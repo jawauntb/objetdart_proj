@@ -38,21 +38,43 @@ export default function RoomScene() {
       const warm = (c.love + c.prayer + c.body) / 300;
       const danger = c.risk / 100;
 
-      // night
+      // night — deeper, more candlelit
       const g = ctx.createLinearGradient(0, 0, 0, h);
-      g.addColorStop(0, "#04101a");
-      g.addColorStop(0.55, "#071521");
-      g.addColorStop(1, "#0a1e2b");
+      g.addColorStop(0, "#03090f");
+      g.addColorStop(0.5, "#050d15");
+      g.addColorStop(1, "#081420");
       ctx.fillStyle = g;
       ctx.fillRect(0, 0, w, h);
 
-      // sea
+      // wood cabinet — left/right walls and ceiling brown wash so
+      // the room reads as enclosed, not a void
+      const wood1 = "rgba(74,44,26,.32)";
+      const wood2 = "rgba(40,24,14,.55)";
+      const lg = ctx.createLinearGradient(0, 0, w * 0.14, 0);
+      lg.addColorStop(0, wood2); lg.addColorStop(1, "rgba(74,44,26,0)");
+      ctx.fillStyle = lg; ctx.fillRect(0, 0, w * 0.14, h);
+      const rg = ctx.createLinearGradient(w * 0.86, 0, w, 0);
+      rg.addColorStop(0, "rgba(74,44,26,0)"); rg.addColorStop(1, wood2);
+      ctx.fillStyle = rg; ctx.fillRect(w * 0.86, 0, w * 0.14, h);
+      const cg = ctx.createLinearGradient(0, 0, 0, h * 0.08);
+      cg.addColorStop(0, wood2); cg.addColorStop(1, "rgba(74,44,26,0)");
+      ctx.fillStyle = cg; ctx.fillRect(0, 0, w, h * 0.08);
+      // wood seams + sill
+      ctx.strokeStyle = wood1; ctx.lineWidth = 1;
+      for (const x of [w * 0.14, w * 0.86]) {
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
+      }
+
+      // sea — under the floor line
       const seaY = h * 0.6;
       const sg = ctx.createLinearGradient(0, seaY, 0, h);
-      sg.addColorStop(0, `rgba(${(20 + danger * 30) | 0},${(60 - danger * 20) | 0},75,0.5)`);
-      sg.addColorStop(1, "rgba(4,16,26,0.9)");
+      sg.addColorStop(0, `rgba(${(15 + danger * 30) | 0},${(46 - danger * 12) | 0},62,0.65)`);
+      sg.addColorStop(1, "rgba(2,10,18,0.96)");
       ctx.fillStyle = sg;
       ctx.fillRect(0, seaY, w, h - seaY);
+      // window sill / floor edge
+      ctx.strokeStyle = "rgba(74,44,26,.7)"; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(0, seaY); ctx.lineTo(w, seaY); ctx.stroke();
 
       // tide lines
       ctx.save();
@@ -143,6 +165,22 @@ export default function RoomScene() {
           }
           ctx.restore();
         }
+      }
+
+      // film grain — sparse noise overlay (cheap, no off-canvas)
+      if (!reduce) {
+        ctx.save();
+        ctx.globalAlpha = 0.045;
+        const grainCount = Math.floor((w * h) / 1800);
+        for (let i = 0; i < grainCount; i++) {
+          const gx = (Math.sin(i * 12.9898 + t * 0.7) * 43758.5453) % 1;
+          const gy = (Math.sin(i * 78.233 + t * 0.7) * 43758.5453) % 1;
+          const px = ((gx + 1) * 0.5 * w) | 0;
+          const py = ((gy + 1) * 0.5 * h) | 0;
+          ctx.fillStyle = (i & 7) ? "#F0E3CD" : "#3a2616";
+          ctx.fillRect(px, py, 1, 1);
+        }
+        ctx.restore();
       }
 
       s.decayAttention();

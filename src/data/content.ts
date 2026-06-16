@@ -44,7 +44,7 @@ export const OBJECTS: SymbolObject[] = [
     regions: ["crash", "obj:candle"],
   },
   {
-    id: "flower", label: "Flower", glyph: "flower", x: 0.78, y: 0.4,
+    id: "flower", label: "Flower", glyph: "flower", x: 0.74, y: 0.4,
     means: ["care", "relation", "warmth"],
     inscription: "tending is a kind of attention",
     fn: "Drag onto House of Loves to reveal the care constellation.",
@@ -68,7 +68,7 @@ export const OBJECTS: SymbolObject[] = [
     regions: ["workbench"],
   },
   {
-    id: "notebook", label: "Notebook", glyph: "notebook", x: 0.86, y: 0.66,
+    id: "notebook", label: "Notebook", glyph: "notebook", x: 0.79, y: 0.66,
     means: ["record", "draft", "ledger"],
     inscription: "the page keeps what the day forgot",
     fn: "Drag onto Archive Estuary to open the writing drawers.",
@@ -168,18 +168,31 @@ export const INSCRIPTIONS: string[] = [
   "what remains is enough",
 ];
 
+// Hand-drawn, weighted glyphs — each object reads as that thing,
+// not "an icon in a circle." Asymmetry and detail matter.
 export const GLYPHS: Record<string, string> = {
-  flame: '<path d="M12 3c2 4 5 5 5 9a5 5 0 0 1-10 0c0-2 1-3 2-4 .5 2 2 2 3 1-1-2-1-4 0-6z"/>',
-  key: '<circle cx="8" cy="8" r="4"/><path d="M11 11l8 8M16 16l2-2M18 18l2-2"/>',
-  record: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.2"/><circle cx="12" cy="12" r="6"/>',
-  book: '<path d="M4 5c3-1 6-1 8 1 2-2 5-2 8-1v13c-3-1-6-1-8 1-2-2-5-2-8-1z"/><path d="M12 6v13"/>',
-  glass: '<path d="M7 3h10l-1.5 16h-7zM7.5 9h9"/>',
-  flower: '<circle cx="12" cy="9" r="2"/><path d="M12 9c0-3-3-4-4-2 1 .5 2 2 4 2zM12 9c0-3 3-4 4-2-1 .5-2 2-4 2zM12 9c2 1 4 0 4-3-2 0-3 1-4 3zM12 9c-2 1-4 0-4-3 2 0 3 1 4 3zM12 11v10"/>',
-  compass: '<circle cx="12" cy="12" r="9"/><path d="M15 9l-2 6-4 2 2-6z"/>',
-  grid: '<rect x="4" y="4" width="16" height="16" rx="1"/><path d="M4 10h16M4 15h16M10 4v16M15 4v16"/>',
-  notebook: '<rect x="5" y="3" width="13" height="18" rx="1"/><path d="M5 7h13M5 11h13M5 15h13M5 19h13M8 3v18"/>',
-  window: '<rect x="4" y="4" width="16" height="16" rx=".5"/><path d="M12 4v16M4 12h16"/>',
-  map: '<path d="M4 6l5-2 6 2 5-2v14l-5 2-6-2-5 2z"/><path d="M9 4v16M15 6v16"/>',
+  flame:
+    '<path d="M12 2.4c.3 3 2.3 4.4 3.6 6.2 1.5 2 2.2 4.1 1.6 6.2-.7 2.5-3 4.2-5.4 4.2-2.4 0-4.6-1.5-5.4-3.8-.8-2.4.4-4.6 1.8-5.7-.1 1.6 1 2.3 2 2 .8-.3 1-1.4.5-2.3-1-1.9-.7-4.2 1.3-6.8z"/><path d="M12 12.6c.6 1.1.4 2.5-.6 3.3"/>',
+  key:
+    '<circle cx="7.6" cy="8.8" r="3.6"/><circle cx="7.6" cy="8.8" r="1" fill="currentColor" stroke="none"/><path d="M10.2 11.4l9.1 9.1M16.2 17.4l1.7-1.7M18.2 19.4l1.5-1.5"/>',
+  record:
+    '<circle cx="12" cy="12" r="9.5"/><circle cx="12" cy="12" r="6.6" opacity=".7"/><circle cx="12" cy="12" r="4.4" opacity=".55"/><circle cx="12" cy="12" r="2.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r=".7" fill="#050d15" stroke="none"/><path d="M5 7.5L8.5 6" opacity=".4"/>',
+  book:
+    '<path d="M3.4 5.4c3-.9 5.6-.7 8.6 1.2 3-1.9 5.6-2.1 8.6-1.2v13.8c-3-.9-5.6-.7-8.6 1.2-3-1.9-5.6-2.1-8.6-1.2z"/><path d="M12 6.6v13.8" opacity=".8"/><path d="M5 8.5h4.5M5 11h4M5 13.5h4.5M14.5 8.5h4M14.5 11h4.5M14.5 13.5h4" opacity=".5"/>',
+  glass:
+    '<path d="M6.6 3.4h10.8l-1 12.4c-.2 1.8-1.4 3-3.4 3h-2c-2 0-3.2-1.2-3.4-3z"/><path d="M7 8.5h10" opacity=".7"/><path d="M9 11.5c1 .6 2 .8 3 .4" opacity=".5"/>',
+  flower:
+    '<circle cx="12" cy="9" r="2.4"/><circle cx="12" cy="9" r=".8" fill="currentColor" stroke="none"/><path d="M12 6.6c-.6-2.6-3-3.2-4.2-1.7-.6.8 0 1.8 1 2 .9.2 2 0 3.2-.3z"/><path d="M12 6.6c.6-2.6 3-3.2 4.2-1.7.6.8 0 1.8-1 2-.9.2-2 0-3.2-.3z"/><path d="M14 10.4c2.4 0 3.4 1.8 2.6 3.4-.5 1-1.6.9-2.2.2-.6-.7-.8-2-.4-3.6z"/><path d="M10 10.4c-2.4 0-3.4 1.8-2.6 3.4.5 1 1.6.9 2.2.2.6-.7.8-2 .4-3.6z"/><path d="M12 11.4c-.2 3.2-.8 6.4-1.6 9.2" opacity=".9"/>',
+  compass:
+    '<circle cx="12" cy="12" r="9.4"/><circle cx="12" cy="12" r="7" opacity=".5"/><path d="M12 3.4v1.6M12 19v1.6M3.4 12h1.6M19 12h1.6" opacity=".8"/><path d="M12 5.5l1.9 6.5L12 14l-1.9-2 1.9-6.5z" fill="currentColor" stroke="none" opacity=".9"/><path d="M12 14l-1.9 6.5L12 18.5l1.9 2-1.9-6.5z" fill="currentColor" stroke="none" opacity=".4"/><circle cx="12" cy="12" r=".6" fill="#050d15" stroke="none"/>',
+  grid:
+    '<rect x="3.4" y="3.4" width="17.2" height="17.2" rx=".4"/><path d="M3.4 8h17.2M3.4 12h17.2M3.4 16h17.2M8 3.4v17.2M12 3.4v17.2M16 3.4v17.2" opacity=".55"/>',
+  notebook:
+    '<path d="M5 3.4h12.6c.7 0 1 .3 1 1v15.2c0 .7-.3 1-1 1H5z"/><path d="M5 3.4v17.2" stroke-width="1.6"/><path d="M3.2 5h2.4M3.2 8h2.4M3.2 11h2.4M3.2 14h2.4M3.2 17h2.4M3.2 20h2.4"/><path d="M8 7h8M8 10h8M8 13h6M8 16h7" opacity=".5"/>',
+  window:
+    '<rect x="3.4" y="3.4" width="17.2" height="17.2"/><path d="M3.4 12h17.2M12 3.4v17.2" opacity=".8"/><path d="M7 7q5 4 10 0M7 16q5-4 10 0" opacity=".35"/><path d="M5 5l2 2M19 5l-2 2M5 19l2-2M19 19l-2-2" opacity=".45"/>',
+  map:
+    '<path d="M3 6.4l5-2 5 2 5-2 3 1.4v13.4l-3-1.4-5 2-5-2-5 2z"/><path d="M8 4.4v15M13 6.4v15M18 4.4v15.4" opacity=".55"/><circle cx="13" cy="11" r=".9" fill="currentColor" stroke="none"/><path d="M9.5 8q2 2 5 0q2-2 5 0" opacity=".35"/>',
 };
 
 export const PRESET_KEYS = Object.keys(PRESETS);

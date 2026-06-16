@@ -23,7 +23,7 @@ export function SymbolCard({
         top: "3.4rem",
         right: 0,
         bottom: "4.4rem",
-        width: "min(248px, 78vw)",
+        width: "min(220px, 76vw)",
         zIndex: 65,
         background: "linear-gradient(180deg, rgba(7,21,33,.94), rgba(7,21,33,.86))",
         borderLeft: "1px solid rgba(185,136,60,.22)",

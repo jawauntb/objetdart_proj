@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useField } from "@/store/field";
 import { OBJECTS, GLYPHS, REGIONS, PHASES } from "@/data/content";
 import type { SymbolObject, LensKey } from "@/lib/types";
@@ -11,13 +11,14 @@ function Glyph({ name, rotate = 0 }: { name: string; rotate?: number }) {
   return (
     <svg
       viewBox="0 0 24 24"
-      width={30}
-      height={30}
+      width={36}
+      height={36}
       style={{
-        stroke: "#D6A84A", fill: "none", strokeWidth: 1.3,
+        color: "#E2B968",
+        stroke: "currentColor", fill: "none", strokeWidth: 1,
         strokeLinecap: "round", strokeLinejoin: "round",
         transform: rotate ? `rotate(${rotate}deg)` : undefined,
-        transition: "transform .2s",
+        transition: "transform .25s cubic-bezier(.2,.8,.2,1), color .25s",
       }}
       dangerouslySetInnerHTML={{ __html: GLYPHS[name] }}
     />
@@ -51,16 +52,25 @@ function dropTarget(x: number, y: number, o: SymbolObject): string | null {
   return bd < 220 ? best : null;
 }
 
-function Hotspot({ o, onInspect }: { o: SymbolObject; onInspect: (o: SymbolObject, el: HTMLElement) => void }) {
+function Hotspot({ o, onInspect, idx }: { o: SymbolObject; onInspect: (o: SymbolObject, el: HTMLElement) => void; idx: number }) {
   const elRef = useRef<HTMLButtonElement>(null);
   const [dragging, setDragging] = useState(false);
+  const [hover, setHover] = useState(false);
   const [rotation, setRotation] = useState(0);
+  const [hint, setHint] = useState(true);
   const state = useRef({ start: null as null | { x: number; y: number }, moved: false, holdTimer: 0 });
   const {
     setHeld, setDragging: setStoreDragging, bumpAttention, resolveCombo,
     cycleLens, setLens, setFlash, setPhase,
   } = useField();
   const lens = useField((s) => s.lens);
+  const exhausted = useField((s) => s.exhausted);
+
+  // first-entry attention pulse — staggered, then off
+  useEffect(() => {
+    const t = window.setTimeout(() => setHint(false), 4200 + idx * 220);
+    return () => clearTimeout(t);
+  }, [idx]);
 
   const isCompass = o.id === "compass";
   const isRecord = o.id === "record";
@@ -183,6 +193,11 @@ function Hotspot({ o, onInspect }: { o: SymbolObject; onInspect: (o: SymbolObjec
           setFlash("Lens · " + next);
         }
       }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      onFocus={() => setHover(true)}
+      onBlur={() => setHover(false)}
+      className="obj-breathe"
       style={{
         position: "absolute",
         left: o.x * 100 + "%",
@@ -195,31 +210,57 @@ function Hotspot({ o, onInspect }: { o: SymbolObject; onInspect: (o: SymbolObjec
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
-        gap: ".3rem",
-        zIndex: dragging ? 60 : 20,
+        gap: ".45rem",
+        zIndex: dragging ? 60 : hover ? 22 : 20,
         padding: 0,
       }}
     >
       <span
+        className={hint && !hover && !dragging ? "obj-hint" : undefined}
         style={{
-          width: 54, height: 54, display: "grid", placeItems: "center",
+          width: 58, height: 58, display: "grid", placeItems: "center",
           borderRadius: "50%",
-          border: "1px solid rgba(185,136,60,.25)",
-          background: "radial-gradient(circle at 50% 40%,rgba(214,168,74,.12),rgba(7,21,33,.4))",
-          boxShadow: dragging ? "0 0 40px rgba(214,168,74,.6)" : "none",
-          transition: "box-shadow .25s, transform .25s",
+          border: `1px solid ${hover ? "rgba(226,185,104,.55)" : "rgba(185,136,60,.18)"}`,
+          background: hover
+            ? "radial-gradient(circle at 50% 40%,rgba(226,185,104,.22),rgba(7,21,33,.6))"
+            : "radial-gradient(circle at 50% 40%,rgba(214,168,74,.08),rgba(7,21,33,.5))",
+          boxShadow: dragging
+            ? "0 0 56px rgba(226,185,104,.7)"
+            : hover
+              ? "0 0 28px rgba(226,185,104,.32)"
+              : "none",
+          transition: "all .3s cubic-bezier(.2,.8,.2,1)",
+          transform: hover ? "scale(1.12)" : "scale(1)",
+          opacity: o.id === "candle" && exhausted ? 0.45 : 1,
         }}
       >
         <Glyph name={o.glyph} rotate={isCompass ? compassAngle : 0} />
       </span>
       <span
         style={{
-          fontFamily: "var(--font-mono)", fontSize: ".55rem",
-          letterSpacing: ".2em", textTransform: "uppercase",
-          color: "#7B7F80", opacity: 0.85,
+          fontFamily: "var(--font-mono)", fontSize: ".5rem",
+          letterSpacing: ".24em", textTransform: "uppercase",
+          color: hover ? "#E2B968" : "#9aa0a3",
+          opacity: hover ? 1 : 0.7,
+          transition: "all .25s",
         }}
       >
         {o.label}
+      </span>
+      <span
+        style={{
+          fontFamily: "var(--font-serif)", fontStyle: "italic", fontSize: ".82rem",
+          color: "#D8A08E", whiteSpace: "nowrap",
+          opacity: hover ? 0.85 : 0,
+          transform: `translateY(${hover ? "0" : "-4px"})`,
+          transition: "all .3s cubic-bezier(.2,.8,.2,1)",
+          pointerEvents: "none",
+          maxWidth: "30ch",
+          textOverflow: "ellipsis",
+          overflow: "hidden",
+        }}
+      >
+        {o.inscription}
       </span>
     </button>
   );
@@ -234,8 +275,8 @@ export default function ObjectTable({
   if (!entered) return null;
   return (
     <div style={{ position: "absolute", inset: 0 }} aria-label="Object table">
-      {OBJECTS.map((o) => (
-        <Hotspot key={o.id} o={o} onInspect={onInspect} />
+      {OBJECTS.map((o, i) => (
+        <Hotspot key={o.id} o={o} onInspect={onInspect} idx={i} />
       ))}
     </div>
   );

@@ -76,18 +76,24 @@ export default function FieldShell() {
         <div
           style={{
             position: "absolute", inset: 0, display: "flex", flexDirection: "column",
-            alignItems: "center", justifyContent: "center", textAlign: "center", gap: "1.4rem", zIndex: 40,
-            background: "radial-gradient(120% 90% at 50% 60%,rgba(7,21,33,0) 35%,rgba(7,21,33,.85) 100%)",
+            alignItems: "center", justifyContent: "center", textAlign: "center",
+            gap: "2rem", zIndex: 40,
+            background: "radial-gradient(140% 90% at 50% 55%, rgba(7,21,33,0) 30%, rgba(5,13,21,.92) 100%)",
           }}
         >
-          <p style={{ fontFamily: "var(--font-mono)", fontSize: ".7rem", letterSpacing: ".28em", textTransform: "uppercase", color: "#7B7F80" }}>
-            a candle inside the command center
+          <p style={{
+            fontFamily: "var(--font-mono)", fontSize: ".58rem", letterSpacing: ".42em",
+            textTransform: "uppercase", color: "rgba(155,160,165,.6)", margin: 0,
+          }}>
+            an instrument
           </p>
           <h1
             style={{
-              fontFamily: "var(--font-serif)", fontWeight: 400, fontSize: "clamp(1.6rem,4.4vw,3rem)",
-              letterSpacing: ".5px", maxWidth: "18ch", lineHeight: 1.18, color: "#EFE5D0",
-              textShadow: "0 0 40px rgba(214,168,74,.25)", margin: 0,
+              fontFamily: "var(--font-serif)", fontStyle: "italic", fontWeight: 400,
+              fontSize: "clamp(2.2rem, 6.4vw, 4.6rem)",
+              letterSpacing: "-.005em", maxWidth: "16ch", lineHeight: 1.02,
+              color: "#F0E3CD", margin: 0,
+              textShadow: "0 0 60px rgba(226,185,104,.18)",
             }}
           >
             A candle inside the command center, facing the sea.
@@ -95,16 +101,20 @@ export default function FieldShell() {
           <button
             onClick={enter}
             style={{
-              fontFamily: "var(--font-mono)", letterSpacing: ".22em", textTransform: "uppercase",
-              fontSize: ".78rem", color: "#071521", background: "#D6A84A", border: "none",
-              padding: ".85rem 1.8rem", borderRadius: 2, cursor: "pointer",
-              boxShadow: "0 0 50px rgba(214,168,74,.4)",
+              fontFamily: "var(--font-mono)", letterSpacing: ".28em", textTransform: "uppercase",
+              fontSize: ".62rem", color: "#E2B968", background: "none",
+              border: "none", padding: ".4rem 0", cursor: "pointer",
+              borderBottom: "1px solid rgba(226,185,104,.7)",
             }}
           >
-            Enter field
+            enter
           </button>
-          <p style={{ fontFamily: "var(--font-mono)", fontSize: ".7rem", letterSpacing: ".28em", textTransform: "uppercase", color: "#7B7F80", opacity: 0.6 }}>
-            handle the objects · calibrate concern · route the atlas
+          <p style={{
+            fontFamily: "var(--font-serif)", fontStyle: "italic", fontWeight: 400,
+            fontSize: ".95rem", color: "rgba(216,160,142,.55)", margin: 0,
+            maxWidth: "28ch", lineHeight: 1.4,
+          }}>
+            handle the objects, calibrate concern, route the atlas, leave a reading.
           </p>
         </div>
       )}

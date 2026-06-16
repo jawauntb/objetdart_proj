@@ -23,29 +23,39 @@ export function TopBar() {
     <div
       style={{
         position: "absolute", top: 0, left: 0, right: 0, display: "flex",
-        alignItems: "center", justifyContent: "space-between", padding: ".7rem 1rem", zIndex: 30,
-        fontFamily: "var(--font-mono)", fontSize: ".62rem", letterSpacing: ".18em", textTransform: "uppercase",
+        alignItems: "baseline", justifyContent: "space-between",
+        padding: "1.05rem 1.5rem .8rem", zIndex: 30,
       }}
     >
-      <span style={{ color: "#7B7F80" }}>field instrument · facing the sea</span>
-      <div role="group" aria-label="Interpretive lens" style={{ display: "flex", gap: ".2rem", flexWrap: "wrap" }}>
-        {LENSES.map((l) => {
+      <span style={{
+        fontFamily: "var(--font-serif)", fontStyle: "italic", fontWeight: 400,
+        fontSize: "1.02rem", color: "rgba(216,160,142,.72)", letterSpacing: ".005em",
+      }}>
+        a candle inside the command center
+      </span>
+      <div role="group" aria-label="Interpretive lens" style={{
+        display: "flex", gap: ".55rem", alignItems: "baseline",
+        fontFamily: "var(--font-mono)", fontSize: ".55rem",
+        letterSpacing: ".26em", textTransform: "uppercase",
+      }}>
+        {LENSES.map((l, i) => {
           const on = lens === l;
           return (
-            <button
-              key={l}
-              aria-pressed={on}
-              onClick={() => setLens(l)}
-              style={{
-                background: on ? "#D6A84A" : "none",
-                border: `1px solid ${on ? "#D6A84A" : "rgba(185,136,60,.3)"}`,
-                color: on ? "#071521" : "#7B7F80",
-                padding: ".4rem .6rem", borderRadius: 2, cursor: "pointer",
-                font: "inherit", letterSpacing: ".14em", textTransform: "uppercase",
-              }}
-            >
-              {l}
-            </button>
+            <span key={l} style={{ display: "flex", alignItems: "baseline", gap: ".55rem" }}>
+              {i > 0 && <span style={{ color: "rgba(155,160,165,.35)" }}>·</span>}
+              <button
+                aria-pressed={on}
+                onClick={() => setLens(l)}
+                style={{
+                  background: "none", border: "none", padding: 0, cursor: "pointer",
+                  color: on ? "#E2B968" : "rgba(155,160,165,.55)",
+                  font: "inherit", letterSpacing: ".26em", textTransform: "uppercase",
+                  transition: "color .25s",
+                }}
+              >
+                {l}
+              </button>
+            </span>
           );
         })}
       </div>
@@ -64,25 +74,29 @@ export function ModeNav() {
       aria-label="Modes"
       style={{
         position: "absolute", bottom: 0, left: 0, right: 0, display: "flex",
-        justifyContent: "center", gap: ".15rem", padding: ".6rem .5rem", zIndex: 30,
-        background: "linear-gradient(0deg,rgba(7,21,33,.92),transparent)",
+        justifyContent: "center", gap: ".5rem", padding: "1rem 1rem 1.1rem", zIndex: 30,
+        alignItems: "baseline",
       }}
     >
-      {MODES.map((m) => {
+      {MODES.map((m, i) => {
         const on = mode === m.id;
         return (
-          <button
-            key={m.id}
-            aria-pressed={on}
-            onClick={() => setMode(m.id)}
-            style={{
-              background: "none", border: "none", color: on ? "#D6A84A" : "#7B7F80", cursor: "pointer",
-              fontFamily: "var(--font-mono)", fontSize: ".6rem", letterSpacing: ".16em", textTransform: "uppercase",
-              padding: ".55rem .7rem", borderTop: `2px solid ${on ? "#D6A84A" : "transparent"}`,
-            }}
-          >
-            {m.label}
-          </button>
+          <span key={m.id} style={{ display: "flex", alignItems: "baseline", gap: ".5rem" }}>
+            {i > 0 && <span style={{ color: "rgba(155,160,165,.3)", fontSize: ".6rem" }}>·</span>}
+            <button
+              aria-pressed={on}
+              onClick={() => setMode(m.id)}
+              style={{
+                background: "none", border: "none", padding: 0, cursor: "pointer",
+                color: on ? "#E2B968" : "rgba(155,160,165,.55)",
+                fontFamily: "var(--font-mono)", fontSize: ".55rem",
+                letterSpacing: ".26em", textTransform: "uppercase",
+                transition: "color .25s",
+              }}
+            >
+              {m.label}
+            </button>
+          </span>
         );
       })}
     </div>

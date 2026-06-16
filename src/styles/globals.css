@@ -3,21 +3,39 @@
 @tailwind utilities;
 
 :root {
-  --font-serif: "Newsreader", "Newsreader Fallback", Georgia, serif;
-  --font-body: "Newsreader", "Newsreader Fallback", Georgia, serif;
-  --font-mono: "Space Mono", "JetBrains Mono", ui-monospace, monospace;
+  --font-serif: "Instrument Serif", "EB Garamond", Georgia, serif;
+  --font-body: "EB Garamond", Georgia, serif;
+  --font-mono: "Space Mono", ui-monospace, monospace;
 }
 
 html, body {
   margin: 0;
   height: 100%;
-  background: #071521;
-  color: #F7F1E6;
+  background: #050d15;
+  color: #F0E3CD;
   font-family: var(--font-body);
   overflow: hidden;
   overscroll-behavior: none;
   -webkit-tap-highlight-color: transparent;
+  font-feature-settings: "kern", "liga", "calt", "onum", "swsh";
 }
+
+@keyframes breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .76; }
+}
+.obj-breathe { animation: breathe 5.4s ease-in-out infinite; }
+.obj-breathe:nth-child(2n) { animation-duration: 6.2s; animation-delay: -1.4s; }
+.obj-breathe:nth-child(3n) { animation-duration: 7.1s; animation-delay: -2.8s; }
+.obj-breathe:nth-child(5n) { animation-duration: 5.8s; animation-delay: -3.1s; }
+
+@keyframes hint-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(226,185,104,0); }
+  50% { box-shadow: 0 0 0 10px rgba(226,185,104,.14); }
+}
+.obj-hint { animation: hint-pulse 2.4s ease-in-out infinite; }
+
+::selection { background: rgba(226,185,104,.35); color: #050d15; }
 
 *:focus-visible {
   outline: 2px solid #D6A84A;
