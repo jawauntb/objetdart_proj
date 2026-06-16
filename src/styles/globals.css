@@ -3,9 +3,9 @@
 @tailwind utilities;
 
 :root {
-  --font-serif: "Cormorant Garamond", Georgia, serif;
-  --font-body: "Spectral", Georgia, serif;
-  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --font-serif: "Newsreader", "Newsreader Fallback", Georgia, serif;
+  --font-body: "Newsreader", "Newsreader Fallback", Georgia, serif;
+  --font-mono: "Space Mono", "JetBrains Mono", ui-monospace, monospace;
 }
 
 html, body {

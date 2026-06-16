@@ -6,46 +6,66 @@ import { OBJECTS, REGIONS, ARCHIVE } from "@/data/content";
 import type { SymbolObject, FieldTrace, ConcernKey } from "@/lib/types";
 
 export function SymbolCard({
-  object, anchor, onClose,
+  object, onClose,
 }: {
   object: SymbolObject | null;
   anchor: DOMRect | null;
   onClose: () => void;
 }) {
-  if (!object) return null;
-  let left = anchor ? anchor.left + anchor.width / 2 - 150 : 40;
-  let top = anchor ? anchor.top - 10 - 190 : 80;
-  left = Math.max(10, Math.min(window.innerWidth - 310, left));
-  if (top < 60 && anchor) top = anchor.bottom + 10;
+  const open = !!object;
   return (
-    <div
+    <aside
       role="dialog"
-      aria-label={object.label}
+      aria-label={object?.label ?? "Object card"}
+      aria-hidden={!open}
       style={{
-        position: "absolute", left, top, zIndex: 70, maxWidth: 300,
-        background: "rgba(16,24,32,.96)", border: "1px solid rgba(185,136,60,.4)",
-        borderRadius: 4, padding: "1.1rem 1.2rem", backdropFilter: "blur(8px)",
+        position: "absolute",
+        top: "3.4rem",
+        right: 0,
+        bottom: "4.4rem",
+        width: "min(248px, 78vw)",
+        zIndex: 65,
+        background: "linear-gradient(180deg, rgba(7,21,33,.94), rgba(7,21,33,.86))",
+        borderLeft: "1px solid rgba(185,136,60,.22)",
+        padding: "1.1rem 1rem",
+        transform: open ? "none" : "translateX(105%)",
+        transition: "transform .42s cubic-bezier(.2,.8,.2,1)",
+        pointerEvents: open ? "auto" : "none",
+        display: "flex",
+        flexDirection: "column",
+        gap: ".55rem",
       }}
     >
-      <div style={{ fontFamily: "var(--font-mono)", fontSize: ".55rem", letterSpacing: ".28em", textTransform: "uppercase", color: "#D6A84A" }}>
-        {object.means.join(" · ")}
-      </div>
-      <h3 style={{ fontFamily: "var(--font-serif)", fontWeight: 500, fontSize: "1.7rem", margin: ".2rem 0 .1rem", color: "#EFE5D0" }}>
-        {object.label}
-      </h3>
-      <div style={{ fontFamily: "var(--font-serif)", fontStyle: "italic", fontSize: "1.15rem", color: "#D8A08E", lineHeight: 1.3 }}>
-        {object.inscription}
-      </div>
-      <div style={{ fontFamily: "var(--font-body)", fontSize: ".82rem", color: "#F7F1E6", opacity: 0.8, marginTop: ".5rem" }}>
-        {object.fn}
-      </div>
-      <button
-        onClick={onClose}
-        style={{ marginTop: ".7rem", background: "none", border: "none", color: "#1F6F73", fontFamily: "var(--font-mono)", fontSize: ".55rem", letterSpacing: ".1em", textTransform: "uppercase", cursor: "pointer", padding: 0 }}
-      >
-        close
-      </button>
-    </div>
+      {object && (
+        <>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: ".5rem", letterSpacing: ".28em", textTransform: "uppercase", color: "#D6A84A" }}>
+              {object.means.join(" · ")}
+            </span>
+            <button
+              onClick={onClose}
+              aria-label="Close card"
+              style={{
+                background: "none", border: "none", color: "#7B7F80", cursor: "pointer",
+                fontFamily: "var(--font-mono)", fontSize: ".62rem", padding: 0, lineHeight: 1,
+              }}
+            >
+              ✕
+            </button>
+          </div>
+          <h3 style={{ fontFamily: "var(--font-serif)", fontWeight: 400, fontSize: "1.55rem", margin: 0, color: "#EFE5D0", letterSpacing: ".005em", lineHeight: 1.05 }}>
+            {object.label}
+          </h3>
+          <div style={{ fontFamily: "var(--font-serif)", fontStyle: "italic", fontWeight: 300, fontSize: ".98rem", color: "#D8A08E", lineHeight: 1.32, maxWidth: "22ch" }}>
+            {object.inscription}
+          </div>
+          <div style={{ height: 1, background: "rgba(185,136,60,.18)", margin: ".15rem 0 .1rem" }} />
+          <div style={{ fontFamily: "var(--font-body)", fontSize: ".74rem", color: "#F7F1E6", opacity: 0.78, lineHeight: 1.5, maxWidth: "28ch" }}>
+            {object.fn}
+          </div>
+        </>
+      )}
+    </aside>
   );
 }
 
