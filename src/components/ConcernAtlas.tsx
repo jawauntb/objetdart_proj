@@ -2,7 +2,46 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useField } from "@/store/field";
-import { REGIONS, OBJECTS, ARCHIVE } from "@/data/content";
+import { REGIONS, OBJECTS, ARCHIVE, PHASES } from "@/data/content";
+
+const REGION_SIGIL: Record<string, (ctx: CanvasRenderingContext2D, x: number, y: number, r: number) => void> = {
+  origin: (c, x, y, r) => {
+    c.beginPath(); c.arc(x, y, r, Math.PI * 0.15, Math.PI * 0.85); c.stroke();
+  },
+  road: (c, x, y, r) => {
+    c.beginPath(); c.moveTo(x - r, y); c.lineTo(x + r, y); c.moveTo(x + r * 0.4, y - r * 0.4); c.lineTo(x + r, y); c.lineTo(x + r * 0.4, y + r * 0.4); c.stroke();
+  },
+  ascent: (c, x, y, r) => {
+    c.beginPath(); c.moveTo(x, y - r); c.lineTo(x + r, y + r); c.lineTo(x - r, y + r); c.closePath(); c.stroke();
+  },
+  workbench: (c, x, y, r) => {
+    c.strokeRect(x - r, y - r * 0.7, r * 2, r * 1.4);
+    c.beginPath(); c.moveTo(x - r, y); c.lineTo(x + r, y); c.stroke();
+  },
+  crash: (c, x, y, r) => {
+    c.beginPath(); c.moveTo(x - r, y); c.quadraticCurveTo(x, y - r, x + r, y);
+    c.quadraticCurveTo(x, y + r, x - r, y); c.closePath(); c.stroke();
+  },
+  loves: (c, x, y, r) => {
+    for (let i = 0; i < 5; i++) {
+      const a = (i / 5) * Math.PI * 2 - Math.PI / 2;
+      c.beginPath(); c.arc(x + Math.cos(a) * r, y + Math.sin(a) * r, 1.4, 0, 7); c.fill();
+    }
+  },
+  spirit: (c, x, y, r) => {
+    c.beginPath(); c.moveTo(x, y - r); c.lineTo(x, y + r); c.moveTo(x - r * 0.5, y - r * 0.4); c.lineTo(x + r * 0.5, y - r * 0.4); c.stroke();
+  },
+  archive: (c, x, y, r) => {
+    c.strokeRect(x - r, y - r * 0.6, r * 2, r * 1.2);
+    c.beginPath(); c.moveTo(x - r * 0.5, y - r * 0.6); c.lineTo(x - r * 0.5, y + r * 0.6);
+    c.moveTo(x + r * 0.5, y - r * 0.6); c.lineTo(x + r * 0.5, y + r * 0.6); c.stroke();
+  },
+  horizon: (c, x, y, r) => {
+    c.beginPath(); c.moveTo(x - r, y + r * 0.3); c.lineTo(x + r, y + r * 0.3);
+    c.moveTo(x - r * 0.7, y - r * 0.1); c.lineTo(x + r * 0.7, y - r * 0.1);
+    c.moveTo(x - r * 0.4, y - r * 0.5); c.lineTo(x + r * 0.4, y - r * 0.5); c.stroke();
+  },
+};
 
 export default function ConcernAtlas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -15,6 +54,8 @@ export default function ConcernAtlas() {
   const makeRoute = useField((s) => s.makeRoute);
   const generateReading = useField((s) => s.generateReading);
   const setMode = useField((s) => s.setMode);
+  const phase = useField((s) => s.phase);
+  const setPhase = useField((s) => s.setPhase);
 
   const drawAtlas = () => {
     const ac = canvasRef.current;
@@ -54,13 +95,23 @@ export default function ConcernAtlas() {
       const x = px(rg);
       const y = py(rg);
       const active = rt && (rt.from === rg.id || rt.to === rg.id);
-      ctx.beginPath();
-      ctx.arc(x, y, active ? 7 : 4, 0, 7);
-      ctx.fillStyle = active ? "#D6A84A" : "rgba(31,111,115,.8)";
-      ctx.fill();
+      // sigil ring
+      ctx.save();
+      ctx.translate(0, 0);
+      ctx.strokeStyle = active ? "rgba(214,168,74,.9)" : "rgba(31,111,115,.55)";
+      ctx.lineWidth = active ? 1.4 : 1;
+      const sigil = REGION_SIGIL[rg.id];
+      if (sigil) {
+        ctx.fillStyle = ctx.strokeStyle;
+        sigil(ctx, x, y, active ? 9 : 7);
+      } else {
+        ctx.beginPath(); ctx.arc(x, y, 4, 0, 7); ctx.stroke();
+      }
+      ctx.restore();
+      // label
       ctx.fillStyle = active ? "#EFE5D0" : "rgba(123,127,128,.9)";
       ctx.font = "9px IBM Plex Mono, monospace";
-      ctx.fillText(rg.label, x + 8, y + 3);
+      ctx.fillText(rg.label, x + 12, y + 3);
     }
   };
 
@@ -70,7 +121,7 @@ export default function ConcernAtlas() {
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [route]);
+  }, [route, phase]);
 
   const routeObjects = route
     ? OBJECTS.filter((o) => route.objects.includes(o.id)).map((o) => o.label.toLowerCase())
@@ -115,6 +166,18 @@ export default function ConcernAtlas() {
         }}
         aria-label="Atlas map. Pan by dragging, zoom with the wheel."
       />
+
+      <div style={{ display: "flex", alignItems: "center", gap: ".7rem", marginTop: ".7rem" }}>
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: ".55rem", letterSpacing: ".18em", textTransform: "uppercase", color: "#D6A84A", width: "5em", flex: "none" }}>
+          {PHASES[phase]}
+        </span>
+        <input
+          type="range" min={0} max={PHASES.length - 1} step={1} value={phase}
+          onChange={(e) => setPhase(+e.target.value)}
+          aria-label="Atlas temporal phase" aria-valuetext={PHASES[phase]}
+          style={{ flex: 1 }}
+        />
+      </div>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: ".5rem", alignItems: "center", marginTop: ".8rem" }}>
         <select aria-label="Route from" value={from} onChange={(e) => setFrom(e.target.value)} style={selStyle}>
