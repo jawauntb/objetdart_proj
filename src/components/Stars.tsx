@@ -114,6 +114,18 @@ type Galaxy = {
   armRgb: [number, number, number];
 };
 
+type PlanetSystem = {
+  nx: number;
+  ny: number;
+  bodyR: number;
+  ringR: number;
+  ringTilt: number;
+  rot: number;
+  hueRgb: [number, number, number];
+  ringRgb: [number, number, number];
+  moons: Array<{ ang: number; dist: number; size: number }>;
+};
+
 type SavedConstellation = {
   id: string;
   name: string;
@@ -147,6 +159,7 @@ const STAR_COUNT = 520;
 const NEBULA_SEED = 0xBADA55;
 const BLACKHOLE_SEED = 0xB14CC0;
 const GALAXY_SEED = 0x9A1A99;
+const PLANET_SEED = 0x51A751;
 const STORAGE_KEY = "objetdart:constellations:v1";
 
 // ── spectral palette ─────────────────────────────────────────────────
@@ -360,6 +373,45 @@ function generateGalaxies(): Galaxy[] {
 
 const GALAXIES: Galaxy[] = generateGalaxies();
 
+function generatePlanetSystems(): PlanetSystem[] {
+  const rng = makeRng(PLANET_SEED);
+  const anchors: Array<[number, number]> = [
+    [0.38, 0.34],
+    [0.63, 0.56],
+    [0.48, 0.72],
+    [0.72, 0.42],
+    [0.27, 0.58],
+  ];
+  const palettes: Array<[[number, number, number], [number, number, number]]> = [
+    [[194, 218, 230], [230, 218, 180]],
+    [[226, 168, 126], [184, 206, 230]],
+    [[150, 196, 172], [224, 196, 146]],
+    [[205, 188, 232], [180, 212, 220]],
+    [[230, 205, 152], [220, 180, 150]],
+  ];
+  return anchors.map(([nx, ny], i) => {
+    const [hueRgb, ringRgb] = palettes[i % palettes.length];
+    const moons = Array.from({ length: 1 + Math.floor(rng() * 3) }, () => ({
+      ang: rng() * Math.PI * 2,
+      dist: 1.9 + rng() * 2.5,
+      size: 0.16 + rng() * 0.20,
+    }));
+    return {
+      nx: nx + (rng() - 0.5) * 0.06,
+      ny: ny + (rng() - 0.5) * 0.06,
+      bodyR: 0.0065 + rng() * 0.0045,
+      ringR: 2.05 + rng() * 1.10,
+      ringTilt: 0.23 + rng() * 0.28,
+      rot: rng() * Math.PI * 2,
+      hueRgb,
+      ringRgb,
+      moons,
+    };
+  });
+}
+
+const PLANET_SYSTEMS: PlanetSystem[] = generatePlanetSystems();
+
 // ── component ────────────────────────────────────────────────────────
 
 // transient visual effects, kept in refs so they update without re-rendering
@@ -380,6 +432,19 @@ const SPARK_LIFE = 0.8;
 // Milky Way band — keep these constants in sync with the draw code
 const MW_BAND_ANGLE = 0.34;        // base angle in radians
 const MW_BAND_HALF_THICKNESS = 0.10; // normalized to min(w,h)
+const USER_ZOOM_MIN = 1;
+const USER_ZOOM_MAX = 4.2;
+const USER_ZOOM_STEP = 0.55;
+const PLANET_REVEAL_ZOOM = 2.05;
+
+function clampZoom(v: number): number {
+  return Math.max(USER_ZOOM_MIN, Math.min(USER_ZOOM_MAX, v));
+}
+
+function smoothstep(edge0: number, edge1: number, x: number): number {
+  const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
 
 export default function Stars() {
   // page-specific ambient bed: very faint cosmic noise + sine drones
@@ -403,6 +468,7 @@ export default function Stars() {
   const [hoveredNebula, setHoveredNebula] = useState<number | null>(null);
   const [hoveredMilkyWay, setHoveredMilkyWay] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [userZoom, setUserZoom] = useState(1);
 
   // transient effects — mutated by event handlers, read by the RAF loop
   const sparksRef = useRef<Spark[]>([]);
@@ -418,8 +484,10 @@ export default function Stars() {
   // hover flags also mirrored into refs so the RAF loop can read them cheaply
   const hoveredNebulaRef = useRef<number | null>(null);
   const hoveredMilkyWayRef = useRef<boolean>(false);
+  const userZoomRef = useRef(userZoom);
   useEffect(() => { hoveredNebulaRef.current = hoveredNebula; }, [hoveredNebula]);
   useEffect(() => { hoveredMilkyWayRef.current = hoveredMilkyWay; }, [hoveredMilkyWay]);
+  useEffect(() => { userZoomRef.current = userZoom; }, [userZoom]);
 
   // we need the latest pending/saved inside the RAF loop without forcing
   // a re-init of the loop on each click, so mirror through refs.
@@ -439,6 +507,24 @@ export default function Stars() {
   // expose the latest starPos function from the RAF loop. We need it for
   // pointer hit-tests and for placing the name input.
   const starPosRef = useRef<((i: number, t: number) => { x: number; y: number }) | null>(null);
+
+  const setZoomLevel = useCallback((next: number | ((cur: number) => number)) => {
+    setUserZoom((cur) => {
+      const value = clampZoom(typeof next === "function" ? next(cur) : next);
+      userZoomRef.current = value;
+      return value;
+    });
+  }, []);
+
+  const zoomIn = useCallback(() => {
+    setZoomLevel((cur) => cur + USER_ZOOM_STEP);
+    try { getFieldAudio().chime(); } catch { /* noop */ }
+  }, [setZoomLevel]);
+
+  const zoomOut = useCallback(() => {
+    setZoomLevel((cur) => cur - USER_ZOOM_STEP);
+    try { getFieldAudio().spark(); } catch { /* noop */ }
+  }, [setZoomLevel]);
 
   // load saved constellations on mount
   useEffect(() => {
@@ -861,6 +947,31 @@ export default function Stars() {
     resize();
     window.addEventListener("resize", resize);
 
+    const cameraZoom = (t: number): number => {
+      const breath = motion ? 1 + Math.sin(t * 0.05) * 0.012 : 1;
+      return userZoomRef.current * breath;
+    };
+
+    const worldPos = (
+      nx: number,
+      ny: number,
+      t: number,
+      rotate: boolean,
+    ): { x: number; y: number } => {
+      const cx = w * 0.5;
+      const cy = h * 0.5;
+      const bx = (nx - 0.5) * w;
+      const by = (ny - 0.5) * h;
+      const ang = rotate && motion ? t * 0.003 : 0;
+      const cs = Math.cos(ang);
+      const sn = Math.sin(ang);
+      const zoom = cameraZoom(t);
+      return {
+        x: cx + (bx * cs - by * sn) * zoom,
+        y: cy + (bx * sn + by * cs) * zoom,
+      };
+    };
+
     // map a star (by index) to its current viewport position, taking the
     // slow camera rotation + breathing zoom into account. Also applies
     // gravitational lensing — stars near a black hole get nudged toward
@@ -871,22 +982,13 @@ export default function Stars() {
     ): { x: number; y: number } => {
       const s = STARS[idx];
       if (!s) return { x: -9999, y: -9999 };
-      const cx = w * 0.5;
-      const cy = h * 0.5;
-      const bx = (s.nx - 0.5) * w;
-      const by = (s.ny - 0.5) * h;
-      const ang = motion ? t * 0.003 : 0;
-      const cs = Math.cos(ang);
-      const sn = Math.sin(ang);
-      const zoom = motion ? 1 + Math.sin(t * 0.05) * 0.012 : 1;
-      let x = cx + (bx * cs - by * sn) * zoom;
-      let y = cy + (bx * sn + by * cs) * zoom;
+      let { x, y } = worldPos(s.nx, s.ny, t, true);
       // gravitational lensing — pull stars within rLens toward each BH
       const base = Math.min(w, h);
+      const zoom = cameraZoom(t);
       for (const bh of BLACKHOLES) {
-        const bhX = bh.nx * w;
-        const bhY = bh.ny * h;
-        const rL = base * bh.rLens;
+        const { x: bhX, y: bhY } = worldPos(bh.nx, bh.ny, t, false);
+        const rL = base * bh.rLens * zoom;
         const dx = bhX - x;
         const dy = bhY - y;
         const d2 = dx * dx + dy * dy;
@@ -927,7 +1029,7 @@ export default function Stars() {
     // cross flare (telescope diffraction).
     const drawStar = (s: Star, x: number, y: number, alpha: number): void => {
       const [r, g, b] = s.rgb;
-      const size = s.size;
+      const size = s.size * Math.min(2.2, Math.sqrt(userZoomRef.current));
 
       // outer halo — only for stars that have it (medium+)
       if (size > 1.0) {
@@ -990,6 +1092,75 @@ export default function Stars() {
       }
     };
 
+    const drawPlanetSystems = (t: number): void => {
+      const zoom = userZoomRef.current;
+      const reveal = smoothstep(PLANET_REVEAL_ZOOM, USER_ZOOM_MAX * 0.82, zoom);
+      if (reveal <= 0) return;
+      const base = Math.min(w, h);
+      bctx.save();
+      bctx.globalCompositeOperation = "lighter";
+      for (let i = 0; i < PLANET_SYSTEMS.length; i++) {
+        const p = PLANET_SYSTEMS[i];
+        const { x, y } = worldPos(p.nx, p.ny, t, false);
+        const r = base * p.bodyR * zoom;
+        const cull = r * p.ringR * 2.2 + 24;
+        if (x < -cull || x > w + cull || y < -cull || y > h + cull) continue;
+        const a = reveal * Math.min(1, 0.55 + (zoom - PLANET_REVEAL_ZOOM) * 0.35);
+        const [br, bg, bb] = p.hueRgb;
+        const [rr, rg, rb] = p.ringRgb;
+        const rot = p.rot + (motion ? t * (0.035 + i * 0.004) : 0);
+
+        bctx.save();
+        bctx.translate(x, y);
+        bctx.rotate(rot);
+
+        const glow = bctx.createRadialGradient(0, 0, 0, 0, 0, r * 4.4);
+        glow.addColorStop(0, `rgba(${br}, ${bg}, ${bb}, ${(0.18 * a).toFixed(3)})`);
+        glow.addColorStop(0.42, `rgba(${br}, ${bg}, ${bb}, ${(0.06 * a).toFixed(3)})`);
+        glow.addColorStop(1, `rgba(${br}, ${bg}, ${bb}, 0)`);
+        bctx.fillStyle = glow;
+        bctx.beginPath();
+        bctx.arc(0, 0, r * 4.4, 0, Math.PI * 2);
+        bctx.fill();
+
+        bctx.save();
+        bctx.scale(1, p.ringTilt);
+        bctx.strokeStyle = `rgba(${rr}, ${rg}, ${rb}, ${(0.46 * a).toFixed(3)})`;
+        bctx.lineWidth = Math.max(0.8, r * 0.16);
+        bctx.beginPath();
+        bctx.ellipse(0, 0, r * p.ringR, r * p.ringR, 0, 0, Math.PI * 2);
+        bctx.stroke();
+        bctx.strokeStyle = `rgba(${rr}, ${rg}, ${rb}, ${(0.20 * a).toFixed(3)})`;
+        bctx.lineWidth = Math.max(0.6, r * 0.08);
+        bctx.beginPath();
+        bctx.ellipse(0, 0, r * (p.ringR * 1.24), r * (p.ringR * 1.24), 0, 0, Math.PI * 2);
+        bctx.stroke();
+        bctx.restore();
+
+        const planet = bctx.createRadialGradient(-r * 0.45, -r * 0.55, r * 0.1, 0, 0, r * 1.25);
+        planet.addColorStop(0, `rgba(255, 255, 245, ${(0.90 * a).toFixed(3)})`);
+        planet.addColorStop(0.38, `rgba(${br}, ${bg}, ${bb}, ${(0.88 * a).toFixed(3)})`);
+        planet.addColorStop(1, `rgba(${Math.max(0, br - 90)}, ${Math.max(0, bg - 90)}, ${Math.max(0, bb - 90)}, ${(0.92 * a).toFixed(3)})`);
+        bctx.fillStyle = planet;
+        bctx.beginPath();
+        bctx.arc(0, 0, r, 0, Math.PI * 2);
+        bctx.fill();
+
+        for (const moon of p.moons) {
+          const ma = moon.ang + (motion ? t * 0.045 : 0);
+          const mx = Math.cos(ma) * r * moon.dist;
+          const my = Math.sin(ma) * r * moon.dist * 0.62;
+          bctx.fillStyle = `rgba(235, 230, 210, ${(0.58 * a).toFixed(3)})`;
+          bctx.beginPath();
+          bctx.arc(mx, my, Math.max(0.9, r * moon.size), 0, Math.PI * 2);
+          bctx.fill();
+        }
+
+        bctx.restore();
+      }
+      bctx.restore();
+    };
+
     const draw = (now: number) => {
       const t = (now - t0) / 1000;
       const nowMs = now;
@@ -998,7 +1169,12 @@ export default function Stars() {
       // Blit the static universe in one drawImage. Then we layer
       // dynamic things (nebula breath flashes, star field) on top.
       bctx.clearRect(0, 0, w, h);
-      bctx.drawImage(staticCanvas, 0, 0, w, h);
+      const zoom = cameraZoom(t);
+      bctx.save();
+      bctx.translate(w * 0.5, h * 0.5);
+      bctx.scale(zoom, zoom);
+      bctx.drawImage(staticCanvas, -w * 0.5, -h * 0.5, w, h);
+      bctx.restore();
 
       // nebula breath flashes — when a user clicks a nebula, a soft
       // expanding overlay flashes within its hit area. Cheap: one
@@ -1015,10 +1191,9 @@ export default function Stars() {
           const u = (nowMs - br.t0) / 1000 / NEBULA_BREATH_DUR;
           const env = motion ? Math.sin(Math.PI * u) : 0.5;
           if (env <= 0) continue;
-          const px = n.nx * w;
-          const py = n.ny * h;
+          const { x: px, y: py } = worldPos(n.nx, n.ny, t, false);
           const base = Math.min(w, h);
-          const r = base * n.rBase * 0.9;
+          const r = base * n.rBase * 0.9 * zoom;
           const palette = NEBULA_PALETTES.find((p) => p.name === n.paletteName)
             ?? NEBULA_PALETTES[0];
           const [pr, pg, pb] = palette.a;
@@ -1093,6 +1268,8 @@ export default function Stars() {
         }
       }
       bctx.restore();
+
+      drawPlanetSystems(t);
 
       const well = gravityWellRef.current;
       if (well.active) {
@@ -1301,13 +1478,14 @@ export default function Stars() {
     const w = window.innerWidth;
     const h = window.innerHeight;
     const base = Math.min(w, h);
+    const zoom = userZoomRef.current;
     let best = -1;
     let bestD2 = Infinity;
     for (let i = 0; i < NEBULAE.length; i++) {
       const n = NEBULAE[i];
-      const px = n.nx * w;
-      const py = n.ny * h;
-      const r = base * n.rBase;
+      const px = w * 0.5 + (n.nx - 0.5) * w * zoom;
+      const py = h * 0.5 + (n.ny - 0.5) * h * zoom;
+      const r = base * n.rBase * zoom;
       const dx = cx - px;
       const dy = cy - py;
       const d2 = dx * dx + dy * dy;
@@ -1325,8 +1503,9 @@ export default function Stars() {
     const w = window.innerWidth;
     const h = window.innerHeight;
     const base = Math.min(w, h);
-    const lx = cx - w * 0.5;
-    const ly = cy - h * 0.5;
+    const zoom = userZoomRef.current;
+    const lx = (cx - w * 0.5) / zoom;
+    const ly = (cy - h * 0.5) / zoom;
     const cs = Math.cos(-MW_BAND_ANGLE);
     const sn = Math.sin(-MW_BAND_ANGLE);
     const localY = lx * sn + ly * cs;
@@ -1518,6 +1697,16 @@ export default function Stars() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (namingRef.current) return;
+      if (e.key === "+" || e.key === "=") {
+        e.preventDefault();
+        zoomIn();
+        return;
+      }
+      if (e.key === "-" || e.key === "_") {
+        e.preventDefault();
+        zoomOut();
+        return;
+      }
       if (e.key === "Escape" && pendingRef.current.length > 0) {
         cancelPending();
         return;
@@ -1538,7 +1727,7 @@ export default function Stars() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [cancelPending]);
+  }, [cancelPending, zoomIn, zoomOut]);
 
   // ── render ─────────────────────────────────────────────────────────
   return (
@@ -1663,6 +1852,87 @@ export default function Stars() {
         click stars to connect · hold anywhere to bend light
       </div>
 
+      {/* compact zoom controls */}
+      <div
+        data-stars-zoom="true"
+        aria-label="sky zoom controls"
+        style={{
+          position: "fixed",
+          left: 18,
+          bottom: 16,
+          zIndex: 4,
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          padding: "5px 6px",
+          border: "1px solid rgba(232, 226, 213, 0.18)",
+          borderRadius: 6,
+          background: "rgba(4, 8, 14, 0.58)",
+          backdropFilter: "blur(6px)",
+          WebkitBackdropFilter: "blur(6px)",
+          boxShadow: "0 8px 24px rgba(0,0,0,0.28)",
+        }}
+      >
+        <button
+          type="button"
+          aria-label="zoom out"
+          onClick={zoomOut}
+          disabled={userZoom <= USER_ZOOM_MIN}
+          style={{
+            width: 30,
+            height: 30,
+            border: "1px solid rgba(232, 226, 213, 0.24)",
+            borderRadius: 4,
+            background: "rgba(232, 226, 213, 0.08)",
+            color: "rgba(244, 238, 222, 0.88)",
+            fontFamily: "var(--font-text)",
+            fontSize: 18,
+            lineHeight: "28px",
+            padding: 0,
+            cursor: userZoom <= USER_ZOOM_MIN ? "default" : "pointer",
+            opacity: userZoom <= USER_ZOOM_MIN ? 0.38 : 1,
+          }}
+        >
+          -
+        </button>
+        <div
+          className="t-mono"
+          aria-live="polite"
+          style={{
+            minWidth: 42,
+            textAlign: "center",
+            fontSize: 10,
+            letterSpacing: "0.08em",
+            textTransform: "lowercase",
+            color: "rgba(232, 226, 213, 0.66)",
+          }}
+        >
+          {userZoom >= PLANET_REVEAL_ZOOM ? "rings" : "galaxies"}
+        </div>
+        <button
+          type="button"
+          aria-label="zoom in"
+          onClick={zoomIn}
+          disabled={userZoom >= USER_ZOOM_MAX}
+          style={{
+            width: 30,
+            height: 30,
+            border: "1px solid rgba(232, 226, 213, 0.24)",
+            borderRadius: 4,
+            background: "rgba(232, 226, 213, 0.08)",
+            color: "rgba(244, 238, 222, 0.88)",
+            fontFamily: "var(--font-text)",
+            fontSize: 18,
+            lineHeight: "28px",
+            padding: 0,
+            cursor: userZoom >= USER_ZOOM_MAX ? "default" : "pointer",
+            opacity: userZoom >= USER_ZOOM_MAX ? 0.38 : 1,
+          }}
+        >
+          +
+        </button>
+      </div>
+
       {/* running counter — subtle, in a bottom corner */}
       <div
         data-stars-counter="true"
@@ -1780,9 +2050,20 @@ export default function Stars() {
             display: none !important;
           }
           [data-stars-hint="true"] {
-            bottom: 54px !important;
+            bottom: 64px !important;
             padding: 0 18px;
             line-height: 1.45;
+          }
+          [data-stars-zoom="true"] {
+            left: 12px !important;
+            bottom: 12px !important;
+            gap: 4px !important;
+            padding: 4px !important;
+          }
+          [data-stars-zoom="true"] button {
+            width: 28px !important;
+            height: 28px !important;
+            line-height: 26px !important;
           }
         }
       `}</style>

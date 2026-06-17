@@ -21,7 +21,9 @@ const ROUTES: RouteEntry[] = [
   { key: "tide",        icon: "tide",     href: "/tide",                              desc: "night sea" },
   { key: "waves",       icon: "waves",    href: "/waves",                             desc: "the poem" },
   { key: "sine",        icon: "waves",    href: "/sine",                              desc: "wave explorer" },
+  { key: "pretext",     icon: "waves",    href: "/pretext",                           desc: "playable text" },
   { key: "circularity", icon: "aphros",   href: "/circularity",                       desc: "circles to waves" },
+  { key: "beyond",      icon: "waves",    href: "/beyond",                            desc: "novel wave field" },
   { key: "storm",       icon: "storm",    href: "/storm",                             desc: "the wave allowed to rage" },
   { key: "clouds",      icon: "clouds",   href: "/clouds",                            desc: "olympus" },
   { key: "aphros",      icon: "aphros",   href: "/aphros",                            desc: "foam · shells · love" },
@@ -54,7 +56,9 @@ export default function SiteHeader() {
     pathname.startsWith("/watch") ||
     pathname.startsWith("/waves") ||
     pathname.startsWith("/sine") ||
+    pathname.startsWith("/pretext") ||
     pathname.startsWith("/circularity") ||
+    pathname.startsWith("/beyond") ||
     pathname.startsWith("/storm") ||
     pathname.startsWith("/clouds") ||
     pathname.startsWith("/flowers") ||
