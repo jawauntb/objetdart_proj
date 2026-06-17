@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "description": "A candle inside the command center, facing the sea — a usable symbolic instrument.",
+  "engines": {
+    "node": "20.x"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",

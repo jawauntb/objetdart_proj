@@ -847,6 +847,7 @@ export default function Tide() {
           bottom: 22,
           textAlign: "center",
           pointerEvents: "none",
+          zIndex: 6,
         }}
       >
         <span
@@ -876,6 +877,8 @@ export default function Tide() {
             fontSize: 16,
             color: "rgba(242, 238, 230, 0.55)",
             letterSpacing: "0.005em",
+            cursor: "pointer",
+            pointerEvents: "auto",
           }}
         >
           what burns also keeps watch.

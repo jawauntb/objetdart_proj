@@ -934,8 +934,8 @@ export default function Pulse() {
           }
           .oda-pulse-readouts {
             right: 8px !important;
-            top: 8px !important;
-            height: calc(56svh - 16px) !important;
+            top: 64px !important;
+            height: calc(56svh - 72px) !important;
             padding-top: 0 !important;
             padding-bottom: 0 !important;
             gap: 2px !important;
@@ -957,16 +957,19 @@ export default function Pulse() {
           }
           .oda-pulse-controls {
             grid-template-columns: 1fr !important;
+            grid-auto-rows: max-content !important;
             height: min(42svh, 340px) !important;
+            bottom: 44px !important;
             padding: 10px 12px calc(10px + env(safe-area-inset-bottom)) !important;
             gap: 10px !important;
             overflow-y: auto;
             overscroll-behavior: contain;
             -webkit-overflow-scrolling: touch;
             align-items: start !important;
+            align-content: start !important;
           }
           .oda-pulse-controls > div {
-            min-height: auto !important;
+            min-height: max-content !important;
           }
           .oda-pulse-controls input,
           .oda-pulse-controls select,

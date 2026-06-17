@@ -635,6 +635,7 @@ export default function Charts() {
   return (
     <div
       ref={wrapRef}
+      className="oda-charts-root"
       data-touch-surface="true"
       style={{
         minHeight: "calc(100vh - 56px)",
@@ -851,9 +852,13 @@ export default function Charts() {
         dangerouslySetInnerHTML={{
           __html: `
             @media (max-width: 699px) {
+              .oda-charts-root {
+                min-height: calc(100svh - 56px) !important;
+                padding-bottom: calc(56px + env(safe-area-inset-bottom)) !important;
+              }
               .oda-charts-surface {
                 flex: 0 0 auto !important;
-                min-height: clamp(340px, 58svh, 520px) !important;
+                min-height: clamp(300px, 44svh, 420px) !important;
               }
               .oda-charts-controls {
                 gap: 10px !important;

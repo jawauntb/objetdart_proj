@@ -1201,16 +1201,28 @@ export default function Signal() {
         @media (max-width: 620px) {
           .signal-footer {
             gap: 6px !important;
-            padding: 0 10px calc(10px + env(safe-area-inset-bottom)) !important;
+            bottom: 44px !important;
+            padding: 0 10px calc(8px + env(safe-area-inset-bottom)) !important;
           }
           .signal-prompt-panel {
             width: calc(100vw - 20px) !important;
           }
           .signal-control-cluster {
             max-width: calc(100vw - 20px) !important;
+            flex-wrap: wrap !important;
+            justify-content: center !important;
+            border-radius: 18px !important;
+            padding: 5px 8px !important;
+          }
+          .signal-control-cluster > span {
+            display: none !important;
+          }
+          .signal-control-cluster button {
+            padding-left: 12px !important;
+            padding-right: 12px !important;
           }
           .signal-bottom-inscription {
-            bottom: calc(132px + env(safe-area-inset-bottom)) !important;
+            bottom: calc(214px + env(safe-area-inset-bottom)) !important;
             font-size: 14px !important;
             opacity: 0.66;
           }

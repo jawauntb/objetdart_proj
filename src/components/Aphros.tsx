@@ -2385,6 +2385,7 @@ export default function Aphros() {
 
       {/* title — pushed down to clear the top Greek-key banner */}
       <div
+        className="aphros-title"
         style={{
           position: "absolute",
           top: Math.max(skyH * 0.18, 52),
@@ -2911,6 +2912,13 @@ export default function Aphros() {
           to { opacity: 0; translate: 0 -34px; }
         }
         @media (max-width: 720px) {
+          .aphros-title {
+            top: 84px !important;
+          }
+          .aphros-title h1 {
+            font-size: clamp(42px, 12vw, 54px) !important;
+            letter-spacing: 0.10em !important;
+          }
           .aphros-chart-wrap {
             display: none !important;
           }

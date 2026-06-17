@@ -1118,6 +1118,7 @@ export default function Clouds() {
 
       {/* OLYMPUS title + subtitle */}
       <div
+        className="cloud-title"
         style={{
           position: "absolute",
           top: 56,
@@ -1248,6 +1249,7 @@ export default function Clouds() {
       {/* Sun / moon glyph — top right corner, clickable to advance day-cycle.
           A hidden affordance — small but reachable. */}
       <button
+        className="cloud-day-toggle"
         type="button"
         onClick={() => {
           phaseOffsetRef.current = (phaseOffsetRef.current + 0.25) % 1;
@@ -1306,6 +1308,19 @@ export default function Clouds() {
             `
             @keyframes clouds-fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
             @media (max-width: 700px) {
+              .cloud-title {
+                top: 78px !important;
+              }
+              .cloud-title h1 {
+                font-size: 25px !important;
+                letter-spacing: 0.24em !important;
+              }
+              .cloud-day-toggle {
+                top: 84px !important;
+                right: 16px !important;
+                width: 44px !important;
+                height: 44px !important;
+              }
               .cloud-labels {
                 top: auto !important;
                 left: 12px !important;
