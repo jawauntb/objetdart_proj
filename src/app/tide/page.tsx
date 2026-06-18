@@ -6,7 +6,7 @@ import SiteHeader from "@/components/SiteHeader";
 import Tide from "@/components/Tide";
 
 export default function TidePage() {
-  useEffect(() => { getFieldAudio().setAmbientProfile("ocean"); }, []);
+  useEffect(() => { getFieldAudio().setAmbientProfile("tide"); }, []);
 
   // No site footer — the page is one scene. The header floats over the
   // night canvas so the brand still connects, but the room owns the rest.

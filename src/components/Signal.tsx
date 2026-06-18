@@ -151,9 +151,9 @@ export default function Signal() {
   const concerns = useField((s) => s.concerns);
   const recordTape = useField((s) => s.recordTape);
 
-  // page-specific ambient bed: silent — composition plays unobstructed
+  // page-specific ambient bed: nearly silent radio carrier
   useEffect(() => {
-    getFieldAudio().setAmbientProfile("silent", { fadeSec: 0.08 });
+    getFieldAudio().setAmbientProfile("signal", { fadeSec: 0.08 });
   }, []);
 
   // ── audio + visualiser bootstrap ─────────────────────────────────────
@@ -198,7 +198,7 @@ export default function Signal() {
     const audio = getFieldAudio();
     await audio.start();
     if (composeRequestRef.current !== requestId) return;
-    audio.setAmbientProfile("silent", { fadeSec: 0.04 });
+    audio.setAmbientProfile("signal", { fadeSec: 0.04 });
     setAudioStarted(true);
     const a = audio.getAnalyser();
     if (a && !micActive) sourceAnalyser.current = a;

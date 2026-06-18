@@ -6,7 +6,7 @@ import SiteHeader from "@/components/SiteHeader";
 import PretextWave from "@/components/PretextWave";
 
 export default function PretextPage() {
-  useEffect(() => { getFieldAudio().setAmbientProfile("ocean"); }, []);
+  useEffect(() => { getFieldAudio().setAmbientProfile("pretext"); }, []);
 
   return (
     <>

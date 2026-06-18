@@ -6,7 +6,7 @@ import SiteHeader from "@/components/SiteHeader";
 import Waves from "@/components/Waves";
 
 export default function WavesPage() {
-  useEffect(() => { getFieldAudio().setAmbientProfile("ocean"); }, []);
+  useEffect(() => { getFieldAudio().setAmbientProfile("waves"); }, []);
 
   return (
     <>

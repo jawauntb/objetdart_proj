@@ -20,8 +20,8 @@ type Spark = { x: number; y: number; vx: number; vy: number; life: number; maxLi
 type Whisper = { text: string; x: number; y: number; t0: number; duration: number; hovered: boolean };
 
 export default function Watch() {
-  // page-specific ambient bed: ocean swell
-  useEffect(() => { getFieldAudio().setAmbientProfile("ocean"); }, []);
+  // page-specific ambient bed: precise ticks over far water
+  useEffect(() => { getFieldAudio().setAmbientProfile("watch"); }, []);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [whisperState, setWhisperState] = useState<Whisper | null>(null);

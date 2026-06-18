@@ -244,7 +244,7 @@ function CompareInner() {
 }
 
 export default function ComparePage() {
-  useEffect(() => { getFieldAudio().setAmbientProfile("silent"); }, []);
+  useEffect(() => { getFieldAudio().setAmbientProfile("compare"); }, []);
 
   return (
     <>

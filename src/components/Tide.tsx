@@ -36,8 +36,8 @@ function triggerTerritoryTone(idx: number): void {
 type Ripple = { id: number; x: number; y: number; size: number; tone: "gold" | "pale" };
 
 export default function Tide() {
-  // page-specific ambient bed: ocean swell
-  useEffect(() => { getFieldAudio().setAmbientProfile("ocean"); }, []);
+  // page-specific ambient bed: slow lunar water and buoy pulse
+  useEffect(() => { getFieldAudio().setAmbientProfile("tide"); }, []);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const scrubT = useRef<number>(0.5); // 0..1, "now" sits at 0.5

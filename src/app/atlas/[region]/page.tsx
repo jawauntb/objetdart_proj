@@ -15,8 +15,8 @@ export default function AtlasRegionPage() {
   const params = useParams<{ region: string }>();
   const setRegion = useField((s) => s.setRegion);
   const loadFromStorage = useField((s) => s.loadFromStorage);
-  // page-specific ambient bed: silent — per-region sigils carry the sound
-  useEffect(() => { getFieldAudio().setAmbientProfile("silent"); }, []);
+  // page-specific ambient bed: compass drone and map-paper air
+  useEffect(() => { getFieldAudio().setAmbientProfile("atlas"); }, []);
 
   useEffect(() => {
     loadFromStorage();

@@ -57,8 +57,8 @@ function useReducedMotion(): boolean {
 export default function Waves() {
   const [activeIdx, setActiveIdx] = useState(0);
 
-  // page-specific ambient bed: ocean swell
-  useEffect(() => { getFieldAudio().setAmbientProfile("ocean"); }, []);
+  // page-specific ambient bed: phasey swell and analytic clicks
+  useEffect(() => { getFieldAudio().setAmbientProfile("waves"); }, []);
 
   useEffect(() => {
     const sections = Array.from(document.querySelectorAll<HTMLElement>("[data-wave-phase]"));

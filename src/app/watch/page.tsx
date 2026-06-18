@@ -6,7 +6,7 @@ import SiteHeader from "@/components/SiteHeader";
 import Watch from "@/components/Watch";
 
 export default function WatchPage() {
-  useEffect(() => { getFieldAudio().setAmbientProfile("ocean"); }, []);
+  useEffect(() => { getFieldAudio().setAmbientProfile("watch"); }, []);
 
   return (
     <>

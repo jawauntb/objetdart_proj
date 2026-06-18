@@ -18,8 +18,8 @@ export default function KeptPage() {
   const [selected, setSelected] = useState<string[]>([]);
 
   useEffect(() => { loadFromStorage(); }, [loadFromStorage]);
-  // page-specific ambient bed: silent — quiet shelf of past readings
-  useEffect(() => { getFieldAudio().setAmbientProfile("silent"); }, []);
+  // page-specific ambient bed: held shelf and memory shimmer
+  useEffect(() => { getFieldAudio().setAmbientProfile("kept"); }, []);
 
   const sorted = [...kept].sort((a, b) => b.keptAt - a.keptAt);
 

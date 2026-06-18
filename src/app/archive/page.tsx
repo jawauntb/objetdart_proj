@@ -10,8 +10,8 @@ import Archive from "@/components/Archive";
 export default function ArchivePage() {
   const loadFromStorage = useField((s) => s.loadFromStorage);
   useEffect(() => { loadFromStorage(); }, [loadFromStorage]);
-  // page-specific ambient bed: silent — let the prose carry the weight
-  useEffect(() => { getFieldAudio().setAmbientProfile("silent"); }, []);
+  // page-specific ambient bed: dry paper room
+  useEffect(() => { getFieldAudio().setAmbientProfile("archive"); }, []);
   return (
     <>
       <SiteHeader />
