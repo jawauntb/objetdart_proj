@@ -211,7 +211,7 @@ The whole reading state encodes into a compact 11-byte hash: 8 concern values + 
 **Why.** Each line above earns its place:
 - *Template-first generation* — instant, deterministic, no API dependency. The site has to feel alive even with no models attached.
 - *Tier-aware phrasing* — "burn for prayer" vs. "lean toward prayer" vs. "split between prayer and memory" — same data, three different readings, because the prose should match the *intensity* not just the *rank*.
-- *Sigil as music* — the author asked for music generation. Procedural beat AI here because (a) it's deterministic per state, so your night sounds like yours, not like the model's interpretation of yours, (b) it always works without API keys, (c) Gemini doesn't reliably do music gen yet anyway.
+- *Sigil as music* — the author asked for music generation. The Signal page now tries Gemini/Lyria first for prompt-submitted music, then falls back to procedural Web Audio when Lyria is unavailable. The procedural layer remains because (a) it's deterministic per state, so your night sounds like yours, (b) it works without API keys, and (c) it stays phase-locked to the site's analyser and oceanic audio graph.
 - *11-byte hash* — small enough that the URL stays human-friendly, big enough to lossless-encode the whole state. The shareable permalink is a small thing that earns disproportionate weight: people kept readings, shared them, and *that* is the social arc the site supports.
 
 ### The Kept & The Constellation
@@ -252,7 +252,7 @@ State: `started: boolean`, `muted: boolean`, `liveTones: Map<id, ToneHandle>`. T
 2. *Free + offline* — no API, no quota, no key wrangling. The site is fully audible with no external dependencies.
 3. *Coherent* — every sound on the site comes from the same Web Audio graph and shares modulation sources with the visual sea. There's no risk of a synthesized-music asset feeling unmatched to the ambient ocean — they literally share gain stages.
 
-A Gemini Music or Suno API could replace the procedural music, but losing determinism + audio-visual coherence is too high a price for the marginal richness gain.
+Gemini/Lyria can now replace the procedural composer for prompt-led clips. The fallback stays in place because losing determinism + audio-visual coherence would be too high a price when the model is unavailable.
 
 ### AI integration
 

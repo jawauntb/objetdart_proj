@@ -260,6 +260,8 @@ type FieldAudio = {
   playSigilPhrase: (concerns: Record<string, number>) => Promise<void>;
   // start a generative composition (~45-90s). Returns a handle with stop().
   composeMusic: (opts?: ComposeOpts) => ComposeHandle | null;
+  // play decoded generated audio through the shared analyser/master sink.
+  playAudioClip: (data: ArrayBuffer) => Promise<ComposeHandle | null>;
   // peek at the active composition, or null if none.
   getCurrentComposition: () => ComposeHandle | null;
   // Swap the ambient bed through the singleton engine with a short fade.
@@ -1660,6 +1662,58 @@ export function getFieldAudio(): FieldAudio {
     return handle;
   };
 
+  const playAudioClip = async (data: ArrayBuffer): Promise<ComposeHandle | null> => {
+    if (currentComposition) {
+      try { currentComposition.stop(); } catch { /* noop */ }
+      currentComposition = null;
+    }
+    if (muted) return null;
+    const c = ensureContext();
+    if (!c) return null;
+    if (c.state === "suspended") { try { await c.resume(); } catch { return null; } }
+
+    let buffer: AudioBuffer;
+    try {
+      buffer = await c.decodeAudioData(data.slice(0));
+    } catch {
+      return null;
+    }
+
+    const t0 = c.currentTime;
+    const source = c.createBufferSource();
+    const bus = c.createGain();
+    source.buffer = buffer;
+    bus.gain.setValueAtTime(0.0001, t0);
+    bus.gain.linearRampToValueAtTime(0.95, t0 + 0.08);
+    bus.gain.setValueAtTime(0.95, t0 + Math.max(0.1, buffer.duration - 0.45));
+    bus.gain.linearRampToValueAtTime(0.0001, t0 + buffer.duration);
+    source.connect(bus).connect(outNode(c));
+
+    let stopped = false;
+    const handle: ComposeHandle = {
+      end: t0 + buffer.duration,
+      duration: buffer.duration,
+      stop: () => {
+        if (stopped) return;
+        stopped = true;
+        const now = c.currentTime;
+        holdAudioParam(bus.gain, now);
+        bus.gain.linearRampToValueAtTime(0.0001, now + 0.35);
+        try { source.stop(now + 0.4); } catch { /* noop */ }
+        if (currentComposition === handle) currentComposition = null;
+      },
+    };
+
+    source.onended = () => {
+      try { source.disconnect(); } catch { /* noop */ }
+      try { bus.disconnect(); } catch { /* noop */ }
+      if (currentComposition === handle) currentComposition = null;
+    };
+    source.start(t0);
+    currentComposition = handle;
+    return handle;
+  };
+
   instance = {
     start,
     setMuted,
@@ -1682,6 +1736,7 @@ export function getFieldAudio(): FieldAudio {
     holdConcernTone, releaseConcernTone, releaseAllConcernTones,
     playSigilPhrase,
     composeMusic,
+    playAudioClip,
     getCurrentComposition,
     setAmbientProfile,
     getAmbientProfile,

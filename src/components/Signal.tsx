@@ -57,7 +57,6 @@ function deriveTempo(concerns: Record<ConcernKey, number>): number {
 const NBINS = 256;
 // transient distortion lifetime, seconds
 const DISTORT_LIFE = 0.5;
-
 // preset concern shapes — clicking the dial cycles through them
 const PHRASES: ReadonlyArray<{ name: string; weights: Record<string, number> }> = [
   { name: "love",       weights: { love: 92, friendship: 70, body: 60, memory: 45, prayer: 55, future: 60, work: 25, risk: 25 } },
@@ -85,6 +84,8 @@ export default function Signal() {
   const [micActive, setMicActive] = useState(false);
   const [micError, setMicError] = useState<string | null>(null);
   const [playing, setPlaying] = useState(false);
+  const [composePending, setComposePending] = useState(false);
+  const [composeSource, setComposeSource] = useState<"lyria" | "procedural" | null>(null);
 
   // ── interactive layer ────────────────────────────────────────────────
   // Hovered = pointer is inside the spiral's outer radius. The RAF loop
@@ -125,6 +126,7 @@ export default function Signal() {
     duration: number;
   } | null>(null);
   const [composeProgress, setComposeProgress] = useState(0);
+  const composeRequestRef = useRef(0);
 
   // ── prompt + coda toggle state ───────────────────────────────────
   // Free-form prompt text feeding the keyword parser in audio.ts. The
@@ -189,8 +191,11 @@ export default function Signal() {
   // vector. Captures derived scale + tempo for the UI label, and seeds
   // a progress timer that updates ~10x/s without thrashing rAF.
   const startCompose = useCallback(async (promptOverride?: string) => {
+    const requestId = composeRequestRef.current + 1;
+    composeRequestRef.current = requestId;
     const audio = getFieldAudio();
     await audio.start();
+    if (composeRequestRef.current !== requestId) return;
     audio.setAmbientProfile("silent", { fadeSec: 0.04 });
     setAudioStarted(true);
     const a = audio.getAnalyser();
@@ -211,19 +216,53 @@ export default function Signal() {
     const baseTempo = deriveTempo(concerns);
     const tempo = Math.max(40, Math.min(180, baseTempo + mods.tempoDelta));
     const scale = mods.scale ?? (prompt ? pickPromptFallbackScale(prompt.toLowerCase()) : deriveScale(concerns));
-    const handle = audio.composeMusic({
-      concerns,
-      duration,
-      scale: mods.scale ?? "auto",
-      prompt: prompt || undefined,
-      oceanicCoda,
-    });
+    setComposeMeta({ scale, tempo, duration: prompt ? 30 : duration });
+    setComposing(false);
+    setComposePending(true);
+    setComposeSource(prompt ? "lyria" : "procedural");
+    setComposeProgress(0);
+
+    let handle: ComposeHandle | null = null;
+    if (prompt) {
+      try {
+        const res = await fetch("/api/generate-music", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ prompt, concerns }),
+        });
+        if (!res.ok) throw new Error(`music generation failed: ${res.status}`);
+        const json = await res.json();
+        const encoded = json?.audio?.data;
+        if (typeof encoded !== "string") throw new Error("music generation returned no audio");
+        if (composeRequestRef.current !== requestId) return;
+        const bytes = Uint8Array.from(atob(encoded), (char) => char.charCodeAt(0));
+        handle = await audio.playAudioClip(bytes.buffer);
+      } catch (err) {
+        console.warn(err);
+        if (composeRequestRef.current !== requestId) return;
+        setComposeSource("procedural");
+      }
+    }
+
+    if (!handle) {
+      handle = audio.composeMusic({
+        concerns,
+        duration,
+        scale: mods.scale ?? "auto",
+        prompt: prompt || undefined,
+        oceanicCoda,
+      });
+    }
+    setComposePending(false);
+    if (composeRequestRef.current !== requestId) {
+      try { handle?.stop(); } catch { /* noop */ }
+      return;
+    }
     if (!handle) return;
     composeHandle.current = handle;
     setComposing(true);
     setComposeStart(Date.now());
-    setComposeMeta({ scale, tempo, duration });
-    setComposeProgress(0);
+    setComposeMeta({ scale, tempo, duration: handle.duration });
     recordTape("sigil", 1.0, "compose");
   }, [concerns, micActive, recordTape, oceanicCoda]);
 
@@ -242,10 +281,13 @@ export default function Signal() {
   );
 
   const stopCompose = useCallback(() => {
+    composeRequestRef.current += 1;
     if (composeHandle.current) {
       try { composeHandle.current.stop(); } catch { /* noop */ }
       composeHandle.current = null;
     }
+    setComposePending(false);
+    setComposeSource(null);
     setComposing(false);
     setComposeProgress(0);
   }, []);
@@ -269,6 +311,7 @@ export default function Signal() {
   // stop compose on unmount
   useEffect(() => {
     return () => {
+      composeRequestRef.current += 1;
       if (composeHandle.current) {
         try { composeHandle.current.stop(); } catch { /* noop */ }
         composeHandle.current = null;
@@ -846,8 +889,8 @@ export default function Signal() {
         </button>
       )}
 
-      {/* compose progress — only when composing */}
-      {composing && composeMeta && (
+      {/* compose progress — preparing first, then playing */}
+      {(composePending || composing) && composeMeta && (
         <div
           className="signal-compose-progress"
           style={{
@@ -889,7 +932,11 @@ export default function Signal() {
                 color: "rgba(244, 238, 222, 0.82)",
               }}
             >
-              <span>{composeMeta.scale}</span>
+              <span>
+                {composePending
+                  ? (composeSource === "lyria" ? "generating" : "preparing")
+                  : (composeSource === "lyria" ? "lyria" : composeMeta.scale)}
+              </span>
               <span>{composeMeta.tempo} bpm</span>
             </div>
             <div
@@ -900,15 +947,15 @@ export default function Signal() {
                 borderRadius: 2,
                 overflow: "hidden",
               }}
-              aria-label={`composition progress ${Math.round(composeProgress * 100)} percent`}
+              aria-label={composePending ? "preparing composition" : `composition progress ${Math.round(composeProgress * 100)} percent`}
             >
               <div
                 style={{
-                  width: `${composeProgress * 100}%`,
+                  width: composePending ? "18%" : `${composeProgress * 100}%`,
                   height: "100%",
                   background:
                     "linear-gradient(90deg, rgba(255,180,110,0.85), rgba(120,200,235,0.85))",
-                  transition: "width 120ms linear",
+                  transition: composePending ? "none" : "width 120ms linear",
                 }}
               />
             </div>
@@ -934,7 +981,7 @@ export default function Signal() {
           zIndex: 20,
         }}
       >
-        {!composing && (
+        {!composePending && !composing && (
           <div
             className="signal-prompt-panel"
             style={{
@@ -1140,7 +1187,7 @@ export default function Signal() {
           }}
         >
           {/* compose — generative music, the centerpiece */}
-          {!composing ? (
+          {!composePending && !composing ? (
             <button
               type="button"
               onClick={(e) => { e.stopPropagation(); void startCompose(); }}
