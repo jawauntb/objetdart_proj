@@ -12,7 +12,7 @@ export default function ReadingPermalinkPage() {
   const params = useParams<{ hash: string }>();
   const decoded = params?.hash ? decodeReadingHash(params.hash) : null;
 
-  useEffect(() => { getFieldAudio().setAmbientProfile("silent"); }, []);
+  useEffect(() => { getFieldAudio().setAmbientProfile("reading"); }, []);
 
   if (!decoded) notFound();
 

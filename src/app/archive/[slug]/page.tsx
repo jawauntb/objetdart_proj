@@ -38,8 +38,8 @@ function entryWeights(concerns: ConcernKey[]): Record<ConcernKey, number> {
 }
 
 export default function ArchiveEntryPage() {
-  // page-specific ambient bed: silent — entries read like prose
-  useEffect(() => { getFieldAudio().setAmbientProfile("silent"); }, []);
+  // page-specific ambient bed: intimate page-turn room
+  useEffect(() => { getFieldAudio().setAmbientProfile("entry"); }, []);
 
   const params = useParams<{ slug: string }>();
   const slug = params?.slug ?? "";

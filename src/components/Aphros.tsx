@@ -252,8 +252,8 @@ type SandImpression = {
 };
 
 export default function Aphros() {
-  // page-specific ambient bed: ocean swell
-  useEffect(() => { getFieldAudio().setAmbientProfile("ocean"); }, []);
+  // page-specific ambient bed: bright foam and shell partials
+  useEffect(() => { getFieldAudio().setAmbientProfile("aphros"); }, []);
 
   // foam canvas + sand grain canvas
   const foamRef = useRef<HTMLCanvasElement>(null);

@@ -7,8 +7,8 @@ import SiteFooter from "@/components/SiteFooter";
 import Colophon from "@/components/Colophon";
 
 export default function ColophonPage() {
-  // page-specific ambient bed: silent — printed matter
-  useEffect(() => { getFieldAudio().setAmbientProfile("silent"); }, []);
+  // page-specific ambient bed: quiet print-shop press
+  useEffect(() => { getFieldAudio().setAmbientProfile("colophon"); }, []);
 
   return (
     <>

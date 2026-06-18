@@ -11,6 +11,11 @@ import type { ConcernKey } from "@/lib/types";
 // ambient graphs.
 export type AmbientProfile =
   | "ocean"      // brown noise + swell LFO — default Atlantic
+  | "aphros"     // bright surf, foam hiss, shell-like partials
+  | "tide"       // slow lunar water, low buoy pulse
+  | "waves"      // phasey stereo-feeling swell + soft clicks
+  | "watch"      // watch ticks over far water
+  | "pretext"    // breathy paper, vocal-ish vowel drone
   | "storm"      // ocean + wind hiss + thunder rumble
   | "wind"       // pink-ish airy noise + faint bird-like sines
   | "fire"       // band-passed crackle
@@ -20,7 +25,21 @@ export type AmbientProfile =
   | "electric"   // 60 Hz hum + occasional spark
   | "garden"     // gentle wind + filtered bird chatter
   | "clockwork"  // faint mechanical ticks + soft pulse
-  | "silent";    // no ambient at all (Signal uses this)
+  | "archive"    // dry paper room, low shelf resonance
+  | "entry"      // intimate page turn + reading room hum
+  | "atlas"      // compass drone, map-paper air
+  | "colophon"   // printed matter, quiet press bed
+  | "compare"    // two low tones beating against one another
+  | "kept"       // held shelf, glassy memory shimmer
+  | "reading"    // quiet candle + near-field breath
+  | "signal"     // radio bed, nearly silent but alive
+  | "beyond"     // folded-wave shimmer and slow interference
+  | "circularity"// rotating Fourier hums
+  | "flowers"    // bees, petals, brighter garden air
+  | "light"      // color instrument halo
+  | "sine"       // clean oscillator laboratory
+  | "time"       // chronograph ticks + manifold drone
+  | "silent";    // no ambient at all, kept for emergency hard-mute routes
 
 export type AmbientProfileOptions = {
   // Seconds. Keep short when moving to "silent" so old beds do not sit under
@@ -430,6 +449,145 @@ export function getFieldAudio(): FieldAudio {
       return g;
     };
 
+    const addNoiseBed = ({
+      seconds = 4,
+      brown = false,
+      hp,
+      lp,
+      bp,
+      q = 1,
+      gain = 0.22,
+      swellRate = 0.08,
+      swellDepth = 0.18,
+      swellBase = 0.45,
+    }: {
+      seconds?: number;
+      brown?: boolean;
+      hp?: number;
+      lp?: number;
+      bp?: number;
+      q?: number;
+      gain?: number;
+      swellRate?: number;
+      swellDepth?: number;
+      swellBase?: number;
+    }) => {
+      const noise = makeNoise(seconds, brown);
+      const gainNode = c.createGain();
+      gainNode.gain.value = gain;
+      const swell = makeSwell(swellRate, swellDepth, swellBase);
+      let node: AudioNode = noise;
+      if (hp) {
+        const filter = c.createBiquadFilter();
+        filter.type = "highpass";
+        filter.frequency.value = hp;
+        node.connect(filter);
+        node = filter;
+        layer.nodes.push(filter);
+      }
+      if (bp) {
+        const filter = c.createBiquadFilter();
+        filter.type = "bandpass";
+        filter.frequency.value = bp;
+        filter.Q.value = q;
+        node.connect(filter);
+        node = filter;
+        layer.nodes.push(filter);
+      }
+      if (lp) {
+        const filter = c.createBiquadFilter();
+        filter.type = "lowpass";
+        filter.frequency.value = lp;
+        filter.Q.value = q;
+        node.connect(filter);
+        node = filter;
+        layer.nodes.push(filter);
+      }
+      node.connect(gainNode).connect(swell).connect(fader);
+      noise.start();
+      layer.sources.push(noise);
+      layer.nodes.push(gainNode, swell);
+    };
+
+    const addDrone = (
+      freqs: number[],
+      {
+        type = "sine",
+        gain = 0.035,
+        swellRate = 0.04,
+        swellDepth = 0.18,
+        filter,
+      }: {
+        type?: OscillatorType;
+        gain?: number;
+        swellRate?: number;
+        swellDepth?: number;
+        filter?: number;
+      } = {},
+    ) => {
+      const bus = c.createGain();
+      bus.gain.value = gain;
+      const swell = makeSwell(swellRate, swellDepth, 0.5);
+      let destination: AudioNode = swell;
+      if (filter) {
+        const lp = c.createBiquadFilter();
+        lp.type = "lowpass";
+        lp.frequency.value = filter;
+        destination = lp;
+        lp.connect(swell);
+        layer.nodes.push(lp);
+      }
+      for (const freq of freqs) {
+        const osc = c.createOscillator();
+        osc.type = type;
+        osc.frequency.value = freq;
+        osc.connect(destination);
+        osc.start();
+        layer.sources.push(osc);
+      }
+      swell.connect(bus).connect(fader);
+      layer.nodes.push(bus, swell);
+    };
+
+    const addPulseTrain = ({
+      freq,
+      every,
+      count,
+      gain = 0.035,
+      decay = 0.14,
+      type = "sine",
+      startOffset = 0,
+    }: {
+      freq: number;
+      every: number;
+      count: number;
+      gain?: number;
+      decay?: number;
+      type?: OscillatorType;
+      startOffset?: number;
+    }) => {
+      const bus = c.createGain();
+      bus.gain.value = 1;
+      bus.connect(fader);
+      layer.nodes.push(bus);
+      const startAt = c.currentTime + startOffset;
+      for (let i = 0; i < count; i++) {
+        const t = startAt + i * every;
+        const osc = c.createOscillator();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, t);
+        const g = c.createGain();
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime(gain, t + 0.006);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + decay);
+        osc.connect(g).connect(bus);
+        osc.start(t);
+        osc.stop(t + decay + 0.04);
+        layer.sources.push(osc);
+        layer.nodes.push(g);
+      }
+    };
+
     if (profile === "silent") {
       // no sources at all — fader stays silent forever
       return layer;
@@ -453,6 +611,30 @@ export function getFieldAudio(): FieldAudio {
       noise.start();
       layer.sources.push(noise, drift);
       layer.nodes.push(hp, lp, swell, driftGain);
+    } else if (profile === "aphros") {
+      // Aphrodite foam: bright surf, shell-like partials, airy sparkle.
+      addNoiseBed({ seconds: 5, brown: true, hp: 90, lp: 900, gain: 0.18, swellRate: 0.16, swellDepth: 0.28 });
+      addNoiseBed({ seconds: 3, hp: 1800, lp: 6200, gain: 0.035, swellRate: 0.31, swellDepth: 0.24 });
+      addDrone([523.25, 659.25, 783.99], { gain: 0.018, swellRate: 0.06, swellDepth: 0.20, filter: 1800 });
+    } else if (profile === "tide") {
+      // Lunar tide: slower and darker than ocean, with a distant buoy pulse.
+      addNoiseBed({ seconds: 7, brown: true, hp: 45, lp: 380, gain: 0.22, swellRate: 0.055, swellDepth: 0.34, swellBase: 0.5 });
+      addDrone([73.42, 110], { type: "triangle", gain: 0.022, swellRate: 0.025, swellDepth: 0.16, filter: 260 });
+      addPulseTrain({ freq: 220, every: 5.6, count: 48, gain: 0.018, decay: 0.32, startOffset: 1.2 });
+    } else if (profile === "waves") {
+      // Study waves: thinner surf plus phase ticks that feel analytic.
+      addNoiseBed({ seconds: 4, brown: true, hp: 110, lp: 760, gain: 0.15, swellRate: 0.21, swellDepth: 0.30 });
+      addDrone([146.83, 220, 293.66], { gain: 0.018, swellRate: 0.11, swellDepth: 0.22, filter: 900 });
+      addPulseTrain({ freq: 587.33, every: 3.0, count: 80, gain: 0.016, decay: 0.09, type: "triangle" });
+    } else if (profile === "watch") {
+      // Watch: precise ticks over a thin, far-water floor.
+      addNoiseBed({ seconds: 5, brown: true, hp: 120, lp: 460, gain: 0.08, swellRate: 0.08, swellDepth: 0.18 });
+      addDrone([196, 392], { gain: 0.012, swellRate: 0.033, swellDepth: 0.12, filter: 800 });
+      addPulseTrain({ freq: 1200, every: 1.0, count: 240, gain: 0.022, decay: 0.04, type: "square" });
+    } else if (profile === "pretext") {
+      // Text room: breathy paper noise with a soft vowel-like drone.
+      addNoiseBed({ seconds: 4, hp: 350, lp: 2200, gain: 0.075, swellRate: 0.12, swellDepth: 0.18 });
+      addDrone([174.61, 261.63, 349.23], { type: "sine", gain: 0.02, swellRate: 0.05, swellDepth: 0.22, filter: 1200 });
     } else if (profile === "storm") {
       // ocean bed + wind hiss (highpassed white noise) + low thunder rumble
       const ocean = makeNoise(6, true);
@@ -660,6 +842,66 @@ export function getFieldAudio(): FieldAudio {
         layer.sources.push(noise);
         layer.nodes.push(hp, g);
       }
+    } else if (profile === "archive") {
+      // Archive: dry paper air and a low shelf resonance.
+      addNoiseBed({ seconds: 5, hp: 700, lp: 2400, gain: 0.045, swellRate: 0.04, swellDepth: 0.10 });
+      addDrone([130.81, 196], { gain: 0.012, swellRate: 0.018, swellDepth: 0.10, filter: 650 });
+    } else if (profile === "entry") {
+      // Single entry: closer paper, tiny page-turn ticks.
+      addNoiseBed({ seconds: 4, hp: 900, lp: 3000, gain: 0.038, swellRate: 0.06, swellDepth: 0.12 });
+      addDrone([164.81, 246.94], { gain: 0.012, swellRate: 0.025, swellDepth: 0.11, filter: 720 });
+      addPulseTrain({ freq: 740, every: 7.0, count: 36, gain: 0.012, decay: 0.08, type: "triangle", startOffset: 2.4 });
+    } else if (profile === "atlas") {
+      // Atlas: compass drone and map-paper air.
+      addNoiseBed({ seconds: 5, hp: 500, lp: 1800, gain: 0.05, swellRate: 0.05, swellDepth: 0.12 });
+      addDrone([98, 146.83, 220], { type: "triangle", gain: 0.022, swellRate: 0.032, swellDepth: 0.18, filter: 820 });
+      addPulseTrain({ freq: 392, every: 4.5, count: 60, gain: 0.014, decay: 0.16, type: "sine", startOffset: 0.7 });
+    } else if (profile === "colophon") {
+      // Colophon: quiet print-shop press, almost still.
+      addNoiseBed({ seconds: 6, hp: 260, lp: 1500, gain: 0.035, swellRate: 0.026, swellDepth: 0.08 });
+      addPulseTrain({ freq: 180, every: 6.0, count: 48, gain: 0.01, decay: 0.05, type: "square", startOffset: 1.8 });
+    } else if (profile === "compare") {
+      // Compare: two low tones gently beating against each other.
+      addNoiseBed({ seconds: 5, hp: 300, lp: 1400, gain: 0.03, swellRate: 0.04, swellDepth: 0.10 });
+      addDrone([174.61, 179.2, 261.63, 268.4], { gain: 0.016, swellRate: 0.027, swellDepth: 0.16, filter: 900 });
+    } else if (profile === "kept") {
+      // Kept: shelf resonance with a glassy memory shimmer.
+      addNoiseBed({ seconds: 5, hp: 600, lp: 2200, gain: 0.035, swellRate: 0.04, swellDepth: 0.12 });
+      addDrone([220, 329.63, 659.25], { gain: 0.014, swellRate: 0.035, swellDepth: 0.16, filter: 1400 });
+    } else if (profile === "reading") {
+      // Reading: near-field breath and candle room tone.
+      addNoiseBed({ seconds: 5, hp: 180, lp: 1300, gain: 0.05, swellRate: 0.11, swellDepth: 0.14 });
+      addDrone([196, 293.66], { gain: 0.012, swellRate: 0.033, swellDepth: 0.12, filter: 760 });
+    } else if (profile === "signal") {
+      // Signal: nearly silent radio carrier so composition pages don't inherit sea.
+      addNoiseBed({ seconds: 3, hp: 2200, lp: 5200, gain: 0.022, swellRate: 0.17, swellDepth: 0.16 });
+      addDrone([440, 441.8], { gain: 0.006, swellRate: 0.021, swellDepth: 0.08, filter: 1200 });
+    } else if (profile === "beyond") {
+      // Beyond: folded-wave interference, no obvious natural source.
+      addNoiseBed({ seconds: 4, hp: 1400, lp: 4800, gain: 0.04, swellRate: 0.19, swellDepth: 0.22 });
+      addDrone([123.47, 185, 277.18, 415.3], { type: "sine", gain: 0.02, swellRate: 0.037, swellDepth: 0.24, filter: 1600 });
+    } else if (profile === "circularity") {
+      // Circularity: rotating Fourier partials.
+      addDrone([110, 220, 330, 440], { type: "sine", gain: 0.022, swellRate: 0.09, swellDepth: 0.20, filter: 1400 });
+      addPulseTrain({ freq: 660, every: 2.25, count: 96, gain: 0.012, decay: 0.08, type: "triangle", startOffset: 0.4 });
+    } else if (profile === "flowers") {
+      // Flowers: brighter garden air, bees, and petal tremble.
+      addNoiseBed({ seconds: 4, hp: 650, lp: 2600, gain: 0.065, swellRate: 0.13, swellDepth: 0.20 });
+      addDrone([246.94, 493.88, 987.77], { type: "sine", gain: 0.014, swellRate: 0.18, swellDepth: 0.18, filter: 2400 });
+      addPulseTrain({ freq: 1760, every: 5.3, count: 48, gain: 0.01, decay: 0.06, type: "sine", startOffset: 1.1 });
+    } else if (profile === "light") {
+      // Light instrument: luminous halo around the playable notes.
+      addDrone([261.63, 392, 523.25, 784], { type: "sine", gain: 0.016, swellRate: 0.06, swellDepth: 0.18, filter: 2200 });
+      addNoiseBed({ seconds: 3, hp: 3000, lp: 6800, gain: 0.018, swellRate: 0.23, swellDepth: 0.20 });
+    } else if (profile === "sine") {
+      // Sine lab: clean low oscillator reference and a metered ping.
+      addDrone([110, 220], { type: "sine", gain: 0.018, swellRate: 0.12, swellDepth: 0.12, filter: 900 });
+      addPulseTrain({ freq: 880, every: 4.0, count: 60, gain: 0.012, decay: 0.10, type: "sine" });
+    } else if (profile === "time") {
+      // Time: chronograph ticks over a slow manifold drone.
+      addDrone([82.41, 164.81, 329.63], { type: "triangle", gain: 0.018, swellRate: 0.02, swellDepth: 0.12, filter: 900 });
+      addPulseTrain({ freq: 1320, every: 1.0, count: 240, gain: 0.018, decay: 0.035, type: "square" });
+      addPulseTrain({ freq: 660, every: 5.0, count: 48, gain: 0.014, decay: 0.18, type: "triangle", startOffset: 0.5 });
     }
 
     return layer;
