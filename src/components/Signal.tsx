@@ -227,6 +227,15 @@ export default function Signal() {
     recordTape("sigil", 1.0, "compose");
   }, [concerns, micActive, recordTape, oceanicCoda]);
 
+  const submitPrompt = useCallback(
+    (event?: React.FormEvent<HTMLFormElement>) => {
+      event?.preventDefault();
+      event?.stopPropagation();
+      void startCompose();
+    },
+    [startCompose],
+  );
+
   const stopCompose = useCallback(() => {
     if (composeHandle.current) {
       try { composeHandle.current.stop(); } catch { /* noop */ }
@@ -835,11 +844,12 @@ export default function Signal() {
       {/* compose progress — only when composing */}
       {composing && composeMeta && (
         <div
+          className="signal-compose-progress"
           style={{
             position: "fixed",
             left: 0,
             right: 0,
-            bottom: 138,
+            bottom: "calc(128px + env(safe-area-inset-bottom))",
             display: "flex",
             justifyContent: "center",
             pointerEvents: "none",
@@ -909,12 +919,12 @@ export default function Signal() {
           position: "fixed",
           left: 0,
           right: 0,
-          bottom: 0,
+          bottom: "calc(58px + env(safe-area-inset-bottom))",
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
-          gap: 8,
-          padding: "0 14px calc(14px + env(safe-area-inset-bottom))",
+          gap: 10,
+          padding: "0 14px",
           pointerEvents: "none",
           zIndex: 20,
         }}
@@ -931,47 +941,91 @@ export default function Signal() {
               pointerEvents: "none",
             }}
           >
-          <input
-            type="text"
-            inputMode="text"
-            enterKeyHint="done"
-            autoComplete="off"
-            autoCapitalize="none"
-            autoCorrect="off"
-            spellCheck={false}
-            value={promptText}
-            onChange={(e) => updatePromptText(e.target.value)}
+          <form
+            className="signal-prompt-form"
+            onSubmit={submitPrompt}
             onClick={(e) => e.stopPropagation()}
             onPointerDown={(e) => e.stopPropagation()}
             onTouchStart={(e) => e.stopPropagation()}
-            placeholder="describe the music — slow, dark, bells, rain…"
-            aria-label="describe the music"
-            className="signal-prompt-input"
             style={{
               pointerEvents: "auto",
+              position: "relative",
               width: "100%",
-              boxSizing: "border-box",
-              minHeight: 44,        // touch target
-              padding: "11px 16px",
-              borderRadius: 22,
-              border: "1px solid rgba(244, 238, 222, 0.62)",
-              background: "rgba(7, 15, 27, 0.88)",
-              backdropFilter: "blur(8px)",
-              WebkitBackdropFilter: "blur(8px)",
-              color: "rgba(244, 238, 222, 0.96)",
-              textAlign: "center",
-              fontFamily: "var(--font-serif)",
-              fontStyle: "italic",
-              // 16px prevents iOS from auto-zooming on focus
-              fontSize: 16,
-              outline: "none",
-              letterSpacing: "0.005em",
-              boxShadow: "0 0 0 1px rgba(120, 200, 235, 0.14), 0 10px 26px rgba(0, 0, 0, 0.28)",
             }}
-          />
+          >
+            <input
+              type="text"
+              inputMode="text"
+              enterKeyHint="send"
+              autoComplete="off"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              value={promptText}
+              onChange={(e) => updatePromptText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key !== "Enter") return;
+                e.preventDefault();
+                e.stopPropagation();
+                void startCompose();
+              }}
+              placeholder="describe the music — slow, dark, bells, rain…"
+              aria-label="describe the music"
+              className="signal-prompt-input"
+              style={{
+                width: "100%",
+                boxSizing: "border-box",
+                minHeight: 46,
+                padding: "12px 58px 12px 20px",
+                borderRadius: 24,
+                border: "1px solid rgba(244, 238, 222, 0.62)",
+                background: "rgba(7, 15, 27, 0.88)",
+                backdropFilter: "blur(8px)",
+                WebkitBackdropFilter: "blur(8px)",
+                color: "rgba(244, 238, 222, 0.96)",
+                textAlign: "left",
+                fontFamily: "var(--font-serif)",
+                fontStyle: "italic",
+                // 16px prevents iOS from auto-zooming on focus
+                fontSize: 16,
+                outline: "none",
+                letterSpacing: "0.005em",
+                boxShadow: "0 0 0 1px rgba(120, 200, 235, 0.14), 0 10px 26px rgba(0, 0, 0, 0.28)",
+              }}
+            />
+            <button
+              type="submit"
+              aria-label="compose prompt"
+              title="compose prompt"
+              className="signal-prompt-submit"
+              style={{
+                position: "absolute",
+                top: "50%",
+                right: 6,
+                transform: "translateY(-50%)",
+                width: 34,
+                height: 34,
+                borderRadius: "50%",
+                border: "1px solid rgba(120, 200, 235, 0.45)",
+                background: "rgba(120, 200, 235, 0.16)",
+                color: "rgba(244, 238, 222, 0.96)",
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontFamily: "var(--font-text)",
+                fontSize: 17,
+                lineHeight: 1,
+                cursor: "pointer",
+                transition: "background 180ms ease, border-color 180ms ease, transform 180ms ease",
+              }}
+            >
+              <span aria-hidden="true">↵</span>
+            </button>
+          </form>
           {/* parsed-modifier chips */}
           {promptChips.length > 0 && (
             <div
+              className="signal-prompt-chips"
               style={{
                 display: "flex",
                 flexWrap: "nowrap",
@@ -1008,6 +1062,7 @@ export default function Signal() {
           )}
           {/* always-end-with-the-sea toggle */}
           <label
+            className="signal-coda-toggle"
             onClick={(e) => e.stopPropagation()}
             style={{
               pointerEvents: "auto",
@@ -1112,7 +1167,7 @@ export default function Signal() {
             </button>
           )}
 
-          <span style={{ opacity: 0.30 }}>·</span>
+          <span className="signal-control-separator" style={{ opacity: 0.30 }}>·</span>
 
           {/* play / phrase dial */}
           <button
@@ -1127,7 +1182,7 @@ export default function Signal() {
             phrase · {PHRASES[phraseIdx].name}
           </button>
 
-          <span style={{ opacity: 0.30 }}>·</span>
+          <span className="signal-control-separator" style={{ opacity: 0.30 }}>·</span>
 
           {/* mic toggle — when active, a small pulsing amber dot announces
               the mic is live; when inactive, an "internal" label notes that
@@ -1194,18 +1249,36 @@ export default function Signal() {
           border-color: rgba(120, 200, 235, 0.86) !important;
           box-shadow: 0 0 0 3px rgba(120, 200, 235, 0.16), 0 12px 30px rgba(0, 0, 0, 0.34) !important;
         }
+        .signal-prompt-submit:hover,
+        .signal-prompt-submit:focus-visible {
+          border-color: rgba(120, 200, 235, 0.82) !important;
+          background: rgba(120, 200, 235, 0.26) !important;
+        }
+        .signal-prompt-submit:active {
+          transform: translateY(-50%) scale(0.96) !important;
+        }
         .signal-control-cluster::-webkit-scrollbar,
-        .signal-prompt-panel > div::-webkit-scrollbar {
+        .signal-prompt-chips::-webkit-scrollbar {
           display: none;
         }
         @media (max-width: 620px) {
           .signal-footer {
             gap: 6px !important;
-            bottom: 44px !important;
-            padding: 0 10px calc(8px + env(safe-area-inset-bottom)) !important;
+            bottom: calc(58px + env(safe-area-inset-bottom)) !important;
+            padding: 0 10px !important;
+          }
+          .signal-compose-progress {
+            bottom: calc(178px + env(safe-area-inset-bottom)) !important;
           }
           .signal-prompt-panel {
             width: calc(100vw - 20px) !important;
+          }
+          .signal-prompt-input {
+            padding-left: 16px !important;
+            padding-right: 54px !important;
+          }
+          .signal-prompt-submit {
+            right: 6px !important;
           }
           .signal-control-cluster {
             max-width: calc(100vw - 20px) !important;
@@ -1214,7 +1287,7 @@ export default function Signal() {
             border-radius: 18px !important;
             padding: 5px 8px !important;
           }
-          .signal-control-cluster > span {
+          .signal-control-separator {
             display: none !important;
           }
           .signal-control-cluster button {
@@ -1222,9 +1295,21 @@ export default function Signal() {
             padding-right: 12px !important;
           }
           .signal-bottom-inscription {
-            bottom: calc(214px + env(safe-area-inset-bottom)) !important;
+            bottom: calc(286px + env(safe-area-inset-bottom)) !important;
             font-size: 14px !important;
             opacity: 0.66;
+          }
+        }
+        @media (max-height: 720px) {
+          .signal-footer {
+            bottom: calc(48px + env(safe-area-inset-bottom)) !important;
+            gap: 5px !important;
+          }
+          .signal-coda-toggle {
+            min-height: 34px !important;
+          }
+          .signal-control-cluster {
+            min-height: 48px !important;
           }
         }
         @media (prefers-reduced-motion: reduce) {
@@ -1242,7 +1327,7 @@ export default function Signal() {
           position: "fixed",
           left: 0,
           right: 0,
-          bottom: 24,
+          bottom: "calc(236px + env(safe-area-inset-bottom))",
           textAlign: "center",
           fontFamily: "var(--font-serif)",
           fontStyle: "italic",
