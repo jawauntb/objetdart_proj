@@ -11,6 +11,7 @@ import Sigil from "@/components/Sigil";
 import ConcernSigil from "@/components/ConcernSigil";
 import MorphText from "@/components/MorphText";
 import ShapedProse from "@/components/ShapedProse";
+import { useGeneratedSpeech } from "@/lib/useGeneratedSpeech";
 
 function useElementWidth(ref: React.RefObject<HTMLElement | null>): number {
   const [w, setW] = useState(0);
@@ -67,18 +68,37 @@ export default function Reading() {
   const [asking, setAsking] = useState(false);
   const [aiAnswer, setAiAnswer] = useState<string | null>(null);
   const [aiError, setAiError] = useState<string | null>(null);
+  const speechContext = useMemo(
+    () => `reading page, region ${reading.region.id}, top concern ${reading.top[0]}`,
+    [reading.region.id, reading.top],
+  );
+  const {
+    speaking: answerSpeaking,
+    speechStatus: answerSpeechStatus,
+    setSpeechStatus: setAnswerSpeechStatus,
+    speakText: speakAnswer,
+    stopSpeech: stopAnswerSpeech,
+  } = useGeneratedSpeech({
+    context: speechContext,
+    loadingStatus: "gemini voice waking",
+    fallbackStatus: "browser voice fallback",
+    doneStatus: "voice complete",
+  });
 
   // when concerns/region/carried change, the old answer no longer fits
   useEffect(() => {
+    stopAnswerSpeech(null);
     setAiAnswer(null);
     setAiError(null);
+    setAnswerSpeechStatus(null);
     useField.getState().recordTape("reading", 0.55, reading.top[0]);
-  }, [reading.hash, reading.top]);
+  }, [reading.hash, reading.top, setAnswerSpeechStatus, stopAnswerSpeech]);
 
   const ask = async () => {
     if (!question.trim() || asking) return;
     setAsking(true);
     setAiError(null);
+    stopAnswerSpeech(null);
     useField.getState().recordTape("ask", 0.7, reading.region.id);
     try {
       const res = await fetch("/api/ask-the-room", {
@@ -96,8 +116,11 @@ export default function Reading() {
         setAiError(j?.hint ?? j?.error ?? "the room could not answer.");
       } else {
         const j = await res.json();
-        setAiAnswer(typeof j.answer === "string" ? j.answer : null);
+        const answer = typeof j.answer === "string" ? j.answer : null;
+        setAiAnswer(answer);
+        setAnswerSpeechStatus(null);
         getFieldAudio().bell();
+        if (answer) void speakAnswer(answer);
       }
     } catch {
       setAiError("the field is unreachable right now.");
@@ -259,20 +282,47 @@ export default function Reading() {
           </form>
 
           {aiAnswer && (
-            <div
-              style={{
-                marginTop: 22,
-                paddingLeft: 18,
-                borderLeft: "2px solid var(--candle)",
-                fontFamily: "var(--font-serif)",
-                fontSize: 20,
-                lineHeight: 1.45,
-                color: "var(--ink)",
-                maxWidth: "64ch",
-                animation: "ask-fade-in 700ms ease both",
-              }}
-            >
-              {aiAnswer}
+            <div>
+              <div
+                style={{
+                  marginTop: 22,
+                  paddingLeft: 18,
+                  borderLeft: "2px solid var(--candle)",
+                  fontFamily: "var(--font-serif)",
+                  fontSize: 20,
+                  lineHeight: 1.45,
+                  color: "var(--ink)",
+                  maxWidth: "64ch",
+                  animation: "ask-fade-in 700ms ease both",
+                }}
+              >
+                {aiAnswer}
+              </div>
+              <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  className="t-mono"
+                  onClick={() => speakAnswer(aiAnswer)}
+                  style={{
+                    background: "transparent",
+                    color: "var(--ink)",
+                    border: "1px solid var(--rule)",
+                    padding: "9px 12px",
+                    minHeight: 36,
+                    fontSize: 11,
+                    letterSpacing: "0.08em",
+                    textTransform: "lowercase",
+                    cursor: "pointer",
+                  }}
+                >
+                  {answerSpeaking ? "stop voice" : "speak answer"}
+                </button>
+                {answerSpeechStatus && (
+                  <span className="t-meta italic" style={{ color: "var(--ink-2)" }}>
+                    {answerSpeechStatus}
+                  </span>
+                )}
+              </div>
             </div>
           )}
           {aiError && (
