@@ -86,6 +86,7 @@ export default function Signal() {
   const [playing, setPlaying] = useState(false);
   const [composePending, setComposePending] = useState(false);
   const [composeSource, setComposeSource] = useState<"lyria" | "procedural" | null>(null);
+  const [composeError, setComposeError] = useState<string | null>(null);
 
   // ── interactive layer ────────────────────────────────────────────────
   // Hovered = pointer is inside the spiral's outer radius. The RAF loop
@@ -138,6 +139,7 @@ export default function Signal() {
   const updatePromptText = useCallback((value: string) => {
     promptTextRef.current = value;
     setPromptText(value);
+    setComposeError(null);
   }, []);
   // live-derived chips so the user sees what the parser picked up
   const promptChips = useMemo(
@@ -220,6 +222,7 @@ export default function Signal() {
     setComposing(false);
     setComposePending(true);
     setComposeSource(prompt ? "lyria" : "procedural");
+    setComposeError(null);
     setComposeProgress(0);
 
     let handle: ComposeHandle | null = null;
@@ -240,7 +243,10 @@ export default function Signal() {
       } catch (err) {
         console.warn(err);
         if (composeRequestRef.current !== requestId) return;
-        setComposeSource("procedural");
+        setComposePending(false);
+        setComposeSource(null);
+        setComposeError("music model unavailable");
+        return;
       }
     }
 
@@ -288,6 +294,7 @@ export default function Signal() {
     }
     setComposePending(false);
     setComposeSource(null);
+    setComposeError(null);
     setComposing(false);
     setComposeProgress(0);
   }, []);
@@ -959,6 +966,38 @@ export default function Signal() {
                 }}
               />
             </div>
+          </div>
+        </div>
+      )}
+
+      {composeError && !composePending && !composing && (
+        <div
+          className="signal-compose-progress"
+          style={{
+            position: "fixed",
+            left: 0,
+            right: 0,
+            bottom: "calc(128px + env(safe-area-inset-bottom))",
+            display: "flex",
+            justifyContent: "center",
+            pointerEvents: "none",
+            zIndex: 10,
+          }}
+        >
+          <div
+            className="t-mono"
+            style={{
+              padding: "10px 18px",
+              border: "1px solid rgba(255, 180, 110, 0.28)",
+              borderRadius: 12,
+              background: "rgba(10, 19, 34, 0.72)",
+              color: "rgba(244, 238, 222, 0.82)",
+              fontSize: 11,
+              letterSpacing: "0.10em",
+              textTransform: "lowercase",
+            }}
+          >
+            {composeError}
           </div>
         </div>
       )}
