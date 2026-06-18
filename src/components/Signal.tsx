@@ -188,7 +188,7 @@ export default function Signal() {
   // Kicks off the generative composer with the user's current concern
   // vector. Captures derived scale + tempo for the UI label, and seeds
   // a progress timer that updates ~10x/s without thrashing rAF.
-  const startCompose = useCallback(async () => {
+  const startCompose = useCallback(async (promptOverride?: string) => {
     const audio = getFieldAudio();
     await audio.start();
     audio.setAmbientProfile("silent", { fadeSec: 0.04 });
@@ -206,7 +206,7 @@ export default function Signal() {
     // Resolve UI labels using the same precedence as the engine: explicit
     // prompt scale/tempo > concern-derived defaults. Keeps the on-screen
     // chip in sync with what the audio engine is actually doing.
-    const prompt = promptTextRef.current.trim();
+    const prompt = (promptOverride ?? promptTextRef.current).trim();
     const mods = parsePromptMods(prompt);
     const baseTempo = deriveTempo(concerns);
     const tempo = Math.max(40, Math.min(180, baseTempo + mods.tempoDelta));
@@ -214,7 +214,7 @@ export default function Signal() {
     const handle = audio.composeMusic({
       concerns,
       duration,
-      scale,
+      scale: mods.scale ?? "auto",
       prompt: prompt || undefined,
       oceanicCoda,
     });
@@ -231,7 +231,12 @@ export default function Signal() {
     (event?: React.FormEvent<HTMLFormElement>) => {
       event?.preventDefault();
       event?.stopPropagation();
-      void startCompose();
+      const submittedPrompt = event
+        ? String(new FormData(event.currentTarget).get("prompt") ?? "")
+        : promptTextRef.current;
+      promptTextRef.current = submittedPrompt;
+      setPromptText(submittedPrompt);
+      void startCompose(submittedPrompt);
     },
     [startCompose],
   );
@@ -961,14 +966,9 @@ export default function Signal() {
               autoCapitalize="none"
               autoCorrect="off"
               spellCheck={false}
+              name="prompt"
               value={promptText}
               onChange={(e) => updatePromptText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key !== "Enter") return;
-                e.preventDefault();
-                e.stopPropagation();
-                void startCompose();
-              }}
               placeholder="describe the music — slow, dark, bells, rain…"
               aria-label="describe the music"
               className="signal-prompt-input"
