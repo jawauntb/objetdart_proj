@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getFieldAudio, parsePromptMods } from "@/lib/audio";
+import { getFieldAudio, parsePromptMods, pickPromptFallbackScale } from "@/lib/audio";
 import type { ComposeHandle, ScaleName } from "@/lib/audio";
 import { useField } from "@/store/field";
 import type { ConcernKey } from "@/lib/types";
@@ -210,7 +210,7 @@ export default function Signal() {
     const mods = parsePromptMods(prompt);
     const baseTempo = deriveTempo(concerns);
     const tempo = Math.max(40, Math.min(180, baseTempo + mods.tempoDelta));
-    const scale = mods.scale ?? deriveScale(concerns);
+    const scale = mods.scale ?? (prompt ? pickPromptFallbackScale(prompt.toLowerCase()) : deriveScale(concerns));
     const handle = audio.composeMusic({
       concerns,
       duration,
@@ -228,7 +228,7 @@ export default function Signal() {
   }, [concerns, micActive, recordTape, oceanicCoda]);
 
   const submitPrompt = useCallback(
-    (event?: React.FormEvent<HTMLFormElement>) => {
+    (event?: React.SyntheticEvent<HTMLFormElement>) => {
       event?.preventDefault();
       event?.stopPropagation();
       const submittedPrompt = event
@@ -949,6 +949,12 @@ export default function Signal() {
           <form
             className="signal-prompt-form"
             onSubmit={submitPrompt}
+            onKeyDown={(e) => {
+              if (e.key !== "Enter") return;
+              e.preventDefault();
+              e.stopPropagation();
+              submitPrompt(e);
+            }}
             onClick={(e) => e.stopPropagation()}
             onPointerDown={(e) => e.stopPropagation()}
             onTouchStart={(e) => e.stopPropagation()}

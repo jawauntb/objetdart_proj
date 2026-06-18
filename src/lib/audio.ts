@@ -91,6 +91,21 @@ const SCALE_DEGREES: Record<Exclude<ScaleName, "auto">, number[]> = {
   mixolydian: [0, 2, 4, 5, 7, 9, 10],
 };
 
+const PROMPT_FALLBACK_SCALES: Array<Exclude<ScaleName, "auto" | "aeolian">> = [
+  "ionian",
+  "dorian",
+  "lydian",
+  "mixolydian",
+];
+
+export function pickPromptFallbackScale(prompt: string): Exclude<ScaleName, "auto" | "aeolian"> {
+  let hash = 0;
+  for (let i = 0; i < prompt.length; i++) {
+    hash = (hash * 31 + prompt.charCodeAt(i)) >>> 0;
+  }
+  return PROMPT_FALLBACK_SCALES[hash % PROMPT_FALLBACK_SCALES.length];
+}
+
 // Map each concern key (high value) to a preferred mode. Looked up when
 // scale === "auto". The top-weighted concern wins.
 const CONCERN_TO_SCALE: Record<ConcernKey, Exclude<ScaleName, "auto">> = {
@@ -1106,6 +1121,8 @@ export function getFieldAudio(): FieldAudio {
       scaleName = opts.scale;
     } else if (promptMods.scale) {
       scaleName = promptMods.scale;
+    } else if (opts.prompt?.trim()) {
+      scaleName = pickPromptFallbackScale(opts.prompt.trim().toLowerCase());
     } else {
       scaleName = pickScale(opts.scale ?? "auto", concerns);
     }
