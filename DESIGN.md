@@ -85,6 +85,8 @@ src/
     _assets/                         — bundled font files for ImageResponse
     api/
       ask-the-room/route.ts          — POST: returns one paragraph
+      generate-music/route.ts        — POST: returns Lyria MP3 for prompt-led /signal clips
+      generate-speech/route.ts       — POST: returns Gemini TTS WAV for spoken room replies
       imagine-entry/route.ts         — POST: returns archive entry shape
     archive/page.tsx                 — index + imagine form + cards
     archive/[slug]/page.tsx          — full entry, Pretext body wrap
@@ -256,7 +258,7 @@ Gemini/Lyria can now replace the procedural composer for prompt-led clips. The f
 
 ### AI integration
 
-Two API routes, `app/api/ask-the-room/route.ts` and `app/api/imagine-entry/route.ts`. Each:
+The text-generation API routes, `app/api/ask-the-room/route.ts` and `app/api/imagine-entry/route.ts`. Each:
 - Runs `nodejs` runtime (not edge)
 - Strict input validation: max length, type checks, array checks
 - Prefers `ANTHROPIC_API_KEY` (Claude Haiku 4.5), falls back to `GEMINI_API_KEY` (Gemini 2.5 Flash) if Claude returns null or is missing
@@ -264,14 +266,14 @@ Two API routes, `app/api/ask-the-room/route.ts` and `app/api/imagine-entry/route
 
 Both system prompts hard-code the voice rules: liturgical-not-mystical, lowercase, short clauses, ≥2 of the three registers (devotional/operational/oceanic), no marketing verbs, no quotation marks, one metaphor per sentence, end on a kept image not a thesis. The user prompt is constructed from the current concern state, the region, and the carried object.
 
-`ask-the-room` returns one paragraph; `imagine-entry` returns a strict JSON `{ fn, note, body[] }` shape (with code-fence tolerant parser since some models still wrap output in ```json fences).
+`ask-the-room` returns one paragraph; `imagine-entry` returns a strict JSON `{ fn, note, body[] }` shape (with code-fence tolerant parser since some models still wrap output in ```json fences). `generate-music` calls Lyria 3 Clip for 30-second MP3 prompt music. `generate-speech` calls Gemini TTS, wraps the returned 24kHz mono PCM in a WAV container, and is used by `/pretext` plus the Reading answer controls.
 
-Keys are pulled from the user's separate `cofounder/dev` Doppler config via `doppler -p cofounder -c dev secrets get NAME --plain | railway variable set NAME --stdin --service objetdart --skip-deploys`. The values themselves are not in this repo or in this doc.
+Keys are pulled from the user's separate `cofounder/prd_superoptimizers` Doppler config via `doppler secrets get NAME --plain --project cofounder --config prd_superoptimizers | railway variable set NAME --stdin --service objetdart --skip-deploys`. The values themselves are not in this repo or in this doc.
 
 **Why these two features specifically (vs. the other AI options we considered).**
 - *"Ask the room"* — the only AI feature where the model is *answering the user*. Everything else on the site is the room speaking to the user, generated locally. This one is interactive in a way the template can't be.
 - *"Imagine a drawer"* — the only place AI is asked to *create new material* in the archive vocabulary. It extends the archive without losing the author's voice (because the system prompt is the voice).
-- We *deliberately did not build*: AI-rewritten reading variations (the template is already in-voice; an LLM rewrite would just blur it); TTS-spoken reading (the procedural ocean already provides the sonic register; a synthetic voice on top would crowd it); AI-driven concern phrasing (it would erode the polygon-as-truth principle — the prose has to be a deterministic function of the polygon, not a probabilistic one).
+- We *deliberately did not build*: AI-rewritten reading variations (the template is already in-voice; an LLM rewrite would just blur it); full-duplex Live API voice chat (the site needs exact, short recitation more than open-ended voice conversation); AI-driven concern phrasing (it would erode the polygon-as-truth principle — the prose has to be a deterministic function of the polygon, not a probabilistic one).
 
 ### Pretext-driven hero
 
