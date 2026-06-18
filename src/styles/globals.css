@@ -52,6 +52,105 @@ a { color: inherit; text-decoration: none; }
   outline-offset: 2px;
 }
 
+body[data-pretext-all-text="true"] .global-pretext-text {
+  --pretext-index: 0;
+  --pretext-weight: 0.5;
+  --pretext-x: 0;
+  --pretext-y: 0;
+  --pretext-r: 0;
+  display: inline-block;
+  position: relative;
+  white-space: break-spaces;
+  transform-origin: 50% 70%;
+  pointer-events: none;
+  will-change: transform, opacity, filter;
+  animation:
+    global-pretext-breathe calc(5.2s + (var(--pretext-weight) * 1.8s)) ease-in-out infinite,
+    global-pretext-glint calc(8.5s + (var(--pretext-weight) * 2.2s)) ease-in-out infinite;
+  animation-delay:
+    calc(var(--pretext-index) * -76ms),
+    calc(var(--pretext-index) * -121ms);
+}
+
+body[data-pretext-all-text="true"] .global-pretext-text[data-pretext-tone="hero"] {
+  animation-name: global-pretext-hero, global-pretext-glint;
+  animation-duration:
+    calc(6s + (var(--pretext-weight) * 2s)),
+    calc(9s + (var(--pretext-weight) * 2.5s));
+}
+
+body[data-pretext-all-text="true"] .global-pretext-text[data-pretext-tone="control"] {
+  animation-name: global-pretext-control, global-pretext-glint;
+  animation-duration: 7s, 11s;
+}
+
+@keyframes global-pretext-breathe {
+  0%, 100% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  35% {
+    transform:
+      translate3d(
+        calc(var(--pretext-x) * 0.06em),
+        calc((var(--pretext-weight) - 0.5) * -0.18em),
+        0
+      )
+      rotate(calc(var(--pretext-r) * 0.18deg));
+  }
+  68% {
+    transform:
+      translate3d(
+        calc(var(--pretext-y) * -0.045em),
+        calc((var(--pretext-weight) - 0.5) * 0.14em),
+        0
+      )
+      rotate(calc(var(--pretext-r) * -0.14deg));
+  }
+}
+
+@keyframes global-pretext-hero {
+  0%, 100% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  42% {
+    transform:
+      translate3d(
+        calc(var(--pretext-x) * 0.08em),
+        calc((var(--pretext-weight) - 0.5) * -0.28em),
+        0
+      )
+      rotate(calc(var(--pretext-r) * 0.22deg));
+  }
+  72% {
+    transform:
+      translate3d(
+        calc(var(--pretext-y) * -0.055em),
+        calc((var(--pretext-weight) - 0.5) * 0.22em),
+        0
+      );
+  }
+}
+
+@keyframes global-pretext-control {
+  0%, 100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(0, calc((var(--pretext-weight) - 0.5) * 0.06em), 0);
+  }
+}
+
+@keyframes global-pretext-glint {
+  0%, 100% {
+    opacity: 1;
+    filter: none;
+  }
+  50% {
+    opacity: 0.94;
+    filter: saturate(1.08);
+  }
+}
+
 /* All canvases are touch surfaces — disable text selection + iOS callouts */
 canvas {
   -webkit-user-select: none;
@@ -76,8 +175,61 @@ button, [role="button"], .chip, .touchable-line {
   touch-action: manipulation;
 }
 
+:where(
+  .t-eyebrow, .t-meta, .t-mono, .t-body, .t-h1, .t-h2, .t-h3,
+  button, [role="button"], .chip, label,
+  .tide-inscription, .pretext-stage, .pretext-line, .pretext-word
+) :where(span) {
+  font: inherit;
+  line-height: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+}
+
+:where(a, button, [role="button"], .chip, .touchable-line, .tide-inscription) :where(span) {
+  pointer-events: none;
+}
+
+:where(button, .chip) {
+  min-width: 0;
+}
+
+:where(button, .chip) > :where(span) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  max-width: 100%;
+}
+
+:where(label:has(> input[type="range"])) {
+  min-width: 0;
+}
+
+:where(label:has(> input[type="range"])) > input[type="range"] {
+  min-width: 0;
+  align-self: center;
+}
+
+:where(label:has(> input[type="range"])) > :where(span, strong) {
+  min-width: 0;
+}
+
 /* SVG inside scenes — drag shouldn't trigger text-selection */
 svg { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+
+.pretext-line :where(span) {
+  white-space: inherit;
+}
+
+.pretext-word > :where(span),
+.pw-word > :where(span) {
+  display: inline-block;
+}
+
+.pretext-stage :where(.pretext-line, .pretext-word, .pw-word) :where(span) {
+  pointer-events: none;
+}
 
 /* Opt-in text selectability for prose pages (waves poem body, archive, reading, colophon) */
 .text-selectable, .text-selectable * {
@@ -234,6 +386,53 @@ input[type="range"]::-moz-range-thumb {
   .touchable-line { transition: none; }
 }
 
+@media (max-width: 860px) {
+  :where(
+    .pretext-controls, .time-controls, .circularity-controls,
+    .flowers-controls, .sine-controls, .light-controls, .oda-charts-controls,
+    .signal-control-cluster, .signal-footer, .oda-pulse-controls,
+    .oda-pulse-readouts, .waves-phase-controls, .archive-grid,
+    .reading-ask-form, .reading-keep-row, .atlas-callout__actions,
+    .oda-primary-nav, .oda-panel
+  ) > * {
+    min-width: 0;
+  }
+
+  :where(
+    .pretext-controls, .time-controls, .circularity-controls,
+    .flowers-controls, .sine-controls, .light-controls, .oda-charts-controls,
+    .signal-control-cluster, .signal-footer, .oda-pulse-controls,
+    .oda-pulse-readouts, .waves-phase-controls, .archive-grid,
+    .reading-ask-form, .reading-keep-row, .atlas-callout__actions,
+    .oda-primary-nav, .oda-panel
+  ) :where(button, .chip) > :where(span) {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  :where(
+    .pretext-controls, .time-controls, .circularity-controls,
+    .flowers-controls, .sine-controls, .light-controls, .oda-charts-controls,
+    .oda-pulse-controls
+  ) input[type="range"] {
+    min-width: 96px;
+  }
+
+  :where(
+    .signal-compose-progress, .signal-footer, .signal-control-cluster,
+    .oda-pulse-readout, .oda-pulse-audio-toggle, .oda-pulse-readout-value,
+    .oda-pulse-readout-unit, .waves-phase-controls, .archive-grid,
+    .reading-ask-form, .reading-keep-row, .atlas-callout,
+    .atlas-drawer, .oda-panel, .oda-row__desc, .cloud-labels,
+    .fire-control-rail, .growth-exp-controls, .growth-life-controls,
+    .flowers-controls, .aphros-tuner, .aphros-inscription
+  ) .global-pretext-text {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    animation-name: global-pretext-control, global-pretext-glint;
+  }
+}
+
 /* a chip */
 .chip {
   font-family: var(--font-text);
@@ -266,5 +465,11 @@ input[type="range"]::-moz-range-thumb {
   *, *::before, *::after {
     animation-duration: 0.001ms !important;
     transition-duration: 0.001ms !important;
+  }
+
+  body[data-pretext-all-text="true"] .global-pretext-text {
+    animation: none !important;
+    transform: none !important;
+    filter: none !important;
   }
 }

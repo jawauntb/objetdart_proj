@@ -6,6 +6,7 @@ import CandleMark from "@/components/CandleMark";
 import Tape from "@/components/Tape";
 import FieldWatch from "@/components/FieldWatch";
 import ConcernTint from "@/components/ConcernTint";
+import GlobalPretextText from "@/components/GlobalPretextText";
 
 const display = Cormorant_Garamond({
   subsets: ["latin"],
@@ -93,6 +94,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" className={`${display.variable} ${mono.variable} ${fraunces.variable}`}>
       <body>
         {children}
+        <GlobalPretextText />
         <Tape />
         <FieldWatch />
         <CandleMark />
