@@ -136,6 +136,8 @@ export default function ShapedProse({
   return (
     <div
       className={className}
+      data-pretext-engine="shaped-prose"
+      data-pretext-ignore="true"
       style={{
         position: "relative",
         width,
