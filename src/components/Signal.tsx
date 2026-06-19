@@ -128,6 +128,10 @@ export default function Signal() {
   } | null>(null);
   const [composeProgress, setComposeProgress] = useState(0);
   const composeRequestRef = useRef(0);
+  // the prompt that drove the current composition, so the progress ticker
+  // can regenerate a fresh procedural piece from the same source when one
+  // plays out. (Prompt/Lyria clips loop their buffer instead — see below.)
+  const composePromptRef = useRef("");
 
   // ── prompt + coda toggle state ───────────────────────────────────
   // Free-form prompt text feeding the keyword parser in audio.ts. The
@@ -214,6 +218,7 @@ export default function Signal() {
     // prompt scale/tempo > concern-derived defaults. Keeps the on-screen
     // chip in sync with what the audio engine is actually doing.
     const prompt = (promptOverride ?? promptTextRef.current).trim();
+    composePromptRef.current = prompt;
     const mods = parsePromptMods(prompt);
     const baseTempo = deriveTempo(concerns);
     const tempo = Math.max(40, Math.min(180, baseTempo + mods.tempoDelta));
@@ -239,7 +244,9 @@ export default function Signal() {
         if (typeof encoded !== "string") throw new Error("music generation returned no audio");
         if (composeRequestRef.current !== requestId) return;
         const bytes = Uint8Array.from(atob(encoded), (char) => char.charCodeAt(0));
-        handle = await audio.playAudioClip(bytes.buffer);
+        // Loop the generated clip so it keeps playing until the listener
+        // hits stop, rather than fading out after a single pass.
+        handle = await audio.playAudioClip(bytes.buffer, { loop: true });
       } catch (err) {
         console.warn(err);
         if (composeRequestRef.current !== requestId) return;
@@ -299,7 +306,12 @@ export default function Signal() {
     setComposeProgress(0);
   }, []);
 
-  // progress ticker — also detects natural end of piece.
+  // progress ticker — also keeps the music alive when a piece plays out.
+  // The listener stays in control: it runs until they press stop.
+  //   • Lyria/prompt clips loop their decoded buffer in the engine, so we
+  //     just wrap the on-screen progress back to zero each pass.
+  //   • Procedural pieces self-stop at their end, so we regenerate a fresh
+  //     variation from the same field/prompt to replace the one that ended.
   useEffect(() => {
     if (!composing || !composeMeta) return;
     const id = window.setInterval(() => {
@@ -307,13 +319,19 @@ export default function Signal() {
       const p = Math.min(1, elapsed / composeMeta.duration);
       setComposeProgress(p);
       if (p >= 1) {
-        // composition has played out — engine self-stops, mirror in UI
-        composeHandle.current = null;
-        setComposing(false);
+        if (composeSource === "lyria") {
+          // buffer is looping seamlessly — restart the progress display.
+          setComposeStart(Date.now());
+          setComposeProgress(0);
+        } else {
+          // procedural piece has played out — engine self-stops; spin up a
+          // new generation from the same source so the music continues.
+          void startCompose(composePromptRef.current);
+        }
       }
     }, 100);
     return () => window.clearInterval(id);
-  }, [composing, composeMeta, composeStart]);
+  }, [composing, composeMeta, composeStart, composeSource, startCompose]);
 
   // stop compose on unmount
   useEffect(() => {

@@ -280,7 +280,8 @@ type FieldAudio = {
   // start a generative composition (~45-90s). Returns a handle with stop().
   composeMusic: (opts?: ComposeOpts) => ComposeHandle | null;
   // play decoded generated audio through the shared analyser/master sink.
-  playAudioClip: (data: ArrayBuffer) => Promise<ComposeHandle | null>;
+  // With { loop: true } the clip repeats seamlessly until stop() is called.
+  playAudioClip: (data: ArrayBuffer, opts?: { loop?: boolean }) => Promise<ComposeHandle | null>;
   // peek at the active composition, or null if none.
   getCurrentComposition: () => ComposeHandle | null;
   // Swap the ambient bed through the singleton engine with a short fade.
@@ -1904,7 +1905,10 @@ export function getFieldAudio(): FieldAudio {
     return handle;
   };
 
-  const playAudioClip = async (data: ArrayBuffer): Promise<ComposeHandle | null> => {
+  const playAudioClip = async (
+    data: ArrayBuffer,
+    opts: { loop?: boolean } = {},
+  ): Promise<ComposeHandle | null> => {
     if (currentComposition) {
       try { currentComposition.stop(); } catch { /* noop */ }
       currentComposition = null;
@@ -1921,14 +1925,20 @@ export function getFieldAudio(): FieldAudio {
       return null;
     }
 
+    const loop = opts.loop === true;
     const t0 = c.currentTime;
     const source = c.createBufferSource();
     const bus = c.createGain();
     source.buffer = buffer;
+    source.loop = loop;
     bus.gain.setValueAtTime(0.0001, t0);
     bus.gain.linearRampToValueAtTime(0.95, t0 + 0.08);
-    bus.gain.setValueAtTime(0.95, t0 + Math.max(0.1, buffer.duration - 0.45));
-    bus.gain.linearRampToValueAtTime(0.0001, t0 + buffer.duration);
+    if (!loop) {
+      // one-shot: fade the tail so it doesn't cut abruptly. Looping clips
+      // skip this so the gain stays flat across the seam between repeats.
+      bus.gain.setValueAtTime(0.95, t0 + Math.max(0.1, buffer.duration - 0.45));
+      bus.gain.linearRampToValueAtTime(0.0001, t0 + buffer.duration);
+    }
     source.connect(bus).connect(outNode(c));
 
     let stopped = false;
