@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getFieldAudio, parsePromptMods, pickPromptFallbackScale } from "@/lib/audio";
 import type { ComposeHandle, ScaleName } from "@/lib/audio";
 import { useField } from "@/store/field";
+import * as haptics from "@/lib/haptics";
+import { stirTurbulence } from "@/lib/turbulence";
 import type { ConcernKey } from "@/lib/types";
 import WaterText from "@/components/WaterText";
 
@@ -687,6 +689,7 @@ export default function Signal() {
       const rect = cv.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
+      const press = e.pressure > 0 ? e.pressure : 0.5;
       const { waveY, waveAmp, spiralR, cx, cy } = layoutRef.current;
       const h = window.innerHeight;
       const specBaseline = h * 0.34;
@@ -695,6 +698,7 @@ export default function Signal() {
       // Bars rise upward from specBaseline. Treat the whole region above the
       // baseline (with a tiny grace below) as tappable.
       if (y < specBaseline + 12) {
+        haptics.ripple(press);
         const u = Math.max(0, Math.min(1, x / window.innerWidth));
         const bin = Math.floor(u * NBINS);
         // Map bin → frequency using the analyser's actual sample rate so the
@@ -721,6 +725,7 @@ export default function Signal() {
         cv.setPointerCapture(e.pointerId);
         wavePointerId.current = e.pointerId;
         lastDragYRef.current = y;
+        haptics.ripple(press);
         return;
       }
 
@@ -731,6 +736,7 @@ export default function Signal() {
       const dRadius = Math.hypot(x - cx, y - cy);
       if (dRadius < spiralR * 0.55 && dRadius > spiralR * 0.05) {
         try { getFieldAudio().bell(); } catch { /* noop */ }
+        haptics.roll();
       }
     },
     [playFreq],
@@ -755,9 +761,11 @@ export default function Signal() {
         const lastY = lastDragYRef.current ?? y;
         const dy = y - lastY;
         if (Math.abs(dy) > 0.5) {
+          // harder press digs a deeper trough — pressure scales the throw.
+          const press = e.pressure > 0 ? e.pressure : 0.5;
           // signed amount clamped to ±waveAmp so the displacement stays in
           // the band visually.
-          const amount = Math.max(-waveAmp, Math.min(waveAmp, dy * 3));
+          const amount = Math.max(-waveAmp, Math.min(waveAmp, dy * 3 * (0.6 + press * 0.9)));
           distortionsRef.current.push({
             x,
             amount,
@@ -767,11 +775,14 @@ export default function Signal() {
           if (distortionsRef.current.length > 80) {
             distortionsRef.current = distortionsRef.current.slice(-80);
           }
-          // throttled chime so it doesn't machine-gun on fast drags
+          // chop the water harder the faster/heavier you drag.
+          stirTurbulence(Math.min(0.06, Math.abs(dy) / 600));
+          // throttled chime + haptic so they don't machine-gun on fast drags
           const now = performance.now();
           if (now - lastChimeAt.current > 140) {
             lastChimeAt.current = now;
             try { getFieldAudio().chime(); } catch { /* noop */ }
+            haptics.chop();
           }
           lastDragYRef.current = y;
         }

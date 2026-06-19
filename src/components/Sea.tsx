@@ -4,6 +4,8 @@ import { useEffect, useRef } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import { useField } from "@/store/field";
 import type { ConcernKey } from "@/lib/types";
+import * as haptics from "@/lib/haptics";
+import { relaxTurbulence, stirTurbulence } from "@/lib/turbulence";
 
 /**
  * The Atlantic.
@@ -124,6 +126,7 @@ export default function Sea({
     let uTimeLoc: WebGLUniformLocation | null = null;
     let uResLoc: WebGLUniformLocation | null = null;
     let uSwellLoc: WebGLUniformLocation | null = null;
+    let uTiltLoc: WebGLUniformLocation | null = null;
     let uRipplesLoc: WebGLUniformLocation | null = null;
     let uRippleCountLoc: WebGLUniformLocation | null = null;
     let uConcernTintLoc: WebGLUniformLocation | null = null;
@@ -142,6 +145,9 @@ export default function Sea({
         uniform float uTime;
         uniform vec2 uRes;
         uniform float uSwell;
+        // device tilt as a small uv bias — the whole body of water leans
+        // toward the low edge of the phone. (0,0) when there's no sensor.
+        uniform vec2 uTilt;
         // up to 12 active ripples: xy = position in normalized canvas uv (0..1),
         // z = age in seconds, w = strength (peak amplitude).
         uniform vec4 uRipples[12];
@@ -203,7 +209,7 @@ export default function Sea({
             sin(uv.y * 8.0 + t * 0.40) * 0.018,
             sin(uv.x * 6.0 + t * 0.30) * 0.012
           );
-          vec2 wuv = uv + flow + vec2(0.0, uSwell * 0.012);
+          vec2 wuv = uv + flow + uTilt + vec2(0.0, uSwell * 0.012);
           wuv += rippleHi * 0.012;
 
           // depth gradient — paper at the horizon, deepening through azure,
@@ -283,6 +289,7 @@ export default function Sea({
             uTimeLoc = gl.getUniformLocation(p, "uTime");
             uResLoc = gl.getUniformLocation(p, "uRes");
             uSwellLoc = gl.getUniformLocation(p, "uSwell");
+            uTiltLoc = gl.getUniformLocation(p, "uTilt");
             uRipplesLoc = gl.getUniformLocation(p, "uRipples");
             uRippleCountLoc = gl.getUniformLocation(p, "uRippleCount");
             uConcernTintLoc = gl.getUniformLocation(p, "u_concern_tint");
@@ -324,34 +331,119 @@ export default function Sea({
       ripples.current.push({ x, y, t0: performance.now(), strength });
       if (ripples.current.length > 28) ripples.current.shift();
     };
+    // Each pressed finger is tracked independently so two hands make two
+    // wave sources that interfere — multitouch, not one shared cursor.
+    const pressed = new Map<number, { x: number; y: number; lastEmit: number }>();
+    // Pen/touch report force in 0..1; mouse and pressure-less touch report 0,
+    // so treat those as a normal press. Harder press → bigger displacement.
+    const pressureOf = (e: PointerEvent) => (e.pressure > 0 ? e.pressure : 0.5);
+    const strengthScale = (p: number) => 0.6 + p * 0.95;
+
+    // The phone's own sensors. Guarded behind a permission request fired from
+    // the first touch (iOS requires a user gesture); silent no-op elsewhere.
+    const tiltTarget = { x: 0, y: 0 };
+    const tiltSmoothed = { x: 0, y: 0 };
+    let sensorsArmed = false;
+    let lastAccelMag: number | null = null;
+    let lastShakeAt = 0;
+
+    const onOrient = (e: DeviceOrientationEvent) => {
+      // gamma: left/right tilt (deg), beta: front/back tilt (deg). Lean the
+      // water toward the low edge. Small, clamped — a slosh, not a flood.
+      const gx = (e.gamma ?? 0) / 45;          // -1..1 across a 45° roll
+      const gy = ((e.beta ?? 45) - 45) / 45;   // 0 at a natural reading angle
+      tiltTarget.x = Math.max(-1, Math.min(1, gx));
+      tiltTarget.y = Math.max(-1, Math.min(1, gy));
+    };
+    const onMotion = (e: DeviceMotionEvent) => {
+      const a = e.accelerationIncludingGravity;
+      if (!a) return;
+      const mag = Math.hypot(a.x ?? 0, a.y ?? 0, a.z ?? 0);
+      if (lastAccelMag != null) {
+        const jolt = Math.abs(mag - lastAccelMag);
+        if (jolt > 13) {
+          // shake = storm. Stir the shared axis, and answer in all three
+          // senses at once: the sea churns, the hand is hit, the room thuds.
+          stirTurbulence(Math.min(0.5, jolt / 38));
+          const now = performance.now();
+          if (now - lastShakeAt > 320) {
+            lastShakeAt = now;
+            haptics.storm();
+            try { getFieldAudio().thud(); } catch { /* noop */ }
+          }
+        }
+      }
+      lastAccelMag = mag;
+    };
+    const armSensors = () => {
+      if (sensorsArmed) return;
+      sensorsArmed = true;
+      type PermCtor = { requestPermission?: () => Promise<"granted" | "denied"> };
+      const DOE = (window as unknown as { DeviceOrientationEvent?: PermCtor }).DeviceOrientationEvent;
+      const DME = (window as unknown as { DeviceMotionEvent?: PermCtor }).DeviceMotionEvent;
+      const add = () => {
+        window.addEventListener("deviceorientation", onOrient);
+        window.addEventListener("devicemotion", onMotion);
+      };
+      // iOS 13+ gates motion behind an explicit permission prompt.
+      if (DOE && typeof DOE.requestPermission === "function") {
+        Promise.allSettled([
+          DOE.requestPermission?.(),
+          DME?.requestPermission?.(),
+        ]).then((res) => {
+          if (res.some((r) => r.status === "fulfilled" && r.value === "granted")) add();
+        }).catch(() => { /* noop */ });
+      } else {
+        add();
+      }
+    };
+
     const onDown = (e: PointerEvent) => {
       const r = lines.getBoundingClientRect();
+      const x = e.clientX - r.left;
+      const y = e.clientY - r.top;
+      const p = pressureOf(e);
+      pressed.set(e.pointerId, { x, y, lastEmit: performance.now() });
       pointer.current.pressed = true;
       pointer.current.over = true;
-      pointer.current.x = e.clientX - r.left;
-      pointer.current.y = e.clientY - r.top;
-      addRipple(pointer.current.x, pointer.current.y, 26);
+      pointer.current.x = x;
+      pointer.current.y = y;
+      addRipple(x, y, 26 * strengthScale(p));
+      stirTurbulence(p * 0.04);
+      haptics.ripple(p);
       useField.getState().recordTape("ripple", 0.85);
+      armSensors();
     };
-    const onUp = () => { pointer.current.pressed = false; };
+    const onUp = (e: PointerEvent) => {
+      pressed.delete(e.pointerId);
+      if (pressed.size === 0) pointer.current.pressed = false;
+    };
     const onMove = (e: PointerEvent) => {
       const r = lines.getBoundingClientRect();
+      const x = e.clientX - r.left;
+      const y = e.clientY - r.top;
       pointer.current.over = true;
-      pointer.current.x = e.clientX - r.left;
-      pointer.current.y = e.clientY - r.top;
+      pointer.current.x = x;
+      pointer.current.y = y;
       const now = performance.now();
-      if (pointer.current.pressed && now - pointer.current.lastEmit > 80) {
-        addRipple(pointer.current.x, pointer.current.y, 13);
-        pointer.current.lastEmit = now;
-        useField.getState().recordTape("ripple", 0.45);
-      } else if (!pointer.current.pressed && now - pointer.current.lastEmit > 220) {
-        addRipple(pointer.current.x, pointer.current.y, 3);
+      const finger = pressed.get(e.pointerId);
+      if (finger) {
+        finger.x = x;
+        finger.y = y;
+        if (now - finger.lastEmit > 80) {
+          const p = pressureOf(e);
+          addRipple(x, y, 13 * strengthScale(p));
+          finger.lastEmit = now;
+          useField.getState().recordTape("ripple", 0.45);
+          haptics.chop();
+        }
+      } else if (now - pointer.current.lastEmit > 220) {
+        addRipple(x, y, 3);
         pointer.current.lastEmit = now;
       }
     };
     const onLeave = () => {
       pointer.current.over = false;
-      pointer.current.pressed = false;
     };
     lines.addEventListener("pointerdown", onDown);
     lines.addEventListener("pointermove", onMove);
@@ -455,12 +547,22 @@ export default function Sea({
         nudgeRef.current.impulse = 0;
       }
 
+      // ── turbulence (calm↔storm) ───────────────────────────────
+      // One shared axis, stirred by shake + hard presses, relaxing toward
+      // calm. It lifts the swell so a storm visibly piles the water higher.
+      const turb = reduce ? 0 : relaxTurbulence(now);
+      if (turb > 0) swellMod *= 1 + turb * 0.85;
+      // lean the body of water toward the phone's low edge (kept small).
+      tiltSmoothed.x += (tiltTarget.x - tiltSmoothed.x) * 0.06;
+      tiltSmoothed.y += (tiltTarget.y - tiltSmoothed.y) * 0.06;
+
       // WebGL water
       if (gl && glProg) {
         gl.useProgram(glProg);
         if (uTimeLoc) gl.uniform1f(uTimeLoc, t);
         if (uResLoc) gl.uniform2f(uResLoc, water.width, water.height);
-        if (uSwellLoc) gl.uniform1f(uSwellLoc, swellLfo);
+        if (uSwellLoc) gl.uniform1f(uSwellLoc, swellLfo + turb * 0.6);
+        if (uTiltLoc) gl.uniform2f(uTiltLoc, tiltSmoothed.x * 0.03, tiltSmoothed.y * 0.03);
         if (uConcernTintLoc) {
           gl.uniform3f(uConcernTintLoc, sm.tint[0], sm.tint[1], sm.tint[2]);
         }
@@ -589,6 +691,8 @@ export default function Sea({
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
       lines.removeEventListener("pointerleave", onLeave);
+      window.removeEventListener("deviceorientation", onOrient);
+      window.removeEventListener("devicemotion", onMotion);
     };
   }, []);
 
