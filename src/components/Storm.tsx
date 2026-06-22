@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
+import * as haptics from "@/lib/haptics";
 import { useField } from "@/store/field";
 import WaterText from "@/components/WaterText";
 import SeaChart, { type SeaChartCandle } from "@/components/SeaChart";
@@ -51,6 +52,30 @@ export default function Storm() {
   const [maelstromOn, setMaelstromOn] = useState(false);
   const [dragMode, setDragMode] = useState<null | "outer" | "inner" | "wind">(null);
   const [windAngleDisplay, setWindAngleDisplay] = useState(0);
+  const stormMarkIdRef = useRef(0);
+  const [stormMarks, setStormMarks] = useState<
+    Array<{ id: number; label: string; level: number }>
+  >([
+    { id: 0, label: "swell", level: 0.45 },
+    { id: -1, label: "wind", level: 0.35 },
+  ]);
+  const lastWheelToneAt = useRef(0);
+
+  const addStormMark = useCallback((label: string, level: number) => {
+    const id = ++stormMarkIdRef.current;
+    setStormMarks((marks) => [
+      { id, label, level: Math.max(0, Math.min(1, level)) },
+      ...marks,
+    ].slice(0, 4));
+  }, []);
+
+  const playWheelTone = useCallback((freq: number) => {
+    const now = performance.now();
+    if (now - lastWheelToneAt.current < 150) return;
+    lastWheelToneAt.current = now;
+    getFieldAudio().playTone(freq, 0.055);
+    haptics.tap();
+  }, []);
 
   // Rolling 30s storm history for the SeaChart embeds at the bottom-left.
   const stormHistoryRef = useRef<number[]>([]);
@@ -423,13 +448,17 @@ export default function Storm() {
         }
         particleBoost[pIdx] = 1;
         audio.spark();
+        haptics.ripple(0.25);
+        addStormMark("spray", 0.34);
         return;
       }
 
       if (isOnFuji(x, y)) {
         fujiHaloRef.current = { t0: performance.now() };
         audio.chime();
+        haptics.roll();
         useField.getState().recordTape("object", 0.7, "fuji");
+        addStormMark("fuji", 0.62);
         return;
       }
 
@@ -446,7 +475,9 @@ export default function Storm() {
           if (windStreaksRef.current.length > 8) windStreaksRef.current.shift();
         }
         audio.chime();
+        haptics.chop();
         useField.getState().recordTape("ripple", 0.4, "storm/sky");
+        addStormMark("squall", 0.44);
         return;
       }
 
@@ -457,10 +488,14 @@ export default function Storm() {
       if (crestD < 24) {
         spawnBurst(x, y, 14, 220);
         audio.thud();
+        haptics.storm();
         stormSpikeRef.current = Math.min(0.4, stormSpikeRef.current + 0.05);
         useField.getState().recordTape("ripple", 1.0, "storm/crest");
+        addStormMark("crest", 0.95);
       } else {
+        haptics.ripple(0.5);
         useField.getState().recordTape("ripple", 0.9, "storm");
+        addStormMark("swell", 0.58);
       }
 
       seaDragging = true;
@@ -490,6 +525,8 @@ export default function Storm() {
       if (nowMs - lastDragAt > 220) {
         if (crestHitDistance(x, y) < 28) {
           audio.chime();
+          haptics.chop();
+          addStormMark("break", 0.66);
           lastDragAt = nowMs;
         }
       }
@@ -936,7 +973,7 @@ export default function Storm() {
       lines.removeEventListener("pointerup", onPointerUp);
       lines.removeEventListener("pointercancel", onPointerUp);
     };
-  }, []);
+  }, [addStormMark]);
 
   // Storm-history sampler for the SeaChart embeds (kept).
   useEffect(() => {
@@ -998,6 +1035,7 @@ export default function Storm() {
     const clamped = reduce ? Math.min(v, 0.3) : v;
     stormTargetRef.current = clamped;
     setStormDisplay(clamped);
+    playWheelTone(110 + clamped * 180);
   };
 
   const setFreqFromAngle = (ang: number) => {
@@ -1005,6 +1043,7 @@ export default function Storm() {
     const mapped = 0.4 + v * 1.8;
     freqTargetRef.current = mapped;
     setFreqDisplay(mapped);
+    playWheelTone(220 + v * 420);
   };
 
   const onWheelDown = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -1015,9 +1054,11 @@ export default function Storm() {
     if (g.norm > 0.62) {
       setDragMode("outer");
       setStormFromAngle(g.ang);
+      addStormMark("amplitude", 0.52);
     } else if (g.norm > 0.18) {
       setDragMode("inner");
       setFreqFromAngle(g.ang);
+      addStormMark("speed", 0.48);
     }
   };
 
@@ -1045,12 +1086,16 @@ export default function Storm() {
     const ang = Math.atan2(clientY - cy, clientX - cx);
     windDirRef.current = ang;
     setWindAngleDisplay(ang);
+    playWheelTone(180 + ((ang + Math.PI) / (Math.PI * 2)) * 260);
   };
   const onWindDown = (e: React.PointerEvent<HTMLDivElement>) => {
     e.currentTarget.setPointerCapture(e.pointerId);
     setDragMode("wind");
     setWindFromPointer(e.clientX, e.clientY);
     getFieldAudio().chime();
+    haptics.chop();
+    useField.getState().recordTape("region", 0.45, "storm/wind");
+    addStormMark("wind", 0.5);
   };
   const onWindMove = (e: React.PointerEvent<HTMLDivElement>) => {
     if (dragMode !== "wind") return;
@@ -1069,9 +1114,13 @@ export default function Storm() {
     if (next) {
       audio.thud();
       window.setTimeout(() => audio.bell(), 220);
+      haptics.storm();
       useField.getState().recordTape("ripple", 1.0, "storm/maelstrom");
+      addStormMark("maelstrom", 1);
     } else {
       audio.chime();
+      haptics.roll();
+      addStormMark("release", 0.42);
     }
   };
 
@@ -1086,7 +1135,9 @@ export default function Storm() {
     setMaelstromOn(false);
     const audio = getFieldAudio();
     audio.bell();
+    haptics.roll();
     useField.getState().recordTape("ripple", 0.3, "storm/calm");
+    addStormMark("calm", 0.28);
   };
 
   const ampPct = Math.round(stormDisplay * 100);
@@ -1144,6 +1195,7 @@ export default function Storm() {
 
       {/* ── title block ───────────────────────────────────────── */}
       <div
+        className="storm-title"
         style={{
           position: "fixed",
           top: 80,
@@ -1195,10 +1247,39 @@ export default function Storm() {
         >
           the wave allowed to rage
         </WaterText>
+        <div
+          className="storm-mark-ribbon"
+          aria-hidden="true"
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "7px 10px",
+            marginTop: 14,
+            maxWidth: 420,
+            fontFamily: "var(--font-text)",
+            fontSize: 11,
+            letterSpacing: "0.08em",
+            textTransform: "lowercase",
+            color: "rgba(244, 248, 255, 0.64)",
+          }}
+        >
+          {stormMarks.map((mark) => (
+            <span
+              key={mark.id}
+              style={{
+                opacity: 0.45 + mark.level * 0.45,
+                borderBottom: "1px solid rgba(244,248,255,0.22)",
+              }}
+            >
+              {mark.label}
+            </span>
+          ))}
+        </div>
       </div>
 
       {/* ── wind rose (top right) ───────────────────────────── */}
       <div
+        className="storm-wind-rose"
         ref={windRoseRef}
         role="slider"
         aria-label="wind direction"
@@ -1247,10 +1328,11 @@ export default function Storm() {
 
       {/* ── ship's wheel (bottom center) ─────────────────────── */}
       <div
+        className="storm-wheel-panel"
         style={{
           position: "fixed",
           left: "50%",
-          bottom: 36,
+          bottom: 56,
           transform: "translateX(-50%)",
           color: "rgba(244, 248, 255, 0.88)",
           pointerEvents: "auto",
@@ -1264,6 +1346,7 @@ export default function Storm() {
         }}
       >
         <div
+          className="storm-readout"
           style={{
             display: "flex",
             gap: 24,
@@ -1280,6 +1363,7 @@ export default function Storm() {
         </div>
 
         <div
+          className="storm-wheel"
           ref={wheelRef}
           role="group"
           aria-label="storm wheel — outer ring is amplitude, inner ring is speed"
@@ -1334,7 +1418,7 @@ export default function Storm() {
           </svg>
         </div>
 
-        <div style={{ display: "flex", gap: 12, marginTop: 4 }}>
+        <div className="storm-actions" style={{ display: "flex", gap: 12, marginTop: 4 }}>
           <button
             onClick={toggleMaelstrom}
             aria-pressed={maelstromOn}
@@ -1381,8 +1465,102 @@ export default function Storm() {
         </div>
       </div>
 
+      <style
+        dangerouslySetInnerHTML={{
+          __html:
+            `
+            @media (max-width: 700px) {
+              .storm-title {
+                top: 76px !important;
+                left: 18px !important;
+                max-width: calc(100vw - 124px) !important;
+              }
+              .storm-title .t-eyebrow {
+                margin-bottom: 8px !important;
+                font-size: 10px !important;
+              }
+              .storm-title h1 {
+                font-size: 52px !important;
+                letter-spacing: 0 !important;
+              }
+              .storm-title [style*="italic"] {
+                font-size: 16px !important;
+                line-height: 1.1 !important;
+              }
+              .storm-mark-ribbon {
+                margin-top: 8px !important;
+                gap: 5px 8px !important;
+                font-size: 10px !important;
+                max-width: 210px !important;
+              }
+              .storm-wind-rose {
+                top: 84px !important;
+                right: 16px !important;
+                width: 68px !important;
+                height: 68px !important;
+              }
+              .storm-wind-rose svg {
+                width: 68px !important;
+                height: 68px !important;
+              }
+              .storm-wheel-panel {
+                bottom: calc(54px + env(safe-area-inset-bottom, 0px)) !important;
+                gap: 6px !important;
+              }
+              .storm-readout {
+                gap: 14px !important;
+                font-size: 12px !important;
+              }
+              .storm-wheel {
+                width: 150px !important;
+                height: 150px !important;
+              }
+              .storm-wheel svg {
+                width: 150px !important;
+                height: 150px !important;
+              }
+              .storm-actions {
+                gap: 8px !important;
+                margin-top: 0 !important;
+              }
+              .storm-actions button {
+                min-height: 40px !important;
+                padding: 8px 10px !important;
+                font-size: 11px !important;
+                max-width: 124px;
+                white-space: normal;
+              }
+              .storm-chart-stack {
+                display: none !important;
+              }
+            }
+            @media (max-width: 700px) and (max-height: 740px) {
+              .storm-title h1 {
+                font-size: 44px !important;
+              }
+              .storm-mark-ribbon {
+                max-width: 190px !important;
+              }
+              .storm-wheel {
+                width: 132px !important;
+                height: 132px !important;
+              }
+              .storm-wheel svg {
+                width: 132px !important;
+                height: 132px !important;
+              }
+              .storm-actions button {
+                min-height: 38px !important;
+                padding: 7px 9px !important;
+              }
+            }
+            `,
+        }}
+      />
+
       {/* ── SeaChart embeds (kept from prior visuals) ──────────── */}
       <div
+        className="storm-chart-stack"
         style={{
           position: "fixed",
           left: 24,
