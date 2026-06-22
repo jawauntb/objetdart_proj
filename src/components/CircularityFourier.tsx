@@ -66,7 +66,7 @@ export default function CircularityFourier() {
   }, [preset, terms, theta]);
 
   return (
-    <div className="circularity-page" data-touch-surface="true">
+    <div className="circularity-page" data-touch-surface="true" data-pretext-ignore="true">
       <section className="circularity-shell">
         <div className="circularity-copy">
           <p className="t-eyebrow circularity-kicker">circularity / fourier complement</p>
@@ -130,7 +130,7 @@ export default function CircularityFourier() {
         </svg>
       </section>
 
-      <style>{`
+      <style dangerouslySetInnerHTML={{ __html: `
         .circularity-page {
           min-height: 100vh;
           background: #141616;
@@ -191,6 +191,14 @@ export default function CircularityFourier() {
           cursor: pointer;
           min-height: 48px;
         }
+        .circularity-controls > button {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          border: 1px solid rgba(242, 238, 230, 0.18);
+          border-radius: 6px;
+          background: rgba(242, 238, 230, 0.06);
+        }
         .circularity-presets button[aria-pressed="true"] {
           background: rgba(241, 215, 124, 0.16);
           color: #f1d77c;
@@ -226,17 +234,28 @@ export default function CircularityFourier() {
         @media (max-width: 820px) {
           .circularity-copy h1 { font-size: 42px; }
           .circularity-controls {
-            grid-auto-flow: column;
-            grid-auto-columns: minmax(170px, 72vw);
-            grid-template-columns: none;
-            overflow-x: auto;
-            overscroll-behavior-x: contain;
-            padding-bottom: 8px;
+            grid-template-columns: minmax(0, 1fr);
+            gap: 8px;
+            overflow: visible;
+            padding-bottom: 0;
           }
-          .circularity-presets { min-width: 250px; }
+          .circularity-presets {
+            min-width: 0;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+          }
+          .circularity-presets button,
+          .circularity-controls > button {
+            font-size: 13px;
+          }
+          .circularity-controls label {
+            grid-template-columns: minmax(58px, auto) minmax(0, 1fr) minmax(32px, auto);
+          }
+          .circularity-controls input[type="range"] {
+            min-width: 0;
+          }
           .circularity-stage { min-height: 390px; }
         }
-      `}</style>
+      ` }} />
     </div>
   );
 }
