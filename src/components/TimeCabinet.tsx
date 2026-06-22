@@ -689,6 +689,7 @@ export default function TimeCabinet() {
           display: grid;
           gap: 10px;
           justify-items: center;
+          overscroll-behavior: contain;
           transition: border-color 0.25s ease, transform 0.25s ease, box-shadow 0.25s ease;
         }
         .inst:hover {
@@ -696,7 +697,13 @@ export default function TimeCabinet() {
           transform: translateY(-2px);
           box-shadow: 0 18px 44px rgba(0,0,0,0.45);
         }
-        .inst svg { width: 100%; max-width: 250px; height: auto; touch-action: manipulation; }
+        .inst svg {
+          width: 100%;
+          max-width: 250px;
+          height: auto;
+          touch-action: none;
+          -webkit-tap-highlight-color: transparent;
+        }
         .inst figcaption { display: grid; gap: 2px; text-align: center; }
         .inst figcaption span {
           font-family: var(--font-numerals);
