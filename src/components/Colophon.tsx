@@ -1,8 +1,44 @@
 "use client";
 
+import { useState } from "react";
+import { getFieldAudio } from "@/lib/audio";
+import * as haptics from "@/lib/haptics";
 import Sigil from "@/components/Sigil";
+import { useField } from "@/store/field";
+
+const REGISTERS = [
+  {
+    id: "devotional",
+    note: 57,
+    tone: "var(--candle)",
+    line: "a candle: attention given a small visible body.",
+  },
+  {
+    id: "operational",
+    note: 64,
+    tone: "var(--sea)",
+    line: "a command center: every surface answers touch.",
+  },
+  {
+    id: "oceanic",
+    note: 69,
+    tone: "#A3CFCB",
+    line: "the sea: a pattern that keeps changing and remains itself.",
+  },
+];
 
 export default function Colophon() {
+  const [activeRegister, setActiveRegister] = useState(REGISTERS[0]);
+  const recordTape = useField((s) => s.recordTape);
+
+  const playRegister = (register: typeof REGISTERS[number]) => {
+    setActiveRegister(register);
+    const audio = getFieldAudio();
+    audio.playNote(register.note, 260);
+    haptics.ripple(0.42);
+    recordTape("sigil", 0.4, `colophon/${register.id}`);
+  };
+
   return (
     <section id="colophon" className="rule" style={{ scrollMarginTop: 72 }}>
       <div className="wrap" style={{ maxWidth: 720 }}>
@@ -24,6 +60,75 @@ export default function Colophon() {
             written entirely by hand. no analytics, no tracking, no email capture.
             send a message if something here is for you.
           </p>
+        </div>
+
+        <div
+          data-colophon-memory="true"
+          style={{
+            marginTop: 34,
+            display: "grid",
+            gap: 12,
+            maxWidth: "min(60ch, calc(100vw - 108px))",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 8,
+            }}
+          >
+            {REGISTERS.map((register) => {
+              const active = activeRegister.id === register.id;
+              return (
+                <button
+                  key={register.id}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => playRegister(register)}
+                  className="t-mono"
+                  style={{
+                    minHeight: 44,
+                    padding: "0 13px",
+                    border: active ? `1px solid ${register.tone}` : "1px solid var(--rule)",
+                    background: active ? "rgba(42, 74, 92, 0.08)" : "transparent",
+                    color: active ? "var(--ink)" : "var(--ink-2)",
+                    fontSize: 11,
+                    letterSpacing: 0,
+                    textTransform: "lowercase",
+                    cursor: "pointer",
+                  }}
+                >
+                  {register.id}
+                </button>
+              );
+            })}
+          </div>
+          <div
+            aria-live="polite"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 9,
+              minHeight: 28,
+              color: "var(--ink-2)",
+              fontFamily: "var(--font-serif)",
+              fontStyle: "italic",
+              fontSize: 17,
+            }}
+          >
+            <span
+              aria-hidden="true"
+              style={{
+                width: 28,
+                height: 2,
+                flex: "0 0 auto",
+                background: activeRegister.tone,
+                boxShadow: `0 0 14px ${activeRegister.tone}`,
+              }}
+            />
+            <span>{activeRegister.line}</span>
+          </div>
         </div>
 
         <div className="rule" style={{ marginTop: 40, paddingTop: 24 }}>

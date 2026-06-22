@@ -2,6 +2,7 @@
 
 import { forwardRef, useCallback, useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
+import * as haptics from "@/lib/haptics";
 import { useField } from "@/store/field";
 import WaterText from "@/components/WaterText";
 
@@ -253,6 +254,12 @@ export default function Plasma() {
   useEffect(() => { getFieldAudio().setAmbientProfile("electric"); }, []);
 
   const isMobile = useIsMobile();
+  const [plasmaMarks, setPlasmaMarks] = useState<Array<{ label: string; tone: string; t: number }>>([
+    { label: "field", tone: "#6fcfe4", t: 0 },
+  ]);
+  const markPlasma = useCallback((label: string, tone = "#6fcfe4") => {
+    setPlasmaMarks((prev) => [{ label, tone, t: performance.now() }, ...prev].slice(0, 5));
+  }, []);
   // ── refs for each canvas + interactions ─────────────────────────
   const orbWrapRef = useRef<HTMLDivElement>(null);
   const orbCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -3347,12 +3354,67 @@ export default function Plasma() {
       style={{
         position: "relative",
         minHeight: "calc(100vh - 56px)", // minus the sticky header
+        paddingBottom: "calc(112px + env(safe-area-inset-bottom, 0px))",
         background:
           "linear-gradient(180deg, #020314 0%, #060823 28%, #08102a 62%, #0a1028 100%)",
         color: "rgba(232, 226, 213, 0.92)",
         overflowX: "hidden",
       }}
     >
+      <div
+        className="plasma-memory"
+        data-plasma-memory="true"
+        aria-live="polite"
+        style={{
+          position: "fixed",
+          left: 18,
+          bottom: "calc(112px + env(safe-area-inset-bottom, 0px))",
+          zIndex: 4,
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          maxWidth: "min(520px, calc(100vw - 150px))",
+          padding: "8px 10px",
+          border: "1px solid rgba(232, 226, 213, 0.16)",
+          borderRadius: 6,
+          background: "rgba(3, 6, 20, 0.62)",
+          backdropFilter: "blur(8px)",
+          WebkitBackdropFilter: "blur(8px)",
+          color: "rgba(232, 226, 213, 0.68)",
+          fontFamily: "var(--font-mono)",
+          fontSize: 10,
+          letterSpacing: 0,
+          textTransform: "lowercase",
+          pointerEvents: "none",
+        }}
+      >
+        {plasmaMarks.map((mark, index) => (
+          <span
+            key={`${mark.label}-${mark.t}-${index}`}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 5,
+              minWidth: 0,
+              opacity: index === 0 ? 1 : 0.46,
+              whiteSpace: "nowrap",
+            }}
+          >
+            <i
+              aria-hidden="true"
+              style={{
+                width: index === 0 ? 24 : 10,
+                height: 2,
+                flex: "0 0 auto",
+                background: mark.tone,
+                boxShadow: index === 0 ? `0 0 14px ${mark.tone}` : undefined,
+              }}
+            />
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{mark.label}</span>
+          </span>
+        ))}
+      </div>
+
       {/* page title block */}
       <div
         style={{
@@ -3495,6 +3557,11 @@ export default function Plasma() {
             const idx = PALETTE_ORDER.indexOf(orbPalette);
             const next = PALETTE_ORDER[(idx + 1) % PALETTE_ORDER.length];
             setOrbPalette(next);
+            const palette = ORB_PALETTES[next];
+            const tone = `rgb(${Math.round(palette.electric[0] * 255)}, ${Math.round(palette.electric[1] * 255)}, ${Math.round(palette.electric[2] * 255)})`;
+            markPlasma(`color ${palette.label}`, tone);
+            haptics.roll();
+            recordTapeRef.current("sigil", 0.42, `plasma/color/${next}`);
             try { getAudio().chime(); } catch { /* noop */ }
           }}
           style={{
@@ -3607,6 +3674,9 @@ export default function Plasma() {
                     setHueSelection({ hue: s.hue, white: s.white });
                     prismState.current.incomingHue = s.hue;
                     prismState.current.hueWhite = s.white;
+                    markPlasma(`beam ${s.label}`, typeof s.color === "string" && s.color.startsWith("#") ? s.color : "#f4eedf");
+                    haptics.ripple(0.35);
+                    recordTapeRef.current("sigil", 0.32, `plasma/beam/${s.label}`);
                     try { getAudio().spark(); } catch { /* noop */ }
                   }}
                   style={{
@@ -3709,6 +3779,8 @@ export default function Plasma() {
             onClick={() => {
               const wrap = prismWrapRef.current;
               if (!wrap) return;
+              markPlasma("random prism", "#ffe06e");
+              haptics.roll();
               wrap.dispatchEvent(new CustomEvent("plasma:prism-randomize"));
             }}
             style={{
@@ -4044,7 +4116,7 @@ export default function Plasma() {
       <section
         style={{
           minHeight: isMobile ? "92vh" : undefined,
-          padding: "36px var(--pad-x, 24px) 80px",
+          padding: "36px var(--pad-x, 24px) calc(136px + env(safe-area-inset-bottom, 0px))",
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
