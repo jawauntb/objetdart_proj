@@ -1,11 +1,8 @@
 "use client";
 
 import { useRef, useState } from "react";
-
-type AudioBag = {
-  context: AudioContext;
-  master: GainNode;
-};
+import { getFieldAudio } from "@/lib/audio";
+import { useField } from "@/store/field";
 
 const NOTES = [
   ["C", 261.63],
@@ -16,55 +13,72 @@ const NOTES = [
   ["B", 493.88],
 ] as const;
 
-const WAVEFORMS: OscillatorType[] = ["sine", "triangle", "square", "sawtooth"];
+const WAVEFORMS = ["sine", "triangle", "square", "sawtooth"] as const satisfies readonly OscillatorType[];
 
-function ensureAudio(current: AudioBag | null): AudioBag | null {
-  if (current) return current;
-  const AudioContextCtor =
-    window.AudioContext ??
-    (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-  if (!AudioContextCtor) return null;
-  const context = new AudioContextCtor();
-  const master = context.createGain();
-  master.gain.value = 0.16;
-  master.connect(context.destination);
-  return { context, master };
-}
+type LightWaveform = (typeof WAVEFORMS)[number];
+
+type Afterimage = {
+  id: number;
+  x: number;
+  y: number;
+  hue: number;
+  lightness: number;
+  waveform: LightWaveform;
+};
+
+const WAVE_VOICES: Record<LightWaveform, { partials: readonly number[]; note: number; intensity: number }> = {
+  sine: { partials: [1], note: 64, intensity: 0.4 },
+  triangle: { partials: [1, 1.5], note: 67, intensity: 0.5 },
+  square: { partials: [1, 2], note: 72, intensity: 0.58 },
+  sawtooth: { partials: [1, 1.25, 1.5], note: 76, intensity: 0.66 },
+};
 
 export default function LightInstrument() {
-  const audioRef = useRef<AudioBag | null>(null);
+  const padRef = useRef<HTMLDivElement | null>(null);
   const lastToneAt = useRef(0);
+  const afterimageId = useRef(0);
   const [hue, setHue] = useState(48);
   const [lightness, setLightness] = useState(64);
-  const [waveform, setWaveform] = useState<OscillatorType>("sine");
+  const [waveform, setWaveform] = useState<LightWaveform>("sine");
   const [octave, setOctave] = useState(1);
   const [activeNote, setActiveNote] = useState("C");
   const [message, setMessage] = useState("tap the light");
+  const [afterimages, setAfterimages] = useState<Afterimage[]>([]);
 
-  const play = async (frequency: number, note: string, duration = 0.42) => {
-    const bag = ensureAudio(audioRef.current);
-    if (!bag) return;
-    audioRef.current = bag;
-    if (bag.context.state === "suspended") await bag.context.resume();
+  const addAfterimage = (x: number, y: number, nextHue: number, nextLightness: number, nextWaveform = waveform) => {
+    const id = afterimageId.current++;
+    setAfterimages((current) => [
+      ...current.slice(-8),
+      { id, x, y, hue: nextHue, lightness: nextLightness, waveform: nextWaveform },
+    ]);
+    window.setTimeout(() => {
+      setAfterimages((current) => current.filter((afterimage) => afterimage.id !== id));
+    }, 1300);
+  };
 
-    const oscillator = bag.context.createOscillator();
-    const gain = bag.context.createGain();
-    oscillator.type = waveform;
-    oscillator.frequency.value = frequency * octave;
-    gain.gain.setValueAtTime(0.0001, bag.context.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.45, bag.context.currentTime + 0.025);
-    gain.gain.exponentialRampToValueAtTime(0.0001, bag.context.currentTime + duration);
-    oscillator.connect(gain);
-    gain.connect(bag.master);
-    oscillator.start();
-    oscillator.stop(bag.context.currentTime + duration + 0.04);
+  const recordLight = (meta: string, intensity: number) => {
+    useField.getState().recordTape("sigil", intensity, `light/${meta}`);
+  };
+
+  const play = (frequency: number, note: string, duration = 0.42, meta = "note", voice = waveform) => {
+    const audio = getFieldAudio();
+    const baseFrequency = frequency * octave;
+    const profile = WAVE_VOICES[voice];
+    try {
+      profile.partials.forEach((partial, index) => {
+        window.setTimeout(() => {
+          audio.playTone(baseFrequency * partial, Math.max(0.08, duration * (index === 0 ? 1 : 0.46)));
+        }, index * 24);
+      });
+    } catch { /* noop */ }
     setActiveNote(note);
-    setMessage(`${note}${octave === 2 ? " high" : ""} / ${waveform}`);
+    setMessage(`${note}${octave === 2 ? " high" : ""} / ${voice}`);
+    recordLight(`${meta}/${note}`, Math.min(1, profile.intensity + (octave - 1) * 0.12));
   };
 
   const tunePad = (clientX: number, clientY: number, shouldSound: boolean) => {
-    const target = document.querySelector(".light-pad");
-    if (!(target instanceof HTMLElement)) return;
+    const target = padRef.current;
+    if (!target) return;
     const rect = target.getBoundingClientRect();
     const x = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
     const y = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
@@ -72,16 +86,32 @@ export default function LightInstrument() {
     const nextLight = Math.round(38 + (1 - y) * 44);
     setHue(nextHue);
     setLightness(nextLight);
+    addAfterimage(x, y, nextHue, nextLight);
     if (!shouldSound) return;
     const now = performance.now();
     if (now - lastToneAt.current < 90) return;
     lastToneAt.current = now;
     const frequency = 180 + x * 620 + (1 - y) * 180;
-    void play(frequency, "pad", 0.22);
+    play(frequency, "pad", 0.18, "pad");
+  };
+
+  const chooseWaveform = (name: LightWaveform) => {
+    setWaveform(name);
+    setMessage(`wave ${name}`);
+    try { getFieldAudio().playNote(WAVE_VOICES[name].note, 120); } catch { /* noop */ }
+    recordLight(`wave/${name}`, WAVE_VOICES[name].intensity);
+    addAfterimage(0.5, 0.5, hue, lightness, name);
+  };
+
+  const chooseOctave = (value: number) => {
+    setOctave(value);
+    setMessage(value === 2 ? "raised octave" : "lower octave");
+    try { getFieldAudio().playNote(value === 2 ? 76 : 64, 110); } catch { /* noop */ }
+    recordLight(`octave/${value}`, value === 2 ? 0.62 : 0.42);
   };
 
   return (
-    <div className="light-page" data-touch-surface="true">
+    <div className="light-page" data-touch-surface="true" data-pretext-ignore="true">
       <section className="light-shell">
         <div className="light-copy">
           <p className="t-eyebrow light-kicker">light / color music instrument</p>
@@ -92,43 +122,49 @@ export default function LightInstrument() {
         <div className="light-controls" aria-label="light instrument controls">
           <div className="light-notes" role="group" aria-label="notes">
             {NOTES.map(([note, frequency]) => (
-              <button key={note} type="button" aria-pressed={activeNote === note} onClick={() => void play(frequency, note)}>
+              <button key={note} type="button" aria-pressed={activeNote === note} onClick={() => play(frequency, note)}>
                 {note}
               </button>
             ))}
           </div>
           <div className="light-waves" role="group" aria-label="waveform">
             {WAVEFORMS.map((name) => (
-              <button key={name} type="button" aria-pressed={waveform === name} onClick={() => setWaveform(name)}>
+              <button key={name} type="button" aria-pressed={waveform === name} onClick={() => chooseWaveform(name)}>
                 {name}
               </button>
             ))}
           </div>
           <label>
             <span>octave</span>
-            <input type="range" min="1" max="2" step="1" value={octave} onChange={(event) => setOctave(Number(event.target.value))} />
+            <input type="range" min="1" max="2" step="1" value={octave} onChange={(event) => chooseOctave(Number(event.target.value))} />
             <strong>{octave}</strong>
           </label>
         </div>
 
         <div
+          ref={padRef}
           className="light-pad"
           role="button"
           tabIndex={0}
           aria-label="light pad"
           onPointerDown={(event) => {
             tunePad(event.clientX, event.clientY, true);
-            event.currentTarget.setPointerCapture(event.pointerId);
+            try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* noop */ }
           }}
           onPointerMove={(event) => {
             if (event.buttons !== 1) return;
             tunePad(event.clientX, event.clientY, true);
           }}
-          onPointerUp={(event) => event.currentTarget.releasePointerCapture(event.pointerId)}
+          onPointerUp={(event) => {
+            try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* noop */ }
+          }}
+          onPointerCancel={(event) => {
+            try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* noop */ }
+          }}
           onKeyDown={(event) => {
             if (event.key === "Enter" || event.key === " ") {
               event.preventDefault();
-              void play(440, "A");
+              play(440, "A");
             }
           }}
           style={{
@@ -136,6 +172,19 @@ export default function LightInstrument() {
             boxShadow: `0 0 80px hsla(${hue}, 92%, ${lightness}%, 0.32)`,
           }}
         >
+          {afterimages.map((afterimage) => (
+            <span
+              key={afterimage.id}
+              className="light-afterimage"
+              data-wave={afterimage.waveform}
+              style={{
+                left: `${afterimage.x * 100}%`,
+                top: `${afterimage.y * 100}%`,
+                borderColor: `hsla(${afterimage.hue}, 94%, ${afterimage.lightness}%, 0.48)`,
+                boxShadow: `0 0 34px hsla(${afterimage.hue}, 94%, ${afterimage.lightness}%, 0.38)`,
+              }}
+            />
+          ))}
           <div className="light-core">
             <span>{message}</span>
             <strong>{hue} deg / {lightness}%</strong>
@@ -143,7 +192,9 @@ export default function LightInstrument() {
         </div>
       </section>
 
-      <style>{`
+      <style
+        dangerouslySetInnerHTML={{
+          __html: `
         .light-page {
           min-height: 100vh;
           background: #121415;
@@ -249,6 +300,37 @@ export default function LightInstrument() {
           transform: rotate(18deg) scaleX(1.35);
           pointer-events: none;
         }
+        .light-afterimage {
+          position: absolute;
+          width: clamp(44px, 9vw, 86px);
+          aspect-ratio: 1;
+          border: 1px solid rgba(244, 215, 120, 0.46);
+          border-radius: 50%;
+          transform: translate(-50%, -50%) scale(0.42);
+          opacity: 0.82;
+          pointer-events: none;
+          animation: lightAfterimage 1300ms ease-out forwards;
+          mix-blend-mode: screen;
+        }
+        .light-afterimage[data-wave="triangle"] {
+          clip-path: polygon(50% 0%, 96% 86%, 4% 86%);
+        }
+        .light-afterimage[data-wave="square"] {
+          border-radius: 12%;
+        }
+        .light-afterimage[data-wave="sawtooth"] {
+          clip-path: polygon(0% 100%, 34% 10%, 34% 100%, 68% 10%, 68% 100%, 100% 10%, 100% 100%);
+        }
+        @keyframes lightAfterimage {
+          0% {
+            opacity: 0.78;
+            transform: translate(-50%, -50%) scale(0.34) rotate(0deg);
+          }
+          100% {
+            opacity: 0;
+            transform: translate(-50%, -50%) scale(1.8) rotate(16deg);
+          }
+        }
         .light-core {
           width: min(280px, 70vw);
           aspect-ratio: 1;
@@ -275,20 +357,29 @@ export default function LightInstrument() {
           font-weight: 400;
         }
         @media (max-width: 860px) {
-          .light-copy h1 { font-size: 42px; }
-          .light-controls {
-            grid-auto-flow: column;
-            grid-auto-columns: minmax(210px, 78vw);
-            grid-template-columns: none;
-            overflow-x: auto;
-            overscroll-behavior-x: contain;
-            padding-bottom: 8px;
+          .light-shell {
+            padding-top: 24px;
           }
-          .light-notes { min-width: 330px; }
-          .light-waves { min-width: 300px; }
-          .light-pad { min-height: 440px; }
+          .light-copy h1 { font-size: clamp(40px, 13vw, 54px); }
+          .light-controls {
+            grid-template-columns: 1fr;
+            gap: 8px;
+          }
+          .light-notes,
+          .light-waves {
+            min-width: 0;
+          }
+          .light-notes button,
+          .light-waves button {
+            min-height: 48px;
+          }
+          .light-pad {
+            min-height: min(62svh, 470px);
+          }
         }
-      `}</style>
+      `,
+        }}
+      />
     </div>
   );
 }
