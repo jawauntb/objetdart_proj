@@ -74,6 +74,31 @@ type Guilloche = { spirals: string[]; rings: number[] };
 type MinuteTick = { x1: number; y1: number; x2: number; y2: number; major: boolean };
 type HourMarker = { hour: number; angle: number; skip: boolean; doubled: boolean };
 
+// Dial-face materials — the thing a collector actually falls for.
+const MATERIALS = [
+  { id: "guilloche", label: "guilloché bleu" },
+  { id: "aventurine", label: "aventurine" },
+  { id: "meteorite", label: "météorite" },
+  { id: "malachite", label: "malachite" },
+] as const;
+type MaterialId = (typeof MATERIALS)[number]["id"];
+
+// deterministic scatter of points inside r<170 for aventurine sparkle
+function dialSparkle(seed: number, count: number) {
+  const pts: Array<{ x: number; y: number; r: number; warm: boolean }> = [];
+  for (let i = 0; i < count; i++) {
+    const a = ((Math.sin((i + seed) * 12.9898) * 43758.5453) % 1 + 1) % 1 * Math.PI * 2;
+    const rad = Math.sqrt(((Math.sin((i + seed) * 78.233) * 43758.5453) % 1 + 1) % 1) * 168;
+    pts.push({
+      x: C + Math.cos(a) * rad,
+      y: C + Math.sin(a) * rad,
+      r: 0.35 + (((Math.sin((i + seed) * 3.1) * 9999) % 1 + 1) % 1) * 1.1,
+      warm: i % 4 === 0,
+    });
+  }
+  return pts;
+}
+
 /**
  * Everything on the dial that never changes between frames — the case, the
  * fluted bezel, the engine-turned guilloché, the chapter ring, the applied
@@ -84,8 +109,10 @@ const StaticDial = memo(function StaticDial(props: {
   guilloche: Guilloche;
   minuteTrack: MinuteTick[];
   hourMarkers: HourMarker[];
+  material: MaterialId;
 }) {
-  const { guilloche, minuteTrack, hourMarkers } = props;
+  const { guilloche, minuteTrack, hourMarkers, material } = props;
+  const sparkle = material === "aventurine" ? dialSparkle(7, 220) : [];
   return (
     <>
       <defs>
@@ -126,6 +153,21 @@ const StaticDial = memo(function StaticDial(props: {
           <stop offset="0%" stopColor="#bfeede" />
           <stop offset="100%" stopColor="#5fae9a" />
         </radialGradient>
+        <radialGradient id="matAventurine" cx="42%" cy="34%" r="85%">
+          <stop offset="0%" stopColor="#16306b" />
+          <stop offset="55%" stopColor="#0c1d4a" />
+          <stop offset="100%" stopColor="#04081e" />
+        </radialGradient>
+        <radialGradient id="matMeteorite" cx="42%" cy="34%" r="85%">
+          <stop offset="0%" stopColor="#5a5e63" />
+          <stop offset="50%" stopColor="#3b3f44" />
+          <stop offset="100%" stopColor="#191b1e" />
+        </radialGradient>
+        <radialGradient id="matMalachite" cx="42%" cy="34%" r="85%">
+          <stop offset="0%" stopColor="#2f7d5e" />
+          <stop offset="60%" stopColor="#155a3f" />
+          <stop offset="100%" stopColor="#06301f" />
+        </radialGradient>
         <filter id="softShadow" x="-30%" y="-30%" width="160%" height="160%">
           <feDropShadow dx="0" dy="1.4" stdDeviation="1.6" floodColor="#000" floodOpacity="0.55" />
         </filter>
@@ -135,6 +177,7 @@ const StaticDial = memo(function StaticDial(props: {
         </filter>
         <clipPath id="tourbClip"><circle cx={C} cy={292} r={36} /></clipPath>
         <clipPath id="moonClip"><circle cx={C + 54} cy={C + 54} r={20} /></clipPath>
+        <clipPath id="dialClip"><circle cx={C} cy={C} r={178} /></clipPath>
       </defs>
 
       {/* case + fluted bezel */}
@@ -150,15 +193,62 @@ const StaticDial = memo(function StaticDial(props: {
       <circle cx={C} cy={C} r={188} fill="url(#bezel)" />
       <circle cx={C} cy={C} r={180} fill="#0a0d11" />
 
-      {/* dial face + guilloché */}
-      <circle cx={C} cy={C} r={178} fill="url(#dialFace)" />
-      <g opacity="0.5" stroke="#9fb6c9" fill="none" strokeWidth="0.35">
-        {guilloche.rings.map((r, i) => (
-          <circle key={`r${i}`} cx={C} cy={C} r={r} strokeOpacity={0.10 + (i % 3) * 0.04} />
-        ))}
-        {guilloche.spirals.map((path, i) => (
-          <path key={`s${i}`} d={path} strokeOpacity="0.07" />
-        ))}
+      {/* dial face — the chosen material (clipped to the dial) */}
+      <g clipPath="url(#dialClip)">
+      {material === "guilloche" && (
+        <>
+          <circle cx={C} cy={C} r={178} fill="url(#dialFace)" />
+          <g opacity="0.5" stroke="#9fb6c9" fill="none" strokeWidth="0.35">
+            {guilloche.rings.map((r, i) => (
+              <circle key={`r${i}`} cx={C} cy={C} r={r} strokeOpacity={0.10 + (i % 3) * 0.04} />
+            ))}
+            {guilloche.spirals.map((path, i) => (
+              <path key={`s${i}`} d={path} strokeOpacity="0.07" />
+            ))}
+          </g>
+        </>
+      )}
+      {material === "aventurine" && (
+        <>
+          <circle cx={C} cy={C} r={178} fill="url(#matAventurine)" />
+          <g>
+            {sparkle.map((s, i) => (
+              <circle key={i} cx={s.x} cy={s.y} r={s.r}
+                fill={s.warm ? "#ffe6a8" : "#dfe9ff"}
+                opacity={0.35 + (i % 5) * 0.12} />
+            ))}
+          </g>
+        </>
+      )}
+      {material === "meteorite" && (
+        <>
+          <circle cx={C} cy={C} r={178} fill="url(#matMeteorite)" />
+          {/* Widmanstätten cross-hatch — etched nickel-iron lattice */}
+          <g stroke="#c8ccd2" strokeWidth="0.4" opacity="0.22">
+            {Array.from({ length: 46 }, (_, i) => {
+              const o = -180 + i * 8;
+              return <line key={`a${i}`} x1={C - 180} y1={C + o} x2={C + 180} y2={C + o - 150} />;
+            })}
+            {Array.from({ length: 46 }, (_, i) => {
+              const o = -180 + i * 8;
+              return <line key={`b${i}`} x1={C - 180} y1={C + o} x2={C + 180} y2={C + o + 150} opacity="0.7" />;
+            })}
+          </g>
+        </>
+      )}
+      {material === "malachite" && (
+        <>
+          <circle cx={C} cy={C} r={178} fill="url(#matMalachite)" />
+          {/* banded concentric malachite eyes */}
+          <g fill="none">
+            {Array.from({ length: 26 }, (_, i) => (
+              <circle key={i} cx={C + Math.sin(i * 1.7) * 40} cy={C + Math.cos(i * 2.3) * 36}
+                r={6 + i * 6} stroke={i % 2 ? "#7fd6a6" : "#0c3d28"} strokeWidth={i % 2 ? 1.4 : 2.2}
+                strokeOpacity="0.35" />
+            ))}
+          </g>
+        </>
+      )}
       </g>
 
       {/* chapter ring: minute track */}
@@ -211,6 +301,7 @@ export default function TimeManifold() {
   const [mass, setMass] = useState(42);
   const [velocity, setVelocity] = useState(0.42);
   const [laps, setLaps] = useState<number[]>([]);
+  const [material, setMaterial] = useState<MaterialId>("guilloche");
   const startedAt = useRef(0);
   const storedElapsed = useRef(0);
   const lastControlAt = useRef(0);
@@ -483,6 +574,49 @@ export default function TimeManifold() {
     useField.getState().recordTape("object", 0.6, "time/wind");
   };
 
+  // ── minute repeater: chime the current time on demand ────────────
+  const repeaterTimers = useRef<number[]>([]);
+  const [striking, setStriking] = useState(false);
+  useEffect(() => () => { repeaterTimers.current.forEach((id) => clearTimeout(id)); }, []);
+
+  const minuteRepeater = () => {
+    repeaterTimers.current.forEach((id) => clearTimeout(id));
+    repeaterTimers.current = [];
+    const d = new Date();
+    let h = d.getHours() % 12; if (h === 0) h = 12;
+    const m = d.getMinutes();
+    const quarters = Math.floor(m / 15);
+    const mins = m % 15;
+    const seq: Array<{ midi: number; ding?: boolean }> = [];
+    for (let i = 0; i < h; i++) seq.push({ midi: 55 });               // low gong — hours
+    for (let i = 0; i < quarters; i++) seq.push({ midi: 67, ding: true }); // ding-dong — quarters
+    for (let i = 0; i < mins; i++) seq.push({ midi: 67 });            // high gong — minutes
+    setStriking(true);
+    const audio = getFieldAudio();
+    let t = 0;
+    seq.forEach((s) => {
+      const id = window.setTimeout(() => {
+        try {
+          audio.playNote(s.midi, 320);
+          if (s.ding) window.setTimeout(() => { try { audio.playNote(55, 320); } catch { /* noop */ } }, 150);
+        } catch { /* noop */ }
+      }, t);
+      repeaterTimers.current.push(id);
+      t += s.ding ? 380 : 300;
+    });
+    const end = window.setTimeout(() => setStriking(false), t + 400);
+    repeaterTimers.current.push(end);
+    useField.getState().recordTape("sigil", 0.92, `time/repeater/${h}:${String(m).padStart(2, "0")}`);
+  };
+
+  const cycleMaterial = () => {
+    const idx = MATERIALS.findIndex((mm) => mm.id === material);
+    const next = MATERIALS[(idx + 1) % MATERIALS.length];
+    setMaterial(next.id);
+    try { getFieldAudio().chime(); } catch { /* noop */ }
+    useField.getState().recordTape("object", 0.5, `time/material/${next.id}`);
+  };
+
   const markControl = (meta: string, normalized: number) => {
     const now = performance.now();
     if (now - lastControlAt.current < 140) return;
@@ -508,7 +642,7 @@ export default function TimeManifold() {
           <div className="time-grand-stage">
             <SpacetimeShader />
           <svg className="time-grand-svg" style={tiltStyle} viewBox="0 0 400 400" role="img" aria-label="grande complication chronograph">
-            <StaticDial guilloche={guilloche} minuteTrack={minuteTrack} hourMarkers={hourMarkers} />
+            <StaticDial guilloche={guilloche} minuteTrack={minuteTrack} hourMarkers={hourMarkers} material={material} />
 
             {/* ─── subdial: POWER RESERVE (12 o'clock, retrograde) ─── */}
             <g transform={`translate(${C} ${108})`}>
@@ -695,7 +829,15 @@ export default function TimeManifold() {
             <button type="button" onClick={lap}>lap</button>
             <button type="button" onClick={reset}>reset</button>
             <button type="button" onClick={wind}>wind</button>
+            <button type="button" onClick={minuteRepeater} className={striking ? "is-striking" : ""}>
+              {striking ? "striking…" : "chime"}
+            </button>
           </div>
+          <button type="button" className="time-material" onClick={cycleMaterial}>
+            <span>dial</span>
+            <strong>{MATERIALS.find((mm) => mm.id === material)?.label}</strong>
+            <em>tap to change</em>
+          </button>
           <label>
             <span>mass</span>
             <input
@@ -883,11 +1025,12 @@ export default function TimeManifold() {
         }
         .time-controls {
           display: grid;
-          grid-template-columns: minmax(280px, 1fr) repeat(2, minmax(180px, 0.8fr));
+          grid-template-columns: repeat(3, minmax(0, 1fr));
           gap: 10px;
           margin: 26px 0 12px;
         }
         .time-buttons,
+        .time-material,
         .time-controls label {
           min-height: 50px;
           border: 1px solid rgba(231, 211, 154, 0.22);
@@ -895,8 +1038,9 @@ export default function TimeManifold() {
           background: rgba(242, 238, 230, 0.05);
         }
         .time-buttons {
+          grid-column: 1 / -1;
           display: grid;
-          grid-template-columns: repeat(4, 1fr);
+          grid-template-columns: repeat(5, 1fr);
           overflow: hidden;
         }
         .time-buttons button {
@@ -913,6 +1057,45 @@ export default function TimeManifold() {
         }
         .time-buttons button:hover { background: rgba(231, 211, 154, 0.12); color: #f4ecd6; }
         .time-buttons button:last-child { border-right: 0; }
+        .time-buttons button.is-striking {
+          color: #f3b64e;
+          background: rgba(217, 161, 77, 0.16);
+          animation: timeStrike 0.5s ease-in-out infinite;
+        }
+        @keyframes timeStrike {
+          0%, 100% { background: rgba(217, 161, 77, 0.10); }
+          50% { background: rgba(217, 161, 77, 0.28); }
+        }
+        .time-material {
+          display: grid;
+          grid-template-columns: auto 1fr auto;
+          align-items: center;
+          gap: 10px;
+          padding: 8px 14px;
+          cursor: pointer;
+          text-align: left;
+          color: rgba(242, 238, 230, 0.92);
+          transition: border-color 0.2s ease, background 0.2s ease;
+        }
+        .time-material:hover { border-color: rgba(231, 211, 154, 0.5); background: rgba(231, 211, 154, 0.1); }
+        .time-material span {
+          font-family: var(--font-text);
+          font-size: 12px;
+          text-transform: lowercase;
+          color: rgba(242, 238, 230, 0.55);
+        }
+        .time-material strong {
+          font-family: var(--font-numerals);
+          font-size: 16px;
+          letter-spacing: 0.5px;
+        }
+        .time-material em {
+          font-family: var(--font-text);
+          font-style: normal;
+          font-size: 10px;
+          text-transform: lowercase;
+          color: rgba(242, 238, 230, 0.4);
+        }
         .time-controls label {
           display: grid;
           grid-template-columns: auto 1fr auto;
