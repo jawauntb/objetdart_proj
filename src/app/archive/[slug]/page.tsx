@@ -8,10 +8,12 @@ import SiteFooter from "@/components/SiteFooter";
 import ConcernSigil from "@/components/ConcernSigil";
 import ShapedProse from "@/components/ShapedProse";
 import { getFieldAudio } from "@/lib/audio";
+import * as haptics from "@/lib/haptics";
 import { findBySlug, neighbourSlug, entrySlug } from "@/lib/slug";
 import { sigilPolygonPoints, polygonLeftEdgeAt, type ObstacleShape } from "@/lib/sigil-shape";
 import { ARCHIVE_BODIES, bodyFor } from "@/data/archive-bodies";
 import { REGIONS, OBJECTS, CONCERNS } from "@/data/content";
+import { useField } from "@/store/field";
 import type { ConcernKey } from "@/lib/types";
 
 void ARCHIVE_BODIES; // re-export reference, prevents tree-shake stripping when unused
@@ -56,6 +58,24 @@ export default function ArchiveEntryPage() {
     a.status === "open" ? "var(--open)" :
     a.status === "closed" ? "var(--closed)" :
     "var(--ink-2)";
+  const recordTape = useField((s) => s.recordTape);
+  const [entryPulse, setEntryPulse] = useState<{ id: number; label: string; color: string } | null>(null);
+  const pulseId = useRef(0);
+
+  const markEntry = (
+    label: string,
+    kind: "reading" | "region" | "object" = "reading",
+    intensity = 0.45,
+    color = statusColor,
+  ) => {
+    const id = ++pulseId.current;
+    haptics.ripple(intensity);
+    recordTape(kind, intensity, `entry/${a.id}/${label.toLowerCase().replace(/\s+/g, "-")}`);
+    setEntryPulse({ id, label, color });
+    window.setTimeout(() => {
+      setEntryPulse((prev) => (prev?.id === id ? null : prev));
+    }, 2400);
+  };
 
   // body content from the data file
   const bodyParagraphs = bodyFor(a.id);
@@ -91,7 +111,7 @@ export default function ArchiveEntryPage() {
       <SiteHeader />
       <main>
         <section className="rule">
-          <div className="wrap">
+          <div className="wrap entry-wrap">
             <div className="t-eyebrow">
               {a.year ?? ""}{a.status ? ` · ` : ""}{a.status ?? ""}{` · ${a.medium}`}{` · ${a.phase}`}{a.concerns.length ? ` · ${a.concerns.join(" / ")}` : ""}
             </div>
@@ -102,7 +122,7 @@ export default function ArchiveEntryPage() {
                 fontWeight: 400,
                 fontSize: "clamp(36px, 5vw, 56px)",
                 lineHeight: 1.05,
-                letterSpacing: "-0.012em",
+                letterSpacing: 0,
                 margin: "20px 0 14px",
               }}
             >
@@ -141,6 +161,24 @@ export default function ArchiveEntryPage() {
                 {a.note}
               </div>
             )}
+
+            <div className="entry-memory-strip" aria-live="polite">
+              <span>
+                <i style={{ background: statusColor }} />
+                {a.status ?? "open"}
+              </span>
+              <span>{region?.label.toLowerCase() ?? a.region}</span>
+              <span>{a.concerns.length} concerns</span>
+              <span>{relatedObjects[0]?.toLowerCase() ?? a.medium}</span>
+              <span
+                className={`entry-memory-pulse${entryPulse ? " is-lit" : ""}`}
+                style={{
+                  ["--entry-pulse-color" as string]: entryPulse?.color ?? statusColor,
+                }}
+              >
+                {entryPulse?.label ?? "still"}
+              </span>
+            </div>
 
             {/* the body — prose flows around the entry's sigil */}
             <div ref={wrapRef} style={{ position: "relative", marginTop: 32 }}>
@@ -183,7 +221,20 @@ export default function ArchiveEntryPage() {
 
               {isNarrow && (
                 <div style={{ display: "flex", justifyContent: "center", marginTop: 32 }}>
-                  <ConcernSigil concerns={entryWeights(a.concerns)} size={sigilSize} showAxes showDots={false} />
+                  <button
+                    type="button"
+                    aria-label="touch drawer sigil"
+                    onClick={() => markEntry("sigil", "object", 0.62, "var(--candle)")}
+                    style={{
+                      background: "transparent",
+                      border: 0,
+                      padding: 0,
+                      color: "var(--ink)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <ConcernSigil concerns={entryWeights(a.concerns)} size={sigilSize} showAxes showDots={false} />
+                  </button>
                 </div>
               )}
             </div>
@@ -208,7 +259,11 @@ export default function ArchiveEntryPage() {
                 <MetaRow
                   label="region"
                   value={
-                    <Link href={`/atlas/${region.id}`} style={{ borderBottom: "1px solid var(--candle)" }}>
+                    <Link
+                      href={`/atlas/${region.id}`}
+                      onPointerDown={() => markEntry("atlas", "region", 0.52, "var(--candle)")}
+                      style={{ borderBottom: "1px solid var(--candle)" }}
+                    >
                       {region.label.toLowerCase()}
                     </Link>
                   }
@@ -219,13 +274,23 @@ export default function ArchiveEntryPage() {
               )}
             </div>
 
-            <div style={{ marginTop: 36, display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
+            <div className="entry-nav">
               <div style={{ display: "flex", gap: 18 }}>
-                <Link href="/archive" className="t-mono" style={{ fontSize: 13, letterSpacing: "0.08em", textTransform: "lowercase", color: "var(--ink-2)" }}>
+                <Link
+                  href="/archive"
+                  className="t-mono"
+                  onPointerDown={() => markEntry("all drawers", "reading", 0.38, "var(--ink-2)")}
+                  style={{ fontSize: 13, letterSpacing: "0.08em", textTransform: "lowercase", color: "var(--ink-2)" }}
+                >
                   ← all drawers
                 </Link>
                 {prevSlug && prevSlug !== slug && (
-                  <Link href={`/archive/${prevSlug}`} className="t-mono" style={{ fontSize: 13, letterSpacing: "0.08em", textTransform: "lowercase", color: "var(--ink-2)" }}>
+                  <Link
+                    href={`/archive/${prevSlug}`}
+                    className="t-mono"
+                    onPointerDown={() => markEntry("previous", "reading", 0.42, "var(--ink-2)")}
+                    style={{ fontSize: 13, letterSpacing: "0.08em", textTransform: "lowercase", color: "var(--ink-2)" }}
+                  >
                     ← previous
                   </Link>
                 )}
@@ -234,6 +299,7 @@ export default function ArchiveEntryPage() {
                 <Link
                   href={`/archive/${nextSlug}`}
                   className="t-mono"
+                  onPointerDown={() => markEntry("next drawer", "reading", 0.56, "var(--candle)")}
                   style={{ fontSize: 13, letterSpacing: "0.08em", textTransform: "lowercase", color: "var(--ink)", borderBottom: "1px solid var(--candle)" }}
                 >
                   next drawer →
@@ -242,6 +308,97 @@ export default function ArchiveEntryPage() {
             </div>
           </div>
         </section>
+        <style
+          dangerouslySetInnerHTML={{
+            __html: `
+          .entry-wrap {
+            padding-bottom: calc(104px + env(safe-area-inset-bottom));
+          }
+          .entry-memory-strip {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px 14px;
+            margin: 30px 0 4px;
+            padding: 12px 0;
+            border-top: 1px solid color-mix(in srgb, var(--rule), transparent 28%);
+            border-bottom: 1px solid color-mix(in srgb, var(--rule), transparent 28%);
+            color: var(--ink-2);
+            font-family: var(--font-mono);
+            font-size: 12px;
+            letter-spacing: 0;
+            text-transform: lowercase;
+          }
+          .entry-memory-strip span {
+            display: inline-flex;
+            align-items: center;
+            min-height: 22px;
+            gap: 7px;
+          }
+          .entry-memory-strip i {
+            width: 7px;
+            height: 7px;
+            border-radius: 999px;
+            box-shadow: 0 0 16px currentColor;
+          }
+          .entry-memory-pulse {
+            margin-left: auto;
+            color: var(--entry-pulse-color, var(--ink-2));
+            max-width: 170px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+          .entry-memory-pulse::before {
+            content: "";
+            width: 36px;
+            height: 1px;
+            background: currentColor;
+            opacity: 0.42;
+          }
+          .entry-memory-pulse.is-lit::before {
+            height: 22px;
+            width: 2px;
+            opacity: 0.9;
+            box-shadow: 0 0 18px currentColor;
+            animation: entry-pulse-rise 2.4s ease both;
+          }
+          .entry-nav {
+            margin-top: 36px;
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            gap: 12px;
+            flex-wrap: wrap;
+          }
+          @keyframes entry-pulse-rise {
+            0% { opacity: 0; transform: translateY(8px) scaleY(0.2); }
+            18% { opacity: 1; transform: translateY(0) scaleY(1); }
+            100% { opacity: 0.4; transform: translateX(-14px) scaleY(0.72); }
+          }
+          @media (max-width: 620px) {
+            .entry-wrap {
+              padding-bottom: calc(136px + env(safe-area-inset-bottom));
+            }
+            .entry-memory-strip {
+              align-items: flex-start;
+              margin-top: 24px;
+            }
+            .entry-memory-pulse {
+              margin-left: 0;
+              max-width: 100%;
+              flex-basis: 100%;
+            }
+            .entry-nav,
+            .entry-nav > div {
+              flex-direction: column;
+              align-items: flex-start;
+              gap: 14px !important;
+            }
+          }
+        `,
+          }}
+        />
       </main>
       <SiteFooter />
     </>

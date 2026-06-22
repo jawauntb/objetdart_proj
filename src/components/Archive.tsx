@@ -1,13 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useField } from "@/store/field";
 import { ARCHIVE, CONCERNS, OBJECTS, PHASES, REGIONS } from "@/data/content";
 import { entrySlug } from "@/lib/slug";
 import ConcernSigil from "@/components/ConcernSigil";
 import WaterText from "@/components/WaterText";
 import { getFieldAudio } from "@/lib/audio";
+import * as haptics from "@/lib/haptics";
 import type { ConcernKey, PhaseKey, ArchiveEntry } from "@/lib/types";
 import type { ImaginedEntry } from "@/store/field";
 
@@ -30,6 +31,22 @@ const STATUS_COLOR: Record<string, string> = {
   closed: "var(--closed)",
 };
 
+type ArchiveFilterKind = "medium" | "concern" | "object" | "phase";
+type ArchiveMarkTone = "paper" | "candle" | "ink" | "kept";
+type ArchiveMark = {
+  id: number;
+  label: string;
+  tone: ArchiveMarkTone;
+  strength: number;
+};
+
+const MARK_COLOR: Record<ArchiveMarkTone, string> = {
+  paper: "var(--ink-2)",
+  candle: "var(--candle)",
+  ink: "var(--ink)",
+  kept: "var(--kept)",
+};
+
 export default function Archive() {
   const archMedium = useField((s) => s.archMedium);
   const archConcern = useField((s) => s.archConcern);
@@ -43,6 +60,7 @@ export default function Archive() {
   const imaginedEntries = useField((s) => s.imaginedEntries);
   const addImaginedEntry = useField((s) => s.addImaginedEntry);
   const forgetImaginedEntry = useField((s) => s.forgetImaginedEntry);
+  const recordTape = useField((s) => s.recordTape);
 
   // imagine-a-drawer form state
   const [imagineTitle, setImagineTitle] = useState("");
@@ -50,13 +68,49 @@ export default function Archive() {
   const [imagining, setImagining] = useState(false);
   const [imagineError, setImagineError] = useState<string | null>(null);
   const [openImagined, setOpenImagined] = useState<string | null>(null);
+  const [archiveMarks, setArchiveMarks] = useState<ArchiveMark[]>([]);
+  const markId = useRef(0);
+
+  const addArchiveMark = (
+    label: string,
+    tone: ArchiveMarkTone = "paper",
+    strength = 0.42,
+  ) => {
+    const id = ++markId.current;
+    const trimmed = label.trim().slice(0, 26) || "drawer";
+    const mark = { id, label: trimmed, tone, strength };
+    setArchiveMarks((prev) => [mark, ...prev.filter((m) => m.label !== trimmed)].slice(0, 7));
+    window.setTimeout(() => {
+      setArchiveMarks((prev) => prev.filter((m) => m.id !== id));
+    }, 2600);
+  };
+
+  const touchArchive = (
+    label: string,
+    tone: ArchiveMarkTone = "paper",
+    intensity = 0.4,
+    kind: "object" | "imagine" | "reading" | "kept" = "object",
+  ) => {
+    addArchiveMark(label, tone, intensity);
+    recordTape(kind, intensity, `archive/${label.toLowerCase().replace(/\s+/g, "-")}`);
+  };
+
+  const handleFilterToggle = (kind: ArchiveFilterKind, value: string) => {
+    haptics.tap();
+    toggle(kind, value);
+    touchArchive(`${kind}:${value}`, "paper", 0.32);
+  };
 
   const toggleImagineConcern = (c: ConcernKey) => {
+    haptics.tap();
+    touchArchive(c, "candle", 0.3);
     setImagineConcerns((cs) => cs.includes(c) ? cs.filter((x) => x !== c) : [...cs, c].slice(0, 3));
   };
 
   const imagine = async () => {
     if (!imagineTitle.trim() || imagining) return;
+    haptics.roll();
+    touchArchive("writing drawer", "candle", 0.58, "imagine");
     setImagining(true);
     setImagineError(null);
     try {
@@ -93,9 +147,13 @@ export default function Archive() {
         setImagineConcerns([]);
         setOpenImagined(id);
         getFieldAudio().bell();
+        haptics.roll();
+        touchArchive("drawer kept", "kept", 0.86, "imagine");
       }
     } catch {
       setImagineError("the field is unreachable right now.");
+      haptics.chop();
+      touchArchive("field closed", "ink", 0.36);
     } finally {
       setImagining(false);
     }
@@ -121,6 +179,9 @@ export default function Archive() {
     return list;
   }, [archMedium, archConcern, archObject, archPhase, archQuery, archSort]);
 
+  const activeFilterCount = archMedium.size + archConcern.size + archObject.size + archPhase.size;
+  const queryTrimmed = archQuery.trim();
+
   return (
     <section id="archive" className="rule" style={{ scrollMarginTop: 72 }}>
       <div className="wrap">
@@ -133,6 +194,31 @@ export default function Archive() {
         >
           every keepable thing
         </WaterText>
+
+        <div className="archive-state-strip" aria-live="polite">
+          <div className="archive-state-stats">
+            <span><b>{items.length}</b> drawers</span>
+            <span>{activeFilterCount ? `${activeFilterCount} filters` : "wide open"}</span>
+            <span>{queryTrimmed ? `search ${queryTrimmed.slice(0, 18)}` : `sort ${archSort}`}</span>
+            {imaginedEntries.length > 0 && <span>{imaginedEntries.length} imagined</span>}
+          </div>
+          <div className="archive-mark-strip" aria-hidden="true">
+            {archiveMarks.length === 0 ? (
+              <span className="archive-mark ghost" />
+            ) : archiveMarks.map((mark) => (
+              <span
+                key={mark.id}
+                className="archive-mark"
+                style={{
+                  ["--mark-color" as string]: MARK_COLOR[mark.tone],
+                  ["--mark-height" as string]: `${18 + mark.strength * 34}px`,
+                }}
+              >
+                <span>{mark.label}</span>
+              </span>
+            ))}
+          </div>
+        </div>
 
         <div
           style={{
@@ -157,6 +243,15 @@ export default function Archive() {
               type="search"
               value={archQuery}
               onChange={(e) => setQuery(e.target.value)}
+              onFocus={() => {
+                haptics.tap();
+                addArchiveMark("search", "ink", 0.28);
+              }}
+              onBlur={() => {
+                const q = archQuery.trim();
+                if (!q) return;
+                touchArchive(`search:${q.slice(0, 14)}`, "ink", 0.3);
+              }}
               placeholder="search the drawers"
               aria-label="search"
               className="t-mono"
@@ -176,25 +271,25 @@ export default function Archive() {
               label="medium"
               options={MEDIUMS}
               active={archMedium}
-              onToggle={(v) => toggle("medium", v)}
+              onToggle={(v) => handleFilterToggle("medium", v)}
             />
             <FilterGroup
               label="concern"
               options={CONCERNS.map((c) => c.id)}
               active={archConcern as Set<string>}
-              onToggle={(v) => toggle("concern", v)}
+              onToggle={(v) => handleFilterToggle("concern", v)}
             />
             <FilterGroup
               label="object"
               options={OBJECTS.map((o) => o.id)}
               active={archObject}
-              onToggle={(v) => toggle("object", v)}
+              onToggle={(v) => handleFilterToggle("object", v)}
             />
             <FilterGroup
               label="phase"
               options={PHASES}
               active={archPhase as unknown as Set<string>}
-              onToggle={(v) => toggle("phase", v)}
+              onToggle={(v) => handleFilterToggle("phase", v)}
             />
 
             <div>
@@ -205,7 +300,11 @@ export default function Archive() {
                     key={s}
                     className={`chip${archSort === s ? " is-active" : ""}`}
                     aria-pressed={archSort === s}
-                    onClick={() => setSort(s)}
+                    onClick={() => {
+                      haptics.chop();
+                      setSort(s);
+                      touchArchive(`sort:${s}`, "paper", 0.36);
+                    }}
                   >
                     {s}
                   </button>
@@ -325,7 +424,11 @@ export default function Archive() {
                             imagined · {new Date(e.imaginedAt).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })}
                           </span>
                           <button
-                            onClick={() => forgetImaginedEntry(e.id)}
+                            onClick={() => {
+                              haptics.chop();
+                              forgetImaginedEntry(e.id);
+                              touchArchive("forget imagined", "ink", 0.35);
+                            }}
                             className="t-mono"
                             style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontSize: 11, color: "var(--ink-2)" }}
                           >
@@ -333,7 +436,11 @@ export default function Archive() {
                           </button>
                         </div>
                         <button
-                          onClick={() => setOpenImagined(expanded ? null : e.id)}
+                          onClick={() => {
+                            haptics.ripple(expanded ? 0.28 : 0.5);
+                            setOpenImagined(expanded ? null : e.id);
+                            touchArchive(expanded ? "fold imagined" : "open imagined", "candle", expanded ? 0.34 : 0.56, "reading");
+                          }}
                           style={{
                             background: "none",
                             border: 0,
@@ -407,12 +514,16 @@ export default function Archive() {
                   })}
                 </div>
 
-                <style>{`
+                <style
+                  dangerouslySetInnerHTML={{
+                    __html: `
                   @keyframes ask-fade-in {
                     from { opacity: 0; transform: translateY(4px); }
                     to   { opacity: 1; transform: none; }
                   }
-                `}</style>
+                `,
+                  }}
+                />
               </div>
             )}
             {items.length === 0 ? (
@@ -446,6 +557,10 @@ export default function Archive() {
                     onMouseLeave={(e) => {
                       e.currentTarget.style.borderColor = "var(--rule)";
                       e.currentTarget.style.transform = "translateY(0)";
+                    }}
+                    onPointerDown={() => {
+                      haptics.tap();
+                      touchArchive(a.title, a.status === "kept" ? "kept" : "ink", 0.48, "reading");
                     }}
                   >
                     <div
@@ -512,12 +627,108 @@ export default function Archive() {
         </div>
       </div>
 
-      <style>{`
+      <style
+        dangerouslySetInnerHTML={{
+          __html: `
+        #archive .wrap {
+          padding-bottom: calc(96px + env(safe-area-inset-bottom));
+        }
+        .archive-state-strip {
+          display: flex;
+          justify-content: space-between;
+          gap: 18px;
+          align-items: center;
+          margin: -4px 0 28px;
+          padding: 12px 0;
+          border-top: 1px solid color-mix(in srgb, var(--rule), transparent 28%);
+          border-bottom: 1px solid color-mix(in srgb, var(--rule), transparent 28%);
+        }
+        .archive-state-stats {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 9px 14px;
+          color: var(--ink-2);
+          font-family: var(--font-mono);
+          font-size: 12px;
+          letter-spacing: 0;
+          text-transform: lowercase;
+        }
+        .archive-state-stats b {
+          color: var(--ink);
+          font-weight: 400;
+        }
+        .archive-mark-strip {
+          min-width: min(320px, 42vw);
+          min-height: 46px;
+          display: flex;
+          align-items: flex-end;
+          justify-content: flex-end;
+          gap: 7px;
+          overflow: hidden;
+        }
+        .archive-mark {
+          position: relative;
+          width: 2px;
+          height: var(--mark-height, 28px);
+          background: var(--mark-color, var(--ink-2));
+          opacity: 0.86;
+          box-shadow: 0 0 18px color-mix(in srgb, var(--mark-color, var(--ink-2)), transparent 45%);
+          animation: archive-mark-rise 2.6s ease both;
+        }
+        .archive-mark span {
+          position: absolute;
+          right: 7px;
+          bottom: 0;
+          max-width: 108px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          color: var(--mark-color, var(--ink-2));
+          font-family: var(--font-mono);
+          font-size: 10px;
+          letter-spacing: 0;
+          text-transform: lowercase;
+        }
+        .archive-mark.ghost {
+          width: 42px;
+          height: 1px;
+          background: var(--rule);
+          opacity: 0.7;
+          box-shadow: none;
+          animation: none;
+        }
+        @keyframes archive-mark-rise {
+          0% { opacity: 0; transform: translateY(8px) scaleY(0.25); }
+          18% { opacity: 0.9; transform: translateY(0) scaleY(1); }
+          100% { opacity: 0; transform: translateX(-28px) scaleY(0.76); }
+        }
         @media (max-width: 880px) {
           .archive-grid { grid-template-columns: 1fr !important; row-gap: 24px; }
           .archive-grid > aside { position: static !important; top: auto !important; }
         }
-      `}</style>
+        @media (max-width: 640px) {
+          #archive .wrap {
+            padding-bottom: calc(128px + env(safe-area-inset-bottom));
+          }
+          .archive-state-strip {
+            align-items: flex-start;
+            flex-direction: column;
+            margin-bottom: 22px;
+          }
+          .archive-mark-strip {
+            justify-content: flex-start;
+            min-width: 100%;
+            width: 100%;
+          }
+          .archive-mark span {
+            right: auto;
+            left: 7px;
+            max-width: 88px;
+          }
+        }
+      `,
+        }}
+      />
     </section>
   );
 }
