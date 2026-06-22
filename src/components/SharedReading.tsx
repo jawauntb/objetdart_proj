@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useField } from "@/store/field";
+import { getFieldAudio } from "@/lib/audio";
 import { buildReading, type ReadingInput } from "@/lib/reading";
 import { entrySlug } from "@/lib/slug";
 import { sigilPolygonPoints, polygonLeftEdgeAt, type ObstacleShape } from "@/lib/sigil-shape";
@@ -27,10 +28,14 @@ function useElementWidth(ref: React.RefObject<HTMLElement | null>): number {
 
 export default function SharedReading({ input }: { input: ReadingInput }) {
   const hydrate = useField((s) => s.hydrateFromHash);
+  const recordTape = useField((s) => s.recordTape);
   const [copied, setCopied] = useState(false);
+  const [playing, setPlaying] = useState(false);
   const reading = buildReading(input);
 
   const stepInto = () => {
+    recordTape("reading", 0.75, `shared/${reading.region.id}`);
+    getFieldAudio().bell();
     hydrate(reading.hash);
     if (typeof window !== "undefined") window.location.href = "/";
   };
@@ -41,8 +46,22 @@ export default function SharedReading({ input }: { input: ReadingInput }) {
         `${typeof location !== "undefined" ? location.origin : ""}/reading/${reading.hash}`,
       );
       setCopied(true);
+      recordTape("reading", 0.45, "shared/copy");
       setTimeout(() => setCopied(false), 1800);
     } catch { /* noop */ }
+  };
+
+  const playSigil = async () => {
+    if (playing) return;
+    setPlaying(true);
+    recordTape("sigil", 0.9, `shared/${reading.top[0]}`);
+    try {
+      await getFieldAudio().playSigilPhrase(input.concerns);
+    } catch {
+      getFieldAudio().refuse();
+    } finally {
+      setPlaying(false);
+    }
   };
 
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -75,7 +94,7 @@ export default function SharedReading({ input }: { input: ReadingInput }) {
   }, [polygonPoints, sigilLeftInWrap, sigilTop, sigilSize, isNarrow]);
 
   return (
-    <section className="rule">
+    <section className="rule" data-pretext-ignore="true">
       <div className="wrap" style={{ maxWidth: 960 }}>
         <div className="t-eyebrow">reading · kept by someone</div>
 
@@ -181,7 +200,24 @@ export default function SharedReading({ input }: { input: ReadingInput }) {
             ← your own room
           </Link>
 
-          <div style={{ display: "flex", gap: 10 }}>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
+            <button
+              onClick={playSigil}
+              disabled={playing}
+              className="t-mono"
+              style={{
+                background: playing ? "var(--paper-2)" : "none",
+                border: "1px solid var(--rule)",
+                padding: "10px 16px",
+                cursor: playing ? "default" : "pointer",
+                fontSize: 12,
+                letterSpacing: "0.06em",
+                textTransform: "lowercase",
+                color: playing ? "var(--candle)" : "var(--ink)",
+              }}
+            >
+              {playing ? "playing sigil" : "play sigil"}
+            </button>
             <button
               onClick={copy}
               className="t-mono"

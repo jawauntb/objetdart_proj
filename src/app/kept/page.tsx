@@ -11,11 +11,18 @@ import SiteFooter from "@/components/SiteFooter";
 import ConcernSigil from "@/components/ConcernSigil";
 import type { ConcernKey } from "@/lib/types";
 
+const BASE_CONCERNS = Object.fromEntries(
+  ["memory", "work", "love", "prayer", "risk", "future", "body", "friendship"].map((k) => [k, 50]),
+) as Record<ConcernKey, number>;
+
 export default function KeptPage() {
   const kept = useField((s) => s.keptReadings);
   const loadFromStorage = useField((s) => s.loadFromStorage);
   const forgetReading = useField((s) => s.forgetReading);
+  const recordTape = useField((s) => s.recordTape);
   const [selected, setSelected] = useState<string[]>([]);
+  const [playingHash, setPlayingHash] = useState<string | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
 
   useEffect(() => { loadFromStorage(); }, [loadFromStorage]);
   // page-specific ambient bed: held shelf and memory shimmer
@@ -24,11 +31,53 @@ export default function KeptPage() {
   const sorted = [...kept].sort((a, b) => b.keptAt - a.keptAt);
 
   const toggleSelect = (hash: string) => {
-    setSelected((s) => {
-      if (s.includes(hash)) return s.filter((h) => h !== hash);
-      if (s.length >= 2) return [s[1], hash];
-      return [...s, hash];
-    });
+    const already = selected.includes(hash);
+    const next = already
+      ? selected.filter((h) => h !== hash)
+      : selected.length >= 2
+        ? [selected[1], hash]
+        : [...selected, hash];
+    setSelected(next);
+    recordTape("sigil", already ? 0.35 : 0.72, already ? "kept/deselect" : `kept/select-${next.indexOf(hash) + 1}`);
+    try {
+      if (already) getFieldAudio().chime();
+      else if (next.length === 2) getFieldAudio().bell();
+      else getFieldAudio().spark();
+    } catch { /* noop */ }
+  };
+
+  const playKept = async (
+    hash: string,
+    concerns: Record<ConcernKey, number>,
+    topConcern: ConcernKey,
+  ) => {
+    if (playingHash) return;
+    setPlayingHash(hash);
+    recordTape("sigil", 0.85, `kept/${topConcern}`);
+    try {
+      await getFieldAudio().playSigilPhrase(concerns);
+    } catch {
+      getFieldAudio().refuse();
+    } finally {
+      setPlayingHash(null);
+    }
+  };
+
+  const forget = (hash: string, headline: string) => {
+    forgetReading(hash);
+    setSelected((s) => s.filter((h) => h !== hash));
+    setStatus(`forgotten: ${headline}`);
+    recordTape("kept", 0.35, "forget");
+    getFieldAudio().thud();
+    window.setTimeout(() => setStatus(null), 2200);
+  };
+
+  const clearSelection = () => {
+    setSelected([]);
+    setStatus("selection cleared");
+    recordTape("sigil", 0.25, "kept/clear");
+    getFieldAudio().chime();
+    window.setTimeout(() => setStatus(null), 1400);
   };
 
   return (
@@ -45,6 +94,11 @@ export default function KeptPage() {
               readings live only in this browser. they are not posted, not synced — kept
               quietly until you forget them.
             </p>
+            {status && (
+              <p className="t-mono" style={{ color: "var(--candle)", fontSize: 12, letterSpacing: "0.06em", marginTop: 14 }}>
+                {status}
+              </p>
+            )}
 
             {selected.length === 2 && (
               <div
@@ -65,7 +119,7 @@ export default function KeptPage() {
                 </span>
                 <div style={{ display: "flex", gap: 8 }}>
                   <button
-                    onClick={() => setSelected([])}
+                    onClick={clearSelection}
                     className="t-mono"
                     style={{
                       background: "none",
@@ -103,12 +157,37 @@ export default function KeptPage() {
               <div
                 style={{
                   marginTop: 56,
-                  padding: "60px 24px",
+                  padding: "72px 24px 58px",
                   border: "1px dashed var(--rule)",
                   textAlign: "center",
+                  position: "relative",
+                  overflow: "hidden",
                 }}
               >
-                <p className="t-h3 italic" style={{ color: "var(--ink-2)", maxWidth: "32ch", margin: "0 auto" }}>
+                <div
+                  aria-hidden="true"
+                  style={{
+                    position: "absolute",
+                    inset: "20px 0 auto",
+                    display: "flex",
+                    justifyContent: "center",
+                    opacity: 0.14,
+                    color: "var(--sea)",
+                    pointerEvents: "none",
+                  }}
+                >
+                  <ConcernSigil concerns={BASE_CONCERNS} size={170} showAxes showRing showDots={false} />
+                </div>
+                <p
+                  className="t-h3 italic"
+                  style={{
+                    color: "var(--ink-2)",
+                    maxWidth: "32ch",
+                    margin: "0 auto",
+                    position: "relative",
+                    zIndex: 1,
+                  }}
+                >
                   no readings kept yet. tune your compass, read the room, and keep one.
                 </p>
                 <Link
@@ -122,6 +201,8 @@ export default function KeptPage() {
                     textTransform: "lowercase",
                     color: "var(--candle)",
                     borderBottom: "1px solid var(--candle)",
+                    position: "relative",
+                    zIndex: 1,
                   }}
                 >
                   the room →
@@ -139,11 +220,13 @@ export default function KeptPage() {
                 {sorted.map((r) => {
                   const decoded = decodeReadingHash(r.hash);
                   const concerns = decoded?.concerns ??
-                    (Object.fromEntries(["memory","work","love","prayer","risk","future","body","friendship"].map((k) => [k, 50])) as Record<ConcernKey, number>);
+                    BASE_CONCERNS;
                   const region = r.region ? REGIONS.find((x) => x.id === r.region) : null;
                   const obj = r.carriedObject ? OBJECTS.find((x) => x.id === r.carriedObject) : null;
                   const date = new Date(r.keptAt);
                   const isSelected = selected.includes(r.hash);
+                  const selectionIndex = selected.indexOf(r.hash);
+                  const isPlaying = playingHash === r.hash;
                   return (
                     <article
                       key={r.hash}
@@ -157,15 +240,54 @@ export default function KeptPage() {
                         transition: "border-color var(--t)",
                         outline: isSelected ? "1px solid var(--candle)" : "none",
                         outlineOffset: 2,
+                        position: "relative",
                       }}
                       onMouseEnter={(e) => { if (!isSelected) e.currentTarget.style.borderColor = "var(--ink)"; }}
                       onMouseLeave={(e) => { if (!isSelected) e.currentTarget.style.borderColor = "var(--rule)"; }}
                     >
+                      {isSelected && (
+                        <span
+                          className="t-mono"
+                          aria-hidden="true"
+                          style={{
+                            position: "absolute",
+                            right: 14,
+                            bottom: 14,
+                            width: 26,
+                            height: 26,
+                            borderRadius: "50%",
+                            border: "1px solid var(--candle)",
+                            display: "grid",
+                            placeItems: "center",
+                            color: "var(--candle)",
+                            fontSize: 12,
+                            background: "var(--paper-2)",
+                          }}
+                        >
+                          {selectionIndex + 1}
+                        </span>
+                      )}
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
                         <span className="t-eyebrow" suppressHydrationWarning>
                           {date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })}
                         </span>
-                        <div style={{ display: "flex", gap: 12 }}>
+                        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                          <button
+                            onClick={() => void playKept(r.hash, concerns, r.topConcern)}
+                            disabled={Boolean(playingHash) && !isPlaying}
+                            aria-label="play kept sigil"
+                            className="t-mono"
+                            style={{
+                              background: "none",
+                              border: "none",
+                              cursor: playingHash && !isPlaying ? "default" : "pointer",
+                              fontSize: 11,
+                              color: isPlaying ? "var(--candle)" : "var(--ink-2)",
+                              padding: 0,
+                            }}
+                          >
+                            {isPlaying ? "playing" : "play"}
+                          </button>
                           <button
                             onClick={() => toggleSelect(r.hash)}
                             aria-pressed={isSelected}
@@ -183,7 +305,7 @@ export default function KeptPage() {
                             {isSelected ? "selected ◦" : "compare ↔"}
                           </button>
                           <button
-                            onClick={() => forgetReading(r.hash)}
+                            onClick={() => forget(r.hash, r.headline)}
                             aria-label="forget"
                             className="t-mono"
                             style={{
