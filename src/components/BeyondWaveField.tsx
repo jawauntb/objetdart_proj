@@ -65,6 +65,7 @@ export default function BeyondWaveField() {
   const [bloom, setBloom] = useState(0.58);
   const [readout, setReadout] = useState("touch the field");
   const [foldMemory, setFoldMemory] = useState<FoldMemory | null>(null);
+  const [controlsOpen, setControlsOpen] = useState(false);
 
   const runningRef = useRef(running);
   const densityRef = useRef(density);
@@ -257,6 +258,18 @@ export default function BeyondWaveField() {
     });
   };
 
+  const toggleControls = () => {
+    setControlsOpen((value) => {
+      const next = !value;
+      try {
+        if (next) getFieldAudio().chime();
+        else getFieldAudio().thud();
+      } catch { /* noop */ }
+      useField.getState().recordTape("sigil", next ? 0.58 : 0.34, next ? "beyond/open-tune" : "beyond/close-tune");
+      return next;
+    });
+  };
+
   const useFoldMemory = () => {
     if (!foldMemory) {
       const canvas = canvasRef.current;
@@ -326,81 +339,86 @@ export default function BeyondWaveField() {
           <h1>Not a line. Not a circle. A living interference.</h1>
         </div>
 
-        <div className="beyond-panel" aria-label="field controls">
+        <div className="beyond-panel" aria-label="field controls" data-expanded={controlsOpen ? "true" : "false"}>
           <div className="beyond-actions">
-            <button type="button" onClick={toggleRunning} aria-pressed={running}>
+            <button className="beyond-run-button" type="button" onClick={toggleRunning} aria-pressed={running}>
               {running ? "pause" : "move"}
             </button>
-            <button type="button" onClick={useFoldMemory} aria-pressed={Boolean(foldMemory)}>
+            <button className="beyond-memory-button" type="button" onClick={useFoldMemory} aria-pressed={Boolean(foldMemory)}>
               {foldMemory ? "replay fold" : "keep fold"}
+            </button>
+            <button className="beyond-tune-toggle" type="button" onClick={toggleControls} aria-expanded={controlsOpen}>
+              {controlsOpen ? "hide tune" : "tune"}
             </button>
             <output className="beyond-readout" aria-live="polite">{readout}</output>
           </div>
 
-          <label>
-            <span>cell size</span>
-            <input
-              type="range"
-              min="16"
-              max="36"
-              step="1"
-              value={density}
-              onChange={(event) => {
-                const value = Number(event.target.value);
-                setDensity(value);
-                markControl("density", (value - 16) / 20);
-              }}
-            />
-            <strong>{density}</strong>
-          </label>
-          <label>
-            <span>fold</span>
-            <input
-              type="range"
-              min="4"
-              max="16"
-              step="0.1"
-              value={fold}
-              onChange={(event) => {
-                const value = Number(event.target.value);
-                setFold(value);
-                markControl("fold", (value - 4) / 12);
-              }}
-            />
-            <strong>{fold.toFixed(1)}</strong>
-          </label>
-          <label>
-            <span>pull</span>
-            <input
-              type="range"
-              min="0.1"
-              max="1.6"
-              step="0.01"
-              value={pull}
-              onChange={(event) => {
-                const value = Number(event.target.value);
-                setPull(value);
-                markControl("pull", (value - 0.1) / 1.5);
-              }}
-            />
-            <strong>{pull.toFixed(2)}</strong>
-          </label>
-          <label>
-            <span>bloom</span>
-            <input
-              type="range"
-              min="0.1"
-              max="1"
-              step="0.01"
-              value={bloom}
-              onChange={(event) => {
-                const value = Number(event.target.value);
-                setBloom(value);
-                markControl("bloom", (value - 0.1) / 0.9);
-              }}
-            />
-            <strong>{bloom.toFixed(2)}</strong>
-          </label>
+          <div className="beyond-sliders">
+            <label>
+              <span>cell size</span>
+              <input
+                type="range"
+                min="16"
+                max="36"
+                step="1"
+                value={density}
+                onChange={(event) => {
+                  const value = Number(event.target.value);
+                  setDensity(value);
+                  markControl("density", (value - 16) / 20);
+                }}
+              />
+              <strong>{density}</strong>
+            </label>
+            <label>
+              <span>fold</span>
+              <input
+                type="range"
+                min="4"
+                max="16"
+                step="0.1"
+                value={fold}
+                onChange={(event) => {
+                  const value = Number(event.target.value);
+                  setFold(value);
+                  markControl("fold", (value - 4) / 12);
+                }}
+              />
+              <strong>{fold.toFixed(1)}</strong>
+            </label>
+            <label>
+              <span>pull</span>
+              <input
+                type="range"
+                min="0.1"
+                max="1.6"
+                step="0.01"
+                value={pull}
+                onChange={(event) => {
+                  const value = Number(event.target.value);
+                  setPull(value);
+                  markControl("pull", (value - 0.1) / 1.5);
+                }}
+              />
+              <strong>{pull.toFixed(2)}</strong>
+            </label>
+            <label>
+              <span>bloom</span>
+              <input
+                type="range"
+                min="0.1"
+                max="1"
+                step="0.01"
+                value={bloom}
+                onChange={(event) => {
+                  const value = Number(event.target.value);
+                  setBloom(value);
+                  markControl("bloom", (value - 0.1) / 0.9);
+                }}
+              />
+              <strong>{bloom.toFixed(2)}</strong>
+            </label>
+          </div>
         </div>
       </section>
 
@@ -466,9 +484,16 @@ export default function BeyondWaveField() {
           right: calc(var(--pad-x) + 278px);
           bottom: calc(58px + env(safe-area-inset-bottom, 0px));
           display: grid;
-          grid-template-columns: minmax(190px, 0.9fr) repeat(4, minmax(130px, 1fr));
+          grid-template-columns: minmax(190px, 0.9fr) minmax(0, 4fr);
           gap: 8px;
           align-items: stretch;
+        }
+
+        .beyond-sliders {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(130px, 1fr));
+          gap: 8px;
+          min-width: 0;
         }
 
         .beyond-actions,
@@ -515,6 +540,14 @@ export default function BeyondWaveField() {
           color: #62d6ca;
         }
 
+        .beyond-memory-button[aria-pressed="true"] {
+          color: #62d6ca;
+        }
+
+        .beyond-tune-toggle {
+          display: none;
+        }
+
         .beyond-readout {
           grid-column: 1 / -1;
           display: flex;
@@ -543,6 +576,8 @@ export default function BeyondWaveField() {
         }
 
         .beyond-panel label strong {
+          grid-column: 2;
+          grid-row: 1;
           color: rgba(244, 238, 222, 0.95);
           font-family: var(--font-numerals);
           font-size: 13px;
@@ -551,6 +586,7 @@ export default function BeyondWaveField() {
 
         .beyond-panel input {
           grid-column: 1 / -1;
+          grid-row: 2;
           width: 100%;
           accent-color: #62d6ca;
         }
@@ -571,13 +607,19 @@ export default function BeyondWaveField() {
           .beyond-panel {
             right: var(--pad-x);
             bottom: calc(104px + env(safe-area-inset-bottom, 0px));
-            grid-template-columns: repeat(2, minmax(0, 1fr));
+            grid-template-columns: minmax(0, 1fr);
             grid-auto-flow: row;
             overflow: visible;
           }
 
-          .beyond-actions {
+          .beyond-actions,
+          .beyond-sliders {
             grid-column: 1 / -1;
+          }
+
+          .beyond-sliders {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 7px;
           }
         }
 
@@ -594,7 +636,43 @@ export default function BeyondWaveField() {
           .beyond-panel {
             left: 14px;
             right: 14px;
+            bottom: calc(100px + env(safe-area-inset-bottom, 0px));
             gap: 7px;
+          }
+
+          .beyond-sliders {
+            display: none;
+          }
+
+          .beyond-panel[data-expanded="true"] .beyond-sliders {
+            display: flex;
+            gap: 7px;
+            overflow-x: auto;
+            overflow-y: hidden;
+            overscroll-behavior-x: contain;
+            scroll-snap-type: x proximity;
+            -webkit-overflow-scrolling: touch;
+            padding-bottom: 2px;
+          }
+
+          .beyond-panel[data-expanded="true"] .beyond-sliders label {
+            display: grid;
+            flex: 0 0 calc((100% - 14px) / 2.15);
+            min-height: 58px;
+            height: 58px;
+            min-width: 0;
+            scroll-snap-align: start;
+            grid-template-rows: auto 18px;
+            gap: 2px 8px;
+            padding: 7px 9px;
+          }
+
+          .beyond-panel[data-expanded="true"] .beyond-sliders input {
+            height: 18px;
+          }
+
+          .beyond-actions {
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(74px, 0.72fr);
           }
 
           .beyond-actions,
@@ -602,8 +680,19 @@ export default function BeyondWaveField() {
             min-height: 54px;
           }
 
+          .beyond-actions button {
+            min-width: 0;
+            padding: 0 8px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+          }
+
+          .beyond-tune-toggle {
+            display: block;
+          }
+
           .beyond-panel label {
-            padding: 9px 10px 8px;
+            padding: 8px 10px 7px;
           }
 
           .beyond-readout {
