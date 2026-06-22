@@ -71,6 +71,80 @@ const PHRASES: ReadonlyArray<{ name: string; weights: Record<string, number> }> 
   { name: "body",       weights: { body: 96, love: 60, prayer: 50, friendship: 55, work: 40, memory: 40, future: 35, risk: 30 } },
 ];
 
+type ComposeSource = "lyria" | "procedural";
+
+type StartComposeOptions = {
+  keepCurrentUntilReady?: boolean;
+  reason?: "compose" | "again" | "slower" | "bells" | "deeper" | "darker" | "kept";
+};
+
+type KeptSignal = {
+  id: string;
+  prompt: string;
+  label: string;
+  source: ComposeSource;
+  model: string;
+  seaWash: boolean;
+  chips: string[];
+  createdAt: number;
+};
+
+const KEPT_SIGNALS_KEY = "objetdart:signal-kept:v1";
+
+const LYRIAL_WAIT_PHRASES = [
+  "asking the sea engine",
+  "braiding the prompt",
+  "waiting for the clip",
+  "tuning the tide",
+  "listening for return",
+] as const;
+
+const LYRIAL_STAGE_LABEL: Record<string, string> = {
+  requesting: "asking lyria",
+  decoding: "opening the clip",
+  ready: "generated signal",
+};
+
+const SIGNAL_NUDGES: ReadonlyArray<{
+  id: NonNullable<StartComposeOptions["reason"]>;
+  label: string;
+  apply: (prompt: string) => string;
+}> = [
+  { id: "again", label: "again", apply: (prompt) => prompt },
+  { id: "slower", label: "slower", apply: (prompt) => appendPromptNudge(prompt, "slower, more tidal") },
+  { id: "bells", label: "more bells", apply: (prompt) => appendPromptNudge(prompt, "more bells") },
+  { id: "deeper", label: "deeper sea", apply: (prompt) => appendPromptNudge(prompt, "deeper sea wash") },
+  { id: "darker", label: "less bright", apply: (prompt) => appendPromptNudge(prompt, "darker and softer") },
+];
+
+function appendPromptNudge(prompt: string, nudge: string): string {
+  const base = prompt.trim();
+  if (!base) return nudge;
+  const lower = base.toLowerCase();
+  if (lower.includes(nudge.toLowerCase())) return base;
+  return `${base}, ${nudge}`;
+}
+
+function promptHash(input: string): number {
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function pickWaitPhrase(prompt: string, requestId: number): string {
+  const hash = promptHash(`${prompt}:${requestId}`);
+  return LYRIAL_WAIT_PHRASES[hash % LYRIAL_WAIT_PHRASES.length];
+}
+
+function compactPrompt(prompt: string, max = 46): string {
+  const clean = prompt.trim().replace(/\s+/g, " ");
+  if (clean.length <= max) return clean;
+  return `${clean.slice(0, max - 3).trimEnd()}...`;
+}
+
 export default function Signal() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const fftSmooth = useRef<Float32Array | null>(null);
@@ -87,8 +161,13 @@ export default function Signal() {
   const [micError, setMicError] = useState<string | null>(null);
   const [playing, setPlaying] = useState(false);
   const [composePending, setComposePending] = useState(false);
-  const [composeSource, setComposeSource] = useState<"lyria" | "procedural" | null>(null);
+  const [composeSource, setComposeSource] = useState<ComposeSource | null>(null);
   const [composeError, setComposeError] = useState<string | null>(null);
+  const [composeStage, setComposeStage] = useState<keyof typeof LYRIAL_STAGE_LABEL | "preparing">("preparing");
+  const [composeWaitPhrase, setComposeWaitPhrase] = useState<string>(LYRIAL_WAIT_PHRASES[0]);
+  const [activePrompt, setActivePrompt] = useState("");
+  const [composeModel, setComposeModel] = useState<string | null>(null);
+  const [keptSignals, setKeptSignals] = useState<KeptSignal[]>([]);
 
   // ── interactive layer ────────────────────────────────────────────────
   // Hovered = pointer is inside the spiral's outer radius. The RAF loop
@@ -152,6 +231,15 @@ export default function Signal() {
     () => parsePromptMods(promptText).chips,
     [promptText],
   );
+  const activePromptChips = useMemo(
+    () => parsePromptMods(activePrompt).chips,
+    [activePrompt],
+  );
+  const activePromptIsKept = useMemo(() => {
+    const prompt = activePrompt.trim();
+    if (!prompt) return false;
+    return keptSignals.some((signal) => signal.prompt === prompt && signal.seaWash === oceanicCoda);
+  }, [activePrompt, keptSignals, oceanicCoda]);
 
   // pull current field state so COMPOSE can use the user's actual concerns.
   const concerns = useField((s) => s.concerns);
@@ -160,6 +248,22 @@ export default function Signal() {
   // page-specific ambient bed: nearly silent radio carrier
   useEffect(() => {
     getFieldAudio().setAmbientProfile("signal", { fadeSec: 0.08 });
+  }, []);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(KEPT_SIGNALS_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as KeptSignal[];
+      if (Array.isArray(parsed)) {
+        setKeptSignals(parsed.filter((signal) => typeof signal?.prompt === "string").slice(0, 12));
+      }
+    } catch { /* noop */ }
+  }, []);
+
+  const persistKeptSignals = useCallback((signals: KeptSignal[]) => {
+    setKeptSignals(signals);
+    try { localStorage.setItem(KEPT_SIGNALS_KEY, JSON.stringify(signals)); } catch { /* noop */ }
   }, []);
 
   // ── audio + visualiser bootstrap ─────────────────────────────────────
@@ -198,7 +302,10 @@ export default function Signal() {
   // Kicks off the generative composer with the user's current concern
   // vector. Captures derived scale + tempo for the UI label, and seeds
   // a progress timer that updates ~10x/s without thrashing rAF.
-  const startCompose = useCallback(async (promptOverride?: string) => {
+  const startCompose = useCallback(async (
+    promptOverride?: string,
+    options: StartComposeOptions = {},
+  ) => {
     const requestId = composeRequestRef.current + 1;
     composeRequestRef.current = requestId;
     const audio = getFieldAudio();
@@ -209,8 +316,16 @@ export default function Signal() {
     const a = audio.getAnalyser();
     if (a && !micActive) sourceAnalyser.current = a;
 
-    // stop any previous compose first
-    if (composeHandle.current) {
+    const prompt = (promptOverride ?? promptTextRef.current).trim();
+    const wantsLyria = prompt.length > 0;
+    const keepCurrentUntilReady = Boolean(
+      options.keepCurrentUntilReady && wantsLyria && composeHandle.current,
+    );
+
+    // Stop any previous composition first unless we are generating a Lyria
+    // variation. In that path, the old clip keeps the room alive until the new
+    // decoded buffer is ready; playAudioClip() will fade it out at handoff.
+    if (composeHandle.current && !keepCurrentUntilReady) {
       try { composeHandle.current.stop(); } catch { /* noop */ }
       composeHandle.current = null;
     }
@@ -219,16 +334,19 @@ export default function Signal() {
     // Resolve UI labels using the same precedence as the engine: explicit
     // prompt scale/tempo > concern-derived defaults. Keeps the on-screen
     // chip in sync with what the audio engine is actually doing.
-    const prompt = (promptOverride ?? promptTextRef.current).trim();
     composePromptRef.current = prompt;
     const mods = parsePromptMods(prompt);
     const baseTempo = deriveTempo(concerns);
     const tempo = Math.max(40, Math.min(180, baseTempo + mods.tempoDelta));
     const scale = mods.scale ?? (prompt ? pickPromptFallbackScale(prompt.toLowerCase()) : deriveScale(concerns));
     setComposeMeta({ scale, tempo, duration: prompt ? 30 : duration });
-    setComposing(false);
+    if (!keepCurrentUntilReady) setComposing(false);
     setComposePending(true);
     setComposeSource(prompt ? "lyria" : "procedural");
+    setComposeStage(prompt ? "requesting" : "preparing");
+    setComposeWaitPhrase(prompt ? pickWaitPhrase(prompt, requestId) : "preparing field music");
+    setActivePrompt(prompt);
+    setComposeModel(null);
     setComposeError(null);
     setComposeProgress(0);
 
@@ -238,13 +356,15 @@ export default function Signal() {
         const res = await fetch("/api/generate-music", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ prompt, concerns }),
+          body: JSON.stringify({ prompt, concerns, oceanicCoda }),
         });
         if (!res.ok) throw new Error(`music generation failed: ${res.status}`);
         const json = await res.json();
         const encoded = json?.audio?.data;
         if (typeof encoded !== "string") throw new Error("music generation returned no audio");
         if (composeRequestRef.current !== requestId) return;
+        setComposeStage("decoding");
+        setComposeModel(typeof json?.model === "string" ? json.model : "lyria-3-clip-preview");
         const bytes = Uint8Array.from(atob(encoded), (char) => char.charCodeAt(0));
         // Loop the generated clip so it keeps playing until the listener
         // hits stop, rather than fading out after a single pass.
@@ -253,8 +373,11 @@ export default function Signal() {
         console.warn(err);
         if (composeRequestRef.current !== requestId) return;
         setComposePending(false);
-        setComposeSource(null);
-        setComposeError("music model unavailable");
+        if (!keepCurrentUntilReady) {
+          setComposeSource(null);
+          setComposing(false);
+        }
+        setComposeError(keepCurrentUntilReady ? "variation unavailable; still playing" : "music model unavailable");
         return;
       }
     }
@@ -278,6 +401,7 @@ export default function Signal() {
     setComposing(true);
     setComposeStart(Date.now());
     setComposeMeta({ scale, tempo, duration: handle.duration });
+    setComposeStage(prompt ? "ready" : "preparing");
     recordTape("sigil", 1.0, "compose");
   }, [concerns, micActive, recordTape, oceanicCoda]);
 
@@ -306,7 +430,60 @@ export default function Signal() {
     setComposeError(null);
     setComposing(false);
     setComposeProgress(0);
+    setComposeModel(null);
+    setComposeStage("preparing");
   }, []);
+
+  const nudgeSignal = useCallback((nudge: (typeof SIGNAL_NUDGES)[number]) => {
+    const base = composePromptRef.current.trim() || promptTextRef.current.trim();
+    const nextPrompt = nudge.apply(base);
+    promptTextRef.current = nextPrompt;
+    setPromptText(nextPrompt);
+    setComposeError(null);
+    haptics.tap();
+    void startCompose(nextPrompt, {
+      keepCurrentUntilReady: true,
+      reason: nudge.id,
+    });
+  }, [startCompose]);
+
+  const keepActiveSignal = useCallback(() => {
+    const prompt = activePrompt.trim();
+    if (!prompt) {
+      try { getFieldAudio().refuse(); } catch { /* noop */ }
+      return;
+    }
+    const source = composeSource ?? "lyria";
+    const entry: KeptSignal = {
+      id: `${Date.now().toString(36)}-${promptHash(`${prompt}:${oceanicCoda}`).toString(36)}`,
+      prompt,
+      label: compactPrompt(prompt, 44),
+      source,
+      model: composeModel ?? (source === "lyria" ? "lyria-3-clip-preview" : "procedural"),
+      seaWash: oceanicCoda,
+      chips: parsePromptMods(prompt).chips.slice(0, 4),
+      createdAt: Date.now(),
+    };
+    const next = [
+      entry,
+      ...keptSignals.filter((signal) => !(signal.prompt === prompt && signal.seaWash === oceanicCoda)),
+    ].slice(0, 12);
+    persistKeptSignals(next);
+    recordTape("kept", 0.8, "signal");
+    haptics.roll();
+    try { getFieldAudio().thud(); } catch { /* noop */ }
+  }, [activePrompt, composeModel, composeSource, keptSignals, oceanicCoda, persistKeptSignals, recordTape]);
+
+  const replayKeptSignal = useCallback((signal: KeptSignal) => {
+    promptTextRef.current = signal.prompt;
+    setPromptText(signal.prompt);
+    setOceanicCoda(signal.seaWash);
+    setComposeError(null);
+    void startCompose(signal.prompt, {
+      keepCurrentUntilReady: Boolean(composeHandle.current),
+      reason: "kept",
+    });
+  }, [startCompose]);
 
   // progress ticker — also keeps the music alive when a piece plays out.
   // The listener stays in control: it runs until they press stop.
@@ -809,6 +986,14 @@ export default function Signal() {
   }, []);
 
   const showTapPrompt = !audioStarted && !micActive;
+  const isLyriaActive = composeSource === "lyria" && activePrompt.trim().length > 0;
+  const composePrimaryLabel = composePending
+    ? (isLyriaActive ? composeWaitPhrase : "preparing")
+    : (isLyriaActive ? LYRIAL_STAGE_LABEL.ready : composeMeta?.scale ?? "compose");
+  const composeSecondaryLabel = composePending
+    ? (isLyriaActive ? (composeStage === "preparing" ? "asking lyria" : LYRIAL_STAGE_LABEL[composeStage]) : `${composeMeta?.tempo ?? 80} bpm`)
+    : (isLyriaActive ? "looping" : `${composeMeta?.tempo ?? 80} bpm`);
+  const activePromptPreview = activePrompt ? compactPrompt(activePrompt, 64) : "";
 
   return (
     <div
@@ -925,6 +1110,23 @@ export default function Signal() {
         </button>
       )}
 
+      {audioStarted && !composePending && !composing && (
+        <div
+          className="signal-affordance-hints"
+          aria-hidden="true"
+          style={{
+            position: "fixed",
+            inset: 0,
+            pointerEvents: "none",
+            zIndex: 4,
+          }}
+        >
+          <span className="signal-affordance-label signal-affordance-pluck">pluck</span>
+          <span className="signal-affordance-label signal-affordance-ring">ring</span>
+          <span className="signal-affordance-label signal-affordance-bend">bend</span>
+        </div>
+      )}
+
       {/* compose progress — preparing first, then playing */}
       {(composePending || composing) && composeMeta && (
         <div
@@ -941,19 +1143,22 @@ export default function Signal() {
           }}
         >
           <div
+            className="signal-compose-card"
             style={{
               display: "flex",
               flexDirection: "column",
               alignItems: "center",
-              gap: 8,
-              padding: "10px 22px",
-              border: "1px solid rgba(244, 238, 222, 0.20)",
+              gap: 9,
+              padding: "12px 18px",
+              border: `1px solid ${composePending && isLyriaActive ? "rgba(120, 200, 235, 0.36)" : "rgba(244, 238, 222, 0.20)"}`,
               borderRadius: 12,
               background: "rgba(10, 19, 34, 0.65)",
               backdropFilter: "blur(6px)",
               WebkitBackdropFilter: "blur(6px)",
               color: "rgba(244, 238, 222, 0.92)",
-              minWidth: 260,
+              minWidth: 286,
+              maxWidth: "min(560px, calc(100vw - 28px))",
+              pointerEvents: "auto",
             }}
           >
             <div
@@ -968,14 +1173,39 @@ export default function Signal() {
                 color: "rgba(244, 238, 222, 0.82)",
               }}
             >
-              <span>
-                {composePending
-                  ? (composeSource === "lyria" ? "generating" : "preparing")
-                  : (composeSource === "lyria" ? "lyria" : composeMeta.scale)}
-              </span>
-              <span>{composeMeta.tempo} bpm</span>
+              <span>{composePrimaryLabel}</span>
+              <span>{composeSecondaryLabel}</span>
             </div>
+            {isLyriaActive && (
+              <div
+                style={{
+                  width: "100%",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 10,
+                  fontFamily: "var(--font-text)",
+                  fontSize: 11,
+                  letterSpacing: "0.05em",
+                  textTransform: "lowercase",
+                  color: "rgba(244, 238, 222, 0.68)",
+                }}
+              >
+                <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {activePromptPreview}
+                </span>
+                {composeModel && !composePending && (
+                  <span
+                    aria-label={`generated by ${composeModel}`}
+                    style={{ flex: "0 0 auto", opacity: 0.72 }}
+                  >
+                    generated
+                  </span>
+                )}
+              </div>
+            )}
             <div
+              className={composePending && isLyriaActive ? "signal-progress-track is-pending" : "signal-progress-track"}
               style={{
                 width: 240,
                 height: 2,
@@ -986,8 +1216,9 @@ export default function Signal() {
               aria-label={composePending ? "preparing composition" : `composition progress ${Math.round(composeProgress * 100)} percent`}
             >
               <div
+                className={composePending && isLyriaActive ? "signal-progress-fill is-pending" : "signal-progress-fill"}
                 style={{
-                  width: composePending ? "18%" : `${composeProgress * 100}%`,
+                  width: composePending ? (isLyriaActive ? "44%" : "18%") : `${composeProgress * 100}%`,
                   height: "100%",
                   background:
                     "linear-gradient(90deg, rgba(255,180,110,0.85), rgba(120,200,235,0.85))",
@@ -995,18 +1226,82 @@ export default function Signal() {
                 }}
               />
             </div>
+            {isLyriaActive && activePromptChips.length > 0 && (
+              <div
+                className="signal-active-chips"
+                style={{
+                  display: "flex",
+                  gap: 5,
+                  width: "100%",
+                  overflowX: "auto",
+                  scrollbarWidth: "none",
+                }}
+              >
+                {activePromptChips.slice(0, 5).map((chip) => (
+                  <span
+                    key={chip}
+                    className="t-mono"
+                    style={{
+                      flex: "0 0 auto",
+                      fontSize: 9,
+                      letterSpacing: "0.08em",
+                      padding: "2px 7px",
+                      borderRadius: 999,
+                      border: "1px solid rgba(244, 238, 222, 0.16)",
+                      color: "rgba(244, 238, 222, 0.66)",
+                    }}
+                  >
+                    {chip}
+                  </span>
+                ))}
+              </div>
+            )}
+            {isLyriaActive && (
+              <div
+                className="signal-lyria-actions"
+                style={{
+                  width: "100%",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  flexWrap: "wrap",
+                  gap: 6,
+                }}
+              >
+                {!composePending && SIGNAL_NUDGES.map((nudge) => (
+                  <button
+                    key={nudge.id}
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); nudgeSignal(nudge); }}
+                    style={miniActionBtn(false)}
+                  >
+                    {nudge.label}
+                  </button>
+                ))}
+                {!composePending && (
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); keepActiveSignal(); }}
+                    aria-pressed={activePromptIsKept}
+                    style={miniActionBtn(activePromptIsKept)}
+                  >
+                    {activePromptIsKept ? "kept" : "keep"}
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}
 
       {composeError && !composePending && !composing && (
         <div
-          className="signal-compose-progress"
+          className="signal-compose-error"
           style={{
             position: "fixed",
             left: 0,
             right: 0,
-            bottom: "calc(128px + env(safe-area-inset-bottom))",
+            bottom: "calc(178px + env(safe-area-inset-bottom))",
             display: "flex",
             justifyContent: "center",
             pointerEvents: "none",
@@ -1213,8 +1508,66 @@ export default function Signal() {
                 cursor: "pointer",
               }}
             />
-            always end with the sea
+            thread sea wash
           </label>
+          {keptSignals.length > 0 && (
+            <div
+              className="signal-kept-signals"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                width: "100%",
+                maxWidth: "100%",
+                overflowX: "auto",
+                paddingBottom: 1,
+                scrollbarWidth: "none",
+                pointerEvents: "auto",
+              }}
+            >
+              <span
+                className="t-mono"
+                style={{
+                  flex: "0 0 auto",
+                  fontSize: 9,
+                  letterSpacing: "0.10em",
+                  textTransform: "lowercase",
+                  color: "rgba(244, 238, 222, 0.46)",
+                }}
+              >
+                kept
+              </span>
+              {keptSignals.slice(0, 5).map((signal) => (
+                <button
+                  key={signal.id}
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    replayKeptSignal(signal);
+                  }}
+                  title={signal.prompt}
+                  style={{
+                    border: "1px solid rgba(244, 238, 222, 0.18)",
+                    background: "rgba(10, 19, 34, 0.45)",
+                    color: "rgba(244, 238, 222, 0.76)",
+                    borderRadius: 999,
+                    padding: "4px 9px",
+                    fontFamily: "var(--font-text)",
+                    fontSize: 11,
+                    fontStyle: "italic",
+                    cursor: "pointer",
+                    maxWidth: 160,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    flex: "0 0 auto",
+                  }}
+                >
+                  {signal.label}
+                </button>
+              ))}
+            </div>
+          )}
           </div>
         )}
 
@@ -1360,11 +1713,52 @@ export default function Signal() {
       </div>
 
       <style>{`
+        @keyframes signal-pending-sweep {
+          0%   { transform: translateX(-115%); opacity: 0.35; }
+          35%  { opacity: 0.95; }
+          100% { transform: translateX(245%); opacity: 0.35; }
+        }
+        @keyframes signal-affordance-drift {
+          0%, 12% { opacity: 0; transform: translateY(6px); }
+          24%, 62% { opacity: 0.58; transform: translateY(0); }
+          100% { opacity: 0; transform: translateY(-8px); }
+        }
         @keyframes signal-mic-dot-pulse {
           0%, 100% { opacity: 0.95; transform: scale(1); }
           50%      { opacity: 0.45; transform: scale(0.78); }
         }
         .signal-mic-dot { animation: signal-mic-dot-pulse 1.6s ease-in-out infinite; }
+        .signal-progress-track.is-pending {
+          position: relative;
+        }
+        .signal-progress-fill.is-pending {
+          animation: signal-pending-sweep 1.65s ease-in-out infinite;
+          will-change: transform, opacity;
+        }
+        .signal-affordance-label {
+          position: absolute;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          min-width: 42px;
+          min-height: 24px;
+          padding: 0 8px;
+          border: 1px solid rgba(244, 238, 222, 0.18);
+          border-radius: 999px;
+          background: rgba(10, 19, 34, 0.36);
+          color: rgba(244, 238, 222, 0.72);
+          font-family: var(--font-text);
+          font-size: 11px;
+          font-style: italic;
+          letter-spacing: 0.04em;
+          text-transform: lowercase;
+          backdrop-filter: blur(4px);
+          -webkit-backdrop-filter: blur(4px);
+          animation: signal-affordance-drift 6.5s ease forwards;
+        }
+        .signal-affordance-pluck { left: 18%; top: 31%; animation-delay: 0.15s; }
+        .signal-affordance-ring { left: 52%; top: 47%; animation-delay: 0.65s; }
+        .signal-affordance-bend { left: 22%; top: 64%; animation-delay: 1.05s; }
         .signal-prompt-input::placeholder { color: rgba(244, 238, 222, 0.62); }
         .signal-prompt-input:focus {
           border-color: rgba(120, 200, 235, 0.86) !important;
@@ -1379,7 +1773,9 @@ export default function Signal() {
           transform: translateY(-50%) scale(0.96) !important;
         }
         .signal-control-cluster::-webkit-scrollbar,
-        .signal-prompt-chips::-webkit-scrollbar {
+        .signal-prompt-chips::-webkit-scrollbar,
+        .signal-active-chips::-webkit-scrollbar,
+        .signal-kept-signals::-webkit-scrollbar {
           display: none;
         }
         @media (max-width: 620px) {
@@ -1389,7 +1785,16 @@ export default function Signal() {
             padding: 0 10px !important;
           }
           .signal-compose-progress {
-            bottom: calc(178px + env(safe-area-inset-bottom)) !important;
+            bottom: calc(186px + env(safe-area-inset-bottom)) !important;
+          }
+          .signal-compose-error {
+            bottom: calc(222px + env(safe-area-inset-bottom)) !important;
+          }
+          .signal-compose-card {
+            max-width: calc(100vw - 20px) !important;
+            min-width: 0 !important;
+            padding-left: 14px !important;
+            padding-right: 14px !important;
           }
           .signal-prompt-panel {
             width: calc(100vw - 20px) !important;
@@ -1416,10 +1821,13 @@ export default function Signal() {
             padding-right: 12px !important;
           }
           .signal-bottom-inscription {
-            bottom: calc(286px + env(safe-area-inset-bottom)) !important;
+            bottom: calc(304px + env(safe-area-inset-bottom)) !important;
             font-size: 14px !important;
             opacity: 0.66;
           }
+          .signal-affordance-pluck { left: 10%; top: 30%; }
+          .signal-affordance-ring { left: 52%; top: 44%; }
+          .signal-affordance-bend { left: 12%; top: 62%; }
         }
         @media (max-height: 720px) {
           .signal-footer {
@@ -1435,6 +1843,8 @@ export default function Signal() {
         }
         @media (prefers-reduced-motion: reduce) {
           .signal-mic-dot { animation: none; }
+          .signal-progress-fill.is-pending { animation: none; }
+          .signal-affordance-label { animation: none; opacity: 0.48; }
         }
       `}</style>
 
@@ -1484,5 +1894,24 @@ function controlBtn(active: boolean): React.CSSProperties {
     flex: "0 0 auto",
     whiteSpace: "nowrap",
     transition: "background 240ms, border-color 240ms",
+  };
+}
+
+function miniActionBtn(active: boolean): React.CSSProperties {
+  return {
+    border: `1px solid ${active ? "rgba(120, 200, 235, 0.62)" : "rgba(244, 238, 222, 0.20)"}`,
+    background: active ? "rgba(120, 200, 235, 0.18)" : "rgba(10, 19, 34, 0.36)",
+    color: "rgba(244, 238, 222, 0.80)",
+    borderRadius: 999,
+    minHeight: 28,
+    padding: "4px 9px",
+    fontFamily: "var(--font-text)",
+    fontSize: 11,
+    fontStyle: "italic",
+    letterSpacing: "0.04em",
+    textTransform: "lowercase",
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+    transition: "background 180ms ease, border-color 180ms ease, transform 180ms ease",
   };
 }
