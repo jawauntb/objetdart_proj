@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useField } from "@/store/field";
 import { getFieldAudio } from "@/lib/audio";
+import * as haptics from "@/lib/haptics";
 import { WAVES_POEM, WAVES_TITLE, WAVES_SUBTITLE, type WavePhase } from "@/data/waves-poem";
 import PhaseChart from "@/components/PhaseChart";
 import PlasmaOrb from "@/components/PlasmaOrb";
@@ -56,6 +57,7 @@ function useReducedMotion(): boolean {
  */
 export default function Waves() {
   const [activeIdx, setActiveIdx] = useState(0);
+  const [crossed, setCrossed] = useState<string[]>([]);
 
   // page-specific ambient bed: phasey swell and analytic clicks
   useEffect(() => { getFieldAudio().setAmbientProfile("waves"); }, []);
@@ -73,9 +75,11 @@ export default function Waves() {
             const idx = Number(e.target.getAttribute("data-wave-idx") ?? "0");
             const id = e.target.getAttribute("data-wave-phase") ?? "";
             setActiveIdx(idx);
+            setCrossed((prev) => prev.includes(id) ? prev : [...prev, id]);
             // first time this phase enters the viewport, record a pulse + chime
             if (!seen.has(id)) {
               seen.add(id);
+              haptics.ripple(id === "coda" ? 0.72 : 0.42);
               useField.getState().recordTape("region", 0.55, `waves/${id}`);
               try {
                 if (id === "coda") getFieldAudio().bell();
@@ -95,11 +99,108 @@ export default function Waves() {
   return (
     <div style={{ background: "#08111c" }}>
       <Threshold />
+      <WaveMemoryRail activeIdx={activeIdx} crossed={crossed} />
       {WAVES_POEM.map((phase, i) => (
         <PhaseSection key={phase.id} phase={phase} idx={i} active={activeIdx === i} />
       ))}
       <Footer />
     </div>
+  );
+}
+
+function WaveMemoryRail({ activeIdx, crossed }: { activeIdx: number; crossed: string[] }) {
+  return (
+    <>
+      <div className="waves-memory-rail" aria-hidden="true">
+        {WAVES_POEM.map((phase, i) => {
+          const active = activeIdx === i;
+          const done = crossed.includes(phase.id);
+          return (
+            <span
+              key={phase.id}
+              className={active ? "is-active" : done ? "is-crossed" : ""}
+              style={{ ["--wave-accent" as string]: phase.accent }}
+            >
+              <i />
+              <b>{pad2(phase.index)}</b>
+            </span>
+          );
+        })}
+      </div>
+      <style
+        dangerouslySetInnerHTML={{
+          __html: `
+          .waves-memory-rail {
+            position: fixed;
+            z-index: 4;
+            left: 18px;
+            top: 50%;
+            transform: translateY(-50%);
+            display: flex;
+            flex-direction: column;
+            gap: 9px;
+            pointer-events: none;
+          }
+          .waves-memory-rail span {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            color: rgba(232,226,213,0.42);
+            font-family: var(--font-mono);
+            font-size: 10px;
+            letter-spacing: 0;
+            transition: color 260ms ease, transform 260ms ease;
+          }
+          .waves-memory-rail i {
+            width: 2px;
+            height: 14px;
+            background: currentColor;
+            opacity: 0.7;
+            transition: height 260ms ease, box-shadow 260ms ease;
+          }
+          .waves-memory-rail b {
+            font-weight: 400;
+          }
+          .waves-memory-rail span.is-crossed,
+          .waves-memory-rail span.is-active {
+            color: var(--wave-accent);
+          }
+          .waves-memory-rail span.is-active {
+            transform: translateX(3px);
+          }
+          .waves-memory-rail span.is-active i {
+            height: 28px;
+            box-shadow: 0 0 18px currentColor;
+          }
+          @media (max-width: 820px) {
+            .waves-memory-rail {
+              top: auto;
+              left: 18px;
+              right: 18px;
+              bottom: calc(108px + env(safe-area-inset-bottom, 0px));
+              transform: none;
+              flex-direction: row;
+              justify-content: center;
+              gap: 8px;
+            }
+            .waves-memory-rail span {
+              flex-direction: column;
+              gap: 4px;
+              font-size: 9px;
+            }
+            .waves-memory-rail i {
+              width: 14px;
+              height: 2px;
+            }
+            .waves-memory-rail span.is-active i {
+              width: 28px;
+              height: 2px;
+            }
+          }
+        `,
+        }}
+      />
+    </>
   );
 }
 
@@ -228,9 +329,11 @@ function PhaseSection({ phase, idx, active }: { phase: WavePhase; idx: number; a
       const next = new Set(prev);
       if (next.has(i)) {
         next.delete(i);
+        haptics.chop();
       } else {
         next.add(i);
         // tape + chime — one-shot on add. Removal is silent.
+        haptics.roll();
         try { getFieldAudio().chime(); } catch { /* noop */ }
         try {
           useField.getState().recordTape("kept", 0.7, `waves/${phase.id}: ${line}`);
@@ -275,7 +378,9 @@ function PhaseSection({ phase, idx, active }: { phase: WavePhase; idx: number; a
         transition: "filter 380ms ease",
       }}
     >
-      <style>{`
+      <style
+        dangerouslySetInnerHTML={{
+          __html: `
         @media (max-width: 820px) {
           .waves-phase-section { grid-template-columns: minmax(0, 1fr) !important; }
           .waves-phase-aside { position: static !important; opacity: 0.7; }
@@ -295,7 +400,9 @@ function PhaseSection({ phase, idx, active }: { phase: WavePhase; idx: number; a
           .waves-poem-line:hover { filter: brightness(1.05); }
         }
         .waves-kept-line { color: var(--phase-accent, currentColor); }
-      `}</style>
+      `,
+        }}
+      />
       {/* flame phase only: a small plasma orb sits in the top-right
           of the section's main content column. pointer-events disabled
           so it never intercepts scroll/clicks. */}
@@ -340,13 +447,19 @@ function PhaseSection({ phase, idx, active }: { phase: WavePhase; idx: number; a
             reduce={reduce}
             onActivate={() => {
               // bell + pulse window
+              haptics.ripple(0.62);
+              useField.getState().recordTape("sigil", 0.56, `waves/${phase.id}/pulse`);
               try { getFieldAudio().bell(); } catch { /* noop */ }
               setPulseTick((t) => t + 1);
             }}
           />
           <PhaseTag
             label={phase.tag}
-            onActivate={() => setReadingForced((v) => !v)}
+            onActivate={() => {
+              haptics.tap();
+              useField.getState().recordTape("object", 0.36, `waves/${phase.id}/reading`);
+              setReadingForced((v) => !v);
+            }}
           />
         </div>
 
@@ -655,6 +768,8 @@ function EkgTrace({
   const onClickTrace = () => {
     // chime pitch: A3 (57) + phaseIndex * 2 semitones → ~A3..F#5 range
     const midi = 57 + (phaseIndex - 1) * 2;
+    haptics.chop();
+    try { useField.getState().recordTape("sigil", 0.46, `waves/trace/${phaseIndex}`); } catch { /* noop */ }
     try { getFieldAudio().playNote(midi, 260); } catch { /* noop */ }
     setReplayTick((t) => t + 1);
   };
@@ -715,7 +830,7 @@ function Footer() {
     <section
       style={{
         minHeight: "60svh",
-        padding: "12vh 6vw",
+        padding: "12vh 6vw calc(112px + 12vh + env(safe-area-inset-bottom, 0px))",
         background: "linear-gradient(180deg, #15314a 0%, #0a1a2c 100%)",
         color: "rgba(232,226,213,0.94)",
         display: "flex",

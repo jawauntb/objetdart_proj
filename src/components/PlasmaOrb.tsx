@@ -411,7 +411,9 @@ export default function PlasmaOrb({
           pointerEvents: "none",
         }}
       />
-      <style>{`
+      <style
+        dangerouslySetInnerHTML={{
+          __html: `
         @keyframes plasma-orb-pulse {
           0%, 100% { filter: brightness(0.92); }
           50%      { filter: brightness(1.10); }
@@ -419,7 +421,9 @@ export default function PlasmaOrb({
         @media (prefers-reduced-motion: reduce) {
           [data-plasma-fallback="1"] { animation: none !important; }
         }
-      `}</style>
+      `,
+        }}
+      />
     </div>
   );
 }
