@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
+import * as haptics from "@/lib/haptics";
 import { useField } from "@/store/field";
 import WaterText from "@/components/WaterText";
 
@@ -131,6 +132,21 @@ type SavedConstellation = {
   name: string;
   starIndices: number[];
   createdAt: number;
+};
+
+type SkyPulseTone = "star" | "nebula" | "gravity" | "kept" | "wish";
+type SkyPulse = {
+  id: number;
+  label: string;
+  tone: SkyPulseTone;
+};
+
+const SKY_PULSE_COLOR: Record<SkyPulseTone, string> = {
+  star: "rgba(244, 238, 222, 0.94)",
+  nebula: "rgba(144, 210, 230, 0.94)",
+  gravity: "rgba(184, 160, 255, 0.94)",
+  kept: "rgba(218, 176, 92, 0.96)",
+  wish: "rgba(240, 130, 170, 0.94)",
 };
 
 // ── seeded PRNG (mulberry32) — same field every load ─────────────────
@@ -469,8 +485,10 @@ export default function Stars() {
   const [hoveredMilkyWay, setHoveredMilkyWay] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [userZoom, setUserZoom] = useState(1);
+  const [skyPulse, setSkyPulse] = useState<SkyPulse | null>(null);
 
   // transient effects — mutated by event handlers, read by the RAF loop
+  const skyPulseId = useRef(0);
   const sparksRef = useRef<Spark[]>([]);
   const breathsRef = useRef<NebulaBreath[]>([]);
   const gravityWellRef = useRef<GravityWell>({
@@ -508,6 +526,22 @@ export default function Stars() {
   // pointer hit-tests and for placing the name input.
   const starPosRef = useRef<((i: number, t: number) => { x: number; y: number }) | null>(null);
 
+  const markSky = useCallback((
+    label: string,
+    tone: SkyPulseTone,
+    intensity = 0.45,
+    kind: "object" | "sigil" | "region" | "kept" = "object",
+    meta = label,
+    writeTape = true,
+  ) => {
+    const id = ++skyPulseId.current;
+    setSkyPulse({ id, label, tone });
+    if (writeTape) recordTape(kind, intensity, `stars/${meta.toLowerCase().replace(/\s+/g, "-")}`);
+    window.setTimeout(() => {
+      setSkyPulse((prev) => (prev?.id === id ? null : prev));
+    }, 2400);
+  }, [recordTape]);
+
   const setZoomLevel = useCallback((next: number | ((cur: number) => number)) => {
     setUserZoom((cur) => {
       const value = clampZoom(typeof next === "function" ? next(cur) : next);
@@ -518,13 +552,17 @@ export default function Stars() {
 
   const zoomIn = useCallback(() => {
     setZoomLevel((cur) => cur + USER_ZOOM_STEP);
+    haptics.ripple(0.38);
+    markSky("rings closer", "nebula", 0.38, "object", "zoom-in");
     try { getFieldAudio().chime(); } catch { /* noop */ }
-  }, [setZoomLevel]);
+  }, [markSky, setZoomLevel]);
 
   const zoomOut = useCallback(() => {
     setZoomLevel((cur) => cur - USER_ZOOM_STEP);
+    haptics.tap();
+    markSky("galaxies wider", "star", 0.34, "object", "zoom-out");
     try { getFieldAudio().spark(); } catch { /* noop */ }
-  }, [setZoomLevel]);
+  }, [markSky, setZoomLevel]);
 
   // load saved constellations on mount
   useEffect(() => {
@@ -573,6 +611,8 @@ export default function Stars() {
       setEditingId(null);
       setNamePos(null);
       try { getFieldAudio().bell(); } catch { /* noop */ }
+      haptics.roll();
+      markSky("name changed", "kept", 0.72, "kept", "rename", false);
       recordTape("kept", 0.85, `stars/${name}`);
       return;
     }
@@ -598,16 +638,22 @@ export default function Stars() {
     setNameValue("");
     setNamePos(null);
     try { getFieldAudio().bell(); } catch { /* noop */ }
+    haptics.roll();
+    markSky("constellation kept", "kept", 0.9, "kept", "kept", false);
     recordTape("kept", 1.0, `stars/${name}`);
-  }, [editingId, nameValue, persistSaved, recordTape]);
+  }, [editingId, markSky, nameValue, persistSaved, recordTape]);
 
   // cancel pending
   const cancelPending = useCallback(() => {
+    if (pendingRef.current.length > 0) {
+      haptics.chop();
+      markSky("selection cleared", "gravity", 0.32, "object", "clear");
+    }
     setPending([]);
     setNaming(false);
     setNameValue("");
     setNamePos(null);
-  }, []);
+  }, [markSky]);
 
   // delete a saved constellation (with confirmation)
   const deleteSaved = useCallback(
@@ -617,15 +663,19 @@ export default function Stars() {
         setSaved(list);
         persistSaved(list);
         setDeleteConfirm(null);
+        haptics.roll();
+        markSky("constellation forgotten", "gravity", 0.62, "object", "forget");
       } else {
         setDeleteConfirm(id);
+        haptics.chop();
+        markSky("confirm forget", "gravity", 0.36, "object", "forget-confirm");
         // auto-clear confirmation after a few seconds
         setTimeout(() => {
           setDeleteConfirm((cur) => (cur === id ? null : cur));
         }, 3000);
       }
     },
-    [deleteConfirm, persistSaved],
+    [deleteConfirm, markSky, persistSaved],
   );
 
   // ── canvas init + render loop ──────────────────────────────────────
@@ -1602,6 +1652,8 @@ export default function Stars() {
         if (cur.length > 0 && cur[cur.length - 1] === idx) return;
         setPending([...cur, idx]);
         lastClickPos.current = { x, y };
+        haptics.ripple(0.34 + Math.min(0.34, cur.length * 0.08));
+        markSky(`${cur.length + 1} stars chosen`, "star", 0.42, "object", `select-${cur.length + 1}`);
         try { getFieldAudio().chime(); } catch { /* noop */ }
         return;
       }
@@ -1613,11 +1665,15 @@ export default function Stars() {
             ...breathsRef.current.filter((b) => b.idx !== nebIdx),
             { idx: nebIdx, t0: performance.now() },
           ];
+          haptics.roll();
+          markSky("nebula breath", "nebula", 0.58, "sigil", "nebula");
           try { getFieldAudio().bell(); } catch { /* noop */ }
           return;
         }
         if (isInMilkyWay(x, y)) {
           milkyPulseRef.current = performance.now();
+          haptics.roll();
+          markSky("milky way", "nebula", 0.62, "region", "milky-way");
           try { getFieldAudio().bell(); } catch { /* noop */ }
           return;
         }
@@ -1625,6 +1681,8 @@ export default function Stars() {
           ...sparksRef.current,
           { x, y, t0: performance.now() },
         ];
+        haptics.tap();
+        markSky("wish spark", "wish", 0.42, "object", "wish", false);
         try { getFieldAudio().spark(); } catch { /* noop */ }
         recordTape("object", 0.6, "wish");
         return;
@@ -1632,7 +1690,7 @@ export default function Stars() {
 
       cancelPending();
     },
-    [findStarAt, findSavedAt, findNebulaAt, isInMilkyWay, deleteSaved, cancelPending, recordTape],
+    [findStarAt, findSavedAt, findNebulaAt, isInMilkyWay, deleteSaved, cancelPending, markSky, recordTape],
   );
 
   const onPointerMove = useCallback(
@@ -1660,13 +1718,15 @@ export default function Stars() {
           ...sparksRef.current.slice(-12),
           { x: gravityWellRef.current.x, y: gravityWellRef.current.y, t0: performance.now() },
         ];
+        haptics.chop();
+        markSky("gravity well", "gravity", 0.58, "sigil", "gravity");
         try { getFieldAudio().thud(); } catch { /* noop */ }
       }
       gravityWellRef.current.active = false;
       gravityWellRef.current.pointerId = null;
       try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* noop */ }
     }
-  }, []);
+  }, [markSky]);
 
   const onDoubleClick = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -1685,8 +1745,10 @@ export default function Stars() {
       setNameValue(c.name);
       setEditingId(id);
       setNaming(true);
+      haptics.tap();
+      markSky("rename constellation", "kept", 0.38, "object", "rename-open");
     },
-    [findSavedNameAt],
+    [findSavedNameAt, markSky],
   );
 
   const onContextMenu = useCallback((e: React.MouseEvent) => {
@@ -1776,6 +1838,63 @@ export default function Stars() {
         }}
       />
 
+      <div
+        data-stars-memory="true"
+        aria-live="polite"
+        style={{
+          position: "fixed",
+          left: 18,
+          bottom: "calc(168px + env(safe-area-inset-bottom, 0px))",
+          zIndex: 4,
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          maxWidth: "min(520px, calc(100vw - 36px))",
+          padding: "8px 10px",
+          border: "1px solid rgba(232, 226, 213, 0.16)",
+          borderRadius: 6,
+          background: "rgba(4, 8, 14, 0.48)",
+          backdropFilter: "blur(8px)",
+          WebkitBackdropFilter: "blur(8px)",
+          color: "rgba(232, 226, 213, 0.68)",
+          fontFamily: "var(--font-mono)",
+          fontSize: 10,
+          letterSpacing: 0,
+          textTransform: "lowercase",
+          pointerEvents: "none",
+        }}
+      >
+        <span>{pending.length ? `${pending.length} chosen` : `${saved.length} named`}</span>
+        <span>{userZoom >= PLANET_REVEAL_ZOOM ? "rings near" : "galaxies wide"}</span>
+        <span
+          className={skyPulse ? "is-lit" : ""}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 7,
+            minWidth: 86,
+            maxWidth: 180,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            color: skyPulse ? SKY_PULSE_COLOR[skyPulse.tone] : "rgba(232, 226, 213, 0.44)",
+          }}
+        >
+          <i
+            style={{
+              width: skyPulse ? 2 : 28,
+              height: skyPulse ? 24 : 1,
+              flex: "0 0 auto",
+              background: "currentColor",
+              boxShadow: skyPulse ? "0 0 18px currentColor" : "none",
+              opacity: skyPulse ? 0.9 : 0.48,
+              transition: "width 240ms ease, height 240ms ease, opacity 240ms ease",
+            }}
+          />
+          {skyPulse?.label ?? (hoveredSaved ? "constellation" : hoveredNebula !== null ? "nebula" : hoveredMilkyWay ? "milky way" : "listening")}
+        </span>
+      </div>
+
       {/* top eyebrow + title */}
       <div
         style={{
@@ -1839,7 +1958,7 @@ export default function Stars() {
           position: "fixed",
           left: 0,
           right: 0,
-          bottom: 22,
+          bottom: "calc(118px + env(safe-area-inset-bottom, 0px))",
           textAlign: "center",
           fontFamily: "var(--font-text)",
           fontSize: 12,
@@ -1859,7 +1978,7 @@ export default function Stars() {
         style={{
           position: "fixed",
           left: 18,
-          bottom: 16,
+          bottom: "calc(104px + env(safe-area-inset-bottom, 0px))",
           zIndex: 4,
           display: "flex",
           alignItems: "center",
@@ -1931,29 +2050,6 @@ export default function Stars() {
         >
           +
         </button>
-      </div>
-
-      {/* running counter — subtle, in a bottom corner */}
-      <div
-        data-stars-counter="true"
-        style={{
-          position: "fixed",
-          right: 18,
-          bottom: 22,
-          fontFamily: "var(--font-text)",
-          fontSize: 10,
-          letterSpacing: "0.10em",
-          textTransform: "lowercase",
-          color: "rgba(232, 226, 213, 0.42)",
-          pointerEvents: "none",
-        }}
-      >
-        {(() => {
-          const connected =
-            pending.length +
-            saved.reduce((acc, c) => acc + c.starIndices.length, 0);
-          return `${connected} stars connected · ${saved.length} constellations named`;
-        })()}
       </div>
 
       {/* delete-confirmation toast */}
@@ -2044,19 +2140,26 @@ export default function Stars() {
           </span>
         </div>
       )}
-      <style>{`
+      <style
+        dangerouslySetInnerHTML={{
+          __html: `
         @media (max-width: 700px) {
-          [data-stars-counter="true"] {
-            display: none !important;
+          [data-stars-memory="true"] {
+            left: 12px !important;
+            right: 12px !important;
+            bottom: calc(184px + env(safe-area-inset-bottom, 0px)) !important;
+            max-width: none !important;
+            justify-content: center;
+            gap: 8px !important;
           }
           [data-stars-hint="true"] {
-            bottom: 64px !important;
+            bottom: calc(146px + env(safe-area-inset-bottom, 0px)) !important;
             padding: 0 18px;
             line-height: 1.45;
           }
           [data-stars-zoom="true"] {
             left: 12px !important;
-            bottom: 12px !important;
+            bottom: calc(102px + env(safe-area-inset-bottom, 0px)) !important;
             gap: 4px !important;
             padding: 4px !important;
           }
@@ -2066,7 +2169,9 @@ export default function Stars() {
             line-height: 26px !important;
           }
         }
-      `}</style>
+      `,
+        }}
+      />
     </div>
   );
 }
