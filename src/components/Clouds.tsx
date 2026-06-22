@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
+import * as haptics from "@/lib/haptics";
 import { useField } from "@/store/field";
 import GreekKeyFrame from "@/components/GreekKeyFrame";
 import WaterText from "@/components/WaterText";
@@ -69,6 +70,22 @@ export default function Clouds() {
   // current phase mirrored out of the render loop so the sun/moon glyph
   // shows the right icon (sun in day phases, moon in night phases).
   const [iconIsSun, setIconIsSun] = useState(true);
+  const [pressCharge, setPressCharge] = useState(0);
+  const weatherMarkIdRef = useRef(0);
+  const [weatherMarks, setWeatherMarks] = useState<
+    Array<{ id: number; label: string; level: number }>
+  >([
+    { id: 0, label: "thin air", level: 0.35 },
+    { id: -1, label: "upper wind", level: 0.52 },
+  ]);
+
+  const addWeatherMark = (label: string, level: number) => {
+    const id = ++weatherMarkIdRef.current;
+    setWeatherMarks((marks) => [
+      { id, label, level: Math.max(0, Math.min(1, level)) },
+      ...marks,
+    ].slice(0, 4));
+  };
 
   // Wind-intensity sampling for the inline SeaChart. We synthesize a wind
   // value from a slow FBM-ish sum of sines; storm phase increases the value.
@@ -127,6 +144,7 @@ export default function Clouds() {
     let uCursorLoc: WebGLUniformLocation | null = null;
     let uPressLoc: WebGLUniformLocation | null = null;
     let uFlashLoc: WebGLUniformLocation | null = null;
+    let lastChargeSync = 0;
 
     if (gl) {
       const vert = `
@@ -385,8 +403,10 @@ export default function Clouds() {
       a.thud();
       // delayed bell = thunder reverb tail
       window.setTimeout(() => a.bell(), 380);
+      haptics.storm();
 
       useField.getState().recordTape("region", 0.9, "olympus/lightning");
+      addWeatherMark("lightning", 0.95);
     };
 
     // Look up the topmost glyph the pointer is currently touching.
@@ -433,6 +453,8 @@ export default function Clouds() {
       updatePointer(e);
       pointer.current.pressed = true;
       pointer.current.pressStart = performance.now();
+      haptics.tap();
+      addWeatherMark("pressure", 0.45);
     };
     const onMove = (e: PointerEvent) => {
       updatePointer(e);
@@ -452,6 +474,9 @@ export default function Clouds() {
           // soft whoosh + breadcrumb trail
           const a = getFieldAudio();
           a.spark();
+          haptics.ripple(0.28);
+          useField.getState().recordTape("sigil", 0.5, `clouds/${g.kind}`);
+          addWeatherMark(g.kind.replace("-", " "), 0.5);
           // seed the trail at the glyph's current rendered position
           const y = reduce
             ? g.baseY
@@ -471,13 +496,18 @@ export default function Clouds() {
           if (cloudPuffs.length > 8) cloudPuffs.shift();
           const a = getFieldAudio();
           a.chime();
+          haptics.ripple(0.38);
+          useField.getState().recordTape("ripple", 0.4, "clouds/puff");
+          addWeatherMark("puff", 0.38);
         }
       }
       pointer.current.pressed = false;
+      setPressCharge(0);
     };
     const onLeave = () => {
       pointer.current.over = false;
       pointer.current.pressed = false;
+      setPressCharge(0);
     };
     overlay.addEventListener("pointerdown", onDown);
     overlay.addEventListener("pointermove", onMove);
@@ -844,6 +874,10 @@ export default function Clouds() {
         : 0;
       const pressTarget = pointer.current.pressed ? Math.min(1, heldSec / 1.4) : 0;
       pressSmoothed += (pressTarget - pressSmoothed) * 0.10;
+      if (now - lastChargeSync > 120) {
+        lastChargeSync = now;
+        setPressCharge(pressSmoothed);
+      }
 
       // ── WebGL pass ──
       if (gl && glProg) {
@@ -1189,6 +1223,9 @@ export default function Clouds() {
             onClick={() => {
               setLabelTip({ name: ct.name, text: ct.text, top: ct.top });
               try { getFieldAudio().chime(); } catch { /* noop */ }
+              haptics.tap();
+              useField.getState().recordTape("object", 0.25, `clouds/${ct.name}`);
+              addWeatherMark(ct.name, 0.32);
               // auto-clear in 4s; the rAF loop is independent so a window
               // timeout is fine here.
               window.setTimeout(() => {
@@ -1254,6 +1291,9 @@ export default function Clouds() {
         onClick={() => {
           phaseOffsetRef.current = (phaseOffsetRef.current + 0.25) % 1;
           try { getFieldAudio().bell(); } catch { /* noop */ }
+          haptics.roll();
+          useField.getState().recordTape("region", 0.45, "clouds/day-cycle");
+          addWeatherMark(iconIsSun ? "moonward" : "sunward", 0.58);
         }}
         aria-label="advance day cycle"
         style={{
@@ -1302,6 +1342,57 @@ export default function Clouds() {
         )}
       </button>
 
+      <div
+        className="cloud-weather-ribbon"
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          top: 132,
+          left: 24,
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          zIndex: 4,
+          pointerEvents: "none",
+          color: titleColor,
+          fontFamily: "var(--font-text)",
+          fontSize: 11,
+          letterSpacing: "0.08em",
+          textTransform: "lowercase",
+        }}
+      >
+        <span
+          style={{
+            width: 54,
+            height: 6,
+            borderRadius: 999,
+            border: `1px solid ${phaseLight ? "rgba(21,23,26,0.34)" : "rgba(244,238,222,0.38)"}`,
+            overflow: "hidden",
+            background: phaseLight ? "rgba(21,23,26,0.08)" : "rgba(244,238,222,0.10)",
+            display: "inline-flex",
+          }}
+        >
+          <span
+            style={{
+              width: `${Math.max(8, Math.round(pressCharge * 100))}%`,
+              background: phaseLight ? "rgba(90,77,106,0.66)" : "rgba(216,196,216,0.80)",
+              transition: "width 120ms ease-out",
+            }}
+          />
+        </span>
+        {weatherMarks.map((mark) => (
+          <span
+            key={mark.id}
+            style={{
+              opacity: 0.46 + mark.level * 0.44,
+              borderBottom: `1px solid ${phaseLight ? "rgba(21,23,26,0.26)" : "rgba(244,238,222,0.28)"}`,
+            }}
+          >
+            {mark.label}
+          </span>
+        ))}
+      </div>
+
       <style
         dangerouslySetInnerHTML={{
           __html:
@@ -1325,7 +1416,7 @@ export default function Clouds() {
                 top: auto !important;
                 left: 12px !important;
                 right: 12px !important;
-                bottom: 50px !important;
+                bottom: calc(58px + env(safe-area-inset-bottom, 0px)) !important;
                 width: auto !important;
                 height: 42px !important;
                 display: flex;
@@ -1345,9 +1436,18 @@ export default function Clouds() {
                 top: auto !important;
                 left: 16px !important;
                 right: 16px !important;
-                bottom: 96px !important;
+                bottom: calc(108px + env(safe-area-inset-bottom, 0px)) !important;
                 max-width: none !important;
                 text-align: center;
+              }
+              .cloud-weather-ribbon {
+                top: 154px !important;
+                left: 16px !important;
+                right: 16px !important;
+                max-width: calc(100vw - 32px);
+                flex-wrap: wrap;
+                gap: 6px 8px !important;
+                font-size: 10px !important;
               }
               .cloud-chart-wrap {
                 display: none !important;

@@ -10,6 +10,7 @@ import {
 import { useField } from "@/store/field";
 import { getFieldAudio } from "@/lib/audio";
 import type { ConcernKey } from "@/lib/types";
+import * as haptics from "@/lib/haptics";
 
 /**
  * Charts — /charts route.
@@ -63,6 +64,8 @@ type Snapshot = {
   volatility: number;
   pinnedAt: number;
 };
+
+type ChartMark = { id: number; label: string; tone: "rise" | "fall" | "amber" | "pale"; strength: number };
 
 type Layout = {
   width: number;
@@ -247,17 +250,34 @@ export default function Charts() {
   const [hoverIdx, setHoverIdx] = useState<number>(-1);
   const [tip, setTip] = useState<{ x: number; y: number } | null>(null);
   const [pinned, setPinned] = useState<Snapshot | null>(null);
+  const [chartMarks, setChartMarks] = useState<ChartMark[]>([]);
+  const chartMarkIdRef = useRef(0);
 
   // Layout cached so pointer handlers can hit-test without recomputing.
   const layoutRef = useRef<Layout | null>(null);
   // y-scale of Panel 1 (price range), updated each draw — used for drag math.
   const p1RangeRef = useRef<{ yMin: number; yMax: number }>({ yMin: 0, yMax: 1 });
   // drag state
-  const dragRef = useRef<{ active: boolean; idx: number; startY: number; startTweak: number; lastChimeAt: number }>(
-    { active: false, idx: -1, startY: 0, startTweak: 0, lastChimeAt: 0 },
+  const dragRef = useRef<{
+    active: boolean;
+    idx: number;
+    startY: number;
+    startTweak: number;
+    lastChimeAt: number;
+    lastMarkAt: number;
+  }>(
+    { active: false, idx: -1, startY: 0, startTweak: 0, lastChimeAt: 0, lastMarkAt: 0 },
   );
   // oscillator threshold-cross state (so we only bell once per crossing)
   const lastZoneRef = useRef<"over" | "under" | "mid">("mid");
+
+  const addChartMark = (label: string, tone: ChartMark["tone"] = "amber", strength = 0.5) => {
+    const id = ++chartMarkIdRef.current;
+    setChartMarks((marks) => [...marks.slice(-4), { id, label, tone, strength }]);
+    window.setTimeout(() => {
+      setChartMarks((marks) => marks.filter((mark) => mark.id !== id));
+    }, 4600);
+  };
 
   // Compute spikes from tape that the chart should react to.
   const oceanSpikes = useMemo(() => {
@@ -497,8 +517,11 @@ export default function Charts() {
       startY: e.clientY,
       startTweak: c.tweak,
       lastChimeAt: 0,
+      lastMarkAt: 0,
     };
     playClickForCandle(c);
+    haptics.tap();
+    addChartMark(`c${hit.idx + 1}`, c.close >= c.open ? "rise" : "fall", 0.5);
     try {
       (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
     } catch {
@@ -554,6 +577,15 @@ export default function Charts() {
       d.lastChimeAt = now;
       const c = candles[d.idx];
       if (c) playClickForCandle({ ...c, tweak });
+      haptics.chop();
+    }
+    if (now - d.lastMarkAt > 360) {
+      d.lastMarkAt = now;
+      addChartMark(
+        `${d.idx + 1} ${tweak >= 0 ? "high" : "low"}`,
+        tweak >= 0 ? "rise" : "fall",
+        Math.min(0.88, 0.42 + Math.abs(tweak) * 0.12),
+      );
     }
   };
 
@@ -567,8 +599,10 @@ export default function Charts() {
       } catch {
         /* noop */
       }
+      haptics.ripple(0.58);
+      addChartMark(`set ${d.idx + 1}`, "amber", 0.66);
     }
-    dragRef.current = { active: false, idx: -1, startY: 0, startTweak: 0, lastChimeAt: 0 };
+    dragRef.current = { active: false, idx: -1, startY: 0, startTweak: 0, lastChimeAt: 0, lastMarkAt: 0 };
     try {
       (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId);
     } catch {
@@ -590,6 +624,9 @@ export default function Charts() {
     } catch {
       /* noop */
     }
+    haptics.roll();
+    recordTape("object", 0.45, "charts:generate");
+    addChartMark("generated", "amber", 0.68);
   };
 
   const onReset = () => {
@@ -599,6 +636,9 @@ export default function Charts() {
     } catch {
       /* noop */
     }
+    haptics.chop();
+    recordTape("object", 0.38, "charts:reset");
+    addChartMark("reset", "pale", 0.48);
   };
 
   const onPin = () => {
@@ -625,6 +665,8 @@ export default function Charts() {
     } catch {
       /* noop */
     }
+    haptics.roll();
+    addChartMark("pinned", "amber", 0.86);
   };
 
   // ── render ─────────────────────────────────────────────────────────────
@@ -641,7 +683,7 @@ export default function Charts() {
         minHeight: "calc(100vh - 56px)",
         background: "#08101a",
         color: "rgba(244,238,222,0.96)",
-        padding: "clamp(16px, 3vh, 32px) clamp(16px, 4vw, 48px)",
+        padding: "clamp(16px, 3vh, 32px) clamp(16px, 4vw, 48px) calc(96px + env(safe-area-inset-bottom))",
         display: "flex",
         flexDirection: "column",
         gap: "clamp(12px, 2vh, 22px)",
@@ -706,6 +748,22 @@ export default function Charts() {
             height: "100%",
           }}
         />
+        <div className="oda-charts-mark-strip" aria-hidden="true">
+          <span className="oda-charts-mark-pulse" />
+          {chartMarks.length === 0 ? (
+            <span className="oda-charts-mark-idle">rsi {fmt(lastRsi)}</span>
+          ) : (
+            chartMarks.map((mark) => (
+              <span
+                key={mark.id}
+                className={`oda-charts-mark oda-charts-mark-${mark.tone}`}
+                style={{ opacity: 0.4 + mark.strength * 0.48 }}
+              >
+                {mark.label}
+              </span>
+            ))
+          )}
+        </div>
         {/* pointer overlay only on the canvas — keeps controls untouched */}
         <div
           onPointerDown={onPointerDown}
@@ -799,6 +857,15 @@ export default function Charts() {
             step={0.05}
             value={volatility}
             onChange={(e) => setVolatility(parseFloat(e.target.value))}
+            onPointerUp={() => {
+              haptics.tap();
+              recordTape("object", 0.34, `charts:vol:${volatility.toFixed(2)}`);
+              addChartMark(`vol ${volatility.toFixed(2)}`, "amber", 0.46);
+            }}
+            onKeyUp={() => {
+              recordTape("object", 0.28, `charts:vol:${volatility.toFixed(2)}`);
+              addChartMark(`vol ${volatility.toFixed(2)}`, "amber", 0.42);
+            }}
             style={{
               width: "min(46vw, 200px)",
               accentColor: "rgba(255,180,110,0.95)",
@@ -851,18 +918,73 @@ export default function Charts() {
       <style
         dangerouslySetInnerHTML={{
           __html: `
+            .oda-charts-mark-strip {
+              position: absolute;
+              top: 12px;
+              right: 12px;
+              z-index: 3;
+              display: flex;
+              align-items: center;
+              justify-content: flex-end;
+              gap: 7px;
+              max-width: min(440px, calc(100% - 24px));
+              min-height: 31px;
+              padding: 8px 10px;
+              border: 1px solid rgba(232,226,213,0.13);
+              border-radius: 999px;
+              background: rgba(8,12,20,0.62);
+              color: rgba(232,226,213,0.64);
+              font-family: var(--font-mono, ui-monospace, monospace);
+              font-size: 11px;
+              line-height: 1;
+              pointer-events: none;
+              overflow: hidden;
+              backdrop-filter: blur(12px);
+            }
+            .oda-charts-mark-pulse {
+              flex: 0 0 auto;
+              width: 7px;
+              height: 7px;
+              border-radius: 999px;
+              background: rgba(255,180,110,0.9);
+              box-shadow: 0 0 14px rgba(255,180,110,0.42);
+            }
+            .oda-charts-mark-idle,
+            .oda-charts-mark {
+              white-space: nowrap;
+            }
+            .oda-charts-mark-rise {
+              color: rgba(118,218,158,0.9);
+            }
+            .oda-charts-mark-fall {
+              color: rgba(238,126,112,0.9);
+            }
+            .oda-charts-mark-amber {
+              color: rgba(255,190,124,0.9);
+            }
+            .oda-charts-mark-pale {
+              color: rgba(232,226,213,0.78);
+            }
             @media (max-width: 699px) {
               .oda-charts-root {
                 min-height: calc(100svh - 56px) !important;
-                padding-bottom: calc(56px + env(safe-area-inset-bottom)) !important;
+                padding-bottom: calc(104px + env(safe-area-inset-bottom)) !important;
               }
               .oda-charts-surface {
                 flex: 0 0 auto !important;
                 min-height: clamp(300px, 44svh, 420px) !important;
               }
+              .oda-charts-mark-strip {
+                top: 10px;
+                left: 10px;
+                right: 10px;
+                max-width: none;
+                justify-content: center;
+              }
               .oda-charts-controls {
                 gap: 10px !important;
                 align-items: stretch !important;
+                padding-bottom: 8px !important;
               }
               .oda-charts-controls > * { flex: 1 1 auto; }
               .oda-charts-controls > button { flex-basis: calc(50% - 10px); }

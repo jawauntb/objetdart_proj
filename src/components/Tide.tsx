@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import { useField } from "@/store/field";
 import SeaChart, { type SeaChartCandle } from "@/components/SeaChart";
+import * as haptics from "@/lib/haptics";
 
 /**
  * /tide — the phenomenology page.
@@ -34,6 +35,7 @@ function triggerTerritoryTone(idx: number): void {
 }
 
 type Ripple = { id: number; x: number; y: number; size: number; tone: "gold" | "pale" };
+type TideMark = { id: number; label: string; tone: "gold" | "pale" | "blue"; strength: number };
 
 export default function Tide() {
   // page-specific ambient bed: slow lunar water and buoy pulse
@@ -84,6 +86,10 @@ export default function Tide() {
   // the animation completes.
   const [ripples, setRipples] = useState<Ripple[]>([]);
   const rippleIdRef = useRef(0);
+  const [tideMarks, setTideMarks] = useState<TideMark[]>([]);
+  const tideMarkIdRef = useRef(0);
+  const lastScrubFeedbackRef = useRef(0);
+  const lastScrubMarkRef = useRef(0);
 
   // Chart pull key bumps every ~600ms so the inline tide chart re-pulls
   // synthetic tide-height candles derived from scrubT.current.
@@ -127,6 +133,14 @@ export default function Tide() {
     window.setTimeout(() => {
       setRipples((rs) => rs.filter((r) => r.id !== id));
     }, 720);
+  };
+
+  const addTideMark = (label: string, tone: TideMark["tone"] = "gold", strength = 0.5) => {
+    const id = ++tideMarkIdRef.current;
+    setTideMarks((marks) => [...marks.slice(-4), { id, label, tone, strength }]);
+    window.setTimeout(() => {
+      setTideMarks((marks) => marks.filter((mark) => mark.id !== id));
+    }, 4600);
   };
 
   useEffect(() => {
@@ -286,6 +300,17 @@ export default function Tide() {
       // 1.4x viewport-width = full scrub
       const sensitivity = 1 / (window.innerWidth * 1.4);
       scrubT.current = Math.max(0, Math.min(1, scrubT.current + dx * sensitivity));
+      const now = performance.now();
+      if (now - lastScrubFeedbackRef.current > 220) {
+        lastScrubFeedbackRef.current = now;
+        haptics.chop();
+      }
+      if (now - lastScrubMarkRef.current > 620) {
+        lastScrubMarkRef.current = now;
+        const pct = Math.round(scrubT.current * 100);
+        recordTapeRef.current("ripple", 0.28, `tide:${pct}`);
+        addTideMark(`${pct}%`, "blue", 0.48);
+      }
     };
     const onCursorLeave = () => { cursor.current.over = false; hoverIdxRef.current = null; };
     const onUp = (e: PointerEvent) => {
@@ -304,8 +329,10 @@ export default function Tide() {
       if (hitTestCandle(x, y)) {
         candleSparkRef.current = performance.now();
         try { audio.spark(); } catch { /* noop */ }
+        haptics.tap();
         recordTapeRef.current("candle", 0.7);
         addRipple(x, y, 50, "gold");
+        addTideMark("candle", "gold", 0.72);
         return;
       }
 
@@ -313,8 +340,10 @@ export default function Tide() {
       if (hitTestWindow(x, y)) {
         windowPulseRef.current = performance.now();
         try { audio.bell(); } catch { /* noop */ }
+        haptics.roll();
         recordTapeRef.current("candle", 0.45, "window");
         addRipple(x, y, 72, "gold");
+        addTideMark("window", "gold", 0.64);
         return;
       }
 
@@ -323,7 +352,9 @@ export default function Tide() {
       if (scrubF !== null) {
         scrubT.current = scrubF;
         try { audio.chime(); } catch { /* noop */ }
+        haptics.chop();
         recordTapeRef.current("ripple", 0.4, `scrub-${scrubF.toFixed(2)}`);
+        addTideMark(`${Math.round(scrubF * 100)}%`, "blue", 0.58);
         return;
       }
 
@@ -332,9 +363,11 @@ export default function Tide() {
       if (shipIdx !== null) {
         shipPulseRef.current.set(shipIdx, performance.now());
         try { audio.chime(); } catch { /* noop */ }
+        haptics.ripple(0.54);
         const name = SHIPS.find((s) => s.id === shipIdx)?.name ?? String(shipIdx);
         recordTapeRef.current("object", 0.45, `ship:${name}`);
         addRipple(x, y, 84, "pale");
+        addTideMark(name, "pale", 0.58);
         return;
       }
 
@@ -343,16 +376,20 @@ export default function Tide() {
       if (idx !== null) {
         triggerTerritoryTone(idx);
         territoryPulseRef.current.set(idx, performance.now());
+        haptics.ripple(0.72);
         const name = TERRITORIES[idx]?.name ?? String(idx);
         recordTapeRef.current("ripple", 0.4, `tide:${name}`);
         addRipple(x, y, 90, "gold");
+        addTideMark(name, TERRITORIES[idx]?.hue === "cool" ? "blue" : "gold", 0.7);
         return;
       }
 
       // 4) otherwise — soft chime on the open sea + a faint pale ripple.
       try { audio.chime(); } catch { /* noop */ }
+      haptics.ripple(0.32);
       recordTapeRef.current("ripple", 0.25, "sea");
       addRipple(x, y, 70, "pale");
+      addTideMark("sea", "pale", 0.42);
     };
     cv.addEventListener("pointerdown", onDown);
     window.addEventListener("pointermove", onMove);
@@ -765,7 +802,7 @@ export default function Tide() {
       ctx.fill();
 
       // scrub-position indicator — a gold tide rail showing where in the tide we are
-      const indicatorY = h - 56;
+      const indicatorY = h - (narrow ? 96 : 76);
       ctx.strokeStyle = "rgba(200, 115, 42, 0.30)";
       ctx.lineWidth = 1.4;
       ctx.beginPath();
@@ -844,7 +881,7 @@ export default function Tide() {
           position: "fixed",
           left: 0,
           right: 0,
-          bottom: 22,
+          bottom: 58,
           textAlign: "center",
           pointerEvents: "none",
           zIndex: 6,
@@ -858,15 +895,19 @@ export default function Tide() {
           onClick={(e) => {
             e.stopPropagation();
             try { getFieldAudio().bell(); } catch { /* noop */ }
+            haptics.roll();
             candleSparkRef.current = performance.now();
             recordTape("candle", 0.55, "inscription");
+            addTideMark("watch", "gold", 0.68);
           }}
           onKeyDown={(e) => {
             if (e.key === "Enter" || e.key === " ") {
               e.preventDefault();
               try { getFieldAudio().bell(); } catch { /* noop */ }
+              haptics.roll();
               candleSparkRef.current = performance.now();
               recordTape("candle", 0.55, "inscription");
+              addTideMark("watch", "gold", 0.68);
             }
           }}
           style={{
@@ -883,6 +924,23 @@ export default function Tide() {
         >
           what burns also keeps watch.
         </span>
+      </div>
+
+      <div className="tide-state-strip" aria-hidden="true">
+        <span className="tide-state-pulse" />
+        {tideMarks.length === 0 ? (
+          <span className="tide-state-idle">tide held</span>
+        ) : (
+          tideMarks.map((mark) => (
+            <span
+              key={mark.id}
+              className={`tide-state-mark tide-state-${mark.tone}`}
+              style={{ opacity: 0.44 + mark.strength * 0.44 }}
+            >
+              {mark.label}
+            </span>
+          ))
+        )}
       </div>
 
       {/* DOM ripple overlay — small expanding circles for taps. Visual only;
@@ -968,11 +1026,77 @@ export default function Tide() {
             display: none !important;
           }
           .tide-inscription-wrap {
-            bottom: 54px !important;
+            bottom: 58px !important;
           }
           .tide-inscription {
             font-size: 14px !important;
             padding: 8px 10px !important;
+          }
+        }
+        .tide-state-strip {
+          position: fixed;
+          left: max(328px, env(safe-area-inset-left));
+          bottom: max(94px, calc(env(safe-area-inset-bottom) + 88px));
+          z-index: 7;
+          display: flex;
+          align-items: center;
+          gap: 7px;
+          max-width: min(440px, calc(100vw - 36px));
+          padding: 8px 10px;
+          border: 1px solid rgba(242, 238, 230, 0.14);
+          border-radius: 999px;
+          background: rgba(8, 14, 24, 0.54);
+          color: rgba(242, 238, 230, 0.62);
+          font-family: var(--font-mono);
+          font-size: 11px;
+          line-height: 1;
+          pointer-events: none;
+          backdrop-filter: blur(14px);
+          overflow: hidden;
+        }
+        .tide-state-pulse {
+          flex: 0 0 auto;
+          width: 7px;
+          height: 7px;
+          border-radius: 999px;
+          background: rgba(200, 115, 42, 0.88);
+          box-shadow: 0 0 16px rgba(200, 115, 42, 0.48);
+        }
+        .tide-state-idle,
+        .tide-state-mark {
+          white-space: nowrap;
+        }
+        .tide-state-mark {
+          color: rgba(242, 238, 230, 0.72);
+        }
+        .tide-state-gold {
+          color: rgba(255, 211, 141, 0.84);
+        }
+        .tide-state-pale {
+          color: rgba(220, 235, 255, 0.72);
+        }
+        .tide-state-blue {
+          color: rgba(136, 184, 216, 0.82);
+        }
+        @media (max-width: 720px) {
+          .tide-state-strip {
+            left: 16px;
+            right: 16px;
+            bottom: max(116px, calc(env(safe-area-inset-bottom) + 104px));
+            max-width: none;
+            justify-content: center;
+            padding: 9px 10px;
+          }
+          .tide-state-strip .tide-state-mark:nth-of-type(n + 5) {
+            display: none;
+          }
+        }
+        @media (max-height: 700px) and (max-width: 720px) {
+          .tide-state-strip {
+            bottom: max(104px, calc(env(safe-area-inset-bottom) + 96px));
+          }
+          .tide-inscription-wrap {
+            bottom: 54px !important;
           }
         }
       `}</style>
