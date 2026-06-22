@@ -1,12 +1,23 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { getFieldAudio } from "@/lib/audio";
+import { useField } from "@/store/field";
 
 type TouchPoint = {
   x: number;
   y: number;
   force: number;
   born: number;
+};
+
+type FoldMemory = {
+  x: number;
+  y: number;
+  density: number;
+  fold: number;
+  pull: number;
+  bloom: number;
 };
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
@@ -44,6 +55,8 @@ export default function BeyondWaveField() {
   const pointerRef = useRef<TouchPoint | null>(null);
   const rafRef = useRef(0);
   const reduceMotionRef = useRef(false);
+  const lastStirAt = useRef(0);
+  const lastControlAt = useRef(0);
 
   const [running, setRunning] = useState(true);
   const [density, setDensity] = useState(24);
@@ -51,6 +64,7 @@ export default function BeyondWaveField() {
   const [pull, setPull] = useState(0.72);
   const [bloom, setBloom] = useState(0.58);
   const [readout, setReadout] = useState("touch the field");
+  const [foldMemory, setFoldMemory] = useState<FoldMemory | null>(null);
 
   const runningRef = useRef(running);
   const densityRef = useRef(density);
@@ -212,10 +226,80 @@ export default function BeyondWaveField() {
     setFold(Number((6 + (x / rect.width) * 9).toFixed(1)));
     setPull(Number((0.22 + (1 - y / rect.height) * 1.2).toFixed(2)));
     setReadout(`${Math.round((x / rect.width) * 100)} / ${Math.round((1 - y / rect.height) * 100)}`);
+
+    const now = performance.now();
+    if (now - lastStirAt.current < 95) return;
+    lastStirAt.current = now;
+    const xPct = x / rect.width;
+    const yPct = y / rect.height;
+    try { getFieldAudio().playNote(44 + Math.round((1 - yPct) * 22) + Math.round(xPct * 7), 90); } catch { /* noop */ }
+    useField.getState().recordTape("ripple", 0.34 + (1 - yPct) * 0.48, "beyond/stir");
+  };
+
+  const markControl = (meta: string, normalized: number) => {
+    const now = performance.now();
+    if (now - lastControlAt.current < 135) return;
+    lastControlAt.current = now;
+    const value = clamp(normalized, 0, 1);
+    try { getFieldAudio().playNote(42 + Math.round(value * 28), 95); } catch { /* noop */ }
+    useField.getState().recordTape("ripple", 0.28 + value * 0.5, `beyond/${meta}`);
+  };
+
+  const toggleRunning = () => {
+    setRunning((value) => {
+      const next = !value;
+      try {
+        if (next) getFieldAudio().chime();
+        else getFieldAudio().thud();
+      } catch { /* noop */ }
+      useField.getState().recordTape("sigil", next ? 0.64 : 0.42, next ? "beyond/move" : "beyond/pause");
+      return next;
+    });
+  };
+
+  const useFoldMemory = () => {
+    if (!foldMemory) {
+      const canvas = canvasRef.current;
+      const rect = canvas?.getBoundingClientRect();
+      const touch = pointerRef.current;
+      setFoldMemory({
+        x: rect && touch ? clamp(touch.x / rect.width, 0, 1) : 0.52,
+        y: rect && touch ? clamp(touch.y / rect.height, 0, 1) : 0.44,
+        density,
+        fold,
+        pull,
+        bloom,
+      });
+      setReadout("fold kept");
+      try { getFieldAudio().bell(); } catch { /* noop */ }
+      useField.getState().recordTape("sigil", 0.72, "beyond/keep-fold");
+      return;
+    }
+
+    setDensity(foldMemory.density);
+    setFold(foldMemory.fold);
+    setPull(foldMemory.pull);
+    setBloom(foldMemory.bloom);
+    const canvas = canvasRef.current;
+    if (canvas) {
+      const rect = canvas.getBoundingClientRect();
+      pointerRef.current = {
+        x: foldMemory.x * rect.width,
+        y: foldMemory.y * rect.height,
+        force: 1.55,
+        born: performance.now(),
+      };
+    }
+    setReadout("fold replay");
+    try {
+      getFieldAudio().playNote(64, 120);
+      window.setTimeout(() => getFieldAudio().playNote(71, 170), 110);
+    } catch { /* noop */ }
+    useField.getState().recordTape("sigil", 0.86, "beyond/replay-fold");
   };
 
   return (
-    <div className="beyond-page" data-touch-surface="true">
+    <div className="beyond-page" data-touch-surface="true" data-pretext-ignore="true">
       <section ref={shellRef} className="beyond-field" aria-label="novel wave field">
         <canvas
           ref={canvasRef}
@@ -223,13 +307,18 @@ export default function BeyondWaveField() {
           aria-hidden="true"
           onPointerDown={(event) => {
             stir(event.clientX, event.clientY);
-            event.currentTarget.setPointerCapture(event.pointerId);
+            try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* noop */ }
           }}
           onPointerMove={(event) => {
             if (event.buttons !== 1) return;
             stir(event.clientX, event.clientY);
           }}
-          onPointerUp={(event) => event.currentTarget.releasePointerCapture(event.pointerId)}
+          onPointerUp={(event) => {
+            try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* noop */ }
+          }}
+          onPointerCancel={(event) => {
+            try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* noop */ }
+          }}
         />
 
         <div className="beyond-copy">
@@ -239,36 +328,85 @@ export default function BeyondWaveField() {
 
         <div className="beyond-panel" aria-label="field controls">
           <div className="beyond-actions">
-            <button type="button" onClick={() => setRunning((value) => !value)} aria-pressed={running}>
+            <button type="button" onClick={toggleRunning} aria-pressed={running}>
               {running ? "pause" : "move"}
+            </button>
+            <button type="button" onClick={useFoldMemory} aria-pressed={Boolean(foldMemory)}>
+              {foldMemory ? "replay fold" : "keep fold"}
             </button>
             <output className="beyond-readout" aria-live="polite">{readout}</output>
           </div>
 
           <label>
             <span>cell size</span>
-            <input type="range" min="16" max="36" step="1" value={density} onChange={(event) => setDensity(Number(event.target.value))} />
+            <input
+              type="range"
+              min="16"
+              max="36"
+              step="1"
+              value={density}
+              onChange={(event) => {
+                const value = Number(event.target.value);
+                setDensity(value);
+                markControl("density", (value - 16) / 20);
+              }}
+            />
             <strong>{density}</strong>
           </label>
           <label>
             <span>fold</span>
-            <input type="range" min="4" max="16" step="0.1" value={fold} onChange={(event) => setFold(Number(event.target.value))} />
+            <input
+              type="range"
+              min="4"
+              max="16"
+              step="0.1"
+              value={fold}
+              onChange={(event) => {
+                const value = Number(event.target.value);
+                setFold(value);
+                markControl("fold", (value - 4) / 12);
+              }}
+            />
             <strong>{fold.toFixed(1)}</strong>
           </label>
           <label>
             <span>pull</span>
-            <input type="range" min="0.1" max="1.6" step="0.01" value={pull} onChange={(event) => setPull(Number(event.target.value))} />
+            <input
+              type="range"
+              min="0.1"
+              max="1.6"
+              step="0.01"
+              value={pull}
+              onChange={(event) => {
+                const value = Number(event.target.value);
+                setPull(value);
+                markControl("pull", (value - 0.1) / 1.5);
+              }}
+            />
             <strong>{pull.toFixed(2)}</strong>
           </label>
           <label>
             <span>bloom</span>
-            <input type="range" min="0.1" max="1" step="0.01" value={bloom} onChange={(event) => setBloom(Number(event.target.value))} />
+            <input
+              type="range"
+              min="0.1"
+              max="1"
+              step="0.01"
+              value={bloom}
+              onChange={(event) => {
+                const value = Number(event.target.value);
+                setBloom(value);
+                markControl("bloom", (value - 0.1) / 0.9);
+              }}
+            />
             <strong>{bloom.toFixed(2)}</strong>
           </label>
         </div>
       </section>
 
-      <style>{`
+      <style
+        dangerouslySetInnerHTML={{
+          __html: `
         .beyond-page {
           min-height: 100vh;
           background:
@@ -325,10 +463,10 @@ export default function BeyondWaveField() {
           position: absolute;
           z-index: 2;
           left: var(--pad-x);
-          right: var(--pad-x);
-          bottom: max(18px, env(safe-area-inset-bottom, 0px));
+          right: calc(var(--pad-x) + 278px);
+          bottom: calc(58px + env(safe-area-inset-bottom, 0px));
           display: grid;
-          grid-template-columns: minmax(150px, 0.8fr) repeat(4, minmax(130px, 1fr));
+          grid-template-columns: minmax(190px, 0.9fr) repeat(4, minmax(130px, 1fr));
           gap: 8px;
           align-items: stretch;
         }
@@ -346,13 +484,14 @@ export default function BeyondWaveField() {
 
         .beyond-actions {
           display: grid;
-          grid-template-columns: 1fr;
+          grid-template-columns: 1fr 1fr;
           overflow: hidden;
         }
 
         .beyond-actions button {
           border: 0;
           border-bottom: 1px solid rgba(244, 238, 222, 0.12);
+          border-right: 1px solid rgba(244, 238, 222, 0.12);
           background: rgba(244, 238, 222, 0.08);
           color: rgba(244, 238, 222, 0.95);
           min-height: 34px;
@@ -361,13 +500,23 @@ export default function BeyondWaveField() {
           font-size: 12px;
           letter-spacing: 0;
           text-transform: lowercase;
+          white-space: nowrap;
+        }
+
+        .beyond-actions button:last-of-type {
+          border-right: 0;
         }
 
         .beyond-actions button[aria-pressed="false"] {
           color: #f4bc5d;
         }
 
+        .beyond-actions button[aria-pressed="true"]:last-of-type {
+          color: #62d6ca;
+        }
+
         .beyond-readout {
+          grid-column: 1 / -1;
           display: flex;
           align-items: center;
           padding: 0 12px;
@@ -407,6 +556,10 @@ export default function BeyondWaveField() {
         }
 
         @media (max-width: 920px) {
+          .beyond-page ~ .oda-field-watch {
+            display: none !important;
+          }
+
           .beyond-field {
             min-height: calc(100svh - 56px);
           }
@@ -416,12 +569,15 @@ export default function BeyondWaveField() {
           }
 
           .beyond-panel {
-            grid-auto-flow: column;
-            grid-auto-columns: minmax(148px, 58vw);
-            grid-template-columns: none;
-            overflow-x: auto;
-            overscroll-behavior-x: contain;
-            padding-bottom: 8px;
+            right: var(--pad-x);
+            bottom: calc(104px + env(safe-area-inset-bottom, 0px));
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            grid-auto-flow: row;
+            overflow: visible;
+          }
+
+          .beyond-actions {
+            grid-column: 1 / -1;
           }
         }
 
@@ -438,7 +594,21 @@ export default function BeyondWaveField() {
           .beyond-panel {
             left: 14px;
             right: 14px;
-            bottom: max(12px, env(safe-area-inset-bottom, 0px));
+            gap: 7px;
+          }
+
+          .beyond-actions,
+          .beyond-panel label {
+            min-height: 54px;
+          }
+
+          .beyond-panel label {
+            padding: 9px 10px 8px;
+          }
+
+          .beyond-readout {
+            min-height: 26px;
+            font-size: 12px;
           }
         }
 
@@ -447,7 +617,9 @@ export default function BeyondWaveField() {
             cursor: default;
           }
         }
-      `}</style>
+      `,
+        }}
+      />
     </div>
   );
 }
