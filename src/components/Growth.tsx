@@ -1,9 +1,20 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import { useField } from "@/store/field";
 import WaterText from "@/components/WaterText";
+
+type GrowthTrace = {
+  id: number;
+  zone: string;
+  label: string;
+  color: string;
+  intensity: number;
+};
+
+type GrowthTraceInput = Omit<GrowthTrace, "id">;
+type GrowthTraceHandler = (trace: GrowthTraceInput) => void;
 
 /**
  * /growth — curves, phases, decay.
@@ -33,6 +44,12 @@ import WaterText from "@/components/WaterText";
 export default function Growth() {
   // page-specific ambient bed: gentle garden wind + faint birdsong
   useEffect(() => { getFieldAudio().setAmbientProfile("garden"); }, []);
+  const traceId = useRef(0);
+  const [traces, setTraces] = useState<GrowthTrace[]>([]);
+  const noteGrowth = useCallback((trace: GrowthTraceInput) => {
+    const id = traceId.current++;
+    setTraces((current) => [...current.slice(-5), { id, ...trace }]);
+  }, []);
 
   return (
     <div
@@ -100,11 +117,28 @@ export default function Growth() {
         >
           everything that rises also rests
         </WaterText>
+        {traces.length > 0 && (
+          <div className="growth-memory" aria-label="recent growth gestures">
+            {traces.map((trace) => (
+              <span
+                key={trace.id}
+                style={{
+                  ["--growth-trace-color" as string]: trace.color,
+                  ["--growth-trace-alpha" as string]: trace.intensity,
+                } as React.CSSProperties}
+              >
+                <i aria-hidden="true" />
+                <b>{trace.zone}</b>
+                {trace.label}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
 
-      <SigmoidZone />
-      <ExpZone />
-      <LifeZone />
+      <SigmoidZone onTrace={noteGrowth} />
+      <ExpZone onTrace={noteGrowth} />
+      <LifeZone onTrace={noteGrowth} />
 
       {/* ── bottom inscription ───────────────────────────────────── */}
       <div
@@ -212,6 +246,46 @@ export default function Growth() {
         }
         .growth-button:hover { background: rgba(200, 220, 180, 0.08); border-color: rgba(200, 220, 180, 0.66); }
         .growth-button:active { background: rgba(200, 220, 180, 0.14); }
+        .growth-memory {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          gap: 8px;
+          min-height: 42px;
+          margin-top: 18px;
+        }
+        .growth-memory span {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          min-height: 34px;
+          padding: 6px 10px;
+          border: 1px solid color-mix(in srgb, var(--growth-trace-color) 46%, transparent);
+          border-radius: 999px;
+          background: color-mix(in srgb, var(--growth-trace-color) calc(var(--growth-trace-alpha) * 16%), transparent);
+          color: rgba(232, 240, 220, 0.86);
+          font-family: var(--font-mono, ui-monospace);
+          font-size: 10px;
+          letter-spacing: 0.08em;
+          text-transform: lowercase;
+          animation: growth-memory-rise 520ms ease-out both;
+        }
+        .growth-memory i {
+          width: 8px;
+          aspect-ratio: 1;
+          border-radius: 50%;
+          background: var(--growth-trace-color);
+          box-shadow: 0 0 14px var(--growth-trace-color);
+          flex: 0 0 auto;
+        }
+        .growth-memory b {
+          font-weight: 500;
+          color: color-mix(in srgb, var(--growth-trace-color) 78%, rgba(232, 240, 220, 0.86));
+        }
+        @keyframes growth-memory-rise {
+          from { opacity: 0; transform: translateY(8px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
         .growth-range {
           -webkit-appearance: none;
           appearance: none;
@@ -255,6 +329,16 @@ export default function Growth() {
           grid-template-columns: 1fr 1fr;
           gap: 14px;
         }
+        .growth-phase-buttons {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 8px;
+          min-width: min(520px, 100%);
+        }
+        .growth-phase-buttons .growth-button {
+          min-width: 0;
+          padding-inline: 12px;
+        }
         @media (max-width: 699px) {
           .growth-zone {
             padding: 22px var(--pad-x);
@@ -269,6 +353,23 @@ export default function Growth() {
           .growth-life-controls {
             align-items: stretch !important;
             flex-direction: column;
+          }
+          .growth-memory {
+            gap: 6px;
+            margin-top: 14px;
+            min-height: 0;
+          }
+          .growth-memory span {
+            min-height: 30px;
+            padding: 5px 8px;
+            gap: 6px;
+            font-size: 9px;
+          }
+          .growth-memory b {
+            display: none;
+          }
+          .growth-phase-buttons {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
           }
           .growth-life-controls .growth-button {
             width: 100%;
@@ -292,13 +393,15 @@ export default function Growth() {
 
 type SigmoidParams = { L: number; k: number; x0: number };
 
-function SigmoidZone() {
+function SigmoidZone({ onTrace }: { onTrace: GrowthTraceHandler }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [params, setParams] = useState<SigmoidParams>({ L: 1.0, k: 1.0, x0: 5.0 });
   // tracked refs for the render loop — avoids re-binding handlers per frame
   const paramsRef = useRef(params);
   paramsRef.current = params;
+  const onTraceRef = useRef(onTrace);
+  useEffect(() => { onTraceRef.current = onTrace; }, [onTrace]);
   const draggingRef = useRef<"L" | "k" | "x0" | null>(null);
   const lastChimeRef = useRef(0);
 
@@ -448,9 +551,18 @@ function SigmoidZone() {
 
     const onPointerUp = (e: PointerEvent) => {
       if (draggingRef.current) {
+        const released = draggingRef.current;
         draggingRef.current = null;
         try { cv.releasePointerCapture(e.pointerId); } catch { /* noop */ }
         useField.getState().recordTape("sigil", 0.6, "growth/sigmoid");
+        const labels = { L: "ceiling", k: "steepness", x0: "seed" } as const;
+        const colors = { L: "#87b878", k: "#4f8a4a", x0: "#c8a86a" } as const;
+        onTraceRef.current({
+          zone: "sigmoid",
+          label: labels[released],
+          color: colors[released],
+          intensity: 0.62,
+        });
       }
     };
 
@@ -619,9 +731,9 @@ function SigmoidZone() {
       </div>
       <div style={{ marginTop: 14, display: "flex", flexWrap: "wrap", gap: 18 }}>
         <span className="growth-readout">L = {params.L.toFixed(2)}</span>
-        <span className="growth-readout" style={{ color: "rgba(135, 184, 120, 0.88)" }}>·</span>
+        <span className="growth-readout" style={{ color: "rgba(135, 184, 120, 0.88)", minWidth: 8 }}>·</span>
         <span className="growth-readout">k = {params.k.toFixed(2)}</span>
-        <span className="growth-readout" style={{ color: "rgba(135, 184, 120, 0.88)" }}>·</span>
+        <span className="growth-readout" style={{ color: "rgba(135, 184, 120, 0.88)", minWidth: 8 }}>·</span>
         <span className="growth-readout">x₀ = {params.x0.toFixed(2)}</span>
       </div>
     </section>
@@ -669,7 +781,7 @@ function drawControl(
 
 type Burst = { x0: number; t0: number };
 
-function ExpZone() {
+function ExpZone({ onTrace }: { onTrace: GrowthTraceHandler }) {
   const wrapRiseRef = useRef<HTMLDivElement>(null);
   const wrapDecayRef = useRef<HTMLDivElement>(null);
   const riseCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -678,6 +790,8 @@ function ExpZone() {
   const lambdaRef = useRef(lambda);
   lambdaRef.current = lambda;
   const burstsRef = useRef<Burst[]>([]);
+  const onTraceRef = useRef(onTrace);
+  useEffect(() => { onTraceRef.current = onTrace; }, [onTrace]);
   // peak / completion markers — fire bell on rise peak, thud on decay finish
   const burstSoundedRef = useRef<Map<number, { peak: boolean; done: boolean }>>(new Map());
 
@@ -691,6 +805,12 @@ function ExpZone() {
       if (removed) burstSoundedRef.current.delete(removed.t0);
     }
     useField.getState().recordTape("ripple", 0.5, "growth/burst");
+    onTraceRef.current({
+      zone: "burst",
+      label: `${Math.round((x0 / 6) * 100)}%`,
+      color: "#f0c04a",
+      intensity: 0.68,
+    });
   };
 
   useEffect(() => {
@@ -999,7 +1119,14 @@ function ExpZone() {
 
 type LifePhase = "ascent" | "plateau" | "decline" | "rest";
 
-function LifeZone() {
+const LIFE_STOPS: ReadonlyArray<{ label: string; t: number; color: string }> = [
+  { label: "seed", t: 0.08, color: "#c8a86a" },
+  { label: "climb", t: 0.42, color: "#4f8a4a" },
+  { label: "bloom", t: 0.68, color: "#87b878" },
+  { label: "rest", t: 0.94, color: "#7a8090" },
+] as const;
+
+function LifeZone({ onTrace }: { onTrace: GrowthTraceHandler }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [t, setT] = useState(0); // 0..1 across the curve
@@ -1009,6 +1136,8 @@ function LifeZone() {
   const playingRef = useRef(playing);
   playingRef.current = playing;
   const draggingRef = useRef(false);
+  const onTraceRef = useRef(onTrace);
+  useEffect(() => { onTraceRef.current = onTrace; }, [onTrace]);
   // ambient drone — created on first interaction
   const droneRef = useRef<{
     osc: OscillatorNode | null;
@@ -1338,6 +1467,12 @@ function LifeZone() {
       if (lastPhaseRef.current !== null && lastPhaseRef.current !== currPhase) {
         // phase transition — chime
         getFieldAudio().chime();
+        onTraceRef.current({
+          zone: "cycle",
+          label: phaseLabel(currPhase),
+          color: markerColor,
+          intensity: 0.72,
+        });
       }
       lastPhaseRef.current = currPhase;
 
@@ -1366,7 +1501,30 @@ function LifeZone() {
         tRef.current = 0;
         setT(0);
       }
+      onTrace({
+        zone: "cycle",
+        label: "walk",
+        color: "#87b878",
+        intensity: 0.58,
+      });
+      useField.getState().recordTape("sigil", 0.52, "growth/life-play");
     }
+  };
+
+  const onJump = (stop: (typeof LIFE_STOPS)[number]) => {
+    setPlaying(false);
+    playingRef.current = false;
+    tRef.current = stop.t;
+    setT(stop.t);
+    ensureDrone();
+    try { getFieldAudio().chime(); } catch { /* noop */ }
+    useField.getState().recordTape("sigil", 0.62, `growth/life-${stop.label}`);
+    onTrace({
+      zone: "cycle",
+      label: stop.label,
+      color: stop.color,
+      intensity: 0.72,
+    });
   };
 
   return (
@@ -1391,6 +1549,13 @@ function LifeZone() {
         <button type="button" className="growth-button" onClick={onPlay}>
           {playing ? "pause" : "play"}
         </button>
+        <div className="growth-phase-buttons" aria-label="life phase jumps">
+          {LIFE_STOPS.map((stop) => (
+            <button key={stop.label} type="button" className="growth-button" onClick={() => onJump(stop)}>
+              {stop.label}
+            </button>
+          ))}
+        </div>
         <span className="growth-readout" style={{ color: "rgba(200, 220, 180, 0.62)" }}>
           {playing ? "marker walking · 30s traversal" : "free scrub · drag the marker"}
         </span>
