@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
+import * as haptics from "@/lib/haptics";
 import { useField } from "@/store/field";
 import WaterText from "@/components/WaterText";
 
@@ -139,6 +140,12 @@ export default function Fire() {
   const [windDisplay, setWindDisplay] = useState(0);
   // Forces a re-render of the small flame swatches (color shifter UI).
   const [paletteTick, setPaletteTick] = useState(0);
+  const [fireMarks, setFireMarks] = useState<Array<{ label: string; tone: string; t: number }>>([
+    { label: "banked", tone: "#e85a18", t: 0 },
+  ]);
+  const markFire = useCallback((label: string, tone = "#e85a18") => {
+    setFireMarks((prev) => [{ label, tone, t: performance.now() }, ...prev].slice(0, 5));
+  }, []);
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -685,14 +692,23 @@ export default function Fire() {
           spawnSparkBurst(baseXPx, baseYPx, 30, f.paletteIdx);
           blazeRef.current = { amp: 0.5, t0: performance.now() };
           audio.thud();
+          const palette = FLAME_PALETTE[f.paletteIdx];
+          const tone = `rgb(${Math.round(palette.mid[0] * 255)}, ${Math.round(palette.mid[1] * 255)}, ${Math.round(palette.mid[2] * 255)})`;
+          haptics.roll();
+          markFire("blaze", tone);
           useField.getState().recordTape("sigil", 0.7, "fire/blaze");
         } else if (y < h * 0.5) {
           spawnEmberBurst(x, y);
           audio.spark();
+          haptics.ripple(0.42);
+          markFire("embers", "#ffb06a");
           useField.getState().recordTape("object", 0.4, "fire/embers");
         } else {
           blazeRef.current = { amp: 0.32, t0: performance.now() };
           audio.thud();
+          haptics.ripple(0.35);
+          markFire("hearth", "#8f3920");
+          useField.getState().recordTape("object", 0.3, "fire/hearth");
         }
       } else {
         if (dragMode === "wind") {
@@ -700,9 +716,14 @@ export default function Fire() {
           if (Math.abs(dragWindVel) > 8) {
             const sign = dragWindVel > 0 ? 1 : -1;
             windRef.current.target = sign;
+            haptics.chop();
+            markFire(sign > 0 ? "east wind" : "west wind", "#ffd28a");
+            useField.getState().recordTape("region", 0.45, sign > 0 ? "fire/east-wind" : "fire/west-wind");
           }
         } else if (dragMode === "flame" && dragFlameIdx >= 0) {
           audio.chime();
+          haptics.ripple(0.38);
+          markFire("moved flame", "#ff7a2d");
           useField.getState().recordTape("object", 0.35, "fire/move");
         }
       }
@@ -1039,13 +1060,30 @@ export default function Fire() {
       fxCanvas.removeEventListener("pointercancel", onPointerUp);
       fxCanvas.removeEventListener("pointerleave", onPointerLeave);
     };
-  }, []);
+  }, [markFire]);
 
   // ── wind dial handlers (small slider, bottom-right) ───────────────
   const onWindChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const v = Math.max(-1, Math.min(1, parseFloat(e.target.value)));
     windDialRef.current = v;
     setWindDisplay(v);
+  };
+
+  const onWindCommit = () => {
+    const v = windDialRef.current;
+    if (Math.abs(v) < 0.02) {
+      markFire("still air", "#ffd28a");
+      haptics.tap();
+      useField.getState().recordTape("region", 0.2, "fire/still-air");
+      return;
+    }
+    markFire(v > 0 ? "east wind" : "west wind", "#ffd28a");
+    haptics.ripple(Math.min(0.75, Math.abs(v)));
+    useField.getState().recordTape(
+      "region",
+      Math.min(0.75, Math.abs(v)),
+      v > 0 ? "fire/east-wind" : "fire/west-wind",
+    );
   };
 
   // ── color shifter: cycle every flame's palette by +1 ──────────────
@@ -1055,13 +1093,19 @@ export default function Fire() {
       f.paletteIdx = (f.paletteIdx + 1) % FLAME_PALETTE.length;
     }
     setPaletteTick((t) => t + 1);
+    const palette = FLAME_PALETTE[flames[0]?.paletteIdx ?? 0];
+    const tone = `rgb(${Math.round(palette.mid[0] * 255)}, ${Math.round(palette.mid[1] * 255)}, ${Math.round(palette.mid[2] * 255)})`;
+    markFire(palette.name, tone);
+    haptics.roll();
+    useField.getState().recordTape("sigil", 0.45, `fire/${palette.id}`);
     try { getFieldAudio().chime(); } catch { /* noop */ }
   };
 
   const onSplitFlame = () => {
     const flames = flamesRef.current;
     const now = performance.now();
-    if (flames.length < MAX_FLAMES) {
+    const didSplit = flames.length < MAX_FLAMES;
+    if (didSplit) {
       const source = flames[Math.floor(flames.length / 2)] ?? flames[0];
       flames.push({
         x: Math.max(0.04, Math.min(0.96, source.x + (Math.random() - 0.5) * 0.18)),
@@ -1082,6 +1126,9 @@ export default function Fire() {
     }
     blazeRef.current = { amp: 0.45, t0: now };
     setPaletteTick((t) => t + 1);
+    markFire(didSplit ? "split" : "brighten", "#ffcf7a");
+    haptics.ripple(0.65);
+    useField.getState().recordTape("object", 0.5, "fire/split");
     try { getFieldAudio().spark(); } catch { /* noop */ }
   };
 
@@ -1095,6 +1142,9 @@ export default function Fire() {
       f.growT0 = performance.now();
     }
     setWindDisplay(0);
+    markFire(dir > 0 ? "fan east" : "fan west", "#ffd28a");
+    haptics.chop();
+    useField.getState().recordTape("region", 0.65, dir > 0 ? "fire/fan-east" : "fire/fan-west");
     try { getFieldAudio().thud(); } catch { /* noop */ }
   };
 
@@ -1193,6 +1243,60 @@ export default function Fire() {
         </WaterText>
       </div>
 
+      <div
+        className="fire-memory"
+        data-fire-memory="true"
+        aria-live="polite"
+        style={{
+          position: "fixed",
+          left: 18,
+          bottom: "calc(112px + env(safe-area-inset-bottom, 0px))",
+          zIndex: 4,
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          maxWidth: "min(480px, calc(100vw - 170px))",
+          padding: "8px 10px",
+          border: "1px solid rgba(255, 246, 220, 0.16)",
+          borderRadius: 6,
+          background: "rgba(20, 8, 4, 0.52)",
+          backdropFilter: "blur(8px)",
+          WebkitBackdropFilter: "blur(8px)",
+          color: "rgba(255, 246, 220, 0.70)",
+          fontFamily: "var(--font-mono)",
+          fontSize: 10,
+          letterSpacing: 0,
+          textTransform: "lowercase",
+          pointerEvents: "none",
+        }}
+      >
+        {fireMarks.map((mark, index) => (
+          <span
+            key={`${mark.label}-${mark.t}-${index}`}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 5,
+              minWidth: 0,
+              opacity: index === 0 ? 1 : 0.45,
+              whiteSpace: "nowrap",
+            }}
+          >
+            <i
+              aria-hidden="true"
+              style={{
+                width: index === 0 ? 24 : 10,
+                height: 2,
+                flex: "0 0 auto",
+                background: mark.tone,
+                boxShadow: index === 0 ? `0 0 14px ${mark.tone}` : undefined,
+              }}
+            />
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{mark.label}</span>
+          </span>
+        ))}
+      </div>
+
       {/* ── bottom inscription ──────────────────────────────────── */}
       <WaterText
         className="fire-legend"
@@ -1202,7 +1306,7 @@ export default function Fire() {
           display: "block",
           position: "fixed",
           left: "50%",
-          bottom: 56,
+          bottom: "calc(152px + env(safe-area-inset-bottom, 0px))",
           transform: "translateX(-50%)",
           fontFamily: "var(--font-serif)",
           fontStyle: "italic",
@@ -1325,8 +1429,8 @@ export default function Fire() {
         className="fire-wind-panel"
         style={{
           position: "fixed",
-          right: "var(--pad-x)",
-          bottom: 56,
+          right: "calc(260px + env(safe-area-inset-right, 0px))",
+          bottom: "calc(108px + env(safe-area-inset-bottom, 0px))",
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
@@ -1355,6 +1459,8 @@ export default function Fire() {
           step={0.01}
           value={windDisplay}
           onChange={onWindChange}
+          onPointerUp={onWindCommit}
+          onKeyUp={onWindCommit}
           className="fire-wind-dial"
           style={{
             width: 120,
@@ -1370,7 +1476,9 @@ export default function Fire() {
       </div>
 
       {/* scoped styles for the wind input */}
-      <style>{`
+      <style
+        dangerouslySetInnerHTML={{
+          __html: `
         .fire-wind-dial::-webkit-slider-runnable-track {
           height: 1px;
           background: rgba(255, 246, 220, 0.30);
@@ -1407,15 +1515,18 @@ export default function Fire() {
           .fire-title {
             top: 70px !important;
             left: 16px !important;
-            right: 110px;
-            max-width: calc(100vw - 132px) !important;
+            right: 150px;
+            max-width: calc(100vw - 166px) !important;
           }
           .fire-title h1 {
-            font-size: clamp(40px, 14vw, 68px) !important;
+            font-size: clamp(34px, 12vw, 58px) !important;
           }
           .fire-control-rail {
-            top: 68px !important;
-            right: 12px !important;
+            top: 240px !important;
+            left: 16px !important;
+            right: auto !important;
+            flex-direction: row !important;
+            align-items: center !important;
             gap: 6px !important;
           }
           .fire-action {
@@ -1430,19 +1541,31 @@ export default function Fire() {
           }
           .fire-wind-panel {
             right: 12px !important;
-            bottom: 50px !important;
+            bottom: calc(102px + env(safe-area-inset-bottom, 0px)) !important;
             gap: 2px !important;
             transform: scale(0.92);
             transform-origin: right bottom;
           }
+          .fire-memory {
+            left: 12px !important;
+            bottom: calc(108px + env(safe-area-inset-bottom, 0px)) !important;
+            max-width: calc(100vw - 136px) !important;
+            gap: 6px !important;
+            padding: 7px 8px !important;
+          }
+          .fire-memory span:nth-child(n+4) {
+            display: none !important;
+          }
           .fire-legend {
-            bottom: 106px !important;
-            max-width: calc(100vw - 160px);
+            bottom: calc(160px + env(safe-area-inset-bottom, 0px)) !important;
+            max-width: calc(100vw - 32px);
             white-space: normal !important;
             line-height: 1.25;
           }
         }
-      `}</style>
+      `,
+        }}
+      />
     </div>
   );
 }
