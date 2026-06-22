@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import { useField } from "@/store/field";
+import * as haptics from "@/lib/haptics";
 
 /**
  * /watch — the "object that emanates."
@@ -18,6 +19,7 @@ import { useField } from "@/store/field";
 
 type Spark = { x: number; y: number; vx: number; vy: number; life: number; maxLife: number };
 type Whisper = { text: string; x: number; y: number; t0: number; duration: number; hovered: boolean };
+type WatchMark = { id: number; label: string; tone: "ember" | "glass" | "wood" | "moon"; strength: number };
 
 export default function Watch() {
   // page-specific ambient bed: precise ticks over far water
@@ -25,6 +27,8 @@ export default function Watch() {
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [whisperState, setWhisperState] = useState<Whisper | null>(null);
+  const [watchMarks, setWatchMarks] = useState<WatchMark[]>([]);
+  const watchMarkIdRef = useRef(0);
 
   const cursor = useRef({ x: -9999, y: -9999, tx: -9999, ty: -9999, over: false });
   const lit = useRef({ candle: 0, glass: 0, book: 0, record: 0, window: 0, clock: 0, music: 0, frame: 0 });
@@ -110,6 +114,14 @@ export default function Watch() {
 
   // next whisper time.
   const whisperNextAt = useRef(performance.now() + 12000);
+
+  const addWatchMark = (label: string, tone: WatchMark["tone"] = "ember", strength = 0.5) => {
+    const id = ++watchMarkIdRef.current;
+    setWatchMarks((marks) => [...marks.slice(-4), { id, label, tone, strength }]);
+    window.setTimeout(() => {
+      setWatchMarks((marks) => marks.filter((mark) => mark.id !== id));
+    }, 5200);
+  };
 
   useEffect(() => {
     const cv = canvasRef.current;
@@ -265,7 +277,9 @@ export default function Watch() {
             candleState.current.snuffStart = performance.now();
             const audio = getFieldAudio();
             audio.thud();
+            haptics.storm();
             useField.getState().recordTape("candle", 0.4, "watch:snuff");
+            addWatchMark("snuffed", "wood", 0.78);
           }
           longPressTimer = null;
         }, 800);
@@ -313,26 +327,34 @@ export default function Watch() {
           candleState.current.alive = 1;
           candleState.current.snuffStart = 0;
           audio.spark();
+          haptics.roll();
           tape("candle", 0.9, "watch:relight");
+          addWatchMark("relit", "ember", 0.92);
         } else {
           audio.spark();
+          haptics.tap();
           tape("candle", 0.9, "watch");
+          addWatchMark("flame", "ember", 0.7);
         }
         return;
       }
 
       if (what === "clock") {
         audio.chime();
+        haptics.tap();
         // gentle pendulum kick — set lit to 1
         lit.current.clock = 1;
         tape("object", 0.4, "clock");
+        addWatchMark("clock", "wood", 0.5);
         return;
       }
 
       if (what === "music") {
         playMusicBoxMelody();
+        haptics.roll();
         lit.current.music = 1;
         tape("sigil", 0.8, "music-box");
+        addWatchMark("music", "ember", 0.86);
         return;
       }
 
@@ -341,13 +363,17 @@ export default function Watch() {
         frame.current.morphPhase = (frame.current.morphPhase + 1) % 5;
         frame.current.lastTapAt = performance.now();
         audio.bell();
+        haptics.ripple(0.48);
         tape("object", 0.6, `frame:phase${frame.current.morphPhase}`);
+        addWatchMark(`frame ${frame.current.morphPhase + 1}`, "moon", 0.62);
         return;
       }
 
       if (what === "boat") {
         audio.chime();
+        haptics.ripple(0.54);
         tape("object", 0.8, "watch:boat");
+        addWatchMark("boat", "moon", 0.72);
         // boat slows briefly so the chime feels acknowledged
         boat.current.speed *= 0.6;
         return;
@@ -358,7 +384,9 @@ export default function Watch() {
         if (whisperState) {
           setWhisperState({ ...whisperState, hovered: true });
           audio.bell();
+          haptics.roll();
           tape("ripple", 0.6, `whisper:${whisperState.text}`);
+          addWatchMark(whisperState.text, "moon", 0.72);
         }
         return;
       }
@@ -370,11 +398,15 @@ export default function Watch() {
           glass.current.fill += 1;
           const detune = (glass.current.fill - 1) * 80;
           oneShotChime(audio, 880 + detune, 1320 + detune);
+          haptics.ripple(0.38 + glass.current.fill * 0.08);
           tape("ripple", 0.5, `glass:${glass.current.fill}`);
+          addWatchMark(`glass ${glass.current.fill}`, "glass", 0.48 + glass.current.fill * 0.06);
         } else {
           glass.current.overflowAt = performance.now();
           oneShotDrop(audio);
+          haptics.chop();
           tape("ripple", 0.7, "glass:overflow");
+          addWatchMark("overflow", "glass", 0.82);
         }
         return;
       }
@@ -383,7 +415,9 @@ export default function Watch() {
         book.current.openUntil = performance.now() + 5000;
         book.current.pageIdx = 0;
         audio.thud();
+        haptics.tap();
         tape("object", 0.6, "book:open");
+        addWatchMark("book", "wood", 0.56);
         return;
       }
       if (what === "page") {
@@ -392,7 +426,9 @@ export default function Watch() {
         book.current.pageTurn = 0.0001;
         book.current.pageIdx = (book.current.pageIdx + 1) % 5;
         oneShotRustle(audio);
+        haptics.ripple(0.36);
         tape("object", 0.4, `book:page${book.current.pageIdx}`);
+        addWatchMark(`page ${book.current.pageIdx + 1}`, "wood", 0.46);
         return;
       }
 
@@ -416,26 +452,34 @@ export default function Watch() {
             const shape = MOOD_SHAPES[record.current.mood];
             audio.bell();
             audio.playSigilPhrase(shape);
+            haptics.roll();
             record.current.playing = true;
             record.current.sinceStart = performance.now();
             tape("sigil", 1.0, `record:mood${record.current.mood}`);
+            addWatchMark(`record ${record.current.mood + 1}`, "ember", 0.9);
             setTimeout(() => { record.current.playing = false; }, 12200);
           } else if (taps === 2) {
             record.current.spinDir *= -1;
             audio.chime();
+            haptics.chop();
             tape("object", 0.5, "record:flip");
+            addWatchMark("flip", "wood", 0.6);
           } else {
             if (record.current.playing) {
               record.current.playing = false;
               audio.thud();
+              haptics.tap();
               tape("object", 0.4, "record:stop");
+              addWatchMark("stop", "wood", 0.48);
             } else {
               record.current.playing = true;
               record.current.sinceStart = performance.now();
               audio.bell();
               const shape = MOOD_SHAPES[record.current.mood];
               audio.playSigilPhrase(shape);
+              haptics.roll();
               tape("sigil", 1.0, "record");
+              addWatchMark("record", "ember", 0.82);
               setTimeout(() => { record.current.playing = false; }, 12200);
             }
           }
@@ -462,14 +506,18 @@ export default function Watch() {
           r.scintUntil = now + 1200;
         }
         oneShotChime(audio, 1180, 1480, 0.18);
+        haptics.ripple(r.taps >= 3 ? 0.78 : 0.46);
         tape("ripple", 0.4, "window");
+        addWatchMark(r.taps >= 3 ? "scint" : "window", "moon", r.taps >= 3 ? 0.86 : 0.56);
         return;
       }
 
       if (what === "wall") {
         wallMarks.current.push({ x, y, t0: performance.now() });
         if (wallMarks.current.length > 18) wallMarks.current.shift();
+        haptics.tap();
         tape("object", 0.3, "wall");
+        addWatchMark("wall", "wood", 0.36);
         return;
       }
     };
@@ -1423,6 +1471,87 @@ export default function Watch() {
         }}
       />
       {renderWhisper()}
+      <div className="watch-state-ribbon" aria-hidden="true">
+        <span className="watch-state-pulse" />
+        {watchMarks.length === 0 ? (
+          <span className="watch-state-idle">room still</span>
+        ) : (
+          watchMarks.map((mark) => (
+            <span
+              key={mark.id}
+              className={`watch-state-mark watch-state-${mark.tone}`}
+              style={{ opacity: 0.42 + mark.strength * 0.46 }}
+            >
+              {mark.label}
+            </span>
+          ))
+        )}
+      </div>
+      <style>{`
+        .watch-state-ribbon {
+          position: fixed;
+          top: max(82px, calc(env(safe-area-inset-top) + 74px));
+          left: max(20px, env(safe-area-inset-left));
+          z-index: 8;
+          display: flex;
+          align-items: center;
+          gap: 7px;
+          max-width: min(440px, calc(100vw - 40px));
+          padding: 8px 10px;
+          border: 1px solid rgba(242, 238, 230, 0.13);
+          border-radius: 999px;
+          background: rgba(10, 8, 8, 0.50);
+          color: rgba(242, 238, 230, 0.62);
+          font-family: var(--font-mono);
+          font-size: 11px;
+          line-height: 1;
+          pointer-events: none;
+          backdrop-filter: blur(14px);
+          overflow: hidden;
+        }
+        .watch-state-pulse {
+          flex: 0 0 auto;
+          width: 7px;
+          height: 7px;
+          border-radius: 999px;
+          background: rgba(255, 184, 116, 0.86);
+          box-shadow: 0 0 16px rgba(255, 184, 116, 0.44);
+        }
+        .watch-state-idle,
+        .watch-state-mark {
+          white-space: nowrap;
+        }
+        .watch-state-ember {
+          color: rgba(255, 202, 138, 0.88);
+        }
+        .watch-state-glass {
+          color: rgba(190, 230, 238, 0.86);
+        }
+        .watch-state-wood {
+          color: rgba(225, 201, 164, 0.78);
+        }
+        .watch-state-moon {
+          color: rgba(220, 232, 255, 0.84);
+        }
+        @media (max-width: 720px) {
+          .watch-state-ribbon {
+            top: max(92px, calc(env(safe-area-inset-top) + 84px));
+            left: 16px;
+            right: 16px;
+            max-width: none;
+            justify-content: center;
+            padding: 9px 10px;
+          }
+          .watch-state-ribbon .watch-state-mark:nth-of-type(n + 5) {
+            display: none;
+          }
+        }
+        @media (max-height: 700px) and (max-width: 720px) {
+          .watch-state-ribbon {
+            top: max(78px, calc(env(safe-area-inset-top) + 72px));
+          }
+        }
+      `}</style>
     </div>
   );
 }
