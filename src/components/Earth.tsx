@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
+import * as haptics from "@/lib/haptics";
 import { useField } from "@/store/field";
 import WaterText from "@/components/WaterText";
 
@@ -202,6 +203,12 @@ export default function Earth() {
   const wrapRef   = useRef<HTMLDivElement>(null);
   const bgRef     = useRef<HTMLCanvasElement>(null);   // pre-rendered strata + grass
   const fgRef     = useRef<HTMLCanvasElement>(null);   // roots + seismograph + interactions
+  const [earthMarks, setEarthMarks] = useState<Array<{ label: string; tone: string; t: number }>>([
+    { label: "still", tone: "#d8c8a8", t: 0 },
+  ]);
+  const markEarth = useCallback((label: string, tone = "#d8c8a8") => {
+    setEarthMarks((prev) => [{ label, tone, t: performance.now() }, ...prev].slice(0, 5));
+  }, []);
   // ring buffer for seismograph
   const seismoBufRef = useRef<Float32Array>(new Float32Array(SEISMO_SAMPLES));
   const seismoHeadRef = useRef<number>(0);
@@ -757,6 +764,8 @@ export default function Earth() {
           p.fallT0 = now;
         }
         getFieldAudio().thud();
+        haptics.storm();
+        markEarth("quake", "#f0c06a");
         useField.getState().recordTape("ripple", 1.0, "earth/quake");
         return;
       }
@@ -766,6 +775,8 @@ export default function Earth() {
         spawnDroplet(x, y, 5);
         clickSpikesRef.current.push({ t0: performance.now(), strength: 0.25 });
         getFieldAudio().spark();
+        haptics.ripple(0.35);
+        markEarth("rain", "#9fc7d8");
         useField.getState().recordTape("ripple", 0.35, "earth/rain");
         return;
       }
@@ -794,6 +805,8 @@ export default function Earth() {
           spawnDroplet(x, z.surfaceTop, 4);
           clickSpikesRef.current.push({ t0: now, strength: 0.55 });
           getFieldAudio().bell();
+          haptics.roll();
+          markEarth(p.kind, p.color);
           useField.getState().recordTape("object", 0.55, `earth/${p.kind}`);
           return;
         }
@@ -801,6 +814,8 @@ export default function Earth() {
         if (dustRef.current.length > 24) dustRef.current.shift();
         clickSpikesRef.current.push({ t0: performance.now(), strength: 0.4 });
         getFieldAudio().chime();
+        haptics.ripple(0.45);
+        markEarth("surface", "#b98952");
         useField.getState().recordTape("object", 0.4, "earth/surface");
         return;
       }
@@ -811,6 +826,8 @@ export default function Earth() {
         pulsedRootsRef.current.push({ idx: rootIdx, t0: performance.now() });
         clickSpikesRef.current.push({ t0: performance.now(), strength: 0.7 });
         getFieldAudio().thud();
+        haptics.roll();
+        markEarth("root", "#6d8f46");
         useField.getState().recordTape("object", 0.5, "earth/root");
         return;
       }
@@ -830,6 +847,8 @@ export default function Earth() {
         }, 2200);
         clickSpikesRef.current.push({ t0: performance.now(), strength: 0.55 });
         getFieldAudio().chime();
+        haptics.ripple(0.6);
+        markEarth(s.name, s.color);
         useField.getState().recordTape("region", 0.5, `earth/${s.id}`);
         // begin trench tracking if pointer moves vertically
         trenchRef.current = {
@@ -871,6 +890,12 @@ export default function Earth() {
 
     const onPointerUp = (e: PointerEvent) => {
       if (trenchRef.current.active && e.pointerId === trenchRef.current.pointerId) {
+        const fold = Math.abs(trenchRef.current.y - trenchRef.current.startY);
+        if (fold > 18) {
+          haptics.chop();
+          markEarth("fold", "#8c5a32");
+          useField.getState().recordTape("region", Math.min(0.8, fold / 160), "earth/fold");
+        }
         trenchRef.current = { y: 0, startY: 0, active: false, pointerId: null };
         try { fg.releasePointerCapture(e.pointerId); } catch { /* noop */ }
       }
@@ -1121,7 +1146,7 @@ export default function Earth() {
       fg.removeEventListener("pointercancel", onPointerUp);
       fg.removeEventListener("pointerleave",  onPointerLeave);
     };
-  }, []);
+  }, [markEarth]);
 
   // Inscription label for the active stratum (rendered as a DOM overlay so it
   // animates with CSS rather than per-frame canvas text).
@@ -1174,6 +1199,7 @@ export default function Earth() {
 
       {/* ── Title block ─────────────────────────────────────────── */}
       <div
+        className="earth-title"
         style={{
           position: "fixed",
           top: 80,
@@ -1271,12 +1297,67 @@ export default function Earth() {
         </div>
       )}
 
-      {/* ── Seismograph magnitude readout ────────────────────────── */}
       <div
+        className="earth-memory"
+        data-earth-memory="true"
+        aria-live="polite"
         style={{
           position: "fixed",
-          right: 24,
-          bottom: 16,
+          left: 18,
+          bottom: "calc(112px + env(safe-area-inset-bottom, 0px))",
+          zIndex: 4,
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          maxWidth: "min(480px, calc(100vw - 150px))",
+          padding: "8px 10px",
+          border: "1px solid rgba(232, 226, 213, 0.16)",
+          borderRadius: 6,
+          background: "rgba(20, 14, 8, 0.52)",
+          backdropFilter: "blur(8px)",
+          WebkitBackdropFilter: "blur(8px)",
+          color: "rgba(232, 226, 213, 0.68)",
+          fontFamily: "var(--font-mono)",
+          fontSize: 10,
+          letterSpacing: 0,
+          textTransform: "lowercase",
+          pointerEvents: "none",
+        }}
+      >
+        {earthMarks.map((mark, index) => (
+          <span
+            key={`${mark.label}-${mark.t}-${index}`}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 5,
+              minWidth: 0,
+              opacity: index === 0 ? 1 : 0.48,
+              whiteSpace: "nowrap",
+            }}
+          >
+            <i
+              aria-hidden="true"
+              style={{
+                width: index === 0 ? 24 : 10,
+                height: 2,
+                flex: "0 0 auto",
+                background: mark.tone,
+                boxShadow: index === 0 ? `0 0 14px ${mark.tone}` : undefined,
+              }}
+            />
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{mark.label}</span>
+          </span>
+        ))}
+      </div>
+
+      {/* ── Seismograph magnitude readout ────────────────────────── */}
+      <div
+        className="earth-magnitude"
+        style={{
+          position: "fixed",
+          right: "calc(260px + env(safe-area-inset-right, 0px))",
+          bottom: "calc(112px + env(safe-area-inset-bottom, 0px))",
           color: "rgba(232, 216, 184, 0.95)",
           pointerEvents: "none",
           textAlign: "right",
@@ -1295,6 +1376,7 @@ export default function Earth() {
           magnitude
         </div>
         <div
+          className="earth-magnitude-value"
           style={{
             fontFamily: "var(--font-fraunces, var(--font-serif))",
             fontWeight: 500,
@@ -1313,6 +1395,34 @@ export default function Earth() {
           __html: `
             @media (hover: none), (pointer: coarse) {
               .oda-earth-hover { display: none !important; }
+            }
+            @media (max-width: 720px) {
+              .earth-title {
+                top: 72px !important;
+                left: 16px !important;
+                right: 16px !important;
+                max-width: calc(100vw - 32px) !important;
+              }
+              .earth-title h1 {
+                font-size: clamp(42px, 17vw, 64px) !important;
+              }
+              .earth-memory {
+                left: 12px !important;
+                bottom: calc(106px + env(safe-area-inset-bottom, 0px)) !important;
+                max-width: calc(100vw - 116px) !important;
+                gap: 6px !important;
+                padding: 7px 8px !important;
+              }
+              .earth-memory span:nth-child(n+4) {
+                display: none !important;
+              }
+              .earth-magnitude {
+                right: 12px !important;
+                bottom: calc(105px + env(safe-area-inset-bottom, 0px)) !important;
+              }
+              .earth-magnitude-value {
+                font-size: 23px !important;
+              }
             }
           `,
         }}
