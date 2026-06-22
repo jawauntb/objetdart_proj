@@ -18,6 +18,7 @@ type RouteEntry = {
 
 const ROUTES: RouteEntry[] = [
   { key: "atlas",       icon: "atlas",    href: "/atlas/origin", anchor: "atlas",    desc: "the territories" },
+  { key: "ocean",       icon: "waves",    href: "/ocean",                             desc: "open water · rivers" },
   { key: "tide",        icon: "tide",     href: "/tide",                              desc: "night sea" },
   { key: "waves",       icon: "waves",    href: "/waves",                             desc: "the poem" },
   { key: "sine",        icon: "waves",    href: "/sine",                              desc: "wave explorer" },
@@ -52,6 +53,7 @@ export default function SiteHeader() {
   const isHome = pathname === "/";
   // dark routes — header & panel float with a dark scrim
   const dark =
+    pathname.startsWith("/ocean") ||
     pathname.startsWith("/tide") ||
     pathname.startsWith("/watch") ||
     pathname.startsWith("/waves") ||
