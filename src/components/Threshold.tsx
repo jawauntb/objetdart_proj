@@ -7,6 +7,7 @@ import Sigil from "@/components/Sigil";
 import Sea from "@/components/Sea";
 import PerWordHero from "@/components/PerWordHero";
 import KeptConstellation from "@/components/KeptConstellation";
+import * as haptics from "@/lib/haptics";
 
 function useLiveClock() {
   const [clock, setClock] = useState("");
@@ -44,8 +45,11 @@ function useLiveClock() {
 export default function Threshold() {
   const clock = useLiveClock();
   const keptCount = useField((s) => s.keptReadings.length);
+  const recordTape = useField((s) => s.recordTape);
 
-  const goTo = (id: string) => {
+  const goTo = (id: string, meta = id, intensity = 0.5) => {
+    haptics.ripple(intensity);
+    recordTape("sigil", intensity, `threshold/${meta}`);
     document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
   const playChart = () => {
@@ -58,7 +62,7 @@ export default function Threshold() {
     } catch {
       /* noop */
     }
-    goTo("live-chart");
+    goTo("live-chart", "chart", 0.62);
   };
 
   return (
@@ -140,11 +144,11 @@ export default function Threshold() {
           }}
           aria-label="departure points"
         >
-          <button className="threshold-action" onClick={() => goTo("concern-field")}>
+          <button className="threshold-action" onClick={() => goTo("concern-field", "field", 0.52)}>
             <span>tune field</span>
             <span aria-hidden="true">↓</span>
           </button>
-          <button className="threshold-action" onClick={() => goTo("atlas")}>
+          <button className="threshold-action" onClick={() => goTo("atlas", "atlas", 0.58)}>
             <span>cross atlas</span>
             <span aria-hidden="true">→</span>
           </button>

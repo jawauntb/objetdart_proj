@@ -12,6 +12,7 @@ import { sigilPolygonPoints, polygonLeftEdgeAt, type ObstacleShape } from "@/lib
 import ConcernSigil from "@/components/ConcernSigil";
 import ShapedProse from "@/components/ShapedProse";
 import WaterText from "@/components/WaterText";
+import * as haptics from "@/lib/haptics";
 import type { ConcernKey } from "@/lib/types";
 
 function useElementWidth(ref: React.RefObject<HTMLElement | null>): number {
@@ -340,7 +341,7 @@ function Drawer({
             border-left: 0 !important;
             border-top: 1px solid var(--rule);
             border-radius: 8px 8px 0 0;
-            padding-bottom: calc(var(--pad-x) + env(safe-area-inset-bottom, 0px) + 20px) !important;
+            padding-bottom: calc(128px + env(safe-area-inset-bottom, 0px)) !important;
           }
           .atlas-drawer .atlas-drawer__handle { display: block !important; }
         }
@@ -502,6 +503,17 @@ const CURRENT_LINKS: Array<[string, string]> = [
   ["spirit", "ascent"],
 ];
 
+const seededDot = (index: number, salt: number, max: number) => {
+  let n = Math.imul(index + 1, 1103515245) + Math.imul(salt + 1, 12345);
+  n ^= n >>> 16;
+  return (((n >>> 0) % 10000) / 10000) * max;
+};
+
+const PARCHMENT_DOTS = Array.from({ length: 60 }, (_, i) => ({
+  x: seededDot(i, 17, 1600),
+  y: seededDot(i, 53, 1000),
+}));
+
 type RegionRuntime = {
   driftX: number; driftY: number;
   dragX: number;  dragY: number;
@@ -517,6 +529,7 @@ export default function Atlas() {
   const carried = useField((s) => s.carriedObject);
   const setCarried = useField((s) => s.setCarried);
   const haloRegions = useField((s) => s.haloRegions);
+  const pulseRegions = useField((s) => s.pulseRegions);
   const recordTape = useField((s) => s.recordTape);
   const [now, setNow] = useState(0);
   useEffect(() => { setNow(Date.now()); }, [haloRegions]);
@@ -525,8 +538,18 @@ export default function Atlas() {
   const [sigilPings, setSigilPings] = useState<Record<string, number>>({});
   const [exhaleId, setExhaleId] = useState<string | null>(null);
   const [drawerRegion, setDrawerRegion] = useState<string | null>(null);
+  const [routeSignal, setRouteSignal] = useState<{
+    regionId: string;
+    objectId: string;
+    compatible: boolean;
+    at: number;
+  } | null>(null);
   const lastAutoDrawerRegionRef = useRef<string | null>(null);
   const selectedRegion = region ? REGIONS.find((r) => r.id === region) ?? null : null;
+  const carriedObject = carried ? OBJECTS.find((o) => o.id === carried) ?? null : null;
+  const routeSignalRegion = routeSignal ? REGIONS.find((r) => r.id === routeSignal.regionId) ?? null : null;
+  const routeSignalObject = routeSignal ? OBJECTS.find((o) => o.id === routeSignal.objectId) ?? null : null;
+  const routeSignalFresh = routeSignal ? Date.now() - routeSignal.at < 5000 : false;
 
   useEffect(() => {
     if (!region) {
@@ -537,13 +560,23 @@ export default function Atlas() {
     if (isRegionRoute && lastAutoDrawerRegionRef.current !== region) {
       setDrawerRegion(region);
       lastAutoDrawerRegionRef.current = region;
+      pulseRegions([region]);
+      setSigilPings((m) => ({ ...m, [region]: Date.now() }));
+      setNow(Date.now());
+      triggerRegionTone(region);
+      haptics.roll();
+      recordTape("region", 0.92, `atlas/arrival/${region}`);
     }
-  }, [isRegionRoute, region]);
+  }, [isRegionRoute, pulseRegions, recordTape, region]);
 
   const openRegionDrawer = (id: string | null = region) => {
     if (!id) return;
     setDrawerRegion(id);
+    setSigilPings((m) => ({ ...m, [id]: Date.now() }));
+    setNow(Date.now());
     getFieldAudio().chime();
+    haptics.roll();
+    recordTape("region", 0.78, `atlas/read/${id}`);
   };
 
   // zoom-to-region animation state.
@@ -762,6 +795,7 @@ export default function Atlas() {
     setZoomTarget(regionId);
     setZoomT(0);
     triggerRegionTone(regionId);
+    haptics.roll();
     setSigilPings((m) => ({ ...m, [regionId]: Date.now() }));
     setNow(Date.now());
     recordTape("object", 0.5, regionId);
@@ -840,11 +874,7 @@ export default function Atlas() {
 
             {/* parchment grain */}
             <g opacity={0.10} fill="var(--ink-2)" pointerEvents="none">
-              {Array.from({ length: 60 }).map((_, i) => {
-                const x = ((Math.sin(i * 12.9898) * 43758.5453) % 1 + 1) % 1 * 1600;
-                const y = (((Math.sin(i * 78.233) * 43758.5453) % 1) + 1) % 1 * 1000;
-                return <circle key={i} cx={x} cy={y} r={0.8} />;
-              })}
+              {PARCHMENT_DOTS.map(({ x, y }, i) => <circle key={i} cx={x} cy={y} r={0.8} />)}
             </g>
 
             {/* current flow lines between regions */}
@@ -898,6 +928,8 @@ export default function Atlas() {
               const halo = haloAt && now - haloAt < 800;
               const sigilPulse = haloAt && now - haloAt < 700;
               const hovered = hoverId === r.id;
+              const compatibleWithCarried = carriedObject?.regions.includes(r.id) ?? false;
+              const carryingOtherCoast = Boolean(carriedObject) && !compatibleWithCarried;
               const pingAt = sigilPings[r.id];
               const sigilPinging = pingAt && now - pingAt < 500;
               const exhaling = exhaleId === r.id;
@@ -955,10 +987,29 @@ export default function Atlas() {
                   <path
                     className="atlas-region__boundary"
                     d={r.d}
-                    fill={active || isVisiting ? "rgba(232, 200, 130, 0.35)" : "rgba(244, 224, 178, 0.22)"}
-                    stroke="var(--ink)"
-                    strokeWidth={active || isVisiting ? 1.6 : 1}
+                    fill={
+                      active || isVisiting
+                        ? "rgba(232, 200, 130, 0.35)"
+                        : compatibleWithCarried
+                          ? "rgba(85, 190, 176, 0.20)"
+                          : carryingOtherCoast
+                            ? "rgba(244, 224, 178, 0.12)"
+                            : "rgba(244, 224, 178, 0.22)"
+                    }
+                    stroke={compatibleWithCarried ? "rgba(38, 120, 112, 0.82)" : "var(--ink)"}
+                    strokeWidth={active || isVisiting || compatibleWithCarried ? 1.6 : 1}
                   />
+
+                  {compatibleWithCarried && (
+                    <path
+                      d={r.d}
+                      fill="none"
+                      stroke="rgba(48, 160, 146, 0.62)"
+                      strokeWidth={3}
+                      className="atlas-region__object-tide"
+                      pointerEvents="none"
+                    />
+                  )}
 
                   {halo && (
                     <path
@@ -1115,10 +1166,27 @@ export default function Atlas() {
                       if (carried) {
                         const o = OBJECTS.find((x) => x.id === carried);
                         const compatible = o?.regions.includes(r.id) ?? false;
-                        if (compatible) getFieldAudio().thud();
-                        else getFieldAudio().refuse();
+                        if (o) {
+                          setRouteSignal({ regionId: r.id, objectId: o.id, compatible, at: Date.now() });
+                          setSigilPings((m) => ({ ...m, [r.id]: Date.now() }));
+                          pulseRegions([r.id, ...o.regions]);
+                          setNow(Date.now());
+                          recordTape(
+                            "object",
+                            compatible ? 0.86 : 0.46,
+                            `atlas/${compatible ? "land" : "resist"}/${o.id}/${r.id}`,
+                          );
+                        }
+                        if (compatible) {
+                          getFieldAudio().thud();
+                          haptics.roll();
+                        } else {
+                          getFieldAudio().refuse();
+                          haptics.chop();
+                        }
                       } else {
                         getFieldAudio().bell();
+                        haptics.tap();
                       }
                       setRegion(r.id);
                     }}
@@ -1237,6 +1305,7 @@ export default function Atlas() {
 
         <div
           className="atlas-callout"
+          data-atlas-state={selectedRegion?.id ?? "departure"}
           style={{
             marginTop: 16,
             borderTop: "1px solid var(--rule)",
@@ -1263,6 +1332,15 @@ export default function Atlas() {
                 ? `${selectedRegion.inscription.toLowerCase()} · ${selectedRegion.concerns.join(" / ")}`
                 : "the atlas can steer the reading first; the long drawer can wait."}
             </p>
+            <div className="atlas-state-strip" aria-live="polite">
+              <span>{selectedRegion ? `current · ${selectedRegion.label.toLowerCase()}` : "current · open water"}</span>
+              <span>{carriedObject ? `carrying · ${carriedObject.label.toLowerCase()}` : "carrying · empty hands"}</span>
+              {routeSignalFresh && routeSignal && routeSignalObject && routeSignalRegion && (
+                <span>
+                  {routeSignalObject.label.toLowerCase()} {routeSignal.compatible ? "settled in" : "refused by"} {routeSignalRegion.label.toLowerCase()}
+                </span>
+              )}
+            </div>
           </div>
           <div className="atlas-callout__actions" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {selectedRegion ? (
@@ -1316,7 +1394,15 @@ export default function Atlas() {
                   onClick={() => {
                     const willCarry = !active;
                     setCarried(active ? null : o.id);
-                    if (willCarry) getFieldAudio().chime();
+                    if (willCarry) {
+                      getFieldAudio().chime();
+                      haptics.ripple(0.52);
+                      pulseRegions(o.regions);
+                      setNow(Date.now());
+                    } else {
+                      haptics.tap();
+                      recordTape("object", 0.34, `atlas/drop/${o.id}`);
+                    }
                   }}
                   aria-pressed={active}
                   aria-label={`carry ${o.label}`}
@@ -1379,6 +1465,29 @@ export default function Atlas() {
           color: var(--candle);
           background: rgba(200, 115, 42, 0.07);
         }
+        .atlas-state-strip {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+          margin-top: 12px;
+        }
+        .atlas-state-strip span {
+          border: 1px solid var(--rule);
+          background: rgba(242, 238, 230, 0.38);
+          color: var(--ink-2);
+          padding: 5px 8px;
+          font-family: var(--font-text);
+          font-size: 11px;
+          letter-spacing: 0.04em;
+          text-transform: lowercase;
+        }
+        .atlas-region__object-tide {
+          animation: atlas-object-tide 1.8s ease-in-out infinite;
+        }
+        @keyframes atlas-object-tide {
+          0%, 100% { opacity: 0.22; stroke-dasharray: 2 10; }
+          50% { opacity: 0.78; stroke-dasharray: 8 8; }
+        }
         @media (max-width: 720px) {
           .atlas-map__cue {
             display: none;
@@ -1393,6 +1502,9 @@ export default function Atlas() {
           }
           .atlas-callout__button {
             width: 100%;
+          }
+          .atlas-state-strip span {
+            flex: 1 1 100%;
           }
           .atlas-object-row {
             gap: 8px !important;
