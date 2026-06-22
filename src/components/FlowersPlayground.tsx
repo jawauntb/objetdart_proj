@@ -1,6 +1,8 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
+import { getFieldAudio } from "@/lib/audio";
+import { useField } from "@/store/field";
 
 type Bloom = {
   id: number;
@@ -21,7 +23,7 @@ function makeBloom(seed: number, count: number): Bloom {
     id: seed,
     x: Math.round((58 + rand(seed + 1) * 884) * 100) / 100,
     y: Math.round((62 + rand(seed + 2) * 496) * 100) / 100,
-    hue: (18 + rand(seed + 3) * 286 + count * 7) % 360,
+    hue: Math.round(((18 + rand(seed + 3) * 286 + count * 7) % 360) * 100) / 100,
     size: Math.round((18 + rand(seed + 4) * 42) * 100) / 100,
     spin: Math.round(rand(seed + 5) * 360 * 100) / 100,
   };
@@ -29,6 +31,9 @@ function makeBloom(seed: number, count: number): Bloom {
 
 export default function FlowersPlayground() {
   const surfaceRef = useRef<SVGSVGElement | null>(null);
+  const lastPlantAt = useRef(0);
+  const lastControlAt = useRef(0);
+  const tapIdRef = useRef(10_000);
   const [seed, setSeed] = useState(12);
   const [petals, setPetals] = useState(7);
   const [breeze, setBreeze] = useState(4);
@@ -54,6 +59,14 @@ export default function FlowersPlayground() {
       ]
     : [...planted, ...taps];
 
+  const markControl = (meta: string, intensity = 0.44) => {
+    const now = performance.now();
+    if (now - lastControlAt.current < 140) return;
+    lastControlAt.current = now;
+    useField.getState().recordTape("object", intensity, `flowers/${meta}`);
+    try { getFieldAudio().chime(); } catch { /* noop */ }
+  };
+
   const plantAt = (clientX: number, clientY: number) => {
     const svg = surfaceRef.current;
     if (!svg) return;
@@ -61,21 +74,46 @@ export default function FlowersPlayground() {
     const x = ((clientX - rect.left) / rect.width) * 1000;
     const y = ((clientY - rect.top) / rect.height) * 620;
     if (x < 0 || y < 0 || x > 1000 || y > 620) return;
+    const now = performance.now();
+    if (now - lastPlantAt.current > 70) {
+      lastPlantAt.current = now;
+      try {
+        getFieldAudio().playNote(54 + Math.round((1 - y / 620) * 16) + Math.round((x / 1000) * 7), 130);
+      } catch { /* noop */ }
+      useField.getState().recordTape("object", 0.38 + (1 - y / 620) * 0.42, "flowers/plant");
+    }
     setTaps((current) => [
       ...current.slice(-20),
       {
-        id: Date.now(),
+        id: tapIdRef.current++,
         x,
         y,
-        hue: (x * 0.28 + y * 0.18) % 360,
+        hue: Math.round(((x * 0.28 + y * 0.18) % 360) * 100) / 100,
         size: 26 + ((x + y) % 34),
         spin: (x - y) % 360,
       },
     ]);
   };
 
+  const replayBouquet = () => {
+    const recent = taps.slice(-7);
+    if (recent.length === 0) {
+      try { getFieldAudio().refuse(); } catch { /* noop */ }
+      useField.getState().recordTape("object", 0.24, "flowers/empty-bouquet");
+      return;
+    }
+    useField.getState().recordTape("sigil", 0.82, "flowers/bouquet");
+    recent.forEach((bloom, index) => {
+      window.setTimeout(() => {
+        try {
+          getFieldAudio().playNote(52 + Math.round((1 - bloom.y / 620) * 18) + (index % 4), 170);
+        } catch { /* noop */ }
+      }, index * 115);
+    });
+  };
+
   return (
-    <div className="flowers-page" data-touch-surface="true">
+    <div className="flowers-page" data-touch-surface="true" data-pretext-ignore="true">
       <section className="flowers-hero">
         <div className="flowers-copy">
           <p className="t-eyebrow flowers-kicker">flowers / radial instruments</p>
@@ -94,7 +132,10 @@ export default function FlowersPlayground() {
               min="4"
               max="30"
               value={seed}
-              onChange={(event) => setSeed(Number(event.target.value))}
+              onChange={(event) => {
+                setSeed(Number(event.target.value));
+                markControl("density", 0.46);
+              }}
             />
             <strong>{seed}</strong>
           </label>
@@ -105,7 +146,10 @@ export default function FlowersPlayground() {
               min="4"
               max="14"
               value={petals}
-              onChange={(event) => setPetals(Number(event.target.value))}
+              onChange={(event) => {
+                setPetals(Number(event.target.value));
+                markControl("petals", 0.52);
+              }}
             />
             <strong>{petals}</strong>
           </label>
@@ -116,15 +160,34 @@ export default function FlowersPlayground() {
               min="0"
               max="10"
               value={breeze}
-              onChange={(event) => setBreeze(Number(event.target.value))}
+              onChange={(event) => {
+                setBreeze(Number(event.target.value));
+                markControl("breeze", 0.4);
+              }}
             />
             <strong>{breeze}</strong>
           </label>
-          <button type="button" onClick={() => setMirror((value) => !value)}>
+          <button
+            type="button"
+            onClick={() => {
+              setMirror((value) => !value);
+              markControl("mirror", 0.62);
+            }}
+          >
             {mirror ? "unmirror" : "mirror"}
           </button>
-          <button type="button" onClick={() => setTaps([])}>
+          <button
+            type="button"
+            onClick={() => {
+              setTaps([]);
+              useField.getState().recordTape("object", 0.36, "flowers/clear");
+              try { getFieldAudio().thud(); } catch { /* noop */ }
+            }}
+          >
             clear taps
+          </button>
+          <button type="button" onClick={replayBouquet} disabled={taps.length === 0}>
+            bouquet {Math.min(taps.length, 7)}
           </button>
         </div>
 
@@ -137,7 +200,7 @@ export default function FlowersPlayground() {
           onPointerDown={(event) => {
             setDragging(true);
             plantAt(event.clientX, event.clientY);
-            event.currentTarget.setPointerCapture(event.pointerId);
+            try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* noop */ }
           }}
           onPointerMove={(event) => {
             if (!dragging) return;
@@ -145,7 +208,7 @@ export default function FlowersPlayground() {
           }}
           onPointerUp={(event) => {
             setDragging(false);
-            event.currentTarget.releasePointerCapture(event.pointerId);
+            try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* noop */ }
           }}
           onPointerCancel={() => setDragging(false)}
         >
@@ -214,7 +277,7 @@ export default function FlowersPlayground() {
         </svg>
       </section>
 
-      <style>{`
+      <style dangerouslySetInnerHTML={{ __html: `
         .flowers-page {
           min-height: 100vh;
           background: #101714;
@@ -248,7 +311,7 @@ export default function FlowersPlayground() {
         }
         .flowers-controls {
           display: grid;
-          grid-template-columns: repeat(3, minmax(150px, 1fr)) repeat(2, minmax(112px, auto));
+          grid-template-columns: repeat(3, minmax(150px, 1fr)) repeat(3, minmax(112px, auto));
           gap: 10px;
           align-items: stretch;
           margin: 22px 0 14px;
@@ -281,6 +344,10 @@ export default function FlowersPlayground() {
           cursor: pointer;
           padding: 0 14px;
         }
+        .flowers-controls button:disabled {
+          cursor: default;
+          opacity: 0.46;
+        }
         .flowers-surface {
           width: 100%;
           min-height: 520px;
@@ -305,17 +372,22 @@ export default function FlowersPlayground() {
           .flowers-hero { padding-top: 24px; }
           .flowers-copy h1 { font-size: 44px; }
           .flowers-controls {
-            grid-auto-flow: column;
-            grid-auto-columns: minmax(168px, 74vw);
-            grid-template-columns: none;
-            overflow-x: auto;
-            overscroll-behavior-x: contain;
-            padding-bottom: 8px;
+            grid-template-columns: minmax(0, 1fr);
+            overflow: visible;
+            padding-bottom: 0;
           }
-          .flowers-controls button { min-width: 128px; }
+          .flowers-controls label {
+            grid-template-columns: minmax(70px, auto) minmax(0, 1fr) minmax(34px, auto);
+          }
+          .flowers-controls input[type="range"] {
+            min-width: 0;
+          }
+          .flowers-controls button {
+            min-width: 0;
+          }
           .flowers-surface { min-height: 430px; }
         }
-      `}</style>
+      ` }} />
     </div>
   );
 }

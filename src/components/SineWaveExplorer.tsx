@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { getFieldAudio } from "@/lib/audio";
+import { useField } from "@/store/field";
 
 function pathFromPoints(points: Array<readonly [number, number]>) {
   return points.map(([x, y], index) => `${index === 0 ? "M" : "L"}${x.toFixed(2)} ${y.toFixed(2)}`).join(" ");
@@ -8,12 +10,16 @@ function pathFromPoints(points: Array<readonly [number, number]>) {
 
 export default function SineWaveExplorer() {
   const plotRef = useRef<SVGSVGElement | null>(null);
+  const lastToneAt = useRef(0);
+  const lastControlAt = useRef(0);
   const [amp, setAmp] = useState(78);
   const [freq, setFreq] = useState(2);
   const [phase, setPhase] = useState(0);
   const [damping, setDamping] = useState(0.08);
   const [harmonic, setHarmonic] = useState(0.24);
   const [running, setRunning] = useState(true);
+  const [dragTrace, setDragTrace] = useState<Array<readonly [number, number]>>([]);
+  const [readout, setReadout] = useState("touch the wave to tune");
 
   useEffect(() => {
     if (!running) return;
@@ -51,25 +57,57 @@ export default function SineWaveExplorer() {
     });
   }, [amp, freq, harmonic, phase]);
 
+  const markControl = (meta: string, value: number, max: number) => {
+    const now = performance.now();
+    if (now - lastControlAt.current < 130) return;
+    lastControlAt.current = now;
+    const normalized = Math.max(0, Math.min(1, value / max));
+    try { getFieldAudio().playNote(48 + Math.round(normalized * 22), 90); } catch { /* noop */ }
+    useField.getState().recordTape("sigil", 0.28 + normalized * 0.5, `sine/${meta}`);
+  };
+
+  const toggleRunning = () => {
+    setRunning((value) => {
+      const next = !value;
+      const audio = getFieldAudio();
+      try {
+        if (next) audio.chime();
+        else audio.thud();
+      } catch { /* noop */ }
+      useField.getState().recordTape("sigil", next ? 0.65 : 0.42, next ? "sine/play" : "sine/pause");
+      return next;
+    });
+  };
+
   const tuneFromPointer = (clientX: number, clientY: number) => {
     const svg = plotRef.current;
     if (!svg) return;
     const rect = svg.getBoundingClientRect();
     const x = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
     const y = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
-    setPhase(x * Math.PI * 2);
-    setAmp(Math.round(28 + (1 - y) * 116));
+    const nextPhase = x * Math.PI * 2;
+    const nextAmp = Math.round(28 + (1 - y) * 116);
+    setPhase(nextPhase);
+    setAmp(nextAmp);
+    setReadout(`phase ${nextPhase.toFixed(2)} / amplitude ${nextAmp}`);
+    setDragTrace((current) => [...current, [40 + x * 880, 50 + y * 400] as const].slice(-48));
+
+    const now = performance.now();
+    if (now - lastToneAt.current < 85) return;
+    lastToneAt.current = now;
+    try { getFieldAudio().playNote(50 + Math.round((1 - y) * 24) + Math.round(x * 6), 95); } catch { /* noop */ }
+    useField.getState().recordTape("sigil", 0.36 + (1 - y) * 0.44, "sine/drag");
   };
 
   return (
-    <div className="sine-page" data-touch-surface="true">
+    <div className="sine-page" data-touch-surface="true" data-pretext-ignore="true">
       <section className="sine-shell">
         <div className="sine-topline">
           <div>
             <p className="t-eyebrow sine-kicker">sine / wave explorer</p>
             <h1>Sine wave explorer</h1>
           </div>
-          <button type="button" onClick={() => setRunning((value) => !value)}>
+          <button type="button" onClick={toggleRunning}>
             {running ? "pause" : "play"}
           </button>
         </div>
@@ -77,27 +115,81 @@ export default function SineWaveExplorer() {
         <div className="sine-controls" aria-label="wave controls">
           <label>
             <span>amplitude</span>
-            <input type="range" min="20" max="145" value={amp} onChange={(event) => setAmp(Number(event.target.value))} />
+            <input
+              type="range"
+              min="20"
+              max="145"
+              value={amp}
+              onChange={(event) => {
+                const value = Number(event.target.value);
+                setAmp(value);
+                markControl("amplitude", value - 20, 125);
+              }}
+            />
             <strong>{amp}</strong>
           </label>
           <label>
             <span>frequency</span>
-            <input type="range" min="1" max="8" step="0.25" value={freq} onChange={(event) => setFreq(Number(event.target.value))} />
+            <input
+              type="range"
+              min="1"
+              max="8"
+              step="0.25"
+              value={freq}
+              onChange={(event) => {
+                const value = Number(event.target.value);
+                setFreq(value);
+                markControl("frequency", value - 1, 7);
+              }}
+            />
             <strong>{freq.toFixed(2)}</strong>
           </label>
           <label>
             <span>phase</span>
-            <input type="range" min="0" max="6.28" step="0.01" value={phase} onChange={(event) => setPhase(Number(event.target.value))} />
+            <input
+              type="range"
+              min="0"
+              max="6.28"
+              step="0.01"
+              value={phase}
+              onChange={(event) => {
+                const value = Number(event.target.value);
+                setPhase(value);
+                markControl("phase", value, 6.28);
+              }}
+            />
             <strong>{phase.toFixed(2)}</strong>
           </label>
           <label>
             <span>damping</span>
-            <input type="range" min="0" max="0.45" step="0.01" value={damping} onChange={(event) => setDamping(Number(event.target.value))} />
+            <input
+              type="range"
+              min="0"
+              max="0.45"
+              step="0.01"
+              value={damping}
+              onChange={(event) => {
+                const value = Number(event.target.value);
+                setDamping(value);
+                markControl("damping", value, 0.45);
+              }}
+            />
             <strong>{damping.toFixed(2)}</strong>
           </label>
           <label>
             <span>harmonic</span>
-            <input type="range" min="0" max="0.8" step="0.01" value={harmonic} onChange={(event) => setHarmonic(Number(event.target.value))} />
+            <input
+              type="range"
+              min="0"
+              max="0.8"
+              step="0.01"
+              value={harmonic}
+              onChange={(event) => {
+                const value = Number(event.target.value);
+                setHarmonic(value);
+                markControl("harmonic", value, 0.8);
+              }}
+            />
             <strong>{harmonic.toFixed(2)}</strong>
           </label>
         </div>
@@ -109,14 +201,17 @@ export default function SineWaveExplorer() {
           role="img"
           aria-label="Interactive sine wave plot"
           onPointerDown={(event) => {
+            setDragTrace([]);
             tuneFromPointer(event.clientX, event.clientY);
-            event.currentTarget.setPointerCapture(event.pointerId);
+            try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* noop */ }
           }}
           onPointerMove={(event) => {
             if (event.buttons !== 1) return;
             tuneFromPointer(event.clientX, event.clientY);
           }}
-          onPointerUp={(event) => event.currentTarget.releasePointerCapture(event.pointerId)}
+          onPointerUp={(event) => {
+            try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* noop */ }
+          }}
         >
           <rect width="960" height="500" rx="8" fill="#f2eee6" />
           {Array.from({ length: 11 }, (_, i) => (
@@ -126,18 +221,21 @@ export default function SineWaveExplorer() {
             <line key={`h-${i}`} x1="40" y1={70 + i * 60} x2="920" y2={70 + i * 60} stroke="rgba(21,23,26,0.09)" />
           ))}
           <line x1="40" y1="250" x2="920" y2="250" stroke="rgba(44,74,92,0.32)" strokeWidth="2" />
+          {dragTrace.length > 1 && (
+            <path d={pathFromPoints(dragTrace)} fill="none" stroke="#78c7d2" strokeWidth="3" strokeLinecap="round" opacity="0.5" />
+          )}
           <path d={pathFromPoints(ghostPoints)} fill="none" stroke="#c8732a" strokeWidth="2" opacity="0.42" />
           <path d={pathFromPoints(points)} fill="none" stroke="#15171a" strokeWidth="5" strokeLinecap="round" />
           {points.filter((_, index) => index % 34 === 0).map(([x, y], index) => (
             <circle key={index} cx={x} cy={y} r="5" fill={index % 2 ? "#2c4a5c" : "#c8732a"} />
           ))}
           <text x="52" y="82" className="sine-readout">
-            y = A sin(wx + phase) + a smaller echo
+            {readout}
           </text>
         </svg>
       </section>
 
-      <style>{`
+      <style dangerouslySetInnerHTML={{ __html: `
         .sine-page {
           min-height: 100vh;
           background: linear-gradient(180deg, #e9dfcd 0%, #f2eee6 48%, #d4e3df 100%);
@@ -218,16 +316,21 @@ export default function SineWaveExplorer() {
           .sine-topline { align-items: start; }
           .sine-topline h1 { font-size: 42px; }
           .sine-controls {
-            grid-auto-flow: column;
-            grid-auto-columns: minmax(154px, 68vw);
-            grid-template-columns: none;
-            overflow-x: auto;
-            overscroll-behavior-x: contain;
-            padding-bottom: 8px;
+            grid-template-columns: minmax(0, 1fr);
+            overflow: visible;
+            padding-bottom: 0;
+          }
+          .sine-controls label {
+            grid-template-columns: minmax(82px, auto) minmax(0, 1fr) minmax(46px, auto);
+            align-items: center;
+            min-height: 52px;
+          }
+          .sine-controls input[type="range"] {
+            min-width: 0;
           }
           .sine-plot { min-height: 390px; }
         }
-      `}</style>
+      ` }} />
     </div>
   );
 }
