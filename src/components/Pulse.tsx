@@ -322,11 +322,19 @@ export default function Pulse() {
       ctx.fillRect(0, 0, w, h);
 
       // ── layout ────────────────────────────────────────────────────
-      const upperH = Math.round(h * (mobile ? 0.56 : 0.6));
-      const chGap = mobile ? 8 : 14;
+      const mobileControlH = Math.min(390, h * 0.46);
+      const mobileControlTop = h - 44 - mobileControlH;
+      const mobileTraceTop = Math.max(132, Math.min(154, h * 0.18));
+      const mobilePatternVisible = Boolean(patternRef.current);
+      const mobileChannelCount = mobilePatternVisible ? 5 : 4;
+      const upperH = Math.round(h * (mobile ? 0.54 : 0.6));
+      const chGap = mobile ? 6 : 14;
       const pad = mobile ? 10 : 24;
+      const drawableH = mobile
+        ? Math.max(168, mobileControlTop - mobileTraceTop - 18)
+        : upperH - pad * 2;
       const chH = mobile
-        ? Math.max(34, Math.min(52, Math.floor((upperH - pad * 2 - chGap * 4) / 5)))
+        ? Math.max(32, Math.min(48, Math.floor((drawableH - chGap * (mobileChannelCount - 1)) / mobileChannelCount)))
         : 70;
       const labelW = mobile ? 58 : 88;
       const channelW = w - labelW - pad * 2;
@@ -335,7 +343,9 @@ export default function Pulse() {
       // within the upper region if possible — otherwise overflows into
       // a thin band above the control region).
       const fourH = chH * 4 + chGap * 3;
-      const startY = pad + (mobile ? 0 : Math.max(0, Math.min(20, upperH - fourH - 80) * 0.5));
+      const startY = mobile
+        ? mobileTraceTop
+        : pad + Math.max(0, Math.min(20, upperH - fourH - 80) * 0.5);
       const channels = channelsRef.current;
 
       const stressV = stressRef.current;
@@ -616,8 +626,8 @@ export default function Pulse() {
             position: "absolute",
             left: "clamp(12px, 3vw, 32px)",
             // 4 channels * (chH=70+gap=14) ≈ 336px below the channels' startY.
-            // We anchor near 44vh to land in the pattern band on most viewports.
-            top: "44vh",
+            // Keep the embed above the control rail and global tape.
+            top: "39.5vh",
             pointerEvents: "auto",
             zIndex: 4,
           }}
@@ -723,7 +733,7 @@ export default function Pulse() {
           position: "absolute",
           left: 0,
           right: 0,
-          bottom: 0,
+          bottom: 44,
           height: "40vh",
           padding: "16px clamp(12px, 3vw, 32px)",
           display: "grid",
@@ -919,9 +929,16 @@ export default function Pulse() {
       </div>
 
       <style>{`
+        body:has(.oda-pulse-root) .oda-field-watch,
+        body:has(.oda-pulse-root) .oda-candle-mark,
+        body:has(.oda-pulse-root) .oda-sound-toggle {
+          display: none !important;
+        }
         @media (max-width: 720px) {
           .oda-pulse-root {
             overflow: hidden !important;
+            --pulse-mobile-control-height: min(390px, 46svh);
+            --pulse-mobile-control-bottom: calc(44px + env(safe-area-inset-bottom, 0px));
           }
           .oda-pulse-canvas {
             height: 100svh !important;
@@ -929,39 +946,56 @@ export default function Pulse() {
           .oda-pulse-pattern-chart {
             left: 12px !important;
             right: 12px !important;
-            top: calc(56svh - 96px) !important;
+            top: calc(100svh - var(--pulse-mobile-control-height) - 128px) !important;
             max-width: calc(100vw - 24px);
+          }
+          .oda-pulse-pattern-chart > div {
+            padding: 6px !important;
+          }
+          .oda-pulse-pattern-chart > div > div:first-child {
+            font-size: 9px !important;
+            margin-bottom: 2px !important;
+          }
+          .oda-pulse-pattern-chart canvas {
+            height: 50px !important;
+          }
+          .oda-pulse-pattern-chart > div > div:last-child {
+            display: none !important;
           }
           .oda-pulse-readouts {
             right: 8px !important;
-            top: 64px !important;
-            height: calc(56svh - 72px) !important;
+            top: 138px !important;
+            height: calc(100svh - var(--pulse-mobile-control-height) - 198px) !important;
+            min-height: 168px !important;
+            max-height: 244px !important;
             padding-top: 0 !important;
             padding-bottom: 0 !important;
             gap: 2px !important;
           }
           .oda-pulse-readout {
-            max-width: min(34vw, 128px);
+            max-width: min(28vw, 104px);
           }
           .oda-pulse-readout-value {
-            font-size: clamp(18px, 6.2vw, 28px) !important;
+            font-size: clamp(16px, 5.4vw, 24px) !important;
             line-height: 0.95 !important;
           }
           .oda-pulse-audio-toggle {
-            font-size: 10px !important;
+            min-height: 30px !important;
+            min-width: 34px !important;
+            font-size: 9px !important;
             letter-spacing: 0.08em !important;
-            padding: 6px 6px !important;
+            padding: 3px 4px !important;
           }
           .oda-pulse-readout-unit {
-            font-size: 9px !important;
+            font-size: 8px !important;
           }
           .oda-pulse-controls {
             grid-template-columns: 1fr !important;
             grid-auto-rows: max-content !important;
-            height: min(42svh, 340px) !important;
-            bottom: 44px !important;
-            padding: 10px 12px calc(10px + env(safe-area-inset-bottom)) !important;
-            gap: 10px !important;
+            height: var(--pulse-mobile-control-height) !important;
+            bottom: var(--pulse-mobile-control-bottom) !important;
+            padding: 8px 12px calc(18px + env(safe-area-inset-bottom, 0px)) !important;
+            gap: 8px !important;
             overflow-y: auto;
             overscroll-behavior: contain;
             -webkit-overflow-scrolling: touch;
@@ -969,12 +1003,24 @@ export default function Pulse() {
             align-content: start !important;
           }
           .oda-pulse-controls > div {
+            padding: 10px 12px !important;
+            gap: 8px !important;
             min-height: max-content !important;
           }
           .oda-pulse-controls input,
           .oda-pulse-controls select,
           .oda-pulse-controls button {
             max-width: 100%;
+          }
+          .oda-pulse-controls select,
+          .oda-pulse-controls input[type="text"] {
+            min-height: 40px !important;
+            font-size: 14px !important;
+          }
+          .oda-pulse-controls button {
+            min-height: 40px !important;
+            font-size: 12px !important;
+            letter-spacing: 0.1em !important;
           }
           .oda-pulse-controls [style*="display: flex"] {
             flex-wrap: wrap;
@@ -987,6 +1033,11 @@ export default function Pulse() {
           height: 44px;
           background: transparent;
           touch-action: manipulation;
+        }
+        @media (max-width: 720px) {
+          .oda-pulse-controls input[type=range] {
+            height: 34px;
+          }
         }
         .oda-pulse-controls input[type=range]::-webkit-slider-runnable-track {
           height: 2px;
@@ -1004,6 +1055,13 @@ export default function Pulse() {
           cursor: pointer;
           border: none;
         }
+        @media (max-width: 720px) {
+          .oda-pulse-controls input[type=range]::-webkit-slider-thumb {
+            width: 20px;
+            height: 20px;
+            margin-top: -9px;
+          }
+        }
         .oda-pulse-controls input[type=range]::-moz-range-track {
           height: 2px;
           background: rgba(232,226,213,0.25);
@@ -1016,6 +1074,12 @@ export default function Pulse() {
           box-shadow: 0 0 8px var(--thumb-color, #4af07a);
           cursor: pointer;
           border: none;
+        }
+        @media (max-width: 720px) {
+          .oda-pulse-controls input[type=range]::-moz-range-thumb {
+            width: 20px;
+            height: 20px;
+          }
         }
       `}</style>
     </div>
