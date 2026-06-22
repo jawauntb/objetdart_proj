@@ -3,6 +3,8 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import { useField } from "@/store/field";
+import SpacetimeShader from "@/components/SpacetimeShader";
+import TimeCabinet from "@/components/TimeCabinet";
 
 /**
  * /time — the grande complication.
@@ -503,6 +505,8 @@ export default function TimeManifold() {
         </div>
 
         <div className="time-grand">
+          <div className="time-grand-stage">
+            <SpacetimeShader />
           <svg className="time-grand-svg" style={tiltStyle} viewBox="0 0 400 400" role="img" aria-label="grande complication chronograph">
             <StaticDial guilloche={guilloche} minuteTrack={minuteTrack} hourMarkers={hourMarkers} />
 
@@ -675,6 +679,7 @@ export default function TimeManifold() {
             {/* domed crystal sheen */}
             <ellipse cx={C - 46} cy={C - 60} rx={120} ry={70} fill="white" opacity="0.05" transform={`rotate(-24 ${C} ${C})`} />
           </svg>
+          </div>
 
           <div className="time-readout">
             <strong>{formatTime(elapsed)}</strong>
@@ -769,6 +774,8 @@ export default function TimeManifold() {
             <text x="650" y="80" className="time-caption">worldline tilts with velocity</text>
           </svg>
         </div>
+
+        <TimeCabinet />
       </section>
 
       <style dangerouslySetInnerHTML={{ __html: `
@@ -810,11 +817,18 @@ export default function TimeManifold() {
           justify-items: center;
           gap: 16px;
           perspective: 1100px;
-          transform-style: preserve-3d;
-          will-change: transform;
-          transition: transform 0.12s ease-out;
+        }
+        .time-grand-stage {
+          position: relative;
+          width: min(560px, 92vw);
+          aspect-ratio: 1 / 1;
+          display: grid;
+          place-items: center;
         }
         .time-grand-svg {
+          position: relative;
+          z-index: 1;
+          pointer-events: none;
           width: min(520px, 88vw);
           height: auto;
           filter: drop-shadow(0 30px 60px rgba(0,0,0,0.6));
