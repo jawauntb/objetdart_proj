@@ -3,6 +3,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import { useField } from "@/store/field";
+import * as haptics from "@/lib/haptics";
 import SpacetimeShader from "@/components/SpacetimeShader";
 import TimeCabinet from "@/components/TimeCabinet";
 
@@ -306,6 +307,12 @@ export default function TimeManifold() {
   const storedElapsed = useRef(0);
   const lastControlAt = useRef(0);
 
+  // touch-effect state for the dial complications (read by the heartbeat)
+  const pings = useRef<Array<{ x: number; y: number; t0: number; color: string }>>([]);
+  const secKick = useRef(0);     // transient flick on the small seconds
+  const moonNudge = useRef(0);   // manual moon advance (fraction of a cycle)
+  const dateNudge = useRef(0);   // manual date advance (days)
+
   // ── live render heartbeat (drives the running dial every frame) ──
   const [, setFrame] = useState(0);
   const reduceRef = useRef(false);
@@ -358,6 +365,9 @@ export default function TimeManifold() {
       // mainspring: drains while the chronograph runs, idles otherwise
       if (running) a.power = Math.max(0, a.power - dt / 240);
       else a.power = Math.min(1, a.power + dt / 900);
+
+      secKick.current *= 0.86;
+      if (pings.current.length) pings.current = pings.current.filter((p) => now - p.t0 < 900);
 
       if (now - lastPaint >= minInterval) {
         lastPaint = now;
@@ -515,11 +525,11 @@ export default function TimeManifold() {
   const hr = (d.getHours() % 12) + min / 60;
   const hourAngle = hr * 30;
   const minAngle = min * 6;
-  const liveSecAngle = sec * 6;            // running seconds subdial (sweep)
+  const liveSecAngle = sec * 6 + secKick.current; // running seconds (sweep + tap flick)
   const chronoSecAngle = (elapsed / 1000) % 60 * 6; // central chrono sweep
 
-  const phase = moonPhase(d);              // 0..1
-  const dateNum = d.getDate();
+  const phase = (moonPhase(d) + moonNudge.current) % 1; // 0..1 (+ manual nudge)
+  const dateNum = ((d.getDate() - 1 + dateNudge.current) % 31) + 1;
 
   // motion gauge: amplitude mapped to a balance "degrees" reading 0..320
   const ampDeg = Math.round(a.amplitude * 320);
@@ -617,6 +627,50 @@ export default function TimeManifold() {
     useField.getState().recordTape("object", 0.5, `time/material/${next.id}`);
   };
 
+  // ── live touch effects on the dial's complications ───────────────
+  // each ping is an expanding ring the heartbeat animates and prunes.
+  const addPing = (x: number, y: number, color = "#e7d39a") => {
+    pings.current.push({ x, y, t0: performance.now(), color });
+    if (pings.current.length > 12) pings.current.shift();
+  };
+  const tape = (kind: "sigil" | "object" | "ripple", v: number, meta: string) =>
+    useField.getState().recordTape(kind, v, meta);
+
+  const tapReserve = (e: React.MouseEvent) => {
+    e.stopPropagation(); wind(); addPing(C, 108, "#e7d39a"); haptics.roll();
+  };
+  const tapSeconds = (e: React.MouseEvent) => {
+    e.stopPropagation(); secKick.current += 46;
+    try { getFieldAudio().playNote(79, 90); } catch { /* noop */ }
+    addPing(292, C, "#c0563a"); haptics.tap(); tape("object", 0.5, "time/dial/seconds");
+  };
+  const tapTourbillon = (e: React.MouseEvent) => {
+    e.stopPropagation(); anim.current.ampTarget = Math.min(1, anim.current.ampTarget + 0.7);
+    try { getFieldAudio().chime(); } catch { /* noop */ }
+    addPing(C, 292, "#6aa6d6"); haptics.ripple(0.6); tape("sigil", 0.72, "time/dial/tourbillon");
+  };
+  const tapAmplitude = (e: React.MouseEvent) => {
+    e.stopPropagation(); anim.current.ampTarget = 1;
+    try { getFieldAudio().playNote(72, 120); } catch { /* noop */ }
+    addPing(108, C, "#7fe0c4"); haptics.chop(); tape("sigil", 0.7, "time/dial/amplitude");
+  };
+  const tapMoon = (e: React.MouseEvent) => {
+    e.stopPropagation(); moonNudge.current = (moonNudge.current + 1 / 29.53) % 1;
+    try { getFieldAudio().bell(); } catch { /* noop */ }
+    addPing(C + 54, C + 54, "#dfe7ff"); haptics.ripple(0.4); tape("object", 0.5, "time/dial/moon");
+  };
+  const tapDate = (e: React.MouseEvent) => {
+    e.stopPropagation(); dateNudge.current += 1;
+    try { getFieldAudio().playNote(67, 70); } catch { /* noop */ }
+    addPing(C - 52, C - 52, "#c0563a"); haptics.tap(); tape("object", 0.4, "time/dial/date");
+  };
+  const tapCenter = (e: React.MouseEvent) => {
+    e.stopPropagation(); // flyback — zero the chronograph on the fly
+    storedElapsed.current = 0; startedAt.current = performance.now(); setElapsed(0);
+    try { getFieldAudio().thud(); } catch { /* noop */ }
+    addPing(C, C, "#6aa6d6"); haptics.roll(); tape("sigil", 0.6, "time/dial/flyback");
+  };
+
   const markControl = (meta: string, normalized: number) => {
     const now = performance.now();
     if (now - lastControlAt.current < 140) return;
@@ -634,7 +688,8 @@ export default function TimeManifold() {
           <h1>Time bends while it counts.</h1>
           <p className="time-sub">
             A tourbillon at six, a moon at her station, a retrograde reserve, and a balance that
-            reads the energy of your hand. Wind it. Move it. Let it run.
+            reads the energy of your hand. Touch any dial — wind the reserve, kick the balance,
+            set the moon, flyback the centre. Wind it. Move it. Let it run.
           </p>
         </div>
 
@@ -645,7 +700,7 @@ export default function TimeManifold() {
             <StaticDial guilloche={guilloche} minuteTrack={minuteTrack} hourMarkers={hourMarkers} material={material} />
 
             {/* ─── subdial: POWER RESERVE (12 o'clock, retrograde) ─── */}
-            <g transform={`translate(${C} ${108})`}>
+            <g transform={`translate(${C} ${108})`} onClick={tapReserve} style={{ pointerEvents: "auto", cursor: "pointer" }}>
               <circle r={40} fill="url(#subFace)" stroke="rgba(231,211,154,0.25)" strokeWidth="0.8" />
               {Array.from({ length: 13 }, (_, i) => {
                 const ang = -60 + i * 10;
@@ -660,7 +715,7 @@ export default function TimeManifold() {
             </g>
 
             {/* ─── subdial: RUNNING SECONDS (3 o'clock, live) ─── */}
-            <g transform={`translate(${292} ${C})`}>
+            <g transform={`translate(${292} ${C})`} onClick={tapSeconds} style={{ pointerEvents: "auto", cursor: "pointer" }}>
               <circle r={40} fill="url(#subFace)" stroke="rgba(231,211,154,0.25)" strokeWidth="0.8" />
               {Array.from({ length: 60 }, (_, i) => {
                 const major = i % 5 === 0;
@@ -676,7 +731,7 @@ export default function TimeManifold() {
             </g>
 
             {/* ─── subdial: MOTION AMPLITUDE (9 o'clock) ─── */}
-            <g transform={`translate(${108} ${C})`}>
+            <g transform={`translate(${108} ${C})`} onClick={tapAmplitude} style={{ pointerEvents: "auto", cursor: "pointer" }}>
               <circle r={40} fill="url(#subFace)" stroke="rgba(231,211,154,0.25)" strokeWidth="0.8" />
               {/* amplitude arc */}
               <path
@@ -697,7 +752,7 @@ export default function TimeManifold() {
             </g>
 
             {/* ─── TOURBILLON aperture (6 o'clock, flying cage) ─── */}
-            <g>
+            <g onClick={tapTourbillon} style={{ pointerEvents: "auto", cursor: "pointer" }}>
               <circle cx={C} cy={292} r={38} fill="url(#tourbWell)" stroke="rgba(231,211,154,0.3)" strokeWidth="1" />
               <g clipPath="url(#tourbClip)">
                 {/* faint orbital field — the "space" inside the cage */}
@@ -734,7 +789,7 @@ export default function TimeManifold() {
             </g>
 
             {/* ─── MOONPHASE aperture (lower-right) ─── */}
-            <g>
+            <g onClick={tapMoon} style={{ pointerEvents: "auto", cursor: "pointer" }}>
               <circle cx={C + 54} cy={C + 54} r={21} fill="#0a0d14" stroke="rgba(231,211,154,0.3)" strokeWidth="1" />
               <g clipPath="url(#moonClip)">
                 <rect x={C + 34} y={C + 34} width={40} height={40} fill="url(#moonSky)" />
@@ -764,7 +819,8 @@ export default function TimeManifold() {
             </g>
 
             {/* ─── retrograde DATE arc (upper-left) ─── */}
-            <g transform={`translate(${C - 52} ${C - 52})`}>
+            <g transform={`translate(${C - 52} ${C - 52})`} onClick={tapDate} style={{ pointerEvents: "auto", cursor: "pointer" }}>
+              <circle r={26} fill="rgba(0,0,0,0.001)" style={{ pointerEvents: "all" }} />
               <path
                 d={`M ${polar(0, 0, 22, -55)[0]} ${polar(0, 0, 22, -55)[1]} A 22 22 0 0 1 ${polar(0, 0, 22, 55)[0]} ${polar(0, 0, 22, 55)[1]}`}
                 fill="none" stroke="rgba(231,211,154,0.35)" strokeWidth="1"
@@ -806,9 +862,25 @@ export default function TimeManifold() {
               <circle cx={C} cy={C - 150} r={2.2} fill="#9cc8ee" />
               <circle cx={C} cy={C + 40} r={4.4} fill="#6aa6d6" />
             </g>
-            {/* central cap */}
-            <circle cx={C} cy={C} r={5} fill="url(#goldHand)" stroke="#5a4520" strokeWidth="0.6" />
-            <circle cx={C} cy={C} r={1.6} fill="#2a2114" />
+            {/* central cap — tap to flyback the chronograph */}
+            <g onClick={tapCenter} style={{ pointerEvents: "auto", cursor: "pointer" }}>
+              <circle cx={C} cy={C} r={9} fill="rgba(0,0,0,0.001)" style={{ pointerEvents: "all" }} />
+              <circle cx={C} cy={C} r={5} fill="url(#goldHand)" stroke="#5a4520" strokeWidth="0.6" />
+              <circle cx={C} cy={C} r={1.6} fill="#2a2114" />
+            </g>
+
+            {/* live touch pings — expanding rings where the dial was poked */}
+            <g style={{ pointerEvents: "none" }}>
+              {pings.current.map((p, i) => {
+                const k = Math.max(0, Math.min(1, (performance.now() - p.t0) / 900));
+                return (
+                  <g key={`${p.t0}-${i}`}>
+                    <circle cx={p.x} cy={p.y} r={6 + k * 34} fill="none" stroke={p.color} strokeOpacity={0.6 * (1 - k)} strokeWidth={1.6 * (1 - k) + 0.3} />
+                    <circle cx={p.x} cy={p.y} r={2 + k * 12} fill="none" stroke={p.color} strokeOpacity={0.3 * (1 - k)} strokeWidth="0.8" />
+                  </g>
+                );
+              })}
+            </g>
 
             {/* domed crystal sheen */}
             <ellipse cx={C - 46} cy={C - 60} rx={120} ry={70} fill="white" opacity="0.05" transform={`rotate(-24 ${C} ${C})`} />
@@ -876,44 +948,175 @@ export default function TimeManifold() {
         </ol>
 
         <div className="time-stage">
-          <svg className="time-manifold" viewBox="0 0 920 460" role="img" aria-label="spacetime manifold">
-            <rect width="920" height="460" rx="8" fill="#0c0b0a" />
-            {grid.map((line, index) => (
-              <path
-                key={index}
-                d={pathFromPoints(line)}
-                fill="none"
-                stroke={index % 2 ? "rgba(108,181,190,0.28)" : "rgba(217,161,77,0.24)"}
-                strokeWidth="1"
-              />
-            ))}
-            <ellipse cx="470" cy="238" rx={42 + mass * 0.34} ry={18 + mass * 0.16} fill="rgba(217,161,77,0.2)" />
-            <circle cx="470" cy="230" r={18 + mass * 0.24} fill="#d9a14d" opacity="0.86" />
-            <path
-              d={`M${worldline.p0[0]} ${worldline.p0[1]} C ${worldline.p1[0]} ${worldline.p1[1]}, ${worldline.p2[0]} ${worldline.p2[1]}, ${worldline.p3[0]} ${worldline.p3[1]}`}
-              fill="none"
-              stroke="#f2eee6"
-              strokeWidth="3"
-              strokeLinecap="round"
-            />
-            {lapMarkers.map((marker) => (
-              <g key={`${marker.value}-${marker.index}`} className="time-lap-marker">
-                <line
-                  x1={marker.x}
-                  y1={marker.y - 18}
-                  x2={marker.x}
-                  y2={marker.y + 18}
-                  stroke="rgba(217,161,77,0.62)"
-                  strokeWidth="1"
-                  strokeDasharray="3 5"
+          <p className="t-eyebrow time-kicker">rattrapante · split-seconds · relativity regulator</p>
+          <svg className="time-manifold" viewBox="0 0 920 520" role="img" aria-label="rattrapante split-seconds chronograph and gravitation register">
+            <defs>
+              <linearGradient id="mfPanel" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#15130f" />
+                <stop offset="100%" stopColor="#07060a" />
+              </linearGradient>
+              <radialGradient id="mfFace" cx="42%" cy="34%" r="80%">
+                <stop offset="0%" stopColor="#1a2733" />
+                <stop offset="45%" stopColor="#101924" />
+                <stop offset="100%" stopColor="#05080d" />
+              </radialGradient>
+              <radialGradient id="mfSub" cx="42%" cy="34%" r="82%">
+                <stop offset="0%" stopColor="#243340" />
+                <stop offset="100%" stopColor="#0a121a" />
+              </radialGradient>
+              <linearGradient id="mfBezel" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stopColor="#c9b27e" />
+                <stop offset="25%" stopColor="#6f5b32" />
+                <stop offset="50%" stopColor="#e7d39a" />
+                <stop offset="75%" stopColor="#6f5b32" />
+                <stop offset="100%" stopColor="#bda367" />
+              </linearGradient>
+              <radialGradient id="mfGold" cx="50%" cy="50%" r="60%">
+                <stop offset="0%" stopColor="#f6e6b4" />
+                <stop offset="100%" stopColor="#c79a4e" />
+              </radialGradient>
+              <filter id="mfShadow" x="-40%" y="-40%" width="180%" height="180%">
+                <feDropShadow dx="0" dy="2" stdDeviation="2.4" floodColor="#000" floodOpacity="0.6" />
+              </filter>
+              <filter id="mfGlow" x="-60%" y="-60%" width="220%" height="220%">
+                <feGaussianBlur stdDeviation="3" result="b" />
+                <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
+              </filter>
+              <clipPath id="mfRegister"><rect x="492" y="60" width="404" height="404" rx="14" /></clipPath>
+            </defs>
+
+            <rect width="920" height="520" rx="14" fill="url(#mfPanel)" />
+            <rect x="6" y="6" width="908" height="508" rx="11" fill="none" stroke="rgba(231,211,154,0.14)" strokeWidth="1" />
+
+            {/* ─────────── LEFT: rattrapante split-seconds dial ─────────── */}
+            {(() => {
+              const cx = 252, cy = 260, R = 196;
+              const coordAng = (elapsed / 1000) % 60 * 6;            // coordinate-time sweep
+              const properAng = (proper / 1000) % 60 * 6;            // proper-time sweep (lags by 1/γ)
+              const minAng = (elapsed / 60000) % 30 * 12;            // 30-min totaliser
+              const gNorm = Math.min(1, (gamma - 1) / 2.2);          // γ 1..3.2 → 0..1
+              const gAng = -52 + gNorm * 104;
+              const liveAng = ((a.nowMs / 1000) % 60) * 6;
+              return (
+                <g filter="url(#mfShadow)">
+                  {/* case + bezel */}
+                  <circle cx={cx} cy={cy} r={R + 8} fill="#0a0c10" />
+                  <circle cx={cx} cy={cy} r={R + 6} fill="url(#mfBezel)" />
+                  <circle cx={cx} cy={cy} r={R} fill="url(#mfFace)" />
+                  {/* guilloché rings */}
+                  {Array.from({ length: 16 }, (_, i) => (
+                    <circle key={i} cx={cx} cy={cy} r={20 + i * 10} fill="none" stroke="rgba(159,182,201,0.06)" strokeWidth="0.5" />
+                  ))}
+                  {/* tachymètre ring */}
+                  {[60, 70, 80, 90, 100, 120, 150, 200, 300, 400].map((v) => {
+                    const secs = 3600 / v; // seconds for one unit at this tachy value
+                    const ang = (secs % 60) * 6;
+                    const [tx, ty] = polar(cx, cy, R - 14, ang);
+                    return <text key={v} x={tx} y={ty + 3} textAnchor="middle" className="mf-tachy">{v}</text>;
+                  })}
+                  {/* 60s chapter track */}
+                  {Array.from({ length: 60 }, (_, i) => {
+                    const major = i % 5 === 0;
+                    const [x1, y1] = polar(cx, cy, R - 26, i * 6);
+                    const [x2, y2] = polar(cx, cy, R - (major ? 36 : 31), i * 6);
+                    return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke={major ? "#e7d39a" : "rgba(231,211,154,0.5)"} strokeWidth={major ? 1.8 : 0.8} strokeLinecap="round" />;
+                  })}
+                  {Array.from({ length: 12 }, (_, i) => {
+                    const [nx, ny] = polar(cx, cy, R - 52, i * 30);
+                    return <text key={i} x={nx} y={ny + 5} textAnchor="middle" className="mf-num">{i === 0 ? 60 : i * 5}</text>;
+                  })}
+
+                  {/* sub-register: 30-min totaliser (left) */}
+                  <g transform={`translate(${cx - 78} ${cy})`}>
+                    <circle r={44} fill="url(#mfSub)" stroke="rgba(231,211,154,0.25)" strokeWidth="0.8" />
+                    {Array.from({ length: 30 }, (_, i) => {
+                      const major = i % 5 === 0;
+                      const [x1, y1] = polar(0, 0, 40, i * 12);
+                      const [x2, y2] = polar(0, 0, major ? 34 : 37, i * 12);
+                      return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="rgba(231,211,154,0.5)" strokeWidth={major ? 1.1 : 0.5} />;
+                    })}
+                    <text y={28} textAnchor="middle" className="mf-label">30 min</text>
+                    <line x1={0} y1={6} x2={polar(0, 0, 34, minAng)[0]} y2={polar(0, 0, 34, minAng)[1]} stroke="url(#mfGold)" strokeWidth="1.8" strokeLinecap="round" />
+                    <circle r={2.4} fill="url(#mfGold)" />
+                  </g>
+
+                  {/* sub-register: Lorentz γ gauge (right) */}
+                  <g transform={`translate(${cx + 78} ${cy})`}>
+                    <circle r={44} fill="url(#mfSub)" stroke="rgba(231,211,154,0.25)" strokeWidth="0.8" />
+                    <path d={`M ${polar(0, 0, 36, -52)[0]} ${polar(0, 0, 36, -52)[1]} A 36 36 0 0 1 ${polar(0, 0, 36, 52)[0]} ${polar(0, 0, 36, 52)[1]}`} fill="none" stroke="rgba(106,166,214,0.4)" strokeWidth="2" />
+                    <path d={`M ${polar(0, 0, 36, -52)[0]} ${polar(0, 0, 36, -52)[1]} A 36 36 0 0 1 ${polar(0, 0, 36, gAng)[0]} ${polar(0, 0, 36, gAng)[1]}`} fill="none" stroke="#6aa6d6" strokeWidth="2.6" strokeLinecap="round" />
+                    <text y={-12} textAnchor="middle" className="mf-label">facteur γ</text>
+                    <text y={26} textAnchor="middle" className="mf-num">{gamma.toFixed(2)}</text>
+                    <line x1={0} y1={4} x2={polar(0, 0, 30, gAng)[0]} y2={polar(0, 0, 30, gAng)[1]} stroke="#9cc8ee" strokeWidth="1.6" strokeLinecap="round" />
+                    <circle r={2.2} fill="#9cc8ee" />
+                  </g>
+
+                  {/* sub-register: live running seconds (bottom) */}
+                  <g transform={`translate(${cx} ${cy + 84})`}>
+                    <circle r={40} fill="url(#mfSub)" stroke="rgba(231,211,154,0.25)" strokeWidth="0.8" />
+                    {Array.from({ length: 60 }, (_, i) => {
+                      const major = i % 5 === 0;
+                      const [x1, y1] = polar(0, 0, 36, i * 6);
+                      const [x2, y2] = polar(0, 0, major ? 31 : 33.5, i * 6);
+                      return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="rgba(231,211,154,0.5)" strokeWidth={major ? 1 : 0.5} />;
+                    })}
+                    <text y={-12} textAnchor="middle" className="mf-label">seconde</text>
+                    <line x1={0} y1={8} x2={polar(0, 0, 32, liveAng)[0]} y2={polar(0, 0, 32, liveAng)[1]} stroke="#c0563a" strokeWidth="1.1" strokeLinecap="round" />
+                    <circle r={2} fill="#c0563a" />
+                  </g>
+
+                  {/* the rattrapante pair: coordinate (gold) leads, proper (blued) lags by 1/γ */}
+                  <g transform={`rotate(${properAng} ${cx} ${cy})`}>
+                    <line x1={cx} y1={cy + 44} x2={cx} y2={cy - (R - 30)} stroke="#6aa6d6" strokeWidth="2" strokeLinecap="round" filter="url(#mfGlow)" />
+                    <circle cx={cx} cy={cy - (R - 30)} r="3" fill="#9cc8ee" />
+                  </g>
+                  <g transform={`rotate(${coordAng} ${cx} ${cy})`}>
+                    <line x1={cx} y1={cy + 50} x2={cx} y2={cy - (R - 18)} stroke="url(#mfGold)" strokeWidth="2.4" strokeLinecap="round" />
+                    <circle cx={cx} cy={cy - (R - 18)} r="3.2" fill="#f6e6b4" />
+                    <circle cx={cx} cy={cy + 50} r="5" fill="url(#mfGold)" />
+                  </g>
+                  <circle cx={cx} cy={cy} r="6" fill="url(#mfGold)" stroke="#5a4520" strokeWidth="0.6" />
+                  <circle cx={cx} cy={cy} r="2" fill="#241b10" />
+
+                  <text x={cx} y={cy - 96} textAnchor="middle" className="dial-sig">RATTRAPANTE</text>
+                  <text x={cx} y={cy - 84} textAnchor="middle" className="dial-fine">coordinate · proper · genève</text>
+
+                  {/* crystal sheen */}
+                  <ellipse cx={cx - 60} cy={cy - 70} rx={120} ry={70} fill="#fff" opacity="0.05" transform={`rotate(-22 ${cx} ${cy})`} />
+                </g>
+              );
+            })()}
+
+            {/* ─────────── RIGHT: gravitation register (curved spacetime) ─────────── */}
+            <g filter="url(#mfShadow)">
+              <rect x="488" y="56" width="412" height="412" rx="16" fill="url(#mfBezel)" />
+              <rect x="492" y="60" width="404" height="404" rx="14" fill="#070a0e" />
+            </g>
+            <g clipPath="url(#mfRegister)">
+              <rect x="492" y="60" width="404" height="404" fill="url(#mfFace)" />
+              {/* transform the warped grid + worldline into the register box */}
+              <g transform="translate(474 58) scale(0.51)">
+                {grid.map((line, index) => (
+                  <path key={index} d={pathFromPoints(line)} fill="none"
+                    stroke={index % 2 ? "rgba(108,181,190,0.30)" : "rgba(217,161,77,0.26)"} strokeWidth="1.6" />
+                ))}
+                <ellipse cx="470" cy="238" rx={42 + mass * 0.34} ry={18 + mass * 0.16} fill="rgba(217,161,77,0.22)" />
+                <circle cx="470" cy="230" r={18 + mass * 0.24} fill="#d9a14d" opacity="0.9" filter="url(#mfGlow)" />
+                <path
+                  d={`M${worldline.p0[0]} ${worldline.p0[1]} C ${worldline.p1[0]} ${worldline.p1[1]}, ${worldline.p2[0]} ${worldline.p2[1]}, ${worldline.p3[0]} ${worldline.p3[1]}`}
+                  fill="none" stroke="#f2eee6" strokeWidth="5" strokeLinecap="round"
                 />
-                <circle cx={marker.x} cy={marker.y} r="6" fill="#d9a14d" />
-                <circle cx={marker.x} cy={marker.y} r="13" fill="none" stroke="rgba(217,161,77,0.28)" />
-                <text x={marker.x + 12} y={marker.y - 10} className="time-caption">lap {marker.index + 1}</text>
+                {lapMarkers.map((marker) => (
+                  <g key={`${marker.value}-${marker.index}`}>
+                    <line x1={marker.x} y1={marker.y - 20} x2={marker.x} y2={marker.y + 20} stroke="rgba(217,161,77,0.62)" strokeWidth="1.6" strokeDasharray="4 6" />
+                    <circle cx={marker.x} cy={marker.y} r="8" fill="#d9a14d" />
+                    <circle cx={marker.x} cy={marker.y} r="16" fill="none" stroke="rgba(217,161,77,0.3)" strokeWidth="1.4" />
+                  </g>
+                ))}
               </g>
-            ))}
-            <text x="68" y="410" className="time-caption">space grid</text>
-            <text x="650" y="80" className="time-caption">worldline tilts with velocity</text>
+            </g>
+            <text x="510" y="92" className="mf-label">gravitation · isochronism</text>
+            <text x="694" y="452" textAnchor="middle" className="mf-label">worldline tilts with velocity · mass warps the grid</text>
           </svg>
         </div>
 
@@ -1119,15 +1322,33 @@ export default function TimeManifold() {
         .time-stage {
           display: grid;
           grid-template-columns: 1fr;
-          gap: 14px;
+          gap: 8px;
+          margin-bottom: 8px;
         }
+        .time-stage .time-kicker { margin: 0; }
         .time-manifold {
           width: 100%;
-          min-height: 380px;
           display: block;
           border: 1px solid rgba(231, 211, 154, 0.16);
-          border-radius: 8px;
+          border-radius: 12px;
           background: rgba(242, 238, 230, 0.02);
+        }
+        .mf-tachy {
+          font-family: var(--font-text);
+          font-size: 9px;
+          fill: rgba(231, 211, 154, 0.45);
+        }
+        .mf-num {
+          font-family: var(--font-numerals);
+          font-size: 13px;
+          fill: rgba(242, 238, 230, 0.82);
+        }
+        .mf-label {
+          font-family: var(--font-text);
+          font-size: 10px;
+          letter-spacing: 0.4px;
+          text-transform: lowercase;
+          fill: rgba(231, 211, 154, 0.55);
         }
         @media (max-width: 900px) {
           .time-copy h1 { font-size: 42px; }
