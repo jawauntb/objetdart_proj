@@ -254,7 +254,7 @@ State: `started: boolean`, `muted: boolean`, `liveTones: Map<id, ToneHandle>`. T
 2. *Free + offline* — no API, no quota, no key wrangling. The site is fully audible with no external dependencies.
 3. *Coherent* — every sound on the site comes from the same Web Audio graph and shares modulation sources with the visual sea. There's no risk of a synthesized-music asset feeling unmatched to the ambient ocean — they literally share gain stages.
 
-Gemini/Lyria can now replace the procedural composer for prompt-led clips. The fallback stays in place because losing determinism + audio-visual coherence would be too high a price when the model is unavailable.
+Gemini/Lyria is now the only path for prompt-led `/signal` clips: pressing Enter with text waits for a returned clip, decodes it through the shared analyser, then loops it. If the model is unavailable the page says so instead of silently starting a procedural Aeolian piece. The procedural composer remains the unprompted `compose` path because determinism + audio-visual coherence still matter when the listener is playing the field itself.
 
 ### AI integration
 
@@ -266,7 +266,7 @@ The text-generation API routes, `app/api/ask-the-room/route.ts` and `app/api/ima
 
 Both system prompts hard-code the voice rules: liturgical-not-mystical, lowercase, short clauses, ≥2 of the three registers (devotional/operational/oceanic), no marketing verbs, no quotation marks, one metaphor per sentence, end on a kept image not a thesis. The user prompt is constructed from the current concern state, the region, and the carried object.
 
-`ask-the-room` returns one paragraph; `imagine-entry` returns a strict JSON `{ fn, note, body[] }` shape (with code-fence tolerant parser since some models still wrap output in ```json fences). `generate-music` calls Lyria 3 Clip for 30-second MP3 prompt music. `generate-speech` calls Gemini TTS, wraps the returned 24kHz mono PCM in a WAV container, and is used by `/pretext` plus the Reading answer controls.
+`ask-the-room` returns one paragraph; `imagine-entry` returns a strict JSON `{ fn, note, body[] }` shape (with code-fence tolerant parser since some models still wrap output in ```json fences). `generate-music` calls Lyria 3 Clip for 30-second MP3 prompt music, including the `/signal` sea-wash toggle in the model prompt. `generate-speech` calls Gemini TTS, wraps the returned 24kHz mono PCM in a WAV container, and is used by `/pretext` plus the Reading answer controls.
 
 Keys are pulled from the user's separate `cofounder/prd_superoptimizers` Doppler config via `doppler secrets get NAME --plain --project cofounder --config prd_superoptimizers | railway variable set NAME --stdin --service objetdart --skip-deploys`. The values themselves are not in this repo or in this doc.
 

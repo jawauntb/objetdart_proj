@@ -1,10 +1,14 @@
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
+export const maxDuration = 60;
+
+const MODEL = "lyria-3-clip-preview";
 
 type MusicBody = {
   prompt: string;
   concerns?: Record<string, number>;
+  oceanicCoda?: boolean;
 };
 
 type GeminiPart = {
@@ -19,12 +23,16 @@ function buildMusicPrompt(body: MusicBody): string {
     .slice(0, 3)
     .map(([name, value]) => `${name} ${value}`)
     .join(", ");
+  const wantsSeaWash = body.oceanicCoda !== false;
 
   return [
     "Create a 30-second instrumental music clip for an interactive oceanic instrument website.",
     "Instrumental only, no vocals, no lyrics.",
-    "Keep it textural, playable as a loop, and responsive to this user prompt:",
+    "Keep it textural, close-mic, playable as a loop, and responsive to this user prompt:",
     body.prompt.trim(),
+    wantsSeaWash
+      ? "Thread a subtle sea-wash texture through the clip, with a tide-like tail that can loop cleanly."
+      : "Do not force an ocean ending; resolve naturally while remaining loopable.",
     top ? `The current field emphasis is: ${top}.` : "",
   ].filter(Boolean).join("\n");
 }
@@ -47,7 +55,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const url = "https://generativelanguage.googleapis.com/v1beta/models/lyria-3-clip-preview:generateContent";
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
   const res = await fetch(url, {
     method: "POST",
     headers: {
@@ -83,7 +91,7 @@ export async function POST(req: Request) {
           data: inline.data,
         },
         text: text || null,
-        model: "lyria-3-clip-preview",
+        model: MODEL,
       });
     }
   }
