@@ -635,6 +635,15 @@ export default function TimeManifold() {
   };
   const tape = (kind: "sigil" | "object" | "ripple", v: number, meta: string) =>
     useField.getState().recordTape(kind, v, meta);
+  const beginDialTouch = (e: React.PointerEvent<SVGGElement>) => {
+    e.stopPropagation();
+    if (e.pointerType !== "touch") return;
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* noop */ }
+  };
+  const endDialTouch = (e: React.PointerEvent<SVGGElement>) => {
+    if (e.pointerType !== "touch") return;
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* noop */ }
+  };
 
   const tapReserve = (e: React.MouseEvent) => {
     e.stopPropagation(); wind(); addPing(C, 108, "#e7d39a"); haptics.roll();
@@ -700,7 +709,8 @@ export default function TimeManifold() {
             <StaticDial guilloche={guilloche} minuteTrack={minuteTrack} hourMarkers={hourMarkers} material={material} />
 
             {/* ─── subdial: POWER RESERVE (12 o'clock, retrograde) ─── */}
-            <g transform={`translate(${C} ${108})`} onClick={tapReserve} style={{ pointerEvents: "auto", cursor: "pointer" }}>
+            <g className="time-dial-target" transform={`translate(${C} ${108})`} onClick={tapReserve} onPointerDown={beginDialTouch} onPointerUp={endDialTouch} onPointerCancel={endDialTouch}>
+              <circle className="time-hit" r={52} />
               <circle r={40} fill="url(#subFace)" stroke="rgba(231,211,154,0.25)" strokeWidth="0.8" />
               {Array.from({ length: 13 }, (_, i) => {
                 const ang = -60 + i * 10;
@@ -715,7 +725,8 @@ export default function TimeManifold() {
             </g>
 
             {/* ─── subdial: RUNNING SECONDS (3 o'clock, live) ─── */}
-            <g transform={`translate(${292} ${C})`} onClick={tapSeconds} style={{ pointerEvents: "auto", cursor: "pointer" }}>
+            <g className="time-dial-target" transform={`translate(${292} ${C})`} onClick={tapSeconds} onPointerDown={beginDialTouch} onPointerUp={endDialTouch} onPointerCancel={endDialTouch}>
+              <circle className="time-hit" r={52} />
               <circle r={40} fill="url(#subFace)" stroke="rgba(231,211,154,0.25)" strokeWidth="0.8" />
               {Array.from({ length: 60 }, (_, i) => {
                 const major = i % 5 === 0;
@@ -731,7 +742,8 @@ export default function TimeManifold() {
             </g>
 
             {/* ─── subdial: MOTION AMPLITUDE (9 o'clock) ─── */}
-            <g transform={`translate(${108} ${C})`} onClick={tapAmplitude} style={{ pointerEvents: "auto", cursor: "pointer" }}>
+            <g className="time-dial-target" transform={`translate(${108} ${C})`} onClick={tapAmplitude} onPointerDown={beginDialTouch} onPointerUp={endDialTouch} onPointerCancel={endDialTouch}>
+              <circle className="time-hit" r={52} />
               <circle r={40} fill="url(#subFace)" stroke="rgba(231,211,154,0.25)" strokeWidth="0.8" />
               {/* amplitude arc */}
               <path
@@ -752,7 +764,8 @@ export default function TimeManifold() {
             </g>
 
             {/* ─── TOURBILLON aperture (6 o'clock, flying cage) ─── */}
-            <g onClick={tapTourbillon} style={{ pointerEvents: "auto", cursor: "pointer" }}>
+            <g className="time-dial-target" onClick={tapTourbillon} onPointerDown={beginDialTouch} onPointerUp={endDialTouch} onPointerCancel={endDialTouch}>
+              <circle className="time-hit" cx={C} cy={292} r={52} />
               <circle cx={C} cy={292} r={38} fill="url(#tourbWell)" stroke="rgba(231,211,154,0.3)" strokeWidth="1" />
               <g clipPath="url(#tourbClip)">
                 {/* faint orbital field — the "space" inside the cage */}
@@ -789,7 +802,8 @@ export default function TimeManifold() {
             </g>
 
             {/* ─── MOONPHASE aperture (lower-right) ─── */}
-            <g onClick={tapMoon} style={{ pointerEvents: "auto", cursor: "pointer" }}>
+            <g className="time-dial-target" onClick={tapMoon} onPointerDown={beginDialTouch} onPointerUp={endDialTouch} onPointerCancel={endDialTouch}>
+              <circle className="time-hit" cx={C + 54} cy={C + 54} r={34} />
               <circle cx={C + 54} cy={C + 54} r={21} fill="#0a0d14" stroke="rgba(231,211,154,0.3)" strokeWidth="1" />
               <g clipPath="url(#moonClip)">
                 <rect x={C + 34} y={C + 34} width={40} height={40} fill="url(#moonSky)" />
@@ -819,7 +833,8 @@ export default function TimeManifold() {
             </g>
 
             {/* ─── retrograde DATE arc (upper-left) ─── */}
-            <g transform={`translate(${C - 52} ${C - 52})`} onClick={tapDate} style={{ pointerEvents: "auto", cursor: "pointer" }}>
+            <g className="time-dial-target" transform={`translate(${C - 52} ${C - 52})`} onClick={tapDate} onPointerDown={beginDialTouch} onPointerUp={endDialTouch} onPointerCancel={endDialTouch}>
+              <circle className="time-hit" r={34} />
               <circle r={26} fill="rgba(0,0,0,0.001)" style={{ pointerEvents: "all" }} />
               <path
                 d={`M ${polar(0, 0, 22, -55)[0]} ${polar(0, 0, 22, -55)[1]} A 22 22 0 0 1 ${polar(0, 0, 22, 55)[0]} ${polar(0, 0, 22, 55)[1]}`}
@@ -863,7 +878,8 @@ export default function TimeManifold() {
               <circle cx={C} cy={C + 40} r={4.4} fill="#6aa6d6" />
             </g>
             {/* central cap — tap to flyback the chronograph */}
-            <g onClick={tapCenter} style={{ pointerEvents: "auto", cursor: "pointer" }}>
+            <g className="time-dial-target" onClick={tapCenter} onPointerDown={beginDialTouch} onPointerUp={endDialTouch} onPointerCancel={endDialTouch}>
+              <circle className="time-hit" cx={C} cy={C} r={20} />
               <circle cx={C} cy={C} r={9} fill="rgba(0,0,0,0.001)" style={{ pointerEvents: "all" }} />
               <circle cx={C} cy={C} r={5} fill="url(#goldHand)" stroke="#5a4520" strokeWidth="0.6" />
               <circle cx={C} cy={C} r={1.6} fill="#2a2114" />
@@ -1169,6 +1185,7 @@ export default function TimeManifold() {
           aspect-ratio: 1 / 1;
           display: grid;
           place-items: center;
+          overscroll-behavior: contain;
         }
         .time-grand-svg {
           position: relative;
@@ -1180,6 +1197,16 @@ export default function TimeManifold() {
           transform-style: preserve-3d;
           will-change: transform;
           transition: transform 0.12s ease-out;
+        }
+        .time-dial-target {
+          pointer-events: auto;
+          cursor: pointer;
+          touch-action: none;
+          -webkit-tap-highlight-color: transparent;
+        }
+        .time-hit {
+          fill: transparent;
+          pointer-events: all;
         }
         .dial-label {
           font-family: var(--font-text);
