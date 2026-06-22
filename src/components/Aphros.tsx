@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
+import * as haptics from "@/lib/haptics";
 import { useField } from "@/store/field";
 import GreekKeyFrame from "@/components/GreekKeyFrame";
 import WaterText from "@/components/WaterText";
@@ -1540,6 +1541,7 @@ export default function Aphros() {
     const audio = getFieldAudio();
     const tape = useField.getState().recordTape;
     audio.chime();
+    haptics.ripple(0.45);
     tape("object", 0.55, `putto:${puttoId}`);
     const existing = puttoFly.current[puttoId];
     puttoFly.current[puttoId] = {
@@ -1564,6 +1566,7 @@ export default function Aphros() {
     });
     addAphrosBurst(clientX, clientY);
     audio.chime();
+    haptics.ripple(0.35);
     tape("object", 0.4, "sky:star");
   };
 
@@ -1585,6 +1588,7 @@ export default function Aphros() {
     if (waterRipplesRef.current.length > 16) waterRipplesRef.current.shift();
     addAphrosBurst(clientX, clientY);
     audio.chime();
+    haptics.ripple(0.45);
     tape("ripple", 0.45, "sea");
   };
 
@@ -1874,6 +1878,7 @@ export default function Aphros() {
     const audio = getFieldAudio();
     const tape = useField.getState().recordTape;
     audio.chime();
+    haptics.roll();
     tape("sigil", 0.5, "ribbon");
   };
 
@@ -1885,6 +1890,7 @@ export default function Aphros() {
     const audio = getFieldAudio();
     const shellId = inscriptionShellRef.current;
     audio.bell();
+    haptics.roll();
     tape("kept", 0.85, shellId ? `inscription/${shellId}` : "inscription");
     setPulseOn(true);
     // keep the inscription on screen a bit longer so the pulse reads
@@ -1900,6 +1906,7 @@ export default function Aphros() {
     const audio = getFieldAudio();
     const tape = useField.getState().recordTape;
     audio.chime();
+    haptics.ripple(0.45);
     tape("object", 0.6, "dolphin");
 
     const d = dolphinState.current.find((x) => x.id === dolphinId);
@@ -2034,6 +2041,7 @@ export default function Aphros() {
     const tape = useField.getState().recordTape;
     // Each shell sounds its own pitch on the A-major-ish scale
     audio.playNote(SHELL_NOTES[id], 240);
+    haptics.ripple(0.5);
     tape("object", 0.5, id);
     popRef.current[id] = 1;
     // bloom animation: a stronger scale + bloom envelope on the shell.
@@ -2078,6 +2086,7 @@ export default function Aphros() {
     const audio = getFieldAudio();
     const tape = useField.getState().recordTape;
     audio.playNote(SHELL_NOTES[id], 220);
+    haptics.tap();
     tape("object", 0.35, `tuner:${id}`);
     popRef.current[id] = 1;
     shellBloomRef.current[id] = 0.001;
@@ -2691,7 +2700,7 @@ export default function Aphros() {
             position: "fixed",
             left: 0,
             right: 0,
-            bottom: 96,
+            bottom: "calc(144px + env(safe-area-inset-bottom, 0px))",
             display: "flex",
             justifyContent: "center",
             flexWrap: "wrap",
@@ -2755,7 +2764,7 @@ export default function Aphros() {
             position: "fixed",
             left: 0,
             right: 0,
-            bottom: 144,
+            bottom: "calc(198px + env(safe-area-inset-bottom, 0px))",
             textAlign: "center",
             fontFamily: "var(--font-serif)",
             fontStyle: "italic",
@@ -2807,7 +2816,7 @@ export default function Aphros() {
           position: "fixed",
           left: 0,
           right: 0,
-          bottom: 58,
+          bottom: "calc(104px + env(safe-area-inset-bottom, 0px))",
           textAlign: "center",
           fontFamily: "var(--font-serif)",
           fontStyle: "italic",
@@ -2878,7 +2887,9 @@ export default function Aphros() {
         />
       </div>
 
-      <style>{`
+      <style
+        dangerouslySetInnerHTML={{
+          __html: `
         .aphros-burst-layer {
           position: fixed;
           inset: 0;
@@ -2923,7 +2934,7 @@ export default function Aphros() {
             display: none !important;
           }
           .aphros-tuner {
-            bottom: 76px !important;
+            bottom: calc(144px + env(safe-area-inset-bottom, 0px)) !important;
             gap: 0 !important;
             row-gap: 0 !important;
           }
@@ -2932,7 +2943,7 @@ export default function Aphros() {
             height: 38px !important;
           }
           .aphros-inscription {
-            bottom: 48px !important;
+            bottom: calc(104px + env(safe-area-inset-bottom, 0px)) !important;
             font-size: 15px !important;
             padding: 0 16px !important;
           }
@@ -2940,7 +2951,9 @@ export default function Aphros() {
             display: none !important;
           }
         }
-      `}</style>
+      `,
+        }}
+      />
     </div>
   );
 }
