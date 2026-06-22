@@ -1,11 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { Suspense, useEffect } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { getFieldAudio } from "@/lib/audio";
+import { useField } from "@/store/field";
 import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
+import ConcernSigil from "@/components/ConcernSigil";
 import { decodeReadingHash, buildReading, type ReadingInput } from "@/lib/reading";
 import type { ConcernKey } from "@/lib/types";
 
@@ -13,7 +15,19 @@ const RADIAL_ORDER: ConcernKey[] = [
   "prayer", "future", "work", "risk", "body", "love", "memory", "friendship",
 ];
 
-function OverlayCompass({ a, b }: { a: ReadingInput; b: ReadingInput }) {
+const BASE_CONCERNS = Object.fromEntries(
+  RADIAL_ORDER.map((k) => [k, 50]),
+) as Record<ConcernKey, number>;
+
+function OverlayCompass({
+  a,
+  b,
+  highlight,
+}: {
+  a: ReadingInput;
+  b: ReadingInput;
+  highlight?: ConcernKey | null;
+}) {
   const SIZE = 460;
   const cx = SIZE / 2;
   const cy = SIZE / 2;
@@ -33,8 +47,7 @@ function OverlayCompass({ a, b }: { a: ReadingInput; b: ReadingInput }) {
     <svg
       viewBox={`-70 -10 ${SIZE + 140} ${SIZE + 20}`}
       width="100%"
-      height="auto"
-      style={{ display: "block", maxWidth: 620 }}
+      style={{ display: "block", maxWidth: 620, height: "auto" }}
       aria-label="two compasses overlaid"
     >
       {/* rings */}
@@ -45,13 +58,15 @@ function OverlayCompass({ a, b }: { a: ReadingInput; b: ReadingInput }) {
       {/* axes */}
       {RADIAL_ORDER.map((k, i) => {
         const ang = -Math.PI / 2 + (i * Math.PI * 2) / 8;
+        const active = highlight === k;
         return (
           <line
             key={k}
             x1={cx} y1={cy}
             x2={cx + Math.cos(ang) * rMax}
             y2={cy + Math.sin(ang) * rMax}
-            stroke="var(--rule)"
+            stroke={active ? "var(--candle)" : "var(--rule)"}
+            strokeWidth={active ? 2 : 1}
           />
         );
       })}
@@ -83,6 +98,7 @@ function OverlayCompass({ a, b }: { a: ReadingInput; b: ReadingInput }) {
         const ang = -Math.PI / 2 + (i * Math.PI * 2) / 8;
         const lx = cx + Math.cos(ang) * (rMax + 26);
         const ly = cy + Math.sin(ang) * (rMax + 26);
+        const active = highlight === k;
         const anchor =
           Math.abs(Math.cos(ang)) < 0.25 ? "middle" :
           Math.cos(ang) > 0 ? "start" : "end";
@@ -96,7 +112,8 @@ function OverlayCompass({ a, b }: { a: ReadingInput; b: ReadingInput }) {
               fontFamily: "var(--font-serif)",
               fontStyle: "italic",
               fontSize: 14,
-              fill: "var(--ink-2)",
+              fill: active ? "var(--candle)" : "var(--ink-2)",
+              transition: "fill var(--t)",
             }}
           >
             {k}
@@ -150,10 +167,13 @@ function ReadingColumn({
 
 function CompareInner() {
   const params = useSearchParams();
+  const recordTape = useField((s) => s.recordTape);
   const aHash = params?.get("a") ?? "";
   const bHash = params?.get("b") ?? "";
   const a = aHash ? decodeReadingHash(aHash) : null;
   const b = bHash ? decodeReadingHash(bHash) : null;
+  const [playing, setPlaying] = useState<"a" | "b" | null>(null);
+  const [highlight, setHighlight] = useState<ConcernKey | null>(null);
 
   // diff between the two — concerns delta
   const diff: { k: ConcernKey; d: number }[] | null = (a && b)
@@ -162,8 +182,32 @@ function CompareInner() {
       .slice(0, 4)
     : null;
 
+  const playInput = async (which: "a" | "b", input: ReadingInput) => {
+    if (playing) return;
+    setPlaying(which);
+    recordTape("sigil", 0.85, `compare/${which}`);
+    try {
+      await getFieldAudio().playSigilPhrase(input.concerns);
+    } catch {
+      getFieldAudio().refuse();
+    } finally {
+      setPlaying(null);
+    }
+  };
+
+  const pulseAxis = (k: ConcernKey, delta: number) => {
+    setHighlight(k);
+    recordTape("concern", Math.min(1, Math.abs(delta) / 80 + 0.25), `compare/${k}`);
+    try {
+      getFieldAudio().playNote(57 + RADIAL_ORDER.indexOf(k) * 2, 180);
+    } catch { /* noop */ }
+    window.setTimeout(() => {
+      setHighlight((current) => (current === k ? null : current));
+    }, 900);
+  };
+
   return (
-    <section className="rule">
+    <section className="rule" data-pretext-ignore="true">
       <div className="wrap">
         <div className="t-eyebrow">compare · two nights overlaid</div>
         <h2 className="t-h2 italic" style={{ marginTop: 12, marginBottom: 24 }}>
@@ -177,8 +221,32 @@ function CompareInner() {
               padding: "60px 24px",
               border: "1px dashed var(--rule)",
               textAlign: "center",
+              position: "relative",
+              overflow: "hidden",
             }}
           >
+            <div
+              aria-hidden="true"
+              style={{
+                display: "flex",
+                justifyContent: "center",
+                gap: 18,
+                marginBottom: 22,
+                opacity: 0.28,
+                color: "var(--sea)",
+              }}
+            >
+              <ConcernSigil concerns={BASE_CONCERNS} size={96} showAxes showRing showDots={false} />
+              <ConcernSigil
+                concerns={{ ...BASE_CONCERNS, prayer: 72, risk: 38, future: 68 }}
+                size={96}
+                showAxes
+                showRing
+                showDots={false}
+                stroke="var(--candle)"
+                fill="rgba(200,115,42,0.12)"
+              />
+            </div>
             <p className="t-h3 italic" style={{ color: "var(--ink-2)", maxWidth: "40ch", margin: "0 auto" }}>
               pick two readings to compare. open /kept and use the compare button on any pair.
             </p>
@@ -210,7 +278,36 @@ function CompareInner() {
             }}
           >
             <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "center" }}>
-              <OverlayCompass a={a} b={b} />
+              <OverlayCompass a={a} b={b} highlight={highlight} />
+            </div>
+            <div
+              style={{
+                gridColumn: "1 / -1",
+                display: "flex",
+                justifyContent: "center",
+                gap: 10,
+                flexWrap: "wrap",
+                marginTop: -12,
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => void playInput("a", a)}
+                disabled={Boolean(playing) && playing !== "a"}
+                className="t-mono"
+                style={compareButton(playing === "a", "var(--candle)")}
+              >
+                {playing === "a" ? "playing a" : "play a sigil"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void playInput("b", b)}
+                disabled={Boolean(playing) && playing !== "b"}
+                className="t-mono"
+                style={compareButton(playing === "b", "var(--sea)")}
+              >
+                {playing === "b" ? "playing b" : "play b sigil"}
+              </button>
             </div>
             <ReadingColumn input={a} color="var(--candle)" label="reading a" />
             <ReadingColumn input={b} color="var(--sea)" label="reading b" />
@@ -220,11 +317,27 @@ function CompareInner() {
                 <div className="t-eyebrow">where they differ most</div>
                 <ul style={{ listStyle: "none", padding: 0, margin: "12px 0 0", display: "grid", gap: 8 }}>
                   {diff.map(({ k, d }) => (
-                    <li key={k} className="t-meta">
-                      <span className="italic" style={{ fontFamily: "var(--font-serif)", fontSize: 17 }}>{k}</span>
-                      <span style={{ marginLeft: 12, color: d > 0 ? "var(--candle)" : "var(--sea)" }}>
-                        {d > 0 ? `+${d}` : d} {d > 0 ? "in a" : "in b"}
-                      </span>
+                    <li key={k}>
+                      <button
+                        type="button"
+                        onClick={() => pulseAxis(k, d)}
+                        className="t-meta"
+                        style={{
+                          width: "100%",
+                          border: `1px solid ${highlight === k ? "var(--candle)" : "var(--rule)"}`,
+                          background: highlight === k ? "rgba(200,115,42,0.08)" : "transparent",
+                          color: "var(--ink)",
+                          padding: "9px 12px",
+                          textAlign: "left",
+                          cursor: "pointer",
+                          transition: "border-color var(--t), background var(--t)",
+                        }}
+                      >
+                        <span className="italic" style={{ fontFamily: "var(--font-serif)", fontSize: 17 }}>{k}</span>
+                        <span style={{ marginLeft: 12, color: d > 0 ? "var(--candle)" : "var(--sea)" }}>
+                          {d > 0 ? `+${d}` : d} {d > 0 ? "in a" : "in b"}
+                        </span>
+                      </button>
                     </li>
                   ))}
                 </ul>
@@ -241,6 +354,19 @@ function CompareInner() {
       </div>
     </section>
   );
+}
+
+function compareButton(active: boolean, color: string): React.CSSProperties {
+  return {
+    background: active ? "var(--paper-2)" : "transparent",
+    border: `1px solid ${active ? color : "var(--rule)"}`,
+    color: active ? color : "var(--ink)",
+    padding: "10px 16px",
+    cursor: active ? "default" : "pointer",
+    fontSize: 12,
+    letterSpacing: "0.06em",
+    textTransform: "lowercase",
+  };
 }
 
 export default function ComparePage() {
