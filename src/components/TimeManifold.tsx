@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { getFieldAudio } from "@/lib/audio";
+import { useField } from "@/store/field";
 
 function formatTime(ms: number) {
   const total = Math.max(0, Math.floor(ms));
@@ -14,6 +16,19 @@ function pathFromPoints(points: Array<readonly [number, number]>) {
   return points.map(([x, y], index) => `${index === 0 ? "M" : "L"}${x.toFixed(1)} ${y.toFixed(1)}`).join(" ");
 }
 
+function cubicPoint(
+  t: number,
+  p0: readonly [number, number],
+  p1: readonly [number, number],
+  p2: readonly [number, number],
+  p3: readonly [number, number],
+): readonly [number, number] {
+  const inv = 1 - t;
+  const x = inv * inv * inv * p0[0] + 3 * inv * inv * t * p1[0] + 3 * inv * t * t * p2[0] + t * t * t * p3[0];
+  const y = inv * inv * inv * p0[1] + 3 * inv * inv * t * p1[1] + 3 * inv * t * t * p2[1] + t * t * t * p3[1];
+  return [x, y];
+}
+
 export default function TimeManifold() {
   const [elapsed, setElapsed] = useState(0);
   const [running, setRunning] = useState(false);
@@ -22,6 +37,7 @@ export default function TimeManifold() {
   const [laps, setLaps] = useState<number[]>([]);
   const startedAt = useRef(0);
   const storedElapsed = useRef(0);
+  const lastControlAt = useRef(0);
 
   useEffect(() => {
     if (!running) return;
@@ -38,6 +54,19 @@ export default function TimeManifold() {
   const gamma = 1 / Math.sqrt(Math.max(0.02, 1 - velocity * velocity));
   const proper = elapsed / gamma;
   const progress = (elapsed % 60000) / 60000;
+  const worldline = useMemo(() => ({
+    p0: [112, 342 - velocity * 82] as const,
+    p1: [280, 280 - mass * 0.34] as const,
+    p2: [462, 278 + velocity * 40] as const,
+    p3: [812, 132 + velocity * 92] as const,
+  }), [mass, velocity]);
+  const lapMarkers = useMemo(() => {
+    return laps.map((value, index) => {
+      const t = (value % 60000) / 60000;
+      const [x, y] = cubicPoint(t, worldline.p0, worldline.p1, worldline.p2, worldline.p3);
+      return { value, index, x, y };
+    });
+  }, [laps, worldline]);
 
   const grid = useMemo(() => {
     const cx = 470;
@@ -63,9 +92,16 @@ export default function TimeManifold() {
     if (running) {
       storedElapsed.current = elapsed;
       setRunning(false);
+      try { getFieldAudio().thud(); } catch { /* noop */ }
+      useField.getState().recordTape("sigil", 0.48, "time/pause");
       return;
     }
     setRunning(true);
+    try {
+      getFieldAudio().chime();
+      window.setTimeout(() => getFieldAudio().playNote(72, 85), 95);
+    } catch { /* noop */ }
+    useField.getState().recordTape("sigil", 0.78, "time/start");
   };
 
   const reset = () => {
@@ -73,14 +109,27 @@ export default function TimeManifold() {
     setElapsed(0);
     setRunning(false);
     setLaps([]);
+    try { getFieldAudio().thud(); } catch { /* noop */ }
+    useField.getState().recordTape("sigil", 0.34, "time/reset");
   };
 
   const lap = () => {
     setLaps((current) => [elapsed, ...current].slice(0, 4));
+    try { getFieldAudio().playNote(76, 120); } catch { /* noop */ }
+    useField.getState().recordTape("sigil", 0.72, `time/lap/${formatTime(elapsed)}`);
+  };
+
+  const markControl = (meta: string, normalized: number) => {
+    const now = performance.now();
+    if (now - lastControlAt.current < 140) return;
+    lastControlAt.current = now;
+    const value = Math.max(0, Math.min(1, normalized));
+    try { getFieldAudio().playNote(45 + Math.round(value * 24), 90); } catch { /* noop */ }
+    useField.getState().recordTape("sigil", 0.32 + value * 0.5, `time/${meta}`);
   };
 
   return (
-    <div className="time-page" data-touch-surface="true">
+    <div className="time-page" data-touch-surface="true" data-pretext-ignore="true">
       <section className="time-shell">
         <div className="time-copy">
           <p className="t-eyebrow time-kicker">time / chronograph / spacetime manifold</p>
@@ -95,12 +144,33 @@ export default function TimeManifold() {
           </div>
           <label>
             <span>mass</span>
-            <input type="range" min="0" max="100" value={mass} onChange={(event) => setMass(Number(event.target.value))} />
+            <input
+              type="range"
+              min="0"
+              max="100"
+              value={mass}
+              onChange={(event) => {
+                const value = Number(event.target.value);
+                setMass(value);
+                markControl("mass", value / 100);
+              }}
+            />
             <strong>{mass}</strong>
           </label>
           <label>
             <span>velocity</span>
-            <input type="range" min="0" max="0.94" step="0.01" value={velocity} onChange={(event) => setVelocity(Number(event.target.value))} />
+            <input
+              type="range"
+              min="0"
+              max="0.94"
+              step="0.01"
+              value={velocity}
+              onChange={(event) => {
+                const value = Number(event.target.value);
+                setVelocity(value);
+                markControl("velocity", value / 0.94);
+              }}
+            />
             <strong>{velocity.toFixed(2)}c</strong>
           </label>
         </div>
@@ -161,19 +231,35 @@ export default function TimeManifold() {
             <ellipse cx="470" cy="238" rx={42 + mass * 0.34} ry={18 + mass * 0.16} fill="rgba(217,161,77,0.2)" />
             <circle cx="470" cy="230" r={18 + mass * 0.24} fill="#d9a14d" opacity="0.86" />
             <path
-              d={`M112 ${342 - velocity * 82} C 280 ${280 - mass * 0.34}, 462 ${278 + velocity * 40}, 812 ${132 + velocity * 92}`}
+              d={`M${worldline.p0[0]} ${worldline.p0[1]} C ${worldline.p1[0]} ${worldline.p1[1]}, ${worldline.p2[0]} ${worldline.p2[1]}, ${worldline.p3[0]} ${worldline.p3[1]}`}
               fill="none"
               stroke="#f2eee6"
               strokeWidth="3"
               strokeLinecap="round"
             />
+            {lapMarkers.map((marker) => (
+              <g key={`${marker.value}-${marker.index}`} className="time-lap-marker">
+                <line
+                  x1={marker.x}
+                  y1={marker.y - 18}
+                  x2={marker.x}
+                  y2={marker.y + 18}
+                  stroke="rgba(217,161,77,0.62)"
+                  strokeWidth="1"
+                  strokeDasharray="3 5"
+                />
+                <circle cx={marker.x} cy={marker.y} r="6" fill="#d9a14d" />
+                <circle cx={marker.x} cy={marker.y} r="13" fill="none" stroke="rgba(217,161,77,0.28)" />
+                <text x={marker.x + 12} y={marker.y - 10} className="time-caption">lap {marker.index + 1}</text>
+              </g>
+            ))}
             <text x="68" y="410" className="time-caption">space grid</text>
             <text x="650" y="80" className="time-caption">worldline tilts with velocity</text>
           </svg>
         </div>
       </section>
 
-      <style>{`
+      <style dangerouslySetInnerHTML={{ __html: `
         .time-page {
           min-height: 100vh;
           background: #171413;
@@ -292,14 +378,17 @@ export default function TimeManifold() {
         @media (max-width: 900px) {
           .time-copy h1 { font-size: 42px; }
           .time-controls {
-            grid-auto-flow: column;
-            grid-auto-columns: minmax(210px, 78vw);
-            grid-template-columns: none;
-            overflow-x: auto;
-            overscroll-behavior-x: contain;
-            padding-bottom: 8px;
+            grid-template-columns: minmax(0, 1fr);
+            overflow: visible;
+            padding-bottom: 0;
           }
-          .time-buttons { min-width: 260px; }
+          .time-buttons { min-width: 0; }
+          .time-controls label {
+            grid-template-columns: minmax(66px, auto) minmax(0, 1fr) minmax(58px, auto);
+          }
+          .time-controls input[type="range"] {
+            min-width: 0;
+          }
           .time-stage { grid-template-columns: 1fr; }
           .time-watch {
             grid-template-columns: minmax(170px, 220px) 1fr;
@@ -312,7 +401,7 @@ export default function TimeManifold() {
           .time-watch { grid-template-columns: 1fr; }
           .time-readout strong { font-size: 34px; }
         }
-      `}</style>
+      ` }} />
     </div>
   );
 }
