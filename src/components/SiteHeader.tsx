@@ -197,12 +197,17 @@ export default function SiteHeader() {
           position: "sticky",
           top: 0,
           zIndex: 30,
-          height: 56,
+          // grow by the top safe-area inset (notch) so content stays clear of
+          // the device bezel under viewport-fit=cover; the bar itself remains
+          // 56px tall below the inset.
+          height: "calc(56px + env(safe-area-inset-top, 0px))",
           background: dark ? "rgba(8, 17, 28, 0.72)" : "var(--paper)",
           backdropFilter: dark ? "blur(8px)" : undefined,
           WebkitBackdropFilter: dark ? "blur(8px)" : undefined,
           borderBottom: dark ? "1px solid rgba(232, 226, 213, 0.10)" : "1px solid var(--rule)",
-          padding: "0 var(--pad-x)",
+          paddingTop: "env(safe-area-inset-top, 0px)",
+          paddingLeft: "max(var(--pad-x), env(safe-area-inset-left, 0px))",
+          paddingRight: "max(var(--pad-x), env(safe-area-inset-right, 0px))",
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",

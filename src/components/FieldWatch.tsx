@@ -3,6 +3,7 @@
 import { usePathname } from "next/navigation";
 import { useField } from "@/store/field";
 import { deriveFieldState } from "@/lib/field-state";
+import { isDarkRoute } from "@/lib/dark-routes";
 
 /**
  * Field watch.
@@ -22,10 +23,7 @@ export default function FieldWatch() {
   if (pathname.startsWith("/reading/")) return null;
 
   // dark route palette — same rule as Tape
-  const dark =
-    pathname.startsWith("/tide") ||
-    pathname.startsWith("/watch") ||
-    pathname.startsWith("/waves");
+  const dark = isDarkRoute(pathname);
 
   const state = deriveFieldState(concerns, tape);
 

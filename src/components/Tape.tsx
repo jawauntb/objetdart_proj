@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useField } from "@/store/field";
 import type { TapeEvent, TapeEventKind } from "@/store/field";
 import { getFieldAudio } from "@/lib/audio";
+import { isDarkRoute } from "@/lib/dark-routes";
 
 /**
  * The tape.
@@ -25,11 +26,9 @@ export default function Tape() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [hovered, setHovered] = useState<TapeEvent | null>(null);
 
-  // routes that need the dark palette
-  const dark =
-    pathname.startsWith("/tide") ||
-    pathname.startsWith("/watch") ||
-    pathname.startsWith("/waves");
+  // routes that need the dark palette — every immersive dark scene, so the
+  // tape never paints a light cream band across the bottom of dark water.
+  const dark = isDarkRoute(pathname);
 
   // hide tape on reading-share pages (OG / printable) — keep them pristine
   const hide = pathname.startsWith("/reading/");

@@ -118,9 +118,9 @@ export default function Ocean() {
           float t = uTime;
 
           // ── horizon split ──────────────────────────────────────
-          // sky occupies the top ~17%, the sea everything below. A soft
+          // sky occupies a thin top band, the sea everything below. A soft
           // band of haze sits where they meet.
-          float horizon = 0.17;
+          float horizon = 0.15;
           float seaT = clamp((uv.y - horizon) / (1.0 - horizon), 0.0, 1.0);
 
           // ── pointer ripples (height field) ─────────────────────
@@ -144,26 +144,37 @@ export default function Ocean() {
           float persp = mix(0.18, 1.0, seaT);
 
           // ── flow warp ──────────────────────────────────────────
+          // larger + faster than a still pond so the body of water visibly
+          // moves: swells travel, the surface is never frozen.
           vec2 flow = vec2(
-            sin(uv.y * 9.0 + t * 0.45) * 0.014,
-            sin(uv.x * 7.0 + t * 0.32) * 0.010
+            sin(uv.y * 9.0 + t * 0.72) * 0.022,
+            sin(uv.x * 7.0 + t * 0.50) * 0.015
+          ) * persp;
+          // a second, slower long-period swell so motion reads at every scale
+          flow += vec2(
+            sin(uv.y * 3.4 - t * 0.30) * 0.010,
+            cos(uv.x * 2.6 + t * 0.24) * 0.008
           ) * persp;
           vec2 wuv = uv + flow + uTilt * (0.4 + seaT) + vec2(0.0, uSwell * 0.010 * persp);
           wuv += rippleHi * 0.012;
 
           // ── depth palette ──────────────────────────────────────
-          // azure skyline -> cerulean -> teal-green shelf -> deep ocean
-          // -> cold prussian-gray floor.
-          vec3 azure    = vec3(0.52, 0.71, 0.82);
-          vec3 cerulean = vec3(0.20, 0.48, 0.66);
-          vec3 teal     = vec3(0.10, 0.42, 0.46); // the green shelf
-          vec3 deep     = vec3(0.06, 0.20, 0.36);
-          vec3 floorGray= vec3(0.10, 0.16, 0.22); // deep ocean gray
+          // azure skyline -> cerulean -> teal-green shelf -> Hokusai
+          // prussian blue -> deep ocean -> a near-black abyssal floor.
+          // the deep is meant to read as genuinely DEEP: most of the lower
+          // sea falls away into prussian and then darkness.
+          vec3 azure    = vec3(0.46, 0.66, 0.78);
+          vec3 cerulean = vec3(0.16, 0.42, 0.60);
+          vec3 teal     = vec3(0.07, 0.34, 0.42); // the green shelf
+          vec3 prussian = vec3(0.04, 0.16, 0.32); // Hokusai's prussian blue
+          vec3 deep     = vec3(0.02, 0.08, 0.18);
+          vec3 abyss    = vec3(0.004, 0.02, 0.06); // near-black deep water
 
-          vec3 color = mix(azure, cerulean, smoothstep(0.00, 0.30, seaT));
-          color = mix(color, teal,      smoothstep(0.26, 0.52, seaT));
-          color = mix(color, deep,      smoothstep(0.50, 0.80, seaT));
-          color = mix(color, floorGray, smoothstep(0.80, 1.00, seaT));
+          vec3 color = mix(azure, cerulean, smoothstep(0.00, 0.22, seaT));
+          color = mix(color, teal,     smoothstep(0.20, 0.40, seaT));
+          color = mix(color, prussian, smoothstep(0.38, 0.60, seaT));
+          color = mix(color, deep,     smoothstep(0.58, 0.80, seaT));
+          color = mix(color, abyss,    smoothstep(0.80, 1.00, seaT));
 
           // ── river ribbon ───────────────────────────────────────
           // a meandering current crossing the sea: a brighter, faster band
@@ -210,17 +221,18 @@ export default function Ocean() {
           color += wash * 0.022 * vec3(0.85, 0.92, 1.0);
 
           // ── sky ────────────────────────────────────────────────
-          // pale azure high, warming to a misty gray-blue at the skyline.
-          vec3 skyTop = vec3(0.74, 0.84, 0.90);
-          vec3 skyLow = vec3(0.86, 0.89, 0.88);
+          // a Hokusai sky: warm cream/beige, faintly deeper at the very top,
+          // paling to a misty haze at the skyline. ties to the paper palette.
+          vec3 skyTop = vec3(0.80, 0.78, 0.70);
+          vec3 skyLow = vec3(0.92, 0.89, 0.81);
           vec3 sky = mix(skyTop, skyLow, smoothstep(0.0, horizon, uv.y));
           // faint sun bloom in the sky above the glint column
           sky += col * exp(-pow((horizon - uv.y) * 6.0, 2.0)) * 0.10;
 
-          // horizon haze: blend a soft band so the seam is atmospheric.
+          // horizon haze: blend a soft warm band so the seam is atmospheric.
           float seam = smoothstep(horizon - 0.04, horizon, uv.y)
                      * (1.0 - smoothstep(horizon, horizon + 0.06, uv.y));
-          color = mix(color, vec3(0.80, 0.87, 0.90), seam * 0.5);
+          color = mix(color, vec3(0.86, 0.84, 0.76), seam * 0.5);
 
           // choose sky above the horizon
           float isSea = step(horizon, uv.y);
@@ -492,11 +504,12 @@ export default function Ocean() {
           const dpr = Math.min(window.devicePixelRatio || 1, 2);
           wctx.setTransform(dpr, 0, 0, dpr, 0, 0);
           const sg = wctx.createLinearGradient(0, 0, 0, h);
-          sg.addColorStop(0.00, "rgba(196,214,222,1)");
-          sg.addColorStop(0.17, "rgba(130,180,205,1)");
-          sg.addColorStop(0.40, "rgba( 26,107,117,1)"); // teal shelf
-          sg.addColorStop(0.72, "rgba( 16, 52, 92,1)");
-          sg.addColorStop(1.00, "rgba( 24, 40, 56,1)"); // ocean gray
+          sg.addColorStop(0.00, "rgba(229,224,206,1)"); // warm cream sky
+          sg.addColorStop(0.15, "rgba(150,176,190,1)");
+          sg.addColorStop(0.34, "rgba( 20, 92,108,1)"); // teal shelf
+          sg.addColorStop(0.56, "rgba( 12, 44, 84,1)"); // prussian
+          sg.addColorStop(0.80, "rgba(  6, 22, 48,1)"); // deep
+          sg.addColorStop(1.00, "rgba(  2,  8, 18,1)"); // abyss
           wctx.fillStyle = sg;
           wctx.fillRect(0, 0, w, h);
         }
@@ -504,19 +517,20 @@ export default function Ocean() {
 
       // ── 2D surface layer ────────────────────────────────────────
       sctx.clearRect(0, 0, w, h);
-      const horizonY = h * 0.17;
+      const horizonY = h * 0.15;
 
       // foam crest lines marching toward the viewer; spacing widens with
-      // perspective so they read as receding swells.
+      // perspective so they read as receding swells. Faster + taller than a
+      // pond so the water visibly travels.
       const crests = 7;
       for (let i = 0; i < crests; i++) {
         const f = i / (crests - 1);
         // perspective: cluster near horizon, spread near the bottom
         const yBase = horizonY + (h - horizonY) * (f * f);
-        const amp = (3 + f * 18) * swellMod;
+        const amp = (4 + f * 22) * swellMod;
         const freq = 0.006 + (1 - f) * 0.010;
-        const speed = 0.14 + f * 0.30;
-        const alpha = 0.10 + f * 0.32;
+        const speed = 0.24 + f * 0.46;
+        const alpha = 0.10 + f * 0.30;
         sctx.strokeStyle = `rgba(232, 244, 248, ${alpha})`;
         sctx.lineWidth = 1 + f * 0.6;
         sctx.beginPath();
@@ -545,6 +559,13 @@ export default function Ocean() {
           }
         }
       }
+
+      // ── the Great Wave (Hokusai) ────────────────────────────────
+      // A breaking prussian-blue swell rises across the upper sea, its lip
+      // curling forward into a barrel and shedding the iconic claw-foam.
+      // Procedural so the whole thing drifts and breathes — the wave is
+      // never still — and so it scales from phone to desktop.
+      drawGreatWave(sctx, w, h, horizonY, t * motion, swellMod);
 
       // sun-glint sparkle in the central column just under the horizon
       const glintTop = horizonY + 6;
@@ -606,7 +627,7 @@ export default function Ocean() {
         position: "fixed",
         inset: 0,
         overflow: "hidden",
-        background: "#0e1c2c",
+        background: "#03070f",
       }}
     >
       <canvas
@@ -633,8 +654,10 @@ export default function Ocean() {
         aria-hidden="true"
         style={{
           position: "fixed",
-          left: 22,
-          bottom: 26,
+          left: "calc(16px + env(safe-area-inset-left, 0px))",
+          // lifted clear of the tape (40px) and the candle mark above it,
+          // so it never hides under the mobile browser's bottom chrome.
+          bottom: "calc(104px + env(safe-area-inset-bottom, 0px))",
           width: 64,
           height: 64,
           pointerEvents: "none",
@@ -663,7 +686,10 @@ export default function Ocean() {
       <div
         style={{
           position: "fixed",
-          left: 0, right: 0, bottom: 24,
+          left: 0, right: 0,
+          // sit just above the bottom tape strip + the device safe area so the
+          // line is always legible on mobile, never clipped by browser chrome.
+          bottom: "calc(52px + env(safe-area-inset-bottom, 0px))",
           textAlign: "center",
           pointerEvents: "none",
           zIndex: 6,
@@ -701,4 +727,145 @@ export default function Ocean() {
       </div>
     </div>
   );
+}
+
+/**
+ * The Great Wave — a Hokusai-inspired breaking swell drawn on the 2D surface
+ * layer over the WebGL water.
+ *
+ * It is fully procedural so it lives: the crest sharpens into pointed claws,
+ * a hero curl barrels forward across the upper sea and sheds the iconic
+ * foam fingers, and the whole form drifts and breathes with time. Scales
+ * from phone to desktop off the smaller viewport dimension.
+ */
+function drawGreatWave(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  horizonY: number,
+  t: number,
+  swellMod: number,
+) {
+  const S = Math.min(w, h);
+  // the wave rides the upper sea, just under the horizon haze
+  const waveBaseY = horizonY + (h - horizonY) * 0.26;
+  const drift = t * 22;
+  const breathe = 1 + Math.sin(t * 0.5) * 0.04;
+  const baseAmp = S * 0.05 * swellMod;
+  const heroAmp = S * 0.22 * breathe * swellMod;
+  // the hero curl wanders slowly across the upper sea
+  const heroX = w * (0.30 + 0.03 * Math.sin(t * 0.05));
+  const heroW = w * 0.55;
+
+  const heroBoost = (x: number) =>
+    Math.exp(-Math.pow((x - heroX) / (heroW * 0.5), 2));
+
+  // a sharpened, drifting crest — pointed like Hokusai's water, not a smooth
+  // sine — amplified under the hero curl.
+  const crestY = (x: number) => {
+    const ph = x * 0.011 - drift * 0.012;
+    let s =
+      Math.sin(ph) +
+      0.42 * Math.sin(ph * 2.3 - drift * 0.02) +
+      0.22 * Math.sin(ph * 3.9 + drift * 0.015);
+    s = s / 1.64; // ~ -1..1
+    s = Math.sign(s) * Math.pow(Math.abs(s), 0.72); // sharpen the crests
+    const amp = baseAmp + heroAmp * heroBoost(x);
+    return waveBaseY - amp * (s * 0.5 + 0.5);
+  };
+
+  // ── filled wave body — prussian-blue swell ──────────────────────
+  const footY = waveBaseY + baseAmp * 1.4;
+  ctx.beginPath();
+  ctx.moveTo(0, crestY(0));
+  for (let x = 4; x <= w; x += 4) ctx.lineTo(x, crestY(x));
+  ctx.lineTo(w, footY);
+  ctx.lineTo(0, footY);
+  ctx.closePath();
+  const body = ctx.createLinearGradient(0, waveBaseY - heroAmp, 0, footY);
+  body.addColorStop(0.0, "rgba(28, 64, 104, 0.0)");
+  body.addColorStop(0.12, "rgba(20, 56, 96, 0.55)");
+  body.addColorStop(0.5, "rgba(10, 34, 70, 0.70)");
+  body.addColorStop(1.0, "rgba(4, 16, 40, 0.55)");
+  ctx.fillStyle = body;
+  ctx.fill();
+
+  // ── foam crest line ─────────────────────────────────────────────
+  ctx.strokeStyle = "rgba(244, 250, 252, 0.85)";
+  ctx.lineWidth = 2.0;
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  for (let x = 0; x <= w; x += 4) {
+    const y = crestY(x);
+    if (x === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  // ── claw foam scattered along the crest (Hokusai's fingers) ─────
+  for (let x = 6; x <= w; x += 9) {
+    const boost = heroBoost(x);
+    const y = crestY(x);
+    const tw = 0.5 + 0.5 * Math.sin(t * 3 + x * 0.05);
+    const density = 0.12 + boost * 0.9;
+    if (tw * density > 0.32) {
+      const r = (0.8 + boost * 2.2) * (0.6 + tw * 0.6);
+      ctx.fillStyle = `rgba(247, 251, 252, ${0.25 + boost * 0.5})`;
+      ctx.beginPath();
+      ctx.arc(x, y - r * 0.4, r, 0, 7);
+      ctx.fill();
+    }
+  }
+
+  // ── the hero barrel: curling lip + spiral eye + claw fingers ────
+  const eyeX = heroX + S * 0.085;
+  const eyeY = waveBaseY - heroAmp * 0.52;
+  const R = S * 0.135 * breathe;
+
+  // the overhanging lip — a bright thick arc sweeping up and over, curling
+  // forward to the right (canvas y is down, so this traces left → top → right)
+  ctx.lineCap = "round";
+  ctx.strokeStyle = "rgba(248, 252, 253, 0.95)";
+  ctx.lineWidth = 3.2;
+  ctx.beginPath();
+  ctx.arc(eyeX, eyeY, R, Math.PI * 1.08, Math.PI * 2.18, false);
+  ctx.stroke();
+
+  // inner curls of the barrel — nested fading arcs spiralling into the eye
+  for (let k = 1; k <= 3; k++) {
+    ctx.strokeStyle = `rgba(236, 246, 250, ${0.5 - k * 0.12})`;
+    ctx.lineWidth = 2.2 - k * 0.4;
+    ctx.beginPath();
+    ctx.arc(
+      eyeX + k * R * 0.06,
+      eyeY + k * R * 0.05,
+      R * (1 - 0.2 * k),
+      Math.PI * 1.15,
+      Math.PI * 2.05,
+      false,
+    );
+    ctx.stroke();
+  }
+
+  // claw fingers spilling off the lip tip — small circles raining forward
+  const tipX = eyeX + Math.cos(Math.PI * 2.18) * R;
+  const tipY = eyeY + Math.sin(Math.PI * 2.18) * R;
+  const fingers = 7;
+  for (let i = 0; i < fingers; i++) {
+    const f = i / (fingers - 1);
+    const ang = -0.5 + f * 1.9; // fan from up-right to down
+    const reach = R * (0.5 + f * 0.9);
+    const fx = tipX + Math.cos(ang) * reach;
+    const fy = tipY + Math.sin(ang) * reach * 0.7;
+    const tw = 0.5 + 0.5 * Math.sin(t * 4 + i * 1.3);
+    const fr = (2.4 - f * 1.4) * (0.6 + tw * 0.6);
+    ctx.fillStyle = `rgba(248, 252, 253, ${0.5 - f * 0.32})`;
+    ctx.beginPath();
+    ctx.arc(fx, fy, Math.max(0.6, fr), 0, 7);
+    ctx.fill();
+    // a tiny trailing droplet
+    ctx.beginPath();
+    ctx.arc(fx + fr * 1.4, fy + fr * 1.1, Math.max(0.4, fr * 0.45), 0, 7);
+    ctx.fill();
+  }
 }
