@@ -86,6 +86,10 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
+  // draw into the safe areas (notch / home indicator) so immersive scenes
+  // like /ocean fill the screen edge-to-edge; chrome opts back in with
+  // env(safe-area-inset-*) so nothing important hides under device bezels.
+  viewportFit: "cover",
   themeColor: "#F2EEE6",
 };
 
