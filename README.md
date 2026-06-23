@@ -24,6 +24,21 @@ yarn start
 
 > Using npm instead of yarn? `npm install` then `npm run dev` works identically.
 
+### Analytics (optional)
+
+Google Analytics 4 is wired in but stays dormant until you give it a Measurement ID. Set an env var (in `.env.local` for dev, or your host's env settings for prod):
+
+```bash
+NEXT_PUBLIC_GA_ID=G-XXXXXXXXXX
+```
+
+With no `NEXT_PUBLIC_GA_ID` set, no tracking scripts load at all — dev and any un-wired deploy stay clean.
+
+When configured, it tracks:
+
+- **Page views** on first load and on every client-side route change (watch, signal, beyond, …).
+- **Clicks** on any interactive element (links, buttons, anything with `role="button"`) via one delegated listener — no per-component wiring. Each click sends a `click` event with a `label` (from `data-analytics`, then `aria-label`, then the element's text) and the `page_path`. To give a control a clean custom label, add `data-analytics="hold-candle"` to it.
+
 ## How to use the instrument
 
 - **Enter field** — step past the threshold into the room.
