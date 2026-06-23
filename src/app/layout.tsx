@@ -7,6 +7,7 @@ import Tape from "@/components/Tape";
 import FieldWatch from "@/components/FieldWatch";
 import ConcernTint from "@/components/ConcernTint";
 import GlobalPretextText from "@/components/GlobalPretextText";
+import GoogleAnalytics from "@/components/GoogleAnalytics";
 
 const display = Cormorant_Garamond({
   subsets: ["latin"],
@@ -104,6 +105,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <CandleMark />
         <SoundToggle />
         <ConcernTint />
+        <GoogleAnalytics />
       </body>
     </html>
   );

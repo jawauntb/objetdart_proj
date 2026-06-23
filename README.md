@@ -24,6 +24,16 @@ yarn start
 
 > Using npm instead of yarn? `npm install` then `npm run dev` works identically.
 
+### Analytics (optional)
+
+Google Analytics 4 is wired in but stays dormant until you give it a Measurement ID. Set an env var (in `.env.local` for dev, or your host's env settings for prod):
+
+```bash
+NEXT_PUBLIC_GA_ID=G-XXXXXXXXXX
+```
+
+With no `NEXT_PUBLIC_GA_ID` set, no tracking scripts load at all — dev and any un-wired deploy stay clean.
+
 ## How to use the instrument
 
 - **Enter field** — step past the threshold into the room.
