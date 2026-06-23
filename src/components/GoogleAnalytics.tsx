@@ -1,4 +1,5 @@
 import Script from "next/script";
+import AnalyticsListener from "@/components/AnalyticsListener";
 
 // Google Analytics 4. Renders nothing unless NEXT_PUBLIC_GA_ID is set, so the
 // instrument stays clean (and untracked) in dev and in any deploy that hasn't
@@ -21,6 +22,7 @@ export default function GoogleAnalytics() {
           gtag('config', '${gaId}');
         `}
       </Script>
+      <AnalyticsListener gaId={gaId} />
     </>
   );
 }
