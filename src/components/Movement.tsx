@@ -213,6 +213,35 @@ export default function Movement() {
     rimRing.position.y = -1.2 + CFG.plateThick / 2;
     root.add(rimRing);
 
+    // ── studio grounding (added to scene, not root, so framing ignores it) ──
+    const floorY = -1.2 - CFG.plateThick / 2 - 0.05;
+    const floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(240, 240),
+      new THREE.MeshStandardMaterial({ color: 0x070809, metalness: 0.5, roughness: 0.55 }),
+    );
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.y = floorY;
+    floor.receiveShadow = true;
+    scene.add(floor);
+    // soft contact-shadow decal (works even when dynamic shadows are off)
+    const shadowTex = (() => {
+      const s = 256; const c = document.createElement("canvas"); c.width = c.height = s;
+      const x = c.getContext("2d")!;
+      const g = x.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+      g.addColorStop(0, "rgba(0,0,0,0.55)");
+      g.addColorStop(0.55, "rgba(0,0,0,0.32)");
+      g.addColorStop(1, "rgba(0,0,0,0)");
+      x.fillStyle = g; x.fillRect(0, 0, s, s);
+      const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+    })();
+    const contact = new THREE.Mesh(
+      new THREE.PlaneGeometry(CFG.plateR * 3.4, CFG.plateR * 3.4),
+      new THREE.MeshBasicMaterial({ map: shadowTex, transparent: true, depthWrite: false }),
+    );
+    contact.rotation.x = -Math.PI / 2;
+    contact.position.y = floorY + 0.02;
+    scene.add(contact);
+
     // helper to add a jewel in a chaton
     const addJewel = (x: number, z: number, y: number, r = 0.42) => {
       const j = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 0.22, 20), matRuby);
