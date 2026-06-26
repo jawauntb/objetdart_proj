@@ -1,4 +1,7 @@
 // Drive the /movement page through camera presets and save PNGs for review.
+// Dev-only tooling — Playwright is intentionally NOT a package.json dependency
+// (its postinstall downloads a browser, which we keep off the deploy path).
+// To run locally: `npm i -D playwright` then `node scripts/shoot.mjs <name>`.
 // Usage: node scripts/shoot.mjs <iterationName> [baseURL]
 import { chromium } from "playwright";
 import { mkdir } from "node:fs/promises";
