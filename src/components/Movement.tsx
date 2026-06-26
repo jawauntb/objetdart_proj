@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
@@ -93,8 +93,20 @@ function gearGeometry(opts: {
   return geo;
 }
 
+const SPEEDS = [
+  { label: "real time", v: 1 },
+  { label: "30×", v: 30 },
+  { label: "300×", v: 300 },
+];
+const VIEWS = ["iso", "top", "side", "macro-balance", "macro-escape", "macro-train"];
+
 export default function Movement() {
   const wrapRef = useRef<HTMLDivElement>(null);
+  const speedRef = useRef(1);
+  const applyViewRef = useRef<((n: string) => void) | null>(null);
+  const clockRef = useRef<HTMLSpanElement>(null);
+  const [speed, setSpeed] = useState(1);
+  const [view, setView] = useState("iso");
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -405,7 +417,7 @@ export default function Movement() {
     const ctr = box.getCenter(new THREE.Vector3());
     const sphere = box.getBoundingSphere(new THREE.Sphere());
     const R = sphere.radius;
-    const setView = (name: string) => {
+    const applyView = (name: string) => {
       controls.autoRotate = false;
       const set = (dir: THREE.Vector3, dist: number, t: THREE.Vector3) => {
         camera.position.copy(t).add(dir.clone().normalize().multiplyScalar(dist));
@@ -425,7 +437,8 @@ export default function Movement() {
         default: set(new THREE.Vector3(0.7, 1.0, 0.95), R * 2.3, C0);
       }
     };
-    setView(view0);
+    applyView(view0);
+    applyViewRef.current = applyView;
     controls.autoRotate = spin;
 
     // hide the global site chrome while inspecting the movement
@@ -435,7 +448,7 @@ export default function Movement() {
 
     // expose hooks for the screenshot harness
     (window as unknown as Record<string, unknown>).__movement = {
-      setView: (n: string) => { setView(n); renderer.render(scene, camera); },
+      setView: (n: string) => { applyView(n); renderer.render(scene, camera); },
       ready: true,
     };
 
@@ -449,30 +462,56 @@ export default function Movement() {
     const ro = new ResizeObserver(resize);
     ro.observe(wrap);
 
-    // ── animation: bind to real local time ──
-    let raf = 0;
+    // ── animation ──────────────────────────────────────────────────
+    // The escapement releases one escape-wheel tooth per balance cycle, so
+    // the fast wheels (escape/fourth/third) and the seconds hand advance in
+    // quantised steps — the signature "tick" of a mechanical watch — while
+    // the balance itself swings smoothly. At real-time rate this still tells
+    // the actual local time; the speed control fast-forwards the whole train.
+    const startLocalSec = (() => {
+      const d = new Date();
+      return d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds() + d.getMilliseconds() / 1000;
+    })();
     const epoch = Date.now();
+    const TICK = 0.4;          // seconds per escape tooth (15 teeth → 6 s/rev)
+    const balHz = 1 / TICK;    // one balance cycle per tooth = 2.5 Hz
+    let raf = 0;
+
     const tick = () => {
-      const now = new Date();
-      const sec = now.getSeconds() + now.getMilliseconds() / 1000;
-      const minutes = now.getMinutes() + sec / 60;
-      const hours = (now.getHours() % 12) + minutes / 60;
-      const tSec = (Date.now() - epoch) / 1000;
+      const sp = speedRef.current;
+      // simulated seconds-of-day: exact local time at 1×, fast-forwarded above
+      const simSec = sp === 1
+        ? (() => { const d = new Date(); return d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds() + d.getMilliseconds() / 1000; })()
+        : startLocalSec + ((Date.now() - epoch) / 1000) * sp;
 
-      // gear train rotates continuously at its real angular rate
-      stations.forEach((s) => { s.group.rotation.y = s.omega * (Date.now() / 1000); });
-      drum.rotation.y = barrel.omega * (Date.now() / 1000);
+      const step = TICK; // tooth cadence in sim-seconds (constant; sp scales simSec)
+      const tEff = Math.floor(simSec / step) * step; // quantised time for fast wheels
 
-      // balance oscillation (4 Hz) + pallet fork rocking in sympathy
-      const bw = Math.sin(tSec * Math.PI * 2 * 2.0) * 0.9; // amplitude ~300°→scaled
-      balance.rotation.y = bw;
-      fork.rotation.y = Math.sin(tSec * Math.PI * 2 * 2.0 + Math.PI / 2) * 0.18;
+      // fast wheels step; slow wheels (centre, barrel) run smooth
+      stations.forEach((s) => {
+        const smooth = s === center || s === barrel;
+        s.group.rotation.y = s.omega * (smooth ? simSec : tEff);
+      });
+      drum.rotation.y = barrel.omega * simSec;
+      ratchet.rotation.y = barrel.omega * simSec;
 
-      // hands → real time (clockwise as seen from +Y top)
-      hands.rotation.y = 0; // group base
-      hourHand.rotation.y = -hours / 12 * Math.PI * 2;
-      minuteHand.rotation.y = -minutes / 60 * Math.PI * 2;
-      secGroup.rotation.y = -sec / 60 * Math.PI * 2;
+      // balance: smooth SHM; pallet fork snaps with the tick
+      const ph = simSec * balHz; // cycles
+      balance.rotation.y = Math.sin(ph * Math.PI * 2) * 1.05;
+      fork.rotation.y = (Math.floor(ph * 2) % 2 ? 1 : -1) * 0.17;
+
+      // hands: hour/minute smooth, seconds steps with the escapement
+      hourHand.rotation.y = -((simSec / 3600) % 12) / 12 * Math.PI * 2;
+      minuteHand.rotation.y = -((simSec / 60) % 60) / 60 * Math.PI * 2;
+      secGroup.rotation.y = -((tEff % 60) / 60) * Math.PI * 2;
+
+      if (clockRef.current) {
+        const s = Math.floor(simSec) % 86400;
+        const hh = String(Math.floor(s / 3600) % 24).padStart(2, "0");
+        const mm = String(Math.floor(s / 60) % 60).padStart(2, "0");
+        const ss = String(s % 60).padStart(2, "0");
+        clockRef.current.textContent = `${hh}:${mm}:${ss}`;
+      }
 
       controls.update();
       renderer.render(scene, camera);
@@ -491,5 +530,58 @@ export default function Movement() {
     };
   }, []);
 
-  return <div ref={wrapRef} style={{ position: "fixed", inset: 0, background: "#0a0b0e" }} />;
+  return (
+    <div ref={wrapRef} style={{ position: "fixed", inset: 0, background: "#0a0b0e" }}>
+      <div className="mv-hud">
+        <div className="mv-title">
+          objet&nbsp;d&apos;art — calibre OD·1 <span className="mv-clock" ref={clockRef}>--:--:--</span>
+        </div>
+        <div className="mv-row" role="group" aria-label="speed">
+          {SPEEDS.map((s) => (
+            <button key={s.v} type="button" className={speed === s.v ? "on" : ""}
+              onClick={() => { speedRef.current = s.v; setSpeed(s.v); }}>{s.label}</button>
+          ))}
+        </div>
+        <div className="mv-row" role="group" aria-label="view">
+          {VIEWS.map((v) => (
+            <button key={v} type="button" className={view === v ? "on" : ""}
+              onClick={() => { applyViewRef.current?.(v); setView(v); }}>{v.replace("macro-", "")}</button>
+          ))}
+        </div>
+        <div className="mv-hint">drag to orbit · scroll / pinch to zoom · hands tell real local time</div>
+      </div>
+      <style dangerouslySetInnerHTML={{ __html: `
+        .mv-hud {
+          position: absolute; left: 0; top: 0; padding: 16px;
+          display: grid; gap: 8px; justify-items: start;
+          pointer-events: none; z-index: 10;
+          font-family: var(--font-mono, ui-monospace, monospace);
+        }
+        .mv-title {
+          font-family: var(--font-fraunces, Georgia, serif);
+          font-size: 15px; letter-spacing: 0.4px;
+          color: rgba(242,238,230,0.92);
+          text-shadow: 0 1px 8px rgba(0,0,0,0.6);
+        }
+        .mv-clock { color: #e7c873; margin-left: 8px; font-variant-numeric: tabular-nums; }
+        .mv-row { display: flex; gap: 6px; flex-wrap: wrap; pointer-events: auto; }
+        .mv-row button {
+          appearance: none; cursor: pointer;
+          border: 1px solid rgba(231,211,154,0.3);
+          background: rgba(12,13,16,0.55); backdrop-filter: blur(6px);
+          color: rgba(242,238,230,0.82);
+          font-size: 11px; letter-spacing: 0.3px; text-transform: lowercase;
+          padding: 7px 11px; border-radius: 7px;
+          transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+        }
+        .mv-row button:hover { border-color: rgba(231,211,154,0.6); color: #f4ecd6; }
+        .mv-row button.on { background: rgba(231,211,154,0.18); border-color: rgba(231,211,154,0.8); color: #f6e6b4; }
+        .mv-hint {
+          font-size: 10px; letter-spacing: 0.3px; text-transform: lowercase;
+          color: rgba(242,238,230,0.4); text-shadow: 0 1px 6px rgba(0,0,0,0.6);
+        }
+        @media (max-width: 560px) { .mv-title { font-size: 13px; } .mv-row button { padding: 8px 10px; } }
+      ` }} />
+    </div>
+  );
 }
