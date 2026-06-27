@@ -106,9 +106,17 @@ const VIEWS = ["iso", "top", "side", "macro-balance", "macro-escape", "macro-tra
 const FACES = ["genève", "aventurine", "nacre"];
 
 // a small, cute, draggable sundial — overlaid at the foot of the movement.
+// Reworked to read like forged jewellery: a polished gold bezel with a
+// beveled bright/dark edge + specular glint, a domed sapphire-crystal sheen,
+// an atmospheric sky (sun bloom & rays by day, stars & a moon by night,
+// drifting cloud wisps) and a soft gradient gnomon shadow. Dragging still
+// scrubs dayT across dawn→noon→dusk→night and now ticks at each hour, chimes
+// at noon & sunset, and plays a warm whoosh on release.
 function SundialChip() {
   const [dayT, setDayT] = useState(0.36);
   const dragging = useRef(false);
+  const lastHour = useRef(-1);
+  const reduceRef = useRef(false);
   const W = 150, H = 118, C = W / 2, baseY = 92, arcR = 60;
   const polar = (r: number, deg: number): [number, number] => {
     const a = (deg - 90) * (Math.PI / 180);
@@ -117,54 +125,220 @@ function SundialChip() {
   const t = dayT;
   const ang = 180 + t * 180;
   const [sx, sy] = polar(arcR, ang);
-  const low = Math.sin(t * Math.PI);
+  const low = Math.sin(t * Math.PI);          // sun altitude 0..1
   const [shx, shy] = polar(14 + (1 - low) * 40, 90 + (t * 180 - 90));
   const hour = 6 + t * 12; const hh = Math.floor(hour); const mm = Math.floor((hour - hh) * 60);
   const night = t > 0.97 || t < 0.03;
-  const sky = t < 0.18 ? ["#241a2e", "#7a4a3a"] : t < 0.42 ? ["#3a6da0", "#bcd4e6"]
-    : t < 0.6 ? ["#5b96cf", "#dff0fb"] : t < 0.84 ? ["#b58a4a", "#f0c98a"] : ["#2a1f34", "#7a3f30"];
+  const golden = (t > 0.06 && t < 0.2) || (t > 0.78 && t < 0.94); // warm low sun
+  // atmospheric sky: zenith → mid → horizon. Phases preserved, deepened.
+  const sky = t < 0.18 ? ["#1a1430", "#3a2a4e", "#a85a3a"]      // dawn
+    : t < 0.42 ? ["#2b5e9e", "#5b96cf", "#cfe4f2"]               // morning
+    : t < 0.6 ? ["#3f82c8", "#6aa8de", "#e6f3fb"]                // noon
+    : t < 0.84 ? ["#5a4a8a", "#b5793e", "#f2c478"]               // golden hour
+    : ["#0e0a22", "#241a40", "#6a3a34"];                          // dusk→night
+  // warm sun glow tint — amber near the horizon, white near zenith
+  const sunCore = golden ? "#fff0c0" : "#fffbe8";
+  const sunMid = golden ? "#ffc060" : "#ffd96b";
+  const sunEdge = golden ? "#e8721f" : "#ef9b2e";
+
+  // soft tactile feedback at each hour boundary + chimes at noon / sunset
+  const feedback = (nt: number) => {
+    const h = Math.floor(6 + nt * 12);
+    if (h !== lastHour.current) {
+      lastHour.current = h;
+      if (!reduceRef.current) { try { haptics.tap(); } catch { /* noop */ } }
+      // noon (12h) and sunset (~18h) get a gentle chime
+      if (h === 12 || h === 18) { try { getFieldAudio().chime(); } catch { /* noop */ } }
+      else { try { getFieldAudio().playNote(64 + Math.round((nt) * 18), 55); } catch { /* noop */ } }
+    }
+  };
+
   const setFrom = (e: React.PointerEvent) => {
     const r = (e.currentTarget as Element).getBoundingClientRect();
-    setDayT(Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)));
+    const nt = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+    setDayT(nt);
+    feedback(nt);
   };
-  const down = (e: React.PointerEvent) => { dragging.current = true; (e.target as Element).setPointerCapture?.(e.pointerId); setFrom(e); };
+  const down = (e: React.PointerEvent) => {
+    dragging.current = true; lastHour.current = Math.floor(6 + dayT * 12);
+    try { reduceRef.current = window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch { /* noop */ }
+    (e.target as Element).setPointerCapture?.(e.pointerId); setFrom(e);
+  };
   const move = (e: React.PointerEvent) => { if (dragging.current) setFrom(e); };
   const up = () => {
     if (!dragging.current) return; dragging.current = false;
-    try { getFieldAudio().playNote(60 + Math.round(dayT * 24), 140); } catch { /* noop */ }
-    haptics.ripple(0.4); useField.getState().recordTape("ripple", 0.3 + dayT * 0.5, "movement/sundial");
+    // warm whoosh on release: a soft bell + a settling note
+    try { getFieldAudio().bell(); window.setTimeout(() => { try { getFieldAudio().playNote(60 + Math.round(dayT * 24), 160); } catch { /* noop */ } }, 60); } catch { /* noop */ }
+    if (!reduceRef.current) haptics.ripple(0.4);
+    useField.getState().recordTape("ripple", 0.3 + dayT * 0.5, "movement/sundial");
   };
+
+  // pseudo-random helper for stars (stable per index)
+  const rnd = (i: number, s: number) => ((Math.sin(i * s) * 43758.5) % 1 + 1) % 1;
+
   return (
     <div className="mv-sundial">
       <svg viewBox={`0 0 ${W} ${H}`} onPointerDown={down} onPointerMove={move} onPointerUp={up} style={{ touchAction: "none", cursor: "grab" }}>
         <defs>
-          <linearGradient id="mvSunSky" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={sky[0]} /><stop offset="100%" stopColor={sky[1]} /></linearGradient>
-          <radialGradient id="mvSunDisc" cx="50%" cy="50%" r="50%"><stop offset="0%" stopColor="#fff6da" /><stop offset="60%" stopColor="#fbcf6b" /><stop offset="100%" stopColor="#e89a35" /></radialGradient>
-          <linearGradient id="mvSunGold" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stopColor="#f7e6a8" /><stop offset="28%" stopColor="#c9962f" />
-            <stop offset="52%" stopColor="#ffdf8a" /><stop offset="76%" stopColor="#b07d24" />
-            <stop offset="100%" stopColor="#e8c560" />
+          {/* atmospheric vertical sky: zenith → mid → horizon glow */}
+          <linearGradient id="mvSunSky" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={sky[0]} />
+            <stop offset="55%" stopColor={sky[1]} />
+            <stop offset="100%" stopColor={sky[2]} />
           </linearGradient>
-          <clipPath id="mvSunClip"><rect x="7" y="7" width={W - 14} height={baseY - 7} rx="10" /></clipPath>
+          {/* sun disc */}
+          <radialGradient id="mvSunDisc" cx="42%" cy="38%" r="62%">
+            <stop offset="0%" stopColor={sunCore} />
+            <stop offset="55%" stopColor={sunMid} />
+            <stop offset="100%" stopColor={sunEdge} />
+          </radialGradient>
+          {/* soft sun bloom */}
+          <radialGradient id="mvSunBloom" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor={sunMid} stopOpacity={0.85} />
+            <stop offset="40%" stopColor={sunMid} stopOpacity={0.32} />
+            <stop offset="100%" stopColor={sunMid} stopOpacity={0} />
+          </radialGradient>
+          {/* moon */}
+          <radialGradient id="mvMoon" cx="40%" cy="36%" r="64%">
+            <stop offset="0%" stopColor="#fdfbf2" />
+            <stop offset="70%" stopColor="#d8dceb" />
+            <stop offset="100%" stopColor="#9aa3bd" />
+          </radialGradient>
+          {/* multi-stop forged gold for the bezel */}
+          <linearGradient id="mvSunGold" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor="#fff6da" />
+            <stop offset="22%" stopColor="#e7b94e" />
+            <stop offset="50%" stopColor="#b8860b" />
+            <stop offset="74%" stopColor="#8a6410" />
+            <stop offset="100%" stopColor="#e7d39a" />
+          </linearGradient>
+          {/* brighter gold for the inner bevel highlight */}
+          <linearGradient id="mvSunGoldHi" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor="#fff8e4" />
+            <stop offset="45%" stopColor="#ffe7a0" />
+            <stop offset="100%" stopColor="#caa238" />
+          </linearGradient>
+          {/* gnomon blade gold */}
+          <linearGradient id="mvSunBlade" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor="#fff4cf" />
+            <stop offset="50%" stopColor="#d9ad48" />
+            <stop offset="100%" stopColor="#8a6410" />
+          </linearGradient>
+          {/* soft gradient for the cast shadow */}
+          <linearGradient id="mvSunShadow" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor="rgba(8,6,2,0.5)" />
+            <stop offset="100%" stopColor="rgba(8,6,2,0)" />
+          </linearGradient>
+          {/* domed sapphire-crystal sheen across the top */}
+          <linearGradient id="mvSunCrystal" x1="0" y1="0" x2="0.35" y2="1">
+            <stop offset="0%" stopColor="rgba(255,255,255,0.5)" />
+            <stop offset="22%" stopColor="rgba(255,255,255,0.16)" />
+            <stop offset="55%" stopColor="rgba(255,255,255,0)" />
+          </linearGradient>
+          {/* warm horizon glow band */}
+          <linearGradient id="mvSunHorizon" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={golden ? "rgba(255,180,90,0)" : "rgba(255,220,150,0)"} />
+            <stop offset="100%" stopColor={golden ? "rgba(255,150,70,0.55)" : "rgba(255,230,170,0.32)"} />
+          </linearGradient>
+          {/* soft outer drop-shadow so the chip reads like a forged case */}
+          <filter id="mvSunDrop" x="-30%" y="-30%" width="160%" height="160%">
+            <feDropShadow dx="0" dy="3" stdDeviation="3.4" floodColor="#000" floodOpacity="0.55" />
+          </filter>
+          <filter id="mvSunBlur" x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur stdDeviation="1.4" />
+          </filter>
+          <clipPath id="mvSunClip"><rect x="9" y="9" width={W - 18} height={baseY - 9} rx="9" /></clipPath>
         </defs>
-        <rect x="3" y="3" width={W - 6} height={H - 6} rx="13" fill="#120d07" />
+
+        {/* forged gold case body with soft outer drop-shadow */}
+        <rect x="3" y="3" width={W - 6} height={H - 6} rx="13" fill="url(#mvSunGold)" filter="url(#mvSunDrop)" />
+
         <g clipPath="url(#mvSunClip)">
+          {/* sky */}
           <rect x="6" y="6" width={W - 12} height={baseY - 6} fill="url(#mvSunSky)" />
-          {night && Array.from({ length: 16 }, (_, i) => {
-            const stx = 12 + ((Math.sin(i * 12.9) * 43758) % 1 + 1) % 1 * (W - 24);
-            const sty = 10 + ((Math.sin(i * 41.2) * 43758) % 1 + 1) % 1 * 60;
-            return <circle key={i} cx={stx} cy={sty} r={0.6} fill="#eaf0ff" opacity={0.7} />;
+
+          {/* night: moon + scattered stars of varying brightness */}
+          {night && (
+            <g>
+              <circle cx={W - 34} cy={26} r={9.5} fill="url(#mvMoon)" />
+              <circle cx={W - 30} cy={23} r={7.5} fill={sky[1]} opacity={0.85} />
+              {Array.from({ length: 22 }, (_, i) => {
+                const stx = 12 + rnd(i, 12.9) * (W - 24);
+                const sty = 10 + rnd(i, 41.2) * 62;
+                const br = 0.35 + rnd(i, 7.3) * 0.6;
+                return <circle key={i} cx={stx} cy={sty} r={0.5 + rnd(i, 3.1) * 0.7} fill="#eaf0ff" opacity={br} />;
+              })}
+            </g>
+          )}
+
+          {/* daytime drifting cloud wisps */}
+          {!night && (
+            <g opacity={0.6 * low + 0.15} fill="#ffffff" filter="url(#mvSunBlur)">
+              <ellipse cx={36} cy={26} rx={16} ry={4.5} opacity={0.5} />
+              <ellipse cx={104} cy={18} rx={20} ry={5} opacity={0.4} />
+            </g>
+          )}
+
+          {/* warm horizon glow band near the ground */}
+          <rect x="6" y={baseY - 26} width={W - 12} height={26} fill="url(#mvSunHorizon)" />
+
+          {/* engraved hour ticks on an inner ring */}
+          {Array.from({ length: 13 }, (_, i) => {
+            const aa = 180 + (i / 12) * 180;
+            const [x1, y1] = polar(arcR + 3, aa); const [x2, y2] = polar(arcR - 2, aa);
+            const major = i % 6 === 0;
+            return (
+              <g key={i}>
+                <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="rgba(0,0,0,0.35)" strokeWidth={major ? 1.6 : 0.9} transform="translate(0.5,0.6)" />
+                <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="rgba(255,247,214,0.55)" strokeWidth={major ? 1.2 : 0.6} />
+              </g>
+            );
           })}
-          {Array.from({ length: 13 }, (_, i) => { const aa = 180 + (i / 12) * 180; const [x1, y1] = polar(arcR + 3, aa); const [x2, y2] = polar(arcR - 2, aa); return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="rgba(255,255,255,0.3)" strokeWidth={i % 6 === 0 ? 1.2 : 0.6} />; })}
-          <circle cx={sx} cy={sy} r={12} fill="#ffe6a8" opacity={0.3 * low + 0.08} />
-          <circle cx={sx} cy={sy} r={6} fill="url(#mvSunDisc)" />
-          <rect x="6" y={baseY} width={W - 12} height={H - baseY} fill="#241a12" />
-          <line x1={C} y1={baseY} x2={shx} y2={shy} stroke="rgba(0,0,0,0.45)" strokeWidth="2.4" strokeLinecap="round" />
-          <path d={`M${C - 4} ${baseY} L${C} ${baseY - 20} L${C + 4} ${baseY} Z`} fill="#cbb377" stroke="#8a6c34" strokeWidth="0.6" />
+
+          {/* sun: bloom + faint rays + disc */}
+          {!night && (
+            <g>
+              <circle cx={sx} cy={sy} r={20} fill="url(#mvSunBloom)" opacity={0.55 * low + 0.35} />
+              <g stroke={sunMid} strokeWidth={0.9} strokeLinecap="round" opacity={(golden ? 0.5 : 0.35) * (low * 0.7 + 0.3)}>
+                {Array.from({ length: 10 }, (_, i) => {
+                  const ra = (i / 10) * Math.PI * 2;
+                  const r0 = 8, r1 = 13 + (i % 2) * 3;
+                  return <line key={i} x1={sx + Math.cos(ra) * r0} y1={sy + Math.sin(ra) * r0} x2={sx + Math.cos(ra) * r1} y2={sy + Math.sin(ra) * r1} />;
+                })}
+              </g>
+              <circle cx={sx} cy={sy} r={6} fill="url(#mvSunDisc)" />
+              <circle cx={sx - 1.6} cy={sy - 1.8} r={1.8} fill="#fffdf2" opacity={0.7} />
+            </g>
+          )}
+
+          {/* ground */}
+          <rect x="6" y={baseY} width={W - 12} height={H - baseY} fill="#221710" />
+          <rect x="6" y={baseY} width={W - 12} height={3} fill="rgba(255,210,140,0.18)" />
+
+          {/* soft gradient gnomon shadow (lengthens at dawn/dusk) */}
+          <g transform={`rotate(${(t * 180 - 90)} ${C} ${baseY})`} opacity={0.9}>
+            <rect x={C} y={baseY - 1.6} width={14 + (1 - low) * 40} height={3.2} rx={1.6}
+              fill="url(#mvSunShadow)" filter="url(#mvSunBlur)" />
+          </g>
+          <line x1={C} y1={baseY} x2={shx} y2={shy} stroke="rgba(6,4,1,0.28)" strokeWidth="1.4" strokeLinecap="round" filter="url(#mvSunBlur)" />
+
+          {/* gnomon — a little gold blade */}
+          <path d={`M${C - 3.4} ${baseY} L${C} ${baseY - 22} L${C + 3.4} ${baseY} Z`} fill="url(#mvSunBlade)" stroke="#6f5410" strokeWidth="0.5" />
+          <path d={`M${C} ${baseY - 22} L${C + 3.4} ${baseY} L${C + 1.2} ${baseY} Z`} fill="rgba(0,0,0,0.22)" />
         </g>
-        {/* Cartier-style polished gold frame */}
-        <rect x="3" y="3" width={W - 6} height={H - 6} rx="13" fill="none" stroke="url(#mvSunGold)" strokeWidth="3.6" />
-        <rect x="8" y="8" width={W - 16} height={H - 16} rx="9" fill="none" stroke="rgba(247,230,168,0.55)" strokeWidth="0.8" />
+
+        {/* domed sapphire crystal sheen over the dial */}
+        <rect x="9" y="9" width={W - 18} height={(baseY - 9) * 0.62} rx="9" fill="url(#mvSunCrystal)" pointerEvents="none" />
+        <ellipse cx={C} cy={20} rx={W * 0.34} ry={9} fill="#ffffff" opacity={0.14} pointerEvents="none" filter="url(#mvSunBlur)" />
+
+        {/* polished gold bezel: outer dark edge, gradient ring, bright inner bevel */}
+        <rect x="3.6" y="3.6" width={W - 7.2} height={H - 7.2} rx="12.4" fill="none" stroke="#6f5410" strokeWidth="1" />
+        <rect x="5" y="5" width={W - 10} height={H - 10} rx="11" fill="none" stroke="url(#mvSunGold)" strokeWidth="3.2" />
+        <rect x="8.4" y="8.4" width={W - 16.8} height={H - 16.8} rx="9.2" fill="none" stroke="url(#mvSunGoldHi)" strokeWidth="1" opacity={0.9} />
+        <rect x="9.6" y="9.6" width={W - 19.2} height={H - 19.2} rx="8.4" fill="none" stroke="rgba(60,42,8,0.55)" strokeWidth="0.6" />
+        {/* specular glint on the bezel — top-left arc */}
+        <path d={`M8 ${H * 0.42} Q8 8 ${W * 0.42} 8`} fill="none" stroke="rgba(255,252,230,0.85)" strokeWidth="1.4" strokeLinecap="round" pointerEvents="none" />
+
         <text x={C} y={baseY + 20} textAnchor="middle" className="mv-sun-time">{String(hh).padStart(2, "0")}:{String(mm).padStart(2, "0")}</text>
       </svg>
     </div>
