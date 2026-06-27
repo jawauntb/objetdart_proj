@@ -140,9 +140,14 @@ function SundialChip() {
         <defs>
           <linearGradient id="mvSunSky" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={sky[0]} /><stop offset="100%" stopColor={sky[1]} /></linearGradient>
           <radialGradient id="mvSunDisc" cx="50%" cy="50%" r="50%"><stop offset="0%" stopColor="#fff6da" /><stop offset="60%" stopColor="#fbcf6b" /><stop offset="100%" stopColor="#e89a35" /></radialGradient>
-          <clipPath id="mvSunClip"><rect x="6" y="6" width={W - 12} height={baseY - 6} rx="10" /></clipPath>
+          <linearGradient id="mvSunGold" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor="#f7e6a8" /><stop offset="28%" stopColor="#c9962f" />
+            <stop offset="52%" stopColor="#ffdf8a" /><stop offset="76%" stopColor="#b07d24" />
+            <stop offset="100%" stopColor="#e8c560" />
+          </linearGradient>
+          <clipPath id="mvSunClip"><rect x="7" y="7" width={W - 14} height={baseY - 7} rx="10" /></clipPath>
         </defs>
-        <rect x="2" y="2" width={W - 4} height={H - 4} rx="12" fill="rgba(10,12,16,0.7)" stroke="rgba(231,211,154,0.3)" />
+        <rect x="3" y="3" width={W - 6} height={H - 6} rx="13" fill="#120d07" />
         <g clipPath="url(#mvSunClip)">
           <rect x="6" y="6" width={W - 12} height={baseY - 6} fill="url(#mvSunSky)" />
           {night && Array.from({ length: 16 }, (_, i) => {
@@ -157,6 +162,9 @@ function SundialChip() {
           <line x1={C} y1={baseY} x2={shx} y2={shy} stroke="rgba(0,0,0,0.45)" strokeWidth="2.4" strokeLinecap="round" />
           <path d={`M${C - 4} ${baseY} L${C} ${baseY - 20} L${C + 4} ${baseY} Z`} fill="#cbb377" stroke="#8a6c34" strokeWidth="0.6" />
         </g>
+        {/* Cartier-style polished gold frame */}
+        <rect x="3" y="3" width={W - 6} height={H - 6} rx="13" fill="none" stroke="url(#mvSunGold)" strokeWidth="3.6" />
+        <rect x="8" y="8" width={W - 16} height={H - 16} rx="9" fill="none" stroke="rgba(247,230,168,0.55)" strokeWidth="0.8" />
         <text x={C} y={baseY + 20} textAnchor="middle" className="mv-sun-time">{String(hh).padStart(2, "0")}:{String(mm).padStart(2, "0")}</text>
       </svg>
     </div>
@@ -327,6 +335,8 @@ export default function Movement() {
     // ── materials ──
     const matPlate = new THREE.MeshPhysicalMaterial({ color: 0xc3c6cc, metalness: 1, roughness: 0.55, map: genevaTex, roughnessMap: genevaRough });
     const matBridge = new THREE.MeshStandardMaterial({ color: 0xc3c6cc, metalness: 1, roughness: 0.4 });
+    // bright 24k yellow gold for the case sides + bezel lip
+    const matGold24 = new THREE.MeshStandardMaterial({ color: 0xffc62e, metalness: 1, roughness: 0.14 });
     const matBrass = new THREE.MeshStandardMaterial({ color: 0xd8a85a, metalness: 1, roughness: 0.22 });
     const matSteel = new THREE.MeshStandardMaterial({ color: 0xdfe3ea, metalness: 1, roughness: 0.16 });
     const matBlued = new THREE.MeshStandardMaterial({ color: 0x2b3d6b, metalness: 1, roughness: 0.18 });
@@ -346,14 +356,31 @@ export default function Movement() {
     plate.position.y = -1.2;
     plate.receiveShadow = true;
     root.add(plate);
-    // chamfered rim ring
+    // polished 24k bezel lip
     const rimRing = new THREE.Mesh(
-      new THREE.TorusGeometry(CFG.plateR, 0.35, 16, 96),
-      new THREE.MeshStandardMaterial({ color: 0xcfd3d9, metalness: 1, roughness: 0.3 }),
+      new THREE.TorusGeometry(CFG.plateR, 0.5, 20, 120),
+      matGold24,
     );
     rimRing.rotation.x = Math.PI / 2;
     rimRing.position.y = -1.2 + CFG.plateThick / 2;
+    rimRing.castShadow = true;
     root.add(rimRing);
+    // bright yellow-gold case band — the watch's sides
+    const caseBand = new THREE.Mesh(
+      new THREE.CylinderGeometry(CFG.plateR + 0.18, CFG.plateR + 0.32, 2.3, 160, 1, true),
+      matGold24,
+    );
+    caseBand.position.y = -0.65;
+    caseBand.castShadow = true;
+    root.add(caseBand);
+    // a lower lip so the case reads solid from the side
+    const caseFoot = new THREE.Mesh(
+      new THREE.TorusGeometry(CFG.plateR + 0.28, 0.34, 18, 120),
+      matGold24,
+    );
+    caseFoot.rotation.x = Math.PI / 2;
+    caseFoot.position.y = -1.75;
+    root.add(caseFoot);
 
     // switchable dial finish — Côtes de Genève · aventurine · nacre
     const applyFace = (f: string) => {
@@ -964,7 +991,7 @@ export default function Movement() {
         .mv-sundial svg { width: 100%; height: auto; display: block; }
         .mv-sun-time {
           font-family: var(--font-fraunces, Georgia, serif); font-size: 13px;
-          fill: rgba(242,238,230,0.92); font-variant-numeric: tabular-nums;
+          fill: #f0d68a; letter-spacing: 1px; font-variant-numeric: tabular-nums;
         }
         @media (max-width: 560px) {
           .mv-title { font-size: 13px; } .mv-row button { padding: 8px 10px; }
