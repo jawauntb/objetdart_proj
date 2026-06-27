@@ -32,19 +32,32 @@ type Gem = {
   chord: number[];
   color: string;          // svg + shader accent (the gem's true colour)
   rgb: [number, number, number]; // 0..1 for the shader tint
+  setting: "gold" | "silver"; // forged bezel metal
 };
 const GEMS: Gem[] = [
-  { key: "citrine",  label: "citrine",  chord: [60, 64, 67],     color: "#f3cf3a", rgb: [0.95, 0.81, 0.23] },
-  { key: "topaz",    label: "topaz",    chord: [62, 65, 69],     color: "#4aa3e0", rgb: [0.29, 0.64, 0.88] },
-  { key: "amber",    label: "amber",    chord: [57, 60, 64],     color: "#e08a2a", rgb: [0.88, 0.54, 0.16] },
-  { key: "rose",     label: "rose",     chord: [64, 67, 71],     color: "#f29bbf", rgb: [0.95, 0.61, 0.75] },
-  { key: "emerald",  label: "emerald",  chord: [55, 59, 62, 67], color: "#3fbf85", rgb: [0.25, 0.75, 0.52] },
-  { key: "brilliant",label: "brilliant",chord: [72, 76, 79, 84], color: "#eaf2ff", rgb: [0.92, 0.95, 1.0] },
+  { key: "citrine",  label: "citrine",  chord: [60, 64, 67],     color: "#f3cf3a", rgb: [0.95, 0.81, 0.23], setting: "gold" },
+  { key: "topaz",    label: "topaz",    chord: [62, 65, 69],     color: "#4aa3e0", rgb: [0.29, 0.64, 0.88], setting: "silver" },
+  { key: "amber",    label: "amber",    chord: [57, 60, 64],     color: "#e08a2a", rgb: [0.88, 0.54, 0.16], setting: "gold" },
+  { key: "rose",     label: "rose",     chord: [64, 67, 71],     color: "#f29bbf", rgb: [0.95, 0.61, 0.75], setting: "silver" },
+  { key: "emerald",  label: "emerald",  chord: [55, 59, 62, 67], color: "#3fbf85", rgb: [0.25, 0.75, 0.52], setting: "gold" },
+  { key: "brilliant",label: "brilliant",chord: [72, 76, 79, 84], color: "#eaf2ff", rgb: [0.92, 0.95, 1.0], setting: "silver" },
 ];
+
+// ── carat-pour particles: tiny faceted gems that fall, tumble, bounce, fade ──
+type Carat = {
+  x: number; y: number; vx: number; vy: number;
+  rot: number; vr: number; size: number; color: string;
+  life: number; bounced: boolean;
+};
 
 export default function Jewel() {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // carat-pour overlay canvas + particle pool + its own RAF loop
+  const caratCanvasRef = useRef<HTMLCanvasElement>(null);
+  const carats = useRef<Carat[]>([]);
+  const caratRaf = useRef<number | null>(null);
+  const reducedRef = useRef(false);
 
   // pointer + smoothed warp
   const ptr = useRef({ x: 0.5, y: 0.5, tx: 0.5, ty: 0.5, warp: 0.16, twarp: 0.16 });
@@ -68,8 +81,56 @@ export default function Jewel() {
   const [flipped, setFlipped] = useState(false);
   const [stretching, setStretching] = useState(false);
 
+  // ── tactile toys ──
+  const [coinFace, setCoinFace] = useState<"heads" | "tails">("heads");
+  const [coinSpin, setCoinSpin] = useState(0); // accumulated rotateY degrees
+  const [coinTilt, setCoinTilt] = useState(0); // a little rotateX wobble
+  const [ingotBeat, setIngotBeat] = useState(0);   // 0..1 squash on a beat
+  const ingotDrag = useRef({ active: false, id: -1, sx: 0, sy: 0 });
+  const [ingotStretch, setIngotStretch] = useState({ sx: 1, sy: 1, skew: 0 });
+
   // sustain tone scheduler (repeated shimmering playNote while pouring)
   const pourTimer = useRef<number | null>(null);
+
+  // ── CARATS POUR OUT — burst of faceted gem particles from a screen point ──
+  const pourCarats = (clientX: number, clientY: number, color: string, count = 30) => {
+    const cv = caratCanvasRef.current;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    let ox = clientX, oy = clientY;
+    if (cv) {
+      const rect = cv.getBoundingClientRect();
+      ox = (clientX - rect.left);
+      oy = (clientY - rect.top);
+    }
+    const reduced = reducedRef.current;
+    const n = reduced ? Math.min(10, count) : count;
+    for (let i = 0; i < n; i++) {
+      const ang = -Math.PI / 2 + (Math.random() - 0.5) * 1.5;
+      const spd = (reduced ? 1.2 : 2.6) + Math.random() * 3.4;
+      carats.current.push({
+        x: ox * dpr + (Math.random() - 0.5) * 16 * dpr,
+        y: oy * dpr + (Math.random() - 0.5) * 10 * dpr,
+        vx: Math.cos(ang) * spd * dpr,
+        vy: (Math.sin(ang) * spd - 2) * dpr,
+        rot: Math.random() * Math.PI * 2,
+        vr: (Math.random() - 0.5) * 0.4,
+        size: (4 + Math.random() * 6) * dpr,
+        color,
+        life: 1,
+        bounced: false,
+      });
+    }
+    // keep the pool bounded
+    if (carats.current.length > 400) carats.current.splice(0, carats.current.length - 400);
+    // a granular cascade of soft high notes + a ripple in the hand
+    const a = getFieldAudio();
+    const cascade = [76, 79, 81, 84, 88, 84, 81, 79];
+    cascade.forEach((m, i) => window.setTimeout(() => {
+      try { a.playNote(m, 130); } catch { /* noop */ }
+    }, i * 45));
+    haptics.ripple(0.8);
+    useField.getState().recordTape("object", 0.7, "jewel/carats");
+  };
 
   // spawn a ripple into the ring buffer
   const spawnRipple = (x: number, y: number, str: number, tNow: number) => {
@@ -81,7 +142,7 @@ export default function Jewel() {
   const t0Ref = useRef(performance.now());
   const nowSec = () => (performance.now() - t0Ref.current) / 1000;
 
-  const onGem = (g: Gem) => {
+  const onGem = (g: Gem, e?: React.PointerEvent) => {
     const a = getFieldAudio();
     try {
       g.chord.forEach((m, i) => {
@@ -97,6 +158,8 @@ export default function Jewel() {
     window.setTimeout(() => setActiveGem((k) => (k === g.key ? null : k)), 260);
     // a big central ripple bloom on each gem
     spawnRipple(0.5, 0.42, 1.0, nowSec());
+    // every gem press spills a few of its own carats
+    if (e) pourCarats(e.clientX, e.clientY, g.color, 16);
   };
 
   const setPour = (on: boolean) => {
@@ -164,6 +227,78 @@ export default function Jewel() {
     spin.current.vel += 0.25;
     haptics.storm();
     useField.getState().recordTape("ripple", 1.0, "jewel/shake");
+  };
+
+  // ── TOY 2: OBJET D'ART COIN — tap to flip in 3D, lands heads/tails ──
+  const flipCoin = () => {
+    const a = getFieldAudio();
+    // a metallic *ting*: a bright struck note + a tiny bell tail
+    try {
+      a.playNote(88, 90);
+      window.setTimeout(() => { try { a.bell(); } catch { /* noop */ } }, 40);
+    } catch { /* noop */ }
+    haptics.tap();
+    // several whole turns + a random extra half so it lands randomly
+    const turns = 4 + Math.floor(Math.random() * 3);
+    const lands = Math.random() < 0.5 ? "heads" : "tails";
+    const half = lands === coinFace ? 0 : 1; // extra half-turn flips the face
+    setCoinSpin((s) => s + (turns * 2 + half) * 180);
+    setCoinTilt((Math.random() - 0.5) * 26);
+    setCoinFace(lands);
+    useField.getState().recordTape("object", 0.6, `jewel/coin/${lands}`);
+  };
+
+  // ── TOY 3: BEAT & STRETCH THE GOLD ──
+  const beatIngot = () => {
+    const a = getFieldAudio();
+    // heavy clang: low struck note + thud
+    try {
+      a.playNote(40, 220);
+      window.setTimeout(() => { try { a.thud(); } catch { /* noop */ } }, 30);
+    } catch { /* noop */ }
+    haptics.roll();
+    setIngotBeat(1);
+    window.setTimeout(() => setIngotBeat(0), 30);
+    useField.getState().recordTape("object", 0.7, "jewel/ingot/beat");
+  };
+  const ingotDown = (e: React.PointerEvent) => {
+    e.preventDefault();
+    ingotDrag.current = { active: true, id: e.pointerId, sx: e.clientX, sy: e.clientY };
+    try { (e.currentTarget as Element).setPointerCapture(e.pointerId); } catch { /* noop */ }
+  };
+  const ingotMove = (e: React.PointerEvent) => {
+    const d = ingotDrag.current;
+    if (!d.active || e.pointerId !== d.id) return;
+    if (reducedRef.current) return;
+    const dx = e.clientX - d.sx;
+    const dy = e.clientY - d.sy;
+    const dist = Math.hypot(dx, dy);
+    if (dist < 4) return;
+    // elongate along the drag axis: taffy stretch (clamped)
+    const pull = Math.min(0.9, dist / 220);
+    const horiz = Math.abs(dx) >= Math.abs(dy);
+    setIngotStretch({
+      sx: horiz ? 1 + pull : Math.max(0.7, 1 - pull * 0.5),
+      sy: horiz ? Math.max(0.7, 1 - pull * 0.5) : 1 + pull,
+      skew: Math.max(-14, Math.min(14, (dx / 18))),
+    });
+  };
+  const ingotUp = (e: React.PointerEvent) => {
+    const d = ingotDrag.current;
+    if (!d.active || e.pointerId !== d.id) return;
+    const dx = e.clientX - d.sx, dy = e.clientY - d.sy;
+    const dist = Math.hypot(dx, dy);
+    ingotDrag.current = { active: false, id: -1, sx: 0, sy: 0 };
+    if (dist < 6) { beatIngot(); return; } // a click without drag = a beat
+    // spring back with a shimmer
+    setIngotStretch({ sx: 1, sy: 1, skew: 0 });
+    const a = getFieldAudio();
+    try {
+      a.chime();
+      [72, 79, 84].forEach((m, i) => window.setTimeout(() => { try { a.playNote(m, 160); } catch { /* noop */ } }, i * 55));
+    } catch { /* noop */ }
+    haptics.ripple(0.5);
+    useField.getState().recordTape("object", 0.6, "jewel/ingot/stretch");
   };
 
   useEffect(() => {
@@ -413,7 +548,8 @@ export default function Jewel() {
 
     const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
     let reduced = mq.matches ? 1 : 0;
-    const onMq = () => { reduced = mq.matches ? 1 : 0; };
+    reducedRef.current = mq.matches;
+    const onMq = () => { reduced = mq.matches ? 1 : 0; reducedRef.current = mq.matches; };
     if (typeof mq.addEventListener === "function") mq.addEventListener("change", onMq);
 
     const onMove = (e: PointerEvent) => {
@@ -558,9 +694,106 @@ export default function Jewel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ── carat-pour canvas: its own RAF physics loop (gravity, tumble, bounce, fade) ──
+  useEffect(() => {
+    const cv = caratCanvasRef.current;
+    const wrap = wrapRef.current;
+    if (!cv || !wrap) return;
+    const ctx = cv.getContext("2d");
+    if (!ctx) return;
+
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const resize = () => {
+      cv.width = Math.max(1, Math.floor((wrap.clientWidth || 1) * dpr));
+      cv.height = Math.max(1, Math.floor((wrap.clientHeight || 1) * dpr));
+    };
+    resize();
+    const ro = new ResizeObserver(resize);
+    ro.observe(wrap);
+
+    const G = 0.42 * dpr;        // gravity per frame
+    let raf = 0;
+    const draw = () => {
+      const w = cv.width, h = cv.height;
+      ctx.clearRect(0, 0, w, h);
+      const pool = carats.current;
+      const floor = h - 4 * dpr;
+      for (let i = pool.length - 1; i >= 0; i--) {
+        const p = pool[i];
+        p.vy += G;
+        p.x += p.vx;
+        p.y += p.vy;
+        p.rot += p.vr;
+        // bounce once off the floor, then fade out
+        if (p.y >= floor) {
+          if (!p.bounced) {
+            p.y = floor;
+            p.vy = -p.vy * 0.45;
+            p.vx *= 0.6;
+            p.bounced = true;
+          } else {
+            p.life -= 0.06;
+            p.y = floor;
+            p.vy = 0;
+            p.vx *= 0.85;
+          }
+        }
+        if (p.bounced) p.life -= 0.012;
+        if (p.life <= 0 || p.y > h + 40 * dpr) { pool.splice(i, 1); continue; }
+
+        // draw a tiny faceted brilliant: a bright kite with a table glint
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.rot);
+        ctx.globalAlpha = Math.max(0, Math.min(1, p.life));
+        const s = p.size;
+        // body
+        ctx.beginPath();
+        ctx.moveTo(0, -s);
+        ctx.lineTo(s * 0.72, -s * 0.1);
+        ctx.lineTo(0, s);
+        ctx.lineTo(-s * 0.72, -s * 0.1);
+        ctx.closePath();
+        const grad = ctx.createLinearGradient(-s, -s, s, s);
+        grad.addColorStop(0, "#ffffff");
+        grad.addColorStop(0.45, p.color);
+        grad.addColorStop(1, "#1a1208");
+        ctx.fillStyle = grad;
+        ctx.fill();
+        // crown facet lines
+        ctx.strokeStyle = "rgba(255,255,255,0.5)";
+        ctx.lineWidth = Math.max(0.5, 0.6 * dpr);
+        ctx.beginPath();
+        ctx.moveTo(-s * 0.72, -s * 0.1);
+        ctx.lineTo(s * 0.72, -s * 0.1);
+        ctx.moveTo(0, -s);
+        ctx.lineTo(0, s);
+        ctx.stroke();
+        // table glint
+        ctx.fillStyle = "rgba(255,255,255,0.9)";
+        ctx.beginPath();
+        ctx.arc(-s * 0.18, -s * 0.34, s * 0.16, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+      ctx.globalAlpha = 1;
+      raf = requestAnimationFrame(draw);
+    };
+    raf = requestAnimationFrame(draw);
+    caratRaf.current = raf;
+
+    return () => {
+      cancelAnimationFrame(raf);
+      caratRaf.current = null;
+      ro.disconnect();
+      carats.current = [];
+    };
+  }, []);
+
   return (
     <div ref={wrapRef} className="jewel-shader" style={{ position: "fixed", inset: 0, background: "#0a0805" }}>
       <canvas ref={canvasRef} />
+      <canvas ref={caratCanvasRef} className="jw-carat-canvas" aria-hidden="true" />
 
       {/* gold & diamond UI overlay */}
       <div className="jw-ui">
@@ -575,11 +808,11 @@ export default function Jewel() {
               <button
                 key={g.key}
                 type="button"
-                className={`jw-gem ${activeGem === g.key ? "on" : ""}`}
-                aria-label={g.label}
-                onPointerDown={(e) => { e.preventDefault(); onGem(g); }}
+                className={`jw-gem jw-gem--${g.setting} ${activeGem === g.key ? "on" : ""}`}
+                aria-label={`${g.label} — ${g.setting} setting`}
+                onPointerDown={(e) => { e.preventDefault(); onGem(g, e); }}
               >
-                <Diamond accent={g.color} />
+                <span className="jw-gem-jewel"><GemSetting gem={g} /></span>
                 <span className="jw-gem-label">{g.label}</span>
               </button>
             ))}
@@ -606,13 +839,75 @@ export default function Jewel() {
               {pouring ? "pouring…" : "pour gold"}
             </button>
           </div>
+
+          {/* ── tactile toys: a gold-framed atelier tray ── */}
+          <div className="jw-toys" role="group" aria-label="tactile toys">
+            <span className="jw-toys-tag">atelier toys</span>
+            <div className="jw-toys-row">
+              {/* TOY 1 — carats pour out */}
+              <button
+                type="button"
+                className="jw-toy jw-toy--carats"
+                aria-label="pour carats"
+                onPointerDown={(e) => { e.preventDefault(); pourCarats(e.clientX, e.clientY, "#eaf2ff", 34); }}
+              >
+                <span className="jw-toy-art jw-toy-art--carats" aria-hidden="true">
+                  <span className="jw-carat-pip" /><span className="jw-carat-pip" /><span className="jw-carat-pip" />
+                </span>
+                <span className="jw-toy-label">pour carats</span>
+              </button>
+
+              {/* TOY 2 — objet d'art coin */}
+              <button
+                type="button"
+                className="jw-toy jw-toy--coin"
+                aria-label="flip the objet d'art coin"
+                onPointerDown={(e) => { e.preventDefault(); flipCoin(); }}
+              >
+                <span
+                  className="jw-coin"
+                  style={{ transform: `rotateX(${coinTilt}deg) rotateY(${coinSpin}deg)` }}
+                >
+                  <span className="jw-coin-face jw-coin-heads"><CoinFace metal="gold" /></span>
+                  <span className="jw-coin-face jw-coin-tails"><CoinFace metal="silver" /></span>
+                </span>
+                <span className="jw-toy-label">{coinFace}</span>
+              </button>
+
+              {/* TOY 3 — beat & stretch the gold */}
+              <button
+                type="button"
+                className="jw-toy jw-toy--ingot"
+                aria-label="beat or stretch the gold ingot"
+                style={{ touchAction: "none" }}
+                onPointerDown={ingotDown}
+                onPointerMove={ingotMove}
+                onPointerUp={ingotUp}
+                onPointerCancel={ingotUp}
+              >
+                <span
+                  className="jw-ingot"
+                  style={{
+                    transform: `scale(${ingotStretch.sx}, ${ingotBeat ? 0.62 : ingotStretch.sy}) skewX(${ingotStretch.skew}deg)`,
+                  }}
+                >
+                  <span className="jw-ingot-shine" />
+                </span>
+                <span className="jw-toy-label">beat &amp; stretch</span>
+              </button>
+            </div>
+          </div>
         </div>
 
-        <div className="jw-hint">tap to chime · drag to twirl · press the gems · spin · hold to stretch · flip · shake for reverb · pour to sustain</div>
+        <div className="jw-hint">tap to chime · press a gem to spill carats · spin · hold to stretch · flip · shake · pour to sustain · flip the coin · beat &amp; stretch the gold</div>
       </div>
 
       <style dangerouslySetInnerHTML={{ __html: `
-        .jewel-shader canvas { width: 100%; height: 100%; display: block; }
+        .jewel-shader > canvas { width: 100%; height: 100%; display: block; }
+        .jw-carat-canvas {
+          position: absolute; inset: 0; z-index: 9;
+          width: 100%; height: 100%; display: block; pointer-events: none;
+        }
         .jewel-shader[data-shader-fallback="1"] {
           background:
             repeating-radial-gradient(circle at 50% 42%, rgba(231,185,78,0.10) 0 2px, transparent 2px 9px),
@@ -652,31 +947,75 @@ export default function Jewel() {
           pointer-events: auto;
           display: flex; flex-wrap: wrap; gap: 10px; justify-content: center;
         }
+        /* ── forged gem button: a minted jeweller's object ── */
         .jw-gem {
           appearance: none; cursor: pointer; pointer-events: auto;
-          display: flex; flex-direction: column; align-items: center; gap: 5px;
-          width: 78px; padding: 10px 6px 8px;
-          border-radius: 14px;
-          border: 1px solid rgba(231,185,78,0.42);
-          background: linear-gradient(180deg, rgba(40,30,12,0.42), rgba(14,10,5,0.32));
-          backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
-          box-shadow: 0 1px 0 rgba(255,240,200,0.18) inset, 0 8px 24px rgba(0,0,0,0.4);
-          transition: transform .14s ease, border-color .18s ease, box-shadow .18s ease;
+          position: relative; overflow: visible;
+          display: flex; flex-direction: column; align-items: center; gap: 7px;
+          width: 84px; padding: 12px 6px 9px;
+          border-radius: 18px;
+          border: none;
+          /* thick forged bezel: beveled rim via inset highlights/shadows */
+          background:
+            linear-gradient(135deg, rgba(255,246,218,0.14), rgba(0,0,0,0.0) 38%),
+            linear-gradient(180deg, #5a4416 0%, #3a2c0e 46%, #241a08 100%);
+          box-shadow:
+            inset 0 2px 1px rgba(255,246,218,0.55),       /* top-left light bevel */
+            inset 2px 0 1px rgba(255,236,180,0.30),
+            inset 0 -3px 3px rgba(0,0,0,0.6),             /* bottom-right dark bevel */
+            inset -2px 0 2px rgba(0,0,0,0.45),
+            0 1px 0 rgba(255,255,255,0.18),
+            0 10px 20px rgba(0,0,0,0.55);                 /* soft cast shadow (lift) */
+          transition: transform .16s cubic-bezier(.2,.8,.2,1), box-shadow .2s ease, filter .2s ease;
         }
-        .jw-gem svg { width: 40px; height: 40px; display: block;
-          filter: drop-shadow(0 2px 6px rgba(0,0,0,0.5)); transition: transform .14s ease; }
-        .jw-gem:hover { border-color: rgba(246,230,180,0.85); transform: translateY(-2px); }
-        .jw-gem:hover svg { transform: scale(1.06) rotate(-2deg); }
-        .jw-gem:active { transform: translateY(0) scale(0.97); }
+        .jw-gem--silver {
+          background:
+            linear-gradient(135deg, rgba(255,255,255,0.22), rgba(0,0,0,0.0) 38%),
+            linear-gradient(180deg, #aab4bf 0%, #6b7682 48%, #3c434b 100%);
+          box-shadow:
+            inset 0 2px 1px rgba(255,255,255,0.7),
+            inset 2px 0 1px rgba(232,237,242,0.4),
+            inset 0 -3px 3px rgba(0,0,0,0.55),
+            inset -2px 0 2px rgba(0,0,0,0.4),
+            0 1px 0 rgba(255,255,255,0.25),
+            0 10px 20px rgba(0,0,0,0.5);
+        }
+        /* animated diagonal specular sweep across the metal on hover/active */
+        .jw-gem::before {
+          content: ""; position: absolute; inset: 0; border-radius: 18px;
+          background: linear-gradient(115deg, transparent 30%, rgba(255,255,255,0.5) 48%, rgba(255,255,255,0.0) 62%);
+          transform: translateX(-120%); opacity: 0; pointer-events: none;
+          transition: opacity .2s ease;
+        }
+        .jw-gem:hover::before, .jw-gem.on::before {
+          opacity: 0.9; animation: jwSpecSweep 1.2s ease-in-out infinite;
+        }
+        .jw-gem-jewel { display: block; position: relative; }
+        .jw-gem svg { width: 46px; height: 46px; display: block;
+          filter: drop-shadow(0 3px 5px rgba(0,0,0,0.6)); transition: transform .16s ease; }
+        .jw-gem:hover { transform: translateY(-3px); filter: brightness(1.06); }
+        .jw-gem:hover svg { transform: scale(1.07) rotate(-2deg); }
+        .jw-gem:active { transform: translateY(-1px) scale(0.96); }
         .jw-gem.on {
-          border-color: #fff6da;
-          box-shadow: 0 0 0 1px rgba(255,246,218,0.6) inset, 0 0 26px rgba(246,230,180,0.55);
+          filter: brightness(1.12);
+          box-shadow:
+            inset 0 2px 1px rgba(255,246,218,0.7),
+            inset 0 -3px 3px rgba(0,0,0,0.6),
+            0 0 0 1px rgba(255,246,218,0.5),
+            0 0 28px rgba(246,230,180,0.6),
+            0 10px 22px rgba(0,0,0,0.55);
         }
         .jw-gem.on svg { transform: scale(1.16); }
         .jw-gem-label {
           font-family: var(--font-mono, ui-monospace, monospace);
           font-size: 10px; letter-spacing: 0.1em; text-transform: lowercase;
-          color: rgba(246,230,180,0.82);
+          color: rgba(246,230,180,0.92);
+          text-shadow: 0 1px 2px rgba(0,0,0,0.7);
+        }
+        .jw-gem--silver .jw-gem-label { color: rgba(240,246,252,0.95); }
+        @keyframes jwSpecSweep {
+          0% { transform: translateX(-120%); }
+          60%,100% { transform: translateX(120%); }
         }
 
         .jw-acts {
@@ -737,6 +1076,117 @@ export default function Jewel() {
         }
         @keyframes jwGlow { 0%,100% { transform: translateY(6px); } 50% { transform: translateY(-2px); } }
 
+        /* ── tactile toys: a gold-framed atelier tray ── */
+        .jw-toys {
+          pointer-events: auto; position: relative;
+          margin-top: 4px; padding: 14px 16px 12px;
+          border-radius: 18px;
+          background:
+            linear-gradient(180deg, rgba(28,20,8,0.62), rgba(10,7,3,0.5));
+          backdrop-filter: blur(9px); -webkit-backdrop-filter: blur(9px);
+          /* polished gold frame, beveled */
+          box-shadow:
+            inset 0 0 0 2px rgba(231,185,78,0.0),
+            inset 0 1px 0 rgba(255,246,218,0.35),
+            inset 0 -2px 4px rgba(0,0,0,0.5),
+            0 12px 30px rgba(0,0,0,0.5);
+          border: 2px solid transparent;
+          border-image: linear-gradient(135deg, #fff6da, #e7b94e 38%, #b8860b 62%, #fff6da) 1;
+        }
+        .jw-toys-tag {
+          position: absolute; top: -9px; left: 16px; padding: 1px 8px;
+          font-family: var(--font-mono, ui-monospace, monospace);
+          font-size: 9px; letter-spacing: 0.22em; text-transform: lowercase;
+          color: #2a1d05; border-radius: 999px;
+          background: linear-gradient(180deg, #fff6da, #e7b94e);
+          box-shadow: 0 2px 6px rgba(0,0,0,0.45);
+        }
+        .jw-toys-row {
+          display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; align-items: flex-end;
+        }
+        .jw-toy {
+          appearance: none; cursor: pointer; pointer-events: auto;
+          display: flex; flex-direction: column; align-items: center; gap: 7px;
+          min-width: 92px; min-height: 92px; padding: 8px 10px 6px;
+          border: none; background: none;
+          transition: transform .14s ease;
+        }
+        .jw-toy:active { transform: scale(0.97); }
+        .jw-toy-label {
+          font-family: var(--font-mono, ui-monospace, monospace);
+          font-size: 10px; letter-spacing: 0.1em; text-transform: lowercase;
+          color: rgba(246,230,180,0.9); text-shadow: 0 1px 3px rgba(0,0,0,0.7);
+        }
+
+        /* TOY 1 — carats pour */
+        .jw-toy-art--carats {
+          position: relative; width: 56px; height: 56px; border-radius: 14px;
+          display: grid; place-items: center;
+          background:
+            linear-gradient(135deg, rgba(255,255,255,0.18), transparent 40%),
+            linear-gradient(180deg, #3a2c0e, #1a1206);
+          box-shadow: inset 0 2px 1px rgba(255,246,218,0.4), inset 0 -3px 4px rgba(0,0,0,0.6), 0 8px 16px rgba(0,0,0,0.5);
+          overflow: hidden;
+        }
+        .jw-carat-pip {
+          position: absolute; width: 9px; height: 9px;
+          background: linear-gradient(135deg, #ffffff, #aee0ff 50%, #2a3a55);
+          clip-path: polygon(50% 0%, 100% 38%, 50% 100%, 0% 38%);
+          filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6));
+        }
+        .jw-carat-pip:nth-child(1) { top: 10px; left: 14px; }
+        .jw-carat-pip:nth-child(2) { top: 22px; left: 30px; width: 7px; height: 7px; }
+        .jw-carat-pip:nth-child(3) { top: 34px; left: 18px; width: 11px; height: 11px; }
+        .jw-toy--carats:hover .jw-carat-pip { animation: jwCaratDrop .9s ease-in-out infinite; }
+        @keyframes jwCaratDrop { 0%,100% { transform: translateY(0); } 50% { transform: translateY(5px); } }
+
+        /* TOY 2 — objet d'art coin */
+        .jw-toy--coin { perspective: 600px; }
+        .jw-coin {
+          position: relative; width: 56px; height: 56px;
+          transform-style: preserve-3d;
+          transition: transform 1s cubic-bezier(.2,.7,.2,1);
+          filter: drop-shadow(0 8px 14px rgba(0,0,0,0.55));
+        }
+        .jw-coin-face {
+          position: absolute; inset: 0; border-radius: 50%;
+          backface-visibility: hidden; -webkit-backface-visibility: hidden;
+          display: grid; place-items: center;
+          overflow: hidden;
+        }
+        .jw-coin-face svg { width: 100%; height: 100%; display: block; }
+        .jw-coin-tails { transform: rotateY(180deg); }
+
+        /* TOY 3 — beat & stretch the gold ingot */
+        .jw-toy--ingot { perspective: 500px; }
+        .jw-ingot {
+          position: relative; display: block;
+          width: 64px; height: 40px; border-radius: 9px;
+          transform-origin: center bottom;
+          transition: transform .12s cubic-bezier(.2,1.4,.4,1);
+          background:
+            linear-gradient(180deg, #fff6da 0%, #f6e6b4 22%, #e7b94e 56%, #b8860b 82%, #8a6410 100%);
+          box-shadow:
+            inset 0 3px 2px rgba(255,255,255,0.7),
+            inset 0 -5px 6px rgba(90,60,8,0.7),
+            inset 3px 0 4px rgba(255,236,180,0.4),
+            0 10px 18px rgba(0,0,0,0.5);
+        }
+        .jw-ingot::after {
+          content: ""; position: absolute; inset: 6px 8px auto 8px; height: 6px; border-radius: 4px;
+          background: linear-gradient(90deg, transparent, rgba(255,255,255,0.55), transparent);
+        }
+        .jw-ingot-shine {
+          position: absolute; inset: 0; border-radius: 9px; overflow: hidden; pointer-events: none;
+        }
+        .jw-ingot-shine::before {
+          content: ""; position: absolute; top: 0; bottom: 0; width: 30%;
+          background: linear-gradient(105deg, transparent, rgba(255,255,255,0.65), transparent);
+          transform: translateX(-160%);
+        }
+        .jw-toy--ingot:hover .jw-ingot-shine::before { animation: jwIngotShine 1.4s ease-in-out infinite; }
+        @keyframes jwIngotShine { 0% { transform: translateX(-160%); } 70%,100% { transform: translateX(360%); } }
+
         .jw-hint {
           font-family: var(--font-mono, ui-monospace, monospace);
           font-size: 10px; letter-spacing: 0.08em; text-transform: lowercase;
@@ -746,32 +1196,49 @@ export default function Jewel() {
 
         @media (max-width: 560px) {
           .jw-ui { padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px)); }
-          .jw-gem { width: 84px; padding: 12px 6px 10px; }
-          .jw-gem svg { width: 44px; height: 44px; }
+          .jw-gem { width: 88px; padding: 13px 6px 10px; }
+          .jw-gem svg { width: 48px; height: 48px; }
           .jw-pour { font-size: 17px; padding: 14px 28px; min-height: 52px; }
+          .jw-toys { padding: 14px 12px 11px; }
+          .jw-toys-row { gap: 10px; }
+          .jw-toy { min-width: 88px; }
           .jw-hint { font-size: 9px; }
         }
         @media (prefers-reduced-motion: reduce) {
           .jw-pour.on, .jw-pour.on .jw-pour-glow { animation: none; }
+          .jw-gem::before, .jw-toy--carats:hover .jw-carat-pip,
+          .jw-toy--ingot:hover .jw-ingot-shine::before { animation: none; }
+          .jw-coin { transition: transform .35s ease; }
         }
       ` }} />
     </div>
   );
 }
 
+// metal ramps for SVG settings (gold / silver), per the house realism spec
+const METAL = {
+  gold: { hi: "#fff6da", mid: "#e7b94e", lo: "#8a6410", prongHi: "#fff6da", prongMid: "#e7b94e", prongLo: "#9a6f12", girdle: "rgba(201,150,47,0.95)" },
+  silver: { hi: "#ffffff", mid: "#aab4bf", lo: "#3c434b", prongHi: "#ffffff", prongMid: "#cdd6de", prongLo: "#6b7682", girdle: "rgba(190,200,210,0.95)" },
+} as const;
+
 /**
- * A jeweler's round-brilliant, viewed from the top: a girdle ring of facets,
- * a band of kite/bezel facets, and a table — each facet shaded light/dark to
- * fake refraction — set in four gold prongs, with prismatic fire and a culet
- * sparkle. Coloured by the gem's accent.
+ * A forged jeweller's object: a faceted round-brilliant (girdle facets, kite
+ * band, table + culet sparkle, prismatic fire) seated in prongs, wrapped in a
+ * thick beveled metal bezel (gold or silver), and ringed by a "carat halo" of
+ * tiny set diamonds — so the button reads minted, weighty and real.
  */
-function Diamond({ accent }: { accent: string }) {
-  const id = accent.replace("#", "");
+function GemSetting({ gem }: { gem: Gem }) {
+  const accent = gem.color;
+  const m = METAL[gem.setting];
+  const id = `${gem.key}-${gem.setting}`;
   const cx = 32, cy = 32;
   const TWO = Math.PI * 2;
   const pol = (r: number, a: number): [number, number] => [cx + Math.cos(a) * r, cy + Math.sin(a) * r];
   const N = 16;
-  const Rg = 25.5, Rm = 17.5, Rt = 9.5; // girdle, mid, table radii
+  // stone sits inside the bezel + halo, so it's smaller than the full circle
+  const Rg = 16.5, Rm = 11.5, Rt = 6.2;      // girdle, mid, table radii (the stone)
+  const Rbez = 26.5;                          // outer bezel rim
+  const Rhalo = 21.5;                         // ring the halo diamonds sit on
   const quad = (r0: number, r1: number, a0: number, a1: number) => {
     const p = [pol(r0, a0), pol(r0, a1), pol(r1, a1), pol(r1, a0)];
     return p.map((q) => `${q[0].toFixed(1)} ${q[1].toFixed(1)}`).join(" L ");
@@ -789,6 +1256,7 @@ function Diamond({ accent }: { accent: string }) {
   const tablePts = Array.from({ length: N }, (_, i) => pol(Rt, (i / N) * TWO).map((v) => v.toFixed(1)).join(",")).join(" ");
   const prongs = [Math.PI / 4, (3 * Math.PI) / 4, (5 * Math.PI) / 4, (7 * Math.PI) / 4].map((a) => pol(Rg, a));
   const fire = [["#ff5da2", 8], ["#5ad1ff", 132], ["#b9ff5a", 250]] as const;
+  const HALO = 16; // tiny set diamonds in the carat-halo ring
   return (
     <svg viewBox="0 0 64 64" aria-hidden="true">
       <defs>
@@ -802,12 +1270,50 @@ function Diamond({ accent }: { accent: string }) {
           <stop offset="100%" stopColor="#000000" stopOpacity="0.45" />
         </radialGradient>
         <linearGradient id={`gprong-${id}`} x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stopColor="#fff6da" /><stop offset="45%" stopColor="#e7b94e" /><stop offset="100%" stopColor="#9a6f12" />
+          <stop offset="0%" stopColor={m.prongHi} /><stop offset="45%" stopColor={m.prongMid} /><stop offset="100%" stopColor={m.prongLo} />
         </linearGradient>
+        {/* beveled forged bezel — bright top-left to dark bottom-right */}
+        <linearGradient id={`gbez-${id}`} x1="0.18" y1="0.1" x2="0.85" y2="0.95">
+          <stop offset="0%" stopColor={m.hi} />
+          <stop offset="42%" stopColor={m.mid} />
+          <stop offset="100%" stopColor={m.lo} />
+        </linearGradient>
+        <radialGradient id={`gseat-${id}`} cx="50%" cy="50%" r="50%">
+          <stop offset="55%" stopColor="#000000" stopOpacity="0.55" />
+          <stop offset="100%" stopColor="#000000" stopOpacity="0" />
+        </radialGradient>
       </defs>
-      {/* gem body */}
+
+      {/* soft cast shadow under the whole forged piece */}
+      <ellipse cx="32" cy="56" rx="22" ry="5" fill="#000000" opacity="0.35" />
+
+      {/* ── forged bezel ring (thick, beveled) ── */}
+      <circle cx={cx} cy={cy} r={Rbez} fill={`url(#gbez-${id})`} />
+      {/* bright specular arc top-left */}
+      <path d={`M ${cx - 19} ${cy - 14} A ${Rbez - 1} ${Rbez - 1} 0 0 1 ${cx + 16} ${cy - 19}`}
+        fill="none" stroke="#ffffff" strokeOpacity="0.6" strokeWidth="2.2" strokeLinecap="round" />
+      {/* dark rim bottom-right for the bevel */}
+      <path d={`M ${cx + 19} ${cy + 14} A ${Rbez - 1} ${Rbez - 1} 0 0 1 ${cx - 16} ${cy + 19}`}
+        fill="none" stroke="#000000" strokeOpacity="0.4" strokeWidth="2.4" strokeLinecap="round" />
+      {/* inner seat — a recessed dark cup so the stone sits in metal */}
+      <circle cx={cx} cy={cy} r={Rhalo + 2.2} fill="#15100a" />
+      <circle cx={cx} cy={cy} r={Rhalo + 2.2} fill={`url(#gseat-${id})`} />
+
+      {/* ── carat halo: a ring of tiny set diamonds in the metal ── */}
+      {Array.from({ length: HALO }, (_, i) => {
+        const a = (i / HALO) * TWO;
+        const [hx, hy] = pol(Rhalo, a);
+        return (
+          <g key={`halo${i}`}>
+            <circle cx={hx} cy={hy} r="2.1" fill={`url(#gprong-${id})`} />
+            <circle cx={hx} cy={hy} r="1.35" fill="#ffffff" opacity="0.95" />
+            <circle cx={hx - 0.4} cy={hy - 0.4} r="0.5" fill="#ffffff" />
+          </g>
+        );
+      })}
+
+      {/* ── the seated stone ── */}
       <circle cx={cx} cy={cy} r={Rg} fill={`url(#gd-${id})`} />
-      {/* facets — light/dark shards fake refraction */}
       <g strokeLinejoin="round">
         {facets.map((f, i) => (
           <path key={i} d={f.d}
@@ -816,7 +1322,7 @@ function Diamond({ accent }: { accent: string }) {
             stroke="rgba(255,255,255,0.14)" strokeWidth="0.35" />
         ))}
       </g>
-      {/* iridescent fire — a spectral conic fan dispersed across the stone */}
+      {/* iridescent fire — spectral conic fan */}
       <g style={{ mixBlendMode: "screen" }}>
         {Array.from({ length: N }, (_, i) => {
           const a0 = (i / N) * TWO, a1 = ((i + 1) / N) * TWO;
@@ -827,26 +1333,89 @@ function Diamond({ accent }: { accent: string }) {
       </g>
       {/* prismatic fire flecks */}
       {fire.map(([c, deg], i) => {
-        const [fx, fy] = pol(Rm - 2, (deg * Math.PI) / 180);
-        return <circle key={i} cx={fx} cy={fy} r="2.4" fill={c} opacity="0.55" style={{ mixBlendMode: "screen" }} />;
+        const [fx, fy] = pol(Rm - 1.5, (deg * Math.PI) / 180);
+        return <circle key={i} cx={fx} cy={fy} r="1.7" fill={c} opacity="0.55" style={{ mixBlendMode: "screen" }} />;
       })}
       {/* table facet */}
       <polygon points={tablePts} fill="#ffffff" opacity="0.16" stroke="rgba(255,255,255,0.45)" strokeWidth="0.5" />
-      <polyline points={tablePts + " " + tablePts.split(" ")[0]} fill="none" stroke="rgba(0,0,0,0.18)" strokeWidth="0.4" />
-      {/* edge darkening for depth + gold girdle */}
+      {/* edge darkening + metal girdle */}
       <circle cx={cx} cy={cy} r={Rg} fill={`url(#gdEdge-${id})`} />
-      <circle cx={cx} cy={cy} r={Rg} fill="none" stroke="rgba(201,150,47,0.95)" strokeWidth="1.4" />
+      <circle cx={cx} cy={cy} r={Rg} fill="none" stroke={m.girdle} strokeWidth="1.2" />
       {/* specular highlight + culet sparkle */}
-      <ellipse cx="24" cy="21" rx="7" ry="3.4" fill="#ffffff" opacity="0.5" transform="rotate(-28 24 21)" />
-      <circle cx={cx} cy={cy} r="1.5" fill="#ffffff" />
-      <path d={`M${cx} ${cy - 5}L${cx} ${cy + 5}M${cx - 5} ${cy}L${cx + 5} ${cy}`} stroke="#ffffff" strokeWidth="0.6" opacity="0.7" />
-      {/* gold prongs gripping the girdle */}
+      <ellipse cx="27" cy="25" rx="4.4" ry="2.2" fill="#ffffff" opacity="0.5" transform="rotate(-28 27 25)" />
+      <circle cx={cx} cy={cy} r="1.1" fill="#ffffff" />
+      <path d={`M${cx} ${cy - 3.4}L${cx} ${cy + 3.4}M${cx - 3.4} ${cy}L${cx + 3.4} ${cy}`} stroke="#ffffff" strokeWidth="0.5" opacity="0.7" />
+      {/* metal prongs gripping the girdle */}
       {prongs.map(([px, py], i) => (
         <g key={i}>
-          <circle cx={px} cy={py} r="3.1" fill={`url(#gprong-${id})`} stroke="rgba(120,80,12,0.6)" strokeWidth="0.5" />
-          <circle cx={px - 0.9} cy={py - 0.9} r="1" fill="#fff6da" opacity="0.9" />
+          <circle cx={px} cy={py} r="2.6" fill={`url(#gprong-${id})`} stroke="rgba(0,0,0,0.45)" strokeWidth="0.5" />
+          <circle cx={px - 0.8} cy={py - 0.8} r="0.9" fill={m.prongHi} opacity="0.95" />
         </g>
       ))}
+    </svg>
+  );
+}
+
+/**
+ * A struck minted coin face — solid gold (heads, "OBJET D'ART") or silver
+ * (tails, a brilliant relief), with a milled/reeded edge, beveled rim and a
+ * raised embossed relief. Used by the flippable coin toy.
+ */
+function CoinFace({ metal }: { metal: "gold" | "silver" }) {
+  const id = `coin-${metal}`;
+  const ramp = metal === "gold"
+    ? { hi: "#fff6da", a: "#f6e6b4", b: "#e7b94e", c: "#b8860b", d: "#8a6410" }
+    : { hi: "#ffffff", a: "#e8edf2", b: "#aab4bf", c: "#6b7682", d: "#cdd6de" };
+  const reeds = 56;
+  const cx = 32, cy = 32;
+  return (
+    <svg viewBox="0 0 64 64" aria-hidden="true">
+      <defs>
+        <linearGradient id={`face-${id}`} x1="0.15" y1="0.1" x2="0.85" y2="0.95">
+          <stop offset="0%" stopColor={ramp.hi} />
+          <stop offset="28%" stopColor={ramp.a} />
+          <stop offset="62%" stopColor={ramp.b} />
+          <stop offset="100%" stopColor={ramp.c} />
+        </linearGradient>
+        <radialGradient id={`shine-${id}`} cx="38%" cy="30%" r="70%">
+          <stop offset="0%" stopColor="#ffffff" stopOpacity="0.7" />
+          <stop offset="40%" stopColor="#ffffff" stopOpacity="0.12" />
+          <stop offset="100%" stopColor="#ffffff" stopOpacity="0" />
+        </radialGradient>
+      </defs>
+      {/* milled / reeded edge */}
+      <circle cx={cx} cy={cy} r="31" fill={ramp.d} />
+      {Array.from({ length: reeds }, (_, i) => {
+        const a = (i / reeds) * Math.PI * 2;
+        const x1 = cx + Math.cos(a) * 28.5, y1 = cy + Math.sin(a) * 28.5;
+        const x2 = cx + Math.cos(a) * 31, y2 = cy + Math.sin(a) * 31;
+        return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke={i % 2 ? ramp.hi : ramp.c} strokeWidth="1.4" />;
+      })}
+      {/* struck field, beveled */}
+      <circle cx={cx} cy={cy} r="28" fill={`url(#face-${id})`} />
+      <circle cx={cx} cy={cy} r="28" fill="none" stroke="#000000" strokeOpacity="0.25" strokeWidth="1" />
+      <circle cx={cx} cy={cy} r="24" fill="none" stroke={ramp.hi} strokeOpacity="0.6" strokeWidth="0.8" />
+      {/* relief */}
+      {metal === "gold" ? (
+        <g fill="none" stroke={ramp.d} strokeOpacity="0.85" strokeWidth="0.9" strokeLinejoin="round">
+          <text x={cx} y={cy - 2} textAnchor="middle"
+            style={{ font: "700 8px var(--font-fraunces, Georgia, serif)", fill: ramp.d, stroke: "none" }}>OBJET</text>
+          <text x={cx} y={cy + 8} textAnchor="middle"
+            style={{ font: "700 7px var(--font-fraunces, Georgia, serif)", fill: ramp.d, stroke: "none" }}>D&rsquo;ART</text>
+          <circle cx={cx} cy={cy + 17} r="2.2" fill={ramp.d} stroke="none" />
+        </g>
+      ) : (
+        <g>
+          {/* a small brilliant relief on the silver face */}
+          <polygon points="32,16 44,28 32,48 20,28" fill={ramp.hi} fillOpacity="0.5" stroke={ramp.c} strokeWidth="0.8" />
+          <polygon points="32,16 38,28 32,34 26,28" fill="#ffffff" fillOpacity="0.8" />
+          <line x1="20" y1="28" x2="44" y2="28" stroke={ramp.c} strokeWidth="0.7" />
+          <text x={cx} y={cy + 17} textAnchor="middle"
+            style={{ font: "700 5px var(--font-mono, monospace)", fill: ramp.c }}>· d&rsquo;art ·</text>
+        </g>
+      )}
+      {/* shine sweep highlight */}
+      <circle cx={cx} cy={cy} r="28" fill={`url(#shine-${id})`} />
     </svg>
   );
 }
