@@ -4,6 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
+import { getFieldAudio } from "@/lib/audio";
+import { useField } from "@/store/field";
+import * as haptics from "@/lib/haptics";
 
 /**
  * /movement — a real(ish) mechanical watch movement in Three.js.
@@ -94,23 +97,97 @@ function gearGeometry(opts: {
 }
 
 const SPEEDS = [
+  { label: "still", v: 0 },
   { label: "real time", v: 1 },
   { label: "30×", v: 30 },
   { label: "300×", v: 300 },
 ];
 const VIEWS = ["iso", "top", "side", "macro-balance", "macro-escape", "macro-train"];
+const FACES = ["genève", "aventurine"];
+
+// a small, cute, draggable sundial — overlaid at the foot of the movement.
+function SundialChip() {
+  const [dayT, setDayT] = useState(0.36);
+  const dragging = useRef(false);
+  const W = 150, H = 118, C = W / 2, baseY = 92, arcR = 60;
+  const polar = (r: number, deg: number): [number, number] => {
+    const a = (deg - 90) * (Math.PI / 180);
+    return [C + r * Math.cos(a), baseY + r * Math.sin(a)];
+  };
+  const t = dayT;
+  const ang = 180 + t * 180;
+  const [sx, sy] = polar(arcR, ang);
+  const low = Math.sin(t * Math.PI);
+  const [shx, shy] = polar(14 + (1 - low) * 40, 90 + (t * 180 - 90));
+  const hour = 6 + t * 12; const hh = Math.floor(hour); const mm = Math.floor((hour - hh) * 60);
+  const night = t > 0.97 || t < 0.03;
+  const sky = t < 0.18 ? ["#241a2e", "#7a4a3a"] : t < 0.42 ? ["#3a6da0", "#bcd4e6"]
+    : t < 0.6 ? ["#5b96cf", "#dff0fb"] : t < 0.84 ? ["#b58a4a", "#f0c98a"] : ["#2a1f34", "#7a3f30"];
+  const setFrom = (e: React.PointerEvent) => {
+    const r = (e.currentTarget as Element).getBoundingClientRect();
+    setDayT(Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)));
+  };
+  const down = (e: React.PointerEvent) => { dragging.current = true; (e.target as Element).setPointerCapture?.(e.pointerId); setFrom(e); };
+  const move = (e: React.PointerEvent) => { if (dragging.current) setFrom(e); };
+  const up = () => {
+    if (!dragging.current) return; dragging.current = false;
+    try { getFieldAudio().playNote(60 + Math.round(dayT * 24), 140); } catch { /* noop */ }
+    haptics.ripple(0.4); useField.getState().recordTape("ripple", 0.3 + dayT * 0.5, "movement/sundial");
+  };
+  return (
+    <div className="mv-sundial">
+      <svg viewBox={`0 0 ${W} ${H}`} onPointerDown={down} onPointerMove={move} onPointerUp={up} style={{ touchAction: "none", cursor: "grab" }}>
+        <defs>
+          <linearGradient id="mvSunSky" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={sky[0]} /><stop offset="100%" stopColor={sky[1]} /></linearGradient>
+          <radialGradient id="mvSunDisc" cx="50%" cy="50%" r="50%"><stop offset="0%" stopColor="#fff6da" /><stop offset="60%" stopColor="#fbcf6b" /><stop offset="100%" stopColor="#e89a35" /></radialGradient>
+          <clipPath id="mvSunClip"><rect x="6" y="6" width={W - 12} height={baseY - 6} rx="10" /></clipPath>
+        </defs>
+        <rect x="2" y="2" width={W - 4} height={H - 4} rx="12" fill="rgba(10,12,16,0.7)" stroke="rgba(231,211,154,0.3)" />
+        <g clipPath="url(#mvSunClip)">
+          <rect x="6" y="6" width={W - 12} height={baseY - 6} fill="url(#mvSunSky)" />
+          {night && Array.from({ length: 16 }, (_, i) => {
+            const stx = 12 + ((Math.sin(i * 12.9) * 43758) % 1 + 1) % 1 * (W - 24);
+            const sty = 10 + ((Math.sin(i * 41.2) * 43758) % 1 + 1) % 1 * 60;
+            return <circle key={i} cx={stx} cy={sty} r={0.6} fill="#eaf0ff" opacity={0.7} />;
+          })}
+          {Array.from({ length: 13 }, (_, i) => { const aa = 180 + (i / 12) * 180; const [x1, y1] = polar(arcR + 3, aa); const [x2, y2] = polar(arcR - 2, aa); return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="rgba(255,255,255,0.3)" strokeWidth={i % 6 === 0 ? 1.2 : 0.6} />; })}
+          <circle cx={sx} cy={sy} r={12} fill="#ffe6a8" opacity={0.3 * low + 0.08} />
+          <circle cx={sx} cy={sy} r={6} fill="url(#mvSunDisc)" />
+          <rect x="6" y={baseY} width={W - 12} height={H - baseY} fill="#241a12" />
+          <line x1={C} y1={baseY} x2={shx} y2={shy} stroke="rgba(0,0,0,0.45)" strokeWidth="2.4" strokeLinecap="round" />
+          <path d={`M${C - 4} ${baseY} L${C} ${baseY - 20} L${C + 4} ${baseY} Z`} fill="#cbb377" stroke="#8a6c34" strokeWidth="0.6" />
+        </g>
+        <text x={C} y={baseY + 20} textAnchor="middle" className="mv-sun-time">{String(hh).padStart(2, "0")}:{String(mm).padStart(2, "0")}</text>
+      </svg>
+    </div>
+  );
+}
 
 export default function Movement() {
   const wrapRef = useRef<HTMLDivElement>(null);
   const speedRef = useRef(1);
+  const resyncRef = useRef(false);
   const applyViewRef = useRef<((n: string) => void) | null>(null);
+  const swapFaceRef = useRef<((f: string) => void) | null>(null);
   const clockRef = useRef<HTMLSpanElement>(null);
   const [speed, setSpeed] = useState(1);
   const [view, setView] = useState("iso");
+  const [face, setFace] = useState("genève");
+
+  const pickSpeed = (v: number) => {
+    speedRef.current = v;
+    if (v === 1) resyncRef.current = true;
+    setSpeed(v);
+    try { getFieldAudio().playNote(v === 0 ? 50 : 60 + Math.round(Math.log2(v || 1) * 4), 80); } catch { /* noop */ }
+    haptics.tap();
+    useField.getState().recordTape("object", 0.4, `movement/speed/${v}`);
+  };
 
   useEffect(() => {
     const wrap = wrapRef.current;
     if (!wrap) return;
+
+    try { getFieldAudio().setAmbientProfile("time"); } catch { /* noop */ }
 
     const params = new URLSearchParams(window.location.search);
     const spin = params.get("spin") !== "0";
@@ -183,8 +260,29 @@ export default function Movement() {
     })();
     const genevaRough = genevaTex.clone(); genevaRough.colorSpace = THREE.NoColorSpace;
 
+    // Aventurine — deep blue glass scattered with gold flecks (the "starry
+    // night" dial from the original watch, kept as switchable character).
+    const aventurineTex = (() => {
+      const s = 1024;
+      const c = document.createElement("canvas"); c.width = c.height = s;
+      const x = c.getContext("2d")!;
+      const bg = x.createRadialGradient(s * 0.42, s * 0.36, 0, s / 2, s / 2, s * 0.7);
+      bg.addColorStop(0, "#16306b"); bg.addColorStop(0.6, "#0c1d4a"); bg.addColorStop(1, "#04081e");
+      x.fillStyle = bg; x.fillRect(0, 0, s, s);
+      for (let i = 0; i < 1400; i++) {
+        const px = ((Math.sin(i * 12.99) * 43758.5) % 1 + 1) % 1 * s;
+        const py = ((Math.sin(i * 78.23) * 43758.5) % 1 + 1) % 1 * s;
+        const r = 0.4 + (((Math.sin(i * 3.7) * 9999) % 1 + 1) % 1) * 1.6;
+        x.fillStyle = i % 4 === 0 ? "rgba(255,228,160,0.9)" : "rgba(210,224,255,0.7)";
+        x.beginPath(); x.arc(px, py, r, 0, Math.PI * 2); x.fill();
+      }
+      const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+      return t;
+    })();
+
     // ── materials ──
     const matPlate = new THREE.MeshStandardMaterial({ color: 0xc3c6cc, metalness: 1, roughness: 0.55, map: genevaTex, roughnessMap: genevaRough });
+    const matBridge = new THREE.MeshStandardMaterial({ color: 0xc3c6cc, metalness: 1, roughness: 0.4 });
     const matBrass = new THREE.MeshStandardMaterial({ color: 0xd8a85a, metalness: 1, roughness: 0.22 });
     const matSteel = new THREE.MeshStandardMaterial({ color: 0xdfe3ea, metalness: 1, roughness: 0.16 });
     const matBlued = new THREE.MeshStandardMaterial({ color: 0x2b3d6b, metalness: 1, roughness: 0.18 });
@@ -212,6 +310,25 @@ export default function Movement() {
     rimRing.rotation.x = Math.PI / 2;
     rimRing.position.y = -1.2 + CFG.plateThick / 2;
     root.add(rimRing);
+
+    // switchable dial finish — Côtes de Genève ⇄ aventurine "starry night"
+    const applyFace = (f: string) => {
+      if (f === "aventurine") {
+        matPlate.map = aventurineTex; matPlate.roughnessMap = null;
+        matPlate.color.set(0x0e1830); matPlate.metalness = 0.35; matPlate.roughness = 0.3;
+        matPlate.emissive.set(0x0a1330); matPlate.emissiveIntensity = 0.25;
+      } else {
+        matPlate.map = genevaTex; matPlate.roughnessMap = genevaRough;
+        matPlate.color.set(0xc3c6cc); matPlate.metalness = 1; matPlate.roughness = 0.55;
+        matPlate.emissive.set(0x000000); matPlate.emissiveIntensity = 0;
+      }
+      matPlate.needsUpdate = true;
+    };
+    swapFaceRef.current = applyFace;
+
+    // pressable parts: collected for raycasting + a little push-in animation
+    const pressables: Array<{ mesh: THREE.Object3D; rest: THREE.Vector3; inDir: THREE.Vector3; act: string }> = [];
+    const pressAnim: { rec: typeof pressables[number] | null; t0: number } = { rec: null, t0: 0 };
 
     // ── studio grounding (added to scene, not root, so framing ignores it) ──
     const floorY = -1.2 - CFG.plateThick / 2 - 0.05;
@@ -395,13 +512,13 @@ export default function Movement() {
       const cock = new THREE.Group();
       const dx = balancePos.x - anchor.x, dz = balancePos.y - anchor.y;
       const len = Math.hypot(dx, dz);
-      const arm = new THREE.Mesh(new THREE.BoxGeometry(len, 0.34, 1.1), matPlate);
+      const arm = new THREE.Mesh(new THREE.BoxGeometry(len, 0.34, 1.1), matBridge);
       arm.position.set(anchor.x + dx / 2, 2.35, anchor.y + dz / 2);
       arm.rotation.y = -Math.atan2(dz, dx);
       arm.castShadow = true;
       cock.add(arm);
       // foot + two screws at the anchored end
-      const foot = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 0.9, 0.4, 20), matPlate);
+      const foot = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 0.9, 0.4, 20), matBridge);
       foot.position.set(anchor.x, 2.25, anchor.y); cock.add(foot);
       [-0.5, 0.5].forEach((o) => {
         const sx = anchor.x + Math.cos(arm.rotation.y + Math.PI / 2) * o;
@@ -410,7 +527,7 @@ export default function Movement() {
         screw.position.set(sx, 2.4, sz); cock.add(screw);
       });
       // end boss + upper jewel over the balance staff
-      const boss = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.7, 0.42, 20), matPlate);
+      const boss = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.7, 0.42, 20), matBridge);
       boss.position.set(balancePos.x, 2.4, balancePos.y); cock.add(boss);
       const upperJewel = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.26, 0.16, 16), matRuby);
       upperJewel.position.set(balancePos.x, 2.62, balancePos.y); cock.add(upperJewel);
@@ -440,6 +557,86 @@ export default function Movement() {
     const secCap = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 0.3, 12), matGold);
     secGroup.add(secCap);
     root.add(secGroup);
+
+    // ── tag the moving parts so taps can find them ──
+    const tag = (o: THREE.Object3D, act: string) => { o.traverse((c) => { c.userData.act = act; }); };
+    tag(center.group, "gear-center"); tag(third.group, "gear-third");
+    tag(fourth.group, "gear-fourth"); tag(escape.group, "gear-escape");
+    tag(barrel.group, "wind"); tag(drum, "wind"); tag(ratchet, "wind");
+    tag(balance, "balance");
+    const GEAR_PITCH: Record<string, number> = { "gear-center": 60, "gear-third": 64, "gear-fourth": 67, "gear-escape": 72 };
+
+    // ── crown + chronograph pushers on the case (3 o'clock) ──
+    const caseY = -0.55;
+    const mkButton = (angDeg: number, act: string, crown: boolean) => {
+      const ang = (angDeg * Math.PI) / 180;
+      const dir = new THREE.Vector3(Math.cos(ang), 0, Math.sin(ang));
+      const len = crown ? 1.9 : 1.2;
+      const rad = crown ? 1.15 : 0.55;
+      const g = new THREE.Group();
+      const body = new THREE.Mesh(new THREE.CylinderGeometry(rad, rad, len, crown ? 28 : 18), crown ? matGold : matSteel);
+      body.rotation.z = Math.PI / 2; body.position.x = len / 2; g.add(body);
+      const cap = new THREE.Mesh(new THREE.CylinderGeometry(rad * (crown ? 0.78 : 0.92), rad * (crown ? 0.78 : 0.92), 0.22, crown ? 24 : 16), crown ? matGold : matGold);
+      cap.rotation.z = Math.PI / 2; cap.position.x = len + 0.1; g.add(cap);
+      if (crown) {
+        for (let i = 0; i < 14; i++) {
+          const a = (i / 14) * Math.PI * 2;
+          const flute = new THREE.Mesh(new THREE.BoxGeometry(len * 0.92, 0.12, 0.12), matGold);
+          flute.position.set(len / 2, Math.cos(a) * rad, Math.sin(a) * rad);
+          g.add(flute);
+        }
+      }
+      g.position.set(dir.x * CFG.plateR, caseY, dir.z * CFG.plateR);
+      g.rotation.y = -ang;
+      g.traverse((o) => { o.castShadow = true; });
+      tag(g, act);
+      root.add(g);
+      pressables.push({ mesh: g, rest: g.position.clone(), inDir: dir.clone().multiplyScalar(-1), act });
+    };
+    mkButton(0, "wind", true);      // crown — wind
+    mkButton(24, "still", false);   // upper pusher — still / run
+    mkButton(-24, "speed", false);  // lower pusher — cycle speed
+
+    // ── interactions: tap a part for sound · haptic · tape (like the site) ──
+    const windKick = { v: 0 };
+    const wind = () => {
+      try { getFieldAudio().bell(); window.setTimeout(() => { try { getFieldAudio().playNote(67, 90); } catch { /* noop */ } }, 70); } catch { /* noop */ }
+      windKick.v = 0.5; haptics.roll();
+      useField.getState().recordTape("object", 0.6, "movement/wind");
+    };
+    const press = (act: string) => {
+      const rec = pressables.find((p) => p.act === act);
+      if (rec) { pressAnim.rec = rec; pressAnim.t0 = performance.now(); }
+    };
+    const handleHit = (act: string | undefined) => {
+      const a = getFieldAudio();
+      if (!act) { try { a.playNote(57, 90); } catch { /* noop */ } haptics.tap(); useField.getState().recordTape("object", 0.3, "movement/plate"); return; }
+      if (act === "wind") { wind(); press("wind"); return; }
+      if (act === "still") { const next = speedRef.current === 0 ? 1 : 0; pickSpeed(next); press("still"); return; }
+      if (act === "speed") { const order = [0, 1, 30, 300]; pickSpeed(order[(order.indexOf(speedRef.current) + 1) % order.length]); press("speed"); return; }
+      if (act === "balance") { try { a.chime(); } catch { /* noop */ } haptics.ripple(0.6); useField.getState().recordTape("sigil", 0.7, "movement/balance"); return; }
+      if (act.startsWith("gear")) { try { a.playNote(GEAR_PITCH[act] ?? 60, 180); } catch { /* noop */ } haptics.tap(); useField.getState().recordTape("object", 0.5, `movement/${act}`); return; }
+    };
+    const raycaster = new THREE.Raycaster();
+    const ndc = new THREE.Vector2();
+    let downX = 0, downY = 0, downT = 0;
+    const onDown = (e: PointerEvent) => { downX = e.clientX; downY = e.clientY; downT = performance.now(); };
+    const onUp = (e: PointerEvent) => {
+      if (performance.now() - downT > 420) return;
+      if (Math.hypot(e.clientX - downX, e.clientY - downY) > 7) return;
+      const rect = renderer.domElement.getBoundingClientRect();
+      ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(ndc, camera);
+      const hits = raycaster.intersectObject(root, true);
+      if (!hits.length) return;
+      let o: THREE.Object3D | null = hits[0].object;
+      let act: string | undefined;
+      while (o) { if (o.userData && o.userData.act) { act = o.userData.act as string; break; } o = o.parent; }
+      handleHit(act);
+    };
+    renderer.domElement.addEventListener("pointerdown", onDown);
+    renderer.domElement.addEventListener("pointerup", onUp);
 
     // ── camera presets (framed from the assembly's bounding sphere) ──
     const box = new THREE.Box3().setFromObject(root);
@@ -497,35 +694,40 @@ export default function Movement() {
     // quantised steps — the signature "tick" of a mechanical watch — while
     // the balance itself swings smoothly. At real-time rate this still tells
     // the actual local time; the speed control fast-forwards the whole train.
-    const startLocalSec = (() => {
+    let simAccum = (() => {
       const d = new Date();
       return d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds() + d.getMilliseconds() / 1000;
     })();
-    const epoch = Date.now();
+    let lastNow = performance.now();
     const TICK = 0.4;          // seconds per escape tooth (15 teeth → 6 s/rev)
     const balHz = 1 / TICK;    // one balance cycle per tooth = 2.5 Hz
     let raf = 0;
 
     const tick = () => {
       const sp = speedRef.current;
-      // simulated seconds-of-day: exact local time at 1×, fast-forwarded above
-      const simSec = sp === 1
-        ? (() => { const d = new Date(); return d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds() + d.getMilliseconds() / 1000; })()
-        : startLocalSec + ((Date.now() - epoch) / 1000) * sp;
+      const now = performance.now();
+      let dt = (now - lastNow) / 1000; lastNow = now;
+      if (dt > 0.1) dt = 0.1;
+      if (resyncRef.current) {
+        const d = new Date();
+        simAccum = d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds() + d.getMilliseconds() / 1000;
+        resyncRef.current = false;
+      }
+      simAccum += dt * sp; // still mode (sp=0) freezes the whole train
+      const simSec = simAccum;
 
-      const step = TICK; // tooth cadence in sim-seconds (constant; sp scales simSec)
-      const tEff = Math.floor(simSec / step) * step; // quantised time for fast wheels
+      const tEff = Math.floor(simSec / TICK) * TICK; // quantised time for fast wheels
 
-      // fast wheels step; slow wheels (centre, barrel) run smooth
       stations.forEach((s) => {
         const smooth = s === center || s === barrel;
         s.group.rotation.y = s.omega * (smooth ? simSec : tEff);
       });
-      drum.rotation.y = barrel.omega * simSec;
-      ratchet.rotation.y = barrel.omega * simSec;
+      windKick.v *= 0.9;
+      drum.rotation.y = barrel.omega * simSec + windKick.v;
+      ratchet.rotation.y = barrel.omega * simSec + windKick.v * 1.6;
 
       // balance: smooth SHM; pallet fork snaps with the tick
-      const ph = simSec * balHz; // cycles
+      const ph = simSec * balHz;
       balance.rotation.y = Math.sin(ph * Math.PI * 2) * 1.05;
       fork.rotation.y = (Math.floor(ph * 2) % 2 ? 1 : -1) * 0.17;
 
@@ -533,6 +735,16 @@ export default function Movement() {
       hourHand.rotation.y = -((simSec / 3600) % 12) / 12 * Math.PI * 2;
       minuteHand.rotation.y = -((simSec / 60) % 60) / 60 * Math.PI * 2;
       secGroup.rotation.y = -((tEff % 60) / 60) * Math.PI * 2;
+
+      // button press-in animation
+      pressables.forEach((p) => { p.mesh.position.copy(p.rest); });
+      if (pressAnim.rec) {
+        const el = now - pressAnim.t0;
+        if (el < 170) {
+          const d = Math.sin((el / 170) * Math.PI) * 0.24;
+          pressAnim.rec.mesh.position.copy(pressAnim.rec.rest).addScaledVector(pressAnim.rec.inDir, d);
+        } else pressAnim.rec = null;
+      }
 
       if (clockRef.current) {
         const s = Math.floor(simSec) % 86400;
@@ -551,6 +763,8 @@ export default function Movement() {
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
+      renderer.domElement.removeEventListener("pointerdown", onDown);
+      renderer.domElement.removeEventListener("pointerup", onUp);
       controls.dispose();
       renderer.dispose();
       pmrem.dispose();
@@ -568,7 +782,13 @@ export default function Movement() {
         <div className="mv-row" role="group" aria-label="speed">
           {SPEEDS.map((s) => (
             <button key={s.v} type="button" className={speed === s.v ? "on" : ""}
-              onClick={() => { speedRef.current = s.v; setSpeed(s.v); }}>{s.label}</button>
+              onClick={() => pickSpeed(s.v)}>{s.label}</button>
+          ))}
+        </div>
+        <div className="mv-row" role="group" aria-label="face">
+          {FACES.map((f) => (
+            <button key={f} type="button" className={face === f ? "on" : ""}
+              onClick={() => { swapFaceRef.current?.(f); setFace(f); try { getFieldAudio().chime(); } catch { /* noop */ } haptics.tap(); useField.getState().recordTape("object", 0.5, `movement/face/${f}`); }}>{f}</button>
           ))}
         </div>
         <div className="mv-row" role="group" aria-label="view">
@@ -577,11 +797,13 @@ export default function Movement() {
               onClick={() => { applyViewRef.current?.(v); setView(v); }}>{v.replace("macro-", "")}</button>
           ))}
         </div>
-        <div className="mv-hint">drag to orbit · scroll / pinch to zoom · hands tell real local time</div>
+        <div className="mv-hint">drag to orbit · tap the crown, pushers, gears &amp; balance · scroll / pinch to zoom</div>
       </div>
+      <div className="mv-sundial-wrap"><SundialChip /></div>
       <style dangerouslySetInnerHTML={{ __html: `
         .mv-hud {
-          position: absolute; left: 0; top: 0; padding: 16px;
+          position: absolute; left: 0; top: 0;
+          padding: calc(64px + env(safe-area-inset-top, 0px)) 16px 16px 16px;
           display: grid; gap: 8px; justify-items: start;
           pointer-events: none; z-index: 10;
           font-family: var(--font-mono, ui-monospace, monospace);
@@ -609,7 +831,20 @@ export default function Movement() {
           font-size: 10px; letter-spacing: 0.3px; text-transform: lowercase;
           color: rgba(242,238,230,0.4); text-shadow: 0 1px 6px rgba(0,0,0,0.6);
         }
-        @media (max-width: 560px) { .mv-title { font-size: 13px; } .mv-row button { padding: 8px 10px; } }
+        .mv-sundial-wrap {
+          position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%);
+          z-index: 10; pointer-events: auto; width: 168px;
+          filter: drop-shadow(0 10px 24px rgba(0,0,0,0.5));
+        }
+        .mv-sundial svg { width: 100%; height: auto; display: block; }
+        .mv-sun-time {
+          font-family: var(--font-fraunces, Georgia, serif); font-size: 13px;
+          fill: rgba(242,238,230,0.92); font-variant-numeric: tabular-nums;
+        }
+        @media (max-width: 560px) {
+          .mv-title { font-size: 13px; } .mv-row button { padding: 8px 10px; }
+          .mv-sundial-wrap { width: 140px; bottom: 12px; }
+        }
       ` }} />
     </div>
   );

@@ -39,6 +39,7 @@ const ROUTES: RouteEntry[] = [
   { key: "pulse",       icon: "pulse",    href: "/pulse",                             desc: "heartbeat · pattern" },
   { key: "charts",      icon: "charts",   href: "/charts",                            desc: "lines · candles · oscillators" },
   { key: "time",        icon: "watch",    href: "/time",                              desc: "chronograph" },
+  { key: "movement",    icon: "watch",    href: "/movement",                          desc: "mechanical movement · 3D" },
   { key: "watch",       icon: "watch",    href: "/watch",                             desc: "the room" },
   { key: "archive",     icon: "archive",  href: "/archive",      anchor: "archive",   desc: "the drawers" },
   { key: "kept",        icon: "kept",     href: "/kept",                              desc: "a private trail" },
@@ -70,6 +71,7 @@ export default function SiteHeader() {
     pathname.startsWith("/pulse") ||
     pathname.startsWith("/charts") ||
     pathname.startsWith("/time") ||
+    pathname.startsWith("/movement") ||
     pathname.startsWith("/fire") ||
     pathname.startsWith("/earth") ||
     pathname.startsWith("/growth") ||
