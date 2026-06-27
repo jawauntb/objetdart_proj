@@ -595,30 +595,41 @@ export default function Movement() {
       const s = 1024, c = document.createElement("canvas"); c.width = c.height = s;
       const x = c.getContext("2d")!;
       const C0 = s / 2;
-      const rNum = s * 0.40, rTickO = s * 0.475, rTickI = s * 0.45, rMinO = s * 0.475, rMinI = s * 0.462;
+      const rBandI = s * 0.345, rBandO = s * 0.5;
+      const rNum = s * 0.43, rTickO = s * 0.49, rTickMaj = s * 0.455, rTickMin = s * 0.47;
       x.clearRect(0, 0, s, s);
-      // minute track
+      // fumé chapter-ring band: translucent toward the open centre, deep at rim
+      const grad = x.createRadialGradient(C0, C0, rBandI, C0, C0, rBandO);
+      grad.addColorStop(0, "rgba(20,24,30,0.05)");
+      grad.addColorStop(0.18, "rgba(17,20,26,0.78)");
+      grad.addColorStop(0.7, "rgba(12,14,19,0.92)");
+      grad.addColorStop(1, "rgba(6,8,11,0.98)");
+      x.beginPath(); x.arc(C0, C0, rBandO, 0, Math.PI * 2); x.fillStyle = grad; x.fill();
+      x.globalCompositeOperation = "destination-out";
+      x.beginPath(); x.arc(C0, C0, rBandI, 0, Math.PI * 2); x.fill();
+      x.globalCompositeOperation = "source-over";
+      // inner + outer hairline rails
+      x.strokeStyle = "rgba(231,211,154,0.5)"; x.lineWidth = 2.5;
+      x.beginPath(); x.arc(C0, C0, rBandI + 6, 0, Math.PI * 2); x.stroke();
+      // minute track (opaque)
       for (let i = 0; i < 60; i++) {
         const a = (i / 60) * Math.PI * 2 - Math.PI / 2;
         const major = i % 5 === 0;
-        const ro = rMinO, ri = major ? rTickI : rMinI;
-        x.strokeStyle = major ? "rgba(231,211,154,0.95)" : "rgba(231,211,154,0.55)";
-        x.lineWidth = major ? 5 : 2;
-        x.beginPath(); x.moveTo(C0 + Math.cos(a) * ri, C0 + Math.sin(a) * ri); x.lineTo(C0 + Math.cos(a) * ro, C0 + Math.sin(a) * ro); x.stroke();
+        const ri = major ? rTickMaj : rTickMin;
+        x.strokeStyle = major ? "rgba(244,232,200,1)" : "rgba(231,211,154,0.8)";
+        x.lineWidth = major ? 6 : 2.4;
+        x.beginPath(); x.moveTo(C0 + Math.cos(a) * ri, C0 + Math.sin(a) * ri); x.lineTo(C0 + Math.cos(a) * rTickO, C0 + Math.sin(a) * rTickO); x.stroke();
       }
-      // hour numerals
-      x.fillStyle = "#e7d39a"; x.textAlign = "center"; x.textBaseline = "middle";
-      x.font = `600 ${Math.round(s * 0.052)}px "Times New Roman", Georgia, serif`;
+      // hour numerals — fully opaque, bright, with a soft dark halo for contrast
+      x.textAlign = "center"; x.textBaseline = "middle";
+      x.font = `700 ${Math.round(s * 0.058)}px "Times New Roman", Georgia, serif`;
       for (let h = 1; h <= 12; h++) {
         const a = (h / 12) * Math.PI * 2 - Math.PI / 2;
-        x.fillText(String(h), C0 + Math.cos(a) * rNum, C0 + Math.sin(a) * rNum + s * 0.004);
+        const nx = C0 + Math.cos(a) * rNum, ny = C0 + Math.sin(a) * rNum + s * 0.004;
+        x.shadowColor = "rgba(0,0,0,0.85)"; x.shadowBlur = 10;
+        x.fillStyle = "#f6e6b4"; x.fillText(String(h), nx, ny);
       }
-      // signature
-      x.fillStyle = "rgba(231,211,154,0.9)"; x.font = `600 ${Math.round(s * 0.026)}px "Times New Roman", Georgia, serif`;
-      x.fillText("OBJET D'ART", C0, C0 - s * 0.22);
-      x.font = `400 ${Math.round(s * 0.018)}px "Times New Roman", Georgia, serif`;
-      x.fillStyle = "rgba(231,211,154,0.6)";
-      x.fillText("automatique · genève", C0, C0 - s * 0.185);
+      x.shadowBlur = 0;
       const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
       return t;
     })();
