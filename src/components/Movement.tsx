@@ -286,13 +286,13 @@ export default function Movement() {
       const c = document.createElement("canvas"); c.width = c.height = s;
       const x = c.getContext("2d")!;
       const bg = x.createRadialGradient(s * 0.42, s * 0.36, 0, s / 2, s / 2, s * 0.7);
-      bg.addColorStop(0, "#16306b"); bg.addColorStop(0.6, "#0c1d4a"); bg.addColorStop(1, "#04081e");
+      bg.addColorStop(0, "#2a52a8"); bg.addColorStop(0.6, "#16306b"); bg.addColorStop(1, "#0a1640");
       x.fillStyle = bg; x.fillRect(0, 0, s, s);
       for (let i = 0; i < 1400; i++) {
         const px = ((Math.sin(i * 12.99) * 43758.5) % 1 + 1) % 1 * s;
         const py = ((Math.sin(i * 78.23) * 43758.5) % 1 + 1) % 1 * s;
-        const r = 0.4 + (((Math.sin(i * 3.7) * 9999) % 1 + 1) % 1) * 1.6;
-        x.fillStyle = i % 4 === 0 ? "rgba(255,228,160,0.9)" : "rgba(210,224,255,0.7)";
+        const r = 0.5 + (((Math.sin(i * 3.7) * 9999) % 1 + 1) % 1) * 1.9;
+        x.fillStyle = i % 4 === 0 ? "rgba(255,232,170,1)" : "rgba(225,235,255,0.85)";
         x.beginPath(); x.arc(px, py, r, 0, Math.PI * 2); x.fill();
       }
       const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
@@ -384,11 +384,12 @@ export default function Movement() {
 
     // switchable dial finish — Côtes de Genève · aventurine · nacre
     const applyFace = (f: string) => {
-      matPlate.iridescence = 0; matPlate.clearcoat = 0; // reset extras
+      matPlate.iridescence = 0; matPlate.clearcoat = 0; matPlate.emissiveMap = null; // reset extras
       if (f === "aventurine") {
         matPlate.map = aventurineTex; matPlate.roughnessMap = null;
-        matPlate.color.set(0x0e1830); matPlate.metalness = 0.35; matPlate.roughness = 0.3;
-        matPlate.emissive.set(0x0a1330); matPlate.emissiveIntensity = 0.25;
+        matPlate.color.set(0xffffff); matPlate.metalness = 0.4; matPlate.roughness = 0.34;
+        matPlate.emissive.set(0x16306b); matPlate.emissiveIntensity = 0.35;
+        matPlate.emissiveMap = aventurineTex;
       } else if (f === "nacre") {
         matPlate.map = nacreTex; matPlate.roughnessMap = null;
         matPlate.color.set(0xf3eef2); matPlate.metalness = 0.2; matPlate.roughness = 0.22;
