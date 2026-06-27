@@ -1,0 +1,14 @@
+import { chromium } from "playwright";
+const b = await chromium.launch({ executablePath: "/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell", args: ["--use-gl=angle","--use-angle=swiftshader","--ignore-gpu-blocklist","--no-sandbox"] });
+const p = await b.newPage({ viewport: { width: 800, height: 800 } });
+p.setDefaultTimeout(90000);
+await p.goto("http://localhost:3100/jewel", { waitUntil:"load" });
+await p.waitForTimeout(2500);
+await p.getByRole("button",{name:"emerald"}).click();
+await p.waitForTimeout(1500);
+await p.screenshot({ path: "iterations/iter-11/emerald-recolor.png" });
+await p.getByRole("button",{name:"rose"}).click();
+await p.waitForTimeout(1500);
+await p.screenshot({ path: "iterations/iter-11/rose-recolor.png" });
+console.log("done");
+await b.close();
