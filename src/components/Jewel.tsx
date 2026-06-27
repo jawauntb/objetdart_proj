@@ -30,16 +30,16 @@ type Gem = {
   key: string;
   label: string;
   chord: number[];
-  hue: number; // palette warp -1..1 (cooler↔warmer/pinker)
-  color: string; // svg accent
+  color: string;          // svg + shader accent (the gem's true colour)
+  rgb: [number, number, number]; // 0..1 for the shader tint
 };
 const GEMS: Gem[] = [
-  { key: "citrine",  label: "citrine",  chord: [60, 64, 67],     hue: 0.0,  color: "#f6e6b4" },
-  { key: "topaz",    label: "topaz",    chord: [62, 65, 69],     hue: 0.18, color: "#e7b94e" },
-  { key: "amber",    label: "amber",    chord: [57, 60, 64],     hue: 0.35, color: "#d98f2e" },
-  { key: "rose",     label: "rose",     chord: [64, 67, 71],     hue: -0.3, color: "#f3b9c8" },
-  { key: "emerald",  label: "emerald",  chord: [55, 59, 62, 67], hue: -0.55, color: "#bfe6c2" },
-  { key: "brilliant",label: "brilliant",chord: [72, 76, 79, 84], hue: 0.55, color: "#ffffff" },
+  { key: "citrine",  label: "citrine",  chord: [60, 64, 67],     color: "#f3cf3a", rgb: [0.95, 0.81, 0.23] },
+  { key: "topaz",    label: "topaz",    chord: [62, 65, 69],     color: "#4aa3e0", rgb: [0.29, 0.64, 0.88] },
+  { key: "amber",    label: "amber",    chord: [57, 60, 64],     color: "#e08a2a", rgb: [0.88, 0.54, 0.16] },
+  { key: "rose",     label: "rose",     chord: [64, 67, 71],     color: "#f29bbf", rgb: [0.95, 0.61, 0.75] },
+  { key: "emerald",  label: "emerald",  chord: [55, 59, 62, 67], color: "#3fbf85", rgb: [0.25, 0.75, 0.52] },
+  { key: "brilliant",label: "brilliant",chord: [72, 76, 79, 84], color: "#eaf2ff", rgb: [0.92, 0.95, 1.0] },
 ];
 
 export default function Jewel() {
@@ -53,14 +53,20 @@ export default function Jewel() {
     Array.from({ length: MAX_RIPPLES }, () => ({ x: 0.5, y: 0.5, born: -100, str: 0 })),
   );
   const ripIdx = useRef(0);
-  // palette hue target + smoothed, driven by gem presses
-  const hue = useRef({ v: 0, t: 0 });
+  // palette tint (the gem's colour the gold field turns toward), smoothed
+  const tint = useRef({ r: 1, g: 1, b: 1, amt: 0, tr: 1, tg: 1, tb: 1, tamt: 0 });
   // sustain ("pour gold") energy boost
   const pour = useRef(0); // 0..1 smoothed
   const pourTarget = useRef(0);
+  // spin (whirl), stretch, flip
+  const spin = useRef({ v: 0, vel: 0 });
+  const stretch = useRef({ v: 0, t: 0 });
+  const flip = useRef({ v: 0, t: 0 });
 
   const [pouring, setPouring] = useState(false);
   const [activeGem, setActiveGem] = useState<string | null>(null);
+  const [flipped, setFlipped] = useState(false);
+  const [stretching, setStretching] = useState(false);
 
   // sustain tone scheduler (repeated shimmering playNote while pouring)
   const pourTimer = useRef<number | null>(null);
@@ -84,7 +90,9 @@ export default function Jewel() {
     } catch { /* noop */ }
     haptics.ripple(0.7);
     useField.getState().recordTape("object", 0.7, `jewel/gem/${g.key}`);
-    hue.current.t = g.hue;
+    // turn the whole gold field toward this gem's colour (held until next gem)
+    tint.current.tr = g.rgb[0]; tint.current.tg = g.rgb[1]; tint.current.tb = g.rgb[2];
+    tint.current.tamt = 0.82;
     setActiveGem(g.key);
     window.setTimeout(() => setActiveGem((k) => (k === g.key ? null : k)), 260);
     // a big central ripple bloom on each gem
@@ -114,6 +122,50 @@ export default function Jewel() {
     }
   };
 
+  // ── SPIN: tap to whirl the gold (impulse that decays) + rising glint ──
+  const doSpin = () => {
+    spin.current.vel += 0.42;
+    const a = getFieldAudio();
+    try {
+      [0, 1, 2, 3].forEach((i) => window.setTimeout(() => { try { a.playNote(64 + i * 3, 150); } catch { /* noop */ } }, i * 60));
+    } catch { /* noop */ }
+    haptics.chop();
+    useField.getState().recordTape("sigil", 0.7, "jewel/spin");
+  };
+  // ── STRETCH: hold to stretch the caustics + low swell ──
+  const holdStretch = (on: boolean) => {
+    stretch.current.t = on ? 1 : 0;
+    setStretching(on);
+    if (on) {
+      try { getFieldAudio().playNote(45, 420); } catch { /* noop */ }
+      haptics.roll();
+      useField.getState().recordTape("sigil", 0.6, "jewel/stretch");
+    } else { haptics.tap(); }
+  };
+  // ── FLIP: mirror + flip the palette to rose-champagne, with a whoosh ──
+  const doFlip = () => {
+    const nf = !flipped;
+    setFlipped(nf);
+    flip.current.t = nf ? 1 : 0;
+    const a = getFieldAudio();
+    try { a.chime(); window.setTimeout(() => { try { a.playNote(nf ? 71 : 59, 320); } catch { /* noop */ } }, 60); } catch { /* noop */ }
+    haptics.roll();
+    spawnRipple(0.5, 0.5, 1.0, nowSec());
+    useField.getState().recordTape("object", 0.6, `jewel/flip/${nf ? "on" : "off"}`);
+  };
+  // ── SHAKE: a reverberant cascade + a storm of sparkle ripples ──
+  const doShake = () => {
+    const a = getFieldAudio();
+    const cascade = [72, 76, 79, 84, 79, 76, 72, 67];
+    cascade.forEach((m, i) => window.setTimeout(() => { try { a.playNote(m, 300 + i * 50); } catch { /* noop */ } }, i * 75));
+    for (let i = 0; i < MAX_RIPPLES; i++) {
+      spawnRipple(Math.random() * 0.8 + 0.1, Math.random() * 0.7 + 0.15, 1.0, nowSec());
+    }
+    spin.current.vel += 0.25;
+    haptics.storm();
+    useField.getState().recordTape("ripple", 1.0, "jewel/shake");
+  };
+
   useEffect(() => {
     const wrap = wrapRef.current;
     const canvas = canvasRef.current;
@@ -139,8 +191,13 @@ export default function Jewel() {
       uniform float u_warp;       // attract strength
       uniform float u_energy;     // 0..1 overall audio energy
       uniform vec3  u_bands;      // low / mid / high 0..1
-      uniform float u_hue;        // palette warp -1..1
+      uniform float u_hue;        // palette warp -1..1 (legacy, kept neutral)
+      uniform vec3  u_tint;       // gem colour the gold turns toward
+      uniform float u_tintAmt;    // 0 = pure gold, 1 = full gem colour
       uniform float u_pour;       // sustain energy boost 0..1
+      uniform float u_spin;       // whirl angle (radians)
+      uniform float u_stretch;    // vertical stretch 0..1
+      uniform float u_flip;       // palette/mirror flip 0..1
       uniform vec3  u_rip[${MAX_RIPPLES}];  // x, y, age(seconds)
       uniform float u_ripStr[${MAX_RIPPLES}];
 
@@ -178,6 +235,12 @@ export default function Jewel() {
         float dc = length(toC) + 0.05;
         float pull = u_warp * 0.42 / dc;
         vec2 wuv = uv - toC * pull;
+
+        // ── spin (whirl), stretch, flip transforms ──
+        wuv.x = mix(wuv.x, -wuv.x, u_flip);                       // flip mirrors the field
+        float cs = cos(u_spin), sn = sin(u_spin);
+        wuv = mat2(cs, -sn, sn, cs) * wuv;                        // spin rotates the gold
+        wuv *= vec2(1.0 / (1.0 + u_stretch * 0.7), 1.0 + u_stretch * 1.1); // stretch
 
         // ── ripple displacement (taps + gem booms) ──
         float ripField = 0.0;
@@ -252,25 +315,35 @@ export default function Jewel() {
         vec3 warm = vec3(1.05, 0.92, 0.72);
         vec3 cool = vec3(0.92, 0.95, 1.02);
         vec3 hueTint = mix(vec3(1.0), u_hue > 0.0 ? warm : cool, abs(u_hue));
+        hueTint *= mix(vec3(1.0), vec3(1.05, 0.84, 0.97), u_flip);  // rose-champagne when flipped
+
+        // recolour the gold ramp toward the chosen gem's colour
+        vec3 tlo = mix(gLo, u_tint * 0.5, u_tintAmt);
+        vec3 tmid = mix(gMid, u_tint * 0.85, u_tintAmt);
+        vec3 thi = mix(gHi, mix(u_tint, vec3(1.0), 0.25), u_tintAmt);
 
         vec3 base = vec3(0.045, 0.035, 0.022);          // dark lacquer ground
         vec3 col = base;
-        col = mix(col, gLo, smoothstep(0.0, 0.5, body));
-        col = mix(col, gMid, smoothstep(0.35, 0.85, body));
-        col = mix(col, gHi, smoothstep(0.7, 1.05, body));
+        col = mix(col, tlo, smoothstep(0.0, 0.5, body));
+        col = mix(col, tmid, smoothstep(0.35, 0.85, body));
+        col = mix(col, thi, smoothstep(0.7, 1.05, body));
         col *= hueTint;
+        // unmistakable recolour: re-tint the field to the gem's hue (luminance × colour)
+        float lum = dot(col, vec3(0.299, 0.587, 0.114));
+        vec3 gemmed = lum * u_tint * 1.9 + u_tint * 0.05;
+        col = mix(col, gemmed, u_tintAmt * 0.82);
 
-        // central warm bloom + gentle vignette
-        col += gMid * exp(-r*r*0.7) * (0.12 + u_bands.y*0.25);
+        // central bloom (tinted) + gentle vignette
+        col += tmid * exp(-r*r*0.7) * (0.12 + u_bands.y*0.25);
         col *= smoothstep(2.1, 0.1, r);
 
         // lens ridge ringing the cursor
         float lens = smoothstep(0.42, 0.0, abs(dc - 0.30)) * u_warp;
-        col += gHi * lens * 0.5;
+        col += thi * lens * 0.5;
 
         // diamonds: white-hot core + prismatic fringe + bloom
-        col += vec3(spark) * vec3(1.0, 0.97, 0.90) * 1.3;
-        col += disp * 0.5;
+        col += vec3(spark) * vec3(1.0, 0.97, 0.90) * 1.15;
+        col += disp * 0.95;                 // stronger prismatic fire (iridescence)
         col += vec3(spark) * energy * 0.4;  // sound-driven over-bloom
 
         // ripple shimmer overlay
@@ -317,7 +390,12 @@ export default function Jewel() {
     const uEnergy = gl.getUniformLocation(prog, "u_energy");
     const uBands = gl.getUniformLocation(prog, "u_bands");
     const uHue = gl.getUniformLocation(prog, "u_hue");
+    const uTint = gl.getUniformLocation(prog, "u_tint");
+    const uTintAmt = gl.getUniformLocation(prog, "u_tintAmt");
     const uPour = gl.getUniformLocation(prog, "u_pour");
+    const uSpin = gl.getUniformLocation(prog, "u_spin");
+    const uStretch = gl.getUniformLocation(prog, "u_stretch");
+    const uFlip = gl.getUniformLocation(prog, "u_flip");
     const uRip = gl.getUniformLocation(prog, "u_rip");
     const uRipStr = gl.getUniformLocation(prog, "u_ripStr");
 
@@ -345,6 +423,11 @@ export default function Jewel() {
       ptr.current.twarp = 0.5;
     };
     const onLeave = () => { ptr.current.twarp = 0.16; };
+    // SCROLL → STRETCH the gold (desktop wheel)
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      stretch.current.t = Math.max(0, Math.min(1, stretch.current.t + (e.deltaY > 0 ? 0.1 : -0.1)));
+    };
     const onDown = (e: PointerEvent) => {
       const rect = wrap.getBoundingClientRect();
       // ignore taps that land on the UI controls
@@ -362,6 +445,7 @@ export default function Jewel() {
     wrap.addEventListener("pointermove", onMove);
     wrap.addEventListener("pointerleave", onLeave);
     wrap.addEventListener("pointerdown", onDown);
+    wrap.addEventListener("wheel", onWheel, { passive: false });
 
     // FFT buffers
     const ripVec = new Float32Array(MAX_RIPPLES * 3);
@@ -380,9 +464,16 @@ export default function Jewel() {
 
       // pour energy smoothing
       pour.current += (pourTarget.current - pour.current) * 0.06;
-      // hue smoothing + relax toward neutral
-      hue.current.v += (hue.current.t - hue.current.v) * 0.07;
-      hue.current.t += (0 - hue.current.t) * 0.01;
+      // spin integrates + decays; stretch & flip ease toward target
+      spin.current.v += spin.current.vel;
+      spin.current.vel *= 0.95;
+      stretch.current.v += (stretch.current.t - stretch.current.v) * 0.08;
+      flip.current.v += (flip.current.t - flip.current.v) * 0.12;
+      // tint smoothing toward the active gem colour
+      tint.current.r += (tint.current.tr - tint.current.r) * 0.08;
+      tint.current.g += (tint.current.tg - tint.current.g) * 0.08;
+      tint.current.b += (tint.current.tb - tint.current.b) * 0.08;
+      tint.current.amt += (tint.current.tamt - tint.current.amt) * 0.06;
 
       // ── audio: pull FFT, compute energy + 3 bands ──
       let energy = 0.14 + pour.current * 0.3;   // gentle idle
@@ -430,8 +521,13 @@ export default function Jewel() {
       gl.uniform1f(uWarp, p.warp);
       gl.uniform1f(uEnergy, energy);
       gl.uniform3f(uBands, bLow, bMid, bHigh);
-      gl.uniform1f(uHue, hue.current.v);
+      gl.uniform1f(uHue, 0.0);
+      gl.uniform3f(uTint, tint.current.r, tint.current.g, tint.current.b);
+      gl.uniform1f(uTintAmt, tint.current.amt);
       gl.uniform1f(uPour, pour.current);
+      gl.uniform1f(uSpin, spin.current.v);
+      gl.uniform1f(uStretch, stretch.current.v);
+      gl.uniform1f(uFlip, flip.current.v);
       gl.uniform3fv(uRip, ripVec);
       gl.uniform1fv(uRipStr, ripStrVec);
 
@@ -454,6 +550,7 @@ export default function Jewel() {
       wrap.removeEventListener("pointermove", onMove);
       wrap.removeEventListener("pointerleave", onLeave);
       wrap.removeEventListener("pointerdown", onDown);
+      wrap.removeEventListener("wheel", onWheel);
       hideStyle.remove();
       if (pourTimer.current !== null) { window.clearInterval(pourTimer.current); pourTimer.current = null; }
       gl.deleteProgram(prog); gl.deleteShader(vs); gl.deleteShader(fs); gl.deleteBuffer(buf);
@@ -488,18 +585,30 @@ export default function Jewel() {
             ))}
           </div>
 
-          <button
-            type="button"
-            className={`jw-pour ${pouring ? "on" : ""}`}
-            aria-pressed={pouring}
-            onPointerDown={(e) => { e.preventDefault(); setPour(!pouring); }}
-          >
-            <span className="jw-pour-glow" />
-            {pouring ? "pouring gold…" : "pour gold"}
-          </button>
+          <div className="jw-acts" role="group" aria-label="play">
+            <button type="button" className="jw-act" onPointerDown={(e) => { e.preventDefault(); doSpin(); }}>spin</button>
+            <button
+              type="button"
+              className={`jw-act ${stretching ? "on" : ""}`}
+              onPointerDown={(e) => { e.preventDefault(); holdStretch(true); }}
+              onPointerUp={(e) => { e.preventDefault(); holdStretch(false); }}
+              onPointerLeave={() => { if (stretching) holdStretch(false); }}
+            >stretch</button>
+            <button type="button" className={`jw-act ${flipped ? "on" : ""}`} onPointerDown={(e) => { e.preventDefault(); doFlip(); }}>flip</button>
+            <button type="button" className="jw-act" onPointerDown={(e) => { e.preventDefault(); doShake(); }}>shake</button>
+            <button
+              type="button"
+              className={`jw-pour ${pouring ? "on" : ""}`}
+              aria-pressed={pouring}
+              onPointerDown={(e) => { e.preventDefault(); setPour(!pouring); }}
+            >
+              <span className="jw-pour-glow" />
+              {pouring ? "pouring…" : "pour gold"}
+            </button>
+          </div>
         </div>
 
-        <div className="jw-hint">tap the field for chimes · drag to warp the gold · play the gems · pour to hold a shimmer</div>
+        <div className="jw-hint">tap to chime · drag to twirl · press the gems · spin · hold to stretch · flip · shake for reverb · pour to sustain</div>
       </div>
 
       <style dangerouslySetInnerHTML={{ __html: `
@@ -570,6 +679,30 @@ export default function Jewel() {
           color: rgba(246,230,180,0.82);
         }
 
+        .jw-acts {
+          pointer-events: auto;
+          display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; align-items: center;
+        }
+        .jw-act {
+          appearance: none; cursor: pointer; pointer-events: auto;
+          min-height: 44px; padding: 10px 16px; border-radius: 999px;
+          font-family: var(--font-mono, ui-monospace, monospace);
+          font-size: 12px; letter-spacing: 0.12em; text-transform: lowercase;
+          color: #f6e6b4;
+          border: 1px solid rgba(231,185,78,0.5);
+          background: linear-gradient(180deg, rgba(48,36,14,0.5), rgba(16,11,5,0.4));
+          backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+          box-shadow: 0 1px 0 rgba(255,240,200,0.18) inset, 0 8px 22px rgba(0,0,0,0.4);
+          transition: transform .14s ease, border-color .18s ease, box-shadow .18s ease, color .18s ease;
+        }
+        .jw-act:hover { border-color: rgba(246,230,180,0.9); transform: translateY(-2px); }
+        .jw-act:active { transform: translateY(0) scale(0.96); }
+        .jw-act.on {
+          color: #2a1d05; border-color: #fff6da;
+          background: linear-gradient(180deg, #fff6da, #f6e6b4 40%, #e7b94e 100%);
+          box-shadow: 0 0 22px rgba(246,230,180,0.6);
+        }
+
         .jw-pour {
           position: relative; overflow: hidden;
           appearance: none; cursor: pointer; pointer-events: auto;
@@ -626,39 +759,94 @@ export default function Jewel() {
   );
 }
 
-/** Inline brilliant-cut diamond with a gold gradient and white facet highlights. */
+/**
+ * A jeweler's round-brilliant, viewed from the top: a girdle ring of facets,
+ * a band of kite/bezel facets, and a table — each facet shaded light/dark to
+ * fake refraction — set in four gold prongs, with prismatic fire and a culet
+ * sparkle. Coloured by the gem's accent.
+ */
 function Diamond({ accent }: { accent: string }) {
+  const id = accent.replace("#", "");
+  const cx = 32, cy = 32;
+  const TWO = Math.PI * 2;
+  const pol = (r: number, a: number): [number, number] => [cx + Math.cos(a) * r, cy + Math.sin(a) * r];
+  const N = 16;
+  const Rg = 25.5, Rm = 17.5, Rt = 9.5; // girdle, mid, table radii
+  const quad = (r0: number, r1: number, a0: number, a1: number) => {
+    const p = [pol(r0, a0), pol(r0, a1), pol(r1, a1), pol(r1, a0)];
+    return p.map((q) => `${q[0].toFixed(1)} ${q[1].toFixed(1)}`).join(" L ");
+  };
+  const facets: Array<{ d: string; b: number }> = [];
+  for (let i = 0; i < N; i++) {
+    const a0 = (i / N) * TWO, a1 = ((i + 1) / N) * TWO;
+    facets.push({ d: `M ${quad(Rg, Rm, a0, a1)} Z`, b: 0.5 + 0.5 * Math.sin(i * 2.7) });
+  }
+  for (let i = 0; i < N; i++) {
+    const off = Math.PI / N;
+    const a0 = (i / N) * TWO + off, a1 = ((i + 1) / N) * TWO + off;
+    facets.push({ d: `M ${quad(Rm, Rt, a0, a1)} Z`, b: 0.5 + 0.5 * Math.sin(i * 1.9 + 1.1) });
+  }
+  const tablePts = Array.from({ length: N }, (_, i) => pol(Rt, (i / N) * TWO).map((v) => v.toFixed(1)).join(",")).join(" ");
+  const prongs = [Math.PI / 4, (3 * Math.PI) / 4, (5 * Math.PI) / 4, (7 * Math.PI) / 4].map((a) => pol(Rg, a));
+  const fire = [["#ff5da2", 8], ["#5ad1ff", 132], ["#b9ff5a", 250]] as const;
   return (
     <svg viewBox="0 0 64 64" aria-hidden="true">
       <defs>
-        <linearGradient id={`jwGold-${accent}`} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#fff6da" />
-          <stop offset="40%" stopColor="#f6e6b4" />
-          <stop offset="78%" stopColor="#e7b94e" />
-          <stop offset="100%" stopColor="#b8860b" />
-        </linearGradient>
-        <linearGradient id={`jwAcc-${accent}`} x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stopColor="#ffffff" stopOpacity="0.9" />
-          <stop offset="100%" stopColor={accent} stopOpacity="0.85" />
+        <radialGradient id={`gd-${id}`} cx="42%" cy="36%" r="68%">
+          <stop offset="0%" stopColor="#ffffff" />
+          <stop offset="46%" stopColor={accent} />
+          <stop offset="100%" stopColor={accent} />
+        </radialGradient>
+        <radialGradient id={`gdEdge-${id}`} cx="50%" cy="50%" r="50%">
+          <stop offset="62%" stopColor="#000000" stopOpacity="0" />
+          <stop offset="100%" stopColor="#000000" stopOpacity="0.45" />
+        </radialGradient>
+        <linearGradient id={`gprong-${id}`} x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="#fff6da" /><stop offset="45%" stopColor="#e7b94e" /><stop offset="100%" stopColor="#9a6f12" />
         </linearGradient>
       </defs>
-      {/* crown table + girdle outline of a round brilliant, drawn as a gem */}
-      <g stroke="rgba(120,80,12,0.55)" strokeWidth="0.8" strokeLinejoin="round">
-        {/* table (top facet) */}
-        <polygon points="22,14 42,14 50,24 14,24" fill={`url(#jwAcc-${accent})`} />
-        {/* left + right crown */}
-        <polygon points="14,24 22,14 28,24" fill={`url(#jwGold-${accent})`} />
-        <polygon points="42,14 50,24 36,24" fill={`url(#jwGold-${accent})`} />
-        <polygon points="28,24 36,24 32,30" fill="#fff6da" opacity="0.85" />
-        {/* pavilion (the point) */}
-        <polygon points="14,24 50,24 32,56" fill={`url(#jwGold-${accent})`} />
-        {/* pavilion facets / sparkle lines */}
-        <polygon points="14,24 24,24 32,56" fill="#ffffff" opacity="0.16" />
-        <polygon points="40,24 50,24 32,56" fill="#000000" opacity="0.12" />
-        <polyline points="22,24 32,56 42,24" fill="none" stroke="rgba(255,250,230,0.55)" strokeWidth="0.7" />
+      {/* gem body */}
+      <circle cx={cx} cy={cy} r={Rg} fill={`url(#gd-${id})`} />
+      {/* facets — light/dark shards fake refraction */}
+      <g strokeLinejoin="round">
+        {facets.map((f, i) => (
+          <path key={i} d={f.d}
+            fill={f.b > 0.5 ? "#ffffff" : "#04060a"}
+            fillOpacity={Math.abs(f.b - 0.5) * 0.62}
+            stroke="rgba(255,255,255,0.14)" strokeWidth="0.35" />
+        ))}
       </g>
-      {/* a tiny twinkle highlight */}
-      <circle cx="26" cy="19" r="1.6" fill="#ffffff" opacity="0.95" />
+      {/* iridescent fire — a spectral conic fan dispersed across the stone */}
+      <g style={{ mixBlendMode: "screen" }}>
+        {Array.from({ length: N }, (_, i) => {
+          const a0 = (i / N) * TWO, a1 = ((i + 1) / N) * TWO;
+          const [x0, y0] = pol(Rg, a0), [x1, y1] = pol(Rg, a1);
+          return <path key={`sp${i}`} d={`M${cx} ${cy}L${x0.toFixed(1)} ${y0.toFixed(1)}L${x1.toFixed(1)} ${y1.toFixed(1)}Z`}
+            fill={`hsl(${Math.round((i / N) * 360)} 95% 62%)`} opacity="0.17" />;
+        })}
+      </g>
+      {/* prismatic fire flecks */}
+      {fire.map(([c, deg], i) => {
+        const [fx, fy] = pol(Rm - 2, (deg * Math.PI) / 180);
+        return <circle key={i} cx={fx} cy={fy} r="2.4" fill={c} opacity="0.55" style={{ mixBlendMode: "screen" }} />;
+      })}
+      {/* table facet */}
+      <polygon points={tablePts} fill="#ffffff" opacity="0.16" stroke="rgba(255,255,255,0.45)" strokeWidth="0.5" />
+      <polyline points={tablePts + " " + tablePts.split(" ")[0]} fill="none" stroke="rgba(0,0,0,0.18)" strokeWidth="0.4" />
+      {/* edge darkening for depth + gold girdle */}
+      <circle cx={cx} cy={cy} r={Rg} fill={`url(#gdEdge-${id})`} />
+      <circle cx={cx} cy={cy} r={Rg} fill="none" stroke="rgba(201,150,47,0.95)" strokeWidth="1.4" />
+      {/* specular highlight + culet sparkle */}
+      <ellipse cx="24" cy="21" rx="7" ry="3.4" fill="#ffffff" opacity="0.5" transform="rotate(-28 24 21)" />
+      <circle cx={cx} cy={cy} r="1.5" fill="#ffffff" />
+      <path d={`M${cx} ${cy - 5}L${cx} ${cy + 5}M${cx - 5} ${cy}L${cx + 5} ${cy}`} stroke="#ffffff" strokeWidth="0.6" opacity="0.7" />
+      {/* gold prongs gripping the girdle */}
+      {prongs.map(([px, py], i) => (
+        <g key={i}>
+          <circle cx={px} cy={py} r="3.1" fill={`url(#gprong-${id})`} stroke="rgba(120,80,12,0.6)" strokeWidth="0.5" />
+          <circle cx={px - 0.9} cy={py - 0.9} r="1" fill="#fff6da" opacity="0.9" />
+        </g>
+      ))}
     </svg>
   );
 }
