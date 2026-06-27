@@ -103,7 +103,7 @@ const SPEEDS = [
   { label: "300×", v: 300 },
 ];
 const VIEWS = ["iso", "top", "side", "macro-balance", "macro-escape", "macro-train"];
-const FACES = ["genève", "aventurine"];
+const FACES = ["genève", "aventurine", "nacre"];
 
 // a small, cute, draggable sundial — overlaid at the foot of the movement.
 function SundialChip() {
@@ -169,10 +169,21 @@ export default function Movement() {
   const resyncRef = useRef(false);
   const applyViewRef = useRef<((n: string) => void) | null>(null);
   const swapFaceRef = useRef<((f: string) => void) | null>(null);
+  const dialRef = useRef<THREE.Object3D | null>(null);
   const clockRef = useRef<HTMLSpanElement>(null);
   const [speed, setSpeed] = useState(1);
   const [view, setView] = useState("iso");
   const [face, setFace] = useState("genève");
+  const [dialOn, setDialOn] = useState(true);
+
+  const toggleDial = () => {
+    const next = !dialOn;
+    if (dialRef.current) dialRef.current.visible = next;
+    setDialOn(next);
+    try { getFieldAudio().thud(); } catch { /* noop */ }
+    haptics.tap();
+    useField.getState().recordTape("object", 0.4, `movement/dial/${next ? "on" : "open"}`);
+  };
 
   const pickSpeed = (v: number) => {
     speedRef.current = v;
@@ -280,8 +291,41 @@ export default function Movement() {
       return t;
     })();
 
+    // Nacre — opalescent mother-of-pearl: pearl base, drifting pastel blooms,
+    // and a fine wavy shell grain. Real iridescence comes from the material.
+    const nacreTex = (() => {
+      const s = 1024;
+      const c = document.createElement("canvas"); c.width = c.height = s;
+      const x = c.getContext("2d")!;
+      const base = x.createLinearGradient(0, 0, s, s);
+      base.addColorStop(0, "#f6f1f4"); base.addColorStop(0.5, "#eef4f6"); base.addColorStop(1, "#f5eef7");
+      x.fillStyle = base; x.fillRect(0, 0, s, s);
+      const rnd = (i: number) => ((Math.sin(i * 127.1) * 43758.5) % 1 + 1) % 1;
+      const hues = ["247,217,227", "214,235,247", "219,247,231", "233,219,247", "247,238,214"];
+      x.globalCompositeOperation = "lighter";
+      for (let i = 0; i < 46; i++) {
+        const px = rnd(i) * s, py = rnd(i + 99) * s, r = 140 + rnd(i + 7) * 300;
+        const hue = hues[i % hues.length];
+        const g = x.createRadialGradient(px, py, 0, px, py, r);
+        g.addColorStop(0, `rgba(${hue},0.22)`); g.addColorStop(1, `rgba(${hue},0)`);
+        x.fillStyle = g; x.fillRect(px - r, py - r, 2 * r, 2 * r);
+      }
+      x.globalCompositeOperation = "source-over";
+      x.strokeStyle = "rgba(255,255,255,0.16)"; x.lineWidth = 1.1;
+      for (let yy = 0; yy < s; yy += 9) {
+        x.beginPath();
+        for (let xx = 0; xx <= s; xx += 8) {
+          const yo = Math.sin(xx * 0.02 + yy * 0.05) * 6;
+          if (xx === 0) x.moveTo(xx, yy + yo); else x.lineTo(xx, yy + yo);
+        }
+        x.stroke();
+      }
+      const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+      return t;
+    })();
+
     // ── materials ──
-    const matPlate = new THREE.MeshStandardMaterial({ color: 0xc3c6cc, metalness: 1, roughness: 0.55, map: genevaTex, roughnessMap: genevaRough });
+    const matPlate = new THREE.MeshPhysicalMaterial({ color: 0xc3c6cc, metalness: 1, roughness: 0.55, map: genevaTex, roughnessMap: genevaRough });
     const matBridge = new THREE.MeshStandardMaterial({ color: 0xc3c6cc, metalness: 1, roughness: 0.4 });
     const matBrass = new THREE.MeshStandardMaterial({ color: 0xd8a85a, metalness: 1, roughness: 0.22 });
     const matSteel = new THREE.MeshStandardMaterial({ color: 0xdfe3ea, metalness: 1, roughness: 0.16 });
@@ -311,12 +355,20 @@ export default function Movement() {
     rimRing.position.y = -1.2 + CFG.plateThick / 2;
     root.add(rimRing);
 
-    // switchable dial finish — Côtes de Genève ⇄ aventurine "starry night"
+    // switchable dial finish — Côtes de Genève · aventurine · nacre
     const applyFace = (f: string) => {
+      matPlate.iridescence = 0; matPlate.clearcoat = 0; // reset extras
       if (f === "aventurine") {
         matPlate.map = aventurineTex; matPlate.roughnessMap = null;
         matPlate.color.set(0x0e1830); matPlate.metalness = 0.35; matPlate.roughness = 0.3;
         matPlate.emissive.set(0x0a1330); matPlate.emissiveIntensity = 0.25;
+      } else if (f === "nacre") {
+        matPlate.map = nacreTex; matPlate.roughnessMap = null;
+        matPlate.color.set(0xf3eef2); matPlate.metalness = 0.2; matPlate.roughness = 0.22;
+        matPlate.emissive.set(0x0c0c14); matPlate.emissiveIntensity = 0.05;
+        matPlate.iridescence = 1; matPlate.iridescenceIOR = 1.4;
+        matPlate.iridescenceThicknessRange = [180, 680];
+        matPlate.clearcoat = 0.7; matPlate.clearcoatRoughness = 0.2;
       } else {
         matPlate.map = genevaTex; matPlate.roughnessMap = genevaRough;
         matPlate.color.set(0xc3c6cc); matPlate.metalness = 1; matPlate.roughness = 0.55;
@@ -534,9 +586,70 @@ export default function Movement() {
       root.add(cock);
     }
 
+    // ── dial: a floating chapter ring (numerals + minute track) over the
+    // movement, with applied gold markers — so the watch reads the time while
+    // the gears still show through. Toggle to "open" for the bare movement.
+    const dialOuter = CFG.plateR - 0.7;     // ~12.3
+    const dialInner = dialOuter - 3.4;      // chapter band only; centre open
+    const dialTex = (() => {
+      const s = 1024, c = document.createElement("canvas"); c.width = c.height = s;
+      const x = c.getContext("2d")!;
+      const C0 = s / 2;
+      const rNum = s * 0.40, rTickO = s * 0.475, rTickI = s * 0.45, rMinO = s * 0.475, rMinI = s * 0.462;
+      x.clearRect(0, 0, s, s);
+      // minute track
+      for (let i = 0; i < 60; i++) {
+        const a = (i / 60) * Math.PI * 2 - Math.PI / 2;
+        const major = i % 5 === 0;
+        const ro = rMinO, ri = major ? rTickI : rMinI;
+        x.strokeStyle = major ? "rgba(231,211,154,0.95)" : "rgba(231,211,154,0.55)";
+        x.lineWidth = major ? 5 : 2;
+        x.beginPath(); x.moveTo(C0 + Math.cos(a) * ri, C0 + Math.sin(a) * ri); x.lineTo(C0 + Math.cos(a) * ro, C0 + Math.sin(a) * ro); x.stroke();
+      }
+      // hour numerals
+      x.fillStyle = "#e7d39a"; x.textAlign = "center"; x.textBaseline = "middle";
+      x.font = `600 ${Math.round(s * 0.052)}px "Times New Roman", Georgia, serif`;
+      for (let h = 1; h <= 12; h++) {
+        const a = (h / 12) * Math.PI * 2 - Math.PI / 2;
+        x.fillText(String(h), C0 + Math.cos(a) * rNum, C0 + Math.sin(a) * rNum + s * 0.004);
+      }
+      // signature
+      x.fillStyle = "rgba(231,211,154,0.9)"; x.font = `600 ${Math.round(s * 0.026)}px "Times New Roman", Georgia, serif`;
+      x.fillText("OBJET D'ART", C0, C0 - s * 0.22);
+      x.font = `400 ${Math.round(s * 0.018)}px "Times New Roman", Georgia, serif`;
+      x.fillStyle = "rgba(231,211,154,0.6)";
+      x.fillText("automatique · genève", C0, C0 - s * 0.185);
+      const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+      return t;
+    })();
+    const dialGroup = new THREE.Group();
+    dialGroup.position.y = 1.5;
+    void dialInner;
+    // Draw the chapter ring on a full transparent disc (square texture maps 1:1);
+    // the printed band lives in the outer area, the centre stays clear so the
+    // gear train shows through.
+    const dialDisc = new THREE.Mesh(
+      new THREE.CircleGeometry(dialOuter, 96),
+      new THREE.MeshBasicMaterial({ map: dialTex, transparent: true, side: THREE.DoubleSide, depthWrite: false }),
+    );
+    dialDisc.rotation.x = -Math.PI / 2;
+    dialGroup.add(dialDisc);
+    // applied gold hour batons for depth + shine
+    for (let h = 0; h < 12; h++) {
+      const a = (h / 12) * Math.PI * 2;
+      const rr = dialOuter - 1.15;
+      const baton = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.16, h % 3 === 0 ? 1.5 : 1.0), matGold);
+      baton.position.set(Math.cos(a) * rr, 0.06, Math.sin(a) * rr);
+      baton.rotation.y = -a + Math.PI / 2;
+      baton.castShadow = true;
+      dialGroup.add(baton);
+    }
+    root.add(dialGroup);
+    dialRef.current = dialGroup;
+
     // ── motion works + hands at centre ──
     const hands = new THREE.Group();
-    hands.position.set(centerPos.x, 1.6, centerPos.y);
+    hands.position.set(centerPos.x, 1.85, centerPos.y);
     root.add(hands);
     const mkHand = (len: number, w: number, h: number, mat: THREE.Material, tailMul = 0.22) => {
       const g = new THREE.Group();
@@ -544,15 +657,15 @@ export default function Movement() {
       shaft.position.z = len / 2 - len * tailMul; shaft.castShadow = true; g.add(shaft);
       return g;
     };
-    const hourHand = mkHand(4.6, 0.5, 0.18, matBlued);
-    const minuteHand = mkHand(6.6, 0.36, 0.16, matBlued);
+    const hourHand = mkHand(7.4, 0.5, 0.2, matBlued);
+    const minuteHand = mkHand(10.6, 0.36, 0.18, matBlued);
     hands.add(hourHand); hands.add(minuteHand);
     const capH = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.42, 0.5, 18), matGold);
     hands.add(capH);
     // small seconds on the fourth-wheel arbor
     const secHand = mkHand(2.2, 0.16, 0.12, matBlued, 0.28);
     const secGroup = new THREE.Group();
-    secGroup.position.set(fourthPos.x, 1.5, fourthPos.y);
+    secGroup.position.set(fourthPos.x, 1.7, fourthPos.y);
     secGroup.add(secHand);
     const secCap = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 0.3, 12), matGold);
     secGroup.add(secCap);
@@ -790,6 +903,7 @@ export default function Movement() {
             <button key={f} type="button" className={face === f ? "on" : ""}
               onClick={() => { swapFaceRef.current?.(f); setFace(f); try { getFieldAudio().chime(); } catch { /* noop */ } haptics.tap(); useField.getState().recordTape("object", 0.5, `movement/face/${f}`); }}>{f}</button>
           ))}
+          <button type="button" className={dialOn ? "on" : ""} onClick={toggleDial}>{dialOn ? "dial" : "open"}</button>
         </div>
         <div className="mv-row" role="group" aria-label="view">
           {VIEWS.map((v) => (

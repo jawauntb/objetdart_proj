@@ -1,0 +1,17 @@
+import { chromium } from "playwright";
+import { mkdir } from "node:fs/promises";
+await mkdir("iterations/iter-08", { recursive: true });
+const b = await chromium.launch({ executablePath: "/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell", args: ["--use-gl=angle","--use-angle=swiftshader","--ignore-gpu-blocklist","--no-sandbox"] });
+const p = await b.newPage({ viewport: { width: 900, height: 900 } });
+p.setDefaultTimeout(90000);
+const errs=[]; p.on("pageerror",e=>errs.push("EXC "+e.message)); p.on("console",m=>{if(m.type()==="error")errs.push("ERR "+m.text());});
+await p.goto("http://localhost:3000/movement?spin=0&view=iso&shot=1", { waitUntil:"networkidle" });
+await p.waitForFunction(() => window.__movement && window.__movement.ready === true);
+await p.waitForTimeout(1000);
+await p.getByRole("button",{name:"nacre"}).click();
+await p.waitForTimeout(700);
+await p.evaluate(()=>window.__movement.setView("top"));
+await p.waitForTimeout(700);
+await p.screenshot({ path: "iterations/iter-08/nacre.png" });
+console.log(errs.length?("ERRORS:\n"+errs.join("\n")):"NO ERRORS");
+await b.close();

@@ -1,0 +1,17 @@
+import { chromium } from "playwright";
+import { mkdir } from "node:fs/promises";
+await mkdir("iterations/iter-08", { recursive: true });
+const b = await chromium.launch({ executablePath: "/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell", args: ["--use-gl=angle","--use-angle=swiftshader","--ignore-gpu-blocklist","--no-sandbox"] });
+const p = await b.newPage({ viewport: { width: 950, height: 950 } });
+p.setDefaultTimeout(120000);
+const errs=[]; p.on("pageerror",e=>errs.push("EXC "+e.message)); p.on("console",m=>{if(m.type()==="error")errs.push("ERR "+m.text());});
+await p.goto("http://localhost:3000/movement?spin=0&view=top&shot=1", { waitUntil:"networkidle" });
+await p.waitForFunction(() => window.__movement && window.__movement.ready === true);
+await p.waitForTimeout(1500);
+await p.screenshot({ path: "iterations/iter-08/dial-geneve.png" });
+await p.getByRole("button",{name:"nacre"}).click(); await p.waitForTimeout(800);
+await p.screenshot({ path: "iterations/iter-08/dial-nacre.png" });
+await p.getByRole("button",{name:"dial"}).click(); await p.waitForTimeout(600);
+await p.screenshot({ path: "iterations/iter-08/open.png" });
+console.log(errs.length?("ERRORS:\n"+errs.join("\n")):"NO ERRORS");
+await b.close();
