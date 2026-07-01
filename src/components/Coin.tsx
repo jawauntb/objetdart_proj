@@ -44,87 +44,218 @@ function textArc(
 }
 
 // A grayscale relief canvas used as a bumpMap: mid grey ground, RAISED elements
-// light, RECESSED (engraved) elements dark. face = "front" (cross) | "back".
+// light, RECESSED (engraved) elements dark. face = "front" (cross) | "back"
+// (St. Benedict standing figure). Rendered as a faithful high-fidelity vector
+// rendition of the classic Saint-Benedict "Jubilee" medal.
 function makeReliefTexture(face: "front" | "back"): THREE.CanvasTexture {
-  const s = 1024;
+  const s = 2048;
   const c = document.createElement("canvas"); c.width = c.height = s;
   const x = c.getContext("2d")!;
   const C0 = s / 2;
+  const G = s / 1024; // scale factor vs. the original 1024 layout
   // ground
   x.fillStyle = "#8a8a8a"; x.fillRect(0, 0, s, s);
-  // raised outer rim ring
-  x.lineWidth = 34; x.strokeStyle = "#cfcfcf";
-  x.beginPath(); x.arc(C0, C0, s * 0.455, 0, Math.PI * 2); x.stroke();
-  x.lineWidth = 6; x.strokeStyle = "#4a4a4a";
-  x.beginPath(); x.arc(C0, C0, s * 0.475, 0, Math.PI * 2); x.stroke();
-  x.beginPath(); x.arc(C0, C0, s * 0.435, 0, Math.PI * 2); x.stroke();
-  // beaded inner border
-  for (let i = 0; i < 90; i++) {
-    const a = (i / 90) * Math.PI * 2;
-    x.fillStyle = "#d8d8d8";
-    x.beginPath(); x.arc(C0 + Math.cos(a) * s * 0.40, C0 + Math.sin(a) * s * 0.40, 4.5, 0, Math.PI * 2); x.fill();
+
+  // ── raised rim ring with fine engraved grooves (both faces) ──
+  x.lineWidth = 30 * G; x.strokeStyle = "#c6c6c6";
+  x.beginPath(); x.arc(C0, C0, s * 0.462, 0, Math.PI * 2); x.stroke();
+  x.lineWidth = 5 * G; x.strokeStyle = "#3f3f3f";
+  x.beginPath(); x.arc(C0, C0, s * 0.484, 0, Math.PI * 2); x.stroke();
+  x.beginPath(); x.arc(C0, C0, s * 0.441, 0, Math.PI * 2); x.stroke();
+  // beaded inner border (denser, higher-relief dots)
+  const beads = 132;
+  for (let i = 0; i < beads; i++) {
+    const a = (i / beads) * Math.PI * 2;
+    const bx = C0 + Math.cos(a) * s * 0.404, by = C0 + Math.sin(a) * s * 0.404;
+    const g = x.createRadialGradient(bx, by, 0, bx, by, 6 * G);
+    g.addColorStop(0, "#ececec"); g.addColorStop(0.6, "#c4c4c4"); g.addColorStop(1, "#7d7d7d");
+    x.fillStyle = g;
+    x.beginPath(); x.arc(bx, by, 6 * G, 0, Math.PI * 2); x.fill();
   }
+  // thin engraved circle just inside the beads
+  x.lineWidth = 3 * G; x.strokeStyle = "#5a5a5a";
+  x.beginPath(); x.arc(C0, C0, s * 0.386, 0, Math.PI * 2); x.stroke();
 
   if (face === "front") {
-    // rim legend (Vade Retro Satana… abbreviated) + PAX at bottom
-    x.fillStyle = "#3a3a3a";
-    textArc(x, "V R S N S M V", C0, C0, s * 0.372, 200, 340, 42);
-    textArc(x, "S M Q L I V B", C0, C0, s * 0.372, 20, 160, 42, true);
-    x.font = `700 46px Georgia, serif`; x.textAlign = "center"; x.textBaseline = "middle";
-    x.fillStyle = "#2e2e2e"; x.fillText("✦ PAX ✦", C0, C0 - s * 0.372);
-    // bold raised cross
-    const arm = s * 0.30, thick = s * 0.075;
-    x.fillStyle = "#dcdcdc";
+    // ── CROSS side ── rim legend of the Vade Retro Satana exorcism.
+    // top arc: V R S N S M V   bottom arc: S M Q L I V B
+    x.fillStyle = "#333";
+    textArc(x, "V·R·S·N·S·M·V", C0, C0, s * 0.372, 202, 338, 40 * G);
+    textArc(x, "S·M·Q·L·I·V·B", C0, C0, s * 0.372, 22, 158, 40 * G, true);
+    // PAX in a little raised banner at top, IHS-style flourishes at the sides
+    x.font = `700 ${44 * G}px Georgia, serif`; x.textAlign = "center"; x.textBaseline = "middle";
+    x.fillStyle = "#e2e2e2"; x.fillText("✦ PAX ✦", C0, C0 - s * 0.372 + 2);
+    x.fillStyle = "#2c2c2c"; x.font = `700 ${44 * G}px Georgia, serif`;
+    x.fillText("✦ PAX ✦", C0, C0 - s * 0.372);
+
+    // radiating fine sunrays behind the cross, filling the field
+    x.strokeStyle = "#9c9c9c"; x.lineWidth = 2 * G;
+    for (let i = 0; i < 72; i++) {
+      const a = (i / 72) * Math.PI * 2;
+      x.beginPath();
+      x.moveTo(C0 + Math.cos(a) * s * 0.10, C0 + Math.sin(a) * s * 0.10);
+      x.lineTo(C0 + Math.cos(a) * s * 0.355, C0 + Math.sin(a) * s * 0.355); x.stroke();
+    }
+
+    // ── the cross itself: a slender pattée cross with flared ends ──
+    const arm = s * 0.315, thick = s * 0.052;
+    const drawCrossArm = (horiz: boolean) => {
+      x.save();
+      x.translate(C0, C0);
+      if (horiz) x.rotate(Math.PI / 2);
+      // tapered raised bar with flared (pattée) terminal
+      x.fillStyle = "#e4e4e4";
+      x.beginPath();
+      x.moveTo(-thick / 2, 0); x.lineTo(-thick / 2, -arm + thick);
+      x.lineTo(-thick * 0.95, -arm); x.lineTo(thick * 0.95, -arm);
+      x.lineTo(thick / 2, -arm + thick); x.lineTo(thick / 2, 0);
+      x.lineTo(-thick / 2, arm - thick);
+      x.closePath();
+      // draw both halves symmetric: simpler — full vertical bar with flares
+      x.restore();
+    };
+    void drawCrossArm;
+    // simpler robust construction: raised bars + flared caps + engraved outline
+    x.fillStyle = "#e4e4e4";
+    // vertical & horizontal bars
     x.fillRect(C0 - thick / 2, C0 - arm, thick, arm * 2);
     x.fillRect(C0 - arm, C0 - thick / 2, arm * 2, thick);
-    x.strokeStyle = "#3a3a3a"; x.lineWidth = 5;
+    // flared pattée terminals
+    const flare = (cx: number, cy: number, horiz: boolean) => {
+      x.save(); x.translate(cx, cy); if (horiz) x.rotate(Math.PI / 2);
+      x.fillStyle = "#eaeaea"; x.beginPath();
+      x.moveTo(-thick / 2, 0); x.lineTo(-thick * 1.05, -thick * 0.9);
+      x.lineTo(thick * 1.05, -thick * 0.9); x.lineTo(thick / 2, 0); x.closePath(); x.fill();
+      x.restore();
+    };
+    flare(C0, C0 - arm, false); flare(C0, C0 + arm, false);
+    flare(C0 - arm, C0, true); flare(C0 + arm, C0, true);
+    // engraved bevel outline on the bars
+    x.strokeStyle = "#3a3a3a"; x.lineWidth = 4 * G;
     x.strokeRect(C0 - thick / 2, C0 - arm, thick, arm * 2);
     x.strokeRect(C0 - arm, C0 - thick / 2, arm * 2, thick);
-    // letters on the cross: vertical C S S M L, horizontal N D S M D
-    x.fillStyle = "#2b2b2b"; x.font = `700 40px Georgia, serif`;
-    const vs = ["C", "S", "S", "M", "L"]; // top→bottom
-    vs.forEach((ch, i) => x.fillText(ch, C0, C0 - arm + 44 + (i * (arm * 2 - 80)) / 4));
+    // inner engraved centre line for depth
+    x.strokeStyle = "#b8b8b8"; x.lineWidth = 2 * G;
+    x.beginPath(); x.moveTo(C0, C0 - arm + thick); x.lineTo(C0, C0 + arm - thick); x.stroke();
+    x.beginPath(); x.moveTo(C0 - arm + thick, C0); x.lineTo(C0 + arm - thick, C0); x.stroke();
+
+    // letters on the cross — vertical C S S M L (Crux Sacra Sit Mihi Lux),
+    // horizontal N D S M D (Non Draco Sit Mihi Dux). Engraved (dark).
+    x.fillStyle = "#232323"; x.textAlign = "center"; x.textBaseline = "middle";
+    x.font = `700 ${34 * G}px Georgia, serif`;
+    const vs = ["C", "S", "S", "M", "L"];
+    const span = arm * 2 - thick * 1.6;
+    vs.forEach((ch, i) => x.fillText(ch, C0, C0 - arm + thick * 0.8 + (i * span) / 4));
     const hs = ["N", "D", "S", "M", "D"];
-    hs.forEach((ch, i) => { if (i !== 2) x.fillText(ch, C0 - arm + 44 + (i * (arm * 2 - 80)) / 4, C0); });
-    // quadrant letters C S P B (Crux Sancti Patris Benedicti)
-    x.font = `700 52px Georgia, serif`;
-    const q = s * 0.20;
-    x.fillText("C", C0 - q, C0 - q); x.fillText("S", C0 + q, C0 - q);
-    x.fillText("S", C0 - q, C0 + q); x.fillText("B", C0 + q, C0 + q);
+    hs.forEach((ch, i) => { if (i !== 2) x.fillText(ch, C0 - arm + thick * 0.8 + (i * span) / 4, C0); });
+    // centre monogram letter where the arms meet
+    x.font = `700 ${30 * G}px Georgia, serif`; x.fillText("S", C0, C0);
+
+    // quadrant letters C S P B (Crux Sancti Patris Benedicti) in raised relief
+    x.fillStyle = "#dcdcdc"; x.font = `800 ${58 * G}px Georgia, serif`;
+    const q = s * 0.205;
+    const quad = (ch: string, dx: number, dy: number) => {
+      x.fillStyle = "#2b2b2b"; x.fillText(ch, C0 + dx + 2, C0 + dy + 2); // shadow
+      x.fillStyle = "#e6e6e6"; x.fillText(ch, C0 + dx, C0 + dy);         // raised
+    };
+    quad("C", -q, -q); quad("S", q, -q); quad("P", -q, q); quad("B", q, q);
   } else {
-    // reverse: rim legend + a standing figure with cross & book + rays
-    x.fillStyle = "#3a3a3a";
-    textArc(x, "EIVS IN OBITV", C0, C0, s * 0.372, 200, 340, 40);
-    textArc(x, "NOSTRO PRAESENTIA", C0, C0, s * 0.372, 12, 168, 34, true);
-    x.font = `700 40px Georgia, serif`; x.textAlign = "center"; x.textBaseline = "middle";
-    x.fillStyle = "#2e2e2e"; x.fillText("✦ MVNIAMVR ✦", C0, C0 - s * 0.372);
-    // radiating rays behind the figure
-    x.strokeStyle = "#bcbcbc"; x.lineWidth = 4;
-    for (let i = 0; i < 40; i++) {
-      const a = (i / 40) * Math.PI * 2;
-      x.beginPath(); x.moveTo(C0 + Math.cos(a) * 70, C0 + Math.sin(a) * 70);
-      x.lineTo(C0 + Math.cos(a) * s * 0.33, C0 + Math.sin(a) * s * 0.33); x.stroke();
+    // ── FIGURE side ── St. Benedict standing, cross in right hand, Rule in
+    // left, poisoned cup + raven at his feet. Rim legend of the death prayer.
+    x.fillStyle = "#333";
+    textArc(x, "EIVS·IN·OBITV·NOSTRO", C0, C0, s * 0.370, 200, 340, 34 * G);
+    textArc(x, "PRÆSENTIA·MVNIAMVR", C0, C0, s * 0.370, 20, 160, 32 * G, true);
+    // exergue label under the figure
+    x.font = `700 ${26 * G}px Georgia, serif`; x.textAlign = "center"; x.textBaseline = "middle";
+    x.fillStyle = "#2c2c2c"; x.fillText("EX·SM·CASINO·MDCCCLXXX", C0, C0 + s * 0.325);
+    // PAX cartouche at the very top
+    x.font = `700 ${40 * G}px Georgia, serif`;
+    x.fillStyle = "#e2e2e2"; x.fillText("✦ PAX ✦", C0, C0 - s * 0.372 + 2);
+    x.fillStyle = "#2c2c2c"; x.fillText("✦ PAX ✦", C0, C0 - s * 0.372);
+
+    // sunburst glory behind the saint
+    x.strokeStyle = "#a6a6a6"; x.lineWidth = 3 * G;
+    for (let i = 0; i < 56; i++) {
+      const a = (i / 56) * Math.PI * 2;
+      x.beginPath();
+      x.moveTo(C0 + Math.cos(a) * s * 0.085, C0 - s * 0.02 + Math.sin(a) * s * 0.085);
+      x.lineTo(C0 + Math.cos(a) * s * 0.30, C0 - s * 0.02 + Math.sin(a) * s * 0.30); x.stroke();
     }
-    // standing robed figure (stylised)
-    x.fillStyle = "#d6d6d6"; x.strokeStyle = "#333"; x.lineWidth = 5;
-    // robe
+
+    // pedestal / ground the saint stands on
+    x.fillStyle = "#cfcfcf"; x.strokeStyle = "#3a3a3a"; x.lineWidth = 4 * G;
+    x.fillRect(C0 - 210 * G, C0 + 300 * G, 420 * G, 46 * G);
+    x.strokeRect(C0 - 210 * G, C0 + 300 * G, 420 * G, 46 * G);
+
+    // robed standing figure
+    x.fillStyle = "#d8d8d8"; x.strokeStyle = "#333"; x.lineWidth = 5 * G;
     x.beginPath();
-    x.moveTo(C0 - 70, C0 + 190); x.lineTo(C0 - 40, C0 - 70);
-    x.quadraticCurveTo(C0, C0 - 120, C0 + 40, C0 - 70);
-    x.lineTo(C0 + 70, C0 + 190); x.closePath(); x.fill(); x.stroke();
+    x.moveTo(C0 - 130 * G, C0 + 300 * G);
+    x.lineTo(C0 - 78 * G, C0 - 150 * G);
+    x.quadraticCurveTo(C0, C0 - 210 * G, C0 + 78 * G, C0 - 150 * G);
+    x.lineTo(C0 + 130 * G, C0 + 300 * G);
+    x.closePath(); x.fill(); x.stroke();
+    // robe fold lines (engraved)
+    x.strokeStyle = "#9a9a9a"; x.lineWidth = 3 * G;
+    for (const off of [-55, -18, 20, 58]) {
+      x.beginPath(); x.moveTo(C0 + off * G, C0 - 120 * G);
+      x.quadraticCurveTo(C0 + off * 1.4 * G, C0 + 90 * G, C0 + off * 1.9 * G, C0 + 290 * G); x.stroke();
+    }
+    // cowl / shoulders
+    x.fillStyle = "#d0d0d0"; x.strokeStyle = "#333"; x.lineWidth = 4 * G;
+    x.beginPath();
+    x.moveTo(C0 - 82 * G, C0 - 120 * G);
+    x.quadraticCurveTo(C0, C0 - 175 * G, C0 + 82 * G, C0 - 120 * G);
+    x.quadraticCurveTo(C0, C0 - 95 * G, C0 - 82 * G, C0 - 120 * G);
+    x.fill(); x.stroke();
     // head + halo
-    x.beginPath(); x.arc(C0, C0 - 110, 34, 0, Math.PI * 2); x.fill(); x.stroke();
-    x.lineWidth = 4; x.beginPath(); x.arc(C0, C0 - 110, 48, 0, Math.PI * 2); x.stroke();
-    // tall cross (left hand) + book (right hand)
-    x.lineWidth = 12; x.strokeStyle = "#cfcfcf";
-    x.beginPath(); x.moveTo(C0 - 120, C0 - 150); x.lineTo(C0 - 120, C0 + 150); x.stroke();
-    x.beginPath(); x.moveTo(C0 - 150, C0 - 90); x.lineTo(C0 - 90, C0 - 90); x.stroke();
-    x.fillStyle = "#cfcfcf"; x.strokeStyle = "#333"; x.lineWidth = 4;
-    x.fillRect(C0 + 78, C0 - 10, 70, 90); x.strokeRect(C0 + 78, C0 - 10, 70, 90);
-    x.beginPath(); x.moveTo(C0 + 113, C0 - 10); x.lineTo(C0 + 113, C0 + 80); x.stroke();
-    // ground line
-    x.lineWidth = 6; x.strokeStyle = "#555";
-    x.beginPath(); x.moveTo(C0 - 130, C0 + 200); x.lineTo(C0 + 130, C0 + 200); x.stroke();
+    x.fillStyle = "#dcdcdc";
+    x.beginPath(); x.arc(C0, C0 - 205 * G, 42 * G, 0, Math.PI * 2); x.fill(); x.stroke();
+    x.lineWidth = 4 * G; x.strokeStyle = "#4a4a4a";
+    x.beginPath(); x.arc(C0, C0 - 210 * G, 60 * G, 0, Math.PI * 2); x.stroke();
+
+    // tall cross in his (viewer-left) hand
+    x.strokeStyle = "#e0e0e0"; x.lineCap = "round";
+    x.lineWidth = 13 * G;
+    x.beginPath(); x.moveTo(C0 - 168 * G, C0 - 250 * G); x.lineTo(C0 - 168 * G, C0 + 250 * G); x.stroke();
+    x.beginPath(); x.moveTo(C0 - 210 * G, C0 - 170 * G); x.lineTo(C0 - 126 * G, C0 - 170 * G); x.stroke();
+    x.lineCap = "butt";
+    // the Holy Rule (book) in his other hand
+    x.fillStyle = "#cfcfcf"; x.strokeStyle = "#333"; x.lineWidth = 4 * G;
+    x.fillRect(C0 + 118 * G, C0 - 30 * G, 92 * G, 118 * G);
+    x.strokeRect(C0 + 118 * G, C0 - 30 * G, 92 * G, 118 * G);
+    x.beginPath(); x.moveTo(C0 + 164 * G, C0 - 30 * G); x.lineTo(C0 + 164 * G, C0 + 88 * G); x.stroke();
+    x.strokeStyle = "#8a8a8a"; x.lineWidth = 2 * G;
+    for (const ry of [-8, 6, 20, 34, 48, 62]) {
+      x.beginPath(); x.moveTo(C0 + 126 * G, C0 + ry * G); x.lineTo(C0 + 158 * G, C0 + ry * G); x.stroke();
+      x.beginPath(); x.moveTo(C0 + 170 * G, C0 + ry * G); x.lineTo(C0 + 202 * G, C0 + ry * G); x.stroke();
+    }
+
+    // poisoned cup with a serpent (viewer-left, at his feet)
+    x.strokeStyle = "#333"; x.lineWidth = 4 * G; x.fillStyle = "#cbcbcb";
+    x.beginPath();
+    x.moveTo(C0 - 250 * G, C0 + 180 * G); x.lineTo(C0 - 205 * G, C0 + 260 * G);
+    x.lineTo(C0 - 165 * G, C0 + 260 * G); x.lineTo(C0 - 120 * G, C0 + 180 * G);
+    x.closePath(); x.fill(); x.stroke();
+    x.beginPath(); x.arc(C0 - 185 * G, C0 + 285 * G, 16 * G, 0, Math.PI * 2); x.stroke(); // foot
+    // serpent rising from the cup
+    x.strokeStyle = "#e0e0e0"; x.lineWidth = 6 * G; x.lineCap = "round";
+    x.beginPath();
+    x.moveTo(C0 - 185 * G, C0 + 180 * G);
+    x.quadraticCurveTo(C0 - 240 * G, C0 + 120 * G, C0 - 190 * G, C0 + 96 * G);
+    x.quadraticCurveTo(C0 - 150 * G, C0 + 78 * G, C0 - 200 * G, C0 + 60 * G); x.stroke();
+    x.lineCap = "butt";
+
+    // raven with a morsel of bread (viewer-right, at his feet)
+    x.fillStyle = "#cbcbcb"; x.strokeStyle = "#333"; x.lineWidth = 3 * G;
+    x.beginPath();
+    x.ellipse(C0 + 175 * G, C0 + 245 * G, 46 * G, 24 * G, -0.3, 0, Math.PI * 2);
+    x.fill(); x.stroke();
+    x.beginPath(); x.arc(C0 + 205 * G, C0 + 220 * G, 16 * G, 0, Math.PI * 2); x.fill(); x.stroke(); // head
+    x.beginPath(); x.moveTo(C0 + 220 * G, C0 + 218 * G); x.lineTo(C0 + 246 * G, C0 + 224 * G);
+    x.lineTo(C0 + 220 * G, C0 + 230 * G); x.closePath(); x.fill(); x.stroke(); // beak
+    x.beginPath(); x.moveTo(C0 + 150 * G, C0 + 235 * G); x.lineTo(C0 + 120 * G, C0 + 210 * G);
+    x.lineTo(C0 + 150 * G, C0 + 250 * G); x.closePath(); x.fill(); x.stroke(); // wing
   }
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
@@ -224,6 +355,7 @@ export default function Coin() {
     const tilt = { x: 0, y: 0, tx: 0, ty: 0 };     // eased vs target rotation from tilt/drag
     const flip = { cur: 0, target: 0 };            // accumulating flip spin (radians)
     const shine = { v: 0 };                        // star glint strength
+    const size = { v: 1, t: 1 };                   // coin scale (lateral slide → resize)
     const drag = { on: false, px: 0, py: 0, moved: 0, downT: 0, lastRub: 0 };
 
     // ── audio ──
@@ -254,7 +386,8 @@ export default function Coin() {
       const dx = e.clientX - drag.px, dy = e.clientY - drag.py;
       drag.px = e.clientX; drag.py = e.clientY;
       drag.moved += Math.abs(dx) + Math.abs(dy);
-      tilt.ty += dx * 0.006;   // yaw
+      // lateral / diagonal slide → resize the coin; vertical → tilt (pitch)
+      size.t = Math.max(0.5, Math.min(2.4, size.t + dx * 0.004));
       tilt.tx += dy * 0.006;   // pitch
       tilt.tx = Math.max(-1.1, Math.min(1.1, tilt.tx));
       const now = performance.now();
@@ -317,7 +450,9 @@ export default function Coin() {
       flip.cur += remain * 0.14;
       const tossing = Math.min(1, Math.abs(remain) / 3);
       coinGroup.position.z = tossing * 3.2;
-      coinGroup.scale.setScalar(1 + tossing * 0.06);
+      // ease the slide-driven size, combined with the flip toss
+      size.v += (size.t - size.v) * 0.16;
+      coinGroup.scale.setScalar(size.v * (1 + tossing * 0.06));
 
       coinGroup.rotation.x = tilt.x + flip.cur;
       coinGroup.rotation.y = tilt.y;
@@ -366,7 +501,7 @@ export default function Coin() {
     <div ref={wrapRef} style={{ position: "fixed", inset: 0, background: "#0a0806" }}>
       <div className="coin-hud">
         <div className="coin-title">objet&nbsp;d&rsquo;art — la médaille</div>
-        <div className="coin-hint" ref={hintRef}>tilt your phone · drag to turn · tap to flip · rub for shine</div>
+        <div className="coin-hint" ref={hintRef}>tilt your phone · slide sideways to resize · tap to flip · rub for shine</div>
       </div>
       <style dangerouslySetInnerHTML={{ __html: `
         .coin-hud {
