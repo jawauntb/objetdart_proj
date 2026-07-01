@@ -416,12 +416,37 @@ export default function Coin() {
       tilt.tx = Math.max(-1.2, Math.min(1.2, gy));
     };
     window.addEventListener("deviceorientation", onOrient);
-    // iOS gates orientation behind a gesture
-    type DOEP = { requestPermission?: () => Promise<"granted" | "denied"> };
-    const DOE = (window as unknown as { DeviceOrientationEvent?: DOEP }).DeviceOrientationEvent;
-    const needPerm = !!DOE && typeof DOE.requestPermission === "function";
-    const askOrient = () => { if (needPerm && DOE?.requestPermission) DOE.requestPermission().catch(() => {}); window.removeEventListener("touchend", askOrient); };
-    if (needPerm) window.addEventListener("touchend", askOrient, { once: true });
+
+    // ── pop the phone up aggressively → flip the coin ──
+    // watch for a sharp upward spike in linear acceleration; debounce so the
+    // pop and its rebound (decel) don't fire twice.
+    let lastShake = 0;
+    const onMotion = (e: DeviceMotionEvent) => {
+      const a = e.acceleration ?? e.accelerationIncludingGravity;
+      if (!a) return;
+      const ax = a.x ?? 0, ay = a.y ?? 0, az = a.z ?? 0;
+      const mag = Math.hypot(ax, ay, az);
+      const now = performance.now();
+      // upward flick (screen-up ≈ +y) or any hard jerk, well above normal handling
+      if ((ay > 15 || mag > 22) && now - lastShake > 850) {
+        lastShake = now;
+        shine.v = 1; haptics.chop();
+        doFlip();
+      }
+    };
+    window.addEventListener("devicemotion", onMotion);
+
+    // iOS gates orientation & motion behind a user gesture
+    type ReqPerm = { requestPermission?: () => Promise<"granted" | "denied"> };
+    const DOE = (window as unknown as { DeviceOrientationEvent?: ReqPerm }).DeviceOrientationEvent;
+    const DME = (window as unknown as { DeviceMotionEvent?: ReqPerm }).DeviceMotionEvent;
+    const needPerm = (!!DOE && typeof DOE.requestPermission === "function") || (!!DME && typeof DME.requestPermission === "function");
+    const askPerm = () => {
+      DOE?.requestPermission?.().catch(() => {});
+      DME?.requestPermission?.().catch(() => {});
+      window.removeEventListener("touchend", askPerm);
+    };
+    if (needPerm) window.addEventListener("touchend", askPerm, { once: true });
 
     const resize = () => {
       const w = wrap.clientWidth || 1, h = wrap.clientHeight || 1;
@@ -485,7 +510,8 @@ export default function Coin() {
       cancelAnimationFrame(raf);
       ro.disconnect();
       window.removeEventListener("deviceorientation", onOrient);
-      window.removeEventListener("touchend", askOrient);
+      window.removeEventListener("devicemotion", onMotion);
+      window.removeEventListener("touchend", askPerm);
       renderer.domElement.removeEventListener("pointerdown", onDown);
       renderer.domElement.removeEventListener("pointermove", onMove);
       renderer.domElement.removeEventListener("pointerup", onUp);
@@ -501,7 +527,7 @@ export default function Coin() {
     <div ref={wrapRef} style={{ position: "fixed", inset: 0, background: "#0a0806" }}>
       <div className="coin-hud">
         <div className="coin-title">objet&nbsp;d&rsquo;art — la médaille</div>
-        <div className="coin-hint" ref={hintRef}>tilt your phone · slide sideways to resize · tap to flip · rub for shine</div>
+        <div className="coin-hint" ref={hintRef}>tilt your phone · slide sideways to resize · tap or flick it up to flip · rub for shine</div>
       </div>
       <style dangerouslySetInnerHTML={{ __html: `
         .coin-hud {
