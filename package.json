@@ -2,7 +2,7 @@
   "name": "field-instrument",
   "version": "1.0.0",
   "private": true,
-  "description": "A candle inside the command center, facing the sea — a usable symbolic instrument.",
+  "description": "a gold medal you can hold",
   "engines": {
     "node": "20.x"
   },
