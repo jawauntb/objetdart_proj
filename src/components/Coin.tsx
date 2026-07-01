@@ -353,35 +353,114 @@ export default function Coin() {
 
     // ── interaction state ──
     const tilt = { x: 0, y: 0, tx: 0, ty: 0 };     // eased vs target rotation from tilt/drag
-    const flip = { cur: 0, target: 0 };            // accumulating flip spin (radians)
+    const flip = {                                 // directional flip (quaternion)
+      q0: new THREE.Quaternion(),                  // orientation at flip start
+      q1: new THREE.Quaternion(),                  // target orientation
+      base: new THREE.Quaternion(),                // current settled/animating orientation
+      t: 1,                                         // 0→1 progress (1 = settled)
+    };
     const shine = { v: 0 };                        // star glint strength
     const size = { v: 1, t: 1 };                   // coin scale (lateral slide → resize)
     const drag = { on: false, px: 0, py: 0, moved: 0, downT: 0, lastRub: 0 };
+    const spin = { z: 0 };                         // two-finger in-plane rotation (radians)
+    const pointers = new Map<number, { x: number; y: number }>();
+    const gesture = { two: false, twoAngle: null as number | null };
+    const notes = { tiltSec: -1, tiltT: 0, spinSec: 999 }; // note-sweep trackers
+    const _flipAxis = new THREE.Vector3();
+    const _flipQ = new THREE.Quaternion();
+    const _qTilt = new THREE.Quaternion();
+    const _qSpin = new THREE.Quaternion();
+    const _tiltEuler = new THREE.Euler();
+    const _z = new THREE.Vector3(0, 0, 1);
 
-    // ── audio ──
+    // ── audio: the coin is an 8-note instrument (a C-major octave) ──
     const A = () => getFieldAudio();
-    const ting = () => { try { const a = A(); a.playNote(88, 55); window.setTimeout(() => a.playNote(95, 40), 45); a.bell(); } catch { /* noop */ } };
-    const flipSound = () => { try { const a = A(); a.playNote(79, 60); window.setTimeout(() => a.playNote(86, 50), 90); } catch { /* noop */ } };
+    const SCALE = [60, 62, 64, 65, 67, 69, 71, 72]; // C4..C5 — do re mi fa sol la ti do
+    // small coin → brighter/higher, big coin → lower "boing"; ~±1 octave
+    const sizeShift = () => Math.round((1 - size.v) * 9);
+    // one note, voiced for the current coin size. Big: adds a low brass/gong
+    // weight + bell shimmer (Chinese-drum heft). Small: adds a bright upper
+    // octave. Metallic either way.
+    const voice = (midi: number, dur = 240) => {
+      try {
+        const a = A(); const m = midi + sizeShift();
+        a.playNote(m, dur);
+        if (size.v > 1.35) { a.playNote(m - 12, Math.round(dur * 1.5)); a.bell(); }
+        else if (size.v < 0.8) { a.playNote(m + 12, Math.max(60, Math.round(dur * 0.5))); }
+      } catch { /* noop */ }
+    };
+    // screen-space angle → one of 8 sectors, centred on the 8 compass directions
+    const sectorOf = (dx: number, dy: number) => {
+      let a = Math.atan2(dy, dx);                  // dy up-positive
+      a = (a + Math.PI * 2 + Math.PI / 8) % (Math.PI * 2);
+      return Math.floor(a / (Math.PI / 4)) % 8;
+    };
+    const coinCenter = () => {
+      const r = renderer.domElement.getBoundingClientRect();
+      return { cx: r.left + r.width / 2, cy: r.top + r.height / 2 };
+    };
+    const ting = () => { try { A().bell(); } catch { /* noop */ } };     // metallic coin click
+    const regionNote = (sec: number) => voice(SCALE[sec], 260);         // tap → root
+    const tiltNote = (sec: number) => voice(SCALE[sec] + 7, 220);       // tilt → fifth (concordant)
+    const spinNote = (sec: number) => voice(SCALE[sec] + 12, 200);      // rotate → octave (concordant)
+    const flipSound = () => { try { const a = A(); const s = sizeShift(); a.playNote(79 + s, 60); window.setTimeout(() => a.playNote(86 + s, 50), 90); } catch { /* noop */ } };
     let lastShimmer = 0;
-    const shimmer = (now: number, pitch: number, gap = 150) => {
+    const shimmer = (now: number, pitch: number, gap = 150) => {         // continuous-motion sparkle (unchanged character)
       if (now - lastShimmer < gap) return; lastShimmer = now;
       try { A().playNote(90 + (pitch % 8), 30); } catch { /* noop */ }
     };
 
-    const doFlip = () => {
-      flip.target += Math.PI * (Math.random() < 0.5 ? 5 : 7); // odd → lands other face
+    // Flip the coin, tumbling toward (dirX, dirY) in screen space (dirY up+).
+    const doFlip = (dirX = 0, dirY = 1) => {
+      const len = Math.hypot(dirX, dirY) || 1;
+      const nx = dirX / len, ny = dirY / len;
+      _flipAxis.set(ny, -nx, 0);                    // in-plane axis ⟂ to the flip direction
+      _flipQ.setFromAxisAngle(_flipAxis, Math.PI);  // 180° → shows the other face
+      flip.q0.copy(flip.base);
+      flip.q1.copy(_flipQ).multiply(flip.base);     // world-space flip
+      flip.t = 0;
       shine.v = 1; flipSound(); haptics.roll();
       useField.getState().recordTape("sigil", 0.9, "coin/flip");
       if (hintRef.current) hintRef.current.style.opacity = "0";
     };
+    // motion-driven flip (pop / sudden tilt) — debounced, plays the concordant note
+    let lastMotionFlip = 0;
+    const motionFlip = (dirX: number, dirY: number, now: number) => {
+      if (now - lastMotionFlip < 700) return;
+      lastMotionFlip = now;
+      tiltNote(sectorOf(dirX, dirY));
+      doFlip(dirX, dirY);
+    };
 
-    // ── pointer (drag to rotate, tap to flip, rub for shine) ──
+    // ── pointer: 1-finger slide=resize / vertical=tilt / rub=shine, tap=flip;
+    //    2-finger twist = rotate the coin in-plane (and sweep the octave notes) ──
+    const twoAngle = () => {
+      const pts = Array.from(pointers.values());
+      if (pts.length < 2) return gesture.twoAngle ?? 0;
+      return Math.atan2(pts[1].y - pts[0].y, pts[1].x - pts[0].x);
+    };
     const onDown = (e: PointerEvent) => {
-      drag.on = true; drag.px = e.clientX; drag.py = e.clientY; drag.moved = 0; drag.downT = performance.now();
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       renderer.domElement.setPointerCapture?.(e.pointerId);
+      if (pointers.size >= 2) { gesture.two = true; gesture.twoAngle = twoAngle(); drag.on = false; }
+      else { drag.on = true; drag.px = e.clientX; drag.py = e.clientY; drag.moved = 0; drag.downT = performance.now(); }
       renderer.domElement.style.cursor = "grabbing";
     };
     const onMove = (e: PointerEvent) => {
+      if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      // two-finger twist → in-plane rotation; each 45° crossing rings a note
+      if (gesture.two && pointers.size >= 2) {
+        const ang = twoAngle();
+        if (gesture.twoAngle !== null) {
+          let d = ang - gesture.twoAngle;
+          while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2;
+          spin.z += d;
+          const sec = (((Math.floor(spin.z / (Math.PI / 4)) % 8) + 8) % 8);
+          if (sec !== notes.spinSec) { notes.spinSec = sec; spinNote(sec); haptics.tap(); shine.v = Math.min(1, shine.v + 0.25); }
+        }
+        gesture.twoAngle = ang;
+        return;
+      }
       if (!drag.on) return;
       const dx = e.clientX - drag.px, dy = e.clientY - drag.py;
       drag.px = e.clientX; drag.py = e.clientY;
@@ -395,11 +474,23 @@ export default function Coin() {
       if (speed > 3) { shine.v = Math.min(1, shine.v + speed * 0.02); shimmer(now, Math.round(e.clientX / 40), 90); if (now - drag.lastRub > 120) { haptics.tap(); drag.lastRub = now; } }
     };
     const onUp = (e: PointerEvent) => {
-      if (!drag.on) return; drag.on = false;
-      renderer.domElement.style.cursor = "grab";
-      const dt = performance.now() - drag.downT;
-      if (drag.moved < 8 && dt < 400) { ting(); shine.v = 1; haptics.tap(); useField.getState().recordTape("object", 0.6, "coin/tap"); doFlip(); }
+      const wasTwo = gesture.two;
+      pointers.delete(e.pointerId);
       renderer.domElement.releasePointerCapture?.(e.pointerId);
+      if (pointers.size < 2) { gesture.two = false; gesture.twoAngle = null; }
+      renderer.domElement.style.cursor = "grab";
+      if (wasTwo) { drag.on = false; return; }        // twist gesture — never a tap
+      if (!drag.on) return; drag.on = false;
+      const dt = performance.now() - drag.downT;
+      if (drag.moved < 8 && dt < 400) {
+        // tap flips toward where you pressed & rings that region's note
+        const { cx, cy } = coinCenter();
+        const dx = e.clientX - cx, dy = cy - e.clientY;    // up-positive
+        const sec = sectorOf(dx, dy);
+        ting(); regionNote(sec); shine.v = 1; haptics.tap();
+        useField.getState().recordTape("object", 0.6, "coin/tap");
+        doFlip(dx, dy);
+      }
     };
     renderer.domElement.addEventListener("pointerdown", onDown);
     renderer.domElement.addEventListener("pointermove", onMove);
@@ -408,30 +499,34 @@ export default function Coin() {
 
     // ── device gyroscope (tilt the phone) ──
     let haveOrient = false;
+    let prevGamma: number | null = null, prevBeta: number | null = null;
     const onOrient = (e: DeviceOrientationEvent) => {
       haveOrient = true;
-      const gx = (e.gamma ?? 0) / 40;           // left/right
-      const gy = ((e.beta ?? 0) - 35) / 40;     // front/back
-      tilt.ty = Math.max(-1.2, Math.min(1.2, gx));
-      tilt.tx = Math.max(-1.2, Math.min(1.2, gy));
+      const gamma = e.gamma ?? 0, beta = e.beta ?? 0;
+      tilt.ty = Math.max(-1.2, Math.min(1.2, gamma / 40));       // left/right
+      tilt.tx = Math.max(-1.2, Math.min(1.2, (beta - 35) / 40)); // front/back
+      if (prevGamma !== null && prevBeta !== null) {
+        const dG = gamma - prevGamma, dB = beta - prevBeta;
+        // a sudden tilt (fast orientation change) flips the coin that way
+        if (Math.hypot(dG, dB) > 11) motionFlip(dG, -dB, performance.now());
+      }
+      prevGamma = gamma; prevBeta = beta;
     };
     window.addEventListener("deviceorientation", onOrient);
 
-    // ── pop the phone up aggressively → flip the coin ──
-    // watch for a sharp upward spike in linear acceleration; debounce so the
-    // pop and its rebound (decel) don't fire twice.
-    let lastShake = 0;
+    // ── pop / jerk the phone → flip the coin toward the pop direction ──
+    // watch for a sharp spike in linear acceleration; motionFlip debounces so
+    // the pop and its rebound (decel) don't fire twice.
     const onMotion = (e: DeviceMotionEvent) => {
       const a = e.acceleration ?? e.accelerationIncludingGravity;
       if (!a) return;
       const ax = a.x ?? 0, ay = a.y ?? 0, az = a.z ?? 0;
       const mag = Math.hypot(ax, ay, az);
       const now = performance.now();
-      // upward flick (screen-up ≈ +y) or any hard jerk, well above normal handling
-      if ((ay > 15 || mag > 22) && now - lastShake > 850) {
-        lastShake = now;
+      // a hard pop in any direction (or a sharp jerk), well above normal handling
+      if (mag > 20 || Math.abs(ax) > 15 || Math.abs(ay) > 15) {
         shine.v = 1; haptics.chop();
-        doFlip();
+        motionFlip(ax, ay, now); // tumbles toward the pop direction
       }
     };
     window.addEventListener("devicemotion", onMotion);
@@ -459,6 +554,7 @@ export default function Coin() {
     // ── loop ──
     let raf = 0; let prev = performance.now();
     let idle = 0; let lastTiltMag = 0;
+    let lastTiltNote = 0;
     const tick = (now: number) => {
       const dt = Math.min(0.05, (now - prev) / 1000); prev = now;
       const motion = reduce ? 0 : 1;
@@ -470,22 +566,34 @@ export default function Coin() {
       tilt.x += (tilt.tx + swayX - tilt.x) * 0.12;
       tilt.y += (tilt.ty + swayY - tilt.y) * 0.12;
 
-      // flip spring (with a little toss toward the camera)
-      const remain = flip.target - flip.cur;
-      flip.cur += remain * 0.14;
-      const tossing = Math.min(1, Math.abs(remain) / 3);
+      // flip animation — quaternion slerp toward the target face
+      if (flip.t < 1) {
+        flip.t = Math.min(1, flip.t + (1 - flip.t) * 0.16 + 0.01);
+        flip.base.slerpQuaternions(flip.q0, flip.q1, flip.t);
+        if (flip.t >= 1) flip.q0.copy(flip.q1);
+      }
+      const tossing = flip.t < 1 ? Math.sin(Math.PI * flip.t) : 0;
       coinGroup.position.z = tossing * 3.2;
       // ease the slide-driven size, combined with the flip toss
       size.v += (size.t - size.v) * 0.16;
       coinGroup.scale.setScalar(size.v * (1 + tossing * 0.06));
 
-      coinGroup.rotation.x = tilt.x + flip.cur;
-      coinGroup.rotation.y = tilt.y;
+      // compose: two-finger spin ∘ ambient tilt ∘ flip (all screen-space)
+      _tiltEuler.set(tilt.x, tilt.y, 0, "XYZ");
+      _qTilt.setFromEuler(_tiltEuler);
+      _qSpin.setFromAxisAngle(_z, spin.z);
+      coinGroup.quaternion.copy(_qSpin).multiply(_qTilt).multiply(flip.base);
 
-      // shimmer sound on real motion (tilt velocity)
-      const tiltMag = Math.abs(tilt.tx) + Math.abs(tilt.ty) + Math.abs(flip.cur);
+      // shimmer sound on real motion (tilt velocity) — unchanged character
+      const tiltMag = Math.abs(tilt.tx) + Math.abs(tilt.ty);
       const tiltVel = Math.abs(tiltMag - lastTiltMag); lastTiltMag = tiltMag;
       if (tiltVel > 0.06) { shine.v = Math.min(1, shine.v + tiltVel * 0.6); shimmer(now, Math.round(tilt.x * 20) + 4, 160); }
+      // slow directional tilt → sweep the concordant octave around the coin
+      const lean = Math.hypot(tilt.tx, tilt.ty);
+      if (lean > 0.4) {
+        const sec = sectorOf(tilt.ty, -tilt.tx);
+        if (sec !== notes.tiltSec && now - lastTiltNote > 200) { notes.tiltSec = sec; lastTiltNote = now; tiltNote(sec); }
+      } else { notes.tiltSec = -1; }
 
       // star glint: ride the highlight, fade out
       shine.v *= 0.92;
@@ -527,7 +635,7 @@ export default function Coin() {
     <div ref={wrapRef} style={{ position: "fixed", inset: 0, background: "#0a0806" }}>
       <div className="coin-hud">
         <div className="coin-title">objet&nbsp;d&rsquo;art — la médaille</div>
-        <div className="coin-hint" ref={hintRef}>tilt your phone · slide sideways to resize · tap or flick it up to flip · rub for shine</div>
+        <div className="coin-hint" ref={hintRef}>tap a spot to flip & play its note · tilt or pop to flip · slide to resize · twist with two fingers · rub to shine</div>
       </div>
       <style dangerouslySetInnerHTML={{ __html: `
         .coin-hud {
