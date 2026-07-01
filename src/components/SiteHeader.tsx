@@ -41,6 +41,7 @@ const ROUTES: RouteEntry[] = [
   { key: "time",        icon: "watch",    href: "/time",                              desc: "chronograph" },
   { key: "movement",    icon: "watch",    href: "/movement",                          desc: "mechanical movement · 3D" },
   { key: "jewel",       icon: "plasma",   href: "/jewel",                             desc: "gold & diamond · sound shader" },
+  { key: "coin",        icon: "watch",    href: "/coin",                              desc: "a gold medal · tilt · flip" },
   { key: "watch",       icon: "watch",    href: "/watch",                             desc: "the room" },
   { key: "archive",     icon: "archive",  href: "/archive",      anchor: "archive",   desc: "the drawers" },
   { key: "kept",        icon: "kept",     href: "/kept",                              desc: "a private trail" },
@@ -74,6 +75,7 @@ export default function SiteHeader() {
     pathname.startsWith("/time") ||
     pathname.startsWith("/movement") ||
     pathname.startsWith("/jewel") ||
+    pathname.startsWith("/coin") ||
     pathname.startsWith("/fire") ||
     pathname.startsWith("/earth") ||
     pathname.startsWith("/growth") ||
