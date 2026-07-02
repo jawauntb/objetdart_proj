@@ -14,7 +14,8 @@
     "test": "npm run test:routes && npm run test:analytics",
     "test:routes": "node scripts/test-routes.mjs",
     "test:analytics": "node scripts/test-analytics.mjs",
-    "smoke:home": "node scripts/smoke-home.mjs"
+    "smoke:home": "node scripts/smoke-home.mjs",
+    "smoke:clouds": "node scripts/smoke-clouds.mjs"
   },
   "dependencies": {
     "@chenglou/pretext": "^0.0.8",

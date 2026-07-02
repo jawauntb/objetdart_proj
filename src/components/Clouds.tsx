@@ -8,6 +8,44 @@ import GreekKeyFrame from "@/components/GreekKeyFrame";
 import WaterText from "@/components/WaterText";
 import SeaChart, { type SeaChartCandle } from "@/components/SeaChart";
 
+type WeatherCell = {
+  id: number;
+  kind: "vapor" | "storm";
+  x: number;
+  y: number;
+  t0: number;
+  strength: number;
+  spread: number;
+  drift: number;
+  lift: number;
+  phase: number;
+  rain: number;
+};
+
+type WindStroke = {
+  id: number;
+  points: Array<{ x: number; y: number; t: number }>;
+  t0: number;
+  releasedAt: number | null;
+  strength: number;
+  vx: number;
+  vy: number;
+  hue: number;
+};
+
+type RainVeil = {
+  id: number;
+  x: number;
+  y: number;
+  t0: number;
+  strength: number;
+  width: number;
+  slant: number;
+  seed: number;
+};
+
+const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+
 /**
  * /clouds — Olympus. The cloud floor.
  *
@@ -19,13 +57,14 @@ import SeaChart, { type SeaChartCandle } from "@/components/SeaChart";
  *      afternoon rose → storm grey → deep purple. The cursor uv is passed
  *      to the shader so hovered sky thickens locally; pressing thickens
  *      further toward nimbus dark grey-lilac.
- *   2. 2D overlay: lightning flash + lightning path, drifting Minoan air
- *      spirals at four altitudes, and the cloud-type labels along the
- *      right edge.
+ *   2. 2D overlay: living vapor cells, drag-born wind shear, rain veils,
+ *      lightning flash + lightning path, drifting Minoan air spirals at
+ *      four altitudes, and the cloud-type labels along the right edge.
  *   3. DOM banners: <GreekKeyFrame /> on all four sides, plus the OLYMPUS title.
  *
- * Lightning is a deliberate event — press and hold the sky for 0.8s+ and
- * release. Thud + delayed bell makes the thunder. recordTape on each strike.
+ * The sky is an instrument: tap to condense vapor, drag to shear the cloud
+ * field, and press for 0.8s+ to build a storm cell that takes lightning.
+ * Thud + delayed bell makes the thunder. recordTape on each strike.
  *
  * prefers-reduced-motion freezes the day cycle and spiral drift; lightning
  * is still triggerable, but it never fires on its own.
@@ -82,7 +121,7 @@ export default function Clouds() {
   const addWeatherMark = (label: string, level: number) => {
     const id = ++weatherMarkIdRef.current;
     setWeatherMarks((marks) => [
-      { id, label, level: Math.max(0, Math.min(1, level)) },
+      { id, label, level: clamp(level, 0, 1) },
       ...marks,
     ].slice(0, 4));
   };
@@ -96,7 +135,7 @@ export default function Clouds() {
       const t = performance.now() / 1000;
       const v = 0.5 + 0.30 * Math.sin(t * 0.18) + 0.12 * Math.sin(t * 0.71) + 0.08 * Math.sin(t * 1.33);
       const buf = windHistoryRef.current;
-      buf.push(Math.max(0, Math.min(1, v)));
+      buf.push(clamp(v, 0, 1));
       if (buf.length > 120) buf.shift();
       setWindChartPullKey((k) => k + 1);
     }, 700);
@@ -144,6 +183,7 @@ export default function Clouds() {
     let uCursorLoc: WebGLUniformLocation | null = null;
     let uPressLoc: WebGLUniformLocation | null = null;
     let uFlashLoc: WebGLUniformLocation | null = null;
+    let uWindLoc: WebGLUniformLocation | null = null;
     let lastChargeSync = 0;
 
     if (gl) {
@@ -163,6 +203,7 @@ export default function Clouds() {
         uniform vec2 uCursor;   // uv 0..1, y up
         uniform float uPress;   // 0 = not pressed, 0..1 = held intensity
         uniform float uFlash;   // 0..1 short flash envelope
+        uniform vec2 uWind;     // drag-driven shear vector
         varying vec2 vUv;
 
         // hash + value noise + fbm — the cloud substrate
@@ -233,10 +274,13 @@ export default function Clouds() {
 
           // shared cloud uv with mild aspect correction so clouds aren't
           // squashed on wide windows
-          vec2 cuv = vec2(uv.x * aspect, uv.y);
+          float shear = smoothstep(0.08, 0.90, length(uWind));
+          vec2 windDrift = vec2(uWind.x * 0.12, uWind.y * 0.05) * (0.45 + sky_uv.y);
+          vec2 cuv = vec2(uv.x * aspect, uv.y) + windDrift;
+          sky += shear * vec3(0.018, 0.020, 0.040);
 
           // ── cirrus (high, thin streaks) ─────────────────────────
-          vec2 ci_uv = cuv * vec2(2.2, 6.0) + vec2(t * 0.012, 0.0);
+          vec2 ci_uv = cuv * vec2(2.2, 6.0) + vec2(t * 0.012 + uWind.x * 0.55, uWind.y * 0.22);
           float cirrus = fbm(ci_uv);
           // mask: only in the top ~35% of the sky
           float ciMask = smoothstep(0.95, 0.55, sky_uv.y);
@@ -245,7 +289,7 @@ export default function Clouds() {
           vec3 col = mix(sky, vec3(0.98, 0.97, 0.95), ciDensity * 0.55);
 
           // ── altostratus (mid, broad smooth sheet) ───────────────
-          vec2 as_uv = cuv * vec2(0.9, 1.6) + vec2(t * 0.018, t * 0.004);
+          vec2 as_uv = cuv * vec2(0.9, 1.6) + vec2(t * 0.018 + uWind.x * 0.22, t * 0.004 + uWind.y * 0.06);
           float alto = fbm(as_uv);
           float asMask = smoothstep(0.75, 0.30, sky_uv.y) * smoothstep(0.05, 0.30, sky_uv.y);
           float asDensity = smoothstep(0.48, 0.74, alto) * asMask;
@@ -253,7 +297,7 @@ export default function Clouds() {
           col = mix(col, asColor, asDensity * 0.55);
 
           // ── cumulus (low, puffy) — main hover/press target ──────
-          vec2 cu_uv = cuv * 1.7 + vec2(t * 0.024, t * 0.009);
+          vec2 cu_uv = cuv * 1.7 + vec2(t * 0.024 + uWind.x * 0.28, t * 0.009 + uWind.y * 0.10);
           float cum = fbm(cu_uv) + 0.12 * fbm(cu_uv * 2.7 + vec2(5.0, 9.0));
           // gentle altitude band
           float cuBand = smoothstep(0.62, 0.20, sky_uv.y) * smoothstep(0.02, 0.18, sky_uv.y);
@@ -271,7 +315,7 @@ export default function Clouds() {
           col = mix(col, cuColor, cuDensity);
 
           // ── nimbus (low, dark, heavy) — emerges in storm phase ──
-          vec2 nim_uv = cuv * 1.2 + vec2(t * 0.02, t * 0.006);
+          vec2 nim_uv = cuv * 1.2 + vec2(t * 0.02 + uWind.x * 0.18, t * 0.006 + uWind.y * 0.08);
           float nim = fbm(nim_uv + vec2(7.3, 2.1));
           float nimBand = smoothstep(0.55, 0.10, sky_uv.y);
           // nimbus presence rides storm phase and local press
@@ -327,6 +371,7 @@ export default function Clouds() {
             uCursorLoc = gl.getUniformLocation(p, "uCursor");
             uPressLoc = gl.getUniformLocation(p, "uPress");
             uFlashLoc = gl.getUniformLocation(p, "uFlash");
+            uWindLoc = gl.getUniformLocation(p, "uWind");
 
             const buf = gl.createBuffer();
             gl.bindBuffer(gl.ARRAY_BUFFER, buf);
@@ -365,6 +410,14 @@ export default function Clouds() {
 
     // ── interaction ────────────────────────────────────────────────
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    let nextWeatherId = 0;
+    let activeWindStroke: WindStroke | null = null;
+    let lastWindMark = 0;
+    let windTargetX = 0;
+    let windTargetY = 0;
+    let windX = 0;
+    let windY = 0;
+    let activePointerId: number | null = null;
 
     // build a jagged path from (x0, y0) to (x1, y1) with mid-jitter forks
     const makeBolt = (x0: number, y0: number, x1: number, y1: number) => {
@@ -384,14 +437,117 @@ export default function Clouds() {
       return pts;
     };
 
-    const triggerLightning = (uvx: number) => {
+    const clampToSky = (x: number, y: number) => {
+      const w = overlay.clientWidth || 1280;
+      const h = overlay.clientHeight || 720;
+      return {
+        x: clamp(x, 24, w - 24),
+        y: clamp(y, 84, h - 48),
+      };
+    };
+
+    const seedWeatherCell = (
+      x: number,
+      y: number,
+      kind: WeatherCell["kind"],
+      strength: number,
+    ) => {
+      const p = clampToSky(x, y);
+      weatherCells.push({
+        id: ++nextWeatherId,
+        kind,
+        x: p.x,
+        y: p.y,
+        t0: performance.now(),
+        strength: clamp(strength, 0.2, 1),
+        spread: kind === "storm" ? 1.10 + Math.random() * 0.45 : 0.70 + Math.random() * 0.55,
+        drift: (Math.random() - 0.5) * (kind === "storm" ? 7 : 16),
+        lift: kind === "storm" ? 0.35 + Math.random() * 0.35 : 1.2 + Math.random() * 1.8,
+        phase: Math.random() * Math.PI * 2,
+        rain: kind === "storm" ? 0.45 + Math.random() * 0.35 + strength * 0.22 : Math.random() * 0.10,
+      });
+      if (weatherCells.length > 20) weatherCells.shift();
+    };
+
+    const seedRainVeil = (x: number, y: number, strength: number, width = 180) => {
+      const p = clampToSky(x, y);
+      rainVeils.push({
+        id: ++nextWeatherId,
+        x: p.x,
+        y: p.y,
+        t0: performance.now(),
+        strength: clamp(strength, 0.18, 1),
+        width,
+        slant: -10 + Math.random() * 22 + windTargetX * 18,
+        seed: Math.random() * 1000,
+      });
+      if (rainVeils.length > 14) rainVeils.shift();
+    };
+
+    const beginWindStroke = (x: number, y: number) => {
+      activeWindStroke = {
+        id: ++nextWeatherId,
+        points: [{ x, y, t: performance.now() }],
+        t0: performance.now(),
+        releasedAt: null,
+        strength: 0.12,
+        vx: 0,
+        vy: 0,
+        hue: Math.random(),
+      };
+      windStrokes.push(activeWindStroke);
+      if (windStrokes.length > 14) windStrokes.shift();
+    };
+
+    const extendWindStroke = (x: number, y: number) => {
+      if (!activeWindStroke) return;
+      const nowMs = performance.now();
+      const pts = activeWindStroke.points;
+      const last = pts[pts.length - 1];
+      const dx = x - last.x;
+      const dy = y - last.y;
+      const d = Math.hypot(dx, dy);
+      if (d < 3) return;
+      const dtSec = Math.max(0.016, (nowMs - last.t) / 1000);
+      activeWindStroke.vx = dx / dtSec;
+      activeWindStroke.vy = dy / dtSec;
+      activeWindStroke.strength = clamp(activeWindStroke.strength + d / 120, 0, 1);
+      pts.push({ x, y, t: nowMs });
+      if (pts.length > 48) pts.shift();
+
+      windTargetX = clamp(activeWindStroke.vx / 780, -1, 1);
+      windTargetY = clamp(activeWindStroke.vy / 980, -1, 1);
+      if (nowMs - lastWindMark > 420) {
+        lastWindMark = nowMs;
+        addWeatherMark("wind shear", Math.min(0.86, 0.32 + activeWindStroke.strength * 0.62));
+      }
+    };
+
+    const releaseWindStroke = (record = true) => {
+      if (!activeWindStroke) return;
+      activeWindStroke.releasedAt = performance.now();
+      if (record && activeWindStroke.points.length > 5) {
+        useField.getState().recordTape("ripple", 0.42 + activeWindStroke.strength * 0.35, "clouds/wind-shear");
+        if (activeWindStroke.strength > 0.55) {
+          try { getFieldAudio().spark(); } catch { /* noop */ }
+          haptics.ripple(0.22 + activeWindStroke.strength * 0.18);
+        }
+      }
+      activeWindStroke = null;
+    };
+
+    const triggerLightning = (uvx: number, target?: { x: number; y: number }) => {
       const w = overlay.clientWidth;
       const h = overlay.clientHeight;
       // strike origin: near top, x near cursor
-      const x0 = Math.max(40, Math.min(w - 40, uvx * w + (Math.random() - 0.5) * 60));
+      const x0 = clamp(uvx * w + (Math.random() - 0.5) * 60, 40, w - 40);
       const y0 = h * 0.05;
-      const x1 = Math.max(20, Math.min(w - 20, x0 + (Math.random() - 0.5) * 220));
-      const y1 = h * (0.55 + Math.random() * 0.25);
+      const x1 = target
+        ? clamp(target.x + (Math.random() - 0.5) * 46, 20, w - 20)
+        : clamp(x0 + (Math.random() - 0.5) * 220, 20, w - 20);
+      const y1 = target
+        ? clamp(target.y + (Math.random() - 0.5) * 30, h * 0.24, h - 30)
+        : h * (0.55 + Math.random() * 0.25);
       lightnings.current.push({
         t0: performance.now(),
         segs: makeBolt(x0, y0, x1, y1),
@@ -441,8 +597,8 @@ export default function Clouds() {
       pointer.current.x = x;
       pointer.current.y = y;
       // y=0 top in DOM, shader expects y=0 bottom
-      pointer.current.uvx = Math.max(0, Math.min(1, x / r.width));
-      pointer.current.uvy = Math.max(0, Math.min(1, 1 - y / r.height));
+      pointer.current.uvx = clamp(x / r.width, 0, 1);
+      pointer.current.uvy = clamp(1 - y / r.height, 0, 1);
       pointer.current.over = true;
 
       // update per-glyph hover state
@@ -450,21 +606,46 @@ export default function Clouds() {
       for (const g of glyphs) g.hovered = g === touched;
     };
     const onDown = (e: PointerEvent) => {
+      if (activePointerId !== null) return;
+      activePointerId = e.pointerId;
+      try { overlay.setPointerCapture(e.pointerId); } catch { /* pointer capture can fail on cancelled touches */ }
       updatePointer(e);
       pointer.current.pressed = true;
       pointer.current.pressStart = performance.now();
+      beginWindStroke(pointer.current.x, pointer.current.y);
       haptics.tap();
       addWeatherMark("pressure", 0.45);
     };
     const onMove = (e: PointerEvent) => {
+      if (activePointerId !== null && e.pointerId !== activePointerId) return;
       updatePointer(e);
+      if (pointer.current.pressed) {
+        extendWindStroke(pointer.current.x, pointer.current.y);
+      }
     };
-    const onUp = () => {
+    const clearActiveGesture = (pointerId?: number, recordWind = true) => {
+      if (pointerId !== undefined) {
+        try { overlay.releasePointerCapture(pointerId); } catch { /* already released */ }
+      }
+      activePointerId = null;
+      releaseWindStroke(recordWind);
+      pointer.current.pressed = false;
+      setPressCharge(0);
+    };
+    const onUp = (e: PointerEvent) => {
+      if (activePointerId !== null && e.pointerId !== activePointerId) return;
       const now = performance.now();
       const held = now - pointer.current.pressStart;
+      if (pointer.current.pressed && pointer.current.over) {
+        extendWindStroke(pointer.current.x, pointer.current.y);
+      }
       if (pointer.current.pressed && held >= 800) {
         // strike comes off the held region (long-press lightning)
-        triggerLightning(pointer.current.uvx);
+        const charge = clamp(held / 1800, 0, 1);
+        seedWeatherCell(pointer.current.x, pointer.current.y, "storm", 0.64 + charge * 0.36);
+        seedRainVeil(pointer.current.x, pointer.current.y + 44, 0.58 + charge * 0.42, 170 + charge * 110);
+        triggerLightning(pointer.current.uvx, { x: pointer.current.x, y: pointer.current.y });
+        addWeatherMark("storm cell", 0.88 + charge * 0.12);
       } else if (pointer.current.pressed && held < 500 && pointer.current.over) {
         // a tap. Route in priority: glyph → cloud puff.
         const px = pointer.current.x;
@@ -494,27 +675,32 @@ export default function Clouds() {
           // a tap on empty sky — local cloud puff
           cloudPuffs.push({ x: px, y: py, t0: performance.now() });
           if (cloudPuffs.length > 8) cloudPuffs.shift();
+          seedWeatherCell(px, py, "vapor", 0.40 + Math.random() * 0.22);
           const a = getFieldAudio();
           a.chime();
           haptics.ripple(0.38);
           useField.getState().recordTape("ripple", 0.4, "clouds/puff");
-          addWeatherMark("puff", 0.38);
+          addWeatherMark("vapor", 0.42);
         }
       }
-      pointer.current.pressed = false;
-      setPressCharge(0);
+      clearActiveGesture(e.pointerId);
+    };
+    const onCancel = (e: PointerEvent) => {
+      if (activePointerId !== null && e.pointerId !== activePointerId) return;
+      pointer.current.over = false;
+      clearActiveGesture(e.pointerId, false);
     };
     const onLeave = () => {
+      if (activePointerId !== null) return;
       pointer.current.over = false;
-      pointer.current.pressed = false;
-      setPressCharge(0);
+      clearActiveGesture();
     };
     overlay.addEventListener("pointerdown", onDown);
     overlay.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
     // iOS fires pointercancel when a touch is interrupted (e.g. by a system
     // gesture). Without this the press state stays held forever.
-    window.addEventListener("pointercancel", onUp);
+    window.addEventListener("pointercancel", onCancel);
     overlay.addEventListener("pointerleave", onLeave);
 
     // ── air glyphs (Minoan wind chorus across altitudes) ───────────
@@ -588,6 +774,25 @@ export default function Clouds() {
 
     // local clouds — soft visual puffs at recent cloud taps
     const cloudPuffs: Array<{ x: number; y: number; t0: number }> = [];
+    const weatherCells: WeatherCell[] = Array.from({ length: 6 }).map((_, i) => {
+      const storm = i === 4 && Math.random() > 0.45;
+      const strength = storm ? 0.58 : 0.28 + Math.random() * 0.24;
+      return {
+        id: ++nextWeatherId,
+        kind: storm ? "storm" : "vapor",
+        x: (0.12 + i * 0.16 + (Math.random() - 0.5) * 0.06) * initialW,
+        y: (0.24 + (i % 3) * 0.16 + (Math.random() - 0.5) * 0.05) * initialH,
+        t0: performance.now() - Math.random() * 12000,
+        strength,
+        spread: storm ? 1.15 : 0.72 + Math.random() * 0.42,
+        drift: (Math.random() - 0.5) * (storm ? 5 : 11),
+        lift: storm ? 0.24 : 0.8 + Math.random() * 1.2,
+        phase: Math.random() * Math.PI * 2,
+        rain: storm ? 0.42 : Math.random() * 0.08,
+      };
+    });
+    const windStrokes: WindStroke[] = [];
+    const rainVeils: RainVeil[] = [];
     const cloudClusters = Array.from({ length: 7 }).map((_, i) => ({
       xFrac: 0.08 + i * 0.15 + (Math.random() - 0.5) * 0.04,
       yFrac: 0.30 + (i % 3) * 0.12 + (Math.random() - 0.5) * 0.035,
@@ -842,6 +1047,205 @@ export default function Clouds() {
       ctx.restore();
     };
 
+    const drawSunShafts = (
+      ctx: CanvasRenderingContext2D,
+      w: number,
+      h: number,
+      phase: number,
+      elapsed: number,
+      isLight: boolean,
+    ) => {
+      const stormDip = phase > 0.56 && phase < 0.90 ? 0.34 : 1;
+      ctx.save();
+      ctx.globalCompositeOperation = "screen";
+      const origin = (0.18 + Math.sin(phase * Math.PI * 2) * 0.18) * w;
+      for (let i = 0; i < 6; i++) {
+        const spread = 86 + i * 36;
+        const x = origin + (i - 2.4) * spread + Math.sin(elapsed * 0.13 + i) * 18;
+        const topWidth = 24 + i * 5;
+        const lowerWidth = 120 + i * 22;
+        const g = ctx.createLinearGradient(0, 58, 0, h);
+        const alpha = (isLight ? 0.105 : 0.065) * stormDip * (0.78 + Math.sin(elapsed * 0.20 + i) * 0.22);
+        g.addColorStop(0, `rgba(255, 249, 218, ${alpha.toFixed(3)})`);
+        g.addColorStop(0.58, `rgba(216, 196, 216, ${(alpha * 0.35).toFixed(3)})`);
+        g.addColorStop(1, "rgba(255, 249, 218, 0)");
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.moveTo(x - topWidth, 58);
+        ctx.lineTo(x + topWidth, 58);
+        ctx.lineTo(x + lowerWidth, h);
+        ctx.lineTo(x - lowerWidth * 0.62, h);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.restore();
+    };
+
+    const drawWindStroke = (
+      ctx: CanvasRenderingContext2D,
+      stroke: WindStroke,
+      now: number,
+      isLight: boolean,
+    ) => {
+      if (stroke.points.length < 2) return;
+      const fadeAge = stroke.releasedAt ? (now - stroke.releasedAt) / 1000 : 0;
+      const fade = stroke.releasedAt ? Math.max(0, 1 - fadeAge / 2.4) : 1;
+      if (fade <= 0) return;
+      const alpha = fade * (0.22 + stroke.strength * 0.42);
+      const outer = isLight
+        ? `rgba(88, 72, 110, ${(alpha * 0.48).toFixed(3)})`
+        : `rgba(244, 238, 222, ${(alpha * 0.58).toFixed(3)})`;
+      const inner = stroke.hue > 0.55
+        ? `rgba(213, 177, 104, ${(alpha * 0.70).toFixed(3)})`
+        : `rgba(181, 201, 230, ${(alpha * 0.72).toFixed(3)})`;
+
+      ctx.save();
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.globalCompositeOperation = isLight ? "source-over" : "screen";
+      for (let pass = 0; pass < 2; pass++) {
+        ctx.strokeStyle = pass === 0 ? outer : inner;
+        ctx.lineWidth = pass === 0 ? 6 + stroke.strength * 9 : 1.2 + stroke.strength * 2.8;
+        ctx.beginPath();
+        const pts = stroke.points;
+        ctx.moveTo(pts[0].x, pts[0].y);
+        for (let i = 1; i < pts.length - 1; i++) {
+          const midX = (pts[i].x + pts[i + 1].x) * 0.5;
+          const midY = (pts[i].y + pts[i + 1].y) * 0.5;
+          ctx.quadraticCurveTo(pts[i].x, pts[i].y, midX, midY);
+        }
+        const last = pts[pts.length - 1];
+        ctx.lineTo(last.x, last.y);
+        ctx.stroke();
+      }
+
+      ctx.fillStyle = inner;
+      for (let i = 2; i < stroke.points.length; i += 7) {
+        const p = stroke.points[i];
+        const r = 1.4 + Math.sin((now - stroke.t0) * 0.004 + i) * 0.5 + stroke.strength * 1.5;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    };
+
+    const drawRainVeil = (
+      ctx: CanvasRenderingContext2D,
+      veil: RainVeil,
+      now: number,
+      elapsed: number,
+      isLight: boolean,
+    ) => {
+      const age = (now - veil.t0) / 1000;
+      const fade = Math.max(0, 1 - age / 3.2);
+      if (fade <= 0) return;
+      ctx.save();
+      ctx.globalAlpha = fade * (0.28 + veil.strength * 0.38);
+      ctx.strokeStyle = isLight ? "rgba(58, 54, 82, 0.34)" : "rgba(218, 224, 255, 0.52)";
+      ctx.lineWidth = 0.8 + veil.strength * 0.55;
+      ctx.lineCap = "round";
+      const drops = 26 + Math.round(veil.strength * 26);
+      for (let i = 0; i < drops; i++) {
+        const seeded = (Math.sin((i + 1) * 98.233 + veil.seed) * 43758.5453) % 1;
+        const u = seeded < 0 ? seeded + 1 : seeded;
+        const x = veil.x - veil.width * 0.5 + u * veil.width + Math.sin(elapsed * 1.8 + i) * 6;
+        const y = veil.y + ((elapsed * (78 + veil.strength * 44) + i * 17 + veil.seed) % 170) - 52;
+        const len = 14 + veil.strength * 26 + (i % 4) * 3;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + veil.slant, y + len);
+        ctx.stroke();
+      }
+      ctx.restore();
+    };
+
+    const drawWeatherCell = (
+      ctx: CanvasRenderingContext2D,
+      cell: WeatherCell,
+      now: number,
+      elapsed: number,
+      dt: number,
+      w: number,
+      h: number,
+      isLight: boolean,
+    ) => {
+      const age = (now - cell.t0) / 1000;
+      const life = cell.kind === "storm" ? 72 : 58;
+      const fadeIn = Math.min(1, age / 1.2);
+      const fadeOut = Math.max(0, 1 - Math.max(0, age - life * 0.72) / (life * 0.28));
+      const alpha = fadeIn * fadeOut;
+      if (alpha <= 0) return;
+
+      if (!reduce) {
+        cell.x += (cell.drift + windX * (cell.kind === "storm" ? 9 : 18)) * dt;
+        cell.y -= cell.lift * dt;
+        const margin = 180 * cell.spread;
+        if (cell.x > w + margin) cell.x = -margin;
+        if (cell.x < -margin) cell.x = w + margin;
+        if (cell.y < 76) cell.y = h * (0.66 + Math.random() * 0.12);
+      }
+
+      const pulse = 1 + Math.sin(elapsed * (cell.kind === "storm" ? 0.7 : 1.05) + cell.phase) * 0.05;
+      const s = cell.spread * (0.82 + cell.strength * 0.82) * pulse;
+      const glowRadius = (cell.kind === "storm" ? 180 : 128) * s;
+      const glow = ctx.createRadialGradient(cell.x, cell.y, 4, cell.x, cell.y, glowRadius);
+      if (cell.kind === "storm") {
+        glow.addColorStop(0, `rgba(60, 50, 80, ${(0.26 * alpha).toFixed(3)})`);
+        glow.addColorStop(0.45, `rgba(95, 83, 122, ${(0.13 * alpha).toFixed(3)})`);
+        glow.addColorStop(1, "rgba(60, 50, 80, 0)");
+      } else {
+        glow.addColorStop(0, `rgba(255, 254, 246, ${(0.24 * alpha).toFixed(3)})`);
+        glow.addColorStop(0.56, `rgba(216, 196, 216, ${(0.10 * alpha).toFixed(3)})`);
+        glow.addColorStop(1, "rgba(255, 254, 246, 0)");
+      }
+
+      ctx.save();
+      ctx.globalCompositeOperation = cell.kind === "storm" ? "source-over" : "screen";
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.ellipse(cell.x, cell.y, glowRadius, glowRadius * 0.38, Math.sin(cell.phase) * 0.10, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+
+      const fill = cell.kind === "storm"
+        ? isLight ? "rgba(72, 61, 93, 0.64)" : "rgba(28, 25, 42, 0.76)"
+        : isLight ? "rgba(255, 254, 248, 0.62)" : "rgba(225, 220, 240, 0.42)";
+      const rim = cell.kind === "storm"
+        ? "rgba(244, 238, 222, 0.30)"
+        : isLight ? "rgba(88, 72, 110, 0.20)" : "rgba(244, 238, 222, 0.24)";
+      drawCloudCluster(ctx, cell.x, cell.y, s * 0.62, fill, rim, alpha * (cell.kind === "storm" ? 0.76 : 0.56));
+
+      if (cell.kind === "storm") {
+        ctx.save();
+        ctx.globalAlpha = alpha * (0.26 + cell.strength * 0.18);
+        ctx.fillStyle = isLight ? "rgba(40, 34, 58, 0.54)" : "rgba(12, 11, 22, 0.62)";
+        ctx.beginPath();
+        ctx.ellipse(cell.x + 6 * s, cell.y + 24 * s, 66 * s, 17 * s, -0.03, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+
+        if (cell.rain > 0.28) {
+          drawRainVeil(
+            ctx,
+            {
+              id: cell.id,
+              x: cell.x,
+              y: cell.y + 36 * s,
+              t0: now - 700,
+              strength: cell.rain * alpha,
+              width: 150 * s,
+              slant: -7 + windX * 20,
+              seed: cell.phase * 100,
+            },
+            now,
+            elapsed,
+            isLight,
+          );
+        }
+      }
+    };
+
     // ── render loop ────────────────────────────────────────────────
     const t0 = performance.now();
     let raf = 0;
@@ -853,6 +1257,7 @@ export default function Clouds() {
       const w = overlay.clientWidth;
       const h = overlay.clientHeight;
       const elapsed = (now - t0) / 1000;
+      const motionElapsed = reduce ? 0 : elapsed;
       elapsedRef.v = elapsed;
       const dt = Math.min(0.05, (now - lastFrameMs) / 1000);
       lastFrameMs = now;
@@ -878,6 +1283,12 @@ export default function Clouds() {
         lastChargeSync = now;
         setPressCharge(pressSmoothed);
       }
+      if (!pointer.current.pressed) {
+        windTargetX *= 0.965;
+        windTargetY *= 0.955;
+      }
+      windX += (windTargetX - windX) * 0.055;
+      windY += (windTargetY - windY) * 0.050;
 
       // ── WebGL pass ──
       if (gl && glProg) {
@@ -893,6 +1304,7 @@ export default function Clouds() {
           );
         }
         if (uPressLoc) gl.uniform1f(uPressLoc, pressSmoothed);
+        if (uWindLoc) gl.uniform2f(uWindLoc, windX, windY);
         // pick the most recent active lightning for flash
         let flash = 0;
         for (const l of lightnings.current) {
@@ -922,12 +1334,43 @@ export default function Clouds() {
       const stormFade = phase > 0.55 && phase < 0.93 ? 0.55 : 1;
       const cloudFill = isLight ? "rgba(255, 254, 248, 0.50)" : "rgba(224, 218, 235, 0.34)";
       const cloudRim = isLight ? "rgba(68, 60, 70, 0.24)" : "rgba(244, 238, 222, 0.30)";
+      drawSunShafts(octx, w, h, phase, motionElapsed, isLight);
       for (const c of cloudClusters) {
         const margin = 110 * c.scale;
         const driftX = reduce ? 0 : ((elapsed * c.drift + c.xFrac * w) % (w + margin * 2)) - margin;
         const x = reduce ? c.xFrac * w : driftX;
         const y = c.yFrac * h + Math.sin(elapsed * 0.22 + c.phase) * 5;
         drawCloudCluster(octx, x, y, c.scale, cloudFill, cloudRim, 0.62 * stormFade);
+      }
+
+      for (let i = weatherCells.length - 1; i >= 0; i--) {
+        const cell = weatherCells[i];
+        const age = (now - cell.t0) / 1000;
+        const life = cell.kind === "storm" ? 72 : 58;
+        if (age > life) {
+          weatherCells.splice(i, 1);
+          continue;
+        }
+        drawWeatherCell(octx, cell, now, motionElapsed, dt, w, h, isLight);
+      }
+
+      for (let i = rainVeils.length - 1; i >= 0; i--) {
+        const veil = rainVeils[i];
+        const age = (now - veil.t0) / 1000;
+        if (age > 3.2) {
+          rainVeils.splice(i, 1);
+          continue;
+        }
+        drawRainVeil(octx, veil, now, motionElapsed, isLight);
+      }
+
+      for (let i = windStrokes.length - 1; i >= 0; i--) {
+        const stroke = windStrokes[i];
+        if (stroke.releasedAt && (now - stroke.releasedAt) / 1000 > 2.4) {
+          windStrokes.splice(i, 1);
+          continue;
+        }
+        drawWindStroke(octx, stroke, now, isLight);
       }
 
       const crystalColor = isLight ? "rgba(255, 255, 250, 0.72)" : "rgba(230, 224, 255, 0.58)";
@@ -989,7 +1432,8 @@ export default function Clouds() {
 
         // temporarily stash the instance opacity so drawGlyph can fade by storm
         const baseOp = g.opacity;
-        g.opacity = baseOp * stormFade;
+        const titleClear = Math.abs(g.x - w * 0.5) < 250 && y < 170 ? 0.22 : 1;
+        g.opacity = baseOp * stormFade * titleClear;
         if (!reduce && g.hovered) {
           // scale 1.15× around (x, y) for the duration of this call
           octx.save();
@@ -1082,7 +1526,7 @@ export default function Clouds() {
       overlay.removeEventListener("pointerdown", onDown);
       overlay.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("pointercancel", onUp);
+      window.removeEventListener("pointercancel", onCancel);
       overlay.removeEventListener("pointerleave", onLeave);
     };
     // We intentionally keep this effect dependency-free — the loop reads live
@@ -1094,14 +1538,15 @@ export default function Clouds() {
   // Frame color flips between dark-on-light and cream-on-dark depending on
   // whether the sky is in a bright or stormy phase, so the meander always
   // has enough contrast against the day cycle's underlying gradient.
-  const frameColor = phaseLight ? "rgba(21, 23, 26, 0.78)" : "rgba(244, 238, 222, 0.86)";
+  const frameColor = phaseLight ? "rgba(21, 23, 26, 0.52)" : "rgba(244, 238, 222, 0.74)";
   const titleColor = phaseLight ? "rgba(21, 23, 26, 0.72)" : "rgba(244, 238, 222, 0.86)";
   const labelColor = phaseLight ? "rgba(21, 23, 26, 0.40)" : "rgba(244, 238, 222, 0.50)";
 
   return (
     <div
       ref={wrapRef}
-      aria-label="olympus — press and hold a region of sky"
+      className="clouds-root"
+      aria-label="olympus — living weather instrument"
       data-touch-surface="true"
       style={{
         position: "fixed",
@@ -1141,7 +1586,7 @@ export default function Clouds() {
           every page that uses the frame — user has reported this twice. */}
       <GreekKeyFrame
         top={56}
-        bottom={40}
+        bottom={0}
         thickness={24}
         mobileThickness={16}
         strokeThickness={2}
@@ -1155,7 +1600,7 @@ export default function Clouds() {
         className="cloud-title"
         style={{
           position: "absolute",
-          top: 56,
+          top: 84,
           left: 0,
           right: 0,
           textAlign: "center",
@@ -1193,7 +1638,7 @@ export default function Clouds() {
             letterSpacing: "0.02em",
           }}
         >
-          the cloud floor
+          living weather
         </WaterText>
       </div>
 
@@ -1398,6 +1843,12 @@ export default function Clouds() {
           __html:
             `
             @keyframes clouds-fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+            body:has(.clouds-root) .oda-field-watch,
+            body:has(.clouds-root) .oda-candle-mark,
+            body:has(.clouds-root) .oda-tape-shell,
+            body:has(.clouds-root) .oda-sound-toggle {
+              display: none !important;
+            }
             @media (max-width: 700px) {
               .cloud-title {
                 top: 78px !important;
