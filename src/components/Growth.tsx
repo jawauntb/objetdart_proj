@@ -2,1564 +2,1420 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
+import * as haptics from "@/lib/haptics";
 import { useField } from "@/store/field";
-import WaterText from "@/components/WaterText";
 
-type GrowthTrace = {
-  id: number;
-  zone: string;
+type GrowthMode = "sigmoid" | "exponential" | "decay" | "cycle";
+
+type ModeConfig = {
+  id: GrowthMode;
   label: string;
-  color: string;
-  intensity: number;
+  short: string;
+  tone: string;
+  low: string;
+  note: number;
+  force: string;
 };
 
-type GrowthTraceInput = Omit<GrowthTrace, "id">;
-type GrowthTraceHandler = (trace: GrowthTraceInput) => void;
+type GrowthSystem = {
+  id: number;
+  x: number;
+  y: number;
+  born: number;
+  mode: GrowthMode;
+  energy: number;
+  scale: number;
+  hue: string;
+  bend: number;
+  phase: number;
+  force: number;
+  immortal?: boolean;
+};
 
-/**
- * /growth — curves, phases, decay.
- *
- * Three stacked interactive zones, each its own 2D canvas:
- *
- *   1. THE SIGMOID FIELD — the logistic curve. Drag three control points
- *      (inflection x0, steepness k, ceiling L) and watch the curve redraw.
- *      Four pale phase bands behind the curve (seed / sprout / climb /
- *      plateau) shade the regions of x.
- *
- *   2. EXPONENTIAL RISE + DECAY — side-by-side plots driven by a shared
- *      rate λ (HTML range slider). A BURST button sends a pulse through
- *      both; tapping anywhere on either plot seeds a fresh wave.
- *
- *   3. LIFE CYCLE — a long horizontal curve composed of four piecewise
- *      phases (birth-S → adolescent-exp → adult-plateau → senescent-decay).
- *      A play button advances a marker; the user can drag it manually.
- *      Inscriptions appear as the marker enters each phase; an ambient
- *      drone bends with the marker's y-value.
- *
- * All curves are dense polylines computed on each frame — pure math, no
- * libs. Pointer events use pointer capture so dragging a control off the
- * canvas keeps tracking. Mobile: ≥44px draggable circles, touchAction
- * "none" on plot surfaces, range slider for λ, 16px input font.
- */
+type DragTrace = {
+  x: number;
+  y: number;
+  px: number;
+  py: number;
+  born: number;
+  force: number;
+  mode: GrowthMode;
+};
+
+type GestureMark = {
+  id: number;
+  label: string;
+  tone: string;
+  level: number;
+};
+
+type Readout = {
+  model: string;
+  phase: string;
+  value: string;
+  gravity: string;
+  force: string;
+};
+
+type FieldParams = {
+  gravityX: number;
+  gravityY: number;
+  time: number;
+  bend: number;
+  bloom: number;
+  saturation: number;
+  collapse: number;
+  rest: number;
+  rate: number;
+  ceiling: number;
+  steepness: number;
+};
+
+type GardenState = {
+  params: FieldParams;
+  time: number;
+  systems: GrowthSystem[];
+  traces: DragTrace[];
+  nextId: number;
+};
+
+type PointerState = {
+  active: boolean;
+  id: number | null;
+  x: number;
+  y: number;
+  startX: number;
+  startY: number;
+  lastX: number;
+  lastY: number;
+  downAt: number;
+  moved: number;
+  holdFired: boolean;
+  timer: number | null;
+  lastTape: number;
+  lastHaptic: number;
+  lastNote: number;
+};
+
+const MODES: ModeConfig[] = [
+  {
+    id: "sigmoid",
+    label: "sigmoid",
+    short: "S",
+    tone: "#b8f07a",
+    low: "#315b31",
+    note: 50,
+    force: "saturation",
+  },
+  {
+    id: "exponential",
+    label: "exponential",
+    short: "e",
+    tone: "#f2c35b",
+    low: "#745126",
+    note: 57,
+    force: "bloom",
+  },
+  {
+    id: "decay",
+    label: "decay",
+    short: "d",
+    tone: "#e57955",
+    low: "#683129",
+    note: 43,
+    force: "collapse",
+  },
+  {
+    id: "cycle",
+    label: "lifecycle",
+    short: "L",
+    tone: "#8ed8c4",
+    low: "#245b55",
+    note: 62,
+    force: "rest",
+  },
+];
+
+const INITIAL_READOUT: Readout = {
+  model: "sigmoid",
+  phase: "seed",
+  value: "L 0.82",
+  gravity: "g 0.00",
+  force: "saturation",
+};
+
+const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+const mix = (a: number, b: number, t: number) => a + (b - a) * t;
+const easeOut = (t: number) => 1 - Math.pow(1 - clamp(t, 0, 1), 3);
+const smooth = (edge0: number, edge1: number, value: number) => {
+  const t = clamp((value - edge0) / Math.max(0.0001, edge1 - edge0), 0, 1);
+  return t * t * (3 - 2 * t);
+};
+
+function configFor(mode: GrowthMode) {
+  return MODES.find((entry) => entry.id === mode) ?? MODES[0];
+}
+
+function colorAlpha(hex: string, alpha: number) {
+  const clean = hex.replace("#", "");
+  const full = clean.length === 3
+    ? clean.split("").map((char) => char + char).join("")
+    : clean;
+  const n = parseInt(full, 16);
+  const r = (n >> 16) & 255;
+  const g = (n >> 8) & 255;
+  const b = n & 255;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function hash(value: number) {
+  const x = Math.sin(value * 127.1 + 311.7) * 43758.5453123;
+  return x - Math.floor(x);
+}
+
+function valueForMode(mode: GrowthMode, uRaw: number, params: FieldParams) {
+  const u = clamp(uRaw, 0, 1);
+
+  if (mode === "sigmoid") {
+    const ceiling = clamp(params.ceiling + params.saturation * 0.18, 0.48, 1);
+    const steepness = 7.2 + params.steepness * 5.6 + params.bloom * 2.2;
+    const x0 = 0.48 - params.bend * 0.10;
+    return ceiling / (1 + Math.exp(-steepness * (u - x0)));
+  }
+
+  if (mode === "exponential") {
+    const rate = 1.85 + params.rate * 2.5 + params.bloom * 1.45;
+    const top = Math.exp(rate) - 1;
+    return clamp(((Math.exp(rate * u) - 1) / Math.max(0.0001, top)) * (0.72 + params.bloom * 0.34), 0, 1.08);
+  }
+
+  if (mode === "decay") {
+    const rate = 1.4 + params.rate * 2.2 + params.collapse * 3.4;
+    const after = Math.exp(-rate * u);
+    const tremor = Math.sin(u * Math.PI * 5.5) * 0.025 * (1 - u) * (0.5 + params.collapse);
+    return clamp(0.08 + after * 0.88 + tremor, 0.04, 1);
+  }
+
+  if (u <= 0.26) {
+    const s = 1 / (1 + Math.exp(-8.5 * (u / 0.26 - 0.5)));
+    return s * 0.72;
+  }
+  if (u <= 0.56) {
+    const v = (u - 0.26) / 0.30;
+    return 0.70 + (1 - 0.70) * (1 - Math.exp(-3.2 * v));
+  }
+  if (u <= 0.78) {
+    const v = (u - 0.56) / 0.22;
+    return 0.96 + Math.sin(v * Math.PI) * 0.04;
+  }
+  const v = (u - 0.78) / 0.22;
+  return mix(0.92, 0.18 + params.rest * 0.04, easeOut(v));
+}
+
+function phaseForMode(mode: GrowthMode, u: number, y: number) {
+  if (mode === "sigmoid") {
+    if (y < 0.22) return "seed";
+    if (y < 0.62) return "climb";
+    if (u < 0.82) return "bloom";
+    return "saturation";
+  }
+
+  if (mode === "exponential") {
+    if (y < 0.18) return "spark";
+    if (y < 0.62) return "surge";
+    return "bloom";
+  }
+
+  if (mode === "decay") {
+    if (u < 0.22) return "full";
+    if (y > 0.42) return "fall";
+    if (y > 0.18) return "remnant";
+    return "rest";
+  }
+
+  if (u < 0.24) return "seed";
+  if (u < 0.56) return "climb";
+  if (u < 0.78) return "bloom";
+  return "rest";
+}
+
+function makeSystem(
+  id: number,
+  x: number,
+  y: number,
+  mode: GrowthMode,
+  born: number,
+  force = 1,
+  immortal = false,
+): GrowthSystem {
+  const seed = id * 17.13 + x * 23 + y * 41;
+  const cfg = configFor(mode);
+  return {
+    id,
+    x: clamp(x, 0.04, 0.96),
+    y: clamp(y, 0.18, 0.94),
+    born,
+    mode,
+    energy: clamp(0.64 + hash(seed) * 0.58 + force * 0.18, 0.45, 1.35),
+    scale: 0.70 + hash(seed + 4.1) * 0.85,
+    hue: cfg.tone,
+    bend: (hash(seed + 9.4) - 0.5) * 2,
+    phase: hash(seed + 15.7) * Math.PI * 2,
+    force,
+    immortal,
+  };
+}
+
+function drawBloom(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  radius: number,
+  tone: string,
+  alpha: number,
+  spin: number,
+  collapse: number,
+) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(spin);
+  const petals = 7;
+  for (let i = 0; i < petals; i += 1) {
+    const a = (i / petals) * Math.PI * 2;
+    const stretch = radius * (1.25 + Math.sin(spin * 2 + i) * 0.10);
+    ctx.save();
+    ctx.rotate(a);
+    ctx.fillStyle = colorAlpha(tone, alpha * (0.30 + collapse * 0.10));
+    ctx.beginPath();
+    ctx.ellipse(stretch * 0.62, 0, radius * 0.22, stretch * 0.52, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+  const glow = ctx.createRadialGradient(0, 0, 0, 0, 0, radius * 2.8);
+  glow.addColorStop(0, colorAlpha(tone, alpha * 0.42));
+  glow.addColorStop(1, colorAlpha(tone, 0));
+  ctx.fillStyle = glow;
+  ctx.beginPath();
+  ctx.arc(0, 0, radius * 2.8, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = `rgba(255, 245, 206, ${alpha * 0.86})`;
+  ctx.beginPath();
+  ctx.arc(0, 0, Math.max(2.2, radius * 0.18), 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawBackground(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  now: number,
+  mode: GrowthMode,
+  params: FieldParams,
+  reduce: boolean,
+) {
+  const cfg = configFor(mode);
+  const sky = ctx.createLinearGradient(0, 0, 0, height);
+  sky.addColorStop(0, "#03120f");
+  sky.addColorStop(0.38, "#061911");
+  sky.addColorStop(0.72, "#0b1710");
+  sky.addColorStop(1, "#050805");
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, width, height);
+
+  const glowX = width * (0.50 + params.gravityX * 0.10);
+  const glowY = height * (0.33 + params.gravityY * 0.05);
+  const light = ctx.createRadialGradient(glowX, glowY, 0, glowX, glowY, Math.max(width, height) * 0.72);
+  light.addColorStop(0, colorAlpha(cfg.tone, 0.12 + params.bloom * 0.05));
+  light.addColorStop(0.42, colorAlpha("#4d8f58", 0.055 + params.saturation * 0.04));
+  light.addColorStop(1, "rgba(0, 0, 0, 0)");
+  ctx.fillStyle = light;
+  ctx.fillRect(0, 0, width, height);
+
+  const soilY = height * 0.74;
+  const soil = ctx.createLinearGradient(0, soilY, 0, height);
+  soil.addColorStop(0, "rgba(51, 43, 25, 0.12)");
+  soil.addColorStop(0.45, "rgba(18, 19, 10, 0.74)");
+  soil.addColorStop(1, "rgba(4, 6, 4, 0.96)");
+  ctx.fillStyle = soil;
+  ctx.fillRect(0, soilY, width, height - soilY);
+
+  ctx.lineCap = "round";
+  for (let i = 0; i < 54; i += 1) {
+    const n = hash(i + 0.31);
+    const x = n * width;
+    const y = height * (0.08 + hash(i + 7.8) * 0.62);
+    const drift = reduce ? 0 : Math.sin(now * (0.15 + hash(i) * 0.22) + i) * 10;
+    const a = 0.06 + hash(i + 2.2) * 0.11;
+    ctx.strokeStyle = `rgba(214, 244, 178, ${a})`;
+    ctx.lineWidth = 0.7 + hash(i + 5.9) * 0.7;
+    ctx.beginPath();
+    ctx.moveTo(x + drift, y);
+    ctx.lineTo(x + drift + 0.1, y + 0.1);
+    ctx.stroke();
+  }
+}
+
+function drawVectorField(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  now: number,
+  mode: GrowthMode,
+  params: FieldParams,
+) {
+  const cfg = configFor(mode);
+  const step = width < 700 ? 42 : 54;
+  const top = height * 0.12;
+  const bottom = height * 0.78;
+  ctx.lineCap = "round";
+
+  for (let y = top; y <= bottom; y += step) {
+    for (let x = step * 0.45; x <= width; x += step) {
+      const nx = x / width - 0.5;
+      const ny = y / height - 0.5;
+      const pulse = Math.sin(nx * 8.5 + ny * 4.2 + now * 0.34) * 0.42
+        + Math.sin(Math.hypot(nx, ny) * 12 - now * 0.25) * 0.22;
+      const angle = -Math.PI / 2
+        + params.gravityX * 0.78
+        + params.bend * pulse * 0.42
+        + (mode === "decay" ? 0.32 : 0);
+      const length = step * (0.24 + Math.abs(pulse) * 0.20 + params.saturation * 0.09);
+      const alpha = 0.07 + Math.abs(pulse) * 0.08 + params.bloom * 0.035;
+      ctx.strokeStyle = colorAlpha(cfg.tone, alpha);
+      ctx.lineWidth = 0.65 + Math.abs(pulse) * 0.55;
+      ctx.beginPath();
+      ctx.moveTo(x - Math.cos(angle) * length * 0.45, y - Math.sin(angle) * length * 0.45);
+      ctx.lineTo(x + Math.cos(angle) * length, y + Math.sin(angle) * length);
+      ctx.stroke();
+    }
+  }
+}
+
+function drawGlobalCurve(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  now: number,
+  mode: GrowthMode,
+  params: FieldParams,
+) {
+  const left = width * 0.07;
+  const right = width * 0.93;
+  const span = right - left;
+  const base = height * (width < 700 ? 0.70 : 0.68);
+  const amp = height * (width < 700 ? 0.42 : 0.48);
+  const samples = 220;
+
+  for (const entry of MODES) {
+    const active = entry.id === mode;
+    ctx.beginPath();
+    for (let i = 0; i <= samples; i += 1) {
+      const u = i / samples;
+      const v = valueForMode(entry.id, u, params);
+      const sway = Math.sin(u * Math.PI * 4 + now * 0.24) * params.bend * 9 * (active ? 1 : 0.35);
+      const x = left + u * span + sway + params.gravityX * 34 * u * u;
+      const y = base - v * amp + params.gravityY * 22 * u;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = active ? colorAlpha(entry.tone, 0.72) : colorAlpha(entry.tone, 0.14);
+    ctx.lineWidth = active ? 2.4 : 1;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.stroke();
+
+    if (active) {
+      ctx.lineTo(right, base);
+      ctx.lineTo(left, base);
+      ctx.closePath();
+      const fill = ctx.createLinearGradient(0, base - amp, 0, base);
+      fill.addColorStop(0, colorAlpha(entry.tone, 0.10 + params.bloom * 0.05));
+      fill.addColorStop(1, colorAlpha(entry.tone, 0));
+      ctx.fillStyle = fill;
+      ctx.fill();
+    }
+  }
+
+  if (mode === "sigmoid") {
+    const y = base - clamp(params.ceiling + params.saturation * 0.18, 0.48, 1) * amp;
+    ctx.setLineDash([2, 8]);
+    ctx.strokeStyle = "rgba(222, 255, 190, 0.18)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(left, y);
+    ctx.lineTo(right, y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+}
+
+function drawTrace(
+  ctx: CanvasRenderingContext2D,
+  trace: DragTrace,
+  width: number,
+  height: number,
+  now: number,
+) {
+  const age = (now - trace.born) / 1000;
+  const alpha = Math.max(0, 1 - age / 1.25) * trace.force;
+  if (alpha <= 0) return;
+  const cfg = configFor(trace.mode);
+  ctx.strokeStyle = colorAlpha(cfg.tone, alpha * 0.36);
+  ctx.lineWidth = 1 + trace.force * 4;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(trace.px * width, trace.py * height);
+  ctx.lineTo(trace.x * width, trace.y * height);
+  ctx.stroke();
+
+  const ring = ctx.createRadialGradient(trace.x * width, trace.y * height, 0, trace.x * width, trace.y * height, 42 + age * 80);
+  ring.addColorStop(0, colorAlpha(cfg.tone, alpha * 0.12));
+  ring.addColorStop(1, colorAlpha(cfg.tone, 0));
+  ctx.fillStyle = ring;
+  ctx.beginPath();
+  ctx.arc(trace.x * width, trace.y * height, 42 + age * 80, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawSystem(
+  ctx: CanvasRenderingContext2D,
+  system: GrowthSystem,
+  width: number,
+  height: number,
+  now: number,
+  params: FieldParams,
+  activeMode: GrowthMode,
+) {
+  const age = (now - system.born) / 1000;
+  const life = system.immortal ? 1 : clamp(1 - Math.max(0, age - 15) / 8, 0, 1);
+  if (life <= 0) return;
+
+  const cfg = configFor(system.mode);
+  const rootX = system.x * width;
+  const rootY = system.y * height;
+  const isMobile = width < 700;
+  const heightScale = (isMobile ? 0.70 : 1) * (0.78 + system.energy * 0.35);
+  const stemHeight = clamp(height * 0.16, 92, 168) * system.scale * heightScale;
+  const span = clamp(width * 0.12, 70, 178) * (0.76 + system.scale * 0.28);
+  const cycleSpeed = system.immortal ? 0.055 : 1 / (5.8 + system.scale * 3.4);
+  const progress = system.immortal
+    ? (0.08 + ((age * cycleSpeed + system.phase / (Math.PI * 2)) % 0.92))
+    : clamp(age * cycleSpeed + system.force * 0.08 + params.bloom * 0.06, 0, 1);
+  const activeLift = activeMode === system.mode ? 1 : 0.72;
+  const collapse = params.collapse * (system.mode === "decay" || activeMode === "decay" ? 1 : 0.28);
+  const rest = params.rest * (system.mode === "cycle" || activeMode === "cycle" ? 1 : 0.2);
+  const tone = system.hue || cfg.tone;
+  const alpha = (system.immortal ? 0.46 : 0.76) * life * activeLift;
+  const samples = 34;
+  const points: Array<{ x: number; y: number; v: number; u: number }> = [];
+
+  for (let i = 0; i <= samples; i += 1) {
+    const u = (i / samples) * progress;
+    const v = valueForMode(system.mode, u, params);
+    const curl = Math.sin(u * Math.PI * 3.2 + system.phase + params.time * 0.36) * (8 + params.bend * 12);
+    const gravityX = params.gravityX * stemHeight * 0.34 * u * u;
+    const gravityY = params.gravityY * stemHeight * 0.12 * u;
+    const decayDrop = collapse * u * u * stemHeight * 0.34;
+    const restDrop = rest * smooth(0.62, 1, u) * stemHeight * 0.30;
+    const x = rootX + (u - 0.06) * span + gravityX + curl * system.bend;
+    const y = rootY - v * stemHeight + gravityY + decayDrop + restDrop;
+    points.push({ x, y, v, u });
+  }
+
+  const rootGlow = ctx.createRadialGradient(rootX, rootY, 0, rootX, rootY, 54);
+  rootGlow.addColorStop(0, colorAlpha(tone, alpha * 0.20));
+  rootGlow.addColorStop(1, colorAlpha(tone, 0));
+  ctx.fillStyle = rootGlow;
+  ctx.beginPath();
+  ctx.arc(rootX, rootY, 54, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.strokeStyle = colorAlpha(cfg.low, alpha * 0.56);
+  ctx.lineWidth = 0.9;
+  ctx.lineCap = "round";
+  for (let r = 0; r < 4; r += 1) {
+    const side = r % 2 === 0 ? -1 : 1;
+    const len = 16 + hash(system.id + r) * 36;
+    ctx.beginPath();
+    ctx.moveTo(rootX, rootY);
+    ctx.quadraticCurveTo(
+      rootX + side * len * 0.42,
+      rootY + 16 + r * 4,
+      rootX + side * len,
+      rootY + 26 + hash(system.id + r * 4) * 26,
+    );
+    ctx.stroke();
+  }
+
+  const stroke = ctx.createLinearGradient(rootX, rootY, points[points.length - 1]?.x ?? rootX, points[points.length - 1]?.y ?? rootY);
+  stroke.addColorStop(0, colorAlpha(cfg.low, alpha * 0.86));
+  stroke.addColorStop(0.58, colorAlpha(tone, alpha * 0.92));
+  stroke.addColorStop(1, colorAlpha("#fff5cf", alpha * 0.78));
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = system.immortal ? 1.15 : 1.85 + system.energy * 0.8;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  points.forEach((point, index) => {
+    if (index === 0) ctx.moveTo(point.x, point.y);
+    else ctx.lineTo(point.x, point.y);
+  });
+  ctx.stroke();
+
+  for (let i = 5; i < points.length; i += 6) {
+    const point = points[i];
+    const next = points[Math.min(points.length - 1, i + 1)] ?? point;
+    const angle = Math.atan2(next.y - point.y, next.x - point.x);
+    const side = i % 2 === 0 ? -1 : 1;
+    const leaf = (5 + point.v * 9) * (1 - collapse * 0.45) * life;
+    if (leaf < 2) continue;
+    ctx.save();
+    ctx.translate(point.x, point.y);
+    ctx.rotate(angle + side * 1.15);
+    ctx.fillStyle = colorAlpha(tone, alpha * (0.22 + point.v * 0.26));
+    ctx.beginPath();
+    ctx.ellipse(leaf * 0.62, 0, leaf, leaf * 0.34, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  const tip = points[points.length - 1];
+  const bloomReadiness = clamp((tip.v - 0.48) / 0.46 + params.bloom * 0.40 + system.force * 0.16, 0, 1);
+  if (bloomReadiness > 0.08) {
+    drawBloom(
+      ctx,
+      tip.x,
+      tip.y,
+      (7 + system.scale * 9) * bloomReadiness * (1 - rest * 0.34),
+      tone,
+      alpha * bloomReadiness,
+      system.phase + now * 0.25,
+      collapse,
+    );
+  }
+
+  if (collapse > 0.08 || system.mode === "decay") {
+    const fallAlpha = alpha * (collapse * 0.62 + (system.mode === "decay" ? 0.16 : 0));
+    for (let i = 0; i < 5; i += 1) {
+      const n = hash(system.id * 13 + i * 8);
+      const fallT = (now * (0.09 + n * 0.04) + n) % 1;
+      const px = tip.x + (n - 0.5) * 54 + params.gravityX * 22;
+      const py = tip.y + fallT * (80 + i * 12);
+      ctx.fillStyle = colorAlpha(tone, fallAlpha * (1 - fallT));
+      ctx.beginPath();
+      ctx.ellipse(px, py, 2.2 + n * 3, 0.8 + n * 1.8, system.phase + i, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+}
+
 export default function Growth() {
-  // page-specific ambient bed: gentle garden wind + faint birdsong
-  useEffect(() => { getFieldAudio().setAmbientProfile("garden"); }, []);
-  const traceId = useRef(0);
-  const [traces, setTraces] = useState<GrowthTrace[]>([]);
-  const noteGrowth = useCallback((trace: GrowthTraceInput) => {
-    const id = traceId.current++;
-    setTraces((current) => [...current.slice(-5), { id, ...trace }]);
+  useEffect(() => {
+    try { getFieldAudio().setAmbientProfile("garden"); } catch { /* noop */ }
   }, []);
+
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const modeRef = useRef<GrowthMode>("sigmoid");
+  const reduceMotionRef = useRef(false);
+  const readoutTickRef = useRef(0);
+  const markIdRef = useRef(0);
+  const fieldRef = useRef<GardenState>({
+    params: {
+      gravityX: 0,
+      gravityY: 0,
+      time: 0,
+      bend: 0.34,
+      bloom: 0.16,
+      saturation: 0.44,
+      collapse: 0,
+      rest: 0,
+      rate: 0.44,
+      ceiling: 0.76,
+      steepness: 0.42,
+    },
+    time: 0,
+    systems: [],
+    traces: [],
+    nextId: 1,
+  });
+  const pointerRef = useRef<PointerState>({
+    active: false,
+    id: null,
+    x: 0.5,
+    y: 0.5,
+    startX: 0.5,
+    startY: 0.5,
+    lastX: 0.5,
+    lastY: 0.5,
+    downAt: 0,
+    moved: 0,
+    holdFired: false,
+    timer: null,
+    lastTape: 0,
+    lastHaptic: 0,
+    lastNote: 0,
+  });
+
+  const [mode, setMode] = useState<GrowthMode>("sigmoid");
+  const [readout, setReadout] = useState<Readout>(INITIAL_READOUT);
+  const [marks, setMarks] = useState<GestureMark[]>([
+    { id: 0, label: "living", tone: MODES[0].tone, level: 0.48 },
+  ]);
+
+  useEffect(() => {
+    modeRef.current = mode;
+  }, [mode]);
+
+  const markGrowth = useCallback((label: string, tone: string, level = 0.65) => {
+    const id = ++markIdRef.current;
+    setMarks((current) => [
+      { id, label, tone, level: clamp(level, 0, 1) },
+      ...current,
+    ].slice(0, 6));
+  }, []);
+
+  const chooseMode = useCallback((nextMode: GrowthMode) => {
+    modeRef.current = nextMode;
+    setMode(nextMode);
+    const cfg = configFor(nextMode);
+    const params = fieldRef.current.params;
+    params.bloom = Math.max(params.bloom, nextMode === "exponential" ? 0.38 : 0.20);
+    params.collapse = nextMode === "decay" ? Math.max(params.collapse, 0.28) : params.collapse * 0.45;
+    params.rest = nextMode === "cycle" ? Math.max(params.rest, 0.28) : params.rest * 0.55;
+    params.saturation = nextMode === "sigmoid" ? Math.max(params.saturation, 0.58) : params.saturation;
+
+    try {
+      const audio = getFieldAudio();
+      void audio.start();
+      audio.playNote(cfg.note, 120);
+    } catch { /* noop */ }
+    haptics.tap();
+    useField.getState().recordTape("sigil", 0.44, `growth/${nextMode}`);
+    markGrowth(cfg.label, cfg.tone, 0.58);
+  }, [markGrowth]);
+
+  useEffect(() => {
+    const root = rootRef.current;
+    const canvas = canvasRef.current;
+    if (!root || !canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    reduceMotionRef.current = mq.matches;
+    const onMotionChange = () => {
+      reduceMotionRef.current = mq.matches;
+    };
+    mq.addEventListener?.("change", onMotionChange);
+
+    const field = fieldRef.current;
+    const pointer = pointerRef.current;
+    let raf = 0;
+    let width = 0;
+    let height = 0;
+    let dpr = 1;
+    let last = performance.now();
+
+    const resize = () => {
+      const rect = root.getBoundingClientRect();
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      width = Math.max(320, Math.floor(rect.width));
+      height = Math.max(520, Math.floor(rect.height));
+      canvas.width = Math.floor(width * dpr);
+      canvas.height = Math.floor(height * dpr);
+      canvas.style.width = `${width}px`;
+      canvas.style.height = `${height}px`;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    };
+
+    const pointFromEvent = (event: PointerEvent) => {
+      const rect = canvas.getBoundingClientRect();
+      return {
+        x: clamp((event.clientX - rect.left) / Math.max(1, rect.width), 0, 1),
+        y: clamp((event.clientY - rect.top) / Math.max(1, rect.height), 0, 1),
+      };
+    };
+
+    const addSystem = (x: number, y: number, systemMode = modeRef.current, force = 1, immortal = false) => {
+      const system = makeSystem(field.nextId++, x, y, systemMode, performance.now(), force, immortal);
+      field.systems.push(system);
+      if (field.systems.length > 42) {
+        const firstTemporary = field.systems.findIndex((entry) => !entry.immortal);
+        field.systems.splice(firstTemporary >= 0 ? firstTemporary : 0, 1);
+      }
+      return system;
+    };
+
+    const forceAt = (x: number, y: number, forcedMode = modeRef.current) => {
+      const cfg = configFor(forcedMode);
+      pointer.holdFired = true;
+
+      if (forcedMode === "sigmoid") {
+        field.params.saturation = 1;
+        field.params.ceiling = 0.90;
+        field.params.bloom = Math.max(field.params.bloom, 0.58);
+        try { getFieldAudio().bell(); } catch { /* noop */ }
+        haptics.roll();
+      } else if (forcedMode === "exponential") {
+        field.params.bloom = 1;
+        field.params.rate = Math.min(1, field.params.rate + 0.24);
+        for (let i = 0; i < 6; i += 1) {
+          const a = (i / 6) * Math.PI * 2;
+          addSystem(x + Math.cos(a) * 0.045, y + Math.sin(a) * 0.035, forcedMode, 1.2);
+        }
+        try {
+          getFieldAudio().chime();
+          window.setTimeout(() => getFieldAudio().playNote(cfg.note + 12, 120), 90);
+        } catch { /* noop */ }
+        haptics.roll();
+      } else if (forcedMode === "decay") {
+        field.params.collapse = 1;
+        field.params.bloom = Math.max(0.08, field.params.bloom * 0.32);
+        try { getFieldAudio().thud(); } catch { /* noop */ }
+        haptics.storm();
+      } else {
+        field.params.rest = 1;
+        field.params.gravityY = Math.max(field.params.gravityY, 0.36);
+        try {
+          getFieldAudio().thud();
+          window.setTimeout(() => getFieldAudio().chime(), 130);
+        } catch { /* noop */ }
+        haptics.roll();
+      }
+
+      field.systems.forEach((system) => {
+        const dx = system.x - x;
+        const dy = system.y - y;
+        const near = Math.exp(-(dx * dx + dy * dy) / 0.030);
+        system.force = clamp(system.force + near * 0.72, 0, 1.8);
+      });
+      addSystem(x, y, forcedMode, 1.55);
+      useField.getState().recordTape("sigil", 0.82, `growth/${cfg.force}`);
+      markGrowth(cfg.force, cfg.tone, 0.86);
+    };
+
+    const seedAt = (x: number, y: number) => {
+      const cfg = configFor(modeRef.current);
+      addSystem(x, y, modeRef.current, 1.05);
+      field.params.bloom = Math.max(field.params.bloom, 0.26);
+      field.params.saturation = Math.max(field.params.saturation, 0.42 + (1 - y) * 0.35);
+      try {
+        const audio = getFieldAudio();
+        void audio.start();
+        audio.playNote(cfg.note + Math.round((1 - y) * 14), 110);
+      } catch { /* noop */ }
+      haptics.tap();
+      useField.getState().recordTape("object", 0.40 + (1 - y) * 0.32, `growth/${modeRef.current}/seed`);
+      markGrowth("seed", cfg.tone, 0.54 + (1 - y) * 0.22);
+    };
+
+    const clearHoldTimer = () => {
+      if (pointer.timer !== null) {
+        window.clearTimeout(pointer.timer);
+        pointer.timer = null;
+      }
+    };
+
+    const onPointerDown = (event: PointerEvent) => {
+      const p = pointFromEvent(event);
+      pointer.active = true;
+      pointer.id = event.pointerId;
+      pointer.x = p.x;
+      pointer.y = p.y;
+      pointer.startX = p.x;
+      pointer.startY = p.y;
+      pointer.lastX = p.x;
+      pointer.lastY = p.y;
+      pointer.downAt = performance.now();
+      pointer.moved = 0;
+      pointer.holdFired = false;
+      pointer.lastTape = 0;
+      pointer.lastHaptic = 0;
+      pointer.lastNote = 0;
+      try { canvas.setPointerCapture(event.pointerId); } catch { /* noop */ }
+      seedAt(p.x, p.y);
+      clearHoldTimer();
+      pointer.timer = window.setTimeout(() => {
+        if (!pointer.active || pointer.id !== event.pointerId || pointer.moved > 34) return;
+        forceAt(pointer.x, pointer.y);
+      }, 620);
+    };
+
+    const onPointerMove = (event: PointerEvent) => {
+      if (!pointer.active || pointer.id !== event.pointerId) return;
+      const p = pointFromEvent(event);
+      const dx = p.x - pointer.lastX;
+      const dy = p.y - pointer.lastY;
+      const totalDx = p.x - pointer.startX;
+      const totalDy = p.y - pointer.startY;
+      const speed = Math.hypot(dx * width, dy * height);
+      pointer.moved += speed;
+      pointer.x = p.x;
+      pointer.y = p.y;
+
+      const params = field.params;
+      params.gravityX = clamp(mix(params.gravityX, totalDx * 2.2, 0.18), -1.1, 1.1);
+      params.gravityY = clamp(mix(params.gravityY, totalDy * 1.8, 0.16), -0.8, 1.1);
+      params.bend = clamp(mix(params.bend, 0.30 + Math.min(1, pointer.moved / 280) * 0.70, 0.10), 0.1, 1);
+      params.rate = clamp(mix(params.rate, 0.22 + Math.abs(totalDx) * 1.4 + (1 - p.y) * 0.42, 0.06), 0.08, 1);
+      params.ceiling = clamp(mix(params.ceiling, 0.56 + (1 - p.y) * 0.42, 0.08), 0.48, 0.98);
+      params.steepness = clamp(mix(params.steepness, 0.26 + Math.abs(totalDy) * 1.8, 0.08), 0.1, 1);
+
+      if (modeRef.current === "decay") params.collapse = Math.max(params.collapse, Math.min(0.72, pointer.moved / 480));
+      if (modeRef.current === "cycle") params.rest = Math.max(params.rest, Math.min(0.62, p.y));
+      if (modeRef.current === "exponential") params.bloom = Math.max(params.bloom, Math.min(0.92, speed / 50));
+
+      field.traces.push({
+        x: p.x,
+        y: p.y,
+        px: pointer.lastX,
+        py: pointer.lastY,
+        born: performance.now(),
+        force: clamp(speed / 34, 0.14, 1),
+        mode: modeRef.current,
+      });
+      if (field.traces.length > 56) field.traces.splice(0, field.traces.length - 56);
+
+      const now = performance.now();
+      if (now - pointer.lastTape > 140) {
+        pointer.lastTape = now;
+        useField.getState().recordTape("ripple", clamp(speed / 52, 0.22, 0.78), `growth/${modeRef.current}/bend`);
+      }
+      if (now - pointer.lastHaptic > 190 && speed > 9) {
+        pointer.lastHaptic = now;
+        haptics.ripple(clamp(speed / 42, 0.18, 0.72));
+      }
+      if (now - pointer.lastNote > 120 && speed > 7) {
+        pointer.lastNote = now;
+        try { getFieldAudio().playNote(configFor(modeRef.current).note + Math.round((1 - p.y) * 18), 58); } catch { /* noop */ }
+      }
+
+      pointer.lastX = p.x;
+      pointer.lastY = p.y;
+    };
+
+    const onPointerUp = (event: PointerEvent) => {
+      if (!pointer.active || pointer.id !== event.pointerId) return;
+      clearHoldTimer();
+      try { canvas.releasePointerCapture(event.pointerId); } catch { /* noop */ }
+      const cfg = configFor(modeRef.current);
+      if (!pointer.holdFired && pointer.moved > 42) {
+        markGrowth("bend", cfg.tone, 0.62);
+      }
+      pointer.active = false;
+      pointer.id = null;
+    };
+
+    const onPointerCancel = (event: PointerEvent) => {
+      if (pointer.id === event.pointerId) {
+        clearHoldTimer();
+        pointer.active = false;
+        pointer.id = null;
+      }
+    };
+
+    resize();
+    const ro = new ResizeObserver(resize);
+    ro.observe(root);
+    window.addEventListener("resize", resize);
+
+    const born = performance.now();
+    if (field.systems.length === 0) {
+      addSystem(0.18, 0.78, "sigmoid", 0.82, true).born = born - 3600;
+      addSystem(0.42, 0.74, "exponential", 0.76, true).born = born - 1400;
+      addSystem(0.66, 0.72, "cycle", 0.80, true).born = born - 2500;
+      addSystem(0.82, 0.76, "decay", 0.62, true).born = born - 4200;
+    }
+
+    canvas.addEventListener("pointerdown", onPointerDown);
+    canvas.addEventListener("pointermove", onPointerMove);
+    canvas.addEventListener("pointerup", onPointerUp);
+    canvas.addEventListener("pointercancel", onPointerCancel);
+
+    const draw = (nowMs: number) => {
+      const dt = Math.min(0.05, (nowMs - last) / 1000);
+      last = nowMs;
+      const reduce = reduceMotionRef.current;
+      field.time += reduce ? dt * 0.08 : dt;
+      field.params.time = field.time;
+
+      const params = field.params;
+      const active = modeRef.current;
+      const holdAge = pointer.active ? clamp((nowMs - pointer.downAt) / 1000, 0, 1.6) : 0;
+      const holdCharge = pointer.active && !pointer.holdFired ? smooth(0.18, 1.12, holdAge) : 0;
+
+      params.gravityX = mix(params.gravityX, 0, reduce ? 0.025 : 0.009);
+      params.gravityY = mix(params.gravityY, 0, reduce ? 0.025 : 0.009);
+      params.bend = mix(params.bend, active === "sigmoid" ? 0.40 : 0.30, reduce ? 0.018 : 0.006);
+      params.bloom = mix(params.bloom, active === "exponential" ? 0.32 : 0.16, reduce ? 0.030 : 0.012);
+      params.saturation = mix(params.saturation, active === "sigmoid" ? 0.58 : 0.42, reduce ? 0.030 : 0.010);
+      params.collapse = mix(params.collapse, active === "decay" ? 0.24 : 0.02, reduce ? 0.028 : 0.012);
+      params.rest = mix(params.rest, active === "cycle" ? 0.22 : 0.02, reduce ? 0.026 : 0.010);
+
+      ctx.clearRect(0, 0, width, height);
+      drawBackground(ctx, width, height, field.time, active, params, reduce);
+      drawVectorField(ctx, width, height, field.time, active, params);
+      drawGlobalCurve(ctx, width, height, field.time, active, params);
+
+      field.traces = field.traces.filter((trace) => (nowMs - trace.born) < 1500);
+      field.traces.forEach((trace) => drawTrace(ctx, trace, width, height, nowMs));
+      field.systems = field.systems.filter((system) => system.immortal || (nowMs - system.born) < 25000);
+      field.systems.forEach((system) => drawSystem(ctx, system, width, height, nowMs, params, active));
+
+      if (pointer.active) {
+        const cfg = configFor(active);
+        const px = pointer.x * width;
+        const py = pointer.y * height;
+        const radius = 22 + holdCharge * 82;
+        ctx.strokeStyle = colorAlpha(cfg.tone, 0.18 + holdCharge * 0.34);
+        ctx.lineWidth = 1.2 + holdCharge * 2.4;
+        ctx.beginPath();
+        ctx.arc(px, py, radius, 0, Math.PI * 2);
+        ctx.stroke();
+        const core = ctx.createRadialGradient(px, py, 0, px, py, radius * 1.3);
+        core.addColorStop(0, colorAlpha(cfg.tone, 0.20 + holdCharge * 0.20));
+        core.addColorStop(1, colorAlpha(cfg.tone, 0));
+        ctx.fillStyle = core;
+        ctx.beginPath();
+        ctx.arc(px, py, radius * 1.3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      if (nowMs - readoutTickRef.current > 120) {
+        readoutTickRef.current = nowMs;
+        const u = (field.time * 0.055 + 0.18) % 1;
+        const value = valueForMode(active, u, params);
+        const cfg = configFor(active);
+        const valueLabel = active === "sigmoid"
+          ? `L ${clamp(params.ceiling + params.saturation * 0.18, 0.48, 1).toFixed(2)}`
+          : active === "exponential"
+          ? `lambda ${params.rate.toFixed(2)}`
+          : active === "decay"
+          ? `half ${Math.max(0.18, 1.1 - params.collapse * 0.72).toFixed(2)}`
+          : `t ${Math.round(u * 100)}`;
+        setReadout({
+          model: cfg.label,
+          phase: phaseForMode(active, u, value),
+          value: valueLabel,
+          gravity: `g ${Math.hypot(params.gravityX, params.gravityY).toFixed(2)}`,
+          force: cfg.force,
+        });
+      }
+
+      raf = requestAnimationFrame(draw);
+    };
+
+    raf = requestAnimationFrame(draw);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      clearHoldTimer();
+      ro.disconnect();
+      window.removeEventListener("resize", resize);
+      mq.removeEventListener?.("change", onMotionChange);
+      canvas.removeEventListener("pointerdown", onPointerDown);
+      canvas.removeEventListener("pointermove", onPointerMove);
+      canvas.removeEventListener("pointerup", onPointerUp);
+      canvas.removeEventListener("pointercancel", onPointerCancel);
+    };
+  }, [markGrowth]);
 
   return (
     <div
+      ref={rootRef}
+      className="growth-instrument"
       data-touch-surface="true"
-      style={{
-        position: "relative",
-        width: "100%",
-        minHeight: "100vh",
-        background:
-          "linear-gradient(180deg, #06120c 0%, #0a1f14 50%, #08130d 100%)",
-        color: "rgba(232, 240, 220, 0.96)",
-        overflowX: "hidden",
-        overflowY: "visible",
-        touchAction: "pan-y",
-      }}
+      data-pretext-ignore="true"
+      aria-label="growth - living mathematical garden"
     >
-      {/* ── header block ─────────────────────────────────────────── */}
-      <div
-        style={{
-          padding: "calc(var(--pad-x)) var(--pad-x) 20px",
-          maxWidth: 1200,
-          margin: "0 auto",
-        }}
-      >
-        <div
-          className="t-mono"
-          style={{
-            fontSize: 11,
-            letterSpacing: "0.14em",
-            textTransform: "uppercase",
-            color: "rgba(200, 220, 180, 0.55)",
-            marginBottom: 12,
-          }}
-        >
-          GROWTH / CURVES &middot; PHASES &middot; DECAY
-        </div>
-        <WaterText
-          as="h1"
-          bobAmp={0}
-          style={{
-            display: "block",
-            margin: 0,
-            fontFamily: "var(--font-serif)",
-            fontWeight: 500,
-            fontSize: "clamp(48px, 8vw, 112px)",
-            lineHeight: 0.98,
-            letterSpacing: "-0.02em",
-            color: "rgba(232, 240, 220, 0.96)",
-          }}
-        >
-          BLOOM
-        </WaterText>
-        <WaterText
-          as="div"
-          bobAmp={2}
-          style={{
-            display: "block",
-            marginTop: 8,
-            fontFamily: "var(--font-serif)",
-            fontStyle: "italic",
-            fontWeight: 300,
-            fontSize: "clamp(17px, 2.2vw, 26px)",
-            color: "rgba(200, 220, 180, 0.74)",
-          }}
-        >
-          everything that rises also rests
-        </WaterText>
-        {traces.length > 0 && (
-          <div className="growth-memory" aria-label="recent growth gestures">
-            {traces.map((trace) => (
-              <span
-                key={trace.id}
-                style={{
-                  ["--growth-trace-color" as string]: trace.color,
-                  ["--growth-trace-alpha" as string]: trace.intensity,
-                } as React.CSSProperties}
-              >
-                <i aria-hidden="true" />
-                <b>{trace.zone}</b>
-                {trace.label}
-              </span>
-            ))}
-          </div>
-        )}
+      <canvas
+        ref={canvasRef}
+        className="growth-canvas"
+        aria-label="living growth curve field"
+      />
+
+      <div className="growth-title" aria-hidden="true">
+        <div>growth / living curve field</div>
+        <h1>Growth</h1>
       </div>
 
-      <SigmoidZone onTrace={noteGrowth} />
-      <ExpZone onTrace={noteGrowth} />
-      <LifeZone onTrace={noteGrowth} />
-
-      {/* ── bottom inscription ───────────────────────────────────── */}
-      <div
-        style={{
-          padding: "32px var(--pad-x) 80px",
-          maxWidth: 1200,
-          margin: "0 auto",
-          textAlign: "center",
-        }}
-      >
-        <WaterText
-          as="div"
-          bobAmp={1.5}
-          style={{
-            display: "block",
-            fontFamily: "var(--font-serif)",
-            fontStyle: "italic",
-            fontWeight: 300,
-            fontSize: "clamp(16px, 2vw, 22px)",
-            color: "rgba(200, 220, 180, 0.50)",
-            letterSpacing: "0.01em",
-          }}
-        >
-          the curve becomes its own clock
-        </WaterText>
-      </div>
-
-      <style>{`
-        .growth-zone {
-          padding: 28px var(--pad-x);
-          max-width: 1200px;
-          margin: 0 auto;
-        }
-        .growth-canvas-wrap {
-          position: relative;
-          width: 100%;
-          border: 1px solid rgba(200, 220, 180, 0.14);
-          background: rgba(8, 19, 13, 0.55);
-          border-radius: 4px;
-          overflow: hidden;
-          box-shadow: inset 0 1px 0 rgba(232, 240, 220, 0.06), 0 18px 48px rgba(0, 0, 0, 0.18);
-        }
-        .growth-canvas-wrap::after {
-          content: "";
-          position: absolute;
-          inset: 0;
-          pointer-events: none;
-          background: linear-gradient(105deg, transparent 0%, rgba(240, 192, 74, 0.08) 46%, transparent 62%);
-          transform: translateX(-120%);
-          animation: growth-sheen 6s ease-in-out infinite;
-        }
-        @keyframes growth-sheen {
-          0%, 34% { transform: translateX(-120%); opacity: 0; }
-          45% { opacity: 1; }
-          70%, 100% { transform: translateX(120%); opacity: 0; }
-        }
-        .growth-eyebrow {
-          font-family: var(--font-mono, ui-monospace);
-          font-size: 11px;
-          letter-spacing: 0.12em;
-          text-transform: uppercase;
-          color: rgba(200, 220, 180, 0.55);
-          margin-bottom: 10px;
-        }
-        .growth-title {
-          font-family: var(--font-serif);
-          font-weight: 500;
-          font-size: clamp(22px, 3.4vw, 36px);
-          line-height: 1.05;
-          letter-spacing: -0.012em;
-          color: rgba(232, 240, 220, 0.96);
-          margin: 0 0 4px;
-        }
-        .growth-sub {
-          font-family: var(--font-serif);
-          font-style: italic;
-          font-size: clamp(14px, 1.6vw, 18px);
-          color: rgba(200, 220, 180, 0.68);
-          margin-bottom: 16px;
-        }
-        .growth-readout {
-          font-family: var(--font-fraunces, Georgia), serif;
-          font-weight: 500;
-          font-size: 15px;
-          font-feature-settings: "tnum";
-          color: rgba(232, 240, 220, 0.88);
-          letter-spacing: 0.01em;
-        }
-        .growth-button {
-          appearance: none;
-          border: 1px solid rgba(200, 220, 180, 0.42);
-          background: transparent;
-          color: rgba(232, 240, 220, 0.96);
-          font-family: var(--font-text);
-          font-size: 13px;
-          letter-spacing: 0.08em;
-          text-transform: lowercase;
-          padding: 10px 18px;
-          min-height: 44px;
-          min-width: 96px;
-          border-radius: 999px;
-          cursor: pointer;
-          touch-action: manipulation;
-          transition: background 200ms, border-color 200ms;
-        }
-        .growth-button:hover { background: rgba(200, 220, 180, 0.08); border-color: rgba(200, 220, 180, 0.66); }
-        .growth-button:active { background: rgba(200, 220, 180, 0.14); }
-        .growth-memory {
-          display: flex;
-          flex-wrap: wrap;
-          align-items: center;
-          gap: 8px;
-          min-height: 42px;
-          margin-top: 18px;
-        }
-        .growth-memory span {
-          display: inline-flex;
-          align-items: center;
-          gap: 8px;
-          min-height: 34px;
-          padding: 6px 10px;
-          border: 1px solid color-mix(in srgb, var(--growth-trace-color) 46%, transparent);
-          border-radius: 999px;
-          background: color-mix(in srgb, var(--growth-trace-color) calc(var(--growth-trace-alpha) * 16%), transparent);
-          color: rgba(232, 240, 220, 0.86);
-          font-family: var(--font-mono, ui-monospace);
-          font-size: 10px;
-          letter-spacing: 0.08em;
-          text-transform: lowercase;
-          animation: growth-memory-rise 520ms ease-out both;
-        }
-        .growth-memory i {
-          width: 8px;
-          aspect-ratio: 1;
-          border-radius: 50%;
-          background: var(--growth-trace-color);
-          box-shadow: 0 0 14px var(--growth-trace-color);
-          flex: 0 0 auto;
-        }
-        .growth-memory b {
-          font-weight: 500;
-          color: color-mix(in srgb, var(--growth-trace-color) 78%, rgba(232, 240, 220, 0.86));
-        }
-        @keyframes growth-memory-rise {
-          from { opacity: 0; transform: translateY(8px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-        .growth-range {
-          -webkit-appearance: none;
-          appearance: none;
-          width: 100%;
-          height: 44px;
-          background: transparent;
-          touch-action: manipulation;
-          font-size: 16px;
-        }
-        .growth-range::-webkit-slider-runnable-track {
-          height: 2px;
-          background: rgba(200, 220, 180, 0.32);
-        }
-        .growth-range::-moz-range-track {
-          height: 2px;
-          background: rgba(200, 220, 180, 0.32);
-        }
-        .growth-range::-webkit-slider-thumb {
-          -webkit-appearance: none;
-          appearance: none;
-          width: 22px;
-          height: 22px;
-          border-radius: 50%;
-          background: rgba(240, 192, 74, 0.95);
-          border: 1px solid rgba(8, 19, 13, 0.8);
-          margin-top: -10px;
-          cursor: pointer;
-          box-shadow: 0 0 0 6px rgba(240, 192, 74, 0.08);
-        }
-        .growth-range::-moz-range-thumb {
-          width: 22px;
-          height: 22px;
-          border-radius: 50%;
-          background: rgba(240, 192, 74, 0.95);
-          border: 1px solid rgba(8, 19, 13, 0.8);
-          cursor: pointer;
-          box-shadow: 0 0 0 6px rgba(240, 192, 74, 0.08);
-        }
-        .growth-exp-row {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 14px;
-        }
-        .growth-phase-buttons {
-          display: grid;
-          grid-template-columns: repeat(4, minmax(0, 1fr));
-          gap: 8px;
-          min-width: min(520px, 100%);
-        }
-        .growth-phase-buttons .growth-button {
-          min-width: 0;
-          padding-inline: 12px;
-        }
-        @media (max-width: 699px) {
-          .growth-zone {
-            padding: 22px var(--pad-x);
-          }
-          .growth-exp-row { grid-template-columns: 1fr; }
-          .growth-exp-controls {
-            grid-template-columns: 1fr !important;
-          }
-          .growth-exp-controls .growth-button {
-            width: 100%;
-          }
-          .growth-life-controls {
-            align-items: stretch !important;
-            flex-direction: column;
-          }
-          .growth-memory {
-            gap: 6px;
-            margin-top: 14px;
-            min-height: 0;
-          }
-          .growth-memory span {
-            min-height: 30px;
-            padding: 5px 8px;
-            gap: 6px;
-            font-size: 9px;
-          }
-          .growth-memory b {
-            display: none;
-          }
-          .growth-phase-buttons {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-          }
-          .growth-life-controls .growth-button {
-            width: 100%;
-          }
-          .growth-life-controls .growth-readout {
-            line-height: 1.4;
-          }
-        }
-        @media (prefers-reduced-motion: reduce) {
-          .growth-canvas-wrap::after {
-            animation: none;
-            opacity: 0;
-          }
-        }
-      `}</style>
-    </div>
-  );
-}
-
-// ── Zone 1: SIGMOID FIELD ────────────────────────────────────────────────
-
-type SigmoidParams = { L: number; k: number; x0: number };
-
-function SigmoidZone({ onTrace }: { onTrace: GrowthTraceHandler }) {
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [params, setParams] = useState<SigmoidParams>({ L: 1.0, k: 1.0, x0: 5.0 });
-  // tracked refs for the render loop — avoids re-binding handlers per frame
-  const paramsRef = useRef(params);
-  paramsRef.current = params;
-  const onTraceRef = useRef(onTrace);
-  useEffect(() => { onTraceRef.current = onTrace; }, [onTrace]);
-  const draggingRef = useRef<"L" | "k" | "x0" | null>(null);
-  const lastChimeRef = useRef(0);
-
-  useEffect(() => {
-    const wrap = wrapRef.current;
-    const cv = canvasRef.current;
-    if (!wrap || !cv) return;
-    const ctx = cv.getContext("2d");
-    if (!ctx) return;
-
-    let raf = 0;
-    let dpr = 1;
-
-    const resize = () => {
-      dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const w = wrap.clientWidth;
-      const h = computeZoneHeight();
-      wrap.style.height = `${h}px`;
-      cv.width = Math.floor(w * dpr);
-      cv.height = Math.floor(h * dpr);
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    };
-
-    const computeZoneHeight = (): number => {
-      const isMobile = window.innerWidth < 700;
-      const vh = window.innerHeight;
-      return isMobile ? Math.max(vh * 0.58, 360) : Math.max(vh * 0.50, 380);
-    };
-
-    resize();
-    const ro = new ResizeObserver(resize);
-    ro.observe(wrap);
-    window.addEventListener("resize", resize);
-
-    // Plot domain — x in [0, 10], y in [0, L_MAX]
-    const X_MIN = 0;
-    const X_MAX = 10;
-    const Y_MIN = 0;
-    const Y_MAX = 1.5; // ceiling axis goes a touch above L_MAX
-
-    const sigmoid = (x: number, p: SigmoidParams): number => {
-      // y = L / (1 + exp(-k * (x - x0)))
-      const z = -p.k * (x - p.x0);
-      // clamp to avoid Infinity
-      const ez = Math.exp(Math.min(40, Math.max(-40, z)));
-      return p.L / (1 + ez);
-    };
-
-    // ── coordinate helpers ───────────────────────────────────────
-    const PAD_L = 56;
-    const PAD_R = 28;
-    const PAD_T = 24;
-    const PAD_B = 56;
-    const plotW = () => cv.clientWidth - PAD_L - PAD_R;
-    const plotH = () => cv.clientHeight - PAD_T - PAD_B;
-    const xToPx = (x: number) => PAD_L + ((x - X_MIN) / (X_MAX - X_MIN)) * plotW();
-    const yToPx = (y: number) =>
-      PAD_T + plotH() - ((y - Y_MIN) / (Y_MAX - Y_MIN)) * plotH();
-    const pxToX = (px: number) => X_MIN + ((px - PAD_L) / plotW()) * (X_MAX - X_MIN);
-    const pxToY = (py: number) =>
-      Y_MIN + ((PAD_T + plotH() - py) / plotH()) * (Y_MAX - Y_MIN);
-
-    // ── control point positions in data space ────────────────────
-    const controlPositions = (p: SigmoidParams) => {
-      // x0 lives ON the curve at (x0, L/2)
-      const x0Pt = { x: p.x0, y: p.L / 2 };
-      // k control: a point to the right of x0 on the curve at a fixed Δx
-      // its on-curve y reveals slope. We display it as a draggable bead.
-      const kDx = 1.0;
-      const kPt = { x: p.x0 + kDx, y: sigmoid(p.x0 + kDx, p) };
-      // L control: the ceiling, drawn at the right edge at height L
-      const LPt = { x: X_MAX - 0.4, y: p.L };
-      return { x0Pt, kPt, LPt };
-    };
-
-    const HIT_RADIUS = 28; // 44px target → 28 logical px (touch-friendly)
-
-    const pickControl = (mx: number, my: number, p: SigmoidParams): "L" | "k" | "x0" | null => {
-      const { x0Pt, kPt, LPt } = controlPositions(p);
-      const candidates: Array<{ k: "L" | "k" | "x0"; px: number; py: number }> = [
-        { k: "x0", px: xToPx(x0Pt.x), py: yToPx(x0Pt.y) },
-        { k: "k", px: xToPx(kPt.x), py: yToPx(kPt.y) },
-        { k: "L", px: xToPx(LPt.x), py: yToPx(LPt.y) },
-      ];
-      let best: { k: "L" | "k" | "x0"; d2: number } | null = null;
-      for (const c of candidates) {
-        const dx = c.px - mx;
-        const dy = c.py - my;
-        const d2 = dx * dx + dy * dy;
-        if (d2 < HIT_RADIUS * HIT_RADIUS && (!best || d2 < best.d2)) {
-          best = { k: c.k, d2 };
-        }
-      }
-      return best?.k ?? null;
-    };
-
-    const onPointerDown = (e: PointerEvent) => {
-      const r = cv.getBoundingClientRect();
-      const mx = e.clientX - r.left;
-      const my = e.clientY - r.top;
-      const p = paramsRef.current;
-      const which = pickControl(mx, my, p);
-      if (which) {
-        draggingRef.current = which;
-        try { cv.setPointerCapture(e.pointerId); } catch { /* noop */ }
-        rateLimitedChime();
-      }
-    };
-
-    const rateLimitedChime = () => {
-      const now = performance.now();
-      if (now - lastChimeRef.current > 100) {
-        getFieldAudio().chime();
-        lastChimeRef.current = now;
-      }
-    };
-
-    const onPointerMove = (e: PointerEvent) => {
-      if (!draggingRef.current) return;
-      const r = cv.getBoundingClientRect();
-      const mx = e.clientX - r.left;
-      const my = e.clientY - r.top;
-      const dataX = Math.min(X_MAX, Math.max(X_MIN, pxToX(mx)));
-      const dataY = Math.min(Y_MAX, Math.max(Y_MIN, pxToY(my)));
-      const p = paramsRef.current;
-      let next: SigmoidParams = p;
-      if (draggingRef.current === "x0") {
-        next = { ...p, x0: Math.min(X_MAX - 0.5, Math.max(X_MIN + 0.5, dataX)) };
-      } else if (draggingRef.current === "L") {
-        next = { ...p, L: Math.min(1.3, Math.max(0.1, dataY)) };
-      } else if (draggingRef.current === "k") {
-        // derive k from where the user pulled the "k" bead — interpret the
-        // bead's distance above L/2 as a steepness hint. Simpler: map
-        // horizontal distance to logistic shape via implicit inversion.
-        // y_target = L / (1+exp(-k*Δx)), Δx=1 → k = ln(y/(L-y))
-        const yT = Math.min(p.L * 0.99, Math.max(p.L * 0.01, dataY));
-        const dx = Math.max(0.05, dataX - p.x0);
-        // k = (1/dx) * ln(y/(L-y))
-        const ratio = yT / Math.max(0.0001, p.L - yT);
-        const kNew = (1 / dx) * Math.log(Math.max(0.0001, ratio));
-        next = { ...p, k: Math.min(5, Math.max(0.1, kNew)) };
-      }
-      paramsRef.current = next;
-      setParams(next);
-      rateLimitedChime();
-    };
-
-    const onPointerUp = (e: PointerEvent) => {
-      if (draggingRef.current) {
-        const released = draggingRef.current;
-        draggingRef.current = null;
-        try { cv.releasePointerCapture(e.pointerId); } catch { /* noop */ }
-        useField.getState().recordTape("sigil", 0.6, "growth/sigmoid");
-        const labels = { L: "ceiling", k: "steepness", x0: "seed" } as const;
-        const colors = { L: "#87b878", k: "#4f8a4a", x0: "#c8a86a" } as const;
-        onTraceRef.current({
-          zone: "sigmoid",
-          label: labels[released],
-          color: colors[released],
-          intensity: 0.62,
-        });
-      }
-    };
-
-    cv.addEventListener("pointerdown", onPointerDown);
-    cv.addEventListener("pointermove", onPointerMove);
-    cv.addEventListener("pointerup", onPointerUp);
-    cv.addEventListener("pointercancel", onPointerUp);
-
-    const draw = (now: number) => {
-      const w = cv.clientWidth;
-      const h = cv.clientHeight;
-      const p = paramsRef.current;
-      ctx.clearRect(0, 0, w, h);
-
-      // ── phase bands behind the curve ────────────────────────────
-      // Divide x into four bands of equal width: seed | sprout | climb | plateau
-      const bandTints: ReadonlyArray<string> = [
-        "rgba(120, 95, 50, 0.10)",   // seed — warm earth
-        "rgba(80, 130, 80, 0.10)",   // sprout — soft green
-        "rgba(135, 184, 120, 0.13)", // climb — bright green
-        "rgba(180, 200, 150, 0.08)", // plateau — pale chartreuse
-      ];
-      const bandLabels = ["seed", "sprout", "climb", "plateau"];
-      const px0 = xToPx(X_MIN);
-      const px1 = xToPx(X_MAX);
-      const bandW = (px1 - px0) / 4;
-      for (let i = 0; i < 4; i++) {
-        ctx.fillStyle = bandTints[i];
-        ctx.fillRect(px0 + i * bandW, PAD_T, bandW, plotH());
-      }
-      // band labels (Fraunces italic, faint, at the top of each band)
-      ctx.font = `300 italic 12px var(--font-fraunces, Georgia), serif`;
-      ctx.fillStyle = "rgba(200, 220, 180, 0.46)";
-      ctx.textAlign = "center";
-      for (let i = 0; i < 4; i++) {
-        ctx.fillText(bandLabels[i], px0 + (i + 0.5) * bandW, PAD_T + 14);
-      }
-
-      // ── axes ─────────────────────────────────────────────────────
-      ctx.strokeStyle = "rgba(200, 220, 180, 0.20)";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      // x-axis at y=0
-      ctx.moveTo(xToPx(X_MIN), yToPx(0));
-      ctx.lineTo(xToPx(X_MAX), yToPx(0));
-      // y-axis
-      ctx.moveTo(xToPx(X_MIN), yToPx(0));
-      ctx.lineTo(xToPx(X_MIN), yToPx(Y_MAX));
-      ctx.stroke();
-
-      // y=L ceiling line (dashed)
-      ctx.setLineDash([3, 4]);
-      ctx.strokeStyle = "rgba(200, 220, 180, 0.32)";
-      ctx.beginPath();
-      ctx.moveTo(xToPx(X_MIN), yToPx(p.L));
-      ctx.lineTo(xToPx(X_MAX), yToPx(p.L));
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      // x0 vertical reference (dashed)
-      ctx.setLineDash([2, 4]);
-      ctx.strokeStyle = "rgba(200, 220, 180, 0.22)";
-      ctx.beginPath();
-      ctx.moveTo(xToPx(p.x0), yToPx(0));
-      ctx.lineTo(xToPx(p.x0), yToPx(p.L));
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      // ── the sigmoid curve, gradient stroke ──────────────────────
-      // Compute polyline samples first.
-      const samples = 200;
-      const xs = new Array<number>(samples + 1);
-      const ys = new Array<number>(samples + 1);
-      for (let i = 0; i <= samples; i++) {
-        const xv = X_MIN + (i / samples) * (X_MAX - X_MIN);
-        xs[i] = xv;
-        ys[i] = sigmoid(xv, p);
-      }
-      // gradient along the line: seed → sprout → full
-      const grad = ctx.createLinearGradient(xToPx(X_MIN), 0, xToPx(X_MAX), 0);
-      grad.addColorStop(0.0, "#c8a86a");
-      grad.addColorStop(0.5, "#4f8a4a");
-      grad.addColorStop(1.0, "#87b878");
-      ctx.strokeStyle = grad;
-      ctx.lineWidth = 2.4;
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-      ctx.beginPath();
-      for (let i = 0; i <= samples; i++) {
-        const px = xToPx(xs[i]);
-        const py = yToPx(ys[i]);
-        if (i === 0) ctx.moveTo(px, py);
-        else ctx.lineTo(px, py);
-      }
-      ctx.stroke();
-
-      // glow under the curve — fill to baseline
-      ctx.beginPath();
-      for (let i = 0; i <= samples; i++) {
-        const px = xToPx(xs[i]);
-        const py = yToPx(ys[i]);
-        if (i === 0) ctx.moveTo(px, py);
-        else ctx.lineTo(px, py);
-      }
-      ctx.lineTo(xToPx(X_MAX), yToPx(0));
-      ctx.lineTo(xToPx(X_MIN), yToPx(0));
-      ctx.closePath();
-      const fillGrad = ctx.createLinearGradient(0, yToPx(p.L), 0, yToPx(0));
-      fillGrad.addColorStop(0, "rgba(135, 184, 120, 0.12)");
-      fillGrad.addColorStop(1, "rgba(135, 184, 120, 0.00)");
-      ctx.fillStyle = fillGrad;
-      ctx.fill();
-
-      // ── control points (large soft circles, visible outlines) ──
-      const { x0Pt, kPt, LPt } = controlPositions(p);
-      const glintT = (now * 0.00008) % 1;
-      const glintX = X_MIN + glintT * (X_MAX - X_MIN);
-      const glintY = sigmoid(glintX, p);
-      const glintR = 4 + Math.sin(now * 0.006) * 1.5;
-      ctx.fillStyle = "rgba(240, 192, 74, 0.82)";
-      ctx.beginPath();
-      ctx.arc(xToPx(glintX), yToPx(glintY), glintR, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = "rgba(240, 192, 74, 0.28)";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.arc(xToPx(glintX), yToPx(glintY), glintR + 8, 0, Math.PI * 2);
-      ctx.stroke();
-      drawControl(ctx, xToPx(x0Pt.x), yToPx(x0Pt.y), "x₀", "#c8a86a", draggingRef.current === "x0");
-      drawControl(ctx, xToPx(kPt.x), yToPx(kPt.y), "k", "#4f8a4a", draggingRef.current === "k");
-      drawControl(ctx, xToPx(LPt.x), yToPx(LPt.y), "L", "#87b878", draggingRef.current === "L");
-
-      raf = requestAnimationFrame(draw);
-    };
-
-    raf = requestAnimationFrame(draw);
-
-    return () => {
-      cancelAnimationFrame(raf);
-      ro.disconnect();
-      window.removeEventListener("resize", resize);
-      cv.removeEventListener("pointerdown", onPointerDown);
-      cv.removeEventListener("pointermove", onPointerMove);
-      cv.removeEventListener("pointerup", onPointerUp);
-      cv.removeEventListener("pointercancel", onPointerUp);
-    };
-  }, []);
-
-  return (
-    <section className="growth-zone">
-      <div className="growth-eyebrow">zone i &middot; the sigmoid field</div>
-      <h2 className="growth-title">a single curve, three handles</h2>
-      <div className="growth-sub">drag the seed, the steepness, the ceiling</div>
-      <div ref={wrapRef} className="growth-canvas-wrap">
-        <canvas
-          ref={canvasRef}
-          aria-label="sigmoid curve with three draggable control points"
-          style={{
-            display: "block",
-            width: "100%",
-            height: "100%",
-            touchAction: "none",
-            cursor: "grab",
-          }}
-        />
-      </div>
-      <div style={{ marginTop: 14, display: "flex", flexWrap: "wrap", gap: 18 }}>
-        <span className="growth-readout">L = {params.L.toFixed(2)}</span>
-        <span className="growth-readout" style={{ color: "rgba(135, 184, 120, 0.88)", minWidth: 8 }}>·</span>
-        <span className="growth-readout">k = {params.k.toFixed(2)}</span>
-        <span className="growth-readout" style={{ color: "rgba(135, 184, 120, 0.88)", minWidth: 8 }}>·</span>
-        <span className="growth-readout">x₀ = {params.x0.toFixed(2)}</span>
-      </div>
-    </section>
-  );
-}
-
-function drawControl(
-  ctx: CanvasRenderingContext2D,
-  px: number,
-  py: number,
-  label: string,
-  color: string,
-  active: boolean,
-) {
-  const r = active ? 14 : 12;
-  // outer soft halo
-  const halo = ctx.createRadialGradient(px, py, 4, px, py, 26);
-  halo.addColorStop(0, `${color}88`);
-  halo.addColorStop(1, `${color}00`);
-  ctx.fillStyle = halo;
-  ctx.beginPath();
-  ctx.arc(px, py, 26, 0, Math.PI * 2);
-  ctx.fill();
-  // body
-  ctx.fillStyle = "rgba(8, 19, 13, 0.85)";
-  ctx.beginPath();
-  ctx.arc(px, py, r, 0, Math.PI * 2);
-  ctx.fill();
-  // outline
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 1.8;
-  ctx.beginPath();
-  ctx.arc(px, py, r, 0, Math.PI * 2);
-  ctx.stroke();
-  // label
-  ctx.fillStyle = "rgba(232, 240, 220, 0.94)";
-  ctx.font = `500 11px var(--font-fraunces, Georgia), serif`;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText(label, px, py + 0.5);
-  ctx.textBaseline = "alphabetic";
-}
-
-// ── Zone 2: EXPONENTIAL RISE + DECAY ────────────────────────────────────
-
-type Burst = { x0: number; t0: number };
-
-function ExpZone({ onTrace }: { onTrace: GrowthTraceHandler }) {
-  const wrapRiseRef = useRef<HTMLDivElement>(null);
-  const wrapDecayRef = useRef<HTMLDivElement>(null);
-  const riseCanvasRef = useRef<HTMLCanvasElement>(null);
-  const decayCanvasRef = useRef<HTMLCanvasElement>(null);
-  const [lambda, setLambda] = useState(0.6);
-  const lambdaRef = useRef(lambda);
-  lambdaRef.current = lambda;
-  const burstsRef = useRef<Burst[]>([]);
-  const onTraceRef = useRef(onTrace);
-  useEffect(() => { onTraceRef.current = onTrace; }, [onTrace]);
-  // peak / completion markers — fire bell on rise peak, thud on decay finish
-  const burstSoundedRef = useRef<Map<number, { peak: boolean; done: boolean }>>(new Map());
-
-  const halfLife = Math.log(2) / Math.max(0.0001, lambda);
-
-  const triggerBurst = (x0: number) => {
-    const b: Burst = { x0, t0: performance.now() };
-    burstsRef.current.push(b);
-    if (burstsRef.current.length > 12) {
-      const removed = burstsRef.current.shift();
-      if (removed) burstSoundedRef.current.delete(removed.t0);
-    }
-    useField.getState().recordTape("ripple", 0.5, "growth/burst");
-    onTraceRef.current({
-      zone: "burst",
-      label: `${Math.round((x0 / 6) * 100)}%`,
-      color: "#f0c04a",
-      intensity: 0.68,
-    });
-  };
-
-  useEffect(() => {
-    const setup = (
-      wrap: HTMLDivElement | null,
-      cv: HTMLCanvasElement | null,
-      kind: "rise" | "decay",
-    ) => {
-      if (!wrap || !cv) return () => { /* noop */ };
-      const ctx = cv.getContext("2d");
-      if (!ctx) return () => { /* noop */ };
-
-      let raf = 0;
-      let dpr = 1;
-      const PAD_L = 44;
-      const PAD_R = 16;
-      const PAD_T = 18;
-      const PAD_B = 36;
-      const X_MAX = 6; // seconds visible on the plot
-      const Y_MAX = 1.1;
-
-      const computeZoneHeight = (): number => {
-        const isMobile = window.innerWidth < 700;
-        const vh = window.innerHeight;
-        return isMobile ? Math.max(vh * 0.34, 220) : Math.max(vh * 0.42, 320);
-      };
-
-      const resize = () => {
-        dpr = Math.min(window.devicePixelRatio || 1, 2);
-        const w = wrap.clientWidth;
-        const h = computeZoneHeight();
-        wrap.style.height = `${h}px`;
-        cv.width = Math.floor(w * dpr);
-        cv.height = Math.floor(h * dpr);
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      };
-      resize();
-      const ro = new ResizeObserver(resize);
-      ro.observe(wrap);
-      window.addEventListener("resize", resize);
-
-      const plotW = () => cv.clientWidth - PAD_L - PAD_R;
-      const plotH = () => cv.clientHeight - PAD_T - PAD_B;
-      const xToPx = (x: number) => PAD_L + (x / X_MAX) * plotW();
-      const yToPx = (y: number) => PAD_T + plotH() - (y / Y_MAX) * plotH();
-      const pxToX = (px: number) => ((px - PAD_L) / plotW()) * X_MAX;
-
-      // burst contribution at time t (since start) at offset x
-      const burstAt = (x: number, now: number): number => {
-        const lam = lambdaRef.current;
-        let total = 0;
-        for (const b of burstsRef.current) {
-          // burst is anchored at b.x0 in plot-space; its envelope advances
-          // with real-world time since b.t0.
-          const elapsedSinceBurst = (now - b.t0) / 1000;
-          // local time on the plot: dx = x - b.x0 must be ≥ 0 to receive
-          // the wave. The envelope drifts toward the right with elapsedSinceBurst.
-          const dx = x - b.x0;
-          if (dx < 0) continue;
-          // The burst's local time is min(dx, elapsedSinceBurst) so the
-          // envelope sweeps from b.x0 outward at "1 unit per second".
-          const tLocal = Math.min(dx, elapsedSinceBurst);
-          if (tLocal < 0) continue;
-          // rise: 1 - exp(-λ t) up to a peak that then decays
-          // shape: a rise + decay pulse — rise quickly to peak at t*=2/λ
-          // then decays. For "rise" plot we show the rising envelope; for
-          // "decay" plot we show the decay portion.
-          let env: number;
-          if (kind === "rise") {
-            env = 1 - Math.exp(-lam * tLocal);
-            // then optional decay after a brief plateau — fade after age
-            const decayPhase = Math.max(0, elapsedSinceBurst - tLocal - 0.4);
-            env *= Math.exp(-lam * decayPhase * 0.4);
-          } else {
-            // decay plot: pulse rises immediately and decays
-            env = Math.exp(-lam * tLocal);
-          }
-          total += env * 0.35;
-          // detect peak / completion for audio
-          const meta = burstSoundedRef.current.get(b.t0) ?? { peak: false, done: false };
-          if (kind === "rise" && !meta.peak && elapsedSinceBurst > Math.min(2.0, 2 / lam) && b === burstsRef.current[burstsRef.current.length - 1]) {
-            meta.peak = true;
-            burstSoundedRef.current.set(b.t0, meta);
-            getFieldAudio().bell();
-          }
-          if (kind === "decay" && !meta.done && elapsedSinceBurst > Math.min(5.0, 5 / lam)) {
-            meta.done = true;
-            burstSoundedRef.current.set(b.t0, meta);
-            getFieldAudio().thud();
-          }
-        }
-        return Math.min(1, total);
-      };
-
-      // tap anywhere on the plot to seed a burst at that x
-      const onPointerDown = (e: PointerEvent) => {
-        const r = cv.getBoundingClientRect();
-        const mx = e.clientX - r.left;
-        const myDataX = Math.min(X_MAX - 0.1, Math.max(0, pxToX(mx)));
-        triggerBurst(myDataX);
-      };
-      cv.addEventListener("pointerdown", onPointerDown);
-
-      const baseColor = kind === "rise" ? "#f0c04a" : "#c06a4a";
-      const fillColor = kind === "rise" ? "rgba(240, 192, 74, 0.10)" : "rgba(192, 106, 74, 0.10)";
-
-      const draw = () => {
-        const w = cv.clientWidth;
-        const h = cv.clientHeight;
-        ctx.clearRect(0, 0, w, h);
-
-        // axes
-        ctx.strokeStyle = "rgba(200, 220, 180, 0.20)";
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(xToPx(0), yToPx(0));
-        ctx.lineTo(xToPx(X_MAX), yToPx(0));
-        ctx.moveTo(xToPx(0), yToPx(0));
-        ctx.lineTo(xToPx(0), yToPx(Y_MAX));
-        ctx.stroke();
-
-        // labels
-        ctx.fillStyle = "rgba(200, 220, 180, 0.50)";
-        ctx.font = `300 italic 12px var(--font-fraunces, Georgia), serif`;
-        ctx.textAlign = "left";
-        ctx.fillText(kind === "rise" ? "rise" : "decay", PAD_L + 4, PAD_T + 14);
-
-        // baseline curve — the canonical shape (no bursts)
-        const samples = 160;
-        const xs = new Array<number>(samples + 1);
-        const ys = new Array<number>(samples + 1);
-        const lam = lambdaRef.current;
-        for (let i = 0; i <= samples; i++) {
-          const xv = (i / samples) * X_MAX;
-          let yv: number;
-          if (kind === "rise") {
-            yv = 1 - Math.exp(-lam * xv);
-          } else {
-            yv = Math.exp(-lam * xv);
-          }
-          xs[i] = xv;
-          ys[i] = yv;
-        }
-
-        // fill under baseline
-        ctx.beginPath();
-        for (let i = 0; i <= samples; i++) {
-          const px = xToPx(xs[i]);
-          const py = yToPx(ys[i]);
-          if (i === 0) ctx.moveTo(px, py);
-          else ctx.lineTo(px, py);
-        }
-        ctx.lineTo(xToPx(X_MAX), yToPx(0));
-        ctx.lineTo(xToPx(0), yToPx(0));
-        ctx.closePath();
-        ctx.fillStyle = fillColor;
-        ctx.fill();
-
-        // baseline stroke
-        ctx.strokeStyle = baseColor;
-        ctx.lineWidth = 2.2;
-        ctx.lineCap = "round";
-        ctx.lineJoin = "round";
-        ctx.beginPath();
-        for (let i = 0; i <= samples; i++) {
-          const px = xToPx(xs[i]);
-          const py = yToPx(ys[i]);
-          if (i === 0) ctx.moveTo(px, py);
-          else ctx.lineTo(px, py);
-        }
-        ctx.stroke();
-
-        // overlay burst pulses
-        if (burstsRef.current.length > 0) {
-          const now = performance.now();
-          ctx.strokeStyle = `${baseColor}cc`;
-          ctx.lineWidth = 1.6;
-          ctx.setLineDash([2, 3]);
-          ctx.beginPath();
-          for (let i = 0; i <= samples; i++) {
-            const xv = (i / samples) * X_MAX;
-            const env = burstAt(xv, now);
-            const px = xToPx(xv);
-            const py = yToPx(env);
-            if (i === 0) ctx.moveTo(px, py);
-            else ctx.lineTo(px, py);
-          }
-          ctx.stroke();
-          ctx.setLineDash([]);
-
-          // small markers at burst origins
-          for (const b of burstsRef.current) {
-            const age = (now - b.t0) / 1000;
-            if (age > 8) continue;
-            const a = Math.max(0, 1 - age / 8);
-            ctx.fillStyle = `rgba(232, 240, 220, ${a * 0.6})`;
-            ctx.beginPath();
-            ctx.arc(xToPx(b.x0), yToPx(0), 3, 0, Math.PI * 2);
-            ctx.fill();
-          }
-          // prune ancient bursts
-          burstsRef.current = burstsRef.current.filter((b) => (now - b.t0) / 1000 < 12);
-        }
-
-        raf = requestAnimationFrame(draw);
-      };
-      raf = requestAnimationFrame(draw);
-
-      return () => {
-        cancelAnimationFrame(raf);
-        ro.disconnect();
-        window.removeEventListener("resize", resize);
-        cv.removeEventListener("pointerdown", onPointerDown);
-      };
-    };
-
-    const cleanupRise = setup(wrapRiseRef.current, riseCanvasRef.current, "rise");
-    const cleanupDecay = setup(wrapDecayRef.current, decayCanvasRef.current, "decay");
-    return () => {
-      cleanupRise();
-      cleanupDecay();
-    };
-  }, []);
-
-  const onBurst = () => {
-    // a synchronized burst at x=0.5 on both plots
-    triggerBurst(0.5);
-  };
-
-  return (
-    <section className="growth-zone">
-      <div className="growth-eyebrow">zone ii &middot; exponential rise &amp; decay</div>
-      <h2 className="growth-title">two tongues of the same fire</h2>
-      <div className="growth-sub">share a rate, send a pulse, hear the half-life</div>
-      <div className="growth-exp-row">
-        <div ref={wrapRiseRef} className="growth-canvas-wrap">
-          <canvas
-            ref={riseCanvasRef}
-            aria-label="exponential rise plot — tap to seed a burst"
-            style={{
-              display: "block",
-              width: "100%",
-              height: "100%",
-              touchAction: "none",
-              cursor: "crosshair",
-            }}
-          />
-        </div>
-        <div ref={wrapDecayRef} className="growth-canvas-wrap">
-          <canvas
-            ref={decayCanvasRef}
-            aria-label="exponential decay plot — tap to seed a burst"
-            style={{
-              display: "block",
-              width: "100%",
-              height: "100%",
-              touchAction: "none",
-              cursor: "crosshair",
-            }}
-          />
-        </div>
-      </div>
-
-      {/* controls row */}
-      <div
-        className="growth-exp-controls"
-        style={{
-          marginTop: 14,
-          display: "grid",
-          gridTemplateColumns: "1fr auto",
-          gap: 16,
-          alignItems: "center",
-        }}
-      >
-        <div>
-          <label
-            htmlFor="growth-lambda"
-            className="growth-readout"
-            style={{ display: "block", marginBottom: 2 }}
+      <div className="growth-modes" role="group" aria-label="growth model">
+        {MODES.map((entry) => (
+          <button
+            key={entry.id}
+            type="button"
+            aria-pressed={mode === entry.id}
+            aria-label={entry.label}
+            onClick={() => chooseMode(entry.id)}
+            style={{ ["--growth-tone" as string]: entry.tone }}
           >
-            λ = {lambda.toFixed(2)}
-          </label>
-          <input
-            id="growth-lambda"
-            className="growth-range"
-            type="range"
-            min={0.05}
-            max={2.0}
-            step={0.01}
-            value={lambda}
-            onChange={(e) => setLambda(parseFloat(e.target.value))}
-          />
-        </div>
-        <button type="button" className="growth-button" onClick={onBurst}>
-          burst
-        </button>
+            <i aria-hidden="true">{entry.short}</i>
+            <span>{entry.label}</span>
+          </button>
+        ))}
       </div>
-      <div className="growth-readout" style={{ marginTop: 8 }}>
-        t½ = ln(2) / λ = {halfLife.toFixed(2)}
+
+      <div className="growth-readouts" aria-label="growth state">
+        <output>
+          <span>model</span>
+          <strong>{readout.model}</strong>
+        </output>
+        <output>
+          <span>phase</span>
+          <strong>{readout.phase}</strong>
+        </output>
+        <output>
+          <span>curve</span>
+          <strong>{readout.value}</strong>
+        </output>
+        <output>
+          <span>field</span>
+          <strong>{readout.gravity}</strong>
+        </output>
+        <output>
+          <span>force</span>
+          <strong>{readout.force}</strong>
+        </output>
       </div>
-    </section>
-  );
-}
 
-// ── Zone 3: LIFE CYCLE ──────────────────────────────────────────────────
-
-type LifePhase = "ascent" | "plateau" | "decline" | "rest";
-
-const LIFE_STOPS: ReadonlyArray<{ label: string; t: number; color: string }> = [
-  { label: "seed", t: 0.08, color: "#c8a86a" },
-  { label: "climb", t: 0.42, color: "#4f8a4a" },
-  { label: "bloom", t: 0.68, color: "#87b878" },
-  { label: "rest", t: 0.94, color: "#7a8090" },
-] as const;
-
-function LifeZone({ onTrace }: { onTrace: GrowthTraceHandler }) {
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [t, setT] = useState(0); // 0..1 across the curve
-  const tRef = useRef(t);
-  tRef.current = t;
-  const [playing, setPlaying] = useState(false);
-  const playingRef = useRef(playing);
-  playingRef.current = playing;
-  const draggingRef = useRef(false);
-  const onTraceRef = useRef(onTrace);
-  useEffect(() => { onTraceRef.current = onTrace; }, [onTrace]);
-  // ambient drone — created on first interaction
-  const droneRef = useRef<{
-    osc: OscillatorNode | null;
-    g: GainNode | null;
-    lp: BiquadFilterNode | null;
-  }>({ osc: null, g: null, lp: null });
-  const lastPhaseRef = useRef<LifePhase | null>(null);
-
-  // ── life curve: piecewise composition ────────────────────────────
-  // domain: tNorm in [0, 1], composed of four phases [0,0.25] [0.25,0.55] [0.55,0.80] [0.80,1.0]
-  // returns y in [0, 1]
-  const lifeY = (tNorm: number): number => {
-    if (tNorm <= 0.25) {
-      // birth-S — sigmoid from 0 → 0.85
-      const u = tNorm / 0.25; // 0..1
-      // logistic centered at u=0.55, k=8 → smooth ascent
-      const s = 1 / (1 + Math.exp(-8 * (u - 0.5)));
-      return s * 0.85;
-    } else if (tNorm <= 0.55) {
-      // adolescent-exp — push from 0.85 → 1.0 with a soft exponential approach
-      const u = (tNorm - 0.25) / 0.30;
-      return 0.85 + (1.0 - 0.85) * (1 - Math.exp(-3 * u));
-    } else if (tNorm <= 0.80) {
-      // adult-plateau — gentle wobble around 1.0
-      const u = (tNorm - 0.55) / 0.25;
-      return 1.0 - 0.02 + 0.02 * Math.cos(u * Math.PI * 1.3);
-    } else {
-      // senescent-decay — drift down to ~0.15 with mild oscillation
-      const u = (tNorm - 0.80) / 0.20;
-      const decay = Math.exp(-2.4 * u);
-      return 0.18 + (1.0 - 0.18) * decay;
-    }
-  };
-
-  const phaseAt = (tNorm: number): LifePhase => {
-    if (tNorm <= 0.25) return "ascent";
-    if (tNorm <= 0.55) return "ascent"; // adolescent-exp is still ascent
-    if (tNorm <= 0.80) return "plateau";
-    if (tNorm <= 0.97) return "decline";
-    return "rest";
-  };
-
-  const phaseLabel = (p: LifePhase): string => {
-    if (p === "ascent") return "ascent";
-    if (p === "plateau") return "plateau";
-    if (p === "decline") return "decline";
-    return "rest";
-  };
-
-  // ambient drone — pitched by marker's y
-  const ensureDrone = () => {
-    const audio = getFieldAudio();
-    const ctx = audio.getAudioContext();
-    if (!ctx) return;
-    if (droneRef.current.osc) return;
-    const osc = ctx.createOscillator();
-    osc.type = "sine";
-    osc.frequency.setValueAtTime(220, ctx.currentTime);
-    const g = ctx.createGain();
-    g.gain.setValueAtTime(0.0001, ctx.currentTime);
-    g.gain.exponentialRampToValueAtTime(0.04, ctx.currentTime + 1.2);
-    const lp = ctx.createBiquadFilter();
-    lp.type = "lowpass";
-    lp.frequency.value = 1400;
-    lp.Q.value = 0.4;
-    // route via the analyser sink — connect to destination via library helper
-    const tail = audio.getAnalyser();
-    osc.connect(g).connect(lp);
-    if (tail) {
-      // analyser is downstream of `sink`; we have to route into the sink too.
-      // Best-effort: connect to ctx.destination directly so the drone is audible.
-      lp.connect(ctx.destination);
-    } else {
-      lp.connect(ctx.destination);
-    }
-    osc.start();
-    droneRef.current = { osc, g, lp };
-  };
-
-  const releaseDrone = () => {
-    const audio = getFieldAudio();
-    const ctx = audio.getAudioContext();
-    if (!ctx) return;
-    const { osc, g, lp } = droneRef.current;
-    if (!osc || !g || !lp) return;
-    const now = ctx.currentTime;
-    try {
-      g.gain.cancelScheduledValues(now);
-      g.gain.setValueAtTime(Math.max(g.gain.value, 0.0001), now);
-      g.gain.exponentialRampToValueAtTime(0.0001, now + 0.6);
-      osc.stop(now + 0.7);
-    } catch { /* noop */ }
-    droneRef.current = { osc: null, g: null, lp: null };
-  };
-
-  useEffect(() => {
-    const wrap = wrapRef.current;
-    const cv = canvasRef.current;
-    if (!wrap || !cv) return;
-    const ctx = cv.getContext("2d");
-    if (!ctx) return;
-
-    let raf = 0;
-    let dpr = 1;
-    const PAD_L = 36;
-    const PAD_R = 36;
-    const PAD_T = 28;
-    const PAD_B = 60;
-
-    const computeZoneHeight = (): number => {
-      const isMobile = window.innerWidth < 700;
-      const vh = window.innerHeight;
-      return isMobile ? Math.max(vh * 0.60, 360) : Math.max(vh * 0.45, 360);
-    };
-
-    const resize = () => {
-      dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const w = wrap.clientWidth;
-      const h = computeZoneHeight();
-      wrap.style.height = `${h}px`;
-      cv.width = Math.floor(w * dpr);
-      cv.height = Math.floor(h * dpr);
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    };
-    resize();
-    const ro = new ResizeObserver(resize);
-    ro.observe(wrap);
-    window.addEventListener("resize", resize);
-
-    const plotW = () => cv.clientWidth - PAD_L - PAD_R;
-    const plotH = () => cv.clientHeight - PAD_T - PAD_B;
-    const xToPx = (xn: number) => PAD_L + xn * plotW();
-    const yToPx = (yn: number) => PAD_T + plotH() - yn * plotH();
-    const pxToX = (px: number) => Math.min(1, Math.max(0, (px - PAD_L) / plotW()));
-
-    // ── drag the marker ─────────────────────────────────────────
-    const onPointerDown = (e: PointerEvent) => {
-      const r = cv.getBoundingClientRect();
-      const mx = e.clientX - r.left;
-      const newT = pxToX(mx);
-      draggingRef.current = true;
-      setPlaying(false);
-      tRef.current = newT;
-      setT(newT);
-      try { cv.setPointerCapture(e.pointerId); } catch { /* noop */ }
-      ensureDrone();
-    };
-    const onPointerMove = (e: PointerEvent) => {
-      if (!draggingRef.current) return;
-      const r = cv.getBoundingClientRect();
-      const mx = e.clientX - r.left;
-      const newT = pxToX(mx);
-      tRef.current = newT;
-      setT(newT);
-    };
-    const onPointerUp = (e: PointerEvent) => {
-      if (!draggingRef.current) return;
-      draggingRef.current = false;
-      try { cv.releasePointerCapture(e.pointerId); } catch { /* noop */ }
-    };
-
-    cv.addEventListener("pointerdown", onPointerDown);
-    cv.addEventListener("pointermove", onPointerMove);
-    cv.addEventListener("pointerup", onPointerUp);
-    cv.addEventListener("pointercancel", onPointerUp);
-
-    // ── auto-marker (play) ──────────────────────────────────────
-    let lastFrameTime = performance.now();
-
-    const draw = (now: number) => {
-      const dt = (now - lastFrameTime) / 1000;
-      lastFrameTime = now;
-      // The play button should always visibly advance the marker; reduced
-      // motion trims decorative CSS effects elsewhere instead of freezing play.
-      if (playingRef.current && !draggingRef.current) {
-        const next = Math.min(1, tRef.current + dt / 30); // 30s traversal
-        tRef.current = next;
-        if (next >= 1) {
-          playingRef.current = false;
-          setPlaying(false);
-        }
-      }
-
-      const w = cv.clientWidth;
-      const h = cv.clientHeight;
-      const currT = tRef.current;
-      const currY = lifeY(currT);
-      const currPhase = phaseAt(currT);
-
-      // ── background tint shifts with phase ──────────────────────
-      // very subtle additive wash so the canvas's own bg communicates mood
-      const phaseTints: Record<LifePhase, string> = {
-        ascent: "rgba(135, 184, 120, 0.06)",
-        plateau: "rgba(180, 200, 150, 0.05)",
-        decline: "rgba(200, 130, 80, 0.06)",
-        rest: "rgba(80, 90, 100, 0.05)",
-      };
-      ctx.fillStyle = phaseTints[currPhase];
-      ctx.fillRect(0, 0, w, h);
-      // a deeper clear so we don't accumulate
-      ctx.clearRect(0, 0, w, h);
-      ctx.fillStyle = phaseTints[currPhase];
-      ctx.fillRect(0, 0, w, h);
-
-      // ── pale vertical phase bands ──────────────────────────────
-      const bandStops: ReadonlyArray<[number, number, string]> = [
-        [0.00, 0.25, "rgba(135, 184, 120, 0.05)"],
-        [0.25, 0.55, "rgba(180, 200, 150, 0.06)"],
-        [0.55, 0.80, "rgba(200, 220, 180, 0.05)"],
-        [0.80, 1.00, "rgba(200, 130, 80, 0.05)"],
-      ];
-      for (const [a, b, c] of bandStops) {
-        ctx.fillStyle = c;
-        ctx.fillRect(xToPx(a), PAD_T, xToPx(b) - xToPx(a), plotH());
-      }
-
-      // ── axes ───────────────────────────────────────────────────
-      ctx.strokeStyle = "rgba(200, 220, 180, 0.20)";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(xToPx(0), yToPx(0));
-      ctx.lineTo(xToPx(1), yToPx(0));
-      ctx.stroke();
-
-      // ── the life curve ─────────────────────────────────────────
-      const samples = 240;
-      const xs = new Array<number>(samples + 1);
-      const ys = new Array<number>(samples + 1);
-      for (let i = 0; i <= samples; i++) {
-        const xn = i / samples;
-        xs[i] = xn;
-        ys[i] = lifeY(xn);
-      }
-      // gradient: seed → bloom → senescence
-      const grad = ctx.createLinearGradient(xToPx(0), 0, xToPx(1), 0);
-      grad.addColorStop(0.0, "#c8a86a");
-      grad.addColorStop(0.35, "#4f8a4a");
-      grad.addColorStop(0.65, "#87b878");
-      grad.addColorStop(1.0, "#7a6a4a");
-      ctx.strokeStyle = grad;
-      ctx.lineWidth = 2.8;
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-      ctx.beginPath();
-      for (let i = 0; i <= samples; i++) {
-        const px = xToPx(xs[i]);
-        const py = yToPx(ys[i]);
-        if (i === 0) ctx.moveTo(px, py);
-        else ctx.lineTo(px, py);
-      }
-      ctx.stroke();
-
-      // glow fill under
-      ctx.beginPath();
-      for (let i = 0; i <= samples; i++) {
-        const px = xToPx(xs[i]);
-        const py = yToPx(ys[i]);
-        if (i === 0) ctx.moveTo(px, py);
-        else ctx.lineTo(px, py);
-      }
-      ctx.lineTo(xToPx(1), yToPx(0));
-      ctx.lineTo(xToPx(0), yToPx(0));
-      ctx.closePath();
-      const fillGrad = ctx.createLinearGradient(0, PAD_T, 0, PAD_T + plotH());
-      fillGrad.addColorStop(0, "rgba(135, 184, 120, 0.10)");
-      fillGrad.addColorStop(1, "rgba(135, 184, 120, 0.00)");
-      ctx.fillStyle = fillGrad;
-      ctx.fill();
-
-      // ── inscription near current phase ─────────────────────────
-      // italic display label of the current phase, near the marker
-      const inscr = phaseLabel(currPhase);
-      ctx.font = `300 italic 22px var(--font-fraunces, Georgia), serif`;
-      ctx.fillStyle = "rgba(232, 240, 220, 0.78)";
-      ctx.textAlign = "center";
-      const markerPx = xToPx(currT);
-      const markerPy = yToPx(currY);
-      const labelY = Math.max(PAD_T + 22, markerPy - 26);
-      ctx.fillText(inscr, markerPx, labelY);
-
-      // ── the marker ─────────────────────────────────────────────
-      const markerColor = currPhase === "ascent"
-        ? "#87b878"
-        : currPhase === "plateau"
-        ? "#a8c890"
-        : currPhase === "decline"
-        ? "#c06a4a"
-        : "#7a8090";
-
-      // halo
-      const halo = ctx.createRadialGradient(markerPx, markerPy, 4, markerPx, markerPy, 32);
-      halo.addColorStop(0, `${markerColor}99`);
-      halo.addColorStop(1, `${markerColor}00`);
-      ctx.fillStyle = halo;
-      ctx.beginPath();
-      ctx.arc(markerPx, markerPy, 32, 0, Math.PI * 2);
-      ctx.fill();
-      // body (large for touch)
-      ctx.fillStyle = "rgba(8, 19, 13, 0.85)";
-      ctx.beginPath();
-      ctx.arc(markerPx, markerPy, 12, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = markerColor;
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(markerPx, markerPy, 12, 0, Math.PI * 2);
-      ctx.stroke();
-
-      // bottom label: t = ##%
-      ctx.fillStyle = "rgba(200, 220, 180, 0.55)";
-      ctx.font = `500 12px var(--font-fraunces, Georgia), serif`;
-      ctx.textAlign = "left";
-      ctx.fillText(`t = ${Math.round(currT * 100)}%`, PAD_L, PAD_T + plotH() + 22);
-      ctx.textAlign = "right";
-      ctx.fillText(`y = ${currY.toFixed(2)}`, PAD_L + plotW(), PAD_T + plotH() + 22);
-
-      // ── audio: bend drone pitch with y, chime on phase change ──
-      const drone = droneRef.current;
-      const audioCtx = getFieldAudio().getAudioContext();
-      if (drone.osc && drone.g && audioCtx) {
-        try {
-          // y in [0, 1] → freq in [120, 360] (gentle bend)
-          const targetFreq = 120 + currY * 240;
-          drone.osc.frequency.setTargetAtTime(targetFreq, audioCtx.currentTime, 0.08);
-        } catch { /* noop */ }
-      }
-      if (lastPhaseRef.current !== null && lastPhaseRef.current !== currPhase) {
-        // phase transition — chime
-        getFieldAudio().chime();
-        onTraceRef.current({
-          zone: "cycle",
-          label: phaseLabel(currPhase),
-          color: markerColor,
-          intensity: 0.72,
-        });
-      }
-      lastPhaseRef.current = currPhase;
-
-      raf = requestAnimationFrame(draw);
-    };
-    raf = requestAnimationFrame(draw);
-
-    return () => {
-      cancelAnimationFrame(raf);
-      ro.disconnect();
-      window.removeEventListener("resize", resize);
-      cv.removeEventListener("pointerdown", onPointerDown);
-      cv.removeEventListener("pointermove", onPointerMove);
-      cv.removeEventListener("pointerup", onPointerUp);
-      cv.removeEventListener("pointercancel", onPointerUp);
-      releaseDrone();
-    };
-  }, []);
-
-  const onPlay = () => {
-    setPlaying((p) => !p);
-    if (!playing) {
-      ensureDrone();
-      // if we're at the end, restart
-      if (tRef.current >= 0.999) {
-        tRef.current = 0;
-        setT(0);
-      }
-      onTrace({
-        zone: "cycle",
-        label: "walk",
-        color: "#87b878",
-        intensity: 0.58,
-      });
-      useField.getState().recordTape("sigil", 0.52, "growth/life-play");
-    }
-  };
-
-  const onJump = (stop: (typeof LIFE_STOPS)[number]) => {
-    setPlaying(false);
-    playingRef.current = false;
-    tRef.current = stop.t;
-    setT(stop.t);
-    ensureDrone();
-    try { getFieldAudio().chime(); } catch { /* noop */ }
-    useField.getState().recordTape("sigil", 0.62, `growth/life-${stop.label}`);
-    onTrace({
-      zone: "cycle",
-      label: stop.label,
-      color: stop.color,
-      intensity: 0.72,
-    });
-  };
-
-  return (
-    <section className="growth-zone">
-      <div className="growth-eyebrow">zone iii &middot; life cycle</div>
-      <h2 className="growth-title">birth, climb, plateau, rest</h2>
-      <div className="growth-sub">drag the marker, or let it walk</div>
-      <div ref={wrapRef} className="growth-canvas-wrap">
-        <canvas
-          ref={canvasRef}
-          aria-label="life cycle curve — drag the marker to scrub, press play to advance"
-          style={{
-            display: "block",
-            width: "100%",
-            height: "100%",
-            touchAction: "none",
-            cursor: "grab",
-          }}
-        />
+      <div className="growth-memory" aria-live="polite">
+        {marks.map((mark, index) => (
+          <span key={mark.id} style={{ ["--growth-mark-tone" as string]: mark.tone, opacity: index === 0 ? 1 : 0.42 + mark.level * 0.24 }}>
+            <i aria-hidden="true" />
+            <b>{mark.label}</b>
+          </span>
+        ))}
       </div>
-      <div className="growth-life-controls" style={{ marginTop: 14, display: "flex", gap: 14, alignItems: "center" }}>
-        <button type="button" className="growth-button" onClick={onPlay}>
-          {playing ? "pause" : "play"}
-        </button>
-        <div className="growth-phase-buttons" aria-label="life phase jumps">
-          {LIFE_STOPS.map((stop) => (
-            <button key={stop.label} type="button" className="growth-button" onClick={() => onJump(stop)}>
-              {stop.label}
-            </button>
-          ))}
-        </div>
-        <span className="growth-readout" style={{ color: "rgba(200, 220, 180, 0.62)" }}>
-          {playing ? "marker walking · 30s traversal" : "free scrub · drag the marker"}
-        </span>
-      </div>
-    </section>
+
+      <style
+        dangerouslySetInnerHTML={{
+          __html: `
+            .growth-instrument {
+              position: fixed;
+              inset: 0;
+              overflow: hidden;
+              isolation: isolate;
+              background: #03110d;
+              color: rgba(239, 248, 221, 0.94);
+              -webkit-user-select: none;
+              user-select: none;
+              -webkit-touch-callout: none;
+            }
+
+            .growth-canvas {
+              position: absolute;
+              inset: 0;
+              z-index: 0;
+              width: 100%;
+              height: 100%;
+              display: block;
+              touch-action: none;
+              cursor: crosshair;
+            }
+
+            .growth-title {
+              position: absolute;
+              z-index: 3;
+              top: calc(74px + env(safe-area-inset-top, 0px));
+              left: var(--pad-x);
+              width: min(500px, calc(100vw - var(--pad-x) * 2));
+              pointer-events: none;
+              text-shadow: 0 20px 62px rgba(0, 0, 0, 0.72);
+            }
+
+            .growth-title div {
+              margin-bottom: 10px;
+              color: rgba(224, 246, 190, 0.52);
+              font-family: var(--font-mono, ui-monospace, monospace);
+              font-size: 11px;
+              letter-spacing: 0;
+              text-transform: lowercase;
+            }
+
+            .growth-title h1 {
+              margin: 0;
+              font-family: var(--font-fraunces, var(--font-serif, Georgia), serif);
+              font-size: clamp(50px, 8vw, 112px);
+              line-height: 0.9;
+              font-weight: 520;
+              letter-spacing: 0;
+              color: rgba(242, 255, 219, 0.98);
+            }
+
+            .growth-modes {
+              position: absolute;
+              z-index: 5;
+              right: calc(18px + env(safe-area-inset-right, 0px));
+              top: calc(92px + env(safe-area-inset-top, 0px));
+              display: grid;
+              gap: 7px;
+              width: 168px;
+            }
+
+            .growth-modes button {
+              appearance: none;
+              min-height: 42px;
+              display: grid;
+              grid-template-columns: 26px minmax(0, 1fr);
+              align-items: center;
+              gap: 9px;
+              padding: 7px 9px;
+              border: 1px solid rgba(232, 255, 204, 0.14);
+              border-radius: 7px;
+              background: rgba(4, 17, 12, 0.48);
+              color: rgba(238, 250, 218, 0.66);
+              backdrop-filter: blur(12px);
+              -webkit-backdrop-filter: blur(12px);
+              cursor: pointer;
+              font-family: var(--font-mono, ui-monospace, monospace);
+              font-size: 10px;
+              letter-spacing: 0;
+              text-transform: lowercase;
+              text-align: left;
+              transition: background 160ms ease, color 160ms ease, border-color 160ms ease;
+            }
+
+            .growth-modes button:hover,
+            .growth-modes button[aria-pressed="true"] {
+              color: rgba(248, 255, 232, 0.96);
+              border-color: color-mix(in srgb, var(--growth-tone) 42%, transparent);
+              background: color-mix(in srgb, var(--growth-tone) 11%, rgba(4, 17, 12, 0.62));
+            }
+
+            .growth-modes i {
+              display: grid;
+              place-items: center;
+              width: 26px;
+              height: 26px;
+              border-radius: 50%;
+              border: 1px solid color-mix(in srgb, var(--growth-tone) 46%, transparent);
+              color: var(--growth-tone);
+              font-style: normal;
+              font-family: var(--font-fraunces, Georgia, serif);
+              font-size: 13px;
+              line-height: 1;
+              box-shadow: 0 0 18px color-mix(in srgb, var(--growth-tone) 24%, transparent);
+            }
+
+            .growth-modes span {
+              overflow: hidden;
+              text-overflow: ellipsis;
+              white-space: nowrap;
+            }
+
+            .growth-readouts {
+              position: absolute;
+              z-index: 5;
+              left: var(--pad-x);
+              bottom: calc(86px + env(safe-area-inset-bottom, 0px));
+              display: grid;
+              grid-template-columns: repeat(5, minmax(72px, auto));
+              gap: 8px;
+              pointer-events: none;
+            }
+
+            .growth-readouts output {
+              display: grid;
+              gap: 3px;
+              min-width: 72px;
+              padding: 8px 9px 7px;
+              border: 1px solid rgba(232, 255, 204, 0.13);
+              border-radius: 7px;
+              background: rgba(4, 17, 12, 0.52);
+              backdrop-filter: blur(12px);
+              -webkit-backdrop-filter: blur(12px);
+            }
+
+            .growth-readouts span {
+              color: rgba(232, 255, 204, 0.46);
+              font-family: var(--font-mono, ui-monospace, monospace);
+              font-size: 9px;
+              letter-spacing: 0;
+              text-transform: lowercase;
+            }
+
+            .growth-readouts strong {
+              color: rgba(248, 255, 232, 0.96);
+              font-family: var(--font-fraunces, var(--font-serif, Georgia), serif);
+              font-size: 20px;
+              line-height: 1;
+              font-weight: 520;
+              font-variant-numeric: tabular-nums;
+              white-space: nowrap;
+            }
+
+            .growth-memory {
+              position: absolute;
+              z-index: 5;
+              right: calc(18px + env(safe-area-inset-right, 0px));
+              bottom: calc(88px + env(safe-area-inset-bottom, 0px));
+              display: flex;
+              align-items: center;
+              justify-content: flex-end;
+              gap: 8px;
+              max-width: min(520px, calc(100vw - 640px));
+              padding: 8px 10px;
+              border: 1px solid rgba(232, 255, 204, 0.13);
+              border-radius: 7px;
+              background: rgba(4, 17, 12, 0.46);
+              backdrop-filter: blur(12px);
+              -webkit-backdrop-filter: blur(12px);
+              color: rgba(238, 250, 218, 0.68);
+              font-family: var(--font-mono, ui-monospace, monospace);
+              font-size: 10px;
+              letter-spacing: 0;
+              text-transform: lowercase;
+              pointer-events: none;
+              overflow: hidden;
+            }
+
+            .growth-memory span {
+              display: inline-flex;
+              align-items: center;
+              min-width: 0;
+              gap: 6px;
+              white-space: nowrap;
+            }
+
+            .growth-memory i {
+              display: block;
+              flex: 0 0 auto;
+              width: 10px;
+              height: 2px;
+              background: var(--growth-mark-tone);
+              box-shadow: 0 0 14px var(--growth-mark-tone);
+            }
+
+            .growth-memory span:first-child i {
+              width: 28px;
+            }
+
+            .growth-memory b {
+              min-width: 0;
+              overflow: hidden;
+              text-overflow: ellipsis;
+              font-weight: 400;
+            }
+
+            body:has(.growth-instrument) header {
+              background: transparent !important;
+              border-bottom: 0 !important;
+              backdrop-filter: none !important;
+              -webkit-backdrop-filter: none !important;
+            }
+
+            body:has(.growth-instrument) .oda-field-watch,
+            body:has(.growth-instrument) .oda-candle-mark,
+            body:has(.growth-instrument) .oda-tape-shell,
+            body:has(.growth-instrument) .oda-sound-toggle {
+              display: none !important;
+            }
+
+            @media (max-width: 920px) {
+              .growth-title {
+                top: calc(70px + env(safe-area-inset-top, 0px));
+                left: 16px;
+                right: 16px;
+                width: auto;
+              }
+
+              .growth-title h1 {
+                font-size: clamp(44px, 16vw, 72px);
+              }
+
+              .growth-modes {
+                left: 12px;
+                right: 12px;
+                top: auto;
+                bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+                width: auto;
+                grid-template-columns: repeat(4, minmax(0, 1fr));
+                gap: 7px;
+              }
+
+              .growth-modes button {
+                grid-template-columns: 1fr;
+                justify-items: center;
+                min-height: 56px;
+                padding: 7px 5px;
+                text-align: center;
+              }
+
+              .growth-modes span {
+                font-size: 9px;
+                max-width: 100%;
+              }
+
+              .growth-readouts {
+                left: 12px;
+                right: 12px;
+                bottom: calc(86px + env(safe-area-inset-bottom, 0px));
+                grid-template-columns: repeat(5, minmax(0, 1fr));
+                gap: 6px;
+              }
+
+              .growth-readouts output {
+                min-width: 0;
+                padding: 7px 7px 6px;
+              }
+
+              .growth-readouts strong {
+                font-size: clamp(13px, 3.6vw, 18px);
+                overflow: hidden;
+                text-overflow: ellipsis;
+              }
+
+              .growth-memory {
+                left: 12px;
+                right: 12px;
+                bottom: calc(146px + env(safe-area-inset-bottom, 0px));
+                max-width: none;
+                justify-content: flex-start;
+              }
+
+              .growth-memory span:nth-child(n+5) {
+                display: none;
+              }
+            }
+
+            @media (max-width: 560px) {
+              .growth-title div {
+                font-size: 10px;
+              }
+
+              .growth-readouts {
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+              }
+
+              .growth-readouts output:nth-child(4),
+              .growth-readouts output:nth-child(5) {
+                display: none;
+              }
+
+              .growth-memory {
+                bottom: calc(154px + env(safe-area-inset-bottom, 0px));
+                font-size: 9px;
+              }
+
+              .growth-memory span:nth-child(n+4) {
+                display: none;
+              }
+            }
+
+            @media (prefers-reduced-motion: reduce) {
+              .growth-canvas {
+                cursor: default;
+              }
+
+              .growth-modes button {
+                transition: none;
+              }
+            }
+          `,
+        }}
+      />
+    </div>
   );
 }
