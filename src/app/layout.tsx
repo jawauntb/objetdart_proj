@@ -8,6 +8,8 @@ import FieldWatch from "@/components/FieldWatch";
 import ConcernTint from "@/components/ConcernTint";
 import GlobalPretextText from "@/components/GlobalPretextText";
 import GoogleAnalytics from "@/components/GoogleAnalytics";
+import { SITE_ORIGIN } from "@/lib/site-icon-config";
+import { siteMetadata } from "@/lib/site-metadata";
 
 const display = Cormorant_Garamond({
   subsets: ["latin"],
@@ -35,10 +37,9 @@ const fraunces = Fraunces({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://objetdart-production.up.railway.app"),
+  ...siteMetadata("home"),
+  metadataBase: new URL(SITE_ORIGIN),
   applicationName: "objet d'art",
-  title: "objet d'art",
-  description: "a gold medal you can hold",
   keywords: [
     "personal instrument",
     "art object",
@@ -46,39 +47,6 @@ export const metadata: Metadata = {
     "interactive poem",
     "objet d'art",
   ],
-  manifest: "/manifest.json",
-  icons: {
-    icon: "/icon.svg",
-    shortcut: "/icon.svg",
-    apple: "/apple-icon",
-  },
-  appleWebApp: {
-    capable: true,
-    title: "objet d'art",
-    statusBarStyle: "black-translucent",
-  },
-  openGraph: {
-    type: "website",
-    locale: "en_US",
-    url: "https://objetdart-production.up.railway.app",
-    title: "objet d'art",
-    description: "a gold medal you can hold",
-    siteName: "objet d'art",
-    images: [
-      {
-        url: "/opengraph-image",
-        width: 1200,
-        height: 630,
-        alt: "objet d'art — a gold medal you can hold.",
-      },
-    ],
-  },
-  twitter: {
-    card: "summary_large_image",
-    title: "objet d'art",
-    description: "a gold medal you can hold",
-    images: ["/opengraph-image"],
-  },
 };
 
 export const viewport: Viewport = {
