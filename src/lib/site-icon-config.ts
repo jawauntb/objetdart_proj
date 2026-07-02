@@ -502,7 +502,7 @@ export const SITE_ICON_VISUALS = {
 } as const satisfies Record<SiteIconKey, SiteIconVisual>;
 
 export function siteIconKey(value: string | undefined): SiteIconKey {
-  if (value && value in SITE_ICON_VISUALS) {
+  if (value && Object.prototype.hasOwnProperty.call(SITE_ICON_VISUALS, value)) {
     return value as SiteIconKey;
   }
   return "home";
@@ -514,4 +514,24 @@ export function siteIconPath(key: SiteIconKey, asset: "icon" | "apple" | "opengr
 
 export function siteAppIconPath(key: SiteIconKey, size: 192 | 512): string {
   return `/site-icons/${key}/app/${size}`;
+}
+
+export function siteIconManifest(key: SiteIconKey, startUrl: string = SITE_ICON_VISUALS[key].path) {
+  const visual = SITE_ICON_VISUALS[key];
+
+  return {
+    name: visual.title,
+    short_name: visual.shortName,
+    description: visual.description,
+    start_url: startUrl,
+    display: "standalone",
+    background_color: visual.bg,
+    theme_color: visual.bg,
+    icons: [
+      { src: siteIconPath(key, "icon"), sizes: "64x64", type: "image/png" },
+      { src: siteIconPath(key, "apple"), sizes: "180x180", type: "image/png" },
+      { src: siteAppIconPath(key, 192), sizes: "192x192", type: "image/png", purpose: "any maskable" },
+      { src: siteAppIconPath(key, 512), sizes: "512x512", type: "image/png", purpose: "any maskable" },
+    ],
+  };
 }

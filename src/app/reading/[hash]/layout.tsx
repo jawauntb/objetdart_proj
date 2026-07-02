@@ -6,6 +6,7 @@ export function generateMetadata({ params }: { params: { hash: string } }): Meta
   return siteMetadata("reading", {
     path: `/reading/${params.hash}`,
     openGraphImage: `/reading/${params.hash}/opengraph-image`,
+    manifest: `/reading/${params.hash}/manifest`,
   });
 }
 

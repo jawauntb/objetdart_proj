@@ -11,6 +11,7 @@ type SiteMetadataOptions = {
   title?: string;
   description?: string;
   openGraphImage?: string;
+  manifest?: string;
 };
 
 export function siteMetadata(key: SiteIconKey, options: SiteMetadataOptions = {}): Metadata {
@@ -23,7 +24,7 @@ export function siteMetadata(key: SiteIconKey, options: SiteMetadataOptions = {}
   return {
     title,
     description,
-    manifest: siteIconPath(key, "manifest"),
+    manifest: options.manifest ?? siteIconPath(key, "manifest"),
     icons: {
       icon: [
         { url: siteIconPath(key, "icon"), sizes: "64x64", type: "image/png" },
