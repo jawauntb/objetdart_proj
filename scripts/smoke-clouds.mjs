@@ -207,7 +207,8 @@ async function runCloudGestures(page, label) {
 async function assertPointerCancelDoesNotStorm(page) {
   await gotoRoute(page, "/clouds");
   await waitForCloudCanvases(page);
-  await page.waitForTimeout(700);
+  await page.waitForSelector(".cloud-weather-ribbon");
+  await page.waitForTimeout(1600);
   await dispatchPointer(page, ".clouds-root > canvas:nth-of-type(2)", "pointerdown", 31, 680, 360);
   await page.waitForTimeout(900);
   await dispatchPointer(page, "window", "pointercancel", 31, 680, 360);
@@ -220,7 +221,8 @@ async function assertPointerCancelDoesNotStorm(page) {
 async function assertPointerIdIsolation(page) {
   await gotoRoute(page, "/clouds");
   await waitForCloudCanvases(page);
-  await page.waitForTimeout(700);
+  await page.waitForSelector(".cloud-weather-ribbon");
+  await page.waitForTimeout(1600);
   await dispatchPointer(page, ".clouds-root > canvas:nth-of-type(2)", "pointerdown", 1, 620, 340);
   await dispatchPointer(page, ".clouds-root > canvas:nth-of-type(2)", "pointerdown", 2, 320, 440);
   await dispatchPointer(page, "window", "pointerup", 2, 320, 440);
@@ -237,7 +239,8 @@ async function runCloudViewport(browser, label, viewport, deviceScaleFactor, isM
   const messages = watchPage(page, label);
   await gotoRoute(page, "/clouds");
   await waitForCloudCanvases(page);
-  await page.waitForTimeout(900);
+  await page.waitForSelector(".cloud-weather-ribbon");
+  await page.waitForTimeout(1600);
   await assertGreekFrame(page, label);
   await assertCloudChromeHidden(page, label);
   await runCloudGestures(page, label);
