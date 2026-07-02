@@ -10,7 +10,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test": "npm run test:routes",
+    "test:routes": "node scripts/test-routes.mjs",
+    "smoke:home": "node scripts/smoke-home.mjs"
   },
   "dependencies": {
     "@chenglou/pretext": "^0.0.8",

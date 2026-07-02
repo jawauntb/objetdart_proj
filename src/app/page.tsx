@@ -5,7 +5,7 @@ import { useField } from "@/store/field";
 import { getFieldAudio } from "@/lib/audio";
 import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
-import Threshold from "@/components/Threshold";
+import HomeCabinet from "@/components/HomeCabinet";
 import ConcernField from "@/components/ConcernField";
 import Atlas from "@/components/Atlas";
 import Reading from "@/components/Reading";
@@ -24,7 +24,7 @@ export default function Page() {
     <>
       <SiteHeader />
       <main>
-        <Threshold />
+        <HomeCabinet />
         <div id="live-chart" style={{ scrollMarginTop: 72 }}>
           <SeaChart
             title="departure chart"
