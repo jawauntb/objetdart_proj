@@ -6,73 +6,113 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 import { getFieldAudio } from "@/lib/audio";
+import * as haptics from "@/lib/haptics";
 import { useField } from "@/store/field";
-import WaterText from "@/components/WaterText";
-import SeaChart, { type SeaChartCandle } from "@/components/SeaChart";
 
 /**
- * /pulse — hospital monitor for the body of the room.
+ * /pulse - embodied rhythm instrument.
  *
- * Four scrolling physiological channels (HR, BREATH, BP, BRAINWAVE) live in
- * the upper 60% of the viewport, each rendered into a ring-buffer trace on
- * a single 2D canvas. The lower 40% is a control rail: stress + rate
- * sliders, a defibrillate button, a pattern generator that produces a
- * fifth channel from procedural curves (tide / wave / seismic / breath /
- * storm), save+load to localStorage, and a SHARE button that base64-encodes
- * the pattern state into the URL hash.
- *
- * Audio is opt-in per channel — click a label to toggle a tick at each R
- * wave (HR) or other characteristic events. Defib plays a thud and a bell.
- *
- * The whole monitor is wired to the stress slider: stress raises HR,
- * widens HR variability, breaks breath into irregular bursts, and pushes
- * the brainwave into spikier territory.
- *
- * Single canvas, single RAF, no external libs.
+ * Four physiological oscillators feed a full-screen membrane: heart, breath,
+ * pressure, and mind. Touches add pressure blooms, the shock control briefly
+ * collapses every channel, and generated patterns orbit the body as a fifth
+ * rhythm that can be saved and shared through the URL hash.
  */
 
-// ── constants ────────────────────────────────────────────────────────────
-const BUFFER_LEN = 600;           // ~10s of samples at 60Hz, per channel
-const SAMPLE_HZ  = 60;            // we advance one sample per frame
-const PATTERN_LEN = 1800;         // 30s of pattern samples (60fps × 30s)
+const BUFFER_LEN = 720;
+const SAMPLE_HZ = 60;
+const PATTERN_LEN = 1800;
 const PATTERN_KEY = "objetdart:patterns:v1";
 
-type ChannelKey = "hr" | "breath" | "bp" | "brain";
-type PatternKind = "tide" | "wave" | "seismic" | "breath" | "storm";
+const CHANNEL_KEYS = ["hr", "breath", "bp", "brain"] as const;
+const PATTERN_KINDS = ["tide", "wave", "seismic", "breath", "storm"] as const;
+
+type ChannelKey = (typeof CHANNEL_KEYS)[number];
+type PatternKind = (typeof PATTERN_KINDS)[number];
 
 type Channel = {
   key: ChannelKey;
   label: string;
-  color: string;        // CSS hex for the trace
-  buffer: Float32Array; // ring buffer of normalised values (-1..1)
-  cursor: number;       // current write index
-  audio: boolean;       // tick audio enabled
-  readout: string;      // human readout (e.g. "72 BPM")
+  readoutLabel: string;
+  tone: string;
+  midi: number;
+  buffer: Float32Array;
+  cursor: number;
 };
 
 type SavedPattern = {
   name: string;
   kind: PatternKind;
-  // We persist the pattern parameters, not the samples themselves —
-  // generators are deterministic given a kind + seed, and storing 1800
-  // floats per saved pattern would balloon localStorage quickly.
   seed: number;
   createdAt: number;
 };
 
-// ── generators ───────────────────────────────────────────────────────────
-// Each returns a length-PATTERN_LEN Float32Array of normalised samples in
-// roughly [-1, 1]. Deterministic w.r.t. the supplied seed so the same name
-// can be reproduced on share.
+type PatternState = {
+  kind: PatternKind;
+  seed: number;
+  samples: Float32Array;
+};
+
+type TouchBloom = {
+  x: number;
+  y: number;
+  born: number;
+  life: number;
+  strength: number;
+  hue: string;
+};
+
+type MeterState = {
+  hr: number;
+  breath: number;
+  bp: string;
+  brain: string;
+  tension: number;
+};
+
+const CHANNEL_META: Record<ChannelKey, Omit<Channel, "buffer" | "cursor">> = {
+  hr: { key: "hr", label: "heart", readoutLabel: "heart", tone: "#ff5d73", midi: 48 },
+  breath: { key: "breath", label: "breath", readoutLabel: "breath", tone: "#58d9c8", midi: 57 },
+  bp: { key: "bp", label: "pressure", readoutLabel: "pressure", tone: "#f2bf62", midi: 43 },
+  brain: { key: "brain", label: "mind", readoutLabel: "mind", tone: "#b994ff", midi: 69 },
+};
+
+const PATTERN_COLORS: Record<PatternKind, string> = {
+  tide: "#64c7ff",
+  wave: "#64e0b7",
+  seismic: "#f89a58",
+  breath: "#d2b7ff",
+  storm: "#ff6c81",
+};
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function mix(a: number, b: number, t: number) {
+  return a + (b - a) * t;
+}
+
+function colorAlpha(hex: string, alpha: number) {
+  const clean = hex.replace("#", "");
+  const n = parseInt(clean.length === 3
+    ? clean.split("").map((ch) => ch + ch).join("")
+    : clean, 16);
+  const r = (n >> 16) & 255;
+  const g = (n >> 8) & 255;
+  const b = n & 255;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
 function rng(seed: number): () => number {
-  // xorshift32
   let s = seed >>> 0;
   return () => {
     s ^= s << 13; s >>>= 0;
     s ^= s >>> 17; s >>>= 0;
-    s ^= s << 5;  s >>>= 0;
+    s ^= s << 5; s >>>= 0;
     return (s >>> 0) / 0xffffffff;
   };
 }
@@ -82,7 +122,6 @@ function generatePattern(kind: PatternKind, seed: number): Float32Array {
   const r = rng(seed);
   switch (kind) {
     case "tide": {
-      // Two slow superposed sines — a 12s primary swell + 3.6s ripple.
       const phase = r() * Math.PI * 2;
       for (let i = 0; i < PATTERN_LEN; i++) {
         const t = i / SAMPLE_HZ;
@@ -94,22 +133,18 @@ function generatePattern(kind: PatternKind, seed: number): Float32Array {
       return out;
     }
     case "wave": {
-      // Faster surf — 2.4s sine modulated by a 7s envelope, with breakers.
       for (let i = 0; i < PATTERN_LEN; i++) {
         const t = i / SAMPLE_HZ;
         const env = 0.6 + 0.4 * Math.sin(t * (Math.PI * 2 / 7));
-        const breaker = Math.sin(t * (Math.PI * 2 / 2.4));
-        out[i] = breaker * env + (r() - 0.5) * 0.06;
+        out[i] = Math.sin(t * (Math.PI * 2 / 2.4)) * env + (r() - 0.5) * 0.06;
       }
       return out;
     }
     case "seismic": {
-      // Low rumble baseline with rare large spikes (P / S wave bursts).
       let val = 0;
       let nextQuake = 80 + Math.floor(r() * 200);
       let quakeI = 0;
       for (let i = 0; i < PATTERN_LEN; i++) {
-        // brownian drift toward 0
         val = val * 0.985 + (r() - 0.5) * 0.06;
         if (i === nextQuake) {
           quakeI = 30 + Math.floor(r() * 50);
@@ -120,29 +155,23 @@ function generatePattern(kind: PatternKind, seed: number): Float32Array {
           val += Math.sin(i * 0.9) * k * 0.55;
           quakeI--;
         }
-        out[i] = Math.max(-1, Math.min(1, val));
+        out[i] = clamp(val, -1, 1);
       }
       return out;
     }
     case "breath": {
-      // Slow paced 5-second inhale/exhale with a 3s hold near peak.
-      // Asymmetric — inhale faster than exhale.
-      const cycle = 8 * SAMPLE_HZ; // samples per breath
+      const cycle = 8 * SAMPLE_HZ;
       for (let i = 0; i < PATTERN_LEN; i++) {
-        const u = (i % cycle) / cycle; // 0..1
-        // piecewise: 0..0.3 inhale (sin from -1 → 1), 0.3..0.5 hold,
-        // 0.5..1 exhale (cos from 1 → -1).
+        const u = (i % cycle) / cycle;
         let v: number;
-        if (u < 0.3)      v = -Math.cos((u / 0.3) * Math.PI);
+        if (u < 0.3) v = -Math.cos((u / 0.3) * Math.PI);
         else if (u < 0.5) v = 1;
-        else              v = Math.cos(((u - 0.5) / 0.5) * Math.PI);
+        else v = Math.cos(((u - 0.5) / 0.5) * Math.PI);
         out[i] = v * 0.85 + (r() - 0.5) * 0.03;
       }
       return out;
     }
     case "storm": {
-      // Chaotic mixture — sum of detuned sines + bursts of noise +
-      // crack-like impulses.
       let energy = 0;
       for (let i = 0; i < PATTERN_LEN; i++) {
         const t = i / SAMPLE_HZ;
@@ -153,1234 +182,1524 @@ function generatePattern(kind: PatternKind, seed: number): Float32Array {
         energy = Math.max(0, energy * 0.92 + (r() < 0.018 ? r() * 1.5 : 0));
         v += energy * (r() - 0.5);
         v += (r() - 0.5) * 0.18;
-        out[i] = Math.max(-1, Math.min(1, v));
+        out[i] = clamp(v, -1, 1);
       }
       return out;
     }
   }
 }
 
-// ── component ────────────────────────────────────────────────────────────
+function makePattern(kind: PatternKind, seed = Math.floor(Math.random() * 0xffffffff)): PatternState {
+  return { kind, seed, samples: generatePattern(kind, seed) };
+}
+
+function isPatternKind(value: string): value is PatternKind {
+  return (PATTERN_KINDS as readonly string[]).includes(value);
+}
+
+function isSavedPattern(value: unknown): value is SavedPattern {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<SavedPattern>;
+  return (
+    typeof candidate.name === "string" &&
+    candidate.name.trim().length > 0 &&
+    typeof candidate.kind === "string" &&
+    isPatternKind(candidate.kind) &&
+    typeof candidate.seed === "number" &&
+    Number.isFinite(candidate.seed) &&
+    typeof candidate.createdAt === "number" &&
+    Number.isFinite(candidate.createdAt)
+  );
+}
+
+function makeChannels(): Record<ChannelKey, Channel> {
+  return {
+    hr: { ...CHANNEL_META.hr, buffer: new Float32Array(BUFFER_LEN), cursor: 0 },
+    breath: { ...CHANNEL_META.breath, buffer: new Float32Array(BUFFER_LEN), cursor: 0 },
+    bp: { ...CHANNEL_META.bp, buffer: new Float32Array(BUFFER_LEN), cursor: 0 },
+    brain: { ...CHANNEL_META.brain, buffer: new Float32Array(BUFFER_LEN), cursor: 0 },
+  };
+}
+
 export default function Pulse() {
-  // page-specific ambient bed: hospital monitor beep
-  useEffect(() => { getFieldAudio().setAmbientProfile("monitor"); }, []);
+  useEffect(() => { getFieldAudio().setAmbientProfile("monitor", { fadeSec: 0.8 }); }, []);
 
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const bloomsRef = useRef<TouchBloom[]>([]);
+  const touchImpulseRef = useRef(0);
+  const pointerRef = useRef({ active: false, id: -1, x: 0, y: 0, startX: 0, startY: 0, lastNote: 0 });
+  const reduceMotionRef = useRef(false);
+  const shockRef = useRef({ until: 0, armedBell: false, energy: 0 });
+  const timersRef = useRef<number[]>([]);
 
-  // controls (rendered state — read by RAF loop via refs to avoid re-binds)
   const [hr, setHr] = useState(72);
   const [breathRate, setBreathRate] = useState(13);
-  const [stress, setStress] = useState(0.2);
+  const [stress, setStress] = useState(0.24);
   const [defibActive, setDefibActive] = useState(false);
-
-  const hrRef = useRef(hr);
-  const brRef = useRef(breathRate);
-  const stressRef = useRef(stress);
-  const defibRef = useRef(false);
-  useEffect(() => { hrRef.current = hr; }, [hr]);
-  useEffect(() => { brRef.current = breathRate; }, [breathRate]);
-  useEffect(() => { stressRef.current = stress; }, [stress]);
-
-  // audio toggles per channel
-  const [audioHR, setAudioHR] = useState(false);
-  const [audioBreath, setAudioBreath] = useState(false);
-  const [audioBP, setAudioBP] = useState(false);
-  const [audioBrain, setAudioBrain] = useState(false);
-  const audioHRRef = useRef(audioHR);
-  const audioBreathRef = useRef(audioBreath);
-  const audioBPRef = useRef(audioBP);
-  const audioBrainRef = useRef(audioBrain);
-  useEffect(() => { audioHRRef.current = audioHR; }, [audioHR]);
-  useEffect(() => { audioBreathRef.current = audioBreath; }, [audioBreath]);
-  useEffect(() => { audioBPRef.current = audioBP; }, [audioBP]);
-  useEffect(() => { audioBrainRef.current = audioBrain; }, [audioBrain]);
-
-  // pattern state
-  const [patternKind, setPatternKind] = useState<PatternKind>("tide");
-  const [patternSeed, setPatternSeed] = useState<number>(() => Math.floor(Math.random() * 0xffffffff));
-  const [patternSamples, setPatternSamples] = useState<Float32Array | null>(null);
+  const [audioEnabled, setAudioEnabled] = useState<Record<ChannelKey, boolean>>({
+    hr: false,
+    breath: false,
+    bp: false,
+    brain: false,
+  });
+  const [pattern, setPattern] = useState<PatternState>(() => makePattern("tide"));
   const [patternName, setPatternName] = useState("");
   const [saved, setSaved] = useState<SavedPattern[]>([]);
   const [shareMsg, setShareMsg] = useState<string | null>(null);
-  // pattern-channel render mode: "line" (existing canvas trace) or
-  // "candles" (SeaChart overlay populated from the pattern buffer).
-  const [patternView, setPatternView] = useState<"line" | "candles">("line");
-  // pullKey bumps when the pattern samples or cursor advances so the
-  // embedded SeaChart re-pulls its candles.
-  const [patternPullKey, setPatternPullKey] = useState(0);
-  useEffect(() => {
-    if (patternView !== "candles") return;
-    const id = window.setInterval(() => setPatternPullKey((k) => k + 1), 500);
-    return () => window.clearInterval(id);
-  }, [patternView]);
-
-  const patternRef = useRef<Float32Array | null>(null);
-  useEffect(() => { patternRef.current = patternSamples; }, [patternSamples]);
-
-  // store hook — used for the defib tape event
-  const recordTape = useField((s) => s.recordTape);
-
-  // readouts (rendered as React text, updated periodically from RAF)
-  const [hrShown, setHrShown] = useState(72);
-  const [bpShown, setBpShown] = useState({ sys: 118, dia: 76 });
-  const [brShown, setBrShown] = useState(13);
-
-  // ── channel definitions (stable refs, mutable buffers) ────────────────
-  const channelsRef = useRef<Record<ChannelKey, Channel>>({
-    hr:     { key: "hr",     label: "HR",     color: "#4af07a", buffer: new Float32Array(BUFFER_LEN), cursor: 0, audio: false, readout: "72 BPM" },
-    breath: { key: "breath", label: "BREATH", color: "#4ad4f0", buffer: new Float32Array(BUFFER_LEN), cursor: 0, audio: false, readout: "13 BR"  },
-    bp:     { key: "bp",     label: "BP",     color: "#f0c04a", buffer: new Float32Array(BUFFER_LEN), cursor: 0, audio: false, readout: "118/76" },
-    brain:  { key: "brain",  label: "BRAIN",  color: "#b04af0", buffer: new Float32Array(BUFFER_LEN), cursor: 0, audio: false, readout: "α-β"    },
+  const [meter, setMeter] = useState<MeterState>({
+    hr: 72,
+    breath: 13,
+    bp: "118/76",
+    brain: "alpha",
+    tension: 24,
   });
 
-  // ── on mount: load saved patterns + parse hash for shared pattern ──
+  const hrRef = useRef(hr);
+  const breathRef = useRef(breathRate);
+  const stressRef = useRef(stress);
+  const audioRef = useRef(audioEnabled);
+  const patternRef = useRef(pattern);
+  const channelsRef = useRef<Record<ChannelKey, Channel>>(makeChannels());
+  const recordTape = useField((s) => s.recordTape);
+
+  useEffect(() => { hrRef.current = hr; }, [hr]);
+  useEffect(() => { breathRef.current = breathRate; }, [breathRate]);
+  useEffect(() => { stressRef.current = stress; }, [stress]);
+  useEffect(() => { audioRef.current = audioEnabled; }, [audioEnabled]);
+  useEffect(() => { patternRef.current = pattern; }, [pattern]);
+  useEffect(() => () => {
+    timersRef.current.forEach((id) => window.clearTimeout(id));
+    timersRef.current = [];
+  }, []);
+
+  const schedule = useCallback((fn: () => void, delay: number) => {
+    const id = window.setTimeout(() => {
+      timersRef.current = timersRef.current.filter((timerId) => timerId !== id);
+      fn();
+    }, delay);
+    timersRef.current.push(id);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    reduceMotionRef.current = mq.matches;
+    const update = () => {
+      reduceMotionRef.current = mq.matches;
+    };
+    mq.addEventListener?.("change", update);
+    return () => mq.removeEventListener?.("change", update);
+  }, []);
+
   useEffect(() => {
     try {
       const raw = localStorage.getItem(PATTERN_KEY);
       if (raw) {
-        const parsed = JSON.parse(raw) as SavedPattern[];
-        if (Array.isArray(parsed)) setSaved(parsed);
+        const parsed = JSON.parse(raw) as unknown;
+        if (Array.isArray(parsed)) setSaved(parsed.filter(isSavedPattern).slice(0, 30));
       }
-    } catch { /* noop */ }
+    } catch { /* localStorage may be unavailable */ }
 
-    // Parse shared pattern out of the location hash, if any.
-    // Format: #p=<base64-encoded-json>
-    if (typeof window !== "undefined" && window.location.hash.startsWith("#p=")) {
-      try {
-        const b64 = window.location.hash.slice(3);
-        const json = atob(b64);
-        const payload = JSON.parse(json) as { kind: PatternKind; seed: number; hr?: number; br?: number; stress?: number };
-        if (payload.kind && typeof payload.seed === "number") {
-          setPatternKind(payload.kind);
-          setPatternSeed(payload.seed);
-          setPatternSamples(generatePattern(payload.kind, payload.seed));
-        }
-        if (typeof payload.hr === "number")     setHr(Math.max(40, Math.min(180, payload.hr)));
-        if (typeof payload.br === "number")     setBreathRate(Math.max(6, Math.min(30, payload.br)));
-        if (typeof payload.stress === "number") setStress(Math.max(0, Math.min(1, payload.stress)));
-      } catch { /* noop */ }
-    }
+    if (!window.location.hash.startsWith("#p=")) return;
+    try {
+      const payload = JSON.parse(atob(window.location.hash.slice(3))) as {
+        kind?: string;
+        seed?: number;
+        hr?: number;
+        br?: number;
+        stress?: number;
+      };
+      if (payload.kind && isPatternKind(payload.kind) && typeof payload.seed === "number") {
+        setPattern(makePattern(payload.kind, payload.seed));
+      }
+      if (typeof payload.hr === "number") setHr(clamp(Math.round(payload.hr), 40, 180));
+      if (typeof payload.br === "number") setBreathRate(clamp(Math.round(payload.br), 6, 30));
+      if (typeof payload.stress === "number") setStress(clamp(payload.stress, 0, 1));
+    } catch { /* malformed shares are ignored */ }
   }, []);
 
-  // ── RAF loop ──────────────────────────────────────────────────────────
   useEffect(() => {
-    const cv = canvasRef.current;
-    if (!cv) return;
-    const ctx = cv.getContext("2d");
+    const canvas = canvasRef.current;
+    const root = rootRef.current;
+    if (!canvas || !root) return;
+    const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    let raf = 0;
-
-    // per-channel internal state for waveform generation
-    const state = {
-      // HR
-      lastBeatT: 0,           // last time we kicked off a QRS
-      qrsProgress: 0,         // 0..1, advances through the PQRST waveform
-      qrsDur: 0.45,           // seconds to draw the full PQRST shape
-      lastBpm: 72,            // last bpm used for the in-progress beat
-      // BREATH
-      breathPhase: 0,         // 0..2π
-      // BP
-      bpFastPhase: 0,         // fast pulse oscillator
-      bpDriftPhase: 0,        // slow drift oscillator
-      // BRAIN
-      brainState: 0,          // smoothed value
-      brainBurstUntil: 0,     // ms timestamp — bursts of larger amplitude
-      // PATTERN
+    const channels = channelsRef.current;
+    const render = {
+      lastT: performance.now(),
+      time: 0,
+      beatAt: 0,
+      qrs: 1,
+      beatGlow: 0,
+      breathPhase: 0,
+      bpFast: 0,
+      bpDrift: 0,
+      brain: 0,
+      brainBurstUntil: 0,
       patternCursor: 0,
-      // DEFIB
-      defibUntil: 0,          // ms timestamp until which all channels are flat
-      defibKickedAt: 0,
-      // readout throttle
-      lastReadoutAt: 0,
+      touchEnergy: 0,
+      lastReadout: 0,
     };
 
     const resize = () => {
+      const rect = root.getBoundingClientRect();
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const w = cv.clientWidth || window.innerWidth;
-      const h = cv.clientHeight || window.innerHeight;
-      cv.width = Math.max(1, Math.floor(w * dpr));
-      cv.height = Math.max(1, Math.floor(h * dpr));
+      const w = Math.max(1, Math.floor(rect.width));
+      const h = Math.max(1, Math.floor(rect.height));
+      canvas.width = Math.floor(w * dpr);
+      canvas.height = Math.floor(h * dpr);
+      canvas.style.width = `${w}px`;
+      canvas.style.height = `${h}px`;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     };
+
     resize();
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(resize) : null;
+    ro?.observe(root);
     window.addEventListener("resize", resize);
 
-    let lastT = performance.now();
-
+    let raf = 0;
     const draw = (now: number) => {
-      const dt = Math.min(0.1, (now - lastT) / 1000); // seconds
-      lastT = now;
+      const rawDt = Math.min(0.08, (now - render.lastT) / 1000);
+      render.lastT = now;
+      const reduce = reduceMotionRef.current;
+      const dt = reduce ? rawDt * 0.18 : rawDt;
+      render.time += dt;
 
-      const w = cv.clientWidth || window.innerWidth;
-      const h = cv.clientHeight || window.innerHeight;
+      const rect = root.getBoundingClientRect();
+      const w = Math.max(1, rect.width);
+      const h = Math.max(1, rect.height);
       const mobile = w < 720;
-
-      // background
-      ctx.fillStyle = "#040810";
-      ctx.fillRect(0, 0, w, h);
-
-      // ── layout ────────────────────────────────────────────────────
-      const mobileControlH = Math.min(390, h * 0.46);
-      const mobileControlTop = h - 44 - mobileControlH;
-      const mobileTraceTop = Math.max(132, Math.min(154, h * 0.18));
-      const mobilePatternVisible = Boolean(patternRef.current);
-      const mobileChannelCount = mobilePatternVisible ? 5 : 4;
-      const upperH = Math.round(h * (mobile ? 0.54 : 0.6));
-      const chGap = mobile ? 6 : 14;
-      const pad = mobile ? 10 : 24;
-      const drawableH = mobile
-        ? Math.max(168, mobileControlTop - mobileTraceTop - 18)
-        : upperH - pad * 2;
-      const chH = mobile
-        ? Math.max(32, Math.min(48, Math.floor((drawableH - chGap * (mobileChannelCount - 1)) / mobileChannelCount)))
-        : 70;
-      const labelW = mobile ? 58 : 88;
-      const channelW = w - labelW - pad * 2;
-
-      // pattern channel is rendered just below the main four (still
-      // within the upper region if possible — otherwise overflows into
-      // a thin band above the control region).
-      const fourH = chH * 4 + chGap * 3;
-      const startY = mobile
-        ? mobileTraceTop
-        : pad + Math.max(0, Math.min(20, upperH - fourH - 80) * 0.5);
-      const channels = channelsRef.current;
-
       const stressV = stressRef.current;
-      const inDefib = now < state.defibUntil;
-      defibRef.current = inDefib;
+      const shock = shockRef.current;
+      const inShock = now < shock.until;
 
-      // ── advance synthesizers ──────────────────────────────────────
-      // HR: time-to-next-beat with stress-modulated variability.
-      {
-        const baseHr = hrRef.current * (1 + stressV * 0.18);
-        // smoothly approach the new bpm; lastBpm carries the actual beat-to-beat
-        const period = 60 / baseHr;
-        const sinceBeat = (now - state.lastBeatT) / 1000;
-        // jitter the beat interval — wider with stress
-        const variance = 0.04 + stressV * 0.12;
-        const effectivePeriod = period * (1 + (Math.sin(now * 0.0023) * 0.5 + Math.sin(now * 0.0017) * 0.5) * variance);
-        if (!inDefib && sinceBeat >= effectivePeriod) {
-          state.lastBeatT = now;
-          state.qrsProgress = 0;
-          state.lastBpm = baseHr;
-          // tick audio
-          if (audioHRRef.current) {
-            try { getFieldAudio().spark(); } catch { /* noop */ }
-          }
-        }
-        if (state.qrsProgress < 1) state.qrsProgress = Math.min(1, state.qrsProgress + dt / state.qrsDur);
+      if (touchImpulseRef.current > 0) {
+        render.touchEnergy = clamp(render.touchEnergy + touchImpulseRef.current, 0, 2.2);
+        touchImpulseRef.current = 0;
       }
-      // BREATH: sinusoidal at breathRate, stress adds irregularity
-      {
-        const baseBr = brRef.current * (1 + stressV * 0.3);
-        const breathHz = baseBr / 60;
-        // stress modulates phase irregularly
-        const wobble = Math.sin(now * 0.0011) * stressV * 0.6;
-        state.breathPhase += dt * Math.PI * 2 * (breathHz + wobble * 0.1);
-        // breath audio tick on inhale apex
-        if (audioBreathRef.current && Math.sin(state.breathPhase) > 0.98 && Math.sin(state.breathPhase - dt * Math.PI * 2 * breathHz) <= 0.98) {
-          try { getFieldAudio().chime(); } catch { /* noop */ }
+      render.touchEnergy *= Math.pow(0.012, rawDt / 2.4);
+      shock.energy = Math.max(inShock ? 1 : 0, shock.energy * Math.pow(0.02, rawDt / 1.45));
+
+      const effectiveHr = clamp(hrRef.current * (1 + stressV * 0.16) + render.touchEnergy * 9, 38, 220);
+      const period = 60 / effectiveHr;
+      const sinceBeat = (now - render.beatAt) / 1000;
+      const variance = 0.028 + stressV * 0.11 + render.touchEnergy * 0.012;
+      const wobble = (Math.sin(now * 0.0021) * 0.55 + Math.sin(now * 0.0013) * 0.45) * variance;
+
+      if (!inShock && sinceBeat >= period * (1 + wobble)) {
+        render.beatAt = now;
+        render.qrs = 0;
+        render.beatGlow = 1;
+        if (audioRef.current.hr) {
+          try { getFieldAudio().playNote(48 + Math.round(stressV * 12), 42); } catch { /* noop */ }
         }
       }
-      // BP: fast pulse on slow drift
-      {
-        const baseHr = hrRef.current * (1 + stressV * 0.18);
-        state.bpFastPhase += dt * Math.PI * 2 * (baseHr / 60);
-        state.bpDriftPhase += dt * Math.PI * 2 * 0.07;
+      if (render.qrs < 1) render.qrs = Math.min(1, render.qrs + dt / 0.45);
+      render.beatGlow *= Math.pow(0.03, rawDt / 0.9);
+
+      const breathHz = clamp((breathRef.current * (1 + stressV * 0.22) + render.touchEnergy * 1.2) / 60, 0.05, 0.9);
+      const previousBreath = Math.sin(render.breathPhase);
+      render.breathPhase += dt * Math.PI * 2 * (breathHz + Math.sin(now * 0.0011) * stressV * 0.025);
+      const breathNow = Math.sin(render.breathPhase);
+      if (!inShock && audioRef.current.breath && breathNow > 0.985 && previousBreath <= 0.985) {
+        try { getFieldAudio().chime(); } catch { /* noop */ }
       }
-      // BRAIN: chaotic alpha with bursts (8-13Hz, with intermittent spikes)
-      {
-        if (now > state.brainBurstUntil && Math.random() < 0.012 + stressV * 0.02) {
-          state.brainBurstUntil = now + 300 + Math.random() * 400;
+
+      render.bpFast += dt * Math.PI * 2 * (effectiveHr / 60);
+      render.bpDrift += dt * Math.PI * 2 * 0.072;
+      if (!inShock && audioRef.current.bp && Math.sin(render.bpFast) > 0.994 && Math.sin(render.bpFast - dt * Math.PI * 2 * (effectiveHr / 60)) <= 0.994) {
+        try { getFieldAudio().playNote(42, 36); } catch { /* noop */ }
+      }
+
+      if (!inShock && now > render.brainBurstUntil && Math.random() < 0.008 + stressV * 0.017 + render.touchEnergy * 0.002) {
+        render.brainBurstUntil = now + 260 + Math.random() * 520;
+        if (audioRef.current.brain) {
+          try { getFieldAudio().spark(); } catch { /* noop */ }
         }
-        const inBurst = now < state.brainBurstUntil;
-        const amp = (0.4 + stressV * 0.6) * (inBurst ? 1.6 : 1.0);
-        const alpha = Math.sin(now * 0.062) * Math.sin(now * 0.083) * 0.6;
-        const beta  = Math.sin(now * 0.18) * 0.25;
-        const noise = (Math.random() - 0.5) * 0.7;
-        const target = (alpha + beta + noise) * amp;
-        state.brainState = state.brainState * 0.55 + target * 0.45;
       }
-      // PATTERN: advance cursor
-      if (patternRef.current) {
-        state.patternCursor = (state.patternCursor + 1) % patternRef.current.length;
-      }
+      const burst = now < render.brainBurstUntil ? 1 : 0;
+      const alpha = Math.sin(now * 0.061) * Math.sin(now * 0.079) * 0.55;
+      const beta = Math.sin(now * 0.18 + render.touchEnergy) * 0.28;
+      const noise = (Math.random() - 0.5) * (0.42 + stressV * 0.52);
+      const brainTarget = (alpha + beta + noise) * (0.56 + stressV * 0.54 + burst * 0.38);
+      render.brain = render.brain * 0.58 + brainTarget * 0.42;
 
-      // ── push samples into ring buffers ───────────────────────────
-      // HR sample is the PQRST waveform at qrsProgress, anchored to lastBpm scale.
-      const hrSample = inDefib ? 0 : qrstSample(state.qrsProgress);
-      pushSample(channels.hr, hrSample);
+      const patternNow = patternRef.current;
+      render.patternCursor = (render.patternCursor + (reduce ? 1 : 2)) % patternNow.samples.length;
+      const patternSample = patternNow.samples[render.patternCursor] ?? 0;
 
-      const breathSample = inDefib ? 0 : Math.sin(state.breathPhase) * 0.85;
-      pushSample(channels.breath, breathSample);
+      pushSample(channels.hr, inShock ? 0 : qrstSample(render.qrs) + render.touchEnergy * 0.035);
+      pushSample(channels.breath, inShock ? 0 : breathNow * (0.74 + render.touchEnergy * 0.08));
+      const bpPulse = Math.max(0, Math.sin(render.bpFast)) ** 1.7;
+      const bpDrift = Math.sin(render.bpDrift) * 0.24;
+      pushSample(channels.bp, inShock ? 0 : bpPulse * 0.78 + bpDrift - 0.34 + render.touchEnergy * 0.025);
+      pushSample(channels.brain, inShock ? 0 : clamp(render.brain + patternSample * 0.06, -1, 1));
 
-      // BP: pulse + drift, kept positive-leaning (we render it as a bowed line above the centerline)
-      const bpFast = Math.max(0, Math.sin(state.bpFastPhase)) ** 1.6;
-      const bpDrift = Math.sin(state.bpDriftPhase) * 0.25;
-      const bpSample = inDefib ? 0 : (bpFast * 0.7 + bpDrift) - 0.35;
-      pushSample(channels.bp, bpSample);
+      drawBackground(ctx, w, h, render.time, stressV, render.touchEnergy, shock.energy, reduce);
+      const center = {
+        x: w * (mobile ? 0.5 : 0.51),
+        y: h * (mobile ? 0.43 : 0.49),
+      };
+      const baseR = Math.min(w, h) * (mobile ? 0.255 : 0.30);
+      drawMembrane(ctx, center.x, center.y, baseR, render.time, render.beatGlow, stressV, render.touchEnergy, shock.energy, reduce);
+      drawPatternOrbit(ctx, patternNow.samples, render.patternCursor, patternNow.kind, center.x, center.y, baseR * 1.38, render.time, reduce);
 
-      const brainSample = inDefib ? 0 : state.brainState;
-      pushSample(channels.brain, brainSample);
+      const rings = [
+        { key: "hr" as const, radius: baseR * 0.58, amp: baseR * 0.22, squash: 0.72, start: -0.90, span: 1.78 },
+        { key: "breath" as const, radius: baseR * 0.83, amp: baseR * 0.16, squash: 0.69, start: -0.78, span: 1.55 },
+        { key: "bp" as const, radius: baseR * 1.06, amp: baseR * 0.13, squash: 0.66, start: -0.84, span: 1.68 },
+        { key: "brain" as const, radius: baseR * 1.24, amp: baseR * 0.12, squash: 0.63, start: -0.86, span: 1.74 },
+      ];
 
-      // ── readouts (throttle to ~3Hz) ──────────────────────────────
-      if (now - state.lastReadoutAt > 333) {
-        state.lastReadoutAt = now;
-        const baseHr = hrRef.current * (1 + stressV * 0.18);
-        setHrShown(Math.round(baseHr));
-        const sysBase = 100 + stressV * 50;
-        const sys = Math.round(sysBase + bpFast * 18 + bpDrift * 5);
-        const dia = Math.round(sysBase * 0.65 + bpDrift * 4);
-        setBpShown({ sys, dia });
-        setBrShown(Math.round(brRef.current));
-      }
-
-      // ── draw channels ─────────────────────────────────────────────
-      const order: ChannelKey[] = ["hr", "breath", "bp", "brain"];
-      order.forEach((k, i) => {
-        const y = startY + i * (chH + chGap);
-        drawChannel(ctx, channels[k], pad, y, channelW + labelW, chH, labelW, reduce, inDefib);
-      });
-
-      // pattern channel — beneath the four main channels if the pattern is loaded.
-      // Skipped on canvas when the user has switched the channel to candle view —
-      // the inline SeaChart overlay paints those instead.
-      if (patternRef.current && patternViewRef.current === "line") {
-        const py = startY + 4 * (chH + chGap);
-        drawPatternChannel(ctx, patternRef.current, state.patternCursor, pad, py, channelW + labelW, chH, labelW, reduce, patternKindRef.current);
+      for (const ring of rings) {
+        drawOrbitTrace(
+          ctx,
+          channels[ring.key],
+          center.x,
+          center.y,
+          ring.radius,
+          ring.amp,
+          ring.squash,
+          ring.start * Math.PI,
+          ring.span * Math.PI,
+          render.time,
+          audioRef.current[ring.key],
+          inShock,
+          reduce,
+        );
       }
 
-      // flat-line audio bell on restart from defib
-      if (state.defibKickedAt && !inDefib && now - state.defibKickedAt > 1800 && now - state.defibKickedAt < 2200) {
-        // single bell fire — protect by zeroing the marker
+      drawTouchBlooms(ctx, bloomsRef.current, now, reduce);
+      drawNeedle(ctx, center.x, center.y, baseR, render.time, patternSample, render.beatGlow, shock.energy);
+
+      if (shock.armedBell && now > shock.until + 120) {
+        shock.armedBell = false;
         try { getFieldAudio().bell(); } catch { /* noop */ }
-        state.defibKickedAt = 0;
+      }
+
+      if (now - render.lastReadout > 220) {
+        render.lastReadout = now;
+        const sysBase = 104 + stressV * 45 + render.touchEnergy * 4;
+        const sys = Math.round(sysBase + bpPulse * 20 + bpDrift * 8);
+        const dia = Math.round(sysBase * 0.64 + bpDrift * 6);
+        setMeter({
+          hr: Math.round(effectiveHr),
+          breath: Math.round(breathRef.current * (1 + stressV * 0.14)),
+          bp: `${sys}/${dia}`,
+          brain: inShock ? "flat" : burst ? "gamma" : stressV > 0.66 ? "beta" : "alpha",
+          tension: Math.round(stressV * 100),
+        });
       }
 
       raf = requestAnimationFrame(draw);
     };
 
-    // public hook for the defib button — set the timer via a window event
-    const onDefib = () => {
-      state.defibUntil = performance.now() + 2000;
-      state.defibKickedAt = performance.now();
-      try { getFieldAudio().thud(); } catch { /* noop */ }
-    };
-    window.addEventListener("oda:pulse:defib", onDefib);
-
     raf = requestAnimationFrame(draw);
     return () => {
       cancelAnimationFrame(raf);
+      ro?.disconnect();
       window.removeEventListener("resize", resize);
-      window.removeEventListener("oda:pulse:defib", onDefib);
     };
   }, []);
 
-  // keep a ref so the RAF loop sees current pattern kind for color
-  const patternKindRef = useRef<PatternKind>(patternKind);
-  useEffect(() => { patternKindRef.current = patternKind; }, [patternKind]);
-  const patternViewRef = useRef<"line" | "candles">(patternView);
-  useEffect(() => { patternViewRef.current = patternView; }, [patternView]);
+  const addBloom = useCallback((clientX: number, clientY: number, strength = 1, meta = "touch") => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = clamp(clientX - rect.left, 0, rect.width);
+    const y = clamp(clientY - rect.top, 0, rect.height);
+    const xPct = rect.width > 0 ? x / rect.width : 0.5;
+    const yPct = rect.height > 0 ? y / rect.height : 0.5;
+    const kind = patternRef.current.kind;
+    const hue = PATTERN_COLORS[kind];
+    const now = performance.now();
 
-  // Build candles directly from the pattern buffer. Each candle covers a
-  // chunk of CHUNK samples (= ~1s @60Hz, scaled to give 30 candles across
-  // the buffer regardless of length). open = first sample, close = last,
-  // high/low = extremes, volume = max abs delta.
-  const patternSource = (i: number): SeaChartCandle => {
-    const samples = patternSamples;
-    if (!samples || samples.length === 0) {
-      return { open: 0, close: 0, high: 0.1, low: -0.1, volume: 0.05 };
+    bloomsRef.current.push({
+      x,
+      y,
+      born: now,
+      life: 1500 + strength * 1100,
+      strength,
+      hue,
+    });
+    if (bloomsRef.current.length > 34) {
+      bloomsRef.current.splice(0, bloomsRef.current.length - 34);
     }
-    const COUNT = 30;
-    const chunk = Math.max(1, Math.floor(samples.length / COUNT));
-    const off = (i % COUNT) * chunk;
-    const open = samples[off];
-    const close = samples[Math.min(samples.length - 1, off + chunk - 1)];
-    let high = open;
-    let low = open;
-    let maxD = 0;
-    for (let k = 0; k < chunk; k++) {
-      const v = samples[off + k];
-      if (v == null) break;
-      if (v > high) high = v;
-      if (v < low) low = v;
-      if (k > 0) {
-        const d = Math.abs(v - samples[off + k - 1]);
-        if (d > maxD) maxD = d;
-      }
-    }
-    return { open, close, high, low, volume: maxD + 0.04 };
-  };
+    touchImpulseRef.current = clamp(touchImpulseRef.current + 0.18 + strength * 0.42, 0, 1.8);
 
-  // ── handlers ──────────────────────────────────────────────────────────
+    if (now - pointerRef.current.lastNote > 86) {
+      pointerRef.current.lastNote = now;
+      try {
+        const note = 42 + Math.round((1 - yPct) * 25) + Math.round(xPct * 7);
+        getFieldAudio().playNote(note, 76 + Math.round(strength * 70));
+      } catch { /* noop */ }
+      try { haptics.ripple(0.28 + strength * 0.34); } catch { /* noop */ }
+      recordTape("ripple", clamp(0.28 + strength * 0.48, 0, 1), `pulse/${meta}`);
+    }
+  }, [recordTape]);
+
+  const onCanvasPointerDown = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
+    try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* noop */ }
+    void getFieldAudio().start();
+    const rect = event.currentTarget.getBoundingClientRect();
+    pointerRef.current.active = true;
+    pointerRef.current.id = event.pointerId;
+    pointerRef.current.x = event.clientX;
+    pointerRef.current.y = event.clientY;
+    pointerRef.current.startX = event.clientX - rect.left;
+    pointerRef.current.startY = event.clientY - rect.top;
+    addBloom(event.clientX, event.clientY, 1.05, "press");
+  }, [addBloom]);
+
+  const onCanvasPointerMove = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
+    const pointer = pointerRef.current;
+    if (!pointer.active || pointer.id !== event.pointerId) return;
+    const dx = event.clientX - pointer.x;
+    const dy = event.clientY - pointer.y;
+    const distance = Math.hypot(dx, dy);
+    pointer.x = event.clientX;
+    pointer.y = event.clientY;
+    if (distance < 9) return;
+    addBloom(event.clientX, event.clientY, clamp(distance / 54, 0.28, 1.18), "shear");
+  }, [addBloom]);
+
+  const clearPointer = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
+    const pointer = pointerRef.current;
+    if (pointer.id === event.pointerId) {
+      pointer.active = false;
+      pointer.id = -1;
+    }
+    try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* noop */ }
+  }, []);
+
+  const toggleAudio = useCallback((key: ChannelKey) => {
+    void getFieldAudio().start();
+    setAudioEnabled((prev) => {
+      const next = { ...prev, [key]: !prev[key] };
+      try {
+        if (next[key]) getFieldAudio().playNote(CHANNEL_META[key].midi + 12, 120);
+        else getFieldAudio().thud();
+      } catch { /* noop */ }
+      try { haptics.tap(); } catch { /* noop */ }
+      recordTape("sigil", next[key] ? 0.55 : 0.28, `pulse/${key}/${next[key] ? "listen" : "mute"}`);
+      return next;
+    });
+  }, [recordTape]);
+
   const onDefibrillate = useCallback(() => {
+    void getFieldAudio().start();
+    const now = performance.now();
+    shockRef.current = { until: now + 2050, armedBell: true, energy: 1 };
     setDefibActive(true);
-    window.dispatchEvent(new Event("oda:pulse:defib"));
-    recordTape("ripple", 1.0, "pulse/defib");
-    window.setTimeout(() => setDefibActive(false), 2200);
+    bloomsRef.current.push({
+      x: (canvasRef.current?.clientWidth ?? window.innerWidth) * 0.5,
+      y: (canvasRef.current?.clientHeight ?? window.innerHeight) * 0.5,
+      born: now,
+      life: 2500,
+      strength: 1.8,
+      hue: "#fff1d0",
+    });
+    try { getFieldAudio().thud(); } catch { /* noop */ }
+    try { haptics.storm(); } catch { /* noop */ }
+    recordTape("ripple", 1, "pulse/shock");
+    schedule(() => setDefibActive(false), 2180);
+  }, [recordTape, schedule]);
+
+  const onPatternKind = useCallback((kind: PatternKind) => {
+    void getFieldAudio().start();
+    setPattern((prev) => makePattern(kind, prev.seed));
+    try { getFieldAudio().playNote(55 + PATTERN_KINDS.indexOf(kind) * 3, 110); } catch { /* noop */ }
+    recordTape("object", 0.38, `pulse/pattern/${kind}`);
   }, [recordTape]);
 
   const onGenerate = useCallback(() => {
-    const seed = Math.floor(Math.random() * 0xffffffff);
-    setPatternSeed(seed);
-    setPatternSamples(generatePattern(patternKind, seed));
-  }, [patternKind]);
+    void getFieldAudio().start();
+    setPattern((prev) => makePattern(prev.kind));
+    touchImpulseRef.current = clamp(touchImpulseRef.current + 0.9, 0, 1.8);
+    try {
+      getFieldAudio().spark();
+      schedule(() => {
+        try { getFieldAudio().playNote(67, 120); } catch { /* noop */ }
+      }, 90);
+    } catch { /* noop */ }
+    try { haptics.roll(); } catch { /* noop */ }
+    recordTape("sigil", 0.68, `pulse/generate/${patternRef.current.kind}`);
+  }, [recordTape, schedule]);
 
   const onSavePattern = useCallback(() => {
-    const name = (patternName || `${patternKind}-${Date.now().toString(36).slice(-4)}`).slice(0, 32);
-    const entry: SavedPattern = { name, kind: patternKind, seed: patternSeed, createdAt: Date.now() };
-    const next = [entry, ...saved.filter((s) => s.name !== name)].slice(0, 30);
+    const name = (patternName || `${pattern.kind}-${Date.now().toString(36).slice(-4)}`).trim().slice(0, 32);
+    const entry: SavedPattern = { name, kind: pattern.kind, seed: pattern.seed, createdAt: Date.now() };
+    const next = [entry, ...saved.filter((item) => item.name !== name)].slice(0, 18);
     setSaved(next);
     try { localStorage.setItem(PATTERN_KEY, JSON.stringify(next)); } catch { /* noop */ }
     setPatternName("");
-  }, [patternName, patternKind, patternSeed, saved]);
+    setShareMsg("kept");
+    schedule(() => setShareMsg(null), 1400);
+    try { getFieldAudio().bell(); } catch { /* noop */ }
+    try { haptics.roll(); } catch { /* noop */ }
+    recordTape("kept", 0.72, `pulse/save/${name}`);
+  }, [patternName, pattern, saved, recordTape, schedule]);
 
-  const onLoadPattern = useCallback((p: SavedPattern) => {
-    setPatternKind(p.kind);
-    setPatternSeed(p.seed);
-    setPatternSamples(generatePattern(p.kind, p.seed));
-  }, []);
-
-  const onDeletePattern = useCallback((name: string) => {
-    const next = saved.filter((s) => s.name !== name);
-    setSaved(next);
-    try { localStorage.setItem(PATTERN_KEY, JSON.stringify(next)); } catch { /* noop */ }
-  }, [saved]);
+  const onLoadPattern = useCallback((entry: SavedPattern) => {
+    setPattern(makePattern(entry.kind, entry.seed));
+    touchImpulseRef.current = clamp(touchImpulseRef.current + 0.62, 0, 1.6);
+    try { getFieldAudio().playNote(58 + PATTERN_KINDS.indexOf(entry.kind) * 4, 140); } catch { /* noop */ }
+    try { haptics.ripple(0.48); } catch { /* noop */ }
+    recordTape("object", 0.54, `pulse/load/${entry.name}`);
+  }, [recordTape]);
 
   const onShare = useCallback(() => {
     try {
-      const payload = { kind: patternKind, seed: patternSeed, hr, br: breathRate, stress };
-      const b64 = btoa(JSON.stringify(payload));
-      const url = `${window.location.origin}${window.location.pathname}#p=${b64}`;
-      void navigator.clipboard.writeText(url).then(
-        () => setShareMsg("copied"),
-        () => setShareMsg("could not copy"),
-      );
-      window.setTimeout(() => setShareMsg(null), 1800);
+      const payload = { kind: pattern.kind, seed: pattern.seed, hr, br: breathRate, stress };
+      const url = `${window.location.origin}${window.location.pathname}#p=${btoa(JSON.stringify(payload))}`;
+      if (navigator.clipboard?.writeText) {
+        void navigator.clipboard.writeText(url).then(
+          () => setShareMsg("copied"),
+          () => setShareMsg("hash set"),
+        );
+      } else {
+        setShareMsg("hash set");
+      }
+      window.history.replaceState(null, "", url);
+      schedule(() => setShareMsg(null), 1600);
+      try { getFieldAudio().chime(); } catch { /* noop */ }
+      recordTape("sigil", 0.52, "pulse/share");
     } catch {
       setShareMsg("share failed");
-      window.setTimeout(() => setShareMsg(null), 1800);
+      schedule(() => setShareMsg(null), 1600);
     }
-  }, [patternKind, patternSeed, hr, breathRate, stress]);
+  }, [pattern, hr, breathRate, stress, recordTape, schedule]);
 
-  const onDownload = useCallback(() => {
-    const cv = canvasRef.current;
-    if (!cv) return;
-    try {
-      const data = cv.toDataURL("image/png");
-      const a = document.createElement("a");
-      a.href = data;
-      a.download = `pulse-${patternKind}-${Date.now()}.png`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-    } catch { /* noop */ }
-  }, [patternKind]);
-
-  // ── readout overlays (positioned over the canvas) ─────────────────────
-  // Hospital-style big Fraunces numerals for each channel.
   const readouts = useMemo(() => ([
-    { key: "hr",     label: "HR",     big: `${hrShown}`,            unit: "BPM",      color: "#4af07a", audio: audioHR,     setAudio: setAudioHR },
-    { key: "breath", label: "BREATH", big: `${brShown}`,            unit: "BR",       color: "#4ad4f0", audio: audioBreath, setAudio: setAudioBreath },
-    { key: "bp",     label: "BP",     big: `${bpShown.sys}/${bpShown.dia}`, unit: "mmHg", color: "#f0c04a", audio: audioBP,     setAudio: setAudioBP },
-    { key: "brain",  label: "BRAIN",  big: defibActive ? "—" : "α·β", unit: "EEG",    color: "#b04af0", audio: audioBrain,  setAudio: setAudioBrain },
-  ]), [hrShown, brShown, bpShown, defibActive, audioHR, audioBreath, audioBP, audioBrain]);
+    { key: "hr" as const, label: CHANNEL_META.hr.readoutLabel, value: meter.hr, unit: "bpm", tone: CHANNEL_META.hr.tone },
+    { key: "breath" as const, label: CHANNEL_META.breath.readoutLabel, value: meter.breath, unit: "br", tone: CHANNEL_META.breath.tone },
+    { key: "bp" as const, label: CHANNEL_META.bp.readoutLabel, value: meter.bp, unit: "mm", tone: CHANNEL_META.bp.tone },
+    { key: "brain" as const, label: CHANNEL_META.brain.readoutLabel, value: meter.brain, unit: "eeg", tone: CHANNEL_META.brain.tone },
+  ]), [meter]);
 
   return (
     <div
+      ref={rootRef}
       className="oda-pulse-root"
       data-touch-surface="true"
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "#040810",
-        overflow: "hidden",
-        touchAction: "manipulation",
-        color: "rgba(232,226,213,0.92)",
-      }}
+      data-pretext-ignore="true"
+      aria-label="pulse rhythm oscillator"
     >
       <canvas
-        className="oda-pulse-canvas"
         ref={canvasRef}
-        aria-label="pulse — hospital monitor for the room"
-        style={{
-          position: "absolute",
-          inset: 0,
-          width: "100vw",
-          height: "100vh",
-          display: "block",
-        }}
+        className="oda-pulse-canvas"
+        aria-hidden="true"
+        onPointerDown={onCanvasPointerDown}
+        onPointerMove={onCanvasPointerMove}
+        onPointerUp={clearPointer}
+        onPointerCancel={clearPointer}
       />
 
-      {/* When the pattern channel is in candle view, overlay an inline
-          SeaChart in the same band the canvas would have drawn the line in.
-          Positioned to the LEFT so it doesn't collide with the right-edge
-          readouts column. */}
-      {patternView === "candles" && patternSamples && (
-        <div
-          className="oda-pulse-pattern-chart"
-          style={{
-            position: "absolute",
-            left: "clamp(12px, 3vw, 32px)",
-            // 4 channels * (chH=70+gap=14) ≈ 336px below the channels' startY.
-            // Keep the embed above the control rail and global tape.
-            top: "39.5vh",
-            pointerEvents: "auto",
-            zIndex: 4,
-          }}
-        >
-          <SeaChart
-            variant="inline"
-            mode="candles"
-            title={`pattern · ${patternKind}`}
-            caption="candle view"
-            width={"min(560px, calc(100vw - 24px))"}
-            height={84}
-            tickMs={0}
-            source={patternSource}
-            pullKey={patternPullKey}
-            static
-            feedToOcean={false}
-            tapeLabel={`pulse/pattern/${patternKind}`}
-            upColor={"#4af07a"}
-            downColor={"#f06a6a"}
-            background="rgba(8, 12, 24, 0.78)"
+      <div className="pulse-vital-strip" aria-label="pulse channels">
+        {readouts.map((item) => (
+          <button
+            key={item.key}
+            type="button"
+            className="pulse-channel-stop"
+            style={{ "--pulse-tone": item.tone } as CSSProperties}
+            aria-pressed={audioEnabled[item.key]}
+            onClick={() => toggleAudio(item.key)}
+          >
+            <span>{item.label}</span>
+            <strong>{item.value}</strong>
+            <em>{item.unit}</em>
+          </button>
+        ))}
+      </div>
+
+      <div className="pulse-state" aria-live="polite">
+        <span>pulse</span>
+        <strong>{pattern.kind}</strong>
+        <i style={{ width: `${Math.max(8, meter.tension)}%` }} />
+      </div>
+
+      <div className="pulse-console" aria-label="pulse controls">
+        <div className="pulse-sliders">
+          <PulseSlider
+            label="rate"
+            min={40}
+            max={180}
+            step={1}
+            value={hr}
+            tone={CHANNEL_META.hr.tone}
+            display={`${hr}`}
+            onChange={(value) => {
+              setHr(value);
+              touchImpulseRef.current = clamp(touchImpulseRef.current + 0.12, 0, 1.2);
+            }}
+          />
+          <PulseSlider
+            label="breath"
+            min={6}
+            max={30}
+            step={1}
+            value={breathRate}
+            tone={CHANNEL_META.breath.tone}
+            display={`${breathRate}`}
+            onChange={(value) => {
+              setBreathRate(value);
+              touchImpulseRef.current = clamp(touchImpulseRef.current + 0.10, 0, 1.2);
+            }}
+          />
+          <PulseSlider
+            label="tension"
+            min={0}
+            max={1}
+            step={0.01}
+            value={stress}
+            tone="#ff8b5d"
+            display={`${Math.round(stress * 100)}`}
+            onChange={(value) => {
+              setStress(value);
+              touchImpulseRef.current = clamp(touchImpulseRef.current + 0.16, 0, 1.4);
+            }}
           />
         </div>
-      )}
 
-      {/* readout overlay column on the right of each channel */}
-      <div
-        aria-hidden="true"
-        style={{
-          position: "absolute",
-          inset: 0,
-          pointerEvents: "none",
-          fontFamily: "var(--font-mono, ui-monospace)",
-        }}
-      >
-        {/* readouts are positioned approximately — they hover near the right edge of each channel band */}
-        <div
-          className="oda-pulse-readouts"
-          style={{
-            position: "absolute",
-            right: 24,
-            top: 0,
-            height: "60vh",
-            display: "flex",
-            flexDirection: "column",
-            justifyContent: "space-around",
-            alignItems: "flex-end",
-            gap: 8,
-            paddingTop: 24,
-            paddingBottom: 24,
-            pointerEvents: "auto",
-          }}
-        >
-          {readouts.map((r) => (
-            <div className="oda-pulse-readout" key={r.key} style={{ textAlign: "right", lineHeight: 1.0 }}>
-              <button
-                className="oda-pulse-audio-toggle"
-                type="button"
-                onClick={() => r.setAudio(!r.audio)}
-                aria-label={`toggle ${r.label} audio`}
-                aria-pressed={r.audio}
-                style={{
-                  background: "transparent",
-                  border: "none",
-                  color: r.audio ? r.color : "rgba(232,226,213,0.55)",
-                  fontFamily: "inherit",
-                  fontSize: 11,
-                  letterSpacing: "0.12em",
-                  cursor: "pointer",
-                  padding: "8px 8px",
-                  minHeight: 44,
-                  minWidth: 44,
-                  textTransform: "uppercase",
-                  filter: r.audio ? `drop-shadow(0 0 4px ${r.color})` : "none",
-                }}
-              >
-                {r.label} {r.audio ? "●" : "○"}
-              </button>
-              <div
-                className="oda-pulse-readout-value"
-                style={{
-                  fontFamily: "var(--font-fraunces, Georgia), serif",
-                  fontWeight: 500,
-                  fontSize: 32,
-                  color: r.color,
-                  letterSpacing: "-0.01em",
-                  filter: `drop-shadow(0 0 6px ${r.color}55)`,
-                }}
-              >
-                {r.big}
-              </div>
-              <div className="oda-pulse-readout-unit" style={{ fontSize: 10, opacity: 0.55, letterSpacing: "0.14em" }}>
-                {r.unit}
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* control rail — lower 40% */}
-      <div
-        className="oda-pulse-controls"
-        style={{
-          position: "absolute",
-          left: 0,
-          right: 0,
-          bottom: 44,
-          height: "40vh",
-          padding: "16px clamp(12px, 3vw, 32px)",
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr 1fr",
-          gap: 16,
-          alignItems: "stretch",
-          background: "linear-gradient(180deg, rgba(4,8,16,0) 0%, rgba(4,8,16,0.72) 14%, rgba(4,8,16,0.92) 100%)",
-          borderTop: "1px solid rgba(74,240,122,0.08)",
-        }}
-      >
-        {/* LEFT — sliders + defib */}
-        <div style={panelStyle}>
-          <div style={panelTitle}>vitals</div>
-          <Slider label="HR"      min={40}  max={180} step={1}    value={hr}          onChange={setHr}          format={(v) => `${v} bpm`} color="#4af07a" />
-          <Slider label="BREATH"  min={6}   max={30}  step={1}    value={breathRate}  onChange={setBreathRate}  format={(v) => `${v} br`}  color="#4ad4f0" />
-          <Slider label="STRESS"  min={0}   max={1}   step={0.01} value={stress}      onChange={setStress}      format={(v) => `${Math.round(v * 100)}%`} color="#f06a6a" />
+        <div className="pulse-actions">
+          <label className="pulse-select-wrap">
+            <span>pattern</span>
+            <select
+              value={pattern.kind}
+              onChange={(event) => {
+                const next = event.target.value;
+                if (isPatternKind(next)) onPatternKind(next);
+              }}
+              aria-label="pattern"
+            >
+              {PATTERN_KINDS.map((kind) => (
+                <option key={kind} value={kind}>{kind}</option>
+              ))}
+            </select>
+          </label>
+          <button type="button" onClick={onGenerate}>cast</button>
+          <input
+            type="text"
+            value={patternName}
+            maxLength={32}
+            placeholder="name"
+            aria-label="pattern name"
+            onChange={(event) => setPatternName(event.target.value)}
+          />
+          <button type="button" onClick={onSavePattern}>keep</button>
+          <button type="button" onClick={onShare}>{shareMsg ?? "share"}</button>
           <button
             type="button"
+            className="pulse-shock"
             onClick={onDefibrillate}
             disabled={defibActive}
-            style={{
-              marginTop: 6,
-              padding: "12px 14px",
-              minHeight: 48,
-              fontSize: 16,
-              fontFamily: "var(--font-mono, ui-monospace)",
-              letterSpacing: "0.18em",
-              textTransform: "uppercase",
-              cursor: defibActive ? "default" : "pointer",
-              borderRadius: 4,
-              border: `1px solid ${defibActive ? "rgba(240,90,80,0.35)" : "rgba(240,90,80,0.75)"}`,
-              background: defibActive ? "rgba(240,90,80,0.20)" : "rgba(240,90,80,0.08)",
-              color: defibActive ? "rgba(240,90,80,0.65)" : "#ff8a78",
-              filter: defibActive ? "none" : "drop-shadow(0 0 8px rgba(240,90,80,0.55))",
-              transition: "background 240ms, border-color 240ms",
-            }}
           >
-            {defibActive ? "⚡ charging" : "⚡ defibrillate"}
+            {defibActive ? "clear" : "shock"}
           </button>
         </div>
 
-        {/* MIDDLE — pattern generator */}
-        <div style={panelStyle}>
-          <div style={panelTitle}>pattern</div>
-          <div style={{ display: "flex", gap: 8, alignItems: "stretch" }}>
-            <select
-              value={patternKind}
-              onChange={(e) => setPatternKind(e.target.value as PatternKind)}
-              style={selectStyle}
-              aria-label="pattern kind"
-            >
-              <option value="tide">tide</option>
-              <option value="wave">wave</option>
-              <option value="seismic">seismic</option>
-              <option value="breath">breath</option>
-              <option value="storm">storm</option>
-            </select>
-            <button type="button" onClick={onGenerate} style={btnStyle("#f0c04a")}>
-              generate
-            </button>
+        {saved.length > 0 && (
+          <div className="pulse-saved" aria-label="saved pulse patterns">
+            {saved.slice(0, 8).map((entry) => (
+              <button
+                type="button"
+                key={`${entry.name}-${entry.seed}`}
+                onClick={() => onLoadPattern(entry)}
+                style={{ "--pulse-tone": PATTERN_COLORS[entry.kind] } as CSSProperties}
+              >
+                <span>{entry.kind}</span>
+                {entry.name}
+              </button>
+            ))}
           </div>
-          {/* view-mode toggle — switches the pattern channel between the
-              default line trace and a candlestick representation. The
-              currently-inactive button is the muted (disabled-style) one. */}
-          <div style={{ display: "flex", gap: 8 }}>
-            <button
-              type="button"
-              onClick={() => setPatternView("line")}
-              style={btnStyle("#4ad4f0", patternView !== "line")}
-              aria-pressed={patternView === "line"}
-            >
-              line view
-            </button>
-            <button
-              type="button"
-              onClick={() => setPatternView("candles")}
-              style={btnStyle("#f0c04a", patternView !== "candles")}
-              aria-pressed={patternView === "candles"}
-            >
-              candle view
-            </button>
-          </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <input
-              type="text"
-              value={patternName}
-              onChange={(e) => setPatternName(e.target.value)}
-              placeholder="name…"
-              aria-label="pattern name"
-              style={inputStyle}
-            />
-            <button type="button" onClick={onSavePattern} disabled={!patternSamples} style={btnStyle("#4af07a", !patternSamples)}>
-              save
-            </button>
-          </div>
-          {saved.length > 0 && (
-            <div
-              style={{
-                maxHeight: "16vh",
-                overflowY: "auto",
-                border: "1px solid rgba(232,226,213,0.12)",
-                borderRadius: 4,
-                padding: 4,
-                display: "flex",
-                flexDirection: "column",
-                gap: 2,
-              }}
-            >
-              {saved.map((p) => (
-                <div key={p.name} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <button
-                    type="button"
-                    onClick={() => onLoadPattern(p)}
-                    style={{
-                      flex: 1,
-                      textAlign: "left",
-                      background: "transparent",
-                      border: "none",
-                      color: "rgba(232,226,213,0.86)",
-                      fontFamily: "var(--font-mono, ui-monospace)",
-                      fontSize: 12,
-                      padding: "10px 6px",
-                      minHeight: 44,
-                      cursor: "pointer",
-                      letterSpacing: "0.04em",
-                    }}
-                  >
-                    <span style={{ opacity: 0.55, marginRight: 6 }}>{p.kind}</span>
-                    {p.name}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onDeletePattern(p.name)}
-                    aria-label={`delete ${p.name}`}
-                    style={{
-                      background: "transparent",
-                      border: "none",
-                      color: "rgba(232,226,213,0.45)",
-                      fontSize: 16,
-                      cursor: "pointer",
-                      padding: "8px 10px",
-                      minHeight: 44,
-                      minWidth: 44,
-                    }}
-                  >
-                    ×
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* RIGHT — share + download */}
-        <div style={panelStyle}>
-          <div style={panelTitle}>distribute</div>
-          <button type="button" onClick={onShare} style={btnStyle("#4ad4f0")}>
-            share link
-          </button>
-          <button type="button" onClick={onDownload} style={btnStyle("#b04af0")}>
-            download png
-          </button>
-          {shareMsg && (
-            <div
-              style={{
-                fontFamily: "var(--font-mono, ui-monospace)",
-                fontSize: 11,
-                letterSpacing: "0.1em",
-                opacity: 0.7,
-                marginTop: 2,
-              }}
-            >
-              {shareMsg}
-            </div>
-          )}
-          <WaterText
-            as="div"
-            bobAmp={1.5}
-            style={{
-              display: "block",
-              marginTop: "auto",
-              fontFamily: "var(--font-serif), Georgia, serif",
-              fontStyle: "italic",
-              fontSize: 13,
-              color: "rgba(232,226,213,0.55)",
-              textAlign: "right",
-              lineHeight: 1.4,
-            }}
-          >
-            the body keeps its own time
-          </WaterText>
-        </div>
+        )}
       </div>
 
-      <style>{`
+      <style
+        dangerouslySetInnerHTML={{
+          __html: `
+        .oda-pulse-root {
+          position: fixed;
+          inset: 0;
+          overflow: hidden;
+          background: #080506;
+          color: rgba(250, 238, 220, 0.94);
+          isolation: isolate;
+          -webkit-user-select: none;
+          user-select: none;
+          -webkit-tap-highlight-color: transparent;
+        }
+
+        .oda-pulse-canvas {
+          position: absolute;
+          inset: 0;
+          width: 100%;
+          height: 100%;
+          display: block;
+          touch-action: none;
+          cursor: crosshair;
+          z-index: 0;
+        }
+
+        .pulse-vital-strip {
+          position: fixed;
+          z-index: 3;
+          left: var(--pad-x);
+          right: var(--pad-x);
+          top: 76px;
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 8px;
+          pointer-events: auto;
+        }
+
+        .pulse-channel-stop {
+          min-width: 0;
+          min-height: 58px;
+          display: grid;
+          grid-template-columns: 1fr auto;
+          grid-template-rows: auto auto;
+          gap: 2px 9px;
+          align-items: end;
+          border: 1px solid rgba(250, 238, 220, 0.15);
+          border: 1px solid color-mix(in srgb, var(--pulse-tone) 35%, transparent);
+          border-radius: 8px;
+          background: rgba(10, 6, 7, 0.54);
+          background:
+            linear-gradient(135deg, color-mix(in srgb, var(--pulse-tone) 12%, transparent), rgba(8, 5, 6, 0.50));
+          color: rgba(250, 238, 220, 0.92);
+          padding: 9px 11px;
+          text-align: left;
+          backdrop-filter: blur(14px);
+          -webkit-backdrop-filter: blur(14px);
+          box-shadow: 0 18px 52px rgba(0, 0, 0, 0.20);
+          cursor: pointer;
+        }
+
+        .pulse-channel-stop span {
+          color: rgba(250, 238, 220, 0.74);
+          color: color-mix(in srgb, var(--pulse-tone) 72%, rgba(250, 238, 220, 0.74));
+          font-family: var(--font-mono);
+          font-size: 10px;
+          line-height: 1;
+          text-transform: lowercase;
+          letter-spacing: 0;
+        }
+
+        .pulse-channel-stop strong {
+          grid-column: 1;
+          color: rgba(255, 248, 234, 0.96);
+          font-family: var(--font-numerals, var(--font-serif));
+          font-size: clamp(18px, 2.4vw, 28px);
+          font-weight: 500;
+          line-height: 0.94;
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
+        .pulse-channel-stop em {
+          grid-column: 2;
+          grid-row: 1 / 3;
+          align-self: center;
+          color: rgba(250, 238, 220, 0.46);
+          font-family: var(--font-mono);
+          font-size: 9px;
+          font-style: normal;
+          text-transform: lowercase;
+          writing-mode: vertical-rl;
+        }
+
+        .pulse-channel-stop[aria-pressed="true"] {
+          box-shadow:
+            0 18px 52px rgba(0, 0, 0, 0.22),
+            0 0 24px rgba(250, 238, 220, 0.16);
+          box-shadow:
+            0 18px 52px rgba(0, 0, 0, 0.22),
+            0 0 24px color-mix(in srgb, var(--pulse-tone) 28%, transparent);
+        }
+
+        .pulse-channel-stop[aria-pressed="true"] span::after {
+          content: "";
+          display: inline-block;
+          width: 5px;
+          height: 5px;
+          margin-left: 6px;
+          border-radius: 999px;
+          background: var(--pulse-tone);
+          box-shadow: 0 0 10px var(--pulse-tone);
+          vertical-align: 1px;
+        }
+
+        .pulse-state {
+          position: fixed;
+          z-index: 2;
+          left: var(--pad-x);
+          top: 156px;
+          display: inline-grid;
+          grid-template-columns: auto auto 86px;
+          gap: 10px;
+          align-items: center;
+          color: rgba(250, 238, 220, 0.58);
+          font-family: var(--font-mono);
+          font-size: 10px;
+          letter-spacing: 0;
+          text-transform: lowercase;
+          pointer-events: none;
+        }
+
+        .pulse-state strong {
+          color: rgba(250, 238, 220, 0.84);
+          font-weight: 500;
+        }
+
+        .pulse-state i {
+          display: block;
+          height: 3px;
+          min-width: 8px;
+          border-radius: 999px;
+          background: linear-gradient(90deg, #58d9c8, #f2bf62, #ff5d73);
+          box-shadow: 0 0 16px rgba(255, 93, 115, 0.35);
+        }
+
+        .pulse-console {
+          position: fixed;
+          z-index: 4;
+          left: var(--pad-x);
+          right: var(--pad-x);
+          bottom: calc(22px + env(safe-area-inset-bottom, 0px));
+          display: grid;
+          grid-template-columns: minmax(280px, 0.82fr) minmax(420px, 1.18fr);
+          gap: 8px;
+          align-items: stretch;
+          padding: 8px;
+          border: 1px solid rgba(250, 238, 220, 0.13);
+          border-radius: 8px;
+          background: rgba(10, 6, 7, 0.58);
+          backdrop-filter: blur(18px);
+          -webkit-backdrop-filter: blur(18px);
+          box-shadow: 0 26px 70px rgba(0, 0, 0, 0.32);
+        }
+
+        .pulse-sliders {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 8px;
+          min-width: 0;
+        }
+
+        .pulse-slider {
+          min-width: 0;
+          display: grid;
+          grid-template-columns: 1fr auto;
+          grid-template-rows: auto 28px;
+          gap: 3px 8px;
+          align-items: center;
+          padding: 7px 9px;
+          border: 1px solid rgba(250, 238, 220, 0.10);
+          border-radius: 6px;
+          background: rgba(250, 238, 220, 0.045);
+          font-family: var(--font-mono);
+          font-size: 10px;
+          color: rgba(250, 238, 220, 0.66);
+        }
+
+        .pulse-slider strong {
+          color: var(--pulse-tone);
+          font-family: var(--font-numerals, var(--font-mono));
+          font-size: 13px;
+          font-weight: 500;
+        }
+
+        .pulse-slider input {
+          -webkit-appearance: none;
+          appearance: none;
+          grid-column: 1 / -1;
+          width: 100%;
+          height: 28px;
+          margin: 0;
+          background: transparent;
+          accent-color: var(--pulse-tone);
+        }
+
+        .pulse-slider input::-webkit-slider-runnable-track {
+          height: 2px;
+          border-radius: 999px;
+          background: linear-gradient(90deg, var(--pulse-tone), rgba(250, 238, 220, 0.18));
+        }
+
+        .pulse-slider input::-webkit-slider-thumb {
+          -webkit-appearance: none;
+          appearance: none;
+          width: 14px;
+          height: 14px;
+          margin-top: -6px;
+          border: 0;
+          border-radius: 3px;
+          background: var(--pulse-tone);
+          box-shadow: 0 0 12px var(--pulse-tone);
+          cursor: pointer;
+        }
+
+        .pulse-slider input::-moz-range-track {
+          height: 2px;
+          border-radius: 999px;
+          background: linear-gradient(90deg, var(--pulse-tone), rgba(250, 238, 220, 0.18));
+        }
+
+        .pulse-slider input::-moz-range-thumb {
+          width: 14px;
+          height: 14px;
+          border: 0;
+          border-radius: 3px;
+          background: var(--pulse-tone);
+          box-shadow: 0 0 12px var(--pulse-tone);
+          cursor: pointer;
+        }
+
+        .pulse-actions {
+          display: grid;
+          grid-template-columns: minmax(116px, 0.86fr) repeat(3, minmax(74px, 0.62fr)) minmax(78px, 0.62fr) minmax(84px, 0.64fr);
+          gap: 8px;
+          min-width: 0;
+        }
+
+        .pulse-actions button,
+        .pulse-actions input,
+        .pulse-select-wrap {
+          min-width: 0;
+          min-height: 58px;
+          border: 1px solid rgba(250, 238, 220, 0.13);
+          border-radius: 6px;
+          background: rgba(250, 238, 220, 0.055);
+          color: rgba(250, 238, 220, 0.88);
+          font-family: var(--font-mono);
+          font-size: 12px;
+          letter-spacing: 0;
+        }
+
+        .pulse-actions button {
+          cursor: pointer;
+          text-transform: lowercase;
+          transition: transform 140ms ease, background 140ms ease, border-color 140ms ease;
+        }
+
+        .pulse-actions button:hover {
+          transform: translateY(-1px);
+          background: rgba(250, 238, 220, 0.09);
+          border-color: rgba(250, 238, 220, 0.24);
+        }
+
+        .pulse-actions button:disabled {
+          cursor: default;
+          opacity: 0.58;
+          transform: none;
+        }
+
+        .pulse-actions input {
+          padding: 0 12px;
+          outline: none;
+        }
+
+        .pulse-actions input::placeholder {
+          color: rgba(250, 238, 220, 0.42);
+        }
+
+        .pulse-select-wrap {
+          display: grid;
+          grid-template-columns: 1fr;
+          grid-template-rows: auto 1fr;
+          gap: 2px;
+          padding: 7px 10px 6px;
+        }
+
+        .pulse-select-wrap span {
+          color: rgba(250, 238, 220, 0.48);
+          font-size: 9px;
+        }
+
+        .pulse-select-wrap select {
+          min-width: 0;
+          width: 100%;
+          border: 0;
+          outline: 0;
+          background: transparent;
+          color: rgba(250, 238, 220, 0.94);
+          font: inherit;
+          cursor: pointer;
+        }
+
+        .pulse-select-wrap option {
+          background: #16090e;
+          color: rgba(250, 238, 220, 0.94);
+        }
+
+        .pulse-shock {
+          color: #fff0ce !important;
+          border-color: rgba(255, 93, 115, 0.48) !important;
+          background:
+            linear-gradient(135deg, rgba(255, 93, 115, 0.18), rgba(242, 191, 98, 0.09)) !important;
+          box-shadow: inset 0 0 0 1px rgba(255, 240, 206, 0.05);
+        }
+
+        .pulse-saved {
+          grid-column: 1 / -1;
+          display: flex;
+          gap: 6px;
+          overflow-x: auto;
+          overscroll-behavior-x: contain;
+          padding-top: 2px;
+          scrollbar-width: none;
+        }
+
+        .pulse-saved::-webkit-scrollbar {
+          display: none;
+        }
+
+        .pulse-saved button {
+          flex: 0 0 auto;
+          max-width: 180px;
+          min-height: 32px;
+          border: 1px solid rgba(250, 238, 220, 0.15);
+          border: 1px solid color-mix(in srgb, var(--pulse-tone) 34%, transparent);
+          border-radius: 999px;
+          background: rgba(10, 6, 7, 0.58);
+          background: color-mix(in srgb, var(--pulse-tone) 10%, rgba(10, 6, 7, 0.58));
+          color: rgba(250, 238, 220, 0.82);
+          padding: 0 11px;
+          cursor: pointer;
+          font-family: var(--font-mono);
+          font-size: 10px;
+          text-transform: lowercase;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .pulse-saved span {
+          color: var(--pulse-tone);
+          margin-right: 7px;
+        }
+
+        body:has(.oda-pulse-root) header {
+          background: transparent !important;
+          border-bottom: 0 !important;
+          backdrop-filter: none !important;
+          -webkit-backdrop-filter: none !important;
+        }
+
         body:has(.oda-pulse-root) .oda-field-watch,
         body:has(.oda-pulse-root) .oda-candle-mark,
-        body:has(.oda-pulse-root) .oda-sound-toggle {
+        body:has(.oda-pulse-root) .oda-sound-toggle,
+        body:has(.oda-pulse-root) .oda-tape-shell {
           display: none !important;
         }
+
+        @media (max-width: 980px) {
+          .pulse-console {
+            grid-template-columns: 1fr;
+          }
+
+          .pulse-actions {
+            grid-template-columns: minmax(118px, 1fr) repeat(5, minmax(72px, 0.7fr));
+          }
+        }
+
         @media (max-width: 720px) {
-          .oda-pulse-root {
-            overflow: hidden !important;
-            --pulse-mobile-control-height: min(390px, 46svh);
-            --pulse-mobile-control-bottom: calc(44px + env(safe-area-inset-bottom, 0px));
+          .pulse-vital-strip {
+            left: 12px;
+            right: 12px;
+            top: 70px;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 7px;
           }
-          .oda-pulse-canvas {
-            height: 100svh !important;
+
+          .pulse-channel-stop {
+            min-height: 48px;
+            padding: 7px 9px;
           }
-          .oda-pulse-pattern-chart {
-            left: 12px !important;
-            right: 12px !important;
-            top: calc(100svh - var(--pulse-mobile-control-height) - 128px) !important;
-            max-width: calc(100vw - 24px);
+
+          .pulse-channel-stop strong {
+            font-size: clamp(16px, 5.8vw, 22px);
           }
-          .oda-pulse-pattern-chart > div {
-            padding: 6px !important;
+
+          .pulse-channel-stop em {
+            font-size: 8px;
           }
-          .oda-pulse-pattern-chart > div > div:first-child {
-            font-size: 9px !important;
-            margin-bottom: 2px !important;
+
+          .pulse-state {
+            top: 184px;
+            left: 14px;
           }
-          .oda-pulse-pattern-chart canvas {
-            height: 50px !important;
-          }
-          .oda-pulse-pattern-chart > div > div:last-child {
-            display: none !important;
-          }
-          .oda-pulse-readouts {
-            right: 8px !important;
-            top: 138px !important;
-            height: calc(100svh - var(--pulse-mobile-control-height) - 198px) !important;
-            min-height: 168px !important;
-            max-height: 244px !important;
-            padding-top: 0 !important;
-            padding-bottom: 0 !important;
-            gap: 2px !important;
-          }
-          .oda-pulse-readout {
-            max-width: min(28vw, 104px);
-          }
-          .oda-pulse-readout-value {
-            font-size: clamp(16px, 5.4vw, 24px) !important;
-            line-height: 0.95 !important;
-          }
-          .oda-pulse-audio-toggle {
-            min-height: 30px !important;
-            min-width: 34px !important;
-            font-size: 9px !important;
-            letter-spacing: 0.08em !important;
-            padding: 3px 4px !important;
-          }
-          .oda-pulse-readout-unit {
-            font-size: 8px !important;
-          }
-          .oda-pulse-controls {
-            grid-template-columns: 1fr !important;
-            grid-auto-rows: max-content !important;
-            height: var(--pulse-mobile-control-height) !important;
-            bottom: var(--pulse-mobile-control-bottom) !important;
-            padding: 8px 12px calc(18px + env(safe-area-inset-bottom, 0px)) !important;
-            gap: 8px !important;
+
+          .pulse-console {
+            left: 10px;
+            right: 10px;
+            bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+            max-height: min(47svh, 410px);
             overflow-y: auto;
-            overscroll-behavior: contain;
-            -webkit-overflow-scrolling: touch;
-            align-items: start !important;
-            align-content: start !important;
+            padding: 7px;
+            gap: 7px;
           }
-          .oda-pulse-controls > div {
-            padding: 10px 12px !important;
-            gap: 8px !important;
-            min-height: max-content !important;
+
+          .pulse-sliders {
+            gap: 7px;
           }
-          .oda-pulse-controls input,
-          .oda-pulse-controls select,
-          .oda-pulse-controls button {
-            max-width: 100%;
+
+          .pulse-slider {
+            grid-template-rows: auto 24px;
+            padding: 6px 8px;
+            font-size: 9px;
           }
-          .oda-pulse-controls select,
-          .oda-pulse-controls input[type="text"] {
-            min-height: 40px !important;
-            font-size: 14px !important;
+
+          .pulse-slider strong {
+            font-size: 11px;
           }
-          .oda-pulse-controls button {
-            min-height: 40px !important;
-            font-size: 12px !important;
-            letter-spacing: 0.1em !important;
+
+          .pulse-slider input {
+            height: 24px;
           }
-          .oda-pulse-controls [style*="display: flex"] {
-            flex-wrap: wrap;
+
+          .pulse-actions {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 7px;
           }
-        }
-        .oda-pulse-controls input[type=range] {
-          -webkit-appearance: none;
-          appearance: none;
-          width: 100%;
-          height: 44px;
-          background: transparent;
-          touch-action: manipulation;
-        }
-        @media (max-width: 720px) {
-          .oda-pulse-controls input[type=range] {
-            height: 34px;
+
+          .pulse-actions button,
+          .pulse-actions input,
+          .pulse-select-wrap {
+            min-height: 44px;
+            font-size: 11px;
           }
-        }
-        .oda-pulse-controls input[type=range]::-webkit-slider-runnable-track {
-          height: 2px;
-          background: rgba(232,226,213,0.25);
-        }
-        .oda-pulse-controls input[type=range]::-webkit-slider-thumb {
-          -webkit-appearance: none;
-          appearance: none;
-          width: 24px;
-          height: 24px;
-          margin-top: -11px;
-          border-radius: 50%;
-          background: var(--thumb-color, #4af07a);
-          box-shadow: 0 0 8px var(--thumb-color, #4af07a);
-          cursor: pointer;
-          border: none;
-        }
-        @media (max-width: 720px) {
-          .oda-pulse-controls input[type=range]::-webkit-slider-thumb {
-            width: 20px;
-            height: 20px;
-            margin-top: -9px;
+
+          .pulse-select-wrap {
+            padding: 5px 8px 4px;
+          }
+
+          .pulse-saved {
+            padding-bottom: 1px;
           }
         }
-        .oda-pulse-controls input[type=range]::-moz-range-track {
-          height: 2px;
-          background: rgba(232,226,213,0.25);
-        }
-        .oda-pulse-controls input[type=range]::-moz-range-thumb {
-          width: 24px;
-          height: 24px;
-          border-radius: 50%;
-          background: var(--thumb-color, #4af07a);
-          box-shadow: 0 0 8px var(--thumb-color, #4af07a);
-          cursor: pointer;
-          border: none;
-        }
-        @media (max-width: 720px) {
-          .oda-pulse-controls input[type=range]::-moz-range-thumb {
-            width: 20px;
-            height: 20px;
+
+        @media (max-width: 420px) {
+          .pulse-console {
+            max-height: min(50svh, 440px);
+          }
+
+          .pulse-sliders {
+            grid-template-columns: 1fr;
+          }
+
+          .pulse-actions {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .pulse-state {
+            display: none;
           }
         }
-      `}</style>
+
+        @media (prefers-reduced-motion: reduce) {
+          .pulse-actions button {
+            transition: none;
+          }
+
+          .pulse-actions button:hover {
+            transform: none;
+          }
+        }
+      `,
+        }}
+      />
     </div>
   );
 }
 
-// ── helpers ──────────────────────────────────────────────────────────────
-
-function pushSample(ch: Channel, v: number): void {
-  ch.buffer[ch.cursor] = v;
-  ch.cursor = (ch.cursor + 1) % ch.buffer.length;
-}
-
-/**
- * Sample a normalised PQRST waveform at progress `p` in [0, 1].
- * Returns roughly [-0.4, 1.0] — R peak hits 1.0, S dip near -0.4.
- *
- * Shape (approximate timings within one beat):
- *   0.00 - 0.08  baseline
- *   0.08 - 0.16  P wave (small bump)
- *   0.16 - 0.22  baseline (PR segment)
- *   0.22 - 0.26  Q dip
- *   0.26 - 0.30  R spike up
- *   0.30 - 0.34  S dip
- *   0.34 - 0.50  baseline (ST)
- *   0.50 - 0.62  T wave (broad bump)
- *   0.62 - 1.00  baseline
- */
-function qrstSample(p: number): number {
-  if (p < 0.08)        return 0;
-  if (p < 0.16)        return Math.sin(((p - 0.08) / 0.08) * Math.PI) * 0.18; // P
-  if (p < 0.22)        return 0;
-  if (p < 0.26)        return -((p - 0.22) / 0.04) * 0.18;                     // Q descent
-  if (p < 0.30)        return -0.18 + ((p - 0.26) / 0.04) * 1.18;              // R ascent → peak 1.0
-  if (p < 0.34)        return 1.0  - ((p - 0.30) / 0.04) * 1.40;               // S descent to -0.40
-  if (p < 0.38)        return -0.40 + ((p - 0.34) / 0.04) * 0.40;              // S recovery
-  if (p < 0.50)        return 0;
-  if (p < 0.62)        return Math.sin(((p - 0.50) / 0.12) * Math.PI) * 0.28; // T
-  return 0;
-}
-
-function drawChannel(
-  ctx: CanvasRenderingContext2D,
-  ch: Channel,
-  x: number,
-  y: number,
-  totalW: number,
-  h: number,
-  labelW: number,
-  reduce: boolean,
-  inDefib: boolean,
-): void {
-  // background — faint dark green grid
-  ctx.fillStyle = "rgba(20, 32, 22, 0.6)";
-  ctx.fillRect(x, y, totalW, h);
-
-  // grid
-  ctx.strokeStyle = "rgba(74, 240, 122, 0.06)";
-  ctx.lineWidth = 1;
-  const gridStep = 14;
-  for (let gx = x + labelW + gridStep; gx < x + totalW; gx += gridStep) {
-    ctx.beginPath();
-    ctx.moveTo(gx, y);
-    ctx.lineTo(gx, y + h);
-    ctx.stroke();
-  }
-  for (let gy = y + gridStep; gy < y + h; gy += gridStep) {
-    ctx.beginPath();
-    ctx.moveTo(x + labelW, gy);
-    ctx.lineTo(x + totalW, gy);
-    ctx.stroke();
-  }
-
-  // label region — left
-  ctx.fillStyle = "rgba(232, 226, 213, 0.78)";
-  ctx.font = '11px var(--font-mono, ui-monospace)';
-  ctx.textBaseline = "middle";
-  ctx.textAlign = "left";
-  ctx.fillText(ch.label, x + 6, y + h * 0.5);
-  if (ch.audio) {
-    ctx.fillStyle = ch.color;
-    ctx.fillRect(x + 2, y + 4, 2, h - 8);
-  }
-
-  // trace
-  const traceX = x + labelW;
-  const traceW = totalW - labelW - 6;
-  const mid = y + h * 0.5;
-  const amp = h * 0.4;
-
-  if (inDefib) {
-    // flatline
-    ctx.strokeStyle = ch.color;
-    ctx.lineWidth = 1.6;
-    ctx.shadowColor = ch.color;
-    ctx.shadowBlur = reduce ? 0 : 4;
-    ctx.beginPath();
-    ctx.moveTo(traceX, mid);
-    ctx.lineTo(traceX + traceW, mid);
-    ctx.stroke();
-    ctx.shadowBlur = 0;
-    return;
-  }
-
-  // Draw the ring buffer from oldest → newest, scrolling right-to-left.
-  // The newest sample (cursor - 1) sits at the right edge.
-  const buf = ch.buffer;
-  const N = buf.length;
-  const startIdx = ch.cursor; // oldest sample lives here
-  ctx.strokeStyle = ch.color;
-  ctx.lineWidth = 1.6;
-  ctx.shadowColor = ch.color;
-  ctx.shadowBlur = reduce ? 0 : 4;
-  ctx.lineJoin = "round";
-  ctx.lineCap = "round";
-  ctx.beginPath();
-  for (let i = 0; i < N; i++) {
-    const idx = (startIdx + i) % N;
-    const sx = traceX + (i / (N - 1)) * traceW;
-    const sy = mid - buf[idx] * amp;
-    if (i === 0) ctx.moveTo(sx, sy);
-    else ctx.lineTo(sx, sy);
-  }
-  ctx.stroke();
-  ctx.shadowBlur = 0;
-}
-
-function drawPatternChannel(
-  ctx: CanvasRenderingContext2D,
-  samples: Float32Array,
-  cursor: number,
-  x: number,
-  y: number,
-  totalW: number,
-  h: number,
-  labelW: number,
-  reduce: boolean,
-  kind: PatternKind,
-): void {
-  const colors: Record<PatternKind, string> = {
-    tide:    "#6ad0ff",
-    wave:    "#8ae0c8",
-    seismic: "#ffae6a",
-    breath:  "#d6b8ff",
-    storm:   "#ff7a86",
-  };
-  const color = colors[kind];
-
-  ctx.fillStyle = "rgba(8, 12, 24, 0.6)";
-  ctx.fillRect(x, y, totalW, h);
-
-  // label
-  ctx.fillStyle = "rgba(232, 226, 213, 0.78)";
-  ctx.font = '11px var(--font-mono, ui-monospace)';
-  ctx.textBaseline = "middle";
-  ctx.textAlign = "left";
-  ctx.fillText(kind.toUpperCase(), x + 6, y + h * 0.5);
-
-  const traceX = x + labelW;
-  const traceW = totalW - labelW - 6;
-  const mid = y + h * 0.5;
-  const amp = h * 0.42;
-  const N = samples.length;
-
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 1.6;
-  ctx.shadowColor = color;
-  ctx.shadowBlur = reduce ? 0 : 5;
-  ctx.lineJoin = "round";
-  ctx.lineCap = "round";
-  ctx.beginPath();
-  // Render the entire pattern across the channel width, with a marker
-  // at the current cursor position to show "now" within the loop.
-  const STRIDE = Math.max(1, Math.floor(N / Math.max(1, traceW * 1.5)));
-  let first = true;
-  for (let i = 0; i < N; i += STRIDE) {
-    const sx = traceX + (i / (N - 1)) * traceW;
-    const sy = mid - samples[i] * amp;
-    if (first) { ctx.moveTo(sx, sy); first = false; }
-    else ctx.lineTo(sx, sy);
-  }
-  ctx.stroke();
-  ctx.shadowBlur = 0;
-
-  // cursor marker
-  const cx = traceX + (cursor / (N - 1)) * traceW;
-  ctx.fillStyle = color;
-  ctx.beginPath();
-  ctx.arc(cx, mid - samples[cursor] * amp, 2.4, 0, Math.PI * 2);
-  ctx.fill();
-}
-
-// ── styled sub-components ────────────────────────────────────────────────
-
-function Slider({
-  label, min, max, step, value, onChange, format, color,
+function PulseSlider({
+  label,
+  min,
+  max,
+  step,
+  value,
+  display,
+  tone,
+  onChange,
 }: {
   label: string;
   min: number;
   max: number;
   step: number;
   value: number;
-  onChange: (v: number) => void;
-  format: (v: number) => string;
-  color: string;
+  display: string;
+  tone: string;
+  onChange: (value: number) => void;
 }) {
   return (
-    <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          fontFamily: "var(--font-mono, ui-monospace)",
-          fontSize: 11,
-          letterSpacing: "0.12em",
-          textTransform: "uppercase",
-          color: "rgba(232,226,213,0.78)",
-        }}
-      >
-        <span>{label}</span>
-        <span style={{ color }}>{format(value)}</span>
-      </div>
+    <label className="pulse-slider" style={{ "--pulse-tone": tone } as CSSProperties}>
+      <span>{label}</span>
+      <strong>{display}</strong>
       <input
         type="range"
         min={min}
         max={max}
         step={step}
         value={value}
-        onChange={(e) => onChange(parseFloat(e.target.value))}
         aria-label={label}
-        style={
-          { ["--thumb-color" as string]: color, fontSize: 16 } as React.CSSProperties
-        }
+        onChange={(event) => onChange(Number(event.target.value))}
       />
     </label>
   );
 }
 
-const panelStyle: React.CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 10,
-  padding: "12px 14px",
-  border: "1px solid rgba(232,226,213,0.10)",
-  borderRadius: 6,
-  background: "rgba(8,14,22,0.55)",
-  backdropFilter: "blur(6px)",
-  WebkitBackdropFilter: "blur(6px)",
-  minHeight: 0,
-};
+function pushSample(channel: Channel, value: number) {
+  channel.buffer[channel.cursor] = clamp(value, -1.2, 1.2);
+  channel.cursor = (channel.cursor + 1) % channel.buffer.length;
+}
 
-const panelTitle: React.CSSProperties = {
-  fontFamily: "var(--font-mono, ui-monospace)",
-  fontSize: 10,
-  letterSpacing: "0.22em",
-  textTransform: "uppercase",
-  opacity: 0.55,
-  marginBottom: 2,
-};
+function qrstSample(p: number): number {
+  if (p < 0.08) return 0;
+  if (p < 0.16) return Math.sin(((p - 0.08) / 0.08) * Math.PI) * 0.18;
+  if (p < 0.22) return 0;
+  if (p < 0.26) return -((p - 0.22) / 0.04) * 0.18;
+  if (p < 0.30) return -0.18 + ((p - 0.26) / 0.04) * 1.18;
+  if (p < 0.34) return 1.0 - ((p - 0.30) / 0.04) * 1.4;
+  if (p < 0.38) return -0.4 + ((p - 0.34) / 0.04) * 0.4;
+  if (p < 0.50) return 0;
+  if (p < 0.62) return Math.sin(((p - 0.50) / 0.12) * Math.PI) * 0.28;
+  return 0;
+}
 
-const selectStyle: React.CSSProperties = {
-  flex: 1,
-  padding: "10px 10px",
-  minHeight: 44,
-  background: "rgba(4,8,16,0.85)",
-  color: "rgba(232,226,213,0.92)",
-  border: "1px solid rgba(232,226,213,0.22)",
-  borderRadius: 4,
-  fontFamily: "var(--font-mono, ui-monospace)",
-  fontSize: 16,
-  letterSpacing: "0.06em",
-  cursor: "pointer",
-};
+function drawBackground(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  time: number,
+  stress: number,
+  touch: number,
+  shock: number,
+  reduce: boolean,
+) {
+  const bg = ctx.createLinearGradient(0, 0, width, height);
+  bg.addColorStop(0, "#12070a");
+  bg.addColorStop(0.34, "#080506");
+  bg.addColorStop(0.68, "#07100f");
+  bg.addColorStop(1, "#190b10");
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, width, height);
 
-const inputStyle: React.CSSProperties = {
-  flex: 1,
-  padding: "10px 12px",
-  minHeight: 44,
-  background: "rgba(4,8,16,0.85)",
-  color: "rgba(232,226,213,0.92)",
-  border: "1px solid rgba(232,226,213,0.22)",
-  borderRadius: 4,
-  fontFamily: "var(--font-mono, ui-monospace)",
-  fontSize: 16,
-  letterSpacing: "0.04em",
-  outline: "none",
-};
+  const cadence = reduce ? 0 : time;
+  ctx.save();
+  ctx.globalCompositeOperation = "screen";
+  for (let i = 0; i < 34; i++) {
+    const y = (i / 33) * height;
+    const hue = i % 3 === 0 ? "255, 93, 115" : i % 3 === 1 ? "88, 217, 200" : "242, 191, 98";
+    ctx.strokeStyle = `rgba(${hue}, ${0.025 + stress * 0.035})`;
+    ctx.lineWidth = i % 5 === 0 ? 1.2 : 0.7;
+    ctx.beginPath();
+    for (let x = -20; x <= width + 20; x += 24) {
+      const yy = y
+        + Math.sin(x * 0.008 + cadence * (0.32 + i * 0.004) + i) * (10 + stress * 18)
+        + Math.sin(x * 0.021 - cadence * 0.7 + i * 1.7) * (3 + touch * 6);
+      if (x <= -20) ctx.moveTo(x, yy);
+      else ctx.lineTo(x, yy);
+    }
+    ctx.stroke();
+  }
 
-function btnStyle(color: string, disabled = false): React.CSSProperties {
-  return {
-    padding: "10px 14px",
-    minHeight: 44,
-    fontSize: 13,
-    fontFamily: "var(--font-mono, ui-monospace)",
-    letterSpacing: "0.14em",
-    textTransform: "uppercase",
-    cursor: disabled ? "default" : "pointer",
-    borderRadius: 4,
-    border: `1px solid ${disabled ? "rgba(232,226,213,0.18)" : color + "aa"}`,
-    background: disabled ? "rgba(232,226,213,0.05)" : color + "18",
-    color: disabled ? "rgba(232,226,213,0.4)" : color,
-    transition: "background 200ms, border-color 200ms",
-  };
+  for (let i = 0; i < 18; i++) {
+    const x = (i / 17) * width;
+    ctx.strokeStyle = `rgba(250, 238, 220, ${0.018 + shock * 0.04})`;
+    ctx.lineWidth = 0.7;
+    ctx.beginPath();
+    for (let y = -20; y <= height + 20; y += 28) {
+      const xx = x + Math.sin(y * 0.009 + cadence * 0.2 + i) * (5 + stress * 9);
+      if (y <= -20) ctx.moveTo(xx, y);
+      else ctx.lineTo(xx, y);
+    }
+    ctx.stroke();
+  }
+
+  if (shock > 0.01) {
+    ctx.fillStyle = `rgba(255, 241, 208, ${0.10 * shock})`;
+    ctx.fillRect(0, 0, width, height);
+  }
+  ctx.restore();
+
+  const veil = ctx.createLinearGradient(0, 0, 0, height);
+  veil.addColorStop(0, "rgba(0, 0, 0, 0.26)");
+  veil.addColorStop(0.38, "rgba(0, 0, 0, 0)");
+  veil.addColorStop(1, "rgba(0, 0, 0, 0.42)");
+  ctx.fillStyle = veil;
+  ctx.fillRect(0, 0, width, height);
+}
+
+function drawMembrane(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  radius: number,
+  time: number,
+  beat: number,
+  stress: number,
+  touch: number,
+  shock: number,
+  reduce: boolean,
+) {
+  const pulse = 1 + beat * 0.075 + touch * 0.026 - shock * 0.05;
+  const inner = radius * (0.34 + beat * 0.035);
+  const outer = radius * pulse;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(1, 0.72);
+
+  const core = ctx.createRadialGradient(0, 0, inner * 0.2, 0, 0, outer * 1.15);
+  core.addColorStop(0, `rgba(255, 241, 208, ${0.22 + beat * 0.20 + shock * 0.22})`);
+  core.addColorStop(0.16, `rgba(255, 93, 115, ${0.20 + stress * 0.16})`);
+  core.addColorStop(0.48, `rgba(88, 217, 200, ${0.075 + touch * 0.05})`);
+  core.addColorStop(1, "rgba(0, 0, 0, 0)");
+  ctx.fillStyle = core;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, outer * 1.18, outer, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.globalCompositeOperation = "screen";
+  for (let i = 0; i < 9; i++) {
+    const u = i / 8;
+    const r = mix(inner, outer, u) * (1 + Math.sin(time * (reduce ? 0 : 0.9) + i) * 0.012);
+    ctx.strokeStyle = i % 2
+      ? `rgba(88, 217, 200, ${0.10 + beat * 0.08})`
+      : `rgba(255, 93, 115, ${0.11 + stress * 0.09 + shock * 0.08})`;
+    ctx.lineWidth = 0.9 + (1 - u) * 1.1;
+    ctx.beginPath();
+    for (let p = 0; p <= 180; p++) {
+      const a = (p / 180) * Math.PI * 2;
+      const lobe = Math.sin(a * 4 + time * 1.4) * radius * (0.008 + stress * 0.006);
+      const rr = r + lobe;
+      const x = Math.cos(a) * rr;
+      const y = Math.sin(a) * rr;
+      if (p === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.stroke();
+  }
+
+  for (let i = 0; i < 7; i++) {
+    const a = i * (Math.PI * 2 / 7) + time * 0.16;
+    const r0 = radius * 0.08;
+    const r1 = radius * (0.66 + Math.sin(time + i) * 0.035);
+    ctx.strokeStyle = `rgba(250, 238, 220, ${0.035 + beat * 0.05})`;
+    ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(a) * r0, Math.sin(a) * r0);
+    ctx.quadraticCurveTo(
+      Math.cos(a + 0.7) * radius * 0.34,
+      Math.sin(a + 0.7) * radius * 0.34,
+      Math.cos(a + 0.18) * r1,
+      Math.sin(a + 0.18) * r1,
+    );
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawOrbitTrace(
+  ctx: CanvasRenderingContext2D,
+  channel: Channel,
+  cx: number,
+  cy: number,
+  radius: number,
+  amp: number,
+  squash: number,
+  startAngle: number,
+  angleSpan: number,
+  time: number,
+  listening: boolean,
+  inShock: boolean,
+  reduce: boolean,
+) {
+  const buf = channel.buffer;
+  const count = buf.length;
+  const tone = channel.tone;
+  const spin = reduce ? 0 : Math.sin(time * 0.12 + channel.midi) * 0.035;
+  ctx.save();
+  ctx.globalCompositeOperation = "screen";
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+
+  ctx.strokeStyle = colorAlpha(tone, inShock ? 0.36 : 0.16);
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let i = 0; i < count; i += 8) {
+    const u = i / (count - 1);
+    const a = startAngle + angleSpan * u + spin;
+    const x = cx + Math.cos(a) * radius;
+    const y = cy + Math.sin(a) * radius * squash;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  ctx.strokeStyle = colorAlpha(tone, listening ? 0.92 : 0.72);
+  ctx.shadowColor = tone;
+  ctx.shadowBlur = reduce ? 0 : listening ? 15 : 8;
+  ctx.lineWidth = listening ? 2.4 : 1.65;
+  ctx.beginPath();
+  for (let i = 0; i < count; i++) {
+    const idx = (channel.cursor + i) % count;
+    const u = i / (count - 1);
+    const sample = inShock ? 0 : buf[idx];
+    const a = startAngle + angleSpan * u + spin;
+    const tremor = Math.sin(u * Math.PI * 8 + time * 1.2 + channel.midi) * amp * 0.025;
+    const rr = radius + sample * amp + tremor;
+    const x = cx + Math.cos(a) * rr;
+    const y = cy + Math.sin(a) * rr * squash;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  const latestIdx = (channel.cursor - 1 + count) % count;
+  const a = startAngle + angleSpan + spin;
+  const rr = radius + (inShock ? 0 : buf[latestIdx]) * amp;
+  const x = cx + Math.cos(a) * rr;
+  const y = cy + Math.sin(a) * rr * squash;
+  ctx.shadowBlur = reduce ? 0 : 12;
+  ctx.fillStyle = tone;
+  ctx.beginPath();
+  ctx.arc(x, y, listening ? 3.7 : 2.6, 0, Math.PI * 2);
+  ctx.fill();
+
+  if (radius > 150) {
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = colorAlpha(tone, 0.62);
+    ctx.font = "11px var(--font-mono, ui-monospace)";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    const labelA = startAngle - 0.05 + spin;
+    ctx.fillText(channel.label, cx + Math.cos(labelA) * (radius + 18), cy + Math.sin(labelA) * (radius + 18) * squash);
+  }
+  ctx.restore();
+}
+
+function drawPatternOrbit(
+  ctx: CanvasRenderingContext2D,
+  samples: Float32Array,
+  cursor: number,
+  kind: PatternKind,
+  cx: number,
+  cy: number,
+  radius: number,
+  time: number,
+  reduce: boolean,
+) {
+  const tone = PATTERN_COLORS[kind];
+  const count = samples.length;
+  const stride = Math.max(2, Math.floor(count / 420));
+  const spin = reduce ? 0 : time * 0.034;
+  ctx.save();
+  ctx.globalCompositeOperation = "screen";
+  ctx.strokeStyle = colorAlpha(tone, 0.42);
+  ctx.shadowColor = tone;
+  ctx.shadowBlur = reduce ? 0 : 10;
+  ctx.lineWidth = 1.35;
+  ctx.beginPath();
+  let first = true;
+  for (let i = 0; i < count; i += stride) {
+    const u = i / (count - 1);
+    const a = u * Math.PI * 2 + spin;
+    const sample = samples[i];
+    const braid = Math.sin(u * Math.PI * 12 + time * 0.7) * radius * 0.012;
+    const rr = radius + sample * radius * 0.105 + braid;
+    const x = cx + Math.cos(a) * rr;
+    const y = cy + Math.sin(a) * rr * 0.58;
+    if (first) {
+      ctx.moveTo(x, y);
+      first = false;
+    } else {
+      ctx.lineTo(x, y);
+    }
+  }
+  ctx.closePath();
+  ctx.stroke();
+
+  const a = (cursor / (count - 1)) * Math.PI * 2 + spin;
+  const rr = radius + samples[cursor] * radius * 0.105;
+  ctx.fillStyle = tone;
+  ctx.shadowBlur = reduce ? 0 : 16;
+  ctx.beginPath();
+  ctx.arc(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr * 0.58, 3.2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawTouchBlooms(
+  ctx: CanvasRenderingContext2D,
+  blooms: TouchBloom[],
+  now: number,
+  reduce: boolean,
+) {
+  ctx.save();
+  ctx.globalCompositeOperation = "screen";
+  for (let i = blooms.length - 1; i >= 0; i--) {
+    const bloom = blooms[i];
+    const age = now - bloom.born;
+    if (age > bloom.life) {
+      blooms.splice(i, 1);
+      continue;
+    }
+    const t = age / bloom.life;
+    const eased = 1 - Math.pow(1 - t, 3);
+    const radius = (reduce ? 42 : 34 + eased * 230) * bloom.strength;
+    const alpha = (1 - t) * (0.20 + bloom.strength * 0.16);
+    ctx.strokeStyle = colorAlpha(bloom.hue, alpha);
+    ctx.lineWidth = 1.2 + bloom.strength * 0.8;
+    ctx.beginPath();
+    ctx.ellipse(bloom.x, bloom.y, radius, radius * 0.52, 0, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.fillStyle = colorAlpha(bloom.hue, alpha * 0.12);
+    ctx.beginPath();
+    ctx.ellipse(bloom.x, bloom.y, radius * 0.72, radius * 0.26, -0.12, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawNeedle(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  radius: number,
+  time: number,
+  patternSample: number,
+  beat: number,
+  shock: number,
+) {
+  const angle = -Math.PI * 0.5 + patternSample * 0.5 + Math.sin(time * 0.7) * 0.05;
+  const len = radius * (0.42 + beat * 0.1 + shock * 0.18);
+  ctx.save();
+  ctx.globalCompositeOperation = "screen";
+  ctx.translate(cx, cy);
+  ctx.rotate(angle);
+  const grad = ctx.createLinearGradient(0, 0, len, 0);
+  grad.addColorStop(0, "rgba(255, 241, 208, 0)");
+  grad.addColorStop(0.42, "rgba(255, 241, 208, 0.46)");
+  grad.addColorStop(1, `rgba(255, 93, 115, ${0.58 + shock * 0.28})`);
+  ctx.strokeStyle = grad;
+  ctx.lineWidth = 1.3 + shock * 1.2;
+  ctx.shadowColor = "#fff1d0";
+  ctx.shadowBlur = 10 + shock * 12;
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.lineTo(len, 0);
+  ctx.stroke();
+  ctx.fillStyle = `rgba(255, 241, 208, ${0.42 + beat * 0.32 + shock * 0.26})`;
+  ctx.beginPath();
+  ctx.arc(0, 0, 4 + beat * 5 + shock * 4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
 }
