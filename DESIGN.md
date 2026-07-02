@@ -13,7 +13,7 @@ A single-page Next.js 14 site that pretends to be an instrument: *a candle insid
 
 The throughline is *embodied state*. Every value the user sets is rendered four ways at once: as polygon geometry (the sigil), as a colored point on a compass, as a held tone (the audio voice for that concern), and as a paragraph the room writes back to them. There are no metrics anywhere on the page that aren't simultaneously visible, audible, and writable.
 
-Single deploy target, Railway, ~1100 LOC of canvas/WebGL, ~1500 LOC of React, two AI endpoints, zero analytics, zero auth, zero backend persistence (everything is `localStorage`).
+Single deploy target, Railway, ~1100 LOC of canvas/WebGL, ~1500 LOC of React, two AI endpoints, optional Google Analytics when a GA4 Measurement ID is configured, zero auth, zero backend persistence (everything is `localStorage`).
 
 ---
 
@@ -138,7 +138,7 @@ src/
 
 One Zustand store is the single source of truth. The compass writes `concerns[k]`; that flows into Reading (via `useMemo(buildReading)`), the atlas drawer (`buildRegionReading`), the per-entry sigils (derived weights), and the Sea (which reads `getAudioTime` from the audio module but doesn't otherwise share state). The store persists `concerns / preset / region / carriedObject` to `localStorage[objetdart:state:v1]`, kept readings to `objetdart:kept:v1`, imagined archive entries to `objetdart:imagined:v1`, audio-muted to `objetdart:audio:muted`.
 
-No backend writes. No analytics. The two API routes (`/api/ask-the-room`, `/api/imagine-entry`) are stateless — they take the user's current state in the request body, never store anything.
+No backend writes. Google Analytics is optional and env-gated; without a GA4 Measurement ID, no tracking script loads. The two API routes (`/api/ask-the-room`, `/api/imagine-entry`) are stateless — they take the user's current state in the request body, never store anything.
 
 ---
 
@@ -313,7 +313,7 @@ Imagery: no stock, no AI-illustration, no 3D. Icons: 1px hairline, 24×24, used 
 - **No sentence-case or Title-case headlines.** Lowercase or display serif italic.
 - **No drop shadows, gradients on UI, or glow on text.** (Sea has gradient because it's the sea.)
 - **No section "cards" wrapping everything.** Only the archive cards and the imagine-a-drawer form are bordered.
-- **No analytics, no tracking, no email capture.** Stated explicitly in the colophon.
+- **No required analytics, auth, or email capture.** GA4 can be enabled by env var for usage/click tracking, but un-wired deploys load no tracking script.
 - **No backend.** Everything is client-state + the two stateless AI routes.
 - **No "coming soon" anywhere.** Every section is fully implemented. Earlier drafts said *"longer body text and images forthcoming"* in the archive — that has been replaced with real prose for every entry.
 - **No autoplay of audio.** First user gesture starts the ocean; muted state persists.

@@ -1,5 +1,5 @@
-// Thin wrapper over gtag. Every call no-ops safely when GA isn't loaded
-// (no NEXT_PUBLIC_GA_ID, or running server-side), so callers never need to guard.
+// Thin wrapper over gtag. Every call no-ops safely when GA isn't loaded, so
+// callers never need to guard.
 
 declare global {
   interface Window {
@@ -8,11 +8,13 @@ declare global {
   }
 }
 
-// Send a page_view for client-side (App Router) navigations. The initial load
-// is already counted by the gtag('config') call in the injected script.
-export function pageview(gaId: string, path: string) {
+export function pageview(path: string) {
   if (typeof window === "undefined" || !window.gtag) return;
-  window.gtag("config", gaId, { page_path: path });
+  window.gtag("event", "page_view", {
+    page_path: path,
+    page_location: window.location.href,
+    page_title: document.title,
+  });
 }
 
 export function trackEvent(name: string, params?: Record<string, unknown>) {

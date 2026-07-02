@@ -1,46 +1,90 @@
 "use client";
 
-import { useEffect } from "react";
-import { usePathname } from "next/navigation";
+import { useEffect, useMemo } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
 import { pageview, trackEvent } from "@/lib/analytics";
 
-// Mounted once (only when GA is configured). Handles the two things gtag's
-// default config doesn't: page views across client-side route changes, and a
-// single delegated listener that turns every click on an interactive element
-// into a GA event — no per-component wiring across the scenes.
+const CLICK_SELECTOR = [
+  "a",
+  "button",
+  "summary",
+  "input",
+  "select",
+  "textarea",
+  "canvas",
+  "svg[role='img']",
+  "[role='button']",
+  "[data-analytics]",
+  "[data-touch-surface]",
+].join(", ");
+
+function compactText(value: string | null | undefined, fallback: string) {
+  const cleaned = value?.replace(/\s+/g, " ").trim();
+  return (cleaned || fallback).slice(0, 120);
+}
+
+function linkPath(el: HTMLElement) {
+  if (!(el instanceof HTMLAnchorElement) || !el.href || typeof window === "undefined") return undefined;
+  try {
+    const url = new URL(el.href);
+    if (url.protocol === "mailto:" || url.protocol === "tel:") return url.protocol.slice(0, -1);
+    if (url.origin === window.location.origin) return compactText(`${url.pathname}${url.search}`, "/");
+    return compactText(`${url.origin}${url.pathname}`, url.origin);
+  } catch {
+    return compactText(el.getAttribute("href"), "link");
+  }
+}
+
+// Mounted once when GA is configured. It owns first-load and client-navigation
+// page views, plus one delegated click listener for interactive surfaces.
 export default function AnalyticsListener({ gaId }: { gaId: string }) {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const pagePath = useMemo(() => {
+    const path = pathname || "/";
+    const query = searchParams.toString();
+    return query ? `${path}?${query}` : path;
+  }, [pathname, searchParams]);
 
   useEffect(() => {
-    if (pathname) pageview(gaId, pathname);
-  }, [gaId, pathname]);
+    if (gaId) pageview(pagePath);
+  }, [gaId, pagePath]);
 
   useEffect(() => {
     function onClick(e: MouseEvent) {
       const target = e.target as HTMLElement | null;
-      const el = target?.closest<HTMLElement>(
-        'a, button, [role="button"], [data-analytics]',
-      );
+      const el = target?.closest<HTMLElement>(CLICK_SELECTOR);
       if (!el) return;
 
-      // Prefer an explicit data-analytics label, then aria-label, then the
-      // element's own text, falling back to the tag name. Capped so long copy
-      // doesn't bloat the event.
-      const label =
+      const tag = el.tagName.toLowerCase();
+      const analyticsId =
         el.getAttribute("data-analytics") ||
         el.getAttribute("aria-label") ||
-        el.textContent?.trim().slice(0, 80) ||
-        el.tagName.toLowerCase();
+        el.getAttribute("title") ||
+        el.getAttribute("name") ||
+        el.id ||
+        (el.hasAttribute("data-touch-surface") ? undefined : el.textContent) ||
+        tag;
 
-      const params: Record<string, unknown> = { label, page_path: pathname };
-      if (el instanceof HTMLAnchorElement && el.href) params.link_url = el.href;
+      const params: Record<string, unknown> = {
+        click_label: compactText(analyticsId, tag),
+        element_tag: tag,
+        page_path: pagePath,
+      };
 
-      trackEvent("click", params);
+      const role = el.getAttribute("role");
+      const explicit = el.getAttribute("data-analytics");
+      const href = linkPath(el);
+      if (role) params.element_role = role;
+      if (explicit) params.analytics_id = compactText(explicit, tag);
+      if (href) params.link_url = href;
+
+      trackEvent("site_click", params);
     }
 
     document.addEventListener("click", onClick, { capture: true });
     return () => document.removeEventListener("click", onClick, { capture: true });
-  }, [pathname]);
+  }, [pagePath]);
 
   return null;
 }
