@@ -24,6 +24,12 @@ yarn start
 
 > Using npm instead of yarn? `npm install` then `npm run dev` works identically.
 
+## Deployment
+
+Production runs on Railway from the GitHub `main` branch. If Railway falls
+behind `origin/main` or only deploys when triggered manually, use the
+[Railway autodeploy runbook](docs/railway-autodeploy.md).
+
 ### Analytics (optional)
 
 Google Analytics 4 is wired in but stays dormant until you give it a Measurement ID. Set an env var (in `.env.local` for dev, or your host's env settings for prod):
