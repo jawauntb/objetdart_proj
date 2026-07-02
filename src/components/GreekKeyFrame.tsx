@@ -242,13 +242,10 @@ function VerticalBand({
   strokeThickness: number;
 }) {
   // We measure the wrapper's height after mount so the rotated band knows
-  // how long to be. Falls back to the viewport inner height during SSR /
-  // first paint so the band has presence on initial render.
+  // how long to be. The CSS fallback is stable across SSR and hydration;
+  // the ResizeObserver tightens it to the exact clipped height after mount.
   const wrapRef = React.useRef<HTMLDivElement | null>(null);
-  const [length, setLength] = React.useState<number>(() => {
-    if (typeof window === "undefined") return 0;
-    return window.innerHeight;
-  });
+  const [length, setLength] = React.useState(0);
 
   React.useEffect(() => {
     const el = wrapRef.current;
@@ -257,7 +254,7 @@ function VerticalBand({
       // Use the parent's bounding height (the GreekKeyFrame wrapper). The
       // VerticalBand wrapper itself is `top: thickness; bottom: thickness`
       // so its own clientHeight already excludes the corner squares.
-      setLength(el.clientHeight);
+      setLength(Math.round(el.getBoundingClientRect().height));
     };
     measure();
     const ro = new ResizeObserver(measure);
@@ -282,10 +279,11 @@ function VerticalBand({
   //     y: -length..0); translating (0, length) brings it back into
   //     (x: 0..thickness, y: 0..length). The meander's "up" now points
   //     to the LEFT, again inward.
+  const bandLength = length > 0 ? `${length}px` : "100vh";
   const transform =
     side === "left"
       ? `translate(${thickness}px, 0) rotate(90deg)`
-      : `translate(0, ${length}px) rotate(-90deg)`;
+      : `translate(0, ${bandLength}) rotate(-90deg)`;
 
   return (
     <div
@@ -309,7 +307,7 @@ function VerticalBand({
           position: "absolute",
           top: 0,
           left: 0,
-          width: length,
+          width: bandLength,
           height: thickness,
           transform,
           transformOrigin: "top left",
