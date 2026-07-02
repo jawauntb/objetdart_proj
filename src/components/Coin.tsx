@@ -311,17 +311,93 @@ export default function Coin() {
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.15;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.autoClear = false; // we draw the aventurine background pass first
     wrap.appendChild(renderer.domElement);
     renderer.domElement.style.cssText = "display:block;width:100%;height:100%;touch-action:none;cursor:grab";
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0a0806);
+    scene.background = null; // the background is the aventurine shader pass below
     const pmrem = new THREE.PMREMGenerator(renderer);
     const envRT = pmrem.fromScene(new RoomEnvironment(), 0.02);
     scene.environment = envRT.texture;
 
     const camera = new THREE.PerspectiveCamera(34, 1, 0.1, 100);
     camera.position.set(0, 0, 23);
+
+    // ── aventurine "night sky" background ─────────────────────────────────
+    // A fullscreen shader that starts as dusk-dark and, as you play with the
+    // coin, fills bottom-to-top with a deep-navy aventurine starfield (gold /
+    // copper / blue-white flecks). Once full it sparkles ever brighter and
+    // drifts iridescent — a wordless score of how much you've played.
+    const bgScene = new THREE.Scene();
+    const bgCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    const bgUniforms = {
+      uTime: { value: 0 },
+      uFill: { value: 0 },   // 0→1, how far the aventurine has risen
+      uSpark: { value: 0 },  // live sparkle/iridescence intensity
+      uAspect: { value: 1 },
+    };
+    const bgMat = new THREE.ShaderMaterial({
+      depthTest: false, depthWrite: false,
+      uniforms: bgUniforms,
+      vertexShader: /* glsl */`
+        varying vec2 vUv;
+        void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }
+      `,
+      fragmentShader: /* glsl */`
+        precision highp float;
+        varying vec2 vUv;
+        uniform float uTime, uFill, uSpark, uAspect;
+        float hash(vec2 p){ p = fract(p*vec2(123.34,345.45)); p += dot(p,p+34.345); return fract(p.x*p.y); }
+        // one twinkling fleck layer
+        void layer(vec2 uv, float scale, float thresh, float seed, inout float acc, inout vec3 col){
+          vec2 gv = vec2(uv.x*uAspect, uv.y) * scale;
+          vec2 id = floor(gv);
+          vec2 off = vec2(hash(id+seed+1.3), hash(id+seed+2.7)) - 0.5;
+          float d = length(fract(gv) - 0.5 - off*0.7);
+          float h = hash(id + seed);
+          float star = smoothstep(0.14, 0.0, d) * step(thresh, h);
+          float tw = 0.55 + 0.45*sin(uTime*(1.2 + h*3.0) + h*30.0);
+          float b = star * mix(0.5, 1.0, tw) * mix(0.8, 2.4, uSpark);
+          // fleck colour: vivid gold, sapphire, and copper — saturated, never white
+          vec3 c = mix(vec3(1.0,0.78,0.30), vec3(0.42,0.62,1.0), hash(id+seed+7.1));
+          c = mix(c, vec3(1.0,0.46,0.16), step(0.86, hash(id+seed+3.3)));
+          // as you keep playing, each fleck flashes its own jewel hue (iridescent carats)
+          vec3 jewel = 0.5 + 0.5*cos(6.2831*(vec3(0.0,0.33,0.67) + hash(id+seed+5.5)*3.0 + uTime*0.5));
+          c = mix(c, jewel, uSpark*0.55);
+          acc += b; col += c * b;
+        }
+        void main(){
+          vec2 uv = vUv;
+          // pure black before the night fills in
+          vec3 dusk = vec3(0.0);
+          // deep-navy aventurine base, darker toward the top of the sky
+          vec3 avn = mix(vec3(0.028,0.050,0.135), vec3(0.014,0.022,0.070), uv.y);
+          // the night rises from the bottom; soft transition band
+          float band = 0.16;
+          float fillAmt = 1.0 - smoothstep(uFill - band, uFill + band, uv.y);
+          // a warm ember line at the rising horizon (sunset → night)
+          float horizon = exp(-pow((uv.y - uFill)/0.045, 2.0)) * (1.0 - uFill*0.7) * step(0.02, uFill);
+          vec3 sunset = vec3(0.40,0.16,0.05) * horizon;
+          // starfield (only within the filled region)
+          float acc = 0.0; vec3 scol = vec3(0.0);
+          layer(uv, 70.0,  0.55, 0.0,  acc, scol);
+          layer(uv, 130.0, 0.62, 17.0, acc, scol);
+          layer(uv, 220.0, 0.72, 41.0, acc, scol);
+          // roll off the brightest flecks so they read as vivid carats, never white
+          float m = max(scol.r, max(scol.g, scol.b));
+          scol = scol / (1.0 + m * 0.6);
+          vec3 col = mix(dusk, avn, fillAmt) + sunset + scol * fillAmt;
+          // gentle vignette
+          float vig = smoothstep(1.25, 0.25, length((uv-0.5)*vec2(uAspect,1.0)));
+          col *= mix(0.82, 1.0, vig);
+          gl_FragColor = vec4(col, 1.0);
+        }
+      `,
+    });
+    const bgQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), bgMat);
+    bgQuad.frustumCulled = false;
+    bgScene.add(bgQuad);
 
     // ── lighting: env + a hard key that makes gold flare ──
     const key = new THREE.DirectionalLight(0xfff4e2, 3.4);
@@ -336,8 +412,8 @@ export default function Coin() {
     const frontTex = makeReliefTexture("front");
     const backTex = makeReliefTexture("back");
     const reedTex = makeReedTexture(); reedTex.repeat.set(56, 1);
-    const matFront = new THREE.MeshStandardMaterial({ ...gold, roughness: 0.26, bumpMap: frontTex, bumpScale: 6 });
-    const matBack = new THREE.MeshStandardMaterial({ ...gold, roughness: 0.26, bumpMap: backTex, bumpScale: 6 });
+    const matFront = new THREE.MeshStandardMaterial({ ...gold, roughness: 0.22, bumpMap: frontTex, bumpScale: 8.5 });
+    const matBack = new THREE.MeshStandardMaterial({ ...gold, roughness: 0.22, bumpMap: backTex, bumpScale: 8.5 });
     const matEdge = new THREE.MeshStandardMaterial({ ...gold, roughness: 0.34, bumpMap: reedTex, bumpScale: 3 });
     const geo = new THREE.CylinderGeometry(R, R, TH, 220, 1, false);
     geo.rotateX(Math.PI / 2); // faces point ±Z (toward camera)
@@ -372,6 +448,21 @@ export default function Coin() {
     const _qSpin = new THREE.Quaternion();
     const _tiltEuler = new THREE.Euler();
     const _z = new THREE.Vector3(0, 0, 1);
+
+    // ── aventurine "points": every interaction fills the night sky a little,
+    //    persisted locally (no login) so it resumes where you left off ──
+    const FILL_KEY = "objetdart:coin:aventurine";
+    const fill = { v: 0, t: 0, spark: 0, save: 0 };
+    try {
+      const s = parseFloat(localStorage.getItem(FILL_KEY) || "0");
+      if (s > 0) { fill.t = Math.min(1, s); fill.v = fill.t; }
+    } catch { /* noop */ }
+    const addPoints = (a: number) => {
+      fill.t = Math.min(1, fill.t + a);            // monotonic progress (the "score")
+      fill.spark = Math.min(1, fill.spark + a * 1.6 + 0.05); // live dazzle
+      const now = performance.now();
+      if (now - fill.save > 700) { fill.save = now; try { localStorage.setItem(FILL_KEY, fill.t.toFixed(3)); } catch { /* noop */ } }
+    };
 
     // ── audio: the coin is an 8-note instrument (a C-major octave) ──
     const A = () => getFieldAudio();
@@ -419,7 +510,7 @@ export default function Coin() {
       flip.q0.copy(flip.base);
       flip.q1.copy(_flipQ).multiply(flip.base);     // world-space flip
       flip.t = 0;
-      shine.v = 1; flipSound(); haptics.roll();
+      shine.v = 1; flipSound(); haptics.roll(); addPoints(0.035);
       useField.getState().recordTape("sigil", 0.9, "coin/flip");
       if (hintRef.current) hintRef.current.style.opacity = "0";
     };
@@ -456,7 +547,7 @@ export default function Coin() {
           while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2;
           spin.z += d;
           const sec = (((Math.floor(spin.z / (Math.PI / 4)) % 8) + 8) % 8);
-          if (sec !== notes.spinSec) { notes.spinSec = sec; spinNote(sec); haptics.tap(); shine.v = Math.min(1, shine.v + 0.25); }
+          if (sec !== notes.spinSec) { notes.spinSec = sec; spinNote(sec); haptics.tap(); shine.v = Math.min(1, shine.v + 0.25); addPoints(0.02); }
         }
         gesture.twoAngle = ang;
         return;
@@ -471,7 +562,7 @@ export default function Coin() {
       tilt.tx = Math.max(-1.1, Math.min(1.1, tilt.tx));
       const now = performance.now();
       const speed = Math.abs(dx) + Math.abs(dy);
-      if (speed > 3) { shine.v = Math.min(1, shine.v + speed * 0.02); shimmer(now, Math.round(e.clientX / 40), 90); if (now - drag.lastRub > 120) { haptics.tap(); drag.lastRub = now; } }
+      if (speed > 3) { shine.v = Math.min(1, shine.v + speed * 0.02); shimmer(now, Math.round(e.clientX / 40), 90); addPoints(0.005); if (now - drag.lastRub > 120) { haptics.tap(); drag.lastRub = now; } }
     };
     const onUp = (e: PointerEvent) => {
       const wasTwo = gesture.two;
@@ -547,6 +638,7 @@ export default function Coin() {
       const w = wrap.clientWidth || 1, h = wrap.clientHeight || 1;
       renderer.setSize(w, h, false);
       camera.aspect = w / h; camera.updateProjectionMatrix();
+      bgUniforms.uAspect.value = w / h;
     };
     resize();
     const ro = new ResizeObserver(resize); ro.observe(wrap);
@@ -587,13 +679,20 @@ export default function Coin() {
       // shimmer sound on real motion (tilt velocity) — unchanged character
       const tiltMag = Math.abs(tilt.tx) + Math.abs(tilt.ty);
       const tiltVel = Math.abs(tiltMag - lastTiltMag); lastTiltMag = tiltMag;
-      if (tiltVel > 0.06) { shine.v = Math.min(1, shine.v + tiltVel * 0.6); shimmer(now, Math.round(tilt.x * 20) + 4, 160); }
+      if (tiltVel > 0.06) { shine.v = Math.min(1, shine.v + tiltVel * 0.6); shimmer(now, Math.round(tilt.x * 20) + 4, 160); addPoints(0.004); }
       // slow directional tilt → sweep the concordant octave around the coin
       const lean = Math.hypot(tilt.tx, tilt.ty);
       if (lean > 0.4) {
         const sec = sectorOf(tilt.ty, -tilt.tx);
         if (sec !== notes.tiltSec && now - lastTiltNote > 200) { notes.tiltSec = sec; lastTiltNote = now; tiltNote(sec); }
       } else { notes.tiltSec = -1; }
+
+      // drive the aventurine night sky
+      fill.v += (fill.t - fill.v) * 0.05;
+      fill.spark *= 0.985;
+      bgUniforms.uTime.value = now * 0.001 * (reduce ? 0.25 : 1);
+      bgUniforms.uFill.value = fill.v;
+      bgUniforms.uSpark.value = Math.min(1, fill.spark + fill.v * 0.3);
 
       // star glint: ride the highlight, fade out
       shine.v *= 0.92;
@@ -602,7 +701,10 @@ export default function Coin() {
       const sc = 8 + shine.v * 8; star.scale.set(sc, sc, 1);
       star.position.set(-2.2 + tilt.y * 3, 2.2 - tilt.x * 3, 6);
 
-      renderer.render(scene, camera);
+      renderer.clear();
+      renderer.render(bgScene, bgCam);   // aventurine background
+      renderer.clearDepth();
+      renderer.render(scene, camera);    // the gold coin over it
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
@@ -617,6 +719,7 @@ export default function Coin() {
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
+      try { localStorage.setItem(FILL_KEY, fill.t.toFixed(3)); } catch { /* noop */ }
       window.removeEventListener("deviceorientation", onOrient);
       window.removeEventListener("devicemotion", onMotion);
       window.removeEventListener("touchend", askPerm);
@@ -627,12 +730,13 @@ export default function Coin() {
       hideStyle.remove();
       renderer.dispose(); pmrem.dispose(); envRT.dispose();
       frontTex.dispose(); backTex.dispose(); reedTex.dispose();
+      bgMat.dispose(); bgQuad.geometry.dispose();
       if (renderer.domElement.parentNode) renderer.domElement.parentNode.removeChild(renderer.domElement);
     };
   }, []);
 
   return (
-    <div ref={wrapRef} style={{ position: "fixed", inset: 0, background: "#0a0806" }}>
+    <div ref={wrapRef} style={{ position: "fixed", inset: 0, background: "#000000" }}>
       <div className="coin-hud">
         <div className="coin-title">objet&nbsp;d&rsquo;art — la médaille</div>
         <div className="coin-hint" ref={hintRef}>tap a spot to flip & play its note · tilt or pop to flip · slide to resize · twist with two fingers · rub to shine</div>
