@@ -49,6 +49,10 @@ function routeUrl(route) {
   return `${baseUrl}${route}`;
 }
 
+async function gotoRoute(page, route) {
+  await page.goto(routeUrl(route), { waitUntil: "domcontentloaded", timeout: 45000 });
+}
+
 async function frameState(page) {
   return page.evaluate(() => {
     const frames = [...document.querySelectorAll('div[aria-hidden="true"]')].filter((element) => {
@@ -201,7 +205,7 @@ async function runCloudGestures(page, label) {
 }
 
 async function assertPointerCancelDoesNotStorm(page) {
-  await page.goto(routeUrl("/clouds"), { waitUntil: "networkidle" });
+  await gotoRoute(page, "/clouds");
   await waitForCloudCanvases(page);
   await page.waitForTimeout(700);
   await dispatchPointer(page, ".clouds-root > canvas:nth-of-type(2)", "pointerdown", 31, 680, 360);
@@ -214,7 +218,7 @@ async function assertPointerCancelDoesNotStorm(page) {
 }
 
 async function assertPointerIdIsolation(page) {
-  await page.goto(routeUrl("/clouds"), { waitUntil: "networkidle" });
+  await gotoRoute(page, "/clouds");
   await waitForCloudCanvases(page);
   await page.waitForTimeout(700);
   await dispatchPointer(page, ".clouds-root > canvas:nth-of-type(2)", "pointerdown", 1, 620, 340);
@@ -231,7 +235,7 @@ async function runCloudViewport(browser, label, viewport, deviceScaleFactor, isM
   const context = await browser.newContext({ viewport, deviceScaleFactor, isMobile, hasTouch: isMobile });
   const page = await context.newPage();
   const messages = watchPage(page, label);
-  await page.goto(routeUrl("/clouds"), { waitUntil: "networkidle" });
+  await gotoRoute(page, "/clouds");
   await waitForCloudCanvases(page);
   await page.waitForTimeout(900);
   await assertGreekFrame(page, label);
@@ -247,10 +251,10 @@ async function runRouteExitCheck(browser) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 960 }, deviceScaleFactor: 1 });
   const page = await context.newPage();
   const messages = watchPage(page, "route-exit");
-  await page.goto(routeUrl("/clouds"), { waitUntil: "networkidle" });
+  await gotoRoute(page, "/clouds");
   await page.waitForSelector(".clouds-root");
   await assertCloudChromeHidden(page, "route-exit");
-  await page.goto(routeUrl("/"), { waitUntil: "networkidle" });
+  await gotoRoute(page, "/");
   await page.waitForFunction(() => !document.querySelector(".clouds-root"), null, { timeout: 10000 });
   const visibleChromeCount = await page.evaluate(() => [".oda-field-watch", ".oda-candle-mark", ".oda-tape-shell", ".oda-sound-toggle"].filter((selector) => {
     const element = document.querySelector(selector);
@@ -268,7 +272,7 @@ async function runGreekFrameCompanionRoute(browser) {
   const context = await browser.newContext({ viewport: { width: 1280, height: 860 }, deviceScaleFactor: 1 });
   const page = await context.newPage();
   const messages = watchPage(page, "aphros-frame");
-  await page.goto(routeUrl("/aphros"), { waitUntil: "networkidle" });
+  await gotoRoute(page, "/aphros");
   await page.waitForTimeout(1200);
   await assertGreekFrame(page, "aphros-frame");
   assert.deepEqual(messages, [], "aphros-frame: unexpected browser messages");
