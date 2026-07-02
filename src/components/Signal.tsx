@@ -92,18 +92,32 @@ type KeptSignal = {
 const KEPT_SIGNALS_KEY = "objetdart:signal-kept:v1";
 
 const LYRIAL_WAIT_PHRASES = [
-  "asking the sea engine",
+  "calling the station",
+  "warming the tape",
   "braiding the prompt",
-  "waiting for the clip",
-  "tuning the tide",
+  "opening the loop",
   "listening for return",
 ] as const;
 
 const LYRIAL_STAGE_LABEL: Record<string, string> = {
-  requesting: "asking lyria",
-  decoding: "opening the clip",
-  ready: "generated signal",
+  requesting: "receiver open",
+  decoding: "opening the tape",
+  ready: "station locked",
 };
+
+const RECEIVER_STAGES = [
+  { after: 0, label: "calling the station", detail: "the old signal keeps the room warm" },
+  { after: 6, label: "warming the tape", detail: "melody is taking shape" },
+  { after: 14, label: "threading the loop", detail: "texture is being folded in" },
+  { after: 26, label: "listening for return", detail: "nearly audible" },
+] as const;
+
+const SIGNAL_PRESETS = [
+  { label: "slow bells", prompt: "slow glass bells over a dark sea, tender and loopable" },
+  { label: "rain drone", prompt: "quiet rain, low drone, sparse melody, distant warm tape" },
+  { label: "bright pulse", prompt: "bright open pulse, gentle joy, clear shimmer, no rush" },
+  { label: "night choir", prompt: "wordless midnight choir made of synths, soft and uncanny" },
+] as const;
 
 const SIGNAL_NUDGES: ReadonlyArray<{
   id: NonNullable<StartComposeOptions["reason"]>;
@@ -168,6 +182,9 @@ export default function Signal() {
   const [activePrompt, setActivePrompt] = useState("");
   const [composeModel, setComposeModel] = useState<string | null>(null);
   const [keptSignals, setKeptSignals] = useState<KeptSignal[]>([]);
+  const [receiveStartedAt, setReceiveStartedAt] = useState(0);
+  const [receiveTick, setReceiveTick] = useState(0);
+  const [pendingKeepsCurrent, setPendingKeepsCurrent] = useState(false);
 
   // ── interactive layer ────────────────────────────────────────────────
   // Hovered = pointer is inside the spiral's outer radius. The RAF loop
@@ -349,6 +366,9 @@ export default function Signal() {
     setComposeModel(null);
     setComposeError(null);
     setComposeProgress(0);
+    setReceiveStartedAt(Date.now());
+    setReceiveTick(Date.now());
+    setPendingKeepsCurrent(keepCurrentUntilReady);
 
     let handle: ComposeHandle | null = null;
     if (prompt) {
@@ -373,6 +393,7 @@ export default function Signal() {
         console.warn(err);
         if (composeRequestRef.current !== requestId) return;
         setComposePending(false);
+        setPendingKeepsCurrent(false);
         if (!keepCurrentUntilReady) {
           setComposeSource(null);
           setComposing(false);
@@ -392,6 +413,7 @@ export default function Signal() {
       });
     }
     setComposePending(false);
+    setPendingKeepsCurrent(false);
     if (composeRequestRef.current !== requestId) {
       try { handle?.stop(); } catch { /* noop */ }
       return;
@@ -414,7 +436,10 @@ export default function Signal() {
         : promptTextRef.current;
       promptTextRef.current = submittedPrompt;
       setPromptText(submittedPrompt);
-      void startCompose(submittedPrompt);
+      void startCompose(submittedPrompt, {
+        keepCurrentUntilReady: Boolean(composeHandle.current && submittedPrompt.trim()),
+        reason: "compose",
+      });
     },
     [startCompose],
   );
@@ -426,6 +451,7 @@ export default function Signal() {
       composeHandle.current = null;
     }
     setComposePending(false);
+    setPendingKeepsCurrent(false);
     setComposeSource(null);
     setComposeError(null);
     setComposing(false);
@@ -484,6 +510,19 @@ export default function Signal() {
       reason: "kept",
     });
   }, [startCompose]);
+
+  const choosePreset = useCallback((prompt: string) => {
+    promptTextRef.current = prompt;
+    setPromptText(prompt);
+    setComposeError(null);
+    haptics.tap();
+  }, []);
+
+  useEffect(() => {
+    if (!composePending) return;
+    const id = window.setInterval(() => setReceiveTick(Date.now()), 500);
+    return () => window.clearInterval(id);
+  }, [composePending]);
 
   // progress ticker — also keeps the music alive when a piece plays out.
   // The listener stays in control: it runs until they press stop.
@@ -987,13 +1026,26 @@ export default function Signal() {
 
   const showTapPrompt = !audioStarted && !micActive;
   const isLyriaActive = composeSource === "lyria" && activePrompt.trim().length > 0;
+  const receiveElapsed = composePending && receiveStartedAt
+    ? Math.max(0, Math.floor(((receiveTick || Date.now()) - receiveStartedAt) / 1000))
+    : 0;
+  const receiveStage = RECEIVER_STAGES.reduce(
+    (current, stage) => (receiveElapsed >= stage.after ? stage : current),
+    RECEIVER_STAGES[0],
+  );
   const composePrimaryLabel = composePending
-    ? (isLyriaActive ? composeWaitPhrase : "preparing")
+    ? (isLyriaActive ? receiveStage.label : "preparing field music")
     : (isLyriaActive ? LYRIAL_STAGE_LABEL.ready : composeMeta?.scale ?? "compose");
   const composeSecondaryLabel = composePending
-    ? (isLyriaActive ? (composeStage === "preparing" ? "asking lyria" : LYRIAL_STAGE_LABEL[composeStage]) : `${composeMeta?.tempo ?? 80} bpm`)
+    ? (isLyriaActive ? `${receiveElapsed}s · ${composeWaitPhrase}` : `${composeMeta?.tempo ?? 80} bpm`)
     : (isLyriaActive ? "looping" : `${composeMeta?.tempo ?? 80} bpm`);
   const activePromptPreview = activePrompt ? compactPrompt(activePrompt, 64) : "";
+  const receiveDetail = pendingKeepsCurrent ? receiveStage.detail : "music is arriving";
+  const receiverButtonLabel = composePending
+    ? "receiving"
+    : composeHandle.current && promptText.trim()
+      ? "receive next"
+      : "receive music";
 
   return (
     <div
@@ -1002,6 +1054,7 @@ export default function Signal() {
         if (!audioStarted) void ensureAudio();
       }}
       data-touch-surface="true"
+      className="signal-root"
       style={{
         position: "fixed",
         inset: 0,
@@ -1054,7 +1107,7 @@ export default function Signal() {
             marginBottom: 10,
           }}
         >
-          the room is making sound
+          ai music receiver
         </div>
         <WaterText
           as="h1"
@@ -1135,7 +1188,7 @@ export default function Signal() {
             position: "fixed",
             left: 0,
             right: 0,
-            bottom: "calc(128px + env(safe-area-inset-bottom))",
+            bottom: "calc(300px + env(safe-area-inset-bottom))",
             display: "flex",
             justifyContent: "center",
             pointerEvents: "none",
@@ -1161,6 +1214,13 @@ export default function Signal() {
               pointerEvents: "auto",
             }}
           >
+            {composePending && isLyriaActive && (
+              <div className="signal-receive-orb" aria-hidden="true">
+                <span />
+                <span />
+                <span />
+              </div>
+            )}
             <div
               style={{
                 display: "flex",
@@ -1176,6 +1236,21 @@ export default function Signal() {
               <span>{composePrimaryLabel}</span>
               <span>{composeSecondaryLabel}</span>
             </div>
+            {composePending && isLyriaActive && (
+              <div
+                className="t-mono"
+                style={{
+                  width: "100%",
+                  textAlign: "center",
+                  color: "rgba(244, 238, 222, 0.62)",
+                  fontSize: 10,
+                  letterSpacing: "0.08em",
+                  textTransform: "lowercase",
+                }}
+              >
+                {receiveDetail}
+              </div>
+            )}
             {isLyriaActive && (
               <div
                 style={{
@@ -1301,7 +1376,7 @@ export default function Signal() {
             position: "fixed",
             left: 0,
             right: 0,
-            bottom: "calc(178px + env(safe-area-inset-bottom))",
+            bottom: "calc(340px + env(safe-area-inset-bottom))",
             display: "flex",
             justifyContent: "center",
             pointerEvents: "none",
@@ -1344,23 +1419,22 @@ export default function Signal() {
           zIndex: 20,
         }}
       >
-        {!composePending && !composing && (
-          <div
-            className="signal-prompt-panel"
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              gap: 6,
-              width: "min(560px, calc(100vw - 28px))",
-              pointerEvents: "none",
-            }}
-          >
+        <div
+          className="signal-prompt-panel"
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "stretch",
+            gap: 8,
+            width: "min(640px, calc(100vw - 28px))",
+            pointerEvents: "none",
+          }}
+        >
           <form
             className="signal-prompt-form"
             onSubmit={submitPrompt}
             onKeyDown={(e) => {
-              if (e.key !== "Enter") return;
+              if (e.key !== "Enter" || (!e.metaKey && !e.ctrlKey)) return;
               e.preventDefault();
               e.stopPropagation();
               submitPrompt(e);
@@ -1374,10 +1448,8 @@ export default function Signal() {
               width: "100%",
             }}
           >
-            <input
-              type="text"
+            <textarea
               inputMode="text"
-              enterKeyHint="send"
               autoComplete="off"
               autoCapitalize="none"
               autoCorrect="off"
@@ -1388,14 +1460,17 @@ export default function Signal() {
               placeholder="describe the music — slow, dark, bells, rain…"
               aria-label="describe the music"
               className="signal-prompt-input"
+              rows={3}
+              maxLength={500}
               style={{
                 width: "100%",
                 boxSizing: "border-box",
-                minHeight: 46,
-                padding: "12px 58px 12px 20px",
-                borderRadius: 24,
+                minHeight: 92,
+                resize: "none",
+                padding: "16px 164px 16px 18px",
+                borderRadius: 16,
                 border: "1px solid rgba(244, 238, 222, 0.62)",
-                background: "rgba(7, 15, 27, 0.88)",
+                background: "linear-gradient(180deg, rgba(7, 15, 27, 0.93), rgba(7, 15, 27, 0.78))",
                 backdropFilter: "blur(8px)",
                 WebkitBackdropFilter: "blur(8px)",
                 color: "rgba(244, 238, 222, 0.96)",
@@ -1404,6 +1479,7 @@ export default function Signal() {
                 fontStyle: "italic",
                 // 16px prevents iOS from auto-zooming on focus
                 fontSize: 16,
+                lineHeight: 1.35,
                 outline: "none",
                 letterSpacing: "0.005em",
                 boxShadow: "0 0 0 1px rgba(120, 200, 235, 0.14), 0 10px 26px rgba(0, 0, 0, 0.28)",
@@ -1411,33 +1487,61 @@ export default function Signal() {
             />
             <button
               type="submit"
+              disabled={composePending}
               aria-label="compose prompt"
               title="compose prompt"
               className="signal-prompt-submit"
               style={{
                 position: "absolute",
-                top: "50%",
-                right: 6,
-                transform: "translateY(-50%)",
-                width: 34,
-                height: 34,
-                borderRadius: "50%",
+                top: 10,
+                right: 10,
+                width: 136,
+                minHeight: 72,
+                borderRadius: 12,
                 border: "1px solid rgba(120, 200, 235, 0.45)",
-                background: "rgba(120, 200, 235, 0.16)",
+                background: composePending ? "rgba(120, 200, 235, 0.10)" : "rgba(120, 200, 235, 0.18)",
                 color: "rgba(244, 238, 222, 0.96)",
                 display: "inline-flex",
                 alignItems: "center",
                 justifyContent: "center",
+                textAlign: "center",
                 fontFamily: "var(--font-text)",
-                fontSize: 17,
-                lineHeight: 1,
-                cursor: "pointer",
+                fontSize: 11,
+                letterSpacing: "0.10em",
+                textTransform: "lowercase",
+                lineHeight: 1.2,
+                cursor: composePending ? "wait" : "pointer",
                 transition: "background 180ms ease, border-color 180ms ease, transform 180ms ease",
               }}
             >
-              <span aria-hidden="true">↵</span>
+              {receiverButtonLabel}
             </button>
           </form>
+          <div
+            className="signal-preset-stations"
+            style={{
+              display: "flex",
+              gap: 6,
+              overflowX: "auto",
+              scrollbarWidth: "none",
+              pointerEvents: "auto",
+            }}
+          >
+            {SIGNAL_PRESETS.map((preset) => (
+              <button
+                key={preset.label}
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  choosePreset(preset.prompt);
+                }}
+                title={preset.prompt}
+                style={stationPresetBtn}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
           {/* parsed-modifier chips */}
           {promptChips.length > 0 && (
             <div
@@ -1568,8 +1672,7 @@ export default function Signal() {
               ))}
             </div>
           )}
-          </div>
-        )}
+        </div>
 
         {/* control rail — compact and horizontally scrollable if the viewport
             is too narrow for every control to fit at 44px touch size. */}
@@ -1612,7 +1715,7 @@ export default function Signal() {
             <button
               type="button"
               onClick={(e) => { e.stopPropagation(); void startCompose(); }}
-              aria-label="compose generative music from your field"
+              aria-label="compose music from the current field"
               style={{
                 ...controlBtn(false),
                 padding: "8px 18px",
@@ -1623,7 +1726,7 @@ export default function Signal() {
               }}
             >
               <span aria-hidden="true" style={{ marginRight: 8, opacity: 0.8 }}>♪</span>
-              compose
+              field music
             </button>
           ) : (
             <button
@@ -1713,6 +1816,21 @@ export default function Signal() {
       </div>
 
       <style>{`
+        body:has(.signal-root) .oda-field-watch,
+        body:has(.signal-root) .oda-candle-mark,
+        body:has(.signal-root) .oda-tape-shell,
+        body:has(.signal-root) .oda-sound-toggle {
+          display: none !important;
+        }
+        @keyframes signal-receive-ring {
+          0%   { opacity: 0.74; transform: translate(-50%, -50%) scale(0.35); }
+          70%  { opacity: 0.22; }
+          100% { opacity: 0; transform: translate(-50%, -50%) scale(1.25); }
+        }
+        @keyframes signal-receive-core {
+          0%, 100% { box-shadow: 0 0 18px rgba(120, 200, 235, 0.22); }
+          50%      { box-shadow: 0 0 46px rgba(120, 200, 235, 0.48); }
+        }
         @keyframes signal-pending-sweep {
           0%   { transform: translateX(-115%); opacity: 0.35; }
           35%  { opacity: 0.95; }
@@ -1728,6 +1846,28 @@ export default function Signal() {
           50%      { opacity: 0.45; transform: scale(0.78); }
         }
         .signal-mic-dot { animation: signal-mic-dot-pulse 1.6s ease-in-out infinite; }
+        .signal-receive-orb {
+          position: relative;
+          width: 54px;
+          aspect-ratio: 1;
+          border: 1px solid rgba(120, 200, 235, 0.34);
+          border-radius: 50%;
+          background: radial-gradient(circle, rgba(120, 200, 235, 0.30), rgba(10, 19, 34, 0.12) 58%, transparent 70%);
+          animation: signal-receive-core 2.8s ease-in-out infinite;
+        }
+        .signal-receive-orb span {
+          position: absolute;
+          left: 50%;
+          top: 50%;
+          width: 100%;
+          aspect-ratio: 1;
+          border: 1px solid rgba(120, 200, 235, 0.32);
+          border-radius: 50%;
+          transform: translate(-50%, -50%);
+          animation: signal-receive-ring 2.4s ease-out infinite;
+        }
+        .signal-receive-orb span:nth-child(2) { animation-delay: 0.55s; }
+        .signal-receive-orb span:nth-child(3) { animation-delay: 1.1s; }
         .signal-progress-track.is-pending {
           position: relative;
         }
@@ -1770,10 +1910,11 @@ export default function Signal() {
           background: rgba(120, 200, 235, 0.26) !important;
         }
         .signal-prompt-submit:active {
-          transform: translateY(-50%) scale(0.96) !important;
+          transform: scale(0.97) !important;
         }
         .signal-control-cluster::-webkit-scrollbar,
         .signal-prompt-chips::-webkit-scrollbar,
+        .signal-preset-stations::-webkit-scrollbar,
         .signal-active-chips::-webkit-scrollbar,
         .signal-kept-signals::-webkit-scrollbar {
           display: none;
@@ -1785,10 +1926,10 @@ export default function Signal() {
             padding: 0 10px !important;
           }
           .signal-compose-progress {
-            bottom: calc(186px + env(safe-area-inset-bottom)) !important;
+            bottom: calc(326px + env(safe-area-inset-bottom)) !important;
           }
           .signal-compose-error {
-            bottom: calc(222px + env(safe-area-inset-bottom)) !important;
+            bottom: calc(360px + env(safe-area-inset-bottom)) !important;
           }
           .signal-compose-card {
             max-width: calc(100vw - 20px) !important;
@@ -1801,10 +1942,14 @@ export default function Signal() {
           }
           .signal-prompt-input {
             padding-left: 16px !important;
-            padding-right: 54px !important;
+            padding-right: 124px !important;
+            min-height: 88px !important;
           }
           .signal-prompt-submit {
-            right: 6px !important;
+            right: 8px !important;
+            top: 8px !important;
+            width: 106px !important;
+            min-height: 72px !important;
           }
           .signal-control-cluster {
             max-width: calc(100vw - 20px) !important;
@@ -1915,3 +2060,18 @@ function miniActionBtn(active: boolean): React.CSSProperties {
     transition: "background 180ms ease, border-color 180ms ease, transform 180ms ease",
   };
 }
+
+const stationPresetBtn: React.CSSProperties = {
+  flex: "0 0 auto",
+  border: "1px solid rgba(244, 238, 222, 0.18)",
+  background: "rgba(10, 19, 34, 0.46)",
+  color: "rgba(244, 238, 222, 0.76)",
+  borderRadius: 999,
+  padding: "5px 10px",
+  fontFamily: "var(--font-text)",
+  fontSize: 11,
+  letterSpacing: "0.06em",
+  textTransform: "lowercase",
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+};
