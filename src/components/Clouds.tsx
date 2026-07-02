@@ -6,7 +6,6 @@ import * as haptics from "@/lib/haptics";
 import { useField } from "@/store/field";
 import GreekKeyFrame from "@/components/GreekKeyFrame";
 import WaterText from "@/components/WaterText";
-import SeaChart, { type SeaChartCandle } from "@/components/SeaChart";
 
 type WeatherCell = {
   id: number;
@@ -126,40 +125,6 @@ export default function Clouds() {
     ].slice(0, 4));
   };
 
-  // Wind-intensity sampling for the inline SeaChart. We synthesize a wind
-  // value from a slow FBM-ish sum of sines; storm phase increases the value.
-  const windHistoryRef = useRef<number[]>([]);
-  const [windChartPullKey, setWindChartPullKey] = useState(0);
-  useEffect(() => {
-    const id = window.setInterval(() => {
-      const t = performance.now() / 1000;
-      const v = 0.5 + 0.30 * Math.sin(t * 0.18) + 0.12 * Math.sin(t * 0.71) + 0.08 * Math.sin(t * 1.33);
-      const buf = windHistoryRef.current;
-      buf.push(clamp(v, 0, 1));
-      if (buf.length > 120) buf.shift();
-      setWindChartPullKey((k) => k + 1);
-    }, 700);
-    return () => window.clearInterval(id);
-  }, []);
-  const windSource = (i: number): SeaChartCandle => {
-    const buf = windHistoryRef.current;
-    const COUNT = 30;
-    if (buf.length < 2) {
-      return { open: 0.5, close: 0.5, high: 0.55, low: 0.45, volume: 0.05 };
-    }
-    const offset = i % COUNT;
-    const start = Math.max(0, buf.length - COUNT * 2);
-    const a = buf[Math.min(buf.length - 1, start + offset * 2)] ?? 0.5;
-    const b = buf[Math.min(buf.length - 1, start + offset * 2 + 1)] ?? a;
-    const open = a;
-    const close = b;
-    const dv = Math.abs(b - a);
-    const high = Math.max(a, b) + dv * 0.5 + 0.03;
-    const low = Math.min(a, b) - dv * 0.5 - 0.03;
-    const volume = dv + 0.04;
-    return { open, close, high, low, volume };
-  };
-
   useEffect(() => {
     const wrap = wrapRef.current;
     const sky = skyRef.current;
@@ -236,16 +201,16 @@ export default function Clouds() {
         // 5-color day cycle. uPhase is 0..1 wrapping every 120s.
         vec3 skyColor(float p) {
           // stops:
-          //   0.00 morning lilac    #d8c4d8
-          //   0.25 midday paper     #efe9d8
-          //   0.50 afternoon rose   #f0d8c8
-          //   0.75 storm grey       #8a8da0
-          //   0.90 deep purple      #5a4d6a  (just before loop)
-          vec3 c0 = vec3(0.847, 0.769, 0.847);
-          vec3 c1 = vec3(0.937, 0.914, 0.847);
-          vec3 c2 = vec3(0.941, 0.847, 0.784);
-          vec3 c3 = vec3(0.541, 0.553, 0.627);
-          vec3 c4 = vec3(0.353, 0.302, 0.416);
+          //   0.00 cold dawn blue     #8fa5c7
+          //   0.25 pearl daylight     #d9e2e6
+          //   0.50 gold rose          #e6b98f
+          //   0.75 mineral storm      #596d72
+          //   0.90 deep ion violet    #22243f
+          vec3 c0 = vec3(0.561, 0.647, 0.780);
+          vec3 c1 = vec3(0.851, 0.886, 0.902);
+          vec3 c2 = vec3(0.902, 0.725, 0.561);
+          vec3 c3 = vec3(0.349, 0.427, 0.447);
+          vec3 c4 = vec3(0.133, 0.141, 0.247);
           vec3 col = c0;
           col = mix(col, c1, smoothstep(0.00, 0.25, p));
           col = mix(col, c2, smoothstep(0.25, 0.50, p));
@@ -264,10 +229,13 @@ export default function Clouds() {
 
           // ── base sky gradient ──────────────────────────────────
           vec3 base = skyColor(uPhase);
-          // vertical gradient: brighter near horizon (bottom), deeper above
-          float vert = smoothstep(0.0, 0.85, 1.0 - sky_uv.y);
-          vec3 horiz = mix(base * 1.07, base * 0.86, sky_uv.y);
-          vec3 sky = mix(horiz, base, vert * 0.45);
+          // vertical gradient: cold, dense air overhead; warm scattering near horizon.
+          float upper = smoothstep(0.10, 1.00, sky_uv.y);
+          float horizon = 1.0 - smoothstep(0.02, 0.42, sky_uv.y);
+          vec3 zenith = mix(base * vec3(0.62, 0.70, 0.92), vec3(0.085, 0.105, 0.165), upper * 0.38);
+          vec3 lowAir = mix(base * 1.05, vec3(1.0, 0.74, 0.46), horizon * 0.26);
+          vec3 sky = mix(lowAir, zenith, upper);
+          sky += horizon * vec3(0.10, 0.055, 0.015);
 
           // is the sky "stormy" this minute? boosts cloud darkness.
           float stormy = smoothstep(0.55, 0.85, uPhase);
@@ -277,7 +245,7 @@ export default function Clouds() {
           float shear = smoothstep(0.08, 0.90, length(uWind));
           vec2 windDrift = vec2(uWind.x * 0.12, uWind.y * 0.05) * (0.45 + sky_uv.y);
           vec2 cuv = vec2(uv.x * aspect, uv.y) + windDrift;
-          sky += shear * vec3(0.018, 0.020, 0.040);
+          sky += shear * vec3(0.010, 0.016, 0.035);
 
           // ── cirrus (high, thin streaks) ─────────────────────────
           vec2 ci_uv = cuv * vec2(2.2, 6.0) + vec2(t * 0.012 + uWind.x * 0.55, uWind.y * 0.22);
@@ -285,16 +253,16 @@ export default function Clouds() {
           // mask: only in the top ~35% of the sky
           float ciMask = smoothstep(0.95, 0.55, sky_uv.y);
           float ciDensity = smoothstep(0.55, 0.78, cirrus) * ciMask;
-          // cirrus is mostly white & wispy
-          vec3 col = mix(sky, vec3(0.98, 0.97, 0.95), ciDensity * 0.55);
+          // cirrus is mostly light catching in ice: cool, not chalk-white.
+          vec3 col = mix(sky, vec3(0.88, 0.94, 1.0), ciDensity * 0.38);
 
           // ── altostratus (mid, broad smooth sheet) ───────────────
           vec2 as_uv = cuv * vec2(0.9, 1.6) + vec2(t * 0.018 + uWind.x * 0.22, t * 0.004 + uWind.y * 0.06);
           float alto = fbm(as_uv);
           float asMask = smoothstep(0.75, 0.30, sky_uv.y) * smoothstep(0.05, 0.30, sky_uv.y);
           float asDensity = smoothstep(0.48, 0.74, alto) * asMask;
-          vec3 asColor = mix(vec3(0.96, 0.94, 0.92), vec3(0.74, 0.74, 0.80), stormy);
-          col = mix(col, asColor, asDensity * 0.55);
+          vec3 asColor = mix(vec3(0.82, 0.88, 0.90), vec3(0.28, 0.34, 0.40), stormy);
+          col = mix(col, asColor, asDensity * 0.42);
 
           // ── cumulus (low, puffy) — main hover/press target ──────
           vec2 cu_uv = cuv * 1.7 + vec2(t * 0.024 + uWind.x * 0.28, t * 0.009 + uWind.y * 0.10);
@@ -311,8 +279,8 @@ export default function Clouds() {
           // cumulus tint — white when calm, deepening to lilac-grey when
           // stormy or locally held.
           float darkPush = clamp(stormy * 0.7 + localPull * uPress, 0.0, 1.0);
-          vec3 cuColor = mix(vec3(1.0, 0.99, 0.97), vec3(0.376, 0.341, 0.470), darkPush);
-          col = mix(col, cuColor, cuDensity);
+          vec3 cuColor = mix(vec3(0.91, 0.96, 0.98), vec3(0.235, 0.250, 0.345), darkPush);
+          col = mix(col, cuColor, cuDensity * 0.82);
 
           // ── nimbus (low, dark, heavy) — emerges in storm phase ──
           vec2 nim_uv = cuv * 1.2 + vec2(t * 0.02 + uWind.x * 0.18, t * 0.006 + uWind.y * 0.08);
@@ -321,23 +289,27 @@ export default function Clouds() {
           // nimbus presence rides storm phase and local press
           float nimPresence = clamp(stormy + localPull * uPress * 0.9, 0.0, 1.0);
           float nimDensity = smoothstep(0.46, 0.66, nim) * nimBand * nimPresence;
-          vec3 nimColor = vec3(0.298, 0.267, 0.345); // dark lilac-grey
-          col = mix(col, nimColor, nimDensity * 0.55);
+          vec3 nimColor = vec3(0.125, 0.135, 0.195); // dark mineral blue
+          col = mix(col, nimColor, nimDensity * 0.66);
 
           // ── horizon haze at the very bottom — paper-warm ────────
           float horizonGlow = smoothstep(0.0, 0.16, sky_uv.y);
-          vec3 hazeColor = mix(vec3(0.949, 0.933, 0.902), base * 0.94, stormy);
+          vec3 hazeColor = mix(vec3(0.945, 0.850, 0.675), base * 0.78, stormy);
           col = mix(hazeColor, col, horizonGlow);
 
-          // gentle local cursor halo — paper-warm
-          col += localPull * 0.04 * vec3(1.0, 0.96, 0.88) * (1.0 - uPress);
+          // gentle local cursor halo — sunlit moisture, not a drawn ring.
+          col += localPull * 0.035 * vec3(0.82, 0.92, 1.0) * (1.0 - uPress);
 
-          // lightning flash — white blast falling off with vertical distance
+          // lightning flash — ion-blue blast falling off with vertical distance
           // from the strike origin (we approximate that with a uniform global
           // intensity here; the 2D overlay paints the actual bolt).
-          col += uFlash * vec3(0.95, 0.96, 1.0) * 0.5;
+          col += uFlash * vec3(0.68, 0.78, 1.0) * 0.42;
 
-          // mild paper grain at the bottom edge
+          float grain = hash21(gl_FragCoord.xy + floor(uTime * 12.0));
+          col += (grain - 0.5) * 0.018;
+          float vignette = smoothstep(1.10, 0.12, distance(uv, vec2(0.5, 0.54)));
+          col *= 0.82 + vignette * 0.22;
+
           col = clamp(col, 0.0, 1.0);
           gl_FragColor = vec4(col, 1.0);
         }
@@ -460,7 +432,7 @@ export default function Clouds() {
         y: p.y,
         t0: performance.now(),
         strength: clamp(strength, 0.2, 1),
-        spread: kind === "storm" ? 1.10 + Math.random() * 0.45 : 0.70 + Math.random() * 0.55,
+        spread: kind === "storm" ? 0.72 + Math.random() * 0.28 : 0.70 + Math.random() * 0.55,
         drift: (Math.random() - 0.5) * (kind === "storm" ? 7 : 16),
         lift: kind === "storm" ? 0.35 + Math.random() * 0.35 : 1.2 + Math.random() * 1.8,
         phase: Math.random() * Math.PI * 2,
@@ -574,6 +546,7 @@ export default function Clouds() {
       let pick: Glyph | null = null;
       let pickArea = Infinity;
       for (const g of glyphs) {
+        if (g.opacity < 0.24) continue;
         const y = reduce
           ? g.baseY
           : g.baseY + Math.sin(elapsedRef.v * g.bobFreq * Math.PI * 2 + g.phase) * g.bobAmp;
@@ -741,13 +714,13 @@ export default function Clouds() {
       "ring-spiral",
       "wind-streak",
     ];
-    const GLYPH_COUNT = 12;
+    const GLYPH_COUNT = 8;
     const initialW = wrap.clientWidth || 1280;
     const initialH = wrap.clientHeight || 720;
     const glyphs: Glyph[] = [];
     for (let i = 0; i < GLYPH_COUNT; i++) {
       const yFrac = 0.08 + (i / GLYPH_COUNT) * 0.62 + (Math.random() - 0.5) * 0.04;
-      const size = 12 + Math.random() * 36; // 12..48
+      const size = 10 + Math.random() * 28; // 10..38
       // Back glyphs (smaller, higher up) drift slowly; front glyphs faster.
       // Mix sizes with altitude so it doesn't look stratified.
       const altWeight = yFrac; // higher y → larger weight
@@ -761,8 +734,8 @@ export default function Clouds() {
         bobAmp: 2 + Math.random() * 4,
         bobFreq: 0.08 + Math.random() * 0.18,
         phase: Math.random() * Math.PI * 2,
-        opacity: 0.35 + Math.random() * 0.35,
-        strokeWidth: 1.0 + Math.random() * 0.6,
+        opacity: 0.08 + Math.random() * 0.12,
+        strokeWidth: 0.75 + Math.random() * 0.45,
         rotation: Math.random() * Math.PI * 2,
         // 0.02..0.06 deg/frame, half clockwise / half counter
         rotSpeed: ((Math.random() * 0.04 + 0.02) * Math.PI) / 180 *
@@ -774,36 +747,20 @@ export default function Clouds() {
 
     // local clouds — soft visual puffs at recent cloud taps
     const cloudPuffs: Array<{ x: number; y: number; t0: number }> = [];
-    const weatherCells: WeatherCell[] = Array.from({ length: 6 }).map((_, i) => {
-      const storm = i === 4 && Math.random() > 0.45;
-      const strength = storm ? 0.58 : 0.28 + Math.random() * 0.24;
-      return {
-        id: ++nextWeatherId,
-        kind: storm ? "storm" : "vapor",
-        x: (0.12 + i * 0.16 + (Math.random() - 0.5) * 0.06) * initialW,
-        y: (0.24 + (i % 3) * 0.16 + (Math.random() - 0.5) * 0.05) * initialH,
-        t0: performance.now() - Math.random() * 12000,
-        strength,
-        spread: storm ? 1.15 : 0.72 + Math.random() * 0.42,
-        drift: (Math.random() - 0.5) * (storm ? 5 : 11),
-        lift: storm ? 0.24 : 0.8 + Math.random() * 1.2,
-        phase: Math.random() * Math.PI * 2,
-        rain: storm ? 0.42 : Math.random() * 0.08,
-      };
-    });
+    const weatherCells: WeatherCell[] = [];
     const windStrokes: WindStroke[] = [];
     const rainVeils: RainVeil[] = [];
-    const cloudClusters = Array.from({ length: 7 }).map((_, i) => ({
-      xFrac: 0.08 + i * 0.15 + (Math.random() - 0.5) * 0.04,
+    const cloudClusters = Array.from({ length: 5 }).map((_, i) => ({
+      xFrac: 0.08 + i * 0.22 + (Math.random() - 0.5) * 0.05,
       yFrac: 0.30 + (i % 3) * 0.12 + (Math.random() - 0.5) * 0.035,
-      scale: 0.72 + Math.random() * 0.72,
-      drift: 4 + Math.random() * 10,
+      scale: 0.90 + Math.random() * 1.20,
+      drift: 2.5 + Math.random() * 7,
       phase: Math.random() * Math.PI * 2,
     }));
-    const iceCrystals = Array.from({ length: 26 }).map((_, i) => ({
+    const iceCrystals = Array.from({ length: 34 }).map((_, i) => ({
       xFrac: (i * 0.381966 + Math.random() * 0.08) % 1,
       yFrac: 0.10 + Math.random() * 0.23,
-      size: 3 + Math.random() * 6,
+      size: 1.4 + Math.random() * 3.8,
       spin: (Math.random() < 0.5 ? -1 : 1) * (0.15 + Math.random() * 0.35),
       phase: Math.random() * Math.PI * 2,
     }));
@@ -979,6 +936,15 @@ export default function Clouds() {
       ctx.restore();
     };
 
+    const colorWithAlpha = (color: string, alpha: number) => {
+      const a = clamp(alpha, 0, 1).toFixed(3);
+      const rgba = color.match(/^rgba\((\s*\d+\s*,\s*\d+\s*,\s*\d+)\s*,\s*[\d.]+\s*\)$/);
+      if (rgba) return `rgba(${rgba[1]}, ${a})`;
+      const rgb = color.match(/^rgb\((\s*\d+\s*,\s*\d+\s*,\s*\d+)\s*\)$/);
+      if (rgb) return `rgba(${rgb[1]}, ${a})`;
+      return color;
+    };
+
     const drawCloudCluster = (
       ctx: CanvasRenderingContext2D,
       x: number,
@@ -990,25 +956,34 @@ export default function Clouds() {
     ) => {
       ctx.save();
       ctx.globalAlpha = alpha;
-      ctx.fillStyle = fill;
+      ctx.globalCompositeOperation = "screen";
       const lobes = [
-        [-34, 10, 28],
-        [-14, -4, 34],
-        [14, -10, 38],
-        [42, 8, 30],
-        [4, 16, 42],
+        [-76, 10, 78, 0.30, -0.08],
+        [-46, -4, 96, 0.42, 0.05],
+        [-8, -16, 116, 0.46, -0.02],
+        [38, -8, 104, 0.40, 0.08],
+        [82, 12, 82, 0.32, -0.06],
+        [-16, 22, 132, 0.36, 0.00],
+        [42, 30, 118, 0.30, 0.04],
       ];
-      for (const [lx, ly, lr] of lobes) {
+      for (const [lx, ly, lr, sy, rot] of lobes) {
+        ctx.save();
+        ctx.translate(x + lx * s, y + ly * s);
+        ctx.rotate(rot);
+        ctx.scale(1, sy);
+        const r = lr * s;
+        const g = ctx.createRadialGradient(0, 0, 0, 0, 0, r);
+        g.addColorStop(0, colorWithAlpha(fill, 0.52));
+        g.addColorStop(0.42, colorWithAlpha(fill, 0.22));
+        g.addColorStop(0.74, colorWithAlpha(rim, 0.08));
+        g.addColorStop(1, colorWithAlpha(fill, 0));
+        ctx.fillStyle = g;
         ctx.beginPath();
-        ctx.arc(x + lx * s, y + ly * s, lr * s, 0, Math.PI * 2);
+        ctx.arc(0, 0, r, 0, Math.PI * 2);
         ctx.fill();
+        ctx.restore();
       }
-      ctx.strokeStyle = rim;
-      ctx.lineWidth = Math.max(1, 1.2 * s);
-      ctx.beginPath();
-      ctx.moveTo(x - 62 * s, y + 20 * s);
-      ctx.bezierCurveTo(x - 32 * s, y + 32 * s, x + 34 * s, y + 32 * s, x + 70 * s, y + 16 * s);
-      ctx.stroke();
+
       ctx.restore();
     };
 
@@ -1021,28 +996,24 @@ export default function Clouds() {
     ) => {
       const s = 0.72 + strength * 0.45;
       ctx.save();
-      ctx.translate(x, y);
-      ctx.globalAlpha = 0.72 + strength * 0.18;
-      drawCloudCluster(ctx, 0, 0, s * 0.58, color, "rgba(244, 238, 222, 0.52)", 0.95);
-      ctx.strokeStyle = "rgba(244, 238, 222, 0.78)";
-      ctx.lineWidth = 1.2;
-      ctx.lineCap = "round";
-      for (let i = -1; i <= 1; i++) {
-        const dx = i * 13 * s;
-        ctx.beginPath();
-        ctx.moveTo(dx, 24 * s);
-        ctx.quadraticCurveTo(dx - 5 * s, 34 * s, dx + 2 * s, 45 * s);
-        ctx.stroke();
-      }
-      ctx.fillStyle = "rgba(244, 238, 222, 0.86)";
+      ctx.globalCompositeOperation = "source-over";
+      const dark = ctx.createRadialGradient(x, y, 0, x, y, 150 * s);
+      dark.addColorStop(0, colorWithAlpha(color, 0.26 + strength * 0.20));
+      dark.addColorStop(0.48, colorWithAlpha(color, 0.10 + strength * 0.08));
+      dark.addColorStop(1, colorWithAlpha(color, 0));
+      ctx.fillStyle = dark;
       ctx.beginPath();
-      ctx.moveTo(20 * s, 16 * s);
-      ctx.lineTo(10 * s, 39 * s);
-      ctx.lineTo(24 * s, 35 * s);
-      ctx.lineTo(16 * s, 56 * s);
-      ctx.lineTo(38 * s, 26 * s);
-      ctx.lineTo(24 * s, 30 * s);
-      ctx.closePath();
+      ctx.ellipse(x, y, 132 * s, 54 * s, -0.04, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.globalCompositeOperation = "screen";
+      const rim = ctx.createRadialGradient(x - 18 * s, y - 12 * s, 0, x - 18 * s, y - 12 * s, 112 * s);
+      rim.addColorStop(0, "rgba(206, 231, 255, 0.18)");
+      rim.addColorStop(0.56, "rgba(206, 231, 255, 0.06)");
+      rim.addColorStop(1, "rgba(206, 231, 255, 0)");
+      ctx.fillStyle = rim;
+      ctx.beginPath();
+      ctx.ellipse(x - 18 * s, y - 12 * s, 104 * s, 34 * s, 0.05, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
     };
@@ -1059,16 +1030,16 @@ export default function Clouds() {
       ctx.save();
       ctx.globalCompositeOperation = "screen";
       const origin = (0.18 + Math.sin(phase * Math.PI * 2) * 0.18) * w;
-      for (let i = 0; i < 6; i++) {
-        const spread = 86 + i * 36;
+      for (let i = 0; i < 5; i++) {
+        const spread = 130 + i * 58;
         const x = origin + (i - 2.4) * spread + Math.sin(elapsed * 0.13 + i) * 18;
-        const topWidth = 24 + i * 5;
-        const lowerWidth = 120 + i * 22;
+        const topWidth = 42 + i * 11;
+        const lowerWidth = 210 + i * 46;
         const g = ctx.createLinearGradient(0, 58, 0, h);
-        const alpha = (isLight ? 0.105 : 0.065) * stormDip * (0.78 + Math.sin(elapsed * 0.20 + i) * 0.22);
-        g.addColorStop(0, `rgba(255, 249, 218, ${alpha.toFixed(3)})`);
-        g.addColorStop(0.58, `rgba(216, 196, 216, ${(alpha * 0.35).toFixed(3)})`);
-        g.addColorStop(1, "rgba(255, 249, 218, 0)");
+        const alpha = (isLight ? 0.070 : 0.040) * stormDip * (0.78 + Math.sin(elapsed * 0.20 + i) * 0.22);
+        g.addColorStop(0, `rgba(255, 239, 190, ${alpha.toFixed(3)})`);
+        g.addColorStop(0.52, `rgba(166, 203, 224, ${(alpha * 0.26).toFixed(3)})`);
+        g.addColorStop(1, "rgba(255, 239, 190, 0)");
         ctx.fillStyle = g;
         ctx.beginPath();
         ctx.moveTo(x - topWidth, 58);
@@ -1091,13 +1062,13 @@ export default function Clouds() {
       const fadeAge = stroke.releasedAt ? (now - stroke.releasedAt) / 1000 : 0;
       const fade = stroke.releasedAt ? Math.max(0, 1 - fadeAge / 2.4) : 1;
       if (fade <= 0) return;
-      const alpha = fade * (0.22 + stroke.strength * 0.42);
+      const alpha = fade * (0.12 + stroke.strength * 0.26);
       const outer = isLight
-        ? `rgba(88, 72, 110, ${(alpha * 0.48).toFixed(3)})`
-        : `rgba(244, 238, 222, ${(alpha * 0.58).toFixed(3)})`;
+        ? `rgba(95, 125, 150, ${(alpha * 0.38).toFixed(3)})`
+        : `rgba(190, 218, 250, ${(alpha * 0.46).toFixed(3)})`;
       const inner = stroke.hue > 0.55
-        ? `rgba(213, 177, 104, ${(alpha * 0.70).toFixed(3)})`
-        : `rgba(181, 201, 230, ${(alpha * 0.72).toFixed(3)})`;
+        ? `rgba(233, 184, 112, ${(alpha * 0.45).toFixed(3)})`
+        : `rgba(162, 214, 246, ${(alpha * 0.48).toFixed(3)})`;
 
       ctx.save();
       ctx.lineCap = "round";
@@ -1105,7 +1076,7 @@ export default function Clouds() {
       ctx.globalCompositeOperation = isLight ? "source-over" : "screen";
       for (let pass = 0; pass < 2; pass++) {
         ctx.strokeStyle = pass === 0 ? outer : inner;
-        ctx.lineWidth = pass === 0 ? 6 + stroke.strength * 9 : 1.2 + stroke.strength * 2.8;
+        ctx.lineWidth = pass === 0 ? 11 + stroke.strength * 16 : 0.8 + stroke.strength * 1.9;
         ctx.beginPath();
         const pts = stroke.points;
         ctx.moveTo(pts[0].x, pts[0].y);
@@ -1122,7 +1093,7 @@ export default function Clouds() {
       ctx.fillStyle = inner;
       for (let i = 2; i < stroke.points.length; i += 7) {
         const p = stroke.points[i];
-        const r = 1.4 + Math.sin((now - stroke.t0) * 0.004 + i) * 0.5 + stroke.strength * 1.5;
+        const r = 0.7 + Math.sin((now - stroke.t0) * 0.004 + i) * 0.25 + stroke.strength * 0.9;
         ctx.beginPath();
         ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
         ctx.fill();
@@ -1141,11 +1112,11 @@ export default function Clouds() {
       const fade = Math.max(0, 1 - age / 3.2);
       if (fade <= 0) return;
       ctx.save();
-      ctx.globalAlpha = fade * (0.28 + veil.strength * 0.38);
-      ctx.strokeStyle = isLight ? "rgba(58, 54, 82, 0.34)" : "rgba(218, 224, 255, 0.52)";
-      ctx.lineWidth = 0.8 + veil.strength * 0.55;
+      ctx.globalAlpha = fade * (0.18 + veil.strength * 0.24);
+      ctx.strokeStyle = isLight ? "rgba(77, 93, 112, 0.24)" : "rgba(176, 213, 255, 0.34)";
+      ctx.lineWidth = 0.55 + veil.strength * 0.36;
       ctx.lineCap = "round";
-      const drops = 26 + Math.round(veil.strength * 26);
+      const drops = 44 + Math.round(veil.strength * 42);
       for (let i = 0; i < drops; i++) {
         const seeded = (Math.sin((i + 1) * 98.233 + veil.seed) * 43758.5453) % 1;
         const u = seeded < 0 ? seeded + 1 : seeded;
@@ -1188,7 +1159,7 @@ export default function Clouds() {
 
       const pulse = 1 + Math.sin(elapsed * (cell.kind === "storm" ? 0.7 : 1.05) + cell.phase) * 0.05;
       const s = cell.spread * (0.82 + cell.strength * 0.82) * pulse;
-      const glowRadius = (cell.kind === "storm" ? 180 : 128) * s;
+      const glowRadius = (cell.kind === "storm" ? 112 : 128) * s;
       const glow = ctx.createRadialGradient(cell.x, cell.y, 4, cell.x, cell.y, glowRadius);
       if (cell.kind === "storm") {
         glow.addColorStop(0, `rgba(60, 50, 80, ${(0.26 * alpha).toFixed(3)})`);
@@ -1209,19 +1180,19 @@ export default function Clouds() {
       ctx.restore();
 
       const fill = cell.kind === "storm"
-        ? isLight ? "rgba(72, 61, 93, 0.64)" : "rgba(28, 25, 42, 0.76)"
-        : isLight ? "rgba(255, 254, 248, 0.62)" : "rgba(225, 220, 240, 0.42)";
+        ? isLight ? "rgba(38, 54, 66, 0.46)" : "rgba(14, 20, 34, 0.58)"
+        : isLight ? "rgba(222, 242, 250, 0.42)" : "rgba(184, 207, 232, 0.28)";
       const rim = cell.kind === "storm"
-        ? "rgba(244, 238, 222, 0.30)"
-        : isLight ? "rgba(88, 72, 110, 0.20)" : "rgba(244, 238, 222, 0.24)";
-      drawCloudCluster(ctx, cell.x, cell.y, s * 0.62, fill, rim, alpha * (cell.kind === "storm" ? 0.76 : 0.56));
+        ? "rgba(4, 8, 18, 0.34)"
+        : isLight ? "rgba(255, 236, 186, 0.16)" : "rgba(214, 231, 255, 0.16)";
+      drawCloudCluster(ctx, cell.x, cell.y, s * (cell.kind === "storm" ? 0.42 : 0.58), fill, rim, alpha * (cell.kind === "storm" ? 0.42 : 0.42));
 
       if (cell.kind === "storm") {
         ctx.save();
-        ctx.globalAlpha = alpha * (0.26 + cell.strength * 0.18);
-        ctx.fillStyle = isLight ? "rgba(40, 34, 58, 0.54)" : "rgba(12, 11, 22, 0.62)";
+        ctx.globalAlpha = alpha * (0.18 + cell.strength * 0.14);
+        ctx.fillStyle = isLight ? "rgba(4, 11, 22, 0.42)" : "rgba(3, 7, 18, 0.52)";
         ctx.beginPath();
-        ctx.ellipse(cell.x + 6 * s, cell.y + 24 * s, 66 * s, 17 * s, -0.03, 0, Math.PI * 2);
+        ctx.ellipse(cell.x + 6 * s, cell.y + 22 * s, 42 * s, 13 * s, -0.03, 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
 
@@ -1332,15 +1303,15 @@ export default function Clouds() {
       octx.clearRect(0, 0, w, h);
 
       const stormFade = phase > 0.55 && phase < 0.93 ? 0.55 : 1;
-      const cloudFill = isLight ? "rgba(255, 254, 248, 0.50)" : "rgba(224, 218, 235, 0.34)";
-      const cloudRim = isLight ? "rgba(68, 60, 70, 0.24)" : "rgba(244, 238, 222, 0.30)";
+      const cloudFill = isLight ? "rgba(221, 242, 250, 0.34)" : "rgba(172, 198, 226, 0.22)";
+      const cloudRim = isLight ? "rgba(255, 221, 164, 0.12)" : "rgba(190, 214, 255, 0.12)";
       drawSunShafts(octx, w, h, phase, motionElapsed, isLight);
       for (const c of cloudClusters) {
-        const margin = 110 * c.scale;
+        const margin = 240 * c.scale;
         const driftX = reduce ? 0 : ((elapsed * c.drift + c.xFrac * w) % (w + margin * 2)) - margin;
         const x = reduce ? c.xFrac * w : driftX;
-        const y = c.yFrac * h + Math.sin(elapsed * 0.22 + c.phase) * 5;
-        drawCloudCluster(octx, x, y, c.scale, cloudFill, cloudRim, 0.62 * stormFade);
+        const y = c.yFrac * h + Math.sin(elapsed * 0.18 + c.phase) * 8;
+        drawCloudCluster(octx, x, y, c.scale, cloudFill, cloudRim, 0.14 * stormFade);
       }
 
       for (let i = weatherCells.length - 1; i >= 0; i--) {
@@ -1373,10 +1344,11 @@ export default function Clouds() {
         drawWindStroke(octx, stroke, now, isLight);
       }
 
-      const crystalColor = isLight ? "rgba(255, 255, 250, 0.72)" : "rgba(230, 224, 255, 0.58)";
+      const crystalColor = isLight ? "rgba(237, 249, 255, 0.42)" : "rgba(184, 219, 255, 0.34)";
       octx.save();
+      octx.globalCompositeOperation = "screen";
       octx.strokeStyle = crystalColor;
-      octx.lineWidth = 1;
+      octx.lineWidth = 0.8;
       octx.lineCap = "round";
       for (const c of iceCrystals) {
         const x = c.xFrac * w + Math.sin(elapsed * 0.05 + c.phase) * 18;
@@ -1386,18 +1358,21 @@ export default function Clouds() {
         octx.save();
         octx.translate(x, y);
         octx.rotate(rot);
+        octx.globalAlpha = 0.12 + Math.max(0, Math.sin(elapsed * 0.9 + c.phase)) * 0.22;
         octx.beginPath();
         octx.moveTo(-r, 0); octx.lineTo(r, 0);
         octx.moveTo(0, -r); octx.lineTo(0, r);
-        octx.moveTo(-r * 0.68, -r * 0.68); octx.lineTo(r * 0.68, r * 0.68);
-        octx.moveTo(-r * 0.68, r * 0.68); octx.lineTo(r * 0.68, -r * 0.68);
         octx.stroke();
+        octx.fillStyle = crystalColor;
+        octx.beginPath();
+        octx.arc(0, 0, Math.max(0.45, r * 0.18), 0, Math.PI * 2);
+        octx.fill();
         octx.restore();
       }
       octx.restore();
 
       // drifting Minoan wind glyphs — a chorus across altitudes
-      const glyphColor = isLight ? "rgba(21, 23, 26, 0.85)" : "rgba(244, 238, 222, 0.95)";
+      const glyphColor = isLight ? "rgba(17, 29, 42, 0.32)" : "rgba(202, 225, 255, 0.38)";
       // fainter during storm phase
       for (const g of glyphs) {
         if (!reduce) {
@@ -1463,16 +1438,19 @@ export default function Clouds() {
         for (let i = cloudPuffs.length - 1; i >= 0; i--) {
           const p = cloudPuffs[i];
           const age = (now - p.t0) / 1000;
-          if (age > 0.7) { cloudPuffs.splice(i, 1); continue; }
-          // brief expansion then settle
-          const t01 = age / 0.7;
-          const r = 14 + Math.sin(t01 * Math.PI) * 30;
-          const a = Math.max(0, 1 - t01) * 0.45 * (isLight ? 1 : 0.8);
+          if (age > 1.2) { cloudPuffs.splice(i, 1); continue; }
+          const t01 = age / 1.2;
+          const r = 24 + Math.sin(t01 * Math.PI) * 90;
+          const a = Math.max(0, 1 - t01) * (isLight ? 0.22 : 0.16);
           octx.save();
-          octx.globalAlpha = a;
-          octx.fillStyle = isLight ? "rgba(255, 254, 248, 1)" : "rgba(220, 215, 234, 1)";
+          octx.globalCompositeOperation = "screen";
+          const bloom = octx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r);
+          bloom.addColorStop(0, `rgba(220, 244, 255, ${(a * 0.65).toFixed(3)})`);
+          bloom.addColorStop(0.45, `rgba(255, 223, 176, ${(a * 0.24).toFixed(3)})`);
+          bloom.addColorStop(1, "rgba(220, 244, 255, 0)");
+          octx.fillStyle = bloom;
           octx.beginPath();
-          octx.arc(p.x, p.y, r, 0, Math.PI * 2);
+          octx.ellipse(p.x, p.y, r, r * 0.32, Math.sin(age * 2) * 0.08, 0, Math.PI * 2);
           octx.fill();
           octx.restore();
         }
@@ -1490,9 +1468,9 @@ export default function Clouds() {
         const alpha = Math.max(0, 1 - age / 0.6) * (age < 0.12 ? 1 : 0.7);
         // outer glow
         octx.save();
-        octx.globalAlpha = alpha * 0.45;
-        octx.strokeStyle = "rgba(245, 240, 255, 1)";
-        octx.lineWidth = 8;
+        octx.globalAlpha = alpha * 0.34;
+        octx.strokeStyle = "rgba(160, 209, 255, 1)";
+        octx.lineWidth = 10;
         octx.lineCap = "round";
         octx.lineJoin = "round";
         octx.beginPath();
@@ -1504,8 +1482,8 @@ export default function Clouds() {
         octx.stroke();
         // core
         octx.globalAlpha = alpha;
-        octx.strokeStyle = "rgba(255, 255, 255, 1)";
-        octx.lineWidth = 2;
+        octx.strokeStyle = "rgba(226, 243, 255, 1)";
+        octx.lineWidth = 1.45;
         octx.beginPath();
         for (let j = 0; j < l.segs.length; j++) {
           const p = l.segs[j];
@@ -1538,8 +1516,8 @@ export default function Clouds() {
   // Frame color flips between dark-on-light and cream-on-dark depending on
   // whether the sky is in a bright or stormy phase, so the meander always
   // has enough contrast against the day cycle's underlying gradient.
-  const frameColor = phaseLight ? "rgba(21, 23, 26, 0.52)" : "rgba(244, 238, 222, 0.74)";
-  const titleColor = phaseLight ? "rgba(21, 23, 26, 0.72)" : "rgba(244, 238, 222, 0.86)";
+  const frameColor = phaseLight ? "rgba(21, 23, 26, 0.30)" : "rgba(244, 238, 222, 0.58)";
+  const titleColor = phaseLight ? "rgba(21, 23, 26, 0.70)" : "rgba(244, 238, 222, 0.84)";
   const labelColor = phaseLight ? "rgba(21, 23, 26, 0.40)" : "rgba(244, 238, 222, 0.50)";
 
   return (
@@ -1575,21 +1553,15 @@ export default function Clouds() {
       />
 
       {/* Classical Hellenic window border — a Greek key meander on all four
-          sides framing the sky. The Clouds wrapper is `position: fixed; inset: 0`
-          and sits BEHIND the 56px sticky SiteHeader (z-index 30); the frame's
-          `top: 56` offset keeps the upper band just below the header.
-          Color flips with the day cycle so the meander stays legible across
-          morning lilac, midday paper, storm grey, and deep purple. */}
-      {/* `bottom: 40` lifts the lower meander band ABOVE the global Tape
-          strip (zIndex 28, 40px tall) so the bottom of the frame stays
-          visible. Without this offset the Tape covers the lower band on
-          every page that uses the frame — user has reported this twice. */}
+          sides framing the sky. The shared header stays available, but is
+          made transparent by the route styles below so it does not read as a
+          slab over the atmosphere. */}
       <GreekKeyFrame
         top={56}
         bottom={0}
-        thickness={24}
-        mobileThickness={16}
-        strokeThickness={2}
+        thickness={18}
+        mobileThickness={12}
+        strokeThickness={1.4}
         color={frameColor}
         opacity={1}
         zIndex={20}
@@ -1843,6 +1815,12 @@ export default function Clouds() {
           __html:
             `
             @keyframes clouds-fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+            body:has(.clouds-root) header {
+              background: transparent !important;
+              border-bottom: 0 !important;
+              backdrop-filter: none !important;
+              -webkit-backdrop-filter: none !important;
+            }
             body:has(.clouds-root) .oda-field-watch,
             body:has(.clouds-root) .oda-candle-mark,
             body:has(.clouds-root) .oda-tape-shell,
@@ -1900,43 +1878,10 @@ export default function Clouds() {
                 gap: 6px 8px !important;
                 font-size: 10px !important;
               }
-              .cloud-chart-wrap {
-                display: none !important;
-              }
             }
             `,
         }}
       />
-
-      {/* ── Wind-intensity chart, bottom-left corner. ── */}
-      <div
-        className="cloud-chart-wrap"
-        style={{
-          position: "fixed",
-          left: 24,
-          bottom: 56,
-          pointerEvents: "auto",
-          zIndex: 5,
-        }}
-      >
-        <SeaChart
-          variant="inline"
-          mode="candles"
-          title="wind · intensity"
-          caption="upper sky · last 30s"
-          width={260}
-          height={88}
-          tickMs={0}
-          source={windSource}
-          pullKey={windChartPullKey}
-          static
-          feedToOcean={false}
-          tapeLabel="clouds/wind"
-          upColor={phaseLight ? "#5A4D6A" : "#D8C4D8"}
-          downColor="#8A8DA0"
-          background={phaseLight ? "rgba(232, 226, 213, 0.55)" : "rgba(20, 18, 24, 0.65)"}
-        />
-      </div>
     </div>
   );
 }
