@@ -57,8 +57,8 @@ export default function Colophon() {
             oceanic. a candle, a command center, the sea.
           </p>
           <p>
-            written entirely by hand. no analytics, no tracking, no email capture.
-            send a message if something here is for you.
+            written entirely by hand. quiet usage analytics may be enabled to see
+            what people touch; no email capture. send a message if something here is for you.
           </p>
         </div>
 
