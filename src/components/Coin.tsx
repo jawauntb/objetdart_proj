@@ -422,8 +422,9 @@ export default function Coin() {
     const bgCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
     const bgUniforms = {
       uTime: { value: 0 },
-      uFill: { value: 0 },   // 0→1, how far the aventurine has risen
-      uSpark: { value: 0 },  // live sparkle/iridescence intensity
+      uFill: { value: 0 },    // 0→1, how far the aventurine has risen
+      uLevel: { value: 0 },   // 0→1, permanent brilliance — grows with every interaction, never falls
+      uPulse: { value: 0 },   // live radiant flash on each interaction
       uAspect: { value: 1 },
     };
     const bgMat = new THREE.ShaderMaterial({
@@ -436,46 +437,57 @@ export default function Coin() {
       fragmentShader: /* glsl */`
         precision highp float;
         varying vec2 vUv;
-        uniform float uTime, uFill, uSpark, uAspect;
+        uniform float uTime, uFill, uLevel, uPulse, uAspect;
         float hash(vec2 p){ p = fract(p*vec2(123.34,345.45)); p += dot(p,p+34.345); return fract(p.x*p.y); }
-        // one twinkling fleck layer
-        void layer(vec2 uv, float scale, float thresh, float seed, inout float acc, inout vec3 col){
+        // one layer of diamantine flecks — tight bright cores with star fire that
+        // sparkle harder and turn more iridescent as the brilliance (uLevel) grows.
+        void layer(vec2 uv, float scale, float thresh, float seed, inout vec3 col){
           vec2 gv = vec2(uv.x*uAspect, uv.y) * scale;
           vec2 id = floor(gv);
-          vec2 off = vec2(hash(id+seed+1.3), hash(id+seed+2.7)) - 0.5;
-          float d = length(fract(gv) - 0.5 - off*0.7);
           float h = hash(id + seed);
-          float star = smoothstep(0.14, 0.0, d) * step(thresh, h);
-          float tw = 0.55 + 0.45*sin(uTime*(1.2 + h*3.0) + h*30.0);
-          float b = star * mix(0.5, 1.0, tw) * mix(0.8, 2.4, uSpark);
-          // fleck colour: vivid gold, sapphire, and copper — saturated, never white
-          vec3 c = mix(vec3(1.0,0.78,0.30), vec3(0.42,0.62,1.0), hash(id+seed+7.1));
-          c = mix(c, vec3(1.0,0.46,0.16), step(0.86, hash(id+seed+3.3)));
-          // as you keep playing, each fleck flashes its own jewel hue (iridescent carats)
-          vec3 jewel = 0.5 + 0.5*cos(6.2831*(vec3(0.0,0.33,0.67) + hash(id+seed+5.5)*3.0 + uTime*0.5));
-          c = mix(c, jewel, uSpark*0.55);
-          acc += b; col += c * b;
+          // more flecks catch light as the brilliance climbs
+          if (h < thresh - uLevel*0.16) return;
+          vec2 off = (vec2(hash(id+seed+1.3), hash(id+seed+2.7)) - 0.5) * 0.7;
+          vec2 pp = fract(gv) - 0.5 - off;
+          float d = length(pp);
+          // tight diamond core
+          float core = smoothstep(0.085, 0.0, d);
+          // radiating star fire (4- and 8-point), sharper near the core
+          float ang = atan(pp.y, pp.x);
+          float spikes = pow(abs(cos(ang*2.0)), 22.0) * smoothstep(0.40, 0.0, d);
+          spikes += pow(abs(sin(ang*2.0)), 26.0) * smoothstep(0.30, 0.0, d) * (0.4 + uLevel*0.6);
+          // twinkle: faster and deeper the more you've played, plus the live pulse
+          float tw = 0.5 + 0.5*sin(uTime*(1.2 + h*4.0)*(1.0 + uLevel*1.6) + h*30.0);
+          float b = (core + spikes*0.6) * mix(0.32, 1.0, tw);
+          b *= (0.7 + uLevel*1.7 + uPulse*1.2);   // each fleck radiates harder with brilliance + interaction
+          // vivid gem base — gold / sapphire / copper, saturated, never white
+          vec3 c = mix(vec3(1.0,0.80,0.32), vec3(0.40,0.62,1.0), hash(id+seed+7.1));
+          c = mix(c, vec3(1.0,0.42,0.16), step(0.86, hash(id+seed+3.3)));
+          // iridescent diamond fire per fleck, bloom growing with brilliance + pulse
+          vec3 fire = 0.5 + 0.5*cos(6.2831*(vec3(0.0,0.33,0.67) + hash(id+seed+5.5)*3.0 + uTime*0.7 + d*4.0));
+          c = mix(c, fire, clamp(uLevel*0.72 + uPulse*0.4, 0.0, 0.92));
+          col += c * b;
         }
         void main(){
           vec2 uv = vUv;
-          // pure black before the night fills in
-          vec3 dusk = vec3(0.0);
+          vec3 dusk = vec3(0.0);                       // pure black before the night fills in
           // deep-navy aventurine base, darker toward the top of the sky
           vec3 avn = mix(vec3(0.028,0.050,0.135), vec3(0.014,0.022,0.070), uv.y);
-          // the night rises from the bottom; soft transition band
           float band = 0.16;
           float fillAmt = 1.0 - smoothstep(uFill - band, uFill + band, uv.y);
           // a warm ember line at the rising horizon (sunset → night)
           float horizon = exp(-pow((uv.y - uFill)/0.045, 2.0)) * (1.0 - uFill*0.7) * step(0.02, uFill);
           vec3 sunset = vec3(0.40,0.16,0.05) * horizon;
-          // starfield (only within the filled region)
-          float acc = 0.0; vec3 scol = vec3(0.0);
-          layer(uv, 70.0,  0.55, 0.0,  acc, scol);
-          layer(uv, 130.0, 0.62, 17.0, acc, scol);
-          layer(uv, 220.0, 0.72, 41.0, acc, scol);
-          // roll off the brightest flecks so they read as vivid carats, never white
+          // diamantine field (only within the filled region)
+          vec3 scol = vec3(0.0);
+          layer(uv, 70.0,  0.55, 0.0,  scol);
+          layer(uv, 130.0, 0.62, 17.0, scol);
+          layer(uv, 220.0, 0.70, 41.0, scol);
+          layer(uv, 320.0, 0.80, 71.0, scol);          // fine diamond dust
+          scol *= 1.0 + uPulse*0.6;                     // radiant flash on interaction
+          // hue-preserving roll-off — vivid carats, never blown out to white
           float m = max(scol.r, max(scol.g, scol.b));
-          scol = scol / (1.0 + m * 0.6);
+          scol = scol / (1.0 + m * 0.5);
           vec3 col = mix(dusk, avn, fillAmt) + sunset + scol * fillAmt;
           // gentle vignette
           float vig = smoothstep(1.25, 0.25, length((uv-0.5)*vec2(uAspect,1.0)));
@@ -541,16 +553,20 @@ export default function Coin() {
     // ── aventurine "points": every interaction fills the night sky a little,
     //    persisted locally (no login) so it resumes where you left off ──
     const FILL_KEY = "objetdart:coin:aventurine";
-    const fill = { v: 0, t: 0, spark: 0, save: 0 };
+    const fill = { v: 0, t: 0, glow: 0, glowV: 0, pulse: 0, save: 0 };
     try {
-      const s = parseFloat(localStorage.getItem(FILL_KEY) || "0");
-      if (s > 0) { fill.t = Math.min(1, s); fill.v = fill.t; }
+      const raw = localStorage.getItem(FILL_KEY) || "";
+      const j = raw.startsWith("{") ? JSON.parse(raw) : { t: parseFloat(raw) || 0, glow: 0 };
+      fill.t = Math.min(1, Math.max(0, j.t || 0)); fill.v = fill.t;
+      fill.glow = Math.max(0, j.glow || 0); fill.glowV = fill.glow;
     } catch { /* noop */ }
+    const saveFill = () => { try { localStorage.setItem(FILL_KEY, JSON.stringify({ t: +fill.t.toFixed(3), glow: +fill.glow.toFixed(3) })); } catch { /* noop */ } };
     const addPoints = (a: number) => {
-      fill.t = Math.min(1, fill.t + a);            // monotonic progress (the "score")
-      fill.spark = Math.min(1, fill.spark + a * 1.6 + 0.05); // live dazzle
+      fill.t = Math.min(1, fill.t + a);            // aventurine coverage (fills the page)
+      fill.glow += a;                              // PERMANENT brilliance — never falls, always climbs
+      fill.pulse = Math.min(1, fill.pulse + a * 2.2 + 0.06); // live radiant flash for this interaction
       const now = performance.now();
-      if (now - fill.save > 700) { fill.save = now; try { localStorage.setItem(FILL_KEY, fill.t.toFixed(3)); } catch { /* noop */ } }
+      if (now - fill.save > 700) { fill.save = now; saveFill(); }
     };
 
     // ── audio: the coin is an 8-note instrument (a C-major octave) ──
@@ -646,7 +662,7 @@ export default function Coin() {
       drag.px = e.clientX; drag.py = e.clientY;
       drag.moved += Math.abs(dx) + Math.abs(dy);
       // lateral / diagonal slide → resize the coin; vertical → tilt (pitch)
-      size.t = Math.max(0.5, Math.min(2.4, size.t + dx * 0.004));
+      size.t = Math.max(0.33, Math.min(1.5, size.t + dx * 0.004));
       tilt.tx += dy * 0.006;   // pitch
       tilt.tx = Math.max(-1.1, Math.min(1.1, tilt.tx));
       const now = performance.now();
@@ -778,10 +794,14 @@ export default function Coin() {
 
       // drive the aventurine night sky
       fill.v += (fill.t - fill.v) * 0.05;
-      fill.spark *= 0.985;
+      fill.glowV += (fill.glow - fill.glowV) * 0.05;
+      fill.pulse *= 0.93;
       bgUniforms.uTime.value = now * 0.001 * (reduce ? 0.25 : 1);
       bgUniforms.uFill.value = fill.v;
-      bgUniforms.uSpark.value = Math.min(1, fill.spark + fill.v * 0.3);
+      // permanent brilliance: rises with every interaction, saturating slowly so it
+      // keeps climbing toward the sublime but never blows out to white
+      bgUniforms.uLevel.value = 1 - Math.exp(-fill.glowV * 0.22);
+      bgUniforms.uPulse.value = fill.pulse;
 
       // star glint: ride the highlight, fade out
       shine.v *= 0.92;
@@ -808,7 +828,7 @@ export default function Coin() {
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
-      try { localStorage.setItem(FILL_KEY, fill.t.toFixed(3)); } catch { /* noop */ }
+      saveFill();
       window.removeEventListener("deviceorientation", onOrient);
       window.removeEventListener("devicemotion", onMotion);
       window.removeEventListener("touchend", askPerm);
