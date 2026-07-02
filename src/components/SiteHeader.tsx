@@ -4,82 +4,14 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import Sigil from "@/components/Sigil";
-import RouteSigil, { type RouteSigilKind } from "@/components/RouteSigil";
+import RouteSigil from "@/components/RouteSigil";
 import ConstellationGlyph from "@/components/ConstellationGlyph";
-
-type RouteEntry = {
-  key: string;
-  icon: RouteSigilKind;
-  href: string;
-  /** anchor id on the home page; if set, handleAnchor scrolls instead of navigating */
-  anchor?: string;
-  desc: string;
-};
-
-const ROUTES: RouteEntry[] = [
-  { key: "atlas",       icon: "atlas",    href: "/atlas/origin", anchor: "atlas",    desc: "the territories" },
-  { key: "ocean",       icon: "waves",    href: "/ocean",                             desc: "open water · rivers" },
-  { key: "tide",        icon: "tide",     href: "/tide",                              desc: "night sea" },
-  { key: "waves",       icon: "waves",    href: "/waves",                             desc: "the poem" },
-  { key: "sine",        icon: "waves",    href: "/sine",                              desc: "wave explorer" },
-  { key: "pretext",     icon: "waves",    href: "/pretext",                           desc: "playable text" },
-  { key: "circularity", icon: "aphros",   href: "/circularity",                       desc: "circles to waves" },
-  { key: "beyond",      icon: "waves",    href: "/beyond",                            desc: "novel wave field" },
-  { key: "storm",       icon: "storm",    href: "/storm",                             desc: "the wave allowed to rage" },
-  { key: "clouds",      icon: "clouds",   href: "/clouds",                            desc: "olympus" },
-  { key: "aphros",      icon: "aphros",   href: "/aphros",                            desc: "foam · shells · love" },
-  { key: "flowers",     icon: "growth",   href: "/flowers",                           desc: "petals · symmetry" },
-  { key: "fire",        icon: "fire",     href: "/fire",                              desc: "the element that breathes" },
-  { key: "earth",       icon: "earth",    href: "/earth",                             desc: "strata · seismograph · root" },
-  { key: "growth",      icon: "growth",   href: "/growth",                            desc: "sigmoid · exponential · decay" },
-  { key: "stars",       icon: "stars",    href: "/stars",                             desc: "the night sky" },
-  { key: "signal",      icon: "signal",   href: "/signal",                            desc: "music is also waves" },
-  { key: "light",       icon: "plasma",   href: "/light",                             desc: "color music" },
-  { key: "plasma",      icon: "plasma",   href: "/plasma",                            desc: "light · wave + particle" },
-  { key: "pulse",       icon: "pulse",    href: "/pulse",                             desc: "heartbeat · pattern" },
-  { key: "charts",      icon: "charts",   href: "/charts",                            desc: "lines · candles · oscillators" },
-  { key: "time",        icon: "watch",    href: "/time",                              desc: "chronograph" },
-  { key: "movement",    icon: "watch",    href: "/movement",                          desc: "mechanical movement · 3D" },
-  { key: "jewel",       icon: "plasma",   href: "/jewel",                             desc: "gold & diamond · sound shader" },
-  { key: "coin",        icon: "watch",    href: "/coin",                              desc: "a gold medal · tilt · flip" },
-  { key: "watch",       icon: "watch",    href: "/watch",                             desc: "the room" },
-  { key: "archive",     icon: "archive",  href: "/archive",      anchor: "archive",   desc: "the drawers" },
-  { key: "kept",        icon: "kept",     href: "/kept",                              desc: "a private trail" },
-  { key: "colophon",    icon: "colophon", href: "/colophon",     anchor: "colophon",  desc: "what kept this" },
-];
-
-/** Inline primary nav at desktop widths — atlas, tide, waves, watch. */
-const PRIMARY: RouteSigilKind[] = ["atlas", "tide", "waves", "watch"];
+import { isDarkRoutePath, PRIMARY_ROUTE_KEYS, SITE_ROUTE_BY_KEY, SITE_ROUTES } from "@/lib/routes";
 
 export default function SiteHeader() {
   const pathname = usePathname() ?? "/";
   const isHome = pathname === "/";
-  // dark routes — header & panel float with a dark scrim
-  const dark =
-    pathname.startsWith("/ocean") ||
-    pathname.startsWith("/tide") ||
-    pathname.startsWith("/watch") ||
-    pathname.startsWith("/waves") ||
-    pathname.startsWith("/sine") ||
-    pathname.startsWith("/pretext") ||
-    pathname.startsWith("/circularity") ||
-    pathname.startsWith("/beyond") ||
-    pathname.startsWith("/storm") ||
-    pathname.startsWith("/clouds") ||
-    pathname.startsWith("/flowers") ||
-    pathname.startsWith("/signal") ||
-    pathname.startsWith("/light") ||
-    pathname.startsWith("/plasma") ||
-    pathname.startsWith("/pulse") ||
-    pathname.startsWith("/charts") ||
-    pathname.startsWith("/time") ||
-    pathname.startsWith("/movement") ||
-    pathname.startsWith("/jewel") ||
-    pathname.startsWith("/coin") ||
-    pathname.startsWith("/fire") ||
-    pathname.startsWith("/earth") ||
-    pathname.startsWith("/growth") ||
-    pathname.startsWith("/stars");
+  const dark = isDarkRoutePath(pathname);
 
   const [open, setOpen] = useState(false);
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -240,8 +172,8 @@ export default function SiteHeader() {
         <nav style={{ display: "flex", alignItems: "center", gap: "clamp(8px, 2vw, 22px)" }}>
           {/* Inline primary nav — hidden under 900px via scoped CSS below */}
           <div className="oda-primary-nav" style={{ alignItems: "center", gap: 22 }}>
-            {PRIMARY.map((k) => {
-              const r = ROUTES.find((x) => x.key === k)!;
+            {PRIMARY_ROUTE_KEYS.map((k) => {
+              const r = SITE_ROUTE_BY_KEY[k];
               const onClick = r.anchor
                 ? (e: React.MouseEvent) => handleAnchor(e, r.anchor as string)
                 : undefined;
@@ -439,7 +371,7 @@ export default function SiteHeader() {
 
         {/* the rows */}
         <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 2 }}>
-          {ROUTES.map((r) => {
+          {SITE_ROUTES.map((r) => {
             const isCurrent =
               pathname === r.href ||
               (r.href !== "/" && pathname.startsWith(r.href));

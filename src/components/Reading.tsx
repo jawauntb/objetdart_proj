@@ -440,7 +440,9 @@ export default function Reading() {
             </button>
           </div>
         </div>
-        <style>{`
+        <style
+          dangerouslySetInnerHTML={{
+            __html: `
           @media (max-width: 720px) {
             .reading-ask-form {
               display: grid !important;
@@ -465,7 +467,9 @@ export default function Reading() {
               grid-template-columns: 1fr;
             }
           }
-        `}</style>
+        `,
+          }}
+        />
       </div>
     </section>
   );
