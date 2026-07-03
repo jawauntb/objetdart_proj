@@ -4,16 +4,24 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { useField } from "@/store/field";
-import WaterText from "@/components/WaterText";
-import SeaChart, { type SeaChartCandle } from "@/components/SeaChart";
 
 /**
- * /storm — water at peak intensity.
+ * /storm — a PRESSURE + ELECTRICITY instrument.
  *
- * A ship's wheel governs the sea: outer ring tunes amplitude, inner ring
- * tunes frequency. A maelstrom button collapses the linear waves into a
- * spiraling vortex. A wind rose nudges crash direction. Lightning answers
- * heavy weather. A "still the sea" rune resets to glass with a 2s decay.
+ * The WebGL sea is the churning body. Two coupled forces drive it:
+ *
+ *   PRESSURE  — a barometric dial. Drop the needle toward LOW and the sea
+ *               rages, wind rises, the sky thickens and darkens. Raise it
+ *               toward HIGH and everything calms.
+ *   CHARGE    — drag across the sky to accumulate static charge. It glows
+ *               up the meter and crackles as filaments flicker between the
+ *               cloud base and the sea. Cross the threshold — or tap to
+ *               release — and it DISCHARGES: a branching forked bolt, a
+ *               screen flash, a heavy haptic, then THUNDER delayed by the
+ *               strike's distance. Charge resets and the sea surges.
+ *
+ * "eye" collapses the sea into a vortex; "clear sky" raises the barometer
+ * to fair and stills the water to glass.
  */
 export default function Storm() {
   // page-specific ambient bed: storm crash + wind hiss
@@ -24,13 +32,20 @@ export default function Storm() {
   const linesRef = useRef<HTMLCanvasElement>(null);
   const flashRef = useRef<HTMLDivElement>(null);
 
-  // amplitude — outer ring of the wheel.
-  const stormRef = useRef<number>(0.45);
-  const stormTargetRef = useRef<number>(0.45);
-  // frequency / speed — inner ring of the wheel.
+  // barometric pressure — 1 = high / fair, 0 = deep low / rage.
+  const pressureRef = useRef<number>(0.62);
+  // derived storm intensity (eased toward 1 - pressure).
+  const stormRef = useRef<number>(0.38);
+  const stormTargetRef = useRef<number>(0.38);
+  // frequency / cadence, eased; falls out of pressure.
   const freqRef = useRef<number>(1.0);
-  const freqTargetRef = useRef<number>(1.0);
+  // transient surge added on strikes / crest kicks.
   const stormSpikeRef = useRef<number>(0);
+  // accumulated static charge 0..1, plus a smoothed value for shader/meter.
+  const chargeRef = useRef<number>(0);
+  const chargeVisualRef = useRef<number>(0);
+  const lastStrikeXFracRef = useRef<number>(0.5);
+
   const manualCrestsRef = useRef<Array<{ x: number; t0: number; strength: number }>>([]);
   const frontWaveRef = useRef<{ xs: number[]; ys: number[]; w: number; h: number } | null>(null);
   const fujiHaloRef = useRef<{ t0: number } | null>(null);
@@ -40,46 +55,32 @@ export default function Storm() {
   const maelstromTargetRef = useRef<number>(0);
   // wind direction in radians (0 = right, π/2 = down).
   const windDirRef = useRef<number>(0);
-  // calm scalar — when "still the sea" is pressed, ramps amp toward 0.
+  // calm scalar — when "clear sky" is pressed, ramps amp toward 0.
   const calmRef = useRef<number>(0);
   const calmStartedRef = useRef<number>(0);
-  // lightning flash state.
-  const lightningRef = useRef<{ t0: number; intensity: number } | null>(null);
+  // forked lightning bolt currently on screen.
+  type BoltSeg = { x0: number; y0: number; x1: number; y1: number; main: boolean };
+  const lightningRef = useRef<{
+    t0: number; life: number; segments: BoltSeg[]; intensity: number; hitX: number; hitY: number;
+  } | null>(null);
   const lastLightningAt = useRef<number>(0);
+  // bridge so React controls can trigger a discharge defined inside the loop.
+  const dischargeRef = useRef<(() => void) | null>(null);
 
-  const [stormDisplay, setStormDisplay] = useState(0.45);
-  const [freqDisplay, setFreqDisplay] = useState(1.0);
+  const [pressureDisplay, setPressureDisplay] = useState(0.62);
+  const [chargeDisplay, setChargeDisplay] = useState(0);
   const [maelstromOn, setMaelstromOn] = useState(false);
-  const [dragMode, setDragMode] = useState<null | "outer" | "inner" | "wind">(null);
+  const [dragMode, setDragMode] = useState<null | "baro" | "wind">(null);
   const [windAngleDisplay, setWindAngleDisplay] = useState(0);
-  const stormMarkIdRef = useRef(0);
-  const [stormMarks, setStormMarks] = useState<
-    Array<{ id: number; label: string; level: number }>
-  >([
-    { id: 0, label: "swell", level: 0.45 },
-    { id: -1, label: "wind", level: 0.35 },
-  ]);
-  const lastWheelToneAt = useRef(0);
+  const lastDialToneAt = useRef(0);
 
-  const addStormMark = useCallback((label: string, level: number) => {
-    const id = ++stormMarkIdRef.current;
-    setStormMarks((marks) => [
-      { id, label, level: Math.max(0, Math.min(1, level)) },
-      ...marks,
-    ].slice(0, 4));
-  }, []);
-
-  const playWheelTone = useCallback((freq: number) => {
+  const playDialTone = useCallback((freq: number) => {
     const now = performance.now();
-    if (now - lastWheelToneAt.current < 150) return;
-    lastWheelToneAt.current = now;
-    getFieldAudio().playTone(freq, 0.055);
-    haptics.tap();
+    if (now - lastDialToneAt.current < 150) return;
+    lastDialToneAt.current = now;
+    try { getFieldAudio().playTone(freq, 0.055); } catch { /* noop */ }
+    try { haptics.tap(); } catch { /* noop */ }
   }, []);
-
-  // Rolling 30s storm history for the SeaChart embeds at the bottom-left.
-  const stormHistoryRef = useRef<number[]>([]);
-  const [chartPullKey, setChartPullKey] = useState(0);
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -89,12 +90,14 @@ export default function Storm() {
     const lctx = lines.getContext("2d");
     if (!lctx) return;
 
+    const SEA_TOP = 0.30;
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const motion = reduce ? 0 : 1;
     if (reduce) {
+      pressureRef.current = Math.max(pressureRef.current, 0.72);
       stormRef.current = Math.min(stormRef.current, 0.3);
       stormTargetRef.current = stormRef.current;
-      setStormDisplay(stormRef.current);
+      setPressureDisplay(pressureRef.current);
     }
 
     // ── WebGL setup ───────────────────────────────────────────────
@@ -111,6 +114,7 @@ export default function Storm() {
     let uStormLoc: WebGLUniformLocation | null = null;
     let uMaelstromLoc: WebGLUniformLocation | null = null;
     let uFlashLoc: WebGLUniformLocation | null = null;
+    let uChargeLoc: WebGLUniformLocation | null = null;
 
     if (gl) {
       const vert = `
@@ -128,6 +132,7 @@ export default function Storm() {
         uniform float uStorm;
         uniform float uMaelstrom;
         uniform float uFlash;
+        uniform float uCharge;
         varying vec2 vUv;
 
         float hash21(vec2 p) {
@@ -166,11 +171,20 @@ export default function Storm() {
 
           vec3 skyCalm  = vec3(0.949, 0.933, 0.902);
           vec3 skyMid   = vec3(0.84, 0.85, 0.86);
-          vec3 skyStorm = vec3(0.38, 0.42, 0.50);
+          vec3 skyStorm = vec3(0.32, 0.36, 0.45);
           vec3 sky = mix(skyCalm, skyMid, smoothstep(0.0, 0.55, s));
           sky = mix(sky, skyStorm, smoothstep(0.55, 1.0, s));
           float skyV = uv.y / seaTop;
           sky = mix(sky, sky * 0.92, smoothstep(0.6, 1.0, skyV));
+
+          // cloud thickening: churning fbm shadow that deepens as pressure drops.
+          float clouds = fbm(vec2(uv.x * 3.2 + t * 0.05, uv.y * 5.0 - t * 0.02));
+          sky -= clouds * (0.05 + s * 0.30) * (1.0 - skyV) * vec3(0.7, 0.72, 0.8);
+
+          // electric potential: violet shimmer building at the cloud base.
+          float band = smoothstep(0.35, 1.0, skyV);
+          float flick = vnoise(vec2(uv.x * 9.0, t * 7.0)) * vnoise(vec2(uv.x * 2.0 - t, 3.0));
+          sky += uCharge * band * (0.10 + 0.55 * flick) * vec3(0.55, 0.60, 0.95);
 
           float seaV = (uv.y - seaTop) / (1.0 - seaTop);
           seaV = clamp(seaV, 0.0, 1.0);
@@ -208,6 +222,9 @@ export default function Storm() {
           float causticBoost = 0.09 + s * 0.18;
           vec3 causticTint = mix(vec3(0.75, 0.88, 0.98), vec3(0.92, 0.96, 1.00), s);
           sea += caustic * causticBoost * causticTint * surfMask;
+
+          // charge reflection glinting on the near water.
+          sea += uCharge * caustic * 0.10 * surfMask * vec3(0.6, 0.66, 0.95);
 
           float wash = sin(uv.x * 2.0 + t * 0.1) * sin(seaV * 3.0 - t * 0.06);
           sea += wash * (0.02 + s * 0.04) * vec3(0.85, 0.92, 1.0);
@@ -254,6 +271,7 @@ export default function Storm() {
             uStormLoc = gl.getUniformLocation(p, "uStorm");
             uMaelstromLoc = gl.getUniformLocation(p, "uMaelstrom");
             uFlashLoc = gl.getUniformLocation(p, "uFlash");
+            uChargeLoc = gl.getUniformLocation(p, "uCharge");
 
             const buf = gl.createBuffer();
             gl.bindBuffer(gl.ARRAY_BUFFER, buf);
@@ -390,29 +408,6 @@ export default function Storm() {
       return best;
     };
 
-    let seaDragging = false;
-    let lastDragAt = 0;
-    let lastDragX = -1;
-    let lastDragY = -1;
-
-    const FUJI_HIT_PADDING = 8;
-    const isOnFuji = (x: number, y: number): boolean => {
-      const wEl = lines.clientWidth;
-      const hEl = lines.clientHeight;
-      const fujiCenterX = wEl * 0.34;
-      const fujiBaseY = hEl * 0.30;
-      const fujiHeight = Math.min(hEl * 0.18, 180);
-      const fujiHalfW = fujiHeight * 1.4;
-      const xLeft = fujiCenterX - fujiHalfW - FUJI_HIT_PADDING;
-      const xRight = fujiCenterX + fujiHalfW + FUJI_HIT_PADDING;
-      const yTop = fujiBaseY - fujiHeight - FUJI_HIT_PADDING;
-      const yBot = fujiBaseY + FUJI_HIT_PADDING;
-      if (x < xLeft || x > xRight || y < yTop || y > yBot) return false;
-      const tNorm = Math.max(0, Math.min(1, (fujiBaseY - y) / fujiHeight));
-      const halfAtY = fujiHalfW * (1 - tNorm * 0.85);
-      return Math.abs(x - fujiCenterX) <= halfAtY + FUJI_HIT_PADDING;
-    };
-
     const crestHitDistance = (x: number, y: number): number => {
       const buf = frontWaveRef.current;
       if (!buf) return Infinity;
@@ -428,11 +423,128 @@ export default function Storm() {
       return bestDist;
     };
 
+    const FUJI_HIT_PADDING = 8;
+    const isOnFuji = (x: number, y: number): boolean => {
+      const wEl = lines.clientWidth;
+      const hEl = lines.clientHeight;
+      const fujiCenterX = wEl * 0.34;
+      const fujiBaseY = hEl * SEA_TOP;
+      const fujiHeight = Math.min(hEl * 0.18, 180);
+      const fujiHalfW = fujiHeight * 1.4;
+      const xLeft = fujiCenterX - fujiHalfW - FUJI_HIT_PADDING;
+      const xRight = fujiCenterX + fujiHalfW + FUJI_HIT_PADDING;
+      const yTop = fujiBaseY - fujiHeight - FUJI_HIT_PADDING;
+      const yBot = fujiBaseY + FUJI_HIT_PADDING;
+      if (x < xLeft || x > xRight || y < yTop || y > yBot) return false;
+      const tNorm = Math.max(0, Math.min(1, (fujiBaseY - y) / fujiHeight));
+      const halfAtY = fujiHalfW * (1 - tNorm * 0.85);
+      return Math.abs(x - fujiCenterX) <= halfAtY + FUJI_HIT_PADDING;
+    };
+
+    // ── forked lightning generator ────────────────────────────────
+    const buildBolt = (
+      x0: number, y0: number, x1: number, y1: number,
+      gen: number, disp: number, main: boolean, out: BoltSeg[],
+    ) => {
+      const dx = x1 - x0;
+      const dy = y1 - y0;
+      if (gen <= 0 || dx * dx + dy * dy < 64) {
+        out.push({ x0, y0, x1, y1, main });
+        return;
+      }
+      const mx = (x0 + x1) / 2 + (Math.random() - 0.5) * disp;
+      const my = (y0 + y1) / 2 + (Math.random() - 0.5) * disp * 0.35;
+      buildBolt(x0, y0, mx, my, gen - 1, disp * 0.58, main, out);
+      buildBolt(mx, my, x1, y1, gen - 1, disp * 0.58, main, out);
+      if (gen > 1 && Math.random() < 0.42) {
+        const bl = 0.5 + Math.random() * 0.7;
+        const bx = mx + dx * bl * 0.5 + (Math.random() - 0.5) * disp * 1.2;
+        const by = my + Math.abs(dy) * bl * 0.5 + Math.random() * disp * 0.4;
+        buildBolt(mx, my, bx, by, gen - 2, disp * 0.5, false, out);
+      }
+    };
+
+    const dischargeAt = (sxFrac: number) => {
+      const now = performance.now();
+      const cur = lightningRef.current;
+      if (cur && now - cur.t0 < 130) return;
+      const w = lines.clientWidth;
+      const h = lines.clientHeight;
+      const charge = Math.max(0.28, chargeRef.current);
+      const intensity = 0.5 + charge * 0.55;
+      const x0 = sxFrac * w + (Math.random() - 0.5) * w * 0.04;
+      const y0 = h * 0.015;
+      const seaTopPx = h * SEA_TOP;
+      const hitY = seaTopPx + h * (0.03 + Math.random() * 0.10);
+      const hitX = x0 + (Math.random() - 0.5) * w * 0.10;
+      const segments: BoltSeg[] = [];
+      buildBolt(x0, y0, hitX, hitY, 6, w * 0.12, true, segments);
+      lightningRef.current = { t0: now, life: 0.42, segments, intensity, hitX, hitY };
+      lastLightningAt.current = now;
+
+      // sea surges where it strikes
+      stormSpikeRef.current = Math.min(0.5, stormSpikeRef.current + 0.22 * charge);
+      manualCrestsRef.current.push({ x: hitX, t0: now, strength: 30 * charge });
+      if (manualCrestsRef.current.length > 12) manualCrestsRef.current.shift();
+      spawnBurst(hitX, seaTopPx + 4, Math.round(16 + charge * 24), 240);
+
+      // screen flash (dimmed under reduced motion)
+      const fl = flashRef.current;
+      if (fl) {
+        fl.style.opacity = String((0.55 * intensity + 0.22) * (reduce ? 0.25 : 1));
+        window.setTimeout(() => { if (fl) fl.style.opacity = "0"; }, 110);
+      }
+
+      try { haptics.storm(); } catch { /* noop */ }
+      try { audio.spark(); } catch { /* noop */ }
+
+      // thunder delayed by distance from the viewer (screen centre)
+      const dist = Math.abs(sxFrac - 0.5) * 2;
+      const delay = 90 + dist * 300 + (1 - charge) * 240;
+      window.setTimeout(() => {
+        try {
+          audio.playTone(46 + Math.random() * 12, 1.15);
+          audio.playTone(74, 0.7);
+          audio.thud();
+        } catch { /* noop */ }
+      }, delay);
+
+      useField.getState().recordTape("ripple", 1.0, "storm/strike");
+      chargeRef.current = 0;
+      lastStrikeXFracRef.current = sxFrac;
+    };
+    dischargeRef.current = () => dischargeAt(lastStrikeXFracRef.current);
+
+    // ── pointer interaction on the sea / sky ──────────────────────
+    let seaDragging = false;
+    let lastDragAt = 0;
+    let lastDragX = -1;
+    let lastDragY = -1;
+
+    let skyCharging = false;
+    let skyStartT = 0;
+    let skyMoved = 0;
+    let skyLastX = 0;
+    let skyLastSound = 0;
+
+    const spawnWindStreak = (y: number, strong: boolean) => {
+      if (reduce) return;
+      const goesRight = Math.random() < 0.6;
+      windStreaksRef.current.push({
+        t0: performance.now(),
+        y,
+        vx: (goesRight ? 1 : -1) * (90 + Math.random() * 90 + (strong ? 60 : 0)),
+        len: 60 + Math.random() * 50,
+        alpha: strong ? 0.6 : 0.4,
+      });
+      if (windStreaksRef.current.length > 12) windStreaksRef.current.shift();
+    };
+
     const onPointerDown = (e: PointerEvent) => {
       const r = lines.getBoundingClientRect();
       const x = e.clientX - r.left;
       const y = e.clientY - r.top;
-      const seaTopPx = lines.clientHeight * 0.30;
+      const seaTopPx = lines.clientHeight * SEA_TOP;
 
       const pIdx = pickParticleAt(x, y, 16);
       if (pIdx >= 0) {
@@ -447,55 +559,48 @@ export default function Storm() {
           p.vy += (p.vy / speed) * mag * 0.6;
         }
         particleBoost[pIdx] = 1;
-        audio.spark();
-        haptics.ripple(0.25);
-        addStormMark("spray", 0.34);
+        try { audio.spark(); } catch { /* noop */ }
+        try { haptics.ripple(0.25); } catch { /* noop */ }
         return;
       }
 
       if (isOnFuji(x, y)) {
         fujiHaloRef.current = { t0: performance.now() };
-        audio.chime();
-        haptics.roll();
-        useField.getState().recordTape("object", 0.7, "fuji");
-        addStormMark("fuji", 0.62);
+        try { audio.chime(); } catch { /* noop */ }
+        try { haptics.roll(); } catch { /* noop */ }
+        useField.getState().recordTape("object", 0.7, "storm/peak");
         return;
       }
 
+      // SKY — accumulate charge on drag, discharge on tap.
       if (y < seaTopPx) {
-        if (!reduce) {
-          const goesRight = Math.random() < 0.7;
-          windStreaksRef.current.push({
-            t0: performance.now(),
-            y,
-            vx: (goesRight ? 1 : -1) * (90 + Math.random() * 80),
-            len: 60 + Math.random() * 50,
-            alpha: 0.55,
-          });
-          if (windStreaksRef.current.length > 8) windStreaksRef.current.shift();
-        }
-        audio.chime();
-        haptics.chop();
-        useField.getState().recordTape("ripple", 0.4, "storm/sky");
-        addStormMark("squall", 0.44);
+        skyCharging = true;
+        skyStartT = performance.now();
+        skyMoved = 0;
+        skyLastX = x;
+        skyLastSound = 0;
+        lastStrikeXFracRef.current = x / Math.max(1, lines.clientWidth);
+        spawnWindStreak(y, false);
+        try { audio.spark(); } catch { /* noop */ }
+        try { haptics.tap(); } catch { /* noop */ }
+        try { lines.setPointerCapture(e.pointerId); } catch { /* noop */ }
         return;
       }
 
+      // SEA — bump crests, kick spray.
       manualCrestsRef.current.push({ x, t0: performance.now(), strength: 28 });
       if (manualCrestsRef.current.length > 12) manualCrestsRef.current.shift();
 
       const crestD = crestHitDistance(x, y);
       if (crestD < 24) {
         spawnBurst(x, y, 14, 220);
-        audio.thud();
-        haptics.storm();
+        try { audio.thud(); } catch { /* noop */ }
+        try { haptics.storm(); } catch { /* noop */ }
         stormSpikeRef.current = Math.min(0.4, stormSpikeRef.current + 0.05);
         useField.getState().recordTape("ripple", 1.0, "storm/crest");
-        addStormMark("crest", 0.95);
       } else {
-        haptics.ripple(0.5);
-        useField.getState().recordTape("ripple", 0.9, "storm");
-        addStormMark("swell", 0.58);
+        try { haptics.ripple(0.5); } catch { /* noop */ }
+        useField.getState().recordTape("ripple", 0.9, "storm/sea");
       }
 
       seaDragging = true;
@@ -506,11 +611,31 @@ export default function Storm() {
     };
 
     const onPointerMove = (e: PointerEvent) => {
-      if (!seaDragging) return;
       const r = lines.getBoundingClientRect();
       const x = e.clientX - r.left;
       const y = e.clientY - r.top;
-      const seaTopPx = lines.clientHeight * 0.30;
+      const w = lines.clientWidth;
+      const seaTopPx = lines.clientHeight * SEA_TOP;
+
+      if (skyCharging) {
+        const dx = Math.abs(x - skyLastX);
+        skyMoved += dx;
+        skyLastX = x;
+        lastStrikeXFracRef.current = x / Math.max(1, w);
+        chargeRef.current = Math.min(1, chargeRef.current + dx / Math.max(1, w) * 0.95);
+        const nowMs = performance.now();
+        if (nowMs - skyLastSound > 150) {
+          skyLastSound = nowMs;
+          const cq = chargeRef.current;
+          try { audio.playTone(360 + cq * 1000, 0.03); } catch { /* noop */ }
+          if (Math.random() < 0.4) spawnWindStreak(y, cq > 0.6);
+          try { haptics.ripple(0.12 + cq * 0.22); } catch { /* noop */ }
+          useField.getState().recordTape("sigil", 0.2 + cq * 0.5, "storm/charge");
+        }
+        return;
+      }
+
+      if (!seaDragging) return;
       if (y < seaTopPx) {
         lastDragX = x; lastDragY = y;
         return;
@@ -524,9 +649,8 @@ export default function Storm() {
       const nowMs = performance.now();
       if (nowMs - lastDragAt > 220) {
         if (crestHitDistance(x, y) < 28) {
-          audio.chime();
-          haptics.chop();
-          addStormMark("break", 0.66);
+          try { audio.chime(); } catch { /* noop */ }
+          try { haptics.chop(); } catch { /* noop */ }
           lastDragAt = nowMs;
         }
       }
@@ -534,6 +658,18 @@ export default function Storm() {
     };
 
     const onPointerUp = (e: PointerEvent) => {
+      if (skyCharging) {
+        skyCharging = false;
+        const tap = skyMoved < 16 && performance.now() - skyStartT < 340;
+        if (tap) {
+          if (chargeRef.current > 0.12) {
+            dischargeAt(lastStrikeXFracRef.current);
+          } else {
+            chargeRef.current = Math.min(1, chargeRef.current + 0.16);
+            try { audio.spark(); } catch { /* noop */ }
+          }
+        }
+      }
       seaDragging = false;
       try { lines.releasePointerCapture(e.pointerId); } catch { /* noop */ }
     };
@@ -545,6 +681,7 @@ export default function Storm() {
 
     const t0 = performance.now();
     let raf = 0;
+    let lastUiSync = 0;
 
     const draw = (now: number) => {
       const w = lines.clientWidth;
@@ -552,9 +689,12 @@ export default function Storm() {
 
       stormSpikeRef.current *= 0.985;
       if (stormSpikeRef.current < 0.001) stormSpikeRef.current = 0;
-      const dialTarget = reduce ? Math.min(stormTargetRef.current, 0.3) : stormTargetRef.current;
 
-      // calm scalar — ease amplitude toward 0 over ~2s when "still the sea" pressed.
+      // pressure → storm target. Low pressure rages the sea.
+      const pressure = reduce ? Math.max(pressureRef.current, 0.72) : pressureRef.current;
+      stormTargetRef.current = 1 - pressure;
+
+      // calm scalar — ease amplitude toward 0 over ~2s when "clear sky" pressed.
       let calmFactor = 1;
       if (calmRef.current > 0.01) {
         const sinceCalm = (now - calmStartedRef.current) / 1000;
@@ -567,37 +707,36 @@ export default function Storm() {
         }
       }
 
+      const dialTarget = reduce ? Math.min(stormTargetRef.current, 0.3) : stormTargetRef.current;
       const target = Math.min(1, dialTarget + stormSpikeRef.current) * calmFactor;
       stormRef.current += (target - stormRef.current) * 0.10;
       const s = stormRef.current;
 
-      // smooth frequency and maelstrom toward their targets.
-      freqRef.current += (freqTargetRef.current - freqRef.current) * 0.10;
+      // cadence follows pressure; maelstrom eases toward target.
+      const freqTarget = 0.6 + (1 - pressure) * 1.2;
+      freqRef.current += (freqTarget - freqRef.current) * 0.08;
       const freqMulDial = freqRef.current;
       maelstromRef.current += (maelstromTargetRef.current - maelstromRef.current) * 0.06;
       const ml = maelstromRef.current;
 
-      // Lightning — random when storm > 0.8.
-      if (!reduce && s > 0.8 && now - lastLightningAt.current > 5000 + Math.random() * 7000) {
-        if (Math.random() < 0.02) {
-          lightningRef.current = { t0: now, intensity: 0.6 + Math.random() * 0.4 };
-          lastLightningAt.current = now;
-          audio.thud();
-          const fl = flashRef.current;
-          if (fl) {
-            fl.style.opacity = "0.65";
-            window.setTimeout(() => { if (fl) fl.style.opacity = "0"; }, 90);
-          }
-        }
+      // charge slowly leaks; smoothed value drives shader + meter.
+      if (!skyCharging) chargeRef.current = Math.max(0, chargeRef.current - 0.0016);
+      chargeVisualRef.current += (chargeRef.current - chargeVisualRef.current) * 0.18;
+      const cq = chargeVisualRef.current;
+
+      // auto-discharge when charge saturates.
+      if (chargeRef.current >= 1 && !lightningRef.current) {
+        dischargeAt(lastStrikeXFracRef.current);
       }
+
       let flashAdd = 0;
       if (lightningRef.current) {
         const age = (now - lightningRef.current.t0) / 1000;
-        if (age > 0.5) {
+        if (age > lightningRef.current.life) {
           lightningRef.current = null;
         } else {
-          const v = Math.max(0, 1 - age / 0.5);
-          flashAdd = v * v * lightningRef.current.intensity * 0.85;
+          const v = Math.max(0, 1 - age / lightningRef.current.life);
+          flashAdd = v * v * lightningRef.current.intensity * (reduce ? 0.2 : 0.7);
         }
       }
 
@@ -613,6 +752,7 @@ export default function Storm() {
         if (uStormLoc) gl.uniform1f(uStormLoc, s);
         if (uMaelstromLoc) gl.uniform1f(uMaelstromLoc, ml);
         if (uFlashLoc) gl.uniform1f(uFlashLoc, flashAdd);
+        if (uChargeLoc) gl.uniform1f(uChargeLoc, cq);
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       } else {
         const wctx = water.getContext("2d");
@@ -620,14 +760,22 @@ export default function Storm() {
           const dpr = Math.min(window.devicePixelRatio || 1, 2);
           wctx.setTransform(dpr, 0, 0, dpr, 0, 0);
           const skyMix = (1 - s);
-          wctx.fillStyle = `rgba(${Math.round(95 + skyMix * 145)},${Math.round(110 + skyMix * 130)},${Math.round(130 + skyMix * 100)},1)`;
-          wctx.fillRect(0, 0, w, h * 0.30);
-          const g = wctx.createLinearGradient(0, h * 0.30, 0, h);
+          wctx.fillStyle = `rgba(${Math.round(80 + skyMix * 160)},${Math.round(96 + skyMix * 144)},${Math.round(120 + skyMix * 110)},1)`;
+          wctx.fillRect(0, 0, w, h * SEA_TOP);
+          if (cq > 0.05) {
+            wctx.fillStyle = `rgba(150, 165, 245, ${cq * 0.18})`;
+            wctx.fillRect(0, h * SEA_TOP * 0.5, w, h * SEA_TOP * 0.5);
+          }
+          const g = wctx.createLinearGradient(0, h * SEA_TOP, 0, h);
           g.addColorStop(0.00, "rgba( 42, 90,140, 1.0)");
           g.addColorStop(0.55, "rgba( 27, 58,100, 1.0)");
           g.addColorStop(1.00, "rgba( 14, 37, 64, 1.0)");
           wctx.fillStyle = g;
-          wctx.fillRect(0, h * 0.30, w, h - h * 0.30);
+          wctx.fillRect(0, h * SEA_TOP, w, h - h * SEA_TOP);
+          if (flashAdd > 0.01) {
+            wctx.fillStyle = `rgba(255,255,255,${Math.min(0.7, flashAdd)})`;
+            wctx.fillRect(0, 0, w, h);
+          }
         }
       }
 
@@ -635,7 +783,7 @@ export default function Storm() {
 
       // ── Mt Fuji ───────────────────────────────────────────────
       const fujiCenterX = w * 0.34;
-      const fujiBaseY = h * 0.30;
+      const fujiBaseY = h * SEA_TOP;
       const fujiHeight = Math.min(h * 0.18, 180);
       const fujiHalfW = fujiHeight * 1.4;
       const fujiAlpha = (1 - s * 0.6) * 0.42 * (1 - ml * 0.6);
@@ -689,9 +837,14 @@ export default function Storm() {
       lctx.strokeStyle = `rgba(20, 30, 50, ${0.18 + s * 0.10})`;
       lctx.lineWidth = 1;
       lctx.beginPath();
-      lctx.moveTo(0, h * 0.30);
-      lctx.lineTo(w, h * 0.30);
+      lctx.moveTo(0, h * SEA_TOP);
+      lctx.lineTo(w, h * SEA_TOP);
       lctx.stroke();
+
+      // ambient wind rising as pressure drops.
+      if (!reduce && s > 0.32 && Math.random() < (s - 0.28) * 0.05) {
+        spawnWindStreak(Math.random() * h * SEA_TOP * 0.9, s > 0.7);
+      }
 
       if (windStreaksRef.current.length > 0) {
         for (let i = windStreaksRef.current.length - 1; i >= 0; i--) {
@@ -714,6 +867,35 @@ export default function Storm() {
         }
       }
 
+      // ── charge filaments: flickering potential at the cloud base ──
+      if (cq > 0.05 && !lightningRef.current) {
+        const seaTopPx = h * SEA_TOP;
+        lctx.save();
+        lctx.globalCompositeOperation = "screen";
+        lctx.lineCap = "round";
+        const filaments = Math.round(2 + cq * 7);
+        for (let i = 0; i < filaments; i++) {
+          if (Math.random() > 0.55) continue;
+          const fx = ((i + 0.5) / filaments) * w + Math.sin(now * 0.004 + i * 1.7) * 26;
+          const topY = seaTopPx - (14 + cq * 46) * (0.4 + Math.random() * 0.6);
+          const a = cq * (0.2 + Math.random() * 0.5);
+          lctx.strokeStyle = `rgba(178, 196, 255, ${a})`;
+          lctx.lineWidth = 0.8 + cq;
+          lctx.beginPath();
+          let px = fx;
+          let py = topY;
+          lctx.moveTo(px, py);
+          const steps = 4;
+          for (let sIdx = 1; sIdx <= steps; sIdx++) {
+            px = fx + (Math.random() - 0.5) * (10 + cq * 16);
+            py = topY + ((seaTopPx + 6 - topY) * sIdx) / steps;
+            lctx.lineTo(px, py);
+          }
+          lctx.stroke();
+        }
+        lctx.restore();
+      }
+
       // ── wave layers ────────────────────────────────────────────
       const ampMul = 0.4 + s * 1.6;
       const freqMul = (1.0 + s * 0.6) * freqMulDial;
@@ -724,7 +906,6 @@ export default function Storm() {
       const emitRate = s > 0.05 ? s * 120 : 0;
       const emitProbPerCrest = Math.min(0.65, emitRate / 90);
 
-      // wind direction: x-skew and phase sign.
       const windSkewX = Math.cos(windDirRef.current) * 6;
       const windPhase = Math.cos(windDirRef.current);
 
@@ -953,12 +1134,72 @@ export default function Storm() {
       }
       lctx.globalAlpha = 1;
 
+      // ── forked lightning bolt ──────────────────────────────────
+      if (lightningRef.current) {
+        const lb = lightningRef.current;
+        const age = (now - lb.t0) / 1000;
+        const k = Math.max(0, 1 - age / lb.life);
+        const flick = 0.4 + 0.6 * Math.random();
+        const a = Math.pow(k, 1.3) * flick * lb.intensity;
+        lctx.save();
+        lctx.globalCompositeOperation = "screen";
+        lctx.lineCap = "round";
+        lctx.lineJoin = "round";
+
+        // soft glow underlay
+        lctx.strokeStyle = `rgba(150, 178, 255, ${a * 0.32})`;
+        lctx.lineWidth = 8;
+        lctx.beginPath();
+        for (const sg of lb.segments) {
+          lctx.moveTo(sg.x0, sg.y0);
+          lctx.lineTo(sg.x1, sg.y1);
+        }
+        lctx.stroke();
+
+        // branches
+        lctx.strokeStyle = `rgba(210, 224, 255, ${Math.min(1, a)})`;
+        lctx.lineWidth = 1.1;
+        lctx.beginPath();
+        for (const sg of lb.segments) {
+          if (sg.main) continue;
+          lctx.moveTo(sg.x0, sg.y0);
+          lctx.lineTo(sg.x1, sg.y1);
+        }
+        lctx.stroke();
+
+        // bright main channel
+        lctx.strokeStyle = `rgba(248, 250, 255, ${Math.min(1, a * 1.25)})`;
+        lctx.lineWidth = 2.2;
+        lctx.beginPath();
+        for (const sg of lb.segments) {
+          if (!sg.main) continue;
+          lctx.moveTo(sg.x0, sg.y0);
+          lctx.lineTo(sg.x1, sg.y1);
+        }
+        lctx.stroke();
+
+        // impact glow on the sea
+        const hitGrad = lctx.createRadialGradient(lb.hitX, lb.hitY, 0, lb.hitX, lb.hitY, 60 + a * 90);
+        hitGrad.addColorStop(0, `rgba(220, 232, 255, ${a * 0.7})`);
+        hitGrad.addColorStop(1, "rgba(220, 232, 255, 0)");
+        lctx.fillStyle = hitGrad;
+        lctx.beginPath();
+        lctx.arc(lb.hitX, lb.hitY, 60 + a * 90, 0, Math.PI * 2);
+        lctx.fill();
+        lctx.restore();
+      }
+
       if (!reduce && s > 0.7 && bigBreakCount > 0) {
         if (now - lastCrashAt > nextCrashGap) {
-          audio.thud();
+          try { audio.thud(); } catch { /* noop */ }
           lastCrashAt = now;
           nextCrashGap = 2000 + Math.random() * 2000;
         }
+      }
+
+      if (now - lastUiSync > 120) {
+        lastUiSync = now;
+        setChargeDisplay(chargeRef.current);
       }
 
       raf = requestAnimationFrame(draw);
@@ -972,110 +1213,49 @@ export default function Storm() {
       lines.removeEventListener("pointermove", onPointerMove);
       lines.removeEventListener("pointerup", onPointerUp);
       lines.removeEventListener("pointercancel", onPointerUp);
+      dischargeRef.current = null;
     };
-  }, [addStormMark]);
-
-  // Storm-history sampler for the SeaChart embeds (kept).
-  useEffect(() => {
-    const id = window.setInterval(() => {
-      const buf = stormHistoryRef.current;
-      buf.push(stormRef.current + stormSpikeRef.current);
-      if (buf.length > 120) buf.shift();
-      setChartPullKey((k) => k + 1);
-    }, 500);
-    return () => window.clearInterval(id);
   }, []);
 
-  const stormSource = (i: number): SeaChartCandle => {
-    const buf = stormHistoryRef.current;
-    const COUNT = 30;
-    if (buf.length < 2) {
-      return { open: 0.5, close: 0.5, high: 0.5, low: 0.5, volume: 0.05 };
-    }
-    const offset = i % COUNT;
-    const start = Math.max(0, buf.length - COUNT * 2);
-    const a = buf[Math.min(buf.length - 1, start + offset * 2)] ?? 0.5;
-    const b = buf[Math.min(buf.length - 1, start + offset * 2 + 1)] ?? a;
-    const open = a;
-    const close = b;
-    const high = Math.max(a, b) + Math.abs(b - a) * 0.4 + 0.02;
-    const low = Math.min(a, b) - Math.abs(b - a) * 0.4 - 0.02;
-    const volume = Math.abs(b - a) + 0.05;
-    return { open, close, high, low, volume };
-  };
+  // ── barometer dial handlers ──────────────────────────────────────
+  const baroRef = useRef<HTMLDivElement>(null);
 
-  // ── ship's-wheel handlers ────────────────────────────────────────
-  const wheelRef = useRef<HTMLDivElement>(null);
-
-  const wheelGeometry = (clientX: number, clientY: number) => {
-    const el = wheelRef.current;
-    if (!el) return null;
+  const setPressureFromPointer = (clientX: number, clientY: number) => {
+    const el = baroRef.current;
+    if (!el) return;
     const r = el.getBoundingClientRect();
     const cx = r.left + r.width / 2;
     const cy = r.top + r.height / 2;
-    const dx = clientX - cx;
-    const dy = clientY - cy;
-    const dist = Math.hypot(dx, dy);
-    const ang = Math.atan2(dy, dx);
-    const norm = dist / (r.width / 2);
-    return { cx, cy, ang, norm };
-  };
-
-  const angleToValue = (ang: number): number => {
-    let a = ang + Math.PI / 2;
-    if (a < 0) a += Math.PI * 2;
-    return Math.min(1, Math.max(0, a / (Math.PI * 2)));
-  };
-
-  const setStormFromAngle = (ang: number) => {
-    const v = angleToValue(ang);
+    const ang = Math.atan2(clientY - cy, clientX - cx);
+    let deg = (ang * 180) / Math.PI + 90; // up = 0, right = +90, left = -90
+    if (deg > 180) deg -= 360;
+    deg = Math.max(-120, Math.min(120, deg));
+    let v = (deg + 120) / 240;
     const reduce =
       typeof window !== "undefined" &&
       window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const clamped = reduce ? Math.min(v, 0.3) : v;
-    stormTargetRef.current = clamped;
-    setStormDisplay(clamped);
-    playWheelTone(110 + clamped * 180);
+    if (reduce) v = Math.max(v, 0.72);
+    pressureRef.current = v;
+    setPressureDisplay(v);
+    playDialTone(90 + v * 260);
   };
 
-  const setFreqFromAngle = (ang: number) => {
-    const v = angleToValue(ang);
-    const mapped = 0.4 + v * 1.8;
-    freqTargetRef.current = mapped;
-    setFreqDisplay(mapped);
-    playWheelTone(220 + v * 420);
-  };
-
-  const onWheelDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    const g = wheelGeometry(e.clientX, e.clientY);
-    if (!g) return;
-    if (g.norm > 1.05) return;
+  const onBaroDown = (e: React.PointerEvent<HTMLDivElement>) => {
     e.currentTarget.setPointerCapture(e.pointerId);
-    if (g.norm > 0.62) {
-      setDragMode("outer");
-      setStormFromAngle(g.ang);
-      addStormMark("amplitude", 0.52);
-    } else if (g.norm > 0.18) {
-      setDragMode("inner");
-      setFreqFromAngle(g.ang);
-      addStormMark("speed", 0.48);
-    }
+    setDragMode("baro");
+    setPressureFromPointer(e.clientX, e.clientY);
+    useField.getState().recordTape("concern", 0.5, "storm/pressure");
   };
-
-  const onWheelMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!dragMode || dragMode === "wind") return;
-    const g = wheelGeometry(e.clientX, e.clientY);
-    if (!g) return;
-    if (dragMode === "outer") setStormFromAngle(g.ang);
-    else if (dragMode === "inner") setFreqFromAngle(g.ang);
+  const onBaroMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (dragMode !== "baro") return;
+    setPressureFromPointer(e.clientX, e.clientY);
   };
-
-  const onWheelUp = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (dragMode === "outer" || dragMode === "inner") setDragMode(null);
+  const onBaroUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (dragMode === "baro") setDragMode(null);
     try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* noop */ }
   };
 
-  // Wind rose handlers.
+  // ── wind rose handlers ───────────────────────────────────────────
   const windRoseRef = useRef<HTMLDivElement>(null);
   const setWindFromPointer = (clientX: number, clientY: number) => {
     const el = windRoseRef.current;
@@ -1086,16 +1266,15 @@ export default function Storm() {
     const ang = Math.atan2(clientY - cy, clientX - cx);
     windDirRef.current = ang;
     setWindAngleDisplay(ang);
-    playWheelTone(180 + ((ang + Math.PI) / (Math.PI * 2)) * 260);
+    playDialTone(180 + ((ang + Math.PI) / (Math.PI * 2)) * 260);
   };
   const onWindDown = (e: React.PointerEvent<HTMLDivElement>) => {
     e.currentTarget.setPointerCapture(e.pointerId);
     setDragMode("wind");
     setWindFromPointer(e.clientX, e.clientY);
-    getFieldAudio().chime();
-    haptics.chop();
+    try { getFieldAudio().chime(); } catch { /* noop */ }
+    try { haptics.chop(); } catch { /* noop */ }
     useField.getState().recordTape("region", 0.45, "storm/wind");
-    addStormMark("wind", 0.5);
   };
   const onWindMove = (e: React.PointerEvent<HTMLDivElement>) => {
     if (dragMode !== "wind") return;
@@ -1106,50 +1285,54 @@ export default function Storm() {
     try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* noop */ }
   };
 
+  const releaseCharge = () => {
+    dischargeRef.current?.();
+  };
+
   const toggleMaelstrom = () => {
     const next = !maelstromOn;
     setMaelstromOn(next);
     maelstromTargetRef.current = next ? 1 : 0;
-    const audio = getFieldAudio();
+    const a = getFieldAudio();
     if (next) {
-      audio.thud();
-      window.setTimeout(() => audio.bell(), 220);
-      haptics.storm();
-      useField.getState().recordTape("ripple", 1.0, "storm/maelstrom");
-      addStormMark("maelstrom", 1);
+      try { a.thud(); } catch { /* noop */ }
+      window.setTimeout(() => { try { a.bell(); } catch { /* noop */ } }, 220);
+      try { haptics.storm(); } catch { /* noop */ }
+      useField.getState().recordTape("ripple", 1.0, "storm/eye");
     } else {
-      audio.chime();
-      haptics.roll();
-      addStormMark("release", 0.42);
+      try { a.chime(); } catch { /* noop */ }
+      try { haptics.roll(); } catch { /* noop */ }
     }
   };
 
-  const stillTheSea = () => {
+  const clearSky = () => {
     calmRef.current = 1;
     calmStartedRef.current = performance.now();
+    pressureRef.current = 1;
     stormTargetRef.current = 0;
-    freqTargetRef.current = 1.0;
     maelstromTargetRef.current = 0;
-    setStormDisplay(0);
-    setFreqDisplay(1.0);
+    chargeRef.current = 0;
+    setPressureDisplay(1);
+    setChargeDisplay(0);
     setMaelstromOn(false);
-    const audio = getFieldAudio();
-    audio.bell();
-    haptics.roll();
-    useField.getState().recordTape("ripple", 0.3, "storm/calm");
-    addStormMark("calm", 0.28);
+    const a = getFieldAudio();
+    try { a.bell(); } catch { /* noop */ }
+    try { haptics.roll(); } catch { /* noop */ }
+    useField.getState().recordTape("ripple", 0.3, "storm/clear");
   };
 
-  const ampPct = Math.round(stormDisplay * 100);
-  const freqPct = Math.round(((freqDisplay - 0.4) / 1.8) * 100);
-  const outerRot = stormDisplay * 360;
-  const innerRot = ((freqDisplay - 0.4) / 1.8) * 360;
+  const hPa = Math.round(960 + pressureDisplay * 80);
+  const chargePct = Math.round(chargeDisplay * 100);
+  const armed = chargeDisplay >= 0.85;
+  const needleDeg = -120 + pressureDisplay * 240;
   const windRot = (windAngleDisplay * 180) / Math.PI;
 
   return (
     <div
       ref={wrapRef}
+      className="storm-instrument"
       data-touch-surface="true"
+      data-pretext-ignore="true"
       style={{
         position: "fixed",
         inset: 0,
@@ -1164,7 +1347,7 @@ export default function Storm() {
       />
       <canvas
         ref={linesRef}
-        aria-label="the storm — click the sea, turn the wheel"
+        aria-label="storm — drop the barometer to rage the sea; drag the sky to build charge, then release lightning"
         style={{
           position: "absolute",
           inset: 0,
@@ -1186,98 +1369,20 @@ export default function Storm() {
         style={{
           position: "absolute",
           inset: 0,
-          background: "rgba(255, 255, 255, 1)",
+          background: "rgba(238, 244, 255, 1)",
           opacity: 0,
-          transition: "opacity 240ms ease-out",
+          transition: "opacity 220ms ease-out",
           pointerEvents: "none",
         }}
       />
 
-      {/* ── title block ───────────────────────────────────────── */}
-      <div
-        className="storm-title"
-        style={{
-          position: "fixed",
-          top: 80,
-          left: "var(--pad-x)",
-          color: "rgba(244, 248, 255, 0.95)",
-          pointerEvents: "none",
-          maxWidth: 520,
-          WebkitUserSelect: "none",
-          userSelect: "none",
-        }}
-      >
-        <div
-          className="t-eyebrow"
-          style={{
-            color: "rgba(244, 248, 255, 0.50)",
-            marginBottom: 14,
-          }}
-        >
-          calm &harr; storm &middot; turn the wheel
-        </div>
-        <WaterText
-          as="h1"
-          bobAmp={0}
-          style={{
-            display: "block",
-            margin: 0,
-            fontFamily: "var(--font-serif)",
-            fontWeight: 500,
-            fontSize: "clamp(48px, 7vw, 96px)",
-            lineHeight: 1.0,
-            letterSpacing: "-0.018em",
-          }}
-        >
-          STORM
-        </WaterText>
-        <WaterText
-          as="div"
-          bobAmp={2}
-          style={{
-            display: "block",
-            fontFamily: "var(--font-serif)",
-            fontStyle: "italic",
-            fontWeight: 300,
-            fontSize: "clamp(18px, 2.2vw, 26px)",
-            color: "rgba(244, 248, 255, 0.78)",
-            marginTop: 6,
-            letterSpacing: "0.002em",
-          }}
-        >
-          the wave allowed to rage
-        </WaterText>
-        <div
-          className="storm-mark-ribbon"
-          aria-hidden="true"
-          style={{
-            display: "flex",
-            flexWrap: "wrap",
-            gap: "7px 10px",
-            marginTop: 14,
-            maxWidth: 420,
-            fontFamily: "var(--font-text)",
-            fontSize: 11,
-            letterSpacing: "0.08em",
-            textTransform: "lowercase",
-            color: "rgba(244, 248, 255, 0.64)",
-          }}
-        >
-          {stormMarks.map((mark) => (
-            <span
-              key={mark.id}
-              style={{
-                opacity: 0.45 + mark.level * 0.45,
-                borderBottom: "1px solid rgba(244,248,255,0.22)",
-              }}
-            >
-              {mark.label}
-            </span>
-          ))}
-        </div>
+      {/* ── quiet title ──────────────────────────────────────────── */}
+      <div className="storm-title" aria-hidden="true">
+        <span>pressure · charge · discharge</span>
+        <strong>Storm</strong>
       </div>
 
-      {/* ── wind rose (top right) ───────────────────────────── */}
+      {/* ── wind rose (top right) ────────────────────────────────── */}
       <div
         className="storm-wind-rose"
         ref={windRoseRef}
@@ -1290,21 +1395,6 @@ export default function Storm() {
         onPointerMove={onWindMove}
         onPointerUp={onWindUp}
         onPointerCancel={onWindUp}
-        style={{
-          position: "fixed",
-          top: 90,
-          right: 32,
-          width: 88,
-          height: 88,
-          borderRadius: "50%",
-          border: "1px solid rgba(244,248,255,0.30)",
-          background: "rgba(20, 30, 50, 0.45)",
-          cursor: "grab",
-          touchAction: "none",
-          WebkitUserSelect: "none",
-          userSelect: "none",
-          WebkitTouchCallout: "none",
-        }}
       >
         <svg viewBox="-50 -50 100 100" width="88" height="88" style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
           {["N", "E", "S", "W"].map((dir, i) => {
@@ -1326,287 +1416,312 @@ export default function Storm() {
         </svg>
       </div>
 
-      {/* ── ship's wheel (bottom center) ─────────────────────── */}
-      <div
-        className="storm-wheel-panel"
-        style={{
-          position: "fixed",
-          left: "50%",
-          bottom: 56,
-          transform: "translateX(-50%)",
-          color: "rgba(244, 248, 255, 0.88)",
-          pointerEvents: "auto",
-          userSelect: "none",
-          WebkitUserSelect: "none",
-          WebkitTouchCallout: "none",
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          gap: 12,
-        }}
+      {/* ── static charge meter (right) — tap to release ─────────── */}
+      <button
+        type="button"
+        className={`storm-charge${armed ? " is-armed" : ""}`}
+        onClick={releaseCharge}
+        aria-label={`static charge ${chargePct} percent, tap to discharge`}
       >
-        <div
-          className="storm-readout"
-          style={{
-            display: "flex",
-            gap: 24,
-            fontFamily: "var(--font-numerals)",
-            fontSize: 14,
-            letterSpacing: "0.06em",
-            color: "rgba(244, 248, 255, 0.78)",
-            fontFeatureSettings: '"tnum"',
-            textTransform: "lowercase",
-          }}
-        >
-          <span>amp {ampPct}%</span>
-          <span>speed {freqPct}%</span>
+        <span className="storm-charge-track">
+          <span className="storm-charge-fill" style={{ height: `${chargePct}%` }} />
+          <span className="storm-charge-thresh" />
+        </span>
+        <span className="storm-charge-label">{armed ? "release" : "charge"}</span>
+      </button>
+
+      {/* ── barometer + actions (bottom center) ──────────────────── */}
+      <div className="storm-baro-panel">
+        <div className="storm-readout">
+          <span>{hPa} hPa</span>
+          <span>charge {chargePct}%</span>
         </div>
 
         <div
-          className="storm-wheel"
-          ref={wheelRef}
-          role="group"
-          aria-label="storm wheel — outer ring is amplitude, inner ring is speed"
-          onPointerDown={onWheelDown}
-          onPointerMove={onWheelMove}
-          onPointerUp={onWheelUp}
-          onPointerCancel={onWheelUp}
-          style={{
-            position: "relative",
-            width: 220,
-            height: 220,
-            touchAction: "none",
-            cursor: dragMode === "outer" || dragMode === "inner" ? "grabbing" : "grab",
-          }}
+          className="storm-baro"
+          ref={baroRef}
+          role="slider"
+          aria-label="barometric pressure — drop toward low to rage the sea"
+          aria-valuemin={960}
+          aria-valuemax={1040}
+          aria-valuenow={hPa}
+          onPointerDown={onBaroDown}
+          onPointerMove={onBaroMove}
+          onPointerUp={onBaroUp}
+          onPointerCancel={onBaroUp}
+          style={{ cursor: dragMode === "baro" ? "grabbing" : "grab" }}
         >
           <svg viewBox="-110 -110 220 220" width={220} height={220} style={{ position: "absolute", inset: 0 }}>
-            {/* outer ring — amplitude */}
-            <circle cx={0} cy={0} r={100} fill="rgba(20,30,50,0.35)" stroke="rgba(244,248,255,0.30)" strokeWidth={1} />
-            {Array.from({ length: 24 }).map((_, i) => {
-              const a = (i / 24) * Math.PI * 2 - Math.PI / 2;
-              const x1 = Math.cos(a) * 88;
-              const y1 = Math.sin(a) * 88;
-              const x2 = Math.cos(a) * 100;
-              const y2 = Math.sin(a) * 100;
-              return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2}
-                stroke="rgba(244,248,255,0.40)" strokeWidth={1} />;
+            <circle cx={0} cy={0} r={100} fill="rgba(20,30,50,0.42)" stroke="rgba(244,248,255,0.28)" strokeWidth={1} />
+            {/* gauge arc + ticks over the top 240° sweep */}
+            {Array.from({ length: 25 }).map((_, i) => {
+              const frac = i / 24;
+              const deg = -120 + frac * 240;
+              const a = ((deg - 90) * Math.PI) / 180;
+              const inner = i % 4 === 0 ? 78 : 86;
+              const x1 = Math.cos(a) * inner;
+              const y1 = Math.sin(a) * inner;
+              const x2 = Math.cos(a) * 98;
+              const y2 = Math.sin(a) * 98;
+              const lit = frac <= pressureDisplay;
+              return (
+                <line
+                  key={i}
+                  x1={x1}
+                  y1={y1}
+                  x2={x2}
+                  y2={y2}
+                  stroke={lit ? "rgba(244,248,255,0.70)" : "rgba(244,248,255,0.24)"}
+                  strokeWidth={i % 4 === 0 ? 1.6 : 1}
+                />
+              );
             })}
-            <g style={{ transform: `rotate(${outerRot}deg)`, transformOrigin: "0 0", transition: dragMode === "outer" ? "none" : "transform 80ms linear" }}>
-              <polygon points="0,-100 -6,-86 6,-86" fill="rgba(244,248,255,0.95)" />
-              <circle cx={0} cy={-94} r={3} fill="rgba(244,248,255,0.95)" />
+            <text x={-70} y={72} fill="rgba(255,180,170,0.72)" textAnchor="middle" fontSize={11}
+              fontStyle="italic" fontFamily="var(--font-serif)">low</text>
+            <text x={70} y={72} fill="rgba(170,210,255,0.72)" textAnchor="middle" fontSize={11}
+              fontStyle="italic" fontFamily="var(--font-serif)">high</text>
+            {/* needle */}
+            <g style={{ transform: `rotate(${needleDeg}deg)`, transformOrigin: "0 0", transition: dragMode === "baro" ? "none" : "transform 90ms linear" }}>
+              <line x1={0} y1={14} x2={0} y2={-84} stroke="rgba(244,248,255,0.96)" strokeWidth={2} strokeLinecap="round" />
+              <polygon points="0,-96 -5,-82 5,-82" fill="rgba(244,248,255,0.96)" />
             </g>
-            {/* inner ring — speed */}
-            <circle cx={0} cy={0} r={62} fill="rgba(20,30,50,0.55)" stroke="rgba(244,248,255,0.35)" strokeWidth={1} />
-            {Array.from({ length: 8 }).map((_, i) => {
-              const a = (i / 8) * Math.PI * 2;
-              const x1 = Math.cos(a) * 36;
-              const y1 = Math.sin(a) * 36;
-              const x2 = Math.cos(a) * 60;
-              const y2 = Math.sin(a) * 60;
-              return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2}
-                stroke="rgba(244,248,255,0.45)" strokeWidth={1.4} strokeLinecap="round" />;
-            })}
-            <g style={{ transform: `rotate(${innerRot}deg)`, transformOrigin: "0 0", transition: dragMode === "inner" ? "none" : "transform 80ms linear" }}>
-              <line x1={0} y1={-58} x2={0} y2={-32} stroke="rgba(244,248,255,0.95)" strokeWidth={1.6} />
-              <circle cx={0} cy={-58} r={3} fill="rgba(244,248,255,0.95)" />
-            </g>
-            <circle cx={0} cy={0} r={18} fill="rgba(20,30,50,0.95)" stroke="rgba(244,248,255,0.50)" strokeWidth={1.2} />
-            <text x={0} y={3} fill="rgba(244,248,255,0.65)" textAnchor="middle"
-              fontSize={10} fontStyle="italic" fontFamily="var(--font-serif)">
-              wheel
-            </text>
+            <circle cx={0} cy={0} r={22} fill="rgba(14,30,52,0.96)" stroke="rgba(244,248,255,0.46)" strokeWidth={1.2} />
+            <text x={0} y={-2} fill="rgba(244,248,255,0.92)" textAnchor="middle" fontSize={15}
+              fontFamily="var(--font-numerals)">{hPa}</text>
+            <text x={0} y={12} fill="rgba(244,248,255,0.5)" textAnchor="middle" fontSize={8}
+              fontFamily="var(--font-serif)" fontStyle="italic">hPa</text>
           </svg>
         </div>
 
-        <div className="storm-actions" style={{ display: "flex", gap: 12, marginTop: 4 }}>
-          <button
-            onClick={toggleMaelstrom}
-            aria-pressed={maelstromOn}
-            style={{
-              minHeight: 44,
-              minWidth: 44,
-              padding: "10px 14px",
-              background: maelstromOn ? "rgba(244,248,255,0.92)" : "transparent",
-              color: maelstromOn ? "rgba(14,37,64,1)" : "rgba(244,248,255,0.85)",
-              border: "1px solid rgba(244,248,255,0.55)",
-              borderRadius: 3,
-              cursor: "pointer",
-              fontFamily: "var(--font-text)",
-              fontSize: 12,
-              letterSpacing: "0.10em",
-              textTransform: "lowercase",
-              touchAction: "manipulation",
-              WebkitTapHighlightColor: "transparent",
-            }}
-          >
-            maelstrom
+        <div className="storm-actions">
+          <button type="button" onClick={toggleMaelstrom} aria-pressed={maelstromOn} className={maelstromOn ? "is-on" : ""}>
+            eye
           </button>
-          <button
-            onClick={stillTheSea}
-            style={{
-              minHeight: 44,
-              minWidth: 44,
-              padding: "10px 14px",
-              background: "transparent",
-              color: "rgba(244,248,255,0.85)",
-              border: "1px solid rgba(244,248,255,0.55)",
-              borderRadius: 3,
-              cursor: "pointer",
-              fontFamily: "var(--font-text)",
-              fontSize: 12,
-              letterSpacing: "0.10em",
-              textTransform: "lowercase",
-              touchAction: "manipulation",
-              WebkitTapHighlightColor: "transparent",
-            }}
-          >
-            still the sea
+          <button type="button" onClick={clearSky}>
+            clear sky
           </button>
         </div>
       </div>
 
       <style
         dangerouslySetInnerHTML={{
-          __html:
-            `
+          __html: `
+            .storm-title {
+              position: fixed;
+              z-index: 3;
+              top: 80px;
+              left: var(--pad-x);
+              pointer-events: none;
+              -webkit-user-select: none;
+              user-select: none;
+            }
+            .storm-title span {
+              display: block;
+              margin-bottom: 12px;
+              color: rgba(244, 248, 255, 0.52);
+              font-family: var(--font-text);
+              font-size: 11px;
+              letter-spacing: 0.04em;
+              text-transform: lowercase;
+            }
+            .storm-title strong {
+              display: block;
+              color: rgba(246, 250, 255, 0.96);
+              font-family: var(--font-serif);
+              font-weight: 500;
+              font-size: clamp(56px, 8vw, 112px);
+              line-height: 0.9;
+              letter-spacing: -0.02em;
+            }
+
+            .storm-wind-rose {
+              position: fixed;
+              z-index: 4;
+              top: 90px;
+              right: 32px;
+              width: 88px;
+              height: 88px;
+              border-radius: 50%;
+              border: 1px solid rgba(244,248,255,0.30);
+              background: rgba(20, 30, 50, 0.45);
+              backdrop-filter: blur(10px);
+              -webkit-backdrop-filter: blur(10px);
+              cursor: grab;
+              touch-action: none;
+              -webkit-user-select: none;
+              user-select: none;
+              -webkit-touch-callout: none;
+            }
+
+            .storm-charge {
+              position: fixed;
+              z-index: 4;
+              top: 50%;
+              right: 30px;
+              transform: translateY(-50%);
+              display: flex;
+              flex-direction: column;
+              align-items: center;
+              gap: 8px;
+              width: 46px;
+              padding: 12px 8px;
+              border: 1px solid rgba(244,248,255,0.20);
+              border-radius: 10px;
+              background: rgba(14, 28, 50, 0.5);
+              backdrop-filter: blur(12px);
+              -webkit-backdrop-filter: blur(12px);
+              cursor: pointer;
+              touch-action: manipulation;
+              -webkit-tap-highlight-color: transparent;
+            }
+            .storm-charge-track {
+              position: relative;
+              width: 12px;
+              height: 200px;
+              border-radius: 999px;
+              background: rgba(244,248,255,0.09);
+              overflow: hidden;
+              display: block;
+            }
+            .storm-charge-fill {
+              position: absolute;
+              left: 0;
+              right: 0;
+              bottom: 0;
+              border-radius: 999px;
+              background: linear-gradient(180deg, rgba(180,200,255,0.95), rgba(120,150,240,0.75));
+              box-shadow: 0 0 14px rgba(150,180,255,0.55);
+              transition: height 120ms linear;
+            }
+            .storm-charge-thresh {
+              position: absolute;
+              left: -3px;
+              right: -3px;
+              bottom: 85%;
+              height: 1px;
+              background: rgba(255,255,255,0.5);
+            }
+            .storm-charge-label {
+              font-family: var(--font-text);
+              font-size: 9px;
+              letter-spacing: 0.06em;
+              text-transform: lowercase;
+              color: rgba(244,248,255,0.62);
+            }
+            .storm-charge.is-armed {
+              border-color: rgba(190,210,255,0.7);
+              box-shadow: 0 0 22px rgba(150,180,255,0.5);
+            }
+            .storm-charge.is-armed .storm-charge-fill {
+              background: linear-gradient(180deg, rgba(235,242,255,1), rgba(170,195,255,0.9));
+              box-shadow: 0 0 22px rgba(200,220,255,0.85);
+            }
+            .storm-charge.is-armed .storm-charge-label {
+              color: rgba(246,250,255,0.95);
+            }
+
+            .storm-baro-panel {
+              position: fixed;
+              z-index: 4;
+              left: 50%;
+              bottom: 48px;
+              transform: translateX(-50%);
+              display: flex;
+              flex-direction: column;
+              align-items: center;
+              gap: 12px;
+              color: rgba(244, 248, 255, 0.88);
+              -webkit-user-select: none;
+              user-select: none;
+              -webkit-touch-callout: none;
+            }
+            .storm-readout {
+              display: flex;
+              gap: 24px;
+              font-family: var(--font-numerals);
+              font-size: 14px;
+              letter-spacing: 0.04em;
+              color: rgba(244, 248, 255, 0.78);
+              font-feature-settings: "tnum";
+              text-transform: lowercase;
+            }
+            .storm-baro {
+              position: relative;
+              width: 220px;
+              height: 220px;
+              touch-action: none;
+            }
+            .storm-actions {
+              display: flex;
+              gap: 12px;
+              margin-top: 2px;
+            }
+            .storm-actions button {
+              min-height: 44px;
+              min-width: 44px;
+              padding: 10px 16px;
+              background: transparent;
+              color: rgba(244,248,255,0.85);
+              border: 1px solid rgba(244,248,255,0.5);
+              border-radius: 4px;
+              cursor: pointer;
+              font-family: var(--font-text);
+              font-size: 12px;
+              letter-spacing: 0.10em;
+              text-transform: lowercase;
+              touch-action: manipulation;
+              -webkit-tap-highlight-color: transparent;
+            }
+            .storm-actions button.is-on {
+              background: rgba(244,248,255,0.92);
+              color: rgba(14,37,64,1);
+            }
+
+            body:has(.storm-instrument) header { display: none !important; }
+            body:has(.storm-instrument) .oda-field-watch,
+            body:has(.storm-instrument) .oda-candle-mark,
+            body:has(.storm-instrument) .oda-tape-shell,
+            body:has(.storm-instrument) .oda-sound-toggle { display: none !important; }
+            body:has(.storm-instrument) { overflow: hidden; background: #0e2540; }
+
             @media (max-width: 700px) {
               .storm-title {
-                top: 76px !important;
+                top: 72px !important;
                 left: 18px !important;
-                max-width: calc(100vw - 124px) !important;
               }
-              .storm-title .t-eyebrow {
-                margin-bottom: 8px !important;
-                font-size: 10px !important;
-              }
-              .storm-title h1 {
-                font-size: 52px !important;
-                letter-spacing: 0 !important;
-              }
-              .storm-title [style*="italic"] {
-                font-size: 16px !important;
-                line-height: 1.1 !important;
-              }
-              .storm-mark-ribbon {
-                margin-top: 8px !important;
-                gap: 5px 8px !important;
-                font-size: 10px !important;
-                max-width: 210px !important;
-              }
+              .storm-title span { margin-bottom: 8px !important; font-size: 10px !important; }
+              .storm-title strong { font-size: 60px !important; }
               .storm-wind-rose {
-                top: 84px !important;
+                top: 78px !important;
                 right: 16px !important;
-                width: 68px !important;
-                height: 68px !important;
+                width: 64px !important;
+                height: 64px !important;
               }
-              .storm-wind-rose svg {
-                width: 68px !important;
-                height: 68px !important;
+              .storm-wind-rose svg { width: 64px !important; height: 64px !important; }
+              .storm-charge {
+                right: 14px !important;
+                width: 40px !important;
+                padding: 10px 6px !important;
               }
-              .storm-wheel-panel {
-                bottom: calc(54px + env(safe-area-inset-bottom, 0px)) !important;
-                gap: 6px !important;
-              }
-              .storm-readout {
-                gap: 14px !important;
-                font-size: 12px !important;
-              }
-              .storm-wheel {
-                width: 150px !important;
-                height: 150px !important;
-              }
-              .storm-wheel svg {
-                width: 150px !important;
-                height: 150px !important;
-              }
-              .storm-actions {
+              .storm-charge-track { height: 150px !important; }
+              .storm-baro-panel {
+                bottom: calc(44px + env(safe-area-inset-bottom, 0px)) !important;
                 gap: 8px !important;
-                margin-top: 0 !important;
               }
-              .storm-actions button {
-                min-height: 40px !important;
-                padding: 8px 10px !important;
-                font-size: 11px !important;
-                max-width: 124px;
-                white-space: normal;
-              }
-              .storm-chart-stack {
-                display: none !important;
-              }
+              .storm-readout { gap: 16px !important; font-size: 12px !important; }
+              .storm-baro { width: 156px !important; height: 156px !important; }
+              .storm-baro svg { width: 156px !important; height: 156px !important; }
+              .storm-actions button { padding: 9px 12px !important; font-size: 11px !important; }
             }
             @media (max-width: 700px) and (max-height: 740px) {
-              .storm-title h1 {
-                font-size: 44px !important;
-              }
-              .storm-mark-ribbon {
-                max-width: 190px !important;
-              }
-              .storm-wheel {
-                width: 132px !important;
-                height: 132px !important;
-              }
-              .storm-wheel svg {
-                width: 132px !important;
-                height: 132px !important;
-              }
-              .storm-actions button {
-                min-height: 38px !important;
-                padding: 7px 9px !important;
-              }
+              .storm-title strong { font-size: 50px !important; }
+              .storm-baro { width: 138px !important; height: 138px !important; }
+              .storm-baro svg { width: 138px !important; height: 138px !important; }
+              .storm-charge-track { height: 120px !important; }
             }
-            `,
+          `,
         }}
       />
-
-      {/* ── SeaChart embeds (kept from prior visuals) ──────────── */}
-      <div
-        className="storm-chart-stack"
-        style={{
-          position: "fixed",
-          left: 24,
-          bottom: 56,
-          display: "flex",
-          flexDirection: "column",
-          gap: 8,
-          pointerEvents: "auto",
-          zIndex: 5,
-        }}
-      >
-        <SeaChart
-          variant="inline"
-          mode="candles"
-          title="storm — last 30s"
-          caption="drag a candle to nudge the sea"
-          width={280}
-          height={100}
-          tickMs={0}
-          source={stormSource}
-          pullKey={chartPullKey}
-          static
-          feedToOcean
-          tapeLabel="storm/chart"
-          upColor="#7CC4FF"
-          downColor="#FF8A78"
-          background="rgba(14, 37, 64, 0.62)"
-        />
-        <SeaChart
-          variant="inline"
-          mode="oscillator"
-          title="osc · above/below calm"
-          caption="zero at 0.5"
-          width={280}
-          height={56}
-          tickMs={0}
-          source={stormSource}
-          pullKey={chartPullKey}
-          static
-          feedToOcean={false}
-          tapeLabel="storm/osc"
-          upColor="#7CC4FF"
-          downColor="#FF8A78"
-          background="rgba(14, 37, 64, 0.62)"
-        />
-      </div>
     </div>
   );
 }

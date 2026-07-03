@@ -16,14 +16,14 @@ export type SiteRouteEntry = {
 
 export const SITE_ROUTES: SiteRouteEntry[] = [
   { key: "atlas",       icon: "atlas",    href: "/atlas/origin", anchor: "atlas",    desc: "the territories",                cluster: "field",     homePriority: 10 },
-  { key: "ocean",       icon: "waves",    href: "/ocean",                             desc: "open water · rivers",           cluster: "water",     dark: true, homePriority: 7 },
-  { key: "tide",        icon: "tide",     href: "/tide",                              desc: "night sea",                    cluster: "water",     dark: true, homePriority: 9 },
-  { key: "waves",       icon: "waves",    href: "/waves",                             desc: "the poem",                     cluster: "water",     dark: true, homePriority: 8 },
+  { key: "ocean",       icon: "waves",    href: "/ocean",                             desc: "the deep · dive down",          cluster: "water",     dark: true, homePriority: 7 },
+  { key: "tide",        icon: "tide",     href: "/tide",                              desc: "move the moon",                cluster: "water",     dark: true, homePriority: 9 },
+  { key: "waves",       icon: "waves",    href: "/waves",                             desc: "ripple tank",                  cluster: "water",     dark: true, homePriority: 8 },
   { key: "sine",        icon: "waves",    href: "/sine",                              desc: "wave explorer",                cluster: "water",     dark: true },
   { key: "pretext",     icon: "waves",    href: "/pretext",                           desc: "playable text",                cluster: "water",     dark: true },
   { key: "circularity", icon: "aphros",   href: "/circularity",                       desc: "circles to waves",             cluster: "water",     dark: true },
   { key: "beyond",      icon: "waves",    href: "/beyond",                            desc: "novel wave field",             cluster: "water",     dark: true, homePriority: 10 },
-  { key: "storm",       icon: "storm",    href: "/storm",                             desc: "the wave allowed to rage",     cluster: "water",     dark: true },
+  { key: "storm",       icon: "storm",    href: "/storm",                             desc: "pressure · charge · discharge", cluster: "water",     dark: true },
   { key: "clouds",      icon: "clouds",   href: "/clouds",                            desc: "olympus",                      cluster: "water",     dark: true },
   { key: "aphros",      icon: "aphros",   href: "/aphros",                            desc: "foam · shells · love",         cluster: "water" },
   { key: "flowers",     icon: "growth",   href: "/flowers",                           desc: "petals · symmetry",            cluster: "nature",    dark: true },
