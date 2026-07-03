@@ -1065,9 +1065,10 @@ function drawGreatWave(
   ctx.closePath();
   const body = ctx.createLinearGradient(0, waveBaseY - heroAmp, 0, footY);
   body.addColorStop(0.0, "rgba(28, 64, 104, 0.0)");
-  body.addColorStop(0.12, "rgba(20, 56, 96, 0.55)");
-  body.addColorStop(0.5, "rgba(10, 34, 70, 0.70)");
-  body.addColorStop(1.0, "rgba(4, 16, 40, 0.55)");
+  body.addColorStop(0.12, "rgba(20, 56, 96, 0.52)");
+  body.addColorStop(0.42, "rgba(10, 34, 70, 0.62)");
+  body.addColorStop(0.72, "rgba(6, 22, 52, 0.34)");
+  body.addColorStop(1.0, "rgba(4, 16, 40, 0.0)");
   ctx.fillStyle = body;
   ctx.fill();
 
