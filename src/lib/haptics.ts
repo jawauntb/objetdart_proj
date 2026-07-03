@@ -18,21 +18,65 @@ import { getTurbulence } from "@/lib/turbulence";
 
 let enabled = true;
 
+type NativeHapticBridge = {
+  __objetCoinNative?: {
+    haptic?: (pattern: number | number[]) => boolean | void;
+  };
+  webkit?: {
+    messageHandlers?: {
+      coinHaptic?: {
+        postMessage: (message: unknown) => void;
+      };
+    };
+  };
+};
+
+function nativeBridge(): NativeHapticBridge | null {
+  if (typeof window === "undefined") return null;
+  return window as Window & NativeHapticBridge;
+}
+
+function canNativeHaptic(): boolean {
+  const bridge = nativeBridge();
+  return !!(
+    bridge?.__objetCoinNative?.haptic ||
+    bridge?.webkit?.messageHandlers?.coinHaptic
+  );
+}
+
+function sendNativeHaptic(pattern: number | number[]): boolean {
+  const bridge = nativeBridge();
+  if (!bridge) return false;
+
+  try {
+    if (bridge.__objetCoinNative?.haptic) {
+      bridge.__objetCoinNative.haptic(pattern);
+      return true;
+    }
+    bridge.webkit?.messageHandlers?.coinHaptic?.postMessage({ type: "haptic", pattern });
+    return !!bridge.webkit?.messageHandlers?.coinHaptic;
+  } catch {
+    return false;
+  }
+}
+
 function canVibrate(): boolean {
   if (!enabled) return false;
   if (typeof navigator === "undefined") return false;
-  if (typeof navigator.vibrate !== "function") return false;
   if (typeof window !== "undefined") {
     try {
       if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return false;
     } catch { /* noop */ }
   }
-  return true;
+  return typeof navigator.vibrate === "function" || canNativeHaptic();
 }
 
 export function setHapticsEnabled(on: boolean): void {
   enabled = on;
-  if (!on && canVibrateRaw()) { try { navigator.vibrate(0); } catch { /* noop */ } }
+  if (!on) {
+    if (canVibrateRaw()) { try { navigator.vibrate(0); } catch { /* noop */ } }
+    else sendNativeHaptic(0);
+  }
 }
 
 export function hapticsEnabled(): boolean {
@@ -46,7 +90,10 @@ function canVibrateRaw(): boolean {
 /** Low-level escape hatch — fire an arbitrary vibrate pattern, guarded. */
 export function haptic(pattern: number | number[]): void {
   if (!canVibrate()) return;
-  try { navigator.vibrate(pattern); } catch { /* noop */ }
+  if (canVibrateRaw()) {
+    try { navigator.vibrate(pattern); return; } catch { /* fall through */ }
+  }
+  sendNativeHaptic(pattern);
 }
 
 // How hard the current sea is hitting: 0.6 at glass, up to ~1.45 at full
