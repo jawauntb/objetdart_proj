@@ -164,19 +164,41 @@ function buildSeries(
   return out;
 }
 
-/** Apply per-candle tweak to high/low. Positive tweak lifts the high; negative dips the low. */
+/**
+ * Effective close = seed close + user tweak. A candle's `tweak` shifts its
+ * close in price-units; the body, wick, derivative and RSI all follow. This
+ * is what lets a drag in ANY panel back-solve the same underlying series so
+ * all three panels stay coherent.
+ */
+function effClose(c: Candle): number {
+  return c.close + c.tweak;
+}
+
+/**
+ * Apply the close-shift and rebuild the OHLC box. The seed wick lengths are
+ * preserved relative to the (shifted) body, so pulling a candle also pulls
+ * its wicks — the whole reading answers the finger.
+ */
+function effectiveCandle(c: Candle): { open: number; close: number; high: number; low: number } {
+  const close = c.close + c.tweak;
+  const wickUp = c.high - Math.max(c.open, c.close);
+  const wickDn = Math.min(c.open, c.close) - c.low;
+  const top = Math.max(c.open, close);
+  const bot = Math.min(c.open, close);
+  return { open: c.open, close, high: top + wickUp, low: bot - wickDn };
+}
+
+/** Back-compat helper — effective high/low with the tweak applied. */
 function effectiveHL(c: Candle): { high: number; low: number } {
-  return {
-    high: c.tweak > 0 ? c.high + c.tweak : c.high,
-    low: c.tweak < 0 ? c.low + c.tweak : c.low,
-  };
+  const e = effectiveCandle(c);
+  return { high: e.high, low: e.low };
 }
 
 // ── second-order derivative + EMA ────────────────────────────────────────
 
-/** First derivative of the close series; output has length CANDLE_COUNT - 1. */
+/** First derivative of the effective-close series; length CANDLE_COUNT - 1. */
 function deriveD1(candles: ReadonlyArray<Candle>): number[] {
-  const closes = candles.map((c) => c.close);
+  const closes = candles.map(effClose);
   const out: number[] = [];
   for (let i = 1; i < closes.length; i++) {
     out.push(closes[i] - closes[i - 1]);
@@ -197,7 +219,10 @@ function ema(values: ReadonlyArray<number>, period: number): number[] {
 // ── RSI (Wilder) ────────────────────────────────────────────────────────
 
 function computeRSI(candles: ReadonlyArray<Candle>, period: number): number[] {
-  const closes = candles.map((c) => c.close);
+  return computeRSIFromCloses(candles.map(effClose), period);
+}
+
+function computeRSIFromCloses(closes: ReadonlyArray<number>, period: number): number[] {
   if (closes.length < period + 1) return new Array(closes.length).fill(50);
   // Use a simple Wilder's smoothing.
   let gain = 0;
@@ -222,6 +247,55 @@ function computeRSI(candles: ReadonlyArray<Candle>, period: number): number[] {
   // Fill early values with the first computed rsi so the line isn't a jump.
   for (let i = 0; i < period; i++) rsi[i] = rsi[period] ?? 50;
   return rsi;
+}
+
+// ── back-solvers (Panel 2 / Panel 3 → candle closes) ─────────────────────
+
+/**
+ * Panel 2 scrub. The derivative sample `i` is the slope between candle `i`
+ * and `i + 1`. To make that slope equal `target`, we move the arrival
+ * candle's close to `effClose(i) + target`. Returns the tweak candle `i+1`
+ * needs. Neighbouring derivative samples ripple — that is the coherence.
+ */
+function solveTweakForD1(
+  candles: ReadonlyArray<Candle>,
+  i: number,
+  target: number,
+): number {
+  const from = candles[i];
+  const to = candles[i + 1];
+  if (!from || !to) return to ? to.tweak : 0;
+  const desiredClose = effClose(from) + target;
+  return desiredClose - to.close;
+}
+
+/**
+ * Panel 3 scrub. RSI is a non-linear Wilder average, but RSI[idx] is
+ * monotonic in candle[idx]'s close (raising the close raises that step's
+ * gain), so we bisect the tweak until RSI[idx] meets the finger. Cheap:
+ * ~36 evals of a 40-length pass.
+ */
+function solveTweakForRSI(
+  candles: ReadonlyArray<Candle>,
+  idx: number,
+  targetRSI: number,
+  period: number,
+): number {
+  const base = candles.map(effClose);
+  const seedClose = candles[idx].close;
+  const evalAt = (tw: number): number => {
+    const closes = base.slice();
+    closes[idx] = seedClose + tw;
+    return computeRSIFromCloses(closes, period)[idx] ?? 50;
+  };
+  let lo = -100;
+  let hi = 100;
+  for (let k = 0; k < 36; k++) {
+    const mid = (lo + hi) / 2;
+    if (evalAt(mid) < targetRSI) lo = mid;
+    else hi = mid;
+  }
+  return (lo + hi) / 2;
 }
 
 // ── component ────────────────────────────────────────────────────────────
@@ -257,16 +331,25 @@ export default function Charts() {
   const layoutRef = useRef<Layout | null>(null);
   // y-scale of Panel 1 (price range), updated each draw — used for drag math.
   const p1RangeRef = useRef<{ yMin: number; yMax: number }>({ yMin: 0, yMax: 1 });
-  // drag state
+  // plot rectangles + value-ranges for Panels 2 & 3, refreshed each draw so
+  // pointer handlers can invert screen-y → value for the back-solve.
+  const p2RangeRef = useRef<{ top: number; bot: number; yMin: number; yMax: number }>(
+    { top: 0, bot: 1, yMin: -1, yMax: 1 },
+  );
+  const p3RangeRef = useRef<{ top: number; bot: number }>({ top: 0, bot: 1 });
+  // live volatility so drag math reads the current value without re-binding
+  const volRef = useRef(1.2);
+  // drag state — `mode` selects which panel/gesture answers the finger
   const dragRef = useRef<{
     active: boolean;
+    mode: "candle" | "d1" | "rsi" | "vol";
     idx: number;
     startY: number;
     startTweak: number;
     lastChimeAt: number;
     lastMarkAt: number;
   }>(
-    { active: false, idx: -1, startY: 0, startTweak: 0, lastChimeAt: 0, lastMarkAt: 0 },
+    { active: false, mode: "candle", idx: -1, startY: 0, startTweak: 0, lastChimeAt: 0, lastMarkAt: 0 },
   );
   // oscillator threshold-cross state (so we only bell once per crossing)
   const lastZoneRef = useRef<"over" | "under" | "mid">("mid");
@@ -345,6 +428,11 @@ export default function Charts() {
   const d1Ema = useMemo(() => ema(d1, EMA_PERIOD), [d1]);
   const rsi = useMemo(() => computeRSI(candles, RSI_PERIOD), [candles]);
 
+  // keep the drag-math mirror of volatility current
+  useEffect(() => {
+    volRef.current = volatility;
+  }, [volatility]);
+
   // ── canvas draw ────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -371,7 +459,8 @@ export default function Charts() {
     const rebuildLayout = () => {
       const w = canvas.clientWidth;
       const h = canvas.clientHeight;
-      const padL = Math.max(24, Math.min(56, w * 0.04));
+      // slightly wider left gutter — it doubles as the volatility handle track
+      const padL = Math.max(38, Math.min(60, w * 0.055));
       const padR = Math.max(24, Math.min(56, w * 0.04));
       const innerW = w - padL - padR;
       const slot = innerW / CANDLE_COUNT;
@@ -414,9 +503,16 @@ export default function Charts() {
       ctx.fillStyle = "rgba(8, 12, 20, 1)";
       ctx.fillRect(0, 0, L.width, L.height);
 
+      // faint inscriptions — the words are pressed into the plate, not
+      // captioning it. Drawn under the data so the lines read over them.
+      drawInscriptions(ctx, L);
+
       drawPanel1(ctx, L, candles, hoverIdx, p1RangeRef);
-      drawPanel2(ctx, L, d1, d1Ema);
-      drawPanel3(ctx, L, rsi);
+      drawPanel2(ctx, L, d1, d1Ema, p2RangeRef);
+      drawPanel3(ctx, L, rsi, p3RangeRef);
+
+      // volatility handle lives in the left gutter beside Panel 1
+      drawVolHandle(ctx, L, volRef.current);
 
       // panel separators
       ctx.strokeStyle = "rgba(232,226,213,0.08)";
@@ -476,133 +572,305 @@ export default function Charts() {
 
   // ── pointer / drag handlers ────────────────────────────────────────────
 
-  const hitTestPanel1 = useCallback(
-    (clientX: number, clientY: number): { idx: number; localY: number } | null => {
+  // Resolve a pointer into a target: the volatility gutter, or a sample in
+  // one of the three panels. Every plotted point is a handle.
+  const locate = useCallback(
+    (
+      clientX: number,
+      clientY: number,
+    ):
+      | { zone: "vol" }
+      | { zone: "p1" | "p2" | "p3"; idx: number; localY: number }
+      | null => {
       const canvas = canvasRef.current;
       const L = layoutRef.current;
       if (!canvas || !L) return null;
       const rect = canvas.getBoundingClientRect();
       const x = clientX - rect.left;
       const y = clientY - rect.top;
-      if (y < L.p1Top || y > L.p1Top + L.p1H) return null;
-      if (x < L.padL || x > L.width - L.padR) return null;
-      const rel = (x - L.padL) / (L.width - L.padL - L.padR);
-      const idx = Math.max(0, Math.min(CANDLE_COUNT - 1, Math.floor(rel * CANDLE_COUNT)));
-      return { idx, localY: y - L.p1Top };
+      // volatility handle — left gutter, alongside Panel 1
+      if (x < L.padL && y >= L.p1Top && y <= L.p1Top + L.p1H) {
+        return { zone: "vol" };
+      }
+      const innerW = L.width - L.padL - L.padR;
+      if (x < L.padL || x > L.width - L.padR || innerW <= 0) return null;
+      const rel = Math.max(0, Math.min(1, (x - L.padL) / innerW));
+      if (y >= L.p1Top && y <= L.p1Top + L.p1H) {
+        const idx = Math.max(0, Math.min(CANDLE_COUNT - 1, Math.floor(rel * CANDLE_COUNT)));
+        return { zone: "p1", idx, localY: y - L.p1Top };
+      }
+      if (y >= L.p2Top && y <= L.p2Top + L.p2H) {
+        const N = CANDLE_COUNT - 1;
+        const idx = Math.max(0, Math.min(N - 1, Math.round(rel * N - 0.5)));
+        return { zone: "p2", idx, localY: y - L.p2Top };
+      }
+      if (y >= L.p3Top && y <= L.p3Top + L.p3H) {
+        const N = CANDLE_COUNT;
+        const idx = Math.max(0, Math.min(N - 1, Math.round(rel * N - 0.5)));
+        return { zone: "p3", idx, localY: y - L.p3Top };
+      }
+      return null;
     },
     [],
   );
 
-  const playClickForCandle = useCallback((c: Candle) => {
-    // pitch derived from close — mapped onto a 2-octave window centered on C4.
-    const { yMin, yMax } = p1RangeRef.current;
-    const span = yMax - yMin || 1;
-    const t = Math.max(0, Math.min(1, (c.close - yMin) / span));
-    const midi = 48 + Math.floor(t * 24);
+  const playNote = useCallback((midi: number, ms = 170) => {
     try {
-      getFieldAudio().playNote(midi, 180);
+      getFieldAudio().playNote(Math.round(midi), ms);
     } catch {
       /* noop */
     }
   }, []);
 
+  const playClickForCandle = useCallback(
+    (c: Candle) => {
+      // pitch derived from effective close — 2-octave window centred on C4.
+      const { yMin, yMax } = p1RangeRef.current;
+      const span = yMax - yMin || 1;
+      const t = Math.max(0, Math.min(1, (effClose(c) - yMin) / span));
+      playNote(48 + Math.floor(t * 24), 180);
+    },
+    [playNote],
+  );
+
+  // invert pointer-y within a panel back to that panel's value
+  const p2ValueAt = (clientY: number): number => {
+    const canvas = canvasRef.current;
+    const { top, bot, yMin, yMax } = p2RangeRef.current;
+    if (!canvas || bot <= top) return 0;
+    const y = clientY - canvas.getBoundingClientRect().top;
+    const t = Math.max(0, Math.min(1, (bot - y) / (bot - top)));
+    return yMin + t * (yMax - yMin);
+  };
+  const p3ValueAt = (clientY: number): number => {
+    const canvas = canvasRef.current;
+    const { top, bot } = p3RangeRef.current;
+    if (!canvas || bot <= top) return 50;
+    const y = clientY - canvas.getBoundingClientRect().top;
+    return Math.max(0, Math.min(100, ((bot - y) / (bot - top)) * 100));
+  };
+  const volValueAt = (clientY: number): number => {
+    const canvas = canvasRef.current;
+    const L = layoutRef.current;
+    if (!canvas || !L) return volRef.current;
+    const y = clientY - canvas.getBoundingClientRect().top;
+    const top = L.p1Top + 18;
+    const bot = L.p1Top + L.p1H - 18;
+    const t = Math.max(0, Math.min(1, (bot - y) / (bot - top || 1)));
+    const v = 0.1 + t * (3.0 - 0.1);
+    return Math.round(v / 0.05) * 0.05;
+  };
+
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    const hit = hitTestPanel1(e.clientX, e.clientY);
+    const hit = locate(e.clientX, e.clientY);
     if (!hit) return;
-    const c = candles[hit.idx];
-    if (!c) return;
-    dragRef.current = {
-      active: true,
-      idx: hit.idx,
-      startY: e.clientY,
-      startTweak: c.tweak,
-      lastChimeAt: 0,
-      lastMarkAt: 0,
-    };
-    playClickForCandle(c);
-    haptics.tap();
-    addChartMark(`c${hit.idx + 1}`, c.close >= c.open ? "rise" : "fall", 0.5);
     try {
       (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
     } catch {
       /* noop */
     }
+    haptics.tap();
+
+    if (hit.zone === "vol") {
+      dragRef.current = {
+        active: true, mode: "vol", idx: -1, startY: e.clientY,
+        startTweak: 0, lastChimeAt: 0, lastMarkAt: 0,
+      };
+      const v = volValueAt(e.clientY);
+      setVolatility(v);
+      playNote(46 + (v / 3.0) * 26, 150);
+      addChartMark(`vol ${v.toFixed(2)}`, "amber", 0.5);
+      return;
+    }
+    if (hit.zone === "p1") {
+      const c = candles[hit.idx];
+      if (!c) return;
+      dragRef.current = {
+        active: true, mode: "candle", idx: hit.idx, startY: e.clientY,
+        startTweak: c.tweak, lastChimeAt: 0, lastMarkAt: 0,
+      };
+      playClickForCandle(c);
+      addChartMark(`c${hit.idx + 1}`, effClose(c) >= c.open ? "rise" : "fall", 0.5);
+      return;
+    }
+    if (hit.zone === "p2") {
+      dragRef.current = {
+        active: true, mode: "d1", idx: hit.idx, startY: e.clientY,
+        startTweak: 0, lastChimeAt: 0, lastMarkAt: 0,
+      };
+      applyD1Drag(hit.idx, p2ValueAt(e.clientY));
+      addChartMark(`d ${hit.idx + 1}`, "amber", 0.52);
+      return;
+    }
+    // p3 — RSI
+    dragRef.current = {
+      active: true, mode: "rsi", idx: hit.idx, startY: e.clientY,
+      startTweak: 0, lastChimeAt: 0, lastMarkAt: 0,
+    };
+    applyRSIDrag(hit.idx, p3ValueAt(e.clientY));
+    addChartMark(`rsi ${hit.idx + 1}`, "amber", 0.52);
+  };
+
+  // Panel 2 back-solve — set the arrival candle's close so the slope answers.
+  const applyD1Drag = (idx: number, targetV: number) => {
+    setCandles((prev) => {
+      if (!prev[idx] || !prev[idx + 1]) return prev;
+      const next = prev.slice();
+      next[idx + 1] = { ...next[idx + 1], tweak: solveTweakForD1(prev, idx, targetV) };
+      return next;
+    });
+    const { yMin, yMax } = p2RangeRef.current;
+    const span = yMax - yMin || 1;
+    const t = Math.max(0, Math.min(1, (targetV - yMin) / span));
+    playNote(50 + t * 22, 130);
+    haptics.chop();
+  };
+
+  // Panel 3 back-solve — bisect a candle's close until RSI meets the finger.
+  const applyRSIDrag = (hitIdx: number, targetRSI: number) => {
+    const solveIdx = Math.max(RSI_PERIOD, hitIdx);
+    setCandles((prev) => {
+      if (!prev[solveIdx]) return prev;
+      const next = prev.slice();
+      next[solveIdx] = {
+        ...next[solveIdx],
+        tweak: solveTweakForRSI(prev, solveIdx, targetRSI, RSI_PERIOD),
+      };
+      return next;
+    });
+    playNote(48 + (targetRSI / 100) * 24, 130);
+    haptics.chop();
   };
 
   const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    // hover tooltip
-    const hit = hitTestPanel1(e.clientX, e.clientY);
-    if (hit) {
-      if (hit.idx !== hoverIdx) {
-        setHoverIdx(hit.idx);
-        const wrap = wrapRef.current;
-        const canvas = canvasRef.current;
-        const L = layoutRef.current;
-        if (wrap && canvas && L) {
-          const wrect = wrap.getBoundingClientRect();
-          const crect = canvas.getBoundingClientRect();
-          const cx = L.padL + hit.idx * L.slot + L.slot / 2;
-          setTip({
-            x: crect.left - wrect.left + cx,
-            y: crect.top - wrect.top + L.p1Top + 8,
-          });
+    const d = dragRef.current;
+
+    // hover tooltip — only when not dragging and only over Panel 1
+    if (!d.active) {
+      const hit = locate(e.clientX, e.clientY);
+      if (hit && hit.zone === "p1") {
+        if (hit.idx !== hoverIdx) {
+          setHoverIdx(hit.idx);
+          const wrap = wrapRef.current;
+          const canvas = canvasRef.current;
+          const L = layoutRef.current;
+          if (wrap && canvas && L) {
+            const wrect = wrap.getBoundingClientRect();
+            const crect = canvas.getBoundingClientRect();
+            const cx = L.padL + hit.idx * L.slot + L.slot / 2;
+            setTip({
+              x: crect.left - wrect.left + cx,
+              y: crect.top - wrect.top + L.p1Top + 8,
+            });
+          }
         }
+      } else if (hoverIdx !== -1) {
+        setHoverIdx(-1);
+        setTip(null);
       }
-    } else if (hoverIdx !== -1) {
-      setHoverIdx(-1);
-      setTip(null);
+      return;
     }
 
-    // drag-to-tweak
-    const d = dragRef.current;
-    if (!d.active) return;
     const L = layoutRef.current;
     if (!L) return;
-    // Convert vertical pixel delta into price-units using current y-range.
-    // Drag DOWN extends low (negative tweak), drag UP extends high (positive).
-    const { yMin, yMax } = p1RangeRef.current;
-    const span = yMax - yMin || 1;
-    const pxPerPrice = L.p1H / span;
-    const dy = e.clientY - d.startY;
-    const tweak = d.startTweak + (-dy / pxPerPrice);
-    setCandles((prev) => {
-      if (!prev[d.idx]) return prev;
-      const next = prev.slice();
-      next[d.idx] = { ...next[d.idx], tweak };
-      return next;
-    });
-    // rate-limited chime + tape mark
     const now = performance.now();
-    if (now - d.lastChimeAt > DRAG_NOTE_MS) {
-      d.lastChimeAt = now;
-      const c = candles[d.idx];
-      if (c) playClickForCandle({ ...c, tweak });
-      haptics.chop();
+
+    if (d.mode === "vol") {
+      const v = volValueAt(e.clientY);
+      if (Math.abs(v - volRef.current) > 1e-6) {
+        setVolatility(v);
+        if (now - d.lastChimeAt > DRAG_NOTE_MS) {
+          d.lastChimeAt = now;
+          playNote(46 + (v / 3.0) * 26, 120);
+          haptics.chop();
+        }
+        if (now - d.lastMarkAt > 360) {
+          d.lastMarkAt = now;
+          addChartMark(`vol ${v.toFixed(2)}`, "amber", 0.46);
+        }
+      }
+      return;
     }
+
+    if (d.mode === "candle") {
+      // vertical pixel delta → price-units via the current Panel-1 y-range
+      const { yMin, yMax } = p1RangeRef.current;
+      const span = yMax - yMin || 1;
+      const pxPerPrice = L.p1H / span;
+      const dy = e.clientY - d.startY;
+      const tweak = d.startTweak + -dy / pxPerPrice;
+      setCandles((prev) => {
+        if (!prev[d.idx]) return prev;
+        const next = prev.slice();
+        next[d.idx] = { ...next[d.idx], tweak };
+        return next;
+      });
+      if (now - d.lastChimeAt > DRAG_NOTE_MS) {
+        d.lastChimeAt = now;
+        const c = candles[d.idx];
+        if (c) playClickForCandle({ ...c, tweak });
+        haptics.chop();
+      }
+      if (now - d.lastMarkAt > 360) {
+        d.lastMarkAt = now;
+        addChartMark(
+          `${d.idx + 1} ${tweak >= 0 ? "up" : "dn"}`,
+          tweak >= 0 ? "rise" : "fall",
+          Math.min(0.88, 0.42 + Math.abs(tweak) * 0.12),
+        );
+      }
+      return;
+    }
+
+    if (d.mode === "d1") {
+      const targetV = p2ValueAt(e.clientY);
+      applyD1Drag(d.idx, targetV);
+      if (now - d.lastMarkAt > 360) {
+        d.lastMarkAt = now;
+        addChartMark(`d ${d.idx + 1} ${targetV >= 0 ? "↑" : "↓"}`, targetV >= 0 ? "rise" : "fall", 0.6);
+      }
+      return;
+    }
+
+    // d.mode === "rsi"
+    const targetRSI = p3ValueAt(e.clientY);
+    applyRSIDrag(d.idx, targetRSI);
     if (now - d.lastMarkAt > 360) {
       d.lastMarkAt = now;
       addChartMark(
-        `${d.idx + 1} ${tweak >= 0 ? "high" : "low"}`,
-        tweak >= 0 ? "rise" : "fall",
-        Math.min(0.88, 0.42 + Math.abs(tweak) * 0.12),
+        `rsi ${fmt(targetRSI)}`,
+        targetRSI >= 70 ? "rise" : targetRSI <= 30 ? "fall" : "pale",
+        0.6,
       );
     }
   };
 
   const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     const d = dragRef.current;
-    if (d.active && d.idx >= 0) {
-      // record one tape event per drag (the rate-limited dedupe in the
-      // store collapses extras within 80ms anyway)
+    if (d.active) {
       try {
-        recordTape("sigil", 0.6, "charts/manipulate");
+        if (d.mode === "vol") {
+          recordTape("object", 0.34, `charts:vol:${volRef.current.toFixed(2)}`);
+          addChartMark(`vol ${volRef.current.toFixed(2)}`, "amber", 0.6);
+        } else if (d.mode === "candle") {
+          recordTape("sigil", 0.6, "charts/manipulate");
+          addChartMark(`set ${d.idx + 1}`, "amber", 0.66);
+        } else if (d.mode === "d1") {
+          recordTape("sigil", 0.56, "charts/derivative");
+          addChartMark(`d set ${d.idx + 1}`, "amber", 0.64);
+        } else {
+          recordTape("sigil", 0.56, "charts/rsi");
+          addChartMark(`rsi set ${d.idx + 1}`, "amber", 0.64);
+        }
       } catch {
         /* noop */
       }
       haptics.ripple(0.58);
-      addChartMark(`set ${d.idx + 1}`, "amber", 0.66);
     }
-    dragRef.current = { active: false, idx: -1, startY: 0, startTweak: 0, lastChimeAt: 0, lastMarkAt: 0 };
+    dragRef.current = {
+      active: false, mode: "candle", idx: -1, startY: 0,
+      startTweak: 0, lastChimeAt: 0, lastMarkAt: 0,
+    };
     try {
       (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId);
     } catch {
@@ -690,40 +958,33 @@ export default function Charts() {
         touchAction: "manipulation",
       }}
     >
-      {/* header — eyebrow + title + subtitle */}
-      <header style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        <div
-          className="t-mono"
-          style={{
-            fontSize: 11,
-            letterSpacing: "0.18em",
-            textTransform: "uppercase",
-            opacity: 0.55,
-          }}
-        >
-          CHARTS / LINES · CANDLES · OSCILLATORS
-        </div>
-        <div
+      {/* whisper-quiet title — the chart is the object, not a captioned figure */}
+      <header
+        aria-hidden="true"
+        style={{ display: "flex", alignItems: "baseline", gap: 12, opacity: 0.44 }}
+      >
+        <span
           style={{
             fontFamily: "var(--font-fraunces, var(--font-display), Georgia, serif)",
             fontWeight: 500,
-            fontSize: "clamp(28px, 4.2vw, 48px)",
-            letterSpacing: "-0.01em",
-            lineHeight: 1.05,
+            fontSize: "clamp(15px, 1.9vw, 20px)",
+            letterSpacing: "0.01em",
+            lineHeight: 1,
           }}
         >
-          FLOW COMPASS
-        </div>
-        <div
+          Flow Compass
+        </span>
+        <span
+          className="t-mono"
           style={{
-            fontFamily: "var(--font-fraunces, var(--font-display), Georgia, serif)",
-            fontStyle: "italic",
-            fontSize: "clamp(14px, 1.6vw, 18px)",
+            fontSize: 9.5,
+            letterSpacing: "0.22em",
+            textTransform: "uppercase",
             opacity: 0.7,
           }}
         >
-          the chart that reads the field
-        </div>
+          candles · d/dt · rsi
+        </span>
       </header>
 
       {/* canvas region */}
@@ -809,7 +1070,7 @@ export default function Charts() {
               <span style={{ opacity: 0.55 }}>l</span>
               <span style={fraunceNum}>{fmt(effectiveHL(hoverC).low)}</span>
               <span style={{ opacity: 0.55 }}>c</span>
-              <span style={fraunceNum}>{fmt(hoverC.close)}</span>
+              <span style={fraunceNum}>{fmt(effClose(hoverC))}</span>
             </div>
           </div>
         ) : null}
@@ -836,19 +1097,9 @@ export default function Charts() {
           pin snapshot
         </button>
 
-        <label
-          className="t-mono"
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 10,
-            fontSize: 11,
-            letterSpacing: "0.08em",
-            textTransform: "lowercase",
-            color: "rgba(232,226,213,0.78)",
-            minHeight: 44,
-          }}
-        >
+        {/* volatility is a drag on the left gutter of the canvas now; this
+            control stays for keyboard / assistive tech only */}
+        <label className="sr-only">
           volatility
           <input
             type="range"
@@ -866,16 +1117,7 @@ export default function Charts() {
               recordTape("object", 0.28, `charts:vol:${volatility.toFixed(2)}`);
               addChartMark(`vol ${volatility.toFixed(2)}`, "amber", 0.42);
             }}
-            style={{
-              width: "min(46vw, 200px)",
-              accentColor: "rgba(255,180,110,0.95)",
-              minHeight: 44,
-              touchAction: "manipulation",
-            }}
           />
-          <span style={{ ...fraunceNum, fontSize: 12, opacity: 0.7, minWidth: 36 }}>
-            {volatility.toFixed(2)}
-          </span>
         </label>
 
         <span
@@ -888,7 +1130,10 @@ export default function Charts() {
             marginLeft: "auto",
           }}
         >
-          rsi:{" "}
+          vol{" "}
+          <span style={{ ...fraunceNum, opacity: 0.82 }}>{volatility.toFixed(2)}</span>
+          <span style={{ margin: "0 10px", opacity: 0.3 }}>·</span>
+          rsi{" "}
           <span style={{ ...fraunceNum, color: zoneColor(lastRsi), opacity: 0.95 }}>
             {fmt(lastRsi)}
           </span>
@@ -898,20 +1143,6 @@ export default function Charts() {
             </span>
           ) : null}
         </span>
-      </div>
-
-      {/* footer inscription */}
-      <div
-        style={{
-          fontFamily: "var(--font-fraunces, var(--font-display), Georgia, serif)",
-          fontStyle: "italic",
-          fontSize: 14,
-          opacity: 0.55,
-          textAlign: "center",
-          padding: "6px 0",
-        }}
-      >
-        manipulate one and watch the others answer
       </div>
 
       {/* scoped styling — mobile stack */}
@@ -1059,12 +1290,13 @@ function drawPanel1(
   // candles
   for (let i = 0; i < candles.length; i++) {
     const c = candles[i];
-    const { high, low } = effectiveHL(c);
-    const up = c.close >= c.open;
+    const e = effectiveCandle(c);
+    const { high, low } = e;
+    const up = e.close >= e.open;
     const isHovered = i === hoverIdx;
     const cx = L.padL + i * L.slot + L.slot / 2;
-    const yOpen = yOf(c.open);
-    const yClose = yOf(c.close);
+    const yOpen = yOf(e.open);
+    const yClose = yOf(e.close);
     const yHigh = yOf(high);
     const yLow = yOf(low);
     const cxPx = Math.floor(cx) + 0.5;
@@ -1096,12 +1328,11 @@ function drawPanel1(
     const bodyH = Math.max(1, bodyBot - bodyTop);
     ctx.fillRect(cx - bw / 2, bodyTop, bw, bodyH);
 
-    // tweak indicator — a small bright marker at the dragged wick tip
+    // tweak indicator — a small bright marker at the manipulated close
     if (Math.abs(c.tweak) > 0.001) {
       ctx.fillStyle = "rgba(255,180,110,0.95)";
       ctx.beginPath();
-      const tipY = c.tweak > 0 ? yHigh : yLow;
-      ctx.arc(cxPx, tipY, 2, 0, Math.PI * 2);
+      ctx.arc(cxPx, yClose, 2.2, 0, Math.PI * 2);
       ctx.fill();
     }
   }
@@ -1112,6 +1343,7 @@ function drawPanel2(
   L: Layout,
   d1: ReadonlyArray<number>,
   d1Ema: ReadonlyArray<number>,
+  rangeRef: React.MutableRefObject<{ top: number; bot: number; yMin: number; yMax: number }>,
 ) {
   const top = L.p2Top + 18;
   const bot = L.p2Top + L.p2H - 6;
@@ -1132,6 +1364,7 @@ function drawPanel2(
   const m = Math.max(Math.abs(yMin), Math.abs(yMax), 0.001) * 1.2;
   yMin = -m;
   yMax = m;
+  rangeRef.current = { top, bot, yMin, yMax };
   const yOf = (v: number) => bot - ((v - yMin) / (yMax - yMin)) * h;
 
   // zero line — faint horizontal
@@ -1217,11 +1450,13 @@ function drawPanel3(
   ctx: CanvasRenderingContext2D,
   L: Layout,
   rsi: ReadonlyArray<number>,
+  rangeRef: React.MutableRefObject<{ top: number; bot: number }>,
 ) {
   const top = L.p3Top + 18;
   const bot = L.p3Top + L.p3H - 6;
   const h = bot - top;
   if (h <= 0 || rsi.length === 0) return;
+  rangeRef.current = { top, bot };
 
   const yOf = (v: number) => bot - (v / 100) * h;
 
@@ -1287,6 +1522,70 @@ function drawPanel3(
   ctx.beginPath();
   ctx.arc(xOf(rsi.length - 1), yOf(last), 2.6, 0, Math.PI * 2);
   ctx.fill();
+}
+
+/**
+ * Faint inscriptions pressed into the plate. Not captions — the words sit
+ * under the data at whisper alpha so the chart stays the object.
+ */
+function drawInscriptions(ctx: CanvasRenderingContext2D, L: Layout) {
+  ctx.save();
+  ctx.textAlign = "center";
+  const cx = L.padL + (L.width - L.padL - L.padR) / 2;
+
+  ctx.fillStyle = "rgba(244,238,222,0.06)";
+  ctx.font = "italic 500 clamp(15px, 2.4vw, 26px) Georgia, 'Times New Roman', serif";
+  ctx.fillText("the chart that reads the field", cx, L.p1Top + L.p1H * 0.52);
+
+  ctx.fillStyle = "rgba(244,238,222,0.05)";
+  ctx.font = "italic 13px Georgia, 'Times New Roman', serif";
+  ctx.fillText("manipulate one and watch the others answer", cx, L.height - 12);
+  ctx.restore();
+}
+
+/**
+ * The volatility control, on-canvas. A knob rides a vertical track in the
+ * left gutter beside Panel 1 — drag it to breathe the series wider or calmer.
+ */
+function drawVolHandle(ctx: CanvasRenderingContext2D, L: Layout, volatility: number) {
+  const top = L.p1Top + 18;
+  const bot = L.p1Top + L.p1H - 18;
+  if (bot <= top) return;
+  const x = Math.round(L.padL * 0.5) + 0.5;
+  const t = Math.max(0, Math.min(1, (volatility - 0.1) / (3.0 - 0.1)));
+  const knobY = bot - t * (bot - top);
+
+  ctx.save();
+  // track
+  ctx.strokeStyle = "rgba(232,226,213,0.16)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(x, top);
+  ctx.lineTo(x, bot);
+  ctx.stroke();
+  // filled portion (amber), from bottom up to the knob
+  ctx.strokeStyle = "rgba(255,180,110,0.5)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(x, bot);
+  ctx.lineTo(x, knobY);
+  ctx.stroke();
+  // knob
+  ctx.fillStyle = "rgba(255,180,110,0.95)";
+  ctx.beginPath();
+  ctx.arc(x, knobY, 4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(8,12,20,0.9)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  // vertical label
+  ctx.translate(x - 9, (top + bot) / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.fillStyle = "rgba(232,226,213,0.34)";
+  ctx.font = "9px var(--font-mono, ui-monospace)";
+  ctx.textAlign = "center";
+  ctx.fillText("vol", 0, 0);
+  ctx.restore();
 }
 
 // ── small helpers ────────────────────────────────────────────────────────

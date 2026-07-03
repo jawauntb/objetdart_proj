@@ -9,6 +9,7 @@ import {
 } from "@chenglou/pretext";
 import { useEffect, useMemo, useRef, useState } from "react";
 import WaterText from "@/components/WaterText";
+import { getFieldAudio } from "@/lib/audio";
 import { useGeneratedSpeech } from "@/lib/useGeneratedSpeech";
 import { useField } from "@/store/field";
 import * as haptics from "@/lib/haptics";
@@ -32,8 +33,15 @@ const MODES: Array<{ key: MotionMode; label: string }> = [
   { key: "sine", label: "sine" },
 ];
 
+const AMP_MIN = 0;
+const AMP_MAX = 42;
+const DENSITY_MIN = 0.4;
+const DENSITY_MAX = 3;
+
+const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+
 const STARTER_TEXT =
-  "type a sentence and the room will make a coast of it. the words keep their measure, then loosen into wave, quake, shake, and sine. press play and the line becomes a small instrument.";
+  "type a sentence and the room will make a coast of it. the words keep their measure, then loosen into wave, quake, shake, and sine. drag across the words to play them, or press play and the line becomes a small instrument.";
 
 const LOCAL_ENDINGS = [
   "the sentence leaves a bright edge on the harbor wall.",
@@ -112,10 +120,29 @@ export default function PretextWave() {
   const [phase, setPhase] = useState(0);
   const [amp, setAmp] = useState(18);
   const [density, setDensity] = useState(1.2);
-  const [status, setStatus] = useState("local text ready");
+  const [status, setStatus] = useState("drag the words, or ask the room");
   const [generating, setGenerating] = useState(false);
   const [marks, setMarks] = useState<PretextMark[]>([]);
   const markIdRef = useRef(0);
+
+  // Live mirrors so the direct-manipulation drag reads current values
+  // without re-binding pointer handlers.
+  const ampRef = useRef(amp);
+  const densityRef = useRef(density);
+  useEffect(() => { ampRef.current = amp; }, [amp]);
+  useEffect(() => { densityRef.current = density; }, [density]);
+
+  const dragRef = useRef({
+    active: false,
+    id: -1,
+    x0: 0,
+    y0: 0,
+    amp0: 18,
+    den0: 1.2,
+    moved: 0,
+    lastFx: 0,
+  });
+
   const { speaking, speechStatus, setSpeechStatus, speakText, stopSpeech } = useGeneratedSpeech({
     context: "pretext wave page, playable sentence, oceanic text instrument",
     doneStatus: "voice complete",
@@ -215,11 +242,12 @@ export default function PretextWave() {
     setMode(nextMode);
     setPlaying(true);
     if (nextMode === "shift") setPhase((value) => value + Math.PI * 0.55);
-    if (nextMode === "shake") setAmp(26);
-    if (nextMode === "quake") setAmp(34);
-    if (nextMode === "move") setAmp(14);
-    if (nextMode === "wave") setAmp(20);
-    if (nextMode === "sine") setAmp(18);
+    if (nextMode === "shake") { setAmp(26); ampRef.current = 26; }
+    if (nextMode === "quake") { setAmp(34); ampRef.current = 34; }
+    if (nextMode === "move") { setAmp(14); ampRef.current = 14; }
+    if (nextMode === "wave") { setAmp(20); ampRef.current = 20; }
+    if (nextMode === "sine") { setAmp(18); ampRef.current = 18; }
+    try { getFieldAudio().playNote(52 + MODES.findIndex((m) => m.key === nextMode) * 3, 130); } catch { /* noop */ }
     haptics.chop();
     recordTape("ripple", nextMode === "quake" ? 0.72 : 0.48, `pretext:${nextMode}`);
     addMark(nextMode, nextMode === "quake" || nextMode === "shake" ? "ember" : "water", 0.62);
@@ -231,145 +259,104 @@ export default function PretextWave() {
     addMark(`${label} ${value}`, "water", strength);
   };
 
+  const togglePlay = () => {
+    const next = !playing;
+    setPlaying(next);
+    haptics.tap();
+    try { if (next) getFieldAudio().chime(); else getFieldAudio().thud(); } catch { /* noop */ }
+    recordTape("object", next ? 0.42 : 0.28, next ? "pretext:play" : "pretext:pause");
+    addMark(next ? "play" : "pause", "water", next ? 0.52 : 0.42);
+  };
+
+  // Direct manipulation: dragging the words tunes the instrument.
+  // Vertical drag drives amplitude, horizontal drag drives frequency.
+  const tuneFromDrag = (clientX: number, clientY: number) => {
+    const drag = dragRef.current;
+    const el = stageRef.current;
+    const w = el ? Math.max(1, el.clientWidth) : window.innerWidth || 1;
+    const h = el ? Math.max(1, el.clientHeight) : window.innerHeight || 1;
+    const dx = clientX - drag.x0;
+    const dy = clientY - drag.y0;
+    drag.moved += Math.abs(dx) + Math.abs(dy);
+
+    // Drag up = more amplitude; a full stage height ≈ full amplitude sweep.
+    const nextAmp = clamp(drag.amp0 - (dy / h) * (AMP_MAX - AMP_MIN) * 1.6, AMP_MIN, AMP_MAX);
+    // Drag right = higher frequency across the stage width.
+    const nextDensity = clamp(drag.den0 + (dx / w) * (DENSITY_MAX - DENSITY_MIN) * 1.4, DENSITY_MIN, DENSITY_MAX);
+
+    const roundedAmp = Math.round(nextAmp);
+    const roundedDen = Number(nextDensity.toFixed(2));
+    ampRef.current = roundedAmp;
+    densityRef.current = roundedDen;
+    setAmp(roundedAmp);
+    setDensity(roundedDen);
+
+    const now = performance.now();
+    if (now - drag.lastFx > 90) {
+      drag.lastFx = now;
+      try {
+        getFieldAudio().playNote(
+          46 + Math.round((nextAmp / AMP_MAX) * 20) + Math.round(nextDensity * 4),
+          80,
+        );
+      } catch { /* noop */ }
+      try { haptics.ripple(0.2 + (nextAmp / AMP_MAX) * 0.3); } catch { /* noop */ }
+      recordTape("ripple", 0.3 + (nextAmp / AMP_MAX) * 0.4, "pretext:drag");
+    }
+  };
+
+  const onStagePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    drag.active = true;
+    drag.id = event.pointerId;
+    drag.x0 = event.clientX;
+    drag.y0 = event.clientY;
+    drag.amp0 = ampRef.current;
+    drag.den0 = densityRef.current;
+    drag.moved = 0;
+    drag.lastFx = 0;
+    setPlaying(true);
+    try { haptics.tap(); } catch { /* noop */ }
+    try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* noop */ }
+  };
+
+  const onStagePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag.active || drag.id !== event.pointerId) return;
+    tuneFromDrag(event.clientX, event.clientY);
+  };
+
+  const endStageDrag = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (drag.id !== event.pointerId) return;
+    const played = drag.moved > 8;
+    drag.active = false;
+    drag.id = -1;
+    try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* noop */ }
+    if (played) {
+      addMark(`amp ${ampRef.current}`, "water", 0.44);
+      setStatus(`amp ${ampRef.current} / freq ${densityRef.current.toFixed(2)}`);
+    }
+  };
+
   return (
-    <div className="pretext-page" data-touch-surface="true">
-      <section className="pretext-shell">
-        <div className="pretext-top">
-          <div>
-            <p className="t-eyebrow pretext-kicker">pretext / wavy text</p>
-            <h1>
-              <WaterText as="span" bobAmp={2.5} maxDisplace={7}>
-                a playable sentence
-              </WaterText>
-            </h1>
-          </div>
-          <div className="pretext-top-actions">
-            <div className="pretext-state-strip" aria-hidden="true">
-              <span className="pretext-state-pulse" />
-              {marks.length === 0 ? (
-                <span className="pretext-state-idle">{mode}</span>
-              ) : (
-                marks.map((mark) => (
-                  <span
-                    key={mark.id}
-                    className={`pretext-state-mark pretext-state-${mark.tone}`}
-                    style={{ opacity: 0.42 + mark.strength * 0.48 }}
-                  >
-                    {mark.label}
-                  </span>
-                ))
-              )}
-            </div>
-            <button
-              type="button"
-              className="pretext-play"
-              onClick={() => {
-                const next = !playing;
-                setPlaying(next);
-                haptics.tap();
-                recordTape("object", next ? 0.42 : 0.28, next ? "pretext:play" : "pretext:pause");
-                addMark(next ? "play" : "pause", "water", next ? 0.52 : 0.42);
-              }}
-            >
-              {playing ? "pause" : "play"}
-            </button>
-          </div>
-        </div>
-
-        <div className="pretext-workbench">
-          <form
-            className="pretext-prompt"
-            onSubmit={(event) => {
-              event.preventDefault();
-              generate();
-            }}
-          >
-            <label htmlFor="pretext-prompt">prompt or text</label>
-            <textarea
-              id="pretext-prompt"
-              value={prompt}
-              onChange={(event) => setPrompt(event.target.value)}
-              placeholder="write the sentence you want the room to bend"
-              rows={4}
-              maxLength={400}
-            />
-            <div className="pretext-actions">
-              <button type="submit" disabled={generating || !prompt.trim()}>
-                {generating ? "generating" : "generate"}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  stopSpeech(null);
-                  setText(prompt.trim() || STARTER_TEXT);
-                  setSpeechStatus(null);
-                  haptics.ripple(0.44);
-                  recordTape("object", 0.46, "pretext:use-text");
-                  addMark("placed", "water", 0.5);
-                }}
-              >
-                use text
-              </button>
-              <button type="button" onClick={speak}>
-                {speaking ? "stop voice" : "speak"}
-              </button>
-            </div>
-            <p className="t-mono pretext-status">{speechStatus ?? status}</p>
-          </form>
-
-          <div className="pretext-controls" aria-label="text motion controls">
-            {MODES.map((item) => (
-              <button
-                key={item.key}
-                type="button"
-                aria-pressed={mode === item.key}
-                onClick={() => impulse(item.key)}
-              >
-                {item.label}
-              </button>
-            ))}
-            <label>
-              <span>amplitude</span>
-              <input
-                type="range"
-                min="0"
-                max="42"
-                value={amp}
-                onChange={(event) => setAmp(Number(event.target.value))}
-                onPointerUp={() => markControl("amp", String(amp), 0.44)}
-                onKeyUp={() => markControl("amp", String(amp), 0.38)}
-              />
-              <strong>{amp}</strong>
-            </label>
-            <label>
-              <span>frequency</span>
-              <input
-                type="range"
-                min="0.4"
-                max="3"
-                step="0.05"
-                value={density}
-                onChange={(event) => setDensity(Number(event.target.value))}
-                onPointerUp={() => markControl("freq", density.toFixed(2), 0.42)}
-                onKeyUp={() => markControl("freq", density.toFixed(2), 0.36)}
-              />
-              <strong>{density.toFixed(2)}</strong>
-            </label>
-          </div>
-        </div>
-
-        <div
-          ref={stageRef}
-          className={`pretext-stage pretext-stage--${mode}`}
-          style={{
-            "--pretext-amp": `${amp}px`,
-            "--pretext-phase": `${phase}`,
-            "--pretext-density": `${density}`,
-            minHeight: layout ? layout.height : 280,
-          } as React.CSSProperties}
-          aria-live="polite"
-        >
-          <span ref={probeRef} className="pretext-probe">measure me</span>
+    <div className="pretext-page" data-touch-surface="true" data-pretext-ignore="true">
+      <div
+        ref={stageRef}
+        className={`pretext-stage pretext-stage--${mode}`}
+        style={{
+          "--pretext-amp": `${amp}px`,
+          "--pretext-phase": `${phase}`,
+          "--pretext-density": `${density}`,
+        } as React.CSSProperties}
+        aria-label="Playable text field. Drag to bend the words: up and down for amplitude, left and right for frequency."
+        onPointerDown={onStagePointerDown}
+        onPointerMove={onStagePointerMove}
+        onPointerUp={endStageDrag}
+        onPointerCancel={endStageDrag}
+      >
+        <span ref={probeRef} className="pretext-probe">measure me</span>
+        <div className="pretext-field" style={{ height: layout ? layout.height : undefined }} aria-live="polite">
           {!layout ? (
             <p className="pretext-fallback">{text}</p>
           ) : (
@@ -399,215 +386,168 @@ export default function PretextWave() {
             ))
           )}
         </div>
-      </section>
+      </div>
+
+      <div className="pretext-title" aria-hidden="true">
+        <span>pretext / playable sentence</span>
+        <strong>
+          <WaterText as="span" bobAmp={2.5} maxDisplace={7}>
+            tide
+          </WaterText>
+        </strong>
+      </div>
+
+      <div className="pretext-state-strip" aria-hidden="true">
+        <span className="pretext-state-pulse" />
+        {marks.length === 0 ? (
+          <span className="pretext-state-idle">{mode}</span>
+        ) : (
+          marks.map((mark) => (
+            <span
+              key={mark.id}
+              className={`pretext-state-mark pretext-state-${mark.tone}`}
+              style={{ opacity: 0.42 + mark.strength * 0.48 }}
+            >
+              {mark.label}
+            </span>
+          ))
+        )}
+      </div>
+
+      <form
+        className="pretext-prompt"
+        aria-label="ask the room"
+        onSubmit={(event) => {
+          event.preventDefault();
+          generate();
+        }}
+      >
+        <label htmlFor="pretext-prompt-input">prompt or text</label>
+        <textarea
+          id="pretext-prompt-input"
+          value={prompt}
+          onChange={(event) => setPrompt(event.target.value)}
+          placeholder="write the sentence you want the room to bend"
+          rows={2}
+          maxLength={400}
+        />
+        <div className="pretext-actions">
+          <button type="submit" disabled={generating || !prompt.trim()}>
+            {generating ? "generating" : "generate"}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              stopSpeech(null);
+              setText(prompt.trim() || STARTER_TEXT);
+              setSpeechStatus(null);
+              haptics.ripple(0.44);
+              recordTape("object", 0.46, "pretext:use-text");
+              addMark("placed", "water", 0.5);
+            }}
+          >
+            use text
+          </button>
+          <button type="button" onClick={speak}>
+            {speaking ? "stop voice" : "speak"}
+          </button>
+        </div>
+        <p className="t-mono pretext-status" aria-live="polite">{speechStatus ?? status}</p>
+      </form>
+
+      <div className="pretext-console" aria-label="text motion controls">
+        <button type="button" className="pretext-run" onClick={togglePlay} aria-pressed={playing}>
+          {playing ? "pause" : "play"}
+        </button>
+        <div className="pretext-modes" aria-label="motion modes">
+          {MODES.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              aria-pressed={mode === item.key}
+              onClick={() => impulse(item.key)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+        <label className="pretext-slider">
+          <span>amp</span>
+          <strong>{amp}</strong>
+          <input
+            type="range"
+            min={AMP_MIN}
+            max={AMP_MAX}
+            value={amp}
+            onChange={(event) => { const v = Number(event.target.value); setAmp(v); ampRef.current = v; }}
+            onPointerUp={() => markControl("amp", String(amp), 0.44)}
+            onKeyUp={() => markControl("amp", String(amp), 0.38)}
+          />
+        </label>
+        <label className="pretext-slider">
+          <span>freq</span>
+          <strong>{density.toFixed(2)}</strong>
+          <input
+            type="range"
+            min={DENSITY_MIN}
+            max={DENSITY_MAX}
+            step="0.05"
+            value={density}
+            onChange={(event) => { const v = Number(event.target.value); setDensity(v); densityRef.current = v; }}
+            onPointerUp={() => markControl("freq", density.toFixed(2), 0.42)}
+            onKeyUp={() => markControl("freq", density.toFixed(2), 0.36)}
+          />
+        </label>
+      </div>
 
       <style
         dangerouslySetInnerHTML={{
           __html: `
         .pretext-page {
-          min-height: calc(100vh - 56px);
-          background:
-            radial-gradient(circle at 18% 14%, rgba(200,115,42,0.18), transparent 24%),
-            linear-gradient(145deg, #101a24 0%, #203d49 48%, #f2eee6 48%, #e8e2d5 100%);
-          color: #f7f0df;
-        }
-        .pretext-shell {
-          min-height: calc(100vh - 56px);
-          padding: clamp(26px, 4vw, 54px) var(--pad-x) clamp(34px, 5vw, 70px);
-          display: flex;
-          flex-direction: column;
-          gap: clamp(18px, 3vw, 30px);
-        }
-        .pretext-top {
-          display: flex;
-          justify-content: space-between;
-          align-items: flex-start;
-          gap: 18px;
-          max-width: 1180px;
-          width: 100%;
-          margin: 0 auto;
-        }
-        .pretext-top-actions {
-          display: flex;
-          flex-direction: column;
-          align-items: flex-end;
-          gap: 10px;
-          min-width: min(320px, 42vw);
-        }
-        .pretext-state-strip {
-          display: flex;
-          align-items: center;
-          justify-content: flex-end;
-          gap: 7px;
-          max-width: 100%;
-          min-height: 31px;
-          padding: 8px 10px;
-          border: 1px solid rgba(247,240,223,0.16);
-          border-radius: 999px;
-          background: rgba(7,15,23,0.42);
-          color: rgba(247,240,223,0.66);
-          font-family: var(--font-mono);
-          font-size: 11px;
-          line-height: 1;
+          position: fixed;
+          inset: 0;
+          min-height: 100svh;
           overflow: hidden;
-          backdrop-filter: blur(12px);
-        }
-        .pretext-state-pulse {
-          flex: 0 0 auto;
-          width: 7px;
-          height: 7px;
-          border-radius: 999px;
-          background: rgba(136,184,216,0.88);
-          box-shadow: 0 0 14px rgba(136,184,216,0.44);
-        }
-        .pretext-state-idle,
-        .pretext-state-mark {
-          white-space: nowrap;
-        }
-        .pretext-state-water {
-          color: rgba(174,218,233,0.86);
-        }
-        .pretext-state-ember {
-          color: rgba(255,200,132,0.9);
-        }
-        .pretext-state-voice {
-          color: rgba(242,238,230,0.82);
-        }
-        .pretext-kicker { color: rgba(247,240,223,0.72); }
-        .pretext-top h1 {
-          margin: 8px 0 0;
-          max-width: 11ch;
-          font-family: var(--font-serif);
-          font-weight: 300;
-          font-style: italic;
-          font-size: clamp(48px, 9vw, 116px);
-          line-height: 0.9;
-          letter-spacing: 0;
-        }
-        .pretext-play,
-        .pretext-actions button,
-        .pretext-controls button {
-          min-height: 44px;
-          border: 1px solid rgba(247,240,223,0.32);
-          border-radius: 4px;
-          background: rgba(247,240,223,0.08);
-          color: inherit;
-          cursor: pointer;
-          font-family: var(--font-text);
-          font-size: 12px;
-          letter-spacing: 0.04em;
-          text-transform: lowercase;
-        }
-        .pretext-play {
-          padding: 0 18px;
-          min-width: 112px;
-        }
-        .pretext-actions button:disabled {
-          cursor: default;
-          opacity: 0.48;
-        }
-        .pretext-workbench {
-          max-width: 1180px;
-          width: 100%;
-          margin: 0 auto;
-          display: grid;
-          grid-template-columns: minmax(280px, 0.88fr) minmax(320px, 1.12fr);
-          gap: 14px;
-          align-items: stretch;
-        }
-        .pretext-prompt,
-        .pretext-controls {
-          border: 1px solid rgba(247,240,223,0.16);
-          background: rgba(7,15,23,0.58);
-          backdrop-filter: blur(12px);
-          border-radius: 8px;
-          padding: 14px;
-        }
-        .pretext-prompt label,
-        .pretext-controls label span {
-          display: block;
-          margin-bottom: 8px;
-          font-family: var(--font-text);
-          font-size: 11px;
-          letter-spacing: 0.06em;
-          text-transform: lowercase;
-          color: rgba(247,240,223,0.68);
-        }
-        .pretext-prompt textarea {
-          width: 100%;
-          resize: vertical;
-          min-height: 108px;
-          border: 1px solid rgba(247,240,223,0.22);
-          border-radius: 4px;
-          background: rgba(242,238,230,0.92);
+          background:
+            radial-gradient(circle at 18% 14%, rgba(200,115,42,0.16), transparent 30%),
+            linear-gradient(150deg, #0c141d 0%, #16303a 52%, #ecebe1 52%, #f3efe6 100%);
           color: #15171a;
-          padding: 12px;
-          font-family: var(--font-serif);
-          font-size: 20px;
-          line-height: 1.35;
-        }
-        .pretext-actions {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 8px;
-          margin-top: 10px;
-        }
-        .pretext-actions button { padding: 0 12px; }
-        .pretext-status {
-          min-height: 18px;
-          margin: 10px 0 0;
-          color: rgba(247,240,223,0.68);
-          font-size: 11px;
-        }
-        .pretext-controls {
-          display: grid;
-          grid-template-columns: repeat(6, minmax(68px, 1fr));
-          gap: 10px;
-        }
-        .pretext-controls button {
-          padding: 0 10px;
-          width: 100%;
-        }
-        .pretext-controls button[aria-pressed='true'] {
-          background: rgba(200,115,42,0.72);
-          border-color: rgba(247,240,223,0.78);
-        }
-        .pretext-controls label {
-          grid-column: span 3;
-          min-width: 0;
-          margin-top: 2px;
-        }
-        .pretext-controls label strong {
-          display: block;
-          margin-top: 2px;
-          font-family: var(--font-text);
-          font-size: 11px;
-          color: rgba(247,240,223,0.72);
-          font-weight: 400;
+          isolation: isolate;
+          -webkit-user-select: none;
+          user-select: none;
+          -webkit-tap-highlight-color: transparent;
         }
         .pretext-stage {
-          position: relative;
-          max-width: 1180px;
-          width: 100%;
-          margin: 0 auto;
+          position: absolute;
+          inset: 0;
           overflow: hidden;
-          border: 1px solid rgba(21,23,26,0.16);
-          border-radius: 8px;
           background:
-            repeating-linear-gradient(0deg, rgba(21,23,26,0.05) 0 1px, transparent 1px 50px),
-            linear-gradient(180deg, rgba(242,238,230,0.98), rgba(232,226,213,0.96));
+            repeating-linear-gradient(0deg, rgba(21,23,26,0.045) 0 1px, transparent 1px 50px),
+            linear-gradient(180deg, rgba(12,20,29,0) 0%, rgba(12,20,29,0) 46%, rgba(242,238,230,0.0) 46%);
           color: #15171a;
-          padding: clamp(18px, 4vw, 38px);
-          isolation: isolate;
-          touch-action: pan-y;
+          padding: clamp(18px, 4vw, 44px);
+          touch-action: none;
+          cursor: grab;
+          z-index: 0;
+        }
+        .pretext-stage:active {
+          cursor: grabbing;
         }
         .pretext-stage::before {
           content: '';
           position: absolute;
           inset: 0;
           background:
-            linear-gradient(90deg, rgba(44,74,92,0.12), transparent 34%, rgba(200,115,42,0.10)),
-            radial-gradient(circle at 78% 24%, rgba(44,74,92,0.18), transparent 30%);
+            linear-gradient(90deg, rgba(44,74,92,0.10), transparent 34%, rgba(200,115,42,0.08)),
+            radial-gradient(circle at 78% 24%, rgba(44,74,92,0.14), transparent 34%);
+          pointer-events: none;
+        }
+        .pretext-field {
+          position: absolute;
+          left: 0;
+          right: 0;
+          top: 50%;
+          transform: translateY(-50%);
           pointer-events: none;
         }
         .pretext-probe {
@@ -616,28 +556,30 @@ export default function PretextWave() {
           top: -9999px;
           visibility: hidden;
           font-family: var(--font-serif);
-          font-size: clamp(28px, 4vw, 42px);
+          font-size: clamp(28px, 4.4vw, 46px);
           font-style: italic;
           font-weight: 300;
         }
         .pretext-fallback,
         .pretext-line {
           font-family: var(--font-serif);
-          font-size: clamp(28px, 4vw, 42px);
+          font-size: clamp(28px, 4.4vw, 46px);
           font-style: italic;
           font-weight: 300;
           line-height: 1.12;
           letter-spacing: 0;
+          color: rgba(24,30,36,0.92);
         }
         .pretext-fallback {
           position: relative;
           z-index: 1;
           margin: 0;
+          padding: 0 clamp(18px, 4vw, 44px);
         }
         .pretext-line {
           position: absolute;
           z-index: 1;
-          left: clamp(18px, 4vw, 38px);
+          left: clamp(18px, 4vw, 44px);
           margin: 0;
           white-space: pre;
           will-change: transform;
@@ -679,65 +621,324 @@ export default function PretextWave() {
             translateY(calc(sin((var(--word-index) * 0.72) + var(--pretext-phase)) * var(--pretext-amp) * 0.86))
             rotate(calc(cos((var(--word-index) * 0.5) + var(--pretext-phase)) * 1.5deg));
         }
-        @media (max-width: 780px) {
-          .pretext-page {
-            background: linear-gradient(180deg, #101a24 0%, #203d49 42%, #e8e2d5 42%, #f2eee6 100%);
-          }
-          .pretext-shell {
-            min-height: auto;
-            padding-top: 24px;
-            padding-bottom: calc(104px + env(safe-area-inset-bottom));
-          }
-          .pretext-top {
-            align-items: flex-end;
-          }
-          .pretext-top-actions {
-            min-width: min(240px, 46vw);
-          }
-          .pretext-top h1 {
-            font-size: clamp(42px, 14vw, 70px);
-          }
-          .pretext-workbench {
-            grid-template-columns: 1fr;
-          }
-          .pretext-controls {
-            grid-template-columns: repeat(3, minmax(74px, 1fr));
-            order: 2;
-          }
-          .pretext-controls label {
-            grid-column: span 3;
-          }
-          .pretext-stage {
-            min-height: 380px;
-            padding: 18px;
-          }
-          .pretext-line {
-            left: 18px;
-          }
+
+        .pretext-title {
+          position: fixed;
+          z-index: 2;
+          top: 72px;
+          left: var(--pad-x);
+          pointer-events: none;
         }
-        @media (max-width: 460px) {
-          .pretext-top {
-            flex-direction: column;
-            align-items: stretch;
+        .pretext-title span {
+          display: block;
+          margin-bottom: 6px;
+          color: rgba(247,240,223,0.6);
+          font-family: var(--font-mono);
+          font-size: 11px;
+          line-height: 1;
+          letter-spacing: 0.02em;
+          text-transform: lowercase;
+        }
+        .pretext-title strong {
+          display: block;
+          color: rgba(248,244,224,0.9);
+          font-family: var(--font-serif);
+          font-weight: 300;
+          font-style: italic;
+          font-size: clamp(52px, 9vw, 116px);
+          line-height: 0.86;
+          mix-blend-mode: overlay;
+        }
+
+        .pretext-state-strip {
+          position: fixed;
+          z-index: 3;
+          top: 78px;
+          right: var(--pad-x);
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 7px;
+          max-width: min(340px, 52vw);
+          min-height: 31px;
+          padding: 8px 12px;
+          border: 1px solid rgba(247,240,223,0.16);
+          border-radius: 999px;
+          background: rgba(7,15,23,0.42);
+          color: rgba(247,240,223,0.66);
+          font-family: var(--font-mono);
+          font-size: 11px;
+          line-height: 1;
+          overflow: hidden;
+          backdrop-filter: blur(12px);
+          -webkit-backdrop-filter: blur(12px);
+          pointer-events: none;
+        }
+        .pretext-state-pulse {
+          flex: 0 0 auto;
+          width: 7px;
+          height: 7px;
+          border-radius: 999px;
+          background: rgba(136,184,216,0.88);
+          box-shadow: 0 0 14px rgba(136,184,216,0.44);
+        }
+        .pretext-state-idle,
+        .pretext-state-mark {
+          white-space: nowrap;
+        }
+        .pretext-state-water { color: rgba(174,218,233,0.86); }
+        .pretext-state-ember { color: rgba(255,200,132,0.9); }
+        .pretext-state-voice { color: rgba(242,238,230,0.82); }
+
+        .pretext-prompt {
+          position: fixed;
+          z-index: 4;
+          right: var(--pad-x);
+          bottom: calc(122px + env(safe-area-inset-bottom, 0px));
+          width: min(360px, calc(100vw - 2 * var(--pad-x)));
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+          padding: 12px;
+          border: 1px solid rgba(247,240,223,0.14);
+          border-radius: 10px;
+          background: rgba(7,15,23,0.5);
+          backdrop-filter: blur(16px);
+          -webkit-backdrop-filter: blur(16px);
+          box-shadow: 0 24px 60px rgba(0,0,0,0.32);
+          color: rgba(247,240,223,0.92);
+          pointer-events: auto;
+        }
+        .pretext-prompt label {
+          font-family: var(--font-mono);
+          font-size: 10px;
+          letter-spacing: 0.04em;
+          text-transform: lowercase;
+          color: rgba(247,240,223,0.56);
+        }
+        .pretext-prompt textarea {
+          width: 100%;
+          resize: none;
+          min-height: 52px;
+          border: 1px solid rgba(247,240,223,0.18);
+          border-radius: 6px;
+          background: rgba(242,238,230,0.94);
+          color: #15171a;
+          padding: 10px;
+          font-family: var(--font-serif);
+          font-size: 17px;
+          line-height: 1.32;
+        }
+        .pretext-actions {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+        }
+        .pretext-actions button {
+          flex: 1 1 84px;
+          min-height: 44px;
+          padding: 0 12px;
+          border: 1px solid rgba(247,240,223,0.22);
+          border-radius: 6px;
+          background: rgba(247,240,223,0.06);
+          color: inherit;
+          cursor: pointer;
+          font-family: var(--font-mono);
+          font-size: 11px;
+          letter-spacing: 0.03em;
+          text-transform: lowercase;
+        }
+        .pretext-actions button:disabled {
+          cursor: default;
+          opacity: 0.44;
+        }
+        .pretext-status {
+          min-height: 14px;
+          margin: 0;
+          color: rgba(247,240,223,0.6);
+          font-size: 11px;
+        }
+
+        .pretext-console {
+          position: fixed;
+          z-index: 4;
+          left: var(--pad-x);
+          right: var(--pad-x);
+          bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+          display: grid;
+          grid-template-columns: 92px minmax(0, 1.6fr) minmax(150px, 1fr) minmax(150px, 1fr);
+          gap: 8px;
+          padding: 8px;
+          border: 1px solid rgba(247,240,223,0.13);
+          border-radius: 10px;
+          background: rgba(7,15,23,0.6);
+          backdrop-filter: blur(18px);
+          -webkit-backdrop-filter: blur(18px);
+          box-shadow: 0 24px 70px rgba(0,0,0,0.36);
+          pointer-events: auto;
+        }
+        .pretext-run,
+        .pretext-slider {
+          min-width: 0;
+          min-height: 58px;
+          border: 1px solid rgba(247,240,223,0.12);
+          border-radius: 6px;
+          background: rgba(247,240,223,0.055);
+          color: rgba(247,240,223,0.9);
+        }
+        .pretext-run {
+          cursor: pointer;
+          font-family: var(--font-mono);
+          font-size: 12px;
+          text-transform: lowercase;
+        }
+        .pretext-run[aria-pressed="true"] {
+          border-color: rgba(200,115,42,0.5);
+          color: rgba(255,200,132,0.94);
+        }
+        .pretext-modes {
+          display: grid;
+          grid-template-columns: repeat(6, minmax(0, 1fr));
+          gap: 6px;
+        }
+        .pretext-modes button {
+          min-width: 0;
+          min-height: 58px;
+          border: 1px solid rgba(247,240,223,0.14);
+          border-radius: 6px;
+          background: rgba(247,240,223,0.05);
+          color: rgba(247,240,223,0.82);
+          cursor: pointer;
+          font-family: var(--font-mono);
+          font-size: 11px;
+          letter-spacing: 0.02em;
+          text-transform: lowercase;
+        }
+        .pretext-modes button[aria-pressed="true"] {
+          background: rgba(200,115,42,0.6);
+          border-color: rgba(247,240,223,0.7);
+          color: rgba(255,246,232,0.98);
+        }
+        .pretext-slider {
+          display: grid;
+          grid-template-columns: 1fr auto;
+          grid-template-rows: auto 28px;
+          gap: 4px 8px;
+          align-items: center;
+          padding: 7px 11px;
+          font-family: var(--font-mono);
+          font-size: 10px;
+          color: rgba(247,240,223,0.58);
+        }
+        .pretext-slider span {
+          text-transform: lowercase;
+          letter-spacing: 0.04em;
+        }
+        .pretext-slider strong {
+          justify-self: end;
+          color: rgba(255,200,132,0.94);
+          font-family: var(--font-numerals, var(--font-mono));
+          font-size: 13px;
+          font-weight: 500;
+        }
+        .pretext-slider input {
+          -webkit-appearance: none;
+          appearance: none;
+          grid-column: 1 / -1;
+          width: 100%;
+          height: 28px;
+          margin: 0;
+          background: transparent;
+          accent-color: rgba(200,115,42,0.9);
+          cursor: pointer;
+        }
+        .pretext-slider input::-webkit-slider-runnable-track {
+          height: 2px;
+          border-radius: 999px;
+          background: linear-gradient(90deg, rgba(200,115,42,0.9), rgba(247,240,223,0.15));
+        }
+        .pretext-slider input::-webkit-slider-thumb {
+          -webkit-appearance: none;
+          appearance: none;
+          width: 14px;
+          height: 14px;
+          margin-top: -6px;
+          border: 0;
+          border-radius: 4px;
+          background: rgba(255,200,132,0.96);
+          box-shadow: 0 0 14px rgba(200,115,42,0.7);
+        }
+        .pretext-slider input::-moz-range-track {
+          height: 2px;
+          border-radius: 999px;
+          background: linear-gradient(90deg, rgba(200,115,42,0.9), rgba(247,240,223,0.15));
+        }
+        .pretext-slider input::-moz-range-thumb {
+          width: 14px;
+          height: 14px;
+          border: 0;
+          border-radius: 4px;
+          background: rgba(255,200,132,0.96);
+          box-shadow: 0 0 14px rgba(200,115,42,0.7);
+        }
+
+        body:has(.pretext-page) {
+          overflow: hidden;
+          background: #0c141d;
+        }
+        body:has(.pretext-page) header {
+          display: none !important;
+        }
+        body:has(.pretext-page) .oda-field-watch,
+        body:has(.pretext-page) .oda-candle-mark,
+        body:has(.pretext-page) .oda-tape-shell,
+        body:has(.pretext-page) .oda-sound-toggle {
+          display: none !important;
+        }
+
+        @media (max-width: 940px) {
+          .pretext-title {
+            top: 30px;
+            left: 22px;
           }
-          .pretext-top-actions {
-            min-width: 0;
-            align-items: stretch;
+          .pretext-title strong {
+            font-size: clamp(46px, 13vw, 74px);
           }
           .pretext-state-strip {
-            justify-content: center;
+            top: 34px;
+            right: 16px;
+            max-width: min(200px, 46vw);
           }
-          .pretext-play {
-            width: 100%;
+          .pretext-prompt {
+            left: 12px;
+            right: 12px;
+            width: auto;
+            bottom: calc(214px + env(safe-area-inset-bottom, 0px));
           }
-          .pretext-controls {
+          .pretext-console {
+            left: 10px;
+            right: 10px;
+            bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            max-height: min(46svh, 420px);
+            overflow-y: auto;
+          }
+          .pretext-run {
+            grid-column: 1 / -1;
+          }
+          .pretext-modes {
+            grid-column: 1 / -1;
+          }
+        }
+        @media (max-width: 520px) {
+          .pretext-modes {
             grid-template-columns: repeat(3, minmax(0, 1fr));
           }
-          .pretext-controls label {
-            grid-column: span 3;
+          .pretext-slider {
+            min-height: 52px;
           }
-          .pretext-actions button {
-            flex: 1 1 94px;
+          .pretext-prompt textarea {
+            font-size: 16px;
           }
         }
         @media (prefers-reduced-motion: reduce) {
