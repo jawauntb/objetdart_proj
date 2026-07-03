@@ -5,8 +5,6 @@ import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { useField } from "@/store/field";
 import GreekKeyFrame from "@/components/GreekKeyFrame";
-import WaterText from "@/components/WaterText";
-import SeaChart, { type SeaChartCandle } from "@/components/SeaChart";
 
 /**
  * /aphros — the love / foam page.
@@ -80,11 +78,19 @@ const SHELL_NOTES: Record<ShellId, number> = {
   abalone:    66, // F#4
 };
 
-// Order in which the tuner pad displays the dots — visually grouped
-// ascending so the user can sweep across to play a scale.
+// Order in which the small tuner shells are strewn across the sand —
+// sorted ascending by pitch so sweeping left→right sounds a rising scale.
 const TUNER_ORDER: ShellId[] = [
-  "abalone", "nautilus", "limpet", "scallop", "murex", "cowrie", "periwinkle", "conch", "starfish", "cone", "sanddollar",
+  "abalone", "nautilus", "limpet", "scallop", "murex", "conch",
+  "cowrie", "periwinkle", "starfish", "cone", "sanddollar", "auger",
 ];
+
+// Deterministic 0..1 hash from an integer — used to scatter the tuner
+// shells across the sand so they read as strewn objects, not a grid.
+const hash01 = (n: number) => {
+  const s = Math.sin(n * 127.1) * 43758.5453;
+  return s - Math.floor(s);
+};
 
 type Shell = {
   id: ShellId;
@@ -360,39 +366,6 @@ export default function Aphros() {
   // they composed. Cleared after 3s of inactivity.
   const [tunerSeq, setTunerSeq] = useState<ShellId[]>([]);
   const tunerSeqTimerRef = useRef<number | null>(null);
-
-  // Foam chart sampling: at 600ms intervals we read the foam bubble list
-  // length (a proxy for "foam intensity") into a rolling buffer used by the
-  // inline SeaChart embed.
-  const foamHistoryRef = useRef<number[]>([]);
-  const [foamChartPullKey, setFoamChartPullKey] = useState(0);
-  useEffect(() => {
-    const id = window.setInterval(() => {
-      const intensity = bubblesRef.current.length / 70; // ~0..1
-      const buf = foamHistoryRef.current;
-      buf.push(intensity);
-      if (buf.length > 120) buf.shift();
-      setFoamChartPullKey((k) => k + 1);
-    }, 600);
-    return () => window.clearInterval(id);
-  }, []);
-  const foamSource = (i: number): SeaChartCandle => {
-    const buf = foamHistoryRef.current;
-    const COUNT = 30;
-    if (buf.length < 2) {
-      return { open: 0.5, close: 0.5, high: 0.55, low: 0.45, volume: 0.05 };
-    }
-    const offset = i % COUNT;
-    const start = Math.max(0, buf.length - COUNT * 2);
-    const a = buf[Math.min(buf.length - 1, start + offset * 2)] ?? 0.5;
-    const b = buf[Math.min(buf.length - 1, start + offset * 2 + 1)] ?? a;
-    const open = a;
-    const close = b;
-    const high = Math.max(a, b) + Math.abs(b - a) * 0.4 + 0.02;
-    const low = Math.min(a, b) - Math.abs(b - a) * 0.4 - 0.02;
-    const volume = Math.abs(b - a) + 0.04;
-    return { open, close, high, low, volume };
-  };
 
   // Per-shell bloom animation state — refs not state. Each entry is an
   // age in ms; the RAF tick decrements it and applies a scale 0→1.1→1.0
@@ -2147,7 +2120,9 @@ export default function Aphros() {
 
   return (
     <div
+      className="aphros-instrument"
       data-touch-surface="true"
+      data-pretext-ignore="true"
       style={{
         position: "fixed",
         inset: 0,
@@ -2392,12 +2367,14 @@ export default function Aphros() {
         ))}
       </div>
 
-      {/* title — pushed down to clear the top Greek-key banner */}
+      {/* title — a single quiet serif word that fades after a moment,
+          leaving the scene to speak for itself */}
       <div
         className="aphros-title"
+        aria-hidden
         style={{
           position: "absolute",
-          top: Math.max(skyH * 0.18, 52),
+          top: Math.max(skyH * 0.2, 40),
           left: 0,
           right: 0,
           textAlign: "center",
@@ -2405,36 +2382,18 @@ export default function Aphros() {
           color: C.ink,
         }}
       >
-        <WaterText
-          as="h1"
-          bobAmp={0}
+        <span
           style={{
-            display: "block",
-            margin: 0,
-            fontFamily: "var(--font-numerals)",
+            fontFamily: "var(--font-serif)",
+            fontStyle: "italic",
             fontWeight: 500,
-            fontSize: "clamp(48px, 7vw, 96px)",
-            letterSpacing: "0.12em",
+            fontSize: "clamp(30px, 5vw, 54px)",
+            letterSpacing: "0.03em",
             lineHeight: 1,
           }}
         >
-          APHROS
-        </WaterText>
-        <WaterText
-          as="div"
-          bobAmp={2}
-          style={{
-            display: "block",
-            fontFamily: "var(--font-serif)",
-            fontStyle: "italic",
-            fontSize: "clamp(14px, 1.4vw, 18px)",
-            letterSpacing: "0.02em",
-            marginTop: 8,
-            color: "rgba(107, 74, 63, 0.75)",
-          }}
-        >
-          born of foam — the body of love
-        </WaterText>
+          Aphros
+        </span>
       </div>
 
       {/* ── Galatea overlay: ribbon + putti + dolphins ──────────────
@@ -2667,61 +2626,51 @@ export default function Aphros() {
           >
             {renderNautilus(W < 700 ? Math.max(120, Math.min(180, W * 0.32)) : 180)}
           </g>
-
-          {/* faint instruction (only when idle and no inscription) */}
-          {!ins && (
-            <text
-              x={centerX}
-              y={centerY + 230}
-              textAnchor="middle"
-              fontFamily="var(--font-serif)"
-              fontStyle="italic"
-              fontSize={13}
-              fill="rgba(107, 74, 63, 0.42)"
-          style={{ pointerEvents: "none" }}
-            >
-              foam answers touch
-            </text>
-          )}
         </svg>
       )}
 
       {/* ── Shell Tuner ──────────────────────────────────────────────
-          A row of 7 tiny touch-target dots above the inscription, each
-          representing one of the shells around the page. Tapping them
-          sequentially plays a tiny melody using each shell's note. The
-          dots are sized for fingertip-friendly tapping (44×44 hit area
-          with 14px visual). */}
+          The twelve tuned shells rest as small objects strewn across the
+          sand. Tapping one sounds its note, so composing a melody means
+          simply touching the shells in the scene. Each is scattered
+          deterministically and sits on a soft cast shadow; the most
+          recently sounded one blooms briefly. Hit targets are 44×44. */}
       {W > 0 && (
         <div
           className="aphros-tuner"
-          aria-label="shell tuner — tap to play a melody"
+          aria-label="tuned shells resting on the sand — tap one to sound its note"
           style={{
-            position: "fixed",
+            position: "absolute",
             left: 0,
             right: 0,
-            bottom: "calc(144px + env(safe-area-inset-bottom, 0px))",
-            display: "flex",
-            justifyContent: "center",
-            flexWrap: "wrap",
-            gap: 6,
-            maxWidth: "min(560px, calc(100vw - 24px))",
-            margin: "0 auto",
-            pointerEvents: "auto",
+            top: sandTop,
+            height: sandH,
+            pointerEvents: "none",
             zIndex: 5,
           }}
         >
-          {TUNER_ORDER.map((id) => {
+          {TUNER_ORDER.map((id, i) => {
+            const n = TUNER_ORDER.length;
+            const t = n > 1 ? i / (n - 1) : 0.5;
+            const arc = Math.sin(t * Math.PI);
+            const xPct = 7 + t * 86;
+            const jx = (hash01(i + 1) - 0.5) * 6;
+            const yPct = 50 - arc * 12 + hash01(i + 7) * 16;
+            const rot = (hash01(i + 3) - 0.5) * 26;
             const recent = tunerSeq.length > 0 && tunerSeq[tunerSeq.length - 1] === id;
             return (
               <button
                 key={`tuner-${id}`}
                 type="button"
-                aria-label={`play ${id} note`}
+                aria-label={`sound the ${id} shell`}
                 onClick={(e) => { e.stopPropagation(); tunerPlayShell(id); }}
                 onPointerDown={(e) => e.stopPropagation()}
                 className="aphros-tuner-button"
+                data-recent={recent ? "true" : undefined}
                 style={{
+                  position: "absolute",
+                  left: `calc(${xPct}% + ${jx}px)`,
+                  top: `${yPct}%`,
                   width: 44,
                   height: 44,
                   padding: 0,
@@ -2731,51 +2680,26 @@ export default function Aphros() {
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
+                  transform: `translate(-50%, -50%) rotate(${rot.toFixed(1)}deg)`,
+                  pointerEvents: "auto",
                   touchAction: "manipulation",
                   WebkitTapHighlightColor: "transparent",
                 }}
               >
-                <span
-                  style={{
-                    width: recent ? 18 : 14,
-                    height: recent ? 18 : 14,
-                    borderRadius: "50%",
-                    background: recent
-                      ? `radial-gradient(circle at 30% 30%, #FFF, ${C.coralSoft})`
-                      : `radial-gradient(circle at 30% 30%, ${C.pearl}, ${C.pinkShell})`,
-                    border: `1px solid ${C.ink}`,
-                    boxShadow: recent
-                      ? `0 0 12px ${C.coralSoft}, 0 0 2px rgba(107, 74, 63, 0.4)`
-                      : "0 1px 2px rgba(107, 74, 63, 0.18)",
-                    transition: "all 180ms ease",
-                  }}
-                />
+                <span className="aphros-tuner-glyph">
+                  <svg
+                    width={34}
+                    height={34}
+                    viewBox="-16 -16 32 32"
+                    aria-hidden
+                    style={{ display: "block", overflow: "visible" }}
+                  >
+                    {renderTinyShell(id)}
+                  </svg>
+                </span>
               </button>
             );
           })}
-        </div>
-      )}
-      {/* breadcrumb of the recently-tapped shells (the user's composed
-          phrase) — fades out after 3s of inactivity. */}
-      {W > 0 && tunerSeq.length > 0 && (
-        <div
-          aria-hidden
-          style={{
-            position: "fixed",
-            left: 0,
-            right: 0,
-            bottom: "calc(198px + env(safe-area-inset-bottom, 0px))",
-            textAlign: "center",
-            fontFamily: "var(--font-serif)",
-            fontStyle: "italic",
-            fontSize: 11,
-            color: "rgba(107, 74, 63, 0.55)",
-            letterSpacing: "0.04em",
-            pointerEvents: "none",
-            zIndex: 5,
-          }}
-        >
-          {tunerSeq.join(" · ")}
         </div>
       )}
 
@@ -2805,50 +2729,46 @@ export default function Aphros() {
         </div>
       )}
 
-      {/* bottom-center inscription — clickable to "save" the inscription.
-          Saving pulses the text briefly and records a `kept` tape event. */}
-      <div
-        // re-key on inscriptionStamp so React keeps it fresh
-        key={inscriptionStamp}
-        className="aphros-inscription"
-        onClick={ins ? onInscriptionClick : undefined}
-        style={{
-          position: "fixed",
-          left: 0,
-          right: 0,
-          bottom: "calc(104px + env(safe-area-inset-bottom, 0px))",
-          textAlign: "center",
-          fontFamily: "var(--font-serif)",
-          fontStyle: "italic",
-          fontSize: 18,
-          color: C.ink,
-          opacity: ins ? insOpacity : 0.32,
-          letterSpacing: "0.005em",
-          pointerEvents: ins ? "auto" : "none",
-          cursor: ins ? "pointer" : "default",
-          transition: "opacity 240ms ease",
-          padding: "0 var(--pad-x)",
-          transform: pulseOn ? "scale(1.10)" : `scale(${insScale.toFixed(3)})`,
-          willChange: "transform",
-        }}
-      >
-        {ins ? ins.text : "listen for shells"}
-      </div>
+      {/* on-touch inscription — a brief line a shell offers back when
+          tapped, then fades. Only present while an inscription is live;
+          nothing lingers when the scene is idle. Clickable to "keep" it. */}
+      {ins && (
+        <div
+          // re-key on inscriptionStamp so React keeps it fresh
+          key={inscriptionStamp}
+          className="aphros-inscription"
+          onClick={onInscriptionClick}
+          style={{
+            position: "fixed",
+            left: 0,
+            right: 0,
+            bottom: "calc(56px + env(safe-area-inset-bottom, 0px))",
+            textAlign: "center",
+            fontFamily: "var(--font-serif)",
+            fontStyle: "italic",
+            fontSize: 18,
+            color: C.ink,
+            opacity: insOpacity,
+            letterSpacing: "0.005em",
+            pointerEvents: "auto",
+            cursor: "pointer",
+            transition: "opacity 240ms ease",
+            padding: "0 var(--pad-x)",
+            transform: pulseOn ? "scale(1.10)" : `scale(${insScale.toFixed(3)})`,
+            willChange: "transform",
+          }}
+        >
+          {ins.text}
+        </div>
+      )}
 
       {/* Classical Hellenic window border — a Greek key meander on all four
-          sides (Minoan / Mediterranean framing). The Aphros scene wrapper is
-          `position: fixed; inset: 0` and sits BEHIND the 56px sticky
-          SiteHeader (z-index 30); the frame's `top: 56` offset keeps the
-          upper band just below the header. The frame is rendered as a
-          single component so the four bands stay continuous around each
-          corner via small meander knots. */}
-      {/* `bottom: 40` lifts the lower meander band ABOVE the global Tape
-          strip (zIndex 28, 40px tall) so the bottom of the frame stays
-          visible. Without this offset the Tape covers the lower band on
-          every page that uses the frame — user has reported this twice. */}
+          sides (Minoan / Mediterranean framing). The scene now hides the
+          global header + tape strip and runs full-bleed, so the frame hugs
+          the four viewport edges (top/bottom insets = 0). */}
       <GreekKeyFrame
-        top={56}
-        bottom={40}
+        top={0}
+        bottom={0}
         thickness={22}
         mobileThickness={16}
         strokeThickness={2}
@@ -2856,36 +2776,6 @@ export default function Aphros() {
         opacity={0.55}
         zIndex={4}
       />
-
-      {/* ── Foam-intensity chart, tucked into the top-left corner. ── */}
-      <div
-        className="aphros-chart-wrap"
-        style={{
-          position: "fixed",
-          left: 24,
-          top: 96,
-          pointerEvents: "auto",
-          zIndex: 5,
-        }}
-      >
-        <SeaChart
-          variant="inline"
-          mode="candles"
-          title="foam · intensity"
-          caption="bubbles per second"
-          width={260}
-          height={92}
-          tickMs={0}
-          source={foamSource}
-          pullKey={foamChartPullKey}
-          static
-          feedToOcean
-          tapeLabel="aphros/foam"
-          upColor="#F8EDE3"
-          downColor="#B8693A"
-          background="rgba(248, 237, 227, 0.42)"
-        />
-      </div>
 
       <style
         dangerouslySetInnerHTML={{
@@ -2922,28 +2812,73 @@ export default function Aphros() {
           from { opacity: 0.95; translate: 0 0; }
           to { opacity: 0; translate: 0 -34px; }
         }
+
+        /* The scene owns the whole viewport: hide the global header and the
+           field chrome (watch, candle mark, tape strip, sound toggle) so the
+           beach runs full-bleed under the Greek-key frame. */
+        body:has(.aphros-instrument) { overflow: hidden; }
+        body:has(.aphros-instrument) header { display: none !important; }
+        body:has(.aphros-instrument) .oda-field-watch,
+        body:has(.aphros-instrument) .oda-candle-mark,
+        body:has(.aphros-instrument) .oda-tape-shell,
+        body:has(.aphros-instrument) .oda-sound-toggle {
+          display: none !important;
+        }
+
+        /* Title: a quiet word that surfaces, holds, then dissolves so the
+           scene is left to speak on its own. */
+        .aphros-title {
+          animation: aphros-title-fade 6.5s ease forwards;
+        }
+        @keyframes aphros-title-fade {
+          0% { opacity: 0; }
+          10%, 52% { opacity: 0.92; }
+          100% { opacity: 0; }
+        }
+
+        /* Tuner shells sit on the sand with a soft cast shadow; the most
+           recently sounded one blooms and glows briefly. */
+        .aphros-tuner-glyph {
+          display: block;
+          filter: drop-shadow(0 3px 3px rgba(107, 74, 63, 0.28));
+          transition: transform 200ms ease, filter 200ms ease;
+        }
+        .aphros-tuner-button:hover .aphros-tuner-glyph {
+          transform: translateY(-1px) scale(1.08);
+        }
+        .aphros-tuner-button:active .aphros-tuner-glyph {
+          transform: scale(0.94);
+        }
+        .aphros-tuner-button[data-recent="true"] .aphros-tuner-glyph {
+          transform: scale(1.18);
+          filter: drop-shadow(0 3px 4px rgba(107, 74, 63, 0.3))
+                  drop-shadow(0 0 9px rgba(232, 180, 164, 0.9));
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .aphros-title {
+            animation: none;
+            opacity: 0.85;
+          }
+          .aphros-tuner-glyph,
+          .aphros-tuner-button:hover .aphros-tuner-glyph,
+          .aphros-tuner-button:active .aphros-tuner-glyph {
+            transition: none;
+          }
+        }
+
         @media (max-width: 720px) {
           .aphros-title {
-            top: 84px !important;
+            top: 70px !important;
           }
-          .aphros-title h1 {
-            font-size: clamp(42px, 12vw, 54px) !important;
-            letter-spacing: 0.10em !important;
+          .aphros-tuner-glyph {
+            transform: scale(0.82);
           }
-          .aphros-chart-wrap {
-            display: none !important;
-          }
-          .aphros-tuner {
-            bottom: calc(144px + env(safe-area-inset-bottom, 0px)) !important;
-            gap: 0 !important;
-            row-gap: 0 !important;
-          }
-          .aphros-tuner-button {
-            width: 40px !important;
-            height: 38px !important;
+          .aphros-tuner-button[data-recent="true"] .aphros-tuner-glyph {
+            transform: scale(0.98);
           }
           .aphros-inscription {
-            bottom: calc(104px + env(safe-area-inset-bottom, 0px)) !important;
+            bottom: calc(48px + env(safe-area-inset-bottom, 0px)) !important;
             font-size: 15px !important;
             padding: 0 16px !important;
           }
@@ -3087,6 +3022,164 @@ function renderShell(id: ShellId, size: number): JSX.Element {
     default:
       return <g />;
   }
+}
+
+// Small shell glyphs for the on-sand tuner. The seven scene shells reuse
+// their scene renderers (so a tuner shell looks like its big sibling); the
+// nautilus reuses the spiral; the remaining four get compact glyphs of
+// their own so all twelve tuned shells read as distinct tactile objects.
+function renderTinyShell(id: ShellId): JSX.Element {
+  switch (id) {
+    case "nautilus":
+      return renderNautilus(26);
+    case "limpet":
+      return renderLimpet(24);
+    case "cone":
+      return renderCone(24);
+    case "periwinkle":
+      return renderPeriwinkle(24);
+    case "abalone":
+      return renderAbalone(26);
+    default:
+      return renderShell(id, 24);
+  }
+}
+
+function renderLimpet(size: number): JSX.Element {
+  const R = size / 2;
+  const ridges: JSX.Element[] = [];
+  for (let i = -3; i <= 3; i++) {
+    const t = i / 3;
+    ridges.push(
+      <line
+        key={`li-${i}`}
+        x1={0}
+        y1={-R * 0.9}
+        x2={t * R * 0.9}
+        y2={R * 0.45}
+        stroke={C.ink}
+        strokeOpacity={0.3}
+        strokeWidth={0.7}
+      />,
+    );
+  }
+  return (
+    <g>
+      <path
+        d={`M ${-R} ${R * 0.45} Q 0 ${-R * 1.05}, ${R} ${R * 0.45} Z`}
+        fill={C.pinkShell}
+        stroke={C.ink}
+        strokeOpacity={0.55}
+        strokeWidth={1}
+      />
+      <path
+        d={`M ${-R * 0.7} ${R * 0.4} Q 0 ${-R * 0.7}, ${R * 0.7} ${R * 0.4}`}
+        fill="none"
+        stroke={C.coralSoft}
+        strokeOpacity={0.6}
+        strokeWidth={1.4}
+      />
+      {ridges}
+    </g>
+  );
+}
+
+function renderCone(size: number): JSX.Element {
+  const R = size / 2;
+  const bands: JSX.Element[] = [];
+  for (let i = 1; i < 6; i++) {
+    const t = i / 6;
+    const y = -R + t * R * 1.8;
+    const halfW = R * 0.62 * t;
+    bands.push(
+      <line
+        key={`co-${i}`}
+        x1={-halfW}
+        y1={y}
+        x2={halfW}
+        y2={y}
+        stroke={C.nautilusStripe}
+        strokeOpacity={0.45}
+        strokeWidth={1.1}
+      />,
+    );
+  }
+  return (
+    <g>
+      <path
+        d={`M 0 ${-R} L ${R * 0.62} ${R * 0.78} Q 0 ${R * 1.05}, ${-R * 0.62} ${R * 0.78} Z`}
+        fill={C.pearl}
+        stroke={C.ink}
+        strokeOpacity={0.55}
+        strokeWidth={1}
+      />
+      {bands}
+      <line x1={0} y1={-R} x2={-R * 0.2} y2={R * 0.7} stroke={C.ink} strokeOpacity={0.28} strokeWidth={0.7} />
+    </g>
+  );
+}
+
+function renderPeriwinkle(size: number): JSX.Element {
+  const R = size / 2;
+  const coils: JSX.Element[] = [];
+  for (let i = 0; i < 4; i++) {
+    const r = R * (0.9 - i * 0.2);
+    coils.push(
+      <circle
+        key={`pw-${i}`}
+        cx={i * R * 0.12}
+        cy={-i * R * 0.12}
+        r={r}
+        fill="none"
+        stroke={C.ink}
+        strokeOpacity={0.32}
+        strokeWidth={0.8}
+      />,
+    );
+  }
+  return (
+    <g>
+      <circle r={R} fill={C.ochreWarm} stroke={C.ink} strokeOpacity={0.55} strokeWidth={1} />
+      <circle r={R * 0.72} fill={C.coralSoft} opacity={0.4} />
+      {coils}
+      <circle cx={-R * 0.3} cy={-R * 0.3} r={R * 0.22} fill="rgba(255,255,250,0.6)" />
+    </g>
+  );
+}
+
+function renderAbalone(size: number): JSX.Element {
+  const R = size / 2;
+  const holes: JSX.Element[] = [];
+  for (let i = 0; i < 5; i++) {
+    const t = i / 4;
+    holes.push(
+      <circle
+        key={`ab-${i}`}
+        cx={-R * 0.7 + t * R * 1.2}
+        cy={-R * 0.5 + t * R * 0.5}
+        r={1.1}
+        fill={C.ink}
+        opacity={0.4}
+      />,
+    );
+  }
+  return (
+    <g transform="rotate(-18)">
+      <ellipse
+        cx={0}
+        cy={0}
+        rx={R}
+        ry={R * 0.66}
+        fill={C.aqua}
+        stroke={C.ink}
+        strokeOpacity={0.5}
+        strokeWidth={1}
+      />
+      <ellipse cx={-R * 0.16} cy={-R * 0.12} rx={R * 0.7} ry={R * 0.42} fill={C.pinkShell} opacity={0.55} />
+      <ellipse cx={-R * 0.28} cy={-R * 0.2} rx={R * 0.4} ry={R * 0.22} fill="rgba(255,255,250,0.55)" />
+      {holes}
+    </g>
+  );
 }
 
 function renderScallop(size: number): JSX.Element {
