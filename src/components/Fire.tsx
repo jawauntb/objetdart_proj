@@ -858,7 +858,7 @@ export default function Fire() {
       <style
         dangerouslySetInnerHTML={{
           __html: `
-            body:has(.fire-root) header {
+            body:has(.fire-root) header:not(.oda-site-header) {
               background: transparent !important;
               border-bottom: 0 !important;
               backdrop-filter: none !important;

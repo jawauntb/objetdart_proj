@@ -849,7 +849,7 @@ export default function Tide() {
           background: #0c1422;
           overflow: hidden;
         }
-        body:has(.tide-instrument) header { display: none !important; }
+        body:has(.tide-instrument) header:not(.oda-site-header) { display: none !important; }
         body:has(.tide-instrument) .oda-field-watch,
         body:has(.tide-instrument) .oda-candle-mark,
         body:has(.tide-instrument) .oda-tape-shell,

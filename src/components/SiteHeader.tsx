@@ -131,6 +131,7 @@ export default function SiteHeader() {
   return (
     <>
       <header
+        className="oda-site-header"
         style={{
           position: "sticky",
           top: 0,

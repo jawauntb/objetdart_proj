@@ -736,7 +736,7 @@ export default function Jewel() {
         .jw-hint.gone { opacity: 0; }
 
         body:has(.jewel-shader) { overflow: hidden; }
-        body:has(.jewel-shader) header { display: none !important; }
+        body:has(.jewel-shader) header:not(.oda-site-header) { display: none !important; }
         body:has(.jewel-shader) .oda-field-watch,
         body:has(.jewel-shader) .oda-candle-mark,
         body:has(.jewel-shader) .oda-tape-shell,

@@ -1299,7 +1299,7 @@ export default function Growth() {
               font-weight: 400;
             }
 
-            body:has(.growth-instrument) header {
+            body:has(.growth-instrument) header:not(.oda-site-header) {
               background: transparent !important;
               border-bottom: 0 !important;
               backdrop-filter: none !important;

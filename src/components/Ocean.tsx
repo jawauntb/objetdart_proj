@@ -982,7 +982,7 @@ export default function Ocean() {
           overflow: hidden;
           background: #03070f;
         }
-        body:has(.ocean-body) header {
+        body:has(.ocean-body) header:not(.oda-site-header) {
           display: none !important;
         }
         body:has(.ocean-body) .oda-field-watch,

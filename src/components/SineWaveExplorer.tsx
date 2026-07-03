@@ -710,7 +710,7 @@ export default function SineWaveExplorer() {
           overflow: hidden;
         }
 
-        body:has(.sine-instrument) header {
+        body:has(.sine-instrument) header:not(.oda-site-header) {
           display: none !important;
         }
 

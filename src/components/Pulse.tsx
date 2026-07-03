@@ -1184,7 +1184,7 @@ export default function Pulse() {
           margin-right: 7px;
         }
 
-        body:has(.oda-pulse-root) header {
+        body:has(.oda-pulse-root) header:not(.oda-site-header) {
           background: transparent !important;
           border-bottom: 0 !important;
           backdrop-filter: none !important;
