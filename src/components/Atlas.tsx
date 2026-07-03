@@ -1320,54 +1320,34 @@ export default function Atlas() {
         >
           <div style={{ minWidth: 0, maxWidth: 660 }}>
             <div className="t-eyebrow">
-              {selectedRegion ? "selected territory" : "point of departure"}
+              {selectedRegion ? "territory" : "atlas"}
+              {routeSignalFresh && routeSignal && routeSignalObject && routeSignalRegion && (
+                <span className="atlas-callout__signal">
+                  {" · "}{routeSignalObject.label.toLowerCase()} {routeSignal.compatible ? "settled in" : "refused by"} {routeSignalRegion.label.toLowerCase()}
+                </span>
+              )}
             </div>
             <div className="t-h3 italic" style={{ marginTop: 4 }}>
               {selectedRegion
                 ? selectedRegion.label.toLowerCase()
-                : "choose a territory without leaving the page"}
+                : carriedObject
+                  ? `carrying ${carriedObject.label.toLowerCase()} — land it on a coast`
+                  : "tap a coast to choose"}
             </div>
             <p className="t-meta italic" style={{ margin: "4px 0 0", color: "var(--ink-2)" }}>
               {selectedRegion
                 ? `${selectedRegion.inscription.toLowerCase()} · ${selectedRegion.concerns.join(" / ")}`
-                : "the atlas can steer the reading first; the long drawer can wait."}
+                : "drag the open water to turn the compass."}
             </p>
-            <div className="atlas-state-strip" aria-live="polite">
-              <span>{selectedRegion ? `current · ${selectedRegion.label.toLowerCase()}` : "current · open water"}</span>
-              <span>{carriedObject ? `carrying · ${carriedObject.label.toLowerCase()}` : "carrying · empty hands"}</span>
-              {routeSignalFresh && routeSignal && routeSignalObject && routeSignalRegion && (
-                <span>
-                  {routeSignalObject.label.toLowerCase()} {routeSignal.compatible ? "settled in" : "refused by"} {routeSignalRegion.label.toLowerCase()}
-                </span>
-              )}
-            </div>
           </div>
           <div className="atlas-callout__actions" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {selectedRegion ? (
+            {selectedRegion && (
               <>
                 <button className="atlas-callout__button" onClick={() => openRegionDrawer(selectedRegion.id)}>
                   read territory
                 </button>
-                <button
-                  className="atlas-callout__button"
-                  onClick={() => document.getElementById("reading")?.scrollIntoView({ behavior: "smooth" })}
-                >
-                  leave reading
-                </button>
                 <button className="atlas-callout__button is-quiet" onClick={() => setRegion(null)}>
                   clear
-                </button>
-              </>
-            ) : (
-              <>
-                <button className="atlas-callout__button" onClick={() => beginZoomTo("origin")}>
-                  visit origin
-                </button>
-                <button
-                  className="atlas-callout__button is-quiet"
-                  onClick={() => document.getElementById("concern-field")?.scrollIntoView({ behavior: "smooth" })}
-                >
-                  tune first
                 </button>
               </>
             )}
@@ -1375,7 +1355,7 @@ export default function Atlas() {
         </div>
 
         <div style={{ marginTop: 36 }}>
-          <div className="t-eyebrow">objects · carry one onto a territory</div>
+          <div className="t-eyebrow">objects · carry one</div>
           <div
             className="atlas-object-row"
             style={{
