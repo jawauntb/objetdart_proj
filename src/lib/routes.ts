@@ -39,6 +39,7 @@ export const SITE_ROUTES: SiteRouteEntry[] = [
   { key: "time",        icon: "watch",    href: "/time",                              desc: "bend a clock",                  cluster: "mechanism", dark: true },
   { key: "movement",    icon: "watch",    href: "/movement",                          desc: "mechanical movement · 3D",     cluster: "mechanism", dark: true, homePriority: 10 },
   { key: "jewel",       icon: "plasma",   href: "/jewel",                             desc: "turn the stone",               cluster: "mechanism", dark: true, homePriority: 8 },
+  { key: "drop",        icon: "plasma",   href: "/drop",                              desc: "a cosmos in glass",            cluster: "mechanism", dark: true, homePriority: 11 },
   { key: "coin",        icon: "watch",    href: "/coin",                              desc: "a gold medal · tilt · flip",   cluster: "mechanism", dark: true, homePriority: 10 },
   { key: "watch",       icon: "watch",    href: "/watch",                             desc: "the room",                     cluster: "mechanism", dark: true, homePriority: 9 },
   { key: "archive",     icon: "archive",  href: "/archive",      anchor: "archive",   desc: "the drawers",                  cluster: "field",     homePriority: 7 },
