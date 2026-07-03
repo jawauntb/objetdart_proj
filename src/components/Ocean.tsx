@@ -7,28 +7,33 @@ import * as haptics from "@/lib/haptics";
 import { relaxTurbulence, stirTurbulence } from "@/lib/turbulence";
 
 /**
- * /ocean — the whole body of water, fullscreen.
+ * /ocean — the whole body of water, and a dive down through it.
  *
- * Where the embedded Sea is a horizon-strip, this is the open ocean seen
- * from just above the surface: a sky meeting the water at a high horizon,
- * a column of sun-glint shivering down the middle, depth falling away from
- * azure at the skyline through cerulean and a teal-green shelf into deep
- * ocean and a cold prussian-gray floor. A river current meanders across
- * the surface — a brighter, faster ribbon advected by its own flow — so
- * the page reads as ocean *and* river at once.
+ * The surface is the open ocean seen from just above: a sky meeting the
+ * water at a high horizon, a column of sun-glint shivering down the middle,
+ * depth falling away from azure through cerulean and a teal-green shelf into
+ * prussian blue, and a meandering river ribbon crossing it all.
+ *
+ * But this page owns DEPTH. A scroll, or a slow two-finger drag, sinks the
+ * camera down the water column: sunlit surface → epipelagic blue → twilight
+ * (colour drains, light shafts thin, marine snow drifts down) → midnight and
+ * the abyss, near-black, alive with drifting BIOLUMINESCENT motes that spark
+ * under the fingertip. Rising brings the light and the sky back. That
+ * vertical journey is what no sibling page has.
  *
  * Two layered canvases:
- *   1. WebGL water — the deep material. Depth gradient, fbm caustics,
- *      sun glint, the meandering river ribbon, foam at the wave crests,
- *      pointer ripples that displace and brighten the surface, and a
- *      device-tilt slosh that leans the whole body toward the low edge.
- *   2. 2D surface — foam crest lines, glint sparkle, the cursor halo, and
- *      a faint nautical bearing ring that turns with the phone's tilt.
+ *   1. WebGL water — the deep material. Depth gradient, fbm caustics, sun
+ *      glint, the river ribbon, foam, pointer ripples, tilt slosh, and — as
+ *      the dive deepens — a whole submerged column with penetrating light
+ *      shafts and a ceiling of caustics that fades to black.
+ *   2. 2D layer — surface foam and the Great Wave (which dissolve as you
+ *      descend), then marine snow and bioluminescent motes that bloom in the
+ *      deep and flare where you touch.
  *
- * Touch-sensitive: every finger is its own wave source (multitouch), hard
- * presses stir the storm axis. Motion-sensitive: tilt sloshes, shake
- * churns whitecaps and thuds the room. If WebGL is unavailable the 2D
- * layer paints its own depth gradient and the piece still reads.
+ * Touch-sensitive: every finger is a wave source at the surface and a spark
+ * of light in the deep; two fingers dragged vertically dive. Motion: tilt
+ * sloshes, shake churns whitecaps. If WebGL is unavailable the 2D layer
+ * paints its own depth gradient and the piece still reads.
  */
 export default function Ocean() {
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -38,8 +43,12 @@ export default function Ocean() {
   const pointer = useRef<{ x: number; y: number; over: boolean; pressed: boolean; lastEmit: number }>({
     x: 0, y: 0, over: false, pressed: false, lastEmit: 0,
   });
-  // device tilt, surfaced to the DOM bearing ring as a smoothed heading.
-  const [bearing, setBearing] = useState(0);
+  // dive position through the water column: 0 = surface, 1 = the abyss.
+  const depthRef = useRef(0);
+  const depthTargetRef = useRef(0);
+  // tiny floating readout — the depth zone and a reading in metres of dark.
+  const [zone, setZone] = useState("surface");
+  const [depthM, setDepthM] = useState(0);
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -63,6 +72,7 @@ export default function Ocean() {
     let uSwellLoc: WebGLUniformLocation | null = null;
     let uTiltLoc: WebGLUniformLocation | null = null;
     let uTurbLoc: WebGLUniformLocation | null = null;
+    let uDepthLoc: WebGLUniformLocation | null = null;
     let uRipplesLoc: WebGLUniformLocation | null = null;
     let uRippleCountLoc: WebGLUniformLocation | null = null;
 
@@ -81,6 +91,7 @@ export default function Ocean() {
         uniform vec2 uRes;
         uniform float uSwell;   // audio swell LFO, ~-1..1
         uniform float uTurb;    // storm axis 0..~1 (shake / hard press)
+        uniform float uDepth;   // dive depth 0 (surface) .. 1 (abyss)
         uniform vec2 uTilt;     // device tilt bias
         uniform vec4 uRipples[12]; // xy uv, z age sec, w strength
         uniform int uRippleCount;
@@ -238,6 +249,49 @@ export default function Ocean() {
           float isSea = step(horizon, uv.y);
           vec3 outc = mix(sky, color, isSea);
 
+          // ── the dive: sinking into the water column ────────────
+          // As uDepth rises the camera slips below the surface. The whole
+          // frame becomes water: a lit ceiling above (caustics + light
+          // shafts stabbing down) fading through twilight into near-black.
+          float depth01 = clamp(uDepth, 0.0, 1.0);
+          float submerge = smoothstep(0.05, 0.34, depth01);
+          if (submerge > 0.001) {
+            float dc = uv.y; // 0 = toward the light above, 1 = deeper below
+            // overall light available at this depth, fading as we descend
+            float lightAmt = 1.0 - smoothstep(0.32, 0.95, depth01);
+            // light concentrated near the ceiling; the ceiling recedes deeper
+            float ceil = exp(-dc * (1.6 + depth01 * 5.5)) * lightAmt;
+
+            // water-column palette: epipelagic blue -> twilight -> midnight
+            vec3 epip     = vec3(0.05, 0.24, 0.34);
+            vec3 twilight = vec3(0.015, 0.05, 0.14);
+            vec3 midnight = vec3(0.002, 0.006, 0.020);
+            vec3 base = mix(epip, twilight, smoothstep(0.12, 0.50, depth01));
+            base = mix(base, midnight, smoothstep(0.50, 0.92, depth01));
+            base *= mix(1.0, 0.55, dc); // darker toward the bottom of frame
+
+            vec3 deepCol = base;
+            // the ceiling glow — the underside of the surface far overhead
+            deepCol += ceil * vec3(0.35, 0.60, 0.72);
+
+            // crepuscular light shafts: shimmering vertical blades from above
+            float shN = fbm(vec2(uv.x * 2.6 + t * 0.03, uv.x * 1.4 + 4.0));
+            float streak = sin((uv.x + shN * 0.13) * 24.0 + shN * 4.0);
+            float shafts = pow(max(0.0, streak), 4.0)
+                         * exp(-dc * (2.2 + depth01 * 4.0)) * lightAmt;
+            deepCol += shafts * vec3(0.45, 0.70, 0.80) * 0.6;
+
+            // caustic flicker rippling across the ceiling
+            deepCol += caustic * ceil * 0.45 * vec3(0.6, 0.85, 1.0);
+
+            // touch ripples read as bioluminescent bloom the deeper we go
+            vec3 bioTint = mix(vec3(0.30, 0.72, 0.92), vec3(0.20, 1.0, 0.78),
+                               smoothstep(0.45, 0.9, depth01));
+            deepCol += rippleHi * 0.010 * bioTint;
+
+            outc = mix(outc, deepCol, submerge);
+          }
+
           // gentle vignette toward the corners for depth
           vec2 vc = (vUv - 0.5);
           float vig = 1.0 - dot(vc, vc) * 0.35;
@@ -273,6 +327,7 @@ export default function Ocean() {
             uSwellLoc = gl.getUniformLocation(p, "uSwell");
             uTiltLoc = gl.getUniformLocation(p, "uTilt");
             uTurbLoc = gl.getUniformLocation(p, "uTurb");
+            uDepthLoc = gl.getUniformLocation(p, "uDepth");
             uRipplesLoc = gl.getUniformLocation(p, "uRipples");
             uRippleCountLoc = gl.getUniformLocation(p, "uRippleCount");
 
@@ -308,6 +363,45 @@ export default function Ocean() {
     const ro = new ResizeObserver(resize);
     ro.observe(wrap);
 
+    // ── small math helpers ────────────────────────────────────────
+    const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
+    const smoothstep = (e0: number, e1: number, x: number) => {
+      const t = clamp01((x - e0) / (e1 - e0));
+      return t * t * (3 - 2 * t);
+    };
+    // deterministic pseudo-random for seeding drifting particles.
+    const rnd = (s: number) => {
+      const v = Math.sin(s * 127.1 + 311.7) * 43758.5453;
+      return v - Math.floor(v);
+    };
+
+    // ── the deep: marine snow + bioluminescent motes ──────────────
+    // marine snow drifts down forever through the twilight and below.
+    const SNOW = 120;
+    const snow = Array.from({ length: SNOW }, (_, i) => ({
+      x: rnd(i * 1.7),
+      y: rnd(i * 2.3),
+      r: 0.5 + rnd(i * 3.1) * 1.6,
+      spd: 0.15 + rnd(i * 4.9) * 0.55,
+      sway: rnd(i * 5.3) * 6.283,
+      a: 0.2 + rnd(i * 6.1) * 0.5,
+    }));
+    // bioluminescent motes: near-dark until stirred, then they flare cyan-green.
+    const MOTES = 84;
+    const motes = Array.from({ length: MOTES }, (_, i) => ({
+      x: rnd(i * 7.7 + 0.3),
+      y: rnd(i * 8.1 + 0.9),
+      r: 1.2 + rnd(i * 9.3) * 2.6,
+      ph: rnd(i * 10.7) * 6.283,
+      hue: rnd(i * 11.9), // 0 = teal, 1 = green
+    }));
+    // touch-born sparks in the deep: expanding blooms of cold light.
+    const sparks: Array<{ x: number; y: number; t0: number; strength: number }> = [];
+    const addSpark = (x: number, y: number, strength: number) => {
+      sparks.push({ x, y, t0: performance.now(), strength });
+      if (sparks.length > 24) sparks.shift();
+    };
+
     // ── pointer / touch ───────────────────────────────────────────
     const addRipple = (x: number, y: number, strength: number) => {
       ripples.current.push({ x, y, t0: performance.now(), strength });
@@ -316,6 +410,8 @@ export default function Ocean() {
     const pressed = new Map<number, { x: number; y: number; lastEmit: number }>();
     const pressureOf = (e: PointerEvent) => (e.pressure > 0 ? e.pressure : 0.5);
     const strengthScale = (p: number) => 0.6 + p * 0.95;
+    // two-finger vertical drag drives the dive; track the fingers' mean Y.
+    let lastAvgY: number | null = null;
 
     // ── device sensors ────────────────────────────────────────────
     const tiltTarget = { x: 0, y: 0 };
@@ -329,8 +425,6 @@ export default function Ocean() {
       const gy = ((e.beta ?? 45) - 45) / 45;
       tiltTarget.x = Math.max(-1, Math.min(1, gx));
       tiltTarget.y = Math.max(-1, Math.min(1, gy));
-      // expose a compass heading from alpha for the bearing ring
-      if (e.alpha != null) setBearing(e.alpha);
     };
     const onMotion = (e: DeviceMotionEvent) => {
       const a = e.accelerationIncludingGravity;
@@ -385,12 +479,21 @@ export default function Ocean() {
       addRipple(x, y, 28 * strengthScale(p));
       stirTurbulence(p * 0.05);
       haptics.ripple(p);
-      useField.getState().recordTape("ripple", 0.85);
-      try { getFieldAudio().chime(); } catch { /* noop */ }
+      // in the deep a touch is a spark of cold light, not a splash of foam.
+      const deep = depthRef.current > 0.38;
+      if (deep) {
+        addSpark(x, y, 0.7 + p * 0.6);
+        useField.getState().recordTape("ripple", 0.7, "biolume");
+        try { getFieldAudio().playNote(74 + Math.floor(p * 10), 160); } catch { /* noop */ }
+      } else {
+        useField.getState().recordTape("ripple", 0.85);
+        try { getFieldAudio().chime(); } catch { /* noop */ }
+      }
       armSensors();
     };
     const onUp = (e: PointerEvent) => {
       pressed.delete(e.pointerId);
+      if (pressed.size < 2) lastAvgY = null;
       if (pressed.size === 0) pointer.current.pressed = false;
     };
     const onMove = (e: PointerEvent) => {
@@ -402,15 +505,38 @@ export default function Ocean() {
       pointer.current.y = y;
       const now = performance.now();
       const finger = pressed.get(e.pointerId);
+      if (finger) { finger.x = x; finger.y = y; }
+
+      // ── two-finger dive: the mean Y of the fingers drives depth ──
+      if (pressed.size >= 2) {
+        let sy = 0;
+        pressed.forEach((f) => { sy += f.y; });
+        const avgY = sy / pressed.size;
+        const h = surf.clientHeight || 1;
+        if (lastAvgY != null) {
+          // dragging down descends; dragging up rises.
+          depthTargetRef.current = clamp01(
+            depthTargetRef.current + ((avgY - lastAvgY) / h) * 1.35,
+          );
+        }
+        lastAvgY = avgY;
+        return; // don't shed ripples while diving
+      }
+      lastAvgY = null;
+
+      const deep = depthRef.current > 0.38;
       if (finger) {
-        finger.x = x;
-        finger.y = y;
         if (now - finger.lastEmit > 70) {
           const p = pressureOf(e);
           addRipple(x, y, 14 * strengthScale(p));
           finger.lastEmit = now;
-          useField.getState().recordTape("ripple", 0.45);
-          haptics.chop();
+          if (deep) {
+            addSpark(x, y, 0.4 + p * 0.4);
+            useField.getState().recordTape("ripple", 0.4, "biolume");
+          } else {
+            useField.getState().recordTape("ripple", 0.45);
+            haptics.chop();
+          }
         }
       } else if (now - pointer.current.lastEmit > 200) {
         addRipple(x, y, 4);
@@ -418,17 +544,33 @@ export default function Ocean() {
       }
     };
     const onLeave = () => { pointer.current.over = false; };
+    // scroll / trackpad sinks and lifts the camera through the water column.
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      depthTargetRef.current = clamp01(depthTargetRef.current + e.deltaY * 0.0011);
+    };
     surf.addEventListener("pointerdown", onDown);
     surf.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
     window.addEventListener("pointercancel", onUp);
     surf.addEventListener("pointerleave", onLeave);
+    surf.addEventListener("wheel", onWheel, { passive: false });
 
     // ── render loop ───────────────────────────────────────────────
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const motion = reduce ? 0 : 1;
     const t0 = performance.now();
     let raf = 0;
+    let prevNow = t0;
+    let lastZone = "surface";
+    let lastMReport = 0;
+    let lastM = -1;
+    const zoneOf = (d: number) =>
+      d < 0.12 ? "surface" : d < 0.4 ? "epipelagic" : d < 0.7 ? "twilight" : "midnight";
+    // a lower, darker chord as each zone is entered.
+    const zoneTone: Record<string, number> = {
+      surface: 320, epipelagic: 190, twilight: 120, midnight: 70,
+    };
 
     const rippleDisp = (x: number, y: number, now: number): number => {
       let d = 0;
@@ -453,9 +595,34 @@ export default function Ocean() {
     const draw = (now: number) => {
       const w = surf.clientWidth;
       const h = surf.clientHeight;
+      const dt = Math.min(60, now - prevNow);
+      prevNow = now;
 
       const audioT = getFieldAudio().getAudioTime();
       const t = audioT != null ? audioT : (now - t0) / 1000;
+
+      // ── dive: ease the camera toward its target depth ───────────
+      depthRef.current += (depthTargetRef.current - depthRef.current) * 0.05;
+      const depth = depthRef.current;
+      const submerge = smoothstep(0.05, 0.34, depth);
+      const surfaceVis = 1 - smoothstep(0.05, 0.30, depth);
+      const snowVis = smoothstep(0.12, 0.44, depth);
+      const bioVis = smoothstep(0.40, 0.74, depth);
+
+      // announce zone changes with a low tone + a haptic roll, and keep the
+      // floating readout current without churning React every frame.
+      const zoneNow = zoneOf(depth);
+      if (zoneNow !== lastZone) {
+        lastZone = zoneNow;
+        setZone(zoneNow);
+        try { getFieldAudio().playTone(zoneTone[zoneNow] ?? 200, 0.55); } catch { /* noop */ }
+        try { haptics.roll(); } catch { /* noop */ }
+      }
+      if (now - lastMReport > 150) {
+        lastMReport = now;
+        const m = Math.round(depth * 3800);
+        if (m !== lastM) { lastM = m; setDepthM(m); }
+      }
 
       const swellLfo = Math.sin(t * Math.PI * 2 * 0.12);
       const driftLfo = Math.sin(t * Math.PI * 2 * 0.03);
@@ -474,6 +641,7 @@ export default function Ocean() {
         if (uResLoc) gl.uniform2f(uResLoc, water.width, water.height);
         if (uSwellLoc) gl.uniform1f(uSwellLoc, swellLfo + turb * 0.6);
         if (uTurbLoc) gl.uniform1f(uTurbLoc, Math.min(1, turb));
+        if (uDepthLoc) gl.uniform1f(uDepthLoc, depth);
         if (uTiltLoc) gl.uniform2f(uTiltLoc, tiltSmoothed.x * 0.028, tiltSmoothed.y * 0.022);
 
         if (uRipplesLoc && uRippleCountLoc) {
@@ -512,12 +680,23 @@ export default function Ocean() {
           sg.addColorStop(1.00, "rgba(  2,  8, 18,1)"); // abyss
           wctx.fillStyle = sg;
           wctx.fillRect(0, 0, w, h);
+          // dive: sink the whole gradient toward black as we descend.
+          if (submerge > 0) {
+            wctx.fillStyle = `rgba(2, 7, 16, ${submerge * 0.9})`;
+            wctx.fillRect(0, 0, w, h);
+          }
         }
       }
 
       // ── 2D surface layer ────────────────────────────────────────
       sctx.clearRect(0, 0, w, h);
       const horizonY = h * 0.15;
+
+      // Surface features — foam swells and the Great Wave — dissolve as the
+      // dive carries us under. Skip the work entirely once we're deep.
+      if (surfaceVis > 0.01) {
+      sctx.save();
+      sctx.globalAlpha = surfaceVis;
 
       // foam crest lines marching toward the viewer; spacing widens with
       // perspective so they read as receding swells. Faster + taller than a
@@ -567,12 +746,15 @@ export default function Ocean() {
       // never still — and so it scales from phone to desktop.
       drawGreatWave(sctx, w, h, horizonY, t * motion, swellMod);
 
+      sctx.restore();
+      }
+
       // sun-glint sparkle in the central column just under the horizon
       const glintTop = horizonY + 6;
       const glintBottom = h * 0.55;
       const cx = w * 0.5;
       sctx.fillStyle = "rgba(255, 252, 238, 0.5)";
-      for (let s = 0; s < 46; s++) {
+      for (let s = 0; s < 46 && surfaceVis > 0.01; s++) {
         const seed = s * 12.9898;
         const rx = (Math.sin(seed) * 43758.5453) % 1;
         const ry = (Math.sin(seed * 1.7) * 24634.6345) % 1;
@@ -581,20 +763,104 @@ export default function Ocean() {
         const tw = 0.5 + 0.5 * Math.sin(t * 5 + s * 1.3);
         if (tw > 0.55) {
           const sz = (1 - (sy - glintTop) / (glintBottom - glintTop)) * 2.4 * tw;
-          sctx.globalAlpha = 0.18 + tw * 0.4;
+          sctx.globalAlpha = (0.18 + tw * 0.4) * surfaceVis;
           sctx.fillRect(sparkleX, sy, sz + 0.6, 0.9);
         }
       }
       sctx.globalAlpha = 1;
 
-      // cursor halo
+      // ── the deep: marine snow, sparks, bioluminescent motes ─────
+      // Marine snow drifts down through the twilight and below — faint
+      // detritus caught in what light remains.
+      if (snowVis > 0.01) {
+        const snowT = reduce ? 0 : dt;
+        sctx.fillStyle = "#dfeef2";
+        for (const p of snow) {
+          p.y += (p.spd * snowT) * 0.00006;
+          if (p.y > 1.05) { p.y -= 1.1; p.x = rnd(p.sway + p.y * 7.0); }
+          const sx = (p.x + Math.sin(t * 0.2 + p.sway) * 0.008) * w;
+          const sy = p.y * h;
+          sctx.globalAlpha = snowVis * p.a * (0.5 + 0.5 * (1 - bioVis * 0.6));
+          sctx.beginPath();
+          sctx.arc(sx, sy, p.r, 0, 7);
+          sctx.fill();
+        }
+        sctx.globalAlpha = 1;
+      }
+
+      // Touch sparks: cold blooms of light expanding where a finger struck.
+      sctx.save();
+      sctx.globalCompositeOperation = "lighter";
+      for (let i = sparks.length - 1; i >= 0; i--) {
+        const s = sparks[i];
+        const age = (now - s.t0) / 1000;
+        if (age > 1.7) { sparks.splice(i, 1); continue; }
+        const life = 1 - age / 1.7;
+        const rad = 14 + age * 150;
+        const g = sctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, rad);
+        g.addColorStop(0, `rgba(150, 255, 224, ${0.30 * life * s.strength})`);
+        g.addColorStop(0.5, `rgba(70, 200, 230, ${0.14 * life * s.strength})`);
+        g.addColorStop(1, "rgba(40, 120, 200, 0)");
+        sctx.fillStyle = g;
+        sctx.beginPath();
+        sctx.arc(s.x, s.y, rad, 0, 7);
+        sctx.fill();
+      }
+      sctx.restore();
+
+      // Bioluminescent motes: near-dark drifters that flare where they are
+      // touched, chased by the cursor, or caught in an expanding spark.
+      if (bioVis > 0.01) {
+        sctx.save();
+        sctx.globalCompositeOperation = "lighter";
+        const drift = reduce ? 0 : 1;
+        for (const m of motes) {
+          const mx = (m.x + Math.sin(t * 0.11 + m.ph) * 0.03 * drift) * w;
+          const my = (m.y + Math.cos(t * 0.08 + m.ph * 1.4) * 0.03 * drift
+            - (t * 0.004 * drift) % 1) * h;
+          let glow = 0.10 + 0.08 * Math.sin(t * 0.9 + m.ph * 3.0);
+          if (pointer.current.over) {
+            const dx = mx - pointer.current.x;
+            const dy = my - pointer.current.y;
+            const d2 = dx * dx + dy * dy;
+            glow += Math.exp(-d2 / (140 * 140)) * (pointer.current.pressed ? 1.15 : 0.55);
+          }
+          for (const s of sparks) {
+            const age = (now - s.t0) / 1000;
+            if (age > 1.7) continue;
+            const front = Math.hypot(mx - s.x, my - s.y) - (14 + age * 150);
+            glow += Math.exp(-(front * front) / (46 * 46)) * (1 - age / 1.7) * 0.9;
+          }
+          if (glow < 0.04) continue;
+          glow = Math.min(1.5, glow);
+          const rad = m.r * (1.6 + glow * 3.2);
+          // teal → green by the mote's own hue, brighter cores when flaring.
+          const cr = Math.round(90 + m.hue * 70);
+          const cg = Math.round(210 + m.hue * 40);
+          const cb = Math.round(210 - m.hue * 70);
+          const g = sctx.createRadialGradient(mx, my, 0, mx, my, rad);
+          g.addColorStop(0, `rgba(${cr}, ${cg}, ${cb}, ${Math.min(0.9, glow * 0.8) * bioVis})`);
+          g.addColorStop(1, `rgba(${cr}, ${cg}, ${cb}, 0)`);
+          sctx.fillStyle = g;
+          sctx.beginPath();
+          sctx.arc(mx, my, rad, 0, 7);
+          sctx.fill();
+        }
+        sctx.restore();
+      }
+
+      // cursor halo — a warm glow at the surface, a cold one in the deep.
       if (pointer.current.over) {
         const px = pointer.current.x;
         const py = pointer.current.y;
         const rad = 100;
         const hg = sctx.createRadialGradient(px, py, 0, px, py, rad);
-        hg.addColorStop(0, "rgba(224, 244, 250, 0.22)");
-        hg.addColorStop(1, "rgba(224, 244, 250, 0)");
+        const cold = bioVis;
+        const hr = Math.round(224 - cold * 90);
+        const hg0 = Math.round(244 + cold * 8);
+        const hb = Math.round(250 - cold * 30);
+        hg.addColorStop(0, `rgba(${hr}, ${hg0}, ${hb}, ${0.22 + cold * 0.08})`);
+        hg.addColorStop(1, `rgba(${hr}, ${hg0}, ${hb}, 0)`);
         sctx.fillStyle = hg;
         sctx.beginPath();
         sctx.arc(px, py, rad, 0, 7);
@@ -613,16 +879,22 @@ export default function Ocean() {
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
       surf.removeEventListener("pointerleave", onLeave);
+      surf.removeEventListener("wheel", onWheel);
       window.removeEventListener("deviceorientation", onOrient);
       window.removeEventListener("devicemotion", onMotion);
     };
   }, []);
 
+  // the title dissolves as the dive carries us into the dark.
+  const titleFade = zone === "surface" ? 1 : zone === "epipelagic" ? 0.7 : zone === "twilight" ? 0.4 : 0.22;
+
   return (
     <div
       ref={wrapRef}
+      className="ocean-body"
       data-touch-surface="true"
-      aria-label="the ocean — drag to disturb the water; tilt your phone to lean the sea"
+      data-pretext-ignore="true"
+      aria-label="The open ocean and the water column beneath it. Drag to disturb the surface; scroll or drag two fingers to dive down through sunlit water, twilight and the bioluminescent abyss; tilt the phone to lean the sea."
       style={{
         position: "fixed",
         inset: 0,
@@ -649,82 +921,91 @@ export default function Ocean() {
         }}
       />
 
-      {/* faint nautical bearing ring — turns with the phone's heading */}
-      <div
-        aria-hidden="true"
-        style={{
-          position: "fixed",
-          left: "calc(16px + env(safe-area-inset-left, 0px))",
-          // lifted clear of the tape (40px) and the candle mark above it,
-          // so it never hides under the mobile browser's bottom chrome.
-          bottom: "calc(104px + env(safe-area-inset-bottom, 0px))",
-          width: 64,
-          height: 64,
-          pointerEvents: "none",
-          opacity: 0.5,
-        }}
-      >
-        <svg width="64" height="64" viewBox="0 0 64 64" style={{ transform: `rotate(${-bearing}deg)`, transition: "transform 200ms linear" }}>
-          <circle cx="32" cy="32" r="28" fill="none" stroke="rgba(232,244,248,0.55)" strokeWidth="1" />
-          <circle cx="32" cy="32" r="22" fill="none" stroke="rgba(232,244,248,0.22)" strokeWidth="0.6" />
-          {/* N S E W ticks */}
-          {[0, 90, 180, 270].map((d) => (
-            <line
-              key={d}
-              x1="32" y1="4" x2="32" y2={d === 0 ? 12 : 9}
-              stroke="rgba(232,244,248,0.7)" strokeWidth={d === 0 ? 1.4 : 0.8}
-              transform={`rotate(${d} 32 32)`}
-            />
-          ))}
-          {/* compass needle: north half warm */}
-          <polygon points="32,8 35,32 32,30 29,32" fill="rgba(200,115,42,0.85)" />
-          <polygon points="32,56 35,32 32,34 29,32" fill="rgba(232,244,248,0.6)" />
-        </svg>
+      {/* a tiny floating readout: the depth zone and a reading in metres */}
+      <div className="ocean-title" aria-hidden="true" style={{ opacity: titleFade }}>
+        <span>{`ocean / ${zone}`}</span>
+        <strong>Ocean</strong>
       </div>
+      <output className="ocean-gauge" aria-live="polite" aria-label={`depth ${depthM} metres, ${zone}`}>
+        {`${depthM} m · ${zone}`}
+      </output>
 
-      {/* the inscription */}
-      <div
-        style={{
-          position: "fixed",
-          left: 0, right: 0,
-          // sit just above the bottom tape strip + the device safe area so the
-          // line is always legible on mobile, never clipped by browser chrome.
-          bottom: "calc(52px + env(safe-area-inset-bottom, 0px))",
-          textAlign: "center",
-          pointerEvents: "none",
-          zIndex: 6,
+      <style
+        dangerouslySetInnerHTML={{
+          __html: `
+        .ocean-title {
+          position: fixed;
+          z-index: 3;
+          top: 78px;
+          left: var(--pad-x, 24px);
+          pointer-events: none;
+          transition: opacity 600ms ease;
+          mix-blend-mode: screen;
+        }
+        .ocean-title span {
+          display: block;
+          margin-bottom: 8px;
+          color: rgba(226, 240, 244, 0.62);
+          font-family: var(--font-mono);
+          font-size: 11px;
+          line-height: 1;
+          letter-spacing: 0.04em;
+          text-transform: lowercase;
+        }
+        .ocean-title strong {
+          display: block;
+          color: rgba(238, 247, 250, 0.9);
+          font-family: var(--font-serif);
+          font-size: 108px;
+          font-weight: 500;
+          line-height: 0.86;
+        }
+        .ocean-gauge {
+          position: fixed;
+          z-index: 3;
+          right: var(--pad-x, 24px);
+          bottom: calc(22px + env(safe-area-inset-bottom, 0px));
+          padding: 6px 12px;
+          border: 1px solid rgba(226, 240, 244, 0.14);
+          border-radius: 999px;
+          background: rgba(6, 14, 26, 0.42);
+          color: rgba(226, 240, 244, 0.72);
+          font-family: var(--font-mono);
+          font-size: 11px;
+          letter-spacing: 0.03em;
+          pointer-events: none;
+          backdrop-filter: blur(10px);
+          -webkit-backdrop-filter: blur(10px);
+        }
+
+        body:has(.ocean-body) {
+          overflow: hidden;
+          background: #03070f;
+        }
+        body:has(.ocean-body) header {
+          display: none !important;
+        }
+        body:has(.ocean-body) .oda-field-watch,
+        body:has(.ocean-body) .oda-candle-mark,
+        body:has(.ocean-body) .oda-tape-shell,
+        body:has(.ocean-body) .oda-sound-toggle {
+          display: none !important;
+        }
+
+        @media (max-width: 940px) {
+          .ocean-title { top: 34px; left: 22px; }
+          .ocean-title strong { font-size: 74px; }
+        }
+        @media (max-width: 520px) {
+          .ocean-title strong { font-size: 58px; }
+          .ocean-gauge { right: 14px; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .ocean-title { transition: none; }
+        }
+      `,
         }}
-      >
-        <span
-          role="button"
-          tabIndex={0}
-          aria-label="the river remembers the sea — bell"
-          onClick={(e) => {
-            e.stopPropagation();
-            try { getFieldAudio().bell(); } catch { /* noop */ }
-            useField.getState().recordTape("ripple", 0.55, "inscription");
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              try { getFieldAudio().bell(); } catch { /* noop */ }
-            }
-          }}
-          style={{
-            display: "inline-block",
-            padding: "4px 8px",
-            fontFamily: "var(--font-serif)",
-            fontStyle: "italic",
-            fontSize: 16,
-            color: "rgba(238, 246, 248, 0.6)",
-            letterSpacing: "0.005em",
-            cursor: "pointer",
-            pointerEvents: "auto",
-          }}
-        >
-          every river is the sea remembering its way home.
-        </span>
-      </div>
+      />
     </div>
   );
 }
@@ -784,9 +1065,10 @@ function drawGreatWave(
   ctx.closePath();
   const body = ctx.createLinearGradient(0, waveBaseY - heroAmp, 0, footY);
   body.addColorStop(0.0, "rgba(28, 64, 104, 0.0)");
-  body.addColorStop(0.12, "rgba(20, 56, 96, 0.55)");
-  body.addColorStop(0.5, "rgba(10, 34, 70, 0.70)");
-  body.addColorStop(1.0, "rgba(4, 16, 40, 0.55)");
+  body.addColorStop(0.12, "rgba(20, 56, 96, 0.52)");
+  body.addColorStop(0.42, "rgba(10, 34, 70, 0.62)");
+  body.addColorStop(0.72, "rgba(6, 22, 52, 0.34)");
+  body.addColorStop(1.0, "rgba(4, 16, 40, 0.0)");
   ctx.fillStyle = body;
   ctx.fill();
 

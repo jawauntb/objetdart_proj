@@ -1,792 +1,575 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import { useField } from "@/store/field";
-import SeaChart, { type SeaChartCandle } from "@/components/SeaChart";
 import * as haptics from "@/lib/haptics";
 
 /**
- * /tide — the phenomenology page.
+ * /tide — the lunar gravity-phase instrument.
  *
- * Night. Atlantic outside. Candle on the windowsill inside. Time is
- * horizontal: drag anywhere across the canvas to scrub. Territories —
- * abstract landmasses, never named — drift in and out as you scrub.
- * Audio rhythm morphs across the timeline so different t-positions
- * sound like different cadences.
+ * Night over the Atlantic. Candle on the sill. Floating in the sky is the
+ * mechanism of the tide itself: the Earth, its exaggerated water ellipse,
+ * and the Moon on its orbit. DRAG THE MOON around the Earth and the two
+ * tidal bulges (near-side and antipodal) swing with it — so the sea at
+ * your shore rises to HIGH when a bulge faces it and falls to LOW between.
  *
- * The page does not explain itself. There is one inscribed line at the
- * bottom. Everything else has to be felt.
+ * A second body, the Sun, also pulls. When Sun and Moon ALIGN (syzygy)
+ * the bulges reinforce — a SPRING tide, extra high and low. When they sit
+ * at right angles the pulls fight — a muted NEAP tide. Move the Sun, or
+ * snap it, to feel the difference. The Moon's face lights by its angle to
+ * the Sun, so the phase you make is the phase you see.
+ *
+ * Motion of the Moon -> phase of the tide. Everything else is felt.
  */
-// territory tone signatures — keyed on territory index (0..6). Each plays a
-// slightly different one-shot so a tapped territory has a "voice".
-function triggerTerritoryTone(idx: number): void {
-  const a = getFieldAudio();
-  switch (idx % 7) {
-    case 0: a.chime();  break;
-    case 1: a.bell();   break;
-    case 2: a.thud();   break;
-    case 3: a.chime();  break;
-    case 4: a.bell();   break;
-    case 5: a.refuse(); break;
-    case 6: a.thud();   break;
-    default: a.chime(); break;
-  }
+
+const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+const TAU = Math.PI * 2;
+
+// Real-ish ratio: the Sun's tide-raising force is ~46% of the Moon's.
+const MOON_AMP = 1.0;
+const SUN_AMP = 0.46;
+// "Your shore" sits at the top of the Earth (toward the sky). Screen-space
+// angle, y-down, so straight up is -PI/2.
+const SHORE_PHI = -Math.PI / 2;
+
+// tide height contributed by a body at orbital angle `ang` with strength `s`.
+// Two bulges 180deg apart -> the field has period PI in the body's angle.
+const bodyTide = (ang: number, s: number) => s * Math.cos(2 * (SHORE_PHI - ang));
+
+function phaseName(illum: number, waxing: boolean): string {
+  if (illum < 0.04) return "new moon";
+  if (illum > 0.96) return "full moon";
+  if (illum < 0.46) return waxing ? "waxing crescent" : "waning crescent";
+  if (illum < 0.54) return waxing ? "first quarter" : "last quarter";
+  return waxing ? "waxing gibbous" : "waning gibbous";
 }
 
-type Ripple = { id: number; x: number; y: number; size: number; tone: "gold" | "pale" };
-type TideMark = { id: number; label: string; tone: "gold" | "pale" | "blue"; strength: number };
-
 export default function Tide() {
-  // page-specific ambient bed: slow lunar water and buoy pulse
+  // keep the page ambient bed: slow lunar water and buoy pulse
   useEffect(() => { getFieldAudio().setAmbientProfile("tide"); }, []);
 
+  const rootRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const scrubT = useRef<number>(0.5); // 0..1, "now" sits at 0.5
-  const dragging = useRef<{ active: boolean; lastX: number; startX: number; startY: number; moved: boolean }>({
-    active: false, lastX: 0, startX: 0, startY: 0, moved: false,
+
+  // orbital state — the whole instrument lives in these two angles.
+  const moonAngRef = useRef(-Math.PI / 2);   // start near shore -> high tide
+  const sunAngRef = useRef(-Math.PI / 2 + 0.5);
+
+  // drag state: which body (if any) the pointer has grabbed.
+  const dragRef = useRef<{ active: boolean; id: number; target: "moon" | "sun" | null; moved: boolean; downX: number; downY: number }>(
+    { active: false, id: -1, target: null, moved: false, downX: 0, downY: 0 },
+  );
+  // live geometry, published each frame for hit-testing.
+  const geomRef = useRef({
+    earth: { x: 0, y: 0, r: 0 },
+    moon: { x: 0, y: 0, r: 0 },
+    sun: { x: 0, y: 0, r: 0 },
+    orbitR: 0,
+    sunOrbitR: 0,
   });
-  const presenceAudioRef = useRef<{ active: Set<number>; lastEnter: Map<number, number> }>({
-    active: new Set(),
-    lastEnter: new Map(),
-  });
-  // pointer for candle-lean (same model as Watch.tsx). Smoothed via lerp.
+
+  // candle flame-lean, same feel as the original scene.
   const cursor = useRef({ x: -9999, y: -9999, tx: -9999, ty: -9999, over: false });
-  // smoothed candle lean in px (additive with the existing flicker)
   const candleLean = useRef(0);
+  const candleSparkRef = useRef(0);
 
-  // Hit data populated each frame inside draw(). The pointerdown/up handlers
-  // read this to know what got tapped without re-running geometry.
-  const hitRef = useRef<{
-    territories: Array<{ idx: number; x: number; y: number; baseR: number }>;
-    ships: Array<{ idx: number; x: number; y: number; r: number }>;
-    candle: { x: number; y: number; r: number };
-    window: { x: number; y: number; w: number; h: number };
-    scrub: { x0: number; x1: number; y: number };
-  }>({
-    territories: [],
-    ships: [],
-    candle: { x: 0, y: 0, r: 0 },
-    window: { x: 0, y: 0, w: 0, h: 0 },
-    scrub: { x0: 0, x1: 0, y: 0 },
-  });
-  // The territory currently hovered (canvas-space). null = none.
-  const hoverIdxRef = useRef<number | null>(null);
-  // Per-territory pulse — set to performance.now() on tap; the draw loop
-  // brightens the territory edge for ~500ms.
-  const territoryPulseRef = useRef<Map<number, number>>(new Map());
-  // Per-frame candle spark — performance.now() on tap; draw loop flashes the
-  // halo brighter for ~350ms.
-  const candleSparkRef = useRef<number>(0);
-  const windowPulseRef = useRef<number>(0);
-  const shipPulseRef = useRef<Map<number, number>>(new Map());
-
-  // DOM ripples — small expanding circles layered on top of the canvas. We
-  // keep them in state so React can render them; each removes itself after
-  // the animation completes.
-  const [ripples, setRipples] = useState<Ripple[]>([]);
-  const rippleIdRef = useRef(0);
-  const [tideMarks, setTideMarks] = useState<TideMark[]>([]);
-  const tideMarkIdRef = useRef(0);
-  const lastScrubFeedbackRef = useRef(0);
-  const lastScrubMarkRef = useRef(0);
-
-  // Chart pull key bumps every ~600ms so the inline tide chart re-pulls
-  // synthetic tide-height candles derived from scrubT.current.
-  const [tideChartPullKey, setTideChartPullKey] = useState(0);
-  useEffect(() => {
-    const id = window.setInterval(() => setTideChartPullKey((k) => k + 1), 600);
-    return () => window.clearInterval(id);
-  }, []);
-
-  // Synthetic tide-height source: each "candle" is a slice along a 30-minute
-  // window centered on the scrub position. The shape is a slow sine (tide
-  // cycle) modulated by the current scrubT — so dragging through time
-  // reshapes the chart in lock step with the visible territory presence.
-  const tideSource = (i: number): SeaChartCandle => {
-    const sT = scrubT.current;
-    // 30 candles = 30 minutes; each one is 1 minute of tide.
-    const COUNT = 30;
-    const idxNorm = (i % COUNT) / COUNT; // 0..1 within window
-    const center = sT;
-    const u = center + (idxNorm - 0.5) * 0.1; // small +/- 5% wander
-    const open = Math.sin(u * Math.PI * 2 * 1.2) * 0.7 + Math.sin(u * Math.PI * 5.3) * 0.18;
-    const close = Math.sin((u + 0.012) * Math.PI * 2 * 1.2) * 0.7 + Math.sin((u + 0.012) * Math.PI * 5.3) * 0.18;
-    const high = Math.max(open, close) + 0.08;
-    const low = Math.min(open, close) - 0.08;
-    const volume = Math.abs(close - open) + 0.05;
-    return { open, close, high, low, volume };
-  };
+  // event-band trackers so we only fire feedback on true crossings.
+  const tideBandRef = useRef<"high" | "mid" | "low">("mid");
+  const springBandRef = useRef<"spring" | "mid" | "neap">("mid");
+  const lastBeatRef = useRef(-1);
+  const lastDragToneRef = useRef(0);
+  const lastDragTapeRef = useRef(0);
+  const reduceMotionRef = useRef(false);
+  const autoRef = useRef(false);
 
   const recordTape = useField((s) => s.recordTape);
   const recordTapeRef = useRef(recordTape);
-  useEffect(() => {
-    recordTapeRef.current = recordTape;
-  }, [recordTape]);
+  useEffect(() => { recordTapeRef.current = recordTape; }, [recordTape]);
 
-  const reduceMotionRef = useRef(false);
+  const [auto, setAuto] = useState(false);
+  const [readout, setReadout] = useState("tide held");
+  useEffect(() => { autoRef.current = auto; }, [auto]);
 
-  const addRipple = (x: number, y: number, size: number, tone: "gold" | "pale") => {
+  // DOM ripples for taps on the open sea.
+  const [ripples, setRipples] = useState<Array<{ id: number; x: number; y: number; size: number; tone: "gold" | "pale" }>>([]);
+  const rippleIdRef = useRef(0);
+  const addRipple = useCallback((x: number, y: number, size: number, tone: "gold" | "pale") => {
     if (reduceMotionRef.current) return;
     const id = ++rippleIdRef.current;
-    setRipples((rs) => [...rs, { id, x, y, size, tone }]);
-    window.setTimeout(() => {
-      setRipples((rs) => rs.filter((r) => r.id !== id));
-    }, 720);
-  };
+    setRipples((rs) => [...rs.slice(-8), { id, x, y, size, tone }]);
+    window.setTimeout(() => setRipples((rs) => rs.filter((r) => r.id !== id)), 720);
+  }, []);
 
-  const addTideMark = (label: string, tone: TideMark["tone"] = "gold", strength = 0.5) => {
-    const id = ++tideMarkIdRef.current;
-    setTideMarks((marks) => [...marks.slice(-4), { id, label, tone, strength }]);
-    window.setTimeout(() => {
-      setTideMarks((marks) => marks.filter((mark) => mark.id !== id));
-    }, 4600);
-  };
+  // snap the Sun to a fixed elongation from the Moon (spring vs neap shortcut).
+  const setSunOffset = useCallback((offset: number, label: string) => {
+    sunAngRef.current = moonAngRef.current + offset;
+    try { getFieldAudio().playNote(offset === 0 ? 67 : 60, 180); } catch { /* noop */ }
+    try { haptics.tap(); } catch { /* noop */ }
+    recordTapeRef.current("preset", offset === 0 ? 0.82 : 0.5, `tide/${label}`);
+  }, []);
+
+  const toggleAuto = useCallback(() => {
+    setAuto((v) => {
+      const next = !v;
+      autoRef.current = next;
+      try {
+        if (next) getFieldAudio().chime();
+        else getFieldAudio().thud();
+      } catch { /* noop */ }
+      recordTapeRef.current("sigil", next ? 0.7 : 0.4, next ? "tide/orbit" : "tide/still");
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     const cv = canvasRef.current;
-    if (!cv) return;
+    const root = rootRef.current;
+    if (!cv || !root) return;
     const ctx = cv.getContext("2d");
     if (!ctx) return;
 
-    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    reduceMotionRef.current = reduce;
+    const audio = getFieldAudio();
+    audio.start();
+
+    reduceMotionRef.current = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const onMq = () => { reduceMotionRef.current = mq.matches; };
+    mq.addEventListener?.("change", onMq);
+
     let raf = 0;
     const t0 = performance.now();
 
     const resize = () => {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      cv.width = window.innerWidth * dpr;
-      cv.height = window.innerHeight * dpr;
+      cv.width = Math.floor(window.innerWidth * dpr);
+      cv.height = Math.floor(window.innerHeight * dpr);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     };
     resize();
     window.addEventListener("resize", resize);
 
-    // ── territories ──────────────────────────────────────────────
-    // Each is an abstract landmass at a deterministic t-position with
-    // a unique polygonal silhouette. They REAPPEAR at later t-positions
-    // to model recurrence — a "person as landscape" returns.
-    type Territory = {
-      anchorT: number;       // primary t-position
-      recurT: number[];      // t-positions where it returns
-      seed: number;          // controls shape
-      lobes: number;         // 3–7
-      scale: number;         // baseline radius
-      hue: "warm" | "cool" | "mid";
-      name: string;          // internal label, never shown
-    };
-    const TERRITORIES: Territory[] = [
-      { anchorT: 0.10, recurT: [0.42, 0.83], seed: 0.13, lobes: 5, scale: 0.06, hue: "warm", name: "first" },
-      { anchorT: 0.20, recurT: [0.55, 0.90], seed: 0.27, lobes: 4, scale: 0.05, hue: "cool", name: "kept" },
-      { anchorT: 0.34, recurT: [0.71],       seed: 0.41, lobes: 6, scale: 0.07, hue: "mid",  name: "long" },
-      { anchorT: 0.46, recurT: [0.62, 0.94], seed: 0.55, lobes: 3, scale: 0.045, hue: "warm", name: "near" },
-      { anchorT: 0.58, recurT: [0.86],       seed: 0.61, lobes: 7, scale: 0.075, hue: "cool", name: "wide" },
-      { anchorT: 0.66, recurT: [0.18, 0.40], seed: 0.73, lobes: 5, scale: 0.055, hue: "mid",  name: "kept-again" },
-      { anchorT: 0.78, recurT: [0.30],       seed: 0.89, lobes: 6, scale: 0.06, hue: "warm", name: "later" },
-    ];
-    const SHIPS = [
-      { id: 0, t: 0.18, yFrac: 0.60, scale: 0.78, name: "skiff" },
-      { id: 1, t: 0.48, yFrac: 0.70, scale: 1.0, name: "late-sail" },
-      { id: 2, t: 0.76, yFrac: 0.82, scale: 0.88, name: "returning" },
-    ];
-
-    // deterministic per-territory polygon shape (no Math.random — same shape every render)
-    function territoryShape(t: Territory, points = 80): Array<{ a: number; r: number }> {
-      const pts: Array<{ a: number; r: number }> = [];
-      for (let i = 0; i < points; i++) {
-        const a = (i / points) * Math.PI * 2;
-        // sum sines at lobes frequencies, seeded — gives a unique silhouette
-        const r = 1 + 0.45 * Math.sin(a * t.lobes + t.seed * 7) +
-                  0.22 * Math.sin(a * (t.lobes * 2 + 1) + t.seed * 11) +
-                  0.12 * Math.sin(a * (t.lobes * 3 + 2) + t.seed * 17);
-        pts.push({ a, r });
-      }
-      return pts;
-    }
-
-    const territoryHueColor = (h: Territory["hue"], alpha: number) => {
-      switch (h) {
-        case "warm": return `rgba(200, 115, 42, ${alpha})`;   // candle
-        case "cool": return `rgba(120, 170, 210, ${alpha})`;  // azure
-        case "mid":  return `rgba(180, 130, 90, ${alpha})`;   // muted clay
-      }
+    // ── pointer handling ────────────────────────────────────────────
+    const grab = (clientX: number, clientY: number): "moon" | "sun" | null => {
+      const g = geomRef.current;
+      const dm = Math.hypot(clientX - g.moon.x, clientY - g.moon.y);
+      const ds = Math.hypot(clientX - g.sun.x, clientY - g.sun.y);
+      const moonReach = g.moon.r + 34;
+      const sunReach = g.sun.r + 34;
+      const moonOk = dm <= moonReach;
+      const sunOk = ds <= sunReach;
+      if (moonOk && sunOk) return dm <= ds ? "moon" : "sun";
+      if (moonOk) return "moon";
+      if (sunOk) return "sun";
+      return null;
     };
 
-    // ── pointer scrub + interactive surface ──────────────────────
-    // Hit-testing helpers — read from hitRef (populated per draw frame).
-    const hitTestTerritory = (x: number, y: number): number | null => {
-      let best: number | null = null;
-      let bestDist = Infinity;
-      for (const t of hitRef.current.territories) {
-        const dx = x - t.x;
-        const dy = y - t.y;
-        // Use territory baseR with slack — silhouettes wobble, so be generous.
-        const d = Math.hypot(dx, dy);
-        if (d <= t.baseR * 1.25 && d < bestDist) {
-          best = t.idx;
-          bestDist = d;
-        }
-      }
-      return best;
-    };
-
-    const hitTestCandle = (x: number, y: number): boolean => {
-      const c = hitRef.current.candle;
-      if (c.r <= 0) return false;
-      return Math.hypot(x - c.x, y - c.y) <= c.r;
-    };
-
-    const hitTestWindow = (x: number, y: number): boolean => {
-      const win = hitRef.current.window;
-      if (win.w <= 0 || win.h <= 0) return false;
-      return x >= win.x && x <= win.x + win.w && y >= win.y && y <= win.y + win.h;
-    };
-
-    const hitTestShip = (x: number, y: number): number | null => {
-      let best: number | null = null;
-      let bestD = Infinity;
-      for (const ship of hitRef.current.ships) {
-        const d = Math.hypot(x - ship.x, y - ship.y);
-        if (d <= ship.r && d < bestD) {
-          best = ship.idx;
-          bestD = d;
-        }
-      }
-      return best;
-    };
-
-    const hitTestScrub = (x: number, y: number): number | null => {
-      const s = hitRef.current.scrub;
-      if (s.x1 <= s.x0) return null;
-      if (Math.abs(y - s.y) > 18) return null;
-      const fx = Math.max(0, Math.min(1, (x - s.x0) / (s.x1 - s.x0)));
-      return fx;
+    const angleFromEarth = (clientX: number, clientY: number) => {
+      const g = geomRef.current;
+      return Math.atan2(clientY - g.earth.y, clientX - g.earth.x);
     };
 
     const onDown = (e: PointerEvent) => {
-      dragging.current.active = true;
-      dragging.current.lastX = e.clientX;
-      dragging.current.startX = e.clientX;
-      dragging.current.startY = e.clientY;
-      dragging.current.moved = false;
+      const target = grab(e.clientX, e.clientY);
+      dragRef.current = { active: true, id: e.pointerId, target, moved: false, downX: e.clientX, downY: e.clientY };
       cv.setPointerCapture?.(e.pointerId);
+      if (target) {
+        try { audio.playNote(target === "moon" ? 62 : 57, 140); } catch { /* noop */ }
+        try { haptics.tap(); } catch { /* noop */ }
+        recordTapeRef.current("object", 0.5, `tide/grab-${target}`);
+      }
     };
+
     const onMove = (e: PointerEvent) => {
-      // always track for the candle-lean
       cursor.current.tx = e.clientX;
       cursor.current.ty = e.clientY;
       cursor.current.over = true;
 
-      // hover: update the territory under the cursor for visual feedback.
-      const hov = hitTestTerritory(e.clientX, e.clientY);
-      if (hov !== hoverIdxRef.current) {
-        hoverIdxRef.current = hov;
-      }
+      const d = dragRef.current;
+      if (!d.active) return;
+      if (!d.moved && Math.hypot(e.clientX - d.downX, e.clientY - d.downY) > 5) d.moved = true;
+      if (!d.target) return;
 
-      if (!dragging.current.active) return;
+      const ang = angleFromEarth(e.clientX, e.clientY);
+      if (d.target === "moon") moonAngRef.current = ang;
+      else sunAngRef.current = ang;
 
-      const tdx = e.clientX - dragging.current.startX;
-      const tdy = e.clientY - dragging.current.startY;
-      if (!dragging.current.moved && Math.hypot(tdx, tdy) > 6) {
-        dragging.current.moved = true;
-      }
-
-      // Only treat as scrub once we've moved past the tap threshold.
-      if (!dragging.current.moved) return;
-
-      const dx = e.clientX - dragging.current.lastX;
-      dragging.current.lastX = e.clientX;
-      // 1.4x viewport-width = full scrub
-      const sensitivity = 1 / (window.innerWidth * 1.4);
-      scrubT.current = Math.max(0, Math.min(1, scrubT.current + dx * sensitivity));
       const now = performance.now();
-      if (now - lastScrubFeedbackRef.current > 220) {
-        lastScrubFeedbackRef.current = now;
-        haptics.chop();
+      if (now - lastDragToneRef.current > 90) {
+        lastDragToneRef.current = now;
+        const tN = clamp(
+          (bodyTide(moonAngRef.current, MOON_AMP) + bodyTide(sunAngRef.current, SUN_AMP)) / (MOON_AMP + SUN_AMP),
+          -1, 1,
+        );
+        try { audio.playNote(52 + Math.round((tN * 0.5 + 0.5) * 20), 90); } catch { /* noop */ }
+        try { haptics.ripple(0.18 + Math.abs(tN) * 0.22); } catch { /* noop */ }
       }
-      if (now - lastScrubMarkRef.current > 620) {
-        lastScrubMarkRef.current = now;
-        const pct = Math.round(scrubT.current * 100);
-        recordTapeRef.current("ripple", 0.28, `tide:${pct}`);
-        addTideMark(`${pct}%`, "blue", 0.48);
+      if (now - lastDragTapeRef.current > 560) {
+        lastDragTapeRef.current = now;
+        recordTapeRef.current("ripple", 0.3, `tide/${d.target}`);
       }
     };
-    const onCursorLeave = () => { cursor.current.over = false; hoverIdxRef.current = null; };
-    const onUp = (e: PointerEvent) => {
-      const wasActive = dragging.current.active;
-      const moved = dragging.current.moved;
-      dragging.current.active = false;
-      dragging.current.moved = false;
+
+    const endTap = (e: PointerEvent) => {
+      const d = dragRef.current;
+      const wasActive = d.active;
+      const wasTap = !d.moved && !d.target;
+      dragRef.current = { active: false, id: -1, target: null, moved: false, downX: 0, downY: 0 };
       try { cv.releasePointerCapture?.(e.pointerId); } catch { /* noop */ }
-
-      // Treat as a tap only if the gesture barely moved.
-      if (!wasActive || moved) return;
-      const x = e.clientX;
-      const y = e.clientY;
-
-      // 1) candle on the sill
-      if (hitTestCandle(x, y)) {
-        candleSparkRef.current = performance.now();
-        try { audio.spark(); } catch { /* noop */ }
-        haptics.tap();
-        recordTapeRef.current("candle", 0.7);
-        addRipple(x, y, 50, "gold");
-        addTideMark("candle", "gold", 0.72);
-        return;
-      }
-
-      // 2) window frame / room
-      if (hitTestWindow(x, y)) {
-        windowPulseRef.current = performance.now();
-        try { audio.bell(); } catch { /* noop */ }
-        haptics.roll();
-        recordTapeRef.current("candle", 0.45, "window");
-        addRipple(x, y, 72, "gold");
-        addTideMark("window", "gold", 0.64);
-        return;
-      }
-
-      // 3) scrub bar tap-to-jump
-      const scrubF = hitTestScrub(x, y);
-      if (scrubF !== null) {
-        scrubT.current = scrubF;
-        try { audio.chime(); } catch { /* noop */ }
-        haptics.chop();
-        recordTapeRef.current("ripple", 0.4, `scrub-${scrubF.toFixed(2)}`);
-        addTideMark(`${Math.round(scrubF * 100)}%`, "blue", 0.58);
-        return;
-      }
-
-      // 4) ship tap
-      const shipIdx = hitTestShip(x, y);
-      if (shipIdx !== null) {
-        shipPulseRef.current.set(shipIdx, performance.now());
-        try { audio.chime(); } catch { /* noop */ }
-        haptics.ripple(0.54);
-        const name = SHIPS.find((s) => s.id === shipIdx)?.name ?? String(shipIdx);
-        recordTapeRef.current("object", 0.45, `ship:${name}`);
-        addRipple(x, y, 84, "pale");
-        addTideMark(name, "pale", 0.58);
-        return;
-      }
-
-      // 5) territory tap
-      const idx = hitTestTerritory(x, y);
-      if (idx !== null) {
-        triggerTerritoryTone(idx);
-        territoryPulseRef.current.set(idx, performance.now());
-        haptics.ripple(0.72);
-        const name = TERRITORIES[idx]?.name ?? String(idx);
-        recordTapeRef.current("ripple", 0.4, `tide:${name}`);
-        addRipple(x, y, 90, "gold");
-        addTideMark(name, TERRITORIES[idx]?.hue === "cool" ? "blue" : "gold", 0.7);
-        return;
-      }
-
-      // 4) otherwise — soft chime on the open sea + a faint pale ripple.
+      if (!wasActive || !wasTap) return;
+      // a tap on the open sea — a soft chime and a pale ring.
       try { audio.chime(); } catch { /* noop */ }
-      haptics.ripple(0.32);
-      recordTapeRef.current("ripple", 0.25, "sea");
-      addRipple(x, y, 70, "pale");
-      addTideMark("sea", "pale", 0.42);
+      try { haptics.ripple(0.3); } catch { /* noop */ }
+      recordTapeRef.current("ripple", 0.24, "tide/sea");
+      addRipple(e.clientX, e.clientY, 70, "pale");
     };
+
+    const onLeave = () => { cursor.current.over = false; };
+
     cv.addEventListener("pointerdown", onDown);
     window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-    window.addEventListener("pointercancel", onUp);
-    window.addEventListener("pointerleave", onCursorLeave);
-    window.addEventListener("blur", onCursorLeave);
+    window.addEventListener("pointerup", endTap);
+    window.addEventListener("pointercancel", endTap);
+    window.addEventListener("pointerleave", onLeave);
+    window.addEventListener("blur", onLeave);
 
-    // ── audio: tide rhythm + territory presence ──────────────────
-    const audio = getFieldAudio();
-    // start the underlying ocean if not yet
-    audio.start();
-
-    let lastBeat = -1;
-    const stepBeat = (now: number, sT: number) => {
-      // overall BPM ranges 56 → 96 across t (slower earlier, faster later)
-      const bpm = 56 + sT * 40;
+    // ── audio cadence: the beat tracks the tidal phase ──────────────
+    const stepBeat = (now: number, tideN: number, band: "high" | "mid" | "low") => {
+      const bpm = 48 + (tideN * 0.5 + 0.5) * 36;
       const beatLen = 60 / bpm;
-      const beatPhase = ((now - t0) / 1000) % beatLen;
-      const beatIndex = Math.floor((now - t0) / 1000 / beatLen);
-      if (beatIndex !== lastBeat && beatPhase < 0.05) {
-        lastBeat = beatIndex;
-        // tonal layer changes by t
-        // scale: pentatonic minor shifted by t
-        const scaleSteps = [0, 3, 5, 7, 10]; // pentatonic minor
-        const baseFreq = 110 * Math.pow(2, sT * 0.5); // A2 → ~D3
-        const step = scaleSteps[beatIndex % scaleSteps.length];
-        const freq = baseFreq * Math.pow(2, step / 12);
-        // syncopation: skip beats based on t to give regional cadence
-        const skip = (sT < 0.33 && beatIndex % 4 === 1)
-                  || (sT > 0.66 && beatIndex % 3 === 2);
-        if (!skip) {
-          // a soft pluck — short oscillator handled via the chime helper-ish
-          // (audio module has no direct "tone with explicit freq" — use chime
-          // which produces a soft fall; reasonable for rhythm)
-          // we'll dispatch via chime for now; consider extending audio.ts later
-          if (sT > 0.5) audio.chime();
-          else audio.thud();
-          void freq; // freq is the design — kept for a future audio extension
-        }
-      }
+      const idx = Math.floor((now - t0) / 1000 / beatLen);
+      const phase = ((now - t0) / 1000) % beatLen;
+      if (idx === lastBeatRef.current || phase > 0.06) return;
+      lastBeatRef.current = idx;
+      // sparse — skip beats in the muddy middle band so highs/lows sing.
+      if (band === "mid" && idx % 2 === 0) return;
+      const midi = 50 + Math.round((tideN * 0.5 + 0.5) * 15);
+      try {
+        if (band === "high") audio.playNote(midi + 5, 260);
+        else if (band === "low") audio.playNote(midi - 4, 320);
+        else audio.playNote(midi, 200);
+      } catch { /* noop */ }
     };
 
-    // ── render loop ──────────────────────────────────────────────
-    const draw = (now: number) => {
+    // ── render loop ─────────────────────────────────────────────────
+    const draw = (nowMs: number) => {
+      const now = nowMs;
       const t = (now - t0) / 1000;
       const w = window.innerWidth;
       const h = window.innerHeight;
-      const sT = scrubT.current;
-      const motion = reduce ? 0 : 1;
+      const motion = reduceMotionRef.current ? 0 : 1;
 
-      // night palette: deep prussian sky → black-sea below, with a band
-      // of mid-azure for the horizon
-      const skyG = ctx.createLinearGradient(0, 0, 0, h * 0.55);
-      skyG.addColorStop(0,    "rgba( 18,  24,  38, 1.0)");
-      skyG.addColorStop(0.45, "rgba( 26,  46,  76, 1.0)");
-      skyG.addColorStop(1,    "rgba( 42,  76, 112, 1.0)");
+      // auto-orbit: the passage of hours moves the Moon on its own.
+      if (autoRef.current && !dragRef.current.target && motion) {
+        moonAngRef.current = (moonAngRef.current + 0.0055) % TAU;
+      }
+
+      const moonAng = moonAngRef.current;
+      const sunAng = sunAngRef.current;
+
+      // tide height at the shore, exaggerated for legibility.
+      const rawTide = bodyTide(moonAng, MOON_AMP) + bodyTide(sunAng, SUN_AMP);
+      const tideN = clamp(rawTide / (MOON_AMP + SUN_AMP), -1, 1);
+      // alignment: +1 at syzygy (new or full) -> spring; -1 at quadrature -> neap.
+      const align = Math.cos(2 * (moonAng - sunAng));
+      // moon illumination follows elongation from the Sun.
+      const elong = ((moonAng - sunAng) % TAU + TAU) % TAU;
+      const illum = (1 - Math.cos(elong)) / 2;
+      const waxing = Math.sin(elong) > 0;
+
+      // ── sky ──────────────────────────────────────────────────────
+      const skyG = ctx.createLinearGradient(0, 0, 0, h * 0.62);
+      skyG.addColorStop(0, "rgba(14, 19, 32, 1)");
+      skyG.addColorStop(0.5, "rgba(22, 40, 68, 1)");
+      skyG.addColorStop(1, "rgba(38, 68, 104, 1)");
       ctx.fillStyle = skyG;
-      ctx.fillRect(0, 0, w, h * 0.55);
+      ctx.fillRect(0, 0, w, h);
 
-      // sea
-      const seaY = h * 0.55;
-      const seaG = ctx.createLinearGradient(0, seaY, 0, h);
-      seaG.addColorStop(0,   "rgba( 30,  56,  88, 1.0)");
-      seaG.addColorStop(0.4, "rgba( 18,  36,  64, 1.0)");
-      seaG.addColorStop(1,   "rgba(  6,  14,  28, 1.0)");
-      ctx.fillStyle = seaG;
-      ctx.fillRect(0, seaY, w, h - seaY);
-
-      // a hairline horizon
-      ctx.strokeStyle = "rgba(220, 220, 235, 0.18)";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(0, seaY + 0.5);
-      ctx.lineTo(w, seaY + 0.5);
-      ctx.stroke();
-
-      // far stars (deterministic — same constellation each render)
-      ctx.fillStyle = "rgba(240, 244, 248, 0.55)";
-      for (let i = 0; i < 60; i++) {
-        const sx = ((Math.sin(i * 12.9898) * 43758.5453) % 1 + 1) % 1;
+      // stars (deterministic constellation, faint twinkle)
+      ctx.fillStyle = "rgba(240, 244, 248, 0.6)";
+      for (let i = 0; i < 70; i++) {
+        const sx = (((Math.sin(i * 12.9898) * 43758.5453) % 1) + 1) % 1;
         const sy = (((Math.sin(i * 78.233) * 43758.5453) % 1) + 1) % 1;
-        const x = sx * w;
-        const y = sy * (h * 0.45);
-        // very subtle twinkle
-        const tw = 0.6 + 0.4 * Math.sin(t * 1.5 + i * 1.3);
-        ctx.globalAlpha = 0.45 * tw;
-        ctx.fillRect(x, y, 1.2, 1.2);
+        const tw = 0.6 + 0.4 * Math.sin(t * 1.4 + i * 1.3);
+        ctx.globalAlpha = 0.42 * tw;
+        ctx.fillRect(sx * w, sy * h * 0.5, 1.2, 1.2);
       }
       ctx.globalAlpha = 1;
 
-      // moon-glint streak — sweeps slowly with sT (anchored to time of night)
-      const moonX = w * (0.3 + sT * 0.5);
-      const moonG = ctx.createLinearGradient(moonX, seaY, moonX, h);
-      moonG.addColorStop(0, "rgba(240, 245, 252, 0.40)");
-      moonG.addColorStop(0.5, "rgba(240, 245, 252, 0.10)");
-      moonG.addColorStop(1, "rgba(240, 245, 252, 0)");
-      ctx.fillStyle = moonG;
-      ctx.fillRect(moonX - 28, seaY, 56, h - seaY);
+      // ── sea: its level rises and falls with the computed tide ─────
+      const meanSeaY = h * 0.64;
+      const swing = h * 0.085;
+      const waterY = meanSeaY - tideN * swing;
+      const seaG = ctx.createLinearGradient(0, waterY, 0, h);
+      seaG.addColorStop(0, "rgba(34, 62, 96, 1)");
+      seaG.addColorStop(0.4, "rgba(18, 38, 66, 1)");
+      seaG.addColorStop(1, "rgba(6, 14, 28, 1)");
+      ctx.fillStyle = seaG;
+      ctx.fillRect(0, waterY, w, h - waterY);
 
-      // soft wave lines on the sea, slower at low sT, faster at high sT
-      const speedScale = 0.35 + sT * 0.8;
-      const swellLfo = Math.sin(t * Math.PI * 2 * (0.10 + sT * 0.10));
-      const ampMod = 1 + swellLfo * 0.20;
+      // moon-glint on the water beneath the Moon's azimuth
+      const glintX = clamp(w * 0.5 + Math.cos(moonAng) * w * 0.28, 40, w - 40);
+      const glint = ctx.createLinearGradient(glintX, waterY, glintX, h);
+      glint.addColorStop(0, `rgba(232, 240, 252, ${0.28 + illum * 0.22})`);
+      glint.addColorStop(1, "rgba(232, 240, 252, 0)");
+      ctx.fillStyle = glint;
+      ctx.fillRect(glintX - 30, waterY, 60, h - waterY);
+
+      // swell lines — cadence quickens toward high tide
+      const speed = 0.3 + (tideN * 0.5 + 0.5) * 0.9;
       const swells = [
-        { yFrac: 0.62, amp: 6,  freq: 0.011, color: "rgba(160, 200, 230, 0.45)" },
-        { yFrac: 0.72, amp: 10, freq: 0.0095, color: "rgba(120, 170, 210, 0.55)" },
-        { yFrac: 0.84, amp: 16, freq: 0.0080, color: "rgba(80, 130, 180, 0.65)" },
-        { yFrac: 0.94, amp: 22, freq: 0.0065, color: "rgba(50, 100, 150, 0.78)" },
+        { off: 0.04, amp: 6, freq: 0.011, color: "rgba(160, 200, 230, 0.42)" },
+        { off: 0.13, amp: 10, freq: 0.0095, color: "rgba(120, 170, 210, 0.5)" },
+        { off: 0.24, amp: 15, freq: 0.008, color: "rgba(80, 130, 180, 0.6)" },
+        { off: 0.34, amp: 21, freq: 0.0065, color: "rgba(50, 100, 150, 0.72)" },
       ];
-      for (const sw of swells) {
-        const y0 = h * sw.yFrac;
-        ctx.strokeStyle = sw.color;
+      for (const s of swells) {
+        const y0 = waterY + (h - waterY) * s.off;
+        ctx.strokeStyle = s.color;
         ctx.lineWidth = 1.3;
         ctx.beginPath();
         for (let x = 0; x <= w; x += 4) {
-          const ph = x * sw.freq + t * speedScale * motion;
+          const ph = x * s.freq + t * speed * motion;
           const v = Math.sin(ph) + 0.35 * Math.sin(ph * 2.3);
-          const yy = y0 + v * sw.amp * ampMod;
+          const yy = y0 + v * s.amp;
           if (x === 0) ctx.moveTo(x, yy);
           else ctx.lineTo(x, yy);
         }
         ctx.stroke();
       }
-
-      const drawShip = (
-        x: number,
-        y: number,
-        scale: number,
-        pulse: number,
-      ) => {
-        ctx.save();
-        ctx.translate(x, y);
-        ctx.scale(scale * (1 + pulse * 0.08), scale * (1 + pulse * 0.08));
-        ctx.strokeStyle = `rgba(242, 238, 230, ${0.66 + pulse * 0.24})`;
-        ctx.fillStyle = `rgba(10, 18, 30, ${0.74 + pulse * 0.12})`;
-        ctx.lineWidth = 1.2;
-        ctx.beginPath();
-        ctx.moveTo(-22, 8);
-        ctx.quadraticCurveTo(-8, 18, 18, 8);
-        ctx.lineTo(25, 1);
-        ctx.quadraticCurveTo(2, 6, -25, 1);
-        ctx.closePath();
-        ctx.fill();
-        ctx.stroke();
-        ctx.strokeStyle = `rgba(242, 238, 230, ${0.74 + pulse * 0.2})`;
-        ctx.beginPath();
-        ctx.moveTo(-2, 2);
-        ctx.lineTo(-2, -31);
-        ctx.stroke();
-        ctx.fillStyle = `rgba(220, 235, 255, ${0.48 + pulse * 0.26})`;
-        ctx.beginPath();
-        ctx.moveTo(0, -29);
-        ctx.quadraticCurveTo(18, -17, 4, -2);
-        ctx.lineTo(0, -2);
-        ctx.closePath();
-        ctx.fill();
-        ctx.fillStyle = `rgba(200, 115, 42, ${0.34 + pulse * 0.34})`;
-        ctx.beginPath();
-        ctx.moveTo(-4, -25);
-        ctx.quadraticCurveTo(-18, -13, -5, -1);
-        ctx.closePath();
-        ctx.fill();
-        if (pulse > 0) {
-          ctx.strokeStyle = `rgba(255, 220, 160, ${pulse * 0.65})`;
-          ctx.beginPath();
-          ctx.ellipse(0, 4, 34, 12, 0, 0, Math.PI * 2);
-          ctx.stroke();
-        }
-        ctx.restore();
-      };
-
-      const shipHits: Array<{ idx: number; x: number; y: number; r: number }> = [];
-      for (const ship of SHIPS) {
-        const wrap = ((ship.t - sT + 0.5) % 1 + 1) % 1;
-        const x = wrap * w;
-        const y = h * ship.yFrac + Math.sin(t * 0.7 + ship.id * 1.4) * 4 * motion;
-        const depthScale = ship.scale * (0.82 + ship.yFrac * 0.28);
-        const pulseAt = shipPulseRef.current.get(ship.id);
-        const pulseAge = pulseAt ? now - pulseAt : Infinity;
-        if (pulseAt && pulseAge > 1200) shipPulseRef.current.delete(ship.id);
-        const pulse = pulseAge < 720 ? Math.max(0, 1 - pulseAge / 720) : 0;
-        drawShip(x, y, depthScale, pulse);
-        shipHits.push({ idx: ship.id, x, y, r: 36 * depthScale });
-      }
-      hitRef.current.ships = shipHits;
-
-      // territories — drifting landmasses, fading in as sT approaches them
-      const cx = w * 0.5;
-      const cy = h * 0.66;
-      const presenceWindow = 0.16; // half-width of presence
-      const nowActive = new Set<number>();
-      // Rebuild the per-frame territory hit list. We only register the
-      // largest-presence occurrence per territory so a tap maps to one idx.
-      const hitTerritories: Array<{ idx: number; x: number; y: number; baseR: number; presence: number }> = [];
-
-      TERRITORIES.forEach((tr, idx) => {
-        const positions = [tr.anchorT, ...tr.recurT];
-        positions.forEach((pos, posIdx) => {
-          const dist = Math.abs(sT - pos);
-          if (dist > presenceWindow) return;
-          const presence = 1 - dist / presenceWindow; // 0..1
-          if (presence < 0.06) return;
-          nowActive.add(idx);
-
-          // each occurrence drifts slightly so it doesn't sit in lockstep
-          const drift = (posIdx + 1) * 0.13 + idx * 0.21;
-          const driftX = Math.sin(t * 0.16 + drift * 7) * w * 0.12;
-          const driftY = Math.cos(t * 0.12 + drift * 5) * h * 0.06;
-
-          // first occurrence is the anchor (largest); recurrences slightly smaller
-          const sizeFactor = posIdx === 0 ? 1.0 : 0.74;
-          const baseR = Math.min(w, h) * tr.scale * sizeFactor * (0.6 + presence * 0.6);
-
-          const x = cx + driftX + (posIdx - 0.5) * w * 0.10;
-          const y = cy + driftY;
-
-          // is this the territory currently hovered or pulsing from a tap?
-          const isHover = hoverIdxRef.current === idx;
-          const pulseAt = territoryPulseRef.current.get(idx);
-          const pulseAge = pulseAt ? now - pulseAt : Infinity;
-          const isPulsing = pulseAge < 500;
-          if (!isPulsing && pulseAt !== undefined && pulseAge > 1500) {
-            territoryPulseRef.current.delete(idx);
-          }
-          // visual boosts (skipped under prefers-reduced-motion):
-          const motionBoost = reduce ? 0 : 1;
-          const pulseBoost = isPulsing ? (1 - pulseAge / 500) : 0;
-          const inflate = motionBoost * (isHover ? 0.06 : 0) + motionBoost * pulseBoost * 0.10;
-          const effR = baseR * (1 + inflate);
-
-          // record hit info for the highest-presence occurrence (the anchor)
-          if (posIdx === 0) {
-            hitTerritories.push({ idx, x, y, baseR: effR, presence });
-          }
-
-          const pts = territoryShape(tr);
-
-          // territory fill — soft, with hue. Hover brightens slightly.
-          const fillAlpha = 0.08 * presence + (isHover ? 0.04 : 0);
-          ctx.fillStyle = territoryHueColor(tr.hue, fillAlpha);
-          ctx.beginPath();
-          for (let i = 0; i < pts.length; i++) {
-            const p = pts[i];
-            const a = p.a;
-            const r = p.r * effR * (1 + Math.sin(t * 0.5 + a * 3 + tr.seed * 4) * 0.04);
-            const px = x + Math.cos(a) * r;
-            const py = y + Math.sin(a) * r;
-            if (i === 0) ctx.moveTo(px, py);
-            else ctx.lineTo(px, py);
-          }
-          ctx.closePath();
-          ctx.fill();
-
-          // territory edge — thin, etched. Hover brightens the stroke;
-          // a pulse momentarily thickens it.
-          const strokeAlpha = (isHover ? 0.85 : 0.55) * presence + pulseBoost * 0.30;
-          ctx.strokeStyle = territoryHueColor(tr.hue, Math.min(1, strokeAlpha));
-          ctx.lineWidth = 1.1 + (isHover ? 0.7 : 0) + pulseBoost * 1.4;
-          ctx.beginPath();
-          for (let i = 0; i < pts.length; i++) {
-            const p = pts[i];
-            const a = p.a;
-            const r = p.r * effR * (1 + Math.sin(t * 0.5 + a * 3 + tr.seed * 4) * 0.04);
-            const px = x + Math.cos(a) * r;
-            const py = y + Math.sin(a) * r;
-            if (i === 0) ctx.moveTo(px, py);
-            else ctx.lineTo(px, py);
-          }
-          ctx.closePath();
-          ctx.stroke();
-
-          // hover/pulse: a small pulsing inner shape at the centroid
-          if (isHover || isPulsing) {
-            const innerR = effR * (0.18 + (isHover ? 0.04 : 0) + pulseBoost * 0.12);
-            ctx.strokeStyle = territoryHueColor(tr.hue, 0.7);
-            ctx.lineWidth = 1.0;
-            ctx.beginPath();
-            ctx.arc(x, y, innerR, 0, Math.PI * 2);
-            ctx.stroke();
-          }
-        });
-      });
-      // Publish the new hit list for the pointer handlers.
-      hitRef.current.territories = hitTerritories.map(({ idx, x, y, baseR }) => ({ idx, x, y, baseR }));
-
-      // play a chime when a territory newly enters presence (debounced)
-      const presenceAudio = presenceAudioRef.current;
-      nowActive.forEach((idx) => {
-        if (!presenceAudio.active.has(idx)) {
-          const last = presenceAudio.lastEnter.get(idx) ?? 0;
-          if (now - last > 1400) {
-            // gentle chime, not on every render
-            audio.chime();
-            presenceAudio.lastEnter.set(idx, now);
-          }
-        }
-      });
-      presenceAudio.active = nowActive;
-
-      // rhythm pulse
-      stepBeat(now, sT);
-
-      // window frame — interior, on the right edge, suggesting a room
-      const narrow = w < 700;
-      const winLeft = narrow ? w * 0.58 : w * 0.78;
-      const winTop = narrow ? h * 0.14 : h * 0.18;
-      const winRight = w - (narrow ? 22 : 36);
-      const winBottom = narrow ? h * 0.52 : h * 0.62;
-      const windowAge = windowPulseRef.current ? now - windowPulseRef.current : Infinity;
-      const windowPulse = windowAge < 700 ? Math.max(0, 1 - windowAge / 700) : 0;
-      if (windowPulse > 0) {
-        ctx.strokeStyle = `rgba(255, 210, 140, ${windowPulse * 0.55})`;
-        ctx.lineWidth = 10;
-        ctx.strokeRect(winLeft - 4, winTop - 4, winRight - winLeft + 8, winBottom - winTop + 8);
-      }
-      // sill
-      ctx.fillStyle = "rgba(80, 56, 36, 0.86)";
-      ctx.fillRect(winLeft - 12, winBottom - 6, (winRight + 12) - (winLeft - 12), 18);
-      // frame
-      ctx.strokeStyle = "rgba(80, 56, 36, 0.88)";
-      ctx.lineWidth = 5;
-      ctx.strokeRect(winLeft, winTop, winRight - winLeft, winBottom - winTop);
-      // mullion
-      ctx.lineWidth = 3;
+      // waterline highlight
+      ctx.strokeStyle = `rgba(220, 235, 255, ${0.2 + Math.abs(tideN) * 0.14})`;
+      ctx.lineWidth = 1.2;
       ctx.beginPath();
-      ctx.moveTo((winLeft + winRight) / 2, winTop);
-      ctx.lineTo((winLeft + winRight) / 2, winBottom);
+      ctx.moveTo(0, waterY);
+      ctx.lineTo(w, waterY);
       ctx.stroke();
-      hitRef.current.window = {
-        x: winLeft - 16,
-        y: winTop - 16,
-        w: winRight - winLeft + 32,
-        h: winBottom - winTop + 34,
+
+      // ── tide staff: a shore ruler with HIGH / MEAN / LOW + float ──
+      const staffX = w < 620 ? 30 : 52;
+      const hiY = meanSeaY - swing;
+      const loY = meanSeaY + swing;
+      ctx.strokeStyle = "rgba(242, 238, 230, 0.28)";
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.moveTo(staffX, hiY);
+      ctx.lineTo(staffX, loY);
+      ctx.stroke();
+      const ticks: Array<[number, string]> = [[hiY, "high"], [meanSeaY, "mean"], [loY, "low"]];
+      ctx.font = "10px var(--font-mono, monospace)";
+      ctx.textBaseline = "middle";
+      for (const [ty, label] of ticks) {
+        ctx.strokeStyle = "rgba(242, 238, 230, 0.35)";
+        ctx.beginPath();
+        ctx.moveTo(staffX - 5, ty);
+        ctx.lineTo(staffX + 5, ty);
+        ctx.stroke();
+        ctx.fillStyle = "rgba(242, 238, 230, 0.42)";
+        ctx.fillText(label, staffX + 10, ty);
+      }
+      // float at the current level
+      const floatY = meanSeaY - tideN * swing;
+      ctx.fillStyle = "rgba(200, 115, 42, 0.95)";
+      ctx.beginPath();
+      ctx.arc(staffX, floatY, 5.4, 0, TAU);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255, 220, 160, 0.7)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(staffX, floatY, 9, 0, TAU);
+      ctx.stroke();
+
+      // ── the mechanism: Earth, water ellipse, orbit, Moon, Sun ─────
+      const ex = w * 0.5;
+      const ey = h * (w < 620 ? 0.34 : 0.36);
+      const earthR = Math.min(w, h) * (w < 620 ? 0.072 : 0.06);
+      const orbitR = Math.min(w * 0.32, h * 0.24);
+      const sunOrbitR = orbitR * 1.34;
+
+      // orbit rings
+      ctx.strokeStyle = "rgba(220, 235, 255, 0.12)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(ex, ey, orbitR, 0, TAU);
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(255, 220, 160, 0.09)";
+      ctx.beginPath();
+      ctx.arc(ex, ey, sunOrbitR, 0, TAU);
+      ctx.stroke();
+
+      // alignment line — glows near spring (syzygy)
+      const springGlow = clamp((align - 0.2) / 0.8, 0, 1);
+      if (springGlow > 0.01) {
+        ctx.save();
+        ctx.strokeStyle = `rgba(255, 224, 168, ${springGlow * 0.5})`;
+        ctx.lineWidth = 1 + springGlow * 2;
+        ctx.beginPath();
+        ctx.moveTo(ex + Math.cos(moonAng) * orbitR, ey + Math.sin(moonAng) * orbitR);
+        ctx.lineTo(ex - Math.cos(moonAng) * orbitR, ey - Math.sin(moonAng) * orbitR);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // water ellipse — long axis points at the Moon, fatter near spring.
+      const bulge = 0.24 + (align * 0.5 + 0.5) * 0.4; // 0.24 (neap) .. 0.64 (spring)
+      ctx.save();
+      ctx.translate(ex, ey);
+      ctx.rotate(moonAng);
+      const rx = earthR * (1 + bulge);
+      const ry = earthR * (1 - bulge * 0.42);
+      const wg = ctx.createRadialGradient(0, 0, earthR * 0.4, 0, 0, rx);
+      wg.addColorStop(0, "rgba(90, 150, 200, 0.05)");
+      wg.addColorStop(0.7, "rgba(110, 170, 220, 0.28)");
+      wg.addColorStop(1, "rgba(150, 200, 240, 0.06)");
+      ctx.fillStyle = wg;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, rx, ry, 0, 0, TAU);
+      ctx.fill();
+      ctx.strokeStyle = `rgba(180, 216, 245, ${0.3 + springGlow * 0.35})`;
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, rx, ry, 0, 0, TAU);
+      ctx.stroke();
+      ctx.restore();
+
+      // Earth body
+      const eg = ctx.createRadialGradient(ex - earthR * 0.3, ey - earthR * 0.3, earthR * 0.1, ex, ey, earthR);
+      eg.addColorStop(0, "rgba(70, 120, 150, 1)");
+      eg.addColorStop(0.6, "rgba(34, 74, 104, 1)");
+      eg.addColorStop(1, "rgba(16, 38, 62, 1)");
+      ctx.fillStyle = eg;
+      ctx.beginPath();
+      ctx.arc(ex, ey, earthR, 0, TAU);
+      ctx.fill();
+
+      // shore marker on the Earth rim (the point whose tide we read)
+      const shoreX = ex + Math.cos(SHORE_PHI) * earthR;
+      const shoreY = ey + Math.sin(SHORE_PHI) * earthR;
+      const shoreHot = clamp(tideN * 0.5 + 0.5, 0, 1);
+      ctx.fillStyle = `rgba(255, ${Math.round(190 + shoreHot * 40)}, ${Math.round(120 + (1 - shoreHot) * 60)}, 0.95)`;
+      ctx.beginPath();
+      ctx.arc(shoreX, shoreY, 4 + shoreHot * 2, 0, TAU);
+      ctx.fill();
+
+      // Sun — draggable warm body on the outer ring
+      const sx = ex + Math.cos(sunAng) * sunOrbitR;
+      const sy = ey + Math.sin(sunAng) * sunOrbitR;
+      const sunR = earthR * 0.62;
+      const sunHalo = ctx.createRadialGradient(sx, sy, 0, sx, sy, sunR * 3);
+      sunHalo.addColorStop(0, "rgba(255, 214, 130, 0.5)");
+      sunHalo.addColorStop(0.4, "rgba(255, 180, 90, 0.18)");
+      sunHalo.addColorStop(1, "rgba(255, 180, 90, 0)");
+      ctx.fillStyle = sunHalo;
+      ctx.beginPath();
+      ctx.arc(sx, sy, sunR * 3, 0, TAU);
+      ctx.fill();
+      ctx.fillStyle = "rgba(255, 226, 158, 1)";
+      ctx.beginPath();
+      ctx.arc(sx, sy, sunR, 0, TAU);
+      ctx.fill();
+
+      // Moon — on the inner orbit, lit by its angle to the Sun
+      const mx = ex + Math.cos(moonAng) * orbitR;
+      const my = ey + Math.sin(moonAng) * orbitR;
+      const moonR = earthR * 0.5;
+      const grabbedMoon = dragRef.current.target === "moon";
+      // soft grab halo
+      ctx.fillStyle = `rgba(226, 236, 250, ${grabbedMoon ? 0.22 : 0.12})`;
+      ctx.beginPath();
+      ctx.arc(mx, my, moonR * (grabbedMoon ? 2 : 1.6), 0, TAU);
+      ctx.fill();
+      // dark disc
+      ctx.fillStyle = "rgba(40, 54, 78, 1)";
+      ctx.beginPath();
+      ctx.arc(mx, my, moonR, 0, TAU);
+      ctx.fill();
+      // lit crescent/gibbous: clip to the disc, draw a lit lens toward the Sun
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(mx, my, moonR, 0, TAU);
+      ctx.clip();
+      const lit = ctx.createRadialGradient(
+        mx + Math.cos(sunAng) * moonR * 0.9,
+        my + Math.sin(sunAng) * moonR * 0.9,
+        0,
+        mx + Math.cos(sunAng) * moonR * 0.9,
+        my + Math.sin(sunAng) * moonR * 0.9,
+        moonR * (0.7 + illum * 1.8),
+      );
+      lit.addColorStop(0, "rgba(244, 246, 250, 0.98)");
+      lit.addColorStop(1, "rgba(244, 246, 250, 0)");
+      ctx.fillStyle = lit;
+      ctx.fillRect(mx - moonR, my - moonR, moonR * 2, moonR * 2);
+      ctx.restore();
+      ctx.strokeStyle = "rgba(226, 236, 250, 0.55)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(mx, my, moonR, 0, TAU);
+      ctx.stroke();
+
+      // publish geometry for hit-testing
+      geomRef.current = {
+        earth: { x: ex, y: ey, r: earthR },
+        moon: { x: mx, y: my, r: moonR },
+        sun: { x: sx, y: sy, r: sunR },
+        orbitR,
+        sunOrbitR,
       };
 
-      // the candle — on the windowsill, paper-warm against the night
-      const candleX = winLeft + (winRight - winLeft) * 0.5;
-      const candleBaseY = winBottom + 2;
-      const candleW = narrow ? 18 : 22;
-      const candleH = narrow ? 62 : 78;
+      // ── candle on the sill (kept atmosphere + flame-lean) ─────────
+      const narrow = w < 700;
+      const sillY = h - (narrow ? 26 : 34);
+      const candleX = w - (narrow ? 56 : 96);
+      const candleH = narrow ? 58 : 74;
+      const candleW = narrow ? 17 : 21;
+      const candleBaseY = sillY;
 
-      // ── cursor-lean: flame tips toward the pointer when nearby ──
-      // ease the smoothed cursor toward the live pointer
+      // sill ledge
+      ctx.fillStyle = "rgba(80, 56, 36, 0.9)";
+      ctx.fillRect(candleX - 44, sillY, 88, 12);
+
       const cur = cursor.current;
       if (cur.tx > -9000) {
-        cur.x = cur.x < -9000 ? cur.tx : cur.x + (cur.tx - cur.x) * 0.20;
-        cur.y = cur.y < -9000 ? cur.ty : cur.y + (cur.ty - cur.y) * 0.20;
+        cur.x = cur.x < -9000 ? cur.tx : cur.x + (cur.tx - cur.x) * 0.2;
+        cur.y = cur.y < -9000 ? cur.ty : cur.y + (cur.ty - cur.y) * 0.2;
       }
-      // target lean — flame top sits roughly at candleBaseY - candleH - 18
       const flameAnchorX = candleX;
       const flameAnchorY = candleBaseY - candleH - 18;
       let leanTarget = 0;
       if (cur.over && motion && cur.x > -9000) {
         const dx = cur.x - flameAnchorX;
         const dy = cur.y - flameAnchorY;
-        const d = Math.hypot(dx, dy);
-        // within ~300px, pull toward cursor; cap at 6px
-        const pull = Math.max(0, 1 - d / 300);
-        leanTarget = (dx / (d || 1)) * pull * 6;
+        const dd = Math.hypot(dx, dy);
+        const pull = Math.max(0, 1 - dd / 300);
+        leanTarget = (dx / (dd || 1)) * pull * 6;
       }
       candleLean.current += (leanTarget - candleLean.current) * 0.15;
       const leanX = candleLean.current;
-      // candle spark — when tapped, the halo flashes brighter for ~350ms.
+
       const sparkAge = candleSparkRef.current ? now - candleSparkRef.current : Infinity;
-      const sparkBoost = sparkAge < 350 ? (1 - sparkAge / 350) : 0;
-      // halo
-      const flickerR = (44 + Math.sin(t * 3.4) * 6 + Math.sin(t * 7.1) * 3) * (motion || 1) * (1 + sparkBoost * 0.6);
+      const sparkBoost = sparkAge < 350 ? 1 - sparkAge / 350 : 0;
+      const flickerR = (40 + Math.sin(t * 3.4) * 6 + Math.sin(t * 7.1) * 3) * (motion || 1) * (1 + sparkBoost * 0.6);
       const halo = ctx.createRadialGradient(candleX, candleBaseY - candleH - 10, 0, candleX, candleBaseY - candleH - 10, flickerR);
-      halo.addColorStop(0, `rgba(255, 200, 130, ${0.55 + sparkBoost * 0.40})`);
-      halo.addColorStop(0.4, `rgba(200, 115, 42, ${0.30 + sparkBoost * 0.30})`);
+      halo.addColorStop(0, `rgba(255, 200, 130, ${0.5 + sparkBoost * 0.4})`);
+      halo.addColorStop(0.4, `rgba(200, 115, 42, ${0.28 + sparkBoost * 0.3})`);
       halo.addColorStop(1, "rgba(200, 115, 42, 0)");
       ctx.fillStyle = halo;
       ctx.beginPath();
-      ctx.arc(candleX, candleBaseY - candleH - 10, flickerR, 0, 7);
+      ctx.arc(candleX, candleBaseY - candleH - 10, flickerR, 0, TAU);
       ctx.fill();
 
-      // publish candle hit info (a generous circle around the flame & body).
-      hitRef.current.candle = {
-        x: candleX,
-        y: candleBaseY - candleH * 0.5,
-        r: Math.max(36, candleH * 0.65),
-      };
-      // candle body
       ctx.fillStyle = "rgba(242, 238, 230, 0.95)";
       ctx.fillRect(candleX - candleW / 2, candleBaseY - candleH, candleW, candleH);
-      ctx.strokeStyle = "rgba(21,23,26,0.45)";
+      ctx.strokeStyle = "rgba(21,23,26,0.4)";
       ctx.lineWidth = 1;
       ctx.strokeRect(candleX - candleW / 2, candleBaseY - candleH, candleW, candleH);
-      // wick
       ctx.strokeStyle = "rgba(21,23,26,0.85)";
       ctx.lineWidth = 1.4;
       ctx.beginPath();
       ctx.moveTo(candleX, candleBaseY - candleH - 1);
       ctx.lineTo(candleX, candleBaseY - candleH - 9);
       ctx.stroke();
-      // flame — flicker (existing) + cursor-lean (new) are additive
       const flameJitter = motion ? Math.sin(t * 9) * 1.2 + Math.cos(t * 5.3) * 0.8 : 0;
       ctx.fillStyle = "rgba(255, 200, 130, 0.85)";
       ctx.beginPath();
@@ -801,36 +584,43 @@ export default function Tide() {
       ctx.quadraticCurveTo(candleX - 2.6 + leanX * 0.6, candleBaseY - candleH - 13, candleX, candleBaseY - candleH - 9);
       ctx.fill();
 
-      // scrub-position indicator — a gold tide rail showing where in the tide we are
-      const indicatorY = h - (narrow ? 96 : 76);
-      ctx.strokeStyle = "rgba(200, 115, 42, 0.30)";
-      ctx.lineWidth = 1.4;
-      ctx.beginPath();
-      ctx.moveTo(40, indicatorY);
-      ctx.lineTo(w - 40, indicatorY);
-      ctx.stroke();
-      for (let i = 0; i <= 6; i++) {
-        const tx = 40 + (i / 6) * (w - 80);
-        const tideLift = Math.sin((i / 6) * Math.PI * 2 + sT * Math.PI * 2) * 7;
-        ctx.fillStyle = i % 2 === 0 ? "rgba(220,235,255,0.62)" : "rgba(200,115,42,0.56)";
-        ctx.beginPath();
-        ctx.arc(tx, indicatorY + tideLift, i % 2 === 0 ? 2.6 : 3.4, 0, Math.PI * 2);
-        ctx.fill();
+      // ── events: tide-band + spring crossings drive haptics/bell ───
+      const band: "high" | "mid" | "low" = tideN > 0.55 ? "high" : tideN < -0.55 ? "low" : "mid";
+      if (band !== tideBandRef.current) {
+        if (band === "high") {
+          try { audio.chime(); } catch { /* noop */ }
+          try { haptics.ripple(0.6); } catch { /* noop */ }
+          recordTapeRef.current("ripple", 0.66, "tide/high");
+          addRipple(shoreX, shoreY, 96, "gold");
+        } else if (band === "low") {
+          try { audio.thud(); } catch { /* noop */ }
+          try { haptics.roll(); } catch { /* noop */ }
+          recordTapeRef.current("ripple", 0.5, "tide/low");
+        }
+        tideBandRef.current = band;
       }
-      const ix = 40 + sT * (w - 80);
-      // small mark
-      ctx.fillStyle = "rgba(200, 115, 42, 0.95)";
-      ctx.beginPath();
-      ctx.arc(ix, indicatorY, 6, 0, 7);
-      ctx.fill();
-      ctx.strokeStyle = "rgba(242,238,230,0.65)";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.arc(ix, indicatorY, 11, 0, Math.PI * 2);
-      ctx.stroke();
+      const sBand: "spring" | "mid" | "neap" = align > 0.72 ? "spring" : align < -0.72 ? "neap" : "mid";
+      if (sBand !== springBandRef.current) {
+        if (sBand === "spring") {
+          try { audio.bell(); } catch { /* noop */ }
+          try { haptics.tap(); } catch { /* noop */ }
+          recordTapeRef.current("sigil", 0.82, "tide/spring");
+        } else if (sBand === "neap") {
+          try { audio.thud(); } catch { /* noop */ }
+          recordTapeRef.current("sigil", 0.4, "tide/neap");
+        }
+        springBandRef.current = sBand;
+      }
 
-      // publish scrub hit geometry
-      hitRef.current.scrub = { x0: 40, x1: w - 40, y: indicatorY };
+      stepBeat(now, tideN, band);
+
+      // ── readout (throttled) ──────────────────────────────────────
+      if (Math.floor(t * 7) !== Math.floor((t - 0.016) * 7)) {
+        const pct = Math.round(tideN * 100);
+        const phaseWord = sBand === "spring" ? "spring" : sBand === "neap" ? "neap" : "mid";
+        const bandWord = band === "high" ? "high" : band === "low" ? "low" : "rising/falling";
+        setReadout(`tide ${pct >= 0 ? "+" : ""}${pct}% · ${bandWord} · ${phaseWord} · ${phaseName(illum, waxing)}`);
+      }
 
       raf = requestAnimationFrame(draw);
     };
@@ -839,53 +629,52 @@ export default function Tide() {
     return () => {
       cancelAnimationFrame(raf);
       window.removeEventListener("resize", resize);
+      mq.removeEventListener?.("change", onMq);
       cv.removeEventListener("pointerdown", onDown);
       window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("pointercancel", onUp);
-      window.removeEventListener("pointerleave", onCursorLeave);
-      window.removeEventListener("blur", onCursorLeave);
+      window.removeEventListener("pointerup", endTap);
+      window.removeEventListener("pointercancel", endTap);
+      window.removeEventListener("pointerleave", onLeave);
+      window.removeEventListener("blur", onLeave);
     };
-  }, []);
+  }, [addRipple]);
 
   return (
     <div
+      ref={rootRef}
+      className="tide-instrument"
       data-touch-surface="true"
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "#0c1422",
-        // overlap header + footer chrome by sitting fixed under them — but the
-        // layout's header/footer should still float over us
-      }}
+      data-pretext-ignore="true"
     >
       <canvas
         ref={canvasRef}
-        aria-label="the tide — drag horizontally to move through time"
-        style={{
-          display: "block",
-          width: "100vw",
-          height: "100vh",
-          cursor: "ew-resize",
-          touchAction: "none",
-        }}
+        className="tide-canvas"
+        role="img"
+        aria-label="A lunar tide instrument. Drag the moon around the earth to swing the tidal bulges; the sea at the shore rises to high tide and falls to low. Move the sun to feel spring and neap tides."
       />
 
-      {/* the one inscribed line. nothing else explains the page. */}
-      {/* The inscription. The outer div spans the page but has pointer-events:
-          none; only the inner <span> is clickable so taps on the surrounding
-          sea pass through to the canvas. */}
+      <div className="tide-title" aria-hidden="true">
+        <span>tide / lunar gravity</span>
+        <strong>Tide</strong>
+      </div>
+
+      <div className="tide-rail" aria-label="tide controls">
+        <button type="button" className="tide-btn" aria-pressed={auto} onClick={toggleAuto}>
+          {auto ? "pause orbit" : "let it orbit"}
+        </button>
+        <button type="button" className="tide-btn" onClick={() => setSunOffset(0, "spring")}>
+          align sun · spring
+        </button>
+        <button type="button" className="tide-btn" onClick={() => setSunOffset(Math.PI / 2, "neap")}>
+          quarter sun · neap
+        </button>
+      </div>
+
+      <output className="tide-readout" aria-live="polite">{readout}</output>
+
       <div
         className="tide-inscription-wrap"
-        style={{
-          position: "fixed",
-          left: 0,
-          right: 0,
-          bottom: 58,
-          textAlign: "center",
-          pointerEvents: "none",
-          zIndex: 6,
-        }}
+        style={{ position: "fixed", left: 0, right: 0, bottom: 62, textAlign: "center", pointerEvents: "none", zIndex: 6 }}
       >
         <span
           className="tide-inscription"
@@ -895,64 +684,25 @@ export default function Tide() {
           onClick={(e) => {
             e.stopPropagation();
             try { getFieldAudio().bell(); } catch { /* noop */ }
-            haptics.roll();
+            try { haptics.roll(); } catch { /* noop */ }
             candleSparkRef.current = performance.now();
             recordTape("candle", 0.55, "inscription");
-            addTideMark("watch", "gold", 0.68);
           }}
           onKeyDown={(e) => {
             if (e.key === "Enter" || e.key === " ") {
               e.preventDefault();
               try { getFieldAudio().bell(); } catch { /* noop */ }
-              haptics.roll();
+              try { haptics.roll(); } catch { /* noop */ }
               candleSparkRef.current = performance.now();
               recordTape("candle", 0.55, "inscription");
-              addTideMark("watch", "gold", 0.68);
             }
-          }}
-          style={{
-            display: "inline-block",
-            padding: "4px 8px",
-            fontFamily: "var(--font-serif)",
-            fontStyle: "italic",
-            fontSize: 16,
-            color: "rgba(242, 238, 230, 0.55)",
-            letterSpacing: "0.005em",
-            cursor: "pointer",
-            pointerEvents: "auto",
           }}
         >
           what burns also keeps watch.
         </span>
       </div>
 
-      <div className="tide-state-strip" aria-hidden="true">
-        <span className="tide-state-pulse" />
-        {tideMarks.length === 0 ? (
-          <span className="tide-state-idle">tide held</span>
-        ) : (
-          tideMarks.map((mark) => (
-            <span
-              key={mark.id}
-              className={`tide-state-mark tide-state-${mark.tone}`}
-              style={{ opacity: 0.44 + mark.strength * 0.44 }}
-            >
-              {mark.label}
-            </span>
-          ))
-        )}
-      </div>
-
-      {/* DOM ripple overlay — small expanding circles for taps. Visual only;
-          we keep pointerEvents:none so they never block subsequent taps. */}
-      <div
-        aria-hidden="true"
-        style={{
-          position: "fixed",
-          inset: 0,
-          pointerEvents: "none",
-        }}
-      >
+      <div aria-hidden="true" style={{ position: "fixed", inset: 0, pointerEvents: "none" }}>
         {ripples.map((r) => (
           <span
             key={r.id}
@@ -962,144 +712,168 @@ export default function Tide() {
               top: r.y - r.size / 2,
               width: r.size,
               height: r.size,
-              borderColor: r.tone === "gold"
-                ? "rgba(200,115,42,0.85)"
-                : "rgba(220,235,255,0.45)",
+              borderColor: r.tone === "gold" ? "rgba(200,115,42,0.85)" : "rgba(220,235,255,0.45)",
             }}
           />
         ))}
       </div>
 
-      {/* ── Tide chart embeds: small candle + line view of the tide
-            height across the last 30 simulated minutes. Bottom-left. ── */}
-      <div
-        className="tide-charts"
-        style={{
-          position: "fixed",
-          left: 24,
-          bottom: 64,
-          display: "flex",
-          flexDirection: "column",
-          gap: 8,
-          pointerEvents: "auto",
-          zIndex: 5,
-        }}
-      >
-        <SeaChart
-          variant="inline"
-          mode="candles"
-          title="tide — last 30 min"
-          caption="drag a candle to nudge"
-          width={280}
-          height={96}
-          tickMs={0}
-          source={tideSource}
-          pullKey={tideChartPullKey}
-          static
-          feedToOcean
-          tapeLabel="tide/chart"
-          upColor="#88B8D8"
-          downColor="#C8732A"
-          background="rgba(12, 20, 34, 0.78)"
-        />
-        <SeaChart
-          variant="inline"
-          mode="line"
-          title="line · tide height"
-          caption="moon at t = scrub"
-          width={280}
-          height={52}
-          tickMs={0}
-          source={tideSource}
-          pullKey={tideChartPullKey}
-          static
-          feedToOcean={false}
-          tapeLabel="tide/line"
-          upColor="#88B8D8"
-          downColor="#C8732A"
-          background="rgba(12, 20, 34, 0.78)"
-        />
-      </div>
-      <style>{`
-        @media (max-width: 720px) {
-          .tide-charts {
-            display: none !important;
-          }
-          .tide-inscription-wrap {
-            bottom: 58px !important;
-          }
-          .tide-inscription {
-            font-size: 14px !important;
-            padding: 8px 10px !important;
-          }
-        }
-        .tide-state-strip {
+      <style
+        dangerouslySetInnerHTML={{
+          __html: `
+        .tide-instrument {
           position: fixed;
-          left: max(328px, env(safe-area-inset-left));
-          bottom: max(94px, calc(env(safe-area-inset-bottom) + 88px));
-          z-index: 7;
-          display: flex;
-          align-items: center;
-          gap: 7px;
-          max-width: min(440px, calc(100vw - 36px));
-          padding: 8px 10px;
-          border: 1px solid rgba(242, 238, 230, 0.14);
-          border-radius: 999px;
-          background: rgba(8, 14, 24, 0.54);
-          color: rgba(242, 238, 230, 0.62);
+          inset: 0;
+          overflow: hidden;
+          min-height: 100svh;
+          background: #0c1422;
+          color: rgba(242, 238, 230, 0.94);
+          isolation: isolate;
+          -webkit-user-select: none;
+          user-select: none;
+          -webkit-tap-highlight-color: transparent;
+        }
+        .tide-canvas {
+          position: absolute;
+          inset: 0;
+          width: 100%;
+          height: 100%;
+          display: block;
+          touch-action: none;
+          cursor: grab;
+          z-index: 0;
+        }
+        .tide-canvas:active { cursor: grabbing; }
+
+        .tide-title {
+          position: fixed;
+          z-index: 2;
+          top: 78px;
+          left: var(--pad-x, 28px);
+          pointer-events: none;
+        }
+        .tide-title span {
+          display: block;
+          margin-bottom: 8px;
+          color: rgba(242, 238, 230, 0.46);
           font-family: var(--font-mono);
           font-size: 11px;
           line-height: 1;
-          pointer-events: none;
+          text-transform: lowercase;
+        }
+        .tide-title strong {
+          display: block;
+          color: rgba(246, 242, 226, 0.96);
+          font-family: var(--font-serif);
+          font-size: 128px;
+          font-weight: 500;
+          line-height: 0.86;
+        }
+
+        .tide-rail {
+          position: fixed;
+          z-index: 3;
+          top: 92px;
+          right: var(--pad-x, 28px);
+          display: grid;
+          gap: 8px;
+          width: min(230px, 40vw);
+        }
+        .tide-btn {
+          min-height: 48px;
+          border: 1px solid rgba(200, 150, 90, 0.28);
+          border-radius: 8px;
+          background: rgba(12, 20, 34, 0.56);
+          color: rgba(242, 238, 230, 0.82);
+          padding: 8px 12px;
+          font-family: var(--font-mono);
+          font-size: 11px;
+          text-align: left;
+          cursor: pointer;
           backdrop-filter: blur(14px);
+          -webkit-backdrop-filter: blur(14px);
+        }
+        .tide-btn[aria-pressed="true"] {
+          border-color: rgba(200, 115, 42, 0.6);
+          color: rgba(255, 214, 150, 0.96);
+          background: rgba(200, 115, 42, 0.14);
+        }
+
+        .tide-readout {
+          position: fixed;
+          z-index: 4;
+          left: 50%;
+          transform: translateX(-50%);
+          bottom: calc(22px + env(safe-area-inset-bottom, 0px));
+          max-width: min(560px, calc(100vw - 32px));
+          padding: 9px 16px;
+          border: 1px solid rgba(242, 238, 230, 0.13);
+          border-radius: 999px;
+          background: rgba(8, 14, 24, 0.58);
+          color: rgba(242, 238, 230, 0.74);
+          font-family: var(--font-mono);
+          font-size: 11px;
+          line-height: 1;
+          text-align: center;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          backdrop-filter: blur(14px);
+          -webkit-backdrop-filter: blur(14px);
+          pointer-events: none;
+        }
+
+        .tide-inscription {
+          display: inline-block;
+          padding: 4px 8px;
+          font-family: var(--font-serif);
+          font-style: italic;
+          font-size: 16px;
+          color: rgba(242, 238, 230, 0.55);
+          cursor: pointer;
+          pointer-events: auto;
+        }
+
+        .tide-ripple {
+          position: absolute;
+          border-radius: 999px;
+          border: 1.5px solid rgba(220, 235, 255, 0.45);
+          animation: tide-ripple 0.72s ease-out forwards;
+        }
+        @keyframes tide-ripple {
+          from { transform: scale(0.2); opacity: 0.8; }
+          to { transform: scale(1); opacity: 0; }
+        }
+
+        body:has(.tide-instrument) {
+          background: #0c1422;
           overflow: hidden;
         }
-        .tide-state-pulse {
-          flex: 0 0 auto;
-          width: 7px;
-          height: 7px;
-          border-radius: 999px;
-          background: rgba(200, 115, 42, 0.88);
-          box-shadow: 0 0 16px rgba(200, 115, 42, 0.48);
+        body:has(.tide-instrument) header { display: none !important; }
+        body:has(.tide-instrument) .oda-field-watch,
+        body:has(.tide-instrument) .oda-candle-mark,
+        body:has(.tide-instrument) .oda-tape-shell,
+        body:has(.tide-instrument) .oda-sound-toggle {
+          display: none !important;
         }
-        .tide-state-idle,
-        .tide-state-mark {
-          white-space: nowrap;
+
+        @media (prefers-reduced-motion: reduce) {
+          .tide-ripple { animation: none; display: none; }
         }
-        .tide-state-mark {
-          color: rgba(242, 238, 230, 0.72);
+
+        @media (max-width: 940px) {
+          .tide-title { top: 34px; left: 20px; }
+          .tide-title strong { font-size: 82px; }
+          .tide-rail { top: auto; left: 12px; right: 12px; bottom: calc(74px + env(safe-area-inset-bottom, 0px)); width: auto; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+          .tide-btn { text-align: center; font-size: 10px; padding: 8px 6px; }
         }
-        .tide-state-gold {
-          color: rgba(255, 211, 141, 0.84);
+        @media (max-width: 520px) {
+          .tide-title strong { font-size: 62px; }
+          .tide-rail { grid-template-columns: 1fr; }
         }
-        .tide-state-pale {
-          color: rgba(220, 235, 255, 0.72);
-        }
-        .tide-state-blue {
-          color: rgba(136, 184, 216, 0.82);
-        }
-        @media (max-width: 720px) {
-          .tide-state-strip {
-            left: 16px;
-            right: 16px;
-            bottom: max(116px, calc(env(safe-area-inset-bottom) + 104px));
-            max-width: none;
-            justify-content: center;
-            padding: 9px 10px;
-          }
-          .tide-state-strip .tide-state-mark:nth-of-type(n + 5) {
-            display: none;
-          }
-        }
-        @media (max-height: 700px) and (max-width: 720px) {
-          .tide-state-strip {
-            bottom: max(104px, calc(env(safe-area-inset-bottom) + 96px));
-          }
-          .tide-inscription-wrap {
-            bottom: 54px !important;
-          }
-        }
-      `}</style>
+      `,
+        }}
+      />
     </div>
   );
 }
