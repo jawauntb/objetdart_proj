@@ -784,7 +784,7 @@ export default function CircularityFourier() {
           overflow: hidden;
         }
 
-        body:has(.circularity-instrument) header,
+        body:has(.circularity-instrument) header:not(.oda-site-header),
         body:has(.circularity-instrument) .oda-field-watch,
         body:has(.circularity-instrument) .oda-candle-mark,
         body:has(.circularity-instrument) .oda-tape-shell,

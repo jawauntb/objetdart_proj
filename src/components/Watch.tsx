@@ -1639,7 +1639,7 @@ export default function Watch() {
       <div className="watch-room-title" aria-hidden="true">the room</div>
       <style>{`
         /* Hide the global site chrome so the room fills the true viewport. */
-        body:has(.watch-room) header {
+        body:has(.watch-room) header:not(.oda-site-header) {
           display: none !important;
         }
         body:has(.watch-room) .oda-field-watch,

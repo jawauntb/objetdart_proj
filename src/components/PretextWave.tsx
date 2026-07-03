@@ -886,7 +886,7 @@ export default function PretextWave() {
           overflow: hidden;
           background: #0c141d;
         }
-        body:has(.pretext-page) header {
+        body:has(.pretext-page) header:not(.oda-site-header) {
           display: none !important;
         }
         body:has(.pretext-page) .oda-field-watch,

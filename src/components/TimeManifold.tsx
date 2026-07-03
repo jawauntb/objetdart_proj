@@ -735,7 +735,7 @@ export default function TimeManifold() {
           background: #050409;
         }
 
-        body:has(.time-instrument) header {
+        body:has(.time-instrument) header:not(.oda-site-header) {
           display: none !important;
         }
 

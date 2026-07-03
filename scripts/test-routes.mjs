@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 import * as ts from "typescript";
@@ -8,6 +8,17 @@ const rootUrl = new URL("../", import.meta.url);
 
 function readRepoFile(path) {
   return readFileSync(new URL(path, rootUrl), "utf8");
+}
+
+function walkRepoFiles(path) {
+  const dir = new URL(path, rootUrl);
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const childPath = `${path}/${entry.name}`;
+    const childUrl = new URL(childPath, rootUrl);
+    if (entry.isDirectory()) return walkRepoFiles(childPath);
+    if (entry.isFile() && statSync(childUrl).isFile()) return [childPath];
+    return [];
+  });
 }
 
 function loadTsModule(path, requireMap = {}) {
@@ -38,6 +49,7 @@ const routesModule = loadTsModule("src/lib/routes.ts");
 const darkRoutesModule = loadTsModule("src/lib/dark-routes.ts", {
   "@/lib/routes": routesModule,
 });
+const siteHeaderSource = readRepoFile("src/components/SiteHeader.tsx");
 
 const {
   DARK_ROUTE_PREFIXES,
@@ -134,5 +146,35 @@ for (const path of ["/", "/aphros", "/archive", "/colophon", "/timekeeper", "/co
 for (const path of ["/", "/coin", "/coin/deep", "/movement", "/archive", "/timekeeper"]) {
   assert.equal(isDarkRoute(path), isDarkRoutePath(path), `isDarkRoute should delegate ${path}`);
 }
+
+assert.match(siteHeaderSource, /className="oda-site-header"/, "site header should carry a stable class for page CSS to spare");
+
+const broadHeaderSelectors = walkRepoFiles("src")
+  .filter((path) => /\.(?:css|tsx?)$/.test(path))
+  .flatMap((path) => {
+    const source = readRepoFile(path);
+    return [...source.matchAll(/([^{}]+)\{/g)].flatMap((match) => {
+      const selectorBlock = match[1];
+      if (!selectorBlock.includes("body:has(")) return [];
+      const line = source.slice(0, match.index).split("\n").length;
+      return selectorBlock
+        .split(",")
+        .map((selector) => selector.trim())
+        .filter((selector) => selector.includes("body:has("))
+        .filter((selector) => {
+          const targetsHeader = /\bheader\b/.test(selector);
+          const sparesSiteHeader = /\bheader:not\(\.oda-site-header\)/.test(selector);
+          const targetsSiteHeader = /\.oda-site-header\b/.test(selector) && !sparesSiteHeader;
+          return (targetsHeader && !sparesSiteHeader) || targetsSiteHeader;
+        })
+        .map((selector) => `${path}:${line}: ${selector}`);
+    });
+  });
+
+assert.deepEqual(
+  broadHeaderSelectors,
+  [],
+  "page-scoped CSS must not hide or restyle the global site header",
+);
 
 console.log(`route registry ok: ${SITE_ROUTES.length} routes, ${DARK_ROUTE_PREFIXES.length} dark prefixes`);

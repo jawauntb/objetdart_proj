@@ -2817,7 +2817,7 @@ export default function Aphros() {
            field chrome (watch, candle mark, tape strip, sound toggle) so the
            beach runs full-bleed under the Greek-key frame. */
         body:has(.aphros-instrument) { overflow: hidden; }
-        body:has(.aphros-instrument) header { display: none !important; }
+        body:has(.aphros-instrument) header:not(.oda-site-header) { display: none !important; }
         body:has(.aphros-instrument) .oda-field-watch,
         body:has(.aphros-instrument) .oda-candle-mark,
         body:has(.aphros-instrument) .oda-tape-shell,

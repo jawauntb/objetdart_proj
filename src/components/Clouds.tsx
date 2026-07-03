@@ -1815,7 +1815,7 @@ export default function Clouds() {
           __html:
             `
             @keyframes clouds-fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
-            body:has(.clouds-root) header {
+            body:has(.clouds-root) header:not(.oda-site-header) {
               background: transparent !important;
               border-bottom: 0 !important;
               backdrop-filter: none !important;

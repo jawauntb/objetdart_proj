@@ -901,7 +901,7 @@ export default function Waves() {
           overflow: hidden;
         }
 
-        body:has(.waves-instrument) header {
+        body:has(.waves-instrument) header:not(.oda-site-header) {
           display: none !important;
         }
 

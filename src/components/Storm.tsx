@@ -1677,7 +1677,7 @@ export default function Storm() {
               color: rgba(14,37,64,1);
             }
 
-            body:has(.storm-instrument) header { display: none !important; }
+            body:has(.storm-instrument) header:not(.oda-site-header) { display: none !important; }
             body:has(.storm-instrument) .oda-field-watch,
             body:has(.storm-instrument) .oda-candle-mark,
             body:has(.storm-instrument) .oda-tape-shell,

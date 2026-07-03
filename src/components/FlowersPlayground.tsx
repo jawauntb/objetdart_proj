@@ -978,7 +978,7 @@ export default function FlowersPlayground() {
           overflow: hidden;
         }
 
-        body:has(.flowers-page) header {
+        body:has(.flowers-page) header:not(.oda-site-header) {
           background: transparent !important;
           border-bottom: 0 !important;
           backdrop-filter: none !important;

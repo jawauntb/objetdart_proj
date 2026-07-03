@@ -1583,7 +1583,7 @@ export default function Earth() {
               font-variant-numeric: tabular-nums;
             }
 
-            body:has(.earth-instrument) header {
+            body:has(.earth-instrument) header:not(.oda-site-header) {
               background: transparent !important;
               border-bottom: 0 !important;
               backdrop-filter: none !important;

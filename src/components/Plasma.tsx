@@ -946,7 +946,7 @@ export default function Plasma() {
 
         /* full-bleed: hide the site chrome so the globe owns the viewport */
         body:has(.plasma-instrument) { overflow: hidden; background: #06060c; }
-        body:has(.plasma-instrument) header { display: none !important; }
+        body:has(.plasma-instrument) header:not(.oda-site-header) { display: none !important; }
         body:has(.plasma-instrument) .oda-field-watch,
         body:has(.plasma-instrument) .oda-candle-mark,
         body:has(.plasma-instrument) .oda-tape-shell,
