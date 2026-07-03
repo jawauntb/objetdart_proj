@@ -27,11 +27,24 @@ export default function Watch() {
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [whisperState, setWhisperState] = useState<Whisper | null>(null);
-  const [watchMarks, setWatchMarks] = useState<WatchMark[]>([]);
-  const watchMarkIdRef = useRef(0);
 
   const cursor = useRef({ x: -9999, y: -9999, tx: -9999, ty: -9999, over: false });
   const lit = useRef({ candle: 0, glass: 0, book: 0, record: 0, window: 0, clock: 0, music: 0, frame: 0 });
+
+  // active pointer-drag on a tactile object (candle / record / glass).
+  const drag = useRef({
+    active: false,
+    id: -1,
+    kind: "" as "candle" | "record" | "glass" | "",
+    startX: 0,
+    startY: 0,
+    lastX: 0,
+    lastY: 0,
+    lastAngle: 0,
+    moved: 0,
+    lastAudioAt: 0,
+    suppressClick: false,
+  });
 
   // candle alive / snuff state.
   const candleState = useRef({
@@ -39,6 +52,7 @@ export default function Watch() {
     flameScale: 1,
     pressStart: 0,
     snuffStart: 0,
+    dragLean: 0,
   });
 
   // sparks rising from the flame.
@@ -54,6 +68,8 @@ export default function Watch() {
     clickCount: 0,
     lastClickAt: 0,
     clickTimer: null as ReturnType<typeof setTimeout> | null,
+    dragging: false,
+    scrubVel: 0,
   });
 
   // book.
@@ -115,12 +131,11 @@ export default function Watch() {
   // next whisper time.
   const whisperNextAt = useRef(performance.now() + 12000);
 
-  const addWatchMark = (label: string, tone: WatchMark["tone"] = "ember", strength = 0.5) => {
-    const id = ++watchMarkIdRef.current;
-    setWatchMarks((marks) => [...marks.slice(-4), { id, label, tone, strength }]);
-    window.setTimeout(() => {
-      setWatchMarks((marks) => marks.filter((mark) => mark.id !== id));
-    }, 5200);
+  // The visible top-left event-log ribbon was removed to keep the room wordless.
+  // Every action still lands on the global tape via recordTape(); addWatchMark is
+  // retained as a no-op so the interaction call sites stay legible and unchanged.
+  const addWatchMark = (_label: string, _tone: WatchMark["tone"] = "ember", _strength = 0.5) => {
+    /* intentionally empty — no HUD chrome on this page */
   };
 
   useEffect(() => {
@@ -254,6 +269,93 @@ export default function Watch() {
           if (windowBreath.current.length > 8) windowBreath.current.shift();
         }
       }
+
+      // ── tactile drag ─────────────────────────────────────────────
+      const d = drag.current;
+      if (d.active && d.id === e.pointerId) {
+        const dx = e.clientX - d.lastX;
+        const dy = e.clientY - d.lastY;
+        d.moved += Math.hypot(dx, dy);
+        const now = performance.now();
+        const throttled = now - d.lastAudioAt > 80;
+        const tape = useField.getState().recordTape;
+
+        if (d.kind === "candle") {
+          // A drag near the flame cancels the snuff-hold and bends the flame
+          // hard in the drag direction, throwing sparks off the wick.
+          if (d.moved > 6) { cancelLongPress(); d.suppressClick = true; }
+          candleState.current.dragLean = Math.max(-28, Math.min(28,
+            candleState.current.dragLean + dx * 0.12));
+          if (!reduce && candleState.current.flameScale > 0.2) {
+            const flameBase = g.candle.y - g.candle.h - 11;
+            const bursts = Math.min(4, 1 + Math.floor(Math.abs(dx) * 0.12));
+            for (let i = 0; i < bursts; i++) {
+              sparks.current.push({
+                x: g.candle.x + (Math.random() - 0.5) * 6,
+                y: flameBase - 6,
+                vx: dx * 1.1 + (Math.random() - 0.5) * 26,
+                vy: -28 - Math.random() * 44,
+                life: 0.7 + Math.random() * 0.6,
+                maxLife: 1.0,
+              });
+            }
+            if (sparks.current.length > 44) sparks.current.splice(0, sparks.current.length - 44);
+          }
+          if (throttled && Math.abs(dx) + Math.abs(dy) > 2 && candleState.current.flameScale > 0.2) {
+            d.lastAudioAt = now;
+            const force = Math.min(0.6, Math.abs(dx) * 0.02);
+            try { getFieldAudio().spark(); } catch { /* ignore */ }
+            try { haptics.ripple(0.18 + force); } catch { /* ignore */ }
+            tape("candle", 0.3 + force, "watch:candle-lean");
+          }
+        } else if (d.kind === "record") {
+          // Scrub the platter by the angle swept around its centre; the last
+          // angular delta becomes fling momentum when the finger lifts.
+          const ang = Math.atan2(e.clientY - g.record.y, e.clientX - g.record.x);
+          let delta = ang - d.lastAngle;
+          if (delta > Math.PI) delta -= Math.PI * 2;
+          else if (delta < -Math.PI) delta += Math.PI * 2;
+          d.lastAngle = ang;
+          record.current.spin += delta;
+          record.current.scrubVel = delta;
+          if (d.moved > 8) d.suppressClick = true;
+          if (throttled && Math.abs(delta) > 0.02) {
+            d.lastAudioAt = now;
+            const speed = Math.min(1, Math.abs(delta) * 5);
+            try { oneShotScratch(getFieldAudio(), speed, delta >= 0 ? 1 : -1); } catch { /* ignore */ }
+            try { haptics.roll(); } catch { /* ignore */ }
+            tape("object", 0.3 + speed * 0.5, "watch:record-scrub");
+          }
+        } else if (d.kind === "glass") {
+          // Pour: the water level follows the finger between the base and rim;
+          // push past the rim and it brims over.
+          const bottom = g.glass.y;
+          const top = g.glass.y - g.glass.h;
+          const frac = (bottom - e.clientY) / Math.max(1, bottom - top);
+          const level = Math.max(0, Math.min(5, frac * 5));
+          const prev = glass.current.fill;
+          glass.current.fill = level;
+          if (d.moved > 6) d.suppressClick = true;
+          if (throttled && Math.abs(level - prev) > 0.03) {
+            d.lastAudioAt = now;
+            glassRipples.current.push({ t0: now });
+            if (glassRipples.current.length > 6) glassRipples.current.shift();
+            const detune = level * 80;
+            try { oneShotChime(getFieldAudio(), 860 + detune, 1300 + detune, 0.16); } catch { /* ignore */ }
+            try { haptics.ripple(0.3 + level * 0.06); } catch { /* ignore */ }
+            tape("ripple", 0.35 + level * 0.08, "watch:glass-pour");
+          }
+          if (frac > 1.02 && now - glass.current.overflowAt > 500) {
+            glass.current.overflowAt = now;
+            try { oneShotDrop(getFieldAudio()); } catch { /* ignore */ }
+            try { haptics.chop(); } catch { /* ignore */ }
+            tape("ripple", 0.7, "glass:overflow");
+          }
+        }
+
+        d.lastX = e.clientX;
+        d.lastY = e.clientY;
+      }
     };
     const onLeave = () => { cursor.current.over = false; };
 
@@ -284,9 +386,47 @@ export default function Watch() {
           longPressTimer = null;
         }, 800);
       }
+
+      // Begin a tactile drag on the objects that reward direct manipulation:
+      // the candle (bend the flame / drag the smoke), the record (spin & scrub)
+      // and the glass (pour by dragging the level up). Taps still fall through
+      // to onClick as the fallback gesture.
+      if (what === "candle" || what === "record" || what === "glass") {
+        const g = geometry();
+        const d = drag.current;
+        d.active = true;
+        d.id = e.pointerId;
+        d.kind = what;
+        d.startX = e.clientX;
+        d.startY = e.clientY;
+        d.lastX = e.clientX;
+        d.lastY = e.clientY;
+        d.moved = 0;
+        d.suppressClick = false;
+        d.lastAudioAt = 0;
+        if (what === "record") {
+          d.lastAngle = Math.atan2(e.clientY - g.record.y, e.clientX - g.record.x);
+          record.current.dragging = true;
+          record.current.scrubVel = 0;
+        }
+        try { cv.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+      }
     };
-    const onPointerUp = () => { cancelLongPress(); };
-    const onPointerCancel = () => { cancelLongPress(); };
+    const endDrag = (e: PointerEvent) => {
+      const d = drag.current;
+      if (!d.active || d.id !== e.pointerId) return;
+      if (d.kind === "record") {
+        // release the platter — any spin it had becomes decaying momentum,
+        // already stored in record.scrubVel by the move handler.
+        record.current.dragging = false;
+      }
+      d.active = false;
+      d.id = -1;
+      d.kind = "";
+      try { cv.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+    };
+    const onPointerUp = (e: PointerEvent) => { endDrag(e); cancelLongPress(); };
+    const onPointerCancel = (e: PointerEvent) => { endDrag(e); cancelLongPress(); };
 
     const playMusicBoxMelody = () => {
       const audio = getFieldAudio();
@@ -313,6 +453,12 @@ export default function Watch() {
     };
 
     const onClick = (e: MouseEvent) => {
+      // A drag that actually moved consumes the trailing click so we don't
+      // double-fire the tap fallback on top of the direct-manipulation gesture.
+      if (drag.current.suppressClick) {
+        drag.current.suppressClick = false;
+        return;
+      }
       if (candleState.current.snuffStart > 0 && performance.now() - candleState.current.snuffStart < 250) {
         return;
       }
@@ -531,7 +677,9 @@ export default function Watch() {
     cv.addEventListener("click", onClick);
 
     // ── whisper scheduler — every ~14-28s spawn a fresh one ────
-    const whisperWords = ["listen", "stay", "breathe", "watch", "remember", "still"];
+    // Diegetic, atmospheric fragments — nouns of the room and the sea, never
+    // instructions. They surface faintly and fade.
+    const whisperWords = ["salt", "tide", "amber", "hush", "ember", "night"];
     const spawnWhisper = () => {
       const w = window.innerWidth;
       const h = window.innerHeight;
@@ -1075,6 +1223,9 @@ export default function Watch() {
         const bonus = pull > 0.6 ? (pull - 0.6) * 18 : 0;
         leanX = (dx / (d || 1)) * (pull * 6 + bonus);
       }
+      // an active drag bends the flame harder, then springs back as it decays.
+      leanX += cs.dragLean;
+      cs.dragLean *= reduce ? 0 : 0.90;
 
       const flameBase = g.candle.y - g.candle.h - 11;
       // Three / four layered flames each with slight independent wobble.
@@ -1336,10 +1487,21 @@ export default function Watch() {
       const rx = g.record.x;
       const ry = g.record.y;
       const rr = g.record.r;
-      if (record.current.playing) {
-        record.current.spin += (motion ? 1 : 0) * 0.06 * record.current.spinDir;
+      if (record.current.dragging) {
+        // spin is driven directly by the drag handler while held.
       } else {
-        record.current.spin += (motion ? 1 : 0) * 0.01 * recordAlive * record.current.spinDir;
+        // fling momentum from a scrub, decaying to rest.
+        if (Math.abs(record.current.scrubVel) > 0.0006) {
+          record.current.spin += record.current.scrubVel * (motion ? 1 : 0);
+          record.current.scrubVel *= 0.96;
+        } else {
+          record.current.scrubVel = 0;
+        }
+        if (record.current.playing) {
+          record.current.spin += (motion ? 1 : 0) * 0.06 * record.current.spinDir;
+        } else {
+          record.current.spin += (motion ? 1 : 0) * 0.01 * recordAlive * record.current.spinDir;
+        }
       }
       ctx.fillStyle = "rgba(30, 22, 16, 1)";
       ctx.beginPath();
@@ -1416,7 +1578,7 @@ export default function Watch() {
     if (age > whisperState.duration) return null;
     // ease in/out
     const p = age / whisperState.duration;
-    let alpha = whisperState.hovered ? 0.95 : 0.32;
+    let alpha = whisperState.hovered ? 0.58 : 0.18;
     if (!whisperState.hovered) {
       // fade in 0..0.15, hold 0.15..0.85, fade out 0.85..1.0
       if (p < 0.15) alpha *= p / 0.15;
@@ -1433,11 +1595,11 @@ export default function Watch() {
           color: `rgba(245, 240, 230, ${alpha})`,
           fontFamily: "var(--font-serif)",
           fontStyle: "italic",
-          fontSize: 22,
-          letterSpacing: "0.04em",
+          fontSize: 17,
+          letterSpacing: "0.05em",
           pointerEvents: "none",
           transition: "color 320ms ease",
-          textShadow: whisperState.hovered ? "0 0 18px rgba(255,200,130,0.5)" : "none",
+          textShadow: whisperState.hovered ? "0 0 16px rgba(255,200,130,0.32)" : "none",
           WebkitUserSelect: "none",
           userSelect: "none",
         }}
@@ -1449,7 +1611,9 @@ export default function Watch() {
 
   return (
     <div
+      className="watch-room"
       data-touch-surface="true"
+      data-pretext-ignore="true"
       style={{
         position: "fixed",
         inset: 0,
@@ -1458,7 +1622,8 @@ export default function Watch() {
     >
       <canvas
         ref={canvasRef}
-        aria-label="a room at night with a window onto the sea — touch the things on the table"
+        role="img"
+        aria-label="a candle-lit room at night with a window onto the sea — reach in: drag the candle flame, spin the record, pour the glass"
         style={{
           display: "block",
           width: "100vw",
@@ -1471,84 +1636,42 @@ export default function Watch() {
         }}
       />
       {renderWhisper()}
-      <div className="watch-state-ribbon" aria-hidden="true">
-        <span className="watch-state-pulse" />
-        {watchMarks.length === 0 ? (
-          <span className="watch-state-idle">room still</span>
-        ) : (
-          watchMarks.map((mark) => (
-            <span
-              key={mark.id}
-              className={`watch-state-mark watch-state-${mark.tone}`}
-              style={{ opacity: 0.42 + mark.strength * 0.46 }}
-            >
-              {mark.label}
-            </span>
-          ))
-        )}
-      </div>
+      <div className="watch-room-title" aria-hidden="true">the room</div>
       <style>{`
-        .watch-state-ribbon {
-          position: fixed;
-          top: max(82px, calc(env(safe-area-inset-top) + 74px));
-          left: max(20px, env(safe-area-inset-left));
-          z-index: 8;
-          display: flex;
-          align-items: center;
-          gap: 7px;
-          max-width: min(440px, calc(100vw - 40px));
-          padding: 8px 10px;
-          border: 1px solid rgba(242, 238, 230, 0.13);
-          border-radius: 999px;
-          background: rgba(10, 8, 8, 0.50);
-          color: rgba(242, 238, 230, 0.62);
-          font-family: var(--font-mono);
-          font-size: 11px;
-          line-height: 1;
-          pointer-events: none;
-          backdrop-filter: blur(14px);
+        /* Hide the global site chrome so the room fills the true viewport. */
+        body:has(.watch-room) header {
+          display: none !important;
+        }
+        body:has(.watch-room) .oda-field-watch,
+        body:has(.watch-room) .oda-candle-mark,
+        body:has(.watch-room) .oda-tape-shell,
+        body:has(.watch-room) .oda-sound-toggle {
+          display: none !important;
+        }
+        body:has(.watch-room) {
           overflow: hidden;
+          background: #0a0a0c;
         }
-        .watch-state-pulse {
-          flex: 0 0 auto;
-          width: 7px;
-          height: 7px;
-          border-radius: 999px;
-          background: rgba(255, 184, 116, 0.86);
-          box-shadow: 0 0 16px rgba(255, 184, 116, 0.44);
+
+        /* A whisper-quiet serif label, diegetic and non-instructional. */
+        .watch-room-title {
+          position: fixed;
+          left: max(20px, env(safe-area-inset-left));
+          bottom: max(18px, calc(env(safe-area-inset-bottom) + 14px));
+          z-index: 3;
+          color: rgba(242, 238, 230, 0.16);
+          font-family: var(--font-serif);
+          font-style: italic;
+          font-size: 15px;
+          letter-spacing: 0.06em;
+          pointer-events: none;
+          -webkit-user-select: none;
+          user-select: none;
         }
-        .watch-state-idle,
-        .watch-state-mark {
-          white-space: nowrap;
-        }
-        .watch-state-ember {
-          color: rgba(255, 202, 138, 0.88);
-        }
-        .watch-state-glass {
-          color: rgba(190, 230, 238, 0.86);
-        }
-        .watch-state-wood {
-          color: rgba(225, 201, 164, 0.78);
-        }
-        .watch-state-moon {
-          color: rgba(220, 232, 255, 0.84);
-        }
+
         @media (max-width: 720px) {
-          .watch-state-ribbon {
-            top: max(92px, calc(env(safe-area-inset-top) + 84px));
-            left: 16px;
-            right: 16px;
-            max-width: none;
-            justify-content: center;
-            padding: 9px 10px;
-          }
-          .watch-state-ribbon .watch-state-mark:nth-of-type(n + 5) {
-            display: none;
-          }
-        }
-        @media (max-height: 700px) and (max-width: 720px) {
-          .watch-state-ribbon {
-            top: max(78px, calc(env(safe-area-inset-top) + 72px));
+          .watch-room-title {
+            font-size: 13px;
           }
         }
       `}</style>
@@ -1569,6 +1692,36 @@ const MOOD_COLORS: Array<[number, number, number]> = [
   [232, 180, 130],
   [120, 60, 80],
 ];
+
+// A short vinyl scratch whose pitch and brightness follow the scrub speed and
+// direction — used when the record is dragged around its centre.
+function oneShotScratch(audio: ReturnType<typeof getFieldAudio>, speed: number, dir: number) {
+  const ctx = audio.getAudioContext();
+  if (!ctx) {
+    audio.thud();
+    return;
+  }
+  const now = ctx.currentTime;
+  const dur = 0.08 + speed * 0.06;
+  const base = 120 + speed * 320;
+  const osc = ctx.createOscillator();
+  osc.type = "sawtooth";
+  osc.frequency.setValueAtTime(base, now);
+  osc.frequency.exponentialRampToValueAtTime(
+    Math.max(40, base * (dir >= 0 ? 0.68 : 1.5)),
+    now + dur,
+  );
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.0001, now);
+  g.gain.exponentialRampToValueAtTime(0.035 + speed * 0.05, now + 0.008);
+  g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+  const lp = ctx.createBiquadFilter();
+  lp.type = "lowpass";
+  lp.frequency.value = 800 + speed * 1700;
+  osc.connect(g).connect(lp).connect(ctx.destination);
+  osc.start(now);
+  osc.stop(now + dur + 0.04);
+}
 
 function oneShotChime(audio: ReturnType<typeof getFieldAudio>, f0: number, f1: number, dur = 0.30) {
   const ctx = audio.getAudioContext();
