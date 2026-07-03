@@ -316,17 +316,10 @@ export default function Archive() {
           {/* card grid */}
           <div>
             {/* imagine-a-drawer */}
-            <div
-              style={{
-                marginBottom: 28,
-                padding: 18,
-                border: "1px dashed var(--rule)",
-                background: "transparent",
-              }}
-            >
-              <div className="t-eyebrow">imagine a drawer</div>
+            <div className="arch-imagine">
+              <div className="t-eyebrow" style={{ color: "var(--candle)" }}>imagine a drawer</div>
               <p className="t-meta italic" style={{ color: "var(--ink-2)", margin: "8px 0 14px", maxWidth: "60ch" }}>
-                give the room a title and one to three concerns. the field will write the drawer into your archive.
+                an empty drawer, waiting. give the room a title and one to three concerns — the field will write the drawer into your archive.
               </p>
               <form
                 onSubmit={(e) => { e.preventDefault(); imagine(); }}
@@ -411,13 +404,8 @@ export default function Archive() {
                     return (
                       <article
                         key={e.id}
-                        style={{
-                          border: "1px solid var(--rule)",
-                          background: "var(--paper-2)",
-                          padding: 22,
-                          transition: "border-color var(--t)",
-                          gridColumn: expanded ? "1 / -1" : undefined,
-                        }}
+                        className={`arch-imagined${expanded ? " is-open" : ""}`}
+                        style={{ gridColumn: expanded ? "1 / -1" : undefined }}
                       >
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
                           <span className="t-eyebrow" style={{ color: "var(--candle)" }}>
@@ -538,26 +526,16 @@ export default function Archive() {
                   gap: 18,
                 }}
               >
-                {items.map((a) => (
+                {items.map((a) => {
+                  const accent = a.status
+                    ? STATUS_COLOR[a.status] ?? "var(--ink-2)"
+                    : "var(--ink-2)";
+                  return (
                   <Link
                     key={a.id}
                     href={`/archive/${entrySlug(a)}`}
-                    style={{
-                      display: "block",
-                      border: "1px solid var(--rule)",
-                      background: "var(--paper-2)",
-                      padding: 22,
-                      transition: "transform var(--t), border-color var(--t)",
-                      color: "var(--ink)",
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.borderColor = "var(--ink)";
-                      e.currentTarget.style.transform = "translateY(-2px)";
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.borderColor = "var(--rule)";
-                      e.currentTarget.style.transform = "translateY(0)";
-                    }}
+                    className="arch-card"
+                    style={{ ["--card-accent" as string]: accent }}
                     onPointerDown={() => {
                       haptics.tap();
                       touchArchive(a.title, a.status === "kept" ? "kept" : "ink", 0.48, "reading");
@@ -574,16 +552,13 @@ export default function Archive() {
                       <span className="t-eyebrow">{a.year ?? ""}</span>
                       {a.status && (
                         <span
-                          className="t-mono"
+                          className="t-mono arch-status"
                           style={{
-                            fontSize: 11,
-                            letterSpacing: "0.08em",
-                            textTransform: "lowercase",
-                            color: STATUS_COLOR[a.status] ?? "var(--ink-2)",
-                            border: `1px solid ${STATUS_COLOR[a.status] ?? "var(--ink-2)"}`,
-                            padding: "2px 6px",
+                            ["--status-color" as string]:
+                              STATUS_COLOR[a.status] ?? "var(--ink-2)",
                           }}
                         >
+                          <span className="arch-status-dot" aria-hidden="true" />
                           {a.status}
                         </span>
                       )}
@@ -616,11 +591,16 @@ export default function Archive() {
                         <p className="t-meta" style={{ color: "var(--ink-2)", margin: 0 }}>{a.fn}</p>
                       </div>
                     </div>
-                    <div className="t-eyebrow" style={{ marginTop: 14, color: "var(--ink-2)" }}>
-                      {a.medium} · {a.phase} · {a.concerns.join(" / ")}
+                    <div className="arch-card-tags t-eyebrow" style={{ marginTop: 14 }}>
+                      <span className="arch-card-medium">{a.medium}</span>
+                      <span className="arch-card-sep" aria-hidden="true">·</span>
+                      <span>{a.phase}</span>
+                      <span className="arch-card-sep" aria-hidden="true">·</span>
+                      <span style={{ color: "var(--ink-2)" }}>{a.concerns.join(" / ")}</span>
                     </div>
                   </Link>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -633,6 +613,120 @@ export default function Archive() {
         #archive .wrap {
           padding-bottom: calc(96px + env(safe-area-inset-bottom));
         }
+
+        /* ---- specimen-drawer cards: pull, don't lift ---- */
+        .arch-card {
+          position: relative;
+          display: block;
+          padding: 22px 22px 22px 26px;
+          color: var(--ink);
+          text-decoration: none;
+          border: 1px solid var(--rule);
+          border-left: 3px solid color-mix(in srgb, var(--card-accent, var(--ink-2)), transparent 45%);
+          background:
+            linear-gradient(180deg, color-mix(in srgb, var(--paper), transparent 42%), transparent 46%),
+            var(--paper-2);
+          transition: transform var(--t), box-shadow var(--t), border-color var(--t);
+        }
+        /* the drawer pull, on the front edge */
+        .arch-card::before {
+          content: "";
+          position: absolute;
+          left: -3px;
+          top: 50%;
+          width: 3px;
+          height: 18px;
+          transform: translateY(-50%);
+          background: var(--card-accent, var(--ink-2));
+          opacity: 0;
+          transition: opacity var(--t), height var(--t);
+        }
+        .arch-card:hover,
+        .arch-card:focus-visible {
+          transform: translateX(6px);
+          border-color: color-mix(in srgb, var(--card-accent, var(--ink)), var(--rule) 52%);
+          border-left-color: var(--card-accent, var(--ink));
+          box-shadow:
+            -13px 0 28px -18px rgba(21, 23, 26, 0.5),
+            inset 0 1px 0 color-mix(in srgb, var(--paper), transparent 28%);
+        }
+        .arch-card:hover::before,
+        .arch-card:focus-visible::before {
+          opacity: 0.9;
+          height: 34px;
+        }
+        .arch-status {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          font-size: 11px;
+          letter-spacing: 0.08em;
+          text-transform: lowercase;
+          color: var(--status-color, var(--ink-2));
+          border: 1px solid color-mix(in srgb, var(--status-color, var(--ink-2)), transparent 55%);
+          padding: 2px 7px;
+        }
+        .arch-status-dot {
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+          background: var(--status-color, var(--ink-2));
+          box-shadow: 0 0 8px color-mix(in srgb, var(--status-color, var(--ink-2)), transparent 40%);
+        }
+        .arch-card-tags {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: baseline;
+          gap: 4px 7px;
+          color: var(--ink-2);
+        }
+        .arch-card-medium { color: var(--ink); }
+        .arch-card-sep { color: color-mix(in srgb, var(--rule), transparent 8%); }
+
+        /* ---- imagine: an empty drawer waiting to be filled ---- */
+        .arch-imagine {
+          position: relative;
+          margin-bottom: 28px;
+          padding: 20px 22px 22px 26px;
+          border: 1px solid var(--rule);
+          border-left: 3px solid color-mix(in srgb, var(--candle), transparent 45%);
+          background: linear-gradient(180deg, color-mix(in srgb, var(--paper), transparent 30%), var(--paper-2));
+          box-shadow: inset 0 12px 26px -20px rgba(21, 23, 26, 0.6);
+        }
+        .arch-imagine::before {
+          content: "";
+          position: absolute;
+          left: -3px;
+          top: 50%;
+          width: 3px;
+          height: 26px;
+          transform: translateY(-50%);
+          background: var(--candle);
+          opacity: 0.55;
+        }
+
+        /* ---- imagined drawers: kept locally ---- */
+        .arch-imagined {
+          position: relative;
+          padding: 22px 22px 22px 26px;
+          border: 1px solid var(--rule);
+          border-left: 3px solid color-mix(in srgb, var(--candle), transparent 42%);
+          background:
+            linear-gradient(180deg, color-mix(in srgb, var(--paper), transparent 42%), transparent 46%),
+            var(--paper-2);
+          transition: box-shadow var(--t), border-color var(--t);
+        }
+        .arch-imagined.is-open {
+          border-left-color: var(--candle);
+          box-shadow: -13px 0 28px -20px rgba(21, 23, 26, 0.42);
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .arch-card { transition: box-shadow var(--t), border-color var(--t); }
+          .arch-card:hover,
+          .arch-card:focus-visible { transform: none; }
+        }
+
         .archive-state-strip {
           display: flex;
           justify-content: space-between;

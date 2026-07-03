@@ -41,14 +41,65 @@ export default function Colophon() {
 
   return (
     <section id="colophon" className="rule" style={{ scrollMarginTop: 72 }}>
+      <style
+        dangerouslySetInnerHTML={{
+          __html: `
+            #colophon .colo-lede {
+              font-size: 20px;
+              line-height: 1.5;
+              letter-spacing: 0.002em;
+            }
+            #colophon .colo-lede::first-letter {
+              float: left;
+              font-family: var(--font-serif);
+              font-weight: 400;
+              font-size: 3.4em;
+              line-height: 0.72;
+              padding: 0.02em 0.11em 0 0;
+              color: var(--ink);
+            }
+            #colophon .colo-credits {
+              display: grid;
+              grid-template-columns: minmax(6rem, max-content) 1fr;
+              column-gap: 22px;
+              row-gap: 11px;
+              margin: 16px 0 0;
+            }
+            #colophon .colo-credits dt {
+              font-family: var(--font-text);
+              font-size: 12px;
+              line-height: 1.7;
+              letter-spacing: 0.06em;
+              text-transform: lowercase;
+              color: var(--ink-2);
+            }
+            #colophon .colo-credits dd {
+              margin: 0;
+              font-family: var(--font-text);
+              font-size: 14px;
+              line-height: 1.7;
+              color: var(--ink);
+            }
+            @media (max-width: 480px) {
+              #colophon .colo-credits {
+                grid-template-columns: 1fr;
+                row-gap: 4px;
+              }
+              #colophon .colo-credits dd {
+                margin-bottom: 8px;
+              }
+            }
+          `,
+        }}
+      />
       <div className="wrap" style={{ maxWidth: 720 }}>
         <div className="t-eyebrow">colophon</div>
         <h2 className="t-h2 italic" style={{ marginTop: 12, marginBottom: 24 }}>
           what this is, and isn&rsquo;t
         </h2>
 
-        <div className="t-body" style={{ display: "grid", gap: 16, maxWidth: "60ch" }}>
-          <p>
+        <div className="t-body" style={{ display: "grid", gap: 18, maxWidth: "60ch" }}>
+          <p className="colo-lede">
             objet d&rsquo;art is not a portfolio. it is an instrument — a room you tune,
             an atlas you cross, an archive you keep.
           </p>
@@ -71,6 +122,7 @@ export default function Colophon() {
             maxWidth: "min(60ch, calc(100vw - 108px))",
           }}
         >
+          <div className="t-eyebrow">signed in three registers</div>
           <div
             style={{
               display: "flex",
@@ -133,20 +185,23 @@ export default function Colophon() {
 
         <div className="rule" style={{ marginTop: 40, paddingTop: 24 }}>
           <div className="t-eyebrow">credits</div>
-          <ul style={{ listStyle: "none", padding: 0, margin: "14px 0 0", display: "grid", gap: 8 }}>
-            <li className="t-meta">type · cormorant garamond + jetbrains mono</li>
-            <li className="t-meta">palette · tidewater vellum</li>
-            <li className="t-meta">build · next.js 14 · typescript · railway</li>
-            <li className="t-meta">
-              correspondence ·{" "}
+          <dl className="colo-credits">
+            <dt>type</dt>
+            <dd>cormorant garamond + jetbrains mono</dd>
+            <dt>palette</dt>
+            <dd>tidewater vellum</dd>
+            <dt>build</dt>
+            <dd>next.js 14 · typescript · railway</dd>
+            <dt>correspondence</dt>
+            <dd>
               <a
                 href="mailto:hello@objetdart.com"
                 style={{ borderBottom: "1px solid var(--candle)", color: "var(--ink)" }}
               >
                 hello@objetdart.com
               </a>
-            </li>
-          </ul>
+            </dd>
+          </dl>
         </div>
 
         <div style={{ marginTop: 56, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
