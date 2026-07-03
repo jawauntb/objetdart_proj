@@ -901,7 +901,7 @@ export default function DropSphere() {
         }
 
         body:has(.drop-sphere) { overflow: hidden; background: #000; }
-        body:has(.drop-sphere) header { display: none !important; }
+        body:has(.drop-sphere) header:not(.oda-site-header) { display: none !important; }
         body:has(.drop-sphere) .oda-field-watch,
         body:has(.drop-sphere) .oda-candle-mark,
         body:has(.drop-sphere) .oda-tape-shell,
