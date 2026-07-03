@@ -1,30 +1,47 @@
 "use client";
 
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import { getFieldAudio } from "@/lib/audio";
-import { useField } from "@/store/field";
 import * as haptics from "@/lib/haptics";
-import SpacetimeShader from "@/components/SpacetimeShader";
-import TimeCabinet from "@/components/TimeCabinet";
+import { useField } from "@/store/field";
 
 /**
- * /time — the grande complication.
+ * /time — a playable relativity instrument.
  *
- * A chronograph imagined as if Patek Philippe, Seiko, and A. Lange & Söhne
- * shared a bench for a night: a guilloché dial under a fluted bezel, applied
- * markers, a flying tourbillon at six, a moonphase that tracks the real moon,
- * a retrograde power reserve, a central column-wheel chronograph sweep, and a
- * "motion amplitude" complication that reads the energy of your hand (pointer
- * velocity) and the tilt of your device the way a balance reads its mainspring.
- * Below the watch, the old spacetime manifold still bends while it counts.
+ * The hero is a mass-warped spacetime manifold. A worldline climbs out of the
+ * observer's origin; dragging left/right sets VELOCITY (the worldline tilts
+ * toward the 45° light cone), dragging up/down sets MASS (the grid curves into
+ * a gravity well). Two clocks sit side by side — coordinate time runs at the
+ * full rate while proper time falls behind by the Lorentz factor
+ * γ = 1/√(1−v²/c²), so proper = elapsed / γ. Ticks strung along the worldline
+ * mark equal intervals of proper time; as v rises they spread apart, which is
+ * the whole story: speed up, and your own clock runs slow.
  */
 
-const C = 200; // dial centre (viewBox 0..400)
-const DEG = Math.PI / 180;
+const TAU = Math.PI * 2;
+const VMAX = 0.985;
+const SECONDS_PER_CLIMB = 12; // coordinate seconds spanned by the visible worldline
 
-function polar(cx: number, cy: number, r: number, deg: number): readonly [number, number] {
-  const a = (deg - 90) * DEG;
-  return [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+const gammaOf = (v: number) => 1 / Math.sqrt(Math.max(1e-4, 1 - v * v));
+
+function colorAlpha(hex: string, alpha: number) {
+  const clean = hex.replace("#", "");
+  const n = parseInt(
+    clean.length === 3 ? clean.split("").map((ch) => ch + ch).join("") : clean,
+    16,
+  );
+  const r = (n >> 16) & 255;
+  const g = (n >> 8) & 255;
+  const b = n & 255;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
 function formatTime(ms: number) {
@@ -35,1367 +52,858 @@ function formatTime(ms: number) {
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}.${String(hundredths).padStart(2, "0")}`;
 }
 
-function pathFromPoints(points: Array<readonly [number, number]>) {
-  return points.map(([x, y], index) => `${index === 0 ? "M" : "L"}${x.toFixed(1)} ${y.toFixed(1)}`).join(" ");
-}
-
-function cubicPoint(
-  t: number,
-  p0: readonly [number, number],
-  p1: readonly [number, number],
-  p2: readonly [number, number],
-  p3: readonly [number, number],
-): readonly [number, number] {
-  const inv = 1 - t;
-  const x = inv * inv * inv * p0[0] + 3 * inv * inv * t * p1[0] + 3 * inv * t * t * p2[0] + t * t * t * p3[0];
-  const y = inv * inv * inv * p0[1] + 3 * inv * inv * t * p1[1] + 3 * inv * t * t * p2[1] + t * t * t * p3[1];
-  return [x, y];
-}
-
-// Real lunar phase 0..1 (0 = new, 0.5 = full). Conway-ish approximation.
-function moonPhase(date: Date) {
-  const synodic = 29.530588853;
-  const known = Date.UTC(2000, 0, 6, 18, 14); // a known new moon
-  const days = (date.getTime() - known) / 86400000;
-  return ((days % synodic) + synodic) % synodic / synodic;
-}
-
-// SVG path for the illuminated portion of a moon at a given phase.
-function moonLitPath(cx: number, cy: number, r: number, phase: number) {
-  const a = phase * Math.PI * 2;
-  const cosA = Math.cos(a);
-  const rx = Math.abs(cosA) * r;
-  const waxing = phase < 0.5;            // lit on the right while waxing
-  const outerSweep = waxing ? 1 : 0;
-  const innerSweep = cosA > 0 ? (waxing ? 0 : 1) : (waxing ? 1 : 0);
-  return `M ${cx} ${cy - r} A ${r} ${r} 0 0 ${outerSweep} ${cx} ${cy + r} A ${rx} ${r} 0 0 ${innerSweep} ${cx} ${cy - r} Z`;
-}
-
-type Guilloche = { spirals: string[]; rings: number[] };
-type MinuteTick = { x1: number; y1: number; x2: number; y2: number; major: boolean };
-type HourMarker = { hour: number; angle: number; skip: boolean; doubled: boolean };
-
-// Dial-face materials — the thing a collector actually falls for.
-const MATERIALS = [
-  { id: "guilloche", label: "guilloché bleu" },
-  { id: "aventurine", label: "aventurine" },
-  { id: "meteorite", label: "météorite" },
-  { id: "malachite", label: "malachite" },
-] as const;
-type MaterialId = (typeof MATERIALS)[number]["id"];
-
-// deterministic scatter of points inside r<170 for aventurine sparkle
-function dialSparkle(seed: number, count: number) {
-  const pts: Array<{ x: number; y: number; r: number; warm: boolean }> = [];
-  for (let i = 0; i < count; i++) {
-    const a = ((Math.sin((i + seed) * 12.9898) * 43758.5453) % 1 + 1) % 1 * Math.PI * 2;
-    const rad = Math.sqrt(((Math.sin((i + seed) * 78.233) * 43758.5453) % 1 + 1) % 1) * 168;
-    pts.push({
-      x: C + Math.cos(a) * rad,
-      y: C + Math.sin(a) * rad,
-      r: 0.35 + (((Math.sin((i + seed) * 3.1) * 9999) % 1 + 1) % 1) * 1.1,
-      warm: i % 4 === 0,
-    });
-  }
-  return pts;
-}
-
-/**
- * Everything on the dial that never changes between frames — the case, the
- * fluted bezel, the engine-turned guilloché, the chapter ring, the applied
- * markers, the gradients. Memoised so the per-frame heartbeat only reconciles
- * the moving hands and complications (this is what keeps it smooth on phones).
- */
-const StaticDial = memo(function StaticDial(props: {
-  guilloche: Guilloche;
-  minuteTrack: MinuteTick[];
-  hourMarkers: HourMarker[];
-  material: MaterialId;
-}) {
-  const { guilloche, minuteTrack, hourMarkers, material } = props;
-  const sparkle = material === "aventurine" ? dialSparkle(7, 220) : [];
-  return (
-    <>
-      <defs>
-        <radialGradient id="caseMetal" cx="38%" cy="30%" r="80%">
-          <stop offset="0%" stopColor="#3a3631" />
-          <stop offset="45%" stopColor="#1d1a18" />
-          <stop offset="100%" stopColor="#0c0b0a" />
-        </radialGradient>
-        <linearGradient id="bezel" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stopColor="#c9b27e" />
-          <stop offset="22%" stopColor="#7a663c" />
-          <stop offset="50%" stopColor="#e7d39a" />
-          <stop offset="74%" stopColor="#6f5b32" />
-          <stop offset="100%" stopColor="#bda367" />
-        </linearGradient>
-        <radialGradient id="dialFace" cx="42%" cy="34%" r="85%">
-          <stop offset="0%" stopColor="#1b2733" />
-          <stop offset="40%" stopColor="#121b24" />
-          <stop offset="100%" stopColor="#070b10" />
-        </radialGradient>
-        <radialGradient id="subFace" cx="42%" cy="34%" r="85%">
-          <stop offset="0%" stopColor="#22303d" />
-          <stop offset="100%" stopColor="#0a1118" />
-        </radialGradient>
-        <radialGradient id="goldHand" cx="50%" cy="50%" r="60%">
-          <stop offset="0%" stopColor="#f6e6b4" />
-          <stop offset="100%" stopColor="#c79a4e" />
-        </radialGradient>
-        <radialGradient id="tourbWell" cx="50%" cy="40%" r="70%">
-          <stop offset="0%" stopColor="#05080c" />
-          <stop offset="100%" stopColor="#0d141c" />
-        </radialGradient>
-        <radialGradient id="moonSky" cx="50%" cy="50%" r="70%">
-          <stop offset="0%" stopColor="#1a2440" />
-          <stop offset="100%" stopColor="#070a16" />
-        </radialGradient>
-        <radialGradient id="lume" cx="50%" cy="50%" r="50%">
-          <stop offset="0%" stopColor="#bfeede" />
-          <stop offset="100%" stopColor="#5fae9a" />
-        </radialGradient>
-        <radialGradient id="matAventurine" cx="42%" cy="34%" r="85%">
-          <stop offset="0%" stopColor="#16306b" />
-          <stop offset="55%" stopColor="#0c1d4a" />
-          <stop offset="100%" stopColor="#04081e" />
-        </radialGradient>
-        <radialGradient id="matMeteorite" cx="42%" cy="34%" r="85%">
-          <stop offset="0%" stopColor="#5a5e63" />
-          <stop offset="50%" stopColor="#3b3f44" />
-          <stop offset="100%" stopColor="#191b1e" />
-        </radialGradient>
-        <radialGradient id="matMalachite" cx="42%" cy="34%" r="85%">
-          <stop offset="0%" stopColor="#2f7d5e" />
-          <stop offset="60%" stopColor="#155a3f" />
-          <stop offset="100%" stopColor="#06301f" />
-        </radialGradient>
-        <filter id="softShadow" x="-30%" y="-30%" width="160%" height="160%">
-          <feDropShadow dx="0" dy="1.4" stdDeviation="1.6" floodColor="#000" floodOpacity="0.55" />
-        </filter>
-        <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
-          <feGaussianBlur stdDeviation="2.4" result="b" />
-          <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
-        </filter>
-        <clipPath id="tourbClip"><circle cx={C} cy={292} r={36} /></clipPath>
-        <clipPath id="moonClip"><circle cx={C + 54} cy={C + 54} r={20} /></clipPath>
-        <clipPath id="dialClip"><circle cx={C} cy={C} r={178} /></clipPath>
-      </defs>
-
-      {/* case + fluted bezel */}
-      <circle cx={C} cy={C} r={198} fill="url(#caseMetal)" />
-      <circle cx={C} cy={C} r={196} fill="none" stroke="#000" strokeOpacity="0.6" strokeWidth="1" />
-      <g>
-        {Array.from({ length: 120 }, (_, i) => {
-          const [x1, y1] = polar(C, C, 196, i * 3);
-          const [x2, y2] = polar(C, C, 188, i * 3);
-          return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="#000" strokeOpacity={i % 2 ? 0.28 : 0.06} strokeWidth="1.4" />;
-        })}
-      </g>
-      <circle cx={C} cy={C} r={188} fill="url(#bezel)" />
-      <circle cx={C} cy={C} r={180} fill="#0a0d11" />
-
-      {/* dial face — the chosen material (clipped to the dial) */}
-      <g clipPath="url(#dialClip)">
-      {material === "guilloche" && (
-        <>
-          <circle cx={C} cy={C} r={178} fill="url(#dialFace)" />
-          <g opacity="0.5" stroke="#9fb6c9" fill="none" strokeWidth="0.35">
-            {guilloche.rings.map((r, i) => (
-              <circle key={`r${i}`} cx={C} cy={C} r={r} strokeOpacity={0.10 + (i % 3) * 0.04} />
-            ))}
-            {guilloche.spirals.map((path, i) => (
-              <path key={`s${i}`} d={path} strokeOpacity="0.07" />
-            ))}
-          </g>
-        </>
-      )}
-      {material === "aventurine" && (
-        <>
-          <circle cx={C} cy={C} r={178} fill="url(#matAventurine)" />
-          <g>
-            {sparkle.map((s, i) => (
-              <circle key={i} cx={s.x} cy={s.y} r={s.r}
-                fill={s.warm ? "#ffe6a8" : "#dfe9ff"}
-                opacity={0.35 + (i % 5) * 0.12} />
-            ))}
-          </g>
-        </>
-      )}
-      {material === "meteorite" && (
-        <>
-          <circle cx={C} cy={C} r={178} fill="url(#matMeteorite)" />
-          {/* Widmanstätten cross-hatch — etched nickel-iron lattice */}
-          <g stroke="#c8ccd2" strokeWidth="0.4" opacity="0.22">
-            {Array.from({ length: 46 }, (_, i) => {
-              const o = -180 + i * 8;
-              return <line key={`a${i}`} x1={C - 180} y1={C + o} x2={C + 180} y2={C + o - 150} />;
-            })}
-            {Array.from({ length: 46 }, (_, i) => {
-              const o = -180 + i * 8;
-              return <line key={`b${i}`} x1={C - 180} y1={C + o} x2={C + 180} y2={C + o + 150} opacity="0.7" />;
-            })}
-          </g>
-        </>
-      )}
-      {material === "malachite" && (
-        <>
-          <circle cx={C} cy={C} r={178} fill="url(#matMalachite)" />
-          {/* banded concentric malachite eyes */}
-          <g fill="none">
-            {Array.from({ length: 26 }, (_, i) => (
-              <circle key={i} cx={C + Math.sin(i * 1.7) * 40} cy={C + Math.cos(i * 2.3) * 36}
-                r={6 + i * 6} stroke={i % 2 ? "#7fd6a6" : "#0c3d28"} strokeWidth={i % 2 ? 1.4 : 2.2}
-                strokeOpacity="0.35" />
-            ))}
-          </g>
-        </>
-      )}
-      </g>
-
-      {/* chapter ring: minute track */}
-      <g>
-        {minuteTrack.map((t, i) => (
-          <line
-            key={i}
-            x1={t.x1} y1={t.y1} x2={t.x2} y2={t.y2}
-            stroke={t.major ? "#e7d39a" : "rgba(231,211,154,0.5)"}
-            strokeWidth={t.major ? 1.6 : 0.7}
-            strokeLinecap="round"
-          />
-        ))}
-      </g>
-
-      {/* applied hour markers + lume */}
-      <g>
-        {hourMarkers.map((m) => {
-          if (m.skip) return null;
-          const [bx, by] = polar(C, C, 150, m.angle);
-          if (m.doubled) {
-            const [lx, ly] = polar(C, C, 150, m.angle - 2.4);
-            const [rx, ry] = polar(C, C, 150, m.angle + 2.4);
-            return (
-              <g key={m.hour} filter="url(#softShadow)">
-                {[[lx, ly], [rx, ry]].map(([x, y], k) => (
-                  <g key={k} transform={`translate(${x} ${y}) rotate(${m.angle})`}>
-                    <rect x={-2.4} y={-12} width={4.8} height={24} rx={1.6} fill="url(#goldHand)" />
-                  </g>
-                ))}
-              </g>
-            );
-          }
-          return (
-            <g key={m.hour} transform={`translate(${bx} ${by}) rotate(${m.angle})`} filter="url(#softShadow)">
-              <rect x={-2.6} y={-13} width={5.2} height={26} rx={1.8} fill="url(#goldHand)" />
-              <circle cx={0} cy={-17} r={1.8} fill="url(#lume)" opacity="0.9" />
-            </g>
-          );
-        })}
-      </g>
-    </>
-  );
-});
+const GEO = "#ffcf7a";   // worldline / proper geodesic
+const LIGHT = "#7fb0ff"; // light cone
+const WELL = "#ff8f6a";  // mass well
+const INK = "rgba(246, 241, 224, 0.94)";
 
 export default function TimeManifold() {
-  // ── chronograph state ───────────────────────────────────────────
-  const [elapsed, setElapsed] = useState(0);
-  const [running, setRunning] = useState(false);
-  const [mass, setMass] = useState(42);
-  const [velocity, setVelocity] = useState(0.42);
-  const [laps, setLaps] = useState<number[]>([]);
-  const [material, setMaterial] = useState<MaterialId>("guilloche");
-  const startedAt = useRef(0);
-  const storedElapsed = useRef(0);
-  const lastControlAt = useRef(0);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  // touch-effect state for the dial complications (read by the heartbeat)
-  const pings = useRef<Array<{ x: number; y: number; t0: number; color: string }>>([]);
-  const secKick = useRef(0);     // transient flick on the small seconds
-  const moonNudge = useRef(0);   // manual moon advance (fraction of a cycle)
-  const dateNudge = useRef(0);   // manual date advance (days)
-
-  // ── live render heartbeat (drives the running dial every frame) ──
-  const [, setFrame] = useState(0);
+  const velRef = useRef(0.42);   // |v|/c magnitude
+  const dirRef = useRef(1);      // tilt direction of the worldline (+right / -left)
+  const massRef = useRef(38);    // 0..100
+  const runningRef = useRef(false);
+  const coordRef = useRef(0);    // coordinate time (ms)
+  const properRef = useRef(0);   // proper time (ms)
+  const lastTickRef = useRef(0); // last whole proper-second that chimed
   const reduceRef = useRef(false);
+  const lastSyncRef = useRef(0);
+  const lastToneRef = useRef(0);
+  const lastControlRef = useRef(0);
+  const pointerRef = useRef({ active: false, id: -1 });
 
-  // animated, smoothed instrument values held in refs (no re-render churn)
-  const anim = useRef({
-    nowMs: Date.now(),
-    tourbillon: 0,   // tourbillon cage rotation (rad)
-    balance: 0,      // balance wheel oscillation (rad)
-    amplitude: 0,    // motion energy 0..1 (smoothed)
-    ampTarget: 0,
-    tiltX: 0,        // device / pointer tilt, smoothed, -1..1
-    tiltY: 0,
-    tiltTX: 0,
-    tiltTY: 0,
-    power: 1,        // mainspring 0..1
-  });
-  const pointer = useRef({ x: 0, y: 0, t: 0, has: false });
+  const recordTape = useField((s) => s.recordTape);
 
-  // ── live clock + tourbillon + motion loop (always running) ───────
+  const [velocity, setVelocity] = useState(0.42);
+  const [mass, setMass] = useState(38);
+  const [running, setRunning] = useState(false);
+  const [readout, setReadout] = useState("proper 00:00.00 · γ 1.10 · v/c 0.420");
+
+  useEffect(() => { velRef.current = velocity; }, [velocity]);
+  useEffect(() => { massRef.current = mass; }, [mass]);
+  useEffect(() => { runningRef.current = running; }, [running]);
+
   useEffect(() => {
-    reduceRef.current = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    // phones get a lighter paint cadence; the physics still integrate per frame
-    const coarse = window.matchMedia("(pointer: coarse)").matches;
-    const minInterval = reduceRef.current ? 250 : coarse ? 33 : 16;
+    if (typeof window === "undefined") return;
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    reduceRef.current = mq.matches;
+    const update = () => { reduceRef.current = mq.matches; };
+    mq.addEventListener?.("change", update);
+    return () => mq.removeEventListener?.("change", update);
+  }, []);
+
+  // ── the heartbeat: integrate the two clocks + paint the manifold ──
+  useEffect(() => {
+    const root = rootRef.current;
+    const canvas = canvasRef.current;
+    if (!root || !canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    let width = 0;
+    let height = 0;
     let raf = 0;
-    let prev = performance.now();
-    let lastPaint = 0;
-    const tick = (now: number) => {
-      const dt = Math.min(0.05, (now - prev) / 1000);
-      prev = now;
-      const a = anim.current;
-      const motion = reduceRef.current ? 0 : 1;
-      a.nowMs = Date.now();
+    let last = performance.now();
 
-      // tourbillon cage: one rotation per minute, classic
-      a.tourbillon += dt * (Math.PI * 2 / 60) * 60 * motion; // visually ~1 rev/sec for life
-      // balance wheel: 4Hz beat, amplitude swells with motion energy
-      const beat = Math.sin(now / 1000 * Math.PI * 2 * 4);
-      a.balance = beat * (0.5 + a.amplitude * 0.9);
+    const resize = () => {
+      const rect = root.getBoundingClientRect();
+      const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+      width = Math.max(320, Math.floor(rect.width));
+      height = Math.max(480, Math.floor(rect.height));
+      canvas.width = Math.floor(width * dpr);
+      canvas.height = Math.floor(height * dpr);
+      canvas.style.width = `${width}px`;
+      canvas.style.height = `${height}px`;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    };
 
-      // motion amplitude decays unless fed by pointer/tilt
-      a.ampTarget *= 0.94;
-      a.amplitude += (a.ampTarget - a.amplitude) * 0.12;
+    resize();
+    const observer = new ResizeObserver(resize);
+    observer.observe(root);
+    window.addEventListener("resize", resize);
 
-      // tilt easing toward target (set by device orientation / pointer)
-      a.tiltX += (a.tiltTX - a.tiltX) * 0.08;
-      a.tiltY += (a.tiltTY - a.tiltY) * 0.08;
+    const draw = (now: number) => {
+      const delta = Math.min(60, now - last);
+      last = now;
 
-      // mainspring: drains while the chronograph runs, idles otherwise
-      if (running) a.power = Math.max(0, a.power - dt / 240);
-      else a.power = Math.min(1, a.power + dt / 900);
+      const reduce = reduceRef.current;
+      const vel = velRef.current;
+      const dir = dirRef.current;
+      const massN = massRef.current / 100;
+      const gamma = gammaOf(vel);
 
-      secKick.current *= 0.86;
-      if (pings.current.length) pings.current = pings.current.filter((p) => now - p.t0 < 900);
-
-      if (now - lastPaint >= minInterval) {
-        lastPaint = now;
-        setFrame((f) => (f + 1) % 1000000);
+      // integrate the two clocks — proper time dilates by 1/γ
+      if (runningRef.current) {
+        coordRef.current += delta;
+        properRef.current += delta / gamma;
+        const ps = Math.floor(properRef.current / 1000);
+        if (ps > lastTickRef.current) {
+          lastTickRef.current = ps;
+          try { getFieldAudio().playNote(62, 120); } catch { /* noop */ }
+          try { haptics.tap(); } catch { /* noop */ }
+        }
       }
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [running]);
 
-  // ── chronograph timer ────────────────────────────────────────────
-  useEffect(() => {
-    if (!running) return;
-    startedAt.current = performance.now();
-    let raf = 0;
-    const tick = (now: number) => {
-      setElapsed(storedElapsed.current + now - startedAt.current);
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [running]);
+      // ── geometry ──
+      const Ox = width * 0.5;
+      const Oy = height * 0.86;
+      const cx = width * 0.5;
+      const cy = height * 0.42;
+      const S = Math.min(width, height);
+      const CLIMB = Oy - height * 0.06;
+      const strength = massN * S * 0.5;
 
-  // ── motion sensitivity: pointer velocity + device orientation ────
-  useEffect(() => {
-    const onMove = (e: PointerEvent) => {
-      const p = pointer.current;
-      const now = performance.now();
-      if (p.has) {
-        const dt = Math.max(8, now - p.t);
-        const speed = Math.hypot(e.clientX - p.x, e.clientY - p.y) / dt; // px/ms
-        anim.current.ampTarget = Math.min(1, anim.current.ampTarget + speed * 0.22);
+      const warp = (x: number, y: number): [number, number] => {
+        const dx = x - cx;
+        const dy = y - cy;
+        const d = Math.hypot(dx, dy) + S * 0.06;
+        let pull = strength / d;
+        if (pull > 0.9) pull = 0.9;
+        return [x - dx * pull, y - dy * pull + pull * pull * S * 0.2];
+      };
+      const baseAt = (u: number): [number, number] => {
+        const up = u * CLIMB;
+        return [Ox + dir * vel * up, Oy - up];
+      };
+
+      // ── background ──
+      const bg = ctx.createLinearGradient(0, 0, 0, height);
+      bg.addColorStop(0, "#080611");
+      bg.addColorStop(0.55, "#0a0a16");
+      bg.addColorStop(1, "#050409");
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, width, height);
+      const halo = ctx.createRadialGradient(cx, cy, 0, cx, cy, S * 0.7);
+      halo.addColorStop(0, colorAlpha(WELL, 0.05 + massN * 0.08));
+      halo.addColorStop(0.5, "rgba(127, 176, 255, 0.03)");
+      halo.addColorStop(1, "rgba(0, 0, 0, 0)");
+      ctx.fillStyle = halo;
+      ctx.fillRect(0, 0, width, height);
+
+      // ── warped spacetime grid ──
+      ctx.save();
+      ctx.lineWidth = 1;
+      const gx0 = -width * 0.15;
+      const gx1 = width * 1.15;
+      const gy0 = height * 0.02;
+      const gy1 = height * 0.98;
+      const stepX = Math.max(38, width / 16);
+      const stepY = Math.max(38, height / 12);
+      // lines of constant space (vertical)
+      for (let x = gx0; x <= gx1; x += stepX) {
+        ctx.beginPath();
+        for (let y = gy0; y <= gy1; y += 10) {
+          const [wx, wy] = warp(x, y);
+          if (y === gy0) ctx.moveTo(wx, wy);
+          else ctx.lineTo(wx, wy);
+        }
+        ctx.strokeStyle = "rgba(129, 150, 178, 0.10)";
+        ctx.stroke();
       }
-      p.x = e.clientX; p.y = e.clientY; p.t = now; p.has = true;
-      // pointer position also drives a gentle parallax tilt
-      const nx = (e.clientX / window.innerWidth) * 2 - 1;
-      const ny = (e.clientY / window.innerHeight) * 2 - 1;
-      anim.current.tiltTX = Math.max(-1, Math.min(1, nx));
-      anim.current.tiltTY = Math.max(-1, Math.min(1, ny));
-    };
-    const onOrient = (e: DeviceOrientationEvent) => {
-      // gamma: left/right [-90,90], beta: front/back [-180,180]
-      const gx = (e.gamma ?? 0) / 45;
-      const gy = ((e.beta ?? 0) - 45) / 45;
-      anim.current.tiltTX = Math.max(-1, Math.min(1, gx));
-      anim.current.tiltTY = Math.max(-1, Math.min(1, gy));
-      const mag = Math.min(1, (Math.abs(gx) + Math.abs(gy)) * 0.5);
-      anim.current.ampTarget = Math.max(anim.current.ampTarget, mag * 0.6);
-    };
-    // iOS gates DeviceOrientation behind a permission prompt that must be
-    // triggered by a user gesture — ask once on the first touch.
-    type OrientCtor = { requestPermission?: () => Promise<"granted" | "denied"> };
-    const DOE = (window as unknown as { DeviceOrientationEvent?: OrientCtor }).DeviceOrientationEvent;
-    const needsPermission = !!DOE && typeof DOE.requestPermission === "function";
-    const requestTilt = () => {
-      window.removeEventListener("touchend", requestTilt);
-      if (needsPermission && DOE?.requestPermission) {
-        DOE.requestPermission().catch(() => { /* declined — pointer tilt still works */ });
+      // lines of constant time (horizontal)
+      for (let y = gy0; y <= gy1; y += stepY) {
+        ctx.beginPath();
+        for (let x = gx0; x <= gx1; x += 12) {
+          const [wx, wy] = warp(x, y);
+          if (x === gx0) ctx.moveTo(wx, wy);
+          else ctx.lineTo(wx, wy);
+        }
+        ctx.strokeStyle = "rgba(129, 150, 178, 0.085)";
+        ctx.stroke();
       }
-    };
-    if (needsPermission) window.addEventListener("touchend", requestTilt, { once: true });
+      ctx.restore();
 
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("deviceorientation", onOrient);
+      // ── light cone ──
+      const coneUp = CLIMB;
+      const lx = Ox - coneUp;
+      const rx = Ox + coneUp;
+      const topY = Oy - coneUp;
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(Ox, Oy);
+      ctx.lineTo(lx, topY);
+      ctx.lineTo(rx, topY);
+      ctx.closePath();
+      const coneFill = ctx.createLinearGradient(0, Oy, 0, topY);
+      coneFill.addColorStop(0, colorAlpha(LIGHT, 0.10));
+      coneFill.addColorStop(1, "rgba(127, 176, 255, 0)");
+      ctx.fillStyle = coneFill;
+      ctx.fill();
+      ctx.lineWidth = 1.2;
+      ctx.setLineDash([5, 8]);
+      ctx.strokeStyle = colorAlpha(LIGHT, 0.4);
+      ctx.beginPath();
+      ctx.moveTo(Ox, Oy); ctx.lineTo(lx, topY);
+      ctx.moveTo(Ox, Oy); ctx.lineTo(rx, topY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+
+      // ── mass well marker ──
+      ctx.save();
+      ctx.globalCompositeOperation = "screen";
+      const wellR = S * (0.03 + massN * 0.09);
+      const wg = ctx.createRadialGradient(cx, cy, 0, cx, cy, wellR * 2.4);
+      wg.addColorStop(0, colorAlpha(WELL, 0.42 + massN * 0.28));
+      wg.addColorStop(0.5, colorAlpha(WELL, 0.16));
+      wg.addColorStop(1, "rgba(0, 0, 0, 0)");
+      ctx.fillStyle = wg;
+      ctx.beginPath();
+      ctx.arc(cx, cy, wellR * 2.4, 0, TAU);
+      ctx.fill();
+      ctx.globalCompositeOperation = "source-over";
+      ctx.fillStyle = colorAlpha(WELL, 0.9);
+      ctx.beginPath();
+      ctx.arc(cx, cy, Math.max(3, wellR * 0.42), 0, TAU);
+      ctx.fill();
+      ctx.restore();
+
+      // ── worldline (glowing geodesic) ──
+      const SAMPLES = 90;
+      ctx.save();
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.shadowColor = colorAlpha(GEO, 0.65);
+      ctx.shadowBlur = reduce ? 0 : 16;
+      ctx.strokeStyle = colorAlpha(GEO, 0.95);
+      ctx.lineWidth = 3.4;
+      ctx.beginPath();
+      for (let i = 0; i <= SAMPLES; i += 1) {
+        const [wx, wy] = warp(...baseAt(i / SAMPLES));
+        if (i === 0) ctx.moveTo(wx, wy);
+        else ctx.lineTo(wx, wy);
+      }
+      ctx.stroke();
+      ctx.restore();
+
+      // ── proper-time ticks strung along the worldline ──
+      // proper second k sits at u = k·γ / SECONDS_PER_CLIMB → they spread as γ grows
+      ctx.save();
+      const du = gamma / SECONDS_PER_CLIMB;
+      for (let k = 1; k * du <= 1; k += 1) {
+        const u = k * du;
+        const [bx, by] = baseAt(u);
+        const [b2x, b2y] = baseAt(Math.min(1, u + 0.004));
+        const [px, py] = warp(bx, by);
+        const [p2x, p2y] = warp(b2x, b2y);
+        const ang = Math.atan2(p2y - py, p2x - px) + Math.PI / 2;
+        const nx = Math.cos(ang);
+        const ny = Math.sin(ang);
+        const len = 7;
+        ctx.strokeStyle = colorAlpha(GEO, 0.7);
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.moveTo(px - nx * len, py - ny * len);
+        ctx.lineTo(px + nx * len, py + ny * len);
+        ctx.stroke();
+        ctx.fillStyle = colorAlpha(GEO, 0.9);
+        ctx.beginPath();
+        ctx.arc(px, py, 2.2, 0, TAU);
+        ctx.fill();
+      }
+      ctx.restore();
+
+      // ── the traveller climbing the worldline with coordinate time ──
+      const prog = (coordRef.current / 1000 % SECONDS_PER_CLIMB) / SECONDS_PER_CLIMB;
+      const [tx, ty] = warp(...baseAt(prog));
+      ctx.save();
+      ctx.globalCompositeOperation = "screen";
+      const tg = ctx.createRadialGradient(tx, ty, 0, tx, ty, 22);
+      tg.addColorStop(0, colorAlpha("#fff3d6", 0.95));
+      tg.addColorStop(0.4, colorAlpha(GEO, 0.5));
+      tg.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = tg;
+      ctx.beginPath();
+      ctx.arc(tx, ty, 22, 0, TAU);
+      ctx.fill();
+      ctx.restore();
+      ctx.fillStyle = "#fff6e2";
+      ctx.beginPath();
+      ctx.arc(tx, ty, 4.4, 0, TAU);
+      ctx.fill();
+
+      // ── velocity vector at the origin ──
+      const [vTipX, vTipY] = baseAt(0.16);
+      ctx.save();
+      ctx.strokeStyle = colorAlpha(GEO, 0.85);
+      ctx.lineWidth = 2.4;
+      ctx.beginPath();
+      ctx.moveTo(Ox, Oy);
+      ctx.lineTo(vTipX, vTipY);
+      ctx.stroke();
+      const va = Math.atan2(vTipY - Oy, vTipX - Ox);
+      ctx.fillStyle = colorAlpha(GEO, 0.9);
+      ctx.beginPath();
+      ctx.moveTo(vTipX, vTipY);
+      ctx.lineTo(vTipX - Math.cos(va - 0.4) * 10, vTipY - Math.sin(va - 0.4) * 10);
+      ctx.lineTo(vTipX - Math.cos(va + 0.4) * 10, vTipY - Math.sin(va + 0.4) * 10);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+      // origin node
+      ctx.fillStyle = colorAlpha(LIGHT, 0.95);
+      ctx.beginPath();
+      ctx.arc(Ox, Oy, 5, 0, TAU);
+      ctx.fill();
+
+      // ── the two clocks, side by side ──
+      const cyClock = clamp(height * 0.16, 92, 210);
+      const r = clamp(S * 0.088, 40, Math.min(width * 0.2, cyClock - 30));
+      const off = r * 1.42;
+      drawClock(ctx, cx - off, cyClock, r, coordRef.current, LIGHT, "coordinate");
+      drawClock(ctx, cx + off, cyClock, r, properRef.current, GEO, "proper");
+      // γ bridge between the dials
+      ctx.save();
+      ctx.fillStyle = "rgba(246, 241, 224, 0.6)";
+      ctx.font = `600 ${Math.round(r * 0.34)}px var(--font-numerals, monospace)`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(`γ ${gamma.toFixed(2)}`, cx, cyClock);
+      ctx.restore();
+
+      // ── throttled sync to React for the console readout ──
+      if (now - lastSyncRef.current > 110) {
+        lastSyncRef.current = now;
+        setReadout(
+          `proper ${formatTime(properRef.current)} · γ ${gamma.toFixed(2)} · v/c ${vel.toFixed(3)}`,
+        );
+      }
+
+      raf = requestAnimationFrame(draw);
+    };
+
+    raf = requestAnimationFrame(draw);
     return () => {
-      window.removeEventListener("touchend", requestTilt);
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("deviceorientation", onOrient);
+      cancelAnimationFrame(raf);
+      observer.disconnect();
+      window.removeEventListener("resize", resize);
     };
   }, []);
 
-  // ── derived relativity values for the manifold ───────────────────
-  const gamma = 1 / Math.sqrt(Math.max(0.02, 1 - velocity * velocity));
-  const proper = elapsed / gamma;
-  const progress = (elapsed % 60000) / 60000;
-  const worldline = useMemo(() => ({
-    p0: [112, 342 - velocity * 82] as const,
-    p1: [280, 280 - mass * 0.34] as const,
-    p2: [462, 278 + velocity * 40] as const,
-    p3: [812, 132 + velocity * 92] as const,
-  }), [mass, velocity]);
-  const lapMarkers = useMemo(() => {
-    return laps.map((value, index) => {
-      const t = (value % 60000) / 60000;
-      const [x, y] = cubicPoint(t, worldline.p0, worldline.p1, worldline.p2, worldline.p3);
-      return { value, index, x, y };
+  // ── direct manipulation on the manifold ──
+  const tuneFromPointer = useCallback((clientX: number, clientY: number) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const px = clamp(clientX - rect.left, 0, rect.width);
+    const py = clamp(clientY - rect.top, 0, rect.height);
+    const w = Math.max(1, rect.width);
+    const h = Math.max(1, rect.height);
+
+    const signed = clamp((px - w / 2) / (w * 0.42), -1, 1);
+    const nextVel = Number((Math.abs(signed) * VMAX).toFixed(3));
+    const nextDir = signed < 0 ? -1 : 1;
+    const nextMass = Math.round(clamp((h * 0.66 - py) / (h * 0.5), 0, 1) * 100);
+
+    dirRef.current = nextDir;
+    velRef.current = nextVel;
+    massRef.current = nextMass;
+    setVelocity(nextVel);
+    setMass(nextMass);
+
+    const now = performance.now();
+    if (now - lastToneRef.current > 80) {
+      lastToneRef.current = now;
+      try { getFieldAudio().playNote(48 + Math.round(nextVel * 26), 80); } catch { /* noop */ }
+      try { haptics.ripple(0.2 + nextVel * 0.3); } catch { /* noop */ }
+      recordTape("ripple", 0.3 + nextVel * 0.5, "time/drag");
+    }
+  }, [recordTape]);
+
+  const markControl = useCallback((meta: string, normalized: number) => {
+    const now = performance.now();
+    if (now - lastControlRef.current < 110) return;
+    lastControlRef.current = now;
+    const value = clamp(normalized, 0, 1);
+    try { getFieldAudio().playNote(46 + Math.round(value * 24), 90); } catch { /* noop */ }
+    try { haptics.tap(); } catch { /* noop */ }
+    recordTape("sigil", 0.32 + value * 0.5, `time/${meta}`);
+  }, [recordTape]);
+
+  const toggleRunning = () => {
+    setRunning((value) => {
+      const next = !value;
+      runningRef.current = next;
+      try {
+        if (next) getFieldAudio().chime();
+        else getFieldAudio().thud();
+      } catch { /* noop */ }
+      recordTape("sigil", next ? 0.78 : 0.48, next ? "time/start" : "time/pause");
+      return next;
     });
-  }, [laps, worldline]);
-
-  const grid = useMemo(() => {
-    const cx = 470;
-    const cy = 230;
-    const warp = (x: number, y: number): readonly [number, number] => {
-      const dx = x - cx;
-      const dy = y - cy;
-      const d = Math.sqrt(dx * dx + dy * dy) + 8;
-      const pull = (mass / 100) * 92 / d;
-      return [x - dx * pull, y - dy * pull + pull * 30];
-    };
-    const lines: Array<Array<readonly [number, number]>> = [];
-    for (let y = 62; y <= 398; y += 42) {
-      lines.push(Array.from({ length: 70 }, (_, i) => warp(70 + i * 12, y)));
-    }
-    for (let x = 82; x <= 850; x += 48) {
-      lines.push(Array.from({ length: 46 }, (_, i) => warp(x, 44 + i * 8)));
-    }
-    return lines;
-  }, [mass]);
-
-  // ── static dial furniture (memoised so the RAF doesn't recompute) ─
-  const minuteTrack = useMemo(() => {
-    return Array.from({ length: 60 }, (_, i) => {
-      const major = i % 5 === 0;
-      const [x1, y1] = polar(C, C, 178, i * 6);
-      const [x2, y2] = polar(C, C, major ? 168 : 173, i * 6);
-      return { x1, y1, x2, y2, major };
-    });
-  }, []);
-
-  const hourMarkers = useMemo(() => {
-    // applied baton markers; doubled at 12; subdial seats (3/6/9) skipped
-    const skip = new Set([3, 6, 9]);
-    return Array.from({ length: 12 }, (_, i) => {
-      const hour = i === 0 ? 12 : i;
-      return { hour, angle: i * 30, skip: skip.has(i), doubled: i === 0 };
-    });
-  }, []);
-
-  const guilloche = useMemo(() => {
-    // rose-engine spirals: several phase-shifted archimedean spirals + rings
-    const spirals: string[] = [];
-    const arms = 6;
-    for (let s = 0; s < arms; s++) {
-      const pts: Array<readonly [number, number]> = [];
-      const phase = (s / arms) * Math.PI * 2;
-      for (let i = 0; i <= 260; i++) {
-        const tt = i / 260;
-        const ang = phase + tt * Math.PI * 9;
-        const r = 16 + tt * 150;
-        pts.push([C + Math.cos(ang) * r, C + Math.sin(ang) * r]);
-      }
-      spirals.push(pathFromPoints(pts));
-    }
-    const rings = Array.from({ length: 22 }, (_, i) => 18 + i * 7.4);
-    return { spirals, rings };
-  }, []);
-
-  // ── live angles (read each render from anim/clock) ───────────────
-  const a = anim.current;
-  const d = new Date(a.nowMs);
-  const ms = d.getMilliseconds();
-  const sec = d.getSeconds() + ms / 1000;
-  const min = d.getMinutes() + sec / 60;
-  const hr = (d.getHours() % 12) + min / 60;
-  const hourAngle = hr * 30;
-  const minAngle = min * 6;
-  const liveSecAngle = sec * 6 + secKick.current; // running seconds (sweep + tap flick)
-  const chronoSecAngle = (elapsed / 1000) % 60 * 6; // central chrono sweep
-
-  const phase = (moonPhase(d) + moonNudge.current) % 1; // 0..1 (+ manual nudge)
-  const dateNum = ((d.getDate() - 1 + dateNudge.current) % 31) + 1;
-
-  // motion gauge: amplitude mapped to a balance "degrees" reading 0..320
-  const ampDeg = Math.round(a.amplitude * 320);
-  const ampAngle = -60 + a.amplitude * 120; // gauge needle within 120° arc
-
-  // power reserve retrograde arc (−60°..+60° around 12)
-  const powerAngle = -60 + a.power * 120;
-
-  // subtle 3D parallax of the whole watch from tilt
-  const tiltStyle = {
-    transform: `rotateX(${(-a.tiltY * 7).toFixed(2)}deg) rotateY(${(a.tiltX * 7).toFixed(2)}deg)`,
-  };
-
-  // ── interactions ─────────────────────────────────────────────────
-  const toggle = () => {
-    if (running) {
-      storedElapsed.current = elapsed;
-      setRunning(false);
-      try { getFieldAudio().thud(); } catch { /* noop */ }
-      useField.getState().recordTape("sigil", 0.48, "time/pause");
-      return;
-    }
-    setRunning(true);
-    try {
-      getFieldAudio().chime();
-      window.setTimeout(() => getFieldAudio().playNote(72, 85), 95);
-    } catch { /* noop */ }
-    useField.getState().recordTape("sigil", 0.78, "time/start");
   };
 
   const reset = () => {
-    storedElapsed.current = 0;
-    setElapsed(0);
+    coordRef.current = 0;
+    properRef.current = 0;
+    lastTickRef.current = 0;
     setRunning(false);
-    setLaps([]);
+    runningRef.current = false;
     try { getFieldAudio().thud(); } catch { /* noop */ }
-    useField.getState().recordTape("sigil", 0.34, "time/reset");
-  };
-
-  const lap = () => {
-    setLaps((current) => [elapsed, ...current].slice(0, 4));
-    try { getFieldAudio().playNote(76, 120); } catch { /* noop */ }
-    useField.getState().recordTape("sigil", 0.72, `time/lap/${formatTime(elapsed)}`);
-  };
-
-  const wind = () => {
-    anim.current.power = 1;
-    try {
-      getFieldAudio().bell();
-      window.setTimeout(() => getFieldAudio().playNote(67, 90), 70);
-    } catch { /* noop */ }
-    useField.getState().recordTape("object", 0.6, "time/wind");
-  };
-
-  // ── minute repeater: chime the current time on demand ────────────
-  const repeaterTimers = useRef<number[]>([]);
-  const [striking, setStriking] = useState(false);
-  useEffect(() => () => { repeaterTimers.current.forEach((id) => clearTimeout(id)); }, []);
-
-  const minuteRepeater = () => {
-    repeaterTimers.current.forEach((id) => clearTimeout(id));
-    repeaterTimers.current = [];
-    const d = new Date();
-    let h = d.getHours() % 12; if (h === 0) h = 12;
-    const m = d.getMinutes();
-    const quarters = Math.floor(m / 15);
-    const mins = m % 15;
-    const seq: Array<{ midi: number; ding?: boolean }> = [];
-    for (let i = 0; i < h; i++) seq.push({ midi: 55 });               // low gong — hours
-    for (let i = 0; i < quarters; i++) seq.push({ midi: 67, ding: true }); // ding-dong — quarters
-    for (let i = 0; i < mins; i++) seq.push({ midi: 67 });            // high gong — minutes
-    setStriking(true);
-    const audio = getFieldAudio();
-    let t = 0;
-    seq.forEach((s) => {
-      const id = window.setTimeout(() => {
-        try {
-          audio.playNote(s.midi, 320);
-          if (s.ding) window.setTimeout(() => { try { audio.playNote(55, 320); } catch { /* noop */ } }, 150);
-        } catch { /* noop */ }
-      }, t);
-      repeaterTimers.current.push(id);
-      t += s.ding ? 380 : 300;
-    });
-    const end = window.setTimeout(() => setStriking(false), t + 400);
-    repeaterTimers.current.push(end);
-    useField.getState().recordTape("sigil", 0.92, `time/repeater/${h}:${String(m).padStart(2, "0")}`);
-  };
-
-  const cycleMaterial = () => {
-    const idx = MATERIALS.findIndex((mm) => mm.id === material);
-    const next = MATERIALS[(idx + 1) % MATERIALS.length];
-    setMaterial(next.id);
-    try { getFieldAudio().chime(); } catch { /* noop */ }
-    useField.getState().recordTape("object", 0.5, `time/material/${next.id}`);
-  };
-
-  // ── live touch effects on the dial's complications ───────────────
-  // each ping is an expanding ring the heartbeat animates and prunes.
-  const addPing = (x: number, y: number, color = "#e7d39a") => {
-    pings.current.push({ x, y, t0: performance.now(), color });
-    if (pings.current.length > 12) pings.current.shift();
-  };
-  const tape = (kind: "sigil" | "object" | "ripple", v: number, meta: string) =>
-    useField.getState().recordTape(kind, v, meta);
-  const beginDialTouch = (e: React.PointerEvent<SVGGElement>) => {
-    e.stopPropagation();
-    if (e.pointerType !== "touch") return;
-    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* noop */ }
-  };
-  const endDialTouch = (e: React.PointerEvent<SVGGElement>) => {
-    if (e.pointerType !== "touch") return;
-    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* noop */ }
-  };
-
-  const tapReserve = (e: React.MouseEvent) => {
-    e.stopPropagation(); wind(); addPing(C, 108, "#e7d39a"); haptics.roll();
-  };
-  const tapSeconds = (e: React.MouseEvent) => {
-    e.stopPropagation(); secKick.current += 46;
-    try { getFieldAudio().playNote(79, 90); } catch { /* noop */ }
-    addPing(292, C, "#c0563a"); haptics.tap(); tape("object", 0.5, "time/dial/seconds");
-  };
-  const tapTourbillon = (e: React.MouseEvent) => {
-    e.stopPropagation(); anim.current.ampTarget = Math.min(1, anim.current.ampTarget + 0.7);
-    try { getFieldAudio().chime(); } catch { /* noop */ }
-    addPing(C, 292, "#6aa6d6"); haptics.ripple(0.6); tape("sigil", 0.72, "time/dial/tourbillon");
-  };
-  const tapAmplitude = (e: React.MouseEvent) => {
-    e.stopPropagation(); anim.current.ampTarget = 1;
-    try { getFieldAudio().playNote(72, 120); } catch { /* noop */ }
-    addPing(108, C, "#7fe0c4"); haptics.chop(); tape("sigil", 0.7, "time/dial/amplitude");
-  };
-  const tapMoon = (e: React.MouseEvent) => {
-    e.stopPropagation(); moonNudge.current = (moonNudge.current + 1 / 29.53) % 1;
-    try { getFieldAudio().bell(); } catch { /* noop */ }
-    addPing(C + 54, C + 54, "#dfe7ff"); haptics.ripple(0.4); tape("object", 0.5, "time/dial/moon");
-  };
-  const tapDate = (e: React.MouseEvent) => {
-    e.stopPropagation(); dateNudge.current += 1;
-    try { getFieldAudio().playNote(67, 70); } catch { /* noop */ }
-    addPing(C - 52, C - 52, "#c0563a"); haptics.tap(); tape("object", 0.4, "time/dial/date");
-  };
-  const tapCenter = (e: React.MouseEvent) => {
-    e.stopPropagation(); // flyback — zero the chronograph on the fly
-    storedElapsed.current = 0; startedAt.current = performance.now(); setElapsed(0);
-    try { getFieldAudio().thud(); } catch { /* noop */ }
-    addPing(C, C, "#6aa6d6"); haptics.roll(); tape("sigil", 0.6, "time/dial/flyback");
-  };
-
-  const markControl = (meta: string, normalized: number) => {
-    const now = performance.now();
-    if (now - lastControlAt.current < 140) return;
-    lastControlAt.current = now;
-    const value = Math.max(0, Math.min(1, normalized));
-    try { getFieldAudio().playNote(45 + Math.round(value * 24), 90); } catch { /* noop */ }
-    useField.getState().recordTape("sigil", 0.32 + value * 0.5, `time/${meta}`);
+    recordTape("sigil", 0.34, "time/reset");
   };
 
   return (
-    <div className="time-page" data-touch-surface="true" data-pretext-ignore="true">
-      <section className="time-shell">
-        <div className="time-copy">
-          <p className="t-eyebrow time-kicker">grande complication / chronographe / manifold of spacetime</p>
-          <h1>Time bends while it counts.</h1>
-          <p className="time-sub">
-            A tourbillon at six, a moon at her station, a retrograde reserve, and a balance that
-            reads the energy of your hand. Touch any dial — wind the reserve, kick the balance,
-            set the moon, flyback the centre. Wind it. Move it. Let it run.
-          </p>
-        </div>
+    <div
+      ref={rootRef}
+      className="time-instrument"
+      data-touch-surface="true"
+      data-pretext-ignore="true"
+      style={{ "--geo": GEO } as CSSProperties}
+    >
+      <canvas
+        ref={canvasRef}
+        className="time-canvas"
+        role="img"
+        aria-label="A spacetime manifold: drag sideways to set velocity, up and down to set mass, and watch proper time dilate against coordinate time."
+        onPointerDown={(event: ReactPointerEvent<HTMLCanvasElement>) => {
+          pointerRef.current.active = true;
+          pointerRef.current.id = event.pointerId;
+          tuneFromPointer(event.clientX, event.clientY);
+          try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* noop */ }
+        }}
+        onPointerMove={(event: ReactPointerEvent<HTMLCanvasElement>) => {
+          const p = pointerRef.current;
+          if (!p.active || p.id !== event.pointerId) return;
+          tuneFromPointer(event.clientX, event.clientY);
+        }}
+        onPointerUp={(event: ReactPointerEvent<HTMLCanvasElement>) => {
+          const p = pointerRef.current;
+          if (p.id !== event.pointerId) return;
+          p.active = false;
+          p.id = -1;
+          try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* noop */ }
+        }}
+        onPointerCancel={(event: ReactPointerEvent<HTMLCanvasElement>) => {
+          const p = pointerRef.current;
+          if (p.id !== event.pointerId) return;
+          p.active = false;
+          p.id = -1;
+          try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* noop */ }
+        }}
+      />
 
-        <div className="time-grand">
-          <div className="time-grand-stage">
-            <SpacetimeShader />
-          <svg className="time-grand-svg" style={tiltStyle} viewBox="0 0 400 400" role="img" aria-label="grande complication chronograph">
-            <StaticDial guilloche={guilloche} minuteTrack={minuteTrack} hourMarkers={hourMarkers} material={material} />
+      <div className="time-title" aria-hidden="true">
+        <span>time · coordinate vs proper</span>
+        <strong>Relativity</strong>
+      </div>
 
-            {/* ─── subdial: POWER RESERVE (12 o'clock, retrograde) ─── */}
-            <g className="time-dial-target" transform={`translate(${C} ${108})`} onClick={tapReserve} onPointerDown={beginDialTouch} onPointerUp={endDialTouch} onPointerCancel={endDialTouch}>
-              <circle className="time-hit" r={52} />
-              <circle r={40} fill="url(#subFace)" stroke="rgba(231,211,154,0.25)" strokeWidth="0.8" />
-              {Array.from({ length: 13 }, (_, i) => {
-                const ang = -60 + i * 10;
-                const [x1, y1] = polar(0, 0, 34, ang);
-                const [x2, y2] = polar(0, 0, 29, ang);
-                const hot = i >= 10;
-                return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke={hot ? "#c0563a" : "rgba(231,211,154,0.6)"} strokeWidth={i % 3 === 0 ? 1.3 : 0.7} />;
-              })}
-              <text y={26} textAnchor="middle" className="dial-label">réserve de marche</text>
-              <line x1={0} y1={6} x2={polar(0, 0, 30, powerAngle)[0]} y2={polar(0, 0, 30, powerAngle)[1]} stroke="url(#goldHand)" strokeWidth="1.8" strokeLinecap="round" />
-              <circle r={2.6} fill="url(#goldHand)" />
-            </g>
+      <p className="time-hint" aria-hidden="true">
+        drag ← → for velocity · ↑ ↓ for mass
+      </p>
 
-            {/* ─── subdial: RUNNING SECONDS (3 o'clock, live) ─── */}
-            <g className="time-dial-target" transform={`translate(${292} ${C})`} onClick={tapSeconds} onPointerDown={beginDialTouch} onPointerUp={endDialTouch} onPointerCancel={endDialTouch}>
-              <circle className="time-hit" r={52} />
-              <circle r={40} fill="url(#subFace)" stroke="rgba(231,211,154,0.25)" strokeWidth="0.8" />
-              {Array.from({ length: 60 }, (_, i) => {
-                const major = i % 5 === 0;
-                const [x1, y1] = polar(0, 0, 36, i * 6);
-                const [x2, y2] = polar(0, 0, major ? 31 : 33.5, i * 6);
-                return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="rgba(231,211,154,0.55)" strokeWidth={major ? 1.2 : 0.5} />;
-              })}
-              <text y={26} textAnchor="middle" className="dial-label">petite seconde</text>
-              <g transform={`rotate(${liveSecAngle})`}>
-                <line x1={0} y1={8} x2={0} y2={-32} stroke="#c0563a" strokeWidth="1.2" strokeLinecap="round" />
-              </g>
-              <circle r={2.2} fill="#c0563a" />
-            </g>
+      <div className="time-console" aria-label="relativity controls">
+        <button
+          type="button"
+          className="time-run"
+          onClick={toggleRunning}
+          aria-pressed={running}
+        >
+          {running ? "pause" : "start"}
+        </button>
+        <button type="button" className="time-reset" onClick={reset}>
+          reset
+        </button>
+        <TimeSlider
+          label="velocity"
+          min={0}
+          max={VMAX}
+          step={0.005}
+          value={velocity}
+          display={`${velocity.toFixed(3)}c`}
+          onChange={(value) => {
+            const v = Number(value.toFixed(3));
+            setVelocity(v);
+            velRef.current = v;
+            markControl("velocity", v / VMAX);
+          }}
+        />
+        <TimeSlider
+          label="mass"
+          min={0}
+          max={100}
+          step={1}
+          value={mass}
+          display={String(Math.round(mass))}
+          onChange={(value) => {
+            const m = Math.round(value);
+            setMass(m);
+            massRef.current = m;
+            markControl("mass", m / 100);
+          }}
+        />
+        <output className="time-readout" aria-live="polite" aria-label={`relativity readout ${readout}`}>
+          {readout}
+        </output>
+      </div>
 
-            {/* ─── subdial: MOTION AMPLITUDE (9 o'clock) ─── */}
-            <g className="time-dial-target" transform={`translate(${108} ${C})`} onClick={tapAmplitude} onPointerDown={beginDialTouch} onPointerUp={endDialTouch} onPointerCancel={endDialTouch}>
-              <circle className="time-hit" r={52} />
-              <circle r={40} fill="url(#subFace)" stroke="rgba(231,211,154,0.25)" strokeWidth="0.8" />
-              {/* amplitude arc */}
-              <path
-                d={`M ${polar(0, 0, 33, -60)[0]} ${polar(0, 0, 33, -60)[1]} A 33 33 0 0 1 ${polar(0, 0, 33, 60)[0]} ${polar(0, 0, 33, 60)[1]}`}
-                fill="none" stroke="rgba(95,174,154,0.4)" strokeWidth="2"
-              />
-              <path
-                d={`M ${polar(0, 0, 33, -60)[0]} ${polar(0, 0, 33, -60)[1]} A 33 33 0 0 1 ${polar(0, 0, 33, ampAngle)[0]} ${polar(0, 0, 33, ampAngle)[1]}`}
-                fill="none" stroke="url(#lume)" strokeWidth="2.6" strokeLinecap="round"
-                opacity={0.6 + a.amplitude * 0.4}
-              />
-              {/* level bubble reads device / pointer tilt */}
-              <circle cx={a.tiltX * 12} cy={6 + a.tiltY * 8} r={3.4} fill="url(#lume)" opacity="0.85" filter="url(#glow)" />
-              <text y={-10} textAnchor="middle" className="dial-label">amplitude</text>
-              <text y={24} textAnchor="middle" className="dial-num">{ampDeg}°</text>
-              <line x1={0} y1={4} x2={polar(0, 0, 28, ampAngle)[0]} y2={polar(0, 0, 28, ampAngle)[1]} stroke="url(#goldHand)" strokeWidth="1.6" strokeLinecap="round" />
-              <circle r={2.4} fill="url(#goldHand)" />
-            </g>
-
-            {/* ─── TOURBILLON aperture (6 o'clock, flying cage) ─── */}
-            <g className="time-dial-target" onClick={tapTourbillon} onPointerDown={beginDialTouch} onPointerUp={endDialTouch} onPointerCancel={endDialTouch}>
-              <circle className="time-hit" cx={C} cy={292} r={52} />
-              <circle cx={C} cy={292} r={38} fill="url(#tourbWell)" stroke="rgba(231,211,154,0.3)" strokeWidth="1" />
-              <g clipPath="url(#tourbClip)">
-                {/* faint orbital field — the "space" inside the cage */}
-                {Array.from({ length: 3 }, (_, i) => (
-                  <ellipse key={i} cx={C} cy={292} rx={30 - i * 7} ry={12 - i * 3}
-                    fill="none" stroke="rgba(120,170,210,0.18)" strokeWidth="0.6"
-                    transform={`rotate(${i * 60 + a.tourbillon * 8} ${C} ${292})`} />
-                ))}
-                {/* rotating titanium cage */}
-                <g transform={`rotate(${(a.tourbillon * 180 / Math.PI)} ${C} ${292})`}>
-                  <circle cx={C} cy={292} r={30} fill="none" stroke="url(#bezel)" strokeWidth="1.6" />
-                  {Array.from({ length: 3 }, (_, i) => {
-                    const ang = i * 120;
-                    const [ex, ey] = polar(C, 292, 30, ang);
-                    return <line key={i} x1={C} y1={292} x2={ex} y2={ey} stroke="url(#bezel)" strokeWidth="1.4" />;
-                  })}
-                  {/* the balance wheel, oscillating */}
-                  <g transform={`rotate(${a.balance * 60} ${C} ${292})`}>
-                    <circle cx={C} cy={292} r={18} fill="none" stroke="#d9c184" strokeWidth="1.4" opacity="0.9" />
-                    {Array.from({ length: 8 }, (_, i) => {
-                      const ang = i * 45;
-                      const [x1, y1] = polar(C, 292, 18, ang);
-                      const [x2, y2] = polar(C, 292, 13, ang);
-                      return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="#d9c184" strokeWidth="2" strokeLinecap="round" opacity="0.8" />;
-                    })}
-                    <line x1={polar(C, 292, 18, 0)[0]} y1={polar(C, 292, 18, 0)[1]} x2={polar(C, 292, 18, 180)[0]} y2={polar(C, 292, 18, 180)[1]} stroke="#f0e3b8" strokeWidth="1" />
-                  </g>
-                  {/* blued-steel cage seconds pointer */}
-                  <line x1={C} y1={292} x2={polar(C, 292, 30, 0)[0]} y2={polar(C, 292, 30, 0)[1]} stroke="#6aa6d6" strokeWidth="1.4" strokeLinecap="round" />
-                  <circle cx={C} cy={292} r={3} fill="#0c1218" stroke="#d9c184" strokeWidth="0.8" />
-                </g>
-              </g>
-              <text x={C} y={292 + 30} textAnchor="middle" className="dial-label">tourbillon</text>
-            </g>
-
-            {/* ─── MOONPHASE aperture (lower-right) ─── */}
-            <g className="time-dial-target" onClick={tapMoon} onPointerDown={beginDialTouch} onPointerUp={endDialTouch} onPointerCancel={endDialTouch}>
-              <circle className="time-hit" cx={C + 54} cy={C + 54} r={34} />
-              <circle cx={C + 54} cy={C + 54} r={21} fill="#0a0d14" stroke="rgba(231,211,154,0.3)" strokeWidth="1" />
-              <g clipPath="url(#moonClip)">
-                <rect x={C + 34} y={C + 34} width={40} height={40} fill="url(#moonSky)" />
-                {/* stars */}
-                {Array.from({ length: 14 }, (_, i) => {
-                  const sx = C + 36 + ((Math.sin(i * 12.9) * 43758) % 1 + 1) % 1 * 36;
-                  const sy = C + 36 + ((Math.sin(i * 78.2) * 43758) % 1 + 1) % 1 * 36;
-                  return <circle key={i} cx={sx} cy={sy} r={i % 4 === 0 ? 0.9 : 0.5} fill="#dfe7ff" opacity={0.5 + (i % 3) * 0.2} />;
-                })}
-                {/* the moon disc, illuminated fraction from real phase */}
-                {(() => {
-                  const cx = C + 54;
-                  const cy = C + 54;
-                  const r = 9;
-                  return (
-                    <g>
-                      <circle cx={cx} cy={cy} r={r} fill="#10162a" />
-                      <path d={moonLitPath(cx, cy, r, phase)} fill="#f3efe0" />
-                      {/* faint maria so the full moon isn't a blank disc */}
-                      <circle cx={cx - 2.6} cy={cy - 1.6} r={1.4} fill="#0b1020" opacity="0.12" />
-                      <circle cx={cx + 1.8} cy={cy + 2.4} r={1.1} fill="#0b1020" opacity="0.10" />
-                      <circle cx={cx} cy={cy} r={r} fill="none" stroke="rgba(0,0,0,0.3)" strokeWidth="0.5" />
-                    </g>
-                  );
-                })()}
-              </g>
-            </g>
-
-            {/* ─── retrograde DATE arc (upper-left) ─── */}
-            <g className="time-dial-target" transform={`translate(${C - 52} ${C - 52})`} onClick={tapDate} onPointerDown={beginDialTouch} onPointerUp={endDialTouch} onPointerCancel={endDialTouch}>
-              <circle className="time-hit" r={34} />
-              <circle r={26} fill="rgba(0,0,0,0.001)" style={{ pointerEvents: "all" }} />
-              <path
-                d={`M ${polar(0, 0, 22, -55)[0]} ${polar(0, 0, 22, -55)[1]} A 22 22 0 0 1 ${polar(0, 0, 22, 55)[0]} ${polar(0, 0, 22, 55)[1]}`}
-                fill="none" stroke="rgba(231,211,154,0.35)" strokeWidth="1"
-              />
-              {Array.from({ length: 7 }, (_, i) => {
-                const ang = -55 + (i / 6) * 110;
-                const [x1, y1] = polar(0, 0, 22, ang);
-                const [x2, y2] = polar(0, 0, 18, ang);
-                return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="rgba(231,211,154,0.5)" strokeWidth="0.7" />;
-              })}
-              {(() => {
-                const dAng = -55 + ((dateNum - 1) / 30) * 110;
-                const [hx, hy] = polar(0, 0, 19, dAng);
-                return <line x1={0} y1={0} x2={hx} y2={hy} stroke="#c0563a" strokeWidth="1.3" strokeLinecap="round" />;
-              })()}
-              <text y={-2} textAnchor="middle" className="dial-num">{dateNum}</text>
-              <text y={32} textAnchor="middle" className="dial-label">date</text>
-              <circle r={1.8} fill="#c0563a" />
-            </g>
-
-            {/* signature */}
-            <text x={C} y={C - 96} textAnchor="middle" className="dial-sig">OBJET D&apos;ART</text>
-            <text x={C} y={C - 84} textAnchor="middle" className="dial-fine">tourbillon · spacetime · genève</text>
-
-            {/* ─── central hands ─── */}
-            {/* hour */}
-            <g transform={`rotate(${hourAngle} ${C} ${C})`} filter="url(#softShadow)">
-              <path d={`M ${C} ${C + 18} L ${C - 4} ${C + 8} L ${C - 3} ${C - 78} L ${C} ${C - 96} L ${C + 3} ${C - 78} L ${C + 4} ${C + 8} Z`} fill="url(#goldHand)" stroke="#7a5c2a" strokeWidth="0.4" />
-              <rect x={C - 1.4} y={C - 70} width={2.8} height={36} rx={1.4} fill="url(#lume)" opacity="0.8" />
-            </g>
-            {/* minute */}
-            <g transform={`rotate(${minAngle} ${C} ${C})`} filter="url(#softShadow)">
-              <path d={`M ${C} ${C + 24} L ${C - 3.4} ${C + 10} L ${C - 2.4} ${C - 116} L ${C} ${C - 134} L ${C + 2.4} ${C - 116} L ${C + 3.4} ${C + 10} Z`} fill="url(#goldHand)" stroke="#7a5c2a" strokeWidth="0.4" />
-              <rect x={C - 1.2} y={C - 108} width={2.4} height={56} rx={1.2} fill="url(#lume)" opacity="0.8" />
-            </g>
-            {/* central chronograph sweep seconds (blued steel) */}
-            <g transform={`rotate(${chronoSecAngle} ${C} ${C})`}>
-              <line x1={C} y1={C + 40} x2={C} y2={C - 150} stroke="#6aa6d6" strokeWidth="1.5" strokeLinecap="round" filter="url(#glow)" />
-              <circle cx={C} cy={C - 150} r={2.2} fill="#9cc8ee" />
-              <circle cx={C} cy={C + 40} r={4.4} fill="#6aa6d6" />
-            </g>
-            {/* central cap — tap to flyback the chronograph */}
-            <g className="time-dial-target" onClick={tapCenter} onPointerDown={beginDialTouch} onPointerUp={endDialTouch} onPointerCancel={endDialTouch}>
-              <circle className="time-hit" cx={C} cy={C} r={20} />
-              <circle cx={C} cy={C} r={9} fill="rgba(0,0,0,0.001)" style={{ pointerEvents: "all" }} />
-              <circle cx={C} cy={C} r={5} fill="url(#goldHand)" stroke="#5a4520" strokeWidth="0.6" />
-              <circle cx={C} cy={C} r={1.6} fill="#2a2114" />
-            </g>
-
-            {/* live touch pings — expanding rings where the dial was poked */}
-            <g style={{ pointerEvents: "none" }}>
-              {pings.current.map((p, i) => {
-                const k = Math.max(0, Math.min(1, (performance.now() - p.t0) / 900));
-                return (
-                  <g key={`${p.t0}-${i}`}>
-                    <circle cx={p.x} cy={p.y} r={6 + k * 34} fill="none" stroke={p.color} strokeOpacity={0.6 * (1 - k)} strokeWidth={1.6 * (1 - k) + 0.3} />
-                    <circle cx={p.x} cy={p.y} r={2 + k * 12} fill="none" stroke={p.color} strokeOpacity={0.3 * (1 - k)} strokeWidth="0.8" />
-                  </g>
-                );
-              })}
-            </g>
-
-            {/* domed crystal sheen */}
-            <ellipse cx={C - 46} cy={C - 60} rx={120} ry={70} fill="white" opacity="0.05" transform={`rotate(-24 ${C} ${C})`} />
-          </svg>
-          </div>
-
-          <div className="time-readout">
-            <strong>{formatTime(elapsed)}</strong>
-            <span>
-              proper {formatTime(proper)} · γ {gamma.toFixed(2)} · reserve {Math.round(a.power * 100)}% · amp {ampDeg}°
-            </span>
-          </div>
-        </div>
-
-        <div className="time-controls" aria-label="chronograph controls">
-          <div className="time-buttons">
-            <button type="button" onClick={toggle}>{running ? "pause" : "start"}</button>
-            <button type="button" onClick={lap}>lap</button>
-            <button type="button" onClick={reset}>reset</button>
-            <button type="button" onClick={wind}>wind</button>
-            <button type="button" onClick={minuteRepeater} className={striking ? "is-striking" : ""}>
-              {striking ? "striking…" : "chime"}
-            </button>
-          </div>
-          <button type="button" className="time-material" onClick={cycleMaterial}>
-            <span>dial</span>
-            <strong>{MATERIALS.find((mm) => mm.id === material)?.label}</strong>
-            <em>tap to change</em>
-          </button>
-          <label>
-            <span>mass</span>
-            <input
-              type="range"
-              min="0"
-              max="100"
-              value={mass}
-              onChange={(event) => {
-                const value = Number(event.target.value);
-                setMass(value);
-                markControl("mass", value / 100);
-              }}
-            />
-            <strong>{mass}</strong>
-          </label>
-          <label>
-            <span>velocity</span>
-            <input
-              type="range"
-              min="0"
-              max="0.94"
-              step="0.01"
-              value={velocity}
-              onChange={(event) => {
-                const value = Number(event.target.value);
-                setVelocity(value);
-                markControl("velocity", value / 0.94);
-              }}
-            />
-            <strong>{velocity.toFixed(2)}c</strong>
-          </label>
-        </div>
-
-        <ol className="time-laps" aria-label="laps">
-          {laps.length === 0 ? <li>laps wait here</li> : laps.map((value, index) => <li key={`${value}-${index}`}>{formatTime(value)}</li>)}
-        </ol>
-
-        <div className="time-stage">
-          <p className="t-eyebrow time-kicker">rattrapante · split-seconds · relativity regulator</p>
-          <svg className="time-manifold" viewBox="0 0 920 520" role="img" aria-label="rattrapante split-seconds chronograph and gravitation register">
-            <defs>
-              <linearGradient id="mfPanel" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#15130f" />
-                <stop offset="100%" stopColor="#07060a" />
-              </linearGradient>
-              <radialGradient id="mfFace" cx="42%" cy="34%" r="80%">
-                <stop offset="0%" stopColor="#1a2733" />
-                <stop offset="45%" stopColor="#101924" />
-                <stop offset="100%" stopColor="#05080d" />
-              </radialGradient>
-              <radialGradient id="mfSub" cx="42%" cy="34%" r="82%">
-                <stop offset="0%" stopColor="#243340" />
-                <stop offset="100%" stopColor="#0a121a" />
-              </radialGradient>
-              <linearGradient id="mfBezel" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0%" stopColor="#c9b27e" />
-                <stop offset="25%" stopColor="#6f5b32" />
-                <stop offset="50%" stopColor="#e7d39a" />
-                <stop offset="75%" stopColor="#6f5b32" />
-                <stop offset="100%" stopColor="#bda367" />
-              </linearGradient>
-              <radialGradient id="mfGold" cx="50%" cy="50%" r="60%">
-                <stop offset="0%" stopColor="#f6e6b4" />
-                <stop offset="100%" stopColor="#c79a4e" />
-              </radialGradient>
-              <filter id="mfShadow" x="-40%" y="-40%" width="180%" height="180%">
-                <feDropShadow dx="0" dy="2" stdDeviation="2.4" floodColor="#000" floodOpacity="0.6" />
-              </filter>
-              <filter id="mfGlow" x="-60%" y="-60%" width="220%" height="220%">
-                <feGaussianBlur stdDeviation="3" result="b" />
-                <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
-              </filter>
-              <clipPath id="mfRegister"><rect x="492" y="60" width="404" height="404" rx="14" /></clipPath>
-            </defs>
-
-            <rect width="920" height="520" rx="14" fill="url(#mfPanel)" />
-            <rect x="6" y="6" width="908" height="508" rx="11" fill="none" stroke="rgba(231,211,154,0.14)" strokeWidth="1" />
-
-            {/* ─────────── LEFT: rattrapante split-seconds dial ─────────── */}
-            {(() => {
-              const cx = 252, cy = 260, R = 196;
-              const coordAng = (elapsed / 1000) % 60 * 6;            // coordinate-time sweep
-              const properAng = (proper / 1000) % 60 * 6;            // proper-time sweep (lags by 1/γ)
-              const minAng = (elapsed / 60000) % 30 * 12;            // 30-min totaliser
-              const gNorm = Math.min(1, (gamma - 1) / 2.2);          // γ 1..3.2 → 0..1
-              const gAng = -52 + gNorm * 104;
-              const liveAng = ((a.nowMs / 1000) % 60) * 6;
-              return (
-                <g filter="url(#mfShadow)">
-                  {/* case + bezel */}
-                  <circle cx={cx} cy={cy} r={R + 8} fill="#0a0c10" />
-                  <circle cx={cx} cy={cy} r={R + 6} fill="url(#mfBezel)" />
-                  <circle cx={cx} cy={cy} r={R} fill="url(#mfFace)" />
-                  {/* guilloché rings */}
-                  {Array.from({ length: 16 }, (_, i) => (
-                    <circle key={i} cx={cx} cy={cy} r={20 + i * 10} fill="none" stroke="rgba(159,182,201,0.06)" strokeWidth="0.5" />
-                  ))}
-                  {/* tachymètre ring */}
-                  {[60, 70, 80, 90, 100, 120, 150, 200, 300, 400].map((v) => {
-                    const secs = 3600 / v; // seconds for one unit at this tachy value
-                    const ang = (secs % 60) * 6;
-                    const [tx, ty] = polar(cx, cy, R - 14, ang);
-                    return <text key={v} x={tx} y={ty + 3} textAnchor="middle" className="mf-tachy">{v}</text>;
-                  })}
-                  {/* 60s chapter track */}
-                  {Array.from({ length: 60 }, (_, i) => {
-                    const major = i % 5 === 0;
-                    const [x1, y1] = polar(cx, cy, R - 26, i * 6);
-                    const [x2, y2] = polar(cx, cy, R - (major ? 36 : 31), i * 6);
-                    return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke={major ? "#e7d39a" : "rgba(231,211,154,0.5)"} strokeWidth={major ? 1.8 : 0.8} strokeLinecap="round" />;
-                  })}
-                  {Array.from({ length: 12 }, (_, i) => {
-                    const [nx, ny] = polar(cx, cy, R - 52, i * 30);
-                    return <text key={i} x={nx} y={ny + 5} textAnchor="middle" className="mf-num">{i === 0 ? 60 : i * 5}</text>;
-                  })}
-
-                  {/* sub-register: 30-min totaliser (left) */}
-                  <g transform={`translate(${cx - 78} ${cy})`}>
-                    <circle r={44} fill="url(#mfSub)" stroke="rgba(231,211,154,0.25)" strokeWidth="0.8" />
-                    {Array.from({ length: 30 }, (_, i) => {
-                      const major = i % 5 === 0;
-                      const [x1, y1] = polar(0, 0, 40, i * 12);
-                      const [x2, y2] = polar(0, 0, major ? 34 : 37, i * 12);
-                      return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="rgba(231,211,154,0.5)" strokeWidth={major ? 1.1 : 0.5} />;
-                    })}
-                    <text y={28} textAnchor="middle" className="mf-label">30 min</text>
-                    <line x1={0} y1={6} x2={polar(0, 0, 34, minAng)[0]} y2={polar(0, 0, 34, minAng)[1]} stroke="url(#mfGold)" strokeWidth="1.8" strokeLinecap="round" />
-                    <circle r={2.4} fill="url(#mfGold)" />
-                  </g>
-
-                  {/* sub-register: Lorentz γ gauge (right) */}
-                  <g transform={`translate(${cx + 78} ${cy})`}>
-                    <circle r={44} fill="url(#mfSub)" stroke="rgba(231,211,154,0.25)" strokeWidth="0.8" />
-                    <path d={`M ${polar(0, 0, 36, -52)[0]} ${polar(0, 0, 36, -52)[1]} A 36 36 0 0 1 ${polar(0, 0, 36, 52)[0]} ${polar(0, 0, 36, 52)[1]}`} fill="none" stroke="rgba(106,166,214,0.4)" strokeWidth="2" />
-                    <path d={`M ${polar(0, 0, 36, -52)[0]} ${polar(0, 0, 36, -52)[1]} A 36 36 0 0 1 ${polar(0, 0, 36, gAng)[0]} ${polar(0, 0, 36, gAng)[1]}`} fill="none" stroke="#6aa6d6" strokeWidth="2.6" strokeLinecap="round" />
-                    <text y={-12} textAnchor="middle" className="mf-label">facteur γ</text>
-                    <text y={26} textAnchor="middle" className="mf-num">{gamma.toFixed(2)}</text>
-                    <line x1={0} y1={4} x2={polar(0, 0, 30, gAng)[0]} y2={polar(0, 0, 30, gAng)[1]} stroke="#9cc8ee" strokeWidth="1.6" strokeLinecap="round" />
-                    <circle r={2.2} fill="#9cc8ee" />
-                  </g>
-
-                  {/* sub-register: live running seconds (bottom) */}
-                  <g transform={`translate(${cx} ${cy + 84})`}>
-                    <circle r={40} fill="url(#mfSub)" stroke="rgba(231,211,154,0.25)" strokeWidth="0.8" />
-                    {Array.from({ length: 60 }, (_, i) => {
-                      const major = i % 5 === 0;
-                      const [x1, y1] = polar(0, 0, 36, i * 6);
-                      const [x2, y2] = polar(0, 0, major ? 31 : 33.5, i * 6);
-                      return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="rgba(231,211,154,0.5)" strokeWidth={major ? 1 : 0.5} />;
-                    })}
-                    <text y={-12} textAnchor="middle" className="mf-label">seconde</text>
-                    <line x1={0} y1={8} x2={polar(0, 0, 32, liveAng)[0]} y2={polar(0, 0, 32, liveAng)[1]} stroke="#c0563a" strokeWidth="1.1" strokeLinecap="round" />
-                    <circle r={2} fill="#c0563a" />
-                  </g>
-
-                  {/* the rattrapante pair: coordinate (gold) leads, proper (blued) lags by 1/γ */}
-                  <g transform={`rotate(${properAng} ${cx} ${cy})`}>
-                    <line x1={cx} y1={cy + 44} x2={cx} y2={cy - (R - 30)} stroke="#6aa6d6" strokeWidth="2" strokeLinecap="round" filter="url(#mfGlow)" />
-                    <circle cx={cx} cy={cy - (R - 30)} r="3" fill="#9cc8ee" />
-                  </g>
-                  <g transform={`rotate(${coordAng} ${cx} ${cy})`}>
-                    <line x1={cx} y1={cy + 50} x2={cx} y2={cy - (R - 18)} stroke="url(#mfGold)" strokeWidth="2.4" strokeLinecap="round" />
-                    <circle cx={cx} cy={cy - (R - 18)} r="3.2" fill="#f6e6b4" />
-                    <circle cx={cx} cy={cy + 50} r="5" fill="url(#mfGold)" />
-                  </g>
-                  <circle cx={cx} cy={cy} r="6" fill="url(#mfGold)" stroke="#5a4520" strokeWidth="0.6" />
-                  <circle cx={cx} cy={cy} r="2" fill="#241b10" />
-
-                  <text x={cx} y={cy - 96} textAnchor="middle" className="dial-sig">RATTRAPANTE</text>
-                  <text x={cx} y={cy - 84} textAnchor="middle" className="dial-fine">coordinate · proper · genève</text>
-
-                  {/* crystal sheen */}
-                  <ellipse cx={cx - 60} cy={cy - 70} rx={120} ry={70} fill="#fff" opacity="0.05" transform={`rotate(-22 ${cx} ${cy})`} />
-                </g>
-              );
-            })()}
-
-            {/* ─────────── RIGHT: gravitation register (curved spacetime) ─────────── */}
-            <g filter="url(#mfShadow)">
-              <rect x="488" y="56" width="412" height="412" rx="16" fill="url(#mfBezel)" />
-              <rect x="492" y="60" width="404" height="404" rx="14" fill="#070a0e" />
-            </g>
-            <g clipPath="url(#mfRegister)">
-              <rect x="492" y="60" width="404" height="404" fill="url(#mfFace)" />
-              {/* transform the warped grid + worldline into the register box */}
-              <g transform="translate(474 58) scale(0.51)">
-                {grid.map((line, index) => (
-                  <path key={index} d={pathFromPoints(line)} fill="none"
-                    stroke={index % 2 ? "rgba(108,181,190,0.30)" : "rgba(217,161,77,0.26)"} strokeWidth="1.6" />
-                ))}
-                <ellipse cx="470" cy="238" rx={42 + mass * 0.34} ry={18 + mass * 0.16} fill="rgba(217,161,77,0.22)" />
-                <circle cx="470" cy="230" r={18 + mass * 0.24} fill="#d9a14d" opacity="0.9" filter="url(#mfGlow)" />
-                <path
-                  d={`M${worldline.p0[0]} ${worldline.p0[1]} C ${worldline.p1[0]} ${worldline.p1[1]}, ${worldline.p2[0]} ${worldline.p2[1]}, ${worldline.p3[0]} ${worldline.p3[1]}`}
-                  fill="none" stroke="#f2eee6" strokeWidth="5" strokeLinecap="round"
-                />
-                {lapMarkers.map((marker) => (
-                  <g key={`${marker.value}-${marker.index}`}>
-                    <line x1={marker.x} y1={marker.y - 20} x2={marker.x} y2={marker.y + 20} stroke="rgba(217,161,77,0.62)" strokeWidth="1.6" strokeDasharray="4 6" />
-                    <circle cx={marker.x} cy={marker.y} r="8" fill="#d9a14d" />
-                    <circle cx={marker.x} cy={marker.y} r="16" fill="none" stroke="rgba(217,161,77,0.3)" strokeWidth="1.4" />
-                  </g>
-                ))}
-              </g>
-            </g>
-            <text x="510" y="92" className="mf-label">gravitation · isochronism</text>
-            <text x="694" y="452" textAnchor="middle" className="mf-label">worldline tilts with velocity · mass warps the grid</text>
-          </svg>
-        </div>
-
-        <TimeCabinet />
-      </section>
-
-      <style dangerouslySetInnerHTML={{ __html: `
-        .time-page {
-          min-height: 100vh;
-          background:
-            radial-gradient(1200px 700px at 50% -10%, rgba(217,161,77,0.10), transparent 60%),
-            #0c0b0a;
-          color: rgba(242, 238, 230, 0.94);
-        }
-        .time-shell {
-          max-width: 1240px;
-          margin: 0 auto;
-          padding: 34px var(--pad-x) 72px;
-        }
-        .time-kicker {
-          color: rgba(242, 238, 230, 0.56);
-          letter-spacing: 0;
-        }
-        .time-copy h1 {
-          margin: 0;
-          font-family: var(--font-serif);
-          font-size: 58px;
-          line-height: 1;
-          font-weight: 300;
-          letter-spacing: 0;
-        }
-        .time-sub {
-          max-width: 56ch;
-          margin: 14px 0 0;
-          font-family: var(--font-serif);
-          font-size: 18px;
-          line-height: 1.5;
-          color: rgba(242, 238, 230, 0.62);
-        }
-        .time-grand {
-          margin: 30px auto 8px;
-          display: grid;
-          justify-items: center;
-          gap: 16px;
-          perspective: 1100px;
-        }
-        .time-grand-stage {
-          position: relative;
-          width: min(560px, 92vw);
-          aspect-ratio: 1 / 1;
-          display: grid;
-          place-items: center;
-          overscroll-behavior: contain;
-        }
-        .time-grand-svg {
-          position: relative;
-          z-index: 1;
-          pointer-events: none;
-          width: min(520px, 88vw);
-          height: auto;
-          filter: drop-shadow(0 30px 60px rgba(0,0,0,0.6));
-          transform-style: preserve-3d;
-          will-change: transform;
-          transition: transform 0.12s ease-out;
-        }
-        .time-dial-target {
-          pointer-events: auto;
-          cursor: pointer;
-          touch-action: none;
+      <style
+        dangerouslySetInnerHTML={{
+          __html: `
+        .time-instrument {
+          position: fixed;
+          inset: 0;
+          overflow: hidden;
+          min-height: 100svh;
+          background: #050409;
+          color: ${INK};
+          isolation: isolate;
+          -webkit-user-select: none;
+          user-select: none;
           -webkit-tap-highlight-color: transparent;
         }
-        .time-hit {
-          fill: transparent;
-          pointer-events: all;
+
+        .time-canvas {
+          position: absolute;
+          inset: 0;
+          width: 100%;
+          height: 100%;
+          display: block;
+          touch-action: none;
+          cursor: grab;
+          z-index: 0;
         }
-        .dial-label {
-          font-family: var(--font-text);
-          font-size: 5px;
-          letter-spacing: 0.5px;
-          text-transform: lowercase;
-          fill: rgba(231, 211, 154, 0.6);
+
+        .time-canvas:active { cursor: grabbing; }
+
+        .time-title {
+          position: fixed;
+          z-index: 2;
+          top: 76px;
+          left: var(--pad-x);
+          pointer-events: none;
         }
-        .dial-num {
-          font-family: var(--font-numerals);
+
+        .time-title span {
+          display: block;
+          margin-bottom: 8px;
+          color: rgba(246, 241, 224, 0.46);
+          font-family: var(--font-mono);
           font-size: 11px;
-          fill: rgba(242, 238, 230, 0.92);
+          line-height: 1;
+          text-transform: lowercase;
         }
-        .dial-sig {
-          font-family: var(--font-numerals);
-          font-size: 9px;
-          letter-spacing: 2px;
-          fill: rgba(231, 211, 154, 0.85);
+
+        .time-title strong {
+          display: block;
+          color: rgba(248, 244, 224, 0.96);
+          font-family: var(--font-serif);
+          font-size: 118px;
+          font-weight: 400;
+          line-height: 0.86;
+          letter-spacing: -0.02em;
         }
-        .dial-fine {
-          font-family: var(--font-text);
-          font-size: 4.4px;
-          letter-spacing: 0.6px;
-          fill: rgba(231, 211, 154, 0.5);
+
+        .time-hint {
+          position: fixed;
+          z-index: 2;
+          left: var(--pad-x);
+          bottom: calc(150px + env(safe-area-inset-bottom, 0px));
+          margin: 0;
+          color: rgba(246, 241, 224, 0.42);
+          font-family: var(--font-mono);
+          font-size: 11px;
+          letter-spacing: 0.02em;
+          pointer-events: none;
         }
+
+        .time-console {
+          position: fixed;
+          z-index: 4;
+          left: var(--pad-x);
+          right: var(--pad-x);
+          bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+          display: grid;
+          grid-template-columns: 92px 92px minmax(150px, 1.2fr) minmax(150px, 1.2fr) minmax(200px, 1fr);
+          gap: 8px;
+          padding: 8px;
+          border: 1px solid rgba(246, 241, 224, 0.13);
+          border-radius: 8px;
+          background: rgba(8, 7, 16, 0.62);
+          backdrop-filter: blur(18px);
+          -webkit-backdrop-filter: blur(18px);
+          box-shadow: 0 24px 70px rgba(0, 0, 0, 0.4);
+          pointer-events: auto;
+        }
+
+        .time-run,
+        .time-reset,
+        .time-slider,
+        .time-readout {
+          min-width: 0;
+          min-height: 58px;
+          border: 1px solid rgba(246, 241, 224, 0.12);
+          border-radius: 6px;
+          background: rgba(246, 241, 224, 0.055);
+          color: rgba(246, 241, 224, 0.9);
+        }
+
+        .time-run,
+        .time-reset {
+          cursor: pointer;
+          font-family: var(--font-mono);
+          font-size: 12px;
+          text-transform: lowercase;
+        }
+
+        .time-run[aria-pressed="true"] {
+          border-color: color-mix(in srgb, var(--geo) 46%, transparent);
+          color: var(--geo);
+        }
+
+        .time-slider {
+          display: grid;
+          grid-template-columns: 1fr auto;
+          grid-template-rows: auto 28px;
+          gap: 4px 8px;
+          align-items: center;
+          padding: 7px 11px;
+          font-family: var(--font-mono);
+          font-size: 10px;
+          color: rgba(246, 241, 224, 0.58);
+        }
+
+        .time-slider strong {
+          color: var(--geo);
+          font-family: var(--font-numerals, var(--font-mono));
+          font-size: 13px;
+          font-weight: 500;
+        }
+
+        .time-slider input {
+          -webkit-appearance: none;
+          appearance: none;
+          grid-column: 1 / -1;
+          width: 100%;
+          height: 28px;
+          margin: 0;
+          background: transparent;
+          accent-color: var(--geo);
+        }
+
+        .time-slider input::-webkit-slider-runnable-track {
+          height: 2px;
+          border-radius: 999px;
+          background: linear-gradient(90deg, var(--geo), rgba(246, 241, 224, 0.15));
+        }
+
+        .time-slider input::-webkit-slider-thumb {
+          -webkit-appearance: none;
+          appearance: none;
+          width: 16px;
+          height: 16px;
+          margin-top: -7px;
+          border: 0;
+          border-radius: 4px;
+          background: var(--geo);
+          box-shadow: 0 0 14px var(--geo);
+          cursor: pointer;
+        }
+
+        .time-slider input::-moz-range-track {
+          height: 2px;
+          border-radius: 999px;
+          background: linear-gradient(90deg, var(--geo), rgba(246, 241, 224, 0.15));
+        }
+
+        .time-slider input::-moz-range-thumb {
+          width: 16px;
+          height: 16px;
+          border: 0;
+          border-radius: 4px;
+          background: var(--geo);
+          box-shadow: 0 0 14px var(--geo);
+          cursor: pointer;
+        }
+
         .time-readout {
           display: grid;
-          gap: 4px;
+          place-items: center;
+          padding: 0 12px;
+          color: rgba(246, 241, 224, 0.74);
+          font-family: var(--font-mono);
+          font-size: 11px;
+          line-height: 1.3;
           text-align: center;
+          word-break: break-word;
         }
-        .time-readout strong {
-          font-family: var(--font-numerals);
-          font-size: 44px;
-          line-height: 1;
-          font-weight: 500;
-          letter-spacing: 0.5px;
-        }
-        .time-readout span,
-        .time-laps,
-        .time-caption {
-          font-family: var(--font-text);
-          font-size: 12px;
-          letter-spacing: 0;
-          color: rgba(242, 238, 230, 0.58);
-          fill: rgba(242, 238, 230, 0.58);
-        }
-        .time-controls {
-          display: grid;
-          grid-template-columns: repeat(3, minmax(0, 1fr));
-          gap: 10px;
-          margin: 26px 0 12px;
-        }
-        .time-buttons,
-        .time-material,
-        .time-controls label {
-          min-height: 50px;
-          border: 1px solid rgba(231, 211, 154, 0.22);
-          border-radius: 6px;
-          background: rgba(242, 238, 230, 0.05);
-        }
-        .time-buttons {
-          grid-column: 1 / -1;
-          display: grid;
-          grid-template-columns: repeat(5, 1fr);
+
+        body:has(.time-instrument) {
           overflow: hidden;
+          background: #050409;
         }
-        .time-buttons button {
-          border: 0;
-          border-right: 1px solid rgba(242, 238, 230, 0.12);
-          background: transparent;
-          color: rgba(242, 238, 230, 0.92);
-          cursor: pointer;
-          font-family: var(--font-text);
-          font-size: 12px;
-          letter-spacing: 0;
-          text-transform: lowercase;
-          transition: background 0.18s ease, color 0.18s ease;
+
+        body:has(.time-instrument) header {
+          display: none !important;
         }
-        .time-buttons button:hover { background: rgba(231, 211, 154, 0.12); color: #f4ecd6; }
-        .time-buttons button:last-child { border-right: 0; }
-        .time-buttons button.is-striking {
-          color: #f3b64e;
-          background: rgba(217, 161, 77, 0.16);
-          animation: timeStrike 0.5s ease-in-out infinite;
+
+        body:has(.time-instrument) .oda-field-watch,
+        body:has(.time-instrument) .oda-candle-mark,
+        body:has(.time-instrument) .oda-tape-shell,
+        body:has(.time-instrument) .oda-sound-toggle {
+          display: none !important;
         }
-        @keyframes timeStrike {
-          0%, 100% { background: rgba(217, 161, 77, 0.10); }
-          50% { background: rgba(217, 161, 77, 0.28); }
-        }
-        .time-material {
-          display: grid;
-          grid-template-columns: auto 1fr auto;
-          align-items: center;
-          gap: 10px;
-          padding: 8px 14px;
-          cursor: pointer;
-          text-align: left;
-          color: rgba(242, 238, 230, 0.92);
-          transition: border-color 0.2s ease, background 0.2s ease;
-        }
-        .time-material:hover { border-color: rgba(231, 211, 154, 0.5); background: rgba(231, 211, 154, 0.1); }
-        .time-material span {
-          font-family: var(--font-text);
-          font-size: 12px;
-          text-transform: lowercase;
-          color: rgba(242, 238, 230, 0.55);
-        }
-        .time-material strong {
-          font-family: var(--font-numerals);
-          font-size: 16px;
-          letter-spacing: 0.5px;
-        }
-        .time-material em {
-          font-family: var(--font-text);
-          font-style: normal;
-          font-size: 10px;
-          text-transform: lowercase;
-          color: rgba(242, 238, 230, 0.4);
-        }
-        .time-controls label {
-          display: grid;
-          grid-template-columns: auto 1fr auto;
-          gap: 10px;
-          align-items: center;
-          padding: 8px 12px;
-          font-family: var(--font-text);
-          font-size: 12px;
-          letter-spacing: 0;
-          text-transform: lowercase;
-        }
-        .time-controls strong {
-          font-family: var(--font-numerals);
-          font-size: 15px;
-        }
-        .time-laps {
-          list-style: decimal-leading-zero;
-          margin: 0 0 24px;
-          padding-left: 28px;
-        }
-        .time-stage {
-          display: grid;
-          grid-template-columns: 1fr;
-          gap: 8px;
-          margin-bottom: 8px;
-        }
-        .time-stage .time-kicker { margin: 0; }
-        .time-manifold {
-          width: 100%;
-          display: block;
-          border: 1px solid rgba(231, 211, 154, 0.16);
-          border-radius: 12px;
-          background: rgba(242, 238, 230, 0.02);
-        }
-        .mf-tachy {
-          font-family: var(--font-text);
-          font-size: 9px;
-          fill: rgba(231, 211, 154, 0.45);
-        }
-        .mf-num {
-          font-family: var(--font-numerals);
-          font-size: 13px;
-          fill: rgba(242, 238, 230, 0.82);
-        }
-        .mf-label {
-          font-family: var(--font-text);
-          font-size: 10px;
-          letter-spacing: 0.4px;
-          text-transform: lowercase;
-          fill: rgba(231, 211, 154, 0.55);
-        }
-        @media (max-width: 900px) {
-          .time-copy h1 { font-size: 42px; }
-          .time-sub { font-size: 16px; }
-          .time-controls { grid-template-columns: minmax(0, 1fr); }
-          .time-buttons { min-width: 0; }
-          .time-controls label {
-            grid-template-columns: minmax(66px, auto) minmax(0, 1fr) minmax(58px, auto);
+
+        @media (max-width: 940px) {
+          .time-title {
+            top: 30px;
+            left: 22px;
           }
-          .time-controls input[type="range"] { min-width: 0; }
-          .time-manifold { min-height: 300px; }
+
+          .time-title strong {
+            font-size: 72px;
+          }
+
+          .time-hint {
+            bottom: calc(206px + env(safe-area-inset-bottom, 0px));
+            left: 12px;
+          }
+
+          .time-console {
+            left: 10px;
+            right: 10px;
+            bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+            grid-template-columns: 1fr 1fr;
+            max-height: min(46svh, 380px);
+            overflow-y: auto;
+          }
+
+          .time-slider {
+            grid-column: 1 / -1;
+          }
+
+          .time-readout {
+            grid-column: 1 / -1;
+            min-height: 44px;
+          }
         }
-        @media (max-width: 560px) {
-          .time-readout strong { font-size: 34px; }
-          .time-grand-svg { width: 92vw; }
+
+        @media (max-width: 520px) {
+          .time-title strong {
+            font-size: 56px;
+          }
+
+          .time-run,
+          .time-reset {
+            min-height: 52px;
+          }
         }
+
         @media (prefers-reduced-motion: reduce) {
-          .time-grand { transition: none; }
+          .time-canvas { cursor: default; }
         }
-      ` }} />
+      `,
+        }}
+      />
     </div>
+  );
+}
+
+function drawClock(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  r: number,
+  ms: number,
+  accent: string,
+  label: string,
+) {
+  ctx.save();
+  // face
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, TAU);
+  ctx.fillStyle = "rgba(6, 8, 16, 0.66)";
+  ctx.fill();
+  ctx.lineWidth = 1.4;
+  ctx.strokeStyle = colorAlpha(accent, 0.55);
+  ctx.stroke();
+
+  // ticks
+  for (let i = 0; i < 60; i += 1) {
+    const major = i % 5 === 0;
+    const a = (i / 60) * TAU;
+    const outer = r - 3;
+    const inner = r - (major ? 10 : 5);
+    ctx.strokeStyle = colorAlpha(accent, major ? 0.7 : 0.32);
+    ctx.lineWidth = major ? 1.4 : 0.7;
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.sin(a) * outer, cy - Math.cos(a) * outer);
+    ctx.lineTo(cx + Math.sin(a) * inner, cy - Math.cos(a) * inner);
+    ctx.stroke();
+  }
+
+  const secA = ((ms / 1000) % 60) / 60 * TAU;
+  const minA = ((ms / 60000) % 60) / 60 * TAU;
+
+  // minute hand
+  ctx.strokeStyle = colorAlpha(accent, 0.85);
+  ctx.lineWidth = 3;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(cx, cy);
+  ctx.lineTo(cx + Math.sin(minA) * r * 0.5, cy - Math.cos(minA) * r * 0.5);
+  ctx.stroke();
+
+  // second hand (glowing sweep)
+  ctx.shadowColor = colorAlpha(accent, 0.7);
+  ctx.shadowBlur = 8;
+  ctx.strokeStyle = accent;
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.moveTo(cx - Math.sin(secA) * r * 0.16, cy + Math.cos(secA) * r * 0.16);
+  ctx.lineTo(cx + Math.sin(secA) * r * 0.82, cy - Math.cos(secA) * r * 0.82);
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  ctx.fillStyle = accent;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 2.6, 0, TAU);
+  ctx.fill();
+
+  // label + digital readout
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = "rgba(246, 241, 224, 0.5)";
+  ctx.font = `${Math.round(r * 0.2)}px var(--font-mono, monospace)`;
+  ctx.fillText(label, cx, cy - r - r * 0.24);
+  ctx.fillStyle = colorAlpha(accent, 0.95);
+  ctx.font = `600 ${Math.round(r * 0.28)}px var(--font-numerals, monospace)`;
+  ctx.fillText(formatTime(ms), cx, cy + r + r * 0.32);
+  ctx.restore();
+}
+
+function TimeSlider({
+  label,
+  min,
+  max,
+  step,
+  value,
+  display,
+  onChange,
+}: {
+  label: string;
+  min: number;
+  max: number;
+  step: number;
+  value: number;
+  display: string;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <label className="time-slider">
+      <span>{label}</span>
+      <strong>{display}</strong>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        aria-label={label}
+        onChange={(event) => onChange(Number(event.target.value))}
+      />
+    </label>
   );
 }
