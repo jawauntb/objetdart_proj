@@ -24,6 +24,18 @@ yarn start
 
 > Using npm instead of yarn? `npm install` then `npm run dev` works identically.
 
+## iOS coin app
+
+The coin also has a small SwiftUI app in `ios/ObjetCoin`. Open
+`ios/ObjetCoin/ObjetCoin.xcodeproj` in Xcode and run the `ObjetCoin` scheme.
+
+By default it loads the production `/coin` route full-screen. For local web
+development, add this launch argument to the Xcode scheme:
+
+```text
+-CoinURL http://localhost:3000/coin?app=ios
+```
+
 ## Deployment
 
 Production runs on Railway from the GitHub `main` branch. If Railway falls
