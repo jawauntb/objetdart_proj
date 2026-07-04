@@ -174,6 +174,44 @@ function poke(d: Drop, angle: number, strength: number): void {
   for (const m of d.modes) m.v -= strength * Math.cos(m.k * angle) * 6;
 }
 
+// Sample the wobbling surface into boundary points at a given radius scale.
+function dropPoints(
+  d: Drop,
+  n: number,
+  radiusScale: number,
+  modeGain: number,
+): Array<[number, number]> {
+  const pts: Array<[number, number]> = [];
+  for (let i = 0; i < n; i++) {
+    const th = (i / n) * TAU;
+    const rr = d.r * radiusScale * (1 + modeSum(d, th) * modeGain);
+    pts.push([d.x + Math.cos(th) * rr, d.y + Math.sin(th) * rr]);
+  }
+  return pts;
+}
+
+// Trace a SMOOTH closed curve through the sample points — quadratic segments
+// anchored on each point and joined at segment midpoints. Keeps a split,
+// merging, wobbling, or flung bead perfectly round with no straight-line
+// polygon edges on the meniscus. Caller sets beginPath + fill/stroke style.
+function smoothClosedPath(ctx: CanvasRenderingContext2D, pts: Array<[number, number]>): void {
+  const n = pts.length;
+  if (n < 3) return;
+  const mid = (a: [number, number], b: [number, number]): [number, number] => [
+    (a[0] + b[0]) / 2,
+    (a[1] + b[1]) / 2,
+  ];
+  const first = mid(pts[n - 1], pts[0]);
+  ctx.moveTo(first[0], first[1]);
+  for (let i = 0; i < n; i++) {
+    const cur = pts[i];
+    const nxt = pts[(i + 1) % n];
+    const m = mid(cur, nxt);
+    ctx.quadraticCurveTo(cur[0], cur[1], m[0], m[1]);
+  }
+  ctx.closePath();
+}
+
 // ── Water audio — a present interactive layer over the "aphros" bed ────────
 type WaterAudio = {
   ready: boolean;
@@ -873,13 +911,7 @@ export default function DropSphere() {
         rad.addColorStop(1, "rgba(255,255,255,0)");
         fctx.fillStyle = rad;
         fctx.beginPath();
-        for (let i = 0; i <= N; i++) {
-          const th = (i / N) * TAU;
-          const rr = d.r * 1.75 * (1 + modeSum(d, th) * 0.7);
-          const x = d.x + Math.cos(th) * rr, y = d.y + Math.sin(th) * rr;
-          if (i === 0) fctx.moveTo(x, y); else fctx.lineTo(x, y);
-        }
-        fctx.closePath();
+        smoothClosedPath(fctx, dropPoints(d, N, 1.75, 0.7));
         fctx.fill();
       }
       fctx.globalCompositeOperation = "source-over";
@@ -1007,13 +1039,8 @@ export default function DropSphere() {
         g.lineWidth = Math.max(1.5, d.r * 0.03);
         g.strokeStyle = "rgba(150,225,245,0.5)";
         g.beginPath();
-        for (let i = 0; i <= N; i++) {
-          const th = (i / N) * TAU;
-          const rr = d.r * (1 + modeSum(d, th));
-          const x = d.x + Math.cos(th) * rr, y = d.y + Math.sin(th) * rr;
-          if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
-        }
-        g.closePath(); g.stroke();
+        smoothClosedPath(g, dropPoints(d, N, 1, 1));
+        g.stroke();
         // soft aqua fresnel glow just inside the rim
         const fr = g.createRadialGradient(d.x, d.y, d.r * 0.6, d.x, d.y, d.r);
         fr.addColorStop(0, "rgba(90,190,220,0)");
