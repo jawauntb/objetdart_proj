@@ -175,16 +175,22 @@ function poke(d: Drop, angle: number, strength: number): void {
 }
 
 // Sample the wobbling surface into boundary points at a given radius scale.
+// `lx`/`ly` are a (roughly unit) gravity direction and `lean` its strength, so
+// the bead sags into a teardrop toward gravity when the phone is tilted.
 function dropPoints(
   d: Drop,
   n: number,
   radiusScale: number,
   modeGain: number,
+  lx = 0,
+  ly = 0,
+  lean = 0,
 ): Array<[number, number]> {
   const pts: Array<[number, number]> = [];
   for (let i = 0; i < n; i++) {
     const th = (i / n) * TAU;
-    const rr = d.r * radiusScale * (1 + modeSum(d, th) * modeGain);
+    let rr = d.r * radiusScale * (1 + modeSum(d, th) * modeGain);
+    if (lean) rr *= 1 + lean * (Math.cos(th) * lx + Math.sin(th) * ly);
     pts.push([d.x + Math.cos(th) * rr, d.y + Math.sin(th) * rr]);
   }
   return pts;
@@ -615,24 +621,43 @@ export default function DropSphere() {
   const dropsRef = useRef<Drop[]>([]);
   const zoomRef = useRef({ slider: 0, impulse: 0, current: 0, vel: 0 });
   const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
-  const dragRef = useRef({ id: -1, drop: -1, lastX: 0, lastY: 0, lastT: 0, downX: 0, downY: 0, downT: 0, moved: 0, vx: 0, vy: 0, throttle: 0 });
+  const dragRef = useRef({ id: -1, drop: -1, lastX: 0, lastY: 0, lastT: 0, downX: 0, downY: 0, downT: 0, moved: 0, vx: 0, vy: 0, throttle: 0, pullAt: 0 });
   const pinchRef = useRef({ active: false, dist: 0 });
   const audioRef = useRef<WaterAudio | null>(null);
   const startRef = useRef(0);
   const sizeRef = useRef({ w: 0, h: 0 });
   const bloopRef = useRef(0);
+  // smoothed in-plane gravity vector (unit-ish, x→right, y→down) from tilt,
+  // plus its magnitude for the meniscus lean. Updated every frame in step().
+  const gravityRef = useRef({ tx: 0, ty: 0, x: 0, y: 0, mag: 0 });
+  // device-motion bookkeeping + the listeners we attach, for clean teardown.
+  const motionRef = useRef<{
+    armed: boolean;
+    lastMag: number | null;
+    lastShakeAt: number;
+    gentleAt: number;
+    onOrient: ((e: DeviceOrientationEvent) => void) | null;
+    onMotion: ((e: DeviceMotionEvent) => void) | null;
+  }>({ armed: false, lastMag: null, lastShakeAt: 0, gentleAt: 0, onOrient: null, onMotion: null });
+  // last tap (for double-tap-to-bounce)
+  const tapRef = useRef({ t: 0, x: 0, y: 0 });
 
   const [dive, setDive] = useState(0);
   const [readout, setReadout] = useState("surface · zoom 0.00 · 1 drop");
   const [fallback, setFallback] = useState(false);
+  // "hidden" (no sensors / auto-armed) | "prompt" (iOS needs a tap) | "on"
+  const [motionUI, setMotionUI] = useState<"hidden" | "prompt" | "on">("hidden");
 
   const recordTape = useField((s) => s.recordTape);
 
   useEffect(() => { zoomRef.current.slider = dive; }, [dive]);
 
+  const armSensorsRef = useRef<() => void>(() => {});
   const ensureAudio = useCallback(() => {
     if (!audioRef.current) audioRef.current = createWaterAudio();
     audioRef.current.kick();
+    // first touch is a user gesture — a good moment to request motion on iOS.
+    try { armSensorsRef.current(); } catch { /* noop */ }
   }, []);
 
   useEffect(() => {
@@ -731,6 +756,181 @@ export default function DropSphere() {
     return false;
   }, []);
 
+  // agitate every bead — a slosh of random wobble + a shove of velocity.
+  const agitate = useCallback((amt: number) => {
+    const reduced = reduceRef.current;
+    const k = clamp(amt, 0, 1) * (reduced ? 0.4 : 1);
+    for (const d of dropsRef.current) {
+      for (const m of d.modes) m.v += (Math.random() - 0.5) * k * 13;
+      d.vx += (Math.random() - 0.5) * k * 150;
+      d.vy += (Math.random() - 0.5) * k * 130;
+    }
+  }, []);
+
+  // a hard shake — necks a bead off and flings the whole cluster apart.
+  const shakeScatter = useCallback((amt: number) => {
+    splitLargest();
+    const k = clamp(amt, 0, 1);
+    for (const d of dropsRef.current) {
+      d.vx += rand(-1, 1) * 230 * k;
+      d.vy += rand(-1, 1) * 190 * k;
+      for (const m of d.modes) m.v += rand(-11, 11);
+    }
+    try { audioRef.current?.ripple(0.9); } catch { /* noop */ }
+    try { audioRef.current?.gloop(); } catch { /* noop */ }
+    try { haptics.storm(); } catch { /* noop */ }
+    recordTape("object", 0.95, "drop/shake-split");
+  }, [splitLargest, recordTape]);
+
+  // pull a droplet off a bead: it necks, pinches, and follows the finger.
+  const pullApart = useCallback((drop: Drop, px: number, py: number, spd: number): boolean => {
+    const drops = dropsRef.current;
+    if (drops.length >= MAX_DROPS) return false;
+    if (drop.r < 62) return false;
+    const reduced = reduceRef.current;
+    const now = (performance.now() - startRef.current) / 1000;
+    const childR = clamp(drop.r * 0.42, 34, drop.r * 0.58);
+    const newParentR = Math.sqrt(Math.max(46 * 46, drop.r * drop.r - childR * childR));
+    let dirx = px - drop.x, diry = py - drop.y;
+    const len = Math.hypot(dirx, diry) || 1;
+    dirx /= len; diry /= len;
+    const flick = clamp(spd, 0, 900);
+    const child: Drop = {
+      id: DROP_ID++,
+      x: px, y: py,
+      vx: dirx * (140 + flick * 0.4),
+      vy: diry * (140 + flick * 0.4),
+      r: childR,
+      modes: makeModes(reduced),
+      mic: [],
+      grabbed: true, gx: 0, gy: 0,
+      mergeLock: now + 0.9,
+      bob: Math.random() * TAU,
+    };
+    // hand the microbes on the pulled side to the new droplet
+    const kept: Microbe[] = [];
+    for (const m of drop.mic) {
+      const side = m.x * dirx + m.y * diry;
+      if (side > 0.2 && child.mic.length < 12) child.mic.push(m);
+      else kept.push(m);
+    }
+    drop.mic = kept;
+    if (child.mic.length === 0) populate(child, reduced);
+    drop.r = newParentR;
+    drop.grabbed = false;
+    drop.mergeLock = now + 0.9;
+    for (const m of drop.modes) m.v += rand(-8, 8);
+    for (const m of child.modes) m.v += rand(-9, 9);
+    drops.push(child);
+    // the finger keeps hold — of the droplet it just tore free
+    dragRef.current.drop = child.id;
+    dragRef.current.pullAt = performance.now();
+    try { audioRef.current?.plip(); } catch { /* noop */ }
+    try { haptics.chop(); } catch { /* noop */ }
+    recordTape("object", 0.8, "drop/pull");
+    return true;
+  }, [recordTape]);
+
+  // double-tap a bead → it springs up and jiggles like a struck jelly.
+  const bounceDrop = useCallback((d: Drop) => {
+    const reduced = reduceRef.current;
+    d.grabbed = false;
+    d.vy -= reduced ? 150 : 340;
+    d.vx += rand(-50, 50);
+    for (const m of d.modes) m.v += rand(-9, 9);
+    try { audioRef.current?.drip(0.85); } catch { /* noop */ }
+    try { audioRef.current?.plip(); } catch { /* noop */ }
+    try { haptics.roll(); } catch { /* noop */ }
+    recordTape("object", 0.7, "drop/bounce");
+  }, [recordTape]);
+
+  // ── device motion: tilt to roll water downhill, shake to scatter ───────
+  const armSensors = useCallback(() => {
+    if (typeof window === "undefined" || motionRef.current.armed) return;
+    motionRef.current.armed = true;
+
+    const onOrient = (e: DeviceOrientationEvent) => {
+      // gamma: left/right tilt (deg), beta: front/back tilt (deg). Flat = calm
+      // bead; tilt any way and gravity leans that way and the water runs downhill.
+      const gx = (e.gamma ?? 0) / 50;
+      const gy = (e.beta ?? 0) / 50;
+      const g = gravityRef.current;
+      g.tx = clamp(gx, -1, 1);
+      g.ty = clamp(gy, -1, 1);
+    };
+
+    const onMotion = (e: DeviceMotionEvent) => {
+      const a = e.accelerationIncludingGravity;
+      if (!a) return;
+      const mag = Math.hypot(a.x ?? 0, a.y ?? 0, a.z ?? 0);
+      const m = motionRef.current;
+      const reduced = reduceRef.current;
+      if (m.lastMag != null) {
+        const jolt = Math.abs(mag - m.lastMag);
+        if (jolt > (reduced ? 9 : 5)) {
+          const amt = clamp(jolt / 26, 0, 1);
+          agitate(amt);
+          const now = performance.now();
+          if (jolt > (reduced ? 22 : 15) && now - m.lastShakeAt > 520) {
+            m.lastShakeAt = now;
+            shakeScatter(amt);
+          } else if (now - m.gentleAt > 220) {
+            m.gentleAt = now;
+            try { audioRef.current?.ripple(clamp(0.2 + amt * 0.6, 0.2, 0.8)); } catch { /* noop */ }
+            try { haptics.ripple(0.2 + amt * 0.4); } catch { /* noop */ }
+          }
+        }
+      }
+      m.lastMag = mag;
+    };
+
+    motionRef.current.onOrient = onOrient;
+    motionRef.current.onMotion = onMotion;
+
+    type PermCtor = { requestPermission?: () => Promise<"granted" | "denied"> };
+    const DOE = (window as unknown as { DeviceOrientationEvent?: PermCtor }).DeviceOrientationEvent;
+    const DME = (window as unknown as { DeviceMotionEvent?: PermCtor }).DeviceMotionEvent;
+    const add = () => {
+      window.addEventListener("deviceorientation", onOrient);
+      window.addEventListener("devicemotion", onMotion);
+      setMotionUI("on");
+    };
+    if (DOE && typeof DOE.requestPermission === "function") {
+      Promise.allSettled([
+        DOE.requestPermission?.(),
+        DME?.requestPermission?.(),
+      ]).then((res) => {
+        if (res.some((r) => r.status === "fulfilled" && r.value === "granted")) add();
+        else { motionRef.current.armed = false; }
+      }).catch(() => { motionRef.current.armed = false; });
+    } else {
+      add();
+    }
+  }, [agitate, shakeScatter]);
+  armSensorsRef.current = armSensors;
+
+  // decide the motion affordance on mount; auto-arm where no permission is
+  // needed (Android/desktop), show a "tilt to play" chip on iOS, clean up.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const w = window as unknown as {
+      DeviceOrientationEvent?: { requestPermission?: () => Promise<string> };
+      DeviceMotionEvent?: unknown;
+    };
+    const hasOrient = "DeviceOrientationEvent" in window;
+    const hasMotion = "DeviceMotionEvent" in window;
+    if (!hasOrient && !hasMotion) { setMotionUI("hidden"); return; }
+    const needsPerm = !!(w.DeviceOrientationEvent && typeof w.DeviceOrientationEvent.requestPermission === "function");
+    if (needsPerm) setMotionUI("prompt");
+    else armSensors();
+    const m = motionRef.current;
+    return () => {
+      if (m.onOrient) window.removeEventListener("deviceorientation", m.onOrient);
+      if (m.onMotion) window.removeEventListener("devicemotion", m.onMotion);
+      m.armed = false; m.onOrient = null; m.onMotion = null;
+    };
+  }, [armSensors]);
+
   // ── main loop ────────────────────────────────────────────────────────
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -804,6 +1004,15 @@ export default function DropSphere() {
       zs.current = mix(zs.current, target, 1 - Math.exp(-dt * 6));
       zs.vel = Math.abs(zs.current - prevZ) / Math.max(dt, 0.001);
 
+      // smooth the tilt-derived gravity vector and derive its magnitude.
+      const grav = gravityRef.current;
+      const gk = 1 - Math.exp(-dt * 5);
+      grav.x += (grav.tx - grav.x) * gk;
+      grav.y += (grav.ty - grav.y) * gk;
+      grav.mag = Math.min(1, Math.hypot(grav.x, grav.y));
+      // gravity acceleration (px/s²): water runs downhill toward the low side.
+      const G = reduced ? 260 : 720;
+
       for (const d of drops) {
         // surface-tension modes: damped harmonic springs → ring and settle
         for (const m of d.modes) {
@@ -815,6 +1024,10 @@ export default function DropSphere() {
         if (d.grabbed) {
           continue; // position handled by pointer follow
         }
+        // tilt gravity — the headline: the bead slides and rolls downhill and
+        // pools against the low wall; leveling the phone lets it come to rest.
+        d.vx += grav.x * G * dt;
+        d.vy += grav.y * G * dt;
         // gentle buoyant drift + cohesion pull toward the crowd centroid
         d.vy += Math.sin(d.bob) * 2 * dt;
         if (drops.length > 1) {
@@ -904,6 +1117,8 @@ export default function DropSphere() {
       fctx.clearRect(0, 0, w, h);
       fctx.globalCompositeOperation = "lighter";
       const N = coarse ? 30 : 44;
+      const gv = gravityRef.current;
+      const lean = gv.mag * 0.13;
       for (const d of drops) {
         const rad = fctx.createRadialGradient(d.x, d.y, 0, d.x, d.y, d.r * 1.75);
         rad.addColorStop(0, "rgba(255,255,255,1)");
@@ -911,7 +1126,7 @@ export default function DropSphere() {
         rad.addColorStop(1, "rgba(255,255,255,0)");
         fctx.fillStyle = rad;
         fctx.beginPath();
-        smoothClosedPath(fctx, dropPoints(d, N, 1.75, 0.7));
+        smoothClosedPath(fctx, dropPoints(d, N, 1.75, 0.7, gv.x, gv.y, lean));
         fctx.fill();
       }
       fctx.globalCompositeOperation = "source-over";
@@ -1032,6 +1247,8 @@ export default function DropSphere() {
 
       // glass reads: fresnel rim, specular glint, inner shading — per bead
       const N = 48;
+      const gv2 = gravityRef.current;
+      const lean2 = gv2.mag * 0.13;
       for (const d of drops) {
         // fresnel rim
         g.save();
@@ -1039,7 +1256,7 @@ export default function DropSphere() {
         g.lineWidth = Math.max(1.5, d.r * 0.03);
         g.strokeStyle = "rgba(150,225,245,0.5)";
         g.beginPath();
-        smoothClosedPath(g, dropPoints(d, N, 1, 1));
+        smoothClosedPath(g, dropPoints(d, N, 1, 1, gv2.x, gv2.y, lean2));
         g.stroke();
         // soft aqua fresnel glow just inside the rim
         const fr = g.createRadialGradient(d.x, d.y, d.r * 0.6, d.x, d.y, d.r);
@@ -1173,31 +1390,48 @@ export default function DropSphere() {
     d.moved += Math.hypot(dx, dy);
 
     if (d.drop !== -1) {
-      // sloshing wobble while a bead is dragged fast
+      // sloshing wobble while a bead is dragged — trailing slosh + pull-off
       const drop = dropsRef.current.find((o) => o.id === d.drop);
-      if (drop && d.moved > 6) {
+      if (drop && d.moved > 4) {
         const spd = Math.hypot(dx, dy);
-        if (spd > 6) {
+        const px = e.clientX - rect.left, py = e.clientY - rect.top;
+        // how far the finger has raced ahead of the bead it's dragging: a fast,
+        // far yank necks a droplet off and hands it to the finger.
+        const stretch = Math.hypot(px - drop.x, py - drop.y);
+        if (
+          spd > 16 &&
+          stretch > drop.r * 1.15 &&
+          drop.r > 62 &&
+          now - d.pullAt > 260 &&
+          dropsRef.current.length < MAX_DROPS
+        ) {
+          // pullApart handles audio/haptics/tape and re-targets the drag
+          pullApart(drop, px, py, spd * 14);
+        } else if (spd > 4) {
           const ang = Math.atan2(dy, dx);
-          poke(drop, ang + Math.PI, clamp(spd * 0.0016, 0, 0.09));
-          if (now - d.throttle > 120) {
+          // stronger trailing slosh so the water visibly lags the finger
+          poke(drop, ang + Math.PI, clamp(spd * 0.0028, 0, 0.17));
+          if (now - d.throttle > 110) {
             d.throttle = now;
-            try { audioRef.current?.ripple(clamp(spd / 40, 0.15, 0.7)); } catch { /* noop */ }
-            try { haptics.ripple(0.2 + clamp(spd / 60, 0, 0.4)); } catch { /* noop */ }
-            recordTape("ripple", 0.35, "drop/drag");
+            try { audioRef.current?.ripple(clamp(spd / 34, 0.15, 0.8)); } catch { /* noop */ }
+            try { haptics.ripple(0.25 + clamp(spd / 55, 0, 0.5)); } catch { /* noop */ }
+            recordTape("ripple", 0.4, "drop/drag");
           }
         }
       }
-    } else if (d.moved > 8) {
+    } else if (d.moved > 6) {
       // dragging empty water → poke the nearest bead into ripples
       const px = e.clientX - rect.left, py = e.clientY - rect.top;
       const hit = hitDrop(px, py);
-      if (hit !== -1 && now - d.throttle > 110) {
+      if (hit !== -1 && now - d.throttle > 100) {
         d.throttle = now;
         const drop = dropsRef.current[hit];
-        poke(drop, Math.atan2(py - drop.y, px - drop.x), 0.05);
-        try { audioRef.current?.ripple(0.4); } catch { /* noop */ }
-        try { haptics.ripple(0.3); } catch { /* noop */ }
+        // press into the drop: a firmer dent that radiates outward
+        const spd = Math.hypot(dx, dy);
+        poke(drop, Math.atan2(py - drop.y, px - drop.x), clamp(0.08 + spd * 0.0016, 0.08, 0.16));
+        try { audioRef.current?.ripple(0.55); } catch { /* noop */ }
+        try { haptics.ripple(0.4); } catch { /* noop */ }
+        recordTape("ripple", 0.4, "drop/push");
       }
     }
   };
@@ -1225,13 +1459,19 @@ export default function DropSphere() {
     const dur = now - d.downT;
 
     if (d.moved < 9 && dur < 340) {
-      // TAP — dart a microbe if we hit one, else poke the bead
+      // TAP — double-tap a bead bounces it; else dart a microbe or poke.
       if (drop) drop.grabbed = false;
-      if (dartMicrobe(px, py)) return;
+      const isDouble = now - tapRef.current.t < 340 && Math.hypot(px - tapRef.current.x, py - tapRef.current.y) < 72;
+      tapRef.current = { t: now, x: px, y: py };
       const hit = drop ? dropsRef.current.indexOf(drop) : hitDrop(px, py);
+      if (isDouble && hit !== -1) {
+        bounceDrop(dropsRef.current[hit]);
+        return;
+      }
+      if (dartMicrobe(px, py)) return;
       if (hit !== -1) {
         const dd = dropsRef.current[hit];
-        poke(dd, Math.atan2(py - dd.y, px - dd.x), 0.14);
+        poke(dd, Math.atan2(py - dd.y, px - dd.x), 0.16);
         try { audioRef.current?.drip(0.5); } catch { /* noop */ }
         try { haptics.ripple(0.5); } catch { /* noop */ }
         recordTape("ripple", 0.5, "drop/poke");
@@ -1283,7 +1523,7 @@ export default function DropSphere() {
           ref={canvasRef}
           className="drop-canvas"
           role="img"
-          aria-label="A living bead of rainwater. Drag it to make it wobble and sway, fling it, split it into more droplets or drag droplets together to merge them, and zoom in — with the dive control, the scroll wheel, or a two-finger pinch — to reveal the microscopic life swimming inside."
+          aria-label="A living bead of rainwater. Tilt or shake your phone to make it roll, slide and scatter; drag it to slosh and fling it; flick a droplet off a bead to split it, or drag droplets together to merge them; double-tap a bead to make it bounce; and zoom in — with the dive control, the scroll wheel, or a two-finger pinch — to reveal the microscopic life swimming inside."
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={endPointer}
@@ -1304,6 +1544,23 @@ export default function DropSphere() {
 
       <div className="drop-hud">
         <output className="drop-readout" aria-live="polite">{readout}</output>
+        {motionUI === "prompt" && (
+          <button
+            type="button"
+            className="drop-motion-chip"
+            aria-label="Enable motion so you can tilt and shake your phone to play with the water"
+            onClick={() => { ensureAudio(); armSensors(); }}
+          >
+            <span aria-hidden="true">◒</span>
+            <span>tilt &amp; shake to play</span>
+          </button>
+        )}
+        {motionUI === "on" && (
+          <div className="drop-motion-chip drop-motion-on" aria-hidden="true">
+            <span>◒</span>
+            <span>tilt &amp; shake live</span>
+          </div>
+        )}
         <div className="drop-console" aria-label="droplet controls">
           <label className="drop-pill drop-dive-pill">
             <span>zoom</span>
@@ -1426,6 +1683,39 @@ export default function DropSphere() {
           -webkit-backdrop-filter: blur(14px);
           pointer-events: none;
         }
+
+        .drop-motion-chip {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          min-height: 44px;
+          padding: 0 16px;
+          border: 1px solid rgba(150, 220, 245, 0.28);
+          border-radius: 999px;
+          background: rgba(6, 26, 38, 0.62);
+          color: rgba(220, 244, 252, 0.92);
+          font-family: var(--font-mono);
+          font-size: 11px;
+          letter-spacing: 0.04em;
+          text-transform: lowercase;
+          backdrop-filter: blur(14px);
+          -webkit-backdrop-filter: blur(14px);
+          box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+          cursor: pointer;
+          pointer-events: auto;
+          transition: background 0.2s ease, border-color 0.2s ease;
+        }
+        .drop-motion-chip span:first-child { opacity: 0.85; }
+        .drop-motion-chip:hover { background: rgba(120, 220, 245, 0.16); border-color: rgba(150, 220, 245, 0.5); }
+        .drop-motion-chip:active { background: rgba(120, 220, 245, 0.26); }
+        .drop-motion-on {
+          cursor: default;
+          pointer-events: none;
+          opacity: 0.6;
+          border-color: rgba(150, 220, 245, 0.16);
+          animation: dropMotionFade 0.5s ease 4.5s forwards;
+        }
+        @keyframes dropMotionFade { to { opacity: 0; visibility: hidden; } }
 
         .drop-console {
           display: flex;
