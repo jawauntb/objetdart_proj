@@ -150,7 +150,17 @@ type UserBlackHole = {
   createdAt: number;
 };
 
-type CosmicEventKind = "birth" | "collapse" | "supernova";
+type CosmicEventKind =
+  | "birth"
+  | "collapse"
+  | "supernova"
+  | "pulsar"
+  | "comet"
+  | "tidal"
+  | "nova"
+  | "starform"
+  | "grb"
+  | "merger";
 type CosmicEvent = {
   id: number;
   kind: CosmicEventKind;
@@ -161,6 +171,10 @@ type CosmicEvent = {
   seed: number;
   rgb: [number, number, number];
   power: number;
+  // optional trajectory (comet / grb / tidal) — direction in radians and a
+  // travel distance in px. Derived at spawn so the RAF loop stays cheap.
+  ang?: number;
+  reach?: number;
 };
 
 type CosmicMemory = {
@@ -175,7 +189,21 @@ type SavedConstellation = {
   createdAt: number;
 };
 
-type SkyPulseTone = "star" | "nebula" | "gravity" | "kept" | "wish" | "birth" | "supernova";
+type SkyPulseTone =
+  | "star"
+  | "nebula"
+  | "gravity"
+  | "kept"
+  | "wish"
+  | "birth"
+  | "supernova"
+  | "pulsar"
+  | "comet"
+  | "tidal"
+  | "nova"
+  | "starform"
+  | "grb"
+  | "merger";
 type SkyPulse = {
   id: number;
   label: string;
@@ -190,6 +218,13 @@ const SKY_PULSE_COLOR: Record<SkyPulseTone, string> = {
   wish: "rgba(240, 130, 170, 0.94)",
   birth: "rgba(128, 222, 214, 0.96)",
   supernova: "rgba(255, 170, 96, 0.96)",
+  pulsar: "rgba(150, 220, 255, 0.96)",
+  comet: "rgba(190, 226, 255, 0.96)",
+  tidal: "rgba(255, 138, 96, 0.96)",
+  nova: "rgba(255, 236, 196, 0.96)",
+  starform: "rgba(140, 236, 200, 0.96)",
+  grb: "rgba(206, 255, 176, 0.98)",
+  merger: "rgba(198, 156, 255, 0.98)",
 };
 
 // ── seeded PRNG (mulberry32) — same field every load ─────────────────
@@ -211,6 +246,11 @@ function hash01(n: number): number {
   x ^= x >>> 17;
   x ^= x << 5;
   return (x >>> 0) / 4294967296;
+}
+
+function makeId(prefix: string): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
 const STAR_SEED = 0xC0FFEE;
@@ -496,6 +536,51 @@ type PointerIntent = {
   inMilkyWay: boolean;
 };
 
+// A mote of matter falling into a black hole. Lives in the hole's local
+// polar frame (radius as a fraction of min(w,h); angle in radians) so the
+// camera's drift/zoom carries it for free. rn shrinks as it spirals in;
+// once inside the horizon it is consumed and briefly brightens the disk.
+type InfallMote = {
+  rn: number;       // radius as fraction of base (min(w,h))
+  ang: number;      // orbital angle
+  va: number;       // angular velocity sign/scale
+  size: number;     // px core size
+  hue: number;      // captured light hue
+  seed: number;
+};
+
+// A gravitational wave — spawned by a black-hole merger. Expands from a
+// normalized sky point and both displaces starlight (in lensPoint) and
+// paints a racing shimmer ring.
+type GravWave = {
+  id: number;
+  nx: number;
+  ny: number;
+  t0Ms: number;
+  life: number;
+  strength: number;
+  // per-frame cache, filled by the RAF loop so lensPoint stays cheap
+  _cx?: number;
+  _cy?: number;
+  _r?: number;
+  _amp?: number;
+  _env?: number;
+};
+
+// An in-progress inspiral of two user black holes toward a merger.
+type Merger = {
+  aId: string;
+  bId: string;
+  ax: number;       // snapshot base positions at capture (normalized)
+  ay: number;
+  bx: number;
+  by: number;
+  tStartMs: number;
+  durMs: number;
+  spinSign: number;
+  committed: boolean;
+};
+
 // breath effect duration, seconds
 const NEBULA_BREATH_DUR = 4;
 // spark lifetime, seconds
@@ -546,9 +631,17 @@ export default function Stars() {
 
   // transient effects — mutated by event handlers, read by the RAF loop
   const skyPulseId = useRef(0);
+  const summonRef = useRef(0);
   const sparksRef = useRef<Spark[]>([]);
   const breathsRef = useRef<NebulaBreath[]>([]);
   const cosmicEventsRef = useRef<CosmicEvent[]>([]);
+  // per-black-hole infalling matter, keyed by hole identity ("bh0"/id).
+  const bhMotesRef = useRef<Map<string, InfallMote[]>>(new Map());
+  // last-consumption timestamp (ms) per hole — drives the feeding flare.
+  const bhFeedRef = useRef<Map<string, number>>(new Map());
+  const gravWavesRef = useRef<GravWave[]>([]);
+  const mergerRef = useRef<Merger | null>(null);
+  const mergerScanRef = useRef<number>(0); // next allowed self-merger (ms)
   const gravityWellRef = useRef<GravityWell>({
     active: false,
     x: 0,
@@ -707,11 +800,57 @@ export default function Stars() {
     try { getFieldAudio().chime(); } catch { /* noop */ }
   }, [addCosmicEvent, markSky, persistCosmicMemory, screenToSky]);
 
+  // A black hole merger sings a descending "chirp" — a fast falling glide
+  // of pitched sines, the audible signature of two horizons becoming one.
+  const chirpTone = useCallback(() => {
+    try {
+      const audio = getFieldAudio();
+      const steps = 8;
+      for (let i = 0; i < steps; i++) {
+        const f = 340 * Math.pow(0.62, (i / (steps - 1)) * 2.2);
+        window.setTimeout(() => {
+          try { audio.playTone(f, 0.2); } catch { /* noop */ }
+        }, i * 62);
+      }
+    } catch {
+      /* noop */
+    }
+  }, []);
+
+  // Core black-hole birth — commits a hole to state + persistence and
+  // returns it. Callers add their own flourishes (touch / collapse).
+  const commitBlackHole = useCallback((
+    nx: number,
+    ny: number,
+    seed: number,
+    massBoost = 0,
+  ): UserBlackHole => {
+    const rng = makeRng(seed);
+    const hole: UserBlackHole = {
+      id: makeId("bh"),
+      nx,
+      ny,
+      mass: Math.min(2.4, 0.82 + rng() * 0.88 + massBoost),
+      spin: (rng() < 0.5 ? -1 : 1) * (0.45 + rng() * 0.75),
+      hue: 28 + rng() * 220,
+      createdAt: Date.now(),
+    };
+    const nextHoles = [...userBlackHolesRef.current, hole].slice(-MAX_USER_BLACK_HOLES);
+    userBlackHolesRef.current = nextHoles;
+    setUserBlackHoles(nextHoles);
+    persistCosmicMemory({
+      bornStars: bornStarsRef.current,
+      blackHoles: nextHoles,
+    });
+    return hole;
+  }, [persistCosmicMemory]);
+
   const supernovaAt = useCallback((
     x: number,
     y: number,
     rgb: [number, number, number] = [255, 180, 96],
     writeTape = true,
+    collapse = false,
   ) => {
     const seed = Math.floor((Date.now() + x * 379 + y * 883) % 0xFFFFFFFF);
     addCosmicEvent({
@@ -724,33 +863,26 @@ export default function Stars() {
       power: 1.0,
     });
     haptics.roll();
-    markSky("supernova", "supernova", 0.88, "sigil", "supernova", writeTape);
+    markSky(collapse ? "core-collapse" : "supernova", "supernova", 0.88, "sigil", "supernova", writeTape);
     try { getFieldAudio().bell(); } catch { /* noop */ }
-  }, [addCosmicEvent, markSky]);
+    // A massive core-collapse leaves a remnant that falls in on itself and
+    // becomes a brand-new black hole — the two systems, tied together.
+    if (collapse) {
+      const { nx, ny } = screenToSky(x, y);
+      window.setTimeout(() => {
+        if (userBlackHolesRef.current.length >= MAX_USER_BLACK_HOLES) return;
+        commitBlackHole(nx, ny, (seed ^ 0x9e3779b9) >>> 0, 0.25);
+        addCosmicEvent({ kind: "collapse", x, y, life: 2.2, seed, rgb: [210, 180, 255], power: 1.1 });
+        haptics.chop();
+        try { getFieldAudio().thud(); } catch { /* noop */ }
+      }, 2500);
+    }
+  }, [addCosmicEvent, commitBlackHole, markSky, screenToSky]);
 
   const createBlackHoleAt = useCallback((x: number, y: number) => {
     const { nx, ny } = screenToSky(x, y);
     const seed = Math.floor((Date.now() + x * 619 + y * 173) % 0xFFFFFFFF);
-    const rng = makeRng(seed);
-    const hole: UserBlackHole = {
-      id:
-        typeof crypto !== "undefined" && "randomUUID" in crypto
-          ? crypto.randomUUID()
-          : `bh-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-      nx,
-      ny,
-      mass: 0.82 + rng() * 0.88,
-      spin: (rng() < 0.5 ? -1 : 1) * (0.45 + rng() * 0.75),
-      hue: 28 + rng() * 220,
-      createdAt: Date.now(),
-    };
-    const nextHoles = [...userBlackHolesRef.current, hole].slice(-MAX_USER_BLACK_HOLES);
-    userBlackHolesRef.current = nextHoles;
-    setUserBlackHoles(nextHoles);
-    persistCosmicMemory({
-      bornStars: bornStarsRef.current,
-      blackHoles: nextHoles,
-    });
+    const hole = commitBlackHole(nx, ny, seed);
     addCosmicEvent({
       kind: "collapse",
       x,
@@ -763,7 +895,98 @@ export default function Stars() {
     haptics.chop();
     markSky("black hole made", "gravity", 0.95, "sigil", "black-hole");
     try { getFieldAudio().thud(); } catch { /* noop */ }
+  }, [addCosmicEvent, commitBlackHole, markSky, screenToSky]);
+
+  // ── new cosmic-event spawners ──────────────────────────────────────
+  // Each fires on its own timer AND can be summoned by touch. They share
+  // the addCosmicEvent transient pool; the RAF loop draws them by kind.
+
+  const spawnPulsar = useCallback((x: number, y: number) => {
+    const seed = Math.floor((Date.now() + x * 211 + y * 733) % 0xFFFFFFFF);
+    addCosmicEvent({ kind: "pulsar", x, y, life: 4.6, seed, rgb: [170, 224, 255], power: 0.9 });
+    haptics.tap();
+    markSky("pulsar sweeping", "pulsar", 0.6, "object", "pulsar");
+    try {
+      const audio = getFieldAudio();
+      for (let i = 0; i < 6; i++) {
+        window.setTimeout(() => { try { audio.playTone(1180, 0.05); } catch { /* noop */ } }, i * 320);
+      }
+    } catch { /* noop */ }
+  }, [addCosmicEvent, markSky]);
+
+  const spawnComet = useCallback((x?: number, y?: number) => {
+    const ww = typeof window !== "undefined" ? window.innerWidth : 1200;
+    const wh = typeof window !== "undefined" ? window.innerHeight : 800;
+    const ang = Math.random() * Math.PI * 2;
+    const reach = Math.hypot(ww, wh) * (0.85 + Math.random() * 0.4);
+    // start off an edge if no explicit origin, so it truly streaks across
+    const sx = x ?? ww * 0.5 - Math.cos(ang) * reach * 0.5;
+    const sy = y ?? wh * 0.5 - Math.sin(ang) * reach * 0.5;
+    const seed = Math.floor((Date.now() + sx * 97 + sy * 389) % 0xFFFFFFFF);
+    addCosmicEvent({ kind: "comet", x: sx, y: sy, life: 4.4, seed, rgb: [198, 228, 255], power: 0.85, ang, reach });
+    haptics.ripple(0.34);
+    markSky("comet streaking", "comet", 0.5, "object", "comet");
+    try { getFieldAudio().spark(); } catch { /* noop */ }
+  }, [addCosmicEvent, markSky]);
+
+  const spawnTidalFlare = useCallback((x: number, y: number) => {
+    const seed = Math.floor((Date.now() + x * 457 + y * 131) % 0xFFFFFFFF);
+    addCosmicEvent({ kind: "tidal", x, y, life: 3.4, seed, rgb: [255, 150, 96], power: 1.0, ang: Math.random() * Math.PI * 2 });
+    haptics.roll();
+    markSky("star torn apart", "tidal", 0.82, "sigil", "tidal-disruption");
+    try { getFieldAudio().bell(); } catch { /* noop */ }
+  }, [addCosmicEvent, markSky]);
+
+  const spawnNova = useCallback((x: number, y: number) => {
+    const seed = Math.floor((Date.now() + x * 619 + y * 241) % 0xFFFFFFFF);
+    addCosmicEvent({ kind: "nova", x, y, life: 1.9, seed, rgb: [255, 238, 200], power: 0.8 });
+    haptics.tap();
+    markSky("nova flash", "nova", 0.58, "object", "nova");
+    try { getFieldAudio().chime(); } catch { /* noop */ }
+  }, [addCosmicEvent, markSky]);
+
+  const spawnStarForm = useCallback((x: number, y: number) => {
+    const { nx, ny } = screenToSky(x, y);
+    const seed = Math.floor((Date.now() + x * 331 + y * 907) % 0xFFFFFFFF);
+    const rng = makeRng(seed);
+    addCosmicEvent({ kind: "starform", x, y, life: 4.0, seed, rgb: [140, 236, 200], power: 0.9 });
+    // a nebula region condensing into new twinkling stars — birthlight.
+    const palettes: Array<[number, number, number]> = [
+      [126, 220, 214], [255, 218, 148], [184, 206, 255], [238, 156, 204],
+    ];
+    const spawned: BornStar[] = [];
+    const n = 2 + Math.floor(rng() * 2);
+    for (let i = 0; i < n; i++) {
+      const rgb = palettes[Math.floor(rng() * palettes.length)];
+      spawned.push({
+        id: makeId("s"),
+        nx: Math.max(0.02, Math.min(0.98, nx + (rng() - 0.5) * 0.05)),
+        ny: Math.max(0.02, Math.min(0.98, ny + (rng() - 0.5) * 0.05)),
+        size: 0.6 + rng() * 1.3,
+        brightness: 0.6 + rng() * 0.3,
+        twinklePhase: rng() * Math.PI * 2,
+        twinkleAmt: 0.3 + rng() * 0.5,
+        spikeLen: rng() > 0.6 ? 4 + rng() * 6 : 0,
+        rgb,
+        createdAt: Date.now(),
+      });
+    }
+    const nextStars = [...bornStarsRef.current, ...spawned].slice(-MAX_BORN_STARS);
+    bornStarsRef.current = nextStars;
+    setBornStars(nextStars);
+    persistCosmicMemory({ bornStars: nextStars, blackHoles: userBlackHolesRef.current });
+    haptics.ripple(0.42);
+    markSky("stars forming", "starform", 0.66, "object", "star-formation");
+    try { getFieldAudio().chime(); } catch { /* noop */ }
   }, [addCosmicEvent, markSky, persistCosmicMemory, screenToSky]);
+
+  const spawnGrb = useCallback((x: number, y: number) => {
+    const seed = Math.floor((Date.now() + x * 787 + y * 149) % 0xFFFFFFFF);
+    addCosmicEvent({ kind: "grb", x, y, life: 1.5, seed, rgb: [206, 255, 176], power: 1.0, ang: Math.random() * Math.PI });
+    haptics.chop();
+    markSky("gamma-ray burst", "grb", 0.9, "sigil", "gamma-ray-burst");
+    try { getFieldAudio().bell(); } catch { /* noop */ }
+  }, [addCosmicEvent, markSky]);
 
   // load saved constellations on mount
   useEffect(() => {
@@ -1261,6 +1484,52 @@ export default function Stars() {
       };
     };
 
+    // idle drift — even a lone hole should feel alive. Small, slow, seeded
+    // by createdAt so each hole wanders on its own path. Held still under
+    // reduced motion.
+    const holeDrift = (hole: UserBlackHole, t: number): { nx: number; ny: number } => {
+      if (!motion) return { nx: hole.nx, ny: hole.ny };
+      const ph = ((hole.createdAt % 1000) / 1000) * Math.PI * 2;
+      const rate = 0.045 + ((hole.createdAt % 7) * 0.006);
+      return {
+        nx: hole.nx + Math.sin(t * rate + ph) * 0.016,
+        ny: hole.ny + Math.cos(t * rate * 0.8 + ph * 1.3) * 0.013,
+      };
+    };
+
+    // effective normalized position of a user hole, incorporating idle
+    // drift and — during a merger — the tightening inspiral toward the
+    // shared midpoint of the two doomed horizons.
+    const effHoleNorm = (hole: UserBlackHole, t: number, nowMs: number): { nx: number; ny: number; inspiral: number } => {
+      const d = holeDrift(hole, t);
+      const m = mergerRef.current;
+      if (m && !m.committed && (m.aId === hole.id || m.bId === hole.id)) {
+        const u = Math.max(0, Math.min(1, (nowMs - m.tStartMs) / m.durMs));
+        const midNx = (m.ax + m.bx) / 2;
+        const midNy = (m.ay + m.by) / 2;
+        const baseNx = hole.id === m.aId ? m.ax : m.bx;
+        const baseNy = hole.id === m.aId ? m.ay : m.by;
+        const vx = baseNx - midNx;
+        const vy = baseNy - midNy;
+        const r0 = Math.hypot(vx, vy);
+        const ang0 = Math.atan2(vy, vx);
+        const tighten = Math.pow(1 - u, 1.4);
+        const orbit = ang0 + (motion ? u * u * Math.PI * 7 * m.spinSign : 0);
+        return {
+          nx: midNx + Math.cos(orbit) * r0 * tighten,
+          ny: midNy + Math.sin(orbit) * r0 * tighten,
+          inspiral: u,
+        };
+      }
+      return { nx: d.nx, ny: d.ny, inspiral: 0 };
+    };
+
+    const userHoleScreen = (hole: UserBlackHole, t: number, nowMs: number): { x: number; y: number; inspiral: number } => {
+      const e = effHoleNorm(hole, t, nowMs);
+      const p = worldPos(e.nx, e.ny, t, false);
+      return { x: p.x, y: p.y, inspiral: e.inspiral };
+    };
+
     const lensPoint = (
       px: number,
       py: number,
@@ -1302,27 +1571,35 @@ export default function Stars() {
       for (const bh of BLACKHOLES) {
         const { x: hx, y: hy } = worldPos(bh.nx, bh.ny, t, false);
         const horizon = base * bh.rHorizon * zoom;
+        // animate the lens: a living Einstein-ring shimmer + a swirl that
+        // keeps pace with the disk rotation, so starlight bends and drags.
+        const shimmer = motion ? 1 + 0.14 * Math.sin(t * 1.3 + bh.rot * 3) : 1;
         applyLens(
           hx,
           hy,
           horizon,
           base * bh.rLens * zoom,
-          bh.lensStrength,
-          Math.sin(bh.rot) * 0.65,
+          bh.lensStrength * shimmer,
+          (motion ? Math.sin(bh.rot + t * 0.5) : Math.sin(bh.rot)) * 0.72,
         );
       }
 
+      const nowMsL = performance.now();
       for (const hole of userBlackHolesRef.current) {
-        const { x: hx, y: hy } = worldPos(hole.nx, hole.ny, t, false);
+        const { x: hx, y: hy, inspiral } = userHoleScreen(hole, t, nowMsL);
         const bornAge = Math.min(1, (Date.now() - hole.createdAt) / 1800);
         const horizon = base * (0.010 + hole.mass * 0.0065) * zoom * (0.72 + bornAge * 0.28);
+        // stronger, animated swirl drags nearby starlight into a spiral and
+        // stretches it into spaghettification streaks near the horizon.
+        const spinDrag = hole.spin * (motion ? 1.15 + 0.25 * Math.sin(t * 1.6 + hole.mass) : 1);
+        const shimmer = motion ? 1 + 0.16 * Math.sin(t * 1.7 + hole.mass * 4) : 1;
         applyLens(
           hx,
           hy,
-          horizon,
-          horizon * (18 + hole.mass * 4.5),
-          0.72 + hole.mass * 0.22,
-          hole.spin,
+          horizon * (1 + inspiral * 0.5),
+          horizon * (18 + hole.mass * 4.5) * (1 + inspiral * 0.4),
+          (0.78 + hole.mass * 0.24) * shimmer,
+          spinDrag,
         );
       }
 
@@ -1340,6 +1617,25 @@ export default function Stars() {
             0.82,
           );
         }
+      }
+
+      // gravitational waves — a merger's spacetime ripple races outward and
+      // displaces starlight radially as the wavefront passes through it. The
+      // per-frame geometry (_cx/_cy/_r/_amp) is cached in draw().
+      const waves = gravWavesRef.current;
+      for (let wi = 0; wi < waves.length; wi++) {
+        const gw = waves[wi];
+        if (gw._amp === undefined || gw._cx === undefined || gw._cy === undefined || gw._r === undefined) continue;
+        const dx = x - gw._cx;
+        const dy = y - gw._cy;
+        const d = Math.hypot(dx, dy);
+        if (d < 1) continue;
+        const width = base * 0.14;
+        const off = d - gw._r;
+        if (Math.abs(off) > width) continue;
+        const disp = Math.sin((off / width) * Math.PI) * gw._amp;
+        x += (dx / d) * disp;
+        y += (dy / d) * disp;
       }
 
       return { x, y };
@@ -1509,87 +1805,293 @@ export default function Stars() {
       bctx.restore();
     };
 
-    const drawUserBlackHoles = (t: number): void => {
+    // ── active black hole — the showpiece ──────────────────────────
+    // A living engine: a swirling, Doppler-beamed accretion disk that
+    // flickers as it feeds, infalling matter that spirals in and gets
+    // spaghettified across the horizon, twin relativistic jets, an
+    // event-horizon/Hawking shimmer, and a feeding-flare on consumption.
+    type BhVisual = {
+      x: number; y: number; horizon: number; lensR: number;
+      spin: number; tilt: number; hue: number; coolHue: number;
+      intensity: number; mass: number; key: string;
+      inspiral: number; lensCopy: boolean;
+    };
+    const MOTE_CAP = motion ? 16 : 7;
+    const drawBlackHoleActive = (v: BhVisual, t: number, nowMs: number): void => {
       const base = Math.min(w, h);
       const zoom = cameraZoom(t);
-      const holes = userBlackHolesRef.current;
-      if (!holes.length) return;
-      for (const hole of holes) {
-        const { x, y } = worldPos(hole.nx, hole.ny, t, false);
-        const bornAge = Math.min(1, (Date.now() - hole.createdAt) / 1800);
-        const horizon = base * (0.010 + hole.mass * 0.0065) * zoom * (0.72 + bornAge * 0.28);
-        const lensR = horizon * (18 + hole.mass * 4.5);
-        const einsteinR = Math.sqrt(horizon * lensR) * 0.72;
-        if (x < -lensR || x > w + lensR || y < -lensR || y > h + lensR) continue;
+      const { x, y, horizon, lensR, spin, tilt, hue, coolHue, intensity } = v;
+      const orient = spin * 0.65;
+      const diskOuter = horizon * (5.4 + v.mass * 1.2) * (1 + v.inspiral * 0.35);
+      const diskInner = horizon * 1.55;
+      const einsteinR = Math.sqrt(horizon * lensR) * 0.72;
 
-        // A clipped magnified copy of the static sky makes the area read as
-        // gravitationally lensed before the accretion disk is drawn over it.
+      // ── infalling matter: spiral in, spaghettify, get consumed ──
+      let motes = bhMotesRef.current.get(v.key);
+      if (!motes) { motes = []; bhMotesRef.current.set(v.key, motes); }
+      const horizonN = horizon / (base * zoom);
+      const lensN = lensR / (base * zoom);
+      const step = motion ? 1 : 0.32;
+      // feed the hole — always something falling in
+      if (motes.length < MOTE_CAP && (Math.random() < (motion ? 0.34 : 0.12))) {
+        const a = Math.random() * Math.PI * 2;
+        motes.push({
+          rn: lensN * (0.72 + Math.random() * 0.5),
+          ang: a,
+          va: Math.sign(spin || 1),
+          size: 0.6 + Math.random() * 1.4,
+          hue: hue + (Math.random() - 0.5) * 60,
+          seed: Math.floor(Math.random() * 0xffff),
+        });
+      }
+      bctx.save();
+      bctx.translate(x, y);
+      bctx.globalCompositeOperation = "lighter";
+      for (let i = motes.length - 1; i >= 0; i--) {
+        const m = motes[i];
+        // Kepler-ish: inner orbits faster; infall accelerates near horizon.
+        const near = horizonN / Math.max(horizonN, m.rn);
+        m.ang += m.va * (0.02 + 0.06 * near) * step * (0.6 + Math.abs(spin) * 0.5);
+        m.rn -= (0.0011 + near * near * 0.006) * step;
+        if (m.rn <= horizonN * 1.02) {
+          // consumed — a little flare that brightens the disk
+          bhFeedRef.current.set(v.key, nowMs);
+          motes.splice(i, 1);
+          continue;
+        }
+        const R = m.rn * base * zoom;
+        const lx = Math.cos(m.ang) * R;
+        const ly = Math.sin(m.ang) * R * tilt;
+        // orient into the disk plane
+        const cs = Math.cos(orient);
+        const sn = Math.sin(orient);
+        const px = lx * cs - ly * sn;
+        const py = lx * sn + ly * cs;
+        const dopp = 0.5 + 0.5 * Math.cos(m.ang);
+        const mh = m.hue - 40 * dopp;
+        // spaghettification: stretch into a radial streak near the horizon
+        const spag = Math.pow(Math.max(0, 1 - (m.rn - horizonN) / (lensN * 0.35)), 2);
+        const streak = spag * horizon * 2.4;
+        const alpha = intensity * (0.4 + 0.5 * dopp) * (0.5 + 0.5 * (1 - spag * 0.4));
+        if (streak > 1) {
+          const inx = (px / (R || 1));
+          const iny = (py / (R || 1));
+          bctx.strokeStyle = `hsla(${mh}, 100%, ${(70 + dopp * 20).toFixed(0)}%, ${alpha.toFixed(3)})`;
+          bctx.lineWidth = Math.max(0.6, m.size * 0.9);
+          bctx.beginPath();
+          bctx.moveTo(px, py);
+          bctx.lineTo(px - inx * streak, py - iny * streak);
+          bctx.stroke();
+        }
+        bctx.fillStyle = `hsla(${mh}, 100%, ${(78 + dopp * 18).toFixed(0)}%, ${alpha.toFixed(3)})`;
+        bctx.beginPath();
+        bctx.arc(px, py, Math.max(0.5, m.size * (0.8 + dopp * 0.5)), 0, Math.PI * 2);
+        bctx.fill();
+      }
+      bctx.restore();
+
+      // ── optional lensed copy of the sky (user holes) ──
+      if (v.lensCopy) {
         bctx.save();
         bctx.beginPath();
         bctx.arc(x, y, lensR * 0.92, 0, Math.PI * 2);
         bctx.clip();
-        bctx.globalAlpha = 0.10 * bornAge;
+        bctx.globalAlpha = 0.1 * intensity;
         bctx.globalCompositeOperation = "screen";
         bctx.translate(x, y);
-        bctx.rotate(hole.spin * 0.04 + t * hole.spin * 0.015);
-        bctx.scale(1.035 + hole.mass * 0.010, 1.035 + hole.mass * 0.010);
+        bctx.rotate(spin * 0.04 + t * spin * 0.015);
+        bctx.scale(1.035 + v.mass * 0.01, 1.035 + v.mass * 0.01);
         bctx.drawImage(staticCanvas, -x, -y, w, h);
         bctx.restore();
+      }
 
+      // feeding flare boost — a fresh consumption briefly brightens the disk
+      const feedAt = bhFeedRef.current.get(v.key) ?? 0;
+      const feed = Math.max(0, 1 - (nowMs - feedAt) / 460);
+
+      // ── relativistic jets — twin polar beams (active/large holes) ──
+      const jetP = Math.max(0, Math.min(1, (v.mass - 0.85) * 1.3 + v.inspiral));
+      if (jetP > 0.02 && motion) {
         bctx.save();
         bctx.translate(x, y);
-        bctx.rotate(t * hole.spin * 0.18);
+        bctx.rotate(orient);
         bctx.globalCompositeOperation = "lighter";
-
-        const ringHue = hole.hue;
-        const coolHue = (hole.hue + 185) % 360;
-        const diskOuter = horizon * (5.4 + hole.mass * 1.2);
-        const diskInner = horizon * 1.55;
-        bctx.save();
-        bctx.rotate(hole.spin * 0.65);
-        bctx.scale(1, 0.28 + hole.mass * 0.045);
-        const disk = bctx.createRadialGradient(0, 0, diskInner, 0, 0, diskOuter);
-        disk.addColorStop(0, `hsla(${ringHue}, 95%, 76%, ${(0.58 * bornAge).toFixed(3)})`);
-        disk.addColorStop(0.23, `hsla(${ringHue + 18}, 92%, 58%, ${(0.38 * bornAge).toFixed(3)})`);
-        disk.addColorStop(0.58, `hsla(${coolHue}, 88%, 66%, ${(0.18 * bornAge).toFixed(3)})`);
-        disk.addColorStop(1, `hsla(${coolHue}, 90%, 50%, 0)`);
-        bctx.fillStyle = disk;
-        bctx.beginPath();
-        bctx.arc(0, 0, diskOuter, 0, Math.PI * 2);
-        bctx.fill();
-
-        bctx.strokeStyle = `hsla(${coolHue}, 96%, 74%, ${(0.22 * bornAge).toFixed(3)})`;
-        bctx.lineWidth = 1.1;
-        bctx.beginPath();
-        bctx.ellipse(0, 0, einsteinR, einsteinR, 0, 0, Math.PI * 2);
-        bctx.stroke();
+        const jetLen = diskOuter * (2.0 + v.mass * 0.6);
+        const flick = 0.55 + 0.45 * Math.sin(t * 9 + v.mass * 3);
+        for (const dir of [-1, 1]) {
+          const jg = bctx.createLinearGradient(0, 0, 0, dir * jetLen);
+          jg.addColorStop(0, `hsla(${coolHue}, 100%, 90%, ${(0.5 * jetP * flick).toFixed(3)})`);
+          jg.addColorStop(0.5, `hsla(${coolHue}, 100%, 80%, ${(0.16 * jetP * flick).toFixed(3)})`);
+          jg.addColorStop(1, `hsla(${coolHue}, 100%, 70%, 0)`);
+          bctx.fillStyle = jg;
+          const wBase = Math.max(1.2, horizon * 0.34);
+          bctx.beginPath();
+          bctx.moveTo(-wBase, 0);
+          bctx.lineTo(wBase, 0);
+          bctx.lineTo(wBase * 0.28, dir * jetLen);
+          bctx.lineTo(-wBase * 0.28, dir * jetLen);
+          bctx.closePath();
+          bctx.fill();
+        }
         bctx.restore();
+      }
 
-        // Doppler-bright beamed crescent on one side of the disk.
-        bctx.strokeStyle = `hsla(${ringHue + 25}, 100%, 78%, ${(0.54 * bornAge).toFixed(3)})`;
-        bctx.lineWidth = Math.max(1.4, horizon * 0.13);
+      bctx.save();
+      bctx.translate(x, y);
+      bctx.globalCompositeOperation = "lighter";
+
+      // base disk gradient
+      bctx.save();
+      bctx.rotate(orient);
+      bctx.scale(1, Math.max(0.14, tilt));
+      const diskA = intensity * (0.5 + feed * 0.5);
+      const disk = bctx.createRadialGradient(0, 0, diskInner, 0, 0, diskOuter);
+      disk.addColorStop(0, `hsla(${hue}, 95%, 78%, ${(0.5 * diskA).toFixed(3)})`);
+      disk.addColorStop(0.23, `hsla(${hue + 18}, 92%, 58%, ${(0.34 * diskA).toFixed(3)})`);
+      disk.addColorStop(0.58, `hsla(${coolHue}, 88%, 62%, ${(0.16 * diskA).toFixed(3)})`);
+      disk.addColorStop(1, `hsla(${coolHue}, 90%, 50%, 0)`);
+      bctx.fillStyle = disk;
+      bctx.beginPath();
+      bctx.arc(0, 0, diskOuter, 0, Math.PI * 2);
+      bctx.fill();
+
+      // swirling orbital streaks — inner rings turn faster, all flicker
+      const streaks = motion ? 11 : 4;
+      for (let i = 0; i < streaks; i++) {
+        const frac = (i * 0.618) % 1;
+        const rr = diskInner + (diskOuter - diskInner) * frac;
+        const speed = spin * (0.4 + 0.8 * (diskInner / rr));
+        const a0 = i * 2.399 + (motion ? t * speed : 0);
+        const arcLen = 0.55 + 0.6 * ((i * 0.37) % 1);
+        const ca = a0 + arcLen * 0.5;
+        const dopp = 0.5 + 0.5 * Math.cos(ca);
+        const flick = 0.55 + 0.45 * Math.sin(t * (3.5 + i) + i * 1.7);
+        const hh = hue - 38 * dopp + 16 * (1 - dopp);
+        const light = 52 + 34 * dopp;
+        const alpha = intensity * flick * (0.08 + 0.26 * dopp) * (0.6 + feed * 0.6);
+        bctx.strokeStyle = `hsla(${hh}, 96%, ${light.toFixed(0)}%, ${alpha.toFixed(3)})`;
+        bctx.lineWidth = Math.max(0.7, horizon * 0.05);
         bctx.beginPath();
-        bctx.ellipse(0, 0, diskOuter * 0.88, diskOuter * 0.25, hole.spin * 0.45, -0.22 * Math.PI, 0.82 * Math.PI);
+        bctx.ellipse(0, 0, rr, rr, 0, a0, a0 + arcLen);
         bctx.stroke();
-        bctx.globalCompositeOperation = "source-over";
+      }
 
-        const photon = bctx.createRadialGradient(0, 0, horizon * 0.88, 0, 0, horizon * 3.0);
-        photon.addColorStop(0, `hsla(${ringHue}, 100%, 84%, ${(0.34 * bornAge).toFixed(3)})`);
-        photon.addColorStop(0.52, `hsla(${coolHue}, 100%, 74%, ${(0.16 * bornAge).toFixed(3)})`);
-        photon.addColorStop(1, "rgba(0, 0, 0, 0)");
-        bctx.fillStyle = photon;
-        bctx.beginPath();
-        bctx.arc(0, 0, horizon * 3.0, 0, Math.PI * 2);
-        bctx.fill();
+      // Doppler-bright inner crescent (approaching side) + dim far edge
+      bctx.strokeStyle = `hsla(${hue - 45}, 100%, 82%, ${(0.5 * intensity * (0.7 + feed * 0.5)).toFixed(3)})`;
+      bctx.lineWidth = Math.max(1.4, horizon * 0.16);
+      bctx.beginPath();
+      bctx.ellipse(0, 0, diskInner * 1.35, diskInner * 1.35, 0, -0.5 * Math.PI, 0.5 * Math.PI);
+      bctx.stroke();
+      bctx.strokeStyle = `hsla(${hue + 40}, 80%, 52%, ${(0.2 * intensity).toFixed(3)})`;
+      bctx.lineWidth = Math.max(1.0, horizon * 0.1);
+      bctx.beginPath();
+      bctx.ellipse(0, 0, diskInner * 1.35, diskInner * 1.35, 0, 0.5 * Math.PI, 1.5 * Math.PI);
+      bctx.stroke();
 
-        const core = bctx.createRadialGradient(0, 0, 0, 0, 0, horizon * 1.48);
-        core.addColorStop(0, "rgba(0, 0, 0, 1)");
-        core.addColorStop(0.74, "rgba(0, 0, 0, 0.98)");
-        core.addColorStop(1, "rgba(0, 0, 0, 0)");
-        bctx.fillStyle = core;
-        bctx.beginPath();
-        bctx.arc(0, 0, horizon * 1.48, 0, Math.PI * 2);
-        bctx.fill();
+      // Einstein-ring shimmer
+      const ringSh = motion ? 0.6 + 0.4 * Math.sin(t * 2.2 + v.mass) : 0.7;
+      bctx.strokeStyle = `hsla(${coolHue}, 96%, 76%, ${(0.2 * intensity * ringSh).toFixed(3)})`;
+      bctx.lineWidth = 1.1;
+      bctx.beginPath();
+      bctx.ellipse(0, 0, einsteinR, einsteinR, 0, 0, Math.PI * 2);
+      bctx.stroke();
+      bctx.restore();
+
+      // hot inner edge / Hawking shimmer at the horizon
+      const hawk = motion ? 0.7 + 0.3 * Math.sin(t * 6 + v.mass * 5) : 0.7;
+      const photon = bctx.createRadialGradient(0, 0, horizon * 0.86, 0, 0, horizon * (3 + feed));
+      photon.addColorStop(0, `hsla(${hue}, 100%, 86%, ${(0.32 * intensity * hawk * (1 + feed)).toFixed(3)})`);
+      photon.addColorStop(0.52, `hsla(${coolHue}, 100%, 74%, ${(0.15 * intensity).toFixed(3)})`);
+      photon.addColorStop(1, "rgba(0, 0, 0, 0)");
+      bctx.fillStyle = photon;
+      bctx.beginPath();
+      bctx.arc(0, 0, horizon * (3 + feed), 0, Math.PI * 2);
+      bctx.fill();
+      bctx.globalCompositeOperation = "source-over";
+
+      // dark singularity
+      const core = bctx.createRadialGradient(0, 0, 0, 0, 0, horizon * 1.48);
+      core.addColorStop(0, "rgba(0, 0, 0, 1)");
+      core.addColorStop(0.74, "rgba(0, 0, 0, 0.98)");
+      core.addColorStop(1, "rgba(0, 0, 0, 0)");
+      bctx.fillStyle = core;
+      bctx.beginPath();
+      bctx.arc(0, 0, horizon * 1.48, 0, Math.PI * 2);
+      bctx.fill();
+      bctx.restore();
+    };
+
+    const drawUserBlackHoles = (t: number, nowMs: number): void => {
+      const base = Math.min(w, h);
+      const zoom = cameraZoom(t);
+      const holes = userBlackHolesRef.current;
+      const liveKeys = new Set<string>();
+      for (const hole of holes) {
+        const { x, y, inspiral } = userHoleScreen(hole, t, nowMs);
+        const bornAge = Math.min(1, (Date.now() - hole.createdAt) / 1800);
+        const horizon = base * (0.010 + hole.mass * 0.0065) * zoom * (0.72 + bornAge * 0.28);
+        const lensR = horizon * (18 + hole.mass * 4.5);
+        liveKeys.add(hole.id);
+        if (x < -lensR || x > w + lensR || y < -lensR || y > h + lensR) continue;
+        drawBlackHoleActive({
+          x, y, horizon, lensR,
+          spin: hole.spin, tilt: 0.28 + hole.mass * 0.045,
+          hue: hole.hue, coolHue: (hole.hue + 185) % 360,
+          intensity: bornAge, mass: hole.mass, key: hole.id,
+          inspiral, lensCopy: true,
+        }, t, nowMs);
+      }
+      // release mote/feed pools for holes that no longer exist
+      for (const key of bhMotesRef.current.keys()) {
+        if (!key.startsWith("bh#") && !liveKeys.has(key)) bhMotesRef.current.delete(key);
+      }
+    };
+
+    // Per-frame animated overlay for the two built-in black holes — the
+    // static canvas bakes their base glow; this brings them to life.
+    const drawStaticBlackHolesActive = (t: number, nowMs: number): void => {
+      const base = Math.min(w, h);
+      const zoom = cameraZoom(t);
+      for (let i = 0; i < BLACKHOLES.length; i++) {
+        const bh = BLACKHOLES[i];
+        const { x, y } = worldPos(bh.nx, bh.ny, t, false);
+        const horizon = base * bh.rHorizon * zoom;
+        const lensR = base * bh.rLens * zoom;
+        if (x < -lensR || x > w + lensR || y < -lensR || y > h + lensR) continue;
+        drawBlackHoleActive({
+          x, y, horizon, lensR,
+          spin: (i === 0 ? 1 : -1) * 0.9, tilt: bh.tilt,
+          hue: 34, coolHue: 210,
+          intensity: 0.9, mass: 1.15, key: `bh#${i}`,
+          inspiral: 0, lensCopy: false,
+        }, t, nowMs);
+      }
+    };
+
+    // gravitational waves — prep per-frame geometry + paint the shimmer ring
+    const drawGravWaves = (t: number, nowMs: number): void => {
+      const base = Math.min(w, h);
+      const waves = gravWavesRef.current;
+      if (!waves.length) return;
+      gravWavesRef.current = waves.filter((gw) => (nowMs - gw.t0Ms) / 1000 < gw.life);
+      for (const gw of gravWavesRef.current) {
+        const age = (nowMs - gw.t0Ms) / 1000;
+        const u = age / gw.life;
+        const c = worldPos(gw.nx, gw.ny, t, false);
+        const r = base * (0.05 + u * 1.15) * cameraZoom(t);
+        const env = Math.pow(1 - u, 1.3);
+        const amp = base * (motion ? 0.024 : 0.006) * env * Math.min(1.2, gw.strength);
+        gw._cx = c.x; gw._cy = c.y; gw._r = r; gw._amp = amp; gw._env = env;
+        // paint a racing double shimmer ring across the field
+        bctx.save();
+        bctx.globalCompositeOperation = "lighter";
+        for (let k = -1; k <= 1; k++) {
+          bctx.strokeStyle = `rgba(198, 168, 255, ${(0.22 * env * (k === 0 ? 1 : 0.5)).toFixed(3)})`;
+          bctx.lineWidth = k === 0 ? 2.2 : 1.1;
+          bctx.beginPath();
+          bctx.arc(c.x, c.y, Math.max(1, r + k * base * 0.05), 0, Math.PI * 2);
+          bctx.stroke();
+        }
         bctx.restore();
       }
     };
@@ -1599,6 +2101,7 @@ export default function Stars() {
       cosmicEventsRef.current = cosmicEventsRef.current.filter((ev) => (nowMs - ev.t0) / 1000 < ev.life);
       if (!cosmicEventsRef.current.length) return;
 
+      const spinT = nowMs / 1000;
       for (const ev of cosmicEventsRef.current) {
         const age = (nowMs - ev.t0) / 1000;
         const u = Math.max(0, Math.min(1, age / ev.life));
@@ -1666,6 +2169,185 @@ export default function Stars() {
             bctx.arc(px, py, 0.7 + hash01(ev.seed + i * 263) * 1.8, 0, Math.PI * 2);
             bctx.fill();
           }
+        } else if (ev.kind === "pulsar") {
+          // spinning neutron star — sweeping lighthouse beams + strobe
+          const life01 = Math.pow(1 - u, 0.5);
+          const beamAng = motion ? spinT * 3.4 : ev.seed;
+          const strobe = 0.4 + 0.6 * Math.abs(Math.sin(spinT * (motion ? 7 : 0.5)));
+          bctx.globalCompositeOperation = "lighter";
+          const beamLen = base * 0.52;
+          for (const d of [0, Math.PI]) {
+            bctx.save();
+            bctx.rotate(beamAng + d);
+            const bg = bctx.createLinearGradient(0, 0, beamLen, 0);
+            bg.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${(0.5 * life01 * strobe).toFixed(3)})`);
+            bg.addColorStop(0.4, `rgba(${r}, ${g}, ${b}, ${(0.14 * life01 * strobe).toFixed(3)})`);
+            bg.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
+            bctx.fillStyle = bg;
+            const halfW = base * 0.03;
+            bctx.beginPath();
+            bctx.moveTo(0, -halfW * 0.3);
+            bctx.lineTo(0, halfW * 0.3);
+            bctx.lineTo(beamLen, halfW);
+            bctx.lineTo(beamLen, -halfW);
+            bctx.closePath();
+            bctx.fill();
+            bctx.restore();
+          }
+          const cr = base * 0.02;
+          const cg2 = bctx.createRadialGradient(0, 0, 0, 0, 0, cr);
+          cg2.addColorStop(0, `rgba(255, 255, 255, ${(0.9 * life01 * strobe).toFixed(3)})`);
+          cg2.addColorStop(0.5, `rgba(${r}, ${g}, ${b}, ${(0.5 * life01).toFixed(3)})`);
+          cg2.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
+          bctx.fillStyle = cg2;
+          bctx.beginPath();
+          bctx.arc(0, 0, cr, 0, Math.PI * 2);
+          bctx.fill();
+        } else if (ev.kind === "comet") {
+          // a comet streaking across with a glowing tail
+          const ang = ev.ang ?? 0;
+          const reach = ev.reach ?? base;
+          const hx = Math.cos(ang) * reach * u;
+          const hy = Math.sin(ang) * reach * u;
+          const fade = Math.sin(Math.PI * u);
+          const tailLen = base * (0.13 + 0.05 * Math.sin(spinT * 10));
+          const tx = hx - Math.cos(ang) * tailLen;
+          const ty = hy - Math.sin(ang) * tailLen;
+          bctx.globalCompositeOperation = "lighter";
+          const tg = bctx.createLinearGradient(hx, hy, tx, ty);
+          tg.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${(0.7 * fade).toFixed(3)})`);
+          tg.addColorStop(0.4, `rgba(180, 210, 255, ${(0.22 * fade).toFixed(3)})`);
+          tg.addColorStop(1, "rgba(180, 210, 255, 0)");
+          bctx.strokeStyle = tg;
+          bctx.lineWidth = Math.max(1.4, base * 0.006);
+          bctx.lineCap = "round";
+          bctx.beginPath();
+          bctx.moveTo(hx, hy);
+          bctx.lineTo(tx, ty);
+          bctx.stroke();
+          const hg = bctx.createRadialGradient(hx, hy, 0, hx, hy, base * 0.02);
+          hg.addColorStop(0, `rgba(255, 255, 255, ${(0.9 * fade).toFixed(3)})`);
+          hg.addColorStop(0.4, `rgba(${r}, ${g}, ${b}, ${(0.4 * fade).toFixed(3)})`);
+          hg.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
+          bctx.fillStyle = hg;
+          bctx.beginPath();
+          bctx.arc(hx, hy, base * 0.02, 0, Math.PI * 2);
+          bctx.fill();
+        } else if (ev.kind === "tidal") {
+          // tidal disruption flare — a star shredded into a spiral stream
+          const flare = Math.sin(Math.PI * Math.min(1, u * 1.7));
+          bctx.globalCompositeOperation = "lighter";
+          const fr = base * 0.09;
+          const fg2 = bctx.createRadialGradient(0, 0, 0, 0, 0, fr);
+          fg2.addColorStop(0, `rgba(255, 244, 220, ${(0.5 * flare).toFixed(3)})`);
+          fg2.addColorStop(0.3, `rgba(${r}, ${g}, ${b}, ${(0.28 * flare).toFixed(3)})`);
+          fg2.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
+          bctx.fillStyle = fg2;
+          bctx.beginPath();
+          bctx.arc(0, 0, fr, 0, Math.PI * 2);
+          bctx.fill();
+          const base0 = ev.ang ?? 0;
+          for (let i = 0; i < 24; i++) {
+            const p = i / 24;
+            const a = base0 + p * 2.4 + (motion ? spinT * 0.7 : 0);
+            const d = base * (0.02 + p * 0.15) * (0.7 + u);
+            const px = Math.cos(a) * d;
+            const py = Math.sin(a) * d * 0.55;
+            bctx.fillStyle = `rgba(255, ${Math.round(150 + p * 60)}, 110, ${(0.5 * (1 - u) * (0.4 + p)).toFixed(3)})`;
+            bctx.beginPath();
+            bctx.arc(px, py, 0.8 + hash01(ev.seed + i * 53) * 1.6, 0, Math.PI * 2);
+            bctx.fill();
+          }
+        } else if (ev.kind === "nova") {
+          // nova flash — a quick brilliant bloom + thin ring, no remnant
+          const fl = Math.pow(1 - u, 1.5);
+          const rr = base * 0.11;
+          bctx.globalCompositeOperation = "lighter";
+          const ng = bctx.createRadialGradient(0, 0, 0, 0, 0, rr);
+          ng.addColorStop(0, `rgba(255, 255, 245, ${(0.6 * fl).toFixed(3)})`);
+          ng.addColorStop(0.35, `rgba(${r}, ${g}, ${b}, ${(0.3 * fl).toFixed(3)})`);
+          ng.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
+          bctx.fillStyle = ng;
+          bctx.beginPath();
+          bctx.arc(0, 0, rr, 0, Math.PI * 2);
+          bctx.fill();
+          bctx.strokeStyle = `rgba(255, 240, 210, ${(0.5 * (1 - u)).toFixed(3)})`;
+          bctx.lineWidth = 1.3;
+          bctx.beginPath();
+          bctx.arc(0, 0, base * (0.02 + u * 0.14), 0, Math.PI * 2);
+          bctx.stroke();
+        } else if (ev.kind === "starform") {
+          // star formation — a gas region condensing into new birthlight
+          const cond = 1 - u;
+          const bloom = Math.sin(Math.PI * u);
+          bctx.globalCompositeOperation = "lighter";
+          const gr = base * (0.14 * cond + 0.02);
+          const gg = bctx.createRadialGradient(0, 0, 0, 0, 0, gr);
+          gg.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${(0.16 * bloom).toFixed(3)})`);
+          gg.addColorStop(0.5, `rgba(${r}, ${g}, ${b}, ${(0.07 * bloom).toFixed(3)})`);
+          gg.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
+          bctx.fillStyle = gg;
+          bctx.beginPath();
+          bctx.arc(0, 0, gr, 0, Math.PI * 2);
+          bctx.fill();
+          for (let i = 0; i < 10; i++) {
+            const a = hash01(ev.seed + i * 71) * Math.PI * 2;
+            const d = base * (0.015 + 0.05 * (1 - cond)) * (0.5 + hash01(ev.seed + i * 97));
+            const px = Math.cos(a) * d;
+            const py = Math.sin(a) * d;
+            const ig = Math.max(0, u - 0.3) * (0.6 + hash01(ev.seed + i * 131) * 0.6);
+            bctx.fillStyle = `rgba(255, 250, 230, ${(0.7 * ig).toFixed(3)})`;
+            bctx.beginPath();
+            bctx.arc(px, py, 0.7 + ig * 1.6, 0, Math.PI * 2);
+            bctx.fill();
+          }
+        } else if (ev.kind === "grb") {
+          // gamma-ray burst — a brief brilliant collimated twin beam
+          const fl = Math.pow(1 - u, 0.8) * Math.min(1, u * 5);
+          bctx.rotate(ev.ang ?? 0);
+          bctx.globalCompositeOperation = "lighter";
+          const len = base * 0.72;
+          for (const d of [-1, 1]) {
+            const bg = bctx.createLinearGradient(0, 0, 0, d * len);
+            bg.addColorStop(0, `rgba(240, 255, 220, ${(0.85 * fl).toFixed(3)})`);
+            bg.addColorStop(0.5, `rgba(${r}, ${g}, ${b}, ${(0.3 * fl).toFixed(3)})`);
+            bg.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
+            bctx.fillStyle = bg;
+            const halfW = base * 0.012;
+            bctx.beginPath();
+            bctx.moveTo(-halfW, 0);
+            bctx.lineTo(halfW, 0);
+            bctx.lineTo(halfW * 0.25, d * len);
+            bctx.lineTo(-halfW * 0.25, d * len);
+            bctx.closePath();
+            bctx.fill();
+          }
+          const cr = base * 0.03;
+          const cg2 = bctx.createRadialGradient(0, 0, 0, 0, 0, cr);
+          cg2.addColorStop(0, `rgba(255, 255, 255, ${(0.9 * fl).toFixed(3)})`);
+          cg2.addColorStop(1, "rgba(255, 255, 255, 0)");
+          bctx.fillStyle = cg2;
+          bctx.beginPath();
+          bctx.arc(0, 0, cr, 0, Math.PI * 2);
+          bctx.fill();
+        } else if (ev.kind === "merger") {
+          // black-hole merger burst — a bright ringing flash at the union
+          const bl = Math.pow(1 - u, 0.7);
+          bctx.globalCompositeOperation = "lighter";
+          const br = base * (0.03 + u * 0.14) * ev.power;
+          const mg = bctx.createRadialGradient(0, 0, 0, 0, 0, base * 0.16);
+          mg.addColorStop(0, `rgba(255, 250, 255, ${(0.6 * bl).toFixed(3)})`);
+          mg.addColorStop(0.3, `rgba(${r}, ${g}, ${b}, ${(0.34 * bl).toFixed(3)})`);
+          mg.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
+          bctx.fillStyle = mg;
+          bctx.beginPath();
+          bctx.arc(0, 0, base * 0.16, 0, Math.PI * 2);
+          bctx.fill();
+          bctx.strokeStyle = `rgba(230, 210, 255, ${(0.6 * bl).toFixed(3)})`;
+          bctx.lineWidth = 2;
+          bctx.beginPath();
+          bctx.arc(0, 0, br, 0, Math.PI * 2);
+          bctx.stroke();
         } else {
           const implosion = Math.pow(1 - u, 0.72);
           const rOuter = base * (0.16 * implosion + 0.018) * ev.power;
@@ -1759,6 +2441,11 @@ export default function Stars() {
         bctx.globalCompositeOperation = prev;
       }
 
+      // gravitational-wave ripples — compute geometry + paint the shimmer
+      // BEFORE stars, so lensPoint (which reads the cached front) displaces
+      // starlight consistently as the wavefront passes.
+      drawGravWaves(t, nowMs);
+
       // ── stars — layered renderer ─────────────────────────────────
       const mwHover = hoveredMilkyWayRef.current;
       const mwPulse = (() => {
@@ -1838,7 +2525,8 @@ export default function Stars() {
       }
       bctx.restore();
 
-      drawUserBlackHoles(t);
+      drawStaticBlackHolesActive(t, nowMs);
+      drawUserBlackHoles(t, nowMs);
       drawCosmicEvents(nowMs);
       drawPlanetSystems(t);
 
@@ -2261,7 +2949,14 @@ export default function Stars() {
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
       const id = findSavedNameAt(x, y);
-      if (!id) return;
+      if (!id) {
+        // double-tap empty space summons the next cosmic event in the cycle
+        const summoners = [spawnComet, spawnPulsar, spawnNova, spawnTidalFlare, spawnStarForm, spawnGrb];
+        const pick = summoners[summonRef.current % summoners.length];
+        summonRef.current += 1;
+        pick(x, y);
+        return;
+      }
       const c = savedRef.current.find((cc) => cc.id === id);
       if (!c) return;
       const w = window.innerWidth;
@@ -2275,7 +2970,7 @@ export default function Stars() {
       haptics.tap();
       markSky("rename constellation", "kept", 0.38, "object", "rename-open");
     },
-    [findSavedNameAt, markSky],
+    [findSavedNameAt, markSky, spawnComet, spawnPulsar, spawnNova, spawnTidalFlare, spawnStarForm, spawnGrb],
   );
 
   const onContextMenu = useCallback((e: React.MouseEvent) => {
@@ -2296,12 +2991,138 @@ export default function Stars() {
         if (!star || (star.size < 1.35 && star.brightness < 0.76)) continue;
         const p = fn(idx, performance.now() / 1000);
         if (p.x < 40 || p.x > window.innerWidth - 40 || p.y < 80 || p.y > window.innerHeight - 80) continue;
-        supernovaAt(p.x, p.y, star.rgb, false);
+        // the biggest stars occasionally leave a remnant that collapses into
+        // a brand-new black hole — supernova and gravity, tied together.
+        const collapse = (star.size > 2.1 || star.brightness > 0.9) && Math.random() < 0.34
+          && userBlackHolesRef.current.length < MAX_USER_BLACK_HOLES;
+        supernovaAt(p.x, p.y, star.rgb, false, collapse);
         break;
       }
     }, RANDOM_SUPERNOVA_MS);
     return () => window.clearInterval(id);
   }, [supernovaAt]);
+
+  // ── cosmic weather — the sky is never static, never chaotic ────────
+  // A gentle scheduler that fires a varied one-shot event now and then.
+  // Timing jitters so it feels like a living cosmos, not a clock.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    let timer = 0;
+    const safePoint = (): { x: number; y: number } => {
+      const ww = window.innerWidth;
+      const wh = window.innerHeight;
+      return {
+        x: 60 + Math.random() * Math.max(1, ww - 120),
+        y: 120 + Math.random() * Math.max(1, wh - 220),
+      };
+    };
+    const fire = () => {
+      if (!(document.hidden || namingRef.current)) {
+        // weighted variety — comets and pulsars are common, GRBs rare
+        const roll = Math.random();
+        const p = safePoint();
+        if (roll < 0.26) spawnComet();
+        else if (roll < 0.46) spawnPulsar(p.x, p.y);
+        else if (roll < 0.62) spawnNova(p.x, p.y);
+        else if (roll < 0.76) spawnStarForm(p.x, p.y);
+        else if (roll < 0.9) spawnTidalFlare(p.x, p.y);
+        else spawnGrb(p.x, p.y);
+      }
+      timer = window.setTimeout(fire, 9000 + Math.random() * 8000);
+    };
+    timer = window.setTimeout(fire, 5000 + Math.random() * 5000);
+    return () => window.clearTimeout(timer);
+  }, [spawnComet, spawnPulsar, spawnNova, spawnStarForm, spawnTidalFlare, spawnGrb]);
+
+  // ── black-hole mergers — inspiral, ringdown, gravitational wave ────
+  // Detects when two user holes drift/are drawn close (or occasionally
+  // captures a pair on its own), runs the inspiral via mergerRef (read by
+  // the RAF loop), then commits the merged hole with a chirp + storm + GW.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const tick = () => {
+      const nowMs = performance.now();
+      const holes = userBlackHolesRef.current;
+      const m = mergerRef.current;
+      if (m) {
+        if (!m.committed && nowMs - m.tStartMs >= m.durMs) {
+          m.committed = true;
+          const a = holes.find((hh) => hh.id === m.aId);
+          const b = holes.find((hh) => hh.id === m.bId);
+          if (a && b) {
+            const midNx = (m.ax + m.bx) / 2;
+            const midNy = (m.ay + m.by) / 2;
+            const merged: UserBlackHole = {
+              id: makeId("bh"),
+              nx: midNx,
+              ny: midNy,
+              mass: Math.min(2.4, a.mass + b.mass * 0.85),
+              spin: ((a.spin + b.spin) / 2) || a.spin,
+              hue: (a.hue + b.hue) / 2,
+              createdAt: Date.now(),
+            };
+            const next = holes.filter((hh) => hh.id !== a.id && hh.id !== b.id)
+              .concat(merged).slice(-MAX_USER_BLACK_HOLES);
+            userBlackHolesRef.current = next;
+            setUserBlackHoles(next);
+            persistCosmicMemory({ bornStars: bornStarsRef.current, blackHoles: next });
+            gravWavesRef.current = [
+              ...gravWavesRef.current.slice(-4),
+              { id: ++skyPulseId.current, nx: midNx, ny: midNy, t0Ms: nowMs, life: reduce ? 2.2 : 3.0, strength: merged.mass },
+            ];
+            const ww = window.innerWidth;
+            const wh = window.innerHeight;
+            const zoom = Math.max(0.001, userZoomRef.current);
+            const sx = ww * 0.5 + (midNx - 0.5) * ww * zoom;
+            const sy = wh * 0.5 + (midNy - 0.5) * wh * zoom;
+            addCosmicEvent({ kind: "merger", x: sx, y: sy, life: 2.4, seed: Math.floor(nowMs) >>> 0, rgb: [210, 180, 255], power: merged.mass });
+            chirpTone();
+            haptics.storm();
+            markSky("black holes merged", "merger", 0.98, "sigil", "merger");
+          }
+          mergerRef.current = null;
+        }
+        return;
+      }
+      if (holes.length < 2) return;
+      // proximity capture — placing holes near each other starts an inspiral
+      let bestI = -1;
+      let bestJ = -1;
+      let bestD = Infinity;
+      for (let i = 0; i < holes.length; i++) {
+        for (let j = i + 1; j < holes.length; j++) {
+          const d = Math.hypot(holes[i].nx - holes[j].nx, holes[i].ny - holes[j].ny);
+          if (d < bestD) { bestD = d; bestI = i; bestJ = j; }
+        }
+      }
+      const startMerge = (i: number, j: number) => {
+        const a = holes[i];
+        const b = holes[j];
+        mergerRef.current = {
+          aId: a.id, bId: b.id,
+          ax: a.nx, ay: a.ny, bx: b.nx, by: b.ny,
+          tStartMs: performance.now(),
+          durMs: reduce ? 1500 : 2400,
+          spinSign: (a.spin + b.spin) >= 0 ? 1 : -1,
+          committed: false,
+        };
+        haptics.roll();
+        markSky("black holes falling together", "merger", 0.6, "object", "inspiral", false);
+      };
+      if (bestI >= 0 && bestD < 0.07) {
+        startMerge(bestI, bestJ);
+        return;
+      }
+      // occasional self-capture so mergers happen on their own, too
+      if (nowMs > mergerScanRef.current && Math.random() < 0.5) {
+        mergerScanRef.current = nowMs + 22000;
+        if (bestI >= 0) startMerge(bestI, bestJ);
+      }
+    };
+    const id = window.setInterval(tick, 140);
+    return () => window.clearInterval(id);
+  }, [addCosmicEvent, chirpTone, markSky, persistCosmicMemory]);
 
   // ── keyboard: Enter (name) / Escape (cancel) ───────────────────────
   useEffect(() => {
@@ -2365,7 +3186,7 @@ export default function Stars() {
       />
       <canvas
         ref={fgRef}
-        aria-label="a living night sky with star births, supernovae, nebulae, galaxies, and black holes"
+        aria-label="a living night sky with star births, supernovae, pulsars, comets, nebulae, galaxies, and feeding, merging black holes"
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
@@ -2517,7 +3338,7 @@ export default function Stars() {
           pointerEvents: "none",
         }}
       >
-        birthlight · stellar death · collapsed space
+        birthlight · stellar death · pulsars, comets, merging holes
       </div>
 
       {/* compact zoom controls */}
