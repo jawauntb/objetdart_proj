@@ -9,7 +9,7 @@ const DropSphere = dynamic(() => import("@/components/DropSphere"), { ssr: false
 
 export default function DropPage() {
   useEffect(() => {
-    getFieldAudio().setAmbientProfile("cosmic");
+    getFieldAudio().setAmbientProfile("aphros");
   }, []);
 
   return (
