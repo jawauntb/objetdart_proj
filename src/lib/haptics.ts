@@ -11,8 +11,8 @@ import { getTurbulence } from "@/lib/turbulence";
  * turbulence axis, so a calm sea taps softly and a storm pounds.
  *
  * Reality check: `navigator.vibrate` is an Android/Chromium thing. iOS Safari
- * does not implement it, so on iPhone these are silent no-ops — the visual
- * and audio layers still carry the interaction. Everything is feature-detected
+ * does not implement it, but the Objet Coin iOS app installs a native bridge
+ * that maps these patterns into Core Haptics. Everything is feature-detected
  * and SSR-safe, so calling into here is always free.
  */
 
