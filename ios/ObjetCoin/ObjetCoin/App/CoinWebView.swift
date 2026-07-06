@@ -1,3 +1,4 @@
+import CoreHaptics
 import SwiftUI
 import UIKit
 @preconcurrency import WebKit
@@ -236,32 +237,45 @@ struct CoinWebView: UIViewRepresentable {
 @MainActor
 final class CoinNativeHaptics {
     static let shared = CoinNativeHaptics()
+    static let previewPattern: [Double] = [90, 40, 160, 40, 90]
 
     private let light = UIImpactFeedbackGenerator(style: .light)
     private let medium = UIImpactFeedbackGenerator(style: .medium)
     private let heavy = UIImpactFeedbackGenerator(style: .heavy)
+    private let supportsCoreHaptics = CHHapticEngine.capabilitiesForHardware().supportsHaptics
+    private var engine: CHHapticEngine?
+    private var activePlayers = [CHHapticPatternPlayer]()
     private var scheduled = [DispatchWorkItem]()
 
     private init() {
         light.prepare()
         medium.prepare()
         heavy.prepare()
+        prepareEngine()
     }
 
     func play(_ body: Any) {
         let pattern = extractPattern(from: body)
 
         if pattern.count == 1, pattern[0] <= 0 {
-            cancelScheduled()
+            cancelPlayback()
             return
         }
 
+        cancelPlayback()
+        if playCoreHaptics(pattern) {
+            return
+        }
+
+        playImpactFallback(pattern)
+    }
+
+    private func playImpactFallback(_ pattern: [Double]) {
         if pattern.count <= 1 {
             impact(durationMs: pattern.first ?? 10)
             return
         }
 
-        cancelScheduled()
         var delayMs: Double = 0
 
         for (index, value) in pattern.enumerated() {
@@ -276,6 +290,120 @@ final class CoinNativeHaptics {
             }
             delayMs += value
         }
+    }
+
+    private func prepareEngine() {
+        guard supportsCoreHaptics else {
+            return
+        }
+
+        do {
+            let engine = try CHHapticEngine()
+            engine.stoppedHandler = { [weak self] _ in
+                Task { @MainActor in
+                    self?.engine = nil
+                }
+            }
+            engine.resetHandler = { [weak self] in
+                Task { @MainActor in
+                    self?.prepareEngine()
+                }
+            }
+            try engine.start()
+            self.engine = engine
+        } catch {
+            engine = nil
+        }
+    }
+
+    private func playCoreHaptics(_ sourcePattern: [Double]) -> Bool {
+        guard supportsCoreHaptics else {
+            return false
+        }
+
+        if engine == nil {
+            prepareEngine()
+        }
+
+        guard let engine else {
+            return false
+        }
+
+        let pattern = normalizedPattern(sourcePattern)
+        let events = hapticEvents(for: pattern)
+        guard !events.isEmpty else {
+            return false
+        }
+
+        do {
+            try engine.start()
+            let hapticPattern = try CHHapticPattern(events: events, parameters: [])
+            let player = try engine.makePlayer(with: hapticPattern)
+            try player.start(atTime: 0)
+            activePlayers.append(player)
+
+            let cleanup = DispatchWorkItem { [weak self] in
+                Task { @MainActor in
+                    guard let self, !self.activePlayers.isEmpty else {
+                        return
+                    }
+                    self.activePlayers.removeFirst()
+                }
+            }
+            scheduled.append(cleanup)
+            DispatchQueue.main.asyncAfter(deadline: .now() + totalDurationSeconds(pattern) + 0.25, execute: cleanup)
+            return true
+        } catch {
+            self.engine = nil
+            return false
+        }
+    }
+
+    private func hapticEvents(for pattern: [Double]) -> [CHHapticEvent] {
+        var events = [CHHapticEvent]()
+        var relativeTime: TimeInterval = 0
+
+        for (index, valueMs) in pattern.enumerated() {
+            let duration = max(0, valueMs) / 1000
+
+            if index.isMultiple(of: 2), duration > 0 {
+                let intensity = Float(max(0.25, min(1.0, valueMs / 70)))
+                let sharpness = Float(max(0.18, min(0.92, 0.32 + valueMs / 180)))
+                let parameters = [
+                    CHHapticEventParameter(parameterID: .hapticIntensity, value: intensity),
+                    CHHapticEventParameter(parameterID: .hapticSharpness, value: sharpness)
+                ]
+
+                if duration < 0.018 {
+                    events.append(CHHapticEvent(
+                        eventType: .hapticTransient,
+                        parameters: parameters,
+                        relativeTime: relativeTime
+                    ))
+                } else {
+                    events.append(CHHapticEvent(
+                        eventType: .hapticContinuous,
+                        parameters: parameters,
+                        relativeTime: relativeTime,
+                        duration: min(duration, 1.2)
+                    ))
+                }
+            }
+
+            relativeTime += duration
+        }
+
+        return events
+    }
+
+    private func normalizedPattern(_ pattern: [Double]) -> [Double] {
+        pattern
+            .prefix(16)
+            .map { max(0, min(1_200, $0)) }
+    }
+
+    private func totalDurationSeconds(_ pattern: [Double]) -> TimeInterval {
+        pattern.reduce(0) { $0 + max(0, $1) / 1000 }
     }
 
     private func extractPattern(from body: Any) -> [Double] {
@@ -321,6 +449,14 @@ final class CoinNativeHaptics {
     private func cancelScheduled() {
         scheduled.forEach { $0.cancel() }
         scheduled.removeAll()
+    }
+
+    private func cancelPlayback() {
+        cancelScheduled()
+        activePlayers.forEach { player in
+            try? player.stop(atTime: 0)
+        }
+        activePlayers.removeAll()
     }
 }
 

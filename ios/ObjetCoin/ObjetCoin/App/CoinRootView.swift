@@ -64,7 +64,7 @@ final class CoinWebViewModel: ObservableObject {
         guard nativeHapticsEnabled else {
             return
         }
-        CoinNativeHaptics.shared.play([10, 28, 26])
+        CoinNativeHaptics.shared.play(CoinNativeHaptics.previewPattern)
     }
 
     func setSource(_ source: CoinNativeSettings.Source) {
@@ -534,7 +534,7 @@ private struct CoinSettingsView: View {
                         guard draft.nativeHapticsEnabled else {
                             return
                         }
-                        CoinNativeHaptics.shared.play([10, 28, 26])
+                        CoinNativeHaptics.shared.play(CoinNativeHaptics.previewPattern)
                     } label: {
                         Label("Preview haptics", systemImage: "waveform.path.ecg")
                     }
