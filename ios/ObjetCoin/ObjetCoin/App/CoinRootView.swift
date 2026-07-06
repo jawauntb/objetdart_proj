@@ -8,6 +8,7 @@ final class CoinWebViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var reloadToken = UUID()
     @Published private(set) var settings: CoinNativeSettings
+    @Published private(set) var latestCommand: CoinWebCommand?
 
     private let launchOverrideURL: URL?
 
@@ -49,6 +50,23 @@ final class CoinWebViewModel: ObservableObject {
         reloadToken = UUID()
     }
 
+    func flipCoin() {
+        latestCommand = CoinWebCommand(action: .flip)
+    }
+
+    func resetCoinProgress() {
+        isLoading = true
+        errorMessage = nil
+        latestCommand = CoinWebCommand(action: .resetAventurine)
+    }
+
+    func previewHaptics() {
+        guard nativeHapticsEnabled else {
+            return
+        }
+        CoinNativeHaptics.shared.play([10, 28, 26])
+    }
+
     func setSource(_ source: CoinNativeSettings.Source) {
         var next = settings
         next.source = source
@@ -64,6 +82,16 @@ final class CoinWebViewModel: ObservableObject {
             reload()
         }
     }
+}
+
+struct CoinWebCommand: Equatable {
+    enum Action: Equatable {
+        case flip
+        case resetAventurine
+    }
+
+    let id = UUID()
+    let action: Action
 }
 
 struct CoinRootView: View {
@@ -115,6 +143,9 @@ struct CoinRootView: View {
 
             Spacer()
 
+            commandDock
+                .padding(.bottom, 8)
+
             sourceDock
         }
         .padding(.horizontal, 14)
@@ -159,6 +190,33 @@ struct CoinRootView: View {
         .overlay {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(.white.opacity(0.14), lineWidth: 1)
+        }
+    }
+
+    private var commandDock: some View {
+        HStack(spacing: 14) {
+            CoinIconButton(systemName: "arrow.triangle.2.circlepath", label: "Flip coin") {
+                model.flipCoin()
+            }
+
+            CoinIconButton(systemName: "sparkles", label: "Reset saved shine") {
+                model.resetCoinProgress()
+            }
+
+            CoinIconButton(
+                systemName: "waveform.path.ecg",
+                label: "Preview haptics",
+                isDisabled: !model.nativeHapticsEnabled
+            ) {
+                model.previewHaptics()
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 44)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(.white.opacity(0.12), lineWidth: 1)
         }
     }
 
@@ -399,17 +457,19 @@ private enum CoinSettingsKeys {
 private struct CoinIconButton: View {
     let systemName: String
     let label: String
+    var isDisabled = false
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             Image(systemName: systemName)
                 .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(Color.white.opacity(isDisabled ? 0.34 : 1))
                 .frame(width: 30, height: 30)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .disabled(isDisabled)
         .accessibilityLabel(label)
     }
 }
@@ -461,6 +521,30 @@ private struct CoinSettingsView: View {
                 Section("Native") {
                     Toggle("Native haptics", isOn: $draft.nativeHapticsEnabled)
                     Toggle("Keep screen awake", isOn: $draft.keepScreenAwake)
+                }
+
+                Section("Actions") {
+                    Button {
+                        model.flipCoin()
+                    } label: {
+                        Label("Flip coin", systemImage: "arrow.triangle.2.circlepath")
+                    }
+
+                    Button {
+                        guard draft.nativeHapticsEnabled else {
+                            return
+                        }
+                        CoinNativeHaptics.shared.play([10, 28, 26])
+                    } label: {
+                        Label("Preview haptics", systemImage: "waveform.path.ecg")
+                    }
+                    .disabled(!draft.nativeHapticsEnabled)
+
+                    Button(role: .destructive) {
+                        model.resetCoinProgress()
+                    } label: {
+                        Label("Reset saved shine", systemImage: "sparkles")
+                    }
                 }
 
                 Section {

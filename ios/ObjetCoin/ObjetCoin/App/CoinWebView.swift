@@ -46,11 +46,14 @@ struct CoinWebView: UIViewRepresentable {
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
-        guard context.coordinator.reloadToken != model.reloadToken else {
+        if context.coordinator.reloadToken != model.reloadToken {
+            context.coordinator.load(webView, token: model.reloadToken)
             return
         }
 
-        context.coordinator.load(webView, token: model.reloadToken)
+        if let command = model.latestCommand {
+            context.coordinator.run(command, in: webView)
+        }
     }
 
     static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
@@ -113,6 +116,7 @@ struct CoinWebView: UIViewRepresentable {
 
         let model: CoinWebViewModel
         var reloadToken: UUID?
+        var commandID: UUID?
 
         init(model: CoinWebViewModel) {
             self.model = model
@@ -124,6 +128,15 @@ struct CoinWebView: UIViewRepresentable {
             request.cachePolicy = .reloadRevalidatingCacheData
             request.timeoutInterval = 30
             webView.load(request)
+        }
+
+        func run(_ command: CoinWebCommand, in webView: WKWebView) {
+            guard commandID != command.id else {
+                return
+            }
+
+            commandID = command.id
+            webView.evaluateJavaScript(command.javaScript)
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -221,7 +234,7 @@ struct CoinWebView: UIViewRepresentable {
 }
 
 @MainActor
-private final class CoinNativeHaptics {
+final class CoinNativeHaptics {
     static let shared = CoinNativeHaptics()
 
     private let light = UIImpactFeedbackGenerator(style: .light)
@@ -308,5 +321,32 @@ private final class CoinNativeHaptics {
     private func cancelScheduled() {
         scheduled.forEach { $0.cancel() }
         scheduled.removeAll()
+    }
+}
+
+private extension CoinWebCommand {
+    var javaScript: String {
+        switch action {
+        case .flip:
+            return """
+            (() => {
+              try {
+                if (window.__coin && typeof window.__coin.flip === 'function') {
+                  window.__coin.flip(0, 1);
+                  return true;
+                }
+              } catch (_) {}
+              return false;
+            })();
+            """
+        case .resetAventurine:
+            return """
+            (() => {
+              try { window.localStorage.removeItem('objetdart:coin:aventurine'); } catch (_) {}
+              window.location.reload();
+              return true;
+            })();
+            """
+        }
     }
 }

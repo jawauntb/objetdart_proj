@@ -9,10 +9,15 @@ The project includes generated app icons, a launch image, a privacy manifest, pe
 The Swift side owns the app chrome around the web instrument:
 
 - Native reload, share, and settings controls
+- Native flip, shine reset, and haptic preview actions
 - Live/local/custom source switching
 - Persisted native haptics and keep-awake preferences
 - Native error recovery with browser fallback
 - Launch-argument override support for Xcode development
+
+The action buttons call into the loaded `/coin` page through a small WebKit
+command bridge, so the native app can drive the same coin state the web route
+uses without duplicating the Three.js instrument.
 
 ## Run
 
