@@ -1,6 +1,6 @@
 import SwiftUI
 import UIKit
-import WebKit
+@preconcurrency import WebKit
 
 struct CoinWebView: UIViewRepresentable {
     @ObservedObject var model: CoinWebViewModel
@@ -98,7 +98,7 @@ struct CoinWebView: UIViewRepresentable {
         style.textContent = `
           html, body { background: #000 !important; overscroll-behavior: none !important; }
           .oda-site-header { display: none !important; }
-          .coin-hud { padding-top: calc(34px + env(safe-area-inset-top, 0px)) !important; }
+          .coin-hud { padding-top: calc(94px + env(safe-area-inset-top, 0px)) !important; }
         `;
         document.head.appendChild(style);
       };
@@ -132,6 +132,9 @@ struct CoinWebView: UIViewRepresentable {
             }
 
             Task { @MainActor in
+                guard self.model.nativeHapticsEnabled else {
+                    return
+                }
                 CoinNativeHaptics.shared.play(message.body)
             }
         }

@@ -1,8 +1,18 @@
 # Objet Coin iOS
 
-A SwiftUI shell for `/coin`. It opens the coin full-screen in `WKWebView`, hides site navigation, keeps the screen awake while the instrument is open, and bridges the page's haptic calls into native iPhone impact feedback.
+A hybrid SwiftUI app for `/coin`. It opens the coin full-screen in `WKWebView`, hides site navigation, wraps the instrument in native controls, and bridges the page's haptic calls into native iPhone impact feedback.
 
-The project includes generated app icons, a launch image, a privacy manifest, and archive/export configuration for App Store Connect uploads.
+The project includes generated app icons, a launch image, a privacy manifest, persisted native settings, and archive/export configuration for App Store Connect uploads.
+
+## Native shell
+
+The Swift side owns the app chrome around the web instrument:
+
+- Native reload, share, and settings controls
+- Live/local/custom source switching
+- Persisted native haptics and keep-awake preferences
+- Native error recovery with browser fallback
+- Launch-argument override support for Xcode development
 
 ## Run
 
@@ -20,7 +30,7 @@ To point it at a local Next dev server, edit the scheme's launch arguments in Xc
 -CoinURL http://localhost:3000/coin?app=ios
 ```
 
-The plist allows local networking so simulator builds can hit localhost during development.
+You can also switch between Live, Local, and Custom from the native settings sheet. The plist allows local networking so simulator builds can hit localhost during development.
 
 ## Assets
 
