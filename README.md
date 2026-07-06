@@ -26,8 +26,10 @@ yarn start
 
 ## iOS coin app
 
-The coin also has a SwiftUI app in `ios/ObjetCoin`. Open
+The coin also has a hybrid SwiftUI app in `ios/ObjetCoin`. Open
 `ios/ObjetCoin/ObjetCoin.xcodeproj` in Xcode and run the `ObjetCoin` scheme.
+It wraps `/coin` with native source controls, sharing, settings, launch art, and
+haptics.
 
 By default it loads the production `/coin` route full-screen. For local web
 development, add this launch argument to the Xcode scheme:
