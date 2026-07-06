@@ -1,6 +1,8 @@
 # Objet Coin iOS
 
-A small SwiftUI shell for `/coin`. It opens the coin full-screen in `WKWebView`, hides site navigation, keeps the screen awake while the instrument is open, and bridges the page's haptic calls into native iPhone impact feedback.
+A SwiftUI shell for `/coin`. It opens the coin full-screen in `WKWebView`, hides site navigation, keeps the screen awake while the instrument is open, and bridges the page's haptic calls into native iPhone impact feedback.
+
+The project includes generated app icons, a launch image, a privacy manifest, and archive/export configuration for App Store Connect uploads.
 
 ## Run
 
@@ -19,3 +21,51 @@ To point it at a local Next dev server, edit the scheme's launch arguments in Xc
 ```
 
 The plist allows local networking so simulator builds can hit localhost during development.
+
+## Assets
+
+The icon and launch coin are generated from `Tools/make-assets.swift`:
+
+```bash
+cd ios/ObjetCoin
+swiftc Tools/make-assets.swift -o /tmp/objetcoin-make-assets
+/tmp/objetcoin-make-assets
+```
+
+The generated PNGs live in `ObjetCoin/Resources/Assets.xcassets`.
+
+## Signing
+
+`Config/Signing.xcconfig` keeps the default bundle identifier and leaves the Apple team blank. Set these in Xcode, or pass them to `xcodebuild`:
+
+```bash
+OBJET_COIN_DEVELOPMENT_TEAM=ABCDE12345
+OBJET_COIN_BUNDLE_IDENTIFIER=com.yourcompany.objetcoin
+```
+
+## Archive
+
+With a valid Apple Developer team configured:
+
+```bash
+cd ios/ObjetCoin
+xcodebuild \
+  -project ObjetCoin.xcodeproj \
+  -scheme ObjetCoin \
+  -configuration Release \
+  -destination 'generic/platform=iOS' \
+  -archivePath build/ObjetCoin.xcarchive \
+  OBJET_COIN_DEVELOPMENT_TEAM=ABCDE12345 \
+  OBJET_COIN_BUNDLE_IDENTIFIER=com.yourcompany.objetcoin \
+  archive
+```
+
+Then export for App Store Connect:
+
+```bash
+xcodebuild \
+  -exportArchive \
+  -archivePath build/ObjetCoin.xcarchive \
+  -exportPath build/AppStore \
+  -exportOptionsPlist AppStore/ExportOptions.plist
+```

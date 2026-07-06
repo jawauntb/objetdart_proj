@@ -6,3 +6,5 @@ out/
 .env*.local
 tsconfig.tsbuildinfo
 .claude/
+ios/ObjetCoin/build/
+*.xcarchive

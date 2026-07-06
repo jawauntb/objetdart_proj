@@ -26,7 +26,7 @@ yarn start
 
 ## iOS coin app
 
-The coin also has a small SwiftUI app in `ios/ObjetCoin`. Open
+The coin also has a SwiftUI app in `ios/ObjetCoin`. Open
 `ios/ObjetCoin/ObjetCoin.xcodeproj` in Xcode and run the `ObjetCoin` scheme.
 
 By default it loads the production `/coin` route full-screen. For local web
@@ -35,6 +35,9 @@ development, add this launch argument to the Xcode scheme:
 ```text
 -CoinURL http://localhost:3000/coin?app=ios
 ```
+
+See `ios/ObjetCoin/README.md` for icon generation, signing, and App Store
+archive/export commands.
 
 ## Deployment
 

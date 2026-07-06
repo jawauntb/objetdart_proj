@@ -1,0 +1,7 @@
+// Override these from Xcode or the xcodebuild command line when archiving.
+OBJET_COIN_DEVELOPMENT_TEAM =
+OBJET_COIN_BUNDLE_IDENTIFIER = com.objetdart.coin
+
+CODE_SIGN_STYLE = Automatic
+DEVELOPMENT_TEAM = $(OBJET_COIN_DEVELOPMENT_TEAM)
+PRODUCT_BUNDLE_IDENTIFIER = $(OBJET_COIN_BUNDLE_IDENTIFIER)
