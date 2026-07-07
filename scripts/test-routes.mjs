@@ -79,6 +79,7 @@ const expectedKeys = [
   "stars",
   "signal",
   "light",
+  "music-color",
   "plasma",
   "pulse",
   "charts",
