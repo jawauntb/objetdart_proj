@@ -8,12 +8,18 @@ import {
   parseMusicScore,
   type ParsedMusicToken,
 } from "@/lib/light-music";
+import {
+  exportMusicColorImage,
+  type MusicColorExportKind,
+} from "@/lib/music-color-export";
 import { useField } from "@/store/field";
 
 type MusicCell = Exclude<ParsedMusicToken, { kind: "invalid" }>;
 type MusicNote = Extract<ParsedMusicToken, { kind: "note" }>;
+type ExportedImages = Record<MusicColorExportKind, boolean>;
 
 const DEFAULT_SCORE = "C4 D4 E4 G4 A4 G4 E4 D4\nC4 E4 G4 C5 B4 G4 E4 C4";
+const EMPTY_EXPORTED: ExportedImages = { bar: false, matrix: false };
 
 const SCORE_SAMPLES = [
   {
@@ -67,6 +73,7 @@ function colorBandStyle(cell: MusicCell) {
 export default function MusicColorInstrument() {
   const [score, setScore] = useState(DEFAULT_SCORE);
   const [copied, setCopied] = useState(false);
+  const [exported, setExported] = useState<ExportedImages>(EMPTY_EXPORTED);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const timersRef = useRef<number[]>([]);
@@ -160,6 +167,23 @@ export default function MusicColorInstrument() {
     }
   };
 
+  const exportImage = async (kind: MusicColorExportKind) => {
+    if (cells.length === 0) {
+      try { getFieldAudio().refuse(); } catch { /* noop */ }
+      recordMusicColor(`export/${kind}/empty`, 0.22);
+      return;
+    }
+
+    try {
+      await exportMusicColorImage({ kind, cells, matrixRows, matrixSize, totalDuration });
+      setExported((current) => ({ ...current, [kind]: true }));
+      recordMusicColor(`export/${kind}/${cells.length}`, 0.5);
+    } catch {
+      setExported((current) => ({ ...current, [kind]: false }));
+      try { getFieldAudio().refuse(); } catch { /* noop */ }
+    }
+  };
+
   return (
     <div
       className="music-color-page"
@@ -189,6 +213,7 @@ export default function MusicColorInstrument() {
               onChange={(event) => {
                 setScore(event.target.value);
                 setCopied(false);
+                setExported(EMPTY_EXPORTED);
               }}
               spellCheck={false}
               placeholder="C4 D4 E4 G4 A4 G4 E4 D4"
@@ -201,6 +226,7 @@ export default function MusicColorInstrument() {
                   onClick={() => {
                     setScore(sample.value);
                     setCopied(false);
+                    setExported(EMPTY_EXPORTED);
                     recordMusicColor(`sample/${sample.label}`, 0.36);
                   }}
                 >
@@ -242,6 +268,12 @@ export default function MusicColorInstrument() {
           </button>
           <button type="button" onClick={copyMatrix}>
             {copied ? "copied" : "copy matrix"}
+          </button>
+          <button type="button" onClick={() => void exportImage("bar")} disabled={cells.length === 0}>
+            {exported.bar ? "bar saved" : "export bar"}
+          </button>
+          <button type="button" onClick={() => void exportImage("matrix")} disabled={cells.length === 0}>
+            {exported.matrix ? "matrix saved" : "export matrix"}
           </button>
           <output>{totalDuration.toFixed(totalDuration >= 10 ? 0 : 1)} beats</output>
         </section>
@@ -472,9 +504,9 @@ export default function MusicColorInstrument() {
         }
         .music-color-actions {
           display: grid;
-          grid-template-columns: minmax(130px, 0.6fr) minmax(130px, 0.6fr) minmax(96px, 0.38fr);
+          grid-template-columns: repeat(5, minmax(118px, 1fr));
           gap: 8px;
-          max-width: 500px;
+          max-width: 820px;
           margin-bottom: 16px;
           padding-top: 0;
           padding-bottom: 0;
