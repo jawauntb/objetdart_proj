@@ -33,6 +33,7 @@ export const SITE_ROUTES: SiteRouteEntry[] = [
   { key: "stars",       icon: "stars",    href: "/stars",                             desc: "the night sky",                cluster: "nature",    dark: true, homePriority: 6 },
   { key: "signal",      icon: "signal",   href: "/signal",                            desc: "music is also waves",          cluster: "mechanism", dark: true },
   { key: "light",       icon: "plasma",   href: "/light",                             desc: "color music",                  cluster: "mechanism", dark: true },
+  { key: "music-color", icon: "plasma",   href: "/light/inverse",                     desc: "notes into color",             cluster: "mechanism", dark: true },
   { key: "plasma",      icon: "plasma",   href: "/plasma",                            desc: "plasma globe",                 cluster: "mechanism", dark: true },
   { key: "pulse",       icon: "pulse",    href: "/pulse",                             desc: "heartbeat · pattern",          cluster: "mechanism", dark: true },
   { key: "charts",      icon: "charts",   href: "/charts",                            desc: "lines · candles · oscillators", cluster: "mechanism", dark: true },

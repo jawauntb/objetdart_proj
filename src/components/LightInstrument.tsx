@@ -2,24 +2,20 @@
 
 import { useMemo, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
+import {
+  BASE_OCTAVE_DROP,
+  OCTAVE_SHIFTS,
+  SPECTRAL_STOPS,
+  audibleFrequency,
+  clamp,
+  colorFromWavelength,
+  formatHz,
+  noteName,
+  opticalFrequencyThz,
+  wavelengthFromX,
+  type OctaveShift,
+} from "@/lib/light-music";
 import { useField } from "@/store/field";
-
-const SPEED_OF_LIGHT = 299_792_458;
-const MIN_WAVELENGTH = 380;
-const MAX_WAVELENGTH = 700;
-const BASE_OCTAVE_DROP = 40;
-
-const SPECTRAL_STOPS = [
-  { nm: 700, color: "#d83a2e", name: "red" },
-  { nm: 610, color: "#f08a28", name: "orange" },
-  { nm: 575, color: "#f5d65b", name: "gold" },
-  { nm: 530, color: "#4fca75", name: "green" },
-  { nm: 485, color: "#45b8e8", name: "cyan" },
-  { nm: 450, color: "#5574f7", name: "blue" },
-  { nm: 405, color: "#9a63ee", name: "violet" },
-] as const;
-
-const OCTAVE_SHIFTS = [-3, -2, -1, 0, 1, 2, 3] as const;
 
 type ToneMark = {
   id: number;
@@ -31,52 +27,12 @@ type ToneMark = {
   color: string;
 };
 
-function clamp(value: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, value));
-}
-
-function wavelengthFromX(x: number) {
-  return Math.round(MAX_WAVELENGTH - x * (MAX_WAVELENGTH - MIN_WAVELENGTH));
-}
-
-function colorFromWavelength(nm: number) {
-  const stops = [...SPECTRAL_STOPS].sort((a, b) => a.nm - b.nm);
-  const lowerIndex = stops.findIndex((stop) => nm <= stop.nm);
-  const upper = stops[Math.max(0, lowerIndex)];
-  const lower = stops[Math.max(0, lowerIndex - 1)] ?? upper;
-  if (!upper || !lower || upper.nm === lower.nm) return upper?.color ?? "#f4d778";
-  const mix = (nm - lower.nm) / (upper.nm - lower.nm);
-  const from = lower.color.match(/\w\w/g)?.map((part) => parseInt(part, 16)) ?? [244, 215, 120];
-  const to = upper.color.match(/\w\w/g)?.map((part) => parseInt(part, 16)) ?? from;
-  const rgb = from.map((channel, index) => Math.round(channel + (to[index] - channel) * mix));
-  return `#${rgb.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
-}
-
-function opticalFrequencyThz(nm: number) {
-  return SPEED_OF_LIGHT / (nm * 1e-9) / 1e12;
-}
-
-function audibleFrequency(nm: number, octaveShift: number) {
-  const opticalHz = SPEED_OF_LIGHT / (nm * 1e-9);
-  return opticalHz / 2 ** (BASE_OCTAVE_DROP - octaveShift);
-}
-
-function noteName(freq: number) {
-  const midi = Math.round(69 + 12 * Math.log2(freq / 440));
-  const names = ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"];
-  return `${names[((midi % 12) + 12) % 12]}${Math.floor(midi / 12) - 1}`;
-}
-
-function formatHz(freq: number) {
-  return `${freq.toFixed(freq >= 100 ? 1 : 2)} Hz`;
-}
-
 export default function LightInstrument() {
   const plateRef = useRef<HTMLDivElement | null>(null);
   const markId = useRef(0);
   const lastToneAt = useRef(0);
   const [wavelength, setWavelength] = useState(532);
-  const [octaveShift, setOctaveShift] = useState(0);
+  const [octaveShift, setOctaveShift] = useState<OctaveShift>(0);
   const [marks, setMarks] = useState<ToneMark[]>([]);
   const [isReplaying, setIsReplaying] = useState(false);
 
@@ -156,7 +112,7 @@ export default function LightInstrument() {
     marks.forEach((mark, index) => {
       window.setTimeout(() => {
         setWavelength(mark.wavelength);
-        setOctaveShift(Math.round(Math.log2(mark.audible / audibleFrequency(mark.wavelength, 0))) as (typeof OCTAVE_SHIFTS)[number]);
+        setOctaveShift(Math.round(Math.log2(mark.audible / audibleFrequency(mark.wavelength, 0))) as OctaveShift);
         playTranslatedTone(mark.audible, 0.28);
       }, index * 260);
     });
