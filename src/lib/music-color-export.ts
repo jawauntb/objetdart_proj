@@ -1,9 +1,13 @@
-import { clamp, type ParsedMusicToken } from "@/lib/light-music";
+import {
+  clamp,
+  tonesForMusicToken,
+  type ParsedMusicToken,
+  type ParsedMusicTone,
+} from "@/lib/light-music";
 
 export type MusicColorExportKind = "bar" | "matrix";
 
 type MusicCell = Exclude<ParsedMusicToken, { kind: "invalid" }>;
-type MusicNote = Extract<ParsedMusicToken, { kind: "note" }>;
 
 type MusicColorExportOptions = {
   kind: MusicColorExportKind;
@@ -35,6 +39,10 @@ function noteLabel(cell: MusicCell | null) {
   if (!cell) return "";
   if (cell.kind === "rest") return "rest";
   return cell.normalized;
+}
+
+function cellTones(cell: MusicCell): ParsedMusicTone[] {
+  return tonesForMusicToken(cell);
 }
 
 function paintExportBackground(ctx: CanvasRenderingContext2D, width: number, height: number) {
@@ -94,17 +102,17 @@ function paintRestPattern(ctx: CanvasRenderingContext2D, x: number, y: number, w
   ctx.restore();
 }
 
-function paintNoteRect(
+function paintToneRect(
   ctx: CanvasRenderingContext2D,
-  cell: MusicNote,
+  tone: Pick<ParsedMusicTone, "color">,
   x: number,
   y: number,
   width: number,
   height: number,
 ) {
-  ctx.shadowColor = cell.color;
+  ctx.shadowColor = tone.color;
   ctx.shadowBlur = 15;
-  ctx.fillStyle = cell.color;
+  ctx.fillStyle = tone.color;
   ctx.fillRect(x, y, width, height);
   ctx.shadowBlur = 0;
 
@@ -114,6 +122,32 @@ function paintNoteRect(
   gloss.addColorStop(1, "rgba(0,0,0,0.32)");
   ctx.fillStyle = gloss;
   ctx.fillRect(x, y, width, height);
+}
+
+function paintMusicCellRect(
+  ctx: CanvasRenderingContext2D,
+  cell: MusicCell,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+) {
+  if (cell.kind === "rest") {
+    paintRestPattern(ctx, x, y, width, height);
+    return;
+  }
+
+  const tones = cellTones(cell);
+  if (tones.length <= 1) {
+    paintToneRect(ctx, tones[0], x, y, width, height);
+    return;
+  }
+
+  tones.forEach((tone, index) => {
+    const bandY = y + (height / tones.length) * index;
+    const bandHeight = index === tones.length - 1 ? y + height - bandY : height / tones.length;
+    paintToneRect(ctx, tone, x, bandY, width, bandHeight);
+  });
 }
 
 function paintExportText(
@@ -160,11 +194,7 @@ function paintBarExport(cells: MusicCell[], totalDuration: number) {
   let x = padding;
   cells.forEach((cell, index) => {
     const segmentWidth = rawWidths[index] * scale;
-    if (cell.kind === "note") {
-      paintNoteRect(ctx, cell, x, barY, segmentWidth, barHeight);
-    } else {
-      paintRestPattern(ctx, x, barY, segmentWidth, barHeight);
-    }
+    paintMusicCellRect(ctx, cell, x, barY, segmentWidth, barHeight);
 
     ctx.strokeStyle = "rgba(255,255,255,0.18)";
     ctx.lineWidth = 1;
@@ -219,10 +249,8 @@ function paintMatrixExport(matrixRows: (MusicCell | null)[][], matrixSize: numbe
       const x = padding + columnIndex * (cellSize + gap);
       const y = headerHeight + rowIndex * (cellSize + gap);
 
-      if (cell?.kind === "note") {
-        paintNoteRect(ctx, cell, x, y, cellSize, cellSize);
-      } else if (cell?.kind === "rest") {
-        paintRestPattern(ctx, x, y, cellSize, cellSize);
+      if (cell) {
+        paintMusicCellRect(ctx, cell, x, y, cellSize, cellSize);
       } else {
         ctx.fillStyle = "rgba(245,240,230,0.05)";
         ctx.fillRect(x, y, cellSize, cellSize);
@@ -234,7 +262,7 @@ function paintMatrixExport(matrixRows: (MusicCell | null)[][], matrixSize: numbe
 
       if (cellSize < 42 || !cell) return;
 
-      if (cell.kind === "note") {
+      if (cell.kind === "note" || cell.kind === "chord") {
         paintExportText(
           ctx,
           cell.normalized,

@@ -5,8 +5,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import {
   formatHz,
-  parseMusicScore,
+  parseMusicInput,
+  tonesForMusicToken,
   type ParsedMusicToken,
+  type ParsedMusicTone,
 } from "@/lib/light-music";
 import {
   exportMusicColorImage,
@@ -15,10 +17,10 @@ import {
 import { useField } from "@/store/field";
 
 type MusicCell = Exclude<ParsedMusicToken, { kind: "invalid" }>;
-type MusicNote = Extract<ParsedMusicToken, { kind: "note" }>;
 type ExportedImages = Record<MusicColorExportKind, boolean>;
+type SheetImage = { data: string; mimeType: string; name: string };
 
-const DEFAULT_SCORE = "C4 D4 E4 G4 A4 G4 E4 D4\nC4 E4 G4 C5 B4 G4 E4 C4";
+const DEFAULT_SCORE = "tempo=104 time=4/4 key=C\nC4 D4 E4 G4 A4 G4 E4 D4\nC4 E4 G4 C5 B4 G4 E4 C4";
 const EMPTY_EXPORTED: ExportedImages = { bar: false, matrix: false };
 
 const SCORE_SAMPLES = [
@@ -28,20 +30,20 @@ const SCORE_SAMPLES = [
   },
   {
     label: "minor",
-    value: "A3 C4 E4 A4 G4 E4 C4 A3\nF3 A3 C4 F4 E4 C4 A3 F3",
+    value: "tempo=86 time=4/4 key=Amin\nA3 C4 E4 A4 G4 E4 C4 A3\nF3 A3 C4 F4 E4 C4 A3 F3",
+  },
+  {
+    label: "chords",
+    value: "tempo=92 time=3/4 key=C\n[C4 E4 G4]:2 [F4 A4 C5] G4\n[A3 C4 E4] rest [G3 B3 D4]:2 C4",
   },
   {
     label: "prism",
-    value: "F#4/2 G4 A4 B4 C5 D5 E5 F#5/2\nrest G5 E5 C5 A4 F#4 D4 B3",
+    value: "M:6/8\nQ:1/4=126\nK:D\nF#4/2 G4 A4 B4 C5 D5 E5 F#5/2\nrest G5 E5 C5 A4 F#4 D4 B3",
   },
 ] as const;
 
 function isMusicCell(token: ParsedMusicToken): token is MusicCell {
   return token.kind !== "invalid";
-}
-
-function isMusicNote(token: MusicCell): token is MusicNote {
-  return token.kind === "note";
 }
 
 function noteLabel(cell: MusicCell | null) {
@@ -53,7 +55,24 @@ function noteLabel(cell: MusicCell | null) {
 function matrixLine(cell: MusicCell | null) {
   if (!cell) return "null";
   if (cell.kind === "rest") return "\"rest\"";
+  if (cell.kind === "chord") {
+    return `[${cell.notes.map((note) => `"${note.normalized} ${Math.round(note.wavelength)}nm ${note.color}"`).join(", ")}]`;
+  }
   return `"${cell.normalized} ${Math.round(cell.wavelength)}nm ${cell.color}"`;
+}
+
+function tonesForCell(cell: MusicCell) {
+  return tonesForMusicToken(cell);
+}
+
+function toneStops(tones: ParsedMusicTone[]) {
+  return tones
+    .map((tone, index) => {
+      const start = (index / tones.length) * 100;
+      const end = ((index + 1) / tones.length) * 100;
+      return `${tone.color} ${start}% ${end}%`;
+    })
+    .join(", ");
 }
 
 function colorBandStyle(cell: MusicCell) {
@@ -64,10 +83,37 @@ function colorBandStyle(cell: MusicCell) {
     };
   }
 
+  const tones = tonesForCell(cell);
+  if (tones.length > 1) {
+    return {
+      background: `linear-gradient(180deg, rgba(255,255,255,0.24), rgba(0,0,0,0.24)), linear-gradient(180deg, ${toneStops(tones)})`,
+      boxShadow: `0 0 22px ${tones[0].color}`,
+    };
+  }
+
   return {
     background: `linear-gradient(180deg, rgba(255,255,255,0.28), ${cell.color} 36%, rgba(0,0,0,0.28))`,
     boxShadow: `0 0 22px ${cell.color}`,
   };
+}
+
+function cellBackground(cell: MusicCell) {
+  if (cell.kind === "rest") return undefined;
+  const tones = tonesForCell(cell);
+  if (tones.length <= 1) return undefined;
+  return `linear-gradient(180deg, rgba(255,255,255,0.22), transparent 32%), linear-gradient(180deg, ${toneStops(tones)})`;
+}
+
+function musicCellLabel(cell: MusicCell) {
+  if (cell.kind === "rest") return "rest";
+  const tones = tonesForCell(cell);
+  return `${cell.normalized} ${tones.map((tone) => `${Math.round(tone.wavelength)} nanometers ${tone.color}`).join(", ")}`;
+}
+
+function metadataLabel(metadata: ReturnType<typeof parseMusicInput>["metadata"]) {
+  const tempo = metadata.tempo ? `${Math.round(metadata.tempo)} bpm` : "120 bpm";
+  const time = metadata.timeSignature ? `${metadata.timeSignature[0]}/${metadata.timeSignature[1]}` : "4/4";
+  return `${tempo} / ${time}`;
 }
 
 export default function MusicColorInstrument() {
@@ -76,19 +122,22 @@ export default function MusicColorInstrument() {
   const [exported, setExported] = useState<ExportedImages>(EMPTY_EXPORTED);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [sheetImage, setSheetImage] = useState<SheetImage | null>(null);
+  const [isInterpreting, setIsInterpreting] = useState(false);
+  const [interpretStatus, setInterpretStatus] = useState("");
+  const [interpretError, setInterpretError] = useState("");
   const timersRef = useRef<number[]>([]);
 
-  const parsed = useMemo(() => parseMusicScore(score), [score]);
-  const cells = useMemo(() => parsed.filter(isMusicCell), [parsed]);
-  const notes = useMemo(() => cells.filter(isMusicNote), [cells]);
-  const invalid = useMemo(() => parsed.filter((token) => token.kind === "invalid"), [parsed]);
+  const parsed = useMemo(() => parseMusicInput(score), [score]);
+  const cells = useMemo(() => parsed.tokens.filter(isMusicCell), [parsed.tokens]);
+  const notes = useMemo(() => cells.flatMap(tonesForCell), [cells]);
+  const invalid = useMemo(() => parsed.tokens.filter((token) => token.kind === "invalid"), [parsed.tokens]);
   const matrixSize = Math.max(1, Math.ceil(Math.sqrt(Math.max(1, cells.length))));
   const dominantColor = notes[0]?.color ?? "#f5d65b";
   const totalDuration = cells.reduce((sum, cell) => sum + cell.duration, 0);
-  const averageWavelength = notes.length
-    ? notes.reduce((sum, note) => sum + note.wavelength, 0) / notes.length
-    : 0;
+  const beatMs = 60000 / (parsed.metadata.tempo ?? 120);
   const exactCount = notes.filter((note) => note.exact).length;
+  const scoreMeta = metadataLabel(parsed.metadata);
 
   const matrixCells = useMemo(
     () => Array.from({ length: matrixSize * matrixSize }, (_, index) => cells[index] ?? null),
@@ -120,6 +169,68 @@ export default function MusicColorInstrument() {
     useField.getState().recordTape("sigil", intensity, `music-color/${meta}`);
   };
 
+  const resetGeneratedState = () => {
+    setCopied(false);
+    setExported(EMPTY_EXPORTED);
+    setInterpretStatus("");
+    setInterpretError("");
+  };
+
+  const handleSheetImage = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      setSheetImage(null);
+      return;
+    }
+
+    try {
+      const data = await readFileAsBase64(file);
+      setSheetImage({ data, mimeType: file.type || "image/png", name: file.name });
+      setInterpretStatus(file.name);
+      setInterpretError("");
+      recordMusicColor("image/ready", 0.34);
+    } catch {
+      setSheetImage(null);
+      setInterpretStatus("");
+      setInterpretError("image could not be read");
+      try { getFieldAudio().refuse(); } catch { /* noop */ }
+    }
+  };
+
+  const interpretInput = async () => {
+    setIsInterpreting(true);
+    setInterpretError("");
+    setInterpretStatus("listening");
+
+    try {
+      const response = await fetch("/api/parse-music-input", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: score.trim(),
+          image: sheetImage,
+        }),
+      });
+      const payload = await response.json();
+
+      if (!response.ok) {
+        throw new Error(payload?.error ?? "could not read music");
+      }
+
+      setScore(payload.scoreText);
+      setCopied(false);
+      setExported(EMPTY_EXPORTED);
+      setInterpretStatus(payload.model ? `${payload.model} normalized` : "normalized");
+      recordMusicColor(`interpret/${payload.model ?? "local"}`, 0.66);
+    } catch (error) {
+      setInterpretError(error instanceof Error ? error.message : "could not read music");
+      setInterpretStatus("");
+      try { getFieldAudio().refuse(); } catch { /* noop */ }
+    } finally {
+      setIsInterpreting(false);
+    }
+  };
+
   const playScore = () => {
     clearTimers();
     setCopied(false);
@@ -137,14 +248,14 @@ export default function MusicColorInstrument() {
 
     cells.forEach((cell, index) => {
       const delay = elapsed;
-      const durationMs = Math.max(120, cell.duration * 180);
+      const durationMs = Math.max(120, cell.duration * beatMs);
       elapsed += durationMs;
 
       const timer = window.setTimeout(() => {
         setActiveIndex(index);
-        if (cell.kind === "note") {
-          try { audio.playTone(cell.frequency, Math.min(0.5, durationMs / 1000)); } catch { /* noop */ }
-        }
+        tonesForCell(cell).forEach((tone) => {
+          try { audio.playTone(tone.frequency, Math.min(1.2, durationMs / 1000)); } catch { /* noop */ }
+        });
       }, delay);
       timersRef.current.push(timer);
     });
@@ -212,11 +323,10 @@ export default function MusicColorInstrument() {
               value={score}
               onChange={(event) => {
                 setScore(event.target.value);
-                setCopied(false);
-                setExported(EMPTY_EXPORTED);
+                resetGeneratedState();
               }}
               spellCheck={false}
-              placeholder="C4 D4 E4 G4 A4 G4 E4 D4"
+              placeholder={"tempo=120 time=4/4 key=C\nC4 D4 E4 [G4 B4 D5] rest"}
             />
             <div className="music-color-samples" aria-label="sample scores">
               {SCORE_SAMPLES.map((sample) => (
@@ -225,8 +335,7 @@ export default function MusicColorInstrument() {
                   type="button"
                   onClick={() => {
                     setScore(sample.value);
-                    setCopied(false);
-                    setExported(EMPTY_EXPORTED);
+                    resetGeneratedState();
                     recordMusicColor(`sample/${sample.label}`, 0.36);
                   }}
                 >
@@ -234,11 +343,29 @@ export default function MusicColorInstrument() {
                 </button>
               ))}
             </div>
+            <div className="music-color-intake" aria-label="music interpretation input">
+              <label className="music-color-upload">
+                <input type="file" accept="image/*" onChange={(event) => void handleSheetImage(event)} />
+                <span>{sheetImage?.name ?? "sheet image"}</span>
+              </label>
+              <button
+                type="button"
+                onClick={() => void interpretInput()}
+                disabled={isInterpreting || (!score.trim() && !sheetImage)}
+              >
+                {isInterpreting ? "reading" : "interpret"}
+              </button>
+            </div>
+            {(interpretStatus || interpretError) && (
+              <p className={`music-color-status ${interpretError ? "is-error" : ""}`}>
+                {interpretError || interpretStatus}
+              </p>
+            )}
           </div>
 
           <div className="music-color-readout" aria-label="translation summary">
             <div>
-              <span>notes</span>
+              <span>tones</span>
               <strong>{notes.length}</strong>
             </div>
             <div>
@@ -250,8 +377,8 @@ export default function MusicColorInstrument() {
               <strong>{notes.length ? `${exactCount}/${notes.length}` : "0/0"}</strong>
             </div>
             <div>
-              <span>center color</span>
-              <strong>{averageWavelength ? `${Math.round(averageWavelength)} nm` : "--"}</strong>
+              <span>time</span>
+              <strong>{scoreMeta}</strong>
             </div>
           </div>
         </section>
@@ -291,11 +418,9 @@ export default function MusicColorInstrument() {
                     flexBasis: `${Math.max(34, cell.duration * 54)}px`,
                   }}
                   aria-label={
-                    cell.kind === "note"
-                      ? `${cell.normalized} ${Math.round(cell.wavelength)} nanometers ${cell.color}`
-                      : "rest"
+                    musicCellLabel(cell)
                   }
-                  title={cell.kind === "note" ? `${cell.normalized} ${cell.color}` : "rest"}
+                  title={cell.kind === "rest" ? "rest" : `${cell.normalized} ${cell.color}`}
                 >
                   <em>{noteLabel(cell)}</em>
                 </span>
@@ -316,10 +441,13 @@ export default function MusicColorInstrument() {
               {matrixCells.map((cell, index) => (
                 <div
                   key={index}
-                  className={`music-color-cell ${cell?.kind === "rest" ? "is-rest" : ""} ${!cell ? "is-empty" : ""} ${activeIndex === index ? "is-active" : ""}`}
-                  style={cell?.kind === "note" ? { "--cell-color": cell.color } as React.CSSProperties : undefined}
+                  className={`music-color-cell ${cell?.kind === "rest" ? "is-rest" : ""} ${cell?.kind === "chord" ? "is-chord" : ""} ${!cell ? "is-empty" : ""} ${activeIndex === index ? "is-active" : ""}`}
+                  style={cell && cell.kind !== "rest" ? {
+                    "--cell-color": cell.color,
+                    background: cellBackground(cell),
+                  } as React.CSSProperties : undefined}
                 >
-                  {cell?.kind === "note" && (
+                  {(cell?.kind === "note" || cell?.kind === "chord") && (
                     <>
                       <strong>{cell.normalized}</strong>
                       <span>{Math.round(cell.wavelength)} nm</span>
@@ -445,6 +573,8 @@ export default function MusicColorInstrument() {
           margin-top: 10px;
         }
         .music-color-samples button,
+        .music-color-intake button,
+        .music-color-upload,
         .music-color-actions button,
         .music-color-actions output {
           min-height: 44px;
@@ -459,9 +589,45 @@ export default function MusicColorInstrument() {
           text-transform: lowercase;
           cursor: pointer;
         }
+        .music-color-intake {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) minmax(112px, auto);
+          gap: 8px;
+          margin-top: 10px;
+        }
+        .music-color-upload {
+          position: relative;
+          display: flex;
+          align-items: center;
+          min-width: 0;
+        }
+        .music-color-upload input {
+          position: absolute;
+          width: 1px;
+          height: 1px;
+          opacity: 0;
+          pointer-events: none;
+        }
+        .music-color-upload span {
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .music-color-intake button:disabled,
         .music-color-actions button:disabled {
           cursor: default;
           opacity: 0.48;
+        }
+        .music-color-status {
+          margin: 8px 0 0;
+          color: rgba(245, 240, 230, 0.62);
+          font-family: var(--font-text);
+          font-size: 12px;
+          line-height: 1.35;
+        }
+        .music-color-status.is-error {
+          color: rgba(255, 173, 145, 0.86);
         }
         .music-color-readout {
           display: grid;
@@ -603,6 +769,10 @@ export default function MusicColorInstrument() {
             rgba(7, 9, 13, 0.7);
           color: rgba(245, 240, 230, 0.66);
         }
+        .music-color-cell.is-chord strong {
+          font-size: 18px;
+          line-height: 1.05;
+        }
         .music-color-cell.is-empty {
           background: rgba(245,240,230,0.04);
           box-shadow: none;
@@ -712,6 +882,9 @@ export default function MusicColorInstrument() {
             max-width: none;
             grid-template-columns: 1fr 1fr;
           }
+          .music-color-intake {
+            grid-template-columns: 1fr;
+          }
           .music-color-actions output {
             grid-column: 1 / -1;
           }
@@ -732,4 +905,16 @@ export default function MusicColorInstrument() {
       />
     </div>
   );
+}
+
+function readFileAsBase64(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result ?? "");
+      resolve(result.includes(",") ? result.split(",")[1] : result);
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("file read failed"));
+    reader.readAsDataURL(file);
+  });
 }
