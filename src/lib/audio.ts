@@ -266,6 +266,7 @@ type FieldAudio = {
   thud:  () => void;     // keep / drop
   refuse: () => void;    // bad action
   spark: () => void;     // candle tap
+  buzz: () => void;      // short, low contact feedback
   // pitched single-note triangle oscillator with ADSR. used by /waves
   // PhaseChart so each candle clicks at a pitch picked from the phase scale.
   playTone: (freq: number, durationSec?: number) => void;
@@ -1048,6 +1049,12 @@ export function getFieldAudio(): FieldAudio {
     f1: number,
     duration: number,
     peakGain: number,
+    options: {
+      attack?: number;
+      cutoff?: number;
+      q?: number;
+      stopPadding?: number;
+    } = {},
   ) => {
     if (muted) return;
     const c = ensureContext();
@@ -1060,15 +1067,20 @@ export function getFieldAudio(): FieldAudio {
     osc.frequency.exponentialRampToValueAtTime(Math.max(20, f1), now + duration);
     const g = c.createGain();
     g.gain.setValueAtTime(0.0001, now);
-    g.gain.exponentialRampToValueAtTime(peakGain, now + 0.012);
+    g.gain.exponentialRampToValueAtTime(peakGain, now + (options.attack ?? 0.012));
     g.gain.exponentialRampToValueAtTime(0.0001, now + duration);
     const lp = c.createBiquadFilter();
     lp.type = "lowpass";
-    lp.frequency.value = 2400;
-    lp.Q.value = 0.5;
+    lp.frequency.value = options.cutoff ?? 2400;
+    lp.Q.value = options.q ?? 0.5;
     osc.connect(g).connect(lp).connect(outNode(c));
     osc.start(now);
-    osc.stop(now + duration + 0.05);
+    osc.stop(now + duration + (options.stopPadding ?? 0.05));
+    osc.onended = () => {
+      try { osc.disconnect(); } catch { /* noop */ }
+      try { g.disconnect(); } catch { /* noop */ }
+      try { lp.disconnect(); } catch { /* noop */ }
+    };
   };
 
   const chime = () => oneShot("sine", 880, 1320, 0.30, 0.05);
@@ -1082,6 +1094,15 @@ export function getFieldAudio(): FieldAudio {
   const spark = () => {
     oneShot("triangle", 1100, 720, 0.16, 0.05);
     oneShot("sine", 540, 760, 0.40, 0.04);
+  };
+
+  const buzz = () => {
+    oneShot("sawtooth", 148, 112, 0.058, 0.016, {
+      attack: 0.004,
+      cutoff: 620,
+      q: 0.55,
+      stopPadding: 0.02,
+    });
   };
 
   const playTone = (freq: number, durationSec = 0.3) => {
@@ -1982,7 +2003,7 @@ export function getFieldAudio(): FieldAudio {
       if (!ctx) ensureContext();
       return ctx;
     },
-    chime, bell, thud, refuse, spark,
+    chime, bell, thud, refuse, spark, buzz,
     playTone,
     playNote,
     holdConcernTone, releaseConcernTone, releaseAllConcernTones,
