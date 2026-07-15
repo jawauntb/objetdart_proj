@@ -7,6 +7,7 @@ export type SiteIconKey =
   | "atlas"
   | "beyond"
   | "charts"
+  | "dither"
   | "circularity"
   | "clouds"
   | "coin"
@@ -160,6 +161,19 @@ export const SITE_ICON_VISUALS = {
     accent: "#90e7b7",
     accent2: "#e7bc63",
     ink: "#ddffe8",
+  },
+  dither: {
+    title: "Dither",
+    description: "ordered dots, signal studies, and luminous fields",
+    path: "/dither",
+    shortName: "dither",
+    kind: "charts",
+    bg: "#0b0e0a",
+    bg2: "#182015",
+    glow: "#d7ff64",
+    accent: "#d7ff64",
+    accent2: "#79d8ff",
+    ink: "#eef0dd",
   },
   circularity: {
     title: "Circularity",
