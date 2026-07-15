@@ -37,6 +37,7 @@ export const SITE_ROUTES: SiteRouteEntry[] = [
   { key: "plasma",      icon: "plasma",   href: "/plasma",                            desc: "plasma globe",                 cluster: "mechanism", dark: true },
   { key: "pulse",       icon: "pulse",    href: "/pulse",                             desc: "heartbeat · pattern",          cluster: "mechanism", dark: true },
   { key: "charts",      icon: "charts",   href: "/charts",                            desc: "lines · candles · oscillators", cluster: "mechanism", dark: true },
+  { key: "dither",      icon: "charts",   href: "/dither",                            desc: "ordered dots · signal studies", cluster: "mechanism", dark: true },
   { key: "time",        icon: "watch",    href: "/time",                              desc: "bend a clock",                  cluster: "mechanism", dark: true },
   { key: "movement",    icon: "watch",    href: "/movement",                          desc: "mechanical movement · 3D",     cluster: "mechanism", dark: true, homePriority: 10 },
   { key: "jewel",       icon: "plasma",   href: "/jewel",                             desc: "turn the stone",               cluster: "mechanism", dark: true, homePriority: 8 },
