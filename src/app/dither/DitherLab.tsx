@@ -1,6 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getFieldAudio } from "@/lib/audio";
+import {
+  createDitherAvatar,
+  normalizeDitherName,
+  shareOrDownloadDitherAvatar,
+} from "@/lib/dither-avatar";
+import * as haptics from "@/lib/haptics";
 import styles from "./dither.module.css";
 
 type ChartMode = "area" | "bar" | "line";
@@ -27,6 +34,8 @@ const BAYER_4 = [
   3, 11, 1, 9,
   15, 7, 13, 5,
 ];
+
+const PRESET_AVATARS = ["dan", "orla", "mine", "yours", "nobody"] as const;
 
 function rgba(hex: string, alpha: number) {
   const value = hex.replace("#", "");
@@ -348,31 +357,186 @@ function DotPattern({ id, color }: { id: string; color: string }) {
   );
 }
 
-function hashName(name: string) {
-  let hash = 2166136261;
-  for (let i = 0; i < name.length; i += 1) {
-    hash ^= name.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash >>> 0;
+function DitherAvatar({
+  name,
+  busy,
+  disabled,
+  current,
+  saved,
+  onSave,
+}: {
+  name: string;
+  busy: boolean;
+  disabled: boolean;
+  current: boolean;
+  saved: boolean;
+  onSave: (name: string) => void;
+}) {
+  const avatar = useMemo(() => createDitherAvatar(name), [name]);
+  return (
+    <button
+      type="button"
+      className={styles.avatar}
+      style={{ "--avatar-hue": avatar.hue } as React.CSSProperties}
+      aria-label={`Save ${avatar.name} as a 512 by 512 PNG avatar`}
+      aria-busy={busy}
+      data-current={current || undefined}
+      data-saved={saved || undefined}
+      disabled={disabled}
+      onClick={() => onSave(avatar.name)}
+    >
+      <svg viewBox="0 0 56 56" aria-hidden="true">
+        {avatar.cells.flatMap((row, y) => row.map((on, x) => on ? <rect key={`${x}-${y}`} x={x * 8} y={y * 8} width="7" height="7" rx="1" /> : null))}
+      </svg>
+      <span className={styles.avatarMeta}>
+        <strong>{avatar.name}</strong>
+        <i>{busy ? "preparing…" : saved ? "saved ✓" : "save png ↘"}</i>
+      </span>
+    </button>
+  );
 }
 
-function DitherAvatar({ name }: { name: string }) {
-  const cells = useMemo(() => {
-    const hash = hashName(name);
-    return Array.from({ length: 7 }, (_, row) => Array.from({ length: 7 }, (_, col) => {
-      const mirrored = col > 3 ? 6 - col : col;
-      return ((hash >>> ((row * 4 + mirrored) % 28)) & 1) === 1;
-    }));
-  }, [name]);
-  const hue = hashName(name) % 360;
+type AvatarNotice = {
+  kind: "ready" | "working" | "success" | "error";
+  message: string;
+};
+
+function contactFeedback() {
+  getFieldAudio().buzz();
+  haptics.tap();
+}
+
+const INTERACTIVE_ACTIVATION_SELECTOR = [
+  "button",
+  "a[href]",
+  "input",
+  "select",
+  "textarea",
+  "[role='button']",
+  "[role='link']",
+  "canvas",
+].join(",");
+
+function isInteractiveActivation(target: EventTarget | null) {
+  if (!(target instanceof Element)) return false;
+  const control = target.closest<HTMLElement>(INTERACTIVE_ACTIVATION_SELECTOR);
+  return Boolean(
+    control
+    && control.getAttribute("aria-disabled") !== "true"
+    && !control.matches(":disabled"),
+  );
+}
+
+function DitherSpecimens() {
+  const [avatarName, setAvatarName] = useState("");
+  const [customAvatar, setCustomAvatar] = useState<string | null>(null);
+  const [savingAvatar, setSavingAvatar] = useState<string | null>(null);
+  const [savedAvatar, setSavedAvatar] = useState<string | null>(null);
+  const [avatarNotice, setAvatarNotice] = useState<AvatarNotice>({
+    kind: "ready",
+    message: "Tap any face to save a 512 × 512 avatar.",
+  });
+  const avatarInputRef = useRef<HTMLInputElement | null>(null);
+
+  const saveAvatar = async (rawName: string) => {
+    const name = normalizeDitherName(rawName);
+    if (!name || savingAvatar) return;
+
+    setSavingAvatar(name);
+    setSavedAvatar(null);
+    setAvatarNotice({ kind: "working", message: `Pressing ${name} into a 512 × 512 image…` });
+    try {
+      const result = await shareOrDownloadDitherAvatar(name);
+      if (result.outcome === "cancelled") {
+        setAvatarNotice({ kind: "ready", message: `${name} is still here. Tap its face whenever you are ready.` });
+        return;
+      }
+      setSavedAvatar(name);
+      setAvatarNotice({
+        kind: "success",
+        message: result.outcome === "shared"
+          ? `${name} is open in your share sheet.`
+          : `${result.filename} downloaded.`,
+      });
+    } catch {
+      setAvatarNotice({ kind: "error", message: `Could not save ${name}. Tap the face to try again.` });
+    } finally {
+      setSavingAvatar(null);
+    }
+  };
+
+  const submitAvatar = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const name = normalizeDitherName(avatarName);
+    if (!name) {
+      setAvatarNotice({ kind: "error", message: "Type a name first, then press once." });
+      avatarInputRef.current?.focus();
+      return;
+    }
+    setAvatarName(name);
+    setCustomAvatar(name);
+    void saveAvatar(name);
+  };
+
+  const avatarNames = customAvatar && !PRESET_AVATARS.some((preset) => preset === customAvatar)
+    ? [customAvatar, ...PRESET_AVATARS]
+    : [...PRESET_AVATARS];
+
   return (
-    <div className={styles.avatar} style={{ "--avatar-hue": hue } as React.CSSProperties}>
-      <svg viewBox="0 0 56 56" role="img" aria-label={`${name} generative avatar`}>
-        {cells.flatMap((row, y) => row.map((on, x) => on ? <rect key={`${x}-${y}`} x={x * 8} y={y * 8} width="7" height="7" rx="1" /> : null))}
-      </svg>
-      <span>{name}</span>
-    </div>
+    <section className={styles.specimens}>
+      <header className={styles.sectionHeader}>
+        <span>02 / specimens</span>
+        <h2>identity,<br />pressed into a grid</h2>
+        <p>Each name becomes a mirrored field. The same letters always return the same face.</p>
+      </header>
+      <form className={styles.avatarMaker} onSubmit={submitAvatar}>
+        <div className={styles.avatarMakerCopy}>
+          <span>one-click avatar / 512 px</span>
+          <strong>name it. press once. keep the face.</strong>
+        </div>
+        <label className={styles.avatarField}>
+          <span>name / seed</span>
+          <input
+            ref={avatarInputRef}
+            value={avatarName}
+            maxLength={48}
+            autoComplete="off"
+            spellCheck="false"
+            placeholder="your name"
+            aria-describedby="dither-avatar-status"
+            onChange={(event) => setAvatarName(event.target.value)}
+          />
+        </label>
+        <button type="submit" disabled={savingAvatar !== null}>
+          <span>{savingAvatar ? "pressing…" : "make + save"}</span>
+          <i aria-hidden="true">↘</i>
+        </button>
+      </form>
+      <p
+        id="dither-avatar-status"
+        className={styles.avatarStatus}
+        data-kind={avatarNotice.kind}
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        <i aria-hidden="true" />
+        {avatarNotice.message}
+      </p>
+      <div className={styles.avatarRow}>
+        {avatarNames.map((name) => (
+          <DitherAvatar
+            key={name}
+            name={name}
+            busy={savingAvatar === name}
+            disabled={savingAvatar !== null}
+            current={customAvatar === name}
+            saved={savedAvatar === name}
+            onSave={(nextName) => { void saveAvatar(nextName); }}
+          />
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -394,6 +558,9 @@ export default function DitherLab() {
   return (
     <div
       className={styles.page}
+      onClickCapture={(event) => {
+        if (isInteractiveActivation(event.target)) contactFeedback();
+      }}
       style={{
         "--signal-primary": palette.primary,
         "--signal-secondary": palette.secondary,
@@ -492,16 +659,7 @@ export default function DitherLab() {
         </div>
       </section>
 
-      <section className={styles.specimens}>
-        <header className={styles.sectionHeader}>
-          <span>02 / specimens</span>
-          <h2>identity,<br />pressed into a grid</h2>
-          <p>Each name becomes a mirrored field. The same letters always return the same face.</p>
-        </header>
-        <div className={styles.avatarRow}>
-          {["dan", "orla", "mine", "yours", "nobody"].map((name) => <DitherAvatar key={name} name={name} />)}
-        </div>
-      </section>
+      <DitherSpecimens />
 
       <section className={styles.touchSection}>
         <div className={styles.wash} aria-hidden="true" />

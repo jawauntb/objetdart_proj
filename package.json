@@ -11,10 +11,11 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "npm run test:routes && npm run test:analytics && npm run test:light-music",
+    "test": "npm run test:routes && npm run test:analytics && npm run test:light-music && npm run test:dither-avatar",
     "test:routes": "node scripts/test-routes.mjs",
     "test:analytics": "node scripts/test-analytics.mjs",
     "test:light-music": "node scripts/test-light-music.mjs",
+    "test:dither-avatar": "node scripts/test-dither-avatar.mjs",
     "smoke:home": "node scripts/smoke-home.mjs",
     "smoke:clouds": "node scripts/smoke-clouds.mjs"
   },
