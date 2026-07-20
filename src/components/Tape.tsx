@@ -30,8 +30,9 @@ export default function Tape() {
   // tape never paints a light cream band across the bottom of dark water.
   const dark = isDarkRoute(pathname);
 
-  // hide tape on reading-share pages (OG / printable) — keep them pristine
-  const hide = pathname.startsWith("/reading/");
+  // Atlas uses edge travel and its own quiet status line, so the global tape
+  // must not claim the bottom interaction zone there.
+  const hide = pathname.startsWith("/reading/") || pathname.startsWith("/atlas/");
 
   useEffect(() => {
     if (hide) return;

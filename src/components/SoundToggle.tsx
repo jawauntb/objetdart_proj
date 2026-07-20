@@ -9,11 +9,13 @@ export default function SoundToggle() {
   const [armed, setArmed] = useState(false);
   const pathname = usePathname() ?? "/";
   const isSignal = pathname.startsWith("/signal");
+  const hide = pathname.startsWith("/atlas/");
   const wakeLabel = isSignal ? "wake sound" : "wake the sea";
   const onLabel = isSignal ? "sound" : "the sea";
 
   // hydrate from storage and wire a first-gesture starter
   useEffect(() => {
+    if (hide) return;
     const a = getFieldAudio();
     setMuted(a.isMuted());
 
@@ -29,7 +31,7 @@ export default function SoundToggle() {
       window.removeEventListener("pointerdown", arm);
       window.removeEventListener("keydown", arm);
     };
-  }, []);
+  }, [hide]);
 
   const toggle = async () => {
     const a = getFieldAudio();
@@ -39,6 +41,8 @@ export default function SoundToggle() {
     setMuted(next);
     setArmed(true);
   };
+
+  if (hide) return null;
 
   return (
     <>

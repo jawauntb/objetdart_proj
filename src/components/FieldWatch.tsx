@@ -19,8 +19,8 @@ export default function FieldWatch() {
   const tape = useField((s) => s.tape);
   const pathname = usePathname() ?? "/";
 
-  // hide on reading-share routes — those pages stay pristine
-  if (pathname.startsWith("/reading/")) return null;
+  // Reading shares stay pristine; Atlas needs every pixel to remain map.
+  if (pathname.startsWith("/reading/") || pathname.startsWith("/atlas/")) return null;
 
   // dark route palette — same rule as Tape
   const dark = isDarkRoute(pathname);
