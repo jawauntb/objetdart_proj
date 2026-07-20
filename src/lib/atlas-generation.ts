@@ -7,6 +7,7 @@ const OPENAI_IMAGE_MODEL = "gpt-image-2";
 const OPENAI_GENERATIONS_URL = "https://api.openai.com/v1/images/generations";
 const OPENAI_EDITS_URL = "https://api.openai.com/v1/images/edits";
 const OPENROUTER_IMAGE_MODEL = "black-forest-labs/flux.2-klein-4b";
+const OPENROUTER_PRO_IMAGE_MODEL = "black-forest-labs/flux.2-pro";
 const OPENROUTER_IMAGES_URL = "https://openrouter.ai/api/v1/images";
 const MAX_PROMPT_LENGTH = 240;
 const MAX_SOURCE_IMAGE_BYTES = 6 * 1024 * 1024;
@@ -25,6 +26,7 @@ export type AtlasMode = "generate" | "zoom" | "shift";
 export type AtlasDirection = "north" | "east" | "south" | "west";
 export type AtlasImageMime = "image/jpeg" | "image/png" | "image/webp";
 export type AtlasImageProvider = "openai" | "openrouter";
+export type AtlasGenerationPhase = "preview" | "final";
 
 export type AtlasViewport = {
   width: number;
@@ -61,11 +63,17 @@ export type AtlasGenerationContext = {
   seeds: AtlasSeeds;
 };
 
-export type AtlasProviderConfig = {
-  provider: AtlasImageProvider;
-  model: typeof OPENAI_IMAGE_MODEL | typeof OPENROUTER_IMAGE_MODEL;
-  apiKey: string | null;
-};
+export type AtlasProviderConfig =
+  | {
+      provider: "openai";
+      model: typeof OPENAI_IMAGE_MODEL;
+      apiKey: string | null;
+    }
+  | {
+      provider: "openrouter";
+      model: typeof OPENROUTER_IMAGE_MODEL | typeof OPENROUTER_PRO_IMAGE_MODEL;
+      apiKey: string | null;
+    };
 
 export type AtlasGenerationUsage = {
   inputTokens: number | null;
@@ -188,7 +196,28 @@ export function resolveAtlasProviderConfig(
       apiKey: normalizeServerSecret(environment.OPENROUTER_API_KEY),
     };
   }
+  if (provider === "openrouter-pro") {
+    return {
+      provider: "openrouter",
+      model: OPENROUTER_PRO_IMAGE_MODEL,
+      apiKey: normalizeServerSecret(environment.OPENROUTER_API_KEY),
+    };
+  }
   throw new AtlasProviderConfigurationError();
+}
+
+export function resolveAtlasPhaseProviderConfig(
+  environment: Record<string, string | undefined>,
+  phase: AtlasGenerationPhase,
+): AtlasProviderConfig {
+  if (phase === "preview") {
+    return {
+      provider: "openrouter",
+      model: OPENROUTER_IMAGE_MODEL,
+      apiKey: normalizeServerSecret(environment.OPENROUTER_API_KEY),
+    };
+  }
+  return resolveAtlasProviderConfig(environment);
 }
 
 export function parseAtlasGenerationRequest(value: unknown): AtlasGenerationRequest {
@@ -256,6 +285,7 @@ export async function generateAtlasImage(
   providerConfig: AtlasProviderConfig,
   requestSignal?: AbortSignal,
 ): Promise<AtlasGenerationResult> {
+  assertValidProviderConfig(providerConfig);
   if (!providerConfig.apiKey) {
     throw new AtlasProviderConfigurationError("Atlas image provider credential is missing");
   }
@@ -279,7 +309,13 @@ export async function generateAtlasImage(
   try {
     const artifact = providerConfig.provider === "openai"
       ? await generateWithOpenAI(request, compositePrompt, size, providerConfig.apiKey, controller.signal)
-      : await generateWithOpenRouter(request, compositePrompt, providerConfig.apiKey, controller.signal);
+      : await generateWithOpenRouter(
+          request,
+          compositePrompt,
+          providerConfig.model,
+          providerConfig.apiKey,
+          controller.signal,
+        );
 
     return {
       dataUrl: `data:${artifact.mediaType};base64,${artifact.base64}`,
@@ -320,6 +356,14 @@ export async function generateAtlasImage(
     clearTimeout(timeout);
     requestSignal?.removeEventListener("abort", abortFromRequest);
   }
+}
+
+function assertValidProviderConfig(providerConfig: AtlasProviderConfig): void {
+  const validOpenAI = providerConfig.provider === "openai"
+    && providerConfig.model === OPENAI_IMAGE_MODEL;
+  const validOpenRouter = providerConfig.provider === "openrouter"
+    && (providerConfig.model === OPENROUTER_IMAGE_MODEL || providerConfig.model === OPENROUTER_PRO_IMAGE_MODEL);
+  if (!validOpenAI && !validOpenRouter) throw new AtlasProviderConfigurationError();
 }
 
 function normalizePrompt(value: unknown): string {
@@ -435,11 +479,12 @@ async function generateWithOpenAI(
 async function generateWithOpenRouter(
   request: AtlasGenerationRequest,
   prompt: string,
+  model: typeof OPENROUTER_IMAGE_MODEL | typeof OPENROUTER_PRO_IMAGE_MODEL,
   apiKey: string,
   signal: AbortSignal,
 ): Promise<ProviderArtifact> {
   const body: {
-    model: typeof OPENROUTER_IMAGE_MODEL;
+    model: typeof OPENROUTER_IMAGE_MODEL | typeof OPENROUTER_PRO_IMAGE_MODEL;
     prompt: string;
     output_format: "png";
     n: 1;
@@ -448,7 +493,7 @@ async function generateWithOpenRouter(
       image_url: { url: string };
     }>;
   } = {
-    model: OPENROUTER_IMAGE_MODEL,
+    model,
     prompt,
     output_format: "png",
     n: 1,

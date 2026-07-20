@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -36,7 +37,13 @@ function loadTsModule(path, requireMap = {}, globals = {}) {
 
 const ONE_PIXEL_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nOQAAAAASUVORK5CYII=";
 const FAKE_WEBP = Buffer.concat([Buffer.from("RIFF"), Buffer.alloc(4), Buffer.from("WEBP"), Buffer.alloc(20)]).toString("base64");
+const SOURCE_PNG_BYTES = Buffer.concat([
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  Buffer.from("atlas-canonical-source"),
+]);
+const SOURCE_PNG = SOURCE_PNG_BYTES.toString("base64");
 const providerCalls = [];
+let failKleinPreview = false;
 
 function plain(value) {
   return JSON.parse(JSON.stringify(value));
@@ -72,6 +79,7 @@ const atlasModule = loadTsModule("src/lib/atlas-generation.ts", {
   setTimeout,
   fetch: async (url, init) => {
     providerCalls.push({ url, init });
+    if (init.signal?.aborted) throw new DOMException("aborted", "AbortError");
     if (url === "https://api.openai.com/v1/images/generations") {
       return new Response(JSON.stringify({
         data: [{ b64_json: FAKE_WEBP }],
@@ -79,6 +87,22 @@ const atlasModule = loadTsModule("src/lib/atlas-generation.ts", {
       }), {
         status: 200,
         headers: { "content-type": "application/json", "x-request-id": "openai-test-request" },
+      });
+    }
+    if (url === "https://api.openai.com/v1/images/edits") {
+      return new Response(JSON.stringify({
+        data: [{ b64_json: FAKE_WEBP }],
+        usage: { input_tokens: 10, output_tokens: 20, total_tokens: 30 },
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json", "x-request-id": "openai-edit-test-request" },
+      });
+    }
+    const body = JSON.parse(init.body);
+    if (failKleinPreview && body.model === "black-forest-labs/flux.2-klein-4b") {
+      return new Response(JSON.stringify({ error: { code: "upstream_busy" } }), {
+        status: 503,
+        headers: { "content-type": "application/json", "retry-after": "1" },
       });
     }
     return new Response(JSON.stringify({
@@ -94,6 +118,7 @@ const routesModule = loadTsModule("src/lib/routes.ts");
 
 function loadAtlasRoute(environment) {
   return loadTsModule("src/app/api/atlas/generate/route.ts", {
+    "node:crypto": { randomUUID },
     "next/server": {
       NextResponse: {
         json: (body, init = {}) => ({ body, status: init.status ?? 200, headers: init.headers ?? {} }),
@@ -101,6 +126,7 @@ function loadAtlasRoute(environment) {
     },
     "@/lib/atlas-generation": atlasModule,
   }, {
+    URL,
     console: { error: () => undefined, log: () => undefined, warn: () => undefined },
     process: { env: environment },
   });
@@ -110,6 +136,7 @@ const {
   createAtlasGenerationContext,
   generateAtlasImage,
   parseAtlasGenerationRequest,
+  resolveAtlasPhaseProviderConfig,
   resolveAtlasProviderConfig,
 } = atlasModule;
 const { SITE_ROUTE_BY_KEY, isDarkRoutePath } = routesModule;
@@ -149,6 +176,40 @@ assert.equal(
   "black-forest-labs/flux.2-klein-4b",
   "the OpenRouter adapter should pin the verified FLUX.2 Klein model",
 );
+
+const previewProvider = resolveAtlasPhaseProviderConfig({
+  ATLAS_IMAGE_PROVIDER: "openrouter-pro",
+  OPENAI_API_KEY: "openai-test-key",
+  OPENROUTER_API_KEY: "openrouter-test-key",
+}, "preview");
+assert.equal(previewProvider.provider, "openrouter", "the preview phase should always stay server-routed through OpenRouter");
+assert.equal(
+  previewProvider.model,
+  "black-forest-labs/flux.2-klein-4b",
+  "the preview phase should always use the fast Klein model",
+);
+
+const proFinalProvider = resolveAtlasPhaseProviderConfig({
+  ATLAS_IMAGE_PROVIDER: "openrouter-pro",
+  OPENROUTER_API_KEY: "openrouter-test-key",
+}, "final");
+assert.equal(proFinalProvider.provider, "openrouter", "FLUX Pro should remain an OpenRouter server adapter");
+assert.equal(
+  proFinalProvider.model,
+  "black-forest-labs/flux.2-pro",
+  "the final phase should allow the server-owned FLUX Pro A/B variant",
+);
+
+const generatedWithPro = plain(await generateAtlasImage(
+  parseAtlasGenerationRequest({ prompt: "fire forest", mode: "generate" }),
+  proFinalProvider,
+));
+assert.equal(generatedWithPro.generation.model, "black-forest-labs/flux.2-pro", "Pro results should retain their model metadata");
+const proCall = providerCalls.find((call) => {
+  if (call.url !== "https://openrouter.ai/api/v1/images") return false;
+  return JSON.parse(call.init.body).model === "black-forest-labs/flux.2-pro";
+});
+assert.ok(proCall, "the Pro adapter should call OpenRouter with the verified model slug");
 
 assertRequestError(
   () => resolveAtlasProviderConfig({}, "untrusted-provider"),
@@ -213,7 +274,10 @@ assert.equal(
 );
 assert.match(generatedWithOpenRouter.dataUrl, /^data:image\/png;base64,/, "OpenRouter output should retain PNG media type");
 
-const generationCall = providerCalls.find((call) => call.url === "https://openrouter.ai/api/v1/images");
+const generationCall = providerCalls.find((call) => {
+  if (call.url !== "https://openrouter.ai/api/v1/images") return false;
+  return JSON.parse(call.init.body).model === "black-forest-labs/flux.2-klein-4b";
+});
 const generationBody = JSON.parse(generationCall.init.body);
 assert.equal(generationCall.url, "https://openrouter.ai/api/v1/images", "OpenRouter should use its dedicated Image API");
 assert.equal(generationCall.init.headers.authorization, "Bearer openrouter-test-key", "OpenRouter auth should stay server-side");
@@ -233,7 +297,8 @@ await generateAtlasImage(
   openRouterProvider,
 );
 const openRouterCalls = providerCalls.filter((call) => call.url === "https://openrouter.ai/api/v1/images");
-const editBody = JSON.parse(openRouterCalls[1].init.body);
+const editCall = openRouterCalls.find((call) => Array.isArray(JSON.parse(call.init.body).input_references));
+const editBody = JSON.parse(editCall.init.body);
 assert.equal(editBody.input_references.length, 1, "OpenRouter edits should send one current-map reference");
 assert.equal(editBody.input_references[0].type, "image_url", "current maps should use image_url references");
 assert.match(
@@ -241,6 +306,182 @@ assert.match(
   /^data:image\/png;base64,/,
   "current maps should remain private bounded data URLs",
 );
+
+const progressiveRoute = loadAtlasRoute({
+  ATLAS_GENERATION_ENABLED: "true",
+  ATLAS_IMAGE_PROVIDER: "openai",
+  OPENAI_API_KEY: "openai-test-key",
+  OPENROUTER_API_KEY: "openrouter-test-key",
+});
+const canonicalInteractionId = "atlas-canonical-interaction-001";
+const canonicalBody = JSON.stringify({
+  prompt: "fire forest",
+  currentImage: `data:image/png;base64,${SOURCE_PNG}`,
+  viewport: { width: 390, height: 844 },
+  focus: { x: 0.42, y: 0.58, zoom: 2.5 },
+  mode: "zoom",
+});
+const progressiveCallsStart = providerCalls.length;
+const [previewResponse, finalResponse] = await Promise.all([
+  progressiveRoute.POST(new Request("https://atlas.test/api/atlas/generate?phase=preview", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-atlas-generation-id": canonicalInteractionId,
+      "x-real-ip": "127.0.0.31",
+    },
+    body: canonicalBody,
+  })),
+  progressiveRoute.POST(new Request("https://atlas.test/api/atlas/generate?phase=final", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-atlas-generation-id": canonicalInteractionId,
+      "x-real-ip": "127.0.0.31",
+    },
+    body: canonicalBody,
+  })),
+]);
+assert.equal(previewResponse.status, 200, "the Klein preview should resolve independently");
+assert.equal(finalResponse.status, 200, "the GPT final should resolve independently");
+assert.equal(previewResponse.body.generation.phase, "preview", "preview responses should identify their phase");
+assert.equal(finalResponse.body.generation.phase, "final", "final responses should identify their phase");
+assert.equal(previewResponse.body.generation.generationId, canonicalInteractionId, "preview should echo the safe stale-response token");
+assert.equal(finalResponse.body.generation.generationId, canonicalInteractionId, "final should echo the same stale-response token");
+assert.equal(previewResponse.body.generation.model, "black-forest-labs/flux.2-klein-4b", "hybrid preview should use Klein");
+assert.equal(finalResponse.body.generation.model, "gpt-image-2", "the default hybrid final should use GPT Image 2");
+
+const progressiveCalls = providerCalls.slice(progressiveCallsStart);
+const canonicalPreviewCall = progressiveCalls.find((call) => {
+  if (call.url !== "https://openrouter.ai/api/v1/images") return false;
+  return JSON.parse(call.init.body).model === "black-forest-labs/flux.2-klein-4b";
+});
+const canonicalFinalCall = progressiveCalls.find((call) => call.url === "https://api.openai.com/v1/images/edits");
+assert.ok(canonicalPreviewCall, "the preview phase should call Klein");
+assert.ok(canonicalFinalCall, "the final phase should edit with GPT Image 2");
+const canonicalPreviewBody = JSON.parse(canonicalPreviewCall.init.body);
+assert.equal(
+  canonicalPreviewBody.input_references[0].image_url.url,
+  `data:image/png;base64,${SOURCE_PNG}`,
+  "the preview should use the canonical current map",
+);
+const finalImageEntry = [...canonicalFinalCall.init.body.entries()].find(([, value]) => value instanceof Blob);
+assert.ok(finalImageEntry, "the final edit should upload the canonical current map");
+const finalSourceBytes = Buffer.from(await finalImageEntry[1].arrayBuffer());
+assert.deepEqual(finalSourceBytes, SOURCE_PNG_BYTES, "the final must start from the canonical map, not the Klein preview");
+assert.notDeepEqual(finalSourceBytes, Buffer.from(ONE_PIXEL_PNG, "base64"), "the preview output must never become GPT's edit source");
+assert.equal(
+  canonicalFinalCall.init.body.get("prompt"),
+  canonicalPreviewBody.prompt,
+  "preview and final should share one canonical server-composed prompt",
+);
+
+const proFinalRoute = loadAtlasRoute({
+  ATLAS_GENERATION_ENABLED: "true",
+  ATLAS_IMAGE_PROVIDER: "openrouter-pro",
+  OPENROUTER_API_KEY: "openrouter-test-key",
+});
+const proFinalResponse = await proFinalRoute.POST(new Request("https://atlas.test/api/atlas/generate?phase=final", {
+  method: "POST",
+  headers: {
+    "content-type": "application/json",
+    "x-atlas-generation-id": "atlas-pro-ab-test-001",
+    "x-real-ip": "127.0.0.36",
+  },
+  body: JSON.stringify({ prompt: "fire forest", mode: "generate" }),
+}));
+assert.equal(proFinalResponse.status, 200, "the server-selected Pro final should generate successfully");
+assert.equal(proFinalResponse.body.generation.provider, "openrouter", "the browser should only see normalized provider metadata");
+assert.equal(proFinalResponse.body.generation.model, "black-forest-labs/flux.2-pro", "the final A/B route should select FLUX Pro from server env");
+
+failKleinPreview = true;
+try {
+  const independentBody = JSON.stringify({ prompt: "storm archive", mode: "generate" });
+  const [failedPreview, survivingFinal] = await Promise.all([
+    progressiveRoute.POST(new Request("https://atlas.test/api/atlas/generate?phase=preview", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-atlas-generation-id": "atlas-independent-failure-001",
+        "x-real-ip": "127.0.0.32",
+      },
+      body: independentBody,
+    })),
+    progressiveRoute.POST(new Request("https://atlas.test/api/atlas/generate?phase=final", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-atlas-generation-id": "atlas-independent-failure-001",
+        "x-real-ip": "127.0.0.32",
+      },
+      body: independentBody,
+    })),
+  ]);
+  assert.equal(failedPreview.status, 503, "a preview provider failure should remain scoped to preview");
+  assert.equal(failedPreview.body.generation.phase, "preview", "preview errors should retain phase metadata");
+  assert.equal(survivingFinal.status, 200, "preview failure must not block the final provider");
+  assert.equal(survivingFinal.body.generation.phase, "final", "the surviving final should retain phase metadata");
+} finally {
+  failKleinPreview = false;
+}
+
+const cancelledController = new AbortController();
+cancelledController.abort();
+const cancelledResponse = await progressiveRoute.POST(new Request("https://atlas.test/api/atlas/generate?phase=preview", {
+  method: "POST",
+  headers: {
+    "content-type": "application/json",
+    "x-atlas-generation-id": "atlas-cancelled-interaction-001",
+    "x-real-ip": "127.0.0.33",
+  },
+  body: JSON.stringify({ prompt: "cancelled forest", mode: "generate" }),
+  signal: cancelledController.signal,
+}));
+assert.equal(cancelledResponse.status, 408, "an aborted phase should stop at the provider boundary");
+assert.equal(cancelledResponse.body.generation.phase, "preview", "cancelled responses should retain phase metadata");
+assert.equal(
+  cancelledResponse.body.generation.generationId,
+  "atlas-cancelled-interaction-001",
+  "cancelled responses should remain attributable to the stale interaction",
+);
+
+const invalidPhaseResponse = await progressiveRoute.POST(new Request("https://atlas.test/api/atlas/generate?phase=provider-secret", {
+  method: "POST",
+  headers: { "content-type": "application/json", "x-real-ip": "127.0.0.34" },
+  body: JSON.stringify({ prompt: "fire forest", mode: "generate" }),
+}));
+assert.equal(invalidPhaseResponse.status, 400, "unknown phases should fail closed");
+assert.equal(invalidPhaseResponse.body.error.code, "invalid_phase", "unknown phases should return a stable safe error");
+
+const interactionLimitedRoute = loadAtlasRoute({
+  ATLAS_GENERATION_ENABLED: "false",
+  ATLAS_IMAGE_PROVIDER: "openai",
+});
+for (let interaction = 0; interaction < 8; interaction += 1) {
+  const interactionBody = JSON.stringify({ prompt: `rate limit map ${interaction}`, mode: "generate" });
+  const phaseResponses = await Promise.all(["preview", "final"].map((phase) => (
+    interactionLimitedRoute.POST(new Request(`https://atlas.test/api/atlas/generate?phase=${phase}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-atlas-generation-id": `atlas-rate-limit-${interaction}`,
+        "x-real-ip": "127.0.0.35",
+      },
+      body: interactionBody,
+    }))
+  )));
+  assert.deepEqual(phaseResponses.map((response) => response.status), [200, 200], "eight full interactions should fit the phase-aware window");
+}
+const seventeenthPhaseCall = await interactionLimitedRoute.POST(new Request("https://atlas.test/api/atlas/generate?phase=preview", {
+  method: "POST",
+  headers: {
+    "content-type": "application/json",
+    "x-atlas-generation-id": "atlas-rate-limit-overflow",
+    "x-real-ip": "127.0.0.35",
+  },
+  body: JSON.stringify({ prompt: "rate limit overflow", mode: "generate" }),
+}));
+assert.equal(seventeenthPhaseCall.status, 429, "the seventeenth phase call should be rate limited");
 
 const openRouterDemoRoute = loadAtlasRoute({
   ATLAS_GENERATION_ENABLED: "false",
@@ -254,6 +495,8 @@ const demoResponse = await openRouterDemoRoute.POST(new Request("https://atlas.t
 assert.equal(demoResponse.status, 200, "disabled generation should keep the Atlas usable in demo mode");
 assert.equal(demoResponse.body.dataUrl, null, "demo mode should not invent a provider image");
 assert.equal(demoResponse.body.generation.provider, "openrouter", "demo metadata should safely name the selected provider");
+assert.equal(demoResponse.body.generation.phase, "final", "legacy requests should remain final-phase JSON responses");
+assert.match(demoResponse.body.generation.generationId, /^[A-Za-z0-9_-]{8,80}$/, "legacy requests should receive a safe server generation ID");
 assert.equal(
   demoResponse.body.generation.model,
   "black-forest-labs/flux.2-klein-4b",
@@ -275,6 +518,7 @@ assert.equal(
   "unconfigured",
   "invalid provider values must not be reflected to the browser",
 );
+assert.equal(invalidProviderResponse.body.generation.phase, "final", "configuration errors should retain final phase metadata");
 assert.doesNotMatch(
   JSON.stringify(invalidProviderResponse.body),
   /private-provider-value/,
