@@ -6,10 +6,7 @@ import { useField } from "@/store/field";
 import { getFieldAudio } from "@/lib/audio";
 import { REGIONS } from "@/data/content";
 import SiteHeader from "@/components/SiteHeader";
-import SiteFooter from "@/components/SiteFooter";
 import Atlas from "@/components/Atlas";
-import Reading from "@/components/Reading";
-import Archive from "@/components/Archive";
 
 export default function AtlasRegionPage() {
   const params = useParams<{ region: string }>();
@@ -31,10 +28,7 @@ export default function AtlasRegionPage() {
       <SiteHeader />
       <main>
         <Atlas />
-        <Reading />
-        <Archive />
       </main>
-      <SiteFooter />
     </>
   );
 }

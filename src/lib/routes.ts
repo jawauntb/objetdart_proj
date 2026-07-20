@@ -15,7 +15,7 @@ export type SiteRouteEntry = {
 };
 
 export const SITE_ROUTES: SiteRouteEntry[] = [
-  { key: "atlas",       icon: "atlas",    href: "/atlas/origin",                    desc: "the territories",                cluster: "field",     homePriority: 10 },
+  { key: "atlas",       icon: "atlas",    href: "/atlas/origin",                    desc: "the living map",                 cluster: "field",     dark: true, homePriority: 10 },
   { key: "ocean",       icon: "waves",    href: "/ocean",                             desc: "the deep · dive down",          cluster: "water",     dark: true, homePriority: 7 },
   { key: "tide",        icon: "tide",     href: "/tide",                              desc: "move the moon",                cluster: "water",     dark: true, homePriority: 9 },
   { key: "waves",       icon: "waves",    href: "/waves",                             desc: "ripple tank",                  cluster: "water",     dark: true, homePriority: 8 },

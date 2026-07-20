@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { usePathname } from "next/navigation";
 import { getFieldAudio } from "@/lib/audio";
 
 /**
@@ -21,12 +22,15 @@ import { getFieldAudio } from "@/lib/audio";
  * idle animation when audio is silent.
  */
 export default function CandleMark() {
+  const pathname = usePathname() ?? "/";
+  const hide = pathname.startsWith("/atlas/");
   // refs to the elements we drive each frame
   const wrapRef = useRef<HTMLDivElement>(null);
   const flameRef = useRef<SVGGElement>(null);
   const haloRef = useRef<SVGGElement>(null);
 
   useEffect(() => {
+    if (hide) return;
     const wrap = wrapRef.current;
     const flame = flameRef.current;
     const halo = haloRef.current;
@@ -130,7 +134,9 @@ export default function CandleMark() {
       flame.style.opacity = "";
       halo.style.opacity = "";
     };
-  }, []);
+  }, [hide]);
+
+  if (hide) return null;
 
   return (
     <div
