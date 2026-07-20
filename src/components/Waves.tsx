@@ -11,6 +11,7 @@ import {
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { useField } from "@/store/field";
+import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
 
 /**
  * Waves — a wave-propagation instrument.
@@ -88,6 +89,8 @@ export default function Waves() {
 
   const simRef = useRef<Sim | null>(null);
   const pointerRef = useRef({ active: false, id: -1, x: 0.5, y: 0.5, lastTone: 0, moved: 0 });
+  const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
+  const pinchDistanceRef = useRef(0);
   const reduceRef = useRef(false);
 
   const speedRef = useRef(0.34); // c^2 (Courant-stable below 0.5)
@@ -553,6 +556,29 @@ export default function Waves() {
 
   const activeTone = (MODES.find((it) => it.id === mode) ?? MODES[0]).tone;
 
+  const endPointer = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    const pointers = pointersRef.current;
+    pointers.delete(event.pointerId);
+    try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* noop */ }
+    const pointer = pointerRef.current;
+    pinchDistanceRef.current = 0;
+    if (pointers.size === 1) {
+      const remaining = pointers.entries().next().value as [number, { x: number; y: number }] | undefined;
+      if (!remaining) return;
+      const [id, point] = remaining;
+      const rect = event.currentTarget.getBoundingClientRect();
+      pointer.active = true;
+      pointer.id = id;
+      pointer.x = clamp((point.x - rect.left) / Math.max(1, rect.width), 0, 1);
+      pointer.y = clamp((point.y - rect.top) / Math.max(1, rect.height), 0, 1);
+      pointer.moved = 0;
+      return;
+    }
+    if (pointers.size > 1 || pointer.id !== event.pointerId) return;
+    pointer.active = false;
+    pointer.id = -1;
+  };
+
   return (
     <div
       ref={rootRef}
@@ -567,6 +593,18 @@ export default function Waves() {
         role="img"
         aria-label="A touch responsive wave propagation instrument. Touch to send travelling pulses that reflect and interfere."
         onPointerDown={(event: ReactPointerEvent<HTMLCanvasElement>) => {
+          const pointers = pointersRef.current;
+          pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+          if (pointers.size >= 2) {
+            const iterator = pointers.values();
+            const a = iterator.next().value;
+            const b = iterator.next().value;
+            if (!a || !b) return;
+            pinchDistanceRef.current = Math.hypot(a.x - b.x, a.y - b.y);
+            pointerRef.current.active = false;
+            try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* noop */ }
+            return;
+          }
           pointerRef.current.active = true;
           pointerRef.current.id = event.pointerId;
           pointerRef.current.moved = 0;
@@ -575,24 +613,33 @@ export default function Waves() {
           try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* noop */ }
         }}
         onPointerMove={(event: ReactPointerEvent<HTMLCanvasElement>) => {
+          const pointers = pointersRef.current;
+          const point = pointers.get(event.pointerId);
+          if (point) {
+            point.x = event.clientX;
+            point.y = event.clientY;
+          }
+          if (pointers.size >= 2) {
+            const iterator = pointers.values();
+            const a = iterator.next().value;
+            const b = iterator.next().value;
+            if (!a || !b) return;
+            const distance = Math.hypot(a.x - b.x, a.y - b.y);
+            const delta = distance - pinchDistanceRef.current;
+            pinchDistanceRef.current = distance;
+            const next = clamp(speedRef.current + delta * 0.0008, 0.14, 0.5);
+            speedRef.current = next;
+            setSpeed(next);
+            setReadout(`${modeRef.current} · c ${next.toFixed(2)} · pinch speed`);
+            markControl("pinch-speed", (next - 0.14) / 0.36);
+            return;
+          }
           const pointer = pointerRef.current;
           if (!pointer.active || pointer.id !== event.pointerId) return;
           disturb(event.clientX, event.clientY, event.pressure > 0 ? event.pressure + 0.35 : 0.8);
         }}
-        onPointerUp={(event: ReactPointerEvent<HTMLCanvasElement>) => {
-          const pointer = pointerRef.current;
-          if (pointer.id !== event.pointerId) return;
-          pointer.active = false;
-          pointer.id = -1;
-          try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* noop */ }
-        }}
-        onPointerCancel={(event: ReactPointerEvent<HTMLCanvasElement>) => {
-          const pointer = pointerRef.current;
-          if (pointer.id !== event.pointerId) return;
-          pointer.active = false;
-          pointer.id = -1;
-          try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* noop */ }
-        }}
+        onPointerUp={endPointer}
+        onPointerCancel={endPointer}
       />
 
       <div className="waves-title" aria-hidden="true">
@@ -618,44 +665,66 @@ export default function Waves() {
         ))}
       </div>
 
-      <div className="waves-console" aria-label="propagation controls">
-        <button type="button" className="waves-btn" onClick={toggleRunning} aria-pressed={running}>
-          {running ? "pause" : "play"}
-        </button>
-        <WaveSlider
-          label="speed"
-          min={0.14}
-          max={0.5}
-          step={0.01}
-          value={speed}
-          display={speed.toFixed(2)}
-          onChange={(v) => { setSpeed(v); speedRef.current = v; markControl("speed", (v - 0.14) / 0.36); }}
-        />
-        <WaveSlider
-          label="damp"
-          min={0}
-          max={0.03}
-          step={0.001}
-          value={damp}
-          display={damp.toFixed(3)}
-          onChange={(v) => { setDamp(v); dampRef.current = v; markControl("damp", v / 0.03); }}
-        />
-        <WaveSlider
-          label="drop"
-          min={0.3}
-          max={2}
-          step={0.05}
-          value={drop}
-          display={drop.toFixed(2)}
-          onChange={(v) => { setDrop(v); dropRef.current = v; markControl("drop", (v - 0.3) / 1.7); }}
-        />
-        <button type="button" className="waves-btn" onClick={stillTank}>
-          still
-        </button>
-        <output className="waves-readout" aria-live="polite" aria-label={`wave readout ${readout}`}>
-          {readout}
-        </output>
-      </div>
+      <label className="waves-mode-compact">
+        <span>medium</span>
+        <select
+          aria-label="wave medium"
+          value={mode}
+          onChange={(event) => setWaveMode(event.target.value as WaveMode)}
+        >
+          {MODES.map((item) => (
+            <option key={item.id} value={item.id}>{item.label}</option>
+          ))}
+        </select>
+      </label>
+
+      <span className="waves-play-hint" aria-hidden="true">tap or drag · pinch speed</span>
+
+      <MobileInstrumentPanel
+        className="waves-mobile-panel"
+        title="propagation"
+        triggerLabel="tune"
+        summary={readout}
+      >
+        <div className="waves-console" aria-label="propagation controls">
+          <button type="button" className="waves-btn" onClick={toggleRunning} aria-pressed={running}>
+            {running ? "pause" : "play"}
+          </button>
+          <WaveSlider
+            label="speed"
+            min={0.14}
+            max={0.5}
+            step={0.01}
+            value={speed}
+            display={speed.toFixed(2)}
+            onChange={(v) => { setSpeed(v); speedRef.current = v; markControl("speed", (v - 0.14) / 0.36); }}
+          />
+          <WaveSlider
+            label="damp"
+            min={0}
+            max={0.03}
+            step={0.001}
+            value={damp}
+            display={damp.toFixed(3)}
+            onChange={(v) => { setDamp(v); dampRef.current = v; markControl("damp", v / 0.03); }}
+          />
+          <WaveSlider
+            label="drop"
+            min={0.3}
+            max={2}
+            step={0.05}
+            value={drop}
+            display={drop.toFixed(2)}
+            onChange={(v) => { setDrop(v); dropRef.current = v; markControl("drop", (v - 0.3) / 1.7); }}
+          />
+          <button type="button" className="waves-btn" onClick={stillTank}>
+            still
+          </button>
+          <output className="waves-readout" aria-live="polite" aria-label={`wave readout ${readout}`}>
+            {readout}
+          </output>
+        </div>
+      </MobileInstrumentPanel>
 
       <style
         dangerouslySetInnerHTML={{
@@ -776,6 +845,9 @@ export default function Waves() {
         .waves-mode-rail button[aria-pressed="true"] i {
           background: color-mix(in srgb, var(--mode-tone) 60%, transparent);
         }
+
+        .waves-mode-compact,
+        .waves-play-hint { display: none; }
 
         .waves-console {
           position: fixed;
@@ -962,15 +1034,78 @@ export default function Waves() {
           }
         }
 
-        @media (max-width: 520px) {
-          .waves-console {
+        @media (max-width: 720px) {
+          .waves-mode-rail { display: none; }
+          .waves-mode-compact {
+            position: fixed;
+            z-index: 5;
+            right: 14px;
+            bottom: calc(68px + env(safe-area-inset-bottom, 0px));
+            min-height: 42px;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            border: 1px solid color-mix(in srgb, var(--wave-tone) 42%, transparent);
+            border-radius: 999px;
+            padding: 0 10px 0 13px;
+            background: rgba(5, 8, 15, 0.82);
+            color: rgba(246, 241, 224, 0.62);
+            box-shadow: 0 12px 34px rgba(0, 0, 0, 0.24);
+            backdrop-filter: blur(14px);
+            -webkit-backdrop-filter: blur(14px);
+            font: 9px/1 var(--font-mono);
+            letter-spacing: 0.07em;
+            text-transform: lowercase;
+          }
+          .waves-mode-compact select {
+            min-height: 32px;
+            border: 0;
+            padding: 0 18px 0 4px;
+            background: transparent;
+            color: var(--wave-tone);
+            font: 10px/1 var(--font-mono);
+            text-transform: lowercase;
+          }
+          .waves-play-hint {
+            position: fixed;
+            z-index: 2;
+            left: 50%;
+            bottom: calc(122px + env(safe-area-inset-bottom, 0px));
+            display: block;
+            transform: translateX(-50%);
+            color: rgba(246, 241, 224, 0.58);
+            font: 10px/1 var(--font-mono);
+            letter-spacing: 0.07em;
+            white-space: nowrap;
+            text-shadow: 0 2px 12px rgba(0, 0, 0, 0.86);
+            pointer-events: none;
+          }
+          .waves-mobile-panel .mobile-instrument-panel__trigger {
+            max-width: calc(100vw - 190px);
+            border-color: color-mix(in srgb, var(--wave-tone) 38%, transparent);
+            background: rgba(5, 8, 15, 0.86);
+          }
+          .waves-mobile-panel .mobile-instrument-panel__sheet {
+            background: rgba(4, 7, 13, 0.98);
+            border-color: color-mix(in srgb, var(--wave-tone) 26%, transparent);
+          }
+          .waves-mobile-panel .waves-console {
+            display: grid;
             grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+            padding: 0;
+            border: 0;
+            border-radius: 0;
+            background: transparent;
+            box-shadow: none;
+            backdrop-filter: none;
+            -webkit-backdrop-filter: none;
+            overflow: visible;
           }
+          .waves-mobile-panel .waves-readout { grid-column: 1 / -1; }
+        }
 
-          .waves-mode-rail {
-            bottom: calc(300px + env(safe-area-inset-bottom, 0px));
-          }
-
+        @media (max-width: 520px) {
           .waves-slider,
           .waves-btn {
             min-height: 52px;

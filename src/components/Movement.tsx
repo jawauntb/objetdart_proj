@@ -7,6 +7,7 @@ import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment
 import { getFieldAudio } from "@/lib/audio";
 import { useField } from "@/store/field";
 import * as haptics from "@/lib/haptics";
+import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
 
 /**
  * /movement — a real(ish) mechanical watch movement in Three.js.
@@ -1099,32 +1100,50 @@ export default function Movement() {
     };
   }, []);
 
+  const speedLabel = SPEEDS.find((option) => option.v === speed)?.label ?? `${speed}×`;
+
   return (
-    <div ref={wrapRef} style={{ position: "fixed", inset: 0, background: "#0a0b0e" }}>
+    <div
+      ref={wrapRef}
+      className="movement-instrument"
+      data-touch-surface="true"
+      style={{ position: "fixed", inset: 0, background: "#0a0b0e" }}
+    >
       <div className="mv-hud">
         <div className="mv-title">
           objet&nbsp;d&apos;art — calibre OD·1 <span className="mv-clock" ref={clockRef}>--:--:--</span>
         </div>
-        <div className="mv-row" role="group" aria-label="speed">
-          {SPEEDS.map((s) => (
-            <button key={s.v} type="button" className={speed === s.v ? "on" : ""}
-              onClick={() => pickSpeed(s.v)}>{s.label}</button>
-          ))}
-        </div>
-        <div className="mv-row" role="group" aria-label="face">
-          {FACES.map((f) => (
-            <button key={f} type="button" className={face === f ? "on" : ""}
-              onClick={() => { swapFaceRef.current?.(f); setFace(f); try { getFieldAudio().chime(); } catch { /* noop */ } haptics.tap(); useField.getState().recordTape("object", 0.5, `movement/face/${f}`); }}>{f}</button>
-          ))}
-          <button type="button" className={dialOn ? "on" : ""} onClick={toggleDial}>{dialOn ? "dial" : "open"}</button>
-        </div>
-        <div className="mv-row" role="group" aria-label="view">
-          {VIEWS.map((v) => (
-            <button key={v} type="button" className={view === v ? "on" : ""}
-              onClick={() => { applyViewRef.current?.(v); setView(v); }}>{v.replace("macro-", "")}</button>
-          ))}
-        </div>
-        <div className="mv-hint">drag to orbit · tap the crown, pushers, gears &amp; balance · scroll / pinch to zoom</div>
+        <MobileInstrumentPanel
+          title="calibre controls"
+          triggerLabel="tune"
+          summary={`${speedLabel} · ${face} · ${view.replace("macro-", "")}`}
+        >
+          <div className="mv-console">
+            <div className="mv-row" role="group" aria-label="movement speed">
+              {SPEEDS.map((s) => (
+                <button key={s.v} type="button" className={speed === s.v ? "on" : ""}
+                  aria-pressed={speed === s.v}
+                  onClick={() => pickSpeed(s.v)}>{s.label}</button>
+              ))}
+            </div>
+            <div className="mv-row" role="group" aria-label="movement finish">
+              {FACES.map((f) => (
+                <button key={f} type="button" className={face === f ? "on" : ""}
+                  aria-pressed={face === f}
+                  onClick={() => { swapFaceRef.current?.(f); setFace(f); try { getFieldAudio().chime(); } catch { /* noop */ } haptics.tap(); useField.getState().recordTape("object", 0.5, `movement/face/${f}`); }}>{f}</button>
+              ))}
+              <button type="button" className={dialOn ? "on" : ""} aria-pressed={dialOn} onClick={toggleDial}>{dialOn ? "dial" : "open"}</button>
+            </div>
+            <div className="mv-row" role="group" aria-label="camera view">
+              {VIEWS.map((v) => (
+                <button key={v} type="button" className={view === v ? "on" : ""}
+                  aria-pressed={view === v}
+                  onClick={() => { applyViewRef.current?.(v); setView(v); }}>{v.replace("macro-", "")}</button>
+              ))}
+            </div>
+          </div>
+        </MobileInstrumentPanel>
+        <div className="mv-hint" aria-hidden="true">drag to orbit · tap parts to play · pinch to zoom</div>
       </div>
       <div className="mv-sundial-wrap"><SundialChip /></div>
       <style dangerouslySetInnerHTML={{ __html: `
@@ -1132,7 +1151,7 @@ export default function Movement() {
           position: absolute; left: 0; top: 0;
           padding: calc(64px + env(safe-area-inset-top, 0px)) 16px 16px 16px;
           display: grid; gap: 8px; justify-items: start;
-          pointer-events: none; z-index: 10;
+          pointer-events: none; z-index: 11;
           font-family: var(--font-mono, ui-monospace, monospace);
         }
         .mv-title {
@@ -1143,6 +1162,7 @@ export default function Movement() {
         }
         .mv-clock { color: #e7c873; margin-left: 8px; font-variant-numeric: tabular-nums; }
         .mv-row { display: flex; gap: 6px; flex-wrap: wrap; pointer-events: auto; }
+        .mv-console { display: grid; gap: 8px; justify-items: start; }
         .mv-row button {
           appearance: none; cursor: pointer;
           border: 1px solid rgba(231,211,154,0.3);
@@ -1168,9 +1188,45 @@ export default function Movement() {
           font-family: var(--font-fraunces, Georgia, serif); font-size: 13px;
           fill: #f0d68a; letter-spacing: 1px; font-variant-numeric: tabular-nums;
         }
-        @media (max-width: 560px) {
-          .mv-title { font-size: 13px; } .mv-row button { padding: 8px 10px; }
-          .mv-sundial-wrap { width: 140px; bottom: 12px; }
+        @media (max-width: 720px) {
+          .mv-hud {
+            right: 0;
+            padding: calc(54px + env(safe-area-inset-top, 0px)) 16px 16px;
+          }
+          .mv-title { font-size: 12px; }
+          .mv-hint {
+            max-width: min(72vw, 330px);
+            font-size: 9px;
+            line-height: 1.45;
+          }
+          .mv-console {
+            width: 100%;
+            gap: 12px;
+          }
+          .mv-row {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            width: 100%;
+            gap: 7px;
+          }
+          .mv-row:first-child { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+          .mv-row button {
+            min-height: 44px;
+            padding: 8px 7px;
+          }
+          .movement-instrument .mobile-instrument-panel__trigger {
+            right: max(14px, env(safe-area-inset-right, 0px));
+            left: auto;
+            border-color: rgba(231,211,154,0.48);
+            pointer-events: auto;
+          }
+          .mv-sundial-wrap {
+            right: 14px;
+            bottom: calc(118px + env(safe-area-inset-bottom, 0px));
+            left: auto;
+            width: 116px;
+            transform: none;
+          }
         }
       ` }} />
     </div>

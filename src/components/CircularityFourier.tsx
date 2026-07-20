@@ -12,6 +12,7 @@ import {
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { useField } from "@/store/field";
+import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
 
 type Preset = "square" | "saw" | "triangle" | "pulse";
 
@@ -138,6 +139,7 @@ export default function CircularityFourier() {
 
   const [preset, setPreset] = useState<Preset>("square");
   const [terms, setTerms] = useState(7);
+  const [amplitude, setAmplitude] = useState(1);
   const [speed, setSpeed] = useState(0.9);
   const [theta, setTheta] = useState(0);
   const [running, setRunning] = useState(true);
@@ -206,8 +208,8 @@ export default function CircularityFourier() {
   const centerY = CENTER_Y;
   const waveX = compact ? 620 : WAVE_X;
   const waveY = WAVE_Y;
-  const orbitScale = compact ? 0.66 : 1;
-  const waveScale = compact ? 0.72 : 1;
+  const orbitScale = (compact ? 0.66 : 1) * amplitude;
+  const waveScale = (compact ? 0.72 : 1) * amplitude;
   const traceStep = compact ? 0.92 : 1.34;
 
   const trace = useMemo(() => {
@@ -407,7 +409,7 @@ export default function CircularityFourier() {
 
         <g className="circularity-spectrum" transform="translate(76 665)" aria-hidden="true">
           {harmonicBars.map((bar, index) => {
-            const height = clamp(bar.r * 1.22, 6, 116);
+            const height = clamp(bar.r * 1.22 * amplitude, 6, 116);
             const active = index < terms;
             return (
               <g
@@ -437,65 +439,87 @@ export default function CircularityFourier() {
         <strong>r_n e^in theta</strong>
       </div>
 
-      <div className="circularity-preset-rail" aria-label="wave presets">
-        {PRESETS.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            aria-pressed={preset === item.id}
-            onClick={() => setFourierPreset(item.id)}
-            style={{ "--preset-tone": item.tone } as CSSProperties}
-          >
-            <i aria-hidden="true" />
-            <span>{item.label}</span>
-          </button>
-        ))}
+      <div className="circularity-gesture" aria-hidden="true">
+        drag across to rotate · drag vertically for harmonics
       </div>
 
-      <div className="circularity-console" aria-label="Fourier controls">
-        <button type="button" className="circularity-run" onClick={toggleRunning} aria-pressed={running}>
-          {running ? "pause" : "play"}
-        </button>
-        <FourierSlider
-          label="terms"
-          min={1}
-          max={12}
-          step={1}
-          value={terms}
-          display={String(terms)}
-          onChange={(value) => setFourierTerms(value)}
-        />
-        <FourierSlider
-          label="speed"
-          min={0.2}
-          max={2.6}
-          step={0.1}
-          value={speed}
-          display={speed.toFixed(1)}
-          onChange={(value) => {
-            setSpeed(value);
-            speedRef.current = value;
-            ringTone("speed", value / 2.6, Math.round(value * 4));
-          }}
-        />
-        <FourierSlider
-          label="phase"
-          min={0}
-          max={6.28}
-          step={0.01}
-          value={theta}
-          display={theta.toFixed(2)}
-          onChange={(value) => {
-            const next = value % TAU;
-            setTheta(next);
-            thetaRef.current = next;
-            ringTone("phase", next / TAU, Math.round(next * 2));
-          }}
-        />
-        <output className="circularity-readout" aria-live="polite" aria-label={`Fourier readout ${readout}`}>
-          {readout}
-        </output>
-      </div>
+      <MobileInstrumentPanel
+        title="Fourier tune & playback"
+        triggerLabel="tune"
+        summary={`${preset} · ${terms} harmonics`}
+      >
+        <div className="circularity-preset-rail" aria-label="wave presets">
+          {PRESETS.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              aria-pressed={preset === item.id}
+              onClick={() => setFourierPreset(item.id)}
+              style={{ "--preset-tone": item.tone } as CSSProperties}
+            >
+              <i aria-hidden="true" />
+              <span>{item.label}</span>
+            </button>
+          ))}
+        </div>
+
+        <div className="circularity-console" aria-label="Fourier controls">
+          <button type="button" className="circularity-run" onClick={toggleRunning} aria-pressed={running}>
+            {running ? "pause" : "play"}
+          </button>
+          <FourierSlider
+            label="terms"
+            min={1}
+            max={12}
+            step={1}
+            value={terms}
+            display={String(terms)}
+            onChange={(value) => setFourierTerms(value)}
+          />
+          <FourierSlider
+            label="amp"
+            min={0.4}
+            max={1.5}
+            step={0.05}
+            value={amplitude}
+            display={amplitude.toFixed(2)}
+            onChange={(value) => {
+              setAmplitude(value);
+              ringTone("amplitude", value / 1.5, Math.round(value * 5));
+            }}
+          />
+          <FourierSlider
+            label="speed"
+            min={0.2}
+            max={2.6}
+            step={0.1}
+            value={speed}
+            display={speed.toFixed(1)}
+            onChange={(value) => {
+              setSpeed(value);
+              speedRef.current = value;
+              ringTone("speed", value / 2.6, Math.round(value * 4));
+            }}
+          />
+          <FourierSlider
+            label="phase"
+            min={0}
+            max={6.28}
+            step={0.01}
+            value={theta}
+            display={theta.toFixed(2)}
+            onChange={(value) => {
+              const next = value % TAU;
+              setTheta(next);
+              thetaRef.current = next;
+              ringTone("phase", next / TAU, Math.round(next * 2));
+            }}
+          />
+          <output className="circularity-readout" aria-live="polite" aria-label={`Fourier readout ${readout}`}>
+            {readout}
+          </output>
+        </div>
+      </MobileInstrumentPanel>
 
       <style
         dangerouslySetInnerHTML={{
@@ -661,6 +685,10 @@ export default function CircularityFourier() {
           letter-spacing: 0;
         }
 
+        .circularity-gesture {
+          display: none;
+        }
+
         .circularity-preset-rail {
           position: fixed;
           z-index: 4;
@@ -713,7 +741,7 @@ export default function CircularityFourier() {
           right: var(--pad-x);
           bottom: calc(20px + env(safe-area-inset-bottom, 0px));
           display: grid;
-          grid-template-columns: 86px repeat(3, minmax(128px, 1fr)) minmax(194px, 0.86fr);
+          grid-template-columns: 86px repeat(4, minmax(116px, 1fr)) minmax(176px, 0.86fr);
           gap: 8px;
           padding: 8px;
           border: 1px solid rgba(246, 241, 224, 0.13);
@@ -877,6 +905,70 @@ export default function CircularityFourier() {
 
           .circularity-preset-rail button i {
             display: none;
+          }
+        }
+
+        @media (max-width: 720px) {
+          .circularity-gesture {
+            position: fixed;
+            z-index: 3;
+            right: 16px;
+            bottom: calc(122px + env(safe-area-inset-bottom, 0px));
+            left: 16px;
+            display: block;
+            color: rgba(246, 241, 224, 0.5);
+            font-family: var(--font-mono);
+            font-size: 9px;
+            letter-spacing: 0.06em;
+            text-align: center;
+            text-transform: lowercase;
+            pointer-events: none;
+            text-shadow: 0 2px 14px rgba(0, 0, 0, 0.9);
+          }
+
+          .mobile-instrument-panel__content .circularity-preset-rail {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+            margin-bottom: 10px !important;
+          }
+
+          .mobile-instrument-panel__content .circularity-preset-rail button {
+            grid-template-columns: 18px minmax(0, 1fr);
+            justify-items: stretch;
+            min-height: 44px;
+            padding: 7px 9px;
+            text-align: left;
+          }
+
+          .mobile-instrument-panel__content .circularity-preset-rail button i {
+            display: block;
+          }
+
+          .mobile-instrument-panel__content .circularity-console {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+            padding: 8px;
+          }
+
+          .mobile-instrument-panel__content .circularity-run,
+          .mobile-instrument-panel__content .fourier-slider,
+          .mobile-instrument-panel__content .circularity-readout {
+            min-height: 48px;
+          }
+
+          .mobile-instrument-panel__content .circularity-run {
+            grid-column: 1 / -1;
+          }
+
+          .mobile-instrument-panel__content .fourier-slider {
+            grid-template-columns: 40px minmax(0, 1fr) 42px;
+            padding: 8px;
+          }
+
+          .mobile-instrument-panel__content .circularity-readout {
+            grid-column: 1 / -1;
           }
         }
           `,

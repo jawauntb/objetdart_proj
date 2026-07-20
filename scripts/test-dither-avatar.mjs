@@ -127,7 +127,10 @@ assert.ok(orla.cells.flat().some((cell) => !cell), "a mark should retain negativ
 assert.notDeepEqual(orla.cells, dan.cells, "different names should normally produce different marks");
 
 for (const row of orla.cells) {
-  assert.deepEqual(row, [...row].reverse(), "every avatar row should mirror left to right");
+  assert.ok(
+    row.every((cell, index) => cell === row[row.length - index - 1]),
+    "every avatar row should mirror left to right",
+  );
 }
 
 const sharedHarness = createExportHarness({

@@ -8,6 +8,7 @@ import {
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
 } from "react";
+import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { useField } from "@/store/field";
@@ -424,7 +425,8 @@ export default function SineWaveExplorer() {
         ref={canvasRef}
         className="sine-canvas"
         role="img"
-        aria-label="A touch responsive sine wave instrument"
+        aria-label="A touch responsive sine wave instrument. Drag horizontally to change frequency and vertically to change amplitude."
+        aria-describedby="sine-gesture-hint"
         onPointerDown={(event: ReactPointerEvent<HTMLCanvasElement>) => {
           pointerRef.current.active = true;
           pointerRef.current.id = event.pointerId;
@@ -458,6 +460,10 @@ export default function SineWaveExplorer() {
         <strong>Sine</strong>
       </div>
 
+      <p id="sine-gesture-hint" className="sine-gesture-hint">
+        drag <span aria-hidden="true">↔</span> frequency · <span aria-hidden="true">↕</span> amplitude
+      </p>
+
       <div className="sine-mode-rail" aria-label="wave modes">
         {MODES.map((item) => (
           <button
@@ -473,19 +479,38 @@ export default function SineWaveExplorer() {
         ))}
       </div>
 
-      <div className="sine-console" aria-label="oscillator controls">
-        <button type="button" className="sine-run" onClick={toggleRunning} aria-pressed={running}>
-          {running ? "pause" : "play"}
-        </button>
-        <WaveSlider label="amp" min={20} max={156} step={1} value={amp} display={String(Math.round(amp))} onChange={(value) => { setAmp(value); ampRef.current = value; markControl("amp", value / 156); }} />
-        <WaveSlider label="freq" min={0.5} max={8.4} step={0.05} value={freq} display={freq.toFixed(2)} onChange={(value) => { setFreq(value); freqRef.current = value; markControl("freq", value / 8.4); }} />
-        <WaveSlider label="phase" min={0} max={6.28} step={0.01} value={phase} display={phase.toFixed(2)} onChange={(value) => { setPhase(value); phaseRef.current = value; markControl("phase", value / 6.28); }} />
-        <WaveSlider label="damp" min={0} max={0.46} step={0.01} value={damping} display={damping.toFixed(2)} onChange={(value) => { setDamping(value); dampingRef.current = value; markControl("damp", value / 0.46); }} />
-        <WaveSlider label="harm" min={0} max={0.84} step={0.01} value={harmonic} display={harmonic.toFixed(2)} onChange={(value) => { setHarmonic(value); harmonicRef.current = value; markControl("harm", value / 0.84); }} />
-        <output className="sine-readout" aria-live="polite" aria-label={`sine readout ${readout}`}>
-          {readout}
-        </output>
-      </div>
+      <label className="sine-mode-compact">
+        <span>mode</span>
+        <select
+          aria-label="wave mode"
+          value={mode}
+          onChange={(event) => setWaveMode(event.target.value as WaveMode)}
+        >
+          {MODES.map((item) => (
+            <option key={item.id} value={item.id}>{item.label}</option>
+          ))}
+        </select>
+      </label>
+
+      <MobileInstrumentPanel
+        title="oscillator tuning"
+        triggerLabel="tune"
+        summary={`${mode} · ${Math.round(amp)} / ${freq.toFixed(2)}`}
+      >
+        <div className="sine-console" aria-label="oscillator controls">
+          <button type="button" className="sine-run" onClick={toggleRunning} aria-pressed={running}>
+            {running ? "pause" : "play"}
+          </button>
+          <WaveSlider label="amp" min={20} max={156} step={1} value={amp} display={String(Math.round(amp))} onChange={(value) => { setAmp(value); ampRef.current = value; markControl("amp", value / 156); }} />
+          <WaveSlider label="freq" min={0.5} max={8.4} step={0.05} value={freq} display={freq.toFixed(2)} onChange={(value) => { setFreq(value); freqRef.current = value; markControl("freq", value / 8.4); }} />
+          <WaveSlider label="phase" min={0} max={6.28} step={0.01} value={phase} display={phase.toFixed(2)} onChange={(value) => { setPhase(value); phaseRef.current = value; markControl("phase", value / 6.28); }} />
+          <WaveSlider label="damp" min={0} max={0.46} step={0.01} value={damping} display={damping.toFixed(2)} onChange={(value) => { setDamping(value); dampingRef.current = value; markControl("damp", value / 0.46); }} />
+          <WaveSlider label="harm" min={0} max={0.84} step={0.01} value={harmonic} display={harmonic.toFixed(2)} onChange={(value) => { setHarmonic(value); harmonicRef.current = value; markControl("harm", value / 0.84); }} />
+          <output className="sine-readout" aria-live="polite" aria-label={`sine readout ${readout}`}>
+            {readout}
+          </output>
+        </div>
+      </MobileInstrumentPanel>
 
       <style
         dangerouslySetInnerHTML={{
@@ -542,6 +567,29 @@ export default function SineWaveExplorer() {
           line-height: 0.86;
         }
 
+        .sine-gesture-hint {
+          display: none;
+          position: fixed;
+          z-index: 2;
+          left: 50%;
+          bottom: 112px;
+          margin: 0;
+          padding: 8px 12px;
+          border: 1px solid rgba(246, 241, 224, 0.13);
+          border-radius: 999px;
+          background: rgba(7, 10, 18, 0.42);
+          color: rgba(246, 241, 224, 0.55);
+          font-family: var(--font-mono);
+          font-size: 10px;
+          line-height: 1;
+          letter-spacing: 0.02em;
+          white-space: nowrap;
+          pointer-events: none;
+          transform: translateX(-50%);
+          backdrop-filter: blur(10px);
+          -webkit-backdrop-filter: blur(10px);
+        }
+
         .sine-mode-rail {
           position: fixed;
           z-index: 3;
@@ -552,6 +600,8 @@ export default function SineWaveExplorer() {
           width: min(260px, 28vw);
           pointer-events: auto;
         }
+
+        .sine-mode-compact { display: none; }
 
         .sine-mode-rail button {
           min-width: 0;
@@ -786,6 +836,60 @@ export default function SineWaveExplorer() {
 
           .sine-title strong {
             font-size: 64px;
+          }
+        }
+
+        @media (max-width: 720px) {
+          .sine-mode-rail { display: none; }
+
+          .sine-mode-compact {
+            position: fixed;
+            z-index: 122;
+            right: max(14px, env(safe-area-inset-right, 0px));
+            bottom: calc(68px + env(safe-area-inset-bottom, 0px));
+            min-height: 42px;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            border: 1px solid color-mix(in srgb, var(--sine-tone) 42%, transparent);
+            border-radius: 999px;
+            padding: 0 10px 0 13px;
+            background: rgba(7, 10, 18, 0.84);
+            color: rgba(246, 241, 224, 0.58);
+            box-shadow: 0 12px 34px rgba(0, 0, 0, 0.24);
+            backdrop-filter: blur(14px);
+            -webkit-backdrop-filter: blur(14px);
+            font: 9px/1 var(--font-mono);
+            letter-spacing: 0.07em;
+            text-transform: lowercase;
+          }
+
+          .sine-mode-compact select {
+            min-height: 32px;
+            border: 0;
+            padding: 0 18px 0 4px;
+            background: transparent;
+            color: var(--sine-tone);
+            font: 10px/1 var(--font-mono);
+            text-transform: lowercase;
+          }
+
+          .sine-gesture-hint {
+            display: block;
+            top: 120px;
+            bottom: auto;
+            padding: 7px 10px;
+            font-size: 9px;
+          }
+
+          .sine-console {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+          }
+
+          .sine-run,
+          .sine-slider {
+            min-height: 52px;
           }
         }
       `,

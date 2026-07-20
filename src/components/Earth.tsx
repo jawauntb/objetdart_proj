@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { useField } from "@/store/field";
+import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
 
 /**
  * /earth - a tactile geologic instrument.
@@ -458,6 +459,27 @@ export default function Earth() {
     lastFault: 0,
     lastHaptic: 0,
   });
+
+  const quietCore = useCallback(() => {
+    clickSpikesRef.current = [];
+    mineralMarksRef.current = [];
+    faultsRef.current = [];
+    bloomsRef.current = [];
+    fracturesRef.current = [];
+    quakeSpikeRef.current = null;
+    activeStratumRef.current = null;
+    shearRef.current = { current: 0, target: 0 };
+    pressureRef.current = { current: 0, target: 0, lastT: performance.now() };
+    seismoBufRef.current.fill(0);
+    seismoHeadRef.current = 0;
+    setActiveStratumId(null);
+    setHoverStratum(null);
+    setReadouts({ magnitude: "0.0", pressure: "0.00", slip: "0" });
+    setEarthMarks([{ label: "quiet core", tone: "#b8ee78", t: performance.now() }]);
+    try { getFieldAudio().bell(); } catch { /* noop */ }
+    try { haptics.roll(); } catch { /* noop */ }
+    useField.getState().recordTape("ripple", 0.24, "earth/quiet-core");
+  }, []);
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -1256,12 +1278,14 @@ export default function Earth() {
     };
   }, [markEarth]);
 
-  const inscription = activeStratumId
-    ? STRATA.find((stratum) => stratum.id === activeStratumId)?.inscription ?? null
+  const activeStratum = activeStratumId
+    ? STRATA.find((stratum) => stratum.id === activeStratumId)
     : null;
+  const inscription = activeStratum?.inscription ?? null;
   const hoverLabel = hoverStratum
     ? STRATA.find((stratum) => stratum.id === hoverStratum)?.name ?? null
     : null;
+  const activeLayerName = activeStratum?.name ?? (activeStratumId ? "strata" : "quiet core");
 
   return (
     <div
@@ -1292,44 +1316,61 @@ export default function Earth() {
         </div>
       )}
 
-      <div className="earth-rail" role="group" aria-label="strata">
-        {STRATA.map((stratum) => (
-          <button
-            key={stratum.id}
-            type="button"
-            onClick={() => activateLayer(stratum.id)}
-            aria-pressed={activeStratumId === stratum.id}
-            aria-label={stratum.inscription}
-          >
-            <i style={{ background: stratum.accent, boxShadow: activeStratumId === stratum.id ? `0 0 16px ${stratum.accent}` : undefined }} />
-            <span>{stratum.name}</span>
-          </button>
-        ))}
-      </div>
+      <div className="earth-gesture" aria-hidden="true">tap a layer · drag a fault · hold to compress</div>
 
-      <div className="earth-memory" data-earth-memory="true" aria-live="polite">
-        {earthMarks.map((mark, index) => (
-          <span key={`${mark.label}-${mark.t}-${index}`}>
-            <i style={{ background: mark.tone, boxShadow: index === 0 ? `0 0 14px ${mark.tone}` : undefined }} />
-            <b>{mark.label}</b>
-          </span>
-        ))}
-      </div>
+      <MobileInstrumentPanel
+        className="earth-mobile-panel"
+        title="strata & history"
+        triggerLabel="tune"
+        summary={`${activeLayerName} · M ${readouts.magnitude}`}
+      >
+        <div className="earth-controls">
+          <div className="earth-rail" role="group" aria-label="strata">
+            {STRATA.map((stratum) => (
+              <button
+                key={stratum.id}
+                type="button"
+                onClick={() => activateLayer(stratum.id)}
+                aria-pressed={activeStratumId === stratum.id}
+                aria-label={stratum.inscription}
+              >
+                <i style={{ background: stratum.accent, boxShadow: activeStratumId === stratum.id ? `0 0 16px ${stratum.accent}` : undefined }} />
+                <span>{stratum.name}</span>
+              </button>
+            ))}
+          </div>
 
-      <div className="earth-readouts" aria-label="geologic readouts">
-        <output>
-          <span>magnitude</span>
-          <strong>{readouts.magnitude}</strong>
-        </output>
-        <output>
-          <span>pressure</span>
-          <strong>{readouts.pressure}</strong>
-        </output>
-        <output>
-          <span>slip</span>
-          <strong>{readouts.slip}</strong>
-        </output>
-      </div>
+          <div className="earth-actions" aria-label="geologic actions">
+            <button type="button" onClick={() => actionRef.current?.compress()}>compress</button>
+            <button type="button" onClick={() => actionRef.current?.quake()}>quake</button>
+            <button type="button" onClick={quietCore}>quiet core</button>
+          </div>
+
+          <div className="earth-memory" data-earth-memory="true" aria-live="polite">
+            {earthMarks.map((mark, index) => (
+              <span key={`${mark.label}-${mark.t}-${index}`}>
+                <i style={{ background: mark.tone, boxShadow: index === 0 ? `0 0 14px ${mark.tone}` : undefined }} />
+                <b>{mark.label}</b>
+              </span>
+            ))}
+          </div>
+
+          <div className="earth-readouts" aria-label="geologic readouts">
+            <output>
+              <span>magnitude</span>
+              <strong>{readouts.magnitude}</strong>
+            </output>
+            <output>
+              <span>pressure</span>
+              <strong>{readouts.pressure}</strong>
+            </output>
+            <output>
+              <span>slip</span>
+              <strong>{readouts.slip}</strong>
+            </output>
+          </div>
+        </div>
+      </MobileInstrumentPanel>
 
       <style
         dangerouslySetInnerHTML={{
@@ -1355,6 +1396,15 @@ export default function Earth() {
               touch-action: none;
               cursor: crosshair;
               z-index: 1;
+            }
+
+            .earth-controls {
+              display: contents;
+            }
+
+            .earth-gesture,
+            .earth-actions {
+              display: none;
             }
 
             .earth-title {
@@ -1687,6 +1737,95 @@ export default function Earth() {
 
               .earth-memory span:nth-child(n+3) {
                 display: none;
+              }
+            }
+
+            @media (max-width: 720px) {
+              .earth-gesture {
+                position: fixed;
+                z-index: 4;
+                right: 16px;
+                bottom: calc(122px + env(safe-area-inset-bottom, 0px));
+                left: 16px;
+                display: block;
+                color: rgba(246, 240, 224, 0.58);
+                font-family: var(--font-mono, ui-monospace, monospace);
+                font-size: 9px;
+                letter-spacing: 0.06em;
+                text-align: center;
+                text-shadow: 0 2px 14px rgba(0, 0, 0, 0.92);
+                text-transform: lowercase;
+                pointer-events: none;
+              }
+
+              .earth-mobile-panel .mobile-instrument-panel__trigger {
+                border-color: rgba(216, 200, 168, 0.42);
+                background: rgba(10, 9, 8, 0.86);
+              }
+
+              .mobile-instrument-panel__content .earth-controls {
+                display: grid;
+                gap: 10px;
+              }
+
+              .mobile-instrument-panel__content .earth-rail {
+                position: relative !important;
+                inset: auto !important;
+                display: grid;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 7px;
+                width: 100%;
+                padding: 0;
+                overflow: visible;
+              }
+
+              .mobile-instrument-panel__content .earth-rail button {
+                min-width: 0;
+                min-height: 44px;
+                padding: 8px 10px;
+              }
+
+              .mobile-instrument-panel__content .earth-actions {
+                display: grid;
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+                gap: 7px;
+              }
+
+              .earth-actions button {
+                min-width: 0;
+                min-height: 44px;
+                border: 1px solid rgba(246, 240, 224, 0.2);
+                border-radius: 7px;
+                padding: 8px;
+                background: rgba(246, 240, 224, 0.06);
+                color: rgba(246, 240, 224, 0.82);
+                font: 9px/1.15 var(--font-mono, ui-monospace, monospace);
+                letter-spacing: 0.05em;
+                text-transform: lowercase;
+              }
+
+              .mobile-instrument-panel__content .earth-memory {
+                position: relative !important;
+                inset: auto !important;
+                display: flex;
+                flex-wrap: wrap;
+                gap: 7px 10px;
+                max-width: none;
+                padding: 9px 10px;
+              }
+
+              .mobile-instrument-panel__content .earth-memory span,
+              .mobile-instrument-panel__content .earth-memory span:nth-child(n+3),
+              .mobile-instrument-panel__content .earth-memory span:nth-child(n+4) {
+                display: inline-flex;
+              }
+
+              .mobile-instrument-panel__content .earth-readouts {
+                position: relative !important;
+                inset: auto !important;
+                display: grid;
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+                gap: 7px;
               }
             }
           `,

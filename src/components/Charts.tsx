@@ -11,6 +11,7 @@ import { useField } from "@/store/field";
 import { getFieldAudio } from "@/lib/audio";
 import type { ConcernKey } from "@/lib/types";
 import * as haptics from "@/lib/haptics";
+import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
 
 /**
  * Charts — /charts route.
@@ -1025,6 +1026,9 @@ export default function Charts() {
             ))
           )}
         </div>
+        <div className="oda-charts-gesture" aria-hidden="true">
+          drag the plots · left edge tunes volatility
+        </div>
         {/* pointer overlay only on the canvas — keeps controls untouched */}
         <div
           onPointerDown={onPointerDown}
@@ -1076,74 +1080,80 @@ export default function Charts() {
         ) : null}
       </div>
 
-      {/* controls */}
-      <div
-        className="oda-charts-controls"
-        style={{
-          display: "flex",
-          flexWrap: "wrap",
-          alignItems: "center",
-          gap: 14,
-          padding: "8px 0",
-        }}
+      {/* Exact controls stay present on desktop and move into an opt-in sheet on phones. */}
+      <MobileInstrumentPanel
+        title="chart tune & history"
+        triggerLabel="tune"
+        summary={`vol ${volatility.toFixed(2)} · rsi ${fmt(lastRsi)}`}
       >
-        <button type="button" onClick={onGenerate} style={ctrlBtn}>
-          generate
-        </button>
-        <button type="button" onClick={onReset} style={ctrlBtn}>
-          reset
-        </button>
-        <button type="button" onClick={onPin} style={{ ...ctrlBtn, ...ctrlBtnAccent }}>
-          pin snapshot
-        </button>
-
-        {/* volatility is a drag on the left gutter of the canvas now; this
-            control stays for keyboard / assistive tech only */}
-        <label className="sr-only">
-          volatility
-          <input
-            type="range"
-            min={0.1}
-            max={3.0}
-            step={0.05}
-            value={volatility}
-            onChange={(e) => setVolatility(parseFloat(e.target.value))}
-            onPointerUp={() => {
-              haptics.tap();
-              recordTape("object", 0.34, `charts:vol:${volatility.toFixed(2)}`);
-              addChartMark(`vol ${volatility.toFixed(2)}`, "amber", 0.46);
-            }}
-            onKeyUp={() => {
-              recordTape("object", 0.28, `charts:vol:${volatility.toFixed(2)}`);
-              addChartMark(`vol ${volatility.toFixed(2)}`, "amber", 0.42);
-            }}
-          />
-        </label>
-
-        <span
-          className="t-mono"
+        <div
+          className="oda-charts-controls"
           style={{
-            fontSize: 11,
-            letterSpacing: "0.08em",
-            textTransform: "lowercase",
-            opacity: 0.55,
-            marginLeft: "auto",
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "center",
+            gap: 14,
+            padding: "8px 0",
           }}
         >
-          vol{" "}
-          <span style={{ ...fraunceNum, opacity: 0.82 }}>{volatility.toFixed(2)}</span>
-          <span style={{ margin: "0 10px", opacity: 0.3 }}>·</span>
-          rsi{" "}
-          <span style={{ ...fraunceNum, color: zoneColor(lastRsi), opacity: 0.95 }}>
-            {fmt(lastRsi)}
-          </span>
-          {pinned ? (
-            <span style={{ marginLeft: 14, opacity: 0.5 }}>
-              pinned · {timeAgo(pinned.pinnedAt)}
+          <button type="button" onClick={onGenerate} style={ctrlBtn}>
+            generate
+          </button>
+          <button type="button" onClick={onReset} style={ctrlBtn}>
+            reset
+          </button>
+          <button type="button" onClick={onPin} style={{ ...ctrlBtn, ...ctrlBtnAccent }}>
+            pin snapshot
+          </button>
+
+          {/* The canvas gutter is primary; this is the precise keyboard fallback. */}
+          <label className="sr-only oda-charts-volatility">
+            <span>volatility</span>
+            <input
+              type="range"
+              min={0.1}
+              max={3.0}
+              step={0.05}
+              value={volatility}
+              onChange={(e) => setVolatility(parseFloat(e.target.value))}
+              onPointerUp={() => {
+                haptics.tap();
+                recordTape("object", 0.34, `charts:vol:${volatility.toFixed(2)}`);
+                addChartMark(`vol ${volatility.toFixed(2)}`, "amber", 0.46);
+              }}
+              onKeyUp={() => {
+                recordTape("object", 0.28, `charts:vol:${volatility.toFixed(2)}`);
+                addChartMark(`vol ${volatility.toFixed(2)}`, "amber", 0.42);
+              }}
+            />
+            <strong>{volatility.toFixed(2)}</strong>
+          </label>
+
+          <span
+            className="t-mono oda-charts-status"
+            style={{
+              fontSize: 11,
+              letterSpacing: "0.08em",
+              textTransform: "lowercase",
+              opacity: 0.55,
+              marginLeft: "auto",
+            }}
+          >
+            vol{" "}
+            <span style={{ ...fraunceNum, opacity: 0.82 }}>{volatility.toFixed(2)}</span>
+            <span style={{ margin: "0 10px", opacity: 0.3 }}>·</span>
+            rsi{" "}
+            <span style={{ ...fraunceNum, color: zoneColor(lastRsi), opacity: 0.95 }}>
+              {fmt(lastRsi)}
             </span>
-          ) : null}
-        </span>
-      </div>
+            {pinned ? (
+              <span style={{ marginLeft: 14, opacity: 0.5 }}>
+                pinned · {timeAgo(pinned.pinnedAt)}
+              </span>
+            ) : null}
+          </span>
+        </div>
+      </MobileInstrumentPanel>
 
       {/* scoped styling — mobile stack */}
       <style
@@ -1184,6 +1194,9 @@ export default function Charts() {
             .oda-charts-mark {
               white-space: nowrap;
             }
+            .oda-charts-gesture {
+              display: none;
+            }
             .oda-charts-mark-rise {
               color: rgba(118,218,158,0.9);
             }
@@ -1198,12 +1211,15 @@ export default function Charts() {
             }
             @media (max-width: 699px) {
               .oda-charts-root {
+                box-sizing: border-box;
+                height: calc(100svh - 56px) !important;
                 min-height: calc(100svh - 56px) !important;
-                padding-bottom: calc(104px + env(safe-area-inset-bottom)) !important;
+                gap: 10px !important;
+                padding: 14px 14px calc(86px + env(safe-area-inset-bottom)) !important;
               }
               .oda-charts-surface {
-                flex: 0 0 auto !important;
-                min-height: clamp(300px, 44svh, 420px) !important;
+                flex: 1 1 auto !important;
+                min-height: 0 !important;
               }
               .oda-charts-mark-strip {
                 top: 10px;
@@ -1212,21 +1228,72 @@ export default function Charts() {
                 max-width: none;
                 justify-content: center;
               }
+              .oda-charts-gesture {
+                position: absolute;
+                z-index: 3;
+                right: 12px;
+                bottom: 12px;
+                left: 12px;
+                display: block;
+                color: rgba(232,226,213,0.48);
+                font-family: var(--font-mono, ui-monospace, monospace);
+                font-size: 9px;
+                letter-spacing: 0.06em;
+                text-align: center;
+                text-transform: lowercase;
+                pointer-events: none;
+              }
               .oda-charts-controls {
-                gap: 10px !important;
+                display: grid !important;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 8px !important;
                 align-items: stretch !important;
-                padding-bottom: 8px !important;
+                padding: 0 !important;
               }
-              .oda-charts-controls > * { flex: 1 1 auto; }
-              .oda-charts-controls > button { flex-basis: calc(50% - 10px); }
-              .oda-charts-controls label { width: 100%; }
-              .oda-charts-controls input[type="range"] {
+              .oda-charts-controls > button {
+                min-height: 46px !important;
+              }
+              .oda-charts-controls > button:nth-child(3) {
+                grid-column: 1 / -1;
+              }
+              .oda-charts-volatility {
+                position: relative !important;
+                grid-column: 1 / -1;
                 width: 100% !important;
+                height: auto !important;
+                display: grid !important;
+                grid-template-columns: auto minmax(0, 1fr) 46px;
+                align-items: center;
+                gap: 10px;
+                margin: 0 !important;
+                overflow: visible !important;
+                clip: auto !important;
+                clip-path: none !important;
+                white-space: normal !important;
+                padding: 12px;
+                border: 1px solid rgba(232,226,213,0.14);
+                border-radius: 8px;
+                color: rgba(232,226,213,0.68);
+                font-family: var(--font-mono, ui-monospace, monospace);
+                font-size: 10px;
+                text-transform: lowercase;
               }
-              .oda-charts-controls > span {
+              .oda-charts-volatility input[type="range"] {
                 width: 100%;
+                min-width: 0;
+                accent-color: rgba(255,180,110,0.9);
+              }
+              .oda-charts-volatility strong {
+                color: rgba(255,190,124,0.92);
+                font-family: var(--font-numerals, var(--font-serif, Georgia, serif));
+                font-size: 15px;
+                font-weight: 500;
+                text-align: right;
+              }
+              .oda-charts-status {
+                grid-column: 1 / -1;
                 margin-left: 0 !important;
-                min-height: 32px;
+                min-height: 28px;
               }
             }
           `,

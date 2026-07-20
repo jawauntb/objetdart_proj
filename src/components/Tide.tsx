@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import { useField } from "@/store/field";
 import * as haptics from "@/lib/haptics";
+import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
 
 /**
  * /tide — the lunar gravity-phase instrument.
@@ -218,6 +219,12 @@ export default function Tide() {
       dragRef.current = { active: false, id: -1, target: null, moved: false, downX: 0, downY: 0 };
       try { cv.releasePointerCapture?.(e.pointerId); } catch { /* noop */ }
       if (!wasActive || !wasTap) return;
+      const g = geomRef.current;
+      if (Math.hypot(e.clientX - g.earth.x, e.clientY - g.earth.y) <= g.earth.r * 1.35) {
+        toggleAuto();
+        addRipple(e.clientX, e.clientY, Math.max(70, g.earth.r * 2.4), "gold");
+        return;
+      }
       // a tap on the open sea — a soft chime and a pale ring.
       try { audio.chime(); } catch { /* noop */ }
       try { haptics.ripple(0.3); } catch { /* noop */ }
@@ -637,7 +644,7 @@ export default function Tide() {
       window.removeEventListener("pointerleave", onLeave);
       window.removeEventListener("blur", onLeave);
     };
-  }, [addRipple]);
+  }, [addRipple, toggleAuto]);
 
   return (
     <div
@@ -658,17 +665,30 @@ export default function Tide() {
         <strong>Tide</strong>
       </div>
 
-      <div className="tide-rail" aria-label="tide controls">
-        <button type="button" className="tide-btn" aria-pressed={auto} onClick={toggleAuto}>
-          {auto ? "pause orbit" : "let it orbit"}
-        </button>
-        <button type="button" className="tide-btn" onClick={() => setSunOffset(0, "spring")}>
-          align sun · spring
-        </button>
-        <button type="button" className="tide-btn" onClick={() => setSunOffset(Math.PI / 2, "neap")}>
-          quarter sun · neap
-        </button>
-      </div>
+      <button type="button" className="tide-orbit-primary" aria-pressed={auto} onClick={toggleAuto}>
+        {auto ? "pause" : "orbit"}
+      </button>
+
+      <span className="tide-play-hint" aria-hidden="true">drag moon &amp; sun · tap earth</span>
+
+      <MobileInstrumentPanel
+        className="tide-mobile-panel"
+        title="orbit & alignment"
+        triggerLabel="tune"
+        summary={readout}
+      >
+        <div className="tide-rail" aria-label="tide controls">
+          <button type="button" className="tide-btn tide-orbit-secondary" aria-pressed={auto} onClick={toggleAuto}>
+            {auto ? "pause orbit" : "let it orbit"}
+          </button>
+          <button type="button" className="tide-btn" onClick={() => setSunOffset(0, "spring")}>
+            align sun · spring
+          </button>
+          <button type="button" className="tide-btn" onClick={() => setSunOffset(Math.PI / 2, "neap")}>
+            quarter sun · neap
+          </button>
+        </div>
+      </MobileInstrumentPanel>
 
       <output className="tide-readout" aria-live="polite">{readout}</output>
 
@@ -799,6 +819,9 @@ export default function Tide() {
           background: rgba(200, 115, 42, 0.14);
         }
 
+        .tide-orbit-primary,
+        .tide-play-hint { display: none; }
+
         .tide-readout {
           position: fixed;
           z-index: 4;
@@ -867,9 +890,74 @@ export default function Tide() {
           .tide-rail { top: auto; left: 12px; right: 12px; bottom: calc(74px + env(safe-area-inset-bottom, 0px)); width: auto; grid-template-columns: repeat(3, minmax(0, 1fr)); }
           .tide-btn { text-align: center; font-size: 10px; padding: 8px 6px; }
         }
+        @media (max-width: 720px) {
+          .tide-readout { display: none; }
+          .tide-orbit-primary {
+            position: fixed;
+            z-index: 5;
+            right: 14px;
+            bottom: calc(68px + env(safe-area-inset-bottom, 0px));
+            min-width: 72px;
+            min-height: 42px;
+            display: inline-grid;
+            place-items: center;
+            border: 1px solid rgba(200, 150, 90, 0.42);
+            border-radius: 999px;
+            padding: 0 14px;
+            background: rgba(12, 20, 34, 0.84);
+            color: rgba(242, 238, 230, 0.9);
+            box-shadow: 0 12px 34px rgba(0, 0, 0, 0.24);
+            backdrop-filter: blur(14px);
+            -webkit-backdrop-filter: blur(14px);
+            font: 10px/1 var(--font-mono);
+            letter-spacing: 0.08em;
+            text-transform: lowercase;
+            cursor: pointer;
+          }
+          .tide-orbit-primary[aria-pressed="true"] {
+            border-color: rgba(200, 115, 42, 0.7);
+            background: rgba(200, 115, 42, 0.18);
+            color: rgba(255, 214, 150, 0.96);
+          }
+          .tide-play-hint {
+            position: fixed;
+            z-index: 2;
+            left: 50%;
+            bottom: calc(122px + env(safe-area-inset-bottom, 0px));
+            display: block;
+            transform: translateX(-50%);
+            color: rgba(242, 238, 230, 0.6);
+            font: 10px/1 var(--font-mono);
+            letter-spacing: 0.06em;
+            white-space: nowrap;
+            text-shadow: 0 2px 12px rgba(0, 0, 0, 0.82);
+            pointer-events: none;
+          }
+          .tide-mobile-panel .mobile-instrument-panel__trigger {
+            max-width: calc(100vw - 112px);
+            border-color: rgba(200, 150, 90, 0.38);
+            background: rgba(12, 20, 34, 0.86);
+          }
+          .tide-mobile-panel .mobile-instrument-panel__sheet {
+            background: rgba(9, 16, 28, 0.98);
+            border-color: rgba(200, 150, 90, 0.24);
+          }
+          .tide-mobile-panel .tide-rail {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+          }
+          .tide-mobile-panel .tide-orbit-secondary { display: none; }
+          .tide-mobile-panel .tide-btn {
+            min-height: 58px;
+            padding: 10px;
+            text-align: center;
+          }
+          .tide-inscription-wrap { bottom: 158px !important; }
+        }
         @media (max-width: 520px) {
           .tide-title strong { font-size: 62px; }
-          .tide-rail { grid-template-columns: 1fr; }
+          .tide-mobile-panel .tide-rail { grid-template-columns: 1fr; }
         }
       `,
         }}

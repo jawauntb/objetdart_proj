@@ -11,6 +11,7 @@ import {
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { useField } from "@/store/field";
+import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
 
 // ─────────────────────────────────────────────────────────────────────────
 // Objet d'Art · /drop — a living bead of RAINWATER.
@@ -1543,6 +1544,7 @@ export default function DropSphere() {
       </div>
 
       <div className="drop-hud">
+        <span className="drop-play-hint" aria-hidden="true">tap · drag · pinch</span>
         <output className="drop-readout" aria-live="polite">{readout}</output>
         {motionUI === "prompt" && (
           <button
@@ -1561,25 +1563,32 @@ export default function DropSphere() {
             <span>tilt &amp; shake live</span>
           </div>
         )}
-        <div className="drop-console" aria-label="droplet controls">
-          <label className="drop-pill drop-dive-pill">
-            <span>zoom</span>
-            <input
-              type="range" min={0} max={1} step={0.001} value={dive}
-              aria-label="dive into the droplet to reveal the life inside"
-              onChange={(e) => onDive(Number(e.target.value))}
-            />
-          </label>
-          <button
-            type="button"
-            className="drop-pill drop-split"
-            aria-label="split the droplet in two"
-            onClick={onSplit}
-            disabled={dropCount() >= MAX_DROPS}
-          >
-            <span>split</span>
-          </button>
-        </div>
+        <MobileInstrumentPanel
+          className="drop-mobile-panel"
+          title="depth & water"
+          triggerLabel="tune"
+          summary={readout}
+        >
+          <div className="drop-console" aria-label="droplet controls">
+            <label className="drop-pill drop-dive-pill">
+              <span>zoom</span>
+              <input
+                type="range" min={0} max={1} step={0.001} value={dive}
+                aria-label="dive into the droplet to reveal the life inside"
+                onChange={(e) => onDive(Number(e.target.value))}
+              />
+            </label>
+            <button
+              type="button"
+              className="drop-pill drop-split"
+              aria-label="split the droplet in two"
+              onClick={onSplit}
+              disabled={dropCount() >= MAX_DROPS}
+            >
+              <span>split</span>
+            </button>
+          </div>
+        </MobileInstrumentPanel>
       </div>
 
       <style
@@ -1660,8 +1669,8 @@ export default function DropSphere() {
         .drop-hud {
           position: fixed;
           z-index: 4;
-          left: 50%;
-          transform: translateX(-50%);
+          right: 0;
+          left: 0;
           bottom: calc(22px + env(safe-area-inset-bottom, 0px));
           display: flex;
           flex-direction: column;
@@ -1683,6 +1692,8 @@ export default function DropSphere() {
           -webkit-backdrop-filter: blur(14px);
           pointer-events: none;
         }
+
+        .drop-play-hint { display: none; }
 
         .drop-motion-chip {
           display: inline-flex;
@@ -1810,9 +1821,61 @@ export default function DropSphere() {
           .drop-pill input { width: 40vw; max-width: 170px; }
         }
 
+        @media (max-width: 720px) {
+          .drop-hud {
+            bottom: calc(122px + env(safe-area-inset-bottom, 0px));
+            gap: 8px;
+          }
+          .drop-play-hint {
+            display: block;
+            color: rgba(212, 240, 250, 0.66);
+            font-family: var(--font-mono);
+            font-size: 10px;
+            letter-spacing: 0.08em;
+            text-transform: lowercase;
+            text-shadow: 0 2px 12px rgba(0, 0, 0, 0.8);
+            pointer-events: none;
+          }
+          .drop-readout { display: none; }
+          .drop-mobile-panel .mobile-instrument-panel__trigger {
+            border-color: rgba(150, 220, 245, 0.34);
+            background: rgba(4, 20, 30, 0.86);
+            color: rgba(224, 248, 255, 0.94);
+            pointer-events: auto;
+          }
+          .drop-mobile-panel .mobile-instrument-panel__sheet {
+            background: rgba(3, 17, 26, 0.98);
+            border-color: rgba(150, 220, 245, 0.22);
+          }
+          .drop-mobile-panel .drop-console {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 10px;
+            padding: 0;
+            border: 0;
+            border-radius: 0;
+            background: transparent;
+            box-shadow: none;
+            backdrop-filter: none;
+            -webkit-backdrop-filter: none;
+          }
+          .drop-mobile-panel .drop-pill {
+            min-width: 0;
+            min-height: 56px;
+            border: 1px solid rgba(150, 220, 245, 0.16);
+            border-radius: 10px;
+            padding: 0 14px;
+            background: rgba(180, 235, 250, 0.06);
+          }
+          .drop-mobile-panel .drop-pill input {
+            width: 100%;
+            max-width: none;
+          }
+        }
+
         @media (max-width: 520px) {
           .drop-title strong { font-size: 56px; }
-          .drop-console { flex-wrap: wrap; justify-content: center; }
+          .drop-mobile-panel .drop-console { grid-template-columns: 1fr; }
         }
       `,
         }}

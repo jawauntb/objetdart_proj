@@ -12,6 +12,7 @@ import {
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { useField } from "@/store/field";
+import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
 
 /**
  * /pulse - embodied rhythm instrument.
@@ -721,102 +722,113 @@ export default function Pulse() {
         <i style={{ width: `${Math.max(8, meter.tension)}%` }} />
       </div>
 
-      <div className="pulse-console" aria-label="pulse controls">
-        <div className="pulse-sliders">
-          <PulseSlider
-            label="rate"
-            min={40}
-            max={180}
-            step={1}
-            value={hr}
-            tone={CHANNEL_META.hr.tone}
-            display={`${hr}`}
-            onChange={(value) => {
-              setHr(value);
-              touchImpulseRef.current = clamp(touchImpulseRef.current + 0.12, 0, 1.2);
-            }}
-          />
-          <PulseSlider
-            label="breath"
-            min={6}
-            max={30}
-            step={1}
-            value={breathRate}
-            tone={CHANNEL_META.breath.tone}
-            display={`${breathRate}`}
-            onChange={(value) => {
-              setBreathRate(value);
-              touchImpulseRef.current = clamp(touchImpulseRef.current + 0.10, 0, 1.2);
-            }}
-          />
-          <PulseSlider
-            label="tension"
-            min={0}
-            max={1}
-            step={0.01}
-            value={stress}
-            tone="#ff8b5d"
-            display={`${Math.round(stress * 100)}`}
-            onChange={(value) => {
-              setStress(value);
-              touchImpulseRef.current = clamp(touchImpulseRef.current + 0.16, 0, 1.4);
-            }}
-          />
-        </div>
-
-        <div className="pulse-actions">
-          <label className="pulse-select-wrap">
-            <span>pattern</span>
-            <select
-              value={pattern.kind}
-              onChange={(event) => {
-                const next = event.target.value;
-                if (isPatternKind(next)) onPatternKind(next);
-              }}
-              aria-label="pattern"
-            >
-              {PATTERN_KINDS.map((kind) => (
-                <option key={kind} value={kind}>{kind}</option>
-              ))}
-            </select>
-          </label>
-          <button type="button" onClick={onGenerate}>cast</button>
-          <input
-            type="text"
-            value={patternName}
-            maxLength={32}
-            placeholder="name"
-            aria-label="pattern name"
-            onChange={(event) => setPatternName(event.target.value)}
-          />
-          <button type="button" onClick={onSavePattern}>keep</button>
-          <button type="button" onClick={onShare}>{shareMsg ?? "share"}</button>
-          <button
-            type="button"
-            className="pulse-shock"
-            onClick={onDefibrillate}
-            disabled={defibActive}
-          >
-            {defibActive ? "clear" : "shock"}
-          </button>
-        </div>
-
-        {saved.length > 0 && (
-          <div className="pulse-saved" aria-label="saved pulse patterns">
-            {saved.slice(0, 8).map((entry) => (
-              <button
-                type="button"
-                key={`${entry.name}-${entry.seed}`}
-                onClick={() => onLoadPattern(entry)}
-                style={{ "--pulse-tone": PATTERN_COLORS[entry.kind] } as CSSProperties}
-              >
-                <span>{entry.kind}</span>
-                {entry.name}
-              </button>
-            ))}
-          </div>
-        )}
+      <div className="pulse-gesture-hint" aria-hidden="true">
+        tap the heart · drag to conduct
       </div>
+
+      <MobileInstrumentPanel
+        className="pulse-mobile-panel"
+        title="pulse · tune & keep"
+        triggerLabel="tune"
+        summary={`${hr} bpm · ${pattern.kind}`}
+      >
+        <div className="pulse-console" aria-label="pulse controls">
+          <div className="pulse-sliders">
+            <PulseSlider
+              label="rate"
+              min={40}
+              max={180}
+              step={1}
+              value={hr}
+              tone={CHANNEL_META.hr.tone}
+              display={`${hr}`}
+              onChange={(value) => {
+                setHr(value);
+                touchImpulseRef.current = clamp(touchImpulseRef.current + 0.12, 0, 1.2);
+              }}
+            />
+            <PulseSlider
+              label="breath"
+              min={6}
+              max={30}
+              step={1}
+              value={breathRate}
+              tone={CHANNEL_META.breath.tone}
+              display={`${breathRate}`}
+              onChange={(value) => {
+                setBreathRate(value);
+                touchImpulseRef.current = clamp(touchImpulseRef.current + 0.10, 0, 1.2);
+              }}
+            />
+            <PulseSlider
+              label="tension"
+              min={0}
+              max={1}
+              step={0.01}
+              value={stress}
+              tone="#ff8b5d"
+              display={`${Math.round(stress * 100)}`}
+              onChange={(value) => {
+                setStress(value);
+                touchImpulseRef.current = clamp(touchImpulseRef.current + 0.16, 0, 1.4);
+              }}
+            />
+          </div>
+
+          <div className="pulse-actions">
+            <label className="pulse-select-wrap">
+              <span>pattern</span>
+              <select
+                value={pattern.kind}
+                onChange={(event) => {
+                  const next = event.target.value;
+                  if (isPatternKind(next)) onPatternKind(next);
+                }}
+                aria-label="pattern"
+              >
+                {PATTERN_KINDS.map((kind) => (
+                  <option key={kind} value={kind}>{kind}</option>
+                ))}
+              </select>
+            </label>
+            <button type="button" onClick={onGenerate}>cast</button>
+            <input
+              type="text"
+              value={patternName}
+              maxLength={32}
+              placeholder="name"
+              aria-label="pattern name"
+              onChange={(event) => setPatternName(event.target.value)}
+            />
+            <button type="button" onClick={onSavePattern}>keep</button>
+            <button type="button" onClick={onShare}>{shareMsg ?? "share"}</button>
+            <button
+              type="button"
+              className="pulse-shock"
+              onClick={onDefibrillate}
+              disabled={defibActive}
+            >
+              {defibActive ? "clear" : "shock"}
+            </button>
+          </div>
+
+          {saved.length > 0 && (
+            <div className="pulse-saved" aria-label="saved pulse patterns">
+              {saved.slice(0, 8).map((entry) => (
+                <button
+                  type="button"
+                  key={`${entry.name}-${entry.seed}`}
+                  onClick={() => onLoadPattern(entry)}
+                  style={{ "--pulse-tone": PATTERN_COLORS[entry.kind] } as CSSProperties}
+                >
+                  <span>{entry.kind}</span>
+                  {entry.name}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </MobileInstrumentPanel>
 
       <style
         dangerouslySetInnerHTML={{
@@ -963,6 +975,10 @@ export default function Pulse() {
           border-radius: 999px;
           background: linear-gradient(90deg, #58d9c8, #f2bf62, #ff5d73);
           box-shadow: 0 0 16px rgba(255, 93, 115, 0.35);
+        }
+
+        .pulse-gesture-hint {
+          display: none;
         }
 
         .pulse-console {
@@ -1213,36 +1229,54 @@ export default function Pulse() {
             left: 12px;
             right: 12px;
             top: 70px;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 7px;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 5px;
           }
 
           .pulse-channel-stop {
-            min-height: 48px;
-            padding: 7px 9px;
+            min-height: 44px;
+            grid-template-columns: 1fr;
+            grid-template-rows: auto auto;
+            gap: 3px;
+            padding: 6px 7px;
           }
 
           .pulse-channel-stop strong {
-            font-size: clamp(16px, 5.8vw, 22px);
+            font-size: clamp(13px, 4.1vw, 18px);
           }
 
           .pulse-channel-stop em {
-            font-size: 8px;
+            display: none;
           }
 
           .pulse-state {
-            top: 184px;
+            top: 126px;
             left: 14px;
           }
 
+          .pulse-gesture-hint {
+            position: fixed;
+            z-index: 2;
+            left: 50%;
+            bottom: calc(122px + env(safe-area-inset-bottom, 0px));
+            display: block;
+            max-width: calc(100vw - 36px);
+            transform: translateX(-50%);
+            color: rgba(250, 238, 220, 0.48);
+            font-family: var(--font-mono);
+            font-size: 9px;
+            letter-spacing: 0.08em;
+            text-align: center;
+            text-transform: lowercase;
+            white-space: nowrap;
+            pointer-events: none;
+          }
+
           .pulse-console {
-            left: 10px;
-            right: 10px;
-            bottom: calc(12px + env(safe-area-inset-bottom, 0px));
-            max-height: min(47svh, 410px);
-            overflow-y: auto;
             padding: 7px;
             gap: 7px;
+            background: rgba(10, 6, 7, 0.34);
+            box-shadow: none;
           }
 
           .pulse-sliders {
@@ -1285,10 +1319,6 @@ export default function Pulse() {
         }
 
         @media (max-width: 420px) {
-          .pulse-console {
-            max-height: min(50svh, 440px);
-          }
-
           .pulse-sliders {
             grid-template-columns: 1fr;
           }
@@ -1297,9 +1327,7 @@ export default function Pulse() {
             grid-template-columns: repeat(2, minmax(0, 1fr));
           }
 
-          .pulse-state {
-            display: none;
-          }
+          .pulse-state { top: 124px; }
         }
 
         @media (prefers-reduced-motion: reduce) {

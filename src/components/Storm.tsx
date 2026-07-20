@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { useField } from "@/store/field";
+import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
 
 /**
  * /storm — a PRESSURE + ELECTRICITY instrument.
@@ -1220,6 +1221,14 @@ export default function Storm() {
   // ── barometer dial handlers ──────────────────────────────────────
   const baroRef = useRef<HTMLDivElement>(null);
 
+  const normalizePressure = (value: number) => {
+    const clamped = Math.max(0, Math.min(1, value));
+    const reduce =
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    return reduce ? Math.max(clamped, 0.72) : clamped;
+  };
+
   const setPressureFromPointer = (clientX: number, clientY: number) => {
     const el = baroRef.current;
     if (!el) return;
@@ -1230,11 +1239,7 @@ export default function Storm() {
     let deg = (ang * 180) / Math.PI + 90; // up = 0, right = +90, left = -90
     if (deg > 180) deg -= 360;
     deg = Math.max(-120, Math.min(120, deg));
-    let v = (deg + 120) / 240;
-    const reduce =
-      typeof window !== "undefined" &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (reduce) v = Math.max(v, 0.72);
+    const v = normalizePressure((deg + 120) / 240);
     pressureRef.current = v;
     setPressureDisplay(v);
     playDialTone(90 + v * 260);
@@ -1321,6 +1326,16 @@ export default function Storm() {
     useField.getState().recordTape("ripple", 0.3, "storm/clear");
   };
 
+  const setPressureExact = (value: number, label = "exact") => {
+    const next = normalizePressure(value);
+    pressureRef.current = next;
+    stormTargetRef.current = 1 - next;
+    calmRef.current = 0;
+    setPressureDisplay(next);
+    playDialTone(90 + next * 260);
+    useField.getState().recordTape("concern", 0.35 + (1 - next) * 0.5, `storm/${label}`);
+  };
+
   const hPa = Math.round(960 + pressureDisplay * 80);
   const chargePct = Math.round(chargeDisplay * 100);
   const armed = chargeDisplay >= 0.85;
@@ -1382,6 +1397,8 @@ export default function Storm() {
         <strong>Storm</strong>
       </div>
 
+      <div className="storm-gesture" aria-hidden="true">swipe sky to charge · sculpt the sea · turn pressure</div>
+
       {/* ── wind rose (top right) ────────────────────────────────── */}
       <div
         className="storm-wind-rose"
@@ -1415,20 +1432,6 @@ export default function Storm() {
           </g>
         </svg>
       </div>
-
-      {/* ── static charge meter (right) — tap to release ─────────── */}
-      <button
-        type="button"
-        className={`storm-charge${armed ? " is-armed" : ""}`}
-        onClick={releaseCharge}
-        aria-label={`static charge ${chargePct} percent, tap to discharge`}
-      >
-        <span className="storm-charge-track">
-          <span className="storm-charge-fill" style={{ height: `${chargePct}%` }} />
-          <span className="storm-charge-thresh" />
-        </span>
-        <span className="storm-charge-label">{armed ? "release" : "charge"}</span>
-      </button>
 
       {/* ── barometer + actions (bottom center) ──────────────────── */}
       <div className="storm-baro-panel">
@@ -1493,14 +1496,54 @@ export default function Storm() {
           </svg>
         </div>
 
-        <div className="storm-actions">
-          <button type="button" onClick={toggleMaelstrom} aria-pressed={maelstromOn} className={maelstromOn ? "is-on" : ""}>
-            eye
+        <MobileInstrumentPanel
+          className="storm-mobile-panel"
+          title="pressure & weather"
+          triggerLabel="tune"
+          summary={`${hPa} hPa · ${chargePct}% charge`}
+        >
+          <button
+            type="button"
+            className={`storm-charge${armed ? " is-armed" : ""}`}
+            onClick={releaseCharge}
+            aria-label={`static charge ${chargePct} percent, tap to discharge`}
+          >
+            <span className="storm-charge-track">
+              <span className="storm-charge-fill" style={{ height: `${chargePct}%` }} />
+              <span className="storm-charge-thresh" />
+            </span>
+            <span className="storm-charge-label">{armed ? "release" : "charge"}</span>
           </button>
-          <button type="button" onClick={clearSky}>
-            clear sky
-          </button>
-        </div>
+
+          <div className="storm-tune-controls">
+            <label>
+              <span>exact pressure</span>
+              <strong>{hPa} hPa</strong>
+              <input
+                type="range"
+                min={960}
+                max={1040}
+                step={1}
+                value={hPa}
+                onChange={(event) => setPressureExact((Number(event.target.value) - 960) / 80)}
+              />
+            </label>
+            <div role="group" aria-label="weather presets">
+              <button type="button" onClick={clearSky}>fair</button>
+              <button type="button" onClick={() => setPressureExact(0.62, "gathering")}>gathering</button>
+              <button type="button" onClick={() => setPressureExact(0.12, "tempest")}>tempest</button>
+            </div>
+          </div>
+
+          <div className="storm-actions">
+            <button type="button" onClick={toggleMaelstrom} aria-pressed={maelstromOn} className={maelstromOn ? "is-on" : ""}>
+              eye
+            </button>
+            <button type="button" onClick={clearSky}>
+              clear sky
+            </button>
+          </div>
+        </MobileInstrumentPanel>
       </div>
 
       <style
@@ -1532,6 +1575,11 @@ export default function Storm() {
               font-size: clamp(56px, 8vw, 112px);
               line-height: 0.9;
               letter-spacing: -0.02em;
+            }
+
+            .storm-gesture,
+            .storm-tune-controls {
+              display: none;
             }
 
             .storm-wind-rose {
@@ -1623,9 +1671,11 @@ export default function Storm() {
             .storm-baro-panel {
               position: fixed;
               z-index: 4;
-              left: 50%;
+              right: 0;
+              left: 0;
               bottom: 48px;
-              transform: translateX(-50%);
+              width: max-content;
+              margin-inline: auto;
               display: flex;
               flex-direction: column;
               align-items: center;
@@ -1698,26 +1748,121 @@ export default function Storm() {
                 height: 64px !important;
               }
               .storm-wind-rose svg { width: 64px !important; height: 64px !important; }
-              .storm-charge {
-                right: 14px !important;
-                width: 40px !important;
-                padding: 10px 6px !important;
-              }
-              .storm-charge-track { height: 150px !important; }
               .storm-baro-panel {
-                bottom: calc(44px + env(safe-area-inset-bottom, 0px)) !important;
+                bottom: calc(116px + env(safe-area-inset-bottom, 0px)) !important;
                 gap: 8px !important;
               }
-              .storm-readout { gap: 16px !important; font-size: 12px !important; }
-              .storm-baro { width: 156px !important; height: 156px !important; }
-              .storm-baro svg { width: 156px !important; height: 156px !important; }
-              .storm-actions button { padding: 9px 12px !important; font-size: 11px !important; }
+              .storm-baro { width: 112px !important; height: 112px !important; }
+              .storm-baro svg { width: 112px !important; height: 112px !important; }
+              .storm-baro-panel > .storm-readout { display: none; }
+
+              .storm-gesture {
+                position: fixed;
+                z-index: 3;
+                right: 16px;
+                bottom: calc(236px + env(safe-area-inset-bottom, 0px));
+                left: 16px;
+                display: block;
+                color: rgba(244, 248, 255, 0.62);
+                font-family: var(--font-text);
+                font-size: 9px;
+                letter-spacing: 0.05em;
+                text-align: center;
+                text-shadow: 0 2px 14px rgba(4, 12, 24, 0.94);
+                text-transform: lowercase;
+                pointer-events: none;
+              }
+
+              .storm-mobile-panel .mobile-instrument-panel__trigger {
+                border-color: rgba(190, 210, 255, 0.42);
+                background: rgba(14, 30, 52, 0.88);
+              }
+
+              .mobile-instrument-panel__content .storm-charge {
+                display: grid;
+                grid-template-columns: 32px minmax(0, 1fr);
+                align-items: center;
+                justify-items: center;
+                gap: 10px;
+                min-height: 92px;
+                padding: 10px;
+              }
+
+              .mobile-instrument-panel__content .storm-charge-track {
+                height: 68px !important;
+              }
+
+              .mobile-instrument-panel__content .storm-tune-controls {
+                display: grid;
+                gap: 9px;
+                margin-top: 9px !important;
+              }
+
+              .storm-tune-controls label {
+                display: grid;
+                grid-template-columns: minmax(0, 1fr) auto;
+                align-items: center;
+                gap: 8px 12px;
+                padding: 10px 12px;
+                border: 1px solid rgba(244, 248, 255, 0.14);
+                border-radius: 8px;
+                color: rgba(244, 248, 255, 0.62);
+                font-family: var(--font-text);
+                font-size: 10px;
+                text-transform: lowercase;
+              }
+
+              .storm-tune-controls label strong {
+                color: rgba(244, 248, 255, 0.94);
+                font-family: var(--font-numerals);
+                font-size: 14px;
+                font-weight: 400;
+              }
+
+              .storm-tune-controls input {
+                grid-column: 1 / -1;
+                width: 100%;
+                accent-color: rgba(190, 210, 255, 0.92);
+              }
+
+              .storm-tune-controls > div,
+              .mobile-instrument-panel__content .storm-actions {
+                display: grid;
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+                gap: 8px;
+              }
+
+              .storm-tune-controls button,
+              .mobile-instrument-panel__content .storm-actions button {
+                min-width: 0;
+                min-height: 44px;
+                padding: 9px 8px !important;
+                border: 1px solid rgba(244,248,255,0.34);
+                border-radius: 7px;
+                background: transparent;
+                color: rgba(244,248,255,0.82);
+                font-family: var(--font-text);
+                font-size: 10px !important;
+                letter-spacing: 0.05em;
+                text-transform: lowercase;
+              }
+
+              .mobile-instrument-panel__content .storm-actions {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                margin-top: 9px !important;
+              }
+
+              .mobile-instrument-panel__content .storm-actions button.is-on {
+                background: rgba(244,248,255,0.92);
+                color: rgba(14,37,64,1);
+              }
             }
             @media (max-width: 700px) and (max-height: 740px) {
               .storm-title strong { font-size: 50px !important; }
-              .storm-baro { width: 138px !important; height: 138px !important; }
-              .storm-baro svg { width: 138px !important; height: 138px !important; }
-              .storm-charge-track { height: 120px !important; }
+              .storm-baro-panel { bottom: calc(106px + env(safe-area-inset-bottom, 0px)) !important; }
+              .storm-baro { width: 96px !important; height: 96px !important; }
+              .storm-baro svg { width: 96px !important; height: 96px !important; }
+              .storm-gesture { bottom: calc(210px + env(safe-area-inset-bottom, 0px)); }
             }
           `,
         }}

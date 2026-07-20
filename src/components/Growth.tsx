@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { useField } from "@/store/field";
+import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
 
 type GrowthMode = "sigmoid" | "exponential" | "decay" | "cycle";
 
@@ -1041,53 +1042,63 @@ export default function Growth() {
         <h1>Growth</h1>
       </div>
 
-      <div className="growth-modes" role="group" aria-label="growth model">
-        {MODES.map((entry) => (
-          <button
-            key={entry.id}
-            type="button"
-            aria-pressed={mode === entry.id}
-            aria-label={entry.label}
-            onClick={() => chooseMode(entry.id)}
-            style={{ ["--growth-tone" as string]: entry.tone }}
-          >
-            <i aria-hidden="true">{entry.short}</i>
-            <span>{entry.label}</span>
-          </button>
-        ))}
+      <div className="growth-gesture" aria-hidden="true">
+        tap to seed · drag to bend · hold to force
       </div>
 
-      <div className="growth-readouts" aria-label="growth state">
-        <output>
-          <span>model</span>
-          <strong>{readout.model}</strong>
-        </output>
-        <output>
-          <span>phase</span>
-          <strong>{readout.phase}</strong>
-        </output>
-        <output>
-          <span>curve</span>
-          <strong>{readout.value}</strong>
-        </output>
-        <output>
-          <span>field</span>
-          <strong>{readout.gravity}</strong>
-        </output>
-        <output>
-          <span>force</span>
-          <strong>{readout.force}</strong>
-        </output>
-      </div>
+      <MobileInstrumentPanel
+        title="growth model & memory"
+        triggerLabel="tune"
+        summary={`${readout.model} · ${readout.phase}`}
+      >
+        <div className="growth-modes" role="group" aria-label="growth model">
+          {MODES.map((entry) => (
+            <button
+              key={entry.id}
+              type="button"
+              aria-pressed={mode === entry.id}
+              aria-label={entry.label}
+              onClick={() => chooseMode(entry.id)}
+              style={{ ["--growth-tone" as string]: entry.tone }}
+            >
+              <i aria-hidden="true">{entry.short}</i>
+              <span>{entry.label}</span>
+            </button>
+          ))}
+        </div>
 
-      <div className="growth-memory" aria-live="polite">
-        {marks.map((mark, index) => (
-          <span key={mark.id} style={{ ["--growth-mark-tone" as string]: mark.tone, opacity: index === 0 ? 1 : 0.42 + mark.level * 0.24 }}>
-            <i aria-hidden="true" />
-            <b>{mark.label}</b>
-          </span>
-        ))}
-      </div>
+        <div className="growth-readouts" aria-label="growth state">
+          <output>
+            <span>model</span>
+            <strong>{readout.model}</strong>
+          </output>
+          <output>
+            <span>phase</span>
+            <strong>{readout.phase}</strong>
+          </output>
+          <output>
+            <span>curve</span>
+            <strong>{readout.value}</strong>
+          </output>
+          <output>
+            <span>field</span>
+            <strong>{readout.gravity}</strong>
+          </output>
+          <output>
+            <span>force</span>
+            <strong>{readout.force}</strong>
+          </output>
+        </div>
+
+        <div className="growth-memory" aria-live="polite">
+          {marks.map((mark, index) => (
+            <span key={mark.id} style={{ ["--growth-mark-tone" as string]: mark.tone, opacity: index === 0 ? 1 : 0.42 + mark.level * 0.24 }}>
+              <i aria-hidden="true" />
+              <b>{mark.label}</b>
+            </span>
+          ))}
+        </div>
+      </MobileInstrumentPanel>
 
       <style
         dangerouslySetInnerHTML={{
@@ -1142,6 +1153,10 @@ export default function Growth() {
               font-weight: 520;
               letter-spacing: 0;
               color: rgba(242, 255, 219, 0.98);
+            }
+
+            .growth-gesture {
+              display: none;
             }
 
             .growth-modes {
@@ -1401,6 +1416,76 @@ export default function Growth() {
 
               .growth-memory span:nth-child(n+4) {
                 display: none;
+              }
+            }
+
+            @media (max-width: 720px) {
+              .growth-gesture {
+                position: fixed;
+                z-index: 4;
+                right: 16px;
+                bottom: calc(122px + env(safe-area-inset-bottom, 0px));
+                left: 16px;
+                display: block;
+                color: rgba(232, 255, 204, 0.48);
+                font-family: var(--font-mono, ui-monospace, monospace);
+                font-size: 9px;
+                letter-spacing: 0.06em;
+                text-align: center;
+                text-transform: lowercase;
+                pointer-events: none;
+                text-shadow: 0 2px 14px rgba(0, 0, 0, 0.9);
+              }
+
+              .mobile-instrument-panel__content .growth-modes {
+                display: grid;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 8px;
+              }
+
+              .mobile-instrument-panel__content .growth-modes button {
+                grid-template-columns: 28px minmax(0, 1fr);
+                justify-items: stretch;
+                min-height: 48px;
+                padding: 8px 10px;
+                text-align: left;
+              }
+
+              .mobile-instrument-panel__content .growth-readouts {
+                display: grid;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 8px;
+                margin-top: 10px !important;
+              }
+
+              .mobile-instrument-panel__content .growth-readouts output,
+              .mobile-instrument-panel__content .growth-readouts output:nth-child(4),
+              .mobile-instrument-panel__content .growth-readouts output:nth-child(5) {
+                display: grid;
+                min-width: 0;
+                padding: 9px;
+              }
+
+              .mobile-instrument-panel__content .growth-readouts output:last-child {
+                grid-column: 1 / -1;
+              }
+
+              .mobile-instrument-panel__content .growth-readouts strong {
+                font-size: 17px;
+              }
+
+              .mobile-instrument-panel__content .growth-memory {
+                display: flex;
+                flex-wrap: wrap;
+                justify-content: flex-start;
+                gap: 8px 12px;
+                margin-top: 10px !important;
+              }
+
+              .mobile-instrument-panel__content .growth-memory span,
+              .mobile-instrument-panel__content .growth-memory span:nth-child(n+4),
+              .mobile-instrument-panel__content .growth-memory span:nth-child(n+5) {
+                display: inline-flex;
               }
             }
 
