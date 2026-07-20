@@ -1421,16 +1421,15 @@ function drawGreatWave(
       0.42 * Math.sin(ph * 2.3 - drift * 0.045) +
       0.22 * Math.sin(ph * 3.9 + drift * 0.032);
     s = s / 1.64;
-    s = Math.sign(s) * Math.pow(Math.abs(s), 0.55); // pointed
+    s = Math.sign(s) * Math.pow(Math.abs(s), 0.4); // more pointed
     const bump = heroBoost(x);
     const rise = bump * heroAmp * (0.85 + s * 0.15);
     return seaLevel - rise;
   };
 
-  // ── (1) main wave body — the prussian silhouette above sea level ──
-  // Just the HUMP: rises above the resting sea line where the hero and the
-  // ambient chop lift the water; returns to seaLevel elsewhere. The WebGL
-  // ocean beneath is already painted, so we don't paint it again.
+  // ── (1) main wave body — a TRANSLUCENT tinted hump so the water
+  //         beneath shows through. The old opaque prussian slab read
+  //         as a paper cutout; real water is see-through. ──────────
   const shoulderY = seaLevel + 3;
   ctx.beginPath();
   ctx.moveTo(0, shoulderY);
@@ -1440,11 +1439,10 @@ function drawGreatWave(
   }
   ctx.lineTo(w, shoulderY);
   ctx.closePath();
-  const bodyGrad = ctx.createLinearGradient(0, peakY, 0, shoulderY + heroAmp * 0.2);
-  bodyGrad.addColorStop(0.0, "rgba(30, 66, 112, 0.68)"); // sunlit shoulder
-  bodyGrad.addColorStop(0.18, "rgba(16, 48, 92, 0.94)"); // Hokusai prussian
-  bodyGrad.addColorStop(0.65, "rgba(8, 30, 66, 0.86)");
-  bodyGrad.addColorStop(1.0, "rgba(4, 18, 44, 0.0)"); // fade into sea below
+  const bodyGrad = ctx.createLinearGradient(0, peakY, 0, shoulderY);
+  bodyGrad.addColorStop(0.0, "rgba(120, 168, 200, 0.42)"); // sunlit crest edge
+  bodyGrad.addColorStop(0.35, "rgba(30, 72, 120, 0.55)"); // deep swell body
+  bodyGrad.addColorStop(1.0, "rgba(8, 26, 60, 0.15)");   // near-transparent base
   ctx.fillStyle = bodyGrad;
   ctx.fill();
 
@@ -1481,16 +1479,12 @@ function drawGreatWave(
     alpha: 1.0,
     depth: 2,
   });
-  // 7 satellites of decreasing scale scattered across the crest, weighted
-  // toward the hero side so the composition stays balanced.
+  // 3 satellites flanking the hero — enough for tessellation, few enough
+  // that the eye rests on the hero curl instead of a cluttered chorus.
   const satellitePositions = [
-    { fx: -0.68, size: 0.28, dropAng: 0.5 },
-    { fx: -0.42, size: 0.42, dropAng: 0.3 },
-    { fx: -0.18, size: 0.58, dropAng: 0.15 },
-    { fx:  0.30, size: 0.50, dropAng: -0.05 },
-    { fx:  0.55, size: 0.36, dropAng: -0.2 },
-    { fx:  0.78, size: 0.24, dropAng: -0.35 },
-    { fx:  0.95, size: 0.16, dropAng: -0.5 },
+    { fx: -0.42, size: 0.42, dropAng: 0.25 },
+    { fx:  0.32, size: 0.48, dropAng: -0.08 },
+    { fx:  0.62, size: 0.28, dropAng: -0.25 },
   ];
   for (let i = 0; i < satellitePositions.length; i++) {
     const s = satellitePositions[i];
@@ -1708,12 +1702,14 @@ function drawSecondaryWave(
 ) {
   const S = Math.min(w, h);
   const seaH = h - horizonY;
-  const troughY = horizonY + seaH * 0.55;
+  // Align baseline with the hero's seaLevel (0.68) so the two waves sit on
+  // the SAME water surface — previously the secondary hovered above the
+  // hero's baseline, producing a floating rectangular slab.
+  const seaLevel = horizonY + seaH * 0.68;
   const drift = t * 18;
-  const amp = Math.min(seaH * 0.32, S * 0.24) * swellMod;
-  // Tilt slides the secondary too, but by a smaller amount so parallax reads
+  const amp = Math.min(seaH * 0.22, S * 0.18) * swellMod; // smaller
   const cx = w * 0.86 + tiltSway * w * 0.05;
-  const width = w * 0.58;
+  const width = w * 0.55;
   const boost = (x: number) => {
     const d = (x - cx) / (width * 0.5);
     return Math.exp(-d * d);
@@ -1721,25 +1717,25 @@ function drawSecondaryWave(
   const crestY = (x: number) => {
     const ph = x * 0.016 - drift * 0.018;
     let s = Math.sin(ph) + 0.4 * Math.sin(ph * 2.1 + drift * 0.02);
-    s = Math.sign(s) * Math.pow(Math.abs(s / 1.4), 0.7);
-    return troughY - amp * boost(x) * (s * 0.5 + 0.55);
+    s = Math.sign(s) * Math.pow(Math.abs(s / 1.4), 0.5);
+    return seaLevel - amp * boost(x) * (s * 0.5 + 0.55);
   };
 
-  // silhouette — a hump above seaLevel only, so we don't paint a slab
-  // over the WebGL water below (same rule the hero uses).
+  // Very light translucent silhouette so the WebGL depth shows through
+  // (was an opaque prussian slab that read as a floating rectangle).
   const xStart = w * 0.42;
   ctx.beginPath();
-  ctx.moveTo(xStart, troughY);
+  ctx.moveTo(xStart, seaLevel);
   for (let x = xStart; x <= w; x += 3) {
     const y = crestY(x);
-    ctx.lineTo(x, Math.min(y, troughY));
+    ctx.lineTo(x, Math.min(y, seaLevel));
   }
-  ctx.lineTo(w, troughY);
+  ctx.lineTo(w, seaLevel);
   ctx.closePath();
-  const grad = ctx.createLinearGradient(0, troughY - amp, 0, troughY);
-  grad.addColorStop(0.0, "rgba(28, 60, 100, 0.75)");
-  grad.addColorStop(0.6, "rgba(12, 34, 74, 0.88)");
-  grad.addColorStop(1.0, "rgba(4, 18, 42, 0.0)");
+  const grad = ctx.createLinearGradient(0, seaLevel - amp, 0, seaLevel);
+  grad.addColorStop(0.0, "rgba(90, 138, 172, 0.28)");
+  grad.addColorStop(0.6, "rgba(22, 56, 96, 0.32)");
+  grad.addColorStop(1.0, "rgba(6, 20, 46, 0.0)");
   ctx.fillStyle = grad;
   ctx.fill();
 
