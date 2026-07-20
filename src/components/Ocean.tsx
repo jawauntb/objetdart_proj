@@ -1328,72 +1328,98 @@ function drawFractalCurl(
   alpha: number,
   seed: number,
 ) {
-  if (r < 3.5 || alpha < 0.04) return;
+  if (r < 4 || alpha < 0.04) return;
 
-  // ── the barrel silhouette: a proper crescent formed by a big outer
-  //    half-arc and an inner half-arc, closed into a filled lens ────
+  // ── logarithmic-spiral CLAW ────────────────────────────────────────
+  // Hokusai's crests aren't semicircles — they're claw-shaped spirals
+  // (paisley/comma silhouettes that tighten into a curled eye). We build
+  // one by tracing two log-spiral arms and filling between them: the outer
+  // arm from the wide base into the tight centre, then the inner arm
+  // back out.  The Greek nautilus scroll uses the same construction.
+  //
+  //   r(θ) = r0 · exp(−b·θ)   log spiral, tightens as θ grows
+  //
+  // `angle` is the direction the claw's TIP curls toward. The base of the
+  // claw grows out of the crest in the OPPOSITE direction (angle − π).
+  const N = 40;
+  const turns = 1.35;        // how many revolutions from base to centre
+  const b = 0.28;            // tightness of the spiral
   const outerR = r;
-  // wall thickness of the curl (barrel roof)
-  const shellW = r * 0.35;
-  // the inner (eye) circle offset toward the "inside" (roof) of the barrel
-  const ndx = Math.cos(angle - Math.PI / 2);
-  const ndy = Math.sin(angle - Math.PI / 2);
-  const ix = cx + ndx * r * 0.10;
-  const iy = cy + ndy * r * 0.10;
-  const innerR = outerR - shellW;
+  const innerRatio = 0.55;   // inner arm radius / outer
+  // The spiral centre is offset from (cx, cy) in the direction of the tip
+  // so the base of the claw plants itself right at the crest.
+  const centerOffset = r * 0.18;
+  const scx = cx + Math.cos(angle) * centerOffset;
+  const scy = cy + Math.sin(angle) * centerOffset;
 
-  // Dome silhouette: a solid filled semicircle whose flat side sits on the
-  // crest (or, when angle != 0, on the tangent to the wave crest). Simpler
-  // than a hollow crescent — the concentric inner arcs drawn on top imply
-  // the barrel's hollow eye without a self-intersecting path.
+  const spiralPoint = (f: number, ratio: number) => {
+    const theta = angle - Math.PI + f * Math.PI * 2 * turns;
+    const rad = outerR * ratio * Math.exp(-b * f * Math.PI * 2 * turns);
+    return { x: scx + Math.cos(theta) * rad, y: scy + Math.sin(theta) * rad };
+  };
+
+  // build the closed claw silhouette
   ctx.save();
   ctx.beginPath();
-  ctx.arc(cx, cy, outerR, angle - Math.PI, angle, false);
+  for (let i = 0; i <= N; i++) {
+    const p = spiralPoint(i / N, 1);
+    if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+  }
+  for (let i = N; i >= 0; i--) {
+    const p = spiralPoint(i / N, innerRatio);
+    ctx.lineTo(p.x, p.y);
+  }
   ctx.closePath();
-  const grad = ctx.createLinearGradient(cx - ndx * r, cy - ndy * r, cx + ndx * r, cy + ndy * r);
-  grad.addColorStop(0.0, `rgba(232, 242, 246, ${0.95 * alpha})`); // sunlit ridge
+
+  // Hokusai's prussian body with a sunlit outer edge
+  const gx = Math.cos(angle - Math.PI / 2);
+  const gy = Math.sin(angle - Math.PI / 2);
+  const grad = ctx.createLinearGradient(cx - gx * r, cy - gy * r, cx + gx * r, cy + gy * r);
+  grad.addColorStop(0.0, `rgba(232, 242, 246, ${0.95 * alpha})`); // sunlit crest
   grad.addColorStop(0.35, `rgba(80, 128, 168, ${0.92 * alpha})`);
   grad.addColorStop(0.75, `rgba(14, 44, 88, ${0.96 * alpha})`);
   grad.addColorStop(1.0, `rgba(4, 18, 48, ${0.98 * alpha})`);
   ctx.fillStyle = grad;
   ctx.fill();
 
-  // pale outer rim — the sunlit ridge along the barrel's roof
+  // pale brushed outline along the outer spiral — Hokusai's ink line
   ctx.strokeStyle = `rgba(240, 248, 252, ${0.9 * alpha})`;
-  ctx.lineWidth = Math.max(1.0, r * 0.05);
+  ctx.lineWidth = Math.max(1.0, r * 0.06);
   ctx.lineCap = "round";
+  ctx.lineJoin = "round";
   ctx.beginPath();
-  ctx.arc(cx, cy, outerR, angle - Math.PI, angle, false);
+  for (let i = 0; i <= N; i++) {
+    const p = spiralPoint(i / N, 1);
+    if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+  }
   ctx.stroke();
   ctx.restore();
 
-  // ── nested inner curls receding into the eye ──────────────────────
-  // Each successive ring shifts deeper INTO the dome (toward the roof)
-  // and shrinks, giving a receding-spiral sense of depth.
-  for (let k = 1; k <= 3; k++) {
-    ctx.strokeStyle = `rgba(232, 244, 250, ${(0.55 - k * 0.12) * alpha})`;
-    ctx.lineWidth = Math.max(0.7, r * 0.032 - k * 0.30);
+  // ── inner receding spiral rings inside the claw's eye ─────────────
+  // A pair of tightening arcs traces the Greek nautilus centre.
+  for (let k = 0; k < 3; k++) {
+    ctx.strokeStyle = `rgba(232, 244, 250, ${(0.55 - k * 0.13) * alpha})`;
+    ctx.lineWidth = Math.max(0.7, r * 0.03 - k * 0.30);
     ctx.beginPath();
-    ctx.arc(
-      ix + ndx * k * r * 0.05,
-      iy + ndy * k * r * 0.05,
-      innerR - k * r * 0.12,
-      angle - Math.PI + 0.05,
-      angle - 0.05,
-      false,
-    );
+    const ringScale = innerRatio - k * 0.09;
+    if (ringScale <= 0.05) break;
+    for (let i = 0; i <= N; i++) {
+      const p = spiralPoint(i / N, ringScale);
+      if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+    }
     ctx.stroke();
   }
 
-  // bright cusp-highlight where the curl meets the tip
-  const tipX = cx + Math.cos(angle) * outerR;
-  const tipY = cy + Math.sin(angle) * outerR;
-  const cusp = ctx.createRadialGradient(tipX, tipY, 0, tipX, tipY, r * 0.35);
-  cusp.addColorStop(0, `rgba(255, 255, 255, ${0.5 * alpha})`);
+  // bright cusp at the claw's tightening tip (the spiral's inner point)
+  const tip = spiralPoint(1, 1);
+  const tipX = tip.x;
+  const tipY = tip.y;
+  const cusp = ctx.createRadialGradient(tipX, tipY, 0, tipX, tipY, r * 0.28);
+  cusp.addColorStop(0, `rgba(255, 255, 255, ${0.55 * alpha})`);
   cusp.addColorStop(1, "rgba(255, 255, 255, 0)");
   ctx.fillStyle = cusp;
   ctx.beginPath();
-  ctx.arc(tipX, tipY, r * 0.35, 0, 7);
+  ctx.arc(tipX, tipY, r * 0.28, 0, 7);
   ctx.fill();
 
   // ── claw fingers off the tip — RECURSE into smaller curls or fall
