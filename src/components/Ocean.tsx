@@ -932,23 +932,24 @@ export default function Ocean() {
       drawGreatWave(sctx, w, h, horizonY, t * motion, swellMod, tiltSway, tiltPitch);
       drawSecondaryWave(sctx, w, h, horizonY, t * motion, swellMod, tiltSway);
 
-      // ── auto-ambient crashers: keep a low-key procession of waves
-      //    rolling in even when nothing is being touched. ──────────
-      if (now - lastAmbientCrasherAt > 2100) {
+      // ── auto-ambient crashers: a real wave train, denser and biased
+      //    left→right so the ocean visibly propagates ────────────────
+      if (now - lastAmbientCrasherAt > 900) {
         lastAmbientCrasherAt = now;
-        const fromLeft = Math.random() < 0.5;
+        // 80% left→right (dominant swell direction), 20% right→left
+        const fromLeft = Math.random() < 0.8;
         const w0 = surf.clientWidth || 1;
         const h0 = surf.clientHeight || 1;
         const horizon0 = h0 * 0.15;
         const sea0 = horizon0 + (h0 - horizon0) * 0.68;
         spawnCrasher({
           x: fromLeft ? -30 : w0 + 30,
-          y: sea0 + (Math.random() - 0.5) * 20,
-          vx: (fromLeft ? 1 : -1) * (55 + Math.random() * 65),
-          size: 0.30 + Math.random() * 0.30,
+          y: sea0 + (Math.random() - 0.5) * 24,
+          vx: (fromLeft ? 1 : -1) * (75 + Math.random() * 80),
+          size: 0.28 + Math.random() * 0.38,
           dir: fromLeft ? 0.08 : Math.PI - 0.08,
-          duration: 2.2 + Math.random() * 0.6,
-          breakAt: 0.5 + Math.random() * 0.15,
+          duration: 2.0 + Math.random() * 0.7,
+          breakAt: 0.45 + Math.random() * 0.15,
           kind: "ambient",
         });
       }
@@ -1364,41 +1365,57 @@ function drawGreatWave(
   const drift = t * 22;
   const breathe = 1 + Math.sin(t * 0.5) * 0.04;
 
-  // Hero anchor + amplitude — the wave is the frame's centrepiece, so it
-  // takes >= half the sea column and reaches up past the horizon line.
-  // Device tilt shifts the hero laterally so the wave sways with the phone.
-  const heroX = w * (0.36 + 0.02 * Math.sin(t * 0.05)) + tiltSway * w * 0.08;
-  const heroW = Math.max(w * 0.85, S * 0.9);
+  // Traveling wave train — TWO hero swells drifting horizontally, phased
+  // 180° apart so one is exiting while the other is entering. Each has a
+  // life-cycle envelope that peaks near the middle of the frame and
+  // tapers at the edges, so the wave form actually PROPAGATES across the
+  // surface (crest velocity > 0) instead of just bobbing in place.
+  const travelPeriod = 9; // seconds for one hero to cross
+  const heroW = Math.max(w * 0.55, S * 0.6);
   const heroAmp = Math.min(seaH * 0.62, S * 0.68) * breathe * swellMod;
-  const peakX = heroX;
-  const peakY = seaLevel - heroAmp;
+  const trav = (offset: number) => {
+    const cyc = ((t / travelPeriod) + offset) % 1;
+    return -w * 0.25 + cyc * (w * 1.50) + tiltSway * w * 0.08;
+  };
+  const heroXA = trav(0);
+  const heroXB = trav(0.5);
+  // life envelope: amp peaks at frame centre, fades to zero past ±0.65w
+  const lifeEnv = (x: number) => {
+    const c = (x - w / 2) / (w * 0.55);
+    return Math.exp(-c * c * 1.6);
+  };
+  const ampA = heroAmp * lifeEnv(heroXA);
+  const ampB = heroAmp * lifeEnv(heroXB);
+  // Pick the currently DOMINANT hero — where the claw + satellites anchor
+  const dominantX = ampA >= ampB ? heroXA : heroXB;
+  const dominantAmp = ampA >= ampB ? ampA : ampB;
+  const peakX = dominantX;
+  const peakY = seaLevel - dominantAmp;
 
-  // Radius of the curling barrel — a slice of the hero amplitude. This
-  // governs the eye size, the lip thickness and the reach of the claws.
-  const R = Math.min(heroAmp * 0.62, S * 0.34) * breathe;
+  // Radius of the curling barrel — a slice of the dominant amp
+  const R = Math.min(dominantAmp * 0.62, S * 0.32) * breathe;
 
   const heroBoost = (x: number) => {
-    const d = (x - heroX) / (heroW * 0.5);
-    return Math.exp(-d * d);
+    const dA = (x - heroXA) / (heroW * 0.5);
+    const dB = (x - heroXB) / (heroW * 0.5);
+    return Math.min(1.35,
+      Math.exp(-dA * dA) * lifeEnv(heroXA) +
+      Math.exp(-dB * dB) * lifeEnv(heroXB),
+    );
   };
 
-  // Sharpened pointed crest — Hokusai's water peaks in jagged fingers, not
-  // smooth sines. Localised to the hero: away from it, crestY collapses to
-  // seaLevel so the wave silhouette doesn't paint a shallow prussian slab
-  // across the whole width.
+  // Traveling sharpened crest — the sine phase advances with time so the
+  // pointed peaks visibly march to the right at phase-velocity ω/k.
   const crestY = (x: number) => {
-    const ph = x * 0.013 - drift * 0.012;
+    const ph = x * 0.013 - drift * 0.028; // stronger horizontal propagation
     let s =
       Math.sin(ph) +
-      0.42 * Math.sin(ph * 2.3 - drift * 0.02) +
-      0.22 * Math.sin(ph * 3.9 + drift * 0.015);
+      0.42 * Math.sin(ph * 2.3 - drift * 0.045) +
+      0.22 * Math.sin(ph * 3.9 + drift * 0.032);
     s = s / 1.64;
     s = Math.sign(s) * Math.pow(Math.abs(s), 0.55); // pointed
     const bump = heroBoost(x);
-    // Only rise where the hero passes. Sharpened chop is layered ON TOP
-    // and scaled by the same envelope so tiny wavelets away from the hero
-    // don't leave the water raised.
-    const rise = bump * heroAmp * (0.9 + s * 0.10);
+    const rise = bump * heroAmp * (0.85 + s * 0.15);
     return seaLevel - rise;
   };
 
@@ -1469,7 +1486,7 @@ function drawGreatWave(
   ];
   for (let i = 0; i < satellitePositions.length; i++) {
     const s = satellitePositions[i];
-    const sx = heroX + s.fx * heroW * 0.55;
+    const sx = dominantX + s.fx * heroW * 0.55;
     if (sx < -R * 0.2 || sx > w + R * 0.2) continue;
     const sy = crestY(sx) - R * s.size * 0.35;
     const wobble = Math.sin(t * 0.7 + i * 1.3) * 0.15;
