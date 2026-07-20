@@ -15,8 +15,7 @@ export type SiteRouteEntry = {
 };
 
 export const SITE_ROUTES: SiteRouteEntry[] = [
-  { key: "experiment",  icon: "atlas",    href: "/experiment",                      desc: "scroll the whole cabinet",     cluster: "field",     dark: true },
-  { key: "atlas",       icon: "atlas",    href: "/atlas/origin", anchor: "atlas",    desc: "the territories",                cluster: "field",     homePriority: 10 },
+  { key: "atlas",       icon: "atlas",    href: "/atlas/origin",                    desc: "the territories",                cluster: "field",     homePriority: 10 },
   { key: "ocean",       icon: "waves",    href: "/ocean",                             desc: "the deep · dive down",          cluster: "water",     dark: true, homePriority: 7 },
   { key: "tide",        icon: "tide",     href: "/tide",                              desc: "move the moon",                cluster: "water",     dark: true, homePriority: 9 },
   { key: "waves",       icon: "waves",    href: "/waves",                             desc: "ripple tank",                  cluster: "water",     dark: true, homePriority: 8 },
@@ -45,12 +44,12 @@ export const SITE_ROUTES: SiteRouteEntry[] = [
   { key: "drop",        icon: "plasma",   href: "/drop",                              desc: "a cosmos in glass",            cluster: "mechanism", dark: true, homePriority: 11 },
   { key: "coin",        icon: "watch",    href: "/coin",                              desc: "a gold medal · tilt · flip",   cluster: "mechanism", dark: true, homePriority: 10 },
   { key: "watch",       icon: "watch",    href: "/watch",                             desc: "the room",                     cluster: "mechanism", dark: true, homePriority: 9 },
-  { key: "archive",     icon: "archive",  href: "/archive",      anchor: "archive",   desc: "the drawers",                  cluster: "field",     homePriority: 7 },
+  { key: "archive",     icon: "archive",  href: "/archive",                          desc: "the drawers",                  cluster: "field",     homePriority: 7 },
   { key: "kept",        icon: "kept",     href: "/kept",                              desc: "a private trail",              cluster: "field",     homePriority: 6 },
-  { key: "colophon",    icon: "colophon", href: "/colophon",     anchor: "colophon",  desc: "what kept this",               cluster: "field" },
+  { key: "colophon",    icon: "colophon", href: "/colophon",                         desc: "what kept this",               cluster: "field" },
 ];
 
-export const PRIMARY_ROUTE_KEYS = ["experiment", "atlas", "tide", "waves", "watch"] as const;
+export const PRIMARY_ROUTE_KEYS = ["atlas", "tide", "waves", "watch"] as const;
 
 export const SITE_ROUTE_BY_KEY = Object.fromEntries(
   SITE_ROUTES.map((route) => [route.key, route]),
@@ -61,5 +60,6 @@ export const DARK_ROUTE_PREFIXES = SITE_ROUTES
   .map((route) => route.href);
 
 export function isDarkRoutePath(pathname: string): boolean {
-  return DARK_ROUTE_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
+  return pathname === "/" ||
+    DARK_ROUTE_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
 }

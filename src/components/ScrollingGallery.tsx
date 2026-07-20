@@ -5,9 +5,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { SyntheticEvent } from "react";
 import { SITE_ROUTES } from "@/lib/routes";
 
-const OMITTED_ROUTES = new Set(["archive", "kept", "colophon", "experiment"]);
+const OMITTED_ROUTES = new Set(["archive", "kept", "colophon"]);
 const OPENING_ROUTES = ["coin", "atlas"];
-const EXPERIMENT_ROOMS = SITE_ROUTES
+const GALLERY_ROOMS = SITE_ROUTES
   .filter((route) => !OMITTED_ROUTES.has(route.key))
   .sort((a, b) => {
     const aOpening = OPENING_ROUTES.indexOf(a.key);
@@ -20,7 +20,7 @@ const EXPERIMENT_ROOMS = SITE_ROUTES
     return 0;
   });
 
-export default function ExperimentGallery() {
+export default function ScrollingGallery() {
   const galleryRef = useRef<HTMLElement | null>(null);
   const frameRefs = useRef<Array<HTMLElement | null>>([]);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -75,16 +75,16 @@ export default function ExperimentGallery() {
   return (
     <main
       ref={galleryRef}
-      className="experiment-gallery"
+      className="scrolling-gallery"
       tabIndex={-1}
-      aria-label="scrolling toy gallery experiment"
+      aria-label="scrolling toy gallery"
     >
-      <div className="experiment-intro" aria-hidden="true">
-        <span>one page · {EXPERIMENT_ROOMS.length} rooms</span>
+      <div className="scrolling-intro" aria-hidden="true">
+        <span>one page · {GALLERY_ROOMS.length} rooms</span>
         <span>scroll to wander · tap to play</span>
       </div>
 
-      {EXPERIMENT_ROOMS.map((room, index) => {
+      {GALLERY_ROOMS.map((room, index) => {
         const entered = enteredIndex === index;
         const shouldLoad = Math.abs(activeIndex - index) <= 1;
 
@@ -93,15 +93,15 @@ export default function ExperimentGallery() {
             key={room.key}
             ref={(node) => { frameRefs.current[index] = node; }}
             data-room-index={index}
-            className={`experiment-room${entered ? " is-entered" : ""}`}
+            className={`scrolling-room${entered ? " is-entered" : ""}`}
             aria-label={`${room.key}: ${room.desc}`}
           >
-            <div className="experiment-room__stage">
+            <div className="scrolling-room__stage">
               {shouldLoad ? (
                 <iframe
                   src={room.href}
                   title={`${room.key} interactive toy`}
-                  className="experiment-room__frame"
+                  className="scrolling-room__frame"
                   loading="lazy"
                   onLoad={connectFrameShortcuts}
                   tabIndex={entered ? 0 : -1}
@@ -109,7 +109,7 @@ export default function ExperimentGallery() {
                   style={{ pointerEvents: entered ? "auto" : "none" }}
                 />
               ) : (
-                <div className="experiment-room__sleep" aria-hidden="true">
+                <div className="scrolling-room__sleep" aria-hidden="true">
                   <span>{room.key}</span>
                 </div>
               )}
@@ -117,19 +117,19 @@ export default function ExperimentGallery() {
               {!entered ? (
                 <button
                   type="button"
-                  className="experiment-room__veil"
+                  className="scrolling-room__veil"
                   onClick={() => setEnteredIndex(index)}
                   aria-label={`enter ${room.key} toy`}
                 >
-                  <span className="experiment-room__count">
-                    {String(index + 1).padStart(2, "0")} / {String(EXPERIMENT_ROOMS.length).padStart(2, "0")}
+                  <span className="scrolling-room__count">
+                    {String(index + 1).padStart(2, "0")} / {String(GALLERY_ROOMS.length).padStart(2, "0")}
                   </span>
-                  <span className="experiment-room__name">{room.key}</span>
-                  <span className="experiment-room__desc">{room.desc}</span>
-                  <span className="experiment-room__enter">enter toy ↘</span>
+                  <span className="scrolling-room__name">{room.key}</span>
+                  <span className="scrolling-room__desc">{room.desc}</span>
+                  <span className="scrolling-room__enter">enter toy ↘</span>
                 </button>
               ) : (
-                <div className="experiment-room__controls">
+                <div className="scrolling-room__controls">
                   <button type="button" onClick={leaveToy}>leave toy · keep scrolling ↓</button>
                   <Link href={room.href}>open alone ↗</Link>
                   <span>esc</span>
@@ -140,12 +140,12 @@ export default function ExperimentGallery() {
         );
       })}
 
-      <section className="experiment-end" aria-label="end of the current gallery orbit">
+      <section className="scrolling-end" aria-label="end of the current gallery orbit">
         <p>the cabinet has no real end.</p>
         <button type="button" onClick={() => goToRoom(0)}>circle back to coin ↑</button>
       </section>
 
-      <aside className="experiment-position" aria-label="gallery position">
+      <aside className="scrolling-position" aria-label="gallery position">
         <button
           type="button"
           aria-label="previous toy"
@@ -156,19 +156,19 @@ export default function ExperimentGallery() {
         </button>
         <span>{String(activeIndex + 1).padStart(2, "0")}</span>
         <i aria-hidden="true" />
-        <span>{String(EXPERIMENT_ROOMS.length).padStart(2, "0")}</span>
+        <span>{String(GALLERY_ROOMS.length).padStart(2, "0")}</span>
         <button
           type="button"
           aria-label="next toy"
-          onClick={() => goToRoom(Math.min(EXPERIMENT_ROOMS.length - 1, activeIndex + 1))}
-          disabled={activeIndex === EXPERIMENT_ROOMS.length - 1}
+          onClick={() => goToRoom(Math.min(GALLERY_ROOMS.length - 1, activeIndex + 1))}
+          disabled={activeIndex === GALLERY_ROOMS.length - 1}
         >
           ↓
         </button>
       </aside>
 
       <style jsx>{`
-        .experiment-gallery {
+        .scrolling-gallery {
           position: relative;
           height: calc(100vh - 56px - env(safe-area-inset-top, 0px));
           overflow-y: auto;
@@ -178,8 +178,8 @@ export default function ExperimentGallery() {
           background: #07101b;
           outline: none;
         }
-        .experiment-gallery::-webkit-scrollbar { display: none; }
-        .experiment-intro {
+        .scrolling-gallery::-webkit-scrollbar { display: none; }
+        .scrolling-intro {
           position: fixed;
           left: max(18px, env(safe-area-inset-left, 0px));
           bottom: calc(16px + env(safe-area-inset-bottom, 0px));
@@ -194,21 +194,21 @@ export default function ExperimentGallery() {
           pointer-events: none;
           mix-blend-mode: difference;
         }
-        .experiment-room,
-        .experiment-end {
+        .scrolling-room,
+        .scrolling-end {
           height: 100%;
           min-height: 520px;
           scroll-snap-align: start;
           scroll-snap-stop: normal;
           position: relative;
         }
-        .experiment-room__stage {
+        .scrolling-room__stage {
           position: absolute;
           inset: 0;
           overflow: hidden;
           background: #07101b;
         }
-        .experiment-room__frame {
+        .scrolling-room__frame {
           position: absolute;
           inset: 0;
           width: 100%;
@@ -216,7 +216,7 @@ export default function ExperimentGallery() {
           border: 0;
           background: var(--paper);
         }
-        .experiment-room__sleep {
+        .scrolling-room__sleep {
           position: absolute;
           inset: 0;
           display: grid;
@@ -225,7 +225,7 @@ export default function ExperimentGallery() {
           color: rgba(244, 238, 222, 0.18);
           font: italic clamp(48px, 12vw, 160px)/1 var(--font-serif);
         }
-        .experiment-room__veil {
+        .scrolling-room__veil {
           position: absolute;
           inset: 0;
           z-index: 3;
@@ -242,14 +242,14 @@ export default function ExperimentGallery() {
           cursor: pointer;
           touch-action: pan-y;
         }
-        .experiment-room__veil::before {
+        .scrolling-room__veil::before {
           content: "";
           position: absolute;
           inset: 0;
           border: 1px solid rgba(244, 238, 222, 0.16);
           pointer-events: none;
         }
-        .experiment-room__veil::after {
+        .scrolling-room__veil::after {
           content: "";
           position: absolute;
           z-index: 0;
@@ -261,15 +261,15 @@ export default function ExperimentGallery() {
           border-bottom: 1px solid rgba(244, 238, 222, 0.14);
           pointer-events: none;
         }
-        .experiment-room__veil > span { position: relative; z-index: 1; }
-        .experiment-room__count,
-        .experiment-room__desc,
-        .experiment-room__enter {
+        .scrolling-room__veil > span { position: relative; z-index: 1; }
+        .scrolling-room__count,
+        .scrolling-room__desc,
+        .scrolling-room__enter {
           font-family: var(--font-mono);
           text-transform: lowercase;
           letter-spacing: 0.08em;
         }
-        .experiment-room__count {
+        .scrolling-room__count {
           position: absolute;
           z-index: 2;
           top: 20px;
@@ -277,7 +277,7 @@ export default function ExperimentGallery() {
           font-size: 10px;
           opacity: 0.72;
         }
-        .experiment-room__name {
+        .scrolling-room__name {
           font-family: var(--font-serif);
           font-size: clamp(68px, 16vw, 210px);
           font-weight: 300;
@@ -286,19 +286,19 @@ export default function ExperimentGallery() {
           letter-spacing: -0.05em;
           text-shadow: 0 2px 30px rgba(0, 0, 0, 0.35);
         }
-        .experiment-room__desc {
+        .scrolling-room__desc {
           margin-top: clamp(22px, 4vh, 44px);
           font-size: clamp(10px, 1.2vw, 13px);
           opacity: 0.76;
         }
-        .experiment-room__enter {
+        .scrolling-room__enter {
           align-self: flex-end;
           margin-top: -1.2em;
           font-size: 11px;
           border-bottom: 1px solid rgba(244, 238, 222, 0.6);
           padding-bottom: 5px;
         }
-        .experiment-room__controls {
+        .scrolling-room__controls {
           position: absolute;
           z-index: 5;
           top: 0;
@@ -314,8 +314,8 @@ export default function ExperimentGallery() {
           border-bottom: 1px solid rgba(244, 238, 222, 0.16);
           backdrop-filter: blur(12px);
         }
-        .experiment-room__controls button,
-        .experiment-room__controls a {
+        .scrolling-room__controls button,
+        .scrolling-room__controls a {
           min-height: 42px;
           display: inline-flex;
           align-items: center;
@@ -329,7 +329,7 @@ export default function ExperimentGallery() {
           text-transform: lowercase;
           cursor: pointer;
         }
-        .experiment-room__controls span {
+        .scrolling-room__controls span {
           margin-left: auto;
           padding-right: 4px;
           font: 9px/1 var(--font-mono);
@@ -337,7 +337,7 @@ export default function ExperimentGallery() {
           opacity: 0.5;
           text-transform: uppercase;
         }
-        .experiment-end {
+        .scrolling-end {
           display: grid;
           place-content: center;
           gap: 20px;
@@ -345,11 +345,11 @@ export default function ExperimentGallery() {
           color: rgba(244, 238, 222, 0.9);
           background: radial-gradient(circle at 50% 45%, #1b2b3f, #07101b 70%);
         }
-        .experiment-end p {
+        .scrolling-end p {
           margin: 0;
           font: italic clamp(36px, 7vw, 88px)/1 var(--font-serif);
         }
-        .experiment-end button {
+        .scrolling-end button {
           justify-self: center;
           min-height: 44px;
           border: 1px solid rgba(244, 238, 222, 0.35);
@@ -361,7 +361,7 @@ export default function ExperimentGallery() {
           letter-spacing: 0.06em;
           cursor: pointer;
         }
-        .experiment-position {
+        .scrolling-position {
           position: fixed;
           z-index: 16;
           right: max(14px, env(safe-area-inset-right, 0px));
@@ -373,18 +373,18 @@ export default function ExperimentGallery() {
           color: rgba(244, 238, 222, 0.82);
           mix-blend-mode: difference;
         }
-        .experiment-position span {
+        .scrolling-position span {
           font: 9px/1 var(--font-mono);
           letter-spacing: 0.06em;
         }
-        .experiment-position i {
+        .scrolling-position i {
           display: block;
           width: 1px;
           height: clamp(40px, 9vh, 90px);
           background: currentColor;
           opacity: 0.45;
         }
-        .experiment-position button {
+        .scrolling-position button {
           width: 34px;
           height: 34px;
           border: 0;
@@ -393,22 +393,22 @@ export default function ExperimentGallery() {
           font: 15px/1 var(--font-mono);
           cursor: pointer;
         }
-        .experiment-position button:disabled { opacity: 0.25; cursor: default; }
-        .experiment-room.is-entered + .experiment-room { scroll-snap-align: none; }
+        .scrolling-position button:disabled { opacity: 0.25; cursor: default; }
+        .scrolling-room.is-entered + .scrolling-room { scroll-snap-align: none; }
 
         @supports (height: 100dvh) {
-          .experiment-gallery { height: calc(100dvh - 56px - env(safe-area-inset-top, 0px)); }
+          .scrolling-gallery { height: calc(100dvh - 56px - env(safe-area-inset-top, 0px)); }
         }
         @media (max-width: 700px) {
-          .experiment-intro { display: none; }
-          .experiment-room__name { font-size: clamp(58px, 23vw, 110px); }
-          .experiment-room__desc { max-width: 70%; }
-          .experiment-room__enter { margin-top: 22px; align-self: flex-start; }
-          .experiment-position { right: 4px; }
-          .experiment-room__controls span { display: none; }
+          .scrolling-intro { display: none; }
+          .scrolling-room__name { font-size: clamp(58px, 23vw, 110px); }
+          .scrolling-room__desc { max-width: 70%; }
+          .scrolling-room__enter { margin-top: 22px; align-self: flex-start; }
+          .scrolling-position { right: 4px; }
+          .scrolling-room__controls span { display: none; }
         }
         @media (prefers-reduced-motion: reduce) {
-          .experiment-gallery { scroll-behavior: auto; }
+          .scrolling-gallery { scroll-behavior: auto; }
         }
       `}</style>
     </main>

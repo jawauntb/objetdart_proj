@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 import * as ts from "typescript";
@@ -50,6 +50,7 @@ const darkRoutesModule = loadTsModule("src/lib/dark-routes.ts", {
   "@/lib/routes": routesModule,
 });
 const siteHeaderSource = readRepoFile("src/components/SiteHeader.tsx");
+const homePageSource = readRepoFile("src/app/page.tsx");
 
 const {
   DARK_ROUTE_PREFIXES,
@@ -98,14 +99,7 @@ const validClusters = new Set(["field", "water", "nature", "mechanism"]);
 const validIcons = new Set(
   [...readRepoFile("src/components/RouteSigil.tsx").matchAll(/case "([^"]+)":/g)].map((match) => match[1]),
 );
-const homeSources = [
-  "src/app/page.tsx",
-  "src/components/ConcernField.tsx",
-  "src/components/Atlas.tsx",
-  "src/components/Reading.tsx",
-  "src/components/Archive.tsx",
-  "src/components/Colophon.tsx",
-].map(readRepoFile).join("\n");
+const homeSources = homePageSource;
 
 function hasAnchor(id) {
   return new RegExp(`id=(?:["']${id}["']|\\{["']${id}["']\\})`).test(homeSources);
@@ -127,9 +121,12 @@ for (const key of PRIMARY_ROUTE_KEYS) {
   assert.ok(SITE_ROUTE_BY_KEY[key], `primary route ${key} should resolve`);
 }
 
-for (const anchor of ["live-chart", "concern-field", "atlas", "reading", "archive", "colophon"]) {
-  assert.ok(hasAnchor(anchor), `home anchor ${anchor} should exist`);
-}
+assert.match(homePageSource, /<ScrollingGallery\s*\/>/, "home page should render the scrolling gallery");
+assert.equal(
+  existsSync(new URL("src/app/experiment/page.tsx", rootUrl)),
+  false,
+  "the temporary experiment route should be removed",
+);
 
 const darkPrefixes = new Set(DARK_ROUTE_PREFIXES);
 for (const route of SITE_ROUTES) {
@@ -142,9 +139,11 @@ for (const route of SITE_ROUTES) {
   }
 }
 
-for (const path of ["/", "/aphros", "/archive", "/colophon", "/timekeeper", "/coinage", "/watching", "/wavescape", "/lightness"]) {
+for (const path of ["/aphros", "/archive", "/colophon", "/timekeeper", "/coinage", "/watching", "/wavescape", "/lightness"]) {
   assert.equal(isDarkRoutePath(path), false, `${path} should not match a dark route by prefix accident`);
 }
+
+assert.equal(isDarkRoutePath("/"), true, "the scrolling home page should use dark chrome");
 
 for (const path of ["/", "/coin", "/coin/deep", "/movement", "/archive", "/timekeeper"]) {
   assert.equal(isDarkRoute(path), isDarkRoutePath(path), `isDarkRoute should delegate ${path}`);
