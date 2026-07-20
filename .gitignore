@@ -8,3 +8,4 @@ tsconfig.tsbuildinfo
 .claude/
 ios/ObjetCoin/build/
 *.xcarchive
+.vercel
