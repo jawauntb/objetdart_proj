@@ -1182,7 +1182,9 @@ function drawGreatWave(
   };
 
   // Sharpened pointed crest — Hokusai's water peaks in jagged fingers, not
-  // smooth sines. Amplified where the hero passes.
+  // smooth sines. Localised to the hero: away from it, crestY collapses to
+  // seaLevel so the wave silhouette doesn't paint a shallow prussian slab
+  // across the whole width.
   const crestY = (x: number) => {
     const ph = x * 0.013 - drift * 0.012;
     let s =
@@ -1192,10 +1194,11 @@ function drawGreatWave(
     s = s / 1.64;
     s = Math.sign(s) * Math.pow(Math.abs(s), 0.55); // pointed
     const bump = heroBoost(x);
-    // baseline chop away from the hero + full hero rise under it
-    const ambient = seaH * 0.05 * swellMod;
-    const rise = bump * heroAmp + (1 - bump) * ambient;
-    return seaLevel - rise * (0.85 + s * 0.15);
+    // Only rise where the hero passes. Sharpened chop is layered ON TOP
+    // and scaled by the same envelope so tiny wavelets away from the hero
+    // don't leave the water raised.
+    const rise = bump * heroAmp * (0.9 + s * 0.10);
+    return seaLevel - rise;
   };
 
   // ── (1) main wave body — the prussian silhouette above sea level ──
