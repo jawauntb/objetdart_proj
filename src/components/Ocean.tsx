@@ -1427,7 +1427,7 @@ function drawFractalCurl(
   const fingerCount = depth > 0 ? 5 : 6;
   const fanSpan = 1.6;
   for (let i = 0; i < fingerCount; i++) {
-    const f = fingerCount === 1 ? 0.5 : i / (fingerCount - 1);
+    const f = i / (fingerCount - 1);
     const fingerAng = angle + (f - 0.5) * fanSpan;
     const reach = r * (0.55 + f * 0.85);
     const fx = tipX + Math.cos(fingerAng) * reach;
