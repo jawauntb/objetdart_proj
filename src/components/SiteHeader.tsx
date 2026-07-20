@@ -41,7 +41,12 @@ export default function SiteHeader() {
 
   const scrollTop = () => {
     if (isHome) {
-      window.scrollTo({ top: 0, behavior: "smooth" });
+      const gallery = document.querySelector<HTMLElement>(".scrolling-gallery");
+      if (gallery) {
+        gallery.scrollTo({ top: 0, behavior: "smooth" });
+      } else {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }
     }
   };
 
