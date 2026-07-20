@@ -402,6 +402,50 @@ export default function Ocean() {
       if (sparks.length > 24) sparks.shift();
     };
 
+    // ── crashing waves ────────────────────────────────────────────
+    // Each gesture spawns a "crasher" — a claw wave that rises, peaks,
+    // breaks, sheds spray, then dies. Some ride sideways so a swipe
+    // reads as a wave train moving in that direction.
+    type Crasher = {
+      t0: number;
+      x0: number;
+      y: number;
+      vx: number;
+      size: number;
+      dir: number;
+      duration: number;
+      breakAt: number;
+      broken: boolean;
+      kind: "ambient" | "tap" | "hold" | "swipe" | "shake" | "flip";
+    };
+    const crashers: Crasher[] = [];
+    const MAX_CRASHERS = 14;
+    let lastAmbientCrasherAt = 0;
+    const spawnCrasher = (opts: {
+      x: number;
+      y: number;
+      vx?: number;
+      size?: number;
+      dir?: number;
+      duration?: number;
+      breakAt?: number;
+      kind?: Crasher["kind"];
+    }) => {
+      crashers.push({
+        t0: performance.now(),
+        x0: opts.x,
+        y: opts.y,
+        vx: opts.vx ?? 0,
+        size: opts.size ?? 0.55,
+        dir: opts.dir ?? 0,
+        duration: opts.duration ?? 2.2,
+        breakAt: opts.breakAt ?? 0.55,
+        broken: false,
+        kind: opts.kind ?? "ambient",
+      });
+      if (crashers.length > MAX_CRASHERS) crashers.shift();
+    };
+
     // ── pointer / touch ───────────────────────────────────────────
     const addRipple = (x: number, y: number, strength: number) => {
       ripples.current.push({ x, y, t0: performance.now(), strength });
@@ -413,18 +457,63 @@ export default function Ocean() {
     // two-finger vertical drag drives the dive; track the fingers' mean Y.
     let lastAvgY: number | null = null;
 
+    // per-finger hold timers + move trails so we can distinguish
+    // tap / long-hold / swipe on pointerup.
+    const holdTimers = new Map<number, ReturnType<typeof setTimeout>>();
+    const trails = new Map<number, Array<{ x: number; y: number; t: number }>>();
+    const HOLD_MS = 780;
+    const SWIPE_MIN_PX = 42;
+    const SWIPE_MAX_MS = 480;
+
     // ── device sensors ────────────────────────────────────────────
     const tiltTarget = { x: 0, y: 0 };
     const tiltSmoothed = { x: 0, y: 0 };
     let sensorsArmed = false;
     let lastAccelMag: number | null = null;
     let lastShakeAt = 0;
+    // flip detection: watch beta+gamma for a rapid crossing (phone rotated
+    // face-down or spun on its own axis in < 350ms)
+    let lastOrient: { beta: number; gamma: number; t: number } | null = null;
+    let lastFlipAt = 0;
 
     const onOrient = (e: DeviceOrientationEvent) => {
-      const gx = (e.gamma ?? 0) / 45;
-      const gy = ((e.beta ?? 45) - 45) / 45;
+      const beta = e.beta ?? 0;
+      const gamma = e.gamma ?? 0;
+      const gx = gamma / 45;
+      const gy = (beta - 45) / 45;
       tiltTarget.x = Math.max(-1, Math.min(1, gx));
       tiltTarget.y = Math.max(-1, Math.min(1, gy));
+
+      const now = performance.now();
+      if (lastOrient) {
+        const dt = now - lastOrient.t;
+        if (dt > 0 && dt < 350) {
+          const rate = Math.hypot(beta - lastOrient.beta, gamma - lastOrient.gamma) / (dt / 1000);
+          if (rate > 260 && now - lastFlipAt > 900) {
+            lastFlipAt = now;
+            const w = surf.clientWidth || 1;
+            const h = surf.clientHeight || 1;
+            const cy = h * 0.15 + (h - h * 0.15) * 0.68;
+            // Flip = a whole-frame swell: three crashers marching across
+            for (let i = 0; i < 3; i++) {
+              spawnCrasher({
+                x: w * (0.15 + i * 0.35),
+                y: cy,
+                vx: -80 + Math.random() * 160,
+                size: 1.1 + Math.random() * 0.2,
+                dir: (Math.random() - 0.5) * 0.4,
+                duration: 2.6,
+                kind: "flip",
+              });
+            }
+            try { getFieldAudio().thud(); } catch { /* noop */ }
+            try { getFieldAudio().playTone(90, 0.9); } catch { /* noop */ }
+            haptics.storm();
+            useField.getState().recordTape("ripple", 1, "flip");
+          }
+        }
+      }
+      lastOrient = { beta, gamma, t: now };
     };
     const onMotion = (e: DeviceMotionEvent) => {
       const a = e.accelerationIncludingGravity;
@@ -439,6 +528,20 @@ export default function Ocean() {
             lastShakeAt = now;
             haptics.storm();
             try { getFieldAudio().thud(); } catch { /* noop */ }
+            // shake = spawn a big crasher at a random side of the frame
+            const w = surf.clientWidth || 1;
+            const h = surf.clientHeight || 1;
+            const cy = h * 0.15 + (h - h * 0.15) * 0.68;
+            const fromLeft = Math.random() < 0.5;
+            spawnCrasher({
+              x: fromLeft ? w * 0.1 : w * 0.9,
+              y: cy,
+              vx: (fromLeft ? 1 : -1) * (60 + jolt * 6),
+              size: Math.min(1.15, 0.7 + jolt / 30),
+              dir: fromLeft ? 0.05 : Math.PI - 0.05,
+              duration: 2.4,
+              kind: "shake",
+            });
           }
         }
       }
@@ -466,12 +569,19 @@ export default function Ocean() {
       }
     };
 
+    const seaLevelPx = () => {
+      const h = surf.clientHeight || 1;
+      const horizon = h * 0.15;
+      return horizon + (h - horizon) * 0.68;
+    };
+
     const onDown = (e: PointerEvent) => {
       const r = surf.getBoundingClientRect();
       const x = e.clientX - r.left;
       const y = e.clientY - r.top;
       const p = pressureOf(e);
-      pressed.set(e.pointerId, { x, y, lastEmit: performance.now() });
+      const now = performance.now();
+      pressed.set(e.pointerId, { x, y, lastEmit: now });
       pointer.current.pressed = true;
       pointer.current.over = true;
       pointer.current.x = x;
@@ -488,10 +598,70 @@ export default function Ocean() {
       } else {
         useField.getState().recordTape("ripple", 0.85);
         try { getFieldAudio().chime(); } catch { /* noop */ }
+        // hard-press taps immediately spawn a small crasher at the surface
+        if (p > 0.55) {
+          spawnCrasher({
+            x, y: seaLevelPx(),
+            size: 0.5 + p * 0.35,
+            dir: (x > (surf.clientWidth || 0) / 2) ? Math.PI - 0.1 : 0.1,
+            duration: 1.8,
+            kind: "tap",
+          });
+        }
       }
+      // start hold timer + trail — used to classify tap vs hold vs swipe on up
+      trails.set(e.pointerId, [{ x, y, t: now }]);
+      const holdTimer = setTimeout(() => {
+        // finger still held after HOLD_MS → summon a big crasher toward it
+        if (!pressed.has(e.pointerId)) return;
+        const f = pressed.get(e.pointerId)!;
+        spawnCrasher({
+          x: f.x, y: seaLevelPx(),
+          size: 1.1,
+          dir: (f.x > (surf.clientWidth || 0) / 2) ? Math.PI - 0.2 : 0.2,
+          duration: 2.8,
+          breakAt: 0.62,
+          kind: "hold",
+        });
+        try { getFieldAudio().playTone(120, 0.7); } catch { /* noop */ }
+        haptics.storm();
+        useField.getState().recordTape("ripple", 0.9, "hold");
+      }, HOLD_MS);
+      holdTimers.set(e.pointerId, holdTimer);
       armSensors();
     };
     const onUp = (e: PointerEvent) => {
+      const holdT = holdTimers.get(e.pointerId);
+      if (holdT != null) clearTimeout(holdT);
+      holdTimers.delete(e.pointerId);
+      // classify swipe: was the movement fast + directional?
+      const trail = trails.get(e.pointerId);
+      if (trail && trail.length >= 2) {
+        const first = trail[0];
+        const last = trail[trail.length - 1];
+        const dtMs = last.t - first.t;
+        const dx = last.x - first.x;
+        const dy = last.y - first.y;
+        const dist = Math.hypot(dx, dy);
+        if (dtMs > 40 && dtMs < SWIPE_MAX_MS && dist > SWIPE_MIN_PX && depthRef.current < 0.38) {
+          const speed = dist / dtMs; // px per ms
+          const ang = Math.atan2(dy, dx);
+          const vx = Math.cos(ang) * Math.min(340, speed * 500);
+          // swipe = a wave train rolling in the swipe direction
+          spawnCrasher({
+            x: last.x, y: seaLevelPx(),
+            vx,
+            size: 0.6 + Math.min(0.5, speed * 0.5),
+            dir: Math.cos(ang) >= 0 ? 0.1 : Math.PI - 0.1,
+            duration: 2.4,
+            breakAt: 0.6,
+            kind: "swipe",
+          });
+          try { getFieldAudio().playNote(64 + Math.floor(dy * 0.02), 180); } catch { /* noop */ }
+          useField.getState().recordTape("ripple", 0.7, "swipe");
+        }
+      }
+      trails.delete(e.pointerId);
       pressed.delete(e.pointerId);
       if (pressed.size < 2) lastAvgY = null;
       if (pressed.size === 0) pointer.current.pressed = false;
@@ -506,6 +676,13 @@ export default function Ocean() {
       const now = performance.now();
       const finger = pressed.get(e.pointerId);
       if (finger) { finger.x = x; finger.y = y; }
+
+      // record trail (bounded to last 12 samples per finger)
+      const tr = trails.get(e.pointerId);
+      if (tr) {
+        tr.push({ x, y, t: now });
+        if (tr.length > 12) tr.shift();
+      }
 
       // ── two-finger dive: the mean Y of the fingers drives depth ──
       if (pressed.size >= 2) {
@@ -708,7 +885,7 @@ export default function Ocean() {
         const yBase = horizonY + (h - horizonY) * (f * f);
         const amp = (4 + f * 22) * swellMod;
         const freq = 0.006 + (1 - f) * 0.010;
-        const speed = 0.24 + f * 0.46;
+        const speed = 0.42 + f * 0.75;
         const alpha = 0.10 + f * 0.30;
         sctx.strokeStyle = `rgba(232, 244, 248, ${alpha})`;
         sctx.lineWidth = 1 + f * 0.6;
@@ -754,6 +931,30 @@ export default function Ocean() {
       drawDistantSwells(sctx, w, h, horizonY, t * motion, swellMod);
       drawGreatWave(sctx, w, h, horizonY, t * motion, swellMod, tiltSway, tiltPitch);
       drawSecondaryWave(sctx, w, h, horizonY, t * motion, swellMod, tiltSway);
+
+      // ── auto-ambient crashers: keep a low-key procession of waves
+      //    rolling in even when nothing is being touched. ──────────
+      if (now - lastAmbientCrasherAt > 2100) {
+        lastAmbientCrasherAt = now;
+        const fromLeft = Math.random() < 0.5;
+        const w0 = surf.clientWidth || 1;
+        const h0 = surf.clientHeight || 1;
+        const horizon0 = h0 * 0.15;
+        const sea0 = horizon0 + (h0 - horizon0) * 0.68;
+        spawnCrasher({
+          x: fromLeft ? -30 : w0 + 30,
+          y: sea0 + (Math.random() - 0.5) * 20,
+          vx: (fromLeft ? 1 : -1) * (55 + Math.random() * 65),
+          size: 0.30 + Math.random() * 0.30,
+          dir: fromLeft ? 0.08 : Math.PI - 0.08,
+          duration: 2.2 + Math.random() * 0.6,
+          breakAt: 0.5 + Math.random() * 0.15,
+          kind: "ambient",
+        });
+      }
+
+      // ── draw + tick all live crashers ────────────────────────────
+      drawCrashers(sctx, crashers, now, t, addRipple, addSpark);
 
       sctx.restore();
       }
@@ -1499,17 +1700,21 @@ function drawSecondaryWave(
     return troughY - amp * boost(x) * (s * 0.5 + 0.55);
   };
 
-  // silhouette
+  // silhouette — a hump above seaLevel only, so we don't paint a slab
+  // over the WebGL water below (same rule the hero uses).
+  const xStart = w * 0.42;
   ctx.beginPath();
-  ctx.moveTo(w * 0.42, troughY);
-  for (let x = w * 0.42; x <= w; x += 3) ctx.lineTo(x, crestY(x));
-  ctx.lineTo(w, troughY + amp * 0.6);
-  ctx.lineTo(w * 0.42, troughY + amp * 0.6);
+  ctx.moveTo(xStart, troughY);
+  for (let x = xStart; x <= w; x += 3) {
+    const y = crestY(x);
+    ctx.lineTo(x, Math.min(y, troughY));
+  }
+  ctx.lineTo(w, troughY);
   ctx.closePath();
-  const grad = ctx.createLinearGradient(0, troughY - amp, 0, troughY + amp * 0.6);
-  grad.addColorStop(0.0, "rgba(28, 60, 100, 0.72)");
-  grad.addColorStop(0.5, "rgba(12, 34, 74, 0.82)");
-  grad.addColorStop(1.0, "rgba(4, 18, 42, 0.35)");
+  const grad = ctx.createLinearGradient(0, troughY - amp, 0, troughY);
+  grad.addColorStop(0.0, "rgba(28, 60, 100, 0.75)");
+  grad.addColorStop(0.6, "rgba(12, 34, 74, 0.88)");
+  grad.addColorStop(1.0, "rgba(4, 18, 42, 0.0)");
   ctx.fillStyle = grad;
   ctx.fill();
 
@@ -1536,5 +1741,132 @@ function drawSecondaryWave(
       ctx.arc(x, y - r * 0.4, r, 0, 7);
       ctx.fill();
     }
+  }
+}
+
+/**
+ * Draw every live crashing wave and tick its lifecycle. Each crasher
+ * rises → peaks → BREAKS (sheds a fan of foam claws + shockwave ripple)
+ * → fades. Moving crashers (swipes, shakes, ambient) also slide their
+ * position along the surface at `vx` px/sec so the wave visibly travels.
+ *
+ * Mutates the crashers array in place: expired entries are spliced out,
+ * and each crasher's `broken` flag flips when it breaks so the break
+ * feedback (ripple + spark) only fires once.
+ */
+type CrasherLite = {
+  t0: number;
+  x0: number;
+  y: number;
+  vx: number;
+  size: number;
+  dir: number;
+  duration: number;
+  breakAt: number;
+  broken: boolean;
+  kind: string;
+};
+function drawCrashers(
+  ctx: CanvasRenderingContext2D,
+  crashers: CrasherLite[],
+  now: number,
+  t: number,
+  addRipple: (x: number, y: number, s: number) => void,
+  addSpark: (x: number, y: number, s: number) => void,
+) {
+  const w = ctx.canvas.clientWidth || ctx.canvas.width;
+  const h = ctx.canvas.clientHeight || ctx.canvas.height;
+  const seaH = h - h * 0.15;
+  const S = Math.min(w, h);
+
+  for (let i = crashers.length - 1; i >= 0; i--) {
+    const c = crashers[i];
+    const age = (now - c.t0) / 1000;
+    const phase = age / c.duration;
+    if (phase >= 1) {
+      crashers.splice(i, 1);
+      continue;
+    }
+
+    // slide the crasher along the surface (swipes/ambient waves travel)
+    const cx = c.x0 + c.vx * age;
+    if (cx < -80 || cx > w + 80) {
+      crashers.splice(i, 1);
+      continue;
+    }
+
+    // amplitude envelope: 0 → 1 (rise) → 1 (crest) → 0 (crash/fade)
+    let env: number;
+    if (phase < 0.18) env = phase / 0.18;
+    else if (phase < c.breakAt) env = 1;
+    else if (phase < 0.9) env = 1 - (phase - c.breakAt) / (0.9 - c.breakAt);
+    else env = 0;
+
+    // radius of the claw. `size` in [0.3..1.3] rescales from a S-relative base.
+    const baseR = S * 0.13;
+    const r = baseR * c.size * (0.55 + env * 0.9);
+    const peakY = c.y - r * 1.7 * env;
+
+    // spawn the break event once (spray + shockwave ripple + haptic beat)
+    if (!c.broken && phase >= c.breakAt) {
+      c.broken = true;
+      addRipple(cx, c.y, 18 * c.size);
+      // a shower of foam droplets forward of the tip
+      const forwardX = cx + Math.cos(c.dir) * r * 1.5;
+      const forwardY = peakY + r * 0.6;
+      for (let s = 0; s < 8; s++) {
+        addSpark(
+          forwardX + (Math.random() - 0.5) * r * 1.2,
+          forwardY + Math.random() * r * 0.8,
+          0.18 * c.size,
+        );
+      }
+    }
+
+    if (env <= 0 || r < 4) continue;
+
+    // The crasher is drawn as a log-spiral claw (same drawFractalCurl the
+    // hero uses) so it matches the rest of the composition. Depth 1 gives
+    // one level of recursive sub-claws; alpha and size follow the envelope.
+    const drawDepth = c.size > 0.8 ? 1 : 0;
+    const alpha = Math.min(1, env * (0.75 + c.size * 0.35));
+    // dir is the direction the claw curls toward
+    drawFractalCurl(ctx, cx, peakY, r, c.dir, t, drawDepth, alpha, c.t0 % 100);
+
+    // during the crash, shed a fan of extra spray forward
+    if (phase >= c.breakAt && phase < 0.88) {
+      const crashF = (phase - c.breakAt) / (0.88 - c.breakAt); // 0..1
+      const fans = 3;
+      const fanAlpha = (1 - crashF) * 0.7;
+      for (let fi = 0; fi < fans; fi++) {
+        const fF = fi / (fans - 1);
+        const ang = c.dir + (fF - 0.5) * 1.7;
+        const reach = r * (1.1 + crashF * 1.4);
+        const dropletCount = 5;
+        for (let dc = 0; dc < dropletCount; dc++) {
+          const df = dc / (dropletCount - 1);
+          const dropRad = r * (0.25 - df * 0.15) * (1 - crashF * 0.4);
+          if (dropRad < 0.5) continue;
+          const dx = cx + Math.cos(ang) * reach * (0.4 + df * 0.9);
+          const dy = peakY + Math.sin(ang) * reach * (0.4 + df * 0.7) + df * df * r * 0.7;
+          ctx.fillStyle = `rgba(248, 252, 253, ${fanAlpha * (1 - df * 0.5)})`;
+          ctx.beginPath();
+          ctx.arc(dx, dy, Math.max(0.5, dropRad), 0, 7);
+          ctx.fill();
+        }
+      }
+
+      // shockwave ring expanding from the impact point
+      const ringR = r * (1.6 + crashF * 4.5);
+      const ringAlpha = (1 - crashF) * 0.55;
+      ctx.strokeStyle = `rgba(232, 244, 250, ${ringAlpha})`;
+      ctx.lineWidth = 1.2 + crashF * 0.6;
+      ctx.beginPath();
+      ctx.ellipse(cx, c.y, ringR, ringR * 0.35, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    // avoid unused warning
+    void seaH;
   }
 }
