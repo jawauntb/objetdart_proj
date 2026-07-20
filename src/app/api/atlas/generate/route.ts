@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import {
   AtlasGenerationError,
@@ -6,7 +7,8 @@ import {
   createAtlasGenerationContext,
   generateAtlasImage,
   parseAtlasGenerationRequest,
-  resolveAtlasProviderConfig,
+  resolveAtlasPhaseProviderConfig,
+  type AtlasGenerationPhase,
   type AtlasGenerationRequest,
   type AtlasProviderConfig,
 } from "@/lib/atlas-generation";
@@ -17,7 +19,7 @@ export const dynamic = "force-dynamic";
 
 const MAX_REQUEST_BODY_CHARS = 8_500_000;
 const RATE_LIMIT_WINDOW_MS = 60_000;
-const RATE_LIMIT_REQUESTS = 8;
+const RATE_LIMIT_REQUESTS = 16;
 const RATE_LIMIT_CONCURRENT = 2;
 const RATE_LIMIT_MAX_CLIENTS = 1_024;
 
@@ -55,36 +57,48 @@ export async function POST(request: Request) {
   }
 
   try {
+    const phase = parseGenerationPhase(request);
+    const generationId = resolveGenerationId(request);
     const parsedBody = await readJsonBody(request);
     const input = parseAtlasGenerationRequest(parsedBody);
     let providerConfig: AtlasProviderConfig;
     try {
-      providerConfig = resolveAtlasProviderConfig(process.env);
+      providerConfig = resolveAtlasPhaseProviderConfig(process.env, phase);
     } catch (error) {
       if (error instanceof AtlasProviderConfigurationError) {
         console.error("invalid Atlas image provider configuration");
-        return configurationErrorResponse(input);
+        return configurationErrorResponse(input, phase, generationId);
       }
       throw error;
     }
 
     if (!atlasGenerationEnabled()) {
-      return demoResponse(input, providerConfig, "generation_disabled");
+      return demoResponse(input, providerConfig, phase, generationId, "generation_disabled");
     }
     if (!providerConfig.apiKey) {
-      return demoResponse(input, providerConfig, "missing_api_key");
+      return demoResponse(input, providerConfig, phase, generationId, "missing_api_key");
     }
 
     try {
       const result = await generateAtlasImage(input, providerConfig, request.signal);
-      return json(result, 200);
+      return json(
+        {
+          ...result,
+          generation: {
+            ...result.generation,
+            phase,
+            generationId,
+          },
+        },
+        200,
+      );
     } catch (error) {
       if (error instanceof AtlasRequestError) {
         return json({ error: { code: error.code, message: error.message } }, 400);
       }
       if (error instanceof AtlasProviderConfigurationError) {
         console.error("invalid Atlas image provider configuration");
-        return configurationErrorResponse(input);
+        return configurationErrorResponse(input, phase, generationId);
       }
       if (error instanceof AtlasGenerationError) {
         console.warn("atlas image generation failed", {
@@ -104,6 +118,8 @@ export async function POST(request: Request) {
               model: providerConfig.model,
               operation: input.currentImage ? "edit" : "generation",
               mode: input.mode,
+              phase,
+              generationId,
               reason: error.code,
               requestId: error.requestId,
             },
@@ -124,6 +140,8 @@ export async function POST(request: Request) {
             model: providerConfig.model,
             operation: input.currentImage ? "edit" : "generation",
             mode: input.mode,
+            phase,
+            generationId,
             reason: "internal_error",
             requestId: null,
           },
@@ -158,9 +176,23 @@ async function readJsonBody(request: Request): Promise<unknown> {
   }
 }
 
+function parseGenerationPhase(request: Request): AtlasGenerationPhase {
+  const phase = new URL(request.url).searchParams.get("phase");
+  if (phase == null || phase === "" || phase === "final") return "final";
+  if (phase === "preview") return phase;
+  throw new AtlasRequestError("invalid_phase", "phase must be preview or final");
+}
+
+function resolveGenerationId(request: Request): string {
+  const candidate = request.headers.get("x-atlas-generation-id")?.trim() ?? "";
+  return /^[A-Za-z0-9_-]{8,80}$/.test(candidate) ? candidate : `atlas-${randomUUID()}`;
+}
+
 function demoResponse(
   input: AtlasGenerationRequest,
   providerConfig: AtlasProviderConfig,
+  phase: AtlasGenerationPhase,
+  generationId: string,
   reason: "generation_disabled" | "missing_api_key",
 ) {
   return json(
@@ -173,6 +205,8 @@ function demoResponse(
         model: providerConfig.model,
         operation: input.currentImage ? "edit" : "generation",
         mode: input.mode,
+        phase,
+        generationId,
         reason,
         requestId: null,
       },
@@ -181,7 +215,11 @@ function demoResponse(
   );
 }
 
-function configurationErrorResponse(input: AtlasGenerationRequest) {
+function configurationErrorResponse(
+  input: AtlasGenerationRequest,
+  phase: AtlasGenerationPhase,
+  generationId: string,
+) {
   return json(
     {
       dataUrl: null,
@@ -192,6 +230,8 @@ function configurationErrorResponse(input: AtlasGenerationRequest) {
         model: null,
         operation: input.currentImage ? "edit" : "generation",
         mode: input.mode,
+        phase,
+        generationId,
         reason: "invalid_provider_configuration",
         requestId: null,
       },

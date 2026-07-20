@@ -54,7 +54,7 @@ function parseArguments(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index];
     if (flag === "--help" || flag === "-h") return { help: true };
-    if (!["--prompt", "--out", "--width", "--height", "--source"].includes(flag)) {
+    if (!["--prompt", "--out", "--width", "--height", "--source", "--openrouter-provider"].includes(flag)) {
       throw new Error(`unknown option: ${flag}`);
     }
     const value = argv[index + 1];
@@ -67,6 +67,10 @@ function parseArguments(argv) {
   if (!options.out) throw new Error("--out is required");
   if ((options.width == null) !== (options.height == null)) {
     throw new Error("--width and --height must be supplied together");
+  }
+  const openrouterProvider = options["openrouter-provider"] ?? "openrouter";
+  if (!["openrouter", "openrouter-pro"].includes(openrouterProvider)) {
+    throw new Error("--openrouter-provider must be openrouter or openrouter-pro");
   }
 
   const viewport = options.width == null
@@ -81,6 +85,7 @@ function parseArguments(argv) {
     outputRoot: resolve(options.out),
     viewport,
     source: options.source,
+    openrouterProvider,
   };
 }
 
@@ -96,6 +101,7 @@ function usage() {
     "",
     "Usage:",
     "  npm run compare:atlas-providers -- --prompt \"fire forest\" --out /tmp/atlas-provider-comparison [--width 390 --height 844]",
+    "  npm run compare:atlas-providers -- --prompt \"fire forest\" --out /tmp/atlas-provider-comparison --openrouter-provider openrouter-pro",
     "  npm run compare:atlas-providers -- --prompt \"fire forest · ember citadel\" --source /atlas/atlas-origin.webp --out /tmp/atlas-provider-edit-comparison",
     "",
     "Required environment:",
@@ -195,7 +201,7 @@ async function main() {
 
   const atlasModule = await loadAtlasModuleAsync();
   const { generateAtlasImage, parseAtlasGenerationRequest, resolveAtlasProviderConfig } = atlasModule;
-  const providerConfigs = ["openai", "openrouter"].map((provider) => (
+  const providerConfigs = ["openai", options.openrouterProvider].map((provider) => (
     resolveAtlasProviderConfig(process.env, provider)
   ));
   const missingProviders = providerConfigs.filter((config) => !config.apiKey).map((config) => config.provider);
@@ -260,6 +266,7 @@ async function main() {
     viewport: request.viewport,
     mode: request.mode,
     source: request.currentImage ?? null,
+    openrouterProvider: options.openrouterProvider,
     startedAt,
     completedAt: new Date().toISOString(),
     results,

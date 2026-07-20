@@ -17,15 +17,15 @@ import * as haptics from "@/lib/haptics";
 import { useField } from "@/store/field";
 
 const ORIGIN_MAP = "/atlas/atlas-origin.webp";
-const FOLDED_MAP = "/atlas/atlas-folded.webp";
 const MOBILE_ORIGIN_MAP = "/atlas/atlas-origin-mobile.webp";
-const MOBILE_FOLDED_MAP = "/atlas/atlas-folded-mobile.webp";
 const DESKTOP_MAP_ASPECT = 4 / 3;
 const MOBILE_MAP_ASPECT = 853 / 1538;
 const MOBILE_BREAKPOINT = 760;
 
 type Direction = "north" | "east" | "south" | "west";
 type GenerationMode = "generate" | "zoom" | "shift";
+type GenerationPhase = "preview" | "final";
+type RenderPhase = "idle" | "local" | "preview" | "final" | "error";
 type MapView = { x: number; y: number; zoom: number };
 type MapMetrics = {
   width: number;
@@ -43,6 +43,17 @@ type MapHotspot = {
   regionId: string;
   prompt?: string;
   kind: MarkKind;
+};
+type MapSnapshot = {
+  image: string;
+  hotspots: MapHotspot[];
+  seeds: MapSeeds;
+  concept: string;
+  focusedId: string | null;
+  focusedLabel: string | null;
+  regionId: string | null;
+  view: MapView;
+  renderPhase: RenderPhase;
 };
 
 const REGION_IDS = new Set(REGIONS.map((region) => region.id));
@@ -87,9 +98,7 @@ function measureMap(width: number, height: number): MapMetrics {
 function responsiveMapSource(source: string, width: number): string {
   const mobile = width <= MOBILE_BREAKPOINT;
   if (mobile && source === ORIGIN_MAP) return MOBILE_ORIGIN_MAP;
-  if (mobile && source === FOLDED_MAP) return MOBILE_FOLDED_MAP;
   if (!mobile && source === MOBILE_ORIGIN_MAP) return ORIGIN_MAP;
-  if (!mobile && source === MOBILE_FOLDED_MAP) return FOLDED_MAP;
   return source;
 }
 
@@ -176,6 +185,13 @@ function localSeeds(prompt: string): MapSeeds {
   return { north: seeds[0], east: seeds[1], south: seeds[2], west: seeds[3] };
 }
 
+function generationId(sequence: number) {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return "atlas-" + Date.now() + "-" + sequence;
+}
+
 const MARK_SIGILS: Record<MarkKind, RouteSigilKind> = {
   coin: "watch",
   flower: "growth",
@@ -202,6 +218,7 @@ type PinchGesture = {
 };
 
 export default function Atlas() {
+  const selectedRegionId = useField((state) => state.region);
   const setRegion = useField((state) => state.setRegion);
   const recordTape = useField((state) => state.recordTape);
 
@@ -211,10 +228,20 @@ export default function Atlas() {
   const pointersRef = useRef(new Map<number, PointerPoint>());
   const dragRef = useRef<DragGesture | null>(null);
   const pinchRef = useRef<PinchGesture | null>(null);
+  const pinchZoomRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
   const requestRef = useRef(0);
+  const generationIdRef = useRef<string | null>(null);
+  const phaseRankRef = useRef(0);
   const crossfadeRef = useRef<number | null>(null);
   const revealRef = useRef<number | null>(null);
+  const incomingImageRef = useRef<string | null>(null);
+  const regionSettleRef = useRef<number | null>(null);
+  const zoomSettleRef = useRef<number | null>(null);
+  const freeZoomParentRef = useRef<MapSnapshot | null>(null);
+  const historyRef = useRef<MapSnapshot[]>([]);
+  const lastZoomRequestKeyRef = useRef<string | null>(null);
+  const renderedZoomRef = useRef(1);
   const activeImageRef = useRef(ORIGIN_MAP);
 
   const [metrics, setMetrics] = useState<MapMetrics>(EMPTY_METRICS);
@@ -229,6 +256,9 @@ export default function Atlas() {
   const [concept, setConcept] = useState("illuminated territories");
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
+  const [busyFocus, setBusyFocus] = useState<{ x: number; y: number } | null>(null);
+  const [renderPhase, setRenderPhase] = useState<RenderPhase>("idle");
+  const [historyDepth, setHistoryDepth] = useState(0);
   const [status, setStatus] = useState("tap a mark · drag the chart · pinch to breathe");
   const [interacting, setInteracting] = useState(false);
   const [pulse, setPulse] = useState<{ x: number; y: number; key: number } | null>(null);
@@ -277,29 +307,100 @@ export default function Atlas() {
       abortRef.current?.abort();
       if (crossfadeRef.current !== null) window.clearTimeout(crossfadeRef.current);
       if (revealRef.current !== null) window.clearTimeout(revealRef.current);
+      if (regionSettleRef.current !== null) window.clearTimeout(regionSettleRef.current);
+      if (zoomSettleRef.current !== null) window.clearTimeout(zoomSettleRef.current);
     };
   }, []);
 
-  const crossfadeTo = (source: string) => {
-    const nextSource = responsiveMapSource(source, metricsRef.current.width);
-    if (!nextSource || nextSource === activeImageRef.current) return;
+  const settleCrossfade = () => {
     if (crossfadeRef.current !== null) window.clearTimeout(crossfadeRef.current);
     if (revealRef.current !== null) window.clearTimeout(revealRef.current);
+    const pending = incomingImageRef.current;
+    if (pending) {
+      activeImageRef.current = pending;
+      setActiveImage(pending);
+    }
+    incomingImageRef.current = null;
+    setIncomingImage(null);
+    setIncomingVisible(false);
+  };
+
+  const crossfadeTo = (source: string) => {
+    const nextSource = responsiveMapSource(source, metricsRef.current.width);
+    settleCrossfade();
+    if (!nextSource || nextSource === activeImageRef.current) return;
+    incomingImageRef.current = nextSource;
     setIncomingVisible(false);
     setIncomingImage(nextSource);
     revealRef.current = window.setTimeout(() => setIncomingVisible(true), 24);
     crossfadeRef.current = window.setTimeout(() => {
       activeImageRef.current = nextSource;
+      incomingImageRef.current = null;
       setActiveImage(nextSource);
       setIncomingImage(null);
       setIncomingVisible(false);
     }, 880);
   };
 
+  const invalidateGeneration = () => {
+    requestRef.current += 1;
+    generationIdRef.current = null;
+    phaseRankRef.current = 0;
+    abortRef.current?.abort();
+    abortRef.current = null;
+    if (regionSettleRef.current !== null) window.clearTimeout(regionSettleRef.current);
+    if (zoomSettleRef.current !== null) window.clearTimeout(zoomSettleRef.current);
+    regionSettleRef.current = null;
+    zoomSettleRef.current = null;
+    setBusy(false);
+    setBusyFocus(null);
+  };
+
+  const captureSnapshot = (): MapSnapshot => {
+    settleCrossfade();
+    return {
+      image: activeImageRef.current,
+      hotspots,
+      seeds,
+      concept,
+      focusedId,
+      focusedLabel,
+      regionId: selectedRegionId,
+      view: viewRef.current,
+      renderPhase,
+    };
+  };
+
+  const restoreSnapshot = (snapshot: MapSnapshot) => {
+    settleCrossfade();
+    setHotspots(snapshot.hotspots);
+    setSeeds(snapshot.seeds);
+    setConcept(snapshot.concept);
+    setFocusedId(snapshot.focusedId);
+    setFocusedLabel(snapshot.focusedLabel);
+    setRegion(snapshot.regionId);
+    setRenderPhase(snapshot.renderPhase);
+    renderedZoomRef.current = snapshot.view.zoom;
+    commitView(boundView(snapshot.view, metricsRef.current));
+    crossfadeTo(snapshot.image);
+  };
+
   const resetOuterMap = () => {
+    invalidateGeneration();
+    freeZoomParentRef.current = null;
+    lastZoomRequestKeyRef.current = null;
+    const parent = historyRef.current.pop();
+    setHistoryDepth(historyRef.current.length);
+    if (parent) {
+      restoreSnapshot(parent);
+      setStatus(parent.focusedLabel ? "returned to " + parent.focusedLabel.toLowerCase() : "returned to the outer map");
+      return;
+    }
     setFocusedId(null);
     setFocusedLabel(null);
+    setRenderPhase("idle");
     setRegion(null);
+    renderedZoomRef.current = 1;
     commitView(centerView(metricsRef.current));
     setStatus("outer map · choose another mark or cross an edge");
   };
@@ -317,56 +418,100 @@ export default function Atlas() {
     direction?: Direction;
     optimisticSeeds?: MapSeeds;
   }) => {
+    invalidateGeneration();
+    settleCrossfade();
     const requestId = ++requestRef.current;
-    abortRef.current?.abort();
+    const clientGenerationId = generationId(requestId);
+    generationIdRef.current = clientGenerationId;
+    phaseRankRef.current = 0;
     const controller = new AbortController();
     abortRef.current = controller;
     const currentImage = activeImageRef.current;
     setBusy(true);
+    setBusyFocus(focus ? {
+      x: viewRef.current.x + focus.x * metricsRef.current.mapWidth * viewRef.current.zoom,
+      y: viewRef.current.y + focus.y * metricsRef.current.mapHeight * viewRef.current.zoom,
+    } : null);
+    setRenderPhase("local");
     if (optimisticSeeds) setSeeds(optimisticSeeds);
-    if (mode !== "zoom") crossfadeTo(FOLDED_MAP);
 
     const box = stageRef.current?.getBoundingClientRect();
-    try {
-      const response = await fetch("/api/atlas/generate", {
+    const body = JSON.stringify({
+      prompt: subjectPrompt.replace(/ +/g, " ").trim().slice(0, 240),
+      currentImage,
+      mode,
+      direction,
+      focus,
+      viewport: {
+        width: Math.round(box?.width ?? 0),
+        height: Math.round(box?.height ?? 0),
+      },
+    });
+
+    const requestPhase = async (phase: GenerationPhase) => {
+      const response = await fetch("/api/atlas/generate?phase=" + phase, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          "x-atlas-generation-id": clientGenerationId,
+        },
         signal: controller.signal,
-        body: JSON.stringify({
-          prompt: subjectPrompt.replace(/ +/g, " ").trim().slice(0, 240),
-          currentImage,
-          mode,
-          direction,
-          focus,
-          viewport: {
-            width: Math.round(box?.width ?? 0),
-            height: Math.round(box?.height ?? 0),
-          },
-        }),
+        body,
       });
       if (!response.ok) throw new Error("The atlas could not be redrawn.");
       const data = await response.json() as unknown;
       if (!isRecord(data)) throw new Error("The atlas returned an unreadable chart.");
-      if (requestId !== requestRef.current) return;
+      if (requestId !== requestRef.current || generationIdRef.current !== clientGenerationId) return;
+      const generation = isRecord(data.generation) ? data.generation : {};
+      const echoedId = typeof generation.generationId === "string" ? generation.generationId : clientGenerationId;
+      const echoedPhase = generation.phase === "preview" || generation.phase === "final" ? generation.phase : phase;
+      if (echoedId !== clientGenerationId || echoedPhase !== phase) return;
+      const rank = phase === "final" ? 2 : 1;
+      if (rank < phaseRankRef.current) return;
+      phaseRankRef.current = rank;
+      setRenderPhase(phase);
       const nextHotspots = normaliseHotspots(data.hotspots);
       if (nextHotspots) setHotspots(nextHotspots);
       setSeeds((current) => normaliseSeeds(data.seeds, current));
       if (typeof data.dataUrl === "string" && data.dataUrl) {
         crossfadeTo(data.dataUrl);
-        setStatus(mode === "zoom" ? "the region has deepened" : "a new atlas has surfaced");
+        setStatus(phase === "preview" ? "a quick chart has surfaced · refining…" : mode === "zoom" ? "the region has deepened" : "a new atlas has surfaced");
       } else {
-        setStatus("the local atlas is ready to explore");
+        setStatus(phase === "preview" ? "the local chart is refining…" : "the local atlas is ready to explore");
       }
-    } catch (error) {
-      if (controller.signal.aborted) return;
-      setStatus(error instanceof Error ? error.message : "The atlas held its present shape.");
-    } finally {
-      if (requestId === requestRef.current) setBusy(false);
+      if (phase === "final") {
+        setBusy(false);
+        setBusyFocus(null);
+      }
+    };
+
+    const results = await Promise.allSettled([
+      requestPhase("preview"),
+      requestPhase("final"),
+    ]);
+    if (controller.signal.aborted || requestId !== requestRef.current || generationIdRef.current !== clientGenerationId) return;
+    const rejected = results.filter((result) => result.status === "rejected");
+    if (rejected.length === 2) {
+      const failure = rejected[0] as PromiseRejectedResult;
+      setStatus(failure.reason instanceof Error ? failure.reason.message : "The atlas held its present shape.");
+      setRenderPhase("error");
+    } else if (results[1].status === "rejected" && phaseRankRef.current === 1) {
+      setStatus("the quick chart is ready · the final ink held back");
     }
+    setBusy(false);
+    setBusyFocus(null);
   };
 
   const enterHotspot = (hotspot: MapHotspot) => {
+    const parent = captureSnapshot();
+    historyRef.current.push(parent);
+    if (historyRef.current.length > 8) historyRef.current.shift();
+    setHistoryDepth(historyRef.current.length);
+    invalidateGeneration();
+    freeZoomParentRef.current = null;
+    lastZoomRequestKeyRef.current = null;
     const nextZoom = Math.max(2.15, Math.min(3, viewRef.current.zoom + 0.85));
+    renderedZoomRef.current = nextZoom;
     const next = boundView({
       zoom: nextZoom,
       x: metricsRef.current.width / 2 - hotspot.x * metricsRef.current.mapWidth * nextZoom,
@@ -377,6 +522,7 @@ export default function Atlas() {
     setRegion(hotspot.regionId);
     commitView(next);
     setStatus("diffusing detail around " + hotspot.label.toLowerCase());
+    setRenderPhase("local");
     try {
       getFieldAudio().chime();
       haptics.roll();
@@ -384,21 +530,33 @@ export default function Atlas() {
       // Sound and haptics are progressive enhancement.
     }
     recordTape("region", 0.84, "atlas/zoom/" + hotspot.id);
-    void generateMap({
-      mode: "zoom",
-      subjectPrompt: [concept, hotspot.prompt || hotspot.label].filter(Boolean).join(" · "),
-      focus: { x: hotspot.x, y: hotspot.y, zoom: nextZoom },
-    });
+    const settledSelection = requestRef.current;
+    setBusy(true);
+    regionSettleRef.current = window.setTimeout(() => {
+      regionSettleRef.current = null;
+      if (settledSelection !== requestRef.current) return;
+      void generateMap({
+        mode: "zoom",
+        subjectPrompt: [concept, hotspot.prompt || hotspot.label].filter(Boolean).join(" · "),
+        focus: { x: hotspot.x, y: hotspot.y, zoom: nextZoom },
+      });
+    }, 480);
   };
 
   const shiftMap = (direction: Direction) => {
     const seed = seeds[direction];
+    historyRef.current = [];
+    setHistoryDepth(0);
+    freeZoomParentRef.current = null;
+    lastZoomRequestKeyRef.current = null;
     setFocusedId(null);
     setFocusedLabel(null);
     setRegion(null);
+    renderedZoomRef.current = 1;
     setConcept(seed);
     commitView(centerView(metricsRef.current));
     setStatus("crossing " + direction + " toward " + seed);
+    setRenderPhase("local");
     recordTape("region", 0.72, "atlas/shift/" + direction + "/" + seed);
     void generateMap({
       mode: "shift",
@@ -412,19 +570,82 @@ export default function Atlas() {
     event.preventDefault();
     const raw = prompt.trim();
     if (!raw) return;
+    historyRef.current = [];
+    setHistoryDepth(0);
+    freeZoomParentRef.current = null;
+    lastZoomRequestKeyRef.current = null;
     setPrompt("");
     setConcept(raw);
     setFocusedId(null);
     setFocusedLabel(null);
     setRegion(null);
+    renderedZoomRef.current = 1;
     commitView(centerView(metricsRef.current));
     setStatus("drawing a map of " + raw);
+    setRenderPhase("local");
     recordTape("imagine", 0.94, "atlas/" + raw.slice(0, 32));
     void generateMap({
       mode: "generate",
       optimisticSeeds: localSeeds(raw),
       subjectPrompt: raw,
     });
+  };
+
+  const beginFreeZoom = () => {
+    if (!freeZoomParentRef.current) {
+      freeZoomParentRef.current = captureSnapshot();
+      invalidateGeneration();
+    }
+  };
+
+  const queueSettledZoom = () => {
+    if (zoomSettleRef.current !== null) window.clearTimeout(zoomSettleRef.current);
+    zoomSettleRef.current = window.setTimeout(() => {
+      zoomSettleRef.current = null;
+      const current = viewRef.current;
+      const parent = freeZoomParentRef.current;
+      if (!parent) return;
+      if (current.zoom <= 1.08) {
+        freeZoomParentRef.current = null;
+        if (historyRef.current.length > 0 || parent.view.zoom > 1.08) resetOuterMap();
+        return;
+      }
+      if (Math.abs(current.zoom - renderedZoomRef.current) < 0.45) {
+        freeZoomParentRef.current = null;
+        return;
+      }
+      const mapWidth = metricsRef.current.mapWidth * current.zoom;
+      const mapHeight = metricsRef.current.mapHeight * current.zoom;
+      const focus = {
+        x: clamp((metricsRef.current.width / 2 - current.x) / mapWidth, 0, 1),
+        y: clamp((metricsRef.current.height / 2 - current.y) / mapHeight, 0, 1),
+        zoom: current.zoom,
+      };
+      const key = [
+        concept,
+        Math.round(current.zoom * 2) / 2,
+        Math.round(focus.x * 8),
+        Math.round(focus.y * 8),
+      ].join("|");
+      if (key === lastZoomRequestKeyRef.current) {
+        freeZoomParentRef.current = null;
+        return;
+      }
+      lastZoomRequestKeyRef.current = key;
+      renderedZoomRef.current = current.zoom;
+      historyRef.current.push(parent);
+      if (historyRef.current.length > 8) historyRef.current.shift();
+      setHistoryDepth(historyRef.current.length);
+      freeZoomParentRef.current = null;
+      setStatus("settling new detail into the visible region");
+      setRenderPhase("local");
+      recordTape("region", 0.68, "atlas/free-zoom/" + current.zoom.toFixed(2));
+      void generateMap({
+        mode: "zoom",
+        subjectPrompt: concept + " · visible region",
+        focus,
+      });
+    }, 620);
   };
 
   const onWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
@@ -438,6 +659,7 @@ export default function Atlas() {
       resetOuterMap();
       return;
     }
+    beginFreeZoom();
     const point = { x: event.clientX - rect.left, y: event.clientY - rect.top };
     const worldX = (point.x - current.x) / current.zoom;
     const worldY = (point.y - current.y) / current.zoom;
@@ -446,6 +668,7 @@ export default function Atlas() {
       x: point.x - worldX * nextZoom,
       y: point.y - worldY * nextZoom,
     }, metricsRef.current));
+    queueSettledZoom();
   };
 
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -467,6 +690,8 @@ export default function Atlas() {
       };
       pinchRef.current = null;
     } else if (pointersRef.current.size === 2) {
+      beginFreeZoom();
+      pinchZoomRef.current = true;
       const points = Array.from(pointersRef.current.values());
       pinchRef.current = {
         distance: Math.hypot(points[1].x - points[0].x, points[1].y - points[0].y),
@@ -532,8 +757,16 @@ export default function Atlas() {
     }
 
     setInteracting(false);
+    const wasPinching = pinchZoomRef.current;
+    pinchZoomRef.current = false;
     pinchRef.current = null;
     const bounded = boundView(viewRef.current, metricsRef.current);
+    if (wasPinching) {
+      commitView(bounded);
+      dragRef.current = null;
+      queueSettledZoom();
+      return;
+    }
     const overflow: Array<[Direction, number]> = [
       ["west", viewRef.current.x - bounded.x],
       ["east", bounded.x - viewRef.current.x],
@@ -571,6 +804,8 @@ export default function Atlas() {
       <div
         ref={stageRef}
         className={"living-atlas__stage" + (busy ? " is-generating" : "")}
+        data-generation-phase={renderPhase}
+        data-history-depth={historyDepth}
         onWheel={onWheel}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
@@ -658,9 +893,15 @@ export default function Atlas() {
         ))}
 
         {busy && (
-          <div className="living-atlas__diffusion" aria-hidden="true">
+          <div
+            className="living-atlas__diffusion"
+            style={{ left: busyFocus?.x ?? metrics.width / 2, top: busyFocus?.y ?? metrics.height / 2 }}
+            aria-hidden="true"
+          >
             <span />
             <span />
+            <i />
+            <i />
           </div>
         )}
         {pulse && (
@@ -688,8 +929,8 @@ export default function Atlas() {
           </button>
         </form>
 
-        <div className="living-atlas__status" role="status" aria-live="polite" data-map-ui="true">
-          {busy ? "the ink is moving…" : status}
+        <div className={"living-atlas__status" + (busy ? " is-busy" : "")} role="status" aria-live="polite" data-map-ui="true">
+          {busy ? "map detail is being drawn" : status}
         </div>
       </div>
 
@@ -912,17 +1153,27 @@ export default function Atlas() {
           text-transform: lowercase;
           pointer-events: none;
         }
+        .living-atlas__status.is-busy {
+          width: 1px;
+          height: 1px;
+          padding: 0;
+          margin: -1px;
+          overflow: hidden;
+          clip: rect(0 0 0 0);
+          white-space: nowrap;
+          border: 0;
+        }
         .living-atlas__diffusion {
           position: absolute;
           z-index: 4;
-          inset: 0;
-          display: grid;
-          place-items: center;
+          width: 1px;
+          height: 1px;
           pointer-events: none;
-          overflow: hidden;
         }
         .living-atlas__diffusion span {
           position: absolute;
+          left: 0;
+          top: 0;
           width: min(66vw, 620px);
           aspect-ratio: 1;
           border: 1px solid rgba(246, 211, 116, .36);
@@ -931,6 +1182,20 @@ export default function Atlas() {
           animation: atlas-diffuse 2.8s ease-out infinite;
         }
         .living-atlas__diffusion span + span { animation-delay: 1.15s; }
+        .living-atlas__diffusion i {
+          position: absolute;
+          left: 0;
+          top: 0;
+          width: min(54vw, 520px);
+          height: 1px;
+          background: linear-gradient(90deg, transparent, rgba(244, 211, 126, .32), transparent);
+          transform-origin: center;
+          animation: atlas-rhumb 2.4s ease-in-out infinite alternate;
+        }
+        .living-atlas__diffusion i + i {
+          transform: translate(-50%, -50%) rotate(71deg);
+          animation-delay: -1.2s;
+        }
         .living-atlas__ripple {
           position: absolute;
           z-index: 7;
@@ -943,9 +1208,13 @@ export default function Atlas() {
           animation: atlas-ripple 1s ease-out forwards;
         }
         @keyframes atlas-diffuse {
-          0% { transform: scale(.12); opacity: 0; filter: blur(0); }
+          0% { transform: translate(-50%, -50%) scale(.12) rotate(0deg); opacity: 0; filter: blur(0); }
           18% { opacity: .8; }
-          100% { transform: scale(1.25); opacity: 0; filter: blur(10px); }
+          100% { transform: translate(-50%, -50%) scale(1.25) rotate(18deg); opacity: 0; filter: blur(10px); }
+        }
+        @keyframes atlas-rhumb {
+          from { transform: translate(-50%, -50%) rotate(18deg) scaleX(.45); opacity: .12; }
+          to { transform: translate(-50%, -50%) rotate(42deg) scaleX(1); opacity: .58; }
         }
         @keyframes atlas-ripple {
           to { transform: scale(12); opacity: 0; }
