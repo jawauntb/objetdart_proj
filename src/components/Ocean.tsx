@@ -421,6 +421,7 @@ export default function Ocean() {
     const crashers: Crasher[] = [];
     const MAX_CRASHERS = 14;
     let lastAmbientCrasherAt = 0;
+    let lastTapCrasherAt = 0;
     const spawnCrasher = (opts: {
       x: number;
       y: number;
@@ -598,13 +599,20 @@ export default function Ocean() {
       } else {
         useField.getState().recordTape("ripple", 0.85);
         try { getFieldAudio().chime(); } catch { /* noop */ }
-        // hard-press taps immediately spawn a small crasher at the surface
-        if (p > 0.55) {
+        // Every surface tap spawns a small crasher — iOS Safari doesn't
+        // populate PointerEvent.pressure, so a pressure gate would never
+        // fire on mobile (the main touch surface). Size scales with
+        // pressure when available; otherwise it uses a mid-range default.
+        // A short throttle prevents machine-gun taps from flooding the
+        // crasher pool.
+        const wSurf = surf.clientWidth || 0;
+        if (now - lastTapCrasherAt > 180) {
+          lastTapCrasherAt = now;
           spawnCrasher({
             x, y: seaLevelPx(),
-            size: 0.5 + p * 0.35,
-            dir: (x > (surf.clientWidth || 0) / 2) ? Math.PI - 0.1 : 0.1,
-            duration: 1.8,
+            size: 0.45 + p * 0.35,
+            dir: (x > wSurf / 2) ? Math.PI - 0.1 : 0.1,
+            duration: 1.7,
             kind: "tap",
           });
         }
