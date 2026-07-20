@@ -15,6 +15,7 @@ export type SiteRouteEntry = {
 };
 
 export const SITE_ROUTES: SiteRouteEntry[] = [
+  { key: "experiment",  icon: "atlas",    href: "/experiment",                      desc: "scroll the whole cabinet",     cluster: "field",     dark: true },
   { key: "atlas",       icon: "atlas",    href: "/atlas/origin", anchor: "atlas",    desc: "the territories",                cluster: "field",     homePriority: 10 },
   { key: "ocean",       icon: "waves",    href: "/ocean",                             desc: "the deep · dive down",          cluster: "water",     dark: true, homePriority: 7 },
   { key: "tide",        icon: "tide",     href: "/tide",                              desc: "move the moon",                cluster: "water",     dark: true, homePriority: 9 },
@@ -49,7 +50,7 @@ export const SITE_ROUTES: SiteRouteEntry[] = [
   { key: "colophon",    icon: "colophon", href: "/colophon",     anchor: "colophon",  desc: "what kept this",               cluster: "field" },
 ];
 
-export const PRIMARY_ROUTE_KEYS = ["atlas", "tide", "waves", "watch"] as const;
+export const PRIMARY_ROUTE_KEYS = ["experiment", "atlas", "tide", "waves", "watch"] as const;
 
 export const SITE_ROUTE_BY_KEY = Object.fromEntries(
   SITE_ROUTES.map((route) => [route.key, route]),
