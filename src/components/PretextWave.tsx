@@ -8,6 +8,7 @@ import {
   type PreparedTextWithSegments,
 } from "@chenglou/pretext";
 import { useEffect, useMemo, useRef, useState } from "react";
+import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
 import WaterText from "@/components/WaterText";
 import { getFieldAudio } from "@/lib/audio";
 import { useGeneratedSpeech } from "@/lib/useGeneratedSpeech";
@@ -350,6 +351,7 @@ export default function PretextWave() {
           "--pretext-density": `${density}`,
         } as React.CSSProperties}
         aria-label="Playable text field. Drag to bend the words: up and down for amplitude, left and right for frequency."
+        aria-describedby="pretext-gesture-hint"
         onPointerDown={onStagePointerDown}
         onPointerMove={onStagePointerMove}
         onPointerUp={endStageDrag}
@@ -388,6 +390,10 @@ export default function PretextWave() {
         </div>
       </div>
 
+      <p id="pretext-gesture-hint" className="pretext-gesture-hint">
+        drag <span aria-hidden="true">↔</span> frequency · <span aria-hidden="true">↕</span> amplitude
+      </p>
+
       <div className="pretext-title" aria-hidden="true">
         <span>pretext / playable sentence</span>
         <strong>
@@ -414,91 +420,107 @@ export default function PretextWave() {
         )}
       </div>
 
-      <form
-        className="pretext-prompt"
-        aria-label="ask the room"
-        onSubmit={(event) => {
-          event.preventDefault();
-          generate();
-        }}
-      >
-        <label htmlFor="pretext-prompt-input">prompt or text</label>
-        <textarea
-          id="pretext-prompt-input"
-          value={prompt}
-          onChange={(event) => setPrompt(event.target.value)}
-          placeholder="write the sentence you want the room to bend"
-          rows={2}
-          maxLength={400}
-        />
-        <div className="pretext-actions">
-          <button type="submit" disabled={generating || !prompt.trim()}>
-            {generating ? "generating" : "generate"}
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              stopSpeech(null);
-              setText(prompt.trim() || STARTER_TEXT);
-              setSpeechStatus(null);
-              haptics.ripple(0.44);
-              recordTape("object", 0.46, "pretext:use-text");
-              addMark("placed", "water", 0.5);
-            }}
-          >
-            use text
-          </button>
-          <button type="button" onClick={speak}>
-            {speaking ? "stop voice" : "speak"}
-          </button>
-        </div>
-        <p className="t-mono pretext-status" aria-live="polite">{speechStatus ?? status}</p>
-      </form>
+      <label className="pretext-mode-chip">
+        <span>motion ·</span>
+        <select
+          value={mode}
+          aria-label="motion mode"
+          onChange={(event) => impulse(event.target.value as MotionMode)}
+        >
+          {MODES.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
+        </select>
+      </label>
 
-      <div className="pretext-console" aria-label="text motion controls">
-        <button type="button" className="pretext-run" onClick={togglePlay} aria-pressed={playing}>
-          {playing ? "pause" : "play"}
-        </button>
-        <div className="pretext-modes" aria-label="motion modes">
-          {MODES.map((item) => (
-            <button
-              key={item.key}
-              type="button"
-              aria-pressed={mode === item.key}
-              onClick={() => impulse(item.key)}
-            >
-              {item.label}
+      <MobileInstrumentPanel
+        title="compose & tune"
+        triggerLabel="compose"
+      >
+        <form
+          className="pretext-prompt"
+          aria-label="ask the room"
+          onSubmit={(event) => {
+            event.preventDefault();
+            generate();
+          }}
+        >
+          <label htmlFor="pretext-prompt-input">prompt or text</label>
+          <textarea
+            id="pretext-prompt-input"
+            value={prompt}
+            onChange={(event) => setPrompt(event.target.value)}
+            placeholder="write the sentence you want the room to bend"
+            rows={2}
+            maxLength={400}
+          />
+          <div className="pretext-actions">
+            <button type="submit" disabled={generating || !prompt.trim()}>
+              {generating ? "generating" : "generate"}
             </button>
-          ))}
+            <button
+              type="button"
+              onClick={() => {
+                stopSpeech(null);
+                setText(prompt.trim() || STARTER_TEXT);
+                setSpeechStatus(null);
+                haptics.ripple(0.44);
+                recordTape("object", 0.46, "pretext:use-text");
+                addMark("placed", "water", 0.5);
+              }}
+            >
+              use text
+            </button>
+            <button type="button" onClick={speak}>
+              {speaking ? "stop voice" : "speak"}
+            </button>
+          </div>
+          <p className="t-mono pretext-status" aria-live="polite">{speechStatus ?? status}</p>
+        </form>
+
+        <div className="pretext-console" aria-label="text motion controls">
+          <button type="button" className="pretext-run" onClick={togglePlay} aria-pressed={playing}>
+            {playing ? "pause" : "play"}
+          </button>
+          <div className="pretext-modes" aria-label="motion modes">
+            {MODES.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                aria-pressed={mode === item.key}
+                onClick={() => impulse(item.key)}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+          <label className="pretext-slider">
+            <span>amp</span>
+            <strong>{amp}</strong>
+            <input
+              type="range"
+              min={AMP_MIN}
+              max={AMP_MAX}
+              value={amp}
+              onChange={(event) => { const v = Number(event.target.value); setAmp(v); ampRef.current = v; }}
+              onPointerUp={() => markControl("amp", String(amp), 0.44)}
+              onKeyUp={() => markControl("amp", String(amp), 0.38)}
+            />
+          </label>
+          <label className="pretext-slider">
+            <span>freq</span>
+            <strong>{density.toFixed(2)}</strong>
+            <input
+              type="range"
+              min={DENSITY_MIN}
+              max={DENSITY_MAX}
+              step="0.05"
+              value={density}
+              onChange={(event) => { const v = Number(event.target.value); setDensity(v); densityRef.current = v; }}
+              onPointerUp={() => markControl("freq", density.toFixed(2), 0.42)}
+              onKeyUp={() => markControl("freq", density.toFixed(2), 0.36)}
+            />
+          </label>
         </div>
-        <label className="pretext-slider">
-          <span>amp</span>
-          <strong>{amp}</strong>
-          <input
-            type="range"
-            min={AMP_MIN}
-            max={AMP_MAX}
-            value={amp}
-            onChange={(event) => { const v = Number(event.target.value); setAmp(v); ampRef.current = v; }}
-            onPointerUp={() => markControl("amp", String(amp), 0.44)}
-            onKeyUp={() => markControl("amp", String(amp), 0.38)}
-          />
-        </label>
-        <label className="pretext-slider">
-          <span>freq</span>
-          <strong>{density.toFixed(2)}</strong>
-          <input
-            type="range"
-            min={DENSITY_MIN}
-            max={DENSITY_MAX}
-            step="0.05"
-            value={density}
-            onChange={(event) => { const v = Number(event.target.value); setDensity(v); densityRef.current = v; }}
-            onPointerUp={() => markControl("freq", density.toFixed(2), 0.42)}
-            onKeyUp={() => markControl("freq", density.toFixed(2), 0.36)}
-          />
-        </label>
-      </div>
+      </MobileInstrumentPanel>
 
       <style
         dangerouslySetInnerHTML={{
@@ -650,6 +672,28 @@ export default function PretextWave() {
           mix-blend-mode: overlay;
         }
 
+        .pretext-gesture-hint {
+          display: none;
+          position: fixed;
+          z-index: 2;
+          left: 50%;
+          bottom: 200px;
+          margin: 0;
+          padding: 8px 12px;
+          border: 1px solid rgba(247,240,223,0.16);
+          border-radius: 999px;
+          background: rgba(7,15,23,0.42);
+          color: rgba(247,240,223,0.62);
+          font-family: var(--font-mono);
+          font-size: 10px;
+          line-height: 1;
+          white-space: nowrap;
+          pointer-events: none;
+          transform: translateX(-50%);
+          backdrop-filter: blur(10px);
+          -webkit-backdrop-filter: blur(10px);
+        }
+
         .pretext-state-strip {
           position: fixed;
           z-index: 3;
@@ -689,6 +733,10 @@ export default function PretextWave() {
         .pretext-state-water { color: rgba(174,218,233,0.86); }
         .pretext-state-ember { color: rgba(255,200,132,0.9); }
         .pretext-state-voice { color: rgba(242,238,230,0.82); }
+
+        .pretext-mode-chip {
+          display: none;
+        }
 
         .pretext-prompt {
           position: fixed;
@@ -939,6 +987,77 @@ export default function PretextWave() {
           }
           .pretext-prompt textarea {
             font-size: 16px;
+          }
+        }
+        @media (max-width: 720px) {
+          .pretext-state-strip {
+            top: 106px;
+            right: 14px;
+            max-width: min(180px, 48vw);
+            min-height: 28px;
+            padding: 7px 10px;
+            font-size: 9px;
+          }
+
+          .pretext-gesture-hint {
+            display: block;
+            top: 148px;
+            bottom: auto;
+            padding: 7px 10px;
+            font-size: 9px;
+          }
+
+          .pretext-mode-chip {
+            position: fixed;
+            z-index: 122;
+            right: max(14px, env(safe-area-inset-right, 0px));
+            bottom: calc(68px + env(safe-area-inset-bottom, 0px));
+            min-height: 42px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid rgba(247,240,223,0.28);
+            border-radius: 999px;
+            padding: 0 13px;
+            background: rgba(7,15,23,0.78);
+            color: rgba(247,240,223,0.88);
+            box-shadow: 0 12px 34px rgba(0,0,0,0.24);
+            font-family: var(--font-mono);
+            font-size: 9px;
+            letter-spacing: 0.04em;
+            text-transform: lowercase;
+            backdrop-filter: blur(14px);
+            -webkit-backdrop-filter: blur(14px);
+          }
+
+          .pretext-mode-chip span {
+            flex: none;
+            color: rgba(247,240,223,0.54);
+          }
+
+          .pretext-mode-chip select {
+            max-width: 88px;
+            border: 0;
+            padding: 6px 18px 6px 4px;
+            color: inherit;
+            background: transparent;
+            font: inherit;
+            text-transform: lowercase;
+          }
+
+          .mobile-instrument-panel__content > .pretext-console {
+            margin-top: 10px !important;
+          }
+
+          .pretext-console {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+          }
+
+          .pretext-run,
+          .pretext-slider,
+          .pretext-modes button {
+            min-height: 48px;
           }
         }
         @media (prefers-reduced-motion: reduce) {

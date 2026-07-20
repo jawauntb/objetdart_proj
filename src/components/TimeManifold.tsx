@@ -11,6 +11,7 @@ import {
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { useField } from "@/store/field";
+import MobileInstrumentPanel, { MOBILE_QUERY } from "@/components/MobileInstrumentPanel";
 
 /**
  * /time — a playable relativity instrument.
@@ -72,7 +73,14 @@ export default function TimeManifold() {
   const lastSyncRef = useRef(0);
   const lastToneRef = useRef(0);
   const lastControlRef = useRef(0);
-  const pointerRef = useRef({ active: false, id: -1 });
+  const pointerRef = useRef({
+    active: false,
+    id: -1,
+    startX: 0,
+    startY: 0,
+    moved: false,
+    mobile: false,
+  });
 
   const recordTape = useField((s) => s.recordTape);
 
@@ -457,24 +465,39 @@ export default function TimeManifold() {
         ref={canvasRef}
         className="time-canvas"
         role="img"
-        aria-label="A spacetime manifold: drag sideways to set velocity, up and down to set mass, and watch proper time dilate against coordinate time."
+        aria-label="A spacetime manifold. On a phone, tap to start or pause. Drag sideways to set velocity and up or down to set mass."
         onPointerDown={(event: ReactPointerEvent<HTMLCanvasElement>) => {
-          pointerRef.current.active = true;
-          pointerRef.current.id = event.pointerId;
-          tuneFromPointer(event.clientX, event.clientY);
+          const mobile = window.matchMedia(MOBILE_QUERY).matches;
+          pointerRef.current = {
+            active: true,
+            id: event.pointerId,
+            startX: event.clientX,
+            startY: event.clientY,
+            moved: false,
+            mobile,
+          };
+          // Preserve the desktop click-to-place behavior. On phones we wait
+          // for movement so a deliberate tap can be the primary play action.
+          if (!mobile) tuneFromPointer(event.clientX, event.clientY);
           try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* noop */ }
         }}
         onPointerMove={(event: ReactPointerEvent<HTMLCanvasElement>) => {
           const p = pointerRef.current;
           if (!p.active || p.id !== event.pointerId) return;
+          if (!p.moved && Math.hypot(event.clientX - p.startX, event.clientY - p.startY) > 7) {
+            p.moved = true;
+          }
+          if (p.mobile && !p.moved) return;
           tuneFromPointer(event.clientX, event.clientY);
         }}
         onPointerUp={(event: ReactPointerEvent<HTMLCanvasElement>) => {
           const p = pointerRef.current;
           if (p.id !== event.pointerId) return;
+          const shouldToggle = p.mobile && !p.moved;
           p.active = false;
           p.id = -1;
           try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* noop */ }
+          if (shouldToggle) toggleRunning();
         }}
         onPointerCancel={(event: ReactPointerEvent<HTMLCanvasElement>) => {
           const p = pointerRef.current;
@@ -491,53 +514,61 @@ export default function TimeManifold() {
       </div>
 
       <p className="time-hint" aria-hidden="true">
+        <span className="time-hint-mobile">tap to {running ? "pause" : "start"} · </span>
         drag ← → for velocity · ↑ ↓ for mass
       </p>
 
-      <div className="time-console" aria-label="relativity controls">
-        <button
-          type="button"
-          className="time-run"
-          onClick={toggleRunning}
-          aria-pressed={running}
-        >
-          {running ? "pause" : "start"}
-        </button>
-        <button type="button" className="time-reset" onClick={reset}>
-          reset
-        </button>
-        <TimeSlider
-          label="velocity"
-          min={0}
-          max={VMAX}
-          step={0.005}
-          value={velocity}
-          display={`${velocity.toFixed(3)}c`}
-          onChange={(value) => {
-            const v = Number(value.toFixed(3));
-            setVelocity(v);
-            velRef.current = v;
-            markControl("velocity", v / VMAX);
-          }}
-        />
-        <TimeSlider
-          label="mass"
-          min={0}
-          max={100}
-          step={1}
-          value={mass}
-          display={String(Math.round(mass))}
-          onChange={(value) => {
-            const m = Math.round(value);
-            setMass(m);
-            massRef.current = m;
-            markControl("mass", m / 100);
-          }}
-        />
-        <output className="time-readout" aria-live="polite" aria-label={`relativity readout ${readout}`}>
-          {readout}
-        </output>
-      </div>
+      <MobileInstrumentPanel
+        title="relativity controls"
+        triggerLabel="tune"
+        summary={`${running ? "running" : "paused"} · ${velocity.toFixed(3)}c · mass ${mass}`}
+      >
+        <div className="time-console" aria-label="relativity controls">
+          <button
+            type="button"
+            className="time-run"
+            onClick={toggleRunning}
+            aria-pressed={running}
+            aria-label={running ? "pause the relativity clocks" : "start the relativity clocks"}
+          >
+            {running ? "pause" : "start"}
+          </button>
+          <button type="button" className="time-reset" onClick={reset} aria-label="reset both relativity clocks">
+            reset
+          </button>
+          <TimeSlider
+            label="velocity"
+            min={0}
+            max={VMAX}
+            step={0.005}
+            value={velocity}
+            display={`${velocity.toFixed(3)}c`}
+            onChange={(value) => {
+              const v = Number(value.toFixed(3));
+              setVelocity(v);
+              velRef.current = v;
+              markControl("velocity", v / VMAX);
+            }}
+          />
+          <TimeSlider
+            label="mass"
+            min={0}
+            max={100}
+            step={1}
+            value={mass}
+            display={String(Math.round(mass))}
+            onChange={(value) => {
+              const m = Math.round(value);
+              setMass(m);
+              massRef.current = m;
+              markControl("mass", m / 100);
+            }}
+          />
+          <output className="time-readout" aria-live="polite" aria-label={`relativity readout ${readout}`}>
+            {readout}
+          </output>
+        </div>
+      </MobileInstrumentPanel>
 
       <style
         dangerouslySetInnerHTML={{
@@ -608,6 +639,8 @@ export default function TimeManifold() {
           letter-spacing: 0.02em;
           pointer-events: none;
         }
+
+        .time-hint-mobile { display: none; }
 
         .time-console {
           position: fixed;
@@ -788,6 +821,42 @@ export default function TimeManifold() {
           .time-run,
           .time-reset {
             min-height: 52px;
+          }
+        }
+
+        @media (max-width: 720px) {
+          .time-title {
+            top: calc(22px + env(safe-area-inset-top, 0px));
+          }
+
+          .time-hint {
+            right: 16px;
+            bottom: calc(122px + env(safe-area-inset-bottom, 0px));
+            left: 16px;
+            font-size: 9px;
+            line-height: 1.45;
+          }
+
+          .time-hint-mobile { display: inline; }
+
+          .time-console {
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            padding: 0;
+            border: 0;
+            background: transparent;
+            box-shadow: none;
+            backdrop-filter: none;
+            -webkit-backdrop-filter: none;
+          }
+
+          .time-run,
+          .time-reset {
+            min-height: 48px;
+          }
+
+          .time-instrument .mobile-instrument-panel__trigger {
+            border-color: color-mix(in srgb, var(--geo) 38%, transparent);
           }
         }
 

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { useField } from "@/store/field";
+import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
 
 type Palette = {
   id: string;
@@ -887,74 +888,118 @@ export default function FlowersPlayground() {
           }}
         />
 
-        <div className="flowers-toolbar" aria-label="flower instrument controls">
-          <div className="flowers-swatches" aria-label="palettes">
-            {PALETTES.map((palette, index) => (
-              <button
-                key={palette.id}
-                type="button"
-                className="flowers-swatch"
-                aria-label={`palette ${palette.id}`}
-                aria-pressed={paletteIndex === index}
-                title={palette.id}
-                onClick={() => selectPalette(index)}
-              >
-                <span
-                  style={{
-                    background: `linear-gradient(135deg, ${palette.glow}, hsl(${palette.petalHues[0]} 82% 62%), ${palette.vein})`,
+        <div className="flowers-gesture" aria-hidden="true">tap to bloom · drag to paint</div>
+
+        <MobileInstrumentPanel
+          className="flowers-mobile-panel"
+          title="garden & bouquet"
+          triggerLabel="tune"
+          summary={`${PALETTES[paletteIndex].id} · ${symmetry} petals`}
+        >
+          <div className="flowers-toolbar" aria-label="flower instrument controls">
+            <div className="flowers-swatches" aria-label="palettes">
+              {PALETTES.map((palette, index) => (
+                <button
+                  key={palette.id}
+                  type="button"
+                  className="flowers-swatch"
+                  aria-label={`palette ${palette.id}`}
+                  aria-pressed={paletteIndex === index}
+                  title={palette.id}
+                  onClick={() => selectPalette(index)}
+                >
+                  <span
+                    style={{
+                      background: `linear-gradient(135deg, ${palette.glow}, hsl(${palette.petalHues[0]} 82% 62%), ${palette.vein})`,
+                    }}
+                  />
+                </button>
+              ))}
+            </div>
+
+            <button
+              type="button"
+              className="flowers-icon-button"
+              aria-label={`cycle radial symmetry, currently ${symmetry}`}
+              title="symmetry"
+              onClick={cycleSymmetry}
+            >
+              <SymmetryIcon />
+            </button>
+            <button
+              type="button"
+              className="flowers-icon-button"
+              aria-label={`cycle wind, currently ${Math.round(wind * 100)}`}
+              title="wind"
+              onClick={cycleWind}
+            >
+              <WindIcon />
+            </button>
+            <button
+              type="button"
+              className="flowers-icon-button"
+              aria-label="replay bouquet"
+              title="bouquet"
+              onClick={replayBouquet}
+            >
+              <BouquetIcon />
+            </button>
+            <button
+              type="button"
+              className="flowers-icon-button"
+              aria-label="clear bouquet"
+              title="clear"
+              onClick={clearBouquet}
+            >
+              <ClearIcon />
+            </button>
+
+            <div className="flowers-exact" aria-label="exact flower controls">
+              <label>
+                <span>symmetry</span>
+                <strong>{symmetry}</strong>
+                <input
+                  type="range"
+                  min={5}
+                  max={12}
+                  step={1}
+                  value={symmetry}
+                  onChange={(event) => {
+                    const next = Number(event.target.value);
+                    setSymmetry(next);
+                    markControl(`symmetry/${next}`, next / 12);
                   }}
                 />
-              </button>
-            ))}
+              </label>
+              <label>
+                <span>breeze</span>
+                <strong>{Math.round(wind * 100)}</strong>
+                <input
+                  type="range"
+                  min={0.12}
+                  max={0.9}
+                  step={0.01}
+                  value={wind}
+                  onChange={(event) => {
+                    const next = Number(event.target.value);
+                    setWind(next);
+                    markControl(`wind/${Math.round(next * 100)}`, next);
+                  }}
+                />
+              </label>
+            </div>
+
+            <output
+              className="flowers-readout"
+              aria-live="polite"
+              aria-label={`symmetry ${symmetry}, wind ${Math.round(wind * 100)}, blooms ${bloomCount}`}
+            >
+              <span>{String(symmetry).padStart(2, "0")}</span>
+              <span>{String(Math.round(wind * 100)).padStart(2, "0")}</span>
+              <span>{String(Math.min(99, bloomCount)).padStart(2, "0")}</span>
+            </output>
           </div>
-
-          <button
-            type="button"
-            className="flowers-icon-button"
-            aria-label={`cycle radial symmetry, currently ${symmetry}`}
-            title="symmetry"
-            onClick={cycleSymmetry}
-          >
-            <SymmetryIcon />
-          </button>
-          <button
-            type="button"
-            className="flowers-icon-button"
-            aria-label={`cycle wind, currently ${Math.round(wind * 100)}`}
-            title="wind"
-            onClick={cycleWind}
-          >
-            <WindIcon />
-          </button>
-          <button
-            type="button"
-            className="flowers-icon-button"
-            aria-label="replay bouquet"
-            title="bouquet"
-            onClick={replayBouquet}
-          >
-            <BouquetIcon />
-          </button>
-          <button
-            type="button"
-            className="flowers-icon-button"
-            aria-label="clear bouquet"
-            title="clear"
-            onClick={clearBouquet}
-          >
-            <ClearIcon />
-          </button>
-
-          <output
-            className="flowers-readout"
-            aria-live="polite"
-            aria-label={`symmetry ${symmetry}, wind ${Math.round(wind * 100)}, blooms ${bloomCount}`}
-          >
-            <span>{String(symmetry).padStart(2, "0")}</span>
-            <span>{String(Math.round(wind * 100)).padStart(2, "0")}</span>
-            <span>{String(Math.min(99, bloomCount)).padStart(2, "0")}</span>
-          </output>
-        </div>
+        </MobileInstrumentPanel>
       </section>
 
       <style
@@ -1001,6 +1046,11 @@ export default function FlowersPlayground() {
           cursor: crosshair;
           touch-action: none;
           z-index: 0;
+        }
+
+        .flowers-gesture,
+        .flowers-exact {
+          display: none;
         }
 
         .flowers-toolbar {
@@ -1198,6 +1248,87 @@ export default function FlowersPlayground() {
           .flowers-readout {
             min-height: 44px;
             flex: 2 1 132px;
+          }
+        }
+
+        @media (max-width: 720px) {
+          .flowers-gesture {
+            position: fixed;
+            z-index: 2;
+            right: 16px;
+            bottom: calc(122px + env(safe-area-inset-bottom, 0px));
+            left: 16px;
+            display: block;
+            color: rgba(246, 239, 222, 0.56);
+            font: 9px/1 var(--font-mono);
+            letter-spacing: 0.07em;
+            text-align: center;
+            text-shadow: 0 2px 14px rgba(0, 0, 0, 0.92);
+            text-transform: lowercase;
+            pointer-events: none;
+          }
+
+          .flowers-mobile-panel .mobile-instrument-panel__trigger {
+            border-color: rgba(255, 231, 150, 0.38);
+            background: rgba(6, 16, 13, 0.86);
+          }
+
+          .mobile-instrument-panel__content .flowers-toolbar {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            align-items: stretch;
+            gap: 8px;
+          }
+
+          .mobile-instrument-panel__content .flowers-swatches {
+            grid-column: 1 / -1;
+            min-height: 50px;
+          }
+
+          .mobile-instrument-panel__content .flowers-icon-button {
+            width: 100%;
+            max-width: none;
+            min-height: 48px;
+          }
+
+          .mobile-instrument-panel__content .flowers-exact {
+            grid-column: 1 / -1;
+            display: grid;
+            gap: 8px;
+          }
+
+          .flowers-exact label {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            align-items: center;
+            gap: 7px 12px;
+            min-height: 62px;
+            padding: 9px 11px;
+            border: 1px solid rgba(246, 239, 222, 0.14);
+            border-radius: 8px;
+            background: rgba(246, 239, 222, 0.05);
+            color: rgba(246, 239, 222, 0.62);
+            font: 9px/1 var(--font-mono);
+            letter-spacing: 0.07em;
+            text-transform: lowercase;
+          }
+
+          .flowers-exact strong {
+            color: rgba(255, 231, 150, 0.94);
+            font: 15px/1 var(--font-numerals);
+          }
+
+          .flowers-exact input {
+            grid-column: 1 / -1;
+            width: 100%;
+            accent-color: rgba(255, 231, 150, 0.9);
+          }
+
+          .mobile-instrument-panel__content .flowers-readout {
+            grid-column: 1 / -1;
+            width: 100%;
+            min-height: 42px;
+            justify-content: center;
           }
         }
       ` }}

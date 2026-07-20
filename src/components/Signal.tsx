@@ -7,6 +7,7 @@ import { useField } from "@/store/field";
 import * as haptics from "@/lib/haptics";
 import { stirTurbulence } from "@/lib/turbulence";
 import type { ConcernKey } from "@/lib/types";
+import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
 import WaterText from "@/components/WaterText";
 
 // Same mapping as audio.ts — duplicated here only so the UI can label the
@@ -182,6 +183,7 @@ export default function Signal() {
   const [activePrompt, setActivePrompt] = useState("");
   const [composeModel, setComposeModel] = useState<string | null>(null);
   const [keptSignals, setKeptSignals] = useState<KeptSignal[]>([]);
+  const [shareStatus, setShareStatus] = useState<string | null>(null);
   const [receiveStartedAt, setReceiveStartedAt] = useState(0);
   const [receiveTick, setReceiveTick] = useState(0);
   const [pendingKeepsCurrent, setPendingKeepsCurrent] = useState(false);
@@ -510,6 +512,44 @@ export default function Signal() {
       reason: "kept",
     });
   }, [startCompose]);
+
+  const retryActiveSignal = useCallback(() => {
+    const prompt = activePrompt.trim() || promptTextRef.current.trim();
+    if (!prompt || composePending) return;
+    void startCompose(prompt, {
+      keepCurrentUntilReady: Boolean(composeHandle.current),
+      reason: "again",
+    });
+  }, [activePrompt, composePending, startCompose]);
+
+  const shareActiveSignal = useCallback(async () => {
+    const prompt = activePrompt.trim();
+    if (!prompt) return;
+    const url = window.location.href;
+    try {
+      if (navigator.share) {
+        try {
+          await navigator.share({
+            title: "SIGNAL — objet d'art",
+            text: prompt,
+            url,
+          });
+          setShareStatus("shared");
+          recordTape("sigil", 0.52, "signal/share");
+          return;
+        } catch (error) {
+          if (error instanceof DOMException && error.name === "AbortError") return;
+        }
+      }
+
+      if (!navigator.clipboard?.writeText) throw new Error("sharing unavailable");
+      await navigator.clipboard.writeText(`${prompt}\n${url}`);
+      setShareStatus("shared");
+      recordTape("sigil", 0.52, "signal/share");
+    } catch {
+      setShareStatus("share failed");
+    }
+  }, [activePrompt, recordTape]);
 
   const choosePreset = useCallback((prompt: string) => {
     promptTextRef.current = prompt;
@@ -1046,6 +1086,12 @@ export default function Signal() {
     : composeHandle.current && promptText.trim()
       ? "receive next"
       : "receive music";
+  const hasReceivedSignal = Boolean(composePending || composing || activePrompt || composeError);
+  const mobilePanelSummary = composePending
+    ? "receiving"
+    : composing
+      ? `playing · ${compactPrompt(activePrompt || composePrimaryLabel, 24)}`
+      : compactPrompt(activePrompt || "signal controls", 30);
 
   return (
     <div
@@ -1054,6 +1100,8 @@ export default function Signal() {
         if (!audioStarted) void ensureAudio();
       }}
       data-touch-surface="true"
+      data-signal-ready={hasReceivedSignal ? "true" : "false"}
+      data-receiving={composePending ? "true" : "false"}
       className="signal-root"
       style={{
         position: "fixed",
@@ -1129,6 +1177,7 @@ export default function Signal() {
       {/* play button — large center prompt when nothing is playing yet */}
       {showTapPrompt && (
         <button
+          className="signal-tap-prompt"
           type="button"
           onClick={(e) => {
             e.stopPropagation();
@@ -1403,22 +1452,29 @@ export default function Signal() {
 
       {/* compact footer rail — empty space remains click-through so the
           canvas stays playable above and around the controls. */}
-      <div
-        className="signal-footer"
-        style={{
-          position: "fixed",
-          left: 0,
-          right: 0,
-          bottom: "calc(58px + env(safe-area-inset-bottom))",
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          gap: 10,
-          padding: "0 14px",
-          pointerEvents: "none",
-          zIndex: 20,
-        }}
+      <MobileInstrumentPanel
+        className="signal-mobile-panel"
+        title="signal · tune & keep"
+        triggerLabel="tune"
+        mobileEnabled={hasReceivedSignal}
+        summary={mobilePanelSummary}
       >
+        <div
+          className="signal-footer"
+          style={{
+            position: "fixed",
+            left: 0,
+            right: 0,
+            bottom: "calc(58px + env(safe-area-inset-bottom))",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 10,
+            padding: "0 14px",
+            pointerEvents: "none",
+            zIndex: 20,
+          }}
+        >
         <div
           className="signal-prompt-panel"
           style={{
@@ -1672,6 +1728,56 @@ export default function Signal() {
               ))}
             </div>
           )}
+          {activePrompt && (
+            <div className="signal-mobile-manage" aria-label="signal variations and sharing">
+              <button
+                type="button"
+                disabled={composePending}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  retryActiveSignal();
+                }}
+                style={miniActionBtn(false)}
+              >
+                retry
+              </button>
+              {SIGNAL_NUDGES.filter((nudge) => nudge.id !== "again").map((nudge) => (
+                <button
+                  key={nudge.id}
+                  type="button"
+                  disabled={composePending}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    nudgeSignal(nudge);
+                  }}
+                  style={miniActionBtn(false)}
+                >
+                  {nudge.label}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  keepActiveSignal();
+                }}
+                aria-pressed={activePromptIsKept}
+                style={miniActionBtn(activePromptIsKept)}
+              >
+                {activePromptIsKept ? "kept" : "keep"}
+              </button>
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void shareActiveSignal();
+                }}
+                style={miniActionBtn(shareStatus === "shared")}
+              >
+                {shareStatus ?? "share"}
+              </button>
+            </div>
+          )}
         </div>
 
         {/* control rail — compact and horizontally scrollable if the viewport
@@ -1814,6 +1920,7 @@ export default function Signal() {
         </div>
       </div>
       </div>
+      </MobileInstrumentPanel>
 
       <style>{`
         body:has(.signal-root) .oda-field-watch,
@@ -1919,6 +2026,9 @@ export default function Signal() {
         .signal-kept-signals::-webkit-scrollbar {
           display: none;
         }
+        .signal-mobile-manage {
+          display: none;
+        }
         @media (max-width: 620px) {
           .signal-footer {
             gap: 6px !important;
@@ -1984,6 +2094,85 @@ export default function Signal() {
           }
           .signal-control-cluster {
             min-height: 48px !important;
+          }
+        }
+        @media (max-width: 720px) {
+          .signal-tap-prompt {
+            display: none !important;
+          }
+
+          .signal-root[data-signal-ready=false] .signal-footer {
+            bottom: calc(72px + env(safe-area-inset-bottom)) !important;
+            gap: 0 !important;
+            padding: 0 10px !important;
+          }
+
+          .signal-root[data-signal-ready=false] .signal-preset-stations,
+          .signal-root[data-signal-ready=false] .signal-prompt-chips,
+          .signal-root[data-signal-ready=false] .signal-coda-toggle,
+          .signal-root[data-signal-ready=false] .signal-kept-signals,
+          .signal-root[data-signal-ready=false] .signal-control-rail {
+            display: none !important;
+          }
+
+          .signal-root[data-signal-ready=false] .signal-prompt-input {
+            min-height: 78px !important;
+            padding: 13px 120px 13px 14px !important;
+          }
+
+          .signal-root[data-signal-ready=false] .signal-prompt-submit {
+            top: 8px !important;
+            right: 8px !important;
+            width: 102px !important;
+            min-height: 62px !important;
+          }
+
+          .signal-root[data-signal-ready=true] .mobile-instrument-panel__content .signal-footer {
+            gap: 10px !important;
+            padding: 0 !important;
+          }
+
+          .signal-root[data-signal-ready=true] .signal-prompt-panel,
+          .signal-root[data-signal-ready=true] .signal-control-cluster {
+            width: 100% !important;
+            max-width: none !important;
+          }
+
+          .signal-root[data-signal-ready=true] .signal-mobile-manage {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 7px;
+            width: 100%;
+            padding: 3px 0;
+            pointer-events: auto;
+          }
+
+          .signal-root[data-signal-ready=true] .signal-mobile-manage button {
+            flex: 1 1 92px;
+          }
+
+          .signal-root[data-signal-ready=true] .signal-lyria-actions,
+          .signal-root[data-signal-ready=true] .signal-active-chips {
+            display: none !important;
+          }
+
+          .signal-root[data-signal-ready=true][data-receiving=false] .signal-compose-progress {
+            display: none !important;
+          }
+
+          .signal-root[data-signal-ready=true][data-receiving=true] .signal-compose-progress,
+          .signal-root[data-signal-ready=true] .signal-compose-error {
+            bottom: calc(126px + env(safe-area-inset-bottom)) !important;
+          }
+
+          .signal-root[data-signal-ready=true][data-receiving=true] .signal-compose-card {
+            width: min(320px, calc(100vw - 32px)) !important;
+            min-width: 0 !important;
+            padding: 10px 14px !important;
+          }
+
+          .signal-root[data-signal-ready=true] .signal-bottom-inscription {
+            bottom: calc(132px + env(safe-area-inset-bottom)) !important;
           }
         }
         @media (prefers-reduced-motion: reduce) {
