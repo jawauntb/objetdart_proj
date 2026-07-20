@@ -740,11 +740,20 @@ export default function Ocean() {
       }
 
       // ── the Great Wave (Hokusai) ────────────────────────────────
-      // A breaking prussian-blue swell rises across the upper sea, its lip
-      // curling forward into a barrel and shedding the iconic claw-foam.
-      // Procedural so the whole thing drifts and breathes — the wave is
-      // never still — and so it scales from phone to desktop.
-      drawGreatWave(sctx, w, h, horizonY, t * motion, swellMod);
+      // A staged composition: snow-capped Fuji on the horizon, a receding
+      // chorus of dark background peaks, then the vast prussian foreground
+      // wave curling over the frame and raining claw-foam. Procedural so it
+      // drifts and breathes — the wave is never still — and scales from
+      // phone to desktop.
+      // Device tilt sways the whole wave (gyroscopic Hokusai physics):
+      // rolling the phone left/right shifts the wave's centre and tips its
+      // curling lip so the swell always leans downhill toward the low edge.
+      const tiltSway = tiltSmoothed.x;
+      const tiltPitch = tiltSmoothed.y;
+      drawFuji(sctx, w, h, horizonY);
+      drawDistantSwells(sctx, w, h, horizonY, t * motion, swellMod);
+      drawGreatWave(sctx, w, h, horizonY, t * motion, swellMod, tiltSway, tiltPitch);
+      drawSecondaryWave(sctx, w, h, horizonY, t * motion, swellMod, tiltSway);
 
       sctx.restore();
       }
@@ -1011,13 +1020,129 @@ export default function Ocean() {
 }
 
 /**
- * The Great Wave — a Hokusai-inspired breaking swell drawn on the 2D surface
- * layer over the WebGL water.
+ * Snow-capped Fuji on the horizon — the small quiet triangle Hokusai
+ * anchors his wave against. Drawn with a soft pale side, a bright snowcap,
+ * and a hint of cream haze at the base so it reads at any viewport size.
+ */
+function drawFuji(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  _h: number,
+  horizonY: number,
+) {
+  const cx = w * 0.62;
+  const peakY = horizonY - w * 0.055;
+  const base = w * 0.22;
+  const baseY = horizonY + 2;
+  // silhouette
+  ctx.beginPath();
+  ctx.moveTo(cx - base, baseY);
+  // gentle asymmetry — the left side rises a touch faster
+  ctx.lineTo(cx - base * 0.12, peakY + 4);
+  ctx.lineTo(cx, peakY);
+  ctx.lineTo(cx + base * 0.18, peakY + 6);
+  ctx.lineTo(cx + base, baseY);
+  ctx.closePath();
+  const body = ctx.createLinearGradient(0, peakY, 0, baseY);
+  body.addColorStop(0.0, "rgba(70, 80, 96, 0.88)");
+  body.addColorStop(0.55, "rgba(52, 62, 78, 0.75)");
+  body.addColorStop(1.0, "rgba(214, 202, 174, 0.32)"); // haze into paper
+  ctx.fillStyle = body;
+  ctx.fill();
+
+  // snowcap — a jagged white crown along the summit
+  ctx.beginPath();
+  ctx.moveTo(cx - base * 0.36, peakY + base * 0.28);
+  ctx.lineTo(cx - base * 0.22, peakY + base * 0.16);
+  ctx.lineTo(cx - base * 0.10, peakY + base * 0.22);
+  ctx.lineTo(cx - base * 0.02, peakY + base * 0.06);
+  ctx.lineTo(cx + base * 0.05, peakY + base * 0.18);
+  ctx.lineTo(cx + base * 0.16, peakY + base * 0.10);
+  ctx.lineTo(cx + base * 0.28, peakY + base * 0.24);
+  ctx.lineTo(cx + base * 0.14, peakY + 4);
+  ctx.lineTo(cx, peakY);
+  ctx.lineTo(cx - base * 0.12, peakY + 4);
+  ctx.closePath();
+  ctx.fillStyle = "rgba(246, 250, 252, 0.94)";
+  ctx.fill();
+
+  // a paler brushed line where snow meets slope
+  ctx.strokeStyle = "rgba(238, 244, 248, 0.55)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(cx - base * 0.34, peakY + base * 0.30);
+  ctx.lineTo(cx - base * 0.05, peakY + base * 0.14);
+  ctx.lineTo(cx + base * 0.10, peakY + base * 0.20);
+  ctx.lineTo(cx + base * 0.30, peakY + base * 0.28);
+  ctx.stroke();
+}
+
+/**
+ * A chorus of dark background peaks receding into haze — the second and
+ * third waves that stand behind Hokusai's hero curl and give it depth.
+ * Same phase seed as the foreground so the whole sea reads as one system.
+ */
+function drawDistantSwells(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  horizonY: number,
+  t: number,
+  swellMod: number,
+) {
+  const drift = t * 12;
+  const layers = [
+    { y: horizonY + 6, amp: 10 * swellMod, freq: 0.020, alpha: 0.55, tint: "rgba(28, 60, 96," },
+    { y: horizonY + 20, amp: 18 * swellMod, freq: 0.015, alpha: 0.72, tint: "rgba(20, 46, 82," },
+  ];
+  for (const L of layers) {
+    ctx.beginPath();
+    ctx.moveTo(0, L.y);
+    for (let x = 0; x <= w; x += 3) {
+      const ph = x * L.freq + drift * 0.003;
+      let s = Math.sin(ph) + 0.45 * Math.sin(ph * 2.1 + drift * 0.006);
+      s = Math.sign(s) * Math.pow(Math.abs(s / 1.45), 0.7);
+      const y = L.y - Math.max(0, s) * L.amp; // only the crests rise above baseline
+      ctx.lineTo(x, y);
+    }
+    ctx.lineTo(w, L.y + L.amp * 0.6);
+    ctx.lineTo(0, L.y + L.amp * 0.6);
+    ctx.closePath();
+    ctx.fillStyle = `${L.tint}${L.alpha})`;
+    ctx.fill();
+
+    // pale crest highlight along the top edge
+    ctx.strokeStyle = `rgba(232, 244, 250, ${L.alpha * 0.55})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let x = 0; x <= w; x += 3) {
+      const ph = x * L.freq + drift * 0.003;
+      let s = Math.sin(ph) + 0.45 * Math.sin(ph * 2.1 + drift * 0.006);
+      s = Math.sign(s) * Math.pow(Math.abs(s / 1.45), 0.7);
+      const y = L.y - Math.max(0, s) * L.amp;
+      if (x === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+  // horizon veil so the peaks bleed into the sky haze
+  const veil = ctx.createLinearGradient(0, horizonY - 4, 0, horizonY + 28);
+  veil.addColorStop(0, "rgba(232, 220, 190, 0.35)");
+  veil.addColorStop(1, "rgba(232, 220, 190, 0.0)");
+  ctx.fillStyle = veil;
+  ctx.fillRect(0, horizonY - 4, w, 32);
+  void h;
+}
+
+/**
+ * The Great Wave — a Hokusai-inspired breaking swell that dominates the
+ * frame from the left, its enormous prussian body arching over into a
+ * bright barrel eye and raining a cascade of claw-foam fingers forward.
  *
- * It is fully procedural so it lives: the crest sharpens into pointed claws,
- * a hero curl barrels forward across the upper sea and sheds the iconic
- * foam fingers, and the whole form drifts and breathes with time. Scales
- * from phone to desktop off the smaller viewport dimension.
+ * Fully procedural: the silhouette breathes and drifts, the crest is
+ * sharpened into Hokusai's pointed water rather than a smooth sine, and
+ * the whole form scales from phone to desktop off the smaller viewport
+ * dimension.
  */
 function drawGreatWave(
   ctx: CanvasRenderingContext2D,
@@ -1026,128 +1151,361 @@ function drawGreatWave(
   horizonY: number,
   t: number,
   swellMod: number,
+  tiltSway: number = 0,
+  tiltPitch: number = 0,
 ) {
   const S = Math.min(w, h);
-  // the wave rides the upper sea, just under the horizon haze
-  const waveBaseY = horizonY + (h - horizonY) * 0.26;
+  const seaH = h - horizonY;
+  // Baseline: the resting water line the wave grows out of. Sit it well
+  // below the horizon so the wave has room to tower up above Fuji.
+  const seaLevel = horizonY + seaH * (0.68 + tiltPitch * 0.04);
+  const footY = h + 6;
   const drift = t * 22;
   const breathe = 1 + Math.sin(t * 0.5) * 0.04;
-  const baseAmp = S * 0.05 * swellMod;
-  const heroAmp = S * 0.22 * breathe * swellMod;
-  // the hero curl wanders slowly across the upper sea
-  const heroX = w * (0.30 + 0.03 * Math.sin(t * 0.05));
-  const heroW = w * 0.55;
 
-  const heroBoost = (x: number) =>
-    Math.exp(-Math.pow((x - heroX) / (heroW * 0.5), 2));
+  // Hero anchor + amplitude — the wave is the frame's centrepiece, so it
+  // takes >= half the sea column and reaches up past the horizon line.
+  // Device tilt shifts the hero laterally so the wave sways with the phone.
+  const heroX = w * (0.36 + 0.02 * Math.sin(t * 0.05)) + tiltSway * w * 0.08;
+  const heroW = Math.max(w * 0.85, S * 0.9);
+  const heroAmp = Math.min(seaH * 0.62, S * 0.68) * breathe * swellMod;
+  const peakX = heroX;
+  const peakY = seaLevel - heroAmp;
 
-  // a sharpened, drifting crest — pointed like Hokusai's water, not a smooth
-  // sine — amplified under the hero curl.
+  // Radius of the curling barrel — a slice of the hero amplitude. This
+  // governs the eye size, the lip thickness and the reach of the claws.
+  const R = Math.min(heroAmp * 0.62, S * 0.34) * breathe;
+
+  const heroBoost = (x: number) => {
+    const d = (x - heroX) / (heroW * 0.5);
+    return Math.exp(-d * d);
+  };
+
+  // Sharpened pointed crest — Hokusai's water peaks in jagged fingers, not
+  // smooth sines. Amplified where the hero passes.
   const crestY = (x: number) => {
-    const ph = x * 0.011 - drift * 0.012;
+    const ph = x * 0.013 - drift * 0.012;
     let s =
       Math.sin(ph) +
       0.42 * Math.sin(ph * 2.3 - drift * 0.02) +
       0.22 * Math.sin(ph * 3.9 + drift * 0.015);
-    s = s / 1.64; // ~ -1..1
-    s = Math.sign(s) * Math.pow(Math.abs(s), 0.72); // sharpen the crests
-    const amp = baseAmp + heroAmp * heroBoost(x);
-    return waveBaseY - amp * (s * 0.5 + 0.5);
+    s = s / 1.64;
+    s = Math.sign(s) * Math.pow(Math.abs(s), 0.55); // pointed
+    const bump = heroBoost(x);
+    // baseline chop away from the hero + full hero rise under it
+    const ambient = seaH * 0.05 * swellMod;
+    const rise = bump * heroAmp + (1 - bump) * ambient;
+    return seaLevel - rise * (0.85 + s * 0.15);
   };
 
-  // ── filled wave body — prussian-blue swell ──────────────────────
-  const footY = waveBaseY + baseAmp * 1.4;
+  // ── (1) main wave body — the prussian silhouette above sea level ──
+  // Just the HUMP: rises above the resting sea line where the hero and the
+  // ambient chop lift the water; returns to seaLevel elsewhere. The WebGL
+  // ocean beneath is already painted, so we don't paint it again.
+  const shoulderY = seaLevel + 3;
   ctx.beginPath();
-  ctx.moveTo(0, crestY(0));
-  for (let x = 4; x <= w; x += 4) ctx.lineTo(x, crestY(x));
-  ctx.lineTo(w, footY);
-  ctx.lineTo(0, footY);
+  ctx.moveTo(0, shoulderY);
+  for (let x = 0; x <= w; x += 3) {
+    const y = crestY(x);
+    ctx.lineTo(x, Math.min(y, shoulderY));
+  }
+  ctx.lineTo(w, shoulderY);
   ctx.closePath();
-  const body = ctx.createLinearGradient(0, waveBaseY - heroAmp, 0, footY);
-  body.addColorStop(0.0, "rgba(28, 64, 104, 0.0)");
-  body.addColorStop(0.12, "rgba(20, 56, 96, 0.52)");
-  body.addColorStop(0.42, "rgba(10, 34, 70, 0.62)");
-  body.addColorStop(0.72, "rgba(6, 22, 52, 0.34)");
-  body.addColorStop(1.0, "rgba(4, 16, 40, 0.0)");
-  ctx.fillStyle = body;
+  const bodyGrad = ctx.createLinearGradient(0, peakY, 0, shoulderY + heroAmp * 0.2);
+  bodyGrad.addColorStop(0.0, "rgba(30, 66, 112, 0.68)"); // sunlit shoulder
+  bodyGrad.addColorStop(0.18, "rgba(16, 48, 92, 0.94)"); // Hokusai prussian
+  bodyGrad.addColorStop(0.65, "rgba(8, 30, 66, 0.86)");
+  bodyGrad.addColorStop(1.0, "rgba(4, 18, 44, 0.0)"); // fade into sea below
+  ctx.fillStyle = bodyGrad;
   ctx.fill();
 
-  // ── foam crest line ─────────────────────────────────────────────
-  ctx.strokeStyle = "rgba(244, 250, 252, 0.85)";
-  ctx.lineWidth = 2.0;
+
+  // ── (2) crest ridge line + Hokusai claw foam texture ──────────────
+  // A bright thin ink line running the sharpened crest. Comes first so the
+  // sub-curls placed along it in the next pass cover it where they land.
+  ctx.strokeStyle = "rgba(246, 251, 253, 0.82)";
+  ctx.lineWidth = 1.5;
   ctx.lineJoin = "round";
   ctx.beginPath();
-  for (let x = 0; x <= w; x += 4) {
+  for (let x = 0; x <= w; x += 3) {
     const y = crestY(x);
     if (x === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
   }
   ctx.stroke();
 
-  // ── claw foam scattered along the crest (Hokusai's fingers) ─────
-  for (let x = 6; x <= w; x += 9) {
+  // ── (3) FRACTAL SUB-CURLS along the crest ──────────────────────────
+  // Hokusai's wave isn't one curl — the whole crest is a chorus of smaller
+  // curling barrels, each a self-similar copy of the hero. We place a fleet
+  // of them along the crest at multiple scales, each with its own drift
+  // phase so the whole ridge reads as tessellated water.
+  //
+  // The hero anchor at the peak gets the largest scale; siblings get
+  // progressively smaller amplitudes falling off toward the flanks.
+  const subCurls: Array<{ cx: number; cy: number; r: number; ang: number; alpha: number; depth: number }> = [];
+  // The hero itself
+  subCurls.push({
+    cx: peakX + R * 0.15,
+    cy: peakY + R * 0.20,
+    r: R,
+    ang: 0.05 + Math.sin(t * 0.4) * 0.06,
+    alpha: 1.0,
+    depth: 2,
+  });
+  // 7 satellites of decreasing scale scattered across the crest, weighted
+  // toward the hero side so the composition stays balanced.
+  const satellitePositions = [
+    { fx: -0.68, size: 0.28, dropAng: 0.5 },
+    { fx: -0.42, size: 0.42, dropAng: 0.3 },
+    { fx: -0.18, size: 0.58, dropAng: 0.15 },
+    { fx:  0.30, size: 0.50, dropAng: -0.05 },
+    { fx:  0.55, size: 0.36, dropAng: -0.2 },
+    { fx:  0.78, size: 0.24, dropAng: -0.35 },
+    { fx:  0.95, size: 0.16, dropAng: -0.5 },
+  ];
+  for (let i = 0; i < satellitePositions.length; i++) {
+    const s = satellitePositions[i];
+    const sx = heroX + s.fx * heroW * 0.55;
+    if (sx < -R * 0.2 || sx > w + R * 0.2) continue;
+    const sy = crestY(sx) - R * s.size * 0.35;
+    const wobble = Math.sin(t * 0.7 + i * 1.3) * 0.15;
+    subCurls.push({
+      cx: sx,
+      cy: sy,
+      r: R * s.size,
+      ang: s.dropAng + wobble,
+      alpha: 0.7 + heroBoost(sx) * 0.3,
+      depth: s.size > 0.35 ? 1 : 0,
+    });
+  }
+
+  // Draw the satellites first (back), then the hero (front) so the hero
+  // reads on top — while claws from either can still spill over each other.
+  for (let i = 1; i < subCurls.length; i++) {
+    const c = subCurls[i];
+    drawFractalCurl(ctx, c.cx, c.cy, c.r, c.ang, t, c.depth, c.alpha, i * 7.3);
+  }
+  const hero = subCurls[0];
+  drawFractalCurl(ctx, hero.cx, hero.cy, hero.r, hero.ang, t, hero.depth, hero.alpha, 1.11);
+
+  // ── (4) extra fine claw foam sprinkled along the whole crest ──────
+  for (let x = 3; x <= w; x += 5) {
     const boost = heroBoost(x);
     const y = crestY(x);
     const tw = 0.5 + 0.5 * Math.sin(t * 3 + x * 0.05);
-    const density = 0.12 + boost * 0.9;
+    const density = 0.10 + boost * 0.9;
     if (tw * density > 0.32) {
-      const r = (0.8 + boost * 2.2) * (0.6 + tw * 0.6);
-      ctx.fillStyle = `rgba(247, 251, 252, ${0.25 + boost * 0.5})`;
+      const r = (0.7 + boost * 2.4) * (0.5 + tw * 0.5);
+      ctx.fillStyle = `rgba(247, 251, 252, ${0.24 + boost * 0.45})`;
       ctx.beginPath();
-      ctx.arc(x, y - r * 0.4, r, 0, 7);
+      ctx.arc(x, y - r * 0.5, r, 0, 7);
       ctx.fill();
     }
   }
+}
 
-  // ── the hero barrel: curling lip + spiral eye + claw fingers ────
-  const eyeX = heroX + S * 0.085;
-  const eyeY = waveBaseY - heroAmp * 0.52;
-  const R = S * 0.135 * breathe;
+/**
+ * A single self-similar Hokusai curl — a hollow crescent barrel with a
+ * bright pale rim, nested inner arcs receding into the eye, and a shower
+ * of claw fingers spilling off the leading tip. When `depth > 0` those
+ * claws are themselves smaller curls, recursing until the scale gets too
+ * small to matter, so the whole wave reads as a fractal cascade.
+ *
+ * `angle` is the direction the curl points its tip in (0 = right, π/2 =
+ * down). `seed` shifts phase so simultaneous curls don't twitch in sync.
+ */
+function drawFractalCurl(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  r: number,
+  angle: number,
+  t: number,
+  depth: number,
+  alpha: number,
+  seed: number,
+) {
+  if (r < 3.5 || alpha < 0.04) return;
 
-  // the overhanging lip — a bright thick arc sweeping up and over, curling
-  // forward to the right (canvas y is down, so this traces left → top → right)
-  ctx.lineCap = "round";
-  ctx.strokeStyle = "rgba(248, 252, 253, 0.95)";
-  ctx.lineWidth = 3.2;
+  // ── the barrel silhouette: a proper crescent formed by a big outer
+  //    half-arc and an inner half-arc, closed into a filled lens ────
+  const outerR = r;
+  // wall thickness of the curl (barrel roof)
+  const shellW = r * 0.35;
+  // the inner (eye) circle offset toward the "inside" (roof) of the barrel
+  const ndx = Math.cos(angle - Math.PI / 2);
+  const ndy = Math.sin(angle - Math.PI / 2);
+  const ix = cx + ndx * r * 0.10;
+  const iy = cy + ndy * r * 0.10;
+  const innerR = outerR - shellW;
+
+  // Dome silhouette: a solid filled semicircle whose flat side sits on the
+  // crest (or, when angle != 0, on the tangent to the wave crest). Simpler
+  // than a hollow crescent — the concentric inner arcs drawn on top imply
+  // the barrel's hollow eye without a self-intersecting path.
+  ctx.save();
   ctx.beginPath();
-  ctx.arc(eyeX, eyeY, R, Math.PI * 1.08, Math.PI * 2.18, false);
-  ctx.stroke();
+  ctx.arc(cx, cy, outerR, angle - Math.PI, angle, false);
+  ctx.closePath();
+  const grad = ctx.createLinearGradient(cx - ndx * r, cy - ndy * r, cx + ndx * r, cy + ndy * r);
+  grad.addColorStop(0.0, `rgba(232, 242, 246, ${0.95 * alpha})`); // sunlit ridge
+  grad.addColorStop(0.35, `rgba(80, 128, 168, ${0.92 * alpha})`);
+  grad.addColorStop(0.75, `rgba(14, 44, 88, ${0.96 * alpha})`);
+  grad.addColorStop(1.0, `rgba(4, 18, 48, ${0.98 * alpha})`);
+  ctx.fillStyle = grad;
+  ctx.fill();
 
-  // inner curls of the barrel — nested fading arcs spiralling into the eye
+  // pale outer rim — the sunlit ridge along the barrel's roof
+  ctx.strokeStyle = `rgba(240, 248, 252, ${0.9 * alpha})`;
+  ctx.lineWidth = Math.max(1.0, r * 0.05);
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.arc(cx, cy, outerR, angle - Math.PI, angle, false);
+  ctx.stroke();
+  ctx.restore();
+
+  // ── nested inner curls receding into the eye ──────────────────────
+  // Each successive ring shifts deeper INTO the dome (toward the roof)
+  // and shrinks, giving a receding-spiral sense of depth.
   for (let k = 1; k <= 3; k++) {
-    ctx.strokeStyle = `rgba(236, 246, 250, ${0.5 - k * 0.12})`;
-    ctx.lineWidth = 2.2 - k * 0.4;
+    ctx.strokeStyle = `rgba(232, 244, 250, ${(0.55 - k * 0.12) * alpha})`;
+    ctx.lineWidth = Math.max(0.7, r * 0.032 - k * 0.30);
     ctx.beginPath();
     ctx.arc(
-      eyeX + k * R * 0.06,
-      eyeY + k * R * 0.05,
-      R * (1 - 0.2 * k),
-      Math.PI * 1.15,
-      Math.PI * 2.05,
+      ix + ndx * k * r * 0.05,
+      iy + ndy * k * r * 0.05,
+      innerR - k * r * 0.12,
+      angle - Math.PI + 0.05,
+      angle - 0.05,
       false,
     );
     ctx.stroke();
   }
 
-  // claw fingers spilling off the lip tip — small circles raining forward
-  const tipX = eyeX + Math.cos(Math.PI * 2.18) * R;
-  const tipY = eyeY + Math.sin(Math.PI * 2.18) * R;
-  const fingers = 7;
-  for (let i = 0; i < fingers; i++) {
-    const f = i / (fingers - 1);
-    const ang = -0.5 + f * 1.9; // fan from up-right to down
-    const reach = R * (0.5 + f * 0.9);
-    const fx = tipX + Math.cos(ang) * reach;
-    const fy = tipY + Math.sin(ang) * reach * 0.7;
-    const tw = 0.5 + 0.5 * Math.sin(t * 4 + i * 1.3);
-    const fr = (2.4 - f * 1.4) * (0.6 + tw * 0.6);
-    ctx.fillStyle = `rgba(248, 252, 253, ${0.5 - f * 0.32})`;
-    ctx.beginPath();
-    ctx.arc(fx, fy, Math.max(0.6, fr), 0, 7);
-    ctx.fill();
-    // a tiny trailing droplet
-    ctx.beginPath();
-    ctx.arc(fx + fr * 1.4, fy + fr * 1.1, Math.max(0.4, fr * 0.45), 0, 7);
-    ctx.fill();
+  // bright cusp-highlight where the curl meets the tip
+  const tipX = cx + Math.cos(angle) * outerR;
+  const tipY = cy + Math.sin(angle) * outerR;
+  const cusp = ctx.createRadialGradient(tipX, tipY, 0, tipX, tipY, r * 0.35);
+  cusp.addColorStop(0, `rgba(255, 255, 255, ${0.5 * alpha})`);
+  cusp.addColorStop(1, "rgba(255, 255, 255, 0)");
+  ctx.fillStyle = cusp;
+  ctx.beginPath();
+  ctx.arc(tipX, tipY, r * 0.35, 0, 7);
+  ctx.fill();
+
+  // ── claw fingers off the tip — RECURSE into smaller curls or fall
+  //    back to droplet chains at the finest scales ───────────────────
+  const fingerCount = depth > 0 ? 5 : 6;
+  const fanSpan = 1.6;
+  for (let i = 0; i < fingerCount; i++) {
+    const f = fingerCount === 1 ? 0.5 : i / (fingerCount - 1);
+    const fingerAng = angle + (f - 0.5) * fanSpan;
+    const reach = r * (0.55 + f * 0.85);
+    const fx = tipX + Math.cos(fingerAng) * reach;
+    const fy = tipY + Math.sin(fingerAng) * reach * 0.82;
+    const fr = r * (0.38 - f * 0.20);
+    const twinkle = 0.65 + 0.35 * Math.sin(t * 2.8 + i * 1.7 + seed);
+    if (depth > 0 && fr > 5) {
+      // recurse: this finger is itself a smaller curl, tipped a bit further
+      // in the tip's own direction. Alpha attenuates so recursion fades.
+      drawFractalCurl(
+        ctx,
+        fx,
+        fy,
+        Math.max(4, fr),
+        fingerAng - 0.15,
+        t,
+        depth - 1,
+        alpha * (0.55 + twinkle * 0.15),
+        seed + i * 3.7,
+      );
+    } else {
+      // droplet chain — 5 shrinking foam blobs along the finger direction
+      const chain = 5;
+      for (let c = 0; c < chain; c++) {
+        const cf = c / (chain - 1);
+        const dr = fr * (1 - cf * 0.7) * (0.55 + twinkle * 0.5);
+        if (dr < 0.4) continue;
+        const dx = fx + Math.cos(fingerAng) * reach * 0.4 * cf;
+        const dy = fy + Math.sin(fingerAng) * reach * 0.4 * cf + cf * cf * r * 0.28;
+        ctx.fillStyle = `rgba(248, 252, 253, ${0.55 * alpha * (1 - cf * 0.6) * twinkle})`;
+        ctx.beginPath();
+        ctx.arc(dx, dy, dr, 0, 7);
+        ctx.fill();
+      }
+    }
+  }
+}
+
+/**
+ * A secondary wave on the right — smaller, later in the cycle — so the
+ * hero doesn't stand alone. Its crest peaks between the hero's crest and
+ * the horizon, echoing Hokusai's second wave.
+ */
+function drawSecondaryWave(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  horizonY: number,
+  t: number,
+  swellMod: number,
+  tiltSway: number = 0,
+) {
+  const S = Math.min(w, h);
+  const seaH = h - horizonY;
+  const troughY = horizonY + seaH * 0.55;
+  const drift = t * 18;
+  const amp = Math.min(seaH * 0.32, S * 0.24) * swellMod;
+  // Tilt slides the secondary too, but by a smaller amount so parallax reads
+  const cx = w * 0.86 + tiltSway * w * 0.05;
+  const width = w * 0.58;
+  const boost = (x: number) => {
+    const d = (x - cx) / (width * 0.5);
+    return Math.exp(-d * d);
+  };
+  const crestY = (x: number) => {
+    const ph = x * 0.016 - drift * 0.018;
+    let s = Math.sin(ph) + 0.4 * Math.sin(ph * 2.1 + drift * 0.02);
+    s = Math.sign(s) * Math.pow(Math.abs(s / 1.4), 0.7);
+    return troughY - amp * boost(x) * (s * 0.5 + 0.55);
+  };
+
+  // silhouette
+  ctx.beginPath();
+  ctx.moveTo(w * 0.42, troughY);
+  for (let x = w * 0.42; x <= w; x += 3) ctx.lineTo(x, crestY(x));
+  ctx.lineTo(w, troughY + amp * 0.6);
+  ctx.lineTo(w * 0.42, troughY + amp * 0.6);
+  ctx.closePath();
+  const grad = ctx.createLinearGradient(0, troughY - amp, 0, troughY + amp * 0.6);
+  grad.addColorStop(0.0, "rgba(28, 60, 100, 0.72)");
+  grad.addColorStop(0.5, "rgba(12, 34, 74, 0.82)");
+  grad.addColorStop(1.0, "rgba(4, 18, 42, 0.35)");
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // pale crest line
+  ctx.strokeStyle = "rgba(240, 248, 252, 0.7)";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  for (let x = w * 0.42; x <= w; x += 3) {
+    const y = crestY(x);
+    if (x === w * 0.42) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  // sparser claw foam
+  for (let x = w * 0.5; x <= w; x += 8) {
+    const b = boost(x);
+    const y = crestY(x);
+    const tw = 0.5 + 0.5 * Math.sin(t * 3 + x * 0.07);
+    if (tw * (0.15 + b * 0.9) > 0.4) {
+      const r = (0.7 + b * 1.8) * (0.6 + tw * 0.5);
+      ctx.fillStyle = `rgba(246, 250, 252, ${0.25 + b * 0.4})`;
+      ctx.beginPath();
+      ctx.arc(x, y - r * 0.4, r, 0, 7);
+      ctx.fill();
+    }
   }
 }
