@@ -63,6 +63,7 @@ const NAVIGATION_ROUTE_KEYS = [
   "clouds",
   "waves",
   "movement",
+  "drop",
   "sine",
   "circularity",
   "beyond",

@@ -106,6 +106,7 @@ const preferredNavigationKeys = [
   "clouds",
   "waves",
   "movement",
+  "drop",
   "sine",
   "circularity",
   "beyond",
