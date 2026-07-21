@@ -11,6 +11,7 @@ import {
   type AtlasClipRect,
   type AtlasDirection,
 } from "@/lib/atlas-batch";
+import { pixelBoundsForClip } from "@/lib/atlas-crop";
 
 export type {
   AtlasBatchDirection,
@@ -31,6 +32,7 @@ export {
   normalizeClipRect,
   resolveAtlasBatchPlan,
 } from "@/lib/atlas-batch";
+export { pixelBoundsForClip } from "@/lib/atlas-crop";
 
 const OPENAI_IMAGE_MODEL = "gpt-image-2";
 // Temporarily unused while Atlas is Flux-only.
@@ -795,7 +797,10 @@ async function generateWithOpenRouter(
   };
 
   if (atlasUsesSourceImage(request) && request.currentImage) {
-    const image = await loadSourceImage(request.currentImage);
+    let image = await loadSourceImage(request.currentImage);
+    if (request.clip) {
+      image = await cropSourceImage(image, request.clip);
+    }
     body.input_references = [{
       type: "image_url",
       image_url: {
@@ -877,6 +882,44 @@ async function generateWithOpenRouter(
 //   if (!response.ok) await throwForProviderResponse(response);
 //   return response;
 // }
+
+async function cropSourceImage(image: SourceImage, clip: AtlasClipRect): Promise<SourceImage> {
+  const sharpModule = await import("sharp");
+  const sharp = sharpModule.default;
+  const metadata = await sharp(image.bytes).metadata();
+  const width = metadata.width ?? 0;
+  const height = metadata.height ?? 0;
+  if (width < 1 || height < 1) {
+    throw new AtlasRequestError("invalid_current_image", "the current atlas image has no dimensions to crop");
+  }
+
+  const bounds = pixelBoundsForClip(clip, width, height);
+  let bytes: Buffer;
+  try {
+    bytes = await sharp(image.bytes)
+      .extract({
+        left: bounds.left,
+        top: bounds.top,
+        width: bounds.width,
+        height: bounds.height,
+      })
+      .png()
+      .toBuffer();
+  } catch {
+    throw new AtlasRequestError("invalid_current_image", "the current atlas image could not be cropped");
+  }
+
+  if (bytes.length === 0 || bytes.length > MAX_SOURCE_IMAGE_BYTES) {
+    throw new AtlasRequestError("invalid_current_image", "the cropped atlas sample is empty or too large");
+  }
+
+  return {
+    blob: new Blob([bytes], { type: "image/png" }),
+    bytes,
+    mimeType: "image/png",
+    filename: "atlas-source-crop.png",
+  };
+}
 
 async function loadSourceImage(reference: string): Promise<SourceImage> {
   if (reference.startsWith("data:")) return sourceImageFromDataUrl(reference);

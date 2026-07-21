@@ -119,7 +119,7 @@ export function formatAtlasClipClause(clip: AtlasClipRect): string {
   const top = Math.round(clip.y * 100);
   const right = Math.round((clip.x + clip.width) * 100);
   const bottom = Math.round((clip.y + clip.height) * 100);
-  return `Use the supplied atlas sample covering roughly ${left}%–${right}% from the left and ${top}%–${bottom}% from the top (including a small buffer margin) as the source region to upsample, extend, and reconstruct into a full explorable sheet.`;
+  return `The supplied image IS the cropped region sample from roughly ${left}%–${right}% left and ${top}%–${bottom}% top of the parent atlas (buffer margin already included in the crop). Upsample, extend, and reconstruct from this crop into a full explorable sheet.`;
 }
 
 function clampUnit(value: number, min: number, max: number): number {

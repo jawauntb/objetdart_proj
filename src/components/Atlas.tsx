@@ -20,6 +20,7 @@ import {
   type AtlasBatchKind,
   type AtlasClipRect,
 } from "@/lib/atlas-batch";
+import { cropAtlasDataUrl } from "@/lib/atlas-crop";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { useField } from "@/store/field";
@@ -32,6 +33,10 @@ const MOBILE_BREAKPOINT = 760;
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 64;
 const SETTLE_TRANSITION = "transform 180ms cubic-bezier(.22,.8,.24,1)";
+const ZOOM_SETTLE_DELTA = 0.45;
+const DRAG_THRESHOLD_PX = 14;
+const EDGE_TRAVEL_RATIO = 0.15;
+const GESTURE_SUPPRESS_MS = 280;
 
 type Direction = "north" | "east" | "south" | "west";
 type GenerationMode = "generate" | "zoom" | "refine" | "shift";
@@ -278,6 +283,10 @@ export default function Atlas() {
   const generationDepthRef = useRef(0);
   const neighborSheetsRef = useRef(new Map<AtlasBatchDirection, NeighborSheet>());
   const neighborAbortRef = useRef<AbortController | null>(null);
+  const pointerStartRef = useRef<PointerPoint | null>(null);
+  const lastGestureAtRef = useRef(0);
+  const edgeTravelLockRef = useRef(false);
+  const activeNeighborDirectionRef = useRef<AtlasBatchDirection | null>(null);
 
   const [metrics, setMetrics] = useState<MapMetrics>(EMPTY_METRICS);
   const [activeImage, setActiveImage] = useState(ORIGIN_MAP);
@@ -323,6 +332,45 @@ export default function Atlas() {
     paintPlane(next, false);
   };
 
+  const markGesture = () => {
+    lastGestureAtRef.current = performance.now();
+  };
+
+  const tryEdgeTravel = (velocity?: PointerPoint) => {
+    if (edgeTravelLockRef.current) return false;
+    const metrics = metricsRef.current;
+    const view = viewRef.current;
+    if (!metrics.width) return false;
+    const hard = boundView(view, metrics);
+    const margin = Math.max(32, Math.min(metrics.width, metrics.height) * EDGE_TRAVEL_RATIO);
+    const vx = velocity?.x ?? 0;
+    const vy = velocity?.y ?? 0;
+    const scores: Array<[Direction, number]> = [
+      ["west", (view.x - hard.x) + (vx > 3 ? vx * 3 : 0)],
+      ["east", (hard.x - view.x) + (vx < -3 ? -vx * 3 : 0)],
+      ["north", (view.y - hard.y) + (vy > 3 ? vy * 3 : 0)],
+      ["south", (hard.y - view.y) + (vy < -3 ? -vy * 3 : 0)],
+    ];
+    // Already clamped against an edge and still pushing counts as travel intent.
+    if (Math.abs(view.x - hard.x) < 1 && vx > 5) scores[0][1] = Math.max(scores[0][1], margin);
+    if (Math.abs(view.x - hard.x) < 1 && vx < -5) scores[1][1] = Math.max(scores[1][1], margin);
+    if (Math.abs(view.y - hard.y) < 1 && vy > 5) scores[2][1] = Math.max(scores[2][1], margin);
+    if (Math.abs(view.y - hard.y) < 1 && vy < -5) scores[3][1] = Math.max(scores[3][1], margin);
+    const best = scores.sort((a, b) => b[1] - a[1])[0];
+    if (best[1] < margin * 0.42) return false;
+    edgeTravelLockRef.current = true;
+    markGesture();
+    stopInertia();
+    interactingRef.current = false;
+    setInteracting(false);
+    commitView(hard, { animate: true });
+    shiftMap(best[0]);
+    window.setTimeout(() => {
+      edgeTravelLockRef.current = false;
+    }, 960);
+    return true;
+  };
+
   const startInertia = (velocity: PointerPoint) => {
     stopInertia();
     let vx = clamp(velocity.x, -48, 48);
@@ -337,6 +385,10 @@ export default function Atlas() {
       last = now;
       vx *= Math.pow(0.9, dt);
       vy *= Math.pow(0.9, dt);
+      if (tryEdgeTravel({ x: vx, y: vy })) {
+        inertiaRef.current = null;
+        return;
+      }
       if (Math.hypot(vx, vy) < 0.35) {
         inertiaRef.current = null;
         interactingRef.current = false;
@@ -538,7 +590,6 @@ export default function Atlas() {
       });
     }
 
-    // Klein previews only for neighbors — Pro stays selective on the active sheet.
     const queue = [...plan.slots];
     const workers = Array.from({ length: Math.min(2, queue.length) }, async () => {
       while (queue.length > 0) {
@@ -551,9 +602,16 @@ export default function Atlas() {
           || slot.direction === "west"
           ? slot.direction
           : undefined;
+        let croppedImage = sourceImage;
+        try {
+          croppedImage = await cropAtlasDataUrl(sourceImage, slot.clip);
+        } catch {
+          // Server crops when clip+currentImage arrive uncropped.
+        }
+        const neighborGenerationId = generationId(parentRequestId) + "-" + slot.direction;
         const body = JSON.stringify({
           prompt: subjectPrompt.replace(/ +/g, " ").trim().slice(0, 240),
-          currentImage: sourceImage,
+          currentImage: croppedImage,
           mode: cardinal ? "shift" : "zoom",
           direction: cardinal,
           focus: cardinal
@@ -570,40 +628,64 @@ export default function Atlas() {
           generationDepth: depth,
           viewport,
         });
-        try {
-          const response = await fetch("/api/atlas/generate?phase=preview", {
+        const requestNeighborPhase = async (phase: GenerationPhase) => {
+          const response = await fetch("/api/atlas/generate?phase=" + phase, {
             method: "POST",
             headers: {
               "content-type": "application/json",
-              "x-atlas-generation-id": generationId(parentRequestId) + "-" + slot.direction,
+              "x-atlas-generation-id": neighborGenerationId,
             },
             signal: controller.signal,
             body,
           });
-          if (!response.ok) throw new Error("neighbor preview failed");
+          if (!response.ok) throw new Error("neighbor " + phase + " failed");
           const data = await response.json() as unknown;
-          if (!isRecord(data) || parentRequestId !== requestRef.current) return;
+          if (!isRecord(data) || parentRequestId !== requestRef.current) return null;
           const image = typeof data.dataUrl === "string" && data.dataUrl ? data.dataUrl : null;
-          neighborSheetsRef.current.set(slot.direction, {
+          if (!image) return null;
+          const next: NeighborSheet = {
             direction: slot.direction,
             image,
             hotspots: normaliseHotspots(data.hotspots),
             seeds: normaliseSeeds(data.seeds, localSeeds(subjectPrompt)),
             concept: subjectPrompt,
-            phase: image ? "preview" : "error",
+            phase,
             batchKind: plan.kind,
-          });
+          };
+          neighborSheetsRef.current.set(slot.direction, next);
+          // Upgrade the live sheet if the user already traveled into this neighbor preview.
+          if (
+            phase === "final"
+            && activeNeighborDirectionRef.current === slot.direction
+            && activeImageRef.current
+            && activeImageRef.current.startsWith("data:")
+          ) {
+            crossfadeTo(image);
+            if (next.hotspots) setHotspots(next.hotspots);
+            if (next.seeds) setSeeds(next.seeds);
+            setRenderPhase("final");
+            setStatus("new territory to the " + slot.direction + " · final chart settled");
+          }
+          return next;
+        };
+        try {
+          await requestNeighborPhase("preview");
+          if (controller.signal.aborted || parentRequestId !== requestRef.current) return;
+          await requestNeighborPhase("final");
         } catch {
           if (controller.signal.aborted) return;
-          neighborSheetsRef.current.set(slot.direction, {
-            direction: slot.direction,
-            image: null,
-            hotspots: null,
-            seeds: null,
-            concept: subjectPrompt,
-            phase: "error",
-            batchKind: plan.kind,
-          });
+          const existing = neighborSheetsRef.current.get(slot.direction);
+          if (!existing?.image) {
+            neighborSheetsRef.current.set(slot.direction, {
+              direction: slot.direction,
+              image: null,
+              hotspots: null,
+              seeds: null,
+              concept: subjectPrompt,
+              phase: "error",
+              batchKind: plan.kind,
+            });
+          }
         }
       }
     });
@@ -654,10 +736,19 @@ export default function Atlas() {
     setRenderPhase("local");
     if (optimisticSeeds) setSeeds(optimisticSeeds);
 
+    let imageForRequest = currentImage;
+    if (usesClippedSource && currentImage && resolvedClip) {
+      try {
+        imageForRequest = await cropAtlasDataUrl(currentImage, resolvedClip);
+      } catch {
+        // Server crops when clip+currentImage arrive uncropped.
+      }
+    }
+
     const box = stageRef.current?.getBoundingClientRect();
     const body = JSON.stringify({
       prompt: subjectPrompt.replace(/ +/g, " ").trim().slice(0, 240),
-      currentImage,
+      currentImage: imageForRequest,
       mode,
       direction,
       focus,
@@ -807,17 +898,22 @@ export default function Atlas() {
     setFocusedLabel(null);
     setRegion(null);
     renderedZoomRef.current = 1;
+    activeNeighborDirectionRef.current = direction;
     setConcept(neighbor.concept);
     if (neighbor.hotspots) setHotspots(neighbor.hotspots);
     if (neighbor.seeds) setSeeds(neighbor.seeds);
     commitView(centerView(metricsRef.current, 1), { animate: true });
     crossfadeTo(neighbor.image);
     setRenderPhase(neighbor.phase === "final" ? "final" : "preview");
-    setStatus("new territory to the " + direction + " · chart ready");
+    setStatus(
+      neighbor.phase === "final"
+        ? "new territory to the " + direction
+        : "new territory to the " + direction + " · refining…",
+    );
     generationDepthRef.current = Math.max(1, generationDepthRef.current + 1);
     setGenerationDepth(generationDepthRef.current);
-    neighborSheetsRef.current.delete(direction);
-    // Prefetch the next diagonal pair from this landed neighbor sheet.
+    // Keep the cache entry so a later Pro final can upgrade the live sheet.
+    neighborSheetsRef.current.set(direction, neighbor);
     void prefetchNeighborBatch({
       sourceImage: neighbor.image,
       subjectPrompt: neighbor.concept,
@@ -829,8 +925,9 @@ export default function Atlas() {
 
   const shiftMap = (direction: Direction) => {
     const cached = neighborSheetsRef.current.get(direction);
-    if (cached?.image) {
-      recordTape("region", 0.72, "atlas/shift/" + direction + "/prefetch");
+    // Prefer a finished Pro neighbor; fall back to Klein preview if that is all we have.
+    if (cached?.image && (cached.phase === "final" || cached.phase === "preview")) {
+      recordTape("region", 0.72, "atlas/shift/" + direction + "/prefetch-" + cached.phase);
       if (applyNeighborSheet(direction, cached)) return;
     }
     const seed = seeds[direction];
@@ -864,6 +961,7 @@ export default function Atlas() {
     setHistoryDepth(0);
     generationDepthRef.current = 0;
     setGenerationDepth(0);
+    activeNeighborDirectionRef.current = null;
     clearNeighborSheets();
     freeZoomParentRef.current = null;
     lastZoomRequestKeyRef.current = null;
@@ -898,15 +996,62 @@ export default function Atlas() {
       const current = viewRef.current;
       const parent = freeZoomParentRef.current;
       if (!parent) return;
+      const renderedZoom = renderedZoomRef.current;
+      const delta = current.zoom - renderedZoom;
+      if (Math.abs(delta) < ZOOM_SETTLE_DELTA) {
+        freeZoomParentRef.current = null;
+        return;
+      }
+
+      const atOuterDepth = historyRef.current.length === 0 && renderedZoom <= 1.08;
+      // Pull-back toward 1: reconstruct a wider parent sheet instead of only popping history.
+      if (delta <= -ZOOM_SETTLE_DELTA) {
+        if (atOuterDepth && current.zoom <= 1.08) {
+          freeZoomParentRef.current = null;
+          resetOuterMap();
+          return;
+        }
+        const mapWidth = Math.max(1, metricsRef.current.mapWidth * current.zoom);
+        const mapHeight = Math.max(1, metricsRef.current.mapHeight * current.zoom);
+        const focus = {
+          x: clamp((metricsRef.current.width / 2 - current.x) / mapWidth, 0, 1),
+          y: clamp((metricsRef.current.height / 2 - current.y) / mapHeight, 0, 1),
+          zoom: Math.max(MIN_ZOOM, current.zoom),
+        };
+        const key = [
+          concept,
+          "wider",
+          Math.round(current.zoom * 2) / 2,
+          Math.round(focus.x * 8),
+          Math.round(focus.y * 8),
+        ].join("|");
+        if (key === lastZoomRequestKeyRef.current) {
+          freeZoomParentRef.current = null;
+          return;
+        }
+        lastZoomRequestKeyRef.current = key;
+        historyRef.current.push(parent);
+        if (historyRef.current.length > 8) historyRef.current.shift();
+        setHistoryDepth(historyRef.current.length);
+        freeZoomParentRef.current = null;
+        renderedZoomRef.current = 1;
+        setStatus("widening the chart to the surrounding territory");
+        setRenderPhase("local");
+        recordTape("region", 0.68, "atlas/free-zoom-out/" + current.zoom.toFixed(2));
+        void generateMap({
+          mode: "zoom",
+          subjectPrompt: concept + " · wider territory",
+          focus,
+        });
+        return;
+      }
+
       if (current.zoom <= 1.08) {
         freeZoomParentRef.current = null;
-        if (historyRef.current.length > 0 || parent.view.zoom > 1.08) resetOuterMap();
+        if (!atOuterDepth) resetOuterMap();
         return;
       }
-      if (Math.abs(current.zoom - renderedZoomRef.current) < 0.45) {
-        freeZoomParentRef.current = null;
-        return;
-      }
+
       const mapWidth = metricsRef.current.mapWidth * current.zoom;
       const mapHeight = metricsRef.current.mapHeight * current.zoom;
       const focus = {
@@ -943,17 +1088,13 @@ export default function Atlas() {
   };
 
   const onWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
-    if ((event.target as HTMLElement).closest("form, input, button")) return;
+    if ((event.target as HTMLElement).closest("form, input, [data-map-ui]")) return;
     event.preventDefault();
     stopInertia();
     const rect = stageRef.current?.getBoundingClientRect();
     if (!rect) return;
     const current = viewRef.current;
     const nextZoom = clamp(current.zoom * Math.exp(-event.deltaY * 0.0018), MIN_ZOOM, MAX_ZOOM);
-    if (nextZoom <= 1.015) {
-      resetOuterMap();
-      return;
-    }
     beginFreeZoom();
     const point = { x: event.clientX - rect.left, y: event.clientY - rect.top };
     const worldX = (point.x - current.x) / current.zoom;
@@ -968,13 +1109,15 @@ export default function Atlas() {
 
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement;
-    if (target.closest("form, input, button, [data-map-ui]")) return;
+    // Hotspots are buttons but must not steal the drag; chrome uses data-map-ui.
+    if (target.closest("form, input, [data-map-ui]")) return;
     const rect = stageRef.current?.getBoundingClientRect();
     if (!rect) return;
     event.preventDefault();
     stopInertia();
     event.currentTarget.setPointerCapture(event.pointerId);
     const point = { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    pointerStartRef.current = point;
     pointersRef.current.set(event.pointerId, point);
     interactingRef.current = true;
     setInteracting(true);
@@ -992,6 +1135,7 @@ export default function Atlas() {
       pinchRef.current = null;
     } else if (pointersRef.current.size === 2) {
       beginFreeZoom();
+      markGesture();
       pinchZoomRef.current = true;
       const points = Array.from(pointersRef.current.values());
       pinchRef.current = {
@@ -1032,7 +1176,11 @@ export default function Atlas() {
     const now = performance.now();
     const dx = point.x - drag.start.x;
     const dy = point.y - drag.start.y;
-    if (Math.hypot(dx, dy) > 6) drag.moved = true;
+    if (Math.hypot(dx, dy) > DRAG_THRESHOLD_PX) {
+      if (!drag.moved) markGesture();
+      drag.moved = true;
+    }
+    if (!drag.moved) return;
     const dt = Math.max(1, now - drag.lastAt);
     const instantX = (point.x - drag.last.x) / dt * 16.67;
     const instantY = (point.y - drag.last.y) / dt * 16.67;
@@ -1047,6 +1195,9 @@ export default function Atlas() {
       x: drag.view.x + dx,
       y: drag.view.y + dy,
     }, metricsRef.current, 80));
+    if (tryEdgeTravel(drag.velocity)) {
+      dragRef.current = null;
+    }
   };
 
   const finishPointer = (event: ReactPointerEvent<HTMLDivElement>, cancelled = false) => {
@@ -1086,6 +1237,11 @@ export default function Atlas() {
       queueSettledZoom();
       return;
     }
+    if (!cancelled && drag?.moved && tryEdgeTravel(drag.velocity)) {
+      dragRef.current = null;
+      return;
+    }
+    const edgeMargin = Math.max(28, Math.min(metricsRef.current.width, metricsRef.current.height) * EDGE_TRAVEL_RATIO);
     const overflow: Array<[Direction, number]> = [
       ["west", live.x - bounded.x],
       ["east", bounded.x - live.x],
@@ -1093,11 +1249,12 @@ export default function Atlas() {
       ["south", bounded.y - live.y],
     ];
     const crossed = overflow.sort((a, b) => b[1] - a[1])[0];
-    if (!cancelled && crossed[1] > 36 && live.zoom <= 1.08) {
+    if (!cancelled && crossed[1] > edgeMargin * 0.35) {
       interactingRef.current = false;
       setInteracting(false);
       commitView(bounded, { animate: true });
       dragRef.current = null;
+      markGesture();
       shiftMap(crossed[0]);
       return;
     }
@@ -1110,6 +1267,10 @@ export default function Atlas() {
     setInteracting(false);
     commitView(bounded, { animate: true });
     if (!cancelled && drag && !drag.moved && point) {
+      if (performance.now() - lastGestureAtRef.current < GESTURE_SUPPRESS_MS) {
+        dragRef.current = null;
+        return;
+      }
       if (viewRef.current.zoom > 1.05 || focusedId) {
         resetOuterMap();
       } else {
@@ -1185,6 +1346,8 @@ export default function Atlas() {
                 }}
                 onClick={(event) => {
                   event.stopPropagation();
+                  if (performance.now() - lastGestureAtRef.current < GESTURE_SUPPRESS_MS) return;
+                  if (dragRef.current?.moved || interactingRef.current) return;
                   enterHotspot(hotspot);
                 }}
                 aria-label={"enter " + hotspot.label}

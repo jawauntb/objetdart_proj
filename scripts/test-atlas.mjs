@@ -60,9 +60,34 @@ function assertRequestError(callback, code, message) {
 }
 
 const atlasBatchModule = loadTsModule("src/lib/atlas-batch.ts");
+const atlasCropModule = loadTsModule("src/lib/atlas-crop.ts", {
+  "@/lib/atlas-batch": atlasBatchModule,
+});
+const sharpExtractCalls = [];
+function createSharpMock() {
+  const sharp = (input) => {
+    const api = {
+      metadata: async () => {
+        // Real 1x1 PNG used by most edit fixtures; larger synthetic sizes for crop math checks.
+        if (Buffer.isBuffer(input) && input.length <= 80) return { width: 1, height: 1 };
+        return { width: 100, height: 80 };
+      },
+      extract: (region) => {
+        sharpExtractCalls.push({ region, byteLength: Buffer.isBuffer(input) ? input.length : 0 });
+        return api;
+      },
+      png: () => api,
+      toBuffer: async () => Buffer.from(ONE_PIXEL_PNG, "base64"),
+    };
+    return api;
+  };
+  return sharp;
+}
 const atlasModule = loadTsModule("src/lib/atlas-generation.ts", {
   "server-only": {},
   "@/lib/atlas-batch": atlasBatchModule,
+  "@/lib/atlas-crop": atlasCropModule,
+  sharp: createSharpMock(),
   "node:fs/promises": {
     readFile: async () => {
       throw new Error("provider file access is outside this unit test");
@@ -142,6 +167,7 @@ const {
   formatAtlasVisualStyleClause,
   generateAtlasImage,
   parseAtlasGenerationRequest,
+  pixelBoundsForClip,
   resolveAtlasBatchPlan,
   resolveAtlasPhaseProviderConfig,
   resolveAtlasProviderConfig,
@@ -151,6 +177,16 @@ assert.equal(
   typeof atlasBatchModule.resolveAtlasBatchPlan,
   "function",
   "atlas-batch should export shared plan resolution for client and server",
+);
+assert.equal(
+  typeof atlasCropModule.pixelBoundsForClip,
+  "function",
+  "atlas-crop should export pure pixel bounds for client and server crop paths",
+);
+assert.equal(
+  typeof atlasCropModule.cropAtlasDataUrl,
+  "function",
+  "atlas-crop should export the browser Canvas crop helper",
 );
 const { SITE_ROUTE_BY_KEY, isDarkRoutePath } = routesModule;
 
@@ -382,6 +418,22 @@ assert.ok(
   "focus clip should contain the focus y",
 );
 
+assert.deepEqual(
+  pixelBoundsForClip({ x: 0.25, y: 0.25, width: 0.5, height: 0.5 }, 100, 200),
+  { left: 25, top: 50, width: 50, height: 100 },
+  "pixelBoundsForClip should map normalized clips onto integer pixel extracts",
+);
+assert.deepEqual(
+  pixelBoundsForClip({ x: 0, y: 0, width: 1, height: 1 }, 1, 1),
+  { left: 0, top: 0, width: 1, height: 1 },
+  "pixelBoundsForClip should keep at least a 1x1 extract on tiny sources",
+);
+const eastPixelBounds = pixelBoundsForClip(clipRectForBatchDirection("east"), 100, 80);
+assert.equal(eastPixelBounds.left, Math.round(0.38 * 100), "east crop should start near the buffered midline");
+assert.equal(eastPixelBounds.top, 0, "east crop should span the full height origin");
+assert.ok(eastPixelBounds.width >= 50, "east crop should cover the eastern half plus buffer");
+assert.equal(eastPixelBounds.height, 80, "east crop should span the full image height");
+
 const zoomSourceRequest = parseAtlasGenerationRequest({
   prompt: "fire forest",
   currentImage: `data:image/png;base64,${ONE_PIXEL_PNG}`,
@@ -396,8 +448,13 @@ assert.equal(
   "edit",
   "zoom with a current image should reconstruct from the clipped source",
 );
+const sharpCallsBeforeZoom = sharpExtractCalls.length;
 const zoomResult = plain(await generateAtlasImage(zoomSourceRequest, openRouterProvider));
 assert.equal(zoomResult.generation.operation, "edit", "free zoom with a source sheet should edit/reconstruct");
+assert.ok(
+  sharpExtractCalls.length > sharpCallsBeforeZoom,
+  "zoom with clip+currentImage must pixel-crop before the provider call",
+);
 const openRouterCalls = () => providerCalls.filter((call) => call.url === "https://openrouter.ai/api/v1/images");
 const zoomCall = [...openRouterCalls()].reverse().find((call) => {
   const body = JSON.parse(call.init.body);
@@ -406,7 +463,16 @@ const zoomCall = [...openRouterCalls()].reverse().find((call) => {
 assert.ok(zoomCall, "zoom should ask the provider to reconstruct from the clipped sample");
 const zoomBody = JSON.parse(zoomCall.init.body);
 assert.equal(zoomBody.input_references.length, 1, "zoom must send the clipped source map as an edit reference");
-assert.match(zoomBody.prompt, /supplied atlas sample|zoomable and pannable again/i, "zoom prompts should describe clipped reconstruction");
+assert.match(
+  zoomBody.input_references[0].image_url.url,
+  /^data:image\/png;base64,/,
+  "zoom input_references must carry the cropped PNG/WebP sample",
+);
+assert.match(
+  zoomBody.prompt,
+  /supplied image IS the cropped region sample|zoomable and pannable again/i,
+  "zoom prompts should treat the reference as an already-cropped sample",
+);
 
 const refineResult = plain(await generateAtlasImage(
   parseAtlasGenerationRequest({
@@ -463,9 +529,14 @@ assert.ok(shiftCall, "shift should ask the provider to extend from the clipped e
 const shiftBody = JSON.parse(shiftCall.init.body);
 assert.equal(shiftBody.input_references.length, 1, "shift must send the previous map as a clipped source reference");
 assert.match(
+  shiftBody.input_references[0].image_url.url,
+  /^data:image\/png;base64,/,
+  "shift input_references must carry the cropped PNG sample",
+);
+assert.match(
   shiftBody.prompt,
-  /supplied atlas sample|pannable and zoomable again/i,
-  "shift prompts should describe clipped neighboring reconstruction",
+  /supplied image IS the cropped region sample|pannable and zoomable again/i,
+  "shift prompts should treat the reference as an already-cropped neighbor sample",
 );
 
 const diagonalNeighbor = plain(parseAtlasGenerationRequest({
@@ -542,7 +613,7 @@ assert.equal(canonicalPreviewBody.input_references?.length, 1, "zoom preview sho
 assert.equal(canonicalFinalBody.input_references?.length, 1, "zoom final should sample from the current map");
 assert.match(
   canonicalPreviewBody.prompt,
-  /Upsample, extend, and reconstruct|supplied atlas sample/i,
+  /Upsample, extend, and reconstruct|supplied image IS the cropped region sample|supplied atlas sample/i,
   "zoom preview should reconstruct from the focused region sample",
 );
 assert.equal(
