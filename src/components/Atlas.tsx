@@ -20,7 +20,8 @@ import {
   type AtlasBatchKind,
   type AtlasClipRect,
 } from "@/lib/atlas-batch";
-import { cropAtlasDataUrl } from "@/lib/atlas-crop";
+import { resolveAtlasEdgeTravel } from "@/lib/atlas-navigation";
+import { prepareAtlasSourceImage } from "@/lib/atlas-source";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { useField } from "@/store/field";
@@ -34,6 +35,10 @@ const MIN_ZOOM = 1;
 const MAX_ZOOM = 64;
 const SETTLE_TRANSITION = "transform 180ms cubic-bezier(.22,.8,.24,1)";
 const ZOOM_SETTLE_DELTA = 0.45;
+const MOBILE_ZOOM_SETTLE_MS = 520;
+const DESKTOP_ZOOM_SETTLE_MS = 620;
+const MOBILE_CROSSFADE_MS = 420;
+const DESKTOP_CROSSFADE_MS = 880;
 const DRAG_THRESHOLD_PX = 14;
 const EDGE_TRAVEL_RATIO = 0.15;
 const GESTURE_SUPPRESS_MS = 280;
@@ -343,28 +348,15 @@ export default function Atlas() {
     if (!metrics.width) return false;
     const hard = boundView(view, metrics);
     const margin = Math.max(32, Math.min(metrics.width, metrics.height) * EDGE_TRAVEL_RATIO);
-    const vx = velocity?.x ?? 0;
-    const vy = velocity?.y ?? 0;
-    const scores: Array<[Direction, number]> = [
-      ["west", (view.x - hard.x) + (vx > 3 ? vx * 3 : 0)],
-      ["east", (hard.x - view.x) + (vx < -3 ? -vx * 3 : 0)],
-      ["north", (view.y - hard.y) + (vy > 3 ? vy * 3 : 0)],
-      ["south", (hard.y - view.y) + (vy < -3 ? -vy * 3 : 0)],
-    ];
-    // Already clamped against an edge and still pushing counts as travel intent.
-    if (Math.abs(view.x - hard.x) < 1 && vx > 5) scores[0][1] = Math.max(scores[0][1], margin);
-    if (Math.abs(view.x - hard.x) < 1 && vx < -5) scores[1][1] = Math.max(scores[1][1], margin);
-    if (Math.abs(view.y - hard.y) < 1 && vy > 5) scores[2][1] = Math.max(scores[2][1], margin);
-    if (Math.abs(view.y - hard.y) < 1 && vy < -5) scores[3][1] = Math.max(scores[3][1], margin);
-    const best = scores.sort((a, b) => b[1] - a[1])[0];
-    if (best[1] < margin * 0.42) return false;
+    const direction = resolveAtlasEdgeTravel(view, metrics, velocity ?? { x: 0, y: 0 }, margin);
+    if (!direction) return false;
     edgeTravelLockRef.current = true;
     markGesture();
     stopInertia();
     interactingRef.current = false;
     setInteracting(false);
     commitView(hard, { animate: true });
-    shiftMap(best[0]);
+    shiftMap(direction);
     window.setTimeout(() => {
       edgeTravelLockRef.current = false;
     }, 960);
@@ -473,6 +465,9 @@ export default function Atlas() {
     incomingImageRef.current = nextSource;
     setIncomingVisible(false);
     setIncomingImage(nextSource);
+    const crossfadeMs = metricsRef.current.width > 0 && metricsRef.current.width <= MOBILE_BREAKPOINT
+      ? MOBILE_CROSSFADE_MS
+      : DESKTOP_CROSSFADE_MS;
     revealRef.current = window.setTimeout(() => setIncomingVisible(true), 24);
     crossfadeRef.current = window.setTimeout(() => {
       activeImageRef.current = nextSource;
@@ -480,7 +475,7 @@ export default function Atlas() {
       setActiveImage(nextSource);
       setIncomingImage(null);
       setIncomingVisible(false);
-    }, 880);
+    }, crossfadeMs);
   };
 
   const clearNeighborSheets = () => {
@@ -602,16 +597,11 @@ export default function Atlas() {
           || slot.direction === "west"
           ? slot.direction
           : undefined;
-        let croppedImage = sourceImage;
-        try {
-          croppedImage = await cropAtlasDataUrl(sourceImage, slot.clip);
-        } catch {
-          // Server crops when clip+currentImage arrive uncropped.
-        }
+        const preparedSource = await prepareAtlasSourceImage(sourceImage, slot.clip);
         const neighborGenerationId = generationId(parentRequestId) + "-" + slot.direction;
         const body = JSON.stringify({
           prompt: subjectPrompt.replace(/ +/g, " ").trim().slice(0, 240),
-          currentImage: croppedImage,
+          currentImage: preparedSource.currentImage,
           mode: cardinal ? "shift" : "zoom",
           direction: cardinal,
           focus: cardinal
@@ -622,6 +612,7 @@ export default function Atlas() {
                 zoom: 2,
               },
           clip: slot.clip,
+          sourceImageCropped: preparedSource.sourceImageCropped,
           batchKind: plan.kind,
           batchRole: "neighbor",
           batchDirection: slot.direction,
@@ -737,12 +728,11 @@ export default function Atlas() {
     if (optimisticSeeds) setSeeds(optimisticSeeds);
 
     let imageForRequest = currentImage;
+    let sourceImageCropped = false;
     if (usesClippedSource && currentImage && resolvedClip) {
-      try {
-        imageForRequest = await cropAtlasDataUrl(currentImage, resolvedClip);
-      } catch {
-        // Server crops when clip+currentImage arrive uncropped.
-      }
+      const preparedSource = await prepareAtlasSourceImage(currentImage, resolvedClip);
+      imageForRequest = preparedSource.currentImage;
+      sourceImageCropped = preparedSource.sourceImageCropped;
     }
 
     const box = stageRef.current?.getBoundingClientRect();
@@ -753,6 +743,7 @@ export default function Atlas() {
       direction,
       focus,
       clip: usesClippedSource ? resolvedClip : undefined,
+      sourceImageCropped: usesClippedSource ? sourceImageCropped : undefined,
       batchRole: "primary",
       generationDepth: depth,
       viewport: {
@@ -1083,8 +1074,9 @@ export default function Atlas() {
         subjectPrompt: concept + " · visible region",
         focus,
       });
-    // Longer settle on phones so pinch/pan inertia can finish before redraw.
-    }, metricsRef.current.width > 0 && metricsRef.current.width <= MOBILE_BREAKPOINT ? 920 : 620);
+    }, metricsRef.current.width > 0 && metricsRef.current.width <= MOBILE_BREAKPOINT
+      ? MOBILE_ZOOM_SETTLE_MS
+      : DESKTOP_ZOOM_SETTLE_MS);
   };
 
   const onWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
@@ -1115,6 +1107,10 @@ export default function Atlas() {
     if (!rect) return;
     event.preventDefault();
     stopInertia();
+    if (zoomSettleRef.current !== null) {
+      window.clearTimeout(zoomSettleRef.current);
+      zoomSettleRef.current = null;
+    }
     event.currentTarget.setPointerCapture(event.pointerId);
     const point = { x: event.clientX - rect.left, y: event.clientY - rect.top };
     pointerStartRef.current = point;
@@ -1746,6 +1742,7 @@ export default function Atlas() {
             bottom: max(14px, env(safe-area-inset-bottom, 0px));
             width: calc(100% - 28px);
           }
+          .living-atlas__image--incoming { transition-duration: 380ms; }
         }
         @media (prefers-reduced-motion: reduce) {
           .living-atlas__plane,
