@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Sigil from "@/components/Sigil";
 import RouteSigil from "@/components/RouteSigil";
 import ConstellationGlyph from "@/components/ConstellationGlyph";
-import { isDarkRoutePath, PRIMARY_ROUTE_KEYS, SITE_ROUTE_BY_KEY, SITE_ROUTES } from "@/lib/routes";
+import { isDarkRoutePath, NAVIGATION_ROUTES, PRIMARY_ROUTE_KEYS, SITE_ROUTE_BY_KEY } from "@/lib/routes";
 
 export default function SiteHeader() {
   const pathname = usePathname() ?? "/";
@@ -377,7 +377,7 @@ export default function SiteHeader() {
 
         {/* the rows */}
         <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 2 }}>
-          {SITE_ROUTES.map((r) => {
+          {NAVIGATION_ROUTES.map((r) => {
             const isCurrent =
               pathname === r.href ||
               (r.href !== "/" && pathname.startsWith(r.href));

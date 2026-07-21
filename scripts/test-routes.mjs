@@ -50,10 +50,13 @@ const darkRoutesModule = loadTsModule("src/lib/dark-routes.ts", {
   "@/lib/routes": routesModule,
 });
 const siteHeaderSource = readRepoFile("src/components/SiteHeader.tsx");
+const scrollingGallerySource = readRepoFile("src/components/ScrollingGallery.tsx");
 const homePageSource = readRepoFile("src/app/page.tsx");
 
 const {
   DARK_ROUTE_PREFIXES,
+  GALLERY_ROUTES,
+  NAVIGATION_ROUTES,
   PRIMARY_ROUTE_KEYS,
   SITE_ROUTE_BY_KEY,
   SITE_ROUTES,
@@ -95,6 +98,30 @@ const expectedKeys = [
   "kept",
   "colophon",
 ];
+const preferredNavigationKeys = [
+  "atlas",
+  "coin",
+  "stars",
+  "ocean",
+  "clouds",
+  "waves",
+  "movement",
+  "sine",
+  "circularity",
+  "beyond",
+  "light",
+  "music-color",
+  "signal",
+  "jewel",
+  "aphros",
+  "tide",
+  "storm",
+  "earth",
+  "flowers",
+  "growth",
+  "pretext",
+  "dither",
+];
 const validClusters = new Set(["field", "water", "nature", "mechanism"]);
 const validIcons = new Set(
   [...readRepoFile("src/components/RouteSigil.tsx").matchAll(/case "([^"]+)":/g)].map((match) => match[1]),
@@ -108,6 +135,46 @@ function hasAnchor(id) {
 const keys = SITE_ROUTES.map((route) => route.key);
 assert.equal(new Set(keys).size, keys.length, "route keys must be unique");
 assert.deepEqual([...keys].sort(), [...expectedKeys].sort(), "route registry must contain the public route set");
+
+const preferredNavigationKeySet = new Set(preferredNavigationKeys);
+const expectedNavigationKeys = [
+  ...preferredNavigationKeys,
+  ...keys.filter((key) => !preferredNavigationKeySet.has(key)),
+];
+assert.deepEqual(
+  NAVIGATION_ROUTES.map((route) => route.key),
+  expectedNavigationKeys,
+  "navigation should use the preferred order and append every remaining route stably",
+);
+assert.equal(NAVIGATION_ROUTES.length, SITE_ROUTES.length, "navigation should include every route exactly once");
+assert.equal(
+  new Set(NAVIGATION_ROUTES.map((route) => route.key)).size,
+  NAVIGATION_ROUTES.length,
+  "navigation order should not duplicate routes",
+);
+assert.ok(NAVIGATION_ROUTES.every(Boolean), "navigation order should contain only known routes");
+assert.deepEqual(
+  GALLERY_ROUTES.map((route) => route.key),
+  expectedNavigationKeys.filter((key) => !["archive", "kept", "colophon"].includes(key)),
+  "swipe gallery should follow navigation order while omitting non-gallery routes",
+);
+assert.match(siteHeaderSource, /NAVIGATION_ROUTES\.map/, "site header should render the shared navigation order");
+assert.match(scrollingGallerySource, /GALLERY_ROUTES\.map/, "gallery should render the shared swipe order");
+assert.doesNotMatch(
+  siteHeaderSource,
+  /NAVIGATION_ROUTES\.(?:sort|reverse)\(/,
+  "site header should not reorder the shared navigation sequence",
+);
+assert.doesNotMatch(
+  scrollingGallerySource,
+  /GALLERY_ROUTES\.(?:sort|reverse)\(/,
+  "gallery should not reorder the shared swipe sequence",
+);
+assert.match(
+  scrollingGallerySource,
+  /circle back to \{GALLERY_ROUTES\[0\]/,
+  "gallery loop should derive its label from the first room",
+);
 
 for (const route of SITE_ROUTES) {
   assert.ok(SITE_ROUTE_BY_KEY[route.key] === route, `${route.key} should resolve through SITE_ROUTE_BY_KEY`);

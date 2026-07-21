@@ -55,6 +55,50 @@ export const SITE_ROUTE_BY_KEY = Object.fromEntries(
   SITE_ROUTES.map((route) => [route.key, route]),
 ) as Record<string, SiteRouteEntry>;
 
+const NAVIGATION_ROUTE_KEYS = [
+  "atlas",
+  "coin",
+  "stars",
+  "ocean",
+  "clouds",
+  "waves",
+  "movement",
+  "sine",
+  "circularity",
+  "beyond",
+  "light",
+  "music-color",
+  "signal",
+  "jewel",
+  "aphros",
+  "tide",
+  "storm",
+  "earth",
+  "flowers",
+  "growth",
+  "pretext",
+  "dither",
+] as const;
+
+const NAVIGATION_ROUTE_KEY_SET = new Set<string>(NAVIGATION_ROUTE_KEYS);
+
+const PREFERRED_NAVIGATION_ROUTES = NAVIGATION_ROUTE_KEYS.map((key) => {
+  const route = SITE_ROUTE_BY_KEY[key];
+  if (!route) throw new Error(`Unknown navigation route: ${key}`);
+  return route;
+});
+
+export const NAVIGATION_ROUTES = [
+  ...PREFERRED_NAVIGATION_ROUTES,
+  ...SITE_ROUTES.filter((route) => !NAVIGATION_ROUTE_KEY_SET.has(route.key)),
+];
+
+const GALLERY_OMITTED_ROUTE_KEYS = new Set(["archive", "kept", "colophon"]);
+
+export const GALLERY_ROUTES = NAVIGATION_ROUTES.filter(
+  (route) => !GALLERY_OMITTED_ROUTE_KEYS.has(route.key),
+);
+
 export const DARK_ROUTE_PREFIXES = SITE_ROUTES
   .filter((route) => route.dark)
   .map((route) => route.href);

@@ -3,22 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { SyntheticEvent } from "react";
-import { SITE_ROUTES } from "@/lib/routes";
-
-const OMITTED_ROUTES = new Set(["archive", "kept", "colophon"]);
-const OPENING_ROUTES = ["coin", "atlas"];
-const GALLERY_ROOMS = SITE_ROUTES
-  .filter((route) => !OMITTED_ROUTES.has(route.key))
-  .sort((a, b) => {
-    const aOpening = OPENING_ROUTES.indexOf(a.key);
-    const bOpening = OPENING_ROUTES.indexOf(b.key);
-    if (aOpening >= 0 || bOpening >= 0) {
-      if (aOpening < 0) return 1;
-      if (bOpening < 0) return -1;
-      return aOpening - bOpening;
-    }
-    return 0;
-  });
+import { GALLERY_ROUTES } from "@/lib/routes";
 
 export default function ScrollingGallery() {
   const galleryRef = useRef<HTMLElement | null>(null);
@@ -80,11 +65,11 @@ export default function ScrollingGallery() {
       aria-label="scrolling toy gallery"
     >
       <div className="scrolling-intro" aria-hidden="true">
-        <span>one page · {GALLERY_ROOMS.length} rooms</span>
+        <span>one page · {GALLERY_ROUTES.length} rooms</span>
         <span>scroll to wander · tap to play</span>
       </div>
 
-      {GALLERY_ROOMS.map((room, index) => {
+      {GALLERY_ROUTES.map((room, index) => {
         const entered = enteredIndex === index;
         const shouldLoad = Math.abs(activeIndex - index) <= 1;
 
@@ -122,7 +107,7 @@ export default function ScrollingGallery() {
                   aria-label={`enter ${room.key} toy`}
                 >
                   <span className="scrolling-room__count">
-                    {String(index + 1).padStart(2, "0")} / {String(GALLERY_ROOMS.length).padStart(2, "0")}
+                    {String(index + 1).padStart(2, "0")} / {String(GALLERY_ROUTES.length).padStart(2, "0")}
                   </span>
                   <span className="scrolling-room__name">{room.key}</span>
                   <span className="scrolling-room__desc">{room.desc}</span>
@@ -142,7 +127,9 @@ export default function ScrollingGallery() {
 
       <section className="scrolling-end" aria-label="end of the current gallery orbit">
         <p>the cabinet has no real end.</p>
-        <button type="button" onClick={() => goToRoom(0)}>circle back to coin ↑</button>
+        <button type="button" onClick={() => goToRoom(0)}>
+          circle back to {GALLERY_ROUTES[0]?.key ?? "the start"} ↑
+        </button>
       </section>
 
       <aside className="scrolling-position" aria-label="gallery position">
@@ -156,12 +143,12 @@ export default function ScrollingGallery() {
         </button>
         <span>{String(activeIndex + 1).padStart(2, "0")}</span>
         <i aria-hidden="true" />
-        <span>{String(GALLERY_ROOMS.length).padStart(2, "0")}</span>
+        <span>{String(GALLERY_ROUTES.length).padStart(2, "0")}</span>
         <button
           type="button"
           aria-label="next toy"
-          onClick={() => goToRoom(Math.min(GALLERY_ROOMS.length - 1, activeIndex + 1))}
-          disabled={activeIndex === GALLERY_ROOMS.length - 1}
+          onClick={() => goToRoom(Math.min(GALLERY_ROUTES.length - 1, activeIndex + 1))}
+          disabled={activeIndex === GALLERY_ROUTES.length - 1}
         >
           ↓
         </button>
