@@ -88,6 +88,7 @@ export type AtlasGenerationRequest = {
   mode: AtlasMode;
   direction?: AtlasDirection;
   clip?: AtlasClipRect;
+  sourceImageCropped?: boolean;
   batchKind?: AtlasBatchKind;
   batchRole?: AtlasBatchRole;
   batchDirection?: AtlasBatchDirection;
@@ -268,6 +269,7 @@ export function parseAtlasGenerationRequest(value: unknown): AtlasGenerationRequ
     "mode",
     "direction",
     "clip",
+    "sourceImageCropped",
     "batchKind",
     "batchRole",
     "batchDirection",
@@ -281,6 +283,9 @@ export function parseAtlasGenerationRequest(value: unknown): AtlasGenerationRequ
   const mode = normalizeMode(body.mode);
   const direction = body.direction == null ? undefined : normalizeDirection(body.direction);
   const clip = body.clip == null ? undefined : normalizeClip(body.clip);
+  const sourceImageCropped = body.sourceImageCropped == null
+    ? undefined
+    : normalizeBoolean(body.sourceImageCropped, "sourceImageCropped");
   const batchKind = body.batchKind == null ? undefined : normalizeBatchKind(body.batchKind);
   const batchRole = body.batchRole == null ? undefined : normalizeBatchRole(body.batchRole);
   const batchDirection = body.batchDirection == null
@@ -308,6 +313,9 @@ export function parseAtlasGenerationRequest(value: unknown): AtlasGenerationRequ
   if (clip && !currentImage) {
     throw new AtlasRequestError("current_image_required", "clip sampling requires a current atlas image");
   }
+  if (sourceImageCropped && !clip) {
+    throw new AtlasRequestError("clip_required", "a pre-cropped source requires its parent clip metadata");
+  }
 
   return {
     prompt,
@@ -317,6 +325,7 @@ export function parseAtlasGenerationRequest(value: unknown): AtlasGenerationRequ
     mode,
     direction,
     clip,
+    sourceImageCropped,
     batchKind,
     batchRole,
     batchDirection,
@@ -798,7 +807,7 @@ async function generateWithOpenRouter(
 
   if (atlasUsesSourceImage(request) && request.currentImage) {
     let image = await loadSourceImage(request.currentImage);
-    if (request.clip) {
+    if (request.clip && !request.sourceImageCropped) {
       image = await cropSourceImage(image, request.clip);
     }
     body.input_references = [{
@@ -1194,6 +1203,13 @@ function assertOnlyKeys(object: Record<string, unknown>, allowed: string[], labe
 function requireNumber(value: unknown, label: string, minimum: number, maximum: number): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value < minimum || value > maximum) {
     throw new AtlasRequestError("invalid_request", `${label} must be between ${minimum} and ${maximum}`);
+  }
+  return value;
+}
+
+function normalizeBoolean(value: unknown, label: string): boolean {
+  if (typeof value !== "boolean") {
+    throw new AtlasRequestError("invalid_request", `${label} must be a boolean`);
   }
   return value;
 }

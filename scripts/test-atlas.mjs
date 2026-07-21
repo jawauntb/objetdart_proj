@@ -60,8 +60,21 @@ function assertRequestError(callback, code, message) {
 }
 
 const atlasBatchModule = loadTsModule("src/lib/atlas-batch.ts");
+const atlasNavigationModule = loadTsModule("src/lib/atlas-navigation.ts");
 const atlasCropModule = loadTsModule("src/lib/atlas-crop.ts", {
   "@/lib/atlas-batch": atlasBatchModule,
+});
+const croppedSourceModule = loadTsModule("src/lib/atlas-source.ts", {
+  "@/lib/atlas-crop": {
+    cropAtlasDataUrl: async () => "data:image/png;base64,cropped",
+  },
+});
+const uncroppedSourceModule = loadTsModule("src/lib/atlas-source.ts", {
+  "@/lib/atlas-crop": {
+    cropAtlasDataUrl: async () => {
+      throw new Error("canvas unavailable");
+    },
+  },
 });
 const sharpExtractCalls = [];
 function createSharpMock() {
@@ -173,6 +186,9 @@ const {
   resolveAtlasProviderConfig,
   resolveAtlasVisualStyle,
 } = atlasModule;
+const { resolveAtlasEdgeTravel } = atlasNavigationModule;
+const { prepareAtlasSourceImage: prepareCroppedSource } = croppedSourceModule;
+const { prepareAtlasSourceImage: prepareUncroppedSource } = uncroppedSourceModule;
 assert.equal(
   typeof atlasBatchModule.resolveAtlasBatchPlan,
   "function",
@@ -404,8 +420,53 @@ assert.deepEqual(
   "diagonal2 should cover NW and SE",
 );
 assert.equal(laterBatch.slots.length, 2, "subsequent batch should request two images");
-assert.deepEqual(laterBatch.slots[0].clip, nw, "diagonal2 northwest clip should match the shared helper");
-assert.deepEqual(laterBatch.slots[1].clip, se, "diagonal2 southeast clip should match the shared helper");
+assert.deepEqual(plain(laterBatch.slots[0].clip), plain(nw), "diagonal2 northwest clip should match the shared helper");
+assert.deepEqual(plain(laterBatch.slots[1].clip), plain(se), "diagonal2 southeast clip should match the shared helper");
+
+const mobileZoomMetrics = { width: 390, height: 788, mapWidth: 437, mapHeight: 788 };
+assert.equal(
+  resolveAtlasEdgeTravel(
+    { x: -360, y: -470, zoom: 2.55 },
+    mobileZoomMetrics,
+    { x: -48, y: 0 },
+    59,
+  ),
+  null,
+  "a fast pan through the middle of a zoomed sheet must not jump to a neighboring region",
+);
+assert.equal(
+  resolveAtlasEdgeTravel(
+    { x: -724, y: -470, zoom: 2.55 },
+    mobileZoomMetrics,
+    { x: -12, y: 0 },
+    59,
+  ),
+  "east",
+  "continuing to pan outward at the eastern edge should travel to the eastern neighbor",
+);
+assert.equal(
+  resolveAtlasEdgeTravel(
+    { x: -704, y: -470, zoom: 2.55 },
+    mobileZoomMetrics,
+    { x: -12, y: 0 },
+    59,
+  ),
+  null,
+  "a fast pan must not travel while visible content remains before the edge",
+);
+
+const edgeTravelCases = [
+  ["west", { x: 0, y: -470, zoom: 2.55 }, { x: 12, y: 0 }],
+  ["north", { x: -360, y: 0, zoom: 2.55 }, { x: 0, y: 12 }],
+  ["south", { x: -360, y: -1221.4, zoom: 2.55 }, { x: 0, y: -12 }],
+];
+for (const [direction, view, velocity] of edgeTravelCases) {
+  assert.equal(
+    resolveAtlasEdgeTravel(view, mobileZoomMetrics, velocity, 59),
+    direction,
+    `${direction} edge travel should resolve only at the matching boundary`,
+  );
+}
 
 const focusClip = clipRectForFocus({ x: 0.4, y: 0.6, zoom: 2 });
 assert.ok(focusClip.width < 1 && focusClip.height < 1, "zoom focus clips should be a bounded region with buffer");
@@ -418,13 +479,26 @@ assert.ok(
   "focus clip should contain the focus y",
 );
 
+const preparedCroppedSource = plain(await prepareCroppedSource("data:image/png;base64,parent", focusClip));
 assert.deepEqual(
-  pixelBoundsForClip({ x: 0.25, y: 0.25, width: 0.5, height: 0.5 }, 100, 200),
+  preparedCroppedSource,
+  { currentImage: "data:image/png;base64,cropped", sourceImageCropped: true },
+  "a successful browser crop should pair the cropped source with the server skip marker",
+);
+const preparedUncroppedSource = plain(await prepareUncroppedSource("data:image/png;base64,parent", focusClip));
+assert.deepEqual(
+  preparedUncroppedSource,
+  { currentImage: "data:image/png;base64,parent", sourceImageCropped: false },
+  "a failed browser crop should preserve the parent source and let the server crop it",
+);
+
+assert.deepEqual(
+  plain(pixelBoundsForClip({ x: 0.25, y: 0.25, width: 0.5, height: 0.5 }, 100, 200)),
   { left: 25, top: 50, width: 50, height: 100 },
   "pixelBoundsForClip should map normalized clips onto integer pixel extracts",
 );
 assert.deepEqual(
-  pixelBoundsForClip({ x: 0, y: 0, width: 1, height: 1 }, 1, 1),
+  plain(pixelBoundsForClip({ x: 0, y: 0, width: 1, height: 1 }, 1, 1)),
   { left: 0, top: 0, width: 1, height: 1 },
   "pixelBoundsForClip should keep at least a 1x1 extract on tiny sources",
 );
@@ -467,6 +541,45 @@ assert.match(
   zoomBody.input_references[0].image_url.url,
   /^data:image\/png;base64,/,
   "zoom input_references must carry the cropped PNG/WebP sample",
+);
+
+const preCroppedZoomRequest = parseAtlasGenerationRequest({
+  prompt: "fire forest",
+  currentImage: `data:image/png;base64,${ONE_PIXEL_PNG}`,
+  focus: { x: 0.4, y: 0.6, zoom: 2 },
+  clip: plain(focusClip),
+  sourceImageCropped: true,
+  mode: "zoom",
+  batchRole: "primary",
+  generationDepth: 1,
+});
+assertRequestError(
+  () => parseAtlasGenerationRequest({
+    prompt: "fire forest",
+    currentImage: `data:image/png;base64,${ONE_PIXEL_PNG}`,
+    sourceImageCropped: true,
+    mode: "generate",
+  }),
+  "clip_required",
+  "pre-cropped sources must retain the parent clip coordinates used to create them",
+);
+assertRequestError(
+  () => parseAtlasGenerationRequest({
+    prompt: "fire forest",
+    currentImage: `data:image/png;base64,${ONE_PIXEL_PNG}`,
+    clip: plain(focusClip),
+    sourceImageCropped: "yes",
+    mode: "zoom",
+  }),
+  "invalid_request",
+  "sourceImageCropped must be a strict boolean",
+);
+const sharpCallsBeforePreCroppedZoom = sharpExtractCalls.length;
+await generateAtlasImage(preCroppedZoomRequest, openRouterProvider);
+assert.equal(
+  sharpExtractCalls.length,
+  sharpCallsBeforePreCroppedZoom,
+  "a browser-cropped source must not be cropped a second time on the server",
 );
 assert.match(
   zoomBody.prompt,
@@ -551,7 +664,7 @@ const diagonalNeighbor = plain(parseAtlasGenerationRequest({
   generationDepth: 2,
 }));
 assert.equal(diagonalNeighbor.batchDirection, "northwest", "diagonal neighbor requests should accept northwest");
-assert.deepEqual(diagonalNeighbor.clip, nw, "diagonal neighbor requests should keep the NW clip rect");
+assert.deepEqual(plain(diagonalNeighbor.clip), plain(nw), "diagonal neighbor requests should keep the NW clip rect");
 
 const progressiveRoute = loadAtlasRoute({
   ATLAS_GENERATION_ENABLED: "true",
