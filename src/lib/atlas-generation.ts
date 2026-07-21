@@ -2,6 +2,35 @@ import "server-only";
 
 import { readFile } from "node:fs/promises";
 import { extname, resolve, sep } from "node:path";
+import {
+  formatAtlasClipClause,
+  normalizeClipRect,
+  type AtlasBatchDirection,
+  type AtlasBatchKind,
+  type AtlasBatchRole,
+  type AtlasClipRect,
+  type AtlasDirection,
+} from "@/lib/atlas-batch";
+
+export type {
+  AtlasBatchDirection,
+  AtlasBatchKind,
+  AtlasBatchPlan,
+  AtlasBatchRole,
+  AtlasBatchSlot,
+  AtlasClipRect,
+  AtlasDiagonalDirection,
+  AtlasDirection,
+} from "@/lib/atlas-batch";
+export {
+  ATLAS_CLIP_BUFFER,
+  clipRectForBatchDirection,
+  clipRectForFocus,
+  clipRectForShiftDirection,
+  formatAtlasClipClause,
+  normalizeClipRect,
+  resolveAtlasBatchPlan,
+} from "@/lib/atlas-batch";
 
 const OPENAI_IMAGE_MODEL = "gpt-image-2";
 // Temporarily unused while Atlas is Flux-only.
@@ -24,7 +53,6 @@ const IMAGE_MIME_BY_EXTENSION: Record<string, AtlasImageMime> = {
 };
 
 export type AtlasMode = "generate" | "zoom" | "refine" | "shift";
-export type AtlasDirection = "north" | "east" | "south" | "west";
 export type AtlasImageMime = "image/jpeg" | "image/png" | "image/webp";
 export type AtlasImageProvider = "openai" | "openrouter";
 export type AtlasGenerationPhase = "preview" | "final";
@@ -57,6 +85,11 @@ export type AtlasGenerationRequest = {
   focus?: AtlasFocus;
   mode: AtlasMode;
   direction?: AtlasDirection;
+  clip?: AtlasClipRect;
+  batchKind?: AtlasBatchKind;
+  batchRole?: AtlasBatchRole;
+  batchDirection?: AtlasBatchDirection;
+  generationDepth?: number;
 };
 
 export type AtlasGenerationContext = {
@@ -225,7 +258,19 @@ export function resolveAtlasPhaseProviderConfig(
 
 export function parseAtlasGenerationRequest(value: unknown): AtlasGenerationRequest {
   const body = requirePlainObject(value, "request body");
-  assertOnlyKeys(body, ["prompt", "currentImage", "viewport", "focus", "mode", "direction"], "request body");
+  assertOnlyKeys(body, [
+    "prompt",
+    "currentImage",
+    "viewport",
+    "focus",
+    "mode",
+    "direction",
+    "clip",
+    "batchKind",
+    "batchRole",
+    "batchDirection",
+    "generationDepth",
+  ], "request body");
 
   const prompt = normalizePrompt(body.prompt);
   const currentImage = normalizeCurrentImage(body.currentImage);
@@ -233,8 +278,17 @@ export function parseAtlasGenerationRequest(value: unknown): AtlasGenerationRequ
   const focus = body.focus == null ? undefined : normalizeFocus(body.focus);
   const mode = normalizeMode(body.mode);
   const direction = body.direction == null ? undefined : normalizeDirection(body.direction);
+  const clip = body.clip == null ? undefined : normalizeClip(body.clip);
+  const batchKind = body.batchKind == null ? undefined : normalizeBatchKind(body.batchKind);
+  const batchRole = body.batchRole == null ? undefined : normalizeBatchRole(body.batchRole);
+  const batchDirection = body.batchDirection == null
+    ? undefined
+    : normalizeBatchDirection(body.batchDirection);
+  const generationDepth = body.generationDepth == null
+    ? undefined
+    : normalizeGenerationDepth(body.generationDepth);
 
-  if (mode === "zoom" && !focus) {
+  if (mode === "zoom" && !focus && !clip) {
     throw new AtlasRequestError("focus_required", "zooming requires a normalized focus point");
   }
   if (mode === "refine" && !currentImage) {
@@ -243,14 +297,29 @@ export function parseAtlasGenerationRequest(value: unknown): AtlasGenerationRequ
   if (mode === "refine" && !focus) {
     throw new AtlasRequestError("focus_required", "refining requires a normalized focus point");
   }
-  if (mode === "shift" && !direction) {
+  if (mode === "shift" && !direction && !batchDirection) {
     throw new AtlasRequestError("direction_required", "shifting requires a direction");
   }
   if (mode !== "shift" && direction) {
     throw new AtlasRequestError("unexpected_direction", "direction is only valid when shifting the atlas");
   }
+  if (clip && !currentImage) {
+    throw new AtlasRequestError("current_image_required", "clip sampling requires a current atlas image");
+  }
 
-  return { prompt, currentImage, viewport, focus, mode, direction };
+  return {
+    prompt,
+    currentImage,
+    viewport,
+    focus,
+    mode,
+    direction,
+    clip,
+    batchKind,
+    batchRole,
+    batchDirection,
+    generationDepth,
+  };
 }
 
 export function createAtlasGenerationContext(prompt: string): AtlasGenerationContext {
@@ -438,6 +507,53 @@ function normalizeDirection(value: unknown): AtlasDirection {
   throw new AtlasRequestError("invalid_direction", "direction must be north, east, south, or west");
 }
 
+function normalizeClip(value: unknown): AtlasClipRect {
+  // Accept plain and cross-realm objects (VM test harness / structured clones).
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new AtlasRequestError("invalid_request", "clip must be an object");
+  }
+  const clip = value as Record<string, unknown>;
+  assertOnlyKeys(clip, ["x", "y", "width", "height"], "clip");
+  return normalizeClipRect({
+    x: requireNumber(clip.x, "clip.x", 0, 1),
+    y: requireNumber(clip.y, "clip.y", 0, 1),
+    width: requireNumber(clip.width, "clip.width", 0.08, 1),
+    height: requireNumber(clip.height, "clip.height", 0.08, 1),
+  });
+}
+
+function normalizeBatchKind(value: unknown): AtlasBatchKind {
+  if (value === "cardinal4" || value === "diagonal2") return value;
+  throw new AtlasRequestError("invalid_batch_kind", "batchKind must be cardinal4 or diagonal2");
+}
+
+function normalizeBatchRole(value: unknown): AtlasBatchRole {
+  if (value === "primary" || value === "neighbor") return value;
+  throw new AtlasRequestError("invalid_batch_role", "batchRole must be primary or neighbor");
+}
+
+function normalizeBatchDirection(value: unknown): AtlasBatchDirection {
+  if (
+    value === "north"
+    || value === "east"
+    || value === "south"
+    || value === "west"
+    || value === "northwest"
+    || value === "southeast"
+  ) return value;
+  throw new AtlasRequestError(
+    "invalid_batch_direction",
+    "batchDirection must be north, east, south, west, northwest, or southeast",
+  );
+}
+
+function normalizeGenerationDepth(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 64) {
+    throw new AtlasRequestError("invalid_generation_depth", "generationDepth must be between 0 and 64");
+  }
+  return Math.floor(value);
+}
+
 /** Always-on ~5% Catalan/portolan residue so every map keeps a family resemblance. */
 const ATLAS_STYLE_DNA =
   "Keep a faint Catalan portolan residue (~5% of the look): one soft compass rose, a few ghost rhumb lines, and sparse gold or vermilion accents along vellum-edged coasts.";
@@ -579,27 +695,54 @@ function buildCompositePrompt(request: AtlasGenerationRequest, context: AtlasGen
 }
 
 export function atlasOperationForRequest(
-  request: Pick<AtlasGenerationRequest, "mode" | "currentImage">,
+  request: Pick<AtlasGenerationRequest, "mode" | "currentImage" | "clip">,
 ): "generation" | "edit" {
-  // Zoom and edge pan mint a fresh full sheet. Landmark refine edits a subsection.
-  if (request.mode === "zoom" || request.mode === "shift" || !request.currentImage) return "generation";
+  // Any request with a current sheet edits/reconstructs from that sample (clip optional).
+  if (!request.currentImage) return "generation";
   return "edit";
 }
 
 export function atlasUsesSourceImage(
-  request: Pick<AtlasGenerationRequest, "mode" | "currentImage">,
+  request: Pick<AtlasGenerationRequest, "mode" | "currentImage" | "clip">,
 ): boolean {
   return atlasOperationForRequest(request) === "edit";
 }
 
 function atlasAction(request: AtlasGenerationRequest): string {
+  const clipClause = request.clip ? formatAtlasClipClause(request.clip) : null;
+  const batchHeading = request.batchDirection
+    ? `This sheet is the ${request.batchDirection} neighbor sample in a directional batch.`
+    : null;
+
+  if (request.mode === "zoom" && request.currentImage && (request.focus || request.clip)) {
+    const focusClause = request.focus
+      ? `Center the reconstruction on the place around ${Math.round(request.focus.x * 100)}% from the left and ${Math.round(request.focus.y * 100)}% from the top at roughly ${request.focus.zoom.toFixed(1)}x depth.`
+      : "Center the reconstruction on the clipped sample region.";
+    return [
+      batchHeading,
+      clipClause,
+      focusClause,
+      "Upsample, extend, and reconstruct that cropped atlas region into one full explorable sheet filling the frame — denser geography continuous with the parent concept, not an inset thumbnail.",
+      "The result must itself be zoomable and pannable again.",
+    ].filter(Boolean).join(" ");
+  }
   if (request.mode === "zoom" && request.focus) {
     const x = Math.round(request.focus.x * 100);
     const y = Math.round(request.focus.y * 100);
-    return `Create an entirely new full atlas sheet of the place that was around ${x}% from the left and ${y}% from the top at roughly ${request.focus.zoom.toFixed(1)}x depth. This is a fresh explorable map filling the whole frame with denser geography of that region, not a crop, inset, or pixel edit of a previous image. Continuity with the parent concept matters; the previous sheet is only lore. The result must itself be zoomable again.`;
+    return `Create an entirely new full atlas sheet of the place that was around ${x}% from the left and ${y}% from the top at roughly ${request.focus.zoom.toFixed(1)}x depth. This is a fresh explorable map filling the whole frame with denser geography of that region. Continuity with the parent concept matters. The result must itself be zoomable again.`;
   }
-  if (request.mode === "shift" && request.direction) {
-    return `Create an entirely new full atlas sheet of the neighboring territory to the ${request.direction}, continuous in lore and theme with the parent concept, not a stitch or pixel edit of the previous image. This is a fresh explorable map filling the whole frame; the prior sheet is only lore. The result must itself be pannable and zoomable again.`;
+  if (request.mode === "shift" && request.currentImage && (request.direction || request.batchDirection)) {
+    const heading = request.direction ?? request.batchDirection ?? "neighboring";
+    return [
+      batchHeading,
+      clipClause,
+      `Extend and reconstruct neighboring territory toward the ${heading} from the supplied atlas sample into one full explorable sheet.`,
+      "Keep lore and theme continuous with the parent concept. The result must itself be pannable and zoomable again.",
+    ].filter(Boolean).join(" ");
+  }
+  if (request.mode === "shift" && (request.direction || request.batchDirection)) {
+    const heading = request.direction ?? request.batchDirection ?? "neighboring";
+    return `Create an entirely new full atlas sheet of the neighboring territory to the ${heading}, continuous in lore and theme with the parent concept. This is a fresh explorable map filling the whole frame. The result must itself be pannable and zoomable again.`;
   }
   if (request.mode === "refine" && request.focus && request.currentImage) {
     const x = Math.round(request.focus.x * 100);
