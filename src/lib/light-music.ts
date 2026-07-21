@@ -153,6 +153,33 @@ export function frequencyFromMidi(midi: number) {
   return 440 * 2 ** ((midi - 69) / 12);
 }
 
+// Playing-scale modes for the light instrument. "pure" keeps the raw
+// light-derived frequency; "chroma" snaps to 12-TET; "penta" snaps to
+// A minor pentatonic (A C D E G) so multi-touch chords always agree.
+export type ScaleMode = "penta" | "chroma" | "pure";
+
+export const SCALE_MODES: ScaleMode[] = ["penta", "chroma", "pure"];
+
+const PENTA_PITCH_CLASSES = new Set([9, 0, 2, 4, 7]); // A C D E G
+
+export function quantizeFrequency(freq: number, mode: ScaleMode): number {
+  if (mode === "pure" || !Number.isFinite(freq) || freq <= 0) return freq;
+  const midi = 69 + 12 * Math.log2(freq / 440);
+  if (mode === "chroma") return frequencyFromMidi(Math.round(midi));
+
+  let best = Math.round(midi);
+  let bestDistance = Infinity;
+  for (let candidate = Math.floor(midi) - 3; candidate <= Math.ceil(midi) + 3; candidate++) {
+    if (!PENTA_PITCH_CLASSES.has(((candidate % 12) + 12) % 12)) continue;
+    const distance = Math.abs(candidate - midi);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = candidate;
+    }
+  }
+  return frequencyFromMidi(best);
+}
+
 export function translateFrequencyToLight(
   frequency: number,
   options: TranslateFrequencyOptions = {},
