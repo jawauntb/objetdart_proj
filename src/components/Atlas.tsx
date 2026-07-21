@@ -26,7 +26,7 @@ const MAX_ZOOM = 64;
 const SETTLE_TRANSITION = "transform 180ms cubic-bezier(.22,.8,.24,1)";
 
 type Direction = "north" | "east" | "south" | "west";
-type GenerationMode = "generate" | "zoom" | "shift";
+type GenerationMode = "generate" | "zoom" | "refine" | "shift";
 type GenerationPhase = "preview" | "final";
 type RenderPhase = "idle" | "local" | "preview" | "final" | "error";
 type MapView = { x: number; y: number; zoom: number };
@@ -541,7 +541,22 @@ export default function Atlas() {
       setSeeds((current) => normaliseSeeds(data.seeds, current));
       if (typeof data.dataUrl === "string" && data.dataUrl) {
         crossfadeTo(data.dataUrl);
-        setStatus(phase === "preview" ? "a quick chart has surfaced · refining…" : mode === "zoom" ? "the region has deepened" : "a new atlas has surfaced");
+        if (mode === "zoom") {
+          // New zoom sheets are full maps — reset travel so they can be explored again.
+          renderedZoomRef.current = 1;
+          lastZoomRequestKeyRef.current = null;
+          freeZoomParentRef.current = null;
+          commitView(centerView(metricsRef.current, 1), { animate: true });
+        }
+        setStatus(
+          phase === "preview"
+            ? "a quick chart has surfaced · refining…"
+            : mode === "zoom"
+              ? "a deeper chart has opened"
+              : mode === "refine"
+                ? "the region has deepened"
+                : "a new atlas has surfaced",
+        );
       } else {
         setStatus(phase === "preview" ? "the local chart is refining…" : "the local atlas is ready to explore");
       }
@@ -602,7 +617,7 @@ export default function Atlas() {
       regionSettleRef.current = null;
       if (settledSelection !== requestRef.current) return;
       void generateMap({
-        mode: "zoom",
+        mode: "refine",
         subjectPrompt: [concept, hotspot.prompt || hotspot.label].filter(Boolean).join(" · "),
         focus: { x: hotspot.x, y: hotspot.y, zoom: nextZoom },
       });

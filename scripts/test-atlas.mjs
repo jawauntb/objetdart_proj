@@ -324,17 +324,59 @@ assert.equal(generationBody.n, 1, "FLUX.2 Klein supports exactly one output");
 assert.equal("size" in generationBody, false, "unsupported size controls must not be sent to OpenRouter");
 assert.equal("quality" in generationBody, false, "unsupported quality controls must not be sent to OpenRouter");
 
-await generateAtlasImage(
+const zoomResult = plain(await generateAtlasImage(
   parseAtlasGenerationRequest({
     prompt: "fire forest",
-    currentImage: `data:image/png;base64,${ONE_PIXEL_PNG}`,
     focus: { x: 0.4, y: 0.6, zoom: 2 },
     mode: "zoom",
   }),
   openRouterProvider,
-);
-const openRouterCalls = providerCalls.filter((call) => call.url === "https://openrouter.ai/api/v1/images");
-const editCall = openRouterCalls.find((call) => Array.isArray(JSON.parse(call.init.body).input_references));
+));
+assert.equal(zoomResult.generation.operation, "generation", "free zoom should mint a fresh sheet instead of editing");
+const openRouterCalls = () => providerCalls.filter((call) => call.url === "https://openrouter.ai/api/v1/images");
+const zoomCall = [...openRouterCalls()].reverse().find((call) => {
+  const body = JSON.parse(call.init.body);
+  return typeof body.prompt === "string" && body.prompt.includes("entirely new full atlas sheet");
+});
+assert.ok(zoomCall, "zoom should ask the provider for a brand-new atlas sheet");
+const zoomBody = JSON.parse(zoomCall.init.body);
+assert.equal("input_references" in zoomBody, false, "zoom must not send the previous map as an edit reference");
+assert.match(zoomBody.prompt, /fresh explorable map|zoomable again/i, "zoom prompts should describe a new explorable sheet");
+
+const refineResult = plain(await generateAtlasImage(
+  parseAtlasGenerationRequest({
+    prompt: "fire forest",
+    currentImage: `data:image/png;base64,${ONE_PIXEL_PNG}`,
+    focus: { x: 0.4, y: 0.6, zoom: 2 },
+    mode: "refine",
+  }),
+  openRouterProvider,
+));
+assert.equal(refineResult.generation.operation, "edit", "landmark clicks should refine/edit a subsection");
+const refineCall = [...openRouterCalls()].reverse().find((call) => {
+  const body = JSON.parse(call.init.body);
+  return typeof body.prompt === "string" && body.prompt.includes("deepen and improve only the subsection");
+});
+assert.ok(refineCall, "refine should ask the provider to edit a local region");
+const refineBody = JSON.parse(refineCall.init.body);
+assert.equal(refineBody.input_references.length, 1, "refine should send the current map as an edit reference");
+assert.match(refineBody.prompt, /subsection|in place/i, "refine prompts should stay local to the clicked region");
+
+const shiftResult = plain(await generateAtlasImage(
+  parseAtlasGenerationRequest({
+    prompt: "fire forest",
+    currentImage: `data:image/png;base64,${ONE_PIXEL_PNG}`,
+    direction: "east",
+    mode: "shift",
+  }),
+  openRouterProvider,
+));
+assert.equal(shiftResult.generation.operation, "edit", "edge shifts should still edit from the current map");
+const editCall = [...openRouterCalls()].reverse().find((call) => {
+  const body = JSON.parse(call.init.body);
+  return Array.isArray(body.input_references) && typeof body.prompt === "string" && body.prompt.includes("toward the east");
+});
+assert.ok(editCall, "shift should keep the OpenRouter current-map reference path");
 const editBody = JSON.parse(editCall.init.body);
 assert.equal(editBody.input_references.length, 1, "OpenRouter edits should send one current-map reference");
 assert.equal(editBody.input_references[0].type, "image_url", "current maps should use image_url references");
@@ -397,29 +439,23 @@ const canonicalFinalCall = progressiveCalls.find((call) => {
   return JSON.parse(call.init.body).model === "black-forest-labs/flux.2-pro";
 });
 assert.ok(canonicalPreviewCall, "the preview phase should call Klein");
-assert.ok(canonicalFinalCall, "the final phase should edit with FLUX.2 Pro");
+assert.ok(canonicalFinalCall, "the final phase should generate with FLUX.2 Pro");
 const canonicalPreviewBody = JSON.parse(canonicalPreviewCall.init.body);
 const canonicalFinalBody = JSON.parse(canonicalFinalCall.init.body);
-assert.equal(
-  canonicalPreviewBody.input_references[0].image_url.url,
-  `data:image/png;base64,${SOURCE_PNG}`,
-  "the preview should use the canonical current map",
-);
-assert.equal(
-  canonicalFinalBody.input_references[0].image_url.url,
-  `data:image/png;base64,${SOURCE_PNG}`,
-  "the final must start from the canonical map, not the Klein preview",
-);
-assert.notEqual(
-  canonicalFinalBody.input_references[0].image_url.url,
-  `data:image/png;base64,${ONE_PIXEL_PNG}`,
-  "the preview output must never become Flux Pro's edit source",
+assert.equal("input_references" in canonicalPreviewBody, false, "zoom preview should generate a fresh sheet");
+assert.equal("input_references" in canonicalFinalBody, false, "zoom final should generate a fresh sheet");
+assert.match(
+  canonicalPreviewBody.prompt,
+  /entirely new full atlas sheet/,
+  "zoom preview should ask for a new full map of the focused region",
 );
 assert.equal(
   canonicalFinalBody.prompt,
   canonicalPreviewBody.prompt,
   "preview and final should share one canonical server-composed prompt",
 );
+assert.equal(previewResponse.body.generation.operation, "generation", "zoom preview metadata should stay generation");
+assert.equal(finalResponse.body.generation.operation, "generation", "zoom final metadata should stay generation");
 
 const proFinalRoute = loadAtlasRoute({
   ATLAS_GENERATION_ENABLED: "true",
