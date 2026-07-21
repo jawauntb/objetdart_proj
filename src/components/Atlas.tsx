@@ -20,6 +20,7 @@ import {
   type AtlasBatchKind,
   type AtlasClipRect,
 } from "@/lib/atlas-batch";
+import { cropAtlasDataUrl } from "@/lib/atlas-crop";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { useField } from "@/store/field";
@@ -551,9 +552,15 @@ export default function Atlas() {
           || slot.direction === "west"
           ? slot.direction
           : undefined;
+        let croppedImage = sourceImage;
+        try {
+          croppedImage = await cropAtlasDataUrl(sourceImage, slot.clip);
+        } catch {
+          // Server crops when clip+currentImage arrive uncropped.
+        }
         const body = JSON.stringify({
           prompt: subjectPrompt.replace(/ +/g, " ").trim().slice(0, 240),
-          currentImage: sourceImage,
+          currentImage: croppedImage,
           mode: cardinal ? "shift" : "zoom",
           direction: cardinal,
           focus: cardinal
@@ -654,10 +661,19 @@ export default function Atlas() {
     setRenderPhase("local");
     if (optimisticSeeds) setSeeds(optimisticSeeds);
 
+    let imageForRequest = currentImage;
+    if (usesClippedSource && currentImage && resolvedClip) {
+      try {
+        imageForRequest = await cropAtlasDataUrl(currentImage, resolvedClip);
+      } catch {
+        // Server crops when clip+currentImage arrive uncropped.
+      }
+    }
+
     const box = stageRef.current?.getBoundingClientRect();
     const body = JSON.stringify({
       prompt: subjectPrompt.replace(/ +/g, " ").trim().slice(0, 240),
-      currentImage,
+      currentImage: imageForRequest,
       mode,
       direction,
       focus,
