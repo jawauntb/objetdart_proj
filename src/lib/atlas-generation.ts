@@ -243,9 +243,6 @@ export function parseAtlasGenerationRequest(value: unknown): AtlasGenerationRequ
   if (mode === "refine" && !focus) {
     throw new AtlasRequestError("focus_required", "refining requires a normalized focus point");
   }
-  if (mode === "shift" && !currentImage) {
-    throw new AtlasRequestError("current_image_required", "shifting requires a current atlas image");
-  }
   if (mode === "shift" && !direction) {
     throw new AtlasRequestError("direction_required", "shifting requires a direction");
   }
@@ -584,8 +581,8 @@ function buildCompositePrompt(request: AtlasGenerationRequest, context: AtlasGen
 export function atlasOperationForRequest(
   request: Pick<AtlasGenerationRequest, "mode" | "currentImage">,
 ): "generation" | "edit" {
-  // Free zoom mints a fresh full sheet. Landmark clicks refine/edit a subsection.
-  if (request.mode === "zoom" || !request.currentImage) return "generation";
+  // Zoom and edge pan mint a fresh full sheet. Landmark refine edits a subsection.
+  if (request.mode === "zoom" || request.mode === "shift" || !request.currentImage) return "generation";
   return "edit";
 }
 
@@ -601,6 +598,9 @@ function atlasAction(request: AtlasGenerationRequest): string {
     const y = Math.round(request.focus.y * 100);
     return `Create an entirely new full atlas sheet of the place that was around ${x}% from the left and ${y}% from the top at roughly ${request.focus.zoom.toFixed(1)}x depth. This is a fresh explorable map filling the whole frame with denser geography of that region, not a crop, inset, or pixel edit of a previous image. Continuity with the parent concept matters; the previous sheet is only lore. The result must itself be zoomable again.`;
   }
+  if (request.mode === "shift" && request.direction) {
+    return `Create an entirely new full atlas sheet of the neighboring territory to the ${request.direction}, continuous in lore and theme with the parent concept, not a stitch or pixel edit of the previous image. This is a fresh explorable map filling the whole frame; the prior sheet is only lore. The result must itself be pannable and zoomable again.`;
+  }
   if (request.mode === "refine" && request.focus && request.currentImage) {
     const x = Math.round(request.focus.x * 100);
     const y = Math.round(request.focus.y * 100);
@@ -608,9 +608,6 @@ function atlasAction(request: AtlasGenerationRequest): string {
   }
   if (!request.currentImage) {
     return "Create the outer map for this concept from scratch, with a coherent world visible at once and richer detail near the center.";
-  }
-  if (request.mode === "shift" && request.direction) {
-    return `Edit and extend the supplied atlas toward the ${request.direction}. Make the new neighboring territory feel newly generated yet geographically continuous with the departing edge, while the opposite edge retains recognizable landmarks.`;
   }
   return "Edit the supplied atlas into a new expression of the visual concept. Preserve its cartographic identity and overall continuity while regenerating the places, materials, and atmosphere.";
 }
