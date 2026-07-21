@@ -60,8 +60,9 @@ selection stays server-side:
 
 | Server setting | Preview | Final |
 | --- | --- | --- |
-| `ATLAS_IMAGE_PROVIDER=openai` | FLUX.2 Klein through OpenRouter | GPT Image 2 |
-| `ATLAS_IMAGE_PROVIDER=openrouter-pro` | FLUX.2 Klein through OpenRouter | FLUX.2 Pro through OpenRouter |
+| `ATLAS_IMAGE_PROVIDER=openrouter-pro` (default) | FLUX.2 Klein through OpenRouter | FLUX.2 Pro through OpenRouter |
+| `ATLAS_IMAGE_PROVIDER=openrouter` | FLUX.2 Klein through OpenRouter | FLUX.2 Klein through OpenRouter |
+| `ATLAS_IMAGE_PROVIDER=openai` | disabled for now | disabled for now |
 
 For a paid A/B, use the same prompt, canonical source image, viewport, and focus
 for both settings. Run at least three matched pairs and record time-to-preview,
