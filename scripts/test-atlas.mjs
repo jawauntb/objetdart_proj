@@ -150,21 +150,29 @@ assert.equal(parsed.prompt, "fire forest", "concept prompts should be normalized
 assert.deepEqual(parsed.viewport, { width: 390, height: 844 }, "valid mobile viewports should survive parsing");
 assert.equal(parsed.mode, "generate", "generate should remain the canonical mode");
 
-const defaultProviderConfig = resolveAtlasProviderConfig({ OPENAI_API_KEY: "openai-test-key" });
+const defaultProviderConfig = resolveAtlasProviderConfig({ OPENROUTER_API_KEY: "openrouter-test-key" });
 const defaultProvider = plain(defaultProviderConfig);
-assert.equal(defaultProvider.provider, "openai", "OpenAI should remain the default Atlas provider");
-assert.equal(defaultProvider.model, "gpt-image-2", "the OpenAI adapter should pin GPT Image 2");
+assert.equal(defaultProvider.provider, "openrouter", "Flux/OpenRouter should be the default Atlas provider");
+assert.equal(defaultProvider.model, "black-forest-labs/flux.2-pro", "the default final adapter should pin FLUX.2 Pro");
 
-const generatedWithOpenAI = plain(await generateAtlasImage(
+const generatedWithDefault = plain(await generateAtlasImage(
   parseAtlasGenerationRequest({ prompt: "fire forest", mode: "generate" }),
   defaultProviderConfig,
 ));
-assert.equal(generatedWithOpenAI.generation.provider, "openai", "the default adapter should return OpenAI metadata");
-assert.match(generatedWithOpenAI.dataUrl, /^data:image\/webp;base64,/, "GPT Image output should retain WebP media type");
-const openAICall = providerCalls.find((call) => call.url === "https://api.openai.com/v1/images/generations");
-const openAIBody = JSON.parse(openAICall.init.body);
-assert.equal(openAIBody.model, "gpt-image-2", "OpenAI generation should pin GPT Image 2");
-assert.equal(openAIBody.output_format, "webp", "OpenAI generation should request compact WebP output");
+assert.equal(generatedWithDefault.generation.provider, "openrouter", "the default adapter should return OpenRouter metadata");
+assert.match(generatedWithDefault.dataUrl, /^data:image\/png;base64,/, "Flux output should retain PNG media type");
+const defaultCall = providerCalls.find((call) => {
+  if (call.url !== "https://openrouter.ai/api/v1/images") return false;
+  return JSON.parse(call.init.body).model === "black-forest-labs/flux.2-pro";
+});
+assert.ok(defaultCall, "default generation should call OpenRouter with FLUX.2 Pro");
+assert.equal(JSON.parse(defaultCall.init.body).output_format, "png", "OpenRouter generation should request PNG output");
+
+assertRequestError(
+  () => resolveAtlasProviderConfig({ OPENAI_API_KEY: "openai-test-key" }, "openai"),
+  "invalid_provider_configuration",
+  "OpenAI should stay disabled while Atlas is Flux-only",
+);
 
 const openRouterProvider = resolveAtlasProviderConfig(
   { OPENROUTER_API_KEY: "openrouter-test-key" },
@@ -309,8 +317,7 @@ assert.match(
 
 const progressiveRoute = loadAtlasRoute({
   ATLAS_GENERATION_ENABLED: "true",
-  ATLAS_IMAGE_PROVIDER: "openai",
-  OPENAI_API_KEY: "openai-test-key",
+  ATLAS_IMAGE_PROVIDER: "openrouter-pro",
   OPENROUTER_API_KEY: "openrouter-test-key",
 });
 const canonicalInteractionId = "atlas-canonical-interaction-001";
@@ -343,35 +350,44 @@ const [previewResponse, finalResponse] = await Promise.all([
   })),
 ]);
 assert.equal(previewResponse.status, 200, "the Klein preview should resolve independently");
-assert.equal(finalResponse.status, 200, "the GPT final should resolve independently");
+assert.equal(finalResponse.status, 200, "the Flux Pro final should resolve independently");
 assert.equal(previewResponse.body.generation.phase, "preview", "preview responses should identify their phase");
 assert.equal(finalResponse.body.generation.phase, "final", "final responses should identify their phase");
 assert.equal(previewResponse.body.generation.generationId, canonicalInteractionId, "preview should echo the safe stale-response token");
 assert.equal(finalResponse.body.generation.generationId, canonicalInteractionId, "final should echo the same stale-response token");
 assert.equal(previewResponse.body.generation.model, "black-forest-labs/flux.2-klein-4b", "hybrid preview should use Klein");
-assert.equal(finalResponse.body.generation.model, "gpt-image-2", "the default hybrid final should use GPT Image 2");
+assert.equal(finalResponse.body.generation.model, "black-forest-labs/flux.2-pro", "the default hybrid final should use FLUX.2 Pro");
 
 const progressiveCalls = providerCalls.slice(progressiveCallsStart);
 const canonicalPreviewCall = progressiveCalls.find((call) => {
   if (call.url !== "https://openrouter.ai/api/v1/images") return false;
   return JSON.parse(call.init.body).model === "black-forest-labs/flux.2-klein-4b";
 });
-const canonicalFinalCall = progressiveCalls.find((call) => call.url === "https://api.openai.com/v1/images/edits");
+const canonicalFinalCall = progressiveCalls.find((call) => {
+  if (call.url !== "https://openrouter.ai/api/v1/images") return false;
+  return JSON.parse(call.init.body).model === "black-forest-labs/flux.2-pro";
+});
 assert.ok(canonicalPreviewCall, "the preview phase should call Klein");
-assert.ok(canonicalFinalCall, "the final phase should edit with GPT Image 2");
+assert.ok(canonicalFinalCall, "the final phase should edit with FLUX.2 Pro");
 const canonicalPreviewBody = JSON.parse(canonicalPreviewCall.init.body);
+const canonicalFinalBody = JSON.parse(canonicalFinalCall.init.body);
 assert.equal(
   canonicalPreviewBody.input_references[0].image_url.url,
   `data:image/png;base64,${SOURCE_PNG}`,
   "the preview should use the canonical current map",
 );
-const finalImageEntry = [...canonicalFinalCall.init.body.entries()].find(([, value]) => value instanceof Blob);
-assert.ok(finalImageEntry, "the final edit should upload the canonical current map");
-const finalSourceBytes = Buffer.from(await finalImageEntry[1].arrayBuffer());
-assert.deepEqual(finalSourceBytes, SOURCE_PNG_BYTES, "the final must start from the canonical map, not the Klein preview");
-assert.notDeepEqual(finalSourceBytes, Buffer.from(ONE_PIXEL_PNG, "base64"), "the preview output must never become GPT's edit source");
 assert.equal(
-  canonicalFinalCall.init.body.get("prompt"),
+  canonicalFinalBody.input_references[0].image_url.url,
+  `data:image/png;base64,${SOURCE_PNG}`,
+  "the final must start from the canonical map, not the Klein preview",
+);
+assert.notEqual(
+  canonicalFinalBody.input_references[0].image_url.url,
+  `data:image/png;base64,${ONE_PIXEL_PNG}`,
+  "the preview output must never become Flux Pro's edit source",
+);
+assert.equal(
+  canonicalFinalBody.prompt,
   canonicalPreviewBody.prompt,
   "preview and final should share one canonical server-composed prompt",
 );
@@ -455,7 +471,7 @@ assert.equal(invalidPhaseResponse.body.error.code, "invalid_phase", "unknown pha
 
 const interactionLimitedRoute = loadAtlasRoute({
   ATLAS_GENERATION_ENABLED: "false",
-  ATLAS_IMAGE_PROVIDER: "openai",
+  ATLAS_IMAGE_PROVIDER: "openrouter-pro",
 });
 for (let interaction = 0; interaction < 8; interaction += 1) {
   const interactionBody = JSON.stringify({ prompt: `rate limit map ${interaction}`, mode: "generate" });

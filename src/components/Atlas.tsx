@@ -21,6 +21,9 @@ const MOBILE_ORIGIN_MAP = "/atlas/atlas-origin-mobile.webp";
 const DESKTOP_MAP_ASPECT = 4 / 3;
 const MOBILE_MAP_ASPECT = 853 / 1538;
 const MOBILE_BREAKPOINT = 760;
+const MIN_ZOOM = 1;
+const MAX_ZOOM = 64;
+const SETTLE_TRANSITION = "transform 180ms cubic-bezier(.22,.8,.24,1)";
 
 type Direction = "north" | "east" | "south" | "west";
 type GenerationMode = "generate" | "zoom" | "shift";
@@ -112,13 +115,18 @@ function centerView(metrics: MapMetrics, zoom = 1): MapView {
 
 function boundView(view: MapView, metrics: MapMetrics, overscroll = 0): MapView {
   if (!metrics.width) return view;
-  const minX = metrics.width - metrics.mapWidth * view.zoom;
-  const minY = metrics.height - metrics.mapHeight * view.zoom;
+  const zoom = clamp(view.zoom, MIN_ZOOM, MAX_ZOOM);
+  const minX = metrics.width - metrics.mapWidth * zoom;
+  const minY = metrics.height - metrics.mapHeight * zoom;
   return {
-    zoom: clamp(view.zoom, 1, 4),
+    zoom,
     x: clamp(view.x, minX - overscroll, overscroll),
     y: clamp(view.y, minY - overscroll, overscroll),
   };
+}
+
+function viewTransform(view: MapView) {
+  return "translate3d(" + view.x.toFixed(2) + "px," + view.y.toFixed(2) + "px,0) scale(" + view.zoom.toFixed(4) + ")";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -210,6 +218,9 @@ type DragGesture = {
   start: PointerPoint;
   view: MapView;
   moved: boolean;
+  last: PointerPoint;
+  lastAt: number;
+  velocity: PointerPoint;
 };
 type PinchGesture = {
   distance: number;
@@ -223,6 +234,7 @@ export default function Atlas() {
   const recordTape = useField((state) => state.recordTape);
 
   const stageRef = useRef<HTMLDivElement>(null);
+  const planeRef = useRef<HTMLDivElement>(null);
   const metricsRef = useRef<MapMetrics>(EMPTY_METRICS);
   const viewRef = useRef<MapView>({ x: 0, y: 0, zoom: 1 });
   const pointersRef = useRef(new Map<number, PointerPoint>());
@@ -243,9 +255,10 @@ export default function Atlas() {
   const lastZoomRequestKeyRef = useRef<string | null>(null);
   const renderedZoomRef = useRef(1);
   const activeImageRef = useRef(ORIGIN_MAP);
+  const inertiaRef = useRef<number | null>(null);
+  const interactingRef = useRef(false);
 
   const [metrics, setMetrics] = useState<MapMetrics>(EMPTY_METRICS);
-  const [view, setView] = useState<MapView>({ x: 0, y: 0, zoom: 1 });
   const [activeImage, setActiveImage] = useState(ORIGIN_MAP);
   const [incomingImage, setIncomingImage] = useState<string | null>(null);
   const [incomingVisible, setIncomingVisible] = useState(false);
@@ -263,9 +276,61 @@ export default function Atlas() {
   const [interacting, setInteracting] = useState(false);
   const [pulse, setPulse] = useState<{ x: number; y: number; key: number } | null>(null);
 
-  const commitView = (next: MapView) => {
+  const paintPlane = (next: MapView, withTransition: boolean) => {
+    const plane = planeRef.current;
+    if (!plane) return;
+    plane.style.transition = withTransition ? SETTLE_TRANSITION : "none";
+    plane.style.transform = viewTransform(next);
+    plane.style.setProperty("--atlas-zoom", String(next.zoom));
+  };
+
+  const stopInertia = () => {
+    if (inertiaRef.current !== null) {
+      window.cancelAnimationFrame(inertiaRef.current);
+      inertiaRef.current = null;
+    }
+  };
+
+  const commitView = (next: MapView, options?: { animate?: boolean }) => {
     viewRef.current = next;
-    setView(next);
+    paintPlane(next, Boolean(options?.animate) && !interactingRef.current);
+  };
+
+  const applyLiveView = (next: MapView) => {
+    viewRef.current = next;
+    paintPlane(next, false);
+  };
+
+  const startInertia = (velocity: PointerPoint) => {
+    stopInertia();
+    let vx = clamp(velocity.x, -48, 48);
+    let vy = clamp(velocity.y, -48, 48);
+    if (Math.hypot(vx, vy) < 0.8) {
+      commitView(boundView(viewRef.current, metricsRef.current), { animate: true });
+      return;
+    }
+    let last = performance.now();
+    const tick = (now: number) => {
+      const dt = Math.min(32, now - last) / 16.67;
+      last = now;
+      vx *= Math.pow(0.9, dt);
+      vy *= Math.pow(0.9, dt);
+      if (Math.hypot(vx, vy) < 0.35) {
+        inertiaRef.current = null;
+        interactingRef.current = false;
+        setInteracting(false);
+        commitView(boundView(viewRef.current, metricsRef.current), { animate: true });
+        if (viewRef.current.zoom > 1.08) queueSettledZoom();
+        return;
+      }
+      applyLiveView(boundView({
+        zoom: viewRef.current.zoom,
+        x: viewRef.current.x + vx * dt,
+        y: viewRef.current.y + vy * dt,
+      }, metricsRef.current, 72));
+      inertiaRef.current = window.requestAnimationFrame(tick);
+    };
+    inertiaRef.current = window.requestAnimationFrame(tick);
   };
 
   useEffect(() => {
@@ -293,8 +358,8 @@ export default function Atlas() {
       }
       metricsRef.current = nextMetrics;
       viewRef.current = nextView;
+      paintPlane(nextView, false);
       setMetrics(nextMetrics);
-      setView(nextView);
     };
     const observer = new ResizeObserver(resize);
     observer.observe(stage);
@@ -305,6 +370,7 @@ export default function Atlas() {
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
+      stopInertia();
       if (crossfadeRef.current !== null) window.clearTimeout(crossfadeRef.current);
       if (revealRef.current !== null) window.clearTimeout(revealRef.current);
       if (regionSettleRef.current !== null) window.clearTimeout(regionSettleRef.current);
@@ -520,7 +586,7 @@ export default function Atlas() {
     setFocusedId(hotspot.id);
     setFocusedLabel(hotspot.label);
     setRegion(hotspot.regionId);
-    commitView(next);
+    commitView(next, { animate: true });
     setStatus("diffusing detail around " + hotspot.label.toLowerCase());
     setRenderPhase("local");
     try {
@@ -645,16 +711,18 @@ export default function Atlas() {
         subjectPrompt: concept + " · visible region",
         focus,
       });
-    }, 620);
+    // Longer settle on phones so pinch/pan inertia can finish before redraw.
+    }, metricsRef.current.width > 0 && metricsRef.current.width <= MOBILE_BREAKPOINT ? 920 : 620);
   };
 
   const onWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
     if ((event.target as HTMLElement).closest("form, input, button")) return;
     event.preventDefault();
+    stopInertia();
     const rect = stageRef.current?.getBoundingClientRect();
     if (!rect) return;
     const current = viewRef.current;
-    const nextZoom = clamp(current.zoom * Math.exp(-event.deltaY * 0.0015), 1, 4);
+    const nextZoom = clamp(current.zoom * Math.exp(-event.deltaY * 0.0018), MIN_ZOOM, MAX_ZOOM);
     if (nextZoom <= 1.015) {
       resetOuterMap();
       return;
@@ -663,7 +731,7 @@ export default function Atlas() {
     const point = { x: event.clientX - rect.left, y: event.clientY - rect.top };
     const worldX = (point.x - current.x) / current.zoom;
     const worldY = (point.y - current.y) / current.zoom;
-    commitView(boundView({
+    applyLiveView(boundView({
       zoom: nextZoom,
       x: point.x - worldX * nextZoom,
       y: point.y - worldY * nextZoom,
@@ -677,16 +745,22 @@ export default function Atlas() {
     const rect = stageRef.current?.getBoundingClientRect();
     if (!rect) return;
     event.preventDefault();
+    stopInertia();
     event.currentTarget.setPointerCapture(event.pointerId);
     const point = { x: event.clientX - rect.left, y: event.clientY - rect.top };
     pointersRef.current.set(event.pointerId, point);
+    interactingRef.current = true;
     setInteracting(true);
+    paintPlane(viewRef.current, false);
     if (pointersRef.current.size === 1) {
       dragRef.current = {
         pointerId: event.pointerId,
         start: point,
-        view: viewRef.current,
+        view: { ...viewRef.current },
         moved: false,
+        last: point,
+        lastAt: performance.now(),
+        velocity: { x: 0, y: 0 },
       };
       pinchRef.current = null;
     } else if (pointersRef.current.size === 2) {
@@ -696,7 +770,7 @@ export default function Atlas() {
       pinchRef.current = {
         distance: Math.hypot(points[1].x - points[0].x, points[1].y - points[0].y),
         midpoint: { x: (points[0].x + points[1].x) / 2, y: (points[0].y + points[1].y) / 2 },
-        view: viewRef.current,
+        view: { ...viewRef.current },
       };
       dragRef.current = null;
     }
@@ -710,29 +784,42 @@ export default function Atlas() {
     pointersRef.current.set(event.pointerId, point);
     if (pointersRef.current.size >= 2 && pinchRef.current) {
       const points = Array.from(pointersRef.current.values()).slice(0, 2);
-      const distance = Math.hypot(points[1].x - points[0].x, points[1].y - points[0].y);
+      const distance = Math.max(1, Math.hypot(points[1].x - points[0].x, points[1].y - points[0].y));
       const midpoint = { x: (points[0].x + points[1].x) / 2, y: (points[0].y + points[1].y) / 2 };
-      const start = pinchRef.current;
-      const zoom = clamp(start.view.zoom * distance / Math.max(1, start.distance), 1, 4);
-      const worldX = (start.midpoint.x - start.view.x) / start.view.zoom;
-      const worldY = (start.midpoint.y - start.view.y) / start.view.zoom;
-      commitView(boundView({
+      const prev = pinchRef.current;
+      const zoom = clamp(prev.view.zoom * (distance / Math.max(1, prev.distance)), MIN_ZOOM, MAX_ZOOM);
+      // Incremental pinch around the live midpoint keeps mobile two-finger zoom stable.
+      const worldX = (midpoint.x - prev.view.x) / prev.view.zoom;
+      const worldY = (midpoint.y - prev.view.y) / prev.view.zoom;
+      const next = boundView({
         zoom,
         x: midpoint.x - worldX * zoom,
         y: midpoint.y - worldY * zoom,
-      }, metricsRef.current, 28));
+      }, metricsRef.current, 48);
+      applyLiveView(next);
+      pinchRef.current = { distance, midpoint, view: next };
       return;
     }
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
+    const now = performance.now();
     const dx = point.x - drag.start.x;
     const dy = point.y - drag.start.y;
-    if (Math.hypot(dx, dy) > 7) drag.moved = true;
-    commitView(boundView({
+    if (Math.hypot(dx, dy) > 6) drag.moved = true;
+    const dt = Math.max(1, now - drag.lastAt);
+    const instantX = (point.x - drag.last.x) / dt * 16.67;
+    const instantY = (point.y - drag.last.y) / dt * 16.67;
+    drag.velocity = {
+      x: drag.velocity.x * 0.65 + instantX * 0.35,
+      y: drag.velocity.y * 0.65 + instantY * 0.35,
+    };
+    drag.last = point;
+    drag.lastAt = now;
+    applyLiveView(boundView({
       zoom: drag.view.zoom,
       x: drag.view.x + dx,
       y: drag.view.y + dy,
-    }, metricsRef.current, 52));
+    }, metricsRef.current, 80));
   };
 
   const finishPointer = (event: ReactPointerEvent<HTMLDivElement>, cancelled = false) => {
@@ -749,45 +836,62 @@ export default function Atlas() {
       dragRef.current = {
         pointerId: remaining[0],
         start: remaining[1],
-        view: viewRef.current,
+        view: { ...viewRef.current },
         moved: true,
+        last: remaining[1],
+        lastAt: performance.now(),
+        velocity: { x: 0, y: 0 },
       };
       pinchRef.current = null;
       return;
     }
 
-    setInteracting(false);
     const wasPinching = pinchZoomRef.current;
     pinchZoomRef.current = false;
     pinchRef.current = null;
-    const bounded = boundView(viewRef.current, metricsRef.current);
+    const live = viewRef.current;
+    const bounded = boundView(live, metricsRef.current);
     if (wasPinching) {
-      commitView(bounded);
+      interactingRef.current = false;
+      setInteracting(false);
+      commitView(bounded, { animate: true });
       dragRef.current = null;
       queueSettledZoom();
       return;
     }
     const overflow: Array<[Direction, number]> = [
-      ["west", viewRef.current.x - bounded.x],
-      ["east", bounded.x - viewRef.current.x],
-      ["north", viewRef.current.y - bounded.y],
-      ["south", bounded.y - viewRef.current.y],
+      ["west", live.x - bounded.x],
+      ["east", bounded.x - live.x],
+      ["north", live.y - bounded.y],
+      ["south", bounded.y - live.y],
     ];
     const crossed = overflow.sort((a, b) => b[1] - a[1])[0];
-    if (!cancelled && crossed[1] > 28) {
-      commitView(bounded);
+    if (!cancelled && crossed[1] > 36 && live.zoom <= 1.08) {
+      interactingRef.current = false;
+      setInteracting(false);
+      commitView(bounded, { animate: true });
+      dragRef.current = null;
       shiftMap(crossed[0]);
-    } else {
-      commitView(bounded);
-      if (!cancelled && drag && !drag.moved && point) {
-        if (viewRef.current.zoom > 1.05 || focusedId) {
-          resetOuterMap();
-        } else {
-          setPulse({ x: point.x, y: point.y, key: Date.now() });
-          setStatus("the water remembers the touch");
-          recordTape("ripple", 0.38, "atlas/water");
-        }
+      return;
+    }
+    if (!cancelled && drag?.moved && Math.hypot(drag.velocity.x, drag.velocity.y) > 0.8) {
+      dragRef.current = null;
+      startInertia(drag.velocity);
+      return;
+    }
+    interactingRef.current = false;
+    setInteracting(false);
+    commitView(bounded, { animate: true });
+    if (!cancelled && drag && !drag.moved && point) {
+      if (viewRef.current.zoom > 1.05 || focusedId) {
+        resetOuterMap();
+      } else {
+        setPulse({ x: point.x, y: point.y, key: Date.now() });
+        setStatus("the water remembers the touch");
+        recordTape("ripple", 0.38, "atlas/water");
       }
+    } else if (viewRef.current.zoom > 1.08) {
+      queueSettledZoom();
     }
     dragRef.current = null;
   };
@@ -795,15 +899,17 @@ export default function Atlas() {
   const planeStyle: CSSProperties = {
     width: metrics.mapWidth || "100%",
     height: metrics.mapHeight || "100%",
-    transform: "translate3d(" + view.x + "px," + view.y + "px,0) scale(" + view.zoom + ")",
-    transition: interacting ? "none" : "transform 760ms cubic-bezier(.2,.72,.18,1)",
   };
 
   return (
     <section id="atlas" className="living-atlas" data-touch-surface="true" data-pretext-ignore>
-      <div
+        <div
         ref={stageRef}
-        className={"living-atlas__stage" + (busy ? " is-generating" : "")}
+        className={
+          "living-atlas__stage"
+          + (busy ? " is-generating" : "")
+          + (interacting ? " is-gesturing" : "")
+        }
         data-generation-phase={renderPhase}
         data-history-depth={historyDepth}
         onWheel={onWheel}
@@ -815,7 +921,7 @@ export default function Atlas() {
         role="application"
         aria-label="Living atlas. Drag to travel, pinch or wheel to zoom, and select a landmark to enter it."
       >
-        <div className="living-atlas__plane" style={planeStyle}>
+        <div ref={planeRef} className="living-atlas__plane" style={planeStyle}>
           <Image
             className="living-atlas__image"
             src={activeImage}
@@ -848,7 +954,6 @@ export default function Atlas() {
                 style={{
                   left: hotspot.x * 100 + "%",
                   top: hotspot.y * 100 + "%",
-                  transform: "translate(-50%,-50%) scale(" + (1 / view.zoom) + ")",
                 }}
                 onClick={(event) => {
                   event.stopPropagation();
@@ -950,15 +1055,23 @@ export default function Atlas() {
           isolation: isolate;
           background: #06141d;
           touch-action: none;
+          overscroll-behavior: none;
+          -webkit-user-select: none;
+          user-select: none;
           cursor: grab;
         }
-        .living-atlas__stage:active { cursor: grabbing; }
+        .living-atlas__stage:active,
+        .living-atlas__stage.is-gesturing { cursor: grabbing; }
+        .living-atlas__stage.is-gesturing .living-atlas__hotspot {
+          pointer-events: none;
+        }
         .living-atlas__plane {
           position: absolute;
           left: 0;
           top: 0;
           transform-origin: 0 0;
           will-change: transform;
+          backface-visibility: hidden;
         }
         .living-atlas__image {
           position: absolute;
@@ -1029,9 +1142,11 @@ export default function Atlas() {
           background: transparent;
           color: rgba(237, 201, 108, .92);
           cursor: pointer;
+          transform: translate(-50%, -50%) scale(calc(1 / var(--atlas-zoom, 1)));
           transform-origin: center;
           transition: color 180ms ease, filter 180ms ease;
           overflow: visible;
+          touch-action: manipulation;
         }
         .living-atlas__hotspot:hover,
         .living-atlas__hotspot:focus-visible,
@@ -1227,6 +1342,15 @@ export default function Atlas() {
           .living-atlas__edge--west,
           .living-atlas__edge--east { writing-mode: horizontal-tb; }
           .living-atlas__status { display: none; }
+          .living-atlas__hotspot {
+            width: 64px;
+            height: 64px;
+          }
+          .living-atlas__mark {
+            width: 36px;
+            height: 36px;
+            margin: 14px;
+          }
           .living-atlas__prompt {
             bottom: max(14px, env(safe-area-inset-bottom, 0px));
             width: calc(100% - 28px);

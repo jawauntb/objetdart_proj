@@ -4,8 +4,9 @@ import { readFile } from "node:fs/promises";
 import { extname, resolve, sep } from "node:path";
 
 const OPENAI_IMAGE_MODEL = "gpt-image-2";
-const OPENAI_GENERATIONS_URL = "https://api.openai.com/v1/images/generations";
-const OPENAI_EDITS_URL = "https://api.openai.com/v1/images/edits";
+// Temporarily unused while Atlas is Flux-only.
+// const OPENAI_GENERATIONS_URL = "https://api.openai.com/v1/images/generations";
+// const OPENAI_EDITS_URL = "https://api.openai.com/v1/images/edits";
 const OPENROUTER_IMAGE_MODEL = "black-forest-labs/flux.2-klein-4b";
 const OPENROUTER_PRO_IMAGE_MODEL = "black-forest-labs/flux.2-pro";
 const OPENROUTER_IMAGES_URL = "https://openrouter.ai/api/v1/images";
@@ -178,17 +179,19 @@ export function resolveAtlasProviderConfig(
   providerOverride?: string,
 ): AtlasProviderConfig {
   const rawProvider = providerOverride ?? environment.ATLAS_IMAGE_PROVIDER;
+  // Flux-only for now: preview=Klein, final=Pro. OpenAI is commented out below.
   const provider = rawProvider == null || rawProvider.trim() === ""
-    ? "openai"
+    ? "openrouter-pro"
     : rawProvider.trim();
 
-  if (provider === "openai") {
-    return {
-      provider,
-      model: OPENAI_IMAGE_MODEL,
-      apiKey: normalizeServerSecret(environment.OPENAI_API_KEY),
-    };
-  }
+  // Temporarily disabled — restore to re-enable GPT Image 2 finals.
+  // if (provider === "openai") {
+  //   return {
+  //     provider,
+  //     model: OPENAI_IMAGE_MODEL,
+  //     apiKey: normalizeServerSecret(environment.OPENAI_API_KEY),
+  //   };
+  // }
   if (provider === "openrouter") {
     return {
       provider,
@@ -307,15 +310,26 @@ export async function generateAtlasImage(
   }, PROVIDER_TIMEOUT_MS);
 
   try {
-    const artifact = providerConfig.provider === "openai"
-      ? await generateWithOpenAI(request, compositePrompt, size, providerConfig.apiKey, controller.signal)
-      : await generateWithOpenRouter(
-          request,
-          compositePrompt,
-          providerConfig.model,
-          providerConfig.apiKey,
-          controller.signal,
-        );
+    // Temporarily Flux/OpenRouter only — OpenAI path commented out for speed.
+    // const artifact = providerConfig.provider === "openai"
+    //   ? await generateWithOpenAI(request, compositePrompt, size, providerConfig.apiKey, controller.signal)
+    //   : await generateWithOpenRouter(
+    //       request,
+    //       compositePrompt,
+    //       providerConfig.model,
+    //       providerConfig.apiKey,
+    //       controller.signal,
+    //     );
+    if (providerConfig.provider === "openai") {
+      throw new AtlasProviderConfigurationError("OpenAI atlas generation is temporarily disabled");
+    }
+    const artifact = await generateWithOpenRouter(
+      request,
+      compositePrompt,
+      providerConfig.model,
+      providerConfig.apiKey,
+      controller.signal,
+    );
 
     return {
       dataUrl: `data:${artifact.mediaType};base64,${artifact.base64}`,
@@ -461,20 +475,21 @@ function atlasAction(request: AtlasGenerationRequest): string {
   return "Edit the supplied atlas into a new expression of the visual concept. Preserve its cartographic identity and overall continuity while regenerating the places, materials, and atmosphere.";
 }
 
-async function generateWithOpenAI(
-  request: AtlasGenerationRequest,
-  prompt: string,
-  size: string,
-  apiKey: string,
-  signal: AbortSignal,
-): Promise<ProviderArtifact> {
-  const response = request.currentImage
-    ? await callOpenAIEdit(request.currentImage, prompt, size, apiKey, signal)
-    : await callOpenAIGeneration(prompt, size, apiKey, signal);
-  const requestId = response.headers.get("x-request-id");
-  const payload = await parseImagesResponse(response);
-  return providerArtifactFromPayload(payload, "image/webp", requestId, size, "openai");
-}
+// Temporarily disabled with the OpenAI atlas path — keep for easy restore.
+// async function generateWithOpenAI(
+//   request: AtlasGenerationRequest,
+//   prompt: string,
+//   size: string,
+//   apiKey: string,
+//   signal: AbortSignal,
+// ): Promise<ProviderArtifact> {
+//   const response = request.currentImage
+//     ? await callOpenAIEdit(request.currentImage, prompt, size, apiKey, signal)
+//     : await callOpenAIGeneration(prompt, size, apiKey, signal);
+//   const requestId = response.headers.get("x-request-id");
+//   const payload = await parseImagesResponse(response);
+//   return providerArtifactFromPayload(payload, "image/webp", requestId, size, "openai");
+// }
 
 async function generateWithOpenRouter(
   request: AtlasGenerationRequest,
@@ -526,61 +541,62 @@ async function generateWithOpenRouter(
   return providerArtifactFromPayload(payload, mediaType, requestId, null, "openrouter");
 }
 
-async function callOpenAIGeneration(
-  prompt: string,
-  size: string,
-  apiKey: string,
-  signal: AbortSignal,
-): Promise<Response> {
-  const response = await fetch(OPENAI_GENERATIONS_URL, {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${apiKey}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model: OPENAI_IMAGE_MODEL,
-      prompt,
-      n: 1,
-      size,
-      quality: "medium",
-      output_format: "webp",
-      output_compression: 84,
-      moderation: "auto",
-    }),
-    signal,
-  });
-  if (!response.ok) await throwForProviderResponse(response);
-  return response;
-}
-
-async function callOpenAIEdit(
-  currentImage: string,
-  prompt: string,
-  size: string,
-  apiKey: string,
-  signal: AbortSignal,
-): Promise<Response> {
-  const image = await loadSourceImage(currentImage);
-  const form = new FormData();
-  form.set("model", OPENAI_IMAGE_MODEL);
-  form.set("prompt", prompt);
-  form.set("image", image.blob, image.filename);
-  form.set("size", size);
-  form.set("quality", "medium");
-  form.set("output_format", "webp");
-  form.set("output_compression", "84");
-  form.set("moderation", "auto");
-
-  const response = await fetch(OPENAI_EDITS_URL, {
-    method: "POST",
-    headers: { authorization: `Bearer ${apiKey}` },
-    body: form,
-    signal,
-  });
-  if (!response.ok) await throwForProviderResponse(response);
-  return response;
-}
+// Temporarily disabled with the OpenAI atlas path — keep for easy restore.
+// async function callOpenAIGeneration(
+//   prompt: string,
+//   size: string,
+//   apiKey: string,
+//   signal: AbortSignal,
+// ): Promise<Response> {
+//   const response = await fetch(OPENAI_GENERATIONS_URL, {
+//     method: "POST",
+//     headers: {
+//       authorization: `Bearer ${apiKey}`,
+//       "content-type": "application/json",
+//     },
+//     body: JSON.stringify({
+//       model: OPENAI_IMAGE_MODEL,
+//       prompt,
+//       n: 1,
+//       size,
+//       quality: "medium",
+//       output_format: "webp",
+//       output_compression: 84,
+//       moderation: "auto",
+//     }),
+//     signal,
+//   });
+//   if (!response.ok) await throwForProviderResponse(response);
+//   return response;
+// }
+//
+// async function callOpenAIEdit(
+//   currentImage: string,
+//   prompt: string,
+//   size: string,
+//   apiKey: string,
+//   signal: AbortSignal,
+// ): Promise<Response> {
+//   const image = await loadSourceImage(currentImage);
+//   const form = new FormData();
+//   form.set("model", OPENAI_IMAGE_MODEL);
+//   form.set("prompt", prompt);
+//   form.set("image", image.blob, image.filename);
+//   form.set("size", size);
+//   form.set("quality", "medium");
+//   form.set("output_format", "webp");
+//   form.set("output_compression", "84");
+//   form.set("moderation", "auto");
+//
+//   const response = await fetch(OPENAI_EDITS_URL, {
+//     method: "POST",
+//     headers: { authorization: `Bearer ${apiKey}` },
+//     body: form,
+//     signal,
+//   });
+//   if (!response.ok) await throwForProviderResponse(response);
+//   return response;
+// }
 
 async function loadSourceImage(reference: string): Promise<SourceImage> {
   if (reference.startsWith("data:")) return sourceImageFromDataUrl(reference);
