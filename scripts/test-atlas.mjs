@@ -134,10 +134,12 @@ function loadAtlasRoute(environment) {
 
 const {
   createAtlasGenerationContext,
+  formatAtlasVisualStyleClause,
   generateAtlasImage,
   parseAtlasGenerationRequest,
   resolveAtlasPhaseProviderConfig,
   resolveAtlasProviderConfig,
+  resolveAtlasVisualStyle,
 } = atlasModule;
 const { SITE_ROUTE_BY_KEY, isDarkRoutePath } = routesModule;
 
@@ -150,13 +152,31 @@ assert.equal(parsed.prompt, "fire forest", "concept prompts should be normalized
 assert.deepEqual(parsed.viewport, { width: 390, height: 844 }, "valid mobile viewports should survive parsing");
 assert.equal(parsed.mode, "generate", "generate should remain the canonical mode");
 
+const spaceStyle = resolveAtlasVisualStyle("space nebula chart");
+assert.equal(spaceStyle.id, "space", "space prompts should select the space atlas pack");
+assert.match(spaceStyle.primary, /deep-space|nebula|constellation/i, "space style should dominate the visual language");
+assert.match(spaceStyle.dna, /Catalan portolan residue/i, "every style should keep a faint Catalan atlas residue");
+assert.match(
+  formatAtlasVisualStyleClause(spaceStyle),
+  /Catalan portolan residue/,
+  "formatted style clauses should keep the Catalan DNA attached",
+);
+
+const fireStyle = resolveAtlasVisualStyle("fire forest");
+assert.equal(fireStyle.id, "fire", "the first matched theme token should win style selection");
+assert.match(fireStyle.primary, /volcanic|ember|molten/i, "fire prompts should not stay locked to Catalan blue portolan paint");
+
+const fallbackStyle = resolveAtlasVisualStyle("quiet marble quarries");
+assert.equal(fallbackStyle.id, "concept", "unknown prompts should fall back to concept-shaped style");
+assert.match(fallbackStyle.dna, /Catalan portolan residue/i, "fallback style must still keep Catalan DNA");
+
 const defaultProviderConfig = resolveAtlasProviderConfig({ OPENROUTER_API_KEY: "openrouter-test-key" });
 const defaultProvider = plain(defaultProviderConfig);
 assert.equal(defaultProvider.provider, "openrouter", "Flux/OpenRouter should be the default Atlas provider");
 assert.equal(defaultProvider.model, "black-forest-labs/flux.2-pro", "the default final adapter should pin FLUX.2 Pro");
 
 const generatedWithDefault = plain(await generateAtlasImage(
-  parseAtlasGenerationRequest({ prompt: "fire forest", mode: "generate" }),
+  parseAtlasGenerationRequest({ prompt: "space nebula", mode: "generate" }),
   defaultProviderConfig,
 ));
 assert.equal(generatedWithDefault.generation.provider, "openrouter", "the default adapter should return OpenRouter metadata");
@@ -167,6 +187,15 @@ const defaultCall = providerCalls.find((call) => {
 });
 assert.ok(defaultCall, "default generation should call OpenRouter with FLUX.2 Pro");
 assert.equal(JSON.parse(defaultCall.init.body).output_format, "png", "OpenRouter generation should request PNG output");
+const defaultPrompt = JSON.parse(defaultCall.init.body).prompt;
+assert.match(defaultPrompt, /deep-space|nebula|constellation/i, "provider prompts should mutate toward the concept theme");
+assert.match(defaultPrompt, /Catalan portolan residue/i, "provider prompts should retain ~5% Catalan atlas DNA");
+assert.match(defaultPrompt, /<visual_concept>space nebula<\/visual_concept>/, "concept text should stay inside the subject tag");
+assert.doesNotMatch(
+  defaultPrompt.split("<visual_concept>")[0] ?? "",
+  /richly illuminated Catalan portolan chart translated into a dark contemporary instrument/,
+  "the old always-Catalan primary clause should no longer dominate themed prompts",
+);
 
 assertRequestError(
   () => resolveAtlasProviderConfig({ OPENAI_API_KEY: "openai-test-key" }, "openai"),
