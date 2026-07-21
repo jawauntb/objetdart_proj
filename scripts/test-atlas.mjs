@@ -362,6 +362,15 @@ const refineBody = JSON.parse(refineCall.init.body);
 assert.equal(refineBody.input_references.length, 1, "refine should send the current map as an edit reference");
 assert.match(refineBody.prompt, /subsection|in place/i, "refine prompts should stay local to the clicked region");
 
+const shiftWithoutImage = plain(parseAtlasGenerationRequest({
+  prompt: "fire forest",
+  direction: "east",
+  mode: "shift",
+}));
+assert.equal(shiftWithoutImage.mode, "shift", "shift should parse without a current image");
+assert.equal(shiftWithoutImage.direction, "east", "shift should keep the compass direction");
+assert.equal(shiftWithoutImage.currentImage, undefined, "shift should not require a source image");
+
 const shiftResult = plain(await generateAtlasImage(
   parseAtlasGenerationRequest({
     prompt: "fire forest",
@@ -371,19 +380,18 @@ const shiftResult = plain(await generateAtlasImage(
   }),
   openRouterProvider,
 ));
-assert.equal(shiftResult.generation.operation, "edit", "edge shifts should still edit from the current map");
-const editCall = [...openRouterCalls()].reverse().find((call) => {
+assert.equal(shiftResult.generation.operation, "generation", "edge pan should mint a fresh neighboring sheet");
+const shiftCall = [...openRouterCalls()].reverse().find((call) => {
   const body = JSON.parse(call.init.body);
-  return Array.isArray(body.input_references) && typeof body.prompt === "string" && body.prompt.includes("toward the east");
+  return typeof body.prompt === "string" && body.prompt.includes("neighboring territory to the east");
 });
-assert.ok(editCall, "shift should keep the OpenRouter current-map reference path");
-const editBody = JSON.parse(editCall.init.body);
-assert.equal(editBody.input_references.length, 1, "OpenRouter edits should send one current-map reference");
-assert.equal(editBody.input_references[0].type, "image_url", "current maps should use image_url references");
+assert.ok(shiftCall, "shift should ask the provider for a brand-new neighboring atlas sheet");
+const shiftBody = JSON.parse(shiftCall.init.body);
+assert.equal("input_references" in shiftBody, false, "shift must not send the previous map as an edit reference");
 assert.match(
-  editBody.input_references[0].image_url.url,
-  /^data:image\/png;base64,/,
-  "current maps should remain private bounded data URLs",
+  shiftBody.prompt,
+  /entirely new full atlas sheet|pannable and zoomable again/i,
+  "shift prompts should describe a new explorable neighboring sheet",
 );
 
 const progressiveRoute = loadAtlasRoute({

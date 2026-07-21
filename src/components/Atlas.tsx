@@ -541,8 +541,8 @@ export default function Atlas() {
       setSeeds((current) => normaliseSeeds(data.seeds, current));
       if (typeof data.dataUrl === "string" && data.dataUrl) {
         crossfadeTo(data.dataUrl);
-        if (mode === "zoom") {
-          // New zoom sheets are full maps — reset travel so they can be explored again.
+        if (mode === "zoom" || mode === "shift") {
+          // Fresh full sheets — reset travel so they can be explored again.
           renderedZoomRef.current = 1;
           lastZoomRequestKeyRef.current = null;
           freeZoomParentRef.current = null;
@@ -553,9 +553,11 @@ export default function Atlas() {
             ? "a quick chart has surfaced · refining…"
             : mode === "zoom"
               ? "a deeper chart has opened"
-              : mode === "refine"
-                ? "the region has deepened"
-                : "a new atlas has surfaced",
+              : mode === "shift" && direction
+                ? "new territory to the " + direction
+                : mode === "refine"
+                  ? "the region has deepened"
+                  : "a new atlas has surfaced",
         );
       } else {
         setStatus(phase === "preview" ? "the local chart is refining…" : "the local atlas is ready to explore");
