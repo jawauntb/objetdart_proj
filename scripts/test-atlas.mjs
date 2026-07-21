@@ -59,8 +59,10 @@ function assertRequestError(callback, code, message) {
   assert.equal(caught?.code, code, message);
 }
 
+const atlasBatchModule = loadTsModule("src/lib/atlas-batch.ts");
 const atlasModule = loadTsModule("src/lib/atlas-generation.ts", {
   "server-only": {},
+  "@/lib/atlas-batch": atlasBatchModule,
   "node:fs/promises": {
     readFile: async () => {
       throw new Error("provider file access is outside this unit test");
@@ -133,14 +135,23 @@ function loadAtlasRoute(environment) {
 }
 
 const {
+  atlasOperationForRequest,
+  clipRectForBatchDirection,
+  clipRectForFocus,
   createAtlasGenerationContext,
   formatAtlasVisualStyleClause,
   generateAtlasImage,
   parseAtlasGenerationRequest,
+  resolveAtlasBatchPlan,
   resolveAtlasPhaseProviderConfig,
   resolveAtlasProviderConfig,
   resolveAtlasVisualStyle,
 } = atlasModule;
+assert.equal(
+  typeof atlasBatchModule.resolveAtlasBatchPlan,
+  "function",
+  "atlas-batch should export shared plan resolution for client and server",
+);
 const { SITE_ROUTE_BY_KEY, isDarkRoutePath } = routesModule;
 
 const parsed = plain(parseAtlasGenerationRequest({
@@ -324,24 +335,78 @@ assert.equal(generationBody.n, 1, "FLUX.2 Klein supports exactly one output");
 assert.equal("size" in generationBody, false, "unsupported size controls must not be sent to OpenRouter");
 assert.equal("quality" in generationBody, false, "unsupported quality controls must not be sent to OpenRouter");
 
-const zoomResult = plain(await generateAtlasImage(
-  parseAtlasGenerationRequest({
-    prompt: "fire forest",
-    focus: { x: 0.4, y: 0.6, zoom: 2 },
-    mode: "zoom",
-  }),
-  openRouterProvider,
-));
-assert.equal(zoomResult.generation.operation, "generation", "free zoom should mint a fresh sheet instead of editing");
+const firstBatch = plain(resolveAtlasBatchPlan(0));
+assert.equal(firstBatch.kind, "cardinal4", "first navigation should plan four cardinal neighbor sheets");
+assert.deepEqual(
+  firstBatch.slots.map((slot) => slot.direction),
+  ["north", "east", "south", "west"],
+  "cardinal4 should cover N/E/S/W",
+);
+assert.equal(firstBatch.slots.length, 4, "first batch should request four images");
+for (const slot of firstBatch.slots) {
+  assert.ok(slot.clip.width > 0.4 && slot.clip.height > 0.4, "cardinal clips should sample a useful edge strip");
+  assert.ok(slot.clip.x >= 0 && slot.clip.y >= 0, "clip origins should stay normalized");
+  assert.ok(slot.clip.x + slot.clip.width <= 1.0001, "clip widths should stay in bounds");
+  assert.ok(slot.clip.y + slot.clip.height <= 1.0001, "clip heights should stay in bounds");
+}
+assert.deepEqual(
+  clipRectForBatchDirection("northwest"),
+  firstBatch.slots[0] && clipRectForBatchDirection("northwest"),
+  "northwest clip helper should stay stable",
+);
+const nw = clipRectForBatchDirection("northwest");
+const se = clipRectForBatchDirection("southeast");
+assert.ok(nw.x === 0 && nw.y === 0, "northwest sample should start at the origin corner");
+assert.ok(se.x < 0.5 && se.y < 0.5, "southeast sample should include a buffer into the center");
+assert.ok(nw.width > 0.5 && nw.height > 0.5, "northwest clip should include ~12% buffer past the quadrant");
+
+const laterBatch = plain(resolveAtlasBatchPlan(1));
+assert.equal(laterBatch.kind, "diagonal2", "subsequent generations should plan northwest/southeast samples");
+assert.deepEqual(
+  laterBatch.slots.map((slot) => slot.direction),
+  ["northwest", "southeast"],
+  "diagonal2 should cover NW and SE",
+);
+assert.equal(laterBatch.slots.length, 2, "subsequent batch should request two images");
+assert.deepEqual(laterBatch.slots[0].clip, nw, "diagonal2 northwest clip should match the shared helper");
+assert.deepEqual(laterBatch.slots[1].clip, se, "diagonal2 southeast clip should match the shared helper");
+
+const focusClip = clipRectForFocus({ x: 0.4, y: 0.6, zoom: 2 });
+assert.ok(focusClip.width < 1 && focusClip.height < 1, "zoom focus clips should be a bounded region with buffer");
+assert.ok(
+  focusClip.x <= 0.4 && focusClip.x + focusClip.width >= 0.4,
+  "focus clip should contain the focus x",
+);
+assert.ok(
+  focusClip.y <= 0.6 && focusClip.y + focusClip.height >= 0.6,
+  "focus clip should contain the focus y",
+);
+
+const zoomSourceRequest = parseAtlasGenerationRequest({
+  prompt: "fire forest",
+  currentImage: `data:image/png;base64,${ONE_PIXEL_PNG}`,
+  focus: { x: 0.4, y: 0.6, zoom: 2 },
+  clip: plain(focusClip),
+  mode: "zoom",
+  batchRole: "primary",
+  generationDepth: 1,
+});
+assert.equal(
+  atlasOperationForRequest(zoomSourceRequest),
+  "edit",
+  "zoom with a current image should reconstruct from the clipped source",
+);
+const zoomResult = plain(await generateAtlasImage(zoomSourceRequest, openRouterProvider));
+assert.equal(zoomResult.generation.operation, "edit", "free zoom with a source sheet should edit/reconstruct");
 const openRouterCalls = () => providerCalls.filter((call) => call.url === "https://openrouter.ai/api/v1/images");
 const zoomCall = [...openRouterCalls()].reverse().find((call) => {
   const body = JSON.parse(call.init.body);
-  return typeof body.prompt === "string" && body.prompt.includes("entirely new full atlas sheet");
+  return typeof body.prompt === "string" && body.prompt.includes("Upsample, extend, and reconstruct");
 });
-assert.ok(zoomCall, "zoom should ask the provider for a brand-new atlas sheet");
+assert.ok(zoomCall, "zoom should ask the provider to reconstruct from the clipped sample");
 const zoomBody = JSON.parse(zoomCall.init.body);
-assert.equal("input_references" in zoomBody, false, "zoom must not send the previous map as an edit reference");
-assert.match(zoomBody.prompt, /fresh explorable map|zoomable again/i, "zoom prompts should describe a new explorable sheet");
+assert.equal(zoomBody.input_references.length, 1, "zoom must send the clipped source map as an edit reference");
+assert.match(zoomBody.prompt, /supplied atlas sample|zoomable and pannable again/i, "zoom prompts should describe clipped reconstruction");
 
 const refineResult = plain(await generateAtlasImage(
   parseAtlasGenerationRequest({
@@ -371,28 +436,51 @@ assert.equal(shiftWithoutImage.mode, "shift", "shift should parse without a curr
 assert.equal(shiftWithoutImage.direction, "east", "shift should keep the compass direction");
 assert.equal(shiftWithoutImage.currentImage, undefined, "shift should not require a source image");
 
-const shiftResult = plain(await generateAtlasImage(
-  parseAtlasGenerationRequest({
-    prompt: "fire forest",
-    currentImage: `data:image/png;base64,${ONE_PIXEL_PNG}`,
-    direction: "east",
-    mode: "shift",
-  }),
-  openRouterProvider,
-));
-assert.equal(shiftResult.generation.operation, "generation", "edge pan should mint a fresh neighboring sheet");
+const eastClip = clipRectForBatchDirection("east");
+const shiftSourceRequest = parseAtlasGenerationRequest({
+  prompt: "fire forest",
+  currentImage: `data:image/png;base64,${ONE_PIXEL_PNG}`,
+  direction: "east",
+  clip: eastClip,
+  mode: "shift",
+  batchKind: "cardinal4",
+  batchRole: "neighbor",
+  batchDirection: "east",
+  generationDepth: 0,
+});
+assert.equal(
+  atlasOperationForRequest(shiftSourceRequest),
+  "edit",
+  "shift with a current image should extend from the clipped source",
+);
+const shiftResult = plain(await generateAtlasImage(shiftSourceRequest, openRouterProvider));
+assert.equal(shiftResult.generation.operation, "edit", "edge pan with a source sheet should edit/extend");
 const shiftCall = [...openRouterCalls()].reverse().find((call) => {
   const body = JSON.parse(call.init.body);
-  return typeof body.prompt === "string" && body.prompt.includes("neighboring territory to the east");
+  return typeof body.prompt === "string" && body.prompt.includes("neighboring territory toward the east");
 });
-assert.ok(shiftCall, "shift should ask the provider for a brand-new neighboring atlas sheet");
+assert.ok(shiftCall, "shift should ask the provider to extend from the clipped east sample");
 const shiftBody = JSON.parse(shiftCall.init.body);
-assert.equal("input_references" in shiftBody, false, "shift must not send the previous map as an edit reference");
+assert.equal(shiftBody.input_references.length, 1, "shift must send the previous map as a clipped source reference");
 assert.match(
   shiftBody.prompt,
-  /entirely new full atlas sheet|pannable and zoomable again/i,
-  "shift prompts should describe a new explorable neighboring sheet",
+  /supplied atlas sample|pannable and zoomable again/i,
+  "shift prompts should describe clipped neighboring reconstruction",
 );
+
+const diagonalNeighbor = plain(parseAtlasGenerationRequest({
+  prompt: "fire forest",
+  currentImage: `data:image/png;base64,${ONE_PIXEL_PNG}`,
+  mode: "zoom",
+  focus: { x: nw.x + nw.width / 2, y: nw.y + nw.height / 2, zoom: 2 },
+  clip: nw,
+  batchKind: "diagonal2",
+  batchRole: "neighbor",
+  batchDirection: "northwest",
+  generationDepth: 2,
+}));
+assert.equal(diagonalNeighbor.batchDirection, "northwest", "diagonal neighbor requests should accept northwest");
+assert.deepEqual(diagonalNeighbor.clip, nw, "diagonal neighbor requests should keep the NW clip rect");
 
 const progressiveRoute = loadAtlasRoute({
   ATLAS_GENERATION_ENABLED: "true",
@@ -447,23 +535,23 @@ const canonicalFinalCall = progressiveCalls.find((call) => {
   return JSON.parse(call.init.body).model === "black-forest-labs/flux.2-pro";
 });
 assert.ok(canonicalPreviewCall, "the preview phase should call Klein");
-assert.ok(canonicalFinalCall, "the final phase should generate with FLUX.2 Pro");
+assert.ok(canonicalFinalCall, "the final phase should reconstruct with FLUX.2 Pro");
 const canonicalPreviewBody = JSON.parse(canonicalPreviewCall.init.body);
 const canonicalFinalBody = JSON.parse(canonicalFinalCall.init.body);
-assert.equal("input_references" in canonicalPreviewBody, false, "zoom preview should generate a fresh sheet");
-assert.equal("input_references" in canonicalFinalBody, false, "zoom final should generate a fresh sheet");
+assert.equal(canonicalPreviewBody.input_references?.length, 1, "zoom preview should sample from the current map");
+assert.equal(canonicalFinalBody.input_references?.length, 1, "zoom final should sample from the current map");
 assert.match(
   canonicalPreviewBody.prompt,
-  /entirely new full atlas sheet/,
-  "zoom preview should ask for a new full map of the focused region",
+  /Upsample, extend, and reconstruct|supplied atlas sample/i,
+  "zoom preview should reconstruct from the focused region sample",
 );
 assert.equal(
   canonicalFinalBody.prompt,
   canonicalPreviewBody.prompt,
   "preview and final should share one canonical server-composed prompt",
 );
-assert.equal(previewResponse.body.generation.operation, "generation", "zoom preview metadata should stay generation");
-assert.equal(finalResponse.body.generation.operation, "generation", "zoom final metadata should stay generation");
+assert.equal(previewResponse.body.generation.operation, "edit", "zoom preview with a source sheet should edit/reconstruct");
+assert.equal(finalResponse.body.generation.operation, "edit", "zoom final with a source sheet should edit/reconstruct");
 
 const proFinalRoute = loadAtlasRoute({
   ATLAS_GENERATION_ENABLED: "true",

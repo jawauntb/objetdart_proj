@@ -12,6 +12,14 @@ import {
 } from "react";
 import { REGIONS } from "@/data/content";
 import RouteSigil, { type RouteSigilKind } from "@/components/RouteSigil";
+import {
+  clipRectForFocus,
+  clipRectForShiftDirection,
+  resolveAtlasBatchPlan,
+  type AtlasBatchDirection,
+  type AtlasBatchKind,
+  type AtlasClipRect,
+} from "@/lib/atlas-batch";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { useField } from "@/store/field";
@@ -57,6 +65,16 @@ type MapSnapshot = {
   regionId: string | null;
   view: MapView;
   renderPhase: RenderPhase;
+  generationDepth: number;
+};
+type NeighborSheet = {
+  direction: AtlasBatchDirection;
+  image: string | null;
+  hotspots: MapHotspot[] | null;
+  seeds: MapSeeds | null;
+  concept: string;
+  phase: GenerationPhase | "pending" | "error";
+  batchKind: AtlasBatchKind;
 };
 
 const REGION_IDS = new Set(REGIONS.map((region) => region.id));
@@ -257,6 +275,9 @@ export default function Atlas() {
   const activeImageRef = useRef(ORIGIN_MAP);
   const inertiaRef = useRef<number | null>(null);
   const interactingRef = useRef(false);
+  const generationDepthRef = useRef(0);
+  const neighborSheetsRef = useRef(new Map<AtlasBatchDirection, NeighborSheet>());
+  const neighborAbortRef = useRef<AbortController | null>(null);
 
   const [metrics, setMetrics] = useState<MapMetrics>(EMPTY_METRICS);
   const [activeImage, setActiveImage] = useState(ORIGIN_MAP);
@@ -272,6 +293,7 @@ export default function Atlas() {
   const [busyFocus, setBusyFocus] = useState<{ x: number; y: number } | null>(null);
   const [renderPhase, setRenderPhase] = useState<RenderPhase>("idle");
   const [historyDepth, setHistoryDepth] = useState(0);
+  const [generationDepth, setGenerationDepth] = useState(0);
   const [status, setStatus] = useState("tap a mark · drag the chart · pinch to breathe");
   const [interacting, setInteracting] = useState(false);
   const [pulse, setPulse] = useState<{ x: number; y: number; key: number } | null>(null);
@@ -370,6 +392,7 @@ export default function Atlas() {
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
+      neighborAbortRef.current?.abort();
       stopInertia();
       if (crossfadeRef.current !== null) window.clearTimeout(crossfadeRef.current);
       if (revealRef.current !== null) window.clearTimeout(revealRef.current);
@@ -408,6 +431,12 @@ export default function Atlas() {
     }, 880);
   };
 
+  const clearNeighborSheets = () => {
+    neighborAbortRef.current?.abort();
+    neighborAbortRef.current = null;
+    neighborSheetsRef.current.clear();
+  };
+
   const invalidateGeneration = () => {
     requestRef.current += 1;
     generationIdRef.current = null;
@@ -434,11 +463,13 @@ export default function Atlas() {
       regionId: selectedRegionId,
       view: viewRef.current,
       renderPhase,
+      generationDepth: generationDepthRef.current,
     };
   };
 
   const restoreSnapshot = (snapshot: MapSnapshot) => {
     settleCrossfade();
+    clearNeighborSheets();
     setHotspots(snapshot.hotspots);
     setSeeds(snapshot.seeds);
     setConcept(snapshot.concept);
@@ -446,6 +477,8 @@ export default function Atlas() {
     setFocusedLabel(snapshot.focusedLabel);
     setRegion(snapshot.regionId);
     setRenderPhase(snapshot.renderPhase);
+    generationDepthRef.current = snapshot.generationDepth;
+    setGenerationDepth(snapshot.generationDepth);
     renderedZoomRef.current = snapshot.view.zoom;
     commitView(boundView(snapshot.view, metricsRef.current));
     crossfadeTo(snapshot.image);
@@ -471,21 +504,132 @@ export default function Atlas() {
     setStatus("outer map · choose another mark or cross an edge");
   };
 
+  const prefetchNeighborBatch = async ({
+    sourceImage,
+    subjectPrompt,
+    depth,
+    parentRequestId,
+  }: {
+    sourceImage: string;
+    subjectPrompt: string;
+    depth: number;
+    parentRequestId: number;
+  }) => {
+    if (!sourceImage || sourceImage.startsWith("/atlas/atlas-origin")) return;
+    neighborAbortRef.current?.abort();
+    const controller = new AbortController();
+    neighborAbortRef.current = controller;
+    const plan = resolveAtlasBatchPlan(depth);
+    const box = stageRef.current?.getBoundingClientRect();
+    const viewport = {
+      width: Math.round(box?.width ?? 0),
+      height: Math.round(box?.height ?? 0),
+    };
+
+    for (const slot of plan.slots) {
+      neighborSheetsRef.current.set(slot.direction, {
+        direction: slot.direction,
+        image: null,
+        hotspots: null,
+        seeds: null,
+        concept: subjectPrompt,
+        phase: "pending",
+        batchKind: plan.kind,
+      });
+    }
+
+    // Klein previews only for neighbors — Pro stays selective on the active sheet.
+    const queue = [...plan.slots];
+    const workers = Array.from({ length: Math.min(2, queue.length) }, async () => {
+      while (queue.length > 0) {
+        if (controller.signal.aborted || parentRequestId !== requestRef.current) return;
+        const slot = queue.shift();
+        if (!slot) return;
+        const cardinal = slot.direction === "north"
+          || slot.direction === "east"
+          || slot.direction === "south"
+          || slot.direction === "west"
+          ? slot.direction
+          : undefined;
+        const body = JSON.stringify({
+          prompt: subjectPrompt.replace(/ +/g, " ").trim().slice(0, 240),
+          currentImage: sourceImage,
+          mode: cardinal ? "shift" : "zoom",
+          direction: cardinal,
+          focus: cardinal
+            ? undefined
+            : {
+                x: slot.clip.x + slot.clip.width / 2,
+                y: slot.clip.y + slot.clip.height / 2,
+                zoom: 2,
+              },
+          clip: slot.clip,
+          batchKind: plan.kind,
+          batchRole: "neighbor",
+          batchDirection: slot.direction,
+          generationDepth: depth,
+          viewport,
+        });
+        try {
+          const response = await fetch("/api/atlas/generate?phase=preview", {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-atlas-generation-id": generationId(parentRequestId) + "-" + slot.direction,
+            },
+            signal: controller.signal,
+            body,
+          });
+          if (!response.ok) throw new Error("neighbor preview failed");
+          const data = await response.json() as unknown;
+          if (!isRecord(data) || parentRequestId !== requestRef.current) return;
+          const image = typeof data.dataUrl === "string" && data.dataUrl ? data.dataUrl : null;
+          neighborSheetsRef.current.set(slot.direction, {
+            direction: slot.direction,
+            image,
+            hotspots: normaliseHotspots(data.hotspots),
+            seeds: normaliseSeeds(data.seeds, localSeeds(subjectPrompt)),
+            concept: subjectPrompt,
+            phase: image ? "preview" : "error",
+            batchKind: plan.kind,
+          });
+        } catch {
+          if (controller.signal.aborted) return;
+          neighborSheetsRef.current.set(slot.direction, {
+            direction: slot.direction,
+            image: null,
+            hotspots: null,
+            seeds: null,
+            concept: subjectPrompt,
+            phase: "error",
+            batchKind: plan.kind,
+          });
+        }
+      }
+    });
+    await Promise.allSettled(workers);
+  };
+
   const generateMap = async ({
     mode,
     subjectPrompt,
     focus,
     direction,
+    clip,
     optimisticSeeds,
+    prefetchNeighbors = true,
   }: {
     mode: GenerationMode;
     subjectPrompt: string;
     focus?: { x: number; y: number; zoom: number };
     direction?: Direction;
+    clip?: AtlasClipRect;
     optimisticSeeds?: MapSeeds;
+    prefetchNeighbors?: boolean;
   }) => {
     invalidateGeneration();
     settleCrossfade();
+    if (prefetchNeighbors) clearNeighborSheets();
     const requestId = ++requestRef.current;
     const clientGenerationId = generationId(requestId);
     generationIdRef.current = clientGenerationId;
@@ -493,6 +637,15 @@ export default function Atlas() {
     const controller = new AbortController();
     abortRef.current = controller;
     const currentImage = activeImageRef.current;
+    const depth = generationDepthRef.current;
+    const resolvedClip = clip
+      ?? (mode === "zoom" && focus ? clipRectForFocus(focus) : undefined)
+      ?? (mode === "shift" && direction ? clipRectForShiftDirection(direction) : undefined);
+    const usesClippedSource = Boolean(
+      currentImage
+      && resolvedClip
+      && (mode === "zoom" || mode === "shift"),
+    );
     setBusy(true);
     setBusyFocus(focus ? {
       x: viewRef.current.x + focus.x * metricsRef.current.mapWidth * viewRef.current.zoom,
@@ -508,11 +661,16 @@ export default function Atlas() {
       mode,
       direction,
       focus,
+      clip: usesClippedSource ? resolvedClip : undefined,
+      batchRole: "primary",
+      generationDepth: depth,
       viewport: {
         width: Math.round(box?.width ?? 0),
         height: Math.round(box?.height ?? 0),
       },
     });
+
+    let landedImage: string | null = null;
 
     const requestPhase = async (phase: GenerationPhase) => {
       const response = await fetch("/api/atlas/generate?phase=" + phase, {
@@ -540,9 +698,9 @@ export default function Atlas() {
       if (nextHotspots) setHotspots(nextHotspots);
       setSeeds((current) => normaliseSeeds(data.seeds, current));
       if (typeof data.dataUrl === "string" && data.dataUrl) {
+        landedImage = data.dataUrl;
         crossfadeTo(data.dataUrl);
         if (mode === "zoom" || mode === "shift") {
-          // Fresh full sheets — reset travel so they can be explored again.
           renderedZoomRef.current = 1;
           lastZoomRequestKeyRef.current = null;
           freeZoomParentRef.current = null;
@@ -580,6 +738,18 @@ export default function Atlas() {
       setRenderPhase("error");
     } else if (results[1].status === "rejected" && phaseRankRef.current === 1) {
       setStatus("the quick chart is ready · the final ink held back");
+    } else if (phaseRankRef.current > 0 && (mode === "generate" || mode === "zoom" || mode === "shift")) {
+      // First successful place is depth 0 → cardinal4. Later landings use diagonal2.
+      generationDepthRef.current = mode === "generate" ? 0 : depth + 1;
+      setGenerationDepth(generationDepthRef.current);
+      if (prefetchNeighbors && landedImage) {
+        void prefetchNeighborBatch({
+          sourceImage: landedImage,
+          subjectPrompt,
+          depth: generationDepthRef.current,
+          parentRequestId: requestId,
+        });
+      }
     }
     setBusy(false);
     setBusyFocus(null);
@@ -626,7 +796,43 @@ export default function Atlas() {
     }, 480);
   };
 
+  const applyNeighborSheet = (direction: Direction, neighbor: NeighborSheet) => {
+    if (!neighbor.image) return false;
+    invalidateGeneration();
+    historyRef.current = [];
+    setHistoryDepth(0);
+    freeZoomParentRef.current = null;
+    lastZoomRequestKeyRef.current = null;
+    setFocusedId(null);
+    setFocusedLabel(null);
+    setRegion(null);
+    renderedZoomRef.current = 1;
+    setConcept(neighbor.concept);
+    if (neighbor.hotspots) setHotspots(neighbor.hotspots);
+    if (neighbor.seeds) setSeeds(neighbor.seeds);
+    commitView(centerView(metricsRef.current, 1), { animate: true });
+    crossfadeTo(neighbor.image);
+    setRenderPhase(neighbor.phase === "final" ? "final" : "preview");
+    setStatus("new territory to the " + direction + " · chart ready");
+    generationDepthRef.current = Math.max(1, generationDepthRef.current + 1);
+    setGenerationDepth(generationDepthRef.current);
+    neighborSheetsRef.current.delete(direction);
+    // Prefetch the next diagonal pair from this landed neighbor sheet.
+    void prefetchNeighborBatch({
+      sourceImage: neighbor.image,
+      subjectPrompt: neighbor.concept,
+      depth: generationDepthRef.current,
+      parentRequestId: requestRef.current,
+    });
+    return true;
+  };
+
   const shiftMap = (direction: Direction) => {
+    const cached = neighborSheetsRef.current.get(direction);
+    if (cached?.image) {
+      recordTape("region", 0.72, "atlas/shift/" + direction + "/prefetch");
+      if (applyNeighborSheet(direction, cached)) return;
+    }
     const seed = seeds[direction];
     historyRef.current = [];
     setHistoryDepth(0);
@@ -644,6 +850,7 @@ export default function Atlas() {
     void generateMap({
       mode: "shift",
       direction,
+      clip: clipRectForShiftDirection(direction),
       optimisticSeeds: localSeeds(seed),
       subjectPrompt: seed,
     });
@@ -655,6 +862,9 @@ export default function Atlas() {
     if (!raw) return;
     historyRef.current = [];
     setHistoryDepth(0);
+    generationDepthRef.current = 0;
+    setGenerationDepth(0);
+    clearNeighborSheets();
     freeZoomParentRef.current = null;
     lastZoomRequestKeyRef.current = null;
     setPrompt("");
@@ -929,6 +1139,7 @@ export default function Atlas() {
         }
         data-generation-phase={renderPhase}
         data-history-depth={historyDepth}
+        data-generation-depth={generationDepth}
         onWheel={onWheel}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
