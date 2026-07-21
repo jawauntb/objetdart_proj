@@ -23,7 +23,7 @@ const IMAGE_MIME_BY_EXTENSION: Record<string, AtlasImageMime> = {
   ".webp": "image/webp",
 };
 
-export type AtlasMode = "generate" | "zoom" | "shift";
+export type AtlasMode = "generate" | "zoom" | "refine" | "shift";
 export type AtlasDirection = "north" | "east" | "south" | "west";
 export type AtlasImageMime = "image/jpeg" | "image/png" | "image/webp";
 export type AtlasImageProvider = "openai" | "openrouter";
@@ -234,11 +234,14 @@ export function parseAtlasGenerationRequest(value: unknown): AtlasGenerationRequ
   const mode = normalizeMode(body.mode);
   const direction = body.direction == null ? undefined : normalizeDirection(body.direction);
 
-  if (mode === "zoom" && !currentImage) {
-    throw new AtlasRequestError("current_image_required", "zooming requires a current atlas image");
-  }
   if (mode === "zoom" && !focus) {
     throw new AtlasRequestError("focus_required", "zooming requires a normalized focus point");
+  }
+  if (mode === "refine" && !currentImage) {
+    throw new AtlasRequestError("current_image_required", "refining requires a current atlas image");
+  }
+  if (mode === "refine" && !focus) {
+    throw new AtlasRequestError("focus_required", "refining requires a normalized focus point");
   }
   if (mode === "shift" && !currentImage) {
     throw new AtlasRequestError("current_image_required", "shifting requires a current atlas image");
@@ -294,7 +297,7 @@ export async function generateAtlasImage(
   }
   const context = createAtlasGenerationContext(request.prompt);
   const size = chooseOutputSize(request.viewport);
-  const operation = request.currentImage ? "edit" : "generation";
+  const operation = atlasOperationForRequest(request);
   const compositePrompt = buildCompositePrompt(request, context);
   const startedAt = Date.now();
   const controller = new AbortController();
@@ -421,16 +424,16 @@ function normalizeFocus(value: unknown): AtlasFocus {
   assertOnlyKeys(focus, ["x", "y", "zoom"], "focus");
   const x = requireNumber(focus.x, "focus.x", 0, 1);
   const y = requireNumber(focus.y, "focus.y", 0, 1);
-  const zoom = focus.zoom == null ? 2 : requireNumber(focus.zoom, "focus.zoom", 1, 8);
+  const zoom = focus.zoom == null ? 2 : requireNumber(focus.zoom, "focus.zoom", 1, 64);
   return { x, y, zoom };
 }
 
 function normalizeMode(value: unknown): AtlasMode {
   if (value == null || value === "") return "generate";
-  if (value === "generate" || value === "zoom" || value === "shift") return value;
+  if (value === "generate" || value === "zoom" || value === "refine" || value === "shift") return value;
   if (value === "regenerate") return "generate";
   if (value === "pan" || value === "extend") return "shift";
-  throw new AtlasRequestError("invalid_mode", "mode must be generate, zoom, or shift");
+  throw new AtlasRequestError("invalid_mode", "mode must be generate, zoom, refine, or shift");
 }
 
 function normalizeDirection(value: unknown): AtlasDirection {
@@ -578,14 +581,33 @@ function buildCompositePrompt(request: AtlasGenerationRequest, context: AtlasGen
   ].join("\n");
 }
 
+export function atlasOperationForRequest(
+  request: Pick<AtlasGenerationRequest, "mode" | "currentImage">,
+): "generation" | "edit" {
+  // Free zoom mints a fresh full sheet. Landmark clicks refine/edit a subsection.
+  if (request.mode === "zoom" || !request.currentImage) return "generation";
+  return "edit";
+}
+
+export function atlasUsesSourceImage(
+  request: Pick<AtlasGenerationRequest, "mode" | "currentImage">,
+): boolean {
+  return atlasOperationForRequest(request) === "edit";
+}
+
 function atlasAction(request: AtlasGenerationRequest): string {
-  if (!request.currentImage) {
-    return "Create the outer map for this concept from scratch, with a coherent world visible at once and richer detail near the center.";
-  }
   if (request.mode === "zoom" && request.focus) {
     const x = Math.round(request.focus.x * 100);
     const y = Math.round(request.focus.y * 100);
-    return `Edit the supplied atlas as a continuous zoom to the area centered ${x}% from the left and ${y}% from the top at roughly ${request.focus.zoom.toFixed(1)}x. Preserve its identity and geography while diffusing substantially richer regional detail outward from that point.`;
+    return `Create an entirely new full atlas sheet of the place that was around ${x}% from the left and ${y}% from the top at roughly ${request.focus.zoom.toFixed(1)}x depth. This is a fresh explorable map filling the whole frame with denser geography of that region, not a crop, inset, or pixel edit of a previous image. Continuity with the parent concept matters; the previous sheet is only lore. The result must itself be zoomable again.`;
+  }
+  if (request.mode === "refine" && request.focus && request.currentImage) {
+    const x = Math.round(request.focus.x * 100);
+    const y = Math.round(request.focus.y * 100);
+    return `Edit the supplied atlas in place: deepen and improve only the subsection centered ${x}% from the left and ${y}% from the top at roughly ${request.focus.zoom.toFixed(1)}x, while keeping the rest of the sheet continuous and recognizable. Enrich local material, landmarks, and atmosphere in that region without replacing the whole map.`;
+  }
+  if (!request.currentImage) {
+    return "Create the outer map for this concept from scratch, with a coherent world visible at once and richer detail near the center.";
   }
   if (request.mode === "shift" && request.direction) {
     return `Edit and extend the supplied atlas toward the ${request.direction}. Make the new neighboring territory feel newly generated yet geographically continuous with the departing edge, while the opposite edge retains recognizable landmarks.`;
@@ -632,7 +654,7 @@ async function generateWithOpenRouter(
     n: 1,
   };
 
-  if (request.currentImage) {
+  if (atlasUsesSourceImage(request) && request.currentImage) {
     const image = await loadSourceImage(request.currentImage);
     body.input_references = [{
       type: "image_url",
