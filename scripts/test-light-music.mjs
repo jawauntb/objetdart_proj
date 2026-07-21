@@ -30,6 +30,7 @@ const {
   noteName,
   parseMusicInput,
   parseMusicScore,
+  quantizeFrequency,
   translateFrequencyToLight,
 } = loadTsModule("src/lib/light-music.ts");
 
@@ -92,5 +93,13 @@ assert.equal(abcInput.metadata.key, "G");
 assert.equal(abcInput.tokens[0].kind, "chord");
 assert.equal(abcInput.tokens[1].kind, "note");
 assert.equal(abcInput.tokens[1].duration, 0.5);
+
+assert.equal(quantizeFrequency(440, "pure"), 440, "pure mode should leave frequencies untouched");
+assert.equal(quantizeFrequency(452, "pure"), 452, "pure mode should keep raw light frequencies");
+assert.ok(Math.abs(quantizeFrequency(455, "chroma") - 466.16) < 0.01, "chroma mode should snap 455 Hz up to Bb4");
+assert.ok(Math.abs(quantizeFrequency(455, "penta") - 440) < 0.01, "penta mode should snap 455 Hz down to A4");
+assert.ok(Math.abs(quantizeFrequency(107.5, "penta") - 110) < 0.01, "the A2 light tone should land on A2 in penta mode");
+assert.ok(Math.abs(quantizeFrequency(370, "penta") - 392) < 0.01, "penta mode should skip non-scale semitones (F#4 → G4)");
+assert.equal(noteName(quantizeFrequency(311, "penta")), "D4", "penta snapping should produce clean note names");
 
 console.log("light music conversion ok");
