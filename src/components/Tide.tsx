@@ -142,6 +142,92 @@ export default function Tide() {
     let raf = 0;
     const t0 = performance.now();
 
+    // ── persistent tideline naturals ─────────────────────────────
+    // Shells, driftwood, starfish left along the shore. Positioned in
+    // "tide-band" space where ny=0 sits at the high-tide mark and ny=1
+    // at the low-tide mark. A shell placed higher up is only exposed
+    // when the user drags the moon to produce a low enough tide — the
+    // simulation is genuinely the gameplay. Same localStorage pattern
+    // as /ocean so the shore has memory across visits.
+    type NaturalKind = "seashell" | "driftwood" | "starfish";
+    type Natural = {
+      id: string;
+      kind: NaturalKind;
+      nx: number;    // 0..1 across width
+      ny: number;    // 0..1 in the tide band (0 = high tide line, 1 = low tide line)
+      seed: number;
+      createdAt: number;
+      lastSeen: number;
+    };
+    const NAT_KEY = "objetdart:tide:naturals:v1";
+    const MAX_NATURALS = 20;
+    let naturals: Natural[] = [];
+    const loadNaturals = () => {
+      if (typeof window === "undefined") return;
+      try {
+        const raw = localStorage.getItem(NAT_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw) as unknown;
+        if (!Array.isArray(parsed)) return;
+        naturals = parsed
+          .filter((n): n is Natural =>
+            !!n && typeof (n as Natural).id === "string" &&
+            typeof (n as Natural).kind === "string" &&
+            typeof (n as Natural).nx === "number" &&
+            typeof (n as Natural).ny === "number",
+          )
+          .slice(-MAX_NATURALS);
+      } catch { /* noop */ }
+    };
+    const persistNaturals = () => {
+      if (typeof window === "undefined") return;
+      try {
+        const nowMs = Date.now();
+        for (const n of naturals) n.lastSeen = nowMs;
+        localStorage.setItem(NAT_KEY, JSON.stringify(naturals.slice(-MAX_NATURALS)));
+      } catch { /* noop */ }
+    };
+    const addNatural = (kind: NaturalKind, nx: number, ny: number) => {
+      const nowMs = Date.now();
+      const n: Natural = {
+        id: `tnat-${nowMs}-${Math.random().toString(36).slice(2, 8)}`,
+        kind,
+        nx: Math.max(0.02, Math.min(0.98, nx)),
+        ny: Math.max(0, Math.min(1, ny)),
+        seed: Math.floor(Math.random() * 0xFFFFFFFF),
+        createdAt: nowMs,
+        lastSeen: nowMs,
+      };
+      naturals.push(n);
+      while (naturals.length > MAX_NATURALS) naturals.shift();
+      persistNaturals();
+      return n;
+    };
+    loadNaturals();
+    let lastNaturalsSaveAt = performance.now();
+
+    // ── weather events (autonomic) ───────────────────────────────
+    // Ephemeral things that happen against the moonlit sea while you
+    // watch: meteors, moon halos, fog banks, a distant boat lantern,
+    // and a firefly by the candle. The scheduler is jittered so it
+    // never feels metronomic. Same pattern as /stars and /ocean.
+    type WeatherEvent =
+      | { kind: "meteor"; t0: number; duration: number; x0: number; y0: number; x1: number; y1: number }
+      | { kind: "moonhalo"; t0: number; duration: number }
+      | { kind: "fog"; t0: number; duration: number; dir: 1 | -1; density: number }
+      | { kind: "boat"; t0: number; duration: number; dir: 1 | -1; yOffset: number }
+      | { kind: "firefly"; t0: number; duration: number; seed: number };
+    const weather: WeatherEvent[] = [];
+    const addWeather = (e: WeatherEvent) => {
+      weather.push(e);
+      if (weather.length > 8) weather.shift();
+    };
+
+    // long-press timer for planting a natural on the tideline
+    let plantTimer: ReturnType<typeof setTimeout> | 0 = 0;
+    let plantFired = false;
+    const PLANT_MS = 1600;
+
     const resize = () => {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       cv.width = Math.floor(window.innerWidth * dpr);
@@ -179,7 +265,46 @@ export default function Tide() {
         try { audio.playNote(target === "moon" ? 62 : 57, 140); } catch { /* noop */ }
         try { haptics.tap(); } catch { /* noop */ }
         recordTapeRef.current("object", 0.5, `tide/grab-${target}`);
+        return;
       }
+      // Not grabbing a body — a hold on the open sea plants a natural
+      // at that spot on the tideline. Kind depends on the current tide:
+      // low tide → seashell (the exposed sand yields shells), high tide
+      // → driftwood (floating), starfish only rarely.
+      if (plantTimer) { clearTimeout(plantTimer); plantTimer = 0; }
+      plantFired = false;
+      const downX = e.clientX;
+      const downY = e.clientY;
+      plantTimer = setTimeout(() => {
+        const d = dragRef.current;
+        if (!d.active || d.moved || d.target) return;
+        plantFired = true;
+        const w = window.innerWidth;
+        const h = window.innerHeight;
+        const meanSeaY = h * 0.64;
+        const swing = h * 0.085;
+        const hiY = meanSeaY - swing;
+        const loY = meanSeaY + swing;
+        // only plant if the tap was in the tide band (or below it)
+        if (downY < hiY - 20) return;
+        // ny 0..1 across the tide band (clamped)
+        const ny = Math.max(0, Math.min(1, (downY - hiY) / (loY - hiY)));
+        const nx = downX / w;
+        const tideN = clamp(
+          (bodyTide(moonAngRef.current, MOON_AMP) + bodyTide(sunAngRef.current, SUN_AMP)) / (MOON_AMP + SUN_AMP),
+          -1, 1,
+        );
+        const roll = Math.random();
+        const kind: NaturalKind =
+          tideN < -0.3 ? (roll < 0.72 ? "seashell" : roll < 0.94 ? "starfish" : "driftwood")
+          : tideN > 0.3 ? (roll < 0.72 ? "driftwood" : "seashell")
+          : (roll < 0.5 ? "seashell" : roll < 0.85 ? "driftwood" : "starfish");
+        addNatural(kind, nx, ny);
+        try { audio.chime(); } catch { /* noop */ }
+        try { haptics.ripple(0.7); } catch { /* noop */ }
+        recordTapeRef.current("ripple", 0.9, "tide/plant");
+        addRipple(downX, downY, 60, "gold");
+      }, PLANT_MS);
     };
 
     const onMove = (e: PointerEvent) => {
@@ -216,9 +341,14 @@ export default function Tide() {
       const d = dragRef.current;
       const wasActive = d.active;
       const wasTap = !d.moved && !d.target;
+      const didPlant = plantFired;
       dragRef.current = { active: false, id: -1, target: null, moved: false, downX: 0, downY: 0 };
+      if (plantTimer) { clearTimeout(plantTimer); plantTimer = 0; }
+      plantFired = false;
       try { cv.releasePointerCapture?.(e.pointerId); } catch { /* noop */ }
       if (!wasActive || !wasTap) return;
+      // suppress the sea-chime if a plant just fired for this press
+      if (didPlant) return;
       const g = geomRef.current;
       if (Math.hypot(e.clientX - g.earth.x, e.clientY - g.earth.y) <= g.earth.r * 1.35) {
         toggleAuto();
@@ -258,6 +388,72 @@ export default function Tide() {
         else audio.playNote(midi, 200);
       } catch { /* noop */ }
     };
+
+    // ── weather scheduler — the sea is never static, never chaotic ─
+    // Every 11–19s a jittered scheduler fires one of five natural
+    // events against the moonlit sea. Modelled on Stars' cosmic weather
+    // block. Slower cadence than /ocean because /tide is a calmer
+    // scene meant for contemplation.
+    let weatherTimer: ReturnType<typeof setTimeout> | 0 = 0;
+    const spawnMeteor = () => {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      const startSide = Math.random() < 0.5 ? 1 : -1;
+      const x0 = startSide > 0 ? -20 : w + 20;
+      const y0 = h * (0.05 + Math.random() * 0.22);
+      const dx = (300 + Math.random() * 220) * -startSide;
+      const dy = 80 + Math.random() * 60;
+      addWeather({
+        kind: "meteor",
+        t0: performance.now(),
+        duration: 1.4,
+        x0, y0,
+        x1: x0 + dx,
+        y1: y0 + dy,
+      });
+    };
+    const spawnMoonhalo = () => {
+      addWeather({ kind: "moonhalo", t0: performance.now(), duration: 9 });
+    };
+    const spawnFog = () => {
+      addWeather({
+        kind: "fog",
+        t0: performance.now(),
+        duration: 42,
+        dir: Math.random() < 0.5 ? 1 : -1,
+        density: 0.55 + Math.random() * 0.3,
+      });
+    };
+    const spawnBoat = () => {
+      addWeather({
+        kind: "boat",
+        t0: performance.now(),
+        duration: 28,
+        dir: Math.random() < 0.5 ? 1 : -1,
+        yOffset: -8 + Math.random() * 16,
+      });
+    };
+    const spawnFirefly = () => {
+      addWeather({
+        kind: "firefly",
+        t0: performance.now(),
+        duration: 7,
+        seed: Math.random() * 1000,
+      });
+    };
+    const fireWeather = () => {
+      if (!document.hidden) {
+        const roll = Math.random();
+        // weighted: boat 26, firefly 22, moonhalo 22, fog 16, meteor 14
+        if (roll < 0.26) spawnBoat();
+        else if (roll < 0.48) spawnFirefly();
+        else if (roll < 0.70) spawnMoonhalo();
+        else if (roll < 0.86) spawnFog();
+        else spawnMeteor();
+      }
+      weatherTimer = setTimeout(fireWeather, 11000 + Math.random() * 8000);
+    };
+    weatherTimer = setTimeout(fireWeather, 4500 + Math.random() * 4500);
 
     // ── render loop ─────────────────────────────────────────────────
     const draw = (nowMs: number) => {
@@ -303,6 +499,9 @@ export default function Tide() {
         ctx.fillRect(sx * w, sy * h * 0.5, 1.2, 1.2);
       }
       ctx.globalAlpha = 1;
+
+      // meteor streaks sit above the sea, behind the mechanism
+      drawTideMeteors(ctx, weather, now);
 
       // ── sea: its level rises and falls with the computed tide ─────
       const meanSeaY = h * 0.64;
@@ -352,6 +551,17 @@ export default function Tide() {
       ctx.moveTo(0, waterY);
       ctx.lineTo(w, waterY);
       ctx.stroke();
+
+      // ── tideline naturals (persistent) and boat/fog weather ─────
+      // Naturals live between the high-tide and low-tide marks; a
+      // shell placed higher up is only exposed when the water pulls
+      // back far enough. This is the whole gameplay of /tide made
+      // literal: play the moon, expose the beach.
+      drawTideNaturals(ctx, naturals, waterY, meanSeaY, swing, w, h, t);
+      // Boat lantern floats on the horizon at the sea surface.
+      drawTideBoat(ctx, weather, now, w, h, waterY);
+      // Fog roll drifts across the sea over ~40s.
+      drawTideFog(ctx, weather, now, w, h);
 
       // ── tide staff: a shore ruler with HIGH / MEAN / LOW + float ──
       const staffX = w < 620 ? 30 : 52;
@@ -515,6 +725,9 @@ export default function Tide() {
       ctx.arc(mx, my, moonR, 0, TAU);
       ctx.stroke();
 
+      // Moon halo weather event: soft cool ring around the moon
+      drawTideMoonhalo(ctx, weather, now, mx, my, moonR);
+
       // publish geometry for hit-testing
       geomRef.current = {
         earth: { x: ex, y: ey, r: earthR },
@@ -591,6 +804,15 @@ export default function Tide() {
       ctx.quadraticCurveTo(candleX - 2.6 + leanX * 0.6, candleBaseY - candleH - 13, candleX, candleBaseY - candleH - 9);
       ctx.fill();
 
+      // Firefly weather event: a tiny warm speck loops near the candle
+      drawTideFirefly(ctx, weather, now, candleX, candleBaseY - candleH - 18);
+
+      // periodic naturals save so drift/plant survives a hard reload
+      if (naturals.length > 0 && nowMs - lastNaturalsSaveAt > 4000) {
+        lastNaturalsSaveAt = nowMs;
+        persistNaturals();
+      }
+
       // ── events: tide-band + spring crossings drive haptics/bell ───
       const band: "high" | "mid" | "low" = tideN > 0.55 ? "high" : tideN < -0.55 ? "low" : "mid";
       if (band !== tideBandRef.current) {
@@ -635,6 +857,9 @@ export default function Tide() {
 
     return () => {
       cancelAnimationFrame(raf);
+      if (weatherTimer) clearTimeout(weatherTimer);
+      if (plantTimer) clearTimeout(plantTimer);
+      persistNaturals();
       window.removeEventListener("resize", resize);
       mq.removeEventListener?.("change", onMq);
       cv.removeEventListener("pointerdown", onDown);
@@ -964,4 +1189,288 @@ export default function Tide() {
       />
     </div>
   );
+}
+
+// ── tideline naturals ──────────────────────────────────────────────
+// A shell/starfish sitting at (nx, ny_tide) is exposed when the water
+// line is drawn below it (larger y). When the tide covers it, we still
+// render but at reduced alpha with a bluish tint to read as "under
+// water" — the shell hasn't moved, just been submerged.
+type TideNaturalLite = {
+  id: string;
+  kind: string;
+  nx: number;
+  ny: number;
+  seed: number;
+};
+function drawTideNaturals(
+  ctx: CanvasRenderingContext2D,
+  naturals: TideNaturalLite[],
+  waterY: number,
+  meanSeaY: number,
+  swing: number,
+  w: number,
+  _h: number,
+  t: number,
+) {
+  if (naturals.length === 0) return;
+  const hiY = meanSeaY - swing;
+  const loY = meanSeaY + swing;
+  const bandH = loY - hiY;
+  ctx.save();
+  for (const n of naturals) {
+    const sx = n.nx * w;
+    let sy: number;
+    let alpha = 1;
+    let tinted = false;
+    if (n.kind === "driftwood") {
+      // Driftwood floats on the surface; it's always visible AT the waterline.
+      sy = waterY - 3 + Math.sin(t * 0.9 + n.seed * 0.001) * 1.2;
+    } else {
+      // Shells/starfish are anchored to their ny in the tide band.
+      sy = hiY + n.ny * bandH;
+      const covered = sy > waterY;
+      if (covered) {
+        // depth below waterline in swing units
+        const depth = Math.min(1, (sy - waterY) / swing);
+        alpha = 1 - depth * 0.75;
+        tinted = true;
+      }
+    }
+    ctx.globalAlpha = alpha;
+    switch (n.kind) {
+      case "seashell": drawTideSeashell(ctx, sx, sy, 5 + (1 - n.ny) * 3, n.seed, tinted); break;
+      case "starfish": drawTideStarfish(ctx, sx, sy, 6 + (1 - n.ny) * 3, n.seed, tinted); break;
+      case "driftwood": drawTideDriftwood(ctx, sx, sy, 22 + (1 - n.ny) * 12, n.seed); break;
+    }
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+function drawTideSeashell(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, seed: number, tinted: boolean) {
+  const rot = Math.sin(seed * 0.017) * 0.9;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(rot);
+  ctx.fillStyle = tinted ? "rgba(80, 130, 180, 0.55)" : "rgba(246, 218, 190, 0.94)";
+  ctx.beginPath();
+  ctx.moveTo(-r, 0);
+  ctx.quadraticCurveTo(0, -r * 1.5, r, 0);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = tinted ? "rgba(160, 200, 230, 0.6)" : "rgba(190, 132, 90, 0.6)";
+  ctx.lineWidth = 0.7;
+  for (let i = 1; i < 6; i++) {
+    const ang = -Math.PI + (i / 6) * Math.PI;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(Math.cos(ang) * r * 0.9, Math.sin(ang) * r * 0.85);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawTideStarfish(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, seed: number, tinted: boolean) {
+  const rot = Math.sin(seed * 0.011) * Math.PI;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(rot);
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const ang = (i / 10) * Math.PI * 2 - Math.PI / 2;
+    const rad = i % 2 === 0 ? r : r * 0.42;
+    const px = Math.cos(ang) * rad;
+    const py = Math.sin(ang) * rad;
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  ctx.fillStyle = tinted ? "rgba(90, 140, 190, 0.6)" : "rgba(220, 148, 76, 0.94)";
+  ctx.fill();
+  ctx.strokeStyle = tinted ? "rgba(180, 210, 240, 0.55)" : "rgba(120, 62, 32, 0.55)";
+  ctx.lineWidth = 0.7;
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawTideDriftwood(ctx: CanvasRenderingContext2D, x: number, y: number, len: number, seed: number) {
+  const rot = Math.sin(seed * 0.021) * 0.4;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(rot);
+  const g = ctx.createLinearGradient(0, -3, 0, 3);
+  g.addColorStop(0, "rgba(214, 196, 168, 0.94)");
+  g.addColorStop(1, "rgba(120, 92, 72, 0.9)");
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, len * 0.5, 2.8, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(96, 68, 46, 0.55)";
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i < 3; i++) {
+    const gy = -1.2 + i;
+    ctx.beginPath();
+    ctx.moveTo(-len * 0.42, gy);
+    ctx.lineTo(len * 0.42, gy + Math.sin(seed + i) * 0.6);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// ── tide weather event drawing ─────────────────────────────────────
+type TideWeatherLite =
+  | { kind: "meteor"; t0: number; duration: number; x0: number; y0: number; x1: number; y1: number }
+  | { kind: "moonhalo"; t0: number; duration: number }
+  | { kind: "fog"; t0: number; duration: number; dir: 1 | -1; density: number }
+  | { kind: "boat"; t0: number; duration: number; dir: 1 | -1; yOffset: number }
+  | { kind: "firefly"; t0: number; duration: number; seed: number };
+
+function drawTideMeteors(ctx: CanvasRenderingContext2D, events: TideWeatherLite[], now: number) {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    const age = (now - e.t0) / 1000;
+    if (age >= e.duration) {
+      if (e.kind === "meteor") events.splice(i, 1);
+      continue;
+    }
+    if (e.kind !== "meteor") continue;
+    const f = age / e.duration;
+    const headX = e.x0 + (e.x1 - e.x0) * f;
+    const headY = e.y0 + (e.y1 - e.y0) * f;
+    const tailF = Math.max(0, f - 0.4);
+    const tailX = e.x0 + (e.x1 - e.x0) * tailF;
+    const tailY = e.y0 + (e.y1 - e.y0) * tailF;
+    const alpha = Math.max(0, 1 - Math.abs(f - 0.5) * 1.4);
+    const g = ctx.createLinearGradient(tailX, tailY, headX, headY);
+    g.addColorStop(0, "rgba(255, 240, 210, 0)");
+    g.addColorStop(1, `rgba(255, 244, 220, ${alpha})`);
+    ctx.strokeStyle = g;
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(tailX, tailY);
+    ctx.lineTo(headX, headY);
+    ctx.stroke();
+    ctx.fillStyle = `rgba(255, 250, 230, ${alpha})`;
+    ctx.beginPath();
+    ctx.arc(headX, headY, 1.6, 0, TAU);
+    ctx.fill();
+  }
+}
+
+function drawTideMoonhalo(ctx: CanvasRenderingContext2D, events: TideWeatherLite[], now: number, mx: number, my: number, moonR: number) {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    const age = (now - e.t0) / 1000;
+    if (age >= e.duration) {
+      if (e.kind === "moonhalo") events.splice(i, 1);
+      continue;
+    }
+    if (e.kind !== "moonhalo") continue;
+    const f = age / e.duration;
+    const env = Math.sin(Math.PI * f);
+    const alpha = env * 0.28;
+    if (alpha < 0.005) continue;
+    const rInner = moonR * 2.4;
+    const rOuter = moonR * 3.8;
+    const g = ctx.createRadialGradient(mx, my, rInner, mx, my, rOuter);
+    g.addColorStop(0, `rgba(220, 232, 252, ${alpha})`);
+    g.addColorStop(0.6, `rgba(200, 218, 248, ${alpha * 0.4})`);
+    g.addColorStop(1, "rgba(200, 218, 248, 0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(mx, my, rOuter, 0, TAU);
+    ctx.fill();
+  }
+}
+
+function drawTideFog(ctx: CanvasRenderingContext2D, events: TideWeatherLite[], now: number, w: number, h: number) {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    const age = (now - e.t0) / 1000;
+    if (age >= e.duration) {
+      if (e.kind === "fog") events.splice(i, 1);
+      continue;
+    }
+    if (e.kind !== "fog") continue;
+    const f = age / e.duration;
+    // fade in over first 20%, hold, fade out over last 20%
+    const env = f < 0.2 ? f / 0.2 : f > 0.8 ? 1 - (f - 0.8) / 0.2 : 1;
+    const alpha = env * e.density * 0.24;
+    if (alpha < 0.005) continue;
+    // fog spans a broad band that drifts horizontally across the sea
+    const fogY = h * 0.5;
+    const fogH = h * 0.4;
+    const drift = (f - 0.5) * w * 1.8 * e.dir;
+    const g = ctx.createLinearGradient(0, fogY, 0, fogY + fogH);
+    g.addColorStop(0, `rgba(220, 230, 236, 0)`);
+    g.addColorStop(0.4, `rgba(220, 230, 236, ${alpha})`);
+    g.addColorStop(1, `rgba(220, 230, 236, 0)`);
+    ctx.save();
+    ctx.translate(drift, 0);
+    ctx.fillStyle = g;
+    ctx.fillRect(-w * 0.5, fogY, w * 2, fogH);
+    ctx.restore();
+  }
+}
+
+function drawTideBoat(ctx: CanvasRenderingContext2D, events: TideWeatherLite[], now: number, w: number, _h: number, waterY: number) {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    const age = (now - e.t0) / 1000;
+    if (age >= e.duration) {
+      if (e.kind === "boat") events.splice(i, 1);
+      continue;
+    }
+    if (e.kind !== "boat") continue;
+    const f = age / e.duration;
+    const x = e.dir > 0 ? -30 + f * (w + 60) : w + 30 - f * (w + 60);
+    const y = waterY + e.yOffset;
+    const env = Math.sin(Math.PI * f);
+    // warm pinprick lantern with a soft halo
+    const halo = ctx.createRadialGradient(x, y, 0, x, y, 18);
+    halo.addColorStop(0, `rgba(255, 200, 120, ${0.7 * env})`);
+    halo.addColorStop(1, "rgba(255, 200, 120, 0)");
+    ctx.fillStyle = halo;
+    ctx.beginPath();
+    ctx.arc(x, y, 18, 0, TAU);
+    ctx.fill();
+    ctx.fillStyle = `rgba(255, 232, 180, ${0.95 * env})`;
+    ctx.beginPath();
+    ctx.arc(x, y, 1.6, 0, TAU);
+    ctx.fill();
+  }
+}
+
+function drawTideFirefly(ctx: CanvasRenderingContext2D, events: TideWeatherLite[], now: number, cx: number, cy: number) {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    const age = (now - e.t0) / 1000;
+    if (age >= e.duration) {
+      if (e.kind === "firefly") events.splice(i, 1);
+      continue;
+    }
+    if (e.kind !== "firefly") continue;
+    const f = age / e.duration;
+    const env = Math.sin(Math.PI * f);
+    // firefly circles around the candle in a wobbly ellipse
+    const ang = e.seed + age * 2.4;
+    const rx = 34 + Math.sin(age * 1.7) * 6;
+    const ry = 18 + Math.cos(age * 2.1) * 4;
+    const x = cx + Math.cos(ang) * rx;
+    const y = cy + Math.sin(ang) * ry - 6;
+    const flicker = 0.5 + 0.5 * Math.sin(age * 22);
+    const alpha = env * (0.6 + flicker * 0.4);
+    const halo = ctx.createRadialGradient(x, y, 0, x, y, 9);
+    halo.addColorStop(0, `rgba(220, 255, 170, ${0.9 * alpha})`);
+    halo.addColorStop(1, "rgba(180, 240, 130, 0)");
+    ctx.fillStyle = halo;
+    ctx.beginPath();
+    ctx.arc(x, y, 9, 0, TAU);
+    ctx.fill();
+    ctx.fillStyle = `rgba(255, 255, 220, ${alpha})`;
+    ctx.beginPath();
+    ctx.arc(x, y, 1.2, 0, TAU);
+    ctx.fill();
+  }
 }
