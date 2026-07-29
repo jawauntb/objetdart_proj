@@ -42,6 +42,10 @@ const DESKTOP_CROSSFADE_MS = 880;
 const DRAG_THRESHOLD_PX = 14;
 const EDGE_TRAVEL_RATIO = 0.15;
 const GESTURE_SUPPRESS_MS = 280;
+// Long-press planting: hold on the map for ATLAS_PLANT_MS to leave a
+// natural (mostly a cairn, sometimes a wildflower, rarely an animal
+// trail). Threshold matches Ocean.tsx so gestures feel consistent.
+const ATLAS_PLANT_MS = 1800;
 
 type Direction = "north" | "east" | "south" | "west";
 type GenerationMode = "generate" | "zoom" | "refine" | "shift";
@@ -240,6 +244,33 @@ function MapMark({ kind }: { kind: MarkKind }) {
   return <RouteSigil kind={MARK_SIGILS[kind]} size={24} />;
 }
 
+// ── living-atlas atmosphere types ───────────────────────────────
+// Naturals ride the map plane (positions are normalized to the plane's
+// dimensions), so a cairn placed on a coastline stays on that coastline
+// as the user pans and zooms. Weather events are frame-relative — the
+// sky belongs to the viewport, not the terrain — modelled after the
+// Ocean weather scheduler.
+type AtlasNaturalKind = "cairn" | "flower" | "trail";
+type AtlasNatural = {
+  id: string;
+  kind: AtlasNaturalKind;
+  nx: number;
+  ny: number;
+  seed: number;
+  createdAt: number;
+  lastSeen: number;
+  // For "trail" kind only: a short arc of small offsets from (nx, ny)
+  // in normalized map coords, so the whole path scales with the plane.
+  trail?: Array<{ dx: number; dy: number }>;
+};
+type AtlasWeatherEvent =
+  | { kind: "flock"; t0: number; duration: number; count: number; yBase: number; dir: 1 | -1; seed: number }
+  | { kind: "cloud"; t0: number; duration: number; y: number; dir: 1 | -1; radius: number; alpha: number }
+  | { kind: "gust"; t0: number; duration: number; y: number; dir: 1 | -1 }
+  | { kind: "sunbeam"; t0: number; duration: number; y: number; dir: 1 | -1 }
+  | { kind: "migration"; t0: number; duration: number; count: number; yBase: number; dir: 1 | -1; seed: number }
+  | { kind: "meteor"; t0: number; duration: number; x0: number; y0: number; dx: number; dy: number };
+
 type PointerPoint = { x: number; y: number };
 type DragGesture = {
   pointerId: number;
@@ -292,6 +323,12 @@ export default function Atlas() {
   const lastGestureAtRef = useRef(0);
   const edgeTravelLockRef = useRef(false);
   const activeNeighborDirectionRef = useRef<AtlasBatchDirection | null>(null);
+  // Living-atlas atmosphere: an overlay canvas that always redraws so the
+  // map has weather, cloud shadows drift over the land, and cairns/
+  // flowers/animal trails the user leaves survive across sessions.
+  const overlayRef = useRef<HTMLCanvasElement>(null);
+  const plantTimersRef = useRef(new Map<number, ReturnType<typeof setTimeout>>());
+  const addNaturalRef = useRef<((kind: AtlasNaturalKind, nx: number, ny: number) => void) | null>(null);
 
   const [metrics, setMetrics] = useState<MapMetrics>(EMPTY_METRICS);
   const [activeImage, setActiveImage] = useState(ORIGIN_MAP);
@@ -399,6 +436,14 @@ export default function Atlas() {
     inertiaRef.current = window.requestAnimationFrame(tick);
   };
 
+  // Ambient audio bed: compass drone + map-paper air. The atlas page
+  // route already sets this on mount; the redundant call here matches
+  // Ocean.tsx and covers the case where <Atlas /> is embedded outside
+  // its own page.
+  useEffect(() => {
+    try { getFieldAudio().setAmbientProfile("atlas"); } catch { /* noop */ }
+  }, []);
+
   useEffect(() => {
     const stage = stageRef.current;
     if (!stage) return;
@@ -434,6 +479,9 @@ export default function Atlas() {
   }, []);
 
   useEffect(() => {
+    // Snapshot the plant-timer map so the cleanup closes over the same
+    // instance the effect saw at mount (satisfies react-hooks/exhaustive-deps).
+    const plantTimers = plantTimersRef.current;
     return () => {
       abortRef.current?.abort();
       neighborAbortRef.current?.abort();
@@ -442,6 +490,312 @@ export default function Atlas() {
       if (revealRef.current !== null) window.clearTimeout(revealRef.current);
       if (regionSettleRef.current !== null) window.clearTimeout(regionSettleRef.current);
       if (zoomSettleRef.current !== null) window.clearTimeout(zoomSettleRef.current);
+      // Cancel any pending plant timers so an unmount mid-hold does not
+      // fire after the DOM is torn down.
+      plantTimers.forEach((id) => window.clearTimeout(id));
+      plantTimers.clear();
+    };
+  }, []);
+
+  // ── living-atlas RAF: weather, cloud shadows, breathing map ─────
+  // Why: the map used to be a static image between clicks; this loop
+  // makes the page always alive. Modelled on Ocean.tsx:750 fireWeather
+  // and its persistent naturals block. Slower cadence (12-20s) because
+  // a map is a calmer place than an open ocean.
+  useEffect(() => {
+    const stage = stageRef.current;
+    const overlay = overlayRef.current;
+    if (!stage || !overlay) return;
+    const ctx = overlay.getContext("2d");
+    if (!ctx) return;
+
+    // DPR-aware canvas sizing. A second ResizeObserver on the stage
+    // element runs alongside the metrics one above; each observer has a
+    // narrow concern and stays self-contained.
+    const resize = () => {
+      const rect = stage.getBoundingClientRect();
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      overlay.width = Math.max(1, Math.round(rect.width * dpr));
+      overlay.height = Math.max(1, Math.round(rect.height * dpr));
+      overlay.style.width = "100%";
+      overlay.style.height = "100%";
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    };
+    resize();
+    const ro = new ResizeObserver(resize);
+    ro.observe(stage);
+
+    // ── persistent naturals ──────────────────────────────────────
+    // Cairns the user stacked, wildflowers they planted, and rare
+    // animal trails crossing the ground. Positions are normalized in
+    // map-plane coordinates so they follow the terrain when the user
+    // pans and zooms. Global (not per-region) because the map itself
+    // reshapes on every generation — the terrain the cairn was placed
+    // on may no longer exist by the next visit. This is a limitation
+    // (a cairn from one continent shows on another) but keeps the
+    // user's marks continuous.
+    const NAT_KEY = "objetdart:atlas:naturals:v1";
+    const MAX_NATURALS = 32;
+    let naturals: AtlasNatural[] = [];
+    const loadNaturals = () => {
+      if (typeof window === "undefined") return;
+      try {
+        const raw = window.localStorage.getItem(NAT_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw) as unknown;
+        if (!Array.isArray(parsed)) return;
+        const nowMs = Date.now();
+        naturals = parsed
+          .filter((n): n is AtlasNatural =>
+            !!n && typeof (n as AtlasNatural).id === "string" &&
+            typeof (n as AtlasNatural).kind === "string" &&
+            typeof (n as AtlasNatural).nx === "number" &&
+            typeof (n as AtlasNatural).ny === "number",
+          )
+          .map((n) => ({ ...n, lastSeen: nowMs }))
+          .slice(-MAX_NATURALS);
+      } catch { /* noop */ }
+    };
+    const persistNaturals = () => {
+      if (typeof window === "undefined") return;
+      try {
+        const nowMs = Date.now();
+        for (const n of naturals) n.lastSeen = nowMs;
+        window.localStorage.setItem(NAT_KEY, JSON.stringify(naturals.slice(-MAX_NATURALS)));
+      } catch { /* noop */ }
+    };
+    // An animal trail is a short curved series of small footprints
+    // stored as offsets in normalized map coords — so the whole path
+    // scales with the plane when the user zooms.
+    const genTrail = (): Array<{ dx: number; dy: number }> => {
+      const heading = Math.random() * Math.PI * 2;
+      const count = 6 + Math.floor(Math.random() * 4);
+      const step = 0.010 + Math.random() * 0.008;
+      const curve = (Math.random() - 0.5) * 0.35;
+      const pts: Array<{ dx: number; dy: number }> = [];
+      let hx = 0;
+      let hy = 0;
+      let ang = heading;
+      for (let i = 0; i < count; i++) {
+        pts.push({ dx: hx, dy: hy });
+        ang += curve;
+        hx += Math.cos(ang) * step;
+        hy += Math.sin(ang) * step;
+      }
+      return pts;
+    };
+    const addNatural = (kind: AtlasNaturalKind, nx: number, ny: number) => {
+      const nowMs = Date.now();
+      const n: AtlasNatural = {
+        id: `nat-${nowMs}-${Math.random().toString(36).slice(2, 8)}`,
+        kind,
+        nx: Math.max(0.02, Math.min(0.98, nx)),
+        ny: Math.max(0.02, Math.min(0.98, ny)),
+        seed: Math.floor(Math.random() * 0xFFFFFFFF),
+        createdAt: nowMs,
+        lastSeen: nowMs,
+        trail: kind === "trail" ? genTrail() : undefined,
+      };
+      naturals.push(n);
+      while (naturals.length > MAX_NATURALS) naturals.shift();
+      persistNaturals();
+      return n;
+    };
+    loadNaturals();
+    // Bridge the addNatural closure to the pointer-down handler.
+    addNaturalRef.current = addNatural;
+
+    // ── ambient cloud shadows ────────────────────────────────────
+    // 4 soft gray radial gradients slowly drift W→E at slightly
+    // different speeds so the day visibly passes over the land.
+    type Cloud = { x: number; y: number; r: number; vx: number; alpha: number };
+    const clouds: Cloud[] = Array.from({ length: 4 }, () => ({
+      x: Math.random() * 1.4 - 0.2,
+      y: 0.08 + Math.random() * 0.74,
+      r: 0.16 + Math.random() * 0.10,
+      vx: 0.008 + Math.random() * 0.013, // fraction of viewport width per second
+      alpha: 0.04 + Math.random() * 0.05,
+    }));
+
+    // ── weather events ────────────────────────────────────────────
+    // Jittered self-rescheduling setTimeout. Six kinds, weighted so
+    // the common flocks/clouds show often and the meteor stays rare.
+    // Same shape as Ocean.tsx fireWeather.
+    const weather: AtlasWeatherEvent[] = [];
+    const addWeather = (e: AtlasWeatherEvent) => {
+      weather.push(e);
+      if (weather.length > 6) weather.shift();
+    };
+    const spawnFlock = () => {
+      addWeather({
+        kind: "flock",
+        t0: performance.now(),
+        duration: 14,
+        count: 5 + Math.floor(Math.random() * 5),
+        yBase: 0.10 + Math.random() * 0.25,
+        dir: Math.random() < 0.5 ? 1 : -1,
+        seed: Math.random() * 1000,
+      });
+    };
+    const spawnCloud = () => {
+      addWeather({
+        kind: "cloud",
+        t0: performance.now(),
+        duration: 12,
+        y: 0.15 + Math.random() * 0.55,
+        dir: Math.random() < 0.85 ? 1 : -1,
+        radius: 0.14 + Math.random() * 0.10,
+        alpha: 0.11 + Math.random() * 0.08,
+      });
+    };
+    const spawnGust = () => {
+      addWeather({
+        kind: "gust",
+        t0: performance.now(),
+        duration: 3,
+        y: 0.30 + Math.random() * 0.40,
+        dir: Math.random() < 0.5 ? 1 : -1,
+      });
+    };
+    const spawnSunbeam = () => {
+      addWeather({
+        kind: "sunbeam",
+        t0: performance.now(),
+        duration: 8,
+        y: 0.20 + Math.random() * 0.40,
+        dir: Math.random() < 0.5 ? 1 : -1,
+      });
+    };
+    const spawnMigration = () => {
+      addWeather({
+        kind: "migration",
+        t0: performance.now(),
+        duration: 22,
+        count: 15 + Math.floor(Math.random() * 11),
+        yBase: 0.06 + Math.random() * 0.14,
+        dir: Math.random() < 0.5 ? 1 : -1,
+        seed: Math.random() * 1000,
+      });
+    };
+    const spawnMeteor = () => {
+      const ang = 0.4 + Math.random() * 0.6;
+      const len = 0.15 + Math.random() * 0.10;
+      addWeather({
+        kind: "meteor",
+        t0: performance.now(),
+        duration: 1.2,
+        x0: Math.random() * 0.7,
+        y0: Math.random() * 0.15,
+        dx: Math.cos(ang) * len,
+        dy: Math.sin(ang) * len,
+      });
+    };
+    let weatherTimer: ReturnType<typeof setTimeout> | 0 = 0;
+    const fireWeather = () => {
+      if (!document.hidden) {
+        const roll = Math.random();
+        // weighted: flock 25, cloud 22, gust 18, sunbeam 18, migration 12, meteor 5.
+        // Atlas has no explicit day/night state — the meteor just fires
+        // at its natural rare cadence and reads as a shooting star
+        // across the sky over the land.
+        if (roll < 0.25) spawnFlock();
+        else if (roll < 0.47) spawnCloud();
+        else if (roll < 0.65) spawnGust();
+        else if (roll < 0.83) spawnSunbeam();
+        else if (roll < 0.95) spawnMigration();
+        else spawnMeteor();
+      }
+      weatherTimer = setTimeout(fireWeather, 12000 + Math.random() * 8000);
+    };
+    weatherTimer = setTimeout(fireWeather, 5000 + Math.random() * 4000);
+
+    // ── render loop ───────────────────────────────────────────────
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const t0 = performance.now();
+    let raf = 0;
+    let prevNow = t0;
+    let lastSaveAt = t0;
+
+    const draw = (now: number) => {
+      const rect = stage.getBoundingClientRect();
+      const w = rect.width;
+      const h = rect.height;
+      const dtSec = Math.min(0.1, (now - prevNow) / 1000);
+      prevNow = now;
+      const t = (now - t0) / 1000;
+
+      // Parallax breath — a very slow lung-scale (1..1.008) on the map
+      // image. Applied via a CSS custom property so we do NOT touch
+      // the plane's inline pan/zoom transform, which the drag/pinch
+      // handlers write to on every event.
+      if (!reduce) {
+        const breath = 1 + Math.sin(t * 0.05) * 0.008;
+        stage.style.setProperty("--atlas-breath", breath.toFixed(4));
+      }
+
+      ctx.clearRect(0, 0, w, h);
+
+      // ── ambient cloud shadows (always drifting) ─────────────────
+      for (const c of clouds) {
+        c.x += c.vx * dtSec;
+        if (c.x > 1.3) c.x = -0.3;
+        const cx = c.x * w;
+        const cy = c.y * h;
+        const rad = c.r * Math.min(w, h) * 1.8;
+        const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, rad);
+        g.addColorStop(0, `rgba(8, 14, 22, ${c.alpha})`);
+        g.addColorStop(1, "rgba(8, 14, 22, 0)");
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // ── weather events (transient, frame-relative) ──────────────
+      for (let i = weather.length - 1; i >= 0; i--) {
+        const e = weather[i];
+        const age = (now - e.t0) / 1000;
+        if (age >= e.duration) { weather.splice(i, 1); continue; }
+        drawAtlasWeather(ctx, e, age, w, h);
+      }
+
+      // ── naturals (map-anchored) ─────────────────────────────────
+      // Compute screen position from the current view + metrics so
+      // cairns and flowers pan and scale with the terrain. Size grows
+      // gently with sqrt(zoom) so they stay readable at all zoom
+      // levels without swallowing the frame at 30x.
+      const view = viewRef.current;
+      const m = metricsRef.current;
+      if (m.width > 0 && m.mapWidth > 0) {
+        const scale = Math.max(0.55, Math.min(3.5, Math.sqrt(view.zoom)));
+        const mapPxW = m.mapWidth * view.zoom;
+        const mapPxH = m.mapHeight * view.zoom;
+        for (const n of naturals) {
+          const sx = view.x + n.nx * mapPxW;
+          const sy = view.y + n.ny * mapPxH;
+          if (sx < -80 || sy < -80 || sx > w + 80 || sy > h + 80) continue;
+          drawAtlasNatural(ctx, n, sx, sy, scale, t, mapPxW, mapPxH);
+        }
+      }
+
+      // Periodic checkpoint so a hard refresh does not lose the cairn
+      // the user placed 30 seconds ago (unmount also flushes).
+      if (naturals.length > 0 && now - lastSaveAt > 4000) {
+        lastSaveAt = now;
+        persistNaturals();
+      }
+
+      raf = requestAnimationFrame(draw);
+    };
+    raf = requestAnimationFrame(draw);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      if (weatherTimer) clearTimeout(weatherTimer);
+      persistNaturals();
+      ro.disconnect();
+      stage.style.removeProperty("--atlas-breath");
+      addNaturalRef.current = null;
     };
   }, []);
 
@@ -1129,6 +1483,53 @@ export default function Atlas() {
         velocity: { x: 0, y: 0 },
       };
       pinchRef.current = null;
+      // Long-press plant: if the finger stays essentially still for
+      // ATLAS_PLANT_MS, leave a natural at that spot. Coexists with the
+      // existing tap/click/drag behavior because the timer is cancelled
+      // the moment the drag threshold is crossed (see onPointerMove) or
+      // the pointer lifts (see finishPointer).
+      const pid = event.pointerId;
+      const plantTimer = setTimeout(() => {
+        plantTimersRef.current.delete(pid);
+        const stageEl = stageRef.current;
+        const mNow = metricsRef.current;
+        const place = addNaturalRef.current;
+        if (!stageEl || !mNow.width || !place) return;
+        // Cancel if the pointer already lifted, or was reclassified as
+        // pinch/drag, or the hold happened during a busy generation.
+        if (!pointersRef.current.has(pid)) return;
+        if (dragRef.current?.moved || pinchZoomRef.current) return;
+        if (busy) return;
+        const startPt = pointerStartRef.current;
+        if (!startPt) return;
+        const view = viewRef.current;
+        const nx = (startPt.x - view.x) / (mNow.mapWidth * view.zoom);
+        const ny = (startPt.y - view.y) / (mNow.mapHeight * view.zoom);
+        if (!Number.isFinite(nx) || !Number.isFinite(ny)) return;
+        if (nx < 0 || ny < 0 || nx > 1 || ny > 1) return;
+        // Cairn is the default surprise; a wildflower shows up often
+        // enough to feel warm; a trail is a rare gift.
+        const roll = Math.random();
+        const kind: AtlasNaturalKind =
+          roll < 0.70 ? "cairn" :
+          roll < 0.95 ? "flower" :
+          "trail";
+        place(kind, nx, ny);
+        setPulse({ x: startPt.x, y: startPt.y, key: Date.now() });
+        setStatus(
+          kind === "cairn" ? "a cairn stands where you paused" :
+          kind === "flower" ? "a wildflower opens where you paused" :
+          "an animal trail crosses the ground",
+        );
+        try {
+          getFieldAudio().chime();
+          haptics.roll();
+        } catch {
+          // Sound and haptics are progressive enhancement.
+        }
+        recordTape("region", 0.68, "atlas/plant/" + kind);
+      }, ATLAS_PLANT_MS);
+      plantTimersRef.current.set(pid, plantTimer);
     } else if (pointersRef.current.size === 2) {
       beginFreeZoom();
       markGesture();
@@ -1140,6 +1541,10 @@ export default function Atlas() {
         view: { ...viewRef.current },
       };
       dragRef.current = null;
+      // A second finger arriving means the gesture is a pinch; cancel
+      // any pending plant so we do not drop a cairn mid-zoom.
+      plantTimersRef.current.forEach((id) => window.clearTimeout(id));
+      plantTimersRef.current.clear();
     }
   };
 
@@ -1173,7 +1578,16 @@ export default function Atlas() {
     const dx = point.x - drag.start.x;
     const dy = point.y - drag.start.y;
     if (Math.hypot(dx, dy) > DRAG_THRESHOLD_PX) {
-      if (!drag.moved) markGesture();
+      if (!drag.moved) {
+        markGesture();
+        // Moving past the drag threshold means this is not a hold; drop
+        // any pending plant timer for this finger.
+        const pending = plantTimersRef.current.get(event.pointerId);
+        if (pending != null) {
+          window.clearTimeout(pending);
+          plantTimersRef.current.delete(event.pointerId);
+        }
+      }
       drag.moved = true;
     }
     if (!drag.moved) return;
@@ -1200,6 +1614,14 @@ export default function Atlas() {
     const point = pointersRef.current.get(event.pointerId);
     const drag = dragRef.current;
     pointersRef.current.delete(event.pointerId);
+    // Whichever way the pointer leaves — clean lift, cancel, whatever —
+    // the plant timer for that finger has to go with it or a stale
+    // timeout would fire on a lifted pointer.
+    const pendingPlant = plantTimersRef.current.get(event.pointerId);
+    if (pendingPlant != null) {
+      window.clearTimeout(pendingPlant);
+      plantTimersRef.current.delete(event.pointerId);
+    }
     try {
       event.currentTarget.releasePointerCapture(event.pointerId);
     } catch {
@@ -1357,6 +1779,15 @@ export default function Atlas() {
           })}
         </div>
 
+        {/* Living-atlas overlay: cloud shadows, weather, and naturals.
+            Sits above the map plane but below the map UI (masthead,
+            edges, prompt). pointer-events: none so map clicks and drags
+            still land on the plane and its hotspots. */}
+        <canvas
+          ref={overlayRef}
+          className="living-atlas__overlay"
+          aria-hidden="true"
+        />
         <div className="living-atlas__shade" aria-hidden="true" />
         <div className="living-atlas__masthead" data-map-ui="true">
           <button
@@ -1469,6 +1900,21 @@ export default function Atlas() {
           pointer-events: none;
           user-select: none;
           filter: saturate(.96) contrast(1.07) brightness(.82);
+          /* Very slow lung-scale set per-frame by the RAF loop via the
+             --atlas-breath custom property on the stage. Composes on top
+             of the plane's pan/zoom transform so the map has quiet
+             motion even when nobody is touching it. */
+          transform: scale(var(--atlas-breath, 1));
+          transform-origin: center center;
+        }
+        .living-atlas__overlay {
+          position: absolute;
+          inset: 0;
+          z-index: 5;
+          width: 100%;
+          height: 100%;
+          pointer-events: none;
+          mix-blend-mode: normal;
         }
         .living-atlas__image--incoming {
           opacity: 0;
@@ -1749,8 +2195,264 @@ export default function Atlas() {
           .living-atlas__image--incoming { transition-duration: 1ms; }
           .living-atlas__diffusion span,
           .living-atlas__ripple { animation: none; }
+          /* The RAF loop already skips writing --atlas-breath when
+             reduced motion is set; this line makes any stale value
+             harmless. */
+          .living-atlas__image { transform: none; }
         }
       `}</style>
     </section>
   );
+}
+
+// ── living-atlas atmosphere helpers ──────────────────────────────
+// Weather events (frame-relative) and naturals (map-anchored) are
+// drawn on the overlay canvas by Atlas's RAF loop. Same helper-at-
+// bottom pattern as Ocean.tsx so the render loop above stays readable.
+
+/**
+ * A single weather event painted into the overlay canvas at its current
+ * age. Frame-relative — the sky belongs to the viewport, not the map —
+ * so a bird flock crosses the visible width regardless of pan/zoom.
+ */
+function drawAtlasWeather(
+  ctx: CanvasRenderingContext2D,
+  e: AtlasWeatherEvent,
+  age: number,
+  w: number,
+  h: number,
+) {
+  if (e.kind === "flock") {
+    // A skein of small V-silhouettes crossing the map. Ported from
+    // Ocean.tsx drawWeatherSky seabirds and re-tinted for land.
+    const f = age / e.duration;
+    ctx.save();
+    ctx.strokeStyle = "rgba(22, 28, 40, 0.72)";
+    ctx.lineWidth = 1;
+    for (let b = 0; b < e.count; b++) {
+      const bf = b / e.count;
+      const p = f + bf * 0.06;
+      const bx = e.dir > 0 ? -30 + p * (w + 60) : w + 30 - p * (w + 60);
+      const by = e.yBase * h + Math.sin(e.seed + b * 1.7 + age * 0.9) * 4 + bf * 5;
+      const wing = 3 + Math.sin(age * 8 + b) * 1.4;
+      ctx.beginPath();
+      ctx.moveTo(bx - wing, by + wing * 0.4);
+      ctx.lineTo(bx, by);
+      ctx.lineTo(bx + wing, by + wing * 0.4);
+      ctx.stroke();
+    }
+    ctx.restore();
+    return;
+  }
+  if (e.kind === "cloud") {
+    // A bigger, darker cloud shadow than the ambient bed. Grows in,
+    // plateaus, and dissolves as it drifts across the frame.
+    const f = age / e.duration;
+    const grow = f < 0.15 ? f / 0.15 : f < 0.85 ? 1 : 1 - (f - 0.85) / 0.15;
+    const x = e.dir > 0 ? -0.15 + f * 1.30 : 1.15 - f * 1.30;
+    const cx = x * w;
+    const cy = e.y * h;
+    const rad = e.radius * Math.min(w, h) * 2.4;
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, rad);
+    g.addColorStop(0, `rgba(6, 10, 18, ${e.alpha * grow})`);
+    g.addColorStop(1, "rgba(6, 10, 18, 0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+  if (e.kind === "gust") {
+    // A thin, fast horizontal shimmer streak — wind moving over grass,
+    // but abstract. Additive so it reads like light, not a shadow.
+    const f = age / e.duration;
+    const grow = f < 0.2 ? f / 0.2 : f < 0.8 ? 1 : 1 - (f - 0.8) / 0.2;
+    const cx = (e.dir > 0 ? -0.2 + f * 1.4 : 1.2 - f * 1.4) * w;
+    const cy = e.y * h;
+    const streakW = w * 0.45;
+    const streakH = 22;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    const g = ctx.createLinearGradient(cx - streakW / 2, cy, cx + streakW / 2, cy);
+    const alpha = 0.10 * grow;
+    g.addColorStop(0.0, "rgba(240, 232, 200, 0)");
+    g.addColorStop(0.5, `rgba(240, 232, 200, ${alpha})`);
+    g.addColorStop(1.0, "rgba(240, 232, 200, 0)");
+    ctx.fillStyle = g;
+    ctx.fillRect(cx - streakW / 2, cy - streakH / 2, streakW, streakH);
+    ctx.restore();
+    return;
+  }
+  if (e.kind === "sunbeam") {
+    // A soft warm-tinted diagonal light patch sweeping across the map
+    // as if a cloud briefly parted. Additive.
+    const f = age / e.duration;
+    const grow = f < 0.25 ? f / 0.25 : f < 0.75 ? 1 : 1 - (f - 0.75) / 0.25;
+    const cx = (e.dir > 0 ? -0.1 + f * 1.20 : 1.10 - f * 1.20) * w;
+    const cy = e.y * h;
+    const beamW = w * 0.35;
+    const beamH = h * 0.55;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.translate(cx, cy);
+    ctx.rotate(0.35 * e.dir);
+    const g = ctx.createLinearGradient(-beamW / 2, 0, beamW / 2, 0);
+    const alpha = 0.14 * grow;
+    g.addColorStop(0.0, "rgba(255, 230, 168, 0)");
+    g.addColorStop(0.5, `rgba(255, 230, 168, ${alpha})`);
+    g.addColorStop(1.0, "rgba(255, 230, 168, 0)");
+    ctx.fillStyle = g;
+    ctx.fillRect(-beamW / 2, -beamH / 2, beamW, beamH);
+    ctx.restore();
+    return;
+  }
+  if (e.kind === "migration") {
+    // A much larger V of 15-25 birds traversing the whole width slowly.
+    // Row offset from the formation midpoint gives the classic V.
+    const f = age / e.duration;
+    ctx.save();
+    ctx.strokeStyle = "rgba(20, 26, 38, 0.78)";
+    ctx.lineWidth = 1;
+    for (let b = 0; b < e.count; b++) {
+      const bf = b / Math.max(1, e.count - 1);
+      const p = f - bf * 0.02;
+      if (p < 0 || p > 1.05) continue;
+      const bx = e.dir > 0 ? -40 + p * (w + 80) : w + 40 - p * (w + 80);
+      const rowY = e.yBase * h + Math.abs(bf - 0.5) * 20 + Math.sin(e.seed + b * 0.4 + age * 0.6) * 3;
+      const wing = 4 + Math.sin(age * 5 + b) * 1.5;
+      ctx.beginPath();
+      ctx.moveTo(bx - wing, rowY + wing * 0.5);
+      ctx.lineTo(bx, rowY);
+      ctx.lineTo(bx + wing, rowY + wing * 0.5);
+      ctx.stroke();
+    }
+    ctx.restore();
+    return;
+  }
+  if (e.kind === "meteor") {
+    // A brief bright streak across a small portion of the sky. Fires
+    // at the natural rare cadence; there is no explicit day/night on
+    // the atlas so it just reads as a shooting star.
+    const f = age / e.duration;
+    const headX = (e.x0 + e.dx * f) * w;
+    const headY = (e.y0 + e.dy * f) * h;
+    const tailX = (e.x0 + e.dx * Math.max(0, f - 0.08)) * w;
+    const tailY = (e.y0 + e.dy * Math.max(0, f - 0.08)) * h;
+    const alpha = Math.max(0, 1 - f);
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    const g = ctx.createLinearGradient(tailX, tailY, headX, headY);
+    g.addColorStop(0, "rgba(255, 240, 210, 0)");
+    g.addColorStop(1, `rgba(255, 250, 220, ${alpha * 0.9})`);
+    ctx.strokeStyle = g;
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(tailX, tailY);
+    ctx.lineTo(headX, headY);
+    ctx.stroke();
+    ctx.fillStyle = `rgba(255, 250, 220, ${alpha})`;
+    ctx.beginPath();
+    ctx.arc(headX, headY, 1.6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+/**
+ * A single natural (cairn, wildflower, or animal trail) painted at its
+ * screen position. Naturals are map-anchored: `sx`/`sy` are the screen
+ * pixels where (nx, ny) lands under the current pan/zoom; `scale` is a
+ * sqrt(zoom) factor so a cairn stays legible at zoom=1 without eating
+ * the frame at zoom=30. Trail offsets are in normalized map coords, so
+ * the whole path scales with the plane via `mapPxW`/`mapPxH`.
+ */
+function drawAtlasNatural(
+  ctx: CanvasRenderingContext2D,
+  n: AtlasNatural,
+  sx: number,
+  sy: number,
+  scale: number,
+  t: number,
+  mapPxW: number,
+  mapPxH: number,
+) {
+  if (n.kind === "cairn") {
+    // A small tan pile of stones — three warm-gray ellipses stacked
+    // with a soft ground shadow so it reads on a busy map.
+    ctx.save();
+    ctx.translate(sx, sy);
+    ctx.scale(scale, scale);
+    ctx.fillStyle = "rgba(20, 12, 8, 0.35)";
+    ctx.beginPath();
+    ctx.ellipse(0, 5, 10, 3, 0, 0, Math.PI * 2);
+    ctx.fill();
+    const stones = [
+      { y: 2, rx: 8, ry: 4, c: "rgba(180, 154, 118, 0.95)" },
+      { y: -4, rx: 6, ry: 3.4, c: "rgba(196, 168, 130, 0.94)" },
+      { y: -9, rx: 4, ry: 2.6, c: "rgba(214, 188, 148, 0.9)" },
+    ];
+    ctx.strokeStyle = "rgba(78, 60, 40, 0.35)";
+    ctx.lineWidth = 0.6;
+    for (const s of stones) {
+      ctx.fillStyle = s.c;
+      ctx.beginPath();
+      ctx.ellipse(0, s.y, s.rx, s.ry, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+    ctx.restore();
+    return;
+  }
+  if (n.kind === "flower") {
+    // A bright dot with 4-6 petals. Petal count and hue driven by seed
+    // for stable identity across renders. Sways very gently with time.
+    ctx.save();
+    ctx.translate(sx, sy);
+    ctx.scale(scale, scale);
+    const petals = 4 + (n.seed % 3);
+    const sway = Math.sin(t * 0.9 + n.seed * 0.01) * 0.05;
+    ctx.rotate(sway);
+    const hues: Array<[number, number, number]> = [
+      [246, 208, 96],
+      [240, 132, 108],
+      [196, 170, 232],
+      [236, 236, 228],
+    ];
+    const c = hues[n.seed % hues.length];
+    for (let i = 0; i < petals; i++) {
+      const ang = (i / petals) * Math.PI * 2;
+      const px = Math.cos(ang) * 4.5;
+      const py = Math.sin(ang) * 4.5;
+      ctx.fillStyle = `rgba(${c[0]}, ${c[1]}, ${c[2]}, 0.9)`;
+      ctx.beginPath();
+      ctx.ellipse(px, py, 3.4, 2.4, ang, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.fillStyle = "rgba(80, 54, 24, 0.95)";
+    ctx.beginPath();
+    ctx.arc(0, 0, 1.6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    return;
+  }
+  if (n.kind === "trail") {
+    // A short curved sequence of small tan-brown dots reading as an
+    // animal path across the region. Because offsets are in normalized
+    // map coords, the whole arc scales with the plane on zoom.
+    if (!n.trail || n.trail.length === 0) return;
+    ctx.save();
+    const dotRx = 2.4 * scale * 0.7;
+    const dotRy = 1.4 * scale * 0.7;
+    for (let i = 0; i < n.trail.length; i++) {
+      const p = n.trail[i];
+      const x = sx + p.dx * mapPxW;
+      const y = sy + p.dy * mapPxH;
+      const alpha = 0.42 + 0.35 * (1 - i / n.trail.length);
+      ctx.fillStyle = `rgba(122, 88, 58, ${alpha})`;
+      ctx.beginPath();
+      ctx.ellipse(x, y, dotRx, dotRy, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
 }
