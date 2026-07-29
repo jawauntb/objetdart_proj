@@ -271,8 +271,11 @@ const STORAGE_KEY = "objetdart:constellations:v1";
 const RANDOM_SUPERNOVA_MS = 18000;
 const DEFAULT_CAMERA: Camera = { panX: 0.5, panY: 0.5, zoom: 1 };
 /** Tap vs hold: only after this does a press become a black-hole accretion. */
-const HOLD_BH_MS = 720;
+const HOLD_BH_MS = 820;
+/** Wait before arming hold so a second finger can start a pinch cleanly. */
+const HOLD_ARM_DELAY_MS = 160;
 const PAN_MOVE_PX = 20;
+const NAV_SUPPRESS_MS = 420;
 
 // ── spectral palette ─────────────────────────────────────────────────
 // Approximate stellar locus colors (RGB 0..255). O/B blue, A white,
@@ -710,6 +713,9 @@ export default function Stars() {
   const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
   const pinchRef = useRef<{ dist: number; zoom: number } | null>(null);
   const holdTimerRef = useRef<number>(0);
+  /** True while pinch/wheel navigation owns the gesture — blocks star/BH commits. */
+  const navGestureRef = useRef(false);
+  const suppressCommitUntilRef = useRef(0);
   const milkyPulseRef = useRef<number>(0); // performance.now() of last MW click
   // hover flags also mirrored into refs so the RAF loop can read them cheaply
   const hoveredNebulaRef = useRef<number | null>(null);
@@ -835,19 +841,51 @@ export default function Stars() {
     applyCamera(next, true);
   }, [applyCamera]);
 
+  const clearHoldTimer = useCallback(() => {
+    if (holdTimerRef.current) {
+      window.clearTimeout(holdTimerRef.current);
+      holdTimerRef.current = 0;
+    }
+  }, []);
+
+  const abortTouchWell = useCallback((el?: HTMLCanvasElement | null) => {
+    clearHoldTimer();
+    const well = gravityWellRef.current;
+    if (well.pointerId != null && el) {
+      try { el.releasePointerCapture(well.pointerId); } catch { /* noop */ }
+    }
+    gravityWellRef.current = {
+      active: false,
+      x: well.x,
+      y: well.y,
+      t0: well.t0,
+      pointerId: null,
+      mass: 0,
+      mode: "pending",
+    };
+    pointerIntentRef.current = null;
+  }, [clearHoldTimer]);
+
+  const markNavGesture = useCallback(() => {
+    navGestureRef.current = true;
+    suppressCommitUntilRef.current = performance.now() + NAV_SUPPRESS_MS;
+  }, []);
+
   const zoomIn = useCallback(() => {
+    markNavGesture();
     zoomBy(ZOOM_STEP);
     haptics.ripple(0.38);
     markSky("deeper in", "nebula", 0.38, "object", "zoom-in");
     try { getFieldAudio().chime(); } catch { /* noop */ }
-  }, [markSky, zoomBy]);
+  }, [markNavGesture, markSky, zoomBy]);
 
   const zoomOut = useCallback(() => {
+    markNavGesture();
     zoomBy(-ZOOM_STEP);
     haptics.tap();
     markSky("wider field", "star", 0.34, "object", "zoom-out");
     try { getFieldAudio().spark(); } catch { /* noop */ }
-  }, [markSky, zoomBy]);
+  }, [markNavGesture, markSky, zoomBy]);
 
   const persistCosmicMemory = useCallback((
     born: BornStar[] = bornStarsRef.current,
@@ -3112,22 +3150,24 @@ export default function Stars() {
       const y = e.clientY - rect.top;
       pointersRef.current.set(e.pointerId, { x, y });
 
-      if (pointersRef.current.size === 2) {
+      // Second finger = pinch/zoom owns the gesture. Never birth or swallow.
+      if (pointersRef.current.size >= 2) {
         const pts = [...pointersRef.current.values()];
         const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
         pinchRef.current = { dist: Math.max(1, dist), zoom: cameraRef.current.zoom };
-        gravityWellRef.current.active = false;
-        gravityWellRef.current.mode = "pending";
-        if (holdTimerRef.current) {
-          window.clearTimeout(holdTimerRef.current);
-          holdTimerRef.current = 0;
-        }
+        markNavGesture();
+        abortTouchWell(e.currentTarget);
         return;
       }
 
       if (e.button === 2) {
         const savedId = findSavedAt(x, y);
         if (savedId) deleteSaved(savedId);
+        return;
+      }
+
+      // Fresh single-finger press after nav: ignore until suppress window ends.
+      if (performance.now() < suppressCommitUntilRef.current || navGestureRef.current) {
         return;
       }
 
@@ -3161,19 +3201,31 @@ export default function Stars() {
         mass: 0,
         mode: "pending",
       };
-      if (holdTimerRef.current) window.clearTimeout(holdTimerRef.current);
+      // Do NOT capture yet — capture steals the second finger and breaks pinch zoom.
+      clearHoldTimer();
       const pointerId = e.pointerId;
       holdTimerRef.current = window.setTimeout(() => {
+        // Still only one finger? Arm the real hold clock.
+        if (pointersRef.current.size !== 1) return;
+        if (navGestureRef.current) return;
         const well = gravityWellRef.current;
         if (!well.active || well.pointerId !== pointerId || well.mode !== "pending") return;
-        well.mode = "accrete";
-        well.mass = 0.05;
-        haptics.roll();
-        markSky("horizon opening", "gravity", 0.42, "sigil", "accrete-start", false);
-      }, HOLD_BH_MS);
-      try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* noop */ }
+        holdTimerRef.current = window.setTimeout(() => {
+          if (pointersRef.current.size !== 1 || navGestureRef.current) return;
+          const w2 = gravityWellRef.current;
+          if (!w2.active || w2.pointerId !== pointerId || w2.mode !== "pending") return;
+          w2.mode = "accrete";
+          w2.mass = 0.05;
+          try {
+            const canvas = fgRef.current;
+            if (canvas) canvas.setPointerCapture(pointerId);
+          } catch { /* noop */ }
+          haptics.roll();
+          markSky("horizon opening", "gravity", 0.42, "sigil", "accrete-start", false);
+        }, Math.max(0, HOLD_BH_MS - HOLD_ARM_DELAY_MS));
+      }, HOLD_ARM_DELAY_MS);
     },
-    [findStarAt, findSavedAt, findNebulaAt, isInMilkyWay, deleteSaved, cancelPending, markSky],
+    [abortTouchWell, cancelPending, clearHoldTimer, deleteSaved, findNebulaAt, findSavedAt, findStarAt, isInMilkyWay, markNavGesture, markSky],
   );
 
   const onPointerMove = useCallback(
@@ -3185,11 +3237,18 @@ export default function Stars() {
         pointersRef.current.set(e.pointerId, { x, y });
       }
 
-      // pinch zoom
-      if (pointersRef.current.size >= 2 && pinchRef.current) {
+      // pinch zoom — never create matter while navigating
+      if (pointersRef.current.size >= 2) {
+        markNavGesture();
+        abortTouchWell(e.currentTarget);
+        if (!pinchRef.current) {
+          const pts = [...pointersRef.current.values()];
+          const dist = Math.max(1, Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y));
+          pinchRef.current = { dist, zoom: cameraRef.current.zoom };
+        }
         const pts = [...pointersRef.current.values()];
         const dist = Math.max(1, Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y));
-        const scale = dist / pinchRef.current.dist;
+        const scale = dist / Math.max(1, pinchRef.current.dist);
         const midX = (pts[0].x + pts[1].x) * 0.5;
         const midY = (pts[0].y + pts[1].y) * 0.5;
         const ww = window.innerWidth;
@@ -3197,6 +3256,8 @@ export default function Stars() {
         applyCamera(zoomAtScreen(cameraRef.current, midX, midY, pinchRef.current.zoom * scale, ww, wh), true);
         return;
       }
+
+      if (navGestureRef.current) return;
 
       const well = gravityWellRef.current;
       if (well.active && well.pointerId === e.pointerId) {
@@ -3207,10 +3268,8 @@ export default function Stars() {
         if (well.mode !== "pan" && move > PAN_MOVE_PX) {
           well.mode = "pan";
           well.mass = 0;
-          if (holdTimerRef.current) {
-            window.clearTimeout(holdTimerRef.current);
-            holdTimerRef.current = 0;
-          }
+          clearHoldTimer();
+          try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* noop */ }
         }
         if (well.mode === "pan") {
           const ww = window.innerWidth;
@@ -3221,7 +3280,7 @@ export default function Stars() {
         } else {
           well.x = x;
           well.y = y;
-          if (held >= HOLD_BH_MS) {
+          if (well.mode === "accrete" && held >= HOLD_BH_MS) {
             // Longer hold → wider / heavier horizon.
             well.mass = Math.min(3.2, (held - HOLD_BH_MS) / 1600);
             const sky = screenToSky(x, y);
@@ -3252,25 +3311,36 @@ export default function Stars() {
       setHoveredNebula(findNebulaAt(x, y));
       setHoveredMilkyWay(isInMilkyWay(x, y));
     },
-    [applyCamera, findSavedAt, findNebulaAt, isInMilkyWay, markSky, screenToSky],
+    [abortTouchWell, applyCamera, clearHoldTimer, findSavedAt, findNebulaAt, isInMilkyWay, markNavGesture, screenToSky],
   );
 
   const endPointer = useCallback((e: React.PointerEvent<HTMLCanvasElement>, commit: boolean) => {
     pointersRef.current.delete(e.pointerId);
+    clearHoldTimer();
+
+    const wasNav = navGestureRef.current || pinchRef.current != null
+      || performance.now() < suppressCommitUntilRef.current;
+
     if (pointersRef.current.size < 2) pinchRef.current = null;
-    if (holdTimerRef.current) {
-      window.clearTimeout(holdTimerRef.current);
-      holdTimerRef.current = 0;
+    if (pointersRef.current.size === 0) {
+      if (navGestureRef.current || wasNav) {
+        suppressCommitUntilRef.current = performance.now() + NAV_SUPPRESS_MS;
+      }
+      navGestureRef.current = false;
     }
 
     const well = gravityWellRef.current;
-    if (well.pointerId !== e.pointerId) return;
+    if (well.pointerId !== e.pointerId) {
+      try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* noop */ }
+      return;
+    }
 
     const held = performance.now() - well.t0;
     const intent = pointerIntentRef.current;
     const move = intent ? Math.hypot(well.x - intent.x, well.y - intent.y) : 0;
+    const allowCommit = commit && !wasNav;
 
-    if (commit) {
+    if (allowCommit) {
       if (well.mode === "pan") {
         // pan complete — quiet
       } else if (well.mode === "accrete") {
@@ -3313,7 +3383,7 @@ export default function Stars() {
     gravityWellRef.current.mode = "pending";
     pointerIntentRef.current = null;
     try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* noop */ }
-  }, [birthStarAt, markSky, releaseAccretion, spawnStarForm, supernovaAt]);
+  }, [birthStarAt, clearHoldTimer, markSky, releaseAccretion, spawnStarForm, supernovaAt]);
 
   const onPointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
     endPointer(e, true);
@@ -3446,8 +3516,15 @@ export default function Stars() {
       const target = e.target as HTMLElement | null;
       if (!target?.closest?.(".stars-root")) return;
       e.preventDefault();
-      const delta = -Math.sign(e.deltaY) * (e.ctrlKey ? 0.18 : 0.35);
+      // Trackpad pinch / wheel zoom is navigation — never a black hole.
+      navGestureRef.current = true;
+      suppressCommitUntilRef.current = performance.now() + NAV_SUPPRESS_MS;
+      abortTouchWell(fgRef.current);
+      const delta = -Math.sign(e.deltaY) * (e.ctrlKey ? 0.22 : 0.4);
       zoomBy(delta * ZOOM_STEP * 0.55, e.clientX, e.clientY);
+      window.setTimeout(() => {
+        if (pointersRef.current.size === 0) navGestureRef.current = false;
+      }, NAV_SUPPRESS_MS);
     };
     window.addEventListener("wheel", onWheel, { passive: false });
     return () => {
@@ -3455,7 +3532,7 @@ export default function Stars() {
       window.clearInterval(autoId);
       window.removeEventListener("wheel", onWheel);
     };
-  }, [zoomBy]);
+  }, [abortTouchWell, zoomBy]);
 
   // ── black-hole mergers — hierarchical pairs + soft N-body dance ────
   // Closest pair inspirals; when it commits, the next queued pair can
@@ -3815,7 +3892,7 @@ export default function Stars() {
           pointerEvents: "none",
         }}
       >
-        tap to birth · hold for a black hole · drag to pan · pinch deeper
+        tap to birth · hold for a hole · drag to pan · pinch/trackpad to zoom
       </div>
 
       {/* delete-confirmation toast */}
