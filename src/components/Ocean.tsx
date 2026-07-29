@@ -50,6 +50,12 @@ export default function Ocean() {
   const [zone, setZone] = useState("surface");
   const [depthM, setDepthM] = useState(0);
 
+  // Ambient audio bed: brown noise + swell LFO. Kept alongside the /stars
+  // pattern so the room is never acoustically dead when the user arrives.
+  useEffect(() => {
+    try { getFieldAudio().setAmbientProfile("ocean"); } catch { /* noop */ }
+  }, []);
+
   useEffect(() => {
     const wrap = wrapRef.current;
     const water = waterRef.current;
@@ -402,6 +408,110 @@ export default function Ocean() {
       if (sparks.length > 24) sparks.shift();
     };
 
+    // ── persistent naturals ──────────────────────────────────────
+    // Things the ocean carries: seashells, kelp rafts, driftwood, starfish,
+    // sand dollars. They drift on their own, survive reload, and advance
+    // their position by the time elapsed while you were gone — so the
+    // ocean has been *doing something* between visits. Never man-made.
+    // Positions are normalized: nx in [0,1] across width, ny in [0,1]
+    // as depth-along-the-shore band (0 = far horizon, 1 = near foreground).
+    type NaturalKind = "seashell" | "kelp" | "driftwood" | "starfish" | "sanddollar";
+    type Natural = {
+      id: string;
+      kind: NaturalKind;
+      nx: number;
+      ny: number;       // band position along the receding sea
+      vx: number;       // drift, cycles per hour across the frame
+      seed: number;
+      createdAt: number;
+      lastSeen: number;
+    };
+    const NAT_KEY = "objetdart:ocean:naturals:v1";
+    const MAX_NATURALS = 24;
+    let naturals: Natural[] = [];
+    // Load persisted naturals; drift each by (now - lastSeen) so they've
+    // been carried by the current while the user was away.
+    const loadNaturals = () => {
+      if (typeof window === "undefined") return;
+      try {
+        const raw = localStorage.getItem(NAT_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw) as unknown;
+        if (!Array.isArray(parsed)) return;
+        const nowMs = Date.now();
+        naturals = parsed
+          .filter((n): n is Natural =>
+            !!n && typeof (n as Natural).id === "string" &&
+            typeof (n as Natural).kind === "string" &&
+            typeof (n as Natural).nx === "number" &&
+            typeof (n as Natural).ny === "number",
+          )
+          .map((n) => {
+            // advance drift for elapsed real time (cap at 12h so a natural
+            // that was placed weeks ago doesn't teleport across the sea)
+            const dtH = Math.min(12, Math.max(0, (nowMs - n.lastSeen) / 3600_000));
+            let nx = n.nx + (n.vx || 0) * dtH;
+            // wrap horizontally so nothing falls off the edge of the world
+            nx = ((nx % 1) + 1) % 1;
+            return { ...n, nx, lastSeen: nowMs };
+          })
+          .slice(-MAX_NATURALS);
+      } catch { /* noop */ }
+    };
+    const persistNaturals = () => {
+      if (typeof window === "undefined") return;
+      try {
+        const nowMs = Date.now();
+        for (const n of naturals) n.lastSeen = nowMs;
+        localStorage.setItem(NAT_KEY, JSON.stringify(naturals.slice(-MAX_NATURALS)));
+      } catch { /* noop */ }
+    };
+    const addNatural = (kind: NaturalKind, nx?: number, ny?: number) => {
+      const nowMs = Date.now();
+      const n: Natural = {
+        id: `nat-${nowMs}-${Math.random().toString(36).slice(2, 8)}`,
+        kind,
+        nx: nx != null ? Math.max(0.02, Math.min(0.98, nx)) : Math.random(),
+        ny: ny != null ? Math.max(0.05, Math.min(0.95, ny)) : 0.5 + Math.random() * 0.4,
+        // gentle prevailing drift: left→right at 0.02 cycles/hr for shells,
+        // slower for heavy driftwood; near-still for anchored starfish.
+        vx: kind === "starfish" ? 0
+          : kind === "sanddollar" ? 0.003
+          : kind === "driftwood" ? 0.012
+          : kind === "kelp" ? 0.006
+          : 0.020,
+        seed: Math.floor(Math.random() * 0xFFFFFFFF),
+        createdAt: nowMs,
+        lastSeen: nowMs,
+      };
+      naturals.push(n);
+      while (naturals.length > MAX_NATURALS) naturals.shift();
+      persistNaturals();
+      return n;
+    };
+    loadNaturals();
+
+    // ── weather events (autonomic, transient) ────────────────────
+    // Every 9-17s a jittered scheduler fires one of six natural events:
+    // distant lightning, a rogue wave, a seabird flock, a phosphor bloom,
+    // a breaching whale, or a "beachcomber's window" — a low tide moment
+    // that reveals a persistent seashell/sanddollar/starfish. Pattern
+    // borrowed from Stars.tsx:3005 so the ocean feels like a place, not
+    // an instrument.
+    type WeatherKind = "lightning" | "rogue" | "seabirds" | "phosphor" | "whale" | "beachcomber";
+    type WeatherEvent =
+      | { kind: "lightning"; t0: number; duration: number; x: number }
+      | { kind: "rogue"; t0: number; duration: number }
+      | { kind: "seabirds"; t0: number; duration: number; count: number; yBase: number; dir: 1 | -1; seed: number }
+      | { kind: "phosphor"; t0: number; duration: number; x: number; radius: number }
+      | { kind: "whale"; t0: number; duration: number; x: number; dir: 1 | -1 }
+      | { kind: "beachcomber"; t0: number; duration: number; x: number; y: number; revealed: NaturalKind };
+    const weather: WeatherEvent[] = [];
+    const addWeather = (e: WeatherEvent) => {
+      weather.push(e);
+      if (weather.length > 8) weather.shift();
+    };
+
     // ── crashing waves ────────────────────────────────────────────
     // Each gesture spawns a "crasher" — a claw wave that rises, peaks,
     // breaks, sheds spray, then dies. Some ride sideways so a swipe
@@ -461,8 +571,10 @@ export default function Ocean() {
     // per-finger hold timers + move trails so we can distinguish
     // tap / long-hold / swipe on pointerup.
     const holdTimers = new Map<number, ReturnType<typeof setTimeout>>();
+    const plantTimers = new Map<number, ReturnType<typeof setTimeout>>();
     const trails = new Map<number, Array<{ x: number; y: number; t: number }>>();
     const HOLD_MS = 780;
+    const PLANT_MS = 1800;
     const SWIPE_MIN_PX = 42;
     const SWIPE_MAX_MS = 480;
 
@@ -636,12 +748,49 @@ export default function Ocean() {
         useField.getState().recordTape("ripple", 0.9, "hold");
       }, HOLD_MS);
       holdTimers.set(e.pointerId, holdTimer);
+      // Long hold on the surface plants a natural at that spot. It then
+      // drifts on its own and survives across sessions.
+      const plantTimer = setTimeout(() => {
+        if (!pressed.has(e.pointerId)) return;
+        if (depthRef.current > 0.15) return; // only at the surface
+        const f = pressed.get(e.pointerId)!;
+        const wSurf = surf.clientWidth || 1;
+        const h0 = surf.clientHeight || 1;
+        const horizon0 = h0 * 0.15;
+        const seaSpan = h0 - horizon0;
+        // map screen y → ny band position (0 near horizon, 1 near foreground).
+        const ny = Math.max(0.05, Math.min(0.95, (f.y - horizon0) / seaSpan));
+        // seashell most likely (a beach yields shells first), then kelp,
+        // then driftwood; heavy things only rarely appear from a placement.
+        const roll = Math.random();
+        const kind: NaturalKind =
+          roll < 0.55 ? "seashell" :
+          roll < 0.80 ? "kelp" :
+          roll < 0.94 ? "driftwood" :
+          "starfish";
+        addNatural(kind, f.x / wSurf, ny);
+        addWeather({
+          kind: "beachcomber",
+          t0: performance.now(),
+          duration: 3.2,
+          x: f.x,
+          y: ny,
+          revealed: kind,
+        });
+        try { getFieldAudio().chime(); } catch { /* noop */ }
+        haptics.ripple(1);
+        useField.getState().recordTape("ripple", 1, "plant");
+      }, PLANT_MS);
+      plantTimers.set(e.pointerId, plantTimer);
       armSensors();
     };
     const onUp = (e: PointerEvent) => {
       const holdT = holdTimers.get(e.pointerId);
       if (holdT != null) clearTimeout(holdT);
       holdTimers.delete(e.pointerId);
+      const plantT = plantTimers.get(e.pointerId);
+      if (plantT != null) clearTimeout(plantT);
+      plantTimers.delete(e.pointerId);
       // classify swipe: was the movement fast + directional?
       const trail = trails.get(e.pointerId);
       if (trail && trail.length >= 2) {
@@ -741,6 +890,110 @@ export default function Ocean() {
     surf.addEventListener("pointerleave", onLeave);
     surf.addEventListener("wheel", onWheel, { passive: false });
 
+    // ── weather scheduler — the sea is never static, never chaotic ──
+    // Fires a random natural event every 9–17s with jitter. Six kinds,
+    // weighted so the common events (birds, phosphor) show often and the
+    // discoveries (beachcomber's window) feel rare. See Stars.tsx:3005 for
+    // the analog. Only runs at the surface — the deep dive is meant to be
+    // the user's own quiet.
+    let weatherTimer: ReturnType<typeof setTimeout> | 0 = 0;
+    const spawnLightning = () => {
+      const w0 = surf.clientWidth || 1;
+      addWeather({
+        kind: "lightning",
+        t0: performance.now(),
+        duration: 1.4,
+        x: w0 * (0.15 + Math.random() * 0.7),
+      });
+      try { getFieldAudio().thud(); } catch { /* noop */ }
+    };
+    const spawnRogue = () => {
+      const w0 = surf.clientWidth || 1;
+      const fromLeft = Math.random() < 0.6;
+      spawnCrasher({
+        x: fromLeft ? -60 : w0 + 60,
+        y: seaLevelPx(),
+        vx: (fromLeft ? 1 : -1) * (180 + Math.random() * 60),
+        size: 1.2 + Math.random() * 0.25,
+        dir: fromLeft ? 0.06 : Math.PI - 0.06,
+        duration: 3.2,
+        breakAt: 0.58,
+        kind: "ambient",
+      });
+      addWeather({ kind: "rogue", t0: performance.now(), duration: 3.2 });
+      try { getFieldAudio().playTone(80, 0.9); } catch { /* noop */ }
+    };
+    const spawnSeabirds = () => {
+      const h0 = surf.clientHeight || 1;
+      addWeather({
+        kind: "seabirds",
+        t0: performance.now(),
+        duration: 14,
+        count: 5 + Math.floor(Math.random() * 5),
+        yBase: h0 * (0.05 + Math.random() * 0.08),
+        dir: Math.random() < 0.5 ? 1 : -1,
+        seed: Math.random() * 1000,
+      });
+    };
+    const spawnPhosphor = () => {
+      const w0 = surf.clientWidth || 1;
+      addWeather({
+        kind: "phosphor",
+        t0: performance.now(),
+        duration: 5.5,
+        x: w0 * (0.15 + Math.random() * 0.7),
+        radius: 90 + Math.random() * 90,
+      });
+    };
+    const spawnWhale = () => {
+      const w0 = surf.clientWidth || 1;
+      addWeather({
+        kind: "whale",
+        t0: performance.now(),
+        duration: 3.4,
+        x: w0 * (0.2 + Math.random() * 0.6),
+        dir: Math.random() < 0.5 ? 1 : -1,
+      });
+      try { getFieldAudio().thud(); } catch { /* noop */ }
+    };
+    const spawnBeachcomber = () => {
+      // The rare one: the tide pulls back and reveals something that
+      // stays. Pick a natural kind biased toward the discoveries.
+      const roll = Math.random();
+      const kind: NaturalKind =
+        roll < 0.45 ? "seashell" :
+        roll < 0.72 ? "starfish" :
+        roll < 0.90 ? "sanddollar" :
+        "driftwood";
+      const w0 = surf.clientWidth || 1;
+      const cx = w0 * (0.18 + Math.random() * 0.64);
+      const cyBand = 0.55 + Math.random() * 0.35;
+      addNatural(kind, cx / w0, cyBand);
+      addWeather({
+        kind: "beachcomber",
+        t0: performance.now(),
+        duration: 4.2,
+        x: cx,
+        y: cyBand,
+        revealed: kind,
+      });
+      try { getFieldAudio().chime(); } catch { /* noop */ }
+    };
+    const fireWeather = () => {
+      if (!document.hidden && depthRef.current < 0.30) {
+        const roll = Math.random();
+        // weighted: seabirds 22, phosphor 20, lightning 18, rogue 16, whale 14, beachcomber 10
+        if (roll < 0.22) spawnSeabirds();
+        else if (roll < 0.42) spawnPhosphor();
+        else if (roll < 0.60) spawnLightning();
+        else if (roll < 0.76) spawnRogue();
+        else if (roll < 0.90) spawnWhale();
+        else spawnBeachcomber();
+      }
+      weatherTimer = setTimeout(fireWeather, 9000 + Math.random() * 8000);
+    };
+    weatherTimer = setTimeout(fireWeather, 4000 + Math.random() * 4000);
+
     // ── render loop ───────────────────────────────────────────────
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const motion = reduce ? 0 : 1;
@@ -750,6 +1003,9 @@ export default function Ocean() {
     let lastZone = "surface";
     let lastMReport = 0;
     let lastM = -1;
+    // periodic naturals persistence — the visible drift is applied per
+    // frame; without this the mutations only get written on unmount.
+    let lastNaturalsSaveAt = performance.now();
     const zoneOf = (d: number) =>
       d < 0.12 ? "surface" : d < 0.4 ? "epipelagic" : d < 0.7 ? "twilight" : "midnight";
     // a lower, darker chord as each zone is entered.
@@ -965,6 +1221,19 @@ export default function Ocean() {
       // ── draw + tick all live crashers ────────────────────────────
       drawCrashers(sctx, crashers, now, t, addRipple, addSpark);
 
+      // ── weather sky-layer (behind wave): lightning + seabirds ────
+      drawWeatherSky(sctx, weather, now, w, h, horizonY);
+
+      // ── naturals: shells, kelp, driftwood, starfish, sanddollars
+      // drift along the tideline. Draw behind the great wave so the
+      // hero composition still leads, but in front of foam so they're
+      // findable.
+      drawNaturals(sctx, naturals, now, t, w, h, horizonY);
+
+      // ── weather surface-layer (in front of wave): phosphor, whale,
+      //    rogue afterglow, beachcomber reveal shimmer ────────────
+      drawWeatherSurface(sctx, weather, now, w, h, horizonY);
+
       sctx.restore();
       }
 
@@ -1086,12 +1355,21 @@ export default function Ocean() {
         sctx.fill();
       }
 
+      // periodic naturals persistence
+      if (naturals.length > 0 && now - lastNaturalsSaveAt > 4000) {
+        lastNaturalsSaveAt = now;
+        persistNaturals();
+      }
+
       raf = requestAnimationFrame(draw);
     };
     raf = requestAnimationFrame(draw);
 
     return () => {
       cancelAnimationFrame(raf);
+      if (weatherTimer) clearTimeout(weatherTimer);
+      // final drift-checkpoint so re-entry advances from now.
+      persistNaturals();
       ro.disconnect();
       surf.removeEventListener("pointerdown", onDown);
       surf.removeEventListener("pointermove", onMove);
@@ -1889,5 +2167,427 @@ function drawCrashers(
 
     // avoid unused warning
     void seaH;
+  }
+}
+
+// ── persistent naturals ─────────────────────────────────────────────
+// Shells, kelp, driftwood, starfish, sand dollars. Each has a normalized
+// position (nx across width, ny as receding-band 0=horizon..1=foreground)
+// so a resize keeps them where they belong on the tideline. Drift a
+// per-frame amount along nx from vx (cycles/hour) so the sea visibly
+// carries them without input.
+type NaturalLite = {
+  id: string;
+  kind: string;
+  nx: number;
+  ny: number;
+  vx: number;
+  seed: number;
+  createdAt: number;
+  lastSeen: number;
+};
+function drawNaturals(
+  ctx: CanvasRenderingContext2D,
+  naturals: NaturalLite[],
+  now: number,
+  t: number,
+  w: number,
+  h: number,
+  horizonY: number,
+) {
+  if (naturals.length === 0) return;
+  // physics: drift each natural by dt seconds worth of vx (cycles/hr).
+  // Use a static ref on the function so we track dt across calls.
+  const staticFn = drawNaturals as unknown as { _prev?: number };
+  const nowSec = now / 1000;
+  const dt = staticFn._prev != null ? Math.min(0.1, nowSec - staticFn._prev) : 0;
+  staticFn._prev = nowSec;
+
+  const seaSpan = h - horizonY;
+  ctx.save();
+  for (const n of naturals) {
+    // drift
+    if (dt > 0 && n.vx !== 0) {
+      let nx = n.nx + n.vx * (dt / 3600);
+      nx = ((nx % 1) + 1) % 1;
+      n.nx = nx;
+    }
+    // screen position from band. Perspective: things at ny=0 (near
+    // horizon) are far away and smaller; ny=1 (foreground) larger.
+    const persp = 0.25 + n.ny * 0.75;
+    const sx = n.nx * w;
+    const sy = horizonY + Math.pow(n.ny, 0.85) * seaSpan;
+    // gentle vertical bob synced to swell so shells rise and fall on the water
+    const bob = Math.sin(t * 1.4 + n.seed * 0.001) * 1.6 * persp;
+    switch (n.kind) {
+      case "seashell": drawSeashell(ctx, sx, sy + bob, 6 + persp * 12, n.seed); break;
+      case "kelp":     drawKelp(ctx, sx, sy + bob, 40 + persp * 90, t, n.seed); break;
+      case "driftwood": drawDriftwood(ctx, sx, sy + bob, 30 + persp * 60, n.seed); break;
+      case "starfish": drawStarfish(ctx, sx, sy + bob, 6 + persp * 12, n.seed); break;
+      case "sanddollar": drawSandDollar(ctx, sx, sy + bob, 5 + persp * 10, n.seed); break;
+    }
+  }
+  ctx.restore();
+}
+
+function drawSeashell(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, seed: number) {
+  // A small ridged crescent — warm cream with a peach interior, thin
+  // ochre shadow beneath. Tiny enough to feel found, not placed.
+  const rot = Math.sin(seed * 0.017) * 0.9;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(rot);
+  // shadow
+  ctx.fillStyle = "rgba(20, 40, 60, 0.28)";
+  ctx.beginPath();
+  ctx.ellipse(1, r * 0.4, r * 1.02, r * 0.28, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // body — half-dome
+  const g = ctx.createRadialGradient(0, -r * 0.2, r * 0.1, 0, 0, r);
+  g.addColorStop(0.0, "rgba(255, 244, 224, 0.98)");
+  g.addColorStop(0.5, "rgba(246, 218, 190, 0.95)");
+  g.addColorStop(1.0, "rgba(212, 170, 140, 0.9)");
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.moveTo(-r, 0);
+  ctx.quadraticCurveTo(0, -r * 1.55, r, 0);
+  ctx.closePath();
+  ctx.fill();
+  // ridges — thin radial lines like a scallop
+  ctx.strokeStyle = "rgba(190, 132, 90, 0.55)";
+  ctx.lineWidth = 0.7;
+  const ridges = 7;
+  for (let i = 1; i < ridges; i++) {
+    const f = i / ridges;
+    const ang = -Math.PI + f * Math.PI;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(Math.cos(ang) * r * 0.92, Math.sin(ang) * r * 0.9);
+    ctx.stroke();
+  }
+  // rim highlight
+  ctx.strokeStyle = "rgba(255, 250, 236, 0.75)";
+  ctx.lineWidth = 0.8;
+  ctx.beginPath();
+  ctx.moveTo(-r, 0);
+  ctx.quadraticCurveTo(0, -r * 1.55, r, 0);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawKelp(ctx: CanvasRenderingContext2D, x: number, y: number, len: number, t: number, seed: number) {
+  // A single sinuous frond rising from the sea. Deep olive-green,
+  // rendered as a stroked spline with a couple of leaf-like widenings.
+  ctx.save();
+  ctx.translate(x, y);
+  const ph = seed * 0.013;
+  const sway = 0.35;
+  ctx.strokeStyle = "rgba(48, 82, 58, 0.86)";
+  ctx.lineCap = "round";
+  ctx.lineWidth = 2.4;
+  ctx.beginPath();
+  const steps = 14;
+  for (let i = 0; i <= steps; i++) {
+    const f = i / steps;
+    const py = -len * f;
+    const px = Math.sin(t * 0.8 + ph + f * 3.2) * len * sway * f;
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.stroke();
+  // leaves
+  ctx.fillStyle = "rgba(58, 96, 68, 0.72)";
+  for (let i = 3; i <= 12; i += 3) {
+    const f = i / steps;
+    const py = -len * f;
+    const px = Math.sin(t * 0.8 + ph + f * 3.2) * len * sway * f;
+    ctx.beginPath();
+    ctx.ellipse(px - 4, py, 6, 2.6, 0.3, 0, Math.PI * 2);
+    ctx.ellipse(px + 4, py + 2, 6, 2.6, -0.3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawDriftwood(ctx: CanvasRenderingContext2D, x: number, y: number, len: number, seed: number) {
+  // A weathered pale log lying across the swell, canted by seed.
+  const rot = Math.sin(seed * 0.021) * 0.7;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(rot);
+  // shadow
+  ctx.fillStyle = "rgba(20, 40, 60, 0.3)";
+  ctx.beginPath();
+  ctx.ellipse(0, 3, len * 0.55, 3, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // body
+  const g = ctx.createLinearGradient(0, -3, 0, 4);
+  g.addColorStop(0, "rgba(226, 208, 180, 0.98)");
+  g.addColorStop(0.5, "rgba(184, 158, 128, 0.96)");
+  g.addColorStop(1, "rgba(120, 92, 72, 0.94)");
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, len * 0.5, 3, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // grain
+  ctx.strokeStyle = "rgba(96, 68, 46, 0.55)";
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i < 4; i++) {
+    const gy = -1.5 + i;
+    ctx.beginPath();
+    ctx.moveTo(-len * 0.45, gy);
+    ctx.lineTo(len * 0.45, gy + Math.sin(seed + i) * 0.6);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawStarfish(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, seed: number) {
+  // A five-armed cushion star. Warm ochre with a paler dotted centre.
+  const rot = Math.sin(seed * 0.011) * Math.PI;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(rot);
+  ctx.fillStyle = "rgba(20, 40, 60, 0.28)";
+  ctx.beginPath();
+  ctx.arc(0.5, r * 0.35, r * 0.9, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const ang = (i / 10) * Math.PI * 2 - Math.PI / 2;
+    const rad = i % 2 === 0 ? r : r * 0.42;
+    const px = Math.cos(ang) * rad;
+    const py = Math.sin(ang) * rad;
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  const g = ctx.createRadialGradient(0, 0, r * 0.15, 0, 0, r);
+  g.addColorStop(0, "rgba(240, 174, 96, 0.98)");
+  g.addColorStop(1, "rgba(184, 108, 54, 0.94)");
+  ctx.fillStyle = g;
+  ctx.fill();
+  ctx.strokeStyle = "rgba(120, 62, 32, 0.6)";
+  ctx.lineWidth = 0.7;
+  ctx.stroke();
+  // pale bumps
+  ctx.fillStyle = "rgba(255, 232, 196, 0.6)";
+  for (let i = 0; i < 8; i++) {
+    const ang = (i / 8) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.arc(Math.cos(ang) * r * 0.35, Math.sin(ang) * r * 0.35, 0.6, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawSandDollar(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, seed: number) {
+  // A pale circle etched with a five-petal pattern — the mark of a
+  // sand dollar. Rare; appears from the beachcomber's window or when
+  // the user leaves one deliberately.
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(seed * 0.007);
+  ctx.fillStyle = "rgba(20, 40, 60, 0.3)";
+  ctx.beginPath();
+  ctx.arc(0.5, r * 0.3, r * 0.98, 0, Math.PI * 2);
+  ctx.fill();
+  const g = ctx.createRadialGradient(0, 0, r * 0.2, 0, 0, r);
+  g.addColorStop(0, "rgba(248, 234, 208, 0.98)");
+  g.addColorStop(1, "rgba(206, 184, 148, 0.94)");
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(0, 0, r, 0, Math.PI * 2);
+  ctx.fill();
+  // petal etching
+  ctx.strokeStyle = "rgba(148, 118, 80, 0.7)";
+  ctx.lineWidth = 0.7;
+  for (let i = 0; i < 5; i++) {
+    const ang = (i / 5) * Math.PI * 2 - Math.PI / 2;
+    const px = Math.cos(ang) * r * 0.55;
+    const py = Math.sin(ang) * r * 0.55;
+    ctx.beginPath();
+    ctx.ellipse(px, py, r * 0.28, r * 0.11, ang, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.beginPath();
+  ctx.arc(0, 0, r * 0.08, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+}
+
+// ── weather events ───────────────────────────────────────────────
+// Ephemeral acts of nature that fire on their own schedule so the sea
+// keeps happening between the user's touches. Two passes so the sky
+// weather sits behind the wave silhouette and the surface weather
+// (foam, glow) reads in front of it.
+type WeatherLite =
+  | { kind: "lightning"; t0: number; duration: number; x: number }
+  | { kind: "rogue"; t0: number; duration: number }
+  | { kind: "seabirds"; t0: number; duration: number; count: number; yBase: number; dir: number; seed: number }
+  | { kind: "phosphor"; t0: number; duration: number; x: number; radius: number }
+  | { kind: "whale"; t0: number; duration: number; x: number; dir: number }
+  | { kind: "beachcomber"; t0: number; duration: number; x: number; y: number; revealed: string };
+
+function drawWeatherSky(
+  ctx: CanvasRenderingContext2D,
+  events: WeatherLite[],
+  now: number,
+  w: number,
+  h: number,
+  horizonY: number,
+) {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    const age = (now - e.t0) / 1000;
+    if (age >= e.duration) { events.splice(i, 1); continue; }
+    if (e.kind === "lightning") {
+      // A flash within the first 200ms, then a soft afterglow.
+      const flash = age < 0.2 ? 1 - age / 0.2 : 0;
+      const glow = Math.max(0, 1 - age / e.duration) * 0.35;
+      const alpha = flash * 0.7 + glow;
+      if (alpha <= 0.01) continue;
+      const g = ctx.createRadialGradient(e.x, horizonY - 20, 0, e.x, horizonY - 20, w * 0.55);
+      g.addColorStop(0, `rgba(246, 244, 236, ${alpha})`);
+      g.addColorStop(0.4, `rgba(198, 214, 236, ${alpha * 0.5})`);
+      g.addColorStop(1, "rgba(90, 110, 148, 0)");
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, w, horizonY + 20);
+      // rare bolt in the first frame of the flash
+      if (age < 0.09) {
+        ctx.strokeStyle = `rgba(255, 250, 232, ${1 - age / 0.09})`;
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        let px = e.x;
+        let py = 4;
+        ctx.moveTo(px, py);
+        while (py < horizonY - 20) {
+          px += (Math.random() - 0.5) * 22;
+          py += 12 + Math.random() * 14;
+          ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+      }
+    } else if (e.kind === "seabirds") {
+      // A skein of V-shaped silhouettes traversing the sky. Each bird
+      // has a phase offset so the flock reads as a formation, not a
+      // marching line.
+      const f = age / e.duration;
+      ctx.strokeStyle = "rgba(38, 46, 60, 0.72)";
+      ctx.lineWidth = 1;
+      for (let b = 0; b < e.count; b++) {
+        const bf = b / e.count;
+        const p = f + bf * 0.06;
+        const bx = e.dir > 0 ? -30 + p * (w + 60) : w + 30 - p * (w + 60);
+        const by = e.yBase + Math.sin(e.seed + b * 1.7 + age * 0.9) * 4 + bf * 5;
+        const wing = 3 + Math.sin(age * 8 + b) * 1.4;
+        ctx.beginPath();
+        ctx.moveTo(bx - wing, by + wing * 0.4);
+        ctx.lineTo(bx, by);
+        ctx.lineTo(bx + wing, by + wing * 0.4);
+        ctx.stroke();
+      }
+    }
+  }
+}
+
+function drawWeatherSurface(
+  ctx: CanvasRenderingContext2D,
+  events: WeatherLite[],
+  now: number,
+  w: number,
+  h: number,
+  horizonY: number,
+) {
+  // Splice expired non-sky events here so the array doesn't grow
+  // unboundedly (sky events are drained in drawWeatherSky).
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    const age = (now - e.t0) / 1000;
+    if (age >= e.duration) {
+      if (e.kind !== "lightning" && e.kind !== "seabirds") events.splice(i, 1);
+      continue;
+    }
+    if (age < 0) continue;
+    if (e.kind === "phosphor") {
+      // A patch of green-cyan glow blooming on the water. Grows to
+      // radius, plateaus, then dissolves.
+      const f = age / e.duration;
+      const grow = f < 0.3 ? f / 0.3 : f < 0.7 ? 1 : 1 - (f - 0.7) / 0.3;
+      const rad = e.radius * grow;
+      const seaY = horizonY + (h - horizonY) * 0.68;
+      const g = ctx.createRadialGradient(e.x, seaY, 0, e.x, seaY, rad);
+      g.addColorStop(0, `rgba(140, 246, 210, ${0.28 * grow})`);
+      g.addColorStop(0.5, `rgba(70, 200, 190, ${0.14 * grow})`);
+      g.addColorStop(1, "rgba(30, 120, 140, 0)");
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.ellipse(e.x, seaY, rad, rad * 0.42, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    } else if (e.kind === "whale") {
+      // A dark silhouette arcs out of the sea and back. Front half of
+      // the duration = rise + apex; back half = re-entry with splash.
+      const f = age / e.duration;
+      const seaY = horizonY + (h - horizonY) * 0.68;
+      const arcH = 60;
+      const span = 90;
+      const t = Math.min(1, f * 1.15); // squash so descent finishes cleanly
+      const hx = e.x + (t - 0.5) * span * e.dir;
+      const hy = seaY - Math.sin(Math.PI * t) * arcH;
+      ctx.save();
+      ctx.fillStyle = "rgba(24, 34, 52, 0.9)";
+      ctx.beginPath();
+      // fluke / body arc: two ellipses forming the classic breach outline
+      ctx.ellipse(hx, hy, 24, 8, Math.sin(Math.PI * t) * 0.6 * e.dir, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(hx - 22 * e.dir, hy - 4, 6, 4, 0.6 * e.dir, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      // splash on re-entry
+      if (f > 0.72 && f < 0.82) {
+        ctx.fillStyle = "rgba(232, 244, 250, 0.72)";
+        for (let s = 0; s < 8; s++) {
+          const sa = Math.random() * Math.PI * 2;
+          const sr = 6 + Math.random() * 22;
+          ctx.beginPath();
+          ctx.arc(hx + Math.cos(sa) * sr, seaY - Math.random() * 8, 1 + Math.random() * 1.4, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    } else if (e.kind === "beachcomber") {
+      // A brief shimmer ring at the reveal spot. The natural has
+      // already been added to persistence; this is just the "the tide
+      // showed me this" flourish.
+      const f = age / e.duration;
+      const seaSpan = h - horizonY;
+      const sy = horizonY + Math.pow(e.y, 0.85) * seaSpan;
+      const ring = 8 + f * 60;
+      const alpha = Math.max(0, 1 - f) * 0.6;
+      ctx.save();
+      ctx.strokeStyle = `rgba(246, 236, 210, ${alpha})`;
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.ellipse(e.x, sy, ring, ring * 0.34, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      // second, softer ring
+      ctx.strokeStyle = `rgba(255, 250, 232, ${alpha * 0.5})`;
+      ctx.beginPath();
+      ctx.ellipse(e.x, sy, ring * 0.55, ring * 0.22, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    } else if (e.kind === "rogue") {
+      // A subtle whole-frame darken/brighten during a rogue wave.
+      const f = age / e.duration;
+      const pulse = Math.sin(f * Math.PI);
+      const alpha = pulse * 0.06;
+      if (alpha > 0.005) {
+        ctx.fillStyle = `rgba(6, 14, 26, ${alpha})`;
+        ctx.fillRect(0, horizonY, w, h - horizonY);
+      }
+    }
   }
 }
