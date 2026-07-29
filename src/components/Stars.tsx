@@ -5,31 +5,47 @@ import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { useField } from "@/store/field";
 import WaterText from "@/components/WaterText";
+import {
+  type Camera,
+  type LayerId,
+  type LayerProfile,
+  LAYER_ORDER,
+  LAYER_PROFILES,
+  MAX_BORN_STARS_PER_LAYER,
+  MAX_USER_BLACK_HOLES,
+  ZOOM_MAX,
+  ZOOM_STEP,
+  applyHoleNBody,
+  clampPan,
+  clampZoom,
+  createAutomata,
+  emptyLayerMemory,
+  heatAutomata,
+  layerFromZoom,
+  layerLabel,
+  loadCosmicMemoryV2,
+  panByScreen,
+  rankMergePairs,
+  sampleAutomata,
+  saveCosmicMemoryV2,
+  screenToSky as camScreenToSky,
+  skyToScreen,
+  tickAutomata,
+  zoomAtScreen,
+} from "@/lib/stars/nestedCosmos";
 
 /**
- * /stars — the night sky (Hubble Deep-Space pass).
+ * /stars — nested living cosmos.
  *
- * Deep space, redrawn with photographic ambition: spectral-class star
- * colors with halo + glow + core + diffraction spikes; dense layered
- * nebulae built from overlapping radial-gradient wisps; black holes
- * with accretion disks and faint gravitational lensing of nearby
- * stars; small log-spiral galaxies; a structured Milky Way band with
- * dark dust lanes and HII regions embedded.
+ * Deep space with photographic ambition, now navigable: pinch/pan/wheel
+ * camera across nested zoom layers (galactic → cluster → system → local).
+ * Each layer owns a seeded field + coarse density automata. Soft N-body
+ * gravity and hierarchical mergers let multiple holes interact; long-hold
+ * accretion grows a well that pulls matter in.
  *
- * Performance: the static, distant universe (background gradient,
- * Milky Way structure, nebulae, black holes' rings, galaxies) is
- * painted ONCE on mount/resize into an offscreen canvas, then
- * blit per-frame via drawImage. Only the star field (twinkle,
- * gravitational lensing offsets, camera rotation) and the
- * foreground constellation layer redraw each frame.
- *
- * Two visible canvases:
- *   - background canvas: blit the static offscreen + draw stars on top.
- *   - foreground canvas: constellation lines, the pending selection,
- *     star hit-halos, the names floating beside their shapes.
- *
- * Slow camera drift gives a sense of cosmic time. Reduced-motion holds
- * everything still.
+ * Performance: static deep field painted per active layer into an
+ * offscreen canvas and blit each frame; only stars, events, and
+ * constellation chrome redraw live.
  */
 
 // ── types ────────────────────────────────────────────────────────────
@@ -138,6 +154,8 @@ type BornStar = {
   spikeLen: number;
   rgb: [number, number, number];
   createdAt: number;
+  vx?: number; // normalized units / sec — accretion coast
+  vy?: number;
 };
 
 type UserBlackHole = {
@@ -175,11 +193,6 @@ type CosmicEvent = {
   // travel distance in px. Derived at spawn so the RAF loop stays cheap.
   ang?: number;
   reach?: number;
-};
-
-type CosmicMemory = {
-  bornStars: BornStar[];
-  blackHoles: UserBlackHole[];
 };
 
 type SavedConstellation = {
@@ -253,17 +266,9 @@ function makeId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
-const STAR_SEED = 0xC0FFEE;
-const STAR_COUNT = 520;
-const NEBULA_SEED = 0xBADA55;
-const BLACKHOLE_SEED = 0xB14CC0;
-const GALAXY_SEED = 0x9A1A99;
-const PLANET_SEED = 0x51A751;
 const STORAGE_KEY = "objetdart:constellations:v1";
-const COSMIC_STORAGE_KEY = "objetdart:stars:cosmic:v1";
-const MAX_BORN_STARS = 96;
-const MAX_USER_BLACK_HOLES = 7;
 const RANDOM_SUPERNOVA_MS = 18000;
+const DEFAULT_CAMERA: Camera = { panX: 0.5, panY: 0.5, zoom: 1 };
 
 // ── spectral palette ─────────────────────────────────────────────────
 // Approximate stellar locus colors (RGB 0..255). O/B blue, A white,
@@ -323,13 +328,30 @@ function paretoSize(u: number): number {
   return 0.35 + Math.pow(u, 4.5) * 2.9;
 }
 
-function generateStars(): Star[] {
-  const rng = makeRng(STAR_SEED);
+type Quasar = {
+  nx: number;
+  ny: number;
+  power: number;
+  hue: number;
+  phase: number;
+};
+
+type LayerField = {
+  id: LayerId;
+  stars: Star[];
+  nebulae: Nebula[];
+  blackHoles: BlackHole[];
+  galaxies: Galaxy[];
+  planets: PlanetSystem[];
+  quasars: Quasar[];
+  profile: LayerProfile;
+};
+
+function generateStarsFor(profile: LayerProfile): Star[] {
+  const rng = makeRng(profile.seed);
   const out: Star[] = [];
-  for (let i = 0; i < STAR_COUNT; i++) {
-    // ~28% of stars belong to the milky way band — sampled around a
-    // diagonal y = 0.5 + (x - 0.5) * 0.35 with soft thickness.
-    const inBand = rng() < 0.28;
+  for (let i = 0; i < profile.starCount; i++) {
+    const inBand = rng() < profile.bandFrac;
     let nx: number;
     let ny: number;
     if (inBand) {
@@ -343,15 +365,11 @@ function generateStars(): Star[] {
       ny = rng();
     }
 
-    const size = paretoSize(rng());
+    const size = paretoSize(rng()) * profile.sizeScale;
     const brightness = 0.32 + Math.pow(rng(), 1.8) * 0.6;
     const twinkleAmt = rng() < 0.55 ? 0.18 + rng() * 0.42 : 0;
     const spectral = pickSpectral(rng());
     const rgb = SPECTRAL_RGB[spectral];
-
-    // diffraction spikes only on bright/large stars — Hubble's spikes
-    // come from telescope strut diffraction so we mimic them on the
-    // brightest sources only. spikeLen 0 = no spikes.
     const isBright = size > 1.9 && brightness > 0.7;
     const spikeLen = isBright ? size * (3.6 + rng() * 2.4) : 0;
 
@@ -370,28 +388,26 @@ function generateStars(): Star[] {
   return out;
 }
 
-const STARS: Star[] = generateStars();
-
-function generateNebulae(): Nebula[] {
-  const rng = makeRng(NEBULA_SEED);
+function generateNebulaeFor(profile: LayerProfile): Nebula[] {
+  const rng = makeRng(profile.seed ^ 0xbada55);
   const out: Nebula[] = [];
-  // 5 nebulae across the field — anchor points spread by quadrant so
-  // they don't clump. Each gets 3-5 wisps in its palette, with offsets,
-  // rotation, squash, and alpha sampled from the seeded RNG.
-  const anchors: Array<[number, number]> = [
+  const baseAnchors: Array<[number, number]> = [
     [0.22, 0.30],
     [0.74, 0.62],
     [0.52, 0.18],
     [0.18, 0.74],
     [0.82, 0.30],
+    [0.40, 0.48],
+    [0.66, 0.28],
+    [0.30, 0.82],
   ];
-  for (let i = 0; i < anchors.length; i++) {
-    const [ax, ay] = anchors[i];
+  for (let i = 0; i < profile.nebulaCount; i++) {
+    const [ax, ay] = baseAnchors[i % baseAnchors.length];
+    const jitter = i >= baseAnchors.length ? 0.12 : 0.08;
     const palette = NEBULA_PALETTES[i % NEBULA_PALETTES.length];
-    const wispCount = 3 + Math.floor(rng() * 3); // 3..5
+    const wispCount = 3 + Math.floor(rng() * 3);
     const wisps: NebulaWisp[] = [];
     for (let j = 0; j < wispCount; j++) {
-      // alternate the two palette colors so the wisps blend
       const useB = (j % 2 === 1) || rng() < 0.35;
       wisps.push({
         ox: (rng() - 0.5) * 0.42,
@@ -405,9 +421,9 @@ function generateNebulae(): Nebula[] {
       });
     }
     out.push({
-      nx: ax + (rng() - 0.5) * 0.08,
-      ny: ay + (rng() - 0.5) * 0.08,
-      rBase: 0.34 + rng() * 0.18,
+      nx: clampPan(ax + (rng() - 0.5) * jitter),
+      ny: clampPan(ay + (rng() - 0.5) * jitter),
+      rBase: (0.28 + rng() * 0.20) * (profile.id === "local" ? 0.7 : 1),
       rot: rng() * Math.PI * 2,
       rotSpeed: (rng() < 0.5 ? -1 : 1) * (0.003 + rng() * 0.004),
       driftX: (rng() - 0.5) * 7,
@@ -420,26 +436,22 @@ function generateNebulae(): Nebula[] {
   return out;
 }
 
-const NEBULAE: Nebula[] = generateNebulae();
-
-function generateBlackHoles(): BlackHole[] {
-  const rng = makeRng(BLACKHOLE_SEED);
-  // place two black holes; keep them off-center and not on top of
-  // the Milky Way band so the disk silhouette reads.
+function generateBlackHolesFor(profile: LayerProfile): BlackHole[] {
+  const rng = makeRng(profile.seed ^ 0xb14cc0);
   const slots: Array<[number, number]> = [
     [0.32, 0.70],
     [0.78, 0.22],
+    [0.55, 0.45],
+    [0.18, 0.38],
   ];
-  return slots.map(([nx, ny]) => {
-    const rHorizon = 0.010 + rng() * 0.006;
-    const rDiskIn = rHorizon * 1.6;
-    const rDiskOut = rHorizon * 6.5;
+  return slots.slice(0, profile.bhCount).map(([nx, ny]) => {
+    const rHorizon = (0.010 + rng() * 0.006) * (profile.id === "local" ? 1.4 : 1);
     return {
-      nx,
-      ny,
+      nx: nx + (rng() - 0.5) * 0.04,
+      ny: ny + (rng() - 0.5) * 0.04,
       rHorizon,
-      rDiskIn,
-      rDiskOut,
+      rDiskIn: rHorizon * 1.6,
+      rDiskOut: rHorizon * 6.5,
       tilt: 0.28 + rng() * 0.35,
       rot: rng() * Math.PI * 2,
       rLens: rHorizon * 14,
@@ -449,22 +461,20 @@ function generateBlackHoles(): BlackHole[] {
   });
 }
 
-const BLACKHOLES: BlackHole[] = generateBlackHoles();
-
-function generateGalaxies(): Galaxy[] {
-  const rng = makeRng(GALAXY_SEED);
-  // 2 small log-spirals in opposite quadrants so the eye finds them.
+function generateGalaxiesFor(profile: LayerProfile): Galaxy[] {
+  if (profile.galaxyCount <= 0) return [];
+  const rng = makeRng(profile.seed ^ 0x9a1a99);
   const slots: Array<[number, number]> = [
     [0.12, 0.52],
     [0.88, 0.78],
+    [0.48, 0.22],
   ];
-  return slots.map(([nx, ny]) => ({
+  return slots.slice(0, profile.galaxyCount).map(([nx, ny]) => ({
     nx,
     ny,
     rCore: 0.012 + rng() * 0.008,
     rDisk: 0.060 + rng() * 0.030,
     rot: rng() * Math.PI * 2,
-    // very slow rotation (galaxies should be effectively still)
     rotSpeed: (rng() < 0.5 ? -1 : 1) * (0.0014 + rng() * 0.0010),
     tilt: 0.32 + rng() * 0.30,
     arms: 2 + (rng() < 0.5 ? 0 : 1),
@@ -474,16 +484,17 @@ function generateGalaxies(): Galaxy[] {
   }));
 }
 
-const GALAXIES: Galaxy[] = generateGalaxies();
-
-function generatePlanetSystems(): PlanetSystem[] {
-  const rng = makeRng(PLANET_SEED);
+function generatePlanetSystemsFor(profile: LayerProfile): PlanetSystem[] {
+  const rng = makeRng(profile.seed ^ 0x51a751);
   const anchors: Array<[number, number]> = [
     [0.38, 0.34],
     [0.63, 0.56],
     [0.48, 0.72],
     [0.72, 0.42],
     [0.27, 0.58],
+    [0.58, 0.28],
+    [0.44, 0.48],
+    [0.80, 0.66],
   ];
   const palettes: Array<[[number, number, number], [number, number, number]]> = [
     [[194, 218, 230], [230, 218, 180]],
@@ -492,7 +503,7 @@ function generatePlanetSystems(): PlanetSystem[] {
     [[205, 188, 232], [180, 212, 220]],
     [[230, 205, 152], [220, 180, 150]],
   ];
-  return anchors.map(([nx, ny], i) => {
+  return anchors.slice(0, profile.planetCount).map(([nx, ny], i) => {
     const [hueRgb, ringRgb] = palettes[i % palettes.length];
     const moons = Array.from({ length: 1 + Math.floor(rng() * 3) }, () => ({
       ang: rng() * Math.PI * 2,
@@ -502,7 +513,7 @@ function generatePlanetSystems(): PlanetSystem[] {
     return {
       nx: nx + (rng() - 0.5) * 0.06,
       ny: ny + (rng() - 0.5) * 0.06,
-      bodyR: 0.0065 + rng() * 0.0045,
+      bodyR: (0.0065 + rng() * 0.0045) * (profile.id === "system" ? 1.35 : 1),
       ringR: 2.05 + rng() * 1.10,
       ringTilt: 0.23 + rng() * 0.28,
       rot: rng() * Math.PI * 2,
@@ -513,7 +524,49 @@ function generatePlanetSystems(): PlanetSystem[] {
   });
 }
 
-const PLANET_SYSTEMS: PlanetSystem[] = generatePlanetSystems();
+function generateQuasarsFor(profile: LayerProfile): Quasar[] {
+  if (profile.quasarCount <= 0) return [];
+  const rng = makeRng(profile.seed ^ 0x9a5a17);
+  const out: Quasar[] = [];
+  for (let i = 0; i < profile.quasarCount; i++) {
+    out.push({
+      nx: 0.15 + rng() * 0.7,
+      ny: 0.15 + rng() * 0.7,
+      power: 0.7 + rng() * 0.5,
+      hue: 200 + rng() * 80,
+      phase: rng() * Math.PI * 2,
+    });
+  }
+  return out;
+}
+
+const layerFieldCache = new Map<LayerId, LayerField>();
+
+function getLayerField(id: LayerId): LayerField {
+  let field = layerFieldCache.get(id);
+  if (field) return field;
+  const profile = LAYER_PROFILES[id];
+  field = {
+    id,
+    stars: generateStarsFor(profile),
+    nebulae: generateNebulaeFor(profile),
+    blackHoles: generateBlackHolesFor(profile),
+    galaxies: generateGalaxiesFor(profile),
+    planets: generatePlanetSystemsFor(profile),
+    quasars: generateQuasarsFor(profile),
+    profile,
+  };
+  layerFieldCache.set(id, field);
+  return field;
+}
+
+/** Prefetch neighboring layers while idle so depth transitions stay snappy. */
+function prefetchNearbyLayers(id: LayerId): void {
+  const idx = LAYER_ORDER.indexOf(id);
+  for (const j of [idx - 1, idx + 1]) {
+    if (j >= 0 && j < LAYER_ORDER.length) getLayerField(LAYER_ORDER[j]);
+  }
+}
 
 // ── component ────────────────────────────────────────────────────────
 
@@ -526,6 +579,8 @@ type GravityWell = {
   y: number;
   t0: number;
   pointerId: number | null;
+  mass: number; // grows while holding
+  mode: "pending" | "pan" | "accrete";
 };
 
 type PointerIntent = {
@@ -588,14 +643,7 @@ const SPARK_LIFE = 0.8;
 // Milky Way band — keep these constants in sync with the draw code
 const MW_BAND_ANGLE = 0.34;        // base angle in radians
 const MW_BAND_HALF_THICKNESS = 0.10; // normalized to min(w,h)
-const USER_ZOOM_MIN = 1;
-const USER_ZOOM_MAX = 4.2;
-const USER_ZOOM_STEP = 0.55;
-const PLANET_REVEAL_ZOOM = 2.05;
-
-function clampZoom(v: number): number {
-  return Math.max(USER_ZOOM_MIN, Math.min(USER_ZOOM_MAX, v));
-}
+const PLANET_REVEAL_ZOOM = 2.05; // cluster+ reveals planet systems
 
 function smoothstep(edge0: number, edge1: number, x: number): number {
   const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
@@ -626,8 +674,10 @@ export default function Stars() {
   const [hoveredNebula, setHoveredNebula] = useState<number | null>(null);
   const [hoveredMilkyWay, setHoveredMilkyWay] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
-  const [userZoom, setUserZoom] = useState(1);
+  const [camera, setCamera] = useState<Camera>(DEFAULT_CAMERA);
+  const [activeLayer, setActiveLayer] = useState<LayerId>("galactic");
   const [skyPulse, setSkyPulse] = useState<SkyPulse | null>(null);
+  const [layerFade, setLayerFade] = useState(1);
 
   // transient effects — mutated by event handlers, read by the RAF loop
   const skyPulseId = useRef(0);
@@ -641,6 +691,7 @@ export default function Stars() {
   const bhFeedRef = useRef<Map<string, number>>(new Map());
   const gravWavesRef = useRef<GravWave[]>([]);
   const mergerRef = useRef<Merger | null>(null);
+  const mergerQueueRef = useRef<Array<{ aId: string; bId: string }>>([]);
   const mergerScanRef = useRef<number>(0); // next allowed self-merger (ms)
   const gravityWellRef = useRef<GravityWell>({
     active: false,
@@ -648,20 +699,73 @@ export default function Stars() {
     y: 0,
     t0: 0,
     pointerId: null,
+    mass: 0,
+    mode: "pending",
   });
   const pointerIntentRef = useRef<PointerIntent | null>(null);
+  const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
+  const pinchRef = useRef<{ dist: number; zoom: number } | null>(null);
   const milkyPulseRef = useRef<number>(0); // performance.now() of last MW click
   // hover flags also mirrored into refs so the RAF loop can read them cheaply
   const hoveredNebulaRef = useRef<number | null>(null);
   const hoveredMilkyWayRef = useRef<boolean>(false);
-  const userZoomRef = useRef(userZoom);
+  const cameraRef = useRef(camera);
+  const activeLayerRef = useRef<LayerId>(activeLayer);
+  const activeFieldRef = useRef<LayerField>(getLayerField("galactic"));
+  const layerFadeRef = useRef(1);
+  const paintStaticRef = useRef<(() => void) | null>(null);
+  const automataRef = useRef<Map<LayerId, Float32Array>>(new Map());
+  const consumedSeedRef = useRef<Map<LayerId, Set<number>>>(new Map());
+  const memoryRef = useRef(loadCosmicMemoryV2());
+  const pageHiddenRef = useRef(false);
   const bornStarsRef = useRef<BornStar[]>(bornStars);
   const userBlackHolesRef = useRef<UserBlackHole[]>(userBlackHoles);
   useEffect(() => { hoveredNebulaRef.current = hoveredNebula; }, [hoveredNebula]);
   useEffect(() => { hoveredMilkyWayRef.current = hoveredMilkyWay; }, [hoveredMilkyWay]);
-  useEffect(() => { userZoomRef.current = userZoom; }, [userZoom]);
+  useEffect(() => { cameraRef.current = camera; }, [camera]);
+  useEffect(() => { layerFadeRef.current = layerFade; }, [layerFade]);
   useEffect(() => { bornStarsRef.current = bornStars; }, [bornStars]);
   useEffect(() => { userBlackHolesRef.current = userBlackHoles; }, [userBlackHoles]);
+
+  // swap layer field + restore that layer's memory when zoom band changes
+  useEffect(() => {
+    if (activeLayerRef.current === activeLayer) return;
+    // stash current layer matter
+    const prev = activeLayerRef.current;
+    memoryRef.current.layers[prev] = {
+      bornStars: bornStarsRef.current,
+      blackHoles: userBlackHolesRef.current,
+      consumedSeedIds: [...(consumedSeedRef.current.get(prev) ?? [])],
+    };
+    activeLayerRef.current = activeLayer;
+    activeFieldRef.current = getLayerField(activeLayer);
+    prefetchNearbyLayers(activeLayer);
+    const mem = memoryRef.current.layers[activeLayer] ?? emptyLayerMemory();
+    const stars = (Array.isArray(mem.bornStars) ? mem.bornStars : []) as BornStar[];
+    const holes = (Array.isArray(mem.blackHoles) ? mem.blackHoles : []) as UserBlackHole[];
+    bornStarsRef.current = stars;
+    userBlackHolesRef.current = holes;
+    setBornStars(stars);
+    setUserBlackHoles(holes);
+    consumedSeedRef.current.set(
+      activeLayer,
+      new Set((mem.consumedSeedIds ?? []).filter((n) => typeof n === "number")),
+    );
+    if (!automataRef.current.has(activeLayer)) {
+      automataRef.current.set(activeLayer, createAutomata(LAYER_PROFILES[activeLayer].seed));
+    }
+    setLayerFade(0);
+    // rebuild static canvas for the new layer
+    window.setTimeout(() => paintStaticRef.current?.(), 0);
+    const fadeId = window.setInterval(() => {
+      setLayerFade((f) => {
+        const next = Math.min(1, f + 0.12);
+        if (next >= 1) window.clearInterval(fadeId);
+        return next;
+      });
+    }, 32);
+    return () => window.clearInterval(fadeId);
+  }, [activeLayer]);
 
   // we need the latest pending/saved inside the RAF loop without forcing
   // a re-init of the loop on each click, so mirror through refs.
@@ -698,48 +802,76 @@ export default function Stars() {
     }, 2400);
   }, [recordTape]);
 
-  const setZoomLevel = useCallback((next: number | ((cur: number) => number)) => {
-    setUserZoom((cur) => {
-      const value = clampZoom(typeof next === "function" ? next(cur) : next);
-      userZoomRef.current = value;
-      return value;
-    });
-  }, []);
+  const applyCamera = useCallback((next: Camera, announce = false) => {
+    const cam = {
+      zoom: clampZoom(next.zoom),
+      panX: clampPan(next.panX),
+      panY: clampPan(next.panY),
+    };
+    cameraRef.current = cam;
+    setCamera(cam);
+    memoryRef.current.camera = cam;
+    const layer = layerFromZoom(cam.zoom);
+    if (layer !== activeLayerRef.current) {
+      setActiveLayer(layer);
+      if (announce) {
+        markSky(`entering ${layerLabel(layer)}`, "nebula", 0.4, "region", `layer-${layer}`, false);
+      }
+    }
+  }, [markSky]);
+
+  const zoomBy = useCallback((delta: number, screenX?: number, screenY?: number) => {
+    const ww = window.innerWidth || 1;
+    const wh = window.innerHeight || 1;
+    const sx = screenX ?? ww * 0.5;
+    const sy = screenY ?? wh * 0.5;
+    const next = zoomAtScreen(cameraRef.current, sx, sy, cameraRef.current.zoom + delta, ww, wh);
+    applyCamera(next, true);
+  }, [applyCamera]);
 
   const zoomIn = useCallback(() => {
-    setZoomLevel((cur) => cur + USER_ZOOM_STEP);
+    zoomBy(ZOOM_STEP);
     haptics.ripple(0.38);
-    markSky("rings closer", "nebula", 0.38, "object", "zoom-in");
+    markSky("deeper in", "nebula", 0.38, "object", "zoom-in");
     try { getFieldAudio().chime(); } catch { /* noop */ }
-  }, [markSky, setZoomLevel]);
+  }, [markSky, zoomBy]);
 
   const zoomOut = useCallback(() => {
-    setZoomLevel((cur) => cur - USER_ZOOM_STEP);
+    zoomBy(-ZOOM_STEP);
     haptics.tap();
-    markSky("galaxies wider", "star", 0.34, "object", "zoom-out");
+    markSky("wider field", "star", 0.34, "object", "zoom-out");
     try { getFieldAudio().spark(); } catch { /* noop */ }
-  }, [markSky, setZoomLevel]);
+  }, [markSky, zoomBy]);
 
-  const persistCosmicMemory = useCallback((memory: CosmicMemory) => {
-    if (typeof window === "undefined") return;
-    try {
-      localStorage.setItem(COSMIC_STORAGE_KEY, JSON.stringify({
-        bornStars: memory.bornStars.slice(-MAX_BORN_STARS),
-        blackHoles: memory.blackHoles.slice(-MAX_USER_BLACK_HOLES),
-      }));
-    } catch {
-      /* noop */
-    }
+  const persistCosmicMemory = useCallback((
+    born: BornStar[] = bornStarsRef.current,
+    holes: UserBlackHole[] = userBlackHolesRef.current,
+  ) => {
+    const layer = activeLayerRef.current;
+    memoryRef.current.layers[layer] = {
+      bornStars: born.slice(-MAX_BORN_STARS_PER_LAYER),
+      blackHoles: holes.slice(-MAX_USER_BLACK_HOLES),
+      consumedSeedIds: [...(consumedSeedRef.current.get(layer) ?? [])],
+    };
+    memoryRef.current.camera = cameraRef.current;
+    memoryRef.current.version = 2;
+    saveCosmicMemoryV2(memoryRef.current);
   }, []);
 
   const screenToSky = useCallback((x: number, y: number): { nx: number; ny: number } => {
     const ww = window.innerWidth || 1;
     const wh = window.innerHeight || 1;
-    const zoom = Math.max(0.001, userZoomRef.current);
-    return {
-      nx: Math.max(0.015, Math.min(0.985, 0.5 + (x - ww * 0.5) / (ww * zoom))),
-      ny: Math.max(0.015, Math.min(0.985, 0.5 + (y - wh * 0.5) / (wh * zoom))),
-    };
+    return camScreenToSky(cameraRef.current, x, y, ww, wh);
+  }, []);
+
+  const heatSky = useCallback((nx: number, ny: number, amount: number) => {
+    const layer = activeLayerRef.current;
+    let grid = automataRef.current.get(layer);
+    if (!grid) {
+      grid = createAutomata(LAYER_PROFILES[layer].seed);
+      automataRef.current.set(layer, grid);
+    }
+    heatAutomata(grid, nx, ny, amount);
   }, []);
 
   const addCosmicEvent = useCallback((event: Omit<CosmicEvent, "id" | "t0">) => {
@@ -779,26 +911,24 @@ export default function Stars() {
       rgb,
       createdAt: Date.now(),
     };
-    const nextStars = [...bornStarsRef.current, born].slice(-MAX_BORN_STARS);
+    const nextStars = [...bornStarsRef.current, born].slice(-MAX_BORN_STARS_PER_LAYER);
     bornStarsRef.current = nextStars;
     setBornStars(nextStars);
-    persistCosmicMemory({
-      bornStars: nextStars,
-      blackHoles: userBlackHolesRef.current,
-    });
+    persistCosmicMemory(nextStars, userBlackHolesRef.current);
+    heatSky(nx, ny, 0.35);
     addCosmicEvent({
       kind: "birth",
       x,
       y,
-      life: 2.9,
+      life: 3.4,
       seed,
       rgb,
-      power: 0.72 + rng() * 0.40,
+      power: 0.95 + rng() * 0.40,
     });
     haptics.ripple(0.48);
-    markSky("star born", "birth", 0.68, "object", "star-birth");
+    markSky("star born", "birth", 0.72, "object", "star-birth");
     try { getFieldAudio().chime(); } catch { /* noop */ }
-  }, [addCosmicEvent, markSky, persistCosmicMemory, screenToSky]);
+  }, [addCosmicEvent, heatSky, markSky, persistCosmicMemory, screenToSky]);
 
   // A black hole merger sings a descending "chirp" — a fast falling glide
   // of pitched sines, the audible signature of two horizons becoming one.
@@ -830,7 +960,7 @@ export default function Stars() {
       id: makeId("bh"),
       nx,
       ny,
-      mass: Math.min(2.4, 0.82 + rng() * 0.88 + massBoost),
+      mass: Math.min(3.6, 0.82 + rng() * 0.88 + massBoost),
       spin: (rng() < 0.5 ? -1 : 1) * (0.45 + rng() * 0.75),
       hue: 28 + rng() * 220,
       createdAt: Date.now(),
@@ -838,12 +968,10 @@ export default function Stars() {
     const nextHoles = [...userBlackHolesRef.current, hole].slice(-MAX_USER_BLACK_HOLES);
     userBlackHolesRef.current = nextHoles;
     setUserBlackHoles(nextHoles);
-    persistCosmicMemory({
-      bornStars: bornStarsRef.current,
-      blackHoles: nextHoles,
-    });
+    heatSky(nx, ny, 0.55);
+    persistCosmicMemory(bornStarsRef.current, nextHoles);
     return hole;
-  }, [persistCosmicMemory]);
+  }, [heatSky, persistCosmicMemory]);
 
   const supernovaAt = useCallback((
     x: number,
@@ -879,10 +1007,10 @@ export default function Stars() {
     }
   }, [addCosmicEvent, commitBlackHole, markSky, screenToSky]);
 
-  const createBlackHoleAt = useCallback((x: number, y: number) => {
+  const createBlackHoleAt = useCallback((x: number, y: number, massBoost = 0) => {
     const { nx, ny } = screenToSky(x, y);
     const seed = Math.floor((Date.now() + x * 619 + y * 173) % 0xFFFFFFFF);
-    const hole = commitBlackHole(nx, ny, seed);
+    const hole = commitBlackHole(nx, ny, seed, massBoost);
     addCosmicEvent({
       kind: "collapse",
       x,
@@ -893,9 +1021,56 @@ export default function Stars() {
       power: hole.mass,
     });
     haptics.chop();
-    markSky("black hole made", "gravity", 0.95, "sigil", "black-hole");
+    markSky(massBoost > 0.4 ? "horizon swollen" : "black hole made", "gravity", 0.95, "sigil", "black-hole");
     try { getFieldAudio().thud(); } catch { /* noop */ }
+    return hole;
   }, [addCosmicEvent, commitBlackHole, markSky, screenToSky]);
+
+  /** Long-hold release: grow/create hole, consume nearby born stars, coast the rest inward. */
+  const releaseAccretion = useCallback((x: number, y: number, holdMs: number, wellMass: number) => {
+    const { nx, ny } = screenToSky(x, y);
+    const massBoost = Math.min(2.2, wellMass * 0.85 + holdMs / 2200);
+    const horizon = 0.012 + massBoost * 0.01;
+    const pullR = horizon * 8;
+    const remaining: BornStar[] = [];
+    const layer = activeLayerRef.current;
+    let consumed = consumedSeedRef.current.get(layer);
+    if (!consumed) {
+      consumed = new Set();
+      consumedSeedRef.current.set(layer, consumed);
+    }
+    for (const s of bornStarsRef.current) {
+      const d = Math.hypot(s.nx - nx, s.ny - ny);
+      if (d < horizon * 1.35) {
+        continue; // swallowed
+      }
+      if (d < pullR) {
+        const ux = (nx - s.nx) / Math.max(0.0001, d);
+        const uy = (ny - s.ny) / Math.max(0.0001, d);
+        const speed = 0.04 + wellMass * 0.05;
+        remaining.push({
+          ...s,
+          vx: (s.vx ?? 0) + ux * speed,
+          vy: (s.vy ?? 0) + uy * speed,
+        });
+      } else {
+        remaining.push(s);
+      }
+    }
+    // dim/consume nearby seeded stars for this session
+    const stars = activeFieldRef.current.stars;
+    for (let i = 0; i < stars.length; i++) {
+      const s = stars[i];
+      const d = Math.hypot(s.nx - nx, s.ny - ny);
+      if (d < horizon * 1.6) consumed.add(i);
+    }
+    bornStarsRef.current = remaining;
+    setBornStars(remaining);
+    createBlackHoleAt(x, y, massBoost);
+    persistCosmicMemory(remaining, userBlackHolesRef.current);
+    heatSky(nx, ny, 0.7);
+    markSky("stars follow in", "gravity", 0.85, "sigil", "accretion-release", false);
+  }, [createBlackHoleAt, heatSky, markSky, persistCosmicMemory, screenToSky]);
 
   // ── new cosmic-event spawners ──────────────────────────────────────
   // Each fires on its own timer AND can be summoned by touch. They share
@@ -971,14 +1146,15 @@ export default function Stars() {
         createdAt: Date.now(),
       });
     }
-    const nextStars = [...bornStarsRef.current, ...spawned].slice(-MAX_BORN_STARS);
+    const nextStars = [...bornStarsRef.current, ...spawned].slice(-MAX_BORN_STARS_PER_LAYER);
     bornStarsRef.current = nextStars;
     setBornStars(nextStars);
-    persistCosmicMemory({ bornStars: nextStars, blackHoles: userBlackHolesRef.current });
+    heatSky(nx, ny, 0.45);
+    persistCosmicMemory(nextStars, userBlackHolesRef.current);
     haptics.ripple(0.42);
     markSky("stars forming", "starform", 0.66, "object", "star-formation");
     try { getFieldAudio().chime(); } catch { /* noop */ }
-  }, [addCosmicEvent, markSky, persistCosmicMemory, screenToSky]);
+  }, [addCosmicEvent, heatSky, markSky, persistCosmicMemory, screenToSky]);
 
   const spawnGrb = useCallback((x: number, y: number) => {
     const seed = Math.floor((Date.now() + x * 787 + y * 149) % 0xFFFFFFFF);
@@ -1002,42 +1178,54 @@ export default function Stars() {
     }
   }, []);
 
-  // load locally evolved sky matter: born stars and user-made black holes.
+  // load nested cosmic memory (v2) + migrate v1 galactic matter
   useEffect(() => {
     if (typeof window === "undefined") return;
-    try {
-      const raw = localStorage.getItem(COSMIC_STORAGE_KEY);
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as Partial<CosmicMemory>;
-      if (Array.isArray(parsed.bornStars)) {
-        const stars = parsed.bornStars
-          .filter((s) =>
-            typeof s?.id === "string" &&
-            typeof s.nx === "number" &&
-            typeof s.ny === "number" &&
-            Array.isArray(s.rgb) &&
-            s.rgb.length === 3,
-          )
-          .slice(-MAX_BORN_STARS);
-        setBornStars(stars);
-        bornStarsRef.current = stars;
-      }
-      if (Array.isArray(parsed.blackHoles)) {
-        const holes = parsed.blackHoles
-          .filter((h) =>
-            typeof h?.id === "string" &&
-            typeof h.nx === "number" &&
-            typeof h.ny === "number" &&
-            typeof h.mass === "number" &&
-            typeof h.spin === "number",
-          )
-          .slice(-MAX_USER_BLACK_HOLES);
-        setUserBlackHoles(holes);
-        userBlackHolesRef.current = holes;
-      }
-    } catch {
-      /* noop */
+    const mem = loadCosmicMemoryV2();
+    memoryRef.current = mem;
+    if (mem.camera) {
+      const cam = {
+        zoom: clampZoom(mem.camera.zoom ?? 1),
+        panX: clampPan(mem.camera.panX ?? 0.5),
+        panY: clampPan(mem.camera.panY ?? 0.5),
+      };
+      cameraRef.current = cam;
+      setCamera(cam);
+      const layer = layerFromZoom(cam.zoom);
+      activeLayerRef.current = layer;
+      setActiveLayer(layer);
+      activeFieldRef.current = getLayerField(layer);
     }
+    for (const id of LAYER_ORDER) {
+      automataRef.current.set(id, createAutomata(LAYER_PROFILES[id].seed));
+      const lm = mem.layers[id];
+      if (lm?.consumedSeedIds?.length) {
+        consumedSeedRef.current.set(id, new Set(lm.consumedSeedIds.filter((n) => typeof n === "number")));
+      }
+    }
+    const layer = activeLayerRef.current;
+    const lm = mem.layers[layer] ?? emptyLayerMemory();
+    const stars = (Array.isArray(lm.bornStars) ? lm.bornStars : [])
+      .filter((s): s is BornStar =>
+        !!s && typeof (s as BornStar).id === "string" &&
+        typeof (s as BornStar).nx === "number" &&
+        typeof (s as BornStar).ny === "number" &&
+        Array.isArray((s as BornStar).rgb),
+      )
+      .slice(-MAX_BORN_STARS_PER_LAYER);
+    const holes = (Array.isArray(lm.blackHoles) ? lm.blackHoles : [])
+      .filter((h): h is UserBlackHole =>
+        !!h && typeof (h as UserBlackHole).id === "string" &&
+        typeof (h as UserBlackHole).nx === "number" &&
+        typeof (h as UserBlackHole).ny === "number" &&
+        typeof (h as UserBlackHole).mass === "number",
+      )
+      .slice(-MAX_USER_BLACK_HOLES);
+    setBornStars(stars);
+    bornStarsRef.current = stars;
+    setUserBlackHoles(holes);
+    userBlackHolesRef.current = holes;
+    prefetchNearbyLayers(layer);
   }, []);
 
   const persistSaved = useCallback((list: SavedConstellation[]) => {
@@ -1175,6 +1363,11 @@ export default function Stars() {
     // accretion rings, and small galaxies. We render at backing-store
     // resolution so the blit is 1:1 in device pixels.
     const paintStatic = () => {
+      const field = activeFieldRef.current;
+      const NEBULAE = field.nebulae;
+      const BLACKHOLES = field.blackHoles;
+      const GALAXIES = field.galaxies;
+      const showMw = field.id === "galactic" || field.id === "cluster";
       const sw = w;
       const sh = h;
       const base = Math.min(sw, sh);
@@ -1212,7 +1405,7 @@ export default function Stars() {
       // (2) dark dust lanes: a few subtle dark splotches along the
       //     band axis to break it up
       // (3) HII regions: small pink/cyan emission nebulae embedded
-      {
+      if (showMw) {
         const cx = sw * 0.5;
         const cy = sh * 0.5;
         sctx.save();
@@ -1459,9 +1652,11 @@ export default function Stars() {
     resize();
     window.addEventListener("resize", resize);
 
+    paintStaticRef.current = paintStatic;
+
     const cameraZoom = (t: number): number => {
       const breath = motion ? 1 + Math.sin(t * 0.05) * 0.012 : 1;
-      return userZoomRef.current * breath;
+      return cameraRef.current.zoom * breath;
     };
 
     const worldPos = (
@@ -1470,18 +1665,17 @@ export default function Stars() {
       t: number,
       rotate: boolean,
     ): { x: number; y: number } => {
-      const cx = w * 0.5;
-      const cy = h * 0.5;
-      const bx = (nx - 0.5) * w;
-      const by = (ny - 0.5) * h;
+      const cam = cameraRef.current;
+      const breath = motion ? 1 + Math.sin(t * 0.05) * 0.012 : 1;
       const ang = rotate && motion ? t * 0.003 : 0;
-      const cs = Math.cos(ang);
-      const sn = Math.sin(ang);
-      const zoom = cameraZoom(t);
-      return {
-        x: cx + (bx * cs - by * sn) * zoom,
-        y: cy + (bx * sn + by * cs) * zoom,
-      };
+      return skyToScreen(
+        { ...cam, zoom: cam.zoom * breath },
+        nx,
+        ny,
+        w,
+        h,
+        ang,
+      );
     };
 
     // idle drift — even a lone hole should feel alive. Small, slow, seeded
@@ -1568,7 +1762,7 @@ export default function Stars() {
         y += uy * pull + ux * swirl;
       };
 
-      for (const bh of BLACKHOLES) {
+      for (const bh of activeFieldRef.current.blackHoles) {
         const { x: hx, y: hy } = worldPos(bh.nx, bh.ny, t, false);
         const horizon = base * bh.rHorizon * zoom;
         // animate the lens: a living Einstein-ring shimmer + a swirl that
@@ -1649,7 +1843,7 @@ export default function Stars() {
       idx: number,
       t: number,
     ): { x: number; y: number } => {
-      const s = STARS[idx];
+      const s = activeFieldRef.current.stars[idx];
       if (!s) return { x: -9999, y: -9999 };
       const { x, y } = worldPos(s.nx, s.ny, t, true);
       return lensPoint(x, y, t);
@@ -1673,7 +1867,7 @@ export default function Stars() {
       alpha: number,
     ): void => {
       const [r, g, b] = s.rgb;
-      const size = s.size * Math.min(2.2, Math.sqrt(userZoomRef.current));
+      const size = s.size * Math.min(2.2, Math.sqrt(cameraRef.current.zoom));
 
       // outer halo — only for stars that have it (medium+)
       if (size > 1.0) {
@@ -1737,12 +1931,13 @@ export default function Stars() {
     };
 
     const drawPlanetSystems = (t: number): void => {
-      const zoom = userZoomRef.current;
-      const reveal = smoothstep(PLANET_REVEAL_ZOOM, USER_ZOOM_MAX * 0.82, zoom);
+      const zoom = cameraRef.current.zoom;
+      const reveal = smoothstep(PLANET_REVEAL_ZOOM, ZOOM_MAX * 0.82, zoom);
       if (reveal <= 0) return;
       const base = Math.min(w, h);
       bctx.save();
       bctx.globalCompositeOperation = "lighter";
+      const PLANET_SYSTEMS = activeFieldRef.current.planets;
       for (let i = 0; i < PLANET_SYSTEMS.length; i++) {
         const p = PLANET_SYSTEMS[i];
         const { x, y } = worldPos(p.nx, p.ny, t, false);
@@ -2050,6 +2245,7 @@ export default function Stars() {
     // Per-frame animated overlay for the two built-in black holes — the
     // static canvas bakes their base glow; this brings them to life.
     const drawStaticBlackHolesActive = (t: number, nowMs: number): void => {
+      const BLACKHOLES = activeFieldRef.current.blackHoles;
       const base = Math.min(w, h);
       const zoom = cameraZoom(t);
       for (let i = 0; i < BLACKHOLES.length; i++) {
@@ -2378,6 +2574,18 @@ export default function Stars() {
     const draw = (now: number) => {
       const t = (now - t0) / 1000;
       const nowMs = now;
+      if (pageHiddenRef.current) {
+        raf = requestAnimationFrame(draw);
+        return;
+      }
+      const field = activeFieldRef.current;
+      const STARS = field.stars;
+      const NEBULAE = field.nebulae;
+      const BLACKHOLES = field.blackHoles;
+      const GALAXIES = field.galaxies;
+      const PLANET_SYSTEMS = field.planets;
+      const fade = layerFadeRef.current;
+      void GALAXIES;
 
       // ── BACKGROUND ───────────────────────────────────────────────
       // Blit the static universe in one drawImage. Then we layer
@@ -2385,8 +2593,13 @@ export default function Stars() {
       bctx.clearRect(0, 0, w, h);
       const zoom = cameraZoom(t);
       bctx.save();
+      bctx.globalAlpha = 0.55 + 0.45 * fade;
       bctx.translate(w * 0.5, h * 0.5);
       bctx.scale(zoom, zoom);
+      // pan is already in worldPos; static is painted in layer-local normalized
+      // space — shift by camera pan so deep field tracks navigation.
+      const cam = cameraRef.current;
+      bctx.translate((0.5 - cam.panX) * w, (0.5 - cam.panY) * h);
       bctx.drawImage(staticCanvas, -w * 0.5, -h * 0.5, w, h);
       bctx.restore();
 
@@ -2457,6 +2670,7 @@ export default function Stars() {
       })();
 
       bctx.save();
+      const consumed = consumedSeedRef.current.get(field.id);
       for (let i = 0; i < STARS.length; i++) {
         const s = STARS[i];
         const { x, y } = starPos(i, t);
@@ -2469,6 +2683,7 @@ export default function Stars() {
 
         // twinkle — reduced motion reduces both rate and amplitude
         let alpha = s.brightness;
+        if (consumed?.has(i)) alpha *= 0.06;
         if (s.twinkleAmt > 0) {
           const speed = inBand && mwHover ? 4.6 : (motion ? 1.7 : 0.6);
           const amp = motion ? s.twinkleAmt : s.twinkleAmt * 0.3;
@@ -2503,6 +2718,20 @@ export default function Stars() {
           }
         }
       }
+      // coast born stars that still carry accretion velocity
+      if (motion && bornStarsRef.current.some((s) => (s.vx || s.vy))) {
+        const dt = 1 / 60;
+        bornStarsRef.current = bornStarsRef.current.map((s) => {
+          if (!s.vx && !s.vy) return s;
+          return {
+            ...s,
+            nx: clampPan(s.nx + (s.vx ?? 0) * dt),
+            ny: clampPan(s.ny + (s.vy ?? 0) * dt),
+            vx: (s.vx ?? 0) * 0.985,
+            vy: (s.vy ?? 0) * 0.985,
+          };
+        });
+      }
       for (const s of bornStarsRef.current) {
         const { x, y } = bornStarPos(s, t);
         const cullM = 18 + s.size * 8;
@@ -2529,6 +2758,34 @@ export default function Stars() {
       drawUserBlackHoles(t, nowMs);
       drawCosmicEvents(nowMs);
       drawPlanetSystems(t);
+
+      // quasars — rare beacons at cluster+ depths
+      if (field.quasars.length) {
+        bctx.save();
+        bctx.globalCompositeOperation = "lighter";
+        for (const q of field.quasars) {
+          const { x, y } = worldPos(q.nx, q.ny, t, false);
+          const pulse = 0.55 + 0.45 * Math.sin(t * 2.4 + q.phase);
+          const r = Math.min(w, h) * 0.012 * q.power * (0.8 + pulse * 0.4) * cameraZoom(t);
+          const col = `hsla(${q.hue}, 70%, 72%, ${(0.22 * pulse * fade).toFixed(3)})`;
+          const g = bctx.createRadialGradient(x, y, 0, x, y, r * 6);
+          g.addColorStop(0, `hsla(${q.hue}, 90%, 88%, ${(0.55 * pulse).toFixed(3)})`);
+          g.addColorStop(0.35, col);
+          g.addColorStop(1, `hsla(${q.hue}, 70%, 60%, 0)`);
+          bctx.fillStyle = g;
+          bctx.beginPath();
+          bctx.arc(x, y, r * 6, 0, Math.PI * 2);
+          bctx.fill();
+          // jet
+          bctx.strokeStyle = `hsla(${q.hue}, 80%, 80%, ${(0.28 * pulse).toFixed(3)})`;
+          bctx.lineWidth = 1.2;
+          bctx.beginPath();
+          bctx.moveTo(x, y - r * 10);
+          bctx.lineTo(x, y + r * 10);
+          bctx.stroke();
+        }
+        bctx.restore();
+      }
 
       const well = gravityWellRef.current;
       if (well.active) {
@@ -2594,7 +2851,7 @@ export default function Stars() {
         let lastValid: { x: number; y: number } | null = null;
         for (let i = 0; i < c.starIndices.length; i++) {
           const idx = c.starIndices[i];
-          if (idx < 0 || idx >= STARS.length) continue;
+          if (idx < 0 || idx >= activeFieldRef.current.stars.length) continue;
           const p = starPos(idx, t);
           if (i === 0 || !lastValid) {
             fctx.moveTo(p.x, p.y);
@@ -2607,7 +2864,7 @@ export default function Stars() {
 
         // small open circles around each named star
         for (const idx of c.starIndices) {
-          if (idx < 0 || idx >= STARS.length) continue;
+          if (idx < 0 || idx >= activeFieldRef.current.stars.length) continue;
           const p = starPos(idx, t);
           fctx.strokeStyle = `rgba(232, 226, 213, ${isHover ? 0.65 : 0.35})`;
           fctx.lineWidth = 0.9;
@@ -2622,7 +2879,7 @@ export default function Stars() {
           let sy = 0;
           let n = 0;
           for (const idx of c.starIndices) {
-            if (idx < 0 || idx >= STARS.length) continue;
+            if (idx < 0 || idx >= activeFieldRef.current.stars.length) continue;
             const p = starPos(idx, t);
             sx += p.x;
             sy += p.y;
@@ -2716,6 +2973,7 @@ export default function Stars() {
     const t = performance.now() / 1000;
     let best = -1;
     let bestD = HIT_R * HIT_R;
+    const STARS = activeFieldRef.current.stars;
     for (let i = 0; i < STARS.length; i++) {
       const p = fn(i, t);
       const dx = p.x - cx;
@@ -2737,13 +2995,15 @@ export default function Stars() {
     const w = window.innerWidth;
     const h = window.innerHeight;
     const base = Math.min(w, h);
-    const zoom = userZoomRef.current;
+    const zoom = cameraRef.current.zoom;
     let best = -1;
     let bestD2 = Infinity;
+    const NEBULAE = activeFieldRef.current.nebulae;
     for (let i = 0; i < NEBULAE.length; i++) {
       const n = NEBULAE[i];
-      const px = w * 0.5 + (n.nx - 0.5) * w * zoom;
-      const py = h * 0.5 + (n.ny - 0.5) * h * zoom;
+      const p = skyToScreen(cameraRef.current, n.nx, n.ny, w, h, 0);
+      const px = p.x;
+      const py = p.y;
       const r = base * n.rBase * zoom;
       const dx = cx - px;
       const dy = cy - py;
@@ -2759,16 +3019,15 @@ export default function Stars() {
   // hit-test for the Milky Way diagonal band. Inverse-rotate the click into
   // the band's local frame and check |y| against the band thickness.
   const isInMilkyWay = useCallback((cx: number, cy: number): boolean => {
+    const layer = activeLayerRef.current;
+    if (layer !== "galactic" && layer !== "cluster") return false;
     const w = window.innerWidth;
     const h = window.innerHeight;
     const base = Math.min(w, h);
-    const zoom = userZoomRef.current;
-    const lx = (cx - w * 0.5) / zoom;
-    const ly = (cy - h * 0.5) / zoom;
-    const cs = Math.cos(-MW_BAND_ANGLE);
-    const sn = Math.sin(-MW_BAND_ANGLE);
-    const localY = lx * sn + ly * cs;
-    return Math.abs(localY) < base * MW_BAND_HALF_THICKNESS;
+    const sky = camScreenToSky(cameraRef.current, cx, cy, w, h);
+    // band in normalized sky space around diagonal
+    const yCenter = 0.5 + (sky.nx - 0.5) * 0.35;
+    return Math.abs(sky.ny - yCenter) < MW_BAND_HALF_THICKNESS * (base / Math.min(w, h)) * 1.2;
   }, []);
 
   // hit-test for a saved constellation NAME (centroid label).
@@ -2782,7 +3041,7 @@ export default function Stars() {
       let sy = 0;
       let n = 0;
       for (const idx of c.starIndices) {
-        if (idx < 0 || idx >= STARS.length) continue;
+        if (idx < 0 || idx >= activeFieldRef.current.stars.length) continue;
         const p = fn(idx, t);
         sx += p.x;
         sy += p.y;
@@ -2807,7 +3066,7 @@ export default function Stars() {
     const THRESH = 8;
     for (const c of savedRef.current) {
       for (const idx of c.starIndices) {
-        if (idx < 0 || idx >= STARS.length) continue;
+        if (idx < 0 || idx >= activeFieldRef.current.stars.length) continue;
         const p = fn(idx, t);
         const dx = p.x - cx;
         const dy = p.y - cy;
@@ -2838,12 +3097,20 @@ export default function Stars() {
       const rect = (e.currentTarget as HTMLCanvasElement).getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
+      pointersRef.current.set(e.pointerId, { x, y });
+
+      if (pointersRef.current.size === 2) {
+        const pts = [...pointersRef.current.values()];
+        const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+        pinchRef.current = { dist: Math.max(1, dist), zoom: cameraRef.current.zoom };
+        gravityWellRef.current.active = false;
+        gravityWellRef.current.mode = "pending";
+        return;
+      }
 
       if (e.button === 2) {
         const savedId = findSavedAt(x, y);
-        if (savedId) {
-          deleteSaved(savedId);
-        }
+        if (savedId) deleteSaved(savedId);
         return;
       }
 
@@ -2859,9 +3126,7 @@ export default function Stars() {
         return;
       }
 
-      if (pendingRef.current.length > 0) {
-        cancelPending();
-      }
+      if (pendingRef.current.length > 0) cancelPending();
 
       pointerIntentRef.current = {
         x,
@@ -2876,6 +3141,8 @@ export default function Stars() {
         y,
         t0: performance.now(),
         pointerId: e.pointerId,
+        mass: 0,
+        mode: "pending",
       };
       try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* noop */ }
     },
@@ -2887,31 +3154,93 @@ export default function Stars() {
       const rect = (e.currentTarget as HTMLCanvasElement).getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
+      if (pointersRef.current.has(e.pointerId)) {
+        pointersRef.current.set(e.pointerId, { x, y });
+      }
+
+      // pinch zoom
+      if (pointersRef.current.size >= 2 && pinchRef.current) {
+        const pts = [...pointersRef.current.values()];
+        const dist = Math.max(1, Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y));
+        const scale = dist / pinchRef.current.dist;
+        const midX = (pts[0].x + pts[1].x) * 0.5;
+        const midY = (pts[0].y + pts[1].y) * 0.5;
+        const ww = window.innerWidth;
+        const wh = window.innerHeight;
+        applyCamera(zoomAtScreen(cameraRef.current, midX, midY, pinchRef.current.zoom * scale, ww, wh), true);
+        return;
+      }
+
       const well = gravityWellRef.current;
       if (well.active && well.pointerId === e.pointerId) {
-        well.x = x;
-        well.y = y;
+        const intent = pointerIntentRef.current;
+        const held = performance.now() - well.t0;
+        const move = intent ? Math.hypot(x - intent.x, y - intent.y) : 0;
+        if (well.mode === "pending" && move > 26 && held < 430) {
+          well.mode = "pan";
+        }
+        if (well.mode === "pan" && intent) {
+          const ww = window.innerWidth;
+          const wh = window.innerHeight;
+          applyCamera(panByScreen(cameraRef.current, x - well.x, y - well.y, ww, wh));
+          well.x = x;
+          well.y = y;
+        } else {
+          well.x = x;
+          well.y = y;
+          if (held > 430) {
+            well.mode = "accrete";
+            well.mass = Math.min(3.2, (held - 430) / 1400);
+            // pull born stars toward the well while holding
+            const sky = screenToSky(x, y);
+            const pull = 0.0009 * (0.4 + well.mass);
+            let changed = false;
+            const next = bornStarsRef.current.map((s) => {
+              const dx = sky.nx - s.nx;
+              const dy = sky.ny - s.ny;
+              const d2 = dx * dx + dy * dy + 0.0002;
+              if (d2 > 0.08) return s;
+              changed = true;
+              return {
+                ...s,
+                nx: clampPan(s.nx + (dx / Math.sqrt(d2)) * pull),
+                ny: clampPan(s.ny + (dy / Math.sqrt(d2)) * pull),
+                vx: (s.vx ?? 0) + dx * pull * 8,
+                vy: (s.vy ?? 0) + dy * pull * 8,
+              };
+            });
+            if (changed) {
+              bornStarsRef.current = next;
+              setBornStars(next);
+            }
+          }
+        }
       }
       setHoveredSaved(findSavedAt(x, y));
       setHoveredNebula(findNebulaAt(x, y));
       setHoveredMilkyWay(isInMilkyWay(x, y));
     },
-    [findSavedAt, findNebulaAt, isInMilkyWay],
+    [applyCamera, findSavedAt, findNebulaAt, isInMilkyWay, screenToSky],
   );
 
   const onPointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+    pointersRef.current.delete(e.pointerId);
+    if (pointersRef.current.size < 2) pinchRef.current = null;
+
     const well = gravityWellRef.current;
     if (well.pointerId === e.pointerId) {
       const held = performance.now() - well.t0;
       const intent = pointerIntentRef.current;
       const move = intent ? Math.hypot(well.x - intent.x, well.y - intent.y) : 0;
 
-      if (held > 430) {
-        createBlackHoleAt(well.x, well.y);
+      if (well.mode === "pan") {
+        // pan complete — quiet
+      } else if (well.mode === "accrete" || held > 430) {
+        releaseAccretion(well.x, well.y, held, well.mass);
       } else if (!intent || move > 26) {
-        markSky("light bent", "gravity", 0.48, "sigil", "light-bent");
+        // tiny drag without pan threshold — ignore
       } else if (intent.starIdx >= 0) {
-        const star = STARS[intent.starIdx];
+        const star = activeFieldRef.current.stars[intent.starIdx];
         if (star && (star.size > 1.55 || star.brightness > 0.78)) {
           const p = starPosRef.current?.(intent.starIdx, performance.now() / 1000) ?? { x: well.x, y: well.y };
           supernovaAt(p.x, p.y, star.rgb);
@@ -2924,11 +3253,13 @@ export default function Stars() {
           ...breathsRef.current.filter((b) => b.idx !== nebIdx),
           { idx: nebIdx, t0: performance.now() },
         ];
+        spawnStarForm(well.x, well.y);
         haptics.roll();
-        markSky("nebula breath", "nebula", 0.58, "sigil", "nebula");
+        markSky("nebula birthlight", "nebula", 0.62, "sigil", "nebula");
         try { getFieldAudio().bell(); } catch { /* noop */ }
       } else if (intent.inMilkyWay) {
         milkyPulseRef.current = performance.now();
+        birthStarAt(well.x, well.y);
         haptics.roll();
         markSky("milky way brightened", "nebula", 0.62, "region", "milky-way");
         try { getFieldAudio().bell(); } catch { /* noop */ }
@@ -2938,10 +3269,12 @@ export default function Stars() {
 
       gravityWellRef.current.active = false;
       gravityWellRef.current.pointerId = null;
+      gravityWellRef.current.mass = 0;
+      gravityWellRef.current.mode = "pending";
       pointerIntentRef.current = null;
       try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* noop */ }
     }
-  }, [birthStarAt, createBlackHoleAt, markSky, supernovaAt]);
+  }, [birthStarAt, markSky, releaseAccretion, spawnStarForm, supernovaAt]);
 
   const onDoubleClick = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -2985,14 +3318,14 @@ export default function Stars() {
       if (document.hidden || namingRef.current || Math.random() > 0.54) return;
       const fn = starPosRef.current;
       if (!fn) return;
+      const STARS = activeFieldRef.current.stars;
       for (let tries = 0; tries < 18; tries++) {
         const idx = Math.floor(Math.random() * STARS.length);
         const star = STARS[idx];
         if (!star || (star.size < 1.35 && star.brightness < 0.76)) continue;
+        if (consumedSeedRef.current.get(activeLayerRef.current)?.has(idx)) continue;
         const p = fn(idx, performance.now() / 1000);
         if (p.x < 40 || p.x > window.innerWidth - 40 || p.y < 80 || p.y > window.innerHeight - 80) continue;
-        // the biggest stars occasionally leave a remnant that collapses into
-        // a brand-new black hole — supernova and gravity, tied together.
         const collapse = (star.size > 2.1 || star.brightness > 0.9) && Math.random() < 0.34
           && userBlackHolesRef.current.length < MAX_USER_BLACK_HOLES;
         supernovaAt(p.x, p.y, star.rgb, false, collapse);
@@ -3002,48 +3335,125 @@ export default function Stars() {
     return () => window.clearInterval(id);
   }, [supernovaAt]);
 
-  // ── cosmic weather — the sky is never static, never chaotic ────────
-  // A gentle scheduler that fires a varied one-shot event now and then.
-  // Timing jitters so it feels like a living cosmos, not a clock.
+  // ── cosmic weather — biased by per-layer automata density ──────────
   useEffect(() => {
     if (typeof window === "undefined") return;
     let timer = 0;
-    const safePoint = (): { x: number; y: number } => {
+    const safePoint = (): { x: number; y: number; nx: number; ny: number } => {
       const ww = window.innerWidth;
       const wh = window.innerHeight;
-      return {
-        x: 60 + Math.random() * Math.max(1, ww - 120),
-        y: 120 + Math.random() * Math.max(1, wh - 220),
-      };
+      const x = 60 + Math.random() * Math.max(1, ww - 120);
+      const y = 120 + Math.random() * Math.max(1, wh - 220);
+      const sky = camScreenToSky(cameraRef.current, x, y, ww, wh);
+      return { x, y, nx: sky.nx, ny: sky.ny };
     };
     const fire = () => {
       if (!(document.hidden || namingRef.current)) {
-        // weighted variety — comets and pulsars are common, GRBs rare
-        const roll = Math.random();
+        const layer = activeLayerRef.current;
+        const profile = LAYER_PROFILES[layer];
+        let grid = automataRef.current.get(layer);
+        if (!grid) {
+          grid = createAutomata(profile.seed);
+          automataRef.current.set(layer, grid);
+        }
         const p = safePoint();
-        if (roll < 0.26) spawnComet();
+        const dens = sampleAutomata(grid, p.nx, p.ny);
+        // hotter cells → more violent events; cool cells prefer comets/birth
+        let roll = Math.random();
+        if (dens > 0.55) roll = Math.min(0.99, roll + 0.18);
+        if (dens < 0.22) roll *= 0.7;
+        if (profile.quasarCount > 0 && dens > 0.6 && roll > 0.85) {
+          spawnGrb(p.x, p.y);
+        } else if (roll < 0.26) spawnComet();
         else if (roll < 0.46) spawnPulsar(p.x, p.y);
         else if (roll < 0.62) spawnNova(p.x, p.y);
         else if (roll < 0.76) spawnStarForm(p.x, p.y);
         else if (roll < 0.9) spawnTidalFlare(p.x, p.y);
         else spawnGrb(p.x, p.y);
       }
-      timer = window.setTimeout(fire, 9000 + Math.random() * 8000);
+      const bias = LAYER_PROFILES[activeLayerRef.current].weatherBias;
+      timer = window.setTimeout(fire, (9000 + Math.random() * 8000) / bias);
     };
     timer = window.setTimeout(fire, 5000 + Math.random() * 5000);
     return () => window.clearTimeout(timer);
   }, [spawnComet, spawnPulsar, spawnNova, spawnStarForm, spawnTidalFlare, spawnGrb]);
 
-  // ── black-hole mergers — inspiral, ringdown, gravitational wave ────
-  // Detects when two user holes drift/are drawn close (or occasionally
-  // captures a pair on its own), runs the inspiral via mergerRef (read by
-  // the RAF loop), then commits the merged hole with a chirp + storm + GW.
+  // automata tick + page visibility + wheel zoom
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onVis = () => { pageHiddenRef.current = document.hidden; };
+    onVis();
+    document.addEventListener("visibilitychange", onVis);
+    const autoId = window.setInterval(() => {
+      if (document.hidden) return;
+      const layer = activeLayerRef.current;
+      let grid = automataRef.current.get(layer);
+      if (!grid) {
+        grid = createAutomata(LAYER_PROFILES[layer].seed);
+        automataRef.current.set(layer, grid);
+      }
+      automataRef.current.set(layer, tickAutomata(grid));
+    }, 1600);
+    const onWheel = (e: WheelEvent) => {
+      if (namingRef.current) return;
+      const target = e.target as HTMLElement | null;
+      if (!target?.closest?.(".stars-root")) return;
+      e.preventDefault();
+      const delta = -Math.sign(e.deltaY) * (e.ctrlKey ? 0.18 : 0.35);
+      zoomBy(delta * ZOOM_STEP * 0.55, e.clientX, e.clientY);
+    };
+    window.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      document.removeEventListener("visibilitychange", onVis);
+      window.clearInterval(autoId);
+      window.removeEventListener("wheel", onWheel);
+    };
+  }, [zoomBy]);
+
+  // ── black-hole mergers — hierarchical pairs + soft N-body dance ────
+  // Closest pair inspirals; when it commits, the next queued pair can
+  // start immediately so triples chain as A+B → C+(AB).
   useEffect(() => {
     if (typeof window === "undefined") return;
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const tick = () => {
+      if (document.hidden) return;
       const nowMs = performance.now();
-      const holes = userBlackHolesRef.current;
+      let holes = userBlackHolesRef.current;
+
+      // soft N-body nudge among free holes (and active accretion well)
+      if (holes.length >= 2 || gravityWellRef.current.mode === "accrete") {
+        const well = gravityWellRef.current;
+        let wellSky: { nx: number; ny: number; mass: number } | null = null;
+        if (well.active && well.mode === "accrete") {
+          const s = camScreenToSky(cameraRef.current, well.x, well.y, window.innerWidth, window.innerHeight);
+          wellSky = { nx: s.nx, ny: s.ny, mass: Math.max(0.2, well.mass) };
+        }
+        const busy = new Set<string>();
+        if (mergerRef.current) {
+          busy.add(mergerRef.current.aId);
+          busy.add(mergerRef.current.bId);
+        }
+        const free = holes.filter((h) => !busy.has(h.id));
+        if (free.length) {
+          const deltas = applyHoleNBody(free, 0.14, wellSky);
+          const byId = new Map(deltas.map((d) => [d.id, d]));
+          let moved = false;
+          holes = holes.map((h) => {
+            const d = byId.get(h.id);
+            if (!d) return h;
+            const nx = clampPan(h.nx + d.dnx);
+            const ny = clampPan(h.ny + d.dny);
+            if (nx !== h.nx || ny !== h.ny) moved = true;
+            return { ...h, nx, ny };
+          });
+          if (moved) {
+            userBlackHolesRef.current = holes;
+            setUserBlackHoles(holes);
+          }
+        }
+      }
+
       const m = mergerRef.current;
       if (m) {
         if (!m.committed && nowMs - m.tStartMs >= m.durMs) {
@@ -3057,7 +3467,7 @@ export default function Stars() {
               id: makeId("bh"),
               nx: midNx,
               ny: midNy,
-              mass: Math.min(2.4, a.mass + b.mass * 0.85),
+              mass: Math.min(3.6, a.mass + b.mass * 0.85),
               spin: ((a.spin + b.spin) / 2) || a.spin,
               hue: (a.hue + b.hue) / 2,
               createdAt: Date.now(),
@@ -3066,39 +3476,41 @@ export default function Stars() {
               .concat(merged).slice(-MAX_USER_BLACK_HOLES);
             userBlackHolesRef.current = next;
             setUserBlackHoles(next);
-            persistCosmicMemory({ bornStars: bornStarsRef.current, blackHoles: next });
+            persistCosmicMemory(bornStarsRef.current, next);
             gravWavesRef.current = [
               ...gravWavesRef.current.slice(-4),
               { id: ++skyPulseId.current, nx: midNx, ny: midNy, t0Ms: nowMs, life: reduce ? 2.2 : 3.0, strength: merged.mass },
             ];
             const ww = window.innerWidth;
             const wh = window.innerHeight;
-            const zoom = Math.max(0.001, userZoomRef.current);
-            const sx = ww * 0.5 + (midNx - 0.5) * ww * zoom;
-            const sy = wh * 0.5 + (midNy - 0.5) * wh * zoom;
-            addCosmicEvent({ kind: "merger", x: sx, y: sy, life: 2.4, seed: Math.floor(nowMs) >>> 0, rgb: [210, 180, 255], power: merged.mass });
+            const scr = skyToScreen(cameraRef.current, midNx, midNy, ww, wh, 0);
+            addCosmicEvent({ kind: "merger", x: scr.x, y: scr.y, life: 2.4, seed: Math.floor(nowMs) >>> 0, rgb: [210, 180, 255], power: merged.mass });
             chirpTone();
             haptics.storm();
             markSky("black holes merged", "merger", 0.98, "sigil", "merger");
+            holes = next;
           }
           mergerRef.current = null;
+          // immediately consider the next closest pair (triple chain)
+        } else {
+          return;
         }
-        return;
       }
+
       if (holes.length < 2) return;
-      // proximity capture — placing holes near each other starts an inspiral
-      let bestI = -1;
-      let bestJ = -1;
-      let bestD = Infinity;
-      for (let i = 0; i < holes.length; i++) {
-        for (let j = i + 1; j < holes.length; j++) {
-          const d = Math.hypot(holes[i].nx - holes[j].nx, holes[i].ny - holes[j].ny);
-          if (d < bestD) { bestD = d; bestI = i; bestJ = j; }
+      const pairs = rankMergePairs(holes, 0.075);
+      // also queue near-misses for later
+      for (const p of pairs.slice(0, 3)) {
+        if (!mergerQueueRef.current.some((q) => q.aId === p.aId && q.bId === p.bId)) {
+          mergerQueueRef.current.push({ aId: p.aId, bId: p.bId });
         }
       }
-      const startMerge = (i: number, j: number) => {
-        const a = holes[i];
-        const b = holes[j];
+      mergerQueueRef.current = mergerQueueRef.current.slice(0, 6);
+
+      const startMergeById = (aId: string, bId: string) => {
+        const a = holes.find((h) => h.id === aId);
+        const b = holes.find((h) => h.id === bId);
+        if (!a || !b) return false;
         mergerRef.current = {
           aId: a.id, bId: b.id,
           ax: a.nx, ay: a.ny, bx: b.nx, by: b.ny,
@@ -3108,16 +3520,35 @@ export default function Stars() {
           committed: false,
         };
         haptics.roll();
-        markSky("black holes falling together", "merger", 0.6, "object", "inspiral", false);
+        markSky(
+          holes.length >= 3 ? "triple system collapsing" : "black holes falling together",
+          "merger",
+          0.6,
+          "object",
+          "inspiral",
+          false,
+        );
+        return true;
       };
-      if (bestI >= 0 && bestD < 0.07) {
-        startMerge(bestI, bestJ);
+
+      if (pairs.length && pairs[0].d < 0.075) {
+        startMergeById(pairs[0].aId, pairs[0].bId);
+        mergerQueueRef.current = mergerQueueRef.current.filter(
+          (q) => !(q.aId === pairs[0].aId && q.bId === pairs[0].bId),
+        );
         return;
       }
-      // occasional self-capture so mergers happen on their own, too
-      if (nowMs > mergerScanRef.current && Math.random() < 0.5) {
-        mergerScanRef.current = nowMs + 22000;
-        if (bestI >= 0) startMerge(bestI, bestJ);
+
+      // drain queue after a free merge slot
+      while (mergerQueueRef.current.length) {
+        const q = mergerQueueRef.current.shift()!;
+        if (startMergeById(q.aId, q.bId)) return;
+      }
+
+      if (nowMs > mergerScanRef.current && holes.length >= 2 && Math.random() < 0.45) {
+        mergerScanRef.current = nowMs + 18000;
+        const ranked = rankMergePairs(holes, 0.22);
+        if (ranked[0]) startMergeById(ranked[0].aId, ranked[0].bId);
       }
     };
     const id = window.setInterval(tick, 140);
@@ -3214,7 +3645,7 @@ export default function Stars() {
         style={{
           position: "fixed",
           left: 18,
-          bottom: "calc(168px + env(safe-area-inset-bottom, 0px))",
+          bottom: "calc(128px + env(safe-area-inset-bottom, 0px))",
           zIndex: 4,
           display: "flex",
           alignItems: "center",
@@ -3235,7 +3666,7 @@ export default function Stars() {
         }}
       >
         <span>{userBlackHoles.length ? `${userBlackHoles.length} holes` : `${bornStars.length} born`}</span>
-        <span>{pending.length ? `${pending.length} connected` : userZoom >= PLANET_REVEAL_ZOOM ? "rings near" : "galaxies wide"}</span>
+        <span>{pending.length ? `${pending.length} connected` : layerLabel(activeLayer)}</span>
         <span
           className={skyPulse ? "is-lit" : ""}
           style={{
@@ -3287,7 +3718,7 @@ export default function Stars() {
             marginBottom: 10,
           }}
         >
-          living night · galaxies, nebulae, black holes
+          living night · pinch deeper · hold to accrete
         </div>
         <WaterText
           as="h1"
@@ -3338,88 +3769,7 @@ export default function Stars() {
           pointerEvents: "none",
         }}
       >
-        birthlight · stellar death · pulsars, comets, merging holes
-      </div>
-
-      {/* compact zoom controls */}
-      <div
-        data-stars-zoom="true"
-        aria-label="sky zoom controls"
-        style={{
-          position: "fixed",
-          left: 18,
-          bottom: "calc(104px + env(safe-area-inset-bottom, 0px))",
-          zIndex: 4,
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-          padding: "5px 6px",
-          border: "1px solid rgba(232, 226, 213, 0.18)",
-          borderRadius: 6,
-          background: "rgba(4, 8, 14, 0.58)",
-          backdropFilter: "blur(6px)",
-          WebkitBackdropFilter: "blur(6px)",
-          boxShadow: "0 8px 24px rgba(0,0,0,0.28)",
-        }}
-      >
-        <button
-          type="button"
-          aria-label="zoom out"
-          onClick={zoomOut}
-          disabled={userZoom <= USER_ZOOM_MIN}
-          style={{
-            width: 30,
-            height: 30,
-            border: "1px solid rgba(232, 226, 213, 0.24)",
-            borderRadius: 4,
-            background: "rgba(232, 226, 213, 0.08)",
-            color: "rgba(244, 238, 222, 0.88)",
-            fontFamily: "var(--font-text)",
-            fontSize: 18,
-            lineHeight: "28px",
-            padding: 0,
-            cursor: userZoom <= USER_ZOOM_MIN ? "default" : "pointer",
-            opacity: userZoom <= USER_ZOOM_MIN ? 0.38 : 1,
-          }}
-        >
-          -
-        </button>
-        <div
-          className="t-mono"
-          aria-live="polite"
-          style={{
-            minWidth: 42,
-            textAlign: "center",
-            fontSize: 10,
-            letterSpacing: "0.08em",
-            textTransform: "lowercase",
-            color: "rgba(232, 226, 213, 0.66)",
-          }}
-        >
-          {userZoom >= PLANET_REVEAL_ZOOM ? "rings" : "galaxies"}
-        </div>
-        <button
-          type="button"
-          aria-label="zoom in"
-          onClick={zoomIn}
-          disabled={userZoom >= USER_ZOOM_MAX}
-          style={{
-            width: 30,
-            height: 30,
-            border: "1px solid rgba(232, 226, 213, 0.24)",
-            borderRadius: 4,
-            background: "rgba(232, 226, 213, 0.08)",
-            color: "rgba(244, 238, 222, 0.88)",
-            fontFamily: "var(--font-text)",
-            fontSize: 18,
-            lineHeight: "28px",
-            padding: 0,
-            cursor: userZoom >= USER_ZOOM_MAX ? "default" : "pointer",
-            opacity: userZoom >= USER_ZOOM_MAX ? 0.38 : 1,
-          }}
-        >
-          +
-        </button>
+        tap to birth · hold to swallow · pinch through layers
       </div>
 
       {/* delete-confirmation toast */}
@@ -3523,26 +3873,15 @@ export default function Stars() {
           [data-stars-memory="true"] {
             left: 12px !important;
             right: 12px !important;
-            bottom: calc(184px + env(safe-area-inset-bottom, 0px)) !important;
+            bottom: calc(148px + env(safe-area-inset-bottom, 0px)) !important;
             max-width: none !important;
             justify-content: center;
             gap: 8px !important;
           }
           [data-stars-hint="true"] {
-            bottom: calc(146px + env(safe-area-inset-bottom, 0px)) !important;
+            bottom: calc(118px + env(safe-area-inset-bottom, 0px)) !important;
             padding: 0 18px;
             line-height: 1.45;
-          }
-          [data-stars-zoom="true"] {
-            left: 12px !important;
-            bottom: calc(102px + env(safe-area-inset-bottom, 0px)) !important;
-            gap: 4px !important;
-            padding: 4px !important;
-          }
-          [data-stars-zoom="true"] button {
-            width: 28px !important;
-            height: 28px !important;
-            line-height: 26px !important;
           }
         }
       `,
