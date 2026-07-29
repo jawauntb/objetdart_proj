@@ -210,8 +210,24 @@ export function clampZoom(z: number): number {
   return Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z));
 }
 
+/** Soft world clamp for matter placement (stars / holes). */
 export function clampPan(v: number): number {
-  return Math.max(0.08, Math.min(0.92, v));
+  return Math.max(0.02, Math.min(0.98, v));
+}
+
+/**
+ * Keep the camera from looking past the seeded field.
+ * At zoom≈1 the view is locked to center (no black margins);
+ * panning unlocks as you zoom deeper.
+ */
+export function clampPanForZoom(v: number, zoom: number): number {
+  const z = Math.max(ZOOM_MIN, zoom);
+  const half = 0.5 / z;
+  const pad = 0.015;
+  const min = half + pad;
+  const max = 1 - half - pad;
+  if (min >= max) return 0.5;
+  return Math.max(min, Math.min(max, v));
 }
 
 /** Zoom toward a screen point — keeps that sky point under the cursor/pinch. */
@@ -229,8 +245,8 @@ export function zoomAtScreen(
   const worldY = cam.panY + (screenY - h * 0.5) / (h * z0);
   return {
     zoom: z1,
-    panX: clampPan(worldX - (screenX - w * 0.5) / (w * z1)),
-    panY: clampPan(worldY - (screenY - h * 0.5) / (h * z1)),
+    panX: clampPanForZoom(worldX - (screenX - w * 0.5) / (w * z1), z1),
+    panY: clampPanForZoom(worldY - (screenY - h * 0.5) / (h * z1), z1),
   };
 }
 
@@ -238,8 +254,8 @@ export function panByScreen(cam: Camera, dx: number, dy: number, w: number, h: n
   const z = Math.max(0.001, cam.zoom);
   return {
     zoom: cam.zoom,
-    panX: clampPan(cam.panX - dx / (w * z)),
-    panY: clampPan(cam.panY - dy / (h * z)),
+    panX: clampPanForZoom(cam.panX - dx / (w * z), z),
+    panY: clampPanForZoom(cam.panY - dy / (h * z), z),
   };
 }
 
