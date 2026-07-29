@@ -126,6 +126,12 @@ export default function Waves() {
     return () => mq.removeEventListener?.("change", update);
   }, []);
 
+  // Ambient audio bed: phasey stereo swell + soft clicks. Kept alongside
+  // the /stars pattern so the pond is never acoustically dead on arrival.
+  useEffect(() => {
+    try { getFieldAudio().setAmbientProfile("waves"); } catch { /* noop */ }
+  }, []);
+
   // ---- field helpers -------------------------------------------------------
 
   const clearFields = useCallback(() => {
@@ -408,6 +414,306 @@ export default function Waves() {
       }
     };
 
+    // ── persistent naturals ─────────────────────────────────────────
+    // Things the pond carries between visits: lily pads, fallen leaves,
+    // and (rarely) a koi drifting under the surface. They advance their
+    // position by elapsed real time on load (cap 12h) so the pond has
+    // been *doing something* while the user was away. Nothing man-made.
+    // Positions are normalized to survive resize.
+    type NaturalKind = "lily" | "leaf" | "koi";
+    type Natural = {
+      id: string;
+      kind: NaturalKind;
+      nx: number;
+      ny: number;
+      vx: number;  // drift cycles per hour across width
+      vy: number;  // gentle downstream drift cycles/hr
+      rot: number; // radians
+      seed: number;
+      createdAt: number;
+      lastSeen: number;
+    };
+    const NAT_KEY = "objetdart:waves:naturals:v1";
+    const MAX_NATURALS = 24;
+    let naturals: Natural[] = [];
+    const loadNaturals = () => {
+      if (typeof window === "undefined") return;
+      try {
+        const raw = localStorage.getItem(NAT_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw) as unknown;
+        if (!Array.isArray(parsed)) return;
+        const nowMs = Date.now();
+        naturals = parsed
+          .filter((n): n is Natural =>
+            !!n && typeof (n as Natural).id === "string" &&
+            typeof (n as Natural).kind === "string" &&
+            typeof (n as Natural).nx === "number" &&
+            typeof (n as Natural).ny === "number",
+          )
+          .map((n) => {
+            // advance drift for elapsed real time (cap 12h so a lily
+            // placed weeks ago doesn't teleport across the pond).
+            const dtH = Math.min(12, Math.max(0, (nowMs - n.lastSeen) / 3600_000));
+            let nx = n.nx + (n.vx || 0) * dtH;
+            let ny = n.ny + (n.vy || 0) * dtH;
+            nx = ((nx % 1) + 1) % 1;
+            ny = ((ny % 1) + 1) % 1;
+            return { ...n, nx, ny, lastSeen: nowMs };
+          })
+          .slice(-MAX_NATURALS);
+      } catch { /* noop */ }
+    };
+    const persistNaturals = () => {
+      if (typeof window === "undefined") return;
+      try {
+        const nowMs = Date.now();
+        for (const n of naturals) n.lastSeen = nowMs;
+        localStorage.setItem(NAT_KEY, JSON.stringify(naturals.slice(-MAX_NATURALS)));
+      } catch { /* noop */ }
+    };
+    const addNatural = (kind: NaturalKind, nx?: number, ny?: number) => {
+      const nowMs = Date.now();
+      const n: Natural = {
+        id: `nat-${nowMs}-${Math.random().toString(36).slice(2, 8)}`,
+        kind,
+        nx: nx != null ? clamp(nx, 0.04, 0.96) : Math.random(),
+        ny: ny != null ? clamp(ny, 0.10, 0.94) : 0.2 + Math.random() * 0.7,
+        // gentle prevailing pond current: leaves ride surface fastest,
+        // lilies barely creep, koi cruise slowly under the surface.
+        vx: kind === "leaf" ? 0.020 + Math.random() * 0.010
+          : kind === "koi" ? 0.014
+          : 0.004,
+        vy: kind === "leaf" ? 0.004 : kind === "koi" ? -0.002 : 0.001,
+        rot: Math.random() * Math.PI * 2,
+        seed: Math.floor(Math.random() * 0xFFFFFFFF),
+        createdAt: nowMs,
+        lastSeen: nowMs,
+      };
+      naturals.push(n);
+      while (naturals.length > MAX_NATURALS) naturals.shift();
+      persistNaturals();
+      return n;
+    };
+    loadNaturals();
+
+    // ── weather events (autonomic, transient) ───────────────────────
+    // Every 9-17s a jittered scheduler fires one of six natural events:
+    // a falling leaf, a dragonfly hover, a wind gust, a frog jump, a
+    // water strider crossing, or (rare) a koi surfacing. Pattern
+    // borrowed from Stars.tsx cosmic weather / Ocean.tsx so the pond
+    // feels like a place, not just an instrument. Only fires in ripple
+    // mode — string and refraction stay analytic.
+    type WeatherEvent =
+      | { kind: "leaf"; t0: number; duration: number; startX: number; startY: number; endX: number; endY: number; rot0: number; spin: number; landed: boolean; nat: Natural | null }
+      | { kind: "dragonfly"; t0: number; duration: number; ax: number; ay: number; bx: number; by: number; lastDip: number }
+      | { kind: "wind"; t0: number; duration: number; dir: number; band: number; lastEmit: number }
+      | { kind: "frog"; t0: number; duration: number; x: number; y: number }
+      | { kind: "strider"; t0: number; duration: number; ax: number; ay: number; bx: number; by: number; lastStep: number }
+      | { kind: "koi"; t0: number; duration: number; x: number; y: number; dir: number; splashed: boolean; nat: Natural | null };
+    const weather: WeatherEvent[] = [];
+    const addWeather = (e: WeatherEvent) => {
+      weather.push(e);
+      if (weather.length > 8) weather.shift();
+    };
+
+    const spawnFallingLeaf = () => {
+      const startX = 0.1 + Math.random() * 0.8;
+      const startY = -0.06;
+      const endX = clamp(startX + (Math.random() - 0.5) * 0.35, 0.08, 0.92);
+      const endY = 0.35 + Math.random() * 0.5;
+      addWeather({
+        kind: "leaf",
+        t0: performance.now(),
+        duration: 4.8 + Math.random() * 1.4,
+        startX, startY, endX, endY,
+        rot0: Math.random() * Math.PI * 2,
+        spin: (Math.random() - 0.5) * 4,
+        landed: false,
+        nat: null,
+      });
+    };
+    const spawnDragonfly = () => {
+      const y = 0.15 + Math.random() * 0.7;
+      const dir = Math.random() < 0.5 ? 1 : -1;
+      addWeather({
+        kind: "dragonfly",
+        t0: performance.now(),
+        duration: 6 + Math.random() * 2,
+        ax: dir > 0 ? -0.05 : 1.05,
+        ay: y,
+        bx: dir > 0 ? 1.05 : -0.05,
+        by: clamp(y + (Math.random() - 0.5) * 0.25, 0.1, 0.85),
+        lastDip: 0,
+      });
+    };
+    const spawnWindGust = () => {
+      const dir = Math.random() < 0.5 ? 1 : -1;
+      addWeather({
+        kind: "wind",
+        t0: performance.now(),
+        duration: 4.0,
+        dir,
+        band: 0.2 + Math.random() * 0.6,
+        lastEmit: 0,
+      });
+    };
+    const spawnFrogJump = () => {
+      const x = 0.12 + Math.random() * 0.76;
+      const y = 0.15 + Math.random() * 0.7;
+      drop2D(x, y, 2.4); // bigger than a tap
+      addWeather({
+        kind: "frog",
+        t0: performance.now(),
+        duration: 1.4,
+        x, y,
+      });
+      // audio.ts has no bloop — chime is the friendliest fallback.
+      try { getFieldAudio().playTone(140, 0.35); } catch { /* noop */ }
+      try { getFieldAudio().chime(); } catch { /* noop */ }
+    };
+    const spawnStrider = () => {
+      const y = 0.2 + Math.random() * 0.6;
+      const dir = Math.random() < 0.5 ? 1 : -1;
+      const arc = 0.22 + Math.random() * 0.18;
+      addWeather({
+        kind: "strider",
+        t0: performance.now(),
+        duration: 5.5,
+        ax: dir > 0 ? 0.1 : 0.9,
+        ay: y,
+        bx: dir > 0 ? 0.1 + arc : 0.9 - arc,
+        by: clamp(y + (Math.random() - 0.5) * 0.12, 0.15, 0.85),
+        lastStep: 0,
+      });
+    };
+    const spawnKoiSurface = () => {
+      const x = 0.15 + Math.random() * 0.7;
+      const y = 0.25 + Math.random() * 0.55;
+      const dir = Math.random() < 0.5 ? 1 : -1;
+      addWeather({
+        kind: "koi",
+        t0: performance.now(),
+        duration: 3.6,
+        x, y, dir,
+        splashed: false,
+        nat: null,
+      });
+      try { getFieldAudio().playTone(160, 0.5); } catch { /* noop */ }
+    };
+
+    let weatherTimer: ReturnType<typeof setTimeout> | 0 = 0;
+    const fireWeather = () => {
+      // Only stir the pond when the user is here and in ripple mode.
+      // string / refraction stay untouched analytical instruments.
+      if (!document.hidden && modeRef.current === "ripple" && runningRef.current) {
+        const roll = Math.random();
+        // weighted: leaf 25, dragonfly 22, wind 18, frog 16, strider 12, koi 7
+        if (roll < 0.25) spawnFallingLeaf();
+        else if (roll < 0.47) spawnDragonfly();
+        else if (roll < 0.65) spawnWindGust();
+        else if (roll < 0.81) spawnFrogJump();
+        else if (roll < 0.93) spawnStrider();
+        else spawnKoiSurface();
+      }
+      weatherTimer = setTimeout(fireWeather, 9000 + Math.random() * 8000);
+    };
+    weatherTimer = setTimeout(fireWeather, 3500 + Math.random() * 4000);
+
+    // ── long-press planting ─────────────────────────────────────────
+    // Hold on empty water at PLANT_MS to leave a lily pad; hold longer
+    // for a leaf; hold longest for a rare koi. Attached with native
+    // listeners so the existing React JSX handlers (which drive the
+    // pluck) keep working unmodified.
+    const PLANT_LILY_MS = 1800;
+    const PLANT_LEAF_MS = 2600;
+    const PLANT_KOI_MS = 3500;
+    const plantTimers = new Map<number, Array<ReturnType<typeof setTimeout>>>();
+    const plantStart = new Map<number, { x: number; y: number }>();
+
+    const armPlant = (id: number, clientX: number, clientY: number) => {
+      if (modeRef.current !== "ripple") return;
+      const rect = canvas.getBoundingClientRect();
+      const nx = (clientX - rect.left) / Math.max(1, rect.width);
+      const ny = (clientY - rect.top) / Math.max(1, rect.height);
+      plantStart.set(id, { x: clientX, y: clientY });
+      const timers: Array<ReturnType<typeof setTimeout>> = [];
+      timers.push(setTimeout(() => {
+        if (!plantStart.has(id)) return;
+        addNatural("lily", nx, ny);
+        try { getFieldAudio().chime(); } catch { /* noop */ }
+        try { haptics.ripple(0.6); } catch { /* noop */ }
+      }, PLANT_LILY_MS));
+      timers.push(setTimeout(() => {
+        if (!plantStart.has(id)) return;
+        addNatural("leaf", nx, ny);
+        try { getFieldAudio().chime(); } catch { /* noop */ }
+        try { haptics.tap(); } catch { /* noop */ }
+      }, PLANT_LEAF_MS));
+      timers.push(setTimeout(() => {
+        if (!plantStart.has(id)) return;
+        addNatural("koi", nx, ny);
+        try { getFieldAudio().playTone(160, 0.6); } catch { /* noop */ }
+        try { haptics.roll(); } catch { /* noop */ }
+      }, PLANT_KOI_MS));
+      plantTimers.set(id, timers);
+    };
+    const disarmPlant = (id: number) => {
+      const timers = plantTimers.get(id);
+      if (timers) for (const t of timers) clearTimeout(t);
+      plantTimers.delete(id);
+      plantStart.delete(id);
+    };
+    const onPlantDown = (e: PointerEvent) => {
+      armPlant(e.pointerId, e.clientX, e.clientY);
+    };
+    const onPlantMove = (e: PointerEvent) => {
+      const start = plantStart.get(e.pointerId);
+      if (!start) return;
+      // moved too much → this is a swipe, not a plant.
+      if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > 14) {
+        disarmPlant(e.pointerId);
+      }
+    };
+    const onPlantUp = (e: PointerEvent) => { disarmPlant(e.pointerId); };
+    canvas.addEventListener("pointerdown", onPlantDown);
+    canvas.addEventListener("pointermove", onPlantMove);
+    window.addEventListener("pointerup", onPlantUp);
+    window.addEventListener("pointercancel", onPlantUp);
+
+    // ── backdrop & natural rendering helpers ────────────────────────
+    // Paint a paper-warm to slate gradient behind the water and a soft
+    // horizon mist across the top so the pond reads as a place with a
+    // far shore instead of just a top-down grid.
+    const drawBackdrop = (w: number, h: number) => {
+      const sky = ctx.createLinearGradient(0, 0, 0, h);
+      sky.addColorStop(0.00, "rgba(226, 214, 186, 1)"); // warm paper
+      sky.addColorStop(0.14, "rgba(178, 172, 168, 1)"); // haze
+      sky.addColorStop(0.32, "rgba( 74,  92, 108, 1)"); // slate
+      sky.addColorStop(1.00, "rgba(  8,  18,  30, 1)"); // deep pond
+      ctx.fillStyle = sky;
+      ctx.fillRect(0, 0, w, h);
+    };
+    const drawHorizon = (w: number, h: number) => {
+      const horizonY = h * 0.14;
+      const mist = ctx.createLinearGradient(0, 0, 0, horizonY + 42);
+      mist.addColorStop(0.0, "rgba(226, 214, 186, 0.86)");
+      mist.addColorStop(0.7, "rgba(180, 174, 164, 0.28)");
+      mist.addColorStop(1.0, "rgba(180, 174, 164, 0.0)");
+      ctx.fillStyle = mist;
+      ctx.fillRect(0, 0, w, horizonY + 42);
+      // a barely-there horizon line
+      ctx.strokeStyle = "rgba(232, 220, 194, 0.28)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, horizonY);
+      ctx.lineTo(w, horizonY);
+      ctx.stroke();
+    };
+
+    let lastNaturalsSaveAt = performance.now();
+    let prevDrawSec = performance.now() / 1000;
+
     const draw = (now: number) => {
       last = now;
       const sim = simRef.current;
@@ -433,6 +739,59 @@ export default function Waves() {
         else drop2D(Math.random(), Math.random() * 0.9 + 0.05, 0.35);
       }
 
+      // ── tick weather (may inject displacement into the sim BEFORE
+      //    the step, so the ripples read at the current frame) ───────
+      const nowSec = now / 1000;
+      const dt = Math.min(0.06, Math.max(0, nowSec - prevDrawSec));
+      prevDrawSec = nowSec;
+      if (m === "ripple") {
+        for (let i = weather.length - 1; i >= 0; i--) {
+          const e = weather[i];
+          const age = (now - e.t0) / 1000;
+          if (age >= e.duration) { weather.splice(i, 1); continue; }
+          if (e.kind === "leaf") {
+            const f = clamp(age / e.duration, 0, 1);
+            if (!e.landed && f > 0.92) {
+              e.landed = true;
+              // touch-down pluck + persistent leaf at landing spot
+              drop2D(e.endX, e.endY, 1.4);
+              e.nat = addNatural("leaf", e.endX, e.endY);
+              try { getFieldAudio().playTone(220, 0.28); } catch { /* noop */ }
+            }
+          } else if (e.kind === "dragonfly") {
+            // dip every 900-1400ms while crossing
+            if (age - e.lastDip > 0.9 + Math.random() * 0.5) {
+              e.lastDip = age;
+              const f = clamp(age / e.duration, 0, 1);
+              const dx = e.ax + (e.bx - e.ax) * f;
+              const dy = e.ay + (e.by - e.ay) * f + Math.sin(age * 3) * 0.02;
+              if (dx > 0 && dx < 1 && dy > 0 && dy < 1) drop2D(dx, dy, 0.28);
+            }
+          } else if (e.kind === "wind") {
+            // step a bar of tiny pluck sources across the field
+            const f = clamp(age / e.duration, 0, 1);
+            const xLead = e.dir > 0 ? f : 1 - f;
+            if (age - e.lastEmit > 0.08) {
+              e.lastEmit = age;
+              const rows = 3;
+              for (let r0 = 0; r0 < rows; r0++) {
+                const y = e.band + (r0 - 1) * 0.03;
+                if (y > 0 && y < 1) drop2D(clamp(xLead, 0.02, 0.98), y, 0.18);
+              }
+            }
+          } else if (e.kind === "koi") {
+            const f = clamp(age / e.duration, 0, 1);
+            if (!e.splashed && f > 0.35 && f < 0.42) {
+              e.splashed = true;
+              drop2D(e.x, e.y, 1.6);
+              e.nat = addNatural("koi", e.x, e.y);
+              try { getFieldAudio().playTone(120, 0.4); } catch { /* noop */ }
+            }
+          }
+          // strider intentionally leaves NO ripples — only visible dimples
+        }
+      }
+
       const substeps = isRunning ? (reduce ? 1 : 2) : 0;
       for (let s = 0; s < substeps; s += 1) {
         if (m === "string") step1D(sim, c2, dampFactor);
@@ -442,7 +801,32 @@ export default function Waves() {
       if (m === "string") {
         renderString(sim, cfg.tone, glow);
       } else {
+        if (m === "ripple") drawBackdrop(width, height);
         renderField(sim, m, glow);
+        if (m === "ripple") {
+          drawHorizon(width, height);
+          // drift + draw persistent naturals on the pond
+          if (naturals.length > 0) {
+            for (const n of naturals) {
+              if (dt > 0) {
+                let nx = n.nx + n.vx * (dt / 3600);
+                let ny = n.ny + n.vy * (dt / 3600);
+                nx = ((nx % 1) + 1) % 1;
+                ny = clamp(ny, 0.10, 0.94);
+                n.nx = nx;
+                n.ny = ny;
+              }
+              const sx = n.nx * width;
+              const sy = n.ny * height;
+              const bob = Math.sin(nowSec * 1.2 + n.seed * 0.001) * 1.4;
+              if (n.kind === "lily") drawLilyPad(ctx, sx, sy + bob, 18 + (n.seed & 15), n.seed);
+              else if (n.kind === "leaf") drawFallenLeaf(ctx, sx, sy + bob, 10 + (n.seed & 7), n.rot + nowSec * 0.05, n.seed);
+              else if (n.kind === "koi") drawKoiShadow(ctx, sx, sy, 28 + (n.seed & 15), nowSec, n.seed);
+            }
+          }
+          // draw weather overlays after the naturals so they read on top
+          drawWeatherOverlay(ctx, weather, now, nowSec, width, height);
+        }
         if (m === "refraction") {
           // faint marker of the slow medium boundary
           const gy = height * 0.6;
@@ -469,14 +853,31 @@ export default function Waves() {
       ctx.fillStyle = vg;
       ctx.fillRect(0, 0, width, height);
 
+      // periodic naturals persistence — visible drift is applied per frame,
+      // this makes sure the mutations get written before unmount races.
+      if (naturals.length > 0 && now - lastNaturalsSaveAt > 4000) {
+        lastNaturalsSaveAt = now;
+        persistNaturals();
+      }
+
       raf = requestAnimationFrame(draw);
     };
 
     raf = requestAnimationFrame(draw);
     return () => {
       cancelAnimationFrame(raf);
+      if (weatherTimer) clearTimeout(weatherTimer);
+      for (const timers of plantTimers.values()) for (const t of timers) clearTimeout(t);
+      plantTimers.clear();
+      plantStart.clear();
+      // final checkpoint so re-entry advances drift from now.
+      persistNaturals();
       observer.disconnect();
       window.removeEventListener("resize", resize);
+      canvas.removeEventListener("pointerdown", onPlantDown);
+      canvas.removeEventListener("pointermove", onPlantMove);
+      window.removeEventListener("pointerup", onPlantUp);
+      window.removeEventListener("pointercancel", onPlantUp);
     };
   }, [drop2D, pluck1D]);
 
@@ -1130,6 +1531,268 @@ function colorAlpha(hex: string, alpha: number) {
   const g = (n >> 8) & 255;
   const b = n & 255;
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+// ── natural drawing helpers ────────────────────────────────────────
+// Small tight paintings for things that live on the pond. Kept
+// procedural (no assets) and never man-made — leaves, pads, koi.
+
+function drawLilyPad(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  r: number,
+  seed: number,
+) {
+  // A round pad with the classic notch cut toward the current, a light
+  // rim, and a subtle underwater shadow.
+  const rot = Math.sin(seed * 0.013) * Math.PI;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(rot);
+  // shadow beneath the pad in the water
+  ctx.fillStyle = "rgba(6, 18, 30, 0.28)";
+  ctx.beginPath();
+  ctx.ellipse(2, 2, r * 1.02, r * 0.92, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // body — flat green oval with a wedge notch removed
+  const g = ctx.createRadialGradient(-r * 0.25, -r * 0.3, r * 0.1, 0, 0, r);
+  g.addColorStop(0, "rgba(150, 196, 118, 0.98)");
+  g.addColorStop(0.6, "rgba( 92, 152,  86, 0.96)");
+  g.addColorStop(1, "rgba( 46, 100,  62, 0.94)");
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.moveTo(r, 0);
+  ctx.arc(0, 0, r, 0, Math.PI * 2 - 0.55, false);
+  ctx.lineTo(0, 0);
+  ctx.closePath();
+  ctx.fill();
+  // rim highlight
+  ctx.strokeStyle = "rgba(214, 244, 178, 0.55)";
+  ctx.lineWidth = 0.8;
+  ctx.beginPath();
+  ctx.arc(0, 0, r * 0.96, 0, Math.PI * 2 - 0.55, false);
+  ctx.stroke();
+  // vein radiating from the notch centre
+  ctx.strokeStyle = "rgba(58, 100, 62, 0.55)";
+  ctx.lineWidth = 0.6;
+  for (let i = 0; i < 5; i++) {
+    const a = -Math.PI + 0.35 + (i / 4) * (Math.PI * 2 - 0.7);
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(Math.cos(a) * r * 0.88, Math.sin(a) * r * 0.88);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawFallenLeaf(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  r: number,
+  rot: number,
+  seed: number,
+) {
+  // A small ochre / rust leaf shape floating on the surface. Two lobes
+  // pinched at both ends, thin stem, veined centre.
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(rot);
+  // shadow
+  ctx.fillStyle = "rgba(6, 18, 30, 0.24)";
+  ctx.beginPath();
+  ctx.ellipse(1, 1, r * 1.1, r * 0.42, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // body — pinched lens
+  const g = ctx.createLinearGradient(-r, 0, r, 0);
+  const warm = (seed & 3);
+  const base = warm === 0 ? "rgba(214, 138, 68, 0.96)"
+             : warm === 1 ? "rgba(196, 108, 54, 0.96)"
+             : warm === 2 ? "rgba(228, 176, 90, 0.96)"
+             : "rgba(180, 128, 76, 0.96)";
+  g.addColorStop(0, "rgba(240, 210, 154, 0.92)");
+  g.addColorStop(0.5, base);
+  g.addColorStop(1, "rgba(120, 78, 48, 0.94)");
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.moveTo(-r, 0);
+  ctx.quadraticCurveTo(0, -r * 0.55, r, 0);
+  ctx.quadraticCurveTo(0, r * 0.55, -r, 0);
+  ctx.closePath();
+  ctx.fill();
+  // central vein
+  ctx.strokeStyle = "rgba(96, 56, 32, 0.7)";
+  ctx.lineWidth = 0.7;
+  ctx.beginPath();
+  ctx.moveTo(-r * 0.95, 0);
+  ctx.lineTo(r * 0.95, 0);
+  ctx.stroke();
+  // side veins
+  for (let i = 1; i <= 3; i++) {
+    const f = i / 4;
+    const px = -r + f * 2 * r;
+    const vy = Math.sqrt(Math.max(0, 1 - Math.pow((px / r), 2))) * r * 0.48;
+    ctx.beginPath();
+    ctx.moveTo(px * 0.3, 0);
+    ctx.lineTo(px, -vy * 0.6);
+    ctx.moveTo(px * 0.3, 0);
+    ctx.lineTo(px, vy * 0.6);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawKoiShadow(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  r: number,
+  t: number,
+  seed: number,
+) {
+  // A dark elongated silhouette drifting under the surface, with a
+  // slight fish-tail wiggle. A single warm orange dab hints at colour
+  // in the koi's back.
+  const angle = Math.sin(t * 0.15 + seed * 0.01) * 0.4;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  // body shadow — soft, wide
+  const g = ctx.createRadialGradient(0, 0, r * 0.15, 0, 0, r);
+  g.addColorStop(0, "rgba(6, 14, 26, 0.55)");
+  g.addColorStop(0.6, "rgba(6, 14, 26, 0.35)");
+  g.addColorStop(1, "rgba(6, 14, 26, 0)");
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, r, r * 0.34, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // tail wiggle
+  const wag = Math.sin(t * 2.4 + seed * 0.03) * 0.5;
+  ctx.beginPath();
+  ctx.moveTo(-r * 0.85, 0);
+  ctx.quadraticCurveTo(-r * 1.05, wag * r * 0.3, -r * 1.15, wag * r * 0.55);
+  ctx.quadraticCurveTo(-r * 1.05, wag * r * 0.15 - r * 0.05, -r * 0.85, 0);
+  ctx.fillStyle = "rgba(6, 14, 26, 0.42)";
+  ctx.fill();
+  // orange back dab — the koi's colour barely showing through the water
+  ctx.fillStyle = "rgba(224, 120, 56, 0.42)";
+  ctx.beginPath();
+  ctx.ellipse(r * 0.15, -r * 0.02, r * 0.32, r * 0.08, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+// ── weather overlay drawing ────────────────────────────────────────
+// Ephemeral acts that fire on their own schedule. Displacement is
+// injected in the sim tick above; this pass just paints their bodies.
+type WeatherLite =
+  | { kind: "leaf"; t0: number; duration: number; startX: number; startY: number; endX: number; endY: number; rot0: number; spin: number; landed: boolean }
+  | { kind: "dragonfly"; t0: number; duration: number; ax: number; ay: number; bx: number; by: number }
+  | { kind: "wind"; t0: number; duration: number; dir: number; band: number }
+  | { kind: "frog"; t0: number; duration: number; x: number; y: number }
+  | { kind: "strider"; t0: number; duration: number; ax: number; ay: number; bx: number; by: number }
+  | { kind: "koi"; t0: number; duration: number; x: number; y: number; dir: number; splashed: boolean };
+
+function drawWeatherOverlay(
+  ctx: CanvasRenderingContext2D,
+  events: WeatherLite[],
+  now: number,
+  t: number,
+  w: number,
+  h: number,
+) {
+  for (const e of events) {
+    const age = (now - e.t0) / 1000;
+    if (age < 0 || age >= e.duration) continue;
+    const f = age / e.duration;
+    if (e.kind === "leaf" && !e.landed) {
+      // spiral down from top: mix start→end with a sinusoidal x wobble
+      const ease = f;
+      const x = (e.startX + (e.endX - e.startX) * ease + Math.sin(age * 3.2) * 0.03) * w;
+      const y = (e.startY + (e.endY - e.startY) * ease) * h;
+      const rot = e.rot0 + age * e.spin;
+      drawFallenLeaf(ctx, x, y, 9 + Math.sin(age * 2) * 1.4, rot, e.t0 & 0xffff);
+    } else if (e.kind === "dragonfly") {
+      const x = (e.ax + (e.bx - e.ax) * f) * w;
+      const y = (e.ay + (e.by - e.ay) * f + Math.sin(age * 6) * 0.02) * h;
+      // body
+      ctx.save();
+      ctx.fillStyle = "rgba(80, 220, 200, 0.85)";
+      ctx.beginPath();
+      ctx.ellipse(x, y, 4, 1.2, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // shimmering wing blur
+      const wing = 6 + Math.sin(age * 40) * 1.4;
+      ctx.strokeStyle = "rgba(200, 240, 232, 0.35)";
+      ctx.lineWidth = 0.8;
+      ctx.beginPath();
+      ctx.ellipse(x, y - 2, wing, 2, 0.4, 0, Math.PI * 2);
+      ctx.ellipse(x, y + 2, wing, 2, -0.4, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    } else if (e.kind === "wind") {
+      // subtle directional streak sweeping the band; the actual water
+      // motion is done by drop2D above.
+      const cy = e.band * h;
+      const lead = (e.dir > 0 ? f : 1 - f) * w;
+      const grad = ctx.createLinearGradient(lead - 60 * e.dir, cy, lead + 60 * e.dir, cy);
+      grad.addColorStop(0, "rgba(230, 240, 240, 0)");
+      grad.addColorStop(0.5, "rgba(230, 240, 240, 0.08)");
+      grad.addColorStop(1, "rgba(230, 240, 240, 0)");
+      ctx.fillStyle = grad;
+      ctx.fillRect(lead - 90, cy - 40, 180, 80);
+    } else if (e.kind === "frog") {
+      // splash rings — the pluck already deformed the water, this is
+      // just the outer shockwave ring for a moment.
+      const rad = 8 + age * 90;
+      const alpha = Math.max(0, 1 - age / e.duration) * 0.55;
+      ctx.save();
+      ctx.strokeStyle = `rgba(230, 244, 232, ${alpha})`;
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(e.x * w, e.y * h, rad, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    } else if (e.kind === "strider") {
+      const x = (e.ax + (e.bx - e.ax) * f) * w;
+      const y = (e.ay + (e.by - e.ay) * f + Math.sin(age * 5) * 0.006) * h;
+      // little dimple pair (the strider's feet meniscus)
+      ctx.save();
+      ctx.fillStyle = "rgba(6, 18, 30, 0.55)";
+      ctx.beginPath();
+      ctx.arc(x - 2, y - 1, 0.8, 0, Math.PI * 2);
+      ctx.arc(x + 2, y + 1, 0.8, 0, Math.PI * 2);
+      ctx.fill();
+      // very faint bug body
+      ctx.strokeStyle = "rgba(20, 40, 24, 0.7)";
+      ctx.lineWidth = 0.6;
+      ctx.beginPath();
+      ctx.moveTo(x - 4, y);
+      ctx.lineTo(x + 4, y);
+      ctx.stroke();
+      ctx.restore();
+      // suppress unused-t warning
+      void t;
+    } else if (e.kind === "koi") {
+      // A rising then descending dark silhouette. Splash ring fires
+      // once at the surface break moment.
+      const arc = Math.sin(Math.PI * f);
+      const bob = arc * 8;
+      const bx = e.x * w + e.dir * (f - 0.5) * 32;
+      const by = e.y * h - bob;
+      drawKoiShadow(ctx, bx, by, 32, t, e.t0 & 0xffff);
+      if (f > 0.34 && f < 0.5) {
+        const rf = (f - 0.34) / 0.16;
+        const rad = 4 + rf * 42;
+        ctx.strokeStyle = `rgba(232, 244, 250, ${(1 - rf) * 0.6})`;
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.arc(bx, by + 4, rad, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+  }
 }
 
 function WaveSlider({
