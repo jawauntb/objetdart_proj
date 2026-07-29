@@ -20,7 +20,7 @@ export type AmbientProfile =
   | "wind"       // pink-ish airy noise + faint bird-like sines
   | "fire"       // band-passed crackle
   | "earth"      // subsonic rumble
-  | "cosmic"     // very faint pink noise + distant sine drones
+  | "cosmic"     // vacuum hush + sparse deep drones + rare pulsar ticks
   | "monitor"    // hospital beep ambient (subliminal)
   | "electric"   // 60 Hz hum + occasional spark
   | "garden"     // gentle wind + filtered bird chatter
@@ -717,28 +717,63 @@ export function getFieldAudio(): FieldAudio {
       layer.sources.push(osc1, osc2);
       layer.nodes.push(lp, swell);
     } else if (profile === "cosmic") {
-      // pink noise barely audible + a couple of high sine drones
-      const noise = makeNoise(4, false);
+      // Deep space, not surf: almost-vacuum hush (thin, quiet, no swell),
+      // sparse pure drones, and rare soft pulsar ticks. Avoids the brown/
+      // pink + swell LFO that made the old bed read as ocean waves.
+      const hush = makeNoise(8, false);
+      const hp = c.createBiquadFilter();
+      hp.type = "highpass";
+      hp.frequency.value = 420;
       const lp = c.createBiquadFilter();
-      lp.type = "lowpass"; lp.frequency.value = 1800;
-      const ng = c.createGain();
-      ng.gain.value = 0.18;
-      noise.connect(lp).connect(ng).connect(fader);
-      noise.start();
+      lp.type = "lowpass";
+      lp.frequency.value = 1400;
+      lp.Q.value = 0.4;
+      const hushG = c.createGain();
+      hushG.gain.value = 0.028;
+      hush.connect(hp).connect(lp).connect(hushG).connect(fader);
+      hush.start();
 
-      const drone1 = c.createOscillator();
-      drone1.type = "sine"; drone1.frequency.value = 220;
-      const drone2 = c.createOscillator();
-      drone2.type = "sine"; drone2.frequency.value = 330;
-      const dg = c.createGain();
-      dg.gain.value = 0.06;
-      const dSwell = makeSwell(0.04, 0.40, 0.5);
-      drone1.connect(dSwell);
-      drone2.connect(dSwell);
-      dSwell.connect(dg).connect(fader);
-      drone1.start(); drone2.start();
-      layer.sources.push(noise, drone1, drone2);
-      layer.nodes.push(lp, ng, dSwell, dg);
+      // very slow, dry sine stack — no swell LFO (that was the "wave" feel)
+      const droneGain = c.createGain();
+      droneGain.gain.value = 0.022;
+      droneGain.connect(fader);
+      const freqs = [55, 82.5, 165, 247.5];
+      for (const f of freqs) {
+        const osc = c.createOscillator();
+        osc.type = "sine";
+        osc.frequency.value = f;
+        const g = c.createGain();
+        // stagger levels so the bed isn't a chord blob
+        g.gain.value = f < 100 ? 0.55 : f < 200 ? 0.28 : 0.16;
+        osc.connect(g).connect(droneGain);
+        osc.start();
+        layer.sources.push(osc);
+        layer.nodes.push(g);
+      }
+
+      // rare soft pulsar ticks — space radio, not surf
+      const tickBus = c.createGain();
+      tickBus.gain.value = 0.7;
+      tickBus.connect(fader);
+      const startAt = c.currentTime + 2.4;
+      for (let i = 0; i < 36; i++) {
+        const t = startAt + i * 3.8 + (i % 3) * 0.15;
+        const osc = c.createOscillator();
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(1480 + (i % 5) * 40, t);
+        const g = c.createGain();
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime(0.018, t + 0.008);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.09);
+        osc.connect(g).connect(tickBus);
+        osc.start(t);
+        osc.stop(t + 0.12);
+        layer.sources.push(osc);
+        layer.nodes.push(g);
+      }
+
+      layer.sources.push(hush);
+      layer.nodes.push(hp, lp, hushG, droneGain, tickBus);
     } else if (profile === "monitor") {
       // hospital monitor beep ambient — periodic short blips, very soft
       const blipBus = c.createGain();
