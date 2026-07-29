@@ -17,6 +17,7 @@ import {
   ZOOM_STEP,
   applyHoleNBody,
   clampPan,
+  clampPanForZoom,
   clampZoom,
   createAutomata,
   emptyLayerMemory,
@@ -269,6 +270,9 @@ function makeId(prefix: string): string {
 const STORAGE_KEY = "objetdart:constellations:v1";
 const RANDOM_SUPERNOVA_MS = 18000;
 const DEFAULT_CAMERA: Camera = { panX: 0.5, panY: 0.5, zoom: 1 };
+/** Tap vs hold: only after this does a press become a black-hole accretion. */
+const HOLD_BH_MS = 720;
+const PAN_MOVE_PX = 20;
 
 // ── spectral palette ─────────────────────────────────────────────────
 // Approximate stellar locus colors (RGB 0..255). O/B blue, A white,
@@ -705,6 +709,7 @@ export default function Stars() {
   const pointerIntentRef = useRef<PointerIntent | null>(null);
   const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
   const pinchRef = useRef<{ dist: number; zoom: number } | null>(null);
+  const holdTimerRef = useRef<number>(0);
   const milkyPulseRef = useRef<number>(0); // performance.now() of last MW click
   // hover flags also mirrored into refs so the RAF loop can read them cheaply
   const hoveredNebulaRef = useRef<number | null>(null);
@@ -803,10 +808,11 @@ export default function Stars() {
   }, [recordTape]);
 
   const applyCamera = useCallback((next: Camera, announce = false) => {
+    const zoom = clampZoom(next.zoom);
     const cam = {
-      zoom: clampZoom(next.zoom),
-      panX: clampPan(next.panX),
-      panY: clampPan(next.panY),
+      zoom,
+      panX: clampPanForZoom(next.panX, zoom),
+      panY: clampPanForZoom(next.panY, zoom),
     };
     cameraRef.current = cam;
     setCamera(cam);
@@ -1184,10 +1190,11 @@ export default function Stars() {
     const mem = loadCosmicMemoryV2();
     memoryRef.current = mem;
     if (mem.camera) {
+      const zoom = clampZoom(mem.camera.zoom ?? 1);
       const cam = {
-        zoom: clampZoom(mem.camera.zoom ?? 1),
-        panX: clampPan(mem.camera.panX ?? 0.5),
-        panY: clampPan(mem.camera.panY ?? 0.5),
+        zoom,
+        panX: clampPanForZoom(mem.camera.panX ?? 0.5, zoom),
+        panY: clampPanForZoom(mem.camera.panY ?? 0.5, zoom),
       };
       cameraRef.current = cam;
       setCamera(cam);
@@ -1798,19 +1805,17 @@ export default function Stars() {
       }
 
       const well = gravityWellRef.current;
-      if (well.active) {
-        const ageMs = performance.now() - well.t0;
-        if (ageMs > 90) {
-          const grow = Math.min(1, (ageMs - 90) / 820);
-          applyLens(
-            well.x,
-            well.y,
-            base * (0.012 + grow * 0.014),
-            base * (0.18 + grow * 0.18),
-            0.58 + grow * 0.70,
-            0.82,
-          );
-        }
+      // Lens only while truly accreting — not on every brief touch.
+      if (well.active && well.mode === "accrete") {
+        const grow = Math.min(1, well.mass / 2.4);
+        applyLens(
+          well.x,
+          well.y,
+          base * (0.014 + grow * 0.028),
+          base * (0.20 + grow * 0.28),
+          0.62 + grow * 0.75,
+          0.82,
+        );
       }
 
       // gravitational waves — a merger's spacetime ripple races outward and
@@ -2591,9 +2596,19 @@ export default function Stars() {
       // Blit the static universe in one drawImage. Then we layer
       // dynamic things (nebula breath flashes, star field) on top.
       bctx.clearRect(0, 0, w, h);
+      // Continuous night fill so pan/zoom never flashes a hard black frame edge.
+      {
+        const sky = bctx.createLinearGradient(0, 0, 0, h);
+        sky.addColorStop(0, "#000204");
+        sky.addColorStop(0.55, "#04060c");
+        sky.addColorStop(1, "#070a12");
+        bctx.fillStyle = sky;
+        bctx.fillRect(0, 0, w, h);
+      }
       const zoom = cameraZoom(t);
       bctx.save();
-      bctx.globalAlpha = 0.55 + 0.45 * fade;
+      // Only soften during layer crossfade — otherwise keep the deep field solid.
+      bctx.globalAlpha = fade < 0.999 ? 0.55 + 0.45 * fade : 1;
       bctx.translate(w * 0.5, h * 0.5);
       bctx.scale(zoom, zoom);
       // pan is already in worldPos; static is painted in layer-local normalized
@@ -2788,52 +2803,50 @@ export default function Stars() {
       }
 
       const well = gravityWellRef.current;
-      if (well.active) {
-        const age = (nowMs - well.t0) / 1000;
-        if (age > 0.08) {
-          const grow = Math.min(1, (age - 0.08) / 0.82);
-          const base = Math.min(w, h);
-          const coreR = 10 + grow * 18;
-          const ringR = base * (0.06 + grow * 0.09);
-          bctx.save();
-          bctx.translate(well.x, well.y);
-          bctx.rotate(t * 0.9);
-          bctx.globalCompositeOperation = "lighter";
-          for (let i = 0; i < 3; i++) {
-            bctx.strokeStyle = i === 0
-              ? `rgba(255, 198, 120, ${(0.34 * grow).toFixed(3)})`
-              : `rgba(132, 170, 255, ${(0.16 * grow).toFixed(3)})`;
-            bctx.lineWidth = 2.2 - i * 0.5;
-            bctx.beginPath();
-            bctx.ellipse(0, 0, ringR * (1 + i * 0.26), ringR * (0.26 + i * 0.05), 0, 0, Math.PI * 2);
-            bctx.stroke();
-          }
-          bctx.globalCompositeOperation = "source-over";
-          const lens = bctx.createRadialGradient(0, 0, 0, 0, 0, ringR * 1.6);
-          lens.addColorStop(0, "rgba(0, 0, 0, 0.92)");
-          lens.addColorStop(0.32, "rgba(0, 0, 0, 0.62)");
-          lens.addColorStop(0.58, `rgba(15, 24, 46, ${(0.26 * grow).toFixed(3)})`);
-          lens.addColorStop(1, "rgba(15, 24, 46, 0)");
-          bctx.fillStyle = lens;
+      // Horizon only after a committed hold — longer hold ⇒ wider event horizon.
+      if (well.active && well.mode === "accrete") {
+        const grow = Math.min(1, well.mass / 2.8);
+        const base = Math.min(w, h);
+        const coreR = 8 + grow * 36;
+        const ringR = base * (0.05 + grow * 0.16);
+        bctx.save();
+        bctx.translate(well.x, well.y);
+        bctx.rotate(t * 0.9);
+        bctx.globalCompositeOperation = "lighter";
+        for (let i = 0; i < 3; i++) {
+          bctx.strokeStyle = i === 0
+            ? `rgba(255, 198, 120, ${(0.40 * grow).toFixed(3)})`
+            : `rgba(132, 170, 255, ${(0.18 * grow).toFixed(3)})`;
+          bctx.lineWidth = 2.2 - i * 0.5;
           bctx.beginPath();
-          bctx.arc(0, 0, ringR * 1.6, 0, Math.PI * 2);
-          bctx.fill();
-          bctx.fillStyle = "rgba(0, 0, 0, 0.98)";
-          bctx.beginPath();
-          bctx.arc(0, 0, coreR, 0, Math.PI * 2);
-          bctx.fill();
-          bctx.restore();
+          bctx.ellipse(0, 0, ringR * (1 + i * 0.26), ringR * (0.26 + i * 0.05), 0, 0, Math.PI * 2);
+          bctx.stroke();
+        }
+        bctx.globalCompositeOperation = "source-over";
+        const lens = bctx.createRadialGradient(0, 0, 0, 0, 0, ringR * 1.6);
+        lens.addColorStop(0, "rgba(0, 0, 0, 0.92)");
+        lens.addColorStop(0.32, "rgba(0, 0, 0, 0.62)");
+        lens.addColorStop(0.58, `rgba(15, 24, 46, ${(0.26 * grow).toFixed(3)})`);
+        lens.addColorStop(1, "rgba(15, 24, 46, 0)");
+        bctx.fillStyle = lens;
+        bctx.beginPath();
+        bctx.arc(0, 0, ringR * 1.6, 0, Math.PI * 2);
+        bctx.fill();
+        bctx.fillStyle = "rgba(0, 0, 0, 0.98)";
+        bctx.beginPath();
+        bctx.arc(0, 0, coreR, 0, Math.PI * 2);
+        bctx.fill();
+        bctx.restore();
 
-          if (age > 0.26 && sparksRef.current.length < 18 && Math.floor(nowMs / 140) % 2 === 0) {
-            sparksRef.current = [
-              ...sparksRef.current.slice(-14),
-              {
-                x: well.x + (Math.random() - 0.5) * ringR * 1.4,
-                y: well.y + (Math.random() - 0.5) * ringR * 0.55,
-                t0: nowMs,
-              },
-            ];
-          }
+        if (grow > 0.12 && sparksRef.current.length < 18 && Math.floor(nowMs / 140) % 2 === 0) {
+          sparksRef.current = [
+            ...sparksRef.current.slice(-14),
+            {
+              x: well.x + (Math.random() - 0.5) * ringR * 1.4,
+              y: well.y + (Math.random() - 0.5) * ringR * 0.55,
+              t0: nowMs,
+            },
+          ];
         }
       }
 
@@ -3105,6 +3118,10 @@ export default function Stars() {
         pinchRef.current = { dist: Math.max(1, dist), zoom: cameraRef.current.zoom };
         gravityWellRef.current.active = false;
         gravityWellRef.current.mode = "pending";
+        if (holdTimerRef.current) {
+          window.clearTimeout(holdTimerRef.current);
+          holdTimerRef.current = 0;
+        }
         return;
       }
 
@@ -3144,6 +3161,16 @@ export default function Stars() {
         mass: 0,
         mode: "pending",
       };
+      if (holdTimerRef.current) window.clearTimeout(holdTimerRef.current);
+      const pointerId = e.pointerId;
+      holdTimerRef.current = window.setTimeout(() => {
+        const well = gravityWellRef.current;
+        if (!well.active || well.pointerId !== pointerId || well.mode !== "pending") return;
+        well.mode = "accrete";
+        well.mass = 0.05;
+        haptics.roll();
+        markSky("horizon opening", "gravity", 0.42, "sigil", "accrete-start", false);
+      }, HOLD_BH_MS);
       try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* noop */ }
     },
     [findStarAt, findSavedAt, findNebulaAt, isInMilkyWay, deleteSaved, cancelPending, markSky],
@@ -3176,10 +3203,16 @@ export default function Stars() {
         const intent = pointerIntentRef.current;
         const held = performance.now() - well.t0;
         const move = intent ? Math.hypot(x - intent.x, y - intent.y) : 0;
-        if (well.mode === "pending" && move > 26 && held < 430) {
+        // Drag always wins: pan should never become a black hole mid-swipe.
+        if (well.mode !== "pan" && move > PAN_MOVE_PX) {
           well.mode = "pan";
+          well.mass = 0;
+          if (holdTimerRef.current) {
+            window.clearTimeout(holdTimerRef.current);
+            holdTimerRef.current = 0;
+          }
         }
-        if (well.mode === "pan" && intent) {
+        if (well.mode === "pan") {
           const ww = window.innerWidth;
           const wh = window.innerHeight;
           applyCamera(panByScreen(cameraRef.current, x - well.x, y - well.y, ww, wh));
@@ -3188,10 +3221,9 @@ export default function Stars() {
         } else {
           well.x = x;
           well.y = y;
-          if (held > 430) {
-            well.mode = "accrete";
-            well.mass = Math.min(3.2, (held - 430) / 1400);
-            // pull born stars toward the well while holding
+          if (held >= HOLD_BH_MS) {
+            // Longer hold → wider / heavier horizon.
+            well.mass = Math.min(3.2, (held - HOLD_BH_MS) / 1600);
             const sky = screenToSky(x, y);
             const pull = 0.0009 * (0.4 + well.mass);
             let changed = false;
@@ -3220,25 +3252,32 @@ export default function Stars() {
       setHoveredNebula(findNebulaAt(x, y));
       setHoveredMilkyWay(isInMilkyWay(x, y));
     },
-    [applyCamera, findSavedAt, findNebulaAt, isInMilkyWay, screenToSky],
+    [applyCamera, findSavedAt, findNebulaAt, isInMilkyWay, markSky, screenToSky],
   );
 
-  const onPointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+  const endPointer = useCallback((e: React.PointerEvent<HTMLCanvasElement>, commit: boolean) => {
     pointersRef.current.delete(e.pointerId);
     if (pointersRef.current.size < 2) pinchRef.current = null;
+    if (holdTimerRef.current) {
+      window.clearTimeout(holdTimerRef.current);
+      holdTimerRef.current = 0;
+    }
 
     const well = gravityWellRef.current;
-    if (well.pointerId === e.pointerId) {
-      const held = performance.now() - well.t0;
-      const intent = pointerIntentRef.current;
-      const move = intent ? Math.hypot(well.x - intent.x, well.y - intent.y) : 0;
+    if (well.pointerId !== e.pointerId) return;
 
+    const held = performance.now() - well.t0;
+    const intent = pointerIntentRef.current;
+    const move = intent ? Math.hypot(well.x - intent.x, well.y - intent.y) : 0;
+
+    if (commit) {
       if (well.mode === "pan") {
         // pan complete — quiet
-      } else if (well.mode === "accrete" || held > 430) {
+      } else if (well.mode === "accrete") {
+        // Only a real hold (entered accrete) births/grows a hole.
         releaseAccretion(well.x, well.y, held, well.mass);
-      } else if (!intent || move > 26) {
-        // tiny drag without pan threshold — ignore
+      } else if (!intent || move > PAN_MOVE_PX) {
+        // aborted / tiny jitter — ignore
       } else if (intent.starIdx >= 0) {
         const star = activeFieldRef.current.stars[intent.starIdx];
         if (star && (star.size > 1.55 || star.brightness > 0.78)) {
@@ -3266,15 +3305,23 @@ export default function Stars() {
       } else {
         birthStarAt(well.x, well.y);
       }
-
-      gravityWellRef.current.active = false;
-      gravityWellRef.current.pointerId = null;
-      gravityWellRef.current.mass = 0;
-      gravityWellRef.current.mode = "pending";
-      pointerIntentRef.current = null;
-      try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* noop */ }
     }
+
+    gravityWellRef.current.active = false;
+    gravityWellRef.current.pointerId = null;
+    gravityWellRef.current.mass = 0;
+    gravityWellRef.current.mode = "pending";
+    pointerIntentRef.current = null;
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* noop */ }
   }, [birthStarAt, markSky, releaseAccretion, spawnStarForm, supernovaAt]);
+
+  const onPointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+    endPointer(e, true);
+  }, [endPointer]);
+
+  const onPointerCancel = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+    endPointer(e, false);
+  }, [endPointer]);
 
   const onDoubleClick = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -3621,8 +3668,7 @@ export default function Stars() {
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
-        onPointerCancel={onPointerUp}
-        onPointerLeave={onPointerUp}
+        onPointerCancel={onPointerCancel}
         onDoubleClick={onDoubleClick}
         onContextMenu={onContextMenu}
         style={{
@@ -3769,7 +3815,7 @@ export default function Stars() {
           pointerEvents: "none",
         }}
       >
-        tap to birth · hold to swallow · pinch through layers
+        tap to birth · hold for a black hole · drag to pan · pinch deeper
       </div>
 
       {/* delete-confirmation toast */}
