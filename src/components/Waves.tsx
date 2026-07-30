@@ -12,6 +12,14 @@ import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { useField } from "@/store/field";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
+import {
+  addNatural as worldAddNatural,
+  commitZone as worldCommitZone,
+  getNaturalsInZone,
+  subscribeNaturals,
+  type WorldKind,
+  type WorldNatural,
+} from "@/lib/world";
 
 /**
  * Waves — a wave-propagation instrument.
@@ -420,82 +428,30 @@ export default function Waves() {
     // position by elapsed real time on load (cap 12h) so the pond has
     // been *doing something* while the user was away. Nothing man-made.
     // Positions are normalized to survive resize.
-    type NaturalKind = "lily" | "leaf" | "koi";
-    type Natural = {
-      id: string;
-      kind: NaturalKind;
-      nx: number;
-      ny: number;
-      vx: number;  // drift cycles per hour across width
-      vy: number;  // gentle downstream drift cycles/hr
-      rot: number; // radians
-      seed: number;
-      createdAt: number;
-      lastSeen: number;
-    };
-    const NAT_KEY = "objetdart:waves:naturals:v1";
-    const MAX_NATURALS = 24;
-    let naturals: Natural[] = [];
-    const loadNaturals = () => {
-      if (typeof window === "undefined") return;
-      try {
-        const raw = localStorage.getItem(NAT_KEY);
-        if (!raw) return;
-        const parsed = JSON.parse(raw) as unknown;
-        if (!Array.isArray(parsed)) return;
-        const nowMs = Date.now();
-        naturals = parsed
-          .filter((n): n is Natural =>
-            !!n && typeof (n as Natural).id === "string" &&
-            typeof (n as Natural).kind === "string" &&
-            typeof (n as Natural).nx === "number" &&
-            typeof (n as Natural).ny === "number",
-          )
-          .map((n) => {
-            // advance drift for elapsed real time (cap 12h so a lily
-            // placed weeks ago doesn't teleport across the pond).
-            const dtH = Math.min(12, Math.max(0, (nowMs - n.lastSeen) / 3600_000));
-            let nx = n.nx + (n.vx || 0) * dtH;
-            let ny = n.ny + (n.vy || 0) * dtH;
-            nx = ((nx % 1) + 1) % 1;
-            ny = ((ny % 1) + 1) % 1;
-            return { ...n, nx, ny, lastSeen: nowMs };
-          })
-          .slice(-MAX_NATURALS);
-      } catch { /* noop */ }
+    // Persistent pond life (from the shared world). Lily pads, fallen
+    // leaves, and rare koi live in the shared pool (src/lib/world.ts) so a
+    // leaf placed here can wash into /ocean over time. Rotation is derived
+    // from seed at render time; vertical downstream drift dropped now that
+    // migration between pages is the main long-term travel.
+    type NaturalKind = Extract<WorldKind, "lily" | "leaf" | "koi">;
+    const vxForKind = (kind: NaturalKind): number =>
+      kind === "leaf" ? 0.024
+      : kind === "koi" ? 0.014
+      : 0.004;
+    let naturals: WorldNatural[] = getNaturalsInZone("waves");
+    const unsubscribeWorld = subscribeNaturals(() => {
+      naturals = getNaturalsInZone("waves");
+    });
+    const addNatural = (kind: NaturalKind, nx?: number, ny?: number) => {
+      const finalNx = nx != null ? clamp(nx, 0.04, 0.96) : Math.random();
+      const finalNy = ny != null ? clamp(ny, 0.10, 0.94) : 0.2 + Math.random() * 0.7;
+      const created = worldAddNatural(kind, "waves", finalNx, finalNy, vxForKind(kind));
+      naturals = getNaturalsInZone("waves");
+      return created;
     };
     const persistNaturals = () => {
-      if (typeof window === "undefined") return;
-      try {
-        const nowMs = Date.now();
-        for (const n of naturals) n.lastSeen = nowMs;
-        localStorage.setItem(NAT_KEY, JSON.stringify(naturals.slice(-MAX_NATURALS)));
-      } catch { /* noop */ }
+      worldCommitZone("waves", naturals);
     };
-    const addNatural = (kind: NaturalKind, nx?: number, ny?: number) => {
-      const nowMs = Date.now();
-      const n: Natural = {
-        id: `nat-${nowMs}-${Math.random().toString(36).slice(2, 8)}`,
-        kind,
-        nx: nx != null ? clamp(nx, 0.04, 0.96) : Math.random(),
-        ny: ny != null ? clamp(ny, 0.10, 0.94) : 0.2 + Math.random() * 0.7,
-        // gentle prevailing pond current: leaves ride surface fastest,
-        // lilies barely creep, koi cruise slowly under the surface.
-        vx: kind === "leaf" ? 0.020 + Math.random() * 0.010
-          : kind === "koi" ? 0.014
-          : 0.004,
-        vy: kind === "leaf" ? 0.004 : kind === "koi" ? -0.002 : 0.001,
-        rot: Math.random() * Math.PI * 2,
-        seed: Math.floor(Math.random() * 0xFFFFFFFF),
-        createdAt: nowMs,
-        lastSeen: nowMs,
-      };
-      naturals.push(n);
-      while (naturals.length > MAX_NATURALS) naturals.shift();
-      persistNaturals();
-      return n;
-    };
-    loadNaturals();
 
     // ── weather events (autonomic, transient) ───────────────────────
     // Every 9-17s a jittered scheduler fires one of six natural events:
@@ -505,12 +461,12 @@ export default function Waves() {
     // feels like a place, not just an instrument. Only fires in ripple
     // mode — string and refraction stay analytic.
     type WeatherEvent =
-      | { kind: "leaf"; t0: number; duration: number; startX: number; startY: number; endX: number; endY: number; rot0: number; spin: number; landed: boolean; nat: Natural | null }
+      | { kind: "leaf"; t0: number; duration: number; startX: number; startY: number; endX: number; endY: number; rot0: number; spin: number; landed: boolean; nat: WorldNatural | null }
       | { kind: "dragonfly"; t0: number; duration: number; ax: number; ay: number; bx: number; by: number; lastDip: number }
       | { kind: "wind"; t0: number; duration: number; dir: number; band: number; lastEmit: number }
       | { kind: "frog"; t0: number; duration: number; x: number; y: number }
       | { kind: "strider"; t0: number; duration: number; ax: number; ay: number; bx: number; by: number; lastStep: number }
-      | { kind: "koi"; t0: number; duration: number; x: number; y: number; dir: number; splashed: boolean; nat: Natural | null };
+      | { kind: "koi"; t0: number; duration: number; x: number; y: number; dir: number; splashed: boolean; nat: WorldNatural | null };
     const weather: WeatherEvent[] = [];
     const addWeather = (e: WeatherEvent) => {
       weather.push(e);
@@ -810,17 +766,18 @@ export default function Waves() {
             for (const n of naturals) {
               if (dt > 0) {
                 let nx = n.nx + n.vx * (dt / 3600);
-                let ny = n.ny + n.vy * (dt / 3600);
                 nx = ((nx % 1) + 1) % 1;
-                ny = clamp(ny, 0.10, 0.94);
                 n.nx = nx;
-                n.ny = ny;
               }
               const sx = n.nx * width;
               const sy = n.ny * height;
               const bob = Math.sin(nowSec * 1.2 + n.seed * 0.001) * 1.4;
+              // rot derived from seed (WorldNatural has no rot field —
+              // deterministic from seed keeps each leaf's cant stable
+              // across reloads without persisting the extra number).
+              const rot = ((n.seed % 6283) / 1000);
               if (n.kind === "lily") drawLilyPad(ctx, sx, sy + bob, 18 + (n.seed & 15), n.seed);
-              else if (n.kind === "leaf") drawFallenLeaf(ctx, sx, sy + bob, 10 + (n.seed & 7), n.rot + nowSec * 0.05, n.seed);
+              else if (n.kind === "leaf") drawFallenLeaf(ctx, sx, sy + bob, 10 + (n.seed & 7), rot + nowSec * 0.05, n.seed);
               else if (n.kind === "koi") drawKoiShadow(ctx, sx, sy, 28 + (n.seed & 15), nowSec, n.seed);
             }
           }
@@ -872,6 +829,7 @@ export default function Waves() {
       plantStart.clear();
       // final checkpoint so re-entry advances drift from now.
       persistNaturals();
+      unsubscribeWorld();
       observer.disconnect();
       window.removeEventListener("resize", resize);
       canvas.removeEventListener("pointerdown", onPlantDown);

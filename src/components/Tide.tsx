@@ -5,6 +5,14 @@ import { getFieldAudio } from "@/lib/audio";
 import { useField } from "@/store/field";
 import * as haptics from "@/lib/haptics";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
+import {
+  addNatural as worldAddNatural,
+  commitZone as worldCommitZone,
+  getNaturalsInZone,
+  subscribeNaturals,
+  type WorldKind,
+  type WorldNatural,
+} from "@/lib/world";
 
 /**
  * /tide — the lunar gravity-phase instrument.
@@ -142,68 +150,32 @@ export default function Tide() {
     let raf = 0;
     const t0 = performance.now();
 
-    // ── persistent tideline naturals ─────────────────────────────
-    // Shells, driftwood, starfish left along the shore. Positioned in
-    // "tide-band" space where ny=0 sits at the high-tide mark and ny=1
-    // at the low-tide mark. A shell placed higher up is only exposed
-    // when the user drags the moon to produce a low enough tide — the
-    // simulation is genuinely the gameplay. Same localStorage pattern
-    // as /ocean so the shore has memory across visits.
-    type NaturalKind = "seashell" | "driftwood" | "starfish";
-    type Natural = {
-      id: string;
-      kind: NaturalKind;
-      nx: number;    // 0..1 across width
-      ny: number;    // 0..1 in the tide band (0 = high tide line, 1 = low tide line)
-      seed: number;
-      createdAt: number;
-      lastSeen: number;
-    };
-    const NAT_KEY = "objetdart:tide:naturals:v1";
-    const MAX_NATURALS = 20;
-    let naturals: Natural[] = [];
-    const loadNaturals = () => {
-      if (typeof window === "undefined") return;
-      try {
-        const raw = localStorage.getItem(NAT_KEY);
-        if (!raw) return;
-        const parsed = JSON.parse(raw) as unknown;
-        if (!Array.isArray(parsed)) return;
-        naturals = parsed
-          .filter((n): n is Natural =>
-            !!n && typeof (n as Natural).id === "string" &&
-            typeof (n as Natural).kind === "string" &&
-            typeof (n as Natural).nx === "number" &&
-            typeof (n as Natural).ny === "number",
-          )
-          .slice(-MAX_NATURALS);
-      } catch { /* noop */ }
+    // ── persistent tideline naturals (from the shared world) ────
+    // Shells, driftwood, starfish left along the shore live in the shared
+    // pool (see src/lib/world.ts). /tide only shows things whose zone is
+    // "tide", but a shell can migrate from /ocean over real elapsed time.
+    // ny is tide-band space: 0 = high-tide mark, 1 = low-tide mark. A shell
+    // placed higher up is only exposed when the moon drags a low enough
+    // tide — the simulation IS the gameplay.
+    type NaturalKind = Extract<WorldKind, "seashell" | "driftwood" | "starfish">;
+    let naturals: WorldNatural[] = getNaturalsInZone("tide");
+    const unsubscribeWorld = subscribeNaturals(() => {
+      naturals = getNaturalsInZone("tide");
+    });
+    const addNatural = (kind: NaturalKind, nx: number, ny: number) => {
+      const created = worldAddNatural(
+        kind,
+        "tide",
+        Math.max(0.02, Math.min(0.98, nx)),
+        Math.max(0, Math.min(1, ny)),
+        0, // /tide naturals stay put — the tide moves, not the shells
+      );
+      naturals = getNaturalsInZone("tide");
+      return created;
     };
     const persistNaturals = () => {
-      if (typeof window === "undefined") return;
-      try {
-        const nowMs = Date.now();
-        for (const n of naturals) n.lastSeen = nowMs;
-        localStorage.setItem(NAT_KEY, JSON.stringify(naturals.slice(-MAX_NATURALS)));
-      } catch { /* noop */ }
+      worldCommitZone("tide", naturals);
     };
-    const addNatural = (kind: NaturalKind, nx: number, ny: number) => {
-      const nowMs = Date.now();
-      const n: Natural = {
-        id: `tnat-${nowMs}-${Math.random().toString(36).slice(2, 8)}`,
-        kind,
-        nx: Math.max(0.02, Math.min(0.98, nx)),
-        ny: Math.max(0, Math.min(1, ny)),
-        seed: Math.floor(Math.random() * 0xFFFFFFFF),
-        createdAt: nowMs,
-        lastSeen: nowMs,
-      };
-      naturals.push(n);
-      while (naturals.length > MAX_NATURALS) naturals.shift();
-      persistNaturals();
-      return n;
-    };
-    loadNaturals();
     let lastNaturalsSaveAt = performance.now();
 
     // ── weather events (autonomic) ───────────────────────────────
@@ -860,6 +832,7 @@ export default function Tide() {
       if (weatherTimer) clearTimeout(weatherTimer);
       if (plantTimer) clearTimeout(plantTimer);
       persistNaturals();
+      unsubscribeWorld();
       window.removeEventListener("resize", resize);
       mq.removeEventListener?.("change", onMq);
       cv.removeEventListener("pointerdown", onDown);
