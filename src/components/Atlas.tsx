@@ -310,6 +310,8 @@ export default function Atlas() {
   const regionSettleRef = useRef<number | null>(null);
   const zoomSettleRef = useRef<number | null>(null);
   const freeZoomParentRef = useRef<MapSnapshot | null>(null);
+  // Debounce for "wider territory" generation triggered by zoom-out at MIN_ZOOM.
+  const lastWidenAtRef = useRef(0);
   const historyRef = useRef<MapSnapshot[]>([]);
   const lastZoomRequestKeyRef = useRef<string | null>(null);
   const renderedZoomRef = useRef(1);
@@ -1433,6 +1435,48 @@ export default function Atlas() {
       : DESKTOP_ZOOM_SETTLE_MS);
   };
 
+  // Zoom-out at fit-to-view is a request for wider territory: MIN_ZOOM
+  // is the "map fills the frame" floor, so pulling back can't shrink
+  // the image any further — instead we ask the generator for a wider
+  // parent sheet centered on the current view. Rate-limited by a
+  // 1500ms window so a burst of scroll ticks fires exactly one
+  // generation, plus `lastZoomRequestKeyRef` dedupe against the same
+  // focus/concept combo.
+  const requestWiderTerritory = () => {
+    if (busy) return;
+    const nowMs = performance.now();
+    if (nowMs - lastWidenAtRef.current < 1500) return;
+    const current = viewRef.current;
+    const m = metricsRef.current;
+    if (!m.width) return;
+    lastWidenAtRef.current = nowMs;
+    const mapWidth = Math.max(1, m.mapWidth * current.zoom);
+    const mapHeight = Math.max(1, m.mapHeight * current.zoom);
+    const focus = {
+      x: clamp((m.width / 2 - current.x) / mapWidth, 0, 1),
+      y: clamp((m.height / 2 - current.y) / mapHeight, 0, 1),
+      zoom: MIN_ZOOM,
+    };
+    const key = [concept, "wider-from-fit", Math.round(focus.x * 8), Math.round(focus.y * 8)].join("|");
+    if (key === lastZoomRequestKeyRef.current) return;
+    lastZoomRequestKeyRef.current = key;
+    const parent = captureSnapshot();
+    invalidateGeneration();
+    historyRef.current.push(parent);
+    if (historyRef.current.length > 8) historyRef.current.shift();
+    setHistoryDepth(historyRef.current.length);
+    freeZoomParentRef.current = null;
+    renderedZoomRef.current = 1;
+    setStatus("widening the chart to the surrounding territory");
+    setRenderPhase("local");
+    recordTape("region", 0.68, "atlas/widen-from-fit");
+    void generateMap({
+      mode: "zoom",
+      subjectPrompt: concept + " · wider territory",
+      focus,
+    });
+  };
+
   const onWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
     if ((event.target as HTMLElement).closest("form, input, [data-map-ui]")) return;
     event.preventDefault();
@@ -1440,6 +1484,12 @@ export default function Atlas() {
     const rect = stageRef.current?.getBoundingClientRect();
     if (!rect) return;
     const current = viewRef.current;
+    // Already at fit-to-view and the user is trying to keep zooming
+    // out — treat that as "show me a wider world" and generate.
+    if (event.deltaY > 0 && current.zoom <= MIN_ZOOM + 0.02) {
+      requestWiderTerritory();
+      return;
+    }
     const nextZoom = clamp(current.zoom * Math.exp(-event.deltaY * 0.0018), MIN_ZOOM, MAX_ZOOM);
     beginFreeZoom();
     const point = { x: event.clientX - rect.left, y: event.clientY - rect.top };
@@ -1559,6 +1609,10 @@ export default function Atlas() {
       const distance = Math.max(1, Math.hypot(points[1].x - points[0].x, points[1].y - points[0].y));
       const midpoint = { x: (points[0].x + points[1].x) / 2, y: (points[0].y + points[1].y) / 2 };
       const prev = pinchRef.current;
+      // Contracting pinch at fit-to-view is a request for wider territory.
+      if (distance < prev.distance * 0.94 && viewRef.current.zoom <= MIN_ZOOM + 0.02) {
+        requestWiderTerritory();
+      }
       const zoom = clamp(prev.view.zoom * (distance / Math.max(1, prev.distance)), MIN_ZOOM, MAX_ZOOM);
       // Incremental pinch around the live midpoint keeps mobile two-finger zoom stable.
       const worldX = (midpoint.x - prev.view.x) / prev.view.zoom;
