@@ -5,6 +5,14 @@ import { getFieldAudio } from "@/lib/audio";
 import { useField } from "@/store/field";
 import * as haptics from "@/lib/haptics";
 import { relaxTurbulence, stirTurbulence } from "@/lib/turbulence";
+import {
+  addNatural as worldAddNatural,
+  commitZone as worldCommitZone,
+  getNaturalsInZone,
+  subscribeNaturals,
+  type WorldKind,
+  type WorldNatural,
+} from "@/lib/world";
 
 /**
  * /ocean — the whole body of water, and a dive down through it.
@@ -408,88 +416,35 @@ export default function Ocean() {
       if (sparks.length > 24) sparks.shift();
     };
 
-    // ── persistent naturals ──────────────────────────────────────
-    // Things the ocean carries: seashells, kelp rafts, driftwood, starfish,
-    // sand dollars. They drift on their own, survive reload, and advance
-    // their position by the time elapsed while you were gone — so the
-    // ocean has been *doing something* between visits. Never man-made.
-    // Positions are normalized: nx in [0,1] across width, ny in [0,1]
-    // as depth-along-the-shore band (0 = far horizon, 1 = near foreground).
-    type NaturalKind = "seashell" | "kelp" | "driftwood" | "starfish" | "sanddollar";
-    type Natural = {
-      id: string;
-      kind: NaturalKind;
-      nx: number;
-      ny: number;       // band position along the receding sea
-      vx: number;       // drift, cycles per hour across the frame
-      seed: number;
-      createdAt: number;
-      lastSeen: number;
-    };
-    const NAT_KEY = "objetdart:ocean:naturals:v1";
-    const MAX_NATURALS = 24;
-    let naturals: Natural[] = [];
-    // Load persisted naturals; drift each by (now - lastSeen) so they've
-    // been carried by the current while the user was away.
-    const loadNaturals = () => {
-      if (typeof window === "undefined") return;
-      try {
-        const raw = localStorage.getItem(NAT_KEY);
-        if (!raw) return;
-        const parsed = JSON.parse(raw) as unknown;
-        if (!Array.isArray(parsed)) return;
-        const nowMs = Date.now();
-        naturals = parsed
-          .filter((n): n is Natural =>
-            !!n && typeof (n as Natural).id === "string" &&
-            typeof (n as Natural).kind === "string" &&
-            typeof (n as Natural).nx === "number" &&
-            typeof (n as Natural).ny === "number",
-          )
-          .map((n) => {
-            // advance drift for elapsed real time (cap at 12h so a natural
-            // that was placed weeks ago doesn't teleport across the sea)
-            const dtH = Math.min(12, Math.max(0, (nowMs - n.lastSeen) / 3600_000));
-            let nx = n.nx + (n.vx || 0) * dtH;
-            // wrap horizontally so nothing falls off the edge of the world
-            nx = ((nx % 1) + 1) % 1;
-            return { ...n, nx, lastSeen: nowMs };
-          })
-          .slice(-MAX_NATURALS);
-      } catch { /* noop */ }
+    // ── persistent naturals (from the shared world) ───────────────
+    // Naturals live in a single pool across all pages (see src/lib/world.ts).
+    // /ocean only renders things whose zone is "ocean", but the underlying
+    // storage is shared — a shell placed here can migrate to /tide over
+    // real elapsed time. Local `naturals` is a live slice we mutate for
+    // per-frame drift, then commitZone() writes it back to the world.
+    type NaturalKind = Extract<WorldKind, "seashell" | "kelp" | "driftwood" | "starfish" | "sanddollar">;
+    const vxForKind = (kind: NaturalKind): number =>
+      kind === "starfish" ? 0
+      : kind === "sanddollar" ? 0.003
+      : kind === "driftwood" ? 0.012
+      : kind === "kelp" ? 0.006
+      : 0.020;
+    let naturals: WorldNatural[] = getNaturalsInZone("ocean");
+    // If another page adds/mutates naturals while we're mounted, resync.
+    const unsubscribeWorld = subscribeNaturals(() => {
+      naturals = getNaturalsInZone("ocean");
+    });
+    const addNatural = (kind: NaturalKind, nx?: number, ny?: number) => {
+      const finalNx = nx != null ? Math.max(0.02, Math.min(0.98, nx)) : Math.random();
+      const finalNy = ny != null ? Math.max(0.05, Math.min(0.95, ny)) : 0.5 + Math.random() * 0.4;
+      const created = worldAddNatural(kind, "ocean", finalNx, finalNy, vxForKind(kind));
+      // resync our local slice so the new one shows up this frame
+      naturals = getNaturalsInZone("ocean");
+      return created;
     };
     const persistNaturals = () => {
-      if (typeof window === "undefined") return;
-      try {
-        const nowMs = Date.now();
-        for (const n of naturals) n.lastSeen = nowMs;
-        localStorage.setItem(NAT_KEY, JSON.stringify(naturals.slice(-MAX_NATURALS)));
-      } catch { /* noop */ }
+      worldCommitZone("ocean", naturals);
     };
-    const addNatural = (kind: NaturalKind, nx?: number, ny?: number) => {
-      const nowMs = Date.now();
-      const n: Natural = {
-        id: `nat-${nowMs}-${Math.random().toString(36).slice(2, 8)}`,
-        kind,
-        nx: nx != null ? Math.max(0.02, Math.min(0.98, nx)) : Math.random(),
-        ny: ny != null ? Math.max(0.05, Math.min(0.95, ny)) : 0.5 + Math.random() * 0.4,
-        // gentle prevailing drift: left→right at 0.02 cycles/hr for shells,
-        // slower for heavy driftwood; near-still for anchored starfish.
-        vx: kind === "starfish" ? 0
-          : kind === "sanddollar" ? 0.003
-          : kind === "driftwood" ? 0.012
-          : kind === "kelp" ? 0.006
-          : 0.020,
-        seed: Math.floor(Math.random() * 0xFFFFFFFF),
-        createdAt: nowMs,
-        lastSeen: nowMs,
-      };
-      naturals.push(n);
-      while (naturals.length > MAX_NATURALS) naturals.shift();
-      persistNaturals();
-      return n;
-    };
-    loadNaturals();
 
     // ── weather events (autonomic, transient) ────────────────────
     // Every 9-17s a jittered scheduler fires one of six natural events:
@@ -1370,6 +1325,7 @@ export default function Ocean() {
       if (weatherTimer) clearTimeout(weatherTimer);
       // final drift-checkpoint so re-entry advances from now.
       persistNaturals();
+      unsubscribeWorld();
       ro.disconnect();
       surf.removeEventListener("pointerdown", onDown);
       surf.removeEventListener("pointermove", onMove);
