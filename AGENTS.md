@@ -71,9 +71,12 @@ and static) will damage it.
 - Visual smoke checks live in `scripts/smoke-*.mjs`; screenshots land in `iterations/`.
 - Commits follow `feat(room): …` / `fix(room): …` as in the existing history. PRs are
   small and single-purpose: one room, one mechanic.
-- After pushing a branch, always open a PR and set it to auto-merge (merge directly
-  if the repo has no required checks blocking it). Don't leave pushed work waiting
-  for a manual merge.
+- **Merge as soon as green, never let PRs pile up.** After pushing a branch, always
+  open a PR and merge it the moment tests + build pass (auto-merge if checks gate it;
+  merge directly otherwise) — don't leave pushed work waiting. One PR in flight at a
+  time per lane; restart the working branch from fresh `origin/main` before the next
+  piece. Stale branches and stacked PRs are how conflicts happen in a repo where
+  lanes share `lib/`.
 - AI endpoints (`src/app/api/*`) prefer `ANTHROPIC_API_KEY`, fall back to
   `GEMINI_API_KEY`, and must keep the hard-coded voice rules in their system prompts.
 - Deploys: Railway from `main` (see `docs/railway-autodeploy.md`).
