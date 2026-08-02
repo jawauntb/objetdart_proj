@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import { useField } from "@/store/field";
 import * as haptics from "@/lib/haptics";
+import { attachGestures } from "@/lib/gesture";
 import { relaxTurbulence, stirTurbulence } from "@/lib/turbulence";
 import {
   addNatural as worldAddNatural,
@@ -389,6 +390,25 @@ export default function Ocean() {
       return v - Math.floor(v);
     };
 
+    // ── the room's clock ─────────────────────────────────────────
+    // Three fingers held touch the law: while held, the whole room runs at
+    // ~1/4 speed. Everything transient (ripples, crashers, weather, snow)
+    // ages against this warped clock instead of performance.now().
+    let simNow = performance.now();
+    let timeScale = 1;
+    let timeScaleTarget = 1;
+    let warpT = 0; // warped seconds driving the shader + foam phases
+    let lastRawT: number | null = null;
+    // three-finger drag = wind: a directional push the whole sea leans into.
+    let windX = 0;
+    let windXTarget = 0;
+    // rhythm entrainment: steady tapping briefly sets the wave-train tempo.
+    let entrainUntil = 0;
+    let entrainInterval = 900;
+    // glimmer bookkeeping (§6: hints are physical, never text)
+    let lastGestureAt = performance.now();
+    let lastGlimmerRippleAt = 0;
+
     // ── the deep: marine snow + bioluminescent motes ──────────────
     // marine snow drifts down forever through the twilight and below.
     const SNOW = 120;
@@ -412,7 +432,7 @@ export default function Ocean() {
     // touch-born sparks in the deep: expanding blooms of cold light.
     const sparks: Array<{ x: number; y: number; t0: number; strength: number }> = [];
     const addSpark = (x: number, y: number, strength: number) => {
-      sparks.push({ x, y, t0: performance.now(), strength });
+      sparks.push({ x, y, t0: simNow, strength });
       if (sparks.length > 24) sparks.shift();
     };
 
@@ -498,7 +518,7 @@ export default function Ocean() {
       kind?: Crasher["kind"];
     }) => {
       crashers.push({
-        t0: performance.now(),
+        t0: simNow,
         x0: opts.x,
         y: opts.y,
         vx: opts.vx ?? 0,
@@ -512,26 +532,21 @@ export default function Ocean() {
       if (crashers.length > MAX_CRASHERS) crashers.shift();
     };
 
-    // ── pointer / touch ───────────────────────────────────────────
+    // ── touch (through the shared grammar — src/lib/gesture) ─────
     const addRipple = (x: number, y: number, strength: number) => {
-      ripples.current.push({ x, y, t0: performance.now(), strength });
+      ripples.current.push({ x, y, t0: simNow, strength });
       if (ripples.current.length > 30) ripples.current.shift();
     };
-    const pressed = new Map<number, { x: number; y: number; lastEmit: number }>();
-    const pressureOf = (e: PointerEvent) => (e.pressure > 0 ? e.pressure : 0.5);
-    const strengthScale = (p: number) => 0.6 + p * 0.95;
-    // two-finger vertical drag drives the dive; track the fingers' mean Y.
-    let lastAvgY: number | null = null;
-
-    // per-finger hold timers + move trails so we can distinguish
-    // tap / long-hold / swipe on pointerup.
-    const holdTimers = new Map<number, ReturnType<typeof setTimeout>>();
-    const plantTimers = new Map<number, ReturnType<typeof setTimeout>>();
-    const trails = new Map<number, Array<{ x: number; y: number; t: number }>>();
-    const HOLD_MS = 780;
-    const PLANT_MS = 1800;
-    const SWIPE_MIN_PX = 42;
-    const SWIPE_MAX_MS = 480;
+    // per-hold bookkeeping: tier 1 summons the crasher, tier 2 plants,
+    // tier 3 (the ceremony) lets the planted natural settle.
+    const holdState: {
+      crasherFired: boolean;
+      planted: { kind: NaturalKind; ny: number } | null;
+      settled: boolean;
+    } = { crasherFired: false, planted: null, settled: false };
+    let lastDragEmit = 0;
+    let lastWindFxAt = 0;
+    let lastScrubAt = 0;
 
     // ── device sensors ────────────────────────────────────────────
     const tiltTarget = { x: 0, y: 0 };
@@ -631,7 +646,8 @@ export default function Ocean() {
           DME?.requestPermission?.(),
         ]).then((res) => {
           if (res.some((r) => r.status === "fulfilled" && r.value === "granted")) add();
-        }).catch(() => { /* noop */ });
+          else sensorsArmed = false; // a later true user gesture may retry
+        }).catch(() => { sensorsArmed = false; });
       } else {
         add();
       }
@@ -643,183 +659,165 @@ export default function Ocean() {
       return horizon + (h - horizon) * 0.68;
     };
 
-    const onDown = (e: PointerEvent) => {
+    // Everything the hand says arrives as semantic gestures — one dialect,
+    // shared with every room (docs/gesture-grammar.md). One finger touches
+    // the water; two fingers pan the frame (here: the camera dives the
+    // water column) — pinch stays unbound because the scale manifold
+    // (ScaleTravel on document.body) owns it; three fingers touch the law.
+    const toLocal = (clientX: number, clientY: number) => {
       const r = surf.getBoundingClientRect();
-      const x = e.clientX - r.left;
-      const y = e.clientY - r.top;
-      const p = pressureOf(e);
-      const now = performance.now();
-      pressed.set(e.pointerId, { x, y, lastEmit: now });
-      pointer.current.pressed = true;
-      pointer.current.over = true;
-      pointer.current.x = x;
-      pointer.current.y = y;
-      addRipple(x, y, 28 * strengthScale(p));
-      stirTurbulence(p * 0.05);
-      haptics.ripple(p);
-      // in the deep a touch is a spark of cold light, not a splash of foam.
-      const deep = depthRef.current > 0.38;
-      if (deep) {
-        addSpark(x, y, 0.7 + p * 0.6);
-        useField.getState().recordTape("ripple", 0.7, "biolume");
-        try { getFieldAudio().playNote(74 + Math.floor(p * 10), 160); } catch { /* noop */ }
-      } else {
-        useField.getState().recordTape("ripple", 0.85);
-        try { getFieldAudio().chime(); } catch { /* noop */ }
-        // Every surface tap spawns a small crasher — iOS Safari doesn't
-        // populate PointerEvent.pressure, so a pressure gate would never
-        // fire on mobile (the main touch surface). Size scales with
-        // pressure when available; otherwise it uses a mid-range default.
-        // A short throttle prevents machine-gun taps from flooding the
-        // crasher pool.
-        const wSurf = surf.clientWidth || 0;
-        if (now - lastTapCrasherAt > 180) {
-          lastTapCrasherAt = now;
-          spawnCrasher({
-            x, y: seaLevelPx(),
-            size: 0.45 + p * 0.35,
-            dir: (x > wSurf / 2) ? Math.PI - 0.1 : 0.1,
-            duration: 1.7,
-            kind: "tap",
-          });
-        }
-      }
-      // start hold timer + trail — used to classify tap vs hold vs swipe on up
-      trails.set(e.pointerId, [{ x, y, t: now }]);
-      const holdTimer = setTimeout(() => {
-        // finger still held after HOLD_MS → summon a big crasher toward it
-        if (!pressed.has(e.pointerId)) return;
-        const f = pressed.get(e.pointerId)!;
-        spawnCrasher({
-          x: f.x, y: seaLevelPx(),
-          size: 1.1,
-          dir: (f.x > (surf.clientWidth || 0) / 2) ? Math.PI - 0.2 : 0.2,
-          duration: 2.8,
-          breakAt: 0.62,
-          kind: "hold",
-        });
-        try { getFieldAudio().playTone(120, 0.7); } catch { /* noop */ }
-        haptics.storm();
-        useField.getState().recordTape("ripple", 0.9, "hold");
-      }, HOLD_MS);
-      holdTimers.set(e.pointerId, holdTimer);
-      // Long hold on the surface plants a natural at that spot. It then
-      // drifts on its own and survives across sessions.
-      const plantTimer = setTimeout(() => {
-        if (!pressed.has(e.pointerId)) return;
-        if (depthRef.current > 0.15) return; // only at the surface
-        const f = pressed.get(e.pointerId)!;
-        const wSurf = surf.clientWidth || 1;
-        const h0 = surf.clientHeight || 1;
-        const horizon0 = h0 * 0.15;
-        const seaSpan = h0 - horizon0;
-        // map screen y → ny band position (0 near horizon, 1 near foreground).
-        const ny = Math.max(0.05, Math.min(0.95, (f.y - horizon0) / seaSpan));
-        // seashell most likely (a beach yields shells first), then kelp,
-        // then driftwood; heavy things only rarely appear from a placement.
-        const roll = Math.random();
-        const kind: NaturalKind =
-          roll < 0.55 ? "seashell" :
-          roll < 0.80 ? "kelp" :
-          roll < 0.94 ? "driftwood" :
-          "starfish";
-        addNatural(kind, f.x / wSurf, ny);
-        addWeather({
-          kind: "beachcomber",
-          t0: performance.now(),
-          duration: 3.2,
-          x: f.x,
-          y: ny,
-          revealed: kind,
-        });
-        try { getFieldAudio().chime(); } catch { /* noop */ }
-        haptics.ripple(1);
-        useField.getState().recordTape("ripple", 1, "plant");
-      }, PLANT_MS);
-      plantTimers.set(e.pointerId, plantTimer);
-      armSensors();
+      return { x: clientX - r.left, y: clientY - r.top };
     };
-    const onUp = (e: PointerEvent) => {
-      const holdT = holdTimers.get(e.pointerId);
-      if (holdT != null) clearTimeout(holdT);
-      holdTimers.delete(e.pointerId);
-      const plantT = plantTimers.get(e.pointerId);
-      if (plantT != null) clearTimeout(plantT);
-      plantTimers.delete(e.pointerId);
-      // classify swipe: was the movement fast + directional?
-      const trail = trails.get(e.pointerId);
-      if (trail && trail.length >= 2) {
-        const first = trail[0];
-        const last = trail[trail.length - 1];
-        const dtMs = last.t - first.t;
-        const dx = last.x - first.x;
-        const dy = last.y - first.y;
-        const dist = Math.hypot(dx, dy);
-        if (dtMs > 40 && dtMs < SWIPE_MAX_MS && dist > SWIPE_MIN_PX && depthRef.current < 0.38) {
-          const speed = dist / dtMs; // px per ms
-          const ang = Math.atan2(dy, dx);
-          const vx = Math.cos(ang) * Math.min(340, speed * 500);
-          // swipe = a wave train rolling in the swipe direction
-          spawnCrasher({
-            x: last.x, y: seaLevelPx(),
-            vx,
-            size: 0.6 + Math.min(0.5, speed * 0.5),
-            dir: Math.cos(ang) >= 0 ? 0.1 : Math.PI - 0.1,
-            duration: 2.4,
-            breakAt: 0.6,
-            kind: "swipe",
-          });
-          try { getFieldAudio().playNote(64 + Math.floor(dy * 0.02), 180); } catch { /* noop */ }
-          useField.getState().recordTape("ripple", 0.7, "swipe");
+    const detachGestures = attachGestures(wrap, {
+      tap: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers !== 1) return; // the sea absorbs frame/law taps
+        armSensors();
+        const { x, y } = toLocal(e.x, e.y);
+        // tap intensity is the splash: ripple height, spark brightness and
+        // crasher size all ride the same 0..1 from core.
+        addRipple(x, y, 28 * (0.6 + e.intensity * 0.95));
+        stirTurbulence(e.intensity * 0.05);
+        haptics.ripple(e.intensity);
+        const deep = depthRef.current > 0.38;
+        if (deep) {
+          addSpark(x, y, 0.7 + e.intensity * 0.6);
+          useField.getState().recordTape("ripple", 0.7, "biolume");
+          try { getFieldAudio().playNote(74 + Math.floor(e.intensity * 10), 160); } catch { /* noop */ }
+        } else {
+          useField.getState().recordTape("ripple", 0.85);
+          try { getFieldAudio().chime(); } catch { /* noop */ }
+          const wSurf = surf.clientWidth || 0;
+          const nowMs = performance.now();
+          if (nowMs - lastTapCrasherAt > 180) {
+            lastTapCrasherAt = nowMs;
+            spawnCrasher({
+              x, y: seaLevelPx(),
+              size: 0.45 + e.intensity * 0.35,
+              dir: (x > wSurf / 2) ? Math.PI - 0.1 : 0.1,
+              duration: 1.7,
+              kind: "tap",
+            });
+          }
         }
-      }
-      trails.delete(e.pointerId);
-      pressed.delete(e.pointerId);
-      if (pressed.size < 2) lastAvgY = null;
-      if (pressed.size === 0) pointer.current.pressed = false;
-    };
-    const onMove = (e: PointerEvent) => {
-      const r = surf.getBoundingClientRect();
-      const x = e.clientX - r.left;
-      const y = e.clientY - r.top;
-      pointer.current.over = true;
-      pointer.current.x = x;
-      pointer.current.y = y;
-      const now = performance.now();
-      const finger = pressed.get(e.pointerId);
-      if (finger) { finger.x = x; finger.y = y; }
-
-      // record trail (bounded to last 12 samples per finger)
-      const tr = trails.get(e.pointerId);
-      if (tr) {
-        tr.push({ x, y, t: now });
-        if (tr.length > 12) tr.shift();
-      }
-
-      // ── two-finger dive: the mean Y of the fingers drives depth ──
-      if (pressed.size >= 2) {
-        let sy = 0;
-        pressed.forEach((f) => { sy += f.y; });
-        const avgY = sy / pressed.size;
-        const h = surf.clientHeight || 1;
-        if (lastAvgY != null) {
-          // dragging down descends; dragging up rises.
-          depthTargetRef.current = clamp01(
-            depthTargetRef.current + ((avgY - lastAvgY) / h) * 1.35,
-          );
+      },
+      hold: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          // three fingers hold the law: the whole sea slows while held
+          if (e.phase === "enter") {
+            timeScaleTarget = 0.25;
+            try { getFieldAudio().playTone(58, 0.6); } catch { /* noop */ }
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+          if (e.phase === "release") timeScaleTarget = 1;
+          return;
         }
-        lastAvgY = avgY;
-        return; // don't shed ripples while diving
-      }
-      lastAvgY = null;
-
-      const deep = depthRef.current > 0.38;
-      if (finger) {
-        if (now - finger.lastEmit > 70) {
-          const p = pressureOf(e);
-          addRipple(x, y, 14 * strengthScale(p));
-          finger.lastEmit = now;
-          if (deep) {
+        if (e.fingers !== 1) return;
+        const { x, y } = toLocal(e.x, e.y);
+        if (e.phase === "enter") {
+          holdState.crasherFired = false;
+          holdState.planted = null;
+          holdState.settled = false;
+          armSensors();
+        }
+        pointer.current.over = true;
+        pointer.current.x = x;
+        pointer.current.y = y;
+        pointer.current.pressed = e.phase !== "release";
+        if (e.phase === "release") return;
+        // touch tier — the sea gathers toward the held finger
+        // (was a private 780ms timer; the threshold now lives in core)
+        if (e.tier >= 1 && !holdState.crasherFired) {
+          holdState.crasherFired = true;
+          if (depthRef.current <= 0.38) {
+            spawnCrasher({
+              x, y: seaLevelPx(),
+              size: 1.1,
+              dir: (x > (surf.clientWidth || 0) / 2) ? Math.PI - 0.2 : 0.2,
+              duration: 2.8,
+              breakAt: 0.62,
+              kind: "hold",
+            });
+            try { getFieldAudio().playTone(120, 0.7); } catch { /* noop */ }
+            haptics.storm();
+            useField.getState().recordTape("ripple", 0.9, "hold");
+          } else {
+            addSpark(x, y, 0.9);
+          }
+        }
+        // dwell tier — plant a natural at the surface; long-press means
+        // grow, everywhere. It drifts on its own and survives sessions.
+        if (e.tier >= 2 && !holdState.planted && depthRef.current <= 0.15) {
+          const wSurf = surf.clientWidth || 1;
+          const h0 = surf.clientHeight || 1;
+          const horizon0 = h0 * 0.15;
+          const seaSpan = h0 - horizon0;
+          const ny = Math.max(0.05, Math.min(0.95, (y - horizon0) / seaSpan));
+          const roll = Math.random();
+          const kind: NaturalKind =
+            roll < 0.55 ? "seashell" :
+            roll < 0.80 ? "kelp" :
+            roll < 0.94 ? "driftwood" :
+            "starfish";
+          addNatural(kind, x / wSurf, ny);
+          addWeather({ kind: "beachcomber", t0: simNow, duration: 3.2, x, y: ny, revealed: kind });
+          try { getFieldAudio().chime(); } catch { /* noop */ }
+          haptics.ripple(1);
+          useField.getState().recordTape("ripple", 1, "plant");
+          holdState.planted = { kind, ny };
+        }
+        // ceremony tier — the planted natural settles; the tide keeps it
+        if (e.tier >= 3 && holdState.planted && !holdState.settled) {
+          holdState.settled = true;
+          try { getFieldAudio().bell(); } catch { /* noop */ }
+          try { haptics.bloom(); } catch { /* noop */ }
+          addWeather({ kind: "beachcomber", t0: simNow, duration: 4.6, x, y: holdState.planted.ny, revealed: holdState.planted.kind });
+          useField.getState().recordTape("sigil", 0.9, "settle");
+        }
+      },
+      drag: (e) => {
+        lastGestureAt = performance.now();
+        const { x, y } = toLocal(e.x, e.y);
+        if (e.fingers === 3) {
+          // three fingers drag the weather: the sea leans into the pushed
+          // wind and the wave train rides it
+          if (e.phase === "end") return;
+          windXTarget = Math.max(-1, Math.min(1, windXTarget + e.vx * 0.25));
+          const nowMs = performance.now();
+          if (Math.abs(e.vx) > 0.25 && nowMs - lastWindFxAt > 480) {
+            lastWindFxAt = nowMs;
+            stirTurbulence(Math.min(0.12, Math.abs(e.vx) * 0.08));
+            spawnCrasher({
+              x, y: seaLevelPx(),
+              vx: Math.sign(e.vx) * (90 + Math.min(220, Math.abs(e.vx) * 160)),
+              size: 0.5 + Math.min(0.5, Math.abs(e.vx) * 0.3),
+              dir: e.vx >= 0 ? 0.08 : Math.PI - 0.08,
+              duration: 2.2,
+              kind: "swipe",
+            });
+            try { getFieldAudio().playTone(70 + Math.abs(windXTarget) * 30, 0.5); } catch { /* noop */ }
+            try { haptics.chop(); } catch { /* noop */ }
+          }
+          return;
+        }
+        if (e.fingers !== 1) return;
+        if (e.phase === "start") armSensors();
+        pointer.current.over = true;
+        pointer.current.x = x;
+        pointer.current.y = y;
+        if (e.phase === "end") {
+          pointer.current.pressed = false;
+          return;
+        }
+        pointer.current.pressed = true;
+        const nowMs = performance.now();
+        if (nowMs - lastDragEmit > 70) {
+          lastDragEmit = nowMs;
+          const speed = Math.hypot(e.vx, e.vy);
+          const p = Math.min(1, 0.35 + speed * 0.5);
+          addRipple(x, y, 14 * (0.6 + p * 0.95));
+          if (depthRef.current > 0.38) {
             addSpark(x, y, 0.4 + p * 0.4);
             useField.getState().recordTape("ripple", 0.4, "biolume");
           } else {
@@ -827,9 +825,79 @@ export default function Ocean() {
             haptics.chop();
           }
         }
-      } else if (now - pointer.current.lastEmit > 200) {
+      },
+      flick: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers !== 1 || depthRef.current >= 0.38) return;
+        const { x } = toLocal(e.x, e.y);
+        // a flick is a thrown swell — a wave train rolling the flick's way
+        const vx = Math.cos(e.angle) * Math.min(340, e.speed * 500);
+        spawnCrasher({
+          x, y: seaLevelPx(),
+          vx,
+          size: 0.6 + Math.min(0.5, e.speed * 0.5),
+          dir: Math.cos(e.angle) >= 0 ? 0.1 : Math.PI - 0.1,
+          duration: 2.4,
+          breakAt: 0.6,
+          kind: "swipe",
+        });
+        try { getFieldAudio().playNote(64 + Math.round(Math.sin(e.angle) * 6), 180); } catch { /* noop */ }
+        useField.getState().recordTape("ripple", 0.7, "swipe");
+      },
+      pan2: (e) => {
+        // The global frame verb: two fingers pan the frame, and /ocean's
+        // frame is a camera in the water column — dragging down dives.
+        lastGestureAt = performance.now();
+        if (e.phase !== "move") return;
+        if (Math.abs(e.dy) <= Math.abs(e.dx) * 1.1) return; // vertical intent only
+        const h = surf.clientHeight || 1;
+        depthTargetRef.current = clamp01(depthTargetRef.current + (e.dy / h) * 1.35);
+      },
+      scrub: (e) => {
+        lastGestureAt = performance.now();
+        const nowMs = performance.now();
+        if (nowMs - lastScrubAt < 700) return;
+        lastScrubAt = nowMs;
+        const { x, y } = toLocal(e.cx, e.cy);
+        // circling stirs a gyre: phosphor blooms under the hand, ripples
+        // ring it, and nearby drifters are carried around the current.
+        addWeather({ kind: "phosphor", t0: simNow, duration: 4.5, x, radius: 70 + Math.min(60, Math.abs(e.winding) * 40) });
+        for (let i = 0; i < 5; i++) {
+          const a = (i / 5) * Math.PI * 2;
+          addRipple(x + Math.cos(a) * 34, y + Math.sin(a) * 14, 10);
+        }
+        const wSurf = surf.clientWidth || 1;
+        const sgn = Math.sign(e.winding) || 1;
+        for (const n of naturals) {
+          const d = Math.abs(n.nx - x / wSurf);
+          if (d < 0.16) n.nx = Math.max(0.02, Math.min(0.98, n.nx + sgn * 0.012 * (1 - d / 0.16)));
+        }
+        try { getFieldAudio().playNote(70, 140); } catch { /* noop */ }
+        try { getFieldAudio().chime(); } catch { /* noop */ }
+        try { haptics.ripple(0.4); } catch { /* noop */ }
+        useField.getState().recordTape("ripple", 0.6, "stir");
+      },
+      rhythm: (e) => {
+        // steady tapping: the wave train quietly falls into the hand's pulse
+        if (e.stability <= 0.7) return;
+        entrainInterval = Math.max(420, Math.min(1800, 60000 / e.bpm));
+        entrainUntil = performance.now() + 9000;
+      },
+    }, { wheelZoom: false });
+
+    // Desktop hover is the grammar's quiet dialect (hover ≈ light touch):
+    // the halo follows and the water barely dimples. All contact gestures
+    // live in the engine above.
+    const onHover = (e: PointerEvent) => {
+      if (pointer.current.pressed) return;
+      const { x, y } = toLocal(e.clientX, e.clientY);
+      pointer.current.over = true;
+      pointer.current.x = x;
+      pointer.current.y = y;
+      const nowMs = performance.now();
+      if (nowMs - pointer.current.lastEmit > 200) {
         addRipple(x, y, 4);
-        pointer.current.lastEmit = now;
+        pointer.current.lastEmit = nowMs;
       }
     };
     const onLeave = () => { pointer.current.over = false; };
@@ -838,10 +906,7 @@ export default function Ocean() {
       e.preventDefault();
       depthTargetRef.current = clamp01(depthTargetRef.current + e.deltaY * 0.0011);
     };
-    surf.addEventListener("pointerdown", onDown);
-    surf.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-    window.addEventListener("pointercancel", onUp);
+    surf.addEventListener("pointermove", onHover);
     surf.addEventListener("pointerleave", onLeave);
     surf.addEventListener("wheel", onWheel, { passive: false });
 
@@ -856,7 +921,7 @@ export default function Ocean() {
       const w0 = surf.clientWidth || 1;
       addWeather({
         kind: "lightning",
-        t0: performance.now(),
+        t0: simNow,
         duration: 1.4,
         x: w0 * (0.15 + Math.random() * 0.7),
       });
@@ -875,14 +940,14 @@ export default function Ocean() {
         breakAt: 0.58,
         kind: "ambient",
       });
-      addWeather({ kind: "rogue", t0: performance.now(), duration: 3.2 });
+      addWeather({ kind: "rogue", t0: simNow, duration: 3.2 });
       try { getFieldAudio().playTone(80, 0.9); } catch { /* noop */ }
     };
     const spawnSeabirds = () => {
       const h0 = surf.clientHeight || 1;
       addWeather({
         kind: "seabirds",
-        t0: performance.now(),
+        t0: simNow,
         duration: 14,
         count: 5 + Math.floor(Math.random() * 5),
         yBase: h0 * (0.05 + Math.random() * 0.08),
@@ -894,7 +959,7 @@ export default function Ocean() {
       const w0 = surf.clientWidth || 1;
       addWeather({
         kind: "phosphor",
-        t0: performance.now(),
+        t0: simNow,
         duration: 5.5,
         x: w0 * (0.15 + Math.random() * 0.7),
         radius: 90 + Math.random() * 90,
@@ -904,7 +969,7 @@ export default function Ocean() {
       const w0 = surf.clientWidth || 1;
       addWeather({
         kind: "whale",
-        t0: performance.now(),
+        t0: simNow,
         duration: 3.4,
         x: w0 * (0.2 + Math.random() * 0.6),
         dir: Math.random() < 0.5 ? 1 : -1,
@@ -926,7 +991,7 @@ export default function Ocean() {
       addNatural(kind, cx / w0, cyBand);
       addWeather({
         kind: "beachcomber",
-        t0: performance.now(),
+        t0: simNow,
         duration: 4.2,
         x: cx,
         y: cyBand,
@@ -994,8 +1059,20 @@ export default function Ocean() {
       const dt = Math.min(60, now - prevNow);
       prevNow = now;
 
+      // three-finger time dilation: ease toward the target and advance the
+      // room's warped clock; everything transient ages against it.
+      timeScale += (timeScaleTarget - timeScale) * Math.min(1, (dt / 1000) * 5);
+      simNow += dt * timeScale;
       const audioT = getFieldAudio().getAudioTime();
-      const t = audioT != null ? audioT : (now - t0) / 1000;
+      const rawT = audioT != null ? audioT : (now - t0) / 1000;
+      if (lastRawT == null) lastRawT = rawT;
+      warpT += (rawT - lastRawT) * timeScale;
+      lastRawT = rawT;
+      const t = warpT;
+
+      // wind (three-finger drag) eases in, then dies back toward calm
+      windX += (windXTarget - windX) * Math.min(1, (dt / 1000) * 2.4);
+      windXTarget *= Math.exp(-(dt / 1000) * 0.55);
 
       // ── dive: ease the camera toward its target depth ───────────
       depthRef.current += (depthTargetRef.current - depthRef.current) * 0.05;
@@ -1038,7 +1115,8 @@ export default function Ocean() {
         if (uSwellLoc) gl.uniform1f(uSwellLoc, swellLfo + turb * 0.6);
         if (uTurbLoc) gl.uniform1f(uTurbLoc, Math.min(1, turb));
         if (uDepthLoc) gl.uniform1f(uDepthLoc, depth);
-        if (uTiltLoc) gl.uniform2f(uTiltLoc, tiltSmoothed.x * 0.028, tiltSmoothed.y * 0.022);
+        // wind leans the whole sea the way the three fingers pushed it
+        if (uTiltLoc) gl.uniform2f(uTiltLoc, tiltSmoothed.x * 0.028 + windX * 0.02, tiltSmoothed.y * 0.022);
 
         if (uRipplesLoc && uRippleCountLoc) {
           const MAX = 12;
@@ -1048,7 +1126,7 @@ export default function Ocean() {
           let count = 0;
           for (let i = ripples.current.length - 1; i >= 0 && count < MAX; i--) {
             const r = ripples.current[i];
-            const age = (now - r.t0) / 1000;
+            const age = (simNow - r.t0) / 1000;
             if (age > 2.8) continue;
             data[count * 4 + 0] = r.x / cw;
             data[count * 4 + 1] = r.y / ch;
@@ -1115,7 +1193,7 @@ export default function Ocean() {
             Math.sin(phase) +
             0.35 * Math.sin(phase * 2.3 + t * speed * 0.6 * motion) +
             0.18 * Math.sin(phase * 0.6 - t * speed * 0.3 * motion);
-          const yy = yBase + base * amp + rippleDisp(x, yBase, now) * (0.4 + f * 0.6);
+          const yy = yBase + base * amp + rippleDisp(x, yBase, simNow) * (0.4 + f * 0.6);
           if (x === 0) sctx.moveTo(x, yy);
           else sctx.lineTo(x, yy);
         }
@@ -1128,7 +1206,7 @@ export default function Ocean() {
             const phase = x * freq + t * speed * motion;
             const v = Math.sin(phase) + 0.35 * Math.sin(phase * 2.3 + t * speed * 0.6 * motion);
             if (v > 1.04) {
-              const yy = yBase + v * amp + rippleDisp(x, yBase, now) * (0.4 + f * 0.6);
+              const yy = yBase + v * amp + rippleDisp(x, yBase, simNow) * (0.4 + f * 0.6);
               sctx.fillRect(x, yy - 1, 1.5 + (v - 1.04) * 6, 1.2);
             }
           }
@@ -1152,11 +1230,14 @@ export default function Ocean() {
       drawSecondaryWave(sctx, w, h, horizonY, t * motion, swellMod, tiltSway);
 
       // ── auto-ambient crashers: a real wave train, denser and biased
-      //    left→right so the ocean visibly propagates ────────────────
-      if (now - lastAmbientCrasherAt > 900) {
+      //    left→right so the ocean visibly propagates. A steady tapped
+      //    rhythm briefly sets this cadence; the pushed wind biases the
+      //    train's direction and speed. ───────────────────────────────
+      const ambientEvery = performance.now() < entrainUntil ? entrainInterval : 900;
+      if (now - lastAmbientCrasherAt > ambientEvery) {
         lastAmbientCrasherAt = now;
         // 80% left→right (dominant swell direction), 20% right→left
-        const fromLeft = Math.random() < 0.8;
+        const fromLeft = Math.random() < Math.max(0.05, Math.min(0.95, 0.8 + windX * 0.4));
         const w0 = surf.clientWidth || 1;
         const h0 = surf.clientHeight || 1;
         const horizon0 = h0 * 0.15;
@@ -1164,8 +1245,8 @@ export default function Ocean() {
         spawnCrasher({
           x: fromLeft ? -30 : w0 + 30,
           y: sea0 + (Math.random() - 0.5) * 24,
-          vx: (fromLeft ? 1 : -1) * (75 + Math.random() * 80),
-          size: 0.28 + Math.random() * 0.38,
+          vx: (fromLeft ? 1 : -1) * (75 + Math.random() * 80) + windX * 90,
+          size: 0.28 + Math.random() * 0.38 + Math.abs(windX) * 0.12,
           dir: fromLeft ? 0.08 : Math.PI - 0.08,
           duration: 2.0 + Math.random() * 0.7,
           breakAt: 0.45 + Math.random() * 0.15,
@@ -1174,20 +1255,20 @@ export default function Ocean() {
       }
 
       // ── draw + tick all live crashers ────────────────────────────
-      drawCrashers(sctx, crashers, now, t, addRipple, addSpark);
+      drawCrashers(sctx, crashers, simNow, t, addRipple, addSpark);
 
       // ── weather sky-layer (behind wave): lightning + seabirds ────
-      drawWeatherSky(sctx, weather, now, w, h, horizonY);
+      drawWeatherSky(sctx, weather, simNow, w, h, horizonY);
 
       // ── naturals: shells, kelp, driftwood, starfish, sanddollars
       // drift along the tideline. Draw behind the great wave so the
       // hero composition still leads, but in front of foam so they're
       // findable.
-      drawNaturals(sctx, naturals, now, t, w, h, horizonY);
+      drawNaturals(sctx, naturals, simNow, t, w, h, horizonY);
 
       // ── weather surface-layer (in front of wave): phosphor, whale,
       //    rogue afterglow, beachcomber reveal shimmer ────────────
-      drawWeatherSurface(sctx, weather, now, w, h, horizonY);
+      drawWeatherSurface(sctx, weather, simNow, w, h, horizonY);
 
       sctx.restore();
       }
@@ -1216,7 +1297,7 @@ export default function Ocean() {
       // Marine snow drifts down through the twilight and below — faint
       // detritus caught in what light remains.
       if (snowVis > 0.01) {
-        const snowT = reduce ? 0 : dt;
+        const snowT = reduce ? 0 : dt * timeScale;
         sctx.fillStyle = "#dfeef2";
         for (const p of snow) {
           p.y += (p.spd * snowT) * 0.00006;
@@ -1236,7 +1317,7 @@ export default function Ocean() {
       sctx.globalCompositeOperation = "lighter";
       for (let i = sparks.length - 1; i >= 0; i--) {
         const s = sparks[i];
-        const age = (now - s.t0) / 1000;
+        const age = (simNow - s.t0) / 1000;
         if (age > 1.7) { sparks.splice(i, 1); continue; }
         const life = 1 - age / 1.7;
         const rad = 14 + age * 150;
@@ -1269,7 +1350,7 @@ export default function Ocean() {
             glow += Math.exp(-d2 / (140 * 140)) * (pointer.current.pressed ? 1.15 : 0.55);
           }
           for (const s of sparks) {
-            const age = (now - s.t0) / 1000;
+            const age = (simNow - s.t0) / 1000;
             if (age > 1.7) continue;
             const front = Math.hypot(mx - s.x, my - s.y) - (14 + age * 150);
             glow += Math.exp(-(front * front) / (46 * 46)) * (1 - age / 1.7) * 0.9;
@@ -1310,6 +1391,25 @@ export default function Ocean() {
         sctx.fill();
       }
 
+      // glimmer (§6): after ~20s of quiet, the water dimples in a small
+      // circle where a scrub would land — a hint made of ripples, never text.
+      const idleMs = performance.now() - lastGestureAt;
+      if (idleMs > 20000) {
+        const slot = Math.floor(now / 9000);
+        const gx = (0.25 + rnd(slot) * 0.5) * w;
+        const gy = horizonY + (0.35 + rnd(slot + 7) * 0.35) * (h - horizonY);
+        const pulse = reduce ? 0.5 : 0.5 + Math.sin(now / 480) * 0.5;
+        sctx.strokeStyle = `rgba(190, 232, 240, ${0.05 + pulse * 0.09})`;
+        sctx.lineWidth = 1;
+        sctx.beginPath();
+        sctx.ellipse(gx, gy, 22 + pulse * 10, (22 + pulse * 10) * 0.36, 0, 0, Math.PI * 2);
+        sctx.stroke();
+        if (now - lastGlimmerRippleAt > 3000) {
+          lastGlimmerRippleAt = now;
+          addRipple(gx, gy, 5);
+        }
+      }
+
       // periodic naturals persistence
       if (naturals.length > 0 && now - lastNaturalsSaveAt > 4000) {
         lastNaturalsSaveAt = now;
@@ -1327,10 +1427,8 @@ export default function Ocean() {
       persistNaturals();
       unsubscribeWorld();
       ro.disconnect();
-      surf.removeEventListener("pointerdown", onDown);
-      surf.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("pointercancel", onUp);
+      detachGestures();
+      surf.removeEventListener("pointermove", onHover);
       surf.removeEventListener("pointerleave", onLeave);
       surf.removeEventListener("wheel", onWheel);
       window.removeEventListener("deviceorientation", onOrient);

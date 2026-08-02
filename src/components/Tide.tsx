@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import { useField } from "@/store/field";
 import * as haptics from "@/lib/haptics";
+import { attachGestures } from "@/lib/gesture";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
 import {
   addNatural as worldAddNatural,
@@ -66,10 +67,8 @@ export default function Tide() {
   const moonAngRef = useRef(-Math.PI / 2);   // start near shore -> high tide
   const sunAngRef = useRef(-Math.PI / 2 + 0.5);
 
-  // drag state: which body (if any) the pointer has grabbed.
-  const dragRef = useRef<{ active: boolean; id: number; target: "moon" | "sun" | null; moved: boolean; downX: number; downY: number }>(
-    { active: false, id: -1, target: null, moved: false, downX: 0, downY: 0 },
-  );
+  // drag state: which body (if any) the hand has grabbed (set by gestures).
+  const grabRef = useRef<"moon" | "sun" | null>(null);
   // live geometry, published each frame for hit-testing.
   const geomRef = useRef({
     earth: { x: 0, y: 0, r: 0 },
@@ -195,10 +194,25 @@ export default function Tide() {
       if (weather.length > 8) weather.shift();
     };
 
-    // long-press timer for planting a natural on the tideline
-    let plantTimer: ReturnType<typeof setTimeout> | 0 = 0;
-    let plantFired = false;
-    const PLANT_MS = 1600;
+    // ── the room's clock + law-layer state (gesture grammar) ────
+    // Three fingers held dilate time; three fingers dragged push the wind;
+    // a steady tapped pulse entrains the beat; a circling finger stirs.
+    let simNow = performance.now();  // warped ms — weather + stir ages
+    let simT = 0;                    // warped seconds — swells, stars, beat
+    let lastFrameAt: number | null = null;
+    let timeScale = 1;
+    let timeScaleTarget = 1;
+    let wind = 0;
+    let windTarget = 0;
+    let windPhase = 0;               // accumulated directional swell drift
+    let lastWindFxAt = 0;
+    let entrainBpm = 0;
+    let entrainUntil = 0;
+    let lastScrubAt = 0;
+    const stirs: Array<{ x: number; y: number; t0: number; sign: number }> = [];
+    let lastGestureAt = performance.now();
+    const holdState: { planted: boolean; skipped: boolean; settled: boolean; body: "moon" | "sun" | null } =
+      { planted: false, skipped: false, settled: false, body: null };
 
     const resize = () => {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -229,126 +243,203 @@ export default function Tide() {
       return Math.atan2(clientY - g.earth.y, clientX - g.earth.x);
     };
 
-    const onDown = (e: PointerEvent) => {
-      const target = grab(e.clientX, e.clientY);
-      dragRef.current = { active: true, id: e.pointerId, target, moved: false, downX: e.clientX, downY: e.clientY };
-      cv.setPointerCapture?.(e.pointerId);
-      if (target) {
-        try { audio.playNote(target === "moon" ? 62 : 57, 140); } catch { /* noop */ }
-        try { haptics.tap(); } catch { /* noop */ }
-        recordTapeRef.current("object", 0.5, `tide/grab-${target}`);
-        return;
-      }
-      // Not grabbing a body — a hold on the open sea plants a natural
-      // at that spot on the tideline. Kind depends on the current tide:
-      // low tide → seashell (the exposed sand yields shells), high tide
-      // → driftwood (floating), starfish only rarely.
-      if (plantTimer) { clearTimeout(plantTimer); plantTimer = 0; }
-      plantFired = false;
-      const downX = e.clientX;
-      const downY = e.clientY;
-      plantTimer = setTimeout(() => {
-        const d = dragRef.current;
-        if (!d.active || d.moved || d.target) return;
-        plantFired = true;
-        const w = window.innerWidth;
-        const h = window.innerHeight;
-        const meanSeaY = h * 0.64;
-        const swing = h * 0.085;
-        const hiY = meanSeaY - swing;
-        const loY = meanSeaY + swing;
-        // only plant if the tap was in the tide band (or below it)
-        if (downY < hiY - 20) return;
-        // ny 0..1 across the tide band (clamped)
-        const ny = Math.max(0, Math.min(1, (downY - hiY) / (loY - hiY)));
-        const nx = downX / w;
-        const tideN = clamp(
-          (bodyTide(moonAngRef.current, MOON_AMP) + bodyTide(sunAngRef.current, SUN_AMP)) / (MOON_AMP + SUN_AMP),
-          -1, 1,
-        );
-        const roll = Math.random();
-        const kind: NaturalKind =
-          tideN < -0.3 ? (roll < 0.72 ? "seashell" : roll < 0.94 ? "starfish" : "driftwood")
-          : tideN > 0.3 ? (roll < 0.72 ? "driftwood" : "seashell")
-          : (roll < 0.5 ? "seashell" : roll < 0.85 ? "driftwood" : "starfish");
-        addNatural(kind, nx, ny);
+    // ── gestures (the shared grammar — src/lib/gesture) ─────────────
+    // One finger touches the mechanism and the sea; two-finger pinch is
+    // left to the scale manifold listening on document.body; three
+    // fingers touch the law: drag is wind, hold dilates time.
+    const drag = { target: null as "moon" | "sun" | null };
+    const detachGestures = attachGestures(cv, {
+      tap: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers !== 1) return; // the night absorbs frame/law taps
+        const body = grab(e.x, e.y);
+        if (body) {
+          try { audio.playNote(body === "moon" ? 62 : 57, 140); } catch { /* noop */ }
+          try { haptics.tap(); } catch { /* noop */ }
+          recordTapeRef.current("object", 0.5, `tide/grab-${body}`);
+          return;
+        }
+        const g = geomRef.current;
+        if (Math.hypot(e.x - g.earth.x, e.y - g.earth.y) <= g.earth.r * 1.35) {
+          toggleAuto();
+          addRipple(e.x, e.y, Math.max(70, g.earth.r * 2.4), "gold");
+          return;
+        }
+        // a tap on the open sea — chime and a ring sized by how hard it landed
         try { audio.chime(); } catch { /* noop */ }
-        try { haptics.ripple(0.7); } catch { /* noop */ }
-        recordTapeRef.current("ripple", 0.9, "tide/plant");
-        addRipple(downX, downY, 60, "gold");
-      }, PLANT_MS);
-    };
+        try { haptics.ripple(0.15 + e.intensity * 0.4); } catch { /* noop */ }
+        recordTapeRef.current("ripple", 0.24, "tide/sea");
+        addRipple(e.x, e.y, 46 + e.intensity * 54, "pale");
+      },
+      drag: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          if (e.phase === "end") return;
+          // three fingers drag the weather: the swell leans into the wind
+          // and a strong push can roll a fog bank the same way
+          windTarget = clamp(windTarget + e.vx * 0.2, -1, 1);
+          const nowMs = performance.now();
+          if (Math.abs(e.vx) > 0.3 && nowMs - lastWindFxAt > 3600) {
+            lastWindFxAt = nowMs;
+            addWeather({
+              kind: "fog",
+              t0: simNow,
+              duration: 26,
+              dir: e.vx >= 0 ? 1 : -1,
+              density: 0.4 + Math.min(0.4, Math.abs(e.vx) * 0.3),
+            });
+            try { audio.playNote(41, 260); } catch { /* noop */ }
+            try { haptics.chop(); } catch { /* noop */ }
+          }
+          return;
+        }
+        if (e.fingers !== 1) return;
+        if (e.phase === "start") {
+          drag.target = grab(e.x, e.y);
+          grabRef.current = drag.target;
+          if (drag.target) {
+            try { audio.playNote(drag.target === "moon" ? 62 : 57, 140); } catch { /* noop */ }
+            try { haptics.tap(); } catch { /* noop */ }
+            recordTapeRef.current("object", 0.5, `tide/grab-${drag.target}`);
+          }
+          return;
+        }
+        if (e.phase === "end") {
+          drag.target = null;
+          grabRef.current = null;
+          return;
+        }
+        if (!drag.target) return;
+        const ang = angleFromEarth(e.x, e.y);
+        if (drag.target === "moon") moonAngRef.current = ang;
+        else sunAngRef.current = ang;
+        const now = performance.now();
+        if (now - lastDragToneRef.current > 90) {
+          lastDragToneRef.current = now;
+          const tN = clamp(
+            (bodyTide(moonAngRef.current, MOON_AMP) + bodyTide(sunAngRef.current, SUN_AMP)) / (MOON_AMP + SUN_AMP),
+            -1, 1,
+          );
+          try { audio.playNote(52 + Math.round((tN * 0.5 + 0.5) * 20), 90); } catch { /* noop */ }
+          try { haptics.ripple(0.18 + Math.abs(tN) * 0.22); } catch { /* noop */ }
+        }
+        if (now - lastDragTapeRef.current > 560) {
+          lastDragTapeRef.current = now;
+          recordTapeRef.current("ripple", 0.3, `tide/${drag.target}`);
+        }
+      },
+      hold: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          // three fingers hold the law: the night slows while held
+          if (e.phase === "enter") {
+            timeScaleTarget = 0.25;
+            try { audio.playNote(36, 260); } catch { /* noop */ }
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+          if (e.phase === "release") timeScaleTarget = 1;
+          return;
+        }
+        if (e.fingers !== 1) return;
+        if (e.phase === "enter") {
+          holdState.planted = false;
+          holdState.skipped = false;
+          holdState.settled = false;
+          holdState.body = grab(e.x, e.y);
+          if (holdState.body) grabRef.current = holdState.body;
+          return;
+        }
+        if (e.phase === "release") {
+          if (holdState.body) grabRef.current = null;
+          return;
+        }
+        if (holdState.body) return; // holding a body just keeps hold of it
+        // dwell tier — plant a natural on the tideline. Kind depends on the
+        // tide: low tide yields shells, high tide floats driftwood.
+        if (e.tier >= 2 && !holdState.planted && !holdState.skipped) {
+          const w = window.innerWidth;
+          const h = window.innerHeight;
+          const meanSeaY = h * 0.64;
+          const swing = h * 0.085;
+          const hiY = meanSeaY - swing;
+          const loY = meanSeaY + swing;
+          if (e.y < hiY - 20) { holdState.skipped = true; return; } // the sky absorbs it
+          const ny = Math.max(0, Math.min(1, (e.y - hiY) / (loY - hiY)));
+          const nx = e.x / w;
+          const tideN = clamp(
+            (bodyTide(moonAngRef.current, MOON_AMP) + bodyTide(sunAngRef.current, SUN_AMP)) / (MOON_AMP + SUN_AMP),
+            -1, 1,
+          );
+          const roll = Math.random();
+          const kind: NaturalKind =
+            tideN < -0.3 ? (roll < 0.72 ? "seashell" : roll < 0.94 ? "starfish" : "driftwood")
+            : tideN > 0.3 ? (roll < 0.72 ? "driftwood" : "seashell")
+            : (roll < 0.5 ? "seashell" : roll < 0.85 ? "driftwood" : "starfish");
+          addNatural(kind, nx, ny);
+          try { audio.chime(); } catch { /* noop */ }
+          try { haptics.ripple(0.7); } catch { /* noop */ }
+          recordTapeRef.current("ripple", 0.9, "tide/plant");
+          addRipple(e.x, e.y, 60, "gold");
+          holdState.planted = true;
+        }
+        // ceremony tier — the placed natural settles into the shore
+        if (e.tier >= 3 && holdState.planted && !holdState.settled) {
+          holdState.settled = true;
+          try { audio.bell(); } catch { /* noop */ }
+          try { haptics.bloom(); } catch { /* noop */ }
+          addRipple(e.x, e.y, 110, "gold");
+          recordTapeRef.current("sigil", 0.9, "tide/settle");
+        }
+      },
+      scrub: (e) => {
+        lastGestureAt = performance.now();
+        const nowMs = performance.now();
+        if (nowMs - lastScrubAt < 700) return;
+        lastScrubAt = nowMs;
+        const h = window.innerHeight;
+        if (e.cy < h * 0.5) return; // stirring is a sea verb; the sky absorbs it
+        const sgn = Math.sign(e.winding) || 1;
+        stirs.push({ x: e.cx, y: e.cy, t0: simNow, sign: sgn });
+        if (stirs.length > 4) stirs.shift();
+        // the turning current carries what the tide left nearby
+        const w = window.innerWidth;
+        for (const n of naturals) {
+          const d = Math.abs(n.nx - e.cx / w);
+          if (d < 0.15) n.nx = Math.max(0.02, Math.min(0.98, n.nx + sgn * 0.015 * (1 - d / 0.15)));
+        }
+        addRipple(e.cx, e.cy, 84, "pale");
+        try { audio.playNote(58, 150); } catch { /* noop */ }
+        try { haptics.ripple(0.35); } catch { /* noop */ }
+        recordTapeRef.current("ripple", 0.5, "tide/stir");
+      },
+      rhythm: (e) => {
+        // a steady tapped pulse: the tide's beat falls in with the hand
+        if (e.stability <= 0.7) return;
+        entrainBpm = Math.max(40, Math.min(96, e.bpm));
+        entrainUntil = performance.now() + 10000;
+      },
+    }, { wheelZoom: false });
 
-    const onMove = (e: PointerEvent) => {
+    // Desktop hover — the candle still leans toward a passing hand.
+    const onHover = (e: PointerEvent) => {
       cursor.current.tx = e.clientX;
       cursor.current.ty = e.clientY;
       cursor.current.over = true;
-
-      const d = dragRef.current;
-      if (!d.active) return;
-      if (!d.moved && Math.hypot(e.clientX - d.downX, e.clientY - d.downY) > 5) d.moved = true;
-      if (!d.target) return;
-
-      const ang = angleFromEarth(e.clientX, e.clientY);
-      if (d.target === "moon") moonAngRef.current = ang;
-      else sunAngRef.current = ang;
-
-      const now = performance.now();
-      if (now - lastDragToneRef.current > 90) {
-        lastDragToneRef.current = now;
-        const tN = clamp(
-          (bodyTide(moonAngRef.current, MOON_AMP) + bodyTide(sunAngRef.current, SUN_AMP)) / (MOON_AMP + SUN_AMP),
-          -1, 1,
-        );
-        try { audio.playNote(52 + Math.round((tN * 0.5 + 0.5) * 20), 90); } catch { /* noop */ }
-        try { haptics.ripple(0.18 + Math.abs(tN) * 0.22); } catch { /* noop */ }
-      }
-      if (now - lastDragTapeRef.current > 560) {
-        lastDragTapeRef.current = now;
-        recordTapeRef.current("ripple", 0.3, `tide/${d.target}`);
-      }
     };
-
-    const endTap = (e: PointerEvent) => {
-      const d = dragRef.current;
-      const wasActive = d.active;
-      const wasTap = !d.moved && !d.target;
-      const didPlant = plantFired;
-      dragRef.current = { active: false, id: -1, target: null, moved: false, downX: 0, downY: 0 };
-      if (plantTimer) { clearTimeout(plantTimer); plantTimer = 0; }
-      plantFired = false;
-      try { cv.releasePointerCapture?.(e.pointerId); } catch { /* noop */ }
-      if (!wasActive || !wasTap) return;
-      // suppress the sea-chime if a plant just fired for this press
-      if (didPlant) return;
-      const g = geomRef.current;
-      if (Math.hypot(e.clientX - g.earth.x, e.clientY - g.earth.y) <= g.earth.r * 1.35) {
-        toggleAuto();
-        addRipple(e.clientX, e.clientY, Math.max(70, g.earth.r * 2.4), "gold");
-        return;
-      }
-      // a tap on the open sea — a soft chime and a pale ring.
-      try { audio.chime(); } catch { /* noop */ }
-      try { haptics.ripple(0.3); } catch { /* noop */ }
-      recordTapeRef.current("ripple", 0.24, "tide/sea");
-      addRipple(e.clientX, e.clientY, 70, "pale");
-    };
-
     const onLeave = () => { cursor.current.over = false; };
-
-    cv.addEventListener("pointerdown", onDown);
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", endTap);
-    window.addEventListener("pointercancel", endTap);
+    window.addEventListener("pointermove", onHover);
     window.addEventListener("pointerleave", onLeave);
     window.addEventListener("blur", onLeave);
 
     // ── audio cadence: the beat tracks the tidal phase ──────────────
-    const stepBeat = (now: number, tideN: number, band: "high" | "mid" | "low") => {
-      const bpm = 48 + (tideN * 0.5 + 0.5) * 36;
+    const stepBeat = (tSec: number, tideN: number, band: "high" | "mid" | "low") => {
+      // rhythm entrainment: a steady tapped pulse briefly sets the tempo
+      const bpm = performance.now() < entrainUntil
+        ? entrainBpm
+        : 48 + (tideN * 0.5 + 0.5) * 36;
       const beatLen = 60 / bpm;
-      const idx = Math.floor((now - t0) / 1000 / beatLen);
-      const phase = ((now - t0) / 1000) % beatLen;
+      const idx = Math.floor(tSec / beatLen);
+      const phase = tSec % beatLen;
       if (idx === lastBeatRef.current || phase > 0.06) return;
       lastBeatRef.current = idx;
       // sparse — skip beats in the muddy middle band so highs/lows sing.
@@ -377,7 +468,7 @@ export default function Tide() {
       const dy = 80 + Math.random() * 60;
       addWeather({
         kind: "meteor",
-        t0: performance.now(),
+        t0: simNow,
         duration: 1.4,
         x0, y0,
         x1: x0 + dx,
@@ -385,12 +476,12 @@ export default function Tide() {
       });
     };
     const spawnMoonhalo = () => {
-      addWeather({ kind: "moonhalo", t0: performance.now(), duration: 9 });
+      addWeather({ kind: "moonhalo", t0: simNow, duration: 9 });
     };
     const spawnFog = () => {
       addWeather({
         kind: "fog",
-        t0: performance.now(),
+        t0: simNow,
         duration: 42,
         dir: Math.random() < 0.5 ? 1 : -1,
         density: 0.55 + Math.random() * 0.3,
@@ -399,7 +490,7 @@ export default function Tide() {
     const spawnBoat = () => {
       addWeather({
         kind: "boat",
-        t0: performance.now(),
+        t0: simNow,
         duration: 28,
         dir: Math.random() < 0.5 ? 1 : -1,
         yOffset: -8 + Math.random() * 16,
@@ -408,7 +499,7 @@ export default function Tide() {
     const spawnFirefly = () => {
       addWeather({
         kind: "firefly",
-        t0: performance.now(),
+        t0: simNow,
         duration: 7,
         seed: Math.random() * 1000,
       });
@@ -430,14 +521,26 @@ export default function Tide() {
     // ── render loop ─────────────────────────────────────────────────
     const draw = (nowMs: number) => {
       const now = nowMs;
-      const t = (now - t0) / 1000;
+      if (lastFrameAt == null) lastFrameAt = nowMs;
+      const dtSec = Math.min(0.1, Math.max(0, (nowMs - lastFrameAt) / 1000));
+      lastFrameAt = nowMs;
+      // three-finger time dilation: the room's clock eases to ~1/4 speed
+      timeScale += (timeScaleTarget - timeScale) * Math.min(1, dtSec * 5);
+      simT += dtSec * timeScale;
+      simNow += dtSec * 1000 * timeScale;
+      // wind (three-finger drag) eases in and decays back toward calm;
+      // its phase pushes the swell lines directionally.
+      wind += (windTarget - wind) * Math.min(1, dtSec * 2.4);
+      windTarget *= Math.exp(-dtSec * 0.5);
+      windPhase += wind * dtSec * 2.2;
+      const t = simT;
       const w = window.innerWidth;
       const h = window.innerHeight;
       const motion = reduceMotionRef.current ? 0 : 1;
 
       // auto-orbit: the passage of hours moves the Moon on its own.
-      if (autoRef.current && !dragRef.current.target && motion) {
-        moonAngRef.current = (moonAngRef.current + 0.0055) % TAU;
+      if (autoRef.current && !grabRef.current && motion) {
+        moonAngRef.current = (moonAngRef.current + 0.0055 * timeScale) % TAU;
       }
 
       const moonAng = moonAngRef.current;
@@ -473,7 +576,7 @@ export default function Tide() {
       ctx.globalAlpha = 1;
 
       // meteor streaks sit above the sea, behind the mechanism
-      drawTideMeteors(ctx, weather, now);
+      drawTideMeteors(ctx, weather, simNow);
 
       // ── sea: its level rises and falls with the computed tide ─────
       const meanSeaY = h * 0.64;
@@ -495,7 +598,7 @@ export default function Tide() {
       ctx.fillRect(glintX - 30, waterY, 60, h - waterY);
 
       // swell lines — cadence quickens toward high tide
-      const speed = 0.3 + (tideN * 0.5 + 0.5) * 0.9;
+      const speed = 0.3 + (tideN * 0.5 + 0.5) * 0.9 + Math.abs(wind) * 0.7;
       const swells = [
         { off: 0.04, amp: 6, freq: 0.011, color: "rgba(160, 200, 230, 0.42)" },
         { off: 0.13, amp: 10, freq: 0.0095, color: "rgba(120, 170, 210, 0.5)" },
@@ -508,7 +611,7 @@ export default function Tide() {
         ctx.lineWidth = 1.3;
         ctx.beginPath();
         for (let x = 0; x <= w; x += 4) {
-          const ph = x * s.freq + t * speed * motion;
+          const ph = x * s.freq + (t * speed + windPhase * 40 * s.freq) * motion;
           const v = Math.sin(ph) + 0.35 * Math.sin(ph * 2.3);
           const yy = y0 + v * s.amp;
           if (x === 0) ctx.moveTo(x, yy);
@@ -531,9 +634,30 @@ export default function Tide() {
       // literal: play the moon, expose the beach.
       drawTideNaturals(ctx, naturals, waterY, meanSeaY, swing, w, h, t);
       // Boat lantern floats on the horizon at the sea surface.
-      drawTideBoat(ctx, weather, now, w, h, waterY);
+      drawTideBoat(ctx, weather, simNow, w, h, waterY);
       // Fog roll drifts across the sea over ~40s.
-      drawTideFog(ctx, weather, now, w, h);
+      drawTideFog(ctx, weather, simNow, w, h);
+
+      // stir arcs — a circling finger leaves a briefly visible turning
+      // current on the water (the scrub verb, discovered by play).
+      for (let i = stirs.length - 1; i >= 0; i--) {
+        const st = stirs[i];
+        const age = (simNow - st.t0) / 1000;
+        if (age > 1.4) { stirs.splice(i, 1); continue; }
+        const f = age / 1.4;
+        const alpha = (1 - f) * 0.4;
+        const rad = 18 + f * 46;
+        const a0 = st.sign * t * 3.2;
+        ctx.save();
+        ctx.strokeStyle = `rgba(190, 220, 245, ${alpha})`;
+        ctx.lineWidth = 1.2;
+        for (let k = 0; k < 2; k++) {
+          ctx.beginPath();
+          ctx.ellipse(st.x, st.y, rad * (1 - k * 0.35), rad * 0.34 * (1 - k * 0.35), 0, a0 + k * 2, a0 + k * 2 + Math.PI * 1.2);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
 
       // ── tide staff: a shore ruler with HIGH / MEAN / LOW + float ──
       const staffX = w < 620 ? 30 : 52;
@@ -662,7 +786,7 @@ export default function Tide() {
       const mx = ex + Math.cos(moonAng) * orbitR;
       const my = ey + Math.sin(moonAng) * orbitR;
       const moonR = earthR * 0.5;
-      const grabbedMoon = dragRef.current.target === "moon";
+      const grabbedMoon = grabRef.current === "moon";
       // soft grab halo
       ctx.fillStyle = `rgba(226, 236, 250, ${grabbedMoon ? 0.22 : 0.12})`;
       ctx.beginPath();
@@ -698,7 +822,7 @@ export default function Tide() {
       ctx.stroke();
 
       // Moon halo weather event: soft cool ring around the moon
-      drawTideMoonhalo(ctx, weather, now, mx, my, moonR);
+      drawTideMoonhalo(ctx, weather, simNow, mx, my, moonR);
 
       // publish geometry for hit-testing
       geomRef.current = {
@@ -777,7 +901,22 @@ export default function Tide() {
       ctx.fill();
 
       // Firefly weather event: a tiny warm speck loops near the candle
-      drawTideFirefly(ctx, weather, now, candleX, candleBaseY - candleH - 18);
+      drawTideFirefly(ctx, weather, simNow, candleX, candleBaseY - candleH - 18);
+
+      // glimmer (§6): after ~20s of quiet, a faint ring floats on the sea
+      // where a scrub would land — a physical hint, never text.
+      if (performance.now() - lastGestureAt > 20000) {
+        const slot = Math.floor(now / 9000);
+        const gseed = (n: number) => { const v = Math.sin((slot + n) * 127.1) * 43758.5453; return v - Math.floor(v); };
+        const gx = (0.2 + gseed(0) * 0.6) * w;
+        const gy = waterY + (0.2 + gseed(7) * 0.5) * Math.max(40, h - waterY - 60);
+        const pulse = motion ? 0.5 + Math.sin(now / 480) * 0.5 : 0.5;
+        ctx.strokeStyle = `rgba(220, 235, 255, ${0.05 + pulse * 0.08})`;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.ellipse(gx, gy, 20 + pulse * 9, (20 + pulse * 9) * 0.34, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      }
 
       // periodic naturals save so drift/plant survives a hard reload
       if (naturals.length > 0 && nowMs - lastNaturalsSaveAt > 4000) {
@@ -813,7 +952,7 @@ export default function Tide() {
         springBandRef.current = sBand;
       }
 
-      stepBeat(now, tideN, band);
+      stepBeat(simT, tideN, band);
 
       // ── readout (throttled) ──────────────────────────────────────
       if (Math.floor(t * 7) !== Math.floor((t - 0.016) * 7)) {
@@ -830,15 +969,12 @@ export default function Tide() {
     return () => {
       cancelAnimationFrame(raf);
       if (weatherTimer) clearTimeout(weatherTimer);
-      if (plantTimer) clearTimeout(plantTimer);
       persistNaturals();
       unsubscribeWorld();
       window.removeEventListener("resize", resize);
       mq.removeEventListener?.("change", onMq);
-      cv.removeEventListener("pointerdown", onDown);
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", endTap);
-      window.removeEventListener("pointercancel", endTap);
+      detachGestures();
+      window.removeEventListener("pointermove", onHover);
       window.removeEventListener("pointerleave", onLeave);
       window.removeEventListener("blur", onLeave);
     };

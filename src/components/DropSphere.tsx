@@ -6,10 +6,10 @@ import {
   useRef,
   useState,
   type CSSProperties,
-  type PointerEvent as ReactPointerEvent,
 } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
+import { attachGestures } from "@/lib/gesture";
 import { useField } from "@/store/field";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
 
@@ -621,9 +621,9 @@ export default function DropSphere() {
   const reduceRef = useRef(false);
   const dropsRef = useRef<Drop[]>([]);
   const zoomRef = useRef({ slider: 0, impulse: 0, current: 0, vel: 0 });
-  const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
-  const dragRef = useRef({ id: -1, drop: -1, lastX: 0, lastY: 0, lastT: 0, downX: 0, downY: 0, downT: 0, moved: 0, vx: 0, vy: 0, throttle: 0, pullAt: 0 });
-  const pinchRef = useRef({ active: false, dist: 0 });
+  // gesture-driven grab state: which bead the finger holds, and where the
+  // finger is (canvas-local) so the draw loop can critically-damp toward it.
+  const dragRef = useRef({ active: false, drop: -1, x: 0, y: 0, lastX: 0, lastY: 0, throttle: 0, pullAt: 0 });
   const audioRef = useRef<WaterAudio | null>(null);
   const startRef = useRef(0);
   const sizeRef = useRef({ w: 0, h: 0 });
@@ -640,8 +640,6 @@ export default function DropSphere() {
     onOrient: ((e: DeviceOrientationEvent) => void) | null;
     onMotion: ((e: DeviceMotionEvent) => void) | null;
   }>({ armed: false, lastMag: null, lastShakeAt: 0, gentleAt: 0, onOrient: null, onMotion: null });
-  // last tap (for double-tap-to-bounce)
-  const tapRef = useRef({ t: 0, x: 0, y: 0 });
 
   const [dive, setDive] = useState(0);
   const [readout, setReadout] = useState("surface · zoom 0.00 · 1 drop");
@@ -991,6 +989,15 @@ export default function DropSphere() {
     let last = startRef.current;
     let raf = 0;
     let readoutAt = 0;
+    // three fingers hold the law: the water runs at ~1/4 speed while held
+    let timeScale = 1;
+    let timeScaleTarget = 1;
+    // a steady tapped pulse briefly entrains the beads' buoyant breathing
+    let bobFactor = 1;
+    let bobUntil = 0;
+    // glimmer bookkeeping (§6: hints are physical, never text)
+    let lastGestureAt = performance.now();
+    let lastGlimmerPokeAt = 0;
 
     const step = (dt: number, time: number) => {
       const reduced = reduceRef.current;
@@ -1020,7 +1027,7 @@ export default function DropSphere() {
           m.v += (-m.omega * m.omega * m.a - 2 * m.damp * m.v) * dt;
           m.a += m.v * dt;
         }
-        d.bob += dt * (reduced ? 0.3 : 0.8);
+        d.bob += dt * (reduced ? 0.3 : 0.8) * (performance.now() < bobUntil ? bobFactor : 1);
 
         if (d.grabbed) {
           continue; // position handled by pointer follow
@@ -1155,18 +1162,19 @@ export default function DropSphere() {
 
     const draw = (now: number) => {
       const dtRaw = (now - last) / 1000;
-      const dt = Math.min(0.05, dtRaw);
       last = now;
+      // ease the law's time dilation in and out, then step warped time
+      timeScale += (timeScaleTarget - timeScale) * Math.min(1, Math.min(0.05, dtRaw) * 5);
+      const dt = Math.min(0.05, dtRaw) * timeScale;
       const time = (now - startRef.current) / 1000;
       step(dt, time);
 
       // pointer-follow for grabbed drop (critically damped)
       const dr = dragRef.current;
-      if (dr.drop !== -1) {
+      if (dr.drop !== -1 && dr.active) {
         const d = dropsRef.current.find((o) => o.id === dr.drop);
-        const p = pointersRef.current.get(dr.id);
-        if (d && p) {
-          const tx = p.x - d.gx, ty = p.y - d.gy;
+        if (d) {
+          const tx = dr.x - d.gx, ty = dr.y - d.gy;
           const k = 1 - Math.exp(-dt * 20);
           const nx = mix(d.x, tx, k), ny = mix(d.y, ty, k);
           d.vx = (nx - d.x) / Math.max(dt, 0.001);
@@ -1285,6 +1293,26 @@ export default function DropSphere() {
         g.restore();
       }
 
+      // glimmer (§6): after ~20s of quiet, one bead wears a faint turning
+      // ring and dimples on its own — the water hinting at a circling
+      // finger. A hint made of light and wobble, never text.
+      if (performance.now() - lastGestureAt > 20000 && drops.length > 0) {
+        const gd = drops[0];
+        const pulse = reduceRef.current ? 0.5 : 0.5 + Math.sin(now / 480) * 0.5;
+        const ga = now / 700;
+        g.save();
+        g.strokeStyle = `rgba(150, 225, 245, ${0.06 + pulse * 0.1})`;
+        g.lineWidth = 1.2;
+        g.beginPath();
+        g.arc(gd.x, gd.y, gd.r * 1.18, ga, ga + Math.PI * 1.3);
+        g.stroke();
+        g.restore();
+        if (now - lastGlimmerPokeAt > 3200) {
+          lastGlimmerPokeAt = now;
+          poke(gd, Math.random() * TAU, 0.04);
+        }
+      }
+
       if (now - readoutAt > 200) {
         readoutAt = now;
         const zz = zoomRef.current.current;
@@ -1313,176 +1341,29 @@ export default function DropSphere() {
     };
     canvas.addEventListener("wheel", onWheel, { passive: false });
 
-    return () => {
-      cancelAnimationFrame(raf);
-      obs.disconnect();
-      window.removeEventListener("resize", resize);
-      canvas.removeEventListener("wheel", onWheel);
-      try { audioRef.current?.dispose(); } catch { /* noop */ }
-      audioRef.current = null;
+    // ── gestures (the shared grammar — src/lib/gesture) ─────────────
+    // One finger touches the water: tap pokes or darts, double-tap
+    // bounces, drag grabs/sloshes/necks a droplet off, dwell grabs, the
+    // ceremony hold stills the bead to glass. Two-finger pinch is left to
+    // the scale manifold on document.body (zoom keeps its slider and the
+    // wheel). Three fingers touch the law: drag swirls the interior
+    // weather, hold dilates time. Device tilt/shake stays on its own
+    // permission-aware wiring (armSensors) — see note in the effect above.
+    const toLocal = (clientX: number, clientY: number) => {
+      const rect = canvas.getBoundingClientRect();
+      return { x: clientX - rect.left, y: clientY - rect.top };
     };
-  }, [ensureAudio, recordTape]);
-
-  // ── pointer gestures ─────────────────────────────────────────────────
-  const onPointerDown = (e: ReactPointerEvent<HTMLCanvasElement>) => {
-    ensureAudio();
-    const map = pointersRef.current;
-    map.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* noop */ }
-    const rect = e.currentTarget.getBoundingClientRect();
-
-    if (map.size >= 2) {
-      // two-finger pinch → zoom
-      pinchRef.current.active = true;
-      const pts = [...map.values()];
-      pinchRef.current.dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-      dragRef.current.id = -1;
-      dragRef.current.drop = -1;
-      return;
-    }
-
-    const px = e.clientX - rect.left, py = e.clientY - rect.top;
-    const hit = hitDrop(px, py);
-    const d = dragRef.current;
-    d.id = e.pointerId;
-    d.lastX = e.clientX; d.lastY = e.clientY; d.lastT = performance.now();
-    d.downX = px; d.downY = py; d.downT = performance.now();
-    d.moved = 0; d.vx = 0; d.vy = 0;
-    if (hit !== -1) {
-      const drop = dropsRef.current[hit];
-      drop.grabbed = true;
-      drop.gx = px - drop.x;
-      drop.gy = py - drop.y;
-      d.drop = drop.id;
-    } else {
-      d.drop = -1;
-    }
-  };
-
-  const onPointerMove = (e: ReactPointerEvent<HTMLCanvasElement>) => {
-    const map = pointersRef.current;
-    if (!map.has(e.pointerId)) return;
-    map.set(e.pointerId, { x: e.clientX, y: e.clientY });
-
-    if (pinchRef.current.active && map.size >= 2) {
-      const pts = [...map.values()];
-      const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-      const delta = dist - pinchRef.current.dist;
-      pinchRef.current.dist = dist;
-      const zs = zoomRef.current;
-      zs.impulse = clamp(zs.impulse + delta * 0.0032, -0.25, 1);
-      const now = performance.now();
-      if (now - dragRef.current.throttle > 120) {
-        dragRef.current.throttle = now;
-        const depth = clamp(zs.slider + zs.impulse, 0, 1);
-        try { audioRef.current?.drip(depth); } catch { /* noop */ }
-        try { haptics.chop(); } catch { /* noop */ }
-        recordTape("sigil", 0.3 + depth * 0.5, "drop/pinch");
-      }
-      return;
-    }
-
-    const d = dragRef.current;
-    if (d.id !== e.pointerId) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const now = performance.now();
-    const dx = e.clientX - d.lastX, dy = e.clientY - d.lastY;
-    d.lastX = e.clientX; d.lastY = e.clientY; d.lastT = now;
-    d.moved += Math.hypot(dx, dy);
-
-    if (d.drop !== -1) {
-      // sloshing wobble while a bead is dragged — trailing slosh + pull-off
-      const drop = dropsRef.current.find((o) => o.id === d.drop);
-      if (drop && d.moved > 4) {
-        const spd = Math.hypot(dx, dy);
-        const px = e.clientX - rect.left, py = e.clientY - rect.top;
-        // how far the finger has raced ahead of the bead it's dragging: a fast,
-        // far yank necks a droplet off and hands it to the finger.
-        const stretch = Math.hypot(px - drop.x, py - drop.y);
-        if (
-          spd > 16 &&
-          stretch > drop.r * 1.15 &&
-          drop.r > 62 &&
-          now - d.pullAt > 260 &&
-          dropsRef.current.length < MAX_DROPS
-        ) {
-          // pullApart handles audio/haptics/tape and re-targets the drag
-          pullApart(drop, px, py, spd * 14);
-        } else if (spd > 4) {
-          const ang = Math.atan2(dy, dx);
-          // stronger trailing slosh so the water visibly lags the finger
-          poke(drop, ang + Math.PI, clamp(spd * 0.0028, 0, 0.17));
-          if (now - d.throttle > 110) {
-            d.throttle = now;
-            try { audioRef.current?.ripple(clamp(spd / 34, 0.15, 0.8)); } catch { /* noop */ }
-            try { haptics.ripple(0.25 + clamp(spd / 55, 0, 0.5)); } catch { /* noop */ }
-            recordTape("ripple", 0.4, "drop/drag");
-          }
-        }
-      }
-    } else if (d.moved > 6) {
-      // dragging empty water → poke the nearest bead into ripples
-      const px = e.clientX - rect.left, py = e.clientY - rect.top;
-      const hit = hitDrop(px, py);
-      if (hit !== -1 && now - d.throttle > 100) {
-        d.throttle = now;
-        const drop = dropsRef.current[hit];
-        // press into the drop: a firmer dent that radiates outward
-        const spd = Math.hypot(dx, dy);
-        poke(drop, Math.atan2(py - drop.y, px - drop.x), clamp(0.08 + spd * 0.0016, 0.08, 0.16));
-        try { audioRef.current?.ripple(0.55); } catch { /* noop */ }
-        try { haptics.ripple(0.4); } catch { /* noop */ }
-        recordTape("ripple", 0.4, "drop/push");
-      }
-    }
-  };
-
-  const endPointer = (e: ReactPointerEvent<HTMLCanvasElement>) => {
-    const map = pointersRef.current;
-    const d = dragRef.current;
-    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* noop */ }
-    const wasDrag = d.id === e.pointerId;
-    map.delete(e.pointerId);
-
-    if (pinchRef.current.active) {
-      if (map.size < 2) pinchRef.current.active = false;
-      return;
-    }
-    if (!wasDrag) return;
-
-    const rect = e.currentTarget.getBoundingClientRect();
-    const px = e.clientX - rect.left, py = e.clientY - rect.top;
-    const grabbedId = d.drop;
-    d.id = -1;
-    d.drop = -1;
-    const drop = grabbedId !== -1 ? dropsRef.current.find((o) => o.id === grabbedId) : undefined;
-    const now = performance.now();
-    const dur = now - d.downT;
-
-    if (d.moved < 9 && dur < 340) {
-      // TAP — double-tap a bead bounces it; else dart a microbe or poke.
-      if (drop) drop.grabbed = false;
-      const isDouble = now - tapRef.current.t < 340 && Math.hypot(px - tapRef.current.x, py - tapRef.current.y) < 72;
-      tapRef.current = { t: now, x: px, y: py };
-      const hit = drop ? dropsRef.current.indexOf(drop) : hitDrop(px, py);
-      if (isDouble && hit !== -1) {
-        bounceDrop(dropsRef.current[hit]);
-        return;
-      }
-      if (dartMicrobe(px, py)) return;
-      if (hit !== -1) {
-        const dd = dropsRef.current[hit];
-        poke(dd, Math.atan2(py - dd.y, px - dd.x), 0.16);
-        try { audioRef.current?.drip(0.5); } catch { /* noop */ }
-        try { haptics.ripple(0.5); } catch { /* noop */ }
-        recordTape("ripple", 0.5, "drop/poke");
-      }
-      return;
-    }
-
-    // FLING — release with velocity; leading edge flattens then rebounds
-    if (drop) {
+    const holdCtx = { stilled: false };
+    let lastSwirlFxAt = 0;
+    let lastScrubAt = 0;
+    const releaseGrab = () => {
+      const dr = dragRef.current;
+      const drop = dr.drop !== -1 ? dropsRef.current.find((o) => o.id === dr.drop) : undefined;
+      dr.active = false;
+      dr.drop = -1;
+      if (!drop) return;
       drop.grabbed = false;
+      // FLING — the leading edge flattens then rebounds
       const spd = Math.hypot(drop.vx, drop.vy);
       if (spd > 60) {
         poke(drop, Math.atan2(drop.vy, drop.vx), clamp(spd * 0.0009, 0, 0.14));
@@ -1490,8 +1371,225 @@ export default function DropSphere() {
         try { haptics.roll(); } catch { /* noop */ }
         recordTape("ripple", clamp(0.3 + spd * 0.001, 0.3, 0.95), "drop/fling");
       }
-    }
-  };
+    };
+    const detachGestures = attachGestures(canvas, {
+      tap: (e) => {
+        lastGestureAt = performance.now();
+        ensureAudio();
+        if (e.fingers !== 1) return; // the water absorbs frame/law taps
+        const { x: px, y: py } = toLocal(e.x, e.y);
+        const hit = hitDrop(px, py);
+        if (e.count >= 2 && hit !== -1) {
+          bounceDrop(dropsRef.current[hit]);
+          return;
+        }
+        if (dartMicrobe(px, py)) return;
+        if (hit !== -1) {
+          const dd = dropsRef.current[hit];
+          // tap intensity is the poke: dent depth, drip brightness and the
+          // haptic swell all ride the same 0..1 from core
+          poke(dd, Math.atan2(py - dd.y, px - dd.x), 0.1 + e.intensity * 0.12);
+          try { audioRef.current?.drip(0.25 + e.intensity * 0.5); } catch { /* noop */ }
+          try { haptics.ripple(0.3 + e.intensity * 0.4); } catch { /* noop */ }
+          recordTape("ripple", 0.5, "drop/poke");
+        }
+      },
+      hold: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          // three fingers hold the law: the droplet world slows to ~1/4
+          if (e.phase === "enter") {
+            ensureAudio();
+            timeScaleTarget = 0.25;
+            try { audioRef.current?.gloop(); } catch { /* noop */ }
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+          if (e.phase === "release") timeScaleTarget = 1;
+          return;
+        }
+        if (e.fingers !== 1) return;
+        const { x: px, y: py } = toLocal(e.x, e.y);
+        const dr = dragRef.current;
+        if (e.phase === "enter") {
+          ensureAudio();
+          holdCtx.stilled = false;
+          if (dr.drop === -1) {
+            const hit = hitDrop(px, py);
+            if (hit !== -1) {
+              const drop = dropsRef.current[hit];
+              drop.grabbed = true;
+              drop.gx = px - drop.x;
+              drop.gy = py - drop.y;
+              dr.drop = drop.id;
+              dr.active = true;
+              dr.x = px; dr.y = py; dr.lastX = px; dr.lastY = py;
+            }
+          }
+          return;
+        }
+        if (e.phase === "release") {
+          releaseGrab();
+          return;
+        }
+        dr.x = px; dr.y = py;
+        // ceremony tier — the room's one solemn act: held to stillness,
+        // the water goes glass-calm in the palm
+        if (e.tier >= 3 && !holdCtx.stilled) {
+          holdCtx.stilled = true;
+          const drop = dr.drop !== -1
+            ? dropsRef.current.find((o) => o.id === dr.drop)
+            : dropsRef.current[hitDrop(px, py)] ?? dropsRef.current[0];
+          if (drop) {
+            for (const m of drop.modes) { m.a *= 0.05; m.v = 0; }
+            drop.vx = 0;
+            drop.vy = 0;
+            try { audioRef.current?.gloop(); } catch { /* noop */ }
+            try { haptics.bloom(); } catch { /* noop */ }
+            recordTape("object", 0.9, "drop/still");
+          }
+        }
+      },
+      drag: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          // three fingers drag the interior weather: the cluster streams
+          // the pushed way and the life inside darts with the current
+          if (e.phase === "end") return;
+          for (const d of dropsRef.current) {
+            d.vx += e.dx * 2.2;
+            d.vy += e.dy * 2.2;
+          }
+          const nowMs = performance.now();
+          if (nowMs - lastSwirlFxAt > 300) {
+            lastSwirlFxAt = nowMs;
+            const ang = Math.atan2(e.vy, e.vx);
+            for (const d of dropsRef.current) {
+              for (const m of d.mic) {
+                m.heading = ang + (Math.random() - 0.5) * 0.9;
+                m.dart = Math.max(m.dart, 0.4);
+              }
+            }
+            try { audioRef.current?.ripple(0.4); } catch { /* noop */ }
+            try { haptics.chop(); } catch { /* noop */ }
+            recordTape("ripple", 0.4, "drop/weather");
+          }
+          return;
+        }
+        if (e.fingers !== 1) return;
+        const { x: px, y: py } = toLocal(e.x, e.y);
+        const dr = dragRef.current;
+        if (e.phase === "start") {
+          ensureAudio();
+          if (dr.drop === -1) {
+            const hit = hitDrop(px, py);
+            if (hit !== -1) {
+              const drop = dropsRef.current[hit];
+              drop.grabbed = true;
+              drop.gx = px - drop.x;
+              drop.gy = py - drop.y;
+              dr.drop = drop.id;
+            }
+          }
+          dr.active = true;
+          dr.x = px; dr.y = py; dr.lastX = px; dr.lastY = py;
+          return;
+        }
+        if (e.phase === "end") {
+          releaseGrab();
+          return;
+        }
+        const dx = px - dr.lastX, dy = py - dr.lastY;
+        dr.lastX = px; dr.lastY = py;
+        dr.x = px; dr.y = py;
+        const now = performance.now();
+        if (dr.drop !== -1) {
+          // sloshing wobble while a bead is dragged — trailing slosh + pull-off
+          const drop = dropsRef.current.find((o) => o.id === dr.drop);
+          if (drop) {
+            const spd = Math.hypot(dx, dy);
+            // how far the finger has raced ahead of the bead it's dragging:
+            // a fast, far yank necks a droplet off and hands it to the finger.
+            const stretch = Math.hypot(px - drop.x, py - drop.y);
+            if (
+              spd > 16 &&
+              stretch > drop.r * 1.15 &&
+              drop.r > 62 &&
+              now - dr.pullAt > 260 &&
+              dropsRef.current.length < MAX_DROPS
+            ) {
+              // pullApart handles audio/haptics/tape and re-targets the drag
+              pullApart(drop, px, py, spd * 14);
+            } else if (spd > 4) {
+              const ang = Math.atan2(dy, dx);
+              // stronger trailing slosh so the water visibly lags the finger
+              poke(drop, ang + Math.PI, clamp(spd * 0.0028, 0, 0.17));
+              if (now - dr.throttle > 110) {
+                dr.throttle = now;
+                try { audioRef.current?.ripple(clamp(spd / 34, 0.15, 0.8)); } catch { /* noop */ }
+                try { haptics.ripple(0.25 + clamp(spd / 55, 0, 0.5)); } catch { /* noop */ }
+                recordTape("ripple", 0.4, "drop/drag");
+              }
+            }
+          }
+        } else {
+          // dragging empty water → poke the nearest bead into ripples
+          const hit = hitDrop(px, py);
+          if (hit !== -1 && now - dr.throttle > 100) {
+            dr.throttle = now;
+            const drop = dropsRef.current[hit];
+            const spd = Math.hypot(dx, dy);
+            poke(drop, Math.atan2(py - drop.y, px - drop.x), clamp(0.08 + spd * 0.0016, 0.08, 0.16));
+            try { audioRef.current?.ripple(0.55); } catch { /* noop */ }
+            try { haptics.ripple(0.4); } catch { /* noop */ }
+            recordTape("ripple", 0.4, "drop/push");
+          }
+        }
+      },
+      scrub: (e) => {
+        lastGestureAt = performance.now();
+        const nowMs = performance.now();
+        if (nowMs - lastScrubAt < 700) return;
+        lastScrubAt = nowMs;
+        ensureAudio();
+        const { x: px, y: py } = toLocal(e.cx, e.cy);
+        const sgn = Math.sign(e.winding) || 1;
+        // stir: a whirlpool around the circling hand — beads orbit it and
+        // the microscopic life spins with the current
+        for (const d of dropsRef.current) {
+          const ang = Math.atan2(d.y - py, d.x - px);
+          const dist = Math.hypot(d.x - px, d.y - py);
+          const fall = Math.exp(-(dist / 320) * (dist / 320));
+          d.vx += -Math.sin(ang) * sgn * 150 * fall;
+          d.vy += Math.cos(ang) * sgn * 150 * fall;
+          poke(d, ang + (Math.PI / 2) * sgn, 0.08 * fall);
+          for (const m of d.mic) {
+            m.heading += sgn * 1.2 * fall;
+            m.dart = Math.max(m.dart, 0.7 * fall);
+          }
+        }
+        try { audioRef.current?.ripple(0.6); } catch { /* noop */ }
+        try { audioRef.current?.drip(0.6); } catch { /* noop */ }
+        try { haptics.ripple(0.4); } catch { /* noop */ }
+        recordTape("ripple", 0.6, "drop/stir");
+      },
+      rhythm: (e) => {
+        // a steady tapped pulse: the beads' buoyant breathing falls in
+        if (e.stability <= 0.7) return;
+        bobFactor = clamp(e.bpm / 75, 0.5, 1.8);
+        bobUntil = performance.now() + 10000;
+      },
+    }, { wheelZoom: false });
+
+    return () => {
+      cancelAnimationFrame(raf);
+      obs.disconnect();
+      window.removeEventListener("resize", resize);
+      canvas.removeEventListener("wheel", onWheel);
+      detachGestures();
+      try { audioRef.current?.dispose(); } catch { /* noop */ }
+      audioRef.current = null;
+    };
+  }, [bounceDrop, dartMicrobe, ensureAudio, hitDrop, pullApart, recordTape]);
 
   const onDive = (v: number) => {
     setDive(v);
@@ -1524,11 +1622,7 @@ export default function DropSphere() {
           ref={canvasRef}
           className="drop-canvas"
           role="img"
-          aria-label="A living bead of rainwater. Tilt or shake your phone to make it roll, slide and scatter; drag it to slosh and fling it; flick a droplet off a bead to split it, or drag droplets together to merge them; double-tap a bead to make it bounce; and zoom in — with the dive control, the scroll wheel, or a two-finger pinch — to reveal the microscopic life swimming inside."
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={endPointer}
-          onPointerCancel={endPointer}
+          aria-label="A living bead of rainwater. Tilt or shake your phone to make it roll, slide and scatter; drag it to slosh and fling it; flick a droplet off a bead to split it, or drag droplets together to merge them; double-tap a bead to make it bounce; and zoom in — with the dive control or the scroll wheel — to reveal the microscopic life swimming inside."
         />
       )}
 
@@ -1544,7 +1638,7 @@ export default function DropSphere() {
       </div>
 
       <div className="drop-hud">
-        <span className="drop-play-hint" aria-hidden="true">tap · drag · pinch</span>
+        <span className="drop-play-hint" aria-hidden="true">tap · drag · hold</span>
         <output className="drop-readout" aria-live="polite">{readout}</output>
         {motionUI === "prompt" && (
           <button
