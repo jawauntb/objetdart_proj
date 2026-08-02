@@ -86,6 +86,7 @@ type CombAudio = {
   brush: (strength: number) => void;
   ring: (strength: number) => void;
   reverse: () => void;
+  gather: () => void;
   dispose: () => void;
 };
 
@@ -200,6 +201,11 @@ function createCombAudio(): CombAudio {
       tone("sine", 880, 220, 0.5, 0.06);
       tone("sine", 220, 660, 0.5, 0.05);
       hiss(0.5, 0.03, 1100, 1);
+    },
+    gather() {
+      if (!ensure()) return;
+      tone("sine", 240, 150, 0.5, 0.05, 800);
+      hiss(0.4, 0.015, 500, 0.8);
     },
     dispose() {
       try { bus?.disconnect(); } catch { /* noop */ }
@@ -362,19 +368,27 @@ export default function Comb() {
     } | null = null;
 
     // sprites
-    const head = makeDot(64, [
-      [0, "rgba(255,255,250,0.9)"],
-      [0.18, "rgba(255,248,232,0.42)"],
-      [0.45, "rgba(255,240,214,0.08)"],
-      [1, "rgba(255,240,214,0)"],
-    ]);
+    // one head sprite per hue family — brightness rides the hue (gold-white,
+    // ice-white, violet-white), never absolute white, so comets stay tinted
+    // even at their hottest, the way filtered light behaves on film
+    const HEAD_TINTS: Array<[string, string]> = [
+      ["255,244,210", "250,222,160"], // amber family
+      ["224,236,255", "196,216,250"], // blue family
+      ["240,228,252", "220,202,244"], // violet family
+    ];
+    const heads = HEAD_TINTS.map(([core, halo]) => makeDot(64, [
+      [0, `rgba(${core},0.9)`],
+      [0.18, `rgba(${halo},0.42)`],
+      [0.45, `rgba(${halo},0.08)`],
+      [1, `rgba(${halo},0)`],
+    ]));
     // blooms repaint onto a persisted canvas every frame, so their per-frame
     // alpha must stay well under the wash fade or they saturate to white
     const bloomPos = makeDot(256, [
-      [0, "rgba(255,253,244,0.045)"],
-      [0.12, "rgba(255,250,236,0.028)"],
-      [0.38, "rgba(255,244,220,0.01)"],
-      [1, "rgba(255,244,220,0)"],
+      [0, "rgba(255,242,206,0.045)"],
+      [0.12, "rgba(253,234,188,0.028)"],
+      [0.38, "rgba(250,228,180,0.01)"],
+      [1, "rgba(250,228,180,0)"],
     ]);
     const bloomNeg = makeDot(256, [
       [0, "rgba(74,58,92,0.04)"],
@@ -382,9 +396,9 @@ export default function Comb() {
       [1, "rgba(96,74,60,0)"],
     ]);
     const flare = makeDot(256, [
-      [0, "rgba(255,255,248,0.85)"],
-      [0.3, "rgba(255,246,224,0.35)"],
-      [1, "rgba(255,246,224,0)"],
+      [0, "rgba(255,244,210,0.85)"],
+      [0.3, "rgba(252,234,190,0.35)"],
+      [1, "rgba(252,234,190,0)"],
     ]);
     const tails: HTMLCanvasElement[][] = TAIL_GROUPS.map((group) =>
       group.map((hex) => {
@@ -465,7 +479,7 @@ export default function Comb() {
         r: mix(a.r, b.r, sm),
         g: mix(a.g, b.g, sm),
         b: mix(a.b, b.b, sm),
-        amt: 0.5 + 0.28 * Math.sin(simT * 0.019 + 1.1),
+        amt: 0.62 + 0.3 * Math.sin(simT * 0.019 + 1.1),
       };
     };
 
@@ -866,13 +880,17 @@ export default function Comb() {
       }
 
       // ── long-press saddle forming under a still finger ─────────────────
+      const wasForming = forming !== null;
       forming = null;
       if (pointers.size === 1) {
         const p = [...pointers.values()][0];
         const held = (now - p.t0) / 1000;
         if (!p.moved && !p.defect && held > 0.38) {
           forming = { x: toWorldX(p.x), y: toWorldY(p.y), start: p.t0 };
-          if (held > 0.4 && held < 0.44) {
+          if (!wasForming) {
+            // the hold announces itself once — a low gathering tone, so a
+            // long press feels different from a tap the moment it begins
+            try { audioRef.current?.gather(); } catch { /* noop */ }
             try { haptics.tap(); } catch { /* noop */ }
           }
         }
@@ -925,7 +943,8 @@ export default function Comb() {
         }
       }
 
-      // the saddle forming under a held finger
+      // the saddle forming under a held finger — a ring, and spokes drawn
+      // inward as the hold gathers the field toward the coming charge
       if (forming) {
         const grow = clamp(((now - forming.start) / 1000 - 0.38) / 1.1, 0, 1);
         const sx = toScreenX(forming.x), sy = toScreenY(forming.y);
@@ -936,6 +955,17 @@ export default function Comb() {
         ctx.beginPath();
         ctx.arc(sx, sy, rad, 0, TAU);
         ctx.stroke();
+        ctx.strokeStyle = `rgba(94,74,138,${0.15 + grow * 0.3})`;
+        ctx.lineWidth = 1.4;
+        for (let i = 0; i < 6; i++) {
+          const a = (i / 6) * TAU + simT * 0.8;
+          const r0 = rad * (3.4 - grow * 1.2);
+          const r1 = rad * 1.5;
+          ctx.beginPath();
+          ctx.moveTo(sx + Math.cos(a) * r0, sy + Math.sin(a) * r0);
+          ctx.lineTo(sx + Math.cos(a) * r1, sy + Math.sin(a) * r1);
+          ctx.stroke();
+        }
         const dim = u * zoom * 0.6 * grow;
         ctx.drawImage(bloomNeg, sx - dim, sy - dim, dim * 2, dim * 2);
       }
@@ -978,8 +1008,8 @@ export default function Comb() {
         const tail = tails[p.gi][p.ci];
         const ts = size * 3.1;
         const hs = size * 2.0;
-        const tailA = (0.45 + 0.35 * rC) * fade;
-        const headA = (0.95 - 0.35 * rC) * fade;
+        const tailA = (0.5 + 0.35 * rC) * fade;
+        const headA = (0.85 - 0.3 * rC) * fade;
 
         // stamp continuously along the motion segment so the streak stays a
         // solid tapered dash at any frame rate instead of beading into pearls
@@ -995,7 +1025,7 @@ export default function Comb() {
           ctx.drawImage(tail, sx - ts / 2, sy - ts / 2, ts, ts);
           ctx.globalCompositeOperation = "lighter";
           ctx.globalAlpha = k === steps ? headA : headA * 0.55;
-          ctx.drawImage(head, sx - hs / 2, sy - hs / 2, hs, hs);
+          ctx.drawImage(heads[p.gi], sx - hs / 2, sy - hs / 2, hs, hs);
         }
         p.lx = p.x;
         p.ly = p.y;
@@ -1032,7 +1062,7 @@ export default function Comb() {
         <strong>comb</strong>
       </div>
       <div className="comb-hud">
-        <span className="comb-hint" aria-hidden="true">tap · hold · comb · pinch</span>
+        <span className="comb-hint" aria-hidden="true">tap vortex · hold saddle · comb · pinch</span>
         {motionUI === "prompt" && (
           <button
             type="button"

@@ -61,14 +61,16 @@ const W = (hex: string): number[] => {
 };
 // four streak hues living side by side in every moment — gold against blue
 // against violet against cream, the way the reference is never one color
+// every anchor carries a hue — no near-whites in the palette, so even the
+// brightest petal stays tinted the way the reference never bleaches out
 const WEATHERS: Weather[] = [
-  { bg0: W("#e9eef0"), bg1: W("#c2d2dc"), pal: [W("#e2b45c"), W("#eef2f6"), W("#7fa0cc"), W("#9a8cc4")], tail: W("#2c3a54") }, // dawn blue
-  { bg0: W("#f4eeda"), bg1: W("#e0cda2"), pal: [W("#e0a850"), W("#f0e6c8"), W("#a6c0dc"), W("#5c6a94")], tail: W("#4c3c22") }, // gold noon
-  { bg0: W("#f2e2cc"), bg1: W("#dcb894"), pal: [W("#cc8244"), W("#ecc8a0"), W("#cc7a74"), W("#8c96cc")], tail: W("#54301e") }, // amber rose
-  { bg0: W("#e4d6d2"), bg1: W("#b49aa8"), pal: [W("#b08850"), W("#c0a0b8"), W("#5c6494"), W("#7c5480")], tail: W("#3a2a3e") }, // mauve dusk
+  { bg0: W("#e4ecee"), bg1: W("#b7cad8"), pal: [W("#e2b45c"), W("#c8dcf0"), W("#7fa0cc"), W("#9a8cc4")], tail: W("#2c3a54") }, // dawn blue
+  { bg0: W("#f2e9cc"), bg1: W("#d8c294"), pal: [W("#e0a850"), W("#ead290"), W("#a6c0dc"), W("#5c6a94")], tail: W("#4c3c22") }, // gold noon
+  { bg0: W("#f0dcc2"), bg1: W("#d4ac84"), pal: [W("#cc8244"), W("#e8ba86"), W("#cc7a74"), W("#8c96cc")], tail: W("#54301e") }, // amber rose
+  { bg0: W("#e0d0cc"), bg1: W("#a890a0"), pal: [W("#b08850"), W("#c0a0b8"), W("#5c6494"), W("#7c5480")], tail: W("#3a2a3e") }, // mauve dusk
 ];
 const NIGHT: Weather = {
-  bg0: W("#181c30"), bg1: W("#0c0e1c"), pal: [W("#e8d494"), W("#d8dce8"), W("#96a6dc"), W("#8a7cc0")], tail: W("#060810"),
+  bg0: W("#181c30"), bg1: W("#0c0e1c"), pal: [W("#e8d494"), W("#b8c4e4"), W("#96a6dc"), W("#8a7cc0")], tail: W("#0a0e1c"),
 };
 
 // ── shaders ──────────────────────────────────────────────────────────────
@@ -90,6 +92,7 @@ uniform vec2  uGustDir;
 uniform float uGustAmt;
 uniform float uWaveAng;   // the orbiting shimmer-wind
 uniform vec3  uRipple;    // x, y, age (seconds); age >= 90.0 means idle
+uniform float uRippleAmp; // 1.0 for a tap, larger for the long-press exhale
 uniform float uFlash;
 uniform float uFocus;     // which depth is in focus 0..1
 uniform float uPupil;     // long-press dilation 0..1
@@ -127,7 +130,8 @@ void main() {
   if (uRipple.z < 3.0) {
     float rr = distance(center, vec2(uRipple.x, uRipple.y));
     float front = uRipple.z * 0.9;
-    glowR = exp(-pow((rr - front) * 7.0, 2.0)) * max(0.0, 1.0 - uRipple.z * 0.4);
+    glowR = exp(-pow((rr - front) * 7.0 / uRippleAmp, 2.0))
+          * max(0.0, 1.0 - uRipple.z * 0.4) * uRippleAmp;
   }
 
   float twinkle = 0.5 + 0.5 * sin(uTime * (1.3 + aSeed * 2.2) + aPhase * 20.0);
@@ -195,18 +199,23 @@ void main() {
   vec3 streak = h < 1.0 ? mix(uPal0, uPal1, h)
               : h < 2.0 ? mix(uPal1, uPal2, h - 1.0)
               : mix(uPal2, uPal3, h - 2.0);
-  // ink only at the very tail tip, streak color through the body, hot head
+  // ink only at the very tail tip, streak color through the body, hot head.
+  // brightness is always the streak's own hue lifted, never absolute white —
+  // in the reference even the hottest light stays tinted
   float headness = smoothstep(0.5, 0.93, t);
   vec3 col = mix(mix(uTail, streak, 0.25), streak, smoothstep(0.0, 0.38, t));
-  vec3 hot = mix(vec3(1.0, 0.99, 0.95), streak, 0.12);
+  vec3 hot = 1.0 - (1.0 - streak) * 0.35;
   col = mix(col, hot, headness * 0.9);
-  // the very core of the head burns
+  // the very core of the head burns in its own color
   float core = smoothstep(0.6, 0.97, t) * smoothstep(radius * 0.7, 0.0, distance(vUv, spine));
-  col += vec3(0.9, 0.85, 0.7) * core * 0.8;
+  col += (1.0 - (1.0 - streak) * 0.2) * core * 0.55;
 
-  col *= vGlow;
-  // out-of-focus marks go translucent — bokeh, not mud
-  float alpha = body * clamp(0.9 - vBlur * 0.55, 0.18, 0.9);
+  col *= min(vGlow, 1.35);
+  // defocus softens edges but must not bleach hue — bokeh keeps its color,
+  // so blurred marks lean *more* saturated as their alpha drops
+  float luma = dot(col, vec3(0.299, 0.587, 0.114));
+  col = mix(vec3(luma), col, 1.0 + vBlur * 0.55);
+  float alpha = body * clamp(0.9 - vBlur * 0.42, 0.3, 0.9);
   // at night the tails nearly vanish and the heads become stars
   alpha *= mix(1.0, 0.22 + 0.78 * headness, uNightMix);
 
@@ -334,6 +343,10 @@ void main() {
   vec3 bloom = texture2D(tBloom, vUv).rgb * uBloomAmt;
   // screen blend keeps the light additive but never clips to flat white
   vec3 col = 1.0 - (1.0 - base) * (1.0 - min(bloom, vec3(1.0)));
+  // vibrance: give back the chroma the screen blend steals, so bright
+  // stays tinted instead of bleaching
+  float l = dot(col, vec3(0.299, 0.587, 0.114));
+  col = clamp(mix(vec3(l), col, 1.22), 0.0, 1.0);
   // gentle vignette
   vec2 d = vUv - 0.5;
   col *= 1.0 - dot(d, d) * 0.35;
@@ -348,6 +361,7 @@ type BeamAudio = {
   whoosh: (strength: number) => void;
   bell: () => void;
   nightfall: (toNight: boolean) => void;
+  exhale: () => void;
   dispose: () => void;
 };
 
@@ -454,6 +468,11 @@ function createBeamAudio(): BeamAudio {
         tone("sine", 165, 440, 1.2, 0.06);
         tone("sine", 330, 660, 0.9, 0.03);
       }
+    },
+    exhale() {
+      if (!ensure()) return;
+      tone("sine", 250, 92, 1.1, 0.07, 600);
+      hiss(0.9, 0.03, 420, 0.7);
     },
     dispose() {
       try { bus?.disconnect(); } catch { /* noop */ }
@@ -613,6 +632,7 @@ export default function Beam() {
       uGustAmt: { value: 0 },
       uWaveAng: { value: 0 },
       uRipple: { value: new THREE.Vector3(0, 0, 99) },
+      uRippleAmp: { value: 1 },
       uFlash: { value: 0 },
       uFocus: { value: 0.35 },
       uPupil: { value: 0 },
@@ -839,7 +859,14 @@ export default function Beam() {
       const held = (performance.now() - p.t0) / 1000;
 
       if (pupilTarget > 0 && pointers.size === 0) {
+        // releasing a long press is its own gesture: the deep exhale — a
+        // wide slow wave of light rolls out from where you held
         pupilTarget = 0;
+        const [wx, wy] = toWorld(p.x, p.y);
+        uniforms.uRipple.value.set(wx, wy, 0);
+        uniforms.uRippleAmp.value = 2.1;
+        try { audioRef.current?.exhale(); } catch { /* noop */ }
+        try { haptics.ripple(0.5); } catch { /* noop */ }
         return;
       }
 
@@ -851,6 +878,7 @@ export default function Beam() {
         focusTarget = clamp(Math.min(da, db) / 1.2, 0, 1);
         focusBreathing = false;
         uniforms.uRipple.value.set(wx, wy, 0);
+        uniforms.uRippleAmp.value = 1;
         try { audioRef.current?.chime(1 - focusTarget); } catch { /* noop */ }
         try { haptics.tap(); } catch { /* noop */ }
         return;
@@ -1028,7 +1056,7 @@ export default function Beam() {
       setV3(uniforms.uTail, blend3(A.tail, B.tail, sm), NIGHT.tail, nightMix);
       setV3(uniforms.uBg0, blend3(A.bg0, B.bg0, sm), NIGHT.bg0, Math.max(nightMix, dusk));
       setV3(uniforms.uBg1, blend3(A.bg1, B.bg1, sm), NIGHT.bg1, Math.max(nightMix, dusk));
-      uniforms.uBloomAmt.value = 1.05 + nightMix * 0.15 + uniforms.uPupil.value * 0.3;
+      uniforms.uBloomAmt.value = 0.92 + nightMix * 0.15 + uniforms.uPupil.value * 0.3;
 
       // apply the twist on top of the slow rotation for this frame
       const savedRot = uniforms.uRot.value;
@@ -1097,7 +1125,7 @@ export default function Beam() {
         <strong>beam</strong>
       </div>
       <div className="beam-hud">
-        <span className="beam-hint" aria-hidden="true">tap · hold · gust · pinch</span>
+        <span className="beam-hint" aria-hidden="true">tap focus · hold exhale · gust · pinch</span>
         {motionUI === "prompt" && (
           <button
             type="button"
