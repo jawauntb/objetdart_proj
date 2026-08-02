@@ -32,6 +32,7 @@ export type SiteIconKey =
   | "pretext"
   | "pulse"
   | "reading"
+  | "relativity"
   | "signal"
   | "sine"
   | "stars"
@@ -492,6 +493,19 @@ export const SITE_ICON_VISUALS = {
     accent: "#c8732a",
     accent2: "#2c4a5c",
     ink: "#15171a",
+  },
+  relativity: {
+    title: "Relativity",
+    description: "light keeps its own covenant",
+    path: "/relativity",
+    shortName: "relativity",
+    kind: "beyond",
+    bg: "#05070c",
+    bg2: "#111b30",
+    glow: "#c6d8f8",
+    accent: "#e7ac52",
+    accent2: "#8fb5e8",
+    ink: "#eaf3ff",
   },
   signal: {
     title: "Signal",
