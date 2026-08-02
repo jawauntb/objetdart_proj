@@ -1,10 +1,38 @@
 "use client";
 
+/**
+ * /growth — the living curve field, its vines now carrying real species (W4b).
+ *
+ * The vines keep their mathematics (sigmoid / exponential / decay / lifecycle)
+ * but everything that blossoms on them is a point in the botany latent
+ * (src/lib/botany.ts): each vine folds its planting into a seed, each blossom
+ * node hashes that seed with its node index, and the same species opens there
+ * forever — /flowers and /growth share one genetics. A node's bud ripens as
+ * its branch matures (src/lib/growth-phenology.ts) and the hand's dwell
+ * carries it the last step, bud → bloom → close, the bell and haptics.bloom()
+ * landing exactly at peak. The hand speaks the shared grammar through
+ * lib/gesture: tap seeds, drag bends the field, dwell forces or blooms, three
+ * fingers are wind and time, a twist leans the room from felt vines toward
+ * the bare equations. Nothing is stored: a blossom is a pure function of
+ * vine seed + node.
+ */
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
+import { attachGestures } from "@/lib/gesture";
 import { useField } from "@/store/field";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
+import {
+  BLOOM_PEAK,
+  flowerGeometry,
+  hashSeed,
+  petalOutline,
+  speciesFromSeed,
+  type FlowerGeometry,
+  type Species,
+} from "@/lib/botany";
+import { nodePhenophase } from "@/lib/growth-phenology";
 
 type GrowthMode = "sigmoid" | "exponential" | "decay" | "cycle";
 
@@ -16,6 +44,30 @@ type ModeConfig = {
   low: string;
   note: number;
   force: string;
+};
+
+/** A real species grafted at a fixed node of a vine. Never stored — decoded
+ * from hashSeed(vine seed, node index) whenever the vine exists. */
+type Blossom = {
+  /** Node index along the vine, 1..4 — the hash input. */
+  node: number;
+  /** The node's fraction of the vine's full extent. */
+  u: number;
+  seed: number;
+  species: Species;
+  /** The hand's phenophase contribution (dwell hold). */
+  held: number;
+  bloomed: boolean;
+  geo: FlowerGeometry | null;
+  geoPhase: number;
+  /** Last computed phenophase, 0..1. */
+  phase: number;
+  // screen-space center + hit radius, refreshed every draw
+  sx: number;
+  sy: number;
+  sr: number;
+  wobble: number;
+  wobbleV: number;
 };
 
 type GrowthSystem = {
@@ -31,6 +83,9 @@ type GrowthSystem = {
   phase: number;
   force: number;
   immortal?: boolean;
+  /** Deterministic vine seed — same hash discipline as botany.ts. */
+  seed: number;
+  blossoms: Blossom[];
 };
 
 type DragTrace = {
@@ -41,6 +96,18 @@ type DragTrace = {
   born: number;
   force: number;
   mode: GrowthMode;
+};
+
+type Speck = {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  born: number;
+  life: number;
+  r: number;
+  color: string;
+  swirl: number;
 };
 
 type GestureMark = {
@@ -70,32 +137,22 @@ type FieldParams = {
   rate: number;
   ceiling: number;
   steepness: number;
+  /** Three-finger weather, -1..1. */
+  wind: number;
+  /** Entrained growth pulse, 0..1 (rhythm gesture). */
+  pulse: number;
+  /** Twist lens, 0 felt vines .. 1 bare equations. */
+  lens: number;
 };
 
 type GardenState = {
   params: FieldParams;
   time: number;
+  /** Dilatable clock (ms) — vine ages read this, not the wall clock. */
+  clock: number;
   systems: GrowthSystem[];
   traces: DragTrace[];
   nextId: number;
-};
-
-type PointerState = {
-  active: boolean;
-  id: number | null;
-  x: number;
-  y: number;
-  startX: number;
-  startY: number;
-  lastX: number;
-  lastY: number;
-  downAt: number;
-  moved: number;
-  holdFired: boolean;
-  timer: number | null;
-  lastTape: number;
-  lastHaptic: number;
-  lastNote: number;
 };
 
 const MODES: ModeConfig[] = [
@@ -145,7 +202,13 @@ const INITIAL_READOUT: Readout = {
   force: "saturation",
 };
 
+/** Blossom nodes as fractions of a vine's full extent. Index+1 is the node's
+ * hash input, so a node's species never depends on how many nodes opened. */
+const NODE_US = [0.42, 0.6, 0.78, 0.94] as const;
+const GEO_EPS = 0.004;
+
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+const clamp01 = (v: number) => clamp(v, 0, 1);
 const mix = (a: number, b: number, t: number) => a + (b - a) * t;
 const easeOut = (t: number) => 1 - Math.pow(1 - clamp(t, 0, 1), 3);
 const smooth = (edge0: number, edge1: number, value: number) => {
@@ -172,6 +235,12 @@ function colorAlpha(hex: string, alpha: number) {
 function hash(value: number) {
   const x = Math.sin(value * 127.1 + 311.7) * 43758.5453123;
   return x - Math.floor(x);
+}
+
+/** midi voice of a species — petals set the degree, the latent detunes it
+ * (the same voice a species carries on /flowers). */
+function midiOf(sp: Species): number {
+  return 52 + (sp.petals % 13) + Math.round(sp.latent[25] * 7);
 }
 
 function valueForMode(mode: GrowthMode, uRaw: number, params: FieldParams) {
@@ -249,12 +318,38 @@ function makeSystem(
   force = 1,
   immortal = false,
 ): GrowthSystem {
-  const seed = id * 17.13 + x * 23 + y * 41;
+  const cx = clamp(x, 0.04, 0.96);
+  const cy = clamp(y, 0.18, 0.94);
+  const seed = id * 17.13 + cx * 23 + cy * 41;
   const cfg = configFor(mode);
+  // the vine's own seed — where and when it rooted, botany's hash discipline
+  const vineSeed = hashSeed(Math.round(cx * 997), Math.round(cy * 991), id);
+  const count = 2 + (vineSeed % 2);
+  const blossoms: Blossom[] = [];
+  for (let k = NODE_US.length - count; k < NODE_US.length; k += 1) {
+    const node = k + 1;
+    const bSeed = hashSeed(vineSeed, node);
+    blossoms.push({
+      node,
+      u: NODE_US[k],
+      seed: bSeed,
+      species: speciesFromSeed(bSeed),
+      held: 0,
+      bloomed: false,
+      geo: null,
+      geoPhase: -1,
+      phase: 0,
+      sx: -1,
+      sy: -1,
+      sr: 0,
+      wobble: 0,
+      wobbleV: 0,
+    });
+  }
   return {
     id,
-    x: clamp(x, 0.04, 0.96),
-    y: clamp(y, 0.18, 0.94),
+    x: cx,
+    y: cy,
     born,
     mode,
     energy: clamp(0.64 + hash(seed) * 0.58 + force * 0.18, 0.45, 1.35),
@@ -264,45 +359,86 @@ function makeSystem(
     phase: hash(seed + 15.7) * Math.PI * 2,
     force,
     immortal,
+    seed: vineSeed,
+    blossoms,
   };
 }
 
-function drawBloom(
+function drawPetalPath(
   ctx: CanvasRenderingContext2D,
+  o: ReturnType<typeof petalOutline>,
+  len: number,
+  w: number,
+) {
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.bezierCurveTo(o.c1.x * w, o.c1.y * len, o.c2.x * w, o.c2.y * len, o.tip.x * w, o.tip.y * len);
+  ctx.bezierCurveTo(-o.c2.x * w, o.c2.y * len, -o.c1.x * w, o.c1.y * len, 0, 0);
+  ctx.closePath();
+}
+
+/** One decoded species head, rendered small — a blossom on a vine, not a
+ * garden flower. Geometry comes straight from flowerGeometry; only the
+ * head (bud casing, petal fan, heart, florets) is drawn — the vine itself
+ * is the plant. */
+function drawBlossomHead(
+  ctx: CanvasRenderingContext2D,
+  sp: Species,
+  geo: FlowerGeometry,
   x: number,
   y: number,
-  radius: number,
-  tone: string,
+  lean: number,
+  scale: number,
   alpha: number,
-  spin: number,
-  collapse: number,
+  detail: boolean,
 ) {
+  const o = petalOutline(sp.petal);
   ctx.save();
   ctx.translate(x, y);
-  ctx.rotate(spin);
-  const petals = 7;
-  for (let i = 0; i < petals; i += 1) {
-    const a = (i / petals) * Math.PI * 2;
-    const stretch = radius * (1.25 + Math.sin(spin * 2 + i) * 0.10);
-    ctx.save();
-    ctx.rotate(a);
-    ctx.fillStyle = colorAlpha(tone, alpha * (0.30 + collapse * 0.10));
+  ctx.rotate(lean);
+  ctx.scale(scale, scale);
+  const budA = clamp01(1 - geo.openness * 1.7);
+  if (budA > 0.01) {
+    ctx.fillStyle = colorAlpha(sp.palette.stem, budA * 0.9 * alpha);
     ctx.beginPath();
-    ctx.ellipse(stretch * 0.62, 0, radius * 0.22, stretch * 0.52, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, 0, geo.headRadius * 0.42, geo.headRadius * 0.58, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  for (let i = geo.petals.length - 1; i >= 0; i -= 1) {
+    const pe = geo.petals[i];
+    if (pe.length <= 0.001) continue;
+    if (!detail && pe.layer > 0) continue;
+    ctx.save();
+    ctx.rotate(pe.angle);
+    ctx.translate(0, -geo.heartRadius * 0.55 * pe.splay);
+    ctx.fillStyle = colorAlpha(
+      pe.layer % 2 === 0 ? sp.palette.petal : sp.palette.petalDeep,
+      (0.6 + 0.34 * pe.splay) * alpha,
+    );
+    drawPetalPath(ctx, o, pe.length, pe.width);
     ctx.fill();
     ctx.restore();
   }
-  const glow = ctx.createRadialGradient(0, 0, 0, 0, 0, radius * 2.8);
-  glow.addColorStop(0, colorAlpha(tone, alpha * 0.42));
-  glow.addColorStop(1, colorAlpha(tone, 0));
-  ctx.fillStyle = glow;
-  ctx.beginPath();
-  ctx.arc(0, 0, radius * 2.8, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = `rgba(255, 245, 206, ${alpha * 0.86})`;
-  ctx.beginPath();
-  ctx.arc(0, 0, Math.max(2.2, radius * 0.18), 0, Math.PI * 2);
-  ctx.fill();
+  if (geo.openness > 0.3) {
+    const heartA = clamp01((geo.openness - 0.3) / 0.4) * alpha;
+    ctx.fillStyle = colorAlpha(sp.palette.petalDeep, heartA * 0.85);
+    ctx.beginPath();
+    ctx.arc(0, 0, geo.heartRadius, 0, Math.PI * 2);
+    ctx.fill();
+    if (detail) {
+      ctx.fillStyle = colorAlpha(sp.palette.heart, heartA);
+      for (const f of geo.florets) {
+        ctx.beginPath();
+        ctx.arc(f.x, f.y, f.r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else {
+      ctx.fillStyle = colorAlpha(sp.palette.heart, heartA * 0.9);
+      ctx.beginPath();
+      ctx.arc(0, 0, geo.heartRadius * 0.7, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
   ctx.restore();
 }
 
@@ -346,7 +482,7 @@ function drawBackground(
     const n = hash(i + 0.31);
     const x = n * width;
     const y = height * (0.08 + hash(i + 7.8) * 0.62);
-    const drift = reduce ? 0 : Math.sin(now * (0.15 + hash(i) * 0.22) + i) * 10;
+    const drift = reduce ? 0 : Math.sin(now * (0.15 + hash(i) * 0.22) + i) * 10 + params.wind * 26;
     const a = 0.06 + hash(i + 2.2) * 0.11;
     ctx.strokeStyle = `rgba(214, 244, 178, ${a})`;
     ctx.lineWidth = 0.7 + hash(i + 5.9) * 0.7;
@@ -369,6 +505,7 @@ function drawVectorField(
   const step = width < 700 ? 42 : 54;
   const top = height * 0.12;
   const bottom = height * 0.78;
+  const emphasis = 0.85 + params.lens * 1.1;
   ctx.lineCap = "round";
 
   for (let y = top; y <= bottom; y += step) {
@@ -379,10 +516,11 @@ function drawVectorField(
         + Math.sin(Math.hypot(nx, ny) * 12 - now * 0.25) * 0.22;
       const angle = -Math.PI / 2
         + params.gravityX * 0.78
+        + params.wind * 0.5
         + params.bend * pulse * 0.42
         + (mode === "decay" ? 0.32 : 0);
       const length = step * (0.24 + Math.abs(pulse) * 0.20 + params.saturation * 0.09);
-      const alpha = 0.07 + Math.abs(pulse) * 0.08 + params.bloom * 0.035;
+      const alpha = (0.07 + Math.abs(pulse) * 0.08 + params.bloom * 0.035) * emphasis;
       ctx.strokeStyle = colorAlpha(cfg.tone, alpha);
       ctx.lineWidth = 0.65 + Math.abs(pulse) * 0.55;
       ctx.beginPath();
@@ -407,6 +545,7 @@ function drawGlobalCurve(
   const base = height * (width < 700 ? 0.70 : 0.68);
   const amp = height * (width < 700 ? 0.42 : 0.48);
   const samples = 220;
+  const emphasis = 1 + params.lens * 0.6;
 
   for (const entry of MODES) {
     const active = entry.id === mode;
@@ -420,7 +559,9 @@ function drawGlobalCurve(
       if (i === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     }
-    ctx.strokeStyle = active ? colorAlpha(entry.tone, 0.72) : colorAlpha(entry.tone, 0.14);
+    ctx.strokeStyle = active
+      ? colorAlpha(entry.tone, Math.min(0.95, 0.72 * emphasis))
+      : colorAlpha(entry.tone, Math.min(0.5, 0.14 * emphasis));
     ctx.lineWidth = active ? 2.4 : 1;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
@@ -479,16 +620,26 @@ function drawTrace(
   ctx.fill();
 }
 
+type SystemFx = {
+  dt: number;
+  reduce: boolean;
+  /** Shared 0.14 Hz breath phase (audio clock when audible). */
+  breath: number;
+  /** Fired the frame a blossom crosses BLOOM_PEAK — sound/haptic/specks. */
+  onBloom: (b: Blossom) => void;
+};
+
 function drawSystem(
   ctx: CanvasRenderingContext2D,
   system: GrowthSystem,
   width: number,
   height: number,
-  now: number,
+  clockMs: number,
   params: FieldParams,
   activeMode: GrowthMode,
+  fx: SystemFx,
 ) {
-  const age = (now - system.born) / 1000;
+  const age = (clockMs - system.born) / 1000;
   const life = system.immortal ? 1 : clamp(1 - Math.max(0, age - 15) / 8, 0, 1);
   if (life <= 0) return;
 
@@ -497,7 +648,8 @@ function drawSystem(
   const rootY = system.y * height;
   const isMobile = width < 700;
   const heightScale = (isMobile ? 0.70 : 1) * (0.78 + system.energy * 0.35);
-  const stemHeight = clamp(height * 0.16, 92, 168) * system.scale * heightScale;
+  const stemHeight = clamp(height * 0.16, 92, 168) * system.scale * heightScale
+    * (1 + params.pulse * 0.05);
   const span = clamp(width * 0.12, 70, 178) * (0.76 + system.scale * 0.28);
   const cycleSpeed = system.immortal ? 0.055 : 1 / (5.8 + system.scale * 3.4);
   const progress = system.immortal
@@ -507,22 +659,27 @@ function drawSystem(
   const collapse = params.collapse * (system.mode === "decay" || activeMode === "decay" ? 1 : 0.28);
   const rest = params.rest * (system.mode === "cycle" || activeMode === "cycle" ? 1 : 0.2);
   const tone = system.hue || cfg.tone;
-  const alpha = (system.immortal ? 0.46 : 0.76) * life * activeLift;
+  const felt = 1 - params.lens * 0.55;
+  const alpha = (system.immortal ? 0.46 : 0.76) * life * activeLift * felt;
   const samples = 34;
-  const points: Array<{ x: number; y: number; v: number; u: number }> = [];
 
-  for (let i = 0; i <= samples; i += 1) {
-    const u = (i / samples) * progress;
+  // one formula for every point of the vine — the loop and the blossom
+  // nodes read the same curve, so a node sits exactly on its branch
+  const pointAt = (u: number) => {
     const v = valueForMode(system.mode, u, params);
     const curl = Math.sin(u * Math.PI * 3.2 + system.phase + params.time * 0.36) * (8 + params.bend * 12);
     const gravityX = params.gravityX * stemHeight * 0.34 * u * u;
     const gravityY = params.gravityY * stemHeight * 0.12 * u;
+    const windX = params.wind * stemHeight * 0.30 * u * u;
     const decayDrop = collapse * u * u * stemHeight * 0.34;
     const restDrop = rest * smooth(0.62, 1, u) * stemHeight * 0.30;
-    const x = rootX + (u - 0.06) * span + gravityX + curl * system.bend;
+    const x = rootX + (u - 0.06) * span + gravityX + windX + curl * system.bend;
     const y = rootY - v * stemHeight + gravityY + decayDrop + restDrop;
-    points.push({ x, y, v, u });
-  }
+    return { x, y, v, u };
+  };
+
+  const points: Array<{ x: number; y: number; v: number; u: number }> = [];
+  for (let i = 0; i <= samples; i += 1) points.push(pointAt((i / samples) * progress));
 
   const rootGlow = ctx.createRadialGradient(rootX, rootY, 0, rootX, rootY, 54);
   rootGlow.addColorStop(0, colorAlpha(tone, alpha * 0.20));
@@ -581,27 +738,62 @@ function drawSystem(
     ctx.restore();
   }
 
-  const tip = points[points.length - 1];
-  const bloomReadiness = clamp((tip.v - 0.48) / 0.46 + params.bloom * 0.40 + system.force * 0.16, 0, 1);
-  if (bloomReadiness > 0.08) {
-    drawBloom(
-      ctx,
-      tip.x,
-      tip.y,
-      (7 + system.scale * 9) * bloomReadiness * (1 - rest * 0.34),
-      tone,
-      alpha * bloomReadiness,
-      system.phase + now * 0.25,
-      collapse,
-    );
+  // ————— blossoms: real species at the vine's nodes —————
+  for (const b of system.blossoms) {
+    if (progress < b.u) {
+      // the vine has not reached this node (or a lifecycle wrapped past it)
+      if (progress < b.u - 0.05) {
+        b.held = 0;
+        b.bloomed = false;
+      }
+      b.sx = -1;
+      b.phase = 0;
+      continue;
+    }
+    const phase = nodePhenophase(progress, b.u, b.held);
+    b.phase = phase;
+    if (b.bloomed && phase < 0.12) b.bloomed = false; // a new season may bloom again
+    if (!b.geo || Math.abs(phase - b.geoPhase) > GEO_EPS) {
+      b.geo = flowerGeometry(b.species, phase);
+      b.geoPhase = phase;
+    }
+    const geo = b.geo;
+
+    if (fx.reduce) {
+      b.wobble = 0;
+      b.wobbleV = 0;
+    } else {
+      const omega = 3 + b.species.swayStiffness * 3;
+      b.wobbleV += (-omega * omega * b.wobble - 2 * 0.6 * omega * b.wobbleV) * fx.dt;
+      b.wobble += b.wobbleV * fx.dt;
+    }
+
+    const pt = pointAt(b.u);
+    const pxScale = stemHeight * (b.u >= 0.9 ? 1.15 : 0.9);
+    const rPx = geo.headRadius * pxScale;
+    b.sx = pt.x;
+    b.sy = pt.y;
+    b.sr = Math.max(18, rPx * 1.8);
+
+    if (!b.bloomed && phase >= BLOOM_PEAK) {
+      b.bloomed = true;
+      fx.onBloom(b);
+    }
+
+    const lean = fx.reduce ? 0 : b.wobble * 0.2 + params.wind * 0.16;
+    const breathScale = fx.reduce
+      ? 1
+      : 1 + Math.sin(fx.breath + b.species.latent[28] * 7) * 0.04 * b.species.breathDepth * (1 + params.pulse * 0.8);
+    drawBlossomHead(ctx, b.species, geo, pt.x, pt.y, lean, pxScale * breathScale, alpha, rPx > 11);
   }
 
   if (collapse > 0.08 || system.mode === "decay") {
+    const tip = points[points.length - 1];
     const fallAlpha = alpha * (collapse * 0.62 + (system.mode === "decay" ? 0.16 : 0));
     for (let i = 0; i < 5; i += 1) {
       const n = hash(system.id * 13 + i * 8);
-      const fallT = (now * (0.09 + n * 0.04) + n) % 1;
-      const px = tip.x + (n - 0.5) * 54 + params.gravityX * 22;
+      const fallT = (clockMs * (0.09 + n * 0.04) + n) % 1;
+      const px = tip.x + (n - 0.5) * 54 + params.gravityX * 22 + params.wind * 30;
       const py = tip.y + fallT * (80 + i * 12);
       ctx.fillStyle = colorAlpha(tone, fallAlpha * (1 - fallT));
       ctx.beginPath();
@@ -635,28 +827,15 @@ export default function Growth() {
       rate: 0.44,
       ceiling: 0.76,
       steepness: 0.42,
+      wind: 0,
+      pulse: 0,
+      lens: 0,
     },
     time: 0,
+    clock: 0,
     systems: [],
     traces: [],
     nextId: 1,
-  });
-  const pointerRef = useRef<PointerState>({
-    active: false,
-    id: null,
-    x: 0.5,
-    y: 0.5,
-    startX: 0.5,
-    startY: 0.5,
-    lastX: 0.5,
-    lastY: 0.5,
-    downAt: 0,
-    moved: 0,
-    holdFired: false,
-    timer: null,
-    lastTape: 0,
-    lastHaptic: 0,
-    lastNote: 0,
   });
 
   const [mode, setMode] = useState<GrowthMode>("sigmoid");
@@ -712,12 +891,52 @@ export default function Growth() {
     mq.addEventListener?.("change", onMotionChange);
 
     const field = fieldRef.current;
-    const pointer = pointerRef.current;
     let raf = 0;
     let width = 0;
     let height = 0;
     let dpr = 1;
     let last = performance.now();
+
+    // ————— gesture-side state (all closure locals) —————
+    const specks: Speck[] = [];
+    let windTarget = 0;
+    let timeScale = 1;
+    let timeScaleTarget = 1;
+    let lensTarget = 0;
+    let lensSnapped = 0;
+    let pulseBpm = 0;
+    let pulseUntil = 0;
+    let lastBeatIdx = -1;
+    let beatsPlayed = 0;
+    let lastInteractionAt = performance.now();
+    let lastGrowNoteAt = 0;
+    let lastGrowHapticAt = 0;
+    let lastWindSoundAt = 0;
+    let lastScrubAt = 0;
+    let lastBrushSoundAt = 0;
+    let lastShedAt = 0;
+    let focused = false;
+    let cursorVisible = false;
+    let cursorNx = 0.5;
+    let cursorNy = 0.55;
+    const holdUI = {
+      active: false,
+      fired: false,
+      x: 0,
+      y: 0,
+      elapsed: 0,
+      blossom: null as Blossom | null,
+    };
+    const dragUI = {
+      startX: 0.5,
+      startY: 0.5,
+      lastX: 0.5,
+      lastY: 0.5,
+      moved: 0,
+      lastTape: 0,
+      lastHaptic: 0,
+      lastNote: 0,
+    };
 
     const resize = () => {
       const rect = root.getBoundingClientRect();
@@ -731,16 +950,55 @@ export default function Growth() {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     };
 
-    const pointFromEvent = (event: PointerEvent) => {
+    const toLocal = (clientX: number, clientY: number) => {
       const rect = canvas.getBoundingClientRect();
       return {
-        x: clamp((event.clientX - rect.left) / Math.max(1, rect.width), 0, 1),
-        y: clamp((event.clientY - rect.top) / Math.max(1, rect.height), 0, 1),
+        x: clamp(clientX - rect.left, 0, Math.max(1, rect.width)),
+        y: clamp(clientY - rect.top, 0, Math.max(1, rect.height)),
       };
     };
 
+    const note = (midi: number, ms = 120) => {
+      try { getFieldAudio().playNote(midi, ms); } catch { /* noop */ }
+    };
+
+    const burst = (x: number, y: number, colors: string[], n: number, speed: number) => {
+      for (let i = 0; i < n; i += 1) {
+        const a = (i / n) * Math.PI * 2 + hash(i + n) * 0.8;
+        const s = speed * (0.4 + hash(i * 3 + 1) * 0.9);
+        specks.push({
+          x,
+          y,
+          vx: Math.cos(a) * s,
+          vy: Math.sin(a) * s - speed * 0.3,
+          born: performance.now(),
+          life: 900 + hash(i * 7 + 2) * 1400,
+          r: 0.8 + hash(i * 11 + 3) * 1.8,
+          color: colors[i % colors.length],
+          swirl: (hash(i * 13 + 4) - 0.5) * 2,
+        });
+      }
+      if (specks.length > 200) specks.splice(0, specks.length - 200);
+    };
+
+    const blossomAt = (x: number, y: number): Blossom | null => {
+      let best: Blossom | null = null;
+      let bestD = Infinity;
+      for (const system of field.systems) {
+        for (const b of system.blossoms) {
+          if (b.sx < 0) continue;
+          const d = Math.hypot(x - b.sx, y - b.sy);
+          if (d < Math.max(24, b.sr) && d < bestD) {
+            bestD = d;
+            best = b;
+          }
+        }
+      }
+      return best;
+    };
+
     const addSystem = (x: number, y: number, systemMode = modeRef.current, force = 1, immortal = false) => {
-      const system = makeSystem(field.nextId++, x, y, systemMode, performance.now(), force, immortal);
+      const system = makeSystem(field.nextId++, x, y, systemMode, field.clock, force, immortal);
       field.systems.push(system);
       if (field.systems.length > 42) {
         const firstTemporary = field.systems.findIndex((entry) => !entry.immortal);
@@ -751,7 +1009,6 @@ export default function Growth() {
 
     const forceAt = (x: number, y: number, forcedMode = modeRef.current) => {
       const cfg = configFor(forcedMode);
-      pointer.holdFired = true;
 
       if (forcedMode === "sigmoid") {
         field.params.saturation = 1;
@@ -812,140 +1069,309 @@ export default function Growth() {
       markGrowth("seed", cfg.tone, 0.54 + (1 - y) * 0.22);
     };
 
-    const clearHoldTimer = () => {
-      if (pointer.timer !== null) {
-        window.clearTimeout(pointer.timer);
-        pointer.timer = null;
-      }
-    };
-
-    const onPointerDown = (event: PointerEvent) => {
-      const p = pointFromEvent(event);
-      pointer.active = true;
-      pointer.id = event.pointerId;
-      pointer.x = p.x;
-      pointer.y = p.y;
-      pointer.startX = p.x;
-      pointer.startY = p.y;
-      pointer.lastX = p.x;
-      pointer.lastY = p.y;
-      pointer.downAt = performance.now();
-      pointer.moved = 0;
-      pointer.holdFired = false;
-      pointer.lastTape = 0;
-      pointer.lastHaptic = 0;
-      pointer.lastNote = 0;
-      try { canvas.setPointerCapture(event.pointerId); } catch { /* noop */ }
-      seedAt(p.x, p.y);
-      clearHoldTimer();
-      pointer.timer = window.setTimeout(() => {
-        if (!pointer.active || pointer.id !== event.pointerId || pointer.moved > 34) return;
-        forceAt(pointer.x, pointer.y);
-      }, 620);
-    };
-
-    const onPointerMove = (event: PointerEvent) => {
-      if (!pointer.active || pointer.id !== event.pointerId) return;
-      const p = pointFromEvent(event);
-      const dx = p.x - pointer.lastX;
-      const dy = p.y - pointer.lastY;
-      const totalDx = p.x - pointer.startX;
-      const totalDy = p.y - pointer.startY;
-      const speed = Math.hypot(dx * width, dy * height);
-      pointer.moved += speed;
-      pointer.x = p.x;
-      pointer.y = p.y;
-
-      const params = field.params;
-      params.gravityX = clamp(mix(params.gravityX, totalDx * 2.2, 0.18), -1.1, 1.1);
-      params.gravityY = clamp(mix(params.gravityY, totalDy * 1.8, 0.16), -0.8, 1.1);
-      params.bend = clamp(mix(params.bend, 0.30 + Math.min(1, pointer.moved / 280) * 0.70, 0.10), 0.1, 1);
-      params.rate = clamp(mix(params.rate, 0.22 + Math.abs(totalDx) * 1.4 + (1 - p.y) * 0.42, 0.06), 0.08, 1);
-      params.ceiling = clamp(mix(params.ceiling, 0.56 + (1 - p.y) * 0.42, 0.08), 0.48, 0.98);
-      params.steepness = clamp(mix(params.steepness, 0.26 + Math.abs(totalDy) * 1.8, 0.08), 0.1, 1);
-
-      if (modeRef.current === "decay") params.collapse = Math.max(params.collapse, Math.min(0.72, pointer.moved / 480));
-      if (modeRef.current === "cycle") params.rest = Math.max(params.rest, Math.min(0.62, p.y));
-      if (modeRef.current === "exponential") params.bloom = Math.max(params.bloom, Math.min(0.92, speed / 50));
-
-      field.traces.push({
-        x: p.x,
-        y: p.y,
-        px: pointer.lastX,
-        py: pointer.lastY,
-        born: performance.now(),
-        force: clamp(speed / 34, 0.14, 1),
-        mode: modeRef.current,
-      });
-      if (field.traces.length > 56) field.traces.splice(0, field.traces.length - 56);
-
+    /** The dwell verb on a blossom: hand-carried phenophase, matching the
+     * rate and voice of /flowers. Bloom crossing is caught in the draw. */
+    const advanceBlossom = (b: Blossom, intensity: number) => {
+      if (b.phase >= 1) return; // its season is done; the hand is absorbed
+      b.held = Math.min(1, b.held + 0.0168 * (0.7 + intensity * 0.6));
       const now = performance.now();
-      if (now - pointer.lastTape > 140) {
-        pointer.lastTape = now;
-        useField.getState().recordTape("ripple", clamp(speed / 52, 0.22, 0.78), `growth/${modeRef.current}/bend`);
+      if (now - lastGrowNoteAt > 300) {
+        lastGrowNoteAt = now;
+        note(midiOf(b.species) + Math.round((b.geo ? b.geo.openness : 0) * 10), 100);
       }
-      if (now - pointer.lastHaptic > 190 && speed > 9) {
-        pointer.lastHaptic = now;
-        haptics.ripple(clamp(speed / 42, 0.18, 0.72));
-      }
-      if (now - pointer.lastNote > 120 && speed > 7) {
-        pointer.lastNote = now;
-        try { getFieldAudio().playNote(configFor(modeRef.current).note + Math.round((1 - p.y) * 18), 58); } catch { /* noop */ }
-      }
-
-      pointer.lastX = p.x;
-      pointer.lastY = p.y;
-    };
-
-    const onPointerUp = (event: PointerEvent) => {
-      if (!pointer.active || pointer.id !== event.pointerId) return;
-      clearHoldTimer();
-      try { canvas.releasePointerCapture(event.pointerId); } catch { /* noop */ }
-      const cfg = configFor(modeRef.current);
-      if (!pointer.holdFired && pointer.moved > 42) {
-        markGrowth("bend", cfg.tone, 0.62);
-      }
-      pointer.active = false;
-      pointer.id = null;
-    };
-
-    const onPointerCancel = (event: PointerEvent) => {
-      if (pointer.id === event.pointerId) {
-        clearHoldTimer();
-        pointer.active = false;
-        pointer.id = null;
+      if (now - lastGrowHapticAt > 620) {
+        lastGrowHapticAt = now;
+        haptics.tap();
       }
     };
+
+    const onBloom = (b: Blossom) => {
+      // full bloom: sight (burst), sound (bell), touch (bloom word) — one frame
+      try { getFieldAudio().bell(); } catch { /* noop */ }
+      try { haptics.bloom(); } catch { /* noop */ }
+      burst(b.sx, b.sy, [b.species.palette.heart, b.species.palette.petal, b.species.palette.glow], 18, 60);
+      useField.getState().recordTape("sigil", 0.85, "growth/bloom");
+      markGrowth("bloom", b.species.palette.petal, 0.9);
+    };
+
+    // ————— gestures (the grammar, nothing private) —————
+    const detach = attachGestures(canvas, {
+      tap: (e) => {
+        lastInteractionAt = performance.now();
+        if (e.fingers !== 1) return; // the frame and the law absorb stray taps
+        const p = toLocal(e.x, e.y);
+        const b = blossomAt(p.x, p.y);
+        if (b) {
+          b.wobbleV += (p.x < b.sx ? -1 : 1) * (0.6 + e.intensity * 1.2);
+          note(midiOf(b.species), 130);
+          haptics.tap();
+          if (b.geo && b.geo.openness > 0.4) {
+            burst(b.sx, b.sy, [b.species.palette.petal, b.species.palette.heart], 4, 22);
+          }
+        } else {
+          seedAt(clamp01(p.x / width), clamp01(p.y / height));
+        }
+      },
+      hold: (e) => {
+        lastInteractionAt = performance.now();
+        if (e.fingers === 3) {
+          // three fingers touch the law: time dilates while held
+          if (e.phase === "enter") {
+            timeScaleTarget = 0.25;
+            haptics.tap();
+            note(36, 260);
+          }
+          if (e.phase === "release") timeScaleTarget = 1;
+          return;
+        }
+        if (e.fingers !== 1) return;
+        const p = toLocal(e.x, e.y);
+        if (e.phase === "enter") {
+          holdUI.active = true;
+          holdUI.fired = false;
+          holdUI.x = p.x;
+          holdUI.y = p.y;
+          holdUI.elapsed = e.elapsed;
+          holdUI.blossom = blossomAt(p.x, p.y);
+          return;
+        }
+        if (e.phase === "release") {
+          holdUI.active = false;
+          holdUI.blossom = null;
+          return;
+        }
+        holdUI.x = p.x;
+        holdUI.y = p.y;
+        holdUI.elapsed = e.elapsed;
+        if (holdUI.blossom) {
+          advanceBlossom(holdUI.blossom, e.intensity);
+        } else if (e.tier >= 2 && !holdUI.fired) {
+          // dwell on open field: the room's forcing verb
+          holdUI.fired = true;
+          forceAt(clamp01(p.x / width), clamp01(p.y / height));
+        }
+      },
+      drag: (e) => {
+        lastInteractionAt = performance.now();
+        if (e.fingers === 3) {
+          // three fingers are the weather: wind through the vines
+          windTarget = clamp(e.vx * 1.6, -1, 1);
+          const now = performance.now();
+          if (Math.abs(windTarget) > 0.5 && now - lastWindSoundAt > 520) {
+            lastWindSoundAt = now;
+            note(38 + Math.round(Math.abs(windTarget) * 5), 240);
+            haptics.chop();
+          }
+          return;
+        }
+        if (e.fingers !== 1) return;
+        const local = toLocal(e.x, e.y);
+        const p = { x: clamp01(local.x / width), y: clamp01(local.y / height) };
+        if (e.phase === "start") {
+          dragUI.startX = p.x;
+          dragUI.startY = p.y;
+          dragUI.lastX = p.x;
+          dragUI.lastY = p.y;
+          dragUI.moved = 0;
+          return;
+        }
+        if (e.phase === "end") {
+          if (dragUI.moved > 42) markGrowth("bend", configFor(modeRef.current).tone, 0.62);
+          return;
+        }
+        const dx = p.x - dragUI.lastX;
+        const dy = p.y - dragUI.lastY;
+        const totalDx = p.x - dragUI.startX;
+        const totalDy = p.y - dragUI.startY;
+        const speed = Math.hypot(dx * width, dy * height);
+        dragUI.moved += speed;
+
+        const params = field.params;
+        params.gravityX = clamp(mix(params.gravityX, totalDx * 2.2, 0.18), -1.1, 1.1);
+        params.gravityY = clamp(mix(params.gravityY, totalDy * 1.8, 0.16), -0.8, 1.1);
+        params.bend = clamp(mix(params.bend, 0.30 + Math.min(1, dragUI.moved / 280) * 0.70, 0.10), 0.1, 1);
+        params.rate = clamp(mix(params.rate, 0.22 + Math.abs(totalDx) * 1.4 + (1 - p.y) * 0.42, 0.06), 0.08, 1);
+        params.ceiling = clamp(mix(params.ceiling, 0.56 + (1 - p.y) * 0.42, 0.08), 0.48, 0.98);
+        params.steepness = clamp(mix(params.steepness, 0.26 + Math.abs(totalDy) * 1.8, 0.08), 0.1, 1);
+
+        if (modeRef.current === "decay") params.collapse = Math.max(params.collapse, Math.min(0.72, dragUI.moved / 480));
+        if (modeRef.current === "cycle") params.rest = Math.max(params.rest, Math.min(0.62, p.y));
+        if (modeRef.current === "exponential") params.bloom = Math.max(params.bloom, Math.min(0.92, speed / 50));
+
+        field.traces.push({
+          x: p.x,
+          y: p.y,
+          px: dragUI.lastX,
+          py: dragUI.lastY,
+          born: performance.now(),
+          force: clamp(speed / 34, 0.14, 1),
+          mode: modeRef.current,
+        });
+        if (field.traces.length > 56) field.traces.splice(0, field.traces.length - 56);
+
+        // a hand passing through the blossoms brushes them
+        const now = performance.now();
+        for (const system of field.systems) {
+          for (const b of system.blossoms) {
+            if (b.sx < 0) continue;
+            if (Math.hypot(local.x - b.sx, local.y - b.sy) > Math.max(40, b.sr * 1.6)) continue;
+            b.wobbleV += clamp(e.vx * 0.9, -1.6, 1.6);
+            if (now - lastBrushSoundAt > 260) {
+              lastBrushSoundAt = now;
+              note(midiOf(b.species) + 5, 70);
+              haptics.ripple(0.2);
+            }
+          }
+        }
+
+        if (now - dragUI.lastTape > 140) {
+          dragUI.lastTape = now;
+          useField.getState().recordTape("ripple", clamp(speed / 52, 0.22, 0.78), `growth/${modeRef.current}/bend`);
+        }
+        if (now - dragUI.lastHaptic > 190 && speed > 9) {
+          dragUI.lastHaptic = now;
+          haptics.ripple(clamp(speed / 42, 0.18, 0.72));
+        }
+        if (now - dragUI.lastNote > 120 && speed > 7) {
+          dragUI.lastNote = now;
+          note(configFor(modeRef.current).note + Math.round((1 - p.y) * 18), 58);
+        }
+
+        dragUI.lastX = p.x;
+        dragUI.lastY = p.y;
+      },
+      twist: (e) => {
+        lastInteractionAt = performance.now();
+        // two fingers rotate the lens: felt vines ↔ the bare equations
+        if (e.phase === "move") {
+          lensTarget = clamp01(lensTarget + e.angle / 1.7);
+        } else if (e.phase === "end") {
+          const snapped = lensTarget > 0.5 ? 1 : 0;
+          if (snapped !== lensSnapped) {
+            lensSnapped = snapped;
+            try { haptics.lens(); } catch { /* noop */ }
+            if (snapped === 1) {
+              try { getFieldAudio().chime(); } catch { /* noop */ }
+            } else {
+              note(48, 160);
+            }
+          }
+          lensTarget = snapped;
+        }
+      },
+      scrub: (e) => {
+        lastInteractionAt = performance.now();
+        const now = performance.now();
+        if (now - lastScrubAt < 700) return;
+        lastScrubAt = now;
+        const p = toLocal(e.cx, e.cy);
+        // circling stirs a falling-petal eddy from the nearest open blossom
+        const b = blossomAt(p.x, p.y);
+        const colors = b
+          ? [b.species.palette.petal, b.species.palette.glow, b.species.palette.heart]
+          : ["#b8f07a", "#fff5cf", "#8ed8c4"];
+        burst(p.x, p.y, colors, 12, 34);
+        for (const s of specks) s.swirl += Math.sign(e.winding) * 1.4;
+        note(64, 90);
+        haptics.ripple(0.3);
+        useField.getState().recordTape("ripple", 0.5, "growth/eddy");
+      },
+      rhythm: (e) => {
+        lastInteractionAt = performance.now();
+        // a steady tap train entrains the field's growth pulse
+        pulseBpm = clamp(e.bpm, 40, 180);
+        pulseUntil = performance.now() + 12000;
+        lastBeatIdx = -1;
+        beatsPlayed = 0;
+        try { getFieldAudio().chime(); } catch { /* noop */ }
+        haptics.tap();
+        markGrowth("pulse", configFor(modeRef.current).tone, 0.7);
+        useField.getState().recordTape("ripple", 0.5, "growth/entrain");
+      },
+    });
+
+    // ————— keyboard dialect (same verbs, quieter) —————
+    const onKeyDown = (ev: KeyboardEvent) => {
+      if (ev.target !== root) return; // panel buttons keep their own keys
+      const step = 0.05;
+      if (ev.key.startsWith("Arrow")) {
+        ev.preventDefault();
+        cursorVisible = true;
+        lastInteractionAt = performance.now();
+        if (ev.key === "ArrowLeft") cursorNx = clamp(cursorNx - step, 0.05, 0.95);
+        if (ev.key === "ArrowRight") cursorNx = clamp(cursorNx + step, 0.05, 0.95);
+        if (ev.key === "ArrowUp") cursorNy = clamp(cursorNy - step, 0.1, 0.95);
+        if (ev.key === "ArrowDown") cursorNy = clamp(cursorNy + step, 0.1, 0.95);
+        return;
+      }
+      if (ev.key === "Enter" || ev.key === " ") {
+        ev.preventDefault();
+        lastInteractionAt = performance.now();
+        if (!cursorVisible) {
+          cursorVisible = true;
+          return;
+        }
+        const b = blossomAt(cursorNx * width, cursorNy * height);
+        if (b) {
+          advanceBlossom(b, 0.5); // held Enter repeats — the keyboard's dwell
+        } else if (!ev.repeat) {
+          seedAt(cursorNx, cursorNy);
+        }
+      }
+    };
+    const onFocus = () => { focused = true; };
+    const onBlur = () => { focused = false; cursorVisible = false; };
+    root.addEventListener("keydown", onKeyDown);
+    root.addEventListener("focus", onFocus);
+    root.addEventListener("blur", onBlur);
 
     resize();
     const ro = new ResizeObserver(resize);
     ro.observe(root);
     window.addEventListener("resize", resize);
 
-    const born = performance.now();
     if (field.systems.length === 0) {
-      addSystem(0.18, 0.78, "sigmoid", 0.82, true).born = born - 3600;
-      addSystem(0.42, 0.74, "exponential", 0.76, true).born = born - 1400;
-      addSystem(0.66, 0.72, "cycle", 0.80, true).born = born - 2500;
-      addSystem(0.82, 0.76, "decay", 0.62, true).born = born - 4200;
+      addSystem(0.18, 0.78, "sigmoid", 0.82, true).born = field.clock - 3600;
+      addSystem(0.42, 0.74, "exponential", 0.76, true).born = field.clock - 1400;
+      addSystem(0.66, 0.72, "cycle", 0.80, true).born = field.clock - 2500;
+      addSystem(0.82, 0.76, "decay", 0.62, true).born = field.clock - 4200;
     }
 
-    canvas.addEventListener("pointerdown", onPointerDown);
-    canvas.addEventListener("pointermove", onPointerMove);
-    canvas.addEventListener("pointerup", onPointerUp);
-    canvas.addEventListener("pointercancel", onPointerCancel);
-
     const draw = (nowMs: number) => {
-      const dt = Math.min(0.05, (nowMs - last) / 1000);
+      const delta = Math.min(50, nowMs - last);
+      const dt = delta / 1000;
       last = nowMs;
       const reduce = reduceMotionRef.current;
-      field.time += reduce ? dt * 0.08 : dt;
+
+      timeScale += (timeScaleTarget - timeScale) * Math.min(1, dt * 5);
+      field.clock += delta * timeScale;
+      field.time += dt * timeScale * (reduce ? 0.08 : 1);
       field.params.time = field.time;
 
       const params = field.params;
       const active = modeRef.current;
-      const holdAge = pointer.active ? clamp((nowMs - pointer.downAt) / 1000, 0, 1.6) : 0;
-      const holdCharge = pointer.active && !pointer.holdFired ? smooth(0.18, 1.12, holdAge) : 0;
+
+      params.wind += (windTarget - params.wind) * Math.min(1, dt * 2.2);
+      windTarget *= Math.exp(-dt * 0.5);
+      params.lens += (lensTarget - params.lens) * Math.min(1, dt * 6);
+
+      // entrained growth pulse (rhythm gesture)
+      if (pulseBpm > 0 && nowMs < pulseUntil) {
+        const beat = field.time * (pulseBpm / 60);
+        const fade = clamp((pulseUntil - nowMs) / 12000, 0, 1);
+        params.pulse = (reduce ? 0.25 : 0.5 + 0.5 * Math.sin(beat * Math.PI * 2)) * fade;
+        const bi = Math.floor(beat);
+        if (bi !== lastBeatIdx) {
+          lastBeatIdx = bi;
+          if (beatsPlayed < 8) {
+            beatsPlayed += 1;
+            note(configFor(active).note + 12, 70);
+          }
+        }
+      } else {
+        params.pulse = mix(params.pulse, 0, Math.min(1, dt * 3));
+        if (pulseBpm > 0 && nowMs >= pulseUntil) pulseBpm = 0;
+      }
 
       params.gravityX = mix(params.gravityX, 0, reduce ? 0.025 : 0.009);
       params.gravityY = mix(params.gravityY, 0, reduce ? 0.025 : 0.009);
@@ -955,6 +1381,13 @@ export default function Growth() {
       params.collapse = mix(params.collapse, active === "decay" ? 0.24 : 0.02, reduce ? 0.028 : 0.012);
       params.rest = mix(params.rest, active === "cycle" ? 0.22 : 0.02, reduce ? 0.026 : 0.010);
 
+      // shared breath: the audio swell clock when audible, RAF when not
+      const audioT = (() => {
+        try { return getFieldAudio().getAudioTime(); } catch { return null; }
+      })();
+      const bt = audioT != null ? audioT : nowMs / 1000;
+      const breath = bt * Math.PI * 2 * 0.14;
+
       ctx.clearRect(0, 0, width, height);
       drawBackground(ctx, width, height, field.time, active, params, reduce);
       drawVectorField(ctx, width, height, field.time, active, params);
@@ -962,25 +1395,121 @@ export default function Growth() {
 
       field.traces = field.traces.filter((trace) => (nowMs - trace.born) < 1500);
       field.traces.forEach((trace) => drawTrace(ctx, trace, width, height, nowMs));
-      field.systems = field.systems.filter((system) => system.immortal || (nowMs - system.born) < 25000);
-      field.systems.forEach((system) => drawSystem(ctx, system, width, height, nowMs, params, active));
+      field.systems = field.systems.filter((system) => system.immortal || (field.clock - system.born) < 25000);
+      const fx: SystemFx = { dt: dt * timeScale, reduce, breath, onBloom };
+      field.systems.forEach((system) => drawSystem(ctx, system, width, height, field.clock, params, active, fx));
 
-      if (pointer.active) {
-        const cfg = configFor(active);
-        const px = pointer.x * width;
-        const py = pointer.y * height;
-        const radius = 22 + holdCharge * 82;
-        ctx.strokeStyle = colorAlpha(cfg.tone, 0.18 + holdCharge * 0.34);
-        ctx.lineWidth = 1.2 + holdCharge * 2.4;
+      // strong wind sheds petals from whatever stands open
+      if (!reduce && Math.abs(params.wind) > 0.45 && nowMs - lastShedAt > 200) {
+        lastShedAt = nowMs;
+        const open: Blossom[] = [];
+        for (const system of field.systems) {
+          for (const b of system.blossoms) {
+            if (b.sx >= 0 && b.geo && b.geo.openness > 0.5) open.push(b);
+          }
+        }
+        if (open.length > 0) {
+          const b = open[Math.floor(hash(nowMs * 0.37) * open.length)];
+          specks.push({
+            x: b.sx,
+            y: b.sy,
+            vx: params.wind * 50,
+            vy: -8,
+            born: nowMs,
+            life: 1400 + hash(nowMs) * 900,
+            r: 1 + hash(nowMs * 1.7) * 1.6,
+            color: b.species.palette.petal,
+            swirl: (hash(nowMs * 2.3) - 0.5) * 2,
+          });
+        }
+      }
+
+      // specks — petals, pollen, eddies
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      for (let i = specks.length - 1; i >= 0; i -= 1) {
+        const s = specks[i];
+        const age = (nowMs - s.born) / s.life;
+        if (age >= 1) {
+          specks.splice(i, 1);
+          continue;
+        }
+        if (!reduce) {
+          const drift = s.swirl * dt * timeScale;
+          const nvx = s.vx * Math.cos(drift) - s.vy * Math.sin(drift);
+          const nvy = s.vx * Math.sin(drift) + s.vy * Math.cos(drift);
+          s.vx = nvx * (1 - dt * 0.6);
+          s.vy = nvy * (1 - dt * 0.6) + 14 * dt;
+          s.x += (s.vx + params.wind * 26) * dt * timeScale;
+          s.y += s.vy * dt * timeScale;
+        }
+        ctx.fillStyle = colorAlpha(s.color, (1 - age) * 0.7);
         ctx.beginPath();
-        ctx.arc(px, py, radius, 0, Math.PI * 2);
+        ctx.arc(s.x, s.y, s.r * (1 + age * 0.8), 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+
+      // the hand's charge / grow feedback
+      if (holdUI.active) {
+        if (holdUI.blossom && holdUI.blossom.sx >= 0) {
+          const b = holdUI.blossom;
+          const pulse = reduce ? 0.5 : 0.5 + Math.sin(nowMs / 260) * 0.5;
+          ctx.strokeStyle = colorAlpha(b.species.palette.glow, 0.24 + b.phase * 0.3 + pulse * 0.1);
+          ctx.lineWidth = 1.2;
+          ctx.beginPath();
+          ctx.arc(b.sx, b.sy, b.sr * 0.9 + pulse * 5, 0, Math.PI * 2);
+          ctx.stroke();
+        } else if (!holdUI.fired) {
+          const cfg = configFor(active);
+          const holdCharge = smooth(0.25, 0.92, holdUI.elapsed / 1000);
+          const radius = 22 + holdCharge * 82;
+          ctx.strokeStyle = colorAlpha(cfg.tone, 0.18 + holdCharge * 0.34);
+          ctx.lineWidth = 1.2 + holdCharge * 2.4;
+          ctx.beginPath();
+          ctx.arc(holdUI.x, holdUI.y, radius, 0, Math.PI * 2);
+          ctx.stroke();
+          const core = ctx.createRadialGradient(holdUI.x, holdUI.y, 0, holdUI.x, holdUI.y, radius * 1.3);
+          core.addColorStop(0, colorAlpha(cfg.tone, 0.20 + holdCharge * 0.20));
+          core.addColorStop(1, colorAlpha(cfg.tone, 0));
+          ctx.fillStyle = core;
+          ctx.beginPath();
+          ctx.arc(holdUI.x, holdUI.y, radius * 1.3, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      // glimmer — after quiet, a ring where a dwell would land (never text)
+      const idleMs = nowMs - lastInteractionAt;
+      if (idleMs > 20000) {
+        const vis: Blossom[] = [];
+        for (const system of field.systems) {
+          for (const b of system.blossoms) if (b.sx >= 0) vis.push(b);
+        }
+        if (vis.length > 0) {
+          const slot = Math.floor(nowMs / 9000);
+          const b = vis[slot % vis.length];
+          const pulse = reduce ? 0.5 : 0.5 + Math.sin(nowMs / 480) * 0.5;
+          ctx.strokeStyle = colorAlpha(b.species.palette.glow, 0.1 + pulse * 0.12);
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.arc(b.sx, b.sy, Math.max(14, b.sr * 0.7) + pulse * 8, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      }
+
+      // keyboard cursor
+      if (focused && cursorVisible) {
+        const cx = cursorNx * width;
+        const cy = cursorNy * height;
+        ctx.strokeStyle = "rgba(242, 255, 219, 0.7)";
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.arc(cx, cy, 12, 0, Math.PI * 2);
         ctx.stroke();
-        const core = ctx.createRadialGradient(px, py, 0, px, py, radius * 1.3);
-        core.addColorStop(0, colorAlpha(cfg.tone, 0.20 + holdCharge * 0.20));
-        core.addColorStop(1, colorAlpha(cfg.tone, 0));
-        ctx.fillStyle = core;
         ctx.beginPath();
-        ctx.arc(px, py, radius * 1.3, 0, Math.PI * 2);
+        ctx.arc(cx, cy, 2, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(184, 240, 122, 0.85)";
         ctx.fill();
       }
 
@@ -1012,14 +1541,13 @@ export default function Growth() {
 
     return () => {
       cancelAnimationFrame(raf);
-      clearHoldTimer();
       ro.disconnect();
       window.removeEventListener("resize", resize);
       mq.removeEventListener?.("change", onMotionChange);
-      canvas.removeEventListener("pointerdown", onPointerDown);
-      canvas.removeEventListener("pointermove", onPointerMove);
-      canvas.removeEventListener("pointerup", onPointerUp);
-      canvas.removeEventListener("pointercancel", onPointerCancel);
+      detach();
+      root.removeEventListener("keydown", onKeyDown);
+      root.removeEventListener("focus", onFocus);
+      root.removeEventListener("blur", onBlur);
     };
   }, [markGrowth]);
 
@@ -1029,21 +1557,19 @@ export default function Growth() {
       className="growth-instrument"
       data-touch-surface="true"
       data-pretext-ignore="true"
-      aria-label="growth - living mathematical garden"
+      role="application"
+      tabIndex={0}
+      aria-label="growth — a living curve field whose vines carry real species; arrows walk the soil, enter seeds and, held on a blossom, blooms"
     >
       <canvas
         ref={canvasRef}
         className="growth-canvas"
-        aria-label="living growth curve field"
+        aria-hidden="true"
       />
 
       <div className="growth-title" aria-hidden="true">
         <div>growth / living curve field</div>
         <h1>Growth</h1>
-      </div>
-
-      <div className="growth-gesture" aria-hidden="true">
-        tap to seed · drag to bend · hold to force
       </div>
 
       <MobileInstrumentPanel
@@ -1113,6 +1639,12 @@ export default function Growth() {
               -webkit-user-select: none;
               user-select: none;
               -webkit-touch-callout: none;
+              outline: none;
+            }
+
+            .growth-instrument:focus-visible {
+              outline: 2px solid rgba(184, 240, 122, 0.7);
+              outline-offset: -2px;
             }
 
             .growth-canvas {
@@ -1153,10 +1685,6 @@ export default function Growth() {
               font-weight: 520;
               letter-spacing: 0;
               color: rgba(242, 255, 219, 0.98);
-            }
-
-            .growth-gesture {
-              display: none;
             }
 
             .growth-modes {
@@ -1420,23 +1948,6 @@ export default function Growth() {
             }
 
             @media (max-width: 720px) {
-              .growth-gesture {
-                position: fixed;
-                z-index: 4;
-                right: 16px;
-                bottom: calc(122px + env(safe-area-inset-bottom, 0px));
-                left: 16px;
-                display: block;
-                color: rgba(232, 255, 204, 0.48);
-                font-family: var(--font-mono, ui-monospace, monospace);
-                font-size: 9px;
-                letter-spacing: 0.06em;
-                text-align: center;
-                text-transform: lowercase;
-                pointer-events: none;
-                text-shadow: 0 2px 14px rgba(0, 0, 0, 0.9);
-              }
-
               .mobile-instrument-panel__content .growth-modes {
                 display: grid;
                 grid-template-columns: repeat(2, minmax(0, 1fr));
