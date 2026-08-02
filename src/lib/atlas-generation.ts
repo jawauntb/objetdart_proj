@@ -48,7 +48,8 @@ const MAX_PROMPT_LENGTH = 240;
 const MAX_SOURCE_IMAGE_BYTES = 6 * 1024 * 1024;
 const MAX_SOURCE_BASE64_LENGTH = 8_400_000;
 const MAX_OUTPUT_BASE64_LENGTH = 32_000_000;
-const PROVIDER_TIMEOUT_MS = 110_000;
+const OPENAI_PROVIDER_TIMEOUT_MS = 180_000;
+const OPENROUTER_PROVIDER_TIMEOUT_MS = 110_000;
 const LOCAL_ATLAS_PREFIXES = ["/atlas/", "/images/atlas/", "/assets/atlas/"] as const;
 const IMAGE_MIME_BY_EXTENSION: Record<string, AtlasImageMime> = {
   ".jpg": "image/jpeg",
@@ -381,6 +382,9 @@ export async function generateAtlasImage(
   const startedAt = Date.now();
   const controller = new AbortController();
   let timedOut = false;
+  const providerTimeoutMs = providerConfig.provider === "openai"
+    ? OPENAI_PROVIDER_TIMEOUT_MS
+    : OPENROUTER_PROVIDER_TIMEOUT_MS;
 
   const abortFromRequest = () => controller.abort();
   if (requestSignal?.aborted) controller.abort();
@@ -389,7 +393,7 @@ export async function generateAtlasImage(
   const timeout = setTimeout(() => {
     timedOut = true;
     controller.abort();
-  }, PROVIDER_TIMEOUT_MS);
+  }, providerTimeoutMs);
 
   try {
     const artifact = providerConfig.provider === "openai"
