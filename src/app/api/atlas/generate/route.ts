@@ -15,7 +15,7 @@ import {
 } from "@/lib/atlas-generation";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
+export const maxDuration = 210;
 export const dynamic = "force-dynamic";
 
 const MAX_REQUEST_BODY_CHARS = 8_500_000;

@@ -122,8 +122,9 @@ railway logs \
 
 ## Deployment caveats
 
-- The route allows 120 seconds and each provider times out at 110 seconds, so
-  preview and final must remain concurrent rather than serial.
+- The route allows 210 seconds. Flux previews retain a 110-second provider
+  timeout, while GPT Image finals have 180 seconds because high-quality edits
+  can take longer than two minutes. Preview and final must remain concurrent.
 - The client interaction creates two phase calls. The route allows 16 phase
   calls per minute and two concurrent calls per client, equivalent to eight
   complete interactions in the current single-replica deployment.
