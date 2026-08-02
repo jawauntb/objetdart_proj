@@ -373,7 +373,7 @@ export default function MusicColorInstrument() {
               <strong>{matrixSize} x {matrixSize}</strong>
             </div>
             <div>
-              <span>bridge fit</span>
+              <span>in hearing</span>
               <strong>{notes.length ? `${exactCount}/${notes.length}` : "0/0"}</strong>
             </div>
             <div>
@@ -469,7 +469,7 @@ export default function MusicColorInstrument() {
           <footer className="music-color-footer">
             <span>{notes[0].normalized}</span>
             <span>{formatHz(notes[0].frequency)}</span>
-            <span>2^{notes[0].bridgeDivisor}</span>
+            <span>{Math.round(notes[0].optical)} THz</span>
             <span>{Math.round(notes[0].wavelength)} nm</span>
           </footer>
         )}

@@ -111,7 +111,9 @@ export function getLight808(): Light808Engine {
     return c;
   };
 
-  const clampFreq = (freq: number) => Math.max(24, Math.min(6500, freq));
+  // Wide enough that the violet edge of the /light map still rises instead of
+  // flattening; the per-voice lowpass keeps the extreme top gentle on speakers.
+  const clampFreq = (freq: number) => Math.max(20, Math.min(16000, freq));
 
   const cutoffFor = (freq: number, brightness: number) =>
     Math.max(220, Math.min(9000, freq * (3 + brightness * 9)));

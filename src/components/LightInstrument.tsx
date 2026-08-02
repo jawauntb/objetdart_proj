@@ -6,8 +6,6 @@ import { getFieldAudio } from "@/lib/audio";
 import { getLight808 } from "@/lib/light-808";
 import { ripple, roll, tap as hapticTap } from "@/lib/haptics";
 import {
-  BASE_OCTAVE_DROP,
-  OCTAVE_SHIFTS,
   SPECTRAL_STOPS,
   audibleFrequency,
   clamp,
@@ -17,7 +15,6 @@ import {
   opticalFrequencyThz,
   quantizeFrequency,
   wavelengthFromX,
-  type OctaveShift,
   type ScaleMode,
 } from "@/lib/light-music";
 import { useField } from "@/store/field";
@@ -76,7 +73,6 @@ export default function LightInstrument() {
   const marksRef = useRef<ToneMark[]>([]);
 
   const [wavelength, setWavelength] = useState(532);
-  const [octaveShift, setOctaveShift] = useState<OctaveShift>(0);
   const [marks, setMarks] = useState<ToneMark[]>([]);
   const [touches, setTouches] = useState<ActiveTouch[]>([]);
   const [isReplaying, setIsReplaying] = useState(false);
@@ -91,22 +87,21 @@ export default function LightInstrument() {
   const color = useMemo(() => colorFromWavelength(wavelength), [wavelength]);
   const optical = useMemo(() => opticalFrequencyThz(wavelength), [wavelength]);
   const audible = useMemo(
-    () => quantizeFrequency(audibleFrequency(wavelength, octaveShift), scaleMode),
-    [wavelength, octaveShift, scaleMode],
+    () => quantizeFrequency(audibleFrequency(wavelength), scaleMode),
+    [wavelength, scaleMode],
   );
   const currentNote = useMemo(() => noteName(audible), [audible]);
-  const bridgeLine = useMemo(() => `divide by 2^${BASE_OCTAVE_DROP - octaveShift}`, [octaveShift]);
 
   const recordLight = useCallback((meta: string, intensity: number) => {
     useField.getState().recordTape("sigil", intensity, `light/${meta}`);
   }, []);
 
-  // x/y in 0..1 plate space → quantized audible frequency + display facts
-  const translationAt = useCallback((x: number, y: number) => {
+  // x in 0..1 plate space sweeps the whole hearing range through the whole
+  // spectrum; y stays with the finger as brightness.
+  const translationAt = useCallback((x: number) => {
     const nm = wavelengthFromX(x);
-    const shift = OCTAVE_SHIFTS[Math.round((1 - y) * (OCTAVE_SHIFTS.length - 1))];
-    const freq = quantizeFrequency(audibleFrequency(nm, shift), scaleModeRef.current);
-    return { nm, shift, freq, color: colorFromWavelength(nm) };
+    const freq = quantizeFrequency(audibleFrequency(nm), scaleModeRef.current);
+    return { nm, freq, color: colorFromWavelength(nm) };
   }, []);
 
   const plateXY = useCallback((clientX: number, clientY: number) => {
@@ -145,7 +140,7 @@ export default function LightInstrument() {
 
   const subKick = useCallback((x: number) => {
     const nm = wavelengthFromX(x);
-    let freq = quantizeFrequency(audibleFrequency(nm, -3), scaleModeRef.current);
+    let freq = quantizeFrequency(audibleFrequency(nm), scaleModeRef.current);
     while (freq > 82) freq /= 2;
     while (freq < 32) freq *= 2;
     getLight808().kick(freq);
@@ -158,7 +153,7 @@ export default function LightInstrument() {
     const engine = getLight808();
     void getFieldAudio().start();
     const { x, y } = plateXY(event.clientX, event.clientY);
-    const { nm, shift, freq, color: touchColor } = translationAt(x, y);
+    const { nm, freq, color: touchColor } = translationAt(x);
     const now = performance.now();
 
     // double tap in the same spot → deep sub kick
@@ -171,11 +166,10 @@ export default function LightInstrument() {
     pointers.current.set(event.pointerId, { downAt: now, downX: x, downY: y, moved: false, freq });
     engine.noteOn(String(event.pointerId), freq, { brightness: 1 - y });
     setWavelength(nm);
-    setOctaveShift(shift);
     showTouch(event.pointerId, x, y, freq, touchColor);
     keepMark(x, y, nm, freq, touchColor);
     try { ripple(0.4 + (1 - y) * 0.4); } catch { /* noop */ }
-    recordLight(`touch/${nm}nm/${Math.round(freq)}hz`, clamp(0.35 + (1 - y) * 0.4, 0.2, 1));
+    recordLight(`touch/${Math.round(nm)}nm/${Math.round(freq)}hz`, clamp(0.35 + (1 - y) * 0.4, 0.2, 1));
 
     if (isDoubleTap) subKick(x);
 
@@ -189,7 +183,7 @@ export default function LightInstrument() {
     if (!record.moved && Math.hypot(x - record.downX, y - record.downY) > 0.02) {
       record.moved = true;
     }
-    const { nm, shift, freq, color: touchColor } = translationAt(x, y);
+    const { nm, freq, color: touchColor } = translationAt(x);
     if (Math.abs(freq - record.freq) > 0.01) {
       getLight808().glide(String(event.pointerId), freq, { brightness: 1 - y });
       record.freq = freq;
@@ -200,7 +194,6 @@ export default function LightInstrument() {
       }
     }
     setWavelength(nm);
-    setOctaveShift(shift);
     showTouch(event.pointerId, x, y, freq, touchColor);
   }, [plateXY, showTouch, translationAt]);
 
@@ -415,11 +408,6 @@ export default function LightInstrument() {
           <span />
           <span />
         </div>
-        <div className="light-octaves" aria-hidden="true">
-          {[...OCTAVE_SHIFTS].reverse().map((shift) => (
-            <span key={shift}>{shift > 0 ? `+${shift}` : shift}</span>
-          ))}
-        </div>
         {marks.map((mark) => (
           <span
             key={mark.id}
@@ -448,7 +436,7 @@ export default function LightInstrument() {
           </span>
         ))}
         <div className="light-current" aria-hidden="true">
-          <span>{wavelength} nm</span>
+          <span>{Math.round(wavelength)} nm</span>
           <strong>{currentNote}</strong>
           <em>{formatHz(audible)}</em>
         </div>
@@ -458,9 +446,9 @@ export default function LightInstrument() {
         <Link href="/" className="light-home">objetd&rsquo;art</Link>
         <p className="light-eyebrow">light / 808 translator</p>
         <div className="light-readout" aria-label="current light and sound translation">
-          <span>{wavelength} nm</span>
+          <span>{Math.round(wavelength)} nm</span>
           <span className="light-readout-wide">{optical.toFixed(1)} THz</span>
-          <span className="light-readout-wide">{bridgeLine}</span>
+          <span className="light-readout-wide">all of hearing across all of sight</span>
           <span>{formatHz(audible)} / {currentNote}</span>
         </div>
       </header>
@@ -530,7 +518,7 @@ export default function LightInstrument() {
           touch-action: none;
           background:
             linear-gradient(180deg, rgba(255,255,255,0.10), transparent 16%, rgba(0,0,0,0.42) 100%),
-            linear-gradient(90deg, #d83a2e 0%, #f08a28 16%, #f5d65b 31%, #4fca75 47%, #45b8e8 63%, #5574f7 80%, #9a63ee 100%);
+            linear-gradient(90deg, #8e2318 0%, #d83a2e 10.2%, #f08a28 30.4%, #f5d65b 39.1%, #4fca75 51.1%, #45b8e8 64.1%, #5574f7 75.1%, #9a63ee 90.6%, #7a43d8 100%);
           box-shadow: inset 0 0 140px rgba(0,0,0,0.55);
           isolation: isolate;
           transition: filter 500ms ease;
@@ -605,19 +593,6 @@ export default function LightInstrument() {
         }
         .light-prism span:nth-child(2) { inset: 33%; }
         .light-prism span:nth-child(3) { inset: 48%; }
-        .light-octaves {
-          position: absolute;
-          top: calc(86px + env(safe-area-inset-top, 0px));
-          bottom: calc(150px + env(safe-area-inset-bottom, 0px));
-          right: 14px;
-          display: grid;
-          align-content: space-between;
-          z-index: 4;
-          color: rgba(255,255,255,0.62);
-          font-family: var(--font-numerals);
-          font-size: 12px;
-          pointer-events: none;
-        }
         .light-mark {
           position: absolute;
           width: clamp(44px, 8vw, 86px);
@@ -769,7 +744,7 @@ export default function LightInstrument() {
         .light-spectrum {
           height: 10px;
           display: grid;
-          grid-template-columns: repeat(7, minmax(0, 1fr));
+          grid-template-columns: repeat(9, minmax(0, 1fr));
           border: 1px solid rgba(255,255,255,0.28);
           opacity: 0.9;
         }
