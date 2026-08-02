@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
+import { attachGestures } from "@/lib/gesture";
+import { THRESHOLDS } from "@/lib/gesture/core";
 import { useField } from "@/store/field";
 import * as haptics from "@/lib/haptics";
 
@@ -31,26 +33,28 @@ export default function Watch() {
   const cursor = useRef({ x: -9999, y: -9999, tx: -9999, ty: -9999, over: false });
   const lit = useRef({ candle: 0, glass: 0, book: 0, record: 0, window: 0, clock: 0, music: 0, frame: 0 });
 
-  // active pointer-drag on a tactile object (candle / record / glass).
-  const drag = useRef({
-    active: false,
-    id: -1,
-    kind: "" as "candle" | "record" | "glass" | "",
-    startX: 0,
-    startY: 0,
-    lastX: 0,
-    lastY: 0,
-    lastAngle: 0,
-    moved: 0,
-    lastAudioAt: 0,
-    suppressClick: false,
+  // ── the room's clock + law-layer state (gesture grammar) ──
+  // Three fingers held dilate the room's time; three fingers dragged gust
+  // wind through it; a circling finger turns the crown of the room's day;
+  // a steady tapped pulse entrains the pendulum. Thresholds live in
+  // gesture/core alone.
+  const law = useRef({
+    timeScale: 1,
+    timeScaleTarget: 1,
+    simT: 0,
+    lastFrameAt: -1,
+    crownVel: 0,     // seconds of room-time per real second, from the scrub
+    gust: 0,         // 3-finger wind leaning the flame and the boat
+    entrainBpm: 0,
+    entrainUntil: 0,
+    lastEntrainBeat: -1,
+    lastGestureAt: 0,
   });
 
   // candle alive / snuff state.
   const candleState = useRef({
     alive: 1,
     flameScale: 1,
-    pressStart: 0,
     snuffStart: 0,
     dragLean: 0,
   });
@@ -146,7 +150,8 @@ export default function Watch() {
 
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     let raf = 0;
-    const t0 = performance.now();
+    law.current.lastFrameAt = -1;
+    law.current.lastGestureAt = performance.now();
 
     const resize = () => {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -254,7 +259,10 @@ export default function Watch() {
     };
 
     // ── pointer interaction ──────────────────────────────────────
-    const onMove = (e: PointerEvent) => {
+    // Hover is the grammar's quiet dialect (hover ≈ light touch): the room
+    // warms toward the cursor and breath fogs the window glass. Every
+    // contact gesture lives in the engine below.
+    const onHover = (e: PointerEvent) => {
       cursor.current.tx = e.clientX;
       cursor.current.ty = e.clientY;
       cursor.current.over = true;
@@ -269,164 +277,10 @@ export default function Watch() {
           if (windowBreath.current.length > 8) windowBreath.current.shift();
         }
       }
-
-      // ── tactile drag ─────────────────────────────────────────────
-      const d = drag.current;
-      if (d.active && d.id === e.pointerId) {
-        const dx = e.clientX - d.lastX;
-        const dy = e.clientY - d.lastY;
-        d.moved += Math.hypot(dx, dy);
-        const now = performance.now();
-        const throttled = now - d.lastAudioAt > 80;
-        const tape = useField.getState().recordTape;
-
-        if (d.kind === "candle") {
-          // A drag near the flame cancels the snuff-hold and bends the flame
-          // hard in the drag direction, throwing sparks off the wick.
-          if (d.moved > 6) { cancelLongPress(); d.suppressClick = true; }
-          candleState.current.dragLean = Math.max(-28, Math.min(28,
-            candleState.current.dragLean + dx * 0.12));
-          if (!reduce && candleState.current.flameScale > 0.2) {
-            const flameBase = g.candle.y - g.candle.h - 11;
-            const bursts = Math.min(4, 1 + Math.floor(Math.abs(dx) * 0.12));
-            for (let i = 0; i < bursts; i++) {
-              sparks.current.push({
-                x: g.candle.x + (Math.random() - 0.5) * 6,
-                y: flameBase - 6,
-                vx: dx * 1.1 + (Math.random() - 0.5) * 26,
-                vy: -28 - Math.random() * 44,
-                life: 0.7 + Math.random() * 0.6,
-                maxLife: 1.0,
-              });
-            }
-            if (sparks.current.length > 44) sparks.current.splice(0, sparks.current.length - 44);
-          }
-          if (throttled && Math.abs(dx) + Math.abs(dy) > 2 && candleState.current.flameScale > 0.2) {
-            d.lastAudioAt = now;
-            const force = Math.min(0.6, Math.abs(dx) * 0.02);
-            try { getFieldAudio().spark(); } catch { /* ignore */ }
-            try { haptics.ripple(0.18 + force); } catch { /* ignore */ }
-            tape("candle", 0.3 + force, "watch:candle-lean");
-          }
-        } else if (d.kind === "record") {
-          // Scrub the platter by the angle swept around its centre; the last
-          // angular delta becomes fling momentum when the finger lifts.
-          const ang = Math.atan2(e.clientY - g.record.y, e.clientX - g.record.x);
-          let delta = ang - d.lastAngle;
-          if (delta > Math.PI) delta -= Math.PI * 2;
-          else if (delta < -Math.PI) delta += Math.PI * 2;
-          d.lastAngle = ang;
-          record.current.spin += delta;
-          record.current.scrubVel = delta;
-          if (d.moved > 8) d.suppressClick = true;
-          if (throttled && Math.abs(delta) > 0.02) {
-            d.lastAudioAt = now;
-            const speed = Math.min(1, Math.abs(delta) * 5);
-            try { oneShotScratch(getFieldAudio(), speed, delta >= 0 ? 1 : -1); } catch { /* ignore */ }
-            try { haptics.roll(); } catch { /* ignore */ }
-            tape("object", 0.3 + speed * 0.5, "watch:record-scrub");
-          }
-        } else if (d.kind === "glass") {
-          // Pour: the water level follows the finger between the base and rim;
-          // push past the rim and it brims over.
-          const bottom = g.glass.y;
-          const top = g.glass.y - g.glass.h;
-          const frac = (bottom - e.clientY) / Math.max(1, bottom - top);
-          const level = Math.max(0, Math.min(5, frac * 5));
-          const prev = glass.current.fill;
-          glass.current.fill = level;
-          if (d.moved > 6) d.suppressClick = true;
-          if (throttled && Math.abs(level - prev) > 0.03) {
-            d.lastAudioAt = now;
-            glassRipples.current.push({ t0: now });
-            if (glassRipples.current.length > 6) glassRipples.current.shift();
-            const detune = level * 80;
-            try { oneShotChime(getFieldAudio(), 860 + detune, 1300 + detune, 0.16); } catch { /* ignore */ }
-            try { haptics.ripple(0.3 + level * 0.06); } catch { /* ignore */ }
-            tape("ripple", 0.35 + level * 0.08, "watch:glass-pour");
-          }
-          if (frac > 1.02 && now - glass.current.overflowAt > 500) {
-            glass.current.overflowAt = now;
-            try { oneShotDrop(getFieldAudio()); } catch { /* ignore */ }
-            try { haptics.chop(); } catch { /* ignore */ }
-            tape("ripple", 0.7, "glass:overflow");
-          }
-        }
-
-        d.lastX = e.clientX;
-        d.lastY = e.clientY;
-      }
     };
     const onLeave = () => { cursor.current.over = false; };
 
-    let longPressTimer: ReturnType<typeof setTimeout> | null = null;
     const recordState = record.current;
-    const cancelLongPress = () => {
-      if (longPressTimer !== null) {
-        clearTimeout(longPressTimer);
-        longPressTimer = null;
-      }
-      candleState.current.pressStart = 0;
-    };
-
-    const onPointerDown = (e: PointerEvent) => {
-      const what = hitTest(e.clientX, e.clientY);
-      if (what === "candle" && candleState.current.alive > 0.5) {
-        candleState.current.pressStart = performance.now();
-        longPressTimer = setTimeout(() => {
-          if (candleState.current.pressStart > 0) {
-            candleState.current.alive = 0;
-            candleState.current.snuffStart = performance.now();
-            const audio = getFieldAudio();
-            audio.thud();
-            haptics.storm();
-            useField.getState().recordTape("candle", 0.4, "watch:snuff");
-            addWatchMark("snuffed", "wood", 0.78);
-          }
-          longPressTimer = null;
-        }, 800);
-      }
-
-      // Begin a tactile drag on the objects that reward direct manipulation:
-      // the candle (bend the flame / drag the smoke), the record (spin & scrub)
-      // and the glass (pour by dragging the level up). Taps still fall through
-      // to onClick as the fallback gesture.
-      if (what === "candle" || what === "record" || what === "glass") {
-        const g = geometry();
-        const d = drag.current;
-        d.active = true;
-        d.id = e.pointerId;
-        d.kind = what;
-        d.startX = e.clientX;
-        d.startY = e.clientY;
-        d.lastX = e.clientX;
-        d.lastY = e.clientY;
-        d.moved = 0;
-        d.suppressClick = false;
-        d.lastAudioAt = 0;
-        if (what === "record") {
-          d.lastAngle = Math.atan2(e.clientY - g.record.y, e.clientX - g.record.x);
-          record.current.dragging = true;
-          record.current.scrubVel = 0;
-        }
-        try { cv.setPointerCapture(e.pointerId); } catch { /* ignore */ }
-      }
-    };
-    const endDrag = (e: PointerEvent) => {
-      const d = drag.current;
-      if (!d.active || d.id !== e.pointerId) return;
-      if (d.kind === "record") {
-        // release the platter — any spin it had becomes decaying momentum,
-        // already stored in record.scrubVel by the move handler.
-        record.current.dragging = false;
-      }
-      d.active = false;
-      d.id = -1;
-      d.kind = "";
-      try { cv.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
-    };
-    const onPointerUp = (e: PointerEvent) => { endDrag(e); cancelLongPress(); };
-    const onPointerCancel = (e: PointerEvent) => { endDrag(e); cancelLongPress(); };
 
     const playMusicBoxMelody = () => {
       const audio = getFieldAudio();
@@ -452,18 +306,14 @@ export default function Watch() {
       musicBox.current.noteIdx = 0;
     };
 
-    const onClick = (e: MouseEvent) => {
-      // A drag that actually moved consumes the trailing click so we don't
-      // double-fire the tap fallback on top of the direct-manipulation gesture.
-      if (drag.current.suppressClick) {
-        drag.current.suppressClick = false;
-        return;
-      }
+    // The tap verb, dispatched by the engine. `intensity` is the strike
+    // weight from core (force → area → velocity); `count` is the engine's
+    // tap-train, which replaces the room's private multi-click timers.
+    const dispatchTap = (x: number, y: number, intensity: number, count: number) => {
       if (candleState.current.snuffStart > 0 && performance.now() - candleState.current.snuffStart < 250) {
         return;
       }
       const g = geometry();
-      const x = e.clientX, y = e.clientY;
       const audio = getFieldAudio();
       const tape = useField.getState().recordTape;
       const what = hitTest(x, y);
@@ -478,8 +328,8 @@ export default function Watch() {
           addWatchMark("relit", "ember", 0.92);
         } else {
           audio.spark();
-          haptics.tap();
-          tape("candle", 0.9, "watch");
+          haptics.ripple(0.25 + intensity * 0.4);
+          tape("candle", 0.6 + intensity * 0.4, "watch");
           addWatchMark("flame", "ember", 0.7);
         }
         return;
@@ -579,12 +429,10 @@ export default function Watch() {
       }
 
       if (what === "record") {
-        const now = performance.now();
-        if (now - record.current.lastClickAt > 380) {
-          record.current.clickCount = 0;
-        }
-        record.current.clickCount += 1;
-        record.current.lastClickAt = now;
+        // the engine's tap train (double/triple within the shared window)
+        // replaces the room's private 320/380ms click timers
+        record.current.clickCount = count;
+        record.current.lastClickAt = performance.now();
         if (record.current.clickTimer !== null) {
           clearTimeout(record.current.clickTimer);
           record.current.clickTimer = null;
@@ -629,7 +477,7 @@ export default function Watch() {
               setTimeout(() => { record.current.playing = false; }, 12200);
             }
           }
-        }, 320);
+        }, THRESHOLDS.tapTrainMs + 40);
         return;
       }
 
@@ -642,11 +490,9 @@ export default function Watch() {
         const dy = (y - cy) * 0.06;
         r.targetX = Math.max(-40, Math.min(40, r.targetX + dx));
         r.targetY = Math.max(-20, Math.min(20, r.targetY + dy));
-        if (now - r.lastTapAt < 900) {
-          r.taps += 1;
-        } else {
-          r.taps = 1;
-        }
+        // the engine's tap train decides the scintillation — triple tap
+        // within the shared window, no private counter
+        r.taps = count;
         r.lastTapAt = now;
         if (r.taps >= 3) {
           r.scintUntil = now + 1200;
@@ -668,13 +514,253 @@ export default function Watch() {
       }
     };
 
-    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointermove", onHover);
     window.addEventListener("pointerleave", onLeave);
     window.addEventListener("blur", onLeave);
-    cv.addEventListener("pointerdown", onPointerDown);
-    window.addEventListener("pointerup", onPointerUp);
-    window.addEventListener("pointercancel", onPointerCancel);
-    cv.addEventListener("click", onClick);
+
+    // ── gestures (the shared grammar — src/lib/gesture) ─────────────
+    // One finger touches the objects: tap speaks to them, drag bends the
+    // flame / scrubs the platter / pours the glass, dwell snuffs the
+    // candle, ceremony holds a vigil through the dark. Three fingers touch
+    // the law: drag gusts wind through the room, hold slows its time.
+    // A circling finger turns the crown of the room's day.
+    // Pinch and pan2 stay unbound — the frame belongs to the manifold.
+    let dragKind: "" | "candle" | "record" | "glass" = "";
+    let dragLastAngle = 0;
+    let dragLastAudioAt = 0;
+    let holdWhat: ReturnType<typeof hitTest> | "" = "";
+    let holdSnuffed = false;
+    let holdVigil = false;
+    let lastGustCueAt = 0;
+    let lastCrownAt = 0;
+
+    const detachGestures = attachGestures(cv, {
+      tap: (e) => {
+        law.current.lastGestureAt = performance.now();
+        if (e.fingers !== 1) return; // the room absorbs frame/law taps
+        dispatchTap(e.x, e.y, e.intensity, e.count);
+      },
+      drag: (e) => {
+        law.current.lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          if (e.phase === "end") return;
+          // three fingers drag the weather: a gust leans the flame, blows
+          // sparks off the wick and shoves the little boat along
+          law.current.gust = Math.max(-1, Math.min(1, law.current.gust + e.vx * 0.25));
+          const nowMs = performance.now();
+          if (Math.abs(e.vx) > 0.3 && nowMs - lastGustCueAt > 900) {
+            lastGustCueAt = nowMs;
+            const g = geometry();
+            if (candleState.current.flameScale > 0.2) {
+              for (let i = 0; i < 6; i++) {
+                sparks.current.push({
+                  x: g.candle.x + (Math.random() - 0.5) * 8,
+                  y: g.candle.y - g.candle.h - 16,
+                  vx: Math.sign(e.vx) * (40 + Math.random() * 60),
+                  vy: -20 - Math.random() * 40,
+                  life: 0.7 + Math.random() * 0.6,
+                  maxLife: 1.0,
+                });
+              }
+              if (sparks.current.length > 44) sparks.current.splice(0, sparks.current.length - 44);
+            }
+            try { getFieldAudio().playNote(38, 260); } catch { /* ignore */ }
+            try { haptics.chop(); } catch { /* ignore */ }
+            useField.getState().recordTape("region", 0.45, "watch:gust");
+          }
+          return;
+        }
+        if (e.fingers !== 1) return;
+        const g = geometry();
+        const tape = useField.getState().recordTape;
+        if (e.phase === "start") {
+          const what = hitTest(e.x, e.y);
+          dragKind = what === "candle" || what === "record" || what === "glass" ? what : "";
+          dragLastAudioAt = 0;
+          if (dragKind === "record") {
+            dragLastAngle = Math.atan2(e.y - g.record.y, e.x - g.record.x);
+            record.current.dragging = true;
+            record.current.scrubVel = 0;
+          }
+          return;
+        }
+        if (e.phase === "end") {
+          if (dragKind === "record") {
+            // release the platter — any spin it had becomes decaying
+            // momentum, already stored in record.scrubVel.
+            record.current.dragging = false;
+          }
+          dragKind = "";
+          return;
+        }
+        const now = performance.now();
+        const throttled = now - dragLastAudioAt > 80;
+        if (dragKind === "candle") {
+          // A drag near the flame bends it hard in the drag direction,
+          // throwing sparks off the wick.
+          candleState.current.dragLean = Math.max(-28, Math.min(28,
+            candleState.current.dragLean + e.dx * 0.12));
+          if (!reduce && candleState.current.flameScale > 0.2) {
+            const flameBase = g.candle.y - g.candle.h - 11;
+            const bursts = Math.min(4, 1 + Math.floor(Math.abs(e.dx) * 0.12));
+            for (let i = 0; i < bursts; i++) {
+              sparks.current.push({
+                x: g.candle.x + (Math.random() - 0.5) * 6,
+                y: flameBase - 6,
+                vx: e.dx * 1.1 + (Math.random() - 0.5) * 26,
+                vy: -28 - Math.random() * 44,
+                life: 0.7 + Math.random() * 0.6,
+                maxLife: 1.0,
+              });
+            }
+            if (sparks.current.length > 44) sparks.current.splice(0, sparks.current.length - 44);
+          }
+          if (throttled && Math.abs(e.dx) + Math.abs(e.dy) > 2 && candleState.current.flameScale > 0.2) {
+            dragLastAudioAt = now;
+            const force = Math.min(0.6, Math.abs(e.dx) * 0.02);
+            try { getFieldAudio().spark(); } catch { /* ignore */ }
+            try { haptics.ripple(0.18 + force); } catch { /* ignore */ }
+            tape("candle", 0.3 + force, "watch:candle-lean");
+          }
+        } else if (dragKind === "record") {
+          // Scrub the platter by the angle swept around its centre; the
+          // last angular delta becomes fling momentum on release.
+          const ang = Math.atan2(e.y - g.record.y, e.x - g.record.x);
+          let delta = ang - dragLastAngle;
+          if (delta > Math.PI) delta -= Math.PI * 2;
+          else if (delta < -Math.PI) delta += Math.PI * 2;
+          dragLastAngle = ang;
+          record.current.spin += delta;
+          record.current.scrubVel = delta;
+          if (throttled && Math.abs(delta) > 0.02) {
+            dragLastAudioAt = now;
+            const speed = Math.min(1, Math.abs(delta) * 5);
+            try { oneShotScratch(getFieldAudio(), speed, delta >= 0 ? 1 : -1); } catch { /* ignore */ }
+            try { haptics.roll(); } catch { /* ignore */ }
+            tape("object", 0.3 + speed * 0.5, "watch:record-scrub");
+          }
+        } else if (dragKind === "glass") {
+          // Pour: the water level follows the finger between base and rim;
+          // push past the rim and it brims over.
+          const bottom = g.glass.y;
+          const top = g.glass.y - g.glass.h;
+          const frac = (bottom - e.y) / Math.max(1, bottom - top);
+          const level = Math.max(0, Math.min(5, frac * 5));
+          const prev = glass.current.fill;
+          glass.current.fill = level;
+          if (throttled && Math.abs(level - prev) > 0.03) {
+            dragLastAudioAt = now;
+            glassRipples.current.push({ t0: now });
+            if (glassRipples.current.length > 6) glassRipples.current.shift();
+            const detune = level * 80;
+            try { oneShotChime(getFieldAudio(), 860 + detune, 1300 + detune, 0.16); } catch { /* ignore */ }
+            try { haptics.ripple(0.3 + level * 0.06); } catch { /* ignore */ }
+            tape("ripple", 0.35 + level * 0.08, "watch:glass-pour");
+          }
+          if (frac > 1.02 && now - glass.current.overflowAt > 500) {
+            glass.current.overflowAt = now;
+            try { oneShotDrop(getFieldAudio()); } catch { /* ignore */ }
+            try { haptics.chop(); } catch { /* ignore */ }
+            tape("ripple", 0.7, "glass:overflow");
+          }
+        }
+      },
+      hold: (e) => {
+        law.current.lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          // three fingers hold the law: the room about time slows its own —
+          // clock, pendulum, day and flame ease to a quarter speed
+          if (e.phase === "enter") {
+            law.current.timeScaleTarget = 0.25;
+            try { getFieldAudio().playNote(36, 260); } catch { /* ignore */ }
+            try { haptics.tap(); } catch { /* ignore */ }
+          }
+          if (e.phase === "release") law.current.timeScaleTarget = 1;
+          return;
+        }
+        if (e.fingers !== 1) return;
+        if (e.phase === "enter") {
+          holdWhat = hitTest(e.x, e.y);
+          holdSnuffed = false;
+          holdVigil = false;
+          return;
+        }
+        if (e.phase === "release") {
+          // a firm short press still speaks the tap verb (no punishment)
+          if (e.tier === 1) dispatchTap(e.x, e.y, e.intensity, 1);
+          holdWhat = "";
+          return;
+        }
+        if (holdWhat !== "candle") return;
+        // dwell tier — the held finger closes over the wick: snuffed.
+        // (was a private 800ms timer; the threshold now lives in core)
+        if (e.tier >= 2 && !holdSnuffed && candleState.current.alive > 0.5) {
+          holdSnuffed = true;
+          candleState.current.alive = 0;
+          candleState.current.snuffStart = performance.now();
+          const audio = getFieldAudio();
+          audio.thud();
+          haptics.storm();
+          useField.getState().recordTape("candle", 0.4, "watch:snuff");
+          addWatchMark("snuffed", "wood", 0.78);
+        }
+        // ceremony tier — the room's one solemn act: hold on through the
+        // dark and the flame returns, kept — a vigil.
+        if (e.tier >= 3 && !holdVigil && candleState.current.alive < 0.5) {
+          holdVigil = true;
+          candleState.current.alive = 1;
+          candleState.current.snuffStart = 0;
+          candleState.current.flameScale = 1.35;
+          try { getFieldAudio().bell(); } catch { /* ignore */ }
+          try { haptics.bloom(); } catch { /* ignore */ }
+          useField.getState().recordTape("candle", 1, "watch:vigil");
+          addWatchMark("vigil", "ember", 1);
+        }
+      },
+      flick: (e) => {
+        law.current.lastGestureAt = performance.now();
+        if (e.fingers !== 1) return;
+        // a flick through the flame hurls a comet of sparks
+        const g = geometry();
+        if (hitTest(e.x, e.y) !== "candle" || candleState.current.flameScale <= 0.2) return;
+        const flameBase = g.candle.y - g.candle.h - 11;
+        for (let i = 0; i < 10; i++) {
+          const jitter = (Math.random() - 0.5) * 0.5;
+          sparks.current.push({
+            x: g.candle.x + (Math.random() - 0.5) * 6,
+            y: flameBase - 6,
+            vx: Math.cos(e.angle + jitter) * (60 + Math.random() * 90),
+            vy: Math.sin(e.angle + jitter) * 50 - 40,
+            life: 0.7 + Math.random() * 0.6,
+            maxLife: 1.0,
+          });
+        }
+        if (sparks.current.length > 44) sparks.current.splice(0, sparks.current.length - 44);
+        try { getFieldAudio().spark(); } catch { /* ignore */ }
+        try { haptics.chop(); } catch { /* ignore */ }
+        useField.getState().recordTape("candle", 0.6, "watch:thrown-sparks");
+      },
+      scrub: (e) => {
+        law.current.lastGestureAt = performance.now();
+        const nowMs = performance.now();
+        if (nowMs - lastCrownAt < 450) return;
+        lastCrownAt = nowMs;
+        // a circling finger turns the crown: the room's day winds forward
+        // with the turn, back against it — sun, clock and pendulum obey
+        const dir = Math.sign(e.winding) || 1;
+        law.current.crownVel = Math.max(-6, Math.min(6, law.current.crownVel + dir * 3.2));
+        try { oneShotChime(getFieldAudio(), dir > 0 ? 980 : 720, dir > 0 ? 1240 : 560, 0.14); } catch { /* ignore */ }
+        try { haptics.tap(); } catch { /* ignore */ }
+        useField.getState().recordTape("object", 0.4, "watch:crown");
+      },
+      rhythm: (e) => {
+        // a steady tapped pulse: the pendulum falls in with the hand
+        if (e.stability <= 0.7) return;
+        law.current.entrainBpm = Math.max(40, Math.min(140, e.bpm));
+        law.current.entrainUntil = performance.now() + 9000;
+        useField.getState().recordTape("sigil", 0.45, "watch:entrain");
+      },
+    }, { wheelZoom: false });
 
     // ── whisper scheduler — every ~14-28s spawn a fresh one ────
     // Diegetic, atmospheric fragments — nouns of the room and the sea, never
@@ -699,9 +785,31 @@ export default function Watch() {
 
     // ── render loop ──────────────────────────────────────────────
     const draw = (now: number) => {
-      const t = (now - t0) / 1000;
+      // the room's own clock: three fingers dilate it, the crown winds it —
+      // sun, pendulum, flame wobble and the little boat all read from simT
+      const L = law.current;
+      if (L.lastFrameAt < 0) L.lastFrameAt = now;
+      const fdt = Math.min(0.05, Math.max(0, (now - L.lastFrameAt) / 1000));
+      L.lastFrameAt = now;
+      L.timeScale += (L.timeScaleTarget - L.timeScale) * Math.min(1, fdt * 5);
+      L.simT += fdt * L.timeScale + fdt * L.crownVel;
+      L.crownVel *= Math.exp(-fdt / 1.4);
+      if (Math.abs(L.crownVel) < 0.01) L.crownVel = 0;
+      L.gust *= Math.exp(-fdt * 1.5);
+      const t = L.simT;
       const g = geometry();
       const motion = reduce ? 0 : 1;
+
+      // rhythm entrainment: while a steady tapped pulse holds, the clock
+      // answers every beat with a tick and a warm pendulum glow.
+      if (now < L.entrainUntil && L.entrainBpm > 0) {
+        const beatIdx = Math.floor(now / (60000 / L.entrainBpm));
+        if (beatIdx !== L.lastEntrainBeat) {
+          L.lastEntrainBeat = beatIdx;
+          lit.current.clock = 1;
+          try { getFieldAudio().playNote(74 + (beatIdx % 2) * 5, 70); } catch { /* ignore */ }
+        }
+      }
 
       const c = cursor.current;
       c.x += (c.tx - c.x) * 0.20;
@@ -822,8 +930,8 @@ export default function Watch() {
         boat.current.speed = 0.020 + Math.random() * 0.010;
       }
       if (boat.current.active) {
-        const dt = motion ? Math.min(0.05, 1 / 60) : 0;
-        boat.current.x += boat.current.dir * boat.current.speed * dt * 6;
+        const dt = motion ? fdt * law.current.timeScale : 0;
+        boat.current.x += boat.current.dir * boat.current.speed * dt * 6 + law.current.gust * dt * 0.05;
         boat.current.bobPhase += dt * 1.2;
         if (boat.current.dir > 0 && boat.current.x > 1.2) {
           boat.current.active = false;
@@ -1005,8 +1113,11 @@ export default function Watch() {
         ctx.beginPath();
         ctx.arc(cl.x, cl.y, 1.6, 0, Math.PI * 2);
         ctx.fill();
-        // pendulum dangle below (a tiny tick visualizer)
-        const pSwing = Math.sin(t * 1.0) * 6;
+        // pendulum dangle below (a tiny tick visualizer) — while a tapped
+        // pulse holds, it swings in the hand's tempo, a little wider
+        const entrainedNow = now < law.current.entrainUntil && law.current.entrainBpm > 0;
+        const pFreq = entrainedNow ? Math.PI * 2 * (law.current.entrainBpm / 60) : 1.0;
+        const pSwing = Math.sin(t * pFreq) * (entrainedNow ? 8 : 6);
         ctx.strokeStyle = "rgba(40, 30, 22, 0.55)";
         ctx.lineWidth = 1;
         ctx.beginPath();
@@ -1223,8 +1334,9 @@ export default function Watch() {
         const bonus = pull > 0.6 ? (pull - 0.6) * 18 : 0;
         leanX = (dx / (d || 1)) * (pull * 6 + bonus);
       }
-      // an active drag bends the flame harder, then springs back as it decays.
-      leanX += cs.dragLean;
+      // an active drag bends the flame harder, then springs back as it
+      // decays; a three-finger gust leans the whole flame with the weather.
+      leanX += cs.dragLean + law.current.gust * 20;
       cs.dragLean *= reduce ? 0 : 0.90;
 
       const flameBase = g.candle.y - g.candle.h - 11;
@@ -1267,7 +1379,7 @@ export default function Watch() {
           });
           if (sparks.current.length > 24) sparks.current.shift();
         }
-        const dt = motion ? 1 / 60 : 0;
+        const dt = motion ? fdt * law.current.timeScale : 0;
         for (let i = sparks.current.length - 1; i >= 0; i--) {
           const sp = sparks.current[i];
           sp.life -= dt;
@@ -1498,9 +1610,9 @@ export default function Watch() {
           record.current.scrubVel = 0;
         }
         if (record.current.playing) {
-          record.current.spin += (motion ? 1 : 0) * 0.06 * record.current.spinDir;
+          record.current.spin += (motion ? 1 : 0) * 0.06 * record.current.spinDir * law.current.timeScale;
         } else {
-          record.current.spin += (motion ? 1 : 0) * 0.01 * recordAlive * record.current.spinDir;
+          record.current.spin += (motion ? 1 : 0) * 0.01 * recordAlive * record.current.spinDir * law.current.timeScale;
         }
       }
       ctx.fillStyle = "rgba(30, 22, 16, 1)";
@@ -1549,6 +1661,17 @@ export default function Watch() {
       ctx.arc(rx, ry, 2.4, 0, 7);
       ctx.fill();
 
+      // glimmer (grammar §6): after ~20s of quiet, a faint ring breathes
+      // around the flame where a finger would land — physical, never text.
+      if (now - L.lastGestureAt > 20000) {
+        const pulse = reduce ? 0.5 : 0.5 + Math.sin(now / 520) * 0.5;
+        ctx.strokeStyle = `rgba(255, 200, 130, ${(0.04 + pulse * 0.08).toFixed(3)})`;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(g.candle.x, g.candle.y - g.candle.h - 14, 22 + pulse * 9, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
       raf = requestAnimationFrame(draw);
     };
     raf = requestAnimationFrame(draw);
@@ -1556,15 +1679,11 @@ export default function Watch() {
     return () => {
       cancelAnimationFrame(raf);
       window.removeEventListener("resize", resize);
-      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointermove", onHover);
       window.removeEventListener("pointerleave", onLeave);
       window.removeEventListener("blur", onLeave);
-      cv.removeEventListener("pointerdown", onPointerDown);
-      window.removeEventListener("pointerup", onPointerUp);
-      window.removeEventListener("pointercancel", onPointerCancel);
-      cv.removeEventListener("click", onClick);
+      detachGestures();
       window.clearInterval(whisperCheck);
-      if (longPressTimer !== null) clearTimeout(longPressTimer);
       if (recordState.clickTimer !== null) clearTimeout(recordState.clickTimer);
     };
   }, [whisperState]);

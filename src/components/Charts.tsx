@@ -9,6 +9,7 @@ import {
 } from "react";
 import { useField } from "@/store/field";
 import { getFieldAudio } from "@/lib/audio";
+import { attachGestures } from "@/lib/gesture";
 import type { ConcernKey } from "@/lib/types";
 import * as haptics from "@/lib/haptics";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
@@ -307,6 +308,7 @@ export default function Charts() {
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  const overlayRef = useRef<HTMLDivElement | null>(null);
 
   // Pull ocean state — concerns + tape — but DON'T re-build the series on
   // every concern slide (would feel chaotic). We rebuild on a debounced
@@ -354,6 +356,15 @@ export default function Charts() {
   );
   // oscillator threshold-cross state (so we only bell once per crossing)
   const lastZoneRef = useRef<"over" | "under" | "mid">("mid");
+
+  // ── gesture-grammar state (law layer, lens, tempo) ──
+  const candlesRef = useRef<Candle[]>([]);          // latest series for stable handlers
+  const lensRef = useRef({ cur: 0, target: 0 });    // twist: chart ↔ the raw walk
+  const rippleRef = useRef({ t0: -1e9, amp: 0, dir: 1 }); // 3-finger drag ripples the field
+  const scanRef = useRef({ t: 0, lastFrameAt: -1 });      // scan line rides the room clock
+  const scanScaleRef = useRef({ cur: 1, target: 1 });     // 3-finger hold dilates it
+  const entrainRef = useRef({ bpm: 0, until: 0, lastBeat: -1, pulse: 0 });
+  const lastGestureAtRef = useRef(0);
 
   const addChartMark = (label: string, tone: ChartMark["tone"] = "amber", strength = 0.5) => {
     const id = ++chartMarkIdRef.current;
@@ -434,6 +445,11 @@ export default function Charts() {
     volRef.current = volatility;
   }, [volatility]);
 
+  // stable mirror of the series for the gesture engine's handlers
+  useEffect(() => {
+    candlesRef.current = candles;
+  }, [candles]);
+
   // ── canvas draw ────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -508,9 +524,21 @@ export default function Charts() {
       // captioning it. Drawn under the data so the lines read over them.
       drawInscriptions(ctx, L);
 
-      drawPanel1(ctx, L, candles, hoverIdx, p1RangeRef);
-      drawPanel2(ctx, L, d1, d1Ema, p2RangeRef);
-      drawPanel3(ctx, L, rsi, p3RangeRef);
+      // three-finger weather: a transient wave rolls through every panel —
+      // the data field ripples and settles, nothing is rewritten
+      const rippleAge = (now - rippleRef.current.t0) / 1000;
+      const rippleEnv = rippleAge < 3 ? rippleRef.current.amp * Math.exp(-rippleAge * 2.1) : 0;
+      const waveOff = rippleEnv > 0.004
+        ? (i: number) => rippleEnv * Math.sin(i * 0.55 - rippleRef.current.dir * rippleAge * 13)
+        : undefined;
+
+      // the lens (twist): candlestick dressing ↔ the raw walk underneath
+      const lens = lensRef.current;
+      lens.cur += (lens.target - lens.cur) * 0.08;
+
+      drawPanel1(ctx, L, candles, hoverIdx, p1RangeRef, lens.cur, waveOff);
+      drawPanel2(ctx, L, d1, d1Ema, p2RangeRef, waveOff);
+      drawPanel3(ctx, L, rsi, p3RangeRef, waveOff);
 
       // volatility handle lives in the left gutter beside Panel 1
       drawVolHandle(ctx, L, volRef.current);
@@ -526,10 +554,32 @@ export default function Charts() {
       ctx.stroke();
 
       // A quiet scan line keeps the instrument alive even when the data is
-      // not being regenerated. It does not change hit targets or layout.
+      // not being regenerated. It rides the room's clock: a three-finger
+      // hold slows it to a quarter, a steady tapped pulse entrains it.
+      const scan = scanRef.current;
+      if (scan.lastFrameAt < 0) scan.lastFrameAt = now;
+      const scanDt = Math.min(80, now - scan.lastFrameAt);
+      scan.lastFrameAt = now;
+      const scanScale = scanScaleRef.current;
+      scanScale.cur += (scanScale.target - scanScale.cur) * Math.min(1, scanDt * 0.005);
+      const entrain = entrainRef.current;
+      const entrained = now < entrain.until && entrain.bpm > 0;
       const scanSpan = Math.max(1, L.width - L.padL - L.padR);
-      const scanX = L.padL + ((now * 0.035) % scanSpan);
-      const scanAlpha = reduce ? 0.08 : 0.18;
+      const scanRate = entrained
+        ? scanSpan / ((60000 / entrain.bpm) * 8) // one crossing per eight beats
+        : 0.035;
+      scan.t += scanDt * scanRate * scanScale.cur;
+      if (entrained) {
+        const beatIdx = Math.floor(now / (60000 / entrain.bpm));
+        if (beatIdx !== entrain.lastBeat) {
+          entrain.lastBeat = beatIdx;
+          entrain.pulse = 1;
+          try { getFieldAudio().playNote(64 + (beatIdx % 2) * 5, 70); } catch { /* noop */ }
+        }
+      }
+      entrain.pulse *= Math.exp(-scanDt / 300);
+      const scanX = L.padL + (scan.t % scanSpan);
+      const scanAlpha = (reduce ? 0.08 : 0.18) + entrain.pulse * 0.3;
       const scanGrad = ctx.createLinearGradient(scanX, 0, scanX + 20, 0);
       scanGrad.addColorStop(0, `rgba(255,180,110,0)`);
       scanGrad.addColorStop(0.45, `rgba(255,180,110,${scanAlpha})`);
@@ -537,11 +587,27 @@ export default function Charts() {
       ctx.fillStyle = scanGrad;
       ctx.fillRect(scanX - 10, 0, 24, L.height);
 
-      // panel labels — top-left of each
+      // glimmer (grammar §6): after ~20s of quiet, a faint ring breathes
+      // over one of the candles — a physical hint, never text.
+      if (now - lastGestureAtRef.current > 20000) {
+        const slot = Math.floor(now / 9000);
+        const gseed = Math.abs(Math.sin(slot * 127.1) * 43758.5453) % 1;
+        const gi = Math.floor(gseed * CANDLE_COUNT);
+        const gx = L.padL + gi * L.slot + L.slot / 2;
+        const gy = L.p1Top + L.p1H * 0.5;
+        const pulse = reduce ? 0.5 : 0.5 + Math.sin(now / 480) * 0.5;
+        ctx.strokeStyle = `rgba(255,180,110,${(0.05 + pulse * 0.08).toFixed(3)})`;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(gx, gy, 14 + pulse * 8, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      // panel labels — top-left of each; the first names the lens in play
       ctx.fillStyle = "rgba(232,226,213,0.42)";
       ctx.font = "10px var(--font-mono, ui-monospace)";
       ctx.textAlign = "left";
-      ctx.fillText("price · ohlc", L.padL, L.p1Top + 14);
+      ctx.fillText(lens.cur > 0.5 ? "price · the raw walk" : "price · ohlc", L.padL, L.p1Top + 14);
       ctx.fillText("d/dt · 9-ema", L.padL, L.p2Top + 14);
       ctx.fillText(`rsi · ${RSI_PERIOD}`, L.padL, L.p3Top + 14);
 
@@ -662,56 +728,6 @@ export default function Charts() {
     return Math.round(v / 0.05) * 0.05;
   };
 
-  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    const hit = locate(e.clientX, e.clientY);
-    if (!hit) return;
-    try {
-      (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
-    } catch {
-      /* noop */
-    }
-    haptics.tap();
-
-    if (hit.zone === "vol") {
-      dragRef.current = {
-        active: true, mode: "vol", idx: -1, startY: e.clientY,
-        startTweak: 0, lastChimeAt: 0, lastMarkAt: 0,
-      };
-      const v = volValueAt(e.clientY);
-      setVolatility(v);
-      playNote(46 + (v / 3.0) * 26, 150);
-      addChartMark(`vol ${v.toFixed(2)}`, "amber", 0.5);
-      return;
-    }
-    if (hit.zone === "p1") {
-      const c = candles[hit.idx];
-      if (!c) return;
-      dragRef.current = {
-        active: true, mode: "candle", idx: hit.idx, startY: e.clientY,
-        startTweak: c.tweak, lastChimeAt: 0, lastMarkAt: 0,
-      };
-      playClickForCandle(c);
-      addChartMark(`c${hit.idx + 1}`, effClose(c) >= c.open ? "rise" : "fall", 0.5);
-      return;
-    }
-    if (hit.zone === "p2") {
-      dragRef.current = {
-        active: true, mode: "d1", idx: hit.idx, startY: e.clientY,
-        startTweak: 0, lastChimeAt: 0, lastMarkAt: 0,
-      };
-      applyD1Drag(hit.idx, p2ValueAt(e.clientY));
-      addChartMark(`d ${hit.idx + 1}`, "amber", 0.52);
-      return;
-    }
-    // p3 — RSI
-    dragRef.current = {
-      active: true, mode: "rsi", idx: hit.idx, startY: e.clientY,
-      startTweak: 0, lastChimeAt: 0, lastMarkAt: 0,
-    };
-    applyRSIDrag(hit.idx, p3ValueAt(e.clientY));
-    addChartMark(`rsi ${hit.idx + 1}`, "amber", 0.52);
-  };
-
   // Panel 2 back-solve — set the arrival candle's close so the slope answers.
   const applyD1Drag = (idx: number, targetV: number) => {
     setCandles((prev) => {
@@ -743,139 +759,31 @@ export default function Charts() {
     haptics.chop();
   };
 
-  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    const d = dragRef.current;
-
-    // hover tooltip — only when not dragging and only over Panel 1
-    if (!d.active) {
-      const hit = locate(e.clientX, e.clientY);
-      if (hit && hit.zone === "p1") {
-        if (hit.idx !== hoverIdx) {
-          setHoverIdx(hit.idx);
-          const wrap = wrapRef.current;
-          const canvas = canvasRef.current;
-          const L = layoutRef.current;
-          if (wrap && canvas && L) {
-            const wrect = wrap.getBoundingClientRect();
-            const crect = canvas.getBoundingClientRect();
-            const cx = L.padL + hit.idx * L.slot + L.slot / 2;
-            setTip({
-              x: crect.left - wrect.left + cx,
-              y: crect.top - wrect.top + L.p1Top + 8,
-            });
-          }
-        }
-      } else if (hoverIdx !== -1) {
-        setHoverIdx(-1);
-        setTip(null);
-      }
-      return;
-    }
-
-    const L = layoutRef.current;
-    if (!L) return;
-    const now = performance.now();
-
-    if (d.mode === "vol") {
-      const v = volValueAt(e.clientY);
-      if (Math.abs(v - volRef.current) > 1e-6) {
-        setVolatility(v);
-        if (now - d.lastChimeAt > DRAG_NOTE_MS) {
-          d.lastChimeAt = now;
-          playNote(46 + (v / 3.0) * 26, 120);
-          haptics.chop();
-        }
-        if (now - d.lastMarkAt > 360) {
-          d.lastMarkAt = now;
-          addChartMark(`vol ${v.toFixed(2)}`, "amber", 0.46);
+  // Desktop hover is the grammar's quiet dialect (hover ≈ light touch):
+  // the tooltip gathers over Panel 1. All contact gestures live in the
+  // engine below.
+  const onHoverMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (dragRef.current.active) return;
+    const hit = locate(e.clientX, e.clientY);
+    if (hit && hit.zone === "p1") {
+      if (hit.idx !== hoverIdx) {
+        setHoverIdx(hit.idx);
+        const wrap = wrapRef.current;
+        const canvas = canvasRef.current;
+        const L = layoutRef.current;
+        if (wrap && canvas && L) {
+          const wrect = wrap.getBoundingClientRect();
+          const crect = canvas.getBoundingClientRect();
+          const cx = L.padL + hit.idx * L.slot + L.slot / 2;
+          setTip({
+            x: crect.left - wrect.left + cx,
+            y: crect.top - wrect.top + L.p1Top + 8,
+          });
         }
       }
-      return;
-    }
-
-    if (d.mode === "candle") {
-      // vertical pixel delta → price-units via the current Panel-1 y-range
-      const { yMin, yMax } = p1RangeRef.current;
-      const span = yMax - yMin || 1;
-      const pxPerPrice = L.p1H / span;
-      const dy = e.clientY - d.startY;
-      const tweak = d.startTweak + -dy / pxPerPrice;
-      setCandles((prev) => {
-        if (!prev[d.idx]) return prev;
-        const next = prev.slice();
-        next[d.idx] = { ...next[d.idx], tweak };
-        return next;
-      });
-      if (now - d.lastChimeAt > DRAG_NOTE_MS) {
-        d.lastChimeAt = now;
-        const c = candles[d.idx];
-        if (c) playClickForCandle({ ...c, tweak });
-        haptics.chop();
-      }
-      if (now - d.lastMarkAt > 360) {
-        d.lastMarkAt = now;
-        addChartMark(
-          `${d.idx + 1} ${tweak >= 0 ? "up" : "dn"}`,
-          tweak >= 0 ? "rise" : "fall",
-          Math.min(0.88, 0.42 + Math.abs(tweak) * 0.12),
-        );
-      }
-      return;
-    }
-
-    if (d.mode === "d1") {
-      const targetV = p2ValueAt(e.clientY);
-      applyD1Drag(d.idx, targetV);
-      if (now - d.lastMarkAt > 360) {
-        d.lastMarkAt = now;
-        addChartMark(`d ${d.idx + 1} ${targetV >= 0 ? "↑" : "↓"}`, targetV >= 0 ? "rise" : "fall", 0.6);
-      }
-      return;
-    }
-
-    // d.mode === "rsi"
-    const targetRSI = p3ValueAt(e.clientY);
-    applyRSIDrag(d.idx, targetRSI);
-    if (now - d.lastMarkAt > 360) {
-      d.lastMarkAt = now;
-      addChartMark(
-        `rsi ${fmt(targetRSI)}`,
-        targetRSI >= 70 ? "rise" : targetRSI <= 30 ? "fall" : "pale",
-        0.6,
-      );
-    }
-  };
-
-  const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
-    const d = dragRef.current;
-    if (d.active) {
-      try {
-        if (d.mode === "vol") {
-          recordTape("object", 0.34, `charts:vol:${volRef.current.toFixed(2)}`);
-          addChartMark(`vol ${volRef.current.toFixed(2)}`, "amber", 0.6);
-        } else if (d.mode === "candle") {
-          recordTape("sigil", 0.6, "charts/manipulate");
-          addChartMark(`set ${d.idx + 1}`, "amber", 0.66);
-        } else if (d.mode === "d1") {
-          recordTape("sigil", 0.56, "charts/derivative");
-          addChartMark(`d set ${d.idx + 1}`, "amber", 0.64);
-        } else {
-          recordTape("sigil", 0.56, "charts/rsi");
-          addChartMark(`rsi set ${d.idx + 1}`, "amber", 0.64);
-        }
-      } catch {
-        /* noop */
-      }
-      haptics.ripple(0.58);
-    }
-    dragRef.current = {
-      active: false, mode: "candle", idx: -1, startY: 0,
-      startTweak: 0, lastChimeAt: 0, lastMarkAt: 0,
-    };
-    try {
-      (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId);
-    } catch {
-      /* noop */
+    } else if (hoverIdx !== -1) {
+      setHoverIdx(-1);
+      setTip(null);
     }
   };
 
@@ -937,6 +845,313 @@ export default function Charts() {
     haptics.roll();
     addChartMark("pinned", "amber", 0.86);
   };
+
+  // latest chrome actions for the stable gesture handlers
+  const onGenerateRef = useRef(onGenerate);
+  const onPinRef = useRef(onPin);
+  onGenerateRef.current = onGenerate;
+  onPinRef.current = onPin;
+
+  // ── gestures (the shared grammar — src/lib/gesture) ────────────────────
+  // One finger touches the data (drag any plotted point and the whole
+  // reading answers); two fingers turn the lens (chart ↔ the raw walk);
+  // three fingers touch the law (drag ripples the field, hold slows the
+  // scan to a quarter). Pinch and pan2 stay unbound — the frame belongs
+  // to the manifold.
+  useEffect(() => {
+    const overlay = overlayRef.current;
+    if (!overlay) return;
+    let twistAcc = 0;
+    let lastRippleCueAt = 0;
+    let lastScrubAt = 0;
+    let lastGrowNoteAt = 0;
+    let holdIdx = -1;
+    let holdCeremony = false;
+
+    const detach = attachGestures(overlay, {
+      tap: (e) => {
+        lastGestureAtRef.current = performance.now();
+        if (e.fingers !== 1) return; // the plate absorbs frame/law taps
+        if (e.count === 3) {
+          // a triple tap reseeds the field — the same act as the generate
+          // chrome, spoken by hand
+          onGenerateRef.current();
+          return;
+        }
+        const hit = locate(e.x, e.y);
+        if (!hit) return;
+        // tap intensity is the strike: haptic and mark ride the 0..1 from core
+        try { haptics.ripple(0.2 + e.intensity * 0.3); } catch { /* noop */ }
+        if (hit.zone === "vol") {
+          const v = volValueAt(e.y);
+          setVolatility(v);
+          playNote(46 + (v / 3.0) * 26, 150);
+          addChartMark(`vol ${v.toFixed(2)}`, "amber", 0.5);
+          return;
+        }
+        if (hit.zone === "p1") {
+          const c = candlesRef.current[hit.idx];
+          if (!c) return;
+          playClickForCandle(c);
+          addChartMark(`c${hit.idx + 1}`, effClose(c) >= c.open ? "rise" : "fall", 0.4 + e.intensity * 0.3);
+          return;
+        }
+        if (hit.zone === "p2") {
+          applyD1Drag(hit.idx, p2ValueAt(e.y));
+          addChartMark(`d ${hit.idx + 1}`, "amber", 0.52);
+          return;
+        }
+        applyRSIDrag(hit.idx, p3ValueAt(e.y));
+        addChartMark(`rsi ${hit.idx + 1}`, "amber", 0.52);
+      },
+      drag: (e) => {
+        lastGestureAtRef.current = performance.now();
+        if (e.fingers === 3) {
+          if (e.phase === "end") return;
+          // three fingers drag the weather: a wave rolls through all three
+          // panels — the field ripples and settles, nothing is rewritten
+          const speed = Math.hypot(e.vx, e.vy);
+          rippleRef.current = {
+            t0: performance.now(),
+            amp: Math.min(1, 0.3 + speed * 0.6),
+            dir: e.vx < 0 ? -1 : 1,
+          };
+          const nowMs = performance.now();
+          if (speed > 0.25 && nowMs - lastRippleCueAt > 700) {
+            lastRippleCueAt = nowMs;
+            playNote(40, 220);
+            try { haptics.chop(); } catch { /* noop */ }
+            recordTape("region", 0.45, "charts/ripple");
+          }
+          return;
+        }
+        if (e.fingers !== 1) return;
+        const d = dragRef.current;
+        const now = performance.now();
+        if (e.phase === "start") {
+          const hit = locate(e.x, e.y);
+          if (!hit) return;
+          try { haptics.tap(); } catch { /* noop */ }
+          if (hit.zone === "vol") {
+            d.active = true; d.mode = "vol"; d.idx = -1;
+            d.startY = e.y; d.startTweak = 0; d.lastChimeAt = 0; d.lastMarkAt = 0;
+            const v = volValueAt(e.y);
+            setVolatility(v);
+            playNote(46 + (v / 3.0) * 26, 150);
+            addChartMark(`vol ${v.toFixed(2)}`, "amber", 0.5);
+            return;
+          }
+          if (hit.zone === "p1") {
+            const c = candlesRef.current[hit.idx];
+            if (!c) return;
+            d.active = true; d.mode = "candle"; d.idx = hit.idx;
+            d.startY = e.y; d.startTweak = c.tweak; d.lastChimeAt = 0; d.lastMarkAt = 0;
+            playClickForCandle(c);
+            addChartMark(`c${hit.idx + 1}`, effClose(c) >= c.open ? "rise" : "fall", 0.5);
+            return;
+          }
+          if (hit.zone === "p2") {
+            d.active = true; d.mode = "d1"; d.idx = hit.idx;
+            d.startY = e.y; d.startTweak = 0; d.lastChimeAt = 0; d.lastMarkAt = 0;
+            applyD1Drag(hit.idx, p2ValueAt(e.y));
+            addChartMark(`d ${hit.idx + 1}`, "amber", 0.52);
+            return;
+          }
+          d.active = true; d.mode = "rsi"; d.idx = hit.idx;
+          d.startY = e.y; d.startTweak = 0; d.lastChimeAt = 0; d.lastMarkAt = 0;
+          applyRSIDrag(hit.idx, p3ValueAt(e.y));
+          addChartMark(`rsi ${hit.idx + 1}`, "amber", 0.52);
+          return;
+        }
+        if (e.phase === "end") {
+          if (d.active) {
+            try {
+              if (d.mode === "vol") {
+                recordTape("object", 0.34, `charts:vol:${volRef.current.toFixed(2)}`);
+                addChartMark(`vol ${volRef.current.toFixed(2)}`, "amber", 0.6);
+              } else if (d.mode === "candle") {
+                recordTape("sigil", 0.6, "charts/manipulate");
+                addChartMark(`set ${d.idx + 1}`, "amber", 0.66);
+              } else if (d.mode === "d1") {
+                recordTape("sigil", 0.56, "charts/derivative");
+                addChartMark(`d set ${d.idx + 1}`, "amber", 0.64);
+              } else {
+                recordTape("sigil", 0.56, "charts/rsi");
+                addChartMark(`rsi set ${d.idx + 1}`, "amber", 0.64);
+              }
+            } catch { /* noop */ }
+            try { haptics.ripple(0.58); } catch { /* noop */ }
+          }
+          d.active = false; d.mode = "candle"; d.idx = -1;
+          d.startY = 0; d.startTweak = 0; d.lastChimeAt = 0; d.lastMarkAt = 0;
+          return;
+        }
+        if (!d.active) return;
+        const L = layoutRef.current;
+        if (!L) return;
+        if (d.mode === "vol") {
+          const v = volValueAt(e.y);
+          if (Math.abs(v - volRef.current) > 1e-6) {
+            setVolatility(v);
+            if (now - d.lastChimeAt > DRAG_NOTE_MS) {
+              d.lastChimeAt = now;
+              playNote(46 + (v / 3.0) * 26, 120);
+              haptics.chop();
+            }
+            if (now - d.lastMarkAt > 360) {
+              d.lastMarkAt = now;
+              addChartMark(`vol ${v.toFixed(2)}`, "amber", 0.46);
+            }
+          }
+          return;
+        }
+        if (d.mode === "candle") {
+          // vertical pixel delta → price-units via the current Panel-1 range
+          const { yMin, yMax } = p1RangeRef.current;
+          const span = yMax - yMin || 1;
+          const pxPerPrice = L.p1H / span;
+          const dy = e.y - d.startY;
+          const tweak = d.startTweak + -dy / pxPerPrice;
+          setCandles((prev) => {
+            if (!prev[d.idx]) return prev;
+            const next = prev.slice();
+            next[d.idx] = { ...next[d.idx], tweak };
+            return next;
+          });
+          if (now - d.lastChimeAt > DRAG_NOTE_MS) {
+            d.lastChimeAt = now;
+            const c = candlesRef.current[d.idx];
+            if (c) playClickForCandle({ ...c, tweak });
+            haptics.chop();
+          }
+          if (now - d.lastMarkAt > 360) {
+            d.lastMarkAt = now;
+            addChartMark(
+              `${d.idx + 1} ${tweak >= 0 ? "up" : "dn"}`,
+              tweak >= 0 ? "rise" : "fall",
+              Math.min(0.88, 0.42 + Math.abs(tweak) * 0.12),
+            );
+          }
+          return;
+        }
+        if (d.mode === "d1") {
+          const targetV = p2ValueAt(e.y);
+          applyD1Drag(d.idx, targetV);
+          if (now - d.lastMarkAt > 360) {
+            d.lastMarkAt = now;
+            addChartMark(`d ${d.idx + 1} ${targetV >= 0 ? "↑" : "↓"}`, targetV >= 0 ? "rise" : "fall", 0.6);
+          }
+          return;
+        }
+        const targetRSI = p3ValueAt(e.y);
+        applyRSIDrag(d.idx, targetRSI);
+        if (now - d.lastMarkAt > 360) {
+          d.lastMarkAt = now;
+          addChartMark(
+            `rsi ${fmt(targetRSI)}`,
+            targetRSI >= 70 ? "rise" : targetRSI <= 30 ? "fall" : "pale",
+            0.6,
+          );
+        }
+      },
+      hold: (e) => {
+        lastGestureAtRef.current = performance.now();
+        if (e.fingers === 3) {
+          // three fingers hold the law: the scan slows to a quarter speed
+          if (e.phase === "enter") {
+            scanScaleRef.current.target = 0.25;
+            playNote(36, 260);
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+          if (e.phase === "release") scanScaleRef.current.target = 1;
+          return;
+        }
+        if (e.fingers !== 1) return;
+        if (e.phase === "enter") {
+          holdCeremony = false;
+          const hit = locate(e.x, e.y);
+          holdIdx = hit && hit.zone === "p1" ? hit.idx : -1;
+          return;
+        }
+        if (e.phase === "release") {
+          if (holdIdx >= 0 && e.tier >= 2) {
+            recordTape("sigil", 0.5, "charts/grown");
+            addChartMark(`grown ${holdIdx + 1}`, "rise", 0.6);
+          }
+          holdIdx = -1;
+          return;
+        }
+        // dwell tier — the held candle grows: its close accretes upward
+        // under the finger, tick by tick
+        if (e.tier >= 2 && holdIdx >= 0 && !holdCeremony) {
+          const { yMin, yMax } = p1RangeRef.current;
+          const span = yMax - yMin || 1;
+          const idx = holdIdx;
+          setCandles((prev) => {
+            if (!prev[idx]) return prev;
+            const next = prev.slice();
+            next[idx] = { ...next[idx], tweak: next[idx].tweak + span * 0.0035 };
+            return next;
+          });
+          const nowMs = performance.now();
+          if (nowMs - lastGrowNoteAt > 240) {
+            lastGrowNoteAt = nowMs;
+            const c = candlesRef.current[idx];
+            if (c) playClickForCandle(c);
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+        }
+        // ceremony tier — the room's one solemn act: the reading is pinned,
+        // kept exactly as the hand shaped it
+        if (e.tier >= 3 && !holdCeremony) {
+          holdCeremony = true;
+          onPinRef.current();
+          try { haptics.bloom(); } catch { /* noop */ }
+        }
+      },
+      twist: (e) => {
+        lastGestureAtRef.current = performance.now();
+        if (e.phase !== "move") return;
+        // twist rotates the lens: the same series as candlestick chart or
+        // as the raw walk beneath it
+        twistAcc += e.angle;
+        const step = Math.PI / 2;
+        while (Math.abs(twistAcc) >= step) {
+          twistAcc -= Math.sign(twistAcc) * step;
+          lensRef.current.target = lensRef.current.target > 0.5 ? 0 : 1;
+          playNote(lensRef.current.target > 0.5 ? 64 : 57, 140);
+          try { haptics.lens(); } catch { /* noop */ }
+          recordTape("sigil", 0.5, lensRef.current.target > 0.5 ? "charts/lens-walk" : "charts/lens-candles");
+          addChartMark(lensRef.current.target > 0.5 ? "the raw walk" : "ohlc", "pale", 0.6);
+        }
+      },
+      scrub: (e) => {
+        lastGestureAtRef.current = performance.now();
+        const nowMs = performance.now();
+        if (nowMs - lastScrubAt < 500) return;
+        lastScrubAt = nowMs;
+        // circling winds the field's storminess — with the turn volatility
+        // rises, against it the series calms
+        const dir = Math.sign(e.winding) || 1;
+        const v = Math.round(Math.min(3, Math.max(0.1, volRef.current + dir * 0.2)) / 0.05) * 0.05;
+        setVolatility(v);
+        playNote(46 + (v / 3.0) * 26, 130);
+        try { haptics.ripple(0.32); } catch { /* noop */ }
+        recordTape("object", 0.4, "charts/vol-wind");
+        addChartMark(`vol ${v.toFixed(2)}`, "amber", 0.5);
+      },
+      rhythm: (e) => {
+        // a steady tapped pulse: the scan line locks to your tempo
+        if (e.stability <= 0.7) return;
+        entrainRef.current.bpm = Math.max(40, Math.min(150, e.bpm));
+        entrainRef.current.until = performance.now() + 9000;
+        recordTape("sigil", 0.45, "charts/entrain");
+      },
+    }, { wheelZoom: false });
+
+    return detach;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [locate, playClickForCandle, playNote, recordTape]);
 
   // ── render ─────────────────────────────────────────────────────────────
 
@@ -1029,12 +1244,11 @@ export default function Charts() {
         <div className="oda-charts-gesture" aria-hidden="true">
           drag the plots · left edge tunes volatility
         </div>
-        {/* pointer overlay only on the canvas — keeps controls untouched */}
+        {/* pointer overlay only on the canvas — keeps controls untouched.
+            contact gestures live in the engine; hover is the quiet dialect */}
         <div
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          onPointerCancel={onPointerUp}
+          ref={overlayRef}
+          onPointerMove={onHoverMove}
           onPointerLeave={onPointerLeave}
           style={{
             position: "absolute",
@@ -1311,6 +1525,8 @@ function drawPanel1(
   candles: ReadonlyArray<Candle>,
   hoverIdx: number,
   rangeRef: React.MutableRefObject<{ yMin: number; yMax: number }>,
+  lensT = 0,
+  waveOff?: (i: number) => number,
 ) {
   const top = L.p1Top + 6;
   const bot = L.p1Top + L.p1H - 6;
@@ -1354,18 +1570,21 @@ function drawPanel1(
     ctx.stroke();
   }
 
-  // candles
+  // candles — the dressed representation fades as the lens turns to the walk
+  ctx.save();
+  ctx.globalAlpha = 1 - lensT * 0.82;
   for (let i = 0; i < candles.length; i++) {
     const c = candles[i];
     const e = effectiveCandle(c);
     const { high, low } = e;
     const up = e.close >= e.open;
     const isHovered = i === hoverIdx;
+    const off = waveOff ? waveOff(i) * h * 0.05 : 0;
     const cx = L.padL + i * L.slot + L.slot / 2;
-    const yOpen = yOf(e.open);
-    const yClose = yOf(e.close);
-    const yHigh = yOf(high);
-    const yLow = yOf(low);
+    const yOpen = yOf(e.open) + off;
+    const yClose = yOf(e.close) + off;
+    const yHigh = yOf(high) + off;
+    const yLow = yOf(low) + off;
     const cxPx = Math.floor(cx) + 0.5;
 
     // soft glow under the body — bigger when hovered or tweaked
@@ -1403,6 +1622,30 @@ function drawPanel1(
       ctx.fill();
     }
   }
+  ctx.restore();
+
+  // the raw walk — the same series stripped to the price path itself; the
+  // twist lens rotates between this and the candlestick dressing
+  if (lensT > 0.02) {
+    ctx.save();
+    ctx.globalAlpha = lensT;
+    ctx.strokeStyle = "rgba(255,190,124,0.92)";
+    ctx.lineWidth = 1.8;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.shadowColor = "rgba(255,180,110,0.5)";
+    ctx.shadowBlur = 8 * lensT;
+    ctx.beginPath();
+    for (let i = 0; i < candles.length; i++) {
+      const off = waveOff ? waveOff(i) * h * 0.05 : 0;
+      const x = L.padL + i * L.slot + L.slot / 2;
+      const y = yOf(effClose(candles[i])) + off;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
 }
 
 function drawPanel2(
@@ -1411,6 +1654,7 @@ function drawPanel2(
   d1: ReadonlyArray<number>,
   d1Ema: ReadonlyArray<number>,
   rangeRef: React.MutableRefObject<{ top: number; bot: number; yMin: number; yMax: number }>,
+  waveOff?: (i: number) => number,
 ) {
   const top = L.p2Top + 18;
   const bot = L.p2Top + L.p2H - 6;
@@ -1455,7 +1699,10 @@ function drawPanel2(
   // For the line itself we use segment-by-segment stroke with sign-coloured
   // segments.
   const pts: Array<{ x: number; y: number; v: number }> = [];
-  for (let i = 0; i < N; i++) pts.push({ x: xOf(i), y: yOf(d1[i]), v: d1[i] });
+  for (let i = 0; i < N; i++) {
+    const off = waveOff ? waveOff(i) * h * 0.06 : 0;
+    pts.push({ x: xOf(i), y: yOf(d1[i]) + off, v: d1[i] });
+  }
 
   // soft fill under the line, faint
   ctx.beginPath();
@@ -1500,12 +1747,13 @@ function drawPanel2(
   ctx.lineWidth = 1;
   ctx.beginPath();
   for (let i = 0; i < d1Ema.length; i++) {
+    const emaOff = (j: number) => (waveOff ? waveOff(j) * h * 0.06 : 0);
     const x = xOf(i);
-    const y = yOf(d1Ema[i]);
+    const y = yOf(d1Ema[i]) + emaOff(i);
     if (i === 0) ctx.moveTo(x, y);
     else {
       const px = xOf(i - 1);
-      const py = yOf(d1Ema[i - 1]);
+      const py = yOf(d1Ema[i - 1]) + emaOff(i - 1);
       const cp1x = (px + x) / 2;
       ctx.bezierCurveTo(cp1x, py, cp1x, y, x, y);
     }
@@ -1518,6 +1766,7 @@ function drawPanel3(
   L: Layout,
   rsi: ReadonlyArray<number>,
   rangeRef: React.MutableRefObject<{ top: number; bot: number }>,
+  waveOff?: (i: number) => number,
 ) {
   const top = L.p3Top + 18;
   const bot = L.p3Top + L.p3H - 6;
@@ -1571,15 +1820,16 @@ function drawPanel3(
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   // colour each segment by which zone its midpoint lies in
+  const rsiOff = (j: number) => (waveOff ? waveOff(j) * h * 0.06 : 0);
   for (let i = 0; i < rsi.length - 1; i++) {
     const a = rsi[i];
     const b = rsi[i + 1];
     const mid = (a + b) / 2;
     ctx.strokeStyle = zoneColor(mid);
     ctx.beginPath();
-    ctx.moveTo(xOf(i), yOf(a));
+    ctx.moveTo(xOf(i), yOf(a) + rsiOff(i));
     const cp1x = (xOf(i) + xOf(i + 1)) / 2;
-    ctx.bezierCurveTo(cp1x, yOf(a), cp1x, yOf(b), xOf(i + 1), yOf(b));
+    ctx.bezierCurveTo(cp1x, yOf(a) + rsiOff(i), cp1x, yOf(b) + rsiOff(i + 1), xOf(i + 1), yOf(b) + rsiOff(i + 1));
     ctx.stroke();
   }
 
@@ -1587,7 +1837,7 @@ function drawPanel3(
   const last = rsi[rsi.length - 1];
   ctx.fillStyle = zoneColor(last);
   ctx.beginPath();
-  ctx.arc(xOf(rsi.length - 1), yOf(last), 2.6, 0, Math.PI * 2);
+  ctx.arc(xOf(rsi.length - 1), yOf(last) + rsiOff(rsi.length - 1), 2.6, 0, Math.PI * 2);
   ctx.fill();
 }
 

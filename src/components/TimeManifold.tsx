@@ -6,10 +6,10 @@ import {
   useRef,
   useState,
   type CSSProperties,
-  type PointerEvent as ReactPointerEvent,
 } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
+import { attachGestures } from "@/lib/gesture";
 import { useField } from "@/store/field";
 import MobileInstrumentPanel, { MOBILE_QUERY } from "@/components/MobileInstrumentPanel";
 
@@ -73,14 +73,13 @@ export default function TimeManifold() {
   const lastSyncRef = useRef(0);
   const lastToneRef = useRef(0);
   const lastControlRef = useRef(0);
-  const pointerRef = useRef({
-    active: false,
-    id: -1,
-    startX: 0,
-    startY: 0,
-    moved: false,
-    mobile: false,
-  });
+  // ── gesture-grammar state (law layer) ──
+  const flowRef = useRef({ cur: 0, target: 0 });      // 3-finger drag: the clock's flow drifts
+  const timeScaleRef = useRef({ cur: 1, target: 1 }); // 3-finger hold: time dilation ×0.25
+  const entrainRef = useRef({ bpm: 0, until: 0, lastBeat: -1 });
+  const pulseRef = useRef(0);        // traveller glow on entrained beats
+  const ceremonyAtRef = useRef(-1e9); // ring flash when the well is sealed
+  const lastGestureAtRef = useRef(0);
 
   const recordTape = useField((s) => s.recordTape);
 
@@ -142,10 +141,32 @@ export default function TimeManifold() {
       const massN = massRef.current / 100;
       const gamma = gammaOf(vel);
 
+      // ── the law layer (gesture grammar): three fingers held dilate the
+      // room's clock; three fingers dragged push the flow of time itself;
+      // a steady tapped pulse entrains the clocks to the hand's tempo ──
+      const ts = timeScaleRef.current;
+      ts.cur += (ts.target - ts.cur) * Math.min(1, delta * 0.005);
+      const flow = flowRef.current;
+      flow.cur += (flow.target - flow.cur) * Math.min(1, delta * 0.004);
+      flow.target *= Math.exp(-delta / 2200);
+      const entrain = entrainRef.current;
+      const entrained = now < entrain.until && entrain.bpm > 0;
+      const entrainMul = entrained ? clamp(entrain.bpm / 60, 0.6, 2.4) : 1;
+      const rate = ts.cur * (1 + flow.cur) * entrainMul;
+      if (entrained) {
+        const beatIdx = Math.floor(now / (60000 / entrain.bpm));
+        if (beatIdx !== entrain.lastBeat) {
+          entrain.lastBeat = beatIdx;
+          pulseRef.current = 1;
+          try { getFieldAudio().playNote(62 + (beatIdx % 2) * 5, 80); } catch { /* noop */ }
+        }
+      }
+      pulseRef.current *= Math.exp(-delta / 320);
+
       // integrate the two clocks — proper time dilates by 1/γ
       if (runningRef.current) {
-        coordRef.current += delta;
-        properRef.current += delta / gamma;
+        coordRef.current += delta * rate;
+        properRef.current += (delta * rate) / gamma;
         const ps = Math.floor(properRef.current / 1000);
         if (ps > lastTickRef.current) {
           lastTickRef.current = ps;
@@ -331,6 +352,36 @@ export default function TimeManifold() {
       ctx.beginPath();
       ctx.arc(tx, ty, 4.4, 0, TAU);
       ctx.fill();
+      // entrained beats pulse the traveller — the clock keeps your tempo
+      if (pulseRef.current > 0.03) {
+        ctx.strokeStyle = colorAlpha(GEO, 0.5 * pulseRef.current);
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.arc(tx, ty, 10 + (1 - pulseRef.current) * 26, 0, TAU);
+        ctx.stroke();
+      }
+
+      // ceremony flash — the well sealed at full mass
+      const sinceCeremony = now - ceremonyAtRef.current;
+      if (sinceCeremony > 0 && sinceCeremony < 1100) {
+        const p = sinceCeremony / 1100;
+        ctx.strokeStyle = colorAlpha(WELL, 0.6 * (1 - p));
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(cx, cy, S * (0.06 + p * 0.34), 0, TAU);
+        ctx.stroke();
+      }
+
+      // glimmer (grammar §6): after ~20s of quiet, a faint ring breathes at
+      // the origin where a finger would land — physical, never text.
+      if (now - lastGestureAtRef.current > 20000) {
+        const pulse = reduce ? 0.5 : 0.5 + Math.sin(now / 480) * 0.5;
+        ctx.strokeStyle = colorAlpha(GEO, 0.05 + pulse * 0.09);
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(Ox, Oy, 18 + pulse * 9, 0, TAU);
+        ctx.stroke();
+      }
 
       // ── velocity vector at the origin ──
       const [vTipX, vTipY] = baseAt(0.16);
@@ -453,6 +504,142 @@ export default function TimeManifold() {
     recordTape("sigil", 0.34, "time/reset");
   };
 
+  const toggleRunningRef = useRef<() => void>(() => {});
+
+  // ── gestures (the shared grammar — src/lib/gesture) ────────────────────
+  // One finger touches the material (place velocity and mass, throw the
+  // traveller, wind the clock); three fingers touch the law (drag drifts
+  // the flow of time, hold dilates it ×0.25 — time slowing under your
+  // fingers, in the room about exactly that). Pinch/pan2 stay unbound.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const audio = getFieldAudio();
+    let lastFlowCueAt = 0;
+    let lastScrubAt = 0;
+    let lastGrowTickAt = 0;
+    let holdCeremony = false;
+
+    const detach = attachGestures(canvas, {
+      tap: (e) => {
+        lastGestureAtRef.current = performance.now();
+        if (e.fingers !== 1) return; // the manifold absorbs frame/law taps
+        const mobile = window.matchMedia(MOBILE_QUERY).matches;
+        if (mobile) {
+          // a deliberate tap is the primary play action on phones
+          toggleRunningRef.current();
+          return;
+        }
+        // desktop: click places velocity and mass; tap intensity is the
+        // strike — note weight and haptic ride the same 0..1 from core
+        tuneFromPointer(e.x, e.y);
+        try { haptics.ripple(0.2 + e.intensity * 0.3); } catch { /* noop */ }
+      },
+      drag: (e) => {
+        lastGestureAtRef.current = performance.now();
+        if (e.fingers === 3) {
+          if (e.phase === "end") return;
+          // three fingers drag the weather: the flow of the room's clock
+          // drifts — pushed right it races, pushed left it wades
+          flowRef.current.target = clamp(flowRef.current.target + e.vx * 0.35, -0.85, 2.4);
+          const nowMs = performance.now();
+          if (nowMs - lastFlowCueAt > 700 && Math.abs(e.vx) > 0.25) {
+            lastFlowCueAt = nowMs;
+            try { audio.playNote(40, 240); } catch { /* noop */ }
+            try { haptics.chop(); } catch { /* noop */ }
+            recordTape("region", 0.45, "time/flow");
+          }
+          return;
+        }
+        if (e.fingers !== 1 || e.phase === "end") return;
+        tuneFromPointer(e.x, e.y);
+      },
+      flick: (e) => {
+        lastGestureAtRef.current = performance.now();
+        if (e.fingers !== 1) return;
+        // a flick throws the traveller — velocity from the hand's speed
+        const vx = Math.cos(e.angle) * e.speed;
+        const nextVel = Number((clamp(Math.abs(vx) / 2.4, 0.08, 1) * VMAX).toFixed(3));
+        dirRef.current = vx < 0 ? -1 : 1;
+        velRef.current = nextVel;
+        setVelocity(nextVel);
+        try { audio.playNote(48 + Math.round(nextVel * 26), 160); } catch { /* noop */ }
+        try { haptics.chop(); } catch { /* noop */ }
+        recordTape("ripple", 0.3 + nextVel * 0.5, "time/throw");
+      },
+      hold: (e) => {
+        lastGestureAtRef.current = performance.now();
+        if (e.fingers === 3) {
+          // three fingers hold the law: time dilates to a quarter speed —
+          // both clocks slow while the hand stays
+          if (e.phase === "enter") {
+            timeScaleRef.current.target = 0.25;
+            try { audio.playNote(36, 260); } catch { /* noop */ }
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+          if (e.phase === "release") timeScaleRef.current.target = 1;
+          return;
+        }
+        if (e.fingers !== 1) return;
+        if (e.phase === "enter") {
+          holdCeremony = false;
+          return;
+        }
+        if (e.phase === "release") return;
+        // dwell tier — gravity accretes under the held finger: mass grows
+        if (e.tier >= 2 && !holdCeremony) {
+          const nowMs = performance.now();
+          if (nowMs - lastGrowTickAt > 160) {
+            lastGrowTickAt = nowMs;
+            const next = Math.min(100, massRef.current + 2);
+            massRef.current = next;
+            setMass(next);
+            try { audio.playNote(46 + Math.round((next / 100) * 18), 70); } catch { /* noop */ }
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+        }
+        // ceremony tier — the room's one solemn act: the well is sealed at
+        // full mass, the manifold rings once
+        if (e.tier >= 3 && !holdCeremony) {
+          holdCeremony = true;
+          massRef.current = 100;
+          setMass(100);
+          ceremonyAtRef.current = performance.now();
+          try { audio.bell(); } catch { /* noop */ }
+          try { haptics.bloom(); } catch { /* noop */ }
+          recordTape("sigil", 1, "time/sealed-well");
+        }
+      },
+      scrub: (e) => {
+        lastGestureAtRef.current = performance.now();
+        const nowMs = performance.now();
+        if (nowMs - lastScrubAt < 500) return;
+        lastScrubAt = nowMs;
+        // circling winds the clocks — with the turn they run ahead,
+        // against it they are drawn back
+        const dir = Math.sign(e.winding) || 1;
+        const gamma = gammaOf(velRef.current);
+        coordRef.current = Math.max(0, coordRef.current + dir * 1500);
+        properRef.current = Math.max(0, properRef.current + (dir * 1500) / gamma);
+        lastTickRef.current = Math.floor(properRef.current / 1000);
+        try { audio.playNote(dir > 0 ? 69 : 57, 80); } catch { /* noop */ }
+        try { haptics.tap(); } catch { /* noop */ }
+        recordTape("object", 0.4, "time/wind");
+      },
+      rhythm: (e) => {
+        // a steady tapped pulse: the clocks fall in with the hand
+        if (e.stability <= 0.7) return;
+        entrainRef.current.bpm = Math.max(40, Math.min(150, e.bpm));
+        entrainRef.current.until = performance.now() + 9000;
+        recordTape("sigil", 0.45, "time/entrain");
+      },
+    }, { wheelZoom: false });
+
+    return detach;
+  }, [recordTape, tuneFromPointer]);
+
+  toggleRunningRef.current = toggleRunning;
+
   return (
     <div
       ref={rootRef}
@@ -465,47 +652,7 @@ export default function TimeManifold() {
         ref={canvasRef}
         className="time-canvas"
         role="img"
-        aria-label="A spacetime manifold. On a phone, tap to start or pause. Drag sideways to set velocity and up or down to set mass."
-        onPointerDown={(event: ReactPointerEvent<HTMLCanvasElement>) => {
-          const mobile = window.matchMedia(MOBILE_QUERY).matches;
-          pointerRef.current = {
-            active: true,
-            id: event.pointerId,
-            startX: event.clientX,
-            startY: event.clientY,
-            moved: false,
-            mobile,
-          };
-          // Preserve the desktop click-to-place behavior. On phones we wait
-          // for movement so a deliberate tap can be the primary play action.
-          if (!mobile) tuneFromPointer(event.clientX, event.clientY);
-          try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* noop */ }
-        }}
-        onPointerMove={(event: ReactPointerEvent<HTMLCanvasElement>) => {
-          const p = pointerRef.current;
-          if (!p.active || p.id !== event.pointerId) return;
-          if (!p.moved && Math.hypot(event.clientX - p.startX, event.clientY - p.startY) > 7) {
-            p.moved = true;
-          }
-          if (p.mobile && !p.moved) return;
-          tuneFromPointer(event.clientX, event.clientY);
-        }}
-        onPointerUp={(event: ReactPointerEvent<HTMLCanvasElement>) => {
-          const p = pointerRef.current;
-          if (p.id !== event.pointerId) return;
-          const shouldToggle = p.mobile && !p.moved;
-          p.active = false;
-          p.id = -1;
-          try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* noop */ }
-          if (shouldToggle) toggleRunning();
-        }}
-        onPointerCancel={(event: ReactPointerEvent<HTMLCanvasElement>) => {
-          const p = pointerRef.current;
-          if (p.id !== event.pointerId) return;
-          p.active = false;
-          p.id = -1;
-          try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* noop */ }
-        }}
+        aria-label="a spacetime manifold. on a phone, tap to start or pause. drag sideways to set velocity and up or down to set mass; hold to grow the well."
       />
 
       <div className="time-title" aria-hidden="true">
