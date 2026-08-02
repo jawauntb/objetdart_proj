@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
+import { attachGestures } from "@/lib/gesture";
 import { useField } from "@/store/field";
 import WaterText from "@/components/WaterText";
 
@@ -284,13 +285,29 @@ export default function Fire() {
 
     let nextId = 1;
     let emberHint = 0;
-    let activePointerId: number | null = null;
     let activeStroke: HeatStroke | null = null;
     let windTarget = 0;
     let wind = 0;
     let ignitionAmp = 0.2;
-    let ignitionT0 = performance.now();
     let lastMarkSync = 0;
+
+    // ── the room's clock + law-layer state (gesture grammar) ──────
+    // Three fingers held dilate time; three fingers dragged push the
+    // wind; a steady tapped pulse entrains the bed; a circling finger
+    // whirls the embers. Thresholds live in gesture/core alone.
+    let timeScale = 1;
+    let timeScaleTarget = 1;
+    let simT = 0;                    // warped seconds — the shader clock
+    let simNow = performance.now();  // warped ms — stroke/well/ember ages
+    let ignitionT0 = simNow;
+    let gutter = 0;                  // 3-finger gust momentarily dims the flame
+    let lastGutterAt = 0;
+    let entrainBpm = 0;
+    let entrainUntil = 0;
+    let lastEntrainBeat = -1;
+    let lastScrubAt = 0;
+    let lastGestureAt = performance.now();
+    const holdState = { ceremony: false };
 
     const spawnEmber = (x: number, y: number, vx: number, vy: number, strength = 1) => {
       for (let tries = 0; tries < emberPool.length; tries++) {
@@ -331,7 +348,7 @@ export default function Fire() {
         id: ++nextId,
         x,
         y,
-        t0: performance.now(),
+        t0: simNow,
         strength,
         radius: 120 + strength * 120,
       });
@@ -342,7 +359,7 @@ export default function Fire() {
       activeStroke = {
         id: ++nextId,
         points: [{ x, y, t: performance.now() }],
-        t0: performance.now(),
+        t0: simNow,
         releasedAt: null,
         strength: 0.08,
         hue: Math.random(),
@@ -369,7 +386,7 @@ export default function Fire() {
 
     const releaseStroke = (record = true) => {
       if (!activeStroke) return;
-      activeStroke.releasedAt = performance.now();
+      activeStroke.releasedAt = simNow;
       if (record && activeStroke.points.length > 5) {
         haptics.ripple(0.24 + activeStroke.strength * 0.30);
         useField.getState().recordTape("region", 0.32 + activeStroke.strength * 0.42, "fire/convection");
@@ -378,99 +395,216 @@ export default function Fire() {
       activeStroke = null;
     };
 
-    const updatePointer = (e: PointerEvent) => {
+    const toLocal = (clientX: number, clientY: number) => {
       const rect = fxCanvas.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
       const w = Math.max(1, rect.width);
       const h = Math.max(1, rect.height);
-      pointerRef.current.x = clamp(x / w, 0, 1);
-      pointerRef.current.y = clamp(y / h, 0, 1);
+      return { x: clientX - rect.left, y: clientY - rect.top, w, h };
+    };
+
+    const trackPointer = (clientX: number, clientY: number) => {
+      const p = toLocal(clientX, clientY);
+      pointerRef.current.x = clamp(p.x / p.w, 0, 1);
+      pointerRef.current.y = clamp(p.y / p.h, 0, 1);
       pointerRef.current.over = true;
-      return { x, y, w, h };
+      return p;
     };
 
-    const clearGesture = (pointerId?: number, recordStroke = true) => {
-      if (pointerId !== undefined) {
-        try { fxCanvas.releasePointerCapture(pointerId); } catch { /* already released */ }
-      }
-      activePointerId = null;
-      pointerRef.current.pressed = false;
-      releaseStroke(recordStroke);
-    };
-
-    const onPointerDown = (e: PointerEvent) => {
-      if (activePointerId !== null) return;
-      activePointerId = e.pointerId;
-      try { fxCanvas.setPointerCapture(e.pointerId); } catch { /* noop */ }
-      const p = updatePointer(e);
-      pointerRef.current.pressed = true;
-      pointerRef.current.pressStart = performance.now();
-      beginStroke(p.x, p.y);
-      haptics.tap();
-      markFire("pressure", "#f5b15a", 0.46);
-    };
-
-    const onPointerMove = (e: PointerEvent) => {
-      if (activePointerId !== null && e.pointerId !== activePointerId) return;
-      const p = updatePointer(e);
-      if (pointerRef.current.pressed) extendStroke(p.x, p.y);
-    };
-
-    const onPointerUp = (e: PointerEvent) => {
-      if (activePointerId !== null && e.pointerId !== activePointerId) return;
-      const p = updatePointer(e);
-      const held = performance.now() - pointerRef.current.pressStart;
-      const strokeStrength = activeStroke?.strength ?? 0;
-      if (pointerRef.current.pressed && held > 720) {
-        const charge = clamp(held / 1800, 0, 1);
-        addWell(p.x, p.y, 0.45 + charge * 0.55);
-        burst(p.x, p.y, 16 + Math.round(charge * 24), 0.9 + charge * 0.75);
-        ignitionAmp = Math.max(ignitionAmp, 0.55 + charge * 0.35);
-        ignitionT0 = performance.now();
-        audio.thud();
-        window.setTimeout(() => {
-          try { audio.bell(); } catch { /* noop */ }
-        }, 180);
-        haptics.storm();
-        markFire("white heat", "#dcecff", 0.82 + charge * 0.16);
-        useField.getState().recordTape("sigil", 0.78 + charge * 0.16, "fire/white-heat");
-      } else if (strokeStrength > 0.25) {
-        ignitionAmp = Math.max(ignitionAmp, 0.34 + strokeStrength * 0.26);
-        ignitionT0 = performance.now();
-        try { audio.spark(); } catch { /* noop */ }
-      } else {
+    // ── gestures (the shared grammar — src/lib/gesture) ─────────────
+    // One finger touches the fire: tap seeds an ember, drag bends
+    // convection, dwell compresses white heat, ceremony blooms it fully.
+    // Three fingers touch the law: drag is crosswind, hold slows time.
+    // Pinch and pan2 stay unbound — the frame belongs to the manifold.
+    const detachGestures = attachGestures(fxCanvas, {
+      tap: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers !== 1) return; // the bed absorbs frame/law taps
+        const p = trackPointer(e.x, e.y);
+        // tap intensity is the strike: ember count, ignition and haptic
+        // all ride the same 0..1 from core.
         const yBias = p.h * (0.70 + Math.random() * 0.22);
-        burst(p.x, p.y > p.h * 0.84 ? p.y : Math.max(p.y, yBias), 11, 0.72);
-        ignitionAmp = Math.max(ignitionAmp, 0.36);
-        ignitionT0 = performance.now();
+        burst(p.x, p.y > p.h * 0.84 ? p.y : Math.max(p.y, yBias), 8 + Math.round(e.intensity * 7), 0.55 + e.intensity * 0.4);
+        ignitionAmp = Math.max(ignitionAmp, 0.28 + e.intensity * 0.18);
+        ignitionT0 = simNow;
         try { audio.spark(); } catch { /* noop */ }
-        haptics.ripple(0.38);
-        markFire("ember", "#f08d3f", 0.54);
-        useField.getState().recordTape("object", 0.42, "fire/ember");
-      }
-      clearGesture(e.pointerId);
-    };
+        haptics.ripple(0.2 + e.intensity * 0.36);
+        markFire("ember", "#f08d3f", 0.4 + e.intensity * 0.3);
+        useField.getState().recordTape("object", 0.3 + e.intensity * 0.25, "fire/ember");
+      },
+      drag: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          if (e.phase === "end") return;
+          // three fingers drag the weather: the flame leans hard into the
+          // crosswind, and a strong gust makes it gutter before it recovers
+          windTarget = clamp(windTarget + e.vx * 0.2, -1, 1);
+          const nowMs = performance.now();
+          if (Math.abs(e.vx) > 0.35 && nowMs - lastGutterAt > 2600) {
+            lastGutterAt = nowMs;
+            gutter = 1;
+            const p = toLocal(e.x, e.y);
+            for (let i = 0; i < 10; i++) {
+              spawnEmber(
+                Math.random() * p.w,
+                p.h * (0.72 + Math.random() * 0.2),
+                Math.sign(e.vx) * (120 + Math.random() * 160),
+                -(10 + Math.random() * 40),
+                0.7,
+              );
+            }
+            try { audio.playNote(38, 260); } catch { /* noop */ }
+            try { haptics.chop(); } catch { /* noop */ }
+            markFire("crosswind", "#c8927a", 0.5 + Math.min(0.4, Math.abs(e.vx) * 0.3));
+          }
+          return;
+        }
+        if (e.fingers !== 1) return;
+        const p = trackPointer(e.x, e.y);
+        if (e.phase === "start") {
+          pointerRef.current.pressed = true;
+          pointerRef.current.pressStart = performance.now();
+          beginStroke(p.x, p.y);
+          haptics.tap();
+          markFire("pressure", "#f5b15a", 0.46);
+          return;
+        }
+        if (e.phase === "end") {
+          pointerRef.current.pressed = false;
+          const strokeStrength = activeStroke?.strength ?? 0;
+          if (strokeStrength > 0.25) {
+            ignitionAmp = Math.max(ignitionAmp, 0.34 + strokeStrength * 0.26);
+            ignitionT0 = simNow;
+            try { audio.spark(); } catch { /* noop */ }
+          }
+          releaseStroke(true);
+          return;
+        }
+        extendStroke(p.x, p.y);
+      },
+      flick: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers !== 1) return;
+        // a flick throws sparks — a comet of embers hurled the flick's way
+        const p = trackPointer(e.x, e.y);
+        const sp = Math.min(420, 160 + e.speed * 260);
+        for (let i = 0; i < 14; i++) {
+          const jitter = (Math.random() - 0.5) * 0.5;
+          spawnEmber(
+            p.x, p.y,
+            Math.cos(e.angle + jitter) * sp * (0.5 + Math.random() * 0.7),
+            Math.sin(e.angle + jitter) * sp * (0.5 + Math.random() * 0.7) - 40,
+            0.9,
+          );
+        }
+        pointerRef.current.pressed = false;
+        releaseStroke(true);
+        try { audio.spark(); } catch { /* noop */ }
+        try { haptics.chop(); } catch { /* noop */ }
+        markFire("thrown sparks", "#f5b15a", 0.6);
+        useField.getState().recordTape("ripple", 0.55, "fire/throw");
+      },
+      hold: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          // three fingers hold the law: the fire slows to a quarter speed
+          if (e.phase === "enter") {
+            timeScaleTarget = 0.25;
+            try { audio.playNote(36, 260); } catch { /* noop */ }
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+          if (e.phase === "release") timeScaleTarget = 1;
+          return;
+        }
+        if (e.fingers !== 1) return;
+        const p = trackPointer(e.x, e.y);
+        if (e.phase === "enter") {
+          holdState.ceremony = false;
+          pointerRef.current.pressed = true;
+          pointerRef.current.pressStart = performance.now() - e.elapsed;
+          haptics.tap();
+          markFire("pressure", "#f5b15a", 0.46);
+          return;
+        }
+        if (e.phase === "release") {
+          pointerRef.current.pressed = false;
+          // dwell tier — the compressed field breaks into white heat
+          // (was a private 720ms constant; the threshold now lives in core)
+          if (e.tier >= 2 && !holdState.ceremony) {
+            const charge = clamp(e.elapsed / 1800, 0, 1);
+            addWell(p.x, p.y, 0.45 + charge * 0.55);
+            burst(p.x, p.y, 16 + Math.round(charge * 24), 0.9 + charge * 0.75);
+            ignitionAmp = Math.max(ignitionAmp, 0.55 + charge * 0.35);
+            ignitionT0 = simNow;
+            audio.thud();
+            window.setTimeout(() => {
+              try { audio.bell(); } catch { /* noop */ }
+            }, 180);
+            haptics.storm();
+            markFire("white heat", "#dcecff", 0.82 + charge * 0.16);
+            useField.getState().recordTape("sigil", 0.78 + charge * 0.16, "fire/white-heat");
+          }
+          return;
+        }
+        // ceremony tier — the room's one solemn act: the pyre blooms fully,
+        // white through the whole bed, and is kept.
+        if (e.tier >= 3 && !holdState.ceremony) {
+          holdState.ceremony = true;
+          addWell(p.x, p.y, 1);
+          burst(p.x, p.y, 44, 1.5);
+          ignitionAmp = 1;
+          ignitionT0 = simNow;
+          try { audio.bell(); } catch { /* noop */ }
+          try { haptics.bloom(); } catch { /* noop */ }
+          markFire("sealed in white", "#dcecff", 1);
+          useField.getState().recordTape("sigil", 1, "fire/ceremony");
+        }
+      },
+      scrub: (e) => {
+        lastGestureAt = performance.now();
+        const nowMs = performance.now();
+        if (nowMs - lastScrubAt < 700) return;
+        lastScrubAt = nowMs;
+        // circling stirs a fire whirl — embers caught in a turning column
+        const p = toLocal(e.cx, e.cy);
+        const sgn = Math.sign(e.winding) || 1;
+        for (let i = 0; i < 22; i++) {
+          const a = (i / 22) * Math.PI * 2;
+          const r0 = 12 + Math.random() * 34;
+          spawnEmber(
+            p.x + Math.cos(a) * r0,
+            p.y + Math.sin(a) * r0 * 0.6,
+            -Math.sin(a) * sgn * (90 + Math.random() * 90),
+            Math.cos(a) * sgn * 40 - (60 + Math.random() * 80),
+            0.85,
+          );
+        }
+        ignitionAmp = Math.max(ignitionAmp, 0.3);
+        ignitionT0 = simNow;
+        try { audio.playNote(55, 150); } catch { /* noop */ }
+        try { haptics.ripple(0.35); } catch { /* noop */ }
+        markFire("whirl", "#f0a44f", 0.6);
+        useField.getState().recordTape("ripple", 0.5, "fire/whirl");
+      },
+      rhythm: (e) => {
+        // a steady tapped pulse: the bed's breath falls in with the hand
+        if (e.stability <= 0.7) return;
+        entrainBpm = Math.max(40, Math.min(120, e.bpm));
+        entrainUntil = performance.now() + 9000;
+      },
+    }, { wheelZoom: false });
 
-    const onPointerCancel = (e: PointerEvent) => {
-      if (activePointerId !== null && e.pointerId !== activePointerId) return;
+    // Desktop hover is the grammar's quiet dialect (hover ≈ light touch):
+    // heat shimmer still gathers under a passing hand. All contact
+    // gestures live in the engine above.
+    const onHover = (e: PointerEvent) => {
+      trackPointer(e.clientX, e.clientY);
+    };
+    const onHoverLeave = () => {
       pointerRef.current.over = false;
-      clearGesture(e.pointerId, false);
     };
+    fxCanvas.addEventListener("pointermove", onHover);
+    fxCanvas.addEventListener("pointerleave", onHoverLeave);
 
-    const onPointerLeave = () => {
-      if (activePointerId !== null) return;
-      pointerRef.current.over = false;
-      clearGesture();
-    };
-
-    fxCanvas.addEventListener("pointerdown", onPointerDown);
-    fxCanvas.addEventListener("pointermove", onPointerMove);
-    window.addEventListener("pointerup", onPointerUp);
-    window.addEventListener("pointercancel", onPointerCancel);
-    fxCanvas.addEventListener("pointerleave", onPointerLeave);
-
-    const t0 = performance.now();
     let raf = 0;
     let lastFrame = performance.now();
     let emberAcc = 0;
@@ -541,21 +675,40 @@ export default function Fire() {
     const draw = (now: number) => {
       const w = fxCanvas.clientWidth;
       const h = fxCanvas.clientHeight;
-      const elapsed = reduce ? 0 : (now - t0) / 1000;
       const dt = Math.min(0.05, (now - lastFrame) / 1000);
-      const step = reduce ? 0 : dt;
       lastFrame = now;
+      // three-finger time dilation: the room's clock eases to ~1/4 speed
+      timeScale += (timeScaleTarget - timeScale) * Math.min(1, dt * 5);
+      simT += (reduce ? 0 : dt) * timeScale;
+      simNow += dt * 1000 * timeScale;
+      const elapsed = reduce ? 0 : simT;
+      const step = reduce ? 0 : dt * timeScale;
 
       if (!pointerRef.current.pressed) windTarget *= Math.pow(0.001, dt / 2.4);
       wind += (windTarget - wind) * Math.min(1, dt * 4.5);
+      gutter *= Math.exp(-dt * 2.4);
 
       const held = pointerRef.current.pressed ? (now - pointerRef.current.pressStart) / 1000 : 0;
       const pressTarget = pointerRef.current.pressed ? clamp(held / 1.35, 0, 1) : 0;
       pressSmoothed += (pressTarget - pressSmoothed) * 0.12;
 
-      const ignitionAge = (now - ignitionT0) / 1000;
-      const ignition = ignitionAmp * Math.exp(-ignitionAge * 2.2);
-      if (ignition < 0.01 && ignitionAmp > 0.01) ignitionAmp = 0;
+      // rhythm entrainment: while a steady tapped pulse holds, the bed
+      // kicks a small ignition breath on every beat, with its own note —
+      // sight and sound land in the same frame.
+      if (performance.now() < entrainUntil && entrainBpm > 0) {
+        const beatLen = 60 / entrainBpm;
+        const beatIdx = Math.floor(simT / beatLen);
+        if (beatIdx !== lastEntrainBeat) {
+          lastEntrainBeat = beatIdx;
+          ignitionAmp = Math.max(ignitionAmp, 0.32);
+          ignitionT0 = simNow;
+          try { audio.playNote(50 + (beatIdx % 2) * 7, 120); } catch { /* noop */ }
+        }
+      }
+
+      const ignitionAge = (simNow - ignitionT0) / 1000;
+      const ignition = Math.max(0, ignitionAmp * Math.exp(-ignitionAge * 2.2) - gutter * 0.4);
+      if (ignition < 0.01 && ignitionAmp > 0.01 && gutter < 0.02) ignitionAmp = 0;
 
       if (now - lastMarkSync > 140) {
         lastMarkSync = now;
@@ -589,14 +742,14 @@ export default function Fire() {
 
       for (let i = wells.length - 1; i >= 0; i--) {
         const well = wells[i];
-        if ((now - well.t0) / 1000 > 5.6) wells.splice(i, 1);
-        else drawWell(well, now);
+        if ((simNow - well.t0) / 1000 > 5.6) wells.splice(i, 1);
+        else drawWell(well, simNow);
       }
 
       for (let i = strokes.length - 1; i >= 0; i--) {
         const stroke = strokes[i];
-        if (stroke.releasedAt && (now - stroke.releasedAt) / 1000 > 2.8) strokes.splice(i, 1);
-        else drawStroke(stroke, now);
+        if (stroke.releasedAt && (simNow - stroke.releasedAt) / 1000 > 2.8) strokes.splice(i, 1);
+        else drawStroke(stroke, simNow);
       }
 
       if (!reduce) {
@@ -651,6 +804,24 @@ export default function Fire() {
       }
       fx.restore();
 
+      // glimmer (grammar §6): after ~20s of quiet, a faint turning ring of
+      // heat floats above the bed where a circling finger would whirl it —
+      // a physical hint, never text.
+      if (performance.now() - lastGestureAt > 20000) {
+        const slot = Math.floor(now / 9000);
+        const gseed = (n: number) => { const v = Math.sin((slot + n) * 127.1) * 43758.5453; return v - Math.floor(v); };
+        const gx = (0.22 + gseed(0) * 0.56) * w;
+        const gy = h * (0.55 + gseed(7) * 0.25);
+        const pulse = reduce ? 0.5 : 0.5 + Math.sin(now / 480) * 0.5;
+        fx.save();
+        fx.strokeStyle = `rgba(245, 177, 90, ${(0.05 + pulse * 0.08).toFixed(3)})`;
+        fx.lineWidth = 1;
+        fx.beginPath();
+        fx.ellipse(gx, gy, 22 + pulse * 10, (22 + pulse * 10) * 0.4, 0, 0, Math.PI * 2);
+        fx.stroke();
+        fx.restore();
+      }
+
       raf = requestAnimationFrame(draw);
     };
 
@@ -659,11 +830,9 @@ export default function Fire() {
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
-      fxCanvas.removeEventListener("pointerdown", onPointerDown);
-      fxCanvas.removeEventListener("pointermove", onPointerMove);
-      window.removeEventListener("pointerup", onPointerUp);
-      window.removeEventListener("pointercancel", onPointerCancel);
-      fxCanvas.removeEventListener("pointerleave", onPointerLeave);
+      detachGestures();
+      fxCanvas.removeEventListener("pointermove", onHover);
+      fxCanvas.removeEventListener("pointerleave", onHoverLeave);
     };
   }, [markFire]);
 

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
+import { attachGestures } from "@/lib/gesture";
 import { useField } from "@/store/field";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
 
@@ -366,6 +367,24 @@ export default function Storm() {
     let lastCrashAt = 0;
     let nextCrashGap = 2200 + Math.random() * 1800;
 
+    // ── the room's clock + law-layer state (gesture grammar) ──────
+    // Three fingers held dilate time; three fingers dragged shear the
+    // rain and wind; a circling finger spins up a gyre; a steady tapped
+    // pulse entrains the sea's surge. Thresholds live in gesture/core.
+    let timeScale = 1;
+    let timeScaleTarget = 1;
+    let simT: number | null = null;  // warped seconds — waves, spirals
+    let simNow = performance.now();  // warped ms — streak/crest/bolt ages
+    let lastFrameAt: number | null = null;
+    let gyre = 0;                    // scrub-born whirl, decays to calm
+    let lastScrubAt = 0;
+    let lastWindLawAt = 0;
+    let entrainBpm = 0;
+    let entrainUntil = 0;
+    let lastEntrainBeat = -1;
+    let lastGestureAt = performance.now();
+    const holdState = { ceremony: false };
+
     const manualBump = (x: number, now: number): number => {
       let d = 0;
       const list = manualCrestsRef.current;
@@ -468,7 +487,7 @@ export default function Storm() {
     const dischargeAt = (sxFrac: number) => {
       const now = performance.now();
       const cur = lightningRef.current;
-      if (cur && now - cur.t0 < 130) return;
+      if (cur && simNow - cur.t0 < 130) return;
       const w = lines.clientWidth;
       const h = lines.clientHeight;
       const charge = Math.max(0.28, chargeRef.current);
@@ -480,12 +499,12 @@ export default function Storm() {
       const hitX = x0 + (Math.random() - 0.5) * w * 0.10;
       const segments: BoltSeg[] = [];
       buildBolt(x0, y0, hitX, hitY, 6, w * 0.12, true, segments);
-      lightningRef.current = { t0: now, life: 0.42, segments, intensity, hitX, hitY };
+      lightningRef.current = { t0: simNow, life: 0.42, segments, intensity, hitX, hitY };
       lastLightningAt.current = now;
 
       // sea surges where it strikes
       stormSpikeRef.current = Math.min(0.5, stormSpikeRef.current + 0.22 * charge);
-      manualCrestsRef.current.push({ x: hitX, t0: now, strength: 30 * charge });
+      manualCrestsRef.current.push({ x: hitX, t0: simNow, strength: 30 * charge });
       if (manualCrestsRef.current.length > 12) manualCrestsRef.current.shift();
       spawnBurst(hitX, seaTopPx + 4, Math.round(16 + charge * 24), 240);
 
@@ -516,15 +535,17 @@ export default function Storm() {
     };
     dischargeRef.current = () => dischargeAt(lastStrikeXFracRef.current);
 
-    // ── pointer interaction on the sea / sky ──────────────────────
-    let seaDragging = false;
+    // ── gestures (the shared grammar — src/lib/gesture) ───────────
+    // One finger touches the weather: the sky banks charge, the sea
+    // bumps crests and kicks spray. Three fingers touch the law: drag
+    // shears the wind and rain, hold slows the whole storm. Ceremony
+    // (2.5s) opens the eye. Pinch and pan2 stay unbound — the frame
+    // belongs to the scale manifold.
+    let skyCharging = false;
+    let dragZone: "sky" | "sea" | null = null;
     let lastDragAt = 0;
     let lastDragX = -1;
     let lastDragY = -1;
-
-    let skyCharging = false;
-    let skyStartT = 0;
-    let skyMoved = 0;
     let skyLastX = 0;
     let skyLastSound = 0;
 
@@ -532,7 +553,7 @@ export default function Storm() {
       if (reduce) return;
       const goesRight = Math.random() < 0.6;
       windStreaksRef.current.push({
-        t0: performance.now(),
+        t0: simNow,
         y,
         vx: (goesRight ? 1 : -1) * (90 + Math.random() * 90 + (strong ? 60 : 0)),
         len: 60 + Math.random() * 50,
@@ -541,144 +562,264 @@ export default function Storm() {
       if (windStreaksRef.current.length > 12) windStreaksRef.current.shift();
     };
 
-    const onPointerDown = (e: PointerEvent) => {
+    const toLocal = (clientX: number, clientY: number) => {
       const r = lines.getBoundingClientRect();
-      const x = e.clientX - r.left;
-      const y = e.clientY - r.top;
-      const seaTopPx = lines.clientHeight * SEA_TOP;
+      return { x: clientX - r.left, y: clientY - r.top };
+    };
 
+    // the "touch lands" verbs shared by tap, drag start and hold enter —
+    // exactly what pointerdown did before the grammar arrived.
+    const boostParticle = (x: number, y: number, intensity: number): boolean => {
       const pIdx = pickParticleAt(x, y, 16);
-      if (pIdx >= 0) {
-        const p = particles[pIdx];
-        const speed = Math.hypot(p.vx, p.vy);
-        if (speed < 5) {
-          p.vx += (Math.random() - 0.5) * 60;
-          p.vy -= 120;
-        } else {
-          const mag = 80;
-          p.vx += (p.vx / speed) * mag;
-          p.vy += (p.vy / speed) * mag * 0.6;
-        }
-        particleBoost[pIdx] = 1;
-        try { audio.spark(); } catch { /* noop */ }
-        try { haptics.ripple(0.25); } catch { /* noop */ }
-        return;
+      if (pIdx < 0) return false;
+      const p = particles[pIdx];
+      const speed = Math.hypot(p.vx, p.vy);
+      if (speed < 5) {
+        p.vx += (Math.random() - 0.5) * 60;
+        p.vy -= 120;
+      } else {
+        const mag = 80;
+        p.vx += (p.vx / speed) * mag;
+        p.vy += (p.vy / speed) * mag * 0.6;
       }
+      particleBoost[pIdx] = 1;
+      try { audio.spark(); } catch { /* noop */ }
+      try { haptics.ripple(0.15 + intensity * 0.2); } catch { /* noop */ }
+      return true;
+    };
 
-      if (isOnFuji(x, y)) {
-        fujiHaloRef.current = { t0: performance.now() };
-        try { audio.chime(); } catch { /* noop */ }
-        try { haptics.roll(); } catch { /* noop */ }
-        useField.getState().recordTape("object", 0.7, "storm/peak");
-        return;
-      }
+    const touchFuji = (x: number, y: number): boolean => {
+      if (!isOnFuji(x, y)) return false;
+      fujiHaloRef.current = { t0: simNow };
+      try { audio.chime(); } catch { /* noop */ }
+      try { haptics.roll(); } catch { /* noop */ }
+      useField.getState().recordTape("object", 0.7, "storm/peak");
+      return true;
+    };
 
-      // SKY — accumulate charge on drag, discharge on tap.
-      if (y < seaTopPx) {
-        skyCharging = true;
-        skyStartT = performance.now();
-        skyMoved = 0;
-        skyLastX = x;
-        skyLastSound = 0;
-        lastStrikeXFracRef.current = x / Math.max(1, lines.clientWidth);
-        spawnWindStreak(y, false);
-        try { audio.spark(); } catch { /* noop */ }
-        try { haptics.tap(); } catch { /* noop */ }
-        try { lines.setPointerCapture(e.pointerId); } catch { /* noop */ }
-        return;
-      }
-
-      // SEA — bump crests, kick spray.
-      manualCrestsRef.current.push({ x, t0: performance.now(), strength: 28 });
+    const bumpSea = (x: number, y: number, intensity: number) => {
+      // tap intensity is the blow: crest height, spray count and haptic
+      // all ride the same 0..1 from core.
+      manualCrestsRef.current.push({ x, t0: simNow, strength: 20 + intensity * 16 });
       if (manualCrestsRef.current.length > 12) manualCrestsRef.current.shift();
-
       const crestD = crestHitDistance(x, y);
       if (crestD < 24) {
-        spawnBurst(x, y, 14, 220);
+        spawnBurst(x, y, 10 + Math.round(intensity * 8), 200 + intensity * 60);
         try { audio.thud(); } catch { /* noop */ }
         try { haptics.storm(); } catch { /* noop */ }
         stormSpikeRef.current = Math.min(0.4, stormSpikeRef.current + 0.05);
         useField.getState().recordTape("ripple", 1.0, "storm/crest");
       } else {
-        try { haptics.ripple(0.5); } catch { /* noop */ }
+        try { haptics.ripple(0.3 + intensity * 0.4); } catch { /* noop */ }
         useField.getState().recordTape("ripple", 0.9, "storm/sea");
       }
-
-      seaDragging = true;
-      lastDragX = x;
-      lastDragY = y;
-      lastDragAt = 0;
-      try { lines.setPointerCapture(e.pointerId); } catch { /* noop */ }
     };
 
-    const onPointerMove = (e: PointerEvent) => {
-      const r = lines.getBoundingClientRect();
-      const x = e.clientX - r.left;
-      const y = e.clientY - r.top;
-      const w = lines.clientWidth;
-      const seaTopPx = lines.clientHeight * SEA_TOP;
-
-      if (skyCharging) {
-        const dx = Math.abs(x - skyLastX);
-        skyMoved += dx;
-        skyLastX = x;
-        lastStrikeXFracRef.current = x / Math.max(1, w);
-        chargeRef.current = Math.min(1, chargeRef.current + dx / Math.max(1, w) * 0.95);
-        const nowMs = performance.now();
-        if (nowMs - skyLastSound > 150) {
-          skyLastSound = nowMs;
-          const cq = chargeRef.current;
-          try { audio.playTone(360 + cq * 1000, 0.03); } catch { /* noop */ }
-          if (Math.random() < 0.4) spawnWindStreak(y, cq > 0.6);
-          try { haptics.ripple(0.12 + cq * 0.22); } catch { /* noop */ }
-          useField.getState().recordTape("sigil", 0.2 + cq * 0.5, "storm/charge");
-        }
-        return;
-      }
-
-      if (!seaDragging) return;
-      if (y < seaTopPx) {
-        lastDragX = x; lastDragY = y;
-        return;
-      }
-      const dist = Math.hypot(x - lastDragX, y - lastDragY);
-      if (dist < 3) return;
-      const dx = x - lastDragX;
-      const ang = Math.atan2(-Math.abs(dx) * 0.2 - 60, dx);
-      const sp = 40 + Math.random() * 40;
-      spawnParticle(x, y, Math.cos(ang) * sp + (Math.random() - 0.5) * 30, Math.sin(ang) * sp);
-      const nowMs = performance.now();
-      if (nowMs - lastDragAt > 220) {
-        if (crestHitDistance(x, y) < 28) {
-          try { audio.chime(); } catch { /* noop */ }
-          try { haptics.chop(); } catch { /* noop */ }
-          lastDragAt = nowMs;
-        }
-      }
-      lastDragX = x; lastDragY = y;
-    };
-
-    const onPointerUp = (e: PointerEvent) => {
-      if (skyCharging) {
-        skyCharging = false;
-        const tap = skyMoved < 16 && performance.now() - skyStartT < 340;
-        if (tap) {
+    const detachGestures = attachGestures(lines, {
+      tap: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers !== 1) return; // the weather absorbs frame/law taps
+        const { x, y } = toLocal(e.x, e.y);
+        const seaTopPx = lines.clientHeight * SEA_TOP;
+        if (boostParticle(x, y, e.intensity)) return;
+        if (touchFuji(x, y)) return;
+        if (y < seaTopPx) {
+          // SKY — a tap releases banked charge, or banks a little more.
+          lastStrikeXFracRef.current = x / Math.max(1, lines.clientWidth);
+          spawnWindStreak(y, false);
           if (chargeRef.current > 0.12) {
             dischargeAt(lastStrikeXFracRef.current);
           } else {
-            chargeRef.current = Math.min(1, chargeRef.current + 0.16);
+            chargeRef.current = Math.min(1, chargeRef.current + 0.10 + e.intensity * 0.12);
             try { audio.spark(); } catch { /* noop */ }
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+          return;
+        }
+        bumpSea(x, y, e.intensity);
+      },
+      drag: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          if (e.phase === "end") return;
+          // three fingers drag the weather: the rain shears over and the
+          // whole wave train leans into the pushed wind
+          const speed = Math.hypot(e.vx, e.vy);
+          if (speed > 0.15) {
+            const ang = Math.atan2(e.vy, e.vx);
+            windDirRef.current = ang;
+            setWindAngleDisplay(ang);
+          }
+          const nowMs = performance.now();
+          if (speed > 0.3 && nowMs - lastWindLawAt > 700) {
+            lastWindLawAt = nowMs;
+            const { y } = toLocal(e.x, e.y);
+            const skyY = Math.min(y, lines.clientHeight * SEA_TOP * 0.9);
+            spawnWindStreak(skyY, true);
+            spawnWindStreak(Math.max(16, skyY - 34), false);
+            stormSpikeRef.current = Math.min(0.4, stormSpikeRef.current + 0.03);
+            try { audio.playTone(70 + Math.abs(Math.cos(windDirRef.current)) * 40, 0.4); } catch { /* noop */ }
+            try { haptics.chop(); } catch { /* noop */ }
+            useField.getState().recordTape("region", 0.45, "storm/wind");
+          }
+          return;
+        }
+        if (e.fingers !== 1) return;
+        const { x, y } = toLocal(e.x, e.y);
+        const w = lines.clientWidth;
+        const seaTopPx = lines.clientHeight * SEA_TOP;
+        if (e.phase === "start") {
+          dragZone = null;
+          if (boostParticle(x, y, 0.5)) return;
+          if (touchFuji(x, y)) return;
+          if (y < seaTopPx) {
+            dragZone = "sky";
+            skyCharging = true;
+            skyLastX = x;
+            skyLastSound = 0;
+            lastStrikeXFracRef.current = x / Math.max(1, w);
+            spawnWindStreak(y, false);
+            try { audio.spark(); } catch { /* noop */ }
+            try { haptics.tap(); } catch { /* noop */ }
+          } else {
+            dragZone = "sea";
+            bumpSea(x, y, 0.5);
+            lastDragX = x;
+            lastDragY = y;
+            lastDragAt = 0;
+          }
+          return;
+        }
+        if (e.phase === "end") {
+          dragZone = null;
+          skyCharging = false;
+          return;
+        }
+        if (dragZone === "sky") {
+          const dx = Math.abs(x - skyLastX);
+          skyLastX = x;
+          lastStrikeXFracRef.current = x / Math.max(1, w);
+          chargeRef.current = Math.min(1, chargeRef.current + dx / Math.max(1, w) * 0.95);
+          const nowMs = performance.now();
+          if (nowMs - skyLastSound > 150) {
+            skyLastSound = nowMs;
+            const cq = chargeRef.current;
+            try { audio.playTone(360 + cq * 1000, 0.03); } catch { /* noop */ }
+            if (Math.random() < 0.4) spawnWindStreak(y, cq > 0.6);
+            try { haptics.ripple(0.12 + cq * 0.22); } catch { /* noop */ }
+            useField.getState().recordTape("sigil", 0.2 + cq * 0.5, "storm/charge");
+          }
+          return;
+        }
+        if (dragZone !== "sea") return;
+        if (y < seaTopPx) {
+          lastDragX = x; lastDragY = y;
+          return;
+        }
+        const dist = Math.hypot(x - lastDragX, y - lastDragY);
+        if (dist < 3) return;
+        const dx = x - lastDragX;
+        const ang = Math.atan2(-Math.abs(dx) * 0.2 - 60, dx);
+        const sp = 40 + Math.random() * 40;
+        spawnParticle(x, y, Math.cos(ang) * sp + (Math.random() - 0.5) * 30, Math.sin(ang) * sp);
+        const nowMs = performance.now();
+        if (nowMs - lastDragAt > 220) {
+          if (crestHitDistance(x, y) < 28) {
+            try { audio.chime(); } catch { /* noop */ }
+            try { haptics.chop(); } catch { /* noop */ }
+            lastDragAt = nowMs;
           }
         }
-      }
-      seaDragging = false;
-      try { lines.releasePointerCapture(e.pointerId); } catch { /* noop */ }
-    };
-
-    lines.addEventListener("pointerdown", onPointerDown);
-    lines.addEventListener("pointermove", onPointerMove);
-    lines.addEventListener("pointerup", onPointerUp);
-    lines.addEventListener("pointercancel", onPointerUp);
+        lastDragX = x; lastDragY = y;
+      },
+      flick: (e) => {
+        lastGestureAt = performance.now();
+        dragZone = null;
+        skyCharging = false;
+        if (e.fingers !== 1) return;
+        const { y } = toLocal(e.x, e.y);
+        if (y >= lines.clientHeight * SEA_TOP) return;
+        // a flick across the sky throws the wind — the vane whips to the
+        // flick's heading and a gust of streaks rides it out
+        windDirRef.current = e.angle;
+        setWindAngleDisplay(e.angle);
+        for (let i = 0; i < 4; i++) {
+          spawnWindStreak(Math.max(16, y - 26 + i * 18), i < 2);
+        }
+        try { audio.playTone(180 + ((e.angle + Math.PI) / (Math.PI * 2)) * 260, 0.2); } catch { /* noop */ }
+        try { haptics.chop(); } catch { /* noop */ }
+        useField.getState().recordTape("region", 0.5, "storm/gust");
+      },
+      hold: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          // three fingers hold the law: the storm slows to a quarter speed
+          if (e.phase === "enter") {
+            timeScaleTarget = 0.25;
+            try { audio.playNote(36, 260); } catch { /* noop */ }
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+          if (e.phase === "release") timeScaleTarget = 1;
+          return;
+        }
+        if (e.fingers !== 1) return;
+        const { x, y } = toLocal(e.x, e.y);
+        if (e.phase === "enter") {
+          holdState.ceremony = false;
+          // the touch still lands — the same verbs pointerdown spoke
+          if (boostParticle(x, y, 0.5)) return;
+          if (touchFuji(x, y)) return;
+          if (y < lines.clientHeight * SEA_TOP) {
+            lastStrikeXFracRef.current = x / Math.max(1, lines.clientWidth);
+            spawnWindStreak(y, false);
+            try { audio.spark(); } catch { /* noop */ }
+            try { haptics.tap(); } catch { /* noop */ }
+          } else {
+            bumpSea(x, y, 0.5);
+          }
+          return;
+        }
+        if (e.phase === "release") return;
+        // ceremony tier — the room's one solemn act: the eye of the storm
+        // opens (a second ceremony lets the sea close over it again)
+        if (e.tier >= 3 && !holdState.ceremony) {
+          holdState.ceremony = true;
+          const next = maelstromTargetRef.current < 0.5;
+          maelstromTargetRef.current = next ? 1 : 0;
+          setMaelstromOn(next);
+          if (next) {
+            try { audio.thud(); } catch { /* noop */ }
+            window.setTimeout(() => { try { audio.bell(); } catch { /* noop */ } }, 220);
+            try { haptics.bloom(); } catch { /* noop */ }
+            useField.getState().recordTape("ripple", 1.0, "storm/eye");
+          } else {
+            try { audio.chime(); } catch { /* noop */ }
+            try { haptics.roll(); } catch { /* noop */ }
+          }
+        }
+      },
+      scrub: (e) => {
+        lastGestureAt = performance.now();
+        const nowMs = performance.now();
+        if (nowMs - lastScrubAt < 700) return;
+        lastScrubAt = nowMs;
+        // circling stirs a gyre — the wave train winds toward the spiral
+        // for a few seconds, spray curling with it, then eases back
+        gyre = Math.min(0.85, gyre + 0.4);
+        const { x, y } = toLocal(e.cx, e.cy);
+        const seaY = Math.max(y, lines.clientHeight * SEA_TOP + 10);
+        spawnBurst(x, seaY, 10, 180);
+        try { audio.playNote(48, 200); } catch { /* noop */ }
+        try { haptics.ripple(0.4); } catch { /* noop */ }
+        useField.getState().recordTape("ripple", 0.6, "storm/gyre");
+      },
+      rhythm: (e) => {
+        // a steady tapped pulse: the surge falls in with the hand
+        if (e.stability <= 0.7) return;
+        entrainBpm = Math.max(40, Math.min(110, e.bpm));
+        entrainUntil = performance.now() + 9000;
+      },
+    }, { wheelZoom: false });
 
     const t0 = performance.now();
     let raf = 0;
@@ -688,8 +829,31 @@ export default function Storm() {
       const w = lines.clientWidth;
       const h = lines.clientHeight;
 
+      if (lastFrameAt == null) lastFrameAt = now;
+      const frameDt = Math.min(0.1, Math.max(0, (now - lastFrameAt) / 1000));
+      lastFrameAt = now;
+      // three-finger time dilation: the storm's clock eases to ~1/4 speed
+      timeScale += (timeScaleTarget - timeScale) * Math.min(1, frameDt * 5);
+      simNow += frameDt * 1000 * timeScale;
+      // the scrub-born gyre unwinds on its own over a few seconds
+      gyre *= Math.exp(-frameDt * 0.4);
+      if (gyre < 0.005) gyre = 0;
+
       stormSpikeRef.current *= 0.985;
       if (stormSpikeRef.current < 0.001) stormSpikeRef.current = 0;
+
+      // rhythm entrainment: while a steady tapped pulse holds, the sea
+      // surges softly on every beat with its own low tick — sight and
+      // sound land in the same frame.
+      if (performance.now() < entrainUntil && entrainBpm > 0 && simT != null) {
+        const beatLen = 60 / entrainBpm;
+        const beatIdx = Math.floor(simT / beatLen);
+        if (beatIdx !== lastEntrainBeat) {
+          lastEntrainBeat = beatIdx;
+          stormSpikeRef.current = Math.min(0.5, stormSpikeRef.current + 0.05);
+          try { audio.playTone(88 + (beatIdx % 2) * 22, 0.06); } catch { /* noop */ }
+        }
+      }
 
       // pressure → storm target. Low pressure rages the sea.
       const pressure = reduce ? Math.max(pressureRef.current, 0.72) : pressureRef.current;
@@ -718,7 +882,8 @@ export default function Storm() {
       freqRef.current += (freqTarget - freqRef.current) * 0.08;
       const freqMulDial = freqRef.current;
       maelstromRef.current += (maelstromTargetRef.current - maelstromRef.current) * 0.06;
-      const ml = maelstromRef.current;
+      // the eye plus any scrub-born gyre — the sea winds toward the spiral
+      const ml = Math.min(1, maelstromRef.current + gyre);
 
       // charge slowly leaks; smoothed value drives shader + meter.
       if (!skyCharging) chargeRef.current = Math.max(0, chargeRef.current - 0.0016);
@@ -732,7 +897,7 @@ export default function Storm() {
 
       let flashAdd = 0;
       if (lightningRef.current) {
-        const age = (now - lightningRef.current.t0) / 1000;
+        const age = (simNow - lightningRef.current.t0) / 1000;
         if (age > lightningRef.current.life) {
           lightningRef.current = null;
         } else {
@@ -741,9 +906,15 @@ export default function Storm() {
         }
       }
 
-      const audioT = audio.getAudioTime();
-      const realT = audioT != null ? audioT : (now - t0) / 1000;
-      const t = reduce ? 0 : realT;
+      // the room's clock: seeded from the shared audio clock so the swell
+      // starts in phase, then accumulated so three fingers can dilate it.
+      if (simT == null) {
+        const audioT = audio.getAudioTime();
+        simT = audioT != null ? audioT : (now - t0) / 1000;
+      } else {
+        simT += frameDt * timeScale;
+      }
+      const t = reduce ? 0 : simT;
 
       // ── WebGL pass ─────────────────────────────────────────────
       if (gl && glProg) {
@@ -790,7 +961,7 @@ export default function Storm() {
       const fujiAlpha = (1 - s * 0.6) * 0.42 * (1 - ml * 0.6);
 
       if (fujiHaloRef.current) {
-        const haloAge = (now - fujiHaloRef.current.t0) / 1000;
+        const haloAge = (simNow - fujiHaloRef.current.t0) / 1000;
         if (haloAge > 1.4) {
           fujiHaloRef.current = null;
         } else {
@@ -850,7 +1021,7 @@ export default function Storm() {
       if (windStreaksRef.current.length > 0) {
         for (let i = windStreaksRef.current.length - 1; i >= 0; i--) {
           const ws = windStreaksRef.current[i];
-          const age = (now - ws.t0) / 1000;
+          const age = (simNow - ws.t0) / 1000;
           if (age > 1.6) { windStreaksRef.current.splice(i, 1); continue; }
           const headX = (ws.vx > 0 ? -ws.len * 0.5 : w + ws.len * 0.5) + ws.vx * age;
           const tailX = headX - Math.sign(ws.vx) * ws.len;
@@ -877,7 +1048,7 @@ export default function Storm() {
         const filaments = Math.round(2 + cq * 7);
         for (let i = 0; i < filaments; i++) {
           if (Math.random() > 0.55) continue;
-          const fx = ((i + 0.5) / filaments) * w + Math.sin(now * 0.004 + i * 1.7) * 26;
+          const fx = ((i + 0.5) / filaments) * w + Math.sin(simNow * 0.004 + i * 1.7) * 26;
           const topY = seaTopPx - (14 + cq * 46) * (0.4 + Math.random() * 0.6);
           const a = cq * (0.2 + Math.random() * 0.5);
           lctx.strokeStyle = `rgba(178, 196, 255, ${a})`;
@@ -937,7 +1108,7 @@ export default function Storm() {
           let xx = x + windSkewX;
           let yy = y0 + base * amp;
           if (li === layers.length - 1) {
-            yy -= manualBump(x, now);
+            yy -= manualBump(x, simNow);
           }
           if (ml > 0.001) {
             const ang = (x / w) * Math.PI * 2 + t * spinSpeed;
@@ -1066,7 +1237,7 @@ export default function Storm() {
       }
 
       // ── particle integration + render ─────────────────────────
-      const dt = Math.min(0.05, motion ? 1 / 60 : 0);
+      const dt = Math.min(0.05, motion ? 1 / 60 : 0) * timeScale;
       const baseGravity = 320;
       const vortexCxP = w * 0.5;
       const vortexCyP = h * 0.65;
@@ -1138,7 +1309,7 @@ export default function Storm() {
       // ── forked lightning bolt ──────────────────────────────────
       if (lightningRef.current) {
         const lb = lightningRef.current;
-        const age = (now - lb.t0) / 1000;
+        const age = (simNow - lb.t0) / 1000;
         const k = Math.max(0, 1 - age / lb.life);
         const flick = 0.4 + 0.6 * Math.random();
         const a = Math.pow(k, 1.3) * flick * lb.intensity;
@@ -1190,6 +1361,24 @@ export default function Storm() {
         lctx.restore();
       }
 
+      // glimmer (grammar §6): after ~20s of quiet, a faint turning current
+      // rides the sea where a circling finger would spin the gyre — a
+      // physical hint, never text.
+      if (performance.now() - lastGestureAt > 20000) {
+        const slot = Math.floor(now / 9000);
+        const gseed = (n: number) => { const v = Math.sin((slot + n) * 127.1) * 43758.5453; return v - Math.floor(v); };
+        const gx = (0.22 + gseed(0) * 0.56) * w;
+        const gy = h * (SEA_TOP + 0.14 + gseed(7) * 0.3);
+        const pulse = reduce ? 0.5 : 0.5 + Math.sin(now / 480) * 0.5;
+        lctx.save();
+        lctx.strokeStyle = `rgba(220, 235, 255, ${(0.05 + pulse * 0.08).toFixed(3)})`;
+        lctx.lineWidth = 1;
+        lctx.beginPath();
+        lctx.ellipse(gx, gy, 22 + pulse * 9, (22 + pulse * 9) * 0.34, 0, 0, Math.PI * 2);
+        lctx.stroke();
+        lctx.restore();
+      }
+
       if (!reduce && s > 0.7 && bigBreakCount > 0) {
         if (now - lastCrashAt > nextCrashGap) {
           try { audio.thud(); } catch { /* noop */ }
@@ -1210,10 +1399,7 @@ export default function Storm() {
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
-      lines.removeEventListener("pointerdown", onPointerDown);
-      lines.removeEventListener("pointermove", onPointerMove);
-      lines.removeEventListener("pointerup", onPointerUp);
-      lines.removeEventListener("pointercancel", onPointerUp);
+      detachGestures();
       dischargeRef.current = null;
     };
   }, []);
