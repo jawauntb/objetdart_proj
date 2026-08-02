@@ -5,10 +5,12 @@ export type SiteIconKey =
   | "aphros"
   | "archive"
   | "atlas"
+  | "atoms"
   | "beam"
   | "beyond"
   | "cells"
   | "charts"
+  | "molecules"
   | "dither"
   | "circularity"
   | "clouds"
@@ -164,6 +166,32 @@ export const SITE_ICON_VISUALS = {
     accent: "#f2c56b",
     accent2: "#9c3d33",
     ink: "#ffedc9",
+  },
+  molecules: {
+    title: "Molecules",
+    description: "what the bond holds, the solvent carries",
+    path: "/molecules",
+    shortName: "molecules",
+    kind: "growth",
+    bg: "#0e0b10",
+    bg2: "#2a1f28",
+    glow: "#e7ac52",
+    accent: "#f2c56b",
+    accent2: "#4e7d8c",
+    ink: "#ffedc9",
+  },
+  atoms: {
+    title: "Atoms",
+    description: "probability breathes around a bright nucleus",
+    path: "/atoms",
+    shortName: "atoms",
+    kind: "plasma",
+    bg: "#0a0c11",
+    bg2: "#1d2430",
+    glow: "#e7ac52",
+    accent: "#f7f3ea",
+    accent2: "#6997a4",
+    ink: "#fff4d6",
   },
   charts: {
     title: "Charts",
