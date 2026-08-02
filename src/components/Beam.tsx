@@ -26,6 +26,26 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
+import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
+
+// the room remembers you — tempo, night, and how far apart you left the
+// suns all survive a reload, the way stars keeps its constellations
+const MEMORY_KEY = "objetdart:beam:memory";
+type BeamMemory = { tempo?: number; night?: boolean; sep?: number };
+
+function loadMemory(): BeamMemory {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(MEMORY_KEY);
+    if (!raw) return {};
+    const mem = JSON.parse(raw) as BeamMemory;
+    return typeof mem === "object" && mem ? mem : {};
+  } catch { return {}; }
+}
+
+function saveMemory(mem: BeamMemory): void {
+  try { window.localStorage.setItem(MEMORY_KEY, JSON.stringify(mem)); } catch { /* noop */ }
+}
 
 const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
 const mix = (a: number, b: number, t: number) => a + (b - a) * t;
@@ -188,7 +208,7 @@ void main() {
   // out-of-focus marks go translucent — bokeh, not mud
   float alpha = body * clamp(0.9 - vBlur * 0.55, 0.18, 0.9);
   // at night the tails nearly vanish and the heads become stars
-  alpha *= mix(1.0, 0.4 + 0.6 * headness, uNightMix);
+  alpha *= mix(1.0, 0.22 + 0.78 * headness, uNightMix);
 
   gl_FragColor = vec4(col * alpha, alpha);
 }
@@ -216,6 +236,9 @@ uniform float uTime;
 uniform float uPupil;
 uniform float uNightMix;
 uniform float uFlash;
+uniform vec2 uMeteorA;    // where the loose petal broke free
+uniform vec2 uMeteorD;    // its direction, unit length
+uniform float uMeteorAge; // seconds since; large means no meteor right now
 
 varying vec2 vPos;
 
@@ -240,6 +263,19 @@ void main() {
   col = mix(col, col * (1.0 - 0.75 * uPupil), pupil);
 
   col += vec3(1.0, 0.97, 0.9) * uFlash * 0.5;
+
+  // every so often a petal breaks formation and streaks across the sky —
+  // the room surprises you if you stay, the way the night sky does
+  if (uMeteorAge < 2.6) {
+    vec2 head = uMeteorA + uMeteorD * uMeteorAge * 0.85;
+    vec2 toP = p - head;
+    float along = dot(toP, -uMeteorD);
+    float perp = abs(dot(toP, vec2(-uMeteorD.y, uMeteorD.x)));
+    float streak = exp(-perp * perp * 1400.0) * smoothstep(0.55, 0.0, along) * step(0.0, along);
+    float headGlow = exp(-dot(toP, toP) * 500.0);
+    float fade = smoothstep(0.0, 0.25, uMeteorAge) * smoothstep(2.6, 2.0, uMeteorAge);
+    col += vec3(1.0, 0.96, 0.86) * (streak * 0.45 + headGlow * 0.85) * fade;
+  }
 
   // grain keeps the gradients organic
   float g = fract(sin(dot(gl_FragCoord.xy + uTime * 60.0, vec2(12.9898, 78.233))) * 43758.5453);
@@ -444,6 +480,28 @@ export default function Beam() {
   const shakeRef = useRef({ pending: 0 });
   const reduceRef = useRef(false);
 
+  const [memory] = useState<BeamMemory>(loadMemory);
+  const [tempo, setTempo] = useState(memory.tempo ?? 1);
+  const [isNight, setIsNight] = useState(!!memory.night);
+  const tempoRef = useRef(memory.tempo ?? 1);
+  const nightWantRef = useRef(!!memory.night);
+  const memRef = useRef<BeamMemory>({ ...memory });
+
+  const onTempo = useCallback((value: number) => {
+    const v = clamp(value, 0.25, 2.5);
+    setTempo(v);
+    tempoRef.current = v;
+    memRef.current.tempo = v;
+    saveMemory(memRef.current);
+  }, []);
+
+  const onNightToggle = useCallback(() => {
+    nightWantRef.current = !nightWantRef.current;
+    setIsNight(nightWantRef.current);
+    memRef.current.night = nightWantRef.current;
+    saveMemory(memRef.current);
+  }, []);
+
   const ensureAudio = useCallback(() => {
     if (!audioRef.current) audioRef.current = createBeamAudio();
     audioRef.current.kick();
@@ -570,6 +628,9 @@ export default function Beam() {
       uBg1: { value: new THREE.Vector3() },
       uAspect: { value: 1 },
       uBloomAmt: { value: 1.15 },
+      uMeteorA: { value: new THREE.Vector2(0, 0) },
+      uMeteorD: { value: new THREE.Vector2(1, 0) },
+      uMeteorAge: { value: 99 },
     };
 
     // background sky
@@ -683,14 +744,16 @@ export default function Beam() {
     let rotExtra = 0;
     let focusTarget = 0.35;
     let focusBreathing = true;
-    let sep = 0.66, sepTarget = 0.66;
+    const sep0 = clamp(memRef.current.sep ?? 0.66, 0.04, 0.9);
+    let sep = sep0, sepTarget = sep0;
+    let meteorNext = 12 + Math.random() * 18;
     let bary = new THREE.Vector2(0, 0);
     const baryTarget = new THREE.Vector2(0, 0);
     let orbAng = 0;
     let gustAmt = 0;
     let pupilTarget = 0;
-    let night = false;
-    let nightMix = 0;
+    let night = nightWantRef.current;
+    let nightMix = night ? 1 : 0;
     let flash = 0;
     let merged = false;
     let landscape: boolean | null = null;
@@ -767,7 +830,12 @@ export default function Beam() {
       const p = pointers.get(e.pointerId);
       if (!p) return;
       pointers.delete(e.pointerId);
-      if (pointers.size < 2) pinch = null;
+      if (pointers.size < 2 && pinch) {
+        pinch = null;
+        // remember how far apart you left the suns
+        memRef.current.sep = sepTarget;
+        saveMemory(memRef.current);
+      }
       const held = (performance.now() - p.t0) / 1000;
 
       if (pupilTarget > 0 && pointers.size === 0) {
@@ -825,10 +893,10 @@ export default function Beam() {
       makeTargets(Math.round(w * dpr), Math.round(h * dpr));
       const nowLandscape = w > h;
       if (landscape !== null && nowLandscape !== landscape && !reduceRef.current) {
-        night = !night;
-        flash = Math.max(flash, 0.5);
-        try { audioRef.current?.nightfall(night); } catch { /* noop */ }
-        try { haptics.ripple(0.6); } catch { /* noop */ }
+        nightWantRef.current = !nightWantRef.current;
+        setIsNight(nightWantRef.current);
+        memRef.current.night = nightWantRef.current;
+        saveMemory(memRef.current);
       }
       landscape = nowLandscape;
     };
@@ -851,8 +919,32 @@ export default function Beam() {
       last = now;
       if (document.hidden || !rtScene || !rtA || !rtB) return;
       const reduced = reduceRef.current;
-      const speed = reduced ? 0.35 : 1;
+      // the tempo dial scales the whole clock — rotation, wave, weather,
+      // twinkle, the waltz of the suns, even how often meteors come
+      const speed = (reduced ? 0.35 : 1) * tempoRef.current;
       simT += dt * speed;
+
+      // day and night follow the want set by the panel or by flipping the phone
+      if (night !== nightWantRef.current) {
+        night = nightWantRef.current;
+        flash = Math.max(flash, 0.5);
+        try { audioRef.current?.nightfall(night); } catch { /* noop */ }
+        try { haptics.ripple(0.6); } catch { /* noop */ }
+      }
+
+      // a loose petal, every so often
+      if (uniforms.uMeteorAge.value < 90) uniforms.uMeteorAge.value += dt * speed;
+      if (simT > meteorNext && !reduced) {
+        const ang = Math.random() * Math.PI * 2;
+        const start = new THREE.Vector2(Math.cos(ang) * (aspect + 0.3), Math.sin(ang) * 1.3);
+        const jitter = (Math.random() - 0.5) * 0.9;
+        const dir = start.clone().multiplyScalar(-1).normalize().rotateAround(new THREE.Vector2(0, 0), jitter);
+        uniforms.uMeteorA.value.copy(start);
+        uniforms.uMeteorD.value.copy(dir);
+        uniforms.uMeteorAge.value = 0;
+        meteorNext = simT + 16 + Math.random() * 28;
+        try { audioRef.current?.chime(0.9); } catch { /* noop */ }
+      }
 
       // long-press: a still finger past 0.38s dilates the pupil
       if (pointers.size === 1) {
@@ -936,7 +1028,7 @@ export default function Beam() {
       setV3(uniforms.uTail, blend3(A.tail, B.tail, sm), NIGHT.tail, nightMix);
       setV3(uniforms.uBg0, blend3(A.bg0, B.bg0, sm), NIGHT.bg0, Math.max(nightMix, dusk));
       setV3(uniforms.uBg1, blend3(A.bg1, B.bg1, sm), NIGHT.bg1, Math.max(nightMix, dusk));
-      uniforms.uBloomAmt.value = 1.05 + nightMix * 0.5 + uniforms.uPupil.value * 0.3;
+      uniforms.uBloomAmt.value = 1.05 + nightMix * 0.15 + uniforms.uPupil.value * 0.3;
 
       // apply the twist on top of the slow rotation for this frame
       const savedRot = uniforms.uRot.value;
@@ -1023,6 +1115,27 @@ export default function Beam() {
             <span>tilt &amp; shake live</span>
           </div>
         )}
+        <MobileInstrumentPanel
+          className="beam-panel"
+          title="time & light"
+          triggerLabel="tune"
+          summary={`×${tempo.toFixed(2).replace(/\.?0+$/, "")}${isNight ? " · night" : ""}`}
+        >
+          <div className="beam-console" aria-label="beam controls">
+            <label className="beam-pill">
+              <span>tempo</span>
+              <input
+                type="range" min={0.25} max={2.5} step={0.05} value={tempo}
+                aria-label="how fast time moves through the beam"
+                onChange={(e) => onTempo(Number(e.target.value))}
+              />
+              <output>{`×${tempo.toFixed(2).replace(/\.?0+$/, "")}`}</output>
+            </label>
+            <button type="button" className="beam-pill beam-night-btn" onClick={onNightToggle}>
+              {isNight ? "bring back the day" : "let night fall"}
+            </button>
+          </div>
+        </MobileInstrumentPanel>
       </div>
       <style
         dangerouslySetInnerHTML={{
@@ -1105,6 +1218,41 @@ export default function Beam() {
   cursor: default;
   opacity: 0.65;
 }
+.beam-console {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 200px;
+}
+.beam-pill {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgba(90, 72, 52, 0.25);
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-size: 12px;
+  letter-spacing: 0.05em;
+  color: #4c3b26;
+  background: rgba(255, 251, 240, 0.8);
+}
+.beam-pill span { min-width: 44px; }
+.beam-pill input[type="range"] {
+  flex: 1;
+  accent-color: #b08850;
+  min-width: 90px;
+}
+.beam-pill output {
+  min-width: 40px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.beam-night-btn {
+  justify-content: center;
+  cursor: pointer;
+  font: inherit;
+}
+.beam-night-btn:active { transform: scale(0.98); }
 @media (prefers-reduced-motion: reduce) {
   .beam-motion-chip { display: none; }
 }
