@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import SiteHeader from "@/components/SiteHeader";
+import ScaleTravel from "@/components/ScaleTravel";
 import Ocean from "@/components/Ocean";
 
 export default function OceanPage() {
@@ -15,6 +16,7 @@ export default function OceanPage() {
       <main>
         <Ocean />
       </main>
+      <ScaleTravel route="/ocean" />
     </>
   );
 }

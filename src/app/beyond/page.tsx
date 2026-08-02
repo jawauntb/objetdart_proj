@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import SiteHeader from "@/components/SiteHeader";
+import ScaleTravel from "@/components/ScaleTravel";
 import BeyondWaveField from "@/components/BeyondWaveField";
 
 export default function BeyondPage() {
@@ -14,6 +15,7 @@ export default function BeyondPage() {
       <main>
         <BeyondWaveField />
       </main>
+      <ScaleTravel route="/beyond" />
     </>
   );
 }

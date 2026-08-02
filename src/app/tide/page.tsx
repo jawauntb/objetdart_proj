@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import SiteHeader from "@/components/SiteHeader";
+import ScaleTravel from "@/components/ScaleTravel";
 import Tide from "@/components/Tide";
 
 export default function TidePage() {
@@ -16,6 +17,7 @@ export default function TidePage() {
       <main>
         <Tide />
       </main>
+      <ScaleTravel route="/tide" />
     </>
   );
 }

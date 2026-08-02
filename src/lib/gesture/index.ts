@@ -70,6 +70,17 @@ export type GestureOptions = {
   edgeInset?: number;
   /** Map plain wheel to pinch (default true — playable surfaces zoom). */
   wheelZoom?: boolean;
+  /**
+   * Skip setPointerCapture (default false). Set when listening on a shared
+   * ancestor (e.g. document.body) so a room's own canvas listeners keep
+   * receiving the stream — capture would silently retarget it.
+   */
+  noCapture?: boolean;
+  /**
+   * Manage touch-action/user-select/callout on the element (default true).
+   * Set false on shared ancestors where the room already owns suppression.
+   */
+  manageStyle?: boolean;
 };
 
 type Contact = {
@@ -226,10 +237,12 @@ export function attachGestures(
     // Three-finger gestures never fight text editing.
     if (contacts.size >= 2 && isTextTarget(ev.target)) return;
 
-    try {
-      el.setPointerCapture(ev.pointerId);
-    } catch {
-      /* noop */
+    if (!opts.noCapture) {
+      try {
+        el.setPointerCapture(ev.pointerId);
+      } catch {
+        /* noop */
+      }
     }
     const now = performance.now();
     contacts.set(ev.pointerId, {
@@ -431,9 +444,11 @@ export function attachGestures(
   el.addEventListener("wheel", onWheel, { passive: false });
   el.addEventListener("gesturestart", swallow as EventListener);
   el.addEventListener("gesturechange", swallow as EventListener);
-  el.style.touchAction = "none";
-  (el.style as CSSStyleDeclaration & { webkitTouchCallout?: string }).webkitTouchCallout = "none";
-  el.style.userSelect = "none";
+  if (opts.manageStyle ?? true) {
+    el.style.touchAction = "none";
+    (el.style as CSSStyleDeclaration & { webkitTouchCallout?: string }).webkitTouchCallout = "none";
+    el.style.userSelect = "none";
+  }
 
   return () => {
     el.removeEventListener("pointerdown", onDown);
