@@ -34,19 +34,21 @@ const mix = (a: number, b: number, t: number) => a + (b - a) * t;
 // four moments of day, each: background core, background edge, warm streak,
 // cool streak, tail ink. The cycle drifts through them; night is its own
 // world reached by flipping the phone.
-type Weather = { bg0: number[]; bg1: number[]; warm: number[]; cool: number[]; tail: number[] };
+type Weather = { bg0: number[]; bg1: number[]; pal: number[][]; tail: number[] };
 const W = (hex: string): number[] => {
   const n = parseInt(hex.slice(1), 16);
   return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
 };
+// four streak hues living side by side in every moment — gold against blue
+// against violet against cream, the way the reference is never one color
 const WEATHERS: Weather[] = [
-  { bg0: W("#e9eef0"), bg1: W("#c2d2dc"), warm: W("#ecc887"), cool: W("#a6c0dc"), tail: W("#2c3a54") }, // dawn blue
-  { bg0: W("#f4eeda"), bg1: W("#e0cda2"), warm: W("#e8bd63"), cool: W("#c4d2e0"), tail: W("#4c3c22") }, // gold noon
-  { bg0: W("#f2e2cc"), bg1: W("#dcb894"), warm: W("#e2a45c"), cool: W("#b0a2cc"), tail: W("#54301e") }, // amber rose
-  { bg0: W("#e4d6d2"), bg1: W("#b49aa8"), warm: W("#d8a878"), cool: W("#9a94c4"), tail: W("#3a2a3e") }, // mauve dusk
+  { bg0: W("#e9eef0"), bg1: W("#c2d2dc"), pal: [W("#e2b45c"), W("#eef2f6"), W("#7fa0cc"), W("#9a8cc4")], tail: W("#2c3a54") }, // dawn blue
+  { bg0: W("#f4eeda"), bg1: W("#e0cda2"), pal: [W("#e0a850"), W("#f0e6c8"), W("#a6c0dc"), W("#5c6a94")], tail: W("#4c3c22") }, // gold noon
+  { bg0: W("#f2e2cc"), bg1: W("#dcb894"), pal: [W("#cc8244"), W("#ecc8a0"), W("#cc7a74"), W("#8c96cc")], tail: W("#54301e") }, // amber rose
+  { bg0: W("#e4d6d2"), bg1: W("#b49aa8"), pal: [W("#b08850"), W("#c0a0b8"), W("#5c6494"), W("#7c5480")], tail: W("#3a2a3e") }, // mauve dusk
 ];
 const NIGHT: Weather = {
-  bg0: W("#181c30"), bg1: W("#0c0e1c"), warm: W("#e8d494"), cool: W("#96a6dc"), tail: W("#060810"),
+  bg0: W("#181c30"), bg1: W("#0c0e1c"), pal: [W("#e8d494"), W("#d8dce8"), W("#96a6dc"), W("#8a7cc0")], tail: W("#060810"),
 };
 
 // ── shaders ──────────────────────────────────────────────────────────────
@@ -109,7 +111,7 @@ void main() {
   }
 
   float twinkle = 0.5 + 0.5 * sin(uTime * (1.3 + aSeed * 2.2) + aPhase * 20.0);
-  vGlow = 0.62 + 0.5 * wave + 0.9 * glowR + uFlash + 0.22 * twinkle;
+  vGlow = 0.58 + 0.55 * wave + 0.9 * glowR + uFlash + 0.34 * twinkle;
 
   // out-of-focus petals swell and soften — bokeh
   vBlur = abs(aDepth - uFocus) * (0.75 + uPupil * 0.5);
@@ -127,8 +129,9 @@ void main() {
   );
   vec2 world = center + rot;
 
-  // the warm/cool tide sweeps around the formation slowly
-  vColorMix = 0.5 + 0.5 * sin(ang + uTime * 0.045 + aSeed * 1.7 + aSun * 2.4);
+  // a color tide sweeps around the formation while every petal keeps its
+  // own offset into the palette — clusters of gold beside runs of blue
+  vColorMix = fract(0.3 * sin(ang + uTime * 0.045 + aSun * 2.4) + aSeed * 0.87 + uTime * 0.006);
 
   gl_Position = projectionMatrix * modelViewMatrix * vec4(world, 0.0, 1.0);
 }
@@ -137,8 +140,10 @@ void main() {
 const PETAL_FRAG = /* glsl */ `
 precision highp float;
 
-uniform vec3 uWarm;
-uniform vec3 uCool;
+uniform vec3 uPal0;
+uniform vec3 uPal1;
+uniform vec3 uPal2;
+uniform vec3 uPal3;
 uniform vec3 uTail;
 uniform float uNightMix;
 
@@ -164,7 +169,12 @@ void main() {
         * smoothstep(0.0, 0.12, vUv.y) * smoothstep(1.0, 0.88, vUv.y);
   if (body < 0.004) discard;
 
-  vec3 streak = mix(uCool, uWarm, vColorMix);
+  // each petal draws its own hue from the four-color weather — the field
+  // is polychromatic in every moment, never just warm against cool
+  float h = fract(vColorMix) * 3.0;
+  vec3 streak = h < 1.0 ? mix(uPal0, uPal1, h)
+              : h < 2.0 ? mix(uPal1, uPal2, h - 1.0)
+              : mix(uPal2, uPal3, h - 2.0);
   // ink only at the very tail tip, streak color through the body, hot head
   float headness = smoothstep(0.5, 0.93, t);
   vec3 col = mix(mix(uTail, streak, 0.25), streak, smoothstep(0.0, 0.38, t));
@@ -551,6 +561,10 @@ export default function Beam() {
       uNightMix: { value: 0 },
       uWarm: { value: new THREE.Vector3() },
       uCool: { value: new THREE.Vector3() },
+      uPal0: { value: new THREE.Vector3() },
+      uPal1: { value: new THREE.Vector3() },
+      uPal2: { value: new THREE.Vector3() },
+      uPal3: { value: new THREE.Vector3() },
       uTail: { value: new THREE.Vector3() },
       uBg0: { value: new THREE.Vector3() },
       uBg1: { value: new THREE.Vector3() },
@@ -665,7 +679,7 @@ export default function Beam() {
 
     // ── interaction state ────────────────────────────────────────────────
     let simT = 0;
-    let rotSpeed = 0.05;
+    let rotSpeed = 0.14;
     let rotExtra = 0;
     let focusTarget = 0.35;
     let focusBreathing = true;
@@ -854,14 +868,14 @@ export default function Beam() {
       if (shakeRef.current.pending > 0 && !reduced) {
         flash = Math.max(flash, shakeRef.current.pending * 0.8);
         gustAmt = clamp(gustAmt + shakeRef.current.pending, 0, 2);
-        rotSpeed = 0.05 + shakeRef.current.pending * 0.25;
+        rotSpeed = 0.14 + shakeRef.current.pending * 0.25;
         shakeRef.current.pending = 0;
         try { audioRef.current?.whoosh(1); } catch { /* noop */ }
         try { haptics.roll(); } catch { /* noop */ }
       }
 
       // springs and drifts
-      rotSpeed = mix(rotSpeed, 0.05, 1 - Math.exp(-dt * 0.6));
+      rotSpeed = mix(rotSpeed, 0.14, 1 - Math.exp(-dt * 0.6));
       uniforms.uRot.value += (rotSpeed * speed) * dt;
       uniforms.uChi.value = 0.32 + 0.3 * Math.sin(simT * 0.05);
       uniforms.uWaveAng.value += dt * speed * 0.55;
@@ -889,26 +903,36 @@ export default function Beam() {
       } else if (merged && sep > 0.2) {
         merged = false;
       }
-      orbAng += dt * speed * 0.07;
+      orbAng += dt * speed * 0.11;
       bary = bary.lerp(baryTarget, 1 - Math.exp(-dt * 3));
       const rot = uniforms.uRot.value + rotExtra;
       const ca = Math.cos(orbAng), sa = Math.sin(orbAng);
-      uniforms.uSunA.value.set(bary.x - ca * sep * 0.5, bary.y - sa * sep * 0.35);
-      uniforms.uSunB.value.set(bary.x + ca * sep * 0.5, bary.y + sa * sep * 0.35);
+      // the whole system revolves in its own slow circle around the frame —
+      // never parked, alive the way the night sky is
+      const revX = Math.cos(simT * 0.09) * 0.14;
+      const revY = Math.sin(simT * 0.09) * 0.11;
+      const cx = bary.x + revX, cy = bary.y + revY;
+      uniforms.uSunA.value.set(cx - ca * sep * 0.5, cy - sa * sep * 0.35);
+      uniforms.uSunB.value.set(cx + ca * sep * 0.5, cy + sa * sep * 0.35);
 
       // tilt parallax
       uniforms.uPar.value.x = mix(uniforms.uPar.value.x, tiltRef.current.tx, 1 - Math.exp(-dt * 4));
       uniforms.uPar.value.y = mix(uniforms.uPar.value.y, -tiltRef.current.ty, 1 - Math.exp(-dt * 4));
 
       // weather
-      const phase = simT * 0.016;
+      const phase = simT * 0.022;
       const wi = ((Math.floor(phase) % WEATHERS.length) + WEATHERS.length) % WEATHERS.length;
       const wf = phase - Math.floor(phase);
       const sm = wf * wf * (3 - 2 * wf);
       const A = WEATHERS[wi], B = WEATHERS[(wi + 1) % WEATHERS.length];
       const dusk = clamp(uniforms.uPupil.value * 0.55, 0, 1);
-      setV3(uniforms.uWarm, blend3(A.warm, B.warm, sm), NIGHT.warm, Math.max(nightMix, dusk * 0.4));
-      setV3(uniforms.uCool, blend3(A.cool, B.cool, sm), NIGHT.cool, Math.max(nightMix, dusk * 0.4));
+      const palMix = Math.max(nightMix, dusk * 0.4);
+      const pals = [uniforms.uPal0, uniforms.uPal1, uniforms.uPal2, uniforms.uPal3];
+      for (let i = 0; i < 4; i++) {
+        setV3(pals[i], blend3(A.pal[i], B.pal[i], sm), NIGHT.pal[i], palMix);
+      }
+      setV3(uniforms.uWarm, blend3(A.pal[0], B.pal[0], sm), NIGHT.pal[0], palMix);
+      setV3(uniforms.uCool, blend3(A.pal[2], B.pal[2], sm), NIGHT.pal[2], palMix);
       setV3(uniforms.uTail, blend3(A.tail, B.tail, sm), NIGHT.tail, nightMix);
       setV3(uniforms.uBg0, blend3(A.bg0, B.bg0, sm), NIGHT.bg0, Math.max(nightMix, dusk));
       setV3(uniforms.uBg1, blend3(A.bg1, B.bg1, sm), NIGHT.bg1, Math.max(nightMix, dusk));
