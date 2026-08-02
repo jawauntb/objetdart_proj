@@ -1,0 +1,498 @@
+"use client";
+
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getFieldAudio } from "@/lib/audio";
+import { getTimbreEngine } from "@/lib/timbre-engine";
+import { tap as hapticTap, ripple } from "@/lib/haptics";
+import {
+  audibleFrequency,
+  clamp,
+  colorFromWavelength,
+  formatHz,
+  noteName,
+  quantizeFrequency,
+  wavelengthFromX,
+  type ScaleMode,
+} from "@/lib/light-music";
+import { TIMBRE_CHAIN, timbreAt } from "@/lib/timbre";
+import { useField } from "@/store/field";
+
+type ActiveTouch = {
+  id: number;
+  x: number;
+  y: number;
+  color: string;
+  note: string;
+  voice: string;
+};
+
+const SCALE_LABELS: Record<ScaleMode, string> = {
+  penta: "scale: penta",
+  chroma: "scale: chroma",
+  pure: "scale: pure",
+};
+
+// desktop keys — A minor pentatonic climbing from A2, voiced by the last
+// touched spot on the plate
+const KEY_ROW = ["a", "s", "d", "f", "g", "h", "j", "k", "l"];
+const KEY_SEMITONES = [0, 3, 5, 7, 10, 12, 15, 17, 19];
+
+export default function TimbreInstrument() {
+  const plateRef = useRef<HTMLDivElement | null>(null);
+  const pointers = useRef(new Set<number>());
+  const lastMorphTick = useRef(0);
+  const scaleModeRef = useRef<ScaleMode>("chroma");
+  const positionRef = useRef(0.5);
+
+  const [wavelength, setWavelength] = useState(553);
+  const [position, setPosition] = useState(0.5);
+  const [touches, setTouches] = useState<ActiveTouch[]>([]);
+  const [scaleMode, setScaleMode] = useState<ScaleMode>("chroma");
+
+  scaleModeRef.current = scaleMode;
+  positionRef.current = position;
+
+  const color = useMemo(() => colorFromWavelength(wavelength), [wavelength]);
+  const audible = useMemo(
+    () => quantizeFrequency(audibleFrequency(wavelength), scaleMode),
+    [wavelength, scaleMode],
+  );
+  const currentNote = useMemo(() => noteName(audible), [audible]);
+  const blend = useMemo(() => timbreAt(position), [position]);
+
+  const recordTimbre = useCallback((meta: string, intensity: number) => {
+    useField.getState().recordTape("sigil", intensity, `timbre/${meta}`);
+  }, []);
+
+  const plateXY = useCallback((clientX: number, clientY: number) => {
+    const target = plateRef.current;
+    if (!target) return { x: 0.5, y: 0.5 };
+    const rect = target.getBoundingClientRect();
+    return {
+      x: clamp((clientX - rect.left) / rect.width, 0, 1),
+      y: clamp((clientY - rect.top) / rect.height, 0, 1),
+    };
+  }, []);
+
+  // x is pitch (and color, through the light bridge); y is which instrument
+  const translationAt = useCallback((x: number, y: number) => {
+    const nm = wavelengthFromX(x);
+    const freq = quantizeFrequency(audibleFrequency(nm), scaleModeRef.current);
+    const spec = timbreAt(y);
+    return { nm, freq, spec, color: colorFromWavelength(nm) };
+  }, []);
+
+  const showTouch = useCallback((id: number, x: number, y: number, freq: number, touchColor: string, voice: string) => {
+    setTouches((current) => {
+      const next = current.filter((touch) => touch.id !== id);
+      next.push({ id, x, y, color: touchColor, note: noteName(freq), voice });
+      return next;
+    });
+  }, []);
+
+  const hideTouch = useCallback((id: number) => {
+    setTouches((current) => current.filter((touch) => touch.id !== id));
+  }, []);
+
+  const handlePointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    void getFieldAudio().start();
+    const { x, y } = plateXY(event.clientX, event.clientY);
+    const { nm, freq, spec, color: touchColor } = translationAt(x, y);
+
+    pointers.current.add(event.pointerId);
+    getTimbreEngine().noteOn(String(event.pointerId), freq, spec);
+    setWavelength(nm);
+    setPosition(y);
+    showTouch(event.pointerId, x, y, freq, touchColor, spec.label);
+    try { ripple(0.4 + (1 - y) * 0.3); } catch { /* noop */ }
+    recordTimbre(`${spec.label.replace(/\s/g, "")}/${Math.round(freq)}hz`, clamp(0.3 + spec.mix * 0.3, 0.2, 1));
+
+    try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* noop */ }
+  }, [plateXY, recordTimbre, showTouch, translationAt]);
+
+  const handlePointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (!pointers.current.has(event.pointerId)) return;
+    const { x, y } = plateXY(event.clientX, event.clientY);
+    const { nm, freq, spec, color: touchColor } = translationAt(x, y);
+    const engine = getTimbreEngine();
+
+    engine.glide(String(event.pointerId), freq);
+    const tick = performance.now();
+    if (tick - lastMorphTick.current > 60) {
+      lastMorphTick.current = tick;
+      engine.morph(String(event.pointerId), spec);
+      try { hapticTap(); } catch { /* noop */ }
+    }
+    setWavelength(nm);
+    setPosition(y);
+    showTouch(event.pointerId, x, y, freq, touchColor, spec.label);
+  }, [plateXY, showTouch, translationAt]);
+
+  const handlePointerEnd = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (pointers.current.delete(event.pointerId)) {
+      getTimbreEngine().noteOff(String(event.pointerId));
+    }
+    hideTouch(event.pointerId);
+    try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* noop */ }
+  }, [hideTouch]);
+
+  const cycleScale = useCallback(() => {
+    setScaleMode((mode) => (mode === "penta" ? "chroma" : mode === "chroma" ? "pure" : "penta"));
+    try { hapticTap(); } catch { /* noop */ }
+  }, []);
+
+  // ── desktop keyboard — pentatonic row voiced by the last touched timbre ──
+  useEffect(() => {
+    const heldKeys = new Set<string>();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.repeat || event.metaKey || event.ctrlKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (target && /^(input|textarea|select|button|a)$/i.test(target.tagName)) return;
+      const key = event.key.toLowerCase();
+      const index = KEY_ROW.indexOf(key);
+      if (index === -1 || heldKeys.has(key)) return;
+      event.preventDefault();
+      heldKeys.add(key);
+      const freq = 110 * 2 ** (KEY_SEMITONES[index] / 12);
+      getTimbreEngine().noteOn(`key:${key}`, freq, timbreAt(positionRef.current));
+      useField.getState().recordTape("sigil", 0.4, `timbre/key/${key}`);
+    };
+    const onKeyUp = (event: KeyboardEvent) => {
+      const key = event.key.toLowerCase();
+      if (!heldKeys.delete(key)) return;
+      getTimbreEngine().noteOff(`key:${key}`);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      heldKeys.forEach((key) => getTimbreEngine().noteOff(`key:${key}`));
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => { getTimbreEngine().stopAll(); };
+  }, []);
+
+  return (
+    <div
+      className="timbre-page"
+      data-touch-surface="true"
+      data-pretext-ignore="true"
+      style={{ "--timbre-color": color } as React.CSSProperties}
+      onContextMenu={(event) => event.preventDefault()}
+    >
+      <div
+        ref={plateRef}
+        className="timbre-plate"
+        role="application"
+        tabIndex={0}
+        aria-label="meta instrument — sideways is pitch, up and down morphs between harp, piano, guitar, tar, sitar, violin, saxophone and trumpet; several fingers stack chords"
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerEnd}
+        onPointerCancel={handlePointerEnd}
+      >
+        <div className="timbre-bands" aria-hidden="true">
+          {TIMBRE_CHAIN.map((voice, index) => (
+            <span
+              key={voice.key}
+              style={{ top: `${(index / (TIMBRE_CHAIN.length - 1)) * 100}%` }}
+              className={
+                Math.abs(position * (TIMBRE_CHAIN.length - 1) - index) < 0.5 ? "is-near" : undefined
+              }
+            >
+              {voice.label}
+            </span>
+          ))}
+        </div>
+        {touches.map((touch) => (
+          <span
+            key={touch.id}
+            className="timbre-finger"
+            style={{
+              left: `${touch.x * 100}%`,
+              top: `${touch.y * 100}%`,
+              borderColor: touch.color,
+              boxShadow: `0 0 44px ${touch.color}, inset 0 0 24px ${touch.color}`,
+            }}
+          >
+            <strong>{touch.note}</strong>
+            <em>{touch.voice}</em>
+          </span>
+        ))}
+        <div className="timbre-current" aria-hidden="true">
+          <span>{blend.label}</span>
+          <strong>{currentNote}</strong>
+          <em>{formatHz(audible)}</em>
+        </div>
+      </div>
+
+      <header className="timbre-hud timbre-hud-top">
+        <Link href="/" className="timbre-home">objetd&rsquo;art</Link>
+        <p className="timbre-eyebrow">timbre / one surface, every instrument</p>
+        <div className="timbre-readout" aria-label="current voice and pitch">
+          <span>{blend.label}</span>
+          <span className="timbre-readout-wide">{Math.round(wavelength)} nm</span>
+          <span>{formatHz(audible)} / {currentNote}</span>
+        </div>
+      </header>
+
+      <footer className="timbre-hud timbre-hud-bottom">
+        <div className="timbre-actions" aria-label="timbre instrument controls">
+          <button type="button" onClick={cycleScale}>{SCALE_LABELS[scaleMode]}</button>
+          <Link href="/light">light</Link>
+        </div>
+        <p className="timbre-hint">
+          hold to sound · slide sideways to bend pitch · slide up or down and the
+          instrument becomes another instrument · fingers stack chords
+        </p>
+      </footer>
+
+      <style
+        dangerouslySetInnerHTML={{
+          __html: `
+        .timbre-page {
+          position: fixed;
+          inset: 0;
+          background: #070908;
+          color: rgba(245, 240, 230, 0.94);
+          overflow: hidden;
+          overscroll-behavior: none;
+          user-select: none;
+          -webkit-user-select: none;
+          -webkit-touch-callout: none;
+        }
+        body:has(.timbre-page) {
+          overflow: hidden;
+        }
+        body:has(.timbre-page) .oda-field-watch,
+        body:has(.timbre-page) .oda-candle-mark,
+        body:has(.timbre-page) .oda-tape-shell,
+        body:has(.timbre-page) .oda-sound-toggle {
+          display: none !important;
+        }
+        .timbre-plate {
+          position: absolute;
+          inset: 0;
+          overflow: hidden;
+          cursor: crosshair;
+          touch-action: none;
+          background:
+            repeating-linear-gradient(180deg, transparent 0 calc(100%/7 - 1px), rgba(255,255,255,0.08) calc(100%/7 - 1px) calc(100%/7)),
+            linear-gradient(180deg, rgba(255,255,255,0.06), transparent 20%, rgba(0,0,0,0.5) 100%),
+            linear-gradient(90deg, #8e2318 0%, #d83a2e 10.2%, #f08a28 30.4%, #f5d65b 39.1%, #4fca75 51.1%, #45b8e8 64.1%, #5574f7 75.1%, #9a63ee 90.6%, #7a43d8 100%);
+          background-blend-mode: normal, normal, normal;
+          box-shadow: inset 0 0 160px rgba(0,0,0,0.66);
+          filter: saturate(0.72) brightness(0.82);
+        }
+        .timbre-plate:after {
+          content: "";
+          position: absolute;
+          inset: 0;
+          background: radial-gradient(circle at 50% 50%, transparent 0 30%, rgba(2,3,3,0.35) 68%, rgba(2,3,3,0.7) 100%);
+          pointer-events: none;
+        }
+        .timbre-bands {
+          position: absolute;
+          inset: 0;
+          z-index: 2;
+          pointer-events: none;
+        }
+        .timbre-bands span {
+          position: absolute;
+          left: 14px;
+          transform: translateY(-50%);
+          color: rgba(245, 240, 230, 0.44);
+          font-family: var(--font-text);
+          font-size: 12px;
+          text-transform: lowercase;
+          letter-spacing: 0.04em;
+          text-shadow: 0 1px 8px rgba(0,0,0,0.7);
+          transition: color 300ms ease, text-shadow 300ms ease;
+        }
+        .timbre-bands span.is-near {
+          color: rgba(255, 255, 255, 0.92);
+          text-shadow: 0 0 18px var(--timbre-color), 0 1px 8px rgba(0,0,0,0.7);
+        }
+        .timbre-finger {
+          position: absolute;
+          width: clamp(88px, 18vw, 136px);
+          aspect-ratio: 1;
+          border: 1.5px solid currentColor;
+          border-radius: 50%;
+          transform: translate(-50%, -50%);
+          display: grid;
+          place-items: center;
+          align-content: center;
+          gap: 2px;
+          background: rgba(5,7,8,0.3);
+          backdrop-filter: blur(3px);
+          mix-blend-mode: screen;
+          z-index: 4;
+          pointer-events: none;
+        }
+        .timbre-finger strong {
+          color: white;
+          font-family: var(--font-serif);
+          font-size: clamp(26px, 5.4vw, 38px);
+          font-weight: 300;
+          line-height: 0.9;
+        }
+        .timbre-finger em {
+          color: rgba(245,240,230,0.82);
+          font-family: var(--font-text);
+          font-size: 11px;
+          font-style: normal;
+          text-transform: lowercase;
+        }
+        .timbre-current {
+          position: absolute;
+          left: 50%;
+          top: 46%;
+          width: min(230px, 52vw);
+          aspect-ratio: 1;
+          transform: translate(-50%, -50%);
+          border: 1px solid rgba(255,255,255,0.2);
+          border-radius: 50%;
+          display: grid;
+          place-items: center;
+          align-content: center;
+          gap: 6px;
+          background: rgba(5,7,8,0.32);
+          backdrop-filter: blur(6px);
+          text-align: center;
+          z-index: 3;
+          pointer-events: none;
+        }
+        .timbre-current span,
+        .timbre-current em {
+          color: rgba(245, 240, 230, 0.74);
+          font-family: var(--font-text);
+          font-size: 12px;
+          font-style: normal;
+          text-transform: lowercase;
+        }
+        .timbre-current strong {
+          color: white;
+          font-family: var(--font-serif);
+          font-size: clamp(48px, 8.6vw, 80px);
+          line-height: 0.85;
+          font-weight: 300;
+          text-shadow: 0 0 34px var(--timbre-color);
+        }
+        .timbre-hud {
+          position: absolute;
+          left: 0;
+          right: 0;
+          z-index: 6;
+          pointer-events: none;
+          padding: 0 clamp(12px, 3vw, 26px);
+        }
+        .timbre-hud-top {
+          top: calc(58px + env(safe-area-inset-top, 0px));
+          display: flex;
+          align-items: center;
+          gap: 14px;
+          flex-wrap: wrap;
+        }
+        .timbre-home {
+          pointer-events: auto;
+          color: rgba(245,240,230,0.92);
+          font-family: var(--font-serif);
+          font-size: 19px;
+          text-decoration: none;
+          text-shadow: 0 1px 12px rgba(0,0,0,0.6);
+        }
+        .timbre-eyebrow {
+          margin: 0;
+          color: rgba(245, 240, 230, 0.62);
+          font-family: var(--font-text);
+          font-size: 11px;
+          text-transform: lowercase;
+          text-shadow: 0 1px 10px rgba(0,0,0,0.6);
+        }
+        .timbre-readout {
+          margin-left: auto;
+          display: flex;
+          gap: 1px;
+          border: 1px solid rgba(245, 240, 230, 0.16);
+          background: rgba(245, 240, 230, 0.14);
+        }
+        .timbre-readout span {
+          padding: 7px 10px;
+          background: rgba(8, 10, 9, 0.66);
+          backdrop-filter: blur(6px);
+          color: rgba(245, 240, 230, 0.92);
+          font-family: var(--font-numerals);
+          font-size: 12px;
+          white-space: nowrap;
+          text-transform: lowercase;
+        }
+        .timbre-hud-bottom {
+          bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+          display: grid;
+          gap: 8px;
+        }
+        .timbre-actions {
+          display: flex;
+          gap: 1px;
+          border: 1px solid rgba(245, 240, 230, 0.16);
+          background: rgba(245, 240, 230, 0.14);
+          pointer-events: auto;
+          width: fit-content;
+        }
+        .timbre-actions button,
+        .timbre-actions a {
+          min-height: 42px;
+          display: inline-flex;
+          align-items: center;
+          padding: 0 14px;
+          border: 0;
+          background: rgba(8,10,9,0.7);
+          backdrop-filter: blur(6px);
+          color: rgba(245, 240, 230, 0.88);
+          font-family: var(--font-text);
+          font-size: 12px;
+          line-height: 1;
+          text-transform: lowercase;
+          text-decoration: none;
+          cursor: pointer;
+        }
+        .timbre-hint {
+          margin: 0;
+          max-width: 640px;
+          color: rgba(245, 240, 230, 0.55);
+          font-family: var(--font-text);
+          font-size: 11px;
+          line-height: 1.5;
+          text-transform: lowercase;
+          text-shadow: 0 1px 10px rgba(0,0,0,0.7);
+        }
+        @media (max-width: 700px) {
+          .timbre-readout {
+            margin-left: 0;
+            width: 100%;
+          }
+          .timbre-readout span {
+            flex: 1;
+            text-align: center;
+          }
+          .timbre-readout-wide {
+            display: none;
+          }
+          .timbre-current {
+            top: 40%;
+          }
+          .timbre-hint {
+            font-size: 10px;
+          }
+        }
+      `,
+        }}
+      />
+    </div>
+  );
+}
