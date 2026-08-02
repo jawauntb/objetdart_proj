@@ -20,19 +20,22 @@ import {
   type AtlasBatchKind,
   type AtlasClipRect,
 } from "@/lib/atlas-batch";
-import { resolveAtlasEdgeTravel } from "@/lib/atlas-navigation";
+import { ATLAS_ZOOM_SPEC, resolveAtlasEdgeTravel } from "@/lib/atlas-navigation";
 import { prepareAtlasSourceImage } from "@/lib/atlas-source";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { useField } from "@/store/field";
+import { useBandEdgeTravel } from "@/components/ScaleTravel";
 
 const ORIGIN_MAP = "/atlas/atlas-origin.webp";
 const MOBILE_ORIGIN_MAP = "/atlas/atlas-origin-mobile.webp";
 const DESKTOP_MAP_ASPECT = 4 / 3;
 const MOBILE_MAP_ASPECT = 853 / 1538;
 const MOBILE_BREAKPOINT = 760;
-const MIN_ZOOM = 1;
-const MAX_ZOOM = 64;
+// The camera clamps come from the room's manifold spec so the sheet's zoom
+// range and its band walls (coast below, earth above) can never disagree.
+const MIN_ZOOM = ATLAS_ZOOM_SPEC.zoomMin;
+const MAX_ZOOM = ATLAS_ZOOM_SPEC.zoomMax;
 const SETTLE_TRANSITION = "transform 180ms cubic-bezier(.22,.8,.24,1)";
 const ZOOM_SETTLE_DELTA = 0.45;
 const MOBILE_ZOOM_SETTLE_MS = 520;
@@ -300,6 +303,8 @@ export default function Atlas() {
   const dragRef = useRef<DragGesture | null>(null);
   const pinchRef = useRef<PinchGesture | null>(null);
   const pinchZoomRef = useRef(false);
+  // Time of the previous pinch event, for the manifold's residual velocity.
+  const pinchAtRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
   const requestRef = useRef(0);
   const generationIdRef = useRef<string | null>(null);
@@ -350,6 +355,17 @@ export default function Atlas() {
   const [status, setStatus] = useState("tap a mark · drag the chart · pinch to breathe");
   const [interacting, setInteracting] = useState(false);
   const [pulse, setPulse] = useState<{ x: number; y: number; key: number } | null>(null);
+
+  // The scale manifold at the sheet's walls. A single pinch-out at
+  // fit-to-view still mints a wider chart (the room's own answer);
+  // only pinch held past that answer presses toward the earth. At the
+  // deepest zoom the sustained pinch presses down toward the coast.
+  const {
+    report: reportScaleEdge,
+    release: releaseScaleEdge,
+    reset: resetScaleEdge,
+    overlay: scaleEdgeOverlay,
+  } = useBandEdgeTravel("/atlas/origin", ATLAS_ZOOM_SPEC);
 
   const paintPlane = (next: MapView, withTransition: boolean) => {
     const plane = planeRef.current;
@@ -1442,13 +1458,16 @@ export default function Atlas() {
   // 1500ms window so a burst of scroll ticks fires exactly one
   // generation, plus `lastZoomRequestKeyRef` dedupe against the same
   // focus/concept combo.
-  const requestWiderTerritory = () => {
-    if (busy) return;
+  // Returns true only when a wider-chart generation was actually dispatched;
+  // a false means the room has already answered this extreme (busy, debounce,
+  // or dedupe) and any further pinch-out is the manifold's to catch.
+  const requestWiderTerritory = (): boolean => {
+    if (busy) return false;
     const nowMs = performance.now();
-    if (nowMs - lastWidenAtRef.current < 1500) return;
+    if (nowMs - lastWidenAtRef.current < 1500) return false;
     const current = viewRef.current;
     const m = metricsRef.current;
-    if (!m.width) return;
+    if (!m.width) return false;
     lastWidenAtRef.current = nowMs;
     const mapWidth = Math.max(1, m.mapWidth * current.zoom);
     const mapHeight = Math.max(1, m.mapHeight * current.zoom);
@@ -1458,7 +1477,7 @@ export default function Atlas() {
       zoom: MIN_ZOOM,
     };
     const key = [concept, "wider-from-fit", Math.round(focus.x * 8), Math.round(focus.y * 8)].join("|");
-    if (key === lastZoomRequestKeyRef.current) return;
+    if (key === lastZoomRequestKeyRef.current) return false;
     lastZoomRequestKeyRef.current = key;
     const parent = captureSnapshot();
     invalidateGeneration();
@@ -1475,6 +1494,7 @@ export default function Atlas() {
       subjectPrompt: concept + " · wider territory",
       focus,
     });
+    return true;
   };
 
   const onWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
@@ -1484,10 +1504,16 @@ export default function Atlas() {
     const rect = stageRef.current?.getBoundingClientRect();
     if (!rect) return;
     const current = viewRef.current;
+    // The attempted log-zoom velocity of this tick, in the gesture engine's
+    // wheel convention (ln-ratio × 60/s); positive means zooming in.
+    const attemptedVel = -event.deltaY * 0.0018 * 60;
     // Already at fit-to-view and the user is trying to keep zooming
-    // out — treat that as "show me a wider world" and generate.
+    // out — treat that as "show me a wider world" and generate. When the
+    // sheet has already answered (busy, debounced, or the same wider view
+    // was minted), the residue goes to the manifold wall toward the earth.
     if (event.deltaY > 0 && current.zoom <= MIN_ZOOM + 0.02) {
-      requestWiderTerritory();
+      if (requestWiderTerritory()) resetScaleEdge();
+      else reportScaleEdge(current.zoom, attemptedVel);
       return;
     }
     const nextZoom = clamp(current.zoom * Math.exp(-event.deltaY * 0.0018), MIN_ZOOM, MAX_ZOOM);
@@ -1501,6 +1527,9 @@ export default function Atlas() {
       y: point.y - worldY * nextZoom,
     }, metricsRef.current));
     queueSettledZoom();
+    // Attempted minus achieved ln-ratio: zero strictly inside the range,
+    // and at the deepest zoom the clamped residue presses toward the coast.
+    reportScaleEdge(nextZoom, attemptedVel - Math.log(nextZoom / current.zoom) * 60);
   };
 
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -1584,6 +1613,7 @@ export default function Atlas() {
       beginFreeZoom();
       markGesture();
       pinchZoomRef.current = true;
+      pinchAtRef.current = performance.now();
       const points = Array.from(pointersRef.current.values());
       pinchRef.current = {
         distance: Math.hypot(points[1].x - points[0].x, points[1].y - points[0].y),
@@ -1610,8 +1640,11 @@ export default function Atlas() {
       const midpoint = { x: (points[0].x + points[1].x) / 2, y: (points[0].y + points[1].y) / 2 };
       const prev = pinchRef.current;
       // Contracting pinch at fit-to-view is a request for wider territory.
+      // When the sheet has already answered (busy, debounced, deduped),
+      // the continued contraction becomes manifold wall pressure below.
+      let mintedWider = false;
       if (distance < prev.distance * 0.94 && viewRef.current.zoom <= MIN_ZOOM + 0.02) {
-        requestWiderTerritory();
+        mintedWider = requestWiderTerritory();
       }
       const zoom = clamp(prev.view.zoom * (distance / Math.max(1, prev.distance)), MIN_ZOOM, MAX_ZOOM);
       // Incremental pinch around the live midpoint keeps mobile two-finger zoom stable.
@@ -1624,6 +1657,18 @@ export default function Atlas() {
       }, metricsRef.current, 48);
       applyLiveView(next);
       pinchRef.current = { distance, midpoint, view: next };
+      // Residual pinch past a held extreme → the band walls: attempted
+      // minus achieved ln-ratio per second, zero inside the sheet's range.
+      const nowMs = performance.now();
+      const dtMs = nowMs - pinchAtRef.current;
+      pinchAtRef.current = nowMs;
+      if (mintedWider) {
+        resetScaleEdge();
+      } else if (dtMs > 0) {
+        const attempted = distance / Math.max(1, prev.distance);
+        const achieved = zoom / prev.view.zoom;
+        reportScaleEdge(zoom, Math.log(attempted / Math.max(1e-6, achieved)) / (dtMs / 1000));
+      }
       return;
     }
     const drag = dragRef.current;
@@ -1699,6 +1744,7 @@ export default function Atlas() {
     const wasPinching = pinchZoomRef.current;
     pinchZoomRef.current = false;
     pinchRef.current = null;
+    if (wasPinching) releaseScaleEdge();
     const live = viewRef.current;
     const bounded = boundView(live, metricsRef.current);
     if (wasPinching) {
@@ -1842,6 +1888,7 @@ export default function Atlas() {
           className="living-atlas__overlay"
           aria-hidden="true"
         />
+        {scaleEdgeOverlay}
         <div className="living-atlas__shade" aria-hidden="true" />
         <div className="living-atlas__masthead" data-map-ui="true">
           <button

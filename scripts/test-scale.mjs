@@ -35,7 +35,14 @@ const {
   stepScale,
   spectralRegisterFor,
   entryScaleFor,
+  scaleForRoomZoom,
+  residualScaleInput,
 } = loadTsModule("src/lib/scale.ts");
+
+// The rooms' declared internal zoom ranges — the same objects the
+// components consume, so a drifted range fails here, not in the hand.
+const { STARS_ZOOM_SPEC } = loadTsModule("src/lib/stars/nestedCosmos.ts");
+const { ATLAS_ZOOM_SPEC } = loadTsModule("src/lib/atlas-navigation.ts");
 
 // — Band registry is contiguous, ordered, and covers the whole axis —
 for (let i = 1; i < SCALE_BANDS.length; i++) {
@@ -161,5 +168,77 @@ assert.ok(cosmic.baseHz >= 20 && micro.baseHz <= 8000, "registers stay audible")
 assert.equal(bandAt(entryScaleFor("/stars")).id, "stars");
 assert.equal(bandAt(entryScaleFor("/tide")).id, "coast");
 assert.equal(entryScaleFor("/colophon"), null);
+
+// — Room band adapters: internal zoom ↔ manifold position —
+// Monotone and order-reversing (zooming in must move DOWN the axis — the
+// bug this catches is an inverted mapping, which would send /stars to
+// /earth when the hand asked for /beyond), and never outside the band.
+for (const spec of [STARS_ZOOM_SPEC, ATLAS_ZOOM_SPEC]) {
+  const band = SCALE_BANDS.find((b) => b.id === spec.band);
+  let prev = Infinity;
+  for (let i = 0; i <= 16; i++) {
+    const z = spec.zoomMin * Math.pow(spec.zoomMax / spec.zoomMin, i / 16);
+    const s = scaleForRoomZoom(spec, z);
+    assert.equal(bandAt(s).id, spec.band, `${spec.band}: zoom ${z} maps into its own band`);
+    assert.ok(s < prev, `${spec.band}: zoom ${z} keeps the map order-reversing`);
+    prev = s;
+  }
+  // The extremes must land flush on the walls; a center landing would mean
+  // residual pinch never reaches wall contact and travel silently dies.
+  assert.ok(
+    band.sMax - scaleForRoomZoom(spec, spec.zoomMin) < 1e-3,
+    `${spec.band}: widest view sits at the band ceiling`,
+  );
+  assert.ok(
+    scaleForRoomZoom(spec, spec.zoomMax) - band.sMin < 1e-3,
+    `${spec.band}: tightest view sits on the band floor`,
+  );
+}
+
+// — No wall engagement strictly inside the internal range, and never for
+//   motion headed back INTO the room from an extreme —
+for (const spec of [STARS_ZOOM_SPEC, ATLAS_ZOOM_SPEC]) {
+  const zMid = Math.sqrt(spec.zoomMin * spec.zoomMax);
+  assert.equal(residualScaleInput(spec, zMid, 4).active, false, `${spec.band}: interior zoom-in is the room's`);
+  assert.equal(residualScaleInput(spec, zMid, -4).active, false, `${spec.band}: interior zoom-out is the room's`);
+  const nearTight = spec.zoomMax - (spec.zoomMax - spec.zoomMin) * 0.01;
+  const nearWide = spec.zoomMin + (spec.zoomMax - spec.zoomMin) * 0.01;
+  assert.equal(residualScaleInput(spec, nearTight, 4).active, false, `${spec.band}: one step shy of tightest is still interior`);
+  assert.equal(residualScaleInput(spec, nearWide, -4).active, false, `${spec.band}: one step shy of widest is still interior`);
+  assert.equal(residualScaleInput(spec, spec.zoomMin, 4).active, false, `${spec.band}: zooming in from widest is the room's move`);
+  assert.equal(residualScaleInput(spec, spec.zoomMax, -4).active, false, `${spec.band}: zooming out from tightest is the room's move`);
+}
+
+// — Neighbor directions at the extremes, through the real physics —
+// Drive residual input into stepScale from the mapped extreme and observe
+// which band the crossing lands in. This is the direction table the rooms
+// rely on; a sign slip anywhere in the chain fails here.
+function wallCrossing(spec, zoom, zoomInVel) {
+  const input = residualScaleInput(spec, zoom, zoomInVel);
+  assert.equal(input.active, true, `${spec.band}: overflow at a held extreme engages the wall`);
+  let st = initialScaleState(scaleForRoomZoom(spec, zoom));
+  let elapsed = 0;
+  for (let i = 0; i < 200; i++) {
+    const r = stepScale(st, input, 16);
+    st = r.state;
+    elapsed += 16;
+    for (const e of r.events) {
+      if (e.type === "crossing") return { to: e.to, elapsed };
+    }
+  }
+  return null;
+}
+
+const starsOut = wallCrossing(STARS_ZOOM_SPEC, STARS_ZOOM_SPEC.zoomMin, -2);
+assert.equal(starsOut?.to, "beyond", "stars: pinching in at the widest field travels toward beyond");
+const starsIn = wallCrossing(STARS_ZOOM_SPEC, STARS_ZOOM_SPEC.zoomMax, 2);
+assert.equal(starsIn?.to, "earth", "stars: pinching out at the tightest field travels toward earth");
+const atlasOut = wallCrossing(ATLAS_ZOOM_SPEC, ATLAS_ZOOM_SPEC.zoomMin, -2);
+assert.equal(atlasOut?.to, "earth", "atlas: pinching in at the widest chart travels toward earth");
+const atlasIn = wallCrossing(ATLAS_ZOOM_SPEC, ATLAS_ZOOM_SPEC.zoomMax, 2);
+assert.equal(atlasIn?.to, "coast", "atlas: pinching out at the deepest detail travels toward the coast");
+// The adapters reuse the one integrator: travel still costs sustained intent.
+assert.ok(starsOut.elapsed >= TRAVEL_INTENT_MS, "adapter walls keep the sustained-intent price");
+assert.ok(atlasIn.elapsed >= TRAVEL_INTENT_MS, "adapter walls keep the sustained-intent price");
 
 console.log("scale manifold tests passed");
