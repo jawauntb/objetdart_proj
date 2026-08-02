@@ -1,0 +1,1092 @@
+"use client";
+
+// Beam — the eye of heaven.
+//
+// A field of comet-petals holds formation around a binary pair of soft
+// suns, breathing and shimmering while the whole formation slowly turns.
+// Rendered on the GPU: instanced teardrop marks with true depth-of-field
+// (near petals sharp and white-hot, far petals swelling into bokeh), a
+// bloom pipeline doing the heavy lifting, and a color weather that sweeps
+// dawn blue → gold noon → amber rose → mauve dusk. A beam: light made
+// visible, bent into a flower of comets.
+//
+// alive on its own   petals shimmer as a wind-wave orbits the rings, the
+//                    suns waltz around their barycenter, focus breathes
+// tap                refocus to that ring, and a ripple of light runs out
+// long-press         the pupil dilates — the field deepens toward night
+// slide / flick      a gust — petals lean away and spring back
+// pinch              pull the two suns apart, or slam them into one
+// two-finger twist   turn the whole formation
+// two-finger drag    carry the system across the sky
+// shake              a burst of light through every petal
+// tilt               parallax — depth layers slide over each other
+// flip the phone     day and night trade places
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import * as THREE from "three";
+import { getFieldAudio } from "@/lib/audio";
+import * as haptics from "@/lib/haptics";
+
+const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
+const mix = (a: number, b: number, t: number) => a + (b - a) * t;
+
+// ── color weather ────────────────────────────────────────────────────────
+// four moments of day, each: background core, background edge, warm streak,
+// cool streak, tail ink. The cycle drifts through them; night is its own
+// world reached by flipping the phone.
+type Weather = { bg0: number[]; bg1: number[]; warm: number[]; cool: number[]; tail: number[] };
+const W = (hex: string): number[] => {
+  const n = parseInt(hex.slice(1), 16);
+  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+};
+const WEATHERS: Weather[] = [
+  { bg0: W("#e9eef0"), bg1: W("#c2d2dc"), warm: W("#ecc887"), cool: W("#a6c0dc"), tail: W("#2c3a54") }, // dawn blue
+  { bg0: W("#f4eeda"), bg1: W("#e0cda2"), warm: W("#e8bd63"), cool: W("#c4d2e0"), tail: W("#4c3c22") }, // gold noon
+  { bg0: W("#f2e2cc"), bg1: W("#dcb894"), warm: W("#e2a45c"), cool: W("#b0a2cc"), tail: W("#54301e") }, // amber rose
+  { bg0: W("#e4d6d2"), bg1: W("#b49aa8"), warm: W("#d8a878"), cool: W("#9a94c4"), tail: W("#3a2a3e") }, // mauve dusk
+];
+const NIGHT: Weather = {
+  bg0: W("#181c30"), bg1: W("#0c0e1c"), warm: W("#e8d494"), cool: W("#96a6dc"), tail: W("#060810"),
+};
+
+// ── shaders ──────────────────────────────────────────────────────────────
+const PETAL_VERT = /* glsl */ `
+attribute float aRing;    // orbit radius 0.14..1.18
+attribute float aAng;     // base angle on its ring
+attribute float aDepth;   // 0 near .. 1 far — drives focus and parallax
+attribute float aPhase;   // per-petal random phase
+attribute float aSeed;    // per-petal random 0..1
+attribute float aSun;     // which sun this petal belongs to (0 or 1)
+
+uniform float uTime;
+uniform float uRot;
+uniform float uChi;       // swirl of the dash orientation
+uniform vec2  uSunA;
+uniform vec2  uSunB;
+uniform vec2  uPar;       // parallax lean from device tilt
+uniform vec2  uGustDir;
+uniform float uGustAmt;
+uniform float uWaveAng;   // the orbiting shimmer-wind
+uniform vec3  uRipple;    // x, y, age (seconds); age >= 90.0 means idle
+uniform float uFlash;
+uniform float uFocus;     // which depth is in focus 0..1
+uniform float uPupil;     // long-press dilation 0..1
+
+varying vec2 vUv;
+varying float vBlur;
+varying float vGlow;
+varying float vColorMix;
+varying float vSeed;
+
+void main() {
+  vUv = uv;
+  vSeed = aSeed;
+
+  vec2 sun = mix(uSunA, uSunB, aSun);
+  float ang = aAng + uRot * (0.55 + 0.45 * (1.0 - aDepth));
+  vec2 radial = vec2(cos(ang), sin(ang));
+
+  float breathe = 1.0 + 0.045 * sin(uTime * 0.6 + aPhase * 6.2831);
+  float ringR = aRing * breathe * (1.0 + uPupil * 0.22 * aRing);
+  vec2 center = sun + radial * ringR;
+  center += uPar * (aDepth - 0.5) * 0.16;
+
+  // the orbiting wind-wave: a soft crest of light and lean moving round
+  float dAng = mod(ang - uWaveAng + 3.14159, 6.2831) - 3.14159;
+  float wave = exp(-dAng * dAng * 2.6);
+
+  // gusts lean the petals away from the stroke, springy
+  float lean = uGustAmt * (0.4 + 0.6 * sin(aPhase * 9.0 + uTime * 3.0));
+  vec2 leanVec = uGustDir * lean * 0.13;
+  center += leanVec * (0.4 + 0.6 * aDepth);
+
+  // ripple of light running outward from a tap
+  float glowR = 0.0;
+  if (uRipple.z < 3.0) {
+    float rr = distance(center, vec2(uRipple.x, uRipple.y));
+    float front = uRipple.z * 0.9;
+    glowR = exp(-pow((rr - front) * 7.0, 2.0)) * max(0.0, 1.0 - uRipple.z * 0.4);
+  }
+
+  float twinkle = 0.5 + 0.5 * sin(uTime * (1.3 + aSeed * 2.2) + aPhase * 20.0);
+  vGlow = 0.62 + 0.5 * wave + 0.9 * glowR + uFlash + 0.22 * twinkle;
+
+  // out-of-focus petals swell and soften — bokeh
+  vBlur = abs(aDepth - uFocus) * (0.75 + uPupil * 0.5);
+
+  // dash orientation: radial, tipped by the swirl and the gust
+  float oAng = ang + uChi + 0.22 * sin(uTime * 0.11 + aPhase * 4.0)
+             + lean * 0.8 * (uGustDir.x * -radial.y + uGustDir.y * radial.x);
+
+  float len = (0.042 + 0.096 * aRing) * (0.85 + 0.3 * aSeed) * (1.0 + vBlur * 1.5);
+  float wid = len * (0.5 + vBlur * 0.3);
+  vec2 local = (uv - 0.5) * vec2(len, wid) * 2.0;
+  vec2 rot = vec2(
+    local.x * cos(oAng) - local.y * sin(oAng),
+    local.x * sin(oAng) + local.y * cos(oAng)
+  );
+  vec2 world = center + rot;
+
+  // the warm/cool tide sweeps around the formation slowly
+  vColorMix = 0.5 + 0.5 * sin(ang + uTime * 0.045 + aSeed * 1.7 + aSun * 2.4);
+
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(world, 0.0, 1.0);
+}
+`;
+
+const PETAL_FRAG = /* glsl */ `
+precision highp float;
+
+uniform vec3 uWarm;
+uniform vec3 uCool;
+uniform vec3 uTail;
+uniform float uNightMix;
+
+varying vec2 vUv;
+varying float vBlur;
+varying float vGlow;
+varying float vColorMix;
+varying float vSeed;
+
+void main() {
+  vec2 p = vUv - 0.5;
+  // comet spine runs from the tail tip at x=0.06 to the head center at
+  // x=0.74; radius grows along it, so the tail is a point and the head is
+  // a full round cap — a true teardrop, never a diamond
+  float t = clamp((vUv.x - 0.1) / 0.6, 0.0, 1.0);
+  vec2 spine = vec2(mix(0.1, 0.7, t), 0.5);
+  float radius = mix(0.03, 0.18, t * t);
+  float d = distance(vUv, spine) - radius;
+  float soft = 0.05 + vBlur * 0.24;
+  float body = smoothstep(soft, -soft, d);
+  // never let the soft edge reach the quad border — no rectangular ghosts
+  body *= smoothstep(0.0, 0.09, vUv.x) * smoothstep(1.0, 0.91, vUv.x)
+        * smoothstep(0.0, 0.12, vUv.y) * smoothstep(1.0, 0.88, vUv.y);
+  if (body < 0.004) discard;
+
+  vec3 streak = mix(uCool, uWarm, vColorMix);
+  // ink only at the very tail tip, streak color through the body, hot head
+  float headness = smoothstep(0.5, 0.93, t);
+  vec3 col = mix(mix(uTail, streak, 0.25), streak, smoothstep(0.0, 0.38, t));
+  vec3 hot = mix(vec3(1.0, 0.99, 0.95), streak, 0.12);
+  col = mix(col, hot, headness * 0.9);
+  // the very core of the head burns
+  float core = smoothstep(0.6, 0.97, t) * smoothstep(radius * 0.7, 0.0, distance(vUv, spine));
+  col += vec3(0.9, 0.85, 0.7) * core * 0.8;
+
+  col *= vGlow;
+  // out-of-focus marks go translucent — bokeh, not mud
+  float alpha = body * clamp(0.9 - vBlur * 0.55, 0.18, 0.9);
+  // at night the tails nearly vanish and the heads become stars
+  alpha *= mix(1.0, 0.4 + 0.6 * headness, uNightMix);
+
+  gl_FragColor = vec4(col * alpha, alpha);
+}
+`;
+
+const BG_VERT = /* glsl */ `
+varying vec2 vPos;
+void main() {
+  vPos = position.xy;
+  gl_Position = vec4(position.xy, 0.0, 1.0);
+}
+`;
+
+const BG_FRAG = /* glsl */ `
+precision highp float;
+
+uniform vec3 uBg0;
+uniform vec3 uBg1;
+uniform vec3 uWarm;
+uniform vec3 uCool;
+uniform vec2 uSunA;
+uniform vec2 uSunB;
+uniform float uAspect;
+uniform float uTime;
+uniform float uPupil;
+uniform float uNightMix;
+uniform float uFlash;
+
+varying vec2 vPos;
+
+void main() {
+  vec2 p = vec2(vPos.x * uAspect, vPos.y);
+  float r = length(p);
+
+  vec3 col = mix(uBg0, uBg1, smoothstep(0.05, 1.15, r));
+
+  // each sun stains the sky around it with its own warmth
+  float da = distance(p, uSunA);
+  float db = distance(p, uSunB);
+  col = mix(col, mix(uBg0, uWarm, 0.5), exp(-da * da * 2.2) * 0.55);
+  col = mix(col, mix(uBg0, uCool, 0.4), exp(-db * db * 2.2) * 0.45);
+  // and a soft brilliance at each core
+  col += vec3(1.0, 0.98, 0.92) * exp(-da * da * 9.0) * (0.2 - uNightMix * 0.08);
+  col += vec3(0.96, 0.97, 1.0) * exp(-db * db * 9.0) * (0.16 - uNightMix * 0.06);
+
+  // the pupil: long-press dilates a deep center
+  float pupilR = uPupil * 0.5;
+  float pupil = smoothstep(pupilR + 0.25, pupilR - 0.1, min(da, db));
+  col = mix(col, col * (1.0 - 0.75 * uPupil), pupil);
+
+  col += vec3(1.0, 0.97, 0.9) * uFlash * 0.5;
+
+  // grain keeps the gradients organic
+  float g = fract(sin(dot(gl_FragCoord.xy + uTime * 60.0, vec2(12.9898, 78.233))) * 43758.5453);
+  col += (g - 0.5) * 0.018;
+
+  gl_FragColor = vec4(col, 1.0);
+}
+`;
+
+const QUAD_VERT = /* glsl */ `
+varying vec2 vUv;
+void main() {
+  vUv = uv;
+  gl_Position = vec4(position.xy, 0.0, 1.0);
+}
+`;
+
+const BRIGHT_FRAG = /* glsl */ `
+precision highp float;
+uniform sampler2D tSrc;
+uniform float uThresh;
+varying vec2 vUv;
+void main() {
+  vec4 c = texture2D(tSrc, vUv);
+  float l = dot(c.rgb, vec3(0.299, 0.587, 0.114));
+  float k = smoothstep(uThresh, uThresh + 0.22, l);
+  gl_FragColor = vec4(c.rgb * k, 1.0);
+}
+`;
+
+const BLUR_FRAG = /* glsl */ `
+precision highp float;
+uniform sampler2D tSrc;
+uniform vec2 uDir;
+varying vec2 vUv;
+void main() {
+  vec3 acc = texture2D(tSrc, vUv).rgb * 0.227027;
+  vec2 o1 = uDir * 1.3846153;
+  vec2 o2 = uDir * 3.2307692;
+  acc += texture2D(tSrc, vUv + o1).rgb * 0.3162162;
+  acc += texture2D(tSrc, vUv - o1).rgb * 0.3162162;
+  acc += texture2D(tSrc, vUv + o2).rgb * 0.0702702;
+  acc += texture2D(tSrc, vUv - o2).rgb * 0.0702702;
+  gl_FragColor = vec4(acc, 1.0);
+}
+`;
+
+const COMPOSITE_FRAG = /* glsl */ `
+precision highp float;
+uniform sampler2D tScene;
+uniform sampler2D tBloom;
+uniform float uBloomAmt;
+varying vec2 vUv;
+void main() {
+  vec3 base = texture2D(tScene, vUv).rgb;
+  vec3 bloom = texture2D(tBloom, vUv).rgb * uBloomAmt;
+  // screen blend keeps the light additive but never clips to flat white
+  vec3 col = 1.0 - (1.0 - base) * (1.0 - min(bloom, vec3(1.0)));
+  // gentle vignette
+  vec2 d = vUv - 0.5;
+  col *= 1.0 - dot(d, d) * 0.35;
+  gl_FragColor = vec4(col, 1.0);
+}
+`;
+
+// ── tiny synth on the shared audio context ───────────────────────────────
+type BeamAudio = {
+  kick: () => void;
+  chime: (bright: number) => void;
+  whoosh: (strength: number) => void;
+  bell: () => void;
+  nightfall: (toNight: boolean) => void;
+  dispose: () => void;
+};
+
+function createBeamAudio(): BeamAudio {
+  const fa = getFieldAudio();
+  let ctx: AudioContext | null = null;
+  let bus: GainNode | null = null;
+  let noiseBuf: AudioBuffer | null = null;
+  let lastWhoosh = 0;
+
+  const ensure = (): boolean => {
+    if (ctx && bus) return true;
+    try { void fa.start(); } catch { /* noop */ }
+    const c = fa.getAudioContext();
+    if (!c) return false;
+    if (c.state === "suspended") { try { void c.resume(); } catch { /* noop */ } }
+    ctx = c;
+    bus = c.createGain();
+    bus.gain.value = 0.8;
+    bus.connect(c.destination);
+    return true;
+  };
+
+  const tone = (type: OscillatorType, f0: number, f1: number, dur: number, peak: number, lp?: number) => {
+    if (!ctx || !bus || fa.isMuted()) return;
+    const c = ctx;
+    const now = c.currentTime;
+    const osc = c.createOscillator();
+    osc.type = type;
+    osc.frequency.setValueAtTime(Math.max(30, f0), now);
+    osc.frequency.exponentialRampToValueAtTime(Math.max(30, f1), now + dur);
+    const g = c.createGain();
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(peak, now + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+    let tail: AudioNode = g;
+    if (lp) {
+      const f = c.createBiquadFilter();
+      f.type = "lowpass";
+      f.frequency.value = lp;
+      g.connect(f);
+      tail = f;
+    }
+    osc.connect(g);
+    tail.connect(bus);
+    osc.start(now);
+    osc.stop(now + dur + 0.05);
+    osc.onended = () => { try { osc.disconnect(); g.disconnect(); } catch { /* noop */ } };
+  };
+
+  const hiss = (dur: number, peak: number, bp: number, q: number) => {
+    if (!ctx || !bus || fa.isMuted()) return;
+    const c = ctx;
+    if (!noiseBuf) {
+      const len = Math.floor(c.sampleRate * 0.9);
+      noiseBuf = c.createBuffer(1, len, c.sampleRate);
+      const data = noiseBuf.getChannelData(0);
+      for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+    }
+    const now = c.currentTime;
+    const src = c.createBufferSource();
+    src.buffer = noiseBuf;
+    const f = c.createBiquadFilter();
+    f.type = "bandpass";
+    f.frequency.value = bp;
+    f.Q.value = q;
+    const g = c.createGain();
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(peak, now + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+    src.connect(f).connect(g).connect(bus);
+    try { src.start(now); src.stop(now + dur + 0.05); } catch { /* noop */ }
+  };
+
+  return {
+    kick() { ensure(); },
+    chime(bright) {
+      if (!ensure()) return;
+      const b = clamp(bright, 0, 1);
+      tone("sine", mix(740, 1180, b), mix(1180, 1760, b), 0.5, 0.06);
+      tone("sine", mix(1480, 2360, b), mix(2220, 3520, b), 0.3, 0.02);
+    },
+    whoosh(strength) {
+      if (!ensure() || !ctx) return;
+      const now = ctx.currentTime;
+      if (now - lastWhoosh < 0.12) return;
+      lastWhoosh = now;
+      const s = clamp(strength, 0, 1);
+      hiss(mix(0.15, 0.4, s), mix(0.015, 0.06, s), mix(500, 1200, s), 0.9);
+    },
+    bell() {
+      if (!ensure()) return;
+      tone("sine", 392, 390, 1.4, 0.09);
+      tone("sine", 588, 584, 1.1, 0.05);
+      tone("sine", 784, 778, 0.8, 0.03);
+      hiss(0.5, 0.04, 1600, 1.2);
+    },
+    nightfall(toNight) {
+      if (!ensure()) return;
+      if (toNight) {
+        tone("sine", 330, 110, 1.6, 0.07, 700);
+        tone("sine", 220, 82, 2.0, 0.05, 400);
+      } else {
+        tone("sine", 165, 440, 1.2, 0.06);
+        tone("sine", 330, 660, 0.9, 0.03);
+      }
+    },
+    dispose() {
+      try { bus?.disconnect(); } catch { /* noop */ }
+      bus = null;
+      ctx = null;
+    },
+  };
+}
+
+export default function Beam() {
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const [fallback, setFallback] = useState(false);
+  const [motionUI, setMotionUI] = useState<"hidden" | "prompt" | "on">("hidden");
+  const audioRef = useRef<BeamAudio | null>(null);
+  const armSensorsRef = useRef<() => void>(() => {});
+  const motionRef = useRef<{
+    armed: boolean;
+    lastMag: number | null;
+    lastShakeAt: number;
+    onOrient: ((e: DeviceOrientationEvent) => void) | null;
+    onMotion: ((e: DeviceMotionEvent) => void) | null;
+  }>({ armed: false, lastMag: null, lastShakeAt: 0, onOrient: null, onMotion: null });
+  const tiltRef = useRef({ tx: 0, ty: 0 });
+  const shakeRef = useRef({ pending: 0 });
+  const reduceRef = useRef(false);
+
+  const ensureAudio = useCallback(() => {
+    if (!audioRef.current) audioRef.current = createBeamAudio();
+    audioRef.current.kick();
+  }, []);
+
+  const armSensors = useCallback(() => {
+    if (typeof window === "undefined" || motionRef.current.armed) return;
+    motionRef.current.armed = true;
+
+    const onOrient = (e: DeviceOrientationEvent) => {
+      tiltRef.current.tx = clamp((e.gamma ?? 0) / 40, -1, 1);
+      tiltRef.current.ty = clamp((e.beta ?? 0) / 40, -1, 1);
+    };
+    const onMotion = (e: DeviceMotionEvent) => {
+      const a = e.accelerationIncludingGravity;
+      if (!a) return;
+      const mag = Math.hypot(a.x ?? 0, a.y ?? 0, a.z ?? 0);
+      const m = motionRef.current;
+      if (m.lastMag != null) {
+        const jolt = Math.abs(mag - m.lastMag);
+        const now = performance.now();
+        if (jolt > (reduceRef.current ? 22 : 14) && now - m.lastShakeAt > 700) {
+          m.lastShakeAt = now;
+          shakeRef.current.pending = clamp(jolt / 30, 0.4, 1);
+        }
+      }
+      m.lastMag = mag;
+    };
+    motionRef.current.onOrient = onOrient;
+    motionRef.current.onMotion = onMotion;
+
+    type PermCtor = { requestPermission?: () => Promise<"granted" | "denied"> };
+    const DOE = (window as unknown as { DeviceOrientationEvent?: PermCtor }).DeviceOrientationEvent;
+    const DME = (window as unknown as { DeviceMotionEvent?: PermCtor }).DeviceMotionEvent;
+    const add = () => {
+      window.addEventListener("deviceorientation", onOrient);
+      window.addEventListener("devicemotion", onMotion);
+      setMotionUI("on");
+    };
+    if (DOE && typeof DOE.requestPermission === "function") {
+      Promise.allSettled([DOE.requestPermission?.(), DME?.requestPermission?.()])
+        .then((res) => {
+          if (res.some((r) => r.status === "fulfilled" && r.value === "granted")) add();
+          else motionRef.current.armed = false;
+        })
+        .catch(() => { motionRef.current.armed = false; });
+    } else {
+      add();
+    }
+  }, []);
+  armSensorsRef.current = armSensors;
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const w = window as unknown as {
+      DeviceOrientationEvent?: { requestPermission?: () => Promise<string> };
+    };
+    const hasAny = "DeviceOrientationEvent" in window || "DeviceMotionEvent" in window;
+    if (!hasAny) { setMotionUI("hidden"); return; }
+    const needsPerm = !!(w.DeviceOrientationEvent && typeof w.DeviceOrientationEvent.requestPermission === "function");
+    if (needsPerm) setMotionUI("prompt");
+    else armSensors();
+    const m = motionRef.current;
+    return () => {
+      if (m.onOrient) window.removeEventListener("deviceorientation", m.onOrient);
+      if (m.onMotion) window.removeEventListener("devicemotion", m.onMotion);
+      m.armed = false; m.onOrient = null; m.onMotion = null;
+    };
+  }, [armSensors]);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+
+    const reduceQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+    reduceRef.current = reduceQuery.matches;
+    const onReduce = () => { reduceRef.current = reduceQuery.matches; };
+    reduceQuery.addEventListener?.("change", onReduce);
+
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({ antialias: false, alpha: false, powerPreference: "high-performance" });
+    } catch {
+      setFallback(true);
+      return;
+    }
+    renderer.setPixelRatio(clamp(window.devicePixelRatio || 1, 1, 2));
+    renderer.domElement.style.cssText = "display:block;width:100%;height:100%;touch-action:none;cursor:crosshair";
+    renderer.domElement.setAttribute("role", "img");
+    renderer.domElement.setAttribute(
+      "aria-label",
+      "A luminous bloom of comet-shaped petals arranged in rings around two soft suns, breathing in and out of focus. Tap to refocus and send a ripple of light; press and hold to dilate the pupil toward night; slide or flick to gust wind through the petals; pinch to pull the two suns apart or merge them; twist two fingers to turn the whole formation; shake for a burst of light; tilt for parallax; and turn the phone sideways to trade day for night.",
+    );
+    host.appendChild(renderer.domElement);
+
+    // ── scene ────────────────────────────────────────────────────────────
+    const scene = new THREE.Scene();
+    let aspect = 1;
+    const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, -1, 1);
+
+    const uniforms = {
+      uTime: { value: 0 },
+      uRot: { value: 0 },
+      uChi: { value: 0.35 },
+      uSunA: { value: new THREE.Vector2(-0.3, 0.04) },
+      uSunB: { value: new THREE.Vector2(0.34, -0.06) },
+      uPar: { value: new THREE.Vector2(0, 0) },
+      uGustDir: { value: new THREE.Vector2(1, 0) },
+      uGustAmt: { value: 0 },
+      uWaveAng: { value: 0 },
+      uRipple: { value: new THREE.Vector3(0, 0, 99) },
+      uFlash: { value: 0 },
+      uFocus: { value: 0.35 },
+      uPupil: { value: 0 },
+      uNightMix: { value: 0 },
+      uWarm: { value: new THREE.Vector3() },
+      uCool: { value: new THREE.Vector3() },
+      uTail: { value: new THREE.Vector3() },
+      uBg0: { value: new THREE.Vector3() },
+      uBg1: { value: new THREE.Vector3() },
+      uAspect: { value: 1 },
+      uBloomAmt: { value: 1.15 },
+    };
+
+    // background sky
+    const bgGeo = new THREE.BufferGeometry();
+    bgGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array([-1, -1, 0, 3, -1, 0, -1, 3, 0]), 3));
+    const bgMat = new THREE.ShaderMaterial({
+      vertexShader: BG_VERT,
+      fragmentShader: BG_FRAG,
+      uniforms,
+      depthTest: false,
+      depthWrite: false,
+    });
+    const bgMesh = new THREE.Mesh(bgGeo, bgMat);
+    bgMesh.frustumCulled = false;
+    bgMesh.renderOrder = 0;
+    scene.add(bgMesh);
+
+    // petals
+    const COUNT = reduceRef.current ? 260 : 470;
+    const plane = new THREE.PlaneGeometry(1, 1);
+    const geo = new THREE.InstancedBufferGeometry();
+    geo.index = plane.index;
+    geo.setAttribute("position", plane.getAttribute("position"));
+    geo.setAttribute("uv", plane.getAttribute("uv"));
+    geo.instanceCount = COUNT;
+
+    const aRing = new Float32Array(COUNT);
+    const aAng = new Float32Array(COUNT);
+    const aDepth = new Float32Array(COUNT);
+    const aPhase = new Float32Array(COUNT);
+    const aSeed = new Float32Array(COUNT);
+    const aSun = new Float32Array(COUNT);
+    // petals arranged in loose rings, like the video: a few seeds per ring
+    // step, jittered so the formation is organic rather than mechanical
+    for (let i = 0; i < COUNT; i++) {
+      const ring = 0.14 + Math.pow(Math.random(), 0.72) * 1.05;
+      aRing[i] = ring;
+      aAng[i] = Math.random() * Math.PI * 2;
+      aDepth[i] = clamp(ring / 1.2 + (Math.random() - 0.5) * 0.3, 0, 1);
+      aPhase[i] = Math.random();
+      aSeed[i] = Math.random();
+      aSun[i] = Math.random() < 0.55 ? 0 : 1;
+    }
+    geo.setAttribute("aRing", new THREE.InstancedBufferAttribute(aRing, 1));
+    geo.setAttribute("aAng", new THREE.InstancedBufferAttribute(aAng, 1));
+    geo.setAttribute("aDepth", new THREE.InstancedBufferAttribute(aDepth, 1));
+    geo.setAttribute("aPhase", new THREE.InstancedBufferAttribute(aPhase, 1));
+    geo.setAttribute("aSeed", new THREE.InstancedBufferAttribute(aSeed, 1));
+    geo.setAttribute("aSun", new THREE.InstancedBufferAttribute(aSun, 1));
+
+    const petalMat = new THREE.ShaderMaterial({
+      vertexShader: PETAL_VERT,
+      fragmentShader: PETAL_FRAG,
+      uniforms,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+      blending: THREE.NormalBlending,
+      premultipliedAlpha: true,
+    });
+    const petals = new THREE.Mesh(geo, petalMat);
+    petals.frustumCulled = false;
+    petals.renderOrder = 1;
+    scene.add(petals);
+
+    // ── post: brightpass → blur → composite ──────────────────────────────
+    const postScene = new THREE.Scene();
+    const postGeo = new THREE.BufferGeometry();
+    postGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array([-1, -1, 0, 3, -1, 0, -1, 3, 0]), 3));
+    postGeo.setAttribute("uv", new THREE.BufferAttribute(new Float32Array([0, 0, 2, 0, 0, 2]), 2));
+    const postMat = new THREE.ShaderMaterial({
+      vertexShader: QUAD_VERT,
+      fragmentShader: BRIGHT_FRAG,
+      uniforms: { tSrc: { value: null }, uThresh: { value: 0.8 } },
+      depthTest: false,
+      depthWrite: false,
+    });
+    const blurMat = new THREE.ShaderMaterial({
+      vertexShader: QUAD_VERT,
+      fragmentShader: BLUR_FRAG,
+      uniforms: { tSrc: { value: null }, uDir: { value: new THREE.Vector2() } },
+      depthTest: false,
+      depthWrite: false,
+    });
+    const compMat = new THREE.ShaderMaterial({
+      vertexShader: QUAD_VERT,
+      fragmentShader: COMPOSITE_FRAG,
+      uniforms: { tScene: { value: null }, tBloom: { value: null }, uBloomAmt: uniforms.uBloomAmt },
+      depthTest: false,
+      depthWrite: false,
+    });
+    const postMesh = new THREE.Mesh(postGeo, postMat);
+    postMesh.frustumCulled = false;
+    postScene.add(postMesh);
+    const postCam = new THREE.OrthographicCamera(-1, 1, 1, -1, -1, 1);
+
+    let rtScene: THREE.WebGLRenderTarget | null = null;
+    let rtA: THREE.WebGLRenderTarget | null = null;
+    let rtB: THREE.WebGLRenderTarget | null = null;
+
+    const makeTargets = (w: number, h: number) => {
+      rtScene?.dispose(); rtA?.dispose(); rtB?.dispose();
+      rtScene = new THREE.WebGLRenderTarget(w, h);
+      rtA = new THREE.WebGLRenderTarget(w >> 1, h >> 1);
+      rtB = new THREE.WebGLRenderTarget(w >> 1, h >> 1);
+    };
+
+    // ── interaction state ────────────────────────────────────────────────
+    let simT = 0;
+    let rotSpeed = 0.05;
+    let rotExtra = 0;
+    let focusTarget = 0.35;
+    let focusBreathing = true;
+    let sep = 0.66, sepTarget = 0.66;
+    let bary = new THREE.Vector2(0, 0);
+    const baryTarget = new THREE.Vector2(0, 0);
+    let orbAng = 0;
+    let gustAmt = 0;
+    let pupilTarget = 0;
+    let night = false;
+    let nightMix = 0;
+    let flash = 0;
+    let merged = false;
+    let landscape: boolean | null = null;
+
+    type P = { x0: number; y0: number; x: number; y: number; px: number; py: number; pt: number; t0: number; moved: boolean };
+    const pointers = new Map<number, P>();
+    let pinch: { d0: number; a0: number; sep0: number; rot0: number; cx0: number; cy0: number; bx0: number; by0: number } | null = null;
+
+    const toWorld = (cx: number, cy: number): [number, number] => {
+      const rect = renderer.domElement.getBoundingClientRect();
+      const x = ((cx - rect.left) / rect.width * 2 - 1) * aspect;
+      const y = -((cy - rect.top) / rect.height * 2 - 1);
+      return [x, y];
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      ensureAudio();
+      renderer.domElement.setPointerCapture?.(e.pointerId);
+      pointers.set(e.pointerId, {
+        x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY,
+        px: e.clientX, py: e.clientY, pt: performance.now(),
+        t0: performance.now(), moved: false,
+      });
+      if (pointers.size === 2) {
+        const [a, b] = [...pointers.values()];
+        pinch = {
+          d0: Math.max(24, Math.hypot(b.x - a.x, b.y - a.y)),
+          a0: Math.atan2(b.y - a.y, b.x - a.x),
+          sep0: sepTarget,
+          rot0: rotExtra,
+          cx0: (a.x + b.x) / 2,
+          cy0: (a.y + b.y) / 2,
+          bx0: baryTarget.x,
+          by0: baryTarget.y,
+        };
+      }
+    };
+
+    const onPointerMove = (e: PointerEvent) => {
+      const p = pointers.get(e.pointerId);
+      if (!p) return;
+      const fromX = p.x, fromY = p.y, fromT = p.pt;
+      p.px = fromX; p.py = fromY;
+      p.x = e.clientX; p.y = e.clientY; p.pt = performance.now();
+      if (!p.moved && Math.hypot(p.x - p.x0, p.y - p.y0) > 10) p.moved = true;
+
+      if (pointers.size >= 2 && pinch) {
+        const [a, b] = [...pointers.values()];
+        const d = Math.max(24, Math.hypot(b.x - a.x, b.y - a.y));
+        const ang = Math.atan2(b.y - a.y, b.x - a.x);
+        sepTarget = clamp(pinch.sep0 * (d / pinch.d0), 0.04, 0.9);
+        rotExtra = pinch.rot0 - (ang - pinch.a0);
+        const rect = renderer.domElement.getBoundingClientRect();
+        const cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
+        baryTarget.x = clamp(pinch.bx0 + ((cx - pinch.cx0) / rect.width) * 2 * aspect, -0.6, 0.6);
+        baryTarget.y = clamp(pinch.by0 - ((cy - pinch.cy0) / rect.height) * 2, -0.6, 0.6);
+        return;
+      }
+
+      if (p.moved) {
+        const dx = p.x - fromX, dy = p.y - fromY;
+        const dist = Math.hypot(dx, dy);
+        if (dist > 1) {
+          const dtms = Math.max(8, p.pt - fromT);
+          const speed = dist / dtms;
+          uniforms.uGustDir.value.set(dx / dist, -dy / dist);
+          gustAmt = clamp(gustAmt + speed * 0.25, 0, 1.4);
+          try { audioRef.current?.whoosh(clamp(speed * 0.7, 0, 1)); } catch { /* noop */ }
+        }
+      }
+    };
+
+    const onPointerEnd = (e: PointerEvent) => {
+      const p = pointers.get(e.pointerId);
+      if (!p) return;
+      pointers.delete(e.pointerId);
+      if (pointers.size < 2) pinch = null;
+      const held = (performance.now() - p.t0) / 1000;
+
+      if (pupilTarget > 0 && pointers.size === 0) {
+        pupilTarget = 0;
+        return;
+      }
+
+      if (!p.moved && held < 0.3 && e.type !== "pointercancel") {
+        // tap: refocus to that ring and send light running outward
+        const [wx, wy] = toWorld(p.x, p.y);
+        const da = Math.hypot(wx - uniforms.uSunA.value.x, wy - uniforms.uSunA.value.y);
+        const db = Math.hypot(wx - uniforms.uSunB.value.x, wy - uniforms.uSunB.value.y);
+        focusTarget = clamp(Math.min(da, db) / 1.2, 0, 1);
+        focusBreathing = false;
+        uniforms.uRipple.value.set(wx, wy, 0);
+        try { audioRef.current?.chime(1 - focusTarget); } catch { /* noop */ }
+        try { haptics.tap(); } catch { /* noop */ }
+        return;
+      }
+
+      if (p.moved) {
+        const dtms = Math.max(16, performance.now() - p.pt + 16);
+        const speed = Math.hypot(p.x - p.px, p.y - p.py) / dtms;
+        if (speed > 0.6) {
+          gustAmt = clamp(gustAmt + speed * 0.5, 0, 2);
+          try { audioRef.current?.whoosh(1); } catch { /* noop */ }
+          try { haptics.chop(); } catch { /* noop */ }
+        }
+      }
+    };
+
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      focusTarget = clamp(focusTarget + e.deltaY * 0.0008, 0, 1);
+      focusBreathing = false;
+    };
+
+    renderer.domElement.addEventListener("pointerdown", onPointerDown);
+    renderer.domElement.addEventListener("pointermove", onPointerMove);
+    renderer.domElement.addEventListener("pointerup", onPointerEnd);
+    renderer.domElement.addEventListener("pointercancel", onPointerEnd);
+    renderer.domElement.addEventListener("wheel", onWheel, { passive: false });
+
+    const resize = () => {
+      const rect = host.getBoundingClientRect();
+      const w = Math.max(1, Math.round(rect.width));
+      const h = Math.max(1, Math.round(rect.height));
+      renderer.setSize(w, h, false);
+      aspect = w / h;
+      camera.left = -aspect; camera.right = aspect;
+      camera.top = 1; camera.bottom = -1;
+      camera.updateProjectionMatrix();
+      uniforms.uAspect.value = aspect;
+      const dpr = renderer.getPixelRatio();
+      makeTargets(Math.round(w * dpr), Math.round(h * dpr));
+      const nowLandscape = w > h;
+      if (landscape !== null && nowLandscape !== landscape && !reduceRef.current) {
+        night = !night;
+        flash = Math.max(flash, 0.5);
+        try { audioRef.current?.nightfall(night); } catch { /* noop */ }
+        try { haptics.ripple(0.6); } catch { /* noop */ }
+      }
+      landscape = nowLandscape;
+    };
+    resize();
+    window.addEventListener("resize", resize);
+
+    // ── weather blending ─────────────────────────────────────────────────
+    const setV3 = (u: { value: THREE.Vector3 }, day: number[], nt: number[], m: number) => {
+      u.value.set(mix(day[0], nt[0], m), mix(day[1], nt[1], m), mix(day[2], nt[2], m));
+    };
+    const blend3 = (a: number[], b: number[], t: number): number[] => [
+      mix(a[0], b[0], t), mix(a[1], b[1], t), mix(a[2], b[2], t),
+    ];
+
+    let raf = 0;
+    let last = performance.now();
+    const step = (now: number) => {
+      raf = requestAnimationFrame(step);
+      const dt = clamp((now - last) / 1000, 0.001, 0.05);
+      last = now;
+      if (document.hidden || !rtScene || !rtA || !rtB) return;
+      const reduced = reduceRef.current;
+      const speed = reduced ? 0.35 : 1;
+      simT += dt * speed;
+
+      // long-press: a still finger past 0.38s dilates the pupil
+      if (pointers.size === 1) {
+        const p = [...pointers.values()][0];
+        if (!p.moved && (now - p.t0) / 1000 > 0.38) {
+          if (pupilTarget === 0) {
+            try { haptics.ripple(0.4); } catch { /* noop */ }
+          }
+          pupilTarget = 1;
+        }
+      }
+
+      if (shakeRef.current.pending > 0 && !reduced) {
+        flash = Math.max(flash, shakeRef.current.pending * 0.8);
+        gustAmt = clamp(gustAmt + shakeRef.current.pending, 0, 2);
+        rotSpeed = 0.05 + shakeRef.current.pending * 0.25;
+        shakeRef.current.pending = 0;
+        try { audioRef.current?.whoosh(1); } catch { /* noop */ }
+        try { haptics.roll(); } catch { /* noop */ }
+      }
+
+      // springs and drifts
+      rotSpeed = mix(rotSpeed, 0.05, 1 - Math.exp(-dt * 0.6));
+      uniforms.uRot.value += (rotSpeed * speed) * dt;
+      uniforms.uChi.value = 0.32 + 0.3 * Math.sin(simT * 0.05);
+      uniforms.uWaveAng.value += dt * speed * 0.55;
+      gustAmt = mix(gustAmt, 0, 1 - Math.exp(-dt * 2.2));
+      uniforms.uGustAmt.value = gustAmt;
+      flash = mix(flash, 0, 1 - Math.exp(-dt * 4));
+      uniforms.uFlash.value = flash;
+      if (uniforms.uRipple.value.z < 90) uniforms.uRipple.value.z += dt;
+
+      // focus breathes until a tap takes over; a long quiet spell resumes it
+      if (focusBreathing) focusTarget = 0.38 + 0.28 * Math.sin(simT * 0.1);
+      uniforms.uFocus.value = mix(uniforms.uFocus.value, focusTarget, 1 - Math.exp(-dt * 3));
+
+      uniforms.uPupil.value = mix(uniforms.uPupil.value, pupilTarget, 1 - Math.exp(-dt * 3.4));
+      nightMix = mix(nightMix, night ? 1 : 0, 1 - Math.exp(-dt * 1.6));
+      uniforms.uNightMix.value = nightMix;
+
+      // the suns waltz; pinch reels them together or apart
+      sep = mix(sep, sepTarget, 1 - Math.exp(-dt * 4));
+      if (!merged && sep < 0.12) {
+        merged = true;
+        flash = Math.max(flash, 0.9);
+        try { audioRef.current?.bell(); } catch { /* noop */ }
+        try { haptics.storm(); } catch { /* noop */ }
+      } else if (merged && sep > 0.2) {
+        merged = false;
+      }
+      orbAng += dt * speed * 0.07;
+      bary = bary.lerp(baryTarget, 1 - Math.exp(-dt * 3));
+      const rot = uniforms.uRot.value + rotExtra;
+      const ca = Math.cos(orbAng), sa = Math.sin(orbAng);
+      uniforms.uSunA.value.set(bary.x - ca * sep * 0.5, bary.y - sa * sep * 0.35);
+      uniforms.uSunB.value.set(bary.x + ca * sep * 0.5, bary.y + sa * sep * 0.35);
+
+      // tilt parallax
+      uniforms.uPar.value.x = mix(uniforms.uPar.value.x, tiltRef.current.tx, 1 - Math.exp(-dt * 4));
+      uniforms.uPar.value.y = mix(uniforms.uPar.value.y, -tiltRef.current.ty, 1 - Math.exp(-dt * 4));
+
+      // weather
+      const phase = simT * 0.016;
+      const wi = ((Math.floor(phase) % WEATHERS.length) + WEATHERS.length) % WEATHERS.length;
+      const wf = phase - Math.floor(phase);
+      const sm = wf * wf * (3 - 2 * wf);
+      const A = WEATHERS[wi], B = WEATHERS[(wi + 1) % WEATHERS.length];
+      const dusk = clamp(uniforms.uPupil.value * 0.55, 0, 1);
+      setV3(uniforms.uWarm, blend3(A.warm, B.warm, sm), NIGHT.warm, Math.max(nightMix, dusk * 0.4));
+      setV3(uniforms.uCool, blend3(A.cool, B.cool, sm), NIGHT.cool, Math.max(nightMix, dusk * 0.4));
+      setV3(uniforms.uTail, blend3(A.tail, B.tail, sm), NIGHT.tail, nightMix);
+      setV3(uniforms.uBg0, blend3(A.bg0, B.bg0, sm), NIGHT.bg0, Math.max(nightMix, dusk));
+      setV3(uniforms.uBg1, blend3(A.bg1, B.bg1, sm), NIGHT.bg1, Math.max(nightMix, dusk));
+      uniforms.uBloomAmt.value = 1.05 + nightMix * 0.5 + uniforms.uPupil.value * 0.3;
+
+      // apply the twist on top of the slow rotation for this frame
+      const savedRot = uniforms.uRot.value;
+      uniforms.uRot.value = rot;
+      uniforms.uTime.value = simT;
+
+      // render: scene → bright → blur ↔ blur → composite
+      renderer.setRenderTarget(rtScene);
+      renderer.render(scene, camera);
+
+      postMesh.material = postMat;
+      postMat.uniforms.tSrc.value = rtScene.texture;
+      renderer.setRenderTarget(rtA);
+      renderer.render(postScene, postCam);
+
+      postMesh.material = blurMat;
+      for (let i = 0; i < 2; i++) {
+        blurMat.uniforms.tSrc.value = rtA.texture;
+        blurMat.uniforms.uDir.value.set(1 / rtA.width, 0);
+        renderer.setRenderTarget(rtB);
+        renderer.render(postScene, postCam);
+        blurMat.uniforms.tSrc.value = rtB.texture;
+        blurMat.uniforms.uDir.value.set(0, 1 / rtB.height);
+        renderer.setRenderTarget(rtA);
+        renderer.render(postScene, postCam);
+      }
+
+      postMesh.material = compMat;
+      compMat.uniforms.tScene.value = rtScene.texture;
+      compMat.uniforms.tBloom.value = rtA.texture;
+      renderer.setRenderTarget(null);
+      renderer.render(postScene, postCam);
+
+      uniforms.uRot.value = savedRot;
+    };
+    raf = requestAnimationFrame(step);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("resize", resize);
+      renderer.domElement.removeEventListener("pointerdown", onPointerDown);
+      renderer.domElement.removeEventListener("pointermove", onPointerMove);
+      renderer.domElement.removeEventListener("pointerup", onPointerEnd);
+      renderer.domElement.removeEventListener("pointercancel", onPointerEnd);
+      renderer.domElement.removeEventListener("wheel", onWheel);
+      reduceQuery.removeEventListener?.("change", onReduce);
+      rtScene?.dispose(); rtA?.dispose(); rtB?.dispose();
+      geo.dispose(); plane.dispose(); bgGeo.dispose(); postGeo.dispose();
+      petalMat.dispose(); bgMat.dispose(); postMat.dispose(); blurMat.dispose(); compMat.dispose();
+      renderer.dispose();
+      try { host.removeChild(renderer.domElement); } catch { /* noop */ }
+      try { audioRef.current?.dispose(); } catch { /* noop */ }
+      audioRef.current = null;
+    };
+  }, [ensureAudio]);
+
+  return (
+    <div className="beam-stage" ref={hostRef}>
+      {fallback && (
+        <div className="beam-fallback" aria-hidden="true">
+          <div className="beam-fallback-eye" />
+        </div>
+      )}
+      <div className="beam-title" aria-hidden="true">
+        <span>the eye of heaven</span>
+        <strong>beam</strong>
+      </div>
+      <div className="beam-hud">
+        <span className="beam-hint" aria-hidden="true">tap · hold · gust · pinch</span>
+        {motionUI === "prompt" && (
+          <button
+            type="button"
+            className="beam-motion-chip"
+            aria-label="Enable motion so tilting adds parallax and shaking sends light through the petals"
+            onClick={() => { ensureAudio(); armSensorsRef.current(); }}
+          >
+            <span aria-hidden="true">◒</span>
+            <span>tilt &amp; shake to play</span>
+          </button>
+        )}
+        {motionUI === "on" && (
+          <div className="beam-motion-chip beam-motion-on" aria-hidden="true">
+            <span>◒</span>
+            <span>tilt &amp; shake live</span>
+          </div>
+        )}
+      </div>
+      <style
+        dangerouslySetInnerHTML={{
+          __html: `
+.beam-stage {
+  position: fixed;
+  inset: 0;
+  background: #ede8db;
+  overflow: hidden;
+}
+.beam-stage canvas {
+  position: absolute;
+  inset: 0;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.beam-fallback {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(circle at 50% 45%, #f6efdd 0%, #e4d4bc 55%, #cbb79e 100%);
+}
+.beam-fallback-eye {
+  width: 42vmin;
+  height: 42vmin;
+  border-radius: 50%;
+  background: radial-gradient(circle, #fffdf4 0%, #f0dcae 34%, #d8bd8e 62%, transparent 72%);
+  filter: blur(2px);
+}
+.beam-title {
+  position: absolute;
+  left: 18px;
+  bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  pointer-events: none;
+  color: #5a4834;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+.beam-title strong {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  color: #40311f;
+}
+.beam-hud {
+  position: absolute;
+  right: 16px;
+  bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+.beam-hint {
+  color: rgba(90, 72, 52, 0.55);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  pointer-events: none;
+}
+.beam-motion-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(90, 72, 52, 0.3);
+  border-radius: 999px;
+  padding: 7px 12px;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: #4c3b26;
+  background: rgba(255, 251, 240, 0.75);
+  backdrop-filter: blur(6px);
+  cursor: pointer;
+}
+.beam-motion-chip:active { transform: scale(0.97); }
+.beam-motion-on {
+  cursor: default;
+  opacity: 0.65;
+}
+@media (prefers-reduced-motion: reduce) {
+  .beam-motion-chip { display: none; }
+}
+`,
+        }}
+      />
+    </div>
+  );
+}

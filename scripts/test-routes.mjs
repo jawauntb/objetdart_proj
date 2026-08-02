@@ -80,6 +80,7 @@ const expectedKeys = [
   "growth",
   "stars",
   "comb",
+  "beam",
   "signal",
   "light",
   "music-color",
@@ -100,6 +101,7 @@ const expectedKeys = [
 const preferredNavigationKeys = [
   "atlas",
   "coin",
+  "beam",
   "comb",
   "stars",
   "ocean",

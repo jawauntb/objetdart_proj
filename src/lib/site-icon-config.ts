@@ -5,6 +5,7 @@ export type SiteIconKey =
   | "aphros"
   | "archive"
   | "atlas"
+  | "beam"
   | "beyond"
   | "charts"
   | "dither"
@@ -305,6 +306,19 @@ export const SITE_ICON_VISUALS = {
     accent: "#c7eb98",
     accent2: "#e2bc6f",
     ink: "#efffdb",
+  },
+  beam: {
+    title: "Beam",
+    description: "the eye of heaven — bokeh petals around binary suns",
+    path: "/beam",
+    shortName: "beam",
+    kind: "flowers",
+    bg: "#ede8db",
+    bg2: "#d3bd9a",
+    glow: "#e8c476",
+    accent: "#a6c0dc",
+    accent2: "#9a94c4",
+    ink: "#40311f",
   },
   jewel: {
     title: "Jewel",
