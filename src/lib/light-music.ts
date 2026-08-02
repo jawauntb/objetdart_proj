@@ -1,11 +1,21 @@
 export const SPEED_OF_LIGHT = 299_792_458;
+
+// Both human ranges, edge to edge. The whole audible band (≈E0 up to the
+// hearing ceiling) stretches across the whole visible band, so every pitch
+// owns one color, every color owns one pitch, and the map runs both ways
+// without loss: 20 Hz ↔ 750 nm deep red, 20 kHz ↔ 380 nm deep violet,
+// exponential (log↔log) in between so equal musical intervals cover equal
+// spectral ground.
 export const MIN_WAVELENGTH = 380;
-export const MAX_WAVELENGTH = 700;
-export const BASE_OCTAVE_DROP = 40;
-export const MUSIC_BRIDGE_DIVISOR_MIN = 28;
-export const MUSIC_BRIDGE_DIVISOR_MAX = 56;
+export const MAX_WAVELENGTH = 750;
+export const AUDIBLE_MIN_HZ = 20;
+export const AUDIBLE_MAX_HZ = 20_000;
+
+const AUDIBLE_SPAN = Math.log(AUDIBLE_MAX_HZ / AUDIBLE_MIN_HZ);
+const VISIBLE_SPAN = Math.log(MAX_WAVELENGTH / MIN_WAVELENGTH);
 
 export const SPECTRAL_STOPS = [
+  { nm: 750, color: "#8e2318", name: "deep red" },
   { nm: 700, color: "#d83a2e", name: "red" },
   { nm: 610, color: "#f08a28", name: "orange" },
   { nm: 575, color: "#f5d65b", name: "gold" },
@@ -13,11 +23,8 @@ export const SPECTRAL_STOPS = [
   { nm: 485, color: "#45b8e8", name: "cyan" },
   { nm: 450, color: "#5574f7", name: "blue" },
   { nm: 405, color: "#9a63ee", name: "violet" },
+  { nm: 380, color: "#7a43d8", name: "deep violet" },
 ] as const;
-
-export const OCTAVE_SHIFTS = [-3, -2, -1, 0, 1, 2, 3] as const;
-
-export type OctaveShift = (typeof OCTAVE_SHIFTS)[number];
 
 export type LightTranslation = {
   frequency: number;
@@ -25,8 +32,6 @@ export type LightTranslation = {
   rawWavelength: number;
   optical: number;
   color: string;
-  octaveShift: number;
-  bridgeDivisor: number;
   cents: number;
   exact: boolean;
 };
@@ -76,12 +81,6 @@ export type ParsedMusicInput = {
   warnings: string[];
 };
 
-type TranslateFrequencyOptions = {
-  minBridgeDivisor?: number;
-  maxBridgeDivisor?: number;
-  preferBridgeDivisor?: number;
-};
-
 const NOTE_NAMES = ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"] as const;
 const NOTE_OFFSETS: Record<string, number> = {
   C: 0,
@@ -111,8 +110,15 @@ export function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
 }
 
+// 0..1 across the instrument → wavelength, log-spaced so equal distance is
+// equal musical interval: x = 0 is 750 nm deep red (20 Hz), x = 1 is 380 nm
+// deep violet (20 kHz).
 export function wavelengthFromX(x: number) {
-  return Math.round(MAX_WAVELENGTH - x * (MAX_WAVELENGTH - MIN_WAVELENGTH));
+  return MAX_WAVELENGTH * Math.exp(-clamp(x, 0, 1) * VISIBLE_SPAN);
+}
+
+export function xFromWavelength(nm: number) {
+  return Math.log(MAX_WAVELENGTH / clamp(nm, MIN_WAVELENGTH, MAX_WAVELENGTH)) / VISIBLE_SPAN;
 }
 
 export function colorFromWavelength(nm: number) {
@@ -135,9 +141,11 @@ export function opticalFrequencyThz(nm: number) {
   return SPEED_OF_LIGHT / (nm * 1e-9) / 1e12;
 }
 
-export function audibleFrequency(nm: number, octaveShift: OctaveShift) {
-  const opticalHz = SPEED_OF_LIGHT / (nm * 1e-9);
-  return opticalHz / 2 ** (BASE_OCTAVE_DROP - octaveShift);
+// Exact inverse of translateFrequencyToLight for in-range wavelengths, so
+// playing a color back gives the pitch that made it. octaveShift transposes
+// the result for performance registers without moving the underlying map.
+export function audibleFrequency(nm: number, octaveShift = 0) {
+  return AUDIBLE_MIN_HZ * Math.exp(xFromWavelength(nm) * AUDIBLE_SPAN) * 2 ** octaveShift;
 }
 
 export function noteName(freq: number) {
@@ -180,43 +188,22 @@ export function quantizeFrequency(freq: number, mode: ScaleMode): number {
   return frequencyFromMidi(best);
 }
 
-export function translateFrequencyToLight(
-  frequency: number,
-  options: TranslateFrequencyOptions = {},
-): LightTranslation {
-  const minBridgeDivisor = options.minBridgeDivisor ?? MUSIC_BRIDGE_DIVISOR_MIN;
-  const maxBridgeDivisor = options.maxBridgeDivisor ?? MUSIC_BRIDGE_DIVISOR_MAX;
-  const preferBridgeDivisor = options.preferBridgeDivisor ?? BASE_OCTAVE_DROP;
-  const candidates = Array.from(
-    { length: Math.max(0, maxBridgeDivisor - minBridgeDivisor + 1) },
-    (_, index) => minBridgeDivisor + index,
-  ).map((bridgeDivisor) => {
-    const octaveShift = BASE_OCTAVE_DROP - bridgeDivisor;
-    const rawWavelength = SPEED_OF_LIGHT / (frequency * 2 ** bridgeDivisor) * 1e9;
-    const wavelength = clamp(rawWavelength, MIN_WAVELENGTH, MAX_WAVELENGTH);
-    const translatedFrequency = SPEED_OF_LIGHT / (wavelength * 1e-9) / 2 ** bridgeDivisor;
-    const cents = 1200 * Math.log2(translatedFrequency / frequency);
-    const exact = rawWavelength >= MIN_WAVELENGTH && rawWavelength <= MAX_WAVELENGTH;
+export function translateFrequencyToLight(frequency: number): LightTranslation {
+  const position = Math.log(frequency / AUDIBLE_MIN_HZ) / AUDIBLE_SPAN;
+  const rawWavelength = MAX_WAVELENGTH * Math.exp(-position * VISIBLE_SPAN);
+  const wavelength = clamp(rawWavelength, MIN_WAVELENGTH, MAX_WAVELENGTH);
+  const cents = 1200 * Math.log2(audibleFrequency(wavelength) / frequency);
+  const exact = frequency >= AUDIBLE_MIN_HZ && frequency <= AUDIBLE_MAX_HZ;
 
-    return {
-      frequency,
-      wavelength,
-      rawWavelength,
-      optical: opticalFrequencyThz(wavelength),
-      color: colorFromWavelength(wavelength),
-      octaveShift,
-      bridgeDivisor,
-      cents,
-      exact,
-    };
-  });
-
-  return candidates.sort((a, b) => {
-    if (a.exact !== b.exact) return a.exact ? -1 : 1;
-    const byPitchError = Math.abs(a.cents) - Math.abs(b.cents);
-    if (byPitchError !== 0) return byPitchError;
-    return Math.abs(a.bridgeDivisor - preferBridgeDivisor) - Math.abs(b.bridgeDivisor - preferBridgeDivisor);
-  })[0];
+  return {
+    frequency,
+    wavelength,
+    rawWavelength,
+    optical: opticalFrequencyThz(wavelength),
+    color: colorFromWavelength(wavelength),
+    cents,
+    exact,
+  };
 }
 
 export function parseMusicScore(input: string): ParsedMusicToken[] {
@@ -292,8 +279,6 @@ function parseMusicToken(raw: string): ParsedMusicToken {
       rawWavelength,
       optical,
       color: colorFromWavelength(wavelength),
-      octaveShift: chordNotes[0].octaveShift,
-      bridgeDivisor: chordNotes[0].bridgeDivisor,
       cents,
       exact: chordNotes.every((note) => note.exact),
     };
