@@ -45,6 +45,9 @@ and static) will damage it.
 - Visual smoke checks live in `scripts/smoke-*.mjs`; screenshots land in `iterations/`.
 - Commits follow `feat(room): …` / `fix(room): …` as in the existing history. PRs are
   small and single-purpose: one room, one mechanic.
+- After pushing a branch, always open a PR and set it to auto-merge (merge directly
+  if the repo has no required checks blocking it). Don't leave pushed work waiting
+  for a manual merge.
 - AI endpoints (`src/app/api/*`) prefer `ANTHROPIC_API_KEY`, fall back to
   `GEMINI_API_KEY`, and must keep the hard-coded voice rules in their system prompts.
 - Deploys: Railway from `main` (see `docs/railway-autodeploy.md`).
