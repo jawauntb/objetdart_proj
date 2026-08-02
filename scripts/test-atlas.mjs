@@ -40,10 +40,17 @@ const FAKE_WEBP = Buffer.concat([Buffer.from("RIFF"), Buffer.alloc(4), Buffer.fr
 const SOURCE_PNG_BYTES = Buffer.concat([
   Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
   Buffer.from("atlas-canonical-source"),
+  Buffer.alloc(96, 0x2a),
 ]);
 const SOURCE_PNG = SOURCE_PNG_BYTES.toString("base64");
+const SHARP_CROP_BYTES = Buffer.concat([
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  Buffer.from("sharp-mock-cropped-atlas-region"),
+]);
 const providerCalls = [];
 let failKleinPreview = false;
+let failOpenAIGeneration = false;
+let failOpenAIEdit = false;
 
 function plain(value) {
   return JSON.parse(JSON.stringify(value));
@@ -90,7 +97,7 @@ function createSharpMock() {
         return api;
       },
       png: () => api,
-      toBuffer: async () => Buffer.from(ONE_PIXEL_PNG, "base64"),
+      toBuffer: async () => SHARP_CROP_BYTES,
     };
     return api;
   };
@@ -121,6 +128,12 @@ const atlasModule = loadTsModule("src/lib/atlas-generation.ts", {
     providerCalls.push({ url, init });
     if (init.signal?.aborted) throw new DOMException("aborted", "AbortError");
     if (url === "https://api.openai.com/v1/images/generations") {
+      if (failOpenAIGeneration) {
+        return new Response(JSON.stringify({ error: { code: "upstream_busy" } }), {
+          status: 503,
+          headers: { "content-type": "application/json", "x-request-id": "openai-generation-failure" },
+        });
+      }
       return new Response(JSON.stringify({
         data: [{ b64_json: FAKE_WEBP }],
         usage: { input_tokens: 10, output_tokens: 20, total_tokens: 30 },
@@ -130,6 +143,12 @@ const atlasModule = loadTsModule("src/lib/atlas-generation.ts", {
       });
     }
     if (url === "https://api.openai.com/v1/images/edits") {
+      if (failOpenAIEdit) {
+        return new Response(JSON.stringify({ error: { code: "upstream_busy" } }), {
+          status: 503,
+          headers: { "content-type": "application/json", "x-request-id": "openai-edit-failure" },
+        });
+      }
       return new Response(JSON.stringify({
         data: [{ b64_json: FAKE_WEBP }],
         usage: { input_tokens: 10, output_tokens: 20, total_tokens: 30 },
@@ -233,24 +252,26 @@ const fallbackStyle = resolveAtlasVisualStyle("quiet marble quarries");
 assert.equal(fallbackStyle.id, "concept", "unknown prompts should fall back to concept-shaped style");
 assert.match(fallbackStyle.dna, /Catalan portolan residue/i, "fallback style must still keep Catalan DNA");
 
-const defaultProviderConfig = resolveAtlasProviderConfig({ OPENROUTER_API_KEY: "openrouter-test-key" });
+const defaultProviderConfig = resolveAtlasProviderConfig({ OPENAI_API_KEY: "openai-test-key" });
 const defaultProvider = plain(defaultProviderConfig);
-assert.equal(defaultProvider.provider, "openrouter", "Flux/OpenRouter should be the default Atlas provider");
-assert.equal(defaultProvider.model, "black-forest-labs/flux.2-pro", "the default final adapter should pin FLUX.2 Pro");
+assert.equal(defaultProvider.provider, "openai", "GPT Image should be the default final Atlas provider");
+assert.equal(defaultProvider.model, "gpt-image-2", "the default final adapter should pin GPT Image 2");
 
 const generatedWithDefault = plain(await generateAtlasImage(
   parseAtlasGenerationRequest({ prompt: "space nebula", mode: "generate" }),
   defaultProviderConfig,
 ));
-assert.equal(generatedWithDefault.generation.provider, "openrouter", "the default adapter should return OpenRouter metadata");
-assert.match(generatedWithDefault.dataUrl, /^data:image\/png;base64,/, "Flux output should retain PNG media type");
-const defaultCall = providerCalls.find((call) => {
-  if (call.url !== "https://openrouter.ai/api/v1/images") return false;
-  return JSON.parse(call.init.body).model === "black-forest-labs/flux.2-pro";
-});
-assert.ok(defaultCall, "default generation should call OpenRouter with FLUX.2 Pro");
-assert.equal(JSON.parse(defaultCall.init.body).output_format, "png", "OpenRouter generation should request PNG output");
-const defaultPrompt = JSON.parse(defaultCall.init.body).prompt;
+assert.equal(generatedWithDefault.generation.provider, "openai", "the default adapter should return OpenAI metadata");
+assert.match(generatedWithDefault.dataUrl, /^data:image\/webp;base64,/, "GPT Image output should retain WebP media type");
+const defaultCall = providerCalls.find((call) => call.url === "https://api.openai.com/v1/images/generations");
+assert.ok(defaultCall, "default generation should call GPT Image 2");
+const defaultBody = JSON.parse(defaultCall.init.body);
+assert.equal(defaultBody.model, "gpt-image-2", "final generation should use GPT Image 2");
+assert.equal(defaultBody.quality, "high", "final generation should request high rendering quality");
+assert.equal(defaultBody.size, "1344x1008", "desktop final generation should preserve the Atlas sheet aspect ratio");
+assert.equal(defaultBody.output_format, "webp", "final generation should request a compact lossless-looking web format");
+assert.equal(defaultBody.output_compression, 92, "final generation should avoid low-quality compression artifacts");
+const defaultPrompt = defaultBody.prompt;
 assert.match(defaultPrompt, /deep-space|nebula|constellation/i, "provider prompts should mutate toward the concept theme");
 assert.match(defaultPrompt, /Catalan portolan residue/i, "provider prompts should retain ~5% Catalan atlas DNA");
 assert.match(defaultPrompt, /<visual_concept>space nebula<\/visual_concept>/, "concept text should stay inside the subject tag");
@@ -260,11 +281,9 @@ assert.doesNotMatch(
   "the old always-Catalan primary clause should no longer dominate themed prompts",
 );
 
-assertRequestError(
-  () => resolveAtlasProviderConfig({ OPENAI_API_KEY: "openai-test-key" }, "openai"),
-  "invalid_provider_configuration",
-  "OpenAI should stay disabled while Atlas is Flux-only",
-);
+const openAIProvider = resolveAtlasProviderConfig({ OPENAI_API_KEY: "openai-test-key" }, "openai");
+assert.equal(openAIProvider.provider, "openai", "OpenAI should be an allowlisted final provider");
+assert.equal(openAIProvider.model, "gpt-image-2", "OpenAI should pin the current high-quality image model");
 
 const openRouterProvider = resolveAtlasProviderConfig(
   { OPENROUTER_API_KEY: "openrouter-test-key" },
@@ -668,18 +687,22 @@ assert.deepEqual(plain(diagonalNeighbor.clip), plain(nw), "diagonal neighbor req
 
 const progressiveRoute = loadAtlasRoute({
   ATLAS_GENERATION_ENABLED: "true",
-  ATLAS_IMAGE_PROVIDER: "openrouter-pro",
+  ATLAS_IMAGE_PROVIDER: "openai",
+  OPENAI_API_KEY: "openai-test-key",
   OPENROUTER_API_KEY: "openrouter-test-key",
 });
 const canonicalInteractionId = "atlas-canonical-interaction-001";
+const canonicalClip = { x: 0.2, y: 0.25, width: 0.4, height: 0.5 };
 const canonicalBody = JSON.stringify({
   prompt: "fire forest",
   currentImage: `data:image/png;base64,${SOURCE_PNG}`,
   viewport: { width: 390, height: 844 },
   focus: { x: 0.42, y: 0.58, zoom: 2.5 },
+  clip: canonicalClip,
   mode: "zoom",
 });
 const progressiveCallsStart = providerCalls.length;
+const progressiveSharpCallsStart = sharpExtractCalls.length;
 const [previewResponse, finalResponse] = await Promise.all([
   progressiveRoute.POST(new Request("https://atlas.test/api/atlas/generate?phase=preview", {
     method: "POST",
@@ -701,41 +724,76 @@ const [previewResponse, finalResponse] = await Promise.all([
   })),
 ]);
 assert.equal(previewResponse.status, 200, "the Klein preview should resolve independently");
-assert.equal(finalResponse.status, 200, "the Flux Pro final should resolve independently");
+assert.equal(finalResponse.status, 200, "the GPT Image final should resolve independently");
 assert.equal(previewResponse.body.generation.phase, "preview", "preview responses should identify their phase");
 assert.equal(finalResponse.body.generation.phase, "final", "final responses should identify their phase");
 assert.equal(previewResponse.body.generation.generationId, canonicalInteractionId, "preview should echo the safe stale-response token");
 assert.equal(finalResponse.body.generation.generationId, canonicalInteractionId, "final should echo the same stale-response token");
 assert.equal(previewResponse.body.generation.model, "black-forest-labs/flux.2-klein-4b", "hybrid preview should use Klein");
-assert.equal(finalResponse.body.generation.model, "black-forest-labs/flux.2-pro", "the default hybrid final should use FLUX.2 Pro");
+assert.equal(finalResponse.body.generation.model, "gpt-image-2", "the default hybrid final should use GPT Image 2");
 
 const progressiveCalls = providerCalls.slice(progressiveCallsStart);
 const canonicalPreviewCall = progressiveCalls.find((call) => {
   if (call.url !== "https://openrouter.ai/api/v1/images") return false;
   return JSON.parse(call.init.body).model === "black-forest-labs/flux.2-klein-4b";
 });
-const canonicalFinalCall = progressiveCalls.find((call) => {
-  if (call.url !== "https://openrouter.ai/api/v1/images") return false;
-  return JSON.parse(call.init.body).model === "black-forest-labs/flux.2-pro";
-});
+const canonicalFinalCall = progressiveCalls.find((call) => call.url === "https://api.openai.com/v1/images/edits");
 assert.ok(canonicalPreviewCall, "the preview phase should call Klein");
-assert.ok(canonicalFinalCall, "the final phase should reconstruct with FLUX.2 Pro");
+assert.ok(canonicalFinalCall, "the final phase should reconstruct with GPT Image 2");
 const canonicalPreviewBody = JSON.parse(canonicalPreviewCall.init.body);
-const canonicalFinalBody = JSON.parse(canonicalFinalCall.init.body);
+const canonicalFinalBody = canonicalFinalCall.init.body;
 assert.equal(canonicalPreviewBody.input_references?.length, 1, "zoom preview should sample from the current map");
-assert.equal(canonicalFinalBody.input_references?.length, 1, "zoom final should sample from the current map");
+assert.ok(canonicalFinalBody.get("image") instanceof Blob, "zoom final should sample from the current map");
+assert.equal(canonicalFinalBody.get("model"), "gpt-image-2", "zoom final should edit with GPT Image 2");
+assert.equal(canonicalFinalBody.get("quality"), "high", "zoom final should request high rendering quality");
+assert.equal(canonicalFinalBody.get("size"), "896x1616", "mobile zoom final should preserve the authored portrait sheet geometry");
+const [mobileOutputWidth, mobileOutputHeight] = canonicalFinalBody.get("size").split("x").map(Number);
+assert.equal(mobileOutputWidth % 16, 0, "mobile output width should align to the image model's 16px grid");
+assert.equal(mobileOutputHeight % 16, 0, "mobile output height should align to the image model's 16px grid");
+assert.ok(
+  Math.abs((mobileOutputWidth / mobileOutputHeight) - (853 / 1538)) < 0.001,
+  "mobile output geometry should match the Atlas MOBILE_MAP_ASPECT within one-thousandth",
+);
+const previewCropBytes = Buffer.from(canonicalPreviewBody.input_references[0].image_url.url.split(",")[1], "base64");
+const finalCropBytes = Buffer.from(await canonicalFinalBody.get("image").arrayBuffer());
+assert.deepEqual(previewCropBytes, SHARP_CROP_BYTES, "Flux preview should receive the exact Sharp-mock crop bytes");
+assert.deepEqual(finalCropBytes, SHARP_CROP_BYTES, "OpenAI edit should receive the exact Sharp-mock crop bytes");
+assert.deepEqual(finalCropBytes, previewCropBytes, "preview and final providers should receive byte-identical crop input");
+const expectedCanonicalCrop = plain(pixelBoundsForClip(canonicalClip, 100, 80));
+const progressiveSharpCalls = sharpExtractCalls.slice(progressiveSharpCallsStart);
+assert.equal(progressiveSharpCalls.length, 2, "each progressive phase should crop the canonical source once");
+assert.ok(
+  progressiveSharpCalls.every((call) => JSON.stringify(call.region) === JSON.stringify(expectedCanonicalCrop)),
+  "both progressive phases should apply the exact canonical clip bounds",
+);
 assert.match(
   canonicalPreviewBody.prompt,
   /Upsample, extend, and reconstruct|supplied image IS the cropped region sample|supplied atlas sample/i,
   "zoom preview should reconstruct from the focused region sample",
 );
 assert.equal(
-  canonicalFinalBody.prompt,
+  canonicalFinalBody.get("prompt"),
   canonicalPreviewBody.prompt,
   "preview and final should share one canonical server-composed prompt",
 );
 assert.equal(previewResponse.body.generation.operation, "edit", "zoom preview with a source sheet should edit/reconstruct");
 assert.equal(finalResponse.body.generation.operation, "edit", "zoom final with a source sheet should edit/reconstruct");
+
+const preCroppedSharpCallsStart = sharpExtractCalls.length;
+const preCroppedResult = plain(await generateAtlasImage(parseAtlasGenerationRequest({
+  prompt: "fire forest",
+  currentImage: `data:image/png;base64,${SHARP_CROP_BYTES.toString("base64")}`,
+  viewport: { width: 390, height: 844 },
+  focus: { x: 0.42, y: 0.58, zoom: 2.5 },
+  clip: canonicalClip,
+  sourceImageCropped: true,
+  mode: "zoom",
+}), openAIProvider));
+assert.equal(preCroppedResult.generation.operation, "edit", "pre-cropped sources should still use the OpenAI edit endpoint");
+const preCroppedCall = [...providerCalls].reverse().find((call) => call.url === "https://api.openai.com/v1/images/edits");
+const preCroppedBytes = Buffer.from(await preCroppedCall.init.body.get("image").arrayBuffer());
+assert.deepEqual(preCroppedBytes, SHARP_CROP_BYTES, "pre-cropped sources should reach OpenAI without another crop");
+assert.equal(sharpExtractCalls.length, preCroppedSharpCallsStart, "sourceImageCropped should suppress duplicate Sharp extraction");
 
 const proFinalRoute = loadAtlasRoute({
   ATLAS_GENERATION_ENABLED: "true",
@@ -784,6 +842,90 @@ try {
   assert.equal(survivingFinal.body.generation.phase, "final", "the surviving final should retain phase metadata");
 } finally {
   failKleinPreview = false;
+}
+
+const keylessOpenAIRoute = loadAtlasRoute({
+  ATLAS_GENERATION_ENABLED: "true",
+  ATLAS_IMAGE_PROVIDER: "openai",
+  OPENROUTER_API_KEY: "openrouter-test-key",
+});
+const keylessGenerationId = "atlas-keyless-openai-final-001";
+const [keylessPreview, keylessFinal] = await Promise.all([
+  keylessOpenAIRoute.POST(new Request("https://atlas.test/api/atlas/generate?phase=preview", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-atlas-generation-id": keylessGenerationId,
+      "x-real-ip": "127.0.0.37",
+    },
+    body: JSON.stringify({ prompt: "keyless harbor", mode: "generate" }),
+  })),
+  keylessOpenAIRoute.POST(new Request("https://atlas.test/api/atlas/generate?phase=final", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-atlas-generation-id": keylessGenerationId,
+      "x-real-ip": "127.0.0.37",
+    },
+    body: JSON.stringify({ prompt: "keyless harbor", mode: "generate" }),
+  })),
+]);
+assert.equal(keylessPreview.status, 200, "a configured Flux preview should succeed independently of the final key");
+assert.equal(keylessFinal.status, 503, "an enabled keyless OpenAI final should fail as configuration, not demo mode");
+assert.equal(keylessFinal.body.error.code, "invalid_provider_configuration", "keyless finals should expose a stable configuration error");
+assert.equal(keylessFinal.body.generation.reason, "missing_api_key", "keyless finals should identify the missing credential without exposing it");
+assert.equal(keylessFinal.body.generation.phase, "final", "keyless errors should retain final phase metadata");
+assert.equal(keylessFinal.body.generation.generationId, keylessGenerationId, "keyless errors should retain the interaction generation ID");
+
+failOpenAIGeneration = true;
+try {
+  const failedGenerationId = "atlas-openai-generation-failure-001";
+  const [survivingPreview, failedFinal] = await Promise.all([
+    progressiveRoute.POST(new Request("https://atlas.test/api/atlas/generate?phase=preview", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-atlas-generation-id": failedGenerationId,
+        "x-real-ip": "127.0.0.38",
+      },
+      body: JSON.stringify({ prompt: "openai generation failure", mode: "generate" }),
+    })),
+    progressiveRoute.POST(new Request("https://atlas.test/api/atlas/generate?phase=final", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-atlas-generation-id": failedGenerationId,
+        "x-real-ip": "127.0.0.38",
+      },
+      body: JSON.stringify({ prompt: "openai generation failure", mode: "generate" }),
+    })),
+  ]);
+  assert.equal(survivingPreview.status, 200, "a Flux preview should survive an OpenAI generation failure");
+  assert.equal(failedFinal.status, 503, "OpenAI generation failures should remain scoped to final");
+  assert.equal(failedFinal.body.generation.phase, "final", "OpenAI generation errors should retain final phase metadata");
+  assert.equal(failedFinal.body.generation.generationId, failedGenerationId, "OpenAI generation errors should retain generationId");
+} finally {
+  failOpenAIGeneration = false;
+}
+
+failOpenAIEdit = true;
+try {
+  const failedEditGenerationId = "atlas-openai-edit-failure-001";
+  const failedEdit = await progressiveRoute.POST(new Request("https://atlas.test/api/atlas/generate?phase=final", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-atlas-generation-id": failedEditGenerationId,
+      "x-real-ip": "127.0.0.39",
+    },
+    body: canonicalBody,
+  }));
+  assert.equal(failedEdit.status, 503, "OpenAI edit failures should remain scoped to final");
+  assert.equal(failedEdit.body.generation.operation, "edit", "OpenAI edit errors should preserve operation metadata");
+  assert.equal(failedEdit.body.generation.phase, "final", "OpenAI edit errors should retain final phase metadata");
+  assert.equal(failedEdit.body.generation.generationId, failedEditGenerationId, "OpenAI edit errors should retain generationId");
+} finally {
+  failOpenAIEdit = false;
 }
 
 const cancelledController = new AbortController();

@@ -60,16 +60,26 @@ selection stays server-side:
 
 | Server setting | Preview | Final |
 | --- | --- | --- |
-| `ATLAS_IMAGE_PROVIDER=openrouter-pro` (default) | FLUX.2 Klein through OpenRouter | FLUX.2 Pro through OpenRouter |
+| `ATLAS_IMAGE_PROVIDER=openai` (default) | FLUX.2 Klein through OpenRouter | GPT Image 2 at high quality through OpenAI |
+| `ATLAS_IMAGE_PROVIDER=openrouter-pro` | FLUX.2 Klein through OpenRouter | FLUX.2 Pro through OpenRouter |
 | `ATLAS_IMAGE_PROVIDER=openrouter` | FLUX.2 Klein through OpenRouter | FLUX.2 Klein through OpenRouter |
-| `ATLAS_IMAGE_PROVIDER=openai` | disabled for now | disabled for now |
 
 For a paid A/B, use the same prompt, canonical source image, viewport, and focus
 for both settings. Run at least three matched pairs and record time-to-preview,
-time-to-final, output dimensions/crop, landmark continuity, legibility, and
-provider cost. The preview should remain comparable because only the final
-provider changes. Never use the preview image as the final provider's edit
-source; both phases must start from the same canonical map.
+time-to-final, output dimensions/crop, landmark continuity, legibility, local
+detail, and provider cost. The preview should remain comparable because only
+the final provider changes. GPT Image finals request `quality=high`, the same
+portrait/landscape sheet geometry as the viewport, and WebP compression 92.
+Mobile finals use `896x1616`, a 16px-aligned approximation of the Atlas
+`853 / 1538` mobile sheet ratio; desktop finals use `1344x1008`.
+Never use the preview image as the final provider's edit source; both phases
+must start from the same canonical map.
+
+When generation is enabled, each phase requires its own provider credential:
+`OPENROUTER_API_KEY` for the Flux preview and the selected final provider's key
+(`OPENAI_API_KEY` by default) for the final. A missing phase credential returns
+a phase-scoped `503` configuration error with the interaction generation ID;
+the `200` demo response is reserved for explicitly disabled generation.
 
 The existing `npm run compare:atlas-providers` command compares GPT Image 2
 with FLUX.2 Klein by default. Add `--openrouter-provider openrouter-pro` to run

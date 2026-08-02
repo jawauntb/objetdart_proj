@@ -77,7 +77,7 @@ export async function POST(request: Request) {
       return demoResponse(input, providerConfig, phase, generationId, "generation_disabled");
     }
     if (!providerConfig.apiKey) {
-      return demoResponse(input, providerConfig, phase, generationId, "missing_api_key");
+      return configurationErrorResponse(input, phase, generationId, providerConfig);
     }
 
     try {
@@ -194,7 +194,7 @@ function demoResponse(
   providerConfig: AtlasProviderConfig,
   phase: AtlasGenerationPhase,
   generationId: string,
-  reason: "generation_disabled" | "missing_api_key",
+  reason: "generation_disabled",
 ) {
   return json(
     {
@@ -220,20 +220,22 @@ function configurationErrorResponse(
   input: AtlasGenerationRequest,
   phase: AtlasGenerationPhase,
   generationId: string,
+  providerConfig?: AtlasProviderConfig,
 ) {
+  const reason = providerConfig ? "missing_api_key" : "invalid_provider_configuration";
   return json(
     {
       dataUrl: null,
       ...createAtlasGenerationContext(input.prompt),
       generation: {
         status: "error",
-        provider: "unconfigured",
-        model: null,
+        provider: providerConfig?.provider ?? "unconfigured",
+        model: providerConfig?.model ?? null,
         operation: atlasOperationForRequest(input),
         mode: input.mode,
         phase,
         generationId,
-        reason: "invalid_provider_configuration",
+        reason,
         requestId: null,
       },
       error: {
