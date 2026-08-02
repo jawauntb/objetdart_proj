@@ -25,6 +25,7 @@ export type SiteIconKey =
   | "jewel"
   | "kept"
   | "light"
+  | "manifold"
   | "movement"
   | "ocean"
   | "plasma"
@@ -400,6 +401,19 @@ export const SITE_ICON_VISUALS = {
     accent: "#fff1a0",
     accent2: "#70d6ff",
     ink: "#fffce7",
+  },
+  manifold: {
+    title: "Manifold",
+    description: "every scale kept in one fold",
+    path: "/manifold",
+    shortName: "manifold",
+    kind: "beyond",
+    bg: "#04060b",
+    bg2: "#131a33",
+    glow: "#cfe0ff",
+    accent: "#e7ac52",
+    accent2: "#8fb5e8",
+    ink: "#eef4ff",
   },
   movement: {
     title: "Movement",
