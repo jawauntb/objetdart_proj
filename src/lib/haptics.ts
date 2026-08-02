@@ -135,3 +135,28 @@ export function storm(): void {
   const g = gain(0.25);
   haptic([ms(30 * g), ms(40), ms(60 * g), ms(30), ms(90 * g)]);
 }
+
+// ——— Scale words (the manifold's vocabulary; see docs/gesture-grammar.md) ———
+
+/** A focus-ring click — arriving at a scale-band wall. */
+export function detent(): void {
+  haptic(ms(4 * gain()));
+}
+
+/** Breaking through a wall — band travel; a firm roll, felt once. */
+export function crossing(): void {
+  const g = gain(0.15);
+  haptic([ms(10 * g), ms(18), ms(28 * g)]);
+}
+
+/** The lens turning — a twist committed at fixed scale; two soft clicks. */
+export function lens(): void {
+  const g = gain();
+  haptic([ms(4 * g), ms(30), ms(4 * g)]);
+}
+
+/** Something opening under a held finger — a bud, a reading kept. */
+export function bloom(): void {
+  const g = gain(0.05);
+  haptic([ms(6 * g), ms(20), ms(12 * g), ms(20), ms(20 * g)]);
+}
