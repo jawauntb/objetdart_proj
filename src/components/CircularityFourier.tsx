@@ -11,6 +11,7 @@ import {
 } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
+import { attachGestures } from "@/lib/gesture";
 import { useField } from "@/store/field";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
 
@@ -137,6 +138,17 @@ export default function CircularityFourier() {
   const reduceMotionRef = useRef(false);
   const recordTape = useField((s) => s.recordTape);
 
+  // ── gesture-grammar state (law layer, lens, wound spring) ──
+  const swayRef = useRef({ x: 0, y: 0, tx: 0, ty: 0 }); // 3-finger drag sways the stack
+  const speedScaleRef = useRef({ cur: 1, target: 1 });  // 3-finger hold dilates time
+  const boostRef = useRef(0);       // scrub winds / unwinds the epicycle
+  const momentumRef = useRef(0);    // flick throws the wheel
+  const lensTargetRef = useRef(0);  // twist: circle ↔ unrolled sine
+  const twistAccRef = useRef(0);
+  const entrainRef = useRef({ bpm: 0, until: 0, lastBeat: -1 });
+  const lastGestureAtRef = useRef(0);
+  const holdCeremonyRef = useRef(false);
+
   const [preset, setPreset] = useState<Preset>("square");
   const [terms, setTerms] = useState(7);
   const [amplitude, setAmplitude] = useState(1);
@@ -145,6 +157,9 @@ export default function CircularityFourier() {
   const [running, setRunning] = useState(true);
   const [energy, setEnergy] = useState(0.18);
   const [compact, setCompact] = useState(false);
+  const [sway, setSway] = useState({ x: 0, y: 0 });
+  const [lens, setLens] = useState(0);
+  const [glimmer, setGlimmer] = useState(false);
   const [readout, setReadout] = useState("7 harmonics / square");
 
   const presetRef = useLiveRef(preset);
@@ -185,11 +200,51 @@ export default function CircularityFourier() {
       previous = now;
       const reduce = reduceMotionRef.current;
 
+      // three-finger time dilation: the room's clock eases to ~1/4 speed
+      const ts = speedScaleRef.current;
+      ts.cur += (ts.target - ts.cur) * Math.min(1, delta * 0.005);
+
+      const entrain = entrainRef.current;
+      const entrained = now < entrain.until && entrain.bpm > 0;
+      let advance = 0;
       if (runningRef.current && !reduce) {
-        const nextTheta = (thetaRef.current + delta * 0.00145 * speedRef.current) % TAU;
+        advance = entrained
+          ? delta * (TAU / ((60000 / entrain.bpm) * 8)) // one turn per eight beats
+          : delta * 0.00145 * speedRef.current;
+        advance *= ts.cur;
+      }
+      // the wound spring (scrub) and the thrown wheel (flick) turn it even
+      // when paused — a deliberate hand always lands
+      advance += (boostRef.current + momentumRef.current) * delta * 0.0018;
+      boostRef.current *= Math.exp(-delta / 1600);
+      momentumRef.current *= Math.exp(-delta / 1300);
+      if (Math.abs(boostRef.current) < 0.004) boostRef.current = 0;
+      if (Math.abs(momentumRef.current) < 0.004) momentumRef.current = 0;
+      if (advance !== 0) {
+        const nextTheta = (thetaRef.current + advance + TAU) % TAU;
         thetaRef.current = nextTheta;
         setTheta(nextTheta);
       }
+      if (entrained) {
+        const beatIdx = Math.floor(now / (60000 / entrain.bpm));
+        if (beatIdx !== entrain.lastBeat) {
+          entrain.lastBeat = beatIdx;
+          const cfg = PRESETS.find((item) => item.id === presetRef.current) ?? PRESETS[0];
+          try { getFieldAudio().playNote(cfg.midi + (beatIdx % 2) * 5, 80); } catch { /* noop */ }
+          localEnergy = Math.min(1, localEnergy + 0.16);
+        }
+      }
+
+      // the epicycle stack sways under three-finger weather, then settles
+      const sw = swayRef.current;
+      sw.x += (sw.tx - sw.x) * Math.min(1, delta * 0.008);
+      sw.y += (sw.ty - sw.y) * Math.min(1, delta * 0.008);
+      sw.tx *= Math.exp(-delta / 900);
+      sw.ty *= Math.exp(-delta / 900);
+      setSway({ x: sw.x, y: sw.y });
+
+      setLens((prev) => prev + (lensTargetRef.current - prev) * Math.min(1, delta * 0.006));
+      setGlimmer(now - lastGestureAtRef.current > 20000);
 
       localEnergy = mix(localEnergy, pointerRef.current.active ? 1 : 0.2, pointerRef.current.active ? 0.14 : 0.018);
       energyRef.current = localEnergy;
@@ -209,7 +264,9 @@ export default function CircularityFourier() {
   const waveX = compact ? 620 : WAVE_X;
   const waveY = WAVE_Y;
   const orbitScale = (compact ? 0.66 : 1) * amplitude;
-  const waveScale = (compact ? 0.72 : 1) * amplitude;
+  // the lens leans the room toward its other representation: as it turns to
+  // the wave, the unrolled sine swells while the circles recede
+  const waveScale = (compact ? 0.72 : 1) * amplitude * (1 + lens * 0.3);
   const traceStep = compact ? 0.92 : 1.34;
 
   const trace = useMemo(() => {
@@ -227,8 +284,8 @@ export default function CircularityFourier() {
 
   const activePreset = PRESETS.find((item) => item.id === preset) ?? PRESETS[0];
   const wavePath = pathFromPoints(trace);
-  const tipX = centerX + tip.x * orbitScale;
-  const tipY = centerY + tip.y * orbitScale;
+  const tipX = centerX + sway.x + tip.x * orbitScale * (1 - lens * 0.22);
+  const tipY = centerY + sway.y + tip.y * orbitScale * (1 - lens * 0.22);
   const waveTipY = waveY + tip.y * waveScale;
   const stageStyle = {
     "--circularity-tone": activePreset.tone,
@@ -299,6 +356,157 @@ export default function CircularityFourier() {
     });
   };
 
+  // ── gestures (the shared grammar — src/lib/gesture) ────────────────────
+  // One finger touches the material (rotate the phasor, pick harmonics),
+  // two fingers the frame (twist turns the lens: circle ↔ unrolled sine),
+  // three fingers the law (drag sways the stack, hold dilates time).
+  // Pinch and pan2 stay unbound — the frame belongs to the manifold.
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    const el = stage as unknown as HTMLElement;
+    const audio = getFieldAudio();
+    let lastSwayCueAt = 0;
+    let lastScrubAt = 0;
+    let uiDrag = false;
+
+    // the spectrum bars keep their own React handlers (ARIA'd chrome) —
+    // gestures beginning on them are theirs alone
+    const onUi = (x: number, y: number) =>
+      Boolean(document.elementFromPoint(x, y)?.closest("[data-circ-ui]"));
+
+    const detach = attachGestures(el, {
+      tap: (e) => {
+        lastGestureAtRef.current = performance.now();
+        if (e.fingers !== 1 || onUi(e.x, e.y)) return;
+        // tap intensity is the strike: energy, tone and haptic ride the
+        // same 0..1 from core
+        tuneFromPointer(e.x, e.y, 0.4 + e.intensity * 0.6);
+      },
+      drag: (e) => {
+        lastGestureAtRef.current = performance.now();
+        if (e.fingers === 3) {
+          if (e.phase === "end") return;
+          // three fingers drag the weather: the whole epicycle stack sways
+          const sw = swayRef.current;
+          sw.tx = clamp(sw.tx + e.vx * 26, -46, 46);
+          sw.ty = clamp(sw.ty + e.vy * 18, -30, 30);
+          const nowMs = performance.now();
+          if (nowMs - lastSwayCueAt > 700 && Math.hypot(e.vx, e.vy) > 0.25) {
+            lastSwayCueAt = nowMs;
+            try { audio.playNote(38, 240); } catch { /* noop */ }
+            try { haptics.chop(); } catch { /* noop */ }
+            recordTape("region", 0.45, "circularity/sway");
+          }
+          return;
+        }
+        if (e.fingers !== 1) return;
+        if (e.phase === "start") {
+          uiDrag = onUi(e.x, e.y);
+          if (uiDrag) return;
+          pointerRef.current.active = true;
+          tuneFromPointer(e.x, e.y, 0.86);
+          return;
+        }
+        if (e.phase === "end") {
+          pointerRef.current.active = false;
+          uiDrag = false;
+          return;
+        }
+        if (!uiDrag) tuneFromPointer(e.x, e.y, 0.86);
+      },
+      flick: (e) => {
+        lastGestureAtRef.current = performance.now();
+        pointerRef.current.active = false;
+        if (e.fingers !== 1) return;
+        // a flick throws the wheel — angular momentum that spins down
+        const throwSpin = clamp(Math.cos(e.angle) * e.speed * 1.4, -3, 3);
+        momentumRef.current = clamp(momentumRef.current + throwSpin, -3, 3);
+        try { audio.playTone(180 + Math.abs(throwSpin) * 90, 0.2); } catch { /* noop */ }
+        try { haptics.chop(); } catch { /* noop */ }
+        recordTape("ripple", 0.5, "circularity/throw");
+      },
+      hold: (e) => {
+        lastGestureAtRef.current = performance.now();
+        if (e.fingers === 3) {
+          // three fingers hold the law: the rotation slows to quarter speed
+          if (e.phase === "enter") {
+            speedScaleRef.current.target = 0.25;
+            try { audio.playNote(36, 260); } catch { /* noop */ }
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+          if (e.phase === "release") speedScaleRef.current.target = 1;
+          return;
+        }
+        if (e.fingers !== 1) return;
+        if (e.phase === "enter") {
+          holdCeremonyRef.current = false;
+          pointerRef.current.active = true;
+          return;
+        }
+        if (e.phase === "release") {
+          pointerRef.current.active = false;
+          // dwell tier — the long press grows the series by one harmonic
+          if (e.tier >= 2 && e.tier < 3 && !holdCeremonyRef.current) {
+            const next = clamp(termsRef.current + 1, 1, 12);
+            termsRef.current = next;
+            setTerms(next);
+            ringTone("grown", next / 12, next);
+          }
+          return;
+        }
+        // ceremony tier — the room's one solemn act: the full series
+        // unfurls, all twelve circles turning at once
+        if (e.tier >= 3 && !holdCeremonyRef.current) {
+          holdCeremonyRef.current = true;
+          termsRef.current = 12;
+          setTerms(12);
+          try { audio.bell(); } catch { /* noop */ }
+          try { haptics.bloom(); } catch { /* noop */ }
+          recordTape("sigil", 1, "circularity/unfurl");
+        }
+      },
+      twist: (e) => {
+        lastGestureAtRef.current = performance.now();
+        if (e.phase !== "move") return;
+        // twist rotates the lens: the same object as circle or as wave
+        twistAccRef.current += e.angle;
+        const step = Math.PI / 2;
+        while (Math.abs(twistAccRef.current) >= step) {
+          twistAccRef.current -= Math.sign(twistAccRef.current) * step;
+          lensTargetRef.current = lensTargetRef.current > 0.5 ? 0 : 1;
+          const cfg = PRESETS.find((item) => item.id === presetRef.current) ?? PRESETS[0];
+          try { audio.playNote(cfg.midi + 5, 140); } catch { /* noop */ }
+          try { haptics.lens(); } catch { /* noop */ }
+          recordTape("sigil", 0.5, lensTargetRef.current > 0.5 ? "circularity/lens-wave" : "circularity/lens-circle");
+        }
+      },
+      scrub: (e) => {
+        lastGestureAtRef.current = performance.now();
+        const nowMs = performance.now();
+        if (nowMs - lastScrubAt < 600) return;
+        lastScrubAt = nowMs;
+        // circling winds the spring — the epicycle turns with the finger,
+        // against the clock it unwinds
+        const dir = Math.sign(e.winding) || 1;
+        boostRef.current = clamp(boostRef.current + dir * 0.8, -2.2, 2.2);
+        const cfg = PRESETS.find((item) => item.id === presetRef.current) ?? PRESETS[0];
+        try { audio.playNote(cfg.midi + (dir > 0 ? 7 : -5), 160); } catch { /* noop */ }
+        try { haptics.ripple(0.35); } catch { /* noop */ }
+        recordTape("ripple", 0.5, "circularity/wind");
+      },
+      rhythm: (e) => {
+        // a steady tapped pulse: the wheel locks to your tempo
+        if (e.stability <= 0.7) return;
+        entrainRef.current.bpm = Math.max(40, Math.min(150, e.bpm));
+        entrainRef.current.until = performance.now() + 9000;
+        recordTape("sigil", 0.45, "circularity/entrain");
+      },
+    }, { wheelZoom: false });
+
+    return detach;
+  }, [recordTape, ringTone, tuneFromPointer]);
+
   return (
     <div
       className="circularity-instrument"
@@ -312,32 +520,7 @@ export default function CircularityFourier() {
         viewBox={compact ? "-80 0 1200 760" : "0 0 1200 760"}
         preserveAspectRatio="xMidYMid slice"
         role="img"
-        aria-label="An interactive Fourier instrument where rotating circles draw a waveform"
-        onPointerDown={(event: ReactPointerEvent<SVGSVGElement>) => {
-          pointerRef.current.active = true;
-          pointerRef.current.id = event.pointerId;
-          tuneFromPointer(event.clientX, event.clientY, event.pressure || 1);
-          try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* noop */ }
-        }}
-        onPointerMove={(event: ReactPointerEvent<SVGSVGElement>) => {
-          const pointer = pointerRef.current;
-          if (!pointer.active || pointer.id !== event.pointerId) return;
-          tuneFromPointer(event.clientX, event.clientY, event.pressure > 0 ? event.pressure + 0.42 : 0.86);
-        }}
-        onPointerUp={(event: ReactPointerEvent<SVGSVGElement>) => {
-          const pointer = pointerRef.current;
-          if (pointer.id !== event.pointerId) return;
-          pointer.active = false;
-          pointer.id = -1;
-          try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* noop */ }
-        }}
-        onPointerCancel={(event: ReactPointerEvent<SVGSVGElement>) => {
-          const pointer = pointerRef.current;
-          if (pointer.id !== event.pointerId) return;
-          pointer.active = false;
-          pointer.id = -1;
-          try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* noop */ }
-        }}
+        aria-label="an interactive Fourier instrument where rotating circles draw a waveform — drag to rotate, circle to wind it, twist two fingers to turn the lens between circle and wave"
       >
         <defs>
           <radialGradient id="circularity-core" cx="36%" cy="46%" r="56%">
@@ -378,7 +561,11 @@ export default function CircularityFourier() {
           <path d={wavePath} />
         </g>
 
-        <g className="circularity-epicycles" transform={`translate(${centerX} ${centerY}) scale(${orbitScale})`}>
+        <g
+          className="circularity-epicycles"
+          opacity={1 - lens * 0.72}
+          transform={`translate(${centerX + sway.x} ${centerY + sway.y}) rotate(${sway.x * 0.22}) scale(${orbitScale * (1 - lens * 0.22)})`}
+        >
           {chain.slice(1).map((point, index) => {
             const previous = chain[index];
             return (
@@ -403,11 +590,21 @@ export default function CircularityFourier() {
           x2={waveX}
           y2={waveTipY}
         />
-        <path className="circularity-wave" d={wavePath} />
-        <circle className="circularity-tip" cx={tipX} cy={tipY} r={7 + energy * 3} />
-        <circle className="circularity-wave-tip" cx={waveX} cy={waveTipY} r={6 + energy * 2} />
+        <path className="circularity-wave" d={wavePath} style={{ strokeWidth: 4.5 + lens * 1.8 }} />
+        <circle className="circularity-tip" cx={tipX} cy={tipY} r={(7 + energy * 3) * (1 - lens * 0.4)} />
+        <circle className="circularity-wave-tip" cx={waveX} cy={waveTipY} r={6 + energy * 2 + lens * 2} />
 
-        <g className="circularity-spectrum" transform="translate(76 665)" aria-hidden="true">
+        {glimmer ? (
+          <circle
+            className="circularity-glimmer"
+            aria-hidden="true"
+            cx={centerX + Math.cos(theta) * 88 * orbitScale}
+            cy={centerY + Math.sin(theta) * 88 * orbitScale}
+            r={7}
+          />
+        ) : null}
+
+        <g className="circularity-spectrum" data-circ-ui="true" transform="translate(76 665)" aria-hidden="true">
           {harmonicBars.map((bar, index) => {
             const height = clamp(bar.r * 1.22 * amplitude, 6, 116);
             const active = index < terms;
@@ -606,6 +803,23 @@ export default function CircularityFourier() {
           stroke: rgba(246, 241, 224, 0.34);
           stroke-width: 1.5;
           stroke-dasharray: 7 10;
+        }
+
+        .circularity-glimmer {
+          fill: none;
+          stroke: rgba(247, 231, 172, 0.5);
+          stroke-width: 1.2;
+          animation: circularity-glimmer-pulse 2.4s ease-in-out infinite;
+          pointer-events: none;
+        }
+
+        @keyframes circularity-glimmer-pulse {
+          0%, 100% { opacity: 0.12; }
+          50% { opacity: 0.44; }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .circularity-glimmer { animation: none; opacity: 0.25; }
         }
 
         .circularity-harmonic-label {

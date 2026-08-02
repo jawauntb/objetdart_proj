@@ -6,11 +6,14 @@ import {
   useRef,
   useState,
   type CSSProperties,
-  type PointerEvent as ReactPointerEvent,
 } from "react";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
+import { attachGestures } from "@/lib/gesture";
+import { holdTier, pathWinding, THRESHOLDS } from "@/lib/gesture/core";
+import { getTimbreEngine } from "@/lib/timbre-engine";
+import type { TimbreSpec } from "@/lib/timbre";
 import { useField } from "@/store/field";
 
 type WaveMode = "source" | "interference" | "standing";
@@ -31,6 +34,56 @@ const MODES: Array<{ id: WaveMode; label: string; tone: string; midi: number }> 
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const mix = (a: number, b: number, t: number) => a + (b - a) * t;
+
+// The room's own voice on the shared timbre engine: the narrowest wind the
+// physical models can speak — a breathless, chiffless bore whose lowpass
+// hugs the fundamental, so what holds under the finger is as close to the
+// bare oscillator as the engine allows.
+const SINE_VOICE: TimbreSpec = {
+  key: "sine-voice",
+  label: "sine",
+  model: "wind",
+  attack: 0.05,
+  release: 0.35,
+  brightBase: 1.1,
+  brightEnv: 0.4,
+  formants: [],
+  breath: 0,
+  breathHz: 2000,
+  onsetBend: 1,
+  onsetMs: 0,
+  chiff: 0,
+  vibratoHz: 0.14,
+  vibratoCents: 3,
+  vibratoDelayMs: 0,
+  gain: 0.7,
+};
+
+const hzFromMidi = (midi: number) => 440 * 2 ** ((midi - 69) / 12);
+/** Each voice is pitched by its height on the wave: high on screen, high in pitch. */
+const hzFromY = (y: number, midi: number) => hzFromMidi(midi) * 2 ** ((1 - y) * 1.8);
+
+type VoiceTouch = {
+  x: number; // normalized 0..1
+  y: number;
+  t0: number;
+  moved: number; // px since landing
+  vx: number; // px/ms, smoothed
+  lastX: number;
+  lastY: number;
+  lastT: number;
+  path: Array<{ x: number; y: number }>; // px, for the scrub verb
+  scrubFired: number;
+};
+
+type KeptWave = {
+  amp: number;
+  freq: number;
+  phase: number;
+  damping: number;
+  harmonic: number;
+  mode: WaveMode;
+};
 
 function colorAlpha(hex: string, alpha: number) {
   const clean = hex.replace("#", "");
@@ -85,6 +138,7 @@ function drawRibbon(
   yCenter: number,
   alpha: number,
   lineWidth: number,
+  bend?: (u: number) => number,
 ) {
   ctx.save();
   ctx.lineCap = "round";
@@ -97,7 +151,8 @@ function drawRibbon(
   for (let i = 0; i <= 260; i += 1) {
     const u = i / 260;
     const x = left + usable * u;
-    const y = yCenter - waveSample(u, phase, amp, freq, damping, harmonic, mode) * height * 0.0026;
+    let y = yCenter - waveSample(u, phase, amp, freq, damping, harmonic, mode) * height * 0.0026;
+    if (bend) y += bend(u);
     if (i === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
   }
@@ -183,6 +238,14 @@ export default function SineWaveExplorer() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const impulsesRef = useRef<Impulse[]>([]);
   const pointerRef = useRef({ active: false, id: -1, x: 0.5, y: 0.5, lastTone: 0, moved: 0 });
+  // ── the polyphonic dialect: every finger an independent voice ──
+  const voicesRef = useRef(new Map<number, VoiceTouch>());
+  const keptRef = useRef<KeptWave | null>(null);
+  const windRef = useRef({ cur: 0, target: 0 }); // phase wind from a 3-voice drag
+  const timeScaleRef = useRef({ cur: 1, target: 1 }); // 3-voice hold dilates time
+  const chordRef = useRef({ dilating: false, kept: false });
+  const entrainRef = useRef({ bpm: 0, until: 0, lastBeat: -1 });
+  const lastGestureAtRef = useRef(0);
   const reduceMotionRef = useRef(false);
   const phaseRef = useRef(0);
   const ampRef = useRef(86);
@@ -260,10 +323,87 @@ export default function SineWaveExplorer() {
       const reduce = reduceMotionRef.current;
       const cfg = MODES.find((item) => item.id === modeRef.current) ?? MODES[0];
 
-      if (!reduce && runningRef.current) {
-        phaseRef.current = (phaseRef.current + delta * 0.0017 * (0.55 + freqRef.current * 0.18)) % (Math.PI * 2);
+      // ── the law layer, read from the chord (gesture grammar §3) ──
+      // Three voices held still dilate the room's clock; three voices held
+      // through the ceremony tier keep the wave as a golden ghost. All
+      // tiers come from gesture/core — no private thresholds.
+      const voices = Array.from(voicesRef.current.values());
+      const chord = chordRef.current;
+      if (voices.length >= 3) {
+        const still = voices.every((v) => v.moved < THRESHOLDS.moveTolPx);
+        const newest = Math.max(...voices.map((v) => v.t0));
+        const tier = holdTier(now - newest);
+        if (still && tier >= 1) {
+          if (!chord.dilating) {
+            chord.dilating = true;
+            timeScaleRef.current.target = 0.25;
+            try { getFieldAudio().playNote(36, 260); } catch { /* noop */ }
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+          if (tier >= 3 && !chord.kept) {
+            // ceremony — the room's one solemn act: the wave is kept
+            chord.kept = true;
+            keptRef.current = {
+              amp: ampRef.current,
+              freq: freqRef.current,
+              phase: phaseRef.current,
+              damping: dampingRef.current,
+              harmonic: harmonicRef.current,
+              mode: modeRef.current,
+            };
+            try { getFieldAudio().bell(); } catch { /* noop */ }
+            try { haptics.bloom(); } catch { /* noop */ }
+            useField.getState().recordTape("sigil", 1, "sine/kept-wave");
+          }
+        } else if (chord.dilating && !still) {
+          chord.dilating = false;
+          timeScaleRef.current.target = 1;
+        }
+      } else {
+        if (chord.dilating) {
+          chord.dilating = false;
+          timeScaleRef.current.target = 1;
+        }
+        chord.kept = false;
       }
-      time += reduce ? delta * 0.00015 : delta * 0.001;
+
+      const ts = timeScaleRef.current;
+      ts.cur += (ts.target - ts.cur) * Math.min(1, delta * 0.005);
+      // phase wind from three voices dragged together — decays on its own
+      const wind = windRef.current;
+      wind.cur += (wind.target - wind.cur) * Math.min(1, delta * 0.0045);
+      wind.target *= Math.exp(-delta / 1400);
+
+      const entrain = entrainRef.current;
+      const entrained = now < entrain.until && entrain.bpm > 0;
+      if (!reduce && runningRef.current) {
+        const beatLen = entrained ? 60000 / entrain.bpm : 0;
+        const advance = entrained
+          ? delta * ((Math.PI * 2) / beatLen) // the wave locks to your tempo
+          : delta * 0.0017 * (0.55 + freqRef.current * 0.18);
+        phaseRef.current =
+          (phaseRef.current + advance * ts.cur + wind.cur * delta * 0.004 + Math.PI * 2) % (Math.PI * 2);
+      } else if (wind.cur !== 0) {
+        // even paused or reduced, a deliberate 3-finger push still lands
+        phaseRef.current = (phaseRef.current + wind.cur * delta * 0.004 + Math.PI * 2) % (Math.PI * 2);
+      }
+      if (entrained) {
+        const beatIdx = Math.floor(now / (60000 / entrain.bpm));
+        if (beatIdx !== entrain.lastBeat) {
+          entrain.lastBeat = beatIdx;
+          try { getFieldAudio().playNote(cfg.midi + (beatIdx % 2) * 7, 90); } catch { /* noop */ }
+          const rect = canvas.getBoundingClientRect();
+          impulsesRef.current.push({
+            x: rect.width * 0.5,
+            y: rect.height * 0.49,
+            born: now,
+            life: 700,
+            strength: 0.4,
+          });
+        }
+      }
+      time += reduce ? delta * 0.00015 : delta * 0.001 * ts.cur;
+      pointerRef.current.active = voicesRef.current.size > 0;
       energy = mix(energy, pointerRef.current.active ? 1 : 0, pointerRef.current.active ? 0.12 : 0.025);
 
       drawBackground(ctx, width, height, time, cfg.tone, energy);
@@ -277,7 +417,52 @@ export default function SineWaveExplorer() {
 
       drawRibbon(ctx, width, height, phaseNow - Math.PI * 0.55, ampNow * 0.62, freqNow * 0.64 + 0.3, dampingNow * 0.7, harmonicNow, "interference", "#65d8c5", center - height * 0.13, 0.20, 1.4);
       drawRibbon(ctx, width, height, -phaseNow * 0.82, ampNow * 0.50, freqNow + 0.75, dampingNow * 0.35, harmonicNow * 0.65, "standing", "#b99aff", center + height * 0.13, 0.18, 1.3);
-      drawRibbon(ctx, width, height, phaseNow, ampNow, freqNow, dampingNow, harmonicNow, modeNow, cfg.tone, center, 0.94, 4.2);
+
+      // the kept wave — sealed by ceremony, a golden ghost under the living one
+      const kept = keptRef.current;
+      if (kept) {
+        drawRibbon(ctx, width, height, kept.phase, kept.amp, kept.freq, kept.damping, kept.harmonic, kept.mode, "#f3d77a", center, 0.24, 2);
+      }
+
+      // every held finger bends the wave through its point — the voices are
+      // the material, the ribbon obeys all of them at once
+      let bend: ((u: number) => number) | undefined;
+      if (voices.length > 0) {
+        const left = width * 0.07;
+        const usable = width * 0.86;
+        const bends = voices.map((v) => {
+          const u = clamp(((v.x * width) - left) / usable, 0, 1);
+          const waveY = center - waveSample(u, phaseNow, ampNow, freqNow, dampingNow, harmonicNow, modeNow) * height * 0.0026;
+          return { u, d: v.y * height - waveY };
+        });
+        bend = (u: number) => {
+          let off = 0;
+          for (const b of bends) {
+            const du = u - b.u;
+            off += b.d * Math.exp(-(du * du) / 0.0028);
+          }
+          return off;
+        };
+      }
+      drawRibbon(ctx, width, height, phaseNow, ampNow, freqNow, dampingNow, harmonicNow, modeNow, cfg.tone, center, 0.94, 4.2, bend);
+
+      // halos under the held voices — sight for what the hand is sounding
+      for (const v of voices) {
+        const vx = v.x * width;
+        const vy = v.y * height;
+        const pulse = reduce ? 0.5 : 0.5 + Math.sin(now / 260 + v.t0) * 0.5;
+        ctx.save();
+        ctx.strokeStyle = colorAlpha(cfg.tone, 0.3 + pulse * 0.3);
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.arc(vx, vy, 20 + pulse * 6, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.fillStyle = colorAlpha(cfg.tone, 0.16);
+        ctx.beginPath();
+        ctx.arc(vx, vy, 7, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
 
       ctx.save();
       ctx.strokeStyle = "rgba(238, 234, 219, 0.13)";
@@ -318,6 +503,24 @@ export default function SineWaveExplorer() {
 
       impulsesRef.current = impulsesRef.current.filter((impulse) => now - impulse.born < impulse.life);
       drawImpulses(ctx, impulsesRef.current, now, cfg.tone);
+
+      // glimmer (grammar §6): after ~20s of quiet, a faint touch-ring floats
+      // on the wave where a finger would land — physical, never text.
+      if (now - lastGestureAtRef.current > 20000) {
+        const slot = Math.floor(now / 9000);
+        const gseed = (n: number) => { const v = Math.sin((slot + n) * 127.1) * 43758.5453; return v - Math.floor(v); };
+        const gu = 0.14 + gseed(0) * 0.72;
+        const gx = width * 0.07 + width * 0.86 * gu;
+        const gy = center - waveSample(gu, phaseNow, ampNow, freqNow, dampingNow, harmonicNow, modeNow) * height * 0.0026;
+        const pulse = reduce ? 0.5 : 0.5 + Math.sin(now / 480) * 0.5;
+        ctx.save();
+        ctx.strokeStyle = colorAlpha(cfg.tone, 0.06 + pulse * 0.09);
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(gx, gy, 16 + pulse * 8, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
 
       if (now - lastPhaseSync > 130) {
         lastPhaseSync = now;
@@ -382,14 +585,166 @@ export default function SineWaveExplorer() {
     });
     if (impulsesRef.current.length > 18) impulsesRef.current = impulsesRef.current.slice(-18);
 
+    // Sound is the voice's own now (the timbre engine holds the tone) —
+    // here only the tape and the hand's throttled pulse remain.
     if (now - pointer.lastTone > 75) {
       pointer.lastTone = now;
-      const cfg = MODES.find((item) => item.id === modeRef.current) ?? MODES[0];
-      try { getFieldAudio().playNote(cfg.midi + Math.round((1 - y) * 22) + Math.round(x * 7), 86); } catch { /* noop */ }
       recordTape("ripple", 0.34 + (1 - y) * 0.42, "sine/drag");
       try { haptics.ripple(0.22 + strength * 0.25); } catch { /* noop */ }
     }
   }, [recordTape]);
+
+  // ── gestures (the shared grammar — src/lib/gesture) ────────────────────
+  // Binding `voice` switches this surface to the polyphonic dialect: every
+  // finger is an independent voice on the waveform — it holds a point, the
+  // wave bends through all held points, and the engine (not the room)
+  // reclaims real pinches so a chord can never misread as one.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const engine = getTimbreEngine();
+    const audio = getFieldAudio();
+
+    const toNorm = (clientX: number, clientY: number) => {
+      const rect = canvas.getBoundingClientRect();
+      return {
+        x: clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1),
+        y: clamp((clientY - rect.top) / Math.max(1, rect.height), 0, 1),
+      };
+    };
+    const leadId = () => voicesRef.current.keys().next().value as number | undefined;
+    let lastWindCueAt = 0;
+    let lastScrubCueAt = 0;
+    let lastVoiceHapticAt = 0;
+
+    const detach = attachGestures(canvas, {
+      voice: (e) => {
+        lastGestureAtRef.current = performance.now();
+        const cfg = MODES.find((item) => item.id === modeRef.current) ?? MODES[0];
+        const key = `sine:${e.id}`;
+        const now = performance.now();
+        if (e.phase === "start") {
+          void audio.start();
+          const p = toNorm(e.x, e.y);
+          voicesRef.current.set(e.id, {
+            x: p.x, y: p.y, t0: now, moved: 0, vx: 0,
+            lastX: e.x, lastY: e.y, lastT: now,
+            path: [{ x: e.x, y: e.y }], scrubFired: 0,
+          });
+          engine.noteOn(key, hzFromY(p.y, cfg.midi), SINE_VOICE);
+          if (voicesRef.current.size === 1) tuneFromPointer(e.x, e.y, 0.5 + e.intensity * 0.5);
+          try { haptics.ripple(0.24 + e.intensity * 0.36); } catch { /* noop */ }
+          recordTape("object", 0.3 + e.intensity * 0.35, "sine/voice");
+          return;
+        }
+        if (e.phase === "move") {
+          const v = voicesRef.current.get(e.id);
+          if (!v) return;
+          const p = toNorm(e.x, e.y);
+          const dt = Math.max(1, now - v.lastT);
+          v.vx = v.vx * 0.7 + ((e.x - v.lastX) / dt) * 0.3;
+          v.moved += Math.hypot(e.x - v.lastX, e.y - v.lastY);
+          v.lastX = e.x; v.lastY = e.y; v.lastT = now;
+          v.x = p.x; v.y = p.y;
+          const lastPt = v.path[v.path.length - 1];
+          if (Math.hypot(e.x - lastPt.x, e.y - lastPt.y) > 4) {
+            v.path.push({ x: e.x, y: e.y });
+            if (v.path.length > 240) v.path.shift();
+          }
+          engine.glide(key, hzFromY(p.y, cfg.midi));
+          if (e.id === leadId()) tuneFromPointer(e.x, e.y, 0.82);
+          else if (now - lastVoiceHapticAt > 140) {
+            lastVoiceHapticAt = now;
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+          // three voices moving the same way push the phase wind — the law
+          // layer read in the polyphonic register
+          const all = Array.from(voicesRef.current.values());
+          if (all.length >= 3 && all.every((av) => av.moved >= THRESHOLDS.moveTolPx)) {
+            const meanVx = all.reduce((acc, av) => acc + av.vx, 0) / all.length;
+            const aligned = all.every((av) => av.vx * meanVx > 0);
+            if (aligned && Math.abs(meanVx) > 0.08) {
+              windRef.current.target = clamp(windRef.current.target + meanVx * 0.5, -1.4, 1.4);
+              if (now - lastWindCueAt > 700) {
+                lastWindCueAt = now;
+                try { audio.playNote(38, 240); } catch { /* noop */ }
+                try { haptics.chop(); } catch { /* noop */ }
+                recordTape("region", 0.45, "sine/phase-wind");
+              }
+            }
+          }
+          // a circling voice is the scrub verb: it bends the frequency —
+          // winding and thresholds come from gesture/core alone
+          const w = pathWinding(v.path);
+          if (Math.abs(w) >= THRESHOLDS.scrubWinding && Math.abs(w - v.scrubFired) >= 0.5 && now - lastScrubCueAt > 500) {
+            v.scrubFired = w;
+            lastScrubCueAt = now;
+            const dir = Math.sign(w) || 1;
+            const nextFreq = Number(clamp(freqRef.current + dir * 0.55, 0.5, 8.4).toFixed(2));
+            freqRef.current = nextFreq;
+            setFreq(nextFreq);
+            try { audio.playNote(cfg.midi + (dir > 0 ? 12 : -7), 150); } catch { /* noop */ }
+            try { haptics.ripple(0.38); } catch { /* noop */ }
+            recordTape("ripple", 0.5, "sine/scrub-bend");
+          }
+          return;
+        }
+        // end or cancel — a canceled voice was a grip forming; let it go fast
+        engine.noteOff(key);
+        voicesRef.current.delete(e.id);
+      },
+      tap: (e) => {
+        lastGestureAtRef.current = performance.now();
+        if (e.fingers !== 1) return; // the field absorbs frame/law taps
+        const cfg = MODES.find((item) => item.id === modeRef.current) ?? MODES[0];
+        const p = toNorm(e.x, e.y);
+        // tap intensity is the strike: pitch weight, impulse size and the
+        // haptic all ride the same 0..1 from core.
+        tuneFromPointer(e.x, e.y, 0.3 + e.intensity * 0.7);
+        try { audio.playNote(cfg.midi + Math.round((1 - p.y) * 22) + Math.round(p.x * 7), 90 + Math.round(e.intensity * 120)); } catch { /* noop */ }
+        try { haptics.ripple(0.2 + e.intensity * 0.4); } catch { /* noop */ }
+        recordTape("object", 0.3 + e.intensity * 0.35, "sine/strike");
+      },
+      flick: (e) => {
+        lastGestureAtRef.current = performance.now();
+        if (e.fingers !== 1) return;
+        // a flick throws a pulse down the wave — a comet of impulses
+        const rect = canvas.getBoundingClientRect();
+        const cfg = MODES.find((item) => item.id === modeRef.current) ?? MODES[0];
+        const px = e.x - rect.left;
+        const py = e.y - rect.top;
+        const sp = Math.min(260, 90 + e.speed * 120);
+        for (let i = 0; i < 6; i++) {
+          impulsesRef.current.push({
+            x: px + Math.cos(e.angle) * sp * (i / 5),
+            y: py + Math.sin(e.angle) * sp * (i / 5) * 0.4,
+            born: performance.now(),
+            life: 900 + i * 160,
+            strength: 0.72 - i * 0.09,
+          });
+        }
+        if (impulsesRef.current.length > 18) impulsesRef.current = impulsesRef.current.slice(-18);
+        try { audio.playNote(cfg.midi + 7, 110); } catch { /* noop */ }
+        try { audio.playNote(cfg.midi + 14, 160); } catch { /* noop */ }
+        try { haptics.chop(); } catch { /* noop */ }
+        recordTape("ripple", 0.55, "sine/throw");
+      },
+      rhythm: (e) => {
+        // a steady tapped pulse: the oscillator locks to your tempo
+        if (e.stability <= 0.7) return;
+        entrainRef.current.bpm = Math.max(40, Math.min(150, e.bpm));
+        entrainRef.current.until = performance.now() + 9000;
+        recordTape("sigil", 0.5, "sine/entrain");
+      },
+    }, { wheelZoom: false });
+
+    const heldVoices = voicesRef.current;
+    return () => {
+      detach();
+      for (const id of heldVoices.keys()) engine.noteOff(`sine:${id}`);
+      heldVoices.clear();
+    };
+  }, [recordTape, tuneFromPointer]);
 
   const setWaveMode = (next: WaveMode) => {
     setMode(next);
@@ -425,34 +780,8 @@ export default function SineWaveExplorer() {
         ref={canvasRef}
         className="sine-canvas"
         role="img"
-        aria-label="A touch responsive sine wave instrument. Drag horizontally to change frequency and vertically to change amplitude."
+        aria-label="a touch responsive sine wave instrument — every finger is a voice: touch holds a point on the wave and sounds a tone pitched by height. drag horizontally for frequency, vertically for amplitude."
         aria-describedby="sine-gesture-hint"
-        onPointerDown={(event: ReactPointerEvent<HTMLCanvasElement>) => {
-          pointerRef.current.active = true;
-          pointerRef.current.id = event.pointerId;
-          pointerRef.current.moved = 0;
-          tuneFromPointer(event.clientX, event.clientY, event.pressure || 1);
-          try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* noop */ }
-        }}
-        onPointerMove={(event: ReactPointerEvent<HTMLCanvasElement>) => {
-          const pointer = pointerRef.current;
-          if (!pointer.active || pointer.id !== event.pointerId) return;
-          tuneFromPointer(event.clientX, event.clientY, event.pressure > 0 ? event.pressure + 0.42 : 0.82);
-        }}
-        onPointerUp={(event: ReactPointerEvent<HTMLCanvasElement>) => {
-          const pointer = pointerRef.current;
-          if (pointer.id !== event.pointerId) return;
-          pointer.active = false;
-          pointer.id = -1;
-          try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* noop */ }
-        }}
-        onPointerCancel={(event: ReactPointerEvent<HTMLCanvasElement>) => {
-          const pointer = pointerRef.current;
-          if (pointer.id !== event.pointerId) return;
-          pointer.active = false;
-          pointer.id = -1;
-          try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* noop */ }
-        }}
       />
 
       <div className="sine-title" aria-hidden="true">
@@ -461,7 +790,7 @@ export default function SineWaveExplorer() {
       </div>
 
       <p id="sine-gesture-hint" className="sine-gesture-hint">
-        drag <span aria-hidden="true">↔</span> frequency · <span aria-hidden="true">↕</span> amplitude
+        every finger a voice · <span aria-hidden="true">↔</span> frequency · <span aria-hidden="true">↕</span> amplitude
       </p>
 
       <div className="sine-mode-rail" aria-label="wave modes">
