@@ -41,6 +41,7 @@ export default function ScaleTravel({ route }: { route: string }) {
   const [ui, setUi] = useState<EdgeUI>({ pressure: 0, towardLabel: null, crossing: false });
   const stateRef = useRef<ScaleState | null>(null);
   const inputRef = useRef({ zoomVel: 0, active: false });
+  const lastPinchAtRef = useRef(0);
   const rafRef = useRef(0);
   const leavingRef = useRef(false);
 
@@ -69,6 +70,11 @@ export default function ScaleTravel({ route }: { route: string }) {
       if (!st || leavingRef.current) return;
       const dt = now - lastT;
       lastT = now;
+      // Wheel/trackpad pinches arrive as discrete ticks with no "end" —
+      // without this decay a single tick would push forever and self-travel.
+      if (inputRef.current.active && now - lastPinchAtRef.current > 150) {
+        inputRef.current = { zoomVel: 0, active: false };
+      }
       const { state, events, edgePressure } = stepScale(st, inputRef.current, dt);
       stateRef.current = state;
 
@@ -135,6 +141,7 @@ export default function ScaleTravel({ route }: { route: string }) {
           } else {
             // Spreading fingers = zoom in = toward smaller scales (s falls).
             inputRef.current = { zoomVel: -e.velocity, active: true };
+            lastPinchAtRef.current = performance.now();
           }
           wake();
         },
