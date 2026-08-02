@@ -323,6 +323,63 @@ export function residualScaleInput(
   return { zoomVel: 0, active: false };
 }
 
+// ——— The travel graph: part-of, not size-of ———
+//
+// The metric axis orders bands by size, but a hand zooming out of a drop
+// expects the sea it belongs to, not a garden that happens to be the next
+// size up. Travel therefore follows mereology — what a thing is PART of —
+// with the metric adjacency as the default. Where a parent has two children
+// (the earth holds both the atlas and the flowers), you return the way you
+// came: every band remembers the neighbor you last crossed from.
+
+export type TravelDir = -1 | 1; // -1 = toward smaller scales, +1 = toward larger
+
+const TRAVEL_OVERRIDES: Partial<Record<ScaleBandId, { up?: ScaleBandId; down?: ScaleBandId }>> = {
+  drop: { up: "coast" }, // a drop returns to the sea
+  coast: { down: "drop" }, // and the sea gives the drop back
+  flowers: { up: "earth", down: "cells" }, // a garden on the planet; a petal opens into cells
+};
+
+/** Canonical travel neighbor: mereological override, else metric adjacency. */
+export function travelNeighbor(id: ScaleBandId, dir: TravelDir): ScaleBandId | null {
+  const o = TRAVEL_OVERRIDES[id];
+  const overridden = dir === 1 ? o?.up : o?.down;
+  if (overridden) return overridden;
+  const i = SCALE_BANDS.findIndex((b) => b.id === id);
+  const n = SCALE_BANDS[i + dir];
+  return n ? n.id : null;
+}
+
+export type EnteredFromMap = Partial<Record<ScaleBandId, ScaleBandId>>;
+
+/**
+ * Where travel in `dir` actually goes from `id`: the remembered origin if it
+ * lies in that direction (you return the way you came), else the canonical
+ * neighbor. Returns the full band, or null at the ends of the axis.
+ */
+export function resolveDestination(
+  id: ScaleBandId,
+  dir: TravelDir,
+  enteredFrom: EnteredFromMap,
+): ScaleBand | null {
+  const self = SCALE_BANDS.find((b) => b.id === id);
+  const rememberedId = enteredFrom[id];
+  if (self && rememberedId && rememberedId !== id) {
+    const r = SCALE_BANDS.find((b) => b.id === rememberedId);
+    if (r && (dir === 1 ? r.sMin >= self.sMax - 1e-9 : r.sMax <= self.sMin + 1e-9)) {
+      return r;
+    }
+  }
+  const n = travelNeighbor(id, dir);
+  return n ? SCALE_BANDS.find((b) => b.id === n) ?? null : null;
+}
+
+/** Arrival position: upward travel enters at the lower wall, downward at the upper. */
+export function entryScaleInto(dest: ScaleBand, dir: TravelDir): number {
+  const mid = (dest.sMin + dest.sMax) / 2;
+  return dir === 1 ? Math.min(dest.sMin + EDGE_PEEK, mid) : Math.max(dest.sMax - EDGE_PEEK, mid);
+}
+
 export type SpectralRegister = {
   /** Fundamental for the band's ambient bed, Hz. */
   baseHz: number;

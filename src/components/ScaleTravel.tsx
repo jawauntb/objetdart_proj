@@ -27,20 +27,61 @@ import {
   bandAt,
   bandIndexAt,
   entryScaleFor,
+  entryScaleInto,
   initialScaleState,
   liveInput,
   residualScaleInput,
+  resolveDestination,
   roomZoomWall,
   scaleForRoomZoom,
   stepScale,
+  type EnteredFromMap,
   type RoomZoomSpec,
   type ScaleBand,
+  type ScaleBandId,
   type ScaleInput,
   type ScaleState,
+  type TravelDir,
 } from "@/lib/scale";
 import { detent as hapticDetent, crossing as hapticCrossing } from "@/lib/haptics";
 
 const STORAGE_KEY = "objetdart:scale:s";
+const ENTERED_FROM_KEY = "objetdart:scale:enteredFrom:v1";
+
+// Every band remembers the neighbor you last crossed from, so a parent with
+// two children (the earth holds the atlas and the flowers) sends you back
+// the way you came.
+function loadEnteredFrom(): EnteredFromMap {
+  try {
+    const raw = window.sessionStorage.getItem(ENTERED_FROM_KEY);
+    if (raw) return JSON.parse(raw) as EnteredFromMap;
+  } catch {
+    /* noop */
+  }
+  return {};
+}
+
+function recordEnteredFrom(dest: ScaleBandId, from: ScaleBandId): void {
+  try {
+    const map = loadEnteredFrom();
+    map[dest] = from;
+    window.sessionStorage.setItem(ENTERED_FROM_KEY, JSON.stringify(map));
+  } catch {
+    /* noop */
+  }
+}
+
+/** Direction of a metric-neighbor crossing/edge event relative to `from`. */
+function dirToward(from: ScaleBandId, towardMetric: ScaleBandId): TravelDir {
+  const fi = SCALE_BANDS.findIndex((b) => b.id === from);
+  const ti = SCALE_BANDS.findIndex((b) => b.id === towardMetric);
+  return ti > fi ? 1 : -1;
+}
+
+/** The band travel would actually reach pressing toward `towardMetric`. */
+function resolvedToward(from: ScaleBandId, towardMetric: ScaleBandId): ScaleBand | null {
+  return resolveDestination(from, dirToward(from, towardMetric), loadEnteredFrom());
+}
 
 export type EdgeUI = {
   pressure: number;
@@ -50,12 +91,11 @@ export type EdgeUI = {
 
 const IDLE_UI: EdgeUI = { pressure: 0, towardLabel: null, crossing: false };
 
-/** Which built neighbor the whispered destination should name while idle. */
+/** Which built destination the whispered name should promise while idle. */
 function nearestNeighborLabel(s: number): string | null {
-  const i = bandIndexAt(s);
-  const band = SCALE_BANDS[i];
+  const band = bandAt(s);
   const nearUpper = band.sMax - s < s - band.sMin;
-  const n = SCALE_BANDS[i + (nearUpper ? 1 : -1)];
+  const n = resolveDestination(band.id, nearUpper ? 1 : -1, loadEnteredFrom());
   return n?.route ? n.label : null;
 }
 
@@ -171,21 +211,25 @@ export function useBandEdgeTravel(
       for (const e of events) {
         if (e.type === "detent") hapticDetent();
         if (e.type === "edge") {
-          const band = SCALE_BANDS.find((b) => b.id === e.toward);
-          // An unbuilt neighbor holds forever: show nothing, promise nothing.
-          toward = band?.route ? band.label : null;
-          if (band && !band.route && r.state) {
+          const resolved = resolvedToward(bandAt(state.s).id, e.toward);
+          // An unbuilt destination holds forever: show nothing, promise nothing.
+          toward = resolved?.route ? resolved.label : null;
+          if (!resolved?.route && r.state) {
             r.state = { ...r.state, intentMs: Math.min(r.state.intentMs, 200) };
           }
         }
         if (e.type === "crossing") {
-          const dest = SCALE_BANDS.find((b) => b.id === e.to);
+          const dir = dirToward(e.from, e.to);
+          const dest = resolveDestination(e.from, dir, loadEnteredFrom());
           if (dest?.route && dest.route !== route) {
+            recordEnteredFrom(dest.id, e.from);
             r.leaving = true;
             r.raf = 0;
-            setUi(executeTravel(router, dest, e.s));
+            setUi(executeTravel(router, dest, entryScaleInto(dest, dir)));
             return;
           }
+          // Destination unbuilt: the wall holds — step back inside the band.
+          r.state = initialScaleState(dir === 1 ? e.s - 0.4 : e.s + 0.4);
         }
       }
 
@@ -305,20 +349,24 @@ export default function ScaleTravel({ route }: { route: string }) {
       for (const e of events) {
         if (e.type === "detent") hapticDetent();
         if (e.type === "edge") {
-          const band = SCALE_BANDS.find((b) => b.id === e.toward);
-          // An unbuilt neighbor holds forever: show nothing, promise nothing.
-          toward = band?.route ? band.label : null;
-          if (band && !band.route) {
+          const resolved = resolvedToward(bandAt(state.s).id, e.toward);
+          // An unbuilt destination holds forever: show nothing, promise nothing.
+          toward = resolved?.route ? resolved.label : null;
+          if (!resolved?.route) {
             stateRef.current = { ...state, intentMs: Math.min(state.intentMs, 200) };
           }
         }
         if (e.type === "crossing") {
-          const dest = SCALE_BANDS.find((b) => b.id === e.to);
+          const dir = dirToward(e.from, e.to);
+          const dest = resolveDestination(e.from, dir, loadEnteredFrom());
           if (dest?.route && dest.route !== route) {
+            recordEnteredFrom(dest.id, e.from);
             leavingRef.current = true;
-            setUi(executeTravel(router, dest, e.s));
+            setUi(executeTravel(router, dest, entryScaleInto(dest, dir)));
             return;
           }
+          // Destination unbuilt: the wall holds — step back inside the band.
+          stateRef.current = initialScaleState(dir === 1 ? e.s - 0.4 : e.s + 0.4);
         }
       }
 

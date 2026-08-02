@@ -169,6 +169,44 @@ assert.equal(bandAt(entryScaleFor("/stars")).id, "stars");
 assert.equal(bandAt(entryScaleFor("/tide")).id, "coast");
 assert.equal(entryScaleFor("/colophon"), null);
 
+// — The travel graph follows part-of, not size-of —
+// The author's law: a drop zooms out to the sea it belongs to, not to a
+// garden that happens to be the next size up. These pins catch any future
+// re-flattening of travel back to bare metric adjacency.
+{
+  const { travelNeighbor, resolveDestination, entryScaleInto } = loadTsModule("src/lib/scale.ts");
+
+  assert.equal(travelNeighbor("drop", 1), "coast", "a drop returns to the sea");
+  assert.equal(travelNeighbor("coast", -1), "drop", "the sea gives the drop back");
+  assert.equal(travelNeighbor("flowers", 1), "earth", "the garden grows on the planet");
+  assert.equal(travelNeighbor("flowers", -1), "cells", "a petal opens into cells");
+  assert.equal(travelNeighbor("earth", -1), "atlas", "earth descends to the atlas by default");
+  assert.equal(travelNeighbor("cells", 1), "drop", "cells rise into the drop by default");
+  assert.equal(travelNeighbor("manifold", 1), null, "the axis ends above the manifold");
+
+  // Return the way you came: earth remembers which child you rose from.
+  const viaFlowers = resolveDestination("earth", -1, { earth: "flowers" });
+  assert.equal(viaFlowers.id, "flowers", "entered from the garden, descend to the garden");
+  const viaAtlas = resolveDestination("earth", -1, { earth: "atlas" });
+  assert.equal(viaAtlas.id, "atlas", "entered from the atlas, descend to the atlas");
+  // Memory in the wrong direction never hijacks travel.
+  const wrongWay = resolveDestination("drop", -1, { drop: "coast" });
+  assert.equal(wrongWay.id, "cells", "memory of an upward door cannot answer a downward push");
+
+  // Round-trip law: wherever canonical travel takes you, remembering the
+  // origin brings you home — no one-way doors anywhere on the axis.
+  for (const band of SCALE_BANDS) {
+    for (const dir of [1, -1]) {
+      const dest = resolveDestination(band.id, dir, {});
+      if (!dest) continue;
+      const back = resolveDestination(dest.id, -dir, { [dest.id]: band.id });
+      assert.equal(back.id, band.id, `${band.id} → ${dest.id} must return the way it came`);
+      const landing = entryScaleInto(dest, dir);
+      assert.equal(bandAt(landing).id, dest.id, `arrival into ${dest.id} lands inside it`);
+    }
+  }
+}
+
 // — Every band route must be a real page —
 // The bug this catches shipped once: the atlas band routed to "/atlas", which
 // has no page (only /atlas/[region]), so crossing the coast wall 404'd in
