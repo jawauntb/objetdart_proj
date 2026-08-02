@@ -76,6 +76,8 @@ const expectedKeys = [
   "aphros",
   "flowers",
   "cells",
+  "molecules",
+  "atoms",
   "fire",
   "earth",
   "growth",
