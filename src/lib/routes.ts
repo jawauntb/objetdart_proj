@@ -31,6 +31,7 @@ export const SITE_ROUTES: SiteRouteEntry[] = [
   { key: "earth",       icon: "earth",    href: "/earth",                             desc: "strata · seismograph · root",  cluster: "nature",    dark: true },
   { key: "growth",      icon: "growth",   href: "/growth",                            desc: "sigmoid · exponential · decay", cluster: "nature",    dark: true },
   { key: "stars",       icon: "stars",    href: "/stars",                             desc: "the night sky",                cluster: "nature",    dark: true, homePriority: 6 },
+  { key: "comb",        icon: "stars",    href: "/comb",                              desc: "comb the light · the cowlick stays", cluster: "nature", homePriority: 9 },
   { key: "signal",      icon: "signal",   href: "/signal",                            desc: "music is also waves",          cluster: "mechanism", dark: true },
   { key: "light",       icon: "plasma",   href: "/light",                             desc: "color music",                  cluster: "mechanism", dark: true },
   { key: "music-color", icon: "plasma",   href: "/light/inverse",                     desc: "notes into color",             cluster: "mechanism", dark: true },
@@ -58,6 +59,7 @@ export const SITE_ROUTE_BY_KEY = Object.fromEntries(
 const NAVIGATION_ROUTE_KEYS = [
   "atlas",
   "coin",
+  "comb",
   "stars",
   "ocean",
   "clouds",

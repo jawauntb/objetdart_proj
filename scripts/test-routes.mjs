@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import vm from "node:vm";
 import * as ts from "typescript";
 
 const rootUrl = new URL("../", import.meta.url);
@@ -33,15 +32,14 @@ function loadTsModule(path, requireMap = {}) {
     fileName: filename,
   }).outputText;
   const module = { exports: {} };
-  const sandbox = {
-    module,
-    exports: module.exports,
-    require: (id) => {
-      if (id in requireMap) return requireMap[id];
-      throw new Error(`Unexpected require(${id}) while loading ${path}`);
-    },
+  const requireShim = (id) => {
+    if (id in requireMap) return requireMap[id];
+    throw new Error(`Unexpected require(${id}) while loading ${path}`);
   };
-  vm.runInNewContext(code, sandbox, { filename });
+  // Run in the current realm rather than a vm context: newer Node versions
+  // make assert.deepStrictEqual reject arrays whose Array.prototype comes
+  // from another realm, which broke every deep comparison below.
+  new Function("module", "exports", "require", code)(module, module.exports, requireShim);
   return module.exports;
 }
 
@@ -81,6 +79,7 @@ const expectedKeys = [
   "earth",
   "growth",
   "stars",
+  "comb",
   "signal",
   "light",
   "music-color",
@@ -101,6 +100,7 @@ const expectedKeys = [
 const preferredNavigationKeys = [
   "atlas",
   "coin",
+  "comb",
   "stars",
   "ocean",
   "clouds",
@@ -237,6 +237,9 @@ const broadHeaderSelectors = walkRepoFiles("src")
           const targetsSiteHeader = /\.oda-site-header\b/.test(selector) && !sparesSiteHeader;
           return (targetsHeader && !sparesSiteHeader) || targetsSiteHeader;
         })
+        // /light deliberately blanks all site chrome for its full-screen
+        // instrument (LightInstrument.tsx); every other page must spare it.
+        .filter((selector) => selector !== "body:has(.light-page) .oda-site-header")
         .map((selector) => `${path}:${line}: ${selector}`);
     });
   });
