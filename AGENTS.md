@@ -10,9 +10,17 @@ and static) will damage it.
 1. **`INSPIRATION.md`** — the angle: why rooms must be lifelike, interactive, and
    instruction-free; the maps-between-representations method; the stack; the laws; the
    scale-manifold roadmap. Non-negotiable context for any non-trivial change.
-2. **`DESIGN.md`** — what exists and why each piece looks the way it does (v2 of the
+2. **`docs/gesture-grammar.md`** — the exhaustive input grammar every room speaks.
+   The structural key: **finger count addresses the stack** (one finger touches the
+   material, two the representation/frame, three the world-law; the device itself is
+   the vessel — tilt, shake, knock, flip, breath). Global bindings are fixed site-wide;
+   rooms add discoveries, never private dialects or thresholds.
+3. **`docs/plans/scale-manifold-build-plan.md`** — the active build: one log-scale axis
+   from quarks to the spacetime manifold, band detents, handoff anchors, twist-lens,
+   scale-as-spectral-register. Workstreams, lanes, and the checkpoint to retreat to.
+4. **`DESIGN.md`** — what exists and why each piece looks the way it does (v2 of the
    home instrument; brand tokens; anti-patterns; known gaps).
-3. **`docs/page-feel-audit.md`** — per-route state of play and improvement batches.
+5. **`docs/page-feel-audit.md`** — per-route state of play and improvement batches.
 
 ## The laws, compressed (full versions in INSPIRATION.md §5)
 
@@ -23,9 +31,19 @@ and static) will damage it.
 - **Join the shared buses**, don't grow private ones: `src/lib/audio.ts` (one audio
   graph), `src/lib/haptics.ts` (haptic bus + iOS Core Haptics bridge),
   `src/lib/turbulence.ts` (shared intensity), `src/lib/world.ts` (shared persistent
-  world across coast pages), `src/lib/stars/nestedCosmos.ts` (zoom bands/crossfades).
-- **Gesture grammar only**: tap, press-duration, tap-intensity, drag, pinch, twist,
-  shake, tilt. No control a hand can't discover in ten seconds. No instructions.
+  world), `src/lib/gesture/` (the semantic gesture engine — never raw pointer wiring
+  in new rooms), `src/lib/scale.ts` (the scale manifold: bands, detents, registers).
+- **Gesture grammar only** (`docs/gesture-grammar.md`): rooms bind meanings from the
+  grammar via `attachGestures`; thresholds live in `gesture/core.ts` alone. Global
+  bindings (pinch = zoom in band, pinch-through-detent = travel, twist = rotate the
+  lens, 3-finger = weather/time, long-press = grow, shake/tilt/knock/flip/breath =
+  vessel) mean the same thing in every room. No control a hand can't discover in ten
+  seconds. No instructions, ever.
+- **Every new page takes a scale address.** Even a standalone room should know where
+  it lives on the quark→manifold axis (`SCALE_BANDS` in `src/lib/scale.ts`) and what
+  its spectral register is (`spectralRegisterFor`), so it can join the manifold and
+  the album's one-instrument sound without rework. If it truly has no physical scale
+  (e.g. a reading surface), say so in the PR — that's a deliberate exemption.
 - **State lands in ≥2 senses in the same frame** (sight + sound at minimum; haptics
   where hardware allows). The water on `/` is the reference feel.
 - **Voice**: lowercase product copy, two of the three registers
@@ -40,8 +58,16 @@ and static) will damage it.
 - Next.js 14 App Router + TypeScript + Tailwind + Zustand. Rooms live in
   `src/app/<room>/` (thin page) with the real component in `src/components/`.
 - Dev: `npm install && npm run dev` (or yarn). Build: `npm run build`.
-- Tests: `npm test` (route registry, atlas, analytics, light-music, dither-avatar).
-  New routes must be registered where `scripts/test-routes.mjs` expects them.
+- Tests: `npm test` (route registry, atlas, analytics, light-music, dither-avatar,
+  gesture, scale). New routes must be registered where `scripts/test-routes.mjs`
+  expects them.
+- **Tests must be falsifiable or not exist.** Assert behavior that a plausible bug
+  would break: integrator dynamics, boundary semantics, classifier outputs on real
+  inputs, round-trips of inverse maps. Never restate a constant back at itself, never
+  assert a value equals the value you just computed it from, no
+  snapshot-of-implementation tests, no tests written to watch a suite go green. If
+  you can't name the bug a test would catch, delete the test. Fewer, sharper tests —
+  the suite must stay fast (plain node, no browser).
 - Visual smoke checks live in `scripts/smoke-*.mjs`; screenshots land in `iterations/`.
 - Commits follow `feat(room): …` / `fix(room): …` as in the existing history. PRs are
   small and single-purpose: one room, one mechanic.
