@@ -85,6 +85,7 @@ const expectedKeys = [
   "light",
   "music-color",
   "timbre",
+  "instrument",
   "plasma",
   "pulse",
   "charts",
