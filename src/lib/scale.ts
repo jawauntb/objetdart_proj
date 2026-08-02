@@ -338,6 +338,10 @@ const TRAVEL_OVERRIDES: Partial<Record<ScaleBandId, { up?: ScaleBandId; down?: S
   drop: { up: "coast" }, // a drop returns to the sea
   coast: { down: "drop" }, // and the sea gives the drop back
   flowers: { up: "earth", down: "cells" }, // a garden on the planet; a petal opens into cells
+  stars: { up: "manifold" }, // the sky opens straight onto the fold
+  manifold: { down: "stars" }, // and the fold descends into stars — /beyond is a
+  // branch off the trunk (an abstraction, not a place between places),
+  // reachable by memory: leave through it and it will receive you back.
 };
 
 /** Canonical travel neighbor: mereological override, else metric adjacency. */

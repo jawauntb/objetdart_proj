@@ -183,6 +183,13 @@ assert.equal(entryScaleFor("/colophon"), null);
   assert.equal(travelNeighbor("earth", -1), "atlas", "earth descends to the atlas by default");
   assert.equal(travelNeighbor("cells", 1), "drop", "cells rise into the drop by default");
   assert.equal(travelNeighbor("manifold", 1), null, "the axis ends above the manifold");
+  assert.equal(travelNeighbor("manifold", -1), "stars", "the fold descends into stars");
+  assert.equal(travelNeighbor("stars", 1), "manifold", "the sky opens straight onto the fold");
+  // /beyond is a branch: entered from it, the manifold sends you back there.
+  const viaBeyond = resolveDestination("manifold", -1, { manifold: "beyond" });
+  assert.equal(viaBeyond.id, "beyond", "the beyond receives its own returns");
+  assert.equal(travelNeighbor("beyond", 1), "manifold", "beyond still opens upward");
+  assert.equal(travelNeighbor("beyond", -1), "stars", "beyond still descends to stars");
 
   // Return the way you came: earth remembers which child you rose from.
   const viaFlowers = resolveDestination("earth", -1, { earth: "flowers" });
