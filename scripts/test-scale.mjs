@@ -31,6 +31,7 @@ const {
   bandAt,
   bandBlend,
   initialScaleState,
+  liveInput,
   stepScale,
   spectralRegisterFor,
   entryScaleFor,
@@ -110,6 +111,43 @@ for (let i = 0; i < 60; i++) {
 }
 assert.equal(lateCross, false, "letting go never crosses");
 assert.equal(st4.intentMs, 0, "intent fully decays");
+
+// — Regression: one orphan wheel tick must never self-travel —
+// A trackpad pinch is a burst of discrete ticks with no end event. Simulate
+// the real driver loop (liveInput applied each frame, as ScaleTravel does):
+// a single tick right next to a wall, then 3 seconds of frames.
+{
+  let st = initialScaleState(4.45);
+  let input = { zoomVel: 2.0, active: true };
+  let lastTick = 0;
+  let crossedFromOneTick = false;
+  for (let t = 16; t <= 3000; t += 16) {
+    input = liveInput(input, t - lastTick);
+    const r = stepScale(st, input, 16);
+    st = r.state;
+    crossedFromOneTick ||= r.events.some((e) => e.type === "crossing");
+  }
+  assert.equal(crossedFromOneTick, false, "an orphan tick decays instead of self-traveling");
+
+  // The counterpart keeps the test honest: a *sustained* tick stream (fresh
+  // ticks every 80ms, well inside the TTL) must still cross.
+  let st2 = initialScaleState(4.45);
+  let input2 = { zoomVel: 2.0, active: true };
+  let lastTick2 = 0;
+  let crossedFromStream = false;
+  for (let t = 16; t <= 3000; t += 16) {
+    if (t - lastTick2 >= 80) {
+      lastTick2 = t;
+      input2 = { zoomVel: 2.0, active: true };
+    }
+    input2 = liveInput(input2, t - lastTick2);
+    const r = stepScale(st2, input2, 16);
+    st2 = r.state;
+    crossedFromStream ||= r.events.some((e) => e.type === "crossing");
+    if (crossedFromStream) break;
+  }
+  assert.equal(crossedFromStream, true, "a sustained tick stream still travels");
+}
 
 // — Spectral register: small is high and quick, large is low and slow —
 const micro = spectralRegisterFor(SCALE_MIN);

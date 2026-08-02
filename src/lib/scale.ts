@@ -143,6 +143,21 @@ export type ScaleInput = {
   active: boolean;
 };
 
+/**
+ * Wheel/trackpad pinches arrive as discrete ticks with no end event. An input
+ * older than this is treated as released — otherwise one orphan tick keeps
+ * pushing the integrator and eventually self-travels through a wall.
+ */
+export const PINCH_TICK_TTL_MS = 150;
+
+/** The liveness policy for tick-style inputs: stale means released. */
+export function liveInput(input: ScaleInput, msSinceLastEvent: number): ScaleInput {
+  if (input.active && msSinceLastEvent > PINCH_TICK_TTL_MS) {
+    return { zoomVel: 0, active: false };
+  }
+  return input;
+}
+
 export type ScaleEvent =
   | { type: "detent"; at: number; band: ScaleBandId }
   | { type: "edge"; toward: ScaleBandId; progress: number }

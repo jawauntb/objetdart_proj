@@ -23,6 +23,7 @@ import {
   bandIndexAt,
   entryScaleFor,
   initialScaleState,
+  liveInput,
   stepScale,
   type ScaleState,
 } from "@/lib/scale";
@@ -70,11 +71,7 @@ export default function ScaleTravel({ route }: { route: string }) {
       if (!st || leavingRef.current) return;
       const dt = now - lastT;
       lastT = now;
-      // Wheel/trackpad pinches arrive as discrete ticks with no "end" —
-      // without this decay a single tick would push forever and self-travel.
-      if (inputRef.current.active && now - lastPinchAtRef.current > 150) {
-        inputRef.current = { zoomVel: 0, active: false };
-      }
+      inputRef.current = liveInput(inputRef.current, now - lastPinchAtRef.current);
       const { state, events, edgePressure } = stepScale(st, inputRef.current, dt);
       stateRef.current = state;
 
