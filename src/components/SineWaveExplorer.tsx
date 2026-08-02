@@ -13,7 +13,7 @@ import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
 import { holdTier, pathWinding, THRESHOLDS } from "@/lib/gesture/core";
 import { getTimbreEngine } from "@/lib/timbre-engine";
-import type { TimbreSpec } from "@/lib/timbre";
+import type { TimbreBlend, TimbreSpec } from "@/lib/timbre";
 import { useField } from "@/store/field";
 
 type WaveMode = "source" | "interference" | "standing";
@@ -57,6 +57,16 @@ const SINE_VOICE: TimbreSpec = {
   vibratoCents: 3,
   vibratoDelayMs: 0,
   gain: 0.7,
+};
+
+// The engine speaks in blends along the instrument chain; the sine's voice
+// is the degenerate blend — itself at both ends.
+const SINE_BLEND: TimbreBlend = {
+  key: "sine-voice",
+  label: "sine",
+  lower: SINE_VOICE,
+  upper: SINE_VOICE,
+  mix: 0,
 };
 
 const hzFromMidi = (midi: number) => 440 * 2 ** ((midi - 69) / 12);
@@ -631,7 +641,7 @@ export default function SineWaveExplorer() {
             lastX: e.x, lastY: e.y, lastT: now,
             path: [{ x: e.x, y: e.y }], scrubFired: 0,
           });
-          engine.noteOn(key, hzFromY(p.y, cfg.midi), SINE_VOICE);
+          engine.noteOn(key, hzFromY(p.y, cfg.midi), SINE_BLEND);
           if (voicesRef.current.size === 1) tuneFromPointer(e.x, e.y, 0.5 + e.intensity * 0.5);
           try { haptics.ripple(0.24 + e.intensity * 0.36); } catch { /* noop */ }
           recordTape("object", 0.3 + e.intensity * 0.35, "sine/voice");
