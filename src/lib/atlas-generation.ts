@@ -35,12 +35,15 @@ export {
 export { pixelBoundsForClip } from "@/lib/atlas-crop";
 
 const OPENAI_IMAGE_MODEL = "gpt-image-2";
-// Temporarily unused while Atlas is Flux-only.
-// const OPENAI_GENERATIONS_URL = "https://api.openai.com/v1/images/generations";
-// const OPENAI_EDITS_URL = "https://api.openai.com/v1/images/edits";
+const OPENAI_GENERATIONS_URL = "https://api.openai.com/v1/images/generations";
+const OPENAI_EDITS_URL = "https://api.openai.com/v1/images/edits";
 const OPENROUTER_IMAGE_MODEL = "black-forest-labs/flux.2-klein-4b";
 const OPENROUTER_PRO_IMAGE_MODEL = "black-forest-labs/flux.2-pro";
 const OPENROUTER_IMAGES_URL = "https://openrouter.ai/api/v1/images";
+const OPENAI_OUTPUT_QUALITY = "high";
+const OPENAI_OUTPUT_FORMAT = "webp";
+const OPENAI_OUTPUT_COMPRESSION = 92;
+const OPENAI_MODERATION = "auto";
 const MAX_PROMPT_LENGTH = 240;
 const MAX_SOURCE_IMAGE_BYTES = 6 * 1024 * 1024;
 const MAX_SOURCE_BASE64_LENGTH = 8_400_000;
@@ -137,7 +140,6 @@ export type AtlasGenerationResult = AtlasGenerationContext & {
 };
 
 type SourceImage = {
-  blob: Blob;
   bytes: Buffer;
   mimeType: AtlasImageMime;
   filename: string;
@@ -215,19 +217,19 @@ export function resolveAtlasProviderConfig(
   providerOverride?: string,
 ): AtlasProviderConfig {
   const rawProvider = providerOverride ?? environment.ATLAS_IMAGE_PROVIDER;
-  // Flux-only for now: preview=Klein, final=Pro. OpenAI is commented out below.
+  // Atlas is progressive: Flux Klein supplies the fast preview while the
+  // default final is rendered by the higher-fidelity GPT Image model.
   const provider = rawProvider == null || rawProvider.trim() === ""
-    ? "openrouter-pro"
+    ? "openai"
     : rawProvider.trim();
 
-  // Temporarily disabled — restore to re-enable GPT Image 2 finals.
-  // if (provider === "openai") {
-  //   return {
-  //     provider,
-  //     model: OPENAI_IMAGE_MODEL,
-  //     apiKey: normalizeServerSecret(environment.OPENAI_API_KEY),
-  //   };
-  // }
+  if (provider === "openai") {
+    return {
+      provider,
+      model: OPENAI_IMAGE_MODEL,
+      apiKey: normalizeServerSecret(environment.OPENAI_API_KEY),
+    };
+  }
   if (provider === "openrouter") {
     return {
       provider,
@@ -390,26 +392,15 @@ export async function generateAtlasImage(
   }, PROVIDER_TIMEOUT_MS);
 
   try {
-    // Temporarily Flux/OpenRouter only — OpenAI path commented out for speed.
-    // const artifact = providerConfig.provider === "openai"
-    //   ? await generateWithOpenAI(request, compositePrompt, size, providerConfig.apiKey, controller.signal)
-    //   : await generateWithOpenRouter(
-    //       request,
-    //       compositePrompt,
-    //       providerConfig.model,
-    //       providerConfig.apiKey,
-    //       controller.signal,
-    //     );
-    if (providerConfig.provider === "openai") {
-      throw new AtlasProviderConfigurationError("OpenAI atlas generation is temporarily disabled");
-    }
-    const artifact = await generateWithOpenRouter(
-      request,
-      compositePrompt,
-      providerConfig.model,
-      providerConfig.apiKey,
-      controller.signal,
-    );
+    const artifact = providerConfig.provider === "openai"
+      ? await generateWithOpenAI(request, compositePrompt, size, providerConfig.apiKey, controller.signal)
+      : await generateWithOpenRouter(
+          request,
+          compositePrompt,
+          providerConfig.model,
+          providerConfig.apiKey,
+          controller.signal,
+        );
 
     return {
       dataUrl: `data:${artifact.mediaType};base64,${artifact.base64}`,
@@ -766,21 +757,20 @@ function atlasAction(request: AtlasGenerationRequest): string {
   return "Edit the supplied atlas into a new expression of the visual concept. Preserve its cartographic identity and overall continuity while regenerating the places, materials, and atmosphere.";
 }
 
-// Temporarily disabled with the OpenAI atlas path — keep for easy restore.
-// async function generateWithOpenAI(
-//   request: AtlasGenerationRequest,
-//   prompt: string,
-//   size: string,
-//   apiKey: string,
-//   signal: AbortSignal,
-// ): Promise<ProviderArtifact> {
-//   const response = request.currentImage
-//     ? await callOpenAIEdit(request.currentImage, prompt, size, apiKey, signal)
-//     : await callOpenAIGeneration(prompt, size, apiKey, signal);
-//   const requestId = response.headers.get("x-request-id");
-//   const payload = await parseImagesResponse(response);
-//   return providerArtifactFromPayload(payload, "image/webp", requestId, size, "openai");
-// }
+async function generateWithOpenAI(
+  request: AtlasGenerationRequest,
+  prompt: string,
+  size: string,
+  apiKey: string,
+  signal: AbortSignal,
+): Promise<ProviderArtifact> {
+  const response = atlasUsesSourceImage(request)
+    ? await callOpenAIEdit(request, prompt, size, apiKey, signal)
+    : await callOpenAIGeneration(prompt, size, apiKey, signal);
+  const requestId = response.headers.get("x-request-id");
+  const payload = await parseImagesResponse(response);
+  return providerArtifactFromPayload(payload, "image/webp", requestId, size, "openai");
+}
 
 async function generateWithOpenRouter(
   request: AtlasGenerationRequest,
@@ -806,10 +796,7 @@ async function generateWithOpenRouter(
   };
 
   if (atlasUsesSourceImage(request) && request.currentImage) {
-    let image = await loadSourceImage(request.currentImage);
-    if (request.clip && !request.sourceImageCropped) {
-      image = await cropSourceImage(image, request.clip);
-    }
+    const image = await loadSourceImageForRequest(request);
     body.input_references = [{
       type: "image_url",
       image_url: {
@@ -835,62 +822,72 @@ async function generateWithOpenRouter(
   return providerArtifactFromPayload(payload, mediaType, requestId, null, "openrouter");
 }
 
-// Temporarily disabled with the OpenAI atlas path — keep for easy restore.
-// async function callOpenAIGeneration(
-//   prompt: string,
-//   size: string,
-//   apiKey: string,
-//   signal: AbortSignal,
-// ): Promise<Response> {
-//   const response = await fetch(OPENAI_GENERATIONS_URL, {
-//     method: "POST",
-//     headers: {
-//       authorization: `Bearer ${apiKey}`,
-//       "content-type": "application/json",
-//     },
-//     body: JSON.stringify({
-//       model: OPENAI_IMAGE_MODEL,
-//       prompt,
-//       n: 1,
-//       size,
-//       quality: "medium",
-//       output_format: "webp",
-//       output_compression: 84,
-//       moderation: "auto",
-//     }),
-//     signal,
-//   });
-//   if (!response.ok) await throwForProviderResponse(response);
-//   return response;
-// }
-//
-// async function callOpenAIEdit(
-//   currentImage: string,
-//   prompt: string,
-//   size: string,
-//   apiKey: string,
-//   signal: AbortSignal,
-// ): Promise<Response> {
-//   const image = await loadSourceImage(currentImage);
-//   const form = new FormData();
-//   form.set("model", OPENAI_IMAGE_MODEL);
-//   form.set("prompt", prompt);
-//   form.set("image", image.blob, image.filename);
-//   form.set("size", size);
-//   form.set("quality", "medium");
-//   form.set("output_format", "webp");
-//   form.set("output_compression", "84");
-//   form.set("moderation", "auto");
-//
-//   const response = await fetch(OPENAI_EDITS_URL, {
-//     method: "POST",
-//     headers: { authorization: `Bearer ${apiKey}` },
-//     body: form,
-//     signal,
-//   });
-//   if (!response.ok) await throwForProviderResponse(response);
-//   return response;
-// }
+async function callOpenAIGeneration(
+  prompt: string,
+  size: string,
+  apiKey: string,
+  signal: AbortSignal,
+): Promise<Response> {
+  const response = await fetch(OPENAI_GENERATIONS_URL, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${apiKey}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model: OPENAI_IMAGE_MODEL,
+      prompt,
+      n: 1,
+      size,
+      quality: OPENAI_OUTPUT_QUALITY,
+      output_format: OPENAI_OUTPUT_FORMAT,
+      output_compression: OPENAI_OUTPUT_COMPRESSION,
+      moderation: OPENAI_MODERATION,
+    }),
+    signal,
+  });
+  if (!response.ok) await throwForProviderResponse(response);
+  return response;
+}
+
+async function callOpenAIEdit(
+  request: AtlasGenerationRequest,
+  prompt: string,
+  size: string,
+  apiKey: string,
+  signal: AbortSignal,
+): Promise<Response> {
+  const image = await loadSourceImageForRequest(request);
+  const form = new FormData();
+  form.set("model", OPENAI_IMAGE_MODEL);
+  form.set("prompt", prompt);
+  form.set("image", new Blob([image.bytes], { type: image.mimeType }), image.filename);
+  form.set("size", size);
+  form.set("quality", OPENAI_OUTPUT_QUALITY);
+  form.set("output_format", OPENAI_OUTPUT_FORMAT);
+  form.set("output_compression", String(OPENAI_OUTPUT_COMPRESSION));
+  form.set("moderation", OPENAI_MODERATION);
+
+  const response = await fetch(OPENAI_EDITS_URL, {
+    method: "POST",
+    headers: { authorization: `Bearer ${apiKey}` },
+    body: form,
+    signal,
+  });
+  if (!response.ok) await throwForProviderResponse(response);
+  return response;
+}
+
+async function loadSourceImageForRequest(request: AtlasGenerationRequest): Promise<SourceImage> {
+  if (!request.currentImage) {
+    throw new AtlasRequestError("current_image_required", "editing requires a current atlas image");
+  }
+  let image = await loadSourceImage(request.currentImage);
+  if (request.clip && !request.sourceImageCropped) {
+    image = await cropSourceImage(image, request.clip);
+  }
+  return image;
+}
 
 async function cropSourceImage(image: SourceImage, clip: AtlasClipRect): Promise<SourceImage> {
   const sharpModule = await import("sharp");
@@ -923,7 +920,6 @@ async function cropSourceImage(image: SourceImage, clip: AtlasClipRect): Promise
   }
 
   return {
-    blob: new Blob([bytes], { type: "image/png" }),
     bytes,
     mimeType: "image/png",
     filename: "atlas-source-crop.png",
@@ -960,7 +956,6 @@ async function loadSourceImage(reference: string): Promise<SourceImage> {
   }
 
   return {
-    blob: new Blob([bytes], { type: mimeType }),
     bytes,
     mimeType,
     filename: `atlas-source${extension}`,
@@ -987,7 +982,6 @@ function sourceImageFromDataUrl(reference: string): SourceImage {
 
   const extension = mimeType === "image/jpeg" ? ".jpg" : mimeType === "image/png" ? ".png" : ".webp";
   return {
-    blob: new Blob([bytes], { type: mimeType }),
     bytes,
     mimeType,
     filename: `atlas-source${extension}`,
@@ -1138,7 +1132,7 @@ async function throwForProviderResponse(response: Response): Promise<never> {
 function chooseOutputSize(viewport?: AtlasViewport): string {
   // Atlas keeps authored portrait sheets on phones and landscape sheets on
   // wider screens, so generated edits inherit the same map geometry.
-  return viewport && viewport.width <= 760 ? "784x1696" : "1344x1008";
+  return viewport && viewport.width <= 760 ? "896x1616" : "1344x1008";
 }
 
 const THEMES: Record<string, ThemeWords> = {
