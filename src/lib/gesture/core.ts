@@ -35,6 +35,17 @@ export const THRESHOLDS = {
   knockThresh: 22,
   /** Screen-edge inset inside which gestures may begin (the surf line). */
   edgeInsetPx: 24,
+  /**
+   * Instrument surfaces (polyphonic rooms binding `voice`): fingers landing
+   * further apart than this are independent voices, never a frame gesture.
+   */
+  voiceStaggerMs: 80,
+  /**
+   * How long a together-landed pair may stay ambiguous before it is locked
+   * as voices. Notes are already sounding — this only closes the door on a
+   * late pinch claim.
+   */
+  voiceDecideMs: 180,
 } as const;
 
 export type HoldTier = 0 | 1 | 2 | 3;
@@ -144,6 +155,54 @@ export function pathWinding(points: Pt[]): number {
     prev = a;
   }
   return -total / (2 * Math.PI); // flip: screen y is down; + = counterclockwise
+}
+
+export type PairMotion = {
+  /** ms between the two fingers landing. */
+  landDeltaMs: number;
+  /** Displacement of each finger since the pair formed, px. */
+  da: Pt;
+  db: Pt;
+  /** Accumulated distance ratio between the fingers (1 = unchanged). */
+  scale: number;
+  /** Accumulated rotation of the connecting line, radians. */
+  rotate: number;
+  /** ms since the pair formed. */
+  elapsedMs: number;
+};
+
+export type PairVerdict = "voices" | "frame" | "undecided";
+
+/**
+ * Instrument-surface discriminator: are two concurrent fingers one frame
+ * gesture (pinch/twist) or two independent voices (a dyad)?
+ *
+ * The physics of hands: chord fingers land staggered, or land together and
+ * then hold still or travel the same way (a double-stop glide). Frame
+ * fingers land together and move *against* each other — spreading, closing,
+ * or turning about their midpoint. So:
+ *
+ * - staggered landing → voices, forever (a chord must never read as pinch)
+ * - opposed motion past the radial or angular deadzone → frame
+ * - parallel or one-sided motion → voices (an anchored-thumb pinch is
+ *   sacrificed on instrument surfaces; both-fingers pinches and the desktop
+ *   wheel still zoom)
+ * - stillness past the decide window → voices (a held dyad)
+ */
+export function classifyInstrumentPair(m: PairMotion): PairVerdict {
+  if (m.landDeltaMs > THRESHOLDS.voiceStaggerMs) return "voices";
+
+  const aMag = Math.hypot(m.da.x, m.da.y);
+  const bMag = Math.hypot(m.db.x, m.db.y);
+  const bothMoving = aMag > THRESHOLDS.moveTolPx && bMag > THRESHOLDS.moveTolPx;
+  const opposed = m.da.x * m.db.x + m.da.y * m.db.y < 0;
+  const radial = Math.abs(m.scale - 1) > THRESHOLDS.pinchDeadzone * 2;
+  const angular = Math.abs(m.rotate) > THRESHOLDS.twistDeadzoneRad * 1.5;
+
+  if (bothMoving && opposed && (radial || angular)) return "frame";
+  if (m.elapsedMs > THRESHOLDS.voiceDecideMs) return "voices";
+  if ((aMag > THRESHOLDS.moveTolPx || bMag > THRESHOLDS.moveTolPx) && !opposed) return "voices";
+  return "undecided";
 }
 
 export type ReleaseKind = "tap" | "flick" | "drag-end" | "hold-release";

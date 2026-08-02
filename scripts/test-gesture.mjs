@@ -29,6 +29,7 @@ const {
   intensityFrom,
   decomposeTwoPointer,
   pathWinding,
+  classifyInstrumentPair,
   classifyRelease,
   tapTrain,
   rhythmFrom,
@@ -120,5 +121,77 @@ assert.equal(shakeIntensity(oneBump, now), 0, "one pothole is not a shake");
 // — Drumming —
 assert.equal(drumAlternation([{ zone: 0 }, { zone: 1 }, { zone: 0 }, { zone: 1 }]), 1, "strict patter");
 assert.equal(drumAlternation([{ zone: 0 }, { zone: 0 }, { zone: 0 }]), 0, "one finger is not a drum");
+
+// — Instrument pairs: chords must never read as pinch, pinches must never sound —
+const still = { x: 0, y: 0 };
+// Staggered landings are voices no matter how the fingers later move.
+assert.equal(
+  classifyInstrumentPair({
+    landDeltaMs: 200,
+    da: { x: -40, y: 0 }, db: { x: 40, y: 0 },
+    scale: 1.6, rotate: 0, elapsedMs: 300,
+  }),
+  "voices",
+  "a staggered chord spreading apart must never become a pinch",
+);
+// A together-landed pair spreading past the radial deadzone is a frame grip.
+assert.equal(
+  classifyInstrumentPair({
+    landDeltaMs: 20,
+    da: { x: -30, y: 0 }, db: { x: 30, y: 0 },
+    scale: 1.5, rotate: 0, elapsedMs: 120,
+  }),
+  "frame",
+  "a real pinch must be reclaimed from the voices",
+);
+// Rotation about the midpoint (opposed tangential motion) is a frame grip too.
+assert.equal(
+  classifyInstrumentPair({
+    landDeltaMs: 10,
+    da: { x: 0, y: -26 }, db: { x: 0, y: 26 },
+    scale: 1.01, rotate: 0.5, elapsedMs: 140,
+  }),
+  "frame",
+  "a twist must be reclaimed from the voices",
+);
+// Parallel travel is a double-stop glide, not a pan.
+assert.equal(
+  classifyInstrumentPair({
+    landDeltaMs: 15,
+    da: { x: 50, y: 4 }, db: { x: 48, y: -3 },
+    scale: 1.02, rotate: 0.02, elapsedMs: 100,
+  }),
+  "voices",
+  "two fingers gliding the same way are two voices, never a pan",
+);
+// An anchored finger with one slider is playing, not pinching.
+assert.equal(
+  classifyInstrumentPair({
+    landDeltaMs: 15,
+    da: still, db: { x: 60, y: 0 },
+    scale: 1.4, rotate: 0, elapsedMs: 100,
+  }),
+  "voices",
+  "holding one note while gliding another must stay two voices",
+);
+// A still, together-landed dyad settles into voices once the window closes.
+assert.equal(
+  classifyInstrumentPair({
+    landDeltaMs: 12,
+    da: still, db: still,
+    scale: 1, rotate: 0, elapsedMs: THRESHOLDS.voiceDecideMs + 1,
+  }),
+  "voices",
+  "a held dyad locks as voices after the decide window",
+);
+assert.equal(
+  classifyInstrumentPair({
+    landDeltaMs: 12,
+    da: still, db: still,
+    scale: 1, rotate: 0, elapsedMs: 60,
+  }),
+  "undecided",
+  "a fresh still pair stays on probation inside the window",
+);
 
 console.log("gesture grammar tests passed");

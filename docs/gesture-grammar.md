@@ -111,6 +111,18 @@ Thing → map → law → vessel. The hand climbs the same stack the site is abo
 the binding is fixed site-wide: once a hand learns that two fingers mean "the map, not the
 thing," that knowledge transfers to every room, forever, with nothing to read.
 
+**Instrument surfaces refine the key from finger *count* to finger *correlation*.** On a
+polyphonic surface (a room that binds `voice`), every finger is material — a note that
+sounds the instant it lands — because a chord is many independent touches of the thing,
+not an address into the stack. The stack is still reachable: fingers that land *together*
+(≤80ms) and move *against each other* — spreading, closing, turning about their midpoint —
+are one correlated grip, and that grip is the map layer (pinch/twist) exactly as
+everywhere else. Staggered landings are voices forever; a chord must never read as a
+pinch. The physics of hands makes this instruction-free: chord fingers land staggered or
+hold still, gesture fingers land together and move together-against. (One sacrifice: the
+anchored-thumb pinch reads as two voices on instrument surfaces; pinch with both fingers
+moving, and the desktop wheel, still zoom.)
+
 ## 4. The semantic vocabulary (what `lib/gesture` emits)
 
 Rooms receive semantic events, never raw pointers:
@@ -124,6 +136,9 @@ pinch      { scale, velocity, phase }          // two-finger radial
 twist      { angle, velocity, phase }          // two-finger angular
 pan2       { dx, dy, phase }                   // two-finger translation
 scrub      { winding, angularVelocity, cx, cy } // circular path, any finger count
+voice      { id, phase: start|move|end|cancel, x, y, intensity } // polyphonic surfaces:
+           // one stream per finger; binding it switches the surface's dialect
+           // (hold/drag/scrub silenced, correlated pairs may cancel into pinch/twist)
 span       { spread, phase }                   // two fingers held apart, static
 rhythm     { bpm, stability }                  // from tap trains
 drum       { hits, alternation }               // multi-point patter
@@ -137,8 +152,9 @@ breath     { strength }                        // opt-in, candle contexts only
 
 Shared thresholds (centralized in `gesture/core.ts`, never redefined per room):
 hold tiers **250ms** (touch) / **900ms** (dwell) / **2500ms** (ceremony); tap window
-280ms; chord settle 40ms; scrub at ¾ winding; flick above 0.6 px/ms. Intensity always
-0..1 from the best available physical channel.
+280ms; chord settle 40ms; scrub at ¾ winding; flick above 0.6 px/ms; voice stagger 80ms
+and pair-decide 180ms on instrument surfaces. Intensity always 0..1 from the best
+available physical channel.
 
 ## 5. Global bindings (identical in every room)
 

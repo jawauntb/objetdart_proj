@@ -19,11 +19,13 @@ import {
   intensityFrom,
   decomposeTwoPointer,
   pathWinding,
+  classifyInstrumentPair,
   classifyRelease,
   tapTrain,
   rhythmFrom,
   shakeIntensity,
   type HoldTier,
+  type PairVerdict,
   type Pt,
   type MotionSample,
   type Rhythm,
@@ -57,6 +59,16 @@ export type GestureHandlers = {
   twist?: (e: { phase: Phase; angle: number; velocity: number; cx: number; cy: number }) => void;
   pan2?: (e: { phase: Phase; dx: number; dy: number; cx: number; cy: number }) => void;
   scrub?: (e: { winding: number; angularVelocity: number; cx: number; cy: number }) => void;
+  /**
+   * Polyphonic channel for instrument surfaces. Binding this switches the
+   * surface's dialect: every finger is an independent voice that starts
+   * sounding the moment it lands (staggered fingers are always voices), and
+   * only a together-landed pair moving with an opposed radial/angular
+   * signature is reclaimed as pinch/twist — its two voices receive `cancel`.
+   * hold/drag/scrub are silenced (a held note is not a hold); tap and rhythm
+   * still fire on release so tap-trains keep their site-wide meaning.
+   */
+  voice?: (e: { id: number; phase: Phase | "cancel"; x: number; y: number; intensity: number }) => void;
   rhythm?: (e: Rhythm) => void;
   shake?: (e: { intensity: number }) => void;
   tilt?: (e: { beta: number; gamma: number }) => void;
@@ -120,6 +132,21 @@ export function attachGestures(
   const edgeInset = opts.edgeInset ?? THRESHOLDS.edgeInsetPx;
 
   const contacts = new Map<number, Contact>();
+  const poly = Boolean(on.voice);
+  const voiceIds = new Set<number>();
+  let voicePair: {
+    a: number;
+    b: number;
+    formedAt: number;
+    landDeltaMs: number;
+    a0: Pt;
+    b0: Pt;
+    pa: Pt;
+    pb: Pt;
+    scaleAcc: number;
+    rotAcc: number;
+    decided: PairVerdict | null;
+  } | null = null;
   let sessionFingers = 0;
   let settled = false;
   let settleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -219,8 +246,10 @@ export function attachGestures(
   const settle = () => {
     settled = true;
     sessionFingers = contacts.size;
-    if (sessionFingers === 2) beginTwo();
-    if (sessionFingers >= 1) armHold();
+    // On an instrument surface the pair claim (below) owns two-finger
+    // meaning, and a held note is a note, not a hold.
+    if (sessionFingers === 2 && !poly) beginTwo();
+    if (sessionFingers >= 1 && !poly) armHold();
   };
 
   const onDown = (ev: PointerEvent) => {
@@ -263,6 +292,34 @@ export function attachGestures(
       width: ev.width,
       height: ev.height,
     });
+    if (poly) {
+      // Every landing sounds now; classification can only cancel later.
+      voiceIds.add(ev.pointerId);
+      on.voice?.({
+        id: ev.pointerId,
+        phase: "start",
+        x: ev.clientX,
+        y: ev.clientY,
+        intensity: intensityFrom({ pressure: ev.pressure, width: ev.width, height: ev.height }),
+      });
+      if (contacts.size === 2 && !voicePair && !two) {
+        const [first, second] = [...contacts.values()];
+        const landDeltaMs = now - first.t0;
+        voicePair = {
+          a: first.id,
+          b: second.id,
+          formedAt: now,
+          landDeltaMs,
+          a0: { x: first.x, y: first.y },
+          b0: { x: second.x, y: second.y },
+          pa: { x: first.x, y: first.y },
+          pb: { x: second.x, y: second.y },
+          scaleAcc: 1,
+          rotAcc: 0,
+          decided: landDeltaMs > THRESHOLDS.voiceStaggerMs ? "voices" : null,
+        };
+      }
+    }
     if (contacts.size === 1) {
       settled = false;
       dragging = false;
@@ -273,7 +330,7 @@ export function attachGestures(
       // More fingers landing inside the settle window grow the chord.
       if (settleTimer) clearTimeout(settleTimer);
       settleTimer = setTimeout(settle, THRESHOLDS.chordSettleMs);
-    } else if (contacts.size === 2 && sessionFingers === 1) {
+    } else if (contacts.size === 2 && sessionFingers === 1 && !poly) {
       // A second finger joined late: promote to a two-finger frame gesture.
       clearHold();
       sessionFingers = 2;
@@ -302,6 +359,45 @@ export function attachGestures(
     if (c.path.length === 0 || Math.hypot(c.x - c.path[c.path.length - 1].x, c.y - c.path[c.path.length - 1].y) > 4) {
       c.path.push({ x: c.x, y: c.y });
       if (c.path.length > 240) c.path.shift();
+    }
+    if (poly) {
+      // A together-landed pair stays on probation until its motion shows a
+      // frame signature (opposed radial/angular → pinch/twist claims it,
+      // voices cancel) or proves itself musical (locked as voices).
+      if (voicePair && voicePair.decided == null && (ev.pointerId === voicePair.a || ev.pointerId === voicePair.b)) {
+        const a = contacts.get(voicePair.a);
+        const b = contacts.get(voicePair.b);
+        if (a && b) {
+          const d = decomposeTwoPointer(voicePair.pa, voicePair.pb, { x: a.x, y: a.y }, { x: b.x, y: b.y });
+          voicePair.scaleAcc *= d.scale;
+          voicePair.rotAcc += d.rotate;
+          voicePair.pa = { x: a.x, y: a.y };
+          voicePair.pb = { x: b.x, y: b.y };
+          const verdict = classifyInstrumentPair({
+            landDeltaMs: voicePair.landDeltaMs,
+            da: { x: a.x - voicePair.a0.x, y: a.y - voicePair.a0.y },
+            db: { x: b.x - voicePair.b0.x, y: b.y - voicePair.b0.y },
+            scale: voicePair.scaleAcc,
+            rotate: voicePair.rotAcc,
+            elapsedMs: now - voicePair.formedAt,
+          });
+          if (verdict === "frame") {
+            voicePair.decided = "frame";
+            for (const id of [voicePair.a, voicePair.b]) {
+              const contact = contacts.get(id);
+              if (voiceIds.delete(id) && contact) {
+                on.voice?.({ id, phase: "cancel", x: contact.x, y: contact.y, intensity: 0 });
+              }
+            }
+            beginTwo();
+          } else if (verdict === "voices") {
+            voicePair.decided = "voices";
+          }
+        }
+      }
+      if (voiceIds.has(ev.pointerId)) {
+        on.voice?.({ id: ev.pointerId, phase: "move", x: c.x, y: c.y, intensity: intensityFrom(c) });
+      }
     }
     if (!settled) return;
 
@@ -343,8 +439,9 @@ export function attachGestures(
       return;
     }
 
-    // One- or three-finger drag.
-    if ((sessionFingers === 1 || sessionFingers === 3) && c === sessionStart()) {
+    // One- or three-finger drag. On an instrument surface a moving finger is
+    // a gliding voice, not a drag.
+    if (!poly && (sessionFingers === 1 || sessionFingers === 3) && c === sessionStart()) {
       if (!dragging && c.moved > THRESHOLDS.moveTolPx) {
         dragging = true;
         clearHold();
@@ -376,6 +473,13 @@ export function attachGestures(
     const now = performance.now();
     const wasSessionLead = c === sessionStart();
     contacts.delete(ev.pointerId);
+
+    if (poly) {
+      if (voiceIds.delete(ev.pointerId)) {
+        on.voice?.({ id: ev.pointerId, phase: "end", x: c.x, y: c.y, intensity: 0 });
+      }
+      if (voicePair && (ev.pointerId === voicePair.a || ev.pointerId === voicePair.b)) voicePair = null;
+    }
 
     if (two && (ev.pointerId === two.a || ev.pointerId === two.b)) endTwo();
 
@@ -416,7 +520,14 @@ export function attachGestures(
   };
 
   const onCancel = (ev: PointerEvent) => {
+    const c = contacts.get(ev.pointerId);
     contacts.delete(ev.pointerId);
+    if (poly) {
+      if (voiceIds.delete(ev.pointerId)) {
+        on.voice?.({ id: ev.pointerId, phase: "cancel", x: c?.x ?? 0, y: c?.y ?? 0, intensity: 0 });
+      }
+      if (voicePair && (ev.pointerId === voicePair.a || ev.pointerId === voicePair.b)) voicePair = null;
+    }
     if (two) endTwo();
     if (contacts.size === 0) {
       clearHold();
