@@ -49,7 +49,7 @@ export const SCALE_BANDS: ScaleBand[] = [
   { id: "drop", label: "a drop", route: "/drop", sMin: -3.5, sMax: -1.5 },
   { id: "flowers", label: "flowers", route: "/flowers", sMin: -1.5, sMax: 0.5 },
   { id: "coast", label: "the coast", route: "/ocean", sMin: 0.5, sMax: 4.5 },
-  { id: "atlas", label: "the atlas", route: "/atlas", sMin: 4.5, sMax: 6.5 },
+  { id: "atlas", label: "the atlas", route: "/atlas/origin", sMin: 4.5, sMax: 6.5 },
   { id: "earth", label: "the earth", route: "/earth", sMin: 6.5, sMax: 9 },
   { id: "stars", label: "the stars", route: "/stars", sMin: 9, sMax: 22 },
   { id: "beyond", label: "beyond", route: "/beyond", sMin: 22, sMax: 25.5 },
@@ -243,6 +243,84 @@ export function stepScale(state: ScaleState, input: ScaleInput, dtMs: number): S
   s = dir === 1 ? Math.min(next, wall - 1e-9) : Math.max(next, wall);
   v *= Math.exp(-dt * 6);
   return { state: { s: clampScale(s), v, intentMs, pressing }, events, edgePressure };
+}
+
+/**
+ * A room that owns an internal camera (its own zoom) joins the manifold by
+ * declaring how that zoom spans its band. `zoomMin` is the room's WIDEST
+ * view — the top of the band, larger scales beyond it; `zoomMax` is its
+ * TIGHTEST view — the band floor, smaller scales beyond. The zoom→s map is
+ * therefore monotone and order-reversing: zooming in moves down the axis.
+ */
+export type RoomZoomSpec = {
+  band: ScaleBandId;
+  /** Internal zoom at the widest view (maps to the band ceiling). */
+  zoomMin: number;
+  /** Internal zoom at the tightest view (maps to the band floor). */
+  zoomMax: number;
+};
+
+function bandById(id: ScaleBandId): ScaleBand {
+  for (const b of SCALE_BANDS) if (b.id === id) return b;
+  return SCALE_BANDS[0];
+}
+
+/** Bands are half-open: keep a mapped position strictly under the ceiling. */
+const ROOM_WALL_EPS = 1e-6;
+
+/**
+ * Internal zoom → manifold position, in log domain (zoom is multiplicative,
+ * decades are its logarithm). zoomMin lands flush against the band ceiling
+ * and zoomMax on the band floor, so the room's extremes ARE the walls: one
+ * residual push at either end makes wall contact within a frame.
+ */
+export function scaleForRoomZoom(spec: RoomZoomSpec, zoom: number): number {
+  const b = bandById(spec.band);
+  const z = Math.max(spec.zoomMin, Math.min(spec.zoomMax, zoom));
+  const u = Math.log(z / spec.zoomMin) / Math.log(spec.zoomMax / spec.zoomMin);
+  const s = b.sMax - u * (b.sMax - b.sMin);
+  return Math.max(b.sMin, Math.min(b.sMax - ROOM_WALL_EPS, s));
+}
+
+/**
+ * Which manifold wall the internal zoom is pinned against, in scale-axis
+ * terms (matching ScaleState.pressing): -1 = the band floor (tightest view;
+ * smaller scales beyond), +1 = the band ceiling (widest view; larger scales
+ * beyond), 0 = strictly inside — the room owns its camera.
+ */
+export function roomZoomWall(spec: RoomZoomSpec, zoom: number): -1 | 0 | 1 {
+  const eps = (spec.zoomMax - spec.zoomMin) * 1e-6;
+  if (zoom >= spec.zoomMax - eps) return -1;
+  if (zoom <= spec.zoomMin + eps) return 1;
+  return 0;
+}
+
+/**
+ * Residual pinch at a held extreme → manifold input.
+ *
+ * `zoomInVel` is the room's ATTEMPTED zoom velocity in log units per second
+ * (ln of the per-event zoom ratio over elapsed time — the same convention
+ * the gesture engine uses for pinch velocity); positive means zooming in.
+ * Strictly inside the room's range the input is inactive: internal zoom is
+ * the room's own business and the manifold must not move. Only overflow at
+ * a pinned extreme becomes wall pressure, and stepScale still demands
+ * TRAVEL_INTENT_MS of sustained push before it becomes travel.
+ */
+export function residualScaleInput(
+  spec: RoomZoomSpec,
+  zoom: number,
+  zoomInVel: number,
+): ScaleInput {
+  const wall = roomZoomWall(spec, zoom);
+  if (wall === -1 && zoomInVel > 0) {
+    // Zooming in past the tightest view: toward smaller scales.
+    return { zoomVel: Math.max(-V_MAX, -zoomInVel), active: true };
+  }
+  if (wall === 1 && zoomInVel < 0) {
+    // Zooming out past the widest view: toward larger scales.
+    return { zoomVel: Math.min(V_MAX, -zoomInVel), active: true };
+  }
+  return { zoomVel: 0, active: false };
 }
 
 export type SpectralRegister = {

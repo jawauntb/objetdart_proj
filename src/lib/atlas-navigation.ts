@@ -1,4 +1,18 @@
 import type { AtlasDirection } from "@/lib/atlas-batch";
+import type { RoomZoomSpec } from "@/lib/scale";
+
+/**
+ * /atlas' membership in the scale manifold. zoomMin is fit-to-view — the
+ * widest generated chart, with the earth above it; zoomMax is the deepest
+ * free zoom the sheet allows, with the coast below it. Atlas derives its
+ * own MIN/MAX zoom clamps from this spec so the camera and the band walls
+ * can never disagree.
+ */
+export const ATLAS_ZOOM_SPEC: RoomZoomSpec = {
+  band: "atlas",
+  zoomMin: 1,
+  zoomMax: 64,
+};
 
 export type AtlasNavigationView = {
   x: number;

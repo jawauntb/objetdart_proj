@@ -3,6 +3,8 @@
  * Visual DNA stays in Stars.tsx; this owns the spatial / memory contracts.
  */
 
+import type { RoomZoomSpec } from "../scale";
+
 export type LayerId = "galactic" | "cluster" | "system" | "local";
 
 export type Camera = {
@@ -28,6 +30,18 @@ export const LAYER_ORDER: LayerId[] = ["galactic", "cluster", "system", "local"]
 export const ZOOM_MIN = 1;
 export const ZOOM_MAX = 14;
 export const ZOOM_STEP = 0.55;
+
+/**
+ * /stars' membership in the scale manifold: zoom 1 (galactic, the widest
+ * field) sits at the top of the stars band — beyond it, /beyond; zoom 14
+ * (local, the tightest field) sits on the band floor — beneath it, /earth.
+ * Consumed by useBandEdgeTravel; the internal layers above stay untouched.
+ */
+export const STARS_ZOOM_SPEC: RoomZoomSpec = {
+  band: "stars",
+  zoomMin: ZOOM_MIN,
+  zoomMax: ZOOM_MAX,
+};
 
 /** Zoom bands: galactic 1–2, cluster 2–4, system 4–8, local 8–14 */
 export function layerFromZoom(zoom: number): LayerId {

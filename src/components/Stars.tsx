@@ -5,6 +5,7 @@ import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { useField } from "@/store/field";
 import WaterText from "@/components/WaterText";
+import { useBandEdgeTravel } from "@/components/ScaleTravel";
 import {
   type Camera,
   type LayerId,
@@ -13,6 +14,7 @@ import {
   LAYER_PROFILES,
   MAX_BORN_STARS_PER_LAYER,
   MAX_USER_BLACK_HOLES,
+  STARS_ZOOM_SPEC,
   ZOOM_MAX,
   ZOOM_STEP,
   applyHoleNBody,
@@ -712,7 +714,18 @@ export default function Stars() {
   const pointerIntentRef = useRef<PointerIntent | null>(null);
   const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
   const pinchRef = useRef<{ dist: number; zoom: number } | null>(null);
+  // Per-event pinch distance, achieved zoom, and time — the manifold's
+  // residual velocity is the attempted ratio minus what the camera took.
+  const pinchFrameRef = useRef<{ dist: number; zoom: number; at: number } | null>(null);
   const holdTimerRef = useRef<number>(0);
+  // The scale manifold at the walls: pinching past zoom 1 keeps going to
+  // /beyond, past zoom 14 down to /earth. Inside 1..14 the nested layers
+  // above own the camera exactly as before.
+  const {
+    report: reportScaleEdge,
+    release: releaseScaleEdge,
+    overlay: scaleEdgeOverlay,
+  } = useBandEdgeTravel("/stars", STARS_ZOOM_SPEC);
   /** True while pinch/wheel navigation owns the gesture — blocks star/BH commits. */
   const navGestureRef = useRef(false);
   const suppressCommitUntilRef = useRef(0);
@@ -3155,6 +3168,11 @@ export default function Stars() {
         const pts = [...pointersRef.current.values()];
         const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
         pinchRef.current = { dist: Math.max(1, dist), zoom: cameraRef.current.zoom };
+        pinchFrameRef.current = {
+          dist: Math.max(1, dist),
+          zoom: cameraRef.current.zoom,
+          at: performance.now(),
+        };
         markNavGesture();
         abortTouchWell(e.currentTarget);
         return;
@@ -3245,6 +3263,7 @@ export default function Stars() {
           const pts = [...pointersRef.current.values()];
           const dist = Math.max(1, Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y));
           pinchRef.current = { dist, zoom: cameraRef.current.zoom };
+          pinchFrameRef.current = { dist, zoom: cameraRef.current.zoom, at: performance.now() };
         }
         const pts = [...pointersRef.current.values()];
         const dist = Math.max(1, Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y));
@@ -3254,6 +3273,19 @@ export default function Stars() {
         const ww = window.innerWidth;
         const wh = window.innerHeight;
         applyCamera(zoomAtScreen(cameraRef.current, midX, midY, pinchRef.current.zoom * scale, ww, wh), true);
+        // Residual pinch at a zoom wall belongs to the manifold: the camera
+        // above clamps to [1, 14]; whatever ln-ratio the clamp swallowed
+        // this frame is what the hand is still saying.
+        const frame = pinchFrameRef.current;
+        const nowMs = performance.now();
+        if (frame && nowMs > frame.at) {
+          const attempted = dist / frame.dist;
+          const achieved = cameraRef.current.zoom / Math.max(1e-6, frame.zoom);
+          const vel =
+            Math.log(attempted / Math.max(1e-6, achieved)) / ((nowMs - frame.at) / 1000);
+          reportScaleEdge(cameraRef.current.zoom, vel);
+        }
+        pinchFrameRef.current = { dist, zoom: cameraRef.current.zoom, at: nowMs };
         return;
       }
 
@@ -3311,7 +3343,7 @@ export default function Stars() {
       setHoveredNebula(findNebulaAt(x, y));
       setHoveredMilkyWay(isInMilkyWay(x, y));
     },
-    [abortTouchWell, applyCamera, clearHoldTimer, findSavedAt, findNebulaAt, isInMilkyWay, markNavGesture, screenToSky],
+    [abortTouchWell, applyCamera, clearHoldTimer, findSavedAt, findNebulaAt, isInMilkyWay, markNavGesture, reportScaleEdge, screenToSky],
   );
 
   const endPointer = useCallback((e: React.PointerEvent<HTMLCanvasElement>, commit: boolean) => {
@@ -3321,7 +3353,11 @@ export default function Stars() {
     const wasNav = navGestureRef.current || pinchRef.current != null
       || performance.now() < suppressCommitUntilRef.current;
 
-    if (pointersRef.current.size < 2) pinchRef.current = null;
+    if (pointersRef.current.size < 2) {
+      if (pinchRef.current) releaseScaleEdge();
+      pinchRef.current = null;
+      pinchFrameRef.current = null;
+    }
     if (pointersRef.current.size === 0) {
       if (navGestureRef.current || wasNav) {
         suppressCommitUntilRef.current = performance.now() + NAV_SUPPRESS_MS;
@@ -3383,7 +3419,7 @@ export default function Stars() {
     gravityWellRef.current.mode = "pending";
     pointerIntentRef.current = null;
     try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* noop */ }
-  }, [birthStarAt, clearHoldTimer, markSky, releaseAccretion, spawnStarForm, supernovaAt]);
+  }, [birthStarAt, clearHoldTimer, markSky, releaseAccretion, releaseScaleEdge, spawnStarForm, supernovaAt]);
 
   const onPointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
     endPointer(e, true);
@@ -3521,7 +3557,16 @@ export default function Stars() {
       suppressCommitUntilRef.current = performance.now() + NAV_SUPPRESS_MS;
       abortTouchWell(fgRef.current);
       const delta = -Math.sign(e.deltaY) * (e.ctrlKey ? 0.22 : 0.4);
-      zoomBy(delta * ZOOM_STEP * 0.55, e.clientX, e.clientY);
+      const z0 = cameraRef.current.zoom;
+      const dz = delta * ZOOM_STEP * 0.55;
+      zoomBy(dz, e.clientX, e.clientY);
+      // Whatever the clamp swallowed is residual intent for the manifold:
+      // attempted minus achieved ln-ratio, at the gesture engine's wheel
+      // rate. Strictly inside the range this is zero and nothing stirs.
+      reportScaleEdge(
+        cameraRef.current.zoom,
+        Math.log(Math.max(0.05, z0 + dz) / cameraRef.current.zoom) * 60,
+      );
       window.setTimeout(() => {
         if (pointersRef.current.size === 0) navGestureRef.current = false;
       }, NAV_SUPPRESS_MS);
@@ -3532,7 +3577,7 @@ export default function Stars() {
       window.clearInterval(autoId);
       window.removeEventListener("wheel", onWheel);
     };
-  }, [abortTouchWell, zoomBy]);
+  }, [abortTouchWell, reportScaleEdge, zoomBy]);
 
   // ── black-hole mergers — hierarchical pairs + soft N-body dance ────
   // Closest pair inspirals; when it commits, the next queued pair can
@@ -3761,6 +3806,8 @@ export default function Stars() {
               : "crosshair",
         }}
       />
+
+      {scaleEdgeOverlay}
 
       <div
         data-stars-memory="true"
