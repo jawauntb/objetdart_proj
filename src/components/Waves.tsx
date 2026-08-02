@@ -6,10 +6,10 @@ import {
   useRef,
   useState,
   type CSSProperties,
-  type PointerEvent as ReactPointerEvent,
 } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
+import { attachGestures, THRESHOLDS } from "@/lib/gesture";
 import { useField } from "@/store/field";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
 import {
@@ -97,8 +97,6 @@ export default function Waves() {
 
   const simRef = useRef<Sim | null>(null);
   const pointerRef = useRef({ active: false, id: -1, x: 0.5, y: 0.5, lastTone: 0, moved: 0 });
-  const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
-  const pinchDistanceRef = useRef(0);
   const reduceRef = useRef(false);
 
   const speedRef = useRef(0.34); // c^2 (Courant-stable below 0.5)
@@ -196,6 +194,46 @@ export default function Waves() {
   }, []);
 
   // ---- main loop -----------------------------------------------------------
+
+  const disturb = useCallback((clientX: number, clientY: number, strength: number) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const nx = clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1);
+    const ny = clamp((clientY - rect.top) / Math.max(1, rect.height), 0, 1);
+    const pointer = pointerRef.current;
+    pointer.moved += Math.hypot(nx - pointer.x, ny - pointer.y);
+    pointer.x = nx;
+    pointer.y = ny;
+
+    const m = modeRef.current;
+    const amp = dropRef.current * (0.5 + strength * 0.7);
+    if (m === "string") pluck1D(nx, ny, amp);
+    else drop2D(nx, ny, amp);
+
+    const now = performance.now();
+    if (now - pointer.lastTone > 82) {
+      pointer.lastTone = now;
+      const cfg = MODES.find((it) => it.id === m) ?? MODES[0];
+      const speedShift = Math.round(speedRef.current * 12);
+      const midi = cfg.midi + Math.round((1 - ny) * 24) + Math.round(nx * 5) + speedShift;
+      try { getFieldAudio().playNote(midi, 90); } catch { /* noop */ }
+      try { haptics.ripple(0.24 + strength * 0.3); } catch { /* noop */ }
+      recordTape("ripple", clamp(0.32 + (1 - ny) * 0.4 + strength * 0.2, 0, 1), `waves/${m}`);
+      setReadout(`${m} · c ${speedRef.current.toFixed(2)} · flowing`);
+    }
+  }, [drop2D, pluck1D, recordTape]);
+
+  const markControl = useCallback((meta: string, intensity: number) => {
+    const now = performance.now();
+    if (now - lastControlAt.current < 100) return;
+    lastControlAt.current = now;
+    const cfg = MODES.find((it) => it.id === modeRef.current) ?? MODES[0];
+    try { getFieldAudio().playNote(cfg.midi + 12 + Math.round(intensity * 20), 80); } catch { /* noop */ }
+    try { haptics.tap(); } catch { /* noop */ }
+    recordTape("sigil", 0.26 + intensity * 0.44, `waves/${meta}`);
+  }, [recordTape]);
+
 
   useEffect(() => {
     const root = rootRef.current;
@@ -576,66 +614,158 @@ export default function Waves() {
     };
     weatherTimer = setTimeout(fireWeather, 3500 + Math.random() * 4000);
 
-    // ── long-press planting ─────────────────────────────────────────
-    // Hold on empty water at PLANT_MS to leave a lily pad; hold longer
-    // for a leaf; hold longest for a rare koi. Attached with native
-    // listeners so the existing React JSX handlers (which drive the
-    // pluck) keep working unmodified.
-    const PLANT_LILY_MS = 1800;
-    const PLANT_LEAF_MS = 2600;
-    const PLANT_KOI_MS = 3500;
-    const plantTimers = new Map<number, Array<ReturnType<typeof setTimeout>>>();
-    const plantStart = new Map<number, { x: number; y: number }>();
-
-    const armPlant = (id: number, clientX: number, clientY: number) => {
-      if (modeRef.current !== "ripple") return;
-      const rect = canvas.getBoundingClientRect();
-      const nx = (clientX - rect.left) / Math.max(1, rect.width);
-      const ny = (clientY - rect.top) / Math.max(1, rect.height);
-      plantStart.set(id, { x: clientX, y: clientY });
-      const timers: Array<ReturnType<typeof setTimeout>> = [];
-      timers.push(setTimeout(() => {
-        if (!plantStart.has(id)) return;
-        addNatural("lily", nx, ny);
-        try { getFieldAudio().chime(); } catch { /* noop */ }
-        try { haptics.ripple(0.6); } catch { /* noop */ }
-      }, PLANT_LILY_MS));
-      timers.push(setTimeout(() => {
-        if (!plantStart.has(id)) return;
-        addNatural("leaf", nx, ny);
-        try { getFieldAudio().chime(); } catch { /* noop */ }
+    // ── gestures (the shared grammar — src/lib/gesture) ─────────────
+    // One finger touches the water: taps and strokes disturb the field.
+    // Two-finger pinch is left to the scale manifold on document.body
+    // (wave speed keeps its slider). Three fingers touch the law: a drag
+    // is wind, a hold dilates time. Dwell plants; the ceremony hold is a
+    // koi taking residence. All thresholds live in gesture/core.
+    const holdPlant = { lily: false, leaf: false, koi: false };
+    let timeScale = 1;
+    let timeScaleTarget = 1;
+    let stepAcc = 0;
+    let entrainInterval = 3200;
+    let entrainUntil = 0;
+    let lastGestureAt = performance.now();
+    let lastGlimmerAt = 0;
+    let glimmerStep = 0;
+    let lastWindFxAt = 0;
+    let lastWindToneAt = 0;
+    let lastScrubAt = 0;
+    const detachGestures = attachGestures(canvas, {
+      tap: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers !== 1) return; // the tank absorbs frame/law taps
+        energyRef.current = Math.min(1, energyRef.current + 0.35);
+        // tap intensity is the drop: amplitude rides the same 0..1
+        disturb(e.x, e.y, 0.35 + e.intensity * 0.9);
         try { haptics.tap(); } catch { /* noop */ }
-      }, PLANT_LEAF_MS));
-      timers.push(setTimeout(() => {
-        if (!plantStart.has(id)) return;
-        addNatural("koi", nx, ny);
-        try { getFieldAudio().playTone(160, 0.6); } catch { /* noop */ }
-        try { haptics.roll(); } catch { /* noop */ }
-      }, PLANT_KOI_MS));
-      plantTimers.set(id, timers);
-    };
-    const disarmPlant = (id: number) => {
-      const timers = plantTimers.get(id);
-      if (timers) for (const t of timers) clearTimeout(t);
-      plantTimers.delete(id);
-      plantStart.delete(id);
-    };
-    const onPlantDown = (e: PointerEvent) => {
-      armPlant(e.pointerId, e.clientX, e.clientY);
-    };
-    const onPlantMove = (e: PointerEvent) => {
-      const start = plantStart.get(e.pointerId);
-      if (!start) return;
-      // moved too much → this is a swipe, not a plant.
-      if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > 14) {
-        disarmPlant(e.pointerId);
-      }
-    };
-    const onPlantUp = (e: PointerEvent) => { disarmPlant(e.pointerId); };
-    canvas.addEventListener("pointerdown", onPlantDown);
-    canvas.addEventListener("pointermove", onPlantMove);
-    window.addEventListener("pointerup", onPlantUp);
-    window.addEventListener("pointercancel", onPlantUp);
+      },
+      drag: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          if (e.phase === "end") return;
+          // three fingers drag the weather: a hand-driven gust marches a
+          // bar of tiny plucks across the tank (and rocks the string)
+          const rect = canvas.getBoundingClientRect();
+          const nx = clamp((e.x - rect.left) / Math.max(1, rect.width), 0.02, 0.98);
+          const ny = clamp((e.y - rect.top) / Math.max(1, rect.height), 0.05, 0.95);
+          const nowMs = performance.now();
+          if (modeRef.current === "string") {
+            if (nowMs - lastWindFxAt > 90) {
+              lastWindFxAt = nowMs;
+              pluck1D(nx, 0.5 - clamp(e.vx, -1, 1) * 0.08, 0.3);
+            }
+          } else if (nowMs - lastWindFxAt > 80) {
+            lastWindFxAt = nowMs;
+            for (let r = -1; r <= 1; r++) {
+              const y2 = ny + r * 0.03;
+              if (y2 > 0 && y2 < 1) drop2D(nx, y2, 0.2);
+            }
+          }
+          if (nowMs - lastWindToneAt > 420) {
+            lastWindToneAt = nowMs;
+            const cfg = MODES.find((it) => it.id === modeRef.current) ?? MODES[0];
+            try { getFieldAudio().playNote(cfg.midi - 5, 200); } catch { /* noop */ }
+            try { haptics.chop(); } catch { /* noop */ }
+          }
+          return;
+        }
+        if (e.fingers !== 1) return;
+        if (e.phase === "start") {
+          pointerRef.current.active = true;
+          disturb(e.x, e.y, 0.6);
+          return;
+        }
+        if (e.phase === "end") {
+          pointerRef.current.active = false;
+          return;
+        }
+        disturb(e.x, e.y, clamp(0.5 + Math.hypot(e.vx, e.vy) * 0.45, 0.5, 1.15));
+      },
+      hold: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          // three fingers hold the law: the medium runs at ~1/4 speed
+          if (e.phase === "enter") {
+            timeScaleTarget = 0.25;
+            try { getFieldAudio().playNote(36, 260); } catch { /* noop */ }
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+          if (e.phase === "release") timeScaleTarget = 1;
+          return;
+        }
+        if (e.fingers !== 1) return;
+        if (e.phase === "enter") {
+          holdPlant.lily = false;
+          holdPlant.leaf = false;
+          holdPlant.koi = false;
+          pointerRef.current.active = true;
+          return;
+        }
+        if (e.phase === "release") {
+          pointerRef.current.active = false;
+          return;
+        }
+        if (modeRef.current !== "ripple") return; // the analytic media absorb the dwell
+        const rect = canvas.getBoundingClientRect();
+        const nx = (e.x - rect.left) / Math.max(1, rect.width);
+        const ny = (e.y - rect.top) / Math.max(1, rect.height);
+        // dwell plants a lily; kept longer, a fallen leaf; held to the
+        // ceremony, a koi takes residence under the hand.
+        if (e.tier >= 2 && !holdPlant.lily) {
+          holdPlant.lily = true;
+          addNatural("lily", nx, ny);
+          try { getFieldAudio().chime(); } catch { /* noop */ }
+          try { haptics.ripple(0.6); } catch { /* noop */ }
+        }
+        if (e.elapsed >= (THRESHOLDS.dwellMs + THRESHOLDS.ceremonyMs) / 2 && !holdPlant.leaf) {
+          holdPlant.leaf = true;
+          addNatural("leaf", nx, ny);
+          try { getFieldAudio().chime(); } catch { /* noop */ }
+          try { haptics.tap(); } catch { /* noop */ }
+        }
+        if (e.tier >= 3 && !holdPlant.koi) {
+          holdPlant.koi = true;
+          addNatural("koi", nx, ny);
+          drop2D(nx, ny, 1.2);
+          try { getFieldAudio().playTone(160, 0.6); } catch { /* noop */ }
+          try { haptics.bloom(); } catch { /* noop */ }
+        }
+      },
+      scrub: (e) => {
+        lastGestureAt = performance.now();
+        if (modeRef.current === "string") return;
+        const nowMs = performance.now();
+        if (nowMs - lastScrubAt < 700) return;
+        lastScrubAt = nowMs;
+        const rect = canvas.getBoundingClientRect();
+        const cx = (e.cx - rect.left) / Math.max(1, rect.width);
+        const cy = (e.cy - rect.top) / Math.max(1, rect.height);
+        const sgn = Math.sign(e.winding) || 1;
+        // stir: a ring of displacements interferes into a turning current,
+        // and nearby floaters ride the gyre
+        for (let k = 0; k < 6; k++) {
+          const a = (k / 6) * Math.PI * 2;
+          const rx = cx + Math.cos(a) * 0.05;
+          const ry = cy + Math.sin(a) * 0.05;
+          if (rx > 0 && rx < 1 && ry > 0 && ry < 1) drop2D(rx, ry, 0.32);
+        }
+        for (const n of naturals) {
+          const d = Math.hypot(n.nx - cx, n.ny - cy);
+          if (d < 0.2) n.nx = clamp(n.nx + sgn * 0.02 * (1 - d / 0.2), 0.02, 0.98);
+        }
+        const cfg = MODES.find((it) => it.id === modeRef.current) ?? MODES[0];
+        try { getFieldAudio().playNote(cfg.midi + 7, 150); } catch { /* noop */ }
+        try { haptics.ripple(0.35); } catch { /* noop */ }
+      },
+      rhythm: (e) => {
+        // a steady tapped pulse: the pond's ambient life falls in with it
+        if (e.stability <= 0.7) return;
+        entrainInterval = Math.max(500, Math.min(2400, 60000 / e.bpm));
+        entrainUntil = performance.now() + 9000;
+      },
+    }, { wheelZoom: false });
 
     // ── backdrop & natural rendering helpers ────────────────────────
     // Paint a paper-warm to slate gradient behind the water and a soft
@@ -689,7 +819,8 @@ export default function Waves() {
       const glow = energyRef.current;
 
       // sparse ambient life so the medium is never dead (not when reduced)
-      if (isRunning && !reduce && !pointer.active && now - lastAmbient.current > 3200) {
+      const ambientEvery = performance.now() < entrainUntil ? entrainInterval : 3200;
+      if (isRunning && !reduce && !pointer.active && now - lastAmbient.current > ambientEvery) {
         lastAmbient.current = now;
         if (m === "string") pluck1D(0.2 + Math.random() * 0.6, 0.5 - (Math.random() * 0.16 + 0.05), 0.35);
         else drop2D(Math.random(), Math.random() * 0.9 + 0.05, 0.35);
@@ -748,7 +879,12 @@ export default function Waves() {
         }
       }
 
-      const substeps = isRunning ? (reduce ? 1 : 2) : 0;
+      // three-finger time dilation: fractional substeps accumulate so the
+      // medium itself runs slow while the law is held
+      timeScale += (timeScaleTarget - timeScale) * Math.min(1, dt * 5);
+      stepAcc += (isRunning ? (reduce ? 1 : 2) : 0) * timeScale;
+      const substeps = Math.floor(stepAcc);
+      stepAcc -= substeps;
       for (let s = 0; s < substeps; s += 1) {
         if (m === "string") step1D(sim, c2, dampFactor);
         else step2D(sim, c2, dampFactor, m === "refraction");
@@ -783,6 +919,19 @@ export default function Waves() {
           }
           // draw weather overlays after the naturals so they read on top
           drawWeatherOverlay(ctx, weather, now, nowSec, width, height);
+          // glimmer (§6): after ~20s of quiet the water itself sketches a
+          // small circle of dimples where a scrub would land — never text.
+          if (isRunning && performance.now() - lastGestureAt > 20000 && now - lastGlimmerAt > 2600) {
+            lastGlimmerAt = now;
+            const slot = Math.floor(now / 9000);
+            const g1 = Math.abs(Math.sin(slot * 127.1) * 43758.5453) % 1;
+            const g2 = Math.abs(Math.sin(slot * 311.7) * 43758.5453) % 1;
+            const gx = 0.2 + g1 * 0.6;
+            const gy = 0.25 + g2 * 0.5;
+            glimmerStep = (glimmerStep + 1) % 6;
+            const ga = (glimmerStep / 6) * Math.PI * 2;
+            drop2D(gx + Math.cos(ga) * 0.045, gy + Math.sin(ga) * 0.045, 0.1);
+          }
         }
         if (m === "refraction") {
           // faint marker of the slow medium boundary
@@ -824,61 +973,16 @@ export default function Waves() {
     return () => {
       cancelAnimationFrame(raf);
       if (weatherTimer) clearTimeout(weatherTimer);
-      for (const timers of plantTimers.values()) for (const t of timers) clearTimeout(t);
-      plantTimers.clear();
-      plantStart.clear();
       // final checkpoint so re-entry advances drift from now.
       persistNaturals();
       unsubscribeWorld();
       observer.disconnect();
       window.removeEventListener("resize", resize);
-      canvas.removeEventListener("pointerdown", onPlantDown);
-      canvas.removeEventListener("pointermove", onPlantMove);
-      window.removeEventListener("pointerup", onPlantUp);
-      window.removeEventListener("pointercancel", onPlantUp);
+      detachGestures();
     };
-  }, [drop2D, pluck1D]);
+  }, [disturb, drop2D, pluck1D]);
 
   // ---- interaction ---------------------------------------------------------
-
-  const disturb = useCallback((clientX: number, clientY: number, strength: number) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    const nx = clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1);
-    const ny = clamp((clientY - rect.top) / Math.max(1, rect.height), 0, 1);
-    const pointer = pointerRef.current;
-    pointer.moved += Math.hypot(nx - pointer.x, ny - pointer.y);
-    pointer.x = nx;
-    pointer.y = ny;
-
-    const m = modeRef.current;
-    const amp = dropRef.current * (0.5 + strength * 0.7);
-    if (m === "string") pluck1D(nx, ny, amp);
-    else drop2D(nx, ny, amp);
-
-    const now = performance.now();
-    if (now - pointer.lastTone > 82) {
-      pointer.lastTone = now;
-      const cfg = MODES.find((it) => it.id === m) ?? MODES[0];
-      const speedShift = Math.round(speedRef.current * 12);
-      const midi = cfg.midi + Math.round((1 - ny) * 24) + Math.round(nx * 5) + speedShift;
-      try { getFieldAudio().playNote(midi, 90); } catch { /* noop */ }
-      try { haptics.ripple(0.24 + strength * 0.3); } catch { /* noop */ }
-      recordTape("ripple", clamp(0.32 + (1 - ny) * 0.4 + strength * 0.2, 0, 1), `waves/${m}`);
-      setReadout(`${m} · c ${speedRef.current.toFixed(2)} · flowing`);
-    }
-  }, [drop2D, pluck1D, recordTape]);
-
-  const markControl = useCallback((meta: string, intensity: number) => {
-    const now = performance.now();
-    if (now - lastControlAt.current < 100) return;
-    lastControlAt.current = now;
-    const cfg = MODES.find((it) => it.id === modeRef.current) ?? MODES[0];
-    try { getFieldAudio().playNote(cfg.midi + 12 + Math.round(intensity * 20), 80); } catch { /* noop */ }
-    try { haptics.tap(); } catch { /* noop */ }
-    recordTape("sigil", 0.26 + intensity * 0.44, `waves/${meta}`);
-  }, [recordTape]);
 
   const setWaveMode = (next: WaveMode) => {
     if (next === modeRef.current) return;
@@ -915,29 +1019,6 @@ export default function Waves() {
 
   const activeTone = (MODES.find((it) => it.id === mode) ?? MODES[0]).tone;
 
-  const endPointer = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    const pointers = pointersRef.current;
-    pointers.delete(event.pointerId);
-    try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* noop */ }
-    const pointer = pointerRef.current;
-    pinchDistanceRef.current = 0;
-    if (pointers.size === 1) {
-      const remaining = pointers.entries().next().value as [number, { x: number; y: number }] | undefined;
-      if (!remaining) return;
-      const [id, point] = remaining;
-      const rect = event.currentTarget.getBoundingClientRect();
-      pointer.active = true;
-      pointer.id = id;
-      pointer.x = clamp((point.x - rect.left) / Math.max(1, rect.width), 0, 1);
-      pointer.y = clamp((point.y - rect.top) / Math.max(1, rect.height), 0, 1);
-      pointer.moved = 0;
-      return;
-    }
-    if (pointers.size > 1 || pointer.id !== event.pointerId) return;
-    pointer.active = false;
-    pointer.id = -1;
-  };
-
   return (
     <div
       ref={rootRef}
@@ -951,54 +1032,6 @@ export default function Waves() {
         className="waves-canvas"
         role="img"
         aria-label="A touch responsive wave propagation instrument. Touch to send travelling pulses that reflect and interfere."
-        onPointerDown={(event: ReactPointerEvent<HTMLCanvasElement>) => {
-          const pointers = pointersRef.current;
-          pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
-          if (pointers.size >= 2) {
-            const iterator = pointers.values();
-            const a = iterator.next().value;
-            const b = iterator.next().value;
-            if (!a || !b) return;
-            pinchDistanceRef.current = Math.hypot(a.x - b.x, a.y - b.y);
-            pointerRef.current.active = false;
-            try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* noop */ }
-            return;
-          }
-          pointerRef.current.active = true;
-          pointerRef.current.id = event.pointerId;
-          pointerRef.current.moved = 0;
-          disturb(event.clientX, event.clientY, event.pressure || 1);
-          try { haptics.tap(); } catch { /* noop */ }
-          try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* noop */ }
-        }}
-        onPointerMove={(event: ReactPointerEvent<HTMLCanvasElement>) => {
-          const pointers = pointersRef.current;
-          const point = pointers.get(event.pointerId);
-          if (point) {
-            point.x = event.clientX;
-            point.y = event.clientY;
-          }
-          if (pointers.size >= 2) {
-            const iterator = pointers.values();
-            const a = iterator.next().value;
-            const b = iterator.next().value;
-            if (!a || !b) return;
-            const distance = Math.hypot(a.x - b.x, a.y - b.y);
-            const delta = distance - pinchDistanceRef.current;
-            pinchDistanceRef.current = distance;
-            const next = clamp(speedRef.current + delta * 0.0008, 0.14, 0.5);
-            speedRef.current = next;
-            setSpeed(next);
-            setReadout(`${modeRef.current} · c ${next.toFixed(2)} · pinch speed`);
-            markControl("pinch-speed", (next - 0.14) / 0.36);
-            return;
-          }
-          const pointer = pointerRef.current;
-          if (!pointer.active || pointer.id !== event.pointerId) return;
-          disturb(event.clientX, event.clientY, event.pressure > 0 ? event.pressure + 0.35 : 0.8);
-        }}
-        onPointerUp={endPointer}
-        onPointerCancel={endPointer}
       />
 
       <div className="waves-title" aria-hidden="true">
@@ -1037,7 +1070,7 @@ export default function Waves() {
         </select>
       </label>
 
-      <span className="waves-play-hint" aria-hidden="true">tap or drag · pinch speed</span>
+      <span className="waves-play-hint" aria-hidden="true">tap or drag · rest to plant</span>
 
       <MobileInstrumentPanel
         className="waves-mobile-panel"
