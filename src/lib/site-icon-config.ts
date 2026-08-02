@@ -7,6 +7,7 @@ export type SiteIconKey =
   | "atlas"
   | "beam"
   | "beyond"
+  | "cells"
   | "charts"
   | "dither"
   | "circularity"
@@ -150,6 +151,19 @@ export const SITE_ICON_VISUALS = {
     accent: "#91dfe7",
     accent2: "#e0a2ff",
     ink: "#e8f7ff",
+  },
+  cells: {
+    title: "Cells",
+    description: "the plasm keeps its own tide",
+    path: "/cells",
+    shortName: "cells",
+    kind: "circularity",
+    bg: "#130e0b",
+    bg2: "#33241a",
+    glow: "#e7ac52",
+    accent: "#f2c56b",
+    accent2: "#9c3d33",
+    ink: "#ffedc9",
   },
   charts: {
     title: "Charts",

@@ -45,7 +45,7 @@ export const SCALE_BANDS: ScaleBand[] = [
   { id: "quarks", label: "quarks", route: null, sMin: -19, sMax: -14 },
   { id: "atoms", label: "atoms", route: null, sMin: -14, sMax: -9.5 },
   { id: "molecules", label: "molecules", route: null, sMin: -9.5, sMax: -7 },
-  { id: "cells", label: "cells", route: null, sMin: -7, sMax: -3.5 },
+  { id: "cells", label: "cells", route: "/cells", sMin: -7, sMax: -3.5 },
   { id: "drop", label: "a drop", route: "/drop", sMin: -3.5, sMax: -1.5 },
   { id: "flowers", label: "flowers", route: "/flowers", sMin: -1.5, sMax: 0.5 },
   { id: "coast", label: "the coast", route: "/ocean", sMin: 0.5, sMax: 4.5 },
