@@ -2,9 +2,15 @@
 // gain, with a 0.14 Hz swell LFO and a 0.03 Hz drift LFO modulating the
 // gain so the noise breathes like waves. No samples, no assets — just the
 // Web Audio graph. setAmbientProfile() swaps the ambient layer with a
-// short crossfade so each page can set its own bed.
+// short crossfade so each page can set its own bed. The whole graph exits
+// through one disciplined master bus (gentle compressor → safety limiter →
+// headroom trim) so nothing the site makes can ever arrive loud, and
+// setScaleRegister() glides the ambient bed along the manifold's spectral
+// register (plan W3): cosmic = dark and slow, atomic = open and quick.
 
 import type { ConcernKey } from "@/lib/types";
+import { spectralRegisterFor } from "@/lib/scale";
+import { registerGlideTargets } from "@/lib/audio-register";
 
 // The named ambient beds each page can request. Profiles swap through the
 // singleton audio engine so route changes do not accidentally start parallel
@@ -291,6 +297,11 @@ type FieldAudio = {
   setAmbientProfile: (name: AmbientProfile, options?: AmbientProfileOptions) => void;
   // Read back the active profile, mostly for debugging / tests.
   getAmbientProfile: () => AmbientProfile;
+  // Glide the ambient bed toward the spectral register for manifold
+  // position s (log10 meters — lib/scale). Safe to call every frame: tiny
+  // moves short-circuit, and before audio starts it just records the
+  // target for when the bed comes up.
+  setScaleRegister: (s: number) => void;
 };
 
 let instance: FieldAudio | null = null;
@@ -303,6 +314,10 @@ export function setAmbientProfile(
   options?: AmbientProfileOptions,
 ): void {
   getFieldAudio().setAmbientProfile(name, options);
+}
+
+export function setScaleRegister(s: number): void {
+  getFieldAudio().setScaleRegister(s);
 }
 
 export function getFieldAudio(): FieldAudio {
@@ -331,9 +346,32 @@ export function getFieldAudio(): FieldAudio {
     sources: AudioScheduledSourceNode[];
     // Every gain/filter/etc. node owned by the layer.
     nodes: { disconnect: () => void }[];
+    // Breathing LFOs the spectral register may retime, with their authored
+    // rates. Only the shared swells register here — texture LFOs (fire
+    // crackle, bird chirp) keep their own clocks.
+    swellLfos: { osc: OscillatorNode; baseHz: number }[];
   };
   let ambientLayer: AmbientLayer | null = null;
   let currentProfile: AmbientProfile = "ocean";
+
+  // ── Scale → spectral register state (plan W3) ────────────────────────
+  // setScaleRegister(s) glides the ambient bed toward the register for a
+  // manifold position: a register lowpass spliced between the ambient
+  // master and the sink, a breath LFO riding its center, and a rate scale
+  // on the layers' swell LFOs. Before audio exists we only remember the
+  // target; tiny moves short-circuit so callers may fire every frame.
+  const REGISTER_GLIDE_SEC = 1.5;
+  const REGISTER_EPSILON = 0.02; // decades of |Δs| below which calls no-op
+  let registerTargetS: number | null = null;
+  let registerAppliedS: number | null = null;
+  let registerRateScale = 1;
+  type RegisterChain = {
+    lp: BiquadFilterNode;
+    shelf: BiquadFilterNode;
+    breath: OscillatorNode;
+    breathDepth: GainNode;
+  };
+  let registerChain: RegisterChain | null = null;
   // Watchdog interval id — checks the audio context every 5s and resumes
   // it if the browser policy suspended it (e.g. iOS Safari after a tab
   // switch). Defensive — shouldn't fire on a healthy page.
@@ -352,15 +390,39 @@ export function getFieldAudio(): FieldAudio {
     const AC = w.AudioContext ?? w.webkitAudioContext;
     if (!AC) return null;
     ctx = new AC();
-    // Build the visualisation tap once. sink → analyser → destination.
-    // Everything else connects to `sink` instead of `ctx.destination`.
+    // Build the visualisation tap once. sink → analyser → master bus →
+    // destination. Everything else connects to `sink` instead of
+    // `ctx.destination` (light-808 connects straight into the analyser —
+    // downstream of the sink, still upstream of the bus discipline).
     sink = ctx.createGain();
     sink.gain.value = 1;
     analyser = ctx.createAnalyser();
     analyser.fftSize = 2048;
     analyser.smoothingTimeConstant = 0.78;
     sink.connect(analyser);
-    analyser.connect(ctx.destination);
+    // Master bus discipline (plan W3). The analyser stays pre-bus so FFT
+    // readers (/signal, the jewel, light-808's tap) see the raw field;
+    // after it, a gentle glue compressor (soft knee, low ratio, slow
+    // release) evens the sum, a hard-safety limiter catches anything that
+    // stacks up, and a headroom trim keeps the whole site shy of loud.
+    const glue = ctx.createDynamicsCompressor();
+    glue.threshold.value = -30;
+    glue.knee.value = 24;
+    glue.ratio.value = 2.5;
+    glue.attack.value = 0.02;
+    glue.release.value = 0.6;
+    const limiter = ctx.createDynamicsCompressor();
+    limiter.threshold.value = -10;
+    limiter.knee.value = 3;
+    limiter.ratio.value = 20;
+    limiter.attack.value = 0.002;
+    limiter.release.value = 0.3;
+    const headroom = ctx.createGain();
+    headroom.gain.value = 0.85;
+    analyser.connect(glue);
+    glue.connect(limiter);
+    limiter.connect(headroom);
+    headroom.connect(ctx.destination);
     return ctx;
   };
 
@@ -401,7 +463,9 @@ export function getFieldAudio(): FieldAudio {
   ): AmbientLayer => {
     const fader = c.createGain();
     fader.gain.setValueAtTime(0.0001, c.currentTime);
-    const layer: AmbientLayer = { profile, fader, sources: [], nodes: [fader] };
+    const layer: AmbientLayer = {
+      profile, fader, sources: [], nodes: [fader], swellLfos: [],
+    };
 
     // helper to wire a buffer-noise source through filters → fader
     const makeNoise = (
@@ -435,19 +499,21 @@ export function getFieldAudio(): FieldAudio {
       return src;
     };
 
-    // common swell — gentle LFO modulating a gain node
+    // common swell — gentle LFO modulating a gain node. New layers are born
+    // already breathing at the current register's rate scale.
     const makeSwell = (rateHz: number, depth: number, base = 0.55): GainNode => {
       const g = c.createGain();
       g.gain.value = base;
       const lfo = c.createOscillator();
       lfo.type = "sine";
-      lfo.frequency.value = rateHz;
+      lfo.frequency.value = rateHz * registerRateScale;
       const lfoGain = c.createGain();
       lfoGain.gain.value = depth;
       lfo.connect(lfoGain).connect(g.gain);
       lfo.start();
       layer.sources.push(lfo);
       layer.nodes.push(lfoGain);
+      layer.swellLfos.push({ osc: lfo, baseHz: rateHz });
       return g;
     };
 
@@ -613,6 +679,7 @@ export function getFieldAudio(): FieldAudio {
       noise.start();
       layer.sources.push(noise, drift);
       layer.nodes.push(hp, lp, swell, driftGain);
+      layer.swellLfos.push({ osc: drift, baseHz: 0.03 });
     } else if (profile === "aphros") {
       // Aphrodite foam: bright surf, shell-like partials, airy sparkle.
       addNoiseBed({ seconds: 5, brown: true, hp: 90, lp: 900, gain: 0.18, swellRate: 0.16, swellDepth: 0.28 });
@@ -629,10 +696,11 @@ export function getFieldAudio(): FieldAudio {
       addDrone([146.83, 220, 293.66], { gain: 0.018, swellRate: 0.11, swellDepth: 0.22, filter: 900 });
       addPulseTrain({ freq: 587.33, every: 3.0, count: 80, gain: 0.016, decay: 0.09, type: "triangle" });
     } else if (profile === "watch") {
-      // Watch: precise ticks over a thin, far-water floor.
+      // Watch: precise ticks over a thin, far-water floor. Triangle ticks —
+      // square edges read as alarm, not escapement (W3 retune).
       addNoiseBed({ seconds: 5, brown: true, hp: 120, lp: 460, gain: 0.08, swellRate: 0.08, swellDepth: 0.18 });
       addDrone([196, 392], { gain: 0.012, swellRate: 0.033, swellDepth: 0.12, filter: 800 });
-      addPulseTrain({ freq: 1200, every: 1.0, count: 240, gain: 0.022, decay: 0.04, type: "square" });
+      addPulseTrain({ freq: 1200, every: 1.0, count: 240, gain: 0.018, decay: 0.04, type: "triangle" });
     } else if (profile === "pretext") {
       // Text room: breathy paper noise with a soft vowel-like drone.
       addNoiseBed({ seconds: 4, hp: 350, lp: 2200, gain: 0.075, swellRate: 0.12, swellDepth: 0.18 });
@@ -896,7 +964,7 @@ export function getFieldAudio(): FieldAudio {
     } else if (profile === "colophon") {
       // Colophon: quiet print-shop press, almost still.
       addNoiseBed({ seconds: 6, hp: 260, lp: 1500, gain: 0.035, swellRate: 0.026, swellDepth: 0.08 });
-      addPulseTrain({ freq: 180, every: 6.0, count: 48, gain: 0.01, decay: 0.05, type: "square", startOffset: 1.8 });
+      addPulseTrain({ freq: 180, every: 6.0, count: 48, gain: 0.009, decay: 0.05, type: "triangle", startOffset: 1.8 });
     } else if (profile === "compare") {
       // Compare: two low tones gently beating against each other.
       addNoiseBed({ seconds: 5, hp: 300, lp: 1400, gain: 0.03, swellRate: 0.04, swellDepth: 0.10 });
@@ -937,7 +1005,7 @@ export function getFieldAudio(): FieldAudio {
     } else if (profile === "time") {
       // Time: chronograph ticks over a slow manifold drone.
       addDrone([82.41, 164.81, 329.63], { type: "triangle", gain: 0.018, swellRate: 0.02, swellDepth: 0.12, filter: 900 });
-      addPulseTrain({ freq: 1320, every: 1.0, count: 240, gain: 0.018, decay: 0.035, type: "square" });
+      addPulseTrain({ freq: 1320, every: 1.0, count: 240, gain: 0.015, decay: 0.035, type: "triangle" });
       addPulseTrain({ freq: 660, every: 5.0, count: 48, gain: 0.014, decay: 0.18, type: "triangle", startOffset: 0.5 });
     }
 
@@ -969,6 +1037,89 @@ export function getFieldAudio(): FieldAudio {
     }
   };
 
+  // Route the ambient master toward the sink — through the register chain
+  // when one has been built. Called wherever master is created and when the
+  // chain first splices in.
+  const wireMasterOut = (c: AudioContext) => {
+    if (!master) return;
+    try { master.disconnect(); } catch { /* noop */ }
+    if (registerChain) master.connect(registerChain.lp);
+    else master.connect(outNode(c));
+  };
+
+  // Glide every register-bound param toward the targets for scale position
+  // s over REGISTER_GLIDE_SEC. Builds the chain lazily (neutral, fully
+  // open) on first use so rooms that never touch the manifold pay nothing.
+  const applyRegister = (c: AudioContext, s: number) => {
+    if (!master) return;
+    if (!registerChain) {
+      const lp = c.createBiquadFilter();
+      lp.type = "lowpass";
+      lp.frequency.value = 12000; // transparent until the first glide lands
+      lp.Q.value = 0.5;
+      const shelf = c.createBiquadFilter();
+      shelf.type = "highshelf";
+      shelf.frequency.value = 1700;
+      shelf.gain.value = 0;
+      const breath = c.createOscillator();
+      breath.type = "sine";
+      breath.frequency.value = 0.16; // coast-neutral until retargeted
+      const breathDepth = c.createGain();
+      breathDepth.gain.value = 0;
+      breath.connect(breathDepth).connect(lp.frequency);
+      breath.start();
+      lp.connect(shelf);
+      shelf.connect(outNode(c));
+      registerChain = { lp, shelf, breath, breathDepth };
+      wireMasterOut(c);
+    }
+    const targets = registerGlideTargets(spectralRegisterFor(s));
+    const now = c.currentTime;
+    const end = now + REGISTER_GLIDE_SEC;
+    const glide = (param: AudioParam, to: number) => {
+      // Not holdAudioParam — the shelf gain is legitimately ≤ 0 and must
+      // not be floored. Mid-glide retargets pick up from the current value.
+      try {
+        param.cancelScheduledValues(now);
+        param.setValueAtTime(
+          Number.isFinite(param.value) ? param.value : to, now,
+        );
+        param.linearRampToValueAtTime(to, end);
+      } catch { /* noop */ }
+    };
+    glide(registerChain.lp.frequency, targets.cutoffHz);
+    glide(registerChain.shelf.gain, targets.shelfDb);
+    glide(registerChain.breath.frequency, targets.breathHz);
+    glide(registerChain.breathDepth.gain, targets.breathDepthHz);
+    registerRateScale = targets.rateScale;
+    if (ambientLayer) {
+      for (const { osc, baseHz } of ambientLayer.swellLfos) {
+        glide(osc.frequency, baseHz * targets.rateScale);
+      }
+    }
+  };
+
+  // If a target arrived before the bed existed, land it now. Called once
+  // master + ambient are up (start / first setAmbientProfile).
+  const applyPendingRegister = (c: AudioContext) => {
+    if (registerTargetS === null || registerAppliedS !== null) return;
+    registerAppliedS = registerTargetS;
+    applyRegister(c, registerTargetS);
+  };
+
+  const setScaleRegister = (s: number) => {
+    if (!Number.isFinite(s)) return;
+    registerTargetS = s;
+    // No context or no ambient master yet — safe no-op, target recorded.
+    if (!ctx || !master) return;
+    if (
+      registerAppliedS !== null &&
+      Math.abs(s - registerAppliedS) < REGISTER_EPSILON
+    ) return;
+    registerAppliedS = s;
+    applyRegister(ctx, s);
+  };
+
   // Crossfade controller — swaps ambientLayer with a short fade.
   const setAmbientProfile = (
     name: AmbientProfile,
@@ -988,7 +1139,7 @@ export function getFieldAudio(): FieldAudio {
     if (!master) {
       master = c.createGain();
       master.gain.setValueAtTime(muted ? 0.0001 : 0.18, c.currentTime);
-      master.connect(outNode(c));
+      wireMasterOut(c);
     }
 
     // Build the next layer through the singleton fader. The default fade is
@@ -1008,6 +1159,8 @@ export function getFieldAudio(): FieldAudio {
       teardownLayer(ambientLayer, fade);
     }
     ambientLayer = next;
+    // A register target may have arrived before the bed existed.
+    applyPendingRegister(c);
   };
 
   const getAmbientProfile = (): AmbientProfile => currentProfile;
@@ -1035,7 +1188,7 @@ export function getFieldAudio(): FieldAudio {
         muted ? 0.0001 : 0.18,
         c.currentTime + 5,
       );
-      master.connect(outNode(c));
+      wireMasterOut(c);
     }
 
     // Build the initial ambient layer ONLY if no layer has been chosen
@@ -1052,6 +1205,9 @@ export function getFieldAudio(): FieldAudio {
       }
       ambientLayer = initial;
     }
+
+    // Land any register target recorded while audio was still down.
+    applyPendingRegister(c);
 
     // Watchdog — every 5s, ensure the context is running. iOS Safari has
     // a habit of suspending on tab background; this brings us back the
@@ -1118,17 +1274,22 @@ export function getFieldAudio(): FieldAudio {
     };
   };
 
-  const chime = () => oneShot("sine", 880, 1320, 0.30, 0.05);
+  // One-shot palette, retuned toward beauty (plan W3): melodic material
+  // never attacks under 10ms, upper partials are lowpassed, and every
+  // default gain sits a step lower — the bar is 2am on headphones. Each
+  // keeps its identity: the chime still lifts, the bell still tolls, the
+  // thud still lands, refuse still declines, spark still glints.
+  const chime = () => oneShot("sine", 880, 1320, 0.38, 0.04, { attack: 0.028, cutoff: 1900 });
   const bell  = () => {
-    oneShot("sine", 480, 480, 1.4, 0.06);
-    oneShot("sine", 720, 720, 1.2, 0.04);
-    oneShot("sine", 960, 960, 1.0, 0.025);
+    oneShot("sine", 480, 480, 1.5, 0.05,  { attack: 0.030, cutoff: 1400 });
+    oneShot("sine", 720, 720, 1.3, 0.032, { attack: 0.036, cutoff: 1400 });
+    oneShot("sine", 960, 960, 1.1, 0.018, { attack: 0.045, cutoff: 1200 });
   };
-  const thud  = () => oneShot("sine", 180, 80, 0.42, 0.10);
-  const refuse = () => oneShot("sine", 260, 200, 0.30, 0.05);
+  const thud  = () => oneShot("sine", 180, 80, 0.42, 0.085, { attack: 0.016, cutoff: 700 });
+  const refuse = () => oneShot("sine", 260, 200, 0.34, 0.04, { attack: 0.022, cutoff: 1100 });
   const spark = () => {
-    oneShot("triangle", 1100, 720, 0.16, 0.05);
-    oneShot("sine", 540, 760, 0.40, 0.04);
+    oneShot("triangle", 1100, 720, 0.18, 0.032, { attack: 0.012, cutoff: 1700 });
+    oneShot("sine", 540, 760, 0.42, 0.032, { attack: 0.020, cutoff: 1600 });
   };
 
   const buzz = () => {
@@ -1152,7 +1313,7 @@ export function getFieldAudio(): FieldAudio {
     osc.frequency.setValueAtTime(Math.max(40, Math.min(8000, freq)), now);
     const g = c.createGain();
     g.gain.setValueAtTime(0.0001, now);
-    g.gain.exponentialRampToValueAtTime(0.06, now + 0.015);
+    g.gain.exponentialRampToValueAtTime(0.05, now + 0.02);
     g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
     osc.connect(g).connect(outNode(c));
     osc.start(now);
@@ -1180,11 +1341,11 @@ export function getFieldAudio(): FieldAudio {
     const now = c.currentTime;
     const freq = 440 * Math.pow(2, (midi - 69) / 12);
     const sustainSec = Math.max(0.04, durationMs / 1000);
-    const attack = 0.008;
+    const attack = 0.014;
     const decay  = 0.08;
     const release = 0.28;
     const sustainLvl = 0.45;
-    const peak = 0.07;
+    const peak = 0.06;
 
     const osc = c.createOscillator();
     osc.type = "triangle";
@@ -1201,7 +1362,7 @@ export function getFieldAudio(): FieldAudio {
     // gentle highpass to remove sub-rumble + soft lowpass so it sits in mix
     const lp = c.createBiquadFilter();
     lp.type = "lowpass";
-    lp.frequency.value = 4200;
+    lp.frequency.value = 3400;
     lp.Q.value = 0.5;
 
     osc.connect(g).connect(lp).connect(outNode(c));
@@ -1216,15 +1377,18 @@ export function getFieldAudio(): FieldAudio {
   };
 
   // each concern is a voice. dragging the compass holds these tones.
+  // W3 retune: the square (work) and saw (risk) keep their grain as
+  // identity but sit behind lower lowpasses at lower gains, and the bare
+  // triangles take a lid so their odd partials never glare.
   const CONCERN_VOICES: Record<string, ConcernVoice> = {
     memory:     { type: "sine",     freq: 174,  pitchRange:  50, gain: 0.05, lp: 1200 },
-    work:       { type: "square",   freq: 220,  pitchRange:  80, gain: 0.025, lp: 900 },
+    work:       { type: "square",   freq: 220,  pitchRange:  80, gain: 0.020, lp: 640 },
     love:       { type: "sine",     freq: 392,  pitchRange:  90, gain: 0.045 },
     prayer:     { type: "sine",     freq: 587,  pitchRange: 120, gain: 0.035 },
-    risk:       { type: "sawtooth", freq: 233,  pitchRange: 140, gain: 0.020, lp: 800 },
-    future:     { type: "triangle", freq: 698,  pitchRange: 160, gain: 0.030 },
+    risk:       { type: "sawtooth", freq: 233,  pitchRange: 140, gain: 0.016, lp: 600 },
+    future:     { type: "triangle", freq: 698,  pitchRange: 160, gain: 0.028, lp: 2200 },
     body:       { type: "sine",     freq: 130,  pitchRange:  40, gain: 0.055, lp: 700 },
-    friendship: { type: "triangle", freq: 466,  pitchRange: 100, gain: 0.035 },
+    friendship: { type: "triangle", freq: 466,  pitchRange: 100, gain: 0.032, lp: 1900 },
   };
 
   type ToneHandle = {
@@ -1876,7 +2040,7 @@ export function getFieldAudio(): FieldAudio {
         const ev = events[qIdx++];
         if (ev.kind === "mel") {
           // triangle, ADSR (attack 30ms, decay 200ms, sustain 0.4, release 600ms)
-          spawnNote("triangle", ev.freq, ev.at, ev.dur, 0.03, 0.20, 0.4, 0.6, 0.18);
+          spawnNote("triangle", ev.freq, ev.at, ev.dur, 0.03, 0.20, 0.4, 0.6, 0.15);
         } else if (ev.kind === "chord") {
           // three (or four, in dense mode) voices with slight detune for richness
           spawnNote("sine", ev.freq,        ev.at, ev.dur, 0.20, 0.30, 0.6, 1.0, 0.12, 0);
@@ -1887,15 +2051,15 @@ export function getFieldAudio(): FieldAudio {
           if (ev.freq4 !== undefined)
             spawnNote("sine", ev.freq4,     ev.at, ev.dur, 0.25, 0.35, 0.55, 1.0, 0.06, +8);
         } else if (ev.kind === "bell") {
-          // bell — high triangle with bell-like decay (sharp attack, very long release)
-          spawnNote("triangle", ev.freq, ev.at, ev.dur, 0.005, 0.18, 0.18, 2.2, 0.07);
+          // bell — high triangle, struck softly (12ms attack, very long release)
+          spawnNote("triangle", ev.freq, ev.at, ev.dur, 0.012, 0.18, 0.18, 2.2, 0.06);
           // a small detuned partial 7 semitones up for a struck shimmer
-          spawnNote("sine", ev.freq * 1.498, ev.at, ev.dur, 0.005, 0.20, 0.12, 1.8, 0.035, +6);
+          spawnNote("sine", ev.freq * 1.498, ev.at, ev.dur, 0.012, 0.20, 0.12, 1.8, 0.03, +6);
         } else if (ev.kind === "rain") {
-          // rain pluck — very short triangle blip, low velocity
-          spawnNote("triangle", ev.freq, ev.at, ev.dur, 0.003, 0.05, 0.0, 0.18, 0.04);
+          // rain pluck — short triangle blip, low velocity, rounded onset
+          spawnNote("triangle", ev.freq, ev.at, ev.dur, 0.010, 0.05, 0.0, 0.18, 0.035);
         } else { // shim
-          spawnNote("sine", ev.freq, ev.at, ev.dur, 0.10, 0.40, 0.4, 1.2, 0.05);
+          spawnNote("sine", ev.freq, ev.at, ev.dur, 0.10, 0.40, 0.4, 1.2, 0.045);
         }
       }
       if (qIdx >= events.length && now >= tEnd) {
@@ -2048,6 +2212,7 @@ export function getFieldAudio(): FieldAudio {
     getCurrentComposition,
     setAmbientProfile,
     getAmbientProfile,
+    setScaleRegister,
   };
   return instance;
 }
