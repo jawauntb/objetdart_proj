@@ -1,168 +1,243 @@
-// The meta instrument's spectral atlas. Every instrument playing the same
-// note shares its fundamental; what separates a piano's C from a sitar's C
-// is the recipe stacked on top — relative harmonic amplitudes, how the
-// envelope moves, how much the partials detune, what noise the body adds,
-// whether the tone breathes vibrato. Each voice below is a point in that
-// parameter space, and because the space is continuous, any position
-// between two voices is also an instrument. Morphing is interpolation.
+// The meta instrument's atlas — what actually makes a piano's C not a
+// sitar's C. Identity does not live in a static harmonic recipe; it lives
+// in the physics of how the note is made and how it dies:
+//
+// - the attack transient (hammer thump, pick click, bow scratch, breath
+//   chiff) — cut the onset off a recording and instruments become nearly
+//   indistinguishable;
+// - how the spectrum moves in time — a plucked string loses its highs
+//   faster than its lows (the damped loop does this for free), while brass
+//   brightness blooms *with* loudness;
+// - where the string is excited — the pluck point notches the series with
+//   a comb (guitar picked near the bridge jangles, a harp stroked at
+//   mid-string rounds off);
+// - fixed body resonances — formants that stay put while pitch moves under
+//   them, which is why a violin glide sounds like one violin and not a
+//   swept oscillator.
+//
+// So the atlas holds two physical models. Strings are Karplus-Strong
+// delay-line loops (harp, piano, guitar, tar, sitar). Bowed and blown
+// voices are a sawtooth-like source through fixed formants with
+// envelope-coupled brightness (violin, saxophone, trumpet). A position
+// between two voices crossfades the two physical models equal-power —
+// morphing swaps physics, not just tone color.
 
-export const HARMONIC_COUNT = 12;
+export type Formant = { freq: number; q: number; gain: number };
 
-export type NoiseColor = "none" | "breath" | "buzz";
+export type StringModel = {
+  model: "string";
+  /** Loop feedback — sets how long the string rings. */
+  feedback: number;
+  /** Loop lowpass as a multiple of the fundamental — how fast highs die. */
+  loopCutoff: number;
+  /** Excitation burst lowpass, Hz — pick/hammer/finger hardness. */
+  burstBrightness: number;
+  /** Unison courses (piano triples, tar/sitar doubled strings). */
+  strings: 1 | 2;
+  /** Cents between courses — the shimmer of doubled strings. */
+  courseDetune: number;
+  /** Pluck point as a fraction of the string — combs the series. */
+  pluckPosition: number;
+  /** Jawari-style bridge buzz 0..1 (the sitar's voice). */
+  buzz: number;
+  /** Hammer/soundboard thump 0..1. */
+  thump: number;
+  /** Pick/nail click 0..1. */
+  pick: number;
+  /** Body resonances. */
+  formants: Formant[];
+  gain: number;
+};
 
-export type TimbreSpec = {
-  key: string;
-  label: string;
-  // relative harmonic amplitudes, fundamental first, always HARMONIC_COUNT long
-  harmonics: number[];
-  // cents between the paired detuned oscillator and the main one — string
-  // stiffness and doubled courses read as shimmer
-  detune: number;
+export type WindModel = {
+  model: "wind";
   attack: number;
-  decay: number;
-  // 0 = struck/plucked (the note falls away), near 1 = bowed/blown (it holds)
-  sustain: number;
   release: number;
-  noise: number;
-  noiseColor: NoiseColor;
+  /** Cutoff = fundamental × (brightBase + envelope × brightEnv). */
+  brightBase: number;
+  brightEnv: number;
+  /** Bore/body resonances — fixed while pitch moves under them. */
+  formants: Formant[];
+  breath: number;
+  breathHz: number;
+  /** Onset pitch ratio: brass rises from below (<1), a bow settles (>1). */
+  onsetBend: number;
+  onsetMs: number;
+  /** Onset noise — bow scratch, reed chiff, lip noise. */
+  chiff: number;
   vibratoHz: number;
   vibratoCents: number;
-  // lowpass cutoff as a multiple of the fundamental
-  brightness: number;
+  /** Players start straight, then let the vibrato in. */
+  vibratoDelayMs: number;
+  gain: number;
 };
+
+export type TimbreSpec = { key: string; label: string } & (StringModel | WindModel);
 
 export const TIMBRE_CHAIN: TimbreSpec[] = [
   {
     key: "harp",
     label: "harp",
-    harmonics: [1, 0.5, 0.25, 0.12, 0.06, 0.03, 0.015, 0.008, 0.004, 0.002, 0.001, 0.0005],
-    detune: 1,
-    attack: 0.004,
-    decay: 2.2,
-    sustain: 0,
-    release: 0.4,
-    noise: 0,
-    noiseColor: "none",
-    vibratoHz: 0,
-    vibratoCents: 0,
-    brightness: 6,
+    model: "string",
+    feedback: 0.9985,
+    loopCutoff: 5,
+    burstBrightness: 1800,
+    strings: 1,
+    courseDetune: 0,
+    pluckPosition: 0.5,
+    buzz: 0,
+    thump: 0.06,
+    pick: 0,
+    formants: [{ freq: 300, q: 1.2, gain: 4 }],
+    gain: 1,
   },
   {
     key: "piano",
     label: "piano",
-    harmonics: [1, 0.62, 0.4, 0.3, 0.18, 0.12, 0.09, 0.06, 0.05, 0.035, 0.02, 0.012],
-    detune: 3,
-    attack: 0.002,
-    decay: 1.6,
-    sustain: 0,
-    release: 0.3,
-    noise: 0.02,
-    noiseColor: "buzz",
-    vibratoHz: 0,
-    vibratoCents: 0,
-    brightness: 9,
+    model: "string",
+    feedback: 0.997,
+    loopCutoff: 7,
+    burstBrightness: 3200,
+    strings: 2,
+    courseDetune: 1.6,
+    pluckPosition: 0.115,
+    buzz: 0,
+    thump: 0.55,
+    pick: 0.12,
+    formants: [{ freq: 180, q: 1, gain: 3 }],
+    gain: 0.95,
   },
   {
     key: "guitar",
     label: "guitar",
-    harmonics: [1, 0.68, 0.34, 0.22, 0.16, 0.09, 0.05, 0.04, 0.02, 0.015, 0.008, 0.004],
-    detune: 2,
-    attack: 0.003,
-    decay: 1.1,
-    sustain: 0,
-    release: 0.28,
-    noise: 0.03,
-    noiseColor: "buzz",
-    vibratoHz: 0,
-    vibratoCents: 0,
-    brightness: 8,
+    model: "string",
+    feedback: 0.995,
+    loopCutoff: 5.5,
+    burstBrightness: 4500,
+    strings: 1,
+    courseDetune: 0,
+    pluckPosition: 0.13,
+    buzz: 0,
+    thump: 0.08,
+    pick: 0.5,
+    formants: [
+      { freq: 110, q: 2, gain: 5 },
+      { freq: 225, q: 2, gain: 3 },
+    ],
+    gain: 1,
   },
   {
     key: "tar",
     label: "tar",
-    harmonics: [1, 0.75, 0.5, 0.35, 0.28, 0.18, 0.12, 0.09, 0.05, 0.03, 0.02, 0.01],
-    detune: 6,
-    attack: 0.003,
-    decay: 0.9,
-    sustain: 0,
-    release: 0.24,
-    noise: 0.05,
-    noiseColor: "buzz",
-    vibratoHz: 0,
-    vibratoCents: 0,
-    brightness: 10,
+    model: "string",
+    feedback: 0.991,
+    loopCutoff: 7,
+    burstBrightness: 5200,
+    strings: 2,
+    courseDetune: 9,
+    pluckPosition: 0.09,
+    buzz: 0.12,
+    thump: 0.05,
+    pick: 0.6,
+    formants: [{ freq: 340, q: 2.5, gain: 5 }],
+    gain: 0.95,
   },
   {
     key: "sitar",
     label: "sitar",
-    harmonics: [1, 0.8, 0.65, 0.55, 0.5, 0.42, 0.36, 0.3, 0.22, 0.16, 0.1, 0.06],
-    detune: 5,
-    attack: 0.004,
-    decay: 1.4,
-    sustain: 0,
-    release: 0.5,
-    noise: 0.18,
-    noiseColor: "buzz",
-    vibratoHz: 0,
-    vibratoCents: 0,
-    brightness: 14,
+    model: "string",
+    feedback: 0.997,
+    loopCutoff: 11,
+    burstBrightness: 5200,
+    strings: 2,
+    courseDetune: 3,
+    pluckPosition: 0.06,
+    buzz: 0.6,
+    thump: 0,
+    pick: 0.35,
+    formants: [
+      { freq: 240, q: 1.5, gain: 4 },
+      { freq: 3400, q: 4, gain: 6 },
+    ],
+    gain: 0.8,
   },
   {
     key: "violin",
     label: "violin",
-    harmonics: [1, 0.78, 0.6, 0.5, 0.4, 0.33, 0.26, 0.2, 0.15, 0.1, 0.07, 0.05],
-    detune: 2,
+    model: "wind",
     attack: 0.09,
-    decay: 0.4,
-    sustain: 0.85,
-    release: 0.32,
-    noise: 0.05,
-    noiseColor: "breath",
-    vibratoHz: 5.4,
-    vibratoCents: 14,
-    brightness: 12,
+    release: 0.3,
+    brightBase: 3,
+    brightEnv: 6,
+    formants: [
+      { freq: 300, q: 2, gain: 6 },
+      { freq: 950, q: 1.5, gain: 4 },
+      { freq: 2800, q: 3, gain: 5 },
+    ],
+    breath: 0.06,
+    breathHz: 2800,
+    onsetBend: 1.012,
+    onsetMs: 70,
+    chiff: 0.35,
+    vibratoHz: 5.5,
+    vibratoCents: 16,
+    vibratoDelayMs: 350,
+    gain: 0.8,
   },
   {
     key: "saxophone",
     label: "saxophone",
-    harmonics: [1, 0.55, 0.8, 0.45, 0.5, 0.3, 0.22, 0.12, 0.08, 0.05, 0.03, 0.02],
-    detune: 1,
+    model: "wind",
     attack: 0.05,
-    decay: 0.3,
-    sustain: 0.9,
-    release: 0.26,
-    noise: 0.12,
-    noiseColor: "breath",
+    release: 0.25,
+    brightBase: 3.5,
+    brightEnv: 7,
+    formants: [
+      { freq: 500, q: 1.2, gain: 4 },
+      { freq: 1100, q: 1.5, gain: 7 },
+    ],
+    breath: 0.16,
+    breathHz: 1900,
+    onsetBend: 0.99,
+    onsetMs: 45,
+    chiff: 0.4,
     vibratoHz: 5,
-    vibratoCents: 8,
-    brightness: 10,
+    vibratoCents: 9,
+    vibratoDelayMs: 450,
+    gain: 0.85,
   },
   {
     key: "trumpet",
     label: "trumpet",
-    harmonics: [1, 0.85, 0.95, 0.8, 0.7, 0.55, 0.42, 0.3, 0.2, 0.12, 0.07, 0.04],
-    detune: 1,
-    attack: 0.035,
-    decay: 0.25,
-    sustain: 0.9,
-    release: 0.22,
-    noise: 0.06,
-    noiseColor: "breath",
-    vibratoHz: 4.6,
+    model: "wind",
+    attack: 0.04,
+    release: 0.2,
+    brightBase: 2.5,
+    brightEnv: 12,
+    formants: [
+      { freq: 700, q: 1.5, gain: 3 },
+      { freq: 1200, q: 2, gain: 8 },
+      { freq: 2500, q: 3, gain: 4 },
+    ],
+    breath: 0.05,
+    breathHz: 3000,
+    onsetBend: 0.972,
+    onsetMs: 55,
+    chiff: 0.2,
+    vibratoHz: 5,
     vibratoCents: 5,
-    brightness: 16,
+    vibratoDelayMs: 500,
+    gain: 0.8,
   },
 ];
 
-export type TimbreBlend = TimbreSpec & {
+export type TimbreBlend = {
+  key: string;
+  label: string;
   lower: TimbreSpec;
   upper: TimbreSpec;
   mix: number;
 };
-
-function lerp(a: number, b: number, t: number) {
-  return a + (b - a) * t;
-}
 
 // position 0..1 along the chain → the two neighboring voices and how far
 // between them the position sits
@@ -183,25 +258,26 @@ export function blendLabel(lower: TimbreSpec, upper: TimbreSpec, mix: number) {
   return `${lower.label} ↔ ${upper.label}`;
 }
 
-// The whole point: any position along the chain is itself an instrument.
+/**
+ * Equal-power crossfade weights between the two physical models. Morphing
+ * plays both instruments at once and leans between them — total energy
+ * stays flat across the whole walk.
+ */
+export function crossfadeGains(mix: number) {
+  const clamped = Math.max(0, Math.min(1, mix));
+  return {
+    lower: Math.cos((clamped * Math.PI) / 2),
+    upper: Math.sin((clamped * Math.PI) / 2),
+  };
+}
+
+// The whole point: any position along the chain is itself an instrument —
+// two real physical models sounding together in proportion.
 export function timbreAt(position: number): TimbreBlend {
   const { lower, upper, mix } = timbreNeighbors(position);
-  const dominant = mix < 0.5 ? lower : upper;
-
   return {
     key: `${lower.key}~${upper.key}`,
     label: blendLabel(lower, upper, mix),
-    harmonics: lower.harmonics.map((amp, index) => lerp(amp, upper.harmonics[index], mix)),
-    detune: lerp(lower.detune, upper.detune, mix),
-    attack: lerp(lower.attack, upper.attack, mix),
-    decay: lerp(lower.decay, upper.decay, mix),
-    sustain: lerp(lower.sustain, upper.sustain, mix),
-    release: lerp(lower.release, upper.release, mix),
-    noise: lerp(lower.noise, upper.noise, mix),
-    noiseColor: dominant.noiseColor,
-    vibratoHz: lerp(lower.vibratoHz, upper.vibratoHz, mix),
-    vibratoCents: lerp(lower.vibratoCents, upper.vibratoCents, mix),
-    brightness: lerp(lower.brightness, upper.brightness, mix),
     lower,
     upper,
     mix,
