@@ -23,6 +23,7 @@ export const SITE_ROUTES: SiteRouteEntry[] = [
   { key: "pretext",     icon: "waves",    href: "/pretext",                           desc: "playable text",                cluster: "water",     dark: true },
   { key: "circularity", icon: "aphros",   href: "/circularity",                       desc: "circles to waves",             cluster: "water",     dark: true },
   { key: "beyond",      icon: "waves",    href: "/beyond",                            desc: "novel wave field",             cluster: "water",     dark: true, homePriority: 10 },
+  { key: "manifold",    icon: "stars",    href: "/manifold",                          desc: "every scale kept in one fold", cluster: "field",     dark: true },
   { key: "storm",       icon: "storm",    href: "/storm",                             desc: "pressure · charge · discharge", cluster: "water",     dark: true },
   { key: "clouds",      icon: "clouds",   href: "/clouds",                            desc: "olympus",                      cluster: "water",     dark: true },
   { key: "aphros",      icon: "aphros",   href: "/aphros",                            desc: "play the shells",              cluster: "water" },

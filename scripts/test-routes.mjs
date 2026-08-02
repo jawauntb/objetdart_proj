@@ -71,6 +71,7 @@ const expectedKeys = [
   "pretext",
   "circularity",
   "beyond",
+  "manifold",
   "storm",
   "clouds",
   "aphros",

@@ -53,7 +53,7 @@ export const SCALE_BANDS: ScaleBand[] = [
   { id: "earth", label: "the earth", route: "/earth", sMin: 6.5, sMax: 9 },
   { id: "stars", label: "the stars", route: "/stars", sMin: 9, sMax: 22 },
   { id: "beyond", label: "beyond", route: "/beyond", sMin: 22, sMax: 25.5 },
-  { id: "manifold", label: "the manifold", route: null, sMin: 25.5, sMax: 27 },
+  { id: "manifold", label: "the manifold", route: "/manifold", sMin: 25.5, sMax: 27 },
 ];
 
 export const SCALE_MIN = SCALE_BANDS[0].sMin;

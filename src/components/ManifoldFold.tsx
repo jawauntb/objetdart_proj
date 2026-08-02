@@ -1,0 +1,1244 @@
+"use client";
+
+/**
+ * /manifold — the spacetime fold at 10²⁶ m, the ceiling of the scale axis
+ * (plan W6). The whole album seen as one object.
+ *
+ * Two intertwined ideas. The fabric: a hairline mesh that wells under
+ * masses the hand places (dwell), rung by gravitational pulses (tap),
+ * dragged and released (one finger), sheared by frame-dragging wind (three
+ * fingers), dilated ×0.25 (three-finger hold — the one room where slowed
+ * time should feel cosmic). Light rays race the field at one fixed speed
+ * and bend hard around the wells; a tapped pulse propagates at exactly the
+ * same speed, so your own ripple races the light and never beats it. Twin
+ * beacons blink the same clock — the one drifting into a well blinks
+ * slower and warmer than its far twin: gravity slowing time, watched, no
+ * numbers. Ceremony on a mass collapses it in a slow flash that sends one
+ * strong wave through everything.
+ *
+ * The filament: one luminous thread woven through the fabric carrying the
+ * twelve scale bands as beads, quarks to manifold — built rooms candle-
+ * warm, unbuilt embers. Tap a bead and it chimes at its band's spectral
+ * register (compressed into a gentle audible range): the site heard as one
+ * instrument from above. Ceremony on a built bead travels there — every
+ * room reachable from the top. Twist rotates the lens: the fabric
+ * straightens into the bare metric — flat measured grid, straight rays,
+ * the thread a log₁₀-meter ruler in thin mono numerals (the only place
+ * notation appears).
+ *
+ * All field math is pure and tested (src/lib/manifold-field.ts). Masses
+ * persist in `objetdart:manifold:v1`, capped at 7; the oldest evaporates
+ * gracefully. Deterministic throughout — seeded hashes, shared clocks;
+ * Date.now() only at interaction moments. Pinch is unbound here:
+ * ScaleTravel owns it (beyond lies below; above, the axis simply ends).
+ */
+
+import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { getFieldAudio } from "@/lib/audio";
+import * as haptics from "@/lib/haptics";
+import { attachGestures } from "@/lib/gesture";
+import { useField } from "@/store/field";
+import { SCALE_BANDS, spectralRegisterFor, type ScaleBand } from "@/lib/scale";
+import {
+  SOFTENING,
+  accelAt,
+  geodesicStep,
+  timeDilation,
+  wellDepth,
+  type MassPoint,
+  type Ray,
+} from "@/lib/manifold-field";
+import { ScaleTravelOverlay, type EdgeUI } from "@/components/ScaleTravel";
+
+const STORE_KEY = "objetdart:manifold:v1";
+const SCALE_S_KEY = "objetdart:scale:s";
+const MAX_MASSES = 7;
+const RAY_COUNT = 6;
+const TRAIL_MAX = 26;
+const EVAP_MS = 1600;
+const MESH_GAP = 34;
+const DIL_SOFT = 96; // wells read wide for clocks
+const DIL_K = 4;
+
+type Mass = {
+  id: string;
+  nx: number;
+  ny: number;
+  m: number;
+  plantedAt: number;
+  /** 0..1 while the fabric is still welling around a fresh mass. */
+  growth: number;
+  settled: boolean;
+  /** 0..1 collapse charge under a ceremony hold. */
+  charge: number;
+  /** performance.now() when evaporation began; 0 = present. */
+  evapAt: number;
+};
+
+type RayState = {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  trail: Array<{ x: number; y: number; w: number }>;
+};
+
+type Pulse = { x: number; y: number; bornLight: number; strength: number };
+
+type Tug = { x: number; y: number; dx: number; dy: number; strength: number; born: number };
+
+type Orbit = { x: number; y: number; omega: number; until: number };
+
+type Stored = { masses: Array<{ id: string; nx: number; ny: number; m: number; plantedAt: number }> };
+
+const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
+const clamp01 = (v: number) => clamp(v, 0, 1);
+
+function hash01(n: number) {
+  const x = Math.sin(n * 127.1 + 311.7) * 43758.5453123;
+  return x - Math.floor(x);
+}
+
+function mix(a: number, b: number, t: number) {
+  return a + (b - a) * t;
+}
+
+/** Band center → a gentle audible chime pitch: the register compressed
+ *  (power law, monotone, invertible) into the middle of hearing. */
+function beadHz(band: ScaleBand): number {
+  const { baseHz } = spectralRegisterFor((band.sMin + band.sMax) / 2);
+  return clamp(220 * Math.pow(baseHz / 220, 0.62), 60, 1250);
+}
+
+/** Ruler numeral for a boundary: log₁₀ meters, thin and exact. */
+function rulerLabel(s: number): string {
+  return `${s < 0 ? "−" : ""}${Math.abs(s) % 1 === 0 ? Math.abs(s) : Math.abs(s).toFixed(1)}`;
+}
+
+function loadStored(): Stored | null {
+  try {
+    const raw = window.localStorage.getItem(STORE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Stored;
+    if (!parsed || !Array.isArray(parsed.masses)) return null;
+    return {
+      masses: parsed.masses.filter(
+        (m) =>
+          m &&
+          typeof m.nx === "number" &&
+          typeof m.ny === "number" &&
+          typeof m.m === "number" &&
+          typeof m.plantedAt === "number",
+      ),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export default function ManifoldFold() {
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const router = useRouter();
+  const [travelUi, setTravelUi] = useState<EdgeUI>({ pressure: 0, towardLabel: null, crossing: false });
+
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    const canvas = canvasRef.current;
+    if (!wrap || !canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    // ————— state —————
+    let masses: Mass[] = [];
+    let massSerial = 0;
+    const rays: RayState[] = [];
+    let spawnSerial = 0;
+    const pulses: Pulse[] = [];
+    const tugs: Tug[] = [];
+    let orbit: Orbit | null = null;
+    let width = 0;
+    let height = 0;
+    let rectLeft = 0;
+    let rectTop = 0;
+    let lightSpeed = 600; // px/s, set on resize; rays AND pulses share it
+    let rayG = 0; // bending strength, derived from lightSpeed
+    let raf = 0;
+    let lastFrame = 0;
+    let last = performance.now();
+    let localT = 0; // the room's dilatable clock
+    let lightT = 0; // the clock light lives on (dilation slows it hard)
+    let reduce = false;
+    let timeScale = 1;
+    let timeScaleTarget = 1;
+    let rayScale = 1;
+    let rayScaleTarget = 1;
+    let windX = 0;
+    let windY = 0;
+    let windTargetX = 0;
+    let windTargetY = 0;
+    let lens = 0;
+    let lensTarget = 0;
+    let lensSnapped = 0;
+    const beaconPhase = [0.4, 3.1];
+    const beadSwell = new Array<number>(SCALE_BANDS.length).fill(0);
+    const beadPos = SCALE_BANDS.map(() => ({ x: 0, y: 0 }));
+    let beadChargeIdx = -1;
+    let beadCharge = 0;
+    let leaving = false;
+    let lastInteractionAt = performance.now();
+    let lastSaveAt = 0;
+    let dirty = false;
+    let focused = false;
+    let cursorNx = 0.5;
+    let cursorNy = 0.5;
+    let cursorVisible = false;
+    let beadSel = -1;
+    let kbCharge = 0;
+    let kbMassId: string | null = null;
+    let lastGrowNoteAt = 0;
+    let lastChargeNoteAt = 0;
+    let lastWindSoundAt = 0;
+    let lastScrubSoundAt = 0;
+    let lastCaptureSoundAt = 0;
+    let staticRayPaths: Array<Array<{ x: number; y: number }>> = [];
+    let staticRaysStale = true;
+    const hold: { mode: "fabric" | "mass" | "bead" | null; massId: string | null; beadIdx: number; placed: boolean; done: boolean } = {
+      mode: null,
+      massId: null,
+      beadIdx: -1,
+      placed: false,
+      done: false,
+    };
+
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    reduce = mq.matches;
+    const onMq = () => { reduce = mq.matches; staticRaysStale = true; };
+    mq.addEventListener?.("change", onMq);
+
+    // ————— persistence —————
+    const save = (force = false) => {
+      const now = performance.now();
+      if (!force && now - lastSaveAt < 800) { dirty = true; return; }
+      lastSaveAt = now;
+      dirty = false;
+      try {
+        const stored: Stored = {
+          masses: masses
+            .filter((m) => !m.evapAt)
+            .map((m) => ({ id: m.id, nx: m.nx, ny: m.ny, m: m.m, plantedAt: m.plantedAt })),
+        };
+        window.localStorage.setItem(STORE_KEY, JSON.stringify(stored));
+      } catch { /* quota; the fold lives on in memory */ }
+    };
+
+    const stored = loadStored();
+    if (stored && stored.masses.length > 0) {
+      masses = stored.masses.slice(-MAX_MASSES).map((m) => ({
+        id: m.id,
+        nx: clamp01(m.nx),
+        ny: clamp01(m.ny),
+        m: clamp(m.m, 0.4, 2.2),
+        plantedAt: m.plantedAt,
+        growth: 1,
+        settled: true,
+        charge: 0,
+        evapAt: 0,
+      }));
+      massSerial = masses.length;
+    } else {
+      // the first look is never an empty sky: one resident mass, so the
+      // light already bends and the twin clocks already disagree
+      masses = [{
+        id: "ms-genesis",
+        nx: 0.6,
+        ny: 0.42,
+        m: 1.0,
+        plantedAt: Date.now(),
+        growth: 1,
+        settled: true,
+        charge: 0,
+        evapAt: 0,
+      }];
+      massSerial = 1;
+      save(true);
+    }
+
+    // ————— helpers —————
+    const audio = () => getFieldAudio();
+    const note = (midi: number, ms = 120) => { try { audio().playNote(midi, ms); } catch { /* noop */ } };
+    const tone = (hz: number, sec = 0.9) => { try { audio().playTone(hz, sec); } catch { /* noop */ } };
+
+    const resize = () => {
+      const r = wrap.getBoundingClientRect();
+      const ratio = Math.min(window.devicePixelRatio || 1, 1.5);
+      width = Math.max(320, Math.floor(r.width));
+      height = Math.max(480, Math.floor(r.height));
+      rectLeft = r.left;
+      rectTop = r.top;
+      canvas.width = Math.floor(width * ratio);
+      canvas.height = Math.floor(height * ratio);
+      canvas.style.width = `${width}px`;
+      canvas.style.height = `${height}px`;
+      ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+      // one speed of light for this viewport: rays and pulses both use it
+      lightSpeed = 0.85 * Math.max(width, height);
+      rayG = 50 * lightSpeed * lightSpeed;
+      staticRaysStale = true;
+    };
+    resize();
+    const observer = new ResizeObserver(resize);
+    observer.observe(wrap);
+
+    const toLocal = (clientX: number, clientY: number) => ({
+      x: clamp(clientX - rectLeft, 0, width),
+      y: clamp(clientY - rectTop, 0, height),
+    });
+
+    const livePoints = (): MassPoint[] =>
+      masses
+        .filter((m) => !m.evapAt)
+        .map((m) => ({ x: m.nx * width, y: m.ny * height, m: m.m * (m.settled ? 1 : 0.25 + 0.75 * m.growth) }));
+
+    const massAt = (x: number, y: number): Mass | null => {
+      let best: Mass | null = null;
+      let bestD = Infinity;
+      for (const m of masses) {
+        if (m.evapAt) continue;
+        const d = Math.hypot(x - m.nx * width, y - m.ny * height);
+        if (d < Math.max(30, 12 + m.m * 18) && d < bestD) { bestD = d; best = m; }
+      }
+      return best;
+    };
+
+    const beadAt = (x: number, y: number): number => {
+      let best = -1;
+      let bestD = 26;
+      for (let k = 0; k < beadPos.length; k++) {
+        const d = Math.hypot(x - beadPos[k].x, y - beadPos[k].y);
+        if (d < bestD) { bestD = d; best = k; }
+      }
+      return best;
+    };
+
+    const firePulse = (x: number, y: number, strength: number) => {
+      pulses.push({ x, y, bornLight: lightT, strength });
+      if (pulses.length > 7) pulses.shift();
+    };
+
+    const placeMass = (x: number, y: number, settled: boolean): Mass => {
+      const m: Mass = {
+        id: `ms-${massSerial++}-${Date.now().toString(36)}`,
+        nx: clamp(x / width, 0.05, 0.95),
+        ny: clamp(y / height, 0.08, 0.92),
+        m: settled ? 0.9 : 0.5,
+        plantedAt: Date.now(),
+        growth: settled ? 1 : 0.06,
+        settled,
+        charge: 0,
+        evapAt: 0,
+      };
+      masses.push(m);
+      // the cap: the oldest presence lets go, gracefully
+      const alive = masses.filter((q) => !q.evapAt);
+      if (alive.length > MAX_MASSES) {
+        const oldest = alive.reduce((a, b) => (a.plantedAt <= b.plantedAt ? a : b));
+        evaporate(oldest, 0.7);
+      }
+      note(26, 240);
+      try { haptics.ripple(0.4); } catch { /* noop */ }
+      if (settled) settleMass(m);
+      staticRaysStale = true;
+      useField.getState().recordTape("object", 0.6, "manifold/mass");
+      save();
+      return m;
+    };
+
+    const settleMass = (m: Mass) => {
+      if (m.settled) return;
+      m.settled = true;
+      m.growth = 1;
+      // the fabric closes around it: felt, heard, seen in the welling
+      try { haptics.bloom(); } catch { /* noop */ }
+      note(31, 420);
+      staticRaysStale = true;
+      dirty = true;
+    };
+
+    const evaporate = (m: Mass, strength = 1) => {
+      if (m.evapAt) return;
+      m.evapAt = performance.now();
+      m.charge = 0;
+      // collapse: one slow flash, one strong wave through the whole fabric
+      firePulse(m.nx * width, m.ny * height, (1.1 + m.m * 0.5) * strength);
+      try { audio().bell(); } catch { /* noop */ }
+      try { haptics.roll(); } catch { /* noop */ }
+      staticRaysStale = true;
+      useField.getState().recordTape("sigil", 0.85, "manifold/evaporate");
+      save();
+    };
+
+    const travelTo = (band: ScaleBand) => {
+      if (!band.route || band.route === "/manifold" || leaving) return;
+      leaving = true;
+      // the crossing presentation, exactly as the axis speaks it
+      try { haptics.crossing(); } catch { /* noop */ }
+      try {
+        window.sessionStorage.setItem(SCALE_S_KEY, String((band.sMin + band.sMax) / 2));
+      } catch { /* noop */ }
+      setTravelUi({ pressure: 1, towardLabel: band.label, crossing: true });
+      useField.getState().recordTape("region", 0.8, `manifold/travel:${band.id}`);
+      window.setTimeout(() => router.push(band.route as string), 380);
+    };
+
+    const chimeBead = (k: number, quiet = false) => {
+      const band = SCALE_BANDS[k];
+      tone(beadHz(band), quiet ? 0.35 : 1.1);
+      beadSwell[k] = Math.max(beadSwell[k], quiet ? 0.55 : 1);
+      try { haptics.tap(); } catch { /* noop */ }
+    };
+
+    // deterministic ray spawning: seeded by its serial, entering from an edge
+    const spawnRay = (): RayState => {
+      const s = spawnSerial++;
+      const edge = Math.floor(hash01(s * 7 + 1) * 4);
+      const along = 0.12 + hash01(s * 13 + 5) * 0.76;
+      const tilt = (hash01(s * 29 + 11) - 0.5) * 0.9;
+      let x = 0, y = 0, a = 0;
+      if (edge === 0) { x = -20; y = along * height; a = tilt; }
+      else if (edge === 1) { x = width + 20; y = along * height; a = Math.PI + tilt; }
+      else if (edge === 2) { x = along * width; y = -20; a = Math.PI / 2 + tilt; }
+      else { x = along * width; y = height + 20; a = -Math.PI / 2 + tilt; }
+      return { x, y, vx: Math.cos(a) * lightSpeed, vy: Math.sin(a) * lightSpeed, trail: [] };
+    };
+    for (let i = 0; i < RAY_COUNT; i++) rays.push(spawnRay());
+
+    // ————— gestures (the grammar only; pinch belongs to ScaleTravel) —————
+    const detach = attachGestures(wrap, {
+      tap: (e) => {
+        lastInteractionAt = performance.now();
+        if (e.fingers !== 1) return; // the frame and the law absorb stray taps
+        const { x, y } = toLocal(e.x, e.y);
+        const k = beadAt(x, y);
+        if (k >= 0) { chimeBead(k); return; }
+        // a gravitational pulse — your ripple will race the light and lose
+        firePulse(x, y, 0.5 + e.intensity * 0.8);
+        note(33 + Math.round(e.intensity * 7), 200);
+        try { haptics.ripple(0.3 + e.intensity * 0.4); } catch { /* noop */ }
+      },
+      hold: (e) => {
+        lastInteractionAt = performance.now();
+        if (e.fingers === 3) {
+          // three fingers touch the law: time dilates — and here, of all
+          // rooms, the light itself nearly stands still
+          if (e.phase === "enter") {
+            timeScaleTarget = 0.25;
+            rayScaleTarget = 0.05;
+            note(24, 500);
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+          if (e.phase === "release") { timeScaleTarget = 1; rayScaleTarget = 1; }
+          return;
+        }
+        if (e.fingers !== 1) return;
+        const { x, y } = toLocal(e.x, e.y);
+        if (e.phase === "enter") {
+          const k = beadAt(x, y);
+          if (k >= 0) { hold.mode = "bead"; hold.beadIdx = k; hold.massId = null; }
+          else {
+            const m = massAt(x, y);
+            if (m) { hold.mode = "mass"; hold.massId = m.id; hold.beadIdx = -1; }
+            else { hold.mode = "fabric"; hold.massId = null; hold.beadIdx = -1; }
+          }
+          hold.placed = false;
+          hold.done = false;
+          return;
+        }
+        if (e.phase === "release") {
+          if (hold.mode === "fabric" && hold.massId) {
+            const m = masses.find((q) => q.id === hold.massId);
+            if (m && !m.settled) settleMass(m);
+          }
+          if (hold.mode === "mass" && hold.massId) {
+            const m = masses.find((q) => q.id === hold.massId);
+            if (m) m.charge = 0;
+          }
+          if (hold.mode === "bead") { beadChargeIdx = -1; beadCharge = 0; }
+          hold.mode = null;
+          hold.massId = null;
+          hold.beadIdx = -1;
+          save();
+          return;
+        }
+        // ticks
+        if (hold.mode === "bead" && hold.beadIdx >= 0) {
+          const band = SCALE_BANDS[hold.beadIdx];
+          if (!band.route || band.route === "/manifold") {
+            // an unbuilt room holds quietly; the room we're in swells a little
+            beadSwell[hold.beadIdx] = Math.max(beadSwell[hold.beadIdx], 0.4);
+            return;
+          }
+          beadChargeIdx = hold.beadIdx;
+          beadCharge = clamp01((e.elapsed - 250) / 2250);
+          const now = performance.now();
+          if (beadCharge > 0.15 && now - lastChargeNoteAt > 420) {
+            lastChargeNoteAt = now;
+            tone(beadHz(band) * (1 + beadCharge * 0.06), 0.3);
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+          if (e.tier >= 3 && !hold.done) {
+            hold.done = true;
+            travelTo(band);
+          }
+          return;
+        }
+        if (hold.mode === "mass" && hold.massId) {
+          const m = masses.find((q) => q.id === hold.massId);
+          if (!m || m.evapAt) return;
+          m.charge = clamp01((e.elapsed - 900) / 1600);
+          const now = performance.now();
+          if (m.charge > 0 && now - lastChargeNoteAt > 340) {
+            lastChargeNoteAt = now;
+            note(30 + Math.round(m.charge * 10), 100);
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+          if (e.tier >= 3 && !hold.done) {
+            hold.done = true;
+            hold.massId = null;
+            evaporate(m);
+          }
+          return;
+        }
+        if (hold.mode === "fabric") {
+          if (!hold.placed && e.tier >= 2) {
+            // dwell on open fabric: a mass gathers — long-press means grow
+            hold.placed = true;
+            const m = placeMass(x, y, false);
+            hold.massId = m.id;
+          } else if (hold.placed && hold.massId) {
+            const m = masses.find((q) => q.id === hold.massId);
+            if (m && !m.settled) {
+              m.growth = clamp01(m.growth + 0.0011 * 80 * (1 + e.intensity * 0.5));
+              m.m = 0.5 + m.growth * 1.1;
+              const now = performance.now();
+              if (now - lastGrowNoteAt > 380) {
+                lastGrowNoteAt = now;
+                note(26 + Math.round(m.growth * 5), 140);
+                try { haptics.tap(); } catch { /* noop */ }
+              }
+              if (m.growth >= 1) settleMass(m);
+            }
+          }
+        }
+      },
+      drag: (e) => {
+        lastInteractionAt = performance.now();
+        const { x, y } = toLocal(e.x, e.y);
+        if (e.fingers === 3) {
+          // three fingers are the law: frame-dragging — the metric shears
+          windTargetX = clamp(e.vx * 1.3, -1, 1);
+          windTargetY = clamp(e.vy * 1.3, -1, 1);
+          const now = performance.now();
+          const mag = Math.hypot(windTargetX, windTargetY);
+          if (mag > 0.5 && now - lastWindSoundAt > 520) {
+            lastWindSoundAt = now;
+            note(38 + Math.round(mag * 5), 260);
+            try { haptics.chop(); } catch { /* noop */ }
+          }
+          return;
+        }
+        if (e.fingers !== 1 || e.phase === "end") return;
+        // one finger drags the fabric — a local pull that relaxes
+        tugs.push({ x, y, dx: e.vx, dy: e.vy, strength: clamp(Math.hypot(e.vx, e.vy), 0.15, 1.6), born: performance.now() });
+        if (tugs.length > 12) tugs.shift();
+      },
+      scrub: (e) => {
+        lastInteractionAt = performance.now();
+        const { x, y } = toLocal(e.cx, e.cy);
+        // a circling hand winds nearby light into closed orbits, briefly
+        orbit = { x, y, omega: clamp(e.angularVelocity, -6, 6), until: performance.now() + 2600 };
+        const now = performance.now();
+        if (now - lastScrubSoundAt > 600) {
+          lastScrubSoundAt = now;
+          note(45 + Math.round(Math.min(6, Math.abs(e.winding))), 130);
+          try { haptics.ripple(0.25); } catch { /* noop */ }
+        }
+      },
+      twist: (e) => {
+        lastInteractionAt = performance.now();
+        // two fingers rotate the lens: the felt fabric ↔ the bare metric
+        if (e.phase === "move") {
+          lensTarget = clamp01(lensTarget + e.angle / 1.7);
+        } else if (e.phase === "end") {
+          const snapped = lensTarget > 0.5 ? 1 : 0;
+          if (snapped !== lensSnapped) {
+            lensSnapped = snapped;
+            staticRaysStale = true; // stilled rays follow the lens too
+            try { haptics.lens(); } catch { /* noop */ }
+            if (snapped === 1) { try { audio().chime(); } catch { /* noop */ } }
+            else note(48, 160);
+          }
+          lensTarget = snapped;
+        }
+      },
+    });
+
+    // ————— keyboard dialect (same verbs, quieter) —————
+    const onKeyDown = (ev: KeyboardEvent) => {
+      const step = 0.05;
+      if (ev.key === "[" || ev.key === "]") {
+        ev.preventDefault();
+        lastInteractionAt = performance.now();
+        const dir = ev.key === "]" ? 1 : -1;
+        beadSel = ((beadSel < 0 ? (dir > 0 ? -1 : 0) : beadSel) + dir + SCALE_BANDS.length) % SCALE_BANDS.length;
+        cursorVisible = false;
+        chimeBead(beadSel, true);
+        return;
+      }
+      if (ev.key === "Escape") { beadSel = -1; return; }
+      if (ev.key.startsWith("Arrow")) {
+        ev.preventDefault();
+        lastInteractionAt = performance.now();
+        beadSel = -1;
+        cursorVisible = true;
+        if (ev.key === "ArrowLeft") cursorNx = clamp(cursorNx - step, 0.05, 0.95);
+        if (ev.key === "ArrowRight") cursorNx = clamp(cursorNx + step, 0.05, 0.95);
+        if (ev.key === "ArrowUp") cursorNy = clamp(cursorNy - step, 0.08, 0.95);
+        if (ev.key === "ArrowDown") cursorNy = clamp(cursorNy + step, 0.08, 0.95);
+        return;
+      }
+      if (ev.key === "Enter" || ev.key === " ") {
+        ev.preventDefault();
+        lastInteractionAt = performance.now();
+        if (beadSel >= 0) {
+          if (!ev.repeat) travelTo(SCALE_BANDS[beadSel]);
+          return;
+        }
+        if (!cursorVisible) { cursorVisible = true; return; }
+        const x = cursorNx * width;
+        const y = cursorNy * height;
+        const m = massAt(x, y);
+        if (m) {
+          // held Enter repeats — the keyboard's ceremony
+          if (kbMassId !== m.id) { kbMassId = m.id; kbCharge = 0; }
+          kbCharge = clamp01(kbCharge + (ev.repeat ? 0.09 : 0.02));
+          m.charge = kbCharge;
+          const now = performance.now();
+          if (now - lastChargeNoteAt > 340) {
+            lastChargeNoteAt = now;
+            note(30 + Math.round(kbCharge * 10), 100);
+          }
+          if (kbCharge >= 1) {
+            kbCharge = 0;
+            kbMassId = null;
+            evaporate(m);
+          }
+        } else if (!ev.repeat) {
+          placeMass(x, y, true);
+        }
+      }
+    };
+    const onKeyUp = (ev: KeyboardEvent) => {
+      if (ev.key === "Enter" || ev.key === " ") {
+        const m = masses.find((q) => q.id === kbMassId);
+        if (m) m.charge = 0;
+        kbCharge = 0;
+        kbMassId = null;
+      }
+    };
+    const onFocus = () => { focused = true; };
+    const onBlur = () => { focused = false; cursorVisible = false; beadSel = -1; save(true); };
+    wrap.addEventListener("keydown", onKeyDown);
+    wrap.addEventListener("keyup", onKeyUp);
+    wrap.addEventListener("focus", onFocus);
+    wrap.addEventListener("blur", onBlur);
+    const onVis = () => { if (document.visibilityState === "hidden") save(true); };
+    document.addEventListener("visibilitychange", onVis);
+
+    // ————— field geometry —————
+    /** Mesh displacement at a point: mass welling + pulse rings + tugs + shear. */
+    const dispAt = (x: number, y: number, pts: MassPoint[], now: number): { dx: number; dy: number } => {
+      let dx = 0;
+      let dy = 0;
+      const felt = 1 - lens;
+      if (felt <= 0.01) return { dx: 0, dy: 0 };
+      for (const p of pts) {
+        const ddx = p.x - x;
+        const ddy = p.y - y;
+        const d2 = ddx * ddx + ddy * ddy;
+        if (d2 < 1) continue;
+        const s2 = 70 * 70;
+        const f = (26 * p.m * s2) / (d2 + s2) / Math.sqrt(d2);
+        dx += ddx * f;
+        dy += ddy * f;
+      }
+      for (const p of pulses) {
+        const age = lightT - p.bornLight;
+        const rf = age * lightSpeed;
+        const prog = clamp01(rf / (Math.max(width, height) * 1.2));
+        const ddx = x - p.x;
+        const ddy = y - p.y;
+        const d = Math.hypot(ddx, ddy);
+        if (d < 1) continue;
+        const g = Math.exp(-((d - rf) * (d - rf)) / (2 * 30 * 30));
+        const amp = 11 * p.strength * (1 - prog) * g;
+        dx += (ddx / d) * amp;
+        dy += (ddy / d) * amp;
+      }
+      for (const t of tugs) {
+        const age = (now - t.born) / 900;
+        if (age >= 1) continue;
+        const d2 = (x - t.x) * (x - t.x) + (y - t.y) * (y - t.y);
+        const k = Math.exp(-d2 / (140 * 140)) * (1 - age) * t.strength * 26;
+        dx += t.dx * k;
+        dy += t.dy * k;
+      }
+      dx += windX * ((y / height) - 0.5) * 90;
+      dy += windY * ((x / width) - 0.5) * 90;
+      return { dx: dx * felt, dy: dy * felt };
+    };
+
+    /** The filament: a woven thread in the felt view, a ruler under the lens. */
+    const pad = () => Math.max(24, width * 0.07);
+    const wovenPoint = (u: number, pts: MassPoint[], now: number) => {
+      const breathe = reduce ? 0 : Math.sin(localT * 0.9 + u * 4) * 0.012;
+      const x = pad() * 0.5 + u * (width - pad());
+      const y = height * (0.58 + 0.14 * Math.sin(u * Math.PI * 2.2 + 0.6) + 0.045 * Math.sin(u * Math.PI * 5.3 + 1.9) + breathe);
+      const d = dispAt(x, y, pts, now);
+      return { x: x + d.dx * 0.6, y: y + d.dy * 0.6 };
+    };
+    const rulerX = (s: number) => {
+      const lo = SCALE_BANDS[0].sMin;
+      const hi = SCALE_BANDS[SCALE_BANDS.length - 1].sMax;
+      return pad() + ((s - lo) / (hi - lo)) * (width - pad() * 2);
+    };
+    const rulerY = () => height * 0.84;
+
+    /** Reduced motion: light as a few still geodesic curves, bent honestly
+     *  (and straightened when the lens shows the bare metric). */
+    const rebuildStaticRays = (pts: MassPoint[]) => {
+      staticRaysStale = false;
+      staticRayPaths = [];
+      const dt = 1 / 120;
+      const gEff = rayG * (1 - lensSnapped);
+      for (let i = 0; i < 5; i++) {
+        const y0 = height * (0.15 + 0.7 * (i / 4));
+        let r: Ray = { x: -10, y: y0, vx: lightSpeed, vy: 0 };
+        const path = [{ x: r.x, y: r.y }];
+        for (let s = 0; s < 420; s++) {
+          r = geodesicStep(pts, r, dt, lightSpeed, gEff, SOFTENING);
+          path.push({ x: r.x, y: r.y });
+          if (r.x < -40 || r.x > width + 40 || r.y < -40 || r.y > height + 40) break;
+        }
+        staticRayPaths.push(path);
+      }
+    };
+
+    // ————— the loop —————
+    const draw = (now: number) => {
+      raf = requestAnimationFrame(draw);
+      if (!reduce && now - lastFrame < 30) return;
+      lastFrame = now;
+      const delta = Math.min(64, now - last);
+      last = now;
+      const dt = delta / 1000;
+
+      timeScale += (timeScaleTarget - timeScale) * Math.min(1, dt * 5);
+      rayScale += (rayScaleTarget - rayScale) * Math.min(1, dt * 5);
+      if (!reduce) localT += dt * timeScale;
+      lightT += dt * (reduce ? 1 : rayScale);
+      windX += (windTargetX - windX) * Math.min(1, dt * 2.2);
+      windY += (windTargetY - windY) * Math.min(1, dt * 2.2);
+      windTargetX *= Math.exp(-dt * 0.5);
+      windTargetY *= Math.exp(-dt * 0.5);
+      lens += (lensTarget - lens) * Math.min(1, dt * 6);
+
+      const pts = livePoints();
+
+      // masses: growth settles on its own if the hand wanders; charges decay
+      for (let i = masses.length - 1; i >= 0; i--) {
+        const m = masses[i];
+        if (m.evapAt && now - m.evapAt > EVAP_MS) { masses.splice(i, 1); dirty = true; continue; }
+        if (!hold.massId || hold.massId !== m.id) {
+          if (kbMassId !== m.id) m.charge = Math.max(0, m.charge - dt * 1.6);
+        }
+      }
+      for (let i = tugs.length - 1; i >= 0; i--) if (now - tugs[i].born > 900) tugs.splice(i, 1);
+      for (let i = pulses.length - 1; i >= 0; i--) {
+        if ((lightT - pulses[i].bornLight) * lightSpeed > Math.max(width, height) * 1.35) pulses.splice(i, 1);
+      }
+      if (orbit && now > orbit.until) orbit = null;
+      for (let k = 0; k < beadSwell.length; k++) beadSwell[k] = Math.max(0, beadSwell[k] - dt * 1.4);
+      if (beadChargeIdx >= 0 && hold.mode !== "bead") { beadChargeIdx = -1; beadCharge = 0; }
+
+      // ————— background: ink, with the faintest cold breath —————
+      const bg = ctx.createLinearGradient(0, 0, 0, height);
+      bg.addColorStop(0, "#04060b");
+      bg.addColorStop(0.6, "#05070d");
+      bg.addColorStop(1, "#060810");
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, width, height);
+      const breathA = reduce ? 0.05 : 0.04 + Math.sin(localT * Math.PI * 2 * 0.14) * 0.015;
+      const halo = ctx.createRadialGradient(width * 0.5, height * 0.42, 20, width * 0.5, height * 0.42, Math.max(width, height) * 0.8);
+      halo.addColorStop(0, `rgba(120, 150, 210, ${breathA + lens * 0.02})`);
+      halo.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = halo;
+      ctx.fillRect(0, 0, width, height);
+
+      // ————— the mesh: hairlines of the metric —————
+      const cols = Math.ceil(width / MESH_GAP) + 1;
+      const rows = Math.ceil(height / MESH_GAP) + 1;
+      const vx: number[] = new Array(cols * rows);
+      const vy: number[] = new Array(cols * rows);
+      for (let j = 0; j < rows; j++) {
+        for (let i = 0; i < cols; i++) {
+          const x = i * MESH_GAP;
+          const y = j * MESH_GAP;
+          const d = dispAt(x, y, pts, now);
+          vx[j * cols + i] = x + d.dx;
+          vy[j * cols + i] = y + d.dy;
+        }
+      }
+      ctx.lineWidth = 0.6;
+      ctx.strokeStyle = `rgba(206, 222, 250, ${0.055 + lens * 0.05})`;
+      ctx.beginPath();
+      for (let j = 0; j < rows; j++) {
+        for (let i = 0; i < cols; i++) {
+          const idx = j * cols + i;
+          if (i === 0) ctx.moveTo(vx[idx], vy[idx]);
+          else ctx.lineTo(vx[idx], vy[idx]);
+        }
+      }
+      for (let i = 0; i < cols; i++) {
+        for (let j = 0; j < rows; j++) {
+          const idx = j * cols + i;
+          if (j === 0) ctx.moveTo(vx[idx], vy[idx]);
+          else ctx.lineTo(vx[idx], vy[idx]);
+        }
+      }
+      ctx.stroke();
+
+      // ————— masses: unlit presences the fabric wells around —————
+      for (const m of masses) {
+        const mx = m.nx * width;
+        const my = m.ny * height;
+        const grow = m.settled ? 1 : 0.3 + 0.7 * m.growth;
+        let R = (10 + m.m * 16) * grow;
+        let evapP = 0;
+        if (m.evapAt) {
+          evapP = clamp01((now - m.evapAt) / EVAP_MS);
+          R *= 1 - evapP * 0.85;
+        }
+        // the well's shadow deepens the ink
+        const depth = wellDepth(pts, mx, my, SOFTENING);
+        const shade = ctx.createRadialGradient(mx, my, R * 0.2, mx, my, R * 3.2);
+        shade.addColorStop(0, `rgba(0, 0, 0, ${0.5 * (1 - evapP)})`);
+        shade.addColorStop(1, "rgba(0,0,0,0)");
+        ctx.fillStyle = shade;
+        ctx.fillRect(mx - R * 3.2, my - R * 3.2, R * 6.4, R * 6.4);
+        ctx.fillStyle = `rgba(2, 3, 6, ${(0.92 - depth * 0.1) * (1 - evapP)})`;
+        ctx.beginPath();
+        ctx.arc(mx, my, R, 0, Math.PI * 2);
+        ctx.fill();
+        // a thin cold rim — the horizon's edge, brighter while forming
+        ctx.strokeStyle = `rgba(150, 175, 225, ${(m.settled ? 0.13 : 0.3) * (1 - evapP)})`;
+        ctx.lineWidth = m.settled ? 0.8 : 1.2;
+        ctx.beginPath();
+        ctx.arc(mx, my, R, 0, Math.PI * 2);
+        ctx.stroke();
+        // collapse charge: a warm arc closing around the presence
+        if (m.charge > 0 && !m.evapAt) {
+          ctx.strokeStyle = `rgba(231, 172, 82, ${0.25 + m.charge * 0.5})`;
+          ctx.lineWidth = 1.4;
+          ctx.beginPath();
+          ctx.arc(mx, my, R + 7, -Math.PI / 2, -Math.PI / 2 + m.charge * Math.PI * 2);
+          ctx.stroke();
+        }
+        // the slow flash of evaporation
+        if (m.evapAt) {
+          const flare = Math.sin(evapP * Math.PI);
+          const fr = R + evapP * 90;
+          const flash = ctx.createRadialGradient(mx, my, 0, mx, my, fr);
+          flash.addColorStop(0, `rgba(235, 242, 255, ${0.5 * flare})`);
+          flash.addColorStop(0.5, `rgba(180, 200, 245, ${0.18 * flare})`);
+          flash.addColorStop(1, "rgba(0,0,0,0)");
+          ctx.fillStyle = flash;
+          ctx.fillRect(mx - fr, my - fr, fr * 2, fr * 2);
+        }
+      }
+
+      // ————— pulses: your ripple, racing the light at its own speed —————
+      for (const p of pulses) {
+        const rf = (lightT - p.bornLight) * lightSpeed;
+        const prog = clamp01(rf / (Math.max(width, height) * 1.2));
+        if (rf < 2) continue;
+        ctx.strokeStyle = `rgba(190, 210, 245, ${0.2 * p.strength * (1 - prog) * (1 - lens * 0.6)})`;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, rf, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      // ————— light: few rays, racing, bending hard —————
+      const dilated = rayScale < 0.5;
+      // under the lens the metric goes bare: geodesics become straight rays
+      const gEff = rayG * (1 - lens);
+      if (!reduce) {
+        const stepDt = (dt * rayScale) / 4;
+        for (const r of rays) {
+          for (let s = 0; s < 4; s++) {
+            const st = geodesicStep(pts, r, stepDt, lightSpeed, gEff, SOFTENING);
+            r.x = st.x; r.y = st.y; r.vx = st.vx; r.vy = st.vy;
+            // frame-dragging: the wind leans on the light too (then the
+            // step's renormalization keeps the speed limit honest)
+            if (windX !== 0 || windY !== 0) {
+              r.vx += windX * lightSpeed * 0.5 * stepDt;
+              r.vy += windY * lightSpeed * 0.5 * stepDt;
+              const sp = Math.hypot(r.vx, r.vy);
+              if (sp > 0) { r.vx *= lightSpeed / sp; r.vy *= lightSpeed / sp; }
+            }
+            // a circling hand winds nearby light into a closed orbit
+            if (orbit) {
+              const ox = r.x - orbit.x;
+              const oy = r.y - orbit.y;
+              const od = Math.hypot(ox, oy);
+              if (od > 8 && od < 190) {
+                const sgn = orbit.omega >= 0 ? 1 : -1;
+                const tx = (-oy / od) * sgn;
+                const ty = (ox / od) * sgn;
+                const k = Math.min(1, 6 * stepDt * Math.abs(orbit.omega));
+                r.vx = mix(r.vx, tx * lightSpeed, k);
+                r.vy = mix(r.vy, ty * lightSpeed, k);
+                const sp = Math.hypot(r.vx, r.vy);
+                if (sp > 0) { r.vx *= lightSpeed / sp; r.vy *= lightSpeed / sp; }
+              }
+            }
+          }
+          // doppler tint: falling in leans blue, climbing out leans red
+          const a = accelAt(pts, r.x, r.y, gEff, SOFTENING);
+          const am = Math.hypot(a.ax, a.ay);
+          let w = 0;
+          if (am > 1) {
+            const proj = (r.vx * a.ax + r.vy * a.ay) / (am * lightSpeed);
+            w = clamp(proj * wellDepth(pts, r.x, r.y, SOFTENING) * 6, -1, 1);
+          }
+          r.trail.push({ x: r.x, y: r.y, w });
+          if (r.trail.length > TRAIL_MAX) r.trail.shift();
+
+          // capture: light that falls in is kept
+          let captured = false;
+          for (const p of pts) {
+            if (Math.hypot(r.x - p.x, r.y - p.y) < 11) { captured = true; break; }
+          }
+          const gone = r.x < -60 || r.x > width + 60 || r.y < -60 || r.y > height + 60;
+          if (captured || gone) {
+            if (captured && now - lastCaptureSoundAt > 2000) {
+              lastCaptureSoundAt = now;
+              note(28, 180);
+            }
+            const fresh = spawnRay();
+            r.x = fresh.x; r.y = fresh.y; r.vx = fresh.vx; r.vy = fresh.vy;
+            r.trail.length = 0;
+          }
+        }
+
+        // draw: long fading tails, luminous heads
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        for (const r of rays) {
+          const n = r.trail.length;
+          for (let i = 1; i < n; i++) {
+            const p0 = r.trail[i - 1];
+            const p1 = r.trail[i];
+            const f = i / n;
+            const warm = p1.w < 0 ? -p1.w : 0;
+            const cool = p1.w > 0 ? p1.w : 0;
+            const rr = Math.round(mix(212, 255, warm) - cool * 60);
+            const gg = Math.round(mix(226, 190, warm * 0.7) - cool * 30);
+            const bb = Math.round(mix(255, 165, warm));
+            ctx.strokeStyle = `rgba(${rr}, ${gg}, ${bb}, ${0.38 * f * f * (dilated ? 0.7 : 1)})`;
+            ctx.lineWidth = 0.8 + f * 0.8;
+            ctx.beginPath();
+            ctx.moveTo(p0.x, p0.y);
+            ctx.lineTo(p1.x, p1.y);
+            ctx.stroke();
+          }
+          if (n > 0) {
+            const h = r.trail[n - 1];
+            const glow = ctx.createRadialGradient(h.x, h.y, 0, h.x, h.y, 7);
+            glow.addColorStop(0, "rgba(240, 246, 255, 0.9)");
+            glow.addColorStop(1, "rgba(0,0,0,0)");
+            ctx.fillStyle = glow;
+            ctx.beginPath();
+            ctx.arc(h.x, h.y, 7, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+        ctx.restore();
+      } else {
+        // stilled streams: the same geodesics, held — curvature still legible
+        if (staticRaysStale) rebuildStaticRays(pts);
+        ctx.strokeStyle = "rgba(220, 232, 255, 0.16)";
+        ctx.lineWidth = 0.8;
+        for (const path of staticRayPaths) {
+          ctx.beginPath();
+          for (let i = 0; i < path.length; i++) {
+            if (i === 0) ctx.moveTo(path[i].x, path[i].y);
+            else ctx.lineTo(path[i].x, path[i].y);
+          }
+          ctx.stroke();
+        }
+      }
+
+      // ————— the twin beacons: gravity slowing time, watched —————
+      {
+        const bxA = width * (0.5 + 0.3 * Math.sin(localT * 0.045 + 1.3));
+        const byA = height * (0.42 + 0.24 * Math.sin(localT * 0.036 + 0.4));
+        const bxB = width * (0.5 + 0.42 * Math.sin(localT * 0.03 + 4.1));
+        const byB = height * (0.15 + 0.03 * Math.sin(localT * 0.023 + 2.2));
+        const spots: Array<[number, number, number]> = [[bxA, byA, 0], [bxB, byB, 1]];
+        for (const [bx, by, bi] of spots) {
+          const f = timeDilation(pts, bx, by, DIL_K, DIL_SOFT);
+          if (!reduce) beaconPhase[bi] += dt * timeScale * Math.PI * 2 * 0.55 * f;
+          const blink = reduce
+            ? 0.35 + 0.5 * f
+            : Math.pow(0.5 + 0.5 * Math.sin(beaconPhase[bi]), 3);
+          const warmth = clamp01((1 - f) * 1.9);
+          const rr = Math.round(mix(223, 255, warmth));
+          const gg = Math.round(mix(233, 158, warmth));
+          const bb = Math.round(mix(255, 106, warmth));
+          const a = (0.2 + blink * 0.7) * (1 - lens * 0.5);
+          const g = ctx.createRadialGradient(bx, by, 0, bx, by, 13);
+          g.addColorStop(0, `rgba(${rr}, ${gg}, ${bb}, ${a})`);
+          g.addColorStop(1, "rgba(0,0,0,0)");
+          ctx.fillStyle = g;
+          ctx.beginPath();
+          ctx.arc(bx, by, 13, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = `rgba(${rr}, ${gg}, ${bb}, ${0.5 + blink * 0.5})`;
+          ctx.beginPath();
+          ctx.arc(bx, by, 1.8, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      // ————— the filament: the album as one thread of twelve beads —————
+      {
+        const N = 84;
+        ctx.save();
+        // thread: warm faint underglow + fine bright line
+        for (const pass of [0, 1]) {
+          ctx.strokeStyle = pass === 0
+            ? `rgba(231, 172, 82, ${0.05 + lens * 0.02})`
+            : `rgba(240, 220, 180, ${0.16 + lens * 0.1})`;
+          ctx.lineWidth = pass === 0 ? 3.4 : 0.8;
+          ctx.beginPath();
+          for (let i = 0; i <= N; i++) {
+            const u = i / N;
+            const wp = wovenPoint(u, pts, now);
+            const rx = pad() + u * (width - pad() * 2);
+            const x = mix(wp.x, rx, lens);
+            const y = mix(wp.y, rulerY(), lens);
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+        }
+
+        // ruler ticks + thin mono numerals — notation lives ONLY under the lens
+        if (lens > 0.6) {
+          const la = (lens - 0.6) / 0.4;
+          ctx.font = "300 10px ui-monospace, 'SF Mono', Menlo, monospace";
+          ctx.textAlign = "center";
+          const edges = [...SCALE_BANDS.map((b) => b.sMin), SCALE_BANDS[SCALE_BANDS.length - 1].sMax];
+          for (const s of edges) {
+            const x = rulerX(s);
+            ctx.strokeStyle = `rgba(206, 222, 250, ${0.35 * la})`;
+            ctx.lineWidth = 0.7;
+            ctx.beginPath();
+            ctx.moveTo(x, rulerY() - 5);
+            ctx.lineTo(x, rulerY() + 5);
+            ctx.stroke();
+            ctx.fillStyle = `rgba(206, 222, 250, ${0.5 * la})`;
+            ctx.fillText(rulerLabel(s), x, rulerY() + 18);
+          }
+        }
+
+        // beads: the twelve bands, in order, quarks to this room
+        for (let k = 0; k < SCALE_BANDS.length; k++) {
+          const band = SCALE_BANDS[k];
+          const u = (k + 0.5) / SCALE_BANDS.length;
+          const wp = wovenPoint(u, pts, now);
+          const rx = rulerX((band.sMin + band.sMax) / 2);
+          const x = mix(wp.x, rx, lens);
+          const y = mix(wp.y, rulerY(), lens);
+          beadPos[k].x = x;
+          beadPos[k].y = y;
+          const built = !!band.route;
+          const here = band.route === "/manifold";
+          const swell = beadSwell[k];
+          const breatheR = reduce ? 0 : Math.sin(localT * 0.9 + k * 0.7) * 0.35;
+          const R = (built ? 3.4 : 2.4) + breatheR + swell * 4;
+          if (built) {
+            // candle-warm: a room that exists, heard from above
+            const g = ctx.createRadialGradient(x, y, 0, x, y, R * (3 + swell * 2));
+            g.addColorStop(0, `rgba(231, 172, 82, ${0.5 + swell * 0.4})`);
+            g.addColorStop(0.5, `rgba(200, 130, 60, ${0.14 + swell * 0.2})`);
+            g.addColorStop(1, "rgba(0,0,0,0)");
+            ctx.fillStyle = g;
+            ctx.beginPath();
+            ctx.arc(x, y, R * (3 + swell * 2), 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = `rgba(255, 232, 190, ${0.85 + swell * 0.15})`;
+          } else {
+            // ember-dim: a band the album holds open
+            ctx.fillStyle = `rgba(122, 84, 52, ${0.4 + swell * 0.3})`;
+          }
+          ctx.beginPath();
+          ctx.arc(x, y, R, 0, Math.PI * 2);
+          ctx.fill();
+          if (here) {
+            ctx.strokeStyle = "rgba(231, 172, 82, 0.4)";
+            ctx.lineWidth = 0.8;
+            ctx.beginPath();
+            ctx.arc(x, y, R + 4, 0, Math.PI * 2);
+            ctx.stroke();
+          }
+          if (beadSel === k) {
+            ctx.strokeStyle = "rgba(242, 238, 230, 0.7)";
+            ctx.lineWidth = 1.1;
+            ctx.beginPath();
+            ctx.arc(x, y, R + 6.5, 0, Math.PI * 2);
+            ctx.stroke();
+          }
+          if (beadChargeIdx === k && beadCharge > 0) {
+            // the road to travel: a ring closing around the bead
+            ctx.strokeStyle = `rgba(231, 172, 82, ${0.35 + beadCharge * 0.55})`;
+            ctx.lineWidth = 1.4;
+            ctx.beginPath();
+            ctx.arc(x, y, R + 8, -Math.PI / 2, -Math.PI / 2 + beadCharge * Math.PI * 2);
+            ctx.stroke();
+          }
+        }
+        ctx.restore();
+      }
+
+      // glimmer — after quiet, a ring where a dwell would land (never text)
+      const idleMs = now - lastInteractionAt;
+      if (idleMs > 20000) {
+        const slot = Math.floor(now / 9000);
+        const gx = (0.22 + hash01(slot) * 0.56) * width;
+        const gy = (0.16 + hash01(slot + 7) * 0.42) * height;
+        const pulse = reduce ? 0.5 : 0.5 + Math.sin(now / 480) * 0.5;
+        ctx.strokeStyle = `rgba(231, 172, 82, ${0.08 + pulse * 0.1})`;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(gx, gy, 14 + pulse * 8, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      // keyboard cursor
+      if (focused && cursorVisible) {
+        const cx = cursorNx * width;
+        const cy = cursorNy * height;
+        ctx.strokeStyle = "rgba(242, 238, 230, 0.7)";
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.arc(cx, cy, 12, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.fillStyle = "rgba(231, 172, 82, 0.85)";
+        ctx.beginPath();
+        ctx.arc(cx, cy, 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      if (dirty && now - lastSaveAt > 800) save(true);
+    };
+    raf = requestAnimationFrame(draw);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      observer.disconnect();
+      detach();
+      wrap.removeEventListener("keydown", onKeyDown);
+      wrap.removeEventListener("keyup", onKeyUp);
+      wrap.removeEventListener("focus", onFocus);
+      wrap.removeEventListener("blur", onBlur);
+      document.removeEventListener("visibilitychange", onVis);
+      mq.removeEventListener?.("change", onMq);
+      save(true);
+    };
+  }, [router]);
+
+  return (
+    <div className="manifold-page" data-touch-surface="true" data-pretext-ignore="true">
+      <div
+        ref={wrapRef}
+        className="manifold-field"
+        role="application"
+        tabIndex={0}
+        aria-label="the manifold — every scale kept in one fold; rest a finger and a mass gathers, the light bends to meet it and your ripple races it; hold a warm bead through the long moment to travel there; arrows walk, enter sets a mass and, held, collapses it; brackets walk the thread, enter travels"
+      >
+        <canvas ref={canvasRef} className="manifold-canvas" aria-hidden="true" />
+      </div>
+      <ScaleTravelOverlay ui={travelUi} />
+
+      <style
+        dangerouslySetInnerHTML={{
+          __html: `
+        .manifold-page {
+          position: fixed;
+          inset: 0;
+          min-height: 100svh;
+          background: #04060b;
+          overflow: hidden;
+        }
+
+        .manifold-field {
+          position: relative;
+          min-height: 100svh;
+          isolation: isolate;
+          overflow: hidden;
+          outline: none;
+        }
+
+        .manifold-field:focus-visible {
+          outline: 2px solid rgba(231, 172, 82, 0.7);
+          outline-offset: -2px;
+        }
+
+        body:has(.manifold-page) {
+          overflow: hidden;
+          background: #04060b;
+        }
+
+        body:has(.manifold-page) header:not(.oda-site-header) {
+          background: transparent !important;
+          border-bottom: 0 !important;
+          backdrop-filter: none !important;
+          -webkit-backdrop-filter: none !important;
+        }
+
+        body:has(.manifold-page) .oda-field-watch,
+        body:has(.manifold-page) .oda-candle-mark,
+        body:has(.manifold-page) .oda-tape-shell,
+        body:has(.manifold-page) .oda-sound-toggle {
+          display: none !important;
+        }
+
+        .manifold-canvas {
+          position: absolute;
+          inset: 0;
+          width: 100%;
+          height: 100%;
+          display: block;
+          cursor: crosshair;
+          touch-action: none;
+          z-index: 0;
+        }
+      ` }}
+      />
+    </div>
+  );
+}
