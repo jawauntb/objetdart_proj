@@ -169,6 +169,44 @@ assert.equal(bandAt(entryScaleFor("/stars")).id, "stars");
 assert.equal(bandAt(entryScaleFor("/tide")).id, "coast");
 assert.equal(entryScaleFor("/colophon"), null);
 
+// — Every band route must be a real page —
+// The bug this catches shipped once: the atlas band routed to "/atlas", which
+// has no page (only /atlas/[region]), so crossing the coast wall 404'd in
+// production. Resolve each non-null band route against src/app, honoring
+// dynamic [param] segments, and require a page file at the end.
+{
+  const { readdirSync, existsSync, statSync } = await import("node:fs");
+  const appDir = fileURLToPath(new URL("src/app/", rootUrl));
+
+  function resolvesToPage(route) {
+    let dir = appDir;
+    for (const seg of route.split("/").filter(Boolean)) {
+      const exact = `${dir}${seg}/`;
+      if (existsSync(exact) && statSync(exact).isDirectory()) {
+        dir = exact;
+        continue;
+      }
+      const dynamic = readdirSync(dir).find(
+        (d) => d.startsWith("[") && d.endsWith("]") && statSync(dir + d).isDirectory(),
+      );
+      if (!dynamic) return false;
+      dir = `${dir}${dynamic}/`;
+    }
+    return existsSync(`${dir}page.tsx`) || existsSync(`${dir}page.ts`);
+  }
+
+  for (const band of SCALE_BANDS) {
+    if (band.route === null) continue;
+    assert.ok(
+      resolvesToPage(band.route),
+      `band "${band.id}" routes to ${band.route}, which is not a page — travel there would 404`,
+    );
+  }
+  // Keep the checker honest: it must reject a route that truly has no page.
+  assert.equal(resolvesToPage("/atlas"), false, "bare /atlas has no page and must fail");
+  assert.equal(resolvesToPage("/no-such-room"), false);
+}
+
 // — Room band adapters: internal zoom ↔ manifold position —
 // Monotone and order-reversing (zooming in must move DOWN the axis — the
 // bug this catches is an inverted mapping, which would send /stars to
