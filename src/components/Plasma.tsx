@@ -9,6 +9,7 @@ import {
 } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
+import { attachGestures } from "@/lib/gesture";
 import { useField } from "@/store/field";
 
 type OrbPalette = "candle" | "sea" | "flame" | "electric" | "aurora";
@@ -418,6 +419,30 @@ export default function Plasma() {
       { a: 4.6, seed: 0.87 },
     ];
 
+    // ── the room's clock + law-layer state (gesture grammar) ────────
+    // Three fingers held dilate time; three fingers dragged bend every
+    // arc; a circling finger sets a filament orbiting; a steady tapped
+    // pulse entrains the core. Thresholds live in gesture/core alone.
+    let timeScale = 1;
+    let timeScaleTarget = 1;
+    let simT = 0;                     // warped seconds — orb + filaments
+    let simNowMs = performance.now(); // warped ms — flare/corona ages
+    let bendX = 0;                    // law-wind: arcs bow with it
+    let bendY = 0;
+    let bendTX = 0;
+    let bendTY = 0;
+    let lastBendFxAt = 0;
+    let orbitRing: { t0: number; sign: number; ang0: number } | null = null;
+    let coronaUntil = 0;
+    let entrainBpm = 0;
+    let entrainUntil = 0;
+    let lastEntrainBeat = -1;
+    let lastScrubAt = 0;
+    let lastDragRipple = 0;
+    let lastGestureAt = performance.now();
+    let lastContact = { x: 0, y: 0 }; // root-relative, for the discharge crack
+    const holdState = { ceremony: false };
+
     // ── filament renderer ───────────────────────────────────────────
     // Draws a jagged, additively-glowing lightning path from the core to a
     // target, with a couple of forks and a bright contact node.
@@ -440,7 +465,11 @@ export default function Plasma() {
           Math.sin(time * 9.0 + f * 11.0 + seed * 40.0) * 0.6 +
           Math.sin(time * 15.0 - f * 7.0 + seed * 80.0) * 0.4;
         const off = j * amp * taper;
-        pts.push({ x: sx + dx * f + nx * off, y: sy + dy * f + ny * off });
+        // the law-wind (three-finger drag) bows every arc the same way
+        pts.push({
+          x: sx + dx * f + nx * off + bendX * taper * 42,
+          y: sy + dy * f + ny * off + bendY * taper * 42,
+        });
       }
 
       const glowCol = rgb(pal.electric, 0.30 * bright);
@@ -498,16 +527,26 @@ export default function Plasma() {
     };
 
     // ── main loop ───────────────────────────────────────────────────
-    const t0 = performance.now();
-    let lastFrame = t0;
+    let lastFrame = performance.now();
     let lastReadout = 0;
+    let wasActive = false;
     let raf = 0;
 
     const draw = (now: number) => {
-      const t = (now - t0) / 1000;
       const dt = Math.min(0.05, (now - lastFrame) / 1000);
       lastFrame = now;
+      // three-finger time dilation: the globe's clock eases to ~1/4 speed
+      timeScale += (timeScaleTarget - timeScale) * Math.min(1, dt * 5);
+      simT += dt * timeScale;
+      simNowMs += dt * 1000 * timeScale;
+      const t = simT;
       const motion = reduced ? 0.28 : 1;
+
+      // the law-wind eases in, then dies back toward the vacuum's calm
+      bendX += (bendTX - bendX) * Math.min(1, dt * 4);
+      bendY += (bendTY - bendY) * Math.min(1, dt * 4);
+      bendTX *= Math.exp(-dt * 0.8);
+      bendTY *= Math.exp(-dt * 0.8);
 
       const contacts = contactsRef.current;
       const active = contacts.size > 0;
@@ -523,16 +562,41 @@ export default function Plasma() {
       }
       const heat = heatRef.current;
 
+      // releasing a charged globe discharges — a big bright crack. The
+      // material reads its own state: last finger up + banked heat.
+      if (wasActive && !active && heatPeakRef.current > 0.55) {
+        spark(lastContact.x, lastContact.y, 1);
+        try { getAudio().bell(); } catch { /* noop */ }
+        try { haptics.storm(); } catch { /* noop */ }
+        recordTapeRef.current("concern", 0.6 + heatPeakRef.current * 0.4, "plasma/discharge");
+        heatPeakRef.current = 0;
+      }
+      wasActive = active;
+
       // rising electric hum while charging
-      if (active && !reduced && now - lastHumRef.current > 190) {
+      if (active && !reduced && now - lastHumRef.current > 190 * (2 - timeScale)) {
         lastHumRef.current = now;
-        try { getAudio().playTone(70 + heat * 210 + contacts.size * 12, 0.22); } catch { /* noop */ }
+        try { getAudio().playTone((70 + heat * 210 + contacts.size * 12) * (0.6 + timeScale * 0.4), 0.22); } catch { /* noop */ }
+      }
+
+      // rhythm entrainment: while a steady tapped pulse holds, the core
+      // blinks on every beat with its own note — sight and sound land in
+      // the same frame.
+      if (performance.now() < entrainUntil && entrainBpm > 0) {
+        const beatLen = 60 / entrainBpm;
+        const beatIdx = Math.floor(simT / beatLen);
+        if (beatIdx !== lastEntrainBeat) {
+          lastEntrainBeat = beatIdx;
+          flashRef.current = Math.max(flashRef.current, 0.18);
+          flashT0Ref.current = simNowMs;
+          try { getAudio().playNote(58 + (beatIdx % 2) * 7, 120); } catch { /* noop */ }
+        }
       }
 
       // ── flash decay ──
       let flash = 0;
       if (flashRef.current > 0) {
-        const age = (now - flashT0Ref.current) / 1000;
+        const age = (simNowMs - flashT0Ref.current) / 1000;
         flash = Math.exp(-age * 6);
         if (flash < 0.001) { flashRef.current = 0; flash = 0; }
         else flashRef.current = flash;
@@ -620,7 +684,7 @@ export default function Plasma() {
       const flares = flaresRef.current;
       for (let i = flares.length - 1; i >= 0; i--) {
         const fl = flares[i];
-        const age = (now - fl.t0) / 1000;
+        const age = (simNowMs - fl.t0) / 1000;
         if (age > 0.32) { flares.splice(i, 1); continue; }
         const b = (1 - age / 0.32) * 1.1;
         const d = Math.hypot(fl.x - cx, fl.y - cy) || 1;
@@ -628,6 +692,43 @@ export default function Plasma() {
         const ex = cx + (fl.x - cx) * kk;
         const ey = cy + (fl.y - cy) * kk;
         drawFilament(cx, cy, ex, ey, fl.seed, t, b, motion, true);
+      }
+
+      // scrub-born orbit — a filament chases its own tail around the rim
+      if (orbitRing) {
+        const age = (simNowMs - orbitRing.t0) / 1000;
+        if (age > 4.2) {
+          orbitRing = null;
+        } else {
+          const fadeIn = Math.min(1, age / 0.3);
+          const fadeOut = Math.max(0, 1 - Math.max(0, age - 3.2) / 1);
+          const ang = orbitRing.ang0 + orbitRing.sign * age * 2.4 * motion;
+          const ex = cx + Math.cos(ang) * radius * 0.9;
+          const ey = cy + Math.sin(ang) * radius * 0.9;
+          drawFilament(cx, cy, ex, ey, 0.37, t, (0.55 + heat * 0.3) * fadeIn * fadeOut, motion, true);
+        }
+      }
+
+      // ceremony corona — every direction at once, briefly
+      if (simNowMs < coronaUntil) {
+        const fade = (coronaUntil - simNowMs) / 1800;
+        for (let k = 0; k < 8; k++) {
+          const ang = (k / 8) * Math.PI * 2 + t * 0.4 * motion;
+          const ex = cx + Math.cos(ang) * radius * 0.92;
+          const ey = cy + Math.sin(ang) * radius * 0.92;
+          drawFilament(cx, cy, ex, ey, 0.1 + k * 0.09, t, 0.85 * fade, motion, true);
+        }
+      }
+
+      // glimmer (grammar §6): after ~20s of quiet, one soft tendril leans
+      // out and slowly circles, the way a scrub would send it — a physical
+      // hint, never text.
+      if (performance.now() - lastGestureAt > 20000) {
+        const pulse = 0.5 + Math.sin(now / 480) * 0.5;
+        const ang = now / 2400;
+        const ex = cx + Math.cos(ang) * radius * 0.88;
+        const ey = cy + Math.sin(ang) * radius * 0.88;
+        drawFilament(cx, cy, ex, ey, 0.71, t, 0.10 + pulse * 0.10, motion, false);
       }
 
       // ── throttled readout ──
@@ -647,92 +748,193 @@ export default function Plasma() {
     // ── pointer interactions on the root surface ────────────────────
     const spark = (x: number, y: number, strength: number) => {
       flashRef.current = Math.max(flashRef.current, strength);
-      flashT0Ref.current = performance.now();
-      flaresRef.current.push({ x, y, t0: performance.now(), seed: Math.random() });
+      flashT0Ref.current = simNowMs;
+      flaresRef.current.push({ x, y, t0: simNowMs, seed: Math.random() });
       if (flaresRef.current.length > 6) flaresRef.current.shift();
     };
 
-    const onDown = (e: PointerEvent) => {
+    const toLocal = (clientX: number, clientY: number) => {
       const rect = root.getBoundingClientRect();
-      const now = performance.now();
-      const c: Contact = {
+      return { x: clientX - rect.left, y: clientY - rect.top };
+    };
+
+    // ── the contact layer — position only, no semantics ─────────────
+    // The glass answers every finger with its own filament, including
+    // second and third fingers the semantic engine reserves for frame
+    // and law verbs. These listeners only keep the endpoint positions
+    // alive for the renderer (like a hover halo); every meaning — tap,
+    // hold, heat, discharge — arrives through attachGestures below.
+    const onContactDown = (e: PointerEvent) => {
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      contactsRef.current.set(e.pointerId, {
         id: e.pointerId,
         cx: e.clientX, cy: e.clientY,
-        downAt: now, moved: 0,
+        downAt: performance.now(), moved: 0,
         lastX: e.clientX, lastY: e.clientY,
         lastRipple: 0, seed: Math.random(),
-      };
-      contactsRef.current.set(e.pointerId, c);
+      });
       heatPeakRef.current = heatRef.current;
-      try { root.setPointerCapture(e.pointerId); } catch { /* noop */ }
-      // a small strike so the touch lands immediately
-      spark(e.clientX - rect.left, e.clientY - rect.top, 0.4);
-      try { getAudio().spark(); } catch { /* noop */ }
-      try { haptics.tap(); } catch { /* noop */ }
-      recordTapeRef.current("object", 0.55, "plasma/touch");
+      lastContact = toLocal(e.clientX, e.clientY);
     };
-
-    const onMove = (e: PointerEvent) => {
+    const onContactMove = (e: PointerEvent) => {
       const c = contactsRef.current.get(e.pointerId);
       if (!c) return;
-      const dxp = e.clientX - c.lastX;
-      const dyp = e.clientY - c.lastY;
-      c.moved += Math.hypot(dxp, dyp);
+      c.moved += Math.hypot(e.clientX - c.lastX, e.clientY - c.lastY);
       c.cx = e.clientX; c.cy = e.clientY;
       c.lastX = e.clientX; c.lastY = e.clientY;
-      const now = performance.now();
-      if (now - c.lastRipple > 90) {
-        c.lastRipple = now;
-        try { haptics.ripple(0.18 + heatRef.current * 0.3); } catch { /* noop */ }
-        recordTapeRef.current("ripple", 0.3 + heatRef.current * 0.4, "plasma/drag");
-      }
+      lastContact = toLocal(e.clientX, e.clientY);
     };
-
-    const release = (e: PointerEvent) => {
-      const c = contactsRef.current.get(e.pointerId);
-      if (!c) return;
+    const onContactUp = (e: PointerEvent) => {
       contactsRef.current.delete(e.pointerId);
-      try { root.releasePointerCapture(e.pointerId); } catch { /* noop */ }
-      const now = performance.now();
-      const rect = root.getBoundingClientRect();
-      const held = now - c.downAt;
-      const tap = held < 260 && c.moved < 12;
-      const lastOne = contactsRef.current.size === 0;
+    };
+    root.addEventListener("pointerdown", onContactDown);
+    root.addEventListener("pointermove", onContactMove);
+    root.addEventListener("pointerup", onContactUp);
+    root.addEventListener("pointercancel", onContactUp);
 
-      if (tap) {
-        // a quick tap cracks a sharp spark
-        spark(c.cx - rect.left, c.cy - rect.top, 0.85);
+    // ── gestures (the shared grammar — src/lib/gesture) ──────────────
+    // One finger touches the plasma: tap cracks a spark, a held touch
+    // charges the core, ceremony blooms the corona. Three fingers touch
+    // the law: drag bends every arc, hold slows the globe. Pinch and
+    // pan2 stay unbound — the frame belongs to the scale manifold.
+    const detachGestures = attachGestures(root, {
+      tap: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers !== 1) return; // the vacuum absorbs frame/law taps
+        const { x, y } = toLocal(e.x, e.y);
+        // tap intensity is the crack: bloom, sound and haptic ride the
+        // same 0..1 from core.
+        spark(x, y, 0.55 + e.intensity * 0.45);
         try { getAudio().spark(); } catch { /* noop */ }
         try { haptics.chop(); } catch { /* noop */ }
-        recordTapeRef.current("sigil", 0.7, "plasma/spark");
-      }
-
-      if (lastOne && heatPeakRef.current > 0.55) {
-        // releasing a charged globe discharges — a big bright crack
-        spark(c.cx - rect.left, c.cy - rect.top, 1);
-        try { getAudio().bell(); } catch { /* noop */ }
-        try { haptics.storm(); } catch { /* noop */ }
-        recordTapeRef.current("concern", 0.6 + heatPeakRef.current * 0.4, "plasma/discharge");
-        heatPeakRef.current = 0;
-      } else if (!tap) {
-        try { getAudio().thud(); } catch { /* noop */ }
-      }
-    };
-
-    root.addEventListener("pointerdown", onDown);
-    root.addEventListener("pointermove", onMove);
-    root.addEventListener("pointerup", release);
-    root.addEventListener("pointercancel", release);
+        recordTapeRef.current("sigil", 0.5 + e.intensity * 0.3, "plasma/spark");
+      },
+      drag: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          if (e.phase === "end") return;
+          // three fingers drag the law: every arc in the globe bows the
+          // same way, ambient tendrils included
+          bendTX = clamp(bendTX + e.vx * 0.04, -1, 1);
+          bendTY = clamp(bendTY + e.vy * 0.04, -1, 1);
+          const nowMs = performance.now();
+          if (Math.hypot(e.vx, e.vy) > 0.3 && nowMs - lastBendFxAt > 900) {
+            lastBendFxAt = nowMs;
+            try { getAudio().playTone(96 + Math.hypot(bendTX, bendTY) * 130, 0.3); } catch { /* noop */ }
+            try { haptics.chop(); } catch { /* noop */ }
+            recordTapeRef.current("region", 0.5, "plasma/bend");
+          }
+          return;
+        }
+        if (e.fingers !== 1) return;
+        if (e.phase === "start") {
+          // the touch lands — a small strike where the finger meets glass
+          const { x, y } = toLocal(e.x, e.y);
+          spark(x, y, 0.4);
+          try { getAudio().spark(); } catch { /* noop */ }
+          try { haptics.tap(); } catch { /* noop */ }
+          recordTapeRef.current("object", 0.55, "plasma/touch");
+          return;
+        }
+        if (e.phase === "end") {
+          if (heatPeakRef.current <= 0.55) {
+            try { getAudio().thud(); } catch { /* noop */ }
+          }
+          return;
+        }
+        const nowMs = performance.now();
+        if (nowMs - lastDragRipple > 90) {
+          lastDragRipple = nowMs;
+          try { haptics.ripple(0.18 + heatRef.current * 0.3); } catch { /* noop */ }
+          recordTapeRef.current("ripple", 0.3 + heatRef.current * 0.4, "plasma/drag");
+        }
+      },
+      flick: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers !== 1) return;
+        // a flick throws the arc — it whips out and cracks on the rim
+        const ex = cx + Math.cos(e.angle) * radius * 0.95;
+        const ey = cy + Math.sin(e.angle) * radius * 0.95;
+        spark(ex, ey, 0.7 + Math.min(0.3, e.speed * 0.2));
+        try { getAudio().spark(); } catch { /* noop */ }
+        try { haptics.chop(); } catch { /* noop */ }
+        recordTapeRef.current("ripple", 0.6, "plasma/thrown-arc");
+      },
+      hold: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          // three fingers hold the law: the plasma slows to a quarter speed
+          if (e.phase === "enter") {
+            timeScaleTarget = 0.25;
+            try { getAudio().playNote(36, 260); } catch { /* noop */ }
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+          if (e.phase === "release") timeScaleTarget = 1;
+          return;
+        }
+        if (e.fingers !== 1) return;
+        if (e.phase === "enter") {
+          holdState.ceremony = false;
+          // the touch lands (a still hold never becomes a drag)
+          const { x, y } = toLocal(e.x, e.y);
+          spark(x, y, 0.4);
+          try { getAudio().spark(); } catch { /* noop */ }
+          try { haptics.tap(); } catch { /* noop */ }
+          recordTapeRef.current("object", 0.55, "plasma/touch");
+          return;
+        }
+        if (e.phase === "release") {
+          if (!holdState.ceremony && heatPeakRef.current <= 0.55) {
+            try { getAudio().thud(); } catch { /* noop */ }
+          }
+          return;
+        }
+        // ceremony tier — the room's one solemn act: the corona. The whole
+        // globe reaches out in every direction at once and blooms.
+        if (e.tier >= 3 && !holdState.ceremony) {
+          holdState.ceremony = true;
+          coronaUntil = simNowMs + 1800;
+          flashRef.current = 1;
+          flashT0Ref.current = simNowMs;
+          try { getAudio().bell(); } catch { /* noop */ }
+          try { haptics.bloom(); } catch { /* noop */ }
+          recordTapeRef.current("sigil", 1, "plasma/corona");
+        }
+      },
+      scrub: (e) => {
+        lastGestureAt = performance.now();
+        const nowMs = performance.now();
+        if (nowMs - lastScrubAt < 700) return;
+        lastScrubAt = nowMs;
+        // circling sets a filament orbiting — it chases the hand's turn
+        const { x, y } = toLocal(e.cx, e.cy);
+        orbitRing = {
+          t0: simNowMs,
+          sign: Math.sign(e.winding) || 1,
+          ang0: Math.atan2(y - cy, x - cx),
+        };
+        try { getAudio().playNote(66, 160); } catch { /* noop */ }
+        try { haptics.ripple(0.35); } catch { /* noop */ }
+        recordTapeRef.current("ripple", 0.55, "plasma/orbit");
+      },
+      rhythm: (e) => {
+        // a steady tapped pulse: the core blinks in time with the hand
+        if (e.stability <= 0.7) return;
+        entrainBpm = Math.max(40, Math.min(140, e.bpm));
+        entrainUntil = performance.now() + 9000;
+      },
+    }, { wheelZoom: false, manageStyle: false });
 
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
       window.removeEventListener("resize", resize);
       if (typeof mq.removeEventListener === "function") mq.removeEventListener("change", onMq);
-      root.removeEventListener("pointerdown", onDown);
-      root.removeEventListener("pointermove", onMove);
-      root.removeEventListener("pointerup", release);
-      root.removeEventListener("pointercancel", release);
+      detachGestures();
+      root.removeEventListener("pointerdown", onContactDown);
+      root.removeEventListener("pointermove", onContactMove);
+      root.removeEventListener("pointerup", onContactUp);
+      root.removeEventListener("pointercancel", onContactUp);
       if (gl) {
         try {
           if (buf) gl.deleteBuffer(buf);

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
+import { attachGestures } from "@/lib/gesture";
 import { useField } from "@/store/field";
 import GreekKeyFrame from "@/components/GreekKeyFrame";
 import WaterText from "@/components/WaterText";
@@ -389,7 +390,23 @@ export default function Clouds() {
     let windTargetY = 0;
     let windX = 0;
     let windY = 0;
-    let activePointerId: number | null = null;
+
+    // ── the room's clock + law-layer state (gesture grammar) ──────
+    // Three fingers held dilate time; three fingers dragged race the
+    // cloud floor; a circling finger spins a vapor spiral; a steady
+    // tapped pulse entrains the sky. Thresholds live in gesture/core.
+    let timeScale = 1;
+    let timeScaleTarget = 1;
+    let simElapsed = 0;              // warped seconds — day cycle, drift
+    let simNowMs = performance.now(); // warped ms — cell/veil/bolt ages
+    let windTravel = 0;              // accumulated law-wind cloud travel
+    let lastRaceFxAt = 0;
+    let entrainBpm = 0;
+    let entrainUntil = 0;
+    let lastEntrainBeat = -1;
+    let lastScrubAt = 0;
+    let lastGestureAt = performance.now();
+    const holdState = { ceremony: false };
 
     // build a jagged path from (x0, y0) to (x1, y1) with mid-jitter forks
     const makeBolt = (x0: number, y0: number, x1: number, y1: number) => {
@@ -430,7 +447,7 @@ export default function Clouds() {
         kind,
         x: p.x,
         y: p.y,
-        t0: performance.now(),
+        t0: simNowMs,
         strength: clamp(strength, 0.2, 1),
         spread: kind === "storm" ? 0.72 + Math.random() * 0.28 : 0.70 + Math.random() * 0.55,
         drift: (Math.random() - 0.5) * (kind === "storm" ? 7 : 16),
@@ -447,7 +464,7 @@ export default function Clouds() {
         id: ++nextWeatherId,
         x: p.x,
         y: p.y,
-        t0: performance.now(),
+        t0: simNowMs,
         strength: clamp(strength, 0.18, 1),
         width,
         slant: -10 + Math.random() * 22 + windTargetX * 18,
@@ -460,7 +477,7 @@ export default function Clouds() {
       activeWindStroke = {
         id: ++nextWeatherId,
         points: [{ x, y, t: performance.now() }],
-        t0: performance.now(),
+        t0: simNowMs,
         releasedAt: null,
         strength: 0.12,
         vx: 0,
@@ -497,7 +514,7 @@ export default function Clouds() {
 
     const releaseWindStroke = (record = true) => {
       if (!activeWindStroke) return;
-      activeWindStroke.releasedAt = performance.now();
+      activeWindStroke.releasedAt = simNowMs;
       if (record && activeWindStroke.points.length > 5) {
         useField.getState().recordTape("ripple", 0.42 + activeWindStroke.strength * 0.35, "clouds/wind-shear");
         if (activeWindStroke.strength > 0.55) {
@@ -521,7 +538,7 @@ export default function Clouds() {
         ? clamp(target.y + (Math.random() - 0.5) * 30, h * 0.24, h - 30)
         : h * (0.55 + Math.random() * 0.25);
       lightnings.current.push({
-        t0: performance.now(),
+        t0: simNowMs,
         segs: makeBolt(x0, y0, x1, y1),
         flash: 1,
       });
@@ -563,10 +580,10 @@ export default function Clouds() {
       return pick;
     };
 
-    const updatePointer = (e: PointerEvent) => {
+    const trackPointer = (clientX: number, clientY: number) => {
       const r = overlay.getBoundingClientRect();
-      const x = e.clientX - r.left;
-      const y = e.clientY - r.top;
+      const x = clientX - r.left;
+      const y = clientY - r.top;
       pointer.current.x = x;
       pointer.current.y = y;
       // y=0 top in DOM, shader expects y=0 bottom
@@ -577,58 +594,26 @@ export default function Clouds() {
       // update per-glyph hover state
       const touched = glyphAt(x, y);
       for (const g of glyphs) g.hovered = g === touched;
+      return { x, y };
     };
-    const onDown = (e: PointerEvent) => {
-      if (activePointerId !== null) return;
-      activePointerId = e.pointerId;
-      try { overlay.setPointerCapture(e.pointerId); } catch { /* pointer capture can fail on cancelled touches */ }
-      updatePointer(e);
-      pointer.current.pressed = true;
-      pointer.current.pressStart = performance.now();
-      beginWindStroke(pointer.current.x, pointer.current.y);
-      haptics.tap();
-      addWeatherMark("pressure", 0.45);
-    };
-    const onMove = (e: PointerEvent) => {
-      if (activePointerId !== null && e.pointerId !== activePointerId) return;
-      updatePointer(e);
-      if (pointer.current.pressed) {
-        extendWindStroke(pointer.current.x, pointer.current.y);
-      }
-    };
-    const clearActiveGesture = (pointerId?: number, recordWind = true) => {
-      if (pointerId !== undefined) {
-        try { overlay.releasePointerCapture(pointerId); } catch { /* already released */ }
-      }
-      activePointerId = null;
-      releaseWindStroke(recordWind);
-      pointer.current.pressed = false;
-      setPressCharge(0);
-    };
-    const onUp = (e: PointerEvent) => {
-      if (activePointerId !== null && e.pointerId !== activePointerId) return;
-      const now = performance.now();
-      const held = now - pointer.current.pressStart;
-      if (pointer.current.pressed && pointer.current.over) {
-        extendWindStroke(pointer.current.x, pointer.current.y);
-      }
-      if (pointer.current.pressed && held >= 800) {
-        // strike comes off the held region (long-press lightning)
-        const charge = clamp(held / 1800, 0, 1);
-        seedWeatherCell(pointer.current.x, pointer.current.y, "storm", 0.64 + charge * 0.36);
-        seedRainVeil(pointer.current.x, pointer.current.y + 44, 0.58 + charge * 0.42, 170 + charge * 110);
-        triggerLightning(pointer.current.uvx, { x: pointer.current.x, y: pointer.current.y });
-        addWeatherMark("storm cell", 0.88 + charge * 0.12);
-      } else if (pointer.current.pressed && held < 500 && pointer.current.over) {
-        // a tap. Route in priority: glyph → cloud puff.
-        const px = pointer.current.x;
-        const py = pointer.current.y;
+
+    // ── gestures (the shared grammar — src/lib/gesture) ───────────
+    // One finger touches the air: tap condenses vapor, drag shears the
+    // wind, dwell builds a storm cell that takes lightning, ceremony
+    // keeps the storm. Three fingers touch the law: drag races the
+    // cloud floor, hold slows the whole sky. Pinch and pan2 stay
+    // unbound — the frame belongs to the scale manifold.
+    const detachGestures = attachGestures(overlay, {
+      tap: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers !== 1) return; // the sky absorbs frame/law taps
+        const { x: px, y: py } = trackPointer(e.x, e.y);
         const g = glyphAt(px, py);
         if (g) {
           // soft whoosh + breadcrumb trail
           const a = getFieldAudio();
           a.spark();
-          haptics.ripple(0.28);
+          haptics.ripple(0.2 + e.intensity * 0.24);
           useField.getState().recordTape("sigil", 0.5, `clouds/${g.kind}`);
           addWeatherMark(g.kind.replace("-", " "), 0.5);
           // seed the trail at the glyph's current rendered position
@@ -644,37 +629,164 @@ export default function Clouds() {
           }
           // cap trail length
           while (g.trail.length > 18) g.trail.shift();
-        } else {
-          // a tap on empty sky — local cloud puff
-          cloudPuffs.push({ x: px, y: py, t0: performance.now() });
-          if (cloudPuffs.length > 8) cloudPuffs.shift();
-          seedWeatherCell(px, py, "vapor", 0.40 + Math.random() * 0.22);
-          const a = getFieldAudio();
-          a.chime();
-          haptics.ripple(0.38);
-          useField.getState().recordTape("ripple", 0.4, "clouds/puff");
-          addWeatherMark("vapor", 0.42);
+          return;
         }
-      }
-      clearActiveGesture(e.pointerId);
+        // a tap on empty sky — local cloud puff. Tap intensity is the
+        // condensation: vapor density, ring and haptic ride the same 0..1.
+        cloudPuffs.push({ x: px, y: py, t0: simNowMs });
+        if (cloudPuffs.length > 8) cloudPuffs.shift();
+        seedWeatherCell(px, py, "vapor", 0.30 + e.intensity * 0.32);
+        const a = getFieldAudio();
+        a.chime();
+        haptics.ripple(0.24 + e.intensity * 0.3);
+        useField.getState().recordTape("ripple", 0.3 + e.intensity * 0.2, "clouds/puff");
+        addWeatherMark("vapor", 0.3 + e.intensity * 0.24);
+      },
+      drag: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          if (e.phase === "end") return;
+          // three fingers drag the weather: the whole cloud floor races
+          // with the pushed wind — bands, cells and glyphs together
+          windTargetX = clamp(windTargetX + e.vx * 0.045, -1, 1);
+          windTargetY = clamp(windTargetY + e.vy * 0.035, -1, 1);
+          const nowMs = performance.now();
+          if (Math.hypot(e.vx, e.vy) > 0.35 && nowMs - lastRaceFxAt > 2400) {
+            lastRaceFxAt = nowMs;
+            try { getFieldAudio().playTone(160 + Math.abs(windTargetX) * 120, 0.35); } catch { /* noop */ }
+            try { haptics.chop(); } catch { /* noop */ }
+            addWeatherMark("racing sky", 0.5 + Math.min(0.4, Math.abs(windTargetX) * 0.5));
+            useField.getState().recordTape("region", 0.5, "clouds/race");
+          }
+          return;
+        }
+        if (e.fingers !== 1) return;
+        const { x, y } = trackPointer(e.x, e.y);
+        if (e.phase === "start") {
+          pointer.current.pressed = true;
+          pointer.current.pressStart = performance.now();
+          beginWindStroke(x, y);
+          haptics.tap();
+          addWeatherMark("pressure", 0.45);
+          return;
+        }
+        if (e.phase === "end") {
+          pointer.current.pressed = false;
+          setPressCharge(0);
+          releaseWindStroke(true);
+          return;
+        }
+        extendWindStroke(x, y);
+      },
+      flick: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers !== 1) return;
+        // a flick throws a gust — three beads of vapor strung on the wind
+        const { x, y } = trackPointer(e.x, e.y);
+        windTargetX = clamp(windTargetX + Math.cos(e.angle) * Math.min(1, e.speed * 0.7), -1, 1);
+        windTargetY = clamp(windTargetY + Math.sin(e.angle) * Math.min(0.7, e.speed * 0.5), -1, 1);
+        for (let k = 1; k <= 3; k++) {
+          seedWeatherCell(x + Math.cos(e.angle) * k * 60, y + Math.sin(e.angle) * k * 42, "vapor", 0.42 - k * 0.07);
+        }
+        pointer.current.pressed = false;
+        setPressCharge(0);
+        releaseWindStroke(true);
+        try { getFieldAudio().spark(); } catch { /* noop */ }
+        try { haptics.chop(); } catch { /* noop */ }
+        addWeatherMark("gust", 0.6);
+        useField.getState().recordTape("ripple", 0.55, "clouds/gust");
+      },
+      hold: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          // three fingers hold the law: the sky slows to a quarter speed
+          if (e.phase === "enter") {
+            timeScaleTarget = 0.25;
+            try { getFieldAudio().playNote(36, 260); } catch { /* noop */ }
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+          if (e.phase === "release") timeScaleTarget = 1;
+          return;
+        }
+        if (e.fingers !== 1) return;
+        trackPointer(e.x, e.y);
+        if (e.phase === "enter") {
+          holdState.ceremony = false;
+          pointer.current.pressed = true;
+          pointer.current.pressStart = performance.now() - e.elapsed;
+          haptics.tap();
+          addWeatherMark("pressure", 0.45);
+          return;
+        }
+        if (e.phase === "release") {
+          pointer.current.pressed = false;
+          setPressCharge(0);
+          // dwell tier — the held region breaks into a storm cell that
+          // takes lightning (was a private 800ms constant; the threshold
+          // now lives in core)
+          if (e.tier >= 2 && !holdState.ceremony) {
+            const charge = clamp(e.elapsed / 1800, 0, 1);
+            seedWeatherCell(pointer.current.x, pointer.current.y, "storm", 0.64 + charge * 0.36);
+            seedRainVeil(pointer.current.x, pointer.current.y + 44, 0.58 + charge * 0.42, 170 + charge * 110);
+            triggerLightning(pointer.current.uvx, { x: pointer.current.x, y: pointer.current.y });
+            addWeatherMark("storm cell", 0.88 + charge * 0.12);
+          }
+          return;
+        }
+        // ceremony tier — the room's one solemn act: the storm is kept.
+        // The cell seeds at full strength, rain closes around it, and the
+        // sky answers with one great bolt.
+        if (e.tier >= 3 && !holdState.ceremony) {
+          holdState.ceremony = true;
+          seedWeatherCell(pointer.current.x, pointer.current.y, "storm", 1);
+          seedRainVeil(pointer.current.x - 90, pointer.current.y + 44, 0.9, 200);
+          seedRainVeil(pointer.current.x + 90, pointer.current.y + 52, 0.9, 200);
+          triggerLightning(pointer.current.uvx, { x: pointer.current.x, y: pointer.current.y });
+          try { haptics.bloom(); } catch { /* noop */ }
+          addWeatherMark("kept storm", 1);
+          useField.getState().recordTape("sigil", 1, "clouds/ceremony");
+        }
+      },
+      scrub: (e) => {
+        lastGestureAt = performance.now();
+        const nowMs = performance.now();
+        if (nowMs - lastScrubAt < 700) return;
+        lastScrubAt = nowMs;
+        // circling spins a vapor spiral — cells strung on the turning air
+        const { x, y } = trackPointer(e.cx, e.cy);
+        const sgn = Math.sign(e.winding) || 1;
+        for (let k = 0; k < 5; k++) {
+          const a = sgn * (k / 5) * Math.PI * 2;
+          const r = 26 + k * 22;
+          seedWeatherCell(x + Math.cos(a) * r, y + Math.sin(a) * r * 0.6, "vapor", 0.44 - k * 0.05);
+        }
+        windTargetX = clamp(windTargetX + sgn * 0.18, -1, 1);
+        cloudPuffs.push({ x, y, t0: simNowMs });
+        if (cloudPuffs.length > 8) cloudPuffs.shift();
+        try { getFieldAudio().playNote(62, 160); } catch { /* noop */ }
+        try { haptics.ripple(0.35); } catch { /* noop */ }
+        addWeatherMark("spiral", 0.6);
+        useField.getState().recordTape("ripple", 0.55, "clouds/spiral");
+      },
+      rhythm: (e) => {
+        // a steady tapped pulse: the sky breathes in time with the hand
+        if (e.stability <= 0.7) return;
+        entrainBpm = Math.max(40, Math.min(120, e.bpm));
+        entrainUntil = performance.now() + 9000;
+      },
+    }, { wheelZoom: false });
+
+    // Desktop hover is the grammar's quiet dialect (hover ≈ light touch):
+    // the hovered sky thickens locally and glyphs notice a passing hand.
+    // All contact gestures live in the engine above.
+    const onHover = (e: PointerEvent) => {
+      trackPointer(e.clientX, e.clientY);
     };
-    const onCancel = (e: PointerEvent) => {
-      if (activePointerId !== null && e.pointerId !== activePointerId) return;
+    const onHoverLeave = () => {
       pointer.current.over = false;
-      clearActiveGesture(e.pointerId, false);
     };
-    const onLeave = () => {
-      if (activePointerId !== null) return;
-      pointer.current.over = false;
-      clearActiveGesture();
-    };
-    overlay.addEventListener("pointerdown", onDown);
-    overlay.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-    // iOS fires pointercancel when a touch is interrupted (e.g. by a system
-    // gesture). Without this the press state stays held forever.
-    window.addEventListener("pointercancel", onCancel);
-    overlay.addEventListener("pointerleave", onLeave);
+    overlay.addEventListener("pointermove", onHover);
+    overlay.addEventListener("pointerleave", onHoverLeave);
 
     // ── air glyphs (Minoan wind chorus across altitudes) ───────────
     // A small library of shapes; each instance is randomly assigned one
@@ -1218,7 +1330,6 @@ export default function Clouds() {
     };
 
     // ── render loop ────────────────────────────────────────────────
-    const t0 = performance.now();
     let raf = 0;
     let lastFrameMs = performance.now();
     // smoothed press strength so the cumulus dark-push doesn't snap
@@ -1227,11 +1338,18 @@ export default function Clouds() {
     const draw = (now: number) => {
       const w = overlay.clientWidth;
       const h = overlay.clientHeight;
-      const elapsed = (now - t0) / 1000;
+      const frameDt = Math.min(0.05, (now - lastFrameMs) / 1000);
+      lastFrameMs = now;
+      // three-finger time dilation: the sky's clock eases to ~1/4 speed
+      timeScale += (timeScaleTarget - timeScale) * Math.min(1, frameDt * 5);
+      simElapsed += frameDt * timeScale;
+      simNowMs += frameDt * 1000 * timeScale;
+      const elapsed = simElapsed;
       const motionElapsed = reduce ? 0 : elapsed;
       elapsedRef.v = elapsed;
-      const dt = Math.min(0.05, (now - lastFrameMs) / 1000);
-      lastFrameMs = now;
+      const dt = frameDt * timeScale;
+      // the law-wind carries the whole cloud floor with it
+      windTravel += windX * dt * 46;
       // 120s day cycle — frozen at 0.2 (midday-warm) when motion is reduced.
       // phaseOffsetRef is advanced by the sun/moon glyph click (0..1).
       const rawPhase = reduce ? 0.2 : (elapsed / 120) % 1;
@@ -1261,6 +1379,22 @@ export default function Clouds() {
       windX += (windTargetX - windX) * 0.055;
       windY += (windTargetY - windY) * 0.050;
 
+      // rhythm entrainment: while a steady tapped pulse holds, a soft
+      // vapor ring blooms on every beat with its own note — sight and
+      // sound land in the same frame.
+      if (performance.now() < entrainUntil && entrainBpm > 0) {
+        const beatLen = 60 / entrainBpm;
+        const beatIdx = Math.floor(elapsed / beatLen);
+        if (beatIdx !== lastEntrainBeat) {
+          lastEntrainBeat = beatIdx;
+          const gx = w * (0.28 + 0.44 * ((beatIdx * 0.381966) % 1));
+          const gy = h * (0.36 + 0.1 * ((beatIdx * 0.618034) % 1));
+          cloudPuffs.push({ x: gx, y: gy, t0: simNowMs });
+          if (cloudPuffs.length > 8) cloudPuffs.shift();
+          try { getFieldAudio().playNote(60 + (beatIdx % 2) * 5, 140); } catch { /* noop */ }
+        }
+      }
+
       // ── WebGL pass ──
       if (gl && glProg) {
         gl.useProgram(glProg);
@@ -1279,7 +1413,7 @@ export default function Clouds() {
         // pick the most recent active lightning for flash
         let flash = 0;
         for (const l of lightnings.current) {
-          const age = (now - l.t0) / 1000;
+          const age = (simNowMs - l.t0) / 1000;
           if (age < 0.36) {
             // sharp attack, exponential decay
             const envelope = age < 0.04 ? age / 0.04 : Math.exp(-(age - 0.04) * 9);
@@ -1308,7 +1442,8 @@ export default function Clouds() {
       drawSunShafts(octx, w, h, phase, motionElapsed, isLight);
       for (const c of cloudClusters) {
         const margin = 240 * c.scale;
-        const driftX = reduce ? 0 : ((elapsed * c.drift + c.xFrac * w) % (w + margin * 2)) - margin;
+        const raced = elapsed * c.drift + windTravel * (0.5 + c.scale * 0.4);
+        const driftX = reduce ? 0 : (((raced + c.xFrac * w) % (w + margin * 2)) + (w + margin * 2)) % (w + margin * 2) - margin;
         const x = reduce ? c.xFrac * w : driftX;
         const y = c.yFrac * h + Math.sin(elapsed * 0.18 + c.phase) * 8;
         drawCloudCluster(octx, x, y, c.scale, cloudFill, cloudRim, 0.14 * stormFade);
@@ -1316,32 +1451,32 @@ export default function Clouds() {
 
       for (let i = weatherCells.length - 1; i >= 0; i--) {
         const cell = weatherCells[i];
-        const age = (now - cell.t0) / 1000;
+        const age = (simNowMs - cell.t0) / 1000;
         const life = cell.kind === "storm" ? 72 : 58;
         if (age > life) {
           weatherCells.splice(i, 1);
           continue;
         }
-        drawWeatherCell(octx, cell, now, motionElapsed, dt, w, h, isLight);
+        drawWeatherCell(octx, cell, simNowMs, motionElapsed, dt, w, h, isLight);
       }
 
       for (let i = rainVeils.length - 1; i >= 0; i--) {
         const veil = rainVeils[i];
-        const age = (now - veil.t0) / 1000;
+        const age = (simNowMs - veil.t0) / 1000;
         if (age > 3.2) {
           rainVeils.splice(i, 1);
           continue;
         }
-        drawRainVeil(octx, veil, now, motionElapsed, isLight);
+        drawRainVeil(octx, veil, simNowMs, motionElapsed, isLight);
       }
 
       for (let i = windStrokes.length - 1; i >= 0; i--) {
         const stroke = windStrokes[i];
-        if (stroke.releasedAt && (now - stroke.releasedAt) / 1000 > 2.4) {
+        if (stroke.releasedAt && (simNowMs - stroke.releasedAt) / 1000 > 2.4) {
           windStrokes.splice(i, 1);
           continue;
         }
-        drawWindStroke(octx, stroke, now, isLight);
+        drawWindStroke(octx, stroke, simNowMs, isLight);
       }
 
       const crystalColor = isLight ? "rgba(237, 249, 255, 0.42)" : "rgba(184, 219, 255, 0.34)";
@@ -1376,8 +1511,8 @@ export default function Clouds() {
       // fainter during storm phase
       for (const g of glyphs) {
         if (!reduce) {
-          // drift
-          g.x += g.vx * dt;
+          // drift — racing with the law-wind when three fingers push it
+          g.x += (g.vx + windX * 60) * dt;
           // wrap with margin so wide glyphs don't pop in/out
           const margin = g.size * 2 + 8;
           if (g.x > w + margin) g.x = -margin;
@@ -1437,7 +1572,7 @@ export default function Clouds() {
       if (cloudPuffs.length > 0) {
         for (let i = cloudPuffs.length - 1; i >= 0; i--) {
           const p = cloudPuffs[i];
-          const age = (now - p.t0) / 1000;
+          const age = (simNowMs - p.t0) / 1000;
           if (age > 1.2) { cloudPuffs.splice(i, 1); continue; }
           const t01 = age / 1.2;
           const r = 24 + Math.sin(t01 * Math.PI) * 90;
@@ -1459,7 +1594,7 @@ export default function Clouds() {
       // lightning bolts
       for (let i = lightnings.current.length - 1; i >= 0; i--) {
         const l = lightnings.current[i];
-        const age = (now - l.t0) / 1000;
+        const age = (simNowMs - l.t0) / 1000;
         if (age > 0.6) {
           lightnings.current.splice(i, 1);
           continue;
@@ -1494,6 +1629,34 @@ export default function Clouds() {
         octx.restore();
       }
 
+      // glimmer (grammar §6): after ~20s of quiet, a faint spiral of air
+      // turns where a circling finger would spin it — a physical hint,
+      // never text.
+      if (performance.now() - lastGestureAt > 20000) {
+        const slot = Math.floor(now / 9000);
+        const gseed = (n: number) => { const v = Math.sin((slot + n) * 127.1) * 43758.5453; return v - Math.floor(v); };
+        const gx = (0.24 + gseed(0) * 0.52) * w;
+        const gy = h * (0.3 + gseed(7) * 0.3);
+        const pulse = reduce ? 0.5 : 0.5 + Math.sin(now / 480) * 0.5;
+        octx.save();
+        octx.strokeStyle = isLight
+          ? `rgba(17, 29, 42, ${(0.04 + pulse * 0.06).toFixed(3)})`
+          : `rgba(202, 225, 255, ${(0.05 + pulse * 0.08).toFixed(3)})`;
+        octx.lineWidth = 1;
+        octx.beginPath();
+        const turns = Math.PI * 2.6;
+        for (let i = 0; i <= 40; i++) {
+          const th = (i / 40) * turns + (reduce ? 0 : now / 2400);
+          const rr = 3 + (i / 40) * (16 + pulse * 8);
+          const px = gx + Math.cos(th) * rr;
+          const py = gy + Math.sin(th) * rr * 0.7;
+          if (i === 0) octx.moveTo(px, py);
+          else octx.lineTo(px, py);
+        }
+        octx.stroke();
+        octx.restore();
+      }
+
       raf = requestAnimationFrame(draw);
     };
     raf = requestAnimationFrame(draw);
@@ -1501,11 +1664,9 @@ export default function Clouds() {
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
-      overlay.removeEventListener("pointerdown", onDown);
-      overlay.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("pointercancel", onCancel);
-      overlay.removeEventListener("pointerleave", onLeave);
+      detachGestures();
+      overlay.removeEventListener("pointermove", onHover);
+      overlay.removeEventListener("pointerleave", onHoverLeave);
     };
     // We intentionally keep this effect dependency-free — the loop reads live
     // refs and only the banner color depends on phaseLight, which is set from
