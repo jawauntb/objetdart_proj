@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import SiteHeader from "@/components/SiteHeader";
+import ScaleTravel from "@/components/ScaleTravel";
 import Waves from "@/components/Waves";
 
 export default function WavesPage() {
@@ -14,6 +15,7 @@ export default function WavesPage() {
       <main>
         <Waves />
       </main>
+      <ScaleTravel route="/waves" />
     </>
   );
 }

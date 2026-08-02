@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import SiteHeader from "@/components/SiteHeader";
+import ScaleTravel from "@/components/ScaleTravel";
 import Earth from "@/components/Earth";
 
 export default function EarthPage() {
@@ -16,6 +17,7 @@ export default function EarthPage() {
       <main>
         <Earth />
       </main>
+      <ScaleTravel route="/earth" />
     </>
   );
 }

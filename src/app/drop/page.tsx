@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import dynamic from "next/dynamic";
 import SiteHeader from "@/components/SiteHeader";
+import ScaleTravel from "@/components/ScaleTravel";
 import { getFieldAudio } from "@/lib/audio";
 
 const DropSphere = dynamic(() => import("@/components/DropSphere"), { ssr: false });
@@ -16,6 +17,7 @@ export default function DropPage() {
     <>
       <SiteHeader />
       <DropSphere />
+      <ScaleTravel route="/drop" />
     </>
   );
 }

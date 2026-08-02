@@ -76,8 +76,11 @@ translated into **exactly the channels the device has**, and nothing else:
 - **State is felt, not parsed.** Everything before the reading should be experienced
   through the body; text is the payoff, never the interface. If a feature needs
   instructions, the feature is wrong.
-- **The gesture grammar is small and universal**: tap, press-duration, tap-intensity,
-  drag, pinch, twist, shake, tilt. Every room interprets the same grammar in its own
+- **The gesture grammar is exhaustive and universal** (`docs/gesture-grammar.md`): the
+  full input space of the device — chords, pressure, contact area, rhythm, winding,
+  motion, breath — each dimension given one consistent meaning. The structural key:
+  finger count addresses the stack (one finger the material, two the frame, three the
+  law; the device is the vessel). Every room interprets the same grammar in its own
   register. No room invents a control a hand cannot discover in ten seconds of play.
 - **Every meaningful state change should be simultaneously visible, audible, and — where
   hardware allows — tangible.** The compass drag renders in the same frame as its tone.
@@ -181,8 +184,11 @@ Before shipping a new route or a major mechanic, check:
       you, in principle, map back?
 - [ ] Is it alive — does it breathe/tide/grow on the shared clocks, and does something in
       it adapt below the top layer?
-- [ ] Is every interaction inside the gesture grammar, discoverable in ten seconds,
-      instruction-free?
+- [ ] Is every interaction inside the gesture grammar (`docs/gesture-grammar.md`),
+      mounted through `lib/gesture` (not private pointer wiring), honoring the global
+      bindings, discoverable in ten seconds, instruction-free?
+- [ ] Does the room have a scale address (`lib/scale.ts` — where does it live on the
+      quark→manifold axis, and what register does it sound in)?
 - [ ] Does state land in at least two senses in the same frame (sight + sound, sound +
       haptic)?
 - [ ] Is generation deterministic from a small vector?
