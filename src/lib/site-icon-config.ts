@@ -12,6 +12,7 @@ export type SiteIconKey =
   | "clouds"
   | "coin"
   | "colophon"
+  | "comb"
   | "compare"
   | "earth"
   | "fire"
@@ -213,6 +214,19 @@ export const SITE_ICON_VISUALS = {
     accent: "#f8d879",
     accent2: "#3d7ba7",
     ink: "#fff2bf",
+  },
+  comb: {
+    title: "Comb",
+    description: "comb the light — the cowlick stays",
+    path: "/comb",
+    shortName: "comb",
+    kind: "stars",
+    bg: "#f4ecdd",
+    bg2: "#e2cfae",
+    glow: "#e7b878",
+    accent: "#8fb7e8",
+    accent2: "#8a6ab8",
+    ink: "#4a3a27",
   },
   colophon: {
     title: "Colophon",
