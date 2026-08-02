@@ -60,6 +60,7 @@ type Stroke = {
 
 type Particle = {
   x: number; y: number;
+  lx: number; ly: number;    // last drawn position (world)
   gi: number; ci: number;    // tail sprite group / index
   sz: number;
   sp: number;
@@ -370,8 +371,9 @@ export default function Comb() {
     // blooms repaint onto a persisted canvas every frame, so their per-frame
     // alpha must stay well under the wash fade or they saturate to white
     const bloomPos = makeDot(256, [
-      [0, "rgba(255,252,240,0.05)"],
-      [0.4, "rgba(255,244,220,0.018)"],
+      [0, "rgba(255,253,244,0.045)"],
+      [0.12, "rgba(255,250,236,0.028)"],
+      [0.38, "rgba(255,244,220,0.01)"],
       [1, "rgba(255,244,220,0)"],
     ]);
     const bloomNeg = makeDot(256, [
@@ -409,7 +411,8 @@ export default function Comb() {
     // radiating (source) and orbiting (vortex); the winding term is what
     // makes the center a true topological defect.
     const fieldAngle = (px: number, py: number): number => {
-      const chi = 0.55 + 0.85 * Math.sin(simT * 0.09 + 1.3) + 0.3 * Math.sin(simT * 0.023);
+      // biased toward radiating outward — a sun first, a whirlpool sometimes
+      const chi = 0.3 + 0.55 * Math.sin(simT * 0.09 + 1.3) + 0.25 * Math.sin(simT * 0.023);
       let sum = th0 + chi;
       for (let i = 0; i < defects.length; i++) {
         const d = defects[i];
@@ -436,11 +439,34 @@ export default function Comb() {
 
     // ── particles ────────────────────────────────────────────────────────
     const groupWeights = (): [number, number, number] => {
-      const a = 0.6 + 0.3 * Math.sin(simT * 0.017);
-      const b = 0.3 + 0.24 * Math.sin(simT * 0.013 + 2.1);
-      const v = 0.22 + 0.2 * Math.sin(simT * 0.011 + 4.2);
+      const a = 0.55 + 0.45 * Math.sin(simT * 0.021);
+      const b = 0.3 + 0.28 * Math.sin(simT * 0.017 + 2.1);
+      const v = 0.22 + 0.21 * Math.sin(simT * 0.013 + 4.2);
       const t = a + b + v;
       return [a / t, b / t, v / t];
+    };
+
+    // the slow weather the whole page moves through: cream noon, peach
+    // afternoon, mauve dusk, amber evening — streaks and wash shift together
+    const WEATHER: Array<{ r: number; g: number; b: number }> = [
+      { r: 222, g: 184, b: 154 },  // peach
+      { r: 174, g: 156, b: 188 },  // mauve dusk
+      { r: 214, g: 188, b: 140 },  // amber
+      { r: 156, g: 168, b: 194 },  // blue hour
+    ];
+    const weatherTint = (): { r: number; g: number; b: number; amt: number } => {
+      const phase = simT * 0.014;
+      const idx = ((Math.floor(phase) % WEATHER.length) + WEATHER.length) % WEATHER.length;
+      const next = (idx + 1) % WEATHER.length;
+      const f = phase - Math.floor(phase);
+      const sm = f * f * (3 - 2 * f);
+      const a = WEATHER[idx], b = WEATHER[next];
+      return {
+        r: mix(a.r, b.r, sm),
+        g: mix(a.g, b.g, sm),
+        b: mix(a.b, b.b, sm),
+        amt: 0.5 + 0.28 * Math.sin(simT * 0.019 + 1.1),
+      };
     };
 
     const respawn = (p: Particle) => {
@@ -460,9 +486,13 @@ export default function Comb() {
       p.gi = roll < wa ? 0 : roll < wa + wb ? 1 : 2;
       p.ci = (Math.random() * TAIL_GROUPS[p.gi].length) | 0;
       p.sz = 0.7 + Math.random() * 0.8;
-      p.sp = 0.1 + Math.random() * 0.13;
+      // fast and short-lived: each streak dies before the field can bend it,
+      // so the hairs read as straight vectors, the way iron filings would
+      p.sp = 0.24 + Math.random() * 0.22;
       p.age = 0;
-      p.life = 6 + Math.random() * 9;
+      p.life = 1.4 + Math.random() * 2.2;
+      p.lx = p.x;
+      p.ly = p.y;
       p.skip = true;
     };
 
@@ -475,7 +505,7 @@ export default function Comb() {
     const syncParticles = () => {
       const n = targetCount();
       while (particles.length < n) {
-        const p: Particle = { x: 0, y: 0, gi: 0, ci: 0, sz: 1, sp: 0.15, age: 0, life: 8, skip: true };
+        const p: Particle = { x: 0, y: 0, lx: 0, ly: 0, gi: 0, ci: 0, sz: 1, sp: 0.15, age: 0, life: 8, skip: true };
         respawn(p);
         p.age = Math.random() * p.life;
         particles.push(p);
@@ -486,7 +516,7 @@ export default function Comb() {
     // ── defect management ────────────────────────────────────────────────
     const spawnDefect = (q: 1 | -1, x: number, y: number, smax = 1) => {
       const alive = defects.filter((d) => !d.dying);
-      if (alive.length >= 8) {
+      if (alive.length >= 6) {
         const oldest = alive.filter((d) => !d.grabbed).sort((a, b) => a.born - b.born)[0];
         if (oldest) oldest.dying = true;
       }
@@ -851,12 +881,16 @@ export default function Comb() {
       // ── paint: persistence wash, then heads over their own trails ──────
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.globalCompositeOperation = "source-over";
-      const tintA = 0.5 + 0.5 * Math.sin(simT * 0.021);
-      const tintB = 0.5 + 0.5 * Math.sin(simT * 0.033 + 2.4);
+      const tint = weatherTint();
+      const inner = {
+        r: Math.round(mix(CREAM.r, tint.r, tint.amt * 0.45)),
+        g: Math.round(mix(CREAM.g, tint.g, tint.amt * 0.45)),
+        b: Math.round(mix(CREAM.b, tint.b, tint.amt * 0.45)),
+      };
       const edge = {
-        r: Math.round(mix(mix(232, 214, tintA * 0.5), 226, tintB * 0.3)),
-        g: Math.round(mix(mix(220, 208, tintA * 0.5), 206, tintB * 0.4)),
-        b: Math.round(mix(mix(196, 214, tintA), 186, tintB * 0.3)),
+        r: Math.round(mix(CREAM.r, tint.r, tint.amt)),
+        g: Math.round(mix(CREAM.g, tint.g, tint.amt)),
+        b: Math.round(mix(CREAM.b, tint.b, tint.amt)),
       };
       const wash = ctx.createRadialGradient(
         w / 2 + Math.sin(simT * 0.05) * w * 0.08,
@@ -864,9 +898,9 @@ export default function Comb() {
         Math.min(w, h) * 0.1,
         w / 2, h / 2, Math.hypot(w, h) * 0.62,
       );
-      wash.addColorStop(0, `rgb(${CREAM.r},${CREAM.g},${CREAM.b})`);
+      wash.addColorStop(0, `rgb(${inner.r},${inner.g},${inner.b})`);
       wash.addColorStop(1, `rgb(${edge.r},${edge.g},${edge.b})`);
-      ctx.globalAlpha = reduced ? 0.13 : 0.07;
+      ctx.globalAlpha = reduced ? 0.13 : 0.085;
       ctx.fillStyle = wash;
       ctx.fillRect(0, 0, w, h);
       ctx.globalAlpha = 1;
@@ -875,7 +909,7 @@ export default function Comb() {
       for (const d of defects) {
         const sx = toScreenX(d.x), sy = toScreenY(d.y);
         const breathe = 1 + 0.12 * Math.sin(simT * 1.7 + d.born * 3);
-        const rad = u * 0.34 * zoom * d.s * breathe;
+        const rad = u * 0.24 * zoom * d.s * breathe;
         if (d.q > 0) {
           ctx.globalCompositeOperation = "lighter";
           ctx.drawImage(bloomPos, sx - rad, sy - rad, rad * 2, rad * 2);
@@ -928,26 +962,43 @@ export default function Comb() {
         }
         const ang = fieldAngle(p.x, p.y);
         const boost = 1 + (pointers.size > 0 ? 0.15 : 0);
-        p.x += (Math.cos(ang) * p.sp * boost * speedScale + g.x * 0.05) * dt * 1.6;
-        p.y += (Math.sin(ang) * p.sp * boost * speedScale + g.y * 0.05) * dt * 1.6;
+        p.x += (Math.cos(ang) * p.sp * boost * speedScale + g.x * 0.05) * dt * 2.2;
+        p.y += (Math.sin(ang) * p.sp * boost * speedScale + g.y * 0.05) * dt * 2.2;
 
-        const sx = toScreenX(p.x), sy = toScreenY(p.y);
-        if (p.skip) { p.skip = false; continue; }
-        const fade = Math.min(1, p.age * 2, (p.life - p.age) * 1.5);
-        const size = p.sz * (2.1 + zoom * 0.7);
-
-        // dark tail dot persists into a comet streak…
-        ctx.globalCompositeOperation = "source-over";
-        ctx.globalAlpha = 0.6 * fade;
+        if (p.skip) { p.skip = false; p.lx = p.x; p.ly = p.y; continue; }
+        const fade = Math.min(1, p.age * 6, (p.life - p.age) * 2);
+        // near a sun the dashes are tiny and white-hot; out at the rim they
+        // grow fatter and darker — the moving-sun look
+        let rC = 1.3;
+        for (const d of defects) {
+          if (d.q > 0 && !d.dying) rC = Math.min(rC, Math.hypot(p.x - d.x, p.y - d.y));
+        }
+        rC = clamp(rC, 0, 1.3);
+        const size = p.sz * (1.0 + rC * 1.5) * (0.8 + zoom * 0.4);
         const tail = tails[p.gi][p.ci];
         const ts = size * 3.1;
-        ctx.drawImage(tail, sx - ts / 2, sy - ts / 2, ts, ts);
+        const hs = size * 2.0;
+        const tailA = (0.45 + 0.35 * rC) * fade;
+        const headA = (0.95 - 0.35 * rC) * fade;
 
-        // …and the bright head leads it
-        ctx.globalCompositeOperation = "lighter";
-        ctx.globalAlpha = 0.6 * fade;
-        const hs = size * 2.3;
-        ctx.drawImage(head, sx - hs / 2, sy - hs / 2, hs, hs);
+        // stamp continuously along the motion segment so the streak stays a
+        // solid tapered dash at any frame rate instead of beading into pearls
+        const sx0 = toScreenX(p.lx), sy0 = toScreenY(p.ly);
+        const sx1 = toScreenX(p.x), sy1 = toScreenY(p.y);
+        const span = Math.hypot(sx1 - sx0, sy1 - sy0);
+        const steps = Math.min(8, Math.max(1, Math.ceil(span / 3)));
+        for (let k = 1; k <= steps; k++) {
+          const t = k / steps;
+          const sx = mix(sx0, sx1, t), sy = mix(sy0, sy1, t);
+          ctx.globalCompositeOperation = "source-over";
+          ctx.globalAlpha = tailA;
+          ctx.drawImage(tail, sx - ts / 2, sy - ts / 2, ts, ts);
+          ctx.globalCompositeOperation = "lighter";
+          ctx.globalAlpha = k === steps ? headA : headA * 0.55;
+          ctx.drawImage(head, sx - hs / 2, sy - hs / 2, hs, hs);
+        }
+        p.lx = p.x;
+        p.ly = p.y;
       }
       ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = "source-over";
