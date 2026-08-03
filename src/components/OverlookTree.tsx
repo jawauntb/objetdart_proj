@@ -4,13 +4,13 @@
  * /overlook — the whole tree kept in one glance (plan W8).
  *
  * The album's trunk and branches as one navigable, touchable view: the
- * scale axis drawn as a living tree — quarks at the roots, the fold at the
+ * scale axis drawn as a living tree — the quanta at the roots, the fold at the
  * crown — with every band a living miniature in its own material idiom
  * (seething pairs, breathing shells, a dividing cell, a blooming flower,
  * a slow galaxy wheel...). Nothing here is hardcoded: the tree derives
  * structurally from the live travel graph (src/lib/overlook-tree.ts), so
  * a cosmology change in lib/scale.ts redraws the overlook for free —
- * trunk = the canonical chain walked up from the quarks; branches sprout
+ * trunk = the canonical chain walked up from the quanta; branches sprout
  * exactly where fork doors exist (flowers off the earth, the ground off
  * the atlas, beyond off the fold).
  *
@@ -180,6 +180,38 @@ function drawVignette(
   const g = GEOM.get(id);
   if (!g) return;
   switch (id) {
+    case "quanta": {
+      // the field floor: one photon crossing forever, one heavy ripple dying
+      const ang = t * 0.35;
+      const px2 = Math.cos(ang) * r * 0.55;
+      const py2 = Math.sin(ang) * r * 0.4;
+      ctx.strokeStyle = "rgba(242, 197, 107, 0.8)";
+      ctx.lineWidth = 0.9;
+      ctx.beginPath();
+      for (let i = -10; i <= 10; i += 2) {
+        const yy = Math.sin(i * 0.8 + t * 5) * 2.4;
+        if (i === -10) ctx.moveTo(px2 + i, py2 + yy);
+        else ctx.lineTo(px2 + i, py2 + yy);
+      }
+      ctx.stroke();
+      // a massive excitation blooms and is gone — mass buys only a moment
+      const ph = (t * 0.55) % 1;
+      const die = Math.sin(ph * Math.PI);
+      ctx.fillStyle = `rgba(156, 61, 51, ${0.55 * die})`;
+      ctx.beginPath();
+      ctx.arc(-r * 0.3, r * 0.25, 1.6 + die * 2.6, 0, Math.PI * 2);
+      ctx.fill();
+      // a neutrino whisper straight through
+      const nu = ((t * 0.22) % 1) * 2 - 1;
+      ctx.strokeStyle = "rgba(124, 139, 147, 0.3)";
+      ctx.setLineDash([1.5, 4]);
+      ctx.beginPath();
+      ctx.moveTo(nu * r - 8, -r * 0.5 + nu * r * 0.3);
+      ctx.lineTo(nu * r + 8, -r * 0.5 + nu * r * 0.3 + 4);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      break;
+    }
     case "quarks": {
       // seething virtual pairs: born together, gone together
       for (let i = 0; i < g.pairs.length; i += 3) {

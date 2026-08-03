@@ -84,6 +84,7 @@ const expectedKeys = [
   "atoms",
   "nucleons",
   "quarks",
+  "quanta",
   "fire",
   "earth",
   "growth",

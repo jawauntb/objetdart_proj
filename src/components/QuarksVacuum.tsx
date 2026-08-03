@@ -1,9 +1,10 @@
 "use client";
 
 /**
- * /quarks — the floor of the scale axis at 10⁻¹⁸ m, the math band of the
+ * /quarks — the confinement band at 10⁻¹⁸ m, the math band of the
  * manifold (plan W6). The strangest and quietest room on the site: there
- * are no things left down here, only relations.
+ * are no things left down here, only relations — and below it, the quanta,
+ * where even the relations dissolve into fields.
  *
  * The vacuum is never empty — virtual pairs spark into being and
  * annihilate on a deterministic seeded schedule riding the shared audio
@@ -25,8 +26,8 @@
  * rotates the lens to the bare mathematics — the Feynman view: vertices,
  * coiled gluon propagators, virtual pairs as closed loops, photons as
  * waving lines. The field persists in `objetdart:quarks:v1`. Pinch is
- * deliberately unbound — ScaleTravel owns it (nucleons above; below is the
- * floor of the axis, and the integrator holds it).
+ * deliberately unbound — ScaleTravel owns it (nucleons above; the quanta
+ * below).
  */
 
 import { useEffect, useRef, useState } from "react";

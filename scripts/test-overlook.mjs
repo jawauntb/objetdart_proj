@@ -38,7 +38,7 @@ const tree = deriveTree(SCALE_BANDS, liveNeighbor);
 const byId = new Map(tree.nodes.map((n) => [n.id, n]));
 
 // — the trunk is a single chain from quarks to the manifold, no repeats —
-assert.equal(tree.trunk[0], "quarks", "the trunk rises from the quarks");
+assert.equal(tree.trunk[0], "quanta", "the trunk rises from the quantum fields");
 assert.equal(tree.trunk[tree.trunk.length - 1], "manifold", "the trunk ends at the fold");
 assert.equal(new Set(tree.trunk).size, tree.trunk.length, "the trunk never revisits a band");
 for (let i = 1; i < tree.trunk.length; i++) {
@@ -115,10 +115,11 @@ assert.equal(
 
 // — the live cosmology's known shape holds (a moved door would move these) —
 // The life ladder is one unbroken stretch of trunk: part-of and smaller-than
-// agree the whole way from the quarks to the petal, so every rung must be
+// agree the whole way from the quanta to the petal, so every rung must be
 // consecutive. A band inserted at the wrong index, a lost override, or a door
 // that skips a rung all break this line and nothing else in the suite.
 const LADDER = [
+  "quanta",
   "quarks",
   "nucleons",
   "atoms",

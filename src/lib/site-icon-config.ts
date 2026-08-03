@@ -35,6 +35,7 @@ export type SiteIconKey =
   | "plasma"
   | "pretext"
   | "pulse"
+  | "quanta"
   | "quarks"
   | "reading"
   | "relativity"
@@ -536,6 +537,19 @@ export const SITE_ICON_VISUALS = {
     glow: "#e7ac52",
     accent: "#f2c56b",
     accent2: "#4e7d8c",
+    ink: "#ffedc9",
+  },
+  quanta: {
+    title: "Quanta",
+    description: "mass buys only a moment",
+    path: "/quanta",
+    shortName: "quanta",
+    kind: "plasma",
+    bg: "#040406",
+    bg2: "#141019",
+    glow: "#e7ac52",
+    accent: "#f2c56b",
+    accent2: "#6997a4",
     ink: "#ffedc9",
   },
   quarks: {

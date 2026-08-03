@@ -70,7 +70,7 @@ export const GUIDE_FIRST_MINUTE: GuideStep[] = [
   {
     title: "walk the axis",
     body:
-      "the rooms are moored along one line from quarks to the spacetime manifold. pinch to zoom inside a room; hold the pinch through the resistance at the edge and you travel to the neighboring band, a haptic tick at the door.",
+      "the rooms are moored along one line from the quantum fields to the spacetime manifold. pinch to zoom inside a room; hold the pinch through the resistance at the edge and you travel to the neighboring band, a haptic tick at the door.",
   },
   {
     title: "hand it the vessel",
@@ -491,7 +491,7 @@ export const GUIDE_ROOMS: GuideRoom[] = [
   {
     key: "quarks",
     title: "nothing here can be alone",
-    scale: "quarks — the floor of the whole axis",
+    scale: "the quarks band — between the quanta and nucleons",
     href: "/quarks",
     essence: "a vacuum that is never empty — color-neutral hadrons held by gluon flux tubes, sitting in a seeded sea of virtual pairs.",
     moves: [
@@ -506,6 +506,30 @@ export const GUIDE_ROOMS: GuideRoom[] = [
       "you can never isolate a single quark: pulling one free only ever creates a new pair at the break",
     ],
     keeps: "the hadrons you've bound",
+  },
+  {
+    key: "quanta",
+    title: "mass buys only a moment",
+    scale: "the quanta — the floor of the whole axis",
+    href: "/quanta",
+    essence: "the field floor: every particle a ripple, and one great law — lifetime and reach are inverse to mass. photons cross forever sounding e = hf; the heavy bosons die within a fingertip's breadth.",
+    moves: [
+      "hold on open field → deposits energy that climbs the mass ladder; a short hold excites a photon, the dwell tier a matter–antimatter pair, the ceremony at full charge births a higgs",
+      "tap a photon → it chirps its own pitch, literally e = hf in the audible register",
+      "flick a photon → light cannot be hurried, only redirected — the note doppler-bends instead",
+      "flick or drag a charged lepton → the ghosts and the light pass under your finger; only mass can be carried",
+      "hold an unstable excitation to the ceremony tier → it decays now, the whole conservation-exact chain cascading down the ladder",
+      "scrub → stirs a gluon out of the vacuum: massless yet leashed, dressing itself in cycling color until the field takes it back",
+      "three-finger drag → the collision wind; wind it up far enough and it pair-produces — the w pair costs more than a higgs, and only the beam can afford one",
+      "three-finger hold → dilates time, and the heavy bosons visibly live longer — the collider's own trick",
+      "twist → raises the bare-field lens: the feynman view, world lines and coils and wavy lines, the one lettered surface",
+    ],
+    finds: [
+      "neutrinos stream through everything and answer a tap about one time in eight — the ghost is real",
+      "cosmic muons rain in on their own seeded schedule and die into electrons mid-flight",
+      "tilt leans only the massive: light and neutrinos ignore gravity entirely",
+    ],
+    keeps: "the stable residue — the electrons, photons, and neutrinos still crossing",
   },
   {
     key: "fire",
@@ -860,7 +884,7 @@ export const GUIDE_ROOMS: GuideRoom[] = [
     key: "overlook",
     title: "the whole tree kept in one glance",
     href: "/overlook",
-    essence: "the entire scale axis drawn as a living tree, quarks at the root and the fold at the crown, derived structurally from the site's own travel graph.",
+    essence: "the entire scale axis drawn as a living tree, the quanta at the root and the fold at the crown, derived structurally from the site's own travel graph.",
     moves: [
       "tap a node → chimes at that band's register; tap open air → the tree leans gently",
       "pinch → zooms the whole view (the one room where pinch is a camera, not travel)",
@@ -929,7 +953,7 @@ export const GUIDE_WORKSHOP: GuideWorkshopPart[] = [
   {
     title: "the scale manifold",
     paragraphs: [
-      "the album mounts one logarithmic axis from 10⁻¹⁹ meters to the spacetime manifold: quarks, nucleons, atoms, molecules, cells, a drop, flowers, the coast, the atlas, the earth, the stars, beyond, the manifold. within a band, pinch zooms freely and rubber-bands at the walls; crossing a wall takes sustained intent — hold the pinch through the resistance and a haptic detent marks the door. the focused object of one band becomes the container of the next, so it stays one world. scale also chooses the sound: sub-bass and minute-long lfos at the cosmic end, mids at human scale, granular shimmer among the atoms — zooming is a glissando on the site's one instrument.",
+      "the album mounts one logarithmic axis from 10⁻²² meters to the spacetime manifold: the quanta, quarks, nucleons, atoms, molecules, cells, a drop, flowers, the coast, the atlas, the earth, the stars, beyond, the manifold. within a band, pinch zooms freely and rubber-bands at the walls; crossing a wall takes sustained intent — hold the pinch through the resistance and a haptic detent marks the door. the focused object of one band becomes the container of the next, so it stays one world. scale also chooses the sound: sub-bass and minute-long lfos at the cosmic end, mids at human scale, granular shimmer among the atoms — zooming is a glissando on the site's one instrument.",
     ],
   },
   {

@@ -58,7 +58,8 @@ assert.equal(SCALE_BANDS[0].sMin, SCALE_MIN);
 assert.equal(SCALE_BANDS[SCALE_BANDS.length - 1].sMax, SCALE_MAX);
 
 // — bandAt respects half-open spans and clamps —
-assert.equal(bandAt(-19).id, "quarks");
+assert.equal(bandAt(-20).id, "quanta");
+assert.equal(bandAt(-19).id, "quarks", "boundary belongs to the upper band");
 assert.equal(bandAt(-14).id, "atoms", "boundary belongs to the upper band");
 assert.equal(bandAt(2).id, "birds");
 assert.equal(bandAt(2.8).id, "coast");
@@ -66,7 +67,7 @@ assert.equal(bandAt(-8.5).id, "organics");
 assert.equal(bandAt(-5).id, "cells");
 assert.equal(bandAt(20).id, "space");
 assert.equal(bandAt(999).id, "manifold");
-assert.equal(bandAt(-999).id, "quarks");
+assert.equal(bandAt(-999).id, "quanta");
 
 // — bandBlend: pure in the interior, symmetric crossfade near a wall —
 const mid = bandBlend(5.5);
