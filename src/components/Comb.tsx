@@ -989,7 +989,7 @@ export default function Comb() {
       const rawDt = clamp((now - last) / 1000, 0.001, 0.05);
       last = now;
       if (asleep) return;
-      const detail = detailForTier(tier);
+      void tier; // consumed by targetCount()/resize() via gov.tier(), not per-frame here
       const reduced = reduceRef.current;
       night += (nightTarget - night) * Math.min(1, rawDt * 0.8);
       const speedScale = (reduced ? 0.35 : 1) * (1 - night * 0.7);

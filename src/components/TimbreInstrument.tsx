@@ -672,8 +672,53 @@ export default function TimbreInstrument() {
             linear-gradient(180deg, rgba(255,255,255,0.06), transparent 20%, rgba(0,0,0,0.5) 100%),
             linear-gradient(90deg, #8e2318 0%, #d83a2e 10.2%, #f08a28 30.4%, #f5d65b 39.1%, #4fca75 51.1%, #45b8e8 64.1%, #5574f7 75.1%, #9a63ee 90.6%, #7a43d8 100%);
           background-blend-mode: normal, normal, normal;
+          background-size: 100% 100%, 100% 100%, calc(100% * var(--timbre-zoom, 1)) 100%;
+          background-position: 0 0, 0 0, calc(50% - var(--timbre-pan, 0) * 100%) 0;
           box-shadow: inset 0 0 160px rgba(0,0,0,0.66);
           filter: saturate(0.72) brightness(0.82);
+        }
+        .timbre-night-veil {
+          position: absolute;
+          inset: 0;
+          background: #020302;
+          opacity: var(--timbre-night, 0);
+          transition: opacity 900ms ease;
+          pointer-events: none;
+          z-index: 1;
+        }
+        .timbre-charge {
+          position: absolute;
+          margin-left: -30px;
+          margin-top: -30px;
+          border-radius: 50%;
+          border: 1.5px solid rgba(255, 230, 190, 0.9);
+          pointer-events: none;
+          z-index: 6;
+        }
+        .timbre-charge--delete {
+          border-color: rgba(255, 120, 100, 0.9);
+        }
+        .timbre-kept-mark {
+          position: absolute;
+          width: 10px;
+          height: 10px;
+          margin-left: -5px;
+          margin-top: -5px;
+          border: 1px solid currentColor;
+          border-radius: 50%;
+          opacity: 0.7;
+          pointer-events: none;
+          z-index: 2;
+        }
+        @keyframes timbreGlimmerBands {
+          0%, 100% { opacity: 0.44; }
+          50% { opacity: 0.92; }
+        }
+        .timbre-plate.is-glimmering .timbre-bands span {
+          animation: timbreGlimmerBands 1.8s ease;
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .timbre-plate.is-glimmering .timbre-bands span { animation: none; }
         }
         .timbre-plate:after {
           content: "";
@@ -735,7 +780,7 @@ export default function TimbreInstrument() {
         .timbre-finger.is-ghost {
           border-style: dashed;
           opacity: 0.8;
-          animation: timbreGhost 900ms ease-in-out infinite;
+          animation: timbreGhost calc(900ms * var(--timbre-time-scale, 1)) ease-in-out infinite;
         }
         @keyframes timbreGhost {
           0%, 100% { transform: translate(-50%, -50%) scale(0.96); opacity: 0.64; }

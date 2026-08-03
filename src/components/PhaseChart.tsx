@@ -2,6 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
+import { attachGestures } from "@/lib/gesture";
+import { onVessel } from "@/lib/vessel";
+import { onVisibility, resolveDpr } from "@/lib/room-runtime";
+import * as haptics from "@/lib/haptics";
 
 /**
  * PhaseChart — per-phase candlestick whose SHAPE is the phenomenology.
@@ -289,6 +293,10 @@ export default function PhaseChart({
   const dragRef = useRef<{ active: boolean; lastIdx: number; lastAt: number }>({
     active: false, lastIdx: -1, lastAt: 0,
   });
+  // twist(2) rotates the lens: candles ↔ a smoothed line — the same close
+  // series read at a different level of description.
+  const chartModeRef = useRef<0 | 1>(0);
+  const lensTwistAccRef = useRef(0);
 
   // Hovered candle drives both the canvas highlight (re-draw) and the
   // tooltip in the DOM overlay.
@@ -347,7 +355,7 @@ export default function PhaseChart({
     };
 
     const resize = () => {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = resolveDpr("high", { reducedMotion: reduce });
       const w = canvas.clientWidth;
       const h = canvas.clientHeight;
       canvas.width = Math.max(1, Math.floor(w * dpr));
@@ -437,18 +445,24 @@ export default function PhaseChart({
       currentHover = h;
       // Re-draw assuming the cascade is already complete; on initial
       // mount before scroll-in this just means everything's still at 0.
-      drawAt(currentProgress);
+      drawAt(progressBuf);
     };
 
-    // Keep the most recent progress so the hover re-draw above can
-    // reuse it. Updated by the cascade tick.
-    let currentProgress: number[] = new Array<number>(CANDLE_COUNT).fill(0);
+    // Keep the most recent progress so the hover re-draw above can reuse
+    // it. Allocated once and mutated in place — SPEC forbids allocation
+    // inside the RAF loop, and this cascade used to allocate a fresh
+    // array every tick.
+    const progressBuf: number[] = new Array<number>(CANDLE_COUNT).fill(0);
+
+    // no cascade drawing while the tab/frame is hidden.
+    let sleeping = document.hidden;
+    const offVisibility = onVisibility((hidden) => { sleeping = hidden; });
 
     if (reduce) {
       // Static, fully drawn — no cascade.
-      currentProgress = new Array<number>(CANDLE_COUNT).fill(1);
-      drawAt(currentProgress);
-      return () => ro.disconnect();
+      progressBuf.fill(1);
+      drawAt(progressBuf);
+      return () => { ro.disconnect(); offVisibility(); };
     }
 
     // IntersectionObserver: when the canvas crosses threshold 0.3,
@@ -458,26 +472,25 @@ export default function PhaseChart({
     let startTime = 0;
 
     const tick = (now: number) => {
+      if (sleeping) { raf = requestAnimationFrame(tick); return; }
       if (!startTime) startTime = now;
       const elapsed = now - startTime;
       const overall = Math.min(1, elapsed / DRAW_IN_MS);
       // Stagger: each candle gets a small window inside [0,1].
-      const progress: number[] = new Array(CANDLE_COUNT);
       for (let i = 0; i < CANDLE_COUNT; i++) {
         const start = i / (CANDLE_COUNT + 4);
         const end = start + 4 / (CANDLE_COUNT + 4);
         const local = (overall - start) / (end - start);
-        progress[i] = local <= 0 ? 0 : local >= 1 ? 1 : easeOut(local);
+        progressBuf[i] = local <= 0 ? 0 : local >= 1 ? 1 : easeOut(local);
       }
-      currentProgress = progress;
-      drawAt(progress);
+      drawAt(progressBuf);
       if (overall < 1) {
         raf = requestAnimationFrame(tick);
       }
     };
 
     // Idle initial draw — empty.
-    drawAt(currentProgress);
+    drawAt(progressBuf);
 
     const io = new IntersectionObserver(
       (entries) => {
@@ -496,6 +509,7 @@ export default function PhaseChart({
     return () => {
       io.disconnect();
       ro.disconnect();
+      offVisibility();
       if (raf) cancelAnimationFrame(raf);
     };
   }, [kind, accent]);
