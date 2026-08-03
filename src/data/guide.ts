@@ -305,6 +305,7 @@ export const GUIDE_ROOMS: GuideRoom[] = [
     key: "sine",
     title: "wave explorer",
     href: "/sine",
+    scale: "the coast band — shore peer among the wave instruments",
     essence: "the fundamental oscillator as an instrument — a sine ribbon that bends through every finger you set on it, each one its own voice.",
     moves: [
       "touch → a note sounds instantly, pitched by height; every finger is its own voice",
@@ -312,6 +313,8 @@ export const GUIDE_ROOMS: GuideRoom[] = [
       "flick → throws a pulse down the wave",
       "circle a finger → bends the frequency up or down",
       "mode buttons → source, interference, standing wave",
+      "pinch through the edge → travels the scale axis from the coast",
+      "two-finger hold to dwell → opens the shore peer ring (coast, ocean, tide, waves…)",
     ],
     finds: ["three fingers moving the same way winds the whole phase — read straight off the moving voices, never a separate gesture"],
   },
@@ -687,6 +690,7 @@ export const GUIDE_ROOMS: GuideRoom[] = [
     key: "fire",
     title: "the element that breathes",
     href: "/fire",
+    scale: "the earth band — hearth peer of the strata",
     essence: "a combustion field on WebGL — blackbody heat, convection plumes, embers and pressure wells, driven by touch as though it were real heat.",
     moves: [
       "tap → seeds an ember burst",
@@ -695,6 +699,8 @@ export const GUIDE_ROOMS: GuideRoom[] = [
       "three-finger drag → crosswind, strong enough to gutter the flame",
       "three-finger hold → the whole fire slows to a quarter speed",
       "scrub → a fire whirl catches embers in a turning column",
+      "pinch through the edge → travels the scale axis from the earth",
+      "two-finger hold to dwell → opens the hearth peer ring toward the earth",
     ],
     finds: [
       "time dilation is honest all the way down — slowing time slows the fire's memory, not just its motion",
@@ -704,7 +710,7 @@ export const GUIDE_ROOMS: GuideRoom[] = [
   {
     key: "earth",
     title: "strata · seismograph · root",
-    scale: "the earth band — between the atlas and the stars",
+    scale: "the earth band — between the atlas and the stars; hearth peer of fire",
     href: "/earth",
     essence: "a mineral cross-section — sky, surface, eight strata, and a live seismograph reading your hand as geologic pressure.",
     moves: [
@@ -714,6 +720,7 @@ export const GUIDE_ROOMS: GuideRoom[] = [
       "tap or long-press the seismograph strip → a quake, rippling through the trace",
       "the stratum buttons → jump straight to any layer",
       "pinch through the inward wall → the garden first; press again for the beach or the mountain",
+      "two-finger hold to dwell → opens the hearth peer ring toward fire",
     ],
     finds: [
       "merely moving your hand across the page draws on the seismograph — it's a real integrator, not decoration",
@@ -725,6 +732,7 @@ export const GUIDE_ROOMS: GuideRoom[] = [
     key: "growth",
     title: "sigmoid · exponential · decay",
     href: "/growth",
+    scale: "the flowers band — meadow peer of birds and flowers",
     essence: "vines whose shape is a growth equation, blossoming with the same species genetics as /flowers.",
     moves: [
       "tap or hold open field → seeds a vine; hold a blossom → carries it toward bloom, then overbloom",
@@ -732,6 +740,8 @@ export const GUIDE_ROOMS: GuideRoom[] = [
       "hold, dwell → forces the current model's signature act (saturate, reproduce, collapse, or rest, by mode)",
       "the four mode buttons → sigmoid, exponential, decay, lifecycle",
       "twist → turns the lens toward the bare equations",
+      "pinch through the edge → travels the scale axis from the garden",
+      "two-finger hold to dwell → opens the meadow peer ring (birds, flowers, growth)",
     ],
     finds: [
       "forcing the exponential model actually reproduces — it spawns six new vines in a ring",
@@ -741,7 +751,7 @@ export const GUIDE_ROOMS: GuideRoom[] = [
   {
     key: "stars",
     title: "the night sky",
-    scale: "the stars band — between the earth and beyond",
+    scale: "the stars band — between the earth and beyond; sky peer of comb and beam",
     href: "/stars",
     essence: "a four-layer nested night sky you pan and zoom through, where stars are born by hand, worlds condense, and black holes merge.",
     moves: [
@@ -750,6 +760,7 @@ export const GUIDE_ROOMS: GuideRoom[] = [
       "pinch → zooms, crossfading through galactic, cluster, system, and local layers",
       "shift+click stars, then enter → names and keeps a constellation",
       "double-click a star you made → condenses a world into orbit around it",
+      "two-finger hold to dwell → opens the sky peer ring toward comb and beam",
     ],
     finds: [
       "black holes that meet genuinely inspiral and merge, singing a real gravitational chirp as they go",
@@ -761,6 +772,7 @@ export const GUIDE_ROOMS: GuideRoom[] = [
     key: "comb",
     title: "comb the light · the cowlick stays",
     href: "/comb",
+    scale: "the stars band — sky peer of the night",
     essence: "a field of light combed by a direction field carrying topological defects, where the total winding never goes away.",
     moves: [
       "drag → combs the streaks of light along your stroke",
@@ -956,6 +968,7 @@ export const GUIDE_ROOMS: GuideRoom[] = [
     key: "tourbillon",
     title: "the carriage against gravity",
     href: "/tourbillon",
+    scale: "the drop band — cabinet peer among the handhelds",
     essence: "a fully modeled watch calibre in 3D — mainspring, going train, escapement, balance wheel, and a tourbillon carriage that turns once a minute so the case's own lean never has the last word.",
     moves: [
       "tap a part → wind the mainspring, still the movement, or cycle its speed; each gear rings its own pitch",
@@ -966,6 +979,7 @@ export const GUIDE_ROOMS: GuideRoom[] = [
       "two fingers tap → steps the camera back; three fingers tap → rings every gear at once",
       "tilt the device (a resting cursor stands in without one) → leans the case; shake or knock it → the balance swings wide and rings",
       "drag empty space → orbits the camera around the whole calibre",
+      "two-finger hold to dwell → opens the cabinet peer ring (drop, seed, coin, jewel, watch…)",
     ],
     finds: [
       "the parts are the interface — tapping the crown does exactly what winding does, and it visibly depresses",
@@ -977,6 +991,7 @@ export const GUIDE_ROOMS: GuideRoom[] = [
     key: "jewel",
     title: "turn the stone",
     href: "/jewel",
+    scale: "the drop band — cabinet peer among the handhelds",
     essence: "one molten-gold gemstone as a full-screen shader — caustics, sparkle, and dispersion that shimmer with the site's own sound.",
     moves: [
       "drag → turns the stone; letting go leaves it spinning with real weight and friction",
@@ -1006,19 +1021,21 @@ export const GUIDE_ROOMS: GuideRoom[] = [
       "knock the case (once invited) → one concentric shudder rings through every bead",
       "lay the phone face-down → night, and the water sleeps until you turn it back",
       "arrows → sink the lens and shove the water; shift with an arrow → flicks a droplet clear; enter → pokes the bead, and held to the ceremony stills it",
-      "two-finger hold to dwell → opens the dew peer ring toward a seed",
+      "two-finger hold to dwell → opens the cabinet peer ring (seed, coin, jewel, tourbillon, watch…)",
+      "pinch through the edge → travels the scale axis; twist while the ring is open cycles its beads",
     ],
     finds: [
       "each of the nine microscopic species only fades in at its own depth, so diving in is genuinely discovering",
       "pulling a droplet off takes real force — speed, stretch, and size all have to agree at once",
       "a mouse hovering near the bead is felt before it lands: the surface leans toward the cursor and the life inside notices",
+      "the cabinet at this scale holds every handheld room — a drop, a seed, a coin, a watch — without leaving the band",
     ],
   },
   {
     key: "seed",
     title: "an embryo in dark soil",
     href: "/seed",
-    scale: "the drop band — peer of the drop, between cells and flowers",
+    scale: "the drop band — cabinet peer of the drop, between cells and flowers",
     essence: "a single living seed in dark soil — husk, radicle, cotyledons — grown, rattled, and split by hand.",
     moves: [
       "tap → pokes the seed and rings a low note",
@@ -1027,11 +1044,11 @@ export const GUIDE_ROOMS: GuideRoom[] = [
       "scrub → stirs the soil around it",
       "three-finger tap → a soft pulse through the field",
       "tilt / shake / knock / flip (once invited) → lean, rattle, shudder, or sleep",
-      "two-finger hold to dwell → opens the dew peer ring toward the drop",
+      "two-finger hold to dwell → opens the cabinet peer ring toward the drop and the other handhelds",
     ],
     finds: [
       "growth deepens with how hard and how long you hold — a brief touch and a ceremony are different lives",
-      "a seed and a drop share one scale; the peer ring steps between them without leaving the band",
+      "a seed and a drop share one scale; the cabinet ring steps between them without leaving the band",
     ],
     keeps: "how far this seed has grown, and how many times it has split",
   },
@@ -1039,6 +1056,7 @@ export const GUIDE_ROOMS: GuideRoom[] = [
     key: "coin",
     title: "a gold medal · tilt · flip",
     href: "/coin",
+    scale: "the drop band — cabinet peer among the handhelds",
     essence: "a real gold medal hanging in an aventurine night that permanently brightens the more you handle it.",
     moves: [
       "tap → flips the coin toward your touch and rings that direction's note",
@@ -1046,6 +1064,8 @@ export const GUIDE_ROOMS: GuideRoom[] = [
       "twist → rotates it in the hand; a full turn flips it to its other face",
       "tilt the phone → the coin leans and can flip on a sudden tilt",
       "hold to the ceremony tier → blesses the medal, its largest single gift of brilliance",
+      "pinch through the edge → travels the scale axis from the drop",
+      "two-finger hold to dwell → opens the cabinet peer ring (drop, seed, jewel, tourbillon, watch…)",
     ],
     finds: ["every interaction adds permanent brilliance to the night sky around it — it only ever climbs, asymptotically, never fading"],
     keeps: "how bright the night has become",
@@ -1054,6 +1074,7 @@ export const GUIDE_ROOMS: GuideRoom[] = [
     key: "watch",
     title: "the room",
     href: "/watch",
+    scale: "the drop band — cabinet peer among the handhelds",
     essence: "a candle-lit still life at night — a living flame at its center, ringed by small instruments: a clock, a music box, a record, a glass, a book, a window on the sea.",
     moves: [
       "tap the candle → sparks, or relights it if it's out",
@@ -1061,6 +1082,8 @@ export const GUIDE_ROOMS: GuideRoom[] = [
       "tap the record → plays or stops; double-tap reverses it; triple-tap changes its mood",
       "drag the glass → pours it, each level its own pitch",
       "knock the case (once invited) → the clock ticks once out of turn and the flame flinches",
+      "pinch through the edge → travels the scale axis from the drop",
+      "two-finger hold to dwell → opens the cabinet peer ring",
     ],
     finds: ["snuffing and the vigil are the same held press at different depths — you can only keep a vigil over a candle you just put out yourself"],
   },

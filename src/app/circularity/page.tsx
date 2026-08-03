@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import SiteHeader from "@/components/SiteHeader";
+import AxisChrome from "@/components/AxisChrome";
 import CircularityFourier from "@/components/CircularityFourier";
 
 export default function CircularityPage() {
@@ -14,6 +15,7 @@ export default function CircularityPage() {
       <main>
         <CircularityFourier />
       </main>
+      <AxisChrome route="/circularity" />
     </>
   );
 }

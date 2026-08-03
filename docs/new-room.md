@@ -68,11 +68,16 @@ the page really exists; that's the point).
 **Dropdown / gallery order is automatic.** `NAVIGATION_ROUTES` is derived from
 `SCALE_BANDS` (manifold → quanta) and `PEER_CIRCLES` in `src/lib/peers.ts`
 (MetaNavigator ring order at each rung) via `src/lib/nav-order.ts`. Do **not**
-hand-maintain a preferred-nav key list. If the room is a same-scale sibling
-(drop↔seed, mountain↔clouds, …), add it to the right `PEER_CIRCLES` entry —
-the header dropdown and the home gallery both update from that. Off-axis
-rooms (instruments, reading surfaces) append after the axis in `SITE_ROUTES`
-registration order.
+hand-maintain a preferred-nav key list. Every interactive room takes a scale
+address: either a band primary in `SCALE_BANDS`, or a seat in a `PEER_CIRCLES`
+ring (cabinet at the drop, shore instruments, sky, hearth, meadow, peak…).
+Mount `<AxisChrome route="…" />` (or `ScaleTravel` + `MetaNavigator`) so
+pinch-travel and the peer ring both work. Laws, lenses, and reading surfaces
+belong in `SCALE_EXEMPT_KEYS` — they append after the axis on purpose.
+`scripts/test-routes.mjs` fails if a `SITE_ROUTES` key is neither placed nor
+exempt; that failure means find its place, don't silence the test. Also keep
+`entryScaleFor` / `LATERAL_ROUTE_BANDS` in `scale.ts` in lockstep with any new
+peer room.
 
 The room also enters the field guide in the same PR: add its entry (essence,
 exhaustive moves, discoveries, what it keeps) to `src/data/guide.ts` and shoot

@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import SiteHeader from "@/components/SiteHeader";
+import AxisChrome from "@/components/AxisChrome";
 import PretextWave from "@/components/PretextWave";
 
 export default function PretextPage() {
@@ -14,6 +15,7 @@ export default function PretextPage() {
       <main>
         <PretextWave />
       </main>
+      <AxisChrome route="/pretext" />
     </>
   );
 }
