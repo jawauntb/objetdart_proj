@@ -80,6 +80,7 @@ const expectedKeys = [
   "cells",
   "molecules",
   "atoms",
+  "quarks",
   "fire",
   "earth",
   "growth",
