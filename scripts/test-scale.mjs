@@ -261,14 +261,18 @@ assert.equal(entryScaleFor("/colophon"), null);
   // Forks offer every built door, resolved-first — this is how a hand
   // reaches a branch for the first time (press, release, press again).
   const { travelOptions } = loadTsModule("src/lib/scale.ts");
+  // /atmosphere has landed, so the map's canonical inward door is the air
+  // column itself rather than the peak it used to resolve through — the
+  // assertion docs/plans/ground-and-sky.md promised would flip when the sky
+  // rooms ship, the transparency law shortening the walk by one.
   assert.deepEqual(
     Array.from(travelOptions("atlas", -1, {}), (b) => b.id),
-    ["olympus", "earth"],
-    "the map opens inward onto the peak first, then the ground",
+    ["atmosphere", "earth"],
+    "the map opens inward onto the air column first, then the ground",
   );
   assert.deepEqual(
     Array.from(travelOptions("atlas", -1, { atlas: "earth" }), (b) => b.id),
-    ["earth", "olympus"],
+    ["earth", "atmosphere"],
     "memory reorders the offer, never removes a door",
   );
   assert.deepEqual(
@@ -312,7 +316,7 @@ assert.equal(entryScaleFor("/colophon"), null);
   // life ladder and the vistas were declared must still work now, resolving
   // through the routeless addresses to the nearest built room.
   for (const [from, dir, expected] of [
-    ["atlas", -1, "olympus"], // peak is built
+    ["atlas", -1, "atmosphere"], // the air column is built now: the walk is one rung
     ["coast", 1, "olympus"], // peak stands above the fog
     ["flowers", -1, "tissue"], // /tissue is built now: the walk is one rung
   ]) {

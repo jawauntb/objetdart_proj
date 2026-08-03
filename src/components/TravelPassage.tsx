@@ -36,6 +36,7 @@ import { SCALE_BANDS, type ScaleBand, type ScaleBandId } from "@/lib/scale";
 import { seededRandom } from "@/lib/manifold-field";
 import { getFieldAudio, setScaleRegister } from "@/lib/audio";
 import { detent as hapticDetent } from "@/lib/haptics";
+import { skyColor, tonemap } from "@/lib/aircolumn";
 import { PITCH_DEFAULT, buildStars, starState, waveNumber } from "@/lib/spiral";
 import {
   worldFromLatent,
@@ -62,7 +63,11 @@ export type PassageEdgeKey =
   | "planets->stars"
   | "stars->planets"
   | "solar->stars"
-  | "stars->solar";
+  | "stars->solar"
+  | "olympus->atmosphere"
+  | "atmosphere->olympus"
+  | "atmosphere->atlas"
+  | "atlas->atmosphere";
 
 export type PassageSpec = {
   /** Full film length, ms. */
@@ -87,10 +92,48 @@ export type PassageSpec = {
    * system receding until its sun is one warm point of the vault
    * ("sunfall", solar↔stars).
    */
-  film?: "planet" | "arm" | "node" | "beads" | "orbitfall" | "sunfall";
+  film?: "planet" | "arm" | "node" | "beads" | "orbitfall" | "sunfall" | "peakair" | "airmap";
 };
 
 export const PASSAGES: Partial<Record<PassageEdgeKey, PassageSpec>> = {
+  // the summit drops away and the air itself becomes the material
+  "olympus->atmosphere": {
+    durationMs: 3200,
+    reducedMs: 1100,
+    navigateAt: 0.55,
+    bellAt: 0.46,
+    detentAt: 0.62,
+    out: true,
+    film: "peakair",
+  },
+  "atmosphere->olympus": {
+    durationMs: 3200,
+    reducedMs: 1100,
+    navigateAt: 0.45,
+    bellAt: 0.56,
+    detentAt: 0.3,
+    out: false,
+    film: "peakair",
+  },
+  // through the last haze the ground resolves into the hand-drawn map
+  "atmosphere->atlas": {
+    durationMs: 3200,
+    reducedMs: 1100,
+    navigateAt: 0.55,
+    bellAt: 0.72,
+    detentAt: 0.62,
+    out: true,
+    film: "airmap",
+  },
+  "atlas->atmosphere": {
+    durationMs: 3200,
+    reducedMs: 1100,
+    navigateAt: 0.45,
+    bellAt: 0.32,
+    detentAt: 0.3,
+    out: false,
+    film: "airmap",
+  },
   // The globe shrinks to one bead among worlds — /earth hands its focused
   // object to /planets as that room's container (the handoff-anchor law).
   "earth->planets": {
@@ -260,11 +303,12 @@ export function playTravelPassage(
   if (typeof window === "undefined" || !hostCue) return false;
   const spec = PASSAGES[`${from}->${dest.id}` as PassageEdgeKey];
   if (!spec) return false;
+  // A missing origin band only costs the register glide, never the film —
+  // edges may be registered ahead of a band's declaration landing.
   const fromBand = SCALE_BANDS.find((b) => b.id === from);
-  if (!fromBand) return false;
   hostCue({
     spec,
-    sFrom: spec.out ? fromBand.sMax : fromBand.sMin,
+    sFrom: fromBand ? (spec.out ? fromBand.sMax : fromBand.sMin) : sLand,
     sTo: sLand,
     navigate,
     nonce: ++passageNonce,
@@ -1312,6 +1356,326 @@ function makeOrbitfallFilm(seed: number): Film {
   return { renderFrame };
 }
 
+/**
+ * A radial falloff as a sprite, built once from arithmetic rather than from a
+ * gradient object per frame — the paint bar in scripts/test-room-paint.mjs is
+ * exactly this rule, and a glow that is drawImage'd scales for free.
+ */
+function makeSoftDisc(size = 96, power = 2.2): HTMLCanvasElement | null {
+  try {
+    const el = document.createElement("canvas");
+    el.width = size;
+    el.height = size;
+    const c = el.getContext("2d");
+    if (!c) return null;
+    const img = c.createImageData(size, size);
+    const d = img.data;
+    const r0 = size / 2;
+    for (let j = 0; j < size; j++) {
+      for (let i = 0; i < size; i++) {
+        const dx = (i + 0.5 - r0) / r0;
+        const dy = (j + 0.5 - r0) / r0;
+        const r = Math.sqrt(dx * dx + dy * dy);
+        const a = r >= 1 ? 0 : Math.pow(1 - r, power);
+        const o = (j * size + i) * 4;
+        d[o] = 255;
+        d[o + 1] = 255;
+        d[o + 2] = 255;
+        d[o + 3] = Math.round(a * 255);
+      }
+    }
+    c.putImageData(img, 0, 0);
+    return el;
+  } catch {
+    return null;
+  }
+}
+
+// ——— The peak → air film ————————————————————————————————————————————
+//
+// One scene function of u ∈ [0, 1]:
+//   u = 0    standing at the summit — folded dark ridges, the fog sea
+//   u ≈ 0.5  the ranges sink and shrink out of the frame
+//   u = 1    inside the column: haze strata sliding at their own speeds
+//            (the shear arriving before the room does), the blue thinning
+//            toward the first stars
+// The sky is not painted at any point: each gradient stop is the
+// closed-form single scatter from src/lib/aircolumn.ts at the altitude
+// the camera has reached.
+
+const PEAKAIR_SUN_ELEV = 0.5;
+
+function makePeakAirFilm(seed: number): Film {
+  const n = makeNoise2(seed ^ 0x1a2b3c4d);
+  const RIDGE_STOPS = 72;
+  const ridges: Float32Array[] = [0, 1, 2].map((r) => {
+    const arr = new Float32Array(RIDGE_STOPS);
+    for (let i = 0; i < RIDGE_STOPS; i++) {
+      const x = i / (RIDGE_STOPS - 1);
+      const v = fbm(n, x * (3 + r * 2.2) + r * 17.3, r * 9.1, 4);
+      arr[i] = 1 - Math.abs(2 * v - 1); // folded — an arête, not a hill
+    }
+    return arr;
+  });
+  const rng = seededRandom(seed ^ 0x2f9d);
+  const strata: Array<{ y: number; speed: number; len: number; ph: number }> = [];
+  for (let i = 0; i < 7; i++) {
+    strata.push({
+      y: 0.16 + (i / 7) * 0.66 + rng() * 0.04,
+      speed: 0.22 + rng() * 0.9, // every layer its own wind — the shear
+      len: 0.2 + rng() * 0.22,
+      ph: rng(),
+    });
+  }
+  const stars: Array<{ x: number; y: number; r: number }> = [];
+  for (let i = 0; i < 120; i++) {
+    stars.push({ x: rng(), y: rng() * 0.55, r: 0.5 + rng() * 1.1 });
+  }
+
+  function renderFrame(ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void {
+    const climb = smoothstep(0.02, 0.9, u);
+    const zEye = 2.5 + climb * 26; // km — the summit let go of
+    // the sky, read off the column at this altitude
+    const g = ctx.createLinearGradient(0, 0, 0, h);
+    for (let j = 0; j <= 6; j++) {
+      const dirY = lerp(0.55, -0.12, j / 6);
+      const s = skyColor(zEye, dirY, 0.35, PEAKAIR_SUN_ELEV).rgb;
+      g.addColorStop(j / 6, rgba([
+        tonemap(s[0], 1.35) ** (1 / 2.2) * 255,
+        tonemap(s[1], 1.35) ** (1 / 2.2) * 255,
+        tonemap(s[2], 1.35) ** (1 / 2.2) * 255,
+      ] as RGB, 1));
+    }
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+
+    // stars, as the blue thins
+    const starA = smoothstep(0.68, 0.98, u);
+    if (starA > 0) {
+      for (const st of stars) {
+        ctx.fillStyle = rgba(PAPER, starA * 0.8 * (1 - st.y * 1.4));
+        ctx.fillRect(st.x * w, st.y * h, st.r, st.r);
+      }
+    }
+
+    // haze strata slide in laterally, each at its own speed
+    for (let i = 0; i < strata.length; i++) {
+      const sBand = strata[i];
+      const a = smoothstep(0.3 + i * 0.04, 0.62 + i * 0.04, u) * 0.34;
+      if (a <= 0) continue;
+      const y = sBand.y * h;
+      for (let k = 0; k < 3; k++) {
+        const cx = ((sBand.ph + k / 3 + u * sBand.speed) % 1.3) - 0.15;
+        const len = sBand.len * w * (1 + sBand.speed);
+        ctx.fillStyle = rgba([228, 234, 244], a * (0.6 + 0.4 * Math.sin(sBand.ph * 7 + k)));
+        ctx.beginPath();
+        ctx.ellipse(cx * w, y, len / 2, Math.max(2.5, h * 0.011), 0, 0, TAU);
+        ctx.fill();
+      }
+    }
+
+    // the fog sea, left below
+    const sink = smoothstep(0.06, 0.72, u);
+    const fogY = h * 0.62 + sink * h * 0.85;
+    if (fogY < h + 40) {
+      const fg = ctx.createLinearGradient(0, fogY - h * 0.08, 0, fogY + h * 0.1);
+      fg.addColorStop(0, rgba([214, 220, 230], 0));
+      fg.addColorStop(0.6, rgba([214, 220, 230], 0.55 * (1 - sink)));
+      fg.addColorStop(1, rgba([214, 220, 230], 0.75 * (1 - sink)));
+      ctx.fillStyle = fg;
+      ctx.fillRect(0, fogY - h * 0.08, w, h * 0.2);
+    }
+
+    // the ranges sink and shrink out of the frame — the summit drops away
+    for (let r = 2; r >= 0; r--) {
+      const rSink = smoothstep(0.04 + r * 0.07, 0.7 + r * 0.05, u);
+      const scale = (1 - rSink) * (1 - rSink * 0.4);
+      const baseY = h * (0.56 + r * 0.15) + rSink * h * 0.95;
+      if (baseY > h + h * 0.3) continue;
+      const amp = h * (0.14 + r * 0.09) * Math.max(0.05, scale);
+      ctx.beginPath();
+      ctx.moveTo(-2, h + 2);
+      for (let i = 0; i < RIDGE_STOPS; i++) {
+        const x = (i / (RIDGE_STOPS - 1)) * (w + 4) - 2;
+        ctx.lineTo(x, baseY - ridges[r][i] * amp);
+      }
+      ctx.lineTo(w + 2, h + 2);
+      ctx.closePath();
+      const dark: RGB = r === 2 ? [16, 18, 24] : r === 1 ? [30, 34, 44] : [52, 58, 72];
+      ctx.fillStyle = rgba(mix(dark, [150, 168, 192], (2 - r) * 0.14 + rSink * 0.2), 1);
+      ctx.fill();
+    }
+
+  }
+
+  return { renderFrame };
+}
+
+// ——— The air → atlas film ————————————————————————————————————————————
+//
+// One scene function of u ∈ [0, 1]:
+//   u = 0    inside the column — pale veiled blue, strata about the camera
+//   u ≈ 0.5  the haze banks fly past, each one nearer than the last
+//   u ≈ 0.8  through the last bank — the bell — and the ground shows
+//   u = 1    the hand-drawn map fills the frame: parchment, ink coasts,
+//            the graticule sharpening as the air gets out of the way
+// The veil's departure is the transmittance rising as the slant column
+// shrinks; the map is the same token-palette chart the atlas keeps.
+
+function makeAirMapFilm(seed: number): Film | null {
+  const n = makeNoise2(seed ^ 0x77aa1109);
+  const rng = seededRandom(seed ^ 0x4c8d);
+
+  // The chart, drawn once: parchment, kept-gold land, sea-ink water.
+  const TEXM = 256;
+  let map: HTMLCanvasElement;
+  try {
+    map = document.createElement("canvas");
+    map.width = TEXM;
+    map.height = TEXM;
+    const mctx = map.getContext("2d");
+    if (!mctx) return null;
+    const img = mctx.createImageData(TEXM, TEXM);
+    const d = img.data;
+    const gridProx = (v: number): number => {
+      const f = v - Math.floor(v);
+      const dd = Math.min(f, 1 - f);
+      return Math.max(0, 1 - dd / 0.06);
+    };
+    for (let j = 0; j < TEXM; j++) {
+      for (let i = 0; i < TEXM; i++) {
+        const x = i / TEXM;
+        const y = j / TEXM;
+        const o = (j * TEXM + i) * 4;
+        const land = fbm(n, x * 3.1 + 7.7, y * 3.1 + 2.9, 4) - 0.52;
+        let col: RGB;
+        if (land > 0) {
+          col = mix(PAPER2, KEPT, 0.14 + Math.min(0.6, land * 3.2));
+        } else {
+          col = mix(PAPER, SEA, 0.12 + Math.min(0.5, -land * 2.2));
+        }
+        const coast = 1 - Math.min(1, Math.abs(land) / 0.014);
+        const grid = Math.max(gridProx(x * 9), gridProx(y * 9)) * 0.2;
+        const inkA = Math.max(coast * 0.75, grid);
+        if (inkA > 0) col = mix(col, INK, inkA);
+        d[o] = col[0];
+        d[o + 1] = col[1];
+        d[o + 2] = col[2];
+        d[o + 3] = 255;
+      }
+    }
+    mctx.putImageData(img, 0, 0);
+  } catch {
+    return null;
+  }
+
+  const disc = makeSoftDisc(128, 2.6);
+  // The u = 0 end of this film IS the air column, so it has to look like it:
+  // strata at their own altitudes, each sliding at its own speed. Without
+  // them the reverse crossing reads as map → white → cut.
+  const strata: Array<{ y: number; speed: number; len: number; ph: number }> = [];
+  for (let i = 0; i < 6; i++) {
+    strata.push({
+      y: 0.2 + (i / 6) * 0.62 + rng() * 0.04,
+      speed: 0.2 + rng() * 0.85,
+      len: 0.22 + rng() * 0.24,
+      ph: rng(),
+    });
+  }
+  const banks: Array<{ at: number; y: number; ph: number }> = [];
+  for (let i = 0; i < 4; i++) {
+    banks.push({ at: 0.18 + i * 0.17, y: 0.25 + rng() * 0.5, ph: rng() });
+  }
+
+  function renderFrame(ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void {
+    // the air around the camera, read off the column at ~16 km looking down
+    const g = ctx.createLinearGradient(0, 0, 0, h);
+    for (let j = 0; j <= 4; j++) {
+      const dirY = lerp(0.25, -0.7, j / 4);
+      const s = skyColor(16 - u * 9, dirY, 0.3, 0.62).rgb;
+      g.addColorStop(j / 4, rgba([
+        tonemap(s[0], 1.35) ** (1 / 2.2) * 255,
+        tonemap(s[1], 1.35) ** (1 / 2.2) * 255,
+        tonemap(s[2], 1.35) ** (1 / 2.2) * 255,
+      ] as RGB, 1));
+    }
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+
+    // the ground resolving: the chart rises through the thinning air
+    const mapA = smoothstep(0.3, 0.8, u);
+    if (mapA > 0) {
+      const scale = lerp(1.5, 1.02, smoothstep(0.2, 1, u));
+      const mw = Math.max(w, h) * scale;
+      ctx.globalAlpha = mapA;
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(map, (w - mw) / 2, (h - mw) / 2, mw, mw);
+      ctx.globalAlpha = 1;
+      // the graticule sharpens last — ink after air
+      const inkA = smoothstep(0.78, 0.98, u);
+      if (inkA > 0) {
+        ctx.strokeStyle = rgba(INK, inkA * 0.35);
+        ctx.lineWidth = 1;
+        for (let k = 1; k < 9; k++) {
+          const p = (k / 9) * Math.max(w, h) - (Math.max(w, h) - Math.min(w, h)) / 2;
+          ctx.beginPath();
+          ctx.moveTo(0, (k / 9) * h);
+          ctx.lineTo(w, (k / 9) * h);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(p, 0);
+          ctx.lineTo(p, h);
+          ctx.stroke();
+        }
+      }
+    }
+
+    // the strata of the column the camera is still inside, thinning as the
+    // ground resolves — the same shear the room shows, seen edge on
+    const strataA = (1 - smoothstep(0.06, 0.52, u)) * 0.4;
+    if (strataA > 0.002) {
+      for (let i = 0; i < strata.length; i++) {
+        const sBand = strata[i];
+        const y = sBand.y * h;
+        for (let k = 0; k < 3; k++) {
+          const cx = ((sBand.ph + k / 3 + (1 - u) * sBand.speed) % 1.3) - 0.15;
+          const len = sBand.len * w * (1 + sBand.speed);
+          ctx.fillStyle = rgba([230, 236, 245], strataA * (0.6 + 0.4 * Math.sin(sBand.ph * 7 + k)));
+          ctx.beginPath();
+          ctx.ellipse(cx * w, y, len / 2, Math.max(2.5, h * 0.012), 0, 0, TAU);
+          ctx.fill();
+        }
+      }
+    }
+
+    // the veil: what the slant column still holds back
+    const veilA = 0.62 * (1 - smoothstep(0.22, 0.82, u));
+    if (veilA > 0) {
+      ctx.fillStyle = rgba([225, 232, 242], veilA);
+      ctx.fillRect(0, 0, w, h);
+    }
+
+    // the banks fly past, each nearer than the last — through the last haze
+    if (disc) {
+      for (const b of banks) {
+        const p = (u - b.at) / 0.26;
+        if (p <= 0 || p >= 1) continue;
+        const a = Math.sin(p * Math.PI) * 0.55;
+        const grow = lerp(0.5, 3.4, p * p);
+        const y = b.y * h + (p - 0.5) * h * 0.7;
+        const r = w * 0.42 * grow;
+        const cx = (0.2 + b.ph * 0.6) * w;
+        ctx.globalAlpha = a;
+        ctx.drawImage(disc, cx - r, y - r, r * 2, r * 2);
+        ctx.globalAlpha = 1;
+      }
+    }
+
+  }
+
+  return { renderFrame };
+}
+
 /** One place that knows which film an edge traverses. */
 
 // ——— The sunfall (solar ↔ stars) ————————————————————————————————————
@@ -1436,6 +1800,8 @@ function makeFilmFor(spec: PassageSpec): Film | null {
   if (spec.film === "beads") return makeBeadsFilm(PASSAGE_SEED ^ 0x1a2b3c);
   if (spec.film === "orbitfall") return makeOrbitfallFilm(PASSAGE_SEED ^ 0x077e11);
   if (spec.film === "sunfall") return makeSunfallFilm();
+  if (spec.film === "peakair") return makePeakAirFilm(PASSAGE_SEED ^ 0x0a7a11);
+  if (spec.film === "airmap") return makeAirMapFilm(PASSAGE_SEED ^ 0x0a7a22);
   return makeFilm(PASSAGE_SEED);
 }
 

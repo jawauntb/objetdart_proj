@@ -86,7 +86,7 @@ export const SCALE_BANDS: ScaleBand[] = [
   // space (the nearest star at 4e16), one galaxy (1e21 across, read from
   // ~1e19), and the web that holds the galaxies. Unbuilt spans (route: null)
   // are real addresses — travel resolves through them until the rooms land.
-  { id: "atmosphere", label: "the atmosphere", route: null, sMin: 4.5, sMax: 5.5 },
+  { id: "atmosphere", label: "the atmosphere", route: "/atmosphere", sMin: 4.5, sMax: 5.5 },
   { id: "atlas", label: "the atlas", route: "/atlas/origin", sMin: 5.5, sMax: 6.5 },
   { id: "earth", label: "the earth", route: "/earth", sMin: 6.5, sMax: 9 },
   { id: "planets", label: "the planets", route: "/planets", sMin: 9, sMax: 11 },
