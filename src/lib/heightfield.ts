@@ -813,7 +813,8 @@ export function corniceStrength(
   const uphillX = slope > 0 ? dhdx / slope : 0;
   const uphillZ = slope > 0 ? dhdz / slope : 0;
   const lee = clamp01(-(wind[0] * uphillX + wind[1] * uphillZ));
-  return crest * steep * lee;
+  const strength = crest * steep * lee;
+  return strength > 0 ? strength : 0;
 }
 
 export type TerrainMaterial = "rock" | "snow" | "glacier";
