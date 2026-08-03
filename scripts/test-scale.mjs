@@ -200,6 +200,42 @@ assert.equal(entryScaleFor("/colophon"), null);
   const wrongWay = resolveDestination("drop", -1, { drop: "coast" });
   assert.equal(wrongWay.id, "cells", "memory of an upward door cannot answer a downward push");
 
+  // Forks offer every built door, resolved-first — this is how a hand
+  // reaches a branch for the first time (press, release, press again).
+  const { travelOptions } = loadTsModule("src/lib/scale.ts");
+  assert.deepEqual(
+    travelOptions("earth", -1, {}).map((b) => b.id),
+    ["atlas", "flowers"],
+    "the earth offers the atlas first, then the garden",
+  );
+  assert.deepEqual(
+    travelOptions("earth", -1, { earth: "flowers" }).map((b) => b.id),
+    ["flowers", "atlas"],
+    "memory reorders the offer, never removes a door",
+  );
+  assert.deepEqual(
+    travelOptions("manifold", -1, {}).map((b) => b.id),
+    ["stars", "beyond"],
+    "the fold offers stars first, then the beyond",
+  );
+  assert.deepEqual(
+    travelOptions("cells", 1, {}).map((b) => b.id),
+    ["drop", "flowers"],
+    "cells rise into the drop first, then the garden",
+  );
+  assert.deepEqual(
+    travelOptions("coast", 1, {}).map((b) => b.id),
+    ["atlas"],
+    "no fork, no cycling",
+  );
+  for (const band of SCALE_BANDS) {
+    for (const dir of [1, -1]) {
+      for (const opt of travelOptions(band.id, dir, {})) {
+        assert.ok(opt.route, `offered door ${band.id}→${opt.id} must be built`);
+      }
+    }
+  }
+
   // Round-trip law: wherever canonical travel takes you, remembering the
   // origin brings you home — no one-way doors anywhere on the axis.
   for (const band of SCALE_BANDS) {

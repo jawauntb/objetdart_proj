@@ -35,6 +35,7 @@ import {
   roomZoomWall,
   scaleForRoomZoom,
   stepScale,
+  travelOptions,
   type EnteredFromMap,
   type RoomZoomSpec,
   type ScaleBand,
@@ -78,9 +79,40 @@ function dirToward(from: ScaleBandId, towardMetric: ScaleBandId): TravelDir {
   return ti > fi ? 1 : -1;
 }
 
-/** The band travel would actually reach pressing toward `towardMetric`. */
-function resolvedToward(from: ScaleBandId, towardMetric: ScaleBandId): ScaleBand | null {
-  return resolveDestination(from, dirToward(from, towardMetric), loadEnteredFrom());
+// At a fork (the earth holds the atlas and the flowers), pressing the wall
+// offers the first door; releasing and pressing again within this window
+// cycles the whisper to the next. Deterministic, discoverable, no chrome.
+const FORK_RECALL_MS = 2500;
+
+type WallOffer = { dir: TravelDir | 0; idx: number; releasedAt: number; wasPressing: boolean };
+
+function freshOffer(): WallOffer {
+  return { dir: 0, idx: 0, releasedAt: -1e9, wasPressing: false };
+}
+
+function advanceOfferOnDetent(offer: WallOffer, dir: TravelDir, now: number): void {
+  if (offer.dir === dir && now - offer.releasedAt < FORK_RECALL_MS) offer.idx += 1;
+  else {
+    offer.dir = dir;
+    offer.idx = 0;
+  }
+}
+
+/** Track wall release so the next press can cycle the offer. */
+function noteOfferPressing(offer: WallOffer, pressing: number, now: number): void {
+  if (offer.wasPressing && pressing === 0) offer.releasedAt = now;
+  offer.wasPressing = pressing !== 0;
+}
+
+/** The door currently on offer toward `towardMetric` from `from`. */
+function offeredDoor(
+  from: ScaleBandId,
+  towardMetric: ScaleBandId,
+  offer: WallOffer,
+): ScaleBand | null {
+  const options = travelOptions(from, dirToward(from, towardMetric), loadEnteredFrom());
+  if (options.length === 0) return null;
+  return options[offer.idx % options.length];
 }
 
 export type EdgeUI = {
@@ -191,6 +223,7 @@ export function useBandEdgeTravel(
     raf: 0,
     leaving: false,
     uiPressure: 0,
+    offer: freshOffer(),
   });
 
   const loop = useCallback(
@@ -207,20 +240,24 @@ export function useBandEdgeTravel(
       const { state, events, edgePressure } = stepScale(st, r.input, dt);
       r.state = state;
 
+      noteOfferPressing(r.offer, state.pressing, now);
       let toward: string | null = null;
       for (const e of events) {
-        if (e.type === "detent") hapticDetent();
+        if (e.type === "detent") {
+          hapticDetent();
+          if (state.pressing !== 0) advanceOfferOnDetent(r.offer, state.pressing, now);
+        }
         if (e.type === "edge") {
-          const resolved = resolvedToward(bandAt(state.s).id, e.toward);
-          // An unbuilt destination holds forever: show nothing, promise nothing.
-          toward = resolved?.route ? resolved.label : null;
-          if (!resolved?.route && r.state) {
+          const door = offeredDoor(bandAt(state.s).id, e.toward, r.offer);
+          // No built door on offer: hold forever, promise nothing.
+          toward = door ? door.label : null;
+          if (!door && r.state) {
             r.state = { ...r.state, intentMs: Math.min(r.state.intentMs, 200) };
           }
         }
         if (e.type === "crossing") {
           const dir = dirToward(e.from, e.to);
-          const dest = resolveDestination(e.from, dir, loadEnteredFrom());
+          const dest = offeredDoor(e.from, e.to, r.offer);
           if (dest?.route && dest.route !== route) {
             recordEnteredFrom(dest.id, e.from);
             r.leaving = true;
@@ -315,6 +352,7 @@ export default function ScaleTravel({ route }: { route: string }) {
   const lastPinchAtRef = useRef(0);
   const rafRef = useRef(0);
   const leavingRef = useRef(false);
+  const offerRef = useRef<WallOffer>(freshOffer());
 
   useEffect(() => {
     const entry = entryScaleFor(route);
@@ -345,20 +383,24 @@ export default function ScaleTravel({ route }: { route: string }) {
       const { state, events, edgePressure } = stepScale(st, inputRef.current, dt);
       stateRef.current = state;
 
+      noteOfferPressing(offerRef.current, state.pressing, now);
       let toward: string | null = null;
       for (const e of events) {
-        if (e.type === "detent") hapticDetent();
+        if (e.type === "detent") {
+          hapticDetent();
+          if (state.pressing !== 0) advanceOfferOnDetent(offerRef.current, state.pressing, now);
+        }
         if (e.type === "edge") {
-          const resolved = resolvedToward(bandAt(state.s).id, e.toward);
-          // An unbuilt destination holds forever: show nothing, promise nothing.
-          toward = resolved?.route ? resolved.label : null;
-          if (!resolved?.route) {
+          const door = offeredDoor(bandAt(state.s).id, e.toward, offerRef.current);
+          // No built door on offer: hold forever, promise nothing.
+          toward = door ? door.label : null;
+          if (!door) {
             stateRef.current = { ...state, intentMs: Math.min(state.intentMs, 200) };
           }
         }
         if (e.type === "crossing") {
           const dir = dirToward(e.from, e.to);
-          const dest = resolveDestination(e.from, dir, loadEnteredFrom());
+          const dest = offeredDoor(e.from, e.to, offerRef.current);
           if (dest?.route && dest.route !== route) {
             recordEnteredFrom(dest.id, e.from);
             leavingRef.current = true;
