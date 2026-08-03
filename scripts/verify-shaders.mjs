@@ -20,7 +20,8 @@
  */
 
 import { chromium } from "playwright";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import zlib from "node:zlib";
 import path from "node:path";
 
 const arg = (name, fallback) => {
@@ -58,6 +59,60 @@ const SHADER_ROOMS = [
 const SHADER_FAILURE = /shader|glsl|compil|link|WebGL|program|getContext/i;
 const HARD_FAILURE = /ERROR:|failed to compile|failed to link|could not compile|INVALID_OPERATION/i;
 
+/**
+ * Just enough PNG to answer "is there a picture here": inflate IDAT, undo the
+ * per-scanline filters, and report the standard deviation of luminance. A flat
+ * fill lands near zero however pretty its colour is.
+ */
+function measure(buf) {
+  let pos = 8, w = 0, h = 0, depth = 0, color = 0;
+  const idat = [];
+  while (pos < buf.length) {
+    const len = buf.readUInt32BE(pos);
+    const type = buf.toString("ascii", pos + 4, pos + 8);
+    const body = buf.subarray(pos + 8, pos + 8 + len);
+    if (type === "IHDR") {
+      w = body.readUInt32BE(0); h = body.readUInt32BE(4);
+      depth = body[8]; color = body[9];
+      if (depth !== 8 || (color !== 6 && color !== 2)) return null; // not ours to read
+    } else if (type === "IDAT") idat.push(body);
+    else if (type === "IEND") break;
+    pos += 12 + len;
+  }
+  if (!w || !h) return null;
+  const raw = zlib.inflateSync(Buffer.concat(idat));
+  const ch = color === 6 ? 4 : 3;
+  const stride = w * ch;
+  const prev = Buffer.alloc(stride);
+  const line = Buffer.alloc(stride);
+  let n = 0, sum = 0, sq = 0;
+  for (let y = 0, o = 0; y < h; y++) {
+    const filter = raw[o++];
+    raw.copy(line, 0, o, o + stride); o += stride;
+    for (let i = 0; i < stride; i++) {
+      const a = i >= ch ? line[i - ch] : 0;
+      const b = prev[i];
+      const c = i >= ch ? prev[i - ch] : 0;
+      let v = line[i];
+      if (filter === 1) v += a;
+      else if (filter === 2) v += b;
+      else if (filter === 3) v += (a + b) >> 1;
+      else if (filter === 4) {
+        const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
+        v += pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+      }
+      line[i] = v & 255;
+    }
+    line.copy(prev);
+    for (let x = 0; x < stride; x += ch) {
+      const l = 0.2126 * line[x] + 0.7152 * line[x + 1] + 0.0722 * line[x + 2];
+      sum += l; sq += l * l; n++;
+    }
+  }
+  const mean = sum / n;
+  return { pixels: n, stdev: Math.sqrt(Math.max(0, sq / n - mean * mean)) };
+}
+
 mkdirSync(OUT, { recursive: true });
 
 const rooms = ONLY ? SHADER_ROOMS.filter((r) => r.route === ONLY) : SHADER_ROOMS;
@@ -89,6 +144,7 @@ for (const room of rooms) {
   let status = "ok";
   let detail = "";
   let gl = null;
+  let paint = null;
 
   try {
     const resp = await page.goto(`${BASE}${room.route}`, {
@@ -142,15 +198,33 @@ for (const room of rooms) {
       }
     }
 
-    await page.screenshot({ path: path.join(OUT, `${room.route.replace(/\//g, "") || "home"}.png`) });
+    const shot = path.join(OUT, `${room.route.replace(/\//g, "") || "home"}.png`);
+    await page.screenshot({ path: shot });
+
+    // The spread of luminance across the shot, REPORTED and never asserted.
+    //
+    // A live context proves nothing — /mountain held one and drew a flat brown
+    // field. But no automatic threshold survives contact with this site. Two
+    // attempts failed honestly and are recorded here so nobody spends the
+    // afternoon again:
+    //   · reading pixels back in-page — without preserveDrawingBuffer the
+    //     buffer is gone by the time we ask, so rooms that draw perfectly
+    //     (/birds, /space) read as blank;
+    //   · thresholding this number — the album is dark on purpose, so
+    //     /manifold and /relativity sit at ~12 while fully drawn, and blank
+    //     /mountain sits at 26 because the header and tape carry the variance.
+    // A gate that cries wolf gets deleted by the next hand. So the number is
+    // printed instead: read the run, and open any room that looks unlike its
+    // neighbours. The screenshots are right there.
+    if (status === "ok") paint = measure(readFileSync(shot));
   } catch (err) {
     status = "threw";
     detail = String(err).slice(0, 300);
   }
 
-  results.push({ ...room, status, detail, gl });
+  results.push({ ...room, status, detail, gl, paint });
   const mark = status === "ok" ? "ok  " : "FAIL";
-  console.log(`${mark} ${room.route.padEnd(14)} ${status === "ok" ? (gl?.canvases.map((c) => c.kind).join(",") ?? "") : `${status}: ${detail}`}`);
+  console.log(`${mark} ${room.route.padEnd(14)} ${status === "ok" ? `${gl?.canvases.map((c) => c.kind).join(",") ?? ""}  stdev ${paint ? paint.stdev.toFixed(1) : "?"}` : `${status}: ${detail}`}`);
   await ctx.close();
 }
 

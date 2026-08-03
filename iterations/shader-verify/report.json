@@ -24,6 +24,10 @@
       ],
       "anyGl": true,
       "sized": true
+    },
+    "paint": {
+      "pixels": 630000,
+      "stdev": 26.195745598218426
     }
   },
   {
@@ -51,6 +55,10 @@
       ],
       "anyGl": true,
       "sized": true
+    },
+    "paint": {
+      "pixels": 630000,
+      "stdev": 23.681804247131655
     }
   },
   {
@@ -78,14 +86,11 @@
       ],
       "anyGl": true,
       "sized": true
+    },
+    "paint": {
+      "pixels": 630000,
+      "stdev": 60.38218049050822
     }
-  },
-  {
-    "route": "/sea",
-    "why": "the water",
-    "status": "http",
-    "detail": "HTTP 404",
-    "gl": null
   },
   {
     "route": "/ocean",
@@ -112,6 +117,10 @@
       ],
       "anyGl": true,
       "sized": true
+    },
+    "paint": {
+      "pixels": 630000,
+      "stdev": 57.682204462512836
     }
   },
   {
@@ -139,6 +148,10 @@
       ],
       "anyGl": true,
       "sized": true
+    },
+    "paint": {
+      "pixels": 630000,
+      "stdev": 39.39468795293437
     }
   },
   {
@@ -166,6 +179,10 @@
       ],
       "anyGl": true,
       "sized": true
+    },
+    "paint": {
+      "pixels": 630000,
+      "stdev": 61.793499707293584
     }
   },
   {
@@ -193,6 +210,10 @@
       ],
       "anyGl": true,
       "sized": true
+    },
+    "paint": {
+      "pixels": 630000,
+      "stdev": 18.96494437625085
     }
   },
   {
@@ -220,6 +241,10 @@
       ],
       "anyGl": true,
       "sized": true
+    },
+    "paint": {
+      "pixels": 630000,
+      "stdev": 69.29828147812519
     }
   },
   {
@@ -242,6 +267,10 @@
       ],
       "anyGl": true,
       "sized": true
+    },
+    "paint": {
+      "pixels": 630000,
+      "stdev": 44.77112033694966
     }
   },
   {
@@ -264,6 +293,10 @@
       ],
       "anyGl": true,
       "sized": true
+    },
+    "paint": {
+      "pixels": 630000,
+      "stdev": 56.828259227530424
     }
   },
   {
@@ -286,6 +319,10 @@
       ],
       "anyGl": true,
       "sized": true
+    },
+    "paint": {
+      "pixels": 630000,
+      "stdev": 41.135598521633035
     }
   },
   {
@@ -313,6 +350,10 @@
       ],
       "anyGl": true,
       "sized": true
+    },
+    "paint": {
+      "pixels": 630000,
+      "stdev": 11.318002201695071
     }
   },
   {
@@ -340,6 +381,10 @@
       ],
       "anyGl": true,
       "sized": true
+    },
+    "paint": {
+      "pixels": 630000,
+      "stdev": 12.220575340655875
     }
   },
   {
@@ -367,6 +412,10 @@
       ],
       "anyGl": true,
       "sized": true
+    },
+    "paint": {
+      "pixels": 630000,
+      "stdev": 45.23115097761705
     }
   },
   {
@@ -389,6 +438,10 @@
       ],
       "anyGl": true,
       "sized": true
+    },
+    "paint": {
+      "pixels": 630000,
+      "stdev": 30.445509417483038
     }
   },
   {
@@ -411,6 +464,10 @@
       ],
       "anyGl": true,
       "sized": true
+    },
+    "paint": {
+      "pixels": 630000,
+      "stdev": 58.40908119512037
     }
   }
 ]
