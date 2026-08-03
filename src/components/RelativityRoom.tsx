@@ -19,17 +19,37 @@
  * near a well blinks slower and warmer. Doppler: a grabbed lantern runs
  * blue ahead and red behind and its hum pitch-bends the same way.
  *
- * Twist rotates the lens: the room re-renders as a minimal Minkowski
- * diagram — worldlines of clocks, comets, lantern; tapped pulses as
- * light cones at exactly 45°; the moving clock's tick dots visibly
- * sparser. Thin mono numerals appear only there. Three-finger hold is
- * this room's one legitimate slow-light moment: time dilates and the
- * light nearly stands still so its geometry can be seen.
+ * Three more phenomena complete the canonical set. Simultaneity: a long
+ * translucent car glides on a quiet strip; tap its midpoint and one
+ * flash splits toward both ends — the car blooms both ends in one
+ * car-tinted moment, but the room's own strikes land rear-first, two
+ * notes with a gap that widens with speed and closes to a single chord
+ * at rest. Drag the car to set its speed (rapidity-capped like all
+ * matter); the ghost outline it slides inside keeps its rest length, so
+ * the moving car visibly fits short of its own ghost by exactly 1/γ —
+ * and the flicked comets squash along their motion by the same law.
+ * The twin reunion: flick the marked drifting beacon and it flies out,
+ * arcs, and returns to its stay-at-home twin visibly younger — each
+ * beacon accretes rings of its own proper time like tree rings, the
+ * traveler comes home with fewer, and the reunion sounds as a two-note
+ * chord detuned by exactly the age gap.
  *
- * Pure math in src/lib/relativity.ts (tick dilation, matter cap, doppler)
- * and src/lib/manifold-field.ts (bending, wells, gravitational dilation —
- * reused, not rebuilt). Deterministic throughout; no persistence — this
- * room is a law, not a place, and a law keeps no belongings.
+ * Twist rotates the lens: the room re-renders as a minimal Minkowski
+ * diagram — worldlines of clocks, comets, lantern, car and beacons;
+ * tapped pulses as light cones at exactly 45°; the moving clock's tick
+ * dots visibly sparser; the car's tilted simultaneity line against the
+ * room's horizontal one with the two strikes straddling them; the
+ * twin's bent worldline dropping fewer proper-time dots than the
+ * stayer's straight one. Thin mono numerals appear only there.
+ * Three-finger hold is this room's one legitimate slow-light moment:
+ * time dilates and the light nearly stands still so its geometry — the
+ * rear end catching its own flash included — can be seen.
+ *
+ * Pure math in src/lib/relativity.ts (tick dilation, matter cap, doppler,
+ * simultaneity gap, proper time, contraction) and src/lib/manifold-field.ts
+ * (bending, wells, gravitational dilation — reused, not rebuilt).
+ * Deterministic throughout; no persistence — this room is a law, not a
+ * place, and a law keeps no belongings.
  */
 
 import { useEffect, useRef } from "react";
@@ -49,10 +69,13 @@ import {
 } from "@/lib/manifold-field";
 import {
   MATTER_CAP,
+  contractedLength,
   dopplerShift,
   lorentzGamma,
   matterGlow,
   matterSpeed,
+  properTimeRatio,
+  simultaneityGapMs,
 } from "@/lib/relativity";
 
 const MAX_MASSES = 4;
@@ -69,6 +92,12 @@ const HIST_MAX = 260;
 const TICKS_MAX = 48;
 const CLOCK_V_CAP = 0.95; // a carried clock's effective fraction of c
 const RING_EVERY = 0.3; // lantern wavefront cadence, seconds of light time
+const CAR_NY = 0.52; // the train's quiet strip
+const CAR_H = 24; // car body height, px
+const RING_TAU = 1.4; // seconds of proper time per accreted beacon ring
+const RINGS_SHOWN = 12; // rings drawn before the oldest merge inward
+const TDOT_TAU = 0.12; // proper-time tick spacing on lens worldlines
+const REUNION_MS = 4000; // how long the twins compare rings side by side
 
 type Mass = {
   id: string;
@@ -143,7 +172,49 @@ type Current = { x: number; y: number; dx: number; dy: number; born: number };
 
 type Orbit = { x: number; y: number; omega: number; until: number };
 
-type Carried = "clockA" | "clockB" | "lantern" | null;
+type Carried = "clockA" | "clockB" | "lantern" | "car" | null;
+
+/** One flash from the car's midpoint, kept in room-frame coordinates. */
+type SimFlash = {
+  born: number; // lightT at emission
+  x0: number; // emission point, fixed in the room
+  y: number;
+  sgn: 1 | -1; // direction of the car's motion at emission
+  vAbs: number; // px/s at emission
+  halfC: number; // contracted half-length at emission
+  tRear: number; // seconds after born — the rear runs into its flash
+  tFront: number; // — the front runs away from its flash
+  rearX: number;
+  frontX: number;
+  rearDone: boolean;
+  frontDone: boolean;
+  carDone: boolean;
+};
+
+/** A beacon that keeps its own proper time as slowly accreted rings. */
+type Beacon = {
+  tau: number;
+  nextTdot: number;
+  x: number;
+  y: number;
+  beta: number;
+  ringFlashAt: number;
+  hist: Array<{ x: number; tau: number }>;
+  tdots: Array<{ x: number; tau: number }>;
+};
+
+/** The traveler's journey: out, arc, home — computed whole at launch. */
+type Journey = {
+  t: number;
+  T: number;
+  beta: number;
+  v: number;
+  pts: Array<{ x: number; y: number }>;
+  cum: number[];
+  len: number;
+  s: number;
+  trail: Array<{ x: number; y: number }>;
+};
 
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 const clamp01 = (v: number) => clamp(v, 0, 1);
@@ -204,6 +275,37 @@ export default function RelativityRoom() {
     const beaconPhase = [0.4, 3.1];
     let beaconOffX = 0;
     let beaconOffY = 0;
+    // the train: one car on a quiet strip, its speed set by hand
+    let carX = 0;
+    let carVx = 0;
+    let carBeta = 0.4; // cruise fraction of c — starts gliding, visibly shy of its ghost
+    let carDir: 1 | -1 = 1;
+    let carHeld = false;
+    let carTargetX = 0;
+    let carRestLen = 260;
+    let carBetaEff = 0;
+    let carGlintAt = -1e9;
+    let kbCarHold = false;
+    const carHist: Array<{ x: number; tau: number }> = [];
+    let simFlash: SimFlash | null = null;
+    // the twins: proper time accreted as rings; one can be sent away
+    const mkBeacon = (): Beacon => ({
+      tau: 0,
+      nextTdot: TDOT_TAU,
+      x: 0,
+      y: 0,
+      beta: 0,
+      ringFlashAt: -1e9,
+      hist: [],
+      tdots: [],
+    });
+    const beaconA = mkBeacon(); // the traveler — flick it and it journeys
+    const beaconB = mkBeacon(); // the stayer
+    let journey: Journey | null = null;
+    let reunionAt = -1e9;
+    let reunionRatio = 1;
+    let blendOffX = 0;
+    let blendOffY = 0;
     // the vessel: the aether current leans with real gravity (-1..1)
     let tiltLeanX = 0;
     let tiltLeanY = 0;
@@ -297,6 +399,7 @@ export default function RelativityRoom() {
       rayG = 50 * c * c; // manifold strengths: whips and slingshots, not drift
       clockGap = clamp(0.22 * c, 84, height * 0.26);
       clockHalfW = clamp(width * 0.085, 26, 44);
+      carRestLen = clamp(width * 0.36, 170, 380);
       if (!placed) {
         placed = true;
         clockA.x = clockA.homeNx * width; clockA.y = clockA.homeNy * height;
@@ -305,6 +408,8 @@ export default function RelativityRoom() {
         clockB.targetX = clockB.x; clockB.targetY = clockB.y;
         lantern.x = width * 0.5; lantern.y = height * 0.72;
         lantern.targetX = lantern.x; lantern.targetY = lantern.y;
+        carX = width * 0.5;
+        carTargetX = carX;
       }
       staticRaysStale = true;
     };
@@ -342,6 +447,134 @@ export default function RelativityRoom() {
 
     const lanternAt = (x: number, y: number): boolean =>
       Math.hypot(x - lantern.x, y - lantern.y) < 40;
+
+    const carY = () => height * CAR_NY;
+
+    const carAt = (x: number, y: number): boolean =>
+      Math.abs(y - carY()) < CAR_H + 16 && Math.abs(x - carX) < carRestLen / 2 + 18;
+
+    const beaconAt = (x: number, y: number): 0 | 1 | null => {
+      if (Math.hypot(x - beaconA.x, y - beaconA.y) < 30) return 0;
+      if (Math.hypot(x - beaconB.x, y - beaconB.y) < 26) return 1;
+      return null;
+    };
+
+    // the twins' drift tracks — deterministic functions of the room clock
+    const driftA = (t: number) => ({
+      x: width * (0.5 + 0.34 * Math.sin(t * 0.045 + 1.3)) + beaconOffX,
+      y: height * (0.56 + 0.2 * Math.sin(t * 0.036 + 0.4)) + beaconOffY,
+    });
+    const driftB = (t: number) => ({
+      x: width * (0.5 + 0.4 * Math.sin(t * 0.03 + 4.1)) + beaconOffX,
+      y: height * (0.84 + 0.05 * Math.sin(t * 0.023 + 2.2)) + beaconOffY,
+    });
+
+    // one flash from the car's midpoint: two framings of the same instant
+    const fireSimFlash = () => {
+      const vSigned = clamp(carVx, -MATTER_CAP * c, MATTER_CAP * c);
+      const vAbs = Math.abs(vSigned);
+      const beta = vAbs / c;
+      const halfC = contractedLength(carRestLen, beta) / 2;
+      const sgn: 1 | -1 = vSigned >= 0 ? 1 : -1;
+      // the kernel's law, verbatim: the strikes straddle their midpoint by
+      // γβL — zero at rest, so the two framings collapse into one
+      const gapSec = simultaneityGapMs(beta, (carRestLen / c) * 1000) / 1000;
+      const tMid = (halfC / (c + vAbs) + halfC / (c - vAbs)) / 2;
+      const tRear = tMid - gapSec / 2;
+      const tFront = tMid + gapSec / 2;
+      simFlash = {
+        born: lightT,
+        x0: carX,
+        y: carY(),
+        sgn,
+        vAbs,
+        halfC,
+        tRear,
+        tFront,
+        rearX: carX - sgn * c * tRear,
+        frontX: carX + sgn * c * tFront,
+        rearDone: false,
+        frontDone: false,
+        carDone: false,
+      };
+      note(64, 70); // the emission spark; the two strikes answer below
+      try { haptics.ripple(0.3); } catch { /* noop */ }
+      useField.getState().recordTape("object", 0.5, "relativity/train");
+    };
+
+    // ring the beacon's age: its rings shimmer, its note deepened by tau
+    const soundBeaconAge = (b: Beacon, now: number) => {
+      b.ringFlashAt = now;
+      note(66 - Math.min(14, Math.round(b.tau / RING_TAU)), 170);
+      try { haptics.tap(); } catch { /* noop */ }
+    };
+
+    const journeyPointAt = (j: Journey, s: number) => {
+      const n = j.pts.length;
+      if (s <= 0) return j.pts[0];
+      if (s >= j.len) return j.pts[n - 1];
+      let lo = 0;
+      let hi = n - 1;
+      while (lo + 1 < hi) {
+        const mid = (lo + hi) >> 1;
+        if (j.cum[mid] <= s) lo = mid; else hi = mid;
+      }
+      const seg = j.cum[hi] - j.cum[lo] || 1;
+      const f = (s - j.cum[lo]) / seg;
+      return {
+        x: mix(j.pts[lo].x, j.pts[hi].x, f),
+        y: mix(j.pts[lo].y, j.pts[hi].y, f),
+      };
+    };
+
+    // send the traveler out: rapidity-capped speed, a wide arc, and a
+    // homecoming aimed at where the stayer will be when it gets there
+    const launchJourney = (angle: number, speedPxMs: number) => {
+      if (journey || performance.now() - reunionAt < 1500) return;
+      const v = Math.max(matterSpeed(speedPxMs * 1000, c), 0.22 * c);
+      const beta = v / c;
+      const from = { x: beaconA.x, y: beaconA.y };
+      const range = Math.max(160, Math.min(width, height) * (0.2 + beta * 0.5));
+      const dirX = Math.cos(angle);
+      const dirY = Math.sin(angle);
+      const perpX = -dirY;
+      const perpY = dirX;
+      let target = driftB(localT);
+      let pts: Array<{ x: number; y: number }> = [];
+      let cum: number[] = [];
+      let len = 0;
+      for (let pass = 0; pass < 2; pass++) {
+        const p0 = from;
+        const p3 = { x: target.x + 26, y: target.y - 8 }; // side by side, not on top
+        const p1 = {
+          x: clamp(p0.x + dirX * range * 1.35, -width * 0.15, width * 1.15),
+          y: clamp(p0.y + dirY * range * 1.35, -height * 0.15, height * 1.15),
+        };
+        const p2 = {
+          x: clamp(p3.x + dirX * range * 0.9 + perpX * range * 0.5, -width * 0.15, width * 1.15),
+          y: clamp(p3.y + dirY * range * 0.9 + perpY * range * 0.5, -height * 0.15, height * 1.15),
+        };
+        pts = [];
+        cum = [];
+        len = 0;
+        const N = 56;
+        for (let i = 0; i <= N; i++) {
+          const u = i / N;
+          const w = 1 - u;
+          const x = w * w * w * p0.x + 3 * w * w * u * p1.x + 3 * w * u * u * p2.x + u * u * u * p3.x;
+          const y = w * w * w * p0.y + 3 * w * w * u * p1.y + 3 * w * u * u * p2.y + u * u * u * p3.y;
+          if (i > 0) len += Math.hypot(x - pts[i - 1].x, y - pts[i - 1].y);
+          pts.push({ x, y });
+          cum.push(len);
+        }
+        target = driftB(localT + len / v); // aim again, now knowing the flight time
+      }
+      journey = { t: 0, T: len / v, beta, v, pts, cum, len, s: 0, trail: [] };
+      note(52, 180);
+      try { audio().chime(); } catch { /* noop */ }
+      try { haptics.ripple(0.45); } catch { /* noop */ }
+      useField.getState().recordTape("object", 0.6, "relativity/journey");
+    };
 
     const firePulse = (x: number, y: number, strength: number) => {
       pulses.push({ x, y, bornLight: lightT, strength });
@@ -436,13 +669,31 @@ export default function RelativityRoom() {
       const k = clockAt(x, y);
       if (k) return k;
       if (lanternAt(x, y)) return "lantern";
+      if (carAt(x, y)) return "car";
       return null;
     };
 
     const carriedObj = (): Clock | Lantern | null =>
       carried === "clockA" ? clockA : carried === "clockB" ? clockB : carried === "lantern" ? lantern : null;
 
+    // let the car go: whatever speed the hand meant, read as rapidity —
+    // capped like all matter, and near-stillness settles into true rest
+    const releaseCar = (vxIntent: number) => {
+      carHeld = false;
+      const v = matterSpeed(Math.abs(vxIntent), c);
+      carDir = vxIntent >= 0 ? 1 : -1;
+      carBeta = v < 0.03 * c ? 0 : v / c;
+      carVx = carDir * carBeta * c;
+      note(40 + Math.round((carBeta / MATTER_CAP) * 10), 190);
+      try { haptics.tap(); } catch { /* noop */ }
+      carried = null;
+    };
+
     const releaseCarried = (throwVx?: number, throwVy?: number) => {
+      if (carried === "car") {
+        releaseCar(throwVx !== undefined ? throwVx : carVx);
+        return;
+      }
       const obj = carriedObj();
       if (!obj) return;
       obj.held = false;
@@ -469,6 +720,9 @@ export default function RelativityRoom() {
       rings.push({ x: lantern.x, y: lantern.y, bornLight: lightT, dx: 1, dy: 0, beta: 0 });
       if (rings.length > MAX_RINGS) rings.shift();
       for (const m of masses) if (!m.evapAt) m.charge = Math.max(m.charge, 0.22);
+      carGlintAt = now;
+      beaconA.ringFlashAt = now;
+      beaconB.ringFlashAt = now;
       try { haptics.tap(); } catch { /* noop */ }
     };
 
@@ -489,6 +743,11 @@ export default function RelativityRoom() {
         if (e.fingers === 3) { tutti(); return; }
         if (e.fingers !== 1) return; // anything else is gently absorbed
         const { x, y } = toLocal(e.x, e.y);
+        // tap the car: one flash from its midpoint, two framings of "at once"
+        if (carAt(x, y)) { fireSimFlash(); return; }
+        // tap a twin: its rings shimmer and its age is heard, deeper when older
+        const b = beaconAt(x, y);
+        if (b !== null) { soundBeaconAge(b === 0 ? beaconA : beaconB, performance.now()); return; }
         // your pulse: a ring at exactly c — race it with anything you like
         firePulse(x, y, 0.5 + e.intensity * 0.8);
         note(45 + Math.round(e.intensity * 7), 200);
@@ -504,6 +763,8 @@ export default function RelativityRoom() {
         }
         if (e.fingers !== 1) return;
         const { x, y } = toLocal(e.x, e.y);
+        // flick the marked twin: it leaves on a journey and comes home younger
+        if (beaconAt(x, y) === 0) { launchJourney(e.angle, e.speed); return; }
         throwComet(x, y, e.angle, e.speed);
       },
       hold: (e) => {
@@ -614,6 +875,14 @@ export default function RelativityRoom() {
         if (e.fingers !== 1) return;
         if (e.phase === "start") {
           carried = grabAt(x, y);
+          if (carried === "car") {
+            // towing the car sets its speed: let go and it keeps your pace
+            carHeld = true;
+            carTargetX = x;
+            try { audio().chime(); } catch { /* noop */ }
+            try { haptics.tap(); } catch { /* noop */ }
+            return;
+          }
           const obj = carriedObj();
           if (obj) {
             obj.held = true;
@@ -625,6 +894,7 @@ export default function RelativityRoom() {
           return;
         }
         if (e.phase === "end") { releaseCarried(); return; }
+        if (carried === "car") { carTargetX = x; return; }
         const obj = carriedObj();
         if (obj) {
           obj.targetX = x;
@@ -712,6 +982,7 @@ export default function RelativityRoom() {
         cursorVisible = false;
         kbCharge = 0;
         kbMassId = null;
+        kbCarHold = false;
         return;
       }
       if (ev.key.startsWith("Arrow")) {
@@ -730,6 +1001,36 @@ export default function RelativityRoom() {
         if (!cursorVisible) { cursorVisible = true; return; }
         const x = cursorNx * width;
         const y = cursorNy * height;
+        if (kbCarHold) {
+          // the held key retunes the car — longer is faster; release cruises
+          kbCharge = clamp01(kbCharge + (ev.repeat ? 0.055 : 0.02));
+          const nowK = performance.now();
+          if (nowK - lastChargeNoteAt > 340) {
+            lastChargeNoteAt = nowK;
+            note(40 + Math.round(kbCharge * 12), 100);
+          }
+          return;
+        }
+        if (!ev.repeat) {
+          if (carAt(x, y)) {
+            // a press on the car is its tap: the flash; keep holding to retune
+            kbCarHold = true;
+            kbCharge = 0;
+            fireSimFlash();
+            return;
+          }
+          const b = beaconAt(x, y);
+          if (b === 0 && !journey) {
+            // the keyboard's flick: the twin departs, away from its stayer
+            const ang = Math.atan2(beaconA.y - beaconB.y, beaconA.x - beaconB.x);
+            launchJourney(ang, 0.45 * (c / 1000));
+            return;
+          }
+          if (b !== null) {
+            soundBeaconAge(b === 0 ? beaconA : beaconB, performance.now());
+            return;
+          }
+        }
         const m = massAt(x, y);
         if (!ev.repeat && !m) {
           // a press is a tap: your pulse, at exactly c
@@ -760,6 +1061,21 @@ export default function RelativityRoom() {
     };
     const onKeyUp = (ev: KeyboardEvent) => {
       if (ev.key === "Enter" || ev.key === " ") {
+        if (kbCarHold) {
+          kbCarHold = false;
+          if (kbCharge >= 0.15) {
+            carBeta = clamp01(kbCharge) * MATTER_CAP;
+            carVx = carDir * carBeta * c;
+            note(40 + Math.round((carBeta / MATTER_CAP) * 10), 190);
+          } else if (kbCharge >= 0.06) {
+            // a settling hold: the car comes to rest, the framings collapse
+            carBeta = 0;
+            carVx = 0;
+            note(40, 190);
+          }
+          kbCharge = 0;
+          return;
+        }
         const m = masses.find((q) => q.id === kbMassId);
         if (m) m.charge = 0;
         kbCharge = 0;
@@ -940,6 +1256,124 @@ export default function RelativityRoom() {
       pushHist(lantern.hist, lantern.x);
     };
 
+    const stepCar = (dt: number) => {
+      if (carHeld) {
+        const nx = mix(carX, carTargetX, Math.min(1, dt * 14));
+        carVx = dt > 0 ? (nx - carX) / dt : 0;
+        carX = nx;
+      } else {
+        const cruise = carDir * carBeta * c;
+        carVx = mix(carVx, cruise, Math.min(1, dt * 4));
+        carX += carVx * dt * (reduce ? 0 : timeScale);
+        // the deterministic loop: off one side, in from the other
+        if (carX > width + carRestLen) carX = -carRestLen;
+        if (carX < -carRestLen) carX = width + carRestLen;
+      }
+      carBetaEff = mix(carBetaEff, clamp(Math.abs(carVx) / c, 0, MATTER_CAP), Math.min(1, dt * 6));
+      pushHist(carHist, carX);
+
+      // the flash lives in light's time: under the three-finger law the
+      // rear end can be watched, slowly, running into its own light
+      if (simFlash) {
+        const t = lightT - simFlash.born;
+        if (!simFlash.rearDone && t >= simFlash.tRear) {
+          simFlash.rearDone = true;
+          note(52, 140); // the rear strike — first, whenever the car moves
+          try { haptics.tap(); } catch { /* noop */ }
+        }
+        if (!simFlash.frontDone && t >= simFlash.tFront) {
+          simFlash.frontDone = true;
+          note(59, 140); // the front strike — late by exactly the kernel's gap
+          try { haptics.tap(); } catch { /* noop */ }
+        }
+        if (!simFlash.carDone && t >= (simFlash.tRear + simFlash.tFront) / 2) {
+          simFlash.carDone = true; // the car's verdict: both ends, one moment
+          try { haptics.ripple(0.2); } catch { /* noop */ }
+        }
+        if (t > simFlash.tFront + 6) simFlash = null; // linger for the lens
+      }
+    };
+
+    const accrueBeacon = (
+      b: Beacon,
+      x: number,
+      y: number,
+      dtP: number,
+      betaUse: number,
+      pts: MassPoint[],
+    ) => {
+      // proper time: the special ratio times the gravitational one — the
+      // same 1/γ the kernel integrates, accrued live
+      const grav = timeDilation(pts, x, y, DIL_K, DIL_SOFT);
+      b.tau += dtP * properTimeRatio(betaUse) * grav;
+      b.beta = betaUse;
+      while (b.tau >= b.nextTdot) {
+        b.tdots.push({ x, tau: lightT });
+        if (b.tdots.length > TICKS_MAX) b.tdots.shift();
+        b.nextTdot += TDOT_TAU;
+      }
+      b.x = x;
+      b.y = y;
+      pushHist(b.hist, x);
+    };
+
+    const stepBeacons = (dt: number, now: number, pts: MassPoint[]) => {
+      const mdt = dt * (reduce ? 1 : timeScale);
+      const dA = driftA(localT);
+      const dB = driftB(localT);
+      // the stayer: its drift is slow, so its clock runs at nearly full rate
+      const betaB = mdt > 0
+        ? clamp(Math.hypot(dB.x - beaconB.x, dB.y - beaconB.y) / (mdt * c), 0, MATTER_CAP)
+        : 0;
+      accrueBeacon(beaconB, dB.x, dB.y, mdt, betaB, pts);
+
+      if (journey) {
+        journey.t += mdt;
+        let ax = beaconA.x;
+        let ay = beaconA.y;
+        if (!reduce) {
+          journey.s = Math.min(journey.s + journey.v * mdt, journey.len);
+          const p = journeyPointAt(journey, journey.s);
+          ax = p.x;
+          ay = p.y;
+          journey.trail.push({ x: ax, y: ay });
+          if (journey.trail.length > 30) journey.trail.shift();
+        }
+        accrueBeacon(beaconA, ax, ay, mdt, journey.beta, pts);
+        const done = reduce ? journey.t >= journey.T : journey.s >= journey.len - 0.5;
+        if (done) {
+          // the reunion: side by side, and the traveler is plainly younger
+          reunionAt = now;
+          reunionRatio = properTimeRatio(journey.beta);
+          if (!reduce) {
+            blendOffX = ax - dA.x;
+            blendOffY = ay - dA.y;
+          }
+          journey = null;
+          beaconA.ringFlashAt = now;
+          beaconB.ringFlashAt = now;
+          tone(392, 0.9);
+          tone(392 * reunionRatio, 0.9); // the age gap, heard as detune
+          note(64, 130);
+          try { haptics.bloom(); } catch { /* noop */ }
+          useField.getState().recordTape("sigil", 0.8, "relativity/reunion");
+        }
+      } else {
+        // after the reunion the traveler lingers beside its twin, then drifts home
+        if (now - reunionAt > REUNION_MS * 0.6) {
+          const k = Math.exp(-dt * 1.2);
+          blendOffX *= k;
+          blendOffY *= k;
+        }
+        const ax = dA.x + blendOffX;
+        const ay = dA.y + blendOffY;
+        const betaA = mdt > 0
+          ? clamp(Math.hypot(ax - beaconA.x, ay - beaconA.y) / (mdt * c), 0, MATTER_CAP)
+          : 0;
+        accrueBeacon(beaconA, ax, ay, mdt, betaA, pts);
+      }
+    };
+
     // ————— the loop —————
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
@@ -1010,6 +1444,8 @@ export default function RelativityRoom() {
       stepClock(clockA, clockB, pts, dt, now);
       stepClock(clockB, clockA, pts, dt, now);
       stepLantern(dt);
+      stepCar(dt);
+      stepBeacons(dt, now, pts);
 
       // ————— background: ink with a cold slow breath —————
       const bg = ctx.createLinearGradient(0, 0, 0, height);
@@ -1279,16 +1715,139 @@ export default function RelativityRoom() {
           ctx.stroke();
         }
         const R = 3.5 + q.heat * 5;
-        const g = ctx.createRadialGradient(q.x, q.y, 0, q.x, q.y, R * 2.4);
+        // the moving body is shorter along its motion by exactly 1/γ —
+        // the head squashes into an ellipse, flattest at the matter cap
+        const sp = Math.hypot(q.vx, q.vy);
+        const squash = contractedLength(1, Math.min(sp / c, 0.95));
+        const ang = sp > 1 ? Math.atan2(q.vy, q.vx) : 0;
+        ctx.save();
+        ctx.translate(q.x, q.y);
+        ctx.rotate(ang);
+        ctx.scale(squash, 1);
+        const g = ctx.createRadialGradient(0, 0, 0, 0, 0, R * 2.4);
         g.addColorStop(0, `rgba(255, 250, 240, ${0.65 + q.heat * 0.35})`);
         g.addColorStop(0.5, `rgba(${rr}, ${gg}, ${bb}, ${0.3 + q.heat * 0.35})`);
         g.addColorStop(1, "rgba(0,0,0,0)");
         ctx.fillStyle = g;
         ctx.beginPath();
-        ctx.arc(q.x, q.y, R * 2.4, 0, Math.PI * 2);
+        ctx.arc(0, 0, R * 2.4, 0, Math.PI * 2);
         ctx.fill();
+        ctx.restore();
       }
       ctx.restore();
+
+      // ————— the train: rest-length ghost, contracted car, one flash —————
+      {
+        const cy = carY();
+        const halfC = contractedLength(carRestLen, carBetaEff) / 2;
+        const held = carHeld || kbCarHold;
+        // the strip: two hairlines the car rides between — its quiet track
+        ctx.strokeStyle = "rgba(206, 222, 250, 0.05)";
+        ctx.lineWidth = 0.7;
+        ctx.beginPath();
+        ctx.moveTo(0, cy - CAR_H / 2 - 9);
+        ctx.lineTo(width, cy - CAR_H / 2 - 9);
+        ctx.moveTo(0, cy + CAR_H / 2 + 9);
+        ctx.lineTo(width, cy + CAR_H / 2 + 9);
+        ctx.stroke();
+        // rest-length ruler marks, fixed to the room, slid past and measured against
+        ctx.strokeStyle = "rgba(206, 222, 250, 0.09)";
+        ctx.beginPath();
+        for (let gx = 0; gx <= width; gx += carRestLen / 2) {
+          ctx.moveTo(gx, cy + CAR_H / 2 + 5);
+          ctx.lineTo(gx, cy + CAR_H / 2 + 12);
+        }
+        ctx.stroke();
+        // the ghost: the car's rest length riding along, never contracting
+        ctx.strokeStyle = `rgba(206, 222, 250, ${held ? 0.32 : 0.17})`;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 5]);
+        ctx.strokeRect(carX - carRestLen / 2, cy - CAR_H / 2, carRestLen, CAR_H);
+        ctx.setLineDash([]);
+        // the car: translucent glass, short of its ghost by exactly 1/γ
+        ctx.fillStyle = `rgba(140, 225, 205, ${0.1 + (held ? 0.06 : 0) + carBetaEff * 0.06})`;
+        ctx.fillRect(carX - halfC, cy - CAR_H / 2, halfC * 2, CAR_H);
+        ctx.strokeStyle = `rgba(150, 232, 210, ${0.45 + (held ? 0.2 : 0)})`;
+        ctx.lineWidth = 1.1;
+        ctx.strokeRect(carX - halfC, cy - CAR_H / 2, halfC * 2, CAR_H);
+        // end posts, brightened by the tutti's glint
+        const glint = clamp01(1 - (now - carGlintAt) / 260);
+        ctx.strokeStyle = `rgba(190, 245, 228, ${0.5 + glint * 0.45})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        for (const ex of [carX - halfC, carX + halfC]) {
+          ctx.moveTo(ex, cy - CAR_H / 2 - 3);
+          ctx.lineTo(ex, cy + CAR_H / 2 + 3);
+        }
+        ctx.stroke();
+        // the midpoint lamp — the tappable heart of the demonstration
+        ctx.fillStyle = "rgba(200, 248, 232, 0.9)";
+        ctx.beginPath();
+        ctx.arc(carX, cy, 2.6, 0, Math.PI * 2);
+        ctx.fill();
+        // keyboard retuning: the charge arc over the car
+        if (kbCarHold && kbCharge > 0.04) {
+          ctx.strokeStyle = `rgba(231, 172, 82, ${0.3 + kbCharge * 0.5})`;
+          ctx.lineWidth = 1.4;
+          ctx.beginPath();
+          ctx.arc(carX, cy, CAR_H * 1.4, -Math.PI / 2, -Math.PI / 2 + kbCharge * Math.PI * 2);
+          ctx.stroke();
+        }
+
+        // the flash: photons at c both ways, the room's strikes rear-first,
+        // and the car's own verdict — both ends blooming in one moment
+        if (simFlash) {
+          const sf = simFlash;
+          const t = lightT - sf.born;
+          ctx.save();
+          ctx.globalCompositeOperation = "lighter";
+          if (!reduce) {
+            for (const [done, dir2, tArr] of [
+              [sf.rearDone, -sf.sgn, sf.tRear],
+              [sf.frontDone, sf.sgn, sf.tFront],
+            ] as const) {
+              if (done) continue;
+              const px2 = sf.x0 + dir2 * c * Math.min(t, tArr);
+              const g = ctx.createRadialGradient(px2, sf.y, 0, px2, sf.y, 6);
+              g.addColorStop(0, "rgba(240, 246, 255, 0.95)");
+              g.addColorStop(1, "rgba(0,0,0,0)");
+              ctx.fillStyle = g;
+              ctx.beginPath();
+              ctx.arc(px2, sf.y, 6, 0, Math.PI * 2);
+              ctx.fill();
+            }
+          }
+          for (const [done, ax2, tArr] of [
+            [sf.rearDone, sf.rearX, sf.tRear],
+            [sf.frontDone, sf.frontX, sf.tFront],
+          ] as const) {
+            if (!done) continue;
+            const age = clamp01((t - tArr) / 0.8);
+            if (age >= 1) continue;
+            const rr2 = reduce ? 12 : 4 + age * 26;
+            ctx.strokeStyle = `rgba(214, 228, 252, ${0.6 * (1 - age)})`;
+            ctx.lineWidth = 1.3;
+            ctx.beginPath();
+            ctx.arc(ax2, sf.y, rr2, 0, Math.PI * 2);
+            ctx.stroke();
+          }
+          if (sf.carDone) {
+            const tCar = (sf.tRear + sf.tFront) / 2;
+            const age = clamp01((t - tCar) / 0.9);
+            if (age < 1) {
+              const rr2 = reduce ? 14 : 5 + age * 22;
+              ctx.strokeStyle = `rgba(150, 232, 210, ${0.55 * (1 - age)})`;
+              ctx.lineWidth = 1.3;
+              for (const ex of [carX - halfC, carX + halfC]) {
+                ctx.beginPath();
+                ctx.arc(ex, cy, rr2, 0, Math.PI * 2);
+                ctx.stroke();
+              }
+            }
+          }
+          ctx.restore();
+        }
+      }
 
       // ————— the lantern: blue running ahead, red trailing behind —————
       {
@@ -1402,31 +1961,96 @@ export default function RelativityRoom() {
         }
       }
 
-      // ————— twin beacons: gravity slowing time, watched, no numbers —————
+      // ————— twin beacons: time worn as rings; one can be sent away —————
       {
-        const bxA = width * (0.5 + 0.34 * Math.sin(localT * 0.045 + 1.3)) + beaconOffX;
-        const byA = height * (0.56 + 0.2 * Math.sin(localT * 0.036 + 0.4)) + beaconOffY;
-        const bxB = width * (0.5 + 0.4 * Math.sin(localT * 0.03 + 4.1)) + beaconOffX;
-        const byB = height * (0.84 + 0.05 * Math.sin(localT * 0.023 + 2.2)) + beaconOffY;
-        const spots: Array<[number, number, number]> = [[bxA, byA, 0], [bxB, byB, 1]];
-        for (const [bx, by, bi] of spots) {
+        const reunLive = now - reunionAt < REUNION_MS;
+        // the stilled journey: the bent path drawn, not flown — reduced
+        // motion keeps the paradox teachable as a comparison at rest
+        if (journey && reduce) {
+          ctx.strokeStyle = "rgba(255, 200, 130, 0.3)";
+          ctx.lineWidth = 1;
+          ctx.setLineDash([3, 6]);
+          ctx.beginPath();
+          journey.pts.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+        // the traveler's arc, glowing faintly behind it
+        if (journey && !reduce && journey.trail.length > 1) {
+          ctx.save();
+          ctx.globalCompositeOperation = "lighter";
+          const n = journey.trail.length;
+          for (let i = 1; i < n; i++) {
+            const f = i / n;
+            ctx.strokeStyle = `rgba(255, 200, 130, ${0.2 * f * f})`;
+            ctx.lineWidth = 1 + f;
+            ctx.beginPath();
+            ctx.moveTo(journey.trail[i - 1].x, journey.trail[i - 1].y);
+            ctx.lineTo(journey.trail[i].x, journey.trail[i].y);
+            ctx.stroke();
+          }
+          ctx.restore();
+        }
+        const spots: Array<[Beacon, number]> = [[beaconA, 0], [beaconB, 1]];
+        for (const [bcn, bi] of spots) {
+          const bx = bcn.x;
+          const by = bcn.y;
+          // gravity and motion both lean on this clock — one rate, felt
           const f = timeDilation(pts, bx, by, DIL_K, DIL_SOFT);
-          if (!reduce) beaconPhase[bi] += dt * timeScale * Math.PI * 2 * 0.55 * f;
+          const rate = f * properTimeRatio(bcn.beta);
+          if (!reduce) beaconPhase[bi] += dt * timeScale * Math.PI * 2 * 0.55 * rate;
           const blink = reduce
-            ? 0.35 + 0.5 * f
+            ? 0.35 + 0.5 * rate
             : Math.pow(0.5 + 0.5 * Math.sin(beaconPhase[bi]), 3);
-          const warmth = clamp01((1 - f) * 1.9);
+          const warmth = clamp01((1 - rate) * 1.9);
           const rr = Math.round(mix(223, 255, warmth));
           const gg = Math.round(mix(233, 158, warmth));
           const bb = Math.round(mix(255, 106, warmth));
           const a = 0.2 + blink * 0.7;
-          const g = ctx.createRadialGradient(bx, by, 0, bx, by, 13);
+          const pulseUp = reunLive
+            ? 1 + 0.45 * Math.sin(clamp01((now - reunionAt) / 900) * Math.PI)
+            : 1;
+          const g = ctx.createRadialGradient(bx, by, 0, bx, by, 13 * pulseUp);
           g.addColorStop(0, `rgba(${rr}, ${gg}, ${bb}, ${a})`);
           g.addColorStop(1, "rgba(0,0,0,0)");
           ctx.fillStyle = g;
           ctx.beginPath();
-          ctx.arc(bx, by, 13, 0, Math.PI * 2);
+          ctx.arc(bx, by, 13 * pulseUp, 0, Math.PI * 2);
           ctx.fill();
+          // rings of proper time, accreted like tree rings — no numerals;
+          // after the journey the traveler simply has fewer of them
+          const flash = now - bcn.ringFlashAt < 1200;
+          const ringScale = reunLive ? 1.6 : flash ? 1.35 : 1;
+          const ringsF = bcn.tau / RING_TAU;
+          const full = Math.floor(ringsF);
+          const shown = Math.min(full, RINGS_SHOWN);
+          const ringA = 0.1 + blink * 0.05 + (reunLive || flash ? 0.16 : 0);
+          ctx.lineWidth = 1;
+          for (let i = 0; i < shown; i++) {
+            const r = (5.5 + (i + 1) * 2.3) * ringScale;
+            ctx.strokeStyle = `rgba(${rr}, ${gg}, ${bb}, ${ringA * (0.45 + 0.55 * ((i + 1) / (shown + 1)))})`;
+            ctx.beginPath();
+            ctx.arc(bx, by, r, 0, Math.PI * 2);
+            ctx.stroke();
+          }
+          // the ring still accreting: a fractional arc, slow as aging
+          const frac = ringsF - full;
+          if (frac > 0.02) {
+            const r = (5.5 + (shown + 1) * 2.3) * ringScale;
+            ctx.strokeStyle = `rgba(${rr}, ${gg}, ${bb}, ${ringA + 0.12})`;
+            ctx.beginPath();
+            ctx.arc(bx, by, r, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2);
+            ctx.stroke();
+          }
+          // the traveler's mark: a faint dashed halo — the one that can go
+          if (bi === 0 && !journey) {
+            ctx.strokeStyle = `rgba(255, 200, 130, ${0.14 + blink * 0.08})`;
+            ctx.setLineDash([2, 5]);
+            ctx.beginPath();
+            ctx.arc(bx, by, (5.5 + (shown + 2) * 2.3) * ringScale + 4, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.setLineDash([]);
+          }
           ctx.fillStyle = `rgba(${rr}, ${gg}, ${bb}, ${0.5 + blink * 0.5})`;
           ctx.beginPath();
           ctx.arc(bx, by, 1.8, 0, Math.PI * 2);
@@ -1505,6 +2129,11 @@ export default function RelativityRoom() {
         drawWorldline(clockA.hist, `rgba(206, 226, 255, ${0.75 * la})`, 1.3);
         drawWorldline(clockB.hist, `rgba(255, 214, 150, ${0.8 * la})`, 1.3);
         drawWorldline(lantern.hist, `rgba(231, 172, 82, ${0.55 * la})`, 1);
+        // the car's worldline tilts with its speed; the twins' pair shows
+        // the bend — and the bent line drops fewer proper-time dots below
+        drawWorldline(carHist, `rgba(150, 232, 210, ${0.7 * la})`, 1.2);
+        drawWorldline(beaconA.hist, `rgba(255, 200, 130, ${0.7 * la})`, 1.1);
+        drawWorldline(beaconB.hist, `rgba(190, 214, 250, ${0.7 * la})`, 1.1);
         for (const q of comets) {
           drawWorldline(q.hist, `rgba(${Math.round(180 + 75 * q.heat)}, 200, ${Math.round(255 - 140 * q.heat)}, ${0.55 * la})`, 1);
         }
@@ -1519,11 +2148,75 @@ export default function RelativityRoom() {
             ctx.fill();
           }
         }
+        // proper-time dots: per stretch of room time, the bent worldline
+        // drops fewer of them — the bent path IS the shorter one
+        for (const [bcn, col] of [
+          [beaconA, "255, 200, 130"],
+          [beaconB, "190, 214, 250"],
+        ] as const) {
+          for (const t of bcn.tdots) {
+            const y = yOf(t.tau);
+            if (y < topY || y > botY) continue;
+            ctx.fillStyle = `rgba(${col}, ${0.85 * la})`;
+            ctx.beginPath();
+            ctx.arc(t.x, y, 1.7, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+        // simultaneity, diagrammed: the flash's 45° legs, the room's
+        // horizontal "at once" and the car's tilted one — the two strikes
+        // straddling them, farther apart the faster the car ran
+        if (simFlash) {
+          const sf = simFlash;
+          const yR = yOf(sf.born + sf.tRear);
+          const yF = yOf(sf.born + sf.tFront);
+          const yE = yOf(sf.born);
+          if (Math.min(yR, yF) < botY && yE > topY) {
+            ctx.strokeStyle = `rgba(240, 246, 255, ${0.4 * la})`;
+            ctx.lineWidth = 0.9;
+            ctx.beginPath();
+            ctx.moveTo(sf.x0, Math.min(yE, botY));
+            ctx.lineTo(sf.rearX, yR);
+            ctx.moveTo(sf.x0, Math.min(yE, botY));
+            ctx.lineTo(sf.frontX, yF);
+            ctx.stroke();
+            const yMid = (yR + yF) / 2;
+            const ext = 40;
+            ctx.strokeStyle = `rgba(206, 222, 250, ${0.5 * la})`;
+            ctx.setLineDash([3, 5]);
+            ctx.beginPath();
+            ctx.moveTo(Math.min(sf.rearX, sf.frontX) - ext, yMid);
+            ctx.lineTo(Math.max(sf.rearX, sf.frontX) + ext, yMid);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            const ddx = sf.frontX - sf.rearX;
+            const ddy = yF - yR;
+            const dl = Math.hypot(ddx, ddy) || 1;
+            const ux = ddx / dl;
+            const uy = ddy / dl;
+            ctx.strokeStyle = `rgba(150, 232, 210, ${0.7 * la})`;
+            ctx.lineWidth = 1.1;
+            ctx.beginPath();
+            ctx.moveTo(sf.rearX - ux * ext, yR - uy * ext);
+            ctx.lineTo(sf.frontX + ux * ext, yF + uy * ext);
+            ctx.stroke();
+            for (const [ex, ey] of [[sf.rearX, yR], [sf.frontX, yF]] as const) {
+              if (ey < topY || ey > botY) continue;
+              ctx.fillStyle = `rgba(240, 246, 255, ${0.9 * la})`;
+              ctx.beginPath();
+              ctx.arc(ex, ey, 2.6, 0, Math.PI * 2);
+              ctx.fill();
+            }
+          }
+        }
         // now-markers so the hand still finds its instruments under the lens
         for (const [x, col] of [
           [clockA.x, "206, 226, 255"],
           [clockB.x, "255, 214, 150"],
           [lantern.x, "231, 172, 82"],
+          [carX, "150, 232, 210"],
+          [beaconA.x, "255, 200, 130"],
+          [beaconB.x, "190, 214, 250"],
         ] as const) {
           ctx.fillStyle = `rgba(${col}, ${0.85 * la})`;
           ctx.beginPath();
@@ -1584,7 +2277,7 @@ export default function RelativityRoom() {
         className="relativity-field"
         role="application"
         tabIndex={0}
-        aria-label="relativity — light keeps its own covenant; tap and your ring runs at the one speed, flick matter and watch it lose the race, drag a clock and hear its tick slow, rest a finger and a mass gathers to slow the beacons near it; arrows walk, enter pulses and, held, gathers or collapses; escape lowers the lens"
+        aria-label="relativity — light keeps its own covenant; tap and your ring runs at the one speed, flick matter and watch it lose the race, drag a clock and hear its tick slow, rest a finger and a mass gathers to slow the beacons near it; tap the gliding car and one flash strikes its rear first by the room's count, drag the car to set its pace and watch it fall short of its resting ghost, flick the haloed beacon and it journeys home younger, its rings fewer; arrows walk, enter pulses and, held, gathers, collapses, or retunes the car; escape lowers the lens"
       >
         <canvas ref={canvasRef} className="relativity-canvas" aria-hidden="true" />
       </div>
