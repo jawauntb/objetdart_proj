@@ -84,6 +84,13 @@ export type RoomVoice = {
   /** every hold tick; `elapsed` keeps counting past every tier on purpose */
   deepen?: (e: { elapsed: number; tier: number; x: number; y: number }) => void;
   ceremony?: (e: { elapsed: number; x: number; y: number }) => void;
+  /**
+   * The hold ended, at any tier — the moment a lifted finger lets go of what
+   * it was charging. Rooms whose dwell act COMMITS on release (a body
+   * condensed under the fingertip and thrown with the drift it was carrying)
+   * need the lift itself; `ceremony` only fires at the top tier.
+   */
+  settle?: (e: { elapsed: number; tier: number; x: number; y: number }) => void;
   timeScale?: (k: number) => void;
   drag?: (e: { fingers: number; phase: "start" | "move" | "end"; x: number; y: number; dx: number; dy: number; vx: number; vy: number }) => void;
   wind?: (e: { dx: number; dy: number }) => void;
@@ -211,9 +218,12 @@ export function roomGestureBindings(ctx: RoomBindingContext): GestureHandlers {
         voice.deepen?.({ elapsed: e.elapsed, tier: e.tier, x: e.x, y: e.y });
         return;
       }
-      if (e.phase === "release" && e.tier >= 3) {
-        if (voice.ceremony) voice.ceremony({ elapsed: e.elapsed, x: e.x, y: e.y });
-        else answer(0.85, 0.95);
+      if (e.phase === "release") {
+        voice.settle?.({ elapsed: e.elapsed, tier: e.tier, x: e.x, y: e.y });
+        if (e.tier >= 3) {
+          if (voice.ceremony) voice.ceremony({ elapsed: e.elapsed, x: e.x, y: e.y });
+          else if (!voice.settle) answer(0.85, 0.95);
+        }
       }
     },
 

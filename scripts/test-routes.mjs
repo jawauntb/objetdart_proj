@@ -115,6 +115,7 @@ const expectedKeys = [
   "earth",
   "planets",
   "growth",
+  "solar",
   "stars",
   "galaxy",
   "space",
