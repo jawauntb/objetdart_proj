@@ -20,6 +20,7 @@ export default function SiteFooter() {
       <span className="t-mono" style={kept}>kept since 2010</span>
       <Sigil size={14} style={{ color: "var(--ink-2)" }} />
       <span style={footerLinks}>
+        <Link className="t-mono" href="/guide" style={link}>guide</Link>
         <Link className="t-mono" href="/colophon" style={link}>colophon</Link>
         <Link className="t-mono" href="/archive" style={link}>archive</Link>
       </span>

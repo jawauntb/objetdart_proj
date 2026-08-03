@@ -63,6 +63,30 @@ the quark→manifold axis, prefer deepening an existing band over adding rooms,
 and branch only where containment genuinely forks. State the placement (or
 the law/lens exemption) in one sentence in the PR body.
 
+## The field guide (`/guide`) — the documentation law
+
+`/guide` is the one sanctioned reading surface where the site explains itself: an
+onboarding walk, the gesture grammar, exhaustive per-room instructions with a
+screenshot of every room, and the workshop (system + HTTP API) docs. It exists so
+the rooms never have to — in-room copy stays instruction-free, always.
+
+- Content lives in **`src/data/guide.ts`** (one entry per route, plus the shared
+  sections). Screenshots live in **`public/guide/<key>.jpg`**, captured by
+  **`npm run shoot:guide`** (Playwright against a running build;
+  `--only=<key>` re-shoots a single room).
+- **Documentation moves with the change, in the same PR.** If your PR adds,
+  removes, or renames a room; changes what a gesture does; changes an API
+  contract; or visibly changes how a room looks — update that room's entry in
+  `src/data/guide.ts` (and the workshop section for system-level changes) and
+  re-shoot the affected screenshots before you merge.
+- `npm run test:guide` enforces this: it fails when the route registry and the
+  guide drift apart, and when a documented room has no screenshot. That failure
+  is the reminder working, not an obstacle — never silence it by deleting the
+  entry you should be updating.
+- The same law extends to the other load-bearing docs: a change that makes
+  `DESIGN.md`, `docs/gesture-grammar.md`, or `docs/new-room.md` false must edit
+  them in the same PR.
+
 ## Working on the code
 
 - Next.js 14 App Router + TypeScript + Tailwind + Zustand. Rooms live in

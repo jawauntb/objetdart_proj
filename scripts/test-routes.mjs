@@ -107,6 +107,7 @@ const expectedKeys = [
   "archive",
   "kept",
   "colophon",
+  "guide",
 ];
 const preferredNavigationKeys = [
   "atlas",
@@ -168,7 +169,7 @@ assert.equal(
 assert.ok(NAVIGATION_ROUTES.every(Boolean), "navigation order should contain only known routes");
 assert.deepEqual(
   GALLERY_ROUTES.map((route) => route.key),
-  expectedNavigationKeys.filter((key) => !["archive", "kept", "colophon"].includes(key)),
+  expectedNavigationKeys.filter((key) => !["archive", "kept", "colophon", "guide"].includes(key)),
   "swipe gallery should follow navigation order while omitting non-gallery routes",
 );
 assert.match(siteHeaderSource, /NAVIGATION_ROUTES\.map/, "site header should render the shared navigation order");
