@@ -14,7 +14,7 @@ import {
   type WorldKind,
   type WorldNatural,
 } from "@/lib/world";
-import { resolveDpr, onGalleryPause, onVisibility, isEmbeddedFrame } from "@/lib/room-runtime";
+import { resolveDpr, onGalleryPause, onVisibility, isEmbeddedFrame, createFrameGovernor, detailForTier } from "@/lib/room-runtime";
 import LetGo from "@/components/LetGo";
 
 /**
@@ -1131,6 +1131,17 @@ export default function Ocean() {
     let lastZone = "surface";
     let lastMReport = 0;
     let lastM = -1;
+
+    // ── the performance contract (src/lib/room-runtime) ─────────────
+    // resolveDpr already gates the drawing-buffer size (resize, above);
+    // the governor + visibility/gallery-pause subscriptions were imported
+    // but never wired to the loop itself — the room drew every frame
+    // whether the tab was visible or not.
+    const gov = createFrameGovernor();
+    let sleeping = false;
+    let galleryPaused = false;
+    const offVisibility = onVisibility((hidden) => { sleeping = hidden; });
+    const offGalleryPause = onGalleryPause((paused) => { galleryPaused = paused; });
     // periodic naturals persistence — the visible drift is applied per
     // frame; without this the mutations only get written on unmount.
     let lastNaturalsSaveAt = performance.now();
@@ -1162,6 +1173,9 @@ export default function Ocean() {
     };
 
     const draw = (now: number) => {
+      const tier = gov.beginFrame(now);
+      if (sleeping || galleryPaused) { raf = requestAnimationFrame(draw); return; } // no draw while hidden
+      const detail = detailForTier(tier);
       const w = surf.clientWidth;
       const h = surf.clientHeight;
       const dt = Math.min(60, now - prevNow);
@@ -1284,7 +1298,7 @@ export default function Ocean() {
       // foam crest lines marching toward the viewer; spacing widens with
       // perspective so they read as receding swells. Faster + taller than a
       // pond so the water visibly travels.
-      const crests = 7;
+      const crests = Math.max(3, Math.round(7 * detail.particles));
       for (let i = 0; i < crests; i++) {
         const f = i / (crests - 1);
         // perspective: cluster near horizon, spread near the bottom
@@ -1556,6 +1570,8 @@ export default function Ocean() {
 
     return () => {
       cancelAnimationFrame(raf);
+      offVisibility();
+      offGalleryPause();
       if (weatherTimer) clearTimeout(weatherTimer);
       // final drift-checkpoint so re-entry advances from now.
       persistNaturals();

@@ -53,11 +53,14 @@ import {
 } from "@/lib/atlas-world";
 import { getFieldAudio } from "@/lib/audio";
 import { PLANET_DESCENT_KEY } from "@/lib/stars/nestedCosmos";
-import { intensityFrom } from "@/lib/gesture/core";
+import { intensityFrom, THRESHOLDS } from "@/lib/gesture/core";
+import { attachGestures } from "@/lib/gesture";
+import { onVessel } from "@/lib/vessel";
 import * as haptics from "@/lib/haptics";
-import { resolveDpr, onGalleryPause, onVisibility, isEmbeddedFrame } from "@/lib/room-runtime";
+import { resolveDpr, onGalleryPause, onVisibility, isEmbeddedFrame, createFrameGovernor, detailForTier } from "@/lib/room-runtime";
 import { useField } from "@/store/field";
 import { useBandEdgeTravel } from "@/components/ScaleTravel";
+import LetGo from "@/components/LetGo";
 
 const ORIGIN_MAP = "/atlas/atlas-origin.webp";
 const MOBILE_ORIGIN_MAP = "/atlas/atlas-origin-mobile.webp";
@@ -76,10 +79,13 @@ const DESKTOP_ZOOM_SETTLE_MS = 620;
 const DRAG_THRESHOLD_PX = 14;
 const EDGE_TRAVEL_RATIO = 0.15;
 const GESTURE_SUPPRESS_MS = 280;
-// Long-press planting: hold on the map for ATLAS_PLANT_MS to leave a
-// natural (mostly a cairn, sometimes a wildflower, rarely an animal
-// trail). Threshold matches Ocean.tsx so gestures feel consistent.
-const ATLAS_PLANT_MS = 1800;
+// Long-press planting: hold on the map through the dwell tier to leave
+// a natural (mostly a cairn, sometimes a wildflower, rarely an animal
+// trail). This used to be a private 1800ms timer — a threshold shadowing
+// the grammar's own dwell tier (gesture/core.ts THRESHOLDS.dwellMs,
+// 900ms). Never redefine a threshold: the plant now fires at the
+// engine's own dwell tier, like every other room's long-press.
+const ATLAS_PLANT_MS = THRESHOLDS.dwellMs;
 
 type Direction = "north" | "east" | "south" | "west";
 type GenerationMode = "generate" | "zoom" | "refine" | "shift";
@@ -403,6 +409,15 @@ export default function Atlas() {
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const plantTimersRef = useRef(new Map<number, ReturnType<typeof setTimeout>>());
   const addNaturalRef = useRef<((kind: AtlasNaturalKind, nx: number, ny: number) => void) | null>(null);
+  // create/delete law: naturals are the atlas's countable material —
+  // addNatural above is the create, these two are the take-away. A
+  // ceremony hold near a mark is its own solemn act (annihilate); the
+  // shared <LetGo/> is the whole-field clear, both bridged the same way
+  // addNatural is, so the pointer/gesture layers never reach into the
+  // render effect's closure directly.
+  const removeNaturalRef = useRef<((id: string) => void) | null>(null);
+  const clearNaturalsRef = useRef<(() => void) | null>(null);
+  const [naturalsCount, setNaturalsCount] = useState(0);
 
   const [metrics, setMetrics] = useState<MapMetrics>(EMPTY_METRICS);
   const [hotspots, setHotspots] = useState(DEFAULT_HOTSPOTS);
@@ -777,11 +792,29 @@ export default function Atlas() {
       naturals.push(n);
       while (naturals.length > MAX_NATURALS) naturals.shift();
       persistNaturals();
+      setNaturalsCount(naturals.length);
       return n;
     };
+    // ceremony hold's solemn act: annihilate the one mark under the hand
+    const removeNatural = (id: string) => {
+      const idx = naturals.findIndex((n) => n.id === id);
+      if (idx === -1) return;
+      naturals.splice(idx, 1);
+      persistNaturals();
+      setNaturalsCount(naturals.length);
+    };
+    // the shared <LetGo/> — every mark released at once
+    const clearNaturals = () => {
+      naturals = [];
+      persistNaturals();
+      setNaturalsCount(0);
+    };
     loadNaturals();
-    // Bridge the addNatural closure to the pointer-down handler.
+    setNaturalsCount(naturals.length);
+    // Bridge the closures to the pointer-down / gesture / LetGo handlers.
     addNaturalRef.current = addNatural;
+    removeNaturalRef.current = removeNatural;
+    clearNaturalsRef.current = clearNaturals;
 
     // ── ambient cloud shadows ────────────────────────────────────
     // 4 soft gray radial gradients slowly drift W→E at slightly
@@ -977,6 +1010,8 @@ export default function Atlas() {
       ro.disconnect();
       stage.style.removeProperty("--atlas-breath");
       addNaturalRef.current = null;
+      removeNaturalRef.current = null;
+      clearNaturalsRef.current = null;
     };
   }, []);
 

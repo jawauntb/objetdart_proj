@@ -50,8 +50,6 @@
     "test:nucleons": "node scripts/test-nucleons.mjs",
     "test:quanta": "node scripts/test-quanta.mjs",
     "test:routes": "node scripts/test-routes.mjs",
-    "test:room-contract": "node scripts/test-room-contract.mjs",
-    "test:scene": "node scripts/test-scene.mjs",
     "test:guide": "node scripts/test-guide.mjs",
     "shoot:guide": "node scripts/shoot-guide.mjs",
     "test:atlas": "node scripts/test-atlas.mjs",
@@ -62,7 +60,9 @@
     "test:dither-avatar": "node scripts/test-dither-avatar.mjs",
     "compare:atlas-providers": "node scripts/compare-atlas-providers.mjs",
     "smoke:home": "node scripts/smoke-home.mjs",
-    "smoke:clouds": "node scripts/smoke-clouds.mjs"
+    "smoke:clouds": "node scripts/smoke-clouds.mjs",
+    "test:room-contract": "node scripts/test-room-contract.mjs",
+    "test:scene": "node scripts/test-scene.mjs"
   },
   "dependencies": {
     "@chenglou/pretext": "^0.0.8",

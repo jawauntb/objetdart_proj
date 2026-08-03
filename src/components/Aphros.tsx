@@ -30,6 +30,7 @@ import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
 import { onVessel } from "@/lib/vessel";
+import { createFrameGovernor, onVisibility, resolveDpr } from "@/lib/room-runtime";
 import LetGo from "@/components/LetGo";
 
 // ── determinism ──────────────────────────────────────────────────────
@@ -101,13 +102,18 @@ export default function Aphros() {
     const audio = getFieldAudio();
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+    // ── the performance contract (src/lib/room-runtime) ────────────────
+    const gov = createFrameGovernor();
+    let sleeping = false;
+    const offVisibility = onVisibility((hidden) => { sleeping = hidden; });
+
     // ── size ─────────────────────────────────────────────────────────
     let width = 0;
     let height = 0;
     let glReady = false;
     const resize = () => {
       const rect = wrap.getBoundingClientRect();
-      const ratio = Math.min(2, window.devicePixelRatio || 1);
+      const ratio = resolveDpr(gov.tier(), { reducedMotion: reduced });
       width = rect.width;
       height = rect.height;
       canvas.width = Math.round(width * ratio);
@@ -441,6 +447,20 @@ export default function Aphros() {
     const gl =
       (canvas.getContext("webgl", { antialias: false }) ||
         canvas.getContext("experimental-webgl" as "webgl")) as WebGLRenderingContext | null;
+
+    // context loss: prevent the default (which would forbid recovery) and
+    // hold the loop still until it comes back, rather than spamming GL
+    // calls against an invalidated context every frame.
+    let contextLost = false;
+    const onGlContextLost = (ev: Event) => {
+      ev.preventDefault();
+      contextLost = true;
+    };
+    const onGlContextRestored = () => {
+      contextLost = false;
+    };
+    canvas.addEventListener("webglcontextlost", onGlContextLost, false);
+    canvas.addEventListener("webglcontextrestored", onGlContextRestored, false);
 
     let raf = 0;
     if (gl) {
@@ -1088,6 +1108,8 @@ export default function Aphros() {
             const motion = reduced ? 0.3 : 1;
 
             const draw = (now: number) => {
+              gov.beginFrame(now);
+              if (sleeping || contextLost) { raf = requestAnimationFrame(draw); return; } // no draw while hidden
               const rawDt = Math.min(64, now - lastNow) / 1000;
               lastNow = now;
               timeScale += (timeScaleTarget - timeScale) * Math.min(1, rawDt * 5);
@@ -1283,6 +1305,9 @@ export default function Aphros() {
 
     return () => {
       observer.disconnect();
+      offVisibility();
+      canvas.removeEventListener("webglcontextlost", onGlContextLost);
+      canvas.removeEventListener("webglcontextrestored", onGlContextRestored);
       detachGestures();
       detachVessel();
       canvas.removeEventListener("pointermove", onHover);

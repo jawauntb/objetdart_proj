@@ -3206,6 +3206,12 @@ export default function Stars() {
 
     const draw = (now: number) => {
       const nowMs = now;
+      // Hidden means asleep: no frame is measured, nothing is drawn, and
+      // the governor keeps the tier it earned while it was being watched.
+      if (pageHiddenRef.current) {
+        raf = requestAnimationFrame(draw);
+        return;
+      }
       const nextTier = gov.beginFrame(now);
       if (nextTier !== tier) {
         tier = nextTier;
@@ -3216,11 +3222,6 @@ export default function Stars() {
           resize();
         }
       }
-      if (pageHiddenRef.current) {
-        raf = requestAnimationFrame(draw);
-        return;
-      }
-
       // The clock the sky runs on. Three fingers resting on the field slow
       // it; face-down slows it further. The wall clock keeps its own time —
       // only what is alive here is dilated.

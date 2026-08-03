@@ -388,6 +388,8 @@ export default function Charts() {
   const scanScaleRef = useRef({ cur: 1, target: 1 });     // 3-finger hold dilates it
   const entrainRef = useRef({ bpm: 0, until: 0, lastBeat: -1, pulse: 0 });
   const lastGestureAtRef = useRef(0);
+  const panRef = useRef({ x: 0, y: 0, tx: 0, ty: 0 }); // pan2: shifts the frame
+  const seasonRef = useRef(0); // 3-finger twist: the market's slow season
 
   // ── vessel state (the device is the plate's gravity) ──
   const tiltRef = useRef({ target: 0, cur: 0, over: false, lastCueAt: 0 });
@@ -634,12 +636,29 @@ export default function Charts() {
       const lens = lensRef.current;
       lens.cur += (lens.target - lens.cur) * 0.08;
 
+      // two-finger pan (pan2) shifts the whole frame, eased back to rest —
+      // distinct from a one-finger drag, which manipulates the data itself.
+      const pan = panRef.current;
+      pan.x += (pan.tx - pan.x) * 0.12;
+      pan.y += (pan.ty - pan.y) * 0.12;
+      pan.tx *= 0.9;
+      pan.ty *= 0.9;
+
+      ctx.save();
+      ctx.translate(pan.x, pan.y);
       drawPanel1(ctx, L, candles, hoverIdx, p1RangeRef, lens.cur, waveOff, detail.particles);
       drawPanel2(ctx, L, d1, d1Ema, p2RangeRef, waveOff);
       drawPanel3(ctx, L, rsi, p3RangeRef, waveOff);
 
       // volatility handle lives in the left gutter beside Panel 1
       drawVolHandle(ctx, L, volRef.current);
+      ctx.restore();
+
+      // three-finger twist = season: a slow, render-only warm/cool cast —
+      // one fillRect, never a per-element gradient.
+      const seasonWarm = Math.sin(seasonRef.current) * 0.5 + 0.5;
+      ctx.fillStyle = `rgba(${Math.round(200 + 40 * seasonWarm)}, ${Math.round(150 + 20 * (1 - seasonWarm))}, ${Math.round(120 + 60 * (1 - seasonWarm))}, 0.02)`;
+      ctx.fillRect(0, 0, L.width, L.height);
 
       // panel separators
       ctx.strokeStyle = "rgba(232,226,213,0.08)";
@@ -968,6 +987,18 @@ export default function Charts() {
     addChartMark("pinned", "amber", 0.86);
   };
 
+  // whole-field clear — the shared <LetGo/>, never a hand-rolled button.
+  const letGoPinned = () => {
+    setPinned(null);
+    if (typeof window !== "undefined") {
+      try { localStorage.removeItem(PIN_KEY); } catch { /* noop */ }
+    }
+    try { getFieldAudio().thud(); } catch { /* noop */ }
+    haptics.roll();
+    recordTape("kept", 0.4, "charts/let-go");
+    addChartMark("let go", "pale", 0.4);
+  };
+
   // latest chrome actions for the stable gesture handlers
   const onGenerateRef = useRef(onGenerate);
   const onPinRef = useRef(onPin);
@@ -995,6 +1026,25 @@ export default function Charts() {
     const detach = attachGestures(overlay, {
       tap: (e) => {
         lastGestureAtRef.current = performance.now();
+        if (e.fingers === 3) {
+          // tutti — every panel answers at once, the plate stating itself.
+          rippleRef.current = { t0: performance.now(), amp: 0.7, dir: 1 };
+          playNote(52, 200);
+          try { haptics.bloom(); } catch { /* noop */ }
+          recordTape("region", 0.6, "charts/tutti");
+          return;
+        }
+        if (e.fingers === 2) {
+          // step back: lower the raised lens first. ScaleTravel reads
+          // data-lens-raised and yields to us when this is set.
+          if (lensRef.current.target > 0.5) {
+            lensRef.current.target = 0;
+            overlay.removeAttribute("data-lens-raised");
+            try { haptics.tap(); } catch { /* noop */ }
+            recordTape("sigil", 0.4, "charts/lens-candles");
+          }
+          return;
+        }
         if (e.fingers !== 1) return; // the plate absorbs frame/law taps
         if (e.count === 3) {
           // a triple tap reseeds the field — the same act as the generate
@@ -1236,9 +1286,18 @@ export default function Charts() {
           try { haptics.bloom(); } catch { /* noop */ }
         }
       },
-      twist: (e) => {
-        if (e.fingers === 3) return; // three fingers turn the season, not the lens
+      pan2: (e) => {
         lastGestureAtRef.current = performance.now();
+        panRef.current.tx = Math.max(-30, Math.min(30, panRef.current.tx + e.dx * 0.25));
+        panRef.current.ty = Math.max(-20, Math.min(20, panRef.current.ty + e.dy * 0.25));
+      },
+      twist: (e) => {
+        lastGestureAtRef.current = performance.now();
+        if (e.fingers === 3) {
+          // three-finger twist = season: a slow warm/cool drift.
+          if (e.phase === "move") seasonRef.current += e.angle * 0.7;
+          return;
+        }
         if (e.phase !== "move") return;
         // twist rotates the lens: the same series as candlestick chart or
         // as the raw walk beneath it
@@ -1247,6 +1306,8 @@ export default function Charts() {
         while (Math.abs(twistAcc) >= step) {
           twistAcc -= Math.sign(twistAcc) * step;
           lensRef.current.target = lensRef.current.target > 0.5 ? 0 : 1;
+          if (lensRef.current.target > 0.5) overlay.setAttribute("data-lens-raised", "1");
+          else overlay.removeAttribute("data-lens-raised");
           playNote(lensRef.current.target > 0.5 ? 64 : 57, 140);
           try { haptics.lens(); } catch { /* noop */ }
           recordTape("sigil", 0.5, lensRef.current.target > 0.5 ? "charts/lens-walk" : "charts/lens-candles");
@@ -1560,6 +1621,8 @@ export default function Charts() {
           </span>
         </div>
       </MobileInstrumentPanel>
+
+      <LetGo label="let the pinned reading go" onLetGo={letGoPinned} visible={pinned !== null} />
 
       {/* scoped styling — mobile stack */}
       <style

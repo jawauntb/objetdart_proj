@@ -32,6 +32,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { onVessel, requestVessel, vesselAvailable, vesselGranted } from "@/lib/vessel";
+import LetGo from "@/components/LetGo";
+import {
+  createFrameGovernor,
+  detailForTier,
+  isEmbeddedFrame,
+  onGalleryPause,
+  onVisibility,
+  resolveDpr,
+} from "@/lib/room-runtime";
 
 const TAU = Math.PI * 2;
 const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
@@ -238,14 +248,6 @@ export default function Comb() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [motionUI, setMotionUI] = useState<"hidden" | "prompt" | "on">("hidden");
   const audioRef = useRef<CombAudio | null>(null);
-  const armSensorsRef = useRef<() => void>(() => {});
-  const motionRef = useRef<{
-    armed: boolean;
-    lastMag: number | null;
-    lastShakeAt: number;
-    onOrient: ((e: DeviceOrientationEvent) => void) | null;
-    onMotion: ((e: DeviceMotionEvent) => void) | null;
-  }>({ armed: false, lastMag: null, lastShakeAt: 0, onOrient: null, onMotion: null });
   const gravityRef = useRef({ tx: 0, ty: 0, x: 0, y: 0 });
   const shakeRef = useRef({ pending: 0 });
   const reduceRef = useRef(false);
@@ -255,77 +257,24 @@ export default function Comb() {
     audioRef.current.kick();
   }, []);
 
-  // ── device motion: tilt leans the stream, shake annihilates ────────────
+  // ── the vessel (shared bus, @/lib/vessel): tilt leans the stream, shake
+  // slams opposite charges together. Not a private wiring — one arm/permit
+  // lifecycle shared with every room. requestVessel() is invited from the
+  // chip's own click on gated platforms (iOS); ungated platforms (Android,
+  // desktop) arm silently, same as the room always behaved.
   const armSensors = useCallback(() => {
-    if (typeof window === "undefined" || motionRef.current.armed) return;
-    motionRef.current.armed = true;
-
-    const onOrient = (e: DeviceOrientationEvent) => {
-      const g = gravityRef.current;
-      g.tx = clamp((e.gamma ?? 0) / 45, -1, 1);
-      g.ty = clamp((e.beta ?? 0) / 45, -1, 1);
-    };
-
-    const onMotion = (e: DeviceMotionEvent) => {
-      const a = e.accelerationIncludingGravity;
-      if (!a) return;
-      const mag = Math.hypot(a.x ?? 0, a.y ?? 0, a.z ?? 0);
-      const m = motionRef.current;
-      if (m.lastMag != null) {
-        const jolt = Math.abs(mag - m.lastMag);
-        const hard = reduceRef.current ? 22 : 14;
-        const now = performance.now();
-        if (jolt > hard && now - m.lastShakeAt > 650) {
-          m.lastShakeAt = now;
-          shakeRef.current.pending = clamp(jolt / 30, 0.4, 1);
-        }
-      }
-      m.lastMag = mag;
-    };
-
-    motionRef.current.onOrient = onOrient;
-    motionRef.current.onMotion = onMotion;
-
-    type PermCtor = { requestPermission?: () => Promise<"granted" | "denied"> };
-    const DOE = (window as unknown as { DeviceOrientationEvent?: PermCtor }).DeviceOrientationEvent;
-    const DME = (window as unknown as { DeviceMotionEvent?: PermCtor }).DeviceMotionEvent;
-    const add = () => {
-      window.addEventListener("deviceorientation", onOrient);
-      window.addEventListener("devicemotion", onMotion);
-      setMotionUI("on");
-    };
-    if (DOE && typeof DOE.requestPermission === "function") {
-      Promise.allSettled([DOE.requestPermission?.(), DME?.requestPermission?.()])
-        .then((res) => {
-          if (res.some((r) => r.status === "fulfilled" && r.value === "granted")) add();
-          else motionRef.current.armed = false;
-        })
-        .catch(() => { motionRef.current.armed = false; });
-    } else {
-      add();
-    }
+    void requestVessel().then((ok) => {
+      if (ok) setMotionUI("on");
+    });
   }, []);
-  armSensorsRef.current = armSensors;
 
-  // decide the motion affordance on mount; auto-arm where no permission is
-  // needed (Android/desktop), show a chip on iOS, clean up on unmount.
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    const w = window as unknown as {
-      DeviceOrientationEvent?: { requestPermission?: () => Promise<string> };
-    };
-    const hasAny = "DeviceOrientationEvent" in window || "DeviceMotionEvent" in window;
-    if (!hasAny) { setMotionUI("hidden"); return; }
-    const needsPerm = !!(w.DeviceOrientationEvent && typeof w.DeviceOrientationEvent.requestPermission === "function");
-    if (needsPerm) setMotionUI("prompt");
-    else armSensors();
-    const m = motionRef.current;
-    return () => {
-      if (m.onOrient) window.removeEventListener("deviceorientation", m.onOrient);
-      if (m.onMotion) window.removeEventListener("devicemotion", m.onMotion);
-      m.armed = false; m.onOrient = null; m.onMotion = null;
-    };
-  }, [armSensors]);
+    if (!vesselAvailable()) { setMotionUI("hidden"); return; }
+    if (vesselGranted()) { setMotionUI("on"); return; }
+    // try a silent arm first (covers ungated platforms + a prior grant);
+    // if it doesn't take, offer the chip so the hand can invite it.
+    void requestVessel().then((ok) => setMotionUI(ok ? "on" : "prompt"));
+  }, []);
 
   // ── the field itself ───────────────────────────────────────────────────
   useEffect(() => {
@@ -348,6 +297,7 @@ export default function Comb() {
 
     // global field state
     let th0 = 0;                 // global phase (twist + slow rotation)
+    let seasonOffset = 0;        // three-finger twist: advances/rewinds the weather cycle
     let tDir = 1;                // time direction — flipping the phone reverses it
     let simT = 0;
 
@@ -470,7 +420,7 @@ export default function Comb() {
       { r: 156, g: 168, b: 194 },  // blue hour
     ];
     const weatherTint = (): { r: number; g: number; b: number; amt: number } => {
-      const phase = simT * 0.014;
+      const phase = simT * 0.014 + seasonOffset;
       const idx = ((Math.floor(phase) % WEATHER.length) + WEATHER.length) % WEATHER.length;
       const next = (idx + 1) % WEATHER.length;
       const f = phase - Math.floor(phase);
@@ -616,7 +566,14 @@ export default function Comb() {
       tap: (e) => {
         ensureAudio();
         lastGestureAt = performance.now();
-        if (e.fingers !== 1) return; // the field absorbs frame/law taps
+        if (e.fingers === 2) return; // ScaleTravel's step back — no lens here
+        if (e.fingers === 3) {
+          // tutti — everything alive answers softly at once
+          for (const d of defects) bursts.push({ x: d.x, y: d.y, t0: simT, amp: 0.25 });
+          try { audioRef.current?.ring(0.5); } catch { /* noop */ }
+          try { haptics.ripple(0.4); } catch { /* noop */ }
+          return;
+        }
         const wx = toWorldX(e.x), wy = toWorldY(e.y);
         // tap intensity is the strike — the newborn vortex's burst rides it
         const d = spawnDefect(1, wx, wy);
@@ -780,11 +737,22 @@ export default function Comb() {
         }
       },
       twist: (e) => {
-        if (e.fingers === 3) return; // three fingers turn the season, not the lens
         ensureAudio();
         lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          // three fingers turn the season — the slow weather cycle, not the lens
+          if (e.phase === "move") seasonOffset += e.angle * 0.6;
+          return;
+        }
         // two fingers rotate the global phase — the whole sky turns
         if (e.phase === "move") th0 += e.angle;
+      },
+      pan2: (e) => {
+        ensureAudio();
+        lastGestureAt = performance.now();
+        // two fingers pan the frame — the camera leans, bounded, world units
+        camX = clamp(camX - e.dx / (u * zoom), -1.6, 1.6);
+        camY = clamp(camY - e.dy / (u * zoom), -1.6, 1.6);
       },
       drum: (e) => {
         ensureAudio();
@@ -853,6 +821,32 @@ export default function Comb() {
       },
     }, { wheelZoom: false });
 
+    // ── the vessel (shared bus): tilt leans the stream, shake slams
+    // opposite charges together, a knock rings the field, and face-down
+    // is night — the field dims and slows until the phone turns back up.
+    // (Distinct from the portrait/landscape flip below, which is this
+    // room's own discovery, not the grammar's vessel `flip`.)
+    let nightTarget = 0;
+    const detachVessel = onVessel({
+      tilt: ({ beta, gamma }) => {
+        const g = gravityRef.current;
+        g.tx = clamp(gamma / 45, -1, 1);
+        g.ty = clamp(beta / 45, -1, 1);
+      },
+      shake: ({ intensity }) => {
+        if (reduceRef.current) return;
+        shakeRef.current.pending = clamp(intensity, 0.4, 1);
+      },
+      knock: ({ intensity }) => {
+        bursts.push({ x: camX, y: camY, t0: simT, amp: 0.4 + intensity * 0.4 });
+        try { audioRef.current?.ring(0.5 + intensity * 0.4); } catch { /* noop */ }
+        try { haptics.tap(); } catch { /* noop */ }
+      },
+      flip: ({ faceDown }) => {
+        nightTarget = faceDown ? 1 : 0;
+      },
+    });
+
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       zoom = clamp(zoom * Math.exp(-e.deltaY * 0.0012), 0.55, 2.6);
@@ -914,17 +908,41 @@ export default function Comb() {
     canvas.addEventListener("pointermove", onHover);
     canvas.addEventListener("wheel", onWheel, { passive: false });
 
+    // ── the shared performance contract: no draw while hidden, a quality
+    // tier that scales particle counts, a DPR ceiling on resize ────────
+    const embedded = isEmbeddedFrame();
+    const gov = createFrameGovernor(embedded ? "medium" : "high");
+    let hiddenDoc = document.hidden;
+    let galleryPaused = false;
+    let asleep = false;
+    const syncSleep = () => {
+      asleep = hiddenDoc || galleryPaused;
+      if (asleep) gov.force("sleep");
+    };
+    const unvis = onVisibility((hd) => {
+      hiddenDoc = hd;
+      syncSleep();
+    });
+    const ungal = onGalleryPause((p) => {
+      galleryPaused = p;
+      syncSleep();
+    });
+
     // ── main loop ────────────────────────────────────────────────────────
     let raf = 0;
     let last = performance.now();
+    let night = 0;
 
     const step = (now: number) => {
       raf = requestAnimationFrame(step);
+      const tier = gov.beginFrame(now);
       const rawDt = clamp((now - last) / 1000, 0.001, 0.05);
       last = now;
-      if (document.hidden) return;
+      if (asleep) return;
+      const detail = detailForTier(tier);
       const reduced = reduceRef.current;
-      const speedScale = reduced ? 0.35 : 1;
+      night += (nightTarget - night) * Math.min(1, rawDt * 0.8);
+      const speedScale = (reduced ? 0.35 : 1) * (1 - night * 0.7);
       // three-finger time dilation: the field's clock eases to 1/4 speed
       timeScale.cur += (timeScale.target - timeScale.cur) * Math.min(1, rawDt * 5);
       const dt = rawDt * timeScale.cur;
@@ -1196,7 +1214,7 @@ export default function Comb() {
             type="button"
             className="comb-motion-chip"
             aria-label="Enable motion so tilting leans the light and shaking slams the charges together"
-            onClick={() => { ensureAudio(); armSensorsRef.current(); }}
+            onClick={() => { ensureAudio(); armSensors(); }}
           >
             <span aria-hidden="true">◒</span>
             <span>tilt &amp; shake to play</span>

@@ -116,6 +116,7 @@ function dominantConcern(concerns: Record<ConcernKey, number>): ConcernKey {
 
 export default function HomeCabinet() {
   const stageRef = useRef<HTMLDivElement | null>(null);
+  const sectionRef = useRef<HTMLElement | null>(null);
   const patinaRef = useRef<HomeCabinetPatina>(blankPatina());
   const activeKeyRef = useRef("atlas");
   const clusterRef = useRef<SiteRouteCluster>("field");
@@ -228,20 +229,129 @@ export default function HomeCabinet() {
     }
   }, [addPatina]);
 
+  // Continuous hover parallax has no classified-gesture equivalent (the
+  // grammar's contacts only exist between a pointerdown and pointerup) —
+  // this is the desktop "hover ≈ light touch" register from the grammar's
+  // own desktop-equivalents table, not a raw gesture state machine, so it
+  // stays a plain listener. The engine mount below owns every real verb.
   const onPointerMove = (event: React.PointerEvent<HTMLElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
     pointerRef.current.x = ((event.clientX - rect.left) / rect.width - 0.5) * 2;
     pointerRef.current.y = ((event.clientY - rect.top) / rect.height - 0.5) * 2;
   };
 
-  const onPointerDown = (event: React.PointerEvent<HTMLElement>) => {
-    if ((event.target as HTMLElement).closest("a, button")) return;
-    pointerRef.current.pulse = 1;
-    addPatina(`surface-${selectedCluster}`, selectedCluster, 0.18);
-    try { haptics.tap(); } catch { /* noop */ }
-    try { getFieldAudio().playNote(activeCluster.pitch, 70); } catch { /* noop */ }
-    useField.getState().recordTape("ripple", 0.32, `home/${selectedCluster}`);
-  };
+  // gesture layer — one finger on open ground is the old surface-touch
+  // pulse, now classified by the engine instead of firing on every raw
+  // pointerdown. Two/three fingers add the frame and law the cabinet was
+  // missing: two-finger tap steps back to the field; twist(2) rotates the
+  // lens through the four route clusters; pan2 nudges the whole
+  // assembly, which eases back like it's on a spring; three-finger tap
+  // is tutti; three-finger drag is wind through the dust; three-finger
+  // hold dilates the cabinet's own time while held.
+  useEffect(() => {
+    const section = sectionRef.current;
+    if (!section) return;
+    let twistAcc = 0;
+    let tuttiTimer: ReturnType<typeof setTimeout> | null = null;
+    const detach = attachGestures(section, {
+      tap: (e) => {
+        if (document.elementFromPoint(e.x, e.y)?.closest("a, button")) return;
+        if (e.fingers === 1) {
+          pointerRef.current.pulse = 1;
+          addPatina(`surface-${clusterRef.current}`, clusterRef.current, 0.18);
+          try { haptics.tap(); } catch { /* noop */ }
+          try { getFieldAudio().playNote(CLUSTER_BY_ID[clusterRef.current].pitch, 70); } catch { /* noop */ }
+          useField.getState().recordTape("ripple", 0.32, `home/${clusterRef.current}`);
+          return;
+        }
+        if (e.fingers === 2) {
+          activeKeyRef.current = "atlas";
+          clusterRef.current = "field";
+          setActiveKey("atlas");
+          setSelectedCluster("field");
+          try { haptics.tap(); } catch { /* noop */ }
+          return;
+        }
+        tuttiRef.current = 1;
+        pointerRef.current.pulse = 1;
+        try { haptics.ripple(0.45); } catch { /* noop */ }
+        try { getFieldAudio().chime(); } catch { /* noop */ }
+        addPatina("tutti", clusterRef.current, 0.12);
+        if (tuttiTimer) clearTimeout(tuttiTimer);
+        tuttiTimer = setTimeout(() => { tuttiRef.current = 0; }, 700);
+      },
+      twist: (e) => {
+        if (e.fingers === 3 || e.phase !== "move") return;
+        twistAcc += e.angle;
+        const step = Math.PI / 2;
+        while (Math.abs(twistAcc) >= step) {
+          const direction = twistAcc > 0 ? 1 : -1;
+          twistAcc -= direction * step;
+          const idx = CLUSTER_INDEX_BY_ID[clusterRef.current];
+          const nextCluster = CLUSTERS[(idx + direction + CLUSTERS.length) % CLUSTERS.length].id;
+          selectCluster(nextCluster, "focus");
+          try { haptics.tap(); } catch { /* noop */ }
+        }
+      },
+      pan2: (e) => {
+        if (e.phase === "end") return;
+        panRef.current = {
+          x: Math.max(-1, Math.min(1, panRef.current.x + e.dx * 0.0025)),
+          y: Math.max(-1, Math.min(1, panRef.current.y + e.dy * 0.0025)),
+        };
+      },
+      drag: (e) => {
+        if (e.fingers !== 3) return;
+        gustRef.current = Math.max(-1, Math.min(1, gustRef.current + e.dx * 0.01));
+      },
+      hold: (e) => {
+        if (e.fingers !== 3) return;
+        if (e.phase === "release") return;
+        timeScaleRef.current = e.phase === "enter"
+          ? 1
+          : Math.max(0.2, 1 - Math.min(1, e.elapsed / THRESHOLDS.ceremonyMs) * 0.8);
+      },
+    }, { wheelZoom: false, manageStyle: false, noCapture: true });
+
+    const releaseHold = () => { timeScaleRef.current = 1; };
+    section.addEventListener("pointerup", releaseHold);
+    section.addEventListener("pointercancel", releaseHold);
+
+    // vessel: tilt leans the whole assembly beyond the hover parallax,
+    // shake agitates the dust field, a knock is tutti, and face-down is
+    // night — the lights ease down until the phone turns back over.
+    const detachVessel = onVessel({
+      tilt: ({ beta, gamma }) => {
+        tiltRef.current = {
+          x: Math.max(-1, Math.min(1, gamma / 45)),
+          y: Math.max(-1, Math.min(1, beta / 45)),
+        };
+      },
+      shake: ({ intensity }) => {
+        agitationRef.current = Math.min(1, agitationRef.current + intensity);
+        try { haptics.chop(); } catch { /* noop */ }
+      },
+      knock: () => {
+        tuttiRef.current = 1;
+        try { getFieldAudio().bell(); } catch { /* noop */ }
+        try { haptics.tap(); } catch { /* noop */ }
+        if (tuttiTimer) clearTimeout(tuttiTimer);
+        tuttiTimer = setTimeout(() => { tuttiRef.current = 0; }, 700);
+      },
+      flip: ({ faceDown }) => {
+        nightRef.current = faceDown ? 1 : 0;
+        setNight(faceDown);
+      },
+    });
+
+    return () => {
+      detach();
+      detachVessel();
+      section.removeEventListener("pointerup", releaseHold);
+      section.removeEventListener("pointercancel", releaseHold);
+      if (tuttiTimer) clearTimeout(tuttiTimer);
+    };
+  }, [addPatina, selectCluster]);
 
   useEffect(() => {
     const host = stageRef.current;
@@ -398,11 +508,21 @@ export default function HomeCabinet() {
     rose.position.set(4, 1.8, 5);
     scene.add(rose);
 
+    // Performance contract: a quality tier from real frame time, an
+    // explicit DPR ceiling (2 on embedded/mobile, 2 otherwise — matching
+    // the room's prior clamp exactly at "high"), and a hard sleep while
+    // the tab is hidden. No allocation happens inside tick() below.
+    const gov = createFrameGovernor();
+    let sleeping = false;
+    const offVisibility = onVisibility((hidden) => { sleeping = hidden; });
+    const embedded = isEmbeddedFrame();
+
     const resize = () => {
       const rect = host.getBoundingClientRect();
       const width = Math.max(1, Math.floor(rect.width));
       const height = Math.max(1, Math.floor(rect.height));
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      const dpr = resolveDpr(gov.tier(), { embedded, reducedMotion: reduce, maxDpr: 2 });
+      renderer.setPixelRatio(dpr);
       renderer.setSize(width, height, false);
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
@@ -416,27 +536,57 @@ export default function HomeCabinet() {
     let glowEase = patinaRef.current.glow;
     let rotX = 0;
     let rotY = 0;
+    let panX = 0;
+    let panY = 0;
+    let simTime = 0;
+    let lastTier = gov.tier();
     const tick = (now: number) => {
-      const dt = Math.min(0.05, (now - last) / 1000);
+      const tier = gov.beginFrame(now);
+      if (tier !== lastTier) { lastTier = tier; resize(); }
+      const dtReal = Math.min(0.05, (now - last) / 1000);
       last = now;
-      const t = now * 0.001;
+      if (sleeping) { raf = requestAnimationFrame(tick); return; } // no draw while hidden
+
+      // three-finger hold dilates the cabinet's own time, eased so it
+      // never snaps; every periodic term below reads simTime, not the
+      // wall clock, so the whole assembly genuinely slows.
+      const timeScale = timeScaleRef.current;
+      const dt = dtReal * timeScale;
+      simTime += dt;
+      const t = simTime;
       const motion = reduce ? 0 : 1;
       const pointer = pointerRef.current;
       pointer.pulse *= 0.92;
+      const tutti = tuttiRef.current;
+      tuttiRef.current *= 0.9;
+      const agitation = agitationRef.current;
+      agitationRef.current *= 0.94;
+      const nightLevel = nightRef.current;
       glowEase += (patinaRef.current.glow - glowEase) * 0.035;
       const level = 1 - Math.exp(-glowEase * 0.055);
 
-      rotY += (pointer.x * 0.26 - rotY) * 0.06;
-      rotX += (-pointer.y * 0.16 - rotX) * 0.06;
+      // pan2 eases the whole assembly off-center, then springs back —
+      // a grabbed pan, not a permanent camera move.
+      panX += (panRef.current.x * 1.1 - panX) * 0.08;
+      panY += (panRef.current.y * 0.9 - panY) * 0.08;
+      panRef.current.x *= 0.9;
+      panRef.current.y *= 0.9;
+      root.position.x = panX;
+      root.position.y = -panY;
+
+      const tilt = tiltRef.current;
+      rotY += (pointer.x * 0.26 + tilt.x * 0.22 - rotY) * 0.06;
+      rotX += (-pointer.y * 0.16 - tilt.y * 0.16 - rotX) * 0.06;
       root.rotation.y = rotY + Math.sin(t * 0.16) * 0.05 * motion;
       root.rotation.x = rotX + Math.cos(t * 0.19) * 0.035 * motion;
       mainRing.rotation.z = t * 0.035 * motion;
       crossRing.rotation.z = -t * 0.06 * motion;
       tiltedRing.rotation.z = t * 0.044 * motion;
-      lens.scale.setScalar(1 + Math.sin(t * 1.2) * 0.018 * motion + pointer.pulse * 0.04);
+      lens.scale.setScalar(1 + Math.sin(t * 1.2) * 0.018 * motion + pointer.pulse * 0.04 + tutti * 0.06);
       core.rotation.y = t * 0.5 * motion;
       core.rotation.z = -t * 0.36 * motion;
-      (candle as THREE.MeshStandardMaterial).emissiveIntensity = 0.35 + pointer.pulse * 0.8 + level * 0.3;
+      (candle as THREE.MeshStandardMaterial).emissiveIntensity =
+        (0.35 + pointer.pulse * 0.8 + level * 0.3 + tutti * 0.5) * (1 - nightLevel * 0.7);
       (glass as THREE.MeshPhysicalMaterial).emissiveIntensity = 0.22 + pointer.pulse * 0.18 + level * 0.22;
 
       const active = activeKeyRef.current;
@@ -449,12 +599,19 @@ export default function HomeCabinet() {
         mesh.rotation.x += dt * (0.9 + baseScale) * motion;
         mesh.rotation.y += dt * 0.8 * motion;
         mesh.position.z = (route.homePriority ? 0.34 : -0.12) + Math.sin(t * 0.9 + angle * 3) * 0.08 * motion + (isActive ? 0.26 : 0);
-        material.emissiveIntensity = (isActive ? 0.84 : isCluster ? 0.34 : 0.08) + pointer.pulse * 0.12 + level * 0.18;
+        material.emissiveIntensity =
+          ((isActive ? 0.84 : isCluster ? 0.34 : 0.08) + pointer.pulse * 0.12 + level * 0.18 + tutti * 0.4)
+          * (1 - nightLevel * 0.6);
       });
-      dust.rotation.z = -t * 0.015 * motion;
-      (dust.material as THREE.PointsMaterial).opacity = 0.34 + level * 0.24 + pointer.pulse * 0.16;
-      sea.intensity = 1.7 + level * 1.2 + pointer.pulse * 0.8;
-      rose.intensity = 1.1 + level * 1.0;
+      // three-finger drag = wind: a gust speeds or reverses the dust
+      // drift for as long as it's pushed, decaying back to the ambient
+      // rate; shake agitates the same field in its own material.
+      dust.rotation.z = (-t * 0.015 + gustRef.current * 0.02) * motion;
+      gustRef.current *= 0.9;
+      (dust.material as THREE.PointsMaterial).opacity =
+        (0.34 + level * 0.24 + pointer.pulse * 0.16 + agitation * 0.3) * detailForTier(tier).particles;
+      sea.intensity = (1.7 + level * 1.2 + pointer.pulse * 0.8 + tutti * 0.6) * (1 - nightLevel * 0.55);
+      rose.intensity = (1.1 + level * 1.0 + agitation * 0.4) * (1 - nightLevel * 0.55);
 
       renderer.render(scene, camera);
       raf = requestAnimationFrame(tick);
@@ -483,6 +640,7 @@ export default function HomeCabinet() {
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
+      offVisibility();
       reduceMotion.removeEventListener?.("change", updateReduce);
       delete (window as unknown as Record<string, unknown>).__homeCabinet;
       routeGems.forEach(({ material, line }) => {
@@ -512,11 +670,11 @@ export default function HomeCabinet() {
   return (
     <section
       id="threshold"
-      className="home-cabinet"
+      ref={sectionRef}
+      className={"home-cabinet" + (night ? " is-night" : "")}
       data-touch-surface="true"
       data-pretext-ignore="true"
       onPointerMove={onPointerMove}
-      onPointerDown={onPointerDown}
       style={{
         ["--active-color" as string]: activeCluster.color,
         ["--active-glow" as string]: activeCluster.glow,
@@ -1007,6 +1165,28 @@ export default function HomeCabinet() {
           .home-cabinet__clusters button,
           .home-cabinet__drawer a,
           .home-cabinet__hotspot {
+            transition: none;
+          }
+        }
+        /* flip face-down — night, until the phone turns back over. The
+           WebGL lights ease down inside tick(); this dims the DOM
+           furniture around them the same way. */
+        .home-cabinet.is-night .home-cabinet__title,
+        .home-cabinet.is-night .home-cabinet__lens,
+        .home-cabinet.is-night .home-cabinet__local,
+        .home-cabinet.is-night .home-cabinet__clusters,
+        .home-cabinet.is-night .home-cabinet__drawer,
+        .home-cabinet.is-night .home-cabinet__ring {
+          opacity: 0.5;
+          transition: opacity 900ms ease;
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .home-cabinet.is-night .home-cabinet__title,
+          .home-cabinet.is-night .home-cabinet__lens,
+          .home-cabinet.is-night .home-cabinet__local,
+          .home-cabinet.is-night .home-cabinet__clusters,
+          .home-cabinet.is-night .home-cabinet__drawer,
+          .home-cabinet.is-night .home-cabinet__ring {
             transition: none;
           }
         }

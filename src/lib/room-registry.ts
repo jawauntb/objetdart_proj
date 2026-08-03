@@ -1,42 +1,43 @@
 /**
- * room-registry — the one manifest a new room writes itself into.
+ * room-registry — what every room owes the hand, and the reasons for whatever
+ * it cannot say.
  *
- * The rest of the site is *derived* from this file. Adding a room should be
- * one entry here plus the component that draws its material; navigator
- * placement, gallery order, axis chrome, the guide's expected key set, the
- * persistence key, the performance wiring and the gesture contract all read
- * from this table or are checked against it by
- * `scripts/test-room-contract.mjs`.
+ * `src/rooms/` answers *where a room is*: its route, its sigil, its placement
+ * on the axis, its guide entry — declared once per room and derived into
+ * `SITE_ROUTES`, `PEER_CIRCLES`, the icon config and the guide. This file
+ * answers the other half, the one no registry had: **what a room owes the
+ * grammar.** Which global bindings it implements, which it genuinely cannot
+ * express and why, who owns the two-finger frame verb, what it keeps, what a
+ * dwell-hold creates, what chrome its page mounts.
  *
- * Why this exists, stated plainly so it is never softened back into prose:
+ * The two are cross-checked against each other (`registryDrift()`), never
+ * duplicated: this table holds no `desc`, no `icon`, no cluster — ask
+ * `SITE_ROUTES` for those.
+ *
+ * Why it exists, stated plainly so it is never softened back into prose:
  * AGENTS.md already said every one of these laws in words, and an audit still
  * found /earth wired to raw PointerEvents with a private 540ms hold timer,
  * /stars (4517 lines) with no vessel layer at all, thirty of thirty-five rooms
- * never touching `room-runtime` (no visibility pause, no DPR ceiling, no
- * quality tier), `src/lib/fork-regions.ts` built and tested and merged with
- * zero consumers, and `AtomsField` hand-rolling the clear button that
- * `<LetGo>` exists to fix. Prose did not hold the line. This table plus the
- * contract test is the line.
+ * never touching `room-runtime`, `src/lib/fork-regions.ts` built and tested and
+ * merged with zero consumers, and `AtomsField` hand-rolling the clear button
+ * that `<LetGo>` exists to fix. Prose did not hold the line. This table plus
+ * `scripts/test-room-contract.mjs` is the line.
  *
  * Pure data + tiny helpers. Imports only the scale manifold and the peer
  * cosmology (no DOM, no React) so node can load it — keep it that way.
  *
- * TODO (follow-up merge, one PR, after the room lanes land): `SCALE_BANDS[].route`,
- * `LATERAL_ROUTE_BANDS` in `src/lib/scale.ts` and `PEER_CIRCLES` /
- * `SCALE_EXEMPT_KEYS` in `src/lib/peers.ts` still hold a second copy of every
- * room's address. Those files were owned by other lanes when this registry was
- * written, so the registry *cross-checks* them (`registryDrift()`) and fails
- * loudly on drift instead of owning them. The merge is: derive
- * `LATERAL_ROUTE_BANDS` and `SCALE_EXEMPT_KEYS` from `ROOM_REGISTRY`, leave
- * `SCALE_BANDS` (physical spans) and `PEER_CIRCLES` (ring order) as the two
- * genuinely separate facts, and delete `expectedKeys` from
- * `scripts/test-routes.mjs` in favour of the registry.
+ * TODO (follow-up merge, one PR): fold these fields into `RoomManifest`
+ * (`src/rooms/types.ts`) as a `contract:` block, so a room states everything
+ * about itself in `src/rooms/<key>/room.config.ts` and this file becomes the
+ * derivation rather than a second table. Only two rooms (beam, relativity) had
+ * migrated to the manifest when this landed, and the contract has to cover all
+ * fifty-six today; merging now would mean fifty-four half-manifests. Until
+ * then `registryDrift()` fails loudly if the two disagree.
  */
 
 import { SCALE_BANDS, scaleBandIdForRoute, spectralRegisterFor, entryScaleFor } from "@/lib/scale";
 import type { ScaleBandId, SpectralRegister } from "@/lib/scale";
 import { SCALE_EXEMPT_KEY_SET, peerCircleForRoute } from "@/lib/peers";
-import type { RouteSigilKind } from "@/components/RouteSigil";
 
 // ———————————————————————————————————————————————————————————————————————
 // The global bindings (docs/gesture-grammar.md §5), as checkable names.
@@ -147,12 +148,6 @@ export type RoomEntry = {
   /** route registry key; also the guide key and the screenshot filename. */
   key: string;
   href: string;
-  /** the one line the nav and gallery show — lowercase, no marketing verbs. */
-  desc: string;
-  icon: RouteSigilKind;
-  cluster: "field" | "water" | "nature" | "mechanism";
-  dark?: boolean;
-  homePriority?: number;
   kind: RoomKind;
   /** repo-relative source of the component that owns the material. */
   source: string | null;
@@ -198,15 +193,14 @@ export type RoomEntry = {
 export const PAN_YIELDED_REASON =
   "the frame is the viewport and ScaleTravel owns its one verb; there is no camera to move";
 
+/**
+ * One entry per registered route. Kept in `SITE_ROUTES` order so the two lists
+ * read side by side; order carries no meaning here.
+ */
 export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "atlas",
     href: "/atlas/origin",
-    desc: "the living map",
-    icon: "atlas",
-    cluster: "field",
-    dark: true,
-    homePriority: 10,
     kind: "room",
     source: "src/components/Atlas.tsx",
     page: "src/app/atlas/[region]/page.tsx",
@@ -220,11 +214,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "coast",
     href: "/coast",
-    desc: "the beach · land meets sea",
-    icon: "waves",
-    cluster: "water",
-    dark: true,
-    homePriority: 7,
     kind: "room",
     source: "src/components/CoastBeach.tsx",
     page: "src/app/coast/page.tsx",
@@ -238,11 +227,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "ocean",
     href: "/ocean",
-    desc: "the deep · dive down",
-    icon: "waves",
-    cluster: "water",
-    dark: true,
-    homePriority: 7,
     kind: "room",
     source: "src/components/Ocean.tsx",
     page: "src/app/ocean/page.tsx",
@@ -256,11 +240,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "tide",
     href: "/tide",
-    desc: "move the moon",
-    icon: "tide",
-    cluster: "water",
-    dark: true,
-    homePriority: 9,
     kind: "room",
     source: "src/components/Tide.tsx",
     page: "src/app/tide/page.tsx",
@@ -274,11 +253,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "waves",
     href: "/waves",
-    desc: "ripple tank",
-    icon: "waves",
-    cluster: "water",
-    dark: true,
-    homePriority: 8,
     kind: "room",
     source: "src/components/Waves.tsx",
     page: "src/app/waves/page.tsx",
@@ -292,10 +266,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "sine",
     href: "/sine",
-    desc: "wave explorer",
-    icon: "waves",
-    cluster: "water",
-    dark: true,
     kind: "room",
     source: "src/components/SineWaveExplorer.tsx",
     page: "src/app/sine/page.tsx",
@@ -309,10 +279,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "pretext",
     href: "/pretext",
-    desc: "playable text",
-    icon: "waves",
-    cluster: "water",
-    dark: true,
     kind: "room",
     source: "src/components/PretextWave.tsx",
     page: "src/app/pretext/page.tsx",
@@ -326,10 +292,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "circularity",
     href: "/circularity",
-    desc: "circles to waves",
-    icon: "aphros",
-    cluster: "water",
-    dark: true,
     kind: "room",
     source: "src/components/CircularityFourier.tsx",
     page: "src/app/circularity/page.tsx",
@@ -344,11 +306,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "beyond",
     href: "/beyond",
-    desc: "novel wave field",
-    icon: "waves",
-    cluster: "water",
-    dark: true,
-    homePriority: 10,
     kind: "room",
     source: "src/components/BeyondWaveField.tsx",
     page: "src/app/beyond/page.tsx",
@@ -362,10 +319,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "manifold",
     href: "/manifold",
-    desc: "every scale kept in one fold",
-    icon: "stars",
-    cluster: "field",
-    dark: true,
     kind: "room",
     source: "src/components/ManifoldFold.tsx",
     page: "src/app/manifold/page.tsx",
@@ -379,10 +332,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "overlook",
     href: "/overlook",
-    desc: "the whole tree kept in one glance",
-    icon: "growth",
-    cluster: "field",
-    dark: true,
     kind: "room",
     source: "src/components/OverlookTree.tsx",
     page: "src/app/overlook/page.tsx",
@@ -396,10 +345,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "relativity",
     href: "/relativity",
-    desc: "light keeps its own covenant",
-    icon: "stars",
-    cluster: "mechanism",
-    dark: true,
     kind: "room",
     source: "src/components/RelativityRoom.tsx",
     page: "src/app/relativity/page.tsx",
@@ -413,10 +358,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "loom",
     href: "/loom",
-    desc: "one structure, every sense",
-    icon: "signal",
-    cluster: "mechanism",
-    dark: true,
     kind: "room",
     source: "src/components/StructureLoom.tsx",
     page: "src/app/loom/page.tsx",
@@ -430,10 +371,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "storm",
     href: "/storm",
-    desc: "pressure · charge · discharge",
-    icon: "storm",
-    cluster: "water",
-    dark: true,
     kind: "room",
     source: "src/components/Storm.tsx",
     page: "src/app/storm/page.tsx",
@@ -448,10 +385,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "clouds",
     href: "/clouds",
-    desc: "the air floor, four banks deep",
-    icon: "clouds",
-    cluster: "water",
-    dark: true,
     kind: "room",
     source: "src/components/Clouds.tsx",
     page: "src/app/clouds/page.tsx",
@@ -465,10 +398,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "mountain",
     href: "/mountain",
-    desc: "the peak above the fog",
-    icon: "earth",
-    cluster: "nature",
-    dark: true,
     kind: "room",
     source: "src/components/MountainPeak.tsx",
     page: "src/app/mountain/page.tsx",
@@ -482,9 +411,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "aphros",
     href: "/aphros",
-    desc: "play the shells",
-    icon: "aphros",
-    cluster: "water",
     kind: "room",
     source: "src/components/Aphros.tsx",
     page: "src/app/aphros/page.tsx",
@@ -498,10 +424,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "flowers",
     href: "/flowers",
-    desc: "petals · symmetry",
-    icon: "growth",
-    cluster: "nature",
-    dark: true,
     kind: "room",
     source: "src/components/FlowersGarden.tsx",
     page: "src/app/flowers/page.tsx",
@@ -516,10 +438,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "birds",
     href: "/birds",
-    desc: "a murmuration",
-    icon: "growth",
-    cluster: "nature",
-    dark: true,
     kind: "room",
     source: "src/components/Murmuration.tsx",
     page: "src/app/birds/page.tsx",
@@ -533,10 +451,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "tissue",
     href: "/tissue",
-    desc: "when one becomes many",
-    icon: "aphros",
-    cluster: "nature",
-    dark: true,
     kind: "room",
     source: "src/components/TissueSheet.tsx",
     page: "src/app/tissue/page.tsx",
@@ -550,10 +464,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "cells",
     href: "/cells",
-    desc: "the plasm keeps its own tide",
-    icon: "aphros",
-    cluster: "nature",
-    dark: true,
     kind: "room",
     source: "src/components/CellsPlasm.tsx",
     page: "src/app/cells/page.tsx",
@@ -567,10 +477,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "organelles",
     href: "/organelles",
-    desc: "the organs before the body",
-    icon: "aphros",
-    cluster: "nature",
-    dark: true,
     kind: "room",
     source: "src/components/OrganellesPlasm.tsx",
     page: "src/app/organelles/page.tsx",
@@ -584,10 +490,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "dna",
     href: "/dna",
-    desc: "the ladder that copies",
-    icon: "growth",
-    cluster: "nature",
-    dark: true,
     kind: "room",
     source: "src/components/HelixLadder.tsx",
     page: "src/app/dna/page.tsx",
@@ -601,10 +503,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "organics",
     href: "/organics",
-    desc: "what carbon does when it has time",
-    icon: "growth",
-    cluster: "nature",
-    dark: true,
     kind: "room",
     source: "src/components/OrganicsField.tsx",
     page: "src/app/organics/page.tsx",
@@ -618,10 +516,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "molecules",
     href: "/molecules",
-    desc: "what the bond holds, the solvent carries",
-    icon: "growth",
-    cluster: "nature",
-    dark: true,
     kind: "room",
     source: "src/components/MoleculesField.tsx",
     page: "src/app/molecules/page.tsx",
@@ -635,10 +529,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "atoms",
     href: "/atoms",
-    desc: "probability breathes around a bright nucleus",
-    icon: "plasma",
-    cluster: "mechanism",
-    dark: true,
     kind: "room",
     source: "src/components/AtomsField.tsx",
     page: "src/app/atoms/page.tsx",
@@ -652,10 +542,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "nucleons",
     href: "/nucleons",
-    desc: "the valley makes the elements",
-    icon: "plasma",
-    cluster: "mechanism",
-    dark: true,
     kind: "room",
     source: "src/components/NucleonsField.tsx",
     page: "src/app/nucleons/page.tsx",
@@ -669,10 +555,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "quarks",
     href: "/quarks",
-    desc: "nothing here can be alone",
-    icon: "plasma",
-    cluster: "mechanism",
-    dark: true,
     kind: "room",
     source: "src/components/QuarksVacuum.tsx",
     page: "src/app/quarks/page.tsx",
@@ -686,10 +568,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "quanta",
     href: "/quanta",
-    desc: "mass buys only a moment",
-    icon: "plasma",
-    cluster: "mechanism",
-    dark: true,
     kind: "room",
     source: "src/components/QuantaField.tsx",
     page: "src/app/quanta/page.tsx",
@@ -703,10 +581,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "fire",
     href: "/fire",
-    desc: "the element that breathes",
-    icon: "fire",
-    cluster: "nature",
-    dark: true,
     kind: "room",
     source: "src/components/Fire.tsx",
     page: "src/app/fire/page.tsx",
@@ -720,10 +594,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "earth",
     href: "/earth",
-    desc: "strata · seismograph · root",
-    icon: "earth",
-    cluster: "nature",
-    dark: true,
     kind: "room",
     source: "src/components/Earth.tsx",
     page: "src/app/earth/page.tsx",
@@ -737,10 +607,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "growth",
     href: "/growth",
-    desc: "sigmoid · exponential · decay",
-    icon: "growth",
-    cluster: "nature",
-    dark: true,
     kind: "room",
     source: "src/components/Growth.tsx",
     page: "src/app/growth/page.tsx",
@@ -754,11 +620,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "stars",
     href: "/stars",
-    desc: "the night sky",
-    icon: "stars",
-    cluster: "nature",
-    dark: true,
-    homePriority: 6,
     kind: "room",
     source: "src/components/Stars.tsx",
     page: "src/app/stars/page.tsx",
@@ -772,10 +633,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "space",
     href: "/space",
-    desc: "the web that holds the light",
-    icon: "stars",
-    cluster: "nature",
-    dark: true,
     kind: "room",
     source: "src/components/DeepSpaceWeb.tsx",
     page: "src/app/space/page.tsx",
@@ -789,10 +646,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "comb",
     href: "/comb",
-    desc: "comb the light · the cowlick stays",
-    icon: "stars",
-    cluster: "nature",
-    homePriority: 9,
     kind: "room",
     source: "src/components/Comb.tsx",
     page: "src/app/comb/page.tsx",
@@ -806,10 +659,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "beam",
     href: "/beam",
-    desc: "the eye of heaven · bokeh petals",
-    icon: "growth",
-    cluster: "nature",
-    homePriority: 10,
     kind: "room",
     source: "src/components/Beam.tsx",
     page: "src/app/beam/page.tsx",
@@ -823,10 +672,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "signal",
     href: "/signal",
-    desc: "music is also waves",
-    icon: "signal",
-    cluster: "mechanism",
-    dark: true,
     kind: "instrument",
     source: "src/components/Signal.tsx",
     page: "src/app/signal/page.tsx",
@@ -840,10 +685,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "light",
     href: "/light",
-    desc: "color music",
-    icon: "plasma",
-    cluster: "mechanism",
-    dark: true,
     kind: "instrument",
     source: "src/components/LightInstrument.tsx",
     page: "src/app/light/page.tsx",
@@ -857,10 +698,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "music-color",
     href: "/light/inverse",
-    desc: "notes into color",
-    icon: "plasma",
-    cluster: "mechanism",
-    dark: true,
     kind: "instrument",
     source: "src/components/MusicColorInstrument.tsx",
     page: "src/app/light/inverse/page.tsx",
@@ -874,10 +711,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "timbre",
     href: "/timbre",
-    desc: "one surface, every instrument",
-    icon: "signal",
-    cluster: "mechanism",
-    dark: true,
     kind: "instrument",
     source: "src/components/TimbreInstrument.tsx",
     page: "src/app/timbre/page.tsx",
@@ -891,10 +724,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "instrument",
     href: "/instrument",
-    desc: "every finger a voice",
-    icon: "signal",
-    cluster: "mechanism",
-    dark: true,
     kind: "instrument",
     source: "src/components/Instrument.tsx",
     page: "src/app/instrument/page.tsx",
@@ -908,10 +737,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "plasma",
     href: "/plasma",
-    desc: "plasma globe",
-    icon: "plasma",
-    cluster: "mechanism",
-    dark: true,
     kind: "room",
     source: "src/components/Plasma.tsx",
     page: "src/app/plasma/page.tsx",
@@ -926,10 +751,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "pulse",
     href: "/pulse",
-    desc: "heartbeat · pattern",
-    icon: "pulse",
-    cluster: "mechanism",
-    dark: true,
     kind: "room",
     source: "src/components/Pulse.tsx",
     page: "src/app/pulse/page.tsx",
@@ -943,10 +764,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "charts",
     href: "/charts",
-    desc: "lines · candles · oscillators",
-    icon: "charts",
-    cluster: "mechanism",
-    dark: true,
     kind: "room",
     source: "src/components/Charts.tsx",
     page: "src/app/charts/page.tsx",
@@ -960,10 +777,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "dither",
     href: "/dither",
-    desc: "ordered dots · signal studies",
-    icon: "charts",
-    cluster: "mechanism",
-    dark: true,
     kind: "room",
     source: "src/app/dither/DitherLab.tsx",
     page: "src/app/dither/page.tsx",
@@ -977,10 +790,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "time",
     href: "/time",
-    desc: "bend a clock",
-    icon: "watch",
-    cluster: "mechanism",
-    dark: true,
     kind: "room",
     source: "src/components/TimeManifold.tsx",
     page: "src/app/time/page.tsx",
@@ -994,11 +803,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "tourbillon",
     href: "/tourbillon",
-    desc: "a cage that cancels gravity",
-    icon: "watch",
-    cluster: "mechanism",
-    dark: true,
-    homePriority: 10,
     kind: "room",
     source: "src/components/Tourbillon.tsx",
     page: "src/app/tourbillon/page.tsx",
@@ -1012,11 +816,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "jewel",
     href: "/jewel",
-    desc: "turn the stone",
-    icon: "plasma",
-    cluster: "mechanism",
-    dark: true,
-    homePriority: 8,
     kind: "room",
     source: "src/components/Jewel.tsx",
     page: "src/app/jewel/page.tsx",
@@ -1031,11 +830,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "drop",
     href: "/drop",
-    desc: "a cosmos in glass",
-    icon: "plasma",
-    cluster: "mechanism",
-    dark: true,
-    homePriority: 11,
     kind: "room",
     source: "src/components/DropSphere.tsx",
     page: "src/app/drop/page.tsx",
@@ -1049,11 +843,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "seed",
     href: "/seed",
-    desc: "an embryo in dark soil",
-    icon: "growth",
-    cluster: "nature",
-    dark: true,
-    homePriority: 11,
     kind: "room",
     source: "src/components/SeedEmbryo.tsx",
     page: "src/app/seed/page.tsx",
@@ -1067,11 +856,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "coin",
     href: "/coin",
-    desc: "a gold medal · tilt · flip",
-    icon: "watch",
-    cluster: "mechanism",
-    dark: true,
-    homePriority: 10,
     kind: "room",
     source: "src/components/Coin.tsx",
     page: "src/app/coin/page.tsx",
@@ -1085,11 +869,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "watch",
     href: "/watch",
-    desc: "the room",
-    icon: "watch",
-    cluster: "mechanism",
-    dark: true,
-    homePriority: 9,
     kind: "room",
     source: "src/components/Watch.tsx",
     page: "src/app/watch/page.tsx",
@@ -1103,10 +882,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "archive",
     href: "/archive",
-    desc: "the drawers",
-    icon: "archive",
-    cluster: "field",
-    homePriority: 7,
     kind: "reading",
     source: "src/components/Archive.tsx",
     page: "src/app/archive/page.tsx",
@@ -1120,10 +895,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "kept",
     href: "/kept",
-    desc: "a private trail",
-    icon: "kept",
-    cluster: "field",
-    homePriority: 6,
     kind: "reading",
     source: null,
     page: "src/app/kept/page.tsx",
@@ -1137,9 +908,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "colophon",
     href: "/colophon",
-    desc: "what kept this",
-    icon: "colophon",
-    cluster: "field",
     kind: "reading",
     source: "src/components/Colophon.tsx",
     page: "src/app/colophon/page.tsx",
@@ -1153,9 +921,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
   {
     key: "guide",
     href: "/guide",
-    desc: "how to hold it",
-    icon: "colophon",
-    cluster: "field",
     kind: "reading",
     source: "src/components/Guide.tsx",
     page: "src/app/guide/page.tsx",

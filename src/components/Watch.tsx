@@ -7,6 +7,16 @@ import { THRESHOLDS } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import * as haptics from "@/lib/haptics";
+import LetGo from "@/components/LetGo";
+import {
+  createFrameGovernor,
+  detailForTier,
+  isEmbeddedFrame,
+  onGalleryPause,
+  onVisibility,
+  resolveDpr,
+  type QualityTier,
+} from "@/lib/room-runtime";
 
 /**
  * /watch — the "object that emanates."
@@ -32,6 +42,7 @@ export default function Watch() {
   const [whisperState, setWhisperState] = useState<Whisper | null>(null);
 
   const cursor = useRef({ x: -9999, y: -9999, tx: -9999, ty: -9999, over: false });
+  const detailRef = useRef(1); // detailForTier(tier).particles, set once per frame
   const lit = useRef({ candle: 0, glass: 0, book: 0, record: 0, window: 0, clock: 0, music: 0, frame: 0 });
 
   // ── the room's clock + law-layer state (gesture grammar) ──
@@ -154,14 +165,48 @@ export default function Watch() {
     law.current.lastFrameAt = -1;
     law.current.lastGestureAt = performance.now();
 
+    // ── performance contract (room-runtime): frame governor + visibility
+    // sleep + DPR ceiling, shared with every other room on the site. ──
+    const embedded = isEmbeddedFrame();
+    const gov = createFrameGovernor(embedded ? "medium" : "high");
+    let tier: QualityTier = gov.tier();
+    let hidden = document.hidden;
+    let galleryPaused = false;
+    let faceDown = false;
+    let sleeping = false;
+    const syncSleep = () => { sleeping = hidden || galleryPaused || faceDown; };
+    const unvis = onVisibility((h) => { hidden = h; syncSleep(); });
+    const ungal = onGalleryPause((p) => { galleryPaused = p; syncSleep(); });
+
     const resize = () => {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = resolveDpr(tier, { embedded, reducedMotion: reduce });
       cv.width = window.innerWidth * dpr;
       cv.height = window.innerHeight * dpr;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     };
     resize();
     window.addEventListener("resize", resize);
+
+    // ── cached background sprites (room-runtime perf contract): the wall,
+    // sky and sea used to allocate a fresh CanvasGradient every frame —
+    // rebuilt now only every few frames (their color drifts on a ~12s
+    // breath, so a few frames of lag is invisible) instead of all 60. ──
+    const bgCache = { frame: 0, wall: null as CanvasGradient | null, sky: null as CanvasGradient | null, sea: null as CanvasGradient | null };
+    // window-breath fog: a per-touch bloom that used to bake a fresh radial
+    // gradient every element every frame — now one shared sprite.
+    const breathSprite = document.createElement("canvas");
+    breathSprite.width = 128;
+    breathSprite.height = 128;
+    const breathSpriteCtx = breathSprite.getContext("2d");
+    if (breathSpriteCtx) {
+      const bg = breathSpriteCtx.createRadialGradient(64, 64, 0, 64, 64, 64);
+      bg.addColorStop(0, "rgba(245, 245, 250, 1)");
+      bg.addColorStop(1, "rgba(245, 245, 250, 0)");
+      breathSpriteCtx.fillStyle = bg;
+      breathSpriteCtx.beginPath();
+      breathSpriteCtx.arc(64, 64, 64, 0, Math.PI * 2);
+      breathSpriteCtx.fill();
+    }
 
     // geometry — re-derive object positions every frame to follow viewport.
     const geometry = () => {
@@ -812,6 +857,10 @@ export default function Watch() {
 
     // ── render loop ──────────────────────────────────────────────
     const draw = (now: number) => {
+      tier = gov.beginFrame(now);
+      if (sleeping) { raf = requestAnimationFrame(draw); return; }
+      const detail = detailForTier(tier);
+      detailRef.current = detail.particles;
       // the room's own clock: three fingers dilate it, the crown winds it —
       // sun, pendulum, flame wobble and the little boat all read from simT
       const L = law.current;
@@ -892,12 +941,6 @@ export default function Watch() {
       const wallR = 28 - cold * 16 + warmShift * 8;
       const wallG2 = 22 - cold * 10 + warmShift * 4;
       const wallB = 18 - cold * 2 + cold * 6 + breath * 2;
-      const wallGrad = ctx.createLinearGradient(0, 0, 0, g.h);
-      wallGrad.addColorStop(0, `rgba(${wallR | 0}, ${wallG2 | 0}, ${wallB | 0}, 1)`);
-      wallGrad.addColorStop(1, `rgba(${(wallR * 0.5) | 0}, ${(wallG2 * 0.55) | 0}, ${(wallB * 0.8) | 0}, 1)`);
-      ctx.fillStyle = wallGrad;
-      ctx.fillRect(0, 0, g.w, g.h);
-
       // ── window: sky + sea ──
       const skyR = 10 + sun * 90 + dawnWarmth * 80;
       const skyG = 18 + sun * 110 + dawnWarmth * 60;
@@ -905,18 +948,33 @@ export default function Watch() {
       const seaR = 8 + sun * 30;
       const seaG = 18 + sun * 50;
       const seaB = 38 + sun * 70;
-
-      const skyGrad = ctx.createLinearGradient(0, g.winTop, 0, g.winBottom * 0.7);
-      skyGrad.addColorStop(0, `rgb(${skyR | 0}, ${skyG | 0}, ${skyB | 0})`);
-      skyGrad.addColorStop(1, `rgb(${(skyR * 0.8) | 0}, ${(skyG * 0.8) | 0}, ${(skyB * 0.85) | 0})`);
-      ctx.fillStyle = skyGrad;
-      ctx.fillRect(g.winLeft, g.winTop, g.winRight - g.winLeft, g.winBottom - g.winTop);
-
       const seaTop = g.winTop + (g.winBottom - g.winTop) * 0.65;
-      const seaGrad = ctx.createLinearGradient(0, seaTop, 0, g.winBottom);
-      seaGrad.addColorStop(0, `rgb(${(seaR + 10) | 0}, ${(seaG + 20) | 0}, ${(seaB + 20) | 0})`);
-      seaGrad.addColorStop(1, `rgb(${seaR | 0}, ${seaG | 0}, ${seaB | 0})`);
-      ctx.fillStyle = seaGrad;
+
+      // wall/sky/sea gradients used to be rebuilt every frame — their color
+      // only drifts on the ~12s breath, so rebuilding every few frames
+      // (throttled harder on lower tiers) is visually identical and a
+      // fraction of the allocation cost.
+      bgCache.frame++;
+      const bgThrottle = tier === "low" || tier === "sleep" ? 6 : tier === "medium" ? 4 : 3;
+      if (!bgCache.wall || bgCache.frame % bgThrottle === 0) {
+        const wallGrad = ctx.createLinearGradient(0, 0, 0, g.h);
+        wallGrad.addColorStop(0, `rgba(${wallR | 0}, ${wallG2 | 0}, ${wallB | 0}, 1)`);
+        wallGrad.addColorStop(1, `rgba(${(wallR * 0.5) | 0}, ${(wallG2 * 0.55) | 0}, ${(wallB * 0.8) | 0}, 1)`);
+        bgCache.wall = wallGrad;
+        const skyGrad = ctx.createLinearGradient(0, g.winTop, 0, g.winBottom * 0.7);
+        skyGrad.addColorStop(0, `rgb(${skyR | 0}, ${skyG | 0}, ${skyB | 0})`);
+        skyGrad.addColorStop(1, `rgb(${(skyR * 0.8) | 0}, ${(skyG * 0.8) | 0}, ${(skyB * 0.85) | 0})`);
+        bgCache.sky = skyGrad;
+        const seaGrad = ctx.createLinearGradient(0, seaTop, 0, g.winBottom);
+        seaGrad.addColorStop(0, `rgb(${(seaR + 10) | 0}, ${(seaG + 20) | 0}, ${(seaB + 20) | 0})`);
+        seaGrad.addColorStop(1, `rgb(${seaR | 0}, ${seaG | 0}, ${seaB | 0})`);
+        bgCache.sea = seaGrad;
+      }
+      ctx.fillStyle = bgCache.wall!;
+      ctx.fillRect(0, 0, g.w, g.h);
+      ctx.fillStyle = bgCache.sky!;
+      ctx.fillRect(g.winLeft, g.winTop, g.winRight - g.winLeft, g.winBottom - g.winTop);
+      ctx.fillStyle = bgCache.sea!;
       ctx.fillRect(g.winLeft, seaTop, g.winRight - g.winLeft, g.winBottom - seaTop);
 
       if (sun < 0.4) {
@@ -1043,7 +1101,8 @@ export default function Watch() {
         ctx.arc(reflX, reflY, reflR * 2.2, 0, 7);
         ctx.fill();
         if (scintActive) {
-          for (let i = 0; i < 6; i++) {
+          const scintN = Math.max(1, Math.round(6 * detailRef.current));
+          for (let i = 0; i < scintN; i++) {
             const ang = (i / 6) * Math.PI * 2 + t * 1.6;
             const rr = reflR * (1.5 + 0.7 * Math.sin(t * 5 + i));
             const sxk = reflX + Math.cos(ang) * rr;
@@ -1069,21 +1128,23 @@ export default function Watch() {
       ctx.stroke();
 
       windowBreath.current = windowBreath.current.filter((b) => now - b.t0 < 1400);
-      windowBreath.current.forEach((b) => {
-        const age = (now - b.t0) / 1400;
-        const r = 36 + age * 18;
-        const a = 0.18 * (1 - age);
-        const fg = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, r);
-        fg.addColorStop(0, `rgba(245, 245, 250, ${a})`);
-        fg.addColorStop(1, `rgba(245, 245, 250, 0)`);
+      if (windowBreath.current.length > 0 && breathSpriteCtx) {
         ctx.save();
         ctx.beginPath();
         ctx.rect(g.winLeft + 3, g.winTop + 3, g.winRight - g.winLeft - 6, g.winBottom - g.winTop - 6);
         ctx.clip();
-        ctx.fillStyle = fg;
-        ctx.fillRect(b.x - r, b.y - r, r * 2, r * 2);
+        // a cached sprite (baked once above), never a fresh gradient per
+        // touch bloom per frame.
+        for (const b of windowBreath.current) {
+          const age = (now - b.t0) / 1400;
+          const r = 36 + age * 18;
+          const a = 0.18 * (1 - age);
+          ctx.globalAlpha = a;
+          ctx.drawImage(breathSprite, b.x - r, b.y - r, r * 2, r * 2);
+        }
+        ctx.globalAlpha = 1;
         ctx.restore();
-      });
+      }
 
       // sill
       ctx.fillStyle = "rgba(76, 54, 34, 0.95)";

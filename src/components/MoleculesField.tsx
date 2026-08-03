@@ -960,6 +960,23 @@ export default function MoleculesField() {
         note(45, 200);
         try { (intensity > 0.7 ? haptics.storm : haptics.chop)(); } catch { /* noop */ }
       },
+      knock: ({ intensity }) => {
+        if (reduce) return;
+        lastInteractionAt = performance.now();
+        // a rap on the case rings the beaker: one wavefront through the
+        // whole solvent, center-out, felt and heard together
+        wavefronts.push({
+          x: width * 0.5,
+          y: height * 0.5,
+          born: performance.now(),
+          maxR: Math.max(width, height) * 0.55,
+          strength: 0.4 + intensity * 0.5,
+        });
+        if (wavefronts.length > 8) wavefronts.shift();
+        try { audio().thud(); } catch { /* noop */ }
+        note(33, 260);
+        try { haptics.detent(); } catch { /* noop */ }
+      },
       flip: ({ faceDown }) => {
         // face-down is night: the pool of light under the beaker goes down
         nightTarget = faceDown ? 1 : 0;

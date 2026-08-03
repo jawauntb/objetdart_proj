@@ -995,6 +995,13 @@ export default function DeepSpaceWeb() {
           // a circling hand rolls the sky about the line of sight
           rollVel += e.angularVelocity * 0.02;
         },
+        pan2: (e) => {
+          lastInteractionAt = performance.now();
+          // two fingers pan the frame — the same parallax one finger already
+          // gives the volume, addressed at the map layer instead of the material
+          panX = clamp(panX - (e.dx / Math.max(1, width)) * 1.4, -0.8, 0.8);
+          panY = clamp(panY + (e.dy / Math.max(1, height)) * 1.0, -0.55, 0.55);
+        },
         rhythm: (e) => {
           if (e.stability > 0.68) tutti();
         },
@@ -1126,6 +1133,8 @@ export default function DeepSpaceWeb() {
     // ——— the loop ———
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
+      gov.beginFrame(now);
+      if (sleeping || galleryPaused) return; // no draw while hidden or embedded-paused
       const delta = Math.min(64, now - last);
       last = now;
       const dt = delta / 1000;
@@ -1393,6 +1402,15 @@ export default function DeepSpaceWeb() {
       }
     };
     raf = requestAnimationFrame(draw);
+    // no draw while hidden or paused inside a gallery iframe
+    const offVis = onVisibility((hiddenNow) => {
+      sleeping = hiddenNow;
+      if (!hiddenNow && !galleryPaused && !raf) raf = requestAnimationFrame(draw);
+    });
+    const offGallery = onGalleryPause((pausedNow) => {
+      galleryPaused = pausedNow;
+      if (!pausedNow && !sleeping && !raf) raf = requestAnimationFrame(draw);
+    });
 
     return () => {
       observer.disconnect();
@@ -1401,15 +1419,12 @@ export default function DeepSpaceWeb() {
       wrap.removeEventListener("keydown", onKeyDown);
       wrap.removeEventListener("keyup", onKeyUp);
       mq.removeEventListener?.("change", onMq);
+      offVis();
+      offGallery();
+      glCanvas.removeEventListener("webglcontextlost", onGlLost);
+      glCanvas.removeEventListener("webglcontextrestored", onGlRestored);
       cancelAnimationFrame(raf);
-      if (gl) {
-        for (const b of [quadBuf, cornerBuf, posBuf, metaBuf, meta2Buf, dynBuf]) {
-          if (b) gl.deleteBuffer(b);
-        }
-        if (volTex) gl.deleteTexture(volTex);
-        if (volProg) gl.deleteProgram(volProg);
-        if (galProg) gl.deleteProgram(galProg);
-      }
+      teardownGL();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

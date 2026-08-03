@@ -592,9 +592,19 @@ export default function MountainPeak() {
       return { x: x - rect.left, y: y - rect.top };
     };
 
+    /**
+     * The focal length, in CSS pixels. Taken from the LONGER side, which is
+     * the difference between a peak and a bump on a phone: derive it from
+     * the width and a portrait frame gets a 66° vertical field, in which
+     * the whole range — six degrees of it — is a smear across a tenth of
+     * the picture. From the longer side the long lens survives the
+     * rotation, and the crest stands where a photograph of it would.
+     */
+    const focalPx = () => Math.max(width, height, 1) / 2 / Math.tan(fov / 2);
+
     /** The camera, in JS — the same pinhole the fragment shader builds. */
     const rayFor = (px: number, py: number): [number, number, number] => {
-      const focal = (width || 1) / 2 / Math.tan(fov / 2);
+      const focal = focalPx();
       const horizonY = height * 0.46 + pitchPx;
       let qx = px - width * 0.5;
       let qy = horizonY - py;
@@ -1031,7 +1041,7 @@ export default function MountainPeak() {
       ctx.fillRect(0, Math.max(0, horizonY), width, height);
 
       const step = Math.max(2, Math.round(3 / Math.max(0.4, samples)));
-      const focal = width / 2 / Math.tan(fov / 2);
+      const focal = focalPx();
       const crests: { x: number; y: number; a: number; w: number }[] = [];
       for (let r = RANGES.length - 1; r >= 0; r--) {
         const d = RANGES[r];
@@ -1039,7 +1049,9 @@ export default function MountainPeak() {
         const near = r === 0;
         for (let x = -step; x <= width + step; x += step) {
           const col = clamp01(x / Math.max(1, width));
-          const a = yaw + (col - 0.5) * fov;
+          // a real pinhole, like the shader's: the bearing of a column is
+          // an arctangent of its offset, not a fraction of the field
+          const a = yaw + Math.atan2(x - width * 0.5, focal);
           const wx = stX + Math.sin(a) * d;
           const wz = stZ + Math.cos(a) * d;
           const g = groundAt(wx, wz, SEED, oct);
@@ -1177,7 +1189,7 @@ export default function MountainPeak() {
           gl.useProgram(prog);
           gl.uniform2f(u("uRes"), glCanvas.width, glCanvas.height);
           gl.uniform1f(u("uHorizonPx"), (height - horizonY) * bufScale);
-          gl.uniform1f(u("uFocal"), glCanvas.width / 2 / Math.tan(fov / 2));
+          gl.uniform1f(u("uFocal"), focalPx() * bufScale);
           gl.uniform1f(u("uRoll"), roll);
           gl.uniform1f(u("uYaw"), yaw);
           gl.uniform3f(u("uSun"), sun[0], sun[1], sun[2]);
