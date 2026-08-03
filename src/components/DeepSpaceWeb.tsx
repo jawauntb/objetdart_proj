@@ -52,6 +52,13 @@ import { stirTurbulence } from "@/lib/turbulence";
 import { SCALE_BANDS, entryScaleInto } from "@/lib/scale";
 import LetGo from "@/components/LetGo";
 import {
+  resolveDpr,
+  onGalleryPause,
+  onVisibility,
+  isEmbeddedFrame,
+  createFrameGovernor,
+} from "@/lib/room-runtime";
+import {
   DENSITY_GRID,
   DENSITY_THRESHOLD,
   GROWTH_MAX,
@@ -653,8 +660,13 @@ export default function DeepSpaceWeb() {
       save();
     };
 
+    // ——— performance contract (room-runtime) ———
+    const gov = createFrameGovernor();
+    let sleeping = false;
+    let galleryPaused = false;
+
     // ——— geometry ———
-    const dpr = () => Math.min(1.5, window.devicePixelRatio || 1);
+    const dpr = () => resolveDpr(gov.tier(), { embedded: isEmbeddedFrame(), reducedMotion: reduced, maxDpr: 1.5 });
     const resize = () => {
       const r = wrap.getBoundingClientRect();
       const ratio = dpr();
@@ -709,7 +721,27 @@ export default function DeepSpaceWeb() {
       else angle?.drawArraysInstancedANGLE(gl!.TRIANGLE_STRIP, 0, verts, instances);
     };
 
-    if (gl && (gl2 || angle)) {
+    // The GL setup below (programs, buffers, texture) is wrapped in a
+    // function so `webglcontextrestored` can rebuild it in place — mobile
+    // GPUs reclaim contexts on backgrounding, and this room previously had
+    // no recovery path at all.
+    const teardownGL = () => {
+      if (!gl) return;
+      for (const b of [quadBuf, cornerBuf, posBuf, metaBuf, meta2Buf, dynBuf]) {
+        if (b) gl.deleteBuffer(b);
+      }
+      if (volTex) gl.deleteTexture(volTex);
+      if (volProg) gl.deleteProgram(volProg);
+      if (galProg) gl.deleteProgram(galProg);
+      quadBuf = cornerBuf = posBuf = metaBuf = meta2Buf = dynBuf = null;
+      volTex = null;
+      volProg = null;
+      galProg = null;
+      glOk = false;
+    };
+
+    const initGL = () => {
+      if (gl && (gl2 || angle)) {
       const compile = (type: number, src: string) => {
         const sh = gl.createShader(type);
         if (!sh) return null;
@@ -813,7 +845,20 @@ export default function DeepSpaceWeb() {
           dyn: gl.getAttribLocation(galProg, "a_dyn"),
         };
       }
-    }
+      }
+    };
+    initGL();
+
+    const onGlLost = (ev: Event) => {
+      ev.preventDefault();
+      glOk = false;
+    };
+    const onGlRestored = () => {
+      teardownGL();
+      initGL();
+    };
+    glCanvas.addEventListener("webglcontextlost", onGlLost, false);
+    glCanvas.addEventListener("webglcontextrestored", onGlRestored, false);
 
     // ——— the grammar ———
     const detachGestures = attachGestures(

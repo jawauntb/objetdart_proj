@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import { getLight808 } from "@/lib/light-808";
-import { ripple, roll, tap as hapticTap } from "@/lib/haptics";
+import { ripple, roll, tap as hapticTap, chop, lens as hapticLens, bloom as hapticBloom } from "@/lib/haptics";
 import {
   SPECTRAL_STOPS,
   audibleFrequency,
@@ -24,6 +24,9 @@ import {
   type LessonGhost,
 } from "@/lib/instrument-lesson";
 import { useField } from "@/store/field";
+import { attachGestures } from "@/lib/gesture";
+import { onVessel, requestVessel, vesselAvailable, vesselGranted } from "@/lib/vessel";
+import LetGo from "@/components/LetGo";
 
 type ToneMark = {
   id: number;

@@ -15,6 +15,15 @@ import * as haptics from "@/lib/haptics";
 import { onVessel } from "@/lib/vessel";
 import { relaxTurbulence, stirTurbulence } from "@/lib/turbulence";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
+import LetGo from "@/components/LetGo";
+import {
+  createFrameGovernor,
+  detailForTier,
+  isEmbeddedFrame,
+  onGalleryPause,
+  resolveDpr,
+  type QualityTier,
+} from "@/lib/room-runtime";
 
 /**
  * Charts — /charts route.
@@ -484,8 +493,17 @@ export default function Charts() {
       typeof window !== "undefined" &&
       window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+    // ── performance contract (room-runtime): frame governor + DPR ceiling,
+    // shared with every other room. Visibility pause already lived here
+    // (document.hidden below) — gallery-pause joins it. ──
+    const embedded = isEmbeddedFrame();
+    const gov = createFrameGovernor(embedded ? "medium" : "high");
+    let tier: QualityTier = gov.tier();
+    let galleryPaused = false;
+    const ungal = onGalleryPause((p) => { galleryPaused = p; });
+
     const resize = () => {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = resolveDpr(tier, { embedded, reducedMotion: reduce });
       const w = canvas.clientWidth;
       const h = canvas.clientHeight;
       canvas.width = Math.max(1, Math.floor(w * dpr));
@@ -532,15 +550,18 @@ export default function Charts() {
     let restedWhileHidden = false;
 
     const draw = (now: number) => {
+      tier = gov.beginFrame(now);
+      const detail = detailForTier(tier);
       const L = layoutRef.current;
       if (!L) {
         raf = requestAnimationFrame(draw);
         return;
       }
-      // a hidden tab costs nothing: one settled frame so the plate is never
-      // blank, then no paint at all, and the clock resumes from here rather
-      // than jumping the breath forward
-      if (document.hidden) {
+      // a hidden tab (or a paused gallery iframe) costs nothing: one
+      // settled frame so the plate is never blank, then no paint at all,
+      // and the clock resumes from here rather than jumping the breath
+      // forward
+      if (document.hidden || galleryPaused) {
         scanRef.current.lastFrameAt = -1;
         if (restedWhileHidden) {
           raf = requestAnimationFrame(draw);
@@ -613,7 +634,7 @@ export default function Charts() {
       const lens = lensRef.current;
       lens.cur += (lens.target - lens.cur) * 0.08;
 
-      drawPanel1(ctx, L, candles, hoverIdx, p1RangeRef, lens.cur, waveOff);
+      drawPanel1(ctx, L, candles, hoverIdx, p1RangeRef, lens.cur, waveOff, detail.particles);
       drawPanel2(ctx, L, d1, d1Ema, p2RangeRef, waveOff);
       drawPanel3(ctx, L, rsi, p3RangeRef, waveOff);
 
@@ -716,6 +737,7 @@ export default function Charts() {
 
     return () => {
       ro.disconnect();
+      ungal();
       if (raf) cancelAnimationFrame(raf);
     };
   }, [candles, d1, d1Ema, rsi, hoverIdx]);
@@ -1697,6 +1719,7 @@ function drawPanel1(
   rangeRef: React.MutableRefObject<{ yMin: number; yMax: number }>,
   lensT = 0,
   waveOff?: (i: number) => number,
+  detailParticles = 1,
 ) {
   const top = L.p1Top + 6;
   const bot = L.p1Top + L.p1H - 6;
@@ -1784,8 +1807,9 @@ function drawPanel1(
     const bodyH = Math.max(1, bodyBot - bodyTop);
     ctx.fillRect(cx - bw / 2, bodyTop, bw, bodyH);
 
-    // tweak indicator — a small bright marker at the manipulated close
-    if (Math.abs(c.tweak) > 0.001) {
+    // tweak indicator — a small bright marker at the manipulated close.
+    // A decorative extra draw, so it scales off first on lower tiers.
+    if (Math.abs(c.tweak) > 0.001 && detailParticles > 0.5) {
       ctx.fillStyle = "rgba(255,180,110,0.95)";
       ctx.beginPath();
       ctx.arc(cxPx, yClose, 2.2, 0, Math.PI * 2);

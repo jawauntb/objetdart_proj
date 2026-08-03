@@ -96,8 +96,14 @@ export default function Ocean() {
     let uSeasonLoc: WebGLUniformLocation | null = null;
     let uRipplesLoc: WebGLUniformLocation | null = null;
     let uRippleCountLoc: WebGLUniformLocation | null = null;
+    let waterBuf: WebGLBuffer | null = null;
 
-    if (gl) {
+    // Factored so the whole program (shaders, buffer, uniform locations)
+    // can be rebuilt after a lost/restored context — GPU resources don't
+    // survive loss even though the JS WebGLRenderingContext object does.
+    const compileWaterProgram = () => {
+      if (!gl) return;
+      glProg = null;
       const vert = `
         attribute vec2 a_pos;
         varying vec2 vUv;
@@ -361,8 +367,8 @@ export default function Ocean() {
             uRipplesLoc = gl.getUniformLocation(p, "uRipples");
             uRippleCountLoc = gl.getUniformLocation(p, "uRippleCount");
 
-            const buf = gl.createBuffer();
-            gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+            waterBuf = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, waterBuf);
             gl.bufferData(
               gl.ARRAY_BUFFER,
               new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]),
@@ -375,7 +381,24 @@ export default function Ocean() {
           }
         }
       }
-    }
+    };
+    compileWaterProgram();
+
+    // WebGL context loss/restore: pause GL draws (the 2D fallback path
+    // already used when `gl` is null covers the frames in between) and
+    // rebuild the whole program once the context comes back.
+    let glContextLost = false;
+    const onContextLost = (ev: Event) => {
+      ev.preventDefault();
+      glContextLost = true;
+      glProg = null;
+    };
+    const onContextRestored = () => {
+      glContextLost = false;
+      compileWaterProgram();
+    };
+    water.addEventListener("webglcontextlost", onContextLost, false);
+    water.addEventListener("webglcontextrestored", onContextRestored, false);
 
     // ── resize ────────────────────────────────────────────────────
     const resize = () => {
@@ -387,7 +410,7 @@ export default function Ocean() {
       surf.width = Math.floor(w * dpr);
       surf.height = Math.floor(h * dpr);
       sctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      if (gl) gl.viewport(0, 0, water.width, water.height);
+      if (gl && !glContextLost) gl.viewport(0, 0, water.width, water.height);
     };
     resize();
     const ro = new ResizeObserver(resize);
@@ -1544,6 +1567,12 @@ export default function Ocean() {
       surf.removeEventListener("wheel", onWheel);
       window.removeEventListener("deviceorientation", onOrient);
       window.removeEventListener("devicemotion", onMotion);
+      water.removeEventListener("webglcontextlost", onContextLost);
+      water.removeEventListener("webglcontextrestored", onContextRestored);
+      if (gl) {
+        if (glProg) gl.deleteProgram(glProg);
+        if (waterBuf) gl.deleteBuffer(waterBuf);
+      }
     };
   }, []);
 

@@ -1054,6 +1054,7 @@ export default function Fire() {
       fxCanvas.removeEventListener("pointerleave", onHoverLeave);
       heatCanvas.removeEventListener("webglcontextlost", onContextLost);
       heatCanvas.removeEventListener("webglcontextrestored", onContextRestored);
+      delete wrap.dataset.lensRaised;
       if (gl) {
         if (program) gl.deleteProgram(program);
         if (vbo) gl.deleteBuffer(vbo);

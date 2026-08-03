@@ -972,8 +972,10 @@ export default function Stars() {
   // two fingers turn the lens, three turn the law, the device is the vessel.
   /** Continuous lens position 0..2 while a hand turns it. */
   const lensRef = useRef(0);
-  /** The rung it rests on — snapped on release. */
+  /** Where the ease is heading — the rung during a rest, the turn mid-twist. */
   const lensSnapRef = useRef(0);
+  /** The rung itself. Only this changes the room's description of the sky. */
+  const lensRungRef = useRef(0);
   const [lensRung, setLensRung] = useState(0);
   /** Precession: three fingers walk the constellations through the year. */
   const seasonRef = useRef(0);
@@ -3417,7 +3419,7 @@ export default function Stars() {
       // Which palette the lens is showing. The rung is discrete — the sky is
       // either being looked at or being measured — while the turn itself
       // (the wash burning off, the mass field rising) is continuous.
-      const rung = lensSnapRef.current;
+      const rung = lensRungRef.current;
       for (let i = 0; i < STARS.length; i++) {
         if (i >= starCut) break;
         const s = STARS[i];
@@ -4027,6 +4029,7 @@ export default function Stars() {
   /** One finger's path, kept only so a closed loop can gather a shape. */
   const pathRef = useRef<number[]>([]);
   const frayTierRef = useRef(0);
+  const wellTierRef = useRef(0);
   const wellToneRef = useRef(0);
   const seasonVoiceRef = useRef(0);
   const windVoiceRef = useRef(0);
@@ -4088,11 +4091,10 @@ export default function Stars() {
   /** Raise or lower the lens. Discrete rungs; the turn between them is not. */
   const setLensRungTo = useCallback((n: number) => {
     const next = Math.max(0, Math.min(LENS_RUNGS - 1, Math.round(n)));
-    if (next === lensSnapRef.current) {
-      lensSnapRef.current = next;
-      return;
-    }
     lensSnapRef.current = next;
+    lensRef.current = Math.max(0, Math.min(LENS_RUNGS - 1, lensRef.current));
+    if (next === lensRungRef.current) return;
+    lensRungRef.current = next;
     setLensRung(next);
     haptics.lens();
     try { getFieldAudio().playTone(180 + next * 150, 0.26); } catch { /* noop */ }
@@ -4108,8 +4110,8 @@ export default function Stars() {
 
   /** Two-finger tap: the frame retreats one step, lens first. */
   const stepBack = useCallback(() => {
-    if (lensSnapRef.current > 0) {
-      setLensRungTo(lensSnapRef.current - 1);
+    if (lensRungRef.current > 0) {
+      setLensRungTo(lensRungRef.current - 1);
       return;
     }
     zoomOut();
@@ -4282,6 +4284,7 @@ export default function Stars() {
       well.gather = 0;
       well.mode = "gather";
       wellToneRef.current = 0;
+      wellTierRef.current = 1;
       // the vessel is invited from inside a real gesture, never demanded
       void requestVessel();
       return;
@@ -4347,12 +4350,22 @@ export default function Stars() {
     const held = (e.elapsed - THRESHOLDS.dwellMs) / 1000;
     well.mass = Math.max(0, held) * WELL_MASS_PER_SEC * (0.62 + e.intensity * 0.9);
 
-    // the deepening voice: the tone falls as the horizon widens
+    // the ceremony tier is a threshold, not a ceiling: it is marked, and
+    // then the horizon goes on opening
     const nowMs = performance.now();
+    if (e.tier > wellTierRef.current) {
+      wellTierRef.current = e.tier;
+      if (e.tier >= 3) {
+        haptics.detent();
+        markSky("the horizon deepens", "gravity", 0.7, "sigil", "accrete-deep", false);
+      }
+    }
+
+    // the deepening voice: the tone falls as the horizon widens
     if (nowMs - wellToneRef.current > 620) {
       wellToneRef.current = nowMs;
       try { getFieldAudio().playTone(196 / (0.8 + well.mass * 0.55), 0.22); } catch { /* noop */ }
-      haptics.tap();
+      haptics.ripple(0.18 + Math.min(0.5, well.mass * 0.16));
     }
 
     // matter falls toward the well while it grows
@@ -4961,12 +4974,12 @@ export default function Stars() {
       }
       if (e.key === "[") {
         e.preventDefault();
-        setLensRungTo(lensSnapRef.current - 1);
+        setLensRungTo(lensRungRef.current - 1);
         return;
       }
       if (e.key === "]") {
         e.preventDefault();
-        setLensRungTo(lensSnapRef.current + 1);
+        setLensRungTo(lensRungRef.current + 1);
         return;
       }
       if (e.key === "t" || e.key === "T") {

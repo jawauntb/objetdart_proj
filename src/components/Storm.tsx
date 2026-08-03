@@ -732,9 +732,12 @@ export default function Storm() {
       tap: (e) => {
         lastGestureAt = performance.now();
         if (e.fingers === 2) {
-          // step back: lower a raised lens, else the storm eases its lean
+          // step back: lower a raised lens, else the storm eases its lean.
+          // ScaleTravel (document.body) reads data-lens-raised so this tap
+          // and the shared scale step-back never both answer at once.
           if (lens > 0.02) {
             lens = 0;
+            wrap.dataset.lensRaised = "";
           } else {
             panXTarget = 0;
             panYTarget = 0;
@@ -970,6 +973,7 @@ export default function Storm() {
         }
         // two-finger twist rotates the lens — felt weather ↔ pressure map
         lens = clamp01(lens + e.angle * 0.4);
+        wrap.dataset.lensRaised = lens > 0.02 ? "1" : "";
       },
       pan2: (e) => {
         lastGestureAt = performance.now();
@@ -1656,6 +1660,7 @@ export default function Storm() {
       clearCellsRef.current = () => {};
       water.removeEventListener("webglcontextlost", onContextLost);
       water.removeEventListener("webglcontextrestored", onContextRestored);
+      delete wrap.dataset.lensRaised;
       if (gl) {
         if (glProg) gl.deleteProgram(glProg);
         if (vbo) gl.deleteBuffer(vbo);

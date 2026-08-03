@@ -1342,6 +1342,9 @@ export default function QuantaField() {
 
       // ——— paint ———
       ctx.clearRect(0, 0, width, height);
+      // season (three-finger twist) drifts a faint warmth through the
+      // vacuum on its own slow cycle
+      const seasonWarm = Math.max(0, Math.sin(season * Math.PI * 2));
       const bg = ctx.createRadialGradient(
         width * 0.5,
         height * 0.44,
@@ -1350,14 +1353,21 @@ export default function QuantaField() {
         height * 0.5,
         Math.max(width, height) * 0.8,
       );
-      bg.addColorStop(0, "#0a0a10");
+      bg.addColorStop(0, `rgb(${10 + seasonWarm * 5}, 10, 16)`);
       bg.addColorStop(1, "#040406");
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, width, height);
+      // face-down is night: the field stills until the phone turns back over
+      if (night > 0.01) {
+        ctx.fillStyle = `rgba(2, 2, 4, ${night * 0.6})`;
+        ctx.fillRect(0, 0, width, height);
+      }
 
-      // the vacuum's own seethe: virtual pairs flickering on a seeded clock
+      // the vacuum's own seethe: virtual pairs flickering on a seeded clock.
+      // The fixed count scales with the frame governor's tier.
       const feltAlpha = 1 - lens;
-      for (let i = 0; i < motes.length; i++) {
+      const activeMotes = Math.max(10, Math.round(motes.length * detail.particles));
+      for (let i = 0; i < activeMotes; i++) {
         const m = motes[i];
         const ph = (localT * (0.25 + hash01(i) * 0.5) + m.p) % 1;
         const a = reduce ? 0.05 : Math.sin(ph * Math.PI) * (0.05 + 0.05 * hash01(i + 3));
@@ -1453,8 +1463,6 @@ export default function QuantaField() {
         excs = excs.filter((e) => !e.retiringAt || nowReal - e.retiringAt <= RETIRE_MS);
       }
       save();
-
-      raf = requestAnimationFrame(frame);
     };
     raf = requestAnimationFrame(frame);
 
@@ -1463,6 +1471,8 @@ export default function QuantaField() {
       observer.disconnect();
       detach();
       detachVessel();
+      offVis();
+      markLens(false);
       wrap.removeEventListener("keydown", onKeyDown);
       wrap.removeEventListener("keyup", onKeyUp);
       wrap.removeEventListener("blur", onBlur);
