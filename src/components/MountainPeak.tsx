@@ -1197,7 +1197,10 @@ export default function MountainPeak() {
           gl.uniform1i(u("uSteps"), Math.max(18, Math.round(MARCH_STEPS * detail.samples)));
           gl.uniform1i(u("uRefine"), Math.max(4, Math.round(MARCH_REFINE * detail.samples)));
           gl.uniform1i(u("uShadowSteps"), Math.round(18 * detail.shadows));
-          gl.uniform1i(u("uMarchOct"), Math.max(3, Math.round(OCTAVES_MARCH * detail.samples)));
+          // The station is placed against this exact marching field. Reducing
+          // its octave count at the low tier can put the eye inside a different
+          // ridge, making every mobile ray hit at once and flattening the view.
+          gl.uniform1i(u("uMarchOct"), OCTAVES_MARCH);
           gl.uniform1i(u("uShadeOct"), Math.max(4, Math.round(OCTAVES_SHADE * detail.samples)));
           gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
         }
@@ -1352,7 +1355,6 @@ export default function MountainPeak() {
         if (vs) gl.deleteShader(vs);
         if (fs) gl.deleteShader(fs);
         if (quad) gl.deleteBuffer(quad);
-        gl.getExtension("WEBGL_lose_context")?.loseContext();
       }
       prog = null;
       quad = null;

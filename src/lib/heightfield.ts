@@ -854,8 +854,10 @@ export const VIEW_OFFCENTRE = 0.16;
 export function nearObstruction(station: Station, seed: number, yaw: number): number {
   let worst = -Infinity;
   for (let f = 0; f < VIEW_FRAME_SAMPLES; f++) {
+    // VIEW_FRAME_SAMPLES is a compile-time constant (>1); spreading across
+    // the fan needs the (n-1) denominator, never a single-sample branch.
     const a =
-      yaw + (VIEW_FRAME_SAMPLES === 1 ? 0 : (f / (VIEW_FRAME_SAMPLES - 1) - 0.5) * 2 * VIEW_FRAME_HALF);
+      yaw + (f / (VIEW_FRAME_SAMPLES - 1) - 0.5) * 2 * VIEW_FRAME_HALF;
     const sa = Math.sin(a);
     const ca = Math.cos(a);
     for (let i = 1; i <= VIEW_NEAR_SAMPLES; i++) {

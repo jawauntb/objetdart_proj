@@ -460,6 +460,8 @@ export default function Atlas() {
   const [concept, setConcept] = useState("illuminated territories");
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
+  busyRef.current = busy;
   const [busyFocus, setBusyFocus] = useState<{ x: number; y: number } | null>(null);
   const [renderPhase, setRenderPhase] = useState<RenderPhase>("idle");
   const [historyDepth, setHistoryDepth] = useState(0);
@@ -967,6 +969,48 @@ export default function Atlas() {
     let timeScale = 1;
     let lensTimer: ReturnType<typeof setTimeout> | null = null;
     let twoTwistAcc = 0;
+    // One-finger hold gather: create at dwell, annihilate at ceremony.
+    // Declared here so the handler and the overlay share one state object —
+    // shipping the handler without this declaration is what broke the deploy.
+    const charge: {
+      active: boolean;
+      x: number;
+      y: number;
+      amount: number;
+      planted: AtlasNaturalKind | null;
+      onId: string | null;
+      sealed: boolean;
+    } = {
+      active: false,
+      x: 0,
+      y: 0,
+      amount: 0,
+      planted: null,
+      onId: null,
+      sealed: false,
+    };
+    /** Nearest natural under a screen point, or null if none within reach. */
+    const naturalNear = (sx: number, sy: number): string | null => {
+      const m = metricsRef.current;
+      const view = viewRef.current;
+      if (m.width <= 0 || m.mapWidth <= 0) return null;
+      const mapPxW = m.mapWidth * view.zoom;
+      const mapPxH = m.mapHeight * view.zoom;
+      const addr = worldAddressRef.current;
+      const reach = 28 * Math.max(0.55, Math.min(3.5, Math.sqrt(view.zoom)));
+      let bestId: string | null = null;
+      let bestD = reach * reach;
+      for (const n of naturals) {
+        const nx = view.x + (addr.wx + n.nx) * mapPxW;
+        const ny = view.y + (addr.wy + n.ny) * mapPxH;
+        const d = (nx - sx) * (nx - sx) + (ny - sy) * (ny - sy);
+        if (d <= bestD) {
+          bestD = d;
+          bestId = n.id;
+        }
+      }
+      return bestId;
+    };
     const detachGrammar = attachGestures(stage, {
       tap: (e) => {
         if (e.fingers !== 3) return;
@@ -1204,6 +1248,20 @@ export default function Atlas() {
       if (naturals.length > 0 && now - lastSaveAt > 4000) {
         lastSaveAt = now;
         persistNaturals();
+      }
+
+      // Hold gather — a soft ring that fills toward dwell, then ceremony.
+      // Drawn without banned paint calls (no createRadialGradient / blur).
+      if (charge.active && charge.amount > 0) {
+        const a = Math.max(0, Math.min(2.2, charge.amount));
+        const r = 10 + a * 14;
+        ctx.beginPath();
+        ctx.arc(charge.x, charge.y, r, 0, Math.PI * 2);
+        ctx.strokeStyle = charge.onId
+          ? `rgba(220, 170, 120, ${0.25 + Math.min(1, a) * 0.45})`
+          : `rgba(180, 210, 170, ${0.2 + Math.min(1, a) * 0.4})`;
+        ctx.lineWidth = 1.5 + Math.min(1, a);
+        ctx.stroke();
       }
 
       // flip face-down — night, until the phone turns back over
