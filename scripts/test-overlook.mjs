@@ -143,13 +143,22 @@ assert.equal(byId.get("tissue").onTrunk, true, "the sheet is a rung, not a fork"
 assert.equal(byId.get("drop").onTrunk, false, "the drop hangs off the trunk");
 assert.equal(byId.get("drop").parent, "coast", "a drop returns to the sea");
 assert.equal(byId.get("coast").parent, "olympus", "the shore lies under the peak");
-assert.equal(byId.get("olympus").parent, "atlas", "the peak stands on the map");
+// The sky re-cut put the air column between the peak and the map: the peak
+// rises into the atmosphere, and the atmosphere hangs on the atlas.
+assert.equal(byId.get("olympus").parent, "atmosphere", "the peak rises into the air");
+assert.equal(byId.get("atmosphere").parent, "atlas", "the air column hangs on the map");
 assert.equal(byId.get("birds").parent, "coast", "the flock carries out to the shore");
 assert.equal(byId.get("beyond").parent, "manifold", "beyond branches off the fold");
+// The unbuilt sky neighbourhoods hang where their outward doors open: the
+// planets under the system, the system under the vault of stars.
+assert.equal(byId.get("solar").parent, "stars", "the system is one star among the vault");
+assert.equal(byId.get("planets").parent, "solar", "the neighbourhood joins the system");
+assert.equal(byId.get("galaxy").onTrunk, true, "the galaxy is a rung of the trunk now");
 // The whole sea branch is one subtree, each step exactly one deeper.
-assert.equal(byId.get("olympus").depth, 1, "the peak hangs one step off the trunk");
-assert.equal(byId.get("coast").depth, 2, "the shore hangs under the peak");
-assert.equal(byId.get("drop").depth, 3, "the drop hangs under the shore");
+assert.equal(byId.get("atmosphere").depth, 1, "the air hangs one step off the trunk");
+assert.equal(byId.get("olympus").depth, 2, "the peak hangs under the air");
+assert.equal(byId.get("coast").depth, 3, "the shore hangs under the peak");
+assert.equal(byId.get("drop").depth, 4, "the drop hangs under the shore");
 
 // — the derivation is a pure function of the graph: move a door, the tree moves —
 const stubBands = [
@@ -210,10 +219,13 @@ assert.ok(
   "a branch keeps its subtree root's side",
 );
 // The deepest branch still stands inside a 390px glance: the room clamps
-// its reach by MAX_ABS_X, and this is the number it clamps against.
+// its reach by MAX_ABS_X, and this is the number it clamps against. The
+// sea branch is four deep since the air column joined it (atmosphere →
+// olympus → coast → drop); a fifth step would crowd the glance and means
+// the cosmology grew a chain it should have folded.
 assert.ok(
-  Math.max(...tree.nodes.map((n) => Math.abs(place[n.id].x))) <= 3,
-  "no branch leans further than three steps off the trunk",
+  Math.max(...tree.nodes.map((n) => Math.abs(place[n.id].x))) <= 4,
+  "no branch leans further than four steps off the trunk",
 );
 assert.deepEqual(layoutTree(tree), place, "the layout is deterministic");
 

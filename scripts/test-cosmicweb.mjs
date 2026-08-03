@@ -506,7 +506,7 @@ const webs = seeds.map((s) => C.buildWeb(s));
   // clamped outside 0..1 rather than running away
   assert.equal(C.subBassHzFor(-5), C.subBassHzFor(0));
   assert.equal(C.subBassHzFor(5), C.subBassHzFor(1));
-  assert.ok(Math.abs(C.subBassMidiFor(0.5) - 33) < 1e-9, "the median is midi 33 — A1, exactly");
+  assert.ok(Math.abs(C.subBassMidiFor(0.5) - 31) < 1e-9, "the median is midi 31 — G1, exactly");
 }
 
 // —— novae: deterministic, and genuinely rare ————————————————————
@@ -583,5 +583,5 @@ console.log(
     "every galaxy above the threshold and every rejected candidate below it; the threshold→count map " +
     "monotone and gapless; morphology a real readout of density with all three classes reachable; " +
     "growth monotone about the field's own mean; density→sub-bass strictly falling and landing on the " +
-    "55 Hz register src/lib/scale.ts assigns s=20; novae deterministic at about one a minute",
+    "49 Hz register src/lib/scale.ts assigns s=127/6; novae deterministic at about one a minute",
 );

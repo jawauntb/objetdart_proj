@@ -26,24 +26,27 @@ import {
   SCALE_BANDS,
   bandAt,
   bandIndexAt,
+  doorMemoryFor,
   entryScaleFor,
   entryScaleInto,
   initialScaleState,
   liveInput,
   residualScaleInput,
-  resolveDestination,
   roomZoomWall,
+  scaleBandIdForRoute,
   scaleForRoomZoom,
   stepBackVelocity,
   stepScale,
   travelOptions,
+  travelOptionsForRoute,
   type EnteredFromMap,
   type RoomZoomSpec,
-  type ScaleBand,
+  type RouteRef,
   type ScaleBandId,
   type ScaleInput,
   type ScaleState,
   type TravelDir,
+  type TravelDoor,
 } from "@/lib/scale";
 import { detent as hapticDetent, crossing as hapticCrossing, tap as hapticTap } from "@/lib/haptics";
 import { playTravelPassage } from "@/components/TravelPassage";
@@ -64,7 +67,7 @@ function loadEnteredFrom(): EnteredFromMap {
   return {};
 }
 
-function recordEnteredFrom(dest: ScaleBandId, from: ScaleBandId): void {
+function recordEnteredFrom(dest: ScaleBandId, from: ScaleBandId | RouteRef): void {
   try {
     const map = loadEnteredFrom();
     map[dest] = from;
@@ -106,13 +109,31 @@ function noteOfferPressing(offer: WallOffer, pressing: number, now: number): voi
   offer.wasPressing = pressing !== 0;
 }
 
+/**
+ * Every built door out of this room in `dir` — route-aware when the room's
+ * live path has a scale address (per-route doors: the ground forks to the
+ * strata), band-grain otherwise (rooms living under a dynamic segment of
+ * their band route, e.g. /atlas/[region]).
+ */
+function doorsFor(route: string, from: ScaleBandId, dir: TravelDir): TravelDoor[] {
+  if (scaleBandIdForRoute(route)) {
+    return travelOptionsForRoute(route, dir, loadEnteredFrom());
+  }
+  return travelOptions(from, dir, loadEnteredFrom()).map((b) => ({
+    band: b,
+    route: b.route as string,
+    label: b.label,
+  }));
+}
+
 /** The door currently on offer toward `towardMetric` from `from`. */
 function offeredDoor(
+  route: string,
   from: ScaleBandId,
   towardMetric: ScaleBandId,
   offer: WallOffer,
-): ScaleBand | null {
-  const options = travelOptions(from, dirToward(from, towardMetric), loadEnteredFrom());
+): TravelDoor | null {
+  const options = doorsFor(route, from, dirToward(from, towardMetric));
   if (options.length === 0) return null;
   return options[offer.idx % options.length];
 }
@@ -140,11 +161,11 @@ function roomLensRaised(): boolean {
 }
 
 /** Which built destination the whispered name should promise while idle. */
-function nearestNeighborLabel(s: number): string | null {
+function nearestNeighborLabel(route: string, s: number): string | null {
   const band = bandAt(s);
   const nearUpper = band.sMax - s < s - band.sMin;
-  const n = resolveDestination(band.id, nearUpper ? 1 : -1, loadEnteredFrom());
-  return n?.route ? n.label : null;
+  const doors = doorsFor(route, band.id, nearUpper ? 1 : -1);
+  return doors[0]?.label ?? null;
 }
 
 /**
@@ -157,7 +178,7 @@ function nearestNeighborLabel(s: number): string | null {
 function executeTravel(
   router: { push: (href: string) => void },
   from: ScaleBandId,
-  dest: ScaleBand,
+  door: TravelDoor,
   s: number,
 ): EdgeUI {
   hapticCrossing();
@@ -166,12 +187,11 @@ function executeTravel(
   } catch {
     /* noop */
   }
-  const route = dest.route as string;
-  if (playTravelPassage(from, dest, s, () => router.push(route))) {
+  if (playTravelPassage(from, door.band, s, () => router.push(door.route))) {
     return IDLE_UI;
   }
-  window.setTimeout(() => router.push(route), 380);
-  return { pressure: 1, towardLabel: dest.label, crossing: true };
+  window.setTimeout(() => router.push(door.route), 380);
+  return { pressure: 1, towardLabel: door.label, crossing: true };
 }
 
 /** The shared wall presentation: edge vignette + serif whisper + ink fade. */
@@ -272,7 +292,7 @@ export function useBandEdgeTravel(
           if (state.pressing !== 0) advanceOfferOnDetent(r.offer, state.pressing, now);
         }
         if (e.type === "edge") {
-          const door = offeredDoor(bandAt(state.s).id, e.toward, r.offer);
+          const door = offeredDoor(route, bandAt(state.s).id, e.toward, r.offer);
           // No built door on offer: hold forever, promise nothing.
           toward = door ? door.label : null;
           if (!door && r.state) {
@@ -281,12 +301,12 @@ export function useBandEdgeTravel(
         }
         if (e.type === "crossing") {
           const dir = dirToward(e.from, e.to);
-          const dest = offeredDoor(e.from, e.to, r.offer);
-          if (dest?.route && dest.route !== route) {
-            recordEnteredFrom(dest.id, e.from);
+          const dest = offeredDoor(route, e.from, e.to, r.offer);
+          if (dest && dest.route !== route) {
+            recordEnteredFrom(dest.band.id, doorMemoryFor(route) ?? e.from);
             r.leaving = true;
             r.raf = 0;
-            setUi(executeTravel(router, e.from, dest, entryScaleInto(dest, dir)));
+            setUi(executeTravel(router, e.from, dest, entryScaleInto(dest.band, dir)));
             return;
           }
           // Destination unbuilt: the wall holds — step back inside the band.
@@ -299,7 +319,7 @@ export function useBandEdgeTravel(
         setUi({
           pressure: edgePressure,
           towardLabel:
-            toward ?? (edgePressure > 0 ? nearestNeighborLabel(state.s) : null),
+            toward ?? (edgePressure > 0 ? nearestNeighborLabel(route, state.s) : null),
           crossing: false,
         });
       }
@@ -415,7 +435,7 @@ export default function ScaleTravel({ route }: { route: string }) {
           if (state.pressing !== 0) advanceOfferOnDetent(offerRef.current, state.pressing, now);
         }
         if (e.type === "edge") {
-          const door = offeredDoor(bandAt(state.s).id, e.toward, offerRef.current);
+          const door = offeredDoor(route, bandAt(state.s).id, e.toward, offerRef.current);
           // No built door on offer: hold forever, promise nothing.
           toward = door ? door.label : null;
           if (!door) {
@@ -424,11 +444,11 @@ export default function ScaleTravel({ route }: { route: string }) {
         }
         if (e.type === "crossing") {
           const dir = dirToward(e.from, e.to);
-          const dest = offeredDoor(e.from, e.to, offerRef.current);
-          if (dest?.route && dest.route !== route) {
-            recordEnteredFrom(dest.id, e.from);
+          const dest = offeredDoor(route, e.from, e.to, offerRef.current);
+          if (dest && dest.route !== route) {
+            recordEnteredFrom(dest.band.id, doorMemoryFor(route) ?? e.from);
             leavingRef.current = true;
-            setUi(executeTravel(router, e.from, dest, entryScaleInto(dest, dir)));
+            setUi(executeTravel(router, e.from, dest, entryScaleInto(dest.band, dir)));
             return;
           }
           // Destination unbuilt: the wall holds — step back inside the band.
@@ -440,7 +460,7 @@ export default function ScaleTravel({ route }: { route: string }) {
         uiPressure = edgePressure;
         // Which wall is closer decides the whispered destination while idle.
         if (toward === null && edgePressure > 0) {
-          toward = nearestNeighborLabel(state.s);
+          toward = nearestNeighborLabel(route, state.s);
         }
         setUi({ pressure: edgePressure, towardLabel: toward, crossing: false });
       }

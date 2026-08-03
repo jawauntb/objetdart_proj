@@ -29,16 +29,23 @@ const {
   SCALE_MAX,
   STEP_BACK_DECADES,
   TRAVEL_INTENT_MS,
+  DOOR_ROOMS,
+  LATERAL_ROUTE_BANDS,
+  ROUTE_TRAVEL_OVERRIDES,
   stepBackVelocity,
   bandAt,
   bandBlend,
+  doorMemoryFor,
   initialScaleState,
   liveInput,
   stepScale,
+  scaleBandIdForRoute,
   spectralRegisterFor,
   entryScaleFor,
   scaleForRoomZoom,
   residualScaleInput,
+  travelOptions,
+  travelOptionsForRoute,
 } = loadTsModule("src/lib/scale.ts");
 
 // The rooms' declared internal zoom ranges — the same objects the
@@ -65,20 +72,33 @@ assert.equal(bandAt(2).id, "birds");
 assert.equal(bandAt(2.8).id, "coast");
 assert.equal(bandAt(-8.5).id, "organics");
 assert.equal(bandAt(-5).id, "cells");
-assert.equal(bandAt(20).id, "space");
+// The sky re-cut, pinned by physics rather than by restating spans: the air
+// column (~100 km) is atmosphere, not atlas; a chart sheet (~1000 km) is
+// atlas; Mercury's orbit (5.8e10 m) is the planetary neighbourhood;
+// Neptune's (4.5e12 m) is the system; the nearest star (4e16 m) is
+// interstellar; the galactic disc read from ~2e19 m is the galaxy; the web
+// keeps the top. The bug each line catches: a boundary cut on the wrong
+// side of the thing the band is named for.
+assert.equal(bandAt(5).id, "atmosphere");
+assert.equal(bandAt(6).id, "atlas");
+assert.equal(bandAt(Math.log10(5.8e10)).id, "planets");
+assert.equal(bandAt(Math.log10(4.5e12)).id, "solar");
+assert.equal(bandAt(Math.log10(4e16)).id, "stars");
+assert.equal(bandAt(Math.log10(2e19)).id, "galaxy");
+assert.equal(bandAt(21).id, "space");
 assert.equal(bandAt(999).id, "manifold");
 assert.equal(bandAt(-999).id, "quanta");
 
 // — bandBlend: pure in the interior, symmetric crossfade near a wall —
-const mid = bandBlend(5.5);
+const mid = bandBlend(6.0);
 assert.equal(mid.t, 0, "band center has no secondary");
 const nearWall = bandBlend(4.5 + 0.05);
-assert.equal(nearWall.primary, "atlas");
+assert.equal(nearWall.primary, "atmosphere");
 assert.equal(nearWall.secondary, "olympus");
 assert.ok(nearWall.t > 0.35 && nearWall.t <= 0.5, `blend ramps toward 0.5 at wall (got ${nearWall.t})`);
 
 // — Local zoom: a brief pinch cannot cross a band wall —
-let st = initialScaleState(5.5);
+let st = initialScaleState(6.0);
 let crossed = false;
 for (let i = 0; i < 20; i++) {
   const r = stepScale(st, { zoomVel: 2.5, active: true }, 16);
@@ -191,13 +211,22 @@ assert.equal(entryScaleFor("/colophon"), null);
   assert.equal(travelNeighbor("earth", 1), "atlas", "the ground lies on the map");
   assert.equal(travelNeighbor("earth", -1), "flowers", "the ground opens onto flowers");
   assert.equal(travelNeighbor("atlas", 1), "stars", "the map recedes into the sky");
-  assert.equal(travelNeighbor("atlas", -1), "olympus", "the map descends onto the peak");
+  assert.equal(travelNeighbor("atlas", -1), "atmosphere", "the map descends into the air column");
   assert.equal(travelNeighbor("olympus", -1), "coast", "the peak descends through fog to the sea");
-  assert.equal(travelNeighbor("olympus", 1), "atlas", "the peak rises onto the map");
+  assert.equal(travelNeighbor("olympus", 1), "atmosphere", "the peak rises into the air");
   assert.equal(travelNeighbor("stars", -1), "atlas", "the sky descends onto the map");
   assert.equal(travelNeighbor("manifold", 1), null, "the axis ends above the manifold");
   assert.equal(travelNeighbor("manifold", -1), "space", "the fold descends into the web");
-  assert.equal(travelNeighbor("stars", 1), "space", "the sky thins into the web");
+  // The upper axis is metric-monotone after the sky re-cut: no override
+  // anywhere from the ground to the web — each of these is plain adjacency,
+  // and an override sneaking back in (the old inverted galaxy door) fails here.
+  assert.equal(travelNeighbor("earth", 1), "atlas", "the ground still lies on the map");
+  assert.equal(travelNeighbor("planets", 1), "solar", "the neighbourhood joins the system");
+  assert.equal(travelNeighbor("planets", -1), "earth", "the neighbourhood holds the earth");
+  assert.equal(travelNeighbor("solar", 1), "stars", "the system is one star among the vault");
+  assert.equal(travelNeighbor("stars", 1), "galaxy", "the vault streams into the arm");
+  assert.equal(travelNeighbor("galaxy", 1), "space", "the galaxy is one node of the web");
+  assert.equal(travelNeighbor("galaxy", -1), "stars", "the arm resolves back into stars");
   assert.equal(travelNeighbor("space", 1), "manifold", "the web opens onto the fold");
   // /beyond is a branch: entered from it, the manifold sends you back there.
   const viaBeyond = resolveDestination("manifold", -1, { manifold: "beyond" });
@@ -258,7 +287,17 @@ assert.equal(entryScaleFor("/colophon"), null);
   assert.deepEqual(
     Array.from(travelOptions("stars", 1, {}), (b) => b.id),
     ["space"],
-    "the sky thins upward into the web, which is now a room",
+    "the sky thins upward through the unbuilt galaxy to the web (flips to /galaxy when it lands)",
+  );
+  assert.deepEqual(
+    Array.from(travelOptions("earth", 1, {}), (b) => b.id),
+    ["atlas", "stars"],
+    "the ground rises onto the map, or through the unbuilt neighbourhoods into the sky",
+  );
+  assert.deepEqual(
+    Array.from(travelOptions("stars", -1, {}), (b) => b.id),
+    ["atlas", "earth"],
+    "the sky descends onto the map first, or walks the unbuilt system down to the ground",
   );
   assert.deepEqual(
     Array.from(travelOptions("cells", 1, {}), (b) => b.id),
@@ -317,6 +356,127 @@ assert.equal(entryScaleFor("/colophon"), null);
   }
 }
 
+// — Per-route doors: rooms sharing one band open onto different worlds —
+// The band grain can only say "the drop's span goes to tissue"; the route
+// grain lets a drop sink into the plasm while a rock on the same span
+// cleaves into molecules. Each assertion names the bug it catches.
+{
+  const routes = (dir, route, mem = {}) =>
+    travelOptionsForRoute(route, dir, mem).map((d) => d.route);
+
+  // A route override beats its band's door — the bug: the route layer
+  // declared but never consulted, every drop-band room still falling to tissue.
+  assert.equal(routes(-1, "/drop")[0], "/cells", "a drop magnifies the plasm swimming in it");
+  assert.equal(
+    travelOptions("drop", -1, {})[0].id,
+    "tissue",
+    "…while the band grain keeps its default, unchanged for old callers",
+  );
+
+  // Two rooms on one band resolve to different destinations — the bug: door
+  // resolution collapsing to the band, making every sibling one room.
+  assert.equal(routes(-1, "/seed")[0], "/tissue", "a seed, no override, keeps the band default");
+  assert.equal(routes(-1, "/soil")[0], "/cells", "soil crumbles into the living plasm");
+  assert.equal(routes(-1, "/rocks")[0], "/molecules", "rock cleaves into its lattice");
+
+  // The ground's downward fork: garden first, then the strata. While /rocks
+  // and /soil are addresses without pages they resolve through to the built
+  // room of their band — the drop — never to a 404 and never to a dead wall.
+  // When the strata rooms land this flips to ["/flowers", "/rocks", "/soil"].
+  const earthDown = routes(-1, "/earth");
+  assert.equal(earthDown[0], "/flowers", "the ground's first door down is still the garden");
+  assert.deepEqual(earthDown, ["/flowers", "/drop"], "unbuilt strata walk through, they do not wall");
+
+  // The strata's own walls (travel FROM an address whose page is unbuilt
+  // still resolves, so the rooms are playable the moment they ship).
+  assert.deepEqual(routes(1, "/soil"), ["/earth", "/flowers"], "soil returns to the ground or the garden");
+  assert.deepEqual(routes(1, "/rocks"), ["/earth", "/mountain"], "rock returns to the ground or rises as the peak");
+
+  // The peak's downward fork and the shore's doors.
+  assert.deepEqual(
+    routes(-1, "/mountain"),
+    ["/coast", "/drop", "/birds"],
+    "the peak descends to the shore, the strata (through the drop), the flock",
+  );
+  assert.deepEqual(routes(-1, "/coast"), ["/drop", "/birds"], "the shore gives the drop back, and opens onto the flock");
+  assert.deepEqual(routes(1, "/coast"), ["/mountain", "/earth"], "the shore keeps its peak and its land");
+
+  // Tissue stays reachable: the petal still opens into its sheet.
+  assert.deepEqual(routes(-1, "/flowers"), ["/tissue", "/drop"], "a petal opens into the sheet it is made of");
+
+  // A route with no override is transparent to the layer entirely — the
+  // bug: the route grain swallowing band doors for innocent laterals.
+  assert.deepEqual(
+    routes(1, "/tide"),
+    Array.from(travelOptions("coast", 1, {}), (b) => b.route),
+    "an unoverridden lateral walks through to its band's wall",
+  );
+
+  // Return the way you came, at the route grain. The coast→earth lateral
+  // must survive the ground's wall now forking elsewhere; a door-room
+  // memory must resolve through its unbuilt address; travel that resolved
+  // THROUGH an unbuilt band must still round-trip.
+  assert.equal(
+    routes(-1, "/earth", { earth: "coast" })[0],
+    "/coast",
+    "band-grain memory reopens a door the route wall no longer offers unprompted",
+  );
+  assert.equal(
+    routes(1, "/cells", { cells: "/soil" })[0],
+    "/drop",
+    "a door-room memory resolves through its unbuilt address (flips to /soil when it lands)",
+  );
+  assert.equal(
+    routes(1, "/earth", { earth: "stars" })[0],
+    "/stars",
+    "travel that resolved through the unbuilt system still returns to the sky",
+  );
+  assert.deepEqual(
+    routes(1, "/cells"),
+    ["/tissue", "/drop"],
+    "the plasm rises into its sheet, or back into the drop that held it",
+  );
+
+  // Round-trip law at the route grain: every door offered from every
+  // overridden route must answer — from where it lands, remembering the
+  // origin, the first door back is the origin room (or, while the origin
+  // is an address without a page, a room of the origin's band). The bug:
+  // a one-way door that strands the hand after one pinch.
+  for (const origin of Object.keys(ROUTE_TRAVEL_OVERRIDES)) {
+    for (const dir of [1, -1]) {
+      for (const door of travelOptionsForRoute(origin, dir, {})) {
+        const mem = { [door.band.id]: doorMemoryFor(origin) };
+        const back = travelOptionsForRoute(door.route, -dir, mem);
+        assert.ok(back.length > 0, `${origin} → ${door.route}: the return wall must hold a door`);
+        const originRoom = DOOR_ROOMS.find((d) => d.prefix === origin);
+        if (originRoom && !originRoom.route) {
+          assert.equal(
+            back[0].band.id,
+            scaleBandIdForRoute(origin),
+            `${origin} → ${door.route} must return to the origin's band while unbuilt`,
+          );
+        } else {
+          assert.equal(
+            back[0].route,
+            origin,
+            `${origin} → ${door.route} must return the way it came`,
+          );
+        }
+      }
+    }
+  }
+
+  // Door rooms and lateral bands must agree on where a room lives — drift
+  // would give the door and the room itself two different scale addresses.
+  for (const d of DOOR_ROOMS) {
+    const lateral = LATERAL_ROUTE_BANDS.find((l) => l.prefix === d.prefix);
+    assert.ok(lateral, `${d.prefix} must have a LATERAL_ROUTE_BANDS entry`);
+    assert.equal(lateral.band, d.band, `${d.prefix}: door room and lateral must share a band`);
+  }
+  assert.equal(bandAt(entryScaleFor("/rocks")).id, "drop", "the strata take the drop's address");
+  assert.equal(bandAt(entryScaleFor("/soil")).id, "drop", "a handful of soil is the drop's size");
+}
+
 // — Every band route must be a real page —
 // The bug this catches shipped once: the atlas band routed to "/atlas", which
 // has no page (only /atlas/[region]), so crossing the coast wall 404'd in
@@ -353,6 +513,27 @@ assert.equal(entryScaleFor("/colophon"), null);
   // Keep the checker honest: it must reject a route that truly has no page.
   assert.equal(resolvesToPage("/atlas"), false, "bare /atlas has no page and must fail");
   assert.equal(resolvesToPage("/no-such-room"), false);
+
+  // The guard, extended to the route grain: every door offered from every
+  // addressed route (band primaries, laterals, built door rooms), in both
+  // directions, must land on a real page. This is the 404 bug's second
+  // chance to ship — an unbuilt door room forgetting to resolve through,
+  // or a route override naming a room that never existed, fails here.
+  const addressedRoutes = [
+    ...SCALE_BANDS.filter((b) => b.route).map((b) => b.route),
+    ...LATERAL_ROUTE_BANDS.map((l) => l.prefix),
+    ...DOOR_ROOMS.filter((d) => d.route).map((d) => d.route),
+  ];
+  for (const route of addressedRoutes) {
+    for (const dir of [1, -1]) {
+      for (const door of travelOptionsForRoute(route, dir, {})) {
+        assert.ok(
+          resolvesToPage(door.route),
+          `door ${route} →(${dir}) ${door.route} is not a page — travel there would 404`,
+        );
+      }
+    }
+  }
 }
 
 // — Room band adapters: internal zoom ↔ manifold position —
@@ -415,14 +596,16 @@ function wallCrossing(spec, zoom, zoomInVel) {
   return null;
 }
 
+// stepScale's crossing events name the METRIC neighbor; the door actually
+// taken is travelOptions', asserted in the travel-graph block above.
 const starsOut = wallCrossing(STARS_ZOOM_SPEC, STARS_ZOOM_SPEC.zoomMin, -2);
-assert.equal(starsOut?.to, "space", "stars: pinching in at the widest field travels toward the web");
+assert.equal(starsOut?.to, "galaxy", "stars: pinching in at the widest field presses the galaxy wall");
 const starsIn = wallCrossing(STARS_ZOOM_SPEC, STARS_ZOOM_SPEC.zoomMax, 2);
-assert.equal(starsIn?.to, "earth", "stars: pinching out at the tightest field travels toward earth");
+assert.equal(starsIn?.to, "solar", "stars: pinching out at the tightest field presses the system wall");
 const atlasOut = wallCrossing(ATLAS_ZOOM_SPEC, ATLAS_ZOOM_SPEC.zoomMin, -2);
 assert.equal(atlasOut?.to, "earth", "atlas: pinching in at the widest chart travels toward earth");
 const atlasIn = wallCrossing(ATLAS_ZOOM_SPEC, ATLAS_ZOOM_SPEC.zoomMax, 2);
-assert.equal(atlasIn?.to, "olympus", "atlas: pinching out at the deepest detail travels toward the peak");
+assert.equal(atlasIn?.to, "atmosphere", "atlas: pinching out at the deepest detail presses the air wall");
 // The adapters reuse the one integrator: travel still costs sustained intent.
 assert.ok(starsOut.elapsed >= TRAVEL_INTENT_MS, "adapter walls keep the sustained-intent price");
 assert.ok(atlasIn.elapsed >= TRAVEL_INTENT_MS, "adapter walls keep the sustained-intent price");
