@@ -392,26 +392,53 @@ export default function Aphros() {
           float sunGlow = exp(-sunDist * sunDist * 34.0);
           float sunHalo = exp(-sunDist * 5.2);
 
-          // ════ SKY ════
-          vec3 zenith = vec3(0.93, 0.80, 0.79);
-          vec3 midSky = vec3(0.97, 0.88, 0.79);
-          vec3 lowSky = vec3(0.98, 0.80, 0.66);
+          // ════ SKY — baroque: storm masses breaking into gold ════
+          // slate and gray-violet cloud country, a raphael-blue break
+          // above, warming to the one gold rent of light at the horizon
+          vec3 rafBlue = vec3(0.40, 0.57, 0.76);
+          vec3 violetG = vec3(0.56, 0.55, 0.64);
+          vec3 goldLt  = vec3(0.95, 0.83, 0.62);
           float skyT = clamp(uv.y / HORIZON, 0.0, 1.0);
-          vec3 sky = mix(zenith, midSky, smoothstep(0.0, 0.62, skyT));
-          sky = mix(sky, lowSky, smoothstep(0.55, 1.0, skyT));
+          vec3 sky = mix(rafBlue, violetG, smoothstep(0.0, 0.60, skyT));
+          sky = mix(sky, goldLt, smoothstep(0.42, 1.0, skyT) * 0.9);
           vec2 cp = vec2(uv.x * aspect * 1.05 + t * 0.016 + uWind * 0.10, uv.y * 3.0);
           vec2 cw = vec2(fbm(cp + vec2(0.0, t * 0.010)), fbm(cp + vec2(5.2, 1.3)));
           float cloud = fbm(cp + (cw - 0.5) * 1.6);
-          float billow = smoothstep(0.46, 0.85, cloud);
-          float underlit = smoothstep(0.52, 0.95, fbm(cp * 1.6 + (cw - 0.5) * 1.3 + vec2(2.0, 4.0)));
-          vec3 cloudCol = mix(vec3(0.99, 0.93, 0.88), vec3(0.94, 0.72, 0.66), underlit * 0.7);
-          float cloudMask = billow * (1.0 - smoothstep(0.55, 1.0, skyT)) * smoothstep(0.03, 0.15, skyT);
-          sky = mix(sky, cloudCol, cloudMask * 0.85);
+          float billow = smoothstep(0.44, 0.85, cloud);
+          float cloudBelly = smoothstep(0.50, 0.95, fbm(cp * 1.6 + (cw - 0.5) * 1.3 + vec2(2.0, 4.0)));
+          // dark bellies, gold-lit rims facing the sun
+          vec3 cloudCol = mix(vec3(0.94, 0.86, 0.72), vec3(0.34, 0.36, 0.46), cloudBelly * 0.9);
+          float rimGold = (smoothstep(0.40, 0.52, cloud) - smoothstep(0.52, 0.72, cloud));
+          cloudCol += max(0.0, rimGold) * vec3(0.55, 0.40, 0.20) * exp(-sunDist * 1.6) * 1.4;
+          float cloudMask = billow * (1.0 - smoothstep(0.60, 1.0, skyT)) * smoothstep(0.02, 0.12, skyT);
+          sky = mix(sky, cloudCol, cloudMask * 0.92);
           float ang = atan(sunD.x, -sunD.y);
           float rayN = fbm(vec2(ang * 2.6 + 7.0, t * 0.05));
           float rays = pow(max(0.0, sin(ang * 7.0 + rayN * 5.0 + t * 0.03)), 4.0);
-          sky += rays * exp(-sunDist * 2.8) * vec3(1.0, 0.93, 0.82) * 0.22;
-          sky += (sunGlow * 0.70 + sunHalo * 0.12) * vec3(1.0, 0.95, 0.86);
+          sky += rays * exp(-sunDist * 2.8) * vec3(1.0, 0.88, 0.66) * 0.22;
+          sky += (sunGlow * 0.60 + sunHalo * 0.13) * vec3(1.0, 0.90, 0.68);
+
+          // ── putti — cherub glows adrift in the upper air, trailing
+          // short coral ribbons (the airborne retinue, abstracted) ──
+          for (int i = 0; i < 3; i++) {
+            float fi = float(i);
+            vec2 pp = vec2(
+              0.20 + fi * 0.28 + sin(t * 0.05 + fi * 2.1) * 0.03,
+              0.09 + fi * 0.035 + cos(t * 0.07 + fi * 1.4) * 0.015
+            );
+            vec2 pd = (uv - pp) * vec2(aspect, 1.0);
+            float head = exp(-dot(pd - vec2(0.0, -0.014), pd - vec2(0.0, -0.014)) / 0.00005);
+            float torso = exp(-dot(pd * vec2(0.85, 1.25), pd * vec2(0.85, 1.25)) / 0.00026);
+            float pglow = min(1.0, head * 0.9 + torso * 0.7);
+            sky = mix(sky, vec3(0.97, 0.85, 0.76), pglow * 0.5);
+            // the ribbon: a short fluttering streak behind the glow
+            vec2 rp = pd - vec2(0.020, 0.010);
+            float rc = cos(0.6 + sin(t * 0.4 + fi) * 0.2);
+            float rs = sin(0.6 + sin(t * 0.4 + fi) * 0.2);
+            vec2 rl = vec2(rc * rp.x + rs * rp.y, -rs * rp.x + rc * rp.y);
+            float streak = exp(-(rl.x * rl.x) / 0.0016 - (rl.y * rl.y) / 0.00003);
+            sky = mix(sky, vec3(0.87, 0.52, 0.34), streak * 0.22);
+          }
 
           // ════ SEA ════
           float seaT = clamp((uv.y - HORIZON) / (SHORE - HORIZON), 0.0, 1.0);
@@ -429,18 +456,20 @@ export default function Aphros() {
           vec2 suv = vec2(uv.x, seaT) + flow + vec2(0.0, wakeHi * 0.04);
           float sd = clamp(suv.y, 0.0, 1.0);
 
-          vec3 nacreW = vec3(0.94, 0.86, 0.80);
-          vec3 turq   = vec3(0.42, 0.76, 0.78);
-          vec3 aegean = vec3(0.13, 0.42, 0.58);
-          vec3 shoal  = vec3(0.55, 0.83, 0.76);
+          // the sea of the old masters: warm mirror at the light, then
+          // teal turning prussian-green in the deeps
+          vec3 nacreW = vec3(0.86, 0.74, 0.58);
+          vec3 turq   = vec3(0.18, 0.44, 0.46);
+          vec3 aegean = vec3(0.06, 0.22, 0.29);
+          vec3 shoal  = vec3(0.26, 0.50, 0.46);
           vec3 sea = mix(nacreW, turq, smoothstep(0.0, 0.34, sd));
-          sea = mix(sea, aegean, smoothstep(0.28, 0.62, sd) * 0.62);
-          sea = mix(sea, shoal, smoothstep(0.62, 0.95, sd));
+          sea = mix(sea, aegean, smoothstep(0.28, 0.66, sd) * 0.75);
+          sea = mix(sea, shoal, smoothstep(0.66, 0.98, sd) * 0.7);
 
           float mir = fbm(vec2(suv.x * aspect * 1.7 + t * 0.05, sd * 14.0));
-          sea = mix(sea, vec3(0.97, 0.82, 0.74),
+          sea = mix(sea, vec3(0.93, 0.72, 0.52),
             (1.0 - smoothstep(0.0, 0.30, sd)) * smoothstep(0.46, 0.85, mir) * 0.55);
-          sea += sunHalo * exp(-sd * 6.0) * vec3(0.22, 0.16, 0.11);
+          sea += sunHalo * exp(-sd * 6.0) * vec3(0.26, 0.17, 0.09);
 
           vec2 nuv = suv * vec2(aspect, 1.0) * (3.0 + 3.6 * sd) + vec2(t * 0.06, t * 0.04);
           float n = fbm(nuv);
@@ -453,7 +482,7 @@ export default function Aphros() {
           float column = exp(-pow((uv.x - 0.5) * (2.2 + 1.4 * sd), 2.0));
           float facets = fbm(vec2(uv.x * aspect * 16.0, sd * 30.0 - t * 1.3));
           float glint = column * smoothstep(0.56, 0.94, facets) * (1.0 - sd * 0.35);
-          sea += glint * (0.5 + uAgit * 0.2) * vec3(1.0, 0.93, 0.84);
+          sea += glint * (0.5 + uAgit * 0.2) * vec3(1.0, 0.88, 0.64);
 
           // ── dolphins: dark arcs under the swell ──
           float dolphinInk = 0.0;
@@ -472,8 +501,8 @@ export default function Aphros() {
             dolphinInk = max(dolphinInk, m);
             dolphinEdge = max(dolphinEdge, smoothstep(0.008, 0.0, abs(body)) * d.w);
           }
-          sea = mix(sea, vec3(0.07, 0.24, 0.36), dolphinInk * 0.8);
-          sea += dolphinEdge * vec3(0.10, 0.14, 0.14) * 0.3;
+          sea = mix(sea, vec3(0.13, 0.24, 0.24), dolphinInk * 0.85);
+          sea += dolphinEdge * vec3(0.55, 0.60, 0.52) * 0.30;
 
           // aphros — the ambient lace, whitening with squall + wakes
           vec2 fuv = suv * vec2(aspect, 1.0) * 5.5 + vec2(t * 0.09 + uWind * 0.5, -t * 0.05);
@@ -520,28 +549,32 @@ export default function Aphros() {
           float fan = cos(sang * 9.0);
           float rOut = shellR * (0.90 + 0.10 * fan * fan) * (1.0 - smoothstep(1.35, 2.6, abs(sang)) * 0.55);
           float inShell = smoothstep(rOut, rOut - 0.006, sr) * (1.0 - smoothstep(1.9, 2.6, abs(sang)));
-          // nacre: thin-film iridescence sweeping the ridges
+          // ivory nacre: a faint film of iridescence over bone-white,
+          // the grooves shaded umber like a real scallop in raking light
           float phase2 = sr * 46.0 - t * 0.35 + fan * 1.6;
           vec3 pearl = vec3(
-            0.97 + 0.03 * cos(phase2),
-            0.90 + 0.05 * cos(phase2 + 2.1),
-            0.86 + 0.06 * cos(phase2 + 4.2)
+            0.95 + 0.02 * cos(phase2),
+            0.90 + 0.03 * cos(phase2 + 2.1),
+            0.81 + 0.04 * cos(phase2 + 4.2)
           );
           float ridgeLight = smoothstep(0.2, 1.0, fan * fan);
-          vec3 shellCol = mix(pearl * 0.92, pearl, ridgeLight);
-          shellCol += vec3(0.06, 0.03, 0.01) * smoothstep(0.0, 1.0, sr / max(shellR, 0.001));
+          vec3 groove = pearl * vec3(0.68, 0.60, 0.50);
+          vec3 shellCol = mix(groove, pearl, ridgeLight);
+          shellCol *= 0.90 + 0.10 * smoothstep(1.0, 0.0, sr / max(shellR, 0.001));
           float rim = smoothstep(0.012, 0.0, abs(sr - rOut)) * (1.0 - smoothstep(1.6, 2.4, abs(sang)));
           // the shell stands ON the sea: only above its waterline
           float shellMask = inShell * smoothstep(0.035, 0.0, uv.y - SHELL.y - 0.055);
           vec3 seaWithShell = mix(sea, shellCol, shellMask);
           seaWithShell += rim * vec3(1.0, 0.96, 0.88) * (0.5 + breath * 0.3 + uFlash * 0.4);
           // halo of light gathering around the shell
-          float halo = exp(-max(0.0, sr - rOut) * 26.0) * (1.0 - inShell);
-          seaWithShell += halo * (0.10 + breath * 0.05 + uFlash * 0.12) * vec3(1.0, 0.94, 0.86);
-          // foam gathers at the shell's waterline
-          float skirt = exp(-pow((uv.y - (SHELL.y + 0.05)) * 60.0, 2.0))
-                      * exp(-pow(sp.x * 3.2, 2.0));
-          seaWithShell = mix(seaWithShell, vec3(0.99, 0.98, 0.95), skirt * (0.5 + breath * 0.2));
+          float halo = exp(-max(0.0, sr - rOut) * 30.0) * (1.0 - inShell);
+          seaWithShell += halo * (0.07 + breath * 0.04 + uFlash * 0.12) * vec3(1.0, 0.92, 0.74);
+          // the sea churns white where the shell stands in it
+          float churnN = fbm(vec2(uv.x * aspect * 7.0 + t * 0.22, uv.y * 14.0 - t * 0.12));
+          float skirt = exp(-pow((uv.y - (SHELL.y + 0.05)) * 42.0, 2.0))
+                      * exp(-pow(sp.x * 3.2, 2.0))
+                      * (0.50 + 0.50 * churnN);
+          seaWithShell = mix(seaWithShell, vec3(0.98, 0.97, 0.93), skirt * (0.68 + breath * 0.2));
           sea = seaWithShell;
 
           // ════ SHORE — wet mirror-sand at the foot of the frame ════
@@ -572,6 +605,30 @@ export default function Aphros() {
           col = mix(col, vec3(0.97, 0.86, 0.76), haze * 0.45);
           col = mix(col, shore, smoothstep(SHORE - 0.012, SHORE + 0.012, uv.y));
 
+          // ── the drapery — a billowing coral silk arc over the centre,
+          // the sail every triumph carries, fluttering with the wind ──
+          vec2 arp = (uv - vec2(0.5, SHELL.y + 0.02)) * vec2(aspect, 1.0);
+          float arAng = atan(arp.x, -arp.y);
+          float arR = length(arp);
+          float flutter = sin(arAng * 3.0 + t * 0.9) * 0.010
+                        + sin(arAng * 7.0 - t * 1.3) * 0.005;
+          float arcR = 0.225 + flutter + uWind * 0.020 * sin(arAng * 2.0);
+          float bandD = abs(arR - arcR);
+          // an asymmetric sail: full overhead, trailing off to the right,
+          // released early on the left — never a closed hoop
+          float extent = (1.0 - smoothstep(0.55, 1.05, -arAng))
+                       * (1.0 - smoothstep(1.05, 1.65, arAng));
+          float thick = 0.030 * (0.60 + 0.40 * sin(arAng * 2.0 + t * 0.5));
+          float drape = smoothstep(thick, thick * 0.35, bandD) * extent;
+          float folds = sin(arAng * 26.0 + t * 0.7) * 0.5 + 0.5;
+          vec3 silk = mix(vec3(0.82, 0.38, 0.20), vec3(0.97, 0.66, 0.44), folds);
+          silk *= 0.72 + 0.28 * folds;
+          silk += smoothstep(thick * 0.5, 0.0, bandD) * 0.08;
+          // a soft shadow the silk casts on whatever lies behind it
+          float drapeShade = (smoothstep(thick * 3.0, thick, bandD) - drape) * extent;
+          col *= 1.0 - drapeShade * 0.10;
+          col = mix(col, silk, drape * 0.92);
+
           // ── the lens: the painting as its own preparatory drawing ──
           if (uLens > 0.001) {
             vec3 paper = vec3(0.93, 0.89, 0.79);
@@ -594,6 +651,9 @@ export default function Aphros() {
             line += bloomFoam * 0.7 + wakeHi * 0.4;
             // dolphin outlines
             line += dolphinEdge * 0.9;
+            // the drapery's contour and fold hatching
+            line += smoothstep(0.006, 0.001, abs(bandD - thick)) * extent * 0.8;
+            line += drape * smoothstep(0.6, 0.95, folds) * 0.3;
             // shore hatching
             float hatch = smoothstep(0.42, 0.5, abs(fract((uv.x * aspect + uv.y * 0.6) * 60.0) - 0.5));
             line += (1.0 - hatch) * 0.12 * smoothstep(SHORE, 1.0, uv.y);
@@ -603,8 +663,12 @@ export default function Aphros() {
             col = mix(col, drawing, smoothstep(0.0, 1.0, uLens));
           }
 
+          // painted-canvas finish: weave, a touch of depth, a dark frame
+          float weave = fbm(uv * vec2(aspect, 1.0) * 9.0);
+          col *= 0.965 + weave * 0.05;
+          col = pow(col, vec3(1.05));
           vec2 vc = vUv - 0.5;
-          col *= 1.0 - dot(vc, vc) * 0.22;
+          col *= 1.0 - dot(vc, vc) * 0.34;
           gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
         }
       `;
