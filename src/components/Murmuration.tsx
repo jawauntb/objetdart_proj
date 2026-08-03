@@ -306,19 +306,21 @@ uniform float u_night;
 uniform float u_hazeFrom;
 
 float ellipse(vec2 p, vec2 r) {
-  return 1.0 - smoothstep(0.92, 1.05, length(p / max(r, vec2(0.001))));
+  // hard falloff — soft discs were reading as fog, not bodies
+  return 1.0 - smoothstep(0.88, 1.02, length(p / max(r, vec2(0.001))));
 }
 float capsule(vec2 p, vec2 a, vec2 b, float r) {
   vec2 pa = p - a;
   vec2 ba = b - a;
   float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-5), 0.0, 1.0);
-  return 1.0 - smoothstep(r, r + 0.04, length(pa - ba * h));
+  return 1.0 - smoothstep(r * 0.92, r + 0.028, length(pa - ba * h));
 }
 
 // thick wing lobe — never a hairline stick
 float wingLobe(vec2 p, float side, float open) {
-  vec2 c = vec2(side * (0.18 + 0.22 * open), -0.02 - 0.10 * open);
-  vec2 r = vec2(0.16 + 0.34 * open, 0.10 + 0.16 * open);
+  float o = clamp(open, 0.0, 1.15);
+  vec2 c = vec2(side * (0.16 + 0.20 * o), 0.02 - 0.08 * o);
+  vec2 r = vec2(0.14 + 0.28 * o, 0.09 + 0.12 * o);
   return ellipse(p - c, r);
 }
 
@@ -365,13 +367,13 @@ float birdShape(vec2 p, float kind, float activity, float wing) {
     a = max(a, ellipse(pp + vec2(0.36, 0.02), vec2(0.16, 0.08)));
     a *= mix(1.0, smoothstep(-0.40, -0.02, p.y), swim);
   }
-  // falcon / hawk — pointed wings, longer body
+  // falcon / hawk — pointed wings, longer body, wedge tail
   else if (kind > 1.5 && kind < 3.5) {
-    float span = mix(0.55, 1.05, max(open, max(dive, soar)));
-    a = max(ellipse(p, vec2(0.34, 0.16)), capsule(p, vec2(0.28, 0.02), vec2(0.58, 0.0), 0.035));
-    a = max(a, ellipse(p - vec2(0.22 * span, -0.04 * span), vec2(0.42 * span, 0.11 + 0.06 * open)));
-    a = max(a, ellipse(p - vec2(-0.22 * span, -0.04 * span), vec2(0.42 * span, 0.11 + 0.06 * open)));
-    a = max(a, ellipse(p + vec2(0.30, 0.0), vec2(0.20, 0.06)));
+    float span = mix(0.5, 0.95, max(open, max(dive, soar)));
+    a = max(ellipse(p - vec2(0.04, 0.0), vec2(0.36, 0.15)), capsule(p, vec2(0.28, 0.02), vec2(0.62, 0.0), 0.032));
+    a = max(a, ellipse(p - vec2(0.20 * span, -0.02), vec2(0.38 * span, 0.09 + 0.05 * open)));
+    a = max(a, ellipse(p - vec2(-0.20 * span, -0.02), vec2(0.38 * span, 0.09 + 0.05 * open)));
+    a = max(a, capsule(p, vec2(-0.28, 0.0), vec2(-0.62, 0.0), 0.04)); // wedge tail
   }
   // emu — tall neck and legs, almost no wing
   else if (kind > 5.5 && kind < 6.5) {
@@ -422,18 +424,22 @@ void main() {
   // rotate local bird space so +x is heading
   vec2 q = vec2(vUv.x * vDir.x + vUv.y * vDir.y, -vUv.x * vDir.y + vUv.y * vDir.x);
   float a = birdShape(q, vKind, vActivity, vWing);
-  if (a < 0.12) discard;
-  vec3 ink = mix(u_ink, vTint, 0.86);
-  ink = mix(ink, ink * 0.55 + vec3(0.04, 0.05, 0.07), u_night * 0.85);
+  if (a < 0.18) discard;
+  // species colour first; ink only deepens the shade
+  vec3 ink = mix(u_ink, vTint, 0.92);
+  ink = mix(ink, ink * 0.62 + vec3(0.05, 0.055, 0.07), u_night * 0.8);
   float hb = clamp(gl_FragCoord.y / u_res.y, 0.0, 1.0) - u_horizon;
   vec3 back = hb >= 0.0
     ? mix(u_low, u_high, smoothstep(0.0, 0.48, hb))
     : mix(u_low, u_ground, smoothstep(0.0, 0.34, -hb));
   // keep individuals sharp — haze only softens the far ones a little
-  float haze = clamp((vDepth - u_hazeFrom) / 160.0, 0.0, 1.0) * u_haze * 0.45;
-  float rim = smoothstep(0.02, 0.18, a) * (1.0 - smoothstep(0.55, 0.95, a));
-  vec3 col = mix(ink, back, haze) + ink * rim * 0.18;
-  gl_FragColor = vec4(col, a * vFade);
+  float haze = clamp((vDepth - u_hazeFrom) / 180.0, 0.0, 1.0) * u_haze * 0.28;
+  // dark outline so a bird reads against dusk and meadow alike
+  float rim = smoothstep(0.16, 0.34, a) * (1.0 - smoothstep(0.42, 0.78, a));
+  vec3 col = mix(ink, back, haze);
+  col = mix(col, col * 0.35, rim * 0.85);
+  col += vTint * (1.0 - rim) * 0.08;
+  gl_FragColor = vec4(col, clamp(a * vFade * 1.05, 0.0, 1.0));
 }
 `;
 

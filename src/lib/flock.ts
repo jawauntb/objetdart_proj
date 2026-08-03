@@ -50,8 +50,8 @@ export const BOUND_MARGIN = 7;
 export const MIN_BIRDS = 200;
 export const MAX_BIRDS = 4096;
 /** A living-room aviary: readable individuals, not a distant murmuration. */
-export const AVIARY_MIN = 12;
-export const AVIARY_MAX = 28;
+export const AVIARY_MIN = 13;
+export const AVIARY_MAX = 22;
 
 /** The integrator's one true step. Everything else accumulates into it. */
 export const FIXED_DT = 1 / 60;
