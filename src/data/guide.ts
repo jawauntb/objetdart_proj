@@ -1031,6 +1031,7 @@ export const GUIDE_ROOMS: GuideRoom[] = [
     finds: [
       "on a phone, a single tap starts and stops the clocks; on a desktop the same tap sets velocity and mass at once",
       "at the felt-duration lens the two ladders start together and open apart — the gap between them is the falling-behind",
+      "the clocks are already running and falling apart the moment you arrive, and the well rings itself down on its own — pausing is the one deliberate stillness here",
     ],
   },
   {
