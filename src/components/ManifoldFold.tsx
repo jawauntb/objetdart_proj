@@ -75,6 +75,7 @@ import {
   type MassPoint,
   type Ray,
 } from "@/lib/manifold-field";
+import { resolveDpr, onGalleryPause, onVisibility, isEmbeddedFrame } from "@/lib/room-runtime";
 import { ScaleTravelOverlay, type EdgeUI } from "@/components/ScaleTravel";
 import LetGo from "@/components/LetGo";
 
@@ -386,7 +387,7 @@ export default function ManifoldFold() {
 
     const resize = () => {
       const r = wrap.getBoundingClientRect();
-      const ratio = Math.min(window.devicePixelRatio || 1, 1.5);
+      const ratio = resolveDpr(isEmbeddedFrame() ? "medium" : "high", { embedded: isEmbeddedFrame(), maxDpr: 1.5 });
       width = Math.max(320, Math.floor(r.width));
       height = Math.max(480, Math.floor(r.height));
       rectLeft = r.left;

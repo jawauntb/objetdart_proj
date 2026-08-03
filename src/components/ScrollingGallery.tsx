@@ -5,11 +5,22 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { SyntheticEvent } from "react";
 import { GALLERY_ROUTES } from "@/lib/routes";
 
+function postRoomPause(frame: HTMLIFrameElement | null, pause: boolean) {
+  try {
+    frame?.contentWindow?.postMessage({ type: "objetdart:room", pause }, "*");
+  } catch {
+    /* cross-origin or not ready */
+  }
+}
+
 export default function ScrollingGallery() {
   const galleryRef = useRef<HTMLElement | null>(null);
   const frameRefs = useRef<Array<HTMLElement | null>>([]);
+  const iframeRefs = useRef<Array<HTMLIFrameElement | null>>([]);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [warmIndex, setWarmIndex] = useState(0);
   const [enteredIndex, setEnteredIndex] = useState<number | null>(null);
+  const activeRef = useRef(0);
 
   const leaveToy = useCallback(() => {
     setEnteredIndex(null);
@@ -24,7 +35,11 @@ export default function ScrollingGallery() {
     const frameWindow = event.currentTarget.contentWindow;
     frameWindow?.removeEventListener("keydown", leaveOnEscape);
     frameWindow?.addEventListener("keydown", leaveOnEscape);
-  }, [leaveOnEscape]);
+    // newly loaded frames start paused unless this room is entered/active
+    const idx = Number(event.currentTarget.dataset.roomIndex);
+    const pause = !(idx === activeRef.current || enteredIndex === idx);
+    postRoomPause(event.currentTarget, pause);
+  }, [leaveOnEscape, enteredIndex]);
 
   useEffect(() => {
     const gallery = galleryRef.current;
@@ -38,7 +53,11 @@ export default function ScrollingGallery() {
         if (!visible) return;
         const index = Number((visible.target as HTMLElement).dataset.roomIndex);
         if (!Number.isFinite(index)) return;
-        setActiveIndex(index);
+        setActiveIndex((prev) => {
+          if (prev === index) return prev;
+          activeRef.current = index;
+          return index;
+        });
         setEnteredIndex((current) => (current === index ? current : null));
       },
       { root: gallery, threshold: [0.45, 0.6, 0.75] },
@@ -47,6 +66,30 @@ export default function ScrollingGallery() {
     frameRefs.current.forEach((frame) => frame && observer.observe(frame));
     return () => observer.disconnect();
   }, []);
+
+  // Prewarm ±1 neighbors only after idle; keep only the active iframe mounted by default.
+  useEffect(() => {
+    activeRef.current = activeIndex;
+    setWarmIndex(activeIndex);
+    let idleId: number | null = null;
+    const ric = window.requestIdleCallback ?? ((cb: () => void) => window.setTimeout(cb, 180) as unknown as number);
+    const cic = window.cancelIdleCallback ?? ((id: number) => clearTimeout(id));
+    idleId = ric(() => {
+      setWarmIndex(activeIndex);
+    });
+    return () => {
+      if (idleId != null) cic(idleId);
+    };
+  }, [activeIndex]);
+
+  // Pause protocol: only the entered (or active preview) frame runs hot.
+  useEffect(() => {
+    iframeRefs.current.forEach((frame, index) => {
+      if (!frame) return;
+      const hot = enteredIndex === index || (enteredIndex == null && index === activeIndex);
+      postRoomPause(frame, !hot);
+    });
+  }, [activeIndex, enteredIndex, warmIndex]);
 
   useEffect(() => {
     window.addEventListener("keydown", leaveOnEscape);
@@ -71,7 +114,10 @@ export default function ScrollingGallery() {
 
       {GALLERY_ROUTES.map((room, index) => {
         const entered = enteredIndex === index;
-        const shouldLoad = Math.abs(activeIndex - index) <= 1;
+        // Mount active immediately; mount neighbors only once warmIndex catches up.
+        const shouldLoad =
+          index === activeIndex ||
+          (Math.abs(warmIndex - index) <= 1 && Math.abs(activeIndex - index) <= 1);
 
         return (
           <section
@@ -80,10 +126,13 @@ export default function ScrollingGallery() {
             data-room-index={index}
             className={`scrolling-room${entered ? " is-entered" : ""}`}
             aria-label={`${room.key}: ${room.desc}`}
+            style={{ contain: "layout paint style" }}
           >
             <div className="scrolling-room__stage">
               {shouldLoad ? (
                 <iframe
+                  ref={(node) => { iframeRefs.current[index] = node; }}
+                  data-room-index={index}
                   src={room.href}
                   title={`${room.key} interactive toy`}
                   className="scrolling-room__frame"
