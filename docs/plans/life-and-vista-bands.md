@@ -24,9 +24,16 @@ keep their exact spans and nothing about them moves. Every re-cut happens
 inside the old `molecules` + `cells` block, inside the old `coast` block, and
 inside the old `stars` block.
 
+> **Shipped.** This table is the plan as written. The axis has since moved
+> past it: other lanes inserted `quanta` (−22…−19) and `nucleons` (−15…−14)
+> below the quarks and narrowed `quarks` to −19…−15, the coast's route
+> became `/coast`, and the olympus band is served by `/mountain` rather
+> than a room called `/olympus`. The seven bands below all landed at the
+> spans stated here. `src/lib/scale.ts` is the authority.
+
 | band | label | route | sMin | sMax | status |
 | --- | --- | --- | --- | --- | --- |
-| quarks | quarks | `/quarks` | −19 | −14 | unchanged |
+| quarks | quarks | `/quarks` | −19 | −14 | since re-cut to −19…−15 by the nucleons lane |
 | atoms | atoms | `/atoms` | −14 | −9.5 | unchanged |
 | **molecules** | molecules | `/molecules` | −9.5 | **−8.8** | narrowed |
 | **organics** | organic molecules | `/organics` | −8.8 | −8.0 | **new** |
@@ -37,8 +44,8 @@ inside the old `stars` block.
 | drop | a drop | `/drop` | −3.5 | −1.5 | unchanged |
 | flowers | flowers | `/flowers` | −1.5 | 0.5 | unchanged |
 | **birds** | birds | `/birds` | 0.5 | 2.2 | **new** |
-| **coast** | the coast | `/ocean` | **2.2** | **3.4** | narrowed |
-| **olympus** | olympus | `/olympus` | 3.4 | 4.5 | **new** |
+| **coast** | the coast | `/coast` | **2.2** | **3.4** | narrowed (route later `/coast`) |
+| **olympus** | olympus | `/mountain` | 3.4 | 4.5 | **shipped as `/mountain`** |
 | atlas | the atlas | `/atlas/origin` | 4.5 | 6.5 | unchanged |
 | earth | the earth | `/earth` | 6.5 | 9 | unchanged |
 | **stars** | the stars | `/stars` | 9 | **16.5** | narrowed |
@@ -204,6 +211,12 @@ change the season, which changes where the flock is going.
 
 ### `/olympus` — the wanderer above the sea of fog
 
+> **Shipped into `/mountain`, not as `/olympus`.** The band was already served
+> by `/mountain` when this was built, and a band takes one room, so the brief
+> below was delivered as a deepening of that room (#224). The fog volume, the
+> archipelago read and the analytic normals all landed; the horn seeds,
+> cornices and glacier did not — see §4.
+
 **Invariant.** A heightfield seed plus a fog altitude. The whole picture — what
 is peak, what is island, what is drowned — is a function of those two numbers.
 
@@ -222,8 +235,8 @@ and the room is the view. One finger turns the head. Long-press draws breath
 horizon — the vessel is level with the world. Three fingers move the sun, and
 the whole palette follows it from dawn through alpenglow.
 
-**Note.** `/clouds` keeps its cloud-floor scene; its route description moves off
-the word "olympus" when this lands, so the two are not confused.
+**Note.** `/clouds` keeps its cloud-floor scene; its route description moved off
+the word "olympus" (#213), so the two rooms sharing that band are not confused.
 
 ### `/space` — the web
 
@@ -294,22 +307,30 @@ And the aliveness rules, which are the point:
 
 One PR at a time, merged on green, fresh `main` after each — per `AGENTS.md`.
 
-| # | PR | contents |
-| --- | --- | --- |
-| 1 | `feat(scale): the life ladder and three vistas take their addresses` | the re-cut in `lib/scale.ts`, doors, `test-scale.mjs`, this plan |
-| 2 | `feat(organics): carbon learns to chain` | `/organics` + `lib/organic.ts` + test |
-| 3 | `feat(dna): the ladder that copies` | `/dna` + sequence↔melody inverse + test |
-| 4 | `feat(organelles): the organs before the body` | `/organelles` + membrane budget + test |
-| 5 | `feat(tissue): when one becomes many` | `/tissue` + adhesion sheet + test |
-| 6 | `feat(birds): the flock as one animal` | `/birds` + flocking law + test |
-| 7 | `feat(olympus): the wanderer above the sea of fog` | `/olympus` + heightfield/fog shader |
-| 8 | `feat(space): the web that holds the light` | `/space` + structure formation + test |
-| 9 | `feat(scale): the ladder sounds its own rungs` | per-band ambient beds, overlook-tree nodes, the `/cells` room consuming `/organelles`' set |
+**All of it shipped.** What actually landed, in order:
 
-PR 1 is the only one anything else depends on. PRs 2–8 touch disjoint files and
-could run in any order; they are listed in ladder order because building them
-that way lets each one's handoff anchor be tested against the room below it as
-soon as it exists.
+| PR | title | contents |
+| --- | --- | --- |
+| #198 | `feat(scale): the life ladder and three vistas take their addresses` | the re-cut in `lib/scale.ts`, the doors, `test-scale.mjs`, this plan, and the seven new `/overlook` miniatures |
+| #203 | `feat(organics): carbon learns to chain` | `/organics` + `lib/organic.ts` + `test-organic.mjs` |
+| #208 | `feat(dna): the ladder that copies` | `/dna` + `lib/helix.ts` (sequence↔melody inverse) + `test-helix.mjs` |
+| #211 | `feat(organelles): the organs before the body` | `/organelles` + `lib/membrane.ts` (the membrane budget) + `test-membrane.mjs` |
+| #217, #219 | `feat(tissue): when one becomes many` | `/tissue` + `lib/sheet.ts` (adhesion → consonance) + `test-sheet.mjs`; #219 lifted a pit that never relaxed |
+| #218, #221 | `feat(space): the web that holds the light` | `/space` + `lib/cosmicweb.ts` + `test-cosmicweb.mjs`; #221 kept its filaments on a phone |
+| #223 | `feat(birds): the flock as one animal` | `/birds` + `lib/flock.ts` (order → harmonic collapse) + `test-flock.mjs`, replacing a thinner earlier implementation |
+| #213, #224 | `feat(mountain): the fog takes its altitude` | the olympus band, **superseded**: it was already served by `/mountain`, so rather than a second room on one band the peak was deepened in place with `lib/heightfield.ts` + `test-heightfield.mjs` — a real exponential-height fog volume, analytic normals, and the archipelago read |
+
+Two things the plan did not foresee. The olympus band was taken by `/mountain`
+while this was being built, and `docs/new-room.md` §1 forbids a second room on
+an occupied band — so PR 7 became a deepening rather than a new route, which is
+the better outcome. And `/clouds` gave the word "olympus" back to the band it
+names (#213), so the two rooms sharing that band are no longer confused.
+
+Still open from §4's original PR 9: per-band ambient beds, and the `/cells` room
+consuming `/organelles`' set. Deferred from `/mountain`: horn-form seeds,
+knife-edge cornices, and glacier as a third material — all of which want the
+heightfield's ridge amplitude retuned against the inversion altitude, and
+therefore want `test-heightfield.mjs`'s constants re-verified with them.
 
 `/coin` is untouched — it is already the reference exemplar for gyroscopic and
 haptic feel, and every room above is measured against it.
