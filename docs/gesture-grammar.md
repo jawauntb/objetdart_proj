@@ -141,8 +141,12 @@ voice      { id, phase: start|move|end|cancel, x, y, intensity } // polyphonic s
            // (hold/drag/scrub silenced, correlated pairs may cancel into pinch/twist)
 span       { spread, phase }                   // two fingers held apart, static
 rhythm     { bpm, stability }                  // from tap trains
-drum       { hits, alternation }               // multi-point patter
-arpeggio   { fingers, spreadMs }               // staggered chord landing
+drum       { hits, alternation, x, y, ax, ay, bx, by } // multi-point patter:
+           // the committing hit plus the two zones the hands alternate
+           // between, so a room can play the space between them
+arpeggio   { fingers, spreadMs, x, y }         // staggered chord landing —
+           // instrument surfaces only; the voices already sound in landing
+           // order, this narrates the roll and never re-triggers them
 shake      { intensity }
 tilt       { beta, gamma }                     // smoothed
 knock      { intensity }
@@ -153,8 +157,11 @@ breath     { strength }                        // opt-in, candle contexts only
 Shared thresholds (centralized in `gesture/core.ts`, never redefined per room):
 hold tiers **250ms** (touch) / **900ms** (dwell) / **2500ms** (ceremony); tap window
 280ms; chord settle 40ms; scrub at ¾ winding; flick above 0.6 px/ms; voice stagger 80ms
-and pair-decide 180ms on instrument surfaces. Intensity always 0..1 from the best
-available physical channel.
+and pair-decide 180ms on instrument surfaces. A drum patter commits at three landings
+alternating between two zones inside a 1.2s window (a same-spot roll or a chord's
+simultaneous landings never drum); an arpeggio is a chord whose landings spread past
+the 40ms settle with no entrance more than 600ms after the last. Intensity always
+0..1 from the best available physical channel.
 
 ## 5. Global bindings (identical in every room)
 

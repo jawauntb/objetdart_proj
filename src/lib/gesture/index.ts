@@ -21,6 +21,8 @@ import {
   pathWinding,
   classifyInstrumentPair,
   classifyRelease,
+  classifyDrum,
+  classifyArpeggio,
   tapTrain,
   rhythmFrom,
   shakeIntensity,
@@ -29,6 +31,7 @@ import {
   type Pt,
   type MotionSample,
   type Rhythm,
+  type DrumHit,
 } from "./core";
 
 export type Phase = "start" | "move" | "end";
@@ -70,6 +73,32 @@ export type GestureHandlers = {
    */
   voice?: (e: { id: number; phase: Phase | "cancel"; x: number; y: number; intensity: number }) => void;
   rhythm?: (e: Rhythm) => void;
+  /**
+   * Multi-point patter (grammar §1 "drumming"): landings alternating between
+   * two zones. Emitted once per landing from the third qualifying hit on —
+   * (x, y) is the committing hit, (ax, ay) / (bx, by) the two zones the
+   * hands alternate between. Classification lives in core (classifyDrum);
+   * a same-spot roll and a chord's simultaneous landings never drum.
+   */
+  drum?: (e: {
+    hits: number;
+    alternation: number;
+    x: number;
+    y: number;
+    ax: number;
+    ay: number;
+    bx: number;
+    by: number;
+  }) => void;
+  /**
+   * Staggered chord landing (grammar §1 "stagger"): the fingers of one chord
+   * arriving deliberately apart — an arpeggio, not a chord. Instrument
+   * surfaces only: the voices are already sounding in landing order, so this
+   * event narrates the roll (one emission per staggered entrance, fingers
+   * counting up) and must never be used to re-trigger them. (x, y) is the
+   * newest entrance.
+   */
+  arpeggio?: (e: { fingers: number; spreadMs: number; x: number; y: number }) => void;
   shake?: (e: { intensity: number }) => void;
   tilt?: (e: { beta: number; gamma: number }) => void;
   knock?: (e: { intensity: number }) => void;
@@ -159,6 +188,7 @@ export function attachGestures(
   let tapTime = -1e9;
   let tapFingersPending = 0;
   const tapTimes: number[] = [];
+  const drumHits: DrumHit[] = [];
 
   const sessionStart = (): Contact | null => contacts.values().next().value ?? null;
 
@@ -292,6 +322,16 @@ export function attachGestures(
       width: ev.width,
       height: ev.height,
     });
+    // drumming — landings alternating between two zones. The classifier in
+    // core rejects same-spot rolls and simultaneous chord landings, so this
+    // never fights the chord/pair logic below; it fires per hit once a
+    // patter is established.
+    if (on.drum) {
+      drumHits.push({ x: ev.clientX, y: ev.clientY, t: now });
+      if (drumHits.length > 12) drumHits.shift();
+      const patter = classifyDrum(drumHits, now);
+      if (patter) on.drum(patter);
+    }
     if (poly) {
       // Every landing sounds now; classification can only cancel later.
       voiceIds.add(ev.pointerId);
@@ -318,6 +358,19 @@ export function attachGestures(
           rotAcc: 0,
           decided: landDeltaMs > THRESHOLDS.voiceStaggerMs ? "voices" : null,
         };
+      }
+      // arpeggio — a staggered entrance while other voices hold: the chord
+      // is rolling. The voices already sound in landing order; this only
+      // narrates the roll. A probationary pair (two fingers still inside
+      // the voice-stagger window) may yet be reclaimed as pinch/twist, so
+      // it is never narrated as a roll.
+      if (on.arpeggio && contacts.size >= 2) {
+        const cs = [...contacts.values()];
+        const roll = classifyArpeggio(cs.map((c) => c.t0));
+        const pairAmbiguous = cs.length === 2 && now - cs[0].t0 <= THRESHOLDS.voiceStaggerMs;
+        if (roll && !pairAmbiguous) {
+          on.arpeggio({ ...roll, x: ev.clientX, y: ev.clientY });
+        }
       }
     }
     if (contacts.size === 1) {

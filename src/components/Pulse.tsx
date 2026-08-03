@@ -237,6 +237,9 @@ export default function Pulse() {
   const windRef = useRef({ cur: 0, target: 0 });
   const timeScaleRef = useRef({ cur: 1, target: 1 });
   const entrainRef = useRef({ bpm: 0, until: 0 });
+  // drumming IS the pacemaker: while an alternating two-point patter holds,
+  // each hit paces one beat and the autonomous heart stands aside
+  const drumRef = useRef({ until: 0, lastHitAt: 0, bpm: 0, queued: 0 });
   const lastGestureAtRef = useRef(0);
   const ceremonyKeepRef = useRef<() => void>(() => {});
 
@@ -402,17 +405,27 @@ export default function Pulse() {
       render.touchEnergy *= Math.pow(0.012, rawDt / 2.4);
       shock.energy = Math.max(inShock ? 1 : 0, shock.energy * Math.pow(0.02, rawDt / 1.45));
 
-      // a tapped, steady pulse entrains the heart while it holds
+      // a tapped, steady pulse entrains the heart while it holds; a drummed
+      // patter overrides everything — the hands are the pacemaker
       const entrain = entrainRef.current;
-      const entrained = now < entrain.until && entrain.bpm > 0;
-      const baseHr = entrained ? entrain.bpm : hrRef.current;
+      const drum = drumRef.current;
+      const drummed = now < drum.until;
+      const entrained = !drummed && now < entrain.until && entrain.bpm > 0;
+      const baseHr = drummed && drum.bpm > 0 ? drum.bpm : entrained ? entrain.bpm : hrRef.current;
       const effectiveHr = clamp(baseHr * (1 + stressV * 0.16) + render.touchEnergy * 9 + Math.abs(wind.cur) * 6, 38, 220);
       const period = 60 / effectiveHr;
       const sinceBeat = (wnow - render.beatAt) / 1000;
       const variance = 0.028 + stressV * 0.11 + render.touchEnergy * 0.012;
       const wobble = (Math.sin(wnow * 0.0021) * 0.55 + Math.sin(wnow * 0.0013) * 0.45) * variance * (entrained ? 0.3 : 1);
 
-      if (!inShock && sinceBeat >= period * (1 + wobble)) {
+      if (!inShock && drum.queued > 0) {
+        // each drum hit lands one beat, exactly when the hand said so
+        drum.queued -= 1;
+        render.beatAt = wnow;
+        render.qrs = 0;
+        render.beatGlow = 1;
+        try { getFieldAudio().playNote(48 + Math.round(stressV * 12), 42); } catch { /* noop */ }
+      } else if (!inShock && !drummed && sinceBeat >= period * (1 + wobble)) {
         render.beatAt = wnow;
         render.qrs = 0;
         render.beatGlow = 1;
@@ -680,8 +693,30 @@ export default function Pulse() {
         try { haptics.ripple(0.35); } catch { /* noop */ }
         recordTape("ripple", 0.5, "pulse/stir");
       },
+      drum: (e) => {
+        // drumming on the field IS the heart's pacemaker: an alternating
+        // two-point patter overrides the heartbeat entirely while it lasts —
+        // each hit lands a beat bloom at its point and paces one beat; the
+        // rhythm decays back to the room's own pulse when the hands stop.
+        lastGestureAtRef.current = performance.now();
+        void getFieldAudio().start();
+        const now = performance.now();
+        const d = drumRef.current;
+        if (now - d.lastHitAt >= 1500) d.bpm = 0;
+        else {
+          const bpm = clamp(60000 / Math.max(1, now - d.lastHitAt), 38, 220);
+          d.bpm = d.bpm > 0 ? d.bpm * 0.6 + bpm * 0.4 : bpm;
+        }
+        d.lastHitAt = now;
+        d.until = now + 1300;
+        d.queued = Math.min(3, d.queued + 1);
+        entrainRef.current.until = 0; // the patter outranks the tapped pulse
+        addBloom(e.x, e.y, 0.7 + e.alternation * 0.5, "drum");
+      },
       rhythm: (e) => {
         // the monitor listens: a steady tapped pulse and the heart falls in
+        // (unless the hands are drumming — the patter is the stronger word)
+        if (performance.now() < drumRef.current.until) return;
         if (e.stability <= 0.7 || e.bpm < 40 || e.bpm > 180) return;
         const wasSilent = performance.now() > entrainRef.current.until;
         entrainRef.current.bpm = Math.round(e.bpm);
