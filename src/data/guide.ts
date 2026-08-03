@@ -892,15 +892,19 @@ export const GUIDE_ROOMS: GuideRoom[] = [
     key: "light",
     title: "color music",
     href: "/light",
-    essence: "a full-screen spectral plate — x is wavelength, y is brightness, played on a sustaining synth.",
+    essence: "a full-screen spectral plate — x is wavelength, y is brightness, with visible scale frets that bloom near your finger, played on a sustaining synth.",
     moves: [
       "touch → sounds the wavelength under your finger; every finger stacks a chord",
       "drag → glides the pitch",
       "double-tap the same spot → a sub-bass kick",
+      "\"listen\" → plays a chord lesson with ghost hands on the plate",
       "keys a s d f g h j k l → a pentatonic keyboard row",
       "shake → strums everything you've touched as an arpeggio",
     ],
-    finds: ["a quick tap booms like a drum; the same touch held is a sustained note — the release decides which"],
+    finds: [
+      "visible scale frets bloom brighter where your finger is nearest — the continuum becomes a piano of light under the active lens",
+      "a quick tap booms like a drum; the same touch held is a sustained note — the release decides which",
+    ],
   },
   {
     key: "music-color",
@@ -919,14 +923,19 @@ export const GUIDE_ROOMS: GuideRoom[] = [
     key: "timbre",
     title: "one surface, every instrument",
     href: "/timbre",
-    essence: "one plate where sideways is pitch and up-and-down morphs continuously through eight physically modeled instruments.",
+    essence: "one plate where sideways is pitch and up-and-down morphs continuously through eight physically modeled instruments, with soft band gravity that settles a resting hand onto a voice.",
     moves: [
       "touch → sounds a note in whatever instrument that height blends toward",
+      "rest on a band → gravity settles you onto that instrument; a fast stroke stays free to morph",
       "drag vertically → morphs the physical model itself, not just the tone color",
       "multiple fingers → each one its own instrument at its own height",
+      "\"listen\" → walks one note through the full chain, then stacks an orchestra chord",
       "keys a s d f g h j k l → plays the last-touched instrument from the keyboard",
     ],
-    finds: ["between two instruments the readout names a real blended hybrid rather than snapping to one or the other"],
+    finds: [
+      "between two instruments the readout names a real blended hybrid rather than snapping to one or the other",
+      "the lesson's ghost fingers land where yours should — one pitch morphing harp through trumpet, then a room-wide chord",
+    ],
   },
   {
     key: "instrument",
@@ -937,6 +946,8 @@ export const GUIDE_ROOMS: GuideRoom[] = [
       "touch → sounds a note; every finger is independent",
       "pinch → zooms the pitch window to finer and finer intervals",
       "twist → steps the scale lens between pentatonic, chromatic, and pure light-frequency tuning",
+      "\"listen\" → demonstrates staggered voices, a pinch that zooms the pitch window, and a twist that turns the scale lens — all with ghost hands",
+      "keys a s d f g h j k l → plays the pentatonic row from the plate's last position",
     ],
     finds: ["fingers that land more than 80ms apart are always treated as voices and can never be mistaken for a pinch, so a rolled chord is always safe"],
   },
@@ -1028,6 +1039,7 @@ export const GUIDE_ROOMS: GuideRoom[] = [
     finds: [
       "on a phone, a single tap starts and stops the clocks; on a desktop the same tap sets velocity and mass at once",
       "at the felt-duration lens the two ladders start together and open apart — the gap between them is the falling-behind",
+      "the clocks are already running and falling apart the moment you arrive, and the well rings itself down on its own — pausing is the one deliberate stillness here",
     ],
   },
   {

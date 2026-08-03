@@ -15,6 +15,12 @@ import {
   wavelengthFromX,
   type ScaleMode,
 } from "@/lib/light-music";
+import {
+  playLesson,
+  timbreGravity,
+  timbreLesson,
+  type LessonGhost,
+} from "@/lib/instrument-lesson";
 import { TIMBRE_CHAIN, timbreAt } from "@/lib/timbre";
 import { useField } from "@/store/field";
 
@@ -40,14 +46,18 @@ const KEY_SEMITONES = [0, 3, 5, 7, 10, 12, 15, 17, 19];
 
 export default function TimbreInstrument() {
   const plateRef = useRef<HTMLDivElement | null>(null);
-  const pointers = useRef(new Set<number>());
+  const pointers = useRef(new Map<number, { x: number; y: number; at: number }>());
   const lastMorphTick = useRef(0);
   const scaleModeRef = useRef<ScaleMode>("chroma");
   const positionRef = useRef(0.5);
+  const cancelLesson = useRef<null | (() => void)>(null);
 
   const [wavelength, setWavelength] = useState(553);
   const [position, setPosition] = useState(0.5);
   const [touches, setTouches] = useState<ActiveTouch[]>([]);
+  const [ghosts, setGhosts] = useState<LessonGhost[]>([]);
+  const [isListening, setIsListening] = useState(false);
+  const [lessonLabel, setLessonLabel] = useState("");
   const [scaleMode, setScaleMode] = useState<ScaleMode>("chroma");
 
   scaleModeRef.current = scaleMode;
@@ -97,10 +107,12 @@ export default function TimbreInstrument() {
 
   const handlePointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     void getFieldAudio().start();
-    const { x, y } = plateXY(event.clientX, event.clientY);
+    const { x, y: rawY } = plateXY(event.clientX, event.clientY);
+    // Band gravity: a slow hand settles onto an instrument, a fast one morphs.
+    const y = timbreGravity(rawY, 0.35);
     const { nm, freq, spec, color: touchColor } = translationAt(x, y);
 
-    pointers.current.add(event.pointerId);
+    pointers.current.set(event.pointerId, { x, y, at: performance.now() });
     getTimbreEngine().noteOn(String(event.pointerId), freq, spec);
     setWavelength(nm);
     setPosition(y);
@@ -112,13 +124,20 @@ export default function TimbreInstrument() {
   }, [plateXY, recordTimbre, showTouch, translationAt]);
 
   const handlePointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    if (!pointers.current.has(event.pointerId)) return;
-    const { x, y } = plateXY(event.clientX, event.clientY);
+    const prev = pointers.current.get(event.pointerId);
+    if (!prev) return;
+    const { x, y: rawY } = plateXY(event.clientX, event.clientY);
+    const now = performance.now();
+    const dt = Math.max(16, now - prev.at);
+    const speed = Math.hypot(x - prev.x, rawY - prev.y) / dt;
+    // Slow motion pulls toward the nearest instrument band; a quick stroke stays free.
+    const y = speed < 0.0012 ? timbreGravity(rawY, 0.28) : rawY;
+    pointers.current.set(event.pointerId, { x, y, at: now });
     const { nm, freq, spec, color: touchColor } = translationAt(x, y);
     const engine = getTimbreEngine();
 
     engine.glide(String(event.pointerId), freq);
-    const tick = performance.now();
+    const tick = now;
     if (tick - lastMorphTick.current > 60) {
       lastMorphTick.current = tick;
       engine.morph(String(event.pointerId), spec);
@@ -136,6 +155,65 @@ export default function TimbreInstrument() {
     hideTouch(event.pointerId);
     try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* noop */ }
   }, [hideTouch]);
+
+  const stopLesson = useCallback(() => {
+    cancelLesson.current?.();
+    cancelLesson.current = null;
+    getTimbreEngine().stopAll();
+    pointers.current.clear();
+    setTouches([]);
+    setGhosts([]);
+    setLessonLabel("");
+    setIsListening(false);
+  }, []);
+
+  const playListen = useCallback(() => {
+    void getFieldAudio().start();
+    cancelLesson.current?.();
+    getTimbreEngine().stopAll();
+    pointers.current.clear();
+    setTouches([]);
+    setGhosts([]);
+    setIsListening(true);
+    setLessonLabel("");
+    recordTimbre("lesson/listen", 0.7);
+    try { ripple(0.5); } catch { /* noop */ }
+
+    cancelLesson.current = playLesson(timbreLesson(), {
+      on: (e) => {
+        const spec = timbreAt(e.y);
+        const touchColor = colorFromWavelength(wavelengthFromX(e.x));
+        getTimbreEngine().noteOn(`lesson:${e.id}`, e.freq, spec);
+        setWavelength(wavelengthFromX(e.x));
+        setPosition(e.y);
+        setGhosts((current) => [
+          ...current.filter((ghost) => ghost.id !== e.id),
+          { id: e.id, x: e.x, y: e.y, note: e.note, voice: e.voice ?? spec.label, color: touchColor },
+        ]);
+      },
+      off: (e) => {
+        getTimbreEngine().noteOff(`lesson:${e.id}`);
+        setGhosts((current) => current.filter((ghost) => ghost.id !== e.id));
+      },
+      morph: (e) => {
+        const spec = timbreAt(e.y);
+        getTimbreEngine().morph(`lesson:${e.id}`, spec);
+        setPosition(e.y);
+        setGhosts((current) =>
+          current.map((ghost) =>
+            ghost.id === e.id ? { ...ghost, y: e.y, voice: e.voice ?? spec.label } : ghost,
+          ),
+        );
+      },
+      label: (text) => setLessonLabel(text),
+      done: () => {
+        cancelLesson.current = null;
+        setGhosts([]);
+        setLessonLabel("");
+        setIsListening(false);
+      },
+    });
+  }, [recordTimbre]);
 
   const cycleScale = useCallback(() => {
     setScaleMode((mode) => (mode === "penta" ? "chroma" : mode === "chroma" ? "pure" : "penta"));
@@ -173,7 +251,10 @@ export default function TimbreInstrument() {
   }, []);
 
   useEffect(() => {
-    return () => { getTimbreEngine().stopAll(); };
+    return () => {
+      cancelLesson.current?.();
+      getTimbreEngine().stopAll();
+    };
   }, []);
 
   return (
@@ -208,6 +289,21 @@ export default function TimbreInstrument() {
             </span>
           ))}
         </div>
+        {ghosts.map((ghost) => (
+          <span
+            key={`g-${ghost.id}`}
+            className="timbre-finger is-ghost"
+            style={{
+              left: `${ghost.x * 100}%`,
+              top: `${ghost.y * 100}%`,
+              borderColor: ghost.color ?? "rgba(255,255,255,0.7)",
+              boxShadow: `0 0 36px ${ghost.color ?? "rgba(255,255,255,0.45)"}`,
+            }}
+          >
+            <strong>{ghost.note}</strong>
+            <em>{ghost.voice ?? "listen"}</em>
+          </span>
+        ))}
         {touches.map((touch) => (
           <span
             key={touch.id}
@@ -226,7 +322,7 @@ export default function TimbreInstrument() {
         <div className="timbre-current" aria-hidden="true">
           <span>{blend.label}</span>
           <strong>{currentNote}</strong>
-          <em>{formatHz(audible)}</em>
+          <em>{lessonLabel || formatHz(audible)}</em>
         </div>
       </div>
 
@@ -242,12 +338,20 @@ export default function TimbreInstrument() {
 
       <footer className="timbre-hud timbre-hud-bottom">
         <div className="timbre-actions" aria-label="timbre instrument controls">
+          <button
+            type="button"
+            className={isListening ? "timbre-on" : undefined}
+            onClick={isListening ? stopLesson : playListen}
+          >
+            {isListening ? "listening" : "listen"}
+          </button>
           <button type="button" onClick={cycleScale}>{SCALE_LABELS[scaleMode]}</button>
           <Link href="/light">light</Link>
         </div>
         <p className="timbre-hint">
-          hold to sound · slide sideways to bend pitch · slide up or down and the
-          instrument becomes another instrument · fingers stack chords
+          {lessonLabel
+            ? lessonLabel
+            : "rest on a band and it becomes that instrument · listen, then stack your own chord"}
         </p>
       </footer>
 
@@ -317,6 +421,17 @@ export default function TimbreInstrument() {
           color: rgba(255, 255, 255, 0.92);
           text-shadow: 0 0 18px var(--timbre-color), 0 1px 8px rgba(0,0,0,0.7);
         }
+        .timbre-bands span.is-near:before {
+          content: "";
+          position: absolute;
+          left: -10px;
+          right: -40vw;
+          top: 50%;
+          height: 1px;
+          background: linear-gradient(90deg, rgba(255,255,255,0.35), transparent 70%);
+          transform: translateY(-50%);
+          pointer-events: none;
+        }
         .timbre-finger {
           position: absolute;
           width: clamp(88px, 18vw, 136px);
@@ -333,6 +448,20 @@ export default function TimbreInstrument() {
           mix-blend-mode: screen;
           z-index: 4;
           pointer-events: none;
+        }
+        .timbre-finger.is-ghost {
+          border-style: dashed;
+          opacity: 0.8;
+          animation: timbreGhost 900ms ease-in-out infinite;
+        }
+        @keyframes timbreGhost {
+          0%, 100% { transform: translate(-50%, -50%) scale(0.96); opacity: 0.64; }
+          50% { transform: translate(-50%, -50%) scale(1.04); opacity: 0.94; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .timbre-finger.is-ghost {
+            animation: none;
+          }
         }
         .timbre-finger strong {
           color: white;
@@ -460,6 +589,10 @@ export default function TimbreInstrument() {
           text-transform: lowercase;
           text-decoration: none;
           cursor: pointer;
+        }
+        .timbre-actions button.timbre-on {
+          color: #f5d65b;
+          box-shadow: inset 0 0 18px rgba(245, 214, 91, 0.22);
         }
         .timbre-hint {
           margin: 0;

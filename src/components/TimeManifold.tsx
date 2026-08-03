@@ -39,6 +39,7 @@ import MobileInstrumentPanel, { MOBILE_QUERY } from "@/components/MobileInstrume
 const TAU = Math.PI * 2;
 const VMAX = 0.985;
 const SECONDS_PER_CLIMB = 12; // coordinate seconds spanned by the visible worldline
+const BREATH_MS = 7000; // the site's one shared clock (AGENTS.md: "one clock family")
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const gammaOf = (v: number) => 1 / Math.sqrt(Math.max(1e-4, 1 - v * v));
@@ -75,7 +76,7 @@ export default function TimeManifold() {
   const velRef = useRef(0.42);   // |v|/c magnitude
   const dirRef = useRef(1);      // tilt direction of the worldline (+right / -left)
   const massRef = useRef(38);    // 0..100
-  const runningRef = useRef(false);
+  const runningRef = useRef(true);
   const coordRef = useRef(0);    // coordinate time (ms)
   const properRef = useRef(0);   // proper time (ms)
   const lastTickRef = useRef(0); // last whole proper-second that chimed
@@ -103,12 +104,20 @@ export default function TimeManifold() {
   const nightRef = useRef({ cur: 0, target: 0 });
   const knockAtRef = useRef(-1e9);
   const tuttiRef = useRef(0);
+  // idle life: the well never stops radiating on its own, jittered like
+  // /ocean's weather — see the scheduler in the draw loop below.
+  const radiateAtRef = useRef(-1e9);
+  const nextRadiateAtRef = useRef(-1);
 
   const recordTape = useField((s) => s.recordTape);
 
   const [velocity, setVelocity] = useState(0.42);
   const [mass, setMass] = useState(38);
-  const [running, setRunning] = useState(false);
+  // this room's subject is the passage of time, so the clocks run and keep
+  // diverging from the moment you arrive — nobody has to press start for
+  // time to pass. Pausing stays a real, deliberate act: the room's one
+  // stillness a hand can choose, not its resting state.
+  const [running, setRunning] = useState(true);
   const [readout, setReadout] = useState("proper 00:00.00 · γ 1.10 · v/c 0.420");
 
   useEffect(() => { velRef.current = velocity; }, [velocity]);
@@ -136,6 +145,9 @@ export default function TimeManifold() {
     let height = 0;
     let raf = 0;
     let last = performance.now();
+    if (nextRadiateAtRef.current < 0) {
+      nextRadiateAtRef.current = last + 5000 + Math.random() * 6000;
+    }
 
     const resize = () => {
       const rect = root.getBoundingClientRect();
@@ -190,6 +202,20 @@ export default function TimeManifold() {
       }
       pulseRef.current *= Math.exp(-delta / 320);
       tuttiRef.current *= Math.exp(-delta / 460);
+
+      // ── idle life: the well never stops radiating ──
+      // Spacetime does not hold still while nobody watches: on a jittered
+      // schedule (9-17s, like /ocean's weather) the mass rings itself
+      // down — a gravitational wave leaves the well, joining the room's
+      // one calm↔storm axis so the metric ripples and the clock's own
+      // flow briefly races exactly as it would under a real hand's drag.
+      // Only reachable while the loop runs, which is only while visible.
+      if (now > nextRadiateAtRef.current) {
+        nextRadiateAtRef.current = now + 9000 + Math.random() * 8000;
+        radiateAtRef.current = now;
+        if (!reduce) stirTurbulence(0.16 + massN * 0.14);
+        try { getFieldAudio().playNote(30 + Math.round(massN * 6), 900); } catch { /* noop */ }
+      }
 
       // ── the frame layer: the lens turns, the frame slides ──
       const lens = lensRef.current;
@@ -339,7 +365,11 @@ export default function TimeManifold() {
       // ── mass well marker ──
       ctx.save();
       ctx.globalCompositeOperation = "screen";
-      const wellR = S * (0.03 + massN * 0.09);
+      // mass settles: a barely-there breath on the site's shared 7s clock,
+      // so the well is never quite at rest even when nothing else moves —
+      // render-time only, costs a sine, free on a loop that already runs
+      const breath = reduce ? 0 : Math.sin((now / BREATH_MS) * TAU) * 0.02;
+      const wellR = S * (0.03 + massN * 0.09) * (1 + breath);
       const wg = ctx.createRadialGradient(cx, cy, 0, cx, cy, wellR * 2.4);
       wg.addColorStop(0, colorAlpha(WELL, 0.42 + massN * 0.28));
       wg.addColorStop(0.5, colorAlpha(WELL, 0.16));
@@ -531,6 +561,19 @@ export default function TimeManifold() {
         ctx.lineWidth = 1.6;
         ctx.beginPath();
         ctx.arc(cx, cy, S * (0.04 + p * 0.62), 0, TAU);
+        ctx.stroke();
+      }
+
+      // idle radiation: the same shudder, but the well's own — slower,
+      // fainter, unprompted. What a real mass does at rest: it rings down
+      // and the ring leaves without anyone having knocked on anything.
+      const sinceRadiate = now - radiateAtRef.current;
+      if (sinceRadiate > 0 && sinceRadiate < 2400) {
+        const p = sinceRadiate / 2400;
+        ctx.strokeStyle = colorAlpha(WELL, 0.26 * (1 - p) * (1 - p));
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.arc(cx, cy, S * (0.05 + p * 0.5), 0, TAU);
         ctx.stroke();
       }
 
