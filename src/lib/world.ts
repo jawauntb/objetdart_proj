@@ -12,7 +12,11 @@
 // `objetdart:waves:naturals:v1`) and folds them into the new shared key,
 // then deletes the old ones. Users lose nothing.
 
-export type WorldZone = "ocean" | "tide" | "waves" | "coast";
+// The sky is a zone of the same world: what /atmosphere gives to the wind
+// drifts across its own frame while nobody is watching, exactly as a shell
+// drifts along the shore. It borders nothing — a lantern released into the
+// air column stays in the air column — so no coast page ever sees one.
+export type WorldZone = "ocean" | "tide" | "waves" | "coast" | "sky";
 
 // The catalog of everything the coast can carry. Different pages will only
 // render kinds that fit — a lily pad on /tide would read as a mistake, so
@@ -25,7 +29,8 @@ export type WorldKind =
   | "sanddollar"
   | "lily"
   | "leaf"
-  | "koi";
+  | "koi"
+  | "lantern";
 
 export type WorldNatural = {
   id: string;
@@ -57,6 +62,7 @@ const NEIGHBORS: Record<WorldZone, WorldZone[]> = {
   tide: ["ocean", "waves", "coast"],
   waves: ["ocean", "tide", "coast"],
   coast: ["tide", "waves"],
+  sky: [],
 };
 
 // Which kinds belong in which zones. A lily pad only makes sense on /waves;
@@ -71,6 +77,7 @@ const KIND_ZONES: Record<WorldKind, WorldZone[]> = {
   lily:       ["waves"],
   leaf:       ["waves", "ocean"],
   koi:        ["waves"],
+  lantern:    ["sky"],
 };
 
 // Base probability per real hour that a natural hops to a neighbor zone.
@@ -86,6 +93,7 @@ const HOP_RATE_PER_HOUR: Record<WorldKind, number> = {
   lily:       0.015,
   leaf:       0.08,
   koi:        0.002,
+  lantern:    0,      // the air column keeps its own
 };
 
 function safe(): Storage | null {

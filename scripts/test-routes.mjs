@@ -98,6 +98,7 @@ const expectedKeys = [
   "storm",
   "clouds",
   "mountain",
+  "atmosphere",
   "aphros",
   "flowers",
   "birds",
