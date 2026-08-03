@@ -532,13 +532,37 @@ export default function Fire() {
 
     // ── gestures (the shared grammar — src/lib/gesture) ─────────────
     // One finger touches the fire: tap seeds an ember, drag bends
-    // convection, dwell compresses white heat, ceremony blooms it fully.
-    // Three fingers touch the law: drag is crosswind, hold slows time.
-    // Pinch and pan2 stay unbound — the frame belongs to the manifold.
+    // convection, dwell compresses white heat, ceremony blooms it fully
+    // (or, over an existing well, snuffs it — the touch-reachable delete).
+    // Two fingers touch the map: twist reads the bed as a felt flame or a
+    // pressure/heat diagram; drag pans the frame's lean; tap steps back.
+    // Three fingers touch the law: drag is crosswind, hold slows time,
+    // twist turns the hearth's slow season, tap is tutti.
     const detachGestures = attachGestures(fxCanvas, {
       tap: (e) => {
         lastGestureAt = performance.now();
-        if (e.fingers !== 1) return; // the bed absorbs frame/law taps
+        if (e.fingers === 2) {
+          // step back: lower a raised lens, else the fire eases off its lean
+          if (lens > 0.02) {
+            lens = 0;
+          } else {
+            panXTarget = 0;
+            panYTarget = 0;
+            windTarget *= 0.4;
+          }
+          haptics.tap();
+          return;
+        }
+        if (e.fingers === 3) {
+          // tutti — everything alive answers softly at once
+          ignitionAmp = Math.max(ignitionAmp, 0.4 + e.intensity * 0.2);
+          ignitionT0 = simNow;
+          for (const well of wells) well.strength = Math.min(1, well.strength + 0.15);
+          try { audio.chime(); } catch { /* noop */ }
+          haptics.ripple(0.4);
+          markFire("tutti", "#ffe4b8", 0.7);
+          return;
+        }
         const p = trackPointer(e.x, e.y);
         // tap intensity is the strike: ember count, ignition and haptic
         // all ride the same 0..1 from core.
@@ -665,19 +689,43 @@ export default function Fire() {
           }
           return;
         }
-        // ceremony tier — the room's one solemn act: the pyre blooms fully,
-        // white through the whole bed, and is kept.
+        // ceremony tier — the room's one solemn act: over an existing well
+        // it is annihilated (the touch-reachable delete); over open bed the
+        // pyre blooms fully, white through the whole bed, and is kept.
         if (e.tier >= 3 && !holdState.ceremony) {
           holdState.ceremony = true;
-          addWell(p.x, p.y, 1);
-          burst(p.x, p.y, 44, 1.5);
-          ignitionAmp = 1;
-          ignitionT0 = simNow;
-          try { audio.bell(); } catch { /* noop */ }
-          try { haptics.bloom(); } catch { /* noop */ }
-          markFire("sealed in white", "#dcecff", 1);
-          useField.getState().recordTape("sigil", 1, "fire/ceremony");
+          if (extinguishWellNear(p.x, p.y)) {
+            try { audio.thud(); } catch { /* noop */ }
+            try { haptics.chop(); } catch { /* noop */ }
+            markFire("snuffed", "#5a4438", 0.3);
+            useField.getState().recordTape("sigil", 0.3, "fire/extinguish");
+          } else {
+            addWell(p.x, p.y, 1);
+            burst(p.x, p.y, 44, 1.5);
+            ignitionAmp = 1;
+            ignitionT0 = simNow;
+            try { audio.bell(); } catch { /* noop */ }
+            try { haptics.bloom(); } catch { /* noop */ }
+            markFire("sealed in white", "#dcecff", 1);
+            useField.getState().recordTape("sigil", 1, "fire/ceremony");
+          }
         }
+      },
+      twist: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          // three-finger twist: advance/rewind the hearth's slow season
+          season = clamp(season + e.angle * 0.12, 0, 1);
+          return;
+        }
+        // two-finger twist rotates the lens — felt flame ↔ heat diagram
+        lens = clamp(lens + e.angle * 0.4, 0, 1);
+      },
+      pan2: (e) => {
+        lastGestureAt = performance.now();
+        // two fingers pan the frame — the bed leans inside the stage
+        panXTarget = clamp(panXTarget + e.dx * 0.0006, -0.14, 0.14);
+        panYTarget = clamp(panYTarget + e.dy * 0.0006, -0.1, 0.1);
       },
       scrub: (e) => {
         lastGestureAt = performance.now();
@@ -712,6 +760,37 @@ export default function Fire() {
         entrainUntil = performance.now() + 9000;
       },
     }, { wheelZoom: false });
+
+    // ── the vessel: the phone's own body is the hearth's other hand ──
+    const detachVessel = onVessel({
+      tilt: ({ gamma }) => {
+        if (reduce || asleep) return;
+        windTarget = clamp(windTarget + gamma * 0.0009, -1, 1);
+      },
+      shake: ({ intensity }) => {
+        if (reduce || asleep) return;
+        gutter = Math.min(1, gutter + intensity * 0.6);
+        const w = fxCanvas.clientWidth;
+        const h = fxCanvas.clientHeight;
+        for (let i = 0; i < 12; i++) {
+          spawnEmber(Math.random() * w, h * (0.7 + Math.random() * 0.25), (Math.random() - 0.5) * 220, -(40 + Math.random() * 90), 0.9);
+        }
+        try { audio.thud(); } catch { /* noop */ }
+        try { haptics.storm(); } catch { /* noop */ }
+        markFire("scattered", "#f5b15a", 0.7);
+      },
+      knock: ({ intensity }) => {
+        if (reduce || asleep) return;
+        ignitionAmp = Math.max(ignitionAmp, 0.3 + intensity * 0.3);
+        ignitionT0 = simNow;
+        try { audio.spark(); } catch { /* noop */ }
+        try { haptics.tap(); } catch { /* noop */ }
+      },
+      flip: ({ faceDown }) => {
+        // night: the fire banks itself down until the phone turns back up
+        bankTarget = faceDown ? 1 : 0;
+      },
+    });
 
     // Desktop hover is the grammar's quiet dialect (hover ≈ light touch):
     // heat shimmer still gathers under a passing hand. All contact
@@ -793,6 +872,12 @@ export default function Fire() {
     };
 
     const draw = (now: number) => {
+      const tier = gov.beginFrame(now);
+      if (asleep) {
+        raf = requestAnimationFrame(draw);
+        return;
+      }
+      const detail = detailForTier(tier);
       const w = fxCanvas.clientWidth;
       const h = fxCanvas.clientHeight;
       const dt = Math.min(0.05, (now - lastFrame) / 1000);
@@ -807,6 +892,9 @@ export default function Fire() {
       if (!pointerRef.current.pressed) windTarget *= Math.pow(0.001, dt / 2.4);
       wind += (windTarget - wind) * Math.min(1, dt * 4.5);
       gutter *= Math.exp(-dt * 2.4);
+      panX += (panXTarget - panX) * Math.min(1, dt * 3);
+      panY += (panYTarget - panY) * Math.min(1, dt * 3);
+      bank += (bankTarget - bank) * Math.min(1, dt * 1.2);
 
       const held = pointerRef.current.pressed ? (now - pointerRef.current.pressStart) / 1000 : 0;
       const pressTarget = pointerRef.current.pressed ? clamp(held / 1.35, 0, 1) : 0;

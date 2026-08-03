@@ -5,6 +5,18 @@ import { getFieldAudio } from "@/lib/audio";
 import { useField } from "@/store/field";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { onVessel } from "@/lib/vessel";
+import LetGo from "@/components/LetGo";
+import {
+  createFrameGovernor,
+  createIdleWriter,
+  detailForTier,
+  isEmbeddedFrame,
+  onGalleryPause,
+  onVisibility,
+  resolveDpr,
+  type QualityTier,
+} from "@/lib/room-runtime";
 
 /**
  * /jewel — one stone you hold and turn in the light.
@@ -28,6 +40,13 @@ import { attachGestures } from "@/lib/gesture";
 const MAX_RIPPLES = 6;
 // a warm pentatonic, chosen by pointer x
 const PENTA = [60, 62, 64, 67, 69, 72, 74];
+
+// facets: the stone's countable material — planted by a dwell hold, sealed
+// or annihilated by a ceremony hold on one, cleared whole by <LetGo/>.
+const MAX_FACETS = 8;
+const FACET_HIT = 0.055; // normalized hit radius for "on an existing facet"
+const STORAGE_KEY = "objetdart:jewel:facets:v1";
+type Facet = { x: number; y: number; seed: number };
 
 // how hard a drag turns the stone (radians per screen-width of drag)
 const TURN_GAIN = 3.4;
@@ -168,6 +187,10 @@ export default function Jewel() {
       uniform float u_cut;        // facet scale (the cut of the stone)
       uniform vec3  u_rip[${MAX_RIPPLES}];  // x, y, age(seconds)
       uniform float u_ripStr[${MAX_RIPPLES}];
+      uniform vec2  u_facet[${MAX_FACETS}]; // planted facets — the stone's kept material
+      uniform float u_facetN;
+      uniform float u_gather;      // 0..1 a facet gathering under the held finger
+      uniform vec2  u_gatherPos;
 
       float hash21(vec2 p){ p = fract(p*vec2(123.34,456.21)); p += dot(p,p+45.32); return fract(p.x*p.y); }
 
@@ -325,6 +348,23 @@ export default function Jewel() {
         // ripple shimmer overlay
         col += gHi * max(0.0, ripField) * 0.18;
 
+        // ── planted facets: kept material, a permanent extra cut catching
+        //    the light — and the one gathering live under a dwelling finger ──
+        for (int i = 0; i < ${MAX_FACETS}; i++) {
+          if (float(i) >= u_facetN) break;
+          vec2 fc = (u_facet[i] * 2.0 - 1.0); fc.x *= ar; fc.y *= -1.0;
+          vec2 fd = uv - fc;
+          float fcore = exp(-dot(fd, fd) * 60.0);
+          col += thi * fcore * 0.65;
+          col += vec3(fcore) * vec3(1.0, 0.97, 0.9) * 0.5;
+        }
+        if (u_gather > 0.001) {
+          vec2 gc = (u_gatherPos * 2.0 - 1.0); gc.x *= ar; gc.y *= -1.0;
+          vec2 gd = uv - gc;
+          float gcore = exp(-dot(gd, gd) * (90.0 - u_gather * 40.0)) * u_gather;
+          col += thi * gcore * 0.9;
+        }
+
         // subtle filmic-ish lift so it reads opulent not garish
         col = col / (col + vec3(0.6));
         col = pow(col, vec3(0.92));
@@ -377,9 +417,32 @@ export default function Jewel() {
     const uCut = gl.getUniformLocation(prog, "u_cut");
     const uRip = gl.getUniformLocation(prog, "u_rip");
     const uRipStr = gl.getUniformLocation(prog, "u_ripStr");
+    const uFacet = gl.getUniformLocation(prog, "u_facet");
+    const uFacetN = gl.getUniformLocation(prog, "u_facetN");
+    const uGather = gl.getUniformLocation(prog, "u_gather");
+    const uGatherPos = gl.getUniformLocation(prog, "u_gatherPos");
+
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    let reduced = mq.matches ? 1 : 0;
+    reducedRef.current = mq.matches;
+    const onMq = () => { reduced = mq.matches ? 1 : 0; reducedRef.current = mq.matches; };
+    if (typeof mq.addEventListener === "function") mq.addEventListener("change", onMq);
+
+    // ── performance contract (room-runtime): frame governor + visibility
+    // sleep + DPR ceiling, shared with every other room on the site. ──
+    const embedded = isEmbeddedFrame();
+    const gov = createFrameGovernor(embedded ? "medium" : "high");
+    let tier: QualityTier = gov.tier();
+    let hidden = document.hidden;
+    let galleryPaused = false;
+    let faceDown = false;
+    let sleeping = false;
+    const syncSleep = () => { sleeping = hidden || galleryPaused || faceDown; };
+    const unvis = onVisibility((h) => { hidden = h; syncSleep(); });
+    const ungal = onGalleryPause((p) => { galleryPaused = p; syncSleep(); });
 
     const resize = () => {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = resolveDpr(tier, { embedded, reducedMotion: reducedRef.current });
       const w = wrap.clientWidth || 1;
       const h = wrap.clientHeight || 1;
       canvas.width = Math.max(1, Math.floor(w * dpr));
@@ -390,11 +453,13 @@ export default function Jewel() {
     const ro = new ResizeObserver(resize);
     ro.observe(wrap);
 
-    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
-    let reduced = mq.matches ? 1 : 0;
-    reducedRef.current = mq.matches;
-    const onMq = () => { reduced = mq.matches ? 1 : 0; reducedRef.current = mq.matches; };
-    if (typeof mq.addEventListener === "function") mq.addEventListener("change", onMq);
+    // WebGL context loss/restore: pause cleanly, rebuild on restore rather
+    // than leaving a dead canvas.
+    let contextLost = false;
+    const onLost = (ev: Event) => { ev.preventDefault(); contextLost = true; };
+    const onRestored = () => { contextLost = false; resize(); };
+    canvas.addEventListener("webglcontextlost", onLost);
+    canvas.addEventListener("webglcontextrestored", onRestored);
 
     // ── gestures (the shared grammar — src/lib/gesture) ────────────────
     // One finger touches the stone: drag turns it, a tap rings it, a flick

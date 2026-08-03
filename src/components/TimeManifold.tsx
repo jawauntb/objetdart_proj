@@ -168,15 +168,10 @@ export default function TimeManifold() {
     // ── performance contract (room-runtime): a frame governor picks a
     // quality tier from real frame time, and the DPR ceiling + a hard sleep
     // while hidden ride on it. Nothing here draws while the tab can't see it.
+    // (offVis is wired up below, once `draw` exists — onVisibility fires
+    // immediately on subscribe and must not close over a not-yet-declared const.)
     const gov = createFrameGovernor();
     let sleeping = false;
-    const offVis = onVisibility((hidden) => {
-      sleeping = hidden;
-      if (!hidden && !raf) {
-        last = performance.now();
-        raf = requestAnimationFrame(draw);
-      }
-    });
 
     const resize = () => {
       const rect = root.getBoundingClientRect();
@@ -709,20 +704,17 @@ export default function TimeManifold() {
     raf = requestAnimationFrame(draw);
     // an unwatched room costs nothing: the loop stops with the tab and picks
     // the clock back up where it left off
-    const onVis = () => {
-      if (document.visibilityState === "hidden") {
-        cancelAnimationFrame(raf);
-        raf = 0;
-      } else if (!raf) {
+    const offVis = onVisibility((hidden) => {
+      sleeping = hidden;
+      if (!hidden && !raf) {
         last = performance.now();
         raf = requestAnimationFrame(draw);
       }
-    };
-    document.addEventListener("visibilitychange", onVis);
+    });
     return () => {
       cancelAnimationFrame(raf);
       observer.disconnect();
-      document.removeEventListener("visibilitychange", onVis);
+      offVis();
       window.removeEventListener("resize", resize);
     };
   }, []);
@@ -1532,16 +1524,23 @@ function drawClock(
   ctx.lineTo(cx + Math.sin(minA) * r * 0.5, cy - Math.cos(minA) * r * 0.5);
   ctx.stroke();
 
-  // second hand (glowing sweep)
-  ctx.shadowColor = colorAlpha(accent, 0.7);
-  ctx.shadowBlur = 8;
+  // second hand — a cheap additive glow (two wider, fainter strokes under
+  // the line) instead of a per-frame ctx.shadowBlur, which is catastrophic
+  // on mobile drawn twice a frame for two dials.
+  const handFrom: [number, number] = [cx - Math.sin(secA) * r * 0.16, cy + Math.cos(secA) * r * 0.16];
+  const handTo: [number, number] = [cx + Math.sin(secA) * r * 0.82, cy - Math.cos(secA) * r * 0.82];
+  const strokeHand = () => {
+    ctx.beginPath();
+    ctx.moveTo(handFrom[0], handFrom[1]);
+    ctx.lineTo(handTo[0], handTo[1]);
+    ctx.stroke();
+  };
+  ctx.strokeStyle = colorAlpha(accent, 0.22);
+  ctx.lineWidth = 5;
+  strokeHand();
   ctx.strokeStyle = accent;
   ctx.lineWidth = 1.6;
-  ctx.beginPath();
-  ctx.moveTo(cx - Math.sin(secA) * r * 0.16, cy + Math.cos(secA) * r * 0.16);
-  ctx.lineTo(cx + Math.sin(secA) * r * 0.82, cy - Math.cos(secA) * r * 0.82);
-  ctx.stroke();
-  ctx.shadowBlur = 0;
+  strokeHand();
 
   ctx.fillStyle = accent;
   ctx.beginPath();

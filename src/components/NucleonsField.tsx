@@ -122,6 +122,7 @@ type Nucleus = {
   pack: Array<{ x: number; y: number }> | null;
   packA: number;
   packMask: boolean[] | null;
+  packZ: number;
   /** Angular momentum from stirring — deforms the drop toward a spindle. */
   spin: number;
   spinPhase: number;
@@ -253,6 +254,7 @@ function makeNucleus(z: number, n: number, nx: number, ny: number, growth: numbe
     pack: null,
     packA: -1,
     packMask: null,
+    packZ: -1,
     spin: 0,
     spinPhase: hash01(seed) * Math.PI * 2,
     charge: 0,
@@ -624,7 +626,29 @@ export default function NucleonsField() {
       d.z = Math.max(0, z);
       d.n = Math.max(0, n);
       d.decayAt = performance.now() + decayDelay(d.z, d.n, d.seed);
+      // the walk across the chart: every identity this drop has worn, so the
+      // lens can draw the road it took to become what it is
+      const w = d.walk;
+      if (w[w.length - 2] !== d.n || w[w.length - 1] !== d.z) {
+        w.push(d.n, d.z);
+        if (w.length > 96) w.splice(0, w.length - 96);
+      }
       save();
+    };
+
+    /** The packing for this drop's current mass — rebuilt only when A moves. */
+    const packFor = (d: Nucleus): Array<{ x: number; y: number }> => {
+      const a = massNumber(d.z, d.n);
+      if (!d.pack || d.packA !== a) {
+        d.pack = packOffsets(a, d.seed);
+        d.packA = a;
+        d.packZ = -1;
+      }
+      if (!d.packMask || d.packZ !== d.z) {
+        d.packMask = protonMask(d.z, a);
+        d.packZ = d.z;
+      }
+      return d.pack;
     };
 
     // ————— the two hands: capture, and the wall a proton has to climb —————
@@ -644,8 +668,12 @@ export default function NucleonsField() {
         }
         return;
       }
+      const before = massNumber(d.z, d.n);
       retune(d, d.z + f.kind, d.n + (f.kind === 0 ? 1 : 0));
       d.ring = Math.min(1, d.ring + 0.5);
+      // the drop visibly takes it in: a swell that settles over a breath, so
+      // a capture reads as the nucleus growing and not as a dot vanishing
+      d.swell = Math.min(1, d.swell + 0.85);
       d.vx += f.vx * 0.06;
       d.vy += f.vy * 0.06;
       try {
@@ -653,9 +681,11 @@ export default function NucleonsField() {
       } catch {
         /* noop */
       }
+      // the voice falls as the drop gets heavier — the ladder you are climbing
       note(midiOf(d.z, d.n), 260);
+      noteLater(150, midiOf(d.z, d.n) + 7, 170);
       try {
-        haptics.bloom();
+        (before > 120 ? haptics.chop : haptics.bloom)();
       } catch {
         /* noop */
       }

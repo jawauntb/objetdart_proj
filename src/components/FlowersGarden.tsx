@@ -280,6 +280,9 @@ export default function FlowersGarden() {
     let season = 0; // 0..4, wraps — spring/summer/autumn/winter
     let seasonTarget = 0;
     let seasonSnapped = 0;
+    // flip face-down = night (vessel): the garden dims and hushes
+    let night = false;
+    let nightAmt = 0;
 
     // fingertip charge — visual only; every semantic threshold stays in the
     // gesture engine. These listeners never plant, never time gestures: they
@@ -488,9 +491,16 @@ export default function FlowersGarden() {
       useField.getState().recordTape("sigil", 0.85, "flowers/bloom");
     };
 
+    // three-finger twist's season (grammar §5): spring quickens growth,
+    // winter slows it near dormant — a real law change, not a coat of paint.
+    const seasonGrowthMul = () => {
+      const si = Math.floor(((season % 4) + 4) % 4);
+      return [1.3, 1.0, 0.75, 0.45][si];
+    };
+
     const advancePhase = (p: Plant, d: number, intensity: number) => {
       if (p.phase >= 1 || p.wiltAt != null) return; // its season is done
-      p.phase = clamp01(p.phase + d * (0.7 + intensity * 0.6));
+      p.phase = clamp01(p.phase + d * (0.7 + intensity * 0.6) * seasonGrowthMul());
       const now = performance.now();
       if (now - lastGrowNoteAt > 300) {
         lastGrowNoteAt = now;
@@ -819,6 +829,17 @@ export default function FlowersGarden() {
         }
         note(40, 200);
         try { (intensity > 0.7 ? haptics.storm : haptics.chop)(); } catch { /* noop */ }
+      },
+      // knock = wake / ring the room (rhymes with /coin's pop-to-flip): a
+      // rap on the case rings the garden the same way three fingers do
+      knock: () => {
+        lastInteractionAt = performance.now();
+        tutti();
+      },
+      // flip face-down = night: the garden dims and quiets until turned back
+      flip: ({ faceDown }) => {
+        night = faceDown;
+        if (!faceDown) lastInteractionAt = performance.now();
       },
     });
 
@@ -1257,6 +1278,7 @@ export default function FlowersGarden() {
       panY += (panTargetY - panY) * Math.min(1, dt * 4);
       // season eases toward wherever the three-finger twist left it
       season += (seasonTarget - season) * Math.min(1, dt * 3);
+      nightAmt += ((night ? 1 : 0) - nightAmt) * Math.min(1, dt * 1.4);
 
       // shared breath: the audio swell clock when audible, RAF when not
       const audioT = (() => { try { return audio().getAudioTime(); } catch { return null; } })();
@@ -1273,7 +1295,7 @@ export default function FlowersGarden() {
       // springs + volunteer lives
       for (const p of plants) {
         if (p.volunteer && p.wiltAt == null) {
-          p.volAge += delta * timeScale;
+          p.volAge += delta * timeScale * seasonGrowthMul();
           const a = p.volAge / p.volLife;
           const target =
             a < 0.32 ? (a / 0.32) * BLOOM_PEAK :
@@ -1408,6 +1430,12 @@ export default function FlowersGarden() {
           }
         }
         ctx.restore();
+      }
+
+      // night (vessel: flip face-down) — the garden dims under a hushed veil
+      if (nightAmt > 0.01) {
+        ctx.fillStyle = `rgba(2, 4, 6, ${nightAmt * 0.72})`;
+        ctx.fillRect(0, 0, width, height);
       }
 
       // glimmer — after quiet, a ring where a dwell would land (never text)
