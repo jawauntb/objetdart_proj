@@ -18,8 +18,10 @@ function loadTsModule(path) {
     fileName: filename,
   }).outputText;
   const module = { exports: {} };
-  const sandbox = { module, exports: module.exports };
-  vm.runInNewContext(code, sandbox, { filename });
+  // Same realm as the test: vm.runInNewContext builds arrays, objects and
+  // strings on a foreign prototype chain, so deepStrictEqual rejects them
+  // against host literals of identical content.
+  new Function("module", "exports", code)(module, module.exports);
   return module.exports;
 }
 
