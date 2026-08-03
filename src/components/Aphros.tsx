@@ -509,15 +509,19 @@ export default function Aphros() {
             gl_Position = vec4(a_pos, 0.0, 1.0);
           }
         `;
-        // Tropical shallow water: pale aqua at the top (sky-reflective),
-        // deeper aqua/teal toward the bottom, with slow wave displacement
-        // and subtle caustic glints. Outputs RGBA with the alpha tied to
-        // the depth gradient so the existing rose/cream sky shows through
-        // softly at the horizon.
+        // The Galatea sea: nacre-pale at the horizon, opening through
+        // turquoise into Aegean blue, green shallows, then sand glowing
+        // through the last of the water. Travelling swells lean with the
+        // shore wind; the rose sky mirrors on the swell backs; a pearl
+        // glitter path shivers down the centre; and procedural foam lace
+        // — the aphros itself — rides the crests, thickening shoreward
+        // until the foam band takes over. Alpha stays tied to depth so
+        // the rose horizon still bleeds through at the top.
         const frag = `
           precision highp float;
           uniform float uTime;
           uniform vec2 uRes;
+          uniform float uWind;
           uniform vec4 uRipples[8];
           uniform int uRippleCount;
           varying vec2 vUv;
@@ -540,7 +544,7 @@ export default function Aphros() {
           float fbm(vec2 p) {
             float v = 0.0;
             float a = 0.5;
-            for (int i = 0; i < 4; i++) {
+            for (int i = 0; i < 5; i++) {
               v += a * vnoise(p);
               p *= 2.05;
               a *= 0.52;
@@ -549,64 +553,95 @@ export default function Aphros() {
           }
 
           void main() {
-            vec2 uv = vec2(vUv.x, 1.0 - vUv.y);
+            vec2 uv = vec2(vUv.x, 1.0 - vUv.y); // y=0 horizon, y=1 foam line
+            float aspect = uRes.x / uRes.y;
             float t = uTime;
 
-            // ── ripples from shell pops & sea taps ──
+            // ── ripples from shell pops & sea taps (height field) ──
             float rippleHi = 0.0;
             for (int i = 0; i < 8; i++) {
               if (i >= uRippleCount) break;
               vec4 r = uRipples[i];
-              vec2 dp = uv - r.xy;
+              vec2 dp = (uv - r.xy) * vec2(aspect, 1.0);
               float dist = length(dp);
               float age = r.z;
               if (age > 2.4) continue;
-              float speed = 0.34;
-              float front = dist - age * speed;
+              float front = dist - age * 0.34;
               float env = exp(-(front * front) / 0.0028);
               float falloff = 1.0 / (1.0 + dist * 3.2);
               float temporal = max(0.0, 1.0 - age / 2.4);
               rippleHi += r.w * env * falloff * temporal;
             }
 
-            // gentle flow displacement
+            // perspective: detail packs toward the horizon, opens shoreward
+            float persp = mix(0.24, 1.0, uv.y);
+
+            // ── travelling swell, two scales, leaning with the shore wind ──
             vec2 flow = vec2(
-              sin(uv.y * 9.0 + t * 0.32) * 0.012,
-              sin(uv.x * 7.0 + t * 0.22) * 0.008
-            );
+              sin(uv.y * 8.0 + t * 0.60) * 0.020,
+              sin(uv.x * 6.5 + t * 0.42) * 0.013
+            ) * persp;
+            flow += vec2(
+              sin(uv.y * 3.2 - t * 0.26) * 0.011,
+              cos(uv.x * 2.4 + t * 0.20) * 0.008
+            ) * persp;
+            flow.x += uWind * 0.06 * persp;
             vec2 wuv = uv + flow;
-            wuv += rippleHi * 0.010;
+            wuv += rippleHi * 0.012;
+            float depth = clamp(wuv.y, 0.0, 1.0);
 
-            // Tropical shallow depth gradient — pale sky-reflective aqua
-            // at top, warmer turquoise mid, pale sand glow at very bottom.
-            vec3 aquaPale = vec3(0.78, 0.92, 0.92);  // BFDDD8 approx
-            vec3 aquaMid  = vec3(0.55, 0.83, 0.84);  // 8FDED1 approx
-            vec3 aquaWarm = vec3(0.66, 0.86, 0.81);  // shallow tint
-            vec3 sandLit  = vec3(0.92, 0.83, 0.69);  // EBD2B0 — sand under water
-            vec3 col = mix(aquaPale, aquaMid, smoothstep(0.0, 0.55, wuv.y));
-            col = mix(col, aquaWarm, smoothstep(0.55, 0.85, wuv.y));
-            col = mix(col, sandLit, smoothstep(0.85, 1.0, wuv.y));
+            // ── depth palette: nacre horizon → open turquoise → Aegean
+            // blue → green shallows → sand glowing through the last water ──
+            vec3 nacre   = vec3(0.87, 0.93, 0.92);
+            vec3 aquaMid = vec3(0.47, 0.79, 0.80);
+            vec3 aegean  = vec3(0.16, 0.44, 0.60);
+            vec3 shallow = vec3(0.60, 0.85, 0.78);
+            vec3 sandLit = vec3(0.93, 0.85, 0.70);
+            vec3 col = mix(nacre, aquaMid, smoothstep(0.00, 0.40, depth));
+            col = mix(col, aegean, smoothstep(0.26, 0.60, depth) * 0.60);
+            col = mix(col, shallow, smoothstep(0.56, 0.86, depth));
+            col = mix(col, sandLit, smoothstep(0.84, 1.00, depth));
 
-            // caustic glints — fbm + sine product, brighter near surface
-            vec2 nuv = wuv * vec2(uRes.x / uRes.y, 1.0) * 4.2 + vec2(t * 0.06, t * 0.04);
+            // ── the rose sky mirrored on the swell backs near the horizon ──
+            float mirrorN = fbm(vec2(wuv.x * aspect * 1.6 + t * 0.05, wuv.y * 16.0));
+            float mirror = (1.0 - smoothstep(0.0, 0.36, uv.y))
+                         * smoothstep(0.48, 0.85, mirrorN);
+            col = mix(col, vec3(0.95, 0.83, 0.79), mirror * 0.45);
+
+            // ── caustic glints ──
+            vec2 nuv = wuv * vec2(aspect, 1.0) * (3.2 + 3.4 * depth) + vec2(t * 0.06, t * 0.04);
             float n = fbm(nuv);
-            float c1 = sin((wuv.x + n * 0.18) * 22.0 + t * 0.40)
-                     * sin((wuv.y + n * 0.14) * 12.0 - t * 0.30);
-            float caustic = smoothstep(0.55, 1.05, c1 * 0.7 + n * 0.3);
-            float surfMask = 1.0 - smoothstep(0.0, 0.5, wuv.y);
-            col += caustic * 0.10 * vec3(1.0, 0.98, 0.92) * surfMask;
+            float c1 = sin((wuv.x + n * 0.18) * 24.0 + t * 0.50)
+                     * sin((wuv.y + n * 0.14) * 15.0 - t * 0.34);
+            float c2 = sin(wuv.x * 11.0 - t * 0.28 + n * 1.2)
+                     * sin(wuv.y *  7.0 + t * 0.20 - n * 1.0);
+            float caustic = smoothstep(0.52, 1.05, c1 * 0.45 + c2 * 0.55);
+            col += caustic * mix(0.13, 0.05, depth) * vec3(1.0, 0.97, 0.90);
 
-            // ripple highlights
+            // ── pearl glitter path — the light shivering down the centre ──
+            float column = exp(-pow((uv.x - 0.5) * 2.6, 2.0));
+            float facets = fbm(vec2(uv.x * aspect * 14.0, uv.y * 44.0 - t * 1.4));
+            float glint = column * smoothstep(0.58, 0.95, facets) * (1.0 - depth * 0.55);
+            col += glint * 0.42 * vec3(1.0, 0.95, 0.88);
+
+            // ── aphros — foam lace riding the crests, thickening shoreward ──
+            vec2 fuv = wuv * vec2(aspect, 1.0) * 5.0 + vec2(t * 0.10 + uWind * 0.5, -t * 0.05);
+            float lace1 = fbm(fuv);
+            float lace2 = fbm(fuv * 2.1 + vec2(3.7, 1.3) + lace1 * 1.1);
+            float vein = 1.0 - abs(2.0 * lace2 - 1.0);
+            float lace = smoothstep(0.70, 0.97, vein * (0.55 + 0.45 * lace1));
+            float crest = smoothstep(0.45, 0.95,
+              sin(wuv.y * 24.0 - t * 0.70 + lace1 * 3.2) * 0.5 + 0.5);
+            float foam = lace * (0.35 + 0.65 * crest) * smoothstep(0.30, 0.92, depth);
+            foam = clamp(foam + rippleHi * 0.035, 0.0, 1.0);
+            col = mix(col, vec3(0.99, 0.98, 0.95), foam * 0.62);
+
+            // ripple wavefront highlights
             col += rippleHi * 0.012 * vec3(1.0, 1.0, 0.95);
-
-            // soft wave-crest white streaks at midline — very subtle
-            float crest = smoothstep(0.6, 1.0, sin(wuv.x * 30.0 + t * 0.8 + n * 1.5)
-                                            * sin(wuv.y * 18.0 - t * 0.5));
-            col += crest * 0.04 * vec3(1.0);
 
             // alpha: fade in at top so the rose horizon shows through softly,
             // full at bottom where the foam band takes over
-            float a = smoothstep(0.0, 0.18, wuv.y) * 0.78 + 0.12;
+            float a = smoothstep(0.0, 0.18, uv.y) * 0.80 + 0.12;
 
             gl_FragColor = vec4(col * a, a);
           }
@@ -630,6 +665,7 @@ export default function Aphros() {
         let uResLoc: WebGLUniformLocation | null = null;
         let uRipplesLoc: WebGLUniformLocation | null = null;
         let uRippleCountLoc: WebGLUniformLocation | null = null;
+        let uWindLoc: WebGLUniformLocation | null = null;
         if (vs && fs) {
           const p = gl.createProgram();
           if (p) {
@@ -642,6 +678,7 @@ export default function Aphros() {
               uResLoc = gl.getUniformLocation(p, "uRes");
               uRipplesLoc = gl.getUniformLocation(p, "uRipples");
               uRippleCountLoc = gl.getUniformLocation(p, "uRippleCount");
+              uWindLoc = gl.getUniformLocation(p, "uWind");
               const buf = gl.createBuffer();
               gl.bindBuffer(gl.ARRAY_BUFFER, buf);
               gl.bufferData(
@@ -660,12 +697,16 @@ export default function Aphros() {
           }
         }
         if (prog) {
-          const t0 = performance.now();
           let raf = 0;
+          let lastNow = performance.now();
+          let wT = 0; // warped seconds — three fingers dilate the sea too
           const draw = (now: number) => {
-            const t = (now - t0) / 1000 * (reduce ? 0.35 : 1);
+            const rawDt = Math.min(64, now - lastNow) / 1000;
+            lastNow = now;
+            wT += rawDt * timeScaleRef.current.cur * (reduce ? 0.35 : 1);
             gl.useProgram(prog!);
-            if (uTimeLoc) gl.uniform1f(uTimeLoc, t);
+            if (uTimeLoc) gl.uniform1f(uTimeLoc, wT);
+            if (uWindLoc) gl.uniform1f(uWindLoc, windRef.current.cur);
             if (uResLoc) gl.uniform2f(uResLoc, water.width, water.height);
             if (uRipplesLoc && uRippleCountLoc) {
               const MAX = 8;
@@ -727,12 +768,16 @@ export default function Aphros() {
             gl_Position = vec4(a_pos, 0.0, 1.0);
           }
         `;
-        // Slow drifting pastel wisps — pink/coral/cream. Very low alpha
-        // so the underlying rose sky reads through cleanly.
+        // The triumph sky: domain-warped cloud billows drifting with the
+        // shore wind, shot through with mother-of-pearl iridescence, and
+        // soft god-rays fanning up from a pearl sun sitting just below
+        // the horizon. Very low alpha throughout so the underlying rose
+        // sky still reads through cleanly.
         const frag = `
           precision highp float;
           uniform float uTime;
           uniform vec2 uRes;
+          uniform float uWind;
           varying vec2 vUv;
 
           float hash21(vec2 p) {
@@ -762,35 +807,52 @@ export default function Aphros() {
           }
 
           void main() {
-            vec2 uv = vec2(vUv.x, 1.0 - vUv.y);
+            vec2 uv = vec2(vUv.x, 1.0 - vUv.y); // y=0 page top, y=1 horizon
+            float aspect = uRes.x / uRes.y;
             float t = uTime;
 
-            // wisp field — fbm advected horizontally with a slow drift
-            vec2 nuv = vec2(uv.x * 2.2 + t * 0.03, uv.y * 2.8 + sin(t * 0.07) * 0.1);
-            float n1 = fbm(nuv);
-            float n2 = fbm(nuv * 1.6 + vec2(t * 0.02, 0.0));
+            // ── cloud billows: domain-warped fbm drifting with the wind ──
+            vec2 p = vec2(uv.x * aspect * 1.1 + t * 0.020 + uWind * 0.12, uv.y * 2.6);
+            vec2 warp = vec2(
+              fbm(p + vec2(0.0, t * 0.014)),
+              fbm(p + vec2(5.2, 1.3) - vec2(t * 0.010, 0.0))
+            );
+            float cloud = fbm(p + (warp - 0.5) * 1.5);
+            float billow = smoothstep(0.42, 0.80, cloud);
+            float shade = smoothstep(0.55, 0.92,
+              fbm(p * 1.7 + (warp - 0.5) * 1.2 + vec2(2.0, 4.0)));
 
-            // three color veils — pink, coral, cream — each masked by a
-            // band of the noise field, so they blend instead of stacking
-            float band1 = smoothstep(0.45, 0.85, n1);
-            float band2 = smoothstep(0.40, 0.80, 1.0 - n2);
-            float band3 = smoothstep(0.50, 0.90, sin(n1 * 6.28 + t * 0.1) * 0.5 + 0.5);
+            // ── nacre iridescence — mother-of-pearl drifting in the veils ──
+            float phase = cloud * 6.2831 + t * 0.06;
+            vec3 pearl = vec3(
+              0.93 + 0.06 * cos(phase),
+              0.86 + 0.06 * cos(phase + 2.1),
+              0.83 + 0.07 * cos(phase + 4.2)
+            );
+            vec3 rose = vec3(0.96, 0.83, 0.81); // F4D5D0
+            vec3 gold = vec3(0.97, 0.88, 0.72);
+            vec3 veil = mix(rose, pearl, billow);
+            veil = mix(veil, gold, shade * 0.35);
 
-            vec3 pink  = vec3(0.96, 0.83, 0.82); // F4D5D0
-            vec3 coral = vec3(0.91, 0.71, 0.65); // E8B4A4
-            vec3 cream = vec3(0.94, 0.91, 0.85); // F0E8D8
+            // ── god-rays from a pearl sun just under the horizon line ──
+            vec2 d = (uv - vec2(0.5, 1.08)) * vec2(aspect, 1.0);
+            float sunDist = length(d);
+            float ang = atan(d.x, -d.y);
+            float rayN = fbm(vec2(ang * 2.6 + 7.0, t * 0.05));
+            float rays = pow(max(0.0, sin(ang * 7.0 + rayN * 5.0 + t * 0.04)), 4.0);
+            float rayFade = exp(-sunDist * 1.9);
+            float glow = exp(-sunDist * sunDist * 4.5);
 
-            vec3 color = pink * band1 * 0.35
-                       + coral * band2 * 0.28
-                       + cream * band3 * 0.22;
-
-            // vertical mask: brightest in the upper third, fades to nothing
-            // at the horizon so the aurora doesn't clash with the sea.
-            float vMask = 1.0 - smoothstep(0.45, 0.95, uv.y);
-            // hide at the very top edge so the page header doesn't get streaks
+            // vertical masks: veils live in the upper sky, rays near the
+            // horizon; the page header stays clean either way
             float topMask = smoothstep(0.0, 0.08, uv.y);
+            float veilMask = 1.0 - smoothstep(0.45, 0.95, uv.y);
+            float veilA = (billow * 0.20 + shade * 0.10) * veilMask * topMask;
+            float rayA = (rays * rayFade * 0.26 + glow * 0.20) * topMask;
 
-            float a = (band1 * 0.18 + band2 * 0.14 + band3 * 0.10) * vMask * topMask;
+            vec3 rayTint = vec3(1.0, 0.94, 0.84);
+            float a = clamp(veilA + rayA, 0.0, 0.55);
+            vec3 color = (veil * veilA + rayTint * rayA) / max(a, 0.0001);
             gl_FragColor = vec4(color, a);
           }
         `;
@@ -811,6 +873,7 @@ export default function Aphros() {
         let prog: WebGLProgram | null = null;
         let uTimeLoc: WebGLUniformLocation | null = null;
         let uResLoc: WebGLUniformLocation | null = null;
+        let uWindLoc: WebGLUniformLocation | null = null;
         if (vs && fs) {
           const p = gl.createProgram();
           if (p) {
@@ -821,6 +884,7 @@ export default function Aphros() {
               prog = p;
               uTimeLoc = gl.getUniformLocation(p, "uTime");
               uResLoc = gl.getUniformLocation(p, "uRes");
+              uWindLoc = gl.getUniformLocation(p, "uWind");
               const buf = gl.createBuffer();
               gl.bindBuffer(gl.ARRAY_BUFFER, buf);
               gl.bufferData(
@@ -839,15 +903,19 @@ export default function Aphros() {
           }
         }
         if (prog) {
-          const t0 = performance.now();
           let raf = 0;
+          let lastNow = performance.now();
+          let wT = 0; // warped seconds — three fingers dilate the sky too
           // Aurora animates very slowly — under reduced motion we still
           // let it drift, just at 0.2× speed.
           const speedScale = reduce ? 0.2 : 1.0;
           const draw = (now: number) => {
-            const t = ((now - t0) / 1000) * speedScale;
+            const rawDt = Math.min(64, now - lastNow) / 1000;
+            lastNow = now;
+            wT += rawDt * timeScaleRef.current.cur * speedScale;
             gl.useProgram(prog!);
-            if (uTimeLoc) gl.uniform1f(uTimeLoc, t);
+            if (uTimeLoc) gl.uniform1f(uTimeLoc, wT);
+            if (uWindLoc) gl.uniform1f(uWindLoc, windRef.current.cur);
             if (uResLoc) gl.uniform2f(uResLoc, aurora.width, aurora.height);
             gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
             raf = requestAnimationFrame(draw);
