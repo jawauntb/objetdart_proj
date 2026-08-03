@@ -213,11 +213,15 @@ export function attachGestures(
     return { x: x / n, y: y / n };
   };
 
-  const clearHold = () => {
+  // `lead` is the contact the caller captured BEFORE removing it. Without
+  // it the last finger leaving empties `contacts`, `sessionStart()` returns
+  // null, and the hold's "release" is silently dropped — which is every
+  // one-finger hold there is, and with it every ceremony in the album.
+  const clearHold = (lead?: Contact | null) => {
     if (holdTimer) clearInterval(holdTimer);
     holdTimer = null;
     if (holdActive) {
-      const c = sessionStart();
+      const c = lead ?? sessionStart();
       if (c && on.hold) {
         const elapsed = performance.now() - c.t0;
         on.hold({
@@ -567,7 +571,8 @@ export function attachGestures(
     const c = contacts.get(ev.pointerId);
     if (!c) return;
     const now = performance.now();
-    const wasSessionLead = c === sessionStart();
+    const lead = sessionStart();
+    const wasSessionLead = c === lead;
     contacts.delete(ev.pointerId);
 
     if (poly) {
@@ -619,7 +624,7 @@ export function attachGestures(
     } else if (kind === "drag-end") {
       on.drag?.({ fingers: sessionFingers, phase: "end", x: c.x, y: c.y, dx: 0, dy: 0, vx: c.vx, vy: c.vy });
     }
-    clearHold();
+    clearHold(lead ?? c);
     dragging = false;
     sessionFingers = 0;
     settled = false;
@@ -628,6 +633,7 @@ export function attachGestures(
 
   const onCancel = (ev: PointerEvent) => {
     const c = contacts.get(ev.pointerId);
+    const lead = sessionStart();
     contacts.delete(ev.pointerId);
     if (poly) {
       if (voiceIds.delete(ev.pointerId)) {
@@ -644,7 +650,7 @@ export function attachGestures(
       three = null;
     }
     if (contacts.size === 0) {
-      clearHold();
+      clearHold(lead ?? c);
       dragging = false;
       sessionFingers = 0;
       settled = false;

@@ -196,7 +196,7 @@ void main() {
         float crest = pow(0.5 + 0.5 * cos(chi - shift), 3.0);
         float dust = pow(0.5 + 0.5 * cos(chi - shift - 0.75), 6.0);
         float sigma = exp(-R / ${G.rd});
-        float att = clamp(abs(rd.y) * 2.6, 0.25, 1.0) / (1.0 + t * t * 0.35);
+        float att = clamp(abs(rd.y) * 2.6, 0.3, 1.0) / (1.0 + t * t * 0.2);
 
         vec3 warm = vec3(0.784, 0.451, 0.165);  // --candle
         vec3 pale = vec3(0.949, 0.933, 0.902);  // --paper
@@ -204,20 +204,20 @@ void main() {
         vec3 gold = vec3(0.93, 0.72, 0.33);     // the old light
 
         // the smooth disc: old starlight, dimmed by night
-        float base = sigma * 0.42 * (0.85 + 0.3 * u_breath) * (1.0 - 0.8 * u_night);
+        float base = sigma * 0.85 * (0.85 + 0.3 * u_breath) * (1.0 - 0.8 * u_night);
         // the wave: gas lit along the crest — this term survives the night
         float wave = sigma * env * u_amp * crest * (0.7 + 0.3 * u_breath)
-                   * (1.0 + 0.6 * u_glimmer) * (1.0 - 0.25 * u_night) * 1.5;
+                   * (1.0 + 0.6 * u_glimmer) * (1.0 - 0.25 * u_night) * 3.4;
         vec3 acc = mix(warm, pale, 0.35) * base
                  + mix(cold, pale, 0.3) * wave * (1.0 + 1.6 * u_reveal);
         // the dust lane bites the inner edge of the arm
-        acc *= 1.0 - 0.55 * dust * env * (1.0 - 0.6 * u_reveal);
+        acc *= 1.0 - 0.62 * dust * env * (1.0 - 0.6 * u_reveal);
         // bulge, and the bar locked to the pattern
         float xb = R * cos(th - u_patPhase);
         float yb = R * sin(th - u_patPhase);
         float bulge = exp(-R * R / 0.017);
         float barg = u_bar * exp(-pow(xb / 0.32, 2.0) - pow(yb / 0.09, 2.0));
-        acc += mix(gold, warm, 0.4) * (bulge * (0.9 + 0.7 * u_barFlash) + barg * 0.7)
+        acc += mix(gold, warm, 0.4) * (bulge * (1.5 + 0.9 * u_barFlash) + barg * 1.1)
              * (1.0 - 0.75 * u_night) * (1.0 - 0.55 * u_reveal);
         // the veil: the pattern alone, and the one radius that keeps station
         acc += cold * u_reveal * env * crest * sigma * 1.6;
@@ -260,6 +260,9 @@ uniform vec3 u_cam, u_right, u_up, u_fwd;
 uniform float u_focal, u_aspect, u_fit;
 uniform float u_tau, u_patPhase, u_k, u_amp, u_bar, u_heat;
 uniform float u_reveal, u_night, u_breath;
+// Total light is conserved as the population changes: one star's share is
+// inversely the count, so a disc of 180k reads like a disc, not a smear.
+uniform float u_lum;
 uniform vec4 u_flares[${MAX_FLARES}];
 uniform vec4 u_regions[${REGION_MAX}]; // x, z, strength, shell radius
 uniform vec3 u_follow;   // disc x, disc z, level
@@ -329,10 +332,13 @@ void main() {
   float young = step(0.72, a_seed.x) * clamp(crowd * 1.5, 0.0, 1.5);
   float inb = 1.0 - smoothstep(0.1, 0.2, R0);
 
-  float extent = (0.0034 + 0.0062 * szr + 0.0036 * young + 0.0042 * inb + 0.005 * a_kept);
+  // At this population a star is a point, not a disc — a couple of pixels
+  // at most, so the structure comes from where stars ARE, never from how
+  // fat they are drawn.
+  float extent = (0.0011 + 0.0019 * szr + 0.0013 * young + 0.0014 * inb + 0.0018 * a_kept);
   // capped well under clip: a star sweeping near the eye stays a star,
   // never a blob the size of the frame
-  float r = min(extent / zc, 0.038);
+  float r = min(extent / zc, 0.011);
   gl_Position = vec4((sp.x + a_corner.x * r) / u_aspect, sp.y + a_corner.y * r, 0.0, 1.0);
   v_uv = a_corner;
 
@@ -357,7 +363,7 @@ void main() {
            * (0.85 + 0.15 * u_breath)
            / (0.5 + zc * 1.1)
            * (1.0 - 0.92 * u_night) * (1.0 - 0.82 * u_reveal)
-           * clamp(u_fit, 0.9, 1.12);
+           * clamp(u_fit, 0.9, 1.12) * u_lum;
 
   // the followed star's neighbourhood answers the hand
   float fd = distance(pos.xz, u_follow.xy);
@@ -415,6 +421,8 @@ export default function GalaxyArms() {
     // ——— the galaxy, built once ———
     const field = buildStars(GALAXY_SEED, STAR_COUNT);
     const count = field.count;
+    /** One star's share of the disc's light — the total stays put. */
+    const LUM = 42000 / count;
 
     // ——— persistence ———
     // The galaxy itself is never stored — one seed brings it back whole.
@@ -569,7 +577,7 @@ export default function GalaxyArms() {
     const cam = { x: 0, y: 0.4, z: -1.2 };
     const basis = { rx: 1, ry: 0, rz: 0, ux: 0, uy: 1, uz: 0, fx: 0, fy: 0, fz: 1 };
     const FOCAL = 1.18;
-    const BASE_RANGE = 1.32;
+    const BASE_RANGE = 0.98;
     let fitScale = 1;
     let aspect = 1;
 
@@ -628,7 +636,7 @@ export default function GalaxyArms() {
     const PICK_STRIDE = Math.max(1, Math.floor(count / 24000));
     const starAt = (px: number, py: number): number => {
       let best = -1;
-      let bestD = 40 * 40;
+      let bestD = 26 * 26;
       for (let i = 0; i < count; i += PICK_STRIDE) {
         if (field.r[i] < 0.12) continue; // the bulge is a glow, not a handle
         const sp = starPos(i);
@@ -925,6 +933,7 @@ export default function GalaxyArms() {
       };
       discProg = link(VERT_QUAD, FRAG_DISC);
       starProg = link(VERT_STAR, FRAG_STAR);
+
       if (discProg && starProg) {
         glOk = true;
         const mk = (data: Float32Array, usage: number) => {
@@ -954,6 +963,7 @@ export default function GalaxyArms() {
           "u_cam", "u_right", "u_up", "u_fwd", "u_focal", "u_aspect", "u_fit",
           "u_tau", "u_patPhase", "u_k", "u_amp", "u_bar", "u_heat",
           "u_reveal", "u_night", "u_breath", "u_flares", "u_follow", "u_regions",
+          "u_lum",
         ]);
         starA = {
           corner: gl.getAttribLocation(starProg, "a_corner"),
@@ -1060,60 +1070,56 @@ export default function GalaxyArms() {
             return;
           }
           if (e.fingers !== 1) return;
+          // One finger, one continuous deepening: the touch tier picks up
+          // the nearest star and rides it; past the dwell the same finger
+          // starts gathering gas where it rests; past the ceremony, letting
+          // go sets that gas off. Nothing here fires the same at 900ms and
+          // at 2400ms — duration is the axis, not a switch.
           if (e.phase === "enter") {
             const { x, y } = toLocal(e.x, e.y);
-            const s = starAt(x, y);
-            if (s >= 0) {
-              startFollow(s);
-              return;
-            }
-            // no star under the finger: the hold gathers gas instead, and
-            // the disc gets something that was not there before
-            const dp = discPointAt(x, y);
-            if (dp) {
-              seeding = seedRegion(dp.x, dp.z);
-              seedTier = 0;
-            }
+            startFollow(starAt(x, y));
             return;
           }
           if (e.phase === "release") {
             if (seeding >= 0) {
-              // held into the ceremony, the knot goes off on release —
-              // and its shell will light whatever gas it reaches
               if (e.tier >= 3) igniteRegion(seeding);
               else writeStore();
               seeding = -1;
               seedTier = 0;
-              return;
             }
             endFollow();
             return;
           }
-          if (seeding >= 0) {
-            // duration is an axis: the longer the hold, the more gas
-            const reg = regionsRef.current[seeding];
-            if (!reg) {
-              seeding = -1;
-              return;
-            }
-            regionsRef.current[seeding] = {
-              ...reg,
-              strength: clamp01(0.18 + e.elapsed / 3400),
-            };
-            if (e.tier > seedTier) {
-              seedTier = e.tier;
-              soundOrbit(reg.R0, 500, 0.8);
-              try {
-                haptics.detent();
-              } catch {
-                /* noop */
-              }
-            }
+          // the ride keeps deepening the whole time the finger is down
+          if (followIdx >= 0) followTarget = clamp01(0.15 + e.elapsed / 3200);
+          if (seeding < 0) {
+            if (e.tier < 2) return; // still only riding
+            const { x, y } = toLocal(e.x, e.y);
+            const dp = discPointAt(x, y);
+            if (!dp) return;
+            seeding = seedRegion(dp.x, dp.z);
+            seedTier = e.tier;
             return;
           }
-          if (followIdx < 0) return;
-          // duration is an axis: the longer the ride, the closer the eye
-          followTarget = clamp01(0.15 + e.elapsed / 3200);
+          const reg = regionsRef.current[seeding];
+          if (!reg) {
+            seeding = -1;
+            return;
+          }
+          // duration is an axis: the longer the hold, the more gas gathers
+          regionsRef.current[seeding] = {
+            ...reg,
+            strength: clamp01(0.18 + (e.elapsed - 900) / 2600),
+          };
+          if (e.tier > seedTier) {
+            seedTier = e.tier;
+            soundOrbit(reg.R0, 500, 0.8);
+            try {
+              haptics.detent();
+            } catch {
+              /* noop */
+            }
+          }
         },
         // two fingers hold the frame: the eye swings round the disc and
         // tips it from face-on to edge-on. Pinch stays ScaleTravel's.
@@ -1508,6 +1514,7 @@ export default function GalaxyArms() {
         gl.uniform1f(starU.u_amp ?? null, 1);
         gl.uniform1f(starU.u_bar ?? null, bar);
         gl.uniform1f(starU.u_heat ?? null, heat);
+        gl.uniform1f(starU.u_lum ?? null, LUM);
         gl.uniform1f(starU.u_reveal ?? null, reveal);
         gl.uniform1f(starU.u_night ?? null, night);
         gl.uniform1f(starU.u_breath ?? null, breath);
