@@ -28,16 +28,14 @@
 import type { RoomGuideEntry, RoomManifest, RoomPlacement } from "@/rooms/types";
 import type { SiteIconVisual } from "@/lib/site-icon-types";
 
-import atmosphere from "@/rooms/atmosphere/room.config";
 import beam from "@/rooms/beam/room.config";
-import galaxy from "@/rooms/galaxy/room.config";
-import planets from "@/rooms/planets/room.config";
+import cabinet from "@/rooms/cabinet/room.config";
+import compass from "@/rooms/compass/room.config";
+import orb from "@/rooms/orb/room.config";
 import relativity from "@/rooms/relativity/room.config";
 import rocks from "@/rooms/rocks/room.config";
-import solar from "@/rooms/solar/room.config";
-import soil from "@/rooms/soil/room.config";
 
-export const ROOM_MANIFESTS = [atmosphere, beam, galaxy, planets, relativity, rocks, soil, solar] as const;
+export const ROOM_MANIFESTS = [beam, cabinet, compass, orb, relativity, rocks] as const;
 
 /** Literal union of every manifest-declared room key. */
 export type RoomKey = (typeof ROOM_MANIFESTS)[number]["key"];

@@ -1,0 +1,416 @@
+[
+  {
+    "route": "/mountain",
+    "why": "the range is ray-marched per pixel",
+    "status": "ok",
+    "detail": "",
+    "gl": {
+      "canvases": [
+        {
+          "kind": "webgl",
+          "w": 675,
+          "h": 525
+        },
+        {
+          "kind": "2d",
+          "w": 900,
+          "h": 700
+        },
+        {
+          "kind": "2d",
+          "w": 900,
+          "h": 40
+        }
+      ],
+      "anyGl": true,
+      "sized": true
+    }
+  },
+  {
+    "route": "/waves",
+    "why": "the height field is a fragment pass, not a CPU raster",
+    "status": "ok",
+    "detail": "",
+    "gl": {
+      "canvases": [
+        {
+          "kind": "webgl2",
+          "w": 900,
+          "h": 700
+        },
+        {
+          "kind": "2d",
+          "w": 900,
+          "h": 700
+        },
+        {
+          "kind": "2d",
+          "w": 900,
+          "h": 40
+        }
+      ],
+      "anyGl": true,
+      "sized": true
+    }
+  },
+  {
+    "route": "/coast",
+    "why": "sea, sky, sand and dune are one shader",
+    "status": "ok",
+    "detail": "",
+    "gl": {
+      "canvases": [
+        {
+          "kind": "webgl",
+          "w": 900,
+          "h": 700
+        },
+        {
+          "kind": "2d",
+          "w": 900,
+          "h": 700
+        },
+        {
+          "kind": "2d",
+          "w": 900,
+          "h": 40
+        }
+      ],
+      "anyGl": true,
+      "sized": true
+    }
+  },
+  {
+    "route": "/sea",
+    "why": "the water",
+    "status": "http",
+    "detail": "HTTP 404",
+    "gl": null
+  },
+  {
+    "route": "/ocean",
+    "why": "the water",
+    "status": "ok",
+    "detail": "",
+    "gl": {
+      "canvases": [
+        {
+          "kind": "webgl",
+          "w": 900,
+          "h": 700
+        },
+        {
+          "kind": "2d",
+          "w": 900,
+          "h": 700
+        },
+        {
+          "kind": "2d",
+          "w": 900,
+          "h": 40
+        }
+      ],
+      "anyGl": true,
+      "sized": true
+    }
+  },
+  {
+    "route": "/clouds",
+    "why": "the sky as a marched volume",
+    "status": "ok",
+    "detail": "",
+    "gl": {
+      "canvases": [
+        {
+          "kind": "webgl",
+          "w": 360,
+          "h": 280
+        },
+        {
+          "kind": "2d",
+          "w": 900,
+          "h": 700
+        },
+        {
+          "kind": "2d",
+          "w": 900,
+          "h": 40
+        }
+      ],
+      "anyGl": true,
+      "sized": true
+    }
+  },
+  {
+    "route": "/storm",
+    "why": "the cell and its rain",
+    "status": "ok",
+    "detail": "",
+    "gl": {
+      "canvases": [
+        {
+          "kind": "webgl",
+          "w": 900,
+          "h": 700
+        },
+        {
+          "kind": "2d",
+          "w": 900,
+          "h": 700
+        },
+        {
+          "kind": "2d",
+          "w": 900,
+          "h": 40
+        }
+      ],
+      "anyGl": true,
+      "sized": true
+    }
+  },
+  {
+    "route": "/fire",
+    "why": "the flame",
+    "status": "ok",
+    "detail": "",
+    "gl": {
+      "canvases": [
+        {
+          "kind": "webgl",
+          "w": 900,
+          "h": 700
+        },
+        {
+          "kind": "2d",
+          "w": 900,
+          "h": 700
+        },
+        {
+          "kind": "2d",
+          "w": 900,
+          "h": 40
+        }
+      ],
+      "anyGl": true,
+      "sized": true
+    }
+  },
+  {
+    "route": "/plasma",
+    "why": "the globe",
+    "status": "ok",
+    "detail": "",
+    "gl": {
+      "canvases": [
+        {
+          "kind": "webgl",
+          "w": 588,
+          "h": 588
+        },
+        {
+          "kind": "2d",
+          "w": 900,
+          "h": 700
+        },
+        {
+          "kind": "2d",
+          "w": 900,
+          "h": 40
+        }
+      ],
+      "anyGl": true,
+      "sized": true
+    }
+  },
+  {
+    "route": "/jewel",
+    "why": "the stone's fire",
+    "status": "ok",
+    "detail": "",
+    "gl": {
+      "canvases": [
+        {
+          "kind": "webgl",
+          "w": 900,
+          "h": 700
+        },
+        {
+          "kind": "2d",
+          "w": 900,
+          "h": 40
+        }
+      ],
+      "anyGl": true,
+      "sized": true
+    }
+  },
+  {
+    "route": "/aphros",
+    "why": "the foam",
+    "status": "ok",
+    "detail": "",
+    "gl": {
+      "canvases": [
+        {
+          "kind": "webgl",
+          "w": 900,
+          "h": 700
+        },
+        {
+          "kind": "2d",
+          "w": 900,
+          "h": 40
+        }
+      ],
+      "anyGl": true,
+      "sized": true
+    }
+  },
+  {
+    "route": "/birds",
+    "why": "the meadow",
+    "status": "ok",
+    "detail": "",
+    "gl": {
+      "canvases": [
+        {
+          "kind": "webgl2",
+          "w": 900,
+          "h": 700
+        },
+        {
+          "kind": "2d",
+          "w": 900,
+          "h": 40
+        }
+      ],
+      "anyGl": true,
+      "sized": true
+    }
+  },
+  {
+    "route": "/manifold",
+    "why": "the fold's lensing ring",
+    "status": "ok",
+    "detail": "",
+    "gl": {
+      "canvases": [
+        {
+          "kind": "2d",
+          "w": 900,
+          "h": 700
+        },
+        {
+          "kind": "webgl",
+          "w": 900,
+          "h": 700
+        },
+        {
+          "kind": "2d",
+          "w": 900,
+          "h": 40
+        }
+      ],
+      "anyGl": true,
+      "sized": true
+    }
+  },
+  {
+    "route": "/relativity",
+    "why": "the gravity well field",
+    "status": "ok",
+    "detail": "",
+    "gl": {
+      "canvases": [
+        {
+          "kind": "2d",
+          "w": 900,
+          "h": 700
+        },
+        {
+          "kind": "webgl",
+          "w": 900,
+          "h": 700
+        },
+        {
+          "kind": "2d",
+          "w": 900,
+          "h": 40
+        }
+      ],
+      "anyGl": true,
+      "sized": true
+    }
+  },
+  {
+    "route": "/space",
+    "why": "the cosmic web",
+    "status": "ok",
+    "detail": "",
+    "gl": {
+      "canvases": [
+        {
+          "kind": "webgl2",
+          "w": 900,
+          "h": 700
+        },
+        {
+          "kind": "2d",
+          "w": 900,
+          "h": 700
+        },
+        {
+          "kind": "2d",
+          "w": 900,
+          "h": 40
+        }
+      ],
+      "anyGl": true,
+      "sized": true
+    }
+  },
+  {
+    "route": "/beam",
+    "why": "the postprocess chain",
+    "status": "ok",
+    "detail": "",
+    "gl": {
+      "canvases": [
+        {
+          "kind": "webgl2",
+          "w": 900,
+          "h": 700
+        },
+        {
+          "kind": "2d",
+          "w": 900,
+          "h": 40
+        }
+      ],
+      "anyGl": true,
+      "sized": true
+    }
+  },
+  {
+    "route": "/tourbillon",
+    "why": "the movement",
+    "status": "ok",
+    "detail": "",
+    "gl": {
+      "canvases": [
+        {
+          "kind": "webgl2",
+          "w": 900,
+          "h": 700
+        },
+        {
+          "kind": "2d",
+          "w": 900,
+          "h": 40
+        }
+      ],
+      "anyGl": true,
+      "sized": true
+    }
+  }
+]

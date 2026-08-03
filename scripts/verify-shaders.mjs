@@ -20,7 +20,7 @@
  */
 
 import { chromium } from "playwright";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 const arg = (name, fallback) => {
@@ -32,12 +32,13 @@ const BASE = arg("base", "http://127.0.0.1:3000").replace(/\/$/, "");
 const OUT = arg("out", "iterations/shader-verify");
 const ONLY = arg("only", "");
 
-/** Rooms that draw through a shader, and what each must not fall back to. */
+/** Rooms that draw through a shader, and what each must not fall back to.
+ *  Sea.tsx is deliberately absent: it is embedded on the home page, not a
+ *  route of its own, so there is no URL to drive it at. */
 const SHADER_ROOMS = [
   { route: "/mountain", why: "the range is ray-marched per pixel" },
   { route: "/waves", why: "the height field is a fragment pass, not a CPU raster" },
   { route: "/coast", why: "sea, sky, sand and dune are one shader" },
-  { route: "/sea", why: "the water" },
   { route: "/ocean", why: "the water" },
   { route: "/clouds", why: "the sky as a marched volume" },
   { route: "/storm", why: "the cell and its rain" },
@@ -60,7 +61,14 @@ const HARD_FAILURE = /ERROR:|failed to compile|failed to link|could not compile|
 mkdirSync(OUT, { recursive: true });
 
 const rooms = ONLY ? SHADER_ROOMS.filter((r) => r.route === ONLY) : SHADER_ROOMS;
-const browser = await chromium.launch();
+// The image ships a pinned Chromium under PLAYWRIGHT_BROWSERS_PATH; a newer
+// playwright package looks for a build number that is not here. Point it at
+// the binary that exists rather than downloading one.
+const EXECUTABLE = process.env.CHROMIUM_PATH || "/opt/pw-browsers/chromium-1194/chrome-linux/chrome";
+const browser = await chromium.launch({
+  executablePath: existsSync(EXECUTABLE) ? EXECUTABLE : undefined,
+  args: ["--use-gl=swiftshader", "--enable-unsafe-swiftshader", "--no-sandbox"],
+});
 const results = [];
 
 for (const room of rooms) {

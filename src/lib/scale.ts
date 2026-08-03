@@ -920,6 +920,8 @@ export const LATERAL_ROUTE_BANDS: { prefix: string; band: ScaleBandId }[] = [
   { prefix: "/tourbillon", band: "drop" },
   { prefix: "/watch", band: "drop" },
   { prefix: "/plasma", band: "drop" },
+  // the loose discs beside the sealed globe — same matter, same size
+  { prefix: "/orb", band: "drop" },
   { prefix: "/pulse", band: "drop" },
   { prefix: "/charts", band: "drop" },
   { prefix: "/dither", band: "drop" },

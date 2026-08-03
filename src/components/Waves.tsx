@@ -31,6 +31,7 @@ import {
   isEmbeddedFrame,
   detailForTier,
 } from "@/lib/room-runtime";
+import { bakeRadialSprite, drawRadialStamp } from "@/lib/scene/radial-sprite";
 
 /**
  * Waves — a wave-propagation instrument.
@@ -1360,6 +1361,27 @@ export default function Waves() {
       ctx.stroke();
     };
 
+    // Wave-train source glows: fixed colour each, only alpha and radius vary
+    // per source per frame — one normalized sprite per colour, baked once
+    // through the shared radial-sprite cache, stamped and scaled instead of
+    // a fresh gradient per source per frame.
+    const creatingGlowSprite = bakeRadialSprite("waves-creating-glow", {
+      width: 128,
+      height: 128,
+      stops: [
+        { offset: 0, color: "rgba(255,246,220,1)" },
+        { offset: 1, color: "rgba(255,246,220,0)" },
+      ],
+    });
+    const departingGlowSprite = bakeRadialSprite("waves-departing-glow", {
+      width: 128,
+      height: 128,
+      stops: [
+        { offset: 0, color: "rgba(255,244,214,1)" },
+        { offset: 1, color: "rgba(255,244,214,0)" },
+      ],
+    });
+
     let lastNaturalsSaveAt = performance.now();
     let prevDrawSec = performance.now() / 1000;
 
@@ -1591,13 +1613,7 @@ export default function Waves() {
                 const sx = s.nx * width;
                 const sy = s.ny * height;
                 const r = 10 + s.strength * 34;
-                const g = ctx.createRadialGradient(sx, sy, 0, sx, sy, r);
-                g.addColorStop(0, `rgba(255,244,214,${0.3 + s.strength * 0.3})`);
-                g.addColorStop(1, "rgba(255,244,214,0)");
-                ctx.fillStyle = g;
-                ctx.beginPath();
-                ctx.arc(sx, sy, r, 0, Math.PI * 2);
-                ctx.fill();
+                drawRadialStamp(ctx, departingGlowSprite, sx, sy, r, 0.3 + s.strength * 0.3);
               }
               ctx.restore();
             }
@@ -1612,13 +1628,7 @@ export default function Waves() {
               const sy = s.ny * height;
               const r = 9 + s.strength * 30;
               const pulse = 0.5 + 0.5 * Math.sin(nowSec * 3.2 + s.id);
-              const g = ctx.createRadialGradient(sx, sy, 0, sx, sy, r);
-              g.addColorStop(0, `rgba(255,246,220,${0.16 + s.strength * 0.26 + pulse * 0.06})`);
-              g.addColorStop(1, "rgba(255,246,220,0)");
-              ctx.fillStyle = g;
-              ctx.beginPath();
-              ctx.arc(sx, sy, r, 0, Math.PI * 2);
-              ctx.fill();
+              drawRadialStamp(ctx, creatingGlowSprite, sx, sy, r, 0.16 + s.strength * 0.26 + pulse * 0.06);
             }
           }
           // glimmer (§6): after ~20s of quiet the water itself sketches a
@@ -1647,19 +1657,20 @@ export default function Waves() {
         }
       }
 
-      // vignette
-      const vg = ctx.createRadialGradient(
-        width * 0.5,
-        height * 0.5,
-        Math.min(width, height) * 0.3,
-        width * 0.5,
-        height * 0.5,
-        Math.max(width, height) * 0.72,
-      );
-      vg.addColorStop(0, "rgba(0,0,0,0)");
-      vg.addColorStop(1, "rgba(0,0,0,0.42)");
-      ctx.fillStyle = vg;
-      ctx.fillRect(0, 0, width, height);
+      // vignette — the stops are constant, only width/height (resize-time,
+      // not per-frame) select the bake, so this is a Map lookup on every
+      // frame that isn't a resize.
+      const vignetteSprite = bakeRadialSprite(`waves-vignette:${Math.round(width)}x${Math.round(height)}`, {
+        width,
+        height,
+        inner: { x: width * 0.5, y: height * 0.5, r: Math.min(width, height) * 0.3 },
+        outer: { x: width * 0.5, y: height * 0.5, r: Math.max(width, height) * 0.72 },
+        stops: [
+          { offset: 0, color: "rgba(0,0,0,0)" },
+          { offset: 1, color: "rgba(0,0,0,0.42)" },
+        ],
+      });
+      if (vignetteSprite) ctx.drawImage(vignetteSprite, 0, 0, width, height);
 
       // periodic persistence — visible drift/growth is applied per frame,
       // this makes sure the mutations get written before unmount races.
@@ -2288,18 +2299,31 @@ function drawLilyPad(
   ctx.beginPath();
   ctx.ellipse(2, 2, r * 1.02, r * 0.92, 0, 0, Math.PI * 2);
   ctx.fill();
-  // body — flat green oval with a wedge notch removed
-  const g = ctx.createRadialGradient(-r * 0.25, -r * 0.3, r * 0.1, 0, 0, r);
-  g.addColorStop(0, "rgba(150, 196, 118, 0.98)");
-  g.addColorStop(0.6, "rgba( 92, 152,  86, 0.96)");
-  g.addColorStop(1, "rgba( 46, 100,  62, 0.94)");
-  ctx.fillStyle = g;
+  // body — flat green oval with a wedge notch removed. The gradient's
+  // offsets and colours are fixed and every one of its own coordinates
+  // scales with r, so one sprite normalized to r=1 — baked once through the
+  // shared radial-sprite cache — covers every pad at any size: clip to the
+  // wedge, then stamp the sprite scaled to this pad's own r.
+  const lilySprite = bakeRadialSprite("waves-lily-body", {
+    width: 256,
+    height: 256,
+    inner: { x: 128 - 128 * 0.25, y: 128 - 128 * 0.3, r: 128 * 0.1 },
+    outer: { x: 128, y: 128, r: 128 },
+    stops: [
+      { offset: 0, color: "rgba(150, 196, 118, 0.98)" },
+      { offset: 0.6, color: "rgba( 92, 152,  86, 0.96)" },
+      { offset: 1, color: "rgba( 46, 100,  62, 0.94)" },
+    ],
+  });
+  ctx.save();
   ctx.beginPath();
   ctx.moveTo(r, 0);
   ctx.arc(0, 0, r, 0, Math.PI * 2 - 0.55, false);
   ctx.lineTo(0, 0);
   ctx.closePath();
-  ctx.fill();
+  ctx.clip();
+  if (lilySprite) ctx.drawImage(lilySprite, -r, -r, r * 2, r * 2);
+  ctx.restore();
   // rim highlight
   ctx.strokeStyle = "rgba(214, 244, 178, 0.55)";
   ctx.lineWidth = 0.8;
@@ -2391,15 +2415,26 @@ function drawKoiShadow(
   ctx.save();
   ctx.translate(x, y);
   ctx.rotate(angle);
-  // body shadow — soft, wide
-  const g = ctx.createRadialGradient(0, 0, r * 0.15, 0, 0, r);
-  g.addColorStop(0, "rgba(6, 14, 26, 0.55)");
-  g.addColorStop(0.6, "rgba(6, 14, 26, 0.35)");
-  g.addColorStop(1, "rgba(6, 14, 26, 0)");
-  ctx.fillStyle = g;
+  // body shadow — soft, wide. Fixed colour and offsets, every coordinate
+  // proportional to r, so one sprite normalized to r=1 covers every koi:
+  // clip to the body ellipse, then stamp the sprite scaled to this fish's r.
+  const koiSprite = bakeRadialSprite("waves-koi-body", {
+    width: 256,
+    height: 256,
+    inner: { x: 128, y: 128, r: 128 * 0.15 },
+    outer: { x: 128, y: 128, r: 128 },
+    stops: [
+      { offset: 0, color: "rgba(6, 14, 26, 0.55)" },
+      { offset: 0.6, color: "rgba(6, 14, 26, 0.35)" },
+      { offset: 1, color: "rgba(6, 14, 26, 0)" },
+    ],
+  });
+  ctx.save();
   ctx.beginPath();
   ctx.ellipse(0, 0, r, r * 0.34, 0, 0, Math.PI * 2);
-  ctx.fill();
+  ctx.clip();
+  if (koiSprite) ctx.drawImage(koiSprite, -r, -r, r * 2, r * 2);
+  ctx.restore();
   // tail wiggle
   const wag = Math.sin(t * 2.4 + seed * 0.03) * 0.5;
   ctx.beginPath();

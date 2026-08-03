@@ -302,7 +302,104 @@ function ctxOf(dt) {
   assert.equal(readInstance(buf, 1).y, 600);
 }
 
+// ———————————————————————————————————————————————————————————————————————
+// 7. the radial-sprite cache — a key really has to mean "same bake"
+// ———————————————————————————————————————————————————————————————————————
+
+{
+  // A tiny fake canvas/2D-context, just enough surface for the module to
+  // run against in node: no real rasterizing, but every call is counted, so
+  // the test can tell a fresh bake from a cache hit without a browser.
+  function fakeDocument() {
+    let createRadialGradientCalls = 0;
+    const makeCanvas = () => {
+      const ctx = {
+        fillStyle: null,
+        createRadialGradient(...args) {
+          createRadialGradientCalls += 1;
+          const stops = [];
+          return {
+            args,
+            addColorStop(offset, color) {
+              stops.push([offset, color]);
+            },
+            stops,
+          };
+        },
+        fillRect() {},
+      };
+      return {
+        width: 0,
+        height: 0,
+        getContext: () => ctx,
+        _ctx: ctx,
+      };
+    };
+    const document = { createElement: () => makeCanvas() };
+    return { document, calls: () => createRadialGradientCalls };
+  }
+
+  const { document: doc1, calls: calls1 } = fakeDocument();
+  const spriteModule = loadTsModule("src/lib/scene/radial-sprite.ts", { globals: { document: doc1 } });
+  const { bakeRadialSprite } = spriteModule;
+
+  const specA = {
+    width: 32,
+    height: 32,
+    stops: [
+      { offset: 0, color: "rgba(1,2,3,1)" },
+      { offset: 1, color: "rgba(1,2,3,0)" },
+    ],
+  };
+  const a1 = bakeRadialSprite("sprite-a", specA);
+  const a2 = bakeRadialSprite("sprite-a", specA);
+  // Catches a cache-key bug that rebuilds on every call — the entire point
+  // of the shared baker is that a repeat key costs a Map lookup, not a
+  // fresh `createRadialGradient` allocation and raster.
+  assert.equal(calls1(), 1, "the same key bakes exactly once, however many times it's requested");
+  assert.equal(a1, a2, "a repeat key returns the identical cached canvas, not a lookalike");
+
+  const specB = {
+    width: 32,
+    height: 32,
+    stops: [
+      { offset: 0, color: "rgba(9,9,9,1)" },
+      { offset: 1, color: "rgba(9,9,9,0)" },
+    ],
+  };
+  const b1 = bakeRadialSprite("sprite-b", specB);
+  // Catches the mirror bug: a cache that collapses every key onto the first
+  // sprite it ever baked, so two genuinely different-looking sprites would
+  // silently render identically.
+  assert.equal(calls1(), 2, "a new key bakes a new sprite");
+  assert.notEqual(a1, b1, "two distinct keys never share a canvas");
+
+  // The `detail` hook layers deterministic extra texture onto a sprite
+  // (TissueSheet's cytoplasmic grain) — it must run once, on the bake, and
+  // never again on a cache hit, or a cached sprite would accumulate a fresh
+  // scatter of grain every frame it's requested.
+  let detailRuns = 0;
+  const specC = {
+    width: 16,
+    height: 16,
+    stops: [{ offset: 0, color: "rgba(0,0,0,1)" }],
+    detail: () => { detailRuns += 1; },
+  };
+  bakeRadialSprite("sprite-c", specC);
+  bakeRadialSprite("sprite-c", specC);
+  bakeRadialSprite("sprite-c", specC);
+  assert.equal(detailRuns, 1, "the detail hook fires once, on the bake, never on a cache hit");
+
+  // A missing `document` (a server render, same as every other room's own
+  // bakers) must fail soft — the room draws nothing that frame, not throw.
+  // No `globals` override at all: node has no ambient `document`, exactly
+  // like an SSR pass — and a distinct cache key from the loads above, so
+  // this genuinely re-runs the module rather than reusing the doc1-bound one.
+  const ssrModule = loadTsModule("src/lib/scene/radial-sprite.ts");
+  assert.equal(ssrModule.bakeRadialSprite("sprite-d", specA), null, "no document, no sprite — and no throw");
+}
+
 console.log(
   `scene ok: ${OBJECT_VERBS.length} verbs, ${INSTANCE_STRIDE} instance fields, ` +
-    "contract refuses a claimed verb with no handler",
+    "contract refuses a claimed verb with no handler, radial-sprite cache keys on the bake that matters",
 );

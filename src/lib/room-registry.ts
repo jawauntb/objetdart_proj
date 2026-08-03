@@ -931,6 +931,58 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     creates: null,
     exempt: {},
   },
+  // The three rooms that arrived through `src/rooms/<key>/room.config.ts` and
+  // therefore land at the tail of SITE_ROUTES' manifest spread. Keep this
+  // block in that order.
+  {
+    key: "cabinet",
+    href: "/cabinet",
+    kind: "room",
+    source: "src/components/HomeCabinet.tsx",
+    page: "src/app/cabinet/page.tsx",
+    address: {
+      exempt:
+        "a case holding every route at once — a view of the tree like /overlook and /loom, not a size on it",
+    },
+    frame: "yield",
+    chrome: "none",
+    keeps: "objetdart:cabinet:v2",
+    creates: "an ember",
+    exempt: {},
+    rawPointer:
+      "a pointermove parallax (the grammar's own desktop 'hover ≈ light touch' register, which has no classified-gesture equivalent) and a pointerup/pointercancel that releases the three-finger dilation; every real verb comes from attachGestures",
+  },
+  {
+    key: "compass",
+    href: "/compass",
+    kind: "room",
+    source: "src/components/ConcernField.tsx",
+    page: "src/app/compass/page.tsx",
+    address: {
+      exempt:
+        "it measures attention rather than metres — a lens over the visitor, readable from every band and resident in none",
+    },
+    frame: "yield",
+    chrome: "none",
+    keeps: "objetdart:field:v1",
+    creates: null,
+    exempt: {},
+    rawPointer:
+      "the founding vertex drag: each handle takes pointer capture on touchdown and tracks the pointer continuously against its own axis, which is a value scrub the engine classifies no verb for",
+  },
+  {
+    key: "orb",
+    href: "/orb",
+    kind: "room",
+    source: "src/components/PlasmaOrb.tsx",
+    page: "src/app/orb/page.tsx",
+    address: { band: "drop" },
+    frame: "yield",
+    chrome: "axis",
+    keeps: "objetdart:orb:v1",
+    creates: "a disc",
+    exempt: {},
+  },
 ];
 
 export const ROOM_BY_KEY: Record<string, RoomEntry> = Object.fromEntries(

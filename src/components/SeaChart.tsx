@@ -1,8 +1,12 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import { useField } from "@/store/field";
+import { attachGestures } from "@/lib/gesture";
+import { onVessel } from "@/lib/vessel";
+import { createFrameGovernor, onVisibility, resolveDpr } from "@/lib/room-runtime";
+import * as haptics from "@/lib/haptics";
 
 /**
  * SeaChart — the sea, but as a candlestick.
@@ -129,7 +133,14 @@ export default function SeaChart(props: SeaChartProps = {}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // Track refs that update on every prop change without re-running the RAF.
   const sourceRef = useRef(source);
-  const modeRef = useRef(mode);
+  // twist(2) rotates the lens through candles/line/oscillator. `mode` is a
+  // parent-controlled prop (this component is meant to be embedded), so a
+  // local override mirrors it — a new `mode` prop always wins, a hand's
+  // twist wins until then. Kept in state (not just a ref) so the inline
+  // header label stays in sync with what the canvas actually renders.
+  const [displayMode, setDisplayMode] = useState<SeaChartMode>(mode);
+  useEffect(() => { setDisplayMode(mode); }, [mode]);
+  const modeRef = useRef(displayMode);
   const candleCountRef = useRef(candleCount);
   const upColorRef = useRef(upColor);
   const downColorRef = useRef(downColor);
@@ -138,7 +149,7 @@ export default function SeaChart(props: SeaChartProps = {}) {
   const pullKeyRef = useRef(pullKey);
 
   useEffect(() => { sourceRef.current = source; }, [source]);
-  useEffect(() => { modeRef.current = mode; }, [mode]);
+  useEffect(() => { modeRef.current = displayMode; }, [displayMode]);
   useEffect(() => { candleCountRef.current = candleCount; }, [candleCount]);
   useEffect(() => { upColorRef.current = upColor; }, [upColor]);
   useEffect(() => { downColorRef.current = downColor; }, [downColor]);
@@ -167,6 +178,7 @@ export default function SeaChart(props: SeaChartProps = {}) {
   // Per-candle nudge offsets — additive on the open/close midpoint. Lerps
   // back to zero over ~1.5s so the chart "breathes back" after a drag.
   const nudgeMapRef = useRef<Map<number, { value: number; t0: number }>>(new Map());
+  const lensTwistAccRef = useRef(0);
 
   // shouldFeedOcean — default to card variant only, override via prop
   const shouldFeed = feedToOcean ?? (variant === "card");
@@ -186,6 +198,13 @@ export default function SeaChart(props: SeaChartProps = {}) {
     let candles: SeaChartCandle[] = [];
     for (let k = 0; k < candleCountRef.current; k++) {
       candles.push(buildCandle(anchor + k));
+    }
+    // Reused every frame by draw() — allocated once here, never in the
+    // RAF loop. Sized for the widest possible render (all candles plus
+    // the one sliding in).
+    const nudgedView: SeaChartCandle[] = [];
+    for (let k = 0; k <= candleCountRef.current; k++) {
+      nudgedView.push({ open: 0, close: 0, high: 0, low: 0, volume: 0 });
     }
 
     let slideStart = 0;
@@ -211,8 +230,12 @@ export default function SeaChart(props: SeaChartProps = {}) {
       return `rgba(${r}, ${g}, ${b}, ${alpha})`;
     };
 
+    const gov = createFrameGovernor();
+    let sleeping = document.hidden;
+    const offVisibility = onVisibility((hidden) => { sleeping = hidden; });
+
     const resize = () => {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = resolveDpr(gov.tier(), { reducedMotion: reduce });
       const w = canvas.clientWidth;
       const h = canvas.clientHeight;
       canvas.width = Math.floor(w * dpr);
@@ -263,57 +286,7 @@ export default function SeaChart(props: SeaChartProps = {}) {
       } catch { /* noop */ }
     };
 
-    // ── pointer events ────────────────────────────────────────────
-    const onPointerMove = (e: PointerEvent) => {
-      const rect = canvas.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-      interactionRef.current.hoverX = x;
-      interactionRef.current.hoverY = y;
-
-      if (interactionRef.current.dragIdx !== null) {
-        // y-delta → price delta. We approximate via the current visible
-        // price range vs canvas height. Updated each frame in draw via
-        // dragOffset being applied at render time. Store the px delta here;
-        // the draw loop converts it using the live y-scale.
-        interactionRef.current.dragOffset =
-          (interactionRef.current.dragStartY - y); // px upward = positive
-        return;
-      }
-
-      const w = canvas.clientWidth;
-      const i = indexAtX(x, w);
-      interactionRef.current.hoverIdx = i;
-    };
-
-    const onPointerLeave = () => {
-      if (interactionRef.current.dragIdx === null) {
-        interactionRef.current.hoverIdx = null;
-      }
-    };
-
-    const onPointerDown = (e: PointerEvent) => {
-      const rect = canvas.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-      const w = canvas.clientWidth;
-      const i = indexAtX(x, w);
-      if (i === null) return;
-      try { canvas.setPointerCapture(e.pointerId); } catch { /* noop */ }
-      // click → play note immediately. We'll convert to a drag if the
-      // pointer moves > 4px on the y axis.
-      const candle = i < candles.length ? candles[i] : incoming;
-      if (candle) {
-        playCandleNote(candle);
-      }
-      interactionRef.current.dragIdx = i;
-      interactionRef.current.dragStartY = y;
-      interactionRef.current.dragOffset = 0;
-      interactionRef.current.hoverIdx = i;
-    };
-
-    const onPointerUp = (e: PointerEvent) => {
-      try { canvas.releasePointerCapture(e.pointerId); } catch { /* noop */ }
+    const commitDrag = () => {
       const idx = interactionRef.current.dragIdx;
       if (idx === null) return;
       // Convert the drag pixel offset into a normalized nudge in price
@@ -333,8 +306,6 @@ export default function SeaChart(props: SeaChartProps = {}) {
       if (Math.abs(delta) > 0.005) {
         // commit a nudge: stash in nudgeMapRef so the draw loop renders it,
         // then decays it. Direction → +1 boost, -1 damp.
-        nudgeMapRef.current.set(idx, { value: delta, t0: performance.now() });
-        // clamp range — too large nudges look broken
         const clamped = Math.max(-1.2, Math.min(1.2, delta));
         nudgeMapRef.current.set(idx, { value: clamped, t0: performance.now() });
         recordNudgeTape();
@@ -347,11 +318,98 @@ export default function SeaChart(props: SeaChartProps = {}) {
       interactionRef.current.dragOffset = 0;
     };
 
-    canvas.addEventListener("pointermove", onPointerMove);
-    canvas.addEventListener("pointerdown", onPointerDown);
-    canvas.addEventListener("pointerleave", onPointerLeave);
-    window.addEventListener("pointerup", onPointerUp);
-    window.addEventListener("pointercancel", onPointerUp);
+    // ── the gesture surface ─────────────────────────────────────────
+    // One finger touches the material: the instant of contact (below any
+    // gesture threshold) strikes the tapped candle's note — same
+    // precedent as Jewel.tsx's onContact — then a vertical drag nudges
+    // its price, reverberating outward to any subscriber (the ocean).
+    // Two fingers touch the map: twist rotates the lens between candles,
+    // line, and oscillator. Pinch/pan2 are exempt — a fixed candle count
+    // has no zoomable/pannable range. Vessel: knock rings the chart;
+    // shake/tilt/flip are exempt — this component is meant to be
+    // embedded, often several at once, and a device-wide shake driving
+    // every instance on the page at once would be noise, not music.
+    const onContact = (e: PointerEvent) => {
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const w = canvas.clientWidth;
+      const i = indexAtX(x, w);
+      if (i === null) return;
+      const candle = i < candles.length ? candles[i] : incoming;
+      if (candle) playCandleNote(candle);
+      interactionRef.current.dragIdx = i;
+      interactionRef.current.dragStartY = y;
+      interactionRef.current.dragOffset = 0;
+      interactionRef.current.hoverIdx = i;
+    };
+    canvas.addEventListener("pointerdown", onContact);
+
+    // Cosmetic hover only (desktop mouse, no button down) — not a
+    // gesture; the drag lifecycle below owns dragOffset.
+    const onHover = (e: PointerEvent) => {
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      interactionRef.current.hoverX = x;
+      interactionRef.current.hoverY = y;
+      if (interactionRef.current.dragIdx === null) {
+        interactionRef.current.hoverIdx = indexAtX(x, canvas.clientWidth);
+      }
+    };
+    canvas.addEventListener("pointermove", onHover);
+    const onLeave = () => {
+      if (interactionRef.current.dragIdx === null) interactionRef.current.hoverIdx = null;
+    };
+    canvas.addEventListener("pointerleave", onLeave);
+
+    const detachGestures = attachGestures(
+      canvas,
+      {
+        drag: (e) => {
+          if (e.fingers !== 1) return;
+          if (e.phase === "end") { commitDrag(); return; }
+          if (interactionRef.current.dragIdx === null) return;
+          const rect = canvas.getBoundingClientRect();
+          const y = e.y - rect.top;
+          interactionRef.current.dragOffset = interactionRef.current.dragStartY - y;
+        },
+        twist: (e) => {
+          if (e.fingers === 3) return; // season — no world-law axis on this widget
+          if (e.phase === "start") lensTwistAccRef.current = 0;
+          if (e.phase === "move") lensTwistAccRef.current += e.angle;
+          if (e.phase === "end" && Math.abs(lensTwistAccRef.current) > Math.PI / 2) {
+            setDisplayMode((m) => (m === "candles" ? "line" : m === "line" ? "oscillator" : "candles"));
+            try { haptics.lens(); } catch { /* noop */ }
+          }
+        },
+        tap: (e) => {
+          if (e.fingers === 2) {
+            interactionRef.current.hoverIdx = null;
+            try { haptics.tap(); } catch { /* noop */ }
+            return;
+          }
+          if (e.fingers === 3) {
+            // tutti — one synchronized pulse of everything alive.
+            for (let i = 0; i < candles.length; i++) {
+              const c = candles[i];
+              window.setTimeout(() => playCandleNote(c), i * 16);
+            }
+            try { haptics.ripple(0.6); } catch { /* noop */ }
+          }
+        },
+      },
+      { wheelZoom: false },
+    );
+
+    const detachVessel = onVessel({
+      knock: () => {
+        if (candles.length === 0) return;
+        playCandleNote(candles[Math.floor(candles.length / 2)]);
+        interactionRef.current.pulseAt = performance.now();
+        try { haptics.tap(); } catch { /* noop */ }
+      },
+    });
 
     // ── draw ──────────────────────────────────────────────────────
     const draw = () => {
@@ -409,41 +467,39 @@ export default function SeaChart(props: SeaChartProps = {}) {
         }
       }
 
-      // apply pending nudges to working-copy prices; decay over 1.5s
-      const view = incoming ? candles.concat([incoming]) : candles;
+      // Apply pending nudges (+ the live drag) into the reused nudgedView
+      // buffer — mutated in place every frame. SPEC forbids allocation
+      // inside the RAF loop; this used to `.map()`/`.concat()` a fresh
+      // array and object per candle, every frame, forever.
       const nudgeMap = nudgeMapRef.current;
       const NUDGE_LIFE = 1500;
       for (const [idx, nudge] of nudgeMap) {
-        const age = now - nudge.t0;
-        if (age >= NUDGE_LIFE) nudgeMap.delete(idx);
+        if (now - nudge.t0 >= NUDGE_LIFE) nudgeMap.delete(idx);
       }
-      // We only render with the nudge — the underlying candle stays clean.
-      const nudgedView: SeaChartCandle[] = view.map((c, i) => {
+      const renderCount = candles.length + (incoming ? 1 : 0);
+      for (let i = 0; i < renderCount; i++) {
+        const src = i < candles.length ? candles[i] : (incoming as SeaChartCandle);
         const n = nudgeMap.get(i);
-        if (!n) return c;
-        const age = now - n.t0;
-        const k = Math.max(0, 1 - age / NUDGE_LIFE);
-        const d = n.value * k;
-        return {
-          open: c.open + d,
-          close: c.close + d,
-          high: c.high + d,
-          low: c.low + d,
-          volume: c.volume,
-        };
-      });
+        const d = n ? n.value * Math.max(0, 1 - (now - n.t0) / NUDGE_LIFE) : 0;
+        const dst = nudgedView[i];
+        dst.open = src.open + d;
+        dst.close = src.close + d;
+        dst.high = src.high + d;
+        dst.low = src.low + d;
+        dst.volume = src.volume;
+      }
 
       // also fold in the LIVE drag for the candle being grabbed (since the
       // user hasn't released yet, no entry exists in nudgeMap).
       const dragIdx = interactionRef.current.dragIdx;
       const dragPx = interactionRef.current.dragOffset;
-      let livePriceDelta = 0;
-      if (dragIdx !== null && dragIdx >= 0 && dragIdx < nudgedView.length) {
+      if (dragIdx !== null && dragIdx >= 0 && dragIdx < renderCount) {
         // We need the y-scale to convert px → price. Computed below.
         // First derive it now from non-dragged values so the conversion is
         // stable, then apply.
         let tempMin = Infinity, tempMax = -Infinity;
-        for (const c of nudgedView) {
+        for (let i = 0; i < renderCount; i++) {
+          const c = nudgedView[i];
           if (c.low < tempMin) tempMin = c.low;
           if (c.high > tempMax) tempMax = c.high;
         }
@@ -451,23 +507,19 @@ export default function SeaChart(props: SeaChartProps = {}) {
           tempMin = -1; tempMax = 1;
         }
         const pricePerPx = (tempMax - tempMin) / Math.max(1, candleAreaH);
-        livePriceDelta = dragPx * pricePerPx;
-        // clamp
-        livePriceDelta = Math.max(-1.5, Math.min(1.5, livePriceDelta));
+        const livePriceDelta = Math.max(-1.5, Math.min(1.5, dragPx * pricePerPx));
         const c = nudgedView[dragIdx];
-        nudgedView[dragIdx] = {
-          open: c.open + livePriceDelta,
-          close: c.close + livePriceDelta,
-          high: c.high + livePriceDelta,
-          low: c.low + livePriceDelta,
-          volume: c.volume,
-        };
+        c.open += livePriceDelta;
+        c.close += livePriceDelta;
+        c.high += livePriceDelta;
+        c.low += livePriceDelta;
       }
 
       // y-scale
       let yMin = Infinity;
       let yMax = -Infinity;
-      for (const c of nudgedView) {
+      for (let i = 0; i < renderCount; i++) {
+        const c = nudgedView[i];
         if (c.low < yMin) yMin = c.low;
         if (c.high > yMax) yMax = c.high;
       }
@@ -479,7 +531,7 @@ export default function SeaChart(props: SeaChartProps = {}) {
       yMax += yPad;
 
       let vMax = 0;
-      for (const c of nudgedView) if (c.volume > vMax) vMax = c.volume;
+      for (let i = 0; i < renderCount; i++) if (nudgedView[i].volume > vMax) vMax = nudgedView[i].volume;
       if (vMax <= 0) vMax = 1;
 
       const innerW = w - padL - padR;
@@ -502,14 +554,7 @@ export default function SeaChart(props: SeaChartProps = {}) {
 
       const mode = modeRef.current;
       const xShift = -slideT * slot;
-
-      const renderList: Array<{ idx: number; c: SeaChartCandle }> = [];
-      for (let i = 0; i < candles.length; i++) {
-        renderList.push({ idx: i, c: nudgedView[i] });
-      }
-      if (incoming) {
-        renderList.push({ idx: candleCountRef.current, c: nudgedView[nudgedView.length - 1] });
-      }
+      const renderIdxAt = (i: number) => (i < candles.length ? i : candleCountRef.current);
 
       if (mode === "line") {
         // draw a polyline over the close prices
@@ -517,8 +562,9 @@ export default function SeaChart(props: SeaChartProps = {}) {
         ctx.lineWidth = 1.6;
         ctx.lineJoin = "round";
         ctx.beginPath();
-        for (let i = 0; i < renderList.length; i++) {
-          const { idx, c } = renderList[i];
+        for (let i = 0; i < renderCount; i++) {
+          const idx = renderIdxAt(i);
+          const c = nudgedView[i];
           const cx = padL + idx * slot + slot / 2 + xShift;
           const cy = yOfPrice(c.close);
           if (i === 0) ctx.moveTo(cx, cy);
@@ -526,10 +572,11 @@ export default function SeaChart(props: SeaChartProps = {}) {
         }
         ctx.stroke();
         // subtle filled area below
-        const lastIdx = renderList[renderList.length - 1];
-        if (lastIdx) {
-          ctx.lineTo(padL + lastIdx.idx * slot + slot / 2 + xShift, candleAreaH);
-          ctx.lineTo(padL + renderList[0].idx * slot + slot / 2 + xShift, candleAreaH);
+        if (renderCount > 0) {
+          const lastIdx = renderIdxAt(renderCount - 1);
+          const firstIdx = renderIdxAt(0);
+          ctx.lineTo(padL + lastIdx * slot + slot / 2 + xShift, candleAreaH);
+          ctx.lineTo(padL + firstIdx * slot + slot / 2 + xShift, candleAreaH);
           ctx.closePath();
           ctx.fillStyle = fillFromHex(upHex, 0.10);
           ctx.fill();
@@ -544,8 +591,9 @@ export default function SeaChart(props: SeaChartProps = {}) {
         ctx.moveTo(0, Math.floor(midY) + 0.5);
         ctx.lineTo(w, Math.floor(midY) + 0.5);
         ctx.stroke();
-        for (let i = 0; i < renderList.length; i++) {
-          const { idx, c } = renderList[i];
+        for (let i = 0; i < renderCount; i++) {
+          const idx = renderIdxAt(i);
+          const c = nudgedView[i];
           const cx = padL + idx * slot + slot / 2 + xShift;
           const cy = yOfPrice(c.close);
           const above = c.close >= midPrice;
@@ -554,7 +602,9 @@ export default function SeaChart(props: SeaChartProps = {}) {
         }
       } else {
         // candles (default)
-        for (const { idx, c } of renderList) {
+        for (let i = 0; i < renderCount; i++) {
+          const idx = renderIdxAt(i);
+          const c = nudgedView[i];
           const cx = padL + idx * slot + slot / 2 + xShift;
           if (cx < -bodyW || cx > w + bodyW) continue;
 
@@ -619,7 +669,7 @@ export default function SeaChart(props: SeaChartProps = {}) {
 
       // tooltip — only when hovering a candle in candles mode
       const hi = interactionRef.current.hoverIdx;
-      if (mode === "candles" && hi !== null && hi >= 0 && hi < nudgedView.length) {
+      if (mode === "candles" && hi !== null && hi >= 0 && hi < candles.length) {
         const c = nudgedView[hi];
         const tx = interactionRef.current.hoverX + 10;
         const ty = Math.max(4, interactionRef.current.hoverY - 56);
@@ -652,9 +702,11 @@ export default function SeaChart(props: SeaChartProps = {}) {
     };
 
     let raf = 0;
-    const loop = () => {
-      draw();
+    const loop = (now: number) => {
+      gov.beginFrame(now);
       raf = requestAnimationFrame(loop);
+      if (sleeping) return; // no draw while the tab/frame is hidden
+      draw();
     };
 
     raf = requestAnimationFrame(loop);
@@ -662,11 +714,12 @@ export default function SeaChart(props: SeaChartProps = {}) {
     return () => {
       if (raf) cancelAnimationFrame(raf);
       ro.disconnect();
-      canvas.removeEventListener("pointermove", onPointerMove);
-      canvas.removeEventListener("pointerdown", onPointerDown);
-      canvas.removeEventListener("pointerleave", onPointerLeave);
-      window.removeEventListener("pointerup", onPointerUp);
-      window.removeEventListener("pointercancel", onPointerUp);
+      offVisibility();
+      canvas.removeEventListener("pointerdown", onContact);
+      canvas.removeEventListener("pointermove", onHover);
+      canvas.removeEventListener("pointerleave", onLeave);
+      detachGestures();
+      detachVessel();
     };
   }, [background, shouldFeed, tapeLabel]);
 
@@ -704,7 +757,7 @@ export default function SeaChart(props: SeaChartProps = {}) {
           }}
         >
           <span>{title}</span>
-          <span style={{ opacity: 0.55 }}>{mode === "line" ? "line" : mode === "oscillator" ? "osc" : "ohlc"}</span>
+          <span style={{ opacity: 0.55 }}>{displayMode === "line" ? "line" : displayMode === "oscillator" ? "osc" : "ohlc"}</span>
         </div>
         <canvas
           ref={canvasRef}

@@ -6,6 +6,7 @@ import * as haptics from "@/lib/haptics";
 import { attachGestures, enableBreath } from "@/lib/gesture";
 import { onVessel, requestVessel } from "@/lib/vessel";
 import { shouldInvite } from "@/lib/candle";
+import { bakeRadialSprite } from "@/lib/scene/radial-sprite";
 import LetGo from "@/components/LetGo";
 import {
   tideLine,
@@ -569,20 +570,18 @@ function makeShoreVoice() {
   return { breathe, breakWave, say, stop, ensure };
 }
 
+// Baked once per (rgb, edge) through the shared radial-sprite cache — never
+// a gradient inside the frame loop. See src/lib/scene/radial-sprite.ts.
 function softSprite(rgb: string, edge: number): HTMLCanvasElement | null {
-  if (typeof document === "undefined") return null;
-  const c = document.createElement("canvas");
-  c.width = 64;
-  c.height = 64;
-  const g = c.getContext("2d");
-  if (!g) return null;
-  const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
-  grad.addColorStop(0, `rgba(${rgb},1)`);
-  grad.addColorStop(edge, `rgba(${rgb},0.55)`);
-  grad.addColorStop(1, `rgba(${rgb},0)`);
-  g.fillStyle = grad;
-  g.fillRect(0, 0, 64, 64);
-  return c;
+  return bakeRadialSprite(`coast-soft:${rgb}:${edge}`, {
+    width: 64,
+    height: 64,
+    stops: [
+      { offset: 0, color: `rgba(${rgb},1)` },
+      { offset: edge, color: `rgba(${rgb},0.55)` },
+      { offset: 1, color: `rgba(${rgb},0)` },
+    ],
+  });
 }
 
 export default function CoastBeach() {

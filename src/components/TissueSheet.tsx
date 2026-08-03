@@ -97,6 +97,7 @@ import {
   onVisibility,
   resolveDpr,
 } from "@/lib/room-runtime";
+import { bakeRadialSprite, drawRadialStamp } from "@/lib/scene/radial-sprite";
 
 const STORE_KEY = "objetdart:tissue:v1";
 /** D3 — the root the whole sheet's harmony stands on. */
@@ -1027,32 +1028,30 @@ export default function TissueSheet() {
 
     // ——— fidelity: a cached translucency + grain sprite, baked once ———
     // Real per-cell light transmission and cytoplasmic granularity would
-    // need a createRadialGradient per cell if drawn live — forbidden inside
-    // a per-element loop (SPEC's performance contract). Bake it once and
-    // stamp it with drawImage instead: the cost per cell is one blit no
-    // matter how many cells the sheet holds. The discrete-membrane look
-    // stays intact — this shades within a cell's own disc, it never blends
-    // neighbours together.
-    const cellSprite = document.createElement("canvas");
-    {
-      const SP = 48;
-      cellSprite.width = SP;
-      cellSprite.height = SP;
-      const sctx = cellSprite.getContext("2d");
-      if (sctx) {
-        const cx = SP / 2;
-        const cy = SP / 2;
-        const r = SP / 2;
-        const g = sctx.createRadialGradient(cx - r * 0.24, cy - r * 0.3, r * 0.05, cx, cy, r);
-        g.addColorStop(0, "rgba(255,255,255,0.55)");
-        g.addColorStop(0.55, "rgba(255,255,255,0.14)");
-        g.addColorStop(1, "rgba(255,255,255,0)");
-        sctx.fillStyle = g;
-        sctx.beginPath();
-        sctx.arc(cx, cy, r, 0, Math.PI * 2);
-        sctx.fill();
-        // cytoplasmic grain: a fixed, seeded scatter, so the sprite (and so
-        // every cell's shading) is identical on every load
+    // need a radial gradient per cell if drawn live — forbidden inside a
+    // per-element loop (SPEC's performance contract). Baked once through
+    // the shared radial-sprite cache and stamped with drawImage instead:
+    // the cost per cell is one blit no matter how many cells the sheet
+    // holds. The discrete-membrane look stays intact — this shades within
+    // a cell's own disc, it never blends neighbours together.
+    const CELL_SPRITE_SP = 48;
+    const cellSprite = bakeRadialSprite("tissue-cell-sprite", {
+      width: CELL_SPRITE_SP,
+      height: CELL_SPRITE_SP,
+      inner: { x: CELL_SPRITE_SP / 2 - (CELL_SPRITE_SP / 2) * 0.24, y: CELL_SPRITE_SP / 2 - (CELL_SPRITE_SP / 2) * 0.3, r: (CELL_SPRITE_SP / 2) * 0.05 },
+      outer: { x: CELL_SPRITE_SP / 2, y: CELL_SPRITE_SP / 2, r: CELL_SPRITE_SP / 2 },
+      stops: [
+        { offset: 0, color: "rgba(255,255,255,0.55)" },
+        { offset: 0.55, color: "rgba(255,255,255,0.14)" },
+        { offset: 1, color: "rgba(255,255,255,0)" },
+      ],
+      // cytoplasmic grain: a fixed, seeded scatter, so the sprite (and so
+      // every cell's shading) is identical on every load. Runs once, only
+      // on the bake — never again once the key is cached.
+      detail(sctx, spW, spH) {
+        const cx = spW / 2;
+        const cy = spH / 2;
+        const r = spW / 2;
         let a = 0x51ed270b;
         for (let k = 0; k < 90; k++) {
           a = (Math.imul(a ^ (a >>> 15), 0x01000193) >>> 0) || 1;
@@ -1068,8 +1067,8 @@ export default function TissueSheet() {
           sctx.arc(sx, sy, 0.6 + ((a >>> 3) % 100) / 260, 0, Math.PI * 2);
           sctx.fill();
         }
-      }
-    }
+      },
+    });
 
     // ——— the loop ———
     const draw = (now: number) => {
@@ -1194,18 +1193,37 @@ export default function TissueSheet() {
       // ——— render ———
       const warm = clamp01(rough / 4);
       const dim = 1 - night * 0.72;
-      const bg = ctx.createRadialGradient(
-        width / 2,
-        height * 0.46,
-        12,
-        width / 2,
-        height * 0.46,
-        Math.max(width, height) * 0.8,
+      // The two stop colours are continuous (warm, dim both ease toward a
+      // target), but a canvas fillStyle string already rounds each channel
+      // to an integer — so keying the shared sprite cache on those same
+      // rounded integers bakes a fresh gradient only when the *rendered*
+      // colour actually changes, not on every tick a value is still easing
+      // toward one it's already at in practice.
+      const bg0r = Math.round((16 + warm * 16) * dim);
+      const bg0g = Math.round((15 + warm * 2) * dim);
+      const bg0b = Math.round((19 - warm * 4) * dim);
+      const bg1r = Math.round(6 * dim);
+      const bg1g = Math.round(7 * dim);
+      const bg1b = Math.round(10 * dim);
+      const bgSprite = bakeRadialSprite(
+        `tissue-bg:${Math.round(width)}x${Math.round(height)}:${bg0r},${bg0g},${bg0b}:${bg1r},${bg1g},${bg1b}`,
+        {
+          width,
+          height,
+          inner: { x: width / 2, y: height * 0.46, r: 12 },
+          outer: { x: width / 2, y: height * 0.46, r: Math.max(width, height) * 0.8 },
+          stops: [
+            { offset: 0, color: `rgb(${bg0r}, ${bg0g}, ${bg0b})` },
+            { offset: 1, color: `rgb(${bg1r}, ${bg1g}, ${bg1b})` },
+          ],
+        },
       );
-      bg.addColorStop(0, `rgb(${(16 + warm * 16) * dim}, ${(15 + warm * 2) * dim}, ${(19 - warm * 4) * dim})`);
-      bg.addColorStop(1, `rgb(${6 * dim}, ${7 * dim}, ${10 * dim})`);
-      ctx.fillStyle = bg;
-      ctx.fillRect(0, 0, width, height);
+      if (bgSprite) {
+        ctx.drawImage(bgSprite, 0, 0, width, height);
+      } else {
+        ctx.fillStyle = `rgb(${bg1r}, ${bg1g}, ${bg1b})`;
+        ctx.fillRect(0, 0, width, height);
+      }
 
       // the medium, drifting — the count itself scales with the governed
       // detail tier, so a laboring frame simply carries fewer motes
@@ -1250,11 +1268,20 @@ export default function TissueSheet() {
           const px = ox + deepX * scale;
           const py = oy + deepY * scale;
           const rr = 2.4 * scale;
-          const g = ctx.createRadialGradient(px, py, 1, px, py, rr);
-          g.addColorStop(0, `rgba(2, 3, 5, ${0.8 * deepest})`);
-          g.addColorStop(1, "rgba(2, 3, 5, 0)");
-          ctx.fillStyle = g;
-          ctx.fillRect(px - rr, py - rr, rr * 2, rr * 2);
+          // Fixed colour, only alpha (0.8 * deepest) and radius vary — one
+          // normalized sprite, baked once, stamped and scaled to rr. The
+          // original's 1px inner radius (vs. this sprite's concentric 0) is
+          // sub-pixel at any rr this room reaches — invisible, never hoisted
+          // into a second cache key.
+          const pitSprite = bakeRadialSprite("tissue-pit-throat", {
+            width: 128,
+            height: 128,
+            stops: [
+              { offset: 0, color: "rgba(2, 3, 5, 1)" },
+              { offset: 1, color: "rgba(2, 3, 5, 0)" },
+            ],
+          });
+          drawRadialStamp(ctx, pitSprite, px, py, rr, 0.8 * deepest);
         }
 
         // — the bloom: each cell's own faint halo, one batched fill, so the

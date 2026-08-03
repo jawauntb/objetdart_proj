@@ -58,6 +58,7 @@ import { attachGestures } from "@/lib/gesture";
 import { onVessel } from "@/lib/vessel";
 import * as haptics from "@/lib/haptics";
 import { resolveDpr, onGalleryPause, onVisibility, isEmbeddedFrame, createFrameGovernor, detailForTier } from "@/lib/room-runtime";
+import { bakeRadialSprite, drawRadialStamp } from "@/lib/scene/radial-sprite";
 import { useField } from "@/store/field";
 import { useBandEdgeTravel } from "@/components/ScaleTravel";
 import LetGo from "@/components/LetGo";
@@ -1044,25 +1045,20 @@ export default function Atlas() {
     let sleeping = false;
     const offVisibility = onVisibility((hidden) => { sleeping = hidden; });
 
-    // Cloud shadows used to call ctx.createRadialGradient() for all 4
+    // Cloud shadows used to build a fresh radial gradient for all 4
     // clouds every single frame — forbidden inside a per-element loop.
     // A radial gradient is a fixed shape (1 at center → 0 at the edge);
     // only alpha and radius differ per cloud, so one normalized sprite,
-    // drawn once, covers every cloud via drawImage + globalAlpha.
-    const cloudSpriteSize = 256;
-    const cloudSprite = document.createElement("canvas");
-    cloudSprite.width = cloudSprite.height = cloudSpriteSize;
-    const spriteCtx = cloudSprite.getContext("2d");
-    if (spriteCtx) {
-      const r = cloudSpriteSize / 2;
-      const g = spriteCtx.createRadialGradient(r, r, 0, r, r, r);
-      g.addColorStop(0, "rgba(8, 14, 22, 1)");
-      g.addColorStop(1, "rgba(8, 14, 22, 0)");
-      spriteCtx.fillStyle = g;
-      spriteCtx.beginPath();
-      spriteCtx.arc(r, r, r, 0, Math.PI * 2);
-      spriteCtx.fill();
-    }
+    // baked once through the shared radial-sprite cache, covers every
+    // cloud via drawRadialStamp (drawImage + globalAlpha).
+    const cloudSprite = bakeRadialSprite("atlas-cloud-shadow", {
+      width: 256,
+      height: 256,
+      stops: [
+        { offset: 0, color: "rgba(8, 14, 22, 1)" },
+        { offset: 1, color: "rgba(8, 14, 22, 0)" },
+      ],
+    });
 
     const draw = (now: number) => {
       const tier = gov.beginFrame(now);
@@ -1099,10 +1095,8 @@ export default function Atlas() {
         const cx = c.x * w;
         const cy = c.y * h;
         const rad = c.r * Math.min(w, h) * 1.8;
-        ctx.globalAlpha = c.alpha * detail.shadows;
-        ctx.drawImage(cloudSprite, cx - rad, cy - rad, rad * 2, rad * 2);
+        drawRadialStamp(ctx, cloudSprite, cx, cy, rad, c.alpha * detail.shadows);
       }
-      ctx.globalAlpha = 1;
 
       // ── weather events (transient, frame-relative) ──────────────
       for (let i = weather.length - 1; i >= 0; i--) {
@@ -3168,13 +3162,18 @@ function drawAtlasWeather(
     const cx = x * w;
     const cy = e.y * h;
     const rad = e.radius * Math.min(w, h) * 2.4;
-    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, rad);
-    g.addColorStop(0, `rgba(6, 10, 18, ${e.alpha * grow})`);
-    g.addColorStop(1, "rgba(6, 10, 18, 0)");
-    ctx.fillStyle = g;
-    ctx.beginPath();
-    ctx.arc(cx, cy, rad, 0, Math.PI * 2);
-    ctx.fill();
+    // Same colour every time this fires — only alpha (e.alpha * grow) and
+    // radius vary — so the sprite bakes once, ever, through the shared
+    // radial-sprite cache, and this call is a Map lookup + a stamp.
+    const sprite = bakeRadialSprite("atlas-weather-cloud", {
+      width: 256,
+      height: 256,
+      stops: [
+        { offset: 0, color: "rgba(6, 10, 18, 1)" },
+        { offset: 1, color: "rgba(6, 10, 18, 0)" },
+      ],
+    });
+    drawRadialStamp(ctx, sprite, cx, cy, rad, e.alpha * grow);
     return;
   }
   if (e.kind === "gust") {
