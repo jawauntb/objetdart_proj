@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import SiteHeader from "@/components/SiteHeader";
+import AxisChrome from "@/components/AxisChrome";
 import Stars from "@/components/Stars";
 
 export default function StarsPage() {
@@ -16,6 +17,7 @@ export default function StarsPage() {
       <main>
         <Stars />
       </main>
+      <AxisChrome route="/stars" travel={false} />
     </>
   );
 }

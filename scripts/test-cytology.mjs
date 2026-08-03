@@ -32,11 +32,24 @@ const {
   daughterSeeds: daughterSeedsRaw,
   settlePopulation,
   hashSeed,
+  HOUR_MS,
+  MAX_CATCHUP_H,
+  STEADY_POPULATION,
+  VITALITY_FLOOR,
+  advanceCulture: advanceCultureRaw,
+  validateStoredCulture: validateStoredCultureRaw,
+  catchUpCulture: catchUpCultureRaw,
 } = loadTsModule("src/lib/cytology.ts");
 
-// Arrays born in the vm realm carry a foreign Array.prototype that newer
-// Node versions reject in deepStrictEqual (see test-routes.mjs) — rehome them.
+// Arrays (and the plain records inside them) born in the vm realm carry a
+// foreign prototype that newer Node versions reject in deepStrictEqual (see
+// test-routes.mjs) — round-tripping through JSON rehomes everything cheaply,
+// which is safe here because every value in play is plain JSON-shaped data.
+const rehome = (v) => JSON.parse(JSON.stringify(v));
 const daughterSeeds = (seed, gen) => [...daughterSeedsRaw(seed, gen)];
+const advanceCulture = (cells, hours) => rehome(advanceCultureRaw(cells, hours));
+const validateStoredCulture = (raw, now) => rehome(validateStoredCultureRaw(raw, now));
+const catchUpCulture = (stored, now) => rehome(catchUpCultureRaw(stored, now));
 
 const SEEDS = Array.from({ length: 80 }, (_, i) => hashSeed(i + 1, 11, 5));
 
@@ -163,4 +176,119 @@ function lineage(root, depth) {
   assert.equal(cells.length, MAX_CELLS, "sustained division should hold the plasm full");
 }
 
+// — The culture's own clock: catch-up across real elapsed time —
+
+function seedCell(seed, nx, ny, generation = 0, vitality = 1) {
+  return { id: `ce-${seed.toString(36)}-${generation}`, seed, nx, ny, generation, vitality };
+}
+
+// — Determinism: identical stored culture + identical elapsed hours must
+//   produce the identical next culture, every time —
+{
+  const cells = SEEDS.slice(0, 5).map((s, i) => seedCell(s, 0.3 + i * 0.1, 0.4, 0, 0.6));
+  for (const hours of [0, 3, 40, 400, 5000]) {
+    assert.deepEqual(
+      advanceCulture(cells, hours),
+      advanceCulture(cells, hours),
+      `advanceCulture must be pure at ${hours}h`,
+    );
+  }
+}
+
+// — Zero elapsed is a true no-op: no drift, no division, no decay. A bug
+//   that advances the culture on *session* time rather than *real* time
+//   would fail this the moment it ran a frame with hoursAway === 0 —
+{
+  const cells = SEEDS.slice(5, 9).map((s, i) => seedCell(s, 0.2 + i * 0.15, 0.5, 1, 0.8));
+  assert.deepEqual(advanceCulture(cells, 0), rehome(cells), "zero hours away must change nothing");
+}
+
+// — An empty dish never spontaneously regrows. Only LetGo may empty a
+//   culture, and the emptiness must survive any amount of elapsed time —
+{
+  for (const hours of [0, 1, 1000, MAX_CATCHUP_H * 10]) {
+    assert.deepEqual(advanceCulture([], hours), [], `an empty dish must stay empty at ${hours}h`);
+  }
+}
+
+// — Growth bound at extreme elapsed time: a returning visitor after six
+//   months must not find a million cells, or even close to it. Six months
+//   and the MAX_CATCHUP_H cap must saturate to the exact same population —
+{
+  const lone = [seedCell(SEEDS[10], 0.5, 0.5, 0, 1)];
+  const sixMonthsH = 24 * 30 * 6;
+  const grown = advanceCulture(lone, sixMonthsH);
+  assert.ok(grown.length > lone.length, "a lone healthy cell should have descendants after six months away");
+  assert.ok(grown.length <= MAX_CELLS, `population must never exceed MAX_CELLS (${grown.length})`);
+  assert.equal(grown.length, STEADY_POPULATION, "six months away saturates exactly at the resting population");
+  assert.deepEqual(
+    advanceCulture(lone, sixMonthsH),
+    advanceCulture(lone, MAX_CATCHUP_H),
+    "six months away and the capped catch-up horizon must saturate to the identical culture",
+  );
+  for (const c of grown) {
+    assert.ok(c.vitality >= VITALITY_FLOOR && c.vitality <= 1, "vitality must stay in [floor, 1]");
+  }
+}
+
+// — Descendants resemble their parent: an offline division must inherit the
+//   heritable palette/cilia nibble exactly as a live division does —
+{
+  const parent = seedCell(SEEDS[11], 0.4, 0.4, 0, 1);
+  const grown = advanceCulture([parent], 200);
+  assert.ok(grown.length > 1, "sanity: this parent must have divided at least once");
+  for (const c of grown) {
+    assert.equal(
+      c.seed & HERITABLE_MASK,
+      parent.seed & HERITABLE_MASK,
+      "every descendant must carry the root's heritable nibble",
+    );
+  }
+}
+
+// — Thinning: a dish left well above its own resting point eases back down
+//   toward it, never toward zero and never overshooting below it —
+{
+  const crowded = Array.from({ length: 22 }, (_, i) =>
+    seedCell(SEEDS[(i + 20) % SEEDS.length], (i % 8) / 8, 0.3 + (i % 5) * 0.1, 0, 1),
+  );
+  const settled = advanceCulture(crowded, 24 * 20);
+  assert.ok(settled.length < crowded.length, "a crowded dish left alone should thin");
+  assert.equal(settled.length, STEADY_POPULATION, "thinning must ease exactly to the resting point, not past it");
+}
+
+// — Corrupt or absent stored state degrades to a well-formed empty culture,
+//   never a throw. A bad localStorage value must never break the room —
+{
+  const now = 1_700_000_000_000;
+  for (const bad of [null, undefined, 42, "nope", [], {}, { cells: "nope" }, { cells: [1, 2, { seed: "x" }] }]) {
+    const decoded = validateStoredCulture(bad, now);
+    assert.ok(Array.isArray(decoded.cells), `corrupt input must decode to an array: ${JSON.stringify(bad)}`);
+    assert.equal(typeof decoded.lastSeen, "number", "lastSeen must always be a finite number");
+  }
+}
+
+// — A clock set backwards must read as zero elapsed, never negative, never
+//   throw, and self-heal lastSeen to now —
+{
+  const now = 1_700_000_000_000;
+  const stored = { cells: [seedCell(SEEDS[12], 0.5, 0.5, 2, 0.9)], lastSeen: now + 72 * HOUR_MS };
+  const result = catchUpCulture(stored, now);
+  assert.deepEqual(result.cells, rehome(stored.cells), "a backwards clock must not perturb the culture");
+  assert.equal(result.lastSeen, now, "lastSeen must self-heal to the current read, not the corrupt future value");
+}
+
+// — Round-trip: encode (JSON.stringify, as the room persists it) then decode
+//   (validateStoredCulture) must reproduce the same well-formed culture —
+{
+  const now = 1_700_000_000_000;
+  const original = { cells: SEEDS.slice(13, 17).map((s, i) => seedCell(s, 0.2 * i, 0.5, i, 0.5 + i * 0.1)), lastSeen: now };
+  const roundTripped = validateStoredCulture(JSON.parse(JSON.stringify(original)), now);
+  assert.deepEqual(roundTripped, rehome(original), "encode → decode must round-trip a well-formed culture exactly");
+}
+
 console.log(`cytology ok: ${SEEDS.length} seeds decoded, lineage stable, population bounded at ${MAX_CELLS}`);
+console.log(
+  `cytology catch-up ok: growth+thinning relax toward steady population ${STEADY_POPULATION}, ` +
+    `bounded at ${MAX_CATCHUP_H}h, corrupt/backwards state handled`,
+);

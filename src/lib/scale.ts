@@ -557,28 +557,66 @@ export function spectralRegisterFor(s: number): SpectralRegister {
   return { baseHz, lfoHz, brightness: 1 - u * 0.85 };
 }
 
+/**
+ * Lateral / sibling routes that share a band with a primary resident but
+ * are not themselves `SCALE_BANDS[].route`. Keep in lockstep with
+ * `PEER_CIRCLES` in `peers.ts` — `scripts/test-routes.mjs` asserts every
+ * peer room resolves here.
+ */
+const LATERAL_ROUTE_BANDS: { prefix: string; band: ScaleBandId }[] = [
+  // shore family + wave instruments
+  { prefix: "/tide", band: "coast" },
+  { prefix: "/waves", band: "coast" },
+  { prefix: "/ocean", band: "coast" },
+  { prefix: "/sine", band: "coast" },
+  { prefix: "/circularity", band: "coast" },
+  { prefix: "/pretext", band: "coast" },
+  { prefix: "/aphros", band: "coast" },
+  // peak weather
+  { prefix: "/clouds", band: "olympus" },
+  { prefix: "/storm", band: "olympus" },
+  // meadow under the flock
+  { prefix: "/growth", band: "flowers" },
+  // hearth
+  { prefix: "/fire", band: "earth" },
+  // night sky instruments
+  { prefix: "/comb", band: "stars" },
+  { prefix: "/beam", band: "stars" },
+  // cabinet at the drop
+  { prefix: "/seed", band: "drop" },
+  { prefix: "/coin", band: "drop" },
+  { prefix: "/jewel", band: "drop" },
+  { prefix: "/tourbillon", band: "drop" },
+  { prefix: "/watch", band: "drop" },
+  { prefix: "/plasma", band: "drop" },
+  { prefix: "/pulse", band: "drop" },
+  { prefix: "/charts", band: "drop" },
+  { prefix: "/dither", band: "drop" },
+];
+
 /** Where a route enters the manifold: center of its band. */
 export function entryScaleFor(route: string): number | null {
+  const path = route.split("?")[0] || route;
   for (const b of SCALE_BANDS) {
-    if (b.route && route.startsWith(b.route)) return (b.sMin + b.sMax) / 2;
+    if (b.route && (path === b.route || path.startsWith(`${b.route}/`))) {
+      return (b.sMin + b.sMax) / 2;
+    }
   }
-  // Coast shares one band across the beach, the deep, and the instruments.
-  if (
-    route.startsWith("/tide") ||
-    route.startsWith("/waves") ||
-    route.startsWith("/ocean")
-  ) {
-    const coast = SCALE_BANDS.find((b) => b.id === "coast");
-    if (coast) return (coast.sMin + coast.sMax) / 2;
+  // Longest-prefix match so /light does not steal /light/inverse later if
+  // a lateral is ever added under a shared stem.
+  let best: ScaleBandId | null = null;
+  let bestLen = -1;
+  for (const { prefix, band } of LATERAL_ROUTE_BANDS) {
+    if (path === prefix || path.startsWith(`${prefix}/`)) {
+      if (prefix.length > bestLen) {
+        best = band;
+        bestLen = prefix.length;
+      }
+    }
   }
-  // A seed sits at the drop's scale; the cloud floor shares olympus with the peak.
-  if (route.startsWith("/seed")) {
-    const drop = SCALE_BANDS.find((b) => b.id === "drop");
-    if (drop) return (drop.sMin + drop.sMax) / 2;
-  }
-  if (route.startsWith("/clouds")) {
-    const peak = SCALE_BANDS.find((b) => b.id === "olympus");
-    if (peak) return (peak.sMin + peak.sMax) / 2;
+  if (best) {
+    const band = SCALE_BANDS.find((b) => b.id === best);
+    if (band) return (band.sMin + band.sMax) / 2;
   }
   return null;
 }

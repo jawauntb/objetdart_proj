@@ -75,8 +75,8 @@ const {
   axisNavigationKeys,
   peerCircleAnchorBand,
 } = navOrderModule;
-const { SCALE_BANDS } = scaleModule;
-const { PEER_CIRCLES } = peersModule;
+const { SCALE_BANDS, entryScaleFor } = scaleModule;
+const { PEER_CIRCLES, SCALE_EXEMPT_KEYS, SCALE_EXEMPT_KEY_SET, allPeerRooms } = peersModule;
 const { isDarkRoute } = darkRoutesModule;
 
 const expectedKeys = [
@@ -212,6 +212,37 @@ assert.ok(
   navKeys.indexOf("overlook") > navKeys.indexOf("quanta"),
   "meta views of the tree sit after the axis",
 );
+
+// Completeness: every SITE_ROUTES key is either on the scale axis (band or
+// peer circle) or a deliberate SCALE_EXEMPT_KEYS entry. Leftover "tail"
+// rooms mean someone shipped without finding a place — fail loud.
+const axisKeySet = new Set(axisKeys);
+for (const route of SITE_ROUTES) {
+  const onAxis = axisKeySet.has(route.key);
+  const exempt = SCALE_EXEMPT_KEY_SET.has(route.key);
+  assert.ok(
+    onAxis || exempt,
+    `${route.key} must join SCALE_BANDS / PEER_CIRCLES or SCALE_EXEMPT_KEYS`,
+  );
+  assert.ok(!(onAxis && exempt), `${route.key} cannot be both on-axis and exempt`);
+}
+assert.ok(SCALE_EXEMPT_KEYS.includes("guide"), "guide stays a reading-surface exemption");
+assert.ok(axisKeySet.has("coin"), "coin sits on the axis (cabinet at the drop)");
+assert.ok(axisKeySet.has("tourbillon"), "tourbillon sits on the axis (cabinet at the drop)");
+assert.ok(axisKeySet.has("fire"), "fire sits on the axis (hearth with earth)");
+assert.ok(axisKeySet.has("sine"), "sine sits on the axis (shore instruments)");
+assert.ok(navKeys.indexOf("coin") < navKeys.indexOf("cells"), "cabinet above cells");
+assert.ok(navKeys.indexOf("stars") < navKeys.indexOf("comb"), "sky ring keeps stars before comb");
+assert.ok(navKeys.indexOf("comb") < navKeys.indexOf("beam"), "sky ring order stars→comb→beam");
+
+// Peer rooms must resolve through entryScaleFor so ScaleTravel can mount.
+for (const room of allPeerRooms()) {
+  assert.notEqual(
+    entryScaleFor(room.href),
+    null,
+    `entryScaleFor(${room.href}) must resolve (keep LATERAL_ROUTE_BANDS ↔ PEER_CIRCLES)`,
+  );
+}
 
 assert.deepEqual(
   GALLERY_ROUTES.map((route) => route.key),

@@ -87,17 +87,25 @@ w.flush();
 assert.equal(writes, 1, "flush collapses to one write");
 w.cancel();
 
-// — Peer circles: drop↔seed, flowers↔birds, shore family, peak↔clouds —
-assert.ok(PEER_CIRCLES.length >= 4);
-assert.equal(peersOf("/drop").map((r) => r.key).join(","), "seed");
-assert.equal(peersOf("/seed").map((r) => r.key).join(","), "drop");
+// — Peer circles: cabinet at the drop, shore, meadow, peak, hearth, sky —
+assert.ok(PEER_CIRCLES.length >= 6);
+assert.equal(peerCircleForRoute("/drop")?.id, "cabinet");
+assert.ok(peersOf("/drop").some((r) => r.key === "seed"));
+assert.ok(peersOf("/drop").some((r) => r.key === "coin"));
+assert.ok(peersOf("/drop").some((r) => r.key === "tourbillon"));
 assert.equal(nextPeer("/drop", 1)?.key, "seed");
-assert.equal(nextPeer("/seed", 1)?.key, "drop");
+assert.equal(nextPeer("/seed", -1)?.key, "drop");
 assert.equal(peerCircleForRoute("/ocean")?.id, "shore");
+assert.equal(peerCircleForRoute("/sine")?.id, "shore");
 assert.equal(peerCircleForRoute("/coast")?.id, "shore");
 assert.equal(peerCircleForRoute("/mountain")?.id, "peak");
+assert.equal(peerCircleForRoute("/storm")?.id, "peak");
 assert.equal(peerCircleForRoute("/clouds")?.id, "peak");
+assert.equal(peerCircleForRoute("/fire")?.id, "hearth");
+assert.equal(peerCircleForRoute("/stars")?.id, "sky");
 assert.ok(peersOf("/flowers").some((r) => r.key === "birds"));
+assert.ok(peersOf("/flowers").some((r) => r.key === "growth"));
 assert.equal(peerCircleForRoute("/colophon"), null);
+assert.equal(peerCircleForRoute("/guide"), null);
 
 console.log("test-room-runtime: ok");

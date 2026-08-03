@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import SiteHeader from "@/components/SiteHeader";
+import AxisChrome from "@/components/AxisChrome";
 import Growth from "@/components/Growth";
 
 export default function GrowthPage() {
@@ -14,6 +15,7 @@ export default function GrowthPage() {
       <main>
         <Growth />
       </main>
+      <AxisChrome route="/growth" />
     </>
   );
 }
