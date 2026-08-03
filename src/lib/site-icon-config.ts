@@ -28,6 +28,7 @@ export type SiteIconKey =
   | "manifold"
   | "movement"
   | "ocean"
+  | "overlook"
   | "plasma"
   | "pretext"
   | "pulse"
@@ -442,6 +443,19 @@ export const SITE_ICON_VISUALS = {
     accent: "#8ee4ed",
     accent2: "#d5ba73",
     ink: "#e0fbff",
+  },
+  overlook: {
+    title: "overlook",
+    description: "the whole tree kept in one glance",
+    path: "/overlook",
+    shortName: "overlook",
+    kind: "growth",
+    bg: "#04060b",
+    bg2: "#101c16",
+    glow: "#e7c97e",
+    accent: "#f3d77a",
+    accent2: "#7ea88f",
+    ink: "#f2eede",
   },
   plasma: {
     title: "Plasma",

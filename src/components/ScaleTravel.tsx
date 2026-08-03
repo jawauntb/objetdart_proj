@@ -46,6 +46,7 @@ import {
   type TravelDir,
 } from "@/lib/scale";
 import { detent as hapticDetent, crossing as hapticCrossing, tap as hapticTap } from "@/lib/haptics";
+import { playTravelPassage } from "@/components/TravelPassage";
 
 const STORAGE_KEY = "objetdart:scale:s";
 const ENTERED_FROM_KEY = "objetdart:scale:enteredFrom:v1";
@@ -148,10 +149,14 @@ function nearestNeighborLabel(s: number): string | null {
 
 /**
  * The shared travel execution: haptic roll, persist the landing position so
- * the destination room enters just inside its wall, fade to ink, then go.
+ * the destination room enters just inside its wall, then go. Edges with a
+ * registered passage (TravelPassage.PASSAGES — the atlas ↔ stars trunk)
+ * travel through the film: the passage owns the screen and navigation fires
+ * mid-passage behind it. Every other edge keeps the ink fade exactly as-is.
  */
 function executeTravel(
   router: { push: (href: string) => void },
+  from: ScaleBandId,
   dest: ScaleBand,
   s: number,
 ): EdgeUI {
@@ -161,7 +166,11 @@ function executeTravel(
   } catch {
     /* noop */
   }
-  window.setTimeout(() => router.push(dest.route as string), 380);
+  const route = dest.route as string;
+  if (playTravelPassage(from, dest, s, () => router.push(route))) {
+    return IDLE_UI;
+  }
+  window.setTimeout(() => router.push(route), 380);
   return { pressure: 1, towardLabel: dest.label, crossing: true };
 }
 
@@ -277,7 +286,7 @@ export function useBandEdgeTravel(
             recordEnteredFrom(dest.id, e.from);
             r.leaving = true;
             r.raf = 0;
-            setUi(executeTravel(router, dest, entryScaleInto(dest, dir)));
+            setUi(executeTravel(router, e.from, dest, entryScaleInto(dest, dir)));
             return;
           }
           // Destination unbuilt: the wall holds — step back inside the band.
@@ -419,7 +428,7 @@ export default function ScaleTravel({ route }: { route: string }) {
           if (dest?.route && dest.route !== route) {
             recordEnteredFrom(dest.id, e.from);
             leavingRef.current = true;
-            setUi(executeTravel(router, dest, entryScaleInto(dest, dir)));
+            setUi(executeTravel(router, e.from, dest, entryScaleInto(dest, dir)));
             return;
           }
           // Destination unbuilt: the wall holds — step back inside the band.
