@@ -298,24 +298,26 @@ void main() {
       col = mix(col, turfC, bladesFar * 0.28 * (1.0 - hazeG * 0.5));
     }
 
-    // near-field upright blades — projected stems with wind lean
+    // near-field upright blades — thin hairline stems under the birds' scale
     float bladeAmt = 0.0;
     vec3 bladeCol = vec3(0.0);
-    if (depth < 55.0 && pond < 0.55) {
-      float cellSize = mix(0.32, 0.7, smoothstep(10.0, 45.0, depth));
+    if (depth < 48.0 && pond < 0.55) {
+      float cellSize = mix(0.28, 0.55, smoothstep(10.0, 40.0, depth));
       vec2 base = floor(xz / cellSize);
-      float dens = mix(0.95, 0.5, smoothstep(12.0, 50.0, depth));
+      float dens = mix(0.97, 0.55, smoothstep(12.0, 45.0, depth));
+      float nearFade = 1.0 - smoothstep(32.0, 48.0, depth);
       for (int i = -2; i <= 2; i++) {
         for (int j = -2; j <= 2; j++) {
           vec2 cell = base + vec2(float(i), float(j));
           float rnd = hash21(cell);
           if (rnd <= dens) {
             vec2 bp = (cell + vec2(hash21(cell + 1.3), hash21(cell + 2.7))) * cellSize;
-            float ht = mix(0.9, 2.4, hash21(cell + 4.1));
-            ht *= mix(1.2, 0.45, smoothstep(14.0, 50.0, depth));
-            float sway = sin(u_time * (1.1 + rnd * 0.8) + rnd * 40.0 + bp.x * 0.2) * 0.35 * ht;
+            // keep blades shorter than a sparrow so they sit under the fauna
+            float ht = mix(0.35, 0.95, hash21(cell + 4.1));
+            ht *= mix(1.0, 0.4, smoothstep(14.0, 42.0, depth));
+            float sway = sin(u_time * (1.1 + rnd * 0.8) + rnd * 40.0 + bp.x * 0.2) * 0.22 * ht;
             vec3 A = vec3(bp.x, GROUND_Y, bp.y);
-            vec3 B = vec3(bp.x + sway, GROUND_Y + ht, bp.y + sway * 0.25);
+            vec3 B = vec3(bp.x + sway, GROUND_Y + ht, bp.y + sway * 0.2);
             float zA = worldToView(A).z + u_camDist;
             if (zA >= 3.0) {
               vec2 pa = projectWorld(A);
@@ -324,21 +326,21 @@ void main() {
               vec2 ba = pb - pa;
               float h = clamp(dot(spv, ba) / max(dot(ba, ba), 1e-5), 0.0, 1.0);
               float stem = length(spv - ba * h);
-              float w = mix(0.0048, 0.0012, smoothstep(10.0, 50.0, zA));
-              w *= mix(1.4, 0.35, h); // sharp taper — a blade, not a post
-              float b = 1.0 - smoothstep(w, w + 0.0032, stem);
-              float nearCell = 1.0 - smoothstep(cellSize * 1.4, cellSize * 2.4, length(xz - bp));
-              b *= nearCell;
+              float w = mix(0.0022, 0.0007, smoothstep(10.0, 45.0, zA));
+              w *= mix(1.2, 0.25, h);
+              float b = 1.0 - smoothstep(w, w + 0.0018, stem);
+              float nearCell = 1.0 - smoothstep(cellSize * 1.3, cellSize * 2.2, length(xz - bp));
+              b *= nearCell * nearFade;
               if (b > bladeAmt) {
                 bladeAmt = b;
-                bladeCol = mix(vec3(0.08, 0.28, 0.08), vec3(0.26, 0.48, 0.14), hash21(cell + 5.5));
-                bladeCol = mix(bladeCol, vec3(0.62, 0.56, 0.24), hash21(cell + 6.2) * 0.45 * h);
+                bladeCol = mix(vec3(0.08, 0.28, 0.08), vec3(0.24, 0.44, 0.13), hash21(cell + 5.5));
+                bladeCol = mix(bladeCol, vec3(0.55, 0.50, 0.22), hash21(cell + 6.2) * 0.4 * h);
               }
             }
           }
         }
       }
-      col = mix(col, bladeCol, clamp(bladeAmt, 0.0, 1.0));
+      col = mix(col, bladeCol, clamp(bladeAmt, 0.0, 1.0) * 0.9);
     }
   } else if (a < 0.0) {
     // under the painted horizon but ray missed the plane — soft falloff
@@ -1124,8 +1126,8 @@ export default function Murmuration() {
     let timeScale = 1;
     let timeScaleTarget = 1;
     // look slightly into the meadow so the ground plane and grass blades read
-    let pitch = -0.14;
-    let pitchTarget = -0.14;
+    let pitch = -0.10;
+    let pitchTarget = -0.10;
     let yawVel = 0;
     let lastCardinal = Math.round(yaw / (Math.PI / 2));
     let roll = 0;
