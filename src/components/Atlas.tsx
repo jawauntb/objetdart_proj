@@ -1246,17 +1246,19 @@ export default function Atlas() {
       clientGenerationId,
       generationIdRef.current,
     );
-    // A fresh concept draws from nothing — never inherit the sheet on screen,
-    // or the new prompt returns the same coastline.
-    const currentImage = mode === "generate" ? null : (sourceImage ?? activeImageRef.current);
+    // Fresh concepts and free-zoom both draw native sheets. Zoom used to crop
+    // and edit the on-screen bitmap; once Flux left a soft preview, every
+    // deeper zoom upsampled that mush and the blur never cleared.
+    const currentImage = (mode === "generate" || mode === "zoom")
+      ? null
+      : (sourceImage ?? activeImageRef.current);
     const depth = generationDepthRef.current;
     const resolvedClip = clip
-      ?? (mode === "zoom" && focus ? clipRectForFocus(focus) : undefined)
       ?? (mode === "shift" && direction ? clipRectForShiftDirection(direction) : undefined);
     const usesClippedSource = Boolean(
       currentImage
       && resolvedClip
-      && (mode === "zoom" || mode === "shift"),
+      && mode === "shift",
     );
     setBusy(true);
     setBusyFocus(focus ? {
@@ -2387,6 +2389,9 @@ export default function Atlas() {
           object-fit: cover;
           pointer-events: none;
           user-select: none;
+          /* Prefer hard pixels while the camera is CSS-scaled awaiting a
+             native redraw — soft bilinear stretch made mid-zoom look mushy. */
+          image-rendering: crisp-edges;
           filter: saturate(.96) contrast(1.07) brightness(.82);
           /* Very slow lung-scale set per-frame by the RAF loop via the
              --atlas-breath custom property on the stage. Composes on top
