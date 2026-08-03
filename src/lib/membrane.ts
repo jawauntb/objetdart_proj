@@ -248,6 +248,56 @@ export function hasFullSet(list: Organelle[]): boolean {
   return missingKinds(list).length === 0;
 }
 
+/** How much of the cell's organ set is present; duplicates never fake a body. */
+export function membraneCompleteness(list: Pick<Organelle, "kind">[]): number {
+  const have = new Set<MembraneKind>();
+  for (const o of list) {
+    if (MEMBRANE_KINDS.includes(o.kind)) have.add(o.kind);
+  }
+  return have.size / MEMBRANE_KINDS.length;
+}
+
+export const CELL_GHOST_RADIUS = 0.44;
+export const CELL_GHOST_GATHER_BAND = 0.16;
+
+export type CellWellPull = {
+  /** unit vector in normalized room coordinates, pointing into the well */
+  x: number;
+  y: number;
+  /** 0..1, scaled by how complete the membrane ghost already is */
+  strength: number;
+};
+
+/**
+ * The forming cell is a well: an organelle near the center, or brushing the
+ * ghost membrane, feels a soft centripetal draw. Coordinates are normalized;
+ * aspect scales distance so the circular ring stays circular on wide screens.
+ */
+export function cellWellPull(
+  nx: number,
+  ny: number,
+  completeness = 1,
+  aspectX = 1,
+  aspectY = 1,
+): CellWellPull {
+  const vx = 0.5 - nx;
+  const vy = 0.5 - ny;
+  const rawDistance = Math.hypot(vx, vy);
+  if (rawDistance < 1e-6) return { x: 0, y: 0, strength: 0 };
+
+  const scaledDistance = Math.hypot((nx - 0.5) * aspectX, (ny - 0.5) * aspectY);
+  const insideWell = Math.max(0, 1 - scaledDistance / CELL_GHOST_RADIUS);
+  const nearMembrane = Math.max(0, 1 - Math.abs(scaledDistance - CELL_GHOST_RADIUS) / CELL_GHOST_GATHER_BAND);
+  const field = Math.max(insideWell * 0.7, nearMembrane);
+  const ready = Math.max(0, Math.min(1, completeness));
+
+  return {
+    x: vx / rawDistance,
+    y: vy / rawDistance,
+    strength: Math.max(0, Math.min(1, field * (0.25 + ready * 0.75))),
+  };
+}
+
 // ——— determinism ————————————————————————————————————————————
 
 const KIND_SHAPE: Record<MembraneKind, { folds: [number, number]; amp: [number, number]; radius: [number, number] }> = {
