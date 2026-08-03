@@ -9,6 +9,7 @@ export type SiteIconKey =
   | "beam"
   | "beyond"
   | "cells"
+  | "organics"
   | "charts"
   | "molecules"
   | "dither"
@@ -174,6 +175,19 @@ export const SITE_ICON_VISUALS = {
     accent: "#f2c56b",
     accent2: "#9c3d33",
     ink: "#ffedc9",
+  },
+  organics: {
+    title: "Organics",
+    description: "what carbon does when it has time",
+    path: "/organics",
+    shortName: "organics",
+    kind: "growth",
+    bg: "#0c0a09",
+    bg2: "#2a201a",
+    glow: "#e7ac52",
+    accent: "#ded6c4",
+    accent2: "#da846c",
+    ink: "#f4ecdc",
   },
   molecules: {
     title: "Molecules",
