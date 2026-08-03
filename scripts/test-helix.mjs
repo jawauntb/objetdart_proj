@@ -160,6 +160,23 @@ for (const seq of strands.slice(0, 6)) {
 }
 assert.deepEqual(H.mutate(strands[0], -1, 1), strands[0], "an index off the strand does nothing");
 assert.deepEqual(H.mutate(strands[0], 9999, 1), strands[0], "and neither does one past its end");
+
+// —— a touch rewrite steps the alphabet, never skips or freezes ————
+{
+  let seq = /** @type {import('../src/lib/helix.ts').Base[]} */ (["A", "T", "G", "C"]);
+  assert.deepEqual(H.cycleBase(seq, 0), ["T", "T", "G", "C"], "A steps to T");
+  assert.deepEqual(H.cycleBase(["T", "T", "G", "C"], 0), ["G", "T", "G", "C"], "T steps to G");
+  assert.deepEqual(H.cycleBase(["G", "T", "G", "C"], 0), ["C", "T", "G", "C"], "G steps to C");
+  assert.deepEqual(H.cycleBase(["C", "T", "G", "C"], 0), ["A", "T", "G", "C"], "C wraps to A");
+  for (let k = 0; k < 4; k++) seq = H.cycleBase(seq, 2);
+  assert.deepEqual(seq, ["A", "T", "G", "C"], "four presses on one rung restore it");
+  assert.notDeepEqual(
+    H.melodyOf(H.cycleBase(["A", "A", "A", "A", "A", "A", "A", "A"], 3)),
+    H.melodyOf(["A", "A", "A", "A", "A", "A", "A", "A"]),
+    "a cycled base is a changed melody",
+  );
+  assert.deepEqual(H.cycleBase(seq, -1), seq, "an off-strand cycle is a no-op");
+}
 // The world does not drift on its own: at rest the rate is exactly zero.
 assert.equal(H.mutationRate(0), 0, "a cold world rewrites nothing");
 let lastRate = -1;

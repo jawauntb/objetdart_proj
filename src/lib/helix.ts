@@ -218,6 +218,20 @@ export function mutate(seq: Base[], index: number, seed: number): Base[] {
 }
 
 /**
+ * A touch rewrite: the hand steps the base along A→T→G→C→A. Deterministic,
+ * no seed — the same rung pressed twice always lands on the same next letter,
+ * so the nucleotide itself is what you feel changing.
+ */
+export function cycleBase(seq: Base[], index: number): Base[] {
+  if (index < 0 || index >= seq.length) return seq;
+  const at = BASES.indexOf(seq[index]);
+  if (at < 0) return seq;
+  const out = [...seq];
+  out[index] = BASES[(at + 1) % BASES.length];
+  return out;
+}
+
+/**
  * The mutation temperature as a rate: how many sites per second the world
  * rewrites. Zero at rest — nothing drifts unless the law is turned up.
  */
