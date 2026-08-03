@@ -22,6 +22,7 @@ export type SiteIconKey =
   | "fire"
   | "flowers"
   | "growth"
+  | "guide"
   | "jewel"
   | "kept"
   | "light"
@@ -287,6 +288,19 @@ export const SITE_ICON_VISUALS = {
     glow: "#c28f4b",
     accent: "#2f2a21",
     accent2: "#c38f49",
+    ink: "#201b14",
+  },
+  guide: {
+    title: "Guide",
+    description: "how to hold it",
+    path: "/guide",
+    shortName: "guide",
+    kind: "colophon",
+    bg: "#f1eadc",
+    bg2: "#20303c",
+    glow: "#c28f4b",
+    accent: "#2f2a21",
+    accent2: "#3f6b7d",
     ink: "#201b14",
   },
   compare: {

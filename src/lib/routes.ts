@@ -59,6 +59,7 @@ export const SITE_ROUTES: SiteRouteEntry[] = [
   { key: "archive",     icon: "archive",  href: "/archive",                          desc: "the drawers",                  cluster: "field",     homePriority: 7 },
   { key: "kept",        icon: "kept",     href: "/kept",                              desc: "a private trail",              cluster: "field",     homePriority: 6 },
   { key: "colophon",    icon: "colophon", href: "/colophon",                         desc: "what kept this",               cluster: "field" },
+  { key: "guide",       icon: "colophon", href: "/guide",                            desc: "how to hold it",               cluster: "field" },
 ];
 
 export const PRIMARY_ROUTE_KEYS = ["atlas", "tide", "waves", "watch"] as const;
@@ -108,7 +109,7 @@ export const NAVIGATION_ROUTES = [
   ...SITE_ROUTES.filter((route) => !NAVIGATION_ROUTE_KEY_SET.has(route.key)),
 ];
 
-const GALLERY_OMITTED_ROUTE_KEYS = new Set(["archive", "kept", "colophon"]);
+const GALLERY_OMITTED_ROUTE_KEYS = new Set(["archive", "kept", "colophon", "guide"]);
 
 export const GALLERY_ROUTES = NAVIGATION_ROUTES.filter(
   (route) => !GALLERY_OMITTED_ROUTE_KEYS.has(route.key),

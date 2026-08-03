@@ -65,6 +65,12 @@ existing set, `siteMetadata`), `src/lib/routes.ts`, `src/lib/site-icon-config.ts
 `SCALE_BANDS` (the band-route-page guard in `test-scale.mjs` will fail until
 the page really exists; that's the point).
 
+The room also enters the field guide in the same PR: add its entry (essence,
+exhaustive moves, discoveries, what it keeps) to `src/data/guide.ts` and shoot
+its screenshot with `npm run shoot:guide -- --only=<key>` against a running
+build. `test-guide.mjs` fails until both exist — see AGENTS.md, "the
+documentation law".
+
 ## 4. Test what can lie
 
 Extract the room's laws into a pure, import-free `src/lib/<something>.ts` and
