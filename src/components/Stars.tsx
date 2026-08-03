@@ -1030,18 +1030,27 @@ export default function Stars() {
     try { getFieldAudio().chime(); } catch { /* noop */ }
   }, [addCosmicEvent, heatSky, markSky, persistCosmicMemory, screenToSky]);
 
-  // A black hole merger sings a descending "chirp" — a fast falling glide
-  // of pitched sines, the audible signature of two horizons becoming one.
-  const chirpTone = useCallback(() => {
+  // A black hole merger sings its true "chirp" — a rising, quickening
+  // glide as the orbit tightens, the audible signature of two horizons
+  // becoming one. Heavier pairs sing deeper and slower, and the sweep
+  // cuts off into the low ringdown of the single horizon left behind.
+  const chirpTone = useCallback((totalMass = 2) => {
     try {
       const audio = getFieldAudio();
-      const steps = 8;
+      const depth = 0.7 + totalMass * 0.28;
+      const steps = 9;
+      let at = 0;
       for (let i = 0; i < steps; i++) {
-        const f = 340 * Math.pow(0.62, (i / (steps - 1)) * 2.2);
+        const u = i / (steps - 1);
+        const f = (110 / depth) * Math.pow(3.4, u * u);
         window.setTimeout(() => {
-          try { audio.playTone(f, 0.2); } catch { /* noop */ }
-        }, i * 62);
+          try { audio.playTone(f, 0.14); } catch { /* noop */ }
+        }, at);
+        at += (95 - 62 * u) * depth;
       }
+      window.setTimeout(() => {
+        try { audio.playTone(66 / depth, 0.6); } catch { /* noop */ }
+      }, at + 160 * depth);
     } catch {
       /* noop */
     }
@@ -3799,12 +3808,19 @@ export default function Stars() {
           if (a && b) {
             const midNx = (m.ax + m.bx) / 2;
             const midNy = (m.ay + m.by) / 2;
+            // the ledger of a merger: the masses add, minus the ~5% the
+            // gravitational wave carries away — and that lost mass is
+            // exactly what powers the ripple. The orbit's own angular
+            // momentum spins the remnant up no matter how the two were
+            // turning; an equal pair lands near 0.69 of maximal.
+            const total = a.mass + b.mass;
+            const radiated = total * 0.05;
             const merged: UserBlackHole = {
               id: makeId("bh"),
               nx: midNx,
               ny: midNy,
-              mass: Math.min(3.6, a.mass + b.mass * 0.85),
-              spin: ((a.spin + b.spin) / 2) || a.spin,
+              mass: Math.min(3.6, total - radiated),
+              spin: m.spinSign * Math.min(1.25, 0.69 + Math.abs(a.spin + b.spin) * 0.18),
               hue: (a.hue + b.hue) / 2,
               createdAt: Date.now(),
             };
@@ -3815,13 +3831,13 @@ export default function Stars() {
             persistCosmicMemory(bornStarsRef.current, next);
             gravWavesRef.current = [
               ...gravWavesRef.current.slice(-4),
-              { id: ++skyPulseId.current, nx: midNx, ny: midNy, t0Ms: nowMs, life: reduce ? 2.2 : 3.0, strength: merged.mass },
+              { id: ++skyPulseId.current, nx: midNx, ny: midNy, t0Ms: nowMs, life: reduce ? 2.2 : 3.0, strength: Math.min(1.2, 0.55 + radiated * 3.5) },
             ];
             const ww = window.innerWidth;
             const wh = window.innerHeight;
             const scr = skyToScreen(cameraRef.current, midNx, midNy, ww, wh, 0);
             addCosmicEvent({ kind: "merger", x: scr.x, y: scr.y, life: 2.4, seed: Math.floor(nowMs) >>> 0, rgb: [210, 180, 255], power: merged.mass });
-            chirpTone();
+            chirpTone(total);
             haptics.storm();
             markSky("black holes merged", "merger", 0.98, "sigil", "merger");
             holes = next;
@@ -3857,7 +3873,11 @@ export default function Stars() {
         };
         haptics.roll();
         markSky(
-          holes.length >= 3 ? "triple system collapsing" : "black holes falling together",
+          holes.length >= 4
+            ? "a hierarchy falling together"
+            : holes.length >= 3
+              ? "triple system collapsing"
+              : "black holes falling together",
           "merger",
           0.6,
           "object",
