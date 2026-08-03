@@ -10,6 +10,7 @@ import {
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures, THRESHOLDS } from "@/lib/gesture";
+import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
 import {
@@ -28,6 +29,7 @@ import {
   createFrameGovernor,
   createIdleWriter,
   isEmbeddedFrame,
+  detailForTier,
 } from "@/lib/room-runtime";
 
 /**
@@ -40,6 +42,15 @@ import {
  *   ripple      — 2D open tank, circular wavefronts
  *   string      — 1D plucked line reflecting at both ends
  *   refraction  — 2D tank with a speed gradient, so wavefronts bend
+ *
+ * The simulation (the state vector: the height field + its previous step)
+ * stays a deterministic JS integrator, exactly as before. What changed is
+ * how it is *seen*: ripple and refraction now upload that field to a
+ * fragment shader as a small packed texture and let the GPU do the
+ * per-pixel colour work a CPU loop + putImageData used to do — real
+ * gradient-lit water, sun glint on the crests, foam on the steep water,
+ * depth in the troughs. If WebGL is unavailable or the context is lost the
+ * original CPU raster is still here, guarded, not deleted.
  */
 
 type WaveMode = "ripple" | "string" | "refraction";
@@ -61,11 +72,14 @@ const MODES: ModeCfg[] = [
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 const mix = (a: number, b: number, t: number) => a + (b - a) * t;
 
+type RGB = readonly [number, number, number];
+
 type Palette = {
-  mid: [number, number, number];
-  crest: [number, number, number];
-  trough: [number, number, number];
-  caustic: [number, number, number];
+  mid: RGB;
+  crest: RGB;
+  trough: RGB;
+  caustic: RGB;
+  foam: RGB;
 };
 
 const PALETTES: Record<"ripple" | "refraction", Palette> = {
@@ -74,14 +88,269 @@ const PALETTES: Record<"ripple" | "refraction", Palette> = {
     crest: [138, 228, 238],
     trough: [22, 30, 88],
     caustic: [214, 248, 255],
+    foam: [236, 250, 255],
   },
   refraction: {
     mid: [18, 16, 40],
     crest: [190, 156, 255],
     trough: [58, 26, 96],
     caustic: [238, 228, 255],
+    foam: [244, 236, 255],
   },
 };
+
+// Flip's "night" — everything the palette blends toward under uNight.
+const NIGHT_TINT: Palette = {
+  mid: [3, 8, 18],
+  crest: [96, 140, 190],
+  trough: [4, 8, 26],
+  caustic: [150, 190, 230],
+  foam: [204, 218, 236],
+};
+
+const mixColor = (a: RGB, b: RGB, t: number): RGB => [
+  mix(a[0], b[0], t),
+  mix(a[1], b[1], t),
+  mix(a[2], b[2], t),
+];
+
+// ── the field shader ────────────────────────────────────────────────
+// The height field is packed into a two-channel 8-bit texture (16-bit
+// fixed point, ±FIELD_RANGE) so it works identically on WebGL1
+// (LUMINANCE_ALPHA, no extensions) and WebGL2 (RG8) without needing
+// OES_texture_float. The colouring body is written once and shared
+// between both shader variants via textual macros (TEXTURE/FIELD_SWIZZLE/
+// FRAG_COLOR) so the two never drift apart.
+const FIELD_RANGE = 1.5;
+
+const FIELD_CORE = `
+uniform sampler2D uField;
+uniform vec2 uGridSize;
+uniform vec3 uMid;
+uniform vec3 uCrest;
+uniform vec3 uTrough;
+uniform vec3 uCaustic;
+uniform vec3 uFoam;
+uniform float uGlow;
+uniform float uLens;
+uniform float uNight;
+uniform vec2 uSunDir;
+uniform float uTime;
+
+float hash21(vec2 p) {
+  p = fract(p * vec2(123.34, 456.21));
+  p += dot(p, p + 45.32);
+  return fract(p.x * p.y);
+}
+
+float decodeH(vec2 enc) {
+  float v = enc.x * 255.0 * 256.0 + enc.y * 255.0;
+  return v / 65535.0 * (2.0 * ${FIELD_RANGE.toFixed(2)}) - ${FIELD_RANGE.toFixed(2)};
+}
+
+void main() {
+  vec2 uv = vec2(vUv.x, 1.0 - vUv.y);
+  vec2 texel = 1.0 / uGridSize;
+
+  float hC = decodeH(TEXTURE(uField, uv).FIELD_SWIZZLE);
+  float hL = decodeH(TEXTURE(uField, uv - vec2(texel.x, 0.0)).FIELD_SWIZZLE);
+  float hR = decodeH(TEXTURE(uField, uv + vec2(texel.x, 0.0)).FIELD_SWIZZLE);
+  float hT = decodeH(TEXTURE(uField, uv - vec2(0.0, texel.y)).FIELD_SWIZZLE);
+  float hB = decodeH(TEXTURE(uField, uv + vec2(0.0, texel.y)).FIELD_SWIZZLE);
+  float sx = hR - hL;
+  float sy = hB - hT;
+  float slope = sqrt(sx * sx + sy * sy);
+
+  float t = clamp(hC * 2.3, -1.0, 1.0);
+  vec3 color = t >= 0.0 ? mix(uMid, uCrest, t) : mix(uMid, uTrough, -t);
+
+  // depth in the troughs — the deeper below still water, the more the
+  // light is swallowed
+  float depth = clamp(-t, 0.0, 1.0);
+  color *= mix(1.0, 0.60, depth * depth);
+  color = mix(color, vec3(dot(color, vec3(0.299, 0.587, 0.114))), depth * 0.16);
+
+  // caustics riding the slope, same shape the CPU raster used
+  float caus = clamp(slope * 3.6, 0.0, 1.0);
+  caus *= caus;
+  float causGlow = caus * (0.55 + uGlow * 0.5);
+  color += (uCaustic - color) * causGlow * 0.9;
+
+  // a surface normal from the gradient — sun/sky glint riding the crests
+  vec3 normal = normalize(vec3(-sx * 6.0, -sy * 6.0, 1.0));
+  vec3 lightDir = normalize(vec3(uSunDir, 0.72));
+  vec3 halfV = normalize(lightDir + vec3(0.0, 0.0, 1.0));
+  float ndoth = max(dot(normal, halfV), 0.0);
+  float glint = pow(ndoth, mix(70.0, 20.0, uGlow)) * mix(1.0, 0.4, uNight);
+  vec3 glintColor = mix(vec3(1.0, 0.96, 0.82), vec3(0.72, 0.80, 1.0), uNight);
+  color += glintColor * glint * (0.55 + t * 0.4);
+
+  // a broad sky sheen so the whole surface reads lit, not just the glints
+  float sheen = clamp(dot(normal, vec3(0.0, 0.0, 1.0)), 0.0, 1.0);
+  color += mix(vec3(0.5, 0.68, 0.82), vec3(0.24, 0.30, 0.48), uNight) * (1.0 - sheen) * 0.05;
+
+  // foam where the gradient is steep, textured so it never reads as a
+  // flat band
+  float foamMask = smoothstep(0.34, 0.80, slope);
+  float foamNoise = hash21(floor(uv * uGridSize * 0.6) + floor(uTime * 6.0));
+  foamMask *= 0.5 + 0.5 * foamNoise;
+  color = mix(color, uFoam, clamp(foamMask, 0.0, 1.0) * 0.85);
+
+  // the lens: rotate the level of description — surface / equation / felt
+  if (uLens > 0.001) {
+    vec3 paper = vec3(0.90, 0.88, 0.80);
+    vec3 ink = vec3(0.12, 0.14, 0.20);
+    float iso = abs(fract(hC * 5.0 + 0.5) - 0.5) * 2.0;
+    float line = 1.0 - smoothstep(0.0, 0.08 + slope * 0.4, iso);
+    float gx = 1.0 - smoothstep(0.0, 0.35, abs(fract(uv.x * uGridSize.x / 8.0) - 0.5) * 2.0 - 0.96);
+    float gy = 1.0 - smoothstep(0.0, 0.35, abs(fract(uv.y * uGridSize.y / 8.0) - 0.5) * 2.0 - 0.96);
+    vec3 eqColor = mix(paper, ink, clamp(line * 0.85 + max(gx, gy) * 0.12, 0.0, 1.0));
+    eqColor = mix(eqColor, ink, clamp(abs(t) * 0.25, 0.0, 1.0));
+    color = mix(color, eqColor, clamp(uLens, 0.0, 1.0));
+
+    float energy = clamp(slope * 3.2 + abs(t) * 0.6, 0.0, 1.0);
+    vec3 feltColor = mix(vec3(0.03, 0.035, 0.05), vec3(0.95, 0.55, 0.28), energy);
+    color = mix(color, feltColor, clamp(uLens - 1.0, 0.0, 1.0));
+  }
+
+  FRAG_COLOR = vec4(clamp(color, 0.0, 1.6), 1.0);
+}
+`;
+
+const FRAG_GL1 = `
+precision highp float;
+#define TEXTURE texture2D
+#define FIELD_SWIZZLE ra
+#define FRAG_COLOR gl_FragColor
+varying vec2 vUv;
+${FIELD_CORE}`;
+
+const FRAG_GL2 = `#version 300 es
+precision highp float;
+#define TEXTURE texture
+#define FIELD_SWIZZLE rg
+#define FRAG_COLOR oColor
+in vec2 vUv;
+out vec4 oColor;
+${FIELD_CORE}`;
+
+const VERT_GL1 = `
+attribute vec2 a_pos;
+varying vec2 vUv;
+void main() {
+  vUv = a_pos * 0.5 + 0.5;
+  gl_Position = vec4(a_pos, 0.0, 1.0);
+}
+`;
+
+const VERT_GL2 = `#version 300 es
+in vec2 a_pos;
+out vec2 vUv;
+void main() {
+  vUv = a_pos * 0.5 + 0.5;
+  gl_Position = vec4(a_pos, 0.0, 1.0);
+}
+`;
+
+type GLCtx = WebGL2RenderingContext | WebGLRenderingContext;
+
+type FieldProgram = {
+  program: WebGLProgram;
+  buffer: WebGLBuffer;
+  texture: WebGLTexture;
+  loc: {
+    uField: WebGLUniformLocation | null;
+    uGridSize: WebGLUniformLocation | null;
+    uMid: WebGLUniformLocation | null;
+    uCrest: WebGLUniformLocation | null;
+    uTrough: WebGLUniformLocation | null;
+    uCaustic: WebGLUniformLocation | null;
+    uFoam: WebGLUniformLocation | null;
+    uGlow: WebGLUniformLocation | null;
+    uLens: WebGLUniformLocation | null;
+    uNight: WebGLUniformLocation | null;
+    uSunDir: WebGLUniformLocation | null;
+    uTime: WebGLUniformLocation | null;
+  };
+};
+
+function compileShader(gl: GLCtx, type: number, src: string): WebGLShader | null {
+  const s = gl.createShader(type);
+  if (!s) return null;
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+    console.warn("waves field shader failed", gl.getShaderInfoLog(s));
+    gl.deleteShader(s);
+    return null;
+  }
+  return s;
+}
+
+function buildFieldProgram(gl: GLCtx, isGL2: boolean): FieldProgram | null {
+  const vs = compileShader(gl, gl.VERTEX_SHADER, isGL2 ? VERT_GL2 : VERT_GL1);
+  const fs = compileShader(gl, gl.FRAGMENT_SHADER, isGL2 ? FRAG_GL2 : FRAG_GL1);
+  if (!vs || !fs) return null;
+  const program = gl.createProgram();
+  if (!program) return null;
+  gl.attachShader(program, vs);
+  gl.attachShader(program, fs);
+  gl.linkProgram(program);
+  gl.deleteShader(vs);
+  gl.deleteShader(fs);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    console.warn("waves field program failed", gl.getProgramInfoLog(program));
+    gl.deleteProgram(program);
+    return null;
+  }
+  const buffer = gl.createBuffer();
+  const texture = gl.createTexture();
+  if (!buffer || !texture) return null;
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+  const aPos = gl.getAttribLocation(program, "a_pos");
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.useProgram(program);
+  gl.enableVertexAttribArray(aPos);
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+  return {
+    program,
+    buffer,
+    texture,
+    loc: {
+      uField: gl.getUniformLocation(program, "uField"),
+      uGridSize: gl.getUniformLocation(program, "uGridSize"),
+      uMid: gl.getUniformLocation(program, "uMid"),
+      uCrest: gl.getUniformLocation(program, "uCrest"),
+      uTrough: gl.getUniformLocation(program, "uTrough"),
+      uCaustic: gl.getUniformLocation(program, "uCaustic"),
+      uFoam: gl.getUniformLocation(program, "uFoam"),
+      uGlow: gl.getUniformLocation(program, "uGlow"),
+      uLens: gl.getUniformLocation(program, "uLens"),
+      uNight: gl.getUniformLocation(program, "uNight"),
+      uSunDir: gl.getUniformLocation(program, "uSunDir"),
+      uTime: gl.getUniformLocation(program, "uTime"),
+    },
+  };
+}
+
+/** Pack the height field into a 16-bit fixed-point RG/LUMINANCE_ALPHA texture. */
+function encodeField(a: Float32Array, out: Uint8Array): void {
+  const inv = 65535 / (FIELD_RANGE * 2);
+  for (let i = 0; i < a.length; i += 1) {
+    let v = a[i];
+    if (v < -FIELD_RANGE) v = -FIELD_RANGE;
+    else if (v > FIELD_RANGE) v = FIELD_RANGE;
+    const enc = Math.round((v + FIELD_RANGE) * inv);
+    out[i * 2] = (enc >> 8) & 255;
+    out[i * 2 + 1] = enc & 255;
+  }
+}
 
 // Simulation state, allocated lazily on resize and never re-created per frame.
 type Sim = {
@@ -90,19 +359,26 @@ type Sim = {
   a: Float32Array; // current field u(t)
   b: Float32Array; // previous field u(t-1) / scratch for next
   speedFld: Float32Array; // per-cell speed multiplier (refraction)
+  fieldEnc: Uint8Array; // packed height field, uploaded to the GPU each frame
   // 1D string
   sN: number;
   sa: Float32Array;
   sb: Float32Array;
-  // offscreen grid raster
+  // offscreen grid raster — CPU fallback only, guarded not deleted
   grid: HTMLCanvasElement | null;
   gctx: CanvasRenderingContext2D | null;
   image: ImageData | null;
 };
 
+// A hand-raised wave train — the room's countable, create/deletable object
+// (SPEC §3). Grows continuously while its dwell-hold is held, then radiates
+// its own train every frame until stilled by a ceremony-hold.
+type WaveSource = { id: number; nx: number; ny: number; strength: number; phase: number };
+
 export default function Waves() {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const glCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const simRef = useRef<Sim | null>(null);
   const pointerRef = useRef({ active: false, id: -1, x: 0.5, y: 0.5, lastTone: 0, moved: 0 });
@@ -125,7 +401,8 @@ export default function Waves() {
   const [running, setRunning] = useState(true);
   const [mode, setMode] = useState<WaveMode>("ripple");
   const [readout, setReadout] = useState("ripple · c 0.34 · still");
-  // whether the pond still keeps anything — gates the quiet clear (§8c)
+  // whether the pond still keeps anything (naturals or a raised source) —
+  // gates the quiet clear (§8c)
   const letGoRef = useRef<() => void>(() => {});
   const [keptHere, setKeptHere] = useState(false);
 
@@ -250,6 +527,7 @@ export default function Waves() {
   useEffect(() => {
     const root = rootRef.current;
     const canvas = canvasRef.current;
+    const glCanvas = glCanvasRef.current;
     if (!root || !canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
@@ -259,9 +537,9 @@ export default function Waves() {
     let raf = 0;
     let last = performance.now();
 
-    const buildSim = (w: number, h: number) => {
+    const buildSim = (w: number, h: number, detail: ReturnType<typeof detailForTier>) => {
       const aspect = w / Math.max(1, h);
-      const target = 190;
+      const target = Math.round(clamp(190 * (0.55 + 0.45 * detail.samples), 118, 210));
       let gw: number;
       let gh: number;
       if (aspect >= 1) {
@@ -272,7 +550,7 @@ export default function Waves() {
         gw = clamp(Math.round(target * aspect), 90, 220);
       }
       const n = gw * gh;
-      const sN = clamp(Math.round(w / 3), 200, 640);
+      const sN = clamp(Math.round((w / 3) * (0.6 + 0.4 * detail.samples)), 160, 640);
       const grid = document.createElement("canvas");
       grid.width = gw;
       grid.height = gh;
@@ -295,6 +573,7 @@ export default function Waves() {
         a: new Float32Array(n),
         b: new Float32Array(n),
         speedFld,
+        fieldEnc: new Uint8Array(n * 2),
         sN,
         sa: new Float32Array(sN),
         sb: new Float32Array(sN),
@@ -311,9 +590,41 @@ export default function Waves() {
     const unvis = onVisibility((h) => { paused = h || galleryPaused; });
     const ungal = onGalleryPause((p) => { galleryPaused = p; paused = document.hidden || p; });
 
+    // ── WebGL field renderer (ripple/refraction) ──────────────────────
+    // WebGL2 first, WebGL1 fallback, and — if neither is available or the
+    // context is later lost — the original CPU raster below still runs,
+    // guarded rather than deleted (SPEC §1).
+    const glOpts: WebGLContextAttributes = { antialias: false, premultipliedAlpha: false };
+    let gl2: WebGL2RenderingContext | null = glCanvas
+      ? (glCanvas.getContext("webgl2", glOpts) as WebGL2RenderingContext | null)
+      : null;
+    let gl1: WebGLRenderingContext | null = null;
+    if (!gl2 && glCanvas) {
+      gl1 = (glCanvas.getContext("webgl", glOpts) ||
+        glCanvas.getContext("experimental-webgl" as "webgl", glOpts)) as WebGLRenderingContext | null;
+    }
+    const gl: GLCtx | null = gl2 ?? gl1;
+    const isGL2 = !!gl2;
+    let fieldProgram: FieldProgram | null = gl ? buildFieldProgram(gl, isGL2) : null;
+    let glLost = false;
+    const glActive = () => !!(gl && fieldProgram && !glLost);
+
+    const onGlLost = (ev: Event) => {
+      ev.preventDefault();
+      glLost = true;
+    };
+    const onGlRestored = () => {
+      glLost = false;
+      if (gl) fieldProgram = buildFieldProgram(gl, isGL2);
+      if (gl && fieldProgram && glCanvas) gl.viewport(0, 0, glCanvas.width, glCanvas.height);
+    };
+    glCanvas?.addEventListener("webglcontextlost", onGlLost, false);
+    glCanvas?.addEventListener("webglcontextrestored", onGlRestored, false);
+
     const resize = () => {
       const rect = root.getBoundingClientRect();
-      const dpr = resolveDpr(governor.tier(), { embedded, maxDpr: 1.5 });
+      const tier = governor.tier();
+      const dpr = resolveDpr(tier, { embedded, reducedMotion: reduceRef.current });
       width = Math.max(320, Math.floor(rect.width));
       height = Math.max(480, Math.floor(rect.height));
       canvas.width = Math.floor(width * dpr);
@@ -321,7 +632,14 @@ export default function Waves() {
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      buildSim(width, height);
+      if (glCanvas) {
+        glCanvas.width = canvas.width;
+        glCanvas.height = canvas.height;
+        glCanvas.style.width = `${width}px`;
+        glCanvas.style.height = `${height}px`;
+        if (gl && fieldProgram) gl.viewport(0, 0, glCanvas.width, glCanvas.height);
+      }
+      buildSim(width, height, detailForTier(tier));
     };
 
     resize();
@@ -356,7 +674,9 @@ export default function Waves() {
       sim.sb = sa;
     };
 
-    const renderField = (sim: Sim, m: "ripple" | "refraction", glow: number) => {
+    // CPU fallback raster — the exact original per-pixel loop, only reached
+    // when WebGL2/WebGL1 are both unavailable or the context has been lost.
+    const renderFieldCPU = (sim: Sim, m: "ripple" | "refraction", glow: number) => {
       const { gw, gh, a, image, gctx, grid } = sim;
       if (!image || !gctx || !grid) return;
       const data = image.data;
@@ -488,26 +808,25 @@ export default function Waves() {
     // Persistent pond life (from the shared world). Lily pads, fallen
     // leaves, and rare koi live in the shared pool (src/lib/world.ts) so a
     // leaf placed here can wash into /ocean over time. Rotation is derived
-    // from seed at render time; vertical downstream drift dropped now that
-    // migration between pages is the main long-term travel.
+    // from seed at render time. These now arrive only through the pond's own
+    // weather (a falling leaf, a surfacing koi) — the hand's create/delete
+    // verb belongs to wave-train sources below (SPEC §3).
     type NaturalKind = Extract<WorldKind, "lily" | "leaf" | "koi">;
     const vxForKind = (kind: NaturalKind): number =>
       kind === "leaf" ? 0.024
       : kind === "koi" ? 0.014
       : 0.004;
     let naturals: WorldNatural[] = getNaturalsInZone("waves");
-    const syncKept = () => setKeptHere(naturals.length > 0);
-    syncKept();
     const unsubscribeWorld = subscribeNaturals(() => {
       naturals = getNaturalsInZone("waves");
-      syncKept();
+      refreshKept();
     });
     const addNatural = (kind: NaturalKind, nx?: number, ny?: number) => {
       const finalNx = nx != null ? clamp(nx, 0.04, 0.96) : Math.random();
       const finalNy = ny != null ? clamp(ny, 0.10, 0.94) : 0.2 + Math.random() * 0.7;
       const created = worldAddNatural(kind, "waves", finalNx, finalNy, vxForKind(kind));
       naturals = getNaturalsInZone("waves");
-      syncKept();
+      refreshKept();
       return created;
     };
     const persistNaturals = () => {
@@ -515,26 +834,80 @@ export default function Waves() {
     };
     const idlePersist = createIdleWriter(() => { persistNaturals(); }, 500);
 
-    // the pond's parting (LetGo, §8c): this zone's keepsakes only — pads,
-    // leaves and koi ride the downstream current out over a couple of
-    // breaths, fading as they go; the world is written empty for this zone
-    // at once, so nothing floats back on reload.
+    // ── wave-train sources — the room's create/delete object (SPEC §3) ──
+    // A dwell-hold on open water raises a new source: it gathers under the
+    // finger immediately (a growing glow) and radiates its own concentric
+    // train every frame, deepening the longer it's held. A ceremony-hold on
+    // an existing source stills it — the touch-reachable delete. Persisted
+    // to the room's own key, independent of the shared coast/pond naturals.
+    const SOURCES_KEY = "objetdart:waves:sources:v1";
+    const MAX_SOURCES = 6;
+    let sourceIdCounter = 0;
+    let sources: WaveSource[] = [];
+    try {
+      const raw = window.localStorage.getItem(SOURCES_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as unknown;
+        if (Array.isArray(parsed)) {
+          for (const item of parsed) {
+            if (
+              item && typeof item === "object" &&
+              typeof (item as { nx?: unknown }).nx === "number" &&
+              typeof (item as { ny?: unknown }).ny === "number" &&
+              typeof (item as { strength?: unknown }).strength === "number"
+            ) {
+              sourceIdCounter += 1;
+              const it = item as { nx: number; ny: number; strength: number };
+              sources.push({
+                id: sourceIdCounter,
+                nx: clamp(it.nx, 0, 1),
+                ny: clamp(it.ny, 0, 1),
+                strength: clamp(it.strength, 0.1, 1),
+                phase: Math.random(),
+              });
+            }
+          }
+          sources = sources.slice(-MAX_SOURCES);
+        }
+      }
+    } catch { /* a fresh tank */ }
+    const persistSourcesNow = () => {
+      try {
+        window.localStorage.setItem(
+          SOURCES_KEY,
+          JSON.stringify(sources.map((s) => ({ nx: s.nx, ny: s.ny, strength: s.strength }))),
+        );
+      } catch { /* quota; skip */ }
+    };
+    const idleSourcePersist = createIdleWriter(persistSourcesNow, 500);
+
+    const refreshKept = () => setKeptHere(naturals.length > 0 || sources.length > 0);
+    refreshKept();
+
+    // the pond's parting (LetGo, §8c): this zone's naturals AND its raised
+    // sources ride the downstream current out over a couple of breaths,
+    // fading as they go; storage for both is written empty at once so
+    // nothing floats back on reload.
     type Departing = WorldNatural & { bx: number };
     let departing: Departing[] = [];
+    let departingSources: Array<{ nx: number; ny: number; strength: number }> = [];
     let letGoAt = 0;
     let letGoDur = 1800;
     const letGo = () => {
-      if (naturals.length === 0) return;
+      if (naturals.length === 0 && sources.length === 0) return;
       departing = naturals.map((n) => ({ ...n, bx: n.nx }));
+      departingSources = sources.map((s) => ({ nx: s.nx, ny: s.ny, strength: s.strength }));
       naturals = [];
+      sources = [];
       letGoAt = performance.now();
       letGoDur = reduceRef.current ? 420 : 1800;
       worldCommitZone("waves", []);
+      persistSourcesNow();
       try { getFieldAudio().thud(); } catch { /* noop */ }
       try { getFieldAudio().playNote(36, 520); } catch { /* noop */ }
       try { haptics.roll(); } catch { /* noop */ }
       useField.getState().recordTape("object", 0.3, "waves/letgo");
-      setKeptHere(false);
+      refreshKept();
     };
     letGoRef.current = letGo;
 
@@ -661,13 +1034,40 @@ export default function Waves() {
     };
     weatherTimer = setTimeout(fireWeather, 3500 + Math.random() * 4000);
 
+    // ── the law layer: lens, season, wind, night, gravity ────────────
+    // Two-finger twist rotates the lens (surface → equation → felt swell,
+    // clamped, persists until turned again). Three-finger twist advances the
+    // season, which turns the sun. Three-finger drag pushes a real wind
+    // vector that keeps driving the spectrum after release, decaying like
+    // real air; vessel tilt adds a steady gravity-lean to the same vector.
+    let lensPos = 0; // 0..2 continuous — surface / equation / felt
+    let seasonPos = 0; // 0..1 wrapping — the sun's slow walk
+    let windDirX = 1;
+    let windDirY = 0;
+    let windStrength = 0;
+    let windStrengthTarget = 0;
+    let tiltTargetX = 0;
+    let tiltTargetY = 0;
+    let tiltBiasX = 0;
+    let tiltBiasY = 0;
+    let nightTarget = 0;
+    let nightVal = 0;
+    let lastWindEmitAt = 0;
+    let lastWindToneAt2 = 0;
+    let lastSeasonToneAt = 0;
+
     // ── gestures (the shared grammar — src/lib/gesture) ─────────────
-    // One finger touches the water: taps and strokes disturb the field.
-    // Two-finger pinch is left to the scale manifold on document.body
-    // (wave speed keeps its slider). Three fingers touch the law: a drag
-    // is wind, a hold dilates time. Dwell plants; the ceremony hold is a
-    // koi taking residence. All thresholds live in gesture/core.
-    const holdPlant = { lily: false, leaf: false, koi: false };
+    // One finger touches the water: taps and strokes disturb the field, a
+    // dwell raises a wave-train source, the ceremony stills one. Two fingers
+    // touch the map: twist rotates the lens (pinch and the two-finger tap's
+    // step-back already belong to ScaleTravel on document.body, per SPEC).
+    // Three fingers touch the law: a tap is tutti, a drag is wind, a hold
+    // dilates time, a twist turns the season.
+    const holdState: { targetSource: WaveSource | null; creatingId: number | null; stillingId: number | null } = {
+      targetSource: null,
+      creatingId: null,
+      stillingId: null,
+    };
     let timeScale = 1;
     let timeScaleTarget = 1;
     let stepAcc = 0;
@@ -682,7 +1082,23 @@ export default function Waves() {
     const detachGestures = attachGestures(canvas, {
       tap: (e) => {
         lastGestureAt = performance.now();
-        if (e.fingers !== 1) return; // the tank absorbs frame/law taps
+        if (e.fingers === 3) {
+          // tutti — one synchronized pulse of everything alive in the tank
+          energyRef.current = 1;
+          if (modeRef.current === "string") {
+            pluck1D(0.5, 0.5, 0.7);
+          } else {
+            drop2D(0.5, 0.18, 0.55);
+            drop2D(0.22, 0.62, 0.42);
+            drop2D(0.78, 0.62, 0.42);
+            for (const s of sources) drop2D(s.nx, s.ny, 0.3 + s.strength * 0.5);
+          }
+          try { getFieldAudio().chime(); } catch { /* noop */ }
+          try { haptics.ripple(0.7); } catch { /* noop */ }
+          useField.getState().recordTape("sigil", 0.8, "waves/tutti");
+          return;
+        }
+        if (e.fingers !== 1) return; // two-finger tap = step back, ScaleTravel's verb
         energyRef.current = Math.min(1, energyRef.current + 0.35);
         // tap intensity is the drop: amplitude rides the same 0..1
         disturb(e.x, e.y, 0.35 + e.intensity * 0.9);
@@ -691,9 +1107,20 @@ export default function Waves() {
       drag: (e) => {
         lastGestureAt = performance.now();
         if (e.fingers === 3) {
-          if (e.phase === "end") return;
-          // three fingers drag the weather: a hand-driven gust marches a
-          // bar of tiny plucks across the tank (and rocks the string)
+          if (e.phase === "end") {
+            windStrengthTarget = Math.max(0, windStrengthTarget - 0.15);
+            return;
+          }
+          // three fingers drag the law: a real wind vector that keeps
+          // driving the spectrum (see the per-frame emitter below), not
+          // just a momentary bar of plucks under the hand
+          const speed = Math.hypot(e.vx, e.vy);
+          if (speed > 0.02) {
+            const inv = 1 / speed;
+            windDirX = e.vx * inv;
+            windDirY = e.vy * inv;
+          }
+          windStrengthTarget = clamp(windStrengthTarget + speed * 0.5, 0, 1);
           const rect = canvas.getBoundingClientRect();
           const nx = clamp((e.x - rect.left) / Math.max(1, rect.width), 0.02, 0.98);
           const ny = clamp((e.y - rect.top) / Math.max(1, rect.height), 0.05, 0.95);
@@ -744,40 +1171,100 @@ export default function Waves() {
         }
         if (e.fingers !== 1) return;
         if (e.phase === "enter") {
-          holdPlant.lily = false;
-          holdPlant.leaf = false;
-          holdPlant.koi = false;
+          holdState.creatingId = null;
+          holdState.stillingId = null;
+          holdState.targetSource = null;
           pointerRef.current.active = true;
+          if (modeRef.current === "ripple") {
+            const rect = canvas.getBoundingClientRect();
+            const nx = (e.x - rect.left) / Math.max(1, rect.width);
+            const ny = (e.y - rect.top) / Math.max(1, rect.height);
+            let best: WaveSource | null = null;
+            let bestD = 0.06;
+            for (const s of sources) {
+              const d = Math.hypot(s.nx - nx, s.ny - ny);
+              if (d < bestD) { bestD = d; best = s; }
+            }
+            holdState.targetSource = best;
+          }
           return;
         }
         if (e.phase === "release") {
           pointerRef.current.active = false;
+          if (holdState.creatingId != null || holdState.stillingId != null) idleSourcePersist.schedule();
           return;
         }
         if (modeRef.current !== "ripple") return; // the analytic media absorb the dwell
         const rect = canvas.getBoundingClientRect();
-        const nx = (e.x - rect.left) / Math.max(1, rect.width);
-        const ny = (e.y - rect.top) / Math.max(1, rect.height);
-        // dwell plants a lily; kept longer, a fallen leaf; held to the
-        // ceremony, a koi takes residence under the hand.
-        if (e.tier >= 2 && !holdPlant.lily) {
-          holdPlant.lily = true;
-          addNatural("lily", nx, ny);
-          try { getFieldAudio().chime(); } catch { /* noop */ }
-          try { haptics.ripple(0.6); } catch { /* noop */ }
+        const nx = clamp((e.x - rect.left) / Math.max(1, rect.width), 0.03, 0.97);
+        const ny = clamp((e.y - rect.top) / Math.max(1, rect.height), 0.06, 0.94);
+
+        if (holdState.targetSource) {
+          // holding on an existing source: the ceremony stills it —
+          // the touch-reachable delete
+          if (e.tier >= 3 && holdState.stillingId == null) {
+            const target = holdState.targetSource;
+            holdState.stillingId = target.id;
+            sources = sources.filter((s) => s.id !== target.id);
+            drop2D(target.nx, target.ny, -0.6); // a settling trough, not a strike
+            try { getFieldAudio().thud(); } catch { /* noop */ }
+            try { haptics.bloom(); } catch { /* noop */ }
+            useField.getState().recordTape("concern", 0.6, "waves/still");
+            refreshKept();
+          }
+          return;
         }
-        if (e.elapsed >= (THRESHOLDS.dwellMs + THRESHOLDS.ceremonyMs) / 2 && !holdPlant.leaf) {
-          holdPlant.leaf = true;
-          addNatural("leaf", nx, ny);
+
+        // dwell: a source gathers under the finger, legible immediately —
+        // it starts radiating the moment the tier is crossed, and holding
+        // longer deepens it (bigger, further-reaching train), continuous.
+        if (e.tier >= 2 && holdState.creatingId == null && sources.length < MAX_SOURCES) {
+          sourceIdCounter += 1;
+          const id = sourceIdCounter;
+          sources.push({ id, nx, ny, strength: 0.16, phase: 0 });
+          holdState.creatingId = id;
+          drop2D(nx, ny, 0.5);
           try { getFieldAudio().chime(); } catch { /* noop */ }
-          try { haptics.tap(); } catch { /* noop */ }
+          try { haptics.ripple(0.5); } catch { /* noop */ }
+          useField.getState().recordTape("ripple", 0.6, "waves/source");
+          refreshKept();
         }
-        if (e.tier >= 3 && !holdPlant.koi) {
-          holdPlant.koi = true;
-          addNatural("koi", nx, ny);
-          drop2D(nx, ny, 1.2);
-          try { getFieldAudio().playTone(160, 0.6); } catch { /* noop */ }
-          try { haptics.bloom(); } catch { /* noop */ }
+        if (holdState.creatingId != null) {
+          const src = sources.find((s) => s.id === holdState.creatingId);
+          if (src) {
+            const growT = clamp((e.elapsed - THRESHOLDS.dwellMs) / 2200, 0, 1);
+            src.strength = 0.16 + growT * 0.84;
+          }
+        }
+      },
+      twist: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          // three fingers turn the season — the sun's slow walk
+          if (e.phase === "move") {
+            seasonPos = ((seasonPos + e.angle / (Math.PI * 2)) % 1 + 1) % 1;
+            const nowMs = performance.now();
+            if (nowMs - lastSeasonToneAt > 260) {
+              lastSeasonToneAt = nowMs;
+              try { getFieldAudio().playTone(120 + seasonPos * 220, 0.12); } catch { /* noop */ }
+              try { haptics.lens(); } catch { /* noop */ }
+            }
+          }
+          return;
+        }
+        // guard: three-finger twist is the season, above — never re-read here
+        if (e.fingers !== 2) return;
+        // two fingers rotate the lens: the water surface → the wave
+        // equation → the felt swell — a natural ladder, persists until
+        // turned again
+        if (e.phase === "move") {
+          const prevStation = Math.floor(lensPos);
+          lensPos = clamp(lensPos + e.angle / (Math.PI * 0.5), 0, 2);
+          if (Math.floor(lensPos) !== prevStation) {
+            try { haptics.lens(); } catch { /* noop */ }
+            try { getFieldAudio().chime(); } catch { /* noop */ }
+            useField.getState().recordTape("sigil", 0.5, "waves/lens");
+          }
         }
       },
       scrub: (e) => {
@@ -814,19 +1301,48 @@ export default function Waves() {
       },
     }, { wheelZoom: false });
 
+    // ── the vessel (lib/vessel): tilt/shake/knock/flip ───────────────
+    // Passive subscription — nothing flows until the candle has granted the
+    // senses. Tilt leans gravity into the same wind vector three-finger drag
+    // pushes; a shake agitates a scatter of chop across the tank; a knock on
+    // the case rings a strike through the centre of the surface; a flip puts
+    // the pond to sleep under moonlight.
+    const detachVessel = onVessel({
+      tilt: ({ beta, gamma }) => {
+        if (reduceRef.current) return;
+        tiltTargetX = clamp(gamma / 45, -1, 1);
+        tiltTargetY = clamp((beta - 45) / 45, -1, 1);
+      },
+      shake: ({ intensity }) => {
+        lastGestureAt = performance.now();
+        const n = 4 + Math.round(intensity * 8);
+        for (let i = 0; i < n; i += 1) drop2D(Math.random(), Math.random(), 0.14 + intensity * 0.32);
+        energyRef.current = Math.min(1, energyRef.current + intensity * 0.5);
+        try { getFieldAudio().thud(); } catch { /* noop */ }
+        try { haptics.storm(); } catch { /* noop */ }
+        useField.getState().recordTape("ripple", 0.5 + intensity * 0.4, "waves/shake");
+      },
+      knock: ({ intensity }) => {
+        lastGestureAt = performance.now();
+        drop2D(0.5, 0.5, 1.3 + intensity * 1.7);
+        try { getFieldAudio().bell(); } catch { /* noop */ }
+        try { haptics.roll(); } catch { /* noop */ }
+        useField.getState().recordTape("sigil", 0.6 + intensity * 0.4, "waves/knock");
+      },
+      flip: ({ faceDown }) => {
+        lastGestureAt = performance.now();
+        nightTarget = faceDown ? 1 : 0;
+        try { haptics.tap(); } catch { /* noop */ }
+        useField.getState().recordTape("sigil", 0.3, faceDown ? "waves/night" : "waves/day");
+      },
+    });
+
     // ── backdrop & natural rendering helpers ────────────────────────
-    // Paint a paper-warm to slate gradient behind the water and a soft
-    // horizon mist across the top so the pond reads as a place with a
-    // far shore instead of just a top-down grid.
-    const drawBackdrop = (w: number, h: number) => {
-      const sky = ctx.createLinearGradient(0, 0, 0, h);
-      sky.addColorStop(0.00, "rgba(226, 214, 186, 1)"); // warm paper
-      sky.addColorStop(0.14, "rgba(178, 172, 168, 1)"); // haze
-      sky.addColorStop(0.32, "rgba( 74,  92, 108, 1)"); // slate
-      sky.addColorStop(1.00, "rgba(  8,  18,  30, 1)"); // deep pond
-      ctx.fillStyle = sky;
-      ctx.fillRect(0, 0, w, h);
-    };
+    // Paint a soft horizon mist across the top so the pond reads as a place
+    // with a far shore instead of just a top-down grid. (The full-canvas sky
+    // gradient the CPU raster used to cover before the field painted over it
+    // is gone — the field always covers the frame now, GL or CPU, so it was
+    // never visible; this keeps only the part that was.)
     const drawHorizon = (w: number, h: number) => {
       const horizonY = h * 0.14;
       const mist = ctx.createLinearGradient(0, 0, 0, horizonY + 42);
@@ -867,6 +1383,7 @@ export default function Waves() {
       const c2 = speedRef.current;
       const dampFactor = 1 - dampRef.current;
       const pointer = pointerRef.current;
+      const detail = detailForTier(governor.tier());
 
       energyRef.current = mix(energyRef.current, pointer.active ? 1 : 0, pointer.active ? 0.14 : 0.03);
       const glow = energyRef.current;
@@ -879,11 +1396,53 @@ export default function Waves() {
         else drop2D(Math.random(), Math.random() * 0.9 + 0.05, 0.35);
       }
 
-      // ── tick weather (may inject displacement into the sim BEFORE
-      //    the step, so the ripples read at the current frame) ───────
       const nowSec = now / 1000;
       const dt = Math.min(0.06, Math.max(0, nowSec - prevDrawSec));
       prevDrawSec = nowSec;
+
+      // ── the law layer: wind (3-finger drag) + gravity (vessel tilt)
+      // continuously drive the spectrum; night (vessel flip) eases the
+      // palette; sources radiate their own train ─────────────────────
+      if (m !== "string") {
+        windStrength += (windStrengthTarget - windStrength) * Math.min(1, dt * 3);
+        windStrengthTarget = Math.max(0, windStrengthTarget - dt * 0.10);
+        tiltBiasX += (tiltTargetX - tiltBiasX) * Math.min(1, dt * 2);
+        tiltBiasY += (tiltTargetY - tiltBiasY) * Math.min(1, dt * 2);
+        const envX = windDirX * windStrength * 0.85 + tiltBiasX * 0.55;
+        const envY = windDirY * windStrength * 0.85 + tiltBiasY * 0.55;
+        const envMag = Math.min(1, Math.hypot(envX, envY));
+        if (envMag > 0.05 && isRunning && !reduce) {
+          const period = mix(640, 90, envMag);
+          if (now - lastWindEmitAt > period) {
+            lastWindEmitAt = now;
+            const ux = envMag > 1e-4 ? envX / envMag : 1;
+            const uy = envMag > 1e-4 ? envY / envMag : 0;
+            for (let k = -2; k <= 2; k += 1) {
+              const px = clamp(0.5 - ux * 0.44 + -uy * k * 0.07, 0.03, 0.97);
+              const py = clamp(0.5 - uy * 0.44 + ux * k * 0.07, 0.05, 0.95);
+              drop2D(px, py, 0.10 + envMag * 0.45);
+            }
+            if (now - lastWindToneAt2 > 480) {
+              lastWindToneAt2 = now;
+              try { getFieldAudio().playTone(72 + envMag * 60, 0.4); } catch { /* noop */ }
+            }
+          }
+        }
+        if (isRunning) {
+          for (const s of sources) {
+            const rate = mix(0.6, 2.4, s.strength);
+            s.phase += dt * rate;
+            if (s.phase >= 1) {
+              s.phase -= Math.floor(s.phase);
+              drop2D(s.nx, s.ny, 0.22 + s.strength * 0.5);
+            }
+          }
+        }
+      }
+      nightVal += (nightTarget - nightVal) * Math.min(1, dt * 0.5);
+
+      // ── tick weather (may inject displacement into the sim BEFORE
+      //    the step, so the ripples read at the current frame) ───────
       if (m === "ripple") {
         for (let i = weather.length - 1; i >= 0; i--) {
           const e = weather[i];
@@ -933,9 +1492,11 @@ export default function Waves() {
       }
 
       // three-finger time dilation: fractional substeps accumulate so the
-      // medium itself runs slow while the law is held
+      // medium itself runs slow while the law is held. Substep rate is
+      // scaled by the frame governor's tier, per SPEC §4.
       timeScale += (timeScaleTarget - timeScale) * Math.min(1, dt * 5);
-      stepAcc += (isRunning ? (reduce ? 1 : 2) : 0) * timeScale;
+      const simRate = detail.simHz / 60;
+      stepAcc += (isRunning ? (reduce ? 1 : 2) : 0) * timeScale * simRate;
       const substeps = Math.floor(stepAcc);
       stepAcc -= substeps;
       for (let s = 0; s < substeps; s += 1) {
@@ -946,8 +1507,44 @@ export default function Waves() {
       if (m === "string") {
         renderString(sim, cfg.tone, glow);
       } else {
-        if (m === "ripple") drawBackdrop(width, height);
-        renderField(sim, m, glow);
+        const pal = PALETTES[m];
+        if (glActive() && gl && fieldProgram) {
+          encodeField(sim.a, sim.fieldEnc);
+          gl.bindTexture(gl.TEXTURE_2D, fieldProgram.texture);
+          if (isGL2 && gl2) {
+            gl2.texImage2D(gl2.TEXTURE_2D, 0, gl2.RG8, sim.gw, sim.gh, 0, gl2.RG, gl2.UNSIGNED_BYTE, sim.fieldEnc);
+          } else if (gl1) {
+            gl1.texImage2D(gl1.TEXTURE_2D, 0, gl1.LUMINANCE_ALPHA, sim.gw, sim.gh, 0, gl1.LUMINANCE_ALPHA, gl1.UNSIGNED_BYTE, sim.fieldEnc);
+          }
+          const palMid = mixColor(pal.mid, NIGHT_TINT.mid, nightVal);
+          const palCrest = mixColor(pal.crest, NIGHT_TINT.crest, nightVal);
+          const palTrough = mixColor(pal.trough, NIGHT_TINT.trough, nightVal);
+          const palCaustic = mixColor(pal.caustic, NIGHT_TINT.caustic, nightVal);
+          const palFoam = mixColor(pal.foam, NIGHT_TINT.foam, nightVal);
+          const sunAngle = seasonPos * Math.PI * 2;
+          const sunDirX = Math.cos(sunAngle) * 0.65;
+          const sunDirY = Math.sin(sunAngle) * 0.35 - 0.15;
+
+          gl.activeTexture(gl.TEXTURE0);
+          gl.uniform1i(fieldProgram.loc.uField, 0);
+          gl.uniform2f(fieldProgram.loc.uGridSize, sim.gw, sim.gh);
+          gl.uniform3f(fieldProgram.loc.uMid, palMid[0] / 255, palMid[1] / 255, palMid[2] / 255);
+          gl.uniform3f(fieldProgram.loc.uCrest, palCrest[0] / 255, palCrest[1] / 255, palCrest[2] / 255);
+          gl.uniform3f(fieldProgram.loc.uTrough, palTrough[0] / 255, palTrough[1] / 255, palTrough[2] / 255);
+          gl.uniform3f(fieldProgram.loc.uCaustic, palCaustic[0] / 255, palCaustic[1] / 255, palCaustic[2] / 255);
+          gl.uniform3f(fieldProgram.loc.uFoam, palFoam[0] / 255, palFoam[1] / 255, palFoam[2] / 255);
+          gl.uniform1f(fieldProgram.loc.uGlow, glow);
+          gl.uniform1f(fieldProgram.loc.uLens, lensPos);
+          gl.uniform1f(fieldProgram.loc.uNight, nightVal);
+          gl.uniform2f(fieldProgram.loc.uSunDir, sunDirX, sunDirY);
+          gl.uniform1f(fieldProgram.loc.uTime, nowSec);
+          gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+          ctx.clearRect(0, 0, width, height);
+        } else {
+          // no WebGL2/WebGL1, or the context was lost — the original CPU
+          // raster, guarded rather than deleted (SPEC §1)
+          renderFieldCPU(sim, m, glow);
+        }
         if (m === "ripple") {
           drawHorizon(width, height);
           // drift + draw persistent naturals on the pond
@@ -970,12 +1567,13 @@ export default function Waves() {
               else if (n.kind === "koi") drawKoiShadow(ctx, sx, sy, 28 + (n.seed & 15), nowSec, n.seed);
             }
           }
-          // the letting go: departing pond life rides the downstream
-          // current out, fading as the water takes it back.
-          if (departing.length > 0) {
+          // the letting go: departing pond life and departing sources ride
+          // the downstream current out, fading as the water takes them back.
+          if (departing.length > 0 || departingSources.length > 0) {
             const u = (now - letGoAt) / letGoDur;
             if (u >= 1) {
               departing = [];
+              departingSources = [];
             } else {
               ctx.save();
               ctx.globalAlpha = 1 - u;
@@ -989,11 +1587,40 @@ export default function Waves() {
                 else if (d.kind === "leaf") drawFallenLeaf(ctx, sx, sy + bob, 10 + (d.seed & 7), rot + nowSec * 0.05, d.seed);
                 else if (d.kind === "koi") drawKoiShadow(ctx, sx, sy, 28 + (d.seed & 15), nowSec, d.seed);
               }
+              for (const s of departingSources) {
+                const sx = s.nx * width;
+                const sy = s.ny * height;
+                const r = 10 + s.strength * 34;
+                const g = ctx.createRadialGradient(sx, sy, 0, sx, sy, r);
+                g.addColorStop(0, `rgba(255,244,214,${0.3 + s.strength * 0.3})`);
+                g.addColorStop(1, "rgba(255,244,214,0)");
+                ctx.fillStyle = g;
+                ctx.beginPath();
+                ctx.arc(sx, sy, r, 0, Math.PI * 2);
+                ctx.fill();
+              }
               ctx.restore();
             }
           }
           // draw weather overlays after the naturals so they read on top
           drawWeatherOverlay(ctx, weather, now, nowSec, width, height);
+          // active wave-train sources — the gathering glow that makes the
+          // create verb legible while it happens
+          if (sources.length > 0) {
+            for (const s of sources) {
+              const sx = s.nx * width;
+              const sy = s.ny * height;
+              const r = 9 + s.strength * 30;
+              const pulse = 0.5 + 0.5 * Math.sin(nowSec * 3.2 + s.id);
+              const g = ctx.createRadialGradient(sx, sy, 0, sx, sy, r);
+              g.addColorStop(0, `rgba(255,246,220,${0.16 + s.strength * 0.26 + pulse * 0.06})`);
+              g.addColorStop(1, "rgba(255,246,220,0)");
+              ctx.fillStyle = g;
+              ctx.beginPath();
+              ctx.arc(sx, sy, r, 0, Math.PI * 2);
+              ctx.fill();
+            }
+          }
           // glimmer (§6): after ~20s of quiet the water itself sketches a
           // small circle of dimples where a scrub would land — never text.
           if (isRunning && performance.now() - lastGestureAt > 20000 && now - lastGlimmerAt > 2600) {
@@ -1034,11 +1661,12 @@ export default function Waves() {
       ctx.fillStyle = vg;
       ctx.fillRect(0, 0, width, height);
 
-      // periodic naturals persistence — visible drift is applied per frame,
+      // periodic persistence — visible drift/growth is applied per frame,
       // this makes sure the mutations get written before unmount races.
-      if (naturals.length > 0 && now - lastNaturalsSaveAt > 4000) {
+      if ((naturals.length > 0 || sources.length > 0) && now - lastNaturalsSaveAt > 4000) {
         lastNaturalsSaveAt = now;
         idlePersist.schedule();
+        idleSourcePersist.schedule();
       }
 
       raf = requestAnimationFrame(draw);
@@ -1050,12 +1678,21 @@ export default function Waves() {
       if (weatherTimer) clearTimeout(weatherTimer);
       // final checkpoint so re-entry advances drift from now.
       idlePersist.flush();
+      idleSourcePersist.flush();
       unvis();
       ungal();
       unsubscribeWorld();
       observer.disconnect();
       window.removeEventListener("resize", resize);
       detachGestures();
+      detachVessel();
+      glCanvas?.removeEventListener("webglcontextlost", onGlLost);
+      glCanvas?.removeEventListener("webglcontextrestored", onGlRestored);
+      if (gl && fieldProgram) {
+        gl.deleteProgram(fieldProgram.program);
+        gl.deleteBuffer(fieldProgram.buffer);
+        gl.deleteTexture(fieldProgram.texture);
+      }
     };
   }, [disturb, drop2D, pluck1D]);
 
@@ -1104,6 +1741,7 @@ export default function Waves() {
       data-pretext-ignore="true"
       style={{ "--wave-tone": activeTone } as CSSProperties}
     >
+      <canvas ref={glCanvasRef} className="waves-canvas-gl" aria-hidden="true" />
       <canvas
         ref={canvasRef}
         className="waves-canvas"
@@ -1211,6 +1849,15 @@ export default function Waves() {
           -webkit-user-select: none;
           user-select: none;
           -webkit-tap-highlight-color: transparent;
+        }
+
+        .waves-canvas-gl {
+          position: absolute;
+          inset: 0;
+          width: 100%;
+          height: 100%;
+          display: block;
+          pointer-events: none;
         }
 
         .waves-canvas {
