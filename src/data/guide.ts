@@ -510,7 +510,7 @@ export const GUIDE_ROOMS: GuideRoom[] = [
     finds: [
       "a smooth vesicle is one sine, exactly — and a cristae-folded mitochondrion is a stack of partials, so you can hear how folded a thing is without looking",
       "nothing is created here: the ledger's total never moves, however you push the membrane around",
-      "gather all six organs in one plasm and the cell membrane closes around them of its own accord",
+      "gather all six organs in one plasm and the cell membrane closes around them of its own accord — when the ring settles, the plasm becomes the cell above",
     ],
     keeps: "the organs you've gathered, and how the membrane is shared between them",
   },
