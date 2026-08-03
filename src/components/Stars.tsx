@@ -682,13 +682,8 @@ type GravityWell = {
   mode: "gather" | "accrete";
 };
 
-type PointerIntent = {
-  x: number;
-  y: number;
-  starIdx: number;
-  nebulaIdx: number;
-  inMilkyWay: boolean;
-};
+/** Where a hold began — the only thing the well needs to remember. */
+type PointerIntent = { x: number; y: number };
 
 /** A saved constellation coming undone under a ceremony hold. */
 type Fraying = { id: string; t0: number };
@@ -804,8 +799,12 @@ const TAG_NOVA = 15;
 const TAG_SFORM = 16;
 const TAG_MERGER = 17;
 
-/** Baked radius, px. Everything scales from here with drawImage. */
-const SPRITE_R = 72;
+/**
+ * Baked radius, px. Everything scales from here with drawImage — small
+ * enough that stamping a 0.4px star is a cheap minification, large enough
+ * that the biggest halo at full zoom never looks resampled.
+ */
+const SPRITE_R = 40;
 const SPIKE_L = 128;
 
 const spriteCache = new Map<number, HTMLCanvasElement>();
@@ -3684,6 +3683,32 @@ export default function Stars() {
         }
         bctx.restore();
       }
+      // ── glimmer ──────────────────────────────────────────────────
+      // After a long silence the sky hints, and only ever physically: a
+      // gathering opens and closes where a held finger would open one.
+      // No copy, no label, nothing to dismiss.
+      if (lastTouchRef.current === 0) lastTouchRef.current = nowMs;
+      const idle = nowMs - lastTouchRef.current;
+      if (idle > 20000 && !well.active && motion && night < 0.5) {
+        const beat = ((idle - 20000) / 5200) % 1;
+        const gl = Math.sin(Math.PI * beat);
+        if (gl > 0.02) {
+          const k = Math.floor((idle - 20000) / 5200);
+          const gx = w * (0.2 + hash01(k * 7919 + 3) * 0.6);
+          const gy = h * (0.28 + hash01(k * 104729 + 11) * 0.44);
+          const gr = 12 + gl * 40;
+          bctx.save();
+          bctx.globalCompositeOperation = "lighter";
+          stamp(bctx, sprite(TAG_SOFT, 176, 196, 255, FALL_SOFT), gx, gy, gr, 0.15 * gl);
+          bctx.strokeStyle = `rgba(190, 206, 255, ${(0.15 * gl).toFixed(3)})`;
+          bctx.lineWidth = 1;
+          bctx.beginPath();
+          bctx.arc(gx, gy, gr * (1.4 - 0.5 * gl), 0, Math.PI * 2);
+          bctx.stroke();
+          bctx.restore();
+        }
+      }
+
       // Horizon only after a committed hold — longer hold ⇒ wider event horizon.
       if (well.active && well.mode === "accrete") {
         // The horizon never plateaus: the first seconds open it fast, and
@@ -4248,13 +4273,7 @@ export default function Stars() {
         try { getFieldAudio().buzz(); } catch { /* noop */ }
         return;
       }
-      pointerIntentRef.current = {
-        x: e.x,
-        y: e.y,
-        starIdx: findStarAt(e.x, e.y),
-        nebulaIdx: findNebulaAt(e.x, e.y),
-        inMilkyWay: isInMilkyWay(e.x, e.y),
-      };
+      pointerIntentRef.current = { x: e.x, y: e.y };
       well.active = true;
       well.x = e.x;
       well.y = e.y;
@@ -4358,10 +4377,7 @@ export default function Stars() {
       bornStarsRef.current = next;
       setBornStars(next);
     }
-  }, [
-    abortWell, deleteSaved, findNebulaAt, findSavedAt, findStarAt, isInMilkyWay,
-    markSky, releaseAccretion, screenToSky, singleTapAt,
-  ]);
+  }, [abortWell, deleteSaved, findSavedAt, markSky, releaseAccretion, screenToSky, singleTapAt]);
 
   // The bindings change every render (they close over fresh state), but the
   // engine attaches once. One ref carries the current table across.

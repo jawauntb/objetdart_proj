@@ -542,9 +542,13 @@ export default function Fire() {
       tap: (e) => {
         lastGestureAt = performance.now();
         if (e.fingers === 2) {
-          // step back: lower a raised lens, else the fire eases off its lean
+          // step back: lower a raised lens, else the fire eases off its lean.
+          // ScaleTravel (document.body) reads data-lens-raised to know
+          // whether this tap should lower the lens instead of stepping the
+          // scale back — the two never both answer the same tap.
           if (lens > 0.02) {
             lens = 0;
+            wrap.dataset.lensRaised = "";
           } else {
             panXTarget = 0;
             panYTarget = 0;
@@ -720,6 +724,7 @@ export default function Fire() {
         }
         // two-finger twist rotates the lens — felt flame ↔ heat diagram
         lens = clamp(lens + e.angle * 0.4, 0, 1);
+        wrap.dataset.lensRaised = lens > 0.02 ? "1" : "";
       },
       pan2: (e) => {
         lastGestureAt = performance.now();

@@ -231,7 +231,7 @@ void main() {
   vec3 rd = vec3(cy * cam.x + sy * cam.z, cam.y, -sy * cam.x + cy * cam.z);
   vec3 ro = uEye;
 
-  // ——— the sky, following the sun ———
+  // --------- the sky, following the sun ---------
   vec3 sky = mix(uHorizonCol, uZenith, smoothstep(0.0, 0.45, rd.y));
   sky = mix(mix(uFogCol, uHorizonCol, 0.5), sky, smoothstep(-0.14, 0.03, rd.y));
   float sd = max(dot(rd, uSun), 0.0);
@@ -239,7 +239,7 @@ void main() {
   float skyT = hf_fogTransmittance(ro.y, rd.y, MARCH_MAX_KM, uFogAlt);
   vec3 col = mix(uFogCol, sky, skyT);
 
-  // ——— the range ———
+  // --------- the range ---------
   float tG = 0.0;
   bool hit = hf_marchTerrain(ro, rd, uMarchOct, uSteps, uRefine, tG);
   vec3 ground = col;
@@ -262,7 +262,7 @@ void main() {
     float sh = softShadow(vec3(p.x, h, p.z) + n * 0.006, uSun, tG > 12.0 ? 0 : uShadowSteps);
     float ndl = max(dot(n, uSun), 0.0);
     float light = uAmbient * (0.65 + 0.35 * n.y) + uSunI * ndl * sh;
-    // the arête itself catches the light along its edge
+    // the arete itself catches the light along its edge
     light += (1.0 - smoothstep(0.0, 0.05, crease)) * uSunI * 0.1 * sh;
     // ice is not chalk: a low sheen on the glacier tongues
     float spec = pow(max(dot(normalize(uSun - rd), n), 0.0), 34.0) * (m.z * 0.5 + m.y * 0.14) * sh;
@@ -273,7 +273,7 @@ void main() {
     col = ground;
   }
 
-  // ——— the sea of fog: its own top, seen from above it ———
+  // --------- the sea of fog: its own top, seen from above it ---------
   float tS = -1.0;
   if (ro.y > uFogAlt && rd.y < -1e-4) {
     float t = (uFogAlt - ro.y) / rd.y;
@@ -301,7 +301,7 @@ void main() {
     col = hit ? mix(sea, ground, groundT) : sea;
   }
 
-  // ——— the survey lens: the same ground, drawn as a map ———
+  // --------- the survey lens: the same ground, drawn as a map ---------
   if (uLens > 0.001) {
     vec3 paper = vec3(0.93, 0.915, 0.87);
     if (hit) {
@@ -568,6 +568,7 @@ export default function MountainPeak() {
     let windAt = 0;
     let glDirty = true;
     let lastGlAt = 0;
+    let lastSig = Infinity;
 
     resize();
     const ro = new ResizeObserver(resize);
@@ -820,8 +821,15 @@ export default function MountainPeak() {
               return;
             }
             if (fovTarget < FOV_MAX - 1e-4) {
+              // the frame retreats a step, harder taps a wider one
               fovTarget = Math.min(FOV_MAX, fovTarget + FOV_STEP * (0.7 + e.intensity * 0.6));
               audio.playNote(44, 200);
+              haptics.detent();
+            } else {
+              // as far back as this frame goes: the next step is the long
+              // lens again, so the hand is never left holding a one-way rope
+              fovTarget = FOV;
+              audio.playNote(56, 220);
               haptics.detent();
             }
             return;
@@ -1120,9 +1128,6 @@ export default function MountainPeak() {
       const t = roomTime;
       if (!asleep) scree = stepScree(scree, dt).slice(-Math.floor(120 * detail.particles));
 
-      const yaw0 = yaw;
-      const pitch0 = pitchPx;
-      const fog0 = fogLift;
       yaw += (yawTarget - yaw) * Math.min(1, wall * 3);
       pitchPx += (pitchTarget - pitchPx) * Math.min(1, wall * 4);
       fov += (fovTarget - fov) * Math.min(1, wall * 3);
@@ -1131,8 +1136,25 @@ export default function MountainPeak() {
       fogLift += (fogLiftTarget - fogLift) * Math.min(1, wall * 1.6);
       fogLiftTarget *= Math.exp(-wall * 0.09); // the inversion always returns
       tutti *= Math.exp(-wall * 2.4);
-      if (Math.abs(yaw - yaw0) > 1e-5 || Math.abs(pitchPx - pitch0) > 0.02) glDirty = true;
-      if (Math.abs(fogLift - fog0) > 1e-6) glDirty = true;
+      // Everything the shader is a function of, in one number. Under reduced
+      // motion the picture is only redrawn when this moves — so the room is
+      // still until a hand moves it, and no state can quietly stop reaching
+      // the screen because someone forgot to flag it.
+      const sig =
+        yaw +
+        pitchPx * 0.01 +
+        roll * 4 +
+        fov * 7 +
+        lens * 5 +
+        fogLift * 100 +
+        sunElev * 10 +
+        sunAz * 10 +
+        season * 3 +
+        tutti;
+      if (Math.abs(sig - lastSig) > 1e-6) {
+        glDirty = true;
+        lastSig = sig;
+      }
 
       // the shared 7s breath: the fog settles on the exhale, lifts on the draw
       const breath = reduced ? 0 : Math.sin(t * Math.PI * 2 * 0.14);

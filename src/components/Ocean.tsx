@@ -93,6 +93,7 @@ export default function Ocean() {
     let uTiltLoc: WebGLUniformLocation | null = null;
     let uTurbLoc: WebGLUniformLocation | null = null;
     let uDepthLoc: WebGLUniformLocation | null = null;
+    let uSeasonLoc: WebGLUniformLocation | null = null;
     let uRipplesLoc: WebGLUniformLocation | null = null;
     let uRippleCountLoc: WebGLUniformLocation | null = null;
 
@@ -112,6 +113,7 @@ export default function Ocean() {
         uniform float uSwell;   // audio swell LFO, ~-1..1
         uniform float uTurb;    // storm axis 0..~1 (shake / hard press)
         uniform float uDepth;   // dive depth 0 (surface) .. 1 (abyss)
+        uniform float uSeason;  // 0..1 cyclic, advanced by 3-finger twist
         uniform vec2 uTilt;     // device tilt bias
         uniform vec4 uRipples[12]; // xy uv, z age sec, w strength
         uniform int uRippleCount;
@@ -251,6 +253,12 @@ export default function Ocean() {
           float wash = sin(wuv.x * 1.8 + t * 0.12) * sin(wuv.y * 2.6 - t * 0.07);
           color += wash * 0.022 * vec3(0.85, 0.92, 1.0);
 
+          // the room's season (three-finger twist): the water's own light
+          // drifts warm to cool and back over the slow cycle — small,
+          // continuous, never a switch.
+          float seasonHue = sin(uSeason * 6.28318);
+          color += seasonHue * 0.030 * vec3(0.10, 0.02, -0.06);
+
           // ── sky ────────────────────────────────────────────────
           // a Hokusai sky: warm cream/beige, faintly deeper at the very top,
           // paling to a misty haze at the skyline. ties to the paper palette.
@@ -259,6 +267,7 @@ export default function Ocean() {
           vec3 sky = mix(skyTop, skyLow, smoothstep(0.0, horizon, uv.y));
           // faint sun bloom in the sky above the glint column
           sky += col * exp(-pow((horizon - uv.y) * 6.0, 2.0)) * 0.10;
+          sky += seasonHue * 0.020 * vec3(0.08, 0.02, -0.05);
 
           // horizon haze: blend a soft warm band so the seam is atmospheric.
           float seam = smoothstep(horizon - 0.04, horizon, uv.y)
@@ -348,6 +357,7 @@ export default function Ocean() {
             uTiltLoc = gl.getUniformLocation(p, "uTilt");
             uTurbLoc = gl.getUniformLocation(p, "uTurb");
             uDepthLoc = gl.getUniformLocation(p, "uDepth");
+            uSeasonLoc = gl.getUniformLocation(p, "uSeason");
             uRipplesLoc = gl.getUniformLocation(p, "uRipples");
             uRippleCountLoc = gl.getUniformLocation(p, "uRippleCount");
 
@@ -579,6 +589,13 @@ export default function Ocean() {
     let lastDragEmit = 0;
     let lastWindFxAt = 0;
     let lastScrubAt = 0;
+    // twist rotates the lens: the Great Wave (Hokusai's own image of this
+    // water) fades in/out over the water itself — a level of description,
+    // not a new mechanic. Three-finger twist turns the season instead.
+    let heroLens = 1;
+    let lensDetentSide = 1;
+    let season = 0;
+    let lastSeasonFxAt = 0;
 
     // ── device sensors ────────────────────────────────────────────
     const tiltTarget = { x: 0, y: 0 };
@@ -586,6 +603,7 @@ export default function Ocean() {
     let sensorsArmed = false;
     let lastAccelMag: number | null = null;
     let lastShakeAt = 0;
+    let lastKnockAt = 0;
     // flip detection: watch beta+gamma for a rapid crossing (phone rotated
     // face-down or spun on its own axis in < 350ms)
     let lastOrient: { beta: number; gamma: number; t: number } | null = null;
@@ -636,6 +654,15 @@ export default function Ocean() {
       const mag = Math.hypot(a.x ?? 0, a.y ?? 0, a.z ?? 0);
       if (lastAccelMag != null) {
         const jolt = Math.abs(mag - lastAccelMag);
+        // knock: a sharp spike without the sustained variance of a shake —
+        // a rap on the case, not an agitation. Rings one ripple at centre.
+        if (jolt <= 13 && mag > 22 && performance.now() - lastKnockAt > 600) {
+          lastKnockAt = performance.now();
+          addRipple(surf.clientWidth * 0.5, seaLevelPx(), 30 + Math.min(1, mag / 44) * 20);
+          try { getFieldAudio().chime(); } catch { /* noop */ }
+          try { haptics.tap(); } catch { /* noop */ }
+          useField.getState().recordTape("ripple", 0.6, "ocean/knock");
+        }
         if (jolt > 13) {
           stirTurbulence(Math.min(0.6, jolt / 34));
           const now = performance.now();
@@ -884,6 +911,32 @@ export default function Ocean() {
         if (Math.abs(e.dy) <= Math.abs(e.dx) * 1.1) return; // vertical intent only
         const h = surf.clientHeight || 1;
         depthTargetRef.current = clamp01(depthTargetRef.current + (e.dy / h) * 1.35);
+      },
+      twist: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          // three fingers turn the season — the water's own light drifts
+          // warm to cool and back over the room's slow cycle
+          if (e.phase === "start") return;
+          season = (((season + e.velocity * 0.012) % 1) + 1) % 1;
+          const nowMs = performance.now();
+          if (nowMs - lastSeasonFxAt > 900) {
+            lastSeasonFxAt = nowMs;
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+          return;
+        }
+        // rotate the lens: Hokusai's own image of this water fades in and
+        // out over the water itself — a level of description, not a
+        // second mechanic.
+        if (e.phase === "start") return;
+        heroLens = clamp01(heroLens - e.velocity * 0.012);
+        const side = heroLens > 0.5 ? 1 : 0;
+        if (side !== lensDetentSide) {
+          lensDetentSide = side;
+          try { haptics.lens(); } catch { /* noop */ }
+          try { getFieldAudio().playTone(side === 1 ? 68 : 60, 0.3); } catch { /* noop */ }
+        }
       },
       scrub: (e) => {
         lastGestureAt = performance.now();
@@ -1147,6 +1200,7 @@ export default function Ocean() {
         if (uSwellLoc) gl.uniform1f(uSwellLoc, swellLfo + turb * 0.6);
         if (uTurbLoc) gl.uniform1f(uTurbLoc, Math.min(1, turb));
         if (uDepthLoc) gl.uniform1f(uDepthLoc, depth);
+        if (uSeasonLoc) gl.uniform1f(uSeasonLoc, season);
         // wind leans the whole sea the way the three fingers pushed it
         if (uTiltLoc) gl.uniform2f(uTiltLoc, tiltSmoothed.x * 0.028 + windX * 0.02, tiltSmoothed.y * 0.022);
 
@@ -1256,10 +1310,18 @@ export default function Ocean() {
       // curling lip so the swell always leans downhill toward the low edge.
       const tiltSway = tiltSmoothed.x;
       const tiltPitch = tiltSmoothed.y;
-      drawFuji(sctx, w, h, horizonY);
-      drawDistantSwells(sctx, w, h, horizonY, t * motion, swellMod);
-      drawGreatWave(sctx, w, h, horizonY, t * motion, swellMod, tiltSway, tiltPitch);
-      drawSecondaryWave(sctx, w, h, horizonY, t * motion, swellMod, tiltSway);
+      // twist's lens: the hero composition fades independently of the
+      // dive-driven surfaceVis, so a rotated-away lens stays gone at any
+      // depth and a raised one returns the moment the hand releases it.
+      if (heroLens > 0.01) {
+        sctx.save();
+        sctx.globalAlpha = surfaceVis * heroLens;
+        drawFuji(sctx, w, h, horizonY);
+        drawDistantSwells(sctx, w, h, horizonY, t * motion, swellMod);
+        drawGreatWave(sctx, w, h, horizonY, t * motion, swellMod, tiltSway, tiltPitch);
+        drawSecondaryWave(sctx, w, h, horizonY, t * motion, swellMod, tiltSway);
+        sctx.restore();
+      }
 
       // ── auto-ambient crashers: a real wave train, denser and biased
       //    left→right so the ocean visibly propagates. A steady tapped

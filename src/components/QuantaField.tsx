@@ -48,6 +48,13 @@ import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import LetGo from "@/components/LetGo";
 import {
+  createFrameGovernor,
+  detailForTier,
+  isEmbeddedFrame,
+  onVisibility,
+  resolveDpr,
+} from "@/lib/room-runtime";
+import {
   C_PX_S,
   CONFINEMENT_REACH_PX,
   LADDER,
@@ -215,6 +222,54 @@ export default function QuantaField() {
     };
     mq.addEventListener?.("change", onMq);
 
+    // ————— performance contract —————
+    const gov = createFrameGovernor();
+    let sleeping = false;
+    const offVis = onVisibility((hidden) => { sleeping = hidden; });
+
+    // three-finger twist = season: the field's own slow cycle
+    let season = 0;
+    let lastSeasonSoundAt = 0;
+
+    // vessel flip: face-down is night
+    let night = 0;
+    let nightTarget = 0;
+
+    // two-finger pan: the frame peeks, then eases home
+    let panX = 0;
+    let panY = 0;
+    let panTargetX = 0;
+    let panTargetY = 0;
+
+    // cached radial-gradient sprites — baked once per palette key, stamped
+    // with drawImage every frame; never a per-excitation gradient
+    const spriteCache = new Map<string, HTMLCanvasElement>();
+    const SPRITE_REF = 128;
+    const radialSprite = (key: string, stops: Array<[number, string]>): HTMLCanvasElement | null => {
+      let c = spriteCache.get(key);
+      if (c) return c;
+      c = document.createElement("canvas");
+      c.width = SPRITE_REF;
+      c.height = SPRITE_REF;
+      const sctx = c.getContext("2d");
+      if (!sctx) return null;
+      const rad = SPRITE_REF / 2;
+      const g = sctx.createRadialGradient(rad, rad, 0, rad, rad, rad);
+      for (const [o, color] of stops) g.addColorStop(o, color);
+      sctx.fillStyle = g;
+      sctx.fillRect(0, 0, SPRITE_REF, SPRITE_REF);
+      spriteCache.set(key, c);
+      return c;
+    };
+    const stampSprite = (key: string, stops: Array<[number, string]>, cx: number, cy: number, r: number, alpha: number) => {
+      if (r <= 0 || alpha <= 0.002) return;
+      const sprite = radialSprite(key, stops);
+      if (!sprite) return;
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(sprite, cx - r, cy - r, r * 2, r * 2);
+      ctx.globalAlpha = 1;
+    };
+
     const audio = () => getFieldAudio();
     const note = (midi: number, ms = 120) => {
       try {
@@ -267,7 +322,7 @@ export default function QuantaField() {
 
     const resize = () => {
       const r = wrap.getBoundingClientRect();
-      const ratio = Math.min(window.devicePixelRatio || 1, 1.5);
+      const ratio = resolveDpr(gov.tier(), { embedded: isEmbeddedFrame(), reducedMotion: reduce, maxDpr: 1.5 });
       width = Math.max(320, Math.floor(r.width));
       height = Math.max(480, Math.floor(r.height));
       rectLeft = r.left;
@@ -701,6 +756,21 @@ export default function QuantaField() {
       },
       twist: (e) => {
         lastInteractionAt = performance.now();
+        if (e.fingers === 3) {
+          // three-finger twist = season: the field's own slow cycle, never
+          // the lens — an unguarded twist here would let it wrongly drive
+          // the bare-field lens on a three-finger turn
+          if (e.phase === "move") {
+            season = (((season + e.angle / (Math.PI * 2)) % 1) + 1) % 1;
+            const now = performance.now();
+            if (now - lastSeasonSoundAt > 260) {
+              lastSeasonSoundAt = now;
+              note(26 + Math.round(season * 16), 180);
+              softly(() => haptics.tap());
+            }
+          }
+          return;
+        }
         if (e.phase === "move") {
           lensTarget = clamp01(lensTarget + e.angle / 1.7);
         } else if (e.phase === "end") {
@@ -713,6 +783,17 @@ export default function QuantaField() {
             else note(44, 160);
           }
           lensTarget = snapped;
+        }
+      },
+      pan2: (e) => {
+        // two-finger drag pans the frame: a peek, not a permanent move
+        lastInteractionAt = performance.now();
+        if (e.phase === "move") {
+          panTargetX = clamp(panTargetX + e.dx * 0.6, -48, 48);
+          panTargetY = clamp(panTargetY + e.dy * 0.6, -48, 48);
+        } else if (e.phase === "end") {
+          panTargetX = 0;
+          panTargetY = 0;
         }
       },
       scrub: (e) => {
@@ -771,6 +852,20 @@ export default function QuantaField() {
         );
         tone(e.pitch, 0.5);
         softly(() => haptics.tap());
+      },
+      flip: ({ faceDown }) => {
+        // face-down is night: the field stills until the phone turns back
+        nightTarget = faceDown ? 1 : 0;
+        lastInteractionAt = performance.now();
+        if (faceDown) {
+          softly(() => audio().thud());
+          note(24, 600);
+          softly(() => haptics.roll());
+        } else {
+          softly(() => audio().spark());
+          note(48, 300);
+          softly(() => haptics.bloom());
+        }
       },
     });
 
@@ -866,11 +961,12 @@ export default function QuantaField() {
           else ctx.lineTo(i, yy);
         }
         ctx.stroke();
-        const glow = ctx.createRadialGradient(0, 0, 1, 0, 0, 22);
-        glow.addColorStop(0, colorAlpha(bright, 0.35 * alpha));
-        glow.addColorStop(1, "rgba(0,0,0,0)");
-        ctx.fillStyle = glow;
-        ctx.fillRect(-24, -24, 48, 48);
+        stampSprite(
+          `q-photon-glow-${fam}`,
+          [[0, colorAlpha(bright, 1)], [1, "rgba(0,0,0,0)"]],
+          0, 0, 22,
+          0.35 * alpha,
+        );
         ctx.restore();
       } else if (isNeutrino(e.id)) {
         // the ghost: a whisper-thin dashed streak, barely there at all
@@ -914,12 +1010,16 @@ export default function QuantaField() {
         const trembleAmp = m > 10000 && !reduce ? 1.6 : 0; // the heavies shiver
         const tx = e.x + (trembleAmp ? Math.sin(performance.now() * 0.03 + e.phase) * trembleAmp : 0);
         const ty = e.y + (trembleAmp ? Math.cos(performance.now() * 0.027 + e.phase) * trembleAmp : 0);
-        const halo = ctx.createRadialGradient(tx, ty, R * 0.2, tx, ty, R * 2.6);
-        halo.addColorStop(0, colorAlpha(bright, 0.5 * alpha));
-        halo.addColorStop(0.5, colorAlpha(tints[1], 0.22 * alpha));
-        halo.addColorStop(1, "rgba(0,0,0,0)");
-        ctx.fillStyle = halo;
-        ctx.fillRect(tx - R * 2.8, ty - R * 2.8, R * 5.6, R * 5.6);
+        stampSprite(
+          `q-mass-halo-${fam}`,
+          [
+            [0, colorAlpha(bright, 0.5)],
+            [0.5, colorAlpha(tints[1], 0.22)],
+            [1, "rgba(0,0,0,0)"],
+          ],
+          tx, ty, R * 2.6,
+          alpha,
+        );
         ctx.fillStyle = colorAlpha(tints[e.anti ? 1 : 2], 0.95 * alpha);
         ctx.beginPath();
         ctx.arc(tx, ty, R * 0.5, 0, Math.PI * 2);
@@ -1087,7 +1187,11 @@ export default function QuantaField() {
 
     // ————— the frame —————
     const frame = () => {
+      raf = requestAnimationFrame(frame);
       const nowReal = performance.now();
+      const tier = gov.beginFrame(nowReal);
+      if (sleeping) return; // no draw while the document is hidden
+      const detail = detailForTier(tier);
       const dtReal = Math.min(64, nowReal - last);
       last = nowReal;
       timeScale += (timeScaleTarget - timeScale) * 0.12;
@@ -1097,11 +1201,18 @@ export default function QuantaField() {
       const breath = reduce ? 0 : Math.sin(t * Math.PI * 2 * 0.14) * 0.5 + 0.5;
 
       lens += (lensTarget - lens) * 0.14;
+      night += (nightTarget - night) * (nightTarget > night ? 0.09 : 0.16);
       windX += (windTargetX - windX) * 0.06;
       windY += (windTargetY - windY) * 0.06;
       windTargetX *= 0.985;
       windTargetY *= 0.985;
       tuttiPulse *= 0.94;
+      // two-finger pan: the frame eases toward the hand's nudge, then home
+      panX += (panTargetX - panX) * 0.14;
+      panY += (panTargetY - panY) * 0.14;
+      canvas.style.transform = (Math.abs(panX) > 0.05 || Math.abs(panY) > 0.05)
+        ? `translate(${panX.toFixed(1)}px, ${panY.toFixed(1)}px)`
+        : "";
 
       // ——— the collision beam: sustained wind winds up real energy ———
       const windMag = Math.hypot(windX, windY);

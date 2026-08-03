@@ -8,6 +8,10 @@ import RouteSigil from "@/components/RouteSigil";
 import ConcernSigil from "@/components/ConcernSigil";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
+import { attachGestures } from "@/lib/gesture";
+import { THRESHOLDS } from "@/lib/gesture/core";
+import { onVessel } from "@/lib/vessel";
+import { createFrameGovernor, detailForTier, isEmbeddedFrame, onVisibility, resolveDpr } from "@/lib/room-runtime";
 import { SITE_ROUTE_BY_KEY, SITE_ROUTES, type SiteRouteCluster, type SiteRouteEntry } from "@/lib/routes";
 import { useField } from "@/store/field";
 import type { ConcernKey } from "@/lib/types";
@@ -118,6 +122,15 @@ export default function HomeCabinet() {
   const pointerRef = useRef({ x: 0, y: 0, pulse: 0 });
   const saveTimerRef = useRef<number | null>(null);
   const lastFeedbackRef = useRef(0);
+  // frame/law/vessel state, read once per tick — never allocated inside it
+  const panRef = useRef({ x: 0, y: 0 });
+  const gustRef = useRef(0);
+  const timeScaleRef = useRef(1);
+  const tuttiRef = useRef(0);
+  const tiltRef = useRef({ x: 0, y: 0 });
+  const agitationRef = useRef(0);
+  const nightRef = useRef(0);
+  const [night, setNight] = useState(false);
 
   const concerns = useField((state) => state.concerns);
   const keptReadings = useField((state) => state.keptReadings);

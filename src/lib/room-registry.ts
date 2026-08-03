@@ -506,7 +506,7 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     source: "src/components/FlowersGarden.tsx",
     page: "src/app/flowers/page.tsx",
     address: { band: "flowers" },
-    frame: "own",
+    frame: "yield",
     chrome: "travel+peers",
     keeps: "objetdart:flowers:v1",
     creates: "a flower",
@@ -763,7 +763,7 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     source: "src/components/Stars.tsx",
     page: "src/app/stars/page.tsx",
     address: { band: "stars" },
-    frame: "yield",
+    frame: "own",
     chrome: "axis",
     keeps: "objetdart:constellations:v1",
     creates: "a star",
@@ -831,7 +831,7 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     source: "src/components/Signal.tsx",
     page: "src/app/signal/page.tsx",
     address: { exempt: "a spectral meta-instrument, not a place" },
-    frame: "yield",
+    frame: "own",
     chrome: "none",
     keeps: "objetdart:signal-kept:v1",
     creates: "a kept signal",
@@ -1208,8 +1208,12 @@ export function requiredBindings(entry: RoomEntry): GlobalBinding[] {
     if (entry.exempt[b]) return false;
     // A yielded frame has nothing to pan (see PAN_YIELDED_REASON).
     if (b === "pan" && entry.frame === "yield") return false;
-    // Two-finger tap is ScaleTravel's verb wherever ScaleTravel is mounted.
-    if (b === "stepBack" && entry.chrome !== "none" && entry.chrome !== "peers") return false;
+    // Two-finger tap is ScaleTravel's verb — but only where ScaleTravel is
+    // actually mounted AND the room yielded the frame to it. A room that keeps
+    // its own camera owes the hand the step back itself: one camera step out.
+    if (b === "stepBack" && entry.frame === "yield" && entry.chrome !== "none" && entry.chrome !== "peers") {
+      return false;
+    }
     return true;
   });
 }
@@ -1219,8 +1223,8 @@ export function exemptionFor(entry: RoomEntry, b: GlobalBinding): string | null 
   if (entry.exempt[b]) return entry.exempt[b] ?? null;
   if (entry.kind === "reading") return "a declared reading surface: prose, not material";
   if (b === "pan" && entry.frame === "yield") return PAN_YIELDED_REASON;
-  if (b === "stepBack" && entry.chrome !== "none" && entry.chrome !== "peers") {
-    return "ScaleTravel binds the two-finger tap for every room that mounts it";
+  if (b === "stepBack" && entry.frame === "yield" && entry.chrome !== "none" && entry.chrome !== "peers") {
+    return "ScaleTravel binds the two-finger tap for every room that yields it the frame";
   }
   return null;
 }

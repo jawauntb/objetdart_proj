@@ -46,10 +46,16 @@ ground climbs through the (unbuilt) planetary neighbourhood and system into
 the stars. It used to zoom *out* to `/atlas` — a band two decades smaller —
 which was the last metric inversion above the ground and a contradiction of
 `docs/plans/ground-and-sky.md` §1. The atlas is a chart of a *region* of the
-ground: it sits one band **below** the earth, is a door **in**, and is also
-the earth's hearth **peer** (`PEER_CIRCLES`), because a map is the same
-ground at a different level of description. Its trunk passage up to `/stars`
-(the `TravelPassage` film) is unchanged.
+ground: it sits one band **below** the earth, so it is a door **in** from
+the earth and its own ceiling is the earth. The `/atlas → /stars` trunk
+passage (the `TravelPassage` film, which is literally map → globe → orbit →
+stars) stays as a declared second door up, and stays the sky's canonical way
+down. The atlas is also the earth's hearth **peer** (`PEER_CIRCLES`),
+because a map is the same ground at a different level of description — the
+lateral reading of the same judgment, reachable by the two-finger dwell ring
+rather than by pinch. In the overlook this straightened the trunk: the spine
+now climbs unbroken from the quanta to the fold, and the map, the air
+column, the peak, the shore and the drop hang off it as one chain.
 
 **Where the pinch happens chooses the door.** `src/lib/fork-regions.ts` is
 wired into `ScaleTravel`: a wall with several doors lays them across the

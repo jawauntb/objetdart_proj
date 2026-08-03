@@ -1194,7 +1194,7 @@ vec3 hf_hornsAt(vec2 p) {
 
 /**
  * The ground. h in km, grad in km per km, crease and ridge for the
- * material classifier — the same terms, differentiated the same way.
+ * material classifier --- the same terms, differentiated the same way.
  */
 void hf_groundAt(vec2 xz, int octaves, out float h, out vec2 grad, out float crease, out float ridge) {
   vec2 p = (xz + uSeedOffset) * BASE_FREQ;
@@ -1225,7 +1225,7 @@ float hf_heightAt(vec2 xz, int octaves) {
   return h;
 }
 
-// ——— the fog, integrated by hand ————————————————————————————————
+// --------- the fog, integrated by hand ------------------------------------------------------------------------------------------------
 
 float hf_fogDensity(float y, float fogAltitude) {
   return exp(-(y - fogAltitude) / FOG_SCALE_HEIGHT_KM);
@@ -1249,7 +1249,7 @@ float hf_fogSurfaceAt(vec2 xz, float fogAltitude, float phase) {
   return fogAltitude + FOG_WAVE_KM * (n * 2.0 - 1.0);
 }
 
-// ——— the march ————————————————————————————————————————————————
+// --------- the march ------------------------------------------------------------------------------------------------------------------------------------------------
 
 /**
  * The distance-bounded heightfield march, step for step. \`steps\` and
@@ -1287,7 +1287,7 @@ bool hf_marchTerrain(vec3 ro, vec3 rd, int octaves, int steps, int refine, out f
 }
 
 /**
- * How near this ground stands to a contour line — 0 on one, 0.5 midway.
+ * How near this ground stands to a contour line --- 0 on one, 0.5 midway.
  * The survey lens draws the field's own level sets, so the interval lives
  * with the field.
  */
@@ -1296,7 +1296,7 @@ float hf_contourDistance(float h) {
   return min(c, 1.0 - c);
 }
 
-// ——— matter: rock, snow, glacier, and the wind's own cornice ————
+// --------- matter: rock, snow, glacier, and the wind's own cornice ------------
 
 float hf_corniceStrength(float crease, vec2 grad, vec2 wind) {
   float slope = length(grad);
@@ -1307,7 +1307,7 @@ float hf_corniceStrength(float crease, vec2 grad, vec2 wind) {
   return max(crest * steep * lee, 0.0);
 }
 
-/** (rock, snow, glacier, cornice) — the weights partition the face */
+/** (rock, snow, glacier, cornice) --- the weights partition the face */
 vec4 hf_material(float h, vec2 grad, float crease, float ridge, float snowKm, vec2 wind) {
   float slope = length(grad);
   float valleyW = 1.0 - smoothstep(0.4, 0.62, ridge);

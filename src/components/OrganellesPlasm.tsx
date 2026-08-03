@@ -1089,6 +1089,8 @@ export default function OrganellesPlasm() {
       observer.disconnect();
       detachGestures();
       detachVessel();
+      offVis();
+      markLens(false);
       wrap.removeEventListener("keydown", onKeyDown);
       wrap.removeEventListener("keyup", onKeyUp);
       mq.removeEventListener?.("change", onMq);

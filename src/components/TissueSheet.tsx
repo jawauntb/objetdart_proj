@@ -198,6 +198,7 @@ export default function TissueSheet() {
     /** the one cell a hold landed squarely on — its own solemn act, not the field's */
     let holdCellIdx = -1;
     let holdResorbed = false;
+    let holdPrevTier = 0;
     let strokeX = 0;
     let strokeY = 0;
     let strokeRun = 0;
@@ -596,6 +597,7 @@ export default function TissueSheet() {
             // (gastrulation) instead. The two never fire together.
             holdCellIdx = nearestCell(sheet, p.x, p.y, 0.5);
             holdResorbed = false;
+            holdPrevTier = 0;
             pitActive = holdCellIdx < 0;
             try {
               haptics.tap();
@@ -607,11 +609,23 @@ export default function TissueSheet() {
           if (e.phase === "release") {
             pitActive = false;
             holdCellIdx = -1;
+            holdPrevTier = 0;
             return;
           }
           pitTickAt = performance.now();
           pitX = p.x;
           pitY = p.y;
+          // Dwell (tier ≥ 2) is where the hold's own answer changes register
+          // — the finger has stopped being a touch and started being a
+          // charge — felt once, right at the crossing, on either path.
+          if (e.tier >= 2 && holdPrevTier < 2) {
+            try {
+              haptics.tap();
+            } catch {
+              /* noop */
+            }
+          }
+          holdPrevTier = e.tier;
 
           if (holdCellIdx >= 0) {
             if (holdCellIdx >= sheet.n) {

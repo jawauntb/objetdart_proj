@@ -10,6 +10,7 @@ import ConcernSigil from "@/components/ConcernSigil";
 import WaterText from "@/components/WaterText";
 import { getFieldAudio } from "@/lib/audio";
 import { attachGestures } from "@/lib/gesture";
+import { onVessel } from "@/lib/vessel";
 import * as haptics from "@/lib/haptics";
 import type { ConcernKey, PhaseKey, ArchiveEntry } from "@/lib/types";
 import type { ImaginedEntry } from "@/store/field";
@@ -49,6 +50,10 @@ const MARK_COLOR: Record<ArchiveMarkTone, string> = {
   kept: "var(--kept)",
 };
 
+// twist(2) steps through the same order the sort chips offer — the
+// drawers' own lens: same material, a different arrangement.
+const SORT_ORDER = ["recent", "oldest", "phase", "medium"] as const;
+
 export default function Archive() {
   const archMedium = useField((s) => s.archMedium);
   const archConcern = useField((s) => s.archConcern);
@@ -74,11 +79,16 @@ export default function Archive() {
   const [archiveMarks, setArchiveMarks] = useState<ArchiveMark[]>([]);
   const markId = useRef(0);
 
-  // gesture layer — the buttons all stay; the grammar adds two verbs:
-  // a flick on a card shivers its drawer open (navigates), and a
-  // long-press on a filter chip solos it (every other filter falls
-  // quiet). Engines mount on the card grid and the filter rail only,
-  // so the page itself keeps scrolling.
+  // gesture layer — the buttons all stay; the grammar adds: a flick on
+  // a card shivers its drawer open (navigates); a long-press on a
+  // filter chip solos it (every other filter falls quiet); twist(2)
+  // steps the sort, the grid's own lens; two-finger tap releases every
+  // filter at once, three-finger tap is tutti (every drawer answers);
+  // and the vessel — shake rattles the grid, a knock rings it, face
+  // down is night. pan2 and the three-finger drag/twist/hold are left
+  // unbound (see the note by the grid's engine mount). Engines mount on
+  // the card grid and the filter rail only, so the page itself keeps
+  // scrolling.
   const router = useRouter();
   const gridRef = useRef<HTMLDivElement>(null);
   const railRef = useRef<HTMLElement>(null);
@@ -87,6 +97,14 @@ export default function Archive() {
   // it began, so the verb resolves against the landing card
   const downHrefRef = useRef<string | null>(null);
   const [shiverHref, setShiverHref] = useState<string | null>(null);
+  // frame/law/vessel: twist(2) cycles the sort (the drawers' own lens —
+  // same shape, different order), two/three-finger tap step back/tutti,
+  // and the vessel rattles, rings and dims the whole grid
+  const [rattle, setRattle] = useState(false);
+  const [tutti, setTutti] = useState(0);
+  const [night, setNight] = useState(false);
+  const sortRef = useRef(archSort);
+  sortRef.current = archSort;
 
   const addArchiveMark = (
     label: string,
@@ -206,11 +224,19 @@ export default function Archive() {
   soloRef.current = solo;
   const hasItems = items.length > 0;
 
-  // flick on a card: the drawer shivers open, then the room steps in
+  // flick on a card: the drawer shivers open, then the room steps in.
+  // The frame and law also live here: twist(2) steps the sort — the
+  // grid's own lens, same drawers in a different order — and tap
+  // completes the pair (two fingers back off the filters, three are
+  // tutti). pan2 and the three-finger drag/twist/hold are left unbound:
+  // the grid already scrolls under two fingers via the page's own
+  // touch-action, and drawers have no weather or season to hold.
   useEffect(() => {
     const grid = gridRef.current;
     if (!grid) return;
     let navTimer: ReturnType<typeof setTimeout> | null = null;
+    let tuttiTimer: ReturnType<typeof setTimeout> | null = null;
+    const twistAcc = { current: 0 };
     const detach = attachGestures(grid, {
       flick: (e) => {
         if (e.fingers !== 1) return;
@@ -226,12 +252,81 @@ export default function Archive() {
         if (navTimer) clearTimeout(navTimer);
         navTimer = setTimeout(() => router.push(href), 260);
       },
+      twist: (e) => {
+        if (e.fingers === 3 || e.phase !== "move") return;
+        twistAcc.current += e.angle;
+        const step = Math.PI / 2;
+        while (Math.abs(twistAcc.current) >= step) {
+          const direction = twistAcc.current > 0 ? 1 : -1;
+          twistAcc.current -= direction * step;
+          const idx = SORT_ORDER.indexOf(sortRef.current);
+          const next = SORT_ORDER[(idx + direction + SORT_ORDER.length) % SORT_ORDER.length];
+          setSort(next);
+          touchArchiveRef.current(`sort:${next}`, "paper", 0.36);
+          try { haptics.tap(); } catch { /* noop */ }
+        }
+      },
+      tap: (e) => {
+        if (e.fingers === 2) {
+          // step back: the filters retreat all at once
+          if (activeFilterCount === 0) return;
+          useField.setState({
+            archMedium: new Set(),
+            archConcern: new Set(),
+            archObject: new Set(),
+            archPhase: new Set(),
+          });
+          touchArchiveRef.current("filters cleared", "ink", 0.4);
+          try { haptics.tap(); } catch { /* noop */ }
+          return;
+        }
+        if (e.fingers === 3) {
+          setTutti(Date.now());
+          if (tuttiTimer) clearTimeout(tuttiTimer);
+          tuttiTimer = setTimeout(() => setTutti(0), 640);
+          try { haptics.ripple(0.4); } catch { /* noop */ }
+          try { getFieldAudio().chime(); } catch { /* noop */ }
+          touchArchiveRef.current("drawers answer", "candle", 0.4);
+        }
+      },
     }, { wheelZoom: false, manageStyle: false, noCapture: true });
     return () => {
       detach();
       if (navTimer) clearTimeout(navTimer);
+      if (tuttiTimer) clearTimeout(tuttiTimer);
     };
-  }, [hasItems, router]);
+  }, [hasItems, router, activeFilterCount, setSort]);
+
+  // vessel: shake rattles every drawer at once, a knock rings the
+  // archive like tutti, and face-down is night — the grid dims until
+  // the phone turns back over. Tilt has no honest gravity on a flat
+  // reading grid, so it is left unbound.
+  useEffect(() => {
+    let rattleTimer: ReturnType<typeof setTimeout> | null = null;
+    let tuttiTimer: ReturnType<typeof setTimeout> | null = null;
+    const detachVessel = onVessel({
+      shake: () => {
+        setRattle(true);
+        try { haptics.chop(); } catch { /* noop */ }
+        try { getFieldAudio().chime(); } catch { /* noop */ }
+        if (rattleTimer) clearTimeout(rattleTimer);
+        rattleTimer = setTimeout(() => setRattle(false), 420);
+      },
+      knock: () => {
+        setTutti(Date.now());
+        try { getFieldAudio().bell(); } catch { /* noop */ }
+        try { haptics.tap(); } catch { /* noop */ }
+        if (tuttiTimer) clearTimeout(tuttiTimer);
+        tuttiTimer = setTimeout(() => setTutti(0), 640);
+      },
+      flip: ({ faceDown }) => setNight(faceDown),
+    });
+    return () => {
+      detachVessel();
+      if (rattleTimer) clearTimeout(rattleTimer);
+      if (tuttiTimer) clearTimeout(tuttiTimer);
+    };
+  }, []);
 
   // long-press on a filter chip: solo it — the other filters fall quiet
   useEffect(() => {
@@ -261,7 +356,16 @@ export default function Archive() {
   }, []);
 
   return (
-    <section id="archive" className="rule" style={{ scrollMarginTop: 72 }}>
+    <section
+      id="archive"
+      className={
+        "rule"
+        + (rattle ? " is-rattling" : "")
+        + (tutti ? " is-tutti" : "")
+        + (night ? " is-night" : "")
+      }
+      style={{ scrollMarginTop: 72 }}
+    >
       <div className="wrap">
         <div className="t-eyebrow">archive · open the drawers</div>
         <WaterText
@@ -605,9 +709,33 @@ export default function Archive() {
               </div>
             )}
             {items.length === 0 ? (
-              <p className="t-h3 italic" style={{ color: "var(--ink-2)", maxWidth: "44ch" }}>
-                no drawer answers that combination — yet.
-              </p>
+              <div className="arch-empty">
+                <div className="arch-empty-ghost" aria-hidden="true">
+                  <ConcernSigil concerns={entryWeightsFromConcerns([])} size={120} showAxes showRing showDots={false} />
+                </div>
+                <p className="t-h3 italic" style={{ color: "var(--ink-2)", maxWidth: "44ch" }}>
+                  no drawer answers that combination — yet.
+                </p>
+                {(activeFilterCount > 0 || queryTrimmed) && (
+                  <button
+                    type="button"
+                    className="chip"
+                    onClick={() => {
+                      useField.setState({
+                        archMedium: new Set(),
+                        archConcern: new Set(),
+                        archObject: new Set(),
+                        archPhase: new Set(),
+                      });
+                      setQuery("");
+                      haptics.tap();
+                      touchArchive("filters cleared", "ink", 0.4);
+                    }}
+                  >
+                    release the filters
+                  </button>
+                )}
+              </div>
             ) : (
               <div
                 ref={gridRef}
@@ -844,6 +972,46 @@ export default function Archive() {
           .arch-card:hover,
           .arch-card:focus-visible { transform: none; }
           .arch-card.is-shivering { animation: none; }
+        }
+
+        /* a richer no-results state: a ghost sigil behind the line, and
+           a release valve when filters or a search are the cause */
+        .arch-empty {
+          position: relative;
+          padding: 20px 0 4px;
+          display: grid;
+          gap: 16px;
+          justify-items: start;
+        }
+        .arch-empty-ghost {
+          position: absolute;
+          top: -10px;
+          right: 12px;
+          opacity: 0.1;
+          color: var(--sea);
+          pointer-events: none;
+        }
+
+        /* shake — every drawer rattles on its runners at once */
+        #archive.is-rattling .arch-card {
+          animation: arch-shiver 260ms ease-out both, arch-rattle 380ms ease-in-out;
+        }
+        @keyframes arch-rattle {
+          0%, 100% { transform: translateX(0); }
+          25% { transform: translateX(2px); }
+          50% { transform: translateX(-2px); }
+          75% { transform: translateX(1px); }
+        }
+        /* three-finger tap / a knock on the case — tutti, drawers answer once */
+        #archive.is-tutti .arch-card::before {
+          opacity: 0.9;
+          height: 34px;
+          transition: opacity 200ms ease, height 200ms ease;
+        }
+        /* flip face-down — night, until the phone turns back over */
+        #archive.is-night .arch-card { opacity: 0.5; transition: opacity 900ms ease; }
+        @media (prefers-reduced-motion: reduce) {
+          #archive.is-rattling .arch-card { animation: none; }
         }
 
         .archive-state-strip {

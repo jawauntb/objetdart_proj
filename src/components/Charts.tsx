@@ -1799,12 +1799,8 @@ function drawPanel1(
   if (lensT > 0.02) {
     ctx.save();
     ctx.globalAlpha = lensT;
-    ctx.strokeStyle = "rgba(255,190,124,0.92)";
-    ctx.lineWidth = 1.8;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
-    ctx.shadowColor = "rgba(255,180,110,0.5)";
-    ctx.shadowBlur = 8 * lensT;
     ctx.beginPath();
     for (let i = 0; i < candles.length; i++) {
       const off = waveOff ? waveOff(i) * h * 0.05 : 0;
@@ -1813,6 +1809,13 @@ function drawPanel1(
       if (i === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     }
+    // additive glow pass instead of ctx.shadowBlur — the same path, once
+    // wide and dim underneath, once crisp on top.
+    ctx.strokeStyle = "rgba(255,180,110,0.35)";
+    ctx.lineWidth = 1.8 + 7;
+    ctx.stroke();
+    ctx.strokeStyle = "rgba(255,190,124,0.92)";
+    ctx.lineWidth = 1.8;
     ctx.stroke();
     ctx.restore();
   }

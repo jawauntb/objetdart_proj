@@ -919,6 +919,13 @@ for (let s = 0; s < 60; s++) {
     `most constants are checked for inlining (${checkedInline}/${names.length})`,
   );
 
+  // 3b. ASCII, comments included. GLSL ES 1.00 declares an ASCII source
+  // character set, and drivers that enforce it reject the whole shader over
+  // an em dash in a comment — which fails silently into the 2D fallback,
+  // i.e. into exactly the flat room this shader exists to replace.
+  const nonAscii = [...`${preamble}\n${body}`].filter((c) => c.charCodeAt(0) > 127);
+  assert.equal(nonAscii.length, 0, `the shader source is ASCII (found ${nonAscii.join("")})`);
+
   // 4. The budget is the same budget. The marcher's loops are written with
   // these bounds as literals because GLSL ES 1.00 demands constants; if the
   // shader's ceiling drifted above the one the march is tested against, the

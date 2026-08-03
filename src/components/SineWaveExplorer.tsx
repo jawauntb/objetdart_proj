@@ -294,7 +294,6 @@ export default function SineWaveExplorer() {
   const panRef = useRef({ x: 0, y: 0, tx: 0, ty: 0 });
   const nightRef = useRef({ on: false, amt: 0 });
   const [hasKept, setHasKept] = useState(false);
-  const letGoKeptRef = useRef<() => void>(() => {});
 
   const [amp, setAmp] = useState(86);
   const [freq, setFreq] = useState(2.5);
@@ -429,6 +428,7 @@ export default function SineWaveExplorer() {
             try { getFieldAudio().bell(); } catch { /* noop */ }
             try { haptics.bloom(); } catch { /* noop */ }
             useField.getState().recordTape("sigil", 1, "sine/kept-wave");
+            setHasKept(true);
           }
         } else if (chord.dilating && !still) {
           chord.dilating = false;
@@ -481,6 +481,21 @@ export default function SineWaveExplorer() {
       pointerRef.current.active = voicesRef.current.size > 0;
       energy = mix(energy, pointerRef.current.active ? 1 : 0, pointerRef.current.active ? 0.12 : 0.025);
 
+      // ease the frame's pan (two-finger drag) and self-center; ease the
+      // lens (twist) toward its snapped level; ease night (vessel: flip)
+      const pan = panRef.current;
+      pan.tx *= Math.exp(-delta / 900);
+      pan.x += (pan.tx - pan.x) * Math.min(1, delta * 0.006);
+      pan.y += (pan.ty - pan.y) * Math.min(1, delta * 0.006);
+      const lensState = lensRef.current;
+      lensState.cur += (lensState.target - lensState.cur) * Math.min(1, delta * 0.006);
+      const lensPos = lensState.cur; // 0 wave · 1 equation · 2 sound
+      const night = nightRef.current;
+      night.amt += ((night.on ? 1 : 0) - night.amt) * Math.min(1, delta * 0.0018);
+
+      ctx.save();
+      ctx.translate(pan.x, pan.y);
+
       drawBackground(ctx, width, height, time, cfg.tone, energy);
       const center = height * 0.49;
       const ampNow = ampRef.current;
@@ -490,14 +505,17 @@ export default function SineWaveExplorer() {
       const harmonicNow = harmonicRef.current;
       const modeNow = modeRef.current;
 
+      // the lens (twist, grammar §5): the wave dims as the level of
+      // description rises toward the bare equation and then the sound
+      const feltMul = clamp(1 - lensPos * 0.42, 0.16, 1);
       const rSteps = Math.max(60, Math.round(260 * detail.samples));
-      drawRibbon(ctx, width, height, phaseNow - Math.PI * 0.55, ampNow * 0.62, freqNow * 0.64 + 0.3, dampingNow * 0.7, harmonicNow, "interference", "#65d8c5", center - height * 0.13, 0.20, 1.4, undefined, rSteps);
-      drawRibbon(ctx, width, height, -phaseNow * 0.82, ampNow * 0.50, freqNow + 0.75, dampingNow * 0.35, harmonicNow * 0.65, "standing", "#b99aff", center + height * 0.13, 0.18, 1.3, undefined, rSteps);
+      drawRibbon(ctx, width, height, phaseNow - Math.PI * 0.55, ampNow * 0.62, freqNow * 0.64 + 0.3, dampingNow * 0.7, harmonicNow, "interference", "#65d8c5", center - height * 0.13, 0.20 * feltMul, 1.4, undefined, rSteps);
+      drawRibbon(ctx, width, height, -phaseNow * 0.82, ampNow * 0.50, freqNow + 0.75, dampingNow * 0.35, harmonicNow * 0.65, "standing", "#b99aff", center + height * 0.13, 0.18 * feltMul, 1.3, undefined, rSteps);
 
       // the kept wave — sealed by ceremony, a golden ghost under the living one
       const kept = keptRef.current;
       if (kept) {
-        drawRibbon(ctx, width, height, kept.phase, kept.amp, kept.freq, kept.damping, kept.harmonic, kept.mode, "#f3d77a", center, 0.24, 2, undefined, rSteps);
+        drawRibbon(ctx, width, height, kept.phase, kept.amp, kept.freq, kept.damping, kept.harmonic, kept.mode, "#f3d77a", center, 0.24 * feltMul, 2, undefined, rSteps);
       }
 
       // every held finger bends the wave through its point — the voices are
@@ -528,7 +546,28 @@ export default function SineWaveExplorer() {
           return off;
         };
       }
-      drawRibbon(ctx, width, height, phaseNow, ampNow, freqNow, dampingNow, harmonicNow, modeNow, cfg.tone, center, 0.94, 4.2, bend, rSteps);
+      drawRibbon(ctx, width, height, phaseNow, ampNow, freqNow, dampingNow, harmonicNow, modeNow, cfg.tone, center, Math.max(0.22, 0.94 * feltMul), 4.2, bend, rSteps);
+
+      // the equation — the middle level of description, fading in as the
+      // lens turns past "wave" and holding through "sound"
+      const eqAlpha = clamp((lensPos - 0.25) / 0.6, 0, 1);
+      if (eqAlpha > 0.01) {
+        ctx.save();
+        ctx.globalAlpha = eqAlpha;
+        ctx.fillStyle = "rgba(238, 234, 219, 0.82)";
+        ctx.font = `${width < 460 ? 13 : 16}px ui-monospace, "SF Mono", Menlo, monospace`;
+        ctx.textAlign = "left";
+        const eq = modeNow === "standing"
+          ? "y(u,t) = A·sin(πnu)·cos(φ)·e^-3.7du"
+          : modeNow === "interference"
+            ? "y = A·[sin(2πfu+φ) + 0.62·sin(2π(1-u)f'-1.2φ)]·e^-3.7du"
+            : "y(u) = A·sin(2πfu + φ)·e^-3.7du";
+        ctx.fillText(eq, width * 0.07, height * 0.1);
+        ctx.font = `${width < 460 ? 10 : 11}px ui-monospace, "SF Mono", Menlo, monospace`;
+        ctx.fillStyle = "rgba(238, 234, 219, 0.4)";
+        ctx.fillText(`A=${Math.round(ampNow)}  f=${freqNow.toFixed(2)}  φ=${phaseNow.toFixed(2)}  d=${dampingNow.toFixed(2)}`, width * 0.07, height * 0.1 + 20);
+        ctx.restore();
+      }
 
       // halos under the held voices — sight for what the hand is sounding
       for (const v of voices) {
@@ -567,16 +606,21 @@ export default function SineWaveExplorer() {
       }
       ctx.restore();
 
-      const lissR = Math.min(width, height) * 0.115;
-      const lx = width * 0.78;
-      const ly = height * 0.28;
+      // the sound — the third level: the Lissajous figure (already how the
+      // room draws "the shape of the tone") grows and moves to center as
+      // the lens turns past "equation", becoming the dominant image
+      const soundT = clamp((lensPos - 1) / 1, 0, 1);
+      const lissR = Math.min(width, height) * 0.115 * (1 + soundT * 2.3);
+      const lx = mix(width * 0.78, width * 0.5, soundT);
+      const ly = mix(height * 0.28, height * 0.5, soundT);
+      const lissSteps = Math.max(50, Math.round(180 * detail.samples));
       ctx.save();
       ctx.globalCompositeOperation = "screen";
-      ctx.strokeStyle = colorAlpha("#f3d77a", 0.36);
-      ctx.lineWidth = 1.3;
+      ctx.strokeStyle = colorAlpha("#f3d77a", 0.36 + soundT * 0.34);
+      ctx.lineWidth = 1.3 + soundT * 1.4;
       ctx.beginPath();
-      for (let i = 0; i <= 180; i += 1) {
-        const t = (i / 180) * Math.PI * 2;
+      for (let i = 0; i <= lissSteps; i += 1) {
+        const t = (i / lissSteps) * Math.PI * 2;
         const x = lx + Math.sin(t * freqNow + phaseNow) * lissR;
         const y = ly + Math.sin(t * (freqNow + 1) - phaseNow * 0.7) * lissR * 0.72;
         if (i === 0) ctx.moveTo(x, y);
@@ -604,6 +648,14 @@ export default function SineWaveExplorer() {
         ctx.arc(gx, gy, 16 + pulse * 8, 0, Math.PI * 2);
         ctx.stroke();
         ctx.restore();
+      }
+
+      ctx.restore(); // close the pan translate
+
+      // night (vessel: flip face-down) — the field hushes under a veil
+      if (night.amt > 0.01) {
+        ctx.fillStyle = `rgba(1, 2, 5, ${night.amt * 0.72})`;
+        ctx.fillRect(0, 0, width, height);
       }
 
       if (now - lastPhaseSync > 130) {
@@ -781,7 +833,33 @@ export default function SineWaveExplorer() {
       },
       tap: (e) => {
         lastGestureAtRef.current = performance.now();
-        if (e.fingers !== 1) return; // the field absorbs frame/law taps
+        // tap and rhythm still fire on instrument surfaces regardless of
+        // finger count (grammar §3) — two-finger tap steps back (lowers a
+        // raised lens), three-finger tap is the tutti of every held voice.
+        if (e.fingers === 2) {
+          const lensState = lensRef.current;
+          if (lensState.target > 0) {
+            lensState.target = Math.max(0, lensState.target - 1);
+            lensState.snapped = lensState.target;
+            try { haptics.lens(); } catch { /* noop */ }
+            try { audio.playNote(48, 160); } catch { /* noop */ }
+          }
+          return;
+        }
+        if (e.fingers === 3) {
+          const cfg3 = MODES.find((item) => item.id === modeRef.current) ?? MODES[0];
+          let i = 0;
+          for (const v of voicesRef.current.values()) {
+            const vv = v;
+            window.setTimeout(() => { try { audio.playNote(cfg3.midi + (i % 2) * 7, 80); } catch { /* noop */ } void vv; }, i * 45);
+            i += 1;
+          }
+          try { audio.chime(); } catch { /* noop */ }
+          try { haptics.ripple(0.4); } catch { /* noop */ }
+          recordTape("sigil", 0.5, "sine/tutti");
+          return;
+        }
+        if (e.fingers !== 1) return;
         const cfg = MODES.find((item) => item.id === modeRef.current) ?? MODES[0];
         const p = toNorm(e.x, e.y);
         // tap intensity is the strike: pitch weight, impulse size and the
@@ -790,6 +868,39 @@ export default function SineWaveExplorer() {
         try { audio.playNote(cfg.midi + Math.round((1 - p.y) * 22) + Math.round(p.x * 7), 90 + Math.round(e.intensity * 120)); } catch { /* noop */ }
         try { haptics.ripple(0.2 + e.intensity * 0.4); } catch { /* noop */ }
         recordTape("object", 0.3 + e.intensity * 0.35, "sine/strike");
+      },
+      // twist rotates the lens (grammar §5): correlated pairs on this
+      // instrument surface are reclaimed from the voice dialect exactly as
+      // the grammar describes (§3 "correlated pairs may cancel into
+      // pinch/twist") — the wave → the equation → the sound, three levels.
+      // Three-finger twist (season) has no channel here: 3+ fingers on a
+      // voice surface stay independent voices per grammar §3 (only a
+      // correlated *pair* is ever reclaimed), so there is no chord left to
+      // read a season from — a deliberate, structural exemption.
+      twist: (e) => {
+        if (e.fingers === 3) return;
+        lastGestureAtRef.current = performance.now();
+        const lensState = lensRef.current;
+        if (e.phase === "move") {
+          lensState.target = clamp(lensState.target + e.angle / 1.3, 0, 2);
+        } else if (e.phase === "end") {
+          const snapped = Math.round(lensState.target);
+          lensState.target = snapped;
+          if (snapped !== lensState.snapped) {
+            lensState.snapped = snapped;
+            try { haptics.lens(); } catch { /* noop */ }
+            if (snapped === 2) { try { audio.chime(); } catch { /* noop */ } }
+            else { try { audio.playNote(48 + snapped * 7, 160); } catch { /* noop */ } }
+          }
+        }
+      },
+      // two-finger drag pans the frame — the room's whole view, spring-centering
+      pan2: (e) => {
+        lastGestureAtRef.current = performance.now();
+        if (e.phase === "end") return;
+        const pan = panRef.current;
+        pan.tx = clamp(pan.tx + e.dx * 0.7, -140, 140);
+        pan.ty = clamp(pan.ty + e.dy * 0.7, -100, 100);
       },
       flick: (e) => {
         lastGestureAtRef.current = performance.now();
@@ -854,9 +965,47 @@ export default function SineWaveExplorer() {
       },
     }, { wheelZoom: false });
 
+    // ————— the vessel: the device is the wave's body (grammar §5) —————
+    const detachVessel = onVessel({
+      tilt: ({ gamma }) => {
+        if (reduceMotionRef.current) return;
+        // a lean pans the frame a little, riding the same channel two
+        // fingers do — gravity and the hand agree on what "pan" means
+        panRef.current.tx = clamp(clamp(gamma, -35, 35) * 3, -140, 140);
+      },
+      shake: ({ intensity }) => {
+        if (reduceMotionRef.current) return;
+        lastGestureAtRef.current = performance.now();
+        const rect = canvas.getBoundingClientRect();
+        for (let i = 0; i < 5; i++) {
+          impulsesRef.current.push({
+            x: rect.width * (0.15 + 0.7 * ((i + 1) / 6)),
+            y: rect.height * (0.3 + 0.4 * ((i * 37) % 5) / 5),
+            born: performance.now(),
+            life: 700 + i * 90,
+            strength: 0.4 + intensity * 0.4,
+          });
+        }
+        try { audio.playNote(40, 200); } catch { /* noop */ }
+        try { (intensity > 0.7 ? haptics.storm : haptics.chop)(); } catch { /* noop */ }
+      },
+      // knock = wake / ring the room (rhymes with /coin, /flowers, /growth,
+      // /overlook): a rap on the case rings a small tutti of every voice
+      knock: () => {
+        lastGestureAtRef.current = performance.now();
+        try { audio.chime(); } catch { /* noop */ }
+        try { haptics.ripple(0.4); } catch { /* noop */ }
+      },
+      // flip face-down = night: the field dims and hushes until turned back
+      flip: ({ faceDown }) => {
+        nightRef.current.on = faceDown;
+      },
+    });
+
     const heldVoices = voicesRef.current;
     return () => {
       detach();
+      detachVessel();
       for (const id of heldVoices.keys()) engine.noteOff(`sine:${id}`);
       heldVoices.clear();
     };
@@ -869,6 +1018,16 @@ export default function SineWaveExplorer() {
     try { getFieldAudio().playNote(cfg.midi + 12, 120); } catch { /* noop */ }
     try { haptics.tap(); } catch { /* noop */ }
     recordTape("object", 0.62, `sine/mode/${next}`);
+  };
+
+  // the quiet clear (RoomTemplate §8c / create-delete law): the room's one
+  // kept object — the golden ghost wave sealed by ceremony — let go.
+  const letGoKept = () => {
+    keptRef.current = null;
+    setHasKept(false);
+    try { getFieldAudio().thud(); } catch { /* noop */ }
+    try { haptics.roll(); } catch { /* noop */ }
+    recordTape("object", 0.3, "sine/letgo-kept");
   };
 
   const toggleRunning = () => {
@@ -956,6 +1115,8 @@ export default function SineWaveExplorer() {
           </output>
         </div>
       </MobileInstrumentPanel>
+
+      <LetGo label="let the kept wave go" onLetGo={letGoKept} visible={hasKept} />
 
       <style
         dangerouslySetInnerHTML={{

@@ -139,6 +139,8 @@ cycle, first door listed first.
 | `/mountain` | down | `/coast` · `/rocks` · `/birds` | shore by default, then the strata, then the flock on the updraft |
 | `/coast` | down | `/drop` · `/birds` | the shore keeps its doors and opens onto the sky region |
 | `/coast` | up | `/mountain` · `/earth` | unchanged — band grain |
+| `/atlas` | up | `/earth` · `/stars` | the ground it charts first, then the trunk passage film beside it |
+| `/atlas` | down | `/mountain` | through the air column, by metric adjacency |
 | every drop-band sibling (`/seed`, `/coin`, …) | both | band grain (tissue below, coast above) | no entry ⇒ transparent to the route layer |
 | the sky bands | both | metric adjacency | no overrides from the ground to the web |
 

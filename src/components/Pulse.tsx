@@ -254,6 +254,9 @@ export default function Pulse() {
   const drumRef = useRef({ until: 0, lastHitAt: 0, bpm: 0, queued: 0 });
   const lastGestureAtRef = useRef(0);
   const ceremonyKeepRef = useRef<() => void>(() => {});
+  const detailParticlesRef = useRef(1);
+  const lensRef = useRef({ v: 0, t: 0 });
+  const seasonRef = useRef(0);
 
   const [hr, setHr] = useState(72);
   const [breathRate, setBreathRate] = useState(13);
@@ -422,7 +425,7 @@ export default function Pulse() {
       tier = gov.beginFrame(now);
       if (sleeping) { raf = requestAnimationFrame(draw); return; }
       const detail = detailForTier(tier);
-      void detail;
+      detailParticlesRef.current = detail.particles;
       const rawDt = Math.min(0.08, (now - render.lastT) / 1000);
       render.lastT = now;
       const reduce = reduceMotionRef.current;
@@ -594,6 +597,29 @@ export default function Pulse() {
         });
       }
 
+      // three-finger twist = season: a slow, render-only warm/cool cast —
+      // one fillRect, never a per-element gradient.
+      const warm = Math.sin(seasonRef.current) * 0.5 + 0.5;
+      ctx.fillStyle = `rgba(${Math.round(210 + 45 * warm)}, ${Math.round(150 + 30 * (1 - warm))}, ${Math.round(120 + 70 * (1 - warm))}, 0.025)`;
+      ctx.fillRect(0, 0, w, h);
+
+      // twist (2 fingers) = rotate the lens: a clinical grid reading —
+      // one stroked path, never a gradient per line.
+      const lens = lensRef.current;
+      lens.v += (lens.t - lens.v) * Math.min(1, rawDt * 5);
+      if (lens.v > 0.01) {
+        ctx.save();
+        ctx.globalAlpha = lens.v * 0.2;
+        ctx.strokeStyle = "#5ad1ff";
+        ctx.lineWidth = 1;
+        const step = 30;
+        ctx.beginPath();
+        for (let gx = 0; gx < w; gx += step) { ctx.moveTo(gx, 0); ctx.lineTo(gx, h); }
+        for (let gy = 0; gy < h; gy += step) { ctx.moveTo(0, gy); ctx.lineTo(w, gy); }
+        ctx.stroke();
+        ctx.restore();
+      }
+
       raf = requestAnimationFrame(draw);
     };
 
@@ -601,6 +627,9 @@ export default function Pulse() {
     return () => {
       cancelAnimationFrame(raf);
       ro?.disconnect();
+      unvis();
+      ungal();
+      detachVessel();
       window.removeEventListener("resize", resize);
     };
   }, []);
@@ -625,8 +654,9 @@ export default function Pulse() {
       strength,
       hue,
     });
-    if (bloomsRef.current.length > 34) {
-      bloomsRef.current.splice(0, bloomsRef.current.length - 34);
+    const cap = Math.max(8, Math.round(34 * detailParticlesRef.current));
+    if (bloomsRef.current.length > cap) {
+      bloomsRef.current.splice(0, bloomsRef.current.length - cap);
     }
     touchImpulseRef.current = clamp(touchImpulseRef.current + 0.18 + strength * 0.42, 0, 1.8);
 
@@ -643,26 +673,72 @@ export default function Pulse() {
 
   // ── gestures (the shared grammar — src/lib/gesture) ──────────────
   // One finger touches the membrane: tap and drag bloom pressure into
-  // the body. Three fingers touch the law: drag is a pressure front,
-  // hold dilates the body's clock. A steady tapped pulse entrains the
-  // heart; circling stirs the channels; a ceremony hold keeps the
-  // pattern. Pinch and pan2 stay unbound — the frame belongs to the
-  // manifold. Thresholds live in gesture/core alone.
+  // the body. Two fingers touch the map: pan2 leans the pressure front,
+  // twist raises a clinical grid lens (a two-finger tap lowers it again,
+  // else the tap falls through to ScaleTravel's own step-back). Three
+  // fingers touch the law: drag is a pressure front (weather), hold
+  // dilates the body's clock, twist turns the season, tap is tutti. A
+  // steady tapped pulse entrains the heart; circling stirs the channels;
+  // a ceremony hold keeps the pattern. Pinch stays unbound — the frame
+  // belongs to the manifold. Thresholds live in gesture/core alone.
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     let shearAcc = 0;
     let lastScrubAt = 0;
     let lastWindCueAt = 0;
+    let twistAcc = 0;
 
     const detach = attachGestures(canvas, {
       tap: (e) => {
         lastGestureAtRef.current = performance.now();
-        if (e.fingers !== 1) return; // the membrane absorbs frame/law taps
+        if (e.fingers === 3) {
+          // tutti — every channel answers at once.
+          touchImpulseRef.current = clamp(touchImpulseRef.current + 0.7, 0, 2);
+          addBloom(canvas.clientWidth / 2, canvas.clientHeight / 2, 1, "tutti");
+          try { haptics.bloom(); } catch { /* noop */ }
+          recordTape("region", 0.6, "pulse/tutti");
+          return;
+        }
+        if (e.fingers === 2) {
+          // step back: lower the raised grid lens first. ScaleTravel
+          // reads data-lens-raised and yields to us when this is set.
+          if (lensRef.current.t > 0.5) {
+            lensRef.current.t = 0;
+            canvas.removeAttribute("data-lens-raised");
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+          return;
+        }
+        if (e.fingers !== 1) return;
         void getFieldAudio().start();
         // tap intensity is the strike — bloom size, note length and the
         // haptic all ride the same 0..1 from core.
         addBloom(e.x, e.y, 0.6 + e.intensity * 0.9, "press");
+      },
+      pan2: (e) => {
+        lastGestureAtRef.current = performance.now();
+        // two-finger pan leans the pressure front, gentler than the law's
+        // own three-finger wind.
+        windRef.current.target = clamp(windRef.current.target + e.dx * 0.0015, -1.4, 1.4);
+      },
+      twist: (e) => {
+        lastGestureAtRef.current = performance.now();
+        if (e.fingers === 3) {
+          // three-finger twist = season: a slow warm/cool drift.
+          if (e.phase === "move") seasonRef.current += e.angle * 0.7;
+          return;
+        }
+        if (e.phase === "start") twistAcc = 0;
+        if (e.phase === "move") twistAcc += e.angle;
+        if (e.phase === "end" && Math.abs(twistAcc) > 0.9) {
+          lensRef.current.t = lensRef.current.t > 0.5 ? 0 : 1;
+          if (lensRef.current.t > 0.5) canvas.setAttribute("data-lens-raised", "1");
+          else canvas.removeAttribute("data-lens-raised");
+          try { getFieldAudio().chime(); } catch { /* noop */ }
+          try { haptics.tap(); } catch { /* noop */ }
+          recordTape("sigil", 0.5, "pulse/lens");
+        }
       },
       drag: (e) => {
         lastGestureAtRef.current = performance.now();
@@ -878,6 +954,27 @@ export default function Pulse() {
     recordTape("object", 0.54, `pulse/load/${entry.name}`);
   }, [recordTape]);
 
+  // ceremony hold on a kept pattern chip is its solemn act: annihilation —
+  // the touch-reachable delete (a plain tap still loads it).
+  const onDeletePattern = useCallback((entry: SavedPattern) => {
+    setSaved((prev) => {
+      const next = prev.filter((item) => item !== entry);
+      try { localStorage.setItem(PATTERN_KEY, JSON.stringify(next)); } catch { /* noop */ }
+      return next;
+    });
+    try { getFieldAudio().bell(); } catch { /* noop */ }
+    try { haptics.bloom(); } catch { /* noop */ }
+    recordTape("kept", 0.7, `pulse/forget/${entry.name}`);
+  }, [recordTape]);
+
+  const letGoPatterns = useCallback(() => {
+    setSaved([]);
+    try { localStorage.setItem(PATTERN_KEY, JSON.stringify([])); } catch { /* noop */ }
+    try { getFieldAudio().thud(); } catch { /* noop */ }
+    try { haptics.roll(); } catch { /* noop */ }
+    recordTape("kept", 0.5, "pulse/let-go");
+  }, [recordTape]);
+
   const onShare = useCallback(() => {
     try {
       const payload = { kind: pattern.kind, seed: pattern.seed, hr, br: breathRate, stress };
@@ -1037,20 +1134,19 @@ export default function Pulse() {
           {saved.length > 0 && (
             <div className="pulse-saved" aria-label="saved pulse patterns">
               {saved.slice(0, 8).map((entry) => (
-                <button
-                  type="button"
+                <SavedPatternChip
                   key={`${entry.name}-${entry.seed}`}
-                  onClick={() => onLoadPattern(entry)}
-                  style={{ "--pulse-tone": PATTERN_COLORS[entry.kind] } as CSSProperties}
-                >
-                  <span>{entry.kind}</span>
-                  {entry.name}
-                </button>
+                  entry={entry}
+                  onLoad={() => onLoadPattern(entry)}
+                  onForget={() => onDeletePattern(entry)}
+                />
               ))}
             </div>
           )}
         </div>
       </MobileInstrumentPanel>
+
+      <LetGo label="let the kept patterns go" onLetGo={letGoPatterns} visible={saved.length > 0} />
 
       <style
         dangerouslySetInnerHTML={{
@@ -1568,6 +1664,62 @@ export default function Pulse() {
   );
 }
 
+/**
+ * A kept-pattern chip: a plain tap loads it; holding it through the
+ * ceremony tier (THRESHOLDS.ceremonyMs) is its solemn act — forgetting it.
+ * A touch-reachable delete, never right-click-only.
+ */
+function SavedPatternChip({
+  entry,
+  onLoad,
+  onForget,
+}: {
+  entry: SavedPattern;
+  onLoad: () => void;
+  onForget: () => void;
+}) {
+  const holdRef = useRef<{ downAt: number; fired: boolean; timer: number | null }>({
+    downAt: 0,
+    fired: false,
+    timer: null,
+  });
+  const clearTimer = () => {
+    if (holdRef.current.timer != null) {
+      window.clearTimeout(holdRef.current.timer);
+      holdRef.current.timer = null;
+    }
+  };
+  return (
+    <button
+      type="button"
+      className="pulse-saved-chip"
+      style={{ "--pulse-tone": PATTERN_COLORS[entry.kind] } as CSSProperties}
+      onPointerDown={() => {
+        holdRef.current.downAt = performance.now();
+        holdRef.current.fired = false;
+        clearTimer();
+        holdRef.current.timer = window.setTimeout(() => {
+          holdRef.current.fired = true;
+          onForget();
+        }, THRESHOLDS.ceremonyMs);
+      }}
+      onPointerUp={() => {
+        clearTimer();
+        if (!holdRef.current.fired) onLoad();
+      }}
+      onPointerLeave={() => {
+        clearTimer();
+      }}
+      onPointerCancel={() => {
+        clearTimer();
+      }}
+    >
+      <span>{entry.kind}</span>
+      {entry.name}
+    </button>
+  );
+}
+
 function PulseSlider({
   label,
   min,
@@ -1793,10 +1945,9 @@ function drawOrbitTrace(
   }
   ctx.stroke();
 
-  ctx.strokeStyle = colorAlpha(tone, listening ? 0.92 : 0.72);
-  ctx.shadowColor = tone;
-  ctx.shadowBlur = reduce ? 0 : listening ? 15 : 8;
-  ctx.lineWidth = listening ? 2.4 : 1.65;
+  // additive glow pass (never ctx.shadowBlur — catastrophic per-frame on
+  // mobile): the same path stroked once wide and dim underneath, once
+  // crisp on top, both under "screen" so the overlap reads as bloom.
   ctx.beginPath();
   for (let i = 0; i < count; i++) {
     const idx = (channel.cursor + i) % count;
@@ -1810,6 +1961,13 @@ function drawOrbitTrace(
     if (i === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
   }
+  if (!reduce) {
+    ctx.strokeStyle = colorAlpha(tone, listening ? 0.30 : 0.16);
+    ctx.lineWidth = (listening ? 2.4 : 1.65) + (listening ? 8 : 4);
+    ctx.stroke();
+  }
+  ctx.strokeStyle = colorAlpha(tone, listening ? 0.92 : 0.72);
+  ctx.lineWidth = listening ? 2.4 : 1.65;
   ctx.stroke();
 
   const latestIdx = (channel.cursor - 1 + count) % count;
@@ -1817,14 +1975,19 @@ function drawOrbitTrace(
   const rr = radius + (inShock ? 0 : buf[latestIdx]) * amp;
   const x = cx + Math.cos(a) * rr;
   const y = cy + Math.sin(a) * rr * squash;
-  ctx.shadowBlur = reduce ? 0 : 12;
+  const dotR = listening ? 3.7 : 2.6;
+  if (!reduce) {
+    ctx.fillStyle = colorAlpha(tone, 0.35);
+    ctx.beginPath();
+    ctx.arc(x, y, dotR * 2.6, 0, Math.PI * 2);
+    ctx.fill();
+  }
   ctx.fillStyle = tone;
   ctx.beginPath();
-  ctx.arc(x, y, listening ? 3.7 : 2.6, 0, Math.PI * 2);
+  ctx.arc(x, y, dotR, 0, Math.PI * 2);
   ctx.fill();
 
   if (radius > 150) {
-    ctx.shadowBlur = 0;
     ctx.fillStyle = colorAlpha(tone, 0.62);
     ctx.font = "11px var(--font-mono, ui-monospace)";
     ctx.textAlign = "center";
@@ -1852,10 +2015,6 @@ function drawPatternOrbit(
   const spin = reduce ? 0 : time * 0.034;
   ctx.save();
   ctx.globalCompositeOperation = "screen";
-  ctx.strokeStyle = colorAlpha(tone, 0.42);
-  ctx.shadowColor = tone;
-  ctx.shadowBlur = reduce ? 0 : 10;
-  ctx.lineWidth = 1.35;
   ctx.beginPath();
   let first = true;
   for (let i = 0; i < count; i += stride) {
@@ -1874,14 +2033,30 @@ function drawPatternOrbit(
     }
   }
   ctx.closePath();
+  // additive glow pass instead of ctx.shadowBlur — same closed path, a wide
+  // dim stroke first, the crisp one on top.
+  if (!reduce) {
+    ctx.strokeStyle = colorAlpha(tone, 0.18);
+    ctx.lineWidth = 1.35 + 7;
+    ctx.stroke();
+  }
+  ctx.strokeStyle = colorAlpha(tone, 0.42);
+  ctx.lineWidth = 1.35;
   ctx.stroke();
 
   const a = (cursor / (count - 1)) * Math.PI * 2 + spin;
   const rr = radius + samples[cursor] * radius * 0.105;
+  const px = cx + Math.cos(a) * rr;
+  const py = cy + Math.sin(a) * rr * 0.58;
+  if (!reduce) {
+    ctx.fillStyle = colorAlpha(tone, 0.32);
+    ctx.beginPath();
+    ctx.arc(px, py, 3.2 * 2.8, 0, Math.PI * 2);
+    ctx.fill();
+  }
   ctx.fillStyle = tone;
-  ctx.shadowBlur = reduce ? 0 : 16;
   ctx.beginPath();
-  ctx.arc(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr * 0.58, 3.2, 0, Math.PI * 2);
+  ctx.arc(px, py, 3.2, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 }
@@ -1939,14 +2114,21 @@ function drawNeedle(
   grad.addColorStop(0, "rgba(255, 241, 208, 0)");
   grad.addColorStop(0.42, "rgba(255, 241, 208, 0.46)");
   grad.addColorStop(1, `rgba(255, 93, 115, ${0.58 + shock * 0.28})`);
-  ctx.strokeStyle = grad;
-  ctx.lineWidth = 1.3 + shock * 1.2;
-  ctx.shadowColor = "#fff1d0";
-  ctx.shadowBlur = 10 + shock * 12;
   ctx.beginPath();
   ctx.moveTo(0, 0);
   ctx.lineTo(len, 0);
+  // additive glow pass instead of ctx.shadowBlur — same path, wide + dim
+  // underneath the crisp gradient stroke.
+  ctx.strokeStyle = `rgba(255, 210, 160, ${0.22 + shock * 0.14})`;
+  ctx.lineWidth = (1.3 + shock * 1.2) + (9 + shock * 6);
   ctx.stroke();
+  ctx.strokeStyle = grad;
+  ctx.lineWidth = 1.3 + shock * 1.2;
+  ctx.stroke();
+  ctx.fillStyle = `rgba(255, 241, 208, ${0.18 + beat * 0.16 + shock * 0.14})`;
+  ctx.beginPath();
+  ctx.arc(0, 0, (4 + beat * 5 + shock * 4) * 2.2, 0, Math.PI * 2);
+  ctx.fill();
   ctx.fillStyle = `rgba(255, 241, 208, ${0.42 + beat * 0.32 + shock * 0.26})`;
   ctx.beginPath();
   ctx.arc(0, 0, 4 + beat * 5 + shock * 4, 0, Math.PI * 2);
