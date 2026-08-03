@@ -89,6 +89,170 @@ export type FlockParams = {
 /** How far a held finger reaches into the sky. */
 export const LURE_RADIUS = 18;
 
+/**
+ * The aviary catalog — thirteen kinds the meadow holds. Colors in 0..1,
+ * sized relative to the murmuration's base point scale. Pure data (no
+ * classes): the hot loop indexes these by `kindOf[i]`.
+ */
+export const BIRD_KINDS = [
+  "parrot",
+  "cockatiel",
+  "falcon",
+  "hawk",
+  "duck",
+  "chicken",
+  "emu",
+  "finch",
+  "sparrow",
+  "hummingbird",
+  "red-ibis",
+  "peacock",
+  "bird-of-paradise",
+] as const;
+
+export type BirdKind = (typeof BIRD_KINDS)[number];
+
+/** What a bird is doing — drives place and the integrator branch. */
+export const ACTIVITIES = [
+  "flock",
+  "fly",
+  "swoop",
+  "flap",
+  "perch",
+  "drink",
+  "swim",
+  "hop",
+  "strut",
+] as const;
+
+export type Activity = (typeof ACTIVITIES)[number];
+
+export type BirdSpecies = {
+  kind: BirdKind;
+  label: string;
+  /** Multiplier on point size. */
+  size: number;
+  body: readonly [number, number, number];
+  /** Preferred activities, first = signature. */
+  activities: readonly Activity[];
+};
+
+export const BIRD_SPECIES: Record<BirdKind, BirdSpecies> = {
+  parrot: {
+    kind: "parrot",
+    label: "parrot",
+    size: 1.15,
+    body: [0.22, 0.55, 0.32],
+    activities: ["perch", "fly", "drink", "flock"],
+  },
+  cockatiel: {
+    kind: "cockatiel",
+    label: "cockatiel",
+    size: 1.05,
+    body: [0.82, 0.72, 0.48],
+    activities: ["perch", "hop", "fly", "drink"],
+  },
+  falcon: {
+    kind: "falcon",
+    label: "falcon",
+    size: 1.2,
+    body: [0.42, 0.4, 0.38],
+    activities: ["swoop", "fly", "flock", "perch"],
+  },
+  hawk: {
+    kind: "hawk",
+    label: "hawk",
+    size: 1.35,
+    body: [0.48, 0.34, 0.22],
+    activities: ["swoop", "fly", "flock", "perch"],
+  },
+  duck: {
+    kind: "duck",
+    label: "duck",
+    size: 1.2,
+    body: [0.2, 0.38, 0.32],
+    activities: ["swim", "drink", "fly", "hop"],
+  },
+  chicken: {
+    kind: "chicken",
+    label: "chicken",
+    size: 1.1,
+    body: [0.72, 0.62, 0.48],
+    activities: ["hop", "drink", "strut", "fly"],
+  },
+  emu: {
+    kind: "emu",
+    label: "emu",
+    size: 1.7,
+    body: [0.38, 0.3, 0.24],
+    activities: ["hop", "drink", "strut"],
+  },
+  finch: {
+    kind: "finch",
+    label: "finch",
+    size: 0.75,
+    body: [0.72, 0.48, 0.22],
+    activities: ["flock", "perch", "hop", "fly"],
+  },
+  sparrow: {
+    kind: "sparrow",
+    label: "sparrow",
+    size: 0.8,
+    body: [0.45, 0.36, 0.28],
+    activities: ["hop", "flock", "perch", "drink"],
+  },
+  hummingbird: {
+    kind: "hummingbird",
+    label: "hummingbird",
+    size: 0.65,
+    body: [0.18, 0.55, 0.48],
+    activities: ["flap", "drink", "fly", "perch"],
+  },
+  "red-ibis": {
+    kind: "red-ibis",
+    label: "red ibis",
+    size: 1.25,
+    body: [0.72, 0.16, 0.14],
+    activities: ["drink", "fly", "perch", "flock"],
+  },
+  peacock: {
+    kind: "peacock",
+    label: "peacock",
+    size: 1.45,
+    body: [0.12, 0.38, 0.42],
+    activities: ["strut", "perch", "drink", "hop"],
+  },
+  "bird-of-paradise": {
+    kind: "bird-of-paradise",
+    label: "bird of paradise",
+    size: 1.25,
+    body: [0.12, 0.12, 0.14],
+    activities: ["strut", "perch", "fly", "flap"],
+  },
+};
+
+/** Habitat anchors in world metres — the meadow under the murmuration. */
+export const PLACES = {
+  tree: { x: -14, y: -5.2, z: 10 },
+  pond: { x: 16, y: -9.2, z: 6 },
+  drink: { x: 12, y: -9.0, z: 4 },
+  grass: { x: -6, y: -11.2, z: -12 },
+  hay: { x: 20, y: -11.0, z: -8 },
+  sky: { x: 0, y: 2, z: 0 },
+} as const;
+
+export function activityIndex(a: Activity): number {
+  return ACTIVITIES.indexOf(a);
+}
+
+export function kindIndex(k: BirdKind): number {
+  return BIRD_KINDS.indexOf(k);
+}
+
+export function isAirActivity(a: Activity): boolean {
+  return a === "flock" || a === "fly" || a === "swoop" || a === "flap";
+}
+
 export type FlockState = {
   n: number;
   /** n*3 — metres. */
@@ -97,6 +261,12 @@ export type FlockState = {
   vel: Float32Array;
   /** n*2 static — wing-phase offset (turns) and relative size. */
   bird: Float32Array;
+  /** n — catalog kind index. */
+  kindOf: Uint8Array;
+  /** n — activity index into ACTIVITIES. */
+  activityOf: Uint8Array;
+  /** n*3 — species body tint, uploaded once to the GPU. */
+  tint: Float32Array;
   /** Seconds of unspent time held for the next fixed step. */
   acc: number;
   // ——— scratch, allocated once: the uniform grid that keeps the
@@ -152,32 +322,116 @@ export function flockSize(request: number): number {
  * looks. The room must be alive before it is touched, and a random gas of
  * birds is not a flock; it is a thing that becomes one while you watch.
  */
+function pickActivity(sp: BirdSpecies, rng: () => number, preferSignature: boolean): Activity {
+  if (preferSignature) return sp.activities[0];
+  const weights = sp.activities.map((_, i) => 1 / (1 + i * 0.85));
+  let sum = 0;
+  for (const w of weights) sum += w;
+  let r = rng() * sum;
+  for (let i = 0; i < sp.activities.length; i++) {
+    r -= weights[i];
+    if (r <= 0) return sp.activities[i];
+  }
+  return sp.activities[0];
+}
+
+function placeForActivity(activity: Activity, rng: () => number): Vec3 {
+  const j = (s: number) => (rng() - 0.5) * s;
+  switch (activity) {
+    case "perch":
+      return { x: PLACES.tree.x + j(3), y: PLACES.tree.y + j(2.5), z: PLACES.tree.z + j(3) };
+    case "flap":
+      return { x: PLACES.tree.x + 2 + j(4), y: PLACES.tree.y + 1 + j(2), z: PLACES.tree.z + j(3) };
+    case "drink":
+      return { x: PLACES.drink.x + j(3), y: PLACES.drink.y + j(0.6), z: PLACES.drink.z + j(3) };
+    case "swim":
+      return { x: PLACES.pond.x + j(4), y: PLACES.pond.y + j(0.4), z: PLACES.pond.z + j(4) };
+    case "hop":
+      return rng() > 0.45
+        ? { x: PLACES.grass.x + j(8), y: PLACES.grass.y + j(0.8), z: PLACES.grass.z + j(8) }
+        : { x: PLACES.hay.x + j(4), y: PLACES.hay.y + j(0.8), z: PLACES.hay.z + j(4) };
+    case "strut":
+      return { x: PLACES.grass.x + 4 + j(8), y: PLACES.grass.y + j(0.6), z: PLACES.grass.z + j(6) };
+    case "swoop":
+      return { x: j(WORLD_X), y: 4 + rng() * 6, z: j(WORLD_Z) };
+    case "fly":
+      return { x: j(WORLD_X * 0.9), y: j(WORLD_Y * 0.7), z: j(WORLD_Z * 0.9) };
+    case "flock":
+    default:
+      return {
+        x: (rng() + rng() - 1) * WORLD_X * 0.55,
+        y: (rng() + rng() - 1) * WORLD_Y * 0.5,
+        z: (rng() + rng() - 1) * WORLD_Z * 0.55,
+      };
+  }
+}
+
 export function seedFlock(seed: number, request: number): FlockState {
   const n = flockSize(request);
   const rng = mulberry32(seed >>> 0);
   const pos = new Float32Array(n * 3);
   const vel = new Float32Array(n * 3);
   const bird = new Float32Array(n * 2);
+  const kindOf = new Uint8Array(n);
+  const activityOf = new Uint8Array(n);
+  const tint = new Float32Array(n * 3);
   const heading = rng() * Math.PI * 2;
+  const guarantee = Math.min(n, BIRD_KINDS.length);
+
   for (let i = 0; i < n; i++) {
-    // two uniforms make a triangle: a body with a middle, not a box
-    pos[i * 3] = (rng() + rng() - 1) * WORLD_X * 0.55;
-    pos[i * 3 + 1] = (rng() + rng() - 1) * WORLD_Y * 0.5;
-    pos[i * 3 + 2] = (rng() + rng() - 1) * WORLD_Z * 0.55;
+    const kind =
+      i < guarantee
+        ? BIRD_KINDS[i]
+        : BIRD_KINDS[Math.floor(rng() * BIRD_KINDS.length)];
+    const sp = BIRD_SPECIES[kind];
+    // First catalog seats open on their signature activity in the meadow;
+    // everyone else is the murmuration (a thin fly minority).
+    const resident = i < guarantee;
+    const activity = resident
+      ? pickActivity(sp, rng, true)
+      : rng() < 0.18
+        ? "fly"
+        : "flock";
+    let px: number;
+    let py: number;
+    let pz: number;
+    if (resident) {
+      const place = placeForActivity(activity, rng);
+      px = place.x;
+      py = place.y;
+      pz = place.z;
+    } else {
+      // same triangle body the murmuration has always used
+      px = (rng() + rng() - 1) * WORLD_X * 0.55;
+      py = (rng() + rng() - 1) * WORLD_Y * 0.5;
+      pz = (rng() + rng() - 1) * WORLD_Z * 0.55;
+    }
+    pos[i * 3] = clamp(px, -WORLD_X, WORLD_X);
+    pos[i * 3 + 1] = clamp(py, -WORLD_Y, WORLD_Y);
+    pos[i * 3 + 2] = clamp(pz, -WORLD_Z, WORLD_Z);
     const yaw = heading + (rng() - 0.5) * 2.6;
     const pitch = (rng() - 0.5) * 0.5;
-    const sp = MIN_SPEED + rng() * (MAX_SPEED - MIN_SPEED);
-    vel[i * 3] = Math.cos(yaw) * Math.cos(pitch) * sp;
-    vel[i * 3 + 1] = Math.sin(pitch) * sp;
-    vel[i * 3 + 2] = Math.sin(yaw) * Math.cos(pitch) * sp;
+    const air = isAirActivity(activity);
+    const spMul = air ? MIN_SPEED + rng() * (MAX_SPEED - MIN_SPEED) : 0.4 + rng() * 1.2;
+    vel[i * 3] = Math.cos(yaw) * Math.cos(pitch) * spMul;
+    vel[i * 3 + 1] = Math.sin(pitch) * spMul * (air ? 1 : 0.2);
+    vel[i * 3 + 2] = Math.sin(yaw) * Math.cos(pitch) * spMul;
     bird[i * 2] = rng();
-    bird[i * 2 + 1] = 0.75 + rng() * 0.55;
+    bird[i * 2 + 1] = (0.75 + rng() * 0.55) * sp.size;
+    kindOf[i] = kindIndex(kind);
+    activityOf[i] = activityIndex(activity);
+    tint[i * 3] = sp.body[0];
+    tint[i * 3 + 1] = sp.body[1];
+    tint[i * 3 + 2] = sp.body[2];
   }
   return {
     n,
     pos,
     vel,
     bird,
+    kindOf,
+    activityOf,
+    tint,
     acc: 0,
     cellOf: new Int32Array(n),
     cellStart: new Int32Array(GRID_CELLS + 1),
@@ -185,6 +439,99 @@ export function seedFlock(seed: number, request: number): FlockState {
     sorted: new Int32Array(n),
     accel: new Float32Array(n * 3),
   };
+}
+
+/** True when every catalog kind is present at least once. */
+export function catalogCovered(state: FlockState): boolean {
+  const seen = new Set<number>();
+  for (let i = 0; i < state.n; i++) seen.add(state.kindOf[i]);
+  return seen.size === BIRD_KINDS.length;
+}
+
+/** Flush birds near a world point into the air (tap / scare). */
+export function flushNear(state: FlockState, at: Vec3, radius: number): void {
+  const r2 = radius * radius;
+  for (let i = 0; i < state.n; i++) {
+    const dx = state.pos[i * 3] - at.x;
+    const dy = state.pos[i * 3 + 1] - at.y;
+    const dz = state.pos[i * 3 + 2] - at.z;
+    if (dx * dx + dy * dy + dz * dz > r2) continue;
+    const sp = BIRD_SPECIES[BIRD_KINDS[state.kindOf[i]]];
+    const next = sp.activities.includes("fly")
+      ? "fly"
+      : sp.activities.includes("flock")
+        ? "flock"
+        : sp.activities.includes("flap")
+          ? "flap"
+          : sp.activities[0];
+    state.activityOf[i] = activityIndex(next);
+    const inv = 1 / (Math.sqrt(dx * dx + dy * dy + dz * dz) + 1e-3);
+    state.vel[i * 3] += dx * inv * 4;
+    state.vel[i * 3 + 1] += dy * inv * 4 + 3;
+    state.vel[i * 3 + 2] += dz * inv * 4;
+  }
+}
+
+/** Settle the nearest bird onto a perch / grass roost (hold). */
+export function roostNearest(state: FlockState, at: Vec3): number {
+  let best = 0;
+  let bestD = Infinity;
+  for (let i = 0; i < state.n; i++) {
+    const dx = state.pos[i * 3] - at.x;
+    const dy = state.pos[i * 3 + 1] - at.y;
+    const dz = state.pos[i * 3 + 2] - at.z;
+    const d = dx * dx + dy * dy + dz * dz;
+    if (d < bestD) {
+      bestD = d;
+      best = i;
+    }
+  }
+  const sp = BIRD_SPECIES[BIRD_KINDS[state.kindOf[best]]];
+  const prefer = sp.activities.includes("perch")
+    ? "perch"
+    : sp.activities.includes("hop")
+      ? "hop"
+      : sp.activities.includes("strut")
+        ? "strut"
+        : sp.activities[0];
+  state.activityOf[best] = activityIndex(prefer);
+  const place = placeForActivity(prefer, mulberry32(state.kindOf[best] + 17));
+  state.pos[best * 3] = place.x;
+  state.pos[best * 3 + 1] = place.y;
+  state.pos[best * 3 + 2] = place.z;
+  state.vel[best * 3] *= 0.1;
+  state.vel[best * 3 + 1] *= 0.1;
+  state.vel[best * 3 + 2] *= 0.1;
+  return best;
+}
+
+/** Flick-launch the nearest bird into a swoop / flight. */
+export function launchNearest(state: FlockState, at: Vec3, dir: Vec3, speed: number): number {
+  let best = 0;
+  let bestD = Infinity;
+  for (let i = 0; i < state.n; i++) {
+    const dx = state.pos[i * 3] - at.x;
+    const dy = state.pos[i * 3 + 1] - at.y;
+    const dz = state.pos[i * 3 + 2] - at.z;
+    const d = dx * dx + dy * dy + dz * dz;
+    if (d < bestD) {
+      bestD = d;
+      best = i;
+    }
+  }
+  const sp = BIRD_SPECIES[BIRD_KINDS[state.kindOf[best]]];
+  const next = sp.activities.includes("swoop")
+    ? "swoop"
+    : sp.activities.includes("fly")
+      ? "fly"
+      : "flock";
+  state.activityOf[best] = activityIndex(next);
+  const m = Math.sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z) || 1;
+  const s = Math.min(MAX_SPEED, Math.max(MIN_SPEED, speed));
+  state.vel[best * 3] = (dir.x / m) * s;
+  state.vel[best * 3 + 1] = (dir.y / m) * s;
+  state.vel[best * 3 + 2] = (dir.z / m) * s;
+  return best;
 }
 
 function cellIndex(x: number, y: number, z: number): number {
@@ -206,19 +553,28 @@ function cellIndex(x: number, y: number, z: number): number {
  * a bird before the wall clamps it.
  */
 export function stepFlock(state: FlockState, params: FlockParams, dt: number): void {
-  const { n, pos, vel, accel, cellOf, cellStart, cursor, sorted } = state;
+  const { n, pos, vel, accel, cellOf, cellStart, cursor, sorted, activityOf } = state;
   if (n === 0 || dt <= 0) return;
 
   // — the uniform grid, rebuilt by counting sort each step —
+  // Only air birds enter the grid — residents are O(1) place motion.
   cellStart.fill(0);
   for (let i = 0; i < n; i++) {
+    const act = ACTIVITIES[activityOf[i]];
+    if (!isAirActivity(act)) {
+      cellOf[i] = -1;
+      continue;
+    }
     const c = cellIndex(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]);
     cellOf[i] = c;
     cellStart[c + 1] += 1;
   }
   for (let c = 0; c < GRID_CELLS; c++) cellStart[c + 1] += cellStart[c];
   cursor.set(cellStart.subarray(0, GRID_CELLS));
-  for (let i = 0; i < n; i++) sorted[cursor[cellOf[i]]++] = i;
+  for (let i = 0; i < n; i++) {
+    if (cellOf[i] < 0) continue;
+    sorted[cursor[cellOf[i]]++] = i;
+  }
 
   const sep = Math.max(0, params.separation);
   const ali = Math.max(0, params.alignment);
@@ -227,12 +583,54 @@ export function stepFlock(state: FlockState, params: FlockParams, dt: number): v
   const sepR2 = SEPARATION_RADIUS * SEPARATION_RADIUS;
 
   for (let i = 0; i < n; i++) {
+    const act = ACTIVITIES[activityOf[i]];
     const px = pos[i * 3];
     const py = pos[i * 3 + 1];
     const pz = pos[i * 3 + 2];
     const vx = vel[i * 3];
     const vy = vel[i * 3 + 1];
     const vz = vel[i * 3 + 2];
+
+    // Ground / water / perch residents — cheap place motion, no O(neighbors).
+    if (!isAirActivity(act)) {
+      let ax = 0;
+      let ay = 0;
+      let az = 0;
+      const phase = i * 0.37 + px * 0.05;
+      if (act === "perch") {
+        ax += (PLACES.tree.x - px) * 1.2;
+        ay += (PLACES.tree.y - py) * 1.2;
+        az += (PLACES.tree.z - pz) * 1.2;
+        ax += Math.sin(phase) * 0.4;
+      } else if (act === "drink") {
+        ax += (PLACES.drink.x - px) * 1.4;
+        ay += (PLACES.drink.y - py) * 2.2;
+        az += (PLACES.drink.z - pz) * 1.4;
+        ay += Math.sin(phase * 3) * 0.8;
+      } else if (act === "swim") {
+        ax += (PLACES.pond.x - px) * 0.9 + Math.cos(phase) * 1.6;
+        ay += (PLACES.pond.y - py) * 3.0;
+        az += (PLACES.pond.z - pz) * 0.9 + Math.sin(phase) * 1.6;
+      } else if (act === "hop") {
+        const home = px * pz > 0 ? PLACES.hay : PLACES.grass;
+        ax += (home.x - px) * 0.5 + Math.sin(phase * 2.1) * 2.2;
+        ay += (home.y - py) * 2.4;
+        az += (home.z - pz) * 0.5 + Math.cos(phase * 1.7) * 2.2;
+        if (Math.floor(phase * 8 + i) % 17 === 0) ay += 6;
+      } else if (act === "strut") {
+        ax += Math.sin(phase * 0.4) * 1.4;
+        ay += (PLACES.grass.y - py) * 2.0;
+        az += Math.cos(phase * 0.35) * 1.1;
+      }
+      // Soft wind only — residents feel a breeze, not a gale.
+      ax += params.wind.x * 0.12;
+      ay += params.wind.y * 0.12;
+      az += params.wind.z * 0.12;
+      accel[i * 3] = ax;
+      accel[i * 3 + 1] = ay;
+      accel[i * 3 + 2] = az;
+      continue;
+    }
 
     let sumVx = 0;
     let sumVy = 0;
@@ -353,6 +751,8 @@ export function stepFlock(state: FlockState, params: FlockParams, dt: number): v
   }
 
   for (let i = 0; i < n; i++) {
+    const act = ACTIVITIES[activityOf[i]];
+    const air = isAirActivity(act);
     let vx = vel[i * 3] + accel[i * 3] * dt;
     let vy = vel[i * 3 + 1] + accel[i * 3 + 1] * dt;
     let vz = vel[i * 3 + 2] + accel[i * 3 + 2] * dt;
@@ -369,25 +769,41 @@ export function stepFlock(state: FlockState, params: FlockParams, dt: number): v
     if (nz > WORLD_Z && vz > 0) vz = -vz * 0.6;
     else if (nz < -WORLD_Z && vz < 0) vz = -vz * 0.6;
 
+    // Swoop pulls down until low, then recovers into fly.
+    if (act === "swoop") {
+      vy -= 4.5 * dt * 60; // strong dive in accel-space already applied; keep nose down
+      if (pos[i * 3 + 1] < -6) {
+        activityOf[i] = activityIndex("fly");
+        vy = Math.abs(vy) * 0.5 + 2;
+      }
+    }
+
+    const maxSp = air ? (act === "swoop" ? MAX_SPEED * 1.15 : MAX_SPEED) : 3.2;
+    const minSp = air ? MIN_SPEED : 0;
     const sp = Math.sqrt(vx * vx + vy * vy + vz * vz);
-    if (sp > MAX_SPEED) {
-      const k = MAX_SPEED / sp;
+    if (sp > maxSp) {
+      const k = maxSp / sp;
       vx *= k;
       vy *= k;
       vz *= k;
-    } else if (sp < MIN_SPEED) {
+    } else if (air && sp < minSp) {
       // A bird that has been stopped dead still leaves in some direction:
       // its own if it has one, the season's if it does not.
-      const k = sp > 1e-6 ? MIN_SPEED / sp : 0;
+      const k = sp > 1e-6 ? minSp / sp : 0;
       if (k > 0) {
         vx *= k;
         vy *= k;
         vz *= k;
       } else {
-        vx = params.goal.x * MIN_SPEED;
-        vy = params.goal.y * MIN_SPEED;
-        vz = params.goal.z * MIN_SPEED;
+        vx = params.goal.x * minSp;
+        vy = params.goal.y * minSp;
+        vz = params.goal.z * minSp;
       }
+    } else if (!air) {
+      // Damp residents so they settle into their place.
+      vx *= 0.92;
+      vy *= 0.88;
+      vz *= 0.92;
     }
     // and the sky is closed: whatever the wind, a bird is inside it.
     const px = clamp(pos[i * 3] + vx * dt, -WORLD_X, WORLD_X);

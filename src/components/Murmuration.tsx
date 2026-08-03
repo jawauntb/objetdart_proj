@@ -52,6 +52,7 @@ import {
 } from "@/lib/room-runtime";
 import LetGo from "@/components/LetGo";
 import {
+  MIN_SPEED,
   PARTIALS,
   SEASONS,
   WORLD_X,
@@ -61,9 +62,12 @@ import {
   callInterval,
   centroid,
   flockSize,
+  flushNear,
+  launchNearest,
   orderParameter,
   partialFreq,
   partialsForOrder,
+  roostNearest,
   seasonGoal,
   seasonIndex,
   seedFlock,
@@ -116,10 +120,29 @@ uniform float u_aspect;
 uniform float u_roll;
 uniform float u_horizon;
 uniform float u_breath;
+uniform float u_time;
+
+float hash21(vec2 p) {
+  p = fract(p * vec2(123.34, 456.21));
+  p += dot(p, p + 45.32);
+  return fract(p.x * p.y);
+}
+float noise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  float a = hash21(i);
+  float b = hash21(i + vec2(1.0, 0.0));
+  float c = hash21(i + vec2(0.0, 1.0));
+  float d = hash21(i + vec2(1.0, 1.0));
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
+}
+
 void main() {
   vec2 c = vUv - 0.5;
   float cs = cos(u_roll), sn = sin(u_roll);
   float y = (c.x * sn + c.y * cs) + 0.5;
+  float x = (c.x * cs - c.y * sn) + 0.5;
   // the real horizon, where the camera's own level lands on the screen
   float a = y - u_horizon;
   vec3 col = a >= 0.0
@@ -130,6 +153,57 @@ void main() {
   float d = length(d2);
   col += u_sunTint * exp(-d * d * 26.0) * (0.34 + u_breath * 0.09) * u_sun.z;
   col += u_sunTint * smoothstep(0.026, 0.012, d) * 0.5 * u_sun.z;
+
+  // —— clouds above the horizon ——
+  if (a > 0.02) {
+    float clouds = noise(vec2(x * u_aspect * 2.2 + u_time * 0.02, y * 3.0));
+    float cm = smoothstep(0.55, 0.78, clouds) * smoothstep(0.02, 0.22, a) * (1.0 - smoothstep(0.4, 0.55, a));
+    col = mix(col, mix(vec3(0.92, 0.90, 0.86), u_sunTint, 0.15), cm * 0.55);
+  }
+
+  // —— meadow under the horizon: grass, pond, tree, hay, fruit ——
+  if (a < 0.0) {
+    float g = -a;
+    // grass texture
+    float blades = step(0.72, noise(vec2(x * 40.0 * u_aspect, g * 28.0)));
+    col += vec3(0.04, 0.06, 0.02) * blades * smoothstep(0.0, 0.2, g);
+
+    // pond (right meadow)
+    vec2 pondC = vec2(0.72, u_horizon - 0.10);
+    vec2 pq = (vec2(x, y) - pondC) * vec2(u_aspect * 1.2, 1.9);
+    float pd = length(pq);
+    float pond = 1.0 - smoothstep(0.085, 0.105, pd);
+    float shore = smoothstep(0.085, 0.105, pd) * (1.0 - smoothstep(0.105, 0.125, pd));
+    float ripple = noise(vec2(x * 14.0 + u_time * 0.15, y * 22.0));
+    vec3 water = mix(vec3(0.12, 0.28, 0.34), vec3(0.30, 0.48, 0.46), 0.3 + ripple * 0.4);
+    col = mix(col, vec3(0.42, 0.36, 0.24), shore);
+    col = mix(col, water, pond);
+
+    // hay pile (far right)
+    vec2 hayC = vec2(0.88, u_horizon - 0.16);
+    float hay = 1.0 - smoothstep(0.055, 0.075, length((vec2(x, y) - hayC) * vec2(u_aspect * 1.5, 2.4)));
+    col = mix(col, mix(vec3(0.62, 0.48, 0.22), vec3(0.80, 0.64, 0.30), noise(vec2(x * 50.0, y * 40.0))), hay);
+
+    // tree (left) — trunk + canopy + fruit
+    float trunkX = 0.22;
+    float trunk = (1.0 - smoothstep(0.008, 0.016, abs((x - trunkX) * u_aspect)))
+      * smoothstep(u_horizon - 0.22, u_horizon - 0.18, y)
+      * (1.0 - smoothstep(u_horizon - 0.02, u_horizon + 0.01, y));
+    col = mix(col, vec3(0.22, 0.14, 0.08), trunk);
+    float canopy = 0.0;
+    canopy = max(canopy, 1.0 - smoothstep(0.09, 0.11, length((vec2(x, y) - vec2(0.22, u_horizon + 0.02)) * vec2(u_aspect, 1.0))));
+    canopy = max(canopy, 1.0 - smoothstep(0.07, 0.09, length((vec2(x, y) - vec2(0.17, u_horizon + 0.05)) * vec2(u_aspect, 1.0))));
+    canopy = max(canopy, 1.0 - smoothstep(0.07, 0.09, length((vec2(x, y) - vec2(0.27, u_horizon + 0.04)) * vec2(u_aspect, 1.0))));
+    vec3 leaf = mix(vec3(0.10, 0.26, 0.12), vec3(0.22, 0.40, 0.16), noise(vec2(x * 18.0, y * 16.0)));
+    col = mix(col, leaf, canopy * 0.92);
+    for (int i = 0; i < 6; i++) {
+      float fi = float(i);
+      vec2 fc = vec2(0.16 + fi * 0.022, u_horizon - 0.01 + hash21(vec2(fi, 3.0)) * 0.06);
+      float fruit = (1.0 - smoothstep(0.008, 0.014, length((vec2(x, y) - fc) * vec2(u_aspect, 1.0)))) * canopy;
+      col = mix(col, mix(vec3(0.72, 0.18, 0.12), vec3(0.86, 0.52, 0.16), hash21(vec2(fi, 8.0))), fruit);
+    }
+  }
+
   gl_FragColor = vec4(col, 1.0);
 }
 `;
@@ -138,6 +212,7 @@ const BIRD_VERT = `
 attribute vec3 a_pos;
 attribute vec3 a_vel;
 attribute vec2 a_bird;
+attribute vec3 a_tint;
 uniform mat3 u_view;
 uniform float u_camDist;
 uniform float u_focalX;
@@ -151,6 +226,7 @@ varying float vWing;
 varying float vFade;
 varying float vDepth;
 varying vec2 vDir;
+varying vec3 vTint;
 void main() {
   vec3 p = u_view * a_pos;
   float z = max(p.z + u_camDist, 1.0);
@@ -170,9 +246,10 @@ void main() {
   float pw = u_pulseT - (a_pos.x + ${WORLD_X.toFixed(1)}) / ${(WORLD_X * 2).toFixed(1)} * 0.42;
   float pulse = (pw > 0.0 && pw < 0.6) ? sin(pw * 11.0) * exp(-pw * 5.0) : 0.0;
   vWing = clamp(mix(0.5 + 0.5 * sin(ph), 0.6, u_reduced) + pulse * 0.55, 0.0, 1.2);
-  gl_PointSize = clamp(u_pointScale * a_bird.y / z, 2.0, 44.0);
+  gl_PointSize = clamp(u_pointScale * a_bird.y / z, 2.0, 52.0);
   vDepth = z;
   vFade = clamp(1.0 - (z - u_camDist) / 110.0, 0.22, 1.0);
+  vTint = a_tint;
 }
 `;
 
@@ -182,6 +259,7 @@ varying float vWing;
 varying float vFade;
 varying float vDepth;
 varying vec2 vDir;
+varying vec3 vTint;
 uniform vec3 u_ink;
 uniform vec3 u_low;
 uniform vec3 u_high;
@@ -203,13 +281,14 @@ void main() {
   float body = smoothstep(0.34, 0.02, length(q * vec2(1.7, 2.4)));
   float a = max(wings, body);
   if (a < 0.02) discard;
-  // the far air a bird fades into is the sky actually behind it
+  // species tint on the near birds; far birds haze into the dusk ink
+  vec3 ink = mix(u_ink, vTint, 0.72);
   float hb = clamp(gl_FragCoord.y / u_res.y, 0.0, 1.0) - u_horizon;
   vec3 back = hb >= 0.0
     ? mix(u_low, u_high, smoothstep(0.0, 0.48, hb))
     : mix(u_low, u_ground, smoothstep(0.0, 0.34, -hb));
   float haze = clamp((vDepth - u_hazeFrom) / 130.0, 0.0, 1.0) * u_haze;
-  gl_FragColor = vec4(mix(u_ink, back, haze), a * vFade);
+  gl_FragColor = vec4(mix(ink, back, haze), a * vFade);
 }
 `;
 
@@ -348,11 +427,13 @@ export default function Murmuration() {
       roll: gl.getUniformLocation(skyProg, "u_roll"),
       horizon: gl.getUniformLocation(skyProg, "u_horizon"),
       breath: gl.getUniformLocation(skyProg, "u_breath"),
+      time: gl.getUniformLocation(skyProg, "u_time"),
     };
     const uBird = {
       pos: gl.getAttribLocation(birdProg, "a_pos"),
       vel: gl.getAttribLocation(birdProg, "a_vel"),
       bird: gl.getAttribLocation(birdProg, "a_bird"),
+      tint: gl.getAttribLocation(birdProg, "a_tint"),
       view: gl.getUniformLocation(birdProg, "u_view"),
       camDist: gl.getUniformLocation(birdProg, "u_camDist"),
       focalX: gl.getUniformLocation(birdProg, "u_focalX"),
@@ -391,6 +472,9 @@ export default function Murmuration() {
     const birdBuf = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, birdBuf);
     gl.bufferData(gl.ARRAY_BUFFER, state.bird, gl.STATIC_DRAW);
+    const tintBuf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, tintBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, state.tint, gl.STATIC_DRAW);
 
     const resize = () => {
       const r = wrap.getBoundingClientRect();
@@ -573,8 +657,11 @@ export default function Murmuration() {
             return;
           }
           if (e.fingers !== 1) return;
-          // one finger in the air: the birds nearest it break away
-          startle(screenToWorld(e.x, e.y), 26 + e.intensity * 60);
+          // one finger in the air: the birds nearest it break away —
+          // residents flush into flight, the murmuration startles.
+          const at = screenToWorld(e.x, e.y);
+          flushNear(state, at, 10 + e.intensity * 8);
+          startle(at, 26 + e.intensity * 60);
           call(0.7 + e.intensity * 0.5);
           try {
             haptics.tap();
@@ -608,6 +695,16 @@ export default function Murmuration() {
           lure.x = p.x;
           lure.y = p.y;
           lure.z = p.z;
+          // A dwell on the meadow roosts the nearest bird; the longer hold
+          // still gathers the murmuration onto the hand.
+          if (e.phase === "enter" && e.tier >= 1) {
+            roostNearest(state, p);
+            try {
+              haptics.ripple(0.4);
+            } catch {
+              /* noop */
+            }
+          }
           // Duration is an axis: the longer the hand waits, the harder the
           // flock comes in, and past the ceremony it settles onto the hand.
           gather = clamp01(e.elapsed / 2500);
@@ -656,6 +753,16 @@ export default function Murmuration() {
           const g = Math.min(1, e.speed / 3.5) * WIND_MAX;
           handWind.x = clamp(handWind.x + Math.cos(e.angle) * g, -WIND_MAX, WIND_MAX);
           handWind.z = clamp(handWind.z + Math.sin(e.angle) * g, -WIND_MAX, WIND_MAX);
+          // A flick also launches the nearest bird into a swoop / flight.
+          if (e.fingers === 1) {
+            const at = screenToWorld(e.x, e.y);
+            launchNearest(
+              state,
+              at,
+              { x: Math.cos(e.angle) * 2, y: 0.6, z: Math.sin(e.angle) * 2 },
+              MIN_SPEED + e.speed * 3,
+            );
+          }
           try {
             haptics.ripple(0.3);
           } catch {
@@ -741,9 +848,11 @@ export default function Murmuration() {
       shake: ({ intensity }) => {
         lastInteractionAt = performance.now();
         energy = 2.2;
-        // the sky bursts, and gathers itself again
+        // the sky bursts, and gathers itself again —
+        // residents leave the tree and pond for the air
         scatter = Math.min(1, scatter + 0.55 + intensity * 0.45);
         const c = centroid(state.pos, state.n);
+        flushNear(state, c, 40);
         startle(c, 40 + intensity * 60);
         stirTurbulence(0.25 + intensity * 0.35);
         pulse();
@@ -1008,6 +1117,7 @@ export default function Murmuration() {
       gl.uniform1f(uSky.roll, roll);
       gl.uniform1f(uSky.horizon, horizon);
       gl.uniform1f(uSky.breath, breath);
+      gl.uniform1f(uSky.time, visualT);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       gl.disableVertexAttribArray(uSky.pos);
 
@@ -1031,6 +1141,11 @@ export default function Murmuration() {
       gl.bindBuffer(gl.ARRAY_BUFFER, birdBuf);
       gl.enableVertexAttribArray(uBird.bird);
       gl.vertexAttribPointer(uBird.bird, 2, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, tintBuf);
+      if (uBird.tint >= 0) {
+        gl.enableVertexAttribArray(uBird.tint);
+        gl.vertexAttribPointer(uBird.tint, 3, gl.FLOAT, false, 0, 0);
+      }
       gl.uniformMatrix3fv(uBird.view, false, viewM);
       gl.uniform1f(uBird.camDist, CAM_DIST);
       gl.uniform1f(uBird.focalX, focalX);
@@ -1052,6 +1167,7 @@ export default function Murmuration() {
       gl.disableVertexAttribArray(uBird.pos);
       gl.disableVertexAttribArray(uBird.vel);
       gl.disableVertexAttribArray(uBird.bird);
+      if (uBird.tint >= 0) gl.disableVertexAttribArray(uBird.tint);
     };
     raf = requestAnimationFrame(draw);
 
@@ -1087,6 +1203,7 @@ export default function Murmuration() {
       gl.deleteBuffer(posBuf);
       gl.deleteBuffer(velBuf);
       gl.deleteBuffer(birdBuf);
+      gl.deleteBuffer(tintBuf);
       gl.deleteBuffer(quad);
       gl.deleteProgram(skyProg);
       gl.deleteProgram(birdProg);
