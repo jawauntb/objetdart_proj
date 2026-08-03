@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
+import { attachGestures } from "@/lib/gesture";
 import { useField } from "@/store/field";
 import GreekKeyFrame from "@/components/GreekKeyFrame";
 
@@ -358,8 +359,16 @@ export default function Aphros() {
   const sandImpressionsRef = useRef<SandImpression[]>([]);
   const sandImpressionIdRef = useRef(0);
 
-  // Long-press timer for the sand surface.
-  const sandPressTimerRef = useRef<number | null>(null);
+  // ── the law layer (gesture grammar) ───────────────────────────────
+  // Three fingers dragged are the shore wind; three fingers held dilate
+  // the whole beach's time; a steady tapped pulse entrains the lapping
+  // tongues. Thresholds live in gesture/core alone.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const timeScaleRef = useRef({ cur: 1, target: 1 });
+  const windRef = useRef({ cur: 0, target: 0 });
+  const entrainRef = useRef({ bpm: 0, until: 0 });
+  const lastGestureAtRef = useRef(0);
+  const viewportRef = useRef({ w: 0, h: 0 });
 
   // Shell-tuner tap sequence — last few shells the user tapped through
   // the tuner pad. Displayed as a tiny breadcrumb so the user sees what
@@ -413,6 +422,7 @@ export default function Aphros() {
   useEffect(() => {
     const onResize = () => {
       setViewport({ w: window.innerWidth, h: window.innerHeight });
+      viewportRef.current = { w: window.innerWidth, h: window.innerHeight };
     };
     onResize();
     window.addEventListener("resize", onResize);
@@ -878,6 +888,8 @@ export default function Aphros() {
     const bubbles = bubblesRef.current;
     bubbles.length = 0;
     const TARGET = reduce ? 90 : Math.min(360, 180 + Math.floor(w / 5));
+    // the foam's own clock — warped by three-finger time dilation
+    let wnow = performance.now();
     const seed = (force = false) => {
       while (bubbles.length < TARGET) {
         // mostly tiny; some medium; rare big — looks like genuine sea foam
@@ -891,7 +903,7 @@ export default function Aphros() {
           r,
           a: 0.32 + Math.random() * 0.55,
           vx: (Math.random() - 0.5) * 0.42,
-          born: performance.now(),
+          born: wnow,
           life: 2400 + Math.random() * 5400,
           swell: 0,
           pop: 0,
@@ -902,16 +914,22 @@ export default function Aphros() {
 
     // Foam tongue spawner — every ~600ms a small advancing arc of foam
     // is born along the foam/sand boundary. Drawn at the bottom of the
-    // foam canvas so it visually "laps" onto the sand below.
-    let lastTongueSpawn = performance.now();
+    // foam canvas so it visually "laps" onto the sand below. A steady
+    // tapped pulse entrains the lapping to the hand's tempo for a while.
+    let lastTongueSpawn = wnow;
 
     let raf = 0;
     let lastT = performance.now();
 
-    const draw = (now: number) => {
-      const dt = Math.min(64, now - lastT) / 1000;
-      lastT = now;
+    const draw = (rafNow: number) => {
+      const rawDt = Math.min(64, rafNow - lastT) / 1000;
+      lastT = rafNow;
+      const ts = timeScaleRef.current;
+      const dt = rawDt * ts.cur;
+      wnow += dt * 1000;
+      const now = wnow;
       const motion = reduce ? 0.2 : 1;
+      const wind = windRef.current.cur;
 
       ctx.clearRect(0, 0, w, h);
 
@@ -940,8 +958,9 @@ export default function Aphros() {
           if (pt >= 1) bubbles.splice(i, 1);
           continue;
         }
-        // gentle drift, slight upward birth then settle
-        b.x += b.vx * motion * (dt * 60) * 0.4;
+        // gentle drift, slight upward birth then settle — leaning with
+        // whatever shore wind three fingers last dragged across
+        b.x += b.vx * motion * (dt * 60) * 0.4 + wind * dt * 60 * 0.9;
         b.y += Math.sin((now / 1400 + i) * 0.6) * 0.03 * motion;
         if (b.x < -20) b.x = w + 20;
         if (b.x > w + 20) b.x = -20;
@@ -973,18 +992,25 @@ export default function Aphros() {
       // Spawn a new tongue periodically. They live in a module-level
       // ref array so other handlers (sea taps, dolphin entries) can
       // also push tongues — but here we just maintain the steady rhythm.
-      const tongueInterval = reduce ? 1600 : 700;
+      const entrained = performance.now() < entrainRef.current.until && entrainRef.current.bpm > 0;
+      const tongueInterval = entrained
+        ? Math.max(300, Math.min(1600, 60000 / entrainRef.current.bpm))
+        : reduce ? 1600 : 700;
       if (now - lastTongueSpawn > tongueInterval) {
         lastTongueSpawn = now;
         foamTonguesRef.current.push({
           id: foamTongueIdRef.current++,
-          x: Math.random() * w,
+          x: Math.random() * w + wind * 60,
           width: 60 + Math.random() * 120,
           reach: 10 + Math.random() * 22,
           born: now,
           life: 1500 + Math.random() * 900,
         });
         if (foamTonguesRef.current.length > 18) foamTonguesRef.current.shift();
+        if (entrained) {
+          // the lapping keeps your pulse: each entrained tongue speaks
+          try { getFieldAudio().playNote(74 + (foamTongueIdRef.current % 2) * 5, 90); } catch { /* noop */ }
+        }
       }
       for (let i = foamTonguesRef.current.length - 1; i >= 0; i--) {
         const tg = foamTonguesRef.current[i];
@@ -1063,12 +1089,21 @@ export default function Aphros() {
 
     let raf = 0;
     let lastT = performance.now();
-    const t0 = lastT;
+    let tW = 0; // warped seconds — the shells bob on the dilatable clock
 
     const tick = (now: number) => {
-      const dt = Math.min(64, now - lastT) / 1000;
+      const rawDt = Math.min(64, now - lastT) / 1000;
       lastT = now;
-      const t = (now - t0) / 1000;
+      // three-finger time dilation: this loop owns the easing; every
+      // other loop reads timeScaleRef.cur. The wind eases here too.
+      const tsr = timeScaleRef.current;
+      tsr.cur += (tsr.target - tsr.cur) * Math.min(1, rawDt * 5);
+      const wr = windRef.current;
+      wr.cur += (wr.target - wr.cur) * Math.min(1, rawDt * 4);
+      wr.target *= Math.exp(-rawDt / 1.8);
+      const dt = rawDt * tsr.cur;
+      tW += dt;
+      const t = tW;
 
       // auto-spin baseline (slower when reduced)
       const autoVel = (reduce ? (1.2 * Math.PI) / 180 : (5 * Math.PI) / 180);
@@ -1177,18 +1212,37 @@ export default function Aphros() {
     let raf = 0;
     const t0 = performance.now();
     let lastT = t0;
+    let wT = 0;           // warped seconds — the sea's dilatable clock
+    let lastGlimmerAt = 0;
 
     const skyHL = viewport.h * 0.25;
     const seaHL = viewport.h * 0.25;
     const seaBottom = skyHL + seaHL;
 
     const tick = (now: number) => {
-      const tSec = (now - t0) / 1000;
-      const dt = Math.min(64, now - lastT) / 1000;
+      const rawDt = Math.min(64, now - lastT) / 1000;
       lastT = now;
+      const dt = rawDt * timeScaleRef.current.cur;
+      wT += dt;
+      const tSec = wT;
       // motion factor: under reduced-motion the arcs still happen but slower,
       // and the putto bob / ribbon sway freeze.
       const motion = reduce ? 0.25 : 1;
+
+      // glimmer (grammar §6): after ~20s of quiet the sea itself hints —
+      // a soft ripple where a hand would land. Physical, never text.
+      if (now - lastGestureAtRef.current > 20000 && now - lastGlimmerAt > 9000) {
+        lastGlimmerAt = now;
+        const slot = Math.floor(now / 9000);
+        const gseed = (n: number) => { const v = Math.sin((slot + n) * 127.1) * 43758.5453; return v - Math.floor(v); };
+        waterRipplesRef.current.push({
+          x: (0.2 + gseed(0) * 0.6) * viewport.w,
+          y: seaHL * (0.4 + gseed(7) * 0.35),
+          t0: now,
+          strength: 5,
+        });
+        if (waterRipplesRef.current.length > 16) waterRipplesRef.current.shift();
+      }
 
       // ── Dolphins ────────────────────────────────────────────────
       // The surface line is at seaBottom (bottom of the sea band, top of
@@ -1322,7 +1376,8 @@ export default function Aphros() {
           fly.boost += boostVx * dt;
         }
         const flyOffset = fly ? fly.boost : 0;
-        const driftX = pt.x0 * viewport.w + pt.vx * tSec * motion + flyOffset;
+        // the shore wind leans the putti as it leans the foam
+        const driftX = pt.x0 * viewport.w + pt.vx * tSec * motion + flyOffset + windRef.current.cur * 90;
         const range = viewport.w + 120;
         const x = ((driftX + 60) % range + range) % range - 60;
         const baseY = skyHL * pt.altY;
@@ -1527,7 +1582,8 @@ export default function Aphros() {
   };
 
   // ── Sky-band tap — plant a small twinkling star ───────────────────
-  const onSkyClick = (clientX: number, clientY: number) => {
+  // (intensity is the strike: burst haptic and tape ride the same 0..1)
+  const onSkyClick = (clientX: number, clientY: number, intensity = 0.5) => {
     const audio = getFieldAudio();
     const tape = useField.getState().recordTape;
     const id = skyStarIdRef.current++;
@@ -1539,12 +1595,12 @@ export default function Aphros() {
     });
     addAphrosBurst(clientX, clientY);
     audio.chime();
-    haptics.ripple(0.35);
-    tape("object", 0.4, "sky:star");
+    haptics.ripple(0.2 + intensity * 0.3);
+    tape("object", 0.25 + intensity * 0.3, "sky:star");
   };
 
   // ── Sea-band tap — spawn an expanding ripple ──────────────────────
-  const onSeaClick = (clientX: number, clientY: number) => {
+  const onSeaClick = (clientX: number, clientY: number, intensity = 0.5) => {
     const audio = getFieldAudio();
     const tape = useField.getState().recordTape;
     const id = seaRippleIdRef.current++;
@@ -1557,12 +1613,12 @@ export default function Aphros() {
     // Convert clientY to sea-band-local coords.
     const seaTopPx = viewport.h * 0.25; // skyH
     const seaY = clientY - seaTopPx;
-    waterRipplesRef.current.push({ x: clientX, y: seaY, t0: now, strength: 18 });
+    waterRipplesRef.current.push({ x: clientX, y: seaY, t0: now, strength: 10 + intensity * 16 });
     if (waterRipplesRef.current.length > 16) waterRipplesRef.current.shift();
     addAphrosBurst(clientX, clientY);
     audio.chime();
-    haptics.ripple(0.45);
-    tape("ripple", 0.45, "sea");
+    haptics.ripple(0.3 + intensity * 0.3);
+    tape("ripple", 0.3 + intensity * 0.3, "sea");
   };
 
   // ── Foam-band pointer overlay handlers ────────────────────────────
@@ -1584,10 +1640,11 @@ export default function Aphros() {
       }
     }
   };
-  const onFoamClick = (e: React.PointerEvent<HTMLDivElement>) => {
+  // pop the nearest bubble under a tap — routed through the gesture engine
+  const popFoamAt = (clientX: number, clientY: number, intensity = 0.5) => {
     const top = foamBandTopRef.current;
-    const lx = e.clientX;
-    const ly = e.clientY - top;
+    const lx = clientX;
+    const ly = clientY - top;
     const bubbles = bubblesRef.current;
     // find the nearest bubble within a small radius and pop it
     let best: FoamBubble | null = null;
@@ -1609,7 +1666,8 @@ export default function Aphros() {
       const ctx = audio.getAudioContext();
       if (ctx) {
         const tnow = ctx.currentTime;
-        // randomized "thup" — sine pluck around 320-460Hz
+        // randomized "thup" — sine pluck around 320-460Hz; the strike's
+        // intensity sets how loud the bubble breaks
         const f0 = 360 + Math.random() * 110;
         const osc = ctx.createOscillator();
         osc.type = "sine";
@@ -1617,7 +1675,7 @@ export default function Aphros() {
         osc.frequency.exponentialRampToValueAtTime(80, tnow + 0.18);
         const gnode = ctx.createGain();
         gnode.gain.setValueAtTime(0.0001, tnow);
-        gnode.gain.exponentialRampToValueAtTime(0.07, tnow + 0.008);
+        gnode.gain.exponentialRampToValueAtTime(0.04 + intensity * 0.06, tnow + 0.008);
         gnode.gain.exponentialRampToValueAtTime(0.0001, tnow + 0.22);
         osc.connect(gnode).connect(ctx.destination);
         osc.start(tnow);
@@ -1625,20 +1683,15 @@ export default function Aphros() {
       } else {
         audio.thud();
       }
-      tape("ripple", 0.35, "foam:pop");
+      tape("ripple", 0.2 + intensity * 0.3, "foam:pop");
     }
   };
 
   // ── Sand-trail drawing ────────────────────────────────────────────
-  // Pointer drag across the sand band draws faint marks to sandTrailRef.
-  // The marks fade over ~8s — every render frame we apply a low-alpha
-  // black-out wipe.  A short RAF inside this effect handles that wipe.
-  const sandDrawing = useRef<{
-    active: boolean;
-    pointerId: number | null;
-    lastX: number;
-    lastY: number;
-  }>({ active: false, pointerId: null, lastX: 0, lastY: 0 });
+  // A one-finger drag across the sand band (routed by the gesture
+  // engine) draws faint marks to sandTrailRef. The marks fade over ~8s —
+  // every render frame we apply a low-alpha black-out wipe. A short RAF
+  // inside this effect handles that wipe.
   const sandBandTopRef = useRef(0);
 
   useEffect(() => {
@@ -1743,82 +1796,31 @@ export default function Aphros() {
     ctx.stroke();
   };
 
-  const onSandDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    sandDrawing.current.active = true;
-    sandDrawing.current.pointerId = e.pointerId;
-    const startX = e.clientX;
-    const startY = e.clientY - sandBandTopRef.current;
-    sandDrawing.current.lastX = startX;
-    sandDrawing.current.lastY = startY;
-    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* noop */ }
-    // Long-press timer — if the pointer stays roughly still for 600ms,
-    // record a sand impression (depression) at this point. Movement
-    // cancels the timer (in onSandMove).
-    if (sandPressTimerRef.current !== null) {
-      window.clearTimeout(sandPressTimerRef.current);
-    }
-    sandPressTimerRef.current = window.setTimeout(() => {
-      sandImpressionsRef.current.push({
-        id: sandImpressionIdRef.current++,
-        x: startX,
-        y: startY,
-        r: 18 + Math.random() * 10,
-        born: performance.now(),
-        life: 6000,
-      });
-      if (sandImpressionsRef.current.length > 14) sandImpressionsRef.current.shift();
-      // soft thud audio so the user knows their press made a mark
-      const audio = getFieldAudio();
-      audio.thud();
-      useField.getState().recordTape("object", 0.4, "sand:impression");
-      sandPressTimerRef.current = null;
-    }, 600);
-  };
-  const onSandMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!sandDrawing.current.active) return;
-    const lx = e.clientX;
-    const ly = e.clientY - sandBandTopRef.current;
-    const dx = lx - sandDrawing.current.lastX;
-    const dy = ly - sandDrawing.current.lastY;
-    // movement > 4px cancels the pending long-press impression
-    if (sandPressTimerRef.current !== null && Math.hypot(dx, dy) > 4) {
-      window.clearTimeout(sandPressTimerRef.current);
-      sandPressTimerRef.current = null;
-    }
-    drawSandMark(lx, ly, sandDrawing.current.lastX, sandDrawing.current.lastY);
-    sandDrawing.current.lastX = lx;
-    sandDrawing.current.lastY = ly;
-  };
-  const onSandUp = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!sandDrawing.current.active) return;
-    sandDrawing.current.active = false;
-    if (sandPressTimerRef.current !== null) {
-      window.clearTimeout(sandPressTimerRef.current);
-      sandPressTimerRef.current = null;
-    }
-    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* noop */ }
+  // ── Sand impression — a dwell on the sand leaves a depression ──────
+  // (was a private 600ms timer; the dwell tier now comes from core)
+  const sandImpressAt = (clientX: number, clientY: number) => {
+    sandImpressionsRef.current.push({
+      id: sandImpressionIdRef.current++,
+      x: clientX,
+      y: clientY - sandBandTopRef.current,
+      r: 18 + Math.random() * 10,
+      born: performance.now(),
+      life: 6000,
+    });
+    if (sandImpressionsRef.current.length > 14) sandImpressionsRef.current.shift();
+    // soft thud audio so the user knows their press made a mark
+    const audio = getFieldAudio();
+    audio.thud();
+    useField.getState().recordTape("object", 0.4, "sand:impression");
   };
 
-  // ── Ribbon drag handlers — re-curve the ribbon on drag, spring back on release ─
-  const onRibbonDown = (e: React.PointerEvent<SVGPathElement>) => {
-    ribbonDrag.current.active = true;
-    ribbonDrag.current.pointerId = e.pointerId;
-    ribbonDrag.current.lastX = e.clientX;
-    ribbonDrag.current.lastY = e.clientY;
-    // cancel any in-progress release spring so the new drag starts fresh
-    ribbonOffset.current.releasedAt = 0;
-    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* noop */ }
-  };
-  const onRibbonMove = (e: React.PointerEvent<SVGPathElement>) => {
-    if (!ribbonDrag.current.active) return;
-    const dx = e.clientX - ribbonDrag.current.lastX;
-    const dy = e.clientY - ribbonDrag.current.lastY;
-    ribbonDrag.current.lastX = e.clientX;
-    ribbonDrag.current.lastY = e.clientY;
+  // ── Ribbon drag — re-curve the ribbon; spring back on release ──────
+  // (called by the gesture engine's drag stream when it starts on the sash)
+  const ribbonDragMove = (clientX: number, dx: number, dy: number) => {
     // figure out which "segment" of the ribbon we're dragging by the
     // pointer's x-fraction across the viewport.  Pulling on the middle
     // affects c1+c2 most; near the ends, the corresponding endpoint moves.
-    const fx = viewport.w > 0 ? e.clientX / viewport.w : 0.5;
+    const fx = viewportRef.current.w > 0 ? clientX / viewportRef.current.w : 0.5;
     const o = ribbonOffset.current;
     const clamp = (v: number, lim: number) => Math.max(-lim, Math.min(lim, v));
     if (fx < 0.2) {
@@ -1838,8 +1840,7 @@ export default function Aphros() {
       o.c2y = clamp(o.c2y + dy * (w2 / totalW), 80);
     }
   };
-  const onRibbonUp = (e: React.PointerEvent<SVGPathElement>) => {
-    if (!ribbonDrag.current.active) return;
+  const ribbonDragEnd = () => {
     ribbonDrag.current.active = false;
     const o = ribbonOffset.current;
     o.releasedAt = performance.now();
@@ -1847,7 +1848,6 @@ export default function Aphros() {
       c1x: o.c1x, c1y: o.c1y, c2x: o.c2x, c2y: o.c2y,
       sx: o.sx, sy: o.sy, ex: o.ex, ey: o.ey,
     };
-    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* noop */ }
     const audio = getFieldAudio();
     const tape = useField.getState().recordTape;
     audio.chime();
@@ -1918,54 +1918,40 @@ export default function Aphros() {
     setShimmers((prev) => [...prev, { id, pts, born: now, life: 1100 }]);
   };
 
-  // ── Nautilus drag handlers ─────────────────────────────────────────
+  // ── Nautilus spin + tap (routed by the gesture engine) ────────────
   const angleFromCenter = (clientX: number, clientY: number) => {
-    const cx = viewport.w / 2;
-    const cy = viewport.h * 0.55;
+    const cx = viewportRef.current.w / 2;
+    const cy = viewportRef.current.h * 0.55;
     return Math.atan2(clientY - cy, clientX - cx);
   };
 
-  const onNautilusDown = (e: React.PointerEvent<SVGGElement>) => {
-    const target = e.currentTarget;
-    try {
-      target.setPointerCapture(e.pointerId);
-    } catch {
-      /* noop */
-    }
+  const nautilusSpinStart = (clientX: number, clientY: number) => {
     drag.current.active = true;
-    drag.current.pointerId = e.pointerId;
-    drag.current.lastA = angleFromCenter(e.clientX, e.clientY);
-    drag.current.moved = false;
+    drag.current.lastA = angleFromCenter(clientX, clientY);
+    drag.current.moved = true;
     drag.current.velSamples = [];
-    drag.current.centerX = viewport.w / 2;
-    drag.current.centerY = viewport.h * 0.55;
+    drag.current.centerX = viewportRef.current.w / 2;
+    drag.current.centerY = viewportRef.current.h * 0.55;
     nautilusVel.current = 0;
   };
 
-  const onNautilusMove = (e: React.PointerEvent<SVGGElement>) => {
+  const nautilusSpinMove = (clientX: number, clientY: number, dtMs: number) => {
     if (!drag.current.active) return;
-    const a = angleFromCenter(e.clientX, e.clientY);
+    const a = angleFromCenter(clientX, clientY);
     let dA = a - drag.current.lastA;
     // unwrap
     if (dA > Math.PI) dA -= Math.PI * 2;
     if (dA < -Math.PI) dA += Math.PI * 2;
     drag.current.lastA = a;
-    if (Math.abs(dA) > 0.008) drag.current.moved = true;
     nautilusRot.current += dA;
-    // estimate instantaneous angular velocity (rad/sec) — assume ~60fps tick
-    const inst = dA * 60;
+    // instantaneous angular velocity (rad/sec)
+    const inst = dA / Math.max(0.008, dtMs / 1000);
     drag.current.velSamples.push(inst);
     if (drag.current.velSamples.length > 6) drag.current.velSamples.shift();
   };
 
-  const onNautilusUp = (e: React.PointerEvent<SVGGElement>) => {
+  const nautilusSpinEnd = () => {
     if (!drag.current.active) return;
-    const target = e.currentTarget;
-    try {
-      target.releasePointerCapture(e.pointerId);
-    } catch {
-      /* noop */
-    }
     // fling: average of recent samples
     const samples = drag.current.velSamples;
     const avg = samples.length
@@ -1974,26 +1960,28 @@ export default function Aphros() {
     nautilusVel.current = avg;
     const audio = getFieldAudio();
     const tape = useField.getState().recordTape;
-    if (!drag.current.moved) {
-      // a click — play the nautilus note (A4) and show inscription
-      audio.playNote(SHELL_NOTES.nautilus, 260);
-      tape("object", 0.5, "nautilus");
-      inscriptionShellRef.current = "nautilus";
-      showInscription(INSCRIPTIONS.nautilus);
-      popRef.current["nautilus"] = 1;
-      shellBloomRef.current["nautilus"] = 0.001;
-      addAphrosBurst(viewport.w / 2, viewport.h * 0.55);
-    } else {
-      // dragged release: tape it as a sigil; bell if high spin
-      tape("sigil", 0.7, "nautilus");
-      if (Math.abs(avg) > 2.4) {
-        audio.bell();
-      }
+    // dragged release: tape it as a sigil; bell if high spin
+    tape("sigil", 0.7, "nautilus");
+    if (Math.abs(avg) > 2.4) {
+      audio.bell();
     }
     drag.current.active = false;
-    drag.current.pointerId = null;
     drag.current.moved = false;
     drag.current.velSamples = [];
+  };
+
+  const nautilusTap = (intensity = 0.5) => {
+    const audio = getFieldAudio();
+    const tape = useField.getState().recordTape;
+    // a tap — play the nautilus note (A4) and show its inscription;
+    // intensity is the strike: note length and tape weight ride it
+    audio.playNote(SHELL_NOTES.nautilus, 200 + Math.round(intensity * 120));
+    tape("object", 0.35 + intensity * 0.3, "nautilus");
+    inscriptionShellRef.current = "nautilus";
+    showInscription(INSCRIPTIONS.nautilus);
+    popRef.current["nautilus"] = 1;
+    shellBloomRef.current["nautilus"] = 0.001;
+    addAphrosBurst(viewportRef.current.w / 2, viewportRef.current.h * 0.55);
   };
 
   // ── Shell interactions ─────────────────────────────────────────────
@@ -2009,13 +1997,14 @@ export default function Aphros() {
     setHoverShell(null);
     setHoverPos(null);
   };
-  const onShellClick = (id: ShellId) => {
+  const onShellClick = (id: ShellId, intensity = 0.5) => {
     const audio = getFieldAudio();
     const tape = useField.getState().recordTape;
-    // Each shell sounds its own pitch on the A-major-ish scale
-    audio.playNote(SHELL_NOTES[id], 240);
-    haptics.ripple(0.5);
-    tape("object", 0.5, id);
+    // Each shell sounds its own pitch on the A-major-ish scale — the
+    // strike's intensity carries into note length, haptic and tape
+    audio.playNote(SHELL_NOTES[id], 180 + Math.round(intensity * 120));
+    haptics.ripple(0.35 + intensity * 0.3);
+    tape("object", 0.35 + intensity * 0.3, id);
     popRef.current[id] = 1;
     // bloom animation: a stronger scale + bloom envelope on the shell.
     // shellBloomRef holds an age (ms) that the RAF tick decays.
@@ -2090,6 +2079,270 @@ export default function Aphros() {
     setInscriptionStamp((s) => s + 1);
   };
 
+  // ── the ceremony — the room's one solemn act ──────────────────────
+  // Held through the ceremony tier, the shore sings its whole scale:
+  // every tuned shell sounds in order, every scene shell blooms, and
+  // the moment is kept.
+  const ceremonyAtRef = useRef(0);
+  const ceremonyStrum = () => {
+    const now = performance.now();
+    if (now - ceremonyAtRef.current < 6000) return;
+    ceremonyAtRef.current = now;
+    const audio = getFieldAudio();
+    TUNER_ORDER.forEach((id, i) => {
+      window.setTimeout(() => {
+        try { audio.playNote(SHELL_NOTES[id], 300); } catch { /* noop */ }
+      }, i * 90);
+    });
+    for (const sh of SHELLS) {
+      popRef.current[sh.id] = 1;
+      shellBloomRef.current[sh.id] = 0.001;
+    }
+    popRef.current["nautilus"] = 1;
+    shellBloomRef.current["nautilus"] = 0.001;
+    addAphrosBurst(viewportRef.current.w / 2, viewportRef.current.h * 0.55);
+    try { haptics.bloom(); } catch { /* noop */ }
+    useField.getState().recordTape("kept", 0.9, "aphros/ceremony");
+  };
+
+  // ── scrub: a circling finger stirs the sea ────────────────────────
+  const stirSeaAt = (cx: number, winding: number) => {
+    const vp = viewportRef.current;
+    const seaH = vp.h * 0.25;
+    const now = performance.now();
+    const sgn = Math.sign(winding) || 1;
+    for (let i = 0; i < 3; i++) {
+      waterRipplesRef.current.push({
+        x: cx + sgn * (i - 1) * 46,
+        y: seaH * (0.45 + i * 0.14),
+        t0: now + i * 90,
+        strength: 9,
+      });
+    }
+    if (waterRipplesRef.current.length > 16) waterRipplesRef.current.splice(0, waterRipplesRef.current.length - 16);
+    const id = seaRippleIdRef.current++;
+    setSeaRipples((prev) => {
+      const live = prev.filter((s) => now - s.born < s.life).slice(-14);
+      return [...live, { id, x: cx, y: vp.h * 0.25 + seaH * 0.55, born: now, life: 1400 }];
+    });
+    try { getFieldAudio().playNote(72 + Math.round(Math.abs(winding)), 140); } catch { /* noop */ }
+    try { haptics.ripple(0.35); } catch { /* noop */ }
+    useField.getState().recordTape("ripple", 0.5, "aphros/stir");
+  };
+
+  // ── flick: thrown spray — the shore takes the throw ───────────────
+  const sprayAt = (x: number, y: number, angle: number, speed: number) => {
+    const vp = viewportRef.current;
+    const now = performance.now();
+    const sp = Math.min(220, 80 + speed * 120);
+    setSeaRipples((prev) => {
+      const live = prev.filter((s) => now - s.born < s.life).slice(-11);
+      const drops: SeaRipple[] = [];
+      for (let i = 0; i < 3; i++) {
+        drops.push({
+          id: seaRippleIdRef.current++,
+          x: x + Math.cos(angle) * sp * ((i + 1) / 3),
+          y: Math.min(vp.h * 0.62, Math.max(vp.h * 0.27, y + Math.sin(angle) * sp * ((i + 1) / 3))),
+          born: now + i * 60,
+          life: 1200,
+        });
+      }
+      return [...live, ...drops];
+    });
+    foamTonguesRef.current.push({
+      id: foamTongueIdRef.current++,
+      x: Math.max(0, Math.min(vp.w, x + Math.cos(angle) * sp)),
+      width: 70 + speed * 40,
+      reach: 16 + speed * 8,
+      born: now,
+      life: 1300,
+    });
+    if (foamTonguesRef.current.length > 24) foamTonguesRef.current.shift();
+    try { getFieldAudio().spark(); } catch { /* noop */ }
+    try { haptics.chop(); } catch { /* noop */ }
+    useField.getState().recordTape("ripple", 0.55, "aphros/spray");
+  };
+
+  // refs so the once-mounted gesture bindings always call fresh closures
+  const actionsRef = useRef({
+    onShellClick, onPuttoClick, onDolphinClick, onSkyClick, onSeaClick,
+    popFoamAt, nautilusTap, nautilusSpinStart, nautilusSpinMove, nautilusSpinEnd,
+    ribbonDragMove, ribbonDragEnd, drawSandMark, sandImpressAt, ceremonyStrum,
+    stirSeaAt, sprayAt,
+  });
+  actionsRef.current = {
+    onShellClick, onPuttoClick, onDolphinClick, onSkyClick, onSeaClick,
+    popFoamAt, nautilusTap, nautilusSpinStart, nautilusSpinMove, nautilusSpinEnd,
+    ribbonDragMove, ribbonDragEnd, drawSandMark, sandImpressAt, ceremonyStrum,
+    stirSeaAt, sprayAt,
+  };
+
+  // ── gestures (the shared grammar — src/lib/gesture) ───────────────
+  // One engine on the whole shore; taps and drags route to whatever the
+  // hand is over — shell, nautilus, putto, dolphin, sash, or band. The
+  // tuner shells and the inscription stay ARIA'd chrome with their own
+  // handlers. Three fingers are the law (wind / dilated time); pinch and
+  // pan2 stay unbound — the frame belongs to the manifold.
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+
+    type Route = { kind: string; id?: string };
+    const hit = (x: number, y: number): Route => {
+      const el = document.elementFromPoint(x, y);
+      if (!(el instanceof Element)) return { kind: "none" };
+      if (el.closest("button, .aphros-inscription, .oda-site-header, a")) return { kind: "chrome" };
+      const shell = el.closest("[data-shell]");
+      if (shell) return { kind: "shell", id: shell.getAttribute("data-shell") ?? undefined };
+      if (el.closest("[data-nautilus]")) return { kind: "nautilus" };
+      const putto = el.closest("[data-putto]");
+      if (putto) return { kind: "putto", id: putto.getAttribute("data-putto") ?? undefined };
+      const dolphin = el.closest("[data-dolphin]");
+      if (dolphin) return { kind: "dolphin", id: dolphin.getAttribute("data-dolphin") ?? undefined };
+      if (el.closest("[data-ribbon]")) return { kind: "ribbon" };
+      const band = el.closest("[data-band]");
+      if (band) return { kind: "band", id: band.getAttribute("data-band") ?? undefined };
+      return { kind: "none" };
+    };
+
+    let dragRoute: Route = { kind: "none" };
+    let sandLast = { x: 0, y: 0 };
+    let lastDragT = 0;
+    let holdRoute: Route = { kind: "none" };
+    let impressed = false;
+    let ceremonyDone = false;
+    let lastWindCueAt = 0;
+    let lastScrubAt = 0;
+
+    const detach = attachGestures(root, {
+      tap: (e) => {
+        lastGestureAtRef.current = performance.now();
+        if (e.fingers !== 1) return; // the shore absorbs frame/law taps
+        const h = hit(e.x, e.y);
+        const acts = actionsRef.current;
+        if (h.kind === "chrome") return; // buttons keep their own handlers
+        if (h.kind === "shell" && h.id) { acts.onShellClick(h.id as ShellId, e.intensity); return; }
+        if (h.kind === "nautilus") { acts.nautilusTap(e.intensity); return; }
+        if (h.kind === "putto" && h.id) { acts.onPuttoClick(Number(h.id)); return; }
+        if (h.kind === "dolphin" && h.id) { acts.onDolphinClick(Number(h.id)); return; }
+        if (h.kind === "band") {
+          if (h.id === "sky") acts.onSkyClick(e.x, e.y, e.intensity);
+          else if (h.id === "sea") acts.onSeaClick(e.x, e.y, e.intensity);
+          else if (h.id === "foam") acts.popFoamAt(e.x, e.y, e.intensity);
+          // the sand quietly absorbs a bare tap
+        }
+      },
+      drag: (e) => {
+        lastGestureAtRef.current = performance.now();
+        const acts = actionsRef.current;
+        if (e.fingers === 3) {
+          if (e.phase === "end") return;
+          // three fingers drag the weather: an onshore wind — foam bubbles
+          // stream, tongues lean, the putti sail with it
+          windRef.current.target = Math.max(-1.2, Math.min(1.2, windRef.current.target + e.vx * 0.25));
+          const now = performance.now();
+          if (Math.abs(e.vx) > 0.3 && now - lastWindCueAt > 700) {
+            lastWindCueAt = now;
+            try { getFieldAudio().playNote(38, 240); } catch { /* noop */ }
+            try { haptics.chop(); } catch { /* noop */ }
+            useField.getState().recordTape("region", 0.45, "aphros/wind");
+          }
+          return;
+        }
+        if (e.fingers !== 1) return;
+        if (e.phase === "start") {
+          dragRoute = hit(e.x, e.y);
+          lastDragT = performance.now();
+          if (dragRoute.kind === "nautilus") acts.nautilusSpinStart(e.x, e.y);
+          else if (dragRoute.kind === "ribbon") {
+            ribbonDrag.current.active = true;
+            ribbonOffset.current.releasedAt = 0;
+          } else if (dragRoute.kind === "band" && dragRoute.id === "sand") {
+            sandLast = { x: e.x, y: e.y - sandBandTopRef.current };
+          }
+          return;
+        }
+        if (e.phase === "end") {
+          if (dragRoute.kind === "nautilus") acts.nautilusSpinEnd();
+          else if (dragRoute.kind === "ribbon") acts.ribbonDragEnd();
+          dragRoute = { kind: "none" };
+          return;
+        }
+        const now = performance.now();
+        const dtMs = Math.max(8, now - lastDragT);
+        lastDragT = now;
+        if (dragRoute.kind === "nautilus") {
+          acts.nautilusSpinMove(e.x, e.y, dtMs);
+        } else if (dragRoute.kind === "ribbon") {
+          acts.ribbonDragMove(e.x, e.dx, e.dy);
+        } else if (dragRoute.kind === "band" && dragRoute.id === "sand") {
+          const ly = e.y - sandBandTopRef.current;
+          acts.drawSandMark(e.x, ly, sandLast.x, sandLast.y);
+          sandLast = { x: e.x, y: ly };
+        }
+        // other bands absorb the stroke gently (foam swell rides hover)
+      },
+      flick: (e) => {
+        lastGestureAtRef.current = performance.now();
+        if (e.fingers !== 1) return;
+        const acts = actionsRef.current;
+        if (dragRoute.kind === "nautilus") { acts.nautilusSpinEnd(); dragRoute = { kind: "none" }; return; }
+        if (dragRoute.kind === "ribbon") { acts.ribbonDragEnd(); dragRoute = { kind: "none" }; return; }
+        dragRoute = { kind: "none" };
+        // a flick throws spray up the shore
+        acts.sprayAt(e.x, e.y, e.angle, e.speed);
+      },
+      hold: (e) => {
+        lastGestureAtRef.current = performance.now();
+        if (e.fingers === 3) {
+          // three fingers hold the law: the whole beach slows to 1/4
+          if (e.phase === "enter") {
+            timeScaleRef.current.target = 0.25;
+            try { getFieldAudio().playNote(36, 260); } catch { /* noop */ }
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+          if (e.phase === "release") timeScaleRef.current.target = 1;
+          return;
+        }
+        if (e.fingers !== 1) return;
+        if (e.phase === "enter") {
+          holdRoute = hit(e.x, e.y);
+          impressed = false;
+          ceremonyDone = false;
+          return;
+        }
+        if (e.phase === "release") { impressed = false; ceremonyDone = false; return; }
+        const acts = actionsRef.current;
+        // a dwell on the sand leaves a depression (dwell tier from core)
+        if (!impressed && e.tier >= 2 && holdRoute.kind === "band" && holdRoute.id === "sand") {
+          impressed = true;
+          acts.sandImpressAt(e.x, e.y);
+        }
+        // ceremony — the shore sings its whole scale and keeps the moment
+        if (!ceremonyDone && e.tier >= 3 && holdRoute.kind !== "chrome") {
+          ceremonyDone = true;
+          acts.ceremonyStrum();
+        }
+      },
+      scrub: (e) => {
+        lastGestureAtRef.current = performance.now();
+        const now = performance.now();
+        if (now - lastScrubAt < 700) return;
+        lastScrubAt = now;
+        actionsRef.current.stirSeaAt(e.cx, e.winding);
+      },
+      rhythm: (e) => {
+        // a steady tapped pulse: the lapping tongues fall in with the hand
+        if (e.stability <= 0.7 || e.bpm < 30 || e.bpm > 160) return;
+        entrainRef.current.bpm = e.bpm;
+        entrainRef.current.until = performance.now() + 12000;
+        useField.getState().recordTape("sigil", 0.5, "aphros/entrain");
+      },
+    }, { wheelZoom: false, noCapture: true });
+
+    return detach;
+  }, []);
+
   // ── Render ─────────────────────────────────────────────────────────
   const W = viewport.w;
   const H = viewport.h;
@@ -2120,6 +2373,7 @@ export default function Aphros() {
 
   return (
     <div
+      ref={rootRef}
       className="aphros-instrument"
       data-touch-surface="true"
       data-pretext-ignore="true"
@@ -2234,11 +2488,11 @@ export default function Aphros() {
           canvas but BELOW the scene SVG (so shells/nautilus still win
           hit-testing). Each handles its own pointer kind.
       */}
-      {/* sky band overlay — hover warms, click plants a star */}
+      {/* sky band overlay — hover warms; taps route through the engine */}
       <div
+        data-band="sky"
         onPointerEnter={() => setSkyWarm(true)}
         onPointerLeave={() => setSkyWarm(false)}
-        onClick={(e) => onSkyClick(e.clientX, e.clientY)}
         style={{
           position: "absolute",
           top: 0,
@@ -2249,9 +2503,9 @@ export default function Aphros() {
           touchAction: "none",
         }}
       />
-      {/* sea band overlay — tap to ripple */}
+      {/* sea band overlay — taps ripple via the engine */}
       <div
-        onClick={(e) => onSeaClick(e.clientX, e.clientY)}
+        data-band="sea"
         style={{
           position: "absolute",
           top: skyH,
@@ -2262,13 +2516,13 @@ export default function Aphros() {
           touchAction: "none",
         }}
       />
-      {/* foam band overlay — hover to swell, click to pop */}
+      {/* foam band overlay — hover swells; taps pop via the engine */}
       <div
+        data-band="foam"
         ref={(el) => {
           if (el) foamBandTopRef.current = skyH + seaH;
         }}
         onPointerMove={onFoamMove}
-        onClick={onFoamClick}
         style={{
           position: "absolute",
           top: skyH + seaH,
@@ -2279,15 +2533,12 @@ export default function Aphros() {
           touchAction: "none",
         }}
       />
-      {/* sand band overlay — drag to draw finger marks */}
+      {/* sand band overlay — engine drags draw, dwells impress */}
       <div
+        data-band="sand"
         ref={(el) => {
           if (el) sandBandTopRef.current = sandTop;
         }}
-        onPointerDown={onSandDown}
-        onPointerMove={onSandMove}
-        onPointerUp={onSandUp}
-        onPointerCancel={onSandUp}
         style={{
           position: "absolute",
           top: sandTop,
@@ -2430,6 +2681,7 @@ export default function Aphros() {
               The stroke is fat (14px) for fingertip-friendly hit area. */}
           <path
             ref={ribbonPathRef}
+            data-ribbon="true"
             d=""
             stroke="url(#aphros-ribbon)"
             strokeWidth={14}
@@ -2437,10 +2689,6 @@ export default function Aphros() {
             fill="none"
             opacity={0.3}
             style={{ pointerEvents: "stroke", cursor: "grab", touchAction: "none" } as React.CSSProperties}
-            onPointerDown={onRibbonDown}
-            onPointerMove={onRibbonMove}
-            onPointerUp={onRibbonUp}
-            onPointerCancel={onRibbonUp}
           />
           {/* Putti — small drifting cherub glyphs in the sky band */}
           {PUTTI.map((pt) => {
@@ -2455,13 +2703,13 @@ export default function Aphros() {
             return (
               <g
                 key={`putto-${pt.id}`}
+                data-putto={pt.id}
                 ref={(el) => {
                   puttoGroupRefs.current[pt.id] = el;
                 }}
                 style={{ pointerEvents: "auto", cursor: "pointer" } as React.CSSProperties}
                 onPointerEnter={() => setHoverPutto(pt.id)}
                 onPointerLeave={() => setHoverPutto(null)}
-                onClick={() => onPuttoClick(pt.id)}
               >
                 {/* drapery ribbon (in the wind) */}
                 <path
@@ -2506,11 +2754,11 @@ export default function Aphros() {
           {DOLPHINS.map((d) => (
             <g
               key={`dolphin-${d.id}`}
+              data-dolphin={d.id}
               ref={(el) => {
                 dolphinGroupRefs.current[d.id] = el;
               }}
               style={{ pointerEvents: "auto", cursor: "pointer" } as React.CSSProperties}
-              onClick={() => onDolphinClick(d.id)}
             >
               {renderDolphin()}
             </g>
@@ -2601,6 +2849,7 @@ export default function Aphros() {
           {SHELLS.map((sh) => (
             <g
               key={sh.id}
+              data-shell={sh.id}
               ref={(el) => {
                 shellRefs.current[sh.id] = el;
               }}
@@ -2608,7 +2857,6 @@ export default function Aphros() {
               onPointerEnter={(e) => onShellEnter(sh.id, e)}
               onPointerMove={(e) => onShellMove(sh.id, e)}
               onPointerLeave={onShellLeave}
-              onClick={() => onShellClick(sh.id)}
             >
               {renderShell(sh.id, sh.size)}
             </g>
@@ -2618,11 +2866,8 @@ export default function Aphros() {
               so it doesn't crowd the shells. */}
           <g
             ref={nautilusGroupRef}
+            data-nautilus="true"
             style={{ cursor: "grab", touchAction: "none" } as React.CSSProperties}
-            onPointerDown={onNautilusDown}
-            onPointerMove={onNautilusMove}
-            onPointerUp={onNautilusUp}
-            onPointerCancel={onNautilusUp}
           >
             {renderNautilus(W < 700 ? Math.max(120, Math.min(180, W * 0.32)) : 180)}
           </g>

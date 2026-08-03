@@ -10,13 +10,20 @@
 //
 // alive on its own   two vortices co-orbit, the field breathes between
 //                    radiating and orbiting, color drifts like weather
+//
+// All contact speaks the shared grammar (src/lib/gesture):
 // tap                bloom a +1 vortex where you touch
-// long-press         grow a −1 saddle; the longer the hold, the stronger
+// dwell              grow a −1 saddle; the longer the hold, the stronger
+// dwell on a sun     feed it — the winding deepens
+// ceremony hold      a charge pair is born together (winding conserved)
 // slide / flick      comb the field — comets swing to follow your stroke
 // drag a defect      carry the singularity around
-// pinch              zoom into the singularity
+// circle a finger    stir the comets into a ring
+// tap a steady beat  the field's breath entrains to your tempo
 // two-finger twist   rotate the global phase
-// two-finger drag    pan across the field
+// three-finger drag  a gust combs the whole sky
+// three-finger hold  time dilates to quarter speed
+// wheel (desktop)    zoom — pinch belongs to the manifold, not the room
 // shake              slam opposite charges together — annihilation
 // tilt               gravity leans the whole comet stream
 // flip the phone     portrait↔landscape reverses time
@@ -24,6 +31,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
+import { attachGestures } from "@/lib/gesture";
 
 const TAU = Math.PI * 2;
 const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
@@ -69,15 +77,6 @@ type Particle = {
 };
 
 type Burst = { x: number; y: number; t0: number; amp: number };
-
-type Pointer = {
-  x0: number; y0: number; x: number; y: number;
-  px: number; py: number; pt: number;          // previous sample for velocity
-  t0: number;
-  moved: boolean;
-  defect: Defect | null;
-  emitted: number;                              // px of stroke path emitted
-};
 
 // ── tiny synth on the shared field-audio context ─────────────────────────
 type CombAudio = {
@@ -359,13 +358,14 @@ export default function Comb() {
     const strokes: Stroke[] = [];
     const bursts: Burst[] = [];
     const particles: Particle[] = [];
-    let forming: { x: number; y: number; start: number } | null = null;
+    // the saddle forming under a held finger — driven by the engine's hold
+    let forming: { x: number; y: number; elapsed: number } | null = null;
 
-    const pointers = new Map<number, Pointer>();
-    let pinch: {
-      d0: number; a0: number; z0: number; th0_0: number;
-      cx0: number; cy0: number; camX0: number; camY0: number;
-    } | null = null;
+    // ── the law layer (gesture grammar): wind, dilated time, entrainment ──
+    const timeScale = { cur: 1, target: 1 };
+    const entrain = { bpm: 0, until: 0, lastBeat: -1 };
+    let beatPulse = 0;
+    let lastGestureAt = performance.now();
 
     // sprites
     // one head sprite per hue family — brightness rides the hue (gold-white,
@@ -433,7 +433,8 @@ export default function Comb() {
         sum += d.q * d.s * Math.atan2(py - d.y, px - d.x);
       }
       const r = Math.hypot(px - camX, py - camY);
-      const k = 0.32 + 0.22 * Math.sin(simT * 0.061);
+      // beatPulse: an entrained hand's tempo breathes through the winding
+      const k = 0.32 + 0.22 * Math.sin(simT * 0.061) + beatPulse * 0.45;
       sum += k * Math.sin(3.1 * r - simT * 0.9 * tDir);
 
       let vx = Math.cos(sum);
@@ -593,164 +594,226 @@ export default function Comb() {
       return best;
     };
 
-    const beginPinch = () => {
-      const pts = [...pointers.values()];
-      if (pts.length < 2) return;
-      const [a, b] = pts;
-      pinch = {
-        d0: Math.max(20, Math.hypot(b.x - a.x, b.y - a.y)),
-        a0: Math.atan2(b.y - a.y, b.x - a.x),
-        z0: zoom,
-        th0_0: th0,
-        cx0: (a.x + b.x) / 2,
-        cy0: (a.y + b.y) / 2,
-        camX0: camX,
-        camY0: camY,
-      };
-      forming = null;
-    };
+    // ── gestures (the shared grammar — src/lib/gesture) ─────────────────
+    // One finger touches the light: tap blooms a +1 vortex, a stroke combs
+    // the comets, a flick leaves a wake, a drag on a defect carries it, a
+    // dwell grows a −1 saddle and a dwell on a vortex feeds it; the
+    // ceremony creates a charge pair (winding conserved). Two fingers
+    // twist the global phase. Three fingers are the law: drag is a gust
+    // over the whole field, hold dilates time. Pinch and pan2 stay
+    // unbound — the frame belongs to the manifold; the desktop wheel
+    // still zooms. Tilt / shake / flip (the vessel) keep their wiring.
+    let carried: Defect | null = null;
+    let feeding: Defect | null = null;
+    let strokeAcc = 0;
+    let holdDone = false;
+    let pendingSaddle = 0;   // a hold preempted by a drag must not commit
+    let lastFeedCueAt = 0;
+    let lastGustCueAt = 0;
+    let lastScrubAt = 0;
 
-    const onPointerDown = (e: PointerEvent) => {
-      ensureAudio();
-      canvas.setPointerCapture?.(e.pointerId);
-      const wx = toWorldX(e.clientX), wy = toWorldY(e.clientY);
-      const p: Pointer = {
-        x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY,
-        px: e.clientX, py: e.clientY, pt: performance.now(),
-        t0: performance.now(), moved: false,
-        defect: null, emitted: 0,
-      };
-      pointers.set(e.pointerId, p);
-      if (pointers.size === 1) {
-        const d = defectNear(wx, wy);
-        if (d) { p.defect = d; d.grabbed = true; }
-      } else if (pointers.size === 2) {
-        for (const q of pointers.values()) {
-          if (q.defect) { q.defect.grabbed = false; q.defect = null; }
-        }
-        beginPinch();
-      }
-    };
-
-    const emitStrokes = (p: Pointer, fromX: number, fromY: number, fromT: number) => {
-      const dx = p.x - fromX, dy = p.y - fromY;
-      const dist = Math.hypot(dx, dy);
-      if (dist < 2) return;
-      p.emitted += dist;
-      const dtms = Math.max(8, p.pt - fromT);
-      const speed = dist / dtms; // px per ms
-      if (p.emitted > 14) {
-        p.emitted = 0;
-        strokes.push({
-          x: toWorldX(p.x), y: toWorldY(p.y),
-          ang: Math.atan2(dy, dx),
-          amp: clamp(0.5 + speed * 0.9, 0.5, 2.4),
-          sig2: 0.045 / (zoom * zoom),
-          t0: simT,
-        });
-        if (strokes.length > 90) strokes.splice(0, strokes.length - 90);
-        try { audioRef.current?.brush(clamp(speed, 0.1, 1)); } catch { /* noop */ }
-      }
-    };
-
-    const onPointerMove = (e: PointerEvent) => {
-      const p = pointers.get(e.pointerId);
-      if (!p) {
-        // hover comb on desktop — the field notices the mouse passing
-        if (e.pointerType === "mouse" && e.buttons === 0 && pointers.size === 0) {
-          const ghost = hoverRef;
-          const dx = e.clientX - ghost.x, dy = e.clientY - ghost.y;
-          const dist = Math.hypot(dx, dy);
-          ghost.acc += dist;
-          if (ghost.acc > 26 && dist > 1) {
-            ghost.acc = 0;
-            strokes.push({
-              x: toWorldX(e.clientX), y: toWorldY(e.clientY),
-              ang: Math.atan2(dy, dx),
-              amp: 0.3, sig2: 0.018 / (zoom * zoom), t0: simT,
-            });
-            if (strokes.length > 90) strokes.splice(0, strokes.length - 90);
-          }
-          ghost.x = e.clientX; ghost.y = e.clientY;
-        }
-        return;
-      }
-      const fromX = p.x, fromY = p.y, fromT = p.pt;
-      p.px = fromX; p.py = fromY;
-      p.x = e.clientX; p.y = e.clientY;
-      p.pt = performance.now();
-      if (!p.moved && Math.hypot(p.x - p.x0, p.y - p.y0) > 10) {
-        p.moved = true;
-        forming = null;
-      }
-
-      if (pointers.size >= 2 && pinch) {
-        const pts = [...pointers.values()];
-        const [a, b] = pts;
-        const d = Math.max(20, Math.hypot(b.x - a.x, b.y - a.y));
-        const ang = Math.atan2(b.y - a.y, b.x - a.x);
-        zoom = clamp(pinch.z0 * (d / pinch.d0), 0.55, 2.6);
-        th0 = pinch.th0_0 + (ang - pinch.a0);
-        const cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
-        camX = pinch.camX0 - (cx - pinch.cx0) / (u * zoom);
-        camY = pinch.camY0 - (cy - pinch.cy0) / (u * zoom);
-        return;
-      }
-
-      if (p.defect) {
-        p.defect.x = toWorldX(e.clientX);
-        p.defect.y = toWorldY(e.clientY);
-        return;
-      }
-      if (p.moved) emitStrokes(p, fromX, fromY, fromT);
-    };
-
-    const onPointerEnd = (e: PointerEvent) => {
-      const p = pointers.get(e.pointerId);
-      if (!p) return;
-      pointers.delete(e.pointerId);
-      if (pointers.size < 2) pinch = null;
-
-      if (p.defect) {
-        p.defect.grabbed = false;
-        try { haptics.ripple(0.3); } catch { /* noop */ }
-        return;
-      }
-
-      const held = (performance.now() - p.t0) / 1000;
-      const wx = toWorldX(p.x), wy = toWorldY(p.y);
-
-      if (forming) {
-        // the long-press saddle commits at whatever strength it grew to
-        const strength = clamp(0.45 + (held - 0.38) / 1.2, 0.45, 1);
-        spawnDefect(-1, forming.x, forming.y, strength);
-        forming = null;
-        return;
-      }
-
-      if (!p.moved && held < 0.32 && e.type !== "pointercancel") {
+    const detachGestures = attachGestures(canvas, {
+      tap: (e) => {
+        ensureAudio();
+        lastGestureAt = performance.now();
+        if (e.fingers !== 1) return; // the field absorbs frame/law taps
+        const wx = toWorldX(e.x), wy = toWorldY(e.y);
+        // tap intensity is the strike — the newborn vortex's burst rides it
         const d = spawnDefect(1, wx, wy);
-        bursts.push({ x: d.x, y: d.y, t0: simT, amp: 0.5 });
-        return;
-      }
-
-      if (p.moved) {
-        // a flick leaves a bigger wake than a stroke
-        const dtms = Math.max(16, performance.now() - p.pt + 16);
-        const speed = Math.hypot(p.x - p.px, p.y - p.py) / dtms;
-        if (speed > 0.6) {
+        bursts.push({ x: d.x, y: d.y, t0: simT, amp: 0.3 + e.intensity * 0.4 });
+      },
+      drag: (e) => {
+        ensureAudio();
+        lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          if (e.phase === "end") return;
+          // three fingers drag the weather: one gust combs the whole sky
+          const ang = Math.atan2(e.dy, e.dx);
+          const hx = halfExtX(), hy = halfExtY();
+          for (let i = 0; i < 3; i++) {
+            strokes.push({
+              x: camX + (Math.random() * 2 - 1) * hx,
+              y: camY + (Math.random() * 2 - 1) * hy,
+              ang,
+              amp: clamp(0.8 + Math.hypot(e.vx, e.vy) * 0.8, 0.8, 2.6),
+              sig2: 0.16, t0: simT,
+            });
+          }
+          if (strokes.length > 90) strokes.splice(0, strokes.length - 90);
+          const now = performance.now();
+          if (now - lastGustCueAt > 500) {
+            lastGustCueAt = now;
+            try { audioRef.current?.brush(1); } catch { /* noop */ }
+            try { haptics.chop(); } catch { /* noop */ }
+          }
+          return;
+        }
+        if (e.fingers !== 1) return;
+        if (e.phase === "start") {
+          forming = null;
+          if (pendingSaddle) { window.clearTimeout(pendingSaddle); pendingSaddle = 0; }
+          const d = defectNear(toWorldX(e.x), toWorldY(e.y));
+          if (d) { carried = d; d.grabbed = true; }
+          strokeAcc = 0;
+          return;
+        }
+        if (e.phase === "end") {
+          if (carried) {
+            carried.grabbed = false;
+            carried = null;
+            try { haptics.ripple(0.3); } catch { /* noop */ }
+          }
+          return;
+        }
+        if (carried) {
+          // carrying the singularity around
+          carried.x = toWorldX(e.x);
+          carried.y = toWorldY(e.y);
+          return;
+        }
+        // combing: strokes bend the field along the moving hand
+        const dist = Math.hypot(e.dx, e.dy);
+        if (dist < 2) return;
+        strokeAcc += dist;
+        const speed = Math.hypot(e.vx, e.vy); // px per ms
+        if (strokeAcc > 14) {
+          strokeAcc = 0;
           strokes.push({
-            x: wx, y: wy,
-            ang: Math.atan2(p.y - p.py, p.x - p.px),
-            amp: clamp(1.4 + speed, 1.4, 3.4),
-            sig2: 0.12 / (zoom * zoom),
+            x: toWorldX(e.x), y: toWorldY(e.y),
+            ang: Math.atan2(e.dy, e.dx),
+            amp: clamp(0.5 + speed * 0.9, 0.5, 2.4),
+            sig2: 0.045 / (zoom * zoom),
             t0: simT,
           });
-          try { audioRef.current?.brush(1); } catch { /* noop */ }
-          try { haptics.chop(); } catch { /* noop */ }
+          if (strokes.length > 90) strokes.splice(0, strokes.length - 90);
+          try { audioRef.current?.brush(clamp(speed, 0.1, 1)); } catch { /* noop */ }
         }
-      }
-    };
+      },
+      flick: (e) => {
+        ensureAudio();
+        lastGestureAt = performance.now();
+        if (e.fingers !== 1 || carried) return;
+        // a flick leaves a bigger wake than a stroke
+        strokes.push({
+          x: toWorldX(e.x), y: toWorldY(e.y),
+          ang: e.angle,
+          amp: clamp(1.4 + e.speed, 1.4, 3.4),
+          sig2: 0.12 / (zoom * zoom),
+          t0: simT,
+        });
+        try { audioRef.current?.brush(1); } catch { /* noop */ }
+        try { haptics.chop(); } catch { /* noop */ }
+      },
+      hold: (e) => {
+        ensureAudio();
+        lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          // three fingers hold the law: the field breathes at 1/4 speed
+          if (e.phase === "enter") {
+            timeScale.target = 0.25;
+            try { audioRef.current?.gather(); } catch { /* noop */ }
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+          if (e.phase === "release") timeScale.target = 1;
+          return;
+        }
+        if (e.fingers !== 1) return;
+        if (e.phase === "enter") {
+          holdDone = false;
+          const d = defectNear(toWorldX(e.x), toWorldY(e.y));
+          if (d && d.q > 0) {
+            // dwelling on a sun feeds it — the winding deepens
+            feeding = d;
+          } else {
+            forming = { x: toWorldX(e.x), y: toWorldY(e.y), elapsed: e.elapsed };
+            // the hold announces itself once — a low gathering tone
+            try { audioRef.current?.gather(); } catch { /* noop */ }
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+          return;
+        }
+        if (e.phase === "release") {
+          feeding = null;
+          if (forming && !holdDone) {
+            // the long-press saddle commits at whatever strength it grew to —
+            // deferred one tick so a drag preempting the hold cancels it
+            const px = forming.x, py = forming.y;
+            const strength = clamp(0.45 + (e.elapsed / 1000 - 0.25) / 1.75, 0.45, 1);
+            pendingSaddle = window.setTimeout(() => {
+              pendingSaddle = 0;
+              spawnDefect(-1, px, py, strength);
+            }, 0);
+          }
+          forming = null;
+          holdDone = false;
+          return;
+        }
+        // ticks
+        if (feeding) {
+          if (feeding.dying) { feeding = null; return; }
+          feeding.smax = Math.min(1.35, feeding.smax + 0.004);
+          feeding.s = Math.min(feeding.smax, feeding.s + 0.004);
+          const now = performance.now();
+          if (now - lastFeedCueAt > 340) {
+            lastFeedCueAt = now;
+            try { audioRef.current?.bloom(1, feeding.smax - 0.35); } catch { /* noop */ }
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+          return;
+        }
+        if (forming) {
+          forming.x = toWorldX(e.x);
+          forming.y = toWorldY(e.y);
+          forming.elapsed = e.elapsed;
+          // ceremony — the one solemn act: the gathering completes into a
+          // charge PAIR, born together, winding conserved.
+          if (e.tier >= 3 && !holdDone) {
+            holdDone = true;
+            const px = forming.x, py = forming.y;
+            forming = null;
+            const a = spawnDefect(1, px - 0.09, py, 1);
+            const b = spawnDefect(-1, px + 0.09, py, 1);
+            bursts.push({ x: (a.x + b.x) / 2, y: py, t0: simT, amp: 0.9 });
+            try { audioRef.current?.ring(0.8); } catch { /* noop */ }
+            try { haptics.bloom(); } catch { /* noop */ }
+          }
+        }
+      },
+      twist: (e) => {
+        ensureAudio();
+        lastGestureAt = performance.now();
+        // two fingers rotate the global phase — the whole sky turns
+        if (e.phase === "move") th0 += e.angle;
+      },
+      scrub: (e) => {
+        lastGestureAt = performance.now();
+        const now = performance.now();
+        if (now - lastScrubAt < 500) return;
+        lastScrubAt = now;
+        // a circling finger stirs the comets into a ring
+        const cx = toWorldX(e.cx), cy = toWorldY(e.cy);
+        const sgn = Math.sign(e.winding) || 1;
+        for (let i = 0; i < 6; i++) {
+          const a = (i / 6) * TAU;
+          strokes.push({
+            x: cx + Math.cos(a) * 0.22, y: cy + Math.sin(a) * 0.22,
+            ang: a + sgn * Math.PI / 2,
+            amp: 1.5, sig2: 0.05 / (zoom * zoom), t0: simT,
+          });
+        }
+        if (strokes.length > 90) strokes.splice(0, strokes.length - 90);
+        try { audioRef.current?.brush(0.8); } catch { /* noop */ }
+        try { haptics.ripple(0.35); } catch { /* noop */ }
+      },
+      rhythm: (e) => {
+        // a steady tapped pulse: the field's breath falls in with the hand
+        if (e.stability <= 0.7 || e.bpm < 40 || e.bpm > 200) return;
+        lastGestureAt = performance.now();
+        entrain.bpm = e.bpm;
+        entrain.until = performance.now() + 9000;
+        entrain.lastBeat = -1;
+      },
+    }, { wheelZoom: false });
 
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
@@ -758,6 +821,25 @@ export default function Comb() {
     };
 
     const hoverRef = { x: 0, y: 0, acc: 0 };
+    // hover comb on desktop — the grammar's quiet dialect: the field
+    // notices the mouse passing even before any gesture begins
+    const onHover = (e: PointerEvent) => {
+      if (e.pointerType !== "mouse" || e.buttons !== 0) return;
+      const ghost = hoverRef;
+      const dx = e.clientX - ghost.x, dy = e.clientY - ghost.y;
+      const dist = Math.hypot(dx, dy);
+      ghost.acc += dist;
+      if (ghost.acc > 26 && dist > 1) {
+        ghost.acc = 0;
+        strokes.push({
+          x: toWorldX(e.clientX), y: toWorldY(e.clientY),
+          ang: Math.atan2(dy, dx),
+          amp: 0.3, sig2: 0.018 / (zoom * zoom), t0: simT,
+        });
+        if (strokes.length > 90) strokes.splice(0, strokes.length - 90);
+      }
+      ghost.x = e.clientX; ghost.y = e.clientY;
+    };
 
     // ── resize / orientation ─────────────────────────────────────────────
     const paintFlat = () => {
@@ -791,10 +873,7 @@ export default function Comb() {
     resize();
     window.addEventListener("resize", resize);
 
-    canvas.addEventListener("pointerdown", onPointerDown);
-    canvas.addEventListener("pointermove", onPointerMove);
-    canvas.addEventListener("pointerup", onPointerEnd);
-    canvas.addEventListener("pointercancel", onPointerEnd);
+    canvas.addEventListener("pointermove", onHover);
     canvas.addEventListener("wheel", onWheel, { passive: false });
 
     // ── main loop ────────────────────────────────────────────────────────
@@ -803,12 +882,26 @@ export default function Comb() {
 
     const step = (now: number) => {
       raf = requestAnimationFrame(step);
-      const dt = clamp((now - last) / 1000, 0.001, 0.05);
+      const rawDt = clamp((now - last) / 1000, 0.001, 0.05);
       last = now;
       if (document.hidden) return;
       const reduced = reduceRef.current;
       const speedScale = reduced ? 0.35 : 1;
+      // three-finger time dilation: the field's clock eases to 1/4 speed
+      timeScale.cur += (timeScale.target - timeScale.cur) * Math.min(1, rawDt * 5);
+      const dt = rawDt * timeScale.cur;
       simT += dt;
+
+      // entrained breath: the winding pulses on each beat of your tempo
+      if (now < entrain.until && entrain.bpm > 0) {
+        const beatIdx = Math.floor(now / (60000 / entrain.bpm));
+        if (beatIdx !== entrain.lastBeat) {
+          entrain.lastBeat = beatIdx;
+          beatPulse = Math.min(1, beatPulse + 0.55);
+          try { audioRef.current?.bloom(1, 0.3); } catch { /* noop */ }
+        }
+      }
+      beatPulse *= Math.exp(-rawDt * 3.2);
 
       // slow global rotation — the whole sky turns
       th0 += 0.1 * tDir * dt * speedScale;
@@ -879,23 +972,6 @@ export default function Comb() {
         if (simT - strokes[i].t0 > 4.5) strokes.splice(i, 1);
       }
 
-      // ── long-press saddle forming under a still finger ─────────────────
-      const wasForming = forming !== null;
-      forming = null;
-      if (pointers.size === 1) {
-        const p = [...pointers.values()][0];
-        const held = (now - p.t0) / 1000;
-        if (!p.moved && !p.defect && held > 0.38) {
-          forming = { x: toWorldX(p.x), y: toWorldY(p.y), start: p.t0 };
-          if (!wasForming) {
-            // the hold announces itself once — a low gathering tone, so a
-            // long press feels different from a tap the moment it begins
-            try { audioRef.current?.gather(); } catch { /* noop */ }
-            try { haptics.tap(); } catch { /* noop */ }
-          }
-        }
-      }
-
       // ── paint: persistence wash, then heads over their own trails ──────
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.globalCompositeOperation = "source-over";
@@ -946,7 +1022,7 @@ export default function Comb() {
       // the saddle forming under a held finger — a ring, and spokes drawn
       // inward as the hold gathers the field toward the coming charge
       if (forming) {
-        const grow = clamp(((now - forming.start) / 1000 - 0.38) / 1.1, 0, 1);
+        const grow = clamp((forming.elapsed / 1000 - 0.25) / 1.75, 0, 1);
         const sx = toScreenX(forming.x), sy = toScreenY(forming.y);
         const rad = u * zoom * (0.02 + grow * 0.05);
         ctx.globalCompositeOperation = "source-over";
@@ -991,7 +1067,7 @@ export default function Comb() {
           respawn(p);
         }
         const ang = fieldAngle(p.x, p.y);
-        const boost = 1 + (pointers.size > 0 ? 0.15 : 0);
+        const boost = 1 + (now - lastGestureAt < 400 ? 0.15 : 0);
         p.x += (Math.cos(ang) * p.sp * boost * speedScale + g.x * 0.05) * dt * 2.2;
         p.y += (Math.sin(ang) * p.sp * boost * speedScale + g.y * 0.05) * dt * 2.2;
 
@@ -1032,16 +1108,30 @@ export default function Comb() {
       }
       ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = "source-over";
+
+      // glimmer (grammar §6): after ~20s of quiet a faint turning ring
+      // floats where a circling finger would stir — physical, never text.
+      if (now - lastGestureAt > 20000) {
+        const slot = Math.floor(now / 9000);
+        const gseed = (n: number) => { const v = Math.sin((slot + n) * 127.1) * 43758.5453; return v - Math.floor(v); };
+        const gx = (0.22 + gseed(0) * 0.56) * w;
+        const gy = (0.25 + gseed(7) * 0.5) * h;
+        const pulse = reduced ? 0.5 : 0.5 + Math.sin(now / 480) * 0.5;
+        ctx.strokeStyle = `rgba(124,90,51,${(0.05 + pulse * 0.07).toFixed(3)})`;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(gx, gy, 20 + pulse * 9, 0, TAU);
+        ctx.stroke();
+      }
     };
     raf = requestAnimationFrame(step);
 
     return () => {
       cancelAnimationFrame(raf);
       window.removeEventListener("resize", resize);
-      canvas.removeEventListener("pointerdown", onPointerDown);
-      canvas.removeEventListener("pointermove", onPointerMove);
-      canvas.removeEventListener("pointerup", onPointerEnd);
-      canvas.removeEventListener("pointercancel", onPointerEnd);
+      detachGestures();
+      if (pendingSaddle) window.clearTimeout(pendingSaddle);
+      canvas.removeEventListener("pointermove", onHover);
       canvas.removeEventListener("wheel", onWheel);
       reduceQuery.removeEventListener?.("change", onReduce);
       try { audioRef.current?.dispose(); } catch { /* noop */ }
@@ -1055,14 +1145,14 @@ export default function Comb() {
         ref={canvasRef}
         className="comb-canvas"
         role="img"
-        aria-label="A cream-colored field of comet-like light streaks orbiting glowing singularities. Tap to bloom a new vortex; press and hold to grow a dark saddle; slide or flick to comb the light; drag a glowing center to carry it; pinch to zoom; twist two fingers to rotate the whole field; shake the phone to slam opposite charges together until they annihilate in a burst; tilt to lean the stream; and flip the phone sideways to run time backwards."
+        aria-label="A cream-colored field of comet-like light streaks orbiting glowing singularities. Tap to bloom a new vortex; press and hold to grow a dark saddle, or hold longer to bear a matched pair; rest on a glowing center to feed it; slide or flick to comb the light; circle a finger to stir it; drag a glowing center to carry it; twist two fingers to rotate the whole field; shake the phone to slam opposite charges together until they annihilate in a burst; tilt to lean the stream; and flip the phone sideways to run time backwards."
       />
       <div className="comb-title" aria-hidden="true">
         <span>comb the light — the cowlick stays</span>
         <strong>comb</strong>
       </div>
       <div className="comb-hud">
-        <span className="comb-hint" aria-hidden="true">tap vortex · hold saddle · comb · pinch</span>
+        <span className="comb-hint" aria-hidden="true">tap vortex · hold saddle · comb the light</span>
         {motionUI === "prompt" && (
           <button
             type="button"

@@ -6,6 +6,7 @@ import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment
 import { getFieldAudio } from "@/lib/audio";
 import { useField } from "@/store/field";
 import * as haptics from "@/lib/haptics";
+import { attachGestures } from "@/lib/gesture";
 
 /**
  * /coin — a real gold coin you tilt, flip, and rub.
@@ -538,11 +539,16 @@ export default function Coin() {
     };
     const shine = { v: 0 };                        // star glint strength
     const size = { v: 1, t: 1 };                   // coin scale (lateral slide → resize)
-    const drag = { on: false, px: 0, py: 0, moved: 0, downT: 0, lastRub: 0 };
-    const spin = { z: 0 };                         // two-finger in-plane rotation (radians)
-    const pointers = new Map<number, { x: number; y: number }>();
-    const gesture = { two: false, twoAngle: null as number | null };
+    const drag = { on: false, lastRub: 0 };
+    const spin = { z: 0 };                         // twist / scrub in-plane rotation (radians)
     const notes = { tiltSec: -1, tiltT: 0, spinSec: 999 }; // note-sweep trackers
+    // ── the law layer (gesture grammar): wind, dilated time, entrainment ──
+    const wind = { x: 0, y: 0 };                   // 3-finger drag rocks the hanging medal
+    const timeScale = { cur: 1, target: 1 };       // 3-finger hold dilates time
+    const entrain = { bpm: 0, until: 0, lastBeat: -1 };
+    const toss = { amp: 1 };                       // a flick throws the coin higher
+    let lastGestureAt = performance.now();
+    let lastGlimmerAt = 0;
     const _flipAxis = new THREE.Vector3();
     const _flipQ = new THREE.Quaternion();
     const _qTilt = new THREE.Quaternion();
@@ -628,70 +634,138 @@ export default function Coin() {
       doFlip(dirX, dirY);
     };
 
-    // ── pointer: 1-finger slide=resize / vertical=tilt / rub=shine, tap=flip;
-    //    2-finger twist = rotate the coin in-plane (and sweep the octave notes) ──
-    const twoAngle = () => {
-      const pts = Array.from(pointers.values());
-      if (pts.length < 2) return gesture.twoAngle ?? 0;
-      return Math.atan2(pts[1].y - pts[0].y, pts[1].x - pts[0].x);
+    // ── gestures (the shared grammar — src/lib/gesture) ─────────────────
+    // One finger touches the medal: tap flips it toward the touch, slide
+    // resizes and tilts it, a rub shines it, a flick throws it high, a
+    // circling finger turns it in-plane, a ceremony hold blesses it. Two
+    // fingers touch the map: twist rotates the coin — and a full turn of
+    // the wrist carries it over to its other face. Three fingers touch the
+    // law: drag is the wind that rocks the hanging medal, hold dilates
+    // time. Pinch and pan2 stay unbound — the frame belongs to the
+    // manifold. The device wiring below (gyro tilt, pop-to-flip) is the
+    // vessel and stays exactly as it was.
+    let twistAcc = 0;
+    let blessed = false;
+    let lastWindCueAt = 0;
+    let lastScrubAt = 0;
+    const spinBy = (d: number) => {
+      spin.z += d;
+      const sec = (((Math.floor(spin.z / (Math.PI / 4)) % 8) + 8) % 8);
+      if (sec !== notes.spinSec) { notes.spinSec = sec; spinNote(sec); haptics.tap(); shine.v = Math.min(1, shine.v + 0.25); addPoints(0.02); }
     };
-    const onDown = (e: PointerEvent) => {
-      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      renderer.domElement.setPointerCapture?.(e.pointerId);
-      if (pointers.size >= 2) { gesture.two = true; gesture.twoAngle = twoAngle(); drag.on = false; }
-      else { drag.on = true; drag.px = e.clientX; drag.py = e.clientY; drag.moved = 0; drag.downT = performance.now(); }
-      renderer.domElement.style.cursor = "grabbing";
-    };
-    const onMove = (e: PointerEvent) => {
-      if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      // two-finger twist → in-plane rotation; each 45° crossing rings a note
-      if (gesture.two && pointers.size >= 2) {
-        const ang = twoAngle();
-        if (gesture.twoAngle !== null) {
-          let d = ang - gesture.twoAngle;
-          while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2;
-          spin.z += d;
-          const sec = (((Math.floor(spin.z / (Math.PI / 4)) % 8) + 8) % 8);
-          if (sec !== notes.spinSec) { notes.spinSec = sec; spinNote(sec); haptics.tap(); shine.v = Math.min(1, shine.v + 0.25); addPoints(0.02); }
-        }
-        gesture.twoAngle = ang;
-        return;
-      }
-      if (!drag.on) return;
-      const dx = e.clientX - drag.px, dy = e.clientY - drag.py;
-      drag.px = e.clientX; drag.py = e.clientY;
-      drag.moved += Math.abs(dx) + Math.abs(dy);
-      // lateral / diagonal slide → resize the coin; vertical → tilt (pitch)
-      size.t = Math.max(0.33, Math.min(1.5, size.t + dx * 0.004));
-      tilt.tx += dy * 0.006;   // pitch
-      tilt.tx = Math.max(-1.1, Math.min(1.1, tilt.tx));
-      const now = performance.now();
-      const speed = Math.abs(dx) + Math.abs(dy);
-      if (speed > 3) { shine.v = Math.min(1, shine.v + speed * 0.02); shimmer(now, Math.round(e.clientX / 40), 90); addPoints(0.005); if (now - drag.lastRub > 120) { haptics.tap(); drag.lastRub = now; } }
-    };
-    const onUp = (e: PointerEvent) => {
-      const wasTwo = gesture.two;
-      pointers.delete(e.pointerId);
-      renderer.domElement.releasePointerCapture?.(e.pointerId);
-      if (pointers.size < 2) { gesture.two = false; gesture.twoAngle = null; }
-      renderer.domElement.style.cursor = "grab";
-      if (wasTwo) { drag.on = false; return; }        // twist gesture — never a tap
-      if (!drag.on) return; drag.on = false;
-      const dt = performance.now() - drag.downT;
-      if (drag.moved < 8 && dt < 400) {
-        // tap flips toward where you pressed & rings that region's note
+    const detachGestures = attachGestures(renderer.domElement, {
+      tap: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers !== 1) return; // the medal absorbs frame/law taps
+        // tap flips toward where you pressed & rings that region's note —
+        // intensity is the strike: shine, haptic and toss ride the same 0..1
         const { cx, cy } = coinCenter();
-        const dx = e.clientX - cx, dy = cy - e.clientY;    // up-positive
+        const dx = e.x - cx, dy = cy - e.y;    // up-positive
         const sec = sectorOf(dx, dy);
-        ting(); regionNote(sec); shine.v = 1; haptics.tap();
-        useField.getState().recordTape("object", 0.6, "coin/tap");
+        ting(); regionNote(sec);
+        shine.v = 0.6 + e.intensity * 0.4;
+        haptics.ripple(0.25 + e.intensity * 0.4);
+        toss.amp = 0.85 + e.intensity * 0.45;
+        useField.getState().recordTape("object", 0.4 + e.intensity * 0.4, "coin/tap");
         doFlip(dx, dy);
-      }
-    };
-    renderer.domElement.addEventListener("pointerdown", onDown);
-    renderer.domElement.addEventListener("pointermove", onMove);
-    renderer.domElement.addEventListener("pointerup", onUp);
-    renderer.domElement.addEventListener("pointercancel", onUp);
+      },
+      drag: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          if (e.phase === "end") return;
+          // three fingers drag the weather: wind rocks the hanging medal
+          // and a shiver runs through the aventurine night
+          wind.x = Math.max(-1, Math.min(1, wind.x + e.dx * 0.004));
+          wind.y = Math.max(-1, Math.min(1, wind.y + e.dy * 0.004));
+          fill.pulse = Math.min(1, fill.pulse + 0.015);
+          const now = performance.now();
+          if (Math.hypot(e.vx, e.vy) > 0.3 && now - lastWindCueAt > 700) {
+            lastWindCueAt = now;
+            try { A().playNote(38 + sizeShift(), 240); } catch { /* noop */ }
+            try { haptics.chop(); } catch { /* noop */ }
+            useField.getState().recordTape("region", 0.45, "coin/wind");
+          }
+          return;
+        }
+        if (e.fingers !== 1) return;
+        if (e.phase === "start") { drag.on = true; renderer.domElement.style.cursor = "grabbing"; return; }
+        if (e.phase === "end") { drag.on = false; renderer.domElement.style.cursor = "grab"; return; }
+        // lateral / diagonal slide → resize the coin; vertical → tilt (pitch)
+        size.t = Math.max(0.33, Math.min(1.5, size.t + e.dx * 0.004));
+        tilt.tx += e.dy * 0.006;   // pitch
+        tilt.tx = Math.max(-1.1, Math.min(1.1, tilt.tx));
+        const now = performance.now();
+        const speed = Math.abs(e.dx) + Math.abs(e.dy);
+        if (speed > 3) { shine.v = Math.min(1, shine.v + speed * 0.02); shimmer(now, Math.round(e.x / 40), 90); addPoints(0.005); if (now - drag.lastRub > 120) { haptics.tap(); drag.lastRub = now; } }
+      },
+      flick: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers !== 1) return;
+        drag.on = false;
+        renderer.domElement.style.cursor = "grab";
+        // a flick throws the coin — a higher toss toward the throw
+        toss.amp = Math.min(2, 1.2 + e.speed * 0.35);
+        shine.v = 1;
+        try { haptics.chop(); } catch { /* noop */ }
+        useField.getState().recordTape("ripple", 0.65, "coin/throw");
+        doFlip(Math.cos(e.angle), -Math.sin(e.angle));
+      },
+      twist: (e) => {
+        lastGestureAt = performance.now();
+        // two-finger twist → in-plane rotation; each 45° crossing rings a
+        // note. A full turn of the wrist turns the medal over — its other
+        // face is the second representation.
+        if (e.phase === "start") twistAcc = 0;
+        if (e.phase === "move") { twistAcc += e.angle; spinBy(e.angle); }
+        if (e.phase === "end" && Math.abs(twistAcc) > 2.4) {
+          toss.amp = 1.1;
+          flipSound();
+          doFlip(Math.sign(twistAcc), 0);
+        }
+      },
+      scrub: (e) => {
+        lastGestureAt = performance.now();
+        const now = performance.now();
+        if (now - lastScrubAt < 300) return;
+        lastScrubAt = now;
+        // one circling finger turns the coin in-plane — the octave sweeps
+        spinBy((Math.sign(e.winding) || 1) * (Math.PI / 4));
+      },
+      hold: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          // three fingers hold the law: the coin's time runs at 1/4
+          if (e.phase === "enter") {
+            timeScale.target = 0.25;
+            try { A().playNote(36, 260); } catch { /* noop */ }
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+          if (e.phase === "release") timeScale.target = 1;
+          return;
+        }
+        if (e.fingers !== 1) return;
+        if (e.phase === "enter") blessed = false;
+        if (e.phase === "release") { blessed = false; return; }
+        // ceremony — the room's one solemn act: the medal is blessed; it
+        // flares, the night sky brightens for good, and the moment is kept.
+        if (e.tier >= 3 && !blessed) {
+          blessed = true;
+          shine.v = 1;
+          addPoints(0.12);
+          try { A().bell(); } catch { /* noop */ }
+          try { haptics.bloom(); } catch { /* noop */ }
+          useField.getState().recordTape("kept", 0.9, "coin/blessing");
+        }
+      },
+      rhythm: (e) => {
+        // a steady tapped pulse: the aventurine night twinkles in time
+        if (e.stability <= 0.7) return;
+        entrain.bpm = Math.max(40, Math.min(160, e.bpm));
+        entrain.until = performance.now() + 8000;
+        entrain.lastBeat = -1;
+        useField.getState().recordTape("sigil", 0.5, "coin/entrain");
+      },
+    }, { wheelZoom: false });
 
     // ── device gyroscope (tilt the phone) ──
     let haveOrient = false;
@@ -752,25 +826,49 @@ export default function Coin() {
     let raf = 0; let prev = performance.now();
     let idle = 0; let lastTiltMag = 0;
     let lastTiltNote = 0;
+    let bgT = 0;
     const tick = (now: number) => {
-      const dt = Math.min(0.05, (now - prev) / 1000); prev = now;
+      const rawDt = Math.min(0.05, (now - prev) / 1000); prev = now;
+      // three-finger time dilation: the coin's clock eases to 1/4 speed
+      timeScale.cur += (timeScale.target - timeScale.cur) * Math.min(1, rawDt * 5);
+      const dt = rawDt * timeScale.cur;
       const motion = reduce ? 0 : 1;
 
-      // ease tilt; add a slow idle breathing sway if untouched
+      // ease tilt; add a slow idle breathing sway if untouched, and lean
+      // into whatever wind three fingers last dragged across the room
       idle += dt;
-      const swayX = haveOrient || drag.on ? 0 : Math.sin(idle * 0.6) * 0.12 * motion;
-      const swayY = haveOrient || drag.on ? 0 : Math.cos(idle * 0.45) * 0.16 * motion;
+      wind.x *= Math.exp(-rawDt * 0.8);
+      wind.y *= Math.exp(-rawDt * 0.8);
+      const swayX = (haveOrient || drag.on ? 0 : Math.sin(idle * 0.6) * 0.12 * motion) + wind.y * 0.5;
+      const swayY = (haveOrient || drag.on ? 0 : Math.cos(idle * 0.45) * 0.16 * motion) + wind.x * 0.6;
       tilt.x += (tilt.tx + swayX - tilt.x) * 0.12;
       tilt.y += (tilt.ty + swayY - tilt.y) * 0.12;
 
+      // entrained twinkle: the night sky pulses on each beat of your tempo
+      if (now < entrain.until && entrain.bpm > 0) {
+        const beatIdx = Math.floor(now / (60000 / entrain.bpm));
+        if (beatIdx !== entrain.lastBeat) {
+          entrain.lastBeat = beatIdx;
+          fill.pulse = Math.min(1, fill.pulse + 0.3);
+          try { A().playNote(90 + (beatIdx % 8), 30); } catch { /* noop */ }
+        }
+      }
+
+      // glimmer (grammar §6): after ~20s untouched, the star glint breathes
+      // over the relief where a rub would shine it — physical, never text.
+      if (now - lastGestureAt > 20000 && now - lastGlimmerAt > 9000) {
+        lastGlimmerAt = now;
+        shine.v = Math.max(shine.v, 0.35);
+      }
+
       // flip animation — quaternion slerp toward the target face
       if (flip.t < 1) {
-        flip.t = Math.min(1, flip.t + (1 - flip.t) * 0.16 + 0.01);
+        flip.t = Math.min(1, flip.t + ((1 - flip.t) * 0.16 + 0.01) * timeScale.cur);
         flip.base.slerpQuaternions(flip.q0, flip.q1, flip.t);
-        if (flip.t >= 1) flip.q0.copy(flip.q1);
+        if (flip.t >= 1) { flip.q0.copy(flip.q1); toss.amp = 1; }
       }
       const tossing = flip.t < 1 ? Math.sin(Math.PI * flip.t) : 0;
-      coinGroup.position.z = tossing * 3.2;
+      coinGroup.position.z = tossing * 3.2 * toss.amp;
       // ease the slide-driven size, combined with the flip toss
       size.v += (size.t - size.v) * 0.16;
       coinGroup.scale.setScalar(size.v * (1 + tossing * 0.06));
@@ -796,7 +894,8 @@ export default function Coin() {
       fill.v += (fill.t - fill.v) * 0.05;
       fill.glowV += (fill.glow - fill.glowV) * 0.05;
       fill.pulse *= 0.93;
-      bgUniforms.uTime.value = now * 0.001 * (reduce ? 0.25 : 1);
+      bgT += dt * (reduce ? 0.25 : 1);
+      bgUniforms.uTime.value = bgT;
       bgUniforms.uFill.value = fill.v;
       // permanent brilliance: rises with every interaction, saturating slowly so it
       // keeps climbing toward the sublime but never blows out to white
@@ -832,10 +931,7 @@ export default function Coin() {
       window.removeEventListener("deviceorientation", onOrient);
       window.removeEventListener("devicemotion", onMotion);
       window.removeEventListener("touchend", askPerm);
-      renderer.domElement.removeEventListener("pointerdown", onDown);
-      renderer.domElement.removeEventListener("pointermove", onMove);
-      renderer.domElement.removeEventListener("pointerup", onUp);
-      renderer.domElement.removeEventListener("pointercancel", onUp);
+      detachGestures();
       hideStyle.remove();
       renderer.dispose(); pmrem.dispose(); envRT.dispose();
       frontTex.dispose(); backTex.dispose(); reedTex.dispose();
