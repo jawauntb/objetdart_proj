@@ -175,6 +175,48 @@ export default function Aphros() {
     let lastStirNoteAt = 0;
     let holdBloom: Bloom | null = null;
 
+    // ── the court, and what the hand last did to it ──────────────────
+    // every figure is strikable and answers in its own register: tritons
+    // low, seahorses and silks mid, dolphins, cherubs and the woman high
+    const TRITON_POS = [
+      [0.3, 0.665],
+      [0.71, 0.655],
+      [0.265, 0.7],
+    ];
+    const SEAHORSE_POS: Array<[number, number, number]> = [
+      [0.155, 0.59, 1],
+      [0.845, 0.59, -1],
+    ];
+    const live = { wT: 0, dolphins: [[0.5, 0.5], [0.5, 0.5], [0.5, 0.5]] };
+    const pointerFx = { x: 0.5, y: 0.6, strength: 0 };
+    let silkBoost = 0;
+    let galateaGlow = 0;
+    const tritonDiveAt = [0, 0, 0];
+    const tritonGlow = [0, 0, 0];
+    const seahorseRearAt = [0, 0];
+    const cherubSpinAt = [0, 0, 0, 0];
+    const dolphinBoostUntil = [0, 0, 0];
+    const cherubPosAt = (i: number, t: number): [number, number] => {
+      const ci = i / 3;
+      const bx = 0.86 + (0.14 - 0.86) * ci + Math.sin(t * 0.11 + i * 1.7) * 0.012;
+      const by = 0.255 + (0.075 - 0.255) * ci + Math.cos(t * 0.13 + i * 1.1) * 0.008;
+      return [bx, by];
+    };
+    // distance from a point to either silk's arc, in aspect-true units
+    const nearSilk = (nx: number, ny: number, ar: number): boolean => {
+      const cx0 = (nx - 0.5) * ar;
+      const cy0 = ny - (SHELL_Y + 0.02);
+      for (const [tilt, radius] of [[0.38, 0.225], [-0.52, 0.265]] as const) {
+        const c = Math.cos(tilt);
+        const s = Math.sin(tilt);
+        const rx = c * cx0 - s * cy0;
+        const ry = s * cx0 + c * cy0;
+        const ang = Math.atan2(rx, -ry);
+        if (Math.abs(Math.hypot(rx, ry) - radius) < 0.05 && Math.abs(ang) < 1.5) return true;
+      }
+      return false;
+    };
+
     const pushWake = (x01: number, y01: number, strength: number) => {
       wakes.push({ x: x01, y: y01, born: performance.now(), strength });
       if (wakes.length > MAX_WAKES) wakes.shift();
@@ -226,9 +268,73 @@ export default function Aphros() {
             return;
           }
           if (e.fingers === 2) return; // reserved — the frame's verbs
-          // a kiss of foam — sight and sound in the same frame
-          pushWake(e.x / Math.max(1, width), e.y / Math.max(1, height), 0.5 + e.intensity * 0.5);
-          audio.playNote(noteAt(e.x / Math.max(1, width)), 200);
+          const nx = e.x / Math.max(1, width);
+          const ny = e.y / Math.max(1, height);
+          const AR = width / Math.max(1, height);
+          const dst = (x: number, y: number) => Math.hypot((nx - x) * AR, ny - y);
+          // ── who did the hand strike? each answers in its register ──
+          // the woman — a bell and her glow
+          if (dst(0.5, 0.47) < 0.14) {
+            galateaGlow = 1;
+            flash = Math.min(1, flash + 0.5);
+            audio.bell();
+            audio.playNote(88, 320);
+            haptics.bloom();
+            return;
+          }
+          // a cherub — one barrel roll and a high chirp
+          for (let i = 0; i < 4; i++) {
+            const [cx2, cy2] = cherubPosAt(i, live.wT);
+            if (dst(cx2, cy2) < 0.07) {
+              if (!cherubSpinAt[i]) cherubSpinAt[i] = performance.now();
+              audio.playNote(93 - i * 2, 150);
+              haptics.tap();
+              return;
+            }
+          }
+          // a hippocamp — it rears, two mid notes
+          for (let i = 0; i < 2; i++) {
+            if (dst(SEAHORSE_POS[i][0], SEAHORSE_POS[i][1]) < 0.1) {
+              seahorseRearAt[i] = performance.now();
+              audio.playNote(66, 170);
+              window.setTimeout(() => audio.playNote(71, 200), 90);
+              haptics.detent();
+              pushWake(SEAHORSE_POS[i][0], SEAHORSE_POS[i][1] + 0.02, 0.6);
+              return;
+            }
+          }
+          // a triton — he dives with a low call, foam closing over him
+          for (let i = 0; i < 3; i++) {
+            if (dst(TRITON_POS[i][0], TRITON_POS[i][1]) < 0.09) {
+              tritonDiveAt[i] = performance.now();
+              tritonGlow[i] = 1;
+              audio.playNote(38 + i * 5, 520);
+              haptics.chop();
+              pushWake(TRITON_POS[i][0], TRITON_POS[i][1] + 0.02, 0.9);
+              return;
+            }
+          }
+          // a dolphin — a burst of play, three rising notes
+          for (let i = 0; i < 3; i++) {
+            if (dst(live.dolphins[i][0], live.dolphins[i][1]) < 0.09) {
+              dolphinBoostUntil[i] = performance.now() + 4000;
+              audio.playNote(81, 130);
+              window.setTimeout(() => audio.playNote(85, 130), 80);
+              window.setTimeout(() => audio.playNote(90, 170), 170);
+              haptics.ripple(0.5);
+              return;
+            }
+          }
+          // a silk — it billows, a soft swish
+          if (nearSilk(nx, ny, AR) && ny < SHORE) {
+            silkBoost = 1;
+            audio.chime();
+            haptics.lens();
+            return;
+          }
+          // else: a kiss of foam on open water
+          pushWake(nx, ny, 0.5 + e.intensity * 0.5);
+          audio.playNote(noteAt(nx), 200);
           haptics.tap();
         },
         hold: (e) => {
@@ -269,7 +375,10 @@ export default function Aphros() {
             return;
           }
           if (e.fingers !== 1) return;
-          // stirring the water — a wake follows the finger
+          // stirring the water — a wake follows the finger, foam under it
+          pointerFx.x = e.x / Math.max(1, width);
+          pointerFx.y = e.y / Math.max(1, height);
+          pointerFx.strength = 1;
           const speed = Math.min(1, Math.hypot(e.vx, e.vy) / 1400);
           pushWake(e.x / Math.max(1, width), e.y / Math.max(1, height), 0.3 + speed * 0.7);
           const now = performance.now();
@@ -301,9 +410,31 @@ export default function Aphros() {
         rhythm: (e) => {
           if (e.stability > 0.7) agitation = Math.min(1, agitation + 0.08);
         },
+        knock: (e) => {
+          // a knock on the vessel surges the whole sea
+          lastTouchAt = performance.now();
+          agitation = Math.min(1, agitation + 0.3 * e.intensity);
+          pushWake(0.5, SHELL_Y + 0.08, 1.0);
+          audio.thud();
+          haptics.storm();
+        },
+        breath: (e) => {
+          // breath on the candle-side brightens the foam a moment
+          flash = Math.min(1, flash + e.strength * 0.5);
+        },
       },
       { wheelZoom: false },
     );
+
+    // hover — foam gathers wherever the pointer rests on the water,
+    // the same quiet reward the home sea gives a moving cursor
+    const onHover = (ev: PointerEvent) => {
+      if (ev.buttons !== 0) return;
+      pointerFx.x = ev.clientX / Math.max(1, width);
+      pointerFx.y = ev.clientY / Math.max(1, height);
+      pointerFx.strength = 1;
+    };
+    canvas.addEventListener("pointermove", onHover, { passive: true });
 
     // ── WebGL — the painting ─────────────────────────────────────────
     const gl =
@@ -334,6 +465,12 @@ export default function Aphros() {
         uniform vec4 uWakes[${MAX_WAKES}];   // x, y, age, strength
         uniform int uWakeCount;
         uniform vec4 uDolphins[3];           // x, y, angle, presence
+        uniform vec4 uPointer;               // x, y, strength, -
+        uniform float uSilkBoost;            // tapped silk billows
+        uniform float uGalatea;              // her answering glow
+        uniform vec4 uTritons[3];            // x, y, dive, glow
+        uniform vec4 uSeahorses[2];          // x, y, rear, facing
+        uniform vec4 uCherubFx;              // barrel-roll phase per cherub
         varying vec2 vUv;
 
         const float HORIZON = ${HORIZON.toFixed(3)};
@@ -404,6 +541,43 @@ export default function Aphros() {
           return min(min(body, fin), min(min(fl1, fl2), beak));
         }
 
+        // ── the woman on the shell — a standing figure in local units,
+        // origin at her feet, one arm raised to the crimson silk ──
+        float galateaSdf(vec2 p) {
+          float d = sdEll(p - vec2(0.0, -0.88), vec2(0.085, 0.105));                 // head
+          d = min(d, sdEll(rot2(-0.06) * (p - vec2(0.0, -0.62)), vec2(0.115, 0.20))); // torso
+          d = min(d, sdEll(rot2(0.10) * (p - vec2(0.010, -0.38)), vec2(0.135, 0.16))); // hips
+          d = min(d, sdEll(rot2(0.06) * (p - vec2(-0.02, -0.16)), vec2(0.10, 0.22)));  // draped legs
+          d = min(d, sdEll(rot2(-0.95) * (p - vec2(0.155, -0.80)), vec2(0.175, 0.045))); // raised arm
+          d = min(d, sdEll(rot2(0.65) * (p - vec2(-0.125, -0.58)), vec2(0.14, 0.040))); // resting arm
+          return d;
+        }
+        float galateaHair(vec2 p) {
+          float d = sdEll(p - vec2(-0.005, -0.93), vec2(0.10, 0.085));
+          d = min(d, sdEll(rot2(0.55) * (p - vec2(-0.14, -0.84)), vec2(0.16, 0.05)));
+          return d;
+        }
+
+        // ── a triton — head, shoulders, one hailing arm, waist-deep ──
+        float tritonSdf(vec2 p) {
+          float d = sdEll(p - vec2(0.0, -0.30), vec2(0.125, 0.135));                // head
+          d = min(d, sdEll(p - vec2(0.0, 0.02), vec2(0.235, 0.26)));                // shoulders
+          d = min(d, sdEll(rot2(-1.15) * (p - vec2(0.20, -0.16)), vec2(0.21, 0.055))); // raised arm
+          return d;
+        }
+
+        // ── a hippocamp — snouted head, arched chest, coiled tail ──
+        float seahorseSdf(vec2 p) {
+          float d = sdEll(rot2(0.45) * (p - vec2(0.05, -0.62)), vec2(0.145, 0.105)); // head
+          d = min(d, sdEll(rot2(0.15) * (p - vec2(0.23, -0.56)), vec2(0.125, 0.038))); // snout
+          d = min(d, sdEll(rot2(-0.40) * (p - vec2(-0.02, -0.38)), vec2(0.15, 0.23))); // chest
+          d = min(d, sdEll(p - vec2(-0.06, -0.06), vec2(0.17, 0.23)));               // belly
+          float coil = abs(length(p - vec2(0.03, 0.20)) - 0.15) - 0.055;             // tail coil
+          d = min(d, coil);
+          d = min(d, sdEll(rot2(-0.15) * (p - vec2(-0.22, -0.26)), vec2(0.065, 0.17))); // dorsal fin
+          return d;
+        }
+
         void main() {
           vec2 uv = vec2(vUv.x, 1.0 - vUv.y); // y = 0 top, 1 bottom
           float aspect = uRes.x / uRes.y;
@@ -440,6 +614,10 @@ export default function Aphros() {
           float skyT = clamp(uv.y / HORIZON, 0.0, 1.0);
           vec3 sky = mix(rafBlue, violetG, smoothstep(0.0, 0.60, skyT));
           sky = mix(sky, goldLt, smoothstep(0.42, 1.0, skyT) * 0.9);
+          // the storm keeps to one side: the left of the sky broods
+          // while the right stays radiant — the canvases' dark wing
+          float stormSide = smoothstep(0.60, 0.02, uv.x);
+          sky = mix(sky, sky * vec3(0.70, 0.72, 0.82), stormSide * 0.38);
           vec2 cp = vec2(uv.x * aspect * 1.05 + t * 0.016 + uWind * 0.10, uv.y * 3.0);
           vec2 cw = vec2(fbm(cp + vec2(0.0, t * 0.010)), fbm(cp + vec2(5.2, 1.3)));
           float cloud = fbm(cp + (cw - 0.5) * 1.6);
@@ -450,7 +628,8 @@ export default function Aphros() {
           float rimGold = (smoothstep(0.40, 0.52, cloud) - smoothstep(0.52, 0.72, cloud));
           cloudCol += max(0.0, rimGold) * vec3(0.56, 0.28, 0.20) * exp(-sunDist * 1.6) * 1.5;
           float cloudMask = billow * (1.0 - smoothstep(0.60, 1.0, skyT)) * smoothstep(0.02, 0.12, skyT);
-          sky = mix(sky, cloudCol, cloudMask * 0.92);
+          cloudMask *= 0.65 + 0.75 * stormSide;
+          sky = mix(sky, cloudCol, min(1.0, cloudMask * 0.92));
           float ang = atan(sunD.x, -sunD.y);
           float rayN = fbm(vec2(ang * 2.6 + 7.0, t * 0.05));
           float rays = pow(max(0.0, sin(ang * 7.0 + rayN * 5.0 + t * 0.03)), 4.0);
@@ -468,8 +647,10 @@ export default function Aphros() {
             float cs = mix(0.050, 0.030, ci);
             vec2 cpd = (uv - pp) * vec2(aspect, 1.0);
             if (length(cpd) > cs * 2.6) continue;
-            // banked along the flight line, breathing a little
-            float bank = -0.28 + sin(t * 0.10 + fi * 0.9) * 0.07;
+            // banked along the flight line, breathing a little; a tapped
+            // cherub throws one full barrel roll
+            float spin = i == 0 ? uCherubFx.x : i == 1 ? uCherubFx.y : i == 2 ? uCherubFx.z : uCherubFx.w;
+            float bank = -0.28 + sin(t * 0.10 + fi * 0.9) * 0.07 + spin * 6.28318;
             vec2 cl = rot2(bank) * cpd / cs;
             // wings first — pale gold, behind the body
             float wm = smoothstep(0.05, -0.05, cherubWings(cl));
@@ -562,9 +743,23 @@ export default function Aphros() {
           float lace = smoothstep(0.74 - uAgit * 0.12, 0.98, vein * (0.55 + 0.45 * l1));
           float crest = smoothstep(0.45, 0.95, sin(sd * 20.0 - t * 0.70 + l1 * 3.0) * 0.5 + 0.5);
           float laceAmt = lace * (0.3 + 0.7 * crest) * smoothstep(0.30, 1.0, sd);
-          laceAmt = clamp(laceAmt + wakeHi * 0.65, 0.0, 1.0);
-          sea = mix(sea, vec3(0.99, 0.98, 0.95), laceAmt * (0.55 + uAgit * 0.25));
+          // aphros under the hand — foam gathers wherever the pointer
+          // rests on the water, swirling while it stays
+          vec2 ptd = (uv - uPointer.xy) * vec2(aspect, 1.0);
+          float ptr = length(ptd);
+          float ptAng = atan(ptd.y, ptd.x);
+          float ptSwirl = smoothstep(0.3, 0.9,
+            cos(ptAng * 3.0 + ptr * 60.0 - t * 2.2) * 0.5 + 0.5);
+          float ptFoam = exp(-(ptr * ptr) / 0.0016) * (0.45 + 0.55 * ptSwirl) * uPointer.z;
+          laceAmt = clamp(laceAmt + wakeHi * 0.65 + ptFoam, 0.0, 1.0);
+          sea = mix(sea, vec3(0.99, 0.98, 0.95), laceAmt * (0.60 + uAgit * 0.25));
           sea += wakeHi * 0.02 * vec3(1.0);
+          // iridescent glints living in the foam — the bubbles' rainbows
+          float tw = smoothstep(0.86, 0.985, vnoise(suv * vec2(aspect, 1.0) * 90.0 + floor(t * 3.0) * 7.3));
+          sea += tw * laceAmt * vec3(
+            0.16 + 0.13 * cos(t * 1.7 + suv.x * 40.0),
+            0.16 + 0.13 * cos(t * 1.7 + suv.x * 40.0 + 2.1),
+            0.16 + 0.13 * cos(t * 1.7 + suv.x * 40.0 + 4.2));
 
           // ── blooms: phyllotaxis vortices of foam the room keeps ──
           float bloomFoam = 0.0;
@@ -656,6 +851,83 @@ export default function Aphros() {
           col = mix(col, vec3(0.97, 0.86, 0.76), haze * 0.45);
           col = mix(col, shore, smoothstep(SHORE - 0.012, SHORE + 0.012, uv.y));
 
+          // ── the hippocamps — two rearing at the flanks, waist-deep,
+          // foam churning where they stand ──
+          for (int i = 0; i < 2; i++) {
+            vec4 sh2 = uSeahorses[i];
+            vec2 hp = (uv - sh2.xy) * vec2(aspect, 1.0);
+            hp.x *= sh2.w;                      // facing
+            float rear = sh2.z;
+            hp = rot2(-0.20 * rear) * hp;
+            hp.y += rear * 0.020;
+            vec2 hl = hp / 0.105;
+            if (length(hl) < 3.2) {
+              float hm = smoothstep(0.035, -0.035, seahorseSdf(hl));
+              // cut below the waterline — low enough that the coil shows
+              hm *= smoothstep(0.030, -0.010, uv.y - (sh2.y + 0.062));
+              vec3 hcol = mix(vec3(0.10, 0.23, 0.23), vec3(0.48, 0.64, 0.54),
+                smoothstep(0.4, -1.2, hl.y));
+              hcol += rear * vec3(0.12, 0.10, 0.05);
+              col = mix(col, hcol, hm * 0.95);
+            }
+            // churn at the waterline
+            float chn = fbm(vec2(uv.x * aspect * 9.0 + t * 0.3, uv.y * 30.0));
+            float churn2 = exp(-pow((uv.y - (sh2.y + 0.064)) * 70.0, 2.0))
+                         * exp(-pow(hp.x * 5.5, 2.0)) * (0.5 + 0.5 * chn);
+            col = mix(col, vec3(0.98, 0.97, 0.93), churn2 * (0.55 + rear * 0.35));
+          }
+
+          // ── the retinue — three tritons hailing from the water, each
+          // in his own skin, foam at every chest ──
+          for (int i = 0; i < 3; i++) {
+            vec4 tr = uTritons[i];
+            vec2 tp = (uv - tr.xy) * vec2(aspect, 1.0);
+            tp.y += tr.z * 0.075;               // diving sinks him
+            vec2 tl = tp / 0.10;
+            float presence = 1.0 - tr.z;
+            if (length(tl) < 3.0 && presence > 0.01) {
+              float tm = smoothstep(0.035, -0.035, tritonSdf(tl));
+              tm *= smoothstep(0.030, -0.010, uv.y - (tr.y + 0.020 + tr.z * 0.02)) * presence;
+              vec3 skin = i == 0 ? vec3(0.55, 0.38, 0.27)
+                        : i == 1 ? vec3(0.40, 0.27, 0.20)
+                        : vec3(0.66, 0.50, 0.36);
+              // lit from the gold rent above, shaded below
+              skin *= 0.78 + 0.28 * smoothstep(0.6, -1.0, tl.y);
+              skin += tr.w * vec3(0.20, 0.12, 0.06);   // his answering flash
+              col = mix(col, skin, tm * 0.92);
+            }
+            float chn3 = fbm(vec2(uv.x * aspect * 8.0 - t * 0.25, uv.y * 26.0));
+            float churn3 = exp(-pow((uv.y - (tr.y + 0.022)) * 64.0, 2.0))
+                         * exp(-pow(tp.x * 5.0, 2.0)) * (0.5 + 0.5 * chn3);
+            col = mix(col, vec3(0.98, 0.97, 0.93), churn3 * (0.5 + tr.w * 0.3 + tr.z * 0.4));
+          }
+
+          // ── and the woman herself, standing on the shell against the
+          // light, her raised hand meeting the crimson silk ──
+          {
+            vec2 gp = (uv - vec2(0.5 + uTilt * 0.010, 0.585)) * vec2(aspect, 1.0);
+            vec2 glcl = gp / 0.22;
+            if (length(glcl - vec2(0.0, -0.5)) < 1.6) {
+              float hairM = smoothstep(0.03, -0.03, galateaHair(glcl));
+              col = mix(col, vec3(0.80, 0.58, 0.28) * (0.95 + uGalatea * 0.3), hairM * 0.96);
+              float gm = smoothstep(0.022, -0.022, galateaSdf(glcl));
+              // warm ivory skin, shaded on the storm side, blushed by rose
+              vec3 skinG = vec3(0.93, 0.78, 0.68);
+              skinG *= 0.82 + 0.22 * smoothstep(-0.9, 0.7, glcl.x);
+              skinG += vec3(0.05, 0.010, 0.015) * smoothstep(0.6, 0.0, abs(glcl.y + 0.38));
+              skinG += uGalatea * vec3(0.16, 0.10, 0.07);
+              col = mix(col, skinG, gm * 0.98);
+              // the rose wrap at her hips, folded, not a ball
+              float wrapM = smoothstep(0.03, -0.03,
+                sdEll(rot2(0.14) * (glcl - vec2(-0.01, -0.30)), vec2(0.145, 0.105)));
+              vec3 wrapCol = vec3(0.68, 0.20, 0.24) * (0.82 + 0.18 * sin(glcl.x * 16.0 + glcl.y * 8.0));
+              col = mix(col, wrapCol, wrapM * 0.94);
+              // backlit rim from the gold rent behind her
+              float grim = smoothstep(0.035, 0.0, abs(galateaSdf(glcl))) * (1.0 - gm);
+              col += grim * vec3(1.0, 0.90, 0.70) * (0.42 + uGalatea * 0.35 + breath * 0.10);
+            }
+          }
+
           // ── the chi of silks: two billowing bands crossing over the
           // shell — a rose one sweeping up-left behind, a crimson one
           // sweeping up-right in front. the crossed diagonals are the
@@ -667,8 +939,9 @@ export default function Aphros() {
           vec2 arpB = rot2(-0.52) * arp0;
           float arAngB = atan(arpB.x, -arpB.y);
           float arRB = length(arpB);
-          float flutterB = sin(arAngB * 3.0 - t * 0.8) * 0.011
-                         + sin(arAngB * 6.0 + t * 1.1) * 0.005;
+          float flutterB = (sin(arAngB * 3.0 - t * 0.8) * 0.011
+                         + sin(arAngB * 6.0 + t * 1.1) * 0.005)
+                         * (1.0 + uSilkBoost * 1.6);
           float arcRB = 0.265 + flutterB - uWind * 0.018 * sin(arAngB * 2.0);
           float bandDB = abs(arRB - arcRB);
           float extentB = (1.0 - smoothstep(0.50, 1.00, arAngB))
@@ -686,8 +959,9 @@ export default function Aphros() {
           vec2 arp = rot2(0.38) * arp0;
           float arAng = atan(arp.x, -arp.y);
           float arR = length(arp);
-          float flutter = sin(arAng * 3.0 + t * 0.9) * 0.010
-                        + sin(arAng * 7.0 - t * 1.3) * 0.005;
+          float flutter = (sin(arAng * 3.0 + t * 0.9) * 0.010
+                        + sin(arAng * 7.0 - t * 1.3) * 0.005)
+                        * (1.0 + uSilkBoost * 1.6);
           float arcR = 0.225 + flutter + uWind * 0.020 * sin(arAng * 2.0);
           float bandD = abs(arR - arcR);
           float extent = (1.0 - smoothstep(0.55, 1.05, -arAng))
@@ -729,6 +1003,9 @@ export default function Aphros() {
             line += drape * smoothstep(0.6, 0.95, folds) * 0.3;
             line += smoothstep(0.006, 0.001, abs(bandDB - thickB)) * extentB * 0.7;
             line += drapeB * smoothstep(0.6, 0.95, foldsB) * 0.25;
+            // her contour, drawn as the cartone would hold it
+            vec2 gpl = (uv - vec2(0.5, 0.585)) * vec2(aspect, 1.0) / 0.22;
+            line += smoothstep(0.05, 0.0, abs(galateaSdf(gpl))) * 0.85;
             // shore hatching
             float hatch = smoothstep(0.42, 0.5, abs(fract((uv.x * aspect + uv.y * 0.6) * 60.0) - 0.5));
             line += (1.0 - hatch) * 0.12 * smoothstep(SHORE, 1.0, uv.y);
@@ -782,6 +1059,12 @@ export default function Aphros() {
             const uWakesU = U("uWakes");
             const uWakeCountU = U("uWakeCount");
             const uDolphinsU = U("uDolphins");
+            const uPointerU = U("uPointer");
+            const uSilkBoostU = U("uSilkBoost");
+            const uGalateaU = U("uGalatea");
+            const uTritonsU = U("uTritons");
+            const uSeahorsesU = U("uSeahorses");
+            const uCherubFxU = U("uCherubFx");
             const buf = gl.createBuffer();
             gl.bindBuffer(gl.ARRAY_BUFFER, buf);
             gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
@@ -794,6 +1077,9 @@ export default function Aphros() {
             const bloomData = new Float32Array(MAX_BLOOMS * 4);
             const wakeData = new Float32Array(MAX_WAKES * 4);
             const dolphinData = new Float32Array(3 * 4);
+            const tritonData = new Float32Array(3 * 4);
+            const seahorseData = new Float32Array(2 * 4);
+            const cherubFx = [0, 0, 0, 0];
             const prevPresence = [0, 0, 0];
 
             let lastNow = performance.now();
@@ -809,6 +1095,50 @@ export default function Aphros() {
               agitation *= Math.exp(-rawDt / 2.8);
               flash *= Math.exp(-rawDt / 0.45);
               lens += (lensTarget - lens) * Math.min(1, rawDt * 5);
+              live.wT = wT;
+              pointerFx.strength *= Math.exp(-rawDt / 1.4);
+              silkBoost *= Math.exp(-rawDt / 1.6);
+              galateaGlow *= Math.exp(-rawDt / 1.3);
+
+              // the court's envelopes — dives, rears, rolls, glows
+              for (let i = 0; i < 3; i++) {
+                tritonGlow[i] *= Math.exp(-rawDt / 1.0);
+                let dive = 0;
+                if (tritonDiveAt[i] > 0) {
+                  const u = (now - tritonDiveAt[i]) / 2600;
+                  if (u >= 1) tritonDiveAt[i] = 0;
+                  else dive = Math.sin(u * Math.PI);
+                }
+                tritonData[i * 4 + 0] = TRITON_POS[i][0] + tiltX * 0.008;
+                tritonData[i * 4 + 1] = TRITON_POS[i][1];
+                tritonData[i * 4 + 2] = dive;
+                tritonData[i * 4 + 3] = tritonGlow[i];
+              }
+              for (let i = 0; i < 2; i++) {
+                let rear = 0;
+                if (seahorseRearAt[i] > 0) {
+                  const u = (now - seahorseRearAt[i]) / 1400;
+                  if (u >= 1) seahorseRearAt[i] = 0;
+                  else rear = Math.sin(u * Math.PI);
+                }
+                seahorseData[i * 4 + 0] = SEAHORSE_POS[i][0] + tiltX * 0.008;
+                seahorseData[i * 4 + 1] = SEAHORSE_POS[i][1];
+                seahorseData[i * 4 + 2] = rear;
+                seahorseData[i * 4 + 3] = SEAHORSE_POS[i][2];
+              }
+              for (let i = 0; i < 4; i++) {
+                if (cherubSpinAt[i] > 0) {
+                  const u = (now - cherubSpinAt[i]) / 900;
+                  if (u >= 1) {
+                    cherubSpinAt[i] = 0;
+                    cherubFx[i] = 0;
+                  } else {
+                    cherubFx[i] = u * u * (3 - 2 * u); // eased full roll
+                  }
+                } else {
+                  cherubFx[i] = 0;
+                }
+              }
 
               // glimmer — after quiet, foam gathers at the shell unbidden
               if (now - lastTouchAt > 20000 && now - lastGlimmerAt > 9000) {
@@ -871,7 +1201,10 @@ export default function Aphros() {
                 const d = DOLPHIN_PARAMS[i];
                 const cyc = (wT + d.offset) / d.period;
                 const p = cyc - Math.floor(cyc);
-                const liftAmt = reduced ? d.lift * 0.4 : d.lift;
+                let liftAmt = reduced ? d.lift * 0.4 : d.lift;
+                // a struck dolphin plays harder; squalls lift them all
+                if (now < dolphinBoostUntil[i]) liftAmt *= 1.35;
+                liftAmt *= 1 + agitation * 0.35;
                 const posAt = (pp: number) => {
                   const px = d.x0 + (d.x1 - d.x0) * pp;
                   const py = d.yBase + d.slope * px - liftAmt * 4 * pp * (1 - pp) + 0.02;
@@ -890,6 +1223,7 @@ export default function Aphros() {
                   pushWake(x, Math.min(SHORE - 0.03, y + 0.05), 0.8);
                 }
                 prevPresence[i] = presence;
+                live.dolphins[i] = [x, y];
                 dolphinData[i * 4 + 0] = x;
                 dolphinData[i * 4 + 1] = y;
                 dolphinData[i * 4 + 2] = angle;
@@ -909,6 +1243,12 @@ export default function Aphros() {
               if (uWakesU) gl.uniform4fv(uWakesU, wakeData);
               if (uWakeCountU) gl.uniform1i(uWakeCountU, wakeCount);
               if (uDolphinsU) gl.uniform4fv(uDolphinsU, dolphinData);
+              if (uPointerU) gl.uniform4f(uPointerU, pointerFx.x, pointerFx.y, pointerFx.strength, 0);
+              if (uSilkBoostU) gl.uniform1f(uSilkBoostU, silkBoost);
+              if (uGalateaU) gl.uniform1f(uGalateaU, galateaGlow);
+              if (uTritonsU) gl.uniform4fv(uTritonsU, tritonData);
+              if (uSeahorsesU) gl.uniform4fv(uSeahorsesU, seahorseData);
+              if (uCherubFxU) gl.uniform4f(uCherubFxU, cherubFx[0], cherubFx[1], cherubFx[2], cherubFx[3]);
               gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
               raf = requestAnimationFrame(draw);
             };
@@ -944,6 +1284,7 @@ export default function Aphros() {
       observer.disconnect();
       detachGestures();
       detachVessel();
+      canvas.removeEventListener("pointermove", onHover);
       window.removeEventListener("keydown", onKey);
       cancelAnimationFrame(raf);
     };
