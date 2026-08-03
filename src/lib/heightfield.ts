@@ -179,13 +179,15 @@ export type Field = { v: number; dx: number; dy: number };
 
 export const HORN_COUNT = 5;
 export const HORN_SALT = 0x40a1;
-export const HORN_AMP_KM = 0.62;
-export const HORN_AMP_JITTER = 0.18;
-export const HORN_RADIUS_KM = 0.92;
-export const HORN_RADIUS_JITTER = 0.22;
+/** Peak add on a ridge — tall enough to tower the inversion as a real horn. */
+export const HORN_AMP_KM = 0.95;
+export const HORN_AMP_JITTER = 0.22;
+/** Narrow skirt so the silhouette reads as a pyramid, not a swell. */
+export const HORN_RADIUS_KM = 0.72;
+export const HORN_RADIUS_JITTER = 0.16;
 export const HORN_EPS_KM = 0.014;
-export const HORN_ANISO = 1.55;
-export const HORN_POWER = 1.35;
+export const HORN_ANISO = 1.72;
+export const HORN_POWER = 1.55;
 export const HORN_RING_INNER_KM = 2.4;
 export const HORN_RING_OUTER_KM = 7.8;
 export const HORN_MIN_SEP_KM = 1.6;
@@ -210,7 +212,8 @@ export const SNOW_SLOPE_K = 2.6;
  * abandons any ray that is above it and still climbing, so if the bound
  * were wrong the far peaks would be silently clipped out of the sky. Horns
  * spend the summit's headroom rather than expanding the covenant:
- * HORN_AMP_KM ≤ SUMMIT_KM, and the horn ring never carries the full outcrop.
+ * HORN_AMP_KM (0.95) ≤ SUMMIT_KM (1.15), and the horn ring never carries
+ * the full outcrop, so ridge + horn stays under ridge + summit.
  */
 export const HEIGHT_MAX_KM = RIDGE_AMP_KM + SUMMIT_KM;
 
@@ -228,19 +231,35 @@ let hornsMemo: Horn[] = [];
 
 export function hornsForSeed(seed: number): Horn[] {
   if (seed === hornsMemoSeed) return hornsMemo;
+  // Hold an empty list while candidates are probed, so heightAt during
+  // placement cannot recurse into this function and cannot credit horns
+  // that have not been chosen yet.
+  hornsMemoSeed = seed;
+  hornsMemo = [];
   const rng = mulberry32(hashSeed(seed, HORN_SALT));
   const horns: Horn[] = [];
   for (let i = 0; i < HORN_COUNT; i++) {
     let cx = 0;
     let cz = 0;
-    for (let attempt = 0; attempt < 8; attempt++) {
+    let bestH = -Infinity;
+    // Several candidates per slot; keep the one that already stands on a
+    // ridge. A horn in a valley is just a hill — the Matterhorn grows from
+    // an arête.
+    for (let attempt = 0; attempt < 10; attempt++) {
       const bearing = ((i + 0.5) * Math.PI * 2) / HORN_COUNT + (rng() - 0.5) * 0.7;
       const ring =
         HORN_RING_INNER_KM + rng() * (HORN_RING_OUTER_KM - HORN_RING_INNER_KM);
-      cx = Math.cos(bearing) * ring;
-      cz = Math.sin(bearing) * ring;
-      const clear = horns.every((h) => Math.hypot(cx - h.cx, cz - h.cz) >= HORN_MIN_SEP_KM);
-      if (clear || attempt === 7) break;
+      const tx = Math.cos(bearing) * ring;
+      const tz = Math.sin(bearing) * ring;
+      const clear = horns.every((h) => Math.hypot(tx - h.cx, tz - h.cz) >= HORN_MIN_SEP_KM);
+      if (!clear && attempt < 9) continue;
+      // Ridge + summit only (horns memo is empty above) — prefer a crest.
+      const probe = heightAt(tx, tz, seed, OCTAVES_MARCH);
+      if (probe >= bestH) {
+        bestH = probe;
+        cx = tx;
+        cz = tz;
+      }
     }
     horns.push({
       cx,
@@ -251,7 +270,6 @@ export function hornsForSeed(seed: number): Horn[] {
       aniso: HORN_ANISO * (0.92 + rng() * 0.16),
     });
   }
-  hornsMemoSeed = seed;
   hornsMemo = horns;
   return hornsMemo;
 }
@@ -566,7 +584,7 @@ export function submergedDepth(
 
 /** How the resting fog level is found: a quantile of the land around you. */
 export const FOG_SAMPLES = 96;
-export const FOG_QUANTILE = 0.65;
+export const FOG_QUANTILE = 0.58;
 export const FOG_SAMPLE_INNER_KM = 1.1;
 export const FOG_SAMPLE_OUTER_KM = 9;
 /** How far one long breath draws the fog down from its rest. */

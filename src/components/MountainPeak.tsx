@@ -84,7 +84,9 @@ const SEED = 0x0a1a;
 /** The ranges the eye actually resolves, in km. Near ones get more octaves. */
 // The first is the rock underfoot — a dark near ridge across the bottom
 // of the frame, so the viewer is standing ON the mountain, not over it.
-const RANGES = [0.26, 0.85, 1.5, 2.7, 4.8, 8.4, 15];
+// Mid-field is denser on purpose: the horn ring lives at 2.4–7.8 km, and a
+// sparse sample list would step over a Matterhorn between rings.
+const RANGES = [0.26, 0.85, 1.5, 2.2, 2.8, 3.5, 4.3, 5.2, 6.2, 7.4, 8.8, 12, 16];
 const ROCK: [number, number, number] = [0.30, 0.27, 0.235];
 const SNOW: [number, number, number] = [0.93, 0.95, 0.98];
 const GLACIER: [number, number, number] = [0.55, 0.68, 0.76]; // cold blue-grey ice
@@ -198,7 +200,9 @@ export default function MountainPeak() {
     let fogLift = 0;
     let fogLiftTarget = 0;
     /** and where the sun stands */
-    let sunElev = 0.22;
+    // Rest a little after dawn: low enough for alpenglow on the horns,
+    // high enough that glacier and cornice still read as materials, not mist.
+    let sunElev = 0.38;
     let sunAz = 0.7;
     let season = 0.4;
     let lens = 0; // 0 felt, 1 contour
@@ -394,9 +398,12 @@ export default function MountainPeak() {
       // the fog's shoreline and the aerial perspective vary across the frame.
       const step = Math.max(2, Math.round(3 / Math.max(0.4, detail.samples)));
       const focal = width / 2 / Math.tan(FOV / 2);
+      // Knife-edge strokes painted after the fills, so a cornice sits on top
+      // of its own ridge rather than being buried by a nearer range.
+      const crests: { x: number; y: number; a: number; w: number }[] = [];
       for (let r = RANGES.length - 1; r >= 0; r--) {
         const d = RANGES[r];
-        const oct = r <= 1 ? 6 : r <= 3 ? 4 : 3;
+        const oct = r <= 1 ? 6 : r <= 4 ? 5 : r <= 8 ? 4 : 3;
         const near = r === 0;
         for (let x = -step; x <= width + step; x += step) {
           const col = clamp01(x / Math.max(1, width));
@@ -425,6 +432,7 @@ export default function MountainPeak() {
           if (y > height) continue;
 
           let seen: [number, number, number];
+          let cornice = 0;
           if (lens > 0.5) {
             seen = drowned ? [0.91, 0.89, 0.83] : [0.78, 0.75, 0.68];
           } else if (near) {
@@ -440,6 +448,7 @@ export default function MountainPeak() {
             );
             const light = pal.ambient + pal.sunI * lambert;
             const m = materialFromGround(g, season, wind);
+            cornice = m.cornice;
             const albedo: [number, number, number] = [
               ROCK[0] * m.rock + SNOW[0] * m.snow + GLACIER[0] * m.glacier,
               ROCK[1] * m.rock + SNOW[1] * m.snow + GLACIER[1] * m.glacier,
@@ -454,10 +463,23 @@ export default function MountainPeak() {
             ];
             // aerial perspective: every further ridge dissolves toward the sky
             seen = mixc(pal.fog, face, trans);
+            // knife-edge: a thin bright lip on the lee crest, drawn after fills
+            if (cornice > 0.18 && g.crease < 0.16 && trans > 0.12) {
+              crests.push({
+                x,
+                y,
+                a: cornice * trans,
+                w: step + 1,
+              });
+            }
           }
           ctx.fillStyle = rgb(seen, 1);
           ctx.fillRect(x, y, step + 1, height - y);
         }
+      }
+      for (const c of crests) {
+        ctx.fillStyle = rgb(SNOW, 0.35 + 0.5 * c.a);
+        ctx.fillRect(c.x, c.y - 1.5, c.w, 3);
       }
 
       // cairns
