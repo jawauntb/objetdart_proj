@@ -1159,7 +1159,6 @@ const {
   addressKey: worldAddressKey,
   createAtlasWorld,
   shiftAddress,
-  slideVectorFor,
   zoomLabelTier,
 } = atlasWorldModule;
 
@@ -1187,17 +1186,6 @@ assert.equal(
   worldAddressKey(shiftAddress(shiftAddress({ wx: 0, wy: 0 }, "south"), "east")),
   "southeast must land where south composed with east lands",
 );
-
-// The incoming sheet slides in from the side the traveler heads toward —
-// a flipped sign would animate every crossing backwards.
-for (const direction of ["north", "east", "south", "west"]) {
-  const delta = shiftAddress({ wx: 0, wy: 0 }, direction);
-  assert.deepEqual(
-    plain(slideVectorFor(direction)),
-    plain(delta),
-    "the " + direction + " slide vector must agree with its travel delta",
-  );
-}
 
 const sheetAt = (address, phase, image) => ({
   address,
@@ -1287,4 +1275,130 @@ assert.equal(zoomLabelTier(1), "far", "the fit view must keep its labels quiet")
 assert.equal(zoomLabelTier(64), "near", "the deepest zoom must name the ground outright");
 assert.equal(zoomLabelTier(Number.NaN), "far", "a broken zoom reading must fail quiet, not loud");
 
-console.log("atlas generation contract ok: parser, navigation metadata, dark route, and world chart");
+// ── the plane frame: one camera over a continuous world ───────────────
+
+const atlasPlaneModule = loadTsModule("src/lib/atlas-plane.ts");
+const {
+  boundViewToBounds,
+  cellAt,
+  deepestTileAt,
+  dynamicZoomFloor,
+  exploredBounds,
+  fitZoomForBounds,
+  focusForSheet,
+  placeChildRect,
+  resolvePlaneEdgeTravel,
+  tileNeedsDetail,
+  viewForCenter,
+  worldCenter,
+} = atlasPlaneModule;
+
+const PLANE_METRICS = { width: 1200, height: 900, mapWidth: 1200, mapHeight: 900 };
+
+// Camera round trip: centering on a world point and asking where the
+// center is must return the same point, or every glide lands off-target.
+{
+  const point = { wx: 1.62, wy: -0.38 };
+  const view = viewForCenter(PLANE_METRICS, point, 2.5);
+  const back = worldCenter(view, PLANE_METRICS);
+  assert.ok(
+    Math.abs(back.wx - point.wx) < 1e-9 && Math.abs(back.wy - point.wy) < 1e-9,
+    "viewForCenter and worldCenter must invert each other",
+  );
+}
+
+// Cell resolution must floor, not truncate — the negative quadrants are
+// real ground west and north of the origin.
+assert.deepEqual(plain(cellAt({ wx: -0.2, wy: 1.7 })), { wx: -1, wy: 1 }, "cellAt must floor into the negative quadrant");
+assert.deepEqual(plain(cellAt({ wx: 0.999, wy: -1.001 })), { wx: 0, wy: -2 }, "cellAt must floor on both axes");
+
+// Explored bounds must cover every remembered cell and always include
+// the cell the traveler stands on.
+{
+  const bounds = exploredBounds([{ wx: -1, wy: 0 }, { wx: 2, wy: 1 }], { wx: 0, wy: -1 });
+  assert.deepEqual(plain(bounds), { x: -1, y: -1, width: 4, height: 3 }, "explored bounds must span all cells plus the standing one");
+  const alone = exploredBounds([], { wx: 3, wy: 3 });
+  assert.deepEqual(plain(alone), { x: 3, y: 3, width: 1, height: 1 }, "an empty world still bounds the standing cell");
+}
+
+// The overview floor falls as the world grows — a two-cell-wide plane
+// fits at half the zoom of one cell — but never rises above the classic
+// single-sheet fit.
+{
+  const one = { x: 0, y: 0, width: 1, height: 1 };
+  const two = { x: 0, y: 0, width: 2, height: 1 };
+  assert.equal(dynamicZoomFloor(one, PLANE_METRICS), 1, "a single explored cell keeps the fit-to-sheet floor");
+  const floorTwo = dynamicZoomFloor(two, PLANE_METRICS);
+  assert.ok(Math.abs(floorTwo - 0.5) < 1e-9, "a two-cell-wide world must survey at half zoom");
+  assert.ok(
+    Math.abs(fitZoomForBounds(two, PLANE_METRICS) * 2 - fitZoomForBounds(one, PLANE_METRICS)) < 1e-9,
+    "doubling the bounds must halve the fit zoom on the limiting axis",
+  );
+}
+
+// Camera clamping: the frame stops at the explored edges where the world
+// overflows the viewport, and the world rides centered where it fits.
+{
+  const bounds = { x: 0, y: 0, width: 2, height: 1 };
+  const clamped = boundViewToBounds({ x: 400, y: 0, zoom: 1 }, PLANE_METRICS, bounds, 0.5, 64);
+  assert.equal(clamped.x, 0, "the camera must stop at the western explored edge");
+  const east = boundViewToBounds({ x: -9999, y: 0, zoom: 1 }, PLANE_METRICS, bounds, 0.5, 64);
+  assert.equal(east.x, PLANE_METRICS.width - 2 * PLANE_METRICS.mapWidth, "the camera must stop at the eastern explored edge");
+  // height 1 * 900 = viewport height → vertical axis centers exactly
+  assert.equal(clamped.y, 0, "a fitting axis must ride centered");
+  const surveyed = boundViewToBounds({ x: 0, y: 0, zoom: 0.5 }, PLANE_METRICS, bounds, 0.5, 64);
+  assert.equal(surveyed.zoom, 0.5, "the floor zoom must be reachable");
+  assert.equal(surveyed.x, 0, "at the floor the surveyed world must span the frame");
+  assert.ok(Math.abs(surveyed.y - (900 - 450) / 2) < 1e-9, "the shallower axis must center at the floor");
+}
+
+// The pyramid's placement law: a child drawn from the camera's focus
+// must occupy ground containing the point the camera looks at.
+{
+  const sheetRect = { x: 1, y: 0, width: 1, height: 1 };
+  const view = viewForCenter(PLANE_METRICS, { wx: 1.7, wy: 0.4 }, 3);
+  const localFocus = focusForSheet(view, PLANE_METRICS, sheetRect);
+  assert.ok(Math.abs(localFocus.x - 0.7) < 1e-9 && Math.abs(localFocus.y - 0.4) < 1e-9, "focus must be sheet-local");
+  assert.ok(Math.abs(localFocus.zoom - 3) < 1e-9, "a root sheet's focus zoom is the camera zoom");
+  const child = placeChildRect(sheetRect, clipRectForFocus(localFocus));
+  assert.ok(
+    child.x <= 1.7 && 1.7 <= child.x + child.width && child.y <= 0.4 && 0.4 <= child.y + child.height,
+    "the child rect must contain the looked-at point",
+  );
+  assert.ok(child.x >= 1 && child.x + child.width <= 2, "the child must stay inside its parent sheet");
+}
+
+// The deepest tile wins, and only tiles actually under the point count.
+{
+  const root = { id: "root", rect: { x: 0, y: 0, width: 1, height: 1 }, level: 0, image: "r", phase: "final" };
+  const child = { id: "child", rect: { x: 0.3, y: 0.3, width: 0.4, height: 0.4 }, level: 1, image: "c", phase: "final" };
+  const elsewhere = { id: "far", rect: { x: 3, y: 3, width: 1, height: 1 }, level: 5, image: "f", phase: "final" };
+  assert.equal(deepestTileAt([root, child, elsewhere], { wx: 0.5, wy: 0.5 })?.id, "child", "the deeper covering tile must win");
+  assert.equal(deepestTileAt([root, child, elsewhere], { wx: 0.1, wy: 0.1 })?.id, "root", "a point outside the child falls to its parent");
+  assert.equal(deepestTileAt([elsewhere], { wx: 0.5, wy: 0.5 }), null, "no covering tile means no ground");
+}
+
+// The pyramid's termination: a parent outrun at zoom 2 stops wanting
+// detail once its half-width child lands under the camera.
+{
+  const parent = { id: "p", rect: { x: 0, y: 0, width: 1, height: 1 }, level: 0, image: "p", phase: "final" };
+  const child = { id: "c", rect: { x: 0.25, y: 0.25, width: 0.5, height: 0.5 }, level: 1, image: "c", phase: "final" };
+  assert.equal(tileNeedsDetail(parent, 2), true, "a doubled zoom must outrun the root sheet");
+  assert.equal(tileNeedsDetail(child, 2), false, "the landed child must satisfy the same zoom");
+  assert.equal(tileNeedsDetail(child, 4), true, "outrunning the child asks for the next level down");
+}
+
+// Frontier travel: only pressing past the explored edge asks for new
+// ground; panning across the interior of the surveyed world does not.
+{
+  const bounds = { x: 0, y: 0, width: 2, height: 1 };
+  const margin = 120;
+  const interior = resolvePlaneEdgeTravel({ x: -600, y: 0, zoom: 1 }, PLANE_METRICS, bounds, { x: 40, y: 0 }, margin);
+  assert.equal(interior, null, "a fast pan through the interior of explored ground must not travel");
+  const west = resolvePlaneEdgeTravel({ x: 60, y: 0, zoom: 1 }, PLANE_METRICS, bounds, { x: 20, y: 0 }, margin);
+  assert.equal(west, "west", "pressing past the western frontier must travel west");
+  const east = resolvePlaneEdgeTravel({ x: PLANE_METRICS.width - 2 * PLANE_METRICS.mapWidth - 60, y: 0, zoom: 1 }, PLANE_METRICS, bounds, { x: -20, y: 0 }, margin);
+  assert.equal(east, "east", "pressing past the eastern frontier must travel east");
+}
+
+console.log("atlas generation contract ok: parser, navigation metadata, dark route, world chart, and plane frame");

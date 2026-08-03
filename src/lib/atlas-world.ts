@@ -62,16 +62,6 @@ export function addressesEqual(a: AtlasWorldAddress, b: AtlasWorldAddress): bool
 }
 
 /**
- * Where a newly entered sheet slides in from, in plane units: the sign of
- * the travel delta. Going east, the new land enters from the right and
- * the old ground falls away left — the motion carries the geography.
- */
-export function slideVectorFor(direction: AtlasWorldDirection): AtlasWorldAddress {
-  const delta = DIRECTION_DELTAS[direction];
-  return { wx: delta.wx, wy: delta.wy };
-}
-
-/**
  * How strongly place names surface at a given camera zoom. Far ground
  * keeps its quiet (labels only answer the hand); mid descent lets names
  * rise faintly; near ground names the land outright — detail resolves
@@ -94,6 +84,8 @@ export type AtlasWorld<Hotspots = unknown, Seeds = unknown> = {
   /** Retrieve without touching recency — for glances (edge names, the traverse chart). */
   peek(address: AtlasWorldAddress): AtlasWorldSheet<Hotspots, Seeds> | null;
   visited(): AtlasWorldAddress[];
+  /** Every remembered sheet, least recently walked first — for plane snapshots. */
+  export(): AtlasWorldSheet<Hotspots, Seeds>[];
   size(): number;
   reset(): void;
 };
@@ -140,6 +132,9 @@ export function createAtlasWorld<Hotspots = unknown, Seeds = unknown>(
     },
     visited() {
       return Array.from(sheets.values(), (sheet) => sheet.address);
+    },
+    export() {
+      return Array.from(sheets.values());
     },
     size() {
       return sheets.size;
