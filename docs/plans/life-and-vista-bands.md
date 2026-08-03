@@ -215,7 +215,8 @@ change the season, which changes where the flock is going.
 > by `/mountain` when this was built, and a band takes one room, so the brief
 > below was delivered as a deepening of that room (#224). The fog volume, the
 > archipelago read and the analytic normals all landed; the horn seeds,
-> cornices and glacier did not — see §4.
+> cornices and glacier landed in the follow-up PR, `feat(mountain): horns,
+> cornices, and glacier take the ridge`.
 
 **Invariant.** A heightfield seed plus a fog altitude. The whole picture — what
 is peak, what is island, what is drowned — is a function of those two numbers.
@@ -327,10 +328,9 @@ the better outcome. And `/clouds` gave the word "olympus" back to the band it
 names (#213), so the two rooms sharing that band are no longer confused.
 
 Still open from §4's original PR 9: per-band ambient beds, and the `/cells` room
-consuming `/organelles`' set. Deferred from `/mountain`: horn-form seeds,
-knife-edge cornices, and glacier as a third material — all of which want the
-heightfield's ridge amplitude retuned against the inversion altitude, and
-therefore want `test-heightfield.mjs`'s constants re-verified with them.
+consuming `/organelles`' set. The `/mountain` deferred work — horn-form seeds,
+knife-edge cornices, and glacier as a third material — shipped in the follow-up
+PR, `feat(mountain): horns, cornices, and glacier take the ridge`.
 
 `/coin` is untouched — it is already the reference exemplar for gyroscopic and
 haptic feel, and every room above is measured against it.

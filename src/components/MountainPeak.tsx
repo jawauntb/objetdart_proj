@@ -9,7 +9,7 @@
  * (src/lib/heightfield.ts). What is peak, what is island and what is
  * drowned is a function of those two and nothing else.
  *
- * The load-bearing map is FOG ALTITUDE → THE SEA. The fog is a real
+ * The load-bearing map is fog altitude → the sea. The fog is a real
  * exponential-height volume, not a painted band: its optical depth along
  * any ray has a closed form, so what survives the distance is computed
  * rather than guessed, and its top rolls with a swell that is additive and
@@ -29,7 +29,9 @@
  * view: one finger turns the head, the vessel's tilt is the
  * horizon, and three fingers hold the world-law — the fog's altitude and
  * the sun's, with the whole palette following the sun from night through
- * dawn to alpenglow. The peak still keeps its cairns and its scree.
+ * dawn to alpenglow. The heightfield now carries matter as rock, snow, and
+ * glacier ice: horns cut the massif, knife-edge cornices catch the lee
+ * arête, and the peak still keeps its cairns and its scree.
  *
  * A call is answered: tap and the ridge under your finger answers at the
  * delay its distance actually implies, lower the further it stands.
@@ -55,10 +57,11 @@ import {
   fogTransmittance,
   groundAt,
   heightAt,
+  materialFromGround,
   paletteForSun,
   restingFogAltitude,
-  snowlineKm,
   sunDirection,
+  windVector,
   windVoice,
   type SkyPalette,
 } from "@/lib/heightfield";
@@ -82,6 +85,9 @@ const SEED = 0x0a1a;
 // The first is the rock underfoot — a dark near ridge across the bottom
 // of the frame, so the viewer is standing ON the mountain, not over it.
 const RANGES = [0.26, 0.85, 1.5, 2.7, 4.8, 8.4, 15];
+const ROCK: [number, number, number] = [0.30, 0.27, 0.235];
+const SNOW: [number, number, number] = [0.93, 0.95, 0.98];
+const GLACIER: [number, number, number] = [0.55, 0.68, 0.76]; // cold blue-grey ice
 // A real pinhole, and a long lens. 66° made every ridge a low bump: apparent
 // rise is focal-limited, and the massif's crests stand only ~0.26km over the
 // inversion at 4km. 35° is also simply how the mountain photographs that
@@ -121,6 +127,7 @@ export default function MountainPeak() {
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const embedded = isEmbeddedFrame();
     const gov = createFrameGovernor(embedded ? "medium" : "high");
+    const wind = windVector(SEED);
 
     // Where the wanderer stands. NOT on the highest point: from the summit
     // every other ridge lies below the horizon and the whole range reads as
@@ -353,7 +360,6 @@ export default function MountainPeak() {
 
       const sun = sunDirection(sunAz, sunElev);
       const pal: SkyPalette = paletteForSun(sunElev);
-      const snowKm = snowlineKm(season);
 
       ctx.clearRect(0, 0, width, height);
 
@@ -388,8 +394,6 @@ export default function MountainPeak() {
       // the fog's shoreline and the aerial perspective vary across the frame.
       const step = Math.max(2, Math.round(3 / Math.max(0.4, detail.samples)));
       const focal = width / 2 / Math.tan(FOV / 2);
-      const ROCK: [number, number, number] = [0.30, 0.27, 0.235];
-      const SNOW: [number, number, number] = [0.93, 0.95, 0.98];
       for (let r = RANGES.length - 1; r >= 0; r--) {
         const d = RANGES[r];
         const oct = r <= 1 ? 6 : r <= 3 ? 4 : 3;
@@ -435,20 +439,18 @@ export default function MountainPeak() {
               ((-g.dhdx * sun[0] + 1 * sun[1] + -g.dhdz * sun[2]) / nLen) * 0.5 + 0.5,
             );
             const light = pal.ambient + pal.sunI * lambert;
-            // Snow by slope AND altitude, and scoured off the very top: the
-            // highest rock is bare and dark because it is too steep and too
-            // wind-blown to hold anything. That inversion is what makes a
-            // summit read as a summit rather than as high ground.
-            const slope = Math.hypot(g.dhdx, g.dhdz);
-            const flat = 1 / (1 + slope * 2.6);
-            const held = clamp01((h - snowKm) / 0.3) * flat;
-            const scour = 1 - clamp01((h - (snowKm + 0.52)) / 0.22);
-            const snowy = clamp01(held * scour);
-            const albedo = mixc(ROCK, SNOW, snowy * 0.94);
+            const m = materialFromGround(g, season, wind);
+            const albedo: [number, number, number] = [
+              ROCK[0] * m.rock + SNOW[0] * m.snow + GLACIER[0] * m.glacier,
+              ROCK[1] * m.rock + SNOW[1] * m.snow + GLACIER[1] * m.glacier,
+              ROCK[2] * m.rock + SNOW[2] * m.snow + GLACIER[2] * m.glacier,
+            ];
+            // cornice: brighten the lee arête toward snow white
+            const lit = mixc(albedo, SNOW, m.cornice * 0.55);
             const face: [number, number, number] = [
-              albedo[0] * light,
-              albedo[1] * light,
-              albedo[2] * light,
+              lit[0] * light,
+              lit[1] * light,
+              lit[2] * light,
             ];
             // aerial perspective: every further ridge dissolves toward the sky
             seen = mixc(pal.fog, face, trans);
