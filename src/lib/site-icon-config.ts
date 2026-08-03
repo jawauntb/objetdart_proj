@@ -25,6 +25,7 @@ export type SiteIconKey =
   | "jewel"
   | "kept"
   | "light"
+  | "loom"
   | "manifold"
   | "movement"
   | "ocean"
@@ -404,6 +405,19 @@ export const SITE_ICON_VISUALS = {
     accent: "#fff1a0",
     accent2: "#70d6ff",
     ink: "#fffce7",
+  },
+  loom: {
+    title: "Loom",
+    description: "one structure woven through every sense",
+    path: "/loom",
+    shortName: "loom",
+    kind: "signal",
+    bg: "#07090e",
+    bg2: "#161d33",
+    glow: "#f4d37a",
+    accent: "#e7ac52",
+    accent2: "#8fb5e8",
+    ink: "#e9edf6",
   },
   manifold: {
     title: "Manifold",

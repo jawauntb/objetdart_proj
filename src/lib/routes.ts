@@ -26,6 +26,7 @@ export const SITE_ROUTES: SiteRouteEntry[] = [
   { key: "manifold",    icon: "stars",    href: "/manifold",                          desc: "every scale kept in one fold", cluster: "field",     dark: true },
   { key: "overlook",    icon: "growth",   href: "/overlook",                          desc: "the whole tree kept in one glance", cluster: "field", dark: true },
   { key: "relativity",  icon: "stars",    href: "/relativity",                        desc: "light keeps its own covenant", cluster: "mechanism", dark: true },
+  { key: "loom",        icon: "signal",   href: "/loom",                              desc: "one structure, every sense",   cluster: "mechanism", dark: true },
   { key: "storm",       icon: "storm",    href: "/storm",                             desc: "pressure · charge · discharge", cluster: "water",     dark: true },
   { key: "clouds",      icon: "clouds",   href: "/clouds",                            desc: "olympus",                      cluster: "water",     dark: true },
   { key: "aphros",      icon: "aphros",   href: "/aphros",                            desc: "play the shells",              cluster: "water" },
