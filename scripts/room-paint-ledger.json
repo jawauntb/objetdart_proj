@@ -113,7 +113,7 @@
     "shadowBlur": 2
   },
   "src/components/TravelPassage.tsx": {
-    "createRadialGradient": 2
+    "createRadialGradient": 1
   },
   "src/components/Watch.tsx": {
     "createRadialGradient": 4

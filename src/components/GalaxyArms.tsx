@@ -41,19 +41,29 @@
  * travel; two-finger tap is its step back.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import RoomShell, { type RoomShellProps } from "@/components/RoomShell";
+import type { RoomVoice } from "@/lib/gesture/defaults";
+import {
+  FULLSCREEN_VERT_CLIP,
+  createGLStage,
+  type FullscreenQuad,
+  type GLProgram,
+  type GLStage,
+  type InstancedDraw,
+} from "@/lib/webgl/stage";
+import { clocksFrom } from "@/lib/webgl/sizing";
+import { spectralRegisterFor } from "@/lib/scale";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
-import { attachGestures } from "@/lib/gesture";
-import { onVessel } from "@/lib/vessel";
-import { stirTurbulence } from "@/lib/turbulence";
-import LetGo from "@/components/LetGo";
+import { getTurbulence, stirTurbulence } from "@/lib/turbulence";
 import {
   ARM_M,
   AZ_FACTOR,
   BAR_AMP,
   BAR_REACH,
   GALAXY_LFO_HZ,
+  GALAXY_SCALE_S,
   OMEGA_P_DEFAULT,
   OMEGA_P_MAX,
   OMEGA_P_MIN,
@@ -123,11 +133,6 @@ const G = {
   barOut: BAR_REACH.toFixed(4),
   rd: R_DISC.toFixed(4),
 };
-
-const VERT_QUAD = `
-attribute vec2 a_pos;
-void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }
-`;
 
 /** The disc pass: gas along the wave, dust on its inner edge, bulge, bar. */
 const FRAG_DISC = `
@@ -401,6 +406,51 @@ export default function GalaxyArms() {
   const keptRef = useRef<number[]>([]);
   const regionsRef = useRef<Region[]>([]);
   const clearRef = useRef<() => void>(() => {});
+  const stageRef = useRef<GLStage | null>(null);
+  const stageRebuild = useRef<() => void>(() => {});
+  // The room's own meanings, handed to <RoomShell>. Held in refs so the
+  // shell never re-attaches the engine and drops an in-flight hold.
+  const voiceRef = useRef<RoomVoice>({});
+  const keyboardRef = useRef<NonNullable<RoomShellProps["keyboard"]>>({});
+  const glimmerRef = useRef<() => void>(() => {});
+  // Every verb the disc speaks, delegated through the ref so the shell never
+  // re-attaches the engine mid-hold. Listed rather than proxied: the list IS
+  // the room's coverage of the grammar, and it should be readable as one.
+  const voice = useMemo<RoomVoice>(
+    () => ({
+      tap: (e) => voiceRef.current.tap?.(e),
+      stepBack: (e) => voiceRef.current.stepBack?.(e),
+      tutti: (e) => voiceRef.current.tutti?.(e),
+      plant: (e) => voiceRef.current.plant?.(e),
+      deepen: (e) => voiceRef.current.deepen?.(e),
+      ceremony: (e) => voiceRef.current.ceremony?.(e),
+      timeScale: (k) => voiceRef.current.timeScale?.(k),
+      drag: (e) => voiceRef.current.drag?.(e),
+      wind: (e) => voiceRef.current.wind?.(e),
+      flick: (e) => voiceRef.current.flick?.(e),
+      stir: (e) => voiceRef.current.stir?.(e),
+      lens: (e) => voiceRef.current.lens?.(e),
+      season: (e) => voiceRef.current.season?.(e),
+      rhythm: (e) => voiceRef.current.rhythm?.(e),
+      drum: (e) => voiceRef.current.drum?.(e),
+      arpeggio: (e) => voiceRef.current.arpeggio?.(e),
+      scatter: (e) => voiceRef.current.scatter?.(e),
+      gravity: (e) => voiceRef.current.gravity?.(e),
+      knock: (e) => voiceRef.current.knock?.(e),
+      night: (e) => voiceRef.current.night?.(e),
+      breath: (e) => voiceRef.current.breath?.(e),
+    }),
+    [],
+  );
+  const keyboard = useMemo<RoomShellProps["keyboard"]>(
+    () => ({
+      enter: () => keyboardRef.current.enter?.(),
+      enterHeld: (ms: number) => keyboardRef.current.enterHeld?.(ms),
+      escape: () => keyboardRef.current.escape?.(),
+      arrow: (dx: number, dy: number) => keyboardRef.current.arrow?.(dx, dy),
+    }),
+    [],
+  );
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -422,7 +472,7 @@ export default function GalaxyArms() {
     const field = buildStars(GALAXY_SEED, STAR_COUNT);
     const count = field.count;
     /** One star's share of the disc's light — the total stays put. */
-    const LUM = 42000 / count;
+    const LUM = 55000 / count;
 
     // ——— persistence ———
     // The galaxy itself is never stored — one seed brings it back whole.
@@ -843,24 +893,36 @@ export default function GalaxyArms() {
       keptDirty = true;
     };
 
-    // ——— geometry ———
-    const dpr = () => Math.min(1.5, window.devicePixelRatio || 1);
-    const resize = () => {
+    // ——— geometry and the GPU, both from the shared stage ———
+    // `createGLStage` owns the context cascade, DPR through the quality
+    // tiers, shader errors with source context, the lockstep 2D overlay,
+    // context-loss recovery and complete teardown — the ceremony every
+    // shader room used to write slightly differently.
+    const stage = createGLStage(glCanvas, {
+      wrap,
+      label: "galaxy",
+      overlay,
+      reducedMotion: reduced,
+      contextAttributes: { alpha: false, antialias: false, depth: false },
+    });
+
+    const syncSize = () => {
+      const sz = stage ? stage.measure() : { width: wrap.clientWidth, height: wrap.clientHeight };
       const r = wrap.getBoundingClientRect();
-      const ratio = dpr();
-      width = Math.max(240, r.width);
-      height = Math.max(320, r.height);
+      width = Math.max(240, sz.width || r.width);
+      height = Math.max(320, sz.height || r.height);
       rectLeft = r.left;
       rectTop = r.top;
       aspect = width / height;
-      glCanvas.width = Math.round(width * ratio);
-      glCanvas.height = Math.round(height * ratio);
-      overlay.width = Math.round(width * ratio);
-      overlay.height = Math.round(height * ratio);
-      ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+      if (!stage) {
+        const ratio = Math.min(1.5, window.devicePixelRatio || 1);
+        overlay.width = Math.round(width * ratio);
+        overlay.height = Math.round(height * ratio);
+        ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+      }
     };
-    resize();
-    const observer = new ResizeObserver(resize);
+    syncSize();
+    const observer = new ResizeObserver(syncSize);
     observer.observe(wrap);
 
     const toLocal = (cx: number, cy: number) => ({
@@ -868,329 +930,288 @@ export default function GalaxyArms() {
       y: clamp(cy - rectTop, 0, height),
     });
 
-    // ——— WebGL ———
-    const glOpts: WebGLContextAttributes = { antialias: false, alpha: false, depth: false };
-    const gl2 = glCanvas.getContext("webgl2", glOpts) as WebGL2RenderingContext | null;
-    const gl = (gl2 ??
-      glCanvas.getContext("webgl", glOpts) ??
-      glCanvas.getContext("experimental-webgl" as "webgl", glOpts)) as WebGLRenderingContext | null;
-    const angle = !gl2 && gl ? gl.getExtension("ANGLE_instanced_arrays") : null;
+    const gl = stage?.gl ?? null;
+    let discProg: GLProgram | null = null;
+    let starProg: GLProgram | null = null;
+    let discQuad: FullscreenQuad | null = null;
+    let starDraw: InstancedDraw | null = null;
     let glOk = false;
-    let discProg: WebGLProgram | null = null;
-    let starProg: WebGLProgram | null = null;
-    let quadBuf: WebGLBuffer | null = null;
-    let cornerBuf: WebGLBuffer | null = null;
-    let orbitBuf: WebGLBuffer | null = null;
-    let seedBuf: WebGLBuffer | null = null;
-    let keptBuf: WebGLBuffer | null = null;
-    type Uni = Record<string, WebGLUniformLocation | null>;
-    let discU: Uni = {};
-    let starU: Uni = {};
-    let starA: Record<string, number> = {};
 
-    const divisor = (loc: number, d: number) => {
-      if (gl2) gl2.vertexAttribDivisor(loc, d);
-      else angle?.vertexAttribDivisorANGLE(loc, d);
-    };
-    const drawInstanced = (verts: number, instances: number) => {
-      if (gl2) gl2.drawArraysInstanced(gl2.TRIANGLE_STRIP, 0, verts, instances);
-      else angle?.drawArraysInstancedANGLE(gl!.TRIANGLE_STRIP, 0, verts, instances);
-    };
-
-    if (gl && (gl2 || angle)) {
-      const compile = (type: number, src: string) => {
-        const sh = gl.createShader(type);
-        if (!sh) return null;
-        gl.shaderSource(sh, src);
-        gl.compileShader(sh);
-        if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
-          if (process.env.NODE_ENV !== "production") {
-            // eslint-disable-next-line no-console
-            console.error("[galaxy] shader", gl.getShaderInfoLog(sh));
-          }
-          gl.deleteShader(sh);
-          return null;
-        }
-        return sh;
-      };
-      const link = (vs: string, fs: string) => {
-        const v = compile(gl.VERTEX_SHADER, vs);
-        const f = compile(gl.FRAGMENT_SHADER, fs);
-        if (!v || !f) return null;
-        const p = gl.createProgram();
-        if (!p) return null;
-        gl.attachShader(p, v);
-        gl.attachShader(p, f);
-        gl.linkProgram(p);
-        if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
-          if (process.env.NODE_ENV !== "production") {
-            // eslint-disable-next-line no-console
-            console.error("[galaxy] link", gl.getProgramInfoLog(p));
-          }
-          return null;
-        }
-        return p;
-      };
-      discProg = link(VERT_QUAD, FRAG_DISC);
-      starProg = link(VERT_STAR, FRAG_STAR);
-
-      if (discProg && starProg) {
-        glOk = true;
-        const mk = (data: Float32Array, usage: number) => {
-          const b = gl.createBuffer();
-          gl.bindBuffer(gl.ARRAY_BUFFER, b);
-          gl.bufferData(gl.ARRAY_BUFFER, data, usage);
-          return b;
-        };
-        quadBuf = mk(new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
-        cornerBuf = mk(new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
-        orbitBuf = mk(orbitArr, gl.STATIC_DRAW);
-        seedBuf = mk(seedArr, gl.STATIC_DRAW);
-        keptBuf = mk(keptArr, gl.DYNAMIC_DRAW);
-
-        const uni = (p: WebGLProgram, names: string[]) => {
-          const out: Uni = {};
-          for (const n of names) out[n] = gl.getUniformLocation(p, n);
-          return out;
-        };
-        discU = uni(discProg, [
-          "u_res", "u_cam", "u_right", "u_up", "u_fwd", "u_focal", "u_aspect",
-          "u_patPhase", "u_k", "u_amp", "u_bar", "u_corot",
-          "u_reveal", "u_night", "u_breath", "u_lens", "u_glimmer", "u_barFlash",
-          "u_tw", "u_regions",
-        ]);
-        starU = uni(starProg, [
-          "u_cam", "u_right", "u_up", "u_fwd", "u_focal", "u_aspect", "u_fit",
-          "u_tau", "u_patPhase", "u_k", "u_amp", "u_bar", "u_heat",
-          "u_reveal", "u_night", "u_breath", "u_flares", "u_follow", "u_regions",
-          "u_lum",
-        ]);
-        starA = {
-          corner: gl.getAttribLocation(starProg, "a_corner"),
-          orbit: gl.getAttribLocation(starProg, "a_orbit"),
-          seed: gl.getAttribLocation(starProg, "a_seed"),
-          kept: gl.getAttribLocation(starProg, "a_kept"),
-        };
+    const buildPrograms = () => {
+      if (!stage) return;
+      discProg = stage.program(FULLSCREEN_VERT_CLIP, FRAG_DISC);
+      starProg = stage.program(VERT_STAR, FRAG_STAR);
+      if (!discProg || !starProg) {
+        glOk = false;
+        return;
       }
-    }
+      discQuad = stage.fullscreenQuad(discProg);
+      starDraw = stage.instanced(starProg);
+      // The whole population, uploaded once. Nothing here is touched again
+      // by the CPU — every orbit is propagated in the vertex shader.
+      starDraw.attribute("a_corner", new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), 2, 0);
+      starDraw.attribute("a_orbit", orbitArr, 4, 1);
+      starDraw.attribute("a_seed", seedArr, 4, 1);
+      starDraw.attribute("a_kept", keptArr, 1, 1);
+      glOk = true;
+    };
+    buildPrograms();
+    // A lost context takes every program and buffer with it; the stage tells
+    // us, and the disc is rebuilt from the one seed exactly as it was.
+    stageRef.current = stage;
+    if (stage) stageRebuild.current = buildPrograms;
 
-    // ——— the grammar ———
-    const detachGestures = attachGestures(
-      glCanvas,
-      {
-        tap: (e) => {
-          lastInteractionAt = performance.now();
-          if (e.fingers === 2) return; // step back — ScaleTravel's verb
-          if (e.fingers === 3) {
-            tutti();
+    // ——— the room's voice ———
+    // <RoomShell> binds the whole grammar through lib/gesture/defaults and
+    // answers in two senses anything the room leaves unspoken; these are the
+    // verbs the disc has a real answer for. No pointer wiring lives here.
+    let lastDeepenAt = 0;
+    let dilateSince = 0;
+
+    voiceRef.current = {
+      tap: (e) => {
+        const { x, y } = toLocal(e.x, e.y);
+        // a second tap on a knot blows it out — the room's removal verb
+        if (e.count >= 2) {
+          const ri = regionIndexAt(x, y);
+          if (ri >= 0) {
+            disperseRegion(ri);
             return;
           }
-          if (e.fingers !== 1) return;
-          const { x, y } = toLocal(e.x, e.y);
-          // a second tap on a knot blows it out — the room's removal verb,
-          // and the only thing a double tap means here
-          if (e.count >= 2) {
-            const ri = regionIndexAt(x, y);
-            if (ri >= 0) {
-              disperseRegion(ri);
-              return;
-            }
-          }
-          const rr = regionIndexAt(x, y);
-          if (rr >= 0) {
-            // touching gas stirs it: the knot answers at its own orbit
-            const reg = regionsRef.current[rr];
-            regionsRef.current[rr] = {
-              ...reg,
-              strength: clamp01(reg.strength + 0.08 * e.intensity),
-            };
-            const rp = regionAt(reg, tau);
-            addFlare(rp.x, rp.y, 0.4);
-            soundOrbit(reg.R0, 620);
-            try {
-              haptics.tap();
-            } catch {
-              /* noop */
-            }
-            return;
-          }
-          const i = starAt(x, y);
-          if (i >= 0) {
-            const sp = starPos(i);
-            addFlare(sp.x, sp.z, 0.35 + e.intensity * 0.5);
-            soundOrbit(field.r[i], 600 + e.intensity * 700);
-            try {
-              haptics.tap();
-            } catch {
-              /* noop */
-            }
-            return;
-          }
-          // open dark: the disc answers once, low, from underneath
-          stirTurbulence(0.04);
+        }
+        const rr = regionIndexAt(x, y);
+        if (rr >= 0) {
+          // touching gas stirs it: the knot answers at its own orbit
+          const reg = regionsRef.current[rr];
+          regionsRef.current[rr] = {
+            ...reg,
+            strength: clamp01(reg.strength + 0.08 * e.intensity),
+          };
+          const rp = regionAt(reg, tau);
+          addFlare(rp.x, rp.y, 0.4);
+          soundOrbit(reg.R0, 620);
           try {
-            audio.playNote(Math.round(patternMidiFor(omegaP, pitch)) - 12, 900);
             haptics.tap();
           } catch {
             /* noop */
           }
-        },
-        hold: (e) => {
-          lastInteractionAt = performance.now();
-          if (e.fingers === 3) {
-            // the law, held still: the veil lifts, the clock stretches, and
-            // holding into the ceremony grows the bar at the centre
-            if (e.phase === "enter") {
-              revealTarget = 0.6;
-              timeScaleTarget = 0.3;
-              try {
-                audio.playNote(Math.round(patternMidiFor(omegaP, pitch)) - 12, 2400);
-                haptics.roll();
-              } catch {
-                /* noop */
-              }
-            }
-            if (e.phase === "tick") {
-              revealTarget = clamp01(0.6 + e.elapsed / 6000);
-              if (e.elapsed > 2500) {
-                barTarget = clamp01(barTarget + 0.008);
-                if (barTarget > 0.02 && barTarget < 0.06) {
-                  try {
-                    haptics.detent();
-                  } catch {
-                    /* noop */
-                  }
-                }
-              }
-            }
-            if (e.phase === "release") {
-              revealTarget = 0;
-              timeScaleTarget = 1;
-            }
-            return;
+          return;
+        }
+        const i = starAt(x, y);
+        if (i >= 0) {
+          const sp = starPos(i);
+          addFlare(sp.x, sp.z, 0.35 + e.intensity * 0.5);
+          soundOrbit(field.r[i], 600 + e.intensity * 700);
+          try {
+            haptics.tap();
+          } catch {
+            /* noop */
           }
-          if (e.fingers !== 1) return;
-          // One finger, one continuous deepening: the touch tier picks up
-          // the nearest star and rides it; past the dwell the same finger
-          // starts gathering gas where it rests; past the ceremony, letting
-          // go sets that gas off. Nothing here fires the same at 900ms and
-          // at 2400ms — duration is the axis, not a switch.
-          if (e.phase === "enter") {
-            const { x, y } = toLocal(e.x, e.y);
-            startFollow(starAt(x, y));
-            return;
+          return;
+        }
+        // open dark beyond the rim: the disc answers once, low, from under
+        stirTurbulence(0.04);
+        try {
+          audio.playNote(Math.round(patternMidiFor(omegaP, pitch)) - 12, 900);
+          haptics.tap();
+        } catch {
+          /* noop */
+        }
+      },
+
+      // step back: the raised lens lowers first, then the veil, then the eye
+      stepBack: () => {
+        if (lensSnapped === 1) {
+          setLens(0);
+          return;
+        }
+        if (revealTarget > 0.05) {
+          revealTarget = 0;
+          return;
+        }
+        panY = clamp(panY * 0.6, -1, 1);
+        panX = clamp(panX * 0.6, -1.2, 1.2);
+        try {
+          audio.playNote(Math.round(patternMidiFor(omegaP, pitch)) - 12, 520);
+          haptics.tap();
+        } catch {
+          /* noop */
+        }
+      },
+
+      tutti: () => tutti(),
+
+      // the touch tier picks up the nearest star and rides its orbit
+      plant: (e) => {
+        lastDeepenAt = performance.now();
+        const { x, y } = toLocal(e.x, e.y);
+        startFollow(starAt(x, y));
+      },
+
+      // one continuous deepening: ride, then gather gas, then (on the
+      // ceremony) set it off. Nothing fires the same at 900ms and 2400ms.
+      deepen: (e) => {
+        lastDeepenAt = performance.now();
+        if (followIdx >= 0) followTarget = clamp01(0.15 + e.elapsed / 3200);
+        if (seeding < 0) {
+          if (e.tier < 2) return; // still only riding
+          const { x, y } = toLocal(e.x, e.y);
+          const dp = discPointAt(x, y);
+          if (!dp) return;
+          seeding = seedRegion(dp.x, dp.z);
+          seedTier = e.tier;
+          return;
+        }
+        const reg = regionsRef.current[seeding];
+        if (!reg) {
+          seeding = -1;
+          return;
+        }
+        // duration is an axis: the longer the hold, the more gas gathers
+        regionsRef.current[seeding] = {
+          ...reg,
+          strength: clamp01(0.18 + (e.elapsed - 900) / 2600),
+        };
+        if (e.tier > seedTier) {
+          seedTier = e.tier;
+          soundOrbit(reg.R0, 500, 0.8);
+          try {
+            haptics.detent();
+          } catch {
+            /* noop */
           }
-          if (e.phase === "release") {
-            if (seeding >= 0) {
-              if (e.tier >= 3) igniteRegion(seeding);
-              else writeStore();
-              seeding = -1;
-              seedTier = 0;
-            }
-            endFollow();
-            return;
+        }
+      },
+
+      // the room's one solemn act: the gathered gas goes off
+      ceremony: () => {
+        if (seeding >= 0) igniteRegion(seeding);
+        else writeStore();
+        seeding = -1;
+        seedTier = 0;
+        endFollow();
+      },
+
+      // three fingers on the law stretch the clock — and while the clock is
+      // stretched the veil lifts, showing the pattern without its particles.
+      // Held past the ceremony, a bar grows at the centre and stays.
+      timeScale: (k) => {
+        timeScaleTarget = k;
+        if (k >= 0.995) {
+          dilateSince = 0;
+          revealTarget = 0;
+          return;
+        }
+        const now = performance.now();
+        if (!dilateSince) {
+          dilateSince = now;
+          try {
+            audio.playNote(Math.round(patternMidiFor(omegaP, pitch)) - 12, 2400);
+            haptics.roll();
+          } catch {
+            /* noop */
           }
-          // the ride keeps deepening the whole time the finger is down
-          if (followIdx >= 0) followTarget = clamp01(0.15 + e.elapsed / 3200);
-          if (seeding < 0) {
-            if (e.tier < 2) return; // still only riding
-            const { x, y } = toLocal(e.x, e.y);
-            const dp = discPointAt(x, y);
-            if (!dp) return;
-            seeding = seedRegion(dp.x, dp.z);
-            seedTier = e.tier;
-            return;
-          }
-          const reg = regionsRef.current[seeding];
-          if (!reg) {
-            seeding = -1;
-            return;
-          }
-          // duration is an axis: the longer the hold, the more gas gathers
-          regionsRef.current[seeding] = {
-            ...reg,
-            strength: clamp01(0.18 + (e.elapsed - 900) / 2600),
-          };
-          if (e.tier > seedTier) {
-            seedTier = e.tier;
-            soundOrbit(reg.R0, 500, 0.8);
+        }
+        const held = now - dilateSince;
+        revealTarget = clamp01(0.6 + held / 6000);
+        if (held > 2500) {
+          barTarget = clamp01(barTarget + 0.004);
+          if (barTarget > 0.02 && barTarget < 0.04) {
             try {
               haptics.detent();
             } catch {
               /* noop */
             }
           }
-        },
-        // two fingers hold the frame: the eye swings round the disc and
-        // tips it from face-on to edge-on. Pinch stays ScaleTravel's.
-        pan2: (e) => {
-          lastInteractionAt = performance.now();
-          if (e.phase !== "move") return;
-          panX = clamp(panX - (e.dx / Math.max(1, width)) * 1.7, -1.2, 1.2);
-          panY = clamp(panY + (e.dy / Math.max(1, height)) * 1.5, -1, 1);
-        },
-        drag: (e) => {
-          lastInteractionAt = performance.now();
-          if (e.fingers === 3) {
-            // the law, dragged: sideways winds the pattern speed, up and
-            // down opens or closes the arms — and the register follows
-            omegaPTarget = clamp(omegaPTarget * (1 + e.dx * 0.0018), OMEGA_P_MIN, OMEGA_P_MAX);
-            pitchTarget = clamp(pitchTarget - e.dy * 0.0012, PITCH_MIN, PITCH_MAX);
-            soundLaw(performance.now());
-            return;
-          }
-          if (e.fingers !== 1) return;
-          if (e.phase === "end") {
-            panVX += e.vx * 0.0004;
-            panVY += e.vy * 0.0004;
-            return;
-          }
-          panX = clamp(panX - (e.dx / Math.max(1, width)) * 1.5, -1.2, 1.2);
-          panY = clamp(panY + (e.dy / Math.max(1, height)) * 1.2, -1, 1);
-        },
-        flick: (e) => {
-          lastInteractionAt = performance.now();
-          panVX += -Math.cos(e.angle) * (e.speed / 9000);
-          panVY += Math.sin(e.angle) * (e.speed / 9000);
-          try {
-            haptics.ripple(0.3);
-          } catch {
-            /* noop */
-          }
-        },
-        twist: (e) => {
-          lastInteractionAt = performance.now();
-          if (e.fingers === 3) {
-            // three fingers turn the pattern itself — the season, by hand
-            patPhase += e.angle * 0.8;
-            soundLaw(performance.now(), 500);
-            return;
-          }
-          if (e.phase === "move") lensTarget = clamp01(lensTarget + e.angle / 1.7);
-          else if (e.phase === "end") setLens(lensTarget > 0.5 ? 1 : 0);
-        },
-        scrub: (e) => {
-          lastInteractionAt = performance.now();
-          rollVel += e.angularVelocity * 0.02;
-        },
-        rhythm: (e) => {
-          if (e.stability > 0.68) tutti();
-        },
+        }
       },
-      { wheelZoom: false },
-    );
 
-    // ——— the vessel ———
-    const detachVessel = onVessel({
-      tilt: ({ beta, gamma }) => {
-        if (reduced) return;
-        tiltX = clamp(gamma / 45, -1, 1);
-        tiltY = clamp((beta - 45) / 60, -1, 1);
+      drag: (e) => {
+        if (e.phase === "end") {
+          panVX += e.vx * 0.0004;
+          panVY += e.vy * 0.0004;
+          return;
+        }
+        panX = clamp(panX - (e.dx / Math.max(1, width)) * 1.5, -1.2, 1.2);
+        panY = clamp(panY + (e.dy / Math.max(1, height)) * 1.2, -1, 1);
       },
-      shake: ({ intensity }) => {
+
+      // the law, dragged: sideways winds the pattern speed, up and down
+      // opens or closes the arms — and the register follows in the same breath
+      wind: (e) => {
+        omegaPTarget = clamp(omegaPTarget * (1 + e.dx * 0.0018), OMEGA_P_MIN, OMEGA_P_MAX);
+        pitchTarget = clamp(pitchTarget - e.dy * 0.0012, PITCH_MIN, PITCH_MAX);
+        soundLaw(performance.now());
+      },
+
+      flick: (e) => {
+        panVX += -Math.cos(e.angle) * (e.speed / 9000);
+        panVY += Math.sin(e.angle) * (e.speed / 9000);
+        try {
+          haptics.ripple(0.3);
+        } catch {
+          /* noop */
+        }
+      },
+
+      stir: (e) => {
+        rollVel += e.angularVelocity * 0.02;
+      },
+
+      lens: (e) => {
+        lensTarget = clamp01(lensTarget + e.angle / 1.7);
+        setLens(lensTarget > 0.5 ? 1 : 0);
+      },
+
+      // three fingers turn the pattern itself — the season, by hand
+      season: (e) => {
+        patPhase += e.angle * 0.8;
+        soundLaw(performance.now(), 500);
+      },
+
+      rhythm: (e) => {
+        if (e.stability > 0.68) tutti();
+      },
+
+      // drumming between two points of the disc rings both radii at once —
+      // the hands play the interval the rotation curve puts between them
+      drum: (e) => {
+        const local = toLocal(e.x, e.y);
+        const hit = discPointAt(local.x, local.y);
+        if (hit) {
+          addFlare(hit.x, hit.z, 0.35);
+          // the patter rings the radius it lands on, and the alternation
+          // widens the interval — two hands, two radii, one rotation curve
+          const R = Math.hypot(hit.x, hit.z);
+          soundOrbit(R, 420, 0.8);
+          soundOrbit(clamp(R * (1 - 0.35 * e.alternation), 0.12, R_MAX), 380, 0.7);
+        } else {
+          stirTurbulence(0.05);
+        }
+        try {
+          haptics.ripple(0.3 + 0.3 * e.alternation);
+        } catch {
+          /* noop */
+        }
+      },
+
+      // a rolled chord rolls outward through the disc, rim last
+      arpeggio: (e) => {
+        const n = Math.max(2, Math.min(3, e.fingers));
+        for (let kk = 0; kk < n; kk++) {
+          const R = 0.2 + (kk / Math.max(1, n - 1)) * 0.7;
+          window.setTimeout(() => soundOrbit(R, 520), kk * Math.max(40, e.spreadMs / n));
+        }
+        try {
+          haptics.ripple(0.3);
+        } catch {
+          /* noop */
+        }
+      },
+
+      // velocity dispersion: the disc heats, then cools back into order
+      scatter: ({ intensity }) => {
         if (reduced) return;
-        lastInteractionAt = performance.now();
-        // velocity dispersion: the disc heats, then cools back into order
         heat = clamp01(heat + 0.4 + intensity * 0.5);
         stirTurbulence(0.2 + intensity * 0.3);
         try {
@@ -1200,10 +1221,16 @@ export default function GalaxyArms() {
           /* noop */
         }
       },
+
+      gravity: ({ beta, gamma }) => {
+        if (reduced) return;
+        tiltX = clamp(gamma / 45, -1, 1);
+        tiltY = clamp((beta - 45) / 60, -1, 1);
+      },
+
+      // the bar answers — the heaviest thing in the room rings lowest
       knock: () => {
         if (reduced) return;
-        lastInteractionAt = performance.now();
-        // the bar answers — the heaviest thing in the room rings lowest
         barFlash = 1;
         addFlare(0, 0, 0.8);
         try {
@@ -1214,88 +1241,114 @@ export default function GalaxyArms() {
           /* noop */
         }
       },
-      flip: ({ faceDown }) => {
-        // night: the stars go out, and the wave glows on without them
+
+      // night: the stars go out, and the wave glows on without them
+      night: ({ faceDown }) => {
         nightTarget = faceDown ? 1 : 0;
         if (faceDown) revealTarget = Math.max(revealTarget, 0.45);
         else if (revealTarget <= 0.45) revealTarget = 0;
       },
-    });
 
-    // ——— keyboard ———
-    const onKeyDown = (ev: KeyboardEvent) => {
-      if (ev.key === "Escape") {
-        if (lensSnapped === 1) setLens(0);
-        revealTarget = 0;
-        endFollow();
-        return;
-      }
-      if (ev.key === "ArrowLeft" || ev.key === "ArrowRight") {
-        ev.preventDefault();
-        lastInteractionAt = performance.now();
-        panX = clamp(panX + (ev.key === "ArrowRight" ? 0.08 : -0.08), -1.2, 1.2);
-        return;
-      }
-      if (ev.key === "ArrowUp" || ev.key === "ArrowDown") {
-        ev.preventDefault();
-        lastInteractionAt = performance.now();
-        // the selection ring walks the rotation curve; each step is heard
-        selR = clamp(selR + (ev.key === "ArrowUp" ? -0.06 : 0.06), 0.14, R_MAX);
-        soundOrbit(selR, 420);
-        return;
-      }
-      if (ev.key === "Enter" || ev.key === " ") {
-        ev.preventDefault();
-        lastInteractionAt = performance.now();
-        if (!ev.repeat) {
-          // pick the nearest star to the ring, ahead of the eye
-          let best = -1;
-          let bestD = 1e9;
-          for (let i = 0; i < count; i += PICK_STRIDE * 7) {
-            const d = Math.abs(field.r[i] - selR);
-            if (d > 0.05) continue;
-            const sp = starPos(i);
-            const p = project(sp.x, sp.y, sp.z);
-            if (!p) continue;
-            const dd = Math.abs(p.x - width / 2) + Math.abs(p.y - height / 2);
-            if (dd < bestD) {
-              bestD = dd;
-              best = i;
-            }
+      // breath on the disc fans whatever gas is standing in it
+      breath: ({ strength }) => {
+        let touched = false;
+        regionsRef.current = regionsRef.current.map((r) => {
+          if (regionLife(r, tau) <= 0.02) return r;
+          touched = true;
+          return { ...r, strength: clamp01(r.strength + 0.25 * strength) };
+        });
+        if (touched) {
+          writeStore();
+          try {
+            haptics.ripple(0.3);
+          } catch {
+            /* noop */
           }
-          startFollow(best);
-          kbHold = 0.1;
-          return;
+        } else {
+          stirTurbulence(0.06 * strength);
         }
-        kbHold = clamp01(kbHold + 0.03);
+      },
+    };
+
+    // The hand leaving is not a gesture, so the engine cannot report it: the
+    // hold's ticks simply stop. A ride that has heard nothing for a quarter
+    // second is a finger that has gone, and the disc lets it go.
+    const HAND_GONE_MS = 260;
+
+    // The keyboard says the same things. Held Enter walks the same three
+    // tiers the finger does, so nothing here is touch-only.
+    keyboardRef.current = {
+      enter: () => {
+        // pick the nearest star to the ring, ahead of the eye
+        let best = -1;
+        let bestD = 1e9;
+        for (let i = 0; i < count; i += PICK_STRIDE * 7) {
+          const d = Math.abs(field.r[i] - selR);
+          if (d > 0.05) continue;
+          const sp = starPos(i);
+          const p = project(sp.x, sp.y, sp.z);
+          if (!p) continue;
+          const dd = Math.abs(p.x - width / 2) + Math.abs(p.y - height / 2);
+          if (dd < bestD) {
+            bestD = dd;
+            best = i;
+          }
+        }
+        startFollow(best);
+        kbHold = 0;
+        lastDeepenAt = performance.now();
+      },
+      enterHeld: (elapsed) => {
+        lastDeepenAt = performance.now();
+        kbHold = clamp01(elapsed / 3200);
         followTarget = clamp01(0.15 + kbHold);
-        return;
-      }
-      if (ev.key === "v" || ev.key === "V") {
-        lastInteractionAt = performance.now();
-        if (!ev.repeat) {
-          vHeldSince = performance.now();
-          revealTarget = revealTarget > 0.05 ? 0 : 0.8;
-          if (revealTarget > 0) {
+        if (elapsed > 900 && seeding < 0) {
+          const th = selR > 0 ? patPhase * 0.5 : 0;
+          seeding = seedRegion(selR * Math.cos(th), selR * Math.sin(th));
+          seedTier = 2;
+        } else if (seeding >= 0) {
+          const reg = regionsRef.current[seeding];
+          if (reg) {
+            regionsRef.current[seeding] = {
+              ...reg,
+              strength: clamp01(0.18 + (elapsed - 900) / 2600),
+            };
+          }
+          if (elapsed > 2500 && seedTier < 3) {
+            seedTier = 3;
             try {
-              audio.playNote(Math.round(patternMidiFor(omegaP, pitch)) - 12, 2000);
-              haptics.roll();
+              haptics.detent();
             } catch {
               /* noop */
             }
           }
-        } else if (performance.now() - vHeldSince > 2500) {
-          // the keyboard's ceremony: a held veil grows the bar too
-          barTarget = clamp01(barTarget + 0.01);
         }
-      }
+      },
+      escape: () => {
+        if (lensSnapped === 1) setLens(0);
+        revealTarget = 0;
+        if (seeding >= 0) {
+          // the keyboard's ceremony: a hold released past the tier ignites
+          if (seedTier >= 3) igniteRegion(seeding);
+          seeding = -1;
+          seedTier = 0;
+        }
+        endFollow();
+      },
+      arrow: (dx, dy) => {
+        if (dx !== 0) {
+          panX = clamp(panX + dx * 0.08, -1.2, 1.2);
+          return;
+        }
+        // the selection ring walks the rotation curve; each step is heard
+        selR = clamp(selR + dy * 0.06, 0.14, R_MAX);
+        soundOrbit(selR, 420);
+      },
     };
-    const onKeyUp = (ev: KeyboardEvent) => {
-      if (ev.key === "Enter" || ev.key === " ") endFollow();
-      if (ev.key === "v" || ev.key === "V") vHeldSince = 0;
+
+    glimmerRef.current = () => {
+      glimmer = 1;
     };
-    wrap.addEventListener("keydown", onKeyDown);
-    wrap.addEventListener("keyup", onKeyUp);
 
     // ——— the loop ———
     const flareVec = new Float32Array(MAX_FLARES * 4);
@@ -1329,6 +1382,11 @@ export default function GalaxyArms() {
       if (entering > 0) entering = Math.max(0, entering - dt * 0.7);
       if (leaving > 0) leaving = Math.min(1, leaving + dt * 2);
       if (glimmer > 0) glimmer = Math.max(0, glimmer - dt * 0.5);
+      if ((followIdx >= 0 || seeding >= 0) && now - lastDeepenAt > HAND_GONE_MS) {
+        seeding = -1;
+        seedTier = 0;
+        endFollow();
+      }
       for (const f of flares) f.age += dt;
       while (flares.length && flares[0].age > 1.6) flares.shift();
 
@@ -1445,79 +1503,71 @@ export default function GalaxyArms() {
         glimmer = 1;
       }
 
-      // ——— render ———
-      if (glOk && gl && discProg && starProg) {
-        const ratio = dpr();
-        gl.viewport(0, 0, glCanvas.width, glCanvas.height);
+      // ——— render: two draws, and the CPU touches no star ———
+      if (glOk && stage && gl && discProg && starProg && discQuad && starDraw) {
+        // The stage sizes, viewports, and binds the shared clocks; the room
+        // adds only what is its own.
+        stage.beginFrame(
+          clocksFrom({
+            time: t,
+            turbulence: getTurbulence(),
+            register: spectralRegisterFor(GALAXY_SCALE_S),
+            reducedMotion: reduced,
+          }),
+          discProg,
+        );
         gl.disable(gl.BLEND);
         gl.clearColor(0, 0, 0, 1);
         gl.clear(gl.COLOR_BUFFER_BIT);
 
-        gl.useProgram(discProg);
-        gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
-        const aq = gl.getAttribLocation(discProg, "a_pos");
-        gl.enableVertexAttribArray(aq);
-        gl.vertexAttribPointer(aq, 2, gl.FLOAT, false, 0, 0);
-        divisor(aq, 0);
-        gl.uniform2f(discU.u_res ?? null, width * ratio, height * ratio);
-        gl.uniform3f(discU.u_cam ?? null, cam.x, cam.y, cam.z);
-        gl.uniform3f(discU.u_right ?? null, basis.rx, basis.ry, basis.rz);
-        gl.uniform3f(discU.u_up ?? null, basis.ux, basis.uy, basis.uz);
-        gl.uniform3f(discU.u_fwd ?? null, basis.fx, basis.fy, basis.fz);
-        gl.uniform1f(discU.u_focal ?? null, FOCAL);
-        gl.uniform1f(discU.u_aspect ?? null, aspect);
-        gl.uniform1f(discU.u_patPhase ?? null, patPhase % TAU);
-        gl.uniform1f(discU.u_k ?? null, k);
-        gl.uniform1f(discU.u_amp ?? null, 1);
-        gl.uniform1f(discU.u_bar ?? null, bar);
-        gl.uniform1f(discU.u_corot ?? null, corot);
-        gl.uniform1f(discU.u_reveal ?? null, reveal);
-        gl.uniform1f(discU.u_night ?? null, night);
-        gl.uniform1f(discU.u_breath ?? null, 0.4 * breath + 0.6 * slow);
-        gl.uniform1f(discU.u_lens ?? null, lens);
-        gl.uniform1f(discU.u_glimmer ?? null, glimmer);
-        gl.uniform1f(discU.u_barFlash ?? null, barFlash);
-        gl.uniform1f(discU.u_tw ?? null, reduced ? 0 : t);
-        gl.uniform4fv(discU.u_regions ?? null, regionVec);
-        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-        gl.disableVertexAttribArray(aq);
+        discProg.use();
+        discProg.setVec2("u_res", stage.size.pixelWidth, stage.size.pixelHeight);
+        discProg.setVec3("u_cam", cam.x, cam.y, cam.z);
+        discProg.setVec3("u_right", basis.rx, basis.ry, basis.rz);
+        discProg.setVec3("u_up", basis.ux, basis.uy, basis.uz);
+        discProg.setVec3("u_fwd", basis.fx, basis.fy, basis.fz);
+        discProg.setFloat("u_focal", FOCAL);
+        discProg.setFloat("u_aspect", aspect);
+        discProg.setFloat("u_patPhase", patPhase % TAU);
+        discProg.setFloat("u_k", k);
+        discProg.setFloat("u_amp", 1);
+        discProg.setFloat("u_bar", bar);
+        discProg.setFloat("u_corot", corot);
+        discProg.setFloat("u_reveal", reveal);
+        discProg.setFloat("u_night", night);
+        discProg.setFloat("u_breath", 0.4 * breath + 0.6 * slow);
+        discProg.setFloat("u_lens", lens);
+        discProg.setFloat("u_glimmer", glimmer);
+        discProg.setFloat("u_barFlash", barFlash);
+        discProg.setFloat("u_tw", reduced ? 0 : t);
+        discProg.setFloatArray("u_regions", regionVec);
+        discQuad.draw();
 
+        // the population: one instanced draw over the typed arrays
         gl.enable(gl.BLEND);
         gl.blendFunc(gl.ONE, gl.ONE);
-        gl.useProgram(starProg);
+        starProg.use();
         if (keptDirty) {
           keptDirty = false;
-          gl.bindBuffer(gl.ARRAY_BUFFER, keptBuf);
-          gl.bufferSubData(gl.ARRAY_BUFFER, 0, keptArr);
+          starDraw.attribute("a_kept", keptArr, 1, 1);
         }
-        const bind = (buf: WebGLBuffer | null, loc: number, size: number, div: number) => {
-          if (loc < 0) return;
-          gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-          gl.enableVertexAttribArray(loc);
-          gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
-          divisor(loc, div);
-        };
-        bind(cornerBuf, starA.corner, 2, 0);
-        bind(orbitBuf, starA.orbit, 4, 1);
-        bind(seedBuf, starA.seed, 4, 1);
-        bind(keptBuf, starA.kept, 1, 1);
-        gl.uniform3f(starU.u_cam ?? null, cam.x, cam.y, cam.z);
-        gl.uniform3f(starU.u_right ?? null, basis.rx, basis.ry, basis.rz);
-        gl.uniform3f(starU.u_up ?? null, basis.ux, basis.uy, basis.uz);
-        gl.uniform3f(starU.u_fwd ?? null, basis.fx, basis.fy, basis.fz);
-        gl.uniform1f(starU.u_focal ?? null, FOCAL);
-        gl.uniform1f(starU.u_aspect ?? null, aspect);
-        gl.uniform1f(starU.u_fit ?? null, fitScale);
-        gl.uniform1f(starU.u_tau ?? null, tau);
-        gl.uniform1f(starU.u_patPhase ?? null, patPhase);
-        gl.uniform1f(starU.u_k ?? null, k);
-        gl.uniform1f(starU.u_amp ?? null, 1);
-        gl.uniform1f(starU.u_bar ?? null, bar);
-        gl.uniform1f(starU.u_heat ?? null, heat);
-        gl.uniform1f(starU.u_lum ?? null, LUM);
-        gl.uniform1f(starU.u_reveal ?? null, reveal);
-        gl.uniform1f(starU.u_night ?? null, night);
-        gl.uniform1f(starU.u_breath ?? null, breath);
+        starProg.setVec3("u_cam", cam.x, cam.y, cam.z);
+        starProg.setVec3("u_right", basis.rx, basis.ry, basis.rz);
+        starProg.setVec3("u_up", basis.ux, basis.uy, basis.uz);
+        starProg.setVec3("u_fwd", basis.fx, basis.fy, basis.fz);
+        starProg.setFloat("u_focal", FOCAL);
+        starProg.setFloat("u_aspect", aspect);
+        starProg.setFloat("u_fit", fitScale);
+        starProg.setFloat("u_tau", tau);
+        starProg.setFloat("u_patPhase", patPhase);
+        starProg.setFloat("u_k", k);
+        starProg.setFloat("u_amp", 1);
+        starProg.setFloat("u_bar", bar);
+        starProg.setFloat("u_heat", heat);
+        starProg.setFloat("u_lum", LUM);
+        starProg.setFloat("u_reveal", reveal);
+        starProg.setFloat("u_night", night);
+        starProg.setFloat("u_breath", breath);
         for (let i = 0; i < MAX_FLARES; i++) {
           const f = flares[i];
           flareVec[i * 4] = f ? f.x : 0;
@@ -1525,21 +1575,16 @@ export default function GalaxyArms() {
           flareVec[i * 4 + 2] = f ? f.s * Math.max(0, 1 - f.age / 1.6) : 0;
           flareVec[i * 4 + 3] = 0;
         }
-        gl.uniform4fv(starU.u_flares ?? null, flareVec);
-        gl.uniform4fv(starU.u_regions ?? null, regionVec);
+        starProg.setFloatArray("u_flares", flareVec);
+        starProg.setFloatArray("u_regions", regionVec);
         if (followIdx >= 0 && followLevel > 0.02) {
           const sp = starPos(followIdx);
-          gl.uniform3f(starU.u_follow ?? null, sp.x, sp.z, followLevel);
+          starProg.setVec3("u_follow", sp.x, sp.z, followLevel);
         } else {
-          gl.uniform3f(starU.u_follow ?? null, 0, 0, 0);
+          starProg.setVec3("u_follow", 0, 0, 0);
         }
-        drawInstanced(4, count);
-        for (const loc of Object.values(starA)) {
-          if (loc >= 0) {
-            divisor(loc, 0);
-            gl.disableVertexAttribArray(loc);
-          }
-        }
+        starDraw.draw(gl.TRIANGLE_STRIP, 4, count);
+        starDraw.reset();
       }
 
       // ——— the overlay ———
@@ -1696,19 +1741,12 @@ export default function GalaxyArms() {
 
     return () => {
       observer.disconnect();
-      detachGestures();
-      detachVessel();
-      wrap.removeEventListener("keydown", onKeyDown);
-      wrap.removeEventListener("keyup", onKeyUp);
       mq.removeEventListener?.("change", onMq);
       cancelAnimationFrame(raf);
-      if (gl) {
-        for (const b of [quadBuf, cornerBuf, orbitBuf, seedBuf, keptBuf]) {
-          if (b) gl.deleteBuffer(b);
-        }
-        if (discProg) gl.deleteProgram(discProg);
-        if (starProg) gl.deleteProgram(starProg);
-      }
+      discQuad?.dispose();
+      starDraw?.dispose();
+      stage?.dispose();
+      stageRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1735,41 +1773,49 @@ export default function GalaxyArms() {
   };
 
   return (
-    <div
-      ref={wrapRef}
-      tabIndex={0}
-      role="application"
-      aria-label="a spiral galaxy turning from inside its arms"
-      data-lens-raised={lensUp ? "1" : undefined}
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "#04070f",
-        outline: "none",
-        touchAction: "none",
-        userSelect: "none",
-        WebkitUserSelect: "none",
-        WebkitTouchCallout: "none",
-        overflow: "hidden",
-      }}
+    <RoomShell
+      route="/galaxy"
+      voice={voice}
+      keyboard={keyboard}
+      onGlimmer={() => glimmerRef.current()}
+      letGo={{ label: "let the disc forget", onLetGo: letGo, visible: hasKept }}
+      surfaceRef={wrapRef}
+      style={{ position: "fixed", inset: 0, background: "#04070f" }}
     >
-      <canvas
-        ref={glCanvasRef}
-        aria-hidden
-        style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
-      />
-      <canvas
-        ref={overlayRef}
-        aria-hidden
+      <div
+        ref={wrapRef}
+        tabIndex={0}
+        role="application"
+        aria-label="a spiral galaxy turning from inside its arms"
+        data-lens-raised={lensUp ? "1" : undefined}
         style={{
           position: "absolute",
           inset: 0,
-          width: "100%",
-          height: "100%",
-          pointerEvents: "none",
+          outline: "none",
+          touchAction: "none",
+          userSelect: "none",
+          WebkitUserSelect: "none",
+          WebkitTouchCallout: "none",
+          overflow: "hidden",
         }}
-      />
-      <LetGo label="let the disc forget" onLetGo={letGo} visible={hasKept} />
-    </div>
+      >
+        <canvas
+          ref={glCanvasRef}
+          aria-hidden
+          style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
+        />
+        <canvas
+          ref={overlayRef}
+          aria-hidden
+          style={{
+            position: "absolute",
+            inset: 0,
+            width: "100%",
+            height: "100%",
+            pointerEvents: "none",
+          }}
+        />
+      </div>
+    </RoomShell>
   );
 }

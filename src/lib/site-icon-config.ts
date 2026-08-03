@@ -37,7 +37,6 @@ type CoreSiteIconKey =
   | "earth"
   | "fire"
   | "flowers"
-  | "galaxy"
   | "growth"
   | "guide"
   | "jewel"
@@ -665,19 +664,6 @@ const CORE_SITE_ICON_VISUALS = {
     accent: "#b4e8ff",
     accent2: "#d5bd7b",
     ink: "#eff9ff",
-  },
-  galaxy: {
-    title: "Galaxy",
-    description: "the wave the stars stream through",
-    path: "/galaxy",
-    shortName: "galaxy",
-    kind: "stars",
-    bg: "#04070f",
-    bg2: "#181330",
-    glow: "#7d9bd8",
-    accent: "#c8732a",
-    accent2: "#b9c9e8",
-    ink: "#e9edf8",
   },
   space: {
     title: "Deep space",

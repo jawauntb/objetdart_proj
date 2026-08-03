@@ -29,10 +29,11 @@ import type { RoomGuideEntry, RoomManifest, RoomPlacement } from "@/rooms/types"
 import type { SiteIconVisual } from "@/lib/site-icon-types";
 
 import beam from "@/rooms/beam/room.config";
+import galaxy from "@/rooms/galaxy/room.config";
 import relativity from "@/rooms/relativity/room.config";
 import rocks from "@/rooms/rocks/room.config";
 
-export const ROOM_MANIFESTS = [beam, relativity, rocks] as const;
+export const ROOM_MANIFESTS = [beam, galaxy, relativity, rocks] as const;
 
 /** Literal union of every manifest-declared room key. */
 export type RoomKey = (typeof ROOM_MANIFESTS)[number]["key"];

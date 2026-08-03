@@ -261,6 +261,16 @@ type Film = {
 };
 
 function makeFilm(seed: number): Film | null {
+  const vignette = makeVignette();
+  // The breath of pale sea around the sphere: a ring, so the ramp rises off
+  // the limb and falls again — built once, blitted every frame.
+  const atmosphereSprite = makeRadialSprite([
+    [0, AURORA, 0],
+    [0.738, AURORA, 0],
+    [0.848, [120, 160, 168], 0.22],
+    [0.984, AURORA, 0],
+    [1, AURORA, 0],
+  ]);
   const nA = makeNoise2(seed ^ 0x9e3779b9);
   const nB = makeNoise2(seed ^ 0x85ebca6b);
   const nC = makeNoise2(seed ^ 0xc2b2ae35);
@@ -470,14 +480,7 @@ function makeFilm(seed: number): Film | null {
     if (atm > 0) {
       ctx.save();
       ctx.globalCompositeOperation = "lighter";
-      const g = ctx.createRadialGradient(cx, cy, R * 0.9, cx, cy, R * 1.2);
-      g.addColorStop(0, rgba(AURORA, 0));
-      g.addColorStop(0.45, rgba([120, 160, 168], 0.22 * atm));
-      g.addColorStop(1, rgba(AURORA, 0));
-      ctx.fillStyle = g;
-      ctx.beginPath();
-      ctx.arc(cx, cy, R * 1.22, 0, TAU);
-      ctx.fill();
+      blitGlow(ctx, atmosphereSprite, cx, cy, R * 1.22, atm);
       ctx.restore();
     }
 
@@ -527,11 +530,7 @@ function makeFilm(seed: number): Film | null {
     }
 
     // A quiet vignette holds the frame together.
-    const vg = ctx.createRadialGradient(cx, h / 2, m * 0.45, cx, h / 2, diag * 0.62);
-    vg.addColorStop(0, rgba(NIGHT, 0));
-    vg.addColorStop(1, rgba(NIGHT, 0.35));
-    ctx.fillStyle = vg;
-    ctx.fillRect(0, 0, w, h);
+    vignette(ctx, w, h, cx);
   }
 
   return { renderFrame };
@@ -545,21 +544,36 @@ function makeFilm(seed: number): Film | null {
 // gradient objects. (The /stars room's per-frame gradients are the named
 // bottleneck this avoids.)
 
-function makeGlowSprite(inner: RGB, outer: RGB, mid: number): HTMLCanvasElement | null {
+type SpriteStop = readonly [offset: number, color: RGB, alpha: number];
+
+/**
+ * A radial ramp rasterised ONCE into an offscreen canvas. Every soft circle
+ * in every film comes through here — glows, the atmosphere ring, the frame's
+ * vignette — so the whole passage host constructs exactly one gradient per
+ * distinct look, at build time, and a frame costs blits instead.
+ */
+function makeRadialSprite(stops: readonly SpriteStop[], px = 128): HTMLCanvasElement | null {
   if (typeof document === "undefined") return null;
-  const S = 96;
   const c = document.createElement("canvas");
-  c.width = S;
-  c.height = S;
+  c.width = px;
+  c.height = px;
   const g = c.getContext("2d");
   if (!g) return null;
-  const grad = g.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
-  grad.addColorStop(0, rgba(inner, 1));
-  grad.addColorStop(0.5, rgba(mix(inner, outer, 0.5), mid));
-  grad.addColorStop(1, rgba(outer, 0));
+  const grad = g.createRadialGradient(px / 2, px / 2, 0, px / 2, px / 2, px / 2);
+  for (const [offset, color, alpha] of stops) {
+    grad.addColorStop(Math.max(0, Math.min(1, offset)), rgba(color, alpha));
+  }
   g.fillStyle = grad;
-  g.fillRect(0, 0, S, S);
+  g.fillRect(0, 0, px, px);
   return c;
+}
+
+function makeGlowSprite(inner: RGB, outer: RGB, mid: number): HTMLCanvasElement | null {
+  return makeRadialSprite([
+    [0, inner, 1],
+    [0.5, mix(inner, outer, 0.5), mid],
+    [1, outer, 0],
+  ]);
 }
 
 function blitGlow(
@@ -577,29 +591,21 @@ function blitGlow(
   ctx.globalAlpha = prev;
 }
 
-/** The frame's vignette, rebuilt only when the frame itself changes size. */
-function makeVignette(): (ctx: CanvasRenderingContext2D, w: number, h: number) => void {
-  let cache: HTMLCanvasElement | null = null;
-  let key = "";
-  return (ctx, w, h) => {
-    const k = `${Math.round(w)}x${Math.round(h)}`;
-    if (k !== key || !cache) {
-      key = k;
-      if (typeof document === "undefined") return;
-      const c = document.createElement("canvas");
-      c.width = Math.max(1, Math.round(w));
-      c.height = Math.max(1, Math.round(h));
-      const g = c.getContext("2d");
-      if (!g) return;
-      const m = Math.min(w, h);
-      const vg = g.createRadialGradient(w / 2, h / 2, m * 0.45, w / 2, h / 2, Math.hypot(w, h) * 0.62);
-      vg.addColorStop(0, rgba(NIGHT, 0));
-      vg.addColorStop(1, rgba(NIGHT, 0.35));
-      g.fillStyle = vg;
-      g.fillRect(0, 0, w, h);
-      cache = c;
-    }
-    if (cache) ctx.drawImage(cache, 0, 0, w, h);
+/**
+ * The frame's vignette. Radially symmetric, so one sprite blitted over the
+ * frame is the same picture the per-frame gradient drew — and it survives a
+ * resize without rebuilding anything.
+ */
+function makeVignette(): (ctx: CanvasRenderingContext2D, w: number, h: number, cx?: number) => void {
+  const sprite = makeRadialSprite([
+    [0, NIGHT, 0],
+    [0.72, NIGHT, 0],
+    [1, NIGHT, 0.35],
+  ], 256);
+  return (ctx, w, h, cx) => {
+    if (!sprite) return;
+    const r = Math.hypot(w, h) * 0.62;
+    blitGlow(ctx, sprite, cx ?? w / 2, h / 2, r, 1);
   };
 }
 
