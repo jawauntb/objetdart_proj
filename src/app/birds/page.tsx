@@ -7,7 +7,7 @@ import ScaleTravel from "@/components/ScaleTravel";
 import MetaNavigator from "@/components/MetaNavigator";
 import { getFieldAudio } from "@/lib/audio";
 
-const BirdsFlock = dynamic(() => import("@/components/BirdsFlock"), { ssr: false });
+const Murmuration = dynamic(() => import("@/components/Murmuration"), { ssr: false });
 
 export default function BirdsPage() {
   useEffect(() => {
@@ -17,7 +17,7 @@ export default function BirdsPage() {
   return (
     <>
       <SiteHeader />
-      <BirdsFlock />
+      <Murmuration />
       <ScaleTravel route="/birds" />
       <MetaNavigator route="/birds" />
     </>
