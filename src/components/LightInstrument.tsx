@@ -27,6 +27,7 @@ import { useField } from "@/store/field";
 import { attachGestures } from "@/lib/gesture";
 import { holdTier } from "@/lib/gesture/core";
 import { onVessel, requestVessel, vesselAvailable, vesselGranted } from "@/lib/vessel";
+import { onVisibility } from "@/lib/room-runtime";
 import LetGo from "@/components/LetGo";
 
 type ToneMark = {
@@ -109,6 +110,9 @@ export default function LightInstrument() {
   const [glimmering, setGlimmering] = useState(false);
   const glimmeringRef = useRef(false);
   useEffect(() => { glimmeringRef.current = glimmering; }, [glimmering]);
+  useEffect(() => onVisibility((hidden) => {
+    if (hidden) setFlash(0);
+  }), []);
   const [charges, setCharges] = useState<Array<{ id: number; x: number; y: number; pct: number; mode: "create" | "delete" }>>([]);
   const cancelLesson = useRef<null | (() => void)>(null);
   const isListeningRef = useRef(false);

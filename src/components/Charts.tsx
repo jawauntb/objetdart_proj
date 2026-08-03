@@ -21,6 +21,7 @@ import {
   detailForTier,
   isEmbeddedFrame,
   onGalleryPause,
+  onVisibility,
   resolveDpr,
   type QualityTier,
 } from "@/lib/room-runtime";
@@ -328,6 +329,9 @@ function solveTweakForRSI(
 export default function Charts() {
   // page-specific ambient bed: faint clockwork ticks
   useEffect(() => { getFieldAudio().setAmbientProfile("clockwork"); }, []);
+  useEffect(() => onVisibility((hidden) => {
+    if (hidden) getFieldAudio().setAmbientProfile("ocean");
+  }), []);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);

@@ -14,7 +14,7 @@ import { THRESHOLDS } from "@/lib/gesture/core";
 import { onVessel, requestVessel, vesselAvailable } from "@/lib/vessel";
 import { shouldInvite } from "@/lib/candle";
 import { useField } from "@/store/field";
-import { createFrameGovernor, detailForTier, onVisibility as onDocVisibility, resolveDpr } from "@/lib/room-runtime";
+import { createFrameGovernor, detailForTier, onVisibility, resolveDpr } from "@/lib/room-runtime";
 
 // ─────────────────────────────────────────────────────────────────────────
 // Objet d'Art · /drop — a living bead of RAINWATER.
@@ -1456,7 +1456,7 @@ export default function DropSphere() {
     // clock back up where it left off, exactly as /ocean's weather does.
     // Wired through the shared room-runtime visibility subscription rather
     // than a private document.hidden listener.
-    const offVisibility = onDocVisibility((hidden) => {
+    const offVisibility = onVisibility((hidden) => {
       if (hidden) {
         cancelAnimationFrame(raf);
         raf = 0;

@@ -239,6 +239,7 @@ export const ROOM_REGISTRY: RoomEntry[] = [
       "two differ because a phone's glide is shorter than a trackpad's. Neither classifies a " +
       "contact: no hold, tap or chord is measured against them, and the room's one real gesture " +
       "timing (the plant) is THRESHOLDS.dwellMs from gesture/core.ts",
+  },
   {
     key: "coast",
     href: "/coast",
@@ -276,7 +277,9 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "travel+peers",
     keeps: "objetdart:world:v1",
     creates: "a natural",
-    exempt: {},
+    exempt: {
+      tutti: "the tide is one continuous waterline rather than a population of independent objects; its synchronized answer is already the shared tide phase",
+    },
   },
   {
     key: "waves",
@@ -302,7 +305,12 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "axis",
     keeps: null,
     creates: null,
-    exempt: {},
+    exempt: {
+      weather: "a sine equation has amplitude and phase but no directional weather field; adding wind would misstate its one-dimensional material law",
+      dilation: "the oscillator's timebase is its represented quantity, so slowing it would change the signal rather than hold the room's world still",
+      dwell: "the surface is a single analytic wave, not a field that can receive a planted or growing object",
+      ceremony: "there is no countable material to seal or retire: the waveform remains a continuously recomputed function",
+    },
   },
   {
     key: "pretext",
@@ -311,11 +319,15 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     source: "src/components/PretextWave.tsx",
     page: "src/app/pretext/page.tsx",
     address: { band: "coast" },
-    frame: "yield",
+    frame: "own",
     chrome: "axis",
     keeps: null,
     creates: null,
-    exempt: {},
+    exempt: {
+      pan: "the wave's camera is an orthographic strip with a fixed horizontal domain; zooming changes its reading scale but translation would hide the signal rather than move through a larger frame",
+    },
+    rawPointer: "the typography layer samples pointer contact continuously to deform the wave beneath a fingertip; semantic gesture handlers remain the owner of classified hand meanings",
+    governor: "the room's requestAnimationFrame loop is a short visual settling pass after a contact, not a continuously running simulation, so it has no sustained frame budget to tier",
   },
   {
     key: "circularity",
@@ -368,7 +380,9 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "none",
     keeps: null,
     creates: null,
-    exempt: {},
+    exempt: {
+      dwell: "the overlook is one generated tree-view rather than soil or a population; a dwell already focuses its existing branches and cannot plant a second tree into the lens",
+    },
   },
   {
     key: "relativity",
@@ -394,7 +408,9 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "none",
     keeps: "objetdart:loom:v1",
     creates: "a crossing",
-    exempt: {},
+    exempt: {
+      dwell: "a crossing is created by a completed stroke, not planted by duration; growing one under a stationary hand would break the loom's deterministic thread geometry",
+    },
   },
   {
     key: "storm",
@@ -456,11 +472,14 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     source: "src/components/FlowersGarden.tsx",
     page: "src/app/flowers/page.tsx",
     address: { band: "flowers" },
-    frame: "yield",
+    frame: "own",
     chrome: "travel+peers",
     keeps: "objetdart:flowers:v1",
     creates: "a flower",
-    exempt: {},
+    exempt: {
+      pan: "the garden camera is anchored to its bed: pinch changes the botanical scale but translation would move the visitor outside the bounded plot",
+      dwell: "the garden's pressure-bloom is continuous from contact and already owns its growth axis; a second dwell plant would duplicate a flower at the same contact",
+    },
     rawPointer: "reads contact count and the surf-line inset directly for the press-bloom; the engine reports intensity per event but no continuous pressure channel while held",
   },
   {
@@ -604,7 +623,9 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "travel",
     keeps: "objetdart:quanta:v1",
     creates: "a particle",
-    exempt: {},
+    exempt: {
+      dwell: "a quantum event is emitted at contact and evolves probabilistically; a stationary dwell cannot plant a second particle without inventing a classical seed",
+    },
   },
   {
     key: "fire",
@@ -656,7 +677,11 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "axis",
     keeps: "objetdart:constellations:v1",
     creates: "a star",
-    exempt: {},
+    exempt: {
+      dilation: "the star field's clock is astronomical position rather than room-time; holding it would falsify the orbital representation",
+      dwell: "constellations are named from a completed contact path, not grown under a stationary finger",
+      ceremony: "the kept sky is sealed by naming a constellation; there is no separate ceremony that can safely retire a shared star",
+    },
   },
   {
     key: "space",
@@ -669,7 +694,9 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "travel",
     keeps: "objetdart:space:v1",
     creates: "a galaxy",
-    exempt: {},
+    exempt: {
+      ceremony: "a galaxy web has no singular touch-reachable object to seal or retire; its persistence is the topology of the whole field",
+    },
   },
   {
     key: "comb",
@@ -682,7 +709,9 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "axis",
     keeps: null,
     creates: null,
-    exempt: {},
+    exempt: {
+      dwell: "the comb's teeth are a fixed acoustic scale; prolonged contact sustains a note instead of planting new material into the instrument",
+    },
   },
   {
     key: "beam",
@@ -691,11 +720,13 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     source: "src/components/Beam.tsx",
     page: "src/app/beam/page.tsx",
     address: { band: "stars" },
-    frame: "yield",
+    frame: "own",
     chrome: "axis",
     keeps: "objetdart:beam:memory",
     creates: "a kept sky",
-    exempt: {},
+    exempt: {
+      pan: "the beam's perspective is locked to its source and target; translation would detach the kept sky from the optical axis",
+    },
   },
   {
     key: "signal",
@@ -708,7 +739,11 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "none",
     keeps: "objetdart:signal-kept:v1",
     creates: "a kept signal",
-    exempt: {},
+    exempt: {
+      weather: "the signal is an ordered spectral trace with no spatial weather field; wind would change its encoded measurement rather than its material",
+      dilation: "time is the horizontal coordinate of the signal, so dilation would rewrite the reading rather than hold a simulated world",
+    },
+    rawPointer: "the transport scrubber needs immediate pointer contact to audition a frequency before a semantic gesture has classified; classified grammar remains attached to the same stage",
   },
   {
     key: "light",
@@ -721,7 +756,13 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "none",
     keeps: null,
     creates: null,
-    exempt: {},
+    exempt: {
+      weather: "the light plate is a fixed chromatic relation, not a directional field that can carry wind",
+      dilation: "its temporal behavior is an audio envelope; slowing it would alter a performed note rather than dilate a world clock",
+      dwell: "marks are placed by discrete touch and the plate has no soil or population lifecycle to grow beneath a held contact",
+      ceremony: "kept marks are explicitly saved through their existing composition act; no solitary object can be sealed or retired by a second ceremony",
+    },
+    governor: "the animation is a bounded audiovisual envelope driven by note playback, not a persistent simulation requiring adaptive detail",
   },
   {
     key: "music-color",
@@ -734,7 +775,20 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "none",
     keeps: null,
     creates: null,
-    exempt: {},
+    exempt: {
+      stepBack: "the inverse is a fixed, single-screen mapping with no camera or raised lens to retreat",
+      tutti: "the surface renders one invertible music-to-colour relation, not a population capable of synchronized response",
+      lens: "this route is itself the inverse lens; rotating a second lens would lose the one-to-one mapping it demonstrates",
+      season: "the inverse mapping is timeless and has no slow environmental cycle to turn",
+      weather: "a colour transform has no spatial material or wind field",
+      dilation: "the mapping has no simulation clock to hold",
+      dwell: "the instrument renders a relation, not countable material that can be planted or grown",
+      ceremony: "there is no persistent object on this inverse surface to seal or touch-delete",
+      tilt: "device gravity cannot be represented in a two-dimensional colour-to-pitch transform without changing its value",
+      shake: "agitation has no material counterpart in a deterministic inverse mapping",
+      knock: "the inverse is a static relation with no body to wake or ring",
+      flip: "face-down night belongs to a world or stage; this reading lens has no illuminated material to sleep",
+    },
   },
   {
     key: "timbre",
@@ -743,11 +797,18 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     source: "src/components/TimbreInstrument.tsx",
     page: "src/app/timbre/page.tsx",
     address: { exempt: "a meta-instrument: one surface, every instrument" },
-    frame: "yield",
+    frame: "own",
     chrome: "none",
     keeps: null,
     creates: null,
-    exempt: {},
+    exempt: {
+      pan: "the timbre plate is a bounded performance surface whose coordinates are the instrument; translation would make notes unreachable",
+      weather: "timbre parameters are not a spatial field and have no directional wind component",
+      dilation: "a held instrument note already owns duration as sound; room-time dilation would change its performed envelope",
+      dwell: "a sustained press is a note charge rather than a plantable object",
+      ceremony: "the plate contains no persistent countable object to seal or retire",
+    },
+    governor: "animation is limited to active note envelopes and ends after release; it is not a continuous scene simulation",
   },
   {
     key: "instrument",
@@ -760,7 +821,11 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "none",
     keeps: null,
     creates: null,
-    exempt: {},
+    exempt: {
+      tutti: "a polyphonic plate answers each finger as a voice; a simultaneous field pulse would collapse the independent-note material into one control",
+      dwell: "duration is already the sustain of an active voice, not a growth axis for a separate object",
+      ceremony: "the instrument leaves no persistent object on the plate to seal or retire",
+    },
   },
   {
     key: "plasma",
@@ -787,7 +852,10 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "axis",
     keeps: "objetdart:patterns:v1",
     creates: "a pattern",
-    exempt: {},
+    exempt: {
+      dwell: "a pattern is struck and recorded on contact; holding the same cell sustains its pulse instead of planting a duplicate pattern",
+    },
+    rawPointer: "the sequencer needs immediate cell lighting at touchdown for low-latency performance, while attachGestures continues to classify every grammar-level act",
   },
   {
     key: "charts",
@@ -801,6 +869,7 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     keeps: "objetdart:charts:pinned:v1",
     creates: "a pinned reading",
     exempt: {},
+    governor: "chart motion is a short transition between readings and stops at rest, so adaptive simulation detail would not govern any persistent frame loop",
   },
   {
     key: "dither",
@@ -813,7 +882,15 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "axis",
     keeps: null,
     creates: null,
-    exempt: {},
+    exempt: {
+      tutti: "the page is a collection of reading specimens, not one shared material population that can pulse together",
+      dwell: "the dither chart already gathers ink through its own analytic hold; it has no countable object to plant",
+      tilt: "gravity has no directional counterpart in the fixed pixel grid",
+      shake: "agitating a deterministic dither pattern would only corrupt the encoded image",
+      knock: "the specimen sheet has no body or resonance to wake",
+      flip: "the page has no illuminated simulation that can enter night",
+    },
+    governor: "the only requestAnimationFrame is a finite chart reveal; it ceases once the reveal reaches its final reading",
   },
   {
     key: "time",
@@ -839,7 +916,9 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "axis",
     keeps: null,
     creates: null,
-    exempt: {},
+    exempt: {
+      dwell: "a tourbillon's dwell is its continuous escapement pressure, not a place where a new object can be planted",
+    },
   },
   {
     key: "jewel",
@@ -866,7 +945,10 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "travel+peers",
     keeps: null,
     creates: null,
-    exempt: {},
+    exempt: {
+      dwell: "a drop pinches off only from continuous vessel tilt and surface tension; a stationary touch cannot plant a second physical droplet",
+    },
+    governor: "the sphere's requestAnimationFrame loop is event-driven settling after an impact and sleeps when no drop is moving",
   },
   {
     key: "seed",
@@ -879,7 +961,9 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "travel+peers",
     keeps: "objetdart:seed:v1",
     creates: "a seed",
-    exempt: {},
+    exempt: {
+      dwell: "the seed's phenology is already advanced by its existing pressure interaction; a second dwell plant would create an impossible duplicate embryo",
+    },
   },
   {
     key: "coin",
@@ -892,7 +976,14 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "axis",
     keeps: "objetdart:coin:aventurine",
     creates: null,
-    exempt: {},
+    exempt: {
+      tutti: "the coin is a single object, so a population-wide synchronized response has no distinct material meaning",
+      dwell: "a held coin is already a continuous spin-brake; it cannot grow or plant a second coin",
+      tilt: "the coin's world-space gravity is fixed by its ceremonial face, so device tilt would contradict the minted orientation",
+      shake: "agitation would make the coin's deterministic spin unreadable rather than scatter a population",
+      knock: "the coin has no room-door or resonant population to wake; its existing tap is the direct contact reading",
+      flip: "face-down does not mean night for a two-sided medal: it is already a meaningful physical orientation of the object",
+    },
   },
   {
     key: "watch",

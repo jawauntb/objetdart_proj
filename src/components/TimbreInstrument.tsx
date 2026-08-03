@@ -26,6 +26,7 @@ import { useField } from "@/store/field";
 import { attachGestures } from "@/lib/gesture";
 import { holdTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
+import { onVisibility } from "@/lib/room-runtime";
 import LetGo from "@/components/LetGo";
 
 type ActiveTouch = {
@@ -90,6 +91,9 @@ export default function TimbreInstrument() {
   const [glimmering, setGlimmering] = useState(false);
   const glimmeringRef = useRef(false);
   useEffect(() => { glimmeringRef.current = glimmering; }, [glimmering]);
+  useEffect(() => onVisibility((hidden) => {
+    if (hidden) setGlimmering(false);
+  }), []);
   const isListeningRef = useRef(false);
   useEffect(() => { isListeningRef.current = isListening; }, [isListening]);
 

@@ -5,6 +5,7 @@ import { getFieldAudio } from "@/lib/audio";
 import { useField } from "@/store/field";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { onVessel } from "@/lib/vessel";
 import { relaxTurbulence, stirTurbulence } from "@/lib/turbulence";
 import {
   addNatural as worldAddNatural,
@@ -753,6 +754,13 @@ export default function Ocean() {
     const detachGestures = attachGestures(wrap, {
       tap: (e) => {
         lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          addRipple((surf.clientWidth || 1) / 2, seaLevelPx(), 56 + e.intensity * 44);
+          stirTurbulence(0.1 + e.intensity * 0.12);
+          haptics.ripple(e.intensity);
+          try { getFieldAudio().chime(); } catch { /* noop */ }
+          return;
+        }
         if (e.fingers !== 1) return; // the sea absorbs frame/law taps
         armSensors();
         const { x, y } = toLocal(e.x, e.y);
@@ -992,6 +1000,22 @@ export default function Ocean() {
         entrainUntil = performance.now() + 9000;
       },
     }, { wheelZoom: false });
+    const detachVessel = onVessel({
+      tilt: ({ gamma }) => {
+        windXTarget = Math.max(-1, Math.min(1, gamma / 35));
+      },
+      shake: ({ intensity }) => {
+        stirTurbulence(Math.min(0.2, intensity * 0.14));
+        haptics.chop();
+      },
+      knock: ({ intensity }) => {
+        addRipple((surf.clientWidth || 1) / 2, seaLevelPx(), 36 + intensity * 28);
+        try { getFieldAudio().bell(); } catch { /* noop */ }
+      },
+      flip: ({ faceDown }) => {
+        timeScaleTarget = faceDown ? 0.25 : 1;
+      },
+    });
 
     // Desktop hover is the grammar's quiet dialect (hover ≈ light touch):
     // the halo follows and the water barely dimples. All contact gestures
@@ -1578,6 +1602,7 @@ export default function Ocean() {
       unsubscribeWorld();
       ro.disconnect();
       detachGestures();
+      detachVessel();
       surf.removeEventListener("pointermove", onHover);
       surf.removeEventListener("pointerleave", onLeave);
       surf.removeEventListener("wheel", onWheel);

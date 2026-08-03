@@ -14,6 +14,7 @@ import {
   exportMusicColorImage,
   type MusicColorExportKind,
 } from "@/lib/music-color-export";
+import { attachGestures } from "@/lib/gesture";
 import { useField } from "@/store/field";
 
 type MusicCell = Exclude<ParsedMusicToken, { kind: "invalid" }>;
@@ -127,6 +128,7 @@ export default function MusicColorInstrument() {
   const [interpretStatus, setInterpretStatus] = useState("");
   const [interpretError, setInterpretError] = useState("");
   const timersRef = useRef<number[]>([]);
+  const surfaceRef = useRef<HTMLDivElement | null>(null);
 
   const parsed = useMemo(() => parseMusicInput(score), [score]);
   const cells = useMemo(() => parsed.tokens.filter(isMusicCell), [parsed.tokens]);
@@ -158,6 +160,10 @@ export default function MusicColorInstrument() {
     return () => {
       timersRef.current.forEach((timer) => window.clearTimeout(timer));
     };
+  }, []);
+  useEffect(() => {
+    const surface = surfaceRef.current;
+    return surface ? attachGestures(surface, {}) : undefined;
   }, []);
 
   const clearTimers = () => {
@@ -297,6 +303,7 @@ export default function MusicColorInstrument() {
 
   return (
     <div
+      ref={surfaceRef}
       className="music-color-page"
       data-touch-surface="true"
       data-pretext-ignore="true"
