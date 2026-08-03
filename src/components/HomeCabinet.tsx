@@ -350,6 +350,7 @@ export default function HomeCabinet() {
     let twistAcc = 0;
     let tuttiTimer: ReturnType<typeof setTimeout> | null = null;
     let ceremonyTarget: Ember | null = null;
+    let holdOnFurniture = false;
     const detach = attachGestures(section, {
       tap: (e) => {
         if (document.elementFromPoint(e.x, e.y)?.closest("a, button")) return;
@@ -429,19 +430,29 @@ export default function HomeCabinet() {
           return;
         }
         if (e.fingers !== 1) return;
-        if (document.elementFromPoint(e.x, e.y)?.closest("a, button")) return;
 
         if (e.phase === "enter") {
+          // a hold that begins on the furniture belongs to the furniture; the
+          // check lives here alone so a release still lands whatever it lands on
+          if (document.elementFromPoint(e.x, e.y)?.closest("a, button")) {
+            ceremonyTarget = null;
+            growingRef.current = null;
+            holdOnFurniture = true;
+            return;
+          }
+          holdOnFurniture = false;
           const at = worldFromClient(e.x, e.y);
           ceremonyTarget = emberNear(at.x, at.y);
           growingRef.current = null;
           return;
         }
+        if (holdOnFurniture && e.phase !== "release") return;
 
         if (e.phase === "release") {
           if (growingRef.current) commitEmbers();
           growingRef.current = null;
           ceremonyTarget = null;
+          holdOnFurniture = false;
           return;
         }
 

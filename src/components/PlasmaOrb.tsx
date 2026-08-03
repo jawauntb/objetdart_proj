@@ -288,6 +288,8 @@ export default function PlasmaOrb() {
     let tutti = 0;
     let night = 0;
     let growing: Disc | null = null;
+    /** the standing disc a hold came down on, if any — see plant/ceremony */
+    let held: Disc | null = null;
 
     const writer = createIdleWriter(() => {
       try {
@@ -339,6 +341,18 @@ export default function PlasmaOrb() {
 
     api.current.plant = (nx, ny, intensity) => {
       const at = toField(nx, ny);
+      // A finger that came down ON a disc is feeding that disc, not making a
+      // new one: the same hold then means "grow this" while it is held and
+      // "annihilate this" if it is held past the ceremony tier.
+      const under = nearest(at.x, at.y);
+      if (under) {
+        held = under;
+        growing = null;
+        under.flare = Math.min(1.6, under.flare + 0.25 + intensity * 0.35);
+        haptics.tap();
+        return;
+      }
+      held = null;
       if (discs.length >= DISC_CAP) {
         // the cap retires the oldest gracefully rather than refusing the hand
         const oldest = discs.reduce((a, b) => (a.born <= b.born ? a : b));
@@ -365,7 +379,13 @@ export default function PlasmaOrb() {
     };
 
     api.current.deepen = (elapsed, nx, ny) => {
-      // holding longer keeps deepening it — never a switch that latches
+      // holding longer keeps deepening it — never a switch that latches, and
+      // never the same thing at 900ms as at 2400ms
+      if (held) {
+        held.weight = Math.min(1, held.weight + 0.004);
+        held.flare = Math.min(1.6, 0.2 + Math.min(1, elapsed / 2500) * 0.9);
+        return;
+      }
       if (!growing) return;
       const at = toField(nx, ny);
       growing.x = at.x;
@@ -376,14 +396,27 @@ export default function PlasmaOrb() {
 
     api.current.ceremony = (nx, ny) => {
       const at = toField(nx, ny);
-      const hit = nearest(at.x, at.y) ?? growing;
-      growing = null;
-      if (!hit) return;
-      // the solemn act, and the touch-reachable delete: it blooms out
-      hit.retire = Math.max(hit.retire, 0.001);
-      audio.thud();
-      haptics.bloom();
-      writer.schedule();
+      // the solemn act, both ways round: a hold that began on a standing disc
+      // annihilates it — the delete a thumb can reach — and a hold that made
+      // one seals it instead, so the same gesture never both makes and unmakes.
+      const target = held ?? nearest(at.x, at.y);
+      if (target) {
+        held = null;
+        growing = null;
+        target.retire = Math.max(target.retire, 0.001);
+        audio.thud();
+        haptics.bloom();
+        writer.schedule();
+        return;
+      }
+      if (growing) {
+        growing.weight = 1;
+        growing.flare = 1.4;
+        growing = null;
+        audio.bell();
+        haptics.bloom();
+        writer.schedule();
+      }
     };
 
     api.current.tap = (nx, ny, intensity) => {
@@ -536,6 +569,7 @@ export default function PlasmaOrb() {
       for (let i = discs.length - 1; i >= 0; i--) {
         const d = discs[i];
         stepDisc(d, dt, { wind, gravity, agitation, aspect: a, reducedMotion: reduced });
+        d.flare *= Math.exp(-dt * 2.6);
         if (d.retire > 0) {
           d.retire = Math.min(1, d.retire + dt * 1.5);
           if (d.retire >= 1) {
@@ -546,6 +580,7 @@ export default function PlasmaOrb() {
         if (d.retire <= 0) alive += 1;
       }
       if (growing && growing.retire > 0) growing = null;
+      if (held && held.retire > 0) held = null;
       if (alive !== lastStanding) {
         lastStanding = alive;
         setStanding(alive);
@@ -560,7 +595,7 @@ export default function PlasmaOrb() {
         const pal = seasonPalette(season);
         // the tier scales how many discs the GPU is asked for, never which
         // ones exist — quality bends, the population does not
-        const shown = Math.max(1, Math.min(discs.length, Math.ceil(DISC_CAP * detail.particles)));
+        const shown = Math.min(discs.length, Math.max(1, Math.ceil(DISC_CAP * detail.particles)));
         for (let i = 0; i < shown; i++) {
           const d = discs[i];
           discBuf[i * 4] = d.x;
@@ -571,9 +606,8 @@ export default function PlasmaOrb() {
           metaBuf[i * 4 + 1] = d.retire;
           metaBuf[i * 4 + 2] = d.flare;
           metaBuf[i * 4 + 3] = season;
-          d.flare *= 0.9;
         }
-        prog.setInt("u_count", discs.length === 0 ? 0 : shown);
+        prog.setInt("u_count", shown);
         prog.setFloatArray(["u_disc", "u_disc[0]"], discBuf);
         prog.setFloatArray(["u_discMeta", "u_discMeta[0]"], metaBuf);
         prog.setFloat("u_night", night);
@@ -689,9 +723,18 @@ export default function PlasmaOrb() {
   );
 }
 
-/** Surface pixels → 0..1 of the room's own box. */
+/**
+ * Contact point → 0..1 of the room's own box. The engine reports client
+ * coordinates, so the room's origin has to come off them: the wrapper is
+ * `position: fixed; inset: 0` today, which makes the two agree, and this is
+ * what keeps them agreeing if it ever isn't.
+ */
 function norm(x: number, y: number, el: HTMLElement | null): [number, number] {
-  const w = el?.clientWidth ?? 1;
-  const h = el?.clientHeight ?? 1;
-  return [Math.max(0, Math.min(1, x / Math.max(1, w))), Math.max(0, Math.min(1, y / Math.max(1, h)))];
+  const rect = el?.getBoundingClientRect();
+  const w = Math.max(1, rect?.width ?? 1);
+  const h = Math.max(1, rect?.height ?? 1);
+  return [
+    Math.max(0, Math.min(1, (x - (rect?.left ?? 0)) / w)),
+    Math.max(0, Math.min(1, (y - (rect?.top ?? 0)) / h)),
+  ];
 }
