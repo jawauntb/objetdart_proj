@@ -23,6 +23,7 @@ import {
 import { ATLAS_ZOOM_SPEC, resolveAtlasEdgeTravel } from "@/lib/atlas-navigation";
 import { prepareAtlasSourceImage } from "@/lib/atlas-source";
 import { getFieldAudio } from "@/lib/audio";
+import { intensityFrom } from "@/lib/gesture/core";
 import * as haptics from "@/lib/haptics";
 import { useField } from "@/store/field";
 import { useBandEdgeTravel } from "@/components/ScaleTravel";
@@ -354,7 +355,13 @@ export default function Atlas() {
   const [generationDepth, setGenerationDepth] = useState(0);
   const [status, setStatus] = useState("tap a mark · drag the chart · pinch to breathe");
   const [interacting, setInteracting] = useState(false);
-  const [pulse, setPulse] = useState<{ x: number; y: number; key: number } | null>(null);
+  const [pulse, setPulse] = useState<{ x: number; y: number; key: number; intensity: number } | null>(null);
+  // How hard the last touch meant it (0..1 from gesture/core) — the tap's
+  // ripple and the region halo it lands on both ride this.
+  const lastTapIntensityRef = useRef(0.5);
+  // Glimmer (grammar §6): after ~20s of quiet the map hints a route
+  // physically — one mark's halo swells once, never a label, never text.
+  const [glimmerId, setGlimmerId] = useState<string | null>(null);
 
   // The scale manifold at the sheet's walls. A single pinch-out at
   // fit-to-view still mints a wider chart (the room's own answer);
@@ -461,6 +468,30 @@ export default function Atlas() {
   useEffect(() => {
     try { getFieldAudio().setAmbientProfile("atlas"); } catch { /* noop */ }
   }, []);
+
+  // Glimmer scheduler: a quiet map occasionally lets one mark's halo
+  // swell — a physical hint of where a tap would land. Skipped under
+  // reduced motion, while generating, and while any hand is on the map.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    let clearTimer: number | null = null;
+    const tick = window.setInterval(() => {
+      if (document.hidden || busy || interactingRef.current) return;
+      if (performance.now() - lastGestureAtRef.current < 20000) return;
+      if (hotspots.length === 0) return;
+      const pick = hotspots[Math.floor(Math.random() * hotspots.length)];
+      setGlimmerId(pick.id);
+      if (clearTimer) window.clearTimeout(clearTimer);
+      clearTimer = window.setTimeout(() => setGlimmerId(null), 2600);
+      // re-arm the idle window so the hint stays rare
+      lastGestureAtRef.current = performance.now() - 12000;
+    }, 7000);
+    return () => {
+      window.clearInterval(tick);
+      if (clearTimer) window.clearTimeout(clearTimer);
+    };
+  }, [busy, hotspots]);
 
   useEffect(() => {
     const stage = stageRef.current;
@@ -1228,6 +1259,11 @@ export default function Atlas() {
     setFocusedLabel(hotspot.label);
     setRegion(hotspot.regionId);
     commitView(next, { animate: true });
+    // the region halo answers with the same weight the finger gave it
+    const tapPoint = pointerStartRef.current;
+    if (tapPoint) {
+      setPulse({ x: tapPoint.x, y: tapPoint.y, key: Date.now(), intensity: lastTapIntensityRef.current });
+    }
     setStatus("diffusing detail around " + hotspot.label.toLowerCase());
     setRenderPhase("local");
     try {
@@ -1546,6 +1582,13 @@ export default function Atlas() {
     }
     event.currentTarget.setPointerCapture(event.pointerId);
     const point = { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    // intensity from the best physical channel (force → contact area),
+    // read once at landing so taps and hotspot halos share it
+    lastTapIntensityRef.current = intensityFrom({
+      pressure: event.pressure,
+      width: event.width,
+      height: event.height,
+    });
     pointerStartRef.current = point;
     pointersRef.current.set(event.pointerId, point);
     interactingRef.current = true;
@@ -1594,7 +1637,7 @@ export default function Atlas() {
           roll < 0.95 ? "flower" :
           "trail";
         place(kind, nx, ny);
-        setPulse({ x: startPt.x, y: startPt.y, key: Date.now() });
+        setPulse({ x: startPt.x, y: startPt.y, key: Date.now(), intensity: 0.7 });
         setStatus(
           kind === "cairn" ? "a cairn stands where you paused" :
           kind === "flower" ? "a wildflower opens where you paused" :
@@ -1792,9 +1835,9 @@ export default function Atlas() {
       if (viewRef.current.zoom > 1.05 || focusedId) {
         resetOuterMap();
       } else {
-        setPulse({ x: point.x, y: point.y, key: Date.now() });
+        setPulse({ x: point.x, y: point.y, key: Date.now(), intensity: lastTapIntensityRef.current });
         setStatus("the water remembers the touch");
-        recordTape("ripple", 0.38, "atlas/water");
+        recordTape("ripple", 0.3 + lastTapIntensityRef.current * 0.3, "atlas/water");
       }
     } else if (viewRef.current.zoom > 1.08) {
       queueSettledZoom();
@@ -1857,7 +1900,11 @@ export default function Atlas() {
               <button
                 key={hotspot.id}
                 type="button"
-                className={"living-atlas__hotspot" + (focused ? " is-focused" : "")}
+                className={
+                  "living-atlas__hotspot"
+                  + (focused ? " is-focused" : "")
+                  + (glimmerId === hotspot.id ? " is-glimmer" : "")
+                }
                 style={{
                   left: hotspot.x * 100 + "%",
                   top: hotspot.y * 100 + "%",
@@ -1932,7 +1979,7 @@ export default function Atlas() {
           <span
             key={pulse.key}
             className="living-atlas__ripple"
-            style={{ left: pulse.x, top: pulse.y }}
+            style={{ left: pulse.x, top: pulse.y, ["--pulse-i" as string]: pulse.intensity }}
             aria-hidden="true"
           />
         )}
@@ -2248,13 +2295,18 @@ export default function Atlas() {
         .living-atlas__ripple {
           position: absolute;
           z-index: 7;
-          width: 12px;
-          height: 12px;
-          margin: -6px;
-          border: 1px solid rgba(241, 212, 132, .86);
+          /* tap intensity (0..1 from gesture/core) sizes the ring and
+             weights its ink — a harder touch leaves a larger mark */
+          width: calc(8px + var(--pulse-i, 0.5) * 12px);
+          height: calc(8px + var(--pulse-i, 0.5) * 12px);
+          margin: calc(-4px - var(--pulse-i, 0.5) * 6px);
+          border: 1px solid rgba(241, 212, 132, calc(0.55 + var(--pulse-i, 0.5) * 0.4));
           border-radius: 50%;
           pointer-events: none;
           animation: atlas-ripple 1s ease-out forwards;
+        }
+        .living-atlas__hotspot.is-glimmer .living-atlas__mark {
+          animation: atlas-glimmer 2.6s ease-in-out 1;
         }
         @keyframes atlas-diffuse {
           0% { transform: translate(-50%, -50%) scale(.12) rotate(0deg); opacity: 0; filter: blur(0); }
@@ -2266,7 +2318,11 @@ export default function Atlas() {
           to { transform: translate(-50%, -50%) rotate(42deg) scaleX(1); opacity: .58; }
         }
         @keyframes atlas-ripple {
-          to { transform: scale(12); opacity: 0; }
+          to { transform: scale(calc(8 + var(--pulse-i, 0.5) * 8)); opacity: 0; }
+        }
+        @keyframes atlas-glimmer {
+          0%, 100% { box-shadow: inset 0 0 0 1px rgba(245, 220, 154, .28), 0 0 0 6px rgba(5, 17, 25, .12); }
+          45% { box-shadow: inset 0 0 0 1px rgba(245, 220, 154, .6), 0 0 22px 8px rgba(239, 197, 92, .34); }
         }
         @media (max-width: 760px) {
           .living-atlas__stage { min-height: 540px; }
@@ -2295,7 +2351,8 @@ export default function Atlas() {
           .living-atlas__plane,
           .living-atlas__image--incoming { transition-duration: 1ms; }
           .living-atlas__diffusion span,
-          .living-atlas__ripple { animation: none; }
+          .living-atlas__ripple,
+          .living-atlas__hotspot.is-glimmer .living-atlas__mark { animation: none; }
           /* The RAF loop already skips writing --atlas-breath when
              reduced motion is set; this line makes any stale value
              harmless. */

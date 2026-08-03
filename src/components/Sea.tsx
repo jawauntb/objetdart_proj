@@ -5,6 +5,7 @@ import { getFieldAudio } from "@/lib/audio";
 import { useField } from "@/store/field";
 import type { ConcernKey } from "@/lib/types";
 import * as haptics from "@/lib/haptics";
+import { attachGestures } from "@/lib/gesture";
 import { relaxTurbulence, stirTurbulence } from "@/lib/turbulence";
 
 /**
@@ -451,11 +452,62 @@ export default function Sea({
     window.addEventListener("pointercancel", onUp);
     lines.addEventListener("pointerleave", onLeave);
 
+    // ── the grammar, alongside the founding ripples ──────────────
+    // The pointer-ripple system above is the template of the whole site
+    // and keeps its private listeners untouched (the engine's tap fires
+    // on release; the sea has always answered on landing — adopting it
+    // for ripples would change the feel). The engine adds only the two
+    // verbs the grammar owes this water: a circling finger stirs a slow
+    // gyre in the swell, and three fingers drag the wind. manageStyle
+    // stays off so touch-action: pan-y keeps the page scrolling.
+    let windX = 0;
+    let windXTarget = 0;
+    let windPhase = 0;
+    let lastWindFxAt = 0;
+    let lastScrubAt = 0;
+    const gyre = { dir: 1 as 1 | -1, strength: 0, phase: 0 };
+    const detachGestures = attachGestures(wrap, {
+      drag: (e) => {
+        if (e.fingers !== 3 || e.phase === "end") return;
+        // three fingers touch the law: the wind leans the whole body of
+        // water and the foam drifts downwind
+        windXTarget = Math.max(-1, Math.min(1, windXTarget + e.vx * 0.25));
+        const nowMs = performance.now();
+        if (Math.abs(e.vx) > 0.25 && nowMs - lastWindFxAt > 480) {
+          lastWindFxAt = nowMs;
+          stirTurbulence(Math.min(0.1, Math.abs(e.vx) * 0.06));
+          try { getFieldAudio().playTone(66 + Math.abs(windXTarget) * 28, 0.5); } catch { /* noop */ }
+          try { haptics.chop(); } catch { /* noop */ }
+          useField.getState().recordTape("ripple", 0.5, "sea/wind");
+        }
+      },
+      scrub: (e) => {
+        const nowMs = performance.now();
+        if (nowMs - lastScrubAt < 700) return;
+        lastScrubAt = nowMs;
+        // circling stirs a gyre: the swell slowly circulates the turn's
+        // way, and the water rings under the hand
+        gyre.dir = (Math.sign(e.winding) || 1) as 1 | -1;
+        gyre.strength = Math.min(1, gyre.strength + 0.5);
+        const r = lines.getBoundingClientRect();
+        const gx = e.cx - r.left;
+        const gy = e.cy - r.top;
+        for (let i = 0; i < 5; i++) {
+          const a = (i / 5) * Math.PI * 2;
+          addRipple(gx + Math.cos(a) * 30, gy + Math.sin(a) * 12, 8);
+        }
+        try { getFieldAudio().chime(); } catch { /* noop */ }
+        try { haptics.ripple(0.4); } catch { /* noop */ }
+        useField.getState().recordTape("ripple", 0.55, "sea/gyre");
+      },
+    }, { wheelZoom: false, manageStyle: false, noCapture: true });
+
     // ── render loop ──────────────────────────────────────────────
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const motion = reduce ? 0 : 1;
     const t0 = performance.now();
     let raf = 0;
+    let lastDrawAt = t0;
 
     const rippleDisp = (x: number, y: number, now: number): number => {
       let d = 0;
@@ -503,6 +555,18 @@ export default function Sea({
       // RAF clock until then.
       const audioT = getFieldAudio().getAudioTime();
       const t = audioT != null ? audioT : (now - t0) / 1000;
+      const dtMs = Math.min(60, now - lastDrawAt);
+      lastDrawAt = now;
+
+      // wind (three-finger drag) eases in, then dies back toward calm;
+      // the gyre a circling finger stirred slowly unwinds
+      windX += (windXTarget - windX) * Math.min(1, (dtMs / 1000) * 2.4);
+      windXTarget *= Math.exp(-(dtMs / 1000) * 0.55);
+      gyre.strength *= Math.exp(-(dtMs / 1000) * 0.22);
+      if (!reduce) {
+        windPhase += windX * (dtMs / 1000) * 1.5;
+        gyre.phase += gyre.dir * gyre.strength * (dtMs / 1000) * 0.6;
+      }
 
       // audio-synced LFOs (visual amplitude + shader swell pump)
       const swellLfo = Math.sin(t * Math.PI * 2 * 0.14);
@@ -552,6 +616,10 @@ export default function Sea({
       // calm. It lifts the swell so a storm visibly piles the water higher.
       const turb = reduce ? 0 : relaxTurbulence(now);
       if (turb > 0) swellMod *= 1 + turb * 0.85;
+      // the gyre breathes the swell as it circulates
+      if (!reduce && gyre.strength > 0.01) {
+        swellMod *= 1 + gyre.strength * 0.16 * Math.sin(t * 0.9 * gyre.dir);
+      }
       // lean the body of water toward the phone's low edge (kept small).
       tiltSmoothed.x += (tiltTarget.x - tiltSmoothed.x) * 0.06;
       tiltSmoothed.y += (tiltTarget.y - tiltSmoothed.y) * 0.06;
@@ -562,7 +630,8 @@ export default function Sea({
         if (uTimeLoc) gl.uniform1f(uTimeLoc, t);
         if (uResLoc) gl.uniform2f(uResLoc, water.width, water.height);
         if (uSwellLoc) gl.uniform1f(uSwellLoc, swellLfo + turb * 0.6);
-        if (uTiltLoc) gl.uniform2f(uTiltLoc, tiltSmoothed.x * 0.03, tiltSmoothed.y * 0.03);
+        // the wind leans the whole body of water the way it was pushed
+        if (uTiltLoc) gl.uniform2f(uTiltLoc, tiltSmoothed.x * 0.03 + windX * 0.02, tiltSmoothed.y * 0.03);
         if (uConcernTintLoc) {
           gl.uniform3f(uConcernTintLoc, sm.tint[0], sm.tint[1], sm.tint[2]);
         }
@@ -633,12 +702,17 @@ export default function Sea({
       for (const sw of swells) {
         const y0 = h * sw.yFrac;
         const ampHere = sw.amp * swellMod;
+        // wind drives the wave train downwind; the gyre swirls it — mid
+        // swells lead, edges lag — so the surface slowly circulates
+        const drift =
+          (windPhase * (0.8 + sw.compound * 1.6) +
+            gyre.phase * Math.sin(sw.yFrac * Math.PI) * 2.2) * motion;
 
         lctx.strokeStyle = sw.line;
         lctx.lineWidth = 1.4;
         lctx.beginPath();
         for (let x = 0; x <= w; x += 4) {
-          const phase = x * sw.freq + t * sw.speed * motion;
+          const phase = x * sw.freq + t * sw.speed * motion + drift;
           const base =
             Math.sin(phase) +
             sw.compound * Math.sin(phase * 2.4 + t * sw.speed * 0.6 * motion) +
@@ -649,17 +723,17 @@ export default function Sea({
         }
         lctx.stroke();
 
-        // foam dabs at the crests
+        // foam dabs at the crests — drifting downwind with the train
         lctx.fillStyle = sw.foam;
         for (let x = 0; x <= w; x += 5) {
-          const phase = x * sw.freq + t * sw.speed * motion;
+          const phase = x * sw.freq + t * sw.speed * motion + drift;
           const v =
             Math.sin(phase) +
             sw.compound * Math.sin(phase * 2.4 + t * sw.speed * 0.6 * motion);
           if (v > 1.05) {
             const yy = y0 + v * ampHere + rippleDisp(x, y0, now);
             const len = 1.5 + (v - 1.05) * 5;
-            lctx.fillRect(x, yy - 1, len, 1);
+            lctx.fillRect(x + windX * 3, yy - 1, len, 1);
           }
         }
       }
@@ -668,8 +742,11 @@ export default function Sea({
       const front = swells[swells.length - 1];
       lctx.fillStyle = "rgba(210, 240, 250, 0.7)";
       const y0f = h * front.yFrac;
+      const driftF =
+        (windPhase * (0.8 + front.compound * 1.6) +
+          gyre.phase * Math.sin(front.yFrac * Math.PI) * 2.2) * motion;
       for (let x = 0; x <= w; x += 9) {
-        const phase = x * front.freq + t * front.speed * motion;
+        const phase = x * front.freq + t * front.speed * motion + driftF;
         const v =
           Math.sin(phase) +
           front.compound * Math.sin(phase * 2.4 + t * front.speed * 0.6 * motion);
@@ -686,6 +763,7 @@ export default function Sea({
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
+      detachGestures();
       lines.removeEventListener("pointerdown", onDown);
       lines.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);

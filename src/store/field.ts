@@ -42,6 +42,8 @@ interface FieldState {
   setRegion: (id: string | null) => void;
   setCarried: (id: string | null) => void;
   toggleArchFilter: (kind: "medium" | "concern" | "object" | "phase", v: string) => void;
+  // solo one filter chip: every other filter falls quiet (the long-press verb)
+  soloArchFilter: (kind: "medium" | "concern" | "object" | "phase", v: string) => void;
   setArchQuery: (q: string) => void;
   setArchSort: (s: FieldState["archSort"]) => void;
   pulseRegions: (ids: string[]) => void;
@@ -201,6 +203,22 @@ export const useField = create<FieldState>((set, get) => ({
     if (next.has(v)) next.delete(v);
     else next.add(v);
     set({ [key]: next } as Partial<FieldState>);
+  },
+
+  soloArchFilter: (kind, v) => {
+    const key = ({
+      medium: "archMedium" as const,
+      concern: "archConcern" as const,
+      object: "archObject" as const,
+      phase: "archPhase" as const,
+    })[kind];
+    set({
+      archMedium: new Set(),
+      archConcern: new Set(),
+      archObject: new Set(),
+      archPhase: new Set(),
+      [key]: new Set([v]),
+    } as Partial<FieldState>);
   },
 
   setArchQuery: (archQuery) => set({ archQuery }),

@@ -4,6 +4,10 @@ import { useEffect, useRef, useState } from "react";
 import { useField } from "@/store/field";
 import { CONCERNS, PRESET_KEYS, PRESETS } from "@/data/content";
 import { getFieldAudio } from "@/lib/audio";
+import * as haptics from "@/lib/haptics";
+import { attachGestures } from "@/lib/gesture";
+import { THRESHOLDS } from "@/lib/gesture/core";
+import { buildReading } from "@/lib/reading";
 import type { ConcernKey } from "@/lib/types";
 
 /**
@@ -78,6 +82,22 @@ export default function ConcernField() {
   const [dragging, setDragging] = useState<ConcernKey | null>(null);
   const [hovering, setHovering] = useState<ConcernKey | null>(null);
   const [hoverPreset, setHoverPreset] = useState<string | null>(null);
+
+  // ── the grammar, alongside the founding drag ──────────────────────
+  // The vertex drag below stays exactly as it has always been — it is the
+  // site's founding interaction. The engine adds only what the grammar
+  // owes this surface: tap intensity into the vertex-pull glow, a tapped
+  // tempo entraining the dominant concern's voice, and the ceremony hold
+  // at the polygon's center — keeping the reading, the oldest solemn act.
+  const draggingRef = useRef<ConcernKey | null>(null);
+  draggingRef.current = dragging;
+  // transient tap glow at a vertex: radius/opacity ride the 0..1 from core
+  const [tapGlow, setTapGlow] = useState<{ k: ConcernKey; intensity: number; key: number } | null>(null);
+  // rhythm entrainment: the dominant concern's vertex pulses on each beat
+  const [beat, setBeat] = useState<{ k: ConcernKey; key: number } | null>(null);
+  // ceremony hold at the center: 0..1 progress toward the keep
+  const [ceremony, setCeremony] = useState(0);
+  const [keptFlash, setKeptFlash] = useState(0);
 
   // map a client-space pointer to a value on a given axis
   const valueFromPointer = (k: ConcernKey, clientX: number, clientY: number) => {
@@ -165,6 +185,154 @@ export default function ConcernField() {
       useField.getState().setHeldConcern(null);
     };
   }, [dragging, setConcern, concerns, recordTape]);
+
+  // current concerns readable from inside the long-lived engine closure
+  const concernsRef = useRef(concerns);
+  concernsRef.current = concerns;
+
+  // ── engine mount (docs/gesture-grammar.md) ─────────────────────────
+  // Attached to the compass svg only — the page around it keeps its
+  // scroll (manageStyle: false leaves touch-action: pan-y in place, and
+  // noCapture leaves the vertex handles' own capture untouched).
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    const toSvg = (clientX: number, clientY: number) => {
+      const pt = svg.createSVGPoint();
+      pt.x = clientX;
+      pt.y = clientY;
+      const ctm = svg.getScreenCTM();
+      if (!ctm) return null;
+      return pt.matrixTransform(ctm.inverse());
+    };
+    const nearestVertex = (x: number, y: number): { k: ConcernKey; d: number } | null => {
+      let best: { k: ConcernKey; d: number } | null = null;
+      RADIAL_ORDER.forEach((k, i) => {
+        const p = pointAt(i, concernsRef.current[k]);
+        const d = Math.hypot(p.x - x, p.y - y);
+        if (!best || d < best.d) best = { k, d };
+      });
+      return best;
+    };
+
+    // rhythm entrainment bookkeeping
+    let beatTimer: ReturnType<typeof setInterval> | null = null;
+    let beatN = 0;
+    const pulseTimers = new Set<ReturnType<typeof setTimeout>>();
+    const pulseVoice = (k: ConcernKey, ms = 150) => {
+      // a brief sounding of that concern's own voice — never while the
+      // founding drag already holds a tone
+      if (draggingRef.current) return;
+      try {
+        getFieldAudio().holdConcernTone(k, concernsRef.current[k] ?? 50);
+        const t = setTimeout(() => {
+          pulseTimers.delete(t);
+          try { getFieldAudio().releaseConcernTone(k); } catch { /* noop */ }
+        }, ms);
+        pulseTimers.add(t);
+      } catch { /* noop */ }
+    };
+
+    // ceremony hold bookkeeping: only a hold born near the polygon's
+    // center gathers toward the keep
+    const center = { active: false, fired: false };
+
+    const detach = attachGestures(svg as unknown as HTMLElement, {
+      tap: (e) => {
+        if (e.fingers !== 1) return; // the compass absorbs frame/law taps
+        const local = toSvg(e.x, e.y);
+        if (!local) return;
+        const hit = nearestVertex(local.x, local.y);
+        if (!hit || hit.d > 72) return; // background taps are absorbed
+        // tap intensity is the pull: the vertex glow blooms by the same
+        // 0..1 the whole grammar reads
+        setTapGlow({ k: hit.k, intensity: e.intensity, key: Date.now() });
+        pulseVoice(hit.k, 160);
+        try { haptics.ripple(0.2 + e.intensity * 0.4); } catch { /* noop */ }
+        recordTape("ripple", 0.3 + e.intensity * 0.4, hit.k);
+      },
+      rhythm: (e) => {
+        // a steady tapped tempo: the dominant concern's voice falls into
+        // the hand's pulse for ~8s
+        if (e.stability <= 0.7) return;
+        const entries = Object.entries(concernsRef.current) as Array<[ConcernKey, number]>;
+        let dominant: ConcernKey = "prayer";
+        let top = -Infinity;
+        for (const [k, v] of entries) if (v > top) { top = v; dominant = k; }
+        const interval = Math.max(280, Math.min(1500, 60000 / e.bpm));
+        const until = performance.now() + 8000;
+        if (beatTimer) clearInterval(beatTimer);
+        beatTimer = setInterval(() => {
+          if (performance.now() > until) {
+            if (beatTimer) clearInterval(beatTimer);
+            beatTimer = null;
+            return;
+          }
+          beatN += 1;
+          if (!reduce) setBeat({ k: dominant, key: beatN });
+          pulseVoice(dominant, Math.min(200, interval * 0.45));
+          try { haptics.tap(); } catch { /* noop */ }
+        }, interval);
+        recordTape("sigil", 0.5, `compass/entrain-${dominant}`);
+      },
+      hold: (e) => {
+        if (e.fingers !== 1 || draggingRef.current) return;
+        if (e.phase === "release") {
+          center.active = false;
+          setCeremony(0);
+          return;
+        }
+        if (e.phase === "enter") {
+          const local = toSvg(e.x, e.y);
+          center.active = Boolean(
+            local && Math.hypot(local.x - CX, local.y - CY) < R_MAX * 0.38,
+          );
+          center.fired = false;
+          if (!center.active) return;
+        }
+        if (!center.active) return;
+        setCeremony(Math.min(1, e.elapsed / THRESHOLDS.ceremonyMs));
+        // the ceremony: the reading is kept — the same act as the keep
+        // button, spoken by the oldest surface's own hand
+        if (e.tier >= 3 && !center.fired) {
+          center.fired = true;
+          const st = useField.getState();
+          const reading = buildReading({
+            concerns: st.concerns,
+            region: st.region,
+            carriedObject: st.carriedObject,
+          });
+          const already = st.keptReadings.some((k) => k.hash === reading.hash);
+          if (!already) {
+            st.keepReading({
+              hash: reading.hash,
+              headline: reading.headline,
+              topConcern: reading.top[0],
+              region: reading.region.id,
+              carriedObject: reading.carried?.id ?? null,
+              keptAt: Date.now(),
+            });
+            try { getFieldAudio().thud(); } catch { /* noop */ }
+          } else {
+            // already kept — the compass answers gently, nothing refuses
+            try { getFieldAudio().chime(); } catch { /* noop */ }
+          }
+          try { haptics.bloom(); } catch { /* noop */ }
+          setKeptFlash(Date.now());
+          setCeremony(0);
+        }
+      },
+    }, { wheelZoom: false, manageStyle: false, noCapture: true });
+
+    return () => {
+      detach();
+      if (beatTimer) clearInterval(beatTimer);
+      pulseTimers.forEach((t) => clearTimeout(t));
+      try { getFieldAudio().releaseAllConcernTones(); } catch { /* noop */ }
+    };
+  }, [recordTape]);
 
   // build the polygon points string
   const polygonPoints = RADIAL_ORDER.map((k, i) => {
@@ -379,6 +547,66 @@ export default function ConcernField() {
                   </g>
                 );
               })}
+
+              {/* the grammar's transient answers — never interactive */}
+              <g pointerEvents="none">
+                {/* tap glow: the vertex-pull halo, bloomed by tap intensity */}
+                {tapGlow && (() => {
+                  const p = pointAt(RADIAL_ORDER.indexOf(tapGlow.k), concerns[tapGlow.k]);
+                  return (
+                    <circle
+                      key={`glow-${tapGlow.key}`}
+                      className="cf-tap-glow"
+                      cx={p.x}
+                      cy={p.y}
+                      r={10 + tapGlow.intensity * 18}
+                      fill={`rgba(200,115,42,${0.10 + tapGlow.intensity * 0.24})`}
+                    />
+                  );
+                })()}
+                {/* rhythm beat: the dominant concern's vertex answers the tempo */}
+                {beat && (() => {
+                  const p = pointAt(RADIAL_ORDER.indexOf(beat.k), concerns[beat.k]);
+                  return (
+                    <circle
+                      key={`beat-${beat.key}`}
+                      className="cf-beat"
+                      cx={p.x}
+                      cy={p.y}
+                      r={11}
+                      fill="none"
+                      stroke="var(--candle)"
+                      strokeWidth={1.2}
+                    />
+                  );
+                })()}
+                {/* ceremony: a ring gathers at the center while the hold deepens */}
+                {ceremony > 0 && (
+                  <circle
+                    cx={CX}
+                    cy={CY}
+                    r={14 + ceremony * R_MAX * 0.34}
+                    fill={`rgba(200,115,42,${ceremony * 0.05})`}
+                    stroke="var(--candle)"
+                    strokeWidth={1}
+                    strokeOpacity={0.25 + ceremony * 0.55}
+                    strokeDasharray="4 6"
+                  />
+                )}
+                {/* the keep lands: one ring opens over the whole polygon */}
+                {keptFlash > 0 && (
+                  <circle
+                    key={`kept-${keptFlash}`}
+                    className="cf-kept-bloom"
+                    cx={CX}
+                    cy={CY}
+                    r={24}
+                    fill="none"
+                    stroke="var(--candle)"
+                    strokeWidth={1.4}
+                  />
+                )}
+              </g>
             </svg>
 
             {/* glosses — small italic line for whoever the compass is currently lit on */}
@@ -455,6 +683,25 @@ export default function ConcernField() {
         </div>
       </div>
       <style>{`
+        .cf-tap-glow { animation: cf-glow-fade 700ms ease-out forwards; }
+        .cf-beat { animation: cf-beat-out 460ms ease-out forwards; transform-origin: center; transform-box: fill-box; }
+        .cf-kept-bloom { animation: cf-kept-open 900ms ease-out forwards; }
+        @keyframes cf-glow-fade {
+          from { opacity: 1; }
+          to { opacity: 0; }
+        }
+        @keyframes cf-beat-out {
+          from { opacity: 0.9; transform: scale(1); }
+          to { opacity: 0; transform: scale(2.4); }
+        }
+        @keyframes cf-kept-open {
+          from { opacity: 0.85; r: 24; }
+          to { opacity: 0; r: ${R_MAX}; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .cf-tap-glow { animation-duration: 1ms; }
+          .cf-beat, .cf-kept-bloom { animation: none; opacity: 0; }
+        }
         @media (max-width: 720px) {
           .concern-field__stage {
             margin-top: 30px !important;
