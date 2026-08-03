@@ -1842,6 +1842,7 @@ export default function Stars() {
     let tier: QualityTier = "high";
     let simT = 0;      // dilated clock — three fingers slow this, not the wall
     let lastFrame = 0;
+    let frameDilation = 1; // read by the per-frame integrators (infall, etc.)
 
     let w = window.innerWidth;
     let h = window.innerHeight;
@@ -2591,7 +2592,8 @@ export default function Stars() {
       const horizonN = horizon / (base * zoom);
       const iscoN = diskInner / (base * zoom);
       const lensN = lensR / (base * zoom);
-      const step = motion ? 1 : 0.32;
+      // infall runs on the sky's clock, so it slows with it
+      const step = (motion ? 1 : 0.32) * frameDilation;
       // feed the hole — always something falling in. Motes frozen at the
       // horizon hold their light but not a place in the live pool.
       let liveMotes = 0;
@@ -3227,6 +3229,7 @@ export default function Stars() {
       timeScaleRef.current += (timeScaleTargetRef.current - timeScaleRef.current) * ease;
       nightRef.current += (nightTargetRef.current - nightRef.current) * Math.min(1, wallDt * 1.6);
       const dilation = timeScaleRef.current * (1 - 0.55 * nightRef.current);
+      frameDilation = dilation;
       simT += wallDt * dilation;
       const t = simT; // the sky's own seconds
       const night = nightRef.current;
@@ -4674,7 +4677,11 @@ export default function Stars() {
         else spawnGrb(p.x, p.y);
       }
       const bias = LAYER_PROFILES[activeLayerRef.current].weatherBias;
-      timer = window.setTimeout(fire, (9000 + Math.random() * 8000) / bias);
+      // the cosmic weather runs on the sky's dilated clock too: three
+      // fingers held down stretch the wait between events, and a
+      // face-down phone stretches it further still
+      const dilation = Math.max(0.08, timeScaleRef.current * (1 - 0.55 * nightRef.current));
+      timer = window.setTimeout(fire, (9000 + Math.random() * 8000) / bias / dilation);
     };
     timer = window.setTimeout(fire, 5000 + Math.random() * 5000);
     return () => window.clearTimeout(timer);
@@ -4713,9 +4720,19 @@ export default function Stars() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    let lastTick = performance.now();
     const tick = () => {
-      if (document.hidden) return;
+      if (pageHiddenRef.current) return;
       const nowMs = performance.now();
+      // An inspiral is an orbit, and orbits obey the sky's dilated clock:
+      // while three fingers rest on the field the fall is held open by
+      // pushing the merger's own start time forward.
+      const dilation = Math.max(0.05, timeScaleRef.current * (1 - 0.55 * nightRef.current));
+      const wallStep = nowMs - lastTick;
+      lastTick = nowMs;
+      if (mergerRef.current && dilation < 0.999) {
+        mergerRef.current.tStartMs += wallStep * (1 - dilation);
+      }
       let holes = userBlackHolesRef.current;
 
       // soft N-body nudge among free holes (and active accretion well)

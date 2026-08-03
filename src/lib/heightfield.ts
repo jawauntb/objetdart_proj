@@ -861,8 +861,10 @@ export function materialFromGround(
   const notCrest = smoothstep(0.06, 0.18, g.crease);
   let glacier = clamp01(valleyW * gentle * iceAlt * notCrest);
 
-  const flat = 1 / (1 + slope * SNOW_SLOPE_K);
-  const held = clamp01((g.h - snowKm) / SNOW_HOLD_KM) * flat;
+  // `flatness`, not `flat`: GLSL ES 1.00 reserves that word, and the two
+  // copies of this classifier are kept legible line for line.
+  const flatness = 1 / (1 + slope * SNOW_SLOPE_K);
+  const held = clamp01((g.h - snowKm) / SNOW_HOLD_KM) * flatness;
   const scour = 1 - clamp01((g.h - (snowKm + SNOW_SCOUR_ABOVE_KM)) / SNOW_SCOUR_WIDTH_KM);
   let snow = clamp01(held * scour) * (1 - glacier);
   let rock = clamp01(1 - snow - glacier);
@@ -1318,8 +1320,8 @@ vec4 hf_material(float h, vec2 grad, float crease, float ridge, float snowKm, ve
   float notCrest = smoothstep(0.06, 0.18, crease);
   float glacier = clamp(valleyW * gentle * iceAlt * notCrest, 0.0, 1.0);
 
-  float flat = 1.0 / (1.0 + slope * SNOW_SLOPE_K);
-  float held = clamp((h - snowKm) / SNOW_HOLD_KM, 0.0, 1.0) * flat;
+  float flatness = 1.0 / (1.0 + slope * SNOW_SLOPE_K);
+  float held = clamp((h - snowKm) / SNOW_HOLD_KM, 0.0, 1.0) * flatness;
   float scour = 1.0 - clamp((h - (snowKm + SNOW_SCOUR_ABOVE_KM)) / SNOW_SCOUR_WIDTH_KM, 0.0, 1.0);
   float snow = clamp(held * scour, 0.0, 1.0) * (1.0 - glacier);
   float rock = clamp(1.0 - snow - glacier, 0.0, 1.0);

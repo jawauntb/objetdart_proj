@@ -162,6 +162,7 @@ function drawRibbon(
   alpha: number,
   lineWidth: number,
   bend?: (u: number) => number,
+  steps = 260,
 ) {
   ctx.save();
   ctx.lineCap = "round";
@@ -171,8 +172,8 @@ function drawRibbon(
   ctx.beginPath();
   const left = width * 0.07;
   const usable = width * 0.86;
-  for (let i = 0; i <= 260; i += 1) {
-    const u = i / 260;
+  for (let i = 0; i <= steps; i += 1) {
+    const u = i / steps;
     const x = left + usable * u;
     let y = yCenter - waveSample(u, phase, amp, freq, damping, harmonic, mode) * height * 0.0026;
     if (bend) y += bend(u);
@@ -286,6 +287,14 @@ export default function SineWaveExplorer() {
   const modeRef = useRef<WaveMode>("source");
   const lastControlAt = useRef(0);
   const recordTape = useField((s) => s.recordTape);
+  // twist rotates the lens through three levels of description: the wave
+  // itself, the equation that draws it, and the sound it becomes.
+  const lensRef = useRef({ cur: 0, target: 0, snapped: 0 });
+  // two-finger drag pans the frame (the whole view), spring-centering
+  const panRef = useRef({ x: 0, y: 0, tx: 0, ty: 0 });
+  const nightRef = useRef({ on: false, amt: 0 });
+  const [hasKept, setHasKept] = useState(false);
+  const letGoKeptRef = useRef<() => void>(() => {});
 
   const [amp, setAmp] = useState(86);
   const [freq, setFreq] = useState(2.5);
@@ -481,13 +490,14 @@ export default function SineWaveExplorer() {
       const harmonicNow = harmonicRef.current;
       const modeNow = modeRef.current;
 
-      drawRibbon(ctx, width, height, phaseNow - Math.PI * 0.55, ampNow * 0.62, freqNow * 0.64 + 0.3, dampingNow * 0.7, harmonicNow, "interference", "#65d8c5", center - height * 0.13, 0.20, 1.4);
-      drawRibbon(ctx, width, height, -phaseNow * 0.82, ampNow * 0.50, freqNow + 0.75, dampingNow * 0.35, harmonicNow * 0.65, "standing", "#b99aff", center + height * 0.13, 0.18, 1.3);
+      const rSteps = Math.max(60, Math.round(260 * detail.samples));
+      drawRibbon(ctx, width, height, phaseNow - Math.PI * 0.55, ampNow * 0.62, freqNow * 0.64 + 0.3, dampingNow * 0.7, harmonicNow, "interference", "#65d8c5", center - height * 0.13, 0.20, 1.4, undefined, rSteps);
+      drawRibbon(ctx, width, height, -phaseNow * 0.82, ampNow * 0.50, freqNow + 0.75, dampingNow * 0.35, harmonicNow * 0.65, "standing", "#b99aff", center + height * 0.13, 0.18, 1.3, undefined, rSteps);
 
       // the kept wave — sealed by ceremony, a golden ghost under the living one
       const kept = keptRef.current;
       if (kept) {
-        drawRibbon(ctx, width, height, kept.phase, kept.amp, kept.freq, kept.damping, kept.harmonic, kept.mode, "#f3d77a", center, 0.24, 2);
+        drawRibbon(ctx, width, height, kept.phase, kept.amp, kept.freq, kept.damping, kept.harmonic, kept.mode, "#f3d77a", center, 0.24, 2, undefined, rSteps);
       }
 
       // every held finger bends the wave through its point — the voices are
@@ -518,7 +528,7 @@ export default function SineWaveExplorer() {
           return off;
         };
       }
-      drawRibbon(ctx, width, height, phaseNow, ampNow, freqNow, dampingNow, harmonicNow, modeNow, cfg.tone, center, 0.94, 4.2, bend);
+      drawRibbon(ctx, width, height, phaseNow, ampNow, freqNow, dampingNow, harmonicNow, modeNow, cfg.tone, center, 0.94, 4.2, bend, rSteps);
 
       // halos under the held voices — sight for what the hand is sounding
       for (const v of voices) {
@@ -610,6 +620,8 @@ export default function SineWaveExplorer() {
       cancelAnimationFrame(raf);
       observer.disconnect();
       window.removeEventListener("resize", resize);
+      offVisibility();
+      offGalleryPause();
     };
   }, []);
 

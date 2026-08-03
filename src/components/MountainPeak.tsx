@@ -287,7 +287,12 @@ void main() {
     vec3 ps = ro + rd * tS;
     float swell = hf_smoothFbm(vec2(ps.x * 0.21 + uPhase * 0.05, ps.z * 0.21 - uPhase * 0.03), 3).x;
     vec3 sea = uFogCol * (0.88 + 0.22 * swell);
-    float glint = max(dot(normalize(vec3(uSun.x, 0.0, uSun.z)), normalize(vec3(rd.x, 0.0, rd.z))), 0.0);
+    // guarded rather than normalized: a ray with no horizontal component
+    // would hand normalize a zero vector, and one NaN is a black region
+    float glint = max(
+      dot(uSun.xz, rd.xz) / max(1e-4, length(uSun.xz) * length(rd.xz)),
+      0.0
+    );
     sea += uSunCol * uSunI * pow(glint, 20.0) * 0.09 * (0.4 + 0.6 * swell);
     float seaT = hf_fogTransmittance(ro.y, rd.y, tS, uFogAlt);
     sea = mix(mix(uFogCol, uHorizonCol, 0.45), sea, max(seaT, 0.25));

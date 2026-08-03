@@ -82,6 +82,12 @@ function splitTokens(text: string) {
   return text.split(/(\s+)/).filter(Boolean);
 }
 
+function compactPhrase(text: string, max = 30): string {
+  const clean = text.trim().replace(/\s+/g, " ");
+  if (clean.length <= max) return clean;
+  return `${clean.slice(0, max - 1).trimEnd()}…`;
+}
+
 function layoutText(prepared: PreparedTextWithSegments | null, width: number, lineHeight: number) {
   if (!prepared || width <= 0) return null;
   const lines: LaidLine[] = [];
@@ -136,6 +142,10 @@ export default function PretextWave() {
   const densityRef = useRef(density);
   useEffect(() => { ampRef.current = amp; }, [amp]);
   useEffect(() => { densityRef.current = density; }, [density]);
+  const playingRef = useRef(playing);
+  useEffect(() => { playingRef.current = playing; }, [playing]);
+  const modeRef = useRef(mode);
+  useEffect(() => { modeRef.current = mode; }, [mode]);
 
   const dragRef = useRef({
     active: false,
@@ -170,6 +180,7 @@ export default function PretextWave() {
   const [keptPhrases, setKeptPhrases] = useState<string[]>([]);
   const [chargePct, setChargePct] = useState(0);
   const [chargeMode, setChargeMode] = useState<"create" | "delete" | null>(null);
+  const [chargePos, setChargePos] = useState({ x: 0, y: 0 });
   const keptPhrasesRef = useRef<string[]>([]);
   const textRef = useRef(text);
   useEffect(() => { textRef.current = text; }, [text]);
@@ -386,39 +397,211 @@ export default function PretextWave() {
     }
   };
 
-  const onStagePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
-    const drag = dragRef.current;
-    drag.active = true;
-    drag.id = event.pointerId;
-    drag.x0 = event.clientX;
-    drag.y0 = event.clientY;
-    drag.amp0 = ampRef.current;
-    drag.den0 = densityRef.current;
-    drag.moved = 0;
-    drag.lastFx = 0;
-    setPlaying(true);
-    try { haptics.tap(); } catch { /* noop */ }
-    try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* noop */ }
-  };
+  // ── the gesture surface ─────────────────────────────────────────────
+  // One finger touches the material: drag tunes amp/frequency directly
+  // (unchanged, re-expressed as a grammar drag), dwell/ceremony create and
+  // delete a kept phrase. Two fingers touch the map: pinch zooms the
+  // reading, twist rotates the lens through the motion modes, pan2 pans
+  // the field. Three fingers touch the law: drag is wind, hold is time
+  // dilation, twist is the season.
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    const sealedRef = { current: false };
 
-  const onStagePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
-    const drag = dragRef.current;
-    if (!drag.active || drag.id !== event.pointerId) return;
-    tuneFromDrag(event.clientX, event.clientY);
-  };
+    // the instant of touch, below any gesture threshold — resuming motion
+    // reads as immediate as the original raw handler (same precedent as
+    // Jewel.tsx's onContact: not a classifier, just contact feedback).
+    const onContact = () => {
+      lastTouchAtRef.current = performance.now();
+      setPlaying(true);
+      try { haptics.tap(); } catch { /* noop */ }
+    };
+    stage.addEventListener("pointerdown", onContact);
 
-  const endStageDrag = (event: React.PointerEvent<HTMLDivElement>) => {
-    const drag = dragRef.current;
-    if (drag.id !== event.pointerId) return;
-    const played = drag.moved > 8;
-    drag.active = false;
-    drag.id = -1;
-    try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* noop */ }
-    if (played) {
-      addMark(`amp ${ampRef.current}`, "water", 0.44);
-      setStatus(`amp ${ampRef.current} / freq ${densityRef.current.toFixed(2)}`);
-    }
-  };
+    const detachGestures = attachGestures(
+      stage,
+      {
+        drag: (e) => {
+          lastTouchAtRef.current = performance.now();
+          if (e.fingers === 3) {
+            if (e.phase === "end") return;
+            // wind: a gust pushes the tide forward or back.
+            setPhase((v) => (v + e.dx * 0.004 + Math.PI * 2) % (Math.PI * 2));
+            const now = performance.now();
+            if (now - dragRef.current.lastFx > 220) {
+              dragRef.current.lastFx = now;
+              addMark("wind", "water", 0.5);
+              recordTape("region", 0.4, "pretext:wind");
+            }
+            return;
+          }
+          if (e.fingers !== 1) return;
+          const drag = dragRef.current;
+          if (e.phase === "start") {
+            drag.active = true;
+            drag.x0 = e.x;
+            drag.y0 = e.y;
+            drag.amp0 = ampRef.current;
+            drag.den0 = densityRef.current;
+            drag.moved = 0;
+            drag.lastFx = 0;
+            return;
+          }
+          if (e.phase === "end") {
+            const played = drag.moved > 8;
+            drag.active = false;
+            if (played) {
+              addMark(`amp ${ampRef.current}`, "water", 0.44);
+              setStatus(`amp ${ampRef.current} / freq ${densityRef.current.toFixed(2)}`);
+            }
+            return;
+          }
+          tuneFromDrag(e.x, e.y);
+        },
+        hold: (e) => {
+          lastTouchAtRef.current = performance.now();
+          if (e.fingers === 3) {
+            // time dilation: the phase clock eases to 1/4 while held.
+            timeScaleRef.current.target = e.phase === "release" ? 1 : 0.25;
+            return;
+          }
+          if (e.fingers !== 1) return;
+          if (e.phase === "enter") sealedRef.current = false;
+          if (e.phase === "release") {
+            setChargePct(0);
+            setChargeMode(null);
+            return;
+          }
+          if (e.tier < 2) {
+            setChargePct(0);
+            setChargeMode(null);
+            return;
+          }
+          const already = keptPhrasesRef.current.includes(textRef.current.trim());
+          setChargeMode(already ? "delete" : "create");
+          setChargePct(Math.min(1, (e.elapsed - 900) / 1600));
+          const rect = stage.getBoundingClientRect();
+          setChargePos({ x: e.x - rect.left, y: e.y - rect.top });
+          if (!sealedRef.current) {
+            // dwell (tier 2) creates a new kept phrase; ceremony (tier 3)
+            // on an existing one is the solemn act that lets it go.
+            if (!already && e.tier >= 2) { sealedRef.current = true; keepCurrentPhrase(); }
+            else if (already && e.tier >= 3) { sealedRef.current = true; keepCurrentPhrase(); }
+          }
+        },
+        pinch: (e) => {
+          lastTouchAtRef.current = performance.now();
+          if (e.phase === "move") {
+            zoomRef.current.target = Math.max(0.72, Math.min(1.5, zoomRef.current.target * e.scale));
+          }
+        },
+        twist: (e) => {
+          lastTouchAtRef.current = performance.now();
+          if (e.fingers === 3) {
+            // season — the room's slow cycle, advanced/rewound.
+            if (e.phase === "start") seasonTwistAccRef.current = 0;
+            if (e.phase === "move") seasonTwistAccRef.current += e.angle;
+            if (e.phase === "end" && Math.abs(seasonTwistAccRef.current) > Math.PI / 2) {
+              seasonRef.current = (seasonRef.current + (seasonTwistAccRef.current > 0 ? 1 : -1) + 8) % 8;
+              haptics.lens();
+              addMark("season", "water", 0.5);
+            }
+            return;
+          }
+          // two fingers rotate the lens: cycle the motion mode — the same
+          // sentence read at a different level of description.
+          if (e.phase === "start") lensTwistAccRef.current = 0;
+          if (e.phase === "move") lensTwistAccRef.current += e.angle;
+          if (e.phase === "end" && Math.abs(lensTwistAccRef.current) > Math.PI / 2) {
+            const dir = lensTwistAccRef.current > 0 ? 1 : -1;
+            const idx = MODES.findIndex((m) => m.key === modeRef.current);
+            impulse(MODES[(idx + dir + MODES.length) % MODES.length].key);
+            haptics.lens();
+          }
+        },
+        pan2: (e) => {
+          lastTouchAtRef.current = performance.now();
+          if (e.phase !== "move") return;
+          const maxPan = 60;
+          panRef.current.targetX = Math.max(-maxPan, Math.min(maxPan, panRef.current.targetX + e.dx * 0.5));
+          panRef.current.targetY = Math.max(-maxPan, Math.min(maxPan, panRef.current.targetY + e.dy * 0.5));
+        },
+        tap: (e) => {
+          lastTouchAtRef.current = performance.now();
+          if (e.fingers === 2) {
+            // step back: nudge the zoom home, else pause, else reset to rest.
+            if (Math.abs(zoomRef.current.target - 1) > 0.02) {
+              zoomRef.current.target = 1;
+            } else if (playingRef.current) {
+              setPlaying(false);
+            } else {
+              setAmp(18); ampRef.current = 18;
+              setDensity(1.2); densityRef.current = 1.2;
+            }
+            haptics.tap();
+            return;
+          }
+          if (e.fingers === 3) {
+            // tutti — one synchronized pulse of everything alive.
+            tuttiRef.current = 1;
+            try { getFieldAudio().chime(); } catch { /* noop */ }
+            haptics.ripple(0.6);
+            addMark("tutti", "ember", 0.72);
+            recordTape("sigil", 0.5, "pretext:tutti");
+          }
+        },
+      },
+      { wheelZoom: false },
+    );
+
+    const detachVessel = onVessel({
+      tilt: ({ gamma }) => {
+        panRef.current.targetX = Math.max(-40, Math.min(40, gamma * 0.7));
+      },
+      shake: ({ intensity }) => {
+        tuttiRef.current = Math.max(tuttiRef.current, 0.4 + intensity * 0.5);
+        haptics.chop();
+      },
+      knock: () => {
+        try { getFieldAudio().chime(); } catch { /* noop */ }
+        haptics.tap();
+        tuttiRef.current = Math.max(tuttiRef.current, 0.55);
+      },
+      flip: ({ faceDown }) => { nightRef.current = faceDown; },
+    });
+
+    // continuous eases for the frame-layer verbs — written straight to
+    // style so they never trigger a React re-render.
+    let raf = 0;
+    let sleeping = document.hidden;
+    const offVisibility = onVisibility((hidden) => { sleeping = hidden; });
+    const ease = () => {
+      raf = requestAnimationFrame(ease);
+      if (sleeping) return;
+      const z = zoomRef.current;
+      z.cur += (z.target - z.cur) * 0.1;
+      const p = panRef.current;
+      p.curX += (p.targetX - p.curX) * 0.08;
+      p.curY += (p.targetY - p.curY) * 0.08;
+      stage.style.setProperty("--pretext-zoom", z.cur.toFixed(4));
+      stage.style.setProperty("--pretext-pan-x", `${p.curX.toFixed(2)}px`);
+      stage.style.setProperty("--pretext-pan-y", `${p.curY.toFixed(2)}px`);
+      stage.style.setProperty("--pretext-season", `${((seasonRef.current / 8) * 360).toFixed(1)}deg`);
+      stage.style.setProperty("--pretext-tutti", (1 + tuttiRef.current * 0.5).toFixed(3));
+      stage.style.setProperty("--pretext-night", nightRef.current ? "0.4" : "0");
+    };
+    raf = requestAnimationFrame(ease);
+
+    return () => {
+      stage.removeEventListener("pointerdown", onContact);
+      detachGestures();
+      detachVessel();
+      cancelAnimationFrame(raf);
+      offVisibility();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="pretext-page" data-touch-surface="true" data-pretext-ignore="true">
@@ -429,13 +612,15 @@ export default function PretextWave() {
           "--pretext-amp": `${amp}px`,
           "--pretext-phase": `${phase}`,
           "--pretext-density": `${density}`,
+          "--pretext-zoom": 1,
+          "--pretext-pan-x": "0px",
+          "--pretext-pan-y": "0px",
+          "--pretext-season": "0deg",
+          "--pretext-tutti": 1,
+          "--pretext-night": 0,
         } as React.CSSProperties}
         aria-label="Playable text field. Drag to bend the words: up and down for amplitude, left and right for frequency."
         aria-describedby="pretext-gesture-hint"
-        onPointerDown={onStagePointerDown}
-        onPointerMove={onStagePointerMove}
-        onPointerUp={endStageDrag}
-        onPointerCancel={endStageDrag}
       >
         <span ref={probeRef} className="pretext-probe">measure me</span>
         <div className="pretext-field" style={{ height: layout ? layout.height : undefined }} aria-live="polite">
@@ -468,11 +653,48 @@ export default function PretextWave() {
             ))
           )}
         </div>
+        <div className="pretext-night-veil" aria-hidden="true" />
+        {chargeMode && chargePct > 0 && (
+          <div
+            className={`pretext-charge pretext-charge--${chargeMode}`}
+            aria-hidden="true"
+            style={{
+              left: chargePos.x,
+              top: chargePos.y,
+              width: 20 + chargePct * 52,
+              height: 20 + chargePct * 52,
+              opacity: 0.25 + chargePct * 0.55,
+            }}
+          />
+        )}
       </div>
 
       <p id="pretext-gesture-hint" className="pretext-gesture-hint">
         drag <span aria-hidden="true">↔</span> frequency · <span aria-hidden="true">↕</span> amplitude
       </p>
+
+      {keptPhrases.length > 0 && (
+        <div className="pretext-kept" aria-label="kept phrases">
+          {keptPhrases.slice(0, 6).map((phrase) => (
+            <button
+              key={phrase}
+              type="button"
+              title={phrase}
+              onClick={() => {
+                stopSpeech(null);
+                setText(phrase);
+                setSpeechStatus(null);
+                haptics.ripple(0.4);
+                addMark("recalled", "water", 0.5);
+              }}
+            >
+              {compactPhrase(phrase)}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <LetGo label="let the kept phrases go" onLetGo={letGoKeptPhrases} visible={keptPhrases.length > 0} />
 
       <div className="pretext-title" aria-hidden="true">
         <span>pretext / playable sentence</span>
@@ -631,6 +853,7 @@ export default function PretextWave() {
           touch-action: none;
           cursor: grab;
           z-index: 0;
+          filter: hue-rotate(var(--pretext-season, 0deg)) brightness(var(--pretext-tutti, 1));
         }
         .pretext-stage:active {
           cursor: grabbing;
@@ -644,12 +867,36 @@ export default function PretextWave() {
             radial-gradient(circle at 78% 24%, rgba(44,74,92,0.14), transparent 34%);
           pointer-events: none;
         }
+        .pretext-night-veil {
+          position: absolute;
+          inset: 0;
+          background: #05070a;
+          opacity: var(--pretext-night, 0);
+          transition: opacity 900ms ease;
+          pointer-events: none;
+          z-index: 1;
+        }
+        .pretext-charge {
+          position: absolute;
+          margin-left: -26px;
+          margin-top: -26px;
+          border-radius: 50%;
+          pointer-events: none;
+          z-index: 2;
+          border: 1.5px solid rgba(255, 210, 160, 0.85);
+        }
+        .pretext-charge--delete {
+          border-color: rgba(255, 130, 110, 0.85);
+        }
         .pretext-field {
           position: absolute;
           left: 0;
           right: 0;
           top: 50%;
-          transform: translateY(-50%);
+          transform:
+            translateY(-50%)
+            translate(var(--pretext-pan-x, 0px), var(--pretext-pan-y, 0px))
+            scale(var(--pretext-zoom, 1));
           pointer-events: none;
         }
         .pretext-probe {
@@ -885,6 +1132,39 @@ export default function PretextWave() {
           margin: 0;
           color: rgba(247,240,223,0.6);
           font-size: 11px;
+        }
+
+        .pretext-kept {
+          position: fixed;
+          z-index: 3;
+          left: var(--pad-x);
+          bottom: calc(200px + env(safe-area-inset-bottom, 0px));
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          max-width: min(420px, calc(100vw - 2 * var(--pad-x)));
+          overflow-x: auto;
+          scrollbar-width: none;
+          pointer-events: auto;
+        }
+        .pretext-kept::-webkit-scrollbar { display: none; }
+        .pretext-kept button {
+          flex: 0 0 auto;
+          max-width: 160px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          border: 1px solid rgba(247,240,223,0.2);
+          border-radius: 999px;
+          background: rgba(7,15,23,0.5);
+          color: rgba(247,240,223,0.78);
+          padding: 5px 11px;
+          font-family: var(--font-serif);
+          font-style: italic;
+          font-size: 11px;
+          cursor: pointer;
+          backdrop-filter: blur(10px);
+          -webkit-backdrop-filter: blur(10px);
         }
 
         .pretext-console {

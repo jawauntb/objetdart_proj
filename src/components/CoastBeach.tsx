@@ -431,6 +431,8 @@ function makeShoreVoice() {
 
   /** Ride the surf envelope. Called on a throttle, never every frame. */
   const breathe = (surf: number, tide: number, wind: number, awake: boolean) => {
+    // nothing built yet and nobody listening — don't build a surf to hush it
+    if (!awake && !ctx) return;
     if (!ensure() || !ctx || !bus) return;
     const now = ctx.currentTime;
     const on = awake && !fa.isMuted();
@@ -771,7 +773,10 @@ export default function CoastBeach() {
 
     const syncSleep = () => {
       asleep = hidden || galleryPaused;
-      if (asleep) gov.force("sleep");
+      if (asleep) {
+        gov.force("sleep");
+        voice.breathe(0, 0.6, 0, false);
+      }
     };
     const unvis = onVisibility((h) => {
       hidden = h;
@@ -1013,6 +1018,7 @@ export default function CoastBeach() {
       const now = performance.now();
       if (now - lastTutti < 900) return;
       lastTutti = now;
+      if (noteTimers.length > 120) noteTimers.splice(0, noteTimers.length - 60);
       const tide = tideNow();
       for (let i = 0; i < pulse.length; i++) pulse[i] = Math.min(1, pulse[i] + 0.85 * strength);
       voice.breakWave(0.7 * strength);
@@ -1561,6 +1567,12 @@ export default function CoastBeach() {
       last = now;
       tier = gov.beginFrame(now);
       const detail = detailForTier(tier);
+
+      // hidden or paused: nothing is drawn at all, not a cheaper frame
+      if (asleep) {
+        raf = requestAnimationFrame(draw);
+        return;
+      }
 
       timeScale += (timeScaleTarget - timeScale) * Math.min(1, dtReal * 6);
       const dt = dtReal * timeScale;

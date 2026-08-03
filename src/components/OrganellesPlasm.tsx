@@ -548,6 +548,13 @@ export default function OrganellesPlasm() {
           if (e.tier >= 3 && !holdDone && listRef.current[holdIdx].kind === "nucleus") {
             holdDone = true;
             intoTheNucleus(listRef.current[holdIdx]);
+          } else if (e.tier >= 3 && !holdCeremonyDone && listRef.current[holdIdx]?.kind !== "nucleus") {
+            // ceremony on any other organ is its solemn act — and the
+            // touch-reachable delete: it gives its membrane back whole
+            holdCeremonyDone = true;
+            const doomed = holdIdx;
+            holdIdx = -1;
+            annihilate(doomed);
           }
         },
         drag: (e) => {
@@ -625,6 +632,24 @@ export default function OrganellesPlasm() {
         },
         twist: (e) => {
           lastInteractionAt = performance.now();
+          if (e.fingers === 3) {
+            // three-finger twist = season: the plasm's own slow cycle,
+            // never the lens
+            if (e.phase === "move") {
+              season = (((season + e.angle / (Math.PI * 2)) % 1) + 1) % 1;
+              const now = performance.now();
+              if (now - lastSeasonSoundAt > 260) {
+                lastSeasonSoundAt = now;
+                audio.playNote(34 + Math.round(season * 14), 180);
+                try {
+                  haptics.tap();
+                } catch {
+                  /* noop */
+                }
+              }
+            }
+            return;
+          }
           if (e.phase === "move") lensTarget = clamp01(lensTarget + e.angle / 1.7);
           else if (e.phase === "end") setLens(lensTarget > 0.5 ? 1 : 0);
         },
@@ -683,6 +708,22 @@ export default function OrganellesPlasm() {
         try {
           audio.thud();
           haptics.detent();
+        } catch {
+          /* noop */
+        }
+      },
+      flip: ({ faceDown }) => {
+        // face-down is night: the plasm's streaming stills until turned back
+        timeScaleTarget = faceDown ? 0.15 : 1;
+        lastInteractionAt = performance.now();
+        try {
+          if (faceDown) {
+            audio.thud();
+            haptics.roll();
+          } else {
+            audio.chime();
+            haptics.bloom();
+          }
         } catch {
           /* noop */
         }
@@ -756,6 +797,9 @@ export default function OrganellesPlasm() {
     // ——— the loop ———
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
+      const tier = gov.beginFrame(now);
+      if (sleeping) return; // no draw while the document is hidden
+      const detail = detailForTier(tier);
       const delta = Math.min(64, now - last);
       last = now;
       const dt = delta / 1000;
@@ -774,6 +818,12 @@ export default function OrganellesPlasm() {
         viewY += (viewTY - viewY) * Math.min(1, dt * 14);
       }
       for (let i = 0; i < lit.length; i++) if (lit[i] > 0) lit[i] = Math.max(0, lit[i] - dt * 1.3);
+      // two-finger pan: the frame eases toward the hand's nudge, then home
+      panX += (panTargetX - panX) * Math.min(1, dt * 5);
+      panY += (panTargetY - panY) * Math.min(1, dt * 5);
+      canvas.style.transform = (Math.abs(panX) > 0.05 || Math.abs(panY) > 0.05)
+        ? `translate(${panX.toFixed(1)}px, ${panY.toFixed(1)}px)`
+        : "";
 
       const list = listRef.current;
       const t = audio.getAudioTime() ?? now / 1000;
@@ -828,6 +878,9 @@ export default function OrganellesPlasm() {
       }
 
       // ——— render ———
+      // season (three-finger twist) drifts the plasm's own slow cycle, a
+      // faint warmth independent of anything the hand is doing
+      const seasonWarm = Math.max(0, Math.sin(season * Math.PI * 2));
       const bg = ctx.createRadialGradient(
         width * 0.5,
         height * 0.5,
@@ -836,7 +889,7 @@ export default function OrganellesPlasm() {
         height * 0.5,
         Math.max(width, height) * 0.8,
       );
-      bg.addColorStop(0, "rgb(16, 19, 18)");
+      bg.addColorStop(0, `rgb(${16 + seasonWarm * 5}, ${19 + seasonWarm * 2}, 18)`);
       bg.addColorStop(1, "rgb(8, 10, 10)");
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, width, height);
@@ -847,8 +900,9 @@ export default function OrganellesPlasm() {
 
       // the cytoplasm, streaming
       const U = unit();
+      const activePlasm = Math.max(16, Math.round(PLASM_MOTES * detail.particles));
       if (lens < 0.92) {
-        for (let i = 0; i < PLASM_MOTES; i++) {
+        for (let i = 0; i < activePlasm; i++) {
           const ph = plasm[i * 4 + 2];
           const sx =
             (plasm[i * 4] +
@@ -912,14 +966,16 @@ export default function OrganellesPlasm() {
 
         // The inner membrane: the SURFACE the budget is spent on, drawn as
         // exactly the closed parametric curve the law measures. Deeper
-        // cristae are literally more line inside the same sac.
+        // cristae are literally more line inside the same sac. Sampled via
+        // membraneRadius (a number) rather than membranePoint (an object) —
+        // no per-point allocation in this per-organelle-per-frame loop.
         ctx.beginPath();
-        const steps = 132;
+        const steps = Math.max(24, Math.round(132 * detail.samples));
         for (let k = 0; k <= steps; k++) {
           const th = (k / steps) * Math.PI * 2;
-          const p = membranePoint(o, th, reduced ? 0 : breath);
-          const x = p.x * scale;
-          const y = p.y * scale;
+          const r = membraneRadius(o, th, reduced ? 0 : breath);
+          const x = Math.cos(th) * r * scale;
+          const y = Math.sin(th) * r * scale;
           if (k === 0) ctx.moveTo(x, y);
           else ctx.lineTo(x, y);
         }
@@ -947,16 +1003,20 @@ export default function OrganellesPlasm() {
           ctx.fill();
         } else if (o.kind !== "vacuole") {
           // the cristae read as folds of that inner line, not as spokes:
-          // short chords across each lobe, which is what a section shows
+          // short chords across each lobe, which is what a section shows.
+          // The negated-amplitude radius is derived inline (no per-fold
+          // object allocation, no per-fold membranePoint call).
           ctx.strokeStyle = `rgba(${tint}, ${0.1 + b * 0.22 + l * 0.2})`;
           ctx.lineWidth = 0.6;
           for (let k = 0; k < o.folds; k++) {
             const a = ((k + 0.5) / o.folds) * Math.PI * 2;
-            const inner = membranePoint({ ...o, amplitude: -o.amplitude }, a, 0);
-            const outer = membranePoint(o, a, 0);
+            const innerR = o.radius * (1 - o.amplitude * Math.sin(o.folds * a));
+            const outerR = membraneRadius(o, a, 0);
+            const ca = Math.cos(a);
+            const sa = Math.sin(a);
             ctx.beginPath();
-            ctx.moveTo(inner.x * scale, inner.y * scale);
-            ctx.lineTo(outer.x * scale * 0.98, outer.y * scale * 0.98);
+            ctx.moveTo(innerR * ca * scale, innerR * sa * scale);
+            ctx.lineTo(outerR * ca * scale * 0.98, outerR * sa * scale * 0.98);
             ctx.stroke();
           }
         }

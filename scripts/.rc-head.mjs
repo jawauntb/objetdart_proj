@@ -241,59 +241,16 @@ const THRESHOLD_WORDS = new Set([
 // therefore stays alive. A wall of two hundred lines gets deleted.
 // ———————————————————————————————————————————————————————————————————————
 
-const structural = []; // [where: what]
-const owedBindings = new Map(); // key -> [binding name]
-const owedNotes = new Map(); // key -> [sentence]
+const structural = []; // [where, what]
+const grammar = new Map(); // key -> [what]
 
 function fail(where, what) {
   structural.push(`${where}: ${what}`);
 }
-function oweBinding(key, binding) {
-  const list = owedBindings.get(key) ?? [];
-  list.push(binding);
-  owedBindings.set(key, list);
-}
-function oweNote(key, what) {
-  const list = owedNotes.get(key) ?? [];
+function owe(key, what) {
+  const list = grammar.get(key) ?? [];
   list.push(what);
-  owedNotes.set(key, list);
-}
-
-/**
- * A room built on the scene shell (src/lib/scene/room.ts) delegates the
- * engine, the vessel, the frame governor, the visibility pause and the DPR
- * ceiling to `createRoomShell`, and states which verbs its material answers in
- * its object spec's `verbs` array. The contract reads that array instead of
- * hunting for handlers the room no longer writes.
- */
-const VERB_FOR_BINDING = {
-  tutti: "tutti",
-  lens: "lens",
-  season: "season",
-  weather: "wind",
-  dilation: "dilate",
-  dwell: "dwell",
-  ceremony: "ceremony",
-  tilt: "gravity",
-  shake: "agitate",
-  knock: "knock",
-  flip: "night",
-  pan: "pan2",
-  stepBack: null, // the shell yields it to ScaleTravel, like every room
-};
-
-/** The verb names in every `verbs: [...]` array — read off the raw source. */
-function declaredVerbs(raw) {
-  const out = new Set();
-  const re = /verbs\s*:\s*\[/g;
-  let m;
-  while ((m = re.exec(raw))) {
-    const open = raw.indexOf("[", m.index + m[0].length - 1);
-    const end = matchAt(raw, open, "[", "]");
-    if (end < 0) continue;
-    for (const q of raw.slice(open, end + 1).matchAll(/["']([a-z]+)["']/g)) out.add(q[1]);
-  }
-  return out;
+  grammar.set(key, list);
 }
 
 // ———————————————————————————————————————————————————————————————————————
@@ -367,14 +324,10 @@ for (const entry of ROOM_REGISTRY) {
   }
   const { raw, clean } = src;
 
-  // Rooms built on the scene shell delegate the wiring to createRoomShell.
-  const viaShell = /@\/lib\/scene\/room/.test(raw);
-  const verbs = viaShell ? declaredVerbs(raw) : null;
-
   // — 1. the gesture engine, and no raw pointer wiring ———————————————
-  const usesEngine = /attachGestures\s*\(/.test(clean) || viaShell;
+  const usesEngine = /attachGestures\s*\(/.test(clean);
   if (!usesEngine) {
-    oweNote(
+    owe(
       key,
       "never adopted the gesture engine — no attachGestures. This is the /earth and /stars " +
         "violation exactly: raw pointer wiring cannot speak the grammar, so every global " +
@@ -447,12 +400,14 @@ for (const entry of ROOM_REGISTRY) {
       fail(key, `no probe for global binding "${binding}" — BINDING_PROBES must cover the grammar`);
       continue;
     }
-    const answered = viaShell
-      ? VERB_FOR_BINDING[binding] === null ||
-        (verbs?.has(VERB_FOR_BINDING[binding]) ?? false) ||
-        bound(probe)
-      : bound(probe);
-    if (!answered) oweBinding(key, binding);
+    if (!bound(probe)) {
+      owe(
+        key,
+        `${binding} unbound (${probe.loses}) — bind it in the ${
+          probe.vessel ? "onVessel" : `attachGestures \`${probe.handler}\``
+        } handler, or write the reason it cannot in the registry's \`exempt\``,
+      );
+    }
   }
   for (const binding of Object.keys(entry.exempt)) {
     if (!GLOBAL_BINDINGS.includes(binding)) {
@@ -479,21 +434,21 @@ for (const entry of ROOM_REGISTRY) {
   }
 
   // — 4. the performance contract ————————————————————————————————
-  const animates = /requestAnimationFrame\s*\(/.test(clean) || viaShell;
+  const animates = /requestAnimationFrame\s*\(/.test(clean);
   if (animates) {
-    if (!viaShell && !/onVisibility\s*\(/.test(clean)) {
-      oweNote(
+    if (!/onVisibility\s*\(/.test(clean)) {
+      owe(
         key,
         "animates but never calls onVisibility — the room keeps drawing in a hidden tab, " +
-          "burning a phone battery for nobody (src/lib/room-runtime.ts, or build on scene/room)",
+          "burning a phone battery for nobody. src/lib/room-runtime.ts",
       );
     }
-    if (!viaShell && !/createFrameGovernor\s*\(/.test(clean) && !entry.governor) {
-      oweNote(
+    if (!/createFrameGovernor\s*\(/.test(clean) && !entry.governor) {
+      owe(
         key,
-        "animates with no createFrameGovernor and no stated exemption — no quality tier, so no " +
-          "detailForTier and no resolveDpr ceiling. That is the whole 'not performing enough' " +
-          "complaint (src/lib/room-runtime.ts, or build on scene/room)",
+        "animates with no createFrameGovernor and no stated exemption — no quality tier means " +
+          "no detailForTier and no resolveDpr ceiling, which is the whole 'not performing enough' " +
+          "complaint. src/lib/room-runtime.ts",
       );
     }
   }
@@ -504,7 +459,7 @@ for (const entry of ROOM_REGISTRY) {
   // — 5. the quiet clear is the shared control ————————————————————
   const usesLetGo = /@\/components\/LetGo/.test(raw);
   if (entry.creates && !usesLetGo) {
-    oweNote(
+    owe(
       key,
       `creates ${entry.creates} but offers no <LetGo> — a whole-field clear hand-rolled in the ` +
         "room's own tree gets trapped under the tape's z-index in Chrome and silently swallows " +
@@ -527,29 +482,6 @@ for (const entry of ROOM_REGISTRY) {
       "hand-rolls its clear control instead of the shared <LetGo> — same stacking-context bug, " +
         "same swallowed clicks, one more dialect of the same word",
     );
-  }
-
-  // — 5b. no paint server rebuilt per object per frame ————————————
-  // The render side of the same defect the scene model fixes: a gradient or a
-  // shadowBlur inside the loop that walks the population.
-  if (!viaShell) {
-    const perFrameGradients = (clean.match(/create(?:Radial|Linear)Gradient\s*\(/g) ?? []).length;
-    if (perFrameGradients >= 6) {
-      oweNote(
-        key,
-        `builds ${perFrameGradients} canvas gradients — if any of them is inside the loop over ` +
-          "the room's material, that is a paint-server rebuild per object per frame, the most " +
-          "expensive habit in this codebase. Hoist to a cached sprite, or describe the objects " +
-          "as instances (src/lib/scene/)",
-      );
-    }
-    if (/ctx\.shadowBlur\s*=/.test(clean) || /filter\s*=\s*[^;]*blur\(/.test(clean)) {
-      oweNote(
-        key,
-        "sets shadowBlur or a css blur filter on a canvas — catastrophic on mobile. Use a " +
-          "pre-blurred sprite or the additive corona in src/lib/scene/gl.ts",
-      );
-    }
   }
 
   // — 6. rooms with a scale address mount the chrome ——————————————
@@ -639,11 +571,10 @@ for (const entry of ROOM_REGISTRY) {
 // ———————————————————————————————————————————————————————————————————————
 
 const interactive = ROOM_REGISTRY.filter((r) => r.kind !== "reading");
-const rooms = new Set([...owedBindings.keys(), ...owedNotes.keys()]);
-const bindingCount = [...owedBindings.values()].reduce((n, l) => n + l.length, 0);
-const noteCount = [...owedNotes.values()].reduce((n, l) => n + l.length, 0);
+const owing = [...grammar.keys()].length;
+const oweCount = [...grammar.values()].reduce((n, l) => n + l.length, 0);
 
-if (structural.length === 0 && bindingCount === 0 && noteCount === 0) {
+if (structural.length === 0 && oweCount === 0) {
   console.log(
     `room contract ok: ${interactive.length} interactive rooms, ` +
       `${GLOBAL_BINDINGS.length} global bindings each, no drift`,
@@ -653,37 +584,18 @@ if (structural.length === 0 && bindingCount === 0 && noteCount === 0) {
 
 const lines = [];
 lines.push("");
-lines.push("— the room contract is red. that is the law working, not an obstacle. —");
+lines.push("— the room contract is red. that is the law working. —");
 lines.push("");
 if (structural.length) {
   lines.push(`structural violations (${structural.length}):`);
   for (const line of structural) lines.push(`  · ${line}`);
   lines.push("");
 }
-if (rooms.size) {
-  lines.push(
-    `the grammar owed: ${bindingCount} unbound bindings and ${noteCount} notes ` +
-      `across ${rooms.size} of ${interactive.length} rooms`,
-  );
-  for (const entry of ROOM_REGISTRY) {
-    const bindings = owedBindings.get(entry.key);
-    const notes = owedNotes.get(entry.key);
-    if (!bindings && !notes) continue;
-    lines.push(`  /${entry.key}${bindings ? `  unbound: ${bindings.join(" ")}` : ""}`);
-    for (const note of notes ?? []) lines.push(`      · ${note}`);
-  }
-  lines.push("");
-  lines.push("what each unbound binding costs the hand:");
-  const named = new Set([...owedBindings.values()].flat());
-  for (const probe of BINDING_PROBES) {
-    if (!named.has(probe.binding)) continue;
-    lines.push(
-      `  ${probe.binding.padEnd(9)} ${probe.loses} — ` +
-        (probe.vessel
-          ? "an onVessel handler"
-          : `the attachGestures \`${probe.handler}\` handler`) +
-        `, or the verb "${VERB_FOR_BINDING[probe.binding] ?? "—"}" on a scene object`,
-    );
+if (oweCount) {
+  lines.push(`the grammar owed (${oweCount} across ${owing} of ${interactive.length} rooms):`);
+  for (const [key, list] of grammar) {
+    lines.push(`  /${key}`);
+    for (const what of list) lines.push(`      · ${what}`);
   }
   lines.push("");
 }

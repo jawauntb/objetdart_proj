@@ -1103,6 +1103,21 @@ export default function Murmuration() {
     gl.bindBuffer(gl.ARRAY_BUFFER, metaBuf);
     gl.bufferData(gl.ARRAY_BUFFER, meta, gl.DYNAMIC_DRAW);
 
+    // WebGL context loss (mobile GPU pressure, background tabs): the draw
+    // loop stops touching the lost context rather than throwing, and the
+    // browser is allowed to restore it. A full flock reinit on restore is
+    // deliberately out of scope here — see the sweep report.
+    let contextLost = false;
+    const onContextLost = (ev: Event) => {
+      ev.preventDefault();
+      contextLost = true;
+    };
+    const onContextRestored = () => {
+      contextLost = false;
+    };
+    canvas.addEventListener("webglcontextlost", onContextLost, false);
+    canvas.addEventListener("webglcontextrestored", onContextRestored, false);
+
     const resize = () => {
       const r = wrap.getBoundingClientRect();
       const ratio = resolveDpr(gov.tier(), { embedded, reducedMotion: reduced });

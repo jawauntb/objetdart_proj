@@ -292,6 +292,11 @@ export default function RelativityRoom() {
       [1, "rgba(0,0,0,0)"],
     ]);
 
+    // ————— performance contract (room-runtime) —————
+    const gov = createFrameGovernor();
+    let sleeping = false;
+    let galleryPaused = false;
+
     // ————— state —————
     let masses: Mass[] = [];
     let massSerial = 0;
@@ -314,6 +319,12 @@ export default function RelativityRoom() {
     let season = 0;
     let seasonTarget = 0;
     let lawG = 0; // rayG signed by the season, recomputed once per frame
+    // two-finger drag pans the frame (grammar §5) — px, smoothed
+    let panX = 0;
+    let panY = 0;
+    let panTX = 0;
+    let panTY = 0;
+    const PAN_LIMIT = 130;
     let clockGap = 150;
     let clockHalfW = 36;
     let raf = 0;
@@ -446,7 +457,7 @@ export default function RelativityRoom() {
 
     const resize = () => {
       const r = wrap.getBoundingClientRect();
-      const ratio = Math.min(window.devicePixelRatio || 1, 1.5);
+      const ratio = resolveDpr(gov.tier(), { embedded: isEmbeddedFrame(), reducedMotion: reduce, maxDpr: 1.5 });
       width = Math.max(320, Math.floor(r.width));
       height = Math.max(480, Math.floor(r.height));
       rectLeft = r.left;
@@ -456,6 +467,7 @@ export default function RelativityRoom() {
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
       ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+      field?.resize(width, height, ratio);
       // one speed of light for this viewport — rays, pulses, rings, comets' ceiling
       c = 0.85 * Math.max(width, height);
       rayG = 50 * c * c; // manifold strengths: whips and slingshots, not drift
@@ -1452,16 +1464,21 @@ export default function RelativityRoom() {
     // ————— the loop —————
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
+      const tier = gov.beginFrame(now);
+      if (sleeping || galleryPaused) return; // no draw while hidden or embedded-paused
       if (!reduce && now - lastFrame < 30) return;
       lastFrame = now;
       const delta = Math.min(64, now - last);
       last = now;
       const dt = delta / 1000;
+      const detail = detailForTier(tier);
 
       timeScale += (timeScaleTarget - timeScale) * Math.min(1, dt * 5);
       rayScale += (rayScaleTarget - rayScale) * Math.min(1, dt * 5);
       season += (seasonTarget - season) * Math.min(1, dt * 3);
       lawG = rayG * (1 - 2 * season);
+      panX += (panTX - panX) * Math.min(1, dt * 8);
+      panY += (panTY - panY) * Math.min(1, dt * 8);
       if (!reduce) localT += dt * timeScale;
       lightT += dt * (reduce ? 1 : rayScale);
       windX += (windTargetX - windX) * Math.min(1, dt * 2.2);

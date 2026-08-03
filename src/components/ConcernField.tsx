@@ -246,9 +246,35 @@ export default function ConcernField() {
     // center gathers toward the keep
     const center = { active: false, fired: false };
 
+    // Exemptions, stated rather than forced: the compass has exactly one
+    // representation — the polygon itself, whose geometry (axisAngle /
+    // pointAt) is also the hit-test math for the founding vertex drag.
+    // Rotating or panning that view would desync what a hand sees from
+    // what it can grab, for a "lens" or "frame" this room doesn't
+    // otherwise have — so twist (2 fingers) and pan2 are left unbound.
+    // The compass also has no world of its own to hold a season or
+    // weather (it is one fixed shape, not a place with a slow cycle), so
+    // three-finger twist and three-finger drag are left unbound too.
+    let tuttiTimer: ReturnType<typeof setTimeout> | null = null;
     const detach = attachGestures(svg as unknown as HTMLElement, {
       tap: (e) => {
-        if (e.fingers !== 1) return; // the compass absorbs frame/law taps
+        if (e.fingers === 2) {
+          // step back: the compass has no camera of its own, so this
+          // steps back up the page — the same retreat a raised lens owes.
+          document.getElementById("threshold")?.scrollIntoView({ behavior: "smooth", block: "start" });
+          try { haptics.tap(); } catch { /* noop */ }
+          return;
+        }
+        if (e.fingers === 3) {
+          // tutti — every vertex answers together, once
+          RADIAL_ORDER.forEach((k, i) => pulseVoice(k, 90 + i * 6));
+          setTutti(Date.now());
+          if (tuttiTimer) clearTimeout(tuttiTimer);
+          tuttiTimer = setTimeout(() => setTutti(0), 700);
+          try { haptics.ripple(0.45); } catch { /* noop */ }
+          recordTape("sigil", 0.45, "compass/tutti");
+          return;
+        }
         const local = toSvg(e.x, e.y);
         if (!local) return;
         const hit = nearestVertex(local.x, local.y);
@@ -285,6 +311,14 @@ export default function ConcernField() {
         recordTape("sigil", 0.5, `compass/entrain-${dominant}`);
       },
       hold: (e) => {
+        if (e.fingers === 3) {
+          // three-finger hold = time dilation while held: the compass's
+          // own answers (tap glow, rhythm beat) slow continuously with
+          // how long the hand has stayed.
+          if (e.phase === "release") { setDilation(0); return; }
+          setDilation(Math.min(1, e.elapsed / THRESHOLDS.ceremonyMs));
+          return;
+        }
         if (e.fingers !== 1 || draggingRef.current) return;
         if (e.phase === "release") {
           center.active = false;
@@ -333,9 +367,45 @@ export default function ConcernField() {
       },
     }, { wheelZoom: false, manageStyle: false, noCapture: true });
 
+    // vessel: tilt leans the whole compass (sight only, matching the
+    // template's own tilt), shake agitates every vertex in a brief
+    // shiver, a knock rings it like tutti, and face-down is night — the
+    // compass dims until the phone turns back over.
+    let agitateTimer: ReturnType<typeof setTimeout> | null = null;
+    const detachVessel = onVessel({
+      tilt: ({ gamma }) => {
+        if (reduce) return;
+        // A drop-shadow offset, never a transform — the compass's
+        // geometry is also its own hit-test math (see the note above),
+        // so tilt only ever casts a lean, it never moves a vertex.
+        const lean = Math.max(-1, Math.min(1, gamma / 45));
+        svg.style.setProperty("--cf-tilt", (lean * 7).toFixed(1) + "px");
+      },
+      shake: () => {
+        if (reduce) return;
+        setAgitated(true);
+        try { haptics.chop(); } catch { /* noop */ }
+        try { getFieldAudio().chime(); } catch { /* noop */ }
+        if (agitateTimer) clearTimeout(agitateTimer);
+        agitateTimer = setTimeout(() => setAgitated(false), 460);
+      },
+      knock: () => {
+        RADIAL_ORDER.forEach((k, i) => pulseVoice(k, 90 + i * 6));
+        setTutti(Date.now());
+        try { getFieldAudio().bell(); } catch { /* noop */ }
+        try { haptics.tap(); } catch { /* noop */ }
+        if (tuttiTimer) clearTimeout(tuttiTimer);
+        tuttiTimer = setTimeout(() => setTutti(0), 700);
+      },
+      flip: ({ faceDown }) => setNight(faceDown),
+    });
+
     return () => {
       detach();
+      detachVessel();
       if (beatTimer) clearInterval(beatTimer);
+      if (tuttiTimer) clearTimeout(tuttiTimer);
+      if (agitateTimer) clearTimeout(agitateTimer);
       pulseTimers.forEach((t) => clearTimeout(t));
       try { getFieldAudio().releaseAllConcernTones(); } catch { /* noop */ }
     };
@@ -382,6 +452,12 @@ export default function ConcernField() {
               viewBox={`0 0 ${VIEW} ${VIEW}`}
               role="group"
               aria-label="concern compass"
+              className={
+                "concern-field__svg"
+                + (tutti ? " is-tutti" : "")
+                + (agitated ? " is-agitated" : "")
+                + (night ? " is-night" : "")
+              }
               style={{
                 display: "block",
                 width: "100%",
@@ -392,6 +468,7 @@ export default function ConcernField() {
                 // the vertex pointerdown captures the drag for value-setting.
                 touchAction: "pan-y",
                 userSelect: "none",
+                ["--cf-dilation" as string]: dilation,
               }}
             >
               {/* concentric rings */}
@@ -691,7 +768,10 @@ export default function ConcernField() {
       </div>
       <style>{`
         .cf-tap-glow { animation: cf-glow-fade 700ms ease-out forwards; }
-        .cf-beat { animation: cf-beat-out 460ms ease-out forwards; transform-origin: center; transform-box: fill-box; }
+        .cf-beat {
+          animation: cf-beat-out calc(460ms + var(--cf-dilation, 0) * 1400ms) ease-out forwards;
+          transform-origin: center; transform-box: fill-box;
+        }
         .cf-kept-bloom { animation: cf-kept-open 900ms ease-out forwards; }
         @keyframes cf-glow-fade {
           from { opacity: 1; }
@@ -705,9 +785,38 @@ export default function ConcernField() {
           from { opacity: 0.85; r: 24; }
           to { opacity: 0; r: ${R_MAX}; }
         }
+        /* vessel: a lean cast as a shadow, never a moved vertex */
+        .concern-field__svg {
+          filter: drop-shadow(var(--cf-tilt, 0px) 6px 14px rgba(21,23,26,0.22));
+          transition: filter 260ms ease-out;
+        }
+        /* three-finger tap / a knock on the case — tutti, one shared pulse */
+        .concern-field__svg.is-tutti polygon:first-of-type {
+          animation: cf-tutti 640ms ease-out;
+        }
+        @keyframes cf-tutti {
+          0% { filter: none; }
+          40% { filter: drop-shadow(0 0 18px rgba(200,115,42,0.6)); }
+          100% { filter: none; }
+        }
+        /* shake — a brief shiver through the whole compass */
+        .concern-field__svg.is-agitated {
+          animation: cf-shudder 420ms ease-in-out;
+        }
+        @keyframes cf-shudder {
+          0%, 100% { transform: translate(0, 0); }
+          25% { transform: translate(3px, -2px); }
+          50% { transform: translate(-3px, 2px); }
+          75% { transform: translate(2px, 2px); }
+        }
+        /* flip face-down — night, until the phone turns back over */
+        .concern-field__svg.is-night { opacity: 0.4; transition: opacity 900ms ease; }
         @media (prefers-reduced-motion: reduce) {
           .cf-tap-glow { animation-duration: 1ms; }
           .cf-beat, .cf-kept-bloom { animation: none; opacity: 0; }
+          .concern-field__svg { filter: none; transition: none; }
+          .concern-field__svg.is-tutti polygon:first-of-type { animation: none; }
+          .concern-field__svg.is-agitated { animation: none; }
         }
         @media (max-width: 720px) {
           .concern-field__stage {
