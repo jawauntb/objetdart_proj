@@ -1476,6 +1476,8 @@ export default function FlowersGarden() {
       observer.disconnect();
       detach();
       detachVessel();
+      offVisibility();
+      offGalleryPause();
       wrap.removeEventListener("pointerdown", onPressDown);
       wrap.removeEventListener("pointermove", onPressMove);
       wrap.removeEventListener("pointerup", onPressUp);

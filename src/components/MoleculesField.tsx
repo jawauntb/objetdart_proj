@@ -41,6 +41,14 @@ import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
 import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
+import LetGo from "@/components/LetGo";
+import {
+  createFrameGovernor,
+  detailForTier,
+  isEmbeddedFrame,
+  onVisibility,
+  resolveDpr,
+} from "@/lib/room-runtime";
 import {
   MAX_MOLECULES,
   MOLECULE_FAMILIES,
@@ -261,6 +269,56 @@ export default function MoleculesField() {
     const onMq = () => { reduce = mq.matches; };
     mq.addEventListener?.("change", onMq);
 
+    // ————— performance contract: frame governor + visibility sleep —————
+    const gov = createFrameGovernor();
+    let sleeping = false;
+    const offVis = onVisibility((hidden) => { sleeping = hidden; });
+
+    // the world-law's slow cycle (three-finger twist): the solvent's own
+    // season, 0..1 cyclic — a warm/cool drift in the candlelight, nothing else
+    let season = 0;
+
+    // the vessel's flip: face-down is night, the pool of light goes down
+    let night = 0;
+    let nightTarget = 0;
+
+    // two-finger pan: the frame peeks a little in the hand's direction, then
+    // eases back — the map layer's translation, never a permanent move
+    let panX = 0;
+    let panY = 0;
+    let panTargetX = 0;
+    let panTargetY = 0;
+
+    // ————— cached radial-gradient sprites: baked once per palette key,
+    // stamped with drawImage every frame — never a createRadialGradient
+    // inside the per-molecule / per-atom loops —————
+    const spriteCache = new Map<string, HTMLCanvasElement>();
+    const SPRITE_REF = 128;
+    const radialSprite = (key: string, stops: Array<[number, string]>): HTMLCanvasElement | null => {
+      let c = spriteCache.get(key);
+      if (c) return c;
+      c = document.createElement("canvas");
+      c.width = SPRITE_REF;
+      c.height = SPRITE_REF;
+      const sctx = c.getContext("2d");
+      if (!sctx) return null;
+      const rad = SPRITE_REF / 2;
+      const g = sctx.createRadialGradient(rad, rad, 0, rad, rad, rad);
+      for (const [o, color] of stops) g.addColorStop(o, color);
+      sctx.fillStyle = g;
+      sctx.fillRect(0, 0, SPRITE_REF, SPRITE_REF);
+      spriteCache.set(key, c);
+      return c;
+    };
+    const stampSprite = (key: string, stops: Array<[number, string]>, cx: number, cy: number, r: number, alpha: number) => {
+      if (r <= 0 || alpha <= 0.002) return;
+      const sprite = radialSprite(key, stops);
+      if (!sprite) return;
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(sprite, cx - r, cy - r, r * 2, r * 2);
+      ctx.globalAlpha = 1;
+    };
+
     // ————— persistence —————
     const save = (force = false) => {
       const now = performance.now();
@@ -305,7 +363,7 @@ export default function MoleculesField() {
 
     const resize = () => {
       const r = wrap.getBoundingClientRect();
-      const ratio = Math.min(window.devicePixelRatio || 1, 1.5);
+      const ratio = resolveDpr(gov.tier(), { embedded: isEmbeddedFrame(), reducedMotion: reduce, maxDpr: 1.5 });
       width = Math.max(320, Math.floor(r.width));
       height = Math.max(480, Math.floor(r.height));
       rectLeft = r.left;
@@ -1140,8 +1198,11 @@ export default function MoleculesField() {
     // ————— the loop —————
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
+      const tier = gov.beginFrame(now);
+      if (sleeping) return; // no draw while the document is hidden
       if (!reduce && now - lastFrame < 30) return;
       lastFrame = now;
+      const detail = detailForTier(tier);
       const delta = Math.min(64, now - last);
       last = now;
       const dt = delta / 1000;
@@ -1155,6 +1216,13 @@ export default function MoleculesField() {
       lens += (lensTarget - lens) * Math.min(1, dt * 6);
       thermalStorm *= Math.exp(-dt * 0.9);
       tuttiPulse *= Math.exp(-dt * 2.4);
+      night += (nightTarget - night) * Math.min(1, dt * (nightTarget > night ? 1.6 : 2.8));
+      // two-finger pan: the frame eases toward the hand's nudge, then home
+      panX += (panTargetX - panX) * Math.min(1, dt * 5);
+      panY += (panTargetY - panY) * Math.min(1, dt * 5);
+      canvas.style.transform = (Math.abs(panX) > 0.05 || Math.abs(panY) > 0.05)
+        ? `translate(${panX.toFixed(1)}px, ${panY.toFixed(1)}px)`
+        : "";
       // the vessel's lean: solvent convection runs downhill with real gravity
       const gravX = streamX + tiltLeanX * 0.5;
       const gravY = streamY + tiltLeanY * 0.5;

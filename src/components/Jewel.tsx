@@ -108,9 +108,15 @@ export default function Jewel() {
   const flipLensRef = useRef({ v: 0, t: 0 });        // twist: the stone's mirror twin
   const entrainRef = useRef({ bpm: 0, until: 0, lastBeat: -1 });
   const lastGestureAtRef = useRef(0);
+  const seasonRef = useRef(0); // 3-finger twist: the light's warm/cool season
+
+  // the stone's kept material: facets planted by a dwell hold.
+  const facetsRef = useRef<Facet[]>([]);
+  const gatherRef = useRef({ active: false, x: 0.5, y: 0.5, amt: 0, hit: -1, committed: false });
 
   const [activeGem, setActiveGem] = useState<string | null>(null);
   const [hint, setHint] = useState(true);
+  const [hasFacets, setHasFacets] = useState(false);
 
   // the stone's own clock (dilatable) — ripples and shader time share it
   const simSecRef = useRef(0);
@@ -461,12 +467,90 @@ export default function Jewel() {
     canvas.addEventListener("webglcontextlost", onLost);
     canvas.addEventListener("webglcontextrestored", onRestored);
 
+    // the stone remembers its planted facets
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as { facets?: Facet[] };
+        if (Array.isArray(parsed.facets)) facetsRef.current = parsed.facets.slice(-MAX_FACETS);
+      }
+    } catch { /* fresh */ }
+    setHasFacets(facetsRef.current.length > 0);
+    const writer = createIdleWriter(() => {
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ facets: facetsRef.current })); } catch { /* noop */ }
+      setHasFacets(facetsRef.current.length > 0);
+    });
+
+    const nearestFacet = (nx: number, ny: number): number => {
+      let best = -1; let bestD = FACET_HIT;
+      facetsRef.current.forEach((f, i) => {
+        const d = Math.hypot(f.x - nx, f.y - ny);
+        if (d < bestD) { bestD = d; best = i; }
+      });
+      return best;
+    };
+
+    const addFacet = (nx: number, ny: number) => {
+      const seed = Math.floor((nx * 9973 + ny * 6151 + facetsRef.current.length * 131) % 100000);
+      facetsRef.current.push({ x: nx, y: ny, seed });
+      if (facetsRef.current.length > MAX_FACETS) facetsRef.current.shift();
+      writer.schedule();
+      fire.current = Math.min(1.9, fire.current + 0.6);
+      spawnRipple(nx, ny, 0.7, nowSec());
+      try { getFieldAudio().spark(); } catch { /* noop */ }
+      try { haptics.ripple(0.5); } catch { /* noop */ }
+      useField.getState().recordTape("kept", 0.6, "jewel/facet-planted");
+    };
+
+    const removeFacet = (idx: number) => {
+      if (idx < 0 || idx >= facetsRef.current.length) return;
+      const f = facetsRef.current[idx];
+      facetsRef.current.splice(idx, 1);
+      writer.schedule();
+      fire.current = 1.9;
+      spawnRipple(f.x, f.y, 1.0, nowSec());
+      try { getFieldAudio().bell(); } catch { /* noop */ }
+      try { haptics.bloom(); } catch { /* noop */ }
+      useField.getState().recordTape("kept", 0.85, "jewel/facet-annihilated");
+    };
+
+    // ── the vessel: the device itself is the stone's body ──
+    const detachVessel = onVessel({
+      tilt: ({ beta, gamma }) => {
+        if (reducedRef.current) return;
+        lightRef.current.x = Math.max(-0.9, Math.min(0.9, gamma / 45));
+        lightRef.current.y = Math.max(-0.9, Math.min(0.9, (beta - 35) / 60));
+      },
+      shake: ({ intensity }) => {
+        if (reducedRef.current) return;
+        turn.current.vyaw += (Math.sin(performance.now() * 0.013) > 0 ? 1 : -1) * intensity * 0.08;
+        fire.current = Math.min(1.9, fire.current + intensity * 0.8);
+        try { haptics.chop(); } catch { /* noop */ }
+        try { getFieldAudio().buzz(); } catch { /* noop */ }
+      },
+      knock: ({ intensity }) => {
+        fire.current = Math.min(1.9, fire.current + 0.5 + intensity * 0.4);
+        spawnRipple(0.5, 0.42, 0.6, nowSec());
+        try { haptics.tap(); } catch { /* noop */ }
+        try { getFieldAudio().thud(); } catch { /* noop */ }
+      },
+      flip: ({ faceDown: fd }) => {
+        faceDown = fd;
+        syncSleep();
+      },
+    });
+
     // ── gestures (the shared grammar — src/lib/gesture) ────────────────
     // One finger touches the stone: drag turns it, a tap rings it, a flick
-    // throws it spinning, a ceremony hold seals it. Two fingers touch the
-    // map: twist turns the stone over to its mirror twin. Three fingers
-    // touch the law: drag sweeps the lamp, hold dilates time. Pinch and
-    // pan2 stay unbound — the frame belongs to the manifold.
+    // throws it spinning, a dwell hold plants a facet, a ceremony hold seals
+    // the stone (or annihilates a facet held under it). Two fingers touch
+    // the map: pan2 shifts the grasp lens, twist turns the stone to its
+    // mirror twin (raising data-lens-raised so a two-finger tap can lower
+    // it — step back), a two-finger tap with no lens raised falls through
+    // to ScaleTravel's own step-back. Three fingers touch the law: drag
+    // sweeps the lamp (weather), hold dilates time, twist turns the season
+    // (the light's warm/cool cast), tap is tutti. Pinch stays unbound — the
+    // frame belongs to the manifold.
     const overUi = (x: number, y: number) =>
       Boolean(document.elementFromPoint(x, y)?.closest(".jw-ui"));
 
@@ -518,6 +602,26 @@ export default function Jewel() {
     const detachGestures = attachGestures(wrap, {
       tap: (e) => {
         lastGestureAtRef.current = performance.now();
+        if (e.fingers === 3) {
+          // tutti — every glint answers at once, the stone stating itself.
+          fire.current = Math.min(1.9, fire.current + 0.7);
+          spawnRipple(0.5, 0.42, 0.8, nowSec());
+          try { PENTA.forEach((m, i) => window.setTimeout(() => { try { getFieldAudio().playNote(m, 140); } catch { /* noop */ } }, i * 18)); } catch { /* noop */ }
+          try { haptics.bloom(); } catch { /* noop */ }
+          useField.getState().recordTape("region", 0.6, "jewel/tutti");
+          return;
+        }
+        if (e.fingers === 2) {
+          // step back: lower the raised mirror lens first. ScaleTravel
+          // reads data-lens-raised and yields to us when this is set.
+          if (flipLensRef.current.t > 0.5) {
+            flipLensRef.current.t = 0;
+            wrap.removeAttribute("data-lens-raised");
+            try { haptics.tap(); } catch { /* noop */ }
+            try { getFieldAudio().playNote(50, 120); } catch { /* noop */ }
+          }
+          return;
+        }
         if (e.fingers !== 1 || overUi(e.x, e.y)) return;
         // a tap (no turn) rings a pentatonic note + a ripple bloom —
         // intensity is the strike: ripple size, note length, haptic
@@ -529,6 +633,14 @@ export default function Jewel() {
         try { getFieldAudio().playNote(midi, 160 + Math.round(e.intensity * 140)); } catch { /* noop */ }
         haptics.ripple(0.35 + e.intensity * 0.4);
         useField.getState().recordTape("sigil", 0.5 + e.intensity * 0.4, "jewel/tap");
+      },
+      pan2: (e) => {
+        lastGestureAtRef.current = performance.now();
+        const rect = wrap.getBoundingClientRect();
+        // two fingers pan the grasp lens without turning the stone.
+        ptr.current.tx = Math.max(0, Math.min(1, ptr.current.tx + e.dx / Math.max(1, rect.width)));
+        ptr.current.ty = Math.max(0, Math.min(1, ptr.current.ty + e.dy / Math.max(1, rect.height)));
+        ptr.current.twarp = 0.55;
       },
       drag: (e) => {
         lastGestureAtRef.current = performance.now();

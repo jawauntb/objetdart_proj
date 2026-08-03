@@ -966,3 +966,389 @@ export function fogRegisterFraction(fogAltitude: number): number {
 
 /** Contour interval when the lens is raised, km. */
 export const CONTOUR_INTERVAL_KM = 0.1;
+
+// ——— the same function, written for the GPU ————————————————————
+//
+// Everything above is a closed-form per-ray function, which is precisely
+// what a fragment shader wants: one pixel, one ray, no geometry. The room
+// marches it per pixel, so the chunk below is the field again in GLSL.
+//
+// Two rules keep the copy honest, because a second differently-behaving
+// height field is the determinism law's worst failure — the room would
+// draw a mountain the suite has never checked:
+//
+//  1. **Every shared constant is injected**, never retyped. The preamble is
+//     generated from the exported numbers themselves (`glslFloat` round
+//     trips a double through its decimal form), so a constant cannot be
+//     edited here and left stale there.
+//  2. **Everything seed-derived is a uniform.** The seed offset and the
+//     horn table are computed by the JS above and handed to the shader,
+//     which never hashes a seed. There is exactly one `hornsForSeed`.
+//
+// scripts/test-heightfield.mjs pins both: the body may not name a constant
+// the preamble does not define, and may not contain the decimal form of a
+// named constant as a bare literal.
+
+/** A JS double as a GLSL float literal that parses back to the same double. */
+export function glslFloat(v: number): string {
+  if (!Number.isFinite(v)) throw new Error(`no GLSL literal for ${v}`);
+  let s = String(v);
+  if (/[eE]/.test(s)) {
+    if (!s.includes(".")) s = s.replace(/[eE]/, ".0e");
+    return s;
+  }
+  if (!s.includes(".")) s += ".0";
+  return s;
+}
+
+/** The float constants the GLSL shares with the TS, by their GLSL names. */
+export const HEIGHTFIELD_GLSL_FLOATS: Readonly<Record<string, number>> = {
+  LACUNARITY,
+  GAIN,
+  OCTAVE_TURN,
+  BASE_FREQ,
+  SWELL_RATIO,
+  RIDGE_AMP_KM,
+  SUMMIT_KM,
+  SUMMIT_RADIUS_KM,
+  SUMMIT_EPS_KM,
+  ENVELOPE_FLOOR,
+  HORN_EPS_KM,
+  HORN_POWER,
+  HEIGHT_MAX_KM,
+  CORNICE_CREASE_LO,
+  CORNICE_CREASE_HI,
+  CORNICE_SLOPE_LO,
+  CORNICE_SLOPE_HI,
+  GLACIER_BELOW_SNOWLINE_KM,
+  GLACIER_BAND_KM,
+  GLACIER_SLOPE_MAX,
+  SNOW_HOLD_KM,
+  SNOW_SCOUR_ABOVE_KM,
+  SNOW_SCOUR_WIDTH_KM,
+  SNOW_SLOPE_K,
+  FOG_SCALE_HEIGHT_KM,
+  FOG_EXTINCTION,
+  FOG_WAVE_KM,
+  FOG_TAU_MAX,
+  MARCH_MAX_KM,
+  MARCH_MIN_STEP_KM,
+  MARCH_RELAX,
+  MARCH_GROWTH,
+  CONTOUR_INTERVAL_KM,
+};
+
+/** The integer constants — octave counts and loop budgets. */
+export const HEIGHTFIELD_GLSL_INTS: Readonly<Record<string, number>> = {
+  OCTAVES_MARCH,
+  OCTAVES_SHADE,
+  SWELL_OCTAVES,
+  HORN_COUNT,
+  MARCH_STEPS,
+  MARCH_REFINE,
+};
+
+/** The generated preamble: every shared number, in GLSL, from the source. */
+export function heightfieldGlslConstants(): string {
+  const lines: string[] = [];
+  for (const [name, v] of Object.entries(HEIGHTFIELD_GLSL_INTS)) {
+    lines.push(`const int ${name} = ${Math.round(v)};`);
+  }
+  for (const [name, v] of Object.entries(HEIGHTFIELD_GLSL_FLOATS)) {
+    lines.push(`const float ${name} = ${glslFloat(v)};`);
+  }
+  return lines.join("\n");
+}
+
+/**
+ * The field, mirrored. Loop bounds are literals because GLSL ES 1.00 needs
+ * them constant; the caller's own budget rides in as `steps`, never above
+ * the literal, which is what keeps the march bounded in the shader exactly
+ * as `marchTerrain` is bounded in node.
+ */
+export const HEIGHTFIELD_GLSL_BODY = `
+uniform vec2 uSeedOffset;
+// cx, cz, amp, radius
+uniform vec4 uHornA[${HORN_COUNT}];
+// cos(angle), sin(angle), aniso, unused
+uniform vec4 uHornB[${HORN_COUNT}];
+
+float hf_hash21(vec2 p) {
+  p = fract(p * vec2(123.34, 456.21));
+  p += dot(p, p + 45.32);
+  return fract(p.x * p.y);
+}
+
+/** value noise in [0,1] with its exact gradient: (v, dv/dx, dv/dy) */
+vec3 hf_noised(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = p - i;
+  vec2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+  vec2 du = 30.0 * f * f * (f * (f - 2.0) + 1.0);
+  float a = hf_hash21(i);
+  float b = hf_hash21(i + vec2(1.0, 0.0));
+  float c = hf_hash21(i + vec2(0.0, 1.0));
+  float d = hf_hash21(i + vec2(1.0, 1.0));
+  float k1 = b - a;
+  float k2 = c - a;
+  float k3 = a - b - c + d;
+  return vec3(
+    a + k1 * u.x + k2 * u.y + k3 * u.x * u.y,
+    du.x * (k1 + k3 * u.y),
+    du.y * (k2 + k3 * u.x)
+  );
+}
+
+float hf_ridgeFold(float v) { return 1.0 - abs(2.0 * v - 1.0); }
+float hf_ridgeFoldSlope(float v) {
+  float s = 2.0 * v - 1.0;
+  return s == 0.0 ? 0.0 : (s > 0.0 ? -2.0 : 2.0);
+}
+
+/** smooth fbm in [0,1] with its exact gradient */
+vec3 hf_smoothFbm(vec2 p, int octaves) {
+  float v = 0.0;
+  float dx = 0.0;
+  float dy = 0.0;
+  float amp = 1.0;
+  float norm = 0.0;
+  float m00 = 1.0, m01 = 0.0, m10 = 0.0, m11 = 1.0;
+  float c = cos(OCTAVE_TURN) * LACUNARITY;
+  float s = sin(OCTAVE_TURN) * LACUNARITY;
+  for (int i = 0; i < ${OCTAVES_SHADE}; i++) {
+    if (i >= octaves) break;
+    vec3 n = hf_noised(vec2(m00 * p.x + m01 * p.y, m10 * p.x + m11 * p.y));
+    v += amp * n.x;
+    dx += amp * (n.y * m00 + n.z * m10);
+    dy += amp * (n.y * m01 + n.z * m11);
+    norm += amp;
+    amp *= GAIN;
+    float a00 = c * m00 - s * m10;
+    float a01 = c * m01 - s * m11;
+    float a10 = s * m00 + c * m10;
+    float a11 = s * m01 + c * m11;
+    m00 = a00; m01 = a01; m10 = a10; m11 = a11;
+  }
+  return vec3(v / norm, dx / norm, dy / norm);
+}
+
+/** ridged fbm: (v, dv/dx, dv/dy, crease) */
+vec4 hf_ridgedFbm(vec2 p, int octaves) {
+  float v = 0.0;
+  float dx = 0.0;
+  float dy = 0.0;
+  float amp = 1.0;
+  float norm = 0.0;
+  float crease = 1.0;
+  float m00 = 1.0, m01 = 0.0, m10 = 0.0, m11 = 1.0;
+  float c = cos(OCTAVE_TURN) * LACUNARITY;
+  float s = sin(OCTAVE_TURN) * LACUNARITY;
+  for (int i = 0; i < ${OCTAVES_SHADE}; i++) {
+    if (i >= octaves) break;
+    vec3 n = hf_noised(vec2(m00 * p.x + m01 * p.y, m10 * p.x + m11 * p.y));
+    float r = hf_ridgeFold(n.x);
+    float g = hf_ridgeFoldSlope(n.x);
+    v += amp * r;
+    dx += amp * g * (n.y * m00 + n.z * m10);
+    dy += amp * g * (n.y * m01 + n.z * m11);
+    norm += amp;
+    if (i < 2) crease = min(crease, abs(2.0 * n.x - 1.0));
+    amp *= GAIN;
+    float a00 = c * m00 - s * m10;
+    float a01 = c * m01 - s * m11;
+    float a10 = s * m00 + c * m10;
+    float a11 = s * m01 + c * m11;
+    m00 = a00; m01 = a01; m10 = a10; m11 = a11;
+  }
+  return vec4(v / norm, dx / norm, dy / norm, crease);
+}
+
+/** one soft-L1 horn: (h, dh/dx, dh/dz) */
+vec3 hf_hornField(vec2 p, vec4 a, vec4 b) {
+  vec2 q = p - a.xy;
+  float ca = b.x;
+  float sa = b.y;
+  float u = ca * q.x - sa * q.y;
+  float v = sa * q.x + ca * q.y;
+  float sx = a.w;
+  float sz = a.w / b.z;
+  float au = sqrt(u * u + HORN_EPS_KM * HORN_EPS_KM);
+  float av = sqrt(v * v + HORN_EPS_KM * HORN_EPS_KM);
+  float invRoot2 = 1.0 / sqrt(2.0);
+  float rho = (au / sx + av / sz) * invRoot2;
+  float h = a.z * exp(-pow(rho, HORN_POWER));
+  float dhdr = -h * HORN_POWER * pow(rho, HORN_POWER - 1.0);
+  float dhdu = dhdr * (u / au) * (invRoot2 / sx);
+  float dhdv = dhdr * (v / av) * (invRoot2 / sz);
+  return vec3(h, dhdu * ca + dhdv * sa, -dhdu * sa + dhdv * ca);
+}
+
+vec3 hf_hornsAt(vec2 p) {
+  vec3 acc = vec3(0.0);
+  for (int i = 0; i < ${HORN_COUNT}; i++) {
+    acc += hf_hornField(p, uHornA[i], uHornB[i]);
+  }
+  return acc;
+}
+
+/**
+ * The ground. h in km, grad in km per km, crease and ridge for the
+ * material classifier — the same terms, differentiated the same way.
+ */
+void hf_groundAt(vec2 xz, int octaves, out float h, out vec2 grad, out float crease, out float ridge) {
+  vec2 p = (xz + uSeedOffset) * BASE_FREQ;
+  vec4 r = hf_ridgedFbm(p, octaves);
+  vec3 sw = hf_smoothFbm(p * SWELL_RATIO, SWELL_OCTAVES);
+
+  float env = ENVELOPE_FLOOR + (1.0 - ENVELOPE_FLOOR) * sw.x;
+  float denv = 1.0 - ENVELOPE_FLOOR;
+
+  float hR = RIDGE_AMP_KM * r.x * env;
+  float dRx = RIDGE_AMP_KM * (r.y * BASE_FREQ * env + r.x * denv * sw.y * BASE_FREQ * SWELL_RATIO);
+  float dRz = RIDGE_AMP_KM * (r.z * BASE_FREQ * env + r.x * denv * sw.z * BASE_FREQ * SWELL_RATIO);
+
+  float s = sqrt(dot(xz, xz) + SUMMIT_EPS_KM * SUMMIT_EPS_KM);
+  float g = SUMMIT_KM * exp(-s / SUMMIT_RADIUS_KM);
+  vec2 dG = (-g / SUMMIT_RADIUS_KM) * (xz / s);
+  vec3 horns = hf_hornsAt(xz);
+
+  h = hR + g + horns.x;
+  grad = vec2(dRx + dG.x + horns.y, dRz + dG.y + horns.z);
+  crease = r.w;
+  ridge = r.x;
+}
+
+float hf_heightAt(vec2 xz, int octaves) {
+  float h; vec2 grad; float crease; float ridge;
+  hf_groundAt(xz, octaves, h, grad, crease, ridge);
+  return h;
+}
+
+// ——— the fog, integrated by hand ————————————————————————————————
+
+float hf_fogDensity(float y, float fogAltitude) {
+  return exp(-(y - fogAltitude) / FOG_SCALE_HEIGHT_KM);
+}
+
+float hf_fogOpticalDepth(float y0, float dirY, float dist, float fogAltitude) {
+  float d = max(0.0, dist);
+  if (abs(dirY) < 1e-7) return min(FOG_TAU_MAX, d * hf_fogDensity(y0, fogAltitude));
+  float e0 = hf_fogDensity(y0, fogAltitude);
+  float e1 = hf_fogDensity(y0 + dirY * d, fogAltitude);
+  float tau = (FOG_SCALE_HEIGHT_KM / dirY) * (e0 - e1);
+  return min(FOG_TAU_MAX, max(0.0, tau));
+}
+
+float hf_fogTransmittance(float y0, float dirY, float dist, float fogAltitude) {
+  return exp(-FOG_EXTINCTION * hf_fogOpticalDepth(y0, dirY, dist, fogAltitude));
+}
+
+float hf_fogSurfaceAt(vec2 xz, float fogAltitude, float phase) {
+  float n = hf_smoothFbm(vec2(xz.x * 0.21 + phase * 0.05, xz.y * 0.21 - phase * 0.03), 3).x;
+  return fogAltitude + FOG_WAVE_KM * (n * 2.0 - 1.0);
+}
+
+// ——— the march ————————————————————————————————————————————————
+
+/**
+ * The distance-bounded heightfield march, step for step. \`steps\` and
+ * \`refine\` are the frame's own budget and never exceed the literals the
+ * loops are written with.
+ */
+bool hf_marchTerrain(vec3 ro, vec3 rd, int octaves, int steps, int refine, out float tHit) {
+  float t = 0.02;
+  float prevT = t;
+  for (int i = 0; i < MARCH_STEPS; i++) {
+    if (i >= steps) break;
+    float py = ro.y + rd.y * t;
+    if (t > MARCH_MAX_KM) { tHit = MARCH_MAX_KM; return false; }
+    if (py > HEIGHT_MAX_KM && rd.y >= 0.0) { tHit = t; return false; }
+    float h = hf_heightAt(ro.xz + rd.xz * t, octaves);
+    float gap = py - h;
+    if (gap < 0.0) {
+      float lo = prevT;
+      float hi = t;
+      for (int k = 0; k < MARCH_REFINE; k++) {
+        if (k >= refine) break;
+        float mid = (lo + hi) * 0.5;
+        float gy = ro.y + rd.y * mid;
+        float gh = hf_heightAt(ro.xz + rd.xz * mid, octaves);
+        if (gy - gh < 0.0) hi = mid; else lo = mid;
+      }
+      tHit = (lo + hi) * 0.5;
+      return true;
+    }
+    prevT = t;
+    t += max(MARCH_MIN_STEP_KM, max(MARCH_RELAX * gap, MARCH_GROWTH * t));
+  }
+  tHit = min(t, MARCH_MAX_KM);
+  return false;
+}
+
+// ——— matter: rock, snow, glacier, and the wind's own cornice ————
+
+float hf_corniceStrength(float crease, vec2 grad, vec2 wind) {
+  float slope = length(grad);
+  float crest = 1.0 - smoothstep(CORNICE_CREASE_LO, CORNICE_CREASE_HI, crease);
+  float steep = smoothstep(CORNICE_SLOPE_LO, CORNICE_SLOPE_HI, slope);
+  vec2 uphill = slope > 0.0 ? grad / slope : vec2(0.0);
+  float lee = clamp(-dot(wind, uphill), 0.0, 1.0);
+  return max(crest * steep * lee, 0.0);
+}
+
+/** (rock, snow, glacier, cornice) — the weights partition the face */
+vec4 hf_material(float h, vec2 grad, float crease, float ridge, float snowKm, vec2 wind) {
+  float slope = length(grad);
+  float valleyW = 1.0 - smoothstep(0.4, 0.62, ridge);
+  float gentle = 1.0 - smoothstep(GLACIER_SLOPE_MAX - 0.1, GLACIER_SLOPE_MAX + 0.14, slope);
+  float iceAlt = smoothstep(
+    snowKm - GLACIER_BELOW_SNOWLINE_KM - GLACIER_BAND_KM,
+    snowKm - GLACIER_BELOW_SNOWLINE_KM,
+    h
+  );
+  float notCrest = smoothstep(0.06, 0.18, crease);
+  float glacier = clamp(valleyW * gentle * iceAlt * notCrest, 0.0, 1.0);
+
+  float flat = 1.0 / (1.0 + slope * SNOW_SLOPE_K);
+  float held = clamp((h - snowKm) / SNOW_HOLD_KM, 0.0, 1.0) * flat;
+  float scour = 1.0 - clamp((h - (snowKm + SNOW_SCOUR_ABOVE_KM)) / SNOW_SCOUR_WIDTH_KM, 0.0, 1.0);
+  float snow = clamp(held * scour, 0.0, 1.0) * (1.0 - glacier);
+  float rock = clamp(1.0 - snow - glacier, 0.0, 1.0);
+
+  float total = rock + snow + glacier;
+  if (total > 0.0) {
+    rock /= total; snow /= total; glacier /= total;
+  } else {
+    rock = 1.0; snow = 0.0; glacier = 0.0;
+  }
+  float cornice = hf_corniceStrength(crease, grad, wind) * (snow + glacier);
+  return vec4(rock, snow, glacier, cornice);
+}
+`;
+
+/** The whole chunk: the generated constants, then the mirrored field. */
+export function heightfieldGlsl(): string {
+  return `${heightfieldGlslConstants()}\n${HEIGHTFIELD_GLSL_BODY}`;
+}
+
+/**
+ * The horn table as the shader takes it — two vec4 arrays, so the seed's
+ * horns are placed exactly once, in JS, by `hornsForSeed`.
+ */
+export function packHorns(seed: number): { a: Float32Array; b: Float32Array } {
+  const horns = hornsForSeed(seed);
+  const a = new Float32Array(HORN_COUNT * 4);
+  const b = new Float32Array(HORN_COUNT * 4);
+  for (let i = 0; i < HORN_COUNT; i++) {
+    const h = horns[i];
+    a[i * 4 + 0] = h.cx;
+    a[i * 4 + 1] = h.cz;
+    a[i * 4 + 2] = h.amp;
+    a[i * 4 + 3] = h.radius;
+    b[i * 4 + 0] = Math.cos(h.angle);
+    b[i * 4 + 1] = Math.sin(h.angle);
+    b[i * 4 + 2] = h.aniso;
+    b[i * 4 + 3] = 0;
+  }
+  return { a, b };
+}

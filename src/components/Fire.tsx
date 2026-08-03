@@ -915,7 +915,7 @@ export default function Fire() {
       }
 
       const ignitionAge = (simNow - ignitionT0) / 1000;
-      const ignition = Math.max(0, ignitionAmp * Math.exp(-ignitionAge * 2.2) - gutter * 0.4);
+      const ignition = Math.max(0, (ignitionAmp * Math.exp(-ignitionAge * 2.2) - gutter * 0.4) * (1 - bank * 0.85));
       if (ignition < 0.01 && ignitionAmp > 0.01 && gutter < 0.02) ignitionAmp = 0;
 
       if (now - lastMarkSync > 140) {
@@ -932,11 +932,14 @@ export default function Fire() {
         if (uPressLoc) gl.uniform1f(uPressLoc, pressSmoothed);
         if (uWindLoc) gl.uniform1f(uWindLoc, wind);
         if (uIgnitionLoc) gl.uniform1f(uIgnitionLoc, ignition);
+        if (uLensLoc) gl.uniform1f(uLensLoc, lens);
+        if (uSeasonLoc) gl.uniform1f(uSeasonLoc, clamp(season + bank * 0.5, 0, 1));
+        if (uPanLoc) gl.uniform2f(uPanLoc, panX, panY);
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       } else {
         const ctx = heatCanvas.getContext("2d");
         if (ctx) {
-          const dpr = Math.min(window.devicePixelRatio || 1, 2);
+          const dpr = resolveDpr(tier, { embedded, reducedMotion: reduce });
           ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
           const g = ctx.createLinearGradient(0, 0, 0, h);
           g.addColorStop(0, "#050304");
@@ -961,7 +964,7 @@ export default function Fire() {
       }
 
       if (!reduce) {
-        emberAcc += (24 + ignition * 58 + pressSmoothed * 36) * dt;
+        emberAcc += (24 + ignition * 58 + pressSmoothed * 36) * dt * detail.particles;
         while (emberAcc > 1) {
           emberAcc -= 1;
           const x = Math.random() * w;
@@ -1039,10 +1042,25 @@ export default function Fire() {
       cancelAnimationFrame(raf);
       ro.disconnect();
       detachGestures();
+      detachVessel();
+      unvis();
+      ungal();
       fxCanvas.removeEventListener("pointermove", onHover);
       fxCanvas.removeEventListener("pointerleave", onHoverLeave);
+      heatCanvas.removeEventListener("webglcontextlost", onContextLost);
+      heatCanvas.removeEventListener("webglcontextrestored", onContextRestored);
+      if (gl) {
+        if (program) gl.deleteProgram(program);
+        if (vbo) gl.deleteBuffer(vbo);
+      }
     };
   }, [markFire]);
+
+  const letGo = useCallback(() => {
+    clearAllRef.current();
+    getFieldAudio().thud();
+    haptics.roll();
+  }, []);
 
   return (
     <div
@@ -1206,6 +1224,8 @@ export default function Fire() {
           </span>
         ))}
       </div>
+
+      <LetGo label="let the fire bank down" onLetGo={letGo} visible={hasBuilt} />
 
       <WaterText
         className="fire-legend"

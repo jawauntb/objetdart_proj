@@ -259,6 +259,13 @@ export default function TimeManifold() {
       pan.x += (pan.tx - pan.x) * Math.min(1, delta * 0.013);
       pan.y += (pan.ty - pan.y) * Math.min(1, delta * 0.013);
 
+      // ── the law layer, angular channel: the season (three-finger twist).
+      // Cosmic epoch drifts the manifold's own palette — young and hot
+      // (amber) toward cold and late (violet-blue) — continuously, never a
+      // detent switch like the lens.
+      const epoch = epochRef.current;
+      epoch.cur += (epoch.target - epoch.cur) * Math.min(1, delta * 0.006);
+
       // ── the vessel: the device's lean is gravity, and mass has weight ──
       // A damped spring (ω ≈ 5 rad/s, ζ ≈ 0.5) so the well leans over about a
       // second and settles once — never the twitch of raw orientation.
@@ -309,10 +316,22 @@ export default function TimeManifold() {
       };
 
       // ── background ──
+      // the season tints the sky itself: young and hot leans amber, cold and
+      // late leans violet — a slow drift, never a hard swap
+      const seasonMix = (young: string, late: string, a: number) => {
+        const y = parseInt(young.replace("#", ""), 16);
+        const l = parseInt(late.replace("#", ""), 16);
+        const mix = (shift: number) => {
+          const yv = (y >> shift) & 255;
+          const lv = (l >> shift) & 255;
+          return Math.round(yv + (lv - yv) * a);
+        };
+        return `rgb(${mix(16)}, ${mix(8)}, ${mix(0)})`;
+      };
       const bg = ctx.createLinearGradient(0, 0, 0, height);
-      bg.addColorStop(0, "#080611");
-      bg.addColorStop(0.55, "#0a0a16");
-      bg.addColorStop(1, "#050409");
+      bg.addColorStop(0, seasonMix("#150d10", "#050813", epoch.cur));
+      bg.addColorStop(0.55, seasonMix("#160f13", "#080a18", epoch.cur));
+      bg.addColorStop(1, seasonMix("#0a0609", "#03040a", epoch.cur));
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, width, height);
       const hx = cx + pan.x;
@@ -888,6 +907,21 @@ export default function TimeManifold() {
       },
       twist: (e) => {
         lastGestureAtRef.current = performance.now();
+        if (e.fingers === 3) {
+          // three-finger twist turns the season, not the lens: the epoch of
+          // the manifold itself, young and hot toward cold and late. It
+          // answers continuously through the whole turn — never a switch —
+          // and tints the manifold's own palette while it drifts.
+          const epoch = epochRef.current;
+          epoch.target = clamp(epoch.target + e.angle / 3.4, 0, 1);
+          try { audio.holdConcernTone("weather", 10 + epoch.target * 70); } catch { /* noop */ }
+          if (e.phase === "end") {
+            try { audio.releaseConcernTone("weather"); } catch { /* noop */ }
+            try { haptics.tap(); } catch { /* noop */ }
+            recordTape("region", 0.3 + epoch.target * 0.5, "time/season");
+          }
+          return;
+        }
         // two fingers turn the lens — one continuous axis, not a switch:
         // the worldline you draw, the duration you feel, the metric that
         // makes both. It answers all the way through the turn, in a tone
