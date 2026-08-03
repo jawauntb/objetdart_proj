@@ -27,7 +27,9 @@ const {
   SCALE_BANDS,
   SCALE_MIN,
   SCALE_MAX,
+  STEP_BACK_DECADES,
   TRAVEL_INTENT_MS,
+  stepBackVelocity,
   bandAt,
   bandBlend,
   initialScaleState,
@@ -378,5 +380,37 @@ assert.equal(atlasIn?.to, "coast", "atlas: pinching out at the deepest detail tr
 // The adapters reuse the one integrator: travel still costs sustained intent.
 assert.ok(starsOut.elapsed >= TRAVEL_INTENT_MS, "adapter walls keep the sustained-intent price");
 assert.ok(atlasIn.elapsed >= TRAVEL_INTENT_MS, "adapter walls keep the sustained-intent price");
+
+// — Step back (two-finger tap): a nudge toward larger scales that can
+// approach but never touch the wall — no detent, no crossing, from any s —
+{
+  const idle = { zoomVel: 0, active: false };
+  const runOut = (s0) => {
+    let state = { ...initialScaleState(s0), v: stepBackVelocity(s0) };
+    const seen = [];
+    for (let t = 0; t < 2000; t += 16) {
+      const r = stepScale(state, idle, 16);
+      state = r.state;
+      seen.push(...r.events);
+    }
+    return { state, seen };
+  };
+  for (const band of SCALE_BANDS) {
+    const mid = (band.sMin + band.sMax) / 2;
+    const nearCeiling = band.sMax - 0.05;
+    for (const s0 of [band.sMin + 0.01, mid, nearCeiling]) {
+      const { state, seen } = runOut(s0);
+      assert.equal(seen.length, 0, `${band.id}: step back from ${s0} never wakes the wall`);
+      assert.equal(bandAt(state.s).id, band.id, `${band.id}: step back stays inside the band`);
+      assert.ok(state.s < band.sMax, `${band.id}: step back never reaches the ceiling`);
+      assert.ok(state.s >= s0, `${band.id}: step back never moves toward smaller scales`);
+    }
+    // Away from the ceiling the nudge really retreats, and by the fixed step.
+    const { state } = runOut(mid);
+    assert.ok(state.s > mid + STEP_BACK_DECADES * 0.8, `${band.id}: the step lands (≈${STEP_BACK_DECADES} decades)`);
+    // Pressed against the peek margin there is no headroom left: it holds.
+    assert.equal(stepBackVelocity(band.sMax - 1e-4), 0, `${band.id}: at the wall the step yields nothing`);
+  }
+}
 
 console.log("scale manifold tests passed");

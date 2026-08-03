@@ -26,6 +26,7 @@ import { useEffect, useRef } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import {
   ATOM_FAMILIES,
@@ -199,6 +200,13 @@ export default function AtomsField() {
     let sweepY = 0;
     let sweepStrength = 0;
     let stirOmega = 0;
+    // the vessel: gravity's lean on the clouds (-1..1) and the tutti pulse
+    let tiltLeanX = 0;
+    let tiltLeanY = 0;
+    let tuttiPulse = 0;
+    let lastTiltSoundAt = 0;
+    let lastTuttiAt = 0;
+    let lastDeepenNoteAt = 0;
     let lastInteractionAt = performance.now();
     let lastSaveAt = 0;
     let dirty = false;
@@ -440,11 +448,44 @@ export default function AtomsField() {
       save();
     };
 
+    // the raised-lens marker ScaleTravel reads before a step-back nudge
+    const markLens = (raised: boolean) => {
+      if (raised) wrap.dataset.lensRaised = "1";
+      else delete wrap.dataset.lensRaised;
+    };
+
+    // three-finger tap = tutti (grammar §5): one synchronized soft pulse —
+    // every cloud brightens a breath and hums its own voice, quietly
+    const tutti = () => {
+      const now = performance.now();
+      if (now - lastTuttiAt < 1400) return;
+      lastTuttiAt = now;
+      tuttiPulse = 1;
+      atoms
+        .filter((a) => !a.retiringAt && a.closed)
+        .slice(0, 8)
+        .forEach((a, i) => noteLater(i * 45, midiOf(a.morph), 70));
+      try { haptics.tap(); } catch { /* noop */ }
+    };
+
     // ————— gestures (the grammar, nothing private; pinch belongs to the manifold) —————
     const detach = attachGestures(wrap, {
       tap: (e) => {
         lastInteractionAt = performance.now();
-        if (e.fingers !== 1) return;
+        if (e.fingers === 2) {
+          // step back: a raised lens lowers first; the marker clears a beat
+          // later so ScaleTravel skips its nudge on this same tap
+          if (lensSnapped === 1) {
+            lensSnapped = 0;
+            lensTarget = 0;
+            window.setTimeout(() => markLens(false), 0);
+            try { haptics.lens(); } catch { /* noop */ }
+            note(46, 160);
+          }
+          return;
+        }
+        if (e.fingers === 3) { tutti(); return; }
+        if (e.fingers !== 1) return; // anything else is gently absorbed
         const { x, y } = toLocal(e.x, e.y);
         const a = nearestAtom(x, y);
         if (a) excite(a, e.intensity);
@@ -485,7 +526,16 @@ export default function AtomsField() {
           const partner = covalentPartner(a);
           hold.partnerId = partner ? partner.id : null;
           if (!partner || !a.closed) {
-            // no partner in reach: the cloud only deepens under the hand
+            // no partner in reach: the cloud deepens under the hand — and
+            // duration is an axis, so the longer the hold, the more the
+            // orbitals stir and the lower its hum settles
+            a.precessBoost = clamp(a.precessBoost + 0.025 * (1 + e.intensity * 0.5), -3, 3);
+            const now = performance.now();
+            if (now - lastDeepenNoteAt > 800) {
+              lastDeepenNoteAt = now;
+              note(midiOf(a.morph) - Math.min(7, Math.round(e.elapsed / 900)), 130);
+              try { haptics.tap(); } catch { /* noop */ }
+            }
             return;
           }
           // the road to the ceremony: lobes reach, ticks rise
@@ -581,6 +631,7 @@ export default function AtomsField() {
           const snapped = lensTarget > 0.5 ? 1 : 0;
           if (snapped !== lensSnapped) {
             lensSnapped = snapped;
+            markLens(snapped === 1);
             try { haptics.lens(); } catch { /* noop */ }
             if (snapped === 1) { try { audio().chime(); } catch { /* noop */ } }
             else note(46, 160);
@@ -599,6 +650,33 @@ export default function AtomsField() {
           note(72 + Math.round(Math.abs(e.winding)), 90);
           try { haptics.ripple(0.3); } catch { /* noop */ }
         }
+      },
+    });
+
+    // ————— the vessel: the device is the vacuum's body (grammar §5) —————
+    // Subscribed passively — nothing flows until the candle has invited the
+    // senses. Tilt = the clouds lean with real gravity; shake = a mass
+    // excitation — several electrons jump at once, ring flashes and all.
+    const detachVessel = onVessel({
+      tilt: ({ beta, gamma }) => {
+        if (reduce) { tiltLeanX = 0; tiltLeanY = 0; return; }
+        tiltLeanX = clamp(gamma / 28, -1, 1);
+        tiltLeanY = clamp((beta - 35) / 28, -1, 1); // rest angle ≈ a held phone
+        const mag = Math.hypot(tiltLeanX, tiltLeanY);
+        const now = performance.now();
+        if (mag > 0.55 && now - lastTiltSoundAt > 1400) {
+          lastTiltSoundAt = now;
+          note(36 + Math.round(mag * 4), 220); // the field's low leaning word
+        }
+      },
+      shake: ({ intensity }) => {
+        if (reduce) return;
+        lastInteractionAt = performance.now();
+        // mass excitation: the whole field jumps a shell together
+        for (const a of atoms) {
+          if (!a.retiringAt && a.closed) excite(a, 0.4 + intensity * 0.6);
+        }
+        try { (intensity > 0.7 ? haptics.storm : haptics.chop)(); } catch { /* noop */ }
       },
     });
 
@@ -701,17 +779,18 @@ export default function AtomsField() {
       const feltAlpha = (1 - lens) * fade * dimK;
       const lensAlpha = lens * fade;
       const precession = a.precessPhase + (reduce ? 0 : t * (morph.precess + a.precessBoost + stirOmega * 0.3));
+      // the vessel's gravity: every cloud leans downhill together
+      let leanX = reduce ? 0 : tiltLeanX * R * 0.2;
+      let leanY = reduce ? 0 : tiltLeanY * R * 0.2;
       // field sweep: the cloud leans toward the finger
-      let leanX = 0;
-      let leanY = 0;
       if (sweepStrength > 0.01) {
         const dx = sweepX - cx;
         const dy = sweepY - cy;
         const d = Math.max(1, Math.hypot(dx, dy));
         const reach = minDim * 0.5;
         const k = Math.max(0, 1 - d / reach) * sweepStrength;
-        leanX = (dx / d) * R * 0.22 * k;
-        leanY = (dy / d) * R * 0.22 * k;
+        leanX += (dx / d) * R * 0.22 * k;
+        leanY += (dy / d) * R * 0.22 * k;
       }
 
       ctx.save();
@@ -936,6 +1015,10 @@ export default function AtomsField() {
       lens += (lensTarget - lens) * Math.min(1, dt * 6);
       sweepStrength *= Math.exp(-dt * 2.2);
       stirOmega *= Math.exp(-dt * 0.8);
+      tuttiPulse *= Math.exp(-dt * 2.4);
+      // the vessel's lean joins the field wind: the vacuum drifts downhill
+      const gravX = windX + tiltLeanX * 0.5;
+      const gravY = windY + tiltLeanY * 0.5;
 
       // deferred notes (the ionized electron falling home)
       for (let i = pendingNotes.length - 1; i >= 0; i--) {
@@ -991,8 +1074,8 @@ export default function AtomsField() {
           const d = a.morph.drift;
           const wx = Math.sin(localT * d.rate + d.ax) * 0.0028;
           const wy = Math.cos(localT * d.rate * 0.8 + d.ay) * 0.0024;
-          const vx = wx + (a.pushX + windX * 26) / Math.max(1, width);
-          const vy = wy + (a.pushY + windY * 26) / Math.max(1, height);
+          const vx = wx + (a.pushX + gravX * 26) / Math.max(1, width);
+          const vy = wy + (a.pushY + gravY * 26) / Math.max(1, height);
           a.nx = clamp(a.nx + vx * dt * timeScale, 0.08, 0.92);
           a.ny = clamp(a.ny + vy * dt * timeScale, 0.09, 0.92);
           a.pushX *= Math.exp(-dt * 2.2);
@@ -1027,8 +1110,8 @@ export default function AtomsField() {
         if (!reduce) {
           const jx = Math.sin(localT * (0.8 + twinkleHash(i + 53) * 1.4) + twinkleHash(i + 11) * 6.28) * 4;
           const jy = Math.cos(localT * (0.7 + twinkleHash(i + 97) * 1.5) + twinkleHash(i + 5) * 6.28) * 4;
-          m.vx += (jx - m.vx) * dt * 2 + windX * 110 * dt;
-          m.vy += (jy - m.vy) * dt * 2 + windY * 110 * dt;
+          m.vx += (jx - m.vx) * dt * 2 + gravX * 110 * dt;
+          m.vy += (jy - m.vy) * dt * 2 + gravY * 110 * dt;
           m.x += m.vx * dt * timeScale;
           m.y += m.vy * dt * timeScale;
           m.vx *= Math.exp(-dt * 1.1);
@@ -1050,6 +1133,18 @@ export default function AtomsField() {
       drawBonds(localT);
       const sorted = [...atoms].sort((a, b) => a.morph.radius - b.morph.radius);
       for (const a of sorted) drawAtom(a, localT, breath);
+
+      // tutti: one soft ring around every cloud, fading together
+      if (tuttiPulse > 0.03) {
+        ctx.strokeStyle = colorAlpha("#E7AC52", 0.2 * tuttiPulse);
+        ctx.lineWidth = 1;
+        for (const a of atoms) {
+          if (a.retiringAt || a.sr <= 0) continue;
+          ctx.beginPath();
+          ctx.arc(a.sx, a.sy, a.sr * (1.05 + (1 - tuttiPulse) * 0.25), 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      }
 
       // specks (bursts and photon streaks)
       ctx.save();
@@ -1120,6 +1215,8 @@ export default function AtomsField() {
       cancelAnimationFrame(raf);
       observer.disconnect();
       detach();
+      detachVessel();
+      markLens(false);
       wrap.removeEventListener("keydown", onKeyDown);
       wrap.removeEventListener("keyup", onKeyUp);
       wrap.removeEventListener("focus", onFocus);

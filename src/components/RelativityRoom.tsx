@@ -36,6 +36,7 @@ import { useEffect, useRef } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import {
   SOFTENING,
@@ -203,6 +204,13 @@ export default function RelativityRoom() {
     const beaconPhase = [0.4, 3.1];
     let beaconOffX = 0;
     let beaconOffY = 0;
+    // the vessel: the aether current leans with real gravity (-1..1)
+    let tiltLeanX = 0;
+    let tiltLeanY = 0;
+    let aetherX = 0; // wind + tilt, refreshed each frame — rays and comets ride it
+    let aetherY = 0;
+    let lastTiltSoundAt = 0;
+    let lastTuttiAt = 0;
     let lastInteractionAt = performance.now();
     let focused = false;
     let cursorNx = 0.5;
@@ -448,11 +456,38 @@ export default function RelativityRoom() {
       carried = null;
     };
 
+    // three-finger tap = tutti (grammar §5): one synchronized soft pulse —
+    // both clocks flash and tick, the lantern breathes one wavefront, every
+    // mass glints its warm arc: the covenant states itself at once
+    const tutti = () => {
+      const now = performance.now();
+      if (now - lastTuttiAt < 1400) return;
+      lastTuttiAt = now;
+      for (const k of [clockA, clockB]) { k.flashTop = now; k.flashBot = now; }
+      note(64, 70);
+      window.setTimeout(() => note(59, 70), 60);
+      rings.push({ x: lantern.x, y: lantern.y, bornLight: lightT, dx: 1, dy: 0, beta: 0 });
+      if (rings.length > MAX_RINGS) rings.shift();
+      for (const m of masses) if (!m.evapAt) m.charge = Math.max(m.charge, 0.22);
+      try { haptics.tap(); } catch { /* noop */ }
+    };
+
     // ————— gestures (grammar only; thresholds live in gesture/core) —————
     const detach = attachGestures(wrap, {
       tap: (e) => {
         lastInteractionAt = performance.now();
-        if (e.fingers !== 1) return; // frame and law absorb stray taps
+        if (e.fingers === 2) {
+          // step back: a raised lens lowers — the frame retreats one step
+          if (lensSnapped === 1) {
+            lensSnapped = 0;
+            lensTarget = 0;
+            try { haptics.lens(); } catch { /* noop */ }
+            note(48, 160);
+          }
+          return;
+        }
+        if (e.fingers === 3) { tutti(); return; }
+        if (e.fingers !== 1) return; // anything else is gently absorbed
         const { x, y } = toLocal(e.x, e.y);
         // your pulse: a ring at exactly c — race it with anything you like
         firePulse(x, y, 0.5 + e.intensity * 0.8);
@@ -545,6 +580,17 @@ export default function RelativityRoom() {
                 try { haptics.tap(); } catch { /* noop */ }
               }
               if (m.growth >= 1) settleMass(m);
+            } else if (m && m.settled && !m.evapAt) {
+              // duration is an axis: past the settle the mass KEEPS gathering —
+              // the well deepens, the beacons near it slow further, all held
+              m.m = clamp(m.m + 0.0035 * (1 + e.intensity * 0.5), 0.4, 2.0);
+              const now = performance.now();
+              if (now - lastGrowNoteAt > 700) {
+                lastGrowNoteAt = now;
+                note(22 + Math.round(m.m * 2), 200);
+                try { haptics.tap(); } catch { /* noop */ }
+                staticRaysStale = true;
+              }
             }
           }
         }
@@ -621,6 +667,39 @@ export default function RelativityRoom() {
           }
           lensTarget = snapped;
         }
+      },
+    });
+
+    // ————— the vessel: the device is the covenant's body (grammar §5) —————
+    // Subscribed passively — nothing flows until the candle has invited the
+    // senses. Tilt = the aether current leans (rays and comets drift with
+    // real gravity); shake = a scatter of pulses, each at exactly c.
+    const detachVessel = onVessel({
+      tilt: ({ beta, gamma }) => {
+        if (reduce) { tiltLeanX = 0; tiltLeanY = 0; return; }
+        tiltLeanX = clamp(gamma / 28, -1, 1);
+        tiltLeanY = clamp((beta - 35) / 28, -1, 1); // rest angle ≈ a held phone
+        const mag = Math.hypot(tiltLeanX, tiltLeanY);
+        const now = performance.now();
+        if (mag > 0.55 && now - lastTiltSoundAt > 1400) {
+          lastTiltSoundAt = now;
+          note(38 + Math.round(mag * 4), 240); // the current's low word
+        }
+      },
+      shake: ({ intensity }) => {
+        if (reduce) return;
+        lastInteractionAt = performance.now();
+        // a scatter of pulses: three rings race out — none beats the others
+        const now = performance.now();
+        for (let k = 0; k < 3; k++) {
+          firePulse(
+            (0.25 + hash01(now + k * 41.3) * 0.5) * width,
+            (0.25 + hash01(now * 1.7 + k * 23.1) * 0.5) * height,
+            0.35 + intensity * 0.45,
+          );
+        }
+        note(45, 180);
+        try { (intensity > 0.7 ? haptics.storm : haptics.chop)(); } catch { /* noop */ }
       },
     });
 
@@ -817,8 +896,8 @@ export default function RelativityRoom() {
         // released: it coasts, then settles
         lantern.vx *= Math.exp(-dt * 1.1);
         lantern.vy *= Math.exp(-dt * 1.1);
-        lantern.vx += windX * c * 0.25 * dt;
-        lantern.vy += windY * c * 0.25 * dt;
+        lantern.vx += aetherX * c * 0.25 * dt;
+        lantern.vy += aetherY * c * 0.25 * dt;
         const sp = Math.hypot(lantern.vx, lantern.vy);
         const cap = 0.9 * c;
         if (sp > cap) { lantern.vx *= cap / sp; lantern.vy *= cap / sp; }
@@ -879,8 +958,11 @@ export default function RelativityRoom() {
       windTargetX *= Math.exp(-dt * 0.5);
       windTargetY *= Math.exp(-dt * 0.5);
       lens += (lensTarget - lens) * Math.min(1, dt * 6);
-      beaconOffX = beaconOffX * Math.exp(-dt * 0.6) + windX * 160 * dt;
-      beaconOffY = beaconOffY * Math.exp(-dt * 0.6) + windY * 160 * dt;
+      // the aether: the hand's wind plus the vessel's lean, one current
+      aetherX = windX + tiltLeanX * 0.4;
+      aetherY = windY + tiltLeanY * 0.4;
+      beaconOffX = beaconOffX * Math.exp(-dt * 0.6) + aetherX * 160 * dt;
+      beaconOffY = beaconOffY * Math.exp(-dt * 0.6) + aetherY * 160 * dt;
 
       const pts = livePoints();
 
@@ -905,8 +987,8 @@ export default function RelativityRoom() {
       for (let i = comets.length - 1; i >= 0; i--) {
         const q = comets[i];
         const a = accelAt(pts, q.x, q.y, rayG * 0.35, SOFTENING);
-        q.vx += (a.ax + windX * c * 0.4) * dt * timeScale;
-        q.vy += (a.ay + windY * c * 0.4) * dt * timeScale;
+        q.vx += (a.ax + aetherX * c * 0.4) * dt * timeScale;
+        q.vy += (a.ay + aetherY * c * 0.4) * dt * timeScale;
         const sp = Math.hypot(q.vx, q.vy);
         if (sp > matterCap) { q.vx *= matterCap / sp; q.vy *= matterCap / sp; }
         q.x += q.vx * dt * timeScale;
@@ -1068,9 +1150,9 @@ export default function RelativityRoom() {
           for (let s = 0; s < 4; s++) {
             const st = geodesicStep(pts, r, stepDt, c, rayG, SOFTENING);
             r.x = st.x; r.y = st.y; r.vx = st.vx; r.vy = st.vy;
-            if (windX !== 0 || windY !== 0) {
-              r.vx += windX * c * 0.5 * stepDt;
-              r.vy += windY * c * 0.5 * stepDt;
+            if (aetherX !== 0 || aetherY !== 0) {
+              r.vx += aetherX * c * 0.5 * stepDt;
+              r.vy += aetherY * c * 0.5 * stepDt;
               const sp = Math.hypot(r.vx, r.vy);
               if (sp > 0) { r.vx *= c / sp; r.vy *= c / sp; }
             }
@@ -1485,6 +1567,7 @@ export default function RelativityRoom() {
       cancelAnimationFrame(raf);
       observer.disconnect();
       detach();
+      detachVessel();
       wrap.removeEventListener("keydown", onKeyDown);
       wrap.removeEventListener("keyup", onKeyUp);
       wrap.removeEventListener("focus", onFocus);

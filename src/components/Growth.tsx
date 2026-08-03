@@ -21,6 +21,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
 import {
@@ -57,6 +58,8 @@ type Blossom = {
   species: Species;
   /** The hand's phenophase contribution (dwell hold). */
   held: number;
+  /** 0..1 overbloom — a hold kept past full bloom keeps deepening. */
+  over: number;
   bloomed: boolean;
   geo: FlowerGeometry | null;
   geoPhase: number;
@@ -335,6 +338,7 @@ function makeSystem(
       seed: bSeed,
       species: speciesFromSeed(bSeed),
       held: 0,
+      over: 0,
       bloomed: false,
       geo: null,
       geoPhase: -1,
@@ -759,6 +763,7 @@ function drawSystem(
     }
     const geo = b.geo;
 
+    b.over *= Math.exp(-fx.dt * 0.25); // the overbloom settles back, slowly
     if (fx.reduce) {
       b.wobble = 0;
       b.wobbleV = 0;
@@ -781,9 +786,11 @@ function drawSystem(
     }
 
     const lean = fx.reduce ? 0 : b.wobble * 0.2 + params.wind * 0.16;
-    const breathScale = fx.reduce
+    // the overbloom breathes the head wider, slow and deliberate
+    const overSwell = b.over * (0.14 + (fx.reduce ? 0 : 0.05 * Math.sin(fx.breath * 2)));
+    const breathScale = (fx.reduce
       ? 1
-      : 1 + Math.sin(fx.breath + b.species.latent[28] * 7) * 0.04 * b.species.breathDepth * (1 + params.pulse * 0.8);
+      : 1 + Math.sin(fx.breath + b.species.latent[28] * 7) * 0.04 * b.species.breathDepth * (1 + params.pulse * 0.8)) + overSwell;
     drawBlossomHead(ctx, b.species, geo, pt.x, pt.y, lean, pxScale * breathScale, alpha, rPx > 11);
   }
 
@@ -900,6 +907,9 @@ export default function Growth() {
     // ————— gesture-side state (all closure locals) —————
     const specks: Speck[] = [];
     let windTarget = 0;
+    let tiltWind = 0; // the vessel's lean: wind toward the downhill side
+    let lastTiltSoundAt = 0;
+    let lastTuttiAt = 0;
     let timeScale = 1;
     let timeScaleTarget = 1;
     let lensTarget = 0;
@@ -1072,7 +1082,18 @@ export default function Growth() {
     /** The dwell verb on a blossom: hand-carried phenophase, matching the
      * rate and voice of /flowers. Bloom crossing is caught in the draw. */
     const advanceBlossom = (b: Blossom, intensity: number) => {
-      if (b.phase >= 1) return; // its season is done; the hand is absorbed
+      if (b.phase >= 1) {
+        // duration is an axis: a hold kept past full bloom keeps deepening —
+        // a slow breathing overbloom, sighing wider the longer the hand stays
+        b.over = Math.min(1, b.over + 0.009 * (1 + intensity * 0.6));
+        const nowOver = performance.now();
+        if (nowOver - lastGrowNoteAt > 800) {
+          lastGrowNoteAt = nowOver;
+          note(midiOf(b.species) - 5 + Math.round(b.over * 4), 160);
+          haptics.tap();
+        }
+        return;
+      }
       b.held = Math.min(1, b.held + 0.0168 * (0.7 + intensity * 0.6));
       const now = performance.now();
       if (now - lastGrowNoteAt > 300) {
@@ -1094,11 +1115,43 @@ export default function Growth() {
       markGrowth("bloom", b.species.palette.petal, 0.9);
     };
 
+    // three-finger tap = tutti (grammar §5): one synchronized soft pulse —
+    // every blossom on every vine sways once, its note a whisper
+    const tutti = () => {
+      const now = performance.now();
+      if (now - lastTuttiAt < 1400) return;
+      lastTuttiAt = now;
+      let voiceI = 0;
+      for (const system of field.systems) {
+        for (const b of system.blossoms) {
+          if (b.sx < 0) continue;
+          b.wobbleV += (hash(b.seed % 977) - 0.5) * 1.1;
+          if (voiceI < 10) {
+            window.setTimeout(() => note(midiOf(b.species), 70), voiceI * 45);
+            voiceI += 1;
+          }
+        }
+      }
+      field.params.pulse = Math.max(field.params.pulse, 0.6);
+      haptics.tap();
+    };
+
     // ————— gestures (the grammar, nothing private) —————
     const detach = attachGestures(canvas, {
       tap: (e) => {
         lastInteractionAt = performance.now();
-        if (e.fingers !== 1) return; // the frame and the law absorb stray taps
+        if (e.fingers === 2) {
+          // step back: a raised lens lowers — the frame retreats one step
+          if (lensSnapped === 1) {
+            lensSnapped = 0;
+            lensTarget = 0;
+            try { haptics.lens(); } catch { /* noop */ }
+            note(48, 160);
+          }
+          return;
+        }
+        if (e.fingers === 3) { tutti(); return; }
+        if (e.fingers !== 1) return; // anything else is gently absorbed
         const p = toLocal(e.x, e.y);
         const b = blossomAt(p.x, p.y);
         if (b) {
@@ -1325,6 +1378,40 @@ export default function Growth() {
     root.addEventListener("focus", onFocus);
     root.addEventListener("blur", onBlur);
 
+    // ————— the vessel: the device is the field's body (grammar §5) —————
+    // Subscribed passively — nothing flows until the candle has invited the
+    // senses. Tilt = the wind leans toward the downhill side (the field's
+    // one wind pathway, reused — vines bow, petals ride it); shake = the
+    // open blossoms shed briefly.
+    const detachVessel = onVessel({
+      tilt: ({ gamma }) => {
+        if (reduceMotionRef.current) { tiltWind = 0; return; }
+        tiltWind = clamp(gamma / 28, -1, 1) * 0.6;
+        const now = performance.now();
+        if (Math.abs(tiltWind) > 0.33 && now - lastTiltSoundAt > 1400) {
+          lastTiltSoundAt = now;
+          note(38 + Math.round(Math.abs(tiltWind) * 5), 240); // the wind's word
+        }
+      },
+      shake: ({ intensity }) => {
+        if (reduceMotionRef.current) return;
+        lastInteractionAt = performance.now();
+        let shed = 0;
+        for (const system of field.systems) {
+          for (const b of system.blossoms) {
+            if (b.sx < 0 || !b.geo || b.geo.openness < 0.5) continue;
+            b.wobbleV += (hash(b.seed % 1013) - 0.5) * (1.2 + intensity);
+            if (shed < 6) {
+              shed += 1;
+              burst(b.sx, b.sy, [b.species.palette.petal, b.species.palette.petalDeep], 3, 18);
+            }
+          }
+        }
+        note(40, 200);
+        try { (intensity > 0.7 ? haptics.storm : haptics.chop)(); } catch { /* noop */ }
+      },
+    });
+
     resize();
     const ro = new ResizeObserver(resize);
     ro.observe(root);
@@ -1351,7 +1438,8 @@ export default function Growth() {
       const params = field.params;
       const active = modeRef.current;
 
-      params.wind += (windTarget - params.wind) * Math.min(1, dt * 2.2);
+      // the hand's weather decays; the vessel's lean stands as long as held
+      params.wind += (windTarget + tiltWind - params.wind) * Math.min(1, dt * 2.2);
       windTarget *= Math.exp(-dt * 0.5);
       params.lens += (lensTarget - params.lens) * Math.min(1, dt * 6);
 
@@ -1545,6 +1633,7 @@ export default function Growth() {
       window.removeEventListener("resize", resize);
       mq.removeEventListener?.("change", onMotionChange);
       detach();
+      detachVessel();
       root.removeEventListener("keydown", onKeyDown);
       root.removeEventListener("focus", onFocus);
       root.removeEventListener("blur", onBlur);
