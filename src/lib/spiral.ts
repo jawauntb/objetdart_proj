@@ -229,8 +229,14 @@ export function crowding(R0: number, chi: number, amp: number, pitch: number): n
 
 // ——— the population, from one seed ————————————————————————————
 
-export const STAR_COUNT = 15000;
-export const STAR_CAP = 20000;
+/**
+ * The population. One instanced draw over typed arrays uploaded once — the
+ * count is a fill-rate question, never a JS one, because no star is ever
+ * touched by the CPU after build: the vertex shader propagates every orbit
+ * from the closed form below.
+ */
+export const STAR_COUNT = 180000;
+export const STAR_CAP = 260000;
 export const BULGE_FRAC = 0.2;
 export const BULGE_R = 0.1;
 /** Disc thickness at the centre; flares gently outward. */
@@ -364,4 +370,140 @@ export function orbitMidiFor(R: number, omegaP: number, pitch: number): number {
  */
 export function armCrossingHz(R: number, omegaP: number): number {
   return (ARM_M * Math.abs(angularSpeed(R) - omegaP)) / TAU;
+}
+
+// ——— what a hand puts into the disc ————————————————————————————
+//
+// The room is not read-only: a held finger seeds a star-forming region in
+// the gas, and a region held into the ceremony ignites — a supernova whose
+// shell sweeps outward, brightens what it passes, and where it reaches the
+// next patch of gas, lights it too. That last part is not decoration: it is
+// self-propagating stochastic star formation (Gerola & Seiden 1978), the
+// standard companion to the density wave, and it is what makes the arms
+// flocculent between the grand-design crests.
+//
+// Regions obey the SAME rotation curve the stars do, so everything a hand
+// plants is caught in the shear immediately — which is the winding problem
+// made personal: plant a round patch, come back, find it drawn into an arc.
+
+/** How many regions the disc carries at once — the shader loops are bounded. */
+export const REGION_MAX = 6;
+/** Seconds of disc clock a nursery burns before it is spent. */
+export const REGION_LIFE = 150;
+/** Radial half-width of a seeded patch, in disc units. */
+export const REGION_HALF_WIDTH = 0.045;
+
+/**
+ * Sedov–Taylor: a blast into a uniform medium goes as r ∝ t^(2/5), so the
+ * shell is fastest the instant it is born and never stops decelerating.
+ * Bounded by SHELL_MAX because a real remnant fades into the medium rather
+ * than crossing the galaxy.
+ */
+export const SHELL_K = 0.16;
+export const SHELL_EXP = 0.4;
+export const SHELL_MAX = 0.34;
+
+export function shellRadius(age: number): number {
+  if (age <= 0) return 0;
+  return Math.min(SHELL_MAX, SHELL_K * Math.pow(age, SHELL_EXP));
+}
+
+/** dr/dt of the same law — strictly falling while the shell still runs. */
+export function shellSpeed(age: number): number {
+  if (age <= 0) return 0;
+  if (shellRadius(age) >= SHELL_MAX) return 0;
+  return SHELL_K * SHELL_EXP * Math.pow(age, SHELL_EXP - 1);
+}
+
+export type Region = {
+  /** Guiding-centre radius — the region rides Ω(R0) like every star. */
+  R0: number;
+  /** Azimuth at t = 0. */
+  theta0: number;
+  /** Disc-clock time the hand seeded it. */
+  born: number;
+  /** How much gas the hold gathered, 0..1. */
+  strength: number;
+  /** Disc-clock time it went supernova, or -1 while it is still gas. */
+  ignited: number;
+};
+
+export type RegionPoint = { x: number; y: number; r: number; theta: number };
+
+/** Where a region stands now: the same circular orbit its stars ride. */
+export function regionAt(reg: Region, t: number): RegionPoint {
+  const theta = reg.theta0 + angularSpeed(reg.R0) * t;
+  return { x: reg.R0 * Math.cos(theta), y: reg.R0 * Math.sin(theta), r: reg.R0, theta };
+}
+
+/**
+ * The winding problem, quantified. A patch of radial half-width dR is torn
+ * azimuthally at |dΩ/dR|·dR per unit time, so its angular span grows without
+ * bound and grows FASTER further in, where the curve is steeper. This is
+ * exactly why a material arm cannot survive — and why the room's arms are a
+ * wave instead. Returns radians.
+ */
+export function shearedSpan(R0: number, dR: number, t: number): number {
+  const r = Math.max(1e-6, R0);
+  // dΩ/dR = −V·R/(R²+Rc²)^{3/2}
+  const denom = Math.pow(r * r + R_CORE * R_CORE, 1.5);
+  const dOmega = (V_FLAT * r) / denom;
+  return 2 * dOmega * dR * Math.max(0, t);
+}
+
+/** Great-circle-free plane distance between two regions at time t. */
+export function regionSeparation(a: Region, b: Region, t: number): number {
+  const pa = regionAt(a, t);
+  const pb = regionAt(b, t);
+  return Math.hypot(pa.x - pb.x, pa.y - pb.y);
+}
+
+/**
+ * Has a's shell reached b by time t? A region only triggers neighbours while
+ * it is genuinely burning — an already-ignited b is never re-lit, and a
+ * shell that has run to SHELL_MAX has spent itself.
+ */
+export function shellReaches(a: Region, b: Region, t: number): boolean {
+  if (a.ignited < 0 || b.ignited >= 0) return false;
+  const age = t - a.ignited;
+  if (age <= 0) return false;
+  const rs = shellRadius(age);
+  if (rs >= SHELL_MAX) return false;
+  return regionSeparation(a, b, t) <= rs;
+}
+
+/**
+ * One step of propagating star formation: every gas region a live shell has
+ * swept lights, and its own shell starts from this instant. Pure — it
+ * returns a NEW list, so the room can pin the chain in a test and the
+ * renderer never has to own the rule.
+ */
+export function propagate(regions: Region[], t: number): { regions: Region[]; lit: number[] } {
+  const lit: number[] = [];
+  const out = regions.map((r) => ({ ...r }));
+  for (let i = 0; i < out.length; i++) {
+    if (out[i].ignited >= 0) continue;
+    for (let j = 0; j < out.length; j++) {
+      if (i === j) continue;
+      if (shellReaches(regions[j], regions[i], t)) {
+        out[i] = { ...out[i], ignited: t, strength: Math.max(out[i].strength, 0.45) };
+        lit.push(i);
+        break;
+      }
+    }
+  }
+  return { regions: out, lit };
+}
+
+/**
+ * A region's remaining life, 0..1. Gas burns down over REGION_LIFE; an
+ * ignited region fades on the shell's own clock instead, so a supernova is
+ * a shorter, brighter death than a slow burn.
+ */
+export function regionLife(reg: Region, t: number): number {
+  if (reg.ignited >= 0) {
+    const age = t - reg.ignited;
+    return clamp(1 - age / (REGION_LIFE * 0.45), 0, 1);
+  }
+  return clamp(1 - (t - reg.born) / REGION_LIFE, 0, 1);
 }

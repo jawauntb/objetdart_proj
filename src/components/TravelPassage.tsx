@@ -537,6 +537,72 @@ function makeFilm(seed: number): Film | null {
   return { renderFrame };
 }
 
+
+// ——— Sprites: gradients built once, never per frame ————————————————
+// A radial gradient is expensive to construct and the films run at 60fps
+// through the whole passage. Every soft glow here is painted ONCE into a
+// small offscreen canvas and then blitted, so a frame costs draws, not
+// gradient objects. (The /stars room's per-frame gradients are the named
+// bottleneck this avoids.)
+
+function makeGlowSprite(inner: RGB, outer: RGB, mid: number): HTMLCanvasElement | null {
+  if (typeof document === "undefined") return null;
+  const S = 96;
+  const c = document.createElement("canvas");
+  c.width = S;
+  c.height = S;
+  const g = c.getContext("2d");
+  if (!g) return null;
+  const grad = g.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+  grad.addColorStop(0, rgba(inner, 1));
+  grad.addColorStop(0.5, rgba(mix(inner, outer, 0.5), mid));
+  grad.addColorStop(1, rgba(outer, 0));
+  g.fillStyle = grad;
+  g.fillRect(0, 0, S, S);
+  return c;
+}
+
+function blitGlow(
+  ctx: CanvasRenderingContext2D,
+  sprite: HTMLCanvasElement | null,
+  cx: number,
+  cy: number,
+  r: number,
+  alpha: number,
+): void {
+  if (!sprite || r <= 0 || alpha <= 0.004) return;
+  const prev = ctx.globalAlpha;
+  ctx.globalAlpha = Math.min(1, alpha);
+  ctx.drawImage(sprite, cx - r, cy - r, r * 2, r * 2);
+  ctx.globalAlpha = prev;
+}
+
+/** The frame's vignette, rebuilt only when the frame itself changes size. */
+function makeVignette(): (ctx: CanvasRenderingContext2D, w: number, h: number) => void {
+  let cache: HTMLCanvasElement | null = null;
+  let key = "";
+  return (ctx, w, h) => {
+    const k = `${Math.round(w)}x${Math.round(h)}`;
+    if (k !== key || !cache) {
+      key = k;
+      if (typeof document === "undefined") return;
+      const c = document.createElement("canvas");
+      c.width = Math.max(1, Math.round(w));
+      c.height = Math.max(1, Math.round(h));
+      const g = c.getContext("2d");
+      if (!g) return;
+      const m = Math.min(w, h);
+      const vg = g.createRadialGradient(w / 2, h / 2, m * 0.45, w / 2, h / 2, Math.hypot(w, h) * 0.62);
+      vg.addColorStop(0, rgba(NIGHT, 0));
+      vg.addColorStop(1, rgba(NIGHT, 0.35));
+      g.fillStyle = vg;
+      g.fillRect(0, 0, w, h);
+      cache = c;
+    }
+    if (cache) ctx.drawImage(cache, 0, 0, w, h);
+  };
+}
+
 // ——— The arm film (stars ↔ galaxy) ———————————————————————————————————
 //
 // One scene function of u ∈ [0, 1]:
@@ -549,6 +615,17 @@ function makeFilm(seed: number): Film | null {
 // so the passage stays a film, not a simulation.
 
 const GALAXY_PASSAGE_SEED = 0xa2135; // keep in lockstep with GalaxyArms
+
+let bulgeSpriteCache: HTMLCanvasElement | null | undefined;
+/** Old gold at the heart of the disc — one sprite, both films, built once. */
+const bulgeSprite = {
+  get canvas(): HTMLCanvasElement | null {
+    if (bulgeSpriteCache === undefined) {
+      bulgeSpriteCache = makeGlowSprite(mix(PAPER, [231, 172, 82] as RGB, 0.5), CANDLE, 0.42);
+    }
+    return bulgeSpriteCache;
+  },
+};
 const ARM_FILM_STARS = 2200;
 
 type DiscPoint = { x: number; y: number; z: number; crowd: number; warm: number; size: number };
@@ -601,17 +678,12 @@ function drawSpiral(
     ctx.fillRect(sx - r / 2, sy - r / 2, r, r);
   }
   // the bulge: old gold at the centre of any inclination
-  const bg = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(6, scale * 0.16));
-  bg.addColorStop(0, rgba(mix(PAPER, [231, 172, 82], 0.5), 0.5 * alpha));
-  bg.addColorStop(1, rgba(CANDLE, 0));
-  ctx.fillStyle = bg;
-  ctx.beginPath();
-  ctx.arc(cx, cy, Math.max(6, scale * 0.16), 0, TAU);
-  ctx.fill();
+  blitGlow(ctx, bulgeSprite.canvas, cx, cy, Math.max(6, scale * 0.16), 0.5 * alpha);
 }
 
 function makeArmFilm(): Film {
   const pts = buildDiscPoints();
+  const vignette = makeVignette();
   // Every disc point gets a scatter position — where it stands in the
   // vault before the stream begins. Deterministic, one for one.
   const rng = seededRandom(GALAXY_PASSAGE_SEED ^ 0x517a);
@@ -693,22 +765,10 @@ function makeArmFilm(): Film {
 
     // once the disc opens, the bulge stands where all roads led
     const bulgeA = smoothstep(0.55, 0.9, u);
-    if (bulgeA > 0.01) {
-      const bg = ctx.createRadialGradient(cx, cy, 0, cx, cy, scale * 0.16);
-      bg.addColorStop(0, rgba(mix(PAPER, [231, 172, 82], 0.5), 0.5 * bulgeA));
-      bg.addColorStop(1, rgba(CANDLE, 0));
-      ctx.fillStyle = bg;
-      ctx.beginPath();
-      ctx.arc(cx, cy, scale * 0.16, 0, TAU);
-      ctx.fill();
-    }
+    blitGlow(ctx, bulgeSprite.canvas, cx, cy, scale * 0.16, 0.5 * bulgeA);
 
     // a quiet vignette holds the frame together
-    const vg = ctx.createRadialGradient(cx, cy, m * 0.45, cx, cy, Math.hypot(w, h) * 0.62);
-    vg.addColorStop(0, rgba(NIGHT, 0));
-    vg.addColorStop(1, rgba(NIGHT, 0.35));
-    ctx.fillStyle = vg;
-    ctx.fillRect(0, 0, w, h);
+    vignette(ctx, w, h);
   }
 
   return { renderFrame };
@@ -725,6 +785,10 @@ function makeArmFilm(): Film {
 
 function makeNodeFilm(): Film {
   const pts = buildDiscPoints();
+  const vignette = makeVignette();
+  const warmKnotSprite = makeGlowSprite(CANDLE, CANDLE, 0.32);
+  const coolKnotSprite = makeGlowSprite(PAPER, PAPER, 0.28);
+  const nodeSprite = makeGlowSprite(PAPER, CANDLE, 0.5);
   const rng = seededRandom(GALAXY_PASSAGE_SEED ^ 0x0de);
   // the web, in screen fractions; our galaxy's seat is the knot nearest centre
   const knots: Array<{ x: number; y: number; m: number }> = [];
@@ -781,14 +845,15 @@ function makeNodeFilm(): Film {
       }
       for (let i = 0; i < knots.length; i++) {
         const kn = knots[i];
-        const g = ctx.createRadialGradient(kn.x * w, kn.y * h, 0, kn.x * w, kn.y * h, 5 + kn.m * 9);
         const warm = i % 5 === 0;
-        g.addColorStop(0, rgba(warm ? CANDLE : PAPER, (warm ? 0.4 : 0.3) * webA));
-        g.addColorStop(1, rgba(PAPER, 0));
-        ctx.fillStyle = g;
-        ctx.beginPath();
-        ctx.arc(kn.x * w, kn.y * h, 5 + kn.m * 9, 0, TAU);
-        ctx.fill();
+        blitGlow(
+          ctx,
+          warm ? warmKnotSprite : coolKnotSprite,
+          kn.x * w,
+          kn.y * h,
+          5 + kn.m * 9,
+          (warm ? 0.4 : 0.3) * webA,
+        );
       }
     }
 
@@ -797,21 +862,10 @@ function makeNodeFilm(): Film {
       drawSpiral(ctx, pts, cx, cy, scale, 0.62, 0.35 + u * 1.1, 1 - 0.25 * webA, 1);
     } else {
       // small enough to be a node: one luminous grain among the others
-      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, 10);
-      g.addColorStop(0, rgba(PAPER, 0.95));
-      g.addColorStop(0.5, rgba(mix(PAPER, CANDLE, 0.4), 0.5));
-      g.addColorStop(1, rgba(CANDLE, 0));
-      ctx.fillStyle = g;
-      ctx.beginPath();
-      ctx.arc(cx, cy, 10, 0, TAU);
-      ctx.fill();
+      blitGlow(ctx, nodeSprite, cx, cy, 10, 0.95);
     }
 
-    const vg = ctx.createRadialGradient(w / 2, h / 2, m * 0.45, w / 2, h / 2, Math.hypot(w, h) * 0.62);
-    vg.addColorStop(0, rgba(NIGHT, 0));
-    vg.addColorStop(1, rgba(NIGHT, 0.35));
-    ctx.fillStyle = vg;
-    ctx.fillRect(0, 0, w, h);
+    vignette(ctx, w, h);
   }
 
   return { renderFrame };

@@ -92,7 +92,7 @@ export const SCALE_BANDS: ScaleBand[] = [
   { id: "planets", label: "the planets", route: null, sMin: 9, sMax: 11 },
   { id: "solar", label: "the solar system", route: null, sMin: 11, sMax: 13.5 },
   { id: "stars", label: "the stars", route: "/stars", sMin: 13.5, sMax: 17 },
-  { id: "galaxy", label: "the galaxy", route: null, sMin: 17, sMax: 20.5 },
+  { id: "galaxy", label: "the galaxy", route: "/galaxy", sMin: 17, sMax: 20.5 },
   { id: "space", label: "deep space", route: "/space", sMin: 20.5, sMax: 22 },
   { id: "beyond", label: "beyond", route: "/beyond", sMin: 22, sMax: 25.5 },
   { id: "manifold", label: "the manifold", route: "/manifold", sMin: 25.5, sMax: 27 },

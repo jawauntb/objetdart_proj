@@ -60,10 +60,13 @@ import {
   PITCH_DEFAULT,
   PITCH_MAX,
   PITCH_MIN,
+  REGION_HALF_WIDTH,
+  REGION_MAX,
   R_CORE,
   R_DISC,
   R_MAX,
   R_REF,
+  SHELL_MAX,
   STAR_COUNT,
   V_FLAT,
   WAVE_AMP_FRAC,
@@ -75,8 +78,14 @@ import {
   orbitMidiFor,
   orbitalSpeed,
   patternMidiFor,
+  propagate,
+  regionAt,
+  regionLife,
+  shearedSpan,
+  shellRadius,
   starState,
   waveNumber,
+  type Region,
   type WaveParams,
 } from "@/lib/spiral";
 
@@ -91,7 +100,14 @@ const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
 const clamp01 = (v: number) => clamp(v, 0, 1);
 const TAU = Math.PI * 2;
 
-type Stored = { kept?: number[]; cleared?: boolean };
+/**
+ * A kept region, serialised relative to NOW rather than to the disc's clock:
+ * `th` is its azimuth at the moment of writing and `age`/`ig` are elapsed
+ * seconds, so on the next visit — where the clock restarts at zero — a
+ * remnant is exactly as old and exactly as far around as it was left.
+ */
+type StoredRegion = { R0: number; th: number; age: number; str: number; ig: number };
+type Stored = { kept?: number[]; regions?: StoredRegion[]; cleared?: boolean };
 
 // GLSL constant injection — the shader mirrors lib/spiral.ts expression for
 // expression; the lib copy is the one the tests pin.
@@ -121,6 +137,37 @@ uniform vec3 u_cam, u_right, u_up, u_fwd;
 uniform float u_focal, u_aspect;
 uniform float u_patPhase, u_k, u_amp, u_bar, u_corot;
 uniform float u_reveal, u_night, u_breath, u_lens, u_glimmer, u_barFlash;
+uniform float u_tw;
+// x, z, strength, shell radius (<= 0 while the region is still gas)
+uniform vec4 u_regions[${REGION_MAX}];
+
+float hash21(vec2 p) {
+  vec3 q = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
+  q += dot(q, q.yzx + 33.33);
+  return fract((q.x + q.y) * q.z);
+}
+
+/**
+ * The halo we watch through: our own foreground stars, fixed in the WORLD
+ * (hashed off the ray direction), so they parallax as the eye turns instead
+ * of riding the glass the way a screen-space overlay would.
+ */
+float haloStars(vec3 rd, float tw) {
+  float acc = 0.0;
+  vec2 sph = vec2(atan(rd.z, rd.x), asin(clamp(rd.y, -1.0, 1.0)));
+  for (int L = 0; L < 2; L++) {
+    float f = 27.0 + float(L) * 43.0;
+    vec2 g = sph * f;
+    vec2 cell = floor(g);
+    float h = hash21(cell + float(L) * 17.0);
+    vec2 jit = vec2(h, fract(h * 91.7));
+    float d = length(fract(g) - jit);
+    float mag = fract(h * 313.7);
+    acc += smoothstep(0.16, 0.0, d) * (0.12 + 0.6 * mag * mag)
+         * (0.7 + 0.3 * sin(tw * 1.7 + h * 40.0));
+  }
+  return acc;
+}
 
 void main() {
   vec2 ndc = (gl_FragCoord.xy / u_res) * 2.0 - 1.0;
@@ -130,6 +177,9 @@ void main() {
   float vig = 1.0 - 0.4 * dot(ndc, ndc);
   vec3 col = vec3(0.012, 0.014, 0.024) * vig
            + vec3(0.008, 0.012, 0.024) * (0.4 + 0.6 * u_breath) * max(0.0, vig);
+
+  // the halo, behind everything and in front of nothing
+  col += vec3(0.82, 0.85, 0.93) * haloStars(rd, u_tw) * (1.0 - 0.5 * u_night) * (1.0 - 0.3 * u_lens);
 
   // one intersection with the disc plane — bounded, no marching
   if (abs(rd.y) > 1e-4) {
@@ -174,6 +224,24 @@ void main() {
         float ring = exp(-pow((R - u_corot) / 0.014, 2.0));
         acc += vec3(0.93, 0.72, 0.33) * ring * u_reveal * 0.8;
 
+        // what the hand planted: gas lit from inside, and the shells of
+        // whatever has gone off — both drawn in the disc, both bounded
+        for (int i = 0; i < ${REGION_MAX}; i++) {
+          vec4 g = u_regions[i];
+          if (g.z <= 0.0) continue;
+          float d = length(p.xz - g.xy);
+          // the nursery: cold hydrogen glow, brightest at its heart
+          acc += mix(cold, pale, 0.25) * g.z * 0.85 * exp(-d * d * 210.0);
+          if (g.w > 0.0) {
+            // the shell: a thin bright rim that thins as it runs out
+            float dr = (d - g.w) / 0.02;
+            float fade = 1.0 - g.w / ${SHELL_MAX.toFixed(3)};
+            acc += mix(pale, cold, 0.4) * g.z * fade * 1.1 * exp(-dr * dr);
+            // and the cavity it swept clear behind it
+            acc *= 1.0 - 0.4 * g.z * fade * smoothstep(g.w, g.w * 0.45, d);
+          }
+        }
+
         col += acc * att * (1.0 - 0.25 * u_lens);
       }
     }
@@ -193,6 +261,7 @@ uniform float u_focal, u_aspect, u_fit;
 uniform float u_tau, u_patPhase, u_k, u_amp, u_bar, u_heat;
 uniform float u_reveal, u_night, u_breath;
 uniform vec4 u_flares[${MAX_FLARES}];
+uniform vec4 u_regions[${REGION_MAX}]; // x, z, strength, shell radius
 uniform vec3 u_follow;   // disc x, disc z, level
 varying vec2 v_uv;
 varying vec3 v_tint;
@@ -215,7 +284,32 @@ void main() {
   float be = 1.0 - smoothstep(${G.barIn}, ${G.barOut}, R0);
   rr *= 1.0 - ${G.barAmp} * u_bar * be * cos(2.0 * (th - u_patPhase));
   float jig = u_heat * 0.022 * sin(u_tau * 7.0 + a_seed.z * 37.0);
-  vec3 pos = vec3(rr * cos(th2), hgt + jig, rr * sin(th2));
+
+  // ——— what the hand planted acts back on the disc ———
+  // A cluster is mass: the disc bends toward it, so a seeded knot visibly
+  // drags the arm it sits in. A supernova shell shoves what it passes and
+  // lights it. Bounded loop, no branching per star beyond the early out.
+  vec2 disc = vec2(rr * cos(th2), rr * sin(th2));
+  float nursery = 0.0;
+  float swept = 0.0;
+  for (int i = 0; i < ${REGION_MAX}; i++) {
+    vec4 g = u_regions[i];
+    if (g.z <= 0.0) continue;
+    vec2 dv = disc - g.xy;
+    float d = length(dv) + 1e-5;
+    vec2 dir = dv / d;
+    // the knot's own pull — clusters perturb the arms they sit in
+    disc -= dir * (g.z * 0.02 * exp(-d * d * 22.0));
+    nursery += g.z * exp(-d * d * 190.0);
+    if (g.w > 0.0) {
+      float dr = (d - g.w) / 0.024;
+      float rim = exp(-dr * dr);
+      float fade = 1.0 - g.w / ${SHELL_MAX.toFixed(3)};
+      disc += dir * (g.z * fade * 0.016 * rim);
+      swept += g.z * fade * rim;
+    }
+  }
+  vec3 pos = vec3(disc.x, hgt + jig, disc.y);
 
   vec3 rel = pos - u_cam;
   float zc = dot(rel, u_fwd);
@@ -250,11 +344,16 @@ void main() {
   tint = mix(tint, gold, inb * 0.8);
   tint = mix(tint, cold, clamp(young, 0.0, 1.0) * 0.75);
   tint = mix(tint, gold, a_kept * 0.35);
+  // stars in a nursery are the newest light in the room, and the shell
+  // front burns hotter still
+  tint = mix(tint, cold, clamp(nursery * 1.4, 0.0, 0.85));
+  tint = mix(tint, vec3(0.98, 0.96, 0.94), clamp(swept, 0.0, 0.7));
   v_tint = tint;
 
   float tw = 0.86 + 0.14 * sin(u_tau * (0.5 + a_seed.z) + a_seed.z * 41.0);
   v_bright = (0.7 + 1.3 * szr) * tw
-           * (1.0 + 2.2 * young + 0.8 * crowd + 1.2 * inb + 1.5 * a_kept)
+           * (1.0 + 2.2 * young + 0.8 * crowd + 1.2 * inb + 1.5 * a_kept
+              + 3.0 * nursery + 5.0 * swept)
            * (0.85 + 0.15 * u_breath)
            / (0.5 + zc * 1.1)
            * (1.0 - 0.92 * u_night) * (1.0 - 0.82 * u_reveal)
@@ -294,6 +393,7 @@ export default function GalaxyArms() {
   const [hasKept, setHasKept] = useState(false);
   const [lensUp, setLensUp] = useState(false);
   const keptRef = useRef<number[]>([]);
+  const regionsRef = useRef<Region[]>([]);
   const clearRef = useRef<() => void>(() => {});
 
   useEffect(() => {
@@ -329,23 +429,59 @@ export default function GalaxyArms() {
             .filter((n) => Number.isFinite(n) && n >= 0 && n < count)
             .slice(-MAX_KEPT);
         }
+        if (Array.isArray(parsed.regions)) {
+          regionsRef.current = parsed.regions
+            .filter(
+              (r) =>
+                r &&
+                Number.isFinite(r.R0) &&
+                Number.isFinite(r.th) &&
+                r.R0 >= 0.1 &&
+                r.R0 <= R_MAX,
+            )
+            .slice(-REGION_MAX)
+            .map((r) => {
+              const age = Math.max(0, Number(r.age) || 0);
+              const ig = Number(r.ig);
+              return {
+                R0: r.R0,
+                theta0: r.th,
+                born: -age,
+                strength: clamp01(Number(r.str) || 0.4),
+                ignited: Number.isFinite(ig) && ig >= 0 ? -ig : -1,
+              };
+            })
+            // whatever has already burned out stays burned out
+            .filter((r) => regionLife(r, 0) > 0.02);
+        }
       }
     } catch {
       /* a first turn */
     }
-    setHasKept(keptRef.current.length > 0);
+    setHasKept(keptRef.current.length > 0 || regionsRef.current.length > 0);
     const keptSet = new Set(keptRef.current);
-    const save = () => {
+    const writeStore = () => {
       try {
         window.localStorage.setItem(
           STORE_KEY,
-          JSON.stringify({ kept: keptRef.current, cleared: keptRef.current.length === 0 }),
+          JSON.stringify({
+            kept: keptRef.current,
+            regions: regionsRef.current.map((r) => ({
+              R0: r.R0,
+              th: regionAt(r, tau).theta,
+              age: tau - r.born,
+              str: r.strength,
+              ig: r.ignited >= 0 ? tau - r.ignited : -1,
+            })),
+            cleared: keptRef.current.length === 0 && regionsRef.current.length === 0,
+          }),
         );
       } catch {
         /* noop */
       }
-      setHasKept(keptRef.current.length > 0);
+      setHasKept(keptRef.current.length > 0 || regionsRef.current.length > 0);
     };
+    const save = () => writeStore();
 
     // ——— state ———
     let width = 0;
@@ -403,6 +539,14 @@ export default function GalaxyArms() {
     let vHeldSince = 0;
     const flares: Array<{ x: number; y: number; s: number; age: number }> = [];
 
+    // ——— what the hand plants ———
+    // Regions ride the same rotation curve the stars do, so a seeded knot is
+    // caught in the shear the instant it exists — plant a round patch, come
+    // back, find it drawn into an arc. That is the winding problem, felt.
+    /** the one being gathered under a finger right now, or -1 */
+    let seeding = -1;
+    let seedTier = 0;
+
     const waveParams = (): WaveParams => ({ patternPhase: patPhase, pitch, amp: 1, bar });
 
     // ——— typed arrays: the whole population, uploaded once ———
@@ -419,20 +563,6 @@ export default function GalaxyArms() {
       seedArr[i * 4 + 2] = mulberry32(hashSeed(GALAXY_SEED, i))();
       seedArr[i * 4 + 3] = 0;
       keptArr[i] = keptSet.has(i) ? 1 : 0;
-    }
-
-    // Foreground: our own halo stars between the eye and the disc,
-    // deterministic, twinkling on the shared breath.
-    const FOREGROUND = 120;
-    const near = new Float32Array(FOREGROUND * 4);
-    {
-      const rng = mulberry32(hashSeed(GALAXY_SEED, 0xf0a));
-      for (let i = 0; i < FOREGROUND; i++) {
-        near[i * 4] = rng();
-        near[i * 4 + 1] = rng();
-        near[i * 4 + 2] = 0.25 + rng() * rng() * 1.4;
-        near[i * 4 + 3] = rng() * TAU;
-      }
     }
 
     // ——— the camera ———
@@ -494,10 +624,12 @@ export default function GalaxyArms() {
     };
 
     /** Which star is under this point, or -1. */
+    /** Coarse stride for picking: a hand aims at a star, not at all of them. */
+    const PICK_STRIDE = Math.max(1, Math.floor(count / 24000));
     const starAt = (px: number, py: number): number => {
       let best = -1;
       let bestD = 40 * 40;
-      for (let i = 0; i < count; i++) {
+      for (let i = 0; i < count; i += PICK_STRIDE) {
         if (field.r[i] < 0.12) continue; // the bulge is a glow, not a handle
         const sp = starPos(i);
         const p = project(sp.x, sp.y, sp.z);
@@ -516,6 +648,101 @@ export default function GalaxyArms() {
     const addFlare = (x: number, z: number, s: number) => {
       flares.push({ x, y: z, s, age: 0 });
       if (flares.length > MAX_FLARES) flares.shift();
+    };
+
+    /** Where a screen point lands on the disc plane, or null past the rim. */
+    const discPointAt = (px: number, py: number): { x: number; z: number } | null => {
+      const ndcX = ((px / Math.max(1, width)) * 2 - 1) * aspect;
+      const ndcY = 1 - (py / Math.max(1, height)) * 2;
+      const dx = basis.fx * FOCAL + basis.rx * ndcX + basis.ux * ndcY;
+      const dy = basis.fy * FOCAL + basis.ry * ndcX + basis.uy * ndcY;
+      const dz = basis.fz * FOCAL + basis.rz * ndcX + basis.uz * ndcY;
+      const n = Math.hypot(dx, dy, dz) || 1;
+      const ry = dy / n;
+      if (Math.abs(ry) < 1e-4) return null;
+      const t = -cam.y / ry;
+      if (t <= 0.02) return null;
+      const x = cam.x + (dx / n) * t;
+      const z = cam.z + (dz / n) * t;
+      if (Math.hypot(x, z) > R_MAX * 1.05) return null;
+      return { x, z };
+    };
+
+    /** Which planted region is under this point, or -1. */
+    const regionIndexAt = (px: number, py: number): number => {
+      let best = -1;
+      let bestD = 46 * 46;
+      for (let i = 0; i < regionsRef.current.length; i++) {
+        const rp = regionAt(regionsRef.current[i], tau);
+        const p = project(rp.x, 0, rp.y);
+        if (!p) continue;
+        const d2 = (p.x - px) ** 2 + (p.y - py) ** 2;
+        if (d2 < bestD) {
+          bestD = d2;
+          best = i;
+        }
+      }
+      return best;
+    };
+
+    const seedRegion = (x: number, z: number): number => {
+      const R0 = Math.hypot(x, z);
+      if (R0 < 0.1 || R0 > R_MAX) return -1;
+      const reg: Region = {
+        R0,
+        theta0: Math.atan2(z, x) - angularSpeed(R0) * tau,
+        born: tau,
+        strength: 0.18,
+        ignited: -1,
+      };
+      regionsRef.current.push(reg);
+      // oldest retired gracefully — the disc carries only so much gas
+      if (regionsRef.current.length > REGION_MAX) regionsRef.current.shift();
+      writeStore();
+      soundOrbit(R0, 700, 0.7);
+      try {
+        audio.spark();
+        haptics.ripple(0.45);
+      } catch {
+        /* noop */
+      }
+      return regionsRef.current.length - 1;
+    };
+
+    /** The ceremony: the gas goes off, and the shell starts from here. */
+    const igniteRegion = (i: number) => {
+      const rs = regionsRef.current;
+      if (i < 0 || i >= rs.length || rs[i].ignited >= 0) return;
+      rs[i] = { ...rs[i], ignited: tau };
+      const rp = regionAt(rs[i], tau);
+      addFlare(rp.x, rp.y, 1);
+      stirTurbulence(0.25);
+      writeStore();
+      try {
+        audio.bell();
+        audio.playNote(Math.round(patternMidiFor(omegaP, pitch)) - 12, 2200);
+        haptics.bloom();
+      } catch {
+        /* noop */
+      }
+    };
+
+    /** Removal: the knot blows out and the disc closes over it. */
+    const disperseRegion = (i: number) => {
+      const rs = regionsRef.current;
+      if (i < 0 || i >= rs.length) return;
+      const rp = regionAt(rs[i], tau);
+      rs.splice(i, 1);
+      if (seeding === i) seeding = -1;
+      else if (seeding > i) seeding -= 1;
+      addFlare(rp.x, rp.y, 0.3);
+      writeStore();
+      try {
+        audio.thud();
+        haptics.roll();
+      } catch {
+        /* noop */
+      }
     };
 
     // ——— sound: the disc, heard ———
@@ -669,6 +896,10 @@ export default function GalaxyArms() {
         gl.shaderSource(sh, src);
         gl.compileShader(sh);
         if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+          if (process.env.NODE_ENV !== "production") {
+            // eslint-disable-next-line no-console
+            console.error("[galaxy] shader", gl.getShaderInfoLog(sh));
+          }
           gl.deleteShader(sh);
           return null;
         }
@@ -683,7 +914,13 @@ export default function GalaxyArms() {
         gl.attachShader(p, v);
         gl.attachShader(p, f);
         gl.linkProgram(p);
-        if (!gl.getProgramParameter(p, gl.LINK_STATUS)) return null;
+        if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+          if (process.env.NODE_ENV !== "production") {
+            // eslint-disable-next-line no-console
+            console.error("[galaxy] link", gl.getProgramInfoLog(p));
+          }
+          return null;
+        }
         return p;
       };
       discProg = link(VERT_QUAD, FRAG_DISC);
@@ -711,11 +948,12 @@ export default function GalaxyArms() {
           "u_res", "u_cam", "u_right", "u_up", "u_fwd", "u_focal", "u_aspect",
           "u_patPhase", "u_k", "u_amp", "u_bar", "u_corot",
           "u_reveal", "u_night", "u_breath", "u_lens", "u_glimmer", "u_barFlash",
+          "u_tw", "u_regions",
         ]);
         starU = uni(starProg, [
           "u_cam", "u_right", "u_up", "u_fwd", "u_focal", "u_aspect", "u_fit",
           "u_tau", "u_patPhase", "u_k", "u_amp", "u_bar", "u_heat",
-          "u_reveal", "u_night", "u_breath", "u_flares", "u_follow",
+          "u_reveal", "u_night", "u_breath", "u_flares", "u_follow", "u_regions",
         ]);
         starA = {
           corner: gl.getAttribLocation(starProg, "a_corner"),
@@ -739,6 +977,33 @@ export default function GalaxyArms() {
           }
           if (e.fingers !== 1) return;
           const { x, y } = toLocal(e.x, e.y);
+          // a second tap on a knot blows it out — the room's removal verb,
+          // and the only thing a double tap means here
+          if (e.count >= 2) {
+            const ri = regionIndexAt(x, y);
+            if (ri >= 0) {
+              disperseRegion(ri);
+              return;
+            }
+          }
+          const rr = regionIndexAt(x, y);
+          if (rr >= 0) {
+            // touching gas stirs it: the knot answers at its own orbit
+            const reg = regionsRef.current[rr];
+            regionsRef.current[rr] = {
+              ...reg,
+              strength: clamp01(reg.strength + 0.08 * e.intensity),
+            };
+            const rp = regionAt(reg, tau);
+            addFlare(rp.x, rp.y, 0.4);
+            soundOrbit(reg.R0, 620);
+            try {
+              haptics.tap();
+            } catch {
+              /* noop */
+            }
+            return;
+          }
           const i = starAt(x, y);
           if (i >= 0) {
             const sp = starPos(i);
@@ -797,16 +1062,66 @@ export default function GalaxyArms() {
           if (e.fingers !== 1) return;
           if (e.phase === "enter") {
             const { x, y } = toLocal(e.x, e.y);
-            startFollow(starAt(x, y));
+            const s = starAt(x, y);
+            if (s >= 0) {
+              startFollow(s);
+              return;
+            }
+            // no star under the finger: the hold gathers gas instead, and
+            // the disc gets something that was not there before
+            const dp = discPointAt(x, y);
+            if (dp) {
+              seeding = seedRegion(dp.x, dp.z);
+              seedTier = 0;
+            }
             return;
           }
           if (e.phase === "release") {
+            if (seeding >= 0) {
+              // held into the ceremony, the knot goes off on release —
+              // and its shell will light whatever gas it reaches
+              if (e.tier >= 3) igniteRegion(seeding);
+              else writeStore();
+              seeding = -1;
+              seedTier = 0;
+              return;
+            }
             endFollow();
+            return;
+          }
+          if (seeding >= 0) {
+            // duration is an axis: the longer the hold, the more gas
+            const reg = regionsRef.current[seeding];
+            if (!reg) {
+              seeding = -1;
+              return;
+            }
+            regionsRef.current[seeding] = {
+              ...reg,
+              strength: clamp01(0.18 + e.elapsed / 3400),
+            };
+            if (e.tier > seedTier) {
+              seedTier = e.tier;
+              soundOrbit(reg.R0, 500, 0.8);
+              try {
+                haptics.detent();
+              } catch {
+                /* noop */
+              }
+            }
             return;
           }
           if (followIdx < 0) return;
           // duration is an axis: the longer the ride, the closer the eye
           followTarget = clamp01(0.15 + e.elapsed / 3200);
+        },
+        // two fingers hold the frame: the eye swings round the disc and
+        // tips it from face-on to edge-on. Pinch stays ScaleTravel's.
+        pan2: (e) => {
+          lastInteractionAt = performance.now();
+          if (e.phase !== "move") return;
+          panX = clamp(panX - (e.dx / Math.max(1, width)) * 1.7, -1.2, 1.2);
+          panY = clamp(panY + (e.dy / Math.max(1, height)) * 1.5, -1, 1);
         },
         drag: (e) => {
           lastInteractionAt = performance.now();
@@ -825,7 +1140,7 @@ export default function GalaxyArms() {
             return;
           }
           panX = clamp(panX - (e.dx / Math.max(1, width)) * 1.5, -1.2, 1.2);
-          panY = clamp(panY + (e.dy / Math.max(1, height)) * 0.9, -0.5, 0.6);
+          panY = clamp(panY + (e.dy / Math.max(1, height)) * 1.2, -1, 1);
         },
         flick: (e) => {
           lastInteractionAt = performance.now();
@@ -930,7 +1245,7 @@ export default function GalaxyArms() {
           // pick the nearest star to the ring, ahead of the eye
           let best = -1;
           let bestD = 1e9;
-          for (let i = 0; i < count; i += 7) {
+          for (let i = 0; i < count; i += PICK_STRIDE * 7) {
             const d = Math.abs(field.r[i] - selR);
             if (d > 0.05) continue;
             const sp = starPos(i);
@@ -978,6 +1293,7 @@ export default function GalaxyArms() {
 
     // ——— the loop ———
     const flareVec = new Float32Array(MAX_FLARES * 4);
+    const regionVec = new Float32Array(REGION_MAX * 4);
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
       const delta = Math.min(64, now - last);
@@ -1001,7 +1317,7 @@ export default function GalaxyArms() {
       roll += rollVel * dt;
       rollVel *= Math.exp(-dt * 1.6);
       panX = clamp(panX + panVX * dt * 60 * 0.02, -1.2, 1.2);
-      panY = clamp(panY + panVY * dt * 60 * 0.02, -0.5, 0.6);
+      panY = clamp(panY + panVY * dt * 60 * 0.02, -1, 1);
       panVX *= Math.exp(-dt * 1.1);
       panVY *= Math.exp(-dt * 1.1);
       if (entering > 0) entering = Math.max(0, entering - dt * 0.7);
@@ -1017,6 +1333,52 @@ export default function GalaxyArms() {
 
       const k = waveNumber(pitch);
       const corot = corotationRadius(omegaP);
+
+      // ——— the disc acts on what the hand planted ———
+      // Shells run, sweep, and light the next patch of gas they reach —
+      // propagating star formation, the rule that lives in lib/spiral.ts and
+      // is pinned there. Spent regions are retired; the room does not hoard.
+      if (regionsRef.current.length) {
+        const step = propagate(regionsRef.current, tau);
+        if (step.lit.length) {
+          regionsRef.current = step.regions;
+          for (const idx of step.lit) {
+            const rp = regionAt(regionsRef.current[idx], tau);
+            addFlare(rp.x, rp.y, 0.75);
+            soundOrbit(regionsRef.current[idx].R0, 620, 0.9);
+          }
+          stirTurbulence(0.12);
+          try {
+            audio.chime();
+            haptics.detent();
+          } catch {
+            /* noop */
+          }
+          writeStore();
+        }
+        const alive = regionsRef.current.filter((r) => regionLife(r, tau) > 0.01);
+        if (alive.length !== regionsRef.current.length) {
+          regionsRef.current = alive;
+          if (seeding >= alive.length) seeding = -1;
+          writeStore();
+        }
+      }
+      // upload the regions the shaders read: x, z, strength, shell radius
+      for (let i = 0; i < REGION_MAX; i++) {
+        const reg = regionsRef.current[i];
+        if (!reg) {
+          regionVec[i * 4] = 0;
+          regionVec[i * 4 + 1] = 0;
+          regionVec[i * 4 + 2] = 0;
+          regionVec[i * 4 + 3] = 0;
+          continue;
+        }
+        const rp = regionAt(reg, tau);
+        regionVec[i * 4] = rp.x;
+        regionVec[i * 4 + 1] = rp.y;
+        regionVec[i * 4 + 2] = reg.strength * regionLife(reg, tau);
+        regionVec[i * 4 + 3] = reg.ignited >= 0 ? shellRadius(tau - reg.ignited) : 0;
+      }
 
       // ——— the followed star: ride the orbit, feel every arm go by ———
       if (followIdx >= 0 && followLevel > 0.05) {
@@ -1048,10 +1410,12 @@ export default function GalaxyArms() {
       // ——— the camera: standing off a turning disc, leaning with the hand ———
       const T = reduced ? 0 : tau;
       const yaw = (reduced ? 0 : 0.05 * Math.sin(T * 0.021)) + panX * 1.6 + tiltX * 0.25 + T * 0.011;
+      // the frame runs the whole way: straight down on the disc (−π/2) to
+      // flat along its rim, where the room becomes the band it hands to
       const pitchCam = clamp(
-        -0.52 + (reduced ? 0 : 0.06 * Math.sin(T * 0.017)) - panY * 0.9 + tiltY * 0.18,
-        -1.25,
-        -0.08,
+        -0.52 + (reduced ? 0 : 0.06 * Math.sin(T * 0.017)) - panY * 1.05 + tiltY * 0.22,
+        -1.55,
+        -0.02,
       );
       setBasis(yaw, pitchCam, roll + (reduced ? 0 : 0.03 * Math.sin(T * 0.013)));
       const fit = Math.max(BASE_RANGE, (0.98 * FOCAL) / Math.max(0.4, aspect));
@@ -1107,6 +1471,8 @@ export default function GalaxyArms() {
         gl.uniform1f(discU.u_lens ?? null, lens);
         gl.uniform1f(discU.u_glimmer ?? null, glimmer);
         gl.uniform1f(discU.u_barFlash ?? null, barFlash);
+        gl.uniform1f(discU.u_tw ?? null, reduced ? 0 : t);
+        gl.uniform4fv(discU.u_regions ?? null, regionVec);
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
         gl.disableVertexAttribArray(aq);
 
@@ -1153,6 +1519,7 @@ export default function GalaxyArms() {
           flareVec[i * 4 + 3] = 0;
         }
         gl.uniform4fv(starU.u_flares ?? null, flareVec);
+        gl.uniform4fv(starU.u_regions ?? null, regionVec);
         if (followIdx >= 0 && followLevel > 0.02) {
           const sp = starPos(followIdx);
           gl.uniform3f(starU.u_follow ?? null, sp.x, sp.z, followLevel);
@@ -1175,7 +1542,8 @@ export default function GalaxyArms() {
         ctx.fillStyle = "#04070f";
         ctx.fillRect(0, 0, width, height);
         const p = waveParams();
-        for (let i = 0; i < count; i += 3) {
+        const step = Math.max(1, Math.floor(count / 5000));
+        for (let i = 0; i < count; i += step) {
           const st = starState(field.r[i], field.theta[i], tau, p);
           const pr = project(st.x, field.z[i], st.y);
           if (!pr) continue;
@@ -1183,17 +1551,6 @@ export default function GalaxyArms() {
           ctx.fillStyle = `rgba(230, 228, 218, ${b})`;
           ctx.fillRect(pr.x, pr.y, 1.4, 1.4);
         }
-      }
-
-      // the foreground: halo stars between the eye and the disc
-      for (let i = 0; i < FOREGROUND; i++) {
-        const tw = reduced ? 1 : 0.62 + 0.38 * Math.sin(t * 0.9 + near[i * 4 + 3]);
-        const a = clamp01(near[i * 4 + 2] * 0.26 * tw * (1 - night * 0.5) - lens * 0.06);
-        if (a <= 0.01) continue;
-        ctx.fillStyle = `rgba(232, 236, 246, ${a})`;
-        ctx.beginPath();
-        ctx.arc(near[i * 4] * width, near[i * 4 + 1] * height, near[i * 4 + 2] * 0.7, 0, TAU);
-        ctx.fill();
       }
 
       // the lens: the geometry under the light — the crest's own log
@@ -1295,6 +1652,32 @@ export default function GalaxyArms() {
         }
       }
 
+      // what the hand planted, marked by the arc the shear has drawn it
+      // into: a knot seeded round is a stroke by the time you come back
+      for (const reg of regionsRef.current) {
+        const life = regionLife(reg, tau);
+        if (life <= 0.02) continue;
+        const span = Math.min(Math.PI * 1.6, shearedSpan(reg.R0, REGION_HALF_WIDTH, tau - reg.born));
+        const here = regionAt(reg, tau).theta;
+        ctx.strokeStyle = `rgba(150, 184, 232, ${clamp01(0.1 + 0.3 * life * reg.strength)})`;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        let on = false;
+        for (let sIdx = 0; sIdx <= 24; sIdx++) {
+          const th = here + (sIdx / 24 - 0.5) * span;
+          const pp = project(reg.R0 * Math.cos(th), 0, reg.R0 * Math.sin(th));
+          if (!pp) {
+            on = false;
+            continue;
+          }
+          if (!on) {
+            ctx.moveTo(pp.x, pp.y);
+            on = true;
+          } else ctx.lineTo(pp.x, pp.y);
+        }
+        ctx.stroke();
+      }
+
       // arrival and departure, both as an exhale
       const fade = Math.max(entering, leaving);
       if (fade > 0.002) {
@@ -1325,9 +1708,13 @@ export default function GalaxyArms() {
 
   const letGo = () => {
     keptRef.current = [];
+    regionsRef.current = [];
     clearRef.current();
     try {
-      window.localStorage.setItem(STORE_KEY, JSON.stringify({ kept: [], cleared: true }));
+      window.localStorage.setItem(
+        STORE_KEY,
+        JSON.stringify({ kept: [], regions: [], cleared: true }),
+      );
     } catch {
       /* noop */
     }
@@ -1375,7 +1762,7 @@ export default function GalaxyArms() {
           pointerEvents: "none",
         }}
       />
-      <LetGo label="let the ridden stars go" onLetGo={letGo} visible={hasKept} />
+      <LetGo label="let the disc forget" onLetGo={letGo} visible={hasKept} />
     </div>
   );
 }

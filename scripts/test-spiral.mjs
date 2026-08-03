@@ -265,4 +265,107 @@ const defaults = () => ({
   assert.ok(edge / a.count < 0.05, "no artificial rim of clamped stars");
 }
 
+// —— what the hand plants obeys the same disc ——————————————————————
+// The bugs: a seeded region pinned to the screen instead of caught in the
+// shear (so the winding problem never bites), a shell that expands linearly
+// or forever (no Sedov deceleration, no fading), and star formation that
+// "propagates" to regions the shell never actually reached.
+{
+  // The winding problem: a planted patch is torn apart, faster further in.
+  const spanIn = S.shearedSpan(0.25, S.REGION_HALF_WIDTH, 200);
+  const spanOut = S.shearedSpan(0.8, S.REGION_HALF_WIDTH, 200);
+  assert.ok(spanIn > spanOut, "the shear tears an inner patch faster than an outer one");
+  assert.ok(spanIn > 0.5, "…and after 200s an inner patch is a visible arc, not a dot");
+  assert.ok(
+    Math.abs(S.shearedSpan(0.5, S.REGION_HALF_WIDTH, 400) - 2 * S.shearedSpan(0.5, S.REGION_HALF_WIDTH, 200)) < 1e-9,
+    "shear grows linearly in time — an arm made of matter would wind up without bound",
+  );
+
+  // A region rides its own orbit, exactly as its stars do — not the pattern's.
+  const reg = { R0: 0.4, theta0: 0.3, born: 0, strength: 1, ignited: -1 };
+  const p = S.regionAt(reg, 50);
+  assert.ok(
+    Math.abs(S.wrapAngle(p.theta - (0.3 + S.angularSpeed(0.4) * 50))) < 1e-12,
+    "a seeded region is carried by Ω(R0), the same clock the stars read",
+  );
+  assert.ok(Math.abs(Math.hypot(p.x, p.y) - 0.4) < 1e-12, "…on a circle, at its guiding radius");
+
+  // Sedov–Taylor: always growing, always decelerating, and finally spent.
+  let prevR = -1;
+  let prevV = Infinity;
+  for (let i = 1; i <= 40; i++) {
+    const age = i * 0.5;
+    const r = S.shellRadius(age);
+    assert.ok(r > prevR || r === S.SHELL_MAX, "the shell never contracts");
+    prevR = r;
+    const v = S.shellSpeed(age);
+    if (v > 0) {
+      assert.ok(v < prevV, "…and never speeds up: the blast decelerates from birth");
+      prevV = v;
+    }
+  }
+  assert.ok(S.shellRadius(1e6) === S.SHELL_MAX, "a remnant fades into the medium, it does not eat the disc");
+  assert.ok(S.shellSpeed(1e6) === 0, "…and a spent shell has stopped");
+
+  // Propagation reaches what the shell reaches, and nothing else.
+  const t0 = 10;
+  const near = { R0: 0.4, theta0: 0.3 + 0.2 / 0.4, born: 0, strength: 0.5, ignited: -1 };
+  const far = { R0: 0.4, theta0: 0.3 + 1.6 / 0.4, born: 0, strength: 0.5, ignited: -1 };
+  const src = { R0: 0.4, theta0: 0.3, born: 0, strength: 1, ignited: t0 };
+  // co-rotating at one radius, separations are frozen: pure geometry
+  const dNear = S.regionSeparation(src, near, t0 + 5);
+  const dFar = S.regionSeparation(src, far, t0 + 5);
+  assert.ok(dNear < S.SHELL_MAX && dFar > S.SHELL_MAX, "the two neighbours straddle the shell's reach");
+
+  let list = [src, near, far];
+  let anyLitFar = false;
+  let litNearAt = -1;
+  for (let i = 0; i <= 400; i++) {
+    const t = t0 + i * 0.25;
+    const step = S.propagate(list, t);
+    list = step.regions;
+    for (const idx of step.lit) {
+      if (idx === 1 && litNearAt < 0) litNearAt = t;
+      if (idx === 2) anyLitFar = true;
+    }
+  }
+  assert.ok(litNearAt > t0, "the near patch lights — star formation propagates along the shell");
+  assert.ok(
+    Math.abs(S.shellRadius(litNearAt - t0) - dNear) < 0.02,
+    "…and it lights exactly when the shell arrives, not on a timer",
+  );
+  assert.ok(!anyLitFar, "the far patch is never lit: nothing propagates past the shell's reach");
+  assert.equal(list[0].ignited, t0, "the source keeps its own ignition time");
+
+  // Determinism: the same chain, run twice, lights the same way.
+  const run = () => {
+    let l = [
+      { R0: 0.4, theta0: 0.3, born: 0, strength: 1, ignited: t0 },
+      { R0: 0.4, theta0: 0.3 + 0.2 / 0.4, born: 0, strength: 0.5, ignited: -1 },
+      { R0: 0.42, theta0: 0.3 + 0.38 / 0.4, born: 0, strength: 0.5, ignited: -1 },
+    ];
+    const order = [];
+    for (let i = 0; i <= 600; i++) {
+      const t = t0 + i * 0.2;
+      const step = S.propagate(l, t);
+      l = step.regions;
+      for (const idx of step.lit) order.push([idx, Math.round(t * 100)]);
+    }
+    return order;
+  };
+  const r1 = run();
+  const r2 = run();
+  assert.deepEqual(r1, r2, "the same chain lights identically every run");
+  assert.ok(r1.length >= 2, "a shell that lights a neighbour lights ITS neighbour in turn — a chain");
+  assert.ok(r1[0][1] < r1[1][1], "…and the chain is ordered in time, nearest first");
+
+  // Life: gas burns slowly, a supernova is the shorter brighter death.
+  const gas = { R0: 0.5, theta0: 0, born: 0, strength: 1, ignited: -1 };
+  const blown = { R0: 0.5, theta0: 0, born: 0, strength: 1, ignited: 0 };
+  assert.ok(S.regionLife(gas, S.REGION_LIFE * 0.5) > S.regionLife(blown, S.REGION_LIFE * 0.5),
+    "an ignited region fades faster than one left to burn");
+  assert.equal(S.regionLife(gas, S.REGION_LIFE * 2), 0, "gas is spent when its life runs out");
+  assert.equal(S.regionLife(blown, S.REGION_LIFE * 2), 0, "…and so is a remnant");
+}
+
 console.log("spiral ok: the arms are a wave the stars stream through");
