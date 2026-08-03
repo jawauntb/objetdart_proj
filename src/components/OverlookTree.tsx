@@ -124,6 +124,12 @@ type VignetteGeom = {
   specks: number[];
   /** quarks: pair sites (x, y, phase) */
   pairs: number[];
+  /** birds: per-bird lane, orbit radius, wing phase */
+  flock: number[];
+  /** space: web nodes (x, y, mass) */
+  web: number[];
+  /** olympus: ridge heights, far range → near */
+  ridge: number[];
 };
 
 function buildGeom(id: string): VignetteGeom {
@@ -147,7 +153,13 @@ function buildGeom(id: string): VignetteGeom {
   for (let i = 0; i < 5; i++) specks.push(rng());
   const pairs: number[] = [];
   for (let i = 0; i < 9; i++) pairs.push((rng() - 0.5) * 1.4, (rng() - 0.5) * 1.4, rng());
-  return { rng, spiral, atoms, specks, pairs };
+  const flock: number[] = [];
+  for (let i = 0; i < 26; i++) flock.push(rng(), 0.25 + rng() * 0.55, rng() * 7);
+  const web: number[] = [];
+  for (let i = 0; i < 11; i++) web.push((rng() - 0.5) * 1.7, (rng() - 0.5) * 1.7, 0.25 + rng() * 0.75);
+  const ridge: number[] = [];
+  for (let i = 0; i < 18; i++) ridge.push(rng());
+  return { rng, spiral, atoms, specks, pairs, flock, web, ridge };
 }
 
 const GEOM = new Map<string, VignetteGeom>(NODES.map((n) => [n.id, buildGeom(n.id)]));
@@ -237,6 +249,123 @@ function drawVignette(
       }
       break;
     }
+    case "organics": {
+      // a carbon chain hunting its angle: the zig-zag opens and closes, and
+      // the shimmer along it dies out as the tetrahedral angle arrives
+      const fold = 0.5 - 0.5 * Math.cos(t * 0.19);
+      const theta = mix(1.62, 1.911, fold); // toward 109.47°
+      const strain = Math.abs(theta - 1.911) / 0.3;
+      const half = (Math.PI - theta) / 2;
+      const L = r * 0.23;
+      const pts: number[] = [];
+      let cx = 0;
+      let cy = 0;
+      pts.push(cx, cy);
+      for (let i = 0; i < 6; i++) {
+        const h = i % 2 === 0 ? -half : half;
+        cx += Math.cos(h) * L;
+        cy += Math.sin(h) * L;
+        pts.push(cx, cy);
+      }
+      const shiftX = cx / 2;
+      const tumble = Math.sin(t * 0.11) * 0.3;
+      ctx.save();
+      ctx.rotate(tumble);
+      ctx.translate(-shiftX, 0);
+      ctx.strokeStyle = `rgba(180, 200, 190, ${0.5 - strain * 0.15})`;
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      for (let i = 0; i < pts.length; i += 2) {
+        if (i === 0) ctx.moveTo(pts[0], pts[1]);
+        else ctx.lineTo(pts[i], pts[i + 1]);
+      }
+      ctx.stroke();
+      for (let i = 0, k = 0; i < pts.length; i += 2, k++) {
+        const end = k === pts.length / 2 - 1;
+        ctx.fillStyle = end ? "rgba(226, 150, 130, 0.85)" : "rgba(150, 200, 190, 0.8)";
+        ctx.beginPath();
+        ctx.arc(pts[i], pts[i + 1], r * (end ? 0.085 : 0.065), 0, Math.PI * 2);
+        ctx.fill();
+        if (strain > 0.05) {
+          // the beat you can hear: it fades as the geometry settles
+          ctx.strokeStyle = `rgba(243, 211, 122, ${strain * 0.3 * (0.5 + 0.5 * Math.sin(t * 9 + k))})`;
+          ctx.lineWidth = 0.7;
+          ctx.beginPath();
+          ctx.arc(pts[i], pts[i + 1], r * 0.13, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      }
+      ctx.restore();
+      break;
+    }
+    case "dna": {
+      // the ladder that copies: two backbones winding, rungs between them,
+      // the near strand passing in front of the far one every half turn
+      const rows = 20;
+      const amp = r * 0.4 * (1 + breath * 0.05);
+      const turns = 2.1;
+      const front: number[] = [];
+      const back: number[] = [];
+      for (let i = 0; i <= rows; i++) {
+        const u = i / rows;
+        const y = -r * 0.78 + u * r * 1.56;
+        const ph = u * turns * Math.PI * 2 + t * 0.55;
+        const xa = Math.sin(ph) * amp;
+        const xb = -xa;
+        const near = Math.cos(ph) * 0.5 + 0.5;
+        ctx.strokeStyle = `rgba(${i % 2 ? 226 : 150}, ${i % 2 ? 170 : 200}, ${
+          i % 2 ? 190 : 190
+        }, ${0.16 + near * 0.34})`;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(xa, y);
+        ctx.lineTo(xb, y);
+        ctx.stroke();
+        front.push(xa, y);
+        back.push(xb, y);
+      }
+      for (const strand of [back, front]) {
+        ctx.strokeStyle = strand === front ? "rgba(240, 220, 180, 0.7)" : "rgba(150, 180, 220, 0.4)";
+        ctx.lineWidth = strand === front ? 1.4 : 1;
+        ctx.beginPath();
+        for (let i = 0; i < strand.length; i += 2) {
+          if (i === 0) ctx.moveTo(strand[0], strand[1]);
+          else ctx.lineTo(strand[i], strand[i + 1]);
+        }
+        ctx.stroke();
+      }
+      break;
+    }
+    case "organelles": {
+      // a membrane budget: as the crista folds deeper the outer wall smooths,
+      // and the length of the line is kept either way
+      const fold = 0.5 - 0.5 * Math.cos(t * 0.2);
+      ctx.strokeStyle = "rgba(170, 200, 220, 0.45)";
+      ctx.fillStyle = "rgba(50, 80, 100, 0.28)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, r * 0.62, r * 0.38 * (1 + breath * 0.04), 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      const lobes = 6;
+      ctx.strokeStyle = `rgba(226, 200, 150, ${0.3 + fold * 0.35})`;
+      ctx.lineWidth = 0.9;
+      ctx.beginPath();
+      for (let i = 0; i <= 60; i++) {
+        const u = i / 60;
+        const x = -r * 0.5 + u * r;
+        const y = Math.sin(u * lobes * Math.PI) * r * 0.26 * fold;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+      // a smooth vesicle alongside: the same membrane, unfolded
+      ctx.strokeStyle = `rgba(200, 220, 210, ${0.5 - fold * 0.2})`;
+      ctx.beginPath();
+      ctx.arc(r * 0.42, -r * 0.42, r * 0.13, 0, Math.PI * 2);
+      ctx.stroke();
+      break;
+    }
     case "cells": {
       // one cell forever mid-division: apart, and together again
       const ph = 0.5 - 0.5 * Math.cos((t * 0.22) % (Math.PI * 2));
@@ -254,6 +383,43 @@ function drawVignette(
         ctx.arc(s * d * 1.15, 0, r * 0.09, 0, Math.PI * 2);
         ctx.fill();
         ctx.fillStyle = "rgba(60, 110, 95, 0.25)";
+      }
+      break;
+    }
+    case "tissue": {
+      // a sheet of cells, and one wave of polarity walking across it —
+      // where the wave passes, the cells face the same way
+      const cols = 5;
+      const rows = 4;
+      const cell = r * 0.3;
+      const wave = (t * 0.24) % 1.6;
+      for (let ry = 0; ry < rows; ry++) {
+        for (let cxi = 0; cxi < cols; cxi++) {
+          const x = (cxi - (cols - 1) / 2) * cell * 0.92 + (ry % 2 ? cell * 0.46 : 0);
+          const y = (ry - (rows - 1) / 2) * cell * 0.8;
+          const u = (x / r + 1) / 2;
+          const near = Math.max(0, 1 - Math.abs(u - (wave - 0.3)) * 5);
+          ctx.strokeStyle = `rgba(170, 220, 200, ${0.28 + near * 0.4})`;
+          ctx.fillStyle = `rgba(60, 110, 95, ${0.16 + near * 0.2})`;
+          ctx.lineWidth = 0.8;
+          ctx.beginPath();
+          for (let k = 0; k < 6; k++) {
+            const a = (k / 6) * Math.PI * 2 + Math.PI / 6;
+            const px = x + Math.cos(a) * cell * 0.46;
+            const py = y + Math.sin(a) * cell * 0.46;
+            if (k === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+          }
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+          if (near > 0.1) {
+            ctx.fillStyle = `rgba(232, 244, 236, ${near * 0.6})`;
+            ctx.beginPath();
+            ctx.arc(x, y - cell * 0.14, cell * 0.11, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
       }
       break;
     }
@@ -305,6 +471,29 @@ function drawVignette(
       ctx.fill();
       break;
     }
+    case "birds": {
+      // the flock as one animal: every bird on its own lane, all of them
+      // wheeling one way, the wingbeats never quite together
+      for (let i = 0; i < g.flock.length; i += 3) {
+        const lane = g.flock[i];
+        const rr = g.flock[i + 1];
+        const wph = g.flock[i + 2];
+        const a = t * (0.42 + rr * 0.3) + lane * Math.PI * 2;
+        const x = Math.cos(a) * rr * r * 0.82;
+        const y = Math.sin(a) * rr * r * 0.42 - r * 0.05;
+        const wing = Math.abs(Math.sin(t * 5.5 + wph));
+        const span = r * 0.075 * (0.35 + wing * 0.65);
+        const lift = r * 0.05 * (1 - wing);
+        ctx.strokeStyle = `rgba(226, 230, 238, ${0.3 + rr * 0.4})`;
+        ctx.lineWidth = 0.9;
+        ctx.beginPath();
+        ctx.moveTo(x - span, y - lift);
+        ctx.lineTo(x, y);
+        ctx.lineTo(x + span, y - lift);
+        ctx.stroke();
+      }
+      break;
+    }
     case "coast": {
       // foam lapping a dark shore, line after line
       ctx.fillStyle = "rgba(30, 50, 65, 0.5)";
@@ -324,6 +513,41 @@ function drawVignette(
         }
         ctx.stroke();
       }
+      break;
+    }
+    case "olympus": {
+      // the wanderer's view: ridges standing out of a fog whose altitude
+      // breathes — raise it and the peaks become an archipelago
+      const fogY = -r * 0.02 + Math.sin(t * 0.12) * r * 0.2;
+      ctx.fillStyle = "rgba(226, 190, 150, 0.5)";
+      ctx.beginPath();
+      ctx.arc(r * 0.42, -r * 0.55, r * 0.09, 0, Math.PI * 2);
+      ctx.fill();
+      for (let layer = 2; layer >= 0; layer--) {
+        const scale = 0.4 + layer * 0.28;
+        const baseY = -r * 0.1 + layer * r * 0.16;
+        const shade = 0.1 + layer * 0.12;
+        ctx.fillStyle = `rgba(${58 + layer * 22}, ${62 + layer * 20}, ${74 + layer * 18}, ${
+          0.35 + shade
+        })`;
+        ctx.beginPath();
+        ctx.moveTo(-r, r);
+        for (let k = 0; k <= 12; k++) {
+          const x = -r + (k / 12) * r * 2;
+          const h = g.ridge[(layer * 6 + k) % g.ridge.length];
+          const y = baseY - h * r * scale - Math.sin(k * 1.9 + layer) * r * 0.05;
+          ctx.lineTo(x, y);
+        }
+        ctx.lineTo(r, r);
+        ctx.closePath();
+        ctx.fill();
+      }
+      const fog = ctx.createLinearGradient(0, fogY - r * 0.16, 0, r);
+      fog.addColorStop(0, "rgba(214, 220, 228, 0)");
+      fog.addColorStop(0.35, "rgba(210, 216, 226, 0.45)");
+      fog.addColorStop(1, "rgba(196, 205, 216, 0.72)");
+      ctx.fillStyle = fog;
+      ctx.fillRect(-r, fogY - r * 0.16, r * 2, r * 2);
       break;
     }
     case "atlas": {
@@ -390,6 +614,41 @@ function drawVignette(
       ctx.beginPath();
       ctx.arc(0, 0, r * 0.07, 0, Math.PI * 2);
       ctx.fill();
+      break;
+    }
+    case "space": {
+      // the web: light gathered where something invisible is dense, the
+      // filaments between the knots drifting on the longest clock here
+      const drift = Math.sin(t * 0.04) * r * 0.05;
+      for (let i = 0; i < g.web.length; i += 3) {
+        const xi = g.web[i] * r * 0.72 + drift;
+        const yi = g.web[i + 1] * r * 0.72;
+        for (let j = i + 3; j < g.web.length; j += 3) {
+          const xj = g.web[j] * r * 0.72 + drift;
+          const yj = g.web[j + 1] * r * 0.72;
+          const d = Math.hypot(xj - xi, yj - yi);
+          if (d > r * 0.72) continue;
+          ctx.strokeStyle = `rgba(150, 170, 210, ${0.16 * (1 - d / (r * 0.72))})`;
+          ctx.lineWidth = 0.6;
+          ctx.beginPath();
+          ctx.moveTo(xi, yi);
+          ctx.lineTo(xj, yj);
+          ctx.stroke();
+        }
+      }
+      for (let i = 0; i < g.web.length; i += 3) {
+        const x = g.web[i] * r * 0.72 + drift;
+        const y = g.web[i + 1] * r * 0.72;
+        const m = g.web[i + 2];
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(t * 0.02 + m * 6);
+        ctx.fillStyle = `rgba(238, 232, 214, ${0.2 + m * 0.5})`;
+        ctx.beginPath();
+        ctx.ellipse(0, 0, r * 0.06 * m + 0.9, r * 0.024 * m + 0.6, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
       break;
     }
     case "beyond": {

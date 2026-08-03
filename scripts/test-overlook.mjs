@@ -113,11 +113,41 @@ assert.equal(
   "trunk edges are the chain steps and nothing else",
 );
 
-// — the live cosmology's known forks hold (a moved door would move these) —
-assert.equal(byId.get("flowers").onTrunk, false, "flowers grow off the trunk");
-assert.equal(byId.get("flowers").parent, "earth", "flowers hang off the earth");
-assert.equal(byId.get("earth").parent, "atlas", "the ground lies on the atlas");
+// — the live cosmology's known shape holds (a moved door would move these) —
+// The life ladder is one unbroken stretch of trunk: part-of and smaller-than
+// agree the whole way from the quarks to the petal, so every rung must be
+// consecutive. A band inserted at the wrong index, a lost override, or a door
+// that skips a rung all break this line and nothing else in the suite.
+const LADDER = [
+  "quarks",
+  "atoms",
+  "molecules",
+  "organics",
+  "dna",
+  "organelles",
+  "cells",
+  "tissue",
+  "flowers",
+];
+assert.deepEqual(
+  tree.trunk.slice(0, LADDER.length),
+  LADDER,
+  "the life ladder climbs the trunk without a gap",
+);
+assert.equal(byId.get("tissue").onTrunk, true, "the sheet is a rung, not a fork");
+// The sea is the fork now: a sheet of cells belongs to the thing it is a
+// sheet of, not to the water it happens to be the size of, so the trunk
+// leaves the ladder through the flower and the drop hangs off it instead.
+assert.equal(byId.get("drop").onTrunk, false, "the drop hangs off the trunk");
+assert.equal(byId.get("drop").parent, "coast", "a drop returns to the sea");
+assert.equal(byId.get("coast").parent, "olympus", "the shore lies under the peak");
+assert.equal(byId.get("olympus").parent, "atlas", "the peak stands on the map");
+assert.equal(byId.get("birds").parent, "coast", "the flock carries out to the shore");
 assert.equal(byId.get("beyond").parent, "manifold", "beyond branches off the fold");
+// The whole sea branch is one subtree, each step exactly one deeper.
+assert.equal(byId.get("olympus").depth, 1, "the peak hangs one step off the trunk");
+assert.equal(byId.get("coast").depth, 2, "the shore hangs under the peak");
+assert.equal(byId.get("drop").depth, 3, "the drop hangs under the shore");
 
 // — the derivation is a pure function of the graph: move a door, the tree moves —
 const stubBands = [
@@ -173,8 +203,15 @@ for (let i = 1; i < axisSorted.length; i++) {
   );
 }
 assert.ok(
-  Math.sign(place.flowers.x) === Math.sign(place.earth.x),
+  Math.sign(place.drop.x) === Math.sign(place.olympus.x) &&
+    Math.sign(place.coast.x) === Math.sign(place.olympus.x),
   "a branch keeps its subtree root's side",
+);
+// The deepest branch still stands inside a 390px glance: the room clamps
+// its reach by MAX_ABS_X, and this is the number it clamps against.
+assert.ok(
+  Math.max(...tree.nodes.map((n) => Math.abs(place[n.id].x))) <= 3,
+  "no branch leans further than three steps off the trunk",
 );
 assert.deepEqual(layoutTree(tree), place, "the layout is deterministic");
 
