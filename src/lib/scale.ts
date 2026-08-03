@@ -444,6 +444,25 @@ export function travelOptions(
   return options;
 }
 
+// ——— Step back: the two-finger tap (gesture grammar §5) ———
+
+/** How far one step back retreats, in decades — gentle, felt, never a jump. */
+export const STEP_BACK_DECADES = 0.35;
+
+/**
+ * Two-finger tap = step back: an impulse velocity (decades/second) that,
+ * decaying through stepScale's V_TAU integrator with no active input,
+ * displaces s by exactly the step — clamped inside the band so the nudge
+ * can approach but never reach the upper wall, and therefore never emits
+ * a detent or a crossing. Pure; the law tested in scripts/test-scale.mjs.
+ */
+export function stepBackVelocity(s: number): number {
+  const band = bandAt(clampScale(s));
+  const headroom = band.sMax - EDGE_PEEK - clampScale(s);
+  const step = Math.min(STEP_BACK_DECADES, Math.max(0, headroom));
+  return step / (V_TAU / 1000);
+}
+
 /** Arrival position: upward travel enters at the lower wall, downward at the upper. */
 export function entryScaleInto(dest: ScaleBand, dir: TravelDir): number {
   const mid = (dest.sMin + dest.sMax) / 2;

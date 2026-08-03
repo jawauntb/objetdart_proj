@@ -34,6 +34,7 @@ import {
   resolveDestination,
   roomZoomWall,
   scaleForRoomZoom,
+  stepBackVelocity,
   stepScale,
   travelOptions,
   type EnteredFromMap,
@@ -44,7 +45,7 @@ import {
   type ScaleState,
   type TravelDir,
 } from "@/lib/scale";
-import { detent as hapticDetent, crossing as hapticCrossing } from "@/lib/haptics";
+import { detent as hapticDetent, crossing as hapticCrossing, tap as hapticTap } from "@/lib/haptics";
 
 const STORAGE_KEY = "objetdart:scale:s";
 const ENTERED_FROM_KEY = "objetdart:scale:enteredFrom:v1";
@@ -122,6 +123,20 @@ export type EdgeUI = {
 };
 
 const IDLE_UI: EdgeUI = { pressure: 0, towardLabel: null, crossing: false };
+
+/**
+ * Two-finger tap = step back (gesture grammar §5): if the room has a lens
+ * raised it lowers first — rooms mark their playable surface with
+ * data-lens-raised="1" and own that step themselves; only then does the
+ * frame retreat. One DOM read per tap, nothing per frame.
+ */
+function roomLensRaised(): boolean {
+  try {
+    return !!document.querySelector('[data-lens-raised="1"]');
+  } catch {
+    return false;
+  }
+}
 
 /** Which built destination the whispered name should promise while idle. */
 function nearestNeighborLabel(s: number): string | null {
@@ -446,6 +461,20 @@ export default function ScaleTravel({ route }: { route: string }) {
             lastPinchAtRef.current = performance.now();
           }
           wake();
+        },
+        tap: (e) => {
+          // Two-finger tap = step back: a gentle nudge toward larger scales,
+          // clamped inside the band — the wall is never touched, never crossed.
+          if (e.fingers !== 2 || leavingRef.current) return;
+          if (roomLensRaised()) return; // the room lowers its lens first
+          const st = stateRef.current;
+          if (!st) return;
+          const v0 = stepBackVelocity(st.s);
+          if (v0 > 1e-6) {
+            stateRef.current = { ...st, v: Math.max(st.v, 0) + v0 };
+            hapticTap();
+            wake();
+          }
         },
       },
       { noCapture: true, manageStyle: false, wheelZoom: false },

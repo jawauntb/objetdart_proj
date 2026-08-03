@@ -26,6 +26,7 @@ import { useEffect, useRef } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import {
   MAX_MOLECULES,
@@ -191,6 +192,13 @@ export default function MoleculesField() {
     let lens = 0;
     let lensTarget = 0;
     let lensSnapped = 0;
+    // the vessel: gravity's lean on the solvent (-1..1) and the thermal spike
+    let tiltLeanX = 0;
+    let tiltLeanY = 0;
+    let thermalStorm = 0;
+    let tuttiPulse = 0;
+    let lastTiltSoundAt = 0;
+    let lastTuttiAt = 0;
     let entrainedBpm = 0;
     let entrainedUntil = 0;
     let lastInteractionAt = performance.now();
@@ -416,11 +424,43 @@ export default function MoleculesField() {
       try { haptics.tap(); } catch { /* noop */ }
     };
 
+    // the raised-lens marker ScaleTravel reads before a step-back nudge
+    const markLens = (raised: boolean) => {
+      if (raised) wrap.dataset.lensRaised = "1";
+      else delete wrap.dataset.lensRaised;
+    };
+
+    // three-finger tap = tutti (grammar §5): one synchronized soft pulse —
+    // every molecule rings its tone quietly, shimmering as one solution
+    const tutti = () => {
+      const now = performance.now();
+      if (now - lastTuttiAt < 1400) return;
+      lastTuttiAt = now;
+      tuttiPulse = 1;
+      const alive = mols.filter((m) => !m.retiringAt && m.closed);
+      alive.slice(0, 10).forEach((m, i) => noteLater(i * 45, midiOf(m.morph), 70));
+      for (const m of alive) m.heat = Math.min(2, m.heat + 0.3);
+      try { haptics.tap(); } catch { /* noop */ }
+    };
+
     // ————— gestures (the grammar, nothing private; pinch belongs to the manifold) —————
     const detach = attachGestures(wrap, {
       tap: (e) => {
         lastInteractionAt = performance.now();
-        if (e.fingers !== 1) return; // the frame and the law absorb stray taps
+        if (e.fingers === 2) {
+          // step back: a raised lens lowers first; the marker clears a beat
+          // later so ScaleTravel skips its nudge on this same tap
+          if (lensSnapped === 1) {
+            lensSnapped = 0;
+            lensTarget = 0;
+            window.setTimeout(() => markLens(false), 0);
+            try { haptics.lens(); } catch { /* noop */ }
+            note(50, 160);
+          }
+          return;
+        }
+        if (e.fingers === 3) { tutti(); return; }
+        if (e.fingers !== 1) return; // anything else is gently absorbed
         const { x, y } = toLocal(e.x, e.y);
         thermalKick(x, y, e.intensity);
       },
@@ -492,7 +532,18 @@ export default function MoleculesField() {
         } else if (hold.molId) {
           // a molecule this hand just condensed — keep holding, it keeps building
           const m = mols.find((q) => q.id === hold.molId);
-          if (m) buildMol(m, 0.0016 * 80 * (1 + e.intensity * 0.6) * m.morph.bonds.length * 0.25);
+          if (m && !m.closed) buildMol(m, 0.0016 * 80 * (1 + e.intensity * 0.6) * m.morph.bonds.length * 0.25);
+          else if (m) {
+            // duration is an axis: past the last bond the hold keeps warming —
+            // the molecule shimmers and tumbles faster the longer it is held
+            m.heat = Math.min(2, m.heat + 0.035 * (1 + e.intensity * 0.6));
+            const now = performance.now();
+            if (now - lastChargeNoteAt > 700) {
+              lastChargeNoteAt = now;
+              note(midiOf(m.morph) + 2 + Math.round(m.heat * 3), 90);
+              try { haptics.tap(); } catch { /* noop */ }
+            }
+          }
         } else if (e.tier >= 2 && !hold.seeded && !hold.onExisting && !hold.reacted) {
           // dwell on open field: condense — long-press means grow, everywhere
           hold.seeded = true;
@@ -573,6 +624,7 @@ export default function MoleculesField() {
           const snapped = lensTarget > 0.5 ? 1 : 0;
           if (snapped !== lensSnapped) {
             lensSnapped = snapped;
+            markLens(snapped === 1);
             try { haptics.lens(); } catch { /* noop */ }
             if (snapped === 1) { try { audio().chime(); } catch { /* noop */ } }
             else note(50, 160);
@@ -604,6 +656,34 @@ export default function MoleculesField() {
           try { haptics.tap(); } catch { /* noop */ }
           note(55, 140);
         }
+      },
+    });
+
+    // ————— the vessel: the device is the beaker's body (grammar §5) —————
+    // Subscribed passively — nothing flows until the candle has invited the
+    // senses. Tilt = solvent convection downhill; shake = a thermal spike —
+    // a brief temperature rise, everything jitters and tumbles harder.
+    const detachVessel = onVessel({
+      tilt: ({ beta, gamma }) => {
+        if (reduce) { tiltLeanX = 0; tiltLeanY = 0; return; }
+        tiltLeanX = clamp(gamma / 28, -1, 1);
+        tiltLeanY = clamp((beta - 35) / 28, -1, 1); // rest angle ≈ a held phone
+        const mag = Math.hypot(tiltLeanX, tiltLeanY);
+        const now = performance.now();
+        if (mag > 0.55 && now - lastTiltSoundAt > 1400) {
+          lastTiltSoundAt = now;
+          note(40 + Math.round(mag * 4), 220); // the convection's low word
+        }
+      },
+      shake: ({ intensity }) => {
+        if (reduce) return;
+        lastInteractionAt = performance.now();
+        // thermal agitation spike: the whole solution runs hot for a breath
+        thermalStorm = Math.min(1, 0.5 + intensity * 0.7);
+        for (const m of mols) m.heat = Math.min(2, m.heat + 0.5 + intensity * 0.6);
+        try { audio().spark(); } catch { /* noop */ }
+        note(45, 200);
+        try { (intensity > 0.7 ? haptics.storm : haptics.chop)(); } catch { /* noop */ }
       },
     });
 
@@ -873,6 +953,11 @@ export default function MoleculesField() {
       streamTargetX *= Math.exp(-dt * 0.5);
       streamTargetY *= Math.exp(-dt * 0.5);
       lens += (lensTarget - lens) * Math.min(1, dt * 6);
+      thermalStorm *= Math.exp(-dt * 0.9);
+      tuttiPulse *= Math.exp(-dt * 2.4);
+      // the vessel's lean: solvent convection runs downhill with real gravity
+      const gravX = streamX + tiltLeanX * 0.5;
+      const gravY = streamY + tiltLeanY * 0.5;
 
       // deferred notes (the doppler tail, mostly)
       for (let i = pendingNotes.length - 1; i >= 0; i--) {
@@ -903,8 +988,8 @@ export default function MoleculesField() {
           const d = m.morph.drift;
           const wx = Math.sin(localT * d.rate + d.ax) * 0.004;
           const wy = Math.cos(localT * d.rate * 0.8 + d.ay) * 0.0035;
-          let vx = wx + (m.pushX + streamX * 30) / Math.max(1, width);
-          let vy = wy + (m.pushY + streamY * 30) / Math.max(1, height);
+          let vx = wx + (m.pushX + gravX * 30) / Math.max(1, width);
+          let vy = wy + (m.pushY + gravY * 30) / Math.max(1, height);
           for (const v of vortices) {
             const age = (now - v.born) / 3000;
             if (age >= 1) continue;
@@ -952,10 +1037,11 @@ export default function MoleculesField() {
       for (let i = 0; i < motes.length; i++) {
         const m = motes[i];
         if (!reduce) {
-          const jx = Math.sin(localT * (1.2 + twinkleHash(i + 47) * 1.9) + twinkleHash(i + 9) * 6.28) * 7;
-          const jy = Math.cos(localT * (1.0 + twinkleHash(i + 89) * 2.1) + twinkleHash(i + 3) * 6.28) * 7;
-          m.vx += (jx - m.vx) * dt * 2 + streamX * 130 * dt;
-          m.vy += (jy - m.vy) * dt * 2 + streamY * 130 * dt;
+          const seethe = 7 * (1 + thermalStorm * 4); // the spike seethes, then cools
+          const jx = Math.sin(localT * (1.2 + twinkleHash(i + 47) * 1.9) + twinkleHash(i + 9) * 6.28) * seethe;
+          const jy = Math.cos(localT * (1.0 + twinkleHash(i + 89) * 2.1) + twinkleHash(i + 3) * 6.28) * seethe;
+          m.vx += (jx - m.vx) * dt * (2 + thermalStorm * 6) + gravX * 130 * dt;
+          m.vy += (jy - m.vy) * dt * (2 + thermalStorm * 6) + gravY * 130 * dt;
           for (const s of stirs) {
             const age = (now - s.born) / 1800;
             if (age >= 1) continue;
@@ -1014,6 +1100,18 @@ export default function MoleculesField() {
       // molecules, painter's order by size (small behind, large in front)
       const sorted = [...mols].sort((a, b) => a.morph.radius - b.morph.radius);
       for (const m of sorted) drawMol(m, localT, breath);
+
+      // tutti: one soft ring around every molecule, fading together
+      if (tuttiPulse > 0.03) {
+        ctx.strokeStyle = colorAlpha("#E7AC52", 0.2 * tuttiPulse);
+        ctx.lineWidth = 1;
+        for (const m of mols) {
+          if (m.retiringAt || m.sr <= 0) continue;
+          ctx.beginPath();
+          ctx.arc(m.sx, m.sy, m.sr * (1.15 + (1 - tuttiPulse) * 0.25), 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      }
 
       // wavefronts — the thermal kick made visible
       for (let i = wavefronts.length - 1; i >= 0; i--) {
@@ -1084,6 +1182,8 @@ export default function MoleculesField() {
       cancelAnimationFrame(raf);
       observer.disconnect();
       detach();
+      detachVessel();
+      markLens(false);
       wrap.removeEventListener("keydown", onKeyDown);
       wrap.removeEventListener("keyup", onKeyUp);
       wrap.removeEventListener("focus", onFocus);

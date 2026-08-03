@@ -33,6 +33,7 @@ import { useEffect, useRef } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import {
   ANTI_TINTS,
@@ -222,6 +223,11 @@ export default function QuarksVacuum() {
     let lens = 0;
     let lensTarget = 0;
     let lensSnapped = 0;
+    // the vessel: gravity's drift on the vacuum (-1..1)
+    let tiltLeanX = 0;
+    let tiltLeanY = 0;
+    let lastTiltSoundAt = 0;
+    let lastTuttiAt = 0;
     let lastInteractionAt = performance.now();
     let lastSaveAt = 0;
     let dirty = false;
@@ -499,11 +505,44 @@ export default function QuarksVacuum() {
       save();
     };
 
+    // the raised-lens marker ScaleTravel reads before a step-back nudge
+    const markLens = (raised: boolean) => {
+      if (raised) wrap.dataset.lensRaised = "1";
+      else delete wrap.dataset.lensRaised;
+    };
+
+    // three-finger tap = tutti (grammar §5): one synchronized soft pulse —
+    // every hadron's tubes shimmer and its voice speaks once, quietly
+    const tutti = () => {
+      const now = performance.now();
+      if (now - lastTuttiAt < 1400) return;
+      lastTuttiAt = now;
+      const alive = hadrons.filter((h) => !h.retiringAt && h.closed);
+      alive.forEach((h, i) => {
+        h.shiver = Math.max(h.shiver, 0.55);
+        if (i < 8) noteLater(i * 45, midiOf(h.morph), 70);
+      });
+      try { haptics.tap(); } catch { /* noop */ }
+    };
+
     // ————— gestures (the grammar, nothing private; pinch belongs to the manifold) —————
     const detach = attachGestures(wrap, {
       tap: (e) => {
         lastInteractionAt = performance.now();
-        if (e.fingers !== 1) return;
+        if (e.fingers === 2) {
+          // step back: a raised lens lowers first; the marker clears a beat
+          // later so ScaleTravel skips its nudge on this same tap
+          if (lensSnapped === 1) {
+            lensSnapped = 0;
+            lensTarget = 0;
+            window.setTimeout(() => markLens(false), 0);
+            try { haptics.lens(); } catch { /* noop */ }
+            note(43, 160);
+          }
+          return;
+        }
+        if (e.fingers === 3) { tutti(); return; }
+        if (e.fingers !== 1) return; // anything else is gently absorbed
         const { x, y } = toLocal(e.x, e.y);
         perturb(x, y, e.intensity);
       },
@@ -557,6 +596,16 @@ export default function QuarksVacuum() {
           if (h && !h.closed) {
             h.growth = clamp01(h.growth + 0.0011 * 80 * (1 + e.intensity * 0.6));
             if (h.growth >= 1) closeHadron(h);
+          } else if (h) {
+            // duration is an axis: past the closing the field keeps feeding —
+            // the fresh hadron trembles with the energy the hand pours in
+            h.shiver = Math.min(1, h.shiver + 0.03 * (1 + e.intensity * 0.5));
+            const now = performance.now();
+            if (now - lastTensionNoteAt > 700) {
+              lastTensionNoteAt = now;
+              note(midiOf(h.morph) + 2 + Math.round(h.shiver * 4), 90);
+              try { haptics.tap(); } catch { /* noop */ }
+            }
           }
         } else if (e.tier >= 2 && !hold.onHadron) {
           // dwell on the empty vacuum: condense — long-press means grow, everywhere
@@ -632,6 +681,7 @@ export default function QuarksVacuum() {
           const snapped = lensTarget > 0.5 ? 1 : 0;
           if (snapped !== lensSnapped) {
             lensSnapped = snapped;
+            markLens(snapped === 1);
             try { haptics.lens(); } catch { /* noop */ }
             if (snapped === 1) { try { audio().chime(); } catch { /* noop */ } }
             else note(43, 160);
@@ -663,6 +713,42 @@ export default function QuarksVacuum() {
           note(74 + Math.round(Math.abs(e.winding) * 2), 90);
           try { haptics.ripple(0.3); } catch { /* noop */ }
         }
+      },
+    });
+
+    // ————— the vessel: the device is the vacuum's body (grammar §5) —————
+    // Subscribed passively — nothing flows until the candle has invited the
+    // senses. Tilt = the vacuum drifts downhill (hadrons and field lines
+    // lean with real gravity); shake = a burst of virtual pairs.
+    const detachVessel = onVessel({
+      tilt: ({ beta, gamma }) => {
+        if (reduce) { tiltLeanX = 0; tiltLeanY = 0; return; }
+        tiltLeanX = clamp(gamma / 28, -1, 1);
+        tiltLeanY = clamp((beta - 35) / 28, -1, 1); // rest angle ≈ a held phone
+        const mag = Math.hypot(tiltLeanX, tiltLeanY);
+        const now = performance.now();
+        if (mag > 0.55 && now - lastTiltSoundAt > 1400) {
+          lastTiltSoundAt = now;
+          note(33 + Math.round(mag * 4), 240); // the drift's low word
+        }
+      },
+      shake: ({ intensity }) => {
+        if (reduce) return;
+        lastInteractionAt = performance.now();
+        // a burst of virtual pairs: the seethe flares wherever the jolt lands
+        const now = performance.now();
+        for (let k = 0; k < 3; k++) {
+          spraySparks(
+            (0.2 + twinkleHash(now + k * 31.7) * 0.6) * width,
+            (0.2 + twinkleHash(now * 1.3 + k * 17.9) * 0.6) * height,
+            3 + Math.round(intensity * 5),
+            30 + intensity * 40,
+          );
+        }
+        for (const h of hadrons) h.shiver = Math.min(1, h.shiver + 0.3 + intensity * 0.4);
+        note(79, 90);
+        noteLater(90, 84, 70);
+        try { (intensity > 0.7 ? haptics.storm : haptics.chop)(); } catch { /* noop */ }
       },
     });
 
@@ -1102,8 +1188,8 @@ export default function QuarksVacuum() {
             q.vx += Math.sin(localT * d.rate + d.ax) * 0.0016 * stepDt * 60;
             q.vy += Math.cos(localT * d.rate * 0.8 + d.ay) * 0.0014 * stepDt * 60;
           }
-          q.vx += windX * 0.05 * stepDt * 60;
-          q.vy += windY * 0.05 * stepDt * 60;
+          q.vx += (windX + tiltLeanX * 0.5) * 0.05 * stepDt * 60;
+          q.vy += (windY + tiltLeanY * 0.5) * 0.05 * stepDt * 60;
           q.nx = clamp(q.nx + q.vx * stepDt, 0.03, 0.97);
           q.ny = clamp(q.ny + q.vy * stepDt, 0.05, 0.96);
           const damp = Math.exp(-stepDt * 3.4);
@@ -1142,9 +1228,11 @@ export default function QuarksVacuum() {
         const l = 5 + twinkleHash(i * 3.7) * 7;
         ctx.strokeStyle = colorAlpha(i % 5 === 0 ? "#E7AC52" : "#CFC2A6", shimmerAlpha * (0.5 + twinkleHash(i * 41.1) * 0.5));
         ctx.lineWidth = 0.6;
+        const shiftX = (windX + tiltLeanX * 0.7) * 8;
+        const shiftY = (windY + tiltLeanY * 0.7) * 8;
         ctx.beginPath();
-        ctx.moveTo(fx - Math.cos(a) * l + windX * 8, fy - Math.sin(a) * l + windY * 8);
-        ctx.lineTo(fx + Math.cos(a) * l + windX * 8, fy + Math.sin(a) * l + windY * 8);
+        ctx.moveTo(fx - Math.cos(a) * l + shiftX, fy - Math.sin(a) * l + shiftY);
+        ctx.lineTo(fx + Math.cos(a) * l + shiftX, fy + Math.sin(a) * l + shiftY);
         ctx.stroke();
       }
       ctx.restore();
@@ -1262,6 +1350,8 @@ export default function QuarksVacuum() {
       cancelAnimationFrame(raf);
       observer.disconnect();
       detach();
+      detachVessel();
+      markLens(false);
       wrap.removeEventListener("keydown", onKeyDown);
       wrap.removeEventListener("keyup", onKeyUp);
       wrap.removeEventListener("focus", onFocus);

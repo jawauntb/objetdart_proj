@@ -22,6 +22,7 @@ import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures, THRESHOLDS } from "@/lib/gesture";
+import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import {
   BLOOM_PEAK,
@@ -64,6 +65,9 @@ type Plant = {
   lastBrushAt: number;
   // the bloom moment (performance.now), for the overshoot-and-settle pulse
   bloomAt: number;
+  // 0..1 overbloom: a hold kept past full bloom keeps deepening — the crown
+  // breathes wider, then slowly settles back (duration is an axis)
+  over: number;
   // ambient volunteers: transient, never persisted
   volunteer: boolean;
   volAge: number; // dilated ms lived so far
@@ -147,6 +151,7 @@ function makePlant(seed: number, nx: number, ny: number, phase: number, plantedA
     by: -1,
     lastBrushAt: 0,
     bloomAt: 0,
+    over: 0,
     volunteer: false,
     volAge: 0,
     volLife: 0,
@@ -222,6 +227,9 @@ export default function FlowersGarden() {
     let reduce = false;
     let wind = 0;
     let windTarget = 0;
+    let tiltWind = 0; // the vessel's lean: wind toward the downhill side
+    let lastTiltSoundAt = 0;
+    let lastTuttiAt = 0;
     let timeScale = 1;
     let timeScaleTarget = 1;
     let zoom = 1;
@@ -521,11 +529,41 @@ export default function FlowersGarden() {
     };
     letGoRef.current = letGo;
 
+    // three-finger tap = tutti (grammar §5): one synchronized soft pulse —
+    // every flower sways once and its note whispers, the garden answering
+    const tutti = () => {
+      const now = performance.now();
+      if (now - lastTuttiAt < 1400) return;
+      lastTuttiAt = now;
+      const living = plants.filter((p) => p.wiltAt == null);
+      living.forEach((p, i) => {
+        swayPlant(p, (twinkleHash(p.seed % 997) - 0.5) * 1.1);
+        if (i < 12) window.setTimeout(() => note(midiOf(p.species), 70), i * 45);
+      });
+      try { haptics.tap(); } catch { /* noop */ }
+    };
+
     // ————— gestures (the grammar, nothing private) —————
     const detach = attachGestures(wrap, {
       tap: (e) => {
         lastInteractionAt = performance.now();
-        if (e.fingers !== 1) return; // the frame and the law absorb stray taps
+        if (e.fingers === 2) {
+          // step back: a raised lens lowers first; otherwise the garden's
+          // own camera takes one gentle step out (never past its widest)
+          if (lensSnapped === 1) {
+            lensSnapped = 0;
+            lensTarget = 0;
+            try { haptics.lens(); } catch { /* noop */ }
+            note(48, 160);
+          } else {
+            zoom = clamp(zoom * 0.86, 0.75, 1.5);
+            try { haptics.tap(); } catch { /* noop */ }
+            note(43, 140);
+          }
+          return;
+        }
+        if (e.fingers === 3) { tutti(); return; }
+        if (e.fingers !== 1) return; // anything else is gently absorbed
         const { x, y } = toLocal(e.x, e.y);
         const p = plantAt(x, y);
         if (p) {
@@ -590,7 +628,18 @@ export default function FlowersGarden() {
           }
         } else if (hold.plantId) {
           const p = plants.find((q) => q.id === hold.plantId);
-          if (p) advancePhase(p, 0.00021 * 80, e.intensity);
+          if (p && p.phase < 1) advancePhase(p, 0.00021 * 80, e.intensity);
+          else if (p && p.wiltAt == null) {
+            // duration is an axis: a hold kept past full bloom keeps
+            // deepening — a slow breathing overbloom, sighing as it widens
+            p.over = Math.min(1, p.over + 0.009 * (1 + e.intensity * 0.6));
+            const now = performance.now();
+            if (now - lastGrowNoteAt > 800) {
+              lastGrowNoteAt = now;
+              note(midiOf(p.species) - 5 + Math.round(p.over * 4), 160);
+              try { haptics.tap(); } catch { /* noop */ }
+            }
+          }
         }
       },
       drag: (e) => {
@@ -658,6 +707,38 @@ export default function FlowersGarden() {
         for (const s of specks) s.swirl += Math.sign(e.winding) * 1.4;
         note(64, 90);
         try { haptics.ripple(0.3); } catch { /* noop */ }
+      },
+    });
+
+    // ————— the vessel: the device is the garden's body (grammar §5) —————
+    // Subscribed passively — nothing flows until the candle has invited the
+    // senses. Tilt = the wind leans toward the downhill side (the garden's
+    // one wind pathway, reused); shake = petals shed briefly.
+    const detachVessel = onVessel({
+      tilt: ({ gamma }) => {
+        if (reduce) { tiltWind = 0; return; }
+        tiltWind = clamp(gamma / 28, -1, 1) * 0.6;
+        const now = performance.now();
+        if (Math.abs(tiltWind) > 0.33 && now - lastTiltSoundAt > 1400) {
+          lastTiltSoundAt = now;
+          note(38 + Math.round(Math.abs(tiltWind) * 5), 240); // the wind's word
+        }
+      },
+      shake: ({ intensity }) => {
+        if (reduce) return;
+        lastInteractionAt = performance.now();
+        // a shaken garden sheds: open crowns let a few petals go
+        let shed = 0;
+        for (const p of plants) {
+          if (p.wiltAt != null || !p.geo || p.geo.openness < 0.5) continue;
+          swayPlant(p, (twinkleHash(p.seed % 1013) - 0.5) * (1.2 + intensity));
+          if (shed < 6) {
+            shed += 1;
+            fallPetals(p.hx, p.hy, [p.species.palette.petal, p.species.palette.petalDeep], 3, false);
+          }
+        }
+        note(40, 200);
+        try { (intensity > 0.7 ? haptics.storm : haptics.chop)(); } catch { /* noop */ }
       },
     });
 
@@ -1038,8 +1119,9 @@ export default function FlowersGarden() {
         }
       }
 
-      // crowns
-      const breathScale = reduce ? 1 : 1 + Math.sin(breath + p.breathOffset) * 0.035 * sp.breathDepth;
+      // crowns — the overbloom breathes the crown wider, slow and audible
+      const overSwell = p.over * (0.14 + (reduce ? 0 : 0.05 * Math.sin(breath * 2 + p.breathOffset)));
+      const breathScale = (reduce ? 1 : 1 + Math.sin(breath + p.breathOffset) * 0.035 * sp.breathDepth) + overSwell;
       for (let h = 0; h < geo.heads.length; h++) {
         const head = geo.heads[h];
         const hs = (h === 0 ? 1 : 0.42 + head.scale * 0.4) * boost;
@@ -1071,7 +1153,8 @@ export default function FlowersGarden() {
 
       timeScale += (timeScaleTarget - timeScale) * Math.min(1, dt * 5);
       if (!reduce) localT += dt * timeScale;
-      wind += (windTarget - wind) * Math.min(1, dt * 2.2);
+      // the hand's weather decays; the vessel's lean stands as long as held
+      wind += (windTarget + tiltWind - wind) * Math.min(1, dt * 2.2);
       windTarget *= Math.exp(-dt * 0.5);
       lens += (lensTarget - lens) * Math.min(1, dt * 6);
 
@@ -1100,6 +1183,7 @@ export default function FlowersGarden() {
           if (!p.bloomed && p.phase >= BLOOM_PEAK) crossBloom(p, false);
           if (a >= 0.86) beginWilt(p, "volunteer", now);
         }
+        p.over *= Math.exp(-dt * 0.25); // the overbloom settles back, slowly
         if (reduce) { p.swayX = 0; p.swayV = 0; continue; }
         const omega = 2.2 + p.species.swayStiffness * 3.4;
         p.swayV += (-omega * omega * p.swayX - 2 * 0.55 * omega * p.swayV) * dt * timeScale;
@@ -1258,6 +1342,7 @@ export default function FlowersGarden() {
       cancelAnimationFrame(raf);
       observer.disconnect();
       detach();
+      detachVessel();
       wrap.removeEventListener("pointerdown", onPressDown);
       wrap.removeEventListener("pointermove", onPressMove);
       wrap.removeEventListener("pointerup", onPressUp);

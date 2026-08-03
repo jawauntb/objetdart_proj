@@ -22,6 +22,7 @@ import { useEffect, useRef } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import {
   CELL_FAMILIES,
@@ -197,6 +198,13 @@ export default function CellsPlasm() {
     let lens = 0;
     let lensTarget = 0;
     let lensSnapped = 0;
+    // the vessel: gravity's lean on the plasm (-1..1) and the brownian storm
+    let tiltLeanX = 0;
+    let tiltLeanY = 0;
+    let brownianStorm = 0;
+    let tuttiPulse = 0;
+    let lastTiltSoundAt = 0;
+    let lastTuttiAt = 0;
     let entrainedBpm = 0;
     let entrainedUntil = 0;
     let lastBeatIndex = -1;
@@ -394,11 +402,45 @@ export default function CellsPlasm() {
       try { haptics.tap(); } catch { /* noop */ }
     };
 
+    // the raised-lens marker ScaleTravel reads before a step-back nudge
+    const markLens = (raised: boolean) => {
+      if (raised) wrap.dataset.lensRaised = "1";
+      else delete wrap.dataset.lensRaised;
+    };
+
+    // three-finger tap = tutti (grammar §5): one synchronized soft pulse —
+    // every cell's cytoplasm quickens, its voice a whisper, one felt tick
+    const tutti = () => {
+      const now = performance.now();
+      if (now - lastTuttiAt < 1400) return;
+      lastTuttiAt = now;
+      tuttiPulse = 1;
+      const alive = cells.filter((c) => !c.retiringAt && c.closed);
+      alive.slice(0, 10).forEach((c, i) => {
+        window.setTimeout(() => note(midiOf(c.morph), 70), i * 45);
+      });
+      for (const c of alive) c.streamBoost = Math.min(2.4, c.streamBoost + 0.5);
+      try { haptics.tap(); } catch { /* noop */ }
+    };
+
     // ————— gestures (the grammar, nothing private; pinch belongs to the manifold) —————
     const detach = attachGestures(wrap, {
       tap: (e) => {
         lastInteractionAt = performance.now();
-        if (e.fingers !== 1) return; // the frame and the law absorb stray taps
+        if (e.fingers === 2) {
+          // step back: a raised lens lowers first; the marker clears a beat
+          // later so ScaleTravel skips its nudge on this same tap
+          if (lensSnapped === 1) {
+            lensSnapped = 0;
+            lensTarget = 0;
+            window.setTimeout(() => markLens(false), 0);
+            try { haptics.lens(); } catch { /* noop */ }
+            note(48, 160);
+          }
+          return;
+        }
+        if (e.fingers === 3) { tutti(); return; }
+        if (e.fingers !== 1) return; // anything else is gently absorbed
         const { x, y } = toLocal(e.x, e.y);
         perturb(x, y, e.intensity);
       },
@@ -448,7 +490,18 @@ export default function CellsPlasm() {
         } else if (hold.cellId) {
           // a cell this hand just seeded — keep holding and it keeps growing
           const c = cells.find((q) => q.id === hold.cellId);
-          if (c) growCell(c, 0.0011 * 80 * (1 + e.intensity * 0.6));
+          if (c && !c.closed) growCell(c, 0.0011 * 80 * (1 + e.intensity * 0.6));
+          else if (c) {
+            // duration is an axis: past the closing the hold keeps feeding —
+            // the cytoplasm streams faster the longer the hand stays
+            c.streamBoost = Math.min(2.4, c.streamBoost + 0.045 * (1 + e.intensity * 0.6));
+            const now = performance.now();
+            if (now - lastChargeNoteAt > 700) {
+              lastChargeNoteAt = now;
+              note(midiOf(c.morph) + 3 + Math.round(c.streamBoost), 90);
+              try { haptics.tap(); } catch { /* noop */ }
+            }
+          }
         } else if (e.tier >= 2 && !hold.seeded && !hold.onExisting && !hold.divided) {
           // dwell on open plasm: seed — long-press means grow, everywhere
           hold.seeded = true;
@@ -524,6 +577,7 @@ export default function CellsPlasm() {
           const snapped = lensTarget > 0.5 ? 1 : 0;
           if (snapped !== lensSnapped) {
             lensSnapped = snapped;
+            markLens(snapped === 1);
             try { haptics.lens(); } catch { /* noop */ }
             if (snapped === 1) { try { audio().chime(); } catch { /* noop */ } }
             else note(48, 160);
@@ -556,6 +610,42 @@ export default function CellsPlasm() {
           try { haptics.tap(); } catch { /* noop */ }
           note(52, 140);
         }
+      },
+    });
+
+    // ————— the vessel: the device is the plasm's body (grammar §5) —————
+    // Subscribed passively — nothing flows until the candle has invited the
+    // senses. Tilt = the plasm settles downhill (cytoplasm streaming biases
+    // toward real gravity); shake = a brownian storm. Cheap handlers: they
+    // assign targets and fire debounced one-shots; the loop does the rest.
+    const detachVessel = onVessel({
+      tilt: ({ beta, gamma }) => {
+        if (reduce) { tiltLeanX = 0; tiltLeanY = 0; return; }
+        tiltLeanX = clamp(gamma / 28, -1, 1);
+        tiltLeanY = clamp((beta - 35) / 28, -1, 1); // rest angle ≈ a held phone
+        const mag = Math.hypot(tiltLeanX, tiltLeanY);
+        const now = performance.now();
+        if (mag > 0.55 && now - lastTiltSoundAt > 1400) {
+          lastTiltSoundAt = now;
+          note(38 + Math.round(mag * 4), 220); // the streaming's low wind-word
+        }
+      },
+      shake: ({ intensity }) => {
+        if (reduce) return;
+        lastInteractionAt = performance.now();
+        // brownian storm: every mote seethes harder for a breath
+        brownianStorm = Math.min(1, 0.5 + intensity * 0.7);
+        for (const c of cells) c.streamBoost = Math.min(2.4, c.streamBoost + 0.7);
+        wavefronts.push({
+          x: width * 0.5,
+          y: height * 0.5,
+          born: performance.now(),
+          maxR: Math.min(width, height) * 0.4,
+          strength: 0.5 + intensity * 0.5,
+        });
+        try { audio().spark(); } catch { /* noop */ }
+        note(43, 200);
+        try { (intensity > 0.7 ? haptics.storm : haptics.chop)(); } catch { /* noop */ }
       },
     });
 
@@ -819,6 +909,11 @@ export default function CellsPlasm() {
       streamTargetX *= Math.exp(-dt * 0.5);
       streamTargetY *= Math.exp(-dt * 0.5);
       lens += (lensTarget - lens) * Math.min(1, dt * 6);
+      brownianStorm *= Math.exp(-dt * 0.9);
+      tuttiPulse *= Math.exp(-dt * 2.4);
+      // the vessel's lean: the plasm settles downhill with real gravity
+      const gravX = streamX + tiltLeanX * 0.5;
+      const gravY = streamY + tiltLeanY * 0.5;
 
       // shared breath: the audio swell clock when audible, RAF when not
       const audioT = (() => { try { return audio().getAudioTime(); } catch { return null; } })();
@@ -839,8 +934,8 @@ export default function CellsPlasm() {
           const d = c.morph.drift;
           const wx = Math.sin(localT * d.rate + d.ax) * 0.004;
           const wy = Math.cos(localT * d.rate * 0.8 + d.ay) * 0.0035;
-          let vx = wx + (c.pushX + streamX * 30) / Math.max(1, width);
-          let vy = wy + (c.pushY + streamY * 30) / Math.max(1, height);
+          let vx = wx + (c.pushX + gravX * 30) / Math.max(1, width);
+          let vy = wy + (c.pushY + gravY * 30) / Math.max(1, height);
           for (const v of vortices) {
             const age = (now - v.born) / 3000;
             if (age >= 1) continue;
@@ -890,10 +985,11 @@ export default function CellsPlasm() {
         const m = motes[i];
         if (!reduce) {
           // brownian jitter — deterministic per mote, alive at rest
-          const jx = Math.sin(localT * (1.1 + twinkleHash(i + 41) * 1.7) + twinkleHash(i + 7) * 6.28) * 6;
-          const jy = Math.cos(localT * (0.9 + twinkleHash(i + 83) * 1.9) + twinkleHash(i + 5) * 6.28) * 6;
-          m.vx += (jx - m.vx) * dt * 2 + streamX * 130 * dt;
-          m.vy += (jy - m.vy) * dt * 2 + streamY * 130 * dt;
+          const seethe = 6 * (1 + brownianStorm * 4); // the storm seethes, then settles
+          const jx = Math.sin(localT * (1.1 + twinkleHash(i + 41) * 1.7) + twinkleHash(i + 7) * 6.28) * seethe;
+          const jy = Math.cos(localT * (0.9 + twinkleHash(i + 83) * 1.9) + twinkleHash(i + 5) * 6.28) * seethe;
+          m.vx += (jx - m.vx) * dt * (2 + brownianStorm * 6) + gravX * 130 * dt;
+          m.vy += (jy - m.vy) * dt * (2 + brownianStorm * 6) + gravY * 130 * dt;
           for (const s of stirs) {
             const age = (now - s.born) / 1800;
             if (age >= 1) continue;
@@ -954,6 +1050,18 @@ export default function CellsPlasm() {
       // cells, painter's order by size (small behind, large in front)
       const sorted = [...cells].sort((a, b) => a.morph.radius - b.morph.radius);
       for (const c of sorted) drawCell(c, localT, breath);
+
+      // tutti: one soft ring around everything alive, fading together
+      if (tuttiPulse > 0.03) {
+        ctx.strokeStyle = colorAlpha("#E7AC52", 0.22 * tuttiPulse);
+        ctx.lineWidth = 1;
+        for (const c of cells) {
+          if (c.retiringAt || c.sr <= 0) continue;
+          ctx.beginPath();
+          ctx.arc(c.sx, c.sy, c.sr * (1.1 + (1 - tuttiPulse) * 0.25), 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      }
 
       // wavefronts — the perturbation made visible
       for (let i = wavefronts.length - 1; i >= 0; i--) {
@@ -1033,6 +1141,8 @@ export default function CellsPlasm() {
       cancelAnimationFrame(raf);
       observer.disconnect();
       detach();
+      detachVessel();
+      markLens(false);
       wrap.removeEventListener("keydown", onKeyDown);
       wrap.removeEventListener("keyup", onKeyUp);
       wrap.removeEventListener("focus", onFocus);

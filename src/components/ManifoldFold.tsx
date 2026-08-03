@@ -56,6 +56,7 @@ import { useRouter } from "next/navigation";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import { SCALE_BANDS, spectralRegisterFor, type ScaleBand } from "@/lib/scale";
 import {
@@ -88,6 +89,20 @@ const WEB_SEED = 3126; // the sky's one seed — the web never rolls dice
 const WEB_SUB = 6; // segments per filament polyline
 const WRAP = 2; // comoving wrap ratio: one epoch per doubling of a(t)
 const WEB_DISP = 0.85; // the web rides the mesh's field, slightly supple
+/**
+ * Gyroscopic parallax (the vessel's tilt): max shift in px at full lean.
+ * The fold hangs in real space beyond the glass — layers shift by depth
+ * (the near thread most, the far web least, the rim not at all), smoothed
+ * and clamped; subtle at rest, unmistakable in motion; off under reduce.
+ */
+const PAR_MAX = 22;
+const PAR_WEB = 0.35;
+const PAR_MESH = 0.55;
+const PAR_MASS = 0.75;
+const PAR_PULSE = 0.8;
+const PAR_BEACON = 0.85;
+const PAR_RAY = 0.9;
+const PAR_THREAD = 1;
 
 type Mass = {
   id: string;
@@ -220,6 +235,13 @@ export default function ManifoldFold() {
     let lens = 0;
     let lensTarget = 0;
     let lensSnapped = 0;
+    // the vessel: smoothed gyroscopic parallax (px) and its tilt target (-1..1)
+    let parX = 0;
+    let parY = 0;
+    let parTX = 0;
+    let parTY = 0;
+    let lastTiltSoundAt = 0;
+    let lastTuttiAt = 0;
     const beaconPhase = [0.4, 3.1];
     const beadSwell = new Array<number>(SCALE_BANDS.length).fill(0);
     const beadPos = SCALE_BANDS.map(() => ({ x: 0, y: 0 }));
@@ -484,6 +506,23 @@ export default function ManifoldFold() {
       try { haptics.tap(); } catch { /* noop */ }
     };
 
+    // three-finger tap = tutti (grammar §5): the whole axis states itself —
+    // the twelve beads glimmer in sequence, a fast arpeggio of every band
+    const tutti = () => {
+      const now = performance.now();
+      if (now - lastTuttiAt < 1400) return;
+      lastTuttiAt = now;
+      for (let k = 0; k < SCALE_BANDS.length; k++) {
+        window.setTimeout(() => chimeBead(k, true), k * 70);
+      }
+    };
+
+    // the raised-lens marker ScaleTravel reads before a step-back nudge
+    const markLens = (raised: boolean) => {
+      if (raised) wrap.dataset.lensRaised = "1";
+      else delete wrap.dataset.lensRaised;
+    };
+
     // deterministic ray spawning: seeded by its serial, entering from an edge
     const spawnRay = (): RayState => {
       const s = spawnSerial++;
@@ -503,7 +542,21 @@ export default function ManifoldFold() {
     const detach = attachGestures(wrap, {
       tap: (e) => {
         lastInteractionAt = performance.now();
-        if (e.fingers !== 1) return; // the frame and the law absorb stray taps
+        if (e.fingers === 2) {
+          // step back: a raised lens lowers first; the marker clears a beat
+          // later so ScaleTravel skips its nudge on this same tap
+          if (lensSnapped === 1) {
+            lensSnapped = 0;
+            lensTarget = 0;
+            staticRaysStale = true;
+            window.setTimeout(() => markLens(false), 0);
+            try { haptics.lens(); } catch { /* noop */ }
+            note(48, 160);
+          }
+          return;
+        }
+        if (e.fingers === 3) { tutti(); return; }
+        if (e.fingers !== 1) return; // anything else is gently absorbed
         const { x, y } = toLocal(e.x, e.y);
         const k = beadAt(x, y);
         if (k >= 0) { chimeBead(k); return; }
@@ -613,6 +666,18 @@ export default function ManifoldFold() {
                 try { haptics.tap(); } catch { /* noop */ }
               }
               if (m.growth >= 1) settleMass(m);
+            } else if (m && m.settled && !m.evapAt) {
+              // duration is an axis: past the settle the mass KEEPS gathering —
+              // the well deepens, slower and lower, as long as the hand stays
+              m.m = clamp(m.m + 0.0035 * (1 + e.intensity * 0.5), 0.4, 2.2);
+              const now = performance.now();
+              if (now - lastGrowNoteAt > 700) {
+                lastGrowNoteAt = now;
+                note(22 + Math.round(m.m * 2), 200);
+                try { haptics.tap(); } catch { /* noop */ }
+                staticRaysStale = true;
+                dirty = true;
+              }
             }
           }
         }
@@ -659,6 +724,7 @@ export default function ManifoldFold() {
           const snapped = lensTarget > 0.5 ? 1 : 0;
           if (snapped !== lensSnapped) {
             lensSnapped = snapped;
+            markLens(snapped === 1);
             staticRaysStale = true; // stilled rays follow the lens too
             try { haptics.lens(); } catch { /* noop */ }
             if (snapped === 1) { try { audio().chime(); } catch { /* noop */ } }
@@ -666,6 +732,36 @@ export default function ManifoldFold() {
           }
           lensTarget = snapped;
         }
+      },
+    });
+
+    // ————— the vessel: the device is the fold's body (grammar §5) —————
+    // Subscribed passively — nothing flows until the candle has invited the
+    // senses. Tilt = move around the manifold gyroscopically (the parallax
+    // targets the loop smooths); shake = a gravitational tremor. Handlers
+    // only assign targets and fire debounced one-shots — always cheap.
+    const detachVessel = onVessel({
+      tilt: ({ beta, gamma }) => {
+        if (reduce) { parTX = 0; parTY = 0; return; }
+        const nx = clamp(gamma / 28, -1, 1);
+        const ny = clamp((beta - 35) / 28, -1, 1); // rest angle ≈ a held phone
+        const vel = Math.hypot(nx - parTX, ny - parTY);
+        parTX = nx;
+        parTY = ny;
+        // a fast attitude change: the fold answers with the faintest low word
+        const now = performance.now();
+        if (vel > 0.16 && now - lastTiltSoundAt > 800) {
+          lastTiltSoundAt = now;
+          note(26 + Math.round(Math.hypot(nx, ny) * 4), 110);
+        }
+      },
+      shake: ({ intensity }) => {
+        if (reduce) return;
+        lastInteractionAt = performance.now();
+        // a gravitational tremor: one soft wave through the whole fabric
+        firePulse(width * 0.5, height * 0.45, 0.6 + intensity * 0.6);
+        note(24, 380);
+        try { haptics.ripple(0.35 + intensity * 0.4); } catch { /* noop */ }
       },
     });
 
@@ -845,6 +941,12 @@ export default function ManifoldFold() {
       windTargetX *= Math.exp(-dt * 0.5);
       windTargetY *= Math.exp(-dt * 0.5);
       lens += (lensTarget - lens) * Math.min(1, dt * 6);
+      // gyroscopic parallax eases toward the tilt target — opposite the
+      // lean, because the fold hangs beyond the glass and the glass slides
+      const parGoalX = reduce ? 0 : -parTX * PAR_MAX;
+      const parGoalY = reduce ? 0 : -parTY * PAR_MAX;
+      parX += (parGoalX - parX) * Math.min(1, dt * 5);
+      parY += (parGoalY - parY) * Math.min(1, dt * 5);
 
       const pts = livePoints();
 
@@ -931,6 +1033,8 @@ export default function ManifoldFold() {
 
       // ————— the cosmic web: the fabric's grain, breathing apart —————
       if (webLayers.length === 2 && lens < 0.96) {
+        ctx.save();
+        ctx.translate(parX * PAR_WEB, parY * PAR_WEB); // the deepest layer drifts least
         const aNow = scaleFactor(expT);
         const la = Math.log(aNow) / Math.log(WRAP);
         const epoch = Math.floor(la);
@@ -990,9 +1094,12 @@ export default function ManifoldFold() {
             }
           }
         }
+        ctx.restore();
       }
 
       // ————— the mesh: hairlines of the metric —————
+      ctx.save();
+      ctx.translate(parX * PAR_MESH, parY * PAR_MESH);
       ctx.lineWidth = 0.6;
       ctx.strokeStyle = `rgba(206, 222, 250, ${0.055 + lens * 0.05})`;
       ctx.beginPath();
@@ -1011,8 +1118,11 @@ export default function ManifoldFold() {
         }
       }
       ctx.stroke();
+      ctx.restore();
 
       // ————— masses: unlit presences the fabric wells around —————
+      ctx.save();
+      ctx.translate(parX * PAR_MASS, parY * PAR_MASS);
       for (const m of masses) {
         const rawX = m.nx * width;
         const rawY = m.ny * height;
@@ -1064,7 +1174,11 @@ export default function ManifoldFold() {
         }
       }
 
+      ctx.restore();
+
       // ————— pulses: your ripple, racing the light at its own speed —————
+      ctx.save();
+      ctx.translate(parX * PAR_PULSE, parY * PAR_PULSE);
       for (const p of pulses) {
         const rf = (lightT - p.bornLight) * lightSpeed;
         const prog = clamp01(rf / (Math.max(width, height) * 1.2));
@@ -1076,6 +1190,7 @@ export default function ManifoldFold() {
         ctx.arc(pf.x, pf.y, rf, 0, Math.PI * 2);
         ctx.stroke();
       }
+      ctx.restore();
 
       // ————— light: few rays, racing, bending hard —————
       const dilated = rayScale < 0.5;
@@ -1157,6 +1272,7 @@ export default function ManifoldFold() {
 
         // draw: long fading tails, luminous heads
         ctx.save();
+        ctx.translate(parX * PAR_RAY, parY * PAR_RAY);
         ctx.globalCompositeOperation = "lighter";
         for (const r of rays) {
           const n = r.trail.length;
@@ -1208,6 +1324,8 @@ export default function ManifoldFold() {
 
       // ————— the twin beacons: gravity slowing time, watched —————
       {
+        ctx.save();
+        ctx.translate(parX * PAR_BEACON, parY * PAR_BEACON);
         // the twins' home positions are comoving: the Hubble breath carries
         // them apart (saturating, so the far twin never leaves the fold),
         // except where a placed mass binds its neighborhood still
@@ -1248,12 +1366,14 @@ export default function ManifoldFold() {
           ctx.arc(bx, by, 1.8, 0, Math.PI * 2);
           ctx.fill();
         }
+        ctx.restore();
       }
 
       // ————— the filament: the album as one thread of twelve beads —————
       {
         const N = 84;
         ctx.save();
+        ctx.translate(parX * PAR_THREAD, parY * PAR_THREAD); // the nearest layer drifts most
         // thread: warm faint underglow + fine bright line
         for (const pass of [0, 1]) {
           ctx.strokeStyle = pass === 0
@@ -1300,8 +1420,9 @@ export default function ManifoldFold() {
           const bf = foldXY(mix(wp.x, rx, lens), mix(wp.y, rulerY(), lens));
           const x = bf.x;
           const y = bf.y;
-          beadPos[k].x = x;
-          beadPos[k].y = y;
+          // hit tests live in screen space: fold the parallax into the record
+          beadPos[k].x = x + parX * PAR_THREAD;
+          beadPos[k].y = y + parY * PAR_THREAD;
           const built = !!band.route;
           const here = band.route === "/manifold";
           const swell = beadSwell[k];
@@ -1403,6 +1524,8 @@ export default function ManifoldFold() {
       cancelAnimationFrame(raf);
       observer.disconnect();
       detach();
+      detachVessel();
+      markLens(false);
       wrap.removeEventListener("keydown", onKeyDown);
       wrap.removeEventListener("keyup", onKeyUp);
       wrap.removeEventListener("focus", onFocus);
