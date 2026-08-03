@@ -1,0 +1,124 @@
+{
+  "src/components/Atlas.tsx": {
+    "createRadialGradient": 2
+  },
+  "src/components/AtomsField.tsx": {
+    "createRadialGradient": 7
+  },
+  "src/components/BeyondWaveField.tsx": {
+    "createRadialGradient": 1
+  },
+  "src/components/CellsPlasm.tsx": {
+    "createRadialGradient": 3
+  },
+  "src/components/Charts.tsx": {
+    "shadowBlur": 1
+  },
+  "src/components/Clouds.tsx": {
+    "createRadialGradient": 1
+  },
+  "src/components/Coin.tsx": {
+    "createRadialGradient": 2
+  },
+  "src/components/Comb.tsx": {
+    "createRadialGradient": 2
+  },
+  "src/components/DeepSpaceWeb.tsx": {
+    "createRadialGradient": 1
+  },
+  "src/components/DropSphere.tsx": {
+    "createRadialGradient": 7,
+    "ctx.filter blur": 1
+  },
+  "src/components/Earth.tsx": {
+    "createRadialGradient": 4,
+    "shadowBlur": 5
+  },
+  "src/components/Fire.tsx": {
+    "createRadialGradient": 3
+  },
+  "src/components/FlowersGarden.tsx": {
+    "createRadialGradient": 4
+  },
+  "src/components/Growth.tsx": {
+    "createRadialGradient": 4
+  },
+  "src/components/HelixLadder.tsx": {
+    "createRadialGradient": 1
+  },
+  "src/components/ManifoldFold.tsx": {
+    "createRadialGradient": 7
+  },
+  "src/components/MoleculesField.tsx": {
+    "createRadialGradient": 6
+  },
+  "src/components/MountainPeak.tsx": {
+    "createRadialGradient": 1
+  },
+  "src/components/NucleonsField.tsx": {
+    "createRadialGradient": 4
+  },
+  "src/components/Ocean.tsx": {
+    "createRadialGradient": 9
+  },
+  "src/components/OrganellesPlasm.tsx": {
+    "createRadialGradient": 1
+  },
+  "src/components/OrganicsField.tsx": {
+    "createRadialGradient": 2
+  },
+  "src/components/OverlookTree.tsx": {
+    "createRadialGradient": 2
+  },
+  "src/components/Plasma.tsx": {
+    "createRadialGradient": 1
+  },
+  "src/components/Pulse.tsx": {
+    "createRadialGradient": 1,
+    "shadowBlur": 6
+  },
+  "src/components/QuantaField.tsx": {
+    "createRadialGradient": 4
+  },
+  "src/components/QuarksVacuum.tsx": {
+    "createRadialGradient": 4
+  },
+  "src/components/RelativityRoom.tsx": {
+    "createRadialGradient": 11
+  },
+  "src/components/Sea.tsx": {
+    "createRadialGradient": 1
+  },
+  "src/components/SineWaveExplorer.tsx": {
+    "createRadialGradient": 2
+  },
+  "src/components/Stars.tsx": {
+    "createRadialGradient": 35
+  },
+  "src/components/Storm.tsx": {
+    "createRadialGradient": 3
+  },
+  "src/components/Tide.tsx": {
+    "createRadialGradient": 8
+  },
+  "src/components/TimeManifold.tsx": {
+    "createRadialGradient": 3,
+    "shadowBlur": 3
+  },
+  "src/components/TissueSheet.tsx": {
+    "createRadialGradient": 2
+  },
+  "src/components/Tourbillon.tsx": {
+    "createRadialGradient": 4,
+    "shadowBlur": 2
+  },
+  "src/components/TravelPassage.tsx": {
+    "createRadialGradient": 2
+  },
+  "src/components/Watch.tsx": {
+    "createRadialGradient": 4
+  },
+  "src/components/Waves.tsx": {
+    "createRadialGradient": 3
+  }
+}
