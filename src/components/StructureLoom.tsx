@@ -361,6 +361,7 @@ export default function StructureLoom() {
           if (s.phase === "agency") selShift = selectionShift(s, choice);
         },
         twist: (e) => {
+          if (e.fingers === 3) return; // three fingers turn the season, not the lens
           if (e.phase !== "move") return;
           lensTarget = Math.max(0, Math.min(1, lensTarget + e.angle / 1.6));
         },

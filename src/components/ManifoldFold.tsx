@@ -757,6 +757,18 @@ export default function ManifoldFold() {
       },
       twist: (e) => {
         lastInteractionAt = performance.now();
+        if (e.fingers === 3) {
+          // three fingers on the law: turn the season wheel by hand —
+          // enough turning steps the season; the crossing detector answers
+          if (e.phase === "move") {
+            seasonTwistAcc += e.angle;
+            while (seasonTwistAcc > 0.6) { seasonTwistAcc -= 0.6; shiftSeason(1); }
+            while (seasonTwistAcc < -0.6) { seasonTwistAcc += 0.6; shiftSeason(-1); }
+          } else if (e.phase === "end") {
+            seasonTwistAcc = 0;
+          }
+          return; // the lens answers two fingers only
+        }
         // two fingers rotate the lens: the felt fabric ↔ the bare metric
         if (e.phase === "move") {
           lensTarget = clamp01(lensTarget + e.angle / 1.7);
@@ -951,13 +963,35 @@ export default function ManifoldFold() {
     ];
     const SEASON_CYCLE = SEASON_SPANS.reduce((acc, sp) => acc + sp.ms, 0);
     const seasonEpoch = performance.now();
+    // the wheel can also be turned by hand: the shift is the hand's standing
+    // adjustment to the clock, the accumulator its unfinished turning
+    let seasonShiftMs = 0;
+    let seasonTwistAcc = 0;
     const seasonAt = (nowMs: number): LawSeason => {
-      let tt = (nowMs - seasonEpoch) % SEASON_CYCLE;
+      let tt = (((nowMs - seasonEpoch + seasonShiftMs) % SEASON_CYCLE) + SEASON_CYCLE) % SEASON_CYCLE;
       for (const span of SEASON_SPANS) {
         if (tt < span.ms) return span.s;
         tt -= span.ms;
       }
       return "attract";
+    };
+    // three fingers on the law: turn the season wheel by hand — the clock
+    // jumps to the next span's start (or back to the previous span's), and
+    // the draw loop's own crossing detector answers with the note, the
+    // touch, and the veil on the next frame. No signal is doubled here.
+    const shiftSeason = (dir: 1 | -1) => {
+      const nowMs = performance.now();
+      const t = (((nowMs - seasonEpoch + seasonShiftMs) % SEASON_CYCLE) + SEASON_CYCLE) % SEASON_CYCLE;
+      let start = 0;
+      let idx = 0;
+      for (let i = 0; i < SEASON_SPANS.length; i++) {
+        if (t < start + SEASON_SPANS[i].ms) { idx = i; break; }
+        start += SEASON_SPANS[i].ms;
+      }
+      const target = dir > 0
+        ? start + SEASON_SPANS[idx].ms
+        : start - SEASON_SPANS[(idx - 1 + SEASON_SPANS.length) % SEASON_SPANS.length].ms;
+      seasonShiftMs += target - t;
     };
     let currentSeason: LawSeason = "attract";
     const SEASON_NOTE: Record<LawSeason, number> = { attract: 26, drag: 33, expand: 21, repel: 29 };

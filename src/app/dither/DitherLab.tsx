@@ -388,6 +388,7 @@ function DitherChart({
         }
       },
       twist: (e) => {
+        if (e.fingers === 3) return; // three fingers turn the season, not the lens
         lastGestureAtRef.current = performance.now();
         // two fingers rotate the lens: the dithered field resolves into
         // raw continuous tone, and back

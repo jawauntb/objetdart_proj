@@ -133,7 +133,7 @@ hold       { fingers, phase: enter|tick|release, elapsed, tier, pressure, x, y }
 drag       { fingers 1|3, dx, dy, velocity, path, phase }
 flick      { fingers, angle, speed }
 pinch      { scale, velocity, phase }          // two-finger radial
-twist      { angle, velocity, phase }          // two-finger angular
+twist      { fingers 2|3, angle, velocity, phase } // angular channel: two fingers turn the lens, three turn the season
 pan2       { dx, dy, phase }                   // two-finger translation
 scrub      { winding, angularVelocity, cx, cy } // circular path, any finger count
 voice      { id, phase: start|move|end|cancel, x, y, intensity } // polyphonic surfaces:
@@ -172,6 +172,7 @@ the 40ms settle with no entrance more than 600ms after the last. Intensity alway
 | pinch | zoom **within** the current scale band |
 | pinch held through the detent | **travel** to the neighboring band (with resistance + haptic click) |
 | twist | rotate the **lens** — change level of description at fixed scale |
+| three-finger twist | advance / rewind the room's season |
 | two-finger drag | pan the frame |
 | three-finger drag | wind / weather |
 | three-finger hold | time dilation while held |

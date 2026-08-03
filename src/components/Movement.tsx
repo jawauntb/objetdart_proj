@@ -1078,6 +1078,7 @@ export default function Movement() {
         }
       },
       twist: (e) => {
+        if (e.fingers === 3) return; // three fingers turn the season, not the lens
         lastGestureAt = performance.now();
         // two fingers rotate the lens: the same hour as chapter ring or as
         // bare going train — dial on, dial off

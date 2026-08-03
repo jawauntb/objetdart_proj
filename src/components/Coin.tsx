@@ -711,6 +711,7 @@ export default function Coin() {
         doFlip(Math.cos(e.angle), -Math.sin(e.angle));
       },
       twist: (e) => {
+        if (e.fingers === 3) return; // three fingers turn the season, not the lens
         lastGestureAt = performance.now();
         // two-finger twist → in-plane rotation; each 45° crossing rings a
         // note. A full turn of the wrist turns the medal over — its other

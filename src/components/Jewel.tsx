@@ -569,6 +569,7 @@ export default function Jewel() {
         }
       },
       twist: (e) => {
+        if (e.fingers === 3) return; // three fingers turn the season, not the lens
         lastGestureAtRef.current = performance.now();
         // two fingers rotate the lens: the stone turns over to its mirror
         // twin — the rose-champagne face — and snaps back on the next turn

@@ -160,6 +160,7 @@ export default function Instrument() {
         setPitchWindow({ lo: nextLo, w: nextW });
       },
       twist: (e) => {
+        if (e.fingers === 3) return; // three fingers turn the season, not the lens
         if (e.phase !== "move") return;
         twistAcc.current += e.angle;
         const step = Math.PI / 2;

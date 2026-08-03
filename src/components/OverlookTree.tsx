@@ -821,6 +821,7 @@ export default function OverlookTree() {
         zoomTarget = clamp(zoomTarget * e.scale, ZOOM_MIN, ZOOM_MAX);
       },
       twist: (e) => {
+        if (e.fingers === 3) return; // three fingers turn the season, not the lens
         lastInteractionAt = performance.now();
         // two fingers rotate the lens: living tree ↔ the bare graph
         if (e.phase === "move") {

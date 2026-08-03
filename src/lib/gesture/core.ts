@@ -129,6 +129,49 @@ export function decomposeTwoPointer(a0: Pt, b0: Pt, a1: Pt, b1: Pt): TwoPointerD
 }
 
 /**
+ * Mean signed rotation (radians) of an N-finger chord about its own centroid.
+ * prev[i] pairs with next[i]. Each contact votes with its angular delta around
+ * the centroid, wrapped to [-π, π]; the chord's word is the average. Contacts
+ * sitting on the centroid say nothing about rotation and are skipped. The
+ * measure is invariant under common translation (both centroids move with the
+ * hand) and under uniform spread (a pure pinch changes radii, never angles) —
+ * the angular channel of a chord, and nothing else.
+ */
+export function chordRotation(prev: Pt[], next: Pt[]): number {
+  const n = Math.min(prev.length, next.length);
+  if (n < 2) return 0;
+  let pcx = 0;
+  let pcy = 0;
+  let ncx = 0;
+  let ncy = 0;
+  for (let i = 0; i < n; i++) {
+    pcx += prev[i].x;
+    pcy += prev[i].y;
+    ncx += next[i].x;
+    ncy += next[i].y;
+  }
+  pcx /= n;
+  pcy /= n;
+  ncx /= n;
+  ncy /= n;
+  let sum = 0;
+  let votes = 0;
+  for (let i = 0; i < n; i++) {
+    const pdx = prev[i].x - pcx;
+    const pdy = prev[i].y - pcy;
+    const ndx = next[i].x - ncx;
+    const ndy = next[i].y - ncy;
+    if (Math.hypot(pdx, pdy) < 2 || Math.hypot(ndx, ndy) < 2) continue;
+    let d = Math.atan2(ndy, ndx) - Math.atan2(pdy, pdx);
+    if (d > Math.PI) d -= 2 * Math.PI;
+    if (d < -Math.PI) d += 2 * Math.PI;
+    sum += d;
+    votes++;
+  }
+  return votes > 0 ? sum / votes : 0;
+}
+
+/**
  * Signed winding of a path around its centroid, in full turns.
  * |winding| ≥ THRESHOLDS.scrubWinding means the hand is circling (a scrub);
  * sign gives direction (positive = counterclockwise in screen coords).

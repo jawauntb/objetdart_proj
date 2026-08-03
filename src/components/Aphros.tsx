@@ -388,6 +388,7 @@ export default function Aphros() {
           }
         },
         twist: (e) => {
+          if (e.fingers === 3) return; // three fingers turn the season, not the lens
           lastTouchAt = performance.now();
           // rotate the lens: painting ↔ its own preparatory drawing
           if (e.phase === "start") return;

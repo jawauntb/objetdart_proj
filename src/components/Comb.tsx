@@ -780,6 +780,7 @@ export default function Comb() {
         }
       },
       twist: (e) => {
+        if (e.fingers === 3) return; // three fingers turn the season, not the lens
         ensureAudio();
         lastGestureAt = performance.now();
         // two fingers rotate the global phase — the whole sky turns
