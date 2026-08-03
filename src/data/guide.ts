@@ -501,8 +501,9 @@ export const GUIDE_ROOMS: GuideRoom[] = [
       "the membrane visibly narrows along the true division axis before a cell actually splits",
       "pinch here is deliberately not the room's own — it belongs to the shared travel between bands",
       "the harder you stir or shake, the heavier the room feels in the hand — one intensity axis under sight, sound and touch",
+      "leave the dish overnight and it has gone on without you — descendants, a settled dimmer glow on the elders, the census eased toward its own resting point",
     ],
-    keeps: "the cells you've seeded, generation by generation",
+    keeps: "the cells you've seeded, generation by generation, and the real hours between visits",
   },
   {
     key: "organelles",
