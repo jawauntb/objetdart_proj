@@ -342,7 +342,6 @@ export default function Atlas() {
   const inertiaRef = useRef<number | null>(null);
   const interactingRef = useRef(false);
   const generationDepthRef = useRef(0);
-  const generationModeRef = useRef<GenerationMode | null>(null);
   const generationViewRef = useRef<MapView | null>(null);
   const generationIntentRef = useRef<GenerationIntent | null>(null);
   const interruptedGenerationRef = useRef<GenerationIntent | null>(null);
@@ -954,7 +953,10 @@ export default function Atlas() {
     neighborSheetsRef.current.clear();
   };
 
-  const invalidateGeneration = ({ preserveRevealedImage = false } = {}) => {
+  const invalidateGeneration = ({
+    preserveRevealedImage = false,
+    preserveDeferredRedraw = false,
+  } = {}) => {
     if (preserveRevealedImage) {
       const interrupted = resolveAtlasGenerationInterruption({
         requestId: requestRef.current,
@@ -974,7 +976,6 @@ export default function Atlas() {
       generationIdRef.current = null;
     }
     phaseRankRef.current = 0;
-    generationModeRef.current = null;
     generationViewRef.current = null;
     generationIntentRef.current = null;
     abortRef.current?.abort();
@@ -985,6 +986,11 @@ export default function Atlas() {
     if (zoomSettleRef.current !== null) window.clearTimeout(zoomSettleRef.current);
     regionSettleRef.current = null;
     zoomSettleRef.current = null;
+    if (!preserveDeferredRedraw) {
+      interruptedGenerationRef.current = null;
+      forceSettledZoomRef.current = false;
+      pendingWiderTerritoryRef.current = false;
+    }
     setBusy(false);
     setBusyFocus(null);
   };
@@ -1003,14 +1009,10 @@ export default function Atlas() {
     const preservedRevealedImage = Boolean(
       incomingImageRef.current && incomingRevealedRef.current,
     );
-    invalidateGeneration({ preserveRevealedImage: true });
-    // Refine intents keep their subject (hotspot / preview upgrade). Stash
-    // them so a settle can resume exactly one redraw. Zoom/shift intents are
-    // rebuilt from the settled camera instead — replaying their old focus
-    // would paint the previous viewport under the new one.
-    if (interruptedIntent?.mode === "refine") {
-      interruptedGenerationRef.current = interruptedIntent;
-    }
+    invalidateGeneration({
+      preserveRevealedImage: true,
+      preserveDeferredRedraw: true,
+    });
     if (interruptedIntent) {
       setStatus(
         preservedRevealedImage
@@ -1224,7 +1226,6 @@ export default function Atlas() {
     const clientGenerationId = generationId(requestId);
     generationIdRef.current = clientGenerationId;
     phaseRankRef.current = 0;
-    generationModeRef.current = mode;
     generationViewRef.current = { ...viewRef.current };
     generationIntentRef.current = {
       mode,
@@ -1376,7 +1377,6 @@ export default function Atlas() {
     abortRef.current = null;
     generationIdRef.current = null;
     phaseRankRef.current = 0;
-    generationModeRef.current = null;
     generationViewRef.current = null;
     generationIntentRef.current = null;
     setBusy(false);
@@ -1386,7 +1386,6 @@ export default function Atlas() {
   const scheduleGeneration = (intent: GenerationIntent, delayMs: number) => {
     if (regionSettleRef.current !== null) window.clearTimeout(regionSettleRef.current);
     const settledSelection = requestRef.current;
-    generationModeRef.current = intent.mode;
     generationViewRef.current = { ...viewRef.current };
     generationIntentRef.current = intent;
     setBusy(true);
@@ -1446,7 +1445,6 @@ export default function Atlas() {
     if (neighbor.phase === "preview") {
       generationIdRef.current = null;
       phaseRankRef.current = 0;
-      generationModeRef.current = null;
       generationViewRef.current = null;
       generationIntentRef.current = null;
       abortRef.current?.abort();
@@ -1456,6 +1454,9 @@ export default function Atlas() {
       if (zoomSettleRef.current !== null) window.clearTimeout(zoomSettleRef.current);
       regionSettleRef.current = null;
       zoomSettleRef.current = null;
+      interruptedGenerationRef.current = null;
+      forceSettledZoomRef.current = false;
+      pendingWiderTerritoryRef.current = false;
       setBusy(false);
       setBusyFocus(null);
     } else {
@@ -1786,7 +1787,8 @@ export default function Atlas() {
     queueSettledZoom();
     // Attempted minus achieved ln-ratio: zero strictly inside the range,
     // and at the deepest zoom the clamped residue presses toward the coast.
-    reportScaleEdge(nextZoom, attemptedVel - Math.log(nextZoom / current.zoom) * 60);
+    if (forceSettledZoomRef.current) resetScaleEdge();
+    else reportScaleEdge(nextZoom, attemptedVel - Math.log(nextZoom / current.zoom) * 60);
   };
 
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -1912,8 +1914,19 @@ export default function Atlas() {
         x: midpoint.x - worldX * zoom,
         y: midpoint.y - worldY * zoom,
       }, metricsRef.current, 48);
+      const liveViewChanged = (
+        Math.abs(viewRef.current.x - prev.view.x) > 0.5
+        || Math.abs(viewRef.current.y - prev.view.y) > 0.5
+        || Math.abs(viewRef.current.zoom - prev.view.zoom) > 0.001
+      );
+      if (liveViewChanged) {
+        pinchRef.current = { distance, midpoint, view: { ...viewRef.current } };
+        pinchAtRef.current = performance.now();
+        return;
+      }
       const generationView = generationViewRef.current;
-      const generationCameraChanged = generationModeRef.current !== null
+      const zoomChanged = Math.abs(next.zoom - viewRef.current.zoom) > 0.001;
+      const generationCameraChanged = generationIntentRef.current !== null
         && generationView !== null
         && (
           Math.abs(next.x - generationView.x) > 0.5
@@ -1922,8 +1935,19 @@ export default function Atlas() {
         );
       if (generationCameraChanged) {
         const interruptedGeneration = interruptGenerationForInteraction();
-        if (interruptedGeneration && interruptedGeneration.intent.mode !== "refine") {
-          forceSettledZoomRef.current = true;
+        if (interruptedGeneration) {
+          if (zoomChanged || wantsWider) {
+            forceSettledZoomRef.current = true;
+          } else {
+            interruptedGenerationRef.current = interruptedGeneration.preservedRevealedImage
+              ? {
+                  mode: "refine",
+                  subjectPrompt: interruptedGeneration.intent.subjectPrompt,
+                  prefetchNeighbors: false,
+                  sourceImage: activeImageRef.current,
+                }
+              : interruptedGeneration.intent;
+          }
         }
       }
       beginFreeZoom();
@@ -1940,7 +1964,11 @@ export default function Atlas() {
       const nowMs = performance.now();
       const dtMs = nowMs - pinchAtRef.current;
       pinchAtRef.current = nowMs;
-      if (pendingWiderTerritoryRef.current || generationCameraChanged) {
+      if (
+        pendingWiderTerritoryRef.current
+        || generationCameraChanged
+        || forceSettledZoomRef.current
+      ) {
         resetScaleEdge();
       } else if (dtMs > 0) {
         const attempted = distance / Math.max(1, prev.distance);
@@ -1957,10 +1985,26 @@ export default function Atlas() {
     if (Math.hypot(dx, dy) > DRAG_THRESHOLD_PX) {
       if (!drag.moved) {
         markGesture();
+        const liveViewChanged = (
+          Math.abs(viewRef.current.x - drag.view.x) > 0.5
+          || Math.abs(viewRef.current.y - drag.view.y) > 0.5
+          || Math.abs(viewRef.current.zoom - drag.view.zoom) > 0.001
+        );
         const interruptedGeneration = interruptGenerationForInteraction();
-        if (interruptedGeneration && interruptedGeneration.intent.mode !== "refine") {
-          forceSettledZoomRef.current = true;
-          if (!freeZoomParentRef.current) freeZoomParentRef.current = captureSnapshot();
+        if (interruptedGeneration) {
+          if (viewRef.current.zoom > 1.08) {
+            forceSettledZoomRef.current = true;
+            if (!freeZoomParentRef.current) freeZoomParentRef.current = captureSnapshot();
+          } else {
+            interruptedGenerationRef.current = interruptedGeneration.preservedRevealedImage
+              ? {
+                  mode: "refine",
+                  subjectPrompt: interruptedGeneration.intent.subjectPrompt,
+                  prefetchNeighbors: false,
+                  sourceImage: activeImageRef.current,
+                }
+              : interruptedGeneration.intent;
+          }
         }
         // Moving past the drag threshold means this is not a hold; drop
         // any pending plant timer for this finger.
@@ -1968,6 +2012,15 @@ export default function Atlas() {
         if (pending != null) {
           window.clearTimeout(pending);
           plantTimersRef.current.delete(event.pointerId);
+        }
+        if (liveViewChanged) {
+          drag.start = point;
+          drag.view = { ...viewRef.current };
+          drag.last = point;
+          drag.lastAt = now;
+          drag.velocity = { x: 0, y: 0 };
+          drag.moved = true;
+          return;
         }
       }
       drag.moved = true;
