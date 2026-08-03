@@ -438,7 +438,40 @@ export default function TissueSheet() {
             if (e.phase === "release") timeScaleTarget = 1;
             return;
           }
-          if (e.fingers !== 1 || !sheet) return;
+          if (e.fingers !== 1) return;
+          // an emptied room is not a dead end: dwell on the dark plants a
+          // new epithelium, the same law that met the first visit.
+          if (!sheet) {
+            if (e.phase === "enter") {
+              try {
+                haptics.tap();
+                audio.playTone(ROOT_HZ * 0.5, 0.35);
+              } catch {
+                /* noop */
+              }
+              return;
+            }
+            if (e.phase === "release") return;
+            if (e.tier >= 2 || e.elapsed >= 900) {
+              sheet = freshSheet();
+              field = morphogenField(sheet.seed);
+              prevLive = new Uint8Array(sheet.ecap);
+              cleared = false;
+              leaving = 0;
+              recomputeChord();
+              scale = Math.min(width / (2 * sheet.spanX), height / (2 * sheet.spanY)) * 0.86;
+              setHasKept(true);
+              save();
+              try {
+                audio.bell();
+                haptics.bloom();
+              } catch {
+                /* noop */
+              }
+              dirty = true;
+            }
+            return;
+          }
           const p = toSheet(e.x, e.y);
           if (e.phase === "enter") {
             pitActive = true;

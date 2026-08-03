@@ -529,6 +529,7 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "stroke across the sheet → the cells the stroke passes divide; both daughters bloom with a brighter note and haptic in the same frame",
       "hold one finger down → the sheet is drawn in at that point and a pit opens, deeper the longer it is held",
       "hold past the ceremony → the pit closes over and its floor becomes a second layer, sealed for good",
+      "hold on empty dark (after letting the sheet go) → a new epithelium plants itself under the finger",
       "two fingers drag → pan the frame over the dense sheet, so you can inspect an edge without leaving the band",
       "flick → a tear; every bond the line crosses lets go at once and the chord roughens in the same frame",
       "circle a finger → the sheet swirls under it and the bonds it turns come under strain",
