@@ -14,6 +14,7 @@ import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
 import { useField } from "@/store/field";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
+import { onVisibility, onGalleryPause, detailForTier, createFrameGovernor } from "@/lib/room-runtime";
 
 type Preset = "square" | "saw" | "triangle" | "pulse";
 
@@ -194,6 +195,8 @@ export default function CircularityFourier() {
     let raf = 0;
     let previous = performance.now();
     let localEnergy = energyRef.current;
+    let lastPublish = 0;
+    const lensRef = { current: 0 };
 
     const tick = (now: number) => {
       const delta = Math.min(48, now - previous);
@@ -223,7 +226,6 @@ export default function CircularityFourier() {
       if (advance !== 0) {
         const nextTheta = (thetaRef.current + advance + TAU) % TAU;
         thetaRef.current = nextTheta;
-        setTheta(nextTheta);
       }
       if (entrained) {
         const beatIdx = Math.floor(now / (60000 / entrain.bpm));
@@ -241,20 +243,45 @@ export default function CircularityFourier() {
       sw.y += (sw.ty - sw.y) * Math.min(1, delta * 0.008);
       sw.tx *= Math.exp(-delta / 900);
       sw.ty *= Math.exp(-delta / 900);
-      setSway({ x: sw.x, y: sw.y });
-
-      setLens((prev) => prev + (lensTargetRef.current - prev) * Math.min(1, delta * 0.006));
-      setGlimmer(now - lastGestureAtRef.current > 20000);
+      lensRef.current += (lensTargetRef.current - lensRef.current) * Math.min(1, delta * 0.006);
 
       localEnergy = mix(localEnergy, pointerRef.current.active ? 1 : 0.2, pointerRef.current.active ? 0.14 : 0.018);
       energyRef.current = localEnergy;
-      setEnergy(localEnergy);
-      setReadout(`${termsRef.current} harmonics / ${presetRef.current}`);
+
+      // Publish React state at ~10Hz — SVG reads refs via the published snapshot.
+      if (now - lastPublish > 100) {
+        lastPublish = now;
+        setTheta(thetaRef.current);
+        setSway({ x: sw.x, y: sw.y });
+        setLens(lensRef.current);
+        setGlimmer(now - lastGestureAtRef.current > 20000);
+        setEnergy(localEnergy);
+        setReadout(`${termsRef.current} harmonics / ${presetRef.current}`);
+      }
       raf = requestAnimationFrame(tick);
     };
 
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
+    const gov = createFrameGovernor("high");
+    void gov;
+    void detailForTier;
+    let hidden = false;
+    let galleryPaused = false;
+    const unvis = onVisibility((h) => { hidden = h; });
+    const ungal = onGalleryPause((p) => { galleryPaused = p; });
+    const wrapped = (now: number) => {
+      if (hidden || galleryPaused) {
+        raf = window.setTimeout(() => { raf = requestAnimationFrame(wrapped); }, 200) as unknown as number;
+        return;
+      }
+      tick(now);
+    };
+
+    raf = requestAnimationFrame(wrapped);
+    return () => {
+      cancelAnimationFrame(raf);
+      unvis();
+      ungal();
+    };
   }, [energyRef, presetRef, runningRef, speedRef, termsRef, thetaRef]);
 
   const chain = useMemo(() => epicycle(preset, terms, theta, energy), [energy, preset, terms, theta]);

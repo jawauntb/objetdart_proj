@@ -9,7 +9,7 @@
 // register (plan W3): cosmic = dark and slow, atomic = open and quick.
 
 import type { ConcernKey } from "@/lib/types";
-import { spectralRegisterFor } from "@/lib/scale";
+import { entryScaleFor, spectralRegisterFor } from "@/lib/scale";
 import { registerGlideTargets } from "@/lib/audio-register";
 
 // The named ambient beds each page can request. Profiles swap through the
@@ -39,6 +39,7 @@ export type AmbientProfile =
   | "kept"       // held shelf, glassy memory shimmer
   | "reading"    // quiet candle + near-field breath
   | "signal"     // radio bed, nearly silent but alive
+  | "vacuum"     // zero-point seethe: high thin hiss beating over a deep floor
   | "beyond"     // folded-wave shimmer and slow interference
   | "circularity"// rotating Fourier hums
   | "flowers"    // bees, petals, brighter garden air
@@ -981,6 +982,21 @@ export function getFieldAudio(): FieldAudio {
       // Signal: nearly silent radio carrier so composition pages don't inherit sea.
       addNoiseBed({ seconds: 3, hp: 2200, lp: 5200, gain: 0.022, swellRate: 0.17, swellDepth: 0.16 });
       addDrone([440, 441.8], { gain: 0.006, swellRate: 0.021, swellDepth: 0.08, filter: 1200 });
+    } else if (profile === "vacuum") {
+      // The zero-point field near the bottom of the axis: nothing is
+      // happening and it never stops. A thin high seethe (this band rings
+      // high and quick), two partials a hair apart so the bed beats at the
+      // band's own breath rate, a deep floor underneath for body, and rare
+      // grains. Quiet by construction — presence, not volume.
+      const reg = spectralRegisterFor(entryScaleFor("/quarks") ?? -17);
+      const beatHz = reg.lfoHz;
+      // The quickness lives in the beat between the two close partials, not in
+      // the swells — a difference frequency survives the register's rate scale,
+      // where a fast LFO would turn to tremolo when travel glides the bed.
+      addNoiseBed({ seconds: 5, hp: 1500, lp: 5200, gain: 0.026, swellRate: beatHz * 0.10, swellDepth: 0.30, swellBase: 0.40 });
+      addNoiseBed({ seconds: 7, brown: true, hp: 40, lp: 200, gain: 0.055, swellRate: beatHz * 0.04, swellDepth: 0.18, swellBase: 0.5 });
+      addDrone([523.25, 1046.5, 1046.5 + beatHz], { type: "sine", gain: 0.009, swellRate: beatHz * 0.06, swellDepth: 0.22, filter: 2400 });
+      addPulseTrain({ freq: 1975.53, every: 3.1, count: 78, gain: 0.007, decay: 0.045, type: "sine", startOffset: 1.3 });
     } else if (profile === "beyond") {
       // Beyond: folded-wave interference, no obvious natural source.
       addNoiseBed({ seconds: 4, hp: 1400, lp: 4800, gain: 0.04, swellRate: 0.19, swellDepth: 0.22 });

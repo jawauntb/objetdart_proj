@@ -39,6 +39,7 @@ import {
   tickAutomata,
   zoomAtScreen,
 } from "@/lib/stars/nestedCosmos";
+import { resolveDpr, onGalleryPause, onVisibility, isEmbeddedFrame } from "@/lib/room-runtime";
 
 /**
  * /stars — nested living cosmos.
@@ -1611,7 +1612,7 @@ export default function Stars() {
 
     let w = window.innerWidth;
     let h = window.innerHeight;
-    let dpr = Math.min(window.devicePixelRatio || 1, 2);
+    let dpr = resolveDpr(isEmbeddedFrame() ? "medium" : "high", { embedded: isEmbeddedFrame(), maxDpr: 2 });
 
     // ── static-layer painter ──────────────────────────────────────
     // Paint the universe that never changes: gradient sky, Milky Way
@@ -1895,7 +1896,7 @@ export default function Stars() {
     };
 
     const resize = () => {
-      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      dpr = resolveDpr(isEmbeddedFrame() ? "medium" : "high", { embedded: isEmbeddedFrame(), maxDpr: 2 });
       w = window.innerWidth;
       h = window.innerHeight;
       bg.width = w * dpr;

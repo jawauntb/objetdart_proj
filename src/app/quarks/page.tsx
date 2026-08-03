@@ -7,7 +7,7 @@ import ScaleTravel from "@/components/ScaleTravel";
 import QuarksVacuum from "@/components/QuarksVacuum";
 
 export default function QuarksPage() {
-  useEffect(() => { getFieldAudio().setAmbientProfile("signal"); }, []);
+  useEffect(() => { getFieldAudio().setAmbientProfile("vacuum"); }, []);
 
   return (
     <>

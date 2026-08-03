@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import SiteHeader from "@/components/SiteHeader";
 import ScaleTravel from "@/components/ScaleTravel";
+import MetaNavigator from "@/components/MetaNavigator";
 import Tide from "@/components/Tide";
 
 export default function TidePage() {
@@ -18,6 +19,7 @@ export default function TidePage() {
         <Tide />
       </main>
       <ScaleTravel route="/tide" />
+      <MetaNavigator route="/tide" />
     </>
   );
 }
