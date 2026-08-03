@@ -49,6 +49,7 @@ export type SiteIconKey =
   | "seed"
   | "signal"
   | "sine"
+  | "space"
   | "stars"
   | "storm"
   | "tide"
@@ -728,6 +729,19 @@ export const SITE_ICON_VISUALS = {
     accent: "#b4e8ff",
     accent2: "#d5bd7b",
     ink: "#eff9ff",
+  },
+  space: {
+    title: "Deep space",
+    description: "the web that holds the light",
+    path: "/space",
+    shortName: "space",
+    kind: "stars",
+    bg: "#05060a",
+    bg2: "#141b2e",
+    glow: "#5b86b8",
+    accent: "#c8732a",
+    accent2: "#9fb9d8",
+    ink: "#e6ecf6",
   },
   stars: {
     title: "Stars",
