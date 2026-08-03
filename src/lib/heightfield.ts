@@ -822,20 +822,90 @@ export const VIEW_BEARINGS = 192;
 /** How far behind him the scan refuses to look — the outcrop is back there. */
 export const VIEW_BEHIND_COS = -0.34;
 export const VIEW_PROBE_KM = [1.5, 2.2, 3, 4, 5.5, 7, 9] as const;
+/**
+ * The near field the view must have clear, in km. Load-bearing: a vista is
+ * ground that falls AWAY from you, and without this rule the scan below
+ * cannot tell one from a hillside.
+ */
+export const VIEW_NEAR_CLEAR_KM = 1.3;
+export const VIEW_NEAR_SAMPLES = 13;
+/**
+ * Half the frame, in radians, and the reason the check is a fan rather than
+ * a ray. The camera's own horizontal half-angle at rest is FOV/2 ≈ 0.31;
+ * this is a little wider, so the composition survives the head being
+ * turned. A visitor who steps the lens back past it is choosing to, which
+ * is a different thing from opening on a wall of rock.
+ */
+export const VIEW_FRAME_HALF = 0.34;
+export const VIEW_FRAME_SAMPLES = 9;
+/** The head, turned: the crest is held off centre rather than dead ahead. */
+export const VIEW_OFFCENTRE = 0.16;
 
 /**
- * Which way he is looking: the bearing whose crest subtends the largest
- * angle from this station, so every seed gets its own peak to face rather
- * than a compass direction that happens to be empty on this one. Bearings
- * back over the outcrop he is standing on are refused — that way is the
- * rock at his heels, which fills the frame and subtends the most of all.
+ * How far the ground rises toward the eye across the whole frame, as a
+ * tangent: positive means something in shot stands above you and you are
+ * looking into a slope, negative means the ground falls away and you are
+ * looking out over it. Zero is eye level.
+ *
+ * A fan, not a ray, because the frame is a fan — checking only the centre
+ * line is how a slope ends up filling half the picture while the bearing it
+ * was tested on stays perfectly clear.
+ */
+export function nearObstruction(station: Station, seed: number, yaw: number): number {
+  let worst = -Infinity;
+  for (let f = 0; f < VIEW_FRAME_SAMPLES; f++) {
+    const a =
+      yaw + (VIEW_FRAME_SAMPLES === 1 ? 0 : (f / (VIEW_FRAME_SAMPLES - 1) - 0.5) * 2 * VIEW_FRAME_HALF);
+    const sa = Math.sin(a);
+    const ca = Math.cos(a);
+    for (let i = 1; i <= VIEW_NEAR_SAMPLES; i++) {
+      const d = (i / VIEW_NEAR_SAMPLES) * VIEW_NEAR_CLEAR_KM;
+      const h = heightAt(station.x + sa * d, station.z + ca * d, seed, OCTAVES_MARCH);
+      const rise = (h - station.y) / d;
+      if (rise > worst) worst = rise;
+    }
+  }
+  return worst;
+}
+
+/**
+ * Which way he is looking.
+ *
+ * Two rules, and the second one is the whole of a bug. The first is the
+ * obvious one: face the bearing whose crest subtends the largest angle, so
+ * every seed gets its own peak to look at rather than a compass direction
+ * that happens to be empty on this one.
+ *
+ * On its own that rule reliably turns the camera into the hillside. The
+ * largest angle anything ever subtends is the rock immediately in front of
+ * your face, and the station stands on the flank of a cone that rises
+ * SUMMIT_KM out of the range — so the scan swung 92 degrees off the way he
+ * walked out and put the outcrop's own slope across half the frame, hit on
+ * the marcher's FIRST step, twenty metres out. A picture of a rock.
+ *
+ * So the near field has to be clear before a bearing is eligible at all:
+ * nothing within VIEW_NEAR_CLEAR_KM may stand above the eye. That is what
+ * "looking out over" means, stated as arithmetic — and it is what makes the
+ * far crest the subject rather than the nearest thing with a horizon.
+ *
+ * If no bearing is clear, he faces the way he walked out. That direction
+ * has ground falling away along it by construction: it is how `stationFor`
+ * found the ledge in the first place.
  */
 export function viewBearingFor(station: Station, seed: number): number {
   let bearing = station.bearing;
   let best = -Infinity;
+  let leastBlocked = Infinity;
+  let leastBlockedBearing = station.bearing;
   for (let b = 0; b < VIEW_BEARINGS; b++) {
     const a = (b / VIEW_BEARINGS) * Math.PI * 2;
     if (Math.cos(a - station.bearing) < VIEW_BEHIND_COS) continue;
+    const blocked = nearObstruction(station, seed, a);
+    if (blocked < leastBlocked) {
+      leastBlocked = blocked;
+      leastBlockedBearing = a;
+    }
+    if (blocked >= 0) continue;
     for (const d of VIEW_PROBE_KM) {
       const ang =
         (heightAt(station.x + Math.sin(a) * d, station.z + Math.cos(a) * d, seed, OCTAVES_MARCH) -
@@ -847,7 +917,7 @@ export function viewBearingFor(station: Station, seed: number): number {
       }
     }
   }
-  return bearing;
+  return Number.isFinite(best) ? bearing : leastBlockedBearing;
 }
 
 // ——— the march ————————————————————————————————————————————————

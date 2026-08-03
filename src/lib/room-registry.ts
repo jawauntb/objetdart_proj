@@ -182,6 +182,19 @@ export type RoomEntry = {
   rawPointer?: string;
   /** Why an animating room needs no `createFrameGovernor`. */
   governor?: string;
+  /**
+   * Why a constant whose *name* reads like a gesture tier is not one. The
+   * contract test flags any `const FOO_SETTLE_MS = 520` because "settle",
+   * "hold", "tap" and "tier" are the grammar's own words, and it cannot tell
+   * a camera's quiet-debounce from a chord-settle window by looking at it.
+   * The room says which it is, in a sentence a human reads.
+   *
+   * This is not a licence: the test requires the sentence to *name* every
+   * constant it covers, so a real hold tier can never hide behind a reason
+   * written for something else. Gesture thresholds still live in
+   * `src/lib/gesture/core.ts` and nowhere else.
+   */
+  thresholds?: string;
 };
 
 /**
@@ -981,6 +994,19 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "axis",
     keeps: "objetdart:orb:v1",
     creates: "a disc",
+    exempt: {},
+  },
+  {
+    key: "rocks",
+    href: "/rocks",
+    kind: "room",
+    source: "src/components/RockShelf.tsx",
+    page: "src/app/rocks/page.tsx",
+    address: { band: "drop" },
+    frame: "yield",
+    chrome: "travel+peers",
+    keeps: "objetdart:rocks:v1",
+    creates: "a stone",
     exempt: {},
   },
 ];

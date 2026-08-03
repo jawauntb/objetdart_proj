@@ -396,12 +396,24 @@ for (const entry of ROOM_REGISTRY) {
     const value = Number(decl[2]);
     if (value < 40) continue; // an accumulator starting at 0 is not a threshold
     if (!identWords(decl[1]).some((w) => THRESHOLD_WORDS.has(w))) continue;
+    // A room may declare that a constant whose NAME reads like a tier is not
+    // one (a camera's quiet-debounce, an animation duration). The sentence
+    // must name the constant, so one reason can never cover a second, real
+    // threshold smuggled in beside it.
+    if ((entry.thresholds ?? "").includes(decl[1])) continue;
     fail(
       key,
       `declares its own timing threshold \`${decl[1]} = ${value}\` — hold tiers, tap windows ` +
         "and chord settling live in src/lib/gesture/core.ts alone. A private copy is how a " +
-        "long-press comes to mean something different in one room than in every other",
+        "long-press comes to mean something different in one room than in every other" +
+        (entry.thresholds
+          ? ". The room's `thresholds` note does not name this one"
+          : ". If the name only *reads* like a tier, say what it really is in the registry's " +
+            "`thresholds` field and name the constant there"),
     );
+  }
+  if (entry.thresholds && entry.thresholds.trim().length < 12) {
+    fail(key, "the `thresholds` note is not a reason — say what the constant really measures");
   }
   if (!usesEngine) {
     for (const delay of timeoutDelays(clean)) {
@@ -531,22 +543,33 @@ for (const entry of ROOM_REGISTRY) {
   // — 5b. no paint server rebuilt per object per frame ————————————
   // The render side of the same defect the scene model fixes: a gradient or a
   // shadowBlur inside the loop that walks the population.
+  //
+  // The count itself belongs to the ratchet in scripts/test-room-paint.mjs —
+  // `room-paint-ledger.json` records what every component in src/components/
+  // uses today, existing debt is visible and may only shrink, and new debt
+  // fails that test. Restating the same numbers here as a note with no way to
+  // answer it taught the reader to skip the report, which is how a law dies.
+  // So this clause asks the one question the ledger cannot: is the room ABOVE
+  // what it declared — and, crucially, it reaches the rooms the ledger never
+  // sees, because test:paint only walks src/components/ while a room may own
+  // its material from src/app/<key>/ (DitherLab.tsx did, with a per-frame
+  // shadowBlur nobody's ledger had ever counted).
   if (!viaShell) {
-    const perFrameGradients = (clean.match(/create(?:Radial|Linear)Gradient\s*\(/g) ?? []).length;
-    if (perFrameGradients >= 6) {
+    const declared = paintLedger[entry.source] ?? {};
+    for (const [name, pattern] of Object.entries(BANNED_PAINT)) {
+      pattern.lastIndex = 0;
+      const used = (raw.match(pattern) ?? []).length;
+      const allowed = declared[name] ?? 0;
+      if (used <= allowed) continue;
       oweNote(
         key,
-        `builds ${perFrameGradients} canvas gradients — if any of them is inside the loop over ` +
-          "the room's material, that is a paint-server rebuild per object per frame, the most " +
-          "expensive habit in this codebase. Hoist to a cached sprite, or describe the objects " +
-          "as instances (src/lib/scene/)",
-      );
-    }
-    if (/ctx\.shadowBlur\s*=/.test(clean) || /filter\s*=\s*[^;]*blur\(/.test(clean)) {
-      oweNote(
-        key,
-        "sets shadowBlur or a css blur filter on a canvas — catastrophic on mobile. Use a " +
-          "pre-blurred sprite or the additive corona in src/lib/scene/gl.ts",
+        `calls ${name} ${used}× — ${
+          allowed === 0
+            ? "and scripts/room-paint-ledger.json sanctions none of them"
+            : `past the ${allowed} scripts/room-paint-ledger.json sanctions`
+        }. A paint server rebuilt inside the loop over the room's material is the most ` +
+          "expensive habit in this codebase: hoist it to a cached sprite (bakeRadialSprite in " +
+          "src/lib/scene/radial-sprite.ts), or describe the objects as instances (src/lib/scene/)",
       );
     }
   }
