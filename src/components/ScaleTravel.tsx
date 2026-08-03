@@ -183,6 +183,11 @@ function executeTravel(
 ): EdgeUI {
   hapticCrossing();
   try {
+    window.dispatchEvent(new CustomEvent("objetdart:scale-travel:start", { detail: { from, to: door.band.id } }));
+  } catch {
+    /* noop */
+  }
+  try {
     window.sessionStorage.setItem(STORAGE_KEY, String(s));
   } catch {
     /* noop */

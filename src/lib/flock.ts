@@ -49,6 +49,9 @@ export const BOUND_MARGIN = 7;
 
 export const MIN_BIRDS = 200;
 export const MAX_BIRDS = 4096;
+/** A living-room aviary: readable individuals, not a distant murmuration. */
+export const AVIARY_MIN = 12;
+export const AVIARY_MAX = 28;
 
 /** The integrator's one true step. Everything else accumulates into it. */
 export const FIXED_DT = 1 / 60;
@@ -120,9 +123,15 @@ export const ACTIVITIES = [
   "flap",
   "perch",
   "drink",
+  "eat",
   "swim",
   "hop",
   "strut",
+  "soar",
+  "dive",
+  "display",
+  "hover",
+  "stalk",
 ] as const;
 
 export type Activity = (typeof ACTIVITIES)[number];
@@ -133,6 +142,8 @@ export type BirdSpecies = {
   /** Multiplier on point size. */
   size: number;
   body: readonly [number, number, number];
+  /** The places this bird chooses when left alone. */
+  places: readonly PlaceName[];
   /** Preferred activities, first = signature. */
   activities: readonly Activity[];
 };
@@ -143,103 +154,119 @@ export const BIRD_SPECIES: Record<BirdKind, BirdSpecies> = {
     label: "parrot",
     size: 1.15,
     body: [0.22, 0.55, 0.32],
-    activities: ["perch", "fly", "drink", "flock"],
+    places: ["tree", "fruit", "drink"],
+    activities: ["perch", "eat", "fly", "drink", "flock"],
   },
   cockatiel: {
     kind: "cockatiel",
     label: "cockatiel",
     size: 1.05,
     body: [0.82, 0.72, 0.48],
-    activities: ["perch", "hop", "fly", "drink"],
+    places: ["tree", "fruit", "grass"],
+    activities: ["perch", "hop", "eat", "fly", "drink"],
   },
   falcon: {
     kind: "falcon",
     label: "falcon",
     size: 1.2,
     body: [0.42, 0.4, 0.38],
-    activities: ["swoop", "fly", "flock", "perch"],
+    places: ["sky", "tree"],
+    activities: ["dive", "soar", "fly", "perch"],
   },
   hawk: {
     kind: "hawk",
     label: "hawk",
     size: 1.35,
     body: [0.48, 0.34, 0.22],
-    activities: ["swoop", "fly", "flock", "perch"],
+    places: ["sky", "tree", "grass"],
+    activities: ["soar", "dive", "fly", "perch"],
   },
   duck: {
     kind: "duck",
     label: "duck",
     size: 1.2,
     body: [0.2, 0.38, 0.32],
-    activities: ["swim", "drink", "fly", "hop"],
+    places: ["pond", "drink", "grass"],
+    activities: ["swim", "drink", "eat", "fly", "hop"],
   },
   chicken: {
     kind: "chicken",
     label: "chicken",
     size: 1.1,
     body: [0.72, 0.62, 0.48],
-    activities: ["hop", "drink", "strut", "fly"],
+    places: ["hay", "grass", "drink"],
+    activities: ["eat", "hop", "stalk", "drink", "strut", "fly"],
   },
   emu: {
     kind: "emu",
     label: "emu",
     size: 1.7,
     body: [0.38, 0.3, 0.24],
-    activities: ["hop", "drink", "strut"],
+    places: ["grass", "hay", "drink"],
+    activities: ["stalk", "eat", "drink", "hop", "strut"],
   },
   finch: {
     kind: "finch",
     label: "finch",
     size: 0.75,
     body: [0.72, 0.48, 0.22],
-    activities: ["flock", "perch", "hop", "fly"],
+    places: ["tree", "fruit", "grass"],
+    activities: ["flock", "perch", "eat", "hop", "fly"],
   },
   sparrow: {
     kind: "sparrow",
     label: "sparrow",
     size: 0.8,
     body: [0.45, 0.36, 0.28],
-    activities: ["hop", "flock", "perch", "drink"],
+    places: ["grass", "hay", "tree"],
+    activities: ["hop", "eat", "flock", "perch", "drink"],
   },
   hummingbird: {
     kind: "hummingbird",
     label: "hummingbird",
     size: 0.65,
     body: [0.18, 0.55, 0.48],
-    activities: ["flap", "drink", "fly", "perch"],
+    places: ["fruit", "tree", "drink"],
+    activities: ["hover", "drink", "flap", "fly", "perch"],
   },
   "red-ibis": {
     kind: "red-ibis",
     label: "red ibis",
     size: 1.25,
     body: [0.72, 0.16, 0.14],
-    activities: ["drink", "fly", "perch", "flock"],
+    places: ["drink", "pond", "grass"],
+    activities: ["drink", "stalk", "fly", "perch", "flock"],
   },
   peacock: {
     kind: "peacock",
     label: "peacock",
     size: 1.45,
     body: [0.12, 0.38, 0.42],
-    activities: ["strut", "perch", "drink", "hop"],
+    places: ["grass", "tree", "drink"],
+    activities: ["display", "strut", "perch", "drink", "hop"],
   },
   "bird-of-paradise": {
     kind: "bird-of-paradise",
     label: "bird of paradise",
     size: 1.25,
     body: [0.12, 0.12, 0.14],
-    activities: ["strut", "perch", "fly", "flap"],
+    places: ["tree", "fruit", "grass"],
+    activities: ["display", "perch", "hover", "fly", "flap"],
   },
 };
 
 /** Habitat anchors in world metres — the meadow under the murmuration. */
 export const PLACES = {
   tree: { x: -14, y: -5.2, z: 10 },
+  fruit: { x: -11.5, y: -4.7, z: 9 },
   pond: { x: 16, y: -9.2, z: 6 },
   drink: { x: 12, y: -9.0, z: 4 },
   grass: { x: -6, y: -11.2, z: -12 },
   hay: { x: 20, y: -11.0, z: -8 },
   sky: { x: 0, y: 2, z: 0 },
 } as const;
+
+export type PlaceName = keyof typeof PLACES;
 
 export function activityIndex(a: Activity): number {
   return ACTIVITIES.indexOf(a);
@@ -250,11 +277,13 @@ export function kindIndex(k: BirdKind): number {
 }
 
 export function isAirActivity(a: Activity): boolean {
-  return a === "flock" || a === "fly" || a === "swoop" || a === "flap";
+  return a === "flock" || a === "fly" || a === "swoop" || a === "flap" || a === "soar" || a === "dive";
 }
 
 export type FlockState = {
   n: number;
+  /** Allocated bird slots; `n` is the live prefix. */
+  capacity: number;
   /** n*3 — metres. */
   pos: Float32Array;
   /** n*3 — metres per second. */
@@ -267,6 +296,8 @@ export type FlockState = {
   activityOf: Uint8Array;
   /** n*3 — species body tint, uploaded once to the GPU. */
   tint: Float32Array;
+  /** n — feeding/display progress for individual morphs. */
+  eatProgress: Float32Array;
   /** Seconds of unspent time held for the next fixed step. */
   acc: number;
   // ——— scratch, allocated once: the uniform grid that keeps the
@@ -335,110 +366,198 @@ function pickActivity(sp: BirdSpecies, rng: () => number, preferSignature: boole
   return sp.activities[0];
 }
 
-function placeForActivity(activity: Activity, rng: () => number): Vec3 {
+function jitterPlace(base: Vec3, rng: () => number, spread: Vec3): Vec3 {
+  return {
+    x: base.x + (rng() - 0.5) * spread.x,
+    y: base.y + (rng() - 0.5) * spread.y,
+    z: base.z + (rng() - 0.5) * spread.z,
+  };
+}
+
+/** Ring seats so the opening aviary doesn't stack every perch on one branch. */
+function meadowSeat(kindSlot: number, rng: () => number): Vec3 {
+  const seats: Vec3[] = [
+    { x: PLACES.tree.x - 2, y: PLACES.tree.y + 1.2, z: PLACES.tree.z },
+    { x: PLACES.fruit.x + 1, y: PLACES.fruit.y + 0.8, z: PLACES.fruit.z - 2 },
+    { x: PLACES.pond.x - 3, y: PLACES.pond.y, z: PLACES.pond.z + 2 },
+    { x: PLACES.drink.x + 2, y: PLACES.drink.y, z: PLACES.drink.z - 3 },
+    { x: PLACES.hay.x - 2, y: PLACES.hay.y, z: PLACES.hay.z + 1 },
+    { x: PLACES.grass.x - 8, y: PLACES.grass.y, z: PLACES.grass.z + 4 },
+    { x: PLACES.grass.x + 10, y: PLACES.grass.y, z: PLACES.grass.z - 6 },
+    { x: PLACES.tree.x + 6, y: PLACES.tree.y - 1, z: PLACES.tree.z - 8 },
+    { x: PLACES.pond.x + 4, y: PLACES.pond.y + 0.2, z: PLACES.pond.z - 6 },
+    { x: -20, y: 5.5, z: -8 },
+    { x: 18, y: 7.0, z: 12 },
+    { x: PLACES.hay.x - 8, y: PLACES.hay.y, z: PLACES.grass.z },
+    { x: PLACES.drink.x - 10, y: PLACES.drink.y, z: 14 },
+  ];
+  const base = seats[((kindSlot % seats.length) + seats.length) % seats.length];
+  return {
+    x: base.x + (rng() - 0.5) * 3.2,
+    y: base.y + (rng() - 0.5) * 1.4,
+    z: base.z + (rng() - 0.5) * 3.2,
+  };
+}
+
+function placeForActivity(activity: Activity, rng: () => number, kindSlot = 0): Vec3 {
   const j = (s: number) => (rng() - 0.5) * s;
   switch (activity) {
     case "perch":
-      return { x: PLACES.tree.x + j(3), y: PLACES.tree.y + j(2.5), z: PLACES.tree.z + j(3) };
+      return meadowSeat(kindSlot, rng);
     case "flap":
-      return { x: PLACES.tree.x + 2 + j(4), y: PLACES.tree.y + 1 + j(2), z: PLACES.tree.z + j(3) };
+      return { x: PLACES.tree.x + 2 + j(8), y: PLACES.tree.y + 1 + j(3), z: PLACES.tree.z + j(8) };
+    case "hover":
+      return { x: PLACES.fruit.x + j(6), y: PLACES.fruit.y + 1.5 + j(3), z: PLACES.fruit.z + j(6) };
     case "drink":
-      return { x: PLACES.drink.x + j(3), y: PLACES.drink.y + j(0.6), z: PLACES.drink.z + j(3) };
+      return { x: PLACES.drink.x + j(7), y: PLACES.drink.y + j(0.6), z: PLACES.drink.z + j(7) };
+    case "eat":
+      return rng() > 0.5
+        ? { x: PLACES.fruit.x + j(6), y: PLACES.fruit.y + j(1.2), z: PLACES.fruit.z + j(6) }
+        : { x: PLACES.hay.x + j(7), y: PLACES.hay.y + j(0.8), z: PLACES.hay.z + j(7) };
     case "swim":
-      return { x: PLACES.pond.x + j(4), y: PLACES.pond.y + j(0.4), z: PLACES.pond.z + j(4) };
+      return { x: PLACES.pond.x + j(6), y: PLACES.pond.y + j(0.4), z: PLACES.pond.z + j(6) };
     case "hop":
       return rng() > 0.45
-        ? { x: PLACES.grass.x + j(8), y: PLACES.grass.y + j(0.8), z: PLACES.grass.z + j(8) }
-        : { x: PLACES.hay.x + j(4), y: PLACES.hay.y + j(0.8), z: PLACES.hay.z + j(4) };
+        ? { x: PLACES.grass.x + j(14), y: PLACES.grass.y + j(0.8), z: PLACES.grass.z + j(14) }
+        : { x: PLACES.hay.x + j(8), y: PLACES.hay.y + j(0.8), z: PLACES.hay.z + j(8) };
     case "strut":
-      return { x: PLACES.grass.x + 4 + j(8), y: PLACES.grass.y + j(0.6), z: PLACES.grass.z + j(6) };
+      return { x: PLACES.grass.x + 4 + j(14), y: PLACES.grass.y + j(0.6), z: PLACES.grass.z + j(12) };
+    case "display":
+      return meadowSeat(kindSlot + 5, rng);
+    case "stalk":
+      return meadowSeat(kindSlot + 9, rng);
+    case "soar":
+      return { x: j(WORLD_X * 1.2), y: 6 + rng() * 6, z: j(WORLD_Z * 1.2) };
+    case "dive":
     case "swoop":
-      return { x: j(WORLD_X), y: 4 + rng() * 6, z: j(WORLD_Z) };
+      return { x: j(WORLD_X * 1.1), y: 4 + rng() * 6, z: j(WORLD_Z * 1.1) };
     case "fly":
-      return { x: j(WORLD_X * 0.9), y: j(WORLD_Y * 0.7), z: j(WORLD_Z * 0.9) };
+      return { x: j(WORLD_X), y: 1 + rng() * 8, z: j(WORLD_Z) };
     case "flock":
     default:
-      return {
-        x: (rng() + rng() - 1) * WORLD_X * 0.55,
-        y: (rng() + rng() - 1) * WORLD_Y * 0.5,
-        z: (rng() + rng() - 1) * WORLD_Z * 0.55,
-      };
+      return meadowSeat(kindSlot, rng);
   }
+}
+
+function placeForHint(hint: PlaceName | Vec3 | undefined, rng: () => number): Vec3 | null {
+  if (!hint) return null;
+  if (typeof hint === "string") return jitterPlace(PLACES[hint], rng, { x: 4, y: 1.4, z: 4 });
+  return { x: hint.x, y: hint.y, z: hint.z };
+}
+
+function aviarySize(request: number): number {
+  if (!Number.isFinite(request)) return AVIARY_MIN;
+  return Math.round(clamp(Math.floor(request), AVIARY_MIN, AVIARY_MAX));
+}
+
+function makeState(n: number, capacity: number): FlockState {
+  const cap = Math.max(n, capacity);
+  return {
+    n,
+    capacity: cap,
+    pos: new Float32Array(cap * 3),
+    vel: new Float32Array(cap * 3),
+    bird: new Float32Array(cap * 2),
+    kindOf: new Uint8Array(cap),
+    activityOf: new Uint8Array(cap),
+    tint: new Float32Array(cap * 3),
+    eatProgress: new Float32Array(cap),
+    acc: 0,
+    cellOf: new Int32Array(cap),
+    cellStart: new Int32Array(GRID_CELLS + 1),
+    cursor: new Int32Array(GRID_CELLS),
+    sorted: new Int32Array(cap),
+    accel: new Float32Array(cap * 3),
+  };
+}
+
+function writeBird(
+  state: FlockState,
+  i: number,
+  kind: BirdKind,
+  activity: Activity,
+  rng: () => number,
+  heading: number,
+  placeHint?: PlaceName | Vec3,
+): void {
+  const sp = BIRD_SPECIES[kind];
+  const slot = kindIndex(kind) + i * 3;
+  const place = placeForHint(placeHint, rng) ?? placeForActivity(activity, rng, slot);
+  state.pos[i * 3] = clamp(place.x, -WORLD_X, WORLD_X);
+  state.pos[i * 3 + 1] = clamp(place.y, -WORLD_Y, WORLD_Y);
+  state.pos[i * 3 + 2] = clamp(place.z, -WORLD_Z, WORLD_Z);
+  const yaw = heading + (rng() - 0.5) * 2.6;
+  const pitch = (rng() - 0.5) * 0.5;
+  const air = isAirActivity(activity);
+  const hover = activity === "hover";
+  const spMul = air ? MIN_SPEED + rng() * (MAX_SPEED - MIN_SPEED) : hover ? 1.4 + rng() * 1.4 : 0.4 + rng() * 1.2;
+  state.vel[i * 3] = Math.cos(yaw) * Math.cos(pitch) * spMul;
+  state.vel[i * 3 + 1] = Math.sin(pitch) * spMul * (air || hover ? 1 : 0.2);
+  state.vel[i * 3 + 2] = Math.sin(yaw) * Math.cos(pitch) * spMul;
+  state.bird[i * 2] = rng();
+  // keep size diversity without letting every resident claim a third of the sky
+  state.bird[i * 2 + 1] = clamp((0.45 + rng() * 0.85) * sp.size, 0.4, 1.55);
+  state.kindOf[i] = kindIndex(kind);
+  state.activityOf[i] = activityIndex(activity);
+  state.tint[i * 3] = sp.body[0];
+  state.tint[i * 3 + 1] = sp.body[1];
+  state.tint[i * 3 + 2] = sp.body[2];
+  state.eatProgress[i] = activity === "eat" ? 0.35 + rng() * 0.35 : 0;
 }
 
 export function seedFlock(seed: number, request: number): FlockState {
   const n = flockSize(request);
+  const state = makeState(n, n);
   const rng = mulberry32(seed >>> 0);
-  const pos = new Float32Array(n * 3);
-  const vel = new Float32Array(n * 3);
-  const bird = new Float32Array(n * 2);
-  const kindOf = new Uint8Array(n);
-  const activityOf = new Uint8Array(n);
-  const tint = new Float32Array(n * 3);
   const heading = rng() * Math.PI * 2;
   const guarantee = Math.min(n, BIRD_KINDS.length);
 
   for (let i = 0; i < n; i++) {
-    const kind =
-      i < guarantee
-        ? BIRD_KINDS[i]
-        : BIRD_KINDS[Math.floor(rng() * BIRD_KINDS.length)];
+    const kind = i < guarantee ? BIRD_KINDS[i] : BIRD_KINDS[Math.floor(rng() * BIRD_KINDS.length)];
     const sp = BIRD_SPECIES[kind];
     // First catalog seats open on their signature activity in the meadow;
     // everyone else is the murmuration (a thin fly minority).
     const resident = i < guarantee;
-    const activity = resident
-      ? pickActivity(sp, rng, true)
-      : rng() < 0.18
-        ? "fly"
-        : "flock";
-    let px: number;
-    let py: number;
-    let pz: number;
-    if (resident) {
-      const place = placeForActivity(activity, rng);
-      px = place.x;
-      py = place.y;
-      pz = place.z;
-    } else {
+    const activity = resident ? pickActivity(sp, rng, true) : rng() < 0.18 ? "fly" : "flock";
+    writeBird(state, i, kind, activity, rng, heading);
+    if (!resident) {
       // same triangle body the murmuration has always used
-      px = (rng() + rng() - 1) * WORLD_X * 0.55;
-      py = (rng() + rng() - 1) * WORLD_Y * 0.5;
-      pz = (rng() + rng() - 1) * WORLD_Z * 0.55;
+      state.pos[i * 3] = (rng() + rng() - 1) * WORLD_X * 0.55;
+      state.pos[i * 3 + 1] = (rng() + rng() - 1) * WORLD_Y * 0.5;
+      state.pos[i * 3 + 2] = (rng() + rng() - 1) * WORLD_Z * 0.55;
     }
-    pos[i * 3] = clamp(px, -WORLD_X, WORLD_X);
-    pos[i * 3 + 1] = clamp(py, -WORLD_Y, WORLD_Y);
-    pos[i * 3 + 2] = clamp(pz, -WORLD_Z, WORLD_Z);
-    const yaw = heading + (rng() - 0.5) * 2.6;
-    const pitch = (rng() - 0.5) * 0.5;
-    const air = isAirActivity(activity);
-    const spMul = air ? MIN_SPEED + rng() * (MAX_SPEED - MIN_SPEED) : 0.4 + rng() * 1.2;
-    vel[i * 3] = Math.cos(yaw) * Math.cos(pitch) * spMul;
-    vel[i * 3 + 1] = Math.sin(pitch) * spMul * (air ? 1 : 0.2);
-    vel[i * 3 + 2] = Math.sin(yaw) * Math.cos(pitch) * spMul;
-    bird[i * 2] = rng();
-    bird[i * 2 + 1] = (0.75 + rng() * 0.55) * sp.size;
-    kindOf[i] = kindIndex(kind);
-    activityOf[i] = activityIndex(activity);
-    tint[i * 3] = sp.body[0];
-    tint[i * 3 + 1] = sp.body[1];
-    tint[i * 3 + 2] = sp.body[2];
   }
-  return {
-    n,
-    pos,
-    vel,
-    bird,
-    kindOf,
-    activityOf,
-    tint,
-    acc: 0,
-    cellOf: new Int32Array(n),
-    cellStart: new Int32Array(GRID_CELLS + 1),
-    cursor: new Int32Array(GRID_CELLS),
-    sorted: new Int32Array(n),
-    accel: new Float32Array(n * 3),
-  };
+  return state;
+}
+
+/**
+ * A small living aviary: enough birds to be an ecosystem, few enough that
+ * each can be a readable animal. Weather nudges density; season turns the
+ * opening heading, but the result is still a pure function of the inputs.
+ */
+export function seedAviary(seed: number, weather = 0, season = 0): FlockState {
+  const w = clamp01(Number(weather) || 0);
+  const rng = mulberry32(hashSeed(seed, Math.round(w * 1000), season));
+  const n = aviarySize(AVIARY_MIN + Math.floor(rng() * (AVIARY_MAX - AVIARY_MIN + 1)) + Math.round(w * 4));
+  const state = makeState(n, AVIARY_MAX);
+  const goal = seasonGoal(season);
+  const heading = Math.atan2(goal.z, goal.x);
+  const guarantee = Math.min(n, BIRD_KINDS.length);
+  for (let i = 0; i < n; i++) {
+    const kind = i < guarantee ? BIRD_KINDS[i] : BIRD_KINDS[Math.floor(rng() * BIRD_KINDS.length)];
+    const sp = BIRD_SPECIES[kind];
+    // Prefer a ground/water pose so the opening frame is a meadow of animals,
+    // not thirteen flyers collapsed into one murmuration ball.
+    let activity = pickActivity(sp, rng, i < guarantee || rng() < 0.7);
+    if (i < guarantee && isAirActivity(activity)) {
+      const grounded = sp.activities.find((a) => !isAirActivity(a));
+      if (grounded) activity = grounded;
+      else if (activity === "flock") activity = "fly";
+    }
+    const place = sp.places[Math.floor(rng() * sp.places.length)];
+    writeBird(state, i, kind, activity, rng, heading, place);
+  }
+  return state;
 }
 
 /** True when every catalog kind is present at least once. */
@@ -446,6 +565,93 @@ export function catalogCovered(state: FlockState): boolean {
   const seen = new Set<number>();
   for (let i = 0; i < state.n; i++) seen.add(state.kindOf[i]);
   return seen.size === BIRD_KINDS.length;
+}
+
+function copyBirdSlot(state: FlockState, to: number, from: number): void {
+  state.pos[to * 3] = state.pos[from * 3];
+  state.pos[to * 3 + 1] = state.pos[from * 3 + 1];
+  state.pos[to * 3 + 2] = state.pos[from * 3 + 2];
+  state.vel[to * 3] = state.vel[from * 3];
+  state.vel[to * 3 + 1] = state.vel[from * 3 + 1];
+  state.vel[to * 3 + 2] = state.vel[from * 3 + 2];
+  state.bird[to * 2] = state.bird[from * 2];
+  state.bird[to * 2 + 1] = state.bird[from * 2 + 1];
+  state.kindOf[to] = state.kindOf[from];
+  state.activityOf[to] = state.activityOf[from];
+  state.tint[to * 3] = state.tint[from * 3];
+  state.tint[to * 3 + 1] = state.tint[from * 3 + 1];
+  state.tint[to * 3 + 2] = state.tint[from * 3 + 2];
+  state.eatProgress[to] = state.eatProgress[from];
+}
+
+/** Nearest bird to a top-down normalised meadow address (0..1, 0..1). */
+export function nearestBird(state: FlockState, nx: number, ny: number): number {
+  if (state.n <= 0) return -1;
+  const x = (clamp01(nx) * 2 - 1) * WORLD_X;
+  const z = (clamp01(ny) * 2 - 1) * WORLD_Z;
+  let best = -1;
+  let bestD = Infinity;
+  for (let i = 0; i < state.n; i++) {
+    const dx = state.pos[i * 3] - x;
+    const dz = state.pos[i * 3 + 2] - z;
+    const d = dx * dx + dz * dz;
+    if (d < bestD) {
+      bestD = d;
+      best = i;
+    }
+  }
+  return best;
+}
+
+/** A normalised hit test against the meadow projection. */
+export function birdAt(state: FlockState, nx: number, ny: number, radius = 0.06): number {
+  const i = nearestBird(state, nx, ny);
+  if (i < 0) return -1;
+  const x = (clamp01(nx) * 2 - 1) * WORLD_X;
+  const z = (clamp01(ny) * 2 - 1) * WORLD_Z;
+  const dx = state.pos[i * 3] - x;
+  const dz = state.pos[i * 3 + 2] - z;
+  const r = Math.max(0, radius) * Math.max(WORLD_X, WORLD_Z) * 2;
+  return dx * dx + dz * dz <= r * r ? i : -1;
+}
+
+/** Add one bird if the aviary still has capacity. Returns its slot, or -1. */
+export function spawnBird(state: FlockState, kind?: BirdKind, placeHint?: PlaceName | Vec3): number {
+  if (state.n >= state.capacity || state.n >= AVIARY_MAX) return -1;
+  const i = state.n;
+  const seed = hashSeed(
+    state.n,
+    state.capacity,
+    Math.round(state.pos[0] * 1000),
+    Math.round(state.pos[1] * 1000),
+    kind ? kindIndex(kind) : 91,
+  );
+  const rng = mulberry32(seed);
+  const k = kind ?? BIRD_KINDS[Math.floor(rng() * BIRD_KINDS.length)];
+  const sp = BIRD_SPECIES[k];
+  const activity = placeHint === "pond" ? "swim" : pickActivity(sp, rng, true);
+  writeBird(state, i, k, activity, rng, rng() * Math.PI * 2, placeHint);
+  state.n += 1;
+  return i;
+}
+
+/** Remove one bird by slot or nearest normalised address. Leaves at least one. */
+export function cullBird(state: FlockState, idOrNearest?: number | { nx: number; ny: number }): number {
+  if (state.n <= 1) return -1;
+  let idx = typeof idOrNearest === "number" ? Math.round(idOrNearest) : -1;
+  if (idx < 0 && idOrNearest && typeof idOrNearest === "object") idx = nearestBird(state, idOrNearest.nx, idOrNearest.ny);
+  if (idx < 0 || idx >= state.n) idx = state.n - 1;
+  const last = state.n - 1;
+  if (idx !== last) copyBirdSlot(state, idx, last);
+  state.n = last;
+  return idx;
+}
+
+/** Let the aviary go nearly empty, without leaving a dead screen. */
+export function clearBirds(state: FlockState): number {
+  const keep = Math.min(state.n, 1 + (state.capacity % 3));
+  while (state.n > keep) cullBird(state, state.n - 1);
+  return state.n;
 }
 
 /** Flush birds near a world point into the air (tap / scare). */
@@ -459,11 +665,13 @@ export function flushNear(state: FlockState, at: Vec3, radius: number): void {
     const sp = BIRD_SPECIES[BIRD_KINDS[state.kindOf[i]]];
     const next = sp.activities.includes("fly")
       ? "fly"
-      : sp.activities.includes("flock")
-        ? "flock"
-        : sp.activities.includes("flap")
-          ? "flap"
-          : sp.activities[0];
+      : sp.activities.includes("soar")
+        ? "soar"
+        : sp.activities.includes("flock")
+          ? "flock"
+          : sp.activities.includes("flap")
+            ? "flap"
+            : sp.activities[0];
     state.activityOf[i] = activityIndex(next);
     const inv = 1 / (Math.sqrt(dx * dx + dy * dy + dz * dz) + 1e-3);
     state.vel[i * 3] += dx * inv * 4;
@@ -598,15 +806,25 @@ export function stepFlock(state: FlockState, params: FlockParams, dt: number): v
       let az = 0;
       const phase = i * 0.37 + px * 0.05;
       if (act === "perch") {
-        ax += (PLACES.tree.x - px) * 1.2;
-        ay += (PLACES.tree.y - py) * 1.2;
-        az += (PLACES.tree.z - pz) * 1.2;
-        ax += Math.sin(phase) * 0.4;
+        // stay near the seat the bird was given — don't vacuum every perch to one trunk
+        ax += Math.sin(phase) * 0.55;
+        ay += Math.sin(phase * 1.7) * 0.25;
+        az += Math.cos(phase * 0.9) * 0.55;
+      } else if (act === "hover") {
+        ax += (PLACES.fruit.x - px) * 1.6 + Math.sin(phase * 5.7) * 0.9;
+        ay += (PLACES.fruit.y + 1.6 - py) * 2.4 + Math.sin(phase * 11.0) * 0.45;
+        az += (PLACES.fruit.z - pz) * 1.6 + Math.cos(phase * 4.9) * 0.9;
       } else if (act === "drink") {
         ax += (PLACES.drink.x - px) * 1.4;
         ay += (PLACES.drink.y - py) * 2.2;
         az += (PLACES.drink.z - pz) * 1.4;
         ay += Math.sin(phase * 3) * 0.8;
+      } else if (act === "eat") {
+        const home = px < 4 ? PLACES.fruit : PLACES.hay;
+        ax += (home.x - px) * 1.1 + Math.sin(phase * 2.8) * 0.6;
+        ay += (home.y - py) * 2.0 + Math.max(0, Math.sin(phase * 6.0)) * 0.9;
+        az += (home.z - pz) * 1.1 + Math.cos(phase * 2.4) * 0.5;
+        state.eatProgress[i] = clamp01(state.eatProgress[i] + dt * 0.45);
       } else if (act === "swim") {
         ax += (PLACES.pond.x - px) * 0.9 + Math.cos(phase) * 1.6;
         ay += (PLACES.pond.y - py) * 3.0;
@@ -619,8 +837,16 @@ export function stepFlock(state: FlockState, params: FlockParams, dt: number): v
         if (Math.floor(phase * 8 + i) % 17 === 0) ay += 6;
       } else if (act === "strut") {
         ax += Math.sin(phase * 0.4) * 1.4;
-        ay += (PLACES.grass.y - py) * 2.0;
+        ay += Math.max(-2, PLACES.grass.y - py) * 1.2;
         az += Math.cos(phase * 0.35) * 1.1;
+      } else if (act === "display") {
+        ax += Math.sin(phase * 0.7) * 0.9;
+        ay += Math.max(-2, PLACES.grass.y - py) * 1.2;
+        az += Math.cos(phase * 0.7) * 0.9;
+      } else if (act === "stalk") {
+        ax += Math.sin(phase * 0.7) * 1.0;
+        ay += Math.max(-2, PLACES.grass.y - py) * 1.2;
+        az += Math.cos(phase * 0.6) * 1.0;
       }
       // Soft wind only — residents feel a breeze, not a gale.
       ax += params.wind.x * 0.12;
@@ -769,17 +995,21 @@ export function stepFlock(state: FlockState, params: FlockParams, dt: number): v
     if (nz > WORLD_Z && vz > 0) vz = -vz * 0.6;
     else if (nz < -WORLD_Z && vz < 0) vz = -vz * 0.6;
 
-    // Swoop pulls down until low, then recovers into fly.
-    if (act === "swoop") {
-      vy -= 4.5 * dt * 60; // strong dive in accel-space already applied; keep nose down
+    // Swoop / dive pulls down until low, then recovers into fly.
+    if (act === "swoop" || act === "dive") {
+      vy -= (act === "dive" ? 6.0 : 4.5) * dt * 60; // keep the nose down
       if (pos[i * 3 + 1] < -6) {
         activityOf[i] = activityIndex("fly");
         vy = Math.abs(vy) * 0.5 + 2;
       }
     }
 
-    const maxSp = air ? (act === "swoop" ? MAX_SPEED * 1.15 : MAX_SPEED) : 3.2;
-    const minSp = air ? MIN_SPEED : 0;
+    if (act === "soar") {
+      vy += Math.sin((pos[i * 3] + pos[i * 3 + 2]) * 0.08 + dt) * 0.2;
+    }
+
+    const maxSp = air ? (act === "swoop" || act === "dive" ? MAX_SPEED * 1.18 : MAX_SPEED) : 3.2;
+    const minSp = air ? (act === "soar" ? MIN_SPEED * 0.75 : MIN_SPEED) : 0;
     const sp = Math.sqrt(vx * vx + vy * vy + vz * vz);
     if (sp > maxSp) {
       const k = maxSp / sp;

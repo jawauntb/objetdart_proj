@@ -213,6 +213,45 @@ assert.equal(F.flockSize(NaN), F.MIN_BIRDS, "a screen that measures nothing stil
 assert.equal(F.seedFlock(1, 1e9).n, F.MAX_BIRDS, "and the seeding obeys the cap");
 assert.equal(F.seedFlock(1, 900).pos.length, 900 * 3, "three numbers per bird, no more");
 
+// —— aviary population: small, diverse, mutable ————————————————
+// The bug: rebuilding the room as just a smaller point cloud, or letting
+// touch creation silently grow back to thousands of birds.
+{
+  const aviary = F.seedAviary(0xa71, 0.4, 2);
+  assert.ok(aviary.n >= F.AVIARY_MIN && aviary.n <= F.AVIARY_MAX, "an aviary starts inside its own readable cap");
+  assert.equal(aviary.capacity, F.AVIARY_MAX, "the aviary has room for touch-spawned birds");
+  assert.ok(aviary.pos.length === F.AVIARY_MAX * 3, "aviary buffers are capacity-sized, not reallocated per spawn");
+
+  const kinds = new Set();
+  let small = Infinity;
+  let large = 0;
+  for (let i = 0; i < aviary.n; i++) {
+    kinds.add(aviary.kindOf[i]);
+    small = Math.min(small, aviary.bird[i * 2 + 1]);
+    large = Math.max(large, aviary.bird[i * 2 + 1]);
+  }
+  assert.ok(kinds.size >= F.BIRD_KINDS.length, "the starting aviary covers every catalog kind");
+  assert.ok(large - small > 0.7, `individual bird sizes differ enough to read (${small} → ${large})`);
+
+  const before = aviary.n;
+  const spawned = F.spawnBird(aviary, "duck", "pond");
+  assert.ok(spawned >= 0, "double-tap can create a bird while capacity remains");
+  assert.equal(aviary.n, before + 1, "spawn grows the live prefix by one");
+  assert.equal(F.BIRD_KINDS[aviary.kindOf[spawned]], "duck", "spawn can choose a species");
+  assert.equal(F.ACTIVITIES[aviary.activityOf[spawned]], "swim", "a pond-spawned duck enters swimming");
+
+  const nearest = F.nearestBird(aviary, 0.5, 0.5);
+  assert.ok(nearest >= 0 && nearest < aviary.n, "nearestBird addresses the live prefix");
+  assert.ok(F.birdAt(aviary, 0.5, 0.5, 1) >= 0, "birdAt hits with a wide enough radius");
+
+  const culled = F.cullBird(aviary, spawned);
+  assert.ok(culled >= 0, "triple-tap can cull a bird");
+  assert.equal(aviary.n, before, "cull shrinks the live prefix by one");
+  const kept = F.clearBirds(aviary);
+  assert.ok(kept >= 1 && kept <= 3, "clear leaves a few living witnesses, not a dead screen");
+  assert.equal(aviary.n, kept, "clear returns the remaining live population");
+}
+
 // —— alignment aligns ————————————————————————————————————————
 // The bug: an alignment term with the sign or the normalisation wrong, which
 // scrambles the flock while the parameter is called alignment.
