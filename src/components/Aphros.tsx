@@ -73,11 +73,12 @@ type Bloom = {
 
 type Wake = { x: number; y: number; born: number; strength: number };
 
-// dolphins — parametric arcs, three of them, staggered
+// dolphins — parametric leaps along the chi's two diagonals: two ride
+// the right-rising stroke, one crosses them on the left-rising stroke
 const DOLPHIN_PARAMS = [
-  { period: 11.0, offset: 0.0, x0: -0.08, x1: 1.08, lift: 0.16 },
-  { period: 14.5, offset: 5.1, x0: 1.08, x1: -0.08, lift: 0.20 },
-  { period: 9.6, offset: 8.0, x0: -0.08, x1: 1.08, lift: 0.13 },
+  { period: 11.0, offset: 0.0, x0: -0.08, x1: 1.08, lift: 0.16, yBase: 0.68, slope: -0.16 },
+  { period: 14.5, offset: 5.1, x0: 1.08, x1: -0.08, lift: 0.2, yBase: 0.5, slope: 0.16 },
+  { period: 9.6, offset: 8.0, x0: -0.08, x1: 1.08, lift: 0.13, yBase: 0.74, slope: -0.14 },
 ];
 
 // composition constants (fractions of viewport height)
@@ -365,6 +366,44 @@ export default function Aphros() {
           return v;
         }
 
+        mat2 rot2(float a) {
+          float c = cos(a);
+          float s = sin(a);
+          return mat2(c, -s, s, c);
+        }
+        float sdEll(vec2 p, vec2 ab) {
+          return (length(p / ab) - 1.0) * min(ab.x, ab.y);
+        }
+
+        // ── a cherub, from five ellipses — head, torso, legs, two wings ──
+        float cherubBody(vec2 p) {
+          float d = sdEll(p - vec2(0.02, -0.60), vec2(0.33, 0.33));       // head
+          d = min(d, sdEll(p - vec2(0.0, 0.05), vec2(0.42, 0.55)));       // torso
+          d = min(d, sdEll(rot2(0.55) * (p - vec2(-0.38, 0.42)), vec2(0.34, 0.16))); // legs kicked back
+          return d;
+        }
+        float cherubWings(vec2 p) {
+          float d = sdEll(rot2(0.85) * (p - vec2(-0.42, -0.38)), vec2(0.66, 0.20));
+          d = min(d, sdEll(rot2(1.25) * (p - vec2(-0.16, -0.52)), vec2(0.52, 0.15)));
+          return d;
+        }
+
+        // ── a dolphin, as mathematics: arched body with a sine radius
+        // profile, dorsal fin, tail flukes, a small beak ──
+        float dolphinSdf(vec2 p) {
+          p.y += 6.0 * p.x * p.x;                 // the arch of the leap
+          float L = 0.055;
+          float u = clamp((p.x + L) / (2.0 * L), 0.0, 1.0);
+          float r = 0.0145 * sin(3.14159 * pow(u, 0.62));
+          float body = abs(p.y) - r;
+          body = max(body, abs(p.x) - L);
+          float fin = sdEll(rot2(0.55) * (p - vec2(0.004, -0.018)), vec2(0.013, 0.0042));
+          float fl1 = sdEll(rot2(0.75) * (p - vec2(-L * 0.98, 0.0)), vec2(0.013, 0.0038));
+          float fl2 = sdEll(rot2(-0.75) * (p - vec2(-L * 0.98, 0.0)), vec2(0.013, 0.0038));
+          float beak = sdEll(p - vec2(L * 1.02, 0.005), vec2(0.010, 0.0036));
+          return min(min(body, fin), min(min(fl1, fl2), beak));
+        }
+
         void main() {
           vec2 uv = vec2(vUv.x, 1.0 - vUv.y); // y = 0 top, 1 bottom
           float aspect = uRes.x / uRes.y;
@@ -407,9 +446,9 @@ export default function Aphros() {
           float billow = smoothstep(0.44, 0.85, cloud);
           float cloudBelly = smoothstep(0.50, 0.95, fbm(cp * 1.6 + (cw - 0.5) * 1.3 + vec2(2.0, 4.0)));
           // dark bellies, gold-lit rims facing the sun
-          vec3 cloudCol = mix(vec3(0.94, 0.86, 0.72), vec3(0.34, 0.36, 0.46), cloudBelly * 0.9);
+          vec3 cloudCol = mix(vec3(0.97, 0.84, 0.78), vec3(0.36, 0.36, 0.47), cloudBelly * 0.9);
           float rimGold = (smoothstep(0.40, 0.52, cloud) - smoothstep(0.52, 0.72, cloud));
-          cloudCol += max(0.0, rimGold) * vec3(0.55, 0.40, 0.20) * exp(-sunDist * 1.6) * 1.4;
+          cloudCol += max(0.0, rimGold) * vec3(0.56, 0.28, 0.20) * exp(-sunDist * 1.6) * 1.5;
           float cloudMask = billow * (1.0 - smoothstep(0.60, 1.0, skyT)) * smoothstep(0.02, 0.12, skyT);
           sky = mix(sky, cloudCol, cloudMask * 0.92);
           float ang = atan(sunD.x, -sunD.y);
@@ -418,26 +457,35 @@ export default function Aphros() {
           sky += rays * exp(-sunDist * 2.8) * vec3(1.0, 0.88, 0.66) * 0.22;
           sky += (sunGlow * 0.60 + sunHalo * 0.13) * vec3(1.0, 0.90, 0.68);
 
-          // ── putti — cherub glows adrift in the upper air, trailing
-          // short coral ribbons (the airborne retinue, abstracted) ──
-          for (int i = 0; i < 3; i++) {
+          // ── the cherub train — four winged figures riding the falling
+          // diagonal (the chi's other stroke), trailing crimson ribbons ──
+          for (int i = 0; i < 4; i++) {
             float fi = float(i);
-            vec2 pp = vec2(
-              0.20 + fi * 0.28 + sin(t * 0.05 + fi * 2.1) * 0.03,
-              0.09 + fi * 0.035 + cos(t * 0.07 + fi * 1.4) * 0.015
-            );
-            vec2 pd = (uv - pp) * vec2(aspect, 1.0);
-            float head = exp(-dot(pd - vec2(0.0, -0.014), pd - vec2(0.0, -0.014)) / 0.00005);
-            float torso = exp(-dot(pd * vec2(0.85, 1.25), pd * vec2(0.85, 1.25)) / 0.00026);
-            float pglow = min(1.0, head * 0.9 + torso * 0.7);
-            sky = mix(sky, vec3(0.97, 0.85, 0.76), pglow * 0.5);
-            // the ribbon: a short fluttering streak behind the glow
-            vec2 rp = pd - vec2(0.020, 0.010);
-            float rc = cos(0.6 + sin(t * 0.4 + fi) * 0.2);
-            float rs = sin(0.6 + sin(t * 0.4 + fi) * 0.2);
-            vec2 rl = vec2(rc * rp.x + rs * rp.y, -rs * rp.x + rc * rp.y);
-            float streak = exp(-(rl.x * rl.x) / 0.0016 - (rl.y * rl.y) / 0.00003);
-            sky = mix(sky, vec3(0.87, 0.52, 0.34), streak * 0.22);
+            float ci = fi / 3.0;
+            // formation along the diagonal, big near right, small far left
+            vec2 pp = mix(vec2(0.86, 0.255), vec2(0.14, 0.075), ci);
+            pp += vec2(sin(t * 0.11 + fi * 1.7) * 0.012, cos(t * 0.13 + fi * 1.1) * 0.008);
+            float cs = mix(0.050, 0.030, ci);
+            vec2 cpd = (uv - pp) * vec2(aspect, 1.0);
+            if (length(cpd) > cs * 2.6) continue;
+            // banked along the flight line, breathing a little
+            float bank = -0.28 + sin(t * 0.10 + fi * 0.9) * 0.07;
+            vec2 cl = rot2(bank) * cpd / cs;
+            // wings first — pale gold, behind the body
+            float wm = smoothstep(0.05, -0.05, cherubWings(cl));
+            sky = mix(sky, vec3(0.97, 0.91, 0.80), wm * 0.85);
+            // flesh — lit from beneath by the gold rent at the horizon
+            float bm = smoothstep(0.05, -0.05, cherubBody(cl));
+            vec3 flesh = vec3(0.95, 0.79, 0.70) * (0.86 + 0.14 * smoothstep(-0.8, 0.8, cl.y));
+            flesh += vec3(0.09, 0.015, 0.02) * smoothstep(0.5, 0.0, length(cl - vec2(0.06, -0.58))); // blush
+            sky = mix(sky, flesh, bm * 0.96);
+            // a crimson ribbon streaming behind, along the flight line
+            vec2 rl = cl - vec2(1.35, 0.30);
+            rl.y += sin(rl.x * 3.2 + t * 0.9 + fi) * 0.14;
+            float ribbon = exp(-(rl.x * rl.x) / 1.3 - (rl.y * rl.y) / 0.012) * step(0.0, rl.x + 1.2);
+            sky = mix(sky, vec3(0.72, 0.16, 0.19), ribbon * 0.55 * (1.0 - bm));
+            // a soft rose halo so the figures sit in the air, not on it
+            sky += exp(-dot(cpd, cpd) / (cs * cs * 2.6)) * vec3(0.10, 0.05, 0.04);
           }
 
           // ════ SEA ════
@@ -467,9 +515,9 @@ export default function Aphros() {
           sea = mix(sea, shoal, smoothstep(0.66, 0.98, sd) * 0.7);
 
           float mir = fbm(vec2(suv.x * aspect * 1.7 + t * 0.05, sd * 14.0));
-          sea = mix(sea, vec3(0.93, 0.72, 0.52),
-            (1.0 - smoothstep(0.0, 0.30, sd)) * smoothstep(0.46, 0.85, mir) * 0.55);
-          sea += sunHalo * exp(-sd * 6.0) * vec3(0.26, 0.17, 0.09);
+          sea = mix(sea, vec3(0.95, 0.64, 0.56),
+            (1.0 - smoothstep(0.0, 0.30, sd)) * smoothstep(0.46, 0.85, mir) * 0.58);
+          sea += sunHalo * exp(-sd * 6.0) * vec3(0.27, 0.15, 0.11);
 
           vec2 nuv = suv * vec2(aspect, 1.0) * (3.0 + 3.6 * sd) + vec2(t * 0.06, t * 0.04);
           float n = fbm(nuv);
@@ -484,25 +532,27 @@ export default function Aphros() {
           float glint = column * smoothstep(0.56, 0.94, facets) * (1.0 - sd * 0.35);
           sea += glint * (0.5 + uAgit * 0.2) * vec3(1.0, 0.88, 0.64);
 
-          // ── dolphins: dark arcs under the swell ──
-          float dolphinInk = 0.0;
+          // ── dolphins: real bodies leaping the crossing diagonals ──
           float dolphinEdge = 0.0;
           for (int i = 0; i < 3; i++) {
             vec4 d = uDolphins[i];
             if (d.w < 0.01) continue;
             vec2 dp = (uv - d.xy) * vec2(aspect, 1.0);
-            float ca = cos(d.z);
-            float sa = sin(d.z);
-            vec2 lp = vec2(ca * dp.x + sa * dp.y, -sa * dp.x + ca * dp.y);
-            // a slender lozenge, tapered toward the tail
-            float bodyR = 0.016 * (1.0 - smoothstep(-0.055, 0.045, lp.x) * 0.55);
-            float body = length(vec2(lp.x * 0.42, lp.y)) - bodyR;
-            float m = smoothstep(0.006, -0.004, body) * d.w;
-            dolphinInk = max(dolphinInk, m);
-            dolphinEdge = max(dolphinEdge, smoothstep(0.008, 0.0, abs(body)) * d.w);
+            vec2 lp = rot2(-d.z) * dp;
+            float sdf = dolphinSdf(lp);
+            float m = smoothstep(0.0018, -0.0018, sdf) * d.w;
+            if (m > 0.001) {
+              // two-tone: slate-teal back, warm pale belly, the arch line
+              float bendY = lp.y + 6.0 * lp.x * lp.x;
+              float backSide = smoothstep(0.007, -0.002, bendY);
+              vec3 dcol = mix(vec3(0.80, 0.76, 0.68), vec3(0.12, 0.22, 0.27), backSide);
+              // wet sheen along the back facing the light
+              dcol += smoothstep(0.004, 0.0, abs(bendY + 0.010)) * vec3(0.35, 0.38, 0.36) * 0.8;
+              sea = mix(sea, dcol, m * 0.95);
+            }
+            dolphinEdge = max(dolphinEdge, smoothstep(0.003, 0.0, abs(sdf)) * d.w);
           }
-          sea = mix(sea, vec3(0.13, 0.24, 0.24), dolphinInk * 0.85);
-          sea += dolphinEdge * vec3(0.55, 0.60, 0.52) * 0.30;
+          sea += dolphinEdge * vec3(0.30, 0.34, 0.32) * 0.20;
 
           // aphros — the ambient lace, whitening with squall + wakes
           vec2 fuv = suv * vec2(aspect, 1.0) * 5.5 + vec2(t * 0.09 + uWind * 0.5, -t * 0.05);
@@ -561,6 +611,7 @@ export default function Aphros() {
           vec3 groove = pearl * vec3(0.68, 0.60, 0.50);
           vec3 shellCol = mix(groove, pearl, ridgeLight);
           shellCol *= 0.90 + 0.10 * smoothstep(1.0, 0.0, sr / max(shellR, 0.001));
+          shellCol += vec3(0.05, 0.008, 0.018) * ridgeLight; // rose in the nacre
           float rim = smoothstep(0.012, 0.0, abs(sr - rOut)) * (1.0 - smoothstep(1.6, 2.4, abs(sang)));
           // the shell stands ON the sea: only above its waterline
           float shellMask = inShell * smoothstep(0.035, 0.0, uv.y - SHELL.y - 0.055);
@@ -605,26 +656,48 @@ export default function Aphros() {
           col = mix(col, vec3(0.97, 0.86, 0.76), haze * 0.45);
           col = mix(col, shore, smoothstep(SHORE - 0.012, SHORE + 0.012, uv.y));
 
-          // ── the drapery — a billowing coral silk arc over the centre,
-          // the sail every triumph carries, fluttering with the wind ──
-          vec2 arp = (uv - vec2(0.5, SHELL.y + 0.02)) * vec2(aspect, 1.0);
+          // ── the chi of silks: two billowing bands crossing over the
+          // shell — a rose one sweeping up-left behind, a crimson one
+          // sweeping up-right in front. the crossed diagonals are the
+          // composition's motion; everything else rides one stroke or
+          // the other. ──
+          vec2 arp0 = (uv - vec2(0.5, SHELL.y + 0.02)) * vec2(aspect, 1.0);
+
+          // rose band (behind), tilted to the left-rising diagonal
+          vec2 arpB = rot2(-0.52) * arp0;
+          float arAngB = atan(arpB.x, -arpB.y);
+          float arRB = length(arpB);
+          float flutterB = sin(arAngB * 3.0 - t * 0.8) * 0.011
+                         + sin(arAngB * 6.0 + t * 1.1) * 0.005;
+          float arcRB = 0.265 + flutterB - uWind * 0.018 * sin(arAngB * 2.0);
+          float bandDB = abs(arRB - arcRB);
+          float extentB = (1.0 - smoothstep(0.50, 1.00, arAngB))
+                        * (1.0 - smoothstep(0.95, 1.40, -arAngB));
+          float thickB = 0.024 * (0.62 + 0.38 * sin(arAngB * 2.0 - t * 0.4));
+          float drapeB = smoothstep(thickB, thickB * 0.35, bandDB) * extentB;
+          float foldsB = sin(arAngB * 24.0 - t * 0.6) * 0.5 + 0.5;
+          vec3 silkB = mix(vec3(0.86, 0.42, 0.50), vec3(0.97, 0.70, 0.74), 0.3 + 0.4 * foldsB);
+          silkB *= 0.86 + 0.14 * foldsB;
+          float shadeB = (smoothstep(thickB * 3.0, thickB, bandDB) - drapeB) * extentB;
+          col *= 1.0 - shadeB * 0.08;
+          col = mix(col, silkB, drapeB * 0.88);
+
+          // crimson band (in front), tilted to the right-rising diagonal
+          vec2 arp = rot2(0.38) * arp0;
           float arAng = atan(arp.x, -arp.y);
           float arR = length(arp);
           float flutter = sin(arAng * 3.0 + t * 0.9) * 0.010
                         + sin(arAng * 7.0 - t * 1.3) * 0.005;
           float arcR = 0.225 + flutter + uWind * 0.020 * sin(arAng * 2.0);
           float bandD = abs(arR - arcR);
-          // an asymmetric sail: full overhead, trailing off to the right,
-          // released early on the left — never a closed hoop
           float extent = (1.0 - smoothstep(0.55, 1.05, -arAng))
-                       * (1.0 - smoothstep(1.05, 1.65, arAng));
+                       * (1.0 - smoothstep(0.95, 1.45, arAng));
           float thick = 0.030 * (0.60 + 0.40 * sin(arAng * 2.0 + t * 0.5));
           float drape = smoothstep(thick, thick * 0.35, bandD) * extent;
           float folds = sin(arAng * 26.0 + t * 0.7) * 0.5 + 0.5;
-          vec3 silk = mix(vec3(0.82, 0.38, 0.20), vec3(0.97, 0.66, 0.44), folds);
-          silk *= 0.72 + 0.28 * folds;
+          vec3 silk = mix(vec3(0.78, 0.20, 0.20), vec3(0.95, 0.50, 0.42), 0.28 + 0.44 * folds);
+          silk *= 0.84 + 0.16 * folds;
           silk += smoothstep(thick * 0.5, 0.0, bandD) * 0.08;
-          // a soft shadow the silk casts on whatever lies behind it
           float drapeShade = (smoothstep(thick * 3.0, thick, bandD) - drape) * extent;
           col *= 1.0 - drapeShade * 0.10;
           col = mix(col, silk, drape * 0.92);
@@ -651,9 +724,11 @@ export default function Aphros() {
             line += bloomFoam * 0.7 + wakeHi * 0.4;
             // dolphin outlines
             line += dolphinEdge * 0.9;
-            // the drapery's contour and fold hatching
+            // both silks' contours and fold hatching
             line += smoothstep(0.006, 0.001, abs(bandD - thick)) * extent * 0.8;
             line += drape * smoothstep(0.6, 0.95, folds) * 0.3;
+            line += smoothstep(0.006, 0.001, abs(bandDB - thickB)) * extentB * 0.7;
+            line += drapeB * smoothstep(0.6, 0.95, foldsB) * 0.25;
             // shore hatching
             float hatch = smoothstep(0.42, 0.5, abs(fract((uv.x * aspect + uv.y * 0.6) * 60.0) - 0.5));
             line += (1.0 - hatch) * 0.12 * smoothstep(SHORE, 1.0, uv.y);
@@ -719,6 +794,7 @@ export default function Aphros() {
             const bloomData = new Float32Array(MAX_BLOOMS * 4);
             const wakeData = new Float32Array(MAX_WAKES * 4);
             const dolphinData = new Float32Array(3 * 4);
+            const prevPresence = [0, 0, 0];
 
             let lastNow = performance.now();
             let wT = 0; // warped seconds — three fingers dilate the shore
@@ -790,19 +866,30 @@ export default function Aphros() {
                 }
               }
 
-              // dolphins → uniforms (parametric arcs beneath the swell)
+              // dolphins → uniforms (leaps along the crossing diagonals)
               for (let i = 0; i < 3; i++) {
                 const d = DOLPHIN_PARAMS[i];
                 const cyc = (wT + d.offset) / d.period;
                 const p = cyc - Math.floor(cyc);
-                const x = d.x0 + (d.x1 - d.x0) * p;
-                const surface = HORIZON + (SHORE - HORIZON) * 0.42;
                 const liftAmt = reduced ? d.lift * 0.4 : d.lift;
-                const y = surface - liftAmt * 4 * p * (1 - p) + 0.05;
-                const dydp = -liftAmt * 4 * (1 - 2 * p);
-                const angle = Math.atan2(dydp, (d.x1 - d.x0) * 0.35);
+                const posAt = (pp: number) => {
+                  const px = d.x0 + (d.x1 - d.x0) * pp;
+                  const py = d.yBase + d.slope * px - liftAmt * 4 * pp * (1 - pp) + 0.02;
+                  return [px, py];
+                };
+                const [x, y] = posAt(p);
+                const [x2, y2] = posAt(Math.min(1, p + 0.012));
+                const angle = Math.atan2(y2 - y, (x2 - x) * 0.6);
                 // present only mid-arc; slips away at the edges of its run
-                const presence = Math.max(0, Math.min(0.7, Math.sin(p * Math.PI) * 1.4 - 0.25));
+                const presence = Math.max(0, Math.min(0.75, Math.sin(p * Math.PI) * 1.4 - 0.25));
+                // foam where the body breaks the water, going up or coming down
+                if (
+                  (presence > 0.35) !== (prevPresence[i] > 0.35) &&
+                  x > 0.02 && x < 0.98
+                ) {
+                  pushWake(x, Math.min(SHORE - 0.03, y + 0.05), 0.8);
+                }
+                prevPresence[i] = presence;
                 dolphinData[i * 4 + 0] = x;
                 dolphinData[i * 4 + 1] = y;
                 dolphinData[i * 4 + 2] = angle;
