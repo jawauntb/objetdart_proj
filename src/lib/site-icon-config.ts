@@ -8,6 +8,7 @@ export type SiteIconKey =
   | "atoms"
   | "beam"
   | "beyond"
+  | "birds"
   | "cells"
   | "organics"
   | "dna"
@@ -176,6 +177,19 @@ export const SITE_ICON_VISUALS = {
     accent: "#f2c56b",
     accent2: "#9c3d33",
     ink: "#ffedc9",
+  },
+  birds: {
+    title: "Birds",
+    description: "the flock as one animal",
+    path: "/birds",
+    shortName: "birds",
+    kind: "growth",
+    bg: "#10131c",
+    bg2: "#3a2d20",
+    glow: "#e7ac52",
+    accent: "#d8a463",
+    accent2: "#6f7d8c",
+    ink: "#f2ead9",
   },
   dna: {
     title: "DNA",

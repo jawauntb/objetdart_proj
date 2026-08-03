@@ -70,7 +70,7 @@ export const SCALE_BANDS: ScaleBand[] = [
   { id: "drop", label: "a drop", route: "/drop", sMin: -3.5, sMax: -1.5 },
   { id: "flowers", label: "flowers", route: "/flowers", sMin: -1.5, sMax: 0.5 },
   // The air above the garden: a wingspan is metres, a flock a hundred of them.
-  { id: "birds", label: "birds", route: null, sMin: 0.5, sMax: 2.2 },
+  { id: "birds", label: "birds", route: "/birds", sMin: 0.5, sMax: 2.2 },
   { id: "coast", label: "the coast", route: "/ocean", sMin: 2.2, sMax: 3.4 },
   // A peak stands kilometres over a valley tens of kilometres wide.
   { id: "olympus", label: "olympus", route: null, sMin: 3.4, sMax: 4.5 },

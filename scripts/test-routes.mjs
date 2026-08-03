@@ -79,6 +79,7 @@ const expectedKeys = [
   "clouds",
   "aphros",
   "flowers",
+  "birds",
   "cells",
   "dna",
   "organics",

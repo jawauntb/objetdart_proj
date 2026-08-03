@@ -31,6 +31,7 @@ export const SITE_ROUTES: SiteRouteEntry[] = [
   { key: "clouds",      icon: "clouds",   href: "/clouds",                            desc: "olympus",                      cluster: "water",     dark: true },
   { key: "aphros",      icon: "aphros",   href: "/aphros",                            desc: "play the shells",              cluster: "water" },
   { key: "flowers",     icon: "growth",   href: "/flowers",                           desc: "petals · symmetry",            cluster: "nature",    dark: true },
+  { key: "birds",       icon: "growth",   href: "/birds",                             desc: "the flock as one animal",      cluster: "nature",    dark: true },
   { key: "cells",       icon: "aphros",   href: "/cells",                             desc: "the plasm keeps its own tide", cluster: "nature",    dark: true },
   { key: "dna",         icon: "growth",   href: "/dna",                               desc: "the ladder that copies", cluster: "nature", dark: true },
   { key: "organics",    icon: "growth",   href: "/organics",                          desc: "what carbon does when it has time", cluster: "nature", dark: true },
