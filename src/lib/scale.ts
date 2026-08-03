@@ -15,13 +15,20 @@ export type ScaleBandId =
   | "quarks"
   | "atoms"
   | "molecules"
+  | "organics"
+  | "dna"
+  | "organelles"
   | "cells"
+  | "tissue"
   | "drop"
   | "flowers"
+  | "birds"
   | "coast"
+  | "olympus"
   | "atlas"
   | "earth"
   | "stars"
+  | "space"
   | "beyond"
   | "manifold";
 
@@ -44,14 +51,29 @@ export type ScaleBand = {
 export const SCALE_BANDS: ScaleBand[] = [
   { id: "quarks", label: "quarks", route: "/quarks", sMin: -19, sMax: -14 },
   { id: "atoms", label: "atoms", route: "/atoms", sMin: -14, sMax: -9.5 },
-  { id: "molecules", label: "molecules", route: "/molecules", sMin: -9.5, sMax: -7 },
-  { id: "cells", label: "cells", route: "/cells", sMin: -7, sMax: -3.5 },
+  // The life ladder. Carbon chains at ~0.9nm (hexane, glucose), a folded
+  // protein at 4-10nm, the helix 2nm across with an 11nm nucleosome, a
+  // ribosome at 25nm and a mitochondrion at 1um, a eukaryote at ~20um, an
+  // epithelial sheet a fraction of a millimetre. Four rungs where the axis
+  // used to take one step from a water molecule to a living plasm.
+  { id: "molecules", label: "molecules", route: "/molecules", sMin: -9.5, sMax: -8.8 },
+  { id: "organics", label: "organic molecules", route: null, sMin: -8.8, sMax: -8 },
+  { id: "dna", label: "dna", route: null, sMin: -8, sMax: -7.2 },
+  { id: "organelles", label: "organelles", route: null, sMin: -7.2, sMax: -5.8 },
+  { id: "cells", label: "cells", route: "/cells", sMin: -5.8, sMax: -4.4 },
+  { id: "tissue", label: "tissue", route: null, sMin: -4.4, sMax: -3.5 },
   { id: "drop", label: "a drop", route: "/drop", sMin: -3.5, sMax: -1.5 },
   { id: "flowers", label: "flowers", route: "/flowers", sMin: -1.5, sMax: 0.5 },
-  { id: "coast", label: "the coast", route: "/ocean", sMin: 0.5, sMax: 4.5 },
+  // The air above the garden: a wingspan is metres, a flock a hundred of them.
+  { id: "birds", label: "birds", route: null, sMin: 0.5, sMax: 2.2 },
+  { id: "coast", label: "the coast", route: "/ocean", sMin: 2.2, sMax: 3.4 },
+  // A peak stands kilometres over a valley tens of kilometres wide.
+  { id: "olympus", label: "olympus", route: null, sMin: 3.4, sMax: 4.5 },
   { id: "atlas", label: "the atlas", route: "/atlas/origin", sMin: 4.5, sMax: 6.5 },
   { id: "earth", label: "the earth", route: "/earth", sMin: 6.5, sMax: 9 },
-  { id: "stars", label: "the stars", route: "/stars", sMin: 9, sMax: 22 },
+  { id: "stars", label: "the stars", route: "/stars", sMin: 9, sMax: 16.5 },
+  // The nearest star is 4e16 m, a nebula 1e17-1e18, a galaxy 1e21.
+  { id: "space", label: "deep space", route: null, sMin: 16.5, sMax: 22 },
   { id: "beyond", label: "beyond", route: "/beyond", sMin: 22, sMax: 25.5 },
   { id: "manifold", label: "the manifold", route: "/manifold", sMin: 25.5, sMax: 27 },
 ];
@@ -344,24 +366,34 @@ type TravelOverride = {
 
 /**
  * The author's cosmology, stated as doors. Containment, inside → outside:
- * quarks ⊂ atoms ⊂ molecules ⊂ cells ⊂ {drop, flowers} ; drop ⊂ coast ;
- * flowers grow from the earth (the ground, the strata) ; coast and earth are
- * both ON the atlas (the map holds the land and the shore) ; the atlas
- * recedes into the stars ; the stars open onto the fold. /beyond branches
- * off the fold. Metric spans are untouched — sound and physics keep them.
+ * quarks ⊂ atoms ⊂ molecules ⊂ organics ⊂ dna ⊂ organelles ⊂ cells ⊂ tissue
+ * ⊂ {drop, flowers} ; drop ⊂ coast ; flowers grow from the earth (the ground,
+ * the strata) ; birds fly over the garden and out to the shore ; the peak
+ * stands above the fog that is the sea ; coast and earth are both ON the
+ * atlas (the map holds the land and the shore) ; the atlas recedes into the
+ * stars ; the stars thin into the galactic web ; the web opens onto the fold.
+ * /beyond branches off the fold. Metric spans stay physical — sound keeps them.
+ *
+ * The life ladder needs no overrides at all: for once part-of and smaller-than
+ * agree the whole way down, and so do the flock's neighbours (the garden below,
+ * the shore above) and the peak's (the fog below, the map above). That
+ * agreement is the tell that those bands were placed right.
  */
 const TRAVEL_OVERRIDES: Partial<Record<ScaleBandId, TravelOverride>> = {
   drop: { up: "coast" }, // a drop returns to the sea
   coast: { down: "drop" }, // and the sea gives the drop back
-  flowers: { up: "earth", down: "cells", extraDown: ["drop"] }, // petals open
-  // into cells; dew gathers on them too
+  tissue: { up: "flowers" }, // a sheet of cells belongs to what it is a sheet of
+  flowers: { up: "earth", down: "tissue", extraDown: ["drop"] }, // a petal is
+  // tissue before it is one cell; dew gathers on them too
   earth: { up: "atlas", down: "flowers" }, // the ground lies on the map;
   // things grow from it
   atlas: { up: "stars" }, // the map recedes into the sky (the planet-globe
-  // room will one day sit between them)
-  stars: { up: "manifold", down: "atlas" }, // the sky opens onto the fold
-  manifold: { down: "stars" }, // /beyond is a branch off the trunk,
-  // reachable by fork doors and received back by memory
+  // room will one day sit between them); it descends onto the peak by metric
+  stars: { down: "atlas" }, // the sky descends onto the map, and thins upward
+  // into the web by metric adjacency
+  space: { up: "manifold" }, // the web opens onto the fold; /beyond stays a
+  // branch off the trunk, reachable by fork doors and received back by memory
+  manifold: { down: "space" },
 };
 
 /** Canonical travel neighbor: mereological override, else metric adjacency. */
@@ -419,10 +451,35 @@ export function resolveDestination(
 }
 
 /**
+ * An unbuilt band is *transparent* to travel, not a wall: a hand pinching out
+ * of the plasm still reaches the garden while /tissue is only an address, and
+ * the sky still opens onto the fold before /space is a room. Walk the
+ * canonical chain past any routeless band until a built one is found.
+ *
+ * This is what lets the axis be re-cut ahead of the rooms: declaring a future
+ * band can never sever a door that works today, and each room that ships
+ * simply shortens the walk. The `seen` guard keeps a cosmology with a cycle
+ * in it from hanging the loop.
+ */
+function firstBuiltAlong(startId: ScaleBandId, dir: TravelDir): ScaleBand | null {
+  let cur: ScaleBandId | null = startId;
+  const seen = new Set<ScaleBandId>();
+  while (cur && !seen.has(cur)) {
+    seen.add(cur);
+    const band = SCALE_BANDS.find((b) => b.id === cur);
+    if (!band) return null;
+    if (band.route) return band;
+    cur = travelNeighbor(cur, dir);
+  }
+  return null;
+}
+
+/**
  * Every built door leading out of `id` in direction `dir`, resolved-first.
  * A fork (the earth holds both the atlas and the flowers; the fold holds
  * the stars and the beyond) offers its doors in this order; pressing the
  * wall takes the first, releasing and pressing again cycles to the next.
+ * Doors onto unbuilt bands resolve through them rather than disappearing.
  */
 export function travelOptions(
   id: ScaleBandId,
@@ -432,10 +489,11 @@ export function travelOptions(
   const options: ScaleBand[] = [];
   const seen = new Set<ScaleBandId>();
   const add = (b: ScaleBand | null | undefined) => {
-    if (b && b.route && b.id !== id && !seen.has(b.id)) {
-      seen.add(b.id);
-      options.push(b);
-    }
+    if (!b || b.id === id) return;
+    const built = b.route ? b : firstBuiltAlong(b.id, dir);
+    if (!built || built.id === id || seen.has(built.id)) return;
+    seen.add(built.id);
+    options.push(built);
   };
   add(resolveDestination(id, dir, enteredFrom));
   for (const doorId of structuralDoors(id, dir)) {
