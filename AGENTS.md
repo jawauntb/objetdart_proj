@@ -16,7 +16,7 @@ and static) will damage it.
    the vessel — tilt, shake, knock, flip, breath). Global bindings are fixed site-wide;
    rooms add discoveries, never private dialects or thresholds.
 3. **`docs/plans/scale-manifold-build-plan.md`** — the active build: one log-scale axis
-   from quarks to the spacetime manifold, band detents, handoff anchors, twist-lens,
+   from the quantum fields to the spacetime manifold, band detents, handoff anchors, twist-lens,
    scale-as-spectral-register. Workstreams, lanes, and the checkpoint to retreat to.
 4. **`DESIGN.md`** — what exists and why each piece looks the way it does (v2 of the
    home instrument; brand tokens; anti-patterns; known gaps).

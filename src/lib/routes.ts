@@ -36,6 +36,7 @@ export const SITE_ROUTES: SiteRouteEntry[] = [
   { key: "atoms",       icon: "plasma",   href: "/atoms",                             desc: "probability breathes around a bright nucleus", cluster: "mechanism", dark: true },
   { key: "nucleons",    icon: "plasma",   href: "/nucleons",                          desc: "the valley makes the elements", cluster: "mechanism", dark: true },
   { key: "quarks",      icon: "plasma",   href: "/quarks",                            desc: "nothing here can be alone", cluster: "mechanism", dark: true },
+  { key: "quanta",      icon: "plasma",   href: "/quanta",                            desc: "mass buys only a moment", cluster: "mechanism", dark: true },
   { key: "fire",        icon: "fire",     href: "/fire",                              desc: "the element that breathes",    cluster: "nature",    dark: true },
   { key: "earth",       icon: "earth",    href: "/earth",                             desc: "strata · seismograph · root",  cluster: "nature",    dark: true },
   { key: "growth",      icon: "growth",   href: "/growth",                            desc: "sigmoid · exponential · decay", cluster: "nature",    dark: true },
