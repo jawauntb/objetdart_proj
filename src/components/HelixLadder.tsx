@@ -17,14 +17,15 @@
  * weak a·t rungs shivering more than the g·c ones. One finger across the
  * helix unzips it — the hydrogen bonds break in order, each a tick you
  * hear and feel, and the resistance is the real bond count, so a gc-rich
- * stretch is genuinely harder to open. Let go and it re-anneals. Hold a
- * strand open and a polymerase runs the complement, playing the tune back
- * in the mirror. One finger along the helix supercoils it. Tap a rung to
- * sound its degree. Three fingers touch the world-law: drag is the
- * mutation temperature, hold dilates the clock, tap plays the whole strand
- * as its melody. Twist raises the lens to notation — the letters, the
- * transcript, the melting point. Tilt leans the ladder; a shake is a
- * mutation burst; a knock rings one rung.
+ * stretch is genuinely harder to open. Keep that finger down while the
+ * strand is open and a polymerase runs the complement, playing the tune
+ * back in the mirror. Let go and it re-anneals. One finger along the helix
+ * supercoils it. Tap a rung to sound its degree. Three fingers touch the
+ * world-law: drag is the mutation temperature, hold dilates the clock,
+ * tap plays the whole strand as its melody. Twist raises the lens to
+ * notation — the letters, the transcript, the melting point. Tilt leans
+ * the ladder; a shake is a mutation burst; a knock rings one rung. Held
+ * Enter is the same road on a keyboard.
  *
  * The strand persists in `objetdart:dna:v1` with the quiet clear at the
  * bottom. Pinch is unbound — ScaleTravel owns it (organelles above,
@@ -376,7 +377,7 @@ export default function HelixLadder() {
           }
           if (e.phase === "end") {
             dragMode = "none";
-            // let go and it re-anneals
+            // release is the only re-anneal — the unzip finger has left
             unzipTarget = 0;
             holdingOpen = false;
             polymerase = -1;
@@ -393,6 +394,13 @@ export default function HelixLadder() {
             // under exactly the same hand.
             const resist = (seq.length * 2.4) / bonds;
             unzipTarget = clamp01(unzipTarget + (Math.abs(e.dx) / Math.max(1, width)) * resist * 2.2);
+            // The unzip finger is still down: keep the ladder open and let
+            // the polymerase run. (Drag clears the hold channel in the
+            // engine, so this contact *is* the hold the guide names.)
+            if (unzipTarget > 0.06) {
+              holdingOpen = true;
+              if (polymerase < 0) polymerase = 0;
+            }
           } else {
             supercoilTarget = clamp(supercoilTarget + e.dy * 0.0025, 0.5, 2.6);
           }
@@ -474,6 +482,8 @@ export default function HelixLadder() {
         selIdx = -1;
         kbCharge = 0;
         unzipTarget = 0;
+        holdingOpen = false;
+        polymerase = -1;
         return;
       }
       if (ev.key === "ArrowDown" || ev.key === "ArrowRight") {
@@ -499,17 +509,13 @@ export default function HelixLadder() {
           kbCharge = 0.04;
           return;
         }
-        // held Enter is the keyboard's unzip — the same slow road
+        // held Enter is the keyboard's unzip — keep it open while the key
+        // is down so the polymerase can run the open strand, same as touch
         kbCharge = clamp01(kbCharge + 0.045);
         unzipTarget = kbCharge;
-        if (kbCharge >= 1) {
-          kbCharge = 0;
-          playStrand(true);
-          try {
-            haptics.bloom();
-          } catch {
-            /* noop */
-          }
+        if (kbCharge > 0.06) {
+          holdingOpen = true;
+          if (polymerase < 0) polymerase = 0;
         }
       }
     };
@@ -517,6 +523,8 @@ export default function HelixLadder() {
       if (ev.key === "Enter" || ev.key === " ") {
         kbCharge = 0;
         unzipTarget = 0;
+        holdingOpen = false;
+        polymerase = -1;
       }
     };
     wrap.addEventListener("keydown", onKeyDown);

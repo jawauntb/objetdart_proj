@@ -510,7 +510,7 @@ export const GUIDE_ROOMS: GuideRoom[] = [
     finds: [
       "a smooth vesicle is one sine, exactly — and a cristae-folded mitochondrion is a stack of partials, so you can hear how folded a thing is without looking",
       "nothing is created here: the ledger's total never moves, however you push the membrane around",
-      "gather all six organs in one plasm and the cell membrane closes around them of its own accord",
+      "gather all six organs in one plasm and the cell membrane closes around them of its own accord — when the ring settles, the plasm becomes the cell above",
     ],
     keeps: "the organs you've gathered, and how the membrane is shared between them",
   },
@@ -584,8 +584,9 @@ export const GUIDE_ROOMS: GuideRoom[] = [
       "one helix standing in the dark, where the strand and its melody are the same object seen twice — four bases, four scale degrees, and the tune reads back into the sequence it came from.",
     moves: [
       "drag across the helix → unzips it; the hydrogen bonds break in order, each one a tick, and a gc-rich stretch is genuinely harder to pull",
+      "keep the finger down while it is open → a polymerase runs the complement and plays the tune back in the mirror",
       "let go → the ladder re-anneals",
-      "hold while it is open → a polymerase runs the complement and plays the tune back in the mirror",
+      "held enter → the same unzip and copy on a keyboard; release and it closes",
       "drag along the helix → supercoils it, winding turns into the length",
       "tap a rung → sounds that base's degree",
       "three fingers drag → the mutation temperature; the world begins rewriting the code on its own",
