@@ -13,6 +13,7 @@ export type SiteIconKey =
   | "coast"
   | "organics"
   | "dna"
+  | "organelles"
   | "charts"
   | "molecules"
   | "dither"
@@ -193,6 +194,19 @@ export const SITE_ICON_VISUALS = {
     accent: "#f2c56b",
     accent2: "#9c3d33",
     ink: "#ffedc9",
+  },
+  organelles: {
+    title: "Organelles",
+    description: "the organs before the body",
+    path: "/organelles",
+    shortName: "organelles",
+    kind: "circularity",
+    bg: "#080a0a",
+    bg2: "#1c2622",
+    glow: "#aad6be",
+    accent: "#86baa8",
+    accent2: "#e28c6c",
+    ink: "#e9f4ee",
   },
   dna: {
     title: "DNA",
