@@ -21,12 +21,13 @@
  * pay, in the same frame. Circle a finger on one to wind its folds deeper,
  * the other way to let them out. Dwell on open plasm and the organ the cell
  * is still missing condenses there; gather all six and the cell membrane
- * closes around them of its own accord, which is the handoff. Hold the
- * nucleus to the ceremony and it opens onto the helix within — the door
- * down. Twist raises the lens to the ledger, where the budget is drawn as
- * shares of one constant total. Three fingers hold the world-law: drag is
- * the streaming rate, hold dilates the clock, tap is the tutti. Tilt pours
- * the plasm; a shake churns it; a knock rings the nearest organ.
+ * closes around them of its own accord — when the ring settles the plasm
+ * becomes the cell above (the handoff up). Hold the nucleus to the ceremony
+ * and it opens onto the helix within — the door down. Twist raises the lens
+ * to the ledger, where the budget is drawn as shares of one constant total.
+ * Three fingers hold the world-law: drag is the streaming rate, hold dilates
+ * the clock, tap is the tutti. Tilt pours the plasm; a shake churns it; a
+ * knock rings the nearest organ.
  *
  * Persists in `objetdart:organelles:v1` with the quiet clear at the bottom.
  * Pinch is unbound — ScaleTravel owns it (cells above, dna below).
@@ -144,7 +145,10 @@ export default function OrganellesPlasm() {
     let lastTickAt = 0;
     let closing = 0; // the cell membrane drawing itself around the set
     let closed = false;
+    /** earned this visit — restored full sets do not auto-travel */
+    let earnedClose = false;
     let leaving = false;
+    let leaveGlow = 0;
     const lit = new Float32Array(MAX_ORGANELLES);
     const vel = new Float32Array(MAX_ORGANELLES * 2);
 
@@ -297,6 +301,29 @@ export default function OrganellesPlasm() {
       }
       void o;
       window.setTimeout(() => router.push("/dna"), 420);
+    };
+
+    /**
+     * The membrane has finished closing — the plasm is a cell, and the band
+     * above takes it. Same scale-session handoff as the door down.
+     */
+    const intoTheCell = () => {
+      if (leaving) return;
+      leaving = true;
+      leaveGlow = 1;
+      try {
+        haptics.crossing();
+        audio.bell();
+      } catch {
+        /* noop */
+      }
+      try {
+        // mid of the cells band (−5.8 … −4.4), as intoTheNucleus lands mid-dna
+        window.sessionStorage.setItem(SCALE_S_KEY, String(-5.1));
+      } catch {
+        /* noop */
+      }
+      window.setTimeout(() => router.push("/cells"), 420);
     };
 
     // ——— canvas ———
@@ -634,10 +661,12 @@ export default function OrganellesPlasm() {
       const t = audio.getAudioTime() ?? now / 1000;
       const breath = reduced ? 0.5 : Math.sin(t * Math.PI * 2 * 0.14) * 0.5 + 0.5;
 
-      // the cell membrane closes around a full set, of its own accord
+      // the cell membrane closes around a full set, of its own accord —
+      // and when that ring settles, the plasm becomes the cell above
       const full = hasFullSet(list);
       if (full && !closed) {
         closed = true;
+        earnedClose = true;
         try {
           audio.bell();
           haptics.bloom();
@@ -645,8 +674,13 @@ export default function OrganellesPlasm() {
           /* noop */
         }
       }
-      if (!full) closed = false;
+      if (!full) {
+        closed = false;
+        earnedClose = false;
+      }
       closing += ((closed ? 1 : 0) - closing) * Math.min(1, dt * 1.4);
+      if (leaveGlow > 0) leaveGlow = Math.max(0, leaveGlow - dt * 2.2);
+      if (earnedClose && closing > 0.98 && !leaving) intoTheCell();
 
       // the plasm streams and carries its organs with it
       if (!reduced) {
@@ -706,11 +740,11 @@ export default function OrganellesPlasm() {
         }
       }
 
-      // the cell membrane, closing
+      // the cell membrane, closing — and brightening as the handoff lands
       if (closing > 0.01) {
         const r = Math.min(width, height) * 0.44;
-        ctx.strokeStyle = `rgba(170, 214, 190, ${0.1 + closing * 0.28})`;
-        ctx.lineWidth = 1 + closing * 1.6;
+        ctx.strokeStyle = `rgba(170, 214, 190, ${0.1 + closing * 0.28 + leaveGlow * 0.5})`;
+        ctx.lineWidth = 1 + closing * 1.6 + leaveGlow * 1.4;
         ctx.beginPath();
         ctx.arc(width / 2, height / 2, r * (0.92 + breath * 0.02), -Math.PI / 2, -Math.PI / 2 + closing * Math.PI * 2);
         ctx.stroke();
