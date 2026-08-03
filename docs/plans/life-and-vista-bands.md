@@ -174,11 +174,16 @@ sheet sound like a chord; a break in the sheet is a dissonance you can hear
 before you can see it.
 
 **Material.** A few hundred cells as a soft-body sheet — Verlet constraints on
-the GPU-friendly side, rendered as one instanced pass. Stroke it and cells
-divide along the stroke. Pinch and the sheet invaginates, which is gastrulation
-and also just *a beautiful thing a sheet does*. Let it run and the sheet
-differentiates by position; hold it and the differentiation freezes. Its
-ceiling opens onto the petal.
+a fixed timestep with an accumulator, so the sheet is the same sheet at 60 and
+120 Hz, rendered as batched passes over typed arrays. Stroke it and cells
+divide along the stroke, each daughter taking half the mother's area. A
+one-finger dwell draws the sheet in at that point and the sheet invaginates,
+which is gastrulation and also just *a beautiful thing a sheet does* — a dwell
+rather than a pinch, because pinch belongs to `ScaleTravel` in every room. Held
+past the ceremony tier the pit seals into a second layer. Let it run and the
+sheet differentiates by position as a front sweeps the morphogen; a three-finger
+hold dilates the clock and the front visibly stalls. Its ceiling opens onto the
+petal.
 
 ### `/birds` — the flock as one animal
 
