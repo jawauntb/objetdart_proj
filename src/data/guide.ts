@@ -987,6 +987,7 @@ export const GUIDE_ROOMS: GuideRoom[] = [
       "each of the nine microscopic species only fades in at its own depth, so diving in is genuinely discovering",
       "pulling a droplet off takes real force — speed, stretch, and size all have to agree at once",
       "a mouse hovering near the bead is felt before it lands: the surface leans toward the cursor and the life inside notices",
+      "left alone the water keeps trembling and catching a draught, dust keeps settling into it, and its bacteria go on dividing",
     ],
   },
   {

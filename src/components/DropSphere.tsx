@@ -36,6 +36,7 @@ const smooth = (e0: number, e1: number, x: number) => {
 };
 
 const MAX_DROPS = 5;
+const MIC_CAP = 26; // per-bead ceiling for idle-grown life (motes + division)
 
 // ── Microscopic life ─────────────────────────────────────────────────────
 type Species =
@@ -915,6 +916,91 @@ export default function DropSphere() {
     let lastGestureAt = performance.now();
     let lastGlimmerPokeAt = 0;
 
+    // ── idle life: the drop is never off ─────────────────────────────
+    // Water left alone still trembles (evaporation stirs the meniscus),
+    // catches a draught, gathers dust, and its bacteria go on dividing.
+    // One jittered scheduler on warped sim time — riding the same
+    // timeScale as everything else, so the three-finger hold slows the
+    // room's idle life along with its water — picks among the three,
+    // weighted like /ocean's weather (common gust/dust, rare division,
+    // the one that leaves permanent state). The whole thing pauses for
+    // free: step() only runs while the tab is visible (see the rAF
+    // visibilitychange guard below), so a hidden tab schedules nothing.
+    let simTime = 0; // advances by warped dt — dilates with everything else
+    let nextIdleAt = 5 + Math.random() * 6;
+
+    const fireDraught = () => {
+      const drops = dropsRef.current;
+      if (drops.length === 0) return;
+      const amt = reduceRef.current ? 0.35 : 1;
+      const ang = rand(0, TAU);
+      const cx = Math.cos(ang), cy = Math.sin(ang);
+      for (const d of drops) {
+        d.vx += cx * 9 * amt;
+        d.vy += cy * 7 * amt;
+        poke(d, ang + Math.PI, 0.032 * amt);
+      }
+      try { audioRef.current?.ripple(0.12); } catch { /* noop */ }
+    };
+
+    const spawnDust = () => {
+      const drops = dropsRef.current;
+      if (drops.length === 0) return;
+      let d = drops[0];
+      for (const o of drops) if (o.r > d.r) d = o;
+      if (d.mic.length >= MIC_CAP) return;
+      // dust settles at the meniscus rim and drifts inward
+      const motes = d.mic.filter((m) => m.sp === "mote");
+      if (motes.length >= 10) {
+        const idx = d.mic.indexOf(motes[0]);
+        if (idx >= 0) d.mic.splice(idx, 1);
+      }
+      const a = rand(0, TAU);
+      const rr = rand(0.9, 0.98);
+      d.mic.push({
+        sp: "mote",
+        x: Math.cos(a) * rr,
+        y: Math.sin(a) * rr,
+        depth: Math.random(),
+        heading: a + Math.PI + rand(-0.4, 0.4),
+        size: SPECIES.mote.size * rand(0.8, 1.3),
+        phase: Math.random() * TAU,
+        spin: 0,
+        seed: Math.random() * 1000,
+        dart: 0,
+      });
+    };
+
+    const fireDivision = () => {
+      for (const d of dropsRef.current) {
+        if (d.mic.length >= MIC_CAP) continue;
+        const bacteria = d.mic.filter((m) => m.sp === "bacterium");
+        if (bacteria.length === 0) continue;
+        const parent = bacteria[Math.floor(Math.random() * bacteria.length)];
+        const a = rand(0, TAU);
+        const off = parent.size * 1.3;
+        d.mic.push({
+          ...parent,
+          x: parent.x + Math.cos(a) * off,
+          y: parent.y + Math.sin(a) * off,
+          heading: a,
+          seed: Math.random() * 1000,
+          phase: Math.random() * TAU,
+          dart: 0,
+        });
+        parent.x -= Math.cos(a) * off * 0.4;
+        parent.y -= Math.sin(a) * off * 0.4;
+        break; // one division per tick — growth is gradual, never a bloom
+      }
+    };
+
+    const fireIdleEvent = () => {
+      const roll = Math.random();
+      if (roll < 0.45) fireDraught();
+      else if (roll < 0.8) spawnDust();
+      else fireDivision();
+    };
+
     const step = (dt: number, time: number) => {
       const reduced = reduceRef.current;
       const drops = dropsRef.current;
@@ -936,10 +1022,17 @@ export default function DropSphere() {
       // gravity acceleration (px/s²): water runs downhill toward the low side.
       const G = reduced ? 260 : 720;
 
+      // evaporation tremor: a permanent, tiny convective drive on every
+      // surface mode, so the meniscus is never glass-still even at rest —
+      // a few sines per bead, effectively free on a loop that already runs
+      const tremor = reduced ? 0 : 0.024;
       for (const d of drops) {
         // surface-tension modes: damped harmonic springs → ring and settle
         for (const m of d.modes) {
           m.v += (-m.omega * m.omega * m.a - 2 * m.damp * m.v) * dt;
+          if (tremor > 0) {
+            m.v += Math.sin(simTime * (0.5 + m.k * 0.09) + d.id * 1.7 + m.k * 2.3) * tremor * dt;
+          }
           m.a += m.v * dt;
         }
         d.bob += dt * (reduced ? 0.3 : 0.8) * (performance.now() < bobUntil ? bobFactor : 1);
@@ -1030,6 +1123,14 @@ export default function DropSphere() {
             m.heading = n + Math.PI + rand(-0.5, 0.5);
           }
         }
+      }
+
+      // idle life scheduler — jittered like /ocean's weather; only ever
+      // reached while step() is running, which is only while visible
+      simTime += dt;
+      if (simTime > nextIdleAt) {
+        nextIdleAt = simTime + 9 + Math.random() * 8;
+        fireIdleEvent();
       }
     };
 
@@ -1239,6 +1340,19 @@ export default function DropSphere() {
       raf = requestAnimationFrame(draw);
     };
     raf = requestAnimationFrame(draw);
+    // an unwatched bead costs nothing: the loop stops with the tab (so the
+    // idle scheduler above never even runs while hidden) and picks the
+    // clock back up where it left off, exactly as /ocean's weather does
+    const onVisibility = () => {
+      if (document.hidden) {
+        cancelAnimationFrame(raf);
+        raf = 0;
+      } else if (!raf) {
+        last = performance.now();
+        raf = requestAnimationFrame(draw);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
 
     // the desktop reading of pan2: a trackpad's two fingers arrive as wheel,
     // so scrolling down must sink the lens exactly as dragging down does.
@@ -1713,6 +1827,7 @@ export default function DropSphere() {
 
     return () => {
       cancelAnimationFrame(raf);
+      document.removeEventListener("visibilitychange", onVisibility);
       obs.disconnect();
       window.removeEventListener("resize", resize);
       canvas.removeEventListener("wheel", onWheel);
