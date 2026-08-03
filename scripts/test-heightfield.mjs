@@ -61,6 +61,53 @@ const spread = (n, r) => Array.from({ length: n }, () => (rng() - 0.5) * r);
   assert.deepEqual(F.seedOffset(7), F.seedOffset(7), "a seed's offset is a fact about the seed");
 }
 
+// —— horns are a fact about the seed ———————————————————————————————
+// The bug: horns re-drawn every tap, or a cache that freezes the first
+// seed's horns into every later mountain.
+{
+  const hornsA = F.hornsForSeed(0xbeef);
+  const hornsB = F.hornsForSeed(0xbeef);
+  assert.deepEqual(hornsA, hornsB, "the same seed always yields the same horns");
+  const hornsC = F.hornsForSeed(0xbeee);
+  const same =
+    hornsA.length === hornsC.length &&
+    hornsA.every((h, i) => {
+      const c = hornsC[i];
+      return (
+        Math.abs(h.cx - c.cx) < 1e-12 &&
+        Math.abs(h.cz - c.cz) < 1e-12 &&
+        Math.abs(h.amp - c.amp) < 1e-12 &&
+        Math.abs(h.radius - c.radius) < 1e-12
+      );
+    });
+  assert.ok(!same, "a different seed is a different horn set — centres, amps, or radii move");
+  assert.deepEqual(F.hornsForSeed(0xbeef), hornsA, "a seed revisited keeps its own horns");
+
+  for (const seed of [1, 0xbeef, 42, 0x5eed]) {
+    const horns = F.hornsForSeed(seed);
+    assert.equal(horns.length, F.HORN_COUNT, "the seed places exactly the designed horn count");
+    for (const h of horns) {
+      const r = Math.hypot(h.cx, h.cz);
+      assert.ok(
+        r >= F.HORN_RING_INNER_KM && r <= F.HORN_RING_OUTER_KM,
+        `seed ${seed}: each horn sits on the ring (${r} km from origin)`,
+      );
+      assert.ok(h.amp > 0 && h.amp <= F.HORN_AMP_KM, `seed ${seed}: horn amplitude is bounded`);
+      assert.ok(h.radius > 0 && h.aniso > 0, `seed ${seed}: horn shape stays physical`);
+    }
+    for (let i = 0; i < horns.length; i++) {
+      for (let j = i + 1; j < horns.length; j++) {
+        const sep = Math.hypot(horns[i].cx - horns[j].cx, horns[i].cz - horns[j].cz);
+        assert.ok(
+          sep >= F.HORN_MIN_SEP_KM - 1e-9,
+          `seed ${seed}: horns do not stack on each other (${sep} km apart)`,
+        );
+      }
+    }
+  }
+  assert.ok(F.HORN_AMP_KM <= F.SUMMIT_KM, "horn amplitude stays inside the summit cone's scale");
+}
+
 // —— the noise basis, and its derivative ————————————————————————
 // This is the foundation the terrain normal is built on. The quintic fade
 // is exactly differentiable everywhere, so here the tolerance is tight and
@@ -134,11 +181,66 @@ const spread = (n, r) => Array.from({ length: n }, () => (rng() - 0.5) * r);
   assert.ok(worst < 5e-3, `fbm gradient survives the octave chain (worst ${worst})`);
 }
 
+// —— the horn field is smooth: its gradient matches finite differences ————
+// The bug: a horn term copied without the chain rule, or an aggregate field
+// whose value and gradient are accidentally computed from different horns.
+{
+  const H = 1e-4;
+  for (const seed of [1, 0xbeef, 0x5eed]) {
+    let checked = 0;
+    let worst = 0;
+    for (let i = 0; i < 800; i++) {
+      const x = (rng() - 0.5) * 40;
+      const z = (rng() - 0.5) * 40;
+      const g = F.hornsAt(x, z, seed);
+      checked++;
+      const fdx = (F.hornsAt(x + H, z, seed).v - F.hornsAt(x - H, z, seed).v) / (2 * H);
+      const fdz = (F.hornsAt(x, z + H, seed).v - F.hornsAt(x, z - H, seed).v) / (2 * H);
+      worst = Math.max(worst, Math.abs(fdx - g.dx), Math.abs(fdz - g.dy));
+    }
+    assert.ok(
+      worst < 5e-3,
+      `seed ${seed}: horn ∂h agrees with finite differences (worst ${worst})`,
+    );
+    assert.ok(checked > 750, "the horn field was actually sampled");
+  }
+
+  // Path integral of the analytic horn gradient — horns are smooth, so no
+  // crease skip can excuse disagreement with endpoint height.
+  for (const seed of [1, 0xbeef]) {
+    let worstRel = 0;
+    for (let k = 0; k < 20; k++) {
+      const x0 = (rng() - 0.5) * 30;
+      const z0 = (rng() - 0.5) * 30;
+      const a = rng() * Math.PI * 2;
+      const L = 0.5 + rng() * 1.2;
+      const dx = Math.cos(a);
+      const dz = Math.sin(a);
+      const N = 3000;
+      const ds = L / N;
+      let integral = 0;
+      for (let i = 0; i < N; i++) {
+        const s = (i + 0.5) * ds;
+        const g = F.hornsAt(x0 + dx * s, z0 + dz * s, seed);
+        integral += (g.dx * dx + g.dy * dz) * ds;
+      }
+      const delta = F.hornsAt(x0 + dx * L, z0 + dz * L, seed).v - F.hornsAt(x0, z0, seed).v;
+      const travel = Math.max(0.02, Math.abs(delta));
+      worstRel = Math.max(worstRel, Math.abs(integral - delta) / travel);
+    }
+    assert.ok(
+      worstRel < 0.02,
+      `seed ${seed}: ∫∇h_horn·dl equals the horn height climbed (worst relative ${worstRel})`,
+    );
+  }
+}
+
 // —— THE ONE THAT MATTERS: the analytic terrain gradient ————————————
 // The bug: a missing frequency factor, a dropped product-rule term, or a
-// rotation transposed the wrong way in the octave chain. Any of those
-// leaves the height field perfect and the lighting wrong everywhere, in a
-// way no screenshot reads as an error — it just looks slightly plastic.
+// rotation transposed the wrong way in the octave chain, including the horn
+// sum now folded into groundAt. Any of those leaves the height field perfect
+// and the lighting wrong everywhere, in a way no screenshot reads as an
+// error — it just looks slightly plastic.
 //
 // The ridged terrain is genuinely non-differentiable on an arête, so a
 // pointwise finite difference straddling one is entitled to disagree. The
@@ -239,7 +341,8 @@ for (const seed of [1, 0xbeef, 42]) {
   // never fires and the budget is spent climbing through empty sky.
   assert.ok(hi > F.HEIGHT_MAX_KM * 0.4, `seed ${seed}: the range actually reaches up (${hi})`);
   assert.ok(
-    F.eyeAltitude(seed) > F.HEIGHT_MAX_KM * 0.55,
+    // taller ceiling from ridge amp + horns; the outcrop is unchanged, so the summit's fraction of HEIGHT_MAX dips
+    F.eyeAltitude(seed) > F.HEIGHT_MAX_KM * 0.5,
     `seed ${seed}: the summit is a summit (eye at ${F.eyeAltitude(seed)})`,
   );
 }
@@ -578,6 +681,86 @@ for (let s = 0; s < 60; s++) {
   );
 }
 
+// —— cornices and materials: wind-shaped snow over rock and ice ——————
+// The bugs: cornices on both sides of a ridge, material weights that do
+// not partition the surface, or a glacier rule that ignores valley shape.
+{
+  const wind = F.windVector(0xbeef);
+  assert.ok(Math.abs(Math.hypot(wind[0], wind[1]) - 1) < 1e-12, "wind is a unit vector in the horizontal plane");
+  assert.deepEqual(F.windVector(0xbeef), wind, "wind is a fact about the seed");
+
+  const windward = F.corniceStrength(0, 1, 0, [1, 0]);
+  const lee = F.corniceStrength(0, 1, 0, [-1, 0]);
+  assert.ok(windward < 0.05, `windward face is bare (${windward})`);
+  assert.ok(lee > 0.95, `lee face holds snow (${lee})`);
+  assert.equal(F.corniceStrength(F.CORNICE_CREASE_HI + 1e-4, 1, 0, [-1, 0]), 0, "a rounded ridge has no cornice");
+  assert.ok(Math.abs(F.corniceStrength(0, 0, 0, [-1, 0])) < 1e-12, "a flat summit has no cornice");
+  assert.ok(F.corniceStrength(0, F.CORNICE_SLOPE_LO * 0.5, 0, [-1, 0]) < 0.05, "gentle slopes do not cornice");
+
+  const season = 0.42;
+  const snowline = F.snowlineKm(season);
+  const windW = [-1, 0];
+  const snowDom = F.materialFromGround(
+    { h: snowline + 0.25, dhdx: 0.05, dhdz: 0.05, crease: 0.35, foldMargin: 0.2, ridge: 0.8 },
+    season,
+    windW,
+  );
+  assert.equal(snowDom.kind, "snow", "high flat ridge classifies as snow");
+  assert.ok(snowDom.snow > snowDom.rock && snowDom.snow > snowDom.glacier, "high flat ridge is snow-dominant");
+
+  const rockDom = F.materialFromGround(
+    { h: snowline + 0.3, dhdx: 1.2, dhdz: 0.4, crease: 0.5, foldMargin: 0.15, ridge: 0.85 },
+    season,
+    windW,
+  );
+  assert.equal(rockDom.kind, "rock", "steep high face classifies as rock");
+  assert.ok(rockDom.rock > rockDom.snow && rockDom.rock > rockDom.glacier, "steep high face is rock-dominant");
+
+  const glacierDom = F.materialFromGround(
+    { h: snowline - F.GLACIER_BELOW_SNOWLINE_KM * 0.5, dhdx: 0.04, dhdz: 0.03, crease: 0.3, foldMargin: 0.25, ridge: 0.08 },
+    season,
+    windW,
+  );
+  assert.equal(glacierDom.kind, "glacier", "low gentle valley classifies as glacier");
+  assert.ok(
+    glacierDom.glacier > glacierDom.rock && glacierDom.glacier > glacierDom.snow,
+    "low gentle valley is glacier-dominant",
+  );
+
+  for (const m of [snowDom, rockDom, glacierDom]) {
+    const sum = m.rock + m.snow + m.glacier;
+    assert.ok(Math.abs(sum - 1) < 1e-12, `synthetic material weights partition the face (${sum})`);
+  }
+
+  for (let s = 0; s <= 2; s += 0.13) {
+    const m0 = F.materialAt(3.1, -2.4, 0xbeef, s);
+    const m1 = F.materialAt(3.1, -2.4, 0xbeef, s + 1);
+    assert.equal(m0.kind, m1.kind, "materialAt is periodic in season kind (period 1)");
+    for (const key of ["rock", "snow", "glacier", "cornice"]) {
+      assert.ok(
+        Math.abs(m0[key] - m1[key]) < 1e-10,
+        `materialAt ${key} is periodic in season (period 1)`,
+      );
+    }
+  }
+
+  let roundedChecked = 0;
+  for (let i = 0; i < 300; i++) {
+    const x = (rng() - 0.5) * 20;
+    const z = (rng() - 0.5) * 20;
+    const m = F.materialAt(x, z, 0xbeef, season);
+    assert.ok(m.cornice >= 0 && m.cornice <= 1, "cornice stays in [0,1]");
+    const sum = m.rock + m.snow + m.glacier;
+    assert.ok(Math.abs(sum - 1) < 1e-6, `rock+snow+glacier partition the face (${sum})`);
+    const g = F.groundAt(x, z, 0xbeef);
+    if (g.crease > F.CORNICE_CREASE_HI) {
+      roundedChecked++;
+      assert.ok(m.cornice < 1e-12, "rounded ridges shed cornice");
+    }
+  }
+  assert.ok(roundedChecked > 40, `rounded ridges were actually sampled (${roundedChecked})`);
+}
+
 // —— the call, and what answers ————————————————————————————————
 {
   // Computable by hand: 343 m out and 343 m back is exactly two seconds.
@@ -650,5 +833,5 @@ for (let s = 0; s < 60; s++) {
 }
 
 console.log(
-  "heightfield ok: analytic ∂h agreeing with finite differences off the creases over 4 seeds, the ridge fold C⁰ but not C¹, the range bounded so the marcher's ceiling exit is sound, fog optical depth matching both hand-computable cases and monotone in path length, raising the fog only ever drowning more land, 64 steps never exceeded with a vertical hit landing where the height says, the sun palette continuous and never darkening as it climbs, and every echo bounded in time",
+  "heightfield ok: analytic ∂h agreeing with finite differences off the creases over 4 seeds, horn ∂h smooth and path-integrable, horns deterministic on the ring with separation, the ridge fold C⁰ but not C¹, the range bounded including horns so the marcher's ceiling exit is sound, cornice lee/windward asymmetry and glacier material classification, fog optical depth matching both hand-computable cases and monotone in path length, raising the fog only ever drowning more land, 64 steps never exceeded with a vertical hit landing where the height says, the sun palette continuous and never darkening as it climbs, and every echo bounded in time",
 );

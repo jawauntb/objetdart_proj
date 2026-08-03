@@ -83,6 +83,15 @@ function fract(v: number): number {
   return v - Math.floor(v);
 }
 
+function clamp01(v: number): number {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
+function smoothstep(e0: number, e1: number, x: number): number {
+  const t = clamp01((x - e0) / (e1 - e0));
+  return t * t * (3 - 2 * t);
+}
+
 export function hash21(x: number, y: number): number {
   let px = fract(x * 123.34);
   let py = fract(y * 456.21);
@@ -146,7 +155,7 @@ export const BASE_FREQ = 1 / 6.1;
 export const SWELL_RATIO = 0.34;
 export const SWELL_OCTAVES = 3;
 /** Peak-to-trough of the ridge system. */
-export const RIDGE_AMP_KM = 1.52;
+export const RIDGE_AMP_KM = 1.95;
 /**
  * The outcrop you are standing on, and how far it reaches. Narrow on
  * purpose: the ground has to fall away from under the eye within a hundred
@@ -164,16 +173,144 @@ export const SUMMIT_EPS_KM = 0.02;
 /** Eye height above the ground at the origin. */
 export const EYE_KM = 0.0017;
 /** The envelope the massif applies to the ridges: never zero, never over 1. */
-export const ENVELOPE_FLOOR = 0.42;
+export const ENVELOPE_FLOOR = 0.32;
+
+export type Field = { v: number; dx: number; dy: number };
+
+export const HORN_COUNT = 5;
+export const HORN_SALT = 0x40a1;
+/** Peak add on a ridge — tall enough to tower the inversion as a real horn. */
+export const HORN_AMP_KM = 0.95;
+export const HORN_AMP_JITTER = 0.22;
+/** Narrow skirt so the silhouette reads as a pyramid, not a swell. */
+export const HORN_RADIUS_KM = 0.72;
+export const HORN_RADIUS_JITTER = 0.16;
+export const HORN_EPS_KM = 0.014;
+export const HORN_ANISO = 1.72;
+export const HORN_POWER = 1.55;
+export const HORN_RING_INNER_KM = 2.4;
+export const HORN_RING_OUTER_KM = 7.8;
+export const HORN_MIN_SEP_KM = 1.6;
+
+export const CORNICE_CREASE_LO = 0.04;
+export const CORNICE_CREASE_HI = 0.20;
+export const CORNICE_SLOPE_LO = 0.38;
+export const CORNICE_SLOPE_HI = 0.95;
+export const WIND_SALT = 0x771d;
+
+export const GLACIER_BELOW_SNOWLINE_KM = 0.24;
+export const GLACIER_BAND_KM = 0.28;
+export const GLACIER_VALLEY = 0.48;
+export const GLACIER_SLOPE_MAX = 0.36;
+export const SNOW_HOLD_KM = 0.30;
+export const SNOW_SCOUR_ABOVE_KM = 0.52;
+export const SNOW_SCOUR_WIDTH_KM = 0.22;
+export const SNOW_SLOPE_K = 2.6;
 
 /**
  * No ground anywhere can stand higher than this. Load-bearing: the marcher
  * abandons any ray that is above it and still climbing, so if the bound
- * were wrong the far peaks would be silently clipped out of the sky.
+ * were wrong the far peaks would be silently clipped out of the sky. Horns
+ * spend the summit's headroom rather than expanding the covenant:
+ * HORN_AMP_KM (0.95) ≤ SUMMIT_KM (1.15), and the horn ring never carries
+ * the full outcrop, so ridge + horn stays under ridge + summit.
  */
 export const HEIGHT_MAX_KM = RIDGE_AMP_KM + SUMMIT_KM;
 
-export type Field = { v: number; dx: number; dy: number };
+export type Horn = {
+  cx: number;
+  cz: number;
+  amp: number;
+  radius: number;
+  angle: number;
+  aniso: number;
+};
+
+let hornsMemoSeed = NaN;
+let hornsMemo: Horn[] = [];
+
+export function hornsForSeed(seed: number): Horn[] {
+  if (seed === hornsMemoSeed) return hornsMemo;
+  // Hold an empty list while candidates are probed, so heightAt during
+  // placement cannot recurse into this function and cannot credit horns
+  // that have not been chosen yet.
+  hornsMemoSeed = seed;
+  hornsMemo = [];
+  const rng = mulberry32(hashSeed(seed, HORN_SALT));
+  const horns: Horn[] = [];
+  for (let i = 0; i < HORN_COUNT; i++) {
+    let cx = 0;
+    let cz = 0;
+    let bestH = -Infinity;
+    // Several candidates per slot; keep the one that already stands on a
+    // ridge. A horn in a valley is just a hill — the Matterhorn grows from
+    // an arête.
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const bearing = ((i + 0.5) * Math.PI * 2) / HORN_COUNT + (rng() - 0.5) * 0.7;
+      const ring =
+        HORN_RING_INNER_KM + rng() * (HORN_RING_OUTER_KM - HORN_RING_INNER_KM);
+      const tx = Math.cos(bearing) * ring;
+      const tz = Math.sin(bearing) * ring;
+      const clear = horns.every((h) => Math.hypot(tx - h.cx, tz - h.cz) >= HORN_MIN_SEP_KM);
+      if (!clear && attempt < 9) continue;
+      // Ridge + summit only (horns memo is empty above) — prefer a crest.
+      const probe = heightAt(tx, tz, seed, OCTAVES_MARCH);
+      if (probe >= bestH) {
+        bestH = probe;
+        cx = tx;
+        cz = tz;
+      }
+    }
+    horns.push({
+      cx,
+      cz,
+      amp: HORN_AMP_KM - rng() * HORN_AMP_JITTER,
+      radius: HORN_RADIUS_KM + (rng() - 0.5) * 2 * HORN_RADIUS_JITTER,
+      angle: rng() * Math.PI,
+      aniso: HORN_ANISO * (0.92 + rng() * 0.16),
+    });
+  }
+  hornsMemo = horns;
+  return hornsMemo;
+}
+
+/**
+ * A soft-L1 horn: the glacial pyramid, sharpened without ever losing a
+ * derivative. The crease is devotional in the picture, operational in the
+ * chain rule, oceanic in the way every face drains toward a bowl.
+ */
+export function hornField(x: number, z: number, horn: Horn): Field {
+  const qx = x - horn.cx;
+  const qz = z - horn.cz;
+  const ca = Math.cos(horn.angle);
+  const sa = Math.sin(horn.angle);
+  const u = ca * qx - sa * qz;
+  const v = sa * qx + ca * qz;
+  const sx = horn.radius;
+  const sz = horn.radius / horn.aniso;
+  const au = Math.sqrt(u * u + HORN_EPS_KM * HORN_EPS_KM);
+  const av = Math.sqrt(v * v + HORN_EPS_KM * HORN_EPS_KM);
+  const invRoot2 = 1 / Math.sqrt(2);
+  const rho = (au / sx + av / sz) * invRoot2;
+  const h = horn.amp * Math.exp(-Math.pow(rho, HORN_POWER));
+  const dhdr = -h * HORN_POWER * Math.pow(rho, HORN_POWER - 1);
+  const dhdu = dhdr * (u / au) * (invRoot2 / sx);
+  const dhdv = dhdr * (v / av) * (invRoot2 / sz);
+  return { v: h, dx: dhdu * ca + dhdv * sa, dy: -dhdu * sa + dhdv * ca };
+}
+
+export function hornsAt(x: number, z: number, seed: number): Field {
+  let v = 0;
+  let dx = 0;
+  let dy = 0;
+  for (const horn of hornsForSeed(seed)) {
+    const h = hornField(x, z, horn);
+    v += h.v;
+    dx += h.dx;
+    dy += h.dy;
+  }
+  return { v, dx, dy };
+}
 
 /** Smooth fbm in [0,1] with its exact gradient (world-space per unit p). */
 export function smoothFbm(x: number, y: number, octaves: number): Field {
@@ -285,6 +422,8 @@ export type Ground = {
   crease: number;
   /** Nearness to any fold at all — where the surface has no normal. */
   foldMargin: number;
+  /** Ridged fbm value in [0,1]; low ground is the valley bowl cue. */
+  ridge: number;
 };
 
 /**
@@ -317,13 +456,15 @@ export function groundAt(x: number, z: number, seed: number, octaves = OCTAVES_S
   const g = SUMMIT_KM * Math.exp(-s / SUMMIT_RADIUS_KM);
   const dGx = (-g / SUMMIT_RADIUS_KM) * (x / s);
   const dGz = (-g / SUMMIT_RADIUS_KM) * (z / s);
+  const horns = hornsAt(x, z, seed);
 
   return {
-    h: hR + g,
-    dhdx: dRx + dGx,
-    dhdz: dRz + dGz,
+    h: hR + g + horns.v,
+    dhdx: dRx + dGx + horns.dx,
+    dhdz: dRz + dGz + horns.dy,
     crease: r.crease,
     foldMargin: r.foldMargin,
+    ridge: r.v,
   };
 }
 
@@ -443,11 +584,11 @@ export function submergedDepth(
 
 /** How the resting fog level is found: a quantile of the land around you. */
 export const FOG_SAMPLES = 96;
-export const FOG_QUANTILE = 0.62;
+export const FOG_QUANTILE = 0.58;
 export const FOG_SAMPLE_INNER_KM = 1.1;
 export const FOG_SAMPLE_OUTER_KM = 9;
 /** How far one long breath draws the fog down from its rest. */
-export const FOG_BREATH_KM = 0.55;
+export const FOG_BREATH_KM = 0.65;
 
 /**
  * Where the fog lies when nobody is breathing on it.
@@ -455,7 +596,7 @@ export const FOG_BREATH_KM = 0.55;
  * Not a constant: a constant altitude would drown one seed's range
  * completely and leave the next one bare, because every seed's massif sits
  * at its own height. An inversion layer fills valleys to a level, so the
- * room finds that level the same way — the 62nd percentile of the land in
+ * room finds that level the same way — the 65th percentile of the land in
  * a ring around the summit, sampled on a deterministic golden spiral. The
  * consequence is the one the room lives on: whatever the seed, some of the
  * range is always an archipelago.
@@ -603,15 +744,6 @@ export const SUN_TOP_ELEVATION = 1.0;
 const DAWN_U = 0.26;
 const MORNING_U = 0.55;
 
-function clamp01(v: number): number {
-  return v < 0 ? 0 : v > 1 ? 1 : v;
-}
-
-function smoothstep(e0: number, e1: number, x: number): number {
-  const t = clamp01((x - e0) / (e1 - e0));
-  return t * t * (3 - 2 * t);
-}
-
 function mix3(
   a: [number, number, number],
   b: [number, number, number],
@@ -669,8 +801,8 @@ export function sunDirection(azimuth: number, elevation: number): [number, numbe
 
 // ——— the season, and the snow it moves ————————————————————————
 
-export const SNOWLINE_MID_KM = 1.16;
-export const SNOWLINE_SWING_KM = 0.34;
+export const SNOWLINE_MID_KM = 1.38;
+export const SNOWLINE_SWING_KM = 0.4;
 
 /**
  * The snowline over the year. Periodic with period 1 by construction, so
@@ -679,6 +811,87 @@ export const SNOWLINE_SWING_KM = 0.34;
  */
 export function snowlineKm(season: number): number {
   return SNOWLINE_MID_KM + SNOWLINE_SWING_KM * Math.cos(season * Math.PI * 2);
+}
+
+export function windVector(seed: number): [number, number] {
+  const rng = mulberry32(hashSeed(seed, WIND_SALT));
+  const a = rng() * Math.PI * 2;
+  return [Math.cos(a), Math.sin(a)];
+}
+
+export function corniceStrength(
+  crease: number,
+  dhdx: number,
+  dhdz: number,
+  wind: [number, number],
+): number {
+  const slope = Math.hypot(dhdx, dhdz);
+  const crest = 1 - smoothstep(CORNICE_CREASE_LO, CORNICE_CREASE_HI, crease);
+  const steep = smoothstep(CORNICE_SLOPE_LO, CORNICE_SLOPE_HI, slope);
+  const uphillX = slope > 0 ? dhdx / slope : 0;
+  const uphillZ = slope > 0 ? dhdz / slope : 0;
+  const lee = clamp01(-(wind[0] * uphillX + wind[1] * uphillZ));
+  const strength = crest * steep * lee;
+  return strength > 0 ? strength : 0;
+}
+
+export type TerrainMaterial = "rock" | "snow" | "glacier";
+export type MaterialSample = {
+  kind: TerrainMaterial;
+  rock: number;
+  snow: number;
+  glacier: number;
+  cornice: number;
+};
+
+export function materialFromGround(
+  g: Ground,
+  season: number,
+  wind: [number, number],
+): MaterialSample {
+  const slope = Math.hypot(g.dhdx, g.dhdz);
+  const snowKm = snowlineKm(season);
+  const valleyW = 1 - smoothstep(0.4, 0.62, g.ridge);
+  const gentle = 1 - smoothstep(GLACIER_SLOPE_MAX - 0.1, GLACIER_SLOPE_MAX + 0.14, slope);
+  const iceAlt = smoothstep(
+    snowKm - GLACIER_BELOW_SNOWLINE_KM - GLACIER_BAND_KM,
+    snowKm - GLACIER_BELOW_SNOWLINE_KM,
+    g.h,
+  );
+  const notCrest = smoothstep(0.06, 0.18, g.crease);
+  let glacier = clamp01(valleyW * gentle * iceAlt * notCrest);
+
+  const flat = 1 / (1 + slope * SNOW_SLOPE_K);
+  const held = clamp01((g.h - snowKm) / SNOW_HOLD_KM) * flat;
+  const scour = 1 - clamp01((g.h - (snowKm + SNOW_SCOUR_ABOVE_KM)) / SNOW_SCOUR_WIDTH_KM);
+  let snow = clamp01(held * scour) * (1 - glacier);
+  let rock = clamp01(1 - snow - glacier);
+
+  const total = rock + snow + glacier;
+  if (total > 0) {
+    rock /= total;
+    snow /= total;
+    glacier /= total;
+  } else {
+    rock = 1;
+    snow = 0;
+    glacier = 0;
+  }
+
+  const cornice = corniceStrength(g.crease, g.dhdx, g.dhdz, wind) * (snow + glacier);
+  const kind: TerrainMaterial =
+    glacier >= snow && glacier >= rock ? "glacier" : snow >= rock ? "snow" : "rock";
+  return { kind, rock, snow, glacier, cornice };
+}
+
+export function materialAt(
+  x: number,
+  z: number,
+  seed: number,
+  season: number,
+  octaves = OCTAVES_SHADE,
+): MaterialSample {
+  return materialFromGround(groundAt(x, z, seed, octaves), season, windVector(seed));
 }
 
 // ——— the call, and what the range says back ————————————————————
