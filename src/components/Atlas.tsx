@@ -1246,7 +1246,9 @@ export default function Atlas() {
       clientGenerationId,
       generationIdRef.current,
     );
-    const currentImage = sourceImage ?? activeImageRef.current;
+    // A fresh concept draws from nothing — never inherit the sheet on screen,
+    // or the new prompt returns the same coastline.
+    const currentImage = mode === "generate" ? null : (sourceImage ?? activeImageRef.current);
     const depth = generationDepthRef.current;
     const resolvedClip = clip
       ?? (mode === "zoom" && focus ? clipRectForFocus(focus) : undefined)

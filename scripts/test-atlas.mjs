@@ -589,6 +589,19 @@ assert.equal(
   "edit",
   "zoom with a current image should reconstruct from the clipped source",
 );
+// A fresh concept must draw from scratch even when a sheet is on screen — the
+// bug that made a new prompt return the same coastline was a `generate` request
+// silently becoming an edit of the current image.
+assert.equal(
+  atlasOperationForRequest({ mode: "generate", currentImage: `data:image/png;base64,${ONE_PIXEL_PNG}` }),
+  "generation",
+  "a new prompt draws a new world from scratch, never an edit of the current map",
+);
+assert.equal(
+  atlasOperationForRequest({ mode: "generate" }),
+  "generation",
+  "the first map is a generation too",
+);
 const sharpCallsBeforeZoom = sharpExtractCalls.length;
 const zoomResult = plain(await generateAtlasImage(zoomSourceRequest, openRouterProvider));
 assert.equal(zoomResult.generation.operation, "edit", "free zoom with a source sheet should edit/reconstruct");

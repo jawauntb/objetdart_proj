@@ -703,7 +703,11 @@ function buildCompositePrompt(request: AtlasGenerationRequest, context: AtlasGen
 export function atlasOperationForRequest(
   request: Pick<AtlasGenerationRequest, "mode" | "currentImage" | "clip">,
 ): "generation" | "edit" {
-  // Any request with a current sheet edits/reconstructs from that sample (clip optional).
+  // A fresh concept always draws a new world from scratch. The map you were
+  // just looking at must not become the basis for the next one — a new prompt
+  // that inherited the old coastline would read as "nothing happened."
+  if (request.mode === "generate") return "generation";
+  // Zoom / shift / refine reconstruct from the current sheet (clip optional).
   if (!request.currentImage) return "generation";
   return "edit";
 }
@@ -755,8 +759,11 @@ function atlasAction(request: AtlasGenerationRequest): string {
     const y = Math.round(request.focus.y * 100);
     return `Edit the supplied atlas in place: deepen and improve only the subsection centered ${x}% from the left and ${y}% from the top at roughly ${request.focus.zoom.toFixed(1)}x, while keeping the rest of the sheet continuous and recognizable. Enrich local material, landmarks, and atmosphere in that region without replacing the whole map.`;
   }
-  if (!request.currentImage) {
-    return "Create the outer map for this concept from scratch, with a coherent world visible at once and richer detail near the center.";
+  // A fresh concept ("generate") is always drawn from scratch — never an edit
+  // of whatever sheet happened to be on screen — so the new world owns its own
+  // coastline, not the previous map's.
+  if (request.mode === "generate" || !request.currentImage) {
+    return "Create the outer map for this concept from scratch, with a coherent world visible at once and richer detail near the center. Do not preserve the shape, coastline, or layout of any previous map.";
   }
   return "Edit the supplied atlas into a new expression of the visual concept. Preserve its cartographic identity and overall continuity while regenerating the places, materials, and atmosphere.";
 }
