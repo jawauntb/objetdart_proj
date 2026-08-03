@@ -16,6 +16,9 @@ export type Camera = {
 export type LayerMemory = {
   bornStars: unknown[];
   blackHoles: unknown[];
+  // worlds condensed from born stars — optional so v2 blobs written
+  // before planets existed keep loading untouched
+  planets?: unknown[];
   consumedSeedIds: number[];
 };
 
@@ -150,6 +153,9 @@ export const COSMIC_STORAGE_V2 = "objetdart:stars:cosmic:v2";
 export const COSMIC_STORAGE_V1 = "objetdart:stars:cosmic:v1";
 export const MAX_BORN_STARS_PER_LAYER = 96;
 export const MAX_USER_BLACK_HOLES = 12;
+export const MAX_USER_PLANETS_PER_LAYER = 24;
+/** sessionStorage key: the world a traveler dove into carries down to the atlas. */
+export const PLANET_DESCENT_KEY = "objetdart:stars:descent:v1";
 
 export const AUTO_W = 24;
 export const AUTO_H = 16;
@@ -307,7 +313,7 @@ export function skyToScreen(
 }
 
 export function emptyLayerMemory(): LayerMemory {
-  return { bornStars: [], blackHoles: [], consumedSeedIds: [] };
+  return { bornStars: [], blackHoles: [], planets: [], consumedSeedIds: [] };
 }
 
 export function loadCosmicMemoryV2(): CosmicMemoryV2 {
