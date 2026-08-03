@@ -15,11 +15,12 @@ import GreekKeyFrame from "@/components/GreekKeyFrame";
  * a one-line inscription. The nautilus drifts on its own and
  * accepts drag — release at speed for a soft bell.
  *
- * Layers (top → bottom):
- *   sky (rose → cream → coral)
- *   sea band (translucent aqua)
- *   foam band (procedural canvas bubbles)
- *   sand (cream/ochre + grain noise)
+ * The whole beach is ONE full-viewport WebGL painting — rose-gold sky
+ * with sun, god-rays and warped cloud billows; a perspective sea with
+ * the sun's glitter path and foam lace; a breathing surf swash; a wet
+ * mirror-sand strip melting into warm dry sand — so no band seam ever
+ * shows. Transparent 2D canvases above it carry the live interactive
+ * detail (foam bubbles, lapping tongues, sand grain, finger trails).
  *
  * The interactive layer is SVG over the canvas — shells and the
  * nautilus are inline SVG paths so the file is self-contained.
@@ -269,13 +270,12 @@ export default function Aphros() {
   // sand-trail overlay canvas — captures finger marks the user drags into
   // the sand band. Sits on top of the static `sandRef` grain canvas.
   const sandTrailRef = useRef<HTMLCanvasElement>(null);
-  // WebGL water canvas — renders a soft tropical-shallow water shader
-  // behind the sea band CSS gradient. If WebGL fails, the gradient
-  // alone still reads.
-  const waterRef = useRef<HTMLCanvasElement>(null);
-  // Aurora canvas — a faint slow-shifting pastel wisp shader in the
-  // upper sky band. Drawn on top of the sky gradient.
-  const auroraRef = useRef<HTMLCanvasElement>(null);
+  // WebGL scene canvas — one full-viewport shader paints the entire
+  // beach (sky, sea, surf, sand) as a single continuous painting. If
+  // WebGL fails, the CSS gradient bands beneath still read.
+  const sceneRef = useRef<HTMLCanvasElement>(null);
+  // Sky-hover warmth — read by the scene shader each frame, eased there.
+  const skyWarmRef = useRef(false);
   // Water-ripple ref array (live) — read by the water shader uniform
   // each frame. Push entries on shell clicks / sea taps.
   const waterRipplesRef = useRef<Array<{ x: number; y: number; t0: number; strength: number }>>([]);
@@ -443,13 +443,9 @@ export default function Aphros() {
     cv.style.width = `${w}px`;
     cv.style.height = `${h}px`;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    // base gradient (cream → ochre)
-    const g = ctx.createLinearGradient(0, 0, 0, h);
-    g.addColorStop(0, C.creamBone);
-    g.addColorStop(0.55, C.pearl);
-    g.addColorStop(1, C.ochreWarm);
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, w, h);
+    // transparent — the scene shader paints the sand color beneath;
+    // this canvas carries only grain speckle and shell flecks
+    ctx.clearRect(0, 0, w, h);
     // grains: many tiny dots
     const grains = Math.floor((w * h) / 900);
     for (let i = 0; i < grains; i++) {
@@ -473,463 +469,333 @@ export default function Aphros() {
     }
   }, [viewport.w, viewport.h]);
 
-  // ── WebGL water (sea band) + aurora (sky band) ─────────────────────
-  // Two small WebGL canvases — one for the sea band, one for the sky.
-  // Each owns its own GL context, shaders, and RAF loop. If GL is
-  // unavailable for either, the underlying CSS gradient still reads.
+  // ── WebGL scene — one continuous painting ──────────────────────────
+  // A single full-viewport shader paints the whole beach as one scene —
+  // rose-gold sky, sun and god-rays, warped cloud billows, a perspective
+  // sea with the sun's glitter path and foam lace, a breathing surf
+  // swash, wet mirror-sand, dry sand with dune shading — so no band
+  // seam ever shows. The 2D canvases above it carry only transparent
+  // interactive detail (bubbles, tongues, grain, finger trails). If GL
+  // is unavailable, the CSS gradient bands beneath still read.
   useEffect(() => {
     if (viewport.w === 0) return;
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-    // ── WATER ────────────────────────────────────────────────────
-    const water = waterRef.current;
-    let waterCleanup: (() => void) | null = null;
-    if (water) {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const w = viewport.w;
-      const h = Math.floor(viewport.h * 0.25);
-      water.width = Math.floor(w * dpr);
-      water.height = Math.floor(h * dpr);
-      water.style.width = `${w}px`;
-      water.style.height = `${h}px`;
+    const scene = sceneRef.current;
+    if (!scene) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = viewport.w;
+    const h = viewport.h;
+    scene.width = Math.floor(w * dpr);
+    scene.height = Math.floor(h * dpr);
+    scene.style.width = `${w}px`;
+    scene.style.height = `${h}px`;
 
-      const gl =
-        (water.getContext("webgl", { antialias: false, premultipliedAlpha: true }) ||
-          water.getContext(
-            "experimental-webgl" as "webgl",
-            { antialias: false, premultipliedAlpha: true } as WebGLContextAttributes,
-          )) as WebGLRenderingContext | null;
+    const gl =
+      (scene.getContext("webgl", { antialias: false, premultipliedAlpha: true }) ||
+        scene.getContext(
+          "experimental-webgl" as "webgl",
+          { antialias: false, premultipliedAlpha: true } as WebGLContextAttributes,
+        )) as WebGLRenderingContext | null;
+    if (!gl) return;
 
-      if (gl) {
-        const vert = `
-          attribute vec2 a_pos;
-          varying vec2 vUv;
-          void main() {
-            vUv = a_pos * 0.5 + 0.5;
-            gl_Position = vec4(a_pos, 0.0, 1.0);
-          }
-        `;
-        // The Galatea sea: nacre-pale at the horizon, opening through
-        // turquoise into Aegean blue, green shallows, then sand glowing
-        // through the last of the water. Travelling swells lean with the
-        // shore wind; the rose sky mirrors on the swell backs; a pearl
-        // glitter path shivers down the centre; and procedural foam lace
-        // — the aphros itself — rides the crests, thickening shoreward
-        // until the foam band takes over. Alpha stays tied to depth so
-        // the rose horizon still bleeds through at the top.
-        const frag = `
-          precision highp float;
-          uniform float uTime;
-          uniform vec2 uRes;
-          uniform float uWind;
-          uniform vec4 uRipples[8];
-          uniform int uRippleCount;
-          varying vec2 vUv;
-
-          float hash21(vec2 p) {
-            p = fract(p * vec2(123.34, 456.21));
-            p += dot(p, p + 45.32);
-            return fract(p.x * p.y);
-          }
-          float vnoise(vec2 p) {
-            vec2 i = floor(p);
-            vec2 f = fract(p);
-            float a = hash21(i);
-            float b = hash21(i + vec2(1.0, 0.0));
-            float c = hash21(i + vec2(0.0, 1.0));
-            float d = hash21(i + vec2(1.0, 1.0));
-            vec2 u = f * f * (3.0 - 2.0 * f);
-            return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
-          }
-          float fbm(vec2 p) {
-            float v = 0.0;
-            float a = 0.5;
-            for (int i = 0; i < 5; i++) {
-              v += a * vnoise(p);
-              p *= 2.05;
-              a *= 0.52;
-            }
-            return v;
-          }
-
-          void main() {
-            vec2 uv = vec2(vUv.x, 1.0 - vUv.y); // y=0 horizon, y=1 foam line
-            float aspect = uRes.x / uRes.y;
-            float t = uTime;
-
-            // ── ripples from shell pops & sea taps (height field) ──
-            float rippleHi = 0.0;
-            for (int i = 0; i < 8; i++) {
-              if (i >= uRippleCount) break;
-              vec4 r = uRipples[i];
-              vec2 dp = (uv - r.xy) * vec2(aspect, 1.0);
-              float dist = length(dp);
-              float age = r.z;
-              if (age > 2.4) continue;
-              float front = dist - age * 0.34;
-              float env = exp(-(front * front) / 0.0028);
-              float falloff = 1.0 / (1.0 + dist * 3.2);
-              float temporal = max(0.0, 1.0 - age / 2.4);
-              rippleHi += r.w * env * falloff * temporal;
-            }
-
-            // perspective: detail packs toward the horizon, opens shoreward
-            float persp = mix(0.24, 1.0, uv.y);
-
-            // ── travelling swell, two scales, leaning with the shore wind ──
-            vec2 flow = vec2(
-              sin(uv.y * 8.0 + t * 0.60) * 0.020,
-              sin(uv.x * 6.5 + t * 0.42) * 0.013
-            ) * persp;
-            flow += vec2(
-              sin(uv.y * 3.2 - t * 0.26) * 0.011,
-              cos(uv.x * 2.4 + t * 0.20) * 0.008
-            ) * persp;
-            flow.x += uWind * 0.06 * persp;
-            vec2 wuv = uv + flow;
-            wuv += rippleHi * 0.012;
-            float depth = clamp(wuv.y, 0.0, 1.0);
-
-            // ── depth palette: nacre horizon → open turquoise → Aegean
-            // blue → green shallows → sand glowing through the last water ──
-            vec3 nacre   = vec3(0.87, 0.93, 0.92);
-            vec3 aquaMid = vec3(0.47, 0.79, 0.80);
-            vec3 aegean  = vec3(0.16, 0.44, 0.60);
-            vec3 shallow = vec3(0.60, 0.85, 0.78);
-            vec3 sandLit = vec3(0.93, 0.85, 0.70);
-            vec3 col = mix(nacre, aquaMid, smoothstep(0.00, 0.40, depth));
-            col = mix(col, aegean, smoothstep(0.26, 0.60, depth) * 0.60);
-            col = mix(col, shallow, smoothstep(0.56, 0.86, depth));
-            col = mix(col, sandLit, smoothstep(0.84, 1.00, depth));
-
-            // ── the rose sky mirrored on the swell backs near the horizon ──
-            float mirrorN = fbm(vec2(wuv.x * aspect * 1.6 + t * 0.05, wuv.y * 16.0));
-            float mirror = (1.0 - smoothstep(0.0, 0.36, uv.y))
-                         * smoothstep(0.48, 0.85, mirrorN);
-            col = mix(col, vec3(0.95, 0.83, 0.79), mirror * 0.45);
-
-            // ── caustic glints ──
-            vec2 nuv = wuv * vec2(aspect, 1.0) * (3.2 + 3.4 * depth) + vec2(t * 0.06, t * 0.04);
-            float n = fbm(nuv);
-            float c1 = sin((wuv.x + n * 0.18) * 24.0 + t * 0.50)
-                     * sin((wuv.y + n * 0.14) * 15.0 - t * 0.34);
-            float c2 = sin(wuv.x * 11.0 - t * 0.28 + n * 1.2)
-                     * sin(wuv.y *  7.0 + t * 0.20 - n * 1.0);
-            float caustic = smoothstep(0.52, 1.05, c1 * 0.45 + c2 * 0.55);
-            col += caustic * mix(0.13, 0.05, depth) * vec3(1.0, 0.97, 0.90);
-
-            // ── pearl glitter path — the light shivering down the centre ──
-            float column = exp(-pow((uv.x - 0.5) * 2.6, 2.0));
-            float facets = fbm(vec2(uv.x * aspect * 14.0, uv.y * 44.0 - t * 1.4));
-            float glint = column * smoothstep(0.58, 0.95, facets) * (1.0 - depth * 0.55);
-            col += glint * 0.42 * vec3(1.0, 0.95, 0.88);
-
-            // ── aphros — foam lace riding the crests, thickening shoreward ──
-            vec2 fuv = wuv * vec2(aspect, 1.0) * 5.0 + vec2(t * 0.10 + uWind * 0.5, -t * 0.05);
-            float lace1 = fbm(fuv);
-            float lace2 = fbm(fuv * 2.1 + vec2(3.7, 1.3) + lace1 * 1.1);
-            float vein = 1.0 - abs(2.0 * lace2 - 1.0);
-            float lace = smoothstep(0.70, 0.97, vein * (0.55 + 0.45 * lace1));
-            float crest = smoothstep(0.45, 0.95,
-              sin(wuv.y * 24.0 - t * 0.70 + lace1 * 3.2) * 0.5 + 0.5);
-            float foam = lace * (0.35 + 0.65 * crest) * smoothstep(0.30, 0.92, depth);
-            foam = clamp(foam + rippleHi * 0.035, 0.0, 1.0);
-            col = mix(col, vec3(0.99, 0.98, 0.95), foam * 0.62);
-
-            // ripple wavefront highlights
-            col += rippleHi * 0.012 * vec3(1.0, 1.0, 0.95);
-
-            // alpha: fade in at top so the rose horizon shows through softly,
-            // full at bottom where the foam band takes over
-            float a = smoothstep(0.0, 0.18, uv.y) * 0.80 + 0.12;
-
-            gl_FragColor = vec4(col * a, a);
-          }
-        `;
-        const compile = (type: number, src: string) => {
-          const s = gl.createShader(type);
-          if (!s) return null;
-          gl.shaderSource(s, src);
-          gl.compileShader(s);
-          if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
-            console.warn("aphros water shader failed", gl.getShaderInfoLog(s));
-            gl.deleteShader(s);
-            return null;
-          }
-          return s;
-        };
-        const vs = compile(gl.VERTEX_SHADER, vert);
-        const fs = compile(gl.FRAGMENT_SHADER, frag);
-        let prog: WebGLProgram | null = null;
-        let uTimeLoc: WebGLUniformLocation | null = null;
-        let uResLoc: WebGLUniformLocation | null = null;
-        let uRipplesLoc: WebGLUniformLocation | null = null;
-        let uRippleCountLoc: WebGLUniformLocation | null = null;
-        let uWindLoc: WebGLUniformLocation | null = null;
-        if (vs && fs) {
-          const p = gl.createProgram();
-          if (p) {
-            gl.attachShader(p, vs);
-            gl.attachShader(p, fs);
-            gl.linkProgram(p);
-            if (gl.getProgramParameter(p, gl.LINK_STATUS)) {
-              prog = p;
-              uTimeLoc = gl.getUniformLocation(p, "uTime");
-              uResLoc = gl.getUniformLocation(p, "uRes");
-              uRipplesLoc = gl.getUniformLocation(p, "uRipples");
-              uRippleCountLoc = gl.getUniformLocation(p, "uRippleCount");
-              uWindLoc = gl.getUniformLocation(p, "uWind");
-              const buf = gl.createBuffer();
-              gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-              gl.bufferData(
-                gl.ARRAY_BUFFER,
-                new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]),
-                gl.STATIC_DRAW,
-              );
-              const loc = gl.getAttribLocation(p, "a_pos");
-              gl.enableVertexAttribArray(loc);
-              gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-              gl.useProgram(p);
-              gl.viewport(0, 0, water.width, water.height);
-              gl.enable(gl.BLEND);
-              gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-            }
-          }
-        }
-        if (prog) {
-          let raf = 0;
-          let lastNow = performance.now();
-          let wT = 0; // warped seconds — three fingers dilate the sea too
-          const draw = (now: number) => {
-            const rawDt = Math.min(64, now - lastNow) / 1000;
-            lastNow = now;
-            wT += rawDt * timeScaleRef.current.cur * (reduce ? 0.35 : 1);
-            gl.useProgram(prog!);
-            if (uTimeLoc) gl.uniform1f(uTimeLoc, wT);
-            if (uWindLoc) gl.uniform1f(uWindLoc, windRef.current.cur);
-            if (uResLoc) gl.uniform2f(uResLoc, water.width, water.height);
-            if (uRipplesLoc && uRippleCountLoc) {
-              const MAX = 8;
-              const data = new Float32Array(MAX * 4);
-              const cw = w || 1;
-              const ch = h || 1;
-              let count = 0;
-              for (let i = waterRipplesRef.current.length - 1; i >= 0 && count < MAX; i--) {
-                const r = waterRipplesRef.current[i];
-                const age = (now - r.t0) / 1000;
-                if (age > 2.4) continue;
-                data[count * 4 + 0] = r.x / cw;
-                // y is in sea-band-local coords (already)
-                data[count * 4 + 1] = r.y / ch;
-                data[count * 4 + 2] = age;
-                data[count * 4 + 3] = r.strength;
-                count++;
-              }
-              // GC old
-              waterRipplesRef.current = waterRipplesRef.current.filter(
-                (r) => (now - r.t0) / 1000 <= 2.4,
-              );
-              gl.uniform4fv(uRipplesLoc, data);
-              gl.uniform1i(uRippleCountLoc, count);
-            }
-            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-            raf = requestAnimationFrame(draw);
-          };
-          raf = requestAnimationFrame(draw);
-          waterCleanup = () => cancelAnimationFrame(raf);
-        }
+    const vert = `
+      attribute vec2 a_pos;
+      varying vec2 vUv;
+      void main() {
+        vUv = a_pos * 0.5 + 0.5;
+        gl_Position = vec4(a_pos, 0.0, 1.0);
       }
-    }
+    `;
+    const frag = `
+      precision highp float;
+      uniform float uTime;
+      uniform vec2 uRes;
+      uniform vec3 uBands;   // x horizon, y foam top, z sand top (0..1 of height)
+      uniform float uWarm;   // sky-hover warmth, eased 0..1
+      uniform float uWind;   // three-finger shore wind
+      uniform vec4 uRipples[8];
+      uniform int uRippleCount;
+      varying vec2 vUv;
 
-    // ── AURORA ───────────────────────────────────────────────────
-    const aurora = auroraRef.current;
-    let auroraCleanup: (() => void) | null = null;
-    if (aurora) {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const w = viewport.w;
-      const h = Math.floor(viewport.h * 0.25);
-      aurora.width = Math.floor(w * dpr);
-      aurora.height = Math.floor(h * dpr);
-      aurora.style.width = `${w}px`;
-      aurora.style.height = `${h}px`;
-
-      const gl =
-        (aurora.getContext("webgl", { antialias: false, premultipliedAlpha: true }) ||
-          aurora.getContext(
-            "experimental-webgl" as "webgl",
-            { antialias: false, premultipliedAlpha: true } as WebGLContextAttributes,
-          )) as WebGLRenderingContext | null;
-      if (gl) {
-        const vert = `
-          attribute vec2 a_pos;
-          varying vec2 vUv;
-          void main() {
-            vUv = a_pos * 0.5 + 0.5;
-            gl_Position = vec4(a_pos, 0.0, 1.0);
-          }
-        `;
-        // The triumph sky: domain-warped cloud billows drifting with the
-        // shore wind, shot through with mother-of-pearl iridescence, and
-        // soft god-rays fanning up from a pearl sun sitting just below
-        // the horizon. Very low alpha throughout so the underlying rose
-        // sky still reads through cleanly.
-        const frag = `
-          precision highp float;
-          uniform float uTime;
-          uniform vec2 uRes;
-          uniform float uWind;
-          varying vec2 vUv;
-
-          float hash21(vec2 p) {
-            p = fract(p * vec2(123.34, 456.21));
-            p += dot(p, p + 45.32);
-            return fract(p.x * p.y);
-          }
-          float vnoise(vec2 p) {
-            vec2 i = floor(p);
-            vec2 f = fract(p);
-            float a = hash21(i);
-            float b = hash21(i + vec2(1.0, 0.0));
-            float c = hash21(i + vec2(0.0, 1.0));
-            float d = hash21(i + vec2(1.0, 1.0));
-            vec2 u = f * f * (3.0 - 2.0 * f);
-            return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
-          }
-          float fbm(vec2 p) {
-            float v = 0.0;
-            float a = 0.5;
-            for (int i = 0; i < 5; i++) {
-              v += a * vnoise(p);
-              p *= 2.04;
-              a *= 0.55;
-            }
-            return v;
-          }
-
-          void main() {
-            vec2 uv = vec2(vUv.x, 1.0 - vUv.y); // y=0 page top, y=1 horizon
-            float aspect = uRes.x / uRes.y;
-            float t = uTime;
-
-            // ── cloud billows: domain-warped fbm drifting with the wind ──
-            vec2 p = vec2(uv.x * aspect * 1.1 + t * 0.020 + uWind * 0.12, uv.y * 2.6);
-            vec2 warp = vec2(
-              fbm(p + vec2(0.0, t * 0.014)),
-              fbm(p + vec2(5.2, 1.3) - vec2(t * 0.010, 0.0))
-            );
-            float cloud = fbm(p + (warp - 0.5) * 1.5);
-            float billow = smoothstep(0.42, 0.80, cloud);
-            float shade = smoothstep(0.55, 0.92,
-              fbm(p * 1.7 + (warp - 0.5) * 1.2 + vec2(2.0, 4.0)));
-
-            // ── nacre iridescence — mother-of-pearl drifting in the veils ──
-            float phase = cloud * 6.2831 + t * 0.06;
-            vec3 pearl = vec3(
-              0.93 + 0.06 * cos(phase),
-              0.86 + 0.06 * cos(phase + 2.1),
-              0.83 + 0.07 * cos(phase + 4.2)
-            );
-            vec3 rose = vec3(0.96, 0.83, 0.81); // F4D5D0
-            vec3 gold = vec3(0.97, 0.88, 0.72);
-            vec3 veil = mix(rose, pearl, billow);
-            veil = mix(veil, gold, shade * 0.35);
-
-            // ── god-rays from a pearl sun just under the horizon line ──
-            vec2 d = (uv - vec2(0.5, 1.08)) * vec2(aspect, 1.0);
-            float sunDist = length(d);
-            float ang = atan(d.x, -d.y);
-            float rayN = fbm(vec2(ang * 2.6 + 7.0, t * 0.05));
-            float rays = pow(max(0.0, sin(ang * 7.0 + rayN * 5.0 + t * 0.04)), 4.0);
-            float rayFade = exp(-sunDist * 1.9);
-            float glow = exp(-sunDist * sunDist * 4.5);
-
-            // vertical masks: veils live in the upper sky, rays near the
-            // horizon; the page header stays clean either way
-            float topMask = smoothstep(0.0, 0.08, uv.y);
-            float veilMask = 1.0 - smoothstep(0.45, 0.95, uv.y);
-            float veilA = (billow * 0.20 + shade * 0.10) * veilMask * topMask;
-            float rayA = (rays * rayFade * 0.26 + glow * 0.20) * topMask;
-
-            vec3 rayTint = vec3(1.0, 0.94, 0.84);
-            float a = clamp(veilA + rayA, 0.0, 0.55);
-            vec3 color = (veil * veilA + rayTint * rayA) / max(a, 0.0001);
-            gl_FragColor = vec4(color, a);
-          }
-        `;
-        const compile = (type: number, src: string) => {
-          const s = gl.createShader(type);
-          if (!s) return null;
-          gl.shaderSource(s, src);
-          gl.compileShader(s);
-          if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
-            console.warn("aphros aurora shader failed", gl.getShaderInfoLog(s));
-            gl.deleteShader(s);
-            return null;
-          }
-          return s;
-        };
-        const vs = compile(gl.VERTEX_SHADER, vert);
-        const fs = compile(gl.FRAGMENT_SHADER, frag);
-        let prog: WebGLProgram | null = null;
-        let uTimeLoc: WebGLUniformLocation | null = null;
-        let uResLoc: WebGLUniformLocation | null = null;
-        let uWindLoc: WebGLUniformLocation | null = null;
-        if (vs && fs) {
-          const p = gl.createProgram();
-          if (p) {
-            gl.attachShader(p, vs);
-            gl.attachShader(p, fs);
-            gl.linkProgram(p);
-            if (gl.getProgramParameter(p, gl.LINK_STATUS)) {
-              prog = p;
-              uTimeLoc = gl.getUniformLocation(p, "uTime");
-              uResLoc = gl.getUniformLocation(p, "uRes");
-              uWindLoc = gl.getUniformLocation(p, "uWind");
-              const buf = gl.createBuffer();
-              gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-              gl.bufferData(
-                gl.ARRAY_BUFFER,
-                new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]),
-                gl.STATIC_DRAW,
-              );
-              const loc = gl.getAttribLocation(p, "a_pos");
-              gl.enableVertexAttribArray(loc);
-              gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-              gl.useProgram(p);
-              gl.viewport(0, 0, aurora.width, aurora.height);
-              gl.enable(gl.BLEND);
-              gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-            }
-          }
-        }
-        if (prog) {
-          let raf = 0;
-          let lastNow = performance.now();
-          let wT = 0; // warped seconds — three fingers dilate the sky too
-          // Aurora animates very slowly — under reduced motion we still
-          // let it drift, just at 0.2× speed.
-          const speedScale = reduce ? 0.2 : 1.0;
-          const draw = (now: number) => {
-            const rawDt = Math.min(64, now - lastNow) / 1000;
-            lastNow = now;
-            wT += rawDt * timeScaleRef.current.cur * speedScale;
-            gl.useProgram(prog!);
-            if (uTimeLoc) gl.uniform1f(uTimeLoc, wT);
-            if (uWindLoc) gl.uniform1f(uWindLoc, windRef.current.cur);
-            if (uResLoc) gl.uniform2f(uResLoc, aurora.width, aurora.height);
-            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-            raf = requestAnimationFrame(draw);
-          };
-          raf = requestAnimationFrame(draw);
-          auroraCleanup = () => cancelAnimationFrame(raf);
-        }
+      float hash21(vec2 p) {
+        p = fract(p * vec2(123.34, 456.21));
+        p += dot(p, p + 45.32);
+        return fract(p.x * p.y);
       }
-    }
+      float vnoise(vec2 p) {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        float a = hash21(i);
+        float b = hash21(i + vec2(1.0, 0.0));
+        float c = hash21(i + vec2(0.0, 1.0));
+        float d = hash21(i + vec2(1.0, 1.0));
+        vec2 u = f * f * (3.0 - 2.0 * f);
+        return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
+      }
+      float fbm(vec2 p) {
+        float v = 0.0;
+        float a = 0.5;
+        for (int i = 0; i < 5; i++) {
+          v += a * vnoise(p);
+          p *= 2.03;
+          a *= 0.52;
+        }
+        return v;
+      }
 
-    return () => {
-      if (waterCleanup) waterCleanup();
-      if (auroraCleanup) auroraCleanup();
+      void main() {
+        vec2 uv = vec2(vUv.x, 1.0 - vUv.y); // y = 0 page top, 1 page bottom
+        float aspect = uRes.x / uRes.y;
+        float t = uTime;
+        float horizon = uBands.x;
+        float foamTop = uBands.y;
+        float sandTop = uBands.z;
+
+        // ── ripple height field (shell pops, sea taps) ──
+        float rippleHi = 0.0;
+        for (int i = 0; i < 8; i++) {
+          if (i >= uRippleCount) break;
+          vec4 r = uRipples[i];
+          vec2 dp = (uv - r.xy) * vec2(aspect, 1.0);
+          float dist = length(dp);
+          float age = r.z;
+          if (age > 2.4) continue;
+          float front = dist - age * 0.085;
+          float env = exp(-(front * front) / 0.0002);
+          float falloff = 1.0 / (1.0 + dist * 12.0);
+          float temporal = max(0.0, 1.0 - age / 2.4);
+          rippleHi += r.w * env * falloff * temporal;
+        }
+
+        // ── the sun — the one light everything answers to ──
+        // clamp the horizontal metric so the halo stays compact on
+        // portrait screens instead of flooding the whole sky
+        vec2 sunD = (uv - vec2(0.5, horizon - 0.015)) * vec2(max(aspect, 1.5), 1.0);
+        float sunDist = length(sunD);
+        float sunGlow = exp(-sunDist * sunDist * 34.0);
+        float sunHalo = exp(-sunDist * 5.2);
+
+        // ════ SKY: rose zenith → gold cream → molten coral waterline ════
+        vec3 zenith = mix(vec3(0.93, 0.80, 0.79), vec3(0.94, 0.74, 0.72), uWarm);
+        vec3 midSky = mix(vec3(0.97, 0.88, 0.79), vec3(0.97, 0.84, 0.74), uWarm);
+        vec3 lowSky = mix(vec3(0.98, 0.80, 0.66), vec3(0.98, 0.75, 0.62), uWarm);
+        float skyT = clamp(uv.y / max(horizon, 0.0001), 0.0, 1.0);
+        vec3 sky = mix(zenith, midSky, smoothstep(0.0, 0.62, skyT));
+        sky = mix(sky, lowSky, smoothstep(0.55, 1.0, skyT));
+
+        // cloud billows — domain-warped, rose-shadowed, lit from below
+        vec2 cp = vec2(uv.x * aspect * 1.05 + t * 0.016 + uWind * 0.10, uv.y * 3.4);
+        vec2 cw = vec2(fbm(cp + vec2(0.0, t * 0.010)), fbm(cp + vec2(5.2, 1.3)));
+        float cloud = fbm(cp + (cw - 0.5) * 1.6);
+        float billow = smoothstep(0.46, 0.85, cloud);
+        float underlit = smoothstep(0.52, 0.95,
+          fbm(cp * 1.6 + (cw - 0.5) * 1.3 + vec2(2.0, 4.0)));
+        vec3 cloudCol = mix(vec3(0.99, 0.93, 0.88), vec3(0.94, 0.72, 0.66), underlit * 0.7);
+        float cloudMask = billow
+          * (1.0 - smoothstep(0.55, 1.0, skyT))
+          * smoothstep(0.03, 0.15, skyT);
+        sky = mix(sky, cloudCol, cloudMask * 0.85);
+
+        // god-rays fanning up from the sun
+        float ang = atan(sunD.x, -sunD.y);
+        float rayN = fbm(vec2(ang * 2.6 + 7.0, t * 0.05));
+        float rays = pow(max(0.0, sin(ang * 7.0 + rayN * 5.0 + t * 0.03)), 4.0);
+        sky += rays * exp(-sunDist * 2.8) * vec3(1.0, 0.93, 0.82) * 0.26;
+        sky += (sunGlow * 0.70 + sunHalo * 0.16) * vec3(1.0, 0.95, 0.86);
+
+        // ════ SEA: nacre skyline → turquoise → aegean → green shoal ════
+        float seaT = clamp((uv.y - horizon) / max(foamTop - horizon, 0.0001), 0.0, 1.0);
+        float persp = mix(0.16, 1.0, seaT);
+        vec2 flow = vec2(
+          sin(seaT * 9.0 + t * 0.62) * 0.018,
+          sin(uv.x * 6.5 + t * 0.44) * 0.012
+        ) * persp;
+        flow += vec2(
+          sin(seaT * 3.1 - t * 0.27) * 0.010,
+          cos(uv.x * 2.5 + t * 0.21) * 0.007
+        ) * persp;
+        flow.x += uWind * 0.05 * persp;
+        vec2 suv = vec2(uv.x, seaT) + flow + vec2(0.0, rippleHi * 0.05);
+        float sd = clamp(suv.y, 0.0, 1.0);
+
+        vec3 nacre  = vec3(0.94, 0.86, 0.80);
+        vec3 turq   = vec3(0.42, 0.76, 0.78);
+        vec3 aegean = vec3(0.13, 0.42, 0.58);
+        vec3 shoal  = vec3(0.55, 0.83, 0.76);
+        vec3 sea = mix(nacre, turq, smoothstep(0.0, 0.34, sd));
+        sea = mix(sea, aegean, smoothstep(0.28, 0.62, sd) * 0.62);
+        sea = mix(sea, shoal, smoothstep(0.62, 0.95, sd));
+
+        // rose sky mirrored in streaks near the skyline
+        float mir = fbm(vec2(suv.x * aspect * 1.7 + t * 0.05, sd * 14.0));
+        sea = mix(sea, vec3(0.97, 0.82, 0.74),
+          (1.0 - smoothstep(0.0, 0.30, sd)) * smoothstep(0.46, 0.85, mir) * 0.55);
+        // the sun bleeds down over the water it faces
+        sea += sunHalo * exp(-sd * 6.0) * vec3(0.22, 0.16, 0.11);
+
+        // caustic sparkle
+        vec2 nuv = suv * vec2(aspect, 1.0) * (3.0 + 3.6 * sd) + vec2(t * 0.06, t * 0.04);
+        float n = fbm(nuv);
+        float c1 = sin((suv.x + n * 0.18) * 24.0 + t * 0.50)
+                 * sin((sd + n * 0.14) * 15.0 - t * 0.34);
+        float caustic = smoothstep(0.62, 1.08, c1);
+        sea += caustic * mix(0.09, 0.04, sd) * vec3(1.0, 0.97, 0.90);
+
+        // the sun's glitter path, shivering facets down the centre
+        float column = exp(-pow((uv.x - 0.5) * (2.2 + 1.4 * sd), 2.0));
+        float facets = fbm(vec2(uv.x * aspect * 16.0, sd * 30.0 - t * 1.3));
+        float glint = column * smoothstep(0.56, 0.94, facets) * (1.0 - sd * 0.35);
+        sea += glint * 0.5 * vec3(1.0, 0.93, 0.84);
+
+        // aphros — foam lace on the crests, thickening toward the surf
+        vec2 fuv = suv * vec2(aspect, 1.0) * 5.5 + vec2(t * 0.09 + uWind * 0.5, -t * 0.05);
+        float l1 = fbm(fuv);
+        float l2 = fbm(fuv * 2.1 + vec2(3.7, 1.3) + l1 * 1.1);
+        float vein = 1.0 - abs(2.0 * l2 - 1.0);
+        float lace = smoothstep(0.74, 0.98, vein * (0.55 + 0.45 * l1));
+        float crest = smoothstep(0.45, 0.95, sin(sd * 20.0 - t * 0.70 + l1 * 3.0) * 0.5 + 0.5);
+        float laceAmt = lace * (0.3 + 0.7 * crest) * smoothstep(0.35, 1.0, sd);
+        laceAmt = clamp(laceAmt + rippleHi * 0.05, 0.0, 1.0);
+        sea = mix(sea, vec3(0.99, 0.98, 0.95), laceAmt * 0.55);
+        sea += rippleHi * 0.015 * vec3(1.0, 1.0, 0.95);
+
+        // ════ SURF: the breaking line where the aphros is born ════
+        float surfT = clamp((uv.y - foamTop) / max(sandTop - foamTop, 0.0001), 0.0, 1.0);
+        float swashN = fbm(vec2(uv.x * aspect * 1.3 + uWind * 0.4, t * 0.10));
+        float edge = 0.55 + 0.25 * sin(t * 0.26 + uv.x * 4.0) + (swashN - 0.5) * 0.5;
+        float foamField = fbm(vec2(uv.x * aspect * 6.0 + t * 0.05, surfT * 5.0 - t * 0.16));
+        float holes = smoothstep(0.30, 0.72, foamField);
+        float above = 1.0 - smoothstep(edge - 0.16, edge + 0.10, surfT);
+        vec3 wetBase = vec3(0.82, 0.71, 0.58);
+        vec3 foamWhite = mix(vec3(0.99, 0.97, 0.93), vec3(0.93, 0.90, 0.85), holes * 0.5);
+        vec3 surf = mix(wetBase, foamWhite, clamp(above * (0.65 + 0.35 * holes), 0.0, 1.0));
+        float sparkle = smoothstep(0.75, 0.95,
+          fbm(vec2(uv.x * aspect * 22.0, surfT * 20.0 - t * 0.9)));
+        surf += sparkle * above * 0.10;
+
+        // ════ SAND: wet mirror strip melting into warm dry grain ════
+        float sandT = clamp((uv.y - sandTop) / max(1.0 - sandTop, 0.0001), 0.0, 1.0);
+        vec3 sandHi = vec3(0.95, 0.89, 0.78);
+        vec3 sandLo = vec3(0.85, 0.72, 0.54);
+        vec3 sand = mix(sandHi, sandLo, smoothstep(0.0, 1.0, sandT));
+        float wet = 1.0 - smoothstep(0.0, 0.30, sandT);
+        sand = mix(sand, vec3(0.80, 0.70, 0.58), wet * 0.55);
+        // the sky and sun reflect faintly on the wet mirror
+        sand += wet * exp(-pow((uv.x - 0.5) * 2.6, 2.0)) * vec3(0.16, 0.11, 0.08);
+        sand += wet * 0.06 * vec3(0.97, 0.84, 0.78);
+        // dune ripples — long low bands warped by noise
+        float dn = fbm(vec2(uv.x * aspect * 2.2, sandT * 6.0));
+        float dune = sin(sandT * 26.0 + dn * 5.0 + uv.x * 3.0) * 0.5 + 0.5;
+        sand -= smoothstep(0.6, 1.0, dune) * 0.035 * (0.3 + 0.7 * sandT);
+        // grain speckle
+        float grain = hash21(floor(uv * uRes * 0.6));
+        sand += (grain - 0.5) * 0.035;
+
+        // ════ compose with soft seams — one scene, no strips ════
+        vec3 col = sky;
+        col = mix(col, sea, smoothstep(horizon - 0.002, horizon + 0.004, uv.y));
+        float haze = smoothstep(horizon - 0.03, horizon, uv.y)
+                   * (1.0 - smoothstep(horizon, horizon + 0.05, uv.y));
+        col = mix(col, vec3(0.97, 0.86, 0.76), haze * 0.45);
+        col = mix(col, surf, smoothstep(foamTop - 0.015, foamTop + 0.015, uv.y));
+        col = mix(col, sand, smoothstep(sandTop - 0.01, sandTop + 0.02, uv.y));
+
+        // gentle vignette
+        vec2 vc = vUv - 0.5;
+        col *= 1.0 - dot(vc, vc) * 0.22;
+
+        gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
+      }
+    `;
+    const compile = (type: number, src: string) => {
+      const s = gl.createShader(type);
+      if (!s) return null;
+      gl.shaderSource(s, src);
+      gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+        console.warn("aphros scene shader failed", gl.getShaderInfoLog(s));
+        gl.deleteShader(s);
+        return null;
+      }
+      return s;
     };
+    const vs = compile(gl.VERTEX_SHADER, vert);
+    const fs = compile(gl.FRAGMENT_SHADER, frag);
+    if (!vs || !fs) return;
+    const prog = gl.createProgram();
+    if (!prog) return;
+    gl.attachShader(prog, vs);
+    gl.attachShader(prog, fs);
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) return;
+    const uTimeLoc = gl.getUniformLocation(prog, "uTime");
+    const uResLoc = gl.getUniformLocation(prog, "uRes");
+    const uBandsLoc = gl.getUniformLocation(prog, "uBands");
+    const uWarmLoc = gl.getUniformLocation(prog, "uWarm");
+    const uWindLoc = gl.getUniformLocation(prog, "uWind");
+    const uRipplesLoc = gl.getUniformLocation(prog, "uRipples");
+    const uRippleCountLoc = gl.getUniformLocation(prog, "uRippleCount");
+    const buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+    const loc = gl.getAttribLocation(prog, "a_pos");
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+    gl.useProgram(prog);
+    gl.viewport(0, 0, scene.width, scene.height);
+
+    // band fractions from the real pixel layout (foamH has a px floor)
+    const skyPx = h * 0.25;
+    const seaPx = h * 0.25;
+    const foamPx = Math.max(80, h * 0.12);
+    const bands: [number, number, number] = [
+      skyPx / h,
+      (skyPx + seaPx) / h,
+      (skyPx + seaPx + foamPx) / h,
+    ];
+
+    let raf = 0;
+    let lastNow = performance.now();
+    let wT = 0;      // warped seconds — three fingers dilate the whole scene
+    let warm = 0;    // eased sky warmth
+    const draw = (now: number) => {
+      const rawDt = Math.min(64, now - lastNow) / 1000;
+      lastNow = now;
+      wT += rawDt * timeScaleRef.current.cur * (reduce ? 0.35 : 1);
+      warm += ((skyWarmRef.current ? 1 : 0) - warm) * Math.min(1, rawDt * 2.4);
+      gl.useProgram(prog);
+      if (uTimeLoc) gl.uniform1f(uTimeLoc, wT);
+      if (uResLoc) gl.uniform2f(uResLoc, scene.width, scene.height);
+      if (uBandsLoc) gl.uniform3f(uBandsLoc, bands[0], bands[1], bands[2]);
+      if (uWarmLoc) gl.uniform1f(uWarmLoc, warm);
+      if (uWindLoc) gl.uniform1f(uWindLoc, windRef.current.cur);
+      if (uRipplesLoc && uRippleCountLoc) {
+        const MAX = 8;
+        const data = new Float32Array(MAX * 4);
+        let count = 0;
+        for (let i = waterRipplesRef.current.length - 1; i >= 0 && count < MAX; i--) {
+          const r = waterRipplesRef.current[i];
+          const age = (now - r.t0) / 1000;
+          if (age > 2.4) continue;
+          data[count * 4 + 0] = r.x / w;
+          // ripple y is stored sea-band-local; lift to full-frame uv
+          data[count * 4 + 1] = (skyPx + r.y) / h;
+          data[count * 4 + 2] = age;
+          data[count * 4 + 3] = r.strength;
+          count++;
+        }
+        waterRipplesRef.current = waterRipplesRef.current.filter(
+          (r) => (now - r.t0) / 1000 <= 2.4,
+        );
+        gl.uniform4fv(uRipplesLoc, data);
+        gl.uniform1i(uRippleCountLoc, count);
+      }
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      raf = requestAnimationFrame(draw);
+    };
+    raf = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(raf);
   }, [viewport.w, viewport.h]);
 
   // ── Foam canvas + animation loop ───────────────────────────────────
@@ -1000,14 +866,8 @@ export default function Aphros() {
       const wind = windRef.current.cur;
 
       ctx.clearRect(0, 0, w, h);
-
-      // base wash — translucent cream so the band has a presence even when bubbles thin
-      const baseG = ctx.createLinearGradient(0, 0, 0, h);
-      baseG.addColorStop(0, "rgba(255, 252, 246, 0.78)");
-      baseG.addColorStop(0.65, "rgba(248, 240, 226, 0.65)");
-      baseG.addColorStop(1, "rgba(240, 232, 216, 0.55)");
-      ctx.fillStyle = baseG;
-      ctx.fillRect(0, 0, w, h);
+      // no base wash — the scene shader paints the surf beneath; this
+      // canvas carries only the live bubbles and lapping tongues
 
       // animate + draw bubbles
       for (let i = bubbles.length - 1; i >= 0; i--) {
@@ -2452,7 +2312,9 @@ export default function Aphros() {
         overflow: "hidden",
       }}
     >
-      {/* sky band — gradient warms slightly when the cursor is over it */}
+      {/* CSS fallback bands — visible only when WebGL is unavailable;
+          the opaque scene canvas above paints over all of them. The sky
+          gradient still warms on hover for the fallback path. */}
       <div
         style={{
           position: "absolute",
@@ -2466,25 +2328,6 @@ export default function Aphros() {
           transition: "background 700ms ease",
         }}
       />
-      {/* aurora — WebGL pastel wisps over the sky band */}
-      <canvas
-        ref={auroraRef}
-        aria-hidden
-        style={{
-          position: "absolute",
-          top: 0,
-          left: 0,
-          width: "100%",
-          height: skyH,
-          display: "block",
-          pointerEvents: "none",
-        }}
-      />
-      {/* sea band — WebGL water shader sits ON TOP of the band gradient
-          but the shader fades out at the top so the rose horizon still
-          reads through softly. The fallback gradient below remains for
-          devices without WebGL — the shader's pre-multiplied alpha will
-          composite cleanly on top of it. */}
       <div
         style={{
           position: "absolute",
@@ -2495,20 +2338,31 @@ export default function Aphros() {
           background: `linear-gradient(180deg, rgba(191,221,216,0.85) 0%, rgba(163,207,203,0.75) 60%, rgba(232,180,164,0.45) 100%)`,
         }}
       />
+      <div
+        style={{
+          position: "absolute",
+          top: skyH + seaH,
+          left: 0,
+          width: "100%",
+          height: foamH + sandH,
+          background: `linear-gradient(180deg, #FCF7EC 0%, ${C.creamBone} 22%, ${C.pearl} 55%, ${C.ochreWarm} 100%)`,
+        }}
+      />
+      {/* the scene — one full-viewport WebGL painting, no band seams */}
       <canvas
-        ref={waterRef}
+        ref={sceneRef}
         aria-hidden
         style={{
           position: "absolute",
-          top: skyH,
-          left: 0,
+          inset: 0,
           width: "100%",
-          height: seaH,
+          height: "100%",
           display: "block",
           pointerEvents: "none",
         }}
       />
-      {/* foam band — canvas */}
+      {/* foam band — transparent canvas carrying the live bubbles and
+          lapping tongues over the shader's surf */}
       <canvas
         ref={foamRef}
         aria-hidden
@@ -2559,8 +2413,8 @@ export default function Aphros() {
       {/* sky band overlay — hover warms; taps route through the engine */}
       <div
         data-band="sky"
-        onPointerEnter={() => setSkyWarm(true)}
-        onPointerLeave={() => setSkyWarm(false)}
+        onPointerEnter={() => { setSkyWarm(true); skyWarmRef.current = true; }}
+        onPointerLeave={() => { setSkyWarm(false); skyWarmRef.current = false; }}
         style={{
           position: "absolute",
           top: 0,
@@ -2926,6 +2780,15 @@ export default function Aphros() {
               onPointerMove={(e) => onShellMove(sh.id, e)}
               onPointerLeave={onShellLeave}
             >
+              {/* cast shadow — grounds the shell on the sand instead of
+                  letting it float over the scene */}
+              <ellipse
+                cx={0}
+                cy={sh.size * 0.42}
+                rx={sh.size * 0.44}
+                ry={sh.size * 0.10}
+                fill="rgba(107, 74, 63, 0.16)"
+              />
               {renderShell(sh.id, sh.size)}
             </g>
           ))}
