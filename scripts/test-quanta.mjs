@@ -23,8 +23,9 @@ function loadTsModule(path) {
     fileName: filename,
   }).outputText;
   const module = { exports: {} };
-  const sandbox = { module, exports: module.exports };
-  vm.runInNewContext(code, sandbox, { filename });
+  // Same realm as the test — vm.runInNewContext yields string primitives that
+  // fail deepStrictEqual against host literals despite identical content.
+  new Function("module", "exports", code)(module, module.exports);
   return module.exports;
 }
 
@@ -65,9 +66,11 @@ const {
   const unstableMassive = PARTICLE_IDS.filter(
     (id) => !PARTICLES[id].stable && id !== "gluon",
   ).sort((a, b) => PARTICLES[a].massMeV - PARTICLES[b].massMeV);
-  assert.deepEqual(
-    unstableMassive,
-    ["muon", "tau", "w", "z", "higgs"],
+  // Compare as joined strings: vm-loaded modules yield string primitives that
+  // can fail deepStrictEqual despite identical content.
+  assert.equal(
+    unstableMassive.join(","),
+    "muon,tau,w,z,higgs",
     "the unstable massive ladder is muon → tau → W → Z → Higgs",
   );
   for (let i = 1; i < unstableMassive.length; i++) {
