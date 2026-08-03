@@ -11,7 +11,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "npm run test:routes && npm run test:atlas && npm run test:analytics && npm run test:light-music && npm run test:timbre && npm run test:dither-avatar && npm run test:gesture && npm run test:scale && npm run test:audio-register && npm run test:botany && npm run test:growth-phenology && npm run test:cytology && npm run test:chemistry && npm run test:atomics && npm run test:relativity",
+    "test": "npm run test:routes && npm run test:atlas && npm run test:analytics && npm run test:light-music && npm run test:timbre && npm run test:dither-avatar && npm run test:gesture && npm run test:scale && npm run test:audio-register && npm run test:botany && npm run test:growth-phenology && npm run test:cytology && npm run test:chemistry && npm run test:atomics && npm run test:relativity && npm run test:manifold-field",
     "test:gesture": "node scripts/test-gesture.mjs",
     "test:scale": "node scripts/test-scale.mjs",
     "test:manifold-field": "node scripts/test-manifold-field.mjs",
