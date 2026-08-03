@@ -604,7 +604,9 @@ type PointerIntent = {
 // A mote of matter falling into a black hole. Lives in the hole's local
 // polar frame (radius as a fraction of min(w,h); angle in radians) so the
 // camera's drift/zoom carries it for free. rn shrinks as it spirals in;
-// once inside the horizon it is consumed and briefly brightens the disk.
+// at the horizon it is never seen to cross — seen from far away its clock
+// dilates to a stop, so it freezes just above the edge, reddens, and fades
+// out on the exponential the sky actually obeys (L = L0·e^(−0.19T/M)).
 type InfallMote = {
   rn: number;       // radius as fraction of base (min(w,h))
   ang: number;      // orbital angle
@@ -612,6 +614,7 @@ type InfallMote = {
   size: number;     // px core size
   hue: number;      // captured light hue
   seed: number;
+  dyingAt?: number; // ms timestamp of reaching the horizon — the long fade
 };
 
 // A gravitational wave — spawned by a black-hole merger. Expands from a
@@ -699,6 +702,8 @@ export default function Stars() {
   const bhMotesRef = useRef<Map<string, InfallMote[]>>(new Map());
   // last-consumption timestamp (ms) per hole — drives the feeding flare.
   const bhFeedRef = useRef<Map<string, number>>(new Map());
+  // last horizon-arrival tone (ms, global) — keeps the fade-out song sparse.
+  const bhToneRef = useRef<number>(0);
   const gravWavesRef = useRef<GravWave[]>([]);
   const mergerRef = useRef<Merger | null>(null);
   const mergerQueueRef = useRef<Array<{ aId: string; bId: string }>>([]);
@@ -2095,10 +2100,12 @@ export default function Stars() {
     };
 
     // ── active black hole — the showpiece ──────────────────────────
-    // A living engine: a swirling, Doppler-beamed accretion disk that
-    // flickers as it feeds, infalling matter that spirals in and gets
-    // spaghettified across the horizon, twin relativistic jets, an
-    // event-horizon/Hawking shimmer, and a feeding-flare on consumption.
+    // A living engine that keeps the real proportions: the disk ends at
+    // the last stable orbit (3 horizons), trapped light rings the last
+    // photon orbit (1.5 horizons), the disk runs blackbody white→ember
+    // as 1/R, tidal shredding scales as M/R³, and matter arriving at the
+    // horizon is never seen to cross — it freezes, reddens, and fades on
+    // the fade-out exponential, one quiet falling tone marking arrival.
     type BhVisual = {
       x: number; y: number; horizon: number; lensR: number;
       spin: number; tilt: number; hue: number; coolHue: number;
@@ -2112,17 +2119,25 @@ export default function Stars() {
       const { x, y, horizon, lensR, spin, tilt, hue, coolHue, intensity } = v;
       const orient = spin * 0.65;
       const diskOuter = horizon * (5.4 + v.mass * 1.2) * (1 + v.inspiral * 0.35);
-      const diskInner = horizon * 1.55;
+      // the last stable orbit sits at 3 horizons — inside it nothing can
+      // circle, so the disk ends there and a true gap opens to the edge
+      const diskInner = horizon * 3.0;
+      // the last photon orbit — trapped light rings the hole at 1.5 horizons
+      const photonR = horizon * 1.5;
       const einsteinR = Math.sqrt(horizon * lensR) * 0.72;
 
       // ── infalling matter: spiral in, spaghettify, get consumed ──
       let motes = bhMotesRef.current.get(v.key);
       if (!motes) { motes = []; bhMotesRef.current.set(v.key, motes); }
       const horizonN = horizon / (base * zoom);
+      const iscoN = diskInner / (base * zoom);
       const lensN = lensR / (base * zoom);
       const step = motion ? 1 : 0.32;
-      // feed the hole — always something falling in
-      if (motes.length < MOTE_CAP && (Math.random() < (motion ? 0.34 : 0.12))) {
+      // feed the hole — always something falling in. Motes frozen at the
+      // horizon hold their light but not a place in the live pool.
+      let liveMotes = 0;
+      for (const q of motes) if (!q.dyingAt) liveMotes++;
+      if (liveMotes < MOTE_CAP && (Math.random() < (motion ? 0.34 : 0.12))) {
         const a = Math.random() * Math.PI * 2;
         motes.push({
           rn: lensN * (0.72 + Math.random() * 0.5),
@@ -2138,14 +2153,64 @@ export default function Stars() {
       bctx.globalCompositeOperation = "lighter";
       for (let i = motes.length - 1; i >= 0; i--) {
         const m = motes[i];
-        // Kepler-ish: inner orbits faster; infall accelerates near horizon.
+        if (m.dyingAt) {
+          // frozen at the edge: seen from here the mote never crosses.
+          // Its last light dims on the fade-out exponential — half-life
+          // grows with mass — while its color slides down the spectrum,
+          // x-ray to ember to gone, and its orbital clock runs down.
+          const dieT = (nowMs - m.dyingAt) / 1000;
+          const half = 0.7 + v.mass * 0.55;
+          const fadeL = Math.pow(0.5, dieT / half);
+          if (fadeL < 0.035) { motes.splice(i, 1); continue; }
+          m.ang += m.va * 0.02 * fadeL * step;
+          const R = m.rn * base * zoom;
+          const cs = Math.cos(orient);
+          const sn = Math.sin(orient);
+          const lx = Math.cos(m.ang) * R;
+          const ly = Math.sin(m.ang) * R * tilt;
+          const emberHue = 4 + 26 * fadeL;
+          bctx.fillStyle = `hsla(${emberHue.toFixed(0)}, 96%, ${(38 + 30 * fadeL).toFixed(0)}%, ${(intensity * 0.6 * fadeL).toFixed(3)})`;
+          bctx.beginPath();
+          bctx.arc(lx * cs - ly * sn, lx * sn + ly * cs, Math.max(0.4, m.size * (0.5 + 0.5 * fadeL)), 0, Math.PI * 2);
+          bctx.fill();
+          continue;
+        }
+        // Kepler outside the last stable orbit; inside it there is no
+        // orbit left to hold — the fall turns radial and runs away.
         const near = horizonN / Math.max(horizonN, m.rn);
+        const plunge = Math.max(0, 1 - (m.rn - horizonN) / Math.max(1e-5, iscoN - horizonN));
         m.ang += m.va * (0.02 + 0.06 * near) * step * (0.6 + Math.abs(spin) * 0.5);
-        m.rn -= (0.0011 + near * near * 0.006) * step;
+        m.rn -= (0.0011 + plunge * plunge * 0.0085) * step;
         if (m.rn <= horizonN * 1.02) {
-          // consumed — a little flare that brightens the disk
+          // arrival — the disk flares once, and the mote begins its long
+          // frozen fade instead of vanishing. Keep the frozen pool bounded.
+          m.rn = horizonN * 1.02;
+          m.dyingAt = nowMs;
           bhFeedRef.current.set(v.key, nowMs);
-          motes.splice(i, 1);
+          // the arrival, heard from far away: a quiet falling pair of
+          // tones, pitched down by mass the way a heavier horizon rings
+          // deeper — throttled so the sky never turns metronome
+          if (nowMs - bhToneRef.current > 2800 && !v.key.startsWith("ghost-")) {
+            bhToneRef.current = nowMs;
+            try {
+              const audio = getFieldAudio();
+              const f0 = 196 / (0.8 + v.mass * 0.3);
+              audio.playTone(f0, 0.2);
+              window.setTimeout(() => {
+                try { audio.playTone(f0 * 0.5, 0.3); } catch { /* noop */ }
+              }, 150);
+            } catch { /* noop */ }
+          }
+          let dyingCount = 0;
+          let oldestIdx = -1;
+          let oldestAt = Infinity;
+          for (let j = 0; j < motes.length; j++) {
+            const q = motes[j];
+            if (!q.dyingAt) continue;
+            dyingCount++;
+            if (q.dyingAt < oldestAt) { oldestAt = q.dyingAt; oldestIdx = j; }
+          }
+          if (dyingCount > MOTE_CAP && oldestIdx >= 0) motes.splice(oldestIdx, 1);
           continue;
         }
         const R = m.rn * base * zoom;
@@ -2158,9 +2223,12 @@ export default function Stars() {
         const py = lx * sn + ly * cs;
         const dopp = 0.5 + 0.5 * Math.cos(m.ang);
         const mh = m.hue - 40 * dopp;
-        // spaghettification: stretch into a radial streak near the horizon
+        // spaghettification goes as M/R³ across the mote — relative to its
+        // own horizon a small hole shreds far harder than a giant one, so
+        // the streaks stretch long on light holes and stay short on heavy
+        const shred = 2.4 * (1.9 / (0.7 + v.mass));
         const spag = Math.pow(Math.max(0, 1 - (m.rn - horizonN) / (lensN * 0.35)), 2);
-        const streak = spag * horizon * 2.4;
+        const streak = spag * horizon * shred;
         const alpha = intensity * (0.4 + 0.5 * dopp) * (0.5 + 0.5 * (1 - spag * 0.4));
         if (streak > 1) {
           const inx = (px / (R || 1));
@@ -2234,11 +2302,16 @@ export default function Stars() {
       bctx.rotate(orient);
       bctx.scale(1, Math.max(0.14, tilt));
       const diskA = intensity * (0.5 + feed * 0.5);
+      // the disk runs blackbody-hot: temperature falls as 1/R, so the
+      // inner edge at the last stable orbit burns near-white (x-ray),
+      // the middle glows in the hole's own light, and the rim cools to
+      // ember red (infrared). More mass, hotter edge.
+      const heat = Math.min(1, 0.55 + v.mass * 0.16);
       const disk = bctx.createRadialGradient(0, 0, diskInner, 0, 0, diskOuter);
-      disk.addColorStop(0, `hsla(${hue}, 95%, 78%, ${(0.5 * diskA).toFixed(3)})`);
-      disk.addColorStop(0.23, `hsla(${hue + 18}, 92%, 58%, ${(0.34 * diskA).toFixed(3)})`);
-      disk.addColorStop(0.58, `hsla(${coolHue}, 88%, 62%, ${(0.16 * diskA).toFixed(3)})`);
-      disk.addColorStop(1, `hsla(${coolHue}, 90%, 50%, 0)`);
+      disk.addColorStop(0, `hsla(${hue}, ${(34 + 30 * (1 - heat)).toFixed(0)}%, ${(86 + heat * 9).toFixed(0)}%, ${(0.55 * diskA).toFixed(3)})`);
+      disk.addColorStop(0.3, `hsla(${hue}, 95%, 66%, ${(0.32 * diskA).toFixed(3)})`);
+      disk.addColorStop(0.62, `hsla(${hue + 14}, 90%, 52%, ${(0.16 * diskA).toFixed(3)})`);
+      disk.addColorStop(1, `hsla(8, 92%, 42%, 0)`);
       bctx.fillStyle = disk;
       bctx.beginPath();
       bctx.arc(0, 0, diskOuter, 0, Math.PI * 2);
@@ -2255,8 +2328,10 @@ export default function Stars() {
         const ca = a0 + arcLen * 0.5;
         const dopp = 0.5 + 0.5 * Math.cos(ca);
         const flick = 0.55 + 0.45 * Math.sin(t * (3.5 + i) + i * 1.7);
-        const hh = hue - 38 * dopp + 16 * (1 - dopp);
-        const light = 52 + 34 * dopp;
+        // outer arcs ride the cooling gradient — their light slides down
+        // toward ember red as 1/R carries the temperature away
+        const hh = hue + (8 - hue) * (frac * 0.55) - 38 * dopp;
+        const light = 52 + 34 * dopp + 12 * (1 - frac);
         const alpha = intensity * flick * (0.08 + 0.26 * dopp) * (0.6 + feed * 0.6);
         bctx.strokeStyle = `hsla(${hh}, 96%, ${light.toFixed(0)}%, ${alpha.toFixed(3)})`;
         bctx.lineWidth = Math.max(0.7, horizon * 0.05);
@@ -2265,16 +2340,17 @@ export default function Stars() {
         bctx.stroke();
       }
 
-      // Doppler-bright inner crescent (approaching side) + dim far edge
+      // Doppler-bright inner crescent (approaching side) + dim far edge —
+      // ringing the disk's true inner rim at the last stable orbit
       bctx.strokeStyle = `hsla(${hue - 45}, 100%, 82%, ${(0.5 * intensity * (0.7 + feed * 0.5)).toFixed(3)})`;
       bctx.lineWidth = Math.max(1.4, horizon * 0.16);
       bctx.beginPath();
-      bctx.ellipse(0, 0, diskInner * 1.35, diskInner * 1.35, 0, -0.5 * Math.PI, 0.5 * Math.PI);
+      bctx.ellipse(0, 0, diskInner * 1.02, diskInner * 1.02, 0, -0.5 * Math.PI, 0.5 * Math.PI);
       bctx.stroke();
       bctx.strokeStyle = `hsla(${hue + 40}, 80%, 52%, ${(0.2 * intensity).toFixed(3)})`;
       bctx.lineWidth = Math.max(1.0, horizon * 0.1);
       bctx.beginPath();
-      bctx.ellipse(0, 0, diskInner * 1.35, diskInner * 1.35, 0, 0.5 * Math.PI, 1.5 * Math.PI);
+      bctx.ellipse(0, 0, diskInner * 1.02, diskInner * 1.02, 0, 0.5 * Math.PI, 1.5 * Math.PI);
       bctx.stroke();
 
       // Einstein-ring shimmer
@@ -2285,6 +2361,16 @@ export default function Stars() {
       bctx.ellipse(0, 0, einsteinR, einsteinR, 0, 0, Math.PI * 2);
       bctx.stroke();
       bctx.restore();
+
+      // the last photon orbit — a razor ring of light circling at 1.5
+      // horizons, round regardless of the disk's tilt: photons keep their
+      // own orbit, disturbed only into flicker
+      const photonSh = motion ? 0.65 + 0.35 * Math.sin(t * 3.1 + v.mass * 2) : 0.8;
+      bctx.strokeStyle = `hsla(${hue}, 55%, 92%, ${(0.30 * intensity * photonSh).toFixed(3)})`;
+      bctx.lineWidth = Math.max(0.7, horizon * 0.07);
+      bctx.beginPath();
+      bctx.arc(0, 0, photonR, 0, Math.PI * 2);
+      bctx.stroke();
 
       // hot inner edge / Hawking shimmer at the horizon
       const hawk = motion ? 0.7 + 0.3 * Math.sin(t * 6 + v.mass * 5) : 0.7;
@@ -2880,16 +2966,25 @@ export default function Stars() {
         const fBase = Math.min(w, h);
         const fZoom = cameraZoom(t);
         for (const hole of forgetting.holes) {
+          // evaporation keeps Hawking's ledger: lifetime goes as mass
+          // cubed and temperature as one-over-mass — the small holes go
+          // first, and every horizon burns brighter as it shrinks,
+          // leaving as a spark instead of a dimming.
+          const lifeFrac = Math.max(0.2, Math.pow(hole.mass / 3.6, 3));
+          const u = Math.min(1, (nowMs - forgetting.t0) / (forgetting.dur * lifeFrac));
+          if (u >= 1) continue;
+          const holeFade = 1 - u;
           const { x, y } = userHoleScreen(hole, t, nowMs);
           const horizon =
-            fBase * (0.010 + hole.mass * 0.0065) * fZoom * (0.35 + 0.65 * forgetFade);
+            fBase * (0.010 + hole.mass * 0.0065) * fZoom * (0.2 + 0.8 * holeFade);
           const lensR = horizon * (18 + hole.mass * 4.5);
           if (x < -lensR || x > w + lensR || y < -lensR || y > h + lensR) continue;
           drawBlackHoleActive({
             x, y, horizon, lensR,
             spin: hole.spin, tilt: 0.28 + hole.mass * 0.045,
             hue: hole.hue, coolHue: (hole.hue + 185) % 360,
-            intensity: forgetFade, mass: hole.mass, key: `ghost-${hole.id}`,
+            intensity: holeFade * 0.8 + 0.45 * Math.pow(u, 7), mass: hole.mass,
+            key: `ghost-${hole.id}`,
             inspiral: 0, lensCopy: false,
           }, t, nowMs);
         }
