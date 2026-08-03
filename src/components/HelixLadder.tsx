@@ -53,6 +53,7 @@ import {
   mutationRate,
   openPairs,
   parseSequence,
+  cycleBase,
   rungAt,
   sequenceFromSeed,
   settleLength,
@@ -295,13 +296,30 @@ export default function HelixLadder() {
           const { x, y } = toLocal(e.x, e.y);
           const i = rungAtPoint(x, y);
           if (i >= 0) {
+            selIdx = i;
+            // double-tap rewrites the nucleotide itself — A→T→G→C — so the
+            // rung is material, not only a key on the melody.
+            if (e.count >= 2) {
+              const next = cycleBase(seqRef.current, i);
+              if (next !== seqRef.current) {
+                seqRef.current = next;
+                litRung[i] = 1;
+                soundBase(i, 280 + Math.round(e.intensity * 180));
+                try {
+                  haptics.bloom();
+                } catch {
+                  /* noop */
+                }
+                save();
+              }
+              return;
+            }
             soundBase(i, 220 + Math.round(e.intensity * 200));
             try {
               haptics.tap();
             } catch {
               /* noop */
             }
-            selIdx = i;
             return;
           }
           // open dark: the whole ladder rings once, softly

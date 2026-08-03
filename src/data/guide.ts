@@ -598,6 +598,7 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "held enter → the same unzip and copy on a keyboard; release and it closes",
       "drag along the helix → supercoils it, winding turns into the length",
       "tap a rung → sounds that base's degree",
+      "double-tap a rung → rewrites the nucleotide itself, stepping A→T→G→C with a new tint, note and haptic in the same frame",
       "three fingers drag → the mutation temperature; the world begins rewriting the code on its own",
       "three fingers tap → the whole strand played as its melody; three fingers hold → the clock slows to a quarter",
       "twist → raises the lens to notation: the letters, the transcript, the melting point, and the melody drawn as a contour",
