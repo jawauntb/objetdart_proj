@@ -13,16 +13,21 @@
  * plasm, a drag stirs the cytoplasm, three fingers run an osmotic current
  * or dilate time, a scrub spins a centrifuge vortex, a twist rotates the
  * lens to a stained-slide diagram. Rhythm entrains the cilia; a flick sends
- * a mote comet. Breath rides the site's shared 0.14 Hz swell. The plasm
- * persists in `objetdart:cells:v1`. Pinch is deliberately unbound here —
- * ScaleTravel owns it, so pinching travels the manifold.
+ * a mote comet. The whole field breathes on the site's shared 0.14 Hz swell.
+ * The vessel is wired through: tilt leans the plasm downhill, shake storms
+ * it, a knock on the case rings the coverslip, face-down is night, and a
+ * blow across the stage gutters the candle. The plasm persists in
+ * `objetdart:cells:v1`. Pinch is deliberately unbound here — ScaleTravel
+ * owns it, so pinching travels the manifold.
  */
 
 import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
-import { attachGestures } from "@/lib/gesture";
-import { onVessel } from "@/lib/vessel";
+import { attachGestures, enableBreath } from "@/lib/gesture";
+import { onVessel, requestVessel } from "@/lib/vessel";
+import { shouldInvite } from "@/lib/candle";
+import { relaxTurbulence, stirTurbulence } from "@/lib/turbulence";
 import { useField } from "@/store/field";
 import LetGo from "@/components/LetGo";
 import {
@@ -189,7 +194,6 @@ export default function CellsPlasm() {
     let rectLeft = 0;
     let rectTop = 0;
     let raf = 0;
-    let lastFrame = 0;
     let last = performance.now();
     let localT = 0; // dilatable clock
     let reduce = false;
@@ -202,12 +206,15 @@ export default function CellsPlasm() {
     let lens = 0;
     let lensTarget = 0;
     let lensSnapped = 0;
-    // the vessel: gravity's lean on the plasm (-1..1) and the brownian storm
+    // the vessel: gravity's lean on the plasm (-1..1), night, the blown gust
     let tiltLeanX = 0;
     let tiltLeanY = 0;
-    let brownianStorm = 0;
+    let night = 0;
+    let nightTarget = 0;
+    let breathGust = 0;
     let tuttiPulse = 0;
     let lastTiltSoundAt = 0;
+    let lastBreathAt = 0;
     let lastTuttiAt = 0;
     let entrainedBpm = 0;
     let entrainedUntil = 0;
@@ -221,15 +228,19 @@ export default function CellsPlasm() {
     let cursorVisible = false;
     let kbCharge = 0;
     let kbCellId: string | null = null;
-    let lastStirSoundAt = 0;
+    let lastStirFeltAt = 0;
+    let stirVoice = 0;
     let lastStreamSoundAt = 0;
     let lastScrubAt = 0;
     let lastChargeNoteAt = 0;
-    const hold: { cellId: string | null; onExisting: boolean; seeded: boolean; divided: boolean } = {
+    const hold: {
+      cellId: string | null; onExisting: boolean; seeded: boolean; divided: boolean; tier: number;
+    } = {
       cellId: null,
       onExisting: false,
       seeded: false,
       divided: false,
+      tier: 0,
     };
 
     const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -275,9 +286,18 @@ export default function CellsPlasm() {
     const audio = () => getFieldAudio();
     const note = (midi: number, ms = 120) => { try { audio().playNote(midi, ms); } catch { /* noop */ } };
 
+    // The stage — background gradient, candle pool, lens iris — carries no
+    // detail above a few pixels, so it is baked once at half resolution and
+    // blitted back up. That pays for the full-rate 2× field in front of it,
+    // and the bilinear upscale keeps the dark gradient from banding.
+    const stage = document.createElement("canvas");
+    const stageCtx = stage.getContext("2d");
+    let stageLens = -1;
+    let stageGlow = -1;
+
     const resize = () => {
       const r = wrap.getBoundingClientRect();
-      const ratio = Math.min(window.devicePixelRatio || 1, 1.5);
+      const ratio = Math.min(window.devicePixelRatio || 1, 2);
       width = Math.max(320, Math.floor(r.width));
       height = Math.max(480, Math.floor(r.height));
       rectLeft = r.left;
@@ -287,6 +307,11 @@ export default function CellsPlasm() {
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
       ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+      const sr = Math.max(0.5, ratio * 0.5);
+      stage.width = Math.max(1, Math.floor(width * sr));
+      stage.height = Math.max(1, Math.floor(height * sr));
+      stageCtx?.setTransform(sr, 0, 0, sr, 0, 0);
+      stageLens = -1;
       if (motes.length === 0) {
         for (let i = 0; i < MOTE_COUNT; i++) {
           motes.push({
@@ -429,7 +454,7 @@ export default function CellsPlasm() {
           maxR: Math.max(width, height) * 0.6,
           strength: 0.45,
         });
-        brownianStorm = Math.min(1, brownianStorm + 0.4);
+        stirTurbulence(0.4);
       }
       try { audio().thud(); } catch { /* noop */ }
       note(40, 520);
@@ -446,6 +471,7 @@ export default function CellsPlasm() {
       const maxR = Math.min(width, height) * (0.14 + intensity * 0.3);
       wavefronts.push({ x, y, born: performance.now(), maxR, strength: 0.4 + intensity * 0.6 });
       if (wavefronts.length > 8) wavefronts.shift();
+      stirTurbulence(intensity * 0.05);
       note(57 + Math.round(intensity * 7), 110);
       try { haptics.tap(); } catch { /* noop */ }
     };
@@ -469,6 +495,37 @@ export default function CellsPlasm() {
       });
       for (const c of alive) c.streamBoost = Math.min(2.4, c.streamBoost + 0.5);
       try { haptics.tap(); } catch { /* noop */ }
+    };
+
+    // ————— breath: the candle under the stage can be blown across —————
+    // Opt-in (grammar §1): armed only by the ceremony hold, and a refused
+    // microphone simply costs the room a dimension.
+    let breathStop: (() => void) | null = null;
+    const onBreath = ({ strength }: { strength: number }) => {
+      const now = performance.now();
+      lastInteractionAt = now;
+      breathGust = Math.min(1, breathGust + strength * 0.4);
+      if (now - lastBreathAt < 260) return;
+      lastBreathAt = now;
+      // the pool of light gutters, the motes go with the draught
+      stirTurbulence(Math.min(0.25, 0.08 + strength * 0.2));
+      if (!reduce) {
+        wavefronts.push({
+          x: width * 0.5,
+          y: height * 0.42,
+          born: now,
+          maxR: Math.max(width, height) * 0.7,
+          strength: 0.3 + strength * 0.5,
+        });
+        if (wavefronts.length > 8) wavefronts.shift();
+      }
+      note(33 + Math.round(strength * 5), 420);
+      try { haptics.chop(); } catch { /* noop */ }
+    };
+    const armBreath = async () => {
+      if (breathStop) return;
+      const stop = await enableBreath({ breath: onBreath });
+      if (stop) breathStop = stop;
     };
 
     // ————— gestures (the grammar, nothing private; pinch belongs to the manifold) —————
@@ -508,6 +565,7 @@ export default function CellsPlasm() {
           hold.onExisting = !!c;
           hold.seeded = false;
           hold.divided = false;
+          hold.tier = 0;
           return;
         }
         if (e.phase === "release") {
@@ -515,8 +573,19 @@ export default function CellsPlasm() {
           if (c) c.charge = 0;
           hold.cellId = null;
           hold.onExisting = false;
+          hold.tier = 0;
           save();
           return;
+        }
+        // the candle's ladder, kept here because the flame is hidden on this
+        // route: dwell invites the vessel, the ceremony invites breath
+        if (e.tier >= 2 && hold.tier < 2) {
+          hold.tier = 2;
+          if (shouldInvite("vessel")) void requestVessel();
+        }
+        if (e.tier >= 3 && hold.tier < 3) {
+          hold.tier = 3;
+          if (shouldInvite("breath")) void armBreath();
         }
         // ticks (~80ms)
         if (hold.onExisting && hold.cellId) {
@@ -566,9 +635,10 @@ export default function CellsPlasm() {
           streamTargetY = clamp(e.vy * 1.4, -1, 1);
           const now = performance.now();
           const mag = Math.hypot(streamTargetX, streamTargetY);
-          if (mag > 0.5 && now - lastStreamSoundAt > 520) {
+          if (mag > 0.35 && now - lastStreamSoundAt > 150) {
             lastStreamSoundAt = now;
-            note(38 + Math.round(mag * 5), 240);
+            stirTurbulence(Math.min(0.04, mag * 0.04));
+            note(38 + Math.round(mag * 5), 200);
             try { haptics.chop(); } catch { /* noop */ }
           }
           return;
@@ -585,11 +655,16 @@ export default function CellsPlasm() {
             c.streamBoost = Math.min(2.4, c.streamBoost + 0.5);
           }
         }
+        // a stir is one continuous act, so it answers continuously: the hand
+        // is met every ~80ms and the plasm speaks on every other meeting
         const now = performance.now();
-        if (now - lastStirSoundAt > 240) {
-          lastStirSoundAt = now;
-          note(62 + Math.round(twinkleHash(Math.floor(now / 240)) * 5), 70);
-          try { haptics.ripple(0.18); } catch { /* noop */ }
+        if (now - lastStirFeltAt > 80) {
+          lastStirFeltAt = now;
+          const speed = Math.hypot(e.vx, e.vy);
+          stirTurbulence(Math.min(0.03, speed * 0.02));
+          try { haptics.ripple(0.12 + Math.min(0.38, speed * 0.24)); } catch { /* noop */ }
+          stirVoice = (stirVoice + 1) % 2;
+          if (stirVoice === 0) note(62 + Math.round(twinkleHash(Math.floor(now / 160)) * 5), 70);
         }
       },
       flick: (e) => {
@@ -613,6 +688,7 @@ export default function CellsPlasm() {
           c.pushX += Math.cos(e.angle) * 20;
           c.pushY += Math.sin(e.angle) * 20;
         }
+        stirTurbulence(Math.min(0.15, e.speed * 0.08));
         try { audio().spark(); } catch { /* noop */ }
         try { haptics.ripple(0.4); } catch { /* noop */ }
       },
@@ -639,9 +715,10 @@ export default function CellsPlasm() {
         vortices.push({ x, y, omega: clamp(e.angularVelocity, -6, 6), born: performance.now() });
         if (vortices.length > 4) vortices.shift();
         const now = performance.now();
-        if (now - lastScrubAt > 600) {
+        if (now - lastScrubAt > 260) {
           lastScrubAt = now;
           // the centrifuge answers: swirl seen, tone heard, ring felt
+          stirTurbulence(Math.min(0.05, Math.abs(e.angularVelocity) * 0.02));
           note(64 + Math.round(Math.abs(e.winding)), 90);
           try { haptics.ripple(0.3); } catch { /* noop */ }
         }
@@ -676,13 +753,14 @@ export default function CellsPlasm() {
         if (mag > 0.55 && now - lastTiltSoundAt > 1400) {
           lastTiltSoundAt = now;
           note(38 + Math.round(mag * 4), 220); // the streaming's low wind-word
+          try { haptics.tap(); } catch { /* noop */ }
         }
       },
       shake: ({ intensity }) => {
         if (reduce) return;
         lastInteractionAt = performance.now();
         // brownian storm: every mote seethes harder for a breath
-        brownianStorm = Math.min(1, 0.5 + intensity * 0.7);
+        stirTurbulence(Math.min(0.7, 0.3 + intensity * 0.5));
         for (const c of cells) c.streamBoost = Math.min(2.4, c.streamBoost + 0.7);
         wavefronts.push({
           x: width * 0.5,
@@ -694,6 +772,38 @@ export default function CellsPlasm() {
         try { audio().spark(); } catch { /* noop */ }
         note(43, 200);
         try { (intensity > 0.7 ? haptics.storm : haptics.chop)(); } catch { /* noop */ }
+      },
+      knock: ({ intensity }) => {
+        // a rap on the case is a rap on the coverslip: the field rings
+        lastInteractionAt = performance.now();
+        stirTurbulence(Math.min(0.35, 0.1 + intensity * 0.3));
+        if (!reduce) {
+          wavefronts.push({
+            x: width * 0.5,
+            y: height * 0.5,
+            born: performance.now(),
+            maxR: Math.max(width, height) * 0.55,
+            strength: 0.3 + intensity * 0.4,
+          });
+          if (wavefronts.length > 8) wavefronts.shift();
+        }
+        try { haptics.detent(); } catch { /* noop */ }
+        tutti();
+      },
+      flip: ({ faceDown }) => {
+        // face-down is night: the lamp under the stage goes down and the
+        // plasm slows to almost still until the slide is turned back over
+        nightTarget = faceDown ? 1 : 0;
+        lastInteractionAt = performance.now();
+        if (faceDown) {
+          try { audio().thud(); } catch { /* noop */ }
+          note(31, 620);
+          try { haptics.roll(); } catch { /* noop */ }
+        } else {
+          try { audio().spark(); } catch { /* noop */ }
+          note(48, 320);
+          try { haptics.bloom(); } catch { /* noop */ }
+        }
       },
     });
 
@@ -944,20 +1054,23 @@ export default function CellsPlasm() {
     // ————— the loop —————
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
-      if (!reduce && now - lastFrame < 30) return;
-      lastFrame = now;
       const delta = Math.min(64, now - last);
       last = now;
       const dt = delta / 1000;
 
-      timeScale += (timeScaleTarget - timeScale) * Math.min(1, dt * 5);
+      // night falls gently and lifts a little quicker — turning the slide
+      // back over should feel like the lamp coming up, not a slow dawn
+      night += (nightTarget - night) * Math.min(1, dt * (nightTarget > night ? 1.6 : 2.8));
+      timeScale += (timeScaleTarget * (1 - night * 0.82) - timeScale) * Math.min(1, dt * 5);
       if (!reduce) localT += dt * timeScale;
       streamX += (streamTargetX - streamX) * Math.min(1, dt * 2.2);
       streamY += (streamTargetY - streamY) * Math.min(1, dt * 2.2);
       streamTargetX *= Math.exp(-dt * 0.5);
       streamTargetY *= Math.exp(-dt * 0.5);
       lens += (lensTarget - lens) * Math.min(1, dt * 6);
-      brownianStorm *= Math.exp(-dt * 0.9);
+      // the shared intensity axis — the same storm the haptics ride
+      const turb = reduce ? 0 : relaxTurbulence(now);
+      breathGust *= Math.exp(-dt * 1.6);
       tuttiPulse *= Math.exp(-dt * 2.4);
       // the vessel's lean: the plasm settles downhill with real gravity
       const gravX = streamX + tiltLeanX * 0.5;
@@ -1001,30 +1114,33 @@ export default function CellsPlasm() {
         }
       }
 
-      // background — the plasm after dark; the lens brightens it to a slide
-      const bgTop = mixHex("#130e0b", "#26201a", lens);
-      const bgMid = mixHex("#181110", "#332a20", lens);
-      const bgLow = mixHex("#1c1512", "#2b2118", lens);
-      const bg = ctx.createLinearGradient(0, 0, 0, height);
-      bg.addColorStop(0, bgTop);
-      bg.addColorStop(0.55, bgMid);
-      bg.addColorStop(1, bgLow);
-      ctx.fillStyle = bg;
-      ctx.fillRect(0, 0, width, height);
-      // the candle beneath the stage: a breathing warm pool of light
-      const glowPulse = reduce ? 0.1 : 0.09 + Math.sin(breath) * 0.03;
-      const glow = ctx.createRadialGradient(width * 0.5, height * 0.46, 10, width * 0.5, height * 0.46, Math.max(width, height) * 0.72);
-      glow.addColorStop(0, `rgba(231, 172, 82, ${glowPulse + lens * 0.1})`);
-      glow.addColorStop(0.55, "rgba(200, 115, 42, 0.045)");
-      glow.addColorStop(1, "rgba(0,0,0,0)");
-      ctx.fillStyle = glow;
-      ctx.fillRect(0, 0, width, height);
-      // the lens iris — the circular field of the objective
-      const iris = ctx.createRadialGradient(width * 0.5, height * 0.5, Math.min(width, height) * 0.52, width * 0.5, height * 0.5, Math.max(width, height) * 0.78);
-      iris.addColorStop(0, "rgba(0,0,0,0)");
-      iris.addColorStop(1, `rgba(5, 3, 2, ${0.5 + lens * 0.2})`);
-      ctx.fillStyle = iris;
-      ctx.fillRect(0, 0, width, height);
+      // the stage: dark plasm, the candle pool beneath it, the objective's
+      // iris. Repainted only when the lens turns or the pool's light moves;
+      // otherwise it is one blit, and the whole frame budget goes to life.
+      const glowPulse = (reduce ? 0.1 : 0.09 + Math.sin(breath) * 0.03)
+        * (1 - night * 0.85) * (1 - breathGust * 0.55);
+      if (stageCtx && (Math.abs(lens - stageLens) > 0.003 || Math.abs(glowPulse - stageGlow) > 0.0015)) {
+        stageLens = lens;
+        stageGlow = glowPulse;
+        const bg = stageCtx.createLinearGradient(0, 0, 0, height);
+        bg.addColorStop(0, mixHex("#130e0b", "#26201a", lens));
+        bg.addColorStop(0.55, mixHex("#181110", "#332a20", lens));
+        bg.addColorStop(1, mixHex("#1c1512", "#2b2118", lens));
+        stageCtx.fillStyle = bg;
+        stageCtx.fillRect(0, 0, width, height);
+        const glow = stageCtx.createRadialGradient(width * 0.5, height * 0.46, 10, width * 0.5, height * 0.46, Math.max(width, height) * 0.72);
+        glow.addColorStop(0, `rgba(231, 172, 82, ${glowPulse + lens * 0.1})`);
+        glow.addColorStop(0.55, `rgba(200, 115, 42, ${0.045 * (1 - night * 0.85)})`);
+        glow.addColorStop(1, "rgba(0,0,0,0)");
+        stageCtx.fillStyle = glow;
+        stageCtx.fillRect(0, 0, width, height);
+        const iris = stageCtx.createRadialGradient(width * 0.5, height * 0.5, Math.min(width, height) * 0.52, width * 0.5, height * 0.5, Math.max(width, height) * 0.78);
+        iris.addColorStop(0, "rgba(0,0,0,0)");
+        iris.addColorStop(1, `rgba(5, 3, 2, ${0.5 + lens * 0.2})`);
+        stageCtx.fillStyle = iris;
+        stageCtx.fillRect(0, 0, width, height);
+      }
+      ctx.drawImage(stage, 0, 0, width, height);
 
       // brownian motes
       ctx.save();
@@ -1033,11 +1149,11 @@ export default function CellsPlasm() {
         const m = motes[i];
         if (!reduce) {
           // brownian jitter — deterministic per mote, alive at rest
-          const seethe = 6 * (1 + brownianStorm * 4); // the storm seethes, then settles
+          const seethe = 6 * (1 + turb * 4); // the storm seethes, then settles
           const jx = Math.sin(localT * (1.1 + twinkleHash(i + 41) * 1.7) + twinkleHash(i + 7) * 6.28) * seethe;
           const jy = Math.cos(localT * (0.9 + twinkleHash(i + 83) * 1.9) + twinkleHash(i + 5) * 6.28) * seethe;
-          m.vx += (jx - m.vx) * dt * (2 + brownianStorm * 6) + gravX * 130 * dt;
-          m.vy += (jy - m.vy) * dt * (2 + brownianStorm * 6) + gravY * 130 * dt;
+          m.vx += (jx - m.vx) * dt * (2 + turb * 6) + gravX * 130 * dt;
+          m.vy += (jy - m.vy) * dt * (2 + turb * 6) + gravY * 130 * dt;
           for (const s of stirs) {
             const age = (now - s.born) / 1800;
             if (age >= 1) continue;
@@ -1152,6 +1268,12 @@ export default function CellsPlasm() {
       }
       ctx.restore();
 
+      // night (the slide turned face-down) settles over everything alive
+      if (night > 0.01) {
+        ctx.fillStyle = `rgba(5, 3, 2, ${night * 0.62})`;
+        ctx.fillRect(0, 0, width, height);
+      }
+
       // glimmer — after quiet, a ring where a dwell would land (never text)
       const idleMs = now - lastInteractionAt;
       if (idleMs > 20000) {
@@ -1190,6 +1312,7 @@ export default function CellsPlasm() {
       observer.disconnect();
       detach();
       detachVessel();
+      breathStop?.();
       markLens(false);
       wrap.removeEventListener("keydown", onKeyDown);
       wrap.removeEventListener("keyup", onKeyUp);
