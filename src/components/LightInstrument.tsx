@@ -17,6 +17,12 @@ import {
   wavelengthFromX,
   type ScaleMode,
 } from "@/lib/light-music";
+import {
+  lightLesson,
+  playLesson,
+  scaleLattice,
+  type LessonGhost,
+} from "@/lib/instrument-lesson";
 import { useField } from "@/store/field";
 
 type ToneMark = {
@@ -75,11 +81,15 @@ export default function LightInstrument() {
   const [wavelength, setWavelength] = useState(532);
   const [marks, setMarks] = useState<ToneMark[]>([]);
   const [touches, setTouches] = useState<ActiveTouch[]>([]);
+  const [ghosts, setGhosts] = useState<LessonGhost[]>([]);
   const [isReplaying, setIsReplaying] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [lessonLabel, setLessonLabel] = useState("");
   const [scaleMode, setScaleMode] = useState<ScaleMode>("penta");
   const [subMode, setSubMode] = useState(false);
   const [motionState, setMotionState] = useState<MotionState>("unavailable");
   const [flash, setFlash] = useState(0);
+  const cancelLesson = useRef<null | (() => void)>(null);
 
   scaleModeRef.current = scaleMode;
   marksRef.current = marks;
@@ -91,6 +101,9 @@ export default function LightInstrument() {
     [wavelength, scaleMode],
   );
   const currentNote = useMemo(() => noteName(audible), [audible]);
+  // Soft frets: the continuum becoming a piano of light under the active scale.
+  const lattice = useMemo(() => scaleLattice(scaleMode), [scaleMode]);
+  const nearX = touches[0]?.x ?? ghosts[0]?.x ?? null;
 
   const recordLight = useCallback((meta: string, intensity: number) => {
     useField.getState().recordTape("sigil", intensity, `light/${meta}`);
@@ -232,6 +245,57 @@ export default function LightInstrument() {
     setMarks([]);
     recordLight("memory/clear", 0.34);
     try { getFieldAudio().thud(); } catch { /* noop */ }
+  }, [recordLight]);
+
+  const stopLesson = useCallback(() => {
+    cancelLesson.current?.();
+    cancelLesson.current = null;
+    getLight808().stopAll();
+    pointers.current.clear();
+    setTouches([]);
+    setGhosts([]);
+    setLessonLabel("");
+    setIsListening(false);
+  }, []);
+
+  const playListen = useCallback(() => {
+    void getFieldAudio().start();
+    cancelLesson.current?.();
+    getLight808().stopAll();
+    pointers.current.clear();
+    setTouches([]);
+    setGhosts([]);
+    setIsListening(true);
+    setLessonLabel("");
+    recordLight("lesson/listen", 0.7);
+    try { ripple(0.5); } catch { /* noop */ }
+
+    cancelLesson.current = playLesson(lightLesson(), {
+      on: (e) => {
+        const touchColor = colorFromWavelength(wavelengthFromX(e.x));
+        getLight808().noteOn(`lesson:${e.id}`, e.freq, { brightness: e.brightness ?? 0.58 });
+        setWavelength(wavelengthFromX(e.x));
+        setGhosts((current) => [
+          ...current.filter((ghost) => ghost.id !== e.id),
+          { id: e.id, x: e.x, y: e.y, note: e.note, color: touchColor },
+        ]);
+      },
+      off: (e) => {
+        getLight808().noteOff(`lesson:${e.id}`);
+        setGhosts((current) => current.filter((ghost) => ghost.id !== e.id));
+      },
+      lens: (e) => {
+        scaleModeRef.current = e.mode;
+        setScaleMode(e.mode);
+      },
+      label: (text) => setLessonLabel(text),
+      done: () => {
+        cancelLesson.current = null;
+        setGhosts([]);
+        setLessonLabel("");
+        setIsListening(false);
+      },
+    });
   }, [recordLight]);
 
   const cycleScale = useCallback(() => {
@@ -378,6 +442,7 @@ export default function LightInstrument() {
     document.addEventListener("gesturestart", prevent);
     return () => {
       document.removeEventListener("gesturestart", prevent);
+      cancelLesson.current?.();
       getLight808().stopAll();
     };
   }, []);
@@ -402,6 +467,19 @@ export default function LightInstrument() {
         onPointerCancel={handlePointerEnd}
       >
         <div key={flash} className="light-flash" aria-hidden="true" />
+        <div className="light-lattice" aria-hidden="true">
+          {lattice.map((fret) => {
+            const near = nearX != null && Math.abs(nearX - fret.x) < 0.03;
+            return (
+              <i
+                key={fret.midi}
+                className={near ? "is-near" : undefined}
+                style={{ left: `${fret.x * 100}%` }}
+                data-note={fret.note}
+              />
+            );
+          })}
+        </div>
         <div className="light-beam" />
         <div className="light-prism">
           <span />
@@ -419,6 +497,21 @@ export default function LightInstrument() {
               boxShadow: `0 0 30px ${mark.color}`,
             }}
           />
+        ))}
+        {ghosts.map((ghost) => (
+          <span
+            key={`g-${ghost.id}`}
+            className="light-finger is-ghost"
+            style={{
+              left: `${ghost.x * 100}%`,
+              top: `${ghost.y * 100}%`,
+              borderColor: ghost.color ?? "rgba(255,255,255,0.7)",
+              boxShadow: `0 0 36px ${ghost.color ?? "rgba(255,255,255,0.45)"}`,
+            }}
+          >
+            <strong>{ghost.note}</strong>
+            <em>listen</em>
+          </span>
         ))}
         {touches.map((touch) => (
           <span
@@ -438,7 +531,7 @@ export default function LightInstrument() {
         <div className="light-current" aria-hidden="true">
           <span>{Math.round(wavelength)} nm</span>
           <strong>{currentNote}</strong>
-          <em>{formatHz(audible)}</em>
+          <em>{lessonLabel || formatHz(audible)}</em>
         </div>
       </div>
 
@@ -460,7 +553,14 @@ export default function LightInstrument() {
           ))}
         </div>
         <div className="light-actions" aria-label="light instrument controls">
-          <button type="button" onClick={replayMarks} disabled={isReplaying}>
+          <button
+            type="button"
+            className={isListening ? "light-on" : undefined}
+            onClick={isListening ? stopLesson : playListen}
+          >
+            {isListening ? "listening" : "listen"}
+          </button>
+          <button type="button" onClick={replayMarks} disabled={isReplaying || isListening}>
             {isReplaying ? "replaying" : "replay"}
           </button>
           <button type="button" onClick={clearMarks} disabled={marks.length === 0}>
@@ -480,8 +580,9 @@ export default function LightInstrument() {
           <output>{marks.length} kept</output>
         </div>
         <p className="light-hint">
-          hold to sustain · fingers stack chords · slide to glide · double-tap drops a sub ·
-          shake to strum what you kept · flip the phone for sub mode · tilt to sweep the filter
+          {lessonLabel
+            ? lessonLabel
+            : "the frets bloom where the scale lives · listen, then join with your hands"}
         </p>
       </footer>
 
@@ -544,6 +645,42 @@ export default function LightInstrument() {
           background: radial-gradient(circle at 50% 46%, transparent 0 24%, rgba(2,3,3,0.30) 56%, rgba(2,3,3,0.68) 100%);
           pointer-events: none;
           z-index: 1;
+        }
+        .light-lattice {
+          position: absolute;
+          inset: 0;
+          z-index: 2;
+          pointer-events: none;
+        }
+        .light-lattice i {
+          position: absolute;
+          top: 8%;
+          bottom: 18%;
+          width: 1px;
+          background: linear-gradient(
+            180deg,
+            transparent,
+            rgba(255,255,255,0.18) 18%,
+            rgba(255,255,255,0.34) 50%,
+            rgba(255,255,255,0.18) 82%,
+            transparent
+          );
+          transform: translateX(-50%);
+          opacity: 0.45;
+          transition: opacity 160ms ease, box-shadow 160ms ease, width 160ms ease;
+        }
+        .light-lattice i.is-near {
+          width: 2px;
+          opacity: 0.95;
+          box-shadow: 0 0 18px rgba(255,255,255,0.55), 0 0 40px var(--light-color);
+          background: linear-gradient(
+            180deg,
+            transparent,
+            rgba(255,255,255,0.55) 18%,
+            var(--light-color) 50%,
+            rgba(255,255,255,0.55) 82%,
+            transparent
+          );
         }
         .light-flash {
           position: absolute;
@@ -641,6 +778,20 @@ export default function LightInstrument() {
           mix-blend-mode: screen;
           z-index: 6;
           pointer-events: none;
+        }
+        .light-finger.is-ghost {
+          border-style: dashed;
+          opacity: 0.78;
+          animation: lightGhost 900ms ease-in-out infinite;
+        }
+        @keyframes lightGhost {
+          0%, 100% { transform: translate(-50%, -50%) scale(0.96); opacity: 0.62; }
+          50% { transform: translate(-50%, -50%) scale(1.04); opacity: 0.92; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .light-finger.is-ghost {
+            animation: none;
+          }
         }
         .light-finger strong {
           color: white;
