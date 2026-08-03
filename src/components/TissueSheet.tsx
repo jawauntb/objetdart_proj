@@ -147,6 +147,8 @@ export default function TissueSheet() {
     let pitAmount = 0;
     let pitSealed = false;
     let lastPitToneAt = 0;
+    /** the last hold tick — a hold that turns into a drag never releases */
+    let pitTickAt = 0;
     let strokeX = 0;
     let strokeY = 0;
     let strokeRun = 0;
@@ -166,6 +168,11 @@ export default function TissueSheet() {
     let field: MorphogenField = morphogenField(0x715);
 
     const lit = new Float32Array(MAX_CELLS);
+    // No two cells in an epithelium look the same size. This is a drawing
+    // variation only — the mechanical radius stays uniform so the lattice's
+    // rest lengths remain satisfiable and bond colour reads real strain.
+    const girth = new Float32Array(MAX_CELLS);
+    for (let i = 0; i < MAX_CELLS; i++) girth[i] = 0.84 + ((hashSeed(i, 0x9a1) % 1000) / 1000) * 0.32;
     const morph = new Float64Array(MAX_CELLS);
     let degrees = new Uint8Array(MAX_CELLS);
     let prevLive = new Uint8Array(0);
@@ -400,6 +407,7 @@ export default function TissueSheet() {
           const p = toSheet(e.x, e.y);
           if (e.phase === "enter") {
             pitActive = true;
+            pitTickAt = performance.now();
             pitSealed = false;
             pitX = p.x;
             pitY = p.y;
@@ -416,6 +424,7 @@ export default function TissueSheet() {
             pitActive = false;
             return;
           }
+          pitTickAt = performance.now();
           // Duration is the axis: the pit keeps deepening the longer the
           // finger stays, and past the ceremony it closes over for good.
           pitX = p.x;
@@ -466,6 +475,8 @@ export default function TissueSheet() {
           if (e.fingers !== 1) return;
           const p = toSheet(e.x, e.y);
           if (e.phase === "start") {
+            // a hold that became a stroke is no longer a hold
+            pitActive = false;
             strokeLive = true;
             strokeRun = 0;
             strokeX = p.x;
@@ -672,6 +683,7 @@ export default function TissueSheet() {
         // and a held key draws the sheet in, as a dwell does
         kbCharge = clamp01(kbCharge + 0.035);
         pitActive = true;
+        pitTickAt = performance.now();
         pitX = sheet.px[selIdx];
         pitY = sheet.py[selIdx];
         pitAmount = kbCharge;
@@ -750,6 +762,10 @@ export default function TissueSheet() {
 
       // ——— the body ———
       if (sheet && sheet.n > 0) {
+        // A hold that turned into a drag or a flick never sends its release,
+        // so the pit would stay pressed into the sheet forever. It lifts
+        // when the ticks stop, exactly as a finger does.
+        if (pitActive && now - pitTickAt > 340 && pitTickAt > 0) pitActive = false;
         if (pitActive) constrict(sheet, pitX, pitY, 2.1, pitAmount);
         else relaxConstriction(sheet, dt * timeScale, 0.55);
 
@@ -871,7 +887,7 @@ export default function TissueSheet() {
         // sheet glows rather than sits flat on the dark —
         ctx.beginPath();
         for (let i = 0; i < n; i++) {
-          const rr = sheet.r[i] * scale * 1.7 * (1 - sheet.depth[i] * 0.5);
+          const rr = sheet.r[i] * scale * girth[i] * 1.75 * (1 - sheet.depth[i] * 0.5);
           const px = ox + sheet.px[i] * scale;
           const py = oy + sheet.py[i] * scale;
           ctx.moveTo(px + rr, py);
@@ -901,7 +917,8 @@ export default function TissueSheet() {
                 ? 0
                 : Math.sin(localT * waveK - (sheet.px[i] / Math.max(0.001, sheet.spanX)) * 2.2) * 0.08;
               const rr =
-                sheet.r[i] * scale * (0.78 + wave + breath * 0.05 + lit[i] * 0.4) * (1 - sheet.depth[i] * 0.45);
+                sheet.r[i] * scale * girth[i] * (0.86 + wave + breath * 0.05 + lit[i] * 0.4) *
+                (1 - sheet.depth[i] * 0.45);
               if (rr <= 0.2) continue;
               const px = ox + sheet.px[i] * scale;
               const py = oy + sheet.py[i] * scale;
@@ -956,15 +973,22 @@ export default function TissueSheet() {
             if (!sheet.live[e]) continue;
             const a = sheet.ea[e];
             const c = sheet.eb[e];
-            if (morph[a] > front === morph[c] > front) continue;
-            ctx.moveTo(ox + sheet.px[a] * scale, oy + sheet.py[a] * scale);
-            ctx.lineTo(ox + sheet.px[c] * scale, oy + sheet.py[c] * scale);
+            const ma = morph[a];
+            const mc = morph[c];
+            if (ma > front === mc > front) continue;
+            // the crossing point itself, so the front reads as a line and
+            // not as a cage of whole bonds
+            const u = (front - ma) / (mc - ma);
+            const fx = ox + (sheet.px[a] + (sheet.px[c] - sheet.px[a]) * u) * scale;
+            const fy = oy + (sheet.py[a] + (sheet.py[c] - sheet.py[a]) * u) * scale;
+            const rr = 1.5 + breath * 0.7;
+            ctx.moveTo(fx + rr, fy);
+            ctx.arc(fx, fy, rr, 0, Math.PI * 2);
             any = true;
           }
           if (any) {
-            ctx.strokeStyle = `rgba(242, 238, 230, ${(0.4 + breath * 0.2) * alpha})`;
-            ctx.lineWidth = 2;
-            ctx.stroke();
+            ctx.fillStyle = `rgba(246, 240, 226, ${(0.5 + breath * 0.24) * alpha})`;
+            ctx.fill();
           }
         }
 
@@ -978,7 +1002,7 @@ export default function TissueSheet() {
           ctx.moveTo(px + Math.cos(sheet.pol[i]) * r0, py + Math.sin(sheet.pol[i]) * r0);
           ctx.lineTo(px + Math.cos(sheet.pol[i]) * r1, py + Math.sin(sheet.pol[i]) * r1);
         }
-        ctx.strokeStyle = `rgba(242, 238, 230, ${(0.09 + lens * 0.26) * alpha})`;
+        ctx.strokeStyle = `rgba(242, 238, 230, ${(0.07 + lens * 0.28) * alpha})`;
         ctx.lineWidth = 0.7;
         ctx.stroke();
 
