@@ -53,15 +53,61 @@ and static) will damage it.
   before generalizing it into `lib/`.
 - Honor `prefers-reduced-motion`, keep keyboard access, and verify at 390px width.
 
+## The room quality bar — non-negotiable
+
+A room that misses any of these is not finished, whatever it looks like in a
+screenshot. Each line names the check that catches it.
+
+1. **The material is a shader.** WebGL for the primary material, canvas-2D only
+   as a *thin* layer over it. Banned per frame and enforced by
+   `npm run test:paint`: `createRadialGradient`, `shadowBlur` on paths,
+   `ctx.filter` blur. `src/lib/webgl/stage.ts` owns context, DPR, the quad,
+   instancing, the shared clocks and teardown — the GPU path is the short one.
+2. **The whole grammar, no dead verbs.** Bind through `attachGestures` +
+   `src/lib/gesture/defaults.ts`, which answers every global verb by default:
+   a verb your material doesn't mean still lands softly, scaled by the
+   magnitude the hand offered. A tap or press that does nothing is a bug.
+   Thresholds from `gesture/core.ts` alone; never raw pointer wiring.
+3. **Make and unmake.** The visitor creates objects *and* retires them, and the
+   objects act on each other — a population, not a slideshow. Persist it
+   (versioned key, capped, oldest retired gracefully) with `<LetGo>`; an
+   emptied room stays empty.
+4. **The room's laws are the real ones.** Molecules obey chemistry, the valley
+   makes the elements, the flock obeys alignment/cohesion/separation. Extract
+   them into a pure `src/lib/<name>.ts` and pin them in `test-<name>.mjs`. A
+   room that only *looks* like its layer of abstraction is decoration.
+5. **Alive at rest**, on the shared 7s breath — and glimmering physically after
+   ~20s idle, never with text.
+6. **Two senses in the same frame**, haptics included: `lib/audio`,
+   `lib/haptics` on every meaningful act, the vessel subscribed passively.
+7. **Performance is a law.** One rAF. One instanced draw per population, not N.
+   Typed arrays allocated once, no per-frame churn. O(visible), never
+   O(history). Closed-form elapsed-time advance after a pause, never a
+   catch-up loop. Pause when hidden; take a DPR tier from `room-runtime.ts`.
+
+`<RoomShell>` mounts 2, 5, 6 and the chrome; `stage.ts` makes 1 and 7 easy.
+Reaching past them is allowed — say why in the PR.
+
 ## Building a new room
 
-Start from **`docs/new-room.md`** and copy **`src/components/RoomTemplate.tsx`**
-(a compilable scaffold wired to every bus — gestures, vessel, audio, haptics,
-persistence with the quiet clear control, glimmer, keyboard, reduced motion).
-The first decision is always ordinal: find the level where the room fits on
-the quark→manifold axis, prefer deepening an existing band over adding rooms,
-and branch only where containment genuinely forks. State the placement (or
-the law/lens exemption) in one sentence in the PR body.
+Start from **`docs/new-room.md`**. The first decision is always ordinal: find
+the level where the room fits on the quark→manifold axis, prefer deepening an
+existing band over adding rooms, and branch only where containment genuinely
+forks. State the placement (or the law/lens exemption) in one sentence in the
+PR body.
+
+Then the room is **declared once**, in `src/rooms/<key>/room.config.ts` (route
+row, sigil, cluster, placement, icon palette, guide entry, chrome overrides)
+plus one import line in `src/rooms/registry.ts`. `SITE_ROUTES`, dropdown and
+gallery order, the peer seat or the exemption, the icon/opengraph assets, the
+guide entry and the route test all derive from it — do **not** hand-add the
+room to those files; `scripts/test-rooms.mjs` fails when a manifest and a
+registry disagree. Rooms predating the manifest keep their hand-written rows;
+both paths work, so migrate one when you touch it.
+
+Wrap the material in **`<RoomShell route="…" voice={…}>`** for the full stack,
+and override only what is special. `src/components/RoomTemplate.tsx` stays as
+the readable worked example of the same contract — read it, then use the shell.
 
 **Nav order follows the scale graph.** The header dropdown and home gallery
 are derived from `SCALE_BANDS` + `PEER_CIRCLES` (`src/lib/nav-order.ts`) —
@@ -69,8 +115,9 @@ manifold at the top, quanta at the bottom, MetaNavigator peers contiguous in
 ring order. Never hand-sort `NAVIGATION_ROUTES`. Every extant interactive
 page belongs on the axis (band or peer circle) or in `SCALE_EXEMPT_KEYS`
 (laws / lenses / reading surfaces) — coin, tourbillon, sine, fire, and the
-rest of the cabinet/shore/sky/hearth rings included. Mount `AxisChrome`
-(or ScaleTravel + MetaNavigator). `scripts/test-routes.mjs` pins this.
+rest of the cabinet/shore/sky/hearth rings included. A manifest states this
+once, as its `place`; `<RoomShell>` mounts `AxisChrome` from it.
+`scripts/test-routes.mjs` and `scripts/test-rooms.mjs` pin it.
 
 ## The field guide (`/guide`) — the documentation law
 
@@ -79,8 +126,9 @@ onboarding walk, the gesture grammar, exhaustive per-room instructions with a
 screenshot of every room, and the workshop (system + HTTP API) docs. It exists so
 the rooms never have to — in-room copy stays instruction-free, always.
 
-- Content lives in **`src/data/guide.ts`** (one entry per route, plus the shared
-  sections). Screenshots live in **`public/guide/<key>.jpg`**, captured by
+- Content lives in the room's own **`room.config.ts`** (`guide:`) for rooms with
+  a manifest, and in **`src/data/guide.ts`** for the rest, plus the shared
+  sections. Screenshots live in **`public/guide/<key>.jpg`**, captured by
   **`npm run shoot:guide`** (Playwright against a running build;
   `--only=<key>` re-shoots a single room).
 - **Documentation moves with the change, in the same PR.** If your PR adds,
@@ -101,9 +149,10 @@ the rooms never have to — in-room copy stays instruction-free, always.
 - Next.js 14 App Router + TypeScript + Tailwind + Zustand. Rooms live in
   `src/app/<room>/` (thin page) with the real component in `src/components/`.
 - Dev: `npm install && npm run dev` (or yarn). Build: `npm run build`.
-- Tests: `npm test` (route registry, atlas, analytics, light-music, dither-avatar,
-  gesture, scale). New routes must be registered where `scripts/test-routes.mjs`
-  expects them.
+- Tests: `npm test` (route registry, rooms, paint bar, atlas, analytics,
+  light-music, dither-avatar, gesture, scale, plus each room's own laws). New
+  rooms arrive through `src/rooms/<key>/room.config.ts`; `test:rooms` checks
+  the derivation and `test:paint` the 2D ban.
 - **Tests must be falsifiable or not exist.** Assert behavior that a plausible bug
   would break: integrator dynamics, boundary semantics, classifier outputs on real
   inputs, round-trips of inverse maps. Never restate a constant back at itself, never
