@@ -28,6 +28,7 @@ import {
 } from "@/lib/atlas-navigation";
 import { prepareAtlasSourceImage } from "@/lib/atlas-source";
 import { getFieldAudio } from "@/lib/audio";
+import { PLANET_DESCENT_KEY } from "@/lib/stars/nestedCosmos";
 import { intensityFrom } from "@/lib/gesture/core";
 import * as haptics from "@/lib/haptics";
 import { useField } from "@/store/field";
@@ -1608,6 +1609,36 @@ export default function Atlas() {
       subjectPrompt: raw,
     });
   };
+
+  // a world carried down from the stars: whoever dove through the deep
+  // wall while over a condensed planet left its name in sessionStorage —
+  // the chart opens on that world instead of the origin sheet. Consumed
+  // once, honored only while fresh; an ordinary arrival changes nothing.
+  const descentConsumedRef = useRef(false);
+  useEffect(() => {
+    if (descentConsumedRef.current) return;
+    descentConsumedRef.current = true;
+    try {
+      const raw = window.sessionStorage.getItem(PLANET_DESCENT_KEY);
+      if (!raw) return;
+      window.sessionStorage.removeItem(PLANET_DESCENT_KEY);
+      const d = JSON.parse(raw) as { prompt?: unknown; at?: unknown };
+      if (typeof d.prompt !== "string" || !d.prompt) return;
+      if (Date.now() - (typeof d.at === "number" ? d.at : 0) > 90_000) return;
+      const subject = d.prompt.slice(0, 96);
+      setConcept(subject);
+      setStatus("drawing a map of " + subject);
+      setRenderPhase("local");
+      recordTape("imagine", 0.94, "atlas/descent/" + subject.slice(0, 32));
+      void generateMap({
+        mode: "generate",
+        optimisticSeeds: localSeeds(subject),
+        subjectPrompt: subject,
+      });
+    } catch { /* noop */ }
+    // one-shot arrival read — the closure's helpers are stable for it
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const beginFreeZoom = () => {
     if (!freeZoomParentRef.current) {
