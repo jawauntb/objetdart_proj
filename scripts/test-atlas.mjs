@@ -8,7 +8,11 @@ import * as ts from "typescript";
 
 const rootUrl = new URL("../", import.meta.url);
 
+const tsModuleCache = new Map();
+
 function loadTsModule(path, requireMap = {}, globals = {}) {
+  const cacheable = Object.keys(requireMap).length === 0 && Object.keys(globals).length === 0;
+  if (cacheable && tsModuleCache.has(path)) return tsModuleCache.get(path);
   const filename = fileURLToPath(new URL(path, rootUrl));
   const source = readFileSync(filename, "utf8");
   const code = ts.transpileModule(source, {
@@ -28,10 +32,14 @@ function loadTsModule(path, requireMap = {}, globals = {}) {
     Object,
     require: (id) => {
       if (id in requireMap) return requireMap[id];
+      if (id.startsWith("@/")) {
+        return loadTsModule(`src/${id.slice(2)}.ts`, requireMap, globals);
+      }
       throw new Error(`Unexpected require(${id}) while loading ${path}`);
     },
   };
   vm.runInNewContext(code, sandbox, { filename });
+  if (cacheable) tsModuleCache.set(path, module.exports);
   return module.exports;
 }
 

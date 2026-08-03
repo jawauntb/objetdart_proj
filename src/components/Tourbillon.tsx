@@ -8,18 +8,33 @@ import { getFieldAudio } from "@/lib/audio";
 import { useField } from "@/store/field";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { onVessel } from "@/lib/vessel";
+import { relaxTurbulence, stirTurbulence } from "@/lib/turbulence";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
 
 /**
- * /movement — a real(ish) mechanical watch movement in Three.js.
+ * /tourbillon — a real(ish) mechanical watch movement in Three.js, built
+ * around the one part that gives the room its name.
  *
  * A skeletonised going train laid face-up: mainspring barrel → centre wheel →
  * third wheel → fourth wheel → escape wheel, regulated by a Swiss lever
  * escapement and an oscillating balance. The wheels are compound (wheel +
  * pinion) so the ratios are real: the centre arbor turns once an hour, the
- * fourth once a minute, and the hands tell the actual local time. Everything
- * is polished metal under a studio environment so it reads like a movement,
- * not a diagram. Orbit to inspect; ?view= and ?spin= drive the camera.
+ * fourth once a minute, and the hands tell the actual local time.
+ *
+ * The escapement, fork and balance ride a rotating carriage — the tourbillon
+ * cage — turning once per simulated minute on the fourth wheel's own arbor.
+ * A real tourbillon exists to cancel gravity's effect on the balance by
+ * continuously re-presenting every position to it, so no single lean biases
+ * the rate. Here the device's own tilt (`lib/vessel.ts`) is the gravity being
+ * cancelled: the whole case leans with the phone (or the cursor, or a slow
+ * autonomous drift when nobody is touching anything), the cage keeps
+ * spinning regardless, and the balance's glow reads the instantaneous
+ * position error the cage is in the middle of averaging away.
+ *
+ * Everything is polished metal under a studio environment so it reads like a
+ * movement, not a diagram. Orbit to inspect; ?view= and ?spin= drive the
+ * camera.
  */
 
 // ── tunable configuration (refined through the screenshot loop) ──────────
@@ -193,7 +208,7 @@ function SundialChip() {
           // warm whoosh on release: a soft bell + a settling note
           try { getFieldAudio().bell(); window.setTimeout(() => { try { getFieldAudio().playNote(60 + Math.round(dayTRef.current * 24), 160); } catch { /* noop */ } }, 60); } catch { /* noop */ }
           if (!reduceRef.current) haptics.ripple(0.4);
-          useField.getState().recordTape("ripple", 0.3 + dayTRef.current * 0.5, "movement/sundial");
+          useField.getState().recordTape("ripple", 0.3 + dayTRef.current * 0.5, "tourbillon/sundial");
           return;
         }
         setFrom(e.x);
@@ -206,7 +221,7 @@ function SundialChip() {
   const rnd = (i: number, s: number) => ((Math.sin(i * s) * 43758.5) % 1 + 1) % 1;
 
   return (
-    <div className="mv-sundial">
+    <div className="tb-sundial">
       <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} style={{ touchAction: "none", cursor: "grab" }}>
         <defs>
           {/* atmospheric vertical sky: zenith → mid → horizon glow */}
@@ -368,13 +383,13 @@ function SundialChip() {
         {/* specular glint on the bezel — top-left arc */}
         <path d={`M8 ${H * 0.42} Q8 8 ${W * 0.42} 8`} fill="none" stroke="rgba(255,252,230,0.85)" strokeWidth="1.4" strokeLinecap="round" pointerEvents="none" />
 
-        <text x={C} y={baseY + 20} textAnchor="middle" className="mv-sun-time">{String(hh).padStart(2, "0")}:{String(mm).padStart(2, "0")}</text>
+        <text x={C} y={baseY + 20} textAnchor="middle" className="tb-sun-time">{String(hh).padStart(2, "0")}:{String(mm).padStart(2, "0")}</text>
       </svg>
     </div>
   );
 }
 
-export default function Movement() {
+export default function Tourbillon() {
   const wrapRef = useRef<HTMLDivElement>(null);
   const speedRef = useRef(1);
   const resyncRef = useRef(false);
@@ -382,6 +397,7 @@ export default function Movement() {
   const swapFaceRef = useRef<((f: string) => void) | null>(null);
   const dialRef = useRef<THREE.Object3D | null>(null);
   const clockRef = useRef<HTMLSpanElement>(null);
+  const faceIdxRef = useRef(0);
   const [speed, setSpeed] = useState(1);
   const [view, setView] = useState("iso");
   const [face, setFace] = useState("genève");
@@ -393,7 +409,7 @@ export default function Movement() {
     setDialOn(next);
     try { getFieldAudio().thud(); } catch { /* noop */ }
     haptics.tap();
-    useField.getState().recordTape("object", 0.4, `movement/dial/${next ? "on" : "open"}`);
+    useField.getState().recordTape("object", 0.4, `tourbillon/dial/${next ? "on" : "open"}`);
   };
 
   const pickSpeed = (v: number) => {
@@ -402,7 +418,7 @@ export default function Movement() {
     setSpeed(v);
     try { getFieldAudio().playNote(v === 0 ? 50 : 60 + Math.round(Math.log2(v || 1) * 4), 80); } catch { /* noop */ }
     haptics.tap();
-    useField.getState().recordTape("object", 0.4, `movement/speed/${v}`);
+    useField.getState().recordTape("object", 0.4, `tourbillon/speed/${v}`);
   };
 
   // refs so the gesture bindings (mounted once) always see the live acts
@@ -418,7 +434,8 @@ export default function Movement() {
     try { getFieldAudio().setAmbientProfile("time"); } catch { /* noop */ }
 
     const params = new URLSearchParams(window.location.search);
-    const spin = params.get("spin") !== "0";
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const spin = params.get("spin") !== "0" && !reduced;
     const view0 = params.get("view") || "iso";
     const shotMode = params.get("shot") === "1"; // cheap render for headless capture
 
@@ -648,14 +665,15 @@ export default function Movement() {
     contact.position.y = floorY + 0.02;
     scene.add(contact);
 
-    // helper to add a jewel in a chaton
-    const addJewel = (x: number, z: number, y: number, r = 0.42) => {
+    // helper to add a jewel in a chaton (optionally to a moving parent, in
+    // that parent's local space rather than root/world space)
+    const addJewel = (x: number, z: number, y: number, r = 0.42, parent: THREE.Object3D = root) => {
       const j = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 0.22, 20), matRuby);
       j.position.set(x, y, z);
-      root.add(j);
+      parent.add(j);
       const ring = new THREE.Mesh(new THREE.TorusGeometry(r + 0.12, 0.09, 10, 24), matGold);
       ring.rotation.x = Math.PI / 2; ring.position.set(x, y, z);
-      root.add(ring);
+      parent.add(ring);
     };
 
     // a spinning compound wheel: big wheel + pinion + arbor, grouped.
@@ -668,9 +686,11 @@ export default function Movement() {
     const makeStation = (o: {
       pos: Vec2; wheelTeeth: number; pinionTeeth: number; omega: number;
       y?: number; spokes?: number; wheelMat?: THREE.Material; tall?: boolean;
+      parent?: THREE.Object3D; origin?: Vec2;
     }): Station => {
       const g = new THREE.Group();
-      g.position.set(o.pos.x, o.y ?? planeY, o.pos.y);
+      const origin = o.origin ?? { x: 0, y: 0 };
+      g.position.set(o.pos.x - origin.x, o.y ?? planeY, o.pos.y - origin.y);
       const wheel = new THREE.Mesh(
         gearGeometry({ teeth: o.wheelTeeth, module: m, thick: CFG.wheelThick, spokes: o.spokes ?? 5 }),
         o.wheelMat ?? matBrass,
@@ -689,7 +709,7 @@ export default function Movement() {
       const arbor = new THREE.Mesh(new THREE.CylinderGeometry(m * 1.0, m * 1.0, 2.2, 16), matSteel);
       arbor.position.y = -0.6;
       g.add(arbor);
-      root.add(g);
+      (o.parent ?? root).add(g);
       return { group: g, omega: o.omega, pos: o.pos, pitchWheel: (m * o.wheelTeeth) / 2, pinionR: (m * o.pinionTeeth) / 2 };
     };
 
@@ -705,11 +725,24 @@ export default function Movement() {
     const escapePos = add(fourthPos, m * (Wf + Pe) / 2, -2.9);
     const barrelPos = add(centerPos, m * (Wbar + Pc) / 2, 2.5);
 
+    // the tourbillon cage: the carriage that carries the escapement, fork and
+    // balance, pivoting on the escape wheel's own arbor. It turns once per
+    // simulated minute — the fourth wheel's own rate — so every position the
+    // balance can lean into is re-presented once a revolution; a real
+    // tourbillon exists to average gravity's bias to zero this way.
+    const cage = new THREE.Group();
+    cage.position.set(escapePos.x, 0, escapePos.y);
+    root.add(cage);
+
     // centre wheel (carries minute hand). spins clockwise-from-top = -wc about Y
     const center = makeStation({ pos: centerPos, wheelTeeth: Wc, pinionTeeth: Pc, omega: -wc, spokes: 5 });
     const third = makeStation({ pos: thirdPos, wheelTeeth: Wt, pinionTeeth: Pt, omega: wc * (Wc / Pt), spokes: 4 });
     const fourth = makeStation({ pos: fourthPos, wheelTeeth: Wf, pinionTeeth: Pf, omega: -wc * (Wc * Wt) / (Pt * Pf), spokes: 4 });
-    const escape = makeStation({ pos: escapePos, wheelTeeth: 15, pinionTeeth: Pe, omega: wc * (Wc * Wt * Wf) / (Pt * Pf * Pe), spokes: 0, wheelMat: matSteel });
+    const escape = makeStation({
+      pos: escapePos, wheelTeeth: 15, pinionTeeth: Pe,
+      omega: wc * (Wc * Wt * Wf) / (Pt * Pf * Pe), spokes: 0, wheelMat: matSteel,
+      parent: cage, origin: escapePos,
+    });
     const barrel = makeStation({ pos: barrelPos, wheelTeeth: Wbar, pinionTeeth: 12, omega: -wc * (Pc / Wbar), spokes: 6, wheelMat: matGold });
 
     // mainspring barrel: a drum narrower than the wheel so the teeth ring
@@ -741,16 +774,20 @@ export default function Movement() {
     }
 
     const stations = [center, third, fourth, escape, barrel];
-    [centerPos, thirdPos, fourthPos, escapePos, barrelPos].forEach((p) => addJewel(p.x, p.y, 1.0, 0.34));
+    [centerPos, thirdPos, fourthPos, barrelPos].forEach((p) => addJewel(p.x, p.y, 1.0, 0.34));
+    addJewel(0, 0, 1.0, 0.34, cage); // the escape arbor's jewel rides the cage
 
-    // ── escapement: pallet fork + balance ──
+    // ── escapement: pallet fork + balance, both riding the cage ──
+    // all positions below are expressed relative to escapePos (the cage's
+    // own origin), since the fork, balance and cock are children of `cage`.
     const escR = (15 * m) / 2;
     const balancePos = add(escapePos, escR + 4.2, -0.2);
+    const balOff: Vec2 = { x: balancePos.x - escapePos.x, y: balancePos.y - escapePos.y };
 
     // pallet fork (blued steel), pivoting between escape and balance
     const fork = new THREE.Group();
     const forkPos = add(escapePos, escR + 1.4, 0.4);
-    fork.position.set(forkPos.x, 0.4, forkPos.y);
+    fork.position.set(forkPos.x - escapePos.x, 0.4, forkPos.y - escapePos.y);
     const forkBar = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.18, 0.5), matBlued);
     fork.add(forkBar);
     const forkStem = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.16, 2.0), matBlued);
@@ -760,11 +797,11 @@ export default function Movement() {
       pallet.position.set(x, 0, 0); fork.add(pallet);
     });
     fork.castShadow = true;
-    root.add(fork);
+    cage.add(fork);
 
     // balance wheel: rim + crossing + hairspring
     const balance = new THREE.Group();
-    balance.position.set(balancePos.x, 1.0, balancePos.y);
+    balance.position.set(balOff.x, 1.0, balOff.y);
     const balR = 3.4;
     const balRim = new THREE.Mesh(new THREE.TorusGeometry(balR, 0.22, 16, 64), matBalance);
     balRim.rotation.x = Math.PI / 2; balRim.castShadow = true; balance.add(balRim);
@@ -791,15 +828,18 @@ export default function Movement() {
     balance.add(hair);
     const staff = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 2.4, 12), matSteel);
     balance.add(staff);
-    root.add(balance);
-    addJewel(balancePos.x, balancePos.y, 1.9, 0.4);
+    cage.add(balance);
+    addJewel(balOff.x, balOff.y, 1.9, 0.4, cage);
 
     // balance cock — a slim polished bridge arching over the balance, anchored
-    // toward the escape side, carrying the upper balance jewel.
+    // toward the escape side, carrying the upper balance jewel. It rides the
+    // cage too: on a real tourbillon this bridge (or a full bridge on both
+    // ends) IS the carriage the balance is mounted to.
     {
-      const anchor = add(balancePos, balR + 1.2, Math.atan2(escapePos.y - balancePos.y, escapePos.x - balancePos.x));
+      const anchorAbs = add(balancePos, balR + 1.2, Math.atan2(escapePos.y - balancePos.y, escapePos.x - balancePos.x));
+      const anchor: Vec2 = { x: anchorAbs.x - escapePos.x, y: anchorAbs.y - escapePos.y };
       const cock = new THREE.Group();
-      const dx = balancePos.x - anchor.x, dz = balancePos.y - anchor.y;
+      const dx = balOff.x - anchor.x, dz = balOff.y - anchor.y;
       const len = Math.hypot(dx, dz);
       const arm = new THREE.Mesh(new THREE.BoxGeometry(len, 0.34, 1.1), matBridge);
       arm.position.set(anchor.x + dx / 2, 2.35, anchor.y + dz / 2);
@@ -817,10 +857,41 @@ export default function Movement() {
       });
       // end boss + upper jewel over the balance staff
       const boss = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.7, 0.42, 20), matBridge);
-      boss.position.set(balancePos.x, 2.4, balancePos.y); cock.add(boss);
+      boss.position.set(balOff.x, 2.4, balOff.y); cock.add(boss);
       const upperJewel = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.26, 0.16, 16), matRuby);
-      upperJewel.position.set(balancePos.x, 2.62, balancePos.y); cock.add(upperJewel);
-      root.add(cock);
+      upperJewel.position.set(balOff.x, 2.62, balOff.y); cock.add(upperJewel);
+      cage.add(cock);
+    }
+
+    // the cage ring — an open skeleton hoop below the balance, the visual
+    // signature of a tourbillon carriage: three slender polished spokes and
+    // a counterweight opposite the fork, so the rotation itself reads as a
+    // carriage and not an accident of the escape wheel spinning in place.
+    {
+      const cageR = balR + 1.0;
+      const hoop = new THREE.Mesh(new THREE.TorusGeometry(cageR, 0.08, 10, 72), matBlued);
+      hoop.rotation.x = Math.PI / 2;
+      hoop.position.set(balOff.x, 0.15, balOff.y);
+      hoop.castShadow = true;
+      cage.add(hoop);
+      const spokeCount = 3;
+      for (let i = 0; i < spokeCount; i++) {
+        const a = (i / spokeCount) * Math.PI * 2;
+        const spoke = new THREE.Mesh(new THREE.BoxGeometry(cageR * 1.96, 0.08, 0.16), matSteel);
+        spoke.position.set(balOff.x, 0.15, balOff.y);
+        spoke.rotation.y = a;
+        spoke.castShadow = true;
+        cage.add(spoke);
+      }
+      // a small brass counterweight opposite the fork, poising the carriage
+      const cwAngle = Math.atan2(-balOff.y, -balOff.x) + Math.PI;
+      const counterweight = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 0.3, 16), matGold);
+      counterweight.position.set(
+        balOff.x + Math.cos(cwAngle) * cageR * 0.94,
+        0.15,
+        balOff.y + Math.sin(cwAngle) * cageR * 0.94,
+      );
+      cage.add(counterweight);
     }
 
     // ── dial: a floating chapter ring (numerals + minute track) over the
@@ -963,7 +1034,7 @@ export default function Movement() {
     const wind = () => {
       try { getFieldAudio().bell(); window.setTimeout(() => { try { getFieldAudio().playNote(67, 90); } catch { /* noop */ } }, 70); } catch { /* noop */ }
       windKick.v = 0.5; haptics.roll();
-      useField.getState().recordTape("object", 0.6, "movement/wind");
+      useField.getState().recordTape("object", 0.6, "tourbillon/wind");
     };
     const press = (act: string) => {
       const rec = pressables.find((p) => p.act === act);
@@ -971,12 +1042,12 @@ export default function Movement() {
     };
     const handleHit = (act: string | undefined, intensity = 0.5) => {
       const a = getFieldAudio();
-      if (!act) { try { a.playNote(57, 60 + Math.round(intensity * 90)); } catch { /* noop */ } haptics.tap(); useField.getState().recordTape("object", 0.2 + intensity * 0.3, "movement/plate"); return; }
+      if (!act) { try { a.playNote(57, 60 + Math.round(intensity * 90)); } catch { /* noop */ } haptics.tap(); useField.getState().recordTape("object", 0.2 + intensity * 0.3, "tourbillon/plate"); return; }
       if (act === "wind") { wind(); press("wind"); return; }
       if (act === "still") { const next = speedRef.current === 0 ? 1 : 0; pickSpeed(next); press("still"); return; }
       if (act === "speed") { const order = [0, 1, 30, 300]; pickSpeed(order[(order.indexOf(speedRef.current) + 1) % order.length]); press("speed"); return; }
-      if (act === "balance") { try { a.chime(); } catch { /* noop */ } haptics.ripple(0.35 + intensity * 0.5); useField.getState().recordTape("sigil", 0.5 + intensity * 0.4, "movement/balance"); return; }
-      if (act.startsWith("gear")) { try { a.playNote(GEAR_PITCH[act] ?? 60, 120 + Math.round(intensity * 120)); } catch { /* noop */ } haptics.tap(); useField.getState().recordTape("object", 0.3 + intensity * 0.4, `movement/${act}`); return; }
+      if (act === "balance") { try { a.chime(); } catch { /* noop */ } haptics.ripple(0.35 + intensity * 0.5); useField.getState().recordTape("sigil", 0.5 + intensity * 0.4, "tourbillon/balance"); return; }
+      if (act.startsWith("gear")) { try { a.playNote(GEAR_PITCH[act] ?? 60, 120 + Math.round(intensity * 120)); } catch { /* noop */ } haptics.tap(); useField.getState().recordTape("object", 0.3 + intensity * 0.4, `tourbillon/${act}`); return; }
     };
     const raycaster = new THREE.Raycaster();
     const ndc = new THREE.Vector2();
@@ -992,27 +1063,109 @@ export default function Movement() {
       return undefined;
     };
 
+    // ── the vessel: real gravity, real agitation, real touch on the case ──
+    // lean.tx/tz are the target lean (device tilt, or its stand-ins); leanX/Z
+    // (declared with the animation state below) are the eased values the
+    // case actually renders. No tilt sensor ever fully replaces another
+    // sense: a light idle drift keeps the case alive with nobody touching
+    // it, and on desktop the cursor's offset from centre stands in for tilt
+    // (grammar's "hover ≈ light touch" equivalence) until a real gyroscope
+    // reports in.
+    const lean = { tx: 0, tz: 0 };
+    let haveTilt = false;
+    let lastHoverAt = 0;
+    let night = false;
+    const onHoverMove = (ev: PointerEvent) => {
+      if (haveTilt) return;
+      const rect = renderer.domElement.getBoundingClientRect();
+      const nx = ((ev.clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1;
+      const ny = ((ev.clientY - rect.top) / Math.max(1, rect.height)) * 2 - 1;
+      lean.tx = Math.max(-1, Math.min(1, nx * 0.6));
+      lean.tz = Math.max(-1, Math.min(1, ny * 0.6));
+      lastHoverAt = performance.now();
+    };
+    renderer.domElement.addEventListener("pointermove", onHoverMove);
+    const detachVessel = onVessel({
+      tilt: ({ beta, gamma }) => {
+        if (reduced) return;
+        haveTilt = true;
+        lastHoverAt = performance.now();
+        lean.tx = Math.max(-1, Math.min(1, gamma / 45));
+        lean.tz = Math.max(-1, Math.min(1, (beta - 45) / 45));
+      },
+      shake: ({ intensity }) => {
+        if (reduced) return;
+        stirTurbulence(Math.min(0.5, intensity * 0.4));
+        escapeKick.amp = Math.max(escapeKick.amp, Math.min(0.7, 0.3 + intensity * 0.3));
+        escapeKick.at = performance.now();
+        try { haptics.chop(); } catch { /* noop */ }
+        useField.getState().recordTape("ripple", 0.5, "tourbillon/shake");
+      },
+      knock: () => {
+        // a knock on the case's own body — answered exactly like a flick:
+        // the balance swings wide, then the hairspring gathers it back
+        escapeKick.amp = Math.max(escapeKick.amp, 0.45);
+        escapeKick.at = performance.now();
+        try { getFieldAudio().chime(); } catch { /* noop */ }
+        try { haptics.ripple(0.5); } catch { /* noop */ }
+        useField.getState().recordTape("ripple", 0.5, "tourbillon/knock-case");
+      },
+      flip: ({ faceDown }) => { night = faceDown; },
+    });
+
     // ── gestures (the shared grammar — src/lib/gesture) ────────────────
     // One finger touches the matter: tap a part and it speaks; a flick
     // knocks the balance wide; a circling finger turns the crown; a
     // ceremony hold sets the watch to true local time. Two fingers twist
-    // the lens: dial ↔ open movement. Three fingers touch the law: drag
-    // winds the mainspring, hold dilates time. OrbitControls keeps the
-    // camera (its pinch is the frame, not a room binding); the engine
-    // rides the same canvas without capturing the stream.
+    // the lens: dial ↔ open movement, and a two-finger tap steps the camera
+    // back. Three fingers touch the law: drag winds the mainspring, hold
+    // dilates time, twist cycles the dial's finish, and a tutti tap rings
+    // every gear at once. OrbitControls keeps the camera (its pinch is the
+    // frame, not a room binding); the engine rides the same canvas without
+    // capturing the stream.
     const escapeKick = { amp: 0, at: 0 };            // flick → balance swings wide
     const entrainT = { bpm: 0, until: 0, lastBeat: -1 };
     const timeScale = { cur: 1, target: 1 };
     let lastGestureAt = performance.now();
     let twistAcc = 0;
+    let twist3Acc = 0;
     let ceremonyDone = false;
     let lastCrankAt = 0;
     let lastWindCueAt = 0;
 
+    const stepBack = () => {
+      const dir = camera.position.clone().sub(controls.target);
+      const d = dir.length();
+      if (d < 1e-4) return;
+      const nd = Math.min(controls.maxDistance, d * 1.22);
+      camera.position.copy(controls.target).add(dir.normalize().multiplyScalar(nd));
+      controls.update();
+      try { haptics.tap(); } catch { /* noop */ }
+      try { getFieldAudio().playNote(50, 140); } catch { /* noop */ }
+    };
+    const tutti = () => {
+      const a = getFieldAudio();
+      const order: Array<[string, THREE.Object3D]> = [
+        ["gear-center", center.group], ["gear-third", third.group],
+        ["gear-fourth", fourth.group], ["gear-escape", escape.group],
+      ];
+      order.forEach(([act], i) => {
+        window.setTimeout(() => { try { a.playNote(GEAR_PITCH[act] ?? 60, 90); } catch { /* noop */ } }, i * 45);
+      });
+      try { a.chime(); } catch { /* noop */ }
+      escapeKick.amp = Math.max(escapeKick.amp, 0.5);
+      escapeKick.at = performance.now();
+      windKick.v = Math.min(1, windKick.v + 0.4);
+      try { haptics.ripple(0.6); } catch { /* noop */ }
+      useField.getState().recordTape("sigil", 0.6, "tourbillon/tutti");
+    };
+
     const detachGestures = attachGestures(renderer.domElement, {
       tap: (e) => {
         lastGestureAt = performance.now();
-        if (e.fingers !== 1) return; // frame/law taps are absorbed
+        if (e.fingers === 2) { stepBack(); return; }
+        if (e.fingers === 3) { tutti(); return; }
+        if (e.fingers !== 1) return;
         handleHit(actAt(e.x, e.y), e.intensity);
       },
       flick: (e) => {
@@ -1024,7 +1177,7 @@ export default function Movement() {
         escapeKick.at = performance.now();
         try { getFieldAudio().chime(); } catch { /* noop */ }
         try { haptics.ripple(0.5); } catch { /* noop */ }
-        useField.getState().recordTape("ripple", 0.55, "movement/knock");
+        useField.getState().recordTape("ripple", 0.55, "tourbillon/knock");
       },
       scrub: (e) => {
         lastGestureAt = performance.now();
@@ -1035,7 +1188,7 @@ export default function Movement() {
         windKick.v = Math.min(1, windKick.v + 0.35);
         try { getFieldAudio().playNote(62 + ((Math.abs(Math.round(e.winding)) % 3) * 2), 70); } catch { /* noop */ }
         try { haptics.tap(); } catch { /* noop */ }
-        useField.getState().recordTape("object", 0.45, "movement/crank");
+        useField.getState().recordTape("object", 0.45, "tourbillon/crank");
       },
       drag: (e) => {
         lastGestureAt = performance.now();
@@ -1048,7 +1201,7 @@ export default function Movement() {
           lastWindCueAt = now;
           try { getFieldAudio().playNote(43, 160); } catch { /* noop */ }
           try { haptics.chop(); } catch { /* noop */ }
-          useField.getState().recordTape("region", 0.5, "movement/mainspring");
+          useField.getState().recordTape("region", 0.5, "tourbillon/mainspring");
         }
       },
       hold: (e) => {
@@ -1074,12 +1227,28 @@ export default function Movement() {
           if (speedRef.current !== 1) pickSpeedRef.current(1);
           try { getFieldAudio().bell(); } catch { /* noop */ }
           try { haptics.bloom(); } catch { /* noop */ }
-          useField.getState().recordTape("kept", 0.85, "movement/set");
+          useField.getState().recordTape("kept", 0.85, "tourbillon/set");
         }
       },
       twist: (e) => {
-        if (e.fingers === 3) return; // three fingers turn the season, not the lens
         lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          // three fingers turn the season: the dial's finish cycles instead
+          // — genève, aventurine, nacre are this room's seasons
+          if (e.phase === "start") twist3Acc = 0;
+          if (e.phase === "move") twist3Acc += e.angle;
+          if (e.phase === "end" && Math.abs(twist3Acc) > 0.9) {
+            const dir = twist3Acc > 0 ? 1 : -1;
+            faceIdxRef.current = (faceIdxRef.current + dir + FACES.length) % FACES.length;
+            const f = FACES[faceIdxRef.current];
+            swapFaceRef.current?.(f);
+            setFace(f);
+            try { getFieldAudio().chime(); } catch { /* noop */ }
+            try { haptics.lens(); } catch { /* noop */ }
+            useField.getState().recordTape("object", 0.5, `tourbillon/face/${f}`);
+          }
+          return;
+        }
         // two fingers rotate the lens: the same hour as chapter ring or as
         // bare going train — dial on, dial off
         if (e.phase === "start") twistAcc = 0;
@@ -1096,7 +1265,7 @@ export default function Movement() {
         entrainT.bpm = e.bpm;
         entrainT.until = performance.now() + 9000;
         entrainT.lastBeat = -1;
-        useField.getState().recordTape("sigil", 0.5, "movement/entrain");
+        useField.getState().recordTape("sigil", 0.5, "tourbillon/entrain");
       },
     }, { wheelZoom: false, noCapture: true, manageStyle: false });
 
@@ -1135,7 +1304,7 @@ export default function Movement() {
     document.head.appendChild(hideStyle);
 
     // expose hooks for the screenshot harness
-    (window as unknown as Record<string, unknown>).__movement = {
+    (window as unknown as Record<string, unknown>).__tourbillon = {
       setView: (n: string) => { applyView(n); renderer.render(scene, camera); },
       ready: true,
     };
@@ -1163,7 +1332,10 @@ export default function Movement() {
     let lastNow = performance.now();
     const TICK = 0.4;          // seconds per escape tooth (15 teeth → 6 s/rev)
     const balHz = 1 / TICK;    // one balance cycle per tooth = 2.5 Hz
+    const CAGE_PERIOD = 60;    // one carriage revolution per simulated minute
     let raf = 0;
+    let leanX = 0, leanZ = 0;  // eased lean, rendered on the root each frame
+    const MAX_LEAN = 0.15;     // radians — a visible lean, never enough to un-mesh a gear
 
     const tick = () => {
       const sp = speedRef.current;
@@ -1172,6 +1344,27 @@ export default function Movement() {
       if (dt > 0.1) dt = 0.1;
       // three-finger time dilation eases the whole train to 1/4 speed
       timeScale.cur += (timeScale.target - timeScale.cur) * Math.min(1, dt * 5);
+
+      // the case's lean: real device tilt when granted, the cursor's offset
+      // as a light-touch stand-in, and — since a watch is alive whether or
+      // not a hand is near it — a slow autonomous drift once both have been
+      // quiet for a few seconds. Never a switch: the drift fades in and the
+      // moment either sense reports again, it fades back out.
+      if (!reduced) {
+        const idleFor = now - lastHoverAt;
+        if (!haveTilt && idleFor > 3500) {
+          const drift = Math.min(1, (idleFor - 3500) / 2500);
+          const t = now / 1000;
+          const driftX = Math.sin(t * 0.11) * 0.55 + Math.sin(t * 0.033) * 0.25;
+          const driftZ = Math.cos(t * 0.085) * 0.5;
+          lean.tx = lean.tx * (1 - drift) + driftX * drift;
+          lean.tz = lean.tz * (1 - drift) + driftZ * drift;
+        }
+        leanX += (lean.tx - leanX) * Math.min(1, dt * 1.8);
+        leanZ += (lean.tz - leanZ) * Math.min(1, dt * 1.8);
+      }
+      root.rotation.x = leanZ * MAX_LEAN;
+      root.rotation.z = -leanX * MAX_LEAN;
       if (resyncRef.current) {
         const d = new Date();
         simAccum = d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds() + d.getMilliseconds() / 1000;
@@ -1190,13 +1383,29 @@ export default function Movement() {
           entrainT.lastBeat = beatIdx;
           try { getFieldAudio().playNote(76 + (beatIdx % 2) * 3, 30); } catch { /* noop */ }
         }
-        entrainPulse = Math.max(0, 1 - ((now % beatLen) / beatLen) * 3) * 0.16;
+        if (!reduced) entrainPulse = Math.max(0, 1 - ((now % beatLen) / beatLen) * 3) * 0.16;
       }
       // a knock rings down: the balance swings wide then gathers back
       const kickAge = (now - escapeKick.at) / 1000;
-      const kick = escapeKick.amp > 0 && kickAge < 2.4 ? escapeKick.amp * Math.exp(-kickAge * 1.8) : 0;
+      const kick = !reduced && escapeKick.amp > 0 && kickAge < 2.4 ? escapeKick.amp * Math.exp(-kickAge * 1.8) : 0;
 
       const tEff = Math.floor(simSec / TICK) * TICK; // quantised time for fast wheels
+
+      // the cage's own slow turn — a full revolution every simulated minute,
+      // riding the same clock (and speed/dilation) as everything else. This
+      // is the correction itself: whatever the case's instantaneous lean,
+      // the escapement spends equal time in every orientation.
+      const cagePhase = (simSec / CAGE_PERIOD) * Math.PI * 2;
+      cage.rotation.y = cagePhase;
+      const leanMag = Math.min(1, Math.hypot(leanX, leanZ));
+      const leanHeading = Math.atan2(leanZ, leanX);
+      // instantaneous positional bias the cage is in the middle of averaging
+      // to zero: at leanMag's peak, without the cage this would be a fixed
+      // rate error; with it, the sign flips every half-turn.
+      const gravityBias = leanMag * Math.cos(cagePhase - leanHeading);
+      if (!reduced) stirTurbulence(Math.min(0.02, Math.abs(gravityBias) * dt * 0.05));
+      const storm = relaxTurbulence(now);
+      void storm; // read each frame so this room's own decay owns the shared axis
 
       stations.forEach((s) => {
         const smooth = s === center || s === barrel;
@@ -1212,13 +1421,26 @@ export default function Movement() {
       balance.rotation.y = Math.sin(ph * Math.PI * 2) * (1.05 + kick + entrainPulse);
       fork.rotation.y = (Math.floor(ph * 2) % 2 ? 1 : -1) * 0.17;
 
+      // the balance rim reads the instantaneous bias the cage is fighting:
+      // warm amber when this instant is running fast, cool blue when slow,
+      // dark when it passes through zero — sight answering the same signal
+      // the haptics and the shared turbulence axis just felt.
+      matBalance.emissive.setRGB(
+        0.14 + Math.max(0, gravityBias) * 0.7,
+        0.1 + Math.abs(gravityBias) * 0.08,
+        0.16 + Math.max(0, -gravityBias) * 0.75,
+      );
+      matBalance.emissiveIntensity = 0.25 + Math.abs(gravityBias) * 0.55;
+
       // glimmer (grammar §6): after ~20s untouched the rim light breathes
       // over the case — a glint where a hand would land, never text
-      if (now - lastGestureAt > 20000) {
+      if (!reduced && now - lastGestureAt > 20000) {
         rim.intensity = 1.1 + (0.5 + Math.sin(now / 480) * 0.5) * 0.7;
       } else {
         rim.intensity = 1.1;
       }
+      // face-down puts the room to sleep: the case dims until it's turned back
+      renderer.toneMappingExposure = night ? CFG.exposure * 0.4 : CFG.exposure;
 
       // hands: hour/minute smooth, seconds steps with the escapement
       hourHand.rotation.y = -((simSec / 3600) % 12) / 12 * Math.PI * 2;
@@ -1249,10 +1471,26 @@ export default function Movement() {
     };
     tick();
 
+    // pause entirely while the tab is hidden — a hidden watch still keeps
+    // real time (simAccum keeps summing dt on the next visible frame via
+    // lastNow), it simply spends no frames rendering nobody is watching
+    const onVisibility = () => {
+      if (document.hidden) {
+        cancelAnimationFrame(raf);
+      } else {
+        lastNow = performance.now();
+        raf = requestAnimationFrame(tick);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+
     return () => {
       cancelAnimationFrame(raf);
+      document.removeEventListener("visibilitychange", onVisibility);
       ro.disconnect();
       detachGestures();
+      detachVessel();
+      renderer.domElement.removeEventListener("pointermove", onHoverMove);
       controls.dispose();
       renderer.dispose();
       pmrem.dispose();
@@ -1266,36 +1504,36 @@ export default function Movement() {
   return (
     <div
       ref={wrapRef}
-      className="movement-instrument"
+      className="tourbillon-instrument"
       data-touch-surface="true"
       style={{ position: "fixed", inset: 0, background: "#0a0b0e" }}
     >
-      <div className="mv-hud">
-        <div className="mv-title">
-          objet&nbsp;d&apos;art — calibre OD·1 <span className="mv-clock" ref={clockRef}>--:--:--</span>
+      <div className="tb-hud">
+        <div className="tb-title">
+          objet&nbsp;d&apos;art — calibre OD·1 <span className="tb-clock" ref={clockRef}>--:--:--</span>
         </div>
         <MobileInstrumentPanel
           title="calibre controls"
           triggerLabel="tune"
           summary={`${speedLabel} · ${face} · ${view.replace("macro-", "")}`}
         >
-          <div className="mv-console">
-            <div className="mv-row" role="group" aria-label="movement speed">
+          <div className="tb-console">
+            <div className="tb-row" role="group" aria-label="tourbillon speed">
               {SPEEDS.map((s) => (
                 <button key={s.v} type="button" className={speed === s.v ? "on" : ""}
                   aria-pressed={speed === s.v}
                   onClick={() => pickSpeed(s.v)}>{s.label}</button>
               ))}
             </div>
-            <div className="mv-row" role="group" aria-label="movement finish">
+            <div className="tb-row" role="group" aria-label="tourbillon finish">
               {FACES.map((f) => (
                 <button key={f} type="button" className={face === f ? "on" : ""}
                   aria-pressed={face === f}
-                  onClick={() => { swapFaceRef.current?.(f); setFace(f); try { getFieldAudio().chime(); } catch { /* noop */ } haptics.tap(); useField.getState().recordTape("object", 0.5, `movement/face/${f}`); }}>{f}</button>
+                  onClick={() => { faceIdxRef.current = FACES.indexOf(f); swapFaceRef.current?.(f); setFace(f); try { getFieldAudio().chime(); } catch { /* noop */ } haptics.tap(); useField.getState().recordTape("object", 0.5, `tourbillon/face/${f}`); }}>{f}</button>
               ))}
               <button type="button" className={dialOn ? "on" : ""} aria-pressed={dialOn} onClick={toggleDial}>{dialOn ? "dial" : "open"}</button>
             </div>
-            <div className="mv-row" role="group" aria-label="camera view">
+            <div className="tb-row" role="group" aria-label="camera view">
               {VIEWS.map((v) => (
                 <button key={v} type="button" className={view === v ? "on" : ""}
                   aria-pressed={view === v}
@@ -1304,27 +1542,27 @@ export default function Movement() {
             </div>
           </div>
         </MobileInstrumentPanel>
-        <div className="mv-hint" aria-hidden="true">drag to orbit · tap parts to play · pinch to zoom</div>
+        <div className="tb-hint" aria-hidden="true">drag to orbit · tap parts to play · pinch to zoom</div>
       </div>
-      <div className="mv-sundial-wrap"><SundialChip /></div>
+      <div className="tb-sundial-wrap"><SundialChip /></div>
       <style dangerouslySetInnerHTML={{ __html: `
-        .mv-hud {
+        .tb-hud {
           position: absolute; left: 0; top: 0;
           padding: calc(64px + env(safe-area-inset-top, 0px)) 16px 16px 16px;
           display: grid; gap: 8px; justify-items: start;
           pointer-events: none; z-index: 11;
           font-family: var(--font-mono, ui-monospace, monospace);
         }
-        .mv-title {
+        .tb-title {
           font-family: var(--font-fraunces, Georgia, serif);
           font-size: 15px; letter-spacing: 0.4px;
           color: rgba(242,238,230,0.92);
           text-shadow: 0 1px 8px rgba(0,0,0,0.6);
         }
-        .mv-clock { color: #e7c873; margin-left: 8px; font-variant-numeric: tabular-nums; }
-        .mv-row { display: flex; gap: 6px; flex-wrap: wrap; pointer-events: auto; }
-        .mv-console { display: grid; gap: 8px; justify-items: start; }
-        .mv-row button {
+        .tb-clock { color: #e7c873; margin-left: 8px; font-variant-numeric: tabular-nums; }
+        .tb-row { display: flex; gap: 6px; flex-wrap: wrap; pointer-events: auto; }
+        .tb-console { display: grid; gap: 8px; justify-items: start; }
+        .tb-row button {
           appearance: none; cursor: pointer;
           border: 1px solid rgba(231,211,154,0.3);
           background: rgba(12,13,16,0.55); backdrop-filter: blur(6px);
@@ -1333,55 +1571,55 @@ export default function Movement() {
           padding: 7px 11px; border-radius: 7px;
           transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease;
         }
-        .mv-row button:hover { border-color: rgba(231,211,154,0.6); color: #f4ecd6; }
-        .mv-row button.on { background: rgba(231,211,154,0.18); border-color: rgba(231,211,154,0.8); color: #f6e6b4; }
-        .mv-hint {
+        .tb-row button:hover { border-color: rgba(231,211,154,0.6); color: #f4ecd6; }
+        .tb-row button.on { background: rgba(231,211,154,0.18); border-color: rgba(231,211,154,0.8); color: #f6e6b4; }
+        .tb-hint {
           font-size: 10px; letter-spacing: 0.3px; text-transform: lowercase;
           color: rgba(242,238,230,0.4); text-shadow: 0 1px 6px rgba(0,0,0,0.6);
         }
-        .mv-sundial-wrap {
+        .tb-sundial-wrap {
           position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%);
           z-index: 10; pointer-events: auto; width: 168px;
           filter: drop-shadow(0 10px 24px rgba(0,0,0,0.5));
         }
-        .mv-sundial svg { width: 100%; height: auto; display: block; }
-        .mv-sun-time {
+        .tb-sundial svg { width: 100%; height: auto; display: block; }
+        .tb-sun-time {
           font-family: var(--font-fraunces, Georgia, serif); font-size: 13px;
           fill: #f0d68a; letter-spacing: 1px; font-variant-numeric: tabular-nums;
         }
         @media (max-width: 720px) {
-          .mv-hud {
+          .tb-hud {
             right: 0;
             padding: calc(54px + env(safe-area-inset-top, 0px)) 16px 16px;
           }
-          .mv-title { font-size: 12px; }
-          .mv-hint {
+          .tb-title { font-size: 12px; }
+          .tb-hint {
             max-width: min(72vw, 330px);
             font-size: 9px;
             line-height: 1.45;
           }
-          .mv-console {
+          .tb-console {
             width: 100%;
             gap: 12px;
           }
-          .mv-row {
+          .tb-row {
             display: grid;
             grid-template-columns: repeat(3, minmax(0, 1fr));
             width: 100%;
             gap: 7px;
           }
-          .mv-row:first-child { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-          .mv-row button {
+          .tb-row:first-child { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+          .tb-row button {
             min-height: 44px;
             padding: 8px 7px;
           }
-          .movement-instrument .mobile-instrument-panel__trigger {
+          .tourbillon-instrument .mobile-instrument-panel__trigger {
             right: max(14px, env(safe-area-inset-right, 0px));
             left: auto;
             border-color: rgba(231,211,154,0.48);
             pointer-events: auto;
           }
-          .mv-sundial-wrap {
+          .tb-sundial-wrap {
             right: 14px;
             bottom: calc(118px + env(safe-area-inset-bottom, 0px));
             left: auto;

@@ -12,7 +12,7 @@
 // `objetdart:waves:naturals:v1`) and folds them into the new shared key,
 // then deletes the old ones. Users lose nothing.
 
-export type WorldZone = "ocean" | "tide" | "waves";
+export type WorldZone = "ocean" | "tide" | "waves" | "coast";
 
 // The catalog of everything the coast can carry. Different pages will only
 // render kinds that fit — a lily pad on /tide would read as a mistake, so
@@ -48,21 +48,26 @@ const MAX_ELAPSED_H = 12;        // don't let drift teleport a shell after weeks
 // Which zone is adjacent to which. A shell on /ocean can drift to /tide's
 // shore; kelp fragments and floating things can wash between the three
 // water pages. Kept explicit so the geography is legible.
+// The beach (coast) borders the tide pools and the breaking waves; a shell
+// left on the sand can be carried out to either, and things wash up onto the
+// coast from them in turn. The deep (ocean) still reaches the beach through
+// the tide it shares.
 const NEIGHBORS: Record<WorldZone, WorldZone[]> = {
   ocean: ["tide", "waves"],
-  tide: ["ocean", "waves"],
-  waves: ["ocean", "tide"],
+  tide: ["ocean", "waves", "coast"],
+  waves: ["ocean", "tide", "coast"],
+  coast: ["tide", "waves"],
 };
 
 // Which kinds belong in which zones. A lily pad only makes sense on /waves;
 // a starfish would look odd on a pond. Kept restrictive at first — we can
 // expand as new visuals ship.
 const KIND_ZONES: Record<WorldKind, WorldZone[]> = {
-  seashell:   ["ocean", "tide"],
-  kelp:       ["ocean", "tide", "waves"],
-  driftwood:  ["ocean", "tide", "waves"],
-  starfish:   ["ocean", "tide"],
-  sanddollar: ["ocean", "tide"],
+  seashell:   ["ocean", "tide", "coast"],
+  kelp:       ["ocean", "tide", "waves", "coast"],
+  driftwood:  ["ocean", "tide", "waves", "coast"],
+  starfish:   ["ocean", "tide", "coast"],
+  sanddollar: ["ocean", "tide", "coast"],
   lily:       ["waves"],
   leaf:       ["waves", "ocean"],
   koi:        ["waves"],

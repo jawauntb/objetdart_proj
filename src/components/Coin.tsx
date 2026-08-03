@@ -7,6 +7,16 @@ import { getFieldAudio } from "@/lib/audio";
 import { useField } from "@/store/field";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import {
+  createFrameGovernor,
+  createIdleWriter,
+  detailForTier,
+  isEmbeddedFrame,
+  onGalleryPause,
+  onVisibility,
+  resolveDpr,
+  type QualityTier,
+} from "@/lib/room-runtime";
 
 /**
  * /coin — a real gold coin you tilt, flip, and rub.
@@ -352,6 +362,31 @@ function makeReliefTexture(face: "front" | "back"): THREE.CanvasTexture {
   return t;
 }
 
+// module-level texture cache — relief canvases are expensive; generate once
+let cachedFrontTex: THREE.CanvasTexture | null = null;
+let cachedBackTex: THREE.CanvasTexture | null = null;
+let cachedReedTex: THREE.CanvasTexture | null = null;
+let cachedStarTex: THREE.CanvasTexture | null = null;
+
+function getReliefTexture(face: "front" | "back"): THREE.CanvasTexture {
+  if (face === "front") {
+    if (!cachedFrontTex) cachedFrontTex = makeReliefTexture("front");
+    return cachedFrontTex;
+  }
+  if (!cachedBackTex) cachedBackTex = makeReliefTexture("back");
+  return cachedBackTex;
+}
+
+function getReedTexture(): THREE.CanvasTexture {
+  if (!cachedReedTex) cachedReedTex = makeReedTexture();
+  return cachedReedTex;
+}
+
+function getStarTexture(): THREE.CanvasTexture {
+  if (!cachedStarTex) cachedStarTex = makeStarTexture();
+  return cachedStarTex;
+}
+
 // milled / reeded coin edge
 function makeReedTexture(): THREE.CanvasTexture {
   const w = 2048, h = 64;
@@ -395,9 +430,15 @@ export default function Coin() {
 
     try { getFieldAudio().setAmbientProfile("light"); } catch { /* noop */ }
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const embedded = isEmbeddedFrame();
+    const qualityCtx = { embedded, reducedMotion: reduce };
+
+    const governor = createFrameGovernor(embedded ? "medium" : "high");
+    let currentTier: QualityTier = governor.tier();
+    let currentDpr = resolveDpr(currentTier, qualityCtx);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setPixelRatio(currentDpr);
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.15;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -511,9 +552,9 @@ export default function Coin() {
     // ── the coin ──
     const R = 6, TH = 0.66;
     const gold = { color: 0xE9B23A, metalness: 1 };
-    const frontTex = makeReliefTexture("front");
-    const backTex = makeReliefTexture("back");
-    const reedTex = makeReedTexture(); reedTex.repeat.set(56, 1);
+    const frontTex = getReliefTexture("front");
+    const backTex = getReliefTexture("back");
+    const reedTex = getReedTexture(); reedTex.repeat.set(56, 1);
     const matFront = new THREE.MeshStandardMaterial({ ...gold, roughness: 0.22, bumpMap: frontTex, bumpScale: 8.5 });
     const matBack = new THREE.MeshStandardMaterial({ ...gold, roughness: 0.22, bumpMap: backTex, bumpScale: 8.5 });
     const matEdge = new THREE.MeshStandardMaterial({ ...gold, roughness: 0.34, bumpMap: reedTex, bumpScale: 3 });
@@ -526,7 +567,8 @@ export default function Coin() {
     scene.add(coinGroup);
 
     // shine star sprite in front of the coin
-    const star = new THREE.Sprite(new THREE.SpriteMaterial({ map: makeStarTexture(), blending: THREE.AdditiveBlending, transparent: true, depthTest: false, opacity: 0 }));
+    const starMat = new THREE.SpriteMaterial({ map: getStarTexture(), blending: THREE.AdditiveBlending, transparent: true, depthTest: false, opacity: 0 });
+    const star = new THREE.Sprite(starMat);
     star.scale.set(10, 10, 1); star.position.set(-2.4, 2.4, 6); scene.add(star);
 
     // ── interaction state ──
@@ -559,7 +601,7 @@ export default function Coin() {
     // ── aventurine "points": every interaction fills the night sky a little,
     //    persisted locally (no login) so it resumes where you left off ──
     const FILL_KEY = "objetdart:coin:aventurine";
-    const fill = { v: 0, t: 0, glow: 0, glowV: 0, pulse: 0, save: 0 };
+    const fill = { v: 0, t: 0, glow: 0, glowV: 0, pulse: 0 };
     try {
       const raw = localStorage.getItem(FILL_KEY) || "";
       const j = raw.startsWith("{") ? JSON.parse(raw) : { t: parseFloat(raw) || 0, glow: 0 };
@@ -567,12 +609,12 @@ export default function Coin() {
       fill.glow = Math.max(0, j.glow || 0); fill.glowV = fill.glow;
     } catch { /* noop */ }
     const saveFill = () => { try { localStorage.setItem(FILL_KEY, JSON.stringify({ t: +fill.t.toFixed(3), glow: +fill.glow.toFixed(3) })); } catch { /* noop */ } };
+    const fillWriter = createIdleWriter(saveFill);
     const addPoints = (a: number) => {
       fill.t = Math.min(1, fill.t + a);            // aventurine coverage (fills the page)
       fill.glow += a;                              // PERMANENT brilliance — never falls, always climbs
       fill.pulse = Math.min(1, fill.pulse + a * 2.2 + 0.06); // live radiant flash for this interaction
-      const now = performance.now();
-      if (now - fill.save > 700) { fill.save = now; saveFill(); }
+      fillWriter.schedule();
     };
 
     // ── audio: the coin is an 8-note instrument (a C-major octave) ──
@@ -768,10 +810,33 @@ export default function Coin() {
       },
     }, { wheelZoom: false });
 
-    // ── device gyroscope (tilt the phone) ──
+    // ── visibility / gallery pause / embedded sleep ───────────────────────
+    let docHidden = document.hidden;
+    let galleryPaused = embedded; // embedded iframes sleep until parent wakes them
+    let hardPaused = docHidden || galleryPaused;
+    let sleeping = hardPaused || embedded;
+
+    const applyPauseState = () => {
+      hardPaused = docHidden || galleryPaused;
+      sleeping = hardPaused || embedded;
+      if (hardPaused) governor.force("sleep");
+    };
+    applyPauseState();
+    const offVisibility = onVisibility((hidden) => {
+      docHidden = hidden;
+      applyPauseState();
+    });
+    const offGalleryPause = onGalleryPause((paused) => {
+      galleryPaused = paused;
+      applyPauseState();
+    });
+
+    // ── device gyroscope (tilt the phone) — disabled while sleeping ───────
     let haveOrient = false;
+    let sensorsOn = !sleeping;
     let prevGamma: number | null = null, prevBeta: number | null = null;
     const onOrient = (e: DeviceOrientationEvent) => {
+      if (!sensorsOn) return;
       haveOrient = true;
       const gamma = e.gamma ?? 0, beta = e.beta ?? 0;
       tilt.ty = Math.max(-1.2, Math.min(1.2, gamma / 40));       // left/right
@@ -783,12 +848,11 @@ export default function Coin() {
       }
       prevGamma = gamma; prevBeta = beta;
     };
-    window.addEventListener("deviceorientation", onOrient);
-
     // ── pop / jerk the phone → flip the coin toward the pop direction ──
     // watch for a sharp spike in linear acceleration; motionFlip debounces so
     // the pop and its rebound (decel) don't fire twice.
     const onMotion = (e: DeviceMotionEvent) => {
+      if (!sensorsOn) return;
       const a = e.acceleration ?? e.accelerationIncludingGravity;
       if (!a) return;
       const ax = a.x ?? 0, ay = a.y ?? 0, az = a.z ?? 0;
@@ -800,8 +864,22 @@ export default function Coin() {
         motionFlip(ax, ay, now); // tumbles toward the pop direction
       }
     };
-    window.addEventListener("devicemotion", onMotion);
-
+    const attachSensors = () => {
+      if (sensorsOn) return;
+      sensorsOn = true;
+      window.addEventListener("deviceorientation", onOrient);
+      window.addEventListener("devicemotion", onMotion);
+    };
+    const detachSensors = () => {
+      if (!sensorsOn) return;
+      sensorsOn = false;
+      window.removeEventListener("deviceorientation", onOrient);
+      window.removeEventListener("devicemotion", onMotion);
+    };
+    if (!sleeping) {
+      window.addEventListener("deviceorientation", onOrient);
+      window.addEventListener("devicemotion", onMotion);
+    }
     // iOS gates orientation & motion behind a user gesture
     type ReqPerm = { requestPermission?: () => Promise<"granted" | "denied"> };
     const DOE = (window as unknown as { DeviceOrientationEvent?: ReqPerm }).DeviceOrientationEvent;
@@ -816,6 +894,7 @@ export default function Coin() {
 
     const resize = () => {
       const w = wrap.clientWidth || 1, h = wrap.clientHeight || 1;
+      renderer.setPixelRatio(currentDpr);
       renderer.setSize(w, h, false);
       camera.aspect = w / h; camera.updateProjectionMatrix();
       bgUniforms.uAspect.value = w / h;
@@ -824,16 +903,45 @@ export default function Coin() {
     const ro = new ResizeObserver(resize); ro.observe(wrap);
 
     // ── loop ──
-    let raf = 0; let prev = performance.now();
+    let raf = 0; let slowWake: ReturnType<typeof setTimeout> | null = null;
+    let prev = performance.now();
     let idle = 0; let lastTiltMag = 0;
     let lastTiltNote = 0;
     let bgT = 0;
     const tick = (now: number) => {
-      const rawDt = Math.min(0.05, (now - prev) / 1000); prev = now;
+      // hard pause: tab hidden or gallery parent paused — skip draw entirely
+      if (hardPaused) {
+        if (sleeping) detachSensors();
+        slowWake = setTimeout(() => { raf = requestAnimationFrame(tick); }, 250);
+        return;
+      }
+      if (sleeping) detachSensors();
+      else attachSensors();
+
+      const tier = governor.beginFrame(now);
+      if (tier !== currentTier) {
+        currentTier = tier;
+        const nextDpr = resolveDpr(tier, qualityCtx);
+        if (nextDpr !== currentDpr) {
+          currentDpr = nextDpr;
+          resize();
+        }
+      }
+      const detail = detailForTier(currentTier);
+      const simHz = detail.simHz;
+      const frameBudget = 1000 / simHz;
+      const rawDtMs = now - prev;
+      if (rawDtMs < frameBudget * 0.85 && currentTier !== "high") {
+        raf = requestAnimationFrame(tick);
+        return;
+      }
+
+      const rawDt = Math.min(0.05, rawDtMs / 1000); prev = now;
       // three-finger time dilation: the coin's clock eases to 1/4 speed
       timeScale.cur += (timeScale.target - timeScale.cur) * Math.min(1, rawDt * 5);
       const dt = rawDt * timeScale.cur;
-      const motion = reduce ? 0 : 1;
+      const motion = reduce ? 0 : sleeping ? 0.35 : 1;
+      const tiltEase = sleeping ? 0.04 : 0.12;
 
       // ease tilt; add a slow idle breathing sway if untouched, and lean
       // into whatever wind three fingers last dragged across the room
@@ -842,8 +950,8 @@ export default function Coin() {
       wind.y *= Math.exp(-rawDt * 0.8);
       const swayX = (haveOrient || drag.on ? 0 : Math.sin(idle * 0.6) * 0.12 * motion) + wind.y * 0.5;
       const swayY = (haveOrient || drag.on ? 0 : Math.cos(idle * 0.45) * 0.16 * motion) + wind.x * 0.6;
-      tilt.x += (tilt.tx + swayX - tilt.x) * 0.12;
-      tilt.y += (tilt.ty + swayY - tilt.y) * 0.12;
+      tilt.x += (tilt.tx + swayX - tilt.x) * tiltEase;
+      tilt.y += (tilt.ty + swayY - tilt.y) * tiltEase;
 
       // entrained twinkle: the night sky pulses on each beat of your tempo
       if (now < entrain.until && entrain.bpm > 0) {
@@ -895,7 +1003,7 @@ export default function Coin() {
       fill.v += (fill.t - fill.v) * 0.05;
       fill.glowV += (fill.glow - fill.glowV) * 0.05;
       fill.pulse *= 0.93;
-      bgT += dt * (reduce ? 0.25 : 1);
+      bgT += dt * (reduce ? 0.25 : sleeping ? 0.4 : 1);
       bgUniforms.uTime.value = bgT;
       bgUniforms.uFill.value = fill.v;
       // permanent brilliance: rises with every interaction, saturating slowly so it
@@ -927,16 +1035,28 @@ export default function Coin() {
 
     return () => {
       cancelAnimationFrame(raf);
+      if (slowWake != null) clearTimeout(slowWake);
+      offVisibility();
+      offGalleryPause();
       ro.disconnect();
-      saveFill();
-      window.removeEventListener("deviceorientation", onOrient);
-      window.removeEventListener("devicemotion", onMotion);
+      fillWriter.flush();
+      fillWriter.cancel();
+      detachSensors();
       window.removeEventListener("touchend", askPerm);
       detachGestures();
       hideStyle.remove();
-      renderer.dispose(); pmrem.dispose(); envRT.dispose();
-      frontTex.dispose(); backTex.dispose(); reedTex.dispose();
-      bgMat.dispose(); bgQuad.geometry.dispose();
+      renderer.dispose();
+      pmrem.dispose();
+      envRT.dispose();
+      bgMat.dispose();
+      bgQuad.geometry.dispose();
+      geo.dispose();
+      matFront.dispose();
+      matBack.dispose();
+      matEdge.dispose();
+      starMat.dispose();
+      scene.remove(coinGroup);
+      scene.remove(star);
       if (renderer.domElement.parentNode) renderer.domElement.parentNode.removeChild(renderer.domElement);
     };
   }, []);

@@ -8,9 +8,13 @@ export type SiteIconKey =
   | "atoms"
   | "beam"
   | "beyond"
+  | "birds"
   | "cells"
+  | "tissue"
+  | "coast"
   | "organics"
   | "dna"
+  | "organelles"
   | "charts"
   | "molecules"
   | "dither"
@@ -30,7 +34,8 @@ export type SiteIconKey =
   | "light"
   | "loom"
   | "manifold"
-  | "movement"
+  | "mountain"
+  | "tourbillon"
   | "nucleons"
   | "ocean"
   | "overlook"
@@ -41,6 +46,7 @@ export type SiteIconKey =
   | "quarks"
   | "reading"
   | "relativity"
+  | "seed"
   | "signal"
   | "sine"
   | "space"
@@ -70,7 +76,7 @@ export type SiteIconKind =
   | "jewel"
   | "kept"
   | "light"
-  | "movement"
+  | "tourbillon"
   | "ocean"
   | "plasma"
   | "pretext"
@@ -165,6 +171,32 @@ export const SITE_ICON_VISUALS = {
     accent2: "#e0a2ff",
     ink: "#e8f7ff",
   },
+  birds: {
+    title: "Birds",
+    description: "a murmuration over the meadow",
+    path: "/birds",
+    shortName: "birds",
+    kind: "growth",
+    bg: "#8eb0c8",
+    bg2: "#dfe6c8",
+    glow: "#f4f0e0",
+    accent: "#2a2a30",
+    accent2: "#8fa86a",
+    ink: "#1c2420",
+  },
+  tissue: {
+    title: "Tissue",
+    description: "when one becomes many",
+    path: "/tissue",
+    shortName: "tissue",
+    kind: "circularity",
+    bg: "#0b0908",
+    bg2: "#2c2116",
+    glow: "#e7ac52",
+    accent: "#d8a95c",
+    accent2: "#4e7d8c",
+    ink: "#f6ead2",
+  },
   cells: {
     title: "Cells",
     description: "the plasm keeps its own tide",
@@ -177,6 +209,19 @@ export const SITE_ICON_VISUALS = {
     accent: "#f2c56b",
     accent2: "#9c3d33",
     ink: "#ffedc9",
+  },
+  organelles: {
+    title: "Organelles",
+    description: "the organs before the body",
+    path: "/organelles",
+    shortName: "organelles",
+    kind: "circularity",
+    bg: "#080a0a",
+    bg2: "#1c2622",
+    glow: "#aad6be",
+    accent: "#86baa8",
+    accent2: "#e28c6c",
+    ink: "#e9f4ee",
   },
   dna: {
     title: "DNA",
@@ -271,7 +316,7 @@ export const SITE_ICON_VISUALS = {
   },
   clouds: {
     title: "Clouds",
-    description: "olympus and the air floor",
+    description: "the air floor, four banks deep",
     path: "/clouds",
     shortName: "clouds",
     kind: "clouds",
@@ -281,6 +326,19 @@ export const SITE_ICON_VISUALS = {
     accent: "#f5f7fb",
     accent2: "#b7c6de",
     ink: "#f7fbff",
+  },
+  coast: {
+    title: "Coast",
+    description: "the beach between land and sea",
+    path: "/coast",
+    shortName: "coast",
+    kind: "waves",
+    bg: "#7eb0d4",
+    bg2: "#cfe3f0",
+    glow: "#fff8e8",
+    accent: "#d2b98c",
+    accent2: "#2e6a86",
+    ink: "#1a2a30",
   },
   coin: {
     title: "Coin",
@@ -477,12 +535,25 @@ export const SITE_ICON_VISUALS = {
     accent2: "#8fb5e8",
     ink: "#eef4ff",
   },
-  movement: {
-    title: "Movement",
-    description: "a mechanical watch in three dimensions",
-    path: "/movement",
-    shortName: "movement",
-    kind: "movement",
+  mountain: {
+    title: "Mountain",
+    description: "the peak above the fog",
+    path: "/mountain",
+    shortName: "mountain",
+    kind: "earth",
+    bg: "#6a7a90",
+    bg2: "#3a342c",
+    glow: "#f0f4f8",
+    accent: "#d8d5d0",
+    accent2: "#8a8478",
+    ink: "#f7f4ee",
+  },
+  tourbillon: {
+    title: "Tourbillon",
+    description: "a mechanical watch in three dimensions, correcting for gravity",
+    path: "/tourbillon",
+    shortName: "tourbillon",
+    kind: "tourbillon",
     bg: "#090c11",
     bg2: "#282018",
     glow: "#e0b66a",
@@ -619,6 +690,19 @@ export const SITE_ICON_VISUALS = {
     accent: "#e7ac52",
     accent2: "#8fb5e8",
     ink: "#eaf3ff",
+  },
+  seed: {
+    title: "Seed",
+    description: "an embryo in dark soil",
+    path: "/seed",
+    shortName: "seed",
+    kind: "growth",
+    bg: "#0a0e0c",
+    bg2: "#1a140f",
+    glow: "#f3d77a",
+    accent: "#96be64",
+    accent2: "#6a4a28",
+    ink: "#f4ecd8",
   },
   signal: {
     title: "Signal",

@@ -1,6 +1,7 @@
 "use client";
 
 import SiteHeader from "@/components/SiteHeader";
+import AxisChrome from "@/components/AxisChrome";
 import DitherLab from "./DitherLab";
 
 export default function DitherPage() {
@@ -10,6 +11,7 @@ export default function DitherPage() {
       <main>
         <DitherLab />
       </main>
+      <AxisChrome route="/dither" />
     </>
   );
 }

@@ -14,6 +14,7 @@ import {
   type WorldKind,
   type WorldNatural,
 } from "@/lib/world";
+import { resolveDpr, onGalleryPause, onVisibility, isEmbeddedFrame } from "@/lib/room-runtime";
 import LetGo from "@/components/LetGo";
 
 /**
@@ -368,7 +369,7 @@ export default function Ocean() {
 
     // ── resize ────────────────────────────────────────────────────
     const resize = () => {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = resolveDpr(isEmbeddedFrame() ? "medium" : "high", { embedded: isEmbeddedFrame(), maxDpr: 2 });
       const w = wrap.clientWidth;
       const h = wrap.clientHeight;
       water.width = Math.floor(w * dpr);
@@ -1174,7 +1175,7 @@ export default function Ocean() {
         // fallback depth gradient
         const wctx = water.getContext("2d");
         if (wctx) {
-          const dpr = Math.min(window.devicePixelRatio || 1, 2);
+          const dpr = resolveDpr(isEmbeddedFrame() ? "medium" : "high", { embedded: isEmbeddedFrame(), maxDpr: 2 });
           wctx.setTransform(dpr, 0, 0, dpr, 0, 0);
           const sg = wctx.createLinearGradient(0, 0, 0, h);
           sg.addColorStop(0.00, "rgba(229,224,206,1)"); // warm cream sky

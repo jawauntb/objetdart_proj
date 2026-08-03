@@ -55,6 +55,7 @@ import { getFieldAudio } from "@/lib/audio";
 import { PLANET_DESCENT_KEY } from "@/lib/stars/nestedCosmos";
 import { intensityFrom } from "@/lib/gesture/core";
 import * as haptics from "@/lib/haptics";
+import { resolveDpr, onGalleryPause, onVisibility, isEmbeddedFrame } from "@/lib/room-runtime";
 import { useField } from "@/store/field";
 import { useBandEdgeTravel } from "@/components/ScaleTravel";
 
@@ -691,7 +692,7 @@ export default function Atlas() {
     // narrow concern and stays self-contained.
     const resize = () => {
       const rect = stage.getBoundingClientRect();
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = resolveDpr(isEmbeddedFrame() ? "medium" : "high", { embedded: isEmbeddedFrame(), maxDpr: 2 });
       overlay.width = Math.max(1, Math.round(rect.width * dpr));
       overlay.height = Math.max(1, Math.round(rect.height * dpr));
       overlay.style.width = "100%";

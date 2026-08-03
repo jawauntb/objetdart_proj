@@ -1,4 +1,5 @@
 import type { RouteSigilKind } from "@/components/RouteSigil";
+import { scaleOrderedNavigationKeys } from "@/lib/nav-order";
 
 export type SiteRouteCluster = "field" | "water" | "nature" | "mechanism";
 
@@ -16,6 +17,7 @@ export type SiteRouteEntry = {
 
 export const SITE_ROUTES: SiteRouteEntry[] = [
   { key: "atlas",       icon: "atlas",    href: "/atlas/origin",                    desc: "the living map",                 cluster: "field",     dark: true, homePriority: 10 },
+  { key: "coast",       icon: "waves",    href: "/coast",                             desc: "the beach · land meets sea",    cluster: "water",     dark: true, homePriority: 7 },
   { key: "ocean",       icon: "waves",    href: "/ocean",                             desc: "the deep · dive down",          cluster: "water",     dark: true, homePriority: 7 },
   { key: "tide",        icon: "tide",     href: "/tide",                              desc: "move the moon",                cluster: "water",     dark: true, homePriority: 9 },
   { key: "waves",       icon: "waves",    href: "/waves",                             desc: "ripple tank",                  cluster: "water",     dark: true, homePriority: 8 },
@@ -28,10 +30,14 @@ export const SITE_ROUTES: SiteRouteEntry[] = [
   { key: "relativity",  icon: "stars",    href: "/relativity",                        desc: "light keeps its own covenant", cluster: "mechanism", dark: true },
   { key: "loom",        icon: "signal",   href: "/loom",                              desc: "one structure, every sense",   cluster: "mechanism", dark: true },
   { key: "storm",       icon: "storm",    href: "/storm",                             desc: "pressure · charge · discharge", cluster: "water",     dark: true },
-  { key: "clouds",      icon: "clouds",   href: "/clouds",                            desc: "olympus",                      cluster: "water",     dark: true },
+  { key: "clouds",      icon: "clouds",   href: "/clouds",                            desc: "the air floor, four banks deep", cluster: "water",     dark: true },
+  { key: "mountain",    icon: "earth",    href: "/mountain",                          desc: "the peak above the fog",       cluster: "nature",    dark: true },
   { key: "aphros",      icon: "aphros",   href: "/aphros",                            desc: "play the shells",              cluster: "water" },
   { key: "flowers",     icon: "growth",   href: "/flowers",                           desc: "petals · symmetry",            cluster: "nature",    dark: true },
+  { key: "birds",       icon: "growth",   href: "/birds",                             desc: "a murmuration",                cluster: "nature",    dark: true },
+  { key: "tissue",      icon: "aphros",   href: "/tissue",                            desc: "when one becomes many", cluster: "nature", dark: true },
   { key: "cells",       icon: "aphros",   href: "/cells",                             desc: "the plasm keeps its own tide", cluster: "nature",    dark: true },
+  { key: "organelles",  icon: "aphros",   href: "/organelles",                        desc: "the organs before the body", cluster: "nature", dark: true },
   { key: "dna",         icon: "growth",   href: "/dna",                               desc: "the ladder that copies", cluster: "nature", dark: true },
   { key: "organics",    icon: "growth",   href: "/organics",                          desc: "what carbon does when it has time", cluster: "nature", dark: true },
   { key: "molecules",   icon: "growth",   href: "/molecules",                         desc: "what the bond holds, the solvent carries", cluster: "nature", dark: true },
@@ -56,9 +62,10 @@ export const SITE_ROUTES: SiteRouteEntry[] = [
   { key: "charts",      icon: "charts",   href: "/charts",                            desc: "lines · candles · oscillators", cluster: "mechanism", dark: true },
   { key: "dither",      icon: "charts",   href: "/dither",                            desc: "ordered dots · signal studies", cluster: "mechanism", dark: true },
   { key: "time",        icon: "watch",    href: "/time",                              desc: "bend a clock",                  cluster: "mechanism", dark: true },
-  { key: "movement",    icon: "watch",    href: "/movement",                          desc: "mechanical movement · 3D",     cluster: "mechanism", dark: true, homePriority: 10 },
+  { key: "tourbillon",  icon: "watch",    href: "/tourbillon",                        desc: "a cage that cancels gravity",  cluster: "mechanism", dark: true, homePriority: 10 },
   { key: "jewel",       icon: "plasma",   href: "/jewel",                             desc: "turn the stone",               cluster: "mechanism", dark: true, homePriority: 8 },
   { key: "drop",        icon: "plasma",   href: "/drop",                              desc: "a cosmos in glass",            cluster: "mechanism", dark: true, homePriority: 11 },
+  { key: "seed",        icon: "growth",   href: "/seed",                              desc: "an embryo in dark soil",       cluster: "nature",    dark: true, homePriority: 11 },
   { key: "coin",        icon: "watch",    href: "/coin",                              desc: "a gold medal · tilt · flip",   cluster: "mechanism", dark: true, homePriority: 10 },
   { key: "watch",       icon: "watch",    href: "/watch",                             desc: "the room",                     cluster: "mechanism", dark: true, homePriority: 9 },
   { key: "archive",     icon: "archive",  href: "/archive",                          desc: "the drawers",                  cluster: "field",     homePriority: 7 },
@@ -73,46 +80,18 @@ export const SITE_ROUTE_BY_KEY = Object.fromEntries(
   SITE_ROUTES.map((route) => [route.key, route]),
 ) as Record<string, SiteRouteEntry>;
 
-const NAVIGATION_ROUTE_KEYS = [
-  "atlas",
-  "coin",
-  "beam",
-  "comb",
-  "stars",
-  "ocean",
-  "clouds",
-  "waves",
-  "movement",
-  "drop",
-  "sine",
-  "circularity",
-  "beyond",
-  "light",
-  "music-color",
-  "signal",
-  "jewel",
-  "aphros",
-  "tide",
-  "storm",
-  "earth",
-  "flowers",
-  "growth",
-  "pretext",
-  "dither",
-] as const;
-
-const NAVIGATION_ROUTE_KEY_SET = new Set<string>(NAVIGATION_ROUTE_KEYS);
-
-const PREFERRED_NAVIGATION_ROUTES = NAVIGATION_ROUTE_KEYS.map((key) => {
+/**
+ * Dropdown + gallery order — derived from SCALE_BANDS (large→small) and
+ * PEER_CIRCLES (MetaNavigator ring order at each rung). Do not hand-sort.
+ * See src/lib/nav-order.ts and docs/new-room.md.
+ */
+export const NAVIGATION_ROUTES: SiteRouteEntry[] = scaleOrderedNavigationKeys(
+  SITE_ROUTES.map((route) => ({ key: route.key, href: route.href })),
+).map((key) => {
   const route = SITE_ROUTE_BY_KEY[key];
   if (!route) throw new Error(`Unknown navigation route: ${key}`);
   return route;
 });
-
-export const NAVIGATION_ROUTES = [
-  ...PREFERRED_NAVIGATION_ROUTES,
-  ...SITE_ROUTES.filter((route) => !NAVIGATION_ROUTE_KEY_SET.has(route.key)),
-];
 
 const GALLERY_OMITTED_ROUTE_KEYS = new Set(["archive", "kept", "colophon", "guide"]);
 
