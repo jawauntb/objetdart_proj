@@ -150,7 +150,12 @@ export default function Clouds() {
     let uPressLoc: WebGLUniformLocation | null = null;
     let uFlashLoc: WebGLUniformLocation | null = null;
     let uWindLoc: WebGLUniformLocation | null = null;
+    let uDriftLoc: WebGLUniformLocation | null = null;
+    let uPuffsLoc: WebGLUniformLocation | null = null;
     let lastChargeSync = 0;
+    // 4 slots of vec4(uv.x, uv.y, strength, spare) handed to the shader each
+    // frame — the hand's condensation, injected into the volume itself.
+    const puffData = new Float32Array(16);
 
     if (gl) {
       const vert = `
@@ -170,146 +175,350 @@ export default function Clouds() {
         uniform float uPress;   // 0 = not pressed, 0..1 = held intensity
         uniform float uFlash;   // 0..1 short flash envelope
         uniform vec2 uWind;     // drag-driven shear vector
+        uniform vec2 uDrift;    // accumulated wind travel, in cloud-field units
+        uniform vec4 uPuffs[4]; // xy = screen uv, z = strength (<0 = storm cell), w = height bias
         varying vec2 vUv;
 
-        // hash + value noise + fbm — the cloud substrate
+        // The cloud deck lives between these two altitudes. The camera sits
+        // just under it, so the deck reads as a floor of heaps with towers
+        // punching up through the shear line.
+        const float DECK_BASE = 26.00;
+        const float DECK_CEIL = 50.00;
+
+        // ── noise ───────────────────────────────────────────────────
         float hash21(vec2 p) {
           p = fract(p * vec2(123.34, 456.21));
           p += dot(p, p + 45.32);
           return fract(p.x * p.y);
         }
-        float vnoise(vec2 p) {
+        float hash13(vec3 p) {
+          p = fract(p * 0.1031);
+          p += dot(p, p.yzx + 33.33);
+          return fract((p.x + p.y) * p.z);
+        }
+        float vnoise2(vec2 p) {
           vec2 i = floor(p);
           vec2 f = fract(p);
+          vec2 u = f * f * (3.0 - 2.0 * f);
           float a = hash21(i);
           float b = hash21(i + vec2(1.0, 0.0));
           float c = hash21(i + vec2(0.0, 1.0));
           float d = hash21(i + vec2(1.0, 1.0));
-          vec2 u = f * f * (3.0 - 2.0 * f);
-          return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
+          return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
         }
-        float fbm(vec2 p) {
+        float vnoise3(vec3 p) {
+          vec3 i = floor(p);
+          vec3 f = fract(p);
+          vec3 u = f * f * (3.0 - 2.0 * f);
+          float n000 = hash13(i + vec3(0.0, 0.0, 0.0));
+          float n100 = hash13(i + vec3(1.0, 0.0, 0.0));
+          float n010 = hash13(i + vec3(0.0, 1.0, 0.0));
+          float n110 = hash13(i + vec3(1.0, 1.0, 0.0));
+          float n001 = hash13(i + vec3(0.0, 0.0, 1.0));
+          float n101 = hash13(i + vec3(1.0, 0.0, 1.0));
+          float n011 = hash13(i + vec3(0.0, 1.0, 1.0));
+          float n111 = hash13(i + vec3(1.0, 1.0, 1.0));
+          return mix(
+            mix(mix(n000, n100, u.x), mix(n010, n110, u.x), u.y),
+            mix(mix(n001, n101, u.x), mix(n011, n111, u.x), u.y),
+            u.z
+          );
+        }
+        // where the deck is thick, seen from above — slow, broad weather.
+        // Normalised to 0..1 so the coverage maths below stays legible.
+        float fbm2(vec2 p) {
           float v = 0.0;
           float a = 0.5;
-          for (int i = 0; i < 6; i++) {
-            v += a * vnoise(p);
-            p = p * 2.07 + vec2(11.7, 3.2);
-            a *= 0.52;
+          for (int i = 0; i < 3; i++) {
+            v += a * vnoise2(p);
+            p = p * 2.13 + vec2(7.31, 1.77);
+            a *= 0.5;
           }
-          return v;
+          return v * 1.143;
+        }
+        // billow (abs-folded) turbulence — the cauliflower grain of a heap
+        // cloud. Ridges instead of blobs is the whole difference between
+        // smoke and a cumulus crown.
+        float billow(vec3 p) {
+          float v = 0.0;
+          float a = 0.5;
+          for (int i = 0; i < 3; i++) {
+            v += a * abs(vnoise3(p) * 2.0 - 1.0);
+            p = p * 2.41 + vec3(3.17, 7.73, 1.29);
+            a *= 0.5;
+          }
+          return v * 1.143;
         }
 
-        // 5-color day cycle. uPhase is 0..1 wrapping every 120s.
-        vec3 skyColor(float p) {
-          // stops:
-          //   0.00 cold dawn blue     #8fa5c7
-          //   0.25 pearl daylight     #d9e2e6
-          //   0.50 gold rose          #e6b98f
-          //   0.75 mineral storm      #596d72
-          //   0.90 deep ion violet    #22243f
-          vec3 c0 = vec3(0.561, 0.647, 0.780);
-          vec3 c1 = vec3(0.851, 0.886, 0.902);
-          vec3 c2 = vec3(0.902, 0.725, 0.561);
-          vec3 c3 = vec3(0.349, 0.427, 0.447);
-          vec3 c4 = vec3(0.133, 0.141, 0.247);
+        // ── hand-driven field bias (set once per pixel in main) ─────
+        float gCov;   // extra coverage under the cursor / at fresh puffs
+        float gDark;  // storm darkening under a held finger / storm cell
+
+        // Column coverage: 0 = clear air, 1 = a tower's worth of vapor.
+        // Broken field, not overcast — the blue between the heaps is the
+        // point, and it is what makes a heap read as a heap.
+        float coverage(vec2 xz) {
+          vec2 q = xz * 0.026 + uDrift * 0.055 + vec2(uTime * 0.0075, uTime * 0.0028);
+          float c = fbm2(q);
+          // a second, slower band decides which heaps get to tower
+          float tall = fbm2(q * 0.37 + vec2(19.3, 4.7));
+          c = (c - 0.44) * 2.45 + (tall - 0.5) * 0.72;
+          return clamp(c + gCov * 1.4, 0.0, 1.35);
+        }
+
+        // Density at a point in the deck. lod is the near-field detail
+        // weight (0 at the horizon, 1 up close) — far heaps drop their
+        // finest octaves rather than boiling into aliased salt, and the
+        // light march skips detail entirely.
+        float density(vec3 p, float lod) {
+          float cov = coverage(p.xz);
+          if (cov <= 0.02) return 0.0;
+          // taller columns where the deck is thick — flat bottoms, heaped tops
+          float base = DECK_BASE + (fbm2(p.xz * 0.019 + vec2(41.7, 8.3)) - 0.5) * 5.0;
+          float top = base + (DECK_CEIL - DECK_BASE) * clamp(0.20 + cov * 0.85, 0.20, 1.0);
+          float h = (p.y - base) / max(1.0, top - base);
+          if (h < 0.0 || h > 1.0) return 0.0;
+          // hard shear-line bottom, rounded crown
+          float profile = smoothstep(0.0, 0.07, h) * smoothstep(1.0, 0.74, h);
+          float d = cov * profile * 1.55 - 0.12;
+          if (d <= 0.0) return 0.0;
+          vec3 q = p * 0.175 + vec3(uDrift.x * 0.42, 0.0, uDrift.y * 0.42)
+                     + vec3(uTime * 0.020, -uTime * 0.012, uTime * 0.009);
+          // erosion grows with altitude: smooth base, boiling crown
+          d -= (billow(q * 1.05) - 0.34) * (0.34 + 0.58 * h);
+          if (d <= 0.0) return 0.0;
+          if (lod > 0.02) {
+            d -= lod * ((billow(q * 2.30) - 0.36) * 0.26 * (0.30 + h)
+                      + (billow(q * 5.90) - 0.42) * 0.15 * (0.25 + h));
+            if (lod > 0.55) d -= (lod - 0.55) * 2.2 * (billow(q * 14.0) - 0.46) * 0.07;
+          }
+          return clamp(d, 0.0, 1.0) * smoothstep(0.0, 0.26, d);
+        }
+
+        // shadow along the sun ray — the reason a cumulus has a bright
+        // shoulder and a bruised underside
+        float lightMarch(vec3 p, vec3 sunDir) {
+          float sum = 0.0;
+          float step = 1.10;
+          for (int i = 0; i < 4; i++) {
+            p += sunDir * step;
+            sum += density(p, 0.0) * step;
+            step *= 1.62;
+          }
+          return sum;
+        }
+
+        // 5-stop day cycle, sampled twice: overhead and at the horizon.
+        vec3 zenithColor(float p) {
+          vec3 c0 = vec3(0.141, 0.251, 0.431); // dawn indigo
+          vec3 c1 = vec3(0.145, 0.412, 0.776); // midday cobalt
+          vec3 c2 = vec3(0.294, 0.435, 0.682); // afternoon blue
+          vec3 c3 = vec3(0.227, 0.275, 0.325); // mineral storm
+          vec3 c4 = vec3(0.082, 0.090, 0.165); // ion violet
           vec3 col = c0;
           col = mix(col, c1, smoothstep(0.00, 0.25, p));
           col = mix(col, c2, smoothstep(0.25, 0.50, p));
           col = mix(col, c3, smoothstep(0.50, 0.75, p));
           col = mix(col, c4, smoothstep(0.75, 0.90, p));
-          // loop back toward morning lilac in the last 10%
+          col = mix(col, c0, smoothstep(0.90, 1.00, p));
+          return col;
+        }
+        vec3 horizonColor(float p) {
+          vec3 c0 = vec3(0.498, 0.561, 0.706);
+          vec3 c1 = vec3(0.812, 0.886, 0.949);
+          vec3 c2 = vec3(0.941, 0.780, 0.608);
+          vec3 c3 = vec3(0.420, 0.451, 0.478);
+          vec3 c4 = vec3(0.137, 0.145, 0.220);
+          vec3 col = c0;
+          col = mix(col, c1, smoothstep(0.00, 0.25, p));
+          col = mix(col, c2, smoothstep(0.25, 0.50, p));
+          col = mix(col, c3, smoothstep(0.50, 0.75, p));
+          col = mix(col, c4, smoothstep(0.75, 0.90, p));
           col = mix(col, c0, smoothstep(0.90, 1.00, p));
           return col;
         }
 
         void main() {
-          vec2 uv = vUv;                       // y up
-          vec2 sky_uv = vec2(uv.x, 1.0 - uv.y); // y=0 top
+          vec2 uv = vUv;                        // y up
           float aspect = uRes.x / uRes.y;
-          float t = uTime;
 
-          // ── base sky gradient ──────────────────────────────────
-          vec3 base = skyColor(uPhase);
-          // vertical gradient: cold, dense air overhead; warm scattering near horizon.
-          float upper = smoothstep(0.10, 1.00, sky_uv.y);
-          float horizon = 1.0 - smoothstep(0.02, 0.42, sky_uv.y);
-          vec3 zenith = mix(base * vec3(0.62, 0.70, 0.92), vec3(0.085, 0.105, 0.165), upper * 0.38);
-          vec3 lowAir = mix(base * 1.05, vec3(1.0, 0.74, 0.46), horizon * 0.26);
-          vec3 sky = mix(lowAir, zenith, upper);
-          sky += horizon * vec3(0.10, 0.055, 0.015);
-
-          // is the sky "stormy" this minute? boosts cloud darkness.
-          float stormy = smoothstep(0.55, 0.85, uPhase);
-
-          // shared cloud uv with mild aspect correction so clouds aren't
-          // squashed on wide windows
-          float shear = smoothstep(0.08, 0.90, length(uWind));
-          vec2 windDrift = vec2(uWind.x * 0.12, uWind.y * 0.05) * (0.45 + sky_uv.y);
-          vec2 cuv = vec2(uv.x * aspect, uv.y) + windDrift;
-          sky += shear * vec3(0.010, 0.016, 0.035);
-
-          // ── cirrus (high, thin streaks) ─────────────────────────
-          vec2 ci_uv = cuv * vec2(2.2, 6.0) + vec2(t * 0.012 + uWind.x * 0.55, uWind.y * 0.22);
-          float cirrus = fbm(ci_uv);
-          // mask: only in the top ~35% of the sky
-          float ciMask = smoothstep(0.95, 0.55, sky_uv.y);
-          float ciDensity = smoothstep(0.55, 0.78, cirrus) * ciMask;
-          // cirrus is mostly light catching in ice: cool, not chalk-white.
-          vec3 col = mix(sky, vec3(0.88, 0.94, 1.0), ciDensity * 0.38);
-
-          // ── altostratus (mid, broad smooth sheet) ───────────────
-          vec2 as_uv = cuv * vec2(0.9, 1.6) + vec2(t * 0.018 + uWind.x * 0.22, t * 0.004 + uWind.y * 0.06);
-          float alto = fbm(as_uv);
-          float asMask = smoothstep(0.75, 0.30, sky_uv.y) * smoothstep(0.05, 0.30, sky_uv.y);
-          float asDensity = smoothstep(0.48, 0.74, alto) * asMask;
-          vec3 asColor = mix(vec3(0.82, 0.88, 0.90), vec3(0.28, 0.34, 0.40), stormy);
-          col = mix(col, asColor, asDensity * 0.42);
-
-          // ── cumulus (low, puffy) — main hover/press target ──────
-          vec2 cu_uv = cuv * 1.7 + vec2(t * 0.024 + uWind.x * 0.28, t * 0.009 + uWind.y * 0.10);
-          float cum = fbm(cu_uv) + 0.12 * fbm(cu_uv * 2.7 + vec2(5.0, 9.0));
-          // gentle altitude band
-          float cuBand = smoothstep(0.62, 0.20, sky_uv.y) * smoothstep(0.02, 0.18, sky_uv.y);
-          // local cursor thickening — lower the threshold near pointer
+          // ── the hand's bias on the field ─────────────────────────
           vec2 cursorDelta = uv - uCursor;
           cursorDelta.x *= aspect;
-          float dCursor = length(cursorDelta);
-          float localPull = exp(-(dCursor * dCursor) / 0.06);
-          float threshold = 0.55 - localPull * (0.06 + uPress * 0.12);
-          float cuDensity = smoothstep(threshold, threshold + 0.18, cum) * cuBand;
-          // cumulus tint — white when calm, deepening to lilac-grey when
-          // stormy or locally held.
-          float darkPush = clamp(stormy * 0.7 + localPull * uPress, 0.0, 1.0);
-          vec3 cuColor = mix(vec3(0.91, 0.96, 0.98), vec3(0.235, 0.250, 0.345), darkPush);
-          col = mix(col, cuColor, cuDensity * 0.82);
+          float localPull = exp(-dot(cursorDelta, cursorDelta) / 0.055);
+          gCov = localPull * (0.07 + uPress * 0.30);
+          gDark = localPull * uPress;
+          for (int i = 0; i < 4; i++) {
+            vec4 pf = uPuffs[i];
+            if (pf.z == 0.0) continue;
+            vec2 pd = uv - pf.xy;
+            pd.x *= aspect;
+            float g = exp(-dot(pd, pd) / 0.022);
+            gCov += abs(pf.z) * g * 0.55;
+            gDark += max(0.0, -pf.z) * g;
+          }
+          gDark = clamp(gDark, 0.0, 1.0);
 
-          // ── nimbus (low, dark, heavy) — emerges in storm phase ──
-          vec2 nim_uv = cuv * 1.2 + vec2(t * 0.02 + uWind.x * 0.18, t * 0.006 + uWind.y * 0.08);
-          float nim = fbm(nim_uv + vec2(7.3, 2.1));
-          float nimBand = smoothstep(0.55, 0.10, sky_uv.y);
-          // nimbus presence rides storm phase and local press
-          float nimPresence = clamp(stormy + localPull * uPress * 0.9, 0.0, 1.0);
-          float nimDensity = smoothstep(0.46, 0.66, nim) * nimBand * nimPresence;
-          vec3 nimColor = vec3(0.125, 0.135, 0.195); // dark mineral blue
-          col = mix(col, nimColor, nimDensity * 0.66);
+          // stormy stretch of the day — heavier extinction, less sun
+          float stormy = smoothstep(0.55, 0.85, uPhase);
 
-          // ── horizon haze at the very bottom — paper-warm ────────
-          float horizonGlow = smoothstep(0.0, 0.16, sky_uv.y);
-          vec3 hazeColor = mix(vec3(0.945, 0.850, 0.675), base * 0.78, stormy);
-          col = mix(hazeColor, col, horizonGlow);
+          // ── camera: standing under the deck, looking out and up ──
+          vec2 sp = uv - 0.5;
+          sp.x *= aspect;
+          // the drag shear tips the whole view, so pushed wind is felt as
+          // the deck leaning, not just sliding
+          vec3 rd = normalize(vec3(
+            sp.x + uWind.x * 0.045,
+            sp.y + 0.320 + uWind.y * 0.030,
+            0.82
+          ));
+          vec3 ro = vec3(0.0, 0.0, 0.0);
 
-          // gentle local cursor halo — sunlit moisture, not a drawn ring.
-          col += localPull * 0.035 * vec3(0.82, 0.92, 1.0) * (1.0 - uPress);
+          // ── sun ──────────────────────────────────────────────────
+          float elev = 0.10 + 0.62 * (0.5 + 0.5 * cos((uPhase - 0.25) * 6.28318));
+          float az = (uPhase - 0.25) * 6.28318;
+          vec3 sunDir = normalize(vec3(sin(az) * 0.85, elev, cos(az) * 0.42 + 0.40));
+          vec3 sunCol = mix(vec3(1.00, 0.60, 0.33), vec3(1.00, 0.97, 0.91),
+                            smoothstep(0.10, 0.52, elev));
+          sunCol *= mix(1.12, 0.42, stormy);
 
-          // lightning flash — ion-blue blast falling off with vertical distance
-          // from the strike origin (we approximate that with a uniform global
-          // intensity here; the 2D overlay paints the actual bolt).
-          col += uFlash * vec3(0.68, 0.78, 1.0) * 0.42;
+          // ── sky dome behind the clouds ───────────────────────────
+          vec3 zen = zenithColor(uPhase);
+          vec3 hor = horizonColor(uPhase);
+          float up = clamp(rd.y, 0.0, 1.0);
+          vec3 sky = mix(hor, zen, pow(up, 0.52));
+          float sd = max(dot(rd, sunDir), 0.0);
+          sky += sunCol * pow(sd, 90.0) * 0.85;         // the disc itself
+          sky += sunCol * pow(sd, 9.0) * 0.07;          // forward haze
+          // ── the two high banks, above the heaps and behind them ──
+          // Flat layers intersected by the ray, so they take true
+          // perspective for the price of one fbm each: altostratus as a
+          // broad veil, cirrus as stretched ice streaks near the zenith.
+          if (rd.y > 0.02) {
+            vec2 ad = rd.xz * (52.0 / rd.y) * 0.010 + uDrift * 0.02 + vec2(uTime * 0.004, 0.0);
+            float alto = fbm2(ad);
+            float altoD = smoothstep(0.60, 0.94, alto) * smoothstep(0.02, 0.14, rd.y);
+            vec3 altoCol = mix(vec3(0.86, 0.90, 0.93), vec3(0.34, 0.38, 0.43), stormy);
+            sky = mix(sky, altoCol, altoD * 0.20);
+
+            vec2 cd = rd.xz * (96.0 / rd.y) * vec2(0.0032, 0.019) + uDrift * 0.01
+                    + vec2(uTime * 0.0025, 0.0);
+            float ci = fbm2(cd);
+            float ciD = smoothstep(0.54, 0.84, ci) * smoothstep(0.05, 0.45, rd.y);
+            sky = mix(sky, mix(vec3(0.90, 0.95, 1.0), sunCol, 0.25), ciD * 0.22);
+          }
+
+          // ── the lower floor: a sea of cloud tops, seen from above ──
+          // This is Olympus: the room stands over a second deck. It is a
+          // sampled plane rather than a second march — from above, a cloud
+          // sea is all tops and shadow, and tops are what a plane gives.
+          float underAir = smoothstep(0.06, -0.16, rd.y);
+          vec3 lowAir = mix(hor * 0.92, vec3(0.30, 0.30, 0.34), stormy * 0.6);
+          sky = mix(sky, lowAir, underAir * 0.85);
+          if (rd.y < -0.012) {
+            float tf = -7.0 / rd.y;
+            vec2 fp = rd.xz * tf * 0.030 + uDrift * 0.03 + vec2(uTime * 0.006, uTime * 0.002);
+            float f = fbm2(fp);
+            float ridge = fbm2(fp * 2.7 + vec2(5.1, 9.4));
+            float tops = smoothstep(0.36, 0.70, f * 0.75 + ridge * 0.25);
+            // slope from a finite difference along the sun's bearing: the
+            // sea reads as heaps, not as a painted texture
+            vec2 sb = normalize(sunDir.xz + vec2(0.001, 0.0)) * 0.09;
+            float slope = fbm2(fp + sb) - fbm2(fp - sb);
+            float lit = clamp(0.62 + slope * 6.0, 0.10, 1.35);
+            vec3 seaCol = mix(hor * 0.72, sunCol * 1.02, lit * 0.72);
+            float haze = 1.0 - exp(-tf * 0.0055);
+            seaCol = mix(seaCol, lowAir, haze * 0.80);
+            sky = mix(sky, seaCol, tops * (0.55 + 0.40 * (1.0 - haze)) * smoothstep(-0.012, -0.06, rd.y));
+          }
+
+          // ── volumetric march through the deck ────────────────────
+          vec3 scatter = vec3(0.0);
+          float trans = 1.0;
+          float ambT = 0.42 + 0.34 * (1.0 - stormy);
+          vec3 ambTop = zen * (1.15 + 0.6 * (1.0 - stormy));
+          vec3 ambBase = mix(hor * 0.62, vec3(0.10, 0.11, 0.15), stormy);
+          float cosT = dot(rd, sunDir);
+          // Henyey-Greenstein: the forward lobe is the silver lining
+          float g = 0.62;
+          float hg = (1.0 - g * g) / (12.566 * pow(1.0 + g * g - 2.0 * g * cosT, 1.5));
+
+          float firstHit = 0.0;
+          if (rd.y > 0.006) {
+            float t0 = min(DECK_BASE / rd.y, 150.0);
+            float t1 = min(min(DECK_CEIL / rd.y, t0 + 86.0), 220.0);
+            // Two-rate march: stride through empty air, then step fine once
+            // inside a heap. Sampling a dense cloud in one gulp is exactly
+            // what turns a march into salt-and-pepper.
+            float dtBig = max(0.80, t0 * 0.080);
+            float dtFine = max(0.26, t0 * 0.020);
+            float dt = dtBig;
+            bool inside = false;
+            float emptyRun = 0.0;
+            // dithered start so the step grid never bands
+            float jitter = hash21(gl_FragCoord.xy + fract(uTime) * 37.0);
+            float t = t0 + dtBig * jitter;
+            float sigma = 2.5 + stormy * 1.7 + gDark * 2.6;
+            for (int i = 0; i < 64; i++) {
+              if (trans < 0.04 || t > t1) break;
+              vec3 p = ro + rd * t;
+              float d = density(p, clamp(1.35 - t * 0.011, 0.0, 1.0));
+              if (d > 0.002) {
+                if (!inside) {
+                  // step back to the edge and refine from there
+                  inside = true;
+                  dt = dtFine;
+                  t = max(t0, t - dtBig) + dtFine * jitter * 0.5;
+                  continue;
+                }
+                emptyRun = 0.0;
+                if (firstHit == 0.0) firstHit = t;
+                float hNorm = clamp((p.y - DECK_BASE) / (DECK_CEIL - DECK_BASE), 0.0, 1.0);
+                float ls = lightMarch(p, sunDir);
+                float sunT = exp(-ls * 0.90);
+                float multi = exp(-ls * 0.22) * 0.62;   // cheap second bounce
+                float powder = 1.0 - exp(-d * 4.0);     // dark, dense cores
+                vec3 lum =
+                  sunCol * (sunT * (0.55 + 2.10 * hg) + multi) * (0.30 + 0.80 * powder)
+                  + ambTop * ambT * (0.24 + 0.55 * hNorm)
+                  + ambBase * 0.30;
+                lum *= 1.0 - gDark * 0.62;              // a held finger bruises it
+                lum += uFlash * vec3(0.72, 0.82, 1.0) * 1.05 * (0.35 + powder);
+                float sampleT = exp(-d * sigma * dt);
+                scatter += trans * (1.0 - sampleT) * lum;
+                trans *= sampleT;
+              } else if (inside) {
+                // stay fine for a few empty samples — leaving refinement the
+                // instant one sample reads clear is how a ray skips straight
+                // through a heap and leaves a hole of sky in it
+                emptyRun += 1.0;
+                if (emptyRun > 3.0) {
+                  inside = false;
+                  emptyRun = 0.0;
+                  dt = dtBig;
+                }
+              }
+              t += dt;
+            }
+          }
+
+          // distance haze: far heaps dissolve into the horizon air rather
+          // than crusting into a hard, aliased rim along the shear line
+          vec3 col = sky * trans + scatter;
+          float aerial = firstHit > 0.0 ? 1.0 - exp(-firstHit * 0.0058) : 0.0;
+          col = mix(col, mix(hor, zen, 0.35), aerial * 0.52);
+          float deckFade = smoothstep(0.006, 0.035, rd.y);
+          col = mix(sky, col, deckFade);
+
+          // the flash lights the whole vault, not only the bolt
+          col += uFlash * vec3(0.60, 0.72, 1.0) * 0.20;
+          // sunlit moisture under a passing hand — never a drawn ring
+          col += localPull * 0.030 * vec3(0.82, 0.92, 1.0) * (1.0 - uPress);
 
           float grain = hash21(gl_FragCoord.xy + floor(uTime * 12.0));
-          col += (grain - 0.5) * 0.018;
+          col += (grain - 0.5) * 0.016;
           float vignette = smoothstep(1.10, 0.12, distance(uv, vec2(0.5, 0.54)));
-          col *= 0.82 + vignette * 0.22;
+          col *= 0.84 + vignette * 0.20;
 
           col = clamp(col, 0.0, 1.0);
           gl_FragColor = vec4(col, 1.0);
@@ -345,6 +554,8 @@ export default function Clouds() {
             uPressLoc = gl.getUniformLocation(p, "uPress");
             uFlashLoc = gl.getUniformLocation(p, "uFlash");
             uWindLoc = gl.getUniformLocation(p, "uWind");
+            uDriftLoc = gl.getUniformLocation(p, "uDrift");
+            uPuffsLoc = gl.getUniformLocation(p, "uPuffs[0]");
 
             const buf = gl.createBuffer();
             gl.bindBuffer(gl.ARRAY_BUFFER, buf);
@@ -363,12 +574,18 @@ export default function Clouds() {
     }
 
     // ── resize ─────────────────────────────────────────────────────
+    // The volume march is the expensive pass, so the sky canvas renders
+    // below CSS resolution and is stretched back up — clouds are soft
+    // enough that nothing is lost but the cost. skyScale is walked down
+    // (and back up) by the frame-time watcher in the loop, so a phone and
+    // a workstation both land near 60fps.
+    let skyScale = 0.55;
     const resize = () => {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const w = wrap.clientWidth;
       const h = wrap.clientHeight;
-      sky.width = Math.floor(w * dpr);
-      sky.height = Math.floor(h * dpr);
+      sky.width = Math.max(2, Math.floor(w * dpr * skyScale));
+      sky.height = Math.max(2, Math.floor(h * dpr * skyScale));
       overlay.width = Math.floor(w * dpr);
       overlay.height = Math.floor(h * dpr);
       octx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -399,7 +616,6 @@ export default function Clouds() {
     let timeScaleTarget = 1;
     let simElapsed = 0;              // warped seconds — day cycle, drift
     let simNowMs = performance.now(); // warped ms — cell/veil/bolt ages
-    let windTravel = 0;              // accumulated law-wind cloud travel
     let lastRaceFxAt = 0;
     let entrainBpm = 0;
     let entrainUntil = 0;
@@ -862,13 +1078,6 @@ export default function Clouds() {
     const weatherCells: WeatherCell[] = [];
     const windStrokes: WindStroke[] = [];
     const rainVeils: RainVeil[] = [];
-    const cloudClusters = Array.from({ length: 5 }).map((_, i) => ({
-      xFrac: 0.08 + i * 0.22 + (Math.random() - 0.5) * 0.05,
-      yFrac: 0.30 + (i % 3) * 0.12 + (Math.random() - 0.5) * 0.035,
-      scale: 0.90 + Math.random() * 1.20,
-      drift: 2.5 + Math.random() * 7,
-      phase: Math.random() * Math.PI * 2,
-    }));
     const iceCrystals = Array.from({ length: 34 }).map((_, i) => ({
       xFrac: (i * 0.381966 + Math.random() * 0.08) % 1,
       yFrac: 0.10 + Math.random() * 0.23,
@@ -1048,88 +1257,6 @@ export default function Clouds() {
       ctx.restore();
     };
 
-    const colorWithAlpha = (color: string, alpha: number) => {
-      const a = clamp(alpha, 0, 1).toFixed(3);
-      const rgba = color.match(/^rgba\((\s*\d+\s*,\s*\d+\s*,\s*\d+)\s*,\s*[\d.]+\s*\)$/);
-      if (rgba) return `rgba(${rgba[1]}, ${a})`;
-      const rgb = color.match(/^rgb\((\s*\d+\s*,\s*\d+\s*,\s*\d+)\s*\)$/);
-      if (rgb) return `rgba(${rgb[1]}, ${a})`;
-      return color;
-    };
-
-    const drawCloudCluster = (
-      ctx: CanvasRenderingContext2D,
-      x: number,
-      y: number,
-      s: number,
-      fill: string,
-      rim: string,
-      alpha: number,
-    ) => {
-      ctx.save();
-      ctx.globalAlpha = alpha;
-      ctx.globalCompositeOperation = "screen";
-      const lobes = [
-        [-76, 10, 78, 0.30, -0.08],
-        [-46, -4, 96, 0.42, 0.05],
-        [-8, -16, 116, 0.46, -0.02],
-        [38, -8, 104, 0.40, 0.08],
-        [82, 12, 82, 0.32, -0.06],
-        [-16, 22, 132, 0.36, 0.00],
-        [42, 30, 118, 0.30, 0.04],
-      ];
-      for (const [lx, ly, lr, sy, rot] of lobes) {
-        ctx.save();
-        ctx.translate(x + lx * s, y + ly * s);
-        ctx.rotate(rot);
-        ctx.scale(1, sy);
-        const r = lr * s;
-        const g = ctx.createRadialGradient(0, 0, 0, 0, 0, r);
-        g.addColorStop(0, colorWithAlpha(fill, 0.52));
-        g.addColorStop(0.42, colorWithAlpha(fill, 0.22));
-        g.addColorStop(0.74, colorWithAlpha(rim, 0.08));
-        g.addColorStop(1, colorWithAlpha(fill, 0));
-        ctx.fillStyle = g;
-        ctx.beginPath();
-        ctx.arc(0, 0, r, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.restore();
-      }
-
-      ctx.restore();
-    };
-
-    const drawNimbusMark = (
-      ctx: CanvasRenderingContext2D,
-      x: number,
-      y: number,
-      strength: number,
-      color: string,
-    ) => {
-      const s = 0.72 + strength * 0.45;
-      ctx.save();
-      ctx.globalCompositeOperation = "source-over";
-      const dark = ctx.createRadialGradient(x, y, 0, x, y, 150 * s);
-      dark.addColorStop(0, colorWithAlpha(color, 0.26 + strength * 0.20));
-      dark.addColorStop(0.48, colorWithAlpha(color, 0.10 + strength * 0.08));
-      dark.addColorStop(1, colorWithAlpha(color, 0));
-      ctx.fillStyle = dark;
-      ctx.beginPath();
-      ctx.ellipse(x, y, 132 * s, 54 * s, -0.04, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.globalCompositeOperation = "screen";
-      const rim = ctx.createRadialGradient(x - 18 * s, y - 12 * s, 0, x - 18 * s, y - 12 * s, 112 * s);
-      rim.addColorStop(0, "rgba(206, 231, 255, 0.18)");
-      rim.addColorStop(0.56, "rgba(206, 231, 255, 0.06)");
-      rim.addColorStop(1, "rgba(206, 231, 255, 0)");
-      ctx.fillStyle = rim;
-      ctx.beginPath();
-      ctx.ellipse(x - 18 * s, y - 12 * s, 104 * s, 34 * s, 0.05, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
-    };
-
     const drawSunShafts = (
       ctx: CanvasRenderingContext2D,
       w: number,
@@ -1269,35 +1396,12 @@ export default function Clouds() {
         if (cell.y < 76) cell.y = h * (0.66 + Math.random() * 0.12);
       }
 
+      // The cell's body is no longer painted here — it is injected into the
+      // volume shader as a puff, so a tap thickens real cloud rather than
+      // laying a decal over it. What stays on the overlay is what the volume
+      // can't say: the rain shadow under a storm cell, and its fall.
       const pulse = 1 + Math.sin(elapsed * (cell.kind === "storm" ? 0.7 : 1.05) + cell.phase) * 0.05;
       const s = cell.spread * (0.82 + cell.strength * 0.82) * pulse;
-      const glowRadius = (cell.kind === "storm" ? 112 : 128) * s;
-      const glow = ctx.createRadialGradient(cell.x, cell.y, 4, cell.x, cell.y, glowRadius);
-      if (cell.kind === "storm") {
-        glow.addColorStop(0, `rgba(60, 50, 80, ${(0.26 * alpha).toFixed(3)})`);
-        glow.addColorStop(0.45, `rgba(95, 83, 122, ${(0.13 * alpha).toFixed(3)})`);
-        glow.addColorStop(1, "rgba(60, 50, 80, 0)");
-      } else {
-        glow.addColorStop(0, `rgba(255, 254, 246, ${(0.24 * alpha).toFixed(3)})`);
-        glow.addColorStop(0.56, `rgba(216, 196, 216, ${(0.10 * alpha).toFixed(3)})`);
-        glow.addColorStop(1, "rgba(255, 254, 246, 0)");
-      }
-
-      ctx.save();
-      ctx.globalCompositeOperation = cell.kind === "storm" ? "source-over" : "screen";
-      ctx.fillStyle = glow;
-      ctx.beginPath();
-      ctx.ellipse(cell.x, cell.y, glowRadius, glowRadius * 0.38, Math.sin(cell.phase) * 0.10, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
-
-      const fill = cell.kind === "storm"
-        ? isLight ? "rgba(38, 54, 66, 0.46)" : "rgba(14, 20, 34, 0.58)"
-        : isLight ? "rgba(222, 242, 250, 0.42)" : "rgba(184, 207, 232, 0.28)";
-      const rim = cell.kind === "storm"
-        ? "rgba(4, 8, 18, 0.34)"
-        : isLight ? "rgba(255, 236, 186, 0.16)" : "rgba(214, 231, 255, 0.16)";
-      drawCloudCluster(ctx, cell.x, cell.y, s * (cell.kind === "storm" ? 0.42 : 0.58), fill, rim, alpha * (cell.kind === "storm" ? 0.42 : 0.42));
 
       if (cell.kind === "storm") {
         ctx.save();
@@ -1334,6 +1438,12 @@ export default function Clouds() {
     let lastFrameMs = performance.now();
     // smoothed press strength so the cumulus dark-push doesn't snap
     let pressSmoothed = 0;
+    // the deck's own travel through the noise field — pushed wind moves the
+    // clouds themselves, and the offset persists after the hand lets go
+    let driftX = 0;
+    let driftY = 0;
+    let frameAvg = 16;
+    let lastQualityCheck = performance.now();
 
     const draw = (now: number) => {
       const w = overlay.clientWidth;
@@ -1348,8 +1458,9 @@ export default function Clouds() {
       const motionElapsed = reduce ? 0 : elapsed;
       elapsedRef.v = elapsed;
       const dt = frameDt * timeScale;
-      // the law-wind carries the whole cloud floor with it
-      windTravel += windX * dt * 46;
+      // the law-wind carries the whole cloud deck with it
+      driftX -= windX * dt * 3.4;
+      driftY -= windY * dt * 2.1;
       // 120s day cycle — frozen at 0.2 (midday-warm) when motion is reduced.
       // phaseOffsetRef is advanced by the sun/moon glyph click (0..1).
       const rawPhase = reduce ? 0.2 : (elapsed / 120) % 1;
@@ -1397,9 +1508,46 @@ export default function Clouds() {
 
       // ── WebGL pass ──
       if (gl && glProg) {
+        // frame-time watcher: the volume march scales itself to the
+        // machine it landed on rather than stuttering on a phone.
+        frameAvg += (frameDt * 1000 - frameAvg) * 0.06;
+        if (now - lastQualityCheck > 1200) {
+          lastQualityCheck = now;
+          const want =
+            frameAvg > 26 ? skyScale - 0.09 :
+            frameAvg < 13 ? skyScale + 0.05 :
+            skyScale;
+          const next = clamp(Math.round(want * 100) / 100, 0.40, 0.78);
+          if (Math.abs(next - skyScale) > 0.02) {
+            skyScale = next;
+            resize();
+          }
+        }
+
+        // the four freshest weather cells ride into the volume itself —
+        // a tap really does thicken the air where the finger landed
+        for (let i = 0; i < 4; i++) {
+          const cell = weatherCells[weatherCells.length - 1 - i];
+          const o = i * 4;
+          if (!cell) {
+            puffData[o] = 0; puffData[o + 1] = 0; puffData[o + 2] = 0; puffData[o + 3] = 0;
+            continue;
+          }
+          const age = (simNowMs - cell.t0) / 1000;
+          const life = cell.kind === "storm" ? 72 : 58;
+          const env = Math.min(1, age / 1.1) * Math.max(0, 1 - Math.max(0, age - life * 0.6) / (life * 0.4));
+          const s = cell.strength * env * (cell.kind === "storm" ? -1 : 1);
+          puffData[o] = clamp(cell.x / Math.max(1, w), 0, 1);
+          puffData[o + 1] = clamp(1 - cell.y / Math.max(1, h), 0, 1);
+          puffData[o + 2] = s;
+          puffData[o + 3] = 0;
+        }
+
         gl.useProgram(glProg);
-        if (uTimeLoc) gl.uniform1f(uTimeLoc, elapsed);
+        if (uTimeLoc) gl.uniform1f(uTimeLoc, reduce ? 21.5 : elapsed);
         if (uResLoc) gl.uniform2f(uResLoc, sky.width, sky.height);
+        if (uDriftLoc) gl.uniform2f(uDriftLoc, driftX, driftY);
+        if (uPuffsLoc) gl.uniform4fv(uPuffsLoc, puffData);
         if (uPhaseLoc) gl.uniform1f(uPhaseLoc, phase);
         if (uCursorLoc) {
           gl.uniform2f(
@@ -1428,7 +1576,7 @@ export default function Clouds() {
         if (sctx) {
           const dpr = Math.min(window.devicePixelRatio || 1, 2);
           sctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-          sctx.fillStyle = "#d8c4d8";
+          sctx.fillStyle = "#7ba3cf";
           sctx.fillRect(0, 0, w, h);
         }
       }
@@ -1437,17 +1585,7 @@ export default function Clouds() {
       octx.clearRect(0, 0, w, h);
 
       const stormFade = phase > 0.55 && phase < 0.93 ? 0.55 : 1;
-      const cloudFill = isLight ? "rgba(221, 242, 250, 0.34)" : "rgba(172, 198, 226, 0.22)";
-      const cloudRim = isLight ? "rgba(255, 221, 164, 0.12)" : "rgba(190, 214, 255, 0.12)";
       drawSunShafts(octx, w, h, phase, motionElapsed, isLight);
-      for (const c of cloudClusters) {
-        const margin = 240 * c.scale;
-        const raced = elapsed * c.drift + windTravel * (0.5 + c.scale * 0.4);
-        const driftX = reduce ? 0 : (((raced + c.xFrac * w) % (w + margin * 2)) + (w + margin * 2)) % (w + margin * 2) - margin;
-        const x = reduce ? c.xFrac * w : driftX;
-        const y = c.yFrac * h + Math.sin(elapsed * 0.18 + c.phase) * 8;
-        drawCloudCluster(octx, x, y, c.scale, cloudFill, cloudRim, 0.14 * stormFade);
-      }
 
       for (let i = weatherCells.length - 1; i >= 0; i--) {
         const cell = weatherCells[i];
@@ -1556,16 +1694,6 @@ export default function Clouds() {
           drawGlyph(octx, g, y, glyphColor);
         }
         g.opacity = baseOp;
-      }
-
-      if (pointer.current.pressed && pointer.current.over) {
-        drawNimbusMark(
-          octx,
-          pointer.current.x,
-          pointer.current.y,
-          pressSmoothed,
-          isLight ? "rgba(93, 82, 112, 0.88)" : "rgba(38, 34, 54, 0.92)",
-        );
       }
 
       // cloud puffs (cloud-body taps) — soft expanding rings
