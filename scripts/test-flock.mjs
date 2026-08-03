@@ -47,6 +47,7 @@ const NO_WIND = { x: 0, y: 0, z: 0 };
  */
 function scramble(st, seed) {
   const rng = F.mulberry32(seed);
+  const flockAct = F.activityIndex("flock");
   for (let i = 0; i < st.n; i++) {
     const yaw = rng() * Math.PI * 2;
     const pitch = (rng() - 0.5) * 1.2;
@@ -54,6 +55,9 @@ function scramble(st, seed) {
     st.vel[i * 3] = Math.cos(yaw) * Math.cos(pitch) * sp;
     st.vel[i * 3 + 1] = Math.sin(pitch) * sp;
     st.vel[i * 3 + 2] = Math.sin(yaw) * Math.cos(pitch) * sp;
+    // Law tests measure the murmuration: put every bird in the air so
+    // the thirteen meadow residents cannot dilute the order under test.
+    st.activityOf[i] = flockAct;
   }
   return st;
 }
@@ -268,7 +272,9 @@ assert.equal(F.seedFlock(1, 900).pos.length, 900 * 3, "three numbers per bird, n
 {
   const compact = (seed) => {
     const st = F.seedFlock(seed, 700);
+    const flockAct = F.activityIndex("flock");
     for (let i = 0; i < st.n; i++) {
+      st.activityOf[i] = flockAct;
       st.pos[i * 3] *= 0.4;
       st.pos[i * 3 + 1] *= 0.4;
       st.pos[i * 3 + 2] *= 0.4;
@@ -308,6 +314,8 @@ assert.equal(F.seedFlock(1, 900).pos.length, 900 * 3, "three numbers per bird, n
     st.n = 2;
     st.pos.set([-6, -0.4, 0, 6, 0.4, 0]);
     st.vel.set([F.MIN_SPEED, 0, 0, -F.MIN_SPEED, 0, 0]);
+    st.activityOf[0] = F.activityIndex("flock");
+    st.activityOf[1] = F.activityIndex("flock");
     const p = params({ separation: sep, alignment: 0, cohesion: 0 });
     let min = Infinity;
     for (let i = 0; i < 90; i++) {
@@ -325,7 +333,9 @@ assert.equal(F.seedFlock(1, 900).pos.length, 900 * 3, "three numbers per bird, n
   // separation radius must push itself out to a real floor.
   const floorOf = (sep) => {
     const st = F.seedFlock(0x0c1, 300);
+    const flockAct = F.activityIndex("flock");
     for (let i = 0; i < st.n; i++) {
+      st.activityOf[i] = flockAct;
       st.pos[i * 3] *= 0.03;
       st.pos[i * 3 + 1] *= 0.03;
       st.pos[i * 3 + 2] *= 0.03;
@@ -463,6 +473,10 @@ assert.equal(F.seedFlock(1, 900).pos.length, 900 * 3, "three numbers per bird, n
     { x: -80, y: -80, z: 80 },
   ]) {
     const st = F.seedFlock(0xfa11, 600);
+    // The closed-sky speed floor is a murmuration law; meadow residents are
+    // allowed to settle. Put every bird in the air for this check.
+    const flockAct = F.activityIndex("flock");
+    for (let i = 0; i < st.n; i++) st.activityOf[i] = flockAct;
     const p = params({ separation: 2, alignment: 2, cohesion: 2, wind: w, goal: F.seasonGoal(2), goalPull: 8 });
     for (let i = 0; i < 600; i++) F.advanceFlock(st, p, 1 / 60);
     assert.ok(F.withinBounds(st.pos, st.n), `no bird leaves the sky under wind ${JSON.stringify(w)}`);
@@ -598,6 +612,77 @@ assert.equal(F.seedFlock(1, 900).pos.length, 900 * 3, "three numbers per bird, n
   assert.ok(best > 0.8, `the murmuration does form (best ${best})`);
 }
 
+// —— the aviary catalog: kinds, activities, places ————————————————
+// The bug: a murmuration that forgot the meadow — no parrot on the tree,
+// no duck on the pond — or a seed that does not cover the catalog.
+{
+  for (const need of [
+    "parrot",
+    "cockatiel",
+    "falcon",
+    "hawk",
+    "duck",
+    "chicken",
+    "emu",
+    "finch",
+    "sparrow",
+    "hummingbird",
+    "red-ibis",
+    "peacock",
+    "bird-of-paradise",
+  ]) {
+    assert.ok(F.BIRD_KINDS.includes(need), `missing kind ${need}`);
+    assert.ok(F.BIRD_SPECIES[need], `missing species ${need}`);
+    assert.ok(F.BIRD_SPECIES[need].activities.length >= 1, `${need} needs activities`);
+  }
+  assert.equal(F.BIRD_KINDS.length, 13);
+
+  const st = F.seedFlock(0xb17d, 400);
+  assert.ok(F.catalogCovered(st), "a seeded flock covers the whole catalog");
+  assert.equal(st.kindOf.length, st.n);
+  assert.equal(st.activityOf.length, st.n);
+  assert.equal(st.tint.length, st.n * 3);
+
+  // Residents stay near their places under a short advance; air birds move.
+  let resident = -1;
+  for (let i = 0; i < st.n; i++) {
+    if (!F.isAirActivity(F.ACTIVITIES[st.activityOf[i]])) {
+      resident = i;
+      break;
+    }
+  }
+  assert.ok(resident >= 0, "the meadow has at least one resident");
+  const rx0 = st.pos[resident * 3];
+  const ry0 = st.pos[resident * 3 + 1];
+  const rz0 = st.pos[resident * 3 + 2];
+  for (let i = 0; i < 30; i++) F.advanceFlock(st, params(), 1 / 60);
+  const rMove = Math.hypot(
+    st.pos[resident * 3] - rx0,
+    st.pos[resident * 3 + 1] - ry0,
+    st.pos[resident * 3 + 2] - rz0,
+  );
+  assert.ok(rMove < 8, `a resident stays near its place (moved ${rMove})`);
+
+  // Flush puts a perched/hopping bird into the air.
+  const before = st.activityOf[resident];
+  F.flushNear(st, { x: rx0, y: ry0, z: rz0 }, 12);
+  assert.ok(
+    F.isAirActivity(F.ACTIVITIES[st.activityOf[resident]]) || st.activityOf[resident] !== before,
+    "flush changes a nearby bird's activity toward the air",
+  );
+
+  // Roost and launch are addressable by the hand.
+  const roostIdx = F.roostNearest(st, { x: 0, y: 0, z: 0 });
+  assert.ok(roostIdx >= 0 && roostIdx < st.n);
+  const roostAct = F.ACTIVITIES[st.activityOf[roostIdx]];
+  assert.ok(
+    roostAct === "perch" || roostAct === "hop" || roostAct === "strut" || roostAct === "drink",
+    `roost lands in a ground activity, got ${roostAct}`,
+  );
+  const launchIdx = F.launchNearest(st, { x: 0, y: 0, z: 0 }, { x: 1, y: 0.5, z: 0 }, 10);
+  assert.ok(F.isAirActivity(F.ACTIVITIES[st.activityOf[launchIdx]]), "launch yields an air activity");
+}
+
 console.log(
-  "flock ok: order checked against the ring, the pair at cos(θ/2) and one animal; 60 Hz and 120 Hz landing every bird in the same place; alignment strictly ordering, cohesion strictly gathering, separation holding a floor, the wind blowing downwind, the sky closed under any wind, and the order→harmonic map monotone, bounded and readable back to 1e-9",
+  "flock ok: order checked against the ring, the pair at cos(θ/2) and one animal; 60 Hz and 120 Hz landing every bird in the same place; alignment strictly ordering, cohesion strictly gathering, separation holding a floor, the wind blowing downwind, the sky closed under any wind, the order→harmonic map monotone, bounded and readable back to 1e-9; and the aviary catalog (thirteen kinds) covers perch/drink/swim/hop/strut residents the hand can flush, roost and launch",
 );
