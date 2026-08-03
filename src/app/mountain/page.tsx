@@ -7,19 +7,19 @@ import ScaleTravel from "@/components/ScaleTravel";
 import MetaNavigator from "@/components/MetaNavigator";
 import { getFieldAudio } from "@/lib/audio";
 
-const DropSphere = dynamic(() => import("@/components/DropSphere"), { ssr: false });
+const MountainPeak = dynamic(() => import("@/components/MountainPeak"), { ssr: false });
 
-export default function DropPage() {
+export default function MountainPage() {
   useEffect(() => {
-    getFieldAudio().setAmbientProfile("aphros");
+    getFieldAudio().setAmbientProfile("wind");
   }, []);
 
   return (
     <>
       <SiteHeader />
-      <DropSphere />
-      <ScaleTravel route="/drop" />
-      <MetaNavigator route="/drop" />
+      <MountainPeak />
+      <ScaleTravel route="/mountain" />
+      <MetaNavigator route="/mountain" />
     </>
   );
 }

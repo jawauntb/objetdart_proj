@@ -70,10 +70,10 @@ export const SCALE_BANDS: ScaleBand[] = [
   { id: "drop", label: "a drop", route: "/drop", sMin: -3.5, sMax: -1.5 },
   { id: "flowers", label: "flowers", route: "/flowers", sMin: -1.5, sMax: 0.5 },
   // The air above the garden: a wingspan is metres, a flock a hundred of them.
-  { id: "birds", label: "birds", route: null, sMin: 0.5, sMax: 2.2 },
-  { id: "coast", label: "the coast", route: "/ocean", sMin: 2.2, sMax: 3.4 },
+  { id: "birds", label: "birds", route: "/birds", sMin: 0.5, sMax: 2.2 },
+  { id: "coast", label: "the coast", route: "/coast", sMin: 2.2, sMax: 3.4 },
   // A peak stands kilometres over a valley tens of kilometres wide.
-  { id: "olympus", label: "olympus", route: null, sMin: 3.4, sMax: 4.5 },
+  { id: "olympus", label: "olympus", route: "/mountain", sMin: 3.4, sMax: 4.5 },
   { id: "atlas", label: "the atlas", route: "/atlas/origin", sMin: 4.5, sMax: 6.5 },
   { id: "earth", label: "the earth", route: "/earth", sMin: 6.5, sMax: 9 },
   { id: "stars", label: "the stars", route: "/stars", sMin: 9, sMax: 16.5 },
@@ -385,13 +385,17 @@ type TravelOverride = {
  * agreement is the tell that those bands were placed right.
  */
 const TRAVEL_OVERRIDES: Partial<Record<ScaleBandId, TravelOverride>> = {
-  drop: { up: "coast" }, // a drop returns to the sea
-  coast: { down: "drop" }, // and the sea gives the drop back
+  drop: { up: "coast" }, // a drop returns to the shore (beach before deep)
+  coast: { down: "drop", extraUp: ["earth"] }, // the shore gives the drop back;
+  // and opens laterally onto the land it borders
   tissue: { up: "flowers" }, // a sheet of cells belongs to what it is a sheet of
   flowers: { up: "earth", down: "tissue", extraDown: ["drop"] }, // a petal is
   // tissue before it is one cell; dew gathers on them too
-  earth: { up: "atlas", down: "flowers" }, // the ground lies on the map;
-  // things grow from it
+  earth: { up: "atlas", down: "flowers", extraDown: ["coast", "olympus"] }, // the
+  // ground lies on the map; things grow from it; the beach and the peak are
+  // lateral doors off the land (press, release, press again)
+  olympus: { down: "coast", extraUp: ["earth"] }, // the peak rises from fog;
+  // walking down from the land reaches the mountain; clouds are a peer, not a pinch
   atlas: { up: "stars" }, // the map recedes into the sky (the planet-globe
   // room will one day sit between them); it descends onto the peak by metric
   stars: { down: "atlas" }, // the sky descends onto the map, and thins upward
@@ -558,10 +562,23 @@ export function entryScaleFor(route: string): number | null {
   for (const b of SCALE_BANDS) {
     if (b.route && route.startsWith(b.route)) return (b.sMin + b.sMax) / 2;
   }
-  // Coast shares one band across three shores.
-  if (route.startsWith("/tide") || route.startsWith("/waves")) {
+  // Coast shares one band across the beach, the deep, and the instruments.
+  if (
+    route.startsWith("/tide") ||
+    route.startsWith("/waves") ||
+    route.startsWith("/ocean")
+  ) {
     const coast = SCALE_BANDS.find((b) => b.id === "coast");
     if (coast) return (coast.sMin + coast.sMax) / 2;
+  }
+  // A seed sits at the drop's scale; the cloud floor shares olympus with the peak.
+  if (route.startsWith("/seed")) {
+    const drop = SCALE_BANDS.find((b) => b.id === "drop");
+    if (drop) return (drop.sMin + drop.sMax) / 2;
+  }
+  if (route.startsWith("/clouds")) {
+    const peak = SCALE_BANDS.find((b) => b.id === "olympus");
+    if (peak) return (peak.sMin + peak.sMax) / 2;
   }
   return null;
 }

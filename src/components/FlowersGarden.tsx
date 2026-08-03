@@ -36,6 +36,7 @@ import {
   type FlowerGeometry,
   type Species,
 } from "@/lib/botany";
+import { resolveDpr, onGalleryPause, onVisibility, isEmbeddedFrame } from "@/lib/room-runtime";
 
 const STORE_KEY = "objetdart:flowers:v1";
 const MAX_PLANTS = 28;
@@ -320,7 +321,7 @@ export default function FlowersGarden() {
 
     const resize = () => {
       const r = wrap.getBoundingClientRect();
-      const ratio = Math.min(window.devicePixelRatio || 1, 1.5);
+      const ratio = resolveDpr(isEmbeddedFrame() ? "medium" : "high", { embedded: isEmbeddedFrame(), maxDpr: 1.5 });
       width = Math.max(320, Math.floor(r.width));
       height = Math.max(480, Math.floor(r.height));
       rectLeft = r.left;
