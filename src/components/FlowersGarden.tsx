@@ -36,7 +36,14 @@ import {
   type FlowerGeometry,
   type Species,
 } from "@/lib/botany";
-import { resolveDpr, onGalleryPause, onVisibility, isEmbeddedFrame } from "@/lib/room-runtime";
+import {
+  resolveDpr,
+  onGalleryPause,
+  onVisibility,
+  isEmbeddedFrame,
+  createFrameGovernor,
+  detailForTier,
+} from "@/lib/room-runtime";
 
 const STORE_KEY = "objetdart:flowers:v1";
 const MAX_PLANTS = 28;
