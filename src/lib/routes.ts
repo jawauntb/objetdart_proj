@@ -43,6 +43,7 @@ export const SITE_ROUTES: SiteRouteEntry[] = [
   { key: "earth",       icon: "earth",    href: "/earth",                             desc: "strata · seismograph · root",  cluster: "nature",    dark: true },
   { key: "growth",      icon: "growth",   href: "/growth",                            desc: "sigmoid · exponential · decay", cluster: "nature",    dark: true },
   { key: "stars",       icon: "stars",    href: "/stars",                             desc: "the night sky",                cluster: "nature",    dark: true, homePriority: 6 },
+  { key: "space",       icon: "stars",    href: "/space",                             desc: "the web that holds the light", cluster: "nature",    dark: true },
   { key: "comb",        icon: "stars",    href: "/comb",                              desc: "comb the light · the cowlick stays", cluster: "nature", homePriority: 9 },
   { key: "beam",        icon: "growth",   href: "/beam",                              desc: "the eye of heaven · bokeh petals",   cluster: "nature", homePriority: 10 },
   { key: "signal",      icon: "signal",   href: "/signal",                            desc: "music is also waves",          cluster: "mechanism", dark: true },

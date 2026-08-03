@@ -78,7 +78,7 @@ export const SCALE_BANDS: ScaleBand[] = [
   { id: "earth", label: "the earth", route: "/earth", sMin: 6.5, sMax: 9 },
   { id: "stars", label: "the stars", route: "/stars", sMin: 9, sMax: 16.5 },
   // The nearest star is 4e16 m, a nebula 1e17-1e18, a galaxy 1e21.
-  { id: "space", label: "deep space", route: null, sMin: 16.5, sMax: 22 },
+  { id: "space", label: "deep space", route: "/space", sMin: 16.5, sMax: 22 },
   { id: "beyond", label: "beyond", route: "/beyond", sMin: 22, sMax: 25.5 },
   { id: "manifold", label: "the manifold", route: "/manifold", sMin: 25.5, sMax: 27 },
 ];

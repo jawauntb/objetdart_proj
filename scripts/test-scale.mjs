@@ -251,13 +251,13 @@ assert.equal(entryScaleFor("/colophon"), null);
   );
   assert.deepEqual(
     Array.from(travelOptions("manifold", -1, {}), (b) => b.id),
-    ["stars", "beyond"],
-    "the fold offers stars first, then the beyond",
+    ["space", "beyond"],
+    "the fold offers the web first, then the beyond",
   );
   assert.deepEqual(
     Array.from(travelOptions("stars", 1, {}), (b) => b.id),
-    ["manifold"],
-    "the sky still opens onto the fold, straight through the unbuilt web",
+    ["space"],
+    "the sky thins upward into the web, which is now a room",
   );
   assert.deepEqual(
     Array.from(travelOptions("cells", 1, {}), (b) => b.id),
@@ -273,7 +273,6 @@ assert.equal(entryScaleFor("/colophon"), null);
     ["atlas", -1, "coast"], // through /olympus
     ["coast", 1, "atlas"], // through /olympus
     ["flowers", -1, "cells"], // through /tissue
-    ["manifold", -1, "stars"], // through /space
   ]) {
     const opts = travelOptions(from, dir, {});
     assert.ok(opts.length > 0, `${from} must keep a door in direction ${dir}`);
