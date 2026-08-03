@@ -65,6 +65,15 @@ existing set, `siteMetadata`), `src/lib/routes.ts`, `src/lib/site-icon-config.ts
 `SCALE_BANDS` (the band-route-page guard in `test-scale.mjs` will fail until
 the page really exists; that's the point).
 
+**Dropdown / gallery order is automatic.** `NAVIGATION_ROUTES` is derived from
+`SCALE_BANDS` (manifold → quanta) and `PEER_CIRCLES` in `src/lib/peers.ts`
+(MetaNavigator ring order at each rung) via `src/lib/nav-order.ts`. Do **not**
+hand-maintain a preferred-nav key list. If the room is a same-scale sibling
+(drop↔seed, mountain↔clouds, …), add it to the right `PEER_CIRCLES` entry —
+the header dropdown and the home gallery both update from that. Off-axis
+rooms (instruments, reading surfaces) append after the axis in `SITE_ROUTES`
+registration order.
+
 The room also enters the field guide in the same PR: add its entry (essence,
 exhaustive moves, discoveries, what it keeps) to `src/data/guide.ts` and shoot
 its screenshot with `npm run shoot:guide -- --only=<key>` against a running

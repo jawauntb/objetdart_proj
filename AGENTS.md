@@ -63,6 +63,13 @@ the quark→manifold axis, prefer deepening an existing band over adding rooms,
 and branch only where containment genuinely forks. State the placement (or
 the law/lens exemption) in one sentence in the PR body.
 
+**Nav order follows the scale graph.** The header dropdown and home gallery
+are derived from `SCALE_BANDS` + `PEER_CIRCLES` (`src/lib/nav-order.ts`) —
+manifold at the top, quanta at the bottom, MetaNavigator peers contiguous in
+ring order. Never hand-sort `NAVIGATION_ROUTES`. Put the room on a band
+and/or in a peer circle; the nav updates itself. `scripts/test-routes.mjs`
+pins this.
+
 ## The field guide (`/guide`) — the documentation law
 
 `/guide` is the one sanctioned reading surface where the site explains itself: an

@@ -28,7 +28,9 @@ export type PeerCircle = {
 
 /**
  * Author's peer cosmology. Order inside a circle is the ring order —
- * twist cycles clockwise through it.
+ * twist cycles clockwise through it, and the site dropdown / gallery
+ * expand the same order at the circle's highest band (see nav-order.ts).
+ * Adding a peer here updates MetaNavigator and the nav sequence together.
  */
 export const PEER_CIRCLES: PeerCircle[] = [
   {
@@ -41,10 +43,12 @@ export const PEER_CIRCLES: PeerCircle[] = [
   },
   {
     id: "meadow",
-    band: "flowers",
+    // Anchor at birds (the higher rung); ring order large → small so the
+    // dropdown and the peer twist agree: flock above garden.
+    band: "birds",
     rooms: [
-      { key: "flowers", href: "/flowers", label: "flowers", band: "flowers" },
       { key: "birds", href: "/birds", label: "birds", band: "birds" },
+      { key: "flowers", href: "/flowers", label: "flowers", band: "flowers" },
     ],
   },
   {
