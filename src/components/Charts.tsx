@@ -12,6 +12,8 @@ import { getFieldAudio } from "@/lib/audio";
 import { attachGestures } from "@/lib/gesture";
 import type { ConcernKey } from "@/lib/types";
 import * as haptics from "@/lib/haptics";
+import { onVessel } from "@/lib/vessel";
+import { relaxTurbulence, stirTurbulence } from "@/lib/turbulence";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
 
 /**
@@ -27,6 +29,13 @@ import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
  *      Amber→cyan gradient and a 9-period EMA smoothing line.
  *   3. Oscillator (30% h) — RSI computed from Panel 1's closes. Threshold
  *      bands at 30 / 70. Colour follows the zone the oscillator is in.
+ *
+ * The plate is alive at rest: a slow breath walks the whole reading on the
+ * shared 7s/47s clocks (render-time only — the series stays a pure function
+ * of the seed), and the room's agitation rides `lib/turbulence`, so a shake
+ * churns the panels and every haptic in the room hits heavier until it
+ * settles. The device is the vessel: tilt leans the reading down-slope, a
+ * knock rings the plate, face-down is night.
  *
  * Feedback loop — the OCEAN influences the chart:
  *   - concerns (especially `risk`) raise base volatility
@@ -44,6 +53,11 @@ const RSI_PERIOD = 14;
 const EMA_PERIOD = 9;
 const DRAG_NOTE_MS = 90;
 const PIN_KEY = "objetdart:charts:pinned:v1";
+
+// the shared clock family (INSPIRATION §5 law 3): the 7s breath under a slow tide
+const BREATH_MS = 7000;
+const TIDE_MS = 47000;
+const TAU = Math.PI * 2;
 
 // Panel proportions (fractions of inner viewport)
 const P1_FRAC = 0.40;
@@ -366,6 +380,13 @@ export default function Charts() {
   const entrainRef = useRef({ bpm: 0, until: 0, lastBeat: -1, pulse: 0 });
   const lastGestureAtRef = useRef(0);
 
+  // ── vessel state (the device is the plate's gravity) ──
+  const tiltRef = useRef({ target: 0, cur: 0, over: false, lastCueAt: 0 });
+  const knockRef = useRef({ t0: -1e9, intensity: 0 });
+  const nightRef = useRef({ target: 0, cur: 0 });
+  const seedRef = useRef(0);
+  seedRef.current = seed;
+
   const addChartMark = (label: string, tone: ChartMark["tone"] = "amber", strength = 0.5) => {
     const id = ++chartMarkIdRef.current;
     setChartMarks((marks) => [...marks.slice(-4), { id, label, tone, strength }]);
@@ -508,11 +529,26 @@ export default function Charts() {
     const ro = new ResizeObserver(resize);
     ro.observe(canvas);
 
+    let restedWhileHidden = false;
+
     const draw = (now: number) => {
       const L = layoutRef.current;
       if (!L) {
         raf = requestAnimationFrame(draw);
         return;
+      }
+      // a hidden tab costs nothing: one settled frame so the plate is never
+      // blank, then no paint at all, and the clock resumes from here rather
+      // than jumping the breath forward
+      if (document.hidden) {
+        scanRef.current.lastFrameAt = -1;
+        if (restedWhileHidden) {
+          raf = requestAnimationFrame(draw);
+          return;
+        }
+        restedWhileHidden = true;
+      } else {
+        restedWhileHidden = false;
       }
       ctx.clearRect(0, 0, L.width, L.height);
 
@@ -524,13 +560,54 @@ export default function Charts() {
       // captioning it. Drawn under the data so the lines read over them.
       drawInscriptions(ctx, L);
 
+      // the shared calm↔storm axis (lib/turbulence): the room's own energy,
+      // decaying here because this loop owns the frame. Haptic weight rides
+      // it too — gain() in lib/haptics reads the same scalar.
+      // (always relax, even under reduced motion — otherwise a stirred axis
+      // would stay high forever and every haptic with it)
+      const turb = relaxTurbulence(now) * (reduce ? 0 : 1);
+
+      // the vessel, smoothed: raw orientation would jitter the panels
+      const tilt = tiltRef.current;
+      tilt.cur += (tilt.target - tilt.cur) * 0.06;
+      const night = nightRef.current;
+      night.cur += (night.target - night.cur) * 0.05;
+
       // three-finger weather: a transient wave rolls through every panel —
       // the data field ripples and settles, nothing is rewritten
       const rippleAge = (now - rippleRef.current.t0) / 1000;
       const rippleEnv = rippleAge < 3 ? rippleRef.current.amp * Math.exp(-rippleAge * 2.1) : 0;
-      const waveOff = rippleEnv > 0.004
-        ? (i: number) => rippleEnv * Math.sin(i * 0.55 - rippleRef.current.dir * rippleAge * 13)
-        : undefined;
+
+      // idle breath: the plate never sits still. A slow swell walks the whole
+      // reading on the shared clock — 7s breath under a 47s tide — with the
+      // per-candle phase fixed by the seed, so the same field always breathes
+      // the same way. Render-time only: the series itself is untouched, so an
+      // idle frame costs a few sines and nothing recomputes.
+      const wake = 1 - night.cur;
+      const driftAmp = reduce ? 0 : 0.15 * wake;
+      const churnAmp = reduce ? 0 : turb * 1.1 * wake;
+      const breathPh = (now / BREATH_MS) * TAU;
+      const tidePh = (now / TIDE_MS) * TAU;
+      const churnPh = (now / 900) * TAU;
+      const seedPh = (seedRef.current % 997) * 0.0063;
+      const lean = tilt.cur * 0.9 * wake;
+      const waveOff =
+        rippleEnv > 0.004 || driftAmp > 0.004 || churnAmp > 0.004 || Math.abs(lean) > 0.004
+          ? (i: number) => {
+              const ph = seedPh + i * 0.37;
+              return (
+                (rippleEnv > 0.004
+                  ? rippleEnv * Math.sin(i * 0.55 - rippleRef.current.dir * rippleAge * 13)
+                  : 0) +
+                driftAmp *
+                  (Math.sin(breathPh + ph) * 0.6 + Math.sin(tidePh + ph * 0.31) * 0.4) +
+                // the churn a shake leaves behind, riding the shared axis down
+                (churnAmp > 0.004 ? churnAmp * Math.sin(churnPh + ph * 1.7) : 0) +
+                // tilt: the plate tips and the reading slides down-slope
+                lean * (i / CANDLE_COUNT - 0.5) * 2
+              );
+            }
+          : undefined;
 
       // the lens (twist): candlestick dressing ↔ the raw walk underneath
       const lens = lensRef.current;
@@ -568,7 +645,7 @@ export default function Charts() {
       const scanRate = entrained
         ? scanSpan / ((60000 / entrain.bpm) * 8) // one crossing per eight beats
         : 0.035;
-      scan.t += scanDt * scanRate * scanScale.cur;
+      scan.t += scanDt * scanRate * scanScale.cur * wake;
       if (entrained) {
         const beatIdx = Math.floor(now / (60000 / entrain.bpm));
         if (beatIdx !== entrain.lastBeat) {
@@ -579,13 +656,29 @@ export default function Charts() {
       }
       entrain.pulse *= Math.exp(-scanDt / 300);
       const scanX = L.padL + (scan.t % scanSpan);
-      const scanAlpha = (reduce ? 0.08 : 0.18) + entrain.pulse * 0.3;
+      const scanAlpha = ((reduce ? 0.08 : 0.18) + entrain.pulse * 0.3 + turb * 0.22) * wake;
       const scanGrad = ctx.createLinearGradient(scanX, 0, scanX + 20, 0);
       scanGrad.addColorStop(0, `rgba(255,180,110,0)`);
       scanGrad.addColorStop(0.45, `rgba(255,180,110,${scanAlpha})`);
       scanGrad.addColorStop(1, `rgba(255,180,110,0)`);
       ctx.fillStyle = scanGrad;
       ctx.fillRect(scanX - 10, 0, 24, L.height);
+
+      // a knock on the case rings the plate: one wave of light crosses all
+      // three panels and dies, the way a struck rim rings and stills
+      const knock = knockRef.current;
+      const knockAge = (now - knock.t0) / 1000;
+      if (knockAge < 1.2) {
+        const env = Math.exp(-knockAge * 2.6) * (0.3 + knock.intensity * 0.7);
+        const r = 40 + knockAge * L.width * 0.9;
+        const cx = L.padL + (L.width - L.padL - L.padR) * 0.5;
+        const cy = L.p1Top + L.p1H * 0.5;
+        ctx.strokeStyle = `rgba(255,190,124,${(env * 0.5).toFixed(3)})`;
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, TAU);
+        ctx.stroke();
+      }
 
       // glimmer (grammar §6): after ~20s of quiet, a faint ring breathes
       // over one of the candles — a physical hint, never text.
@@ -610,6 +703,12 @@ export default function Charts() {
       ctx.fillText(lens.cur > 0.5 ? "price · the raw walk" : "price · ohlc", L.padL, L.p1Top + 14);
       ctx.fillText("d/dt · 9-ema", L.padL, L.p2Top + 14);
       ctx.fillText(`rsi · ${RSI_PERIOD}`, L.padL, L.p3Top + 14);
+
+      // face-down is night: the plate darkens and the scan stands still
+      if (night.cur > 0.004) {
+        ctx.fillStyle = `rgba(6,10,16,${(night.cur * 0.84).toFixed(3)})`;
+        ctx.fillRect(0, 0, L.width, L.height);
+      }
 
       raf = requestAnimationFrame(draw);
     };
@@ -796,6 +895,7 @@ export default function Charts() {
 
   const onGenerate = () => {
     setSeed(Date.now() % 1_000_000);
+    stirTurbulence(0.2);
     try {
       getFieldAudio().chime();
     } catch {
@@ -849,15 +949,17 @@ export default function Charts() {
   // latest chrome actions for the stable gesture handlers
   const onGenerateRef = useRef(onGenerate);
   const onPinRef = useRef(onPin);
+  const addMarkRef = useRef(addChartMark);
   onGenerateRef.current = onGenerate;
   onPinRef.current = onPin;
+  addMarkRef.current = addChartMark;
 
   // ── gestures (the shared grammar — src/lib/gesture) ────────────────────
   // One finger touches the data (drag any plotted point and the whole
   // reading answers); two fingers turn the lens (chart ↔ the raw walk);
   // three fingers touch the law (drag ripples the field, hold slows the
-  // scan to a quarter). Pinch and pan2 stay unbound — the frame belongs
-  // to the manifold.
+  // scan to a quarter); the device is the vessel (below). Pinch and pan2
+  // stay unbound: the plate holds one reading and has no scale to travel.
   useEffect(() => {
     const overlay = overlayRef.current;
     if (!overlay) return;
@@ -919,6 +1021,7 @@ export default function Charts() {
           const nowMs = performance.now();
           if (speed > 0.25 && nowMs - lastRippleCueAt > 700) {
             lastRippleCueAt = nowMs;
+            stirTurbulence(Math.min(0.12, speed * 0.08));
             playNote(40, 220);
             try { haptics.chop(); } catch { /* noop */ }
             recordTape("region", 0.45, "charts/ripple");
@@ -995,6 +1098,7 @@ export default function Charts() {
             setVolatility(v);
             if (now - d.lastChimeAt > DRAG_NOTE_MS) {
               d.lastChimeAt = now;
+              stirTurbulence(Math.min(0.12, Math.max(0, v - volRef.current) * 0.6));
               playNote(46 + (v / 3.0) * 26, 120);
               haptics.chop();
             }
@@ -1020,6 +1124,7 @@ export default function Charts() {
           });
           if (now - d.lastChimeAt > DRAG_NOTE_MS) {
             d.lastChimeAt = now;
+            stirTurbulence(0.012);
             const c = candlesRef.current[d.idx];
             if (c) playClickForCandle({ ...c, tweak });
             haptics.chop();
@@ -1136,6 +1241,7 @@ export default function Charts() {
         const dir = Math.sign(e.winding) || 1;
         const v = Math.round(Math.min(3, Math.max(0.1, volRef.current + dir * 0.2)) / 0.05) * 0.05;
         setVolatility(v);
+        if (dir > 0) stirTurbulence(0.09);
         playNote(46 + (v / 3.0) * 26, 130);
         try { haptics.ripple(0.32); } catch { /* noop */ }
         recordTape("object", 0.4, "charts/vol-wind");
@@ -1153,6 +1259,69 @@ export default function Charts() {
     return detach;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [locate, playClickForCandle, playNote, recordTape]);
+
+  // ── the vessel (lib/vessel) — the plate hangs from real gravity ────────
+  // Passive subscription: nothing flows until the candle has granted the
+  // senses. Tilt leans the whole reading down-slope; shake churns the field
+  // through the shared turbulence axis; a knock on the case rings the plate;
+  // face-down is night and the instrument sleeps.
+  useEffect(() => {
+    const reduce =
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    const detach = onVessel({
+      tilt: ({ gamma }) => {
+        const lean = Math.max(-1, Math.min(1, gamma / 38));
+        tiltRef.current.target = lean;
+        // a detent where the slope gets steep: the reading answers in sound
+        // and touch, not only in the lean the eye already reads
+        const mag = Math.abs(lean);
+        const now = performance.now();
+        if (!tiltRef.current.over && mag > 0.55 && now - tiltRef.current.lastCueAt > 700) {
+          tiltRef.current.over = true;
+          tiltRef.current.lastCueAt = now;
+          lastGestureAtRef.current = now;
+          playNote(lean > 0 ? 55 : 48, 200);
+          try { haptics.detent(); } catch { /* noop */ }
+          addMarkRef.current(lean > 0 ? "lean up" : "lean dn", lean > 0 ? "rise" : "fall", 0.5);
+        } else if (tiltRef.current.over && mag < 0.34) {
+          tiltRef.current.over = false;
+        }
+      },
+      shake: ({ intensity }) => {
+        // agitation lands on the shared axis — the churn the panels draw,
+        // and the weight every haptic in the room hits with
+        stirTurbulence(Math.min(0.55, 0.18 + intensity * 0.6));
+        lastGestureAtRef.current = performance.now();
+        try { getFieldAudio().thud(); } catch { /* noop */ }
+        try { haptics.storm(); } catch { /* noop */ }
+        recordTape("ripple", Math.min(1, 0.5 + intensity * 0.5), "charts/churn");
+        addMarkRef.current("churn", "amber", Math.min(0.9, 0.5 + intensity * 0.4));
+      },
+      knock: ({ intensity }) => {
+        const now = performance.now();
+        if (now - knockRef.current.t0 < 420) return;
+        knockRef.current = { t0: now, intensity };
+        lastGestureAtRef.current = now;
+        stirTurbulence(0.06 + intensity * 0.08);
+        try { getFieldAudio().bell(); } catch { /* noop */ }
+        try { haptics.tap(); } catch { /* noop */ }
+        recordTape("object", 0.4 + intensity * 0.3, "charts/knock");
+        addMarkRef.current("ring", "pale", 0.5 + intensity * 0.3);
+      },
+      flip: ({ faceDown }) => {
+        nightRef.current.target = faceDown ? 1 : 0;
+        if (reduce) nightRef.current.cur = faceDown ? 1 : 0;
+        lastGestureAtRef.current = performance.now();
+        playNote(faceDown ? 33 : 45, faceDown ? 320 : 200);
+        try { haptics.roll(); } catch { /* noop */ }
+        addMarkRef.current(faceDown ? "night" : "plate", "pale", 0.44);
+      },
+    });
+
+    return detach;
+  }, [playNote, recordTape]);
 
   // ── render ─────────────────────────────────────────────────────────────
 

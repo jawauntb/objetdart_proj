@@ -1,5 +1,6 @@
 /**
- * The scale manifold — one axis from quarks to the spacetime manifold.
+ * The scale manifold — one axis from the quantum fields to the spacetime
+ * manifold.
  *
  * `s` is a position in log10 meters. Every room that joins the manifold owns a
  * band (a half-open span of decades); zooming moves `s`; crossing a band
@@ -12,6 +13,7 @@
  */
 
 export type ScaleBandId =
+  | "quanta"
   | "quarks"
   | "nucleons"
   | "atoms"
@@ -50,6 +52,7 @@ export type ScaleBand = {
  * and audio registers are stable when the rooms arrive (plan W6).
  */
 export const SCALE_BANDS: ScaleBand[] = [
+  { id: "quanta", label: "the quanta", route: "/quanta", sMin: -22, sMax: -19 },
   { id: "quarks", label: "quarks", route: "/quarks", sMin: -19, sMax: -15 },
   { id: "nucleons", label: "nucleons", route: "/nucleons", sMin: -15, sMax: -14 },
   { id: "atoms", label: "atoms", route: "/atoms", sMin: -14, sMax: -9.5 },

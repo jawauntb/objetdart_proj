@@ -22,9 +22,11 @@ export type RegisterGlideTargets = {
 
 // The coast is the neutral point of the instrument: at human scale the
 // register filter sits open enough to be transparent and the swells run at
-// their authored rates. Mirrors spectralRegisterFor at the coast band center
-// (s = 2.5) — ~0.159 Hz, a breath away from the ocean bed's 0.14 Hz swell.
-export const NEUTRAL_LFO_HZ = 0.159;
+// their authored rates. Mirrors spectralRegisterFor at the human shore
+// (s = 2.5) on the −22…27 axis — ~0.134 Hz, a breath away from the ocean
+// bed's 0.14 Hz swell. Retuned whenever the axis floor moves (the quanta
+// band extended it); test-audio-register.mjs holds the two in sync.
+export const NEUTRAL_LFO_HZ = 0.134;
 
 const clamp = (v: number, lo: number, hi: number) =>
   Math.min(hi, Math.max(lo, v));
