@@ -353,168 +353,172 @@ float birdShape(vec2 p, float kind, float activity, float wing) {
   float air = max(open, max(dive, soar));
   float a = 0.0;
 
-  // 0 parrot — stocky amazon: deep hooked beak, short squared tail, big head
+  // 0 parrot — stocky amazon: oversized head, deep hooked beak, short square tail
   if (kind < 0.5) {
-    a = max(ellipse(p - vec2(0.02, 0.02), vec2(0.34, 0.30)), ellipse(p - vec2(0.26, 0.14), vec2(0.18, 0.17)));
-    a = max(a, hookedBeak(p, vec2(0.38, 0.08), 0.26));
-    a = max(a, mix(foldedWing(p, -0.02), flightWing(p, 1.0, open, 0.2), air));
-    a = max(a, mix(0.0, flightWing(p, -1.0, open * 0.7, 0.2), air));
-    a = max(a, ellipse(p + vec2(0.30, 0.0), vec2(0.14, 0.10))); // short square tail
-    a = max(a, legPair(p, 0.1, 0.028) * (1.0 - air * 0.85));
+    a = max(ellipse(p - vec2(-0.02, 0.0), vec2(0.30, 0.26)), capsule(p, vec2(0.12, 0.06), vec2(0.28, 0.14), 0.10));
+    a = max(a, ellipse(p - vec2(0.30, 0.16), vec2(0.20, 0.19))); // big head
+    a = max(a, hookedBeak(p, vec2(0.42, 0.10), 0.30));
+    a = max(a, mix(foldedWing(p, -0.04), flightWing(p, 1.0, open, 0.15), air));
+    a = max(a, mix(0.0, flightWing(p, -1.0, open * 0.65, 0.15), air));
+    a = max(a, ellipse(p + vec2(0.32, 0.02), vec2(0.12, 0.09))); // short square tail
+    a = max(a, legPair(p, 0.08, 0.026) * (1.0 - air * 0.85));
   }
-  // 1 cockatiel — erect pointed crest, long tapering tail, smaller hook
+  // 1 cockatiel — tall erect crest, long tapering tail (half the bird), small hook
   else if (kind < 1.5) {
-    a = max(ellipse(p - vec2(0.0, 0.0), vec2(0.30, 0.24)), ellipse(p - vec2(0.24, 0.12), vec2(0.16, 0.15)));
-    a = max(a, hookedBeak(p, vec2(0.34, 0.08), 0.18));
-    // erect crest — the cockatiel's signature
-    a = max(a, capsule(p, vec2(0.18, 0.22), vec2(0.22, 0.58), 0.035));
-    a = max(a, capsule(p, vec2(0.14, 0.24), vec2(0.08, 0.52), 0.028));
-    a = max(a, capsule(p, vec2(0.22, 0.22), vec2(0.34, 0.50), 0.026));
+    a = max(ellipse(p - vec2(0.02, 0.0), vec2(0.26, 0.20)), ellipse(p - vec2(0.22, 0.10), vec2(0.14, 0.13)));
+    a = max(a, hookedBeak(p, vec2(0.32, 0.08), 0.16));
+    // erect crest — three fingers, the cockatiel's signature
+    a = max(a, capsule(p, vec2(0.16, 0.20), vec2(0.18, 0.66), 0.032));
+    a = max(a, capsule(p, vec2(0.12, 0.22), vec2(0.02, 0.58), 0.024));
+    a = max(a, capsule(p, vec2(0.20, 0.20), vec2(0.34, 0.56), 0.022));
     a = max(a, mix(foldedWing(p, 0.0), flightWing(p, 1.0, open, 0.35), air));
-    a = max(a, capsule(p, vec2(-0.22, 0.0), vec2(-0.72, -0.06), 0.05)); // long tapering tail
-    a = max(a, legPair(p, 0.0, 0.022) * (1.0 - air * 0.85));
+    a = max(a, capsule(p, vec2(-0.18, 0.0), vec2(-0.82, -0.08), 0.042)); // long tapering tail
+    a = max(a, legPair(p, 0.0, 0.02) * (1.0 - air * 0.85));
   }
-  // 2 falcon — bullet body, sharply pointed wings, short pointed tail, malar
+  // 2 falcon — bullet body, scythe wings, short pointed tail, malar slash
   else if (kind < 2.5) {
-    float span = mix(0.45, 1.05, max(open, dive));
-    a = max(ellipse(p - vec2(0.02, 0.0), vec2(0.38, 0.13)), capsule(p, vec2(0.30, 0.02), vec2(0.58, 0.0), 0.028));
+    float span = mix(0.5, 1.15, max(open, dive));
+    a = max(ellipse(p - vec2(0.0, 0.0), vec2(0.40, 0.11)), capsule(p, vec2(0.32, 0.0), vec2(0.62, -0.01), 0.024));
     a = max(a, flightWing(p, 1.0, span, 1.0));
     a = max(a, flightWing(p, -1.0, span, 1.0));
-    a = max(a, capsule(p, vec2(-0.30, 0.0), vec2(-0.58, 0.0), 0.028)); // pointed tail
-    // dark moustache mark as a small wedge under the eye
-    a = max(a, capsule(p, vec2(0.34, 0.02), vec2(0.42, -0.06), 0.018));
+    // primary tip slash — more scythe than paddle
+    a = max(a, capsule(p, vec2(0.20, -0.02), vec2(0.20 + 0.70 * span, -0.22 * span), 0.02));
+    a = max(a, capsule(p, vec2(-0.20, -0.02), vec2(-0.20 - 0.70 * span, -0.22 * span), 0.02));
+    a = max(a, capsule(p, vec2(-0.32, 0.0), vec2(-0.62, 0.0), 0.022)); // pointed tail
+    a = max(a, capsule(p, vec2(0.36, 0.02), vec2(0.46, -0.08), 0.016)); // malar
   }
-  // 3 hawk — broader rounder wings, fanned rounded tail, bulkier
+  // 3 hawk — broad paddle wings, fanned rounded tail, bulkier torso
   else if (kind < 3.5) {
-    float span = mix(0.5, 1.0, max(open, soar));
-    a = max(ellipse(p - vec2(0.0, 0.0), vec2(0.36, 0.16)), capsule(p, vec2(0.28, 0.02), vec2(0.52, 0.0), 0.03));
-    a = max(a, flightWing(p, 1.0, span, 0.15));
-    a = max(a, flightWing(p, -1.0, span, 0.15));
-    // fan tail (red-tailed: broad rounded)
-    a = max(a, ellipse(p + vec2(0.38, 0.0), vec2(0.22, 0.12)));
-    a = max(a, capsule(p, vec2(-0.22, 0.04), vec2(-0.55, 0.10), 0.03));
-    a = max(a, capsule(p, vec2(-0.22, -0.04), vec2(-0.55, -0.10), 0.03));
+    float span = mix(0.55, 1.05, max(open, soar));
+    a = max(ellipse(p - vec2(0.0, 0.0), vec2(0.38, 0.17)), capsule(p, vec2(0.30, 0.02), vec2(0.54, 0.0), 0.03));
+    a = max(a, flightWing(p, 1.0, span, 0.08));
+    a = max(a, flightWing(p, -1.0, span, 0.08));
+    // fingered primaries (soft notches)
+    a = max(a, capsule(p, vec2(0.25, 0.02), vec2(0.25 + 0.55 * span, 0.12), 0.028));
+    a = max(a, capsule(p, vec2(-0.25, 0.02), vec2(-0.25 - 0.55 * span, 0.12), 0.028));
+    // broad fan tail
+    a = max(a, ellipse(p + vec2(0.42, 0.0), vec2(0.26, 0.14)));
+    a = max(a, capsule(p, vec2(-0.24, 0.05), vec2(-0.58, 0.14), 0.032));
+    a = max(a, capsule(p, vec2(-0.24, -0.05), vec2(-0.58, -0.14), 0.032));
   }
-  // 4 duck — horizontal football, flat spatulate bill, low in water
+  // 4 duck — boat hull, flat spatulate bill, low waterline when swimming
   else if (kind < 4.5) {
-    vec2 pp = p + vec2(0.0, swim * 0.12);
-    a = max(ellipse(pp - vec2(0.04, 0.0), vec2(0.50, 0.22)), ellipse(pp - vec2(0.40, 0.10), vec2(0.16, 0.14)));
-    // flat spatulate bill
-    a = max(a, capsule(pp, vec2(0.48, 0.08), vec2(0.78, 0.06), 0.055));
-    a = max(a, capsule(pp, vec2(0.48, 0.04), vec2(0.76, 0.02), 0.04));
+    vec2 pp = p + vec2(0.0, swim * 0.14);
+    a = max(ellipse(pp - vec2(0.0, 0.0), vec2(0.52, 0.20)), capsule(pp, vec2(0.28, 0.06), vec2(0.42, 0.12), 0.08));
+    a = max(a, ellipse(pp - vec2(0.42, 0.12), vec2(0.14, 0.12))); // head
+    // spatulate bill — wide and flat
+    a = max(a, capsule(pp, vec2(0.50, 0.10), vec2(0.84, 0.08), 0.06));
+    a = max(a, capsule(pp, vec2(0.50, 0.05), vec2(0.82, 0.03), 0.045));
     a = max(a, mix(foldedWing(pp, 0.02), flightWing(pp, 1.0, open, 0.4), air * (1.0 - swim)));
-    a = max(a, ellipse(pp + vec2(0.40, 0.02), vec2(0.14, 0.08)));
-    // waterline clip when swimming
-    a *= mix(1.0, smoothstep(-0.38, -0.02, p.y), swim);
+    a = max(a, ellipse(pp + vec2(0.42, 0.02), vec2(0.12, 0.07)));
+    a *= mix(1.0, smoothstep(-0.36, -0.02, p.y), swim);
   }
-  // 5 chicken — upright round body, serrated comb + wattles, thick legs
+  // 5 chicken — upright pear body, tall serrated comb, wattles, thick legs
   else if (kind < 5.5) {
-    a = max(ellipse(p - vec2(0.0, 0.06), vec2(0.34, 0.34)), ellipse(p - vec2(0.22, 0.24), vec2(0.15, 0.14)));
-    a = max(a, capsule(p, vec2(0.30, 0.18), vec2(0.48, 0.14), 0.035)); // short beak
-    // serrated comb
-    a = max(a, ellipse(p - vec2(0.16, 0.40), vec2(0.07, 0.10)));
-    a = max(a, ellipse(p - vec2(0.10, 0.44), vec2(0.05, 0.08)));
-    a = max(a, ellipse(p - vec2(0.22, 0.42), vec2(0.05, 0.07)));
-    // wattle
-    a = max(a, ellipse(p - vec2(0.30, 0.12), vec2(0.05, 0.07)));
-    a = max(a, mix(foldedWing(p, 0.0), flightWing(p, 1.0, open * 0.5, 0.3), air));
-    a = max(a, ellipse(p + vec2(0.22, 0.02), vec2(0.12, 0.10))); // arched tail
-    a = max(a, legPair(p, 0.25, 0.032));
+    a = max(ellipse(p - vec2(-0.02, 0.02), vec2(0.32, 0.36)), capsule(p, vec2(0.14, 0.18), vec2(0.26, 0.28), 0.08));
+    a = max(a, ellipse(p - vec2(0.28, 0.28), vec2(0.14, 0.13)));
+    a = max(a, capsule(p, vec2(0.36, 0.22), vec2(0.54, 0.16), 0.032)); // short beak
+    // tall serrated comb
+    a = max(a, ellipse(p - vec2(0.18, 0.46), vec2(0.08, 0.12)));
+    a = max(a, ellipse(p - vec2(0.10, 0.50), vec2(0.055, 0.10)));
+    a = max(a, ellipse(p - vec2(0.26, 0.48), vec2(0.055, 0.09)));
+    a = max(a, ellipse(p - vec2(0.32, 0.14), vec2(0.055, 0.08))); // wattle
+    a = max(a, mix(foldedWing(p, 0.0), flightWing(p, 1.0, open * 0.45, 0.25), air));
+    a = max(a, ellipse(p + vec2(0.24, -0.02), vec2(0.14, 0.12))); // arched tail
+    a = max(a, legPair(p, 0.3, 0.034));
   }
-  // 6 emu — tallest: long neck, small head, shaggy body, long thick legs
+  // 6 emu — tallest: tiny head on long S-neck, shaggy oval body, pillar legs
   else if (kind < 6.5) {
-    a = max(ellipse(p - vec2(0.0, -0.02), vec2(0.28, 0.36)), capsule(p, vec2(0.10, 0.28), vec2(0.16, 0.72), 0.055));
-    a = max(a, ellipse(p - vec2(0.28, 0.72), vec2(0.13, 0.10)));
-    a = max(a, capsule(p, vec2(0.36, 0.70), vec2(0.52, 0.68), 0.03)); // stubby bill
-    // shaggy chest suggestion
-    a = max(a, ellipse(p - vec2(0.12, 0.05), vec2(0.18, 0.22)));
-    a = max(a, capsule(p, vec2(-0.10, -0.28), vec2(-0.14, -0.82), 0.038));
-    a = max(a, capsule(p, vec2(0.12, -0.28), vec2(0.16, -0.82), 0.038));
-    a = max(a, capsule(p, vec2(-0.14, -0.82), vec2(-0.22, -0.86), 0.022));
-    a = max(a, capsule(p, vec2(0.16, -0.82), vec2(0.24, -0.86), 0.022));
+    a = max(ellipse(p - vec2(0.0, -0.06), vec2(0.26, 0.34)), capsule(p, vec2(0.08, 0.22), vec2(0.10, 0.52), 0.05));
+    a = max(a, capsule(p, vec2(0.10, 0.52), vec2(0.22, 0.78), 0.042)); // long neck
+    a = max(a, ellipse(p - vec2(0.30, 0.78), vec2(0.11, 0.08))); // small head
+    a = max(a, capsule(p, vec2(0.38, 0.76), vec2(0.56, 0.74), 0.026)); // stubby bill
+    a = max(a, ellipse(p - vec2(0.10, 0.02), vec2(0.16, 0.20))); // shaggy chest
+    a = max(a, capsule(p, vec2(-0.08, -0.30), vec2(-0.12, -0.88), 0.036));
+    a = max(a, capsule(p, vec2(0.10, -0.30), vec2(0.14, -0.88), 0.036));
+    a = max(a, capsule(p, vec2(-0.12, -0.88), vec2(-0.24, -0.90), 0.02));
+    a = max(a, capsule(p, vec2(0.14, -0.88), vec2(0.26, -0.90), 0.02));
   }
-  // 7 finch — plump goldfinch: conical seed bill, notched short tail
+  // 7 finch — compact goldfinch: deep conical bill, notched short tail
   else if (kind < 7.5) {
-    a = max(ellipse(p - vec2(0.0, 0.0), vec2(0.34, 0.26)), ellipse(p - vec2(0.26, 0.08), vec2(0.14, 0.13)));
-    // deep conical bill
-    a = max(a, capsule(p, vec2(0.34, 0.04), vec2(0.58, 0.02), 0.048));
-    a = max(a, capsule(p, vec2(0.34, 0.0), vec2(0.54, -0.02), 0.035));
+    a = max(ellipse(p - vec2(0.0, 0.0), vec2(0.32, 0.24)), ellipse(p - vec2(0.24, 0.06), vec2(0.13, 0.12)));
+    a = max(a, capsule(p, vec2(0.32, 0.04), vec2(0.60, 0.02), 0.05)); // deep cone
+    a = max(a, capsule(p, vec2(0.32, 0.0), vec2(0.56, -0.02), 0.036));
     a = max(a, mix(foldedWing(p, -0.02), flightWing(p, 1.0, open, 0.45), air));
     a = max(a, mix(0.0, flightWing(p, -1.0, open * 0.75, 0.45), air));
-    // notched tail
-    a = max(a, capsule(p, vec2(-0.26, 0.03), vec2(-0.48, 0.06), 0.03));
-    a = max(a, capsule(p, vec2(-0.26, -0.03), vec2(-0.48, -0.06), 0.03));
-    a = max(a, legPair(p, 0.0, 0.018) * (1.0 - air * 0.9));
+    a = max(a, capsule(p, vec2(-0.24, 0.04), vec2(-0.50, 0.08), 0.028));
+    a = max(a, capsule(p, vec2(-0.24, -0.04), vec2(-0.50, -0.08), 0.028));
+    a = max(a, legPair(p, 0.0, 0.016) * (1.0 - air * 0.9));
   }
-  // 8 sparrow — rounder neckless ball, shorter thicker bill, plump mid
+  // 8 sparrow — round neckless ball, stubby bill, short square tail
   else if (kind < 8.5) {
-    a = max(ellipse(p - vec2(0.0, 0.0), vec2(0.36, 0.28)), ellipse(p - vec2(0.22, 0.06), vec2(0.16, 0.15)));
-    a = max(a, capsule(p, vec2(0.32, 0.04), vec2(0.50, 0.02), 0.04)); // shorter conical
+    a = max(ellipse(p - vec2(0.0, 0.0), vec2(0.34, 0.28)), ellipse(p - vec2(0.20, 0.04), vec2(0.15, 0.14)));
+    a = max(a, capsule(p, vec2(0.30, 0.02), vec2(0.48, 0.0), 0.038)); // stubby
     a = max(a, mix(foldedWing(p, 0.0), flightWing(p, 1.0, open, 0.4), air));
-    a = max(a, ellipse(p + vec2(0.28, 0.0), vec2(0.14, 0.08)));
-    a = max(a, legPair(p, 0.15, 0.02) * (1.0 - air * 0.9));
+    a = max(a, ellipse(p + vec2(0.26, 0.0), vec2(0.12, 0.07)));
+    a = max(a, legPair(p, 0.15, 0.018) * (1.0 - air * 0.9));
   }
-  // 9 hummingbird — needle bill, tiny body, hover blur disc
+  // 9 hummingbird — extreme needle bill, tiny fuselage, hover blur disc
   else if (kind < 9.5) {
-    a = max(ellipse(p - vec2(0.0, 0.0), vec2(0.22, 0.13)), ellipse(p - vec2(0.16, 0.04), vec2(0.10, 0.09)));
-    a = max(a, capsule(p, vec2(0.20, 0.02), vec2(0.82, 0.02), 0.018)); // needle
-    float blur = mix(0.55, 1.1, open);
-    a = max(a, flightWing(p, 1.0, blur, 0.7));
-    a = max(a, flightWing(p, -1.0, blur, 0.7));
-    a = max(a, hover * ellipse(p - vec2(0.0, 0.0), vec2(0.72, 0.30)) * 0.28);
-    a = max(a, capsule(p, vec2(-0.16, 0.0), vec2(-0.38, -0.02), 0.022)); // tiny tail
+    a = max(ellipse(p - vec2(-0.02, 0.0), vec2(0.18, 0.11)), ellipse(p - vec2(0.12, 0.02), vec2(0.08, 0.07)));
+    a = max(a, capsule(p, vec2(0.16, 0.02), vec2(0.92, 0.02), 0.014)); // extreme needle
+    float blur = mix(0.6, 1.2, open);
+    a = max(a, flightWing(p, 1.0, blur, 0.75));
+    a = max(a, flightWing(p, -1.0, blur, 0.75));
+    a = max(a, hover * ellipse(p - vec2(0.0, 0.0), vec2(0.78, 0.32)) * 0.3);
+    a = max(a, capsule(p, vec2(-0.14, 0.0), vec2(-0.36, -0.02), 0.018));
   }
-  // 10 scarlet ibis — long downcurved sickle bill, S-neck, long legs
+  // 10 scarlet ibis — extreme downcurved sickle bill, S-neck, stilt legs
   else if (kind < 10.5) {
-    a = max(ellipse(p - vec2(0.0, 0.02), vec2(0.30, 0.20)), capsule(p, vec2(0.18, 0.12), vec2(0.28, 0.38), 0.05));
-    a = max(a, ellipse(p - vec2(0.34, 0.40), vec2(0.11, 0.09)));
-    // downcurved sickle bill
-    a = max(a, capsule(p, vec2(0.40, 0.38), vec2(0.58, 0.28), 0.032));
-    a = max(a, capsule(p, vec2(0.58, 0.28), vec2(0.78, 0.08), 0.028));
+    a = max(ellipse(p - vec2(-0.02, 0.0), vec2(0.26, 0.18)), capsule(p, vec2(0.14, 0.10), vec2(0.22, 0.32), 0.045));
+    a = max(a, capsule(p, vec2(0.22, 0.32), vec2(0.32, 0.46), 0.038)); // S-neck
+    a = max(a, ellipse(p - vec2(0.36, 0.46), vec2(0.10, 0.08)));
+    // long sickle bill
+    a = max(a, capsule(p, vec2(0.42, 0.44), vec2(0.62, 0.30), 0.028));
+    a = max(a, capsule(p, vec2(0.62, 0.30), vec2(0.86, 0.02), 0.022));
     a = max(a, mix(foldedWing(p, 0.0), flightWing(p, 1.0, open, 0.35), air));
-    // black wingtip suggestion in flight (ink comes from accent)
-    a = max(a, air * capsule(p, vec2(0.18, -0.02), vec2(0.55, -0.18), 0.035));
-    a = max(a, capsule(p, vec2(-0.08, -0.18), vec2(-0.12, -0.78), 0.026));
-    a = max(a, capsule(p, vec2(0.10, -0.18), vec2(0.14, -0.78), 0.026));
-    a = max(a, capsule(p, vec2(-0.12, -0.78), vec2(-0.22, -0.80), 0.018));
-    a = max(a, capsule(p, vec2(0.14, -0.78), vec2(0.24, -0.80), 0.018));
+    a = max(a, air * capsule(p, vec2(0.16, -0.02), vec2(0.58, -0.20), 0.032));
+    a = max(a, capsule(p, vec2(-0.06, -0.16), vec2(-0.10, -0.86), 0.02));
+    a = max(a, capsule(p, vec2(0.08, -0.16), vec2(0.12, -0.86), 0.02));
+    a = max(a, capsule(p, vec2(-0.10, -0.86), vec2(-0.22, -0.88), 0.014));
+    a = max(a, capsule(p, vec2(0.12, -0.86), vec2(0.24, -0.88), 0.014));
   }
-  // 11 peacock — blue neck + fan crest; display = upright train with eye spots
+  // 11 peacock — slender blue neck + fan crest; train with eye spots when displayed
   else if (kind < 11.5) {
-    float fan = mix(0.22, 1.0, max(display, 0.18));
-    // train fan behind
-    a = max(a, ellipse(p - vec2(-0.28, 0.08), vec2(0.52 * fan, 0.62 * fan)) * fan);
-    // eye spots on the train
-    for (float i = 0.0; i < 6.0; i += 1.0) {
-      float ang = -1.05 + i * 0.42;
-      vec2 ep = vec2(-0.28, 0.08) + vec2(cos(ang), sin(ang)) * (0.40 * fan);
-      a = max(a, ellipse(p - ep, vec2(0.055, 0.065)) * fan * 0.9);
+    float fan = mix(0.18, 1.0, max(display, 0.22));
+    // upright train behind the body
+    a = max(a, ellipse(p - vec2(-0.32, 0.12), vec2(0.55 * fan, 0.70 * fan)) * fan);
+    for (float i = 0.0; i < 7.0; i += 1.0) {
+      float ang = -1.15 + i * 0.38;
+      vec2 ep = vec2(-0.32, 0.12) + vec2(cos(ang), sin(ang)) * (0.44 * fan);
+      a = max(a, ellipse(p - ep, vec2(0.05, 0.06)) * fan * 0.92);
     }
-    a = max(a, ellipse(p - vec2(0.06, 0.0), vec2(0.26, 0.18)));
-    a = max(a, capsule(p, vec2(0.22, 0.10), vec2(0.34, 0.42), 0.04)); // blue neck
-    a = max(a, ellipse(p - vec2(0.38, 0.44), vec2(0.09, 0.08)));
-    // fan crest on head (wire + tip)
-    a = max(a, capsule(p, vec2(0.34, 0.50), vec2(0.30, 0.68), 0.014));
-    a = max(a, capsule(p, vec2(0.38, 0.50), vec2(0.42, 0.68), 0.014));
-    a = max(a, ellipse(p - vec2(0.30, 0.70), vec2(0.035, 0.035)));
-    a = max(a, ellipse(p - vec2(0.42, 0.70), vec2(0.035, 0.035)));
-    a = max(a, capsule(p, vec2(0.40, 0.42), vec2(0.54, 0.40), 0.028)); // beak
-    a = max(a, legPair(p, 0.2, 0.026));
+    a = max(a, ellipse(p - vec2(0.04, -0.02), vec2(0.22, 0.16))); // compact body
+    a = max(a, capsule(p, vec2(0.18, 0.08), vec2(0.30, 0.46), 0.036)); // long blue neck
+    a = max(a, ellipse(p - vec2(0.36, 0.48), vec2(0.08, 0.07)));
+    // wire crest with tip dots
+    a = max(a, capsule(p, vec2(0.32, 0.52), vec2(0.26, 0.74), 0.012));
+    a = max(a, capsule(p, vec2(0.36, 0.52), vec2(0.40, 0.74), 0.012));
+    a = max(a, capsule(p, vec2(0.34, 0.52), vec2(0.34, 0.76), 0.01));
+    a = max(a, ellipse(p - vec2(0.26, 0.76), vec2(0.03, 0.03)));
+    a = max(a, ellipse(p - vec2(0.40, 0.76), vec2(0.03, 0.03)));
+    a = max(a, ellipse(p - vec2(0.34, 0.78), vec2(0.03, 0.03)));
+    a = max(a, capsule(p, vec2(0.40, 0.46), vec2(0.56, 0.44), 0.024));
+    a = max(a, legPair(p, 0.18, 0.022));
   }
   // 12 bird of paradise — compact dark body, streaming flank wires + gold cape
   else {
-    a = max(ellipse(p - vec2(0.0, 0.0), vec2(0.28, 0.17)), ellipse(p - vec2(0.22, 0.06), vec2(0.13, 0.12)));
-    a = max(a, capsule(p, vec2(0.28, 0.04), vec2(0.50, 0.02), 0.03));
-    // gold cape / ornamental flank plumes
-    float plume = max(display, 0.45);
-    a = max(a, capsule(p, vec2(-0.08, 0.04), vec2(-0.55, 0.55), 0.045) * plume);
-    a = max(a, capsule(p, vec2(-0.10, -0.02), vec2(-0.72, -0.42), 0.05) * plume);
-    a = max(a, capsule(p, vec2(-0.06, 0.0), vec2(-0.48, 0.28), 0.03) * plume);
-    // wiry tail wires with racket tips
-    a = max(a, capsule(p, vec2(-0.20, -0.04), vec2(-0.70, -0.18), 0.014));
-    a = max(a, capsule(p, vec2(-0.18, 0.02), vec2(-0.65, 0.12), 0.012));
-    a = max(a, ellipse(p - vec2(-0.72, -0.18), vec2(0.04, 0.03)));
-    a = max(a, ellipse(p - vec2(-0.67, 0.12), vec2(0.035, 0.03)));
+    a = max(ellipse(p - vec2(0.02, 0.0), vec2(0.24, 0.15)), ellipse(p - vec2(0.20, 0.05), vec2(0.12, 0.11)));
+    a = max(a, capsule(p, vec2(0.26, 0.04), vec2(0.52, 0.02), 0.026));
+    float plume = max(display, 0.55);
+    a = max(a, capsule(p, vec2(-0.06, 0.06), vec2(-0.58, 0.62), 0.048) * plume);
+    a = max(a, capsule(p, vec2(-0.08, -0.02), vec2(-0.78, -0.48), 0.052) * plume);
+    a = max(a, capsule(p, vec2(-0.04, 0.02), vec2(-0.52, 0.32), 0.032) * plume);
+    // wiry racket-tipped wires
+    a = max(a, capsule(p, vec2(-0.18, -0.04), vec2(-0.78, -0.20), 0.012));
+    a = max(a, capsule(p, vec2(-0.16, 0.04), vec2(-0.72, 0.16), 0.01));
+    a = max(a, ellipse(p - vec2(-0.80, -0.20), vec2(0.045, 0.032)));
+    a = max(a, ellipse(p - vec2(-0.74, 0.16), vec2(0.04, 0.03)));
     a = max(a, mix(foldedWing(p, 0.0), flightWing(p, 1.0, open, 0.5), air));
     a = max(a, mix(0.0, flightWing(p, -1.0, open * 0.5, 0.5), air));
   }
@@ -586,14 +590,14 @@ vec3 speciesInk(vec2 p, float kind, float activity, vec3 base) {
     float neck = smoothstep(0.15, 0.45, p.y) * smoothstep(0.05, 0.35, p.x);
     c = mix(c, vec3(0.12, 0.48, 0.28), train * 0.75);
     c = mix(c, vec3(0.05, 0.42, 0.55), neck * 0.85);
-    // eye-spot discs
-    float fan = mix(0.22, 1.0, max(display, 0.18));
-    for (float i = 0.0; i < 6.0; i += 1.0) {
-      float ang = -1.05 + i * 0.42;
-      vec2 ep = vec2(-0.28, 0.08) + vec2(cos(ang), sin(ang)) * (0.40 * fan);
+    // eye-spot discs (blue ring, gold pupil)
+    float fan = mix(0.18, 1.0, max(display, 0.22));
+    for (float i = 0.0; i < 7.0; i += 1.0) {
+      float ang = -1.15 + i * 0.38;
+      vec2 ep = vec2(-0.32, 0.12) + vec2(cos(ang), sin(ang)) * (0.44 * fan);
       float spot = ellipse(p - ep, vec2(0.05, 0.06));
-      c = mix(c, vec3(0.15, 0.55, 0.85), spot * fan * 0.85);
-      c = mix(c, vec3(0.92, 0.78, 0.2), ellipse(p - ep, vec2(0.022, 0.026)) * fan);
+      c = mix(c, vec3(0.12, 0.48, 0.78), spot * fan * 0.9);
+      c = mix(c, vec3(0.95, 0.82, 0.22), ellipse(p - ep, vec2(0.02, 0.024)) * fan);
     }
   } else {
     // bird of paradise: gold cape / flank plumes on velvet body
