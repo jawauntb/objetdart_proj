@@ -26,6 +26,24 @@
  * the thread a log₁₀-meter ruler in thin mono numerals (the only place
  * notation appears).
  *
+ * The grain: the fabric's texture is the large-scale structure of the
+ * universe — a seeded cosmic web of candle-warm filaments meeting at
+ * nodes, galaxy motes clustered along them, dark voids between. The web
+ * rides the same displacement field as the mesh (masses well it, pulses
+ * ripple it, frame-drag shears it): one fabric, not wallpaper. And it
+ * breathes apart — the Hubble breath: everything comoving drifts from
+ * the view center as a(t) grows on the audio graph's slow tide, wrapped
+ * at the rim by epoch crossfade so the room never empties. Inside a
+ * placed mass's gravitational neighborhood the web holds together —
+ * bound structures do not expand. Three-finger dilation slows the
+ * breath; reduced motion freezes it.
+ *
+ * The fold: the fabric is not an infinite plane. Toward the boundary,
+ * curvature takes over — mesh and web curl inward, foreshorten, and sink
+ * into a darkened rim, and light that reaches the rim is steered along
+ * the curl back inward at exactly c. The lens flattens the fold away
+ * with everything else: the metric view stays a flat measured grid.
+ *
  * All field math is pure and tested (src/lib/manifold-field.ts). Masses
  * persist in `objetdart:manifold:v1`, capped at 7; the oldest evaporates
  * gracefully. Deterministic throughout — seeded hashes, shared clocks;
@@ -43,7 +61,13 @@ import { SCALE_BANDS, spectralRegisterFor, type ScaleBand } from "@/lib/scale";
 import {
   SOFTENING,
   accelAt,
+  boundFraction,
+  buildCosmicWeb,
+  foldPoint,
   geodesicStep,
+  placeMotes,
+  rimSteerRay,
+  scaleFactor,
   timeDilation,
   wellDepth,
   type MassPoint,
@@ -60,6 +84,10 @@ const EVAP_MS = 1600;
 const MESH_GAP = 34;
 const DIL_SOFT = 96; // wells read wide for clocks
 const DIL_K = 4;
+const WEB_SEED = 3126; // the sky's one seed — the web never rolls dice
+const WEB_SUB = 6; // segments per filament polyline
+const WRAP = 2; // comoving wrap ratio: one epoch per doubling of a(t)
+const WEB_DISP = 0.85; // the web rides the mesh's field, slightly supple
 
 type Mass = {
   id: string;
@@ -91,6 +119,17 @@ type Tug = { x: number; y: number; dx: number; dy: number; strength: number; bor
 type Orbit = { x: number; y: number; omega: number; until: number };
 
 type Stored = { masses: Array<{ id: string; nx: number; ny: number; m: number; plantedAt: number }> };
+
+/** One precomputed comoving copy of the cosmic web (two alternate by epoch). */
+type WebLayer = {
+  /** filament polylines, (WEB_SUB + 1) xy pairs per link */
+  verts: Float32Array;
+  linkCount: number;
+  /** node xy pairs — where filaments meet */
+  nodes: Float32Array;
+  /** galaxy motes as x, y, glow triples */
+  motes: Float32Array;
+};
 
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 const clamp01 = (v: number) => clamp(v, 0, 1);
@@ -204,6 +243,8 @@ export default function ManifoldFold() {
     let lastCaptureSoundAt = 0;
     let staticRayPaths: Array<Array<{ x: number; y: number }>> = [];
     let staticRaysStale = true;
+    let expT = 0; // the expansion's comoving clock — dilates, freezes under reduce
+    let webLayers: WebLayer[] = [];
     const hold: { mode: "fabric" | "mass" | "bead" | null; massId: string | null; beadIdx: number; placed: boolean; done: boolean } = {
       mode: null,
       massId: null,
@@ -270,6 +311,48 @@ export default function ManifoldFold() {
     const note = (midi: number, ms = 120) => { try { audio().playNote(midi, ms); } catch { /* noop */ } };
     const tone = (hz: number, sec = 0.9) => { try { audio().playTone(hz, sec); } catch { /* noop */ } };
 
+    /** Precompute one comoving copy of the web: filament polylines with a
+     *  deterministic bow, node points, and motes — static in comoving
+     *  space, so per-frame work is transform-and-stroke only. */
+    const buildWebLayer = (seed: number): WebLayer => {
+      const ww = width * 1.5;
+      const wh = height * 1.5;
+      const ox = -(ww - width) / 2;
+      const oy = -(wh - height) / 2;
+      const count = clamp(Math.round((ww * wh) / (170 * 170)), 24, 96);
+      const web = buildCosmicWeb(seed, ww, wh, count);
+      const verts = new Float32Array(web.links.length * (WEB_SUB + 1) * 2);
+      let vi = 0;
+      for (let li = 0; li < web.links.length; li++) {
+        const [i, j] = web.links[li];
+        const ax = web.nodes[i].x;
+        const ay = web.nodes[i].y;
+        const ex = web.nodes[j].x - ax;
+        const ey = web.nodes[j].y - ay;
+        const len = Math.hypot(ex, ey) || 1;
+        const bow = (hash01(seed * 3 + li * 17 + 5) - 0.5) * 0.22;
+        for (let k = 0; k <= WEB_SUB; k++) {
+          const t = k / WEB_SUB;
+          const sag = Math.sin(t * Math.PI) * bow * len;
+          verts[vi++] = ax + ex * t + (-ey / len) * sag + ox;
+          verts[vi++] = ay + ey * t + (ex / len) * sag + oy;
+        }
+      }
+      const nodes = new Float32Array(web.nodes.length * 2);
+      for (let k = 0; k < web.nodes.length; k++) {
+        nodes[k * 2] = web.nodes[k].x + ox;
+        nodes[k * 2 + 1] = web.nodes[k].y + oy;
+      }
+      const ms = placeMotes(web, seed + 13, Math.min(300, count * 6), ww, wh, 30);
+      const motes = new Float32Array(ms.length * 3);
+      for (let k = 0; k < ms.length; k++) {
+        motes[k * 3] = ms[k].x + ox;
+        motes[k * 3 + 1] = ms[k].y + oy;
+        motes[k * 3 + 2] = ms[k].glow;
+      }
+      return { verts, linkCount: web.links.length, nodes, motes };
+    };
+
     const resize = () => {
       const r = wrap.getBoundingClientRect();
       const ratio = Math.min(window.devicePixelRatio || 1, 1.5);
@@ -285,6 +368,8 @@ export default function ManifoldFold() {
       // one speed of light for this viewport: rays and pulses both use it
       lightSpeed = 0.85 * Math.max(width, height);
       rayG = 50 * lightSpeed * lightSpeed;
+      // two alternate skies, one per epoch parity — built once per resize
+      webLayers = [buildWebLayer(WEB_SEED), buildWebLayer(WEB_SEED + 1)];
       staticRaysStale = true;
     };
     resize();
@@ -728,6 +813,10 @@ export default function ManifoldFold() {
         const path = [{ x: r.x, y: r.y }];
         for (let s = 0; s < 420; s++) {
           r = geodesicStep(pts, r, dt, lightSpeed, gEff, SOFTENING);
+          // the fold holds even stilled light: rim streams curl, never exit
+          if (lensSnapped === 0) {
+            r = rimSteerRay(r, width / 2, height / 2, width / 2, height / 2, dt, lightSpeed);
+          }
           path.push({ x: r.x, y: r.y });
           if (r.x < -40 || r.x > width + 40 || r.y < -40 || r.y > height + 40) break;
         }
@@ -747,6 +836,9 @@ export default function ManifoldFold() {
       timeScale += (timeScaleTarget - timeScale) * Math.min(1, dt * 5);
       rayScale += (rayScaleTarget - rayScale) * Math.min(1, dt * 5);
       if (!reduce) localT += dt * timeScale;
+      // the Hubble breath rides the dilatable clock: three fingers slow the
+      // expansion too, and reduced motion freezes a(t) entirely
+      if (!reduce) expT += dt * timeScale;
       lightT += dt * (reduce ? 1 : rayScale);
       windX += (windTargetX - windX) * Math.min(1, dt * 2.2);
       windY += (windTargetY - windY) * Math.min(1, dt * 2.2);
@@ -786,20 +878,121 @@ export default function ManifoldFold() {
       ctx.fillStyle = halo;
       ctx.fillRect(0, 0, width, height);
 
-      // ————— the mesh: hairlines of the metric —————
+      // ————— the fold at the edges: the fabric closes on itself —————
+      const cxv = width / 2;
+      const cyv = height / 2;
+      const foldMix = 1 - lens; // the lens flattens the fold away
+      const foldXY = (x: number, y: number): { x: number; y: number } => {
+        if (foldMix <= 0.02) return { x, y };
+        const f = foldPoint(x, y, cxv, cyv, cxv, cyv);
+        return { x: mix(x, f.x, foldMix), y: mix(y, f.y, foldMix) };
+      };
+
+      // ————— the field grid: one displacement pass shared by mesh and web —————
       const cols = Math.ceil(width / MESH_GAP) + 1;
       const rows = Math.ceil(height / MESH_GAP) + 1;
       const vx: number[] = new Array(cols * rows);
       const vy: number[] = new Array(cols * rows);
+      const dispX: number[] = new Array(cols * rows);
+      const dispY: number[] = new Array(cols * rows);
       for (let j = 0; j < rows; j++) {
         for (let i = 0; i < cols; i++) {
           const x = i * MESH_GAP;
           const y = j * MESH_GAP;
           const d = dispAt(x, y, pts, now);
-          vx[j * cols + i] = x + d.dx;
-          vy[j * cols + i] = y + d.dy;
+          const idx = j * cols + i;
+          dispX[idx] = d.dx;
+          dispY[idx] = d.dy;
+          const fp = foldXY(x + d.dx, y + d.dy);
+          vx[idx] = fp.x;
+          vy[idx] = fp.y;
         }
       }
+      /** Bilinear sample of the mesh's displacement field — the web deforms
+       *  with the same fabric for the cost of four reads. */
+      const sampleDisp = (x: number, y: number): { dx: number; dy: number } => {
+        const gx = clamp(x / MESH_GAP, 0, cols - 1.001);
+        const gy = clamp(y / MESH_GAP, 0, rows - 1.001);
+        const i0 = Math.floor(gx);
+        const j0 = Math.floor(gy);
+        const fx = gx - i0;
+        const fy = gy - j0;
+        const i1 = Math.min(i0 + 1, cols - 1);
+        const j1 = Math.min(j0 + 1, rows - 1);
+        const a00 = j0 * cols + i0;
+        const a10 = j0 * cols + i1;
+        const a01 = j1 * cols + i0;
+        const a11 = j1 * cols + i1;
+        return {
+          dx: (dispX[a00] * (1 - fx) + dispX[a10] * fx) * (1 - fy) + (dispX[a01] * (1 - fx) + dispX[a11] * fx) * fy,
+          dy: (dispY[a00] * (1 - fx) + dispY[a10] * fx) * (1 - fy) + (dispY[a01] * (1 - fx) + dispY[a11] * fx) * fy,
+        };
+      };
+
+      // ————— the cosmic web: the fabric's grain, breathing apart —————
+      if (webLayers.length === 2 && lens < 0.96) {
+        const aNow = scaleFactor(expT);
+        const la = Math.log(aNow) / Math.log(WRAP);
+        const epoch = Math.floor(la);
+        const uWrap = la - epoch;
+        const webFade = 1 - lens;
+        for (const pass of [0, 1]) {
+          const layer = webLayers[(epoch + pass) & 1];
+          const s = Math.pow(WRAP, uWrap - pass);
+          const alpha = (pass === 0 ? 1 - uWrap : uWrap) * webFade;
+          if (alpha <= 0.03) continue;
+          // comoving → physical: expansion about the view center, tempered
+          // where a mass binds its neighborhood; then the shared field;
+          // then the fold — one fabric, three laws deep
+          const tp = (qx: number, qy: number): { x: number; y: number } => {
+            const px = cxv + (qx - cxv) * s;
+            const py = cyv + (qy - cyv) * s;
+            const b = pts.length > 0 ? boundFraction(pts, px, py) : 0;
+            const e = 1 + (s - 1) * (1 - b);
+            const x = cxv + (qx - cxv) * e;
+            const y = cyv + (qy - cyv) * e;
+            const d = sampleDisp(x, y);
+            return foldXY(x + d.dx * WEB_DISP, y + d.dy * WEB_DISP);
+          };
+          // filaments: hairline parchment over near-black — grain, not decoration
+          ctx.strokeStyle = `rgba(233, 210, 168, ${0.05 * alpha})`;
+          ctx.lineWidth = 0.55;
+          ctx.beginPath();
+          const V = layer.verts;
+          const per = (WEB_SUB + 1) * 2;
+          for (let li = 0; li < layer.linkCount; li++) {
+            const base = li * per;
+            for (let k = 0; k <= WEB_SUB; k++) {
+              const p = tp(V[base + k * 2], V[base + k * 2 + 1]);
+              if (k === 0) ctx.moveTo(p.x, p.y);
+              else ctx.lineTo(p.x, p.y);
+            }
+          }
+          ctx.stroke();
+          // nodes: where filaments meet, a breath brighter
+          ctx.fillStyle = `rgba(238, 216, 176, ${0.11 * alpha})`;
+          for (let k = 0; k < layer.nodes.length; k += 2) {
+            const p = tp(layer.nodes[k], layer.nodes[k + 1]);
+            ctx.fillRect(p.x - 0.7, p.y - 0.7, 1.4, 1.4);
+          }
+          // galaxy motes: sub-pixel warm points along the filaments, batched
+          const M = layer.motes;
+          for (const bucket of [0, 1]) {
+            ctx.fillStyle =
+              bucket === 0
+                ? `rgba(240, 218, 178, ${0.2 * alpha})`
+                : `rgba(236, 212, 172, ${0.1 * alpha})`;
+            const sz = bucket === 0 ? 1.3 : 0.9;
+            for (let k = 0; k < M.length; k += 3) {
+              if ((M[k + 2] >= 0.45) !== (bucket === 0)) continue;
+              const p = tp(M[k], M[k + 1]);
+              ctx.fillRect(p.x - sz / 2, p.y - sz / 2, sz, sz);
+            }
+          }
+        }
+      }
+
+      // ————— the mesh: hairlines of the metric —————
       ctx.lineWidth = 0.6;
       ctx.strokeStyle = `rgba(206, 222, 250, ${0.055 + lens * 0.05})`;
       ctx.beginPath();
@@ -821,8 +1014,11 @@ export default function ManifoldFold() {
 
       // ————— masses: unlit presences the fabric wells around —————
       for (const m of masses) {
-        const mx = m.nx * width;
-        const my = m.ny * height;
+        const rawX = m.nx * width;
+        const rawY = m.ny * height;
+        const mfold = foldXY(rawX, rawY);
+        const mx = mfold.x;
+        const my = mfold.y;
         const grow = m.settled ? 1 : 0.3 + 0.7 * m.growth;
         let R = (10 + m.m * 16) * grow;
         let evapP = 0;
@@ -830,8 +1026,8 @@ export default function ManifoldFold() {
           evapP = clamp01((now - m.evapAt) / EVAP_MS);
           R *= 1 - evapP * 0.85;
         }
-        // the well's shadow deepens the ink
-        const depth = wellDepth(pts, mx, my, SOFTENING);
+        // the well's shadow deepens the ink (physics reads the unfolded field)
+        const depth = wellDepth(pts, rawX, rawY, SOFTENING);
         const shade = ctx.createRadialGradient(mx, my, R * 0.2, mx, my, R * 3.2);
         shade.addColorStop(0, `rgba(0, 0, 0, ${0.5 * (1 - evapP)})`);
         shade.addColorStop(1, "rgba(0,0,0,0)");
@@ -875,8 +1071,9 @@ export default function ManifoldFold() {
         if (rf < 2) continue;
         ctx.strokeStyle = `rgba(190, 210, 245, ${0.2 * p.strength * (1 - prog) * (1 - lens * 0.6)})`;
         ctx.lineWidth = 1;
+        const pf = foldXY(p.x, p.y);
         ctx.beginPath();
-        ctx.arc(p.x, p.y, rf, 0, Math.PI * 2);
+        ctx.arc(pf.x, pf.y, rf, 0, Math.PI * 2);
         ctx.stroke();
       }
 
@@ -914,6 +1111,17 @@ export default function ManifoldFold() {
                 if (sp > 0) { r.vx *= lightSpeed / sp; r.vy *= lightSpeed / sp; }
               }
             }
+            // the fold: light that reaches the rim follows the boundary
+            // curvature back inward — steered, renormalized, still exactly c
+            if (lens < 0.9) {
+              const st2 = rimSteerRay(
+                { x: r.x, y: r.y, vx: r.vx, vy: r.vy },
+                cxv, cyv, cxv, cyv,
+                stepDt, lightSpeed, 9 * (1 - lens),
+              );
+              r.vx = st2.vx;
+              r.vy = st2.vy;
+            }
           }
           // doppler tint: falling in leans blue, climbing out leans red
           const a = accelAt(pts, r.x, r.y, gEff, SOFTENING);
@@ -931,7 +1139,11 @@ export default function ManifoldFold() {
           for (const p of pts) {
             if (Math.hypot(r.x - p.x, r.y - p.y) < 11) { captured = true; break; }
           }
-          const gone = r.x < -60 || r.x > width + 60 || r.y < -60 || r.y > height + 60;
+          // escape is measured in rim coordinates: steered light rides the
+          // fold band (u up to ~1.4) without being recycled mid-curl; only
+          // truly departed rays (straight lens-view exits) respawn
+          const uRay = Math.hypot((r.x - cxv) / cxv, (r.y - cyv) / cyv);
+          const gone = uRay > 1.7;
           if (captured || gone) {
             if (captured && now - lastCaptureSoundAt > 2000) {
               lastCaptureSoundAt = now;
@@ -948,9 +1160,10 @@ export default function ManifoldFold() {
         ctx.globalCompositeOperation = "lighter";
         for (const r of rays) {
           const n = r.trail.length;
+          let qPrev = n > 0 ? foldXY(r.trail[0].x, r.trail[0].y) : null;
           for (let i = 1; i < n; i++) {
-            const p0 = r.trail[i - 1];
             const p1 = r.trail[i];
+            const q1 = foldXY(p1.x, p1.y);
             const f = i / n;
             const warm = p1.w < 0 ? -p1.w : 0;
             const cool = p1.w > 0 ? p1.w : 0;
@@ -960,12 +1173,13 @@ export default function ManifoldFold() {
             ctx.strokeStyle = `rgba(${rr}, ${gg}, ${bb}, ${0.38 * f * f * (dilated ? 0.7 : 1)})`;
             ctx.lineWidth = 0.8 + f * 0.8;
             ctx.beginPath();
-            ctx.moveTo(p0.x, p0.y);
-            ctx.lineTo(p1.x, p1.y);
+            ctx.moveTo((qPrev as { x: number; y: number }).x, (qPrev as { x: number; y: number }).y);
+            ctx.lineTo(q1.x, q1.y);
             ctx.stroke();
+            qPrev = q1;
           }
           if (n > 0) {
-            const h = r.trail[n - 1];
+            const h = foldXY(r.trail[n - 1].x, r.trail[n - 1].y);
             const glow = ctx.createRadialGradient(h.x, h.y, 0, h.x, h.y, 7);
             glow.addColorStop(0, "rgba(240, 246, 255, 0.9)");
             glow.addColorStop(1, "rgba(0,0,0,0)");
@@ -984,8 +1198,9 @@ export default function ManifoldFold() {
         for (const path of staticRayPaths) {
           ctx.beginPath();
           for (let i = 0; i < path.length; i++) {
-            if (i === 0) ctx.moveTo(path[i].x, path[i].y);
-            else ctx.lineTo(path[i].x, path[i].y);
+            const p = foldXY(path[i].x, path[i].y);
+            if (i === 0) ctx.moveTo(p.x, p.y);
+            else ctx.lineTo(p.x, p.y);
           }
           ctx.stroke();
         }
@@ -993,13 +1208,25 @@ export default function ManifoldFold() {
 
       // ————— the twin beacons: gravity slowing time, watched —————
       {
+        // the twins' home positions are comoving: the Hubble breath carries
+        // them apart (saturating, so the far twin never leaves the fold),
+        // except where a placed mass binds its neighborhood still
+        const aEff = scaleFactor(expT);
+        const sBeacon = 1 + 0.9 * (1 - 1 / aEff);
         const bxA = width * (0.5 + 0.3 * Math.sin(localT * 0.045 + 1.3));
         const byA = height * (0.42 + 0.24 * Math.sin(localT * 0.036 + 0.4));
         const bxB = width * (0.5 + 0.42 * Math.sin(localT * 0.03 + 4.1));
         const byB = height * (0.15 + 0.03 * Math.sin(localT * 0.023 + 2.2));
         const spots: Array<[number, number, number]> = [[bxA, byA, 0], [bxB, byB, 1]];
-        for (const [bx, by, bi] of spots) {
-          const f = timeDilation(pts, bx, by, DIL_K, DIL_SOFT);
+        for (const [bx0, by0, bi] of spots) {
+          const bBound = pts.length > 0 ? boundFraction(pts, bx0, by0) : 0;
+          const eB = 1 + (sBeacon - 1) * (1 - bBound);
+          const bxu = cxv + (bx0 - cxv) * eB;
+          const byu = cyv + (by0 - cyv) * eB;
+          const f = timeDilation(pts, bxu, byu, DIL_K, DIL_SOFT);
+          const bfold = foldXY(bxu, byu);
+          const bx = bfold.x;
+          const by = bfold.y;
           if (!reduce) beaconPhase[bi] += dt * timeScale * Math.PI * 2 * 0.55 * f;
           const blink = reduce
             ? 0.35 + 0.5 * f
@@ -1038,10 +1265,9 @@ export default function ManifoldFold() {
             const u = i / N;
             const wp = wovenPoint(u, pts, now);
             const rx = pad() + u * (width - pad() * 2);
-            const x = mix(wp.x, rx, lens);
-            const y = mix(wp.y, rulerY(), lens);
-            if (i === 0) ctx.moveTo(x, y);
-            else ctx.lineTo(x, y);
+            const tf = foldXY(mix(wp.x, rx, lens), mix(wp.y, rulerY(), lens));
+            if (i === 0) ctx.moveTo(tf.x, tf.y);
+            else ctx.lineTo(tf.x, tf.y);
           }
           ctx.stroke();
         }
@@ -1071,8 +1297,9 @@ export default function ManifoldFold() {
           const u = (k + 0.5) / SCALE_BANDS.length;
           const wp = wovenPoint(u, pts, now);
           const rx = rulerX((band.sMin + band.sMax) / 2);
-          const x = mix(wp.x, rx, lens);
-          const y = mix(wp.y, rulerY(), lens);
+          const bf = foldXY(mix(wp.x, rx, lens), mix(wp.y, rulerY(), lens));
+          const x = bf.x;
+          const y = bf.y;
           beadPos[k].x = x;
           beadPos[k].y = y;
           const built = !!band.route;
@@ -1124,6 +1351,20 @@ export default function ManifoldFold() {
         ctx.restore();
       }
 
+      // ————— the darkened rim: the closed fold that contains everything —————
+      if (foldMix > 0.03) {
+        ctx.save();
+        ctx.translate(cxv, cyv);
+        ctx.scale(cxv, cyv);
+        const rim = ctx.createRadialGradient(0, 0, 0.7, 0, 0, 1.18);
+        rim.addColorStop(0, "rgba(1, 2, 5, 0)");
+        rim.addColorStop(0.62, `rgba(1, 2, 5, ${0.22 * foldMix})`);
+        rim.addColorStop(1, `rgba(0, 1, 3, ${0.82 * foldMix})`);
+        ctx.fillStyle = rim;
+        ctx.fillRect(-1.4, -1.4, 2.8, 2.8);
+        ctx.restore();
+      }
+
       // glimmer — after quiet, a ring where a dwell would land (never text)
       const idleMs = now - lastInteractionAt;
       if (idleMs > 20000) {
@@ -1140,8 +1381,9 @@ export default function ManifoldFold() {
 
       // keyboard cursor
       if (focused && cursorVisible) {
-        const cx = cursorNx * width;
-        const cy = cursorNy * height;
+        const cfold = foldXY(cursorNx * width, cursorNy * height);
+        const cx = cfold.x;
+        const cy = cfold.y;
         ctx.strokeStyle = "rgba(242, 238, 230, 0.7)";
         ctx.lineWidth = 1.2;
         ctx.beginPath();
