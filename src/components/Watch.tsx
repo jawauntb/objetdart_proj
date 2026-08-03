@@ -40,6 +40,11 @@ export default function Watch() {
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [whisperState, setWhisperState] = useState<Whisper | null>(null);
+  // the wall's kept material: small pinned snapshots of the room, planted
+  // by a dwell hold on bare wall, annihilated by a ceremony hold on one.
+  const pinsRef = useRef<Array<{ x: number; y: number; seed: number }>>([]);
+  const [hasPins, setHasPins] = useState(false);
+  const PIN_KEY = "objetdart:watch:pins:v1";
 
   const cursor = useRef({ x: -9999, y: -9999, tx: -9999, ty: -9999, over: false });
   const detailRef = useRef(1); // detailForTier(tier).particles, set once per frame
@@ -574,6 +579,32 @@ export default function Watch() {
     // the law: drag gusts wind through the room, hold slows its time.
     // A circling finger turns the crown of the room's day.
     // Pinch and pan2 stay unbound — the frame belongs to the manifold.
+    // the wall's kept pins — loaded once, saved on every change.
+    try {
+      const raw = localStorage.getItem(PIN_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as { pins?: Array<{ x: number; y: number; seed: number }> };
+        if (Array.isArray(parsed.pins)) pinsRef.current = parsed.pins.slice(-24);
+      }
+    } catch { /* fresh */ }
+    setHasPins(pinsRef.current.length > 0);
+    const savePins = () => {
+      try { localStorage.setItem(PIN_KEY, JSON.stringify({ pins: pinsRef.current })); } catch { /* noop */ }
+      setHasPins(pinsRef.current.length > 0);
+    };
+    const nearestPin = (x: number, y: number): number => {
+      let best = -1; let bestD = 26;
+      pinsRef.current.forEach((p, i) => {
+        const d = Math.hypot(p.x - x, p.y - y);
+        if (d < bestD) { bestD = d; best = i; }
+      });
+      return best;
+    };
+    let holdPinHit = -1;
+    let holdPinX = 0;
+    let holdPinY = 0;
+    let holdPinCommitted = false;
+
     let dragKind: "" | "candle" | "record" | "glass" = "";
     let dragLastAngle = 0;
     let dragLastAudioAt = 0;
@@ -775,12 +806,41 @@ export default function Watch() {
           holdWhat = hitTest(e.x, e.y);
           holdSnuffed = false;
           holdVigil = false;
+          if (holdWhat === "wall") {
+            holdPinX = e.x; holdPinY = e.y;
+            holdPinHit = nearestPin(e.x, e.y);
+            holdPinCommitted = false;
+          }
           return;
         }
         if (e.phase === "release") {
           // a firm short press still speaks the tap verb (no punishment)
           if (e.tier === 1) dispatchTap(e.x, e.y, e.intensity, 1);
           holdWhat = "";
+          return;
+        }
+        if (holdWhat === "wall") {
+          if (holdPinHit >= 0) {
+            // ceremony hold on an existing pin: its solemn act is
+            // annihilation — the touch-reachable delete.
+            if (e.tier >= 3 && !holdPinCommitted) {
+              holdPinCommitted = true;
+              pinsRef.current.splice(holdPinHit, 1);
+              savePins();
+              try { getFieldAudio().bell(); } catch { /* ignore */ }
+              try { haptics.bloom(); } catch { /* ignore */ }
+              useField.getState().recordTape("kept", 0.8, "watch:pin-let-go");
+            }
+          } else if (e.tier >= 2 && !holdPinCommitted) {
+            // dwell on bare wall plants a pinned snapshot of the room.
+            holdPinCommitted = true;
+            pinsRef.current.push({ x: holdPinX, y: holdPinY, seed: Math.round(holdPinX * 97 + holdPinY * 53) });
+            if (pinsRef.current.length > 24) pinsRef.current.shift();
+            savePins();
+            try { getFieldAudio().spark(); } catch { /* ignore */ }
+            try { haptics.ripple(0.5); } catch { /* ignore */ }
+            useField.getState().recordTape("kept", 0.6, "watch:pin-planted");
+          }
           return;
         }
         if (holdWhat !== "candle") return;
@@ -1456,6 +1516,18 @@ export default function Watch() {
         }
       });
 
+      // ── pinned snapshots — the wall's kept material ──
+      for (const p of pinsRef.current) {
+        ctx.fillStyle = "rgba(210, 190, 150, 0.14)";
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 5.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "rgba(240, 220, 180, 0.85)";
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 1.6, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
       // ── table ──
       const tableY = g.tableTop;
       ctx.fillStyle = "rgba(48, 32, 22, 0.96)";
@@ -1874,6 +1946,14 @@ export default function Watch() {
     };
   }, [whisperState]);
 
+  const letGoPins = () => {
+    pinsRef.current = [];
+    try { localStorage.setItem(PIN_KEY, JSON.stringify({ pins: [] })); } catch { /* noop */ }
+    setHasPins(false);
+    try { getFieldAudio().thud(); } catch { /* ignore */ }
+    try { haptics.roll(); } catch { /* ignore */ }
+  };
+
   // Whisper rendering uses a tiny overlay <div> rather than canvas — gives
   // us crisp italic typography matching the rest of the site, and the hover
   // state is easy to drive via React.
@@ -1941,6 +2021,7 @@ export default function Watch() {
         }}
       />
       {renderWhisper()}
+      <LetGo label="let the pinned wall go" onLetGo={letGoPins} visible={hasPins} />
       <div className="watch-room-title" aria-hidden="true">the room</div>
       <style>{`
         /* Hide the global site chrome so the room fills the true viewport. */

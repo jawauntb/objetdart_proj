@@ -247,6 +247,8 @@ function hexToRgb(hex: string): { r: number; g: number; b: number } {
 export default function Comb() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [motionUI, setMotionUI] = useState<"hidden" | "prompt" | "on">("hidden");
+  const [hasChanged, setHasChanged] = useState(false);
+  const clearFieldRef = useRef<() => void>(() => {});
   const audioRef = useRef<CombAudio | null>(null);
   const gravityRef = useRef({ tx: 0, ty: 0, x: 0, y: 0 });
   const shakeRef = useRef({ pending: 0 });
@@ -287,6 +289,26 @@ export default function Comb() {
     reduceRef.current = reduceQuery.matches;
     const onReduce = () => { reduceRef.current = reduceQuery.matches; };
     reduceQuery.addEventListener?.("change", onReduce);
+
+    // ── the shared performance contract: no draw while hidden, a quality
+    // tier that scales particle counts, a DPR ceiling on resize ────────
+    const embedded = isEmbeddedFrame();
+    const gov = createFrameGovernor(embedded ? "medium" : "high");
+    let hiddenDoc = document.hidden;
+    let galleryPaused = false;
+    let asleep = false;
+    const syncSleep = () => {
+      asleep = hiddenDoc || galleryPaused;
+      if (asleep) gov.force("sleep");
+    };
+    const unvis = onVisibility((hd) => {
+      hiddenDoc = hd;
+      syncSleep();
+    });
+    const ungal = onGalleryPause((p) => {
+      galleryPaused = p;
+      syncSleep();
+    });
 
     let w = 0, h = 0, dpr = 1, u = 1;
     let landscape: boolean | null = null;
@@ -360,6 +382,38 @@ export default function Comb() {
         ]);
       }),
     );
+
+    // A pre-rendered "wash" — the slow-drifting weather tint under the
+    // whole field. Built on a small offscreen canvas at a throttled rate
+    // and blitted with drawImage every frame; the frame loop never builds
+    // a CanvasGradient itself (perf contract — never per-frame allocation).
+    const washCanvas = document.createElement("canvas");
+    washCanvas.width = 128;
+    washCanvas.height = 128;
+    const washCtx = washCanvas.getContext("2d");
+    let lastWashPaintAt = -Infinity;
+    const paintWash = () => {
+      if (!washCtx) return;
+      const ww = washCanvas.width, wh = washCanvas.height;
+      const tint = weatherTint();
+      const inner = {
+        r: Math.round(mix(CREAM.r, tint.r, tint.amt * 0.45)),
+        g: Math.round(mix(CREAM.g, tint.g, tint.amt * 0.45)),
+        b: Math.round(mix(CREAM.b, tint.b, tint.amt * 0.45)),
+      };
+      const edge = {
+        r: Math.round(mix(CREAM.r, tint.r, tint.amt)),
+        g: Math.round(mix(CREAM.g, tint.g, tint.amt)),
+        b: Math.round(mix(CREAM.b, tint.b, tint.amt)),
+      };
+      const cx = ww / 2 + Math.sin(simT * 0.05) * ww * 0.08;
+      const cy = wh / 2 + Math.cos(simT * 0.041) * wh * 0.08;
+      const grad = washCtx.createRadialGradient(cx, cy, Math.min(ww, wh) * 0.1, ww / 2, wh / 2, Math.hypot(ww, wh) * 0.62);
+      grad.addColorStop(0, `rgb(${inner.r},${inner.g},${inner.b})`);
+      grad.addColorStop(1, `rgb(${edge.r},${edge.g},${edge.b})`);
+      washCtx.fillStyle = grad;
+      washCtx.fillRect(0, 0, ww, wh);
+    };
 
     // ── coordinate helpers ───────────────────────────────────────────────
     const toScreenX = (x: number) => w / 2 + (x - camX) * u * zoom;
@@ -464,7 +518,8 @@ export default function Comb() {
     const targetCount = () => {
       const area = w * h;
       const base = clamp(Math.round(area / 6200), 90, 210);
-      return reduceRef.current ? Math.round(base * 0.55) : base;
+      const scaled = Math.round(base * detailForTier(gov.tier()).particles);
+      return reduceRef.current ? Math.round(scaled * 0.55) : scaled;
     };
 
     const syncParticles = () => {
@@ -489,7 +544,19 @@ export default function Comb() {
       defects.push(d);
       try { audioRef.current?.bloom(q, 0.7); } catch { /* noop */ }
       try { (q > 0 ? haptics.tap : haptics.chop)(); } catch { /* noop */ }
+      setHasChanged(true);
       return d;
+    };
+
+    clearFieldRef.current = () => {
+      defects.length = 0;
+      defects.push(
+        { x: -0.34, y: 0.08, q: 1, s: 1, smax: 1, born: simT - 10, dying: false, slam: 0, grabbed: false },
+        { x: 0.38, y: -0.12, q: 1, s: 1, smax: 1, born: simT - 10, dying: false, slam: 0, grabbed: false },
+      );
+      strokes.length = 0;
+      bursts.length = 0;
+      setHasChanged(false);
     };
 
     const annihilate = (a: Defect, b: Defect) => {
@@ -886,9 +953,11 @@ export default function Comb() {
       const rect = canvas.getBoundingClientRect();
       w = Math.max(1, rect.width);
       h = Math.max(1, rect.height);
-      dpr = clamp(window.devicePixelRatio || 1, 1, 2);
+      dpr = resolveDpr(gov.tier(), { embedded, reducedMotion: reduceRef.current });
       canvas.width = Math.round(w * dpr);
       canvas.height = Math.round(h * dpr);
+      washCanvas.width = Math.max(2, Math.round(w * 0.25));
+      washCanvas.height = Math.max(2, Math.round(h * 0.25));
       u = Math.min(w, h) / 2;
       const nowLandscape = w > h;
       if (landscape !== null && nowLandscape !== landscape && !reduceRef.current) {
@@ -903,30 +972,11 @@ export default function Comb() {
       syncParticles();
     };
     resize();
+    paintWash();
     window.addEventListener("resize", resize);
 
     canvas.addEventListener("pointermove", onHover);
     canvas.addEventListener("wheel", onWheel, { passive: false });
-
-    // ── the shared performance contract: no draw while hidden, a quality
-    // tier that scales particle counts, a DPR ceiling on resize ────────
-    const embedded = isEmbeddedFrame();
-    const gov = createFrameGovernor(embedded ? "medium" : "high");
-    let hiddenDoc = document.hidden;
-    let galleryPaused = false;
-    let asleep = false;
-    const syncSleep = () => {
-      asleep = hiddenDoc || galleryPaused;
-      if (asleep) gov.force("sleep");
-    };
-    const unvis = onVisibility((hd) => {
-      hiddenDoc = hd;
-      syncSleep();
-    });
-    const ungal = onGalleryPause((p) => {
-      galleryPaused = p;
-      syncSleep();
-    });
 
     // ── main loop ────────────────────────────────────────────────────────
     let raf = 0;
@@ -1031,29 +1081,22 @@ export default function Comb() {
       // ── paint: persistence wash, then heads over their own trails ──────
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.globalCompositeOperation = "source-over";
-      const tint = weatherTint();
-      const inner = {
-        r: Math.round(mix(CREAM.r, tint.r, tint.amt * 0.45)),
-        g: Math.round(mix(CREAM.g, tint.g, tint.amt * 0.45)),
-        b: Math.round(mix(CREAM.b, tint.b, tint.amt * 0.45)),
-      };
-      const edge = {
-        r: Math.round(mix(CREAM.r, tint.r, tint.amt)),
-        g: Math.round(mix(CREAM.g, tint.g, tint.amt)),
-        b: Math.round(mix(CREAM.b, tint.b, tint.amt)),
-      };
-      const wash = ctx.createRadialGradient(
-        w / 2 + Math.sin(simT * 0.05) * w * 0.08,
-        h / 2 + Math.cos(simT * 0.041) * h * 0.08,
-        Math.min(w, h) * 0.1,
-        w / 2, h / 2, Math.hypot(w, h) * 0.62,
-      );
-      wash.addColorStop(0, `rgb(${inner.r},${inner.g},${inner.b})`);
-      wash.addColorStop(1, `rgb(${edge.r},${edge.g},${edge.b})`);
-      ctx.globalAlpha = reduced ? 0.13 : 0.085;
-      ctx.fillStyle = wash;
-      ctx.fillRect(0, 0, w, h);
+      // the wash sprite is repainted on a throttled cadence, never per
+      // frame — the draw loop only ever blits it.
+      if (now - lastWashPaintAt > 180) {
+        lastWashPaintAt = now;
+        paintWash();
+      }
+      ctx.globalAlpha = (reduced ? 0.13 : 0.085) * (1 - night * 0.25);
+      ctx.drawImage(washCanvas, 0, 0, w, h);
       ctx.globalAlpha = 1;
+      if (night > 0.02) {
+        // face-down night: a soft dark veil settles over the field
+        ctx.fillStyle = "rgb(20,17,24)";
+        ctx.globalAlpha = night * 0.35;
+        ctx.fillRect(0, 0, w, h);
+        ctx.globalAlpha = 1;
+      }
 
       // defect blooms
       for (const d of defects) {
@@ -1186,14 +1229,24 @@ export default function Comb() {
       cancelAnimationFrame(raf);
       window.removeEventListener("resize", resize);
       detachGestures();
+      detachVessel();
+      unvis();
+      ungal();
       if (pendingSaddle) window.clearTimeout(pendingSaddle);
       canvas.removeEventListener("pointermove", onHover);
       canvas.removeEventListener("wheel", onWheel);
       reduceQuery.removeEventListener?.("change", onReduce);
       try { audioRef.current?.dispose(); } catch { /* noop */ }
       audioRef.current = null;
+      clearFieldRef.current = () => {};
     };
   }, [ensureAudio]);
+
+  const letGo = useCallback(() => {
+    clearFieldRef.current();
+    try { getFieldAudio().thud(); } catch { /* noop */ }
+    try { haptics.roll(); } catch { /* noop */ }
+  }, []);
 
   return (
     <div className="comb-stage">
@@ -1207,6 +1260,7 @@ export default function Comb() {
         <span>comb the light — the cowlick stays</span>
         <strong>comb</strong>
       </div>
+      <LetGo label="let the field settle" onLetGo={letGo} visible={hasChanged} />
       <div className="comb-hud">
         <span className="comb-hint" aria-hidden="true">tap vortex · hold saddle · comb the light</span>
         {motionUI === "prompt" && (

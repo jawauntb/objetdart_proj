@@ -4,31 +4,7 @@
 // of them restates a constant back at itself.
 
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import * as ts from "typescript";
-
-const rootUrl = new URL("../", import.meta.url);
-
-function loadTsModule(path, requireMap = {}) {
-  const filename = fileURLToPath(new URL(path, rootUrl));
-  const code = ts.transpileModule(readFileSync(filename, "utf8"), {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2020,
-      esModuleInterop: true,
-    },
-    fileName: filename,
-  }).outputText;
-  const module = { exports: {} };
-  const requireShim = (id) => {
-    if (id in requireMap) return requireMap[id];
-    throw new Error(`Unexpected require(${id}) while loading ${path}`);
-  };
-  // Own realm — vm.runInNewContext breaks deepStrictEqual across realms.
-  new Function("module", "exports", "require", code)(module, module.exports, requireShim);
-  return module.exports;
-}
+import { loadTsModule } from "./lib/load-ts.mjs";
 
 const objectModule = loadTsModule("src/lib/scene/object.ts");
 const instancesModule = loadTsModule("src/lib/scene/instances.ts");

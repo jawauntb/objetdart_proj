@@ -378,7 +378,20 @@ export default function Aphros() {
           }
           if (e.fingers !== 1) return;
           if (e.phase === "enter" && e.tier >= 1) {
-            holdBloom = plantBloom(e.x / Math.max(1, width), e.y / Math.max(1, height));
+            const nx = e.x / Math.max(1, width);
+            const ny = e.y / Math.max(1, height);
+            // ceremony hold on an EXISTING bloom is its solemn act too —
+            // the touch-reachable delete the create/delete law asks for.
+            // Only a hold that lands on open water plants a new one.
+            const AR = width / Math.max(1, height);
+            let nearest: Bloom | null = null;
+            let nearestD = Infinity;
+            for (const b of bloomsRef.current) {
+              if (b.ascendAt !== 0) continue;
+              const d = Math.hypot((nx - b.nx) * AR, ny - b.ny);
+              if (d < b.size * 1.3 && d < nearestD) { nearestD = d; nearest = b; }
+            }
+            holdBloom = nearest ?? plantBloom(nx, ny);
             audio.spark();
             haptics.ripple(0.5);
           }

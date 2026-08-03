@@ -25,6 +25,7 @@ import {
 } from "@/lib/instrument-lesson";
 import { useField } from "@/store/field";
 import { attachGestures } from "@/lib/gesture";
+import { holdTier } from "@/lib/gesture/core";
 import { onVessel, requestVessel, vesselAvailable, vesselGranted } from "@/lib/vessel";
 import LetGo from "@/components/LetGo";
 
@@ -66,20 +67,32 @@ const KEY_SEMITONES = [0, 3, 5, 7, 10, 12, 15, 17, 19];
 
 type MotionState = "unavailable" | "needs-permission" | "on";
 
-type PermissionRequester = { requestPermission?: () => Promise<string> };
-
 export default function LightInstrument() {
   const plateRef = useRef<HTMLDivElement | null>(null);
   const markId = useRef(0);
   const pointers = useRef(new Map<number, PointerRecord>());
-  const lastDown = useRef({ time: 0, x: -1, y: -1 });
   const lastMoveTick = useRef(0);
-  const lastShakeAt = useRef(0);
-  const lastJerkAt = useRef(0);
-  const lastAccel = useRef<{ x: number; y: number; z: number } | null>(null);
   const flipped = useRef(false);
   const scaleModeRef = useRef<ScaleMode>("penta");
   const marksRef = useRef<ToneMark[]>([]);
+
+  // ── frame-layer state (two/three-finger verbs) ──────────────────────
+  // pinch magnifies the spectrum (a narrower slice under the whole width),
+  // pan2 shifts which slice of the mapping sits under the plate, twist(2)
+  // rotates the lens through the scale modes — penta ↔ chroma ↔ pure
+  // light, the same mapping at a different level of description.
+  const zoomRef = useRef({ cur: 1, target: 1 });
+  const panRef = useRef({ cur: 0, target: 0 });
+  const lensTwistAccRef = useRef(0);
+  // three fingers touch the law: drag is wind (a transient puff of tone),
+  // hold is time dilation (the plate's own animations ease to 1/4 speed),
+  // twist is the season (a slow hue drift across the whole instrument).
+  const timeScaleRef = useRef(1);
+  const seasonRef = useRef(0);
+  const seasonTwistAccRef = useRef(0);
+  const windLastAtRef = useRef(0);
+  const nightRef = useRef(false);
+  const lastTouchAtRef = useRef(0);
 
   const [wavelength, setWavelength] = useState(532);
   const [marks, setMarks] = useState<ToneMark[]>([]);
@@ -92,7 +105,15 @@ export default function LightInstrument() {
   const [subMode, setSubMode] = useState(false);
   const [motionState, setMotionState] = useState<MotionState>("unavailable");
   const [flash, setFlash] = useState(0);
+  const [glimmering, setGlimmering] = useState(false);
+  const glimmeringRef = useRef(false);
+  useEffect(() => { glimmeringRef.current = glimmering; }, [glimmering]);
+  const [charges, setCharges] = useState<Array<{ id: number; x: number; y: number; pct: number; mode: "create" | "delete" }>>([]);
   const cancelLesson = useRef<null | (() => void)>(null);
+  const isListeningRef = useRef(false);
+  useEffect(() => { isListeningRef.current = isListening; }, [isListening]);
+  const subModeRef = useRef(false);
+  useEffect(() => { subModeRef.current = subMode; }, [subMode]);
 
   scaleModeRef.current = scaleMode;
   marksRef.current = marks;
@@ -112,13 +133,20 @@ export default function LightInstrument() {
     useField.getState().recordTape("sigil", intensity, `light/${meta}`);
   }, []);
 
+  // pinch zooms into a narrower slice of the spectrum; pan2 shifts which
+  // slice sits under the plate — the map layer over the same material.
+  const mapX = useCallback((x: number) => {
+    const mapped = 0.5 + (x - 0.5) / zoomRef.current.cur + panRef.current.cur;
+    return clamp(mapped, 0, 1);
+  }, []);
+
   // x in 0..1 plate space sweeps the whole hearing range through the whole
   // spectrum; y stays with the finger as brightness.
   const translationAt = useCallback((x: number) => {
-    const nm = wavelengthFromX(x);
+    const nm = wavelengthFromX(mapX(x));
     const freq = quantizeFrequency(audibleFrequency(nm), scaleModeRef.current);
     return { nm, freq, color: colorFromWavelength(nm) };
-  }, []);
+  }, [mapX]);
 
   const plateXY = useCallback((clientX: number, clientY: number) => {
     const target = plateRef.current;
@@ -155,7 +183,7 @@ export default function LightInstrument() {
   }, []);
 
   const subKick = useCallback((x: number) => {
-    const nm = wavelengthFromX(x);
+    const nm = wavelengthFromX(mapX(x));
     let freq = quantizeFrequency(audibleFrequency(nm), scaleModeRef.current);
     while (freq > 82) freq /= 2;
     while (freq < 32) freq *= 2;
@@ -163,68 +191,37 @@ export default function LightInstrument() {
     pulseFlash();
     try { ripple(1); } catch { /* noop */ }
     recordLight(`kick/${Math.round(freq)}hz`, 0.9);
+  }, [mapX, pulseFlash, recordLight]);
+
+  const findNearMark = useCallback((x: number, y: number): ToneMark | null => {
+    let best: ToneMark | null = null;
+    let bestD = 0.05;
+    for (const mark of marksRef.current) {
+      const d = Math.hypot(mark.x - x, mark.y - y);
+      if (d < bestD) { bestD = d; best = mark; }
+    }
+    return best;
+  }, []);
+
+  const forgetMark = useCallback((id: number) => {
+    setMarks((current) => current.filter((mark) => mark.id !== id));
+    try { roll(); } catch { /* noop */ }
+    try { getFieldAudio().thud(); } catch { /* noop */ }
+    recordLight("memory/forget", 0.5);
+  }, [recordLight]);
+
+  const tuttiBurst = useCallback(() => {
+    const kept = marksRef.current;
+    if (kept.length > 0) {
+      getLight808().strum(kept.map((mark) => mark.audible), 0.055);
+      recordLight(`tutti/${kept.length}`, 0.95);
+    } else {
+      getLight808().kick(42);
+      recordLight("tutti/kick", 0.8);
+    }
+    pulseFlash();
+    try { roll(); } catch { /* noop */ }
   }, [pulseFlash, recordLight]);
-
-  const handlePointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    const engine = getLight808();
-    void getFieldAudio().start();
-    const { x, y } = plateXY(event.clientX, event.clientY);
-    const { nm, freq, color: touchColor } = translationAt(x);
-    const now = performance.now();
-
-    // double tap in the same spot → deep sub kick
-    const previous = lastDown.current;
-    const isDoubleTap =
-      now - previous.time < 320 &&
-      Math.hypot(x - previous.x, y - previous.y) < 0.07;
-    lastDown.current = { time: now, x, y };
-
-    pointers.current.set(event.pointerId, { downAt: now, downX: x, downY: y, moved: false, freq });
-    engine.noteOn(String(event.pointerId), freq, { brightness: 1 - y });
-    setWavelength(nm);
-    showTouch(event.pointerId, x, y, freq, touchColor);
-    keepMark(x, y, nm, freq, touchColor);
-    try { ripple(0.4 + (1 - y) * 0.4); } catch { /* noop */ }
-    recordLight(`touch/${Math.round(nm)}nm/${Math.round(freq)}hz`, clamp(0.35 + (1 - y) * 0.4, 0.2, 1));
-
-    if (isDoubleTap) subKick(x);
-
-    try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* noop */ }
-  }, [keepMark, plateXY, recordLight, showTouch, subKick, translationAt]);
-
-  const handlePointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    const record = pointers.current.get(event.pointerId);
-    if (!record) return;
-    const { x, y } = plateXY(event.clientX, event.clientY);
-    if (!record.moved && Math.hypot(x - record.downX, y - record.downY) > 0.02) {
-      record.moved = true;
-    }
-    const { nm, freq, color: touchColor } = translationAt(x);
-    if (Math.abs(freq - record.freq) > 0.01) {
-      getLight808().glide(String(event.pointerId), freq, { brightness: 1 - y });
-      record.freq = freq;
-      const tick = performance.now();
-      if (tick - lastMoveTick.current > 90) {
-        lastMoveTick.current = tick;
-        try { hapticTap(); } catch { /* noop */ }
-      }
-    }
-    setWavelength(nm);
-    showTouch(event.pointerId, x, y, freq, touchColor);
-  }, [plateXY, showTouch, translationAt]);
-
-  const handlePointerEnd = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    const record = pointers.current.get(event.pointerId);
-    pointers.current.delete(event.pointerId);
-    if (record) {
-      const heldMs = performance.now() - record.downAt;
-      // quick unmoved taps release as a long 808 boom; held notes release tight
-      getLight808().noteOff(String(event.pointerId), { boom: heldMs < 200 && !record.moved });
-      if (record.moved) recordLight("slide", 0.5);
-    }
-    hideTouch(event.pointerId);
-    try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* noop */ }
-  }, [hideTouch, recordLight]);
 
   const replayMarks = useCallback(() => {
     const kept = marksRef.current;
@@ -314,93 +311,245 @@ export default function LightInstrument() {
     recordLight(`submode/${next ? "on" : "off"}/${source}`, 0.7);
   }, [pulseFlash, recordLight]);
 
-  // shake → strum every kept translation as a fast light-burst arpeggio
-  const onShake = useCallback(() => {
-    const now = performance.now();
-    if (now - lastShakeAt.current < 1200) return;
-    lastShakeAt.current = now;
-    const kept = marksRef.current;
-    if (kept.length > 0) {
-      getLight808().strum(kept.map((mark) => mark.audible), 0.055);
-      recordLight(`shake/strum/${kept.length}`, 0.95);
-    } else {
-      getLight808().kick(42);
-      recordLight("shake/kick", 0.8);
-    }
-    pulseFlash();
-    try { roll(); } catch { /* noop */ }
-  }, [pulseFlash, recordLight]);
-
-  // ── device motion + orientation ────────────────────────────────────────
+  // ── the gesture surface ──────────────────────────────────────────────
+  // Polyphonic (binds `voice`): every finger is an independent 808 note
+  // that sounds the instant it lands — a chord is many voices, not an
+  // address into the stack (grammar §3). A together-landed pair moving
+  // against each other is reclaimed as the frame layer: pinch magnifies
+  // the spectrum, twist(2) rotates the lens through the scale modes,
+  // pan2 shifts which slice of the mapping sits under the plate.
+  //
+  // Three-finger law-layer channels (`drag`/`hold`/`twist(3)`) never fire
+  // here — gesture/index.ts silences them unconditionally on any surface
+  // that binds `voice` (only a landed pair can be reclaimed past voices).
+  // Time dilation and wind are reconstructed by hand from the raw voice
+  // count instead (three simultaneous, largely-still voices); season
+  // (three-finger twist) needs the engine's chord-rotation math to read
+  // cleanly and is exempted here — the same trade the grammar names for
+  // instrument surfaces (§3's "one sacrifice").
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    const hasMotion = "DeviceMotionEvent" in window || "DeviceOrientationEvent" in window;
-    if (!hasMotion) return;
-    const motionCtor = (window as { DeviceMotionEvent?: PermissionRequester }).DeviceMotionEvent;
-    const needsPermission = typeof motionCtor?.requestPermission === "function";
-    setMotionState(needsPermission ? "needs-permission" : "on");
+    const plate = plateRef.current;
+    if (!plate) return;
+    const chargeState = new Map<number, { sealed: boolean }>();
+    let lastTapPos = { x: -1, y: -1 };
+
+    const toXY = (clientX: number, clientY: number) => plateXY(clientX, clientY);
+
+    const detachGestures = attachGestures(
+      plate,
+      {
+        voice: (e) => {
+          lastTouchAtRef.current = performance.now();
+          const { x, y } = toXY(e.x, e.y);
+          if (e.phase === "start") {
+            void getFieldAudio().start();
+            const { nm, freq, color: touchColor } = translationAt(x);
+            pointers.current.set(e.id, { downAt: performance.now(), downX: x, downY: y, moved: false, freq });
+            chargeState.set(e.id, { sealed: false });
+            getLight808().noteOn(String(e.id), freq, { brightness: 1 - y });
+            setWavelength(nm);
+            showTouch(e.id, x, y, freq, touchColor);
+            keepMark(x, y, nm, freq, touchColor);
+            try { ripple(0.4 + (1 - y) * 0.4); } catch { /* noop */ }
+            recordLight(`touch/${Math.round(nm)}nm/${Math.round(freq)}hz`, clamp(0.35 + (1 - y) * 0.4, 0.2, 1));
+            return;
+          }
+          const record = pointers.current.get(e.id);
+          if (e.phase === "move") {
+            if (!record) return;
+            if (!record.moved && Math.hypot(x - record.downX, y - record.downY) > 0.02) {
+              record.moved = true;
+              // three or more simultaneous voices, one of them sliding —
+              // the law's wind: a transient puff pushed across the light.
+              if (pointers.current.size >= 3) {
+                const now = performance.now();
+                if (now - windLastAtRef.current > 220) {
+                  windLastAtRef.current = now;
+                  const { freq } = translationAt(x);
+                  getLight808().strum([freq], 0.05);
+                  try { chop(); } catch { /* noop */ }
+                  recordLight("wind", 0.4);
+                }
+              }
+            }
+            const { nm, freq, color: touchColor } = translationAt(x);
+            if (Math.abs(freq - record.freq) > 0.01) {
+              getLight808().glide(String(e.id), freq, { brightness: 1 - y });
+              record.freq = freq;
+              const tick = performance.now();
+              if (tick - lastMoveTick.current > 90) {
+                lastMoveTick.current = tick;
+                try { hapticTap(); } catch { /* noop */ }
+              }
+            }
+            setWavelength(nm);
+            showTouch(e.id, x, y, freq, touchColor);
+            return;
+          }
+          // end / cancel
+          pointers.current.delete(e.id);
+          chargeState.delete(e.id);
+          if (record) {
+            const heldMs = performance.now() - record.downAt;
+            getLight808().noteOff(String(e.id), { boom: heldMs < 200 && !record.moved });
+            if (record.moved) recordLight("slide", 0.5);
+          }
+          hideTouch(e.id);
+        },
+        pinch: (e) => {
+          lastTouchAtRef.current = performance.now();
+          if (e.phase === "move") {
+            zoomRef.current.target = clamp(zoomRef.current.target * e.scale, 1, 3);
+          }
+        },
+        twist: (e) => {
+          if (e.fingers === 3) return; // season — see the exemption note above
+          lastTouchAtRef.current = performance.now();
+          if (e.phase === "start") lensTwistAccRef.current = 0;
+          if (e.phase === "move") lensTwistAccRef.current += e.angle;
+          if (e.phase === "end" && Math.abs(lensTwistAccRef.current) > Math.PI / 2) {
+            cycleScale();
+            try { hapticLens(); } catch { /* noop */ }
+          }
+        },
+        pan2: (e) => {
+          lastTouchAtRef.current = performance.now();
+          if (e.phase !== "move") return;
+          panRef.current.target = clamp(panRef.current.target + e.dx * 0.0006, -0.4, 0.4);
+        },
+        tap: (e) => {
+          lastTouchAtRef.current = performance.now();
+          if (e.fingers === 2) {
+            // step back: leave the lesson, else lower the zoom, else drop
+            // out of sub mode.
+            if (isListeningRef.current) {
+              stopLesson();
+            } else if (Math.abs(zoomRef.current.target - 1) > 0.02) {
+              zoomRef.current.target = 1;
+            } else if (subModeRef.current) {
+              toggleSubMode(false, "stepback");
+            }
+            try { hapticTap(); } catch { /* noop */ }
+            return;
+          }
+          if (e.fingers === 3) {
+            // tutti — one synchronized pulse of everything alive.
+            tuttiBurst();
+            recordLight("tutti", 0.6);
+            return;
+          }
+          if (e.fingers !== 1) return;
+          const { x, y } = toXY(e.x, e.y);
+          // double tap in the same spot → deep sub kick. Timing comes from
+          // the engine's own tap train (280ms); the spatial check is the
+          // room's own material read of the same event, not a threshold.
+          if (e.count === 2 && Math.hypot(x - lastTapPos.x, y - lastTapPos.y) < 0.07) {
+            subKick(x);
+          }
+          lastTapPos = { x, y };
+        },
+      },
+      { wheelZoom: false },
+    );
+
+    // continuous eases (zoom/pan/season/time-dilation) + the create/delete
+    // poll: dwell/ceremony never reach `on.hold` on a poly surface, so a
+    // stationary voice's elapsed time is read by hand each tick, sharing
+    // the one classifier (`holdTier`) instead of inventing a threshold.
+    let raf = 0;
+    const ease = () => {
+      raf = requestAnimationFrame(ease);
+      const z = zoomRef.current;
+      z.cur += (z.target - z.cur) * 0.12;
+      const p = panRef.current;
+      p.cur += (p.target - p.cur) * 0.1;
+      const dilating = pointers.current.size >= 3;
+      timeScaleRef.current += ((dilating ? 3 : 1) - timeScaleRef.current) * 0.06;
+      plate.style.setProperty("--light-zoom", z.cur.toFixed(4));
+      plate.style.setProperty("--light-pan", p.cur.toFixed(4));
+      plate.style.setProperty("--light-season", `${((seasonRef.current / 8) * 360).toFixed(1)}deg`);
+      plate.style.setProperty("--light-time-scale", timeScaleRef.current.toFixed(3));
+      plate.style.setProperty("--light-night", nightRef.current ? "0.5" : "0");
+    };
+    raf = requestAnimationFrame(ease);
+
+    const chargeTimer = window.setInterval(() => {
+      const now = performance.now();
+      const active: Array<{ id: number; x: number; y: number; pct: number; mode: "create" | "delete" }> = [];
+      for (const [id, record] of pointers.current) {
+        if (record.moved) continue;
+        const elapsed = now - record.downAt;
+        const tier = holdTier(elapsed);
+        if (tier < 2) continue;
+        const chg = chargeState.get(id);
+        if (!chg) continue;
+        const near = findNearMark(record.downX, record.downY);
+        const mode: "create" | "delete" = near ? "delete" : "create";
+        active.push({ id, x: record.downX, y: record.downY, pct: Math.min(1, (elapsed - 900) / 1600), mode });
+        if (!chg.sealed && tier >= 3) {
+          chg.sealed = true;
+          try { hapticBloom(); } catch { /* noop */ }
+          if (mode === "delete" && near) forgetMark(near.id);
+          else replayMarks();
+        }
+      }
+      setCharges(active);
+      // idle glimmer (grammar §6): a soft breath after ~20s of quiet.
+      if (now - lastTouchAtRef.current > 20000) {
+        setGlimmering((g) => (g ? g : true));
+      } else if (glimmeringRef.current) {
+        setGlimmering(false);
+      }
+    }, 90);
+
+    return () => {
+      detachGestures();
+      cancelAnimationFrame(raf);
+      window.clearInterval(chargeTimer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ── the vessel ───────────────────────────────────────────────────────
+  // tilt left/right sweeps the filter, pitch-tilt adds vibrato, and past
+  // ~135° (held upside down) toggles the sub layer — a room-specific tilt
+  // discovery, distinct from the sitewide flip-face-down/night meaning
+  // (bound separately below via onVessel's `flip`, gravity z-based).
+  // shake strums the kept marks; classification (windows, thresholds) is
+  // the shared one in gesture/core — never re-derived here.
   useEffect(() => {
-    if (motionState !== "on" || typeof window === "undefined") return;
-
-    const onMotion = (event: DeviceMotionEvent) => {
-      const accel = event.accelerationIncludingGravity ?? event.acceleration;
-      if (!accel || accel.x == null || accel.y == null || accel.z == null) return;
-      const previous = lastAccel.current;
-      lastAccel.current = { x: accel.x, y: accel.y, z: accel.z };
-      if (!previous) return;
-      const jerk = Math.hypot(accel.x - previous.x, accel.y - previous.y, accel.z - previous.z);
-      if (jerk > 16) {
-        const now = performance.now();
-        if (now - lastJerkAt.current < 500) onShake();
-        lastJerkAt.current = now;
-      }
-    };
-
-    const onOrientation = (event: DeviceOrientationEvent) => {
-      const beta = event.beta ?? 0;
-      const gamma = event.gamma ?? 0;
-
-      // flip the phone past face-down → toggle sub mode
-      const isFlipped = Math.abs(beta) > 135;
-      if (isFlipped && !flipped.current) {
-        flipped.current = true;
-        toggleSubMode(!getLight808().getSubMode(), "flip");
-      } else if (!isFlipped && Math.abs(beta) < 100) {
-        flipped.current = false;
-      }
-
-      // tilt left/right sweeps the filter, pitch-tilt adds vibrato
-      getLight808().setMacro({
-        cutoff: clamp(gamma / 45, -1, 1),
-        vibrato: clamp((Math.abs(beta - 50) - 25) / 60, 0, 1),
-      });
-    };
-
-    window.addEventListener("devicemotion", onMotion);
-    window.addEventListener("deviceorientation", onOrientation);
-    return () => {
-      window.removeEventListener("devicemotion", onMotion);
-      window.removeEventListener("deviceorientation", onOrientation);
-    };
-  }, [motionState, onShake, toggleSubMode]);
+    setMotionState(vesselAvailable() ? (vesselGranted() ? "on" : "needs-permission") : "unavailable");
+    const detach = onVessel({
+      tilt: ({ beta, gamma }) => {
+        setMotionState("on");
+        const isFlipped = Math.abs(beta) > 135;
+        if (isFlipped && !flipped.current) {
+          flipped.current = true;
+          toggleSubMode(!getLight808().getSubMode(), "flip");
+        } else if (!isFlipped && Math.abs(beta) < 100) {
+          flipped.current = false;
+        }
+        getLight808().setMacro({
+          cutoff: clamp(gamma / 45, -1, 1),
+          vibrato: clamp((Math.abs(beta - 50) - 25) / 60, 0, 1),
+        });
+      },
+      shake: () => { tuttiBurst(); },
+      knock: () => {
+        subKick(0.5);
+        recordLight("vessel/knock", 0.7);
+      },
+      flip: ({ faceDown }) => { nightRef.current = faceDown; },
+    });
+    return detach;
+  }, [subKick, toggleSubMode, tuttiBurst, recordLight]);
 
   const requestMotion = useCallback(async () => {
-    const win = window as {
-      DeviceMotionEvent?: PermissionRequester;
-      DeviceOrientationEvent?: PermissionRequester;
-    };
-    try {
-      const results = await Promise.all([
-        win.DeviceMotionEvent?.requestPermission?.() ?? Promise.resolve("granted"),
-        win.DeviceOrientationEvent?.requestPermission?.() ?? Promise.resolve("granted"),
-      ]);
-      if (results.every((result) => result === "granted")) {
-        setMotionState("on");
-        recordLight("motion/granted", 0.5);
-      }
-    } catch { /* user dismissed the prompt */ }
+    const ok = await requestVessel();
+    if (ok) {
+      setMotionState("on");
+      recordLight("motion/granted", 0.5);
+    }
   }, [recordLight]);
 
   // ── desktop keyboard — pentatonic row with sustain, space = kick ──────
@@ -460,16 +609,34 @@ export default function LightInstrument() {
     >
       <div
         ref={plateRef}
-        className="light-plate"
+        className={`light-plate${glimmering ? " is-glimmering" : ""}`}
         role="application"
         tabIndex={0}
         aria-label="full-screen light instrument — touch to play sustained 808 tones, slide to glide, use several fingers for chords"
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerEnd}
-        onPointerCancel={handlePointerEnd}
+        style={{
+          "--light-zoom": 1,
+          "--light-pan": 0,
+          "--light-season": "0deg",
+          "--light-time-scale": 1,
+          "--light-night": 0,
+        } as React.CSSProperties}
       >
         <div key={flash} className="light-flash" aria-hidden="true" />
+        <div className="light-night-veil" aria-hidden="true" />
+        {charges.map((charge) => (
+          <span
+            key={charge.id}
+            className={`light-charge light-charge--${charge.mode}`}
+            aria-hidden="true"
+            style={{
+              left: `${charge.x * 100}%`,
+              top: `${charge.y * 100}%`,
+              width: 24 + charge.pct * 60,
+              height: 24 + charge.pct * 60,
+              opacity: 0.25 + charge.pct * 0.55,
+            }}
+          />
+        ))}
         <div className="light-lattice" aria-hidden="true">
           {lattice.map((fret) => {
             const near = nearX != null && Math.abs(nearX - fret.x) < 0.03;
@@ -566,9 +733,6 @@ export default function LightInstrument() {
           <button type="button" onClick={replayMarks} disabled={isReplaying || isListening}>
             {isReplaying ? "replaying" : "replay"}
           </button>
-          <button type="button" onClick={clearMarks} disabled={marks.length === 0}>
-            clear
-          </button>
           <button type="button" onClick={cycleScale}>{SCALE_LABELS[scaleMode]}</button>
           <button
             type="button"
@@ -588,6 +752,8 @@ export default function LightInstrument() {
             : "the frets bloom where the scale lives · listen, then join with your hands"}
         </p>
       </footer>
+
+      <LetGo label="let the light go" onLetGo={clearMarks} visible={marks.length > 0} />
 
       <style
         dangerouslySetInnerHTML={{
@@ -623,12 +789,46 @@ export default function LightInstrument() {
           background:
             linear-gradient(180deg, rgba(255,255,255,0.10), transparent 16%, rgba(0,0,0,0.42) 100%),
             linear-gradient(90deg, #8e2318 0%, #d83a2e 10.2%, #f08a28 30.4%, #f5d65b 39.1%, #4fca75 51.1%, #45b8e8 64.1%, #5574f7 75.1%, #9a63ee 90.6%, #7a43d8 100%);
+          background-size: 100% 100%, calc(100% * var(--light-zoom, 1)) 100%;
+          background-position: 0 0, calc(50% - var(--light-pan, 0) * 100%) 0;
           box-shadow: inset 0 0 140px rgba(0,0,0,0.55);
           isolation: isolate;
           transition: filter 500ms ease;
+          filter: hue-rotate(var(--light-season, 0deg));
         }
         .light-sub .light-plate {
-          filter: brightness(0.62) saturate(1.35);
+          filter: hue-rotate(var(--light-season, 0deg)) brightness(0.62) saturate(1.35);
+        }
+        .light-night-veil {
+          position: absolute;
+          inset: 0;
+          background: #020302;
+          opacity: var(--light-night, 0);
+          transition: opacity 900ms ease;
+          pointer-events: none;
+          z-index: 1;
+        }
+        .light-charge {
+          position: absolute;
+          margin-left: -30px;
+          margin-top: -30px;
+          border-radius: 50%;
+          border: 1.5px solid rgba(255, 230, 190, 0.9);
+          pointer-events: none;
+          z-index: 6;
+        }
+        .light-charge--delete {
+          border-color: rgba(255, 120, 100, 0.9);
+        }
+        @keyframes lightGlimmerBeam {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 1.6; filter: brightness(1.5); }
+        }
+        .light-plate.is-glimmering .light-beam {
+          animation: lightGlimmerBeam 1.6s ease;
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .light-plate.is-glimmering .light-beam { animation: none; }
         }
         .light-plate:before {
           content: "";
@@ -692,7 +892,7 @@ export default function LightInstrument() {
           opacity: 0;
           pointer-events: none;
           z-index: 7;
-          animation: lightFlash 520ms ease-out;
+          animation: lightFlash calc(520ms * var(--light-time-scale, 1)) ease-out;
         }
         @keyframes lightFlash {
           0% { opacity: 0.85; }
@@ -744,7 +944,7 @@ export default function LightInstrument() {
           opacity: 0.82;
           z-index: 5;
           pointer-events: none;
-          animation: lightPulse 1600ms ease-out forwards;
+          animation: lightPulse calc(1600ms * var(--light-time-scale, 1)) ease-out forwards;
         }
         .light-mark:before,
         .light-mark:after {
@@ -785,7 +985,7 @@ export default function LightInstrument() {
         .light-finger.is-ghost {
           border-style: dashed;
           opacity: 0.78;
-          animation: lightGhost 900ms ease-in-out infinite;
+          animation: lightGhost calc(900ms * var(--light-time-scale, 1)) ease-in-out infinite;
         }
         @keyframes lightGhost {
           0%, 100% { transform: translate(-50%, -50%) scale(0.96); opacity: 0.62; }

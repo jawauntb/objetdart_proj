@@ -983,8 +983,7 @@ export default function Atlas() {
     // map like tutti, and face-down is night — the overlay dims until
     // the phone turns back over. Tilt has no honest gravity on a map
     // seen from directly above, so it is left unbound.
-    let nightAlpha = 0;
-    let knockTimer: ReturnType<typeof setTimeout> | null = null;
+    let nightTarget = 0;
     const detachVessel = onVessel({
       shake: () => {
         spawnGust();
@@ -995,9 +994,8 @@ export default function Atlas() {
         setPulse({ x: (metricsRef.current.width || 0) / 2, y: (metricsRef.current.height || 0) / 2, key: Date.now(), intensity: 0.5 });
         try { getFieldAudio().bell(); } catch { /* noop */ }
         try { haptics.tap(); } catch { /* noop */ }
-        if (knockTimer) clearTimeout(knockTimer);
       },
-      flip: ({ faceDown }) => { nightAlpha = faceDown ? 1 : 0; },
+      flip: ({ faceDown }) => { nightTarget = faceDown ? 1 : 0; },
     });
 
     // ── render loop ───────────────────────────────────────────────
@@ -1006,6 +1004,8 @@ export default function Atlas() {
     let raf = 0;
     let prevNow = t0;
     let lastSaveAt = t0;
+    let nightEase = 0;
+    let simTime = 0;
 
     // Performance contract: sleep the heavy per-frame work while the tab
     // is hidden (the rAF loop itself keeps ticking cheaply so it wakes
@@ -1044,7 +1044,11 @@ export default function Atlas() {
       const h = rect.height;
       const dtSec = Math.min(0.1, (now - prevNow) / 1000);
       prevNow = now;
-      const t = (now - t0) / 1000;
+      // three-finger hold dilates time: this sim clock (not the wall
+      // clock) drives every periodic wobble below, so a held dilation
+      // genuinely slows the sky and the naturals, continuously.
+      simTime += dtSec * timeScale;
+      const t = simTime;
 
       // Parallax breath — a very slow lung-scale (1..1.008) on the map
       // image. Applied via a CSS custom property so we do NOT touch
@@ -1058,8 +1062,10 @@ export default function Atlas() {
       ctx.clearRect(0, 0, w, h);
 
       // ── ambient cloud shadows (always drifting) ─────────────────
+      // three-finger hold dilates time: the drift (and, below, the
+      // naturals' own idle wobble via `t`) slows continuously while held.
       for (const c of clouds) {
-        c.x += c.vx * dtSec;
+        c.x += c.vx * dtSec * timeScale;
         if (c.x > 1.3) c.x = -0.3;
         const cx = c.x * w;
         const cy = c.y * h;
@@ -1106,6 +1112,13 @@ export default function Atlas() {
         persistNaturals();
       }
 
+      // flip face-down — night, until the phone turns back over
+      nightEase += (nightTarget - nightEase) * 0.05;
+      if (nightEase > 0.002) {
+        ctx.fillStyle = `rgba(4, 8, 14, ${nightEase * 0.6})`;
+        ctx.fillRect(0, 0, w, h);
+      }
+
       raf = requestAnimationFrame(draw);
     };
     raf = requestAnimationFrame(draw);
@@ -1113,6 +1126,9 @@ export default function Atlas() {
     return () => {
       cancelAnimationFrame(raf);
       offVisibility();
+      detachGrammar();
+      detachVessel();
+      if (lensTimer) clearTimeout(lensTimer);
       if (weatherTimer) clearTimeout(weatherTimer);
       persistNaturals();
       ro.disconnect();

@@ -15,48 +15,13 @@
 // regex.
 
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import * as ts from "typescript";
+import { loadTsModule, rootUrl } from "./lib/load-ts.mjs";
 
-const rootUrl = new URL("../", import.meta.url);
 const read = (p) => readFileSync(new URL(p, rootUrl), "utf8");
 const there = (p) => existsSync(new URL(p, rootUrl));
 
-function loadTsModule(path, requireMap = {}) {
-  const filename = fileURLToPath(new URL(path, rootUrl));
-  const code = ts.transpileModule(readFileSync(filename, "utf8"), {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2020,
-      esModuleInterop: true,
-    },
-    fileName: filename,
-  }).outputText;
-  const module = { exports: {} };
-  const requireShim = (id) => {
-    if (id in requireMap) return requireMap[id];
-    throw new Error(`Unexpected require(${id}) while loading ${path}`);
-  };
-  // Own realm, not vm.runInNewContext — cross-realm prototypes break
-  // assert.deepStrictEqual, as the other scripts here learned the hard way.
-  new Function("module", "exports", "require", code)(module, module.exports, requireShim);
-  return module.exports;
-}
-
-const scaleModule = loadTsModule("src/lib/scale.ts");
-const peersModule = loadTsModule("src/lib/peers.ts");
-const navOrderModule = loadTsModule("src/lib/nav-order.ts", {
-  "@/lib/scale": scaleModule,
-  "@/lib/peers": peersModule,
-});
-const registryModule = loadTsModule("src/lib/room-registry.ts", {
-  "@/lib/scale": scaleModule,
-  "@/lib/peers": peersModule,
-});
-const routesModule = loadTsModule("src/lib/routes.ts", {
-  "@/lib/nav-order": navOrderModule,
-  "@/lib/room-registry": registryModule,
-});
+const registryModule = loadTsModule("src/lib/room-registry.ts");
+const routesModule = loadTsModule("src/lib/routes.ts");
 
 const {
   ROOM_REGISTRY,
