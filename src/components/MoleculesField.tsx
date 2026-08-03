@@ -11,18 +11,31 @@
  * Tap gives a thermal kick, a drag runs a solvent current, dwell on open
  * field condenses a new molecule bond by bond (haptics.bloom() as the last
  * bond closes), and the ceremony held where two molecules are near is a
- * REACTION: they dock and become one deterministic product — the product
- * seed is the order-independent hash of both reactant seeds, so the pair
- * always meets the same fate. Three fingers run convection or dilate time,
- * a scrub stirs a vortex, a twist rotates the lens to the structural
- * formula (hairline bonds, heteroatom letters — notation, the one lettered
+ * REACTION — real where reality has one: when the curated set holds an
+ * equation for the pair and the neighborhood truly holds the counts
+ * (src/lib/stoichiometry.ts), the equation fires with its true
+ * stoichiometry — 2 H₂ near 1 O₂ genuinely yields two waters — releasing
+ * an energy shiver when exothermic and visibly DRAWING light inward for
+ * the one endothermic equation (N₂+O₂, lightning's work). Where no
+ * equation exists (or the counts fall short) the old deterministic-product
+ * fallback answers, order-independent as ever. Each compound also keeps
+ * one behavioral tell from its felt property: CO₂ warms the field faintly,
+ * flammables shiver near heat, the inert airs drift serene, and water
+ * finds water — the hydrogen bond as a slow lean. Reactable neighbors get
+ * a bond-hint: a faint dashed arc breathing between them after a beat,
+ * never text. Bond orders draw honestly (single/double/triple strands,
+ * N≡N's three). Three fingers run convection or dilate time, a scrub
+ * stirs a vortex, a twist rotates the lens to the structural formula
+ * (hairline bonds, real skeletal letters — notation, the one lettered
  * surface). Rhythm entrains the vibration modes; a flick sends a molecule
- * tumbling with a doppler note. The field persists in
- * `objetdart:molecules:v1`. Pinch is deliberately unbound — ScaleTravel
- * owns it, so pinching travels the manifold (cells above, atoms below).
+ * tumbling with a doppler note, the light ones flying farther than the
+ * heavy. The field persists in `objetdart:molecules:v1`; a quiet control
+ * at the bottom lets the solution clear. Pinch is deliberately unbound —
+ * ScaleTravel owns it, so pinching travels the manifold (cells above,
+ * atoms below).
  */
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
@@ -31,12 +44,17 @@ import { useField } from "@/store/field";
 import {
   MAX_MOLECULES,
   MOLECULE_FAMILIES,
+  REACTIONS,
+  compoundByKey,
+  compoundFromSeed,
   hashSeed,
+  molecularWeight,
   moleculeFromSeed,
   reactionProductSeed,
   settlePopulation,
   type MoleculeMorph,
 } from "@/lib/chemistry";
+import { reactionForPair, resolveReaction } from "@/lib/stoichiometry";
 
 const STORE_KEY = "objetdart:molecules:v1";
 const MOTE_COUNT = 80;
@@ -60,6 +78,8 @@ type Mol = {
   spin: number;
   /** Thermal excitement from taps, 0..~2, decays. */
   heat: number;
+  /** Kick response ∝ 1/√(molecular weight) — the light fly, the heavy sit. */
+  massK: number;
   birth: number;
   retiringAt: number;
   pushX: number;
@@ -72,6 +92,8 @@ type Mol = {
 
 type Mote = { x: number; y: number; vx: number; vy: number };
 type Wavefront = { x: number; y: number; born: number; maxR: number; strength: number };
+type Indraw = { x: number; y: number; born: number; maxR: number };
+type Hint = { aId: string; bId: string; since: number; alpha: number };
 type Stir = { x: number; y: number; dx: number; dy: number; strength: number; born: number };
 type Vortex = { x: number; y: number; omega: number; born: number };
 type Speck = { x: number; y: number; vx: number; vy: number; born: number; life: number; r: number; color: string };
@@ -103,6 +125,10 @@ function mixHex(a: string, b: string, t: number) {
 
 function makeMol(seed: number, nx: number, ny: number, built: number): Mol {
   const morph = moleculeFromSeed(seed);
+  const compound = compoundByKey(morph.compound);
+  const massK = compound
+    ? clamp(4.5 / Math.sqrt(Math.max(1, molecularWeight(compound))), 0.45, 1.5)
+    : 1;
   return {
     id: `mo-${seed.toString(36)}`,
     seed,
@@ -115,6 +141,7 @@ function makeMol(seed: number, nx: number, ny: number, built: number): Mol {
     rot: (hashSeed(seed, 53) / 4294967296) * Math.PI * 2,
     spin: 0,
     heat: 0,
+    massK,
     birth: performance.now(),
     retiringAt: 0,
     pushX: 0,
@@ -157,6 +184,9 @@ function midiOf(morph: MoleculeMorph): number {
 export default function MoleculesField() {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  // §8c — the quiet clear: visible only when molecules stand; wired by the effect
+  const [hasMols, setHasMols] = useState(false);
+  const clearRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -170,10 +200,14 @@ export default function MoleculesField() {
     let seedCount = 0;
     const motes: Mote[] = [];
     const wavefronts: Wavefront[] = [];
+    const indraws: Indraw[] = []; // the endothermic equation drawing light in
     const stirs: Stir[] = [];
     const vortices: Vortex[] = [];
     const specks: Speck[] = [];
     const pendingNotes: PendingNote[] = [];
+    const hints = new Map<string, Hint>(); // bond-hints between reactable neighbors
+    const reactPairCache = new Map<string, boolean>();
+    let greenhouseGlow = 0; // CO₂'s tell: the field warms faintly
     let width = 0;
     let height = 0;
     let rectLeft = 0;
@@ -230,6 +264,7 @@ export default function MoleculesField() {
     // ————— persistence —————
     const save = (force = false) => {
       const now = performance.now();
+      setHasMols(mols.some((m) => !m.retiringAt));
       if (!force && now - lastSaveAt < 800) { dirty = true; return; }
       lastSaveAt = now;
       dirty = false;
@@ -259,6 +294,7 @@ export default function MoleculesField() {
       seedCount = mols.length;
       save(true);
     }
+    setHasMols(mols.length > 0);
 
     // ————— helpers —————
     const audio = () => getFieldAudio();
@@ -382,8 +418,144 @@ export default function MoleculesField() {
       }
     };
 
+    /**
+     * A deterministic seed whose compound IS `key`: walk the pair's hash
+     * chain until compoundFromSeed lands on it. Pure — the same reactants
+     * always beget the same individuals.
+     */
+    const seedForCompound = (sa: number, sb: number, key: string, idx: number): number | null => {
+      for (let k = 0; k < 40000; k++) {
+        const s = hashSeed(Math.min(sa, sb), Math.max(sa, sb), 0xc0de + idx, k);
+        if (compoundFromSeed(s).key === key) return s;
+      }
+      return null;
+    };
+
+    // exothermic: a small energy shiver — motes, a warm ring, a bell
+    const exothermicShiver = (x: number, y: number, energy: number) => {
+      const s = clamp01(energy / 1200);
+      wavefronts.push({
+        x, y,
+        born: performance.now(),
+        maxR: Math.min(width, height) * (0.16 + s * 0.22),
+        strength: 0.5 + s * 0.5,
+      });
+      if (wavefronts.length > 8) wavefronts.shift();
+      burst(x, y, ["#F2C56B", "#E7AC52", "#F2EEE6"], 14 + Math.round(s * 18), 50 + s * 40);
+      for (const m of mols) {
+        if (m.retiringAt) continue;
+        const d = Math.hypot(m.sx - x, m.sy - y);
+        if (d < Math.min(width, height) * 0.4) m.heat = Math.min(2, m.heat + 0.3 + s * 0.5);
+      }
+      try { audio().bell(); } catch { /* noop */ }
+      if (s > 0.5) { try { audio().spark(); } catch { /* noop */ } }
+      note(52 + Math.round(s * 10), 300);
+    };
+
+    // endothermic (N₂+O₂, lightning's work): the reaction DRAWS light
+    // inward — specks converge, a ring closes, the field cools
+    const endothermicDraw = (x: number, y: number) => {
+      indraws.push({ x, y, born: performance.now(), maxR: Math.min(width, height) * 0.2 });
+      if (indraws.length > 3) indraws.shift();
+      if (!reduce) {
+        const r0 = Math.min(width, height) * 0.2;
+        for (let i = 0; i < 16; i++) {
+          const ang = (i / 16) * Math.PI * 2 + twinkleHash(i + 19) * 0.4;
+          specks.push({
+            x: x + Math.cos(ang) * r0,
+            y: y + Math.sin(ang) * r0,
+            vx: -Math.cos(ang) * (r0 / 0.8),
+            vy: -Math.sin(ang) * (r0 / 0.8),
+            born: performance.now(),
+            life: 800,
+            r: 0.9,
+            color: i % 3 === 0 ? "#6997A4" : "#DDD3BE",
+          });
+        }
+      }
+      for (const m of mols) m.heat *= 0.55; // the solution cools around the work
+      try { audio().thud(); } catch { /* noop */ }
+      note(30, 480);
+    };
+
     const react = (a: Mol, b: Mol) => {
       if (!a.closed || !b.closed || a.retiringAt || b.retiringAt) return;
+      const mx = (a.sx + b.sx) / 2;
+      const my = (a.sy + b.sy) / 2;
+      // census the neighborhood: who stands near enough to take part
+      const reach = Math.min(width, height) * 0.34;
+      const nearby = mols.filter(
+        (m) => !m.retiringAt && m.closed && Math.hypot(m.sx - mx, m.sy - my) < reach,
+      );
+      const census: Record<string, number> = {};
+      for (const m of nearby) census[m.morph.compound] = (census[m.morph.compound] ?? 0) + 1;
+      const resolution = resolveReaction(REACTIONS, a.morph.compound, b.morph.compound, census);
+      if (resolution) {
+        // pick the consumed individuals: the ceremony pair first, then the
+        // nearest of each remaining species the equation demands
+        const need = new Map(resolution.consumed.map((t) => [t.key, t.n]));
+        const chosen: Mol[] = [];
+        const take = (m: Mol) => {
+          const n = need.get(m.morph.compound) ?? 0;
+          if (n <= 0) return;
+          need.set(m.morph.compound, n - 1);
+          chosen.push(m);
+        };
+        take(a);
+        take(b);
+        const rest = nearby
+          .filter((m) => m !== a && m !== b)
+          .sort((p, q) => Math.hypot(p.sx - mx, p.sy - my) - Math.hypot(q.sx - mx, q.sy - my));
+        for (const m of rest) take(m);
+        let unmet = false;
+        for (const n of need.values()) if (n > 0) unmet = true;
+        // every product must decode to its real compound; if the chain ever
+        // failed (it should not), the fallback law answers instead
+        const productSeeds: Array<{ seed: number; key: string }> = [];
+        if (!unmet) {
+          let pi = 0;
+          for (const t of resolution.produced) {
+            for (let n = 0; n < t.n && pi >= 0; n++) {
+              const s = seedForCompound(a.seed, b.seed, t.key, pi);
+              if (s == null) { pi = -1; break; }
+              productSeeds.push({ seed: s, key: t.key });
+              pi += 1;
+            }
+            if (pi < 0) break;
+          }
+          if (pi >= 0 && productSeeds.length > 0) {
+            // the equation fires: consume the true counts, condense the
+            // true products with their real stoichiometry
+            const now = performance.now();
+            for (const m of chosen) {
+              m.retiringAt = now;
+              const d = Math.max(1, Math.hypot(mx - m.sx, my - m.sy));
+              m.pushX += ((mx - m.sx) / d) * 26; // the consumed lean into the work
+              m.pushY += ((my - m.sy) / d) * 26;
+            }
+            const spreadPhase = (hashSeed(a.seed, b.seed, 7) / 4294967296) * Math.PI * 2;
+            productSeeds.forEach((ps, i) => {
+              const ang = spreadPhase + (i / Math.max(1, productSeeds.length)) * Math.PI * 2;
+              const rad = productSeeds.length > 1 ? (a.sr + b.sr) * 0.45 : 0;
+              const nx = clamp01((mx + Math.cos(ang) * rad) / Math.max(1, width));
+              const ny = clamp((my + Math.sin(ang) * rad) / Math.max(1, height), 0.08, 0.95);
+              const p = makeMol(ps.seed, nx, ny, Math.max(1, Math.floor(moleculeFromSeed(ps.seed).bonds.length * 0.55)));
+              p.closed = false;
+              p.heat = resolution.energy > 0 ? 1.4 : 0.2;
+              mols.push(p);
+            });
+            retireOldest();
+            if (resolution.energy > 0) exothermicShiver(mx, my, resolution.energy);
+            else endothermicDraw(mx, my);
+            try { haptics.bloom(); } catch { /* noop */ }
+            useField.getState().recordTape("sigil", 0.85, "molecules/reaction");
+            save();
+            return;
+          }
+        }
+      }
+      // no curated equation, or the counts fall short: the old law answers —
+      // the pair's deterministic product, order-independent as ever
       const seed = reactionProductSeed(a.seed, b.seed);
       const nx = (a.nx + b.nx) / 2;
       const ny = (a.ny + b.ny) / 2;
@@ -415,8 +587,9 @@ export default function MoleculesField() {
           const k = 1 - d / (maxR * 1.4);
           m.heat = Math.min(2, m.heat + (0.4 + intensity) * k);
           if (d > 1) {
-            m.pushX += ((m.sx - x) / d) * k * 30 * (0.5 + intensity);
-            m.pushY += ((m.sy - y) / d) * k * 30 * (0.5 + intensity);
+            // the light fly farther than the heavy — molecular weight, felt
+            m.pushX += ((m.sx - x) / d) * k * 30 * (0.5 + intensity) * m.massK;
+            m.pushY += ((m.sy - y) / d) * k * 30 * (0.5 + intensity) * m.massK;
           }
         }
       }
@@ -428,6 +601,23 @@ export default function MoleculesField() {
     const markLens = (raised: boolean) => {
       if (raised) wrap.dataset.lensRaised = "1";
       else delete wrap.dataset.lensRaised;
+    };
+
+    // §8c — let the solution clear: everything dissolves, the beaker forgets
+    clearRef.current = () => {
+      const now = performance.now();
+      for (const m of mols) {
+        if (m.retiringAt) continue;
+        m.retiringAt = now;
+        if (!reduce && m.sr > 0) {
+          burst(m.sx, m.sy, [MOLECULE_FAMILIES[m.morph.family][3], "#CFC2A6"], 4, 16);
+        }
+      }
+      hints.clear();
+      try { window.localStorage.setItem(STORE_KEY, JSON.stringify({ molecules: [] })); } catch { /* noop */ }
+      setHasMols(false);
+      try { audio().thud(); } catch { /* noop */ }
+      try { haptics.roll(); } catch { /* noop */ }
     };
 
     // three-finger tap = tutti (grammar §5): one synchronized soft pulse —
@@ -594,9 +784,10 @@ export default function MoleculesField() {
         const m = molAt(x, y) ?? mols.find((q) => !q.retiringAt) ?? null;
         if (m) {
           const speed = clamp(e.speed, 0.6, 2.4);
-          m.pushX += Math.cos(e.angle) * 130 * speed;
-          m.pushY += Math.sin(e.angle) * 130 * speed;
-          m.spin += (e.angle > 0 ? 1 : -1) * speed * 4;
+          // weight is honest here too: hydrogen leaps, benzene lumbers
+          m.pushX += Math.cos(e.angle) * 130 * speed * m.massK;
+          m.pushY += Math.sin(e.angle) * 130 * speed * m.massK;
+          m.spin += (e.angle > 0 ? 1 : -1) * speed * 4 * m.massK;
           m.heat = Math.min(2, m.heat + 0.5);
           note(midiOf(m.morph) + 7, 100);
           noteLater(190, midiOf(m.morph) - 2, 200);
@@ -821,10 +1012,12 @@ export default function MoleculesField() {
 
       // — felt pass: warm orbs and glowing bonds under candlelight —
       if (feltAlpha > 0.02) {
-        // heat shows as a faint shimmer envelope
-        if (m.heat > 0.15) {
+        // heat shows as a faint shimmer envelope — and a greenhouse molecule
+        // carries a permanent quiet warmth of its own (CO₂'s tell)
+        const haloK = Math.max(Math.min(1, m.heat), morph.felt === "greenhouse" ? 0.4 : 0);
+        if (haloK > 0.15) {
           const hg = ctx.createRadialGradient(0, 0, R * 0.1, 0, 0, R * 1.5);
-          hg.addColorStop(0, colorAlpha(fam[4], 0.05 * Math.min(1, m.heat) * feltAlpha));
+          hg.addColorStop(0, colorAlpha(fam[4], 0.05 * haloK * feltAlpha));
           hg.addColorStop(1, "rgba(0,0,0,0)");
           ctx.fillStyle = hg;
           ctx.fillRect(-R * 1.6, -R * 1.6, R * 3.2, R * 3.2);
@@ -833,25 +1026,36 @@ export default function MoleculesField() {
         for (let i = 0; i < morph.bonds.length; i++) {
           if (i >= m.built) break;
           const b = morph.bonds[i];
+          const ax = pts[b.a].x;
+          const ay = pts[b.a].y;
           let bx = pts[b.b].x;
           let by = pts[b.b].y;
           if (i === builtBonds && partial > 0 && partial < 1) {
             // the bond still finding its way across
-            bx = pts[b.a].x + (pts[b.b].x - pts[b.a].x) * partial;
-            by = pts[b.a].y + (pts[b.b].y - pts[b.a].y) * partial;
+            bx = ax + (pts[b.b].x - ax) * partial;
+            by = ay + (pts[b.b].y - ay) * partial;
           }
+          // bond order drawn honestly: one, two, or three parallel strands
+          // (O=O's pair, N≡N's three) — the multiplicity is the material
+          const blen = Math.max(1e-6, Math.hypot(bx - ax, by - ay));
+          const pxv = -(by - ay) / blen;
+          const pyv = (bx - ax) / blen;
+          const gap = R * 0.055;
+          const offs = b.order === 1 ? [0] : b.order === 2 ? [-1, 1] : [-1.7, 0, 1.7];
           ctx.strokeStyle = colorAlpha(fam[3], 0.55 * feltAlpha);
-          ctx.lineWidth = Math.max(1.1, R * (b.order === 2 ? 0.085 : 0.05));
+          ctx.lineWidth = Math.max(1, R * (b.order === 1 ? 0.05 : 0.036));
           ctx.beginPath();
-          ctx.moveTo(pts[b.a].x, pts[b.a].y);
-          ctx.lineTo(bx, by);
+          for (const o of offs) {
+            ctx.moveTo(ax + pxv * o * gap, ay + pyv * o * gap);
+            ctx.lineTo(bx + pxv * o * gap, by + pyv * o * gap);
+          }
           ctx.stroke();
-          if (b.order === 2) {
-            // the second line of a double bond, a bright inner filament
+          if (b.order >= 2) {
+            // multiplicity gleams: a bright filament down the middle
             ctx.strokeStyle = colorAlpha(fam[5], 0.4 * feltAlpha);
             ctx.lineWidth = Math.max(0.6, R * 0.02);
             ctx.beginPath();
-            ctx.moveTo(pts[b.a].x, pts[b.a].y);
+            ctx.moveTo(ax, ay);
             ctx.lineTo(bx, by);
             ctx.stroke();
           }
@@ -895,19 +1099,14 @@ export default function MoleculesField() {
           const oy = (dx / len) * R * 0.045;
           ctx.strokeStyle = colorAlpha(ink, 0.8 * lensAlpha);
           ctx.lineWidth = 0.8;
-          if (b.order === 2) {
-            ctx.beginPath();
-            ctx.moveTo(ax + ox, ay + oy);
-            ctx.lineTo(bx + ox, by + oy);
-            ctx.moveTo(ax - ox, ay - oy);
-            ctx.lineTo(bx - ox, by - oy);
-            ctx.stroke();
-          } else {
-            ctx.beginPath();
-            ctx.moveTo(ax, ay);
-            ctx.lineTo(bx, by);
-            ctx.stroke();
+          // the notation draws the true count of lines: N≡N earns three
+          const offs2 = b.order === 1 ? [0] : b.order === 2 ? [-1, 1] : [-1.5, 0, 1.5];
+          ctx.beginPath();
+          for (const o of offs2) {
+            ctx.moveTo(ax + ox * o, ay + oy * o);
+            ctx.lineTo(bx + ox * o, by + oy * o);
           }
+          ctx.stroke();
         }
         // heteroatom letters at their vertices — the one lettered surface of
         // this band, and it is notation, not instruction
@@ -972,6 +1171,69 @@ export default function MoleculesField() {
       const bt = audioT != null ? audioT : now / 1000;
       const breath = bt * Math.PI * 2 * 0.14;
 
+      // the felt tells: one behavioral word per compound, subtle — CO₂
+      // warms the field, flammables shiver near heat, the inert airs stay
+      // serene, and water finds water (the anomaly as a slow lean)
+      const tellMols = mols.filter((m) => !m.retiringAt && m.closed && m.sr > 0);
+      let greenhouseCount = 0;
+      for (const m of tellMols) if (m.morph.felt === "greenhouse") greenhouseCount += 1;
+      greenhouseGlow += (Math.min(0.05, greenhouseCount * 0.012) - greenhouseGlow) * Math.min(1, dt * 0.8);
+      for (let i = 0; i < tellMols.length; i++) {
+        const m = tellMols[i];
+        for (let j = i + 1; j < tellMols.length; j++) {
+          const o = tellMols[j];
+          const d = Math.hypot(o.sx - m.sx, o.sy - m.sy);
+          if (d < 1 || d > (m.sr + o.sr) * 2.4) continue;
+          // flammables catch the shiver from hot neighbors
+          if (m.morph.felt === "flammable" && o.heat > 0.9) m.heat = Math.min(2, m.heat + dt * 0.55);
+          if (o.morph.felt === "flammable" && m.heat > 0.9) o.heat = Math.min(2, o.heat + dt * 0.55);
+          // a greenhouse molecule warms whoever drifts past, faintly
+          if (m.morph.felt === "greenhouse") o.heat = Math.min(2, o.heat + dt * 0.06);
+          if (o.morph.felt === "greenhouse") m.heat = Math.min(2, m.heat + dt * 0.06);
+          // water finds water: the hydrogen bond as a quiet mutual lean
+          if (m.morph.felt === "anomalous" && o.morph.felt === "anomalous" && !reduce) {
+            const k = 30 * dt;
+            m.pushX += ((o.sx - m.sx) / d) * k;
+            m.pushY += ((o.sy - m.sy) / d) * k;
+            o.pushX += ((m.sx - o.sx) / d) * k;
+            o.pushY += ((m.sy - o.sy) / d) * k;
+          }
+        }
+      }
+
+      // the bond-hint: reactable neighbors get a dashed arc after a beat —
+      // the room proposing the ceremony, never text
+      const reactable = (ka: string, kb: string): boolean => {
+        const ck = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+        let v = reactPairCache.get(ck);
+        if (v === undefined) {
+          v = reactionForPair(REACTIONS, ka, kb) != null;
+          reactPairCache.set(ck, v);
+        }
+        return v;
+      };
+      const hintSeen = new Set<string>();
+      for (let i = 0; i < tellMols.length; i++) {
+        const m = tellMols[i];
+        for (let j = i + 1; j < tellMols.length; j++) {
+          const o = tellMols[j];
+          const d = Math.hypot(o.sx - m.sx, o.sy - m.sy);
+          if (d > (m.sr + o.sr) * 2.2 || d < (m.sr + o.sr) * 0.6) continue;
+          if (!reactable(m.morph.compound, o.morph.compound)) continue;
+          const key = m.id < o.id ? `${m.id}|${o.id}` : `${o.id}|${m.id}`;
+          hintSeen.add(key);
+          if (!hints.has(key)) hints.set(key, { aId: m.id, bId: o.id, since: now, alpha: 0 });
+        }
+      }
+      for (const [key, h] of hints) {
+        if (!hintSeen.has(key)) {
+          h.alpha = Math.max(0, h.alpha - dt * 1.8); // fades as they part
+          if (h.alpha <= 0) hints.delete(key);
+        } else if (now - h.since > 900) {
+          h.alpha = Math.min(1, h.alpha + dt * 1.2); // glimmers after a beat
+        }
+      }
+
       // molecules: assembly, tumble, decay of pushes/heat/charge, retirement
       for (let i = mols.length - 1; i >= 0; i--) {
         const m = mols[i];
@@ -979,6 +1241,11 @@ export default function MoleculesField() {
         if (!m.closed) buildMol(m, dt * 0.9); // a condensing molecule finishes on its own
         m.heat *= Math.exp(-dt * 0.7);
         m.spin *= Math.exp(-dt * 1.1);
+        if (m.morph.felt === "inert") {
+          // the still airs: agitation sheds faster, the tumble steadies
+          m.heat *= Math.exp(-dt * 1.1);
+          m.spin *= Math.exp(-dt * 0.8);
+        }
         if (!hold.molId || hold.molId !== m.id) {
           if (kbMolId !== m.id && hold.partnerId !== m.id) m.charge = Math.max(0, m.charge - dt * 1.6);
         }
@@ -1018,7 +1285,8 @@ export default function MoleculesField() {
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, width, height);
       // the candle beneath the bench: a breathing warm pool of light
-      const glowPulse = reduce ? 0.08 : 0.07 + Math.sin(breath) * 0.025;
+      // greenhouseGlow is CO₂'s tell — the candle pool warms with the census
+      const glowPulse = (reduce ? 0.08 : 0.07 + Math.sin(breath) * 0.025) + greenhouseGlow;
       const glow = ctx.createRadialGradient(width * 0.5, height * 0.44, 10, width * 0.5, height * 0.44, Math.max(width, height) * 0.72);
       glow.addColorStop(0, `rgba(231, 172, 82, ${glowPulse + lens * 0.05})`);
       glow.addColorStop(0.55, "rgba(200, 115, 42, 0.04)");
@@ -1097,6 +1365,35 @@ export default function MoleculesField() {
       for (let i = stirs.length - 1; i >= 0; i--) if (now - stirs[i].born > 1800) stirs.splice(i, 1);
       for (let i = vortices.length - 1; i >= 0; i--) if (now - vortices[i].born > 3000) vortices.splice(i, 1);
 
+      // bond-hint glimmer — a faint dashed arc breathing between the pair
+      for (const h of hints.values()) {
+        if (h.alpha <= 0.02) continue;
+        const pa = mols.find((q) => q.id === h.aId);
+        const pb = mols.find((q) => q.id === h.bId);
+        if (!pa || !pb || pa.retiringAt || pb.retiringAt || pa.sr <= 0 || pb.sr <= 0) continue;
+        const dx = pb.sx - pa.sx;
+        const dy = pb.sy - pa.sy;
+        const d = Math.max(1, Math.hypot(dx, dy));
+        const ux = dx / d;
+        const uy = dy / d;
+        const x1 = pa.sx + ux * pa.sr * 0.9;
+        const y1 = pa.sy + uy * pa.sr * 0.9;
+        const x2 = pb.sx - ux * pb.sr * 0.9;
+        const y2 = pb.sy - uy * pb.sr * 0.9;
+        const bow = d * 0.16;
+        const bx2 = (x1 + x2) / 2 - uy * bow;
+        const by2 = (y1 + y2) / 2 + ux * bow;
+        const breathe = reduce ? 0.75 : 0.6 + 0.4 * Math.sin(now / 700 + (h.since % 1000));
+        ctx.setLineDash([3, 6]);
+        ctx.strokeStyle = colorAlpha("#E7AC52", 0.2 * h.alpha * breathe);
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.quadraticCurveTo(bx2, by2, x2, y2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
       // molecules, painter's order by size (small behind, large in front)
       const sorted = [...mols].sort((a, b) => a.morph.radius - b.morph.radius);
       for (const m of sorted) drawMol(m, localT, breath);
@@ -1122,6 +1419,26 @@ export default function MoleculesField() {
         ctx.lineWidth = 1.4 * (1 - age) + 0.4;
         ctx.beginPath();
         ctx.arc(w.x, w.y, w.maxR * age, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      // indraws — the endothermic equation pulling light toward itself:
+      // a cool ring closes on the point and the field dims around it
+      // (under reduced motion the ring stands still and simply fades)
+      for (let i = indraws.length - 1; i >= 0; i--) {
+        const w = indraws[i];
+        const age = (now - w.born) / 1100;
+        if (age >= 1) { indraws.splice(i, 1); continue; }
+        const ig = ctx.createRadialGradient(w.x, w.y, 2, w.x, w.y, w.maxR * 1.4);
+        ig.addColorStop(0, `rgba(4, 3, 5, ${0.3 * (1 - age)})`);
+        ig.addColorStop(1, "rgba(0,0,0,0)");
+        ctx.fillStyle = ig;
+        ctx.fillRect(w.x - w.maxR * 1.4, w.y - w.maxR * 1.4, w.maxR * 2.8, w.maxR * 2.8);
+        const rr = reduce ? w.maxR * 0.55 : w.maxR * (1 - age);
+        ctx.strokeStyle = colorAlpha("#6997A4", 0.3 * (1 - Math.abs(age * 2 - 1)));
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.arc(w.x, w.y, Math.max(2, rr), 0, Math.PI * 2);
         ctx.stroke();
       }
 
@@ -1201,10 +1518,20 @@ export default function MoleculesField() {
         className="molecules-field"
         role="application"
         tabIndex={0}
-        aria-label="a solvent kept dark and warm — rest a finger and a molecule assembles bond by bond; hold where two drift near and they become one; arrows walk, enter kindles and, held beside a neighbor, reacts"
+        aria-label="a solvent kept dark and warm — rest a finger and a molecule assembles bond by bond; hold where two drift near and they react, with real stoichiometry when the neighbors allow; arrows walk, enter kindles and, held beside a neighbor, reacts"
       >
         <canvas ref={canvasRef} className="molecules-canvas" aria-hidden="true" />
       </div>
+
+      {hasMols && (
+        <button
+          type="button"
+          className="molecules-clear"
+          onClick={() => clearRef.current()}
+        >
+          let the solution clear
+        </button>
+      )}
 
       <style
         dangerouslySetInnerHTML={{
@@ -1258,6 +1585,29 @@ export default function MoleculesField() {
           cursor: crosshair;
           touch-action: none;
           z-index: 0;
+        }
+
+        .molecules-clear {
+          position: fixed;
+          bottom: max(18px, env(safe-area-inset-bottom));
+          left: 50%;
+          transform: translateX(-50%);
+          min-height: 40px;
+          padding: 8px 14px;
+          background: transparent;
+          border: 1px solid rgba(238, 234, 219, 0.18);
+          border-radius: 3px;
+          color: rgba(238, 234, 219, 0.5);
+          font-family: var(--font-mono, "IBM Plex Mono", monospace);
+          font-size: 11px;
+          letter-spacing: 0.06em;
+          cursor: pointer;
+          z-index: 30;
+        }
+
+        .molecules-clear:focus-visible {
+          outline: 2px solid rgba(231, 172, 82, 0.7);
+          outline-offset: 2px;
         }
       ` }}
       />
