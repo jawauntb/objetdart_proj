@@ -9,11 +9,6 @@ import { stirTurbulence } from "@/lib/turbulence";
 import type { ConcernKey } from "@/lib/types";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
 import WaterText from "@/components/WaterText";
-import { attachGestures } from "@/lib/gesture";
-import { holdTier } from "@/lib/gesture/core";
-import { onVessel } from "@/lib/vessel";
-import { createFrameGovernor, detailForTier, onVisibility, resolveDpr } from "@/lib/room-runtime";
-import LetGo from "@/components/LetGo";
 
 // Same mapping as audio.ts — duplicated here only so the UI can label the
 // chosen mood/tempo without having to call into the engine. Keep in sync.
@@ -215,28 +210,10 @@ export default function Signal() {
   // rendered waveform at a given x, fading over DISTORT_LIFE seconds.
   type WaveDistortion = { x: number; amount: number; t0: number };
   const distortionsRef = useRef<WaveDistortion[]>([]);
+  // active drag pointer (only one finger drives the "play" gesture)
+  const wavePointerId = useRef<number | null>(null);
+  const lastDragYRef = useRef<number | null>(null);
   const lastChimeAt = useRef<number>(0);
-
-  // ── the gesture surface is polyphonic: every finger is an independent
-  // voice — a note the instant it lands (grammar §3, instrument surfaces).
-  // Only a together-landed pair moving against each other is reclaimed as
-  // the frame layer (pinch/twist/pan2); staggered fingers stay voices.
-  type VoiceRegion = "spectrum" | "waveform" | "spiral" | null;
-  type VoiceState = { region: VoiceRegion; lastX: number; lastY: number; t0: number; sealed: boolean; charging: boolean };
-  const voiceStateRef = useRef<Map<number, VoiceState>>(new Map());
-  // twist(2) rotates the lens — the level of description: spectrum ↔
-  // waveform ↔ the felt sound (spiral). A discrete state advanced by
-  // accumulated turn, smoothed continuously for the draw loop.
-  const lensIndexRef = useRef(0);
-  const lensTwistAccRef = useRef(0);
-  const lensBlendRef = useRef([1, 1, 1]); // smoothed emphasis per layer
-  // pinch zooms the spiral within its own frame; pan2 pans its center.
-  const zoomRef = useRef({ cur: 1, target: 1 });
-  const panRef = useRef({ curX: 0, curY: 0, targetX: 0, targetY: 0 });
-  // tutti / step-back flashes — a soft synchronized pulse across layers.
-  const tuttiRef = useRef(0);
-  // last touch, for the idle glimmer (grammar §6).
-  const lastTouchAtRef = useRef(0);
 
   // ── compose state ────────────────────────────────────────────────
   // composeHandle is held in a ref so the render loop can read end time
@@ -524,25 +501,6 @@ export default function Signal() {
     haptics.roll();
     try { getFieldAudio().thud(); } catch { /* noop */ }
   }, [activePrompt, composeModel, composeSource, keptSignals, oceanicCoda, persistKeptSignals, recordTape]);
-
-  // touch-reachable per-item delete (ceremony hold on a kept pill, see
-  // <KeptSignalPill> below) — the create/delete law's "existing one".
-  const removeKeptSignal = useCallback((id: string) => {
-    setKeptSignals((prev) => {
-      const next = prev.filter((signal) => signal.id !== id);
-      try { localStorage.setItem(KEPT_SIGNALS_KEY, JSON.stringify(next)); } catch { /* noop */ }
-      return next;
-    });
-    haptics.roll();
-    try { getFieldAudio().thud(); } catch { /* noop */ }
-  }, []);
-
-  // whole-field clear — the shared <LetGo/>, never a hand-rolled button.
-  const letGoKeptSignals = useCallback(() => {
-    persistKeptSignals([]);
-    haptics.roll();
-    try { getFieldAudio().thud(); } catch { /* noop */ }
-  }, [persistKeptSignals]);
 
   const replayKeptSignal = useCallback((signal: KeptSignal) => {
     promptTextRef.current = signal.prompt;
