@@ -18,7 +18,9 @@ Before writing anything, place the room in the cosmology. Answer in order:
    - Does it genuinely need its own band position? Give it a scale address in
      `SCALE_BANDS` (`src/lib/scale.ts`), and decide its **doors**: default is
      the metric neighbors; override in `TRAVEL_OVERRIDES` when containment
-     says otherwise (a drop belongs to the sea, not to the next size up).
+     says otherwise (a drop belongs to the sea, not to the next size up). A
+     room that shares a band with siblings but needs its own vertical doors
+     uses `ROUTE_TRAVEL_OVERRIDES` (see `docs/plans/ground-and-sky.md`).
 2. **Is it a *law*, *lens*, or *abstraction*?** Then it takes no scale address
    (the `/relativity` precedent — note the deliberate exemption in the PR), or
    it branches off the band it comments on (the `/beyond` precedent).

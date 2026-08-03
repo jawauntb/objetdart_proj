@@ -525,17 +525,19 @@ export function litCount(
 }
 
 // ——— the field, heard ————————————————————————————————————————
-// The lowest register on the axis. `spectralRegisterFor` puts s = 20 at
-// 27.5·2^((1−6/7)·7) = 55 Hz exactly — A1 — breathing once every ~48 s.
-// This room does not invent a register; it spreads the density across the
-// one the axis already assigned it.
+// The lowest register on the axis. The sky re-cut (docs/plans/
+// ground-and-sky.md) moved the web's band to 20.5–22, so the listening
+// post sits at s = 127/6 ≈ 21.17 — near the band's centre, chosen so
+// `spectralRegisterFor` lands on 27.5·2^(5/6) ≈ 49 Hz exactly — G1 —
+// breathing once every ~54 s. This room does not invent a register; it
+// spreads the density across the one the axis already assigned it.
 
 /** The room's listening post on the manifold, log10 metres. */
-export const WEB_SCALE_S = 20;
-/** spectralRegisterFor(20).baseHz, to the last digit. */
-export const WEB_BASE_HZ = 55;
-/** spectralRegisterFor(20).lfoHz = 1.8·2^(−7.5·6/7). One breath ≈ 48 s. */
-export const WEB_LFO_HZ = 1.8 * Math.pow(2, -45 / 7);
+export const WEB_SCALE_S = 127 / 6;
+/** spectralRegisterFor(127/6).baseHz: 27.5·2^(5/6) — G1, to the last digit. */
+export const WEB_BASE_HZ = 27.5 * Math.pow(2, 5 / 6);
+/** spectralRegisterFor(127/6).lfoHz = 1.8·2^(−7.5·37/42). One breath ≈ 54 s. */
+export const WEB_LFO_HZ = 1.8 * Math.pow(2, -555 / 84);
 /** How many octaves the whole density range spans, centred on the register. */
 export const SUB_BASS_SPAN = 1.6;
 /** Below this the ear stops hearing pitch and starts hearing pressure. */

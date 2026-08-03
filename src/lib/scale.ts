@@ -28,9 +28,13 @@ export type ScaleBandId =
   | "birds"
   | "coast"
   | "olympus"
+  | "atmosphere"
   | "atlas"
   | "earth"
+  | "planets"
+  | "solar"
   | "stars"
+  | "galaxy"
   | "space"
   | "beyond"
   | "manifold";
@@ -74,11 +78,22 @@ export const SCALE_BANDS: ScaleBand[] = [
   { id: "coast", label: "the coast", route: "/coast", sMin: 2.2, sMax: 3.4 },
   // A peak stands kilometres over a valley tens of kilometres wide.
   { id: "olympus", label: "olympus", route: "/mountain", sMin: 3.4, sMax: 4.5 },
-  { id: "atlas", label: "the atlas", route: "/atlas/origin", sMin: 4.5, sMax: 6.5 },
+  // The sky re-cut (docs/plans/ground-and-sky.md). The air column is ~100 km
+  // deep, so the atmosphere takes the decade under the atlas and the chart
+  // floor rises to 5.5. Above the earth the axis is metric-monotone: the
+  // planetary neighbourhood (the sun at 1.4e9 m, Mercury's orbit at 5.8e10),
+  // the system (Neptune at 4.5e12, the heliopause at 1.8e13), interstellar
+  // space (the nearest star at 4e16), one galaxy (1e21 across, read from
+  // ~1e19), and the web that holds the galaxies. Unbuilt spans (route: null)
+  // are real addresses — travel resolves through them until the rooms land.
+  { id: "atmosphere", label: "the atmosphere", route: null, sMin: 4.5, sMax: 5.5 },
+  { id: "atlas", label: "the atlas", route: "/atlas/origin", sMin: 5.5, sMax: 6.5 },
   { id: "earth", label: "the earth", route: "/earth", sMin: 6.5, sMax: 9 },
-  { id: "stars", label: "the stars", route: "/stars", sMin: 9, sMax: 16.5 },
-  // The nearest star is 4e16 m, a nebula 1e17-1e18, a galaxy 1e21.
-  { id: "space", label: "deep space", route: "/space", sMin: 16.5, sMax: 22 },
+  { id: "planets", label: "the planets", route: null, sMin: 9, sMax: 11 },
+  { id: "solar", label: "the solar system", route: null, sMin: 11, sMax: 13.5 },
+  { id: "stars", label: "the stars", route: "/stars", sMin: 13.5, sMax: 17 },
+  { id: "galaxy", label: "the galaxy", route: null, sMin: 17, sMax: 20.5 },
+  { id: "space", label: "deep space", route: "/space", sMin: 20.5, sMax: 22 },
   { id: "beyond", label: "beyond", route: "/beyond", sMin: 22, sMax: 25.5 },
   { id: "manifold", label: "the manifold", route: "/manifold", sMin: 25.5, sMax: 27 },
 ];
@@ -376,8 +391,10 @@ type TravelOverride = {
  * the strata) ; birds fly over the garden and out to the shore ; the peak
  * stands above the fog that is the sea ; coast and earth are both ON the
  * atlas (the map holds the land and the shore) ; the atlas recedes into the
- * stars ; the stars thin into the galactic web ; the web opens onto the fold.
- * /beyond branches off the fold. Metric spans stay physical — sound keeps them.
+ * stars ; the stars thin into the galaxy, the galaxy into the web ; the web
+ * opens onto the fold. /beyond branches off the fold. Metric spans stay
+ * physical — sound keeps them. Doors below the band grain (the ground's
+ * strata: /rocks, /soil) live in ROUTE_TRAVEL_OVERRIDES further down.
  *
  * The life ladder needs no overrides at all: for once part-of and smaller-than
  * agree the whole way down, and so do the flock's neighbours (the garden below,
@@ -395,11 +412,13 @@ const TRAVEL_OVERRIDES: Partial<Record<ScaleBandId, TravelOverride>> = {
   // ground lies on the map; things grow from it; the beach and the peak are
   // lateral doors off the land (press, release, press again)
   olympus: { down: "coast", extraUp: ["earth"] }, // the peak rises from fog;
-  // walking down from the land reaches the mountain; clouds are a peer, not a pinch
-  atlas: { up: "stars" }, // the map recedes into the sky (the planet-globe
-  // room will one day sit between them); it descends onto the peak by metric
+  // walking down from the land reaches the mountain; clouds are a peer, not a
+  // pinch; its canonical ceiling is now the air column, resolving onto the map
+  atlas: { up: "stars" }, // the map recedes into the sky — the trunk passage;
+  // the earth, the planets and the system are reached by their own doors, and
+  // it descends onto the peak through the air column by metric adjacency
   stars: { down: "atlas" }, // the sky descends onto the map, and thins upward
-  // into the web by metric adjacency
+  // into the galaxy, then the web, by metric adjacency
   space: { up: "manifold" }, // the web opens onto the fold; /beyond stays a
   // branch off the trunk, reachable by fork doors and received back by memory
   manifold: { down: "space" },
@@ -439,7 +458,13 @@ function structuralDoors(id: ScaleBandId, dir: TravelDir): ScaleBandId[] {
   return doors;
 }
 
-export type EnteredFromMap = Partial<Record<ScaleBandId, ScaleBandId>>;
+/**
+ * Every band remembers the door you last crossed in through: a band id, or —
+ * when you arrived from a room below the band grain (a door room like /soil)
+ * — its route prefix, so the return trip finds the very room, not just its
+ * band. Band-grain consumers normalize route memories to their band.
+ */
+export type EnteredFromMap = Partial<Record<ScaleBandId, ScaleBandId | RouteRef>>;
 
 /**
  * Where travel in `dir` actually goes from `id`: the remembered origin if it
@@ -451,7 +476,10 @@ export function resolveDestination(
   dir: TravelDir,
   enteredFrom: EnteredFromMap,
 ): ScaleBand | null {
-  const rememberedId = enteredFrom[id];
+  const raw = enteredFrom[id];
+  const rememberedId = typeof raw === "string" && raw.startsWith("/")
+    ? scaleBandIdForRoute(raw)
+    : (raw as ScaleBandId | undefined);
   if (rememberedId && rememberedId !== id && structuralDoors(id, dir).includes(rememberedId)) {
     return SCALE_BANDS.find((b) => b.id === rememberedId) ?? null;
   }
@@ -511,6 +539,269 @@ export function travelOptions(
   return options;
 }
 
+// ——— Per-route doors: the ground opens more ways than a band can say ———
+//
+// TRAVEL_OVERRIDES speaks at the band grain, but several rooms share one
+// band and need DIFFERENT vertical destinations: from the same span of
+// centimetres a drop of water sinks into the plasm, the soil crumbles into
+// cells, a rock cleaves into its lattice of molecules. This layer keys
+// doors by route prefix and is consulted FIRST — exact route match, then
+// the band override, then metric adjacency — so the band grammar stays the
+// default and this stays the exception.
+//
+// The author's cosmology, stated plainly: doors may invert or skip the
+// metric order, because travel follows what a thing is PART of (the
+// narrative), not what it is smaller than. Band SPANS may never invert or
+// lie — they are physical addresses, and the sound, the blend weights and
+// the room cameras are keyed to them. Doors bend; metres do not.
+
+export type RouteRef = `/${string}`;
+/** A door target: a band id, or a route that shares a band with siblings. */
+export type DoorRef = ScaleBandId | RouteRef;
+
+/**
+ * Rooms that are travel destinations below the band grain: they share a
+ * band with a primary resident yet are doors in their own right. `route`
+ * stays null until the page ships (the room lane flips that one line);
+ * while null the door resolves through to the nearest built room in its
+ * direction — firstBuiltAlong's transparency law, extended to routes, so
+ * declaring a future room can never sever a door that works today.
+ */
+export const DOOR_ROOMS: { prefix: RouteRef; band: ScaleBandId; label: string; route: string | null }[] = [
+  { prefix: "/rocks", band: "drop", label: "the rocks", route: null },
+  { prefix: "/soil", band: "drop", label: "the soil", route: null },
+];
+
+type RouteTravelOverride = {
+  up?: DoorRef;
+  down?: DoorRef;
+  /** Additional doors beyond the first (press, release, press again). */
+  extraUp?: DoorRef[];
+  extraDown?: DoorRef[];
+};
+
+/**
+ * A route with an entry here OWNS the wall it declares: the listed doors
+ * replace the band grain's offer on that wall (memory of a band-grain door
+ * still answers — see travelOptionsForRoute). A wall it stays silent on
+ * falls through to the band. Route-level doors swing both ways, exactly
+ * like band extras: each declaration also opens the reverse door.
+ */
+export const ROUTE_TRAVEL_OVERRIDES: Partial<Record<string, RouteTravelOverride>> = {
+  // The ground forks three ways going down: things grow from it, and it is
+  // itself made of stone and of soil.
+  "/earth": { down: "flowers", extraDown: ["/rocks", "/soil"] },
+  // Soil returns to the ground it is the ground of, or to the garden rooted
+  // in it; downward it crumbles into the living plasm.
+  "/soil": { up: "earth", extraUp: ["flowers"], down: "cells" },
+  // Rock returns to the ground, or rises as the peak; downward it cleaves
+  // into the lattice — molecules, not life.
+  "/rocks": { up: "earth", extraUp: ["olympus"], down: "molecules" },
+  // A drop of water magnifies what swims in it: down is the plasm. Its
+  // band's default descent, tissue, stays reachable through the petal.
+  "/drop": { down: "cells" },
+  // The peak descends to the shore by default; press again for the strata
+  // it stands on, again for the birds riding its updraft.
+  "/mountain": { down: "coast", extraDown: ["/rocks", "birds"] },
+};
+
+/** A resolved, walkable door: where the hand actually goes today. */
+export type TravelDoor = {
+  /** The band the door lands in — the memory key and entry-scale source. */
+  band: ScaleBand;
+  /** Built route to navigate to. */
+  route: string;
+  label: string;
+};
+
+function stripQuery(route: string): string {
+  return route.split("?")[0] || route;
+}
+
+function doorRoomFor(path: string): (typeof DOOR_ROOMS)[number] | null {
+  for (const d of DOOR_ROOMS) {
+    if (path === d.prefix || path.startsWith(`${d.prefix}/`)) return d;
+  }
+  return null;
+}
+
+/** The scale band a route lives in: band primary, door room, or lateral. */
+export function scaleBandIdForRoute(route: string): ScaleBandId | null {
+  const path = stripQuery(route);
+  for (const b of SCALE_BANDS) {
+    if (b.route && (path === b.route || path.startsWith(`${b.route}/`))) return b.id;
+  }
+  const dr = doorRoomFor(path);
+  if (dr) return dr.band;
+  // Longest-prefix match so /light does not steal /light/inverse later if
+  // a lateral is ever added under a shared stem.
+  let best: ScaleBandId | null = null;
+  let bestLen = -1;
+  for (const { prefix, band } of LATERAL_ROUTE_BANDS) {
+    if ((path === prefix || path.startsWith(`${prefix}/`)) && prefix.length > bestLen) {
+      best = band;
+      bestLen = prefix.length;
+    }
+  }
+  return best;
+}
+
+function bandFor(id: ScaleBandId): ScaleBand | null {
+  return SCALE_BANDS.find((b) => b.id === id) ?? null;
+}
+
+/** A band id resolved to the built room it opens onto along `dir`. */
+function builtDoorForBand(id: ScaleBandId, dir: TravelDir): TravelDoor | null {
+  const band = bandFor(id);
+  if (!band) return null;
+  const built = band.route ? band : firstBuiltAlong(band.id, dir);
+  return built?.route ? { band: built, route: built.route, label: built.label } : null;
+}
+
+/** Any door ref resolved to the built room it opens onto along `dir`. */
+function resolveDoorRef(ref: DoorRef, dir: TravelDir): TravelDoor | null {
+  if (ref.startsWith("/")) {
+    const dr = doorRoomFor(ref);
+    if (dr) {
+      if (dr.route) {
+        const band = bandFor(dr.band);
+        return band ? { band, route: dr.route, label: dr.label } : null;
+      }
+      return builtDoorForBand(dr.band, dir); // address without a page yet
+    }
+    const b = SCALE_BANDS.find((x) => x.route === ref);
+    return b?.route ? { band: b, route: b.route, label: b.label } : null;
+  }
+  return builtDoorForBand(ref as ScaleBandId, dir);
+}
+
+/** The route-level override governing `path`, by longest prefix. */
+function routeOverrideFor(path: string): RouteTravelOverride | null {
+  let best: RouteTravelOverride | null = null;
+  let bestLen = -1;
+  for (const prefix of Object.keys(ROUTE_TRAVEL_OVERRIDES)) {
+    if ((path === prefix || path.startsWith(`${prefix}/`)) && prefix.length > bestLen) {
+      best = ROUTE_TRAVEL_OVERRIDES[prefix] ?? null;
+      bestLen = prefix.length;
+    }
+  }
+  return best;
+}
+
+/**
+ * Route-level reverse pointers: every route whose override, in the opposite
+ * direction, names this position — by its band id or by its route — offers
+ * itself here, so route doors swing both ways like band extras do.
+ */
+function reverseRouteDoorRefs(path: string, homeId: ScaleBandId, dir: TravelDir): DoorRef[] {
+  const out: DoorRef[] = [];
+  for (const prefix of Object.keys(ROUTE_TRAVEL_OVERRIDES)) {
+    if (path === prefix || path.startsWith(`${prefix}/`)) continue; // self
+    const o = ROUTE_TRAVEL_OVERRIDES[prefix];
+    if (!o) continue;
+    const primary = dir === 1 ? o.down : o.up;
+    const extras = (dir === 1 ? o.extraDown : o.extraUp) ?? [];
+    const pointsHere = [primary, ...extras].some(
+      (ref) =>
+        ref !== undefined &&
+        (ref === homeId || ref === path || (ref.startsWith("/") && path.startsWith(`${ref}/`))),
+    );
+    if (pointsHere) out.push(prefix as RouteRef);
+  }
+  return out;
+}
+
+/**
+ * Every built door out of `route` in direction `dir`, resolved-first — the
+ * route-aware form of travelOptions, consulted by ScaleTravel whenever the
+ * room knows its route. Resolution order: exact route override, else the
+ * band grain (band override, else metric adjacency). Doors onto unbuilt
+ * addresses — band or route — resolve through to the nearest built room.
+ *
+ * Memory: you return the way you came. A remembered origin answers when it
+ * is a structural door of this wall at either grain, or when its own wall,
+ * in the opposite direction, opens onto this room — the latter is what lets
+ * travel that resolved THROUGH an unbuilt address still round-trip (the
+ * ground drops you into the drop while /rocks is only an address; pinching
+ * out of the drop must return to the ground).
+ */
+export function travelOptionsForRoute(
+  route: string,
+  dir: TravelDir,
+  enteredFrom: EnteredFromMap,
+): TravelDoor[] {
+  const path = stripQuery(route);
+  const homeId = scaleBandIdForRoute(path);
+  if (!homeId) return [];
+
+  const o = routeOverrideFor(path);
+  const primaryRef = dir === 1 ? o?.up : o?.down;
+  const extraRefs = (dir === 1 ? o?.extraUp : o?.extraDown) ?? [];
+  const owned = primaryRef !== undefined || extraRefs.length > 0;
+  const reverses = reverseRouteDoorRefs(path, homeId, dir);
+
+  const refs: DoorRef[] = [];
+  if (owned) {
+    if (primaryRef !== undefined) refs.push(primaryRef);
+    else {
+      const n = travelNeighbor(homeId, dir);
+      if (n) refs.push(n);
+    }
+    refs.push(...extraRefs, ...reverses);
+  } else {
+    refs.push(...structuralDoors(homeId, dir), ...reverses);
+  }
+
+  // The remembered origin, validated against this wall (see doc above).
+  let rememberedRef: DoorRef | null = null;
+  const raw = enteredFrom[homeId];
+  if (typeof raw === "string") {
+    const wanted: DoorRef | null = raw.startsWith("/")
+      ? doorRoomFor(raw)?.prefix ?? scaleBandIdForRoute(raw)
+      : (raw as ScaleBandId);
+    if (wanted && wanted !== homeId) {
+      const memRefs = owned ? [...refs, ...structuralDoors(homeId, dir)] : refs;
+      let valid = memRefs.includes(wanted);
+      if (!valid) {
+        const originRoute = wanted.startsWith("/")
+          ? wanted
+          : bandFor(wanted as ScaleBandId)?.route ?? null;
+        if (originRoute) {
+          valid = travelOptionsForRoute(originRoute, dir === 1 ? -1 : 1, {}).some(
+            (d) => d.route === path || d.band.id === homeId,
+          );
+        }
+      }
+      if (valid) rememberedRef = wanted;
+    }
+  }
+
+  const doors: TravelDoor[] = [];
+  const seen = new Set<string>();
+  const push = (d: TravelDoor | null) => {
+    if (!d) return;
+    if (d.route === path || path.startsWith(`${d.route}/`)) return; // self
+    if (seen.has(d.route)) return;
+    seen.add(d.route);
+    doors.push(d);
+  };
+  if (rememberedRef) push(resolveDoorRef(rememberedRef, dir));
+  for (const ref of refs) push(resolveDoorRef(ref, dir));
+  return doors;
+}
+
+/**
+ * What ScaleTravel records as the origin when leaving `route`: the route
+ * prefix for a door room (so the return trip finds the very room), else
+ * the band id — exactly what the band-grain memory always held.
+ */
+export function doorMemoryFor(route: string): ScaleBandId | RouteRef | null {
+  const path = stripQuery(route);
+  const dr = doorRoomFor(path);
+  if (dr) return dr.prefix;
+  return scaleBandIdForRoute(path);
+}
+
 // ——— Step back: the two-finger tap (gesture grammar §5) ———
 
 /** How far one step back retreats, in decades — gentle, felt, never a jump. */
@@ -563,7 +854,7 @@ export function spectralRegisterFor(s: number): SpectralRegister {
  * `PEER_CIRCLES` in `peers.ts` — `scripts/test-routes.mjs` asserts every
  * peer room resolves here.
  */
-const LATERAL_ROUTE_BANDS: { prefix: string; band: ScaleBandId }[] = [
+export const LATERAL_ROUTE_BANDS: { prefix: string; band: ScaleBandId }[] = [
   // shore family + wave instruments
   { prefix: "/tide", band: "coast" },
   { prefix: "/waves", band: "coast" },
@@ -592,31 +883,16 @@ const LATERAL_ROUTE_BANDS: { prefix: string; band: ScaleBandId }[] = [
   { prefix: "/pulse", band: "drop" },
   { prefix: "/charts", band: "drop" },
   { prefix: "/dither", band: "drop" },
+  // the ground's strata — door rooms of the earth wall (see DOOR_ROOMS):
+  // a rock in the hand, a handful of soil, both the drop's size
+  { prefix: "/rocks", band: "drop" },
+  { prefix: "/soil", band: "drop" },
 ];
 
 /** Where a route enters the manifold: center of its band. */
 export function entryScaleFor(route: string): number | null {
-  const path = route.split("?")[0] || route;
-  for (const b of SCALE_BANDS) {
-    if (b.route && (path === b.route || path.startsWith(`${b.route}/`))) {
-      return (b.sMin + b.sMax) / 2;
-    }
-  }
-  // Longest-prefix match so /light does not steal /light/inverse later if
-  // a lateral is ever added under a shared stem.
-  let best: ScaleBandId | null = null;
-  let bestLen = -1;
-  for (const { prefix, band } of LATERAL_ROUTE_BANDS) {
-    if (path === prefix || path.startsWith(`${prefix}/`)) {
-      if (prefix.length > bestLen) {
-        best = band;
-        bestLen = prefix.length;
-      }
-    }
-  }
-  if (best) {
-    const band = SCALE_BANDS.find((b) => b.id === best);
-    if (band) return (band.sMin + band.sMax) / 2;
-  }
-  return null;
+  const id = scaleBandIdForRoute(route);
+  if (!id) return null;
+  const band = SCALE_BANDS.find((b) => b.id === id);
+  return band ? (band.sMin + band.sMax) / 2 : null;
 }
