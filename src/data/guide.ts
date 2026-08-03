@@ -1059,6 +1059,7 @@ export const GUIDE_ROOMS: GuideRoom[] = [
       "pulling a droplet off takes real force — speed, stretch, and size all have to agree at once",
       "a mouse hovering near the bead is felt before it lands: the surface leans toward the cursor and the life inside notices",
       "the cabinet at this scale holds every handheld room — a drop, a seed, a coin, a watch — without leaving the band",
+      "left alone the water keeps trembling and catching a draught, dust keeps settling into it, and its bacteria go on dividing",
     ],
   },
   {
