@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import { useField } from "@/store/field";
 import * as haptics from "@/lib/haptics";
+import { attachGestures } from "@/lib/gesture";
 
 /**
  * /jewel — one stone you hold and turn in the light.
@@ -81,12 +82,21 @@ export default function Jewel() {
   const lastFx = useRef(0);
   const lastTape = useRef(0);
 
+  // ── the law layer (gesture grammar): light wind, dilated time, the
+  //    mirror lens, entrained glints ──
+  const lightRef = useRef({ x: 0, y: 0 });          // 3-finger drag sweeps the lamp
+  const timeScaleRef = useRef({ cur: 1, target: 1 }); // 3-finger hold dilates time
+  const flipLensRef = useRef({ v: 0, t: 0 });        // twist: the stone's mirror twin
+  const entrainRef = useRef({ bpm: 0, until: 0, lastBeat: -1 });
+  const lastGestureAtRef = useRef(0);
+
   const [activeGem, setActiveGem] = useState<string | null>(null);
   const [hint, setHint] = useState(true);
 
-  // wall-clock seconds since component start, kept in sync with the draw loop
+  // the stone's own clock (dilatable) — ripples and shader time share it
+  const simSecRef = useRef(0);
   const t0Ref = useRef(performance.now());
-  const nowSec = () => (performance.now() - t0Ref.current) / 1000;
+  const nowSec = () => simSecRef.current;
 
   // spawn a ripple into the ring buffer
   const spawnRipple = (x: number, y: number, str: number, tNow: number) => {
@@ -386,87 +396,50 @@ export default function Jewel() {
     const onMq = () => { reduced = mq.matches ? 1 : 0; reducedRef.current = mq.matches; };
     if (typeof mq.addEventListener === "function") mq.addEventListener("change", onMq);
 
-    // ── the tactile heart: DRAG anywhere to turn the one stone ──
-    const onDown = (e: PointerEvent) => {
-      const el = e.target as HTMLElement;
-      if (el && el.closest && el.closest(".jw-ui")) return; // let the rail buttons act
+    // ── gestures (the shared grammar — src/lib/gesture) ────────────────
+    // One finger touches the stone: drag turns it, a tap rings it, a flick
+    // throws it spinning, a ceremony hold seals it. Two fingers touch the
+    // map: twist turns the stone over to its mirror twin. Three fingers
+    // touch the law: drag sweeps the lamp, hold dilates time. Pinch and
+    // pan2 stay unbound — the frame belongs to the manifold.
+    const overUi = (x: number, y: number) =>
+      Boolean(document.elementFromPoint(x, y)?.closest(".jw-ui"));
+
+    const onContact = (e: PointerEvent) => {
+      // the instant of touch (below any gesture threshold): catching a
+      // spinning stone arrests its momentum, the lens presses to the grasp
+      if ((e.target as HTMLElement)?.closest?.(".jw-ui")) return;
       const rect = wrap.getBoundingClientRect();
-      const d = drag.current;
-      d.active = true; d.id = e.pointerId;
-      d.lx = e.clientX; d.ly = e.clientY; d.lt = performance.now();
-      d.moved = 0; d.dyaw = 0; d.dpitch = 0;
-      // catching a spinning stone arrests most of its momentum
       turn.current.vyaw *= 0.22; turn.current.vpitch *= 0.22;
-      try { wrap.setPointerCapture(e.pointerId); } catch { /* noop */ }
-      // the lens presses toward your grasp
       ptr.current.tx = (e.clientX - rect.left) / rect.width;
       ptr.current.ty = (e.clientY - rect.top) / rect.height;
       ptr.current.twarp = 0.7;
+      lastGestureAtRef.current = performance.now();
       setHint(false);
     };
-    const onMove = (e: PointerEvent) => {
+    const onHover = (e: PointerEvent) => {
+      if (e.buttons !== 0 || drag.current.active) return;
+      // idle hover: the lens drifts toward the pointer (desktop dialect)
       const rect = wrap.getBoundingClientRect();
-      const d = drag.current;
-      if (!d.active || e.pointerId !== d.id) {
-        // idle hover: the lens drifts toward the pointer (desktop)
-        ptr.current.tx = (e.clientX - rect.left) / rect.width;
-        ptr.current.ty = (e.clientY - rect.top) / rect.height;
-        ptr.current.twarp = 0.42;
-        return;
-      }
-      const now = performance.now();
-      const dt = Math.max(8, now - d.lt);
-      const dx = (e.clientX - d.lx) / Math.max(1, rect.width);
-      const dy = (e.clientY - d.ly) / Math.max(1, rect.height);
-      d.lx = e.clientX; d.ly = e.clientY; d.lt = now;
-      // the lens follows your finger over the stone
       ptr.current.tx = (e.clientX - rect.left) / rect.width;
       ptr.current.ty = (e.clientY - rect.top) / rect.height;
-      ptr.current.twarp = 0.62;
-      if (reducedRef.current) return;              // no turning under reduced motion
-      d.moved += Math.hypot(dx, dy);
-      const dyaw = dx * TURN_GAIN;
-      const dpitch = dy * TILT_GAIN;
-      turn.current.yaw += dyaw;
-      turn.current.pitch = Math.max(-1.15, Math.min(1.15, turn.current.pitch + dpitch));
-      // smoothed estimate becomes the release velocity (heavy-stone throw)
-      d.dyaw = d.dyaw * 0.4 + dyaw * 0.6;
-      d.dpitch = d.dpitch * 0.4 + dpitch * 0.6;
-      // velocity → fire flash + haptic + a light-catch note (all throttled)
-      const speed = Math.hypot(dx, dy) / (dt / 1000);
-      fire.current = Math.min(1.7, fire.current + speed * 0.06);
-      if (speed > 0.6 && now - lastFx.current > 90) {
-        lastFx.current = now;
-        const inten = Math.min(1, speed * 0.35);
-        haptics.ripple(0.22 + inten * 0.5);
-        if (speed > 1.7) { try { haptics.tap(); } catch { /* noop */ } }
-        const idx = Math.max(0, Math.min(PENTA.length - 1, Math.floor(((e.clientX - rect.left) / rect.width) * PENTA.length)));
-        try { getFieldAudio().playNote(PENTA[idx] + 12, 120); } catch { /* noop */ }
-      }
-      if (now - lastTape.current > 180) {
-        lastTape.current = now;
-        useField.getState().recordTape("ripple", 0.3 + Math.min(0.6, speed * 0.3), "jewel/turn");
-      }
+      ptr.current.twarp = 0.42;
     };
-    const release = (e: PointerEvent, allowTap: boolean) => {
+    const onLeave = () => { if (!drag.current.active) ptr.current.twarp = 0.16; };
+    wrap.addEventListener("pointerdown", onContact);
+    wrap.addEventListener("pointermove", onHover);
+    wrap.addEventListener("pointerleave", onLeave);
+
+    let uiDrag = false;
+    let twistAcc = 0;
+    let holdSealed = false;
+    let lastLightCueAt = 0;
+    let lastScrubAt = 0;
+
+    const applyRelease = () => {
       const d = drag.current;
-      if (!d.active || e.pointerId !== d.id) return;
-      d.active = false; d.id = -1;
-      try { wrap.releasePointerCapture(e.pointerId); } catch { /* noop */ }
+      d.active = false;
       ptr.current.twarp = 0.16;
-      if (allowTap && d.moved < 0.014) {
-        // a tap (no turn): ring a pentatonic note + a ripple bloom
-        const rect = wrap.getBoundingClientRect();
-        const x = (e.clientX - rect.left) / rect.width;
-        const y = (e.clientY - rect.top) / rect.height;
-        spawnRipple(x, y, 0.9, nowSec());
-        const midi = PENTA[Math.max(0, Math.min(PENTA.length - 1, Math.floor(x * PENTA.length)))];
-        try { getFieldAudio().playNote(midi, 220); } catch { /* noop */ }
-        haptics.ripple(0.6);
-        useField.getState().recordTape("sigil", 0.8, "jewel/tap");
-        return;
-      }
-      // released mid-turn: momentum carries the heavy stone on
       turn.current.vyaw = d.dyaw;
       turn.current.vpitch = d.dpitch;
       const rel = Math.hypot(d.dyaw, d.dpitch);
@@ -476,15 +449,161 @@ export default function Jewel() {
       if (inten > 0.5) { try { getFieldAudio().chime(); } catch { /* noop */ } }
       useField.getState().recordTape("object", 0.4 + inten * 0.4, "jewel/release");
     };
-    const onUp = (e: PointerEvent) => release(e, true);
-    const onCancel = (e: PointerEvent) => release(e, false);
-    const onLeave = () => { if (!drag.current.active) ptr.current.twarp = 0.16; };
 
-    wrap.addEventListener("pointerdown", onDown);
-    wrap.addEventListener("pointermove", onMove);
-    wrap.addEventListener("pointerup", onUp);
-    wrap.addEventListener("pointercancel", onCancel);
-    wrap.addEventListener("pointerleave", onLeave);
+    const detachGestures = attachGestures(wrap, {
+      tap: (e) => {
+        lastGestureAtRef.current = performance.now();
+        if (e.fingers !== 1 || overUi(e.x, e.y)) return;
+        // a tap (no turn) rings a pentatonic note + a ripple bloom —
+        // intensity is the strike: ripple size, note length, haptic
+        const rect = wrap.getBoundingClientRect();
+        const x = (e.x - rect.left) / rect.width;
+        const y = (e.y - rect.top) / rect.height;
+        spawnRipple(x, y, 0.6 + e.intensity * 0.6, nowSec());
+        const midi = PENTA[Math.max(0, Math.min(PENTA.length - 1, Math.floor(x * PENTA.length)))];
+        try { getFieldAudio().playNote(midi, 160 + Math.round(e.intensity * 140)); } catch { /* noop */ }
+        haptics.ripple(0.35 + e.intensity * 0.4);
+        useField.getState().recordTape("sigil", 0.5 + e.intensity * 0.4, "jewel/tap");
+      },
+      drag: (e) => {
+        lastGestureAtRef.current = performance.now();
+        const rect = wrap.getBoundingClientRect();
+        if (e.fingers === 3) {
+          if (e.phase === "end") return;
+          // three fingers drag the law: the lamp itself sweeps — the
+          // highlight and the fire wheel around the held stone
+          lightRef.current.x = Math.max(-0.9, Math.min(0.9, lightRef.current.x + e.dx / rect.width * 2.2));
+          lightRef.current.y = Math.max(-0.9, Math.min(0.9, lightRef.current.y + e.dy / rect.height * 2.2));
+          fire.current = Math.min(1.7, fire.current + Math.hypot(e.vx, e.vy) * 0.05);
+          const now = performance.now();
+          if (now - lastLightCueAt > 700) {
+            lastLightCueAt = now;
+            try { getFieldAudio().playNote(38, 240); } catch { /* noop */ }
+            try { haptics.chop(); } catch { /* noop */ }
+            useField.getState().recordTape("region", 0.45, "jewel/lamp");
+          }
+          return;
+        }
+        if (e.fingers !== 1) return;
+        if (e.phase === "start") {
+          uiDrag = overUi(e.x, e.y);
+          if (uiDrag) return;
+          const d = drag.current;
+          d.active = true;
+          d.lt = performance.now();
+          d.moved = 0; d.dyaw = 0; d.dpitch = 0;
+          ptr.current.twarp = 0.7;
+          return;
+        }
+        if (uiDrag) return;
+        if (e.phase === "end") {
+          if (drag.current.active) applyRelease();
+          return;
+        }
+        const d = drag.current;
+        const now = performance.now();
+        const dt = Math.max(8, now - d.lt);
+        d.lt = now;
+        const dx = e.dx / Math.max(1, rect.width);
+        const dy = e.dy / Math.max(1, rect.height);
+        // the lens follows your finger over the stone
+        ptr.current.tx = (e.x - rect.left) / rect.width;
+        ptr.current.ty = (e.y - rect.top) / rect.height;
+        ptr.current.twarp = 0.62;
+        if (reducedRef.current) return;            // no turning under reduced motion
+        d.moved += Math.hypot(dx, dy);
+        const dyaw = dx * TURN_GAIN;
+        const dpitch = dy * TILT_GAIN;
+        turn.current.yaw += dyaw;
+        turn.current.pitch = Math.max(-1.15, Math.min(1.15, turn.current.pitch + dpitch));
+        // smoothed estimate becomes the release velocity (heavy-stone throw)
+        d.dyaw = d.dyaw * 0.4 + dyaw * 0.6;
+        d.dpitch = d.dpitch * 0.4 + dpitch * 0.6;
+        // velocity → fire flash + haptic + a light-catch note (all throttled)
+        const speed = Math.hypot(dx, dy) / (dt / 1000);
+        fire.current = Math.min(1.7, fire.current + speed * 0.06);
+        if (speed > 0.6 && now - lastFx.current > 90) {
+          lastFx.current = now;
+          const inten = Math.min(1, speed * 0.35);
+          haptics.ripple(0.22 + inten * 0.5);
+          if (speed > 1.7) { try { haptics.tap(); } catch { /* noop */ } }
+          const idx = Math.max(0, Math.min(PENTA.length - 1, Math.floor(((e.x - rect.left) / rect.width) * PENTA.length)));
+          try { getFieldAudio().playNote(PENTA[idx] + 12, 120); } catch { /* noop */ }
+        }
+        if (now - lastTape.current > 180) {
+          lastTape.current = now;
+          useField.getState().recordTape("ripple", 0.3 + Math.min(0.6, speed * 0.3), "jewel/turn");
+        }
+      },
+      flick: (e) => {
+        lastGestureAtRef.current = performance.now();
+        if (e.fingers !== 1 || uiDrag) return;
+        // a flick throws the heavy stone into a fast spin — extra fire
+        if (drag.current.active) applyRelease();
+        fire.current = Math.min(1.9, fire.current + Math.min(0.8, e.speed * 0.3));
+      },
+      hold: (e) => {
+        lastGestureAtRef.current = performance.now();
+        if (e.fingers === 3) {
+          // three fingers hold the law: the stone's time runs at 1/4
+          if (e.phase === "enter") {
+            timeScaleRef.current.target = 0.25;
+            try { getFieldAudio().playNote(36, 260); } catch { /* noop */ }
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+          if (e.phase === "release") timeScaleRef.current.target = 1;
+          return;
+        }
+        if (e.fingers !== 1) return;
+        if (e.phase === "enter") holdSealed = false;
+        if (e.phase === "release") { holdSealed = false; return; }
+        // ceremony — the room's one solemn act: the stone is sealed; it
+        // flares to full fire and the cut is kept to the tape.
+        if (e.tier >= 3 && !holdSealed && !overUi(e.x, e.y)) {
+          holdSealed = true;
+          fire.current = 1.9;
+          spawnRipple(0.5, 0.42, 1.0, nowSec());
+          try { getFieldAudio().bell(); } catch { /* noop */ }
+          try { haptics.bloom(); } catch { /* noop */ }
+          useField.getState().recordTape("kept", 0.9, "jewel/sealed");
+        }
+      },
+      twist: (e) => {
+        lastGestureAtRef.current = performance.now();
+        // two fingers rotate the lens: the stone turns over to its mirror
+        // twin — the rose-champagne face — and snaps back on the next turn
+        if (e.phase === "start") twistAcc = 0;
+        if (e.phase === "move") twistAcc += e.angle;
+        if (e.phase === "end" && Math.abs(twistAcc) > 0.9) {
+          flipLensRef.current.t = flipLensRef.current.t > 0.5 ? 0 : 1;
+          fire.current = Math.min(1.9, fire.current + 0.5);
+          try { haptics.lens(); } catch { /* noop */ }
+          try { getFieldAudio().chime(); } catch { /* noop */ }
+          useField.getState().recordTape("sigil", 0.6, "jewel/mirror");
+        }
+      },
+      scrub: (e) => {
+        lastGestureAtRef.current = performance.now();
+        const now = performance.now();
+        if (now - lastScrubAt < 500) return;
+        lastScrubAt = now;
+        // a circling finger orbits the stone — the turn keeps its wind
+        const dir = Math.sign(e.winding) || 1;
+        turn.current.vyaw = Math.max(-0.16, Math.min(0.16, turn.current.vyaw + dir * 0.05));
+        fire.current = Math.min(1.7, fire.current + 0.3);
+        try { getFieldAudio().playNote(PENTA[dir > 0 ? 4 : 1] + 12, 140); } catch { /* noop */ }
+        try { haptics.ripple(0.38); } catch { /* noop */ }
+        useField.getState().recordTape("ripple", 0.5, "jewel/orbit");
+      },
+      rhythm: (e) => {
+        // a steady tapped pulse: the glints flash in time with your hand
+        if (e.stability <= 0.7) return;
+        entrainRef.current.bpm = Math.max(40, Math.min(160, e.bpm));
+        entrainRef.current.until = performance.now() + 9000;
+        entrainRef.current.lastBeat = -1;
+        useField.getState().recordTape("sigil", 0.5, "jewel/entrain");
+      },
+    }, { wheelZoom: false });
 
     // FFT buffers
     const ripVec = new Float32Array(MAX_RIPPLES * 3);
@@ -494,7 +613,15 @@ export default function Jewel() {
     let raf = 0;
     const t0 = performance.now();
     t0Ref.current = t0;
+    let lastFrame = t0;
+    let lastGlimmerAt = 0;
     const draw = (now: number) => {
+      const frameDt = Math.min(0.05, (now - lastFrame) / 1000);
+      lastFrame = now;
+      // three-finger time dilation: the stone's clock eases to 1/4 speed
+      const ts = timeScaleRef.current;
+      ts.cur += (ts.target - ts.cur) * Math.min(1, frameDt * 5);
+      simSecRef.current += frameDt * ts.cur;
       const p = ptr.current;
       p.x += (p.tx - p.x) * 0.09;
       p.y += (p.ty - p.y) * 0.09;
@@ -504,12 +631,36 @@ export default function Jewel() {
       // ── turn integration: momentum + friction; pitch settles level ──
       const tn = turn.current;
       if (!drag.current.active) {
-        tn.yaw += tn.vyaw; tn.vyaw *= FRICTION;
-        tn.pitch += tn.vpitch; tn.vpitch *= FRICTION;
+        tn.yaw += tn.vyaw * ts.cur; tn.vyaw *= FRICTION;
+        tn.pitch += tn.vpitch * ts.cur; tn.vpitch *= FRICTION;
         tn.vpitch += (0 - tn.pitch) * 0.004;   // gentle spring back to level
         tn.pitch += (0 - tn.pitch) * 0.006;    // slow settle so it comes to rest
       }
       fire.current *= 0.9;                       // fire flash decays
+      // the swept lamp settles back over the stone
+      lightRef.current.x *= Math.exp(-frameDt * 0.9);
+      lightRef.current.y *= Math.exp(-frameDt * 0.9);
+      // the mirror lens eases between the two faces
+      const fl = flipLensRef.current;
+      fl.v += (fl.t - fl.v) * 0.08;
+      // entrained glints: fire pulses on each beat of the tapped tempo
+      const en = entrainRef.current;
+      if (now < en.until && en.bpm > 0) {
+        const beatIdx = Math.floor(now / (60000 / en.bpm));
+        if (beatIdx !== en.lastBeat) {
+          en.lastBeat = beatIdx;
+          fire.current = Math.min(1.7, fire.current + 0.45);
+          try { getFieldAudio().playNote(PENTA[beatIdx % PENTA.length] + 12, 90); } catch { /* noop */ }
+        }
+      }
+      // glimmer (grammar §6): after ~20s of quiet, a soft ripple lands
+      // where a tap would ring — physical, never text.
+      if (now - lastGestureAtRef.current > 20000 && now - lastGlimmerAt > 9000) {
+        lastGlimmerAt = now;
+        const slot = Math.floor(now / 9000);
+        const gseed = (n: number) => { const v = Math.sin((slot + n) * 127.1) * 43758.5453; return v - Math.floor(v); };
+        spawnRipple(0.3 + gseed(0) * 0.4, 0.3 + gseed(7) * 0.3, 0.22, nowSec());
+      }
       cut.current.v += (cut.current.t - cut.current.v) * 0.08;
       // tint smoothing toward the active stone colour
       tint.current.r += (tint.current.tr - tint.current.r) * 0.08;
@@ -546,8 +697,8 @@ export default function Jewel() {
         }
       } catch { /* noop */ }
 
-      // pack ripples (age in seconds)
-      const tSec = (now - t0) / 1000;
+      // pack ripples (age in dilatable stone-seconds)
+      const tSec = simSecRef.current;
       for (let i = 0; i < MAX_RIPPLES; i++) {
         const r = ripples.current[i];
         ripVec[i * 3] = r.x;
@@ -557,9 +708,10 @@ export default function Jewel() {
       }
 
       // the specular highlight glances with the turn: it orbits as the stone
-      // spins (sin/cos of yaw), lurches with yaw velocity, and rides the tilt.
-      const hlx = Math.sin(tn.yaw * 0.6) * 0.42 + Math.max(-0.5, Math.min(0.5, tn.vyaw * 3.0));
-      const hly = -Math.cos(tn.yaw * 0.6) * 0.16 + Math.max(-0.7, Math.min(0.7, tn.pitch * 0.62));
+      // spins (sin/cos of yaw), lurches with yaw velocity, rides the tilt —
+      // and leans wherever three fingers last swept the lamp.
+      const hlx = Math.sin(tn.yaw * 0.6) * 0.42 + Math.max(-0.5, Math.min(0.5, tn.vyaw * 3.0)) + lightRef.current.x;
+      const hly = -Math.cos(tn.yaw * 0.6) * 0.16 + Math.max(-0.7, Math.min(0.7, tn.pitch * 0.62)) + lightRef.current.y;
 
       gl.uniform1f(uTime, tSec);
       gl.uniform1f(uReduced, reduced);
@@ -574,7 +726,7 @@ export default function Jewel() {
       gl.uniform1f(uPour, Math.min(1, fire.current * 0.5));
       gl.uniform1f(uSpin, tn.yaw);
       gl.uniform1f(uStretch, Math.min(0.4, Math.abs(tn.pitch) * 0.45));
-      gl.uniform1f(uFlip, 0.0);
+      gl.uniform1f(uFlip, fl.v);
       gl.uniform2f(uTilt, hlx, hly);
       gl.uniform1f(uFire, fire.current);
       gl.uniform1f(uCut, cut.current.v);
@@ -592,10 +744,9 @@ export default function Jewel() {
       cancelAnimationFrame(raf);
       ro.disconnect();
       if (typeof mq.removeEventListener === "function") mq.removeEventListener("change", onMq);
-      wrap.removeEventListener("pointerdown", onDown);
-      wrap.removeEventListener("pointermove", onMove);
-      wrap.removeEventListener("pointerup", onUp);
-      wrap.removeEventListener("pointercancel", onCancel);
+      detachGestures();
+      wrap.removeEventListener("pointerdown", onContact);
+      wrap.removeEventListener("pointermove", onHover);
       wrap.removeEventListener("pointerleave", onLeave);
       gl.deleteProgram(prog); gl.deleteShader(vs); gl.deleteShader(fs); gl.deleteBuffer(buf);
     };

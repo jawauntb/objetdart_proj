@@ -7,6 +7,7 @@ import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment
 import { getFieldAudio } from "@/lib/audio";
 import { useField } from "@/store/field";
 import * as haptics from "@/lib/haptics";
+import { attachGestures } from "@/lib/gesture";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
 
 /**
@@ -154,32 +155,59 @@ function SundialChip() {
     }
   };
 
-  const setFrom = (e: React.PointerEvent) => {
-    const r = (e.currentTarget as Element).getBoundingClientRect();
-    const nt = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
-    setDayT(nt);
-    feedback(nt);
-  };
-  const down = (e: React.PointerEvent) => {
-    dragging.current = true; lastHour.current = Math.floor(6 + dayT * 12);
-    try { reduceRef.current = window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch { /* noop */ }
-    (e.target as Element).setPointerCapture?.(e.pointerId); setFrom(e);
-  };
-  const move = (e: React.PointerEvent) => { if (dragging.current) setFrom(e); };
-  const up = () => {
-    if (!dragging.current) return; dragging.current = false;
-    // warm whoosh on release: a soft bell + a settling note
-    try { getFieldAudio().bell(); window.setTimeout(() => { try { getFieldAudio().playNote(60 + Math.round(dayT * 24), 160); } catch { /* noop */ } }, 60); } catch { /* noop */ }
-    if (!reduceRef.current) haptics.ripple(0.4);
-    useField.getState().recordTape("ripple", 0.3 + dayT * 0.5, "movement/sundial");
-  };
+  // the sundial speaks the shared grammar too: a one-finger drag scrubs
+  // the day, a tap jumps straight to that hour (private wiring deleted).
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const dayTRef = useRef(dayT);
+  const feedbackRef = useRef(feedback);
+  feedbackRef.current = feedback;
+  useEffect(() => { dayTRef.current = dayT; }, [dayT]);
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const setFrom = (clientX: number) => {
+      const r = svg.getBoundingClientRect();
+      const nt = Math.max(0, Math.min(1, (clientX - r.left) / Math.max(1, r.width)));
+      setDayT(nt);
+      feedbackRef.current(nt);
+      return nt;
+    };
+    const detach = attachGestures(svg as unknown as HTMLElement, {
+      tap: (e) => {
+        if (e.fingers !== 1) return;
+        lastHour.current = -1;
+        setFrom(e.x);
+      },
+      drag: (e) => {
+        if (e.fingers !== 1) return;
+        if (e.phase === "start") {
+          dragging.current = true;
+          lastHour.current = Math.floor(6 + dayTRef.current * 12);
+          try { reduceRef.current = window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch { /* noop */ }
+          setFrom(e.x);
+          return;
+        }
+        if (e.phase === "end") {
+          if (!dragging.current) return;
+          dragging.current = false;
+          // warm whoosh on release: a soft bell + a settling note
+          try { getFieldAudio().bell(); window.setTimeout(() => { try { getFieldAudio().playNote(60 + Math.round(dayTRef.current * 24), 160); } catch { /* noop */ } }, 60); } catch { /* noop */ }
+          if (!reduceRef.current) haptics.ripple(0.4);
+          useField.getState().recordTape("ripple", 0.3 + dayTRef.current * 0.5, "movement/sundial");
+          return;
+        }
+        setFrom(e.x);
+      },
+    }, { wheelZoom: false });
+    return detach;
+  }, []);
 
   // pseudo-random helper for stars (stable per index)
   const rnd = (i: number, s: number) => ((Math.sin(i * s) * 43758.5) % 1 + 1) % 1;
 
   return (
     <div className="mv-sundial">
-      <svg viewBox={`0 0 ${W} ${H}`} onPointerDown={down} onPointerMove={move} onPointerUp={up} style={{ touchAction: "none", cursor: "grab" }}>
+      <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} style={{ touchAction: "none", cursor: "grab" }}>
         <defs>
           {/* atmospheric vertical sky: zenith → mid → horizon glow */}
           <linearGradient id="mvSunSky" x1="0" y1="0" x2="0" y2="1">
@@ -376,6 +404,12 @@ export default function Movement() {
     haptics.tap();
     useField.getState().recordTape("object", 0.4, `movement/speed/${v}`);
   };
+
+  // refs so the gesture bindings (mounted once) always see the live acts
+  const toggleDialRef = useRef<() => void>(() => {});
+  const pickSpeedRef = useRef<(v: number) => void>(() => {});
+  toggleDialRef.current = toggleDial;
+  pickSpeedRef.current = pickSpeed;
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -935,35 +969,135 @@ export default function Movement() {
       const rec = pressables.find((p) => p.act === act);
       if (rec) { pressAnim.rec = rec; pressAnim.t0 = performance.now(); }
     };
-    const handleHit = (act: string | undefined) => {
+    const handleHit = (act: string | undefined, intensity = 0.5) => {
       const a = getFieldAudio();
-      if (!act) { try { a.playNote(57, 90); } catch { /* noop */ } haptics.tap(); useField.getState().recordTape("object", 0.3, "movement/plate"); return; }
+      if (!act) { try { a.playNote(57, 60 + Math.round(intensity * 90)); } catch { /* noop */ } haptics.tap(); useField.getState().recordTape("object", 0.2 + intensity * 0.3, "movement/plate"); return; }
       if (act === "wind") { wind(); press("wind"); return; }
       if (act === "still") { const next = speedRef.current === 0 ? 1 : 0; pickSpeed(next); press("still"); return; }
       if (act === "speed") { const order = [0, 1, 30, 300]; pickSpeed(order[(order.indexOf(speedRef.current) + 1) % order.length]); press("speed"); return; }
-      if (act === "balance") { try { a.chime(); } catch { /* noop */ } haptics.ripple(0.6); useField.getState().recordTape("sigil", 0.7, "movement/balance"); return; }
-      if (act.startsWith("gear")) { try { a.playNote(GEAR_PITCH[act] ?? 60, 180); } catch { /* noop */ } haptics.tap(); useField.getState().recordTape("object", 0.5, `movement/${act}`); return; }
+      if (act === "balance") { try { a.chime(); } catch { /* noop */ } haptics.ripple(0.35 + intensity * 0.5); useField.getState().recordTape("sigil", 0.5 + intensity * 0.4, "movement/balance"); return; }
+      if (act.startsWith("gear")) { try { a.playNote(GEAR_PITCH[act] ?? 60, 120 + Math.round(intensity * 120)); } catch { /* noop */ } haptics.tap(); useField.getState().recordTape("object", 0.3 + intensity * 0.4, `movement/${act}`); return; }
     };
     const raycaster = new THREE.Raycaster();
     const ndc = new THREE.Vector2();
-    let downX = 0, downY = 0, downT = 0;
-    const onDown = (e: PointerEvent) => { downX = e.clientX; downY = e.clientY; downT = performance.now(); };
-    const onUp = (e: PointerEvent) => {
-      if (performance.now() - downT > 420) return;
-      if (Math.hypot(e.clientX - downX, e.clientY - downY) > 7) return;
+    const actAt = (clientX: number, clientY: number): string | undefined => {
       const rect = renderer.domElement.getBoundingClientRect();
-      ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-      ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+      ndc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+      ndc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
       raycaster.setFromCamera(ndc, camera);
       const hits = raycaster.intersectObject(root, true);
-      if (!hits.length) return;
+      if (!hits.length) return undefined;
       let o: THREE.Object3D | null = hits[0].object;
-      let act: string | undefined;
-      while (o) { if (o.userData && o.userData.act) { act = o.userData.act as string; break; } o = o.parent; }
-      handleHit(act);
+      while (o) { if (o.userData && o.userData.act) return o.userData.act as string; o = o.parent; }
+      return undefined;
     };
-    renderer.domElement.addEventListener("pointerdown", onDown);
-    renderer.domElement.addEventListener("pointerup", onUp);
+
+    // ── gestures (the shared grammar — src/lib/gesture) ────────────────
+    // One finger touches the matter: tap a part and it speaks; a flick
+    // knocks the balance wide; a circling finger turns the crown; a
+    // ceremony hold sets the watch to true local time. Two fingers twist
+    // the lens: dial ↔ open movement. Three fingers touch the law: drag
+    // winds the mainspring, hold dilates time. OrbitControls keeps the
+    // camera (its pinch is the frame, not a room binding); the engine
+    // rides the same canvas without capturing the stream.
+    const escapeKick = { amp: 0, at: 0 };            // flick → balance swings wide
+    const entrainT = { bpm: 0, until: 0, lastBeat: -1 };
+    const timeScale = { cur: 1, target: 1 };
+    let lastGestureAt = performance.now();
+    let twistAcc = 0;
+    let ceremonyDone = false;
+    let lastCrankAt = 0;
+    let lastWindCueAt = 0;
+
+    const detachGestures = attachGestures(renderer.domElement, {
+      tap: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers !== 1) return; // frame/law taps are absorbed
+        handleHit(actAt(e.x, e.y), e.intensity);
+      },
+      flick: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers !== 1) return;
+        // a flick is a watchmaker's knock: the balance swings wide, rings,
+        // then the hairspring gathers it back
+        escapeKick.amp = Math.min(0.6, 0.25 + e.speed * 0.2);
+        escapeKick.at = performance.now();
+        try { getFieldAudio().chime(); } catch { /* noop */ }
+        try { haptics.ripple(0.5); } catch { /* noop */ }
+        useField.getState().recordTape("ripple", 0.55, "movement/knock");
+      },
+      scrub: (e) => {
+        lastGestureAt = performance.now();
+        const now = performance.now();
+        if (now - lastCrankAt < 420) return;
+        lastCrankAt = now;
+        // a circling finger turns the crown — the ratchet clicks over
+        windKick.v = Math.min(1, windKick.v + 0.35);
+        try { getFieldAudio().playNote(62 + ((Math.abs(Math.round(e.winding)) % 3) * 2), 70); } catch { /* noop */ }
+        try { haptics.tap(); } catch { /* noop */ }
+        useField.getState().recordTape("object", 0.45, "movement/crank");
+      },
+      drag: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers !== 3 || e.phase === "end") return;
+        // three fingers drag the law: wind pours into the mainspring —
+        // the barrel and ratchet surge with the stroke
+        windKick.v = Math.min(1.2, windKick.v + Math.hypot(e.dx, e.dy) * 0.004);
+        const now = performance.now();
+        if (now - lastWindCueAt > 500) {
+          lastWindCueAt = now;
+          try { getFieldAudio().playNote(43, 160); } catch { /* noop */ }
+          try { haptics.chop(); } catch { /* noop */ }
+          useField.getState().recordTape("region", 0.5, "movement/mainspring");
+        }
+      },
+      hold: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          // three fingers hold the law: the whole train runs at 1/4
+          if (e.phase === "enter") {
+            timeScale.target = 0.25;
+            try { getFieldAudio().playNote(36, 260); } catch { /* noop */ }
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+          if (e.phase === "release") timeScale.target = 1;
+          return;
+        }
+        if (e.fingers !== 1) return;
+        if (e.phase === "enter") ceremonyDone = false;
+        if (e.phase === "release") { ceremonyDone = false; return; }
+        // ceremony — the room's one solemn act: the watch is set. It
+        // returns to real time, synchronised to this very moment.
+        if (e.tier >= 3 && !ceremonyDone) {
+          ceremonyDone = true;
+          resyncRef.current = true;
+          if (speedRef.current !== 1) pickSpeedRef.current(1);
+          try { getFieldAudio().bell(); } catch { /* noop */ }
+          try { haptics.bloom(); } catch { /* noop */ }
+          useField.getState().recordTape("kept", 0.85, "movement/set");
+        }
+      },
+      twist: (e) => {
+        lastGestureAt = performance.now();
+        // two fingers rotate the lens: the same hour as chapter ring or as
+        // bare going train — dial on, dial off
+        if (e.phase === "start") twistAcc = 0;
+        if (e.phase === "move") twistAcc += e.angle;
+        if (e.phase === "end" && Math.abs(twistAcc) > 0.9) {
+          toggleDialRef.current();
+          try { haptics.lens(); } catch { /* noop */ }
+        }
+      },
+      rhythm: (e) => {
+        // tap a steady beat and the escapement beats audibly with you
+        if (e.stability <= 0.7 || e.bpm < 40 || e.bpm > 220) return;
+        lastGestureAt = performance.now();
+        entrainT.bpm = e.bpm;
+        entrainT.until = performance.now() + 9000;
+        entrainT.lastBeat = -1;
+        useField.getState().recordTape("sigil", 0.5, "movement/entrain");
+      },
+    }, { wheelZoom: false, noCapture: true, manageStyle: false });
 
     // ── camera presets (framed from the assembly's bounding sphere) ──
     const box = new THREE.Box3().setFromObject(root);
@@ -1035,13 +1169,31 @@ export default function Movement() {
       const now = performance.now();
       let dt = (now - lastNow) / 1000; lastNow = now;
       if (dt > 0.1) dt = 0.1;
+      // three-finger time dilation eases the whole train to 1/4 speed
+      timeScale.cur += (timeScale.target - timeScale.cur) * Math.min(1, dt * 5);
       if (resyncRef.current) {
         const d = new Date();
         simAccum = d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds() + d.getMilliseconds() / 1000;
         resyncRef.current = false;
       }
-      simAccum += dt * sp; // still mode (sp=0) freezes the whole train
+      simAccum += dt * sp * timeScale.cur; // still mode (sp=0) freezes the whole train
       const simSec = simAccum;
+
+      // the escapement beats with a steadily tapped hand — an audible tick
+      // and a visible pulse of the balance on every beat, for a while
+      let entrainPulse = 0;
+      if (now < entrainT.until && entrainT.bpm > 0) {
+        const beatLen = 60000 / entrainT.bpm;
+        const beatIdx = Math.floor(now / beatLen);
+        if (beatIdx !== entrainT.lastBeat) {
+          entrainT.lastBeat = beatIdx;
+          try { getFieldAudio().playNote(76 + (beatIdx % 2) * 3, 30); } catch { /* noop */ }
+        }
+        entrainPulse = Math.max(0, 1 - ((now % beatLen) / beatLen) * 3) * 0.16;
+      }
+      // a knock rings down: the balance swings wide then gathers back
+      const kickAge = (now - escapeKick.at) / 1000;
+      const kick = escapeKick.amp > 0 && kickAge < 2.4 ? escapeKick.amp * Math.exp(-kickAge * 1.8) : 0;
 
       const tEff = Math.floor(simSec / TICK) * TICK; // quantised time for fast wheels
 
@@ -1053,10 +1205,19 @@ export default function Movement() {
       drum.rotation.y = barrel.omega * simSec + windKick.v;
       ratchet.rotation.y = barrel.omega * simSec + windKick.v * 1.6;
 
-      // balance: smooth SHM; pallet fork snaps with the tick
+      // balance: smooth SHM; pallet fork snaps with the tick. A knock or an
+      // entrained beat widens the swing without touching the timekeeping.
       const ph = simSec * balHz;
-      balance.rotation.y = Math.sin(ph * Math.PI * 2) * 1.05;
+      balance.rotation.y = Math.sin(ph * Math.PI * 2) * (1.05 + kick + entrainPulse);
       fork.rotation.y = (Math.floor(ph * 2) % 2 ? 1 : -1) * 0.17;
+
+      // glimmer (grammar §6): after ~20s untouched the rim light breathes
+      // over the case — a glint where a hand would land, never text
+      if (now - lastGestureAt > 20000) {
+        rim.intensity = 1.1 + (0.5 + Math.sin(now / 480) * 0.5) * 0.7;
+      } else {
+        rim.intensity = 1.1;
+      }
 
       // hands: hour/minute smooth, seconds steps with the escapement
       hourHand.rotation.y = -((simSec / 3600) % 12) / 12 * Math.PI * 2;
@@ -1090,8 +1251,7 @@ export default function Movement() {
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
-      renderer.domElement.removeEventListener("pointerdown", onDown);
-      renderer.domElement.removeEventListener("pointerup", onUp);
+      detachGestures();
       controls.dispose();
       renderer.dispose();
       pmrem.dispose();

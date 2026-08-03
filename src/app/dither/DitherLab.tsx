@@ -8,6 +8,8 @@ import {
   shareOrDownloadDitherAvatar,
 } from "@/lib/dither-avatar";
 import * as haptics from "@/lib/haptics";
+import { attachGestures } from "@/lib/gesture";
+import { useField } from "@/store/field";
 import styles from "./dither.module.css";
 
 type ChartMode = "area" | "bar" | "line";
@@ -106,6 +108,8 @@ function DitherChart({
   focus,
   locked,
   onFocus,
+  onWind,
+  onCeremony,
 }: {
   mode: ChartMode;
   pattern: PatternMode;
@@ -115,11 +119,21 @@ function DitherChart({
   focus: SeriesKey | null;
   locked: boolean;
   onFocus: (focus: SeriesKey | null, locked?: boolean) => void;
+  onWind: (delta: number) => void;
+  onCeremony: () => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [scrubIndex, setScrubIndex] = useState<number | null>(null);
   const [scrubLocked, setScrubLocked] = useState(false);
+  const scrubLockedRef = useRef(false);
+  useEffect(() => { scrubLockedRef.current = scrubLocked; }, [scrubLocked]);
+  // twist rotates the lens: dithered ↔ raw continuous tone
+  const [rawLens, setRawLens] = useState(false);
   const animationRef = useRef(1);
+  const timeScaleRef = useRef({ cur: 1, target: 1 });
+  const lastGestureAtRef = useRef(0);
+  const ghostRef = useRef(-1); // 0..1 while the idle glimmer sweeps; -1 off
+  const [replayNonce, setReplayNonce] = useState(0);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -179,7 +193,7 @@ function DitherChart({
         const barW = Math.max(7, innerW / MONTHS.length / 3.2);
         points.forEach((point) => {
           const offset = key === "desktop" ? -barW * 0.6 : barW * 0.6;
-          ctx.fillStyle = makePattern(ctx, color, pattern, density);
+          ctx.fillStyle = rawLens ? rgba(color, 0.42) : makePattern(ctx, color, pattern, density);
           ctx.fillRect(point.x + offset - barW / 2, point.y, barW, baseY - point.y);
           ctx.strokeStyle = rgba(color, 0.92);
           ctx.strokeRect(point.x + offset - barW / 2, point.y, barW, baseY - point.y);
@@ -191,7 +205,7 @@ function DitherChart({
           points.forEach((point) => ctx.lineTo(point.x, point.y));
           ctx.lineTo(points[points.length - 1].x, baseY);
           ctx.closePath();
-          ctx.fillStyle = makePattern(ctx, color, pattern, density);
+          ctx.fillStyle = rawLens ? rgba(color, 0.30) : makePattern(ctx, color, pattern, density);
           ctx.fill();
         }
         ctx.strokeStyle = color;
@@ -229,7 +243,18 @@ function DitherChart({
         ctx.stroke();
       });
     }
-  }, [density, focus, mode, palette, pattern, scrubIndex]);
+
+    // glimmer (grammar §6): a faint ghost scrub drifts across the signal
+    // after ~20s of quiet — a physical hint of where a hand would land.
+    if (ghostRef.current >= 0) {
+      const gx = left + ghostRef.current * innerW;
+      ctx.strokeStyle = rgba(palette.primary, 0.18 * Math.sin(ghostRef.current * Math.PI));
+      ctx.beginPath();
+      ctx.moveTo(gx, top);
+      ctx.lineTo(gx, baseY);
+      ctx.stroke();
+    }
+  }, [density, focus, mode, palette, pattern, scrubIndex, rawLens]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -249,23 +274,181 @@ function DitherChart({
     }
     animationRef.current = 0;
     let frame = 0;
-    const started = performance.now();
+    let raw = 0;
+    let last = performance.now();
     const animate = (now: number) => {
-      const raw = Math.min(1, (now - started) / 760);
+      // the room's clock — dilated to 1/4 while three fingers hold
+      const ts = timeScaleRef.current;
+      ts.cur += (ts.target - ts.cur) * Math.min(1, ((now - last) / 1000) * 5);
+      raw = Math.min(1, raw + ((now - last) / 760) * ts.cur);
+      last = now;
       animationRef.current = 1 - Math.pow(1 - raw, 3);
       draw();
       if (raw < 1) frame = requestAnimationFrame(animate);
     };
     frame = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(frame);
-  }, [replayToken, mode, draw]);
+  }, [replayToken, replayNonce, mode, draw]);
 
-  const updateScrub = (clientX: number) => {
+  const updateScrub = useCallback((clientX: number, audible = false) => {
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
     const x = Math.max(44, Math.min(rect.width - 18, clientX - rect.left));
-    setScrubIndex(Math.round(((x - 44) / (rect.width - 62)) * (MONTHS.length - 1)));
-  };
+    const next = Math.round(((x - 44) / (rect.width - 62)) * (MONTHS.length - 1));
+    setScrubIndex((prev) => {
+      if (audible && prev !== next) {
+        // the scrub sounds the month it crosses — pitch carries the value
+        try { getFieldAudio().playNote(50 + Math.round((SERIES.desktop[next] / 300) * 19), 70); } catch { /* noop */ }
+        try { haptics.tap(); } catch { /* noop */ }
+      }
+      return next;
+    });
+  }, []);
+
+  // ── gestures (the shared grammar — src/lib/gesture) ──────────────
+  // One finger scrubs the signal (tap holds it, a flick strums all eight
+  // months, a ceremony hold gathers full ink). Two fingers twist the lens:
+  // dithered ↔ raw tone. Three fingers are the law: drag blows ink density,
+  // hold dilates the replay clock. Pinch and pan2 stay unbound.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    let twistAcc = 0;
+    let inked = false;
+    let lastWindCueAt = 0;
+    let strumTimers: number[] = [];
+    let entrainStop = 0;
+    let entrainRaf = 0;
+
+    const detach = attachGestures(canvas, {
+      tap: (e) => {
+        lastGestureAtRef.current = performance.now();
+        if (e.fingers !== 1) return;
+        updateScrub(e.x, true);
+        setScrubLocked((value) => !value);
+      },
+      drag: (e) => {
+        lastGestureAtRef.current = performance.now();
+        if (e.fingers === 3) {
+          if (e.phase === "end") return;
+          // three fingers drag the weather: wind blows ink across the
+          // surface — density gathers with the stroke and thins against it
+          onWind(e.dx * 0.0016);
+          const now = performance.now();
+          if (Math.abs(e.vx) > 0.25 && now - lastWindCueAt > 600) {
+            lastWindCueAt = now;
+            try { getFieldAudio().buzz(); } catch { /* noop */ }
+            try { haptics.chop(); } catch { /* noop */ }
+          }
+          return;
+        }
+        if (e.fingers !== 1 || e.phase === "end") return;
+        updateScrub(e.x, true);
+      },
+      flick: (e) => {
+        lastGestureAtRef.current = performance.now();
+        if (e.fingers !== 1) return;
+        // a flick strums the whole signal — eight months ring in order
+        strumTimers.forEach((id) => window.clearTimeout(id));
+        strumTimers = [];
+        const dir = Math.cos(e.angle) < 0 ? -1 : 1;
+        MONTHS.forEach((_, i) => {
+          const step = dir > 0 ? i : MONTHS.length - 1 - i;
+          strumTimers.push(window.setTimeout(() => {
+            setScrubIndex(step);
+            try { getFieldAudio().playNote(50 + Math.round((SERIES.desktop[step] / 300) * 19), 90); } catch { /* noop */ }
+          }, i * 70));
+        });
+        strumTimers.push(window.setTimeout(() => {
+          if (!scrubLockedRef.current) setScrubIndex(null);
+        }, MONTHS.length * 70 + 260));
+        try { haptics.ripple(0.4); } catch { /* noop */ }
+      },
+      hold: (e) => {
+        lastGestureAtRef.current = performance.now();
+        if (e.fingers === 3) {
+          // three fingers hold the law: the signal redraws at quarter speed
+          if (e.phase === "enter") {
+            timeScaleRef.current.target = 0.25;
+            setReplayNonce((n) => n + 1);
+            try { getFieldAudio().playNote(36, 260); } catch { /* noop */ }
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+          if (e.phase === "release") timeScaleRef.current.target = 1;
+          return;
+        }
+        if (e.fingers !== 1) return;
+        if (e.phase === "enter") inked = false;
+        if (e.phase === "release") { inked = false; return; }
+        // ceremony — the room's one solemn act: full ink gathers under the
+        // held hand and stays.
+        if (e.tier >= 3 && !inked) {
+          inked = true;
+          onCeremony();
+        }
+      },
+      twist: (e) => {
+        lastGestureAtRef.current = performance.now();
+        // two fingers rotate the lens: the dithered field resolves into
+        // raw continuous tone, and back
+        if (e.phase === "start") twistAcc = 0;
+        if (e.phase === "move") twistAcc += e.angle;
+        if (e.phase === "end" && Math.abs(twistAcc) > 0.9) {
+          setRawLens((value) => !value);
+          try { haptics.lens(); } catch { /* noop */ }
+          try { getFieldAudio().chime(); } catch { /* noop */ }
+        }
+      },
+      rhythm: (e) => {
+        // a steady tapped pulse: the signal breathes on your beat
+        if (e.stability <= 0.7 || e.bpm < 40 || e.bpm > 200) return;
+        lastGestureAtRef.current = performance.now();
+        entrainStop = performance.now() + 8000;
+        const beatLen = 60000 / e.bpm;
+        let lastBeat = -1;
+        cancelAnimationFrame(entrainRaf);
+        const pulse = (now: number) => {
+          if (now > entrainStop) { animationRef.current = 1; draw(); return; }
+          const beat = Math.floor(now / beatLen);
+          const phase = (now % beatLen) / beatLen;
+          if (beat !== lastBeat) {
+            lastBeat = beat;
+            try { getFieldAudio().playNote(62, 50); } catch { /* noop */ }
+          }
+          animationRef.current = 0.94 + 0.06 * Math.min(1, phase * 3);
+          draw();
+          entrainRaf = requestAnimationFrame(pulse);
+        };
+        entrainRaf = requestAnimationFrame(pulse);
+      },
+    }, { wheelZoom: false });
+
+    return () => {
+      detach();
+      strumTimers.forEach((id) => window.clearTimeout(id));
+      cancelAnimationFrame(entrainRaf);
+    };
+  }, [draw, onCeremony, onWind, updateScrub]);
+
+  // idle glimmer — every ~9s of stillness a ghost scrub sweeps once
+  useEffect(() => {
+    let raf = 0;
+    const interval = window.setInterval(() => {
+      if (performance.now() - lastGestureAtRef.current < 20000) return;
+      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+      const started = performance.now();
+      cancelAnimationFrame(raf);
+      const sweep = (now: number) => {
+        const t = (now - started) / 1600;
+        if (t >= 1) { ghostRef.current = -1; draw(); return; }
+        ghostRef.current = t;
+        draw();
+        raf = requestAnimationFrame(sweep);
+      };
+      raf = requestAnimationFrame(sweep);
+    }, 9000);
+    return () => { window.clearInterval(interval); cancelAnimationFrame(raf); };
+  }, [draw]);
 
   const tooltipPosition = scrubIndex === null ? 50 : 14 + (scrubIndex / 7) * 78;
   return (
@@ -274,10 +457,10 @@ function DitherChart({
         ref={canvasRef}
         className={styles.chart}
         aria-label="Interactive chart comparing desktop and mobile signals from January through August"
-        onPointerMove={(event) => updateScrub(event.clientX)}
-        onPointerDown={(event) => {
-          updateScrub(event.clientX);
-          setScrubLocked((value) => !value);
+        onPointerMove={(event) => {
+          // hover is the grammar's quiet dialect — the scrub follows a
+          // passing hand; pressed contact belongs to the gesture engine
+          if (event.buttons === 0) updateScrub(event.clientX);
         }}
         onPointerLeave={() => {
           if (!scrubLocked) setScrubIndex(null);
@@ -555,6 +738,19 @@ export default function DitherLab() {
     setFocusLocked(nextLocked);
   };
 
+  // three-finger wind blows ink density across the surface
+  const onWind = useCallback((delta: number) => {
+    setDensity((value) => Math.max(0.15, Math.min(1, value + delta)));
+  }, []);
+
+  // ceremony hold — the one solemn act: full ink gathers and stays
+  const onCeremony = useCallback(() => {
+    setDensity(1);
+    try { getFieldAudio().bell(); } catch { /* noop */ }
+    try { haptics.bloom(); } catch { /* noop */ }
+    useField.getState().recordTape("kept", 0.85, "dither/full-ink");
+  }, []);
+
   return (
     <div
       className={styles.page}
@@ -601,6 +797,8 @@ export default function DitherLab() {
             focus={focus}
             locked={focusLocked}
             onFocus={onFocus}
+            onWind={onWind}
+            onCeremony={onCeremony}
           />
           <div className={styles.controls}>
             <fieldset>

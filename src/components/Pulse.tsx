@@ -7,10 +7,10 @@ import {
   useRef,
   useState,
   type CSSProperties,
-  type PointerEvent as ReactPointerEvent,
 } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
+import { attachGestures } from "@/lib/gesture";
 import { useField } from "@/store/field";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
 
@@ -233,6 +233,12 @@ export default function Pulse() {
   const reduceMotionRef = useRef(false);
   const shockRef = useRef({ until: 0, armedBell: false, energy: 0 });
   const timersRef = useRef<number[]>([]);
+  // ── the law layer (gesture grammar): wind, time dilation, entrainment ──
+  const windRef = useRef({ cur: 0, target: 0 });
+  const timeScaleRef = useRef({ cur: 1, target: 1 });
+  const entrainRef = useRef({ bpm: 0, until: 0 });
+  const lastGestureAtRef = useRef(0);
+  const ceremonyKeepRef = useRef<() => void>(() => {});
 
   const [hr, setHr] = useState(72);
   const [breathRate, setBreathRate] = useState(13);
@@ -331,6 +337,8 @@ export default function Pulse() {
     const render = {
       lastT: performance.now(),
       time: 0,
+      // the body's own clock — warped by three-finger time dilation
+      wnow: performance.now(),
       beatAt: 0,
       qrs: 1,
       beatGlow: 0,
@@ -342,6 +350,7 @@ export default function Pulse() {
       patternCursor: 0,
       touchEnergy: 0,
       lastReadout: 0,
+      lastGlimmer: 0,
     };
 
     const resize = () => {
@@ -366,8 +375,17 @@ export default function Pulse() {
       const rawDt = Math.min(0.08, (now - render.lastT) / 1000);
       render.lastT = now;
       const reduce = reduceMotionRef.current;
-      const dt = reduce ? rawDt * 0.18 : rawDt;
+      // three-finger time dilation: the body's clock eases toward 1/4 speed
+      const ts = timeScaleRef.current;
+      ts.cur += (ts.target - ts.cur) * Math.min(1, rawDt * 5);
+      const dt = (reduce ? rawDt * 0.18 : rawDt) * ts.cur;
       render.time += dt;
+      render.wnow += rawDt * 1000 * ts.cur;
+      const wnow = render.wnow;
+      // three-finger wind: a pressure front leaning through every channel
+      const wind = windRef.current;
+      wind.cur += (wind.target - wind.cur) * Math.min(1, rawDt * 4);
+      wind.target *= Math.exp(-rawDt / 1.6);
 
       const rect = root.getBoundingClientRect();
       const w = Math.max(1, rect.width);
@@ -384,17 +402,21 @@ export default function Pulse() {
       render.touchEnergy *= Math.pow(0.012, rawDt / 2.4);
       shock.energy = Math.max(inShock ? 1 : 0, shock.energy * Math.pow(0.02, rawDt / 1.45));
 
-      const effectiveHr = clamp(hrRef.current * (1 + stressV * 0.16) + render.touchEnergy * 9, 38, 220);
+      // a tapped, steady pulse entrains the heart while it holds
+      const entrain = entrainRef.current;
+      const entrained = now < entrain.until && entrain.bpm > 0;
+      const baseHr = entrained ? entrain.bpm : hrRef.current;
+      const effectiveHr = clamp(baseHr * (1 + stressV * 0.16) + render.touchEnergy * 9 + Math.abs(wind.cur) * 6, 38, 220);
       const period = 60 / effectiveHr;
-      const sinceBeat = (now - render.beatAt) / 1000;
+      const sinceBeat = (wnow - render.beatAt) / 1000;
       const variance = 0.028 + stressV * 0.11 + render.touchEnergy * 0.012;
-      const wobble = (Math.sin(now * 0.0021) * 0.55 + Math.sin(now * 0.0013) * 0.45) * variance;
+      const wobble = (Math.sin(wnow * 0.0021) * 0.55 + Math.sin(wnow * 0.0013) * 0.45) * variance * (entrained ? 0.3 : 1);
 
       if (!inShock && sinceBeat >= period * (1 + wobble)) {
-        render.beatAt = now;
+        render.beatAt = wnow;
         render.qrs = 0;
         render.beatGlow = 1;
-        if (audioRef.current.hr) {
+        if (audioRef.current.hr || entrained) {
           try { getFieldAudio().playNote(48 + Math.round(stressV * 12), 42); } catch { /* noop */ }
         }
       }
@@ -403,7 +425,7 @@ export default function Pulse() {
 
       const breathHz = clamp((breathRef.current * (1 + stressV * 0.22) + render.touchEnergy * 1.2) / 60, 0.05, 0.9);
       const previousBreath = Math.sin(render.breathPhase);
-      render.breathPhase += dt * Math.PI * 2 * (breathHz + Math.sin(now * 0.0011) * stressV * 0.025);
+      render.breathPhase += dt * Math.PI * 2 * (breathHz + Math.sin(wnow * 0.0011) * stressV * 0.025);
       const breathNow = Math.sin(render.breathPhase);
       if (!inShock && audioRef.current.breath && breathNow > 0.985 && previousBreath <= 0.985) {
         try { getFieldAudio().chime(); } catch { /* noop */ }
@@ -415,15 +437,15 @@ export default function Pulse() {
         try { getFieldAudio().playNote(42, 36); } catch { /* noop */ }
       }
 
-      if (!inShock && now > render.brainBurstUntil && Math.random() < 0.008 + stressV * 0.017 + render.touchEnergy * 0.002) {
-        render.brainBurstUntil = now + 260 + Math.random() * 520;
+      if (!inShock && wnow > render.brainBurstUntil && Math.random() < (0.008 + stressV * 0.017 + render.touchEnergy * 0.002) * ts.cur) {
+        render.brainBurstUntil = wnow + 260 + Math.random() * 520;
         if (audioRef.current.brain) {
           try { getFieldAudio().spark(); } catch { /* noop */ }
         }
       }
-      const burst = now < render.brainBurstUntil ? 1 : 0;
-      const alpha = Math.sin(now * 0.061) * Math.sin(now * 0.079) * 0.55;
-      const beta = Math.sin(now * 0.18 + render.touchEnergy) * 0.28;
+      const burst = wnow < render.brainBurstUntil ? 1 : 0;
+      const alpha = Math.sin(wnow * 0.061) * Math.sin(wnow * 0.079) * 0.55;
+      const beta = Math.sin(wnow * 0.18 + render.touchEnergy) * 0.28;
       const noise = (Math.random() - 0.5) * (0.42 + stressV * 0.52);
       const brainTarget = (alpha + beta + noise) * (0.56 + stressV * 0.54 + burst * 0.38);
       render.brain = render.brain * 0.58 + brainTarget * 0.42;
@@ -439,7 +461,7 @@ export default function Pulse() {
       pushSample(channels.bp, inShock ? 0 : bpPulse * 0.78 + bpDrift - 0.34 + render.touchEnergy * 0.025);
       pushSample(channels.brain, inShock ? 0 : clamp(render.brain + patternSample * 0.06, -1, 1));
 
-      drawBackground(ctx, w, h, render.time, stressV, render.touchEnergy, shock.energy, reduce);
+      drawBackground(ctx, w, h, render.time, stressV, render.touchEnergy + Math.abs(wind.cur) * 1.4, shock.energy, reduce);
       const center = {
         x: w * (mobile ? 0.5 : 0.51),
         y: h * (mobile ? 0.43 : 0.49),
@@ -479,6 +501,22 @@ export default function Pulse() {
       if (shock.armedBell && now > shock.until + 120) {
         shock.armedBell = false;
         try { getFieldAudio().bell(); } catch { /* noop */ }
+      }
+
+      // glimmer (grammar §6): after ~20s of quiet the membrane breathes a
+      // faint ring where a touch would bloom — physical, never text.
+      if (now - lastGestureAtRef.current > 20000 && now - render.lastGlimmer > 9000) {
+        render.lastGlimmer = now;
+        const slot = Math.floor(now / 9000);
+        const gseed = (n: number) => { const v = Math.sin((slot + n) * 127.1) * 43758.5453; return v - Math.floor(v); };
+        bloomsRef.current.push({
+          x: w * (0.3 + gseed(0) * 0.4),
+          y: h * (0.32 + gseed(7) * 0.34),
+          born: now,
+          life: 2600,
+          strength: 0.22,
+          hue: PATTERN_COLORS[patternRef.current.kind],
+        });
       }
 
       if (now - render.lastReadout > 220) {
@@ -542,39 +580,122 @@ export default function Pulse() {
     }
   }, [recordTape]);
 
-  const onCanvasPointerDown = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
-    try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* noop */ }
-    void getFieldAudio().start();
-    const rect = event.currentTarget.getBoundingClientRect();
-    pointerRef.current.active = true;
-    pointerRef.current.id = event.pointerId;
-    pointerRef.current.x = event.clientX;
-    pointerRef.current.y = event.clientY;
-    pointerRef.current.startX = event.clientX - rect.left;
-    pointerRef.current.startY = event.clientY - rect.top;
-    addBloom(event.clientX, event.clientY, 1.05, "press");
-  }, [addBloom]);
+  // ── gestures (the shared grammar — src/lib/gesture) ──────────────
+  // One finger touches the membrane: tap and drag bloom pressure into
+  // the body. Three fingers touch the law: drag is a pressure front,
+  // hold dilates the body's clock. A steady tapped pulse entrains the
+  // heart; circling stirs the channels; a ceremony hold keeps the
+  // pattern. Pinch and pan2 stay unbound — the frame belongs to the
+  // manifold. Thresholds live in gesture/core alone.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    let shearAcc = 0;
+    let lastScrubAt = 0;
+    let lastWindCueAt = 0;
 
-  const onCanvasPointerMove = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
-    const pointer = pointerRef.current;
-    if (!pointer.active || pointer.id !== event.pointerId) return;
-    const dx = event.clientX - pointer.x;
-    const dy = event.clientY - pointer.y;
-    const distance = Math.hypot(dx, dy);
-    pointer.x = event.clientX;
-    pointer.y = event.clientY;
-    if (distance < 9) return;
-    addBloom(event.clientX, event.clientY, clamp(distance / 54, 0.28, 1.18), "shear");
-  }, [addBloom]);
+    const detach = attachGestures(canvas, {
+      tap: (e) => {
+        lastGestureAtRef.current = performance.now();
+        if (e.fingers !== 1) return; // the membrane absorbs frame/law taps
+        void getFieldAudio().start();
+        // tap intensity is the strike — bloom size, note length and the
+        // haptic all ride the same 0..1 from core.
+        addBloom(e.x, e.y, 0.6 + e.intensity * 0.9, "press");
+      },
+      drag: (e) => {
+        lastGestureAtRef.current = performance.now();
+        if (e.fingers === 3) {
+          if (e.phase === "end") return;
+          // three fingers drag the weather: a pressure front — every
+          // channel leans, the field lines shear with the wind
+          windRef.current.target = clamp(windRef.current.target + e.vx * 0.3, -1.4, 1.4);
+          const now = performance.now();
+          if (Math.abs(e.vx) > 0.3 && now - lastWindCueAt > 700) {
+            lastWindCueAt = now;
+            try { getFieldAudio().playNote(38, 240); } catch { /* noop */ }
+            try { haptics.chop(); } catch { /* noop */ }
+            recordTape("region", 0.45, "pulse/front");
+          }
+          return;
+        }
+        if (e.fingers !== 1) return;
+        if (e.phase === "start") {
+          void getFieldAudio().start();
+          addBloom(e.x, e.y, 1.05, "press");
+          shearAcc = 0;
+          return;
+        }
+        if (e.phase === "end") return;
+        // conduct: shear blooms follow the moving hand
+        shearAcc += Math.hypot(e.dx, e.dy);
+        if (shearAcc < 9) return;
+        addBloom(e.x, e.y, clamp(shearAcc / 54, 0.28, 1.18), "shear");
+        shearAcc = 0;
+      },
+      flick: (e) => {
+        lastGestureAtRef.current = performance.now();
+        if (e.fingers !== 1) return;
+        // a flick throws a jolt across the membrane — a comet of blooms
+        const sp = Math.min(260, 90 + e.speed * 130);
+        for (let i = 0; i < 5; i++) {
+          addBloom(
+            e.x + Math.cos(e.angle) * sp * (i / 4),
+            e.y + Math.sin(e.angle) * sp * (i / 4) * 0.6,
+            0.5 + (1 - i / 5) * 0.5,
+            "jolt",
+          );
+        }
+        try { haptics.chop(); } catch { /* noop */ }
+        recordTape("ripple", 0.6, "pulse/jolt");
+      },
+      hold: (e) => {
+        lastGestureAtRef.current = performance.now();
+        if (e.fingers === 3) {
+          // three fingers hold the law: the body slows to quarter time
+          if (e.phase === "enter") {
+            timeScaleRef.current.target = 0.25;
+            try { getFieldAudio().playNote(36, 260); } catch { /* noop */ }
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+          if (e.phase === "release") timeScaleRef.current.target = 1;
+          return;
+        }
+        if (e.fingers !== 1) return;
+        // ceremony — the room's one solemn act: this pattern is kept
+        if (e.phase === "tick" && e.tier >= 3) ceremonyKeepRef.current();
+      },
+      scrub: (e) => {
+        lastGestureAtRef.current = performance.now();
+        const now = performance.now();
+        if (now - lastScrubAt < 700) return;
+        lastScrubAt = now;
+        // circling stirs the channels — a ring of blooms turns with you
+        const sgn = Math.sign(e.winding) || 1;
+        for (let i = 0; i < 6; i++) {
+          const a = (i / 6) * Math.PI * 2 * sgn;
+          addBloom(e.cx + Math.cos(a) * 60, e.cy + Math.sin(a) * 36, 0.4, "stir");
+        }
+        try { getFieldAudio().playNote(55 + Math.round(Math.abs(e.winding) * 4), 140); } catch { /* noop */ }
+        try { haptics.ripple(0.35); } catch { /* noop */ }
+        recordTape("ripple", 0.5, "pulse/stir");
+      },
+      rhythm: (e) => {
+        // the monitor listens: a steady tapped pulse and the heart falls in
+        if (e.stability <= 0.7 || e.bpm < 40 || e.bpm > 180) return;
+        const wasSilent = performance.now() > entrainRef.current.until;
+        entrainRef.current.bpm = Math.round(e.bpm);
+        entrainRef.current.until = performance.now() + 12000;
+        if (wasSilent) {
+          try { getFieldAudio().playNote(60, 140); } catch { /* noop */ }
+          try { haptics.tap(); } catch { /* noop */ }
+          recordTape("sigil", 0.55, "pulse/entrain");
+        }
+      },
+    }, { wheelZoom: false });
 
-  const clearPointer = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
-    const pointer = pointerRef.current;
-    if (pointer.id === event.pointerId) {
-      pointer.active = false;
-      pointer.id = -1;
-    }
-    try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* noop */ }
-  }, []);
+    return detach;
+  }, [addBloom, recordTape]);
 
   const toggleAudio = useCallback((key: ChannelKey) => {
     void getFieldAudio().start();
@@ -644,6 +765,28 @@ export default function Pulse() {
     recordTape("kept", 0.72, `pulse/save/${name}`);
   }, [patternName, pattern, saved, recordTape, schedule]);
 
+  // ceremony hold — keep the pattern without the console: same act as the
+  // keep button, sealed with a bloom instead of a roll.
+  const lastCeremonyAtRef = useRef(0);
+  useEffect(() => {
+    ceremonyKeepRef.current = () => {
+      const now = performance.now();
+      if (now - lastCeremonyAtRef.current < 4000) return;
+      lastCeremonyAtRef.current = now;
+      const name = `${pattern.kind}-${Date.now().toString(36).slice(-4)}`;
+      const entry: SavedPattern = { name, kind: pattern.kind, seed: pattern.seed, createdAt: Date.now() };
+      const next = [entry, ...saved.filter((item) => item.name !== name)].slice(0, 18);
+      setSaved(next);
+      try { localStorage.setItem(PATTERN_KEY, JSON.stringify(next)); } catch { /* noop */ }
+      setShareMsg("kept");
+      schedule(() => setShareMsg(null), 1400);
+      touchImpulseRef.current = clamp(touchImpulseRef.current + 1.1, 0, 2);
+      try { getFieldAudio().bell(); } catch { /* noop */ }
+      try { haptics.bloom(); } catch { /* noop */ }
+      recordTape("kept", 0.85, `pulse/ceremony/${name}`);
+    };
+  }, [pattern, saved, recordTape, schedule]);
+
   const onLoadPattern = useCallback((entry: SavedPattern) => {
     setPattern(makePattern(entry.kind, entry.seed));
     touchImpulseRef.current = clamp(touchImpulseRef.current + 0.62, 0, 1.6);
@@ -693,10 +836,6 @@ export default function Pulse() {
         ref={canvasRef}
         className="oda-pulse-canvas"
         aria-hidden="true"
-        onPointerDown={onCanvasPointerDown}
-        onPointerMove={onCanvasPointerMove}
-        onPointerUp={clearPointer}
-        onPointerCancel={clearPointer}
       />
 
       <div className="pulse-vital-strip" aria-label="pulse channels">
