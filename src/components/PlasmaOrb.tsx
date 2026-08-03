@@ -204,11 +204,34 @@ void main() {
 
 type Persisted = { discs: Array<[number, number, number, number, number]>; season: number };
 
+/**
+ * What a field that has never been visited holds. Three discs, deterministic
+ * from their index alone, so the room is alive the moment it opens instead of
+ * being a rectangle of dark waiting to be told what it is. A field the visitor
+ * emptied is a different thing: `letGo` writes `{ discs: [] }`, and a stored
+ * empty list is a remembered state that nothing respawns over.
+ */
+function firstLight(nowMs: number): Disc[] {
+  const seeds = [0.17, 0.61, 0.88];
+  return seeds.map((seed, i) => ({
+    x: (i - 1) * 0.86,
+    y: Math.sin(i * 2.1) * 0.26,
+    vx: 0,
+    vy: 0,
+    radius: MIN_RADIUS + (MAX_RADIUS - MIN_RADIUS) * (0.42 + i * 0.11),
+    weight: 0.5 + i * 0.14,
+    seed,
+    born: nowMs - i * 900,
+    flare: 0,
+    retire: 0,
+  }));
+}
+
 function loadDiscs(nowMs: number): { discs: Disc[]; season: number } {
-  if (typeof window === "undefined") return { discs: [], season: 0 };
+  if (typeof window === "undefined") return { discs: firstLight(nowMs), season: 0 };
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { discs: [], season: 0 };
+    if (!raw) return { discs: firstLight(nowMs), season: 0 };
     const parsed = JSON.parse(raw) as Partial<Persisted>;
     const rows = Array.isArray(parsed.discs) ? parsed.discs : [];
     const discs: Disc[] = [];

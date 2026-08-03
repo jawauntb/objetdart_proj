@@ -517,14 +517,14 @@ export default function ConcernField() {
   return (
     <section id="concern-field" className="rule" data-touch-surface="true" style={{ scrollMarginTop: 72 }}>
       <div className="wrap">
-        <div className="t-eyebrow">concern field · drag the points</div>
+        {/* The room says what it is and nothing about how to work it: it was a
+            section of a scrolling page once, where a line of instruction was
+            fair, and it is a room now, where it is not (AGENTS.md, "no
+            instructions, ever"). Every move it answers lives in the guide. */}
+        <div className="t-eyebrow">concern field</div>
         <h2 className="t-h2 italic" style={{ marginTop: 12, marginBottom: 12 }}>
           weights maintained against time
         </h2>
-        <p className="t-meta italic" style={{ color: "var(--ink-2)", maxWidth: "56ch", marginTop: 0 }}>
-          eight concerns, eight axes. each vertex of the polygon is your weight
-          on that axis. drag it inward or outward. the shape is your night.
-        </p>
 
         <div
           className="concern-field__stage"
@@ -812,9 +812,10 @@ export default function ConcernField() {
               }}
             >
               {(() => {
-                const lit = dragging ?? hovering;
-                if (!lit) return "drag any point — opposites face across the compass";
-                const c = CONCERNS.find((x) => x.id === lit);
+                // lit by whatever the hand is on; silent otherwise. The
+                // reserved line keeps the layout from jumping.
+                const lit = dragging ?? hovering ?? charging?.k ?? null;
+                const c = lit ? CONCERNS.find((x) => x.id === lit) : null;
                 return c ? c.inscription : "";
               })()}
             </div>
@@ -822,7 +823,7 @@ export default function ConcernField() {
         </div>
 
         {/* presets */}
-        <div className="t-eyebrow" style={{ marginTop: 56 }}>presets · snap the polygon</div>
+        <div className="t-eyebrow" style={{ marginTop: 56 }}>presets</div>
         <div className="concern-field__presets" style={{ marginTop: 12, display: "flex", flexWrap: "wrap", gap: 8 }}>
           {PRESET_KEYS.map((name) => {
             const on = preset === name;
