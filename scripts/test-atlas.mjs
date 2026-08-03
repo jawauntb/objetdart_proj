@@ -610,8 +610,8 @@ const zoomSourceRequest = parseAtlasGenerationRequest({
 });
 assert.equal(
   atlasOperationForRequest(zoomSourceRequest),
-  "edit",
-  "zoom with a current image should reconstruct from the clipped source",
+  "generation",
+  "free zoom always draws a native sheet — never an edit/upscale of the soft parent",
 );
 // A fresh concept must draw from scratch even when a sheet is on screen — the
 // bug that made a new prompt return the same coastline was a `generate` request
@@ -628,32 +628,28 @@ assert.equal(
 );
 const sharpCallsBeforeZoom = sharpExtractCalls.length;
 const zoomResult = plain(await generateAtlasImage(zoomSourceRequest, openRouterProvider));
-assert.equal(zoomResult.generation.operation, "edit", "free zoom with a source sheet should edit/reconstruct");
-assert.ok(
-  sharpExtractCalls.length > sharpCallsBeforeZoom,
-  "zoom with clip+currentImage must pixel-crop before the provider call",
+assert.equal(zoomResult.generation.operation, "generation", "free zoom must generate, not edit the parent bitmap");
+assert.equal(
+  sharpExtractCalls.length,
+  sharpCallsBeforeZoom,
+  "free zoom must not pixel-crop the parent — that path is what stacked blur",
 );
 const openRouterCalls = () => providerCalls.filter((call) => call.url === "https://openrouter.ai/api/v1/images");
 const zoomCall = [...openRouterCalls()].reverse().find((call) => {
   const body = JSON.parse(call.init.body);
-  return typeof body.prompt === "string" && body.prompt.includes("Upsample, extend, and reconstruct");
+  return typeof body.prompt === "string" && body.prompt.includes("full-resolution atlas sheet");
 });
-assert.ok(zoomCall, "zoom should ask the provider to reconstruct from the clipped sample");
+assert.ok(zoomCall, "zoom should ask for a native full-resolution close view");
 const zoomBody = JSON.parse(zoomCall.init.body);
-assert.equal(zoomBody.input_references.length, 1, "zoom must send the clipped source map as an edit reference");
-assert.match(
-  zoomBody.input_references[0].image_url.url,
-  /^data:image\/png;base64,/,
-  "zoom input_references must carry the cropped PNG/WebP sample",
-);
+assert.equal(zoomBody.input_references, undefined, "zoom must not send the soft parent as an edit reference");
 
-const preCroppedZoomRequest = parseAtlasGenerationRequest({
+const preCroppedShiftRequest = parseAtlasGenerationRequest({
   prompt: "fire forest",
   currentImage: `data:image/png;base64,${ONE_PIXEL_PNG}`,
-  focus: { x: 0.4, y: 0.6, zoom: 2 },
+  direction: "east",
   clip: plain(focusClip),
   sourceImageCropped: true,
-  mode: "zoom",
+  mode: "shift",
   batchRole: "primary",
   generationDepth: 1,
 });
@@ -673,22 +669,22 @@ assertRequestError(
     currentImage: `data:image/png;base64,${ONE_PIXEL_PNG}`,
     clip: plain(focusClip),
     sourceImageCropped: "yes",
-    mode: "zoom",
+    mode: "shift",
   }),
   "invalid_request",
   "sourceImageCropped must be a strict boolean",
 );
-const sharpCallsBeforePreCroppedZoom = sharpExtractCalls.length;
-await generateAtlasImage(preCroppedZoomRequest, openRouterProvider);
+const sharpCallsBeforePreCroppedShift = sharpExtractCalls.length;
+await generateAtlasImage(preCroppedShiftRequest, openRouterProvider);
 assert.equal(
   sharpExtractCalls.length,
-  sharpCallsBeforePreCroppedZoom,
-  "a browser-cropped source must not be cropped a second time on the server",
+  sharpCallsBeforePreCroppedShift,
+  "a browser-cropped shift source must not be cropped a second time on the server",
 );
 assert.match(
   zoomBody.prompt,
-  /supplied image IS the cropped region sample|zoomable and pannable again/i,
-  "zoom prompts should treat the reference as an already-cropped sample",
+  /full-resolution|Do not produce a soft, blurry|zoomable and pannable again/i,
+  "zoom prompts should demand a native sharp close view, not an upscale",
 );
 
 const refineResult = plain(await generateAtlasImage(
@@ -778,13 +774,14 @@ const progressiveRoute = loadAtlasRoute({
 });
 const canonicalInteractionId = "atlas-canonical-interaction-001";
 const canonicalClip = { x: 0.2, y: 0.25, width: 0.4, height: 0.5 };
+// Shift still samples the parent edge; free-zoom no longer does (blur stack).
 const canonicalBody = JSON.stringify({
   prompt: "fire forest",
   currentImage: `data:image/png;base64,${SOURCE_PNG}`,
   viewport: { width: 390, height: 844 },
-  focus: { x: 0.42, y: 0.58, zoom: 2.5 },
+  direction: "east",
   clip: canonicalClip,
-  mode: "zoom",
+  mode: "shift",
 });
 const progressiveCallsStart = providerCalls.length;
 const progressiveSharpCallsStart = sharpExtractCalls.length;
@@ -827,11 +824,11 @@ assert.ok(canonicalPreviewCall, "the preview phase should call Klein");
 assert.ok(canonicalFinalCall, "the final phase should reconstruct with GPT Image 2");
 const canonicalPreviewBody = JSON.parse(canonicalPreviewCall.init.body);
 const canonicalFinalBody = canonicalFinalCall.init.body;
-assert.equal(canonicalPreviewBody.input_references?.length, 1, "zoom preview should sample from the current map");
-assert.ok(canonicalFinalBody.get("image") instanceof Blob, "zoom final should sample from the current map");
-assert.equal(canonicalFinalBody.get("model"), "gpt-image-2", "zoom final should edit with GPT Image 2");
-assert.equal(canonicalFinalBody.get("quality"), "high", "zoom final should request high rendering quality");
-assert.equal(canonicalFinalBody.get("size"), "896x1616", "mobile zoom final should preserve the authored portrait sheet geometry");
+assert.equal(canonicalPreviewBody.input_references?.length, 1, "shift preview should sample from the current map");
+assert.ok(canonicalFinalBody.get("image") instanceof Blob, "shift final should sample from the current map");
+assert.equal(canonicalFinalBody.get("model"), "gpt-image-2", "shift final should edit with GPT Image 2");
+assert.equal(canonicalFinalBody.get("quality"), "high", "shift final should request high rendering quality");
+assert.equal(canonicalFinalBody.get("size"), "896x1616", "mobile shift final should preserve the authored portrait sheet geometry");
 const [mobileOutputWidth, mobileOutputHeight] = canonicalFinalBody.get("size").split("x").map(Number);
 assert.equal(mobileOutputWidth % 16, 0, "mobile output width should align to the image model's 16px grid");
 assert.equal(mobileOutputHeight % 16, 0, "mobile output height should align to the image model's 16px grid");
@@ -853,28 +850,66 @@ assert.ok(
 );
 assert.match(
   canonicalPreviewBody.prompt,
-  /Upsample, extend, and reconstruct|supplied image IS the cropped region sample|supplied atlas sample/i,
-  "zoom preview should reconstruct from the focused region sample",
+  /neighboring territory toward the east|supplied atlas sample/i,
+  "shift preview should extend from the edge sample",
 );
 assert.equal(
   canonicalFinalBody.get("prompt"),
   canonicalPreviewBody.prompt,
   "preview and final should share one canonical server-composed prompt",
 );
-assert.equal(previewResponse.body.generation.operation, "edit", "zoom preview with a source sheet should edit/reconstruct");
-assert.equal(finalResponse.body.generation.operation, "edit", "zoom final with a source sheet should edit/reconstruct");
+assert.equal(previewResponse.body.generation.operation, "edit", "shift preview with a source sheet should edit/reconstruct");
+assert.equal(finalResponse.body.generation.operation, "edit", "shift final with a source sheet should edit/reconstruct");
+
+const zoomProgressiveBody = JSON.stringify({
+  prompt: "fire forest",
+  viewport: { width: 390, height: 844 },
+  focus: { x: 0.42, y: 0.58, zoom: 2.5 },
+  mode: "zoom",
+});
+const zoomProgressiveId = "atlas-zoom-native-001";
+const [zoomPreviewResponse, zoomFinalResponse] = await Promise.all([
+  progressiveRoute.POST(new Request("https://atlas.test/api/atlas/generate?phase=preview", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-atlas-generation-id": zoomProgressiveId,
+      "x-real-ip": "127.0.0.41",
+    },
+    body: zoomProgressiveBody,
+  })),
+  progressiveRoute.POST(new Request("https://atlas.test/api/atlas/generate?phase=final", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-atlas-generation-id": zoomProgressiveId,
+      "x-real-ip": "127.0.0.41",
+    },
+    body: zoomProgressiveBody,
+  })),
+]);
+assert.equal(zoomPreviewResponse.body.generation.operation, "generation", "zoom preview must generate natively");
+assert.equal(zoomFinalResponse.body.generation.operation, "generation", "zoom final must generate natively");
+assert.equal(zoomFinalResponse.body.generation.model, "gpt-image-2", "zoom final should still use GPT Image 2");
+const zoomFinalGenCall = [...providerCalls].reverse().find((call) => call.url === "https://api.openai.com/v1/images/generations");
+assert.ok(zoomFinalGenCall, "zoom final should hit the generations endpoint, not edits");
+assert.match(
+  JSON.parse(zoomFinalGenCall.init.body).prompt,
+  /Do not produce a soft, blurry/i,
+  "zoom finals should forbid soft upscales in the provider prompt",
+);
 
 const preCroppedSharpCallsStart = sharpExtractCalls.length;
 const preCroppedResult = plain(await generateAtlasImage(parseAtlasGenerationRequest({
   prompt: "fire forest",
   currentImage: `data:image/png;base64,${SHARP_CROP_BYTES.toString("base64")}`,
   viewport: { width: 390, height: 844 },
-  focus: { x: 0.42, y: 0.58, zoom: 2.5 },
+  direction: "east",
   clip: canonicalClip,
   sourceImageCropped: true,
-  mode: "zoom",
+  mode: "shift",
 }), openAIProvider));
-assert.equal(preCroppedResult.generation.operation, "edit", "pre-cropped sources should still use the OpenAI edit endpoint");
+assert.equal(preCroppedResult.generation.operation, "edit", "pre-cropped shift sources should still use the OpenAI edit endpoint");
 const preCroppedCall = [...providerCalls].reverse().find((call) => call.url === "https://api.openai.com/v1/images/edits");
 const preCroppedBytes = Buffer.from(await preCroppedCall.init.body.get("image").arrayBuffer());
 assert.deepEqual(preCroppedBytes, SHARP_CROP_BYTES, "pre-cropped sources should reach OpenAI without another crop");

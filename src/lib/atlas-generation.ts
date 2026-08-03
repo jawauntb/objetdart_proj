@@ -723,7 +723,10 @@ export function atlasOperationForRequest(
   // just looking at must not become the basis for the next one — a new prompt
   // that inherited the old coastline would read as "nothing happened."
   if (request.mode === "generate") return "generation";
-  // Zoom / shift / refine reconstruct from the current sheet (clip optional).
+  // Free-zoom must also draw native-resolution sheets. Editing/upsampling the
+  // on-screen bitmap compounds Flux softness until every deeper view is mush.
+  if (request.mode === "zoom") return "generation";
+  // Shift / refine may still reconstruct from the current sheet (clip optional).
   if (!request.currentImage) return "generation";
   return "edit";
 }
@@ -740,22 +743,24 @@ function atlasAction(request: AtlasGenerationRequest): string {
     ? `This sheet is the ${request.batchDirection} neighbor sample in a directional batch.`
     : null;
 
-  if (request.mode === "zoom" && request.currentImage && (request.focus || request.clip)) {
-    const focusClause = request.focus
-      ? `Center the reconstruction on the place around ${Math.round(request.focus.x * 100)}% from the left and ${Math.round(request.focus.y * 100)}% from the top at roughly ${request.focus.zoom.toFixed(1)}x depth.`
-      : "Center the reconstruction on the clipped sample region.";
-    return [
-      batchHeading,
-      clipClause,
-      focusClause,
-      "Upsample, extend, and reconstruct that cropped atlas region into one full explorable sheet filling the frame — denser geography continuous with the parent concept, not an inset thumbnail.",
-      "The result must itself be zoomable and pannable again.",
-    ].filter(Boolean).join(" ");
-  }
   if (request.mode === "zoom" && request.focus) {
     const x = Math.round(request.focus.x * 100);
     const y = Math.round(request.focus.y * 100);
-    return `Create an entirely new full atlas sheet of the place that was around ${x}% from the left and ${y}% from the top at roughly ${request.focus.zoom.toFixed(1)}x depth. This is a fresh explorable map filling the whole frame with denser geography of that region. Continuity with the parent concept matters. The result must itself be zoomable again.`;
+    return [
+      batchHeading,
+      `Create an entirely new full-resolution atlas sheet of the place around ${x}% from the left and ${y}% from the top at roughly ${request.focus.zoom.toFixed(1)}x depth.`,
+      "This is a native close view filling the whole frame with denser, sharper geography of that region — invent fine detail appropriate to this depth.",
+      "Do not produce a soft, blurry, pixelated, or stretched upscale of a previous map. Continuity of lore with the parent concept matters; pixel-copying it does not.",
+      "The result must itself be zoomable and pannable again.",
+    ].filter(Boolean).join(" ");
+  }
+  if (request.mode === "zoom") {
+    return [
+      batchHeading,
+      "Create an entirely new full-resolution atlas sheet of a deeper view of this concept, filling the whole frame with denser, sharper geography.",
+      "Do not produce a soft, blurry, pixelated, or stretched upscale of a previous map.",
+      "The result must itself be zoomable and pannable again.",
+    ].filter(Boolean).join(" ");
   }
   if (request.mode === "shift" && request.currentImage && (request.direction || request.batchDirection)) {
     const heading = request.direction ?? request.batchDirection ?? "neighboring";
