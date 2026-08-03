@@ -10,6 +10,8 @@
 // Every move reads "gesture → what answers" (the arrow is load-bearing:
 // the test checks for it, and the page splits on it).
 
+import { roomGuideEntries } from "@/rooms/registry";
+
 export type GuideRoom = {
   /** route registry key from src/lib/routes.ts, or "home" for the threshold */
   key: string;
@@ -130,7 +132,7 @@ export const GUIDE_GLOBAL_BINDINGS: GuideBinding[] = [
 // the rooms — filled per route; test-guide.mjs enforces coverage
 // ---------------------------------------------------------------------------
 
-export const GUIDE_ROOMS: GuideRoom[] = [
+const CORE_GUIDE_ROOMS: GuideRoom[] = [
   // --- threshold ---
   {
     key: "home",
@@ -863,24 +865,6 @@ export const GUIDE_ROOMS: GuideRoom[] = [
       "rotating the device between portrait and landscape flips the direction of time itself",
     ],
   },
-  {
-    key: "beam",
-    title: "the eye of heaven · bokeh petals",
-    href: "/beam",
-    essence: "a binary pair of soft suns wearing rings of comet-petal bokeh, sweeping through a day of shifting color.",
-    moves: [
-      "tap → refocuses the depth of field at that point",
-      "hold → the pupil dilates toward night; release → a slow exhale ripples outward",
-      "drag → a gust leans the petals",
-      "pinch → pulls the two suns apart or reels them together",
-      "the tempo slider and \"let night fall\" → scale the whole clock, or force night",
-    ],
-    finds: [
-      "squeezing the two suns close enough merges them into one with a flash, and they drift back apart on their own",
-      "a petal breaks formation and streaks across the sky as a meteor every so often, on its own",
-    ],
-    keeps: "your tempo, day/night state, and how far apart you left the suns",
-  },
 
   // --- mechanism ---
   {
@@ -1210,20 +1194,6 @@ export const GUIDE_ROOMS: GuideRoom[] = [
     finds: ["the tree is never hand-authored — it's derived live from the same travel graph the rest of the site uses, so a cosmology change redraws it for free"],
   },
   {
-    key: "relativity",
-    title: "light keeps its own covenant",
-    href: "/relativity",
-    essence: "the law of relativity taught by hand — light's fixed speed, time dilation, gravity, doppler, simultaneity, and the twin paradox, sharing one dark room.",
-    moves: [
-      "tap open dark → a pulse at exactly the speed of light",
-      "drag a light clock → carrying it visibly slows its own tick",
-      "flick a beacon → sends its twin on a journey; it returns visibly younger, sounded as a detuned chord",
-      "tap the gliding car → one flash splits toward both ends, but the room's own strikes land unevenly — simultaneity, heard as a gap",
-      "three-finger hold → time slows and light itself nearly stands still, so its own geometry can be seen",
-    ],
-    finds: ["harder flicks make comets glow hotter rather than move faster — effort is capped at the speed of light and turns to heat instead"],
-  },
-  {
     key: "loom",
     title: "one structure, every sense",
     href: "/loom",
@@ -1239,6 +1209,16 @@ export const GUIDE_ROOMS: GuideRoom[] = [
     keeps: "how many times you've carried the structure across its threshold",
   },
 ];
+
+/**
+ * Every documented room: the hand-written entries above plus the entries
+ * rooms declare in their own manifest (`src/rooms/<key>/room.config.ts`).
+ * A room with a manifest never edits this file — its guide entry travels with
+ * the room, which is what "documentation moves with the change" was always
+ * asking for. `scripts/test-guide.mjs` still checks coverage and screenshots
+ * for both sources alike.
+ */
+export const GUIDE_ROOMS: GuideRoom[] = [...CORE_GUIDE_ROOMS, ...roomGuideEntries()];
 
 // ---------------------------------------------------------------------------
 // the workshop — how the machinery is kept

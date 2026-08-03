@@ -16,7 +16,14 @@
  * middle of the manifold.
  *
  * Pure data + tiny helpers. No DOM.
+ *
+ * Rooms that carry a manifest (`src/rooms/<key>/room.config.ts`) declare their
+ * seat there — `place: { kind: "peer", circle, band, label, ringAfter }` — and
+ * are spliced into the rings below by `mergePeerRing`. Nothing here is
+ * hand-edited for those rooms; `scripts/test-rooms.mjs` pins the splice.
  */
+
+import { mergePeerRing, roomExemptKeys, roomPeerCircleIds, roomPeerSeats } from "@/rooms/registry";
 
 export type PeerRoom = {
   /** SITE_ROUTES key / guide key. */
@@ -41,9 +48,8 @@ export type PeerCircle = {
  * If a room is neither here nor on a band/peer circle, tests fail — that
  * failure means find its place, don't silence the test.
  */
-export const SCALE_EXEMPT_KEYS = [
+const CORE_SCALE_EXEMPT_KEYS = [
   "overlook",
-  "relativity",
   "loom",
   "time", // relativity instrument — the covenant holds at every band
   "signal",
@@ -57,7 +63,13 @@ export const SCALE_EXEMPT_KEYS = [
   "guide", // reading surfaces
 ] as const;
 
-export type ScaleExemptKey = (typeof SCALE_EXEMPT_KEYS)[number];
+/** Core exemptions plus every manifest room that declared `place.kind === "exempt"`. */
+export const SCALE_EXEMPT_KEYS: readonly string[] = [
+  ...CORE_SCALE_EXEMPT_KEYS,
+  ...roomExemptKeys(),
+];
+
+export type ScaleExemptKey = (typeof CORE_SCALE_EXEMPT_KEYS)[number] | (string & {});
 
 export const SCALE_EXEMPT_KEY_SET: ReadonlySet<string> = new Set(SCALE_EXEMPT_KEYS);
 
@@ -67,14 +79,14 @@ export const SCALE_EXEMPT_KEY_SET: ReadonlySet<string> = new Set(SCALE_EXEMPT_KE
  * expand the same order at the circle's highest band (see nav-order.ts).
  * Adding a peer here updates MetaNavigator and the nav sequence together.
  */
-export const PEER_CIRCLES: PeerCircle[] = [
+const CORE_PEER_CIRCLES: PeerCircle[] = [
   {
     id: "sky",
     band: "stars",
     rooms: [
       { key: "stars", href: "/stars", label: "the stars", band: "stars" },
       { key: "comb", href: "/comb", label: "the comb", band: "stars" },
-      { key: "beam", href: "/beam", label: "the beam", band: "stars" },
+      // /beam declares its seat in src/rooms/beam/room.config.ts (ringAfter: comb).
     ],
   },
   {
@@ -138,6 +150,30 @@ export const PEER_CIRCLES: PeerCircle[] = [
     ],
   },
 ];
+
+/**
+ * The rings the site actually walks: the author's cosmology above, with every
+ * manifest-declared seat spliced in at its `ringAfter` anchor. A manifest that
+ * names a circle nobody defined is a typo, not a new ring — fail loud.
+ */
+export const PEER_CIRCLES: PeerCircle[] = CORE_PEER_CIRCLES.map((circle) => ({
+  ...circle,
+  rooms: mergePeerRing(circle.rooms, roomPeerSeats(circle.id), (seat) => ({
+    key: seat.key,
+    href: seat.href,
+    label: seat.label,
+    band: seat.band,
+  })),
+}));
+
+for (const id of roomPeerCircleIds()) {
+  if (!CORE_PEER_CIRCLES.some((c) => c.id === id)) {
+    throw new Error(
+      `Room manifest names peer circle "${id}", which is not in PEER_CIRCLES. ` +
+        `A new ring is a cosmology decision — add it here deliberately.`,
+    );
+  }
+}
 
 /** Flat index of every peer-placed room (excludes solo band primaries). */
 export function allPeerRooms(): PeerRoom[] {

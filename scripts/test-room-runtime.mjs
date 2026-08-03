@@ -18,17 +18,14 @@ function loadTsModule(path) {
     fileName: filename,
   }).outputText;
   const module = { exports: {} };
-  vm.runInNewContext(
-    code,
-    {
-      module,
-      exports: module.exports,
-      setTimeout,
-      clearTimeout,
-      globalThis,
-    },
-    { filename },
-  );
+  // Same realm as the test: vm.runInNewContext builds arrays, objects and
+  // strings on a foreign prototype chain, so deepStrictEqual rejects them
+  // against host literals of identical content.
+  const requireShim = (id) => {
+    if (id.startsWith("@/")) return loadTsModule(`src/${id.slice(2)}.ts`);
+    throw new Error(`Unexpected require(${id}) while loading ${path}`);
+  };
+  new Function("module", "exports", "require", code)(module, module.exports, requireShim);
   return module.exports;
 }
 

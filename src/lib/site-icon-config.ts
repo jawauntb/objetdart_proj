@@ -1,12 +1,22 @@
+import { roomIconVisuals, type RoomKey } from "@/rooms/registry";
+import type { SiteIconKind, SiteIconVisual } from "@/lib/site-icon-types";
+
+export type { SiteIconKind, SiteIconVisual };
+
 export const SITE_ORIGIN = "https://objetdart-production.up.railway.app";
 
-export type SiteIconKey =
+/**
+ * Keys with a hand-written palette below. Rooms that carry a manifest declare
+ * their palette in `src/rooms/<key>/room.config.ts` instead and are merged in
+ * — `SiteIconKey` stays a literal union either way, so a typo at a call site
+ * is still a type error.
+ */
+type CoreSiteIconKey =
   | "home"
   | "aphros"
   | "archive"
   | "atlas"
   | "atoms"
-  | "beam"
   | "beyond"
   | "birds"
   | "cells"
@@ -45,7 +55,6 @@ export type SiteIconKey =
   | "quanta"
   | "quarks"
   | "reading"
-  | "relativity"
   | "seed"
   | "signal"
   | "sine"
@@ -57,55 +66,7 @@ export type SiteIconKey =
   | "watch"
   | "waves";
 
-export type SiteIconKind =
-  | "aphros"
-  | "archive"
-  | "atlas"
-  | "beyond"
-  | "charts"
-  | "circularity"
-  | "clouds"
-  | "coin"
-  | "colophon"
-  | "compare"
-  | "earth"
-  | "fire"
-  | "flowers"
-  | "growth"
-  | "home"
-  | "jewel"
-  | "kept"
-  | "light"
-  | "tourbillon"
-  | "ocean"
-  | "plasma"
-  | "pretext"
-  | "pulse"
-  | "reading"
-  | "signal"
-  | "sine"
-  | "stars"
-  | "storm"
-  | "tide"
-  | "time"
-  | "watch"
-  | "waves";
-
-export type SiteIconVisual = {
-  title: string;
-  description: string;
-  path: string;
-  shortName: string;
-  kind: SiteIconKind;
-  bg: string;
-  bg2: string;
-  glow: string;
-  accent: string;
-  accent2: string;
-  ink: string;
-};
-
-export const SITE_ICON_VISUALS = {
+const CORE_SITE_ICON_VISUALS = {
   home: {
     title: "objet d'art",
     description: "a gold medal you can hold",
@@ -457,19 +418,6 @@ export const SITE_ICON_VISUALS = {
     accent2: "#e2bc6f",
     ink: "#efffdb",
   },
-  beam: {
-    title: "Beam",
-    description: "the eye of heaven — bokeh petals around binary suns",
-    path: "/beam",
-    shortName: "beam",
-    kind: "flowers",
-    bg: "#ede8db",
-    bg2: "#d3bd9a",
-    glow: "#e8c476",
-    accent: "#a6c0dc",
-    accent2: "#9a94c4",
-    ink: "#40311f",
-  },
   jewel: {
     title: "Jewel",
     description: "gold and diamond sound shader",
@@ -678,19 +626,6 @@ export const SITE_ICON_VISUALS = {
     accent2: "#2c4a5c",
     ink: "#15171a",
   },
-  relativity: {
-    title: "Relativity",
-    description: "light keeps its own covenant",
-    path: "/relativity",
-    shortName: "relativity",
-    kind: "beyond",
-    bg: "#05070c",
-    bg2: "#111b30",
-    glow: "#c6d8f8",
-    accent: "#e7ac52",
-    accent2: "#8fb5e8",
-    ink: "#eaf3ff",
-  },
   seed: {
     title: "Seed",
     description: "an embryo in dark soil",
@@ -821,7 +756,15 @@ export const SITE_ICON_VISUALS = {
     accent2: "#dbbd72",
     ink: "#e5fbff",
   },
-} as const satisfies Record<SiteIconKey, SiteIconVisual>;
+} as const satisfies Record<CoreSiteIconKey, SiteIconVisual>;
+
+/** Every room key that can render an icon: hand-written palettes + manifests. */
+export type SiteIconKey = CoreSiteIconKey | RoomKey;
+
+export const SITE_ICON_VISUALS = {
+  ...CORE_SITE_ICON_VISUALS,
+  ...roomIconVisuals(),
+} as Record<SiteIconKey, SiteIconVisual>;
 
 export function siteIconKey(value: string | undefined): SiteIconKey {
   if (value && value in SITE_ICON_VISUALS) {
