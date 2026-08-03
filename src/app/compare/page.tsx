@@ -12,6 +12,7 @@ import {
 } from "react";
 import { useSearchParams } from "next/navigation";
 import { getFieldAudio } from "@/lib/audio";
+import { attachGestures } from "@/lib/gesture";
 import * as haptics from "@/lib/haptics";
 import { useField } from "@/store/field";
 import SiteHeader from "@/components/SiteHeader";
@@ -309,6 +310,64 @@ function CompareInner() {
     const rect = el.getBoundingClientRect();
     applyMorph((clientX - rect.left) / Math.max(1, rect.width), true);
   }, [applyMorph]);
+
+  // ── engine mount on the overlay ───────────────────────────────────
+  // The straight drag (morph follows the hand across the stage) stays
+  // exactly as it was. The grammar adds the circular verb: a scrub
+  // winds the morph — with the turn toward b, against it toward a —
+  // and at each step the blend hums through the concern voice that
+  // travels furthest, sounded at its interpolated value.
+  const applyMorphRef = useRef(applyMorph);
+  applyMorphRef.current = applyMorph;
+  useEffect(() => {
+    const el = stageRef.current;
+    if (!el || !aHash || !bHash) return;
+    const av = decodeReadingHash(aHash);
+    const bv = decodeReadingHash(bHash);
+    if (!av || !bv) return;
+    // the axes that travel furthest, sorted once — the hum walks them
+    const byTravel = RADIAL_ORDER
+      .map((k) => ({ k, d: Math.abs((av.concerns[k] ?? 50) - (bv.concerns[k] ?? 50)) }))
+      .sort((x, y) => y.d - x.d)
+      .filter((x) => x.d > 0);
+    let humRelease: ReturnType<typeof setTimeout> | null = null;
+    let humKey: ConcernKey | null = null;
+    let humStep = 0;
+
+    const detach = attachGestures(el, {
+      scrub: (e) => {
+        const dir = Math.sign(e.winding) || 1;
+        const t = clamp01(morphRef.current + dir * 0.15);
+        applyMorphRef.current(t, false);
+        // hum: the most-travelled axes take turns singing the blend
+        const pickFrom = byTravel.length > 0 ? byTravel : [{ k: "prayer" as ConcernKey, d: 0 }];
+        const pick = pickFrom[humStep % Math.min(3, pickFrom.length)].k;
+        humStep += 1;
+        const va = av.concerns[pick] ?? 50;
+        const vb = bv.concerns[pick] ?? 50;
+        const blended = va + (vb - va) * t;
+        try {
+          const audio = getFieldAudio();
+          if (humKey && humKey !== pick) audio.releaseConcernTone(humKey);
+          humKey = pick;
+          audio.holdConcernTone(pick, blended);
+          if (humRelease) clearTimeout(humRelease);
+          humRelease = setTimeout(() => {
+            try { getFieldAudio().releaseConcernTone(pick); } catch { /* noop */ }
+            if (humKey === pick) humKey = null;
+          }, 320);
+        } catch { /* noop */ }
+        try { haptics.ripple(0.25 + Math.abs(t - 0.5) * 0.4); } catch { /* noop */ }
+        recordTape("ripple", 0.35 + t * 0.35, "compare/scrub");
+      },
+    }, { wheelZoom: false, manageStyle: false, noCapture: true });
+
+    return () => {
+      detach();
+      if (humRelease) clearTimeout(humRelease);
+      try { getFieldAudio().releaseAllConcernTones(); } catch { /* noop */ }
+    };
+  }, [aHash, bHash, recordTape]);
 
   return (
     <section className="rule" data-pretext-ignore="true">

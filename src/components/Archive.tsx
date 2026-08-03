@@ -1,13 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useField } from "@/store/field";
 import { ARCHIVE, CONCERNS, OBJECTS, PHASES, REGIONS } from "@/data/content";
 import { entrySlug } from "@/lib/slug";
 import ConcernSigil from "@/components/ConcernSigil";
 import WaterText from "@/components/WaterText";
 import { getFieldAudio } from "@/lib/audio";
+import { attachGestures } from "@/lib/gesture";
 import * as haptics from "@/lib/haptics";
 import type { ConcernKey, PhaseKey, ArchiveEntry } from "@/lib/types";
 import type { ImaginedEntry } from "@/store/field";
@@ -55,6 +57,7 @@ export default function Archive() {
   const archQuery = useField((s) => s.archQuery);
   const archSort = useField((s) => s.archSort);
   const toggle = useField((s) => s.toggleArchFilter);
+  const solo = useField((s) => s.soloArchFilter);
   const setQuery = useField((s) => s.setArchQuery);
   const setSort = useField((s) => s.setArchSort);
   const imaginedEntries = useField((s) => s.imaginedEntries);
@@ -70,6 +73,20 @@ export default function Archive() {
   const [openImagined, setOpenImagined] = useState<string | null>(null);
   const [archiveMarks, setArchiveMarks] = useState<ArchiveMark[]>([]);
   const markId = useRef(0);
+
+  // gesture layer — the buttons all stay; the grammar adds two verbs:
+  // a flick on a card shivers its drawer open (navigates), and a
+  // long-press on a filter chip solos it (every other filter falls
+  // quiet). Engines mount on the card grid and the filter rail only,
+  // so the page itself keeps scrolling.
+  const router = useRouter();
+  const gridRef = useRef<HTMLDivElement>(null);
+  const railRef = useRef<HTMLElement>(null);
+  const consumedAtRef = useRef(-1e9);
+  // the drawer the finger landed on — a flick releases away from where
+  // it began, so the verb resolves against the landing card
+  const downHrefRef = useRef<string | null>(null);
+  const [shiverHref, setShiverHref] = useState<string | null>(null);
 
   const addArchiveMark = (
     label: string,
@@ -182,6 +199,67 @@ export default function Archive() {
   const activeFilterCount = archMedium.size + archConcern.size + archObject.size + archPhase.size;
   const queryTrimmed = archQuery.trim();
 
+  // stable bridges into the long-lived engine closures
+  const touchArchiveRef = useRef(touchArchive);
+  touchArchiveRef.current = touchArchive;
+  const soloRef = useRef(solo);
+  soloRef.current = solo;
+  const hasItems = items.length > 0;
+
+  // flick on a card: the drawer shivers open, then the room steps in
+  useEffect(() => {
+    const grid = gridRef.current;
+    if (!grid) return;
+    let navTimer: ReturnType<typeof setTimeout> | null = null;
+    const detach = attachGestures(grid, {
+      flick: (e) => {
+        if (e.fingers !== 1) return;
+        const hit = (document.elementFromPoint(e.x, e.y) as HTMLElement | null)
+          ?.closest?.("a.arch-card") as HTMLAnchorElement | null;
+        const href = downHrefRef.current ?? hit?.getAttribute("href") ?? null;
+        if (!href) return;
+        consumedAtRef.current = performance.now();
+        setShiverHref(href);
+        try { haptics.chop(); } catch { /* noop */ }
+        try { getFieldAudio().chime(); } catch { /* noop */ }
+        touchArchiveRef.current("drawer opens", "candle", 0.6, "reading");
+        if (navTimer) clearTimeout(navTimer);
+        navTimer = setTimeout(() => router.push(href), 260);
+      },
+    }, { wheelZoom: false, manageStyle: false, noCapture: true });
+    return () => {
+      detach();
+      if (navTimer) clearTimeout(navTimer);
+    };
+  }, [hasItems, router]);
+
+  // long-press on a filter chip: solo it — the other filters fall quiet
+  useEffect(() => {
+    const rail = railRef.current;
+    if (!rail) return;
+    let fired = false;
+    const detach = attachGestures(rail as HTMLElement, {
+      hold: (e) => {
+        if (e.fingers !== 1) return;
+        if (e.phase === "enter") { fired = false; return; }
+        if (e.phase === "release" || fired || e.tier < 2) return;
+        const btn = (document.elementFromPoint(e.x, e.y) as HTMLElement | null)
+          ?.closest?.("button[data-filter-kind]") as HTMLButtonElement | null;
+        if (!btn) return;
+        fired = true;
+        const kind = btn.dataset.filterKind as ArchiveFilterKind | undefined;
+        const value = btn.dataset.filterValue;
+        if (!kind || !value) return;
+        consumedAtRef.current = performance.now();
+        soloRef.current(kind, value);
+        try { getFieldAudio().bell(); } catch { /* noop */ }
+        try { haptics.roll(); } catch { /* noop */ }
+        touchArchiveRef.current(`solo:${value}`, "candle", 0.62);
+      },
+    }, { wheelZoom: false, manageStyle: false, noCapture: true });
+    return detach;
+  }, []);
+
   return (
     <section id="archive" className="rule" style={{ scrollMarginTop: 72 }}>
       <div className="wrap">
@@ -230,6 +308,14 @@ export default function Archive() {
         >
           {/* filter rail */}
           <aside
+            ref={railRef}
+            onClickCapture={(e) => {
+              // a consumed long-press (solo) never doubles as a toggle click
+              if (performance.now() - consumedAtRef.current < 700) {
+                e.preventDefault();
+                e.stopPropagation();
+              }
+            }}
             style={{
               position: "sticky",
               top: 72,
@@ -269,24 +355,28 @@ export default function Archive() {
 
             <FilterGroup
               label="medium"
+              kind="medium"
               options={MEDIUMS}
               active={archMedium}
               onToggle={(v) => handleFilterToggle("medium", v)}
             />
             <FilterGroup
               label="concern"
+              kind="concern"
               options={CONCERNS.map((c) => c.id)}
               active={archConcern as Set<string>}
               onToggle={(v) => handleFilterToggle("concern", v)}
             />
             <FilterGroup
               label="object"
+              kind="object"
               options={OBJECTS.map((o) => o.id)}
               active={archObject}
               onToggle={(v) => handleFilterToggle("object", v)}
             />
             <FilterGroup
               label="phase"
+              kind="phase"
               options={PHASES}
               active={archPhase as unknown as Set<string>}
               onToggle={(v) => handleFilterToggle("phase", v)}
@@ -520,6 +610,18 @@ export default function Archive() {
               </p>
             ) : (
               <div
+                ref={gridRef}
+                onPointerDownCapture={(e) => {
+                  const a = (e.target as HTMLElement).closest?.("a.arch-card") as HTMLAnchorElement | null;
+                  downHrefRef.current = a?.getAttribute("href") ?? null;
+                }}
+                onClickCapture={(e) => {
+                  // a consumed flick already opens the drawer — one entry, once
+                  if (performance.now() - consumedAtRef.current < 700) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }
+                }}
                 style={{
                   display: "grid",
                   gridTemplateColumns: "repeat(auto-fill,minmax(260px,1fr))",
@@ -530,11 +632,13 @@ export default function Archive() {
                   const accent = a.status
                     ? STATUS_COLOR[a.status] ?? "var(--ink-2)"
                     : "var(--ink-2)";
+                  const href = `/archive/${entrySlug(a)}`;
                   return (
                   <Link
                     key={a.id}
-                    href={`/archive/${entrySlug(a)}`}
-                    className="arch-card"
+                    href={href}
+                    className={`arch-card${shiverHref === href ? " is-shivering" : ""}`}
+                    draggable={false}
                     style={{ ["--card-accent" as string]: accent }}
                     onPointerDown={() => {
                       haptics.tap();
@@ -721,10 +825,25 @@ export default function Archive() {
           box-shadow: -13px 0 28px -20px rgba(21, 23, 26, 0.42);
         }
 
+        /* a flicked drawer shivers on its runners as it opens */
+        .arch-card.is-shivering {
+          animation: arch-shiver 260ms ease-out both;
+          border-left-color: var(--card-accent, var(--ink));
+        }
+        .arch-card.is-shivering::before { opacity: 0.9; height: 34px; }
+        @keyframes arch-shiver {
+          0% { transform: translateX(0); }
+          28% { transform: translateX(9px); }
+          52% { transform: translateX(4px); }
+          74% { transform: translateX(11px); }
+          100% { transform: translateX(14px); }
+        }
+
         @media (prefers-reduced-motion: reduce) {
           .arch-card { transition: box-shadow var(--t), border-color var(--t); }
           .arch-card:hover,
           .arch-card:focus-visible { transform: none; }
+          .arch-card.is-shivering { animation: none; }
         }
 
         .archive-state-strip {
@@ -829,11 +948,13 @@ export default function Archive() {
 
 function FilterGroup({
   label,
+  kind,
   options,
   active,
   onToggle,
 }: {
   label: string;
+  kind: ArchiveFilterKind;
   options: string[];
   active: Set<string>;
   onToggle: (v: string) => void;
@@ -849,6 +970,8 @@ function FilterGroup({
               key={opt}
               className={`chip${on ? " is-active" : ""}`}
               aria-pressed={on}
+              data-filter-kind={kind}
+              data-filter-value={opt}
               onClick={() => onToggle(opt)}
             >
               {opt}

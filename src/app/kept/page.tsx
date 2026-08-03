@@ -1,9 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useField } from "@/store/field";
 import { getFieldAudio } from "@/lib/audio";
+import * as haptics from "@/lib/haptics";
+import { attachGestures } from "@/lib/gesture";
 import { REGIONS, OBJECTS } from "@/data/content";
 import { decodeReadingHash } from "@/lib/reading";
 import SiteHeader from "@/components/SiteHeader";
@@ -38,12 +40,22 @@ export default function KeptPage() {
   const [playingHash, setPlayingHash] = useState<string | null>(null);
   const [openHash, setOpenHash] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+  // gesture layer — the ceremony hold (2.5s, threshold from gesture/core)
+  // is the forget button's own code path spoken by hand
+  const skyRef = useRef<HTMLDivElement>(null);
+  const starsRef = useRef<Array<{ hash: string; headline: string }>>([]);
+  const consumedAtRef = useRef(-1e9);
+  const exhaleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [gatheringHash, setGatheringHash] = useState<string | null>(null);
+  const [exhalingHash, setExhalingHash] = useState<string | null>(null);
+  const forgetRef = useRef<(hash: string, headline: string) => void>(() => {});
 
   useEffect(() => { loadFromStorage(); }, [loadFromStorage]);
   // page-specific ambient bed: held shelf and memory shimmer
   useEffect(() => { getFieldAudio().setAmbientProfile("kept"); }, []);
 
   const sorted = [...kept].sort((a, b) => b.keptAt - a.keptAt);
+  starsRef.current = sorted.map((r) => ({ hash: r.hash, headline: r.headline }));
 
   const toggleSelect = (hash: string) => {
     const already = selected.includes(hash);
@@ -87,6 +99,73 @@ export default function KeptPage() {
     getFieldAudio().thud();
     window.setTimeout(() => setStatus(null), 2200);
   };
+  forgetRef.current = forget;
+
+  // ── engine mount on the sky ───────────────────────────────────────
+  // The stars keep their tap (open) and buttons (play / compare /
+  // forget) exactly as they were. The grammar adds one verb: the
+  // ceremony hold on a star is the solemn form of forget — the same
+  // code path as the button, with the bloom haptic, and the card
+  // exhales before it goes. manageStyle stays off so the page scrolls.
+  useEffect(() => {
+    const sky = skyRef.current;
+    if (!sky) return;
+    let ceremonyFired = false;
+    let heldHash: string | null = null;
+
+    const starAt = (clientX: number, clientY: number) => {
+      const rect = sky.getBoundingClientRect();
+      let best: { hash: string; headline: string; d: number } | null = null;
+      for (const s of starsRef.current) {
+        const p = hashToPos(s.hash);
+        const d = Math.hypot(rect.left + p.x * rect.width - clientX, rect.top + p.y * rect.height - clientY);
+        if (d < 38 && (!best || d < best.d)) best = { ...s, d };
+      }
+      return best;
+    };
+
+    const detach = attachGestures(sky, {
+      hold: (e) => {
+        if (e.fingers !== 1) return;
+        if (e.phase === "enter") {
+          ceremonyFired = false;
+          heldHash = starAt(e.x, e.y)?.hash ?? null;
+          return;
+        }
+        if (e.phase === "release") {
+          const hh = heldHash;
+          heldHash = null;
+          if (hh) setGatheringHash((h) => (h === hh ? null : h));
+          return;
+        }
+        if (!heldHash || ceremonyFired) return;
+        // dwell tier: the star gathers inward — the breath before the exhale
+        if (e.tier >= 2) setGatheringHash(heldHash);
+        // ceremony tier: forgotten, through the button's own code path
+        if (e.tier >= 3) {
+          ceremonyFired = true;
+          const star = starsRef.current.find((s) => s.hash === heldHash);
+          const hash = heldHash;
+          heldHash = null;
+          setGatheringHash(null);
+          if (!star) return;
+          consumedAtRef.current = performance.now();
+          try { haptics.bloom(); } catch { /* noop */ }
+          setExhalingHash(hash);
+          if (exhaleTimerRef.current) clearTimeout(exhaleTimerRef.current);
+          exhaleTimerRef.current = setTimeout(() => {
+            setExhalingHash(null);
+            forgetRef.current(star.hash, star.headline);
+          }, 420);
+        }
+      },
+    }, { wheelZoom: false, manageStyle: false, noCapture: true });
+
+    return () => {
+      detach();
+      if (exhaleTimerRef.current) clearTimeout(exhaleTimerRef.current);
+    };
+  }, []);
 
   const clearSelection = () => {
     setSelected([]);
@@ -234,9 +313,17 @@ export default function KeptPage() {
             ) : (
               <>
                 <div
+                  ref={skyRef}
                   className="kept-sky"
                   aria-label="your kept readings, as a constellation on the water"
                   style={{ marginTop: 40 }}
+                  onClickCapture={(e) => {
+                    // a consumed ceremony hold never doubles as a click
+                    if (performance.now() - consumedAtRef.current < 700) {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }
+                  }}
                 >
                   {/* line joining two selected stars */}
                   {line && (
@@ -274,6 +361,8 @@ export default function KeptPage() {
                       "kept-star",
                       isSelected ? "is-selected" : "",
                       isOpen ? "is-open" : "",
+                      gatheringHash === r.hash ? "is-gathering" : "",
+                      exhalingHash === r.hash ? "is-exhaling" : "",
                     ].filter(Boolean).join(" ");
 
                     return (
@@ -674,6 +763,25 @@ export default function KeptPage() {
         .kept-act--paper:hover { background: none; border-color: var(--ink); color: var(--ink); }
         .kept-act--paper.is-on { color: var(--candle); border-color: var(--candle); }
 
+        /* the ceremony hold gathers the star inward — the breath in */
+        .kept-star.is-gathering .sigil-wrap {
+          transform: scale(0.86);
+          filter: drop-shadow(0 0 10px rgba(232,178,120,0.65)) brightness(0.9);
+        }
+        .kept-star.is-gathering .kept-star-halo {
+          transform: scale(0.8);
+          opacity: 0.9;
+        }
+        /* — and the exhale: it swells once, then dissolves into the water */
+        .kept-star.is-exhaling {
+          animation: kept-exhale 420ms ease-in both;
+          pointer-events: none;
+        }
+        @keyframes kept-exhale {
+          0% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+          38% { opacity: 0.95; transform: translate(-50%, -50%) scale(1.35); }
+          100% { opacity: 0; transform: translate(-50%, -50%) scale(0.3); }
+        }
         @keyframes kept-twinkle {
           0%, 100% { filter: brightness(1); }
           50% { filter: brightness(1.35); }
@@ -687,6 +795,7 @@ export default function KeptPage() {
         }
         @media (prefers-reduced-motion: reduce) {
           .kept-star { animation: none; }
+          .kept-star.is-exhaling { animation: none; opacity: 0; }
           .kept-line { animation: kept-draw 1ms linear both; }
         }
       ` }} />
