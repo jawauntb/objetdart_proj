@@ -61,6 +61,54 @@ Two qualifiers matter:
   on shared clocks. A rendering of state that does not unfold in time is a screenshot, not
   a representation, and screenshots do not belong here.
 
+### 2a. Instantiation, and the recursive cycle
+
+A structure causes nothing by existing abstractly. A concern polygon is inert until some
+material system realizes its relations — a compass someone drags, a chord an oscillator
+holds, prose a layout engine lays down. Structure becomes causally effective **only through
+embodiment**, and the same structure can be embodied in many substrates that preserve its
+organization while differing materially. So the real object under everything here is not a
+representation but a *cycle*:
+
+```
+R  ──q──▶  S  ──ι──▶  R'
+```
+
+`q` (a quotient / coarse-graining) extracts a structure `S` from a realization `R`, forgetting
+everything irrelevant to it; `ι` (instantiation) embodies `S` in a fresh substrate `R'`, which
+preserves the invariant but may have entirely new causal powers because its material and
+context differ. Every lens on this site is a `q`; every room that renders shared state is an
+`ι`; the album as a whole is this loop run continuously. The manifold is the *fiber* of `S`
+— the space `I(S)/∼` of materially different but structurally equivalent embodiments, laid
+along an axis.
+
+This reframes the site's own laws as one conjecture — the thesis the whole build enacts:
+
+> **The work finds the level at which the world becomes both compressible and controllable.**
+> A representation earns its place when task-relevant dynamics *descend* to it (the map
+> commutes with the room's evolution: `q∘Φ ≈ ψ∘q`), irrelevant variation stays confined to
+> the fiber, an intervention can be specified compactly in it, that specification can be
+> re-instantiated in another substrate, and its consequences stay stable across substrates
+> and contexts not chosen to flatter it.
+
+Three consequences are load-bearing for future work:
+
+- **Truth is interventional stability, not compression.** A quotient is not good because it
+  is small; it is good when the relations it keeps survive independent tests and keep
+  enabling action across contexts the model did not define. Prefer a lens that still holds
+  when the room changes than one that merely looks tidy at rest.
+- **A symbol reshapes the reachable future only through a compiler.** Text, rule, sigil,
+  interface — none move matter until an interpreter enacts them. The site's "magic" (the
+  command line, the shared world, the kept reading that others can step into) is exactly
+  symbolically-mediated causation: `P(future | state, symbol) ≠ P(future | state)`, with the
+  instantiation machinery supplied by the runtime and the hand.
+- **Art is the compiler whose output is an encounter.** These rooms do not assert a
+  proposition about a world; they instantiate a perceptual world and let a stranger inhabit
+  its organization until they feel it. That is why embodiment, not description, is the whole
+  method — and why the strongest form of this work is one structure compiled into many
+  substrates at once (see `src/lib/structure.ts` and the room that plays it), each medium
+  verified to preserve the same invariant.
+
 ## 3. The medium is the message: exteriorized phenomenology
 
 This site is a phenomenology — a rendering of how one person sees the world, in maps and
