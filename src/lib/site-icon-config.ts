@@ -29,6 +29,7 @@ export type SiteIconKey =
   | "loom"
   | "manifold"
   | "movement"
+  | "nucleons"
   | "ocean"
   | "overlook"
   | "plasma"
@@ -523,6 +524,19 @@ export const SITE_ICON_VISUALS = {
     accent: "#83ffc8",
     accent2: "#f0c665",
     ink: "#dcffec",
+  },
+  nucleons: {
+    title: "Nucleons",
+    description: "the valley makes the elements",
+    path: "/nucleons",
+    shortName: "nucleons",
+    kind: "plasma",
+    bg: "#0a0806",
+    bg2: "#241a10",
+    glow: "#e7ac52",
+    accent: "#f2c56b",
+    accent2: "#4e7d8c",
+    ink: "#ffedc9",
   },
   quarks: {
     title: "Quarks",

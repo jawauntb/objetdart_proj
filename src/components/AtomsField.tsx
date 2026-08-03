@@ -33,7 +33,7 @@
  * ionizes as it throws: the shed electron streaks off behind the hurled
  * cloud. The field persists in `objetdart:atoms:v1`; a quiet control at
  * the bottom stills it. Pinch is deliberately unbound — ScaleTravel owns
- * it (molecules above; quarks below, still unbuilt).
+ * it (molecules above; nucleons below).
  */
 
 import { useEffect, useRef, useState } from "react";
