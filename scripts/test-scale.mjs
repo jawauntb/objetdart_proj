@@ -242,8 +242,8 @@ assert.equal(entryScaleFor("/colophon"), null);
   );
   assert.deepEqual(
     Array.from(travelOptions("flowers", -1, {}), (b) => b.id),
-    ["cells", "drop"],
-    "a petal opens into cells, and dew gathers on it too",
+    ["tissue", "drop"],
+    "a petal opens into the sheet it is made of, and dew gathers on it too",
   );
   assert.deepEqual(
     Array.from(travelOptions("drop", 1, {}), (b) => b.id),
@@ -262,8 +262,8 @@ assert.equal(entryScaleFor("/colophon"), null);
   );
   assert.deepEqual(
     Array.from(travelOptions("cells", 1, {}), (b) => b.id),
-    ["flowers"],
-    "the plasm rises to the garden through the unbuilt sheet",
+    ["tissue"],
+    "the plasm rises into the sheet it belongs to",
   );
 
   // An unbuilt band is transparent, never a wall. This is the law that lets
@@ -273,7 +273,7 @@ assert.equal(entryScaleFor("/colophon"), null);
   for (const [from, dir, expected] of [
     ["atlas", -1, "olympus"], // peak is built
     ["coast", 1, "olympus"], // peak stands above the fog
-    ["flowers", -1, "cells"], // through /tissue
+    ["flowers", -1, "tissue"], // /tissue is built now: the walk is one rung
     ["manifold", -1, "stars"], // through /space
   ]) {
     const opts = travelOptions(from, dir, {});

@@ -10,6 +10,7 @@ export type SiteIconKey =
   | "beyond"
   | "birds"
   | "cells"
+  | "tissue"
   | "coast"
   | "organics"
   | "dna"
@@ -181,6 +182,19 @@ export const SITE_ICON_VISUALS = {
     accent: "#2a2a30",
     accent2: "#8fa86a",
     ink: "#1c2420",
+  },
+  tissue: {
+    title: "Tissue",
+    description: "when one becomes many",
+    path: "/tissue",
+    shortName: "tissue",
+    kind: "circularity",
+    bg: "#0b0908",
+    bg2: "#2c2116",
+    glow: "#e7ac52",
+    accent: "#d8a95c",
+    accent2: "#4e7d8c",
+    ink: "#f6ead2",
   },
   cells: {
     title: "Cells",

@@ -66,7 +66,7 @@ export const SCALE_BANDS: ScaleBand[] = [
   { id: "dna", label: "dna", route: "/dna", sMin: -8, sMax: -7.2 },
   { id: "organelles", label: "organelles", route: "/organelles", sMin: -7.2, sMax: -5.8 },
   { id: "cells", label: "cells", route: "/cells", sMin: -5.8, sMax: -4.4 },
-  { id: "tissue", label: "tissue", route: null, sMin: -4.4, sMax: -3.5 },
+  { id: "tissue", label: "tissue", route: "/tissue", sMin: -4.4, sMax: -3.5 },
   { id: "drop", label: "a drop", route: "/drop", sMin: -3.5, sMax: -1.5 },
   { id: "flowers", label: "flowers", route: "/flowers", sMin: -1.5, sMax: 0.5 },
   // The air above the garden: a wingspan is metres, a flock a hundred of them.
