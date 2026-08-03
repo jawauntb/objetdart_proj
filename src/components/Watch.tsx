@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import { attachGestures } from "@/lib/gesture";
 import { THRESHOLDS } from "@/lib/gesture/core";
+import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import * as haptics from "@/lib/haptics";
 
@@ -762,6 +763,32 @@ export default function Watch() {
       },
     }, { wheelZoom: false });
 
+    // ── the vessel (lib/vessel): a knock on the case is a knock on the
+    // watch — horology's oldest gesture, tapping a stopped movement. The
+    // subscription is passive: nothing flows until the candle has granted
+    // the senses. One escapement tick sounds out of turn, the balance
+    // wheel below the clock shivers, the flame flinches. Reduced motion
+    // keeps the tick and the haptic; the shiver and flinch stay still.
+    const knockState = { at: -1e9, intensity: 0 };
+    const detachVessel = onVessel({
+      knock: (e) => {
+        const nowMs = performance.now();
+        if (nowMs - knockState.at < 350) return;
+        knockState.at = nowMs;
+        knockState.intensity = e.intensity;
+        law.current.lastGestureAt = nowMs;
+        lit.current.clock = 1;
+        // the escapement answers out of turn — same voice as the clock's tick
+        try { getFieldAudio().playNote(74 + Math.round(e.intensity * 5), 70); } catch { /* ignore */ }
+        try { haptics.tap(); } catch { /* ignore */ }
+        if (!reduce && candleState.current.flameScale > 0.2 && candleState.current.alive > 0.5) {
+          candleState.current.flameScale = Math.max(0.55, candleState.current.flameScale - 0.3 * e.intensity);
+          candleState.current.dragLean += (Math.random() < 0.5 ? -1 : 1) * (6 + e.intensity * 10);
+        }
+        useField.getState().recordTape("object", 0.4 + e.intensity * 0.3, "watch:knock");
+      },
+    });
+
     // ── whisper scheduler — every ~14-28s spawn a fresh one ────
     // Diegetic, atmospheric fragments — nouns of the room and the sea, never
     // instructions. They surface faintly and fade.
@@ -1117,7 +1144,13 @@ export default function Watch() {
         // pulse holds, it swings in the hand's tempo, a little wider
         const entrainedNow = now < law.current.entrainUntil && law.current.entrainBpm > 0;
         const pFreq = entrainedNow ? Math.PI * 2 * (law.current.entrainBpm / 60) : 1.0;
-        const pSwing = Math.sin(t * pFreq) * (entrainedNow ? 8 : 6);
+        // a knock on the case: the balance wheel shivers — a fast damped
+        // tremor rides the swing for a moment, then settles
+        const sinceKnock = now - knockState.at;
+        const knockShiver = !reduce && sinceKnock < 700
+          ? Math.sin(sinceKnock * 0.09) * 6 * (0.4 + knockState.intensity) * Math.exp(-sinceKnock / 240)
+          : 0;
+        const pSwing = Math.sin(t * pFreq) * (entrainedNow ? 8 : 6) + knockShiver;
         ctx.strokeStyle = "rgba(40, 30, 22, 0.55)";
         ctx.lineWidth = 1;
         ctx.beginPath();
@@ -1683,6 +1716,7 @@ export default function Watch() {
       window.removeEventListener("pointerleave", onLeave);
       window.removeEventListener("blur", onLeave);
       detachGestures();
+      detachVessel();
       window.clearInterval(whisperCheck);
       if (recordState.clickTimer !== null) clearTimeout(recordState.clickTimer);
     };

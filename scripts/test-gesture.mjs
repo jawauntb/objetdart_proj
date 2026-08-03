@@ -35,6 +35,8 @@ const {
   rhythmFrom,
   shakeIntensity,
   drumAlternation,
+  classifyDrum,
+  classifyArpeggio,
 } = loadTsModule("src/lib/gesture/core.ts");
 
 // — Hold tiers: touch → dwell → ceremony —
@@ -121,6 +123,30 @@ assert.equal(shakeIntensity(oneBump, now), 0, "one pothole is not a shake");
 // — Drumming —
 assert.equal(drumAlternation([{ zone: 0 }, { zone: 1 }, { zone: 0 }, { zone: 1 }]), 1, "strict patter");
 assert.equal(drumAlternation([{ zone: 0 }, { zone: 0 }, { zone: 0 }]), 0, "one finger is not a drum");
+
+// — Drum classification: a two-zone patter commits; rolls and chords do not —
+const hitsAt = (pts) => pts.map(([x, y, t]) => ({ x, y, t }));
+const patter = hitsAt([[100, 300, 0], [300, 300, 200], [100, 300, 400], [300, 300, 600]]);
+const drum = classifyDrum(patter, 620);
+assert.ok(drum, "a strict L-R-L-R patter is a drum");
+assert.equal(drum.hits, 4);
+assert.equal(drum.alternation, 1, "strict alternation reads as 1");
+assert.equal(drum.x, 300, "the committing hit is the latest landing");
+assert.ok(drum.ax === 100 && drum.bx === 300, "both zone anchors surface for the room");
+const roll = hitsAt([[100, 300, 0], [104, 302, 200], [98, 296, 400]]);
+assert.equal(classifyDrum(roll, 420), null, "a same-spot roll is one zone, not a drum");
+const chordLanding = hitsAt([[100, 300, 0], [300, 300, 12], [200, 340, 24]]);
+assert.equal(classifyDrum(chordLanding, 40), null, "a chord's simultaneous landings are one strike");
+const sloppy = hitsAt([[100, 300, 0], [100, 300, 200], [300, 300, 400], [100, 300, 600]]);
+assert.equal(classifyDrum(sloppy, 620), null, "weak alternation stays below the drum");
+assert.equal(classifyDrum(patter, 2000), null, "the patter fades once the window closes");
+
+// — Arpeggio: staggered landings roll; a chord lands together; late fingers are new phrases —
+assert.equal(classifyArpeggio([0, 12, 30]), null, "a chord lands inside the settle stagger");
+const arp = classifyArpeggio([0, 70, 150]);
+assert.ok(arp && arp.fingers === 3 && arp.spreadMs === 150, "a rolled 3-finger chord is an arpeggio");
+assert.equal(classifyArpeggio([0, 70, 900]), null, "an entrance past the gap window is a new phrase");
+assert.equal(classifyArpeggio([0]), null, "one finger cannot arpeggiate");
 
 // — Instrument pairs: chords must never read as pinch, pinches must never sound —
 const still = { x: 0, y: 0 };

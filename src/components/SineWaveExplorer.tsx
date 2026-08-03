@@ -84,6 +84,9 @@ type VoiceTouch = {
   lastT: number;
   path: Array<{ x: number; y: number }>; // px, for the scrub verb
   scrubFired: number;
+  /** Set by the arpeggio verb: this entrance rolls in rather than snapping. */
+  rollT0?: number;
+  rollMs?: number;
 };
 
 type KeptWave = {
@@ -443,7 +446,15 @@ export default function SineWaveExplorer() {
         const bends = voices.map((v) => {
           const u = clamp(((v.x * width) - left) / usable, 0, 1);
           const waveY = center - waveSample(u, phaseNow, ampNow, freqNow, dampingNow, harmonicNow, modeNow) * height * 0.0026;
-          return { u, d: v.y * height - waveY };
+          // an arpeggiated entrance rolls in: its bend eases from nothing to
+          // full over the roll window — the ribbon takes the points one at a
+          // time, a portamento of shape. Reduced motion lands it at once.
+          let ease = 1;
+          if (v.rollMs && !reduce) {
+            const p = clamp((now - (v.rollT0 ?? 0)) / v.rollMs, 0, 1);
+            ease = p * p * (3 - 2 * p);
+          }
+          return { u, d: (v.y * height - waveY) * ease };
         });
         bend = (u: number) => {
           let off = 0;
@@ -738,6 +749,36 @@ export default function SineWaveExplorer() {
         try { audio.playNote(cfg.midi + 14, 160); } catch { /* noop */ }
         try { haptics.chop(); } catch { /* noop */ }
         recordTape("ripple", 0.55, "sine/throw");
+      },
+      arpeggio: (e) => {
+        // the chord rolled: the engine's voice dialect already sounds each
+        // staggered landing in order — this is the sight of it. The newest
+        // entrance gets its own small wavefront and its bend rolls into the
+        // ribbon with a portamento ease; a tick of haptic marks the step.
+        // No extra notes here — the voices must never be double-triggered.
+        lastGestureAtRef.current = performance.now();
+        const now = performance.now();
+        let newest: VoiceTouch | null = null;
+        for (const v of voicesRef.current.values()) {
+          if (!newest || v.t0 > newest.t0) newest = v;
+        }
+        if (newest) {
+          newest.rollT0 = now;
+          newest.rollMs = clamp(120 + e.spreadMs * 0.35, 120, 380);
+        }
+        if (!reduceMotionRef.current) {
+          const rect = canvas.getBoundingClientRect();
+          impulsesRef.current.push({
+            x: e.x - rect.left,
+            y: e.y - rect.top,
+            born: now,
+            life: 620 + e.fingers * 90,
+            strength: clamp(0.3 + e.fingers * 0.09 + e.spreadMs / 1200, 0.3, 0.7),
+          });
+          if (impulsesRef.current.length > 18) impulsesRef.current = impulsesRef.current.slice(-18);
+        }
+        try { haptics.tap(); } catch { /* noop */ }
+        recordTape("sigil", 0.35 + e.fingers * 0.08, "sine/arpeggio");
       },
       rhythm: (e) => {
         // a steady tapped pulse: the oscillator locks to your tempo

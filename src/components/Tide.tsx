@@ -5,6 +5,7 @@ import { getFieldAudio } from "@/lib/audio";
 import { useField } from "@/store/field";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { onVessel } from "@/lib/vessel";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
 import {
   addNatural as worldAddNatural,
@@ -420,6 +421,36 @@ export default function Tide() {
       },
     }, { wheelZoom: false });
 
+    // ── the vessel (lib/vessel): a knock on the case skips a stone ─────
+    // Passive subscription — nothing flows until the candle has granted
+    // the senses. The stone leaves the same shore point every time and
+    // takes three diminishing bounces across the moonlit water: a ring, a
+    // falling note and a softer haptic at each touch. Reduced motion keeps
+    // the notes and the haptics; the stone and its rings stay still.
+    type StoneBounce = { at: number; fx: number; done: boolean };
+    let stoneSkip: { t0: number; intensity: number; bounces: StoneBounce[] } | null = null;
+    const STONE_LAUNCH_FX = 0.10; // the deterministic edge point, a fraction of width
+    const detachVessel = onVessel({
+      knock: (e) => {
+        const nowMs = performance.now();
+        if (stoneSkip && nowMs - stoneSkip.t0 < 1600) return;
+        lastGestureAt = nowMs;
+        stoneSkip = {
+          t0: nowMs,
+          intensity: e.intensity,
+          // hops shorten and quicken as the skip dies
+          bounces: [
+            { at: 300, fx: 0.30, done: false },
+            { at: 560, fx: 0.46, done: false },
+            { at: 760, fx: 0.56, done: false },
+          ],
+        };
+        try { audio.playNote(52, 90); } catch { /* noop */ }
+        try { haptics.tap(); } catch { /* noop */ }
+        recordTapeRef.current("ripple", 0.4 + e.intensity * 0.4, "tide/skip");
+      },
+    });
+
     // Desktop hover — the candle still leans toward a passing hand.
     const onHover = (e: PointerEvent) => {
       cursor.current.tx = e.clientX;
@@ -657,6 +688,54 @@ export default function Tide() {
           ctx.stroke();
         }
         ctx.restore();
+      }
+
+      // ── skipped stone (vessel knock): three diminishing bounces ──
+      if (stoneSkip) {
+        const skipAge = now - stoneSkip.t0;
+        for (let i = 0; i < stoneSkip.bounces.length; i++) {
+          const b = stoneSkip.bounces[i];
+          if (!b.done && skipAge >= b.at) {
+            b.done = true;
+            // ring + note + haptic per bounce, each softer than the last
+            addRipple(b.fx * w, waterY, 58 - i * 14, "pale");
+            try { audio.playNote(64 - i * 3, 90 - i * 18); } catch { /* noop */ }
+            try { haptics.ripple(0.36 - i * 0.09); } catch { /* noop */ }
+          }
+        }
+        const lastBounce = stoneSkip.bounces[stoneSkip.bounces.length - 1];
+        if (skipAge > lastBounce.at + 600) {
+          stoneSkip = null;
+        } else if (motion) {
+          // the stone in flight: a flat pale fleck arcing hop to hop,
+          // settling into the water after the last touch
+          const pts = [
+            { fx: STONE_LAUNCH_FX, at: 0 },
+            ...stoneSkip.bounces.map((b) => ({ fx: b.fx, at: b.at })),
+          ];
+          let sx = lastBounce.fx * w;
+          let sy = waterY;
+          let alpha = 0.85;
+          if (skipAge <= lastBounce.at) {
+            for (let k = 0; k < pts.length - 1; k++) {
+              if (skipAge >= pts[k].at && skipAge < pts[k + 1].at) {
+                const u = (skipAge - pts[k].at) / (pts[k + 1].at - pts[k].at);
+                sx = lerp(pts[k].fx, pts[k + 1].fx, u) * w;
+                sy = waterY - Math.sin(u * Math.PI) * [16, 11, 7][k];
+                break;
+              }
+            }
+          } else {
+            const sink = (skipAge - lastBounce.at) / 600;
+            sx = (lastBounce.fx + sink * 0.015) * w;
+            sy = waterY + sink * 9;
+            alpha = 0.85 * (1 - sink);
+          }
+          ctx.fillStyle = `rgba(214, 224, 235, ${alpha})`;
+          ctx.beginPath();
+          ctx.ellipse(sx, sy, 3.2, 2, 0, 0, TAU);
+          ctx.fill();
+        }
       }
 
       // ── tide staff: a shore ruler with HIGH / MEAN / LOW + float ──
@@ -974,6 +1053,7 @@ export default function Tide() {
       window.removeEventListener("resize", resize);
       mq.removeEventListener?.("change", onMq);
       detachGestures();
+      detachVessel();
       window.removeEventListener("pointermove", onHover);
       window.removeEventListener("pointerleave", onLeave);
       window.removeEventListener("blur", onLeave);

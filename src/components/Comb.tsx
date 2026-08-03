@@ -785,6 +785,43 @@ export default function Comb() {
         // two fingers rotate the global phase — the whole sky turns
         if (e.phase === "move") th0 += e.angle;
       },
+      drum: (e) => {
+        ensureAudio();
+        lastGestureAt = performance.now();
+        // drumming scatters a syncopated shower of comet sparks between the
+        // two drum points — each hit fires from its own side toward the
+        // other hand, so the shower alternates with the patter. Reduced
+        // motion keeps the brush and the haptic; the sparks stay still.
+        const hx = toWorldX(e.x), hy = toWorldY(e.y);
+        const otherIsB = Math.hypot(e.x - e.ax, e.y - e.ay) <= Math.hypot(e.x - e.bx, e.y - e.by);
+        const ox = toWorldX(otherIsB ? e.bx : e.ax);
+        const oy = toWorldY(otherIsB ? e.by : e.ay);
+        const ang = Math.atan2(oy - hy, ox - hx);
+        strokes.push({
+          x: hx, y: hy, ang,
+          amp: clamp(1.1 + e.alternation, 1.1, 2.4),
+          sig2: 0.06 / (zoom * zoom), t0: simT,
+        });
+        if (strokes.length > 90) strokes.splice(0, strokes.length - 90);
+        bursts.push({ x: hx, y: hy, t0: simT, amp: 0.2 + e.alternation * 0.25 });
+        if (!reduceRef.current) {
+          for (let k = 0; k < 5; k++) {
+            const p = particles[(Math.random() * particles.length) | 0];
+            if (!p) break;
+            const t = Math.random() * 0.85;
+            p.x = hx + (ox - hx) * t + (Math.random() - 0.5) * 0.06;
+            p.y = hy + (oy - hy) * t + (Math.random() - 0.5) * 0.06;
+            p.age = 0;
+            p.life = 0.8 + Math.random() * 0.8;
+            p.sp = 0.42 + Math.random() * 0.24;
+            p.lx = p.x;
+            p.ly = p.y;
+            p.skip = true;
+          }
+        }
+        try { audioRef.current?.brush(0.5 + e.alternation * 0.5); } catch { /* noop */ }
+        try { haptics.tap(); } catch { /* noop */ }
+      },
       scrub: (e) => {
         lastGestureAt = performance.now();
         const now = performance.now();

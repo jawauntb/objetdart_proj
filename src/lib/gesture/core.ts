@@ -46,6 +46,18 @@ export const THRESHOLDS = {
    * late pinch claim.
    */
   voiceDecideMs: 180,
+  /** Drum: landings within this rolling window can form one patter. */
+  drumWindowMs: 1200,
+  /** Landings needed inside the window before a patter commits. */
+  drumMinHits: 3,
+  /** Consecutive landings closer than this are one chord strike, never a patter. */
+  drumGapMs: 60,
+  /** Landings within this radius of a zone anchor belong to that hand's spot. */
+  drumZonePx: 72,
+  /** drumAlternation at or above this reads as drumming, not stray taps. */
+  drumAlternationMin: 0.7,
+  /** An entrance later than this after the previous is a new phrase, not the same arpeggio. */
+  arpeggioGapMaxMs: 600,
 } as const;
 
 export type HoldTier = 0 | 1 | 2 | 3;
@@ -266,6 +278,83 @@ export function drumAlternation(hits: Array<{ zone: number }>): number {
   let alt = 0;
   for (let i = 1; i < hits.length; i++) if (hits[i].zone !== hits[i - 1].zone) alt++;
   return alt / (hits.length - 1);
+}
+
+export type DrumHit = { x: number; y: number; t: number };
+
+export type DrumVerdict = {
+  hits: number;
+  alternation: number;
+  /** The landing that committed this patter. */
+  x: number;
+  y: number;
+  /** The two zones the hands alternate between. */
+  ax: number;
+  ay: number;
+  bx: number;
+  by: number;
+};
+
+/**
+ * Drumming (grammar §1): landings alternating between two distinct zones
+ * inside the rolling window. A same-spot roll is one zone — no drum; a
+ * chord's simultaneous landings are one strike — no drum. Hits must be in
+ * time order. Returns the patter (with both zone anchors, so a room can
+ * play the space *between* the hands) or null.
+ */
+export function classifyDrum(hits: DrumHit[], nowMs: number): DrumVerdict | null {
+  const recent = hits.filter((h) => nowMs - h.t <= THRESHOLDS.drumWindowMs);
+  if (recent.length < THRESHOLDS.drumMinHits) return null;
+  for (let i = 1; i < recent.length; i++) {
+    if (recent[i].t - recent[i - 1].t < THRESHOLDS.drumGapMs) return null;
+  }
+  // Zone anchors: the first hit, and the first hit that lands clear of it.
+  const a = recent[0];
+  let b: DrumHit | null = null;
+  const zones: Array<{ zone: number }> = [];
+  for (const h of recent) {
+    const da = Math.hypot(h.x - a.x, h.y - a.y);
+    if (b === null && da > THRESHOLDS.drumZonePx) b = h;
+    if (b === null) {
+      zones.push({ zone: 0 });
+      continue;
+    }
+    const db = Math.hypot(h.x - b.x, h.y - b.y);
+    zones.push({ zone: da <= db ? 0 : 1 });
+  }
+  if (b === null) return null; // one zone: a roll on the spot, not a drum
+  const alternation = drumAlternation(zones);
+  if (alternation < THRESHOLDS.drumAlternationMin) return null;
+  const last = recent[recent.length - 1];
+  return {
+    hits: recent.length,
+    alternation,
+    x: last.x,
+    y: last.y,
+    ax: a.x,
+    ay: a.y,
+    bx: b.x,
+    by: b.y,
+  };
+}
+
+export type ArpeggioVerdict = { fingers: number; spreadMs: number };
+
+/**
+ * Staggered chord landing (grammar §1 "stagger"): concurrent fingers whose
+ * landings spread past the chord-settle stagger — an arpeggio rather than a
+ * chord. Landings tighter than arpeggioMs are one chord; an entrance more
+ * than arpeggioGapMaxMs after the previous is a new phrase, not this roll.
+ */
+export function classifyArpeggio(landingsMs: number[]): ArpeggioVerdict | null {
+  if (landingsMs.length < 2) return null;
+  const sorted = [...landingsMs].sort((x, y) => x - y);
+  const spreadMs = sorted[sorted.length - 1] - sorted[0];
+  if (spreadMs <= THRESHOLDS.arpeggioMs) return null;
+  for (let i = 1; i < sorted.length; i++) {
+    if (sorted[i] - sorted[i - 1] > THRESHOLDS.arpeggioGapMaxMs) return null;
+  }
+  return { fingers: landingsMs.length, spreadMs };
 }
 
 function clamp01(v: number): number {
