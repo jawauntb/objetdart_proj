@@ -14,6 +14,10 @@ import { getFieldAudio } from "@/lib/audio";
 import { useGeneratedSpeech } from "@/lib/useGeneratedSpeech";
 import { useField } from "@/store/field";
 import * as haptics from "@/lib/haptics";
+import { attachGestures } from "@/lib/gesture";
+import { onVessel } from "@/lib/vessel";
+import { onVisibility } from "@/lib/room-runtime";
+import LetGo from "@/components/LetGo";
 
 type MotionMode = "move" | "shift" | "shake" | "quake" | "wave" | "sine";
 type PretextMark = { id: number; label: string; tone: "water" | "ember" | "voice"; strength: number };
@@ -144,6 +148,72 @@ export default function PretextWave() {
     lastFx: 0,
   });
 
+  // ── frame-layer state (two/three-finger verbs) ─────────────────────
+  // pinch scales the reading (a local zoom on the text), pan2/tilt shift
+  // the field, twist(2) rotates the lens through the motion modes — the
+  // same material read at a different level of description.
+  const zoomRef = useRef({ cur: 1, target: 1 });
+  const panRef = useRef({ curX: 0, curY: 0, targetX: 0, targetY: 0 });
+  const lensTwistAccRef = useRef(0);
+  // three fingers touch the law: drag is wind (a transient gust on amp),
+  // hold is time dilation (the phase clock eases toward 1/4 speed), twist
+  // is the season (a slow hue drift + which local ending gets picked).
+  const timeScaleRef = useRef({ cur: 1, target: 1 });
+  const seasonRef = useRef(0);
+  const seasonTwistAccRef = useRef(0);
+  const tuttiRef = useRef(0);
+  const nightRef = useRef(false);
+  const lastTouchAtRef = useRef(0);
+
+  // ── create/delete: the room's material is countable (a kept phrase).
+  const KEPT_PHRASES_KEY = "objetdart:pretext-kept:v1";
+  const [keptPhrases, setKeptPhrases] = useState<string[]>([]);
+  const [chargePct, setChargePct] = useState(0);
+  const [chargeMode, setChargeMode] = useState<"create" | "delete" | null>(null);
+  const keptPhrasesRef = useRef<string[]>([]);
+  const textRef = useRef(text);
+  useEffect(() => { textRef.current = text; }, [text]);
+  useEffect(() => { keptPhrasesRef.current = keptPhrases; }, [keptPhrases]);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(KEPT_PHRASES_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as string[];
+        if (Array.isArray(parsed)) setKeptPhrases(parsed.filter((p) => typeof p === "string").slice(0, 8));
+      }
+    } catch { /* noop */ }
+  }, []);
+
+  const persistKept = (next: string[]) => {
+    setKeptPhrases(next);
+    try { localStorage.setItem(KEPT_PHRASES_KEY, JSON.stringify(next)); } catch { /* noop */ }
+  };
+
+  const keepCurrentPhrase = () => {
+    const phrase = textRef.current.trim();
+    if (!phrase) return;
+    const already = keptPhrasesRef.current.includes(phrase);
+    if (already) {
+      persistKept(keptPhrasesRef.current.filter((p) => p !== phrase));
+      haptics.roll();
+      try { getFieldAudio().thud(); } catch { /* noop */ }
+      addMark("released", "water", 0.5);
+    } else {
+      persistKept([phrase, ...keptPhrasesRef.current].slice(0, 8));
+      haptics.bloom();
+      try { getFieldAudio().bell(); } catch { /* noop */ }
+      addMark("kept", "ember", 0.8);
+      recordTape("kept", 0.8, "pretext:kept");
+    }
+  };
+
+  const letGoKeptPhrases = () => {
+    persistKept([]);
+    haptics.roll();
+    try { getFieldAudio().thud(); } catch { /* noop */ }
+  };
+
   const { speaking, speechStatus, setSpeechStatus, speakText, stopSpeech } = useGeneratedSpeech({
     context: "pretext wave page, playable sentence, oceanic text instrument",
     doneStatus: "voice complete",
@@ -171,14 +241,24 @@ export default function PretextWave() {
     if (!playing) return;
     let raf = 0;
     let previous = performance.now();
+    let sleeping = document.hidden;
+    const offVisibility = onVisibility((hidden) => { sleeping = hidden; });
     const tick = (now: number) => {
+      raf = requestAnimationFrame(tick);
       const delta = Math.min(50, now - previous);
       previous = now;
-      setPhase((value) => (value + delta * 0.0025) % (Math.PI * 2));
-      raf = requestAnimationFrame(tick);
+      if (sleeping) return; // no draw while the tab/frame is hidden
+      // three-finger hold dilates time: the phase clock eases toward 1/4.
+      const ts = timeScaleRef.current;
+      ts.cur += (ts.target - ts.cur) * 0.08;
+      tuttiRef.current *= 0.92;
+      setPhase((value) => (value + delta * 0.0025 * ts.cur) % (Math.PI * 2));
     };
     raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
+    return () => {
+      cancelAnimationFrame(raf);
+      offVisibility();
+    };
   }, [playing]);
 
   const prepared = useMemo(() => {

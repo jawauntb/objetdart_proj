@@ -252,6 +252,12 @@ export default function RelativityRoom() {
     let rectTop = 0;
     let c = 600; // px/s — the one speed; rays, pulses, rings all ride it
     let rayG = 0;
+    // the law's own weather (three-finger twist, grammar §5 "season"): 0 is
+    // the room's ordinary attraction, 1 turns it fully inside out — light
+    // and matter pushed instead of pulled. Continuous, never a switch.
+    let season = 0;
+    let seasonTarget = 0;
+    let lawG = 0; // rayG signed by the season, recomputed once per frame
     let clockGap = 150;
     let clockHalfW = 36;
     let raf = 0;
@@ -923,7 +929,19 @@ export default function RelativityRoom() {
         }
       },
       twist: (e) => {
-        if (e.fingers === 3) return; // three fingers turn the season, not the lens
+        if (e.fingers === 3) {
+          // three fingers turn the season: the law's own weather, attraction
+          // sliding continuously toward its own inversion and back
+          lastInteractionAt = performance.now();
+          if (e.phase === "move") {
+            seasonTarget = clamp01(seasonTarget + e.angle / 2.6);
+            try { audio().holdConcernTone("season", 20 + seasonTarget * 60); } catch { /* noop */ }
+          } else if (e.phase === "end") {
+            try { audio().releaseConcernTone("season"); } catch { /* noop */ }
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+          return;
+        }
         lastInteractionAt = performance.now();
         // two fingers rotate the lens: the felt room ↔ its spacetime record
         if (e.phase === "move") {
@@ -1130,7 +1148,7 @@ export default function RelativityRoom() {
         let r: Ray = { x: -10, y: y0, vx: c, vy: 0 };
         const path = [{ x: r.x, y: r.y }];
         for (let s = 0; s < 420; s++) {
-          r = geodesicStep(pts, r, dt, c, rayG, SOFTENING);
+          r = geodesicStep(pts, r, dt, c, lawG, SOFTENING);
           path.push({ x: r.x, y: r.y });
           if (r.x < -40 || r.x > width + 40 || r.y < -40 || r.y > height + 40) break;
         }
@@ -1386,6 +1404,8 @@ export default function RelativityRoom() {
 
       timeScale += (timeScaleTarget - timeScale) * Math.min(1, dt * 5);
       rayScale += (rayScaleTarget - rayScale) * Math.min(1, dt * 5);
+      season += (seasonTarget - season) * Math.min(1, dt * 3);
+      lawG = rayG * (1 - 2 * season);
       if (!reduce) localT += dt * timeScale;
       lightT += dt * (reduce ? 1 : rayScale);
       windX += (windTargetX - windX) * Math.min(1, dt * 2.2);
@@ -1421,7 +1441,7 @@ export default function RelativityRoom() {
       const matterCap = MATTER_CAP * c;
       for (let i = comets.length - 1; i >= 0; i--) {
         const q = comets[i];
-        const a = accelAt(pts, q.x, q.y, rayG * 0.35, SOFTENING);
+        const a = accelAt(pts, q.x, q.y, lawG * 0.35, SOFTENING);
         q.vx += (a.ax + aetherX * c * 0.4) * dt * timeScale;
         q.vy += (a.ay + aetherY * c * 0.4) * dt * timeScale;
         const sp = Math.hypot(q.vx, q.vy);
@@ -1461,6 +1481,11 @@ export default function RelativityRoom() {
       halo.addColorStop(1, "rgba(0,0,0,0)");
       ctx.fillStyle = halo;
       ctx.fillRect(0, 0, width, height);
+      // the season's veil — the law leaning toward its own inversion
+      if (season > 0.02) {
+        ctx.fillStyle = `rgba(220, 120, 70, ${(season * 0.05).toFixed(3)})`;
+        ctx.fillRect(0, 0, width, height);
+      }
 
       // ————— the mesh: hairlines, welling only where mass gathers —————
       if (pts.length > 0 || pulses.length > 0) {
@@ -1585,7 +1610,7 @@ export default function RelativityRoom() {
         const stepDt = (dt * rayScale) / 4;
         for (const r of rays) {
           for (let s = 0; s < 4; s++) {
-            const st = geodesicStep(pts, r, stepDt, c, rayG, SOFTENING);
+            const st = geodesicStep(pts, r, stepDt, c, lawG, SOFTENING);
             r.x = st.x; r.y = st.y; r.vx = st.vx; r.vy = st.vy;
             if (aetherX !== 0 || aetherY !== 0) {
               r.vx += aetherX * c * 0.5 * stepDt;
@@ -1621,7 +1646,7 @@ export default function RelativityRoom() {
             }
           }
           // doppler tint: blue falling in, red climbing out
-          const a = accelAt(pts, r.x, r.y, rayG, SOFTENING);
+          const a = accelAt(pts, r.x, r.y, lawG, SOFTENING);
           const am = Math.hypot(a.ax, a.ay);
           let w = 0;
           if (am > 1) {

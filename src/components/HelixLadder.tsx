@@ -40,9 +40,18 @@ import { onVessel } from "@/lib/vessel";
 import { stirTurbulence } from "@/lib/turbulence";
 import LetGo from "@/components/LetGo";
 import {
+  createFrameGovernor,
+  detailForTier,
+  isEmbeddedFrame,
+  onVisibility,
+  resolveDpr,
+} from "@/lib/room-runtime";
+import {
+  BASES,
   BASES_PER_TURN,
   H_BONDS,
   MAX_BASES,
+  MIN_BASES,
   complement,
   gcContent,
   hashSeed,
@@ -133,6 +142,7 @@ export default function HelixLadder() {
     /** 0..1 — how far the daughter has condensed into a chromatid */
     let chromatidCoil = 0;
     let chromatidFlash = 0;
+    let lastGrowSoundAt = 0;
     let lastInteractionAt = performance.now();
     let glimmerAt = 0;
     let selIdx = -1;
@@ -140,6 +150,35 @@ export default function HelixLadder() {
     let dragMode: "none" | "unzip" | "coil" = "none";
     const litRung = new Float32Array(MAX_BASES);
     let leaving = 0;
+
+    // create/delete: dwelling past the ladder's ends grows the strand,
+    // visibly gathering a new rung under the finger; ceremony on an existing
+    // rung is the room's solemn act (mutate) — cold, it snips the strand
+    let growing: { end: "head" | "tail"; progress: number; x: number; y: number } | null = null;
+    let holdCeremonyDone = false;
+
+    // ————— performance contract —————
+    const gov = createFrameGovernor();
+    let sleeping = false;
+    const offVis = onVisibility((hidden) => { sleeping = hidden; });
+
+    // three-finger twist = season: the strand's own slow cycle
+    let season = 0;
+    let lastSeasonSoundAt = 0;
+
+    // vessel flip: face-down is night
+    let night = 0;
+    let nightTarget = 0;
+
+    // two-finger pan: the frame peeks, then eases home
+    let panX = 0;
+    let panY = 0;
+    let panTargetX = 0;
+    let panTargetY = 0;
+
+    // the heat overlay's cached gradient strip — baked once, stretched with
+    // drawImage every frame instead of a per-frame createLinearGradient
+    let heatStrip: HTMLCanvasElement | null = null;
 
     const dust = new Float32Array(DUST * 3);
     const rngD = mulberry(hashSeed(0xd, 0x2a));
@@ -220,6 +259,31 @@ export default function HelixLadder() {
       litRung[i] = 1;
     };
 
+    /**
+     * Create: a dwell past the ladder's end grows the strand by one base.
+     * The oldest end — whichever the hand is NOT growing from — gives way
+     * at the cap, never a silent refusal.
+     */
+    const growBase = (end: "head" | "tail") => {
+      const seq = seqRef.current;
+      const rng = mulberry(hashSeed(seq.length, end === "head" ? 0x48 : 0x54, Math.round(performance.now() / 30)));
+      const base = BASES[Math.floor(rng() * BASES.length) % BASES.length];
+      let next = end === "tail" ? [...seq, base] : [base, ...seq];
+      if (next.length > MAX_BASES) {
+        next = end === "tail" ? next.slice(next.length - MAX_BASES) : next.slice(0, MAX_BASES);
+      }
+      seqRef.current = next;
+      const litIdx = end === "tail" ? next.length - 1 : 0;
+      litRung[litIdx] = 1;
+      soundBase(litIdx, 220);
+      try {
+        haptics.bloom();
+      } catch {
+        /* noop */
+      }
+      save();
+    };
+
     /** The whole strand as its melody — the tutti of this room. */
     const playStrand = (transposed = false) => {
       const seq = seqRef.current;
@@ -234,10 +298,17 @@ export default function HelixLadder() {
       }
     };
 
+    // the raised-lens marker ScaleTravel reads before a step-back nudge
+    const markLens = (raised: boolean) => {
+      if (raised) wrap.dataset.lensRaised = "1";
+      else delete wrap.dataset.lensRaised;
+    };
+
     const setLens = (snapped: number) => {
       if (snapped === lensSnapped) return;
       lensSnapped = snapped;
       lensTarget = snapped;
+      markLens(snapped === 1);
       try {
         haptics.lens();
         if (snapped === 1) audio.chime();
@@ -250,7 +321,7 @@ export default function HelixLadder() {
     // ——— geometry ———
     const resize = () => {
       const r = wrap.getBoundingClientRect();
-      const ratio = Math.min(2, window.devicePixelRatio || 1);
+      const ratio = resolveDpr(gov.tier(), { embedded: isEmbeddedFrame(), reducedMotion: reduced, maxDpr: 2 });
       width = Math.max(240, r.width);
       height = Math.max(320, r.height);
       rectLeft = r.left;
@@ -282,6 +353,17 @@ export default function HelixLadder() {
       return clamp(Math.round(u * (seq.length - 1)), 0, seq.length - 1);
     };
 
+    /** Which end of the strand a dwell near this point would extend, or
+     *  null when the touch is nowhere near the ladder's axis at all. */
+    const endNear = (x: number, y: number): "head" | "tail" | null => {
+      if (Math.abs(x - axisX()) > helixW() * 5) return null;
+      if (seqRef.current.length === 0) return "tail";
+      const u = (y - (height / 2 - halfH())) / (halfH() * 2);
+      if (u < 0.12) return "head";
+      if (u > 0.88) return "tail";
+      return null;
+    };
+
     // ——— the grammar ———
     const detachGestures = attachGestures(
       // On the CANVAS, not the wrapper (RoomTemplate §3). The engine takes
@@ -292,7 +374,22 @@ export default function HelixLadder() {
       {
         tap: (e) => {
           lastInteractionAt = performance.now();
-          if (e.fingers === 2) return; // ScaleTravel's step back
+          if (e.fingers === 2) {
+            // step back: a raised lens lowers first; the marker clears a
+            // beat later so ScaleTravel skips its nudge on this same tap
+            if (lensSnapped === 1) {
+              lensSnapped = 0;
+              lensTarget = 0;
+              window.setTimeout(() => markLens(false), 0);
+              try {
+                haptics.lens();
+              } catch {
+                /* noop */
+              }
+              audio.playNote(44, 160);
+            }
+            return;
+          }
           if (e.fingers === 3) {
             playStrand(false);
             return;
@@ -355,11 +452,47 @@ export default function HelixLadder() {
           if (e.phase === "enter") {
             const { x, y } = toLocal(e.x, e.y);
             selIdx = rungAtPoint(x, y);
+            holdCeremonyDone = false;
+            if (selIdx < 0) {
+              const end = endNear(x, y);
+              growing = end ? { end, progress: 0, x, y } : null;
+              if (growing) {
+                try {
+                  haptics.tap();
+                } catch {
+                  /* noop */
+                }
+              }
+            } else {
+              growing = null;
+            }
             return;
           }
           if (e.phase === "release") {
+            if (growing && e.tier >= 2) growBase(growing.end);
+            growing = null;
             holdingOpen = false;
             polymerase = -1;
+            return;
+          }
+          if (growing) {
+            // dwell past the ladder's end: a new rung visibly gathers under
+            // the finger from the moment the dwell tier is crossed, and
+            // holding longer keeps deepening it until it commits on release
+            const { x: gx, y: gy } = toLocal(e.x, e.y);
+            growing.x = gx;
+            growing.y = gy;
+            growing.progress = clamp01((e.elapsed - 220) / 1400);
+            const nowT = performance.now();
+            if (nowT - lastGrowSoundAt > 340 && growing.progress > 0.05) {
+              lastGrowSoundAt = nowT;
+              try {
+                audio.playNote(40 + Math.round(growing.progress * 12), 110);
+                haptics.tap();
+              } catch {
+                /* noop */
+              }
+            }
             return;
           }
           // Holding the ladder open sets the polymerase running: it copies
@@ -369,16 +502,33 @@ export default function HelixLadder() {
             if (polymerase < 0) polymerase = 0;
           }
           // Duration keeps deepening: a longer hold on a rung under a warm
-          // world eventually rewrites it.
-          if (e.tier >= 3 && selIdx >= 0 && temperature > 0.05) {
-            const seq = seqRef.current;
-            const next = mutate(seq, selIdx, hashSeed(Math.round(e.elapsed / 900), selIdx));
-            if (next !== seq) {
-              seqRef.current = next;
-              litRung[selIdx] = 1;
-              soundBase(selIdx, 260);
+          // world eventually rewrites it. Ceremony (tier 3) on a rung with
+          // no warmth to rewrite it is the room's solemn act read cold —
+          // the touch-reachable delete, snipping the strand there.
+          if (e.tier >= 3 && selIdx >= 0) {
+            if (temperature > 0.05) {
+              const seq = seqRef.current;
+              const next = mutate(seq, selIdx, hashSeed(Math.round(e.elapsed / 900), selIdx));
+              if (next !== seq) {
+                seqRef.current = next;
+                litRung[selIdx] = 1;
+                soundBase(selIdx, 260);
+                try {
+                  haptics.bloom();
+                } catch {
+                  /* noop */
+                }
+                save();
+              }
+            } else if (!holdCeremonyDone && seqRef.current.length > MIN_BASES) {
+              holdCeremonyDone = true;
+              const seq = seqRef.current;
+              const cut = selIdx;
+              seqRef.current = seq.slice(0, cut).concat(seq.slice(cut + 1));
+              selIdx = Math.min(cut, seqRef.current.length - 1);
               try {
-                haptics.bloom();
+                audio.thud();
+                haptics.roll();
               } catch {
                 /* noop */
               }
@@ -440,8 +590,37 @@ export default function HelixLadder() {
         },
         twist: (e) => {
           lastInteractionAt = performance.now();
+          if (e.fingers === 3) {
+            // three-finger twist = season: the strand's own slow cycle,
+            // never the lens
+            if (e.phase === "move") {
+              season = (((season + e.angle / (Math.PI * 2)) % 1) + 1) % 1;
+              const now = performance.now();
+              if (now - lastSeasonSoundAt > 260) {
+                lastSeasonSoundAt = now;
+                audio.playNote(28 + Math.round(season * 14), 180);
+                try {
+                  haptics.tap();
+                } catch {
+                  /* noop */
+                }
+              }
+            }
+            return;
+          }
           if (e.phase === "move") lensTarget = clamp01(lensTarget + e.angle / 1.7);
           else if (e.phase === "end") setLens(lensTarget > 0.5 ? 1 : 0);
+        },
+        pan2: (e) => {
+          // two-finger drag pans the frame: a peek, not a permanent move
+          lastInteractionAt = performance.now();
+          if (e.phase === "move") {
+            panTargetX = clamp(panTargetX + e.dx * 0.6, -48, 48);
+            panTargetY = clamp(panTargetY + e.dy * 0.6, -48, 48);
+          } else if (e.phase === "end") {
+            panTargetX = 0;
+            panTargetY = 0;
+          }
         },
         scrub: (e) => {
           lastInteractionAt = performance.now();
@@ -491,6 +670,22 @@ export default function HelixLadder() {
         try {
           audio.thud();
           haptics.detent();
+        } catch {
+          /* noop */
+        }
+      },
+      flip: ({ faceDown }) => {
+        // face-down is night: the ladder stills until the phone turns back
+        nightTarget = faceDown ? 1 : 0;
+        lastInteractionAt = performance.now();
+        try {
+          if (faceDown) {
+            audio.thud();
+            haptics.roll();
+          } else {
+            audio.chime();
+            haptics.bloom();
+          }
         } catch {
           /* noop */
         }
@@ -556,6 +751,9 @@ export default function HelixLadder() {
     // ——— the loop ———
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
+      const tier = gov.beginFrame(now);
+      if (sleeping) return; // no draw while the document is hidden
+      const detail = detailForTier(tier);
       const delta = Math.min(64, now - last);
       last = now;
       const dt = delta / 1000;
@@ -568,7 +766,14 @@ export default function HelixLadder() {
       temperatureTarget *= Math.exp(-dt * 0.05); // the world cools on its own
       lens += (lensTarget - lens) * Math.min(1, dt * 6);
       lean += (leanTarget - lean) * Math.min(1, dt * 3);
+      night += (nightTarget - night) * Math.min(1, dt * (nightTarget > night ? 1.6 : 2.8));
       if (leaving > 0) leaving = Math.max(0, leaving - dt * 0.6);
+      // two-finger pan: the frame eases toward the hand's nudge, then home
+      panX += (panTargetX - panX) * Math.min(1, dt * 5);
+      panY += (panTargetY - panY) * Math.min(1, dt * 5);
+      canvas.style.transform = (Math.abs(panX) > 0.05 || Math.abs(panY) > 0.05)
+        ? `translate(${panX.toFixed(1)}px, ${panY.toFixed(1)}px)`
+        : "";
       for (let i = 0; i < litRung.length; i++) {
         if (litRung[i] > 0) litRung[i] = Math.max(0, litRung[i] - dt * 1.6);
       }
@@ -628,7 +833,9 @@ export default function HelixLadder() {
       }
 
       // ——— render ———
-      const heat = temperature;
+      // season (three-finger twist) drifts the ladder's own slow cycle,
+      // read as a faint warmth independent of the hand's own heat
+      const heat = temperature + Math.max(0, Math.sin(season * Math.PI * 2)) * 0.12;
       const bg = ctx.createRadialGradient(
         width / 2,
         height * 0.45,
@@ -641,10 +848,16 @@ export default function HelixLadder() {
       bg.addColorStop(1, "rgb(6, 7, 10)");
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, width, height);
+      // face-down is night: the ladder dims until the phone turns back over
+      if (night > 0.01) {
+        ctx.fillStyle = `rgba(3, 3, 5, ${night * 0.6})`;
+        ctx.fillRect(0, 0, width, height);
+      }
 
-      // nuclear dust, drifting
+      // nuclear dust, drifting — the fixed count scales with the tier
+      const activeDust = Math.max(10, Math.round(DUST * detail.particles));
       if (lens < 0.9) {
-        for (let i = 0; i < DUST; i++) {
+        for (let i = 0; i < activeDust; i++) {
           const dx = (dust[i * 3] + (reduced ? 0 : Math.sin(localT * 0.12 + i) * 0.02)) * width;
           const dy = (dust[i * 3 + 1] + (reduced ? 0 : Math.cos(localT * 0.09 + i * 1.3) * 0.02)) * height;
           ctx.fillStyle = `rgba(150, 168, 200, ${0.1 * (1 - lens)})`;
@@ -886,6 +1099,23 @@ export default function HelixLadder() {
         }
       }
 
+      // the dwell that grows the strand: a new rung visibly gathers under
+      // the finger, deepening the longer it is held
+      if (growing) {
+        const u = growing.progress;
+        ctx.strokeStyle = `rgba(231, 172, 82, ${0.2 + u * 0.5})`;
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.arc(growing.x, growing.y, helixW() * (0.6 + u * 1.1), -Math.PI / 2, -Math.PI / 2 + u * Math.PI * 2);
+        ctx.stroke();
+        if (u > 0.05) {
+          ctx.fillStyle = `rgba(222, 214, 196, ${0.3 + u * 0.5})`;
+          ctx.beginPath();
+          ctx.arc(growing.x, growing.y, 2.4 + u * 2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
       // ——— glimmer: after ~20s idle one rung sounds itself, faintly
       if (now - lastInteractionAt > 20000 && now - glimmerAt > 6000 && !reduced && n > 0) {
         glimmerAt = now;
@@ -893,14 +1123,28 @@ export default function HelixLadder() {
         litRung[i] = 0.5;
       }
 
-      // the heat of the world, felt at the edge
+      // the heat of the world, felt at the edge — a cached horizontal strip
+      // stretched across the frame, never rebuilt per frame
       if (heat > 0.03) {
-        const g = ctx.createLinearGradient(0, 0, width, 0);
-        g.addColorStop(0, `rgba(200, 92, 40, ${heat * 0.1})`);
-        g.addColorStop(0.5, "rgba(0,0,0,0)");
-        g.addColorStop(1, `rgba(200, 92, 40, ${heat * 0.1})`);
-        ctx.fillStyle = g;
-        ctx.fillRect(0, 0, width, height);
+        let strip = heatStrip;
+        if (!strip) {
+          strip = document.createElement("canvas");
+          strip.width = 256;
+          strip.height = 1;
+          const sctx = strip.getContext("2d");
+          if (sctx) {
+            const g = sctx.createLinearGradient(0, 0, 256, 0);
+            g.addColorStop(0, "rgba(200, 92, 40, 1)");
+            g.addColorStop(0.5, "rgba(0,0,0,0)");
+            g.addColorStop(1, "rgba(200, 92, 40, 1)");
+            sctx.fillStyle = g;
+            sctx.fillRect(0, 0, 256, 1);
+          }
+          heatStrip = strip;
+        }
+        ctx.globalAlpha = heat * 0.1;
+        ctx.drawImage(strip, 0, 0, width, height);
+        ctx.globalAlpha = 1;
       }
     };
     raf = requestAnimationFrame(draw);
@@ -909,6 +1153,8 @@ export default function HelixLadder() {
       observer.disconnect();
       detachGestures();
       detachVessel();
+      offVis();
+      markLens(false);
       wrap.removeEventListener("keydown", onKeyDown);
       wrap.removeEventListener("keyup", onKeyUp);
       mq.removeEventListener?.("change", onMq);

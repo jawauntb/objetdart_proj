@@ -12,6 +12,66 @@ rotates between levels of description. Context: `INSPIRATION.md` (esp. §6),
 To retreat: `git revert` forward or branch from `23e0b8a` and redeploy. Nothing in this
 plan may rewrite history before that commit.
 
+## What ships today (state of the axis)
+
+The plan below is still the map of the work; this section is the ground
+truth of what a hand can actually do, so the two do not drift. `src/lib/scale.ts`
+is the authority — where this file and the code disagree, the code is right
+and this file owes an edit.
+
+**The axis.** 25 contiguous bands from `quanta` (10⁻²² m) to `manifold`
+(10²⁷ m), `SCALE_BANDS`. Five are addresses without rooms
+(`atmosphere`, `planets`, `solar`, `galaxy`, and the door rooms `/rocks`,
+`/soil`); every one of them is *transparent* to travel, never a wall.
+
+**Three layers of doors**, consulted in this order and **unioned**, never
+replaced:
+
+1. `ROUTE_TRAVEL_OVERRIDES` — per-route doors, for rooms that share a band
+   and need different destinations (a drop sinks to the plasm, a rock
+   cleaves to the lattice). A route **leads** its wall; it does not empty
+   it.
+2. `TRAVEL_OVERRIDES` — the band grain: the author's mereology, plus every
+   band whose opposite door points back.
+3. metric adjacency — the default when neither speaks.
+
+That union is load-bearing and was got wrong once: `/earth`'s route
+override used to *replace* the band grain on its floor, which silently
+deleted `earth.extraDown = ["coast","olympus"]`, so a fresh pinch down from
+the ground could never reach the shore or the peak. `test-scale.mjs` pins
+it now.
+
+**The upper axis is metric-monotone.** `earth` takes no `up` override: the
+ground climbs through the (unbuilt) planetary neighbourhood and system into
+the stars. It used to zoom *out* to `/atlas` — a band two decades smaller —
+which was the last metric inversion above the ground and a contradiction of
+`docs/plans/ground-and-sky.md` §1. The atlas is a chart of a *region* of the
+ground: it sits one band **below** the earth, is a door **in**, and is also
+the earth's hearth **peer** (`PEER_CIRCLES`), because a map is the same
+ground at a different level of description. Its trunk passage up to `/stars`
+(the `TravelPassage` film) is unchanged.
+
+**Where the pinch happens chooses the door.** `src/lib/fork-regions.ts` is
+wired into `ScaleTravel`: a wall with several doors lays them across the
+frame west→east in offer order (`fanRegions`), with a neutral disc in the
+middle that claims nothing. Pinch off-centre and that door is taken; pinch
+in the middle and the old press-release-press carousel answers exactly as
+before (which is also the whole story for trackpads and keyboards, which
+have no centroid). The vignette's eye slides to the offered door's column
+and a warm bloom gathers there with the pressure, so the choice is felt
+before it commits — no menu, no label. Rooms that know their own geography
+(a fog line, a ridge silhouette) replace the default through
+`declareForkRegions` in `ScaleTravel.tsx`; none do yet.
+
+**Chrome.** Every addressed room mounts `AxisChrome` (or `ScaleTravel` +
+`MetaNavigator`) — including `/atlas/[region]`, with `travel={false}`
+because `Atlas` drives the manifold itself through `useBandEdgeTravel`, the
+same pattern `/stars` uses.
+
+**Still unbuilt:** the four sky rooms (atmosphere, planets, solar, galaxy),
+the ground's strata (`/rocks`, `/soil`), W7's twist-lens registry, and W8's
+overlook. Nothing above depends on them landing.
+
 ## Shape of the work
 
 Eight workstreams. W0 is the serial foundation; after it lands, four lanes run in
@@ -53,9 +113,12 @@ W0 foundation: lib/gesture + lib/scale        ──► serial, everything depen
 2. Band adapters for existing rooms — a room exports `{ mount, unmount, anchor }`;
    the **handoff anchor** rule: the focused object of band N becomes the container of
    band N+1 (petal → cell field; atlas sheet → coastline).
-3. First traversal live: **coast (ocean/tide/waves) ↔ atlas ↔ earth ↔ stars ↔ beyond**,
-   entered from any of those rooms; existing routes keep working standalone (the manifold
-   is additive, never a rewrite).
+3. First traversal live: **coast (ocean/tide/waves) ↔ olympus ↔ atlas ↔ earth**
+   below, **earth ↔ stars ↔ space ↔ manifold** above (with `/beyond` a branch off
+   the fold), entered from any of those rooms; existing routes keep working
+   standalone (the manifold is additive, never a rewrite). The order is the
+   metric order — see "What ships today" above; the atlas sits *under* the
+   earth, not over it.
 4. Persist `s` + per-band camera in `lib/world.ts` storage.
 - **PR slices:** manifold shell; coast↔atlas; atlas↔earth; earth↔stars↔beyond.
 - **Risks:** perf (two live bands during crossfade — budget one rAF, pause the hidden

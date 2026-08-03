@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { onVisibility } from "@/lib/room-runtime";
+import { isEmbeddedFrame, onVisibility, resolveDpr } from "@/lib/room-runtime";
 
 /**
  * createGravityFieldRenderer — the shared curvature field.
@@ -347,8 +347,13 @@ export default function SpacetimeShader({ className }: { className?: string }) {
     const uCursor = gl.getUniformLocation(prog, "u_cursor");
     const uWarp = gl.getUniformLocation(prog, "u_warp");
 
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    let reduced = mq.matches ? 1 : 0;
+    const onMq = () => { reduced = mq.matches ? 1 : 0; };
+    if (typeof mq.addEventListener === "function") mq.addEventListener("change", onMq);
+
     const resize = () => {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = resolveDpr("high", { embedded: isEmbeddedFrame(), reducedMotion: reduced === 1, maxDpr: 2 });
       const w = wrap.clientWidth || 1;
       const h = wrap.clientHeight || 1;
       canvas.width = Math.max(1, Math.floor(w * dpr));
@@ -358,11 +363,6 @@ export default function SpacetimeShader({ className }: { className?: string }) {
     resize();
     const ro = new ResizeObserver(resize);
     ro.observe(wrap);
-
-    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
-    let reduced = mq.matches ? 1 : 0;
-    const onMq = () => { reduced = mq.matches ? 1 : 0; };
-    if (typeof mq.addEventListener === "function") mq.addEventListener("change", onMq);
 
     const onMove = (e: PointerEvent) => {
       const rect = wrap.getBoundingClientRect();
@@ -395,13 +395,25 @@ export default function SpacetimeShader({ className }: { className?: string }) {
       raf = requestAnimationFrame(draw);
     };
     raf = requestAnimationFrame(draw);
+    const offVis = onVisibility((hiddenNow) => {
+      sleeping = hiddenNow;
+      if (!hiddenNow && !raf) raf = requestAnimationFrame(draw);
+    });
+
+    const onLost = (ev: Event) => { ev.preventDefault(); cancelAnimationFrame(raf); raf = 0; };
+    const onRestored = () => { /* a static ambient backdrop: reload is enough */ };
+    canvas.addEventListener("webglcontextlost", onLost, false);
+    canvas.addEventListener("webglcontextrestored", onRestored, false);
 
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
+      offVis();
       if (typeof mq.removeEventListener === "function") mq.removeEventListener("change", onMq);
       wrap.removeEventListener("pointermove", onMove);
       wrap.removeEventListener("pointerleave", onLeave);
+      canvas.removeEventListener("webglcontextlost", onLost);
+      canvas.removeEventListener("webglcontextrestored", onRestored);
       gl.deleteProgram(prog); gl.deleteShader(vs); gl.deleteShader(fs); gl.deleteBuffer(buf);
     };
   }, []);

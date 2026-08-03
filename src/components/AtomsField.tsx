@@ -39,15 +39,25 @@
 import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
-import { attachGestures } from "@/lib/gesture";
+import { THRESHOLDS, attachGestures } from "@/lib/gesture";
 import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
+import LetGo from "@/components/LetGo";
+import {
+  createFrameGovernor,
+  detailForTier,
+  isEmbeddedFrame,
+  onGalleryPause,
+  onVisibility,
+  resolveDpr,
+} from "@/lib/room-runtime";
 import {
   ATOM_FAMILIES,
   MAX_ATOMS,
   MAX_RING,
   atomFromSeed,
   blastMagnitude,
+  bondPolarity,
   canFuse,
   covalentBond,
   covalentPair,
@@ -66,6 +76,9 @@ const STORE_KEY = "objetdart:atoms:v1";
 const MOTE_COUNT = 60;
 const RETIRE_MS = 1400;
 const EXCITE_MS = 900;
+/** The hold tiers, read from the grammar — never redefined here. */
+const TOUCH_MS = THRESHOLDS.tapMaxMs;
+const DWELL_MS = THRESHOLDS.dwellMs;
 
 type AtomEnt = {
   id: string;
@@ -250,6 +263,17 @@ export default function AtomsField() {
     let tiltLeanX = 0;
     let tiltLeanY = 0;
     let tuttiPulse = 0;
+    /** the room's slow cycle, 0..1: a cold vacuum ↔ the inside of a star */
+    let season = 0.1;
+    let seasonSpokenAt = 0;
+    let spontaneousAt = 0;
+    /** face-down: the clouds keep their watch in the dark */
+    let night = 0;
+    let nightTarget = 0;
+    /** the iron wall, still ringing: the field leans downhill toward the
+     *  band below, where anything heavier has to be made */
+    let ironward = 0;
+    let lastKnockAt = 0;
     let lastTiltSoundAt = 0;
     let lastTuttiAt = 0;
     let lastDeepenNoteAt = 0;
@@ -266,13 +290,36 @@ export default function AtomsField() {
     let lastWindSoundAt = 0;
     let lastScrubAt = 0;
     let lastChargeNoteAt = 0;
-    const hold: { atomId: string | null; partnerId: string | null; onExisting: boolean; seeded: boolean; bonded: boolean } = {
+    const hold: {
+      atomId: string | null;
+      partnerId: string | null;
+      onExisting: boolean;
+      seeded: boolean;
+      bonded: boolean;
+      /** 0..1 — what has visibly gathered under the finger so far */
+      gather: number;
+      gx: number;
+      gy: number;
+    } = {
       atomId: null,
       partnerId: null,
       onExisting: false,
       seeded: false,
       bonded: false,
+      gather: 0,
+      gx: 0,
+      gy: 0,
     };
+    let gatherFade = 0;
+    let lastGatherNoteAt = 0;
+
+    // ————— the room runtime: govern frames, sleep when unwatched —————
+    const gov = createFrameGovernor();
+    let sleeping = false;
+    let paused = false;
+    let lastTier = gov.tier();
+    const offVis = onVisibility((hidden) => { sleeping = hidden; });
+    const offPause = onGalleryPause((p) => { paused = p; });
 
     const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
     reduce = mq.matches;
@@ -355,9 +402,63 @@ export default function AtomsField() {
       pendingNotes.push({ at: performance.now() + delayMs, midi, ms });
     };
 
+    // ————— sprites: every soft glow baked once, drawn with drawImage —————
+    // A cloud, a lobe and a nucleus are all the same shape at different
+    // radii and tints, so the room bakes one per family instead of building
+    // a radial gradient per atom per lobe per frame.
+    const sprite = (stops: Array<[number, string]>, size = 96): HTMLCanvasElement => {
+      const c = document.createElement("canvas");
+      c.width = size;
+      c.height = size;
+      const g = c.getContext("2d");
+      if (g) {
+        const grad = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+        for (const [stop, color] of stops) grad.addColorStop(stop, color);
+        g.fillStyle = grad;
+        g.fillRect(0, 0, size, size);
+      }
+      return c;
+    };
+    const CLOUD_SPRITES = ATOM_FAMILIES.map((fam) =>
+      sprite([
+        [0, colorAlpha(fam[3], 0.1)],
+        [0.6, colorAlpha(fam[2], 0.06)],
+        [1, "rgba(0,0,0,0)"],
+      ]),
+    );
+    const LOBE_SPRITES = ATOM_FAMILIES.map((fam) =>
+      sprite([
+        [0.04, colorAlpha(fam[4], 0.16)],
+        [0.65, colorAlpha(fam[2], 0.07)],
+        [1, "rgba(0,0,0,0)"],
+      ], 64),
+    );
+    const NUCLEUS_SPRITES = ATOM_FAMILIES.map((fam) =>
+      sprite([
+        [0, colorAlpha("#F7F3EA", 0.9)],
+        [0.25, colorAlpha(fam[5], 0.6)],
+        [1, "rgba(0,0,0,0)"],
+      ], 64),
+    );
+    const HALO_SPRITE = sprite([
+      [0.1, "rgba(231, 172, 82, 0.3)"],
+      [1, "rgba(0,0,0,0)"],
+    ]);
+    const GATHER_SPRITE = sprite([
+      [0, "rgba(242, 238, 230, 0.4)"],
+      [0.45, "rgba(231, 172, 82, 0.16)"],
+      [1, "rgba(0,0,0,0)"],
+    ]);
+    const stamp = (img: HTMLCanvasElement, x: number, y: number, r: number, alpha: number) => {
+      if (alpha <= 0.004 || r <= 0.3) return;
+      ctx.globalAlpha = Math.min(1, alpha);
+      ctx.drawImage(img, x - r, y - r, r * 2, r * 2);
+      ctx.globalAlpha = 1;
+    };
+
     const resize = () => {
       const r = wrap.getBoundingClientRect();
-      const ratio = Math.min(window.devicePixelRatio || 1, 1.5);
+      const ratio = resolveDpr(gov.tier(), { embedded: isEmbeddedFrame(), reducedMotion: reduce });
       width = Math.max(320, Math.floor(r.width));
       height = Math.max(480, Math.floor(r.height));
       rectLeft = r.left;
@@ -524,10 +625,22 @@ export default function AtomsField() {
       if (!pair || appetiteOf(a) <= 0 || appetiteOf(b) <= 0) { rebuff(a, b); return; }
       bondBetween(a, b);
       const cb = covalentBond(a.seed, b.seed);
-      // covalence: one solemn act, three senses in one frame
+      // covalence: one solemn act, three senses in one frame — and the act
+      // sounds like the bond it made. An even share rings a clean fifth; a
+      // lopsided one leans flat; an outright transfer (a wide
+      // electronegativity gap — sodium and chlorine, not carbon and hydrogen)
+      // speaks two separate notes, because that is two ions and not one pair.
       try { audio().bell(); } catch { /* noop */ }
-      try { haptics.bloom(); } catch { /* noop */ }
+      try { (cb.character === "ionic" ? haptics.chop : haptics.bloom)(); } catch { /* noop */ }
       note(52 + cb.tone, 420);
+      if (cb.character === "ionic") {
+        noteLater(150, 52 + cb.tone + 11, 380);
+        try { audio().chime(); } catch { /* noop */ }
+      } else if (cb.character === "polar") {
+        noteLater(170, 52 + cb.tone + 7 - Math.round(cb.polarity * 2), 300);
+      } else {
+        noteLater(170, 52 + cb.tone + 7, 300);
+      }
       burst((a.sx + b.sx) / 2, (a.sy + b.sy) / 2, [
         ATOM_FAMILIES[a.morph.family][5],
         ATOM_FAMILIES[b.morph.family][5],
@@ -597,15 +710,18 @@ export default function AtomsField() {
       try { (mag > 0.55 ? haptics.storm : haptics.bloom)(); } catch { /* noop */ }
     };
 
-    // past iron, fusion costs more than it pays: the nuclei strain, shudder,
-    // and dim instead of flashing — the iron wall, felt
+    // Past iron, fusion costs more than it pays. This is not a failure to
+    // report but a wall to feel: the two nuclei are thrown back hard, the
+    // whole field goes heavy and sags DOWNWARD — toward the band below,
+    // where the only road past iron has ever run — and a merlot weight
+    // gathers along the bottom edge until it fades. No word is said about it.
     const ironWall = (a: AtomEnt, b: AtomEnt) => {
       const dx = b.sx - a.sx;
       const dy = b.sy - a.sy;
       const d = Math.max(1, Math.hypot(dx, dy));
       // the elastic bounce: whatever closing speed remains is returned
       const closing = ((a.kvx - b.kvx) * dx + (a.kvy - b.kvy) * dy) / d;
-      const k = Math.max(40, closing * 0.7);
+      const k = Math.max(90, closing * 1.1);
       a.kvx -= (dx / d) * k;
       a.kvy -= (dy / d) * k;
       b.kvx += (dx / d) * k;
@@ -614,9 +730,30 @@ export default function AtomsField() {
       b.shudder = 1;
       a.dim = Math.min(1, a.dim + 0.6);
       b.dim = Math.min(1, b.dim + 0.6);
+      // the weight: everything in the field is pulled down for a breath
+      ironward = 1;
+      if (!reduce) {
+        for (let i = 0; i < 10; i++) {
+          const spread = (i / 10 - 0.5) * 90;
+          specks.push({
+            x: (a.sx + b.sx) / 2 + spread,
+            y: (a.sy + b.sy) / 2,
+            vx: spread * 0.6,
+            vy: 130 + twinkleHash(i * 5 + 3) * 120,
+            born: performance.now(),
+            life: 1200,
+            r: 1.2,
+            color: i % 3 === 0 ? "#7A1F1F" : "#9C3D33",
+            streak: true,
+          });
+        }
+      }
       try { audio().refuse(); } catch { /* noop */ }
-      note(26, 420);
-      try { haptics.chop(); } catch { /* noop */ }
+      try { audio().thud(); } catch { /* noop */ }
+      note(26, 520);
+      noteLater(180, 22, 640); // the second, lower word: the floor of the band
+      try { haptics.storm(); } catch { /* noop */ }
+      useField.getState().recordTape("object", 0.6, "atoms/iron-wall");
     };
 
     const attemptFusion = (a: AtomEnt, b: AtomEnt) => {
@@ -757,6 +894,9 @@ export default function AtomsField() {
           hold.onExisting = !!a;
           hold.seeded = false;
           hold.bonded = false;
+          hold.gather = 0;
+          hold.gx = x;
+          hold.gy = y;
           return;
         }
         if (e.phase === "release") {
@@ -767,10 +907,27 @@ export default function AtomsField() {
           hold.atomId = null;
           hold.partnerId = null;
           hold.onExisting = false;
+          gatherFade = hold.gather;
+          hold.gather = 0;
           save();
           return;
         }
-        // ticks (~80ms)
+        // ticks (~80ms). On open vacuum the gathering is continuous from the
+        // touch tier: probability visibly draws inward under the finger and
+        // tightens until, at the dwell, it is an atom. The verb is watched,
+        // not waited through — and it keeps deepening after it lands.
+        if (!hold.onExisting) {
+          hold.gx = x;
+          hold.gy = y;
+          hold.gather = hold.seeded
+            ? Math.max(0, 1 - (e.elapsed - DWELL_MS) / 460) // it became the atom
+            : clamp01((e.elapsed - TOUCH_MS) / (DWELL_MS - TOUCH_MS));
+          const nowG = performance.now();
+          if (!hold.seeded && hold.gather > 0 && hold.gather < 1 && nowG - lastGatherNoteAt > 150) {
+            lastGatherNoteAt = nowG;
+            note(60 + Math.round(hold.gather * 16), 70);
+          }
+        }
         if (hold.onExisting && hold.atomId) {
           const a = atoms.find((q) => q.id === hold.atomId);
           if (!a || a.retiringAt) return;
@@ -815,9 +972,22 @@ export default function AtomsField() {
             partner.charge = 0;
           }
         } else if (hold.atomId) {
-          // an atom this hand just condensed — keep holding, it keeps gathering
+          // an atom this hand just condensed — keep holding, it keeps
+          // gathering: the cloud fills, and past its closing the hand keeps
+          // pouring in, stirring the orbitals and exciting it further
           const a = atoms.find((q) => q.id === hold.atomId);
-          if (a) growAtom(a, 0.0011 * 80 * (1 + e.intensity * 0.6));
+          if (!a) return;
+          if (!a.closed) {
+            growAtom(a, 0.0011 * 80 * (1 + e.intensity * 0.6));
+          } else {
+            a.precessBoost = clamp(a.precessBoost + 0.02 * (1 + e.intensity * 0.5), -3, 3);
+            const now = performance.now();
+            if (now - lastDeepenNoteAt > 600) {
+              lastDeepenNoteAt = now;
+              note(midiOf(a.morph) + Math.min(9, Math.round((e.elapsed - 900) / 400)), 100);
+              try { haptics.tap(); } catch { /* noop */ }
+            }
+          }
         } else if (e.tier >= 2 && !hold.seeded && !hold.onExisting && !hold.bonded) {
           // dwell on open space: condense — long-press means grow, everywhere
           hold.seeded = true;
@@ -889,7 +1059,22 @@ export default function AtomsField() {
         }
       },
       twist: (e) => {
-        if (e.fingers === 3) return; // three fingers turn the season, not the lens
+        if (e.fingers === 3) {
+          // three fingers turn the season: the vacuum cools toward a still,
+          // cold field or warms toward the inside of a star, where clouds
+          // stir fast and electrons jump without being asked
+          if (e.phase !== "move") return;
+          lastInteractionAt = performance.now();
+          season = (season - e.angle / (Math.PI * 2) + 1) % 1;
+          const now = performance.now();
+          if (now - seasonSpokenAt > 260) {
+            seasonSpokenAt = now;
+            const heat = 0.5 - 0.5 * Math.cos(season * Math.PI * 2);
+            note(34 + Math.round(heat * 24), 200);
+            try { haptics.detent(); } catch { /* noop */ }
+          }
+          return;
+        }
         lastInteractionAt = performance.now();
         // two fingers rotate the lens: felt cloud ↔ orbital diagram
         if (e.phase === "move") {
@@ -944,6 +1129,38 @@ export default function AtomsField() {
           if (!a.retiringAt && a.closed) excite(a, 0.4 + intensity * 0.6);
         }
         try { (intensity > 0.7 ? haptics.storm : haptics.chop)(); } catch { /* noop */ }
+      },
+      knock: ({ intensity }) => {
+        const now = performance.now();
+        if (now - lastKnockAt < 350) return;
+        lastKnockAt = now;
+        lastInteractionAt = now;
+        // a knock on the case is a knock on the room's door: the whole field
+        // answers at once, and the nearest cloud sheds a photon toward it
+        tutti();
+        tuttiPulse = Math.max(tuttiPulse, 0.7 + intensity * 0.3);
+        note(30 + Math.round(intensity * 8), 200);
+        const a = atoms.find((q) => !q.retiringAt && q.closed);
+        if (a && !reduce) {
+          photonStreak(a, twinkleHash(now) * Math.PI * 2, 150 + intensity * 140, "#F2C56B");
+        }
+        try { (intensity > 0.6 ? haptics.chop : haptics.tap)(); } catch { /* noop */ }
+      },
+      flip: ({ faceDown }) => {
+        const want = faceDown ? 1 : 0;
+        if (nightTarget === want) return;
+        nightTarget = want;
+        lastInteractionAt = performance.now();
+        // night: the clouds keep their watch under the dark
+        if (faceDown) {
+          note(28, 620);
+          try { haptics.roll(); } catch { /* noop */ }
+        } else {
+          note(52, 240);
+          noteLater(140, 64, 200);
+          try { haptics.ripple(0.35); } catch { /* noop */ }
+        }
+        useField.getState().recordTape("object", faceDown ? 0.2 : 0.45, "atoms/night");
       },
     });
 
@@ -1084,24 +1301,14 @@ export default function AtomsField() {
 
       // the covalence ceremony: a warm halo tightens as lobes reach
       if (a.charge > 0) {
-        const halo = ctx.createRadialGradient(0, 0, R * 0.2, 0, 0, R * (2 - a.charge * 0.6));
-        halo.addColorStop(0, colorAlpha("#E7AC52", 0.09 * a.charge * fade));
-        halo.addColorStop(1, "rgba(0,0,0,0)");
-        ctx.fillStyle = halo;
-        ctx.fillRect(-R * 2, -R * 2, R * 4, R * 4);
+        stamp(HALO_SPRITE, 0, 0, R * (2 - a.charge * 0.6), 0.3 * a.charge * fade);
       }
 
       // — felt pass: probability as translucent light —
       if (feltAlpha > 0.02) {
-        // the whole cloud: a soft envelope
-        const cloud = ctx.createRadialGradient(leanX * 0.5, leanY * 0.5, R * 0.05, leanX * 0.5, leanY * 0.5, R * 1.1);
-        cloud.addColorStop(0, colorAlpha(fam[3], 0.1 * feltAlpha * grow));
-        cloud.addColorStop(0.6, colorAlpha(fam[2], 0.06 * feltAlpha * grow));
-        cloud.addColorStop(1, "rgba(0,0,0,0)");
-        ctx.fillStyle = cloud;
-        ctx.beginPath();
-        ctx.arc(leanX * 0.5, leanY * 0.5, R * 1.1, 0, Math.PI * 2);
-        ctx.fill();
+        // the whole cloud: a soft envelope (baked sprite, not a per-frame
+        // gradient — this loop runs once per atom per frame)
+        stamp(CLOUD_SPRITES[morph.family], leanX * 0.5, leanY * 0.5, R * 1.1, feltAlpha * grow);
 
         // orbital lobes — translucent fields with the seed's symmetry
         const lobeR = R * 0.62;
@@ -1114,14 +1321,8 @@ export default function AtomsField() {
           ctx.save();
           ctx.translate(lx, ly);
           ctx.rotate(ang);
-          const lg = ctx.createRadialGradient(0, 0, lr * 0.08, 0, 0, lr);
-          lg.addColorStop(0, colorAlpha(fam[4], 0.16 * feltAlpha));
-          lg.addColorStop(0.65, colorAlpha(fam[2], 0.07 * feltAlpha));
-          lg.addColorStop(1, "rgba(0,0,0,0)");
-          ctx.fillStyle = lg;
-          ctx.beginPath();
-          ctx.ellipse(0, 0, lr, lr * 0.55, 0, 0, Math.PI * 2);
-          ctx.fill();
+          ctx.scale(1, 0.55);
+          stamp(LOBE_SPRITES[morph.family], 0, 0, lr, feltAlpha);
           ctx.restore();
         }
 
@@ -1169,14 +1370,7 @@ export default function AtomsField() {
 
         // nucleus — the one bright certainty
         const nR = R * morph.nucleus * (1 + (reduce ? 0 : Math.sin(breath * 2 + morph.breathOffset) * 0.08));
-        const ng = ctx.createRadialGradient(0, 0, 0, 0, 0, nR * 3);
-        ng.addColorStop(0, colorAlpha("#F7F3EA", 0.9 * feltAlpha));
-        ng.addColorStop(0.25, colorAlpha(fam[5], 0.6 * feltAlpha));
-        ng.addColorStop(1, "rgba(0,0,0,0)");
-        ctx.fillStyle = ng;
-        ctx.beginPath();
-        ctx.arc(0, 0, nR * 3, 0, Math.PI * 2);
-        ctx.fill();
+        stamp(NUCLEUS_SPRITES[morph.family], 0, 0, nR * 3, feltAlpha);
       }
 
       // — lens pass: the orbital diagram, the same atom as measure —
@@ -1265,22 +1459,54 @@ export default function AtomsField() {
         // O=O two, N≡N three (the kernel's covalentPair decided b.order)
         const strandOffs = b.order === 1 ? [0] : b.order === 2 ? [-1, 1] : [-1.6, 0, 1.6];
         const feltAlpha = 1 - lens;
+        // where the shared pair actually sits: the more electronegative atom
+        // holds it closer, and an ionic gap holds it outright. This is the
+        // one place the table's electronegativity column is visible.
+        const ea = elementOf(pa.morph.z);
+        const eb = elementOf(pb.morph.z);
+        const pol = ea && eb ? bondPolarity(ea, eb) : 0; // + = pb pulls harder
+        const bias = Math.max(-0.42, Math.min(0.42, pol * 0.45));
+        const shareX = midX + ux * d * bias;
+        const shareY = midY + uy * d * bias;
         if (feltAlpha > 0.02) {
-          // merged lobes: a shared luminous field between the pair
-          const g = ctx.createRadialGradient(midX, midY, 2, midX, midY, d * 0.55);
-          const fa = ATOM_FAMILIES[pa.morph.family][4];
+          // merged lobes: a shared luminous field between the pair, pooled
+          // toward whichever end takes the harder pull
+          const g = ctx.createRadialGradient(shareX, shareY, 2, shareX, shareY, d * 0.55);
+          const fa = ATOM_FAMILIES[(pol > 0 ? pb : pa).morph.family][4];
           g.addColorStop(0, colorAlpha(fa, 0.14 * cb.gleam * feltAlpha));
           g.addColorStop(1, "rgba(0,0,0,0)");
           ctx.fillStyle = g;
           ctx.save();
-          ctx.translate(midX, midY);
+          ctx.translate(shareX, shareY);
           ctx.rotate(Math.atan2(pb.sy - pa.sy, pb.sx - pa.sx));
           const pulse = reduce ? 1 : 1 + Math.sin(t * 1.7 + cb.tone) * 0.12;
           ctx.beginPath();
-          ctx.ellipse(0, 0, d * 0.52 * pulse, Math.min(pa.sr, pb.sr) * 0.5 * pulse, 0, 0, Math.PI * 2);
+          ctx.ellipse(
+            0, 0,
+            d * (0.52 - Math.abs(bias) * 0.5) * pulse,
+            Math.min(pa.sr, pb.sr) * 0.5 * pulse,
+            0, 0, Math.PI * 2,
+          );
           ctx.fillStyle = g;
           ctx.fill();
           ctx.restore();
+          if (cb.character === "ionic") {
+            // a transfer, not a share: the two ends carry opposite signs —
+            // one ring bright and closed, the other open and hollow
+            const giver = pol > 0 ? pa : pb;
+            const taker = pol > 0 ? pb : pa;
+            ctx.strokeStyle = colorAlpha("#E7AC52", 0.3 * feltAlpha);
+            ctx.lineWidth = 1;
+            ctx.setLineDash([2, 4]);
+            ctx.beginPath();
+            ctx.arc(giver.sx, giver.sy, giver.sr * 0.72, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.strokeStyle = colorAlpha("#6997A4", 0.4 * feltAlpha);
+            ctx.beginPath();
+            ctx.arc(taker.sx, taker.sy, taker.sr * 0.62, 0, Math.PI * 2);
+            ctx.stroke();
+          }
           // the luminous strands of the shared pair(s)
           const spacing = Math.max(2.2, Math.min(pa.sr, pb.sr) * 0.12);
           const x1 = pa.sx + ux * pa.sr * 0.5;
@@ -1320,8 +1546,15 @@ export default function AtomsField() {
     // ————— the loop —————
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
+      const tier = gov.beginFrame(now);
+      // unwatched, the vacuum keeps its own counsel and costs nothing
+      if (sleeping || paused) { last = now; return; }
       if (!reduce && now - lastFrame < 30) return;
       lastFrame = now;
+      // the governor owns the drawing-buffer size too: a field that starts
+      // costing frames redraws itself smaller rather than dropping them
+      if (tier !== lastTier) { lastTier = tier; resize(); }
+      const detail = detailForTier(tier);
       const delta = Math.min(64, now - last);
       last = now;
       const dt = delta / 1000;
@@ -1336,9 +1569,25 @@ export default function AtomsField() {
       sweepStrength *= Math.exp(-dt * 2.2);
       stirOmega *= Math.exp(-dt * 0.8);
       tuttiPulse *= Math.exp(-dt * 2.4);
-      // the vessel's lean joins the field wind: the vacuum drifts downhill
+      night += (nightTarget - night) * Math.min(1, dt * 1.6);
+      gatherFade = Math.max(0, gatherFade - dt * 2.2);
+      ironward = Math.max(0, ironward - dt * 0.42);
+      const heat = 0.5 - 0.5 * Math.cos(season * Math.PI * 2);
+      // the vessel's lean joins the field wind: the vacuum drifts downhill,
+      // and after an iron refusal the whole field sags toward the band below
       const gravX = windX + tiltLeanX * 0.5;
-      const gravY = windY + tiltLeanY * 0.5;
+      const gravY = windY + tiltLeanY * 0.5 + ironward * 0.85;
+
+      // the furnace season: hot enough and electrons jump unbidden — the room
+      // is alive at rest, and the season says how alive
+      if (!reduce && heat > 0.4 && now - spontaneousAt > 2600 - heat * 1600) {
+        spontaneousAt = now;
+        const live = atoms.filter((a) => !a.retiringAt && a.closed);
+        if (live.length > 0) {
+          const pick = live[Math.floor(twinkleHash(Math.floor(now / 97)) * live.length) % live.length];
+          excite(pick, 0.25 + heat * 0.5);
+        }
+      }
 
       // deferred notes (the ionized electron falling home)
       for (let i = pendingNotes.length - 1; i >= 0; i--) {
@@ -1470,10 +1719,25 @@ export default function AtomsField() {
       ctx.fillStyle = glow;
       ctx.fillRect(0, 0, width, height);
 
+      // the season's warmth, and the weight of an iron refusal pooling along
+      // the bottom edge — the direction the field is telling the hand to go
+      if (heat > 0.01) {
+        ctx.fillStyle = `rgba(200, 115, 42, ${0.02 + heat * 0.06})`;
+        ctx.fillRect(0, 0, width, height);
+      }
+      if (ironward > 0.004) {
+        const sink = ctx.createLinearGradient(0, height * (0.55 - ironward * 0.15), 0, height);
+        sink.addColorStop(0, "rgba(0,0,0,0)");
+        sink.addColorStop(1, `rgba(122, 31, 31, ${0.34 * ironward})`);
+        ctx.fillStyle = sink;
+        ctx.fillRect(0, 0, width, height);
+      }
+
       // vacuum motes — the faint noise floor of the field
       ctx.save();
       ctx.globalCompositeOperation = lens > 0.5 ? "source-over" : "screen";
-      for (let i = 0; i < motes.length; i++) {
+      const moteShown = Math.max(10, Math.round(motes.length * detail.particles));
+      for (let i = 0; i < moteShown; i++) {
         const m = motes[i];
         if (!reduce) {
           const jx = Math.sin(localT * (0.8 + twinkleHash(i + 53) * 1.4) + twinkleHash(i + 11) * 6.28) * 4;
@@ -1612,18 +1876,58 @@ export default function AtomsField() {
       }
       ctx.restore();
 
-      // glimmer — after quiet, a ring where a dwell would land (never text)
+      // ——— the gathering under the finger ———
+      // From the touch tier on, probability visibly draws inward and tightens
+      // until, at the dwell, it is an atom. The hand learns the verb by
+      // watching it happen — never by being told (grammar §6).
+      const gk = hold.gather > 0 ? hold.gather : gatherFade;
+      if (gk > 0.01) {
+        const ease = gk * gk;
+        const ringR = 48 - 34 * ease;
+        stamp(GATHER_SPRITE, hold.gx, hold.gy, 12 + 22 * ease, 0.3 + 0.55 * ease);
+        ctx.strokeStyle = colorAlpha("#E7AC52", 0.1 + 0.4 * ease);
+        ctx.lineWidth = 0.8 + ease * 1.2;
+        ctx.beginPath();
+        ctx.arc(hold.gx, hold.gy, ringR, 0, Math.PI * 2);
+        ctx.stroke();
+        if (!reduce) {
+          for (let i = 0; i < 7; i++) {
+            const ang = (i / 7) * Math.PI * 2 + localT * 1.1 + gk * 3;
+            const r0 = ringR + 26 * (1 - ease);
+            ctx.strokeStyle = colorAlpha("#CFC2A6", 0.08 + 0.3 * ease);
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(hold.gx + Math.cos(ang) * r0, hold.gy + Math.sin(ang) * r0);
+            ctx.lineTo(hold.gx + Math.cos(ang) * (ringR + 4), hold.gy + Math.sin(ang) * (ringR + 4));
+            ctx.stroke();
+          }
+        }
+      }
+
+      // glimmer (grammar §6.3) — after quiet, the same gathering ripples once
+      // where a press would land, so the room shows its verb without a word
       const idleMs = now - lastInteractionAt;
       if (idleMs > 20000) {
         const slot = Math.floor(now / 9000);
         const gx = (0.25 + twinkleHash(slot) * 0.5) * width;
         const gy = (0.25 + twinkleHash(slot + 7) * 0.5) * height;
-        const pulse = reduce ? 0.5 : 0.5 + Math.sin(now / 480) * 0.5;
-        ctx.strokeStyle = colorAlpha("#E7AC52", 0.1 + pulse * 0.12);
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.arc(gx, gy, 14 + pulse * 8, 0, Math.PI * 2);
-        ctx.stroke();
+        const u = ((now % 9000) / 9000) * 3;
+        if (u < 1) {
+          const ease = reduce ? 0.5 : u;
+          const alpha = Math.sin(ease * Math.PI);
+          stamp(GATHER_SPRITE, gx, gy, 12 + 18 * ease, alpha * 0.5);
+          ctx.strokeStyle = colorAlpha("#E7AC52", alpha * 0.3);
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.arc(gx, gy, 48 - 32 * ease, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      }
+
+      // night — laid face-down, the clouds keep their watch in the dark
+      if (night > 0.002) {
+        ctx.fillStyle = `rgba(4, 5, 8, ${night * 0.72})`;
+        ctx.fillRect(0, 0, width, height);
       }
 
       // keyboard cursor
@@ -1648,6 +1952,8 @@ export default function AtomsField() {
     return () => {
       cancelAnimationFrame(raf);
       observer.disconnect();
+      offVis();
+      offPause();
       detach();
       detachVessel();
       markLens(false);
@@ -1673,15 +1979,10 @@ export default function AtomsField() {
         <canvas ref={canvasRef} className="atoms-canvas" aria-hidden="true" />
       </div>
 
-      {hasAtoms && (
-        <button
-          type="button"
-          className="atoms-still"
-          onClick={() => stillRef.current()}
-        >
-          still the field
-        </button>
-      )}
+      {/* the quiet clear is the shared one: LetGo portals to <body> on
+          purpose, because a control rendered inside this `position: fixed`
+          wrapper is trapped in its stacking context under the tape's z-28 */}
+      <LetGo label="still the field" onLetGo={() => stillRef.current()} visible={hasAtoms} />
 
       <style
         dangerouslySetInnerHTML={{
@@ -1737,28 +2038,6 @@ export default function AtomsField() {
           z-index: 0;
         }
 
-        .atoms-still {
-          position: fixed;
-          bottom: max(18px, env(safe-area-inset-bottom));
-          left: 50%;
-          transform: translateX(-50%);
-          min-height: 40px;
-          padding: 8px 14px;
-          background: transparent;
-          border: 1px solid rgba(238, 234, 219, 0.18);
-          border-radius: 3px;
-          color: rgba(238, 234, 219, 0.5);
-          font-family: var(--font-mono, "IBM Plex Mono", monospace);
-          font-size: 11px;
-          letter-spacing: 0.06em;
-          cursor: pointer;
-          z-index: 30;
-        }
-
-        .atoms-still:focus-visible {
-          outline: 2px solid rgba(231, 172, 82, 0.7);
-          outline-offset: 2px;
-        }
       ` }}
       />
     </div>

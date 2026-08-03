@@ -41,6 +41,13 @@ import { onVessel } from "@/lib/vessel";
 import { stirTurbulence } from "@/lib/turbulence";
 import LetGo from "@/components/LetGo";
 import {
+  createFrameGovernor,
+  detailForTier,
+  isEmbeddedFrame,
+  onVisibility,
+  resolveDpr,
+} from "@/lib/room-runtime";
+import {
   BEAT_MAX_HZ,
   COVALENCE,
   GROUPS,
@@ -191,7 +198,56 @@ export default function OrganicsField() {
     let condensing: { nx: number; ny: number; bonds: number } | null = null;
     let holdIdx = -1;
     let holdDone = false;
+    let holdWasSealed = false; // ceremony on an already-folded chain dissolves it
     let leaving = 0; // the exhale of a let-go
+
+    // ————— performance contract —————
+    const gov = createFrameGovernor();
+    let sleeping = false;
+    const offVis = onVisibility((hidden) => { sleeping = hidden; });
+
+    // three-finger twist = season: the solvent's own slow cycle
+    let season = 0;
+    let lastSeasonSoundAt = 0;
+
+    // vessel flip: face-down is night
+    let night = 0;
+    let nightTarget = 0;
+
+    // two-finger pan: the frame peeks, then eases home
+    let panX = 0;
+    let panY = 0;
+    let panTargetX = 0;
+    let panTargetY = 0;
+
+    // cached radial-gradient sprites — baked once per palette key, stamped
+    // with drawImage every frame; never a createRadialGradient per loose atom
+    const spriteCache = new Map<string, HTMLCanvasElement>();
+    const SPRITE_REF = 128;
+    const radialSprite = (key: string, stops: Array<[number, string]>): HTMLCanvasElement | null => {
+      let c = spriteCache.get(key);
+      if (c) return c;
+      c = document.createElement("canvas");
+      c.width = SPRITE_REF;
+      c.height = SPRITE_REF;
+      const sctx = c.getContext("2d");
+      if (!sctx) return null;
+      const rad = SPRITE_REF / 2;
+      const g = sctx.createRadialGradient(rad, rad, 0, rad, rad, rad);
+      for (const [o, color] of stops) g.addColorStop(o, color);
+      sctx.fillStyle = g;
+      sctx.fillRect(0, 0, SPRITE_REF, SPRITE_REF);
+      spriteCache.set(key, c);
+      return c;
+    };
+    const stampSprite = (key: string, stops: Array<[number, string]>, cx: number, cy: number, r: number, alpha: number) => {
+      if (r <= 0 || alpha <= 0.002) return;
+      const sprite = radialSprite(key, stops);
+      if (!sprite) return;
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(sprite, cx - r, cy - r, r * 2, r * 2);
+      ctx.globalAlpha = 1;
+    };
 
     const loose: Loose[] = [];
     const solvent = new Float32Array(SOLVENT_MOTES * 4); // x, y, phase, size
@@ -447,10 +503,17 @@ export default function OrganicsField() {
       soundChain(p, 0.6);
     };
 
+    // the raised-lens marker ScaleTravel reads before a step-back nudge
+    const markLens = (raised: boolean) => {
+      if (raised) wrap.dataset.lensRaised = "1";
+      else delete wrap.dataset.lensRaised;
+    };
+
     const setLens = (snapped: number) => {
       if (snapped === lensSnapped) return;
       lensSnapped = snapped;
       lensTarget = snapped;
+      markLens(snapped === 1);
       try {
         haptics.lens();
         if (snapped === 1) audio.chime();
@@ -474,7 +537,7 @@ export default function OrganicsField() {
     // ——— canvas ———
     const resize = () => {
       const r = wrap.getBoundingClientRect();
-      const ratio = Math.min(2, window.devicePixelRatio || 1);
+      const ratio = resolveDpr(gov.tier(), { embedded: isEmbeddedFrame(), reducedMotion: reduced, maxDpr: 2 });
       width = Math.max(240, r.width);
       height = Math.max(320, r.height);
       rectLeft = r.left;
@@ -497,7 +560,22 @@ export default function OrganicsField() {
       {
         tap: (e) => {
           lastInteractionAt = performance.now();
-          if (e.fingers === 2) return; // ScaleTravel's step back
+          if (e.fingers === 2) {
+            // step back: a raised lens lowers first; the marker clears a
+            // beat later so ScaleTravel skips its nudge on this same tap
+            if (lensSnapped === 1) {
+              lensSnapped = 0;
+              lensTarget = 0;
+              window.setTimeout(() => markLens(false), 0);
+              try {
+                haptics.lens();
+              } catch {
+                /* noop */
+              }
+              audio.playNote(46, 160);
+            }
+            return;
+          }
           if (e.fingers === 3) {
             tutti();
             return;
@@ -549,7 +627,11 @@ export default function OrganicsField() {
           if (e.phase === "enter") {
             holdIdx = nearestChain(x, y, scaleOf() * 4);
             holdDone = false;
-            if (holdIdx < 0 && placedRef.current.length < MAX_CHAINS) {
+            holdWasSealed = holdIdx >= 0 && placedRef.current[holdIdx].chain.fold >= 0.98;
+            if (holdIdx < 0) {
+              // dwell on open solvent always gathers something — at the
+              // population cap the eldest chain gives way (settlePopulation
+              // in condenseAt), never a silent refusal
               condensing = { nx: x / width, ny: y / height, bonds: 0 };
               try {
                 haptics.tap();
@@ -599,13 +681,27 @@ export default function OrganicsField() {
           }
           if (e.tier >= 3 && !holdDone) {
             holdDone = true;
-            // ceremony: the coil locks, and the strain floor with it
-            p.lit = 1;
-            try {
-              audio.bell();
-              haptics.bloom();
-            } catch {
-              /* noop */
+            if (holdWasSealed) {
+              // the solemn act, held past its lock a second time: the coil
+              // that was already sealed comes apart — the touch-reachable
+              // delete, symmetric with the seal it follows
+              placedRef.current = placedRef.current.filter((q) => q !== p);
+              holdIdx = -1;
+              try {
+                audio.thud();
+                haptics.roll();
+              } catch {
+                /* noop */
+              }
+            } else {
+              // ceremony: the coil locks, and the strain floor with it
+              p.lit = 1;
+              try {
+                audio.bell();
+                haptics.bloom();
+              } catch {
+                /* noop */
+              }
             }
             save();
           }
@@ -667,8 +763,37 @@ export default function OrganicsField() {
         },
         twist: (e) => {
           lastInteractionAt = performance.now();
+          if (e.fingers === 3) {
+            // three-finger twist = season: the solvent's own slow cycle,
+            // never the lens
+            if (e.phase === "move") {
+              season = (((season + e.angle / (Math.PI * 2)) % 1) + 1) % 1;
+              const now = performance.now();
+              if (now - lastSeasonSoundAt > 260) {
+                lastSeasonSoundAt = now;
+                audio.playNote(30 + Math.round(season * 14), 180);
+                try {
+                  haptics.tap();
+                } catch {
+                  /* noop */
+                }
+              }
+            }
+            return;
+          }
           if (e.phase === "move") lensTarget = clamp01(lensTarget + e.angle / 1.7);
           else if (e.phase === "end") setLens(lensTarget > 0.5 ? 1 : 0);
+        },
+        pan2: (e) => {
+          // two-finger drag pans the frame: a peek, not a permanent move
+          lastInteractionAt = performance.now();
+          if (e.phase === "move") {
+            panTargetX = clamp(panTargetX + e.dx * 0.6, -48, 48);
+            panTargetY = clamp(panTargetY + e.dy * 0.6, -48, 48);
+          } else if (e.phase === "end") {
+            panTargetX = 0;
+            panTargetY = 0;
+          }
         },
         scrub: (e) => {
           lastInteractionAt = performance.now();
@@ -730,6 +855,26 @@ export default function OrganicsField() {
           haptics.detent();
         } catch {
           /* noop */
+        }
+      },
+      flip: ({ faceDown }) => {
+        // face-down is night: the solvent cools and stills until turned back
+        nightTarget = faceDown ? 1 : 0;
+        lastInteractionAt = performance.now();
+        if (faceDown) {
+          try {
+            audio.thud();
+            haptics.roll();
+          } catch {
+            /* noop */
+          }
+        } else {
+          try {
+            audio.spark();
+            haptics.bloom();
+          } catch {
+            /* noop */
+          }
         }
       },
     });
@@ -804,6 +949,9 @@ export default function OrganicsField() {
     // ——— the loop ———
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
+      const tier = gov.beginFrame(now);
+      if (sleeping) return; // no draw while the document is hidden
+      const detail = detailForTier(tier);
       const delta = Math.min(64, now - last);
       last = now;
       const dt = delta / 1000;
@@ -814,8 +962,15 @@ export default function OrganicsField() {
       current += (currentTarget - current) * Math.min(1, dt * 2.4);
       vortex *= Math.exp(-dt * 0.9);
       lens += (lensTarget - lens) * Math.min(1, dt * 6);
+      night += (nightTarget - night) * Math.min(1, dt * (nightTarget > night ? 1.6 : 2.8));
       warmthTarget *= Math.exp(-dt * 0.06); // heat leaks away on its own
       if (leaving > 0) leaving = Math.max(0, leaving - dt * 0.6);
+      // two-finger pan: the frame eases toward the hand's nudge, then home
+      panX += (panTargetX - panX) * Math.min(1, dt * 5);
+      panY += (panTargetY - panY) * Math.min(1, dt * 5);
+      canvas.style.transform = (Math.abs(panX) > 0.05 || Math.abs(panY) > 0.05)
+        ? `translate(${panX.toFixed(1)}px, ${panY.toFixed(1)}px)`
+        : "";
 
       const t = audio.getAudioTime() ?? now / 1000;
       const breath = reduced ? 0.5 : Math.sin(t * Math.PI * 2 * 0.14) * 0.5 + 0.5;
@@ -854,8 +1009,11 @@ export default function OrganicsField() {
         a.nx = clamp(a.nx, 0.04, 0.96);
         a.ny = clamp(a.ny, 0.05, 0.95);
       }
-      // the solvent keeps its stock of loose atoms — the room is never empty
-      if (loose.length < 4) spawnLoose(2, hashSeed(Math.round(localT * 10), loose.length));
+      // the solvent keeps its stock of loose atoms — the room is never empty.
+      // MAX_LOOSE is a fixed count; the frame governor scales how much of it
+      // the current tier bothers keeping topped up.
+      const looseFloor = Math.max(3, Math.round(MAX_LOOSE * 0.45 * detail.particles));
+      if (loose.length < looseFloor) spawnLoose(2, hashSeed(Math.round(localT * 10), loose.length));
 
       // ——— the beating: the room's own voice, sounding only while strained
       if (now - lastBeatAt > 2600 && holdIdx < 0 && !condensing) {
@@ -876,17 +1034,26 @@ export default function OrganicsField() {
 
       // ——— render ———
       const bg = ctx.createLinearGradient(0, 0, 0, height);
-      const warm = warmth * 0.5;
+      // season (three-finger twist) drifts the solvent's ambient warmth on
+      // its own slow cycle, independent of the hand's own heat
+      const warm = warmth * 0.5 + Math.max(0, Math.sin(season * Math.PI * 2)) * 0.12;
       bg.addColorStop(0, `rgb(${14 + warm * 26}, ${12 + warm * 8}, ${10})`);
       bg.addColorStop(0.6, `rgb(${11 + warm * 18}, ${10 + warm * 6}, ${9})`);
       bg.addColorStop(1, "rgb(8, 8, 8)");
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, width, height);
+      // face-down is night: the solvent dims until the phone turns back over
+      if (night > 0.01) {
+        ctx.fillStyle = `rgba(4, 3, 2, ${night * 0.6})`;
+        ctx.fillRect(0, 0, width, height);
+      }
 
-      // the solvent: water you can already see moving
+      // the solvent: water you can already see moving — the fixed count
+      // scales with the frame governor's tier
       const solA = 0.16 * (1 - lens * 0.8);
+      const activeSolvent = Math.max(12, Math.round(SOLVENT_MOTES * detail.particles));
       if (solA > 0.005) {
-        for (let i = 0; i < SOLVENT_MOTES; i++) {
+        for (let i = 0; i < activeSolvent; i++) {
           const ph = solvent[i * 4 + 2];
           const sx =
             (solvent[i * 4] + (reduced ? 0 : (Math.sin(localT * 0.18 + ph) * 0.03 + current * 0.05))) *
@@ -940,13 +1107,17 @@ export default function OrganicsField() {
             ctx.fill();
           }
         }
-        const halo = ctx.createRadialGradient(x, y, r * 0.2, x, y, r * 2.2);
-        halo.addColorStop(0, `rgba(${ELEMENT_TINT[a.el]}, ${0.2 + (held ? 0.2 : 0)})`);
-        halo.addColorStop(1, `rgba(${ELEMENT_TINT[a.el]}, 0)`);
-        ctx.fillStyle = halo;
-        ctx.beginPath();
-        ctx.arc(x, y, r * 2.2, 0, Math.PI * 2);
-        ctx.fill();
+        // a cached sprite per element+held state, stamped with drawImage —
+        // never a createRadialGradient inside the per-atom loop
+        stampSprite(
+          `org-loose-halo-${a.el}-${held ? 1 : 0}`,
+          [
+            [0, `rgba(${ELEMENT_TINT[a.el]}, ${0.2 + (held ? 0.2 : 0)})`],
+            [1, `rgba(${ELEMENT_TINT[a.el]}, 0)`],
+          ],
+          x, y, r * 2.2,
+          1,
+        );
         ctx.fillStyle = `rgba(${ELEMENT_TINT[a.el]}, ${0.6 + (held ? 0.3 : 0.1) + breath * 0.06})`;
         ctx.beginPath();
         ctx.arc(x, y, r, 0, Math.PI * 2);
@@ -1152,6 +1323,8 @@ export default function OrganicsField() {
       observer.disconnect();
       detachGestures();
       detachVessel();
+      offVis();
+      markLens(false);
       wrap.removeEventListener("keydown", onKeyDown);
       wrap.removeEventListener("keyup", onKeyUp);
       mq.removeEventListener?.("change", onMq);

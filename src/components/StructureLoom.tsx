@@ -49,6 +49,14 @@ import {
   type Phase,
   type MediumId,
 } from "@/lib/structure";
+import {
+  createFrameGovernor,
+  detailForTier,
+  onVisibility,
+  onGalleryPause,
+  resolveDpr,
+  isEmbeddedFrame,
+} from "@/lib/room-runtime";
 
 const STORAGE_KEY = "objetdart:loom:v1";
 const SEED = 20260803;
@@ -135,10 +143,16 @@ function buildGrid(
     const c = CARRIES[medium];
     const row = {} as Record<InvariantId, Mark>;
 
-    // (i) accumulation — tension monotone rising while gathering
+    // (i) accumulation — tension monotone rising while gathering. Built with
+    // a manual loop, never .map().filter(), so the table's ~4Hz refresh
+    // allocates nothing the RAF loop has to sweep up (SPEC perf contract).
     if (!c.tension) row.accum = "na";
     else {
-      const vals = accRun.map((s) => tensionProxy(medium, s, params)!).filter((v) => v != null);
+      const vals: number[] = [];
+      for (const st of accRun) {
+        const v = tensionProxy(medium, st, params);
+        if (v != null) vals.push(v);
+      }
       row.accum = vals.length >= 3 ? (isMonotoneRising(vals, 1e-6) ? "hold" : "fail") : "na";
     }
 
@@ -168,7 +182,8 @@ function buildGrid(
     if (medium === "text") row.decay = sawRestAfterAgency ? "hold" : "na";
     else if (!c.reach) row.decay = "na";
     else {
-      const vals = decRun.map((s) => reachProxy(medium, s, params)!);
+      const vals: number[] = [];
+      for (const st of decRun) vals.push(reachProxy(medium, st, params)!);
       row.decay = vals.length >= 3 && sawRestAfterAgency ? (isMonotoneFalling(vals, 1e-6) ? "hold" : "fail") : "na";
     }
 
@@ -236,11 +251,30 @@ export default function StructureLoom() {
     let conservationOk = true;
     let qBeforeCross = 0;
 
+    // ————— performance contract (room-runtime) —————
+    const embedded = isEmbeddedFrame();
+    const governor = createFrameGovernor(embedded ? "medium" : "high");
+    let currentTier = governor.tier();
+    let detail = detailForTier(currentTier);
+    let docHidden = false;
+    let galleryPaused = embedded;
+    let sleeping = docHidden || galleryPaused;
+    const offVisibility = onVisibility((hidden) => {
+      docHidden = hidden;
+      sleeping = docHidden || galleryPaused;
+      if (sleeping) governor.force("sleep");
+    });
+    const offGalleryPause = onGalleryPause((paused) => {
+      galleryPaused = paused;
+      sleeping = docHidden || galleryPaused;
+      if (sleeping) governor.force("sleep");
+    });
+
     let width = 0;
     let height = 0;
     const resize = () => {
       const rect = wrap.getBoundingClientRect();
-      const ratio = Math.min(2, window.devicePixelRatio || 1);
+      const ratio = resolveDpr(currentTier, { embedded, reducedMotion: reduced, maxDpr: 2 });
       width = rect.width;
       height = rect.height;
       canvas.width = Math.round(width * ratio);
@@ -420,7 +454,11 @@ export default function StructureLoom() {
     };
 
     const draw = () => {
-      const now = audio.getAudioTime() ?? performance.now() / 1000;
+      const nowMs = performance.now();
+      const tier = governor.beginFrame(nowMs);
+      if (sleeping) { raf = requestAnimationFrame(draw); return; } // hard pause
+      if (tier !== currentTier) { currentTier = tier; resize(); }
+      const now = audio.getAudioTime() ?? nowMs / 1000;
       let dt = now - last;
       last = now;
       if (!(dt > 0) || dt > 0.25) dt = 1 / 60;
@@ -732,6 +770,8 @@ export default function StructureLoom() {
       observer.disconnect();
       detachGestures();
       detachVessel();
+      offVisibility();
+      offGalleryPause();
       window.removeEventListener("keydown", onKey);
       cancelAnimationFrame(raf);
       stopTones();

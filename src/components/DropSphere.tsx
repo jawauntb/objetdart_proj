@@ -877,12 +877,21 @@ export default function DropSphere() {
     // expensive blur/threshold pass runs) rides that tier down under
     // load instead of costing the same on every device.
     const gov = createFrameGovernor();
-    let sleeping = false;
-    const offDocVisibility = onDocVisibility((hidden) => { sleeping = hidden; });
 
     let w = 0, h = 0, dpr = 1, fw = 0, fh = 0;
     // the canvas origin, cached here so the hover dialect never reads layout
     const origin = { x: 0, y: 0 };
+    // the dark-water tint is a fixed-shape gradient (only fh moves it) —
+    // hoisted out of the per-frame drawBody path, rebuilt only on resize.
+    let tintGrad: CanvasGradient | null = null;
+    const buildTintGrad = () => {
+      if (fh <= 0) { tintGrad = null; return; }
+      const gr = bctx.createLinearGradient(0, 0, 0, fh);
+      gr.addColorStop(0, "rgba(24,74,96,0.95)");
+      gr.addColorStop(0.45, "rgba(10,40,58,0.96)");
+      gr.addColorStop(1, "rgba(4,16,28,0.97)");
+      tintGrad = gr;
+    };
     const resize = () => {
       const rect = root.getBoundingClientRect();
       origin.x = rect.left; origin.y = rect.top;
@@ -900,6 +909,7 @@ export default function DropSphere() {
       field.width = fw; field.height = fh;
       sharp.width = fw; sharp.height = fh;
       body.width = fw; body.height = fh;
+      buildTintGrad();
     };
     resize();
 
@@ -1206,16 +1216,20 @@ export default function DropSphere() {
       }
     };
 
-    const drawBody = () => {
+    const drawBody = (detailNow: ReturnType<typeof detailForTier>) => {
       const drops = dropsRef.current;
       // metaball field: additive wobbly blobs
       fctx.setTransform(FS, 0, 0, FS, 0, 0);
       fctx.clearRect(0, 0, w, h);
       fctx.globalCompositeOperation = "lighter";
-      const N = coarse ? 30 : 44;
+      const N = Math.max(14, Math.round((coarse ? 30 : 44) * detailNow.particles));
       const gv = gravityRef.current;
       const lean = gv.mag * 0.13;
       for (const d of drops) {
+        // the blob's own silhouette is an organic wobble path (not a plain
+        // circle), so its fill gradient can't be a static sprite the way
+        // the fixed-shape glints above were — this stays a per-drop
+        // CanvasGradient, bounded by MAX_DROPS (≤5), never per-particle.
         const rad = fctx.createRadialGradient(d.x, d.y, 0, d.x, d.y, d.r * 1.75);
         rad.addColorStop(0, "rgba(255,255,255,1)");
         rad.addColorStop(0.55, "rgba(255,255,255,0.85)");
@@ -1227,7 +1241,11 @@ export default function DropSphere() {
       }
       fctx.globalCompositeOperation = "source-over";
 
-      // threshold → crisp liquid silhouette
+      // threshold → crisp liquid silhouette. ctx.filter is the one
+      // catastrophic-on-mobile call SPEC forbids per-frame; it's already
+      // running on the downsampled `field` buffer (FS, itself scaled down
+      // further under load above), and the caller throttles how often
+      // this whole function runs at low/medium tiers.
       sctx.setTransform(1, 0, 0, 1, 0, 0);
       sctx.clearRect(0, 0, fw, fh);
       sctx.filter = `blur(${(coarse ? 4 : 6)}px) contrast(26)`;
@@ -1237,11 +1255,7 @@ export default function DropSphere() {
       // tint the silhouette into dark water
       bctx.setTransform(1, 0, 0, 1, 0, 0);
       bctx.clearRect(0, 0, fw, fh);
-      const grad = bctx.createLinearGradient(0, 0, 0, fh);
-      grad.addColorStop(0, "rgba(24,74,96,0.95)");
-      grad.addColorStop(0.45, "rgba(10,40,58,0.96)");
-      grad.addColorStop(1, "rgba(4,16,28,0.97)");
-      bctx.fillStyle = grad;
+      bctx.fillStyle = tintGrad ?? "#0a2836";
       bctx.fillRect(0, 0, fw, fh);
       bctx.globalCompositeOperation = "destination-in";
       bctx.drawImage(sharp, 0, 0);
@@ -1253,7 +1267,6 @@ export default function DropSphere() {
     const draw = (now: number) => {
       const tier = gov.beginFrame(now);
       const detail = detailForTier(tier);
-      if (sleeping) { raf = requestAnimationFrame(draw); return; } // no draw while hidden
       if (tier !== lastTier) {
         lastTier = tier;
         // the field's own resolution rides the governor down under load —
@@ -1265,6 +1278,7 @@ export default function DropSphere() {
         field.width = fw; field.height = fh;
         sharp.width = fw; sharp.height = fh;
         body.width = fw; body.height = fh;
+        buildTintGrad();
       }
       const dtRaw = (now - last) / 1000;
       last = now;
@@ -1318,8 +1332,14 @@ export default function DropSphere() {
       }
       g.globalCompositeOperation = "source-over";
 
-      // water body (metaball, dark-field)
-      drawBody();
+      // water body (metaball, dark-field). The blur+contrast threshold
+      // pass inside drawBody is the one ctx.filter call in this room —
+      // never skip it outright (a permanently stale silhouette would be a
+      // visible bug), but under load run it less often than every frame,
+      // reusing the last composited bitmap on the frames in between.
+      bodyFrameCount++;
+      const skipEvery = tier === "low" ? 3 : tier === "medium" ? 2 : 1;
+      if (bodyFrameCount % skipEvery === 0) drawBody(detail);
       g.imageSmoothingEnabled = true;
       g.drawImage(body, 0, 0, fw, fh, 0, 0, w, h);
 
@@ -1347,8 +1367,10 @@ export default function DropSphere() {
         g.restore();
       }
 
-      // glass reads: fresnel rim, specular glint, inner shading — per bead
-      const N = 48;
+      // glass reads: fresnel rim, specular glint, inner shading — per bead.
+      // Fix 1: fr/sgl/sg2 are pre-baked sprites (setup above), blitted with
+      // drawImage instead of allocating a fresh CanvasGradient per bead.
+      const N = Math.max(16, Math.round(48 * detail.samples));
       const gv2 = gravityRef.current;
       const lean2 = gv2.mag * 0.13;
       for (const d of drops) {
@@ -1361,28 +1383,40 @@ export default function DropSphere() {
         smoothClosedPath(g, dropPoints(d, N, 1, 1, gv2.x, gv2.y, lean2));
         g.stroke();
         // soft aqua fresnel glow just inside the rim
-        const fr = g.createRadialGradient(d.x, d.y, d.r * 0.6, d.x, d.y, d.r);
-        fr.addColorStop(0, "rgba(90,190,220,0)");
-        fr.addColorStop(1, "rgba(120,220,245,0.28)");
-        g.fillStyle = fr;
-        g.beginPath(); g.arc(d.x, d.y, d.r, 0, TAU); g.fill();
+        g.drawImage(fresnelSprite, d.x - d.r, d.y - d.r, d.r * 2, d.r * 2);
         g.restore();
 
         // bright sharp specular glint (upper-left) + soft secondary
         g.save();
         g.globalCompositeOperation = "lighter";
         const gx = d.x - d.r * 0.38, gy = d.y - d.r * 0.42;
-        const sgl = g.createRadialGradient(gx, gy, 0, gx, gy, d.r * 0.22);
-        sgl.addColorStop(0, "rgba(255,255,255,0.95)");
-        sgl.addColorStop(0.5, "rgba(220,245,255,0.4)");
-        sgl.addColorStop(1, "rgba(220,245,255,0)");
-        g.fillStyle = sgl;
-        g.beginPath(); g.ellipse(gx, gy, d.r * 0.2, d.r * 0.13, -0.6, 0, TAU); g.fill();
-        const sg2 = g.createRadialGradient(d.x + d.r * 0.3, d.y + d.r * 0.36, 0, d.x + d.r * 0.3, d.y + d.r * 0.36, d.r * 0.3);
-        sg2.addColorStop(0, "rgba(120,210,235,0.22)");
-        sg2.addColorStop(1, "rgba(120,210,235,0)");
-        g.fillStyle = sg2;
-        g.beginPath(); g.arc(d.x + d.r * 0.3, d.y + d.r * 0.36, d.r * 0.3, 0, TAU); g.fill();
+        g.save();
+        g.translate(gx, gy);
+        g.rotate(-0.6);
+        g.drawImage(glintSprite, -d.r * 0.2, -d.r * 0.13, d.r * 0.4, d.r * 0.26);
+        g.restore();
+        const g2x = d.x + d.r * 0.3, g2y = d.y + d.r * 0.36;
+        g.drawImage(glint2Sprite, g2x - d.r * 0.3, g2y - d.r * 0.3, d.r * 0.6, d.r * 0.6);
+        g.restore();
+      }
+
+      // the lens (twist) and the season (3-finger twist): two continuous,
+      // single-fillRect washes over the whole water — never a loop, never
+      // a switch. lensGrade reads the same water dark-field ↔ true-color;
+      // season drifts its light warm ↔ cool over the room's slow cycle.
+      if (lensGrade > 0.003) {
+        g.save();
+        g.globalCompositeOperation = "color";
+        g.fillStyle = `rgba(224,182,120,${(0.4 * lensGrade).toFixed(3)})`;
+        g.fillRect(0, 0, w, h);
+        g.restore();
+      }
+      if (!reduceRef.current) {
+        const seasonHue = Math.sin(season * TAU);
+        g.save();
+        g.globalCompositeOperation = "overlay";
+        g.fillStyle = `rgba(${Math.round(128 + seasonHue * 40)},${Math.round(128 - seasonHue * 18)},${Math.round(128 + (1 - Math.abs(seasonHue)) * 26)},0.07)`;
+        g.fillRect(0, 0, w, h);
         g.restore();
       }
 
@@ -1419,17 +1453,18 @@ export default function DropSphere() {
     raf = requestAnimationFrame(draw);
     // an unwatched bead costs nothing: the loop stops with the tab (so the
     // idle scheduler above never even runs while hidden) and picks the
-    // clock back up where it left off, exactly as /ocean's weather does
-    const onVisibility = () => {
-      if (document.hidden) {
+    // clock back up where it left off, exactly as /ocean's weather does.
+    // Wired through the shared room-runtime visibility subscription rather
+    // than a private document.hidden listener.
+    const offVisibility = onDocVisibility((hidden) => {
+      if (hidden) {
         cancelAnimationFrame(raf);
         raf = 0;
       } else if (!raf) {
         last = performance.now();
         raf = requestAnimationFrame(draw);
       }
-    };
-    document.addEventListener("visibilitychange", onVisibility);
+    });
 
     // the desktop reading of pan2: a trackpad's two fingers arrive as wheel,
     // so scrolling down must sink the lens exactly as dragging down does.
@@ -1465,6 +1500,13 @@ export default function DropSphere() {
     const holdCtx = { stilled: false };
     let lastSwirlFxAt = 0;
     let lastScrubAt = 0;
+    // twist rotates the lens (grammar §5): dark-field microscope reading
+    // (as-is) ↔ a warmer, true-color reading of the same water — a level
+    // of description, not a new mechanic. Three-finger twist is the law's
+    // own wheel: the room's season, a slow drift of the water's own light.
+    let lensGrade = 0; // 0 dark-field … 1 true-color
+    let lensGradeDetentSide = 0;
+    let season = 0; // 0..1 cyclic, advanced/rewound by 3-finger twist
     const releaseGrab = () => {
       const dr = dragRef.current;
       const drop = dr.drop !== -1 ? dropsRef.current.find((o) => o.id === dr.drop) : undefined;
@@ -1505,7 +1547,19 @@ export default function DropSphere() {
       tap: (e) => {
         lastGestureAt = performance.now();
         ensureAudio();
-        if (e.fingers !== 1) return; // the water absorbs frame/law taps
+        if (e.fingers === 3) {
+          // tutti — every bead and every mote inside it answers at once
+          for (const d of dropsRef.current) {
+            poke(d, rand(0, TAU), 0.05 + e.intensity * 0.05);
+            for (const m of d.mic) m.dart = Math.max(m.dart, 0.5);
+          }
+          try { audioRef.current?.gloop(); } catch { /* noop */ }
+          try { audioRef.current?.drip(0.5 + e.intensity * 0.4); } catch { /* noop */ }
+          try { haptics.ripple(0.5); } catch { /* noop */ }
+          recordTape("sigil", 0.7, "drop/tutti");
+          return;
+        }
+        if (e.fingers !== 1) return; // two fingers: the frame's own verbs
         const { x: px, y: py } = toLocal(e.x, e.y);
         const hit = hitDrop(px, py);
         if (e.count >= 2 && hit !== -1) {
@@ -1693,6 +1747,33 @@ export default function DropSphere() {
         try { audioRef.current?.ripple(0.35); } catch { /* noop */ }
         try { haptics.chop(); } catch { /* noop */ }
         recordTape("ripple", 0.4, "drop/current");
+      },
+      twist: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          // three fingers turn the season, not the lens: the water's own
+          // light drifts through a slow cycle, warm ↔ cool.
+          if (e.phase === "start") return;
+          season = ((season + e.velocity * 0.02) % 1 + 1) % 1;
+          const nowMs = performance.now();
+          if (nowMs - lastSwirlFxAt > 900) {
+            lastSwirlFxAt = nowMs;
+            try { audioRef.current?.bloop(); } catch { /* noop */ }
+            try { haptics.tap(); } catch { /* noop */ }
+            recordTape("sigil", 0.4, "drop/season");
+          }
+          return;
+        }
+        // rotate the lens: the same water read dark-field or true-color —
+        // a level of description, not a new mechanic
+        if (e.phase === "start") return;
+        lensGrade = clamp(lensGrade + e.velocity * 0.012, 0, 1);
+        const side = lensGrade > 0.5 ? 1 : 0;
+        if (side !== lensGradeDetentSide) {
+          lensGradeDetentSide = side;
+          try { haptics.lens(); } catch { /* noop */ }
+          try { audioRef.current?.bloop(); } catch { /* noop */ }
+        }
       },
       pan2: (e) => {
         // the global frame verb — /drop's frame is a lens in the water, so
@@ -1904,7 +1985,7 @@ export default function DropSphere() {
 
     return () => {
       cancelAnimationFrame(raf);
-      document.removeEventListener("visibilitychange", onVisibility);
+      offVisibility();
       obs.disconnect();
       window.removeEventListener("resize", resize);
       canvas.removeEventListener("wheel", onWheel);

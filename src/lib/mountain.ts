@@ -81,6 +81,54 @@ export function placeCairn(seed: number, x: number, y: number, stones: number): 
   };
 }
 
+/** The dwell tier, in ms — where a hold stops being a touch and starts building. */
+export const CAIRN_DWELL_MS = 900;
+/** How long one more stone takes to gather, at an ordinary press. */
+export const CAIRN_STONE_MS = 520;
+
+/**
+ * How tall the cairn under the finger stands after `elapsedMs` of holding.
+ *
+ * Continuous, not a switch: the first stone lands as the dwell tier is
+ * crossed and every further stone is earned by staying, faster under a
+ * harder press. Zero before the dwell — nothing is built by a tap — and
+ * capped at the seven stones a cairn can carry, so a finger left on the
+ * glass forever does not grow a tower.
+ */
+export function cairnStonesForHold(elapsedMs: number, intensity = 0.5): number {
+  if (elapsedMs < CAIRN_DWELL_MS) return 0;
+  const rate = 0.7 + Math.max(0, Math.min(1, intensity)) * 0.6;
+  const grown = 1 + ((elapsedMs - CAIRN_DWELL_MS) / CAIRN_STONE_MS) * rate;
+  return Math.max(1, Math.min(7, Math.floor(grown)));
+}
+
+/**
+ * The cairn a finger has landed on, or -1 for open ground.
+ *
+ * Coordinates are the frame's own normalized ones, and `aspect` is
+ * width/height — without it a wide frame would make a cairn a finger's
+ * width away in pixels read as near in normalized units, and the ceremony
+ * would unmake a cairn the hand was nowhere near.
+ */
+export function nearestCairnIndex(
+  cairns: Cairn[],
+  x: number,
+  y: number,
+  radius: number,
+  aspect = 1,
+): number {
+  let best = -1;
+  let bestD = radius;
+  for (let i = 0; i < cairns.length; i++) {
+    const d = Math.hypot((cairns[i].x - x) * aspect, cairns[i].y - y);
+    if (d <= bestD) {
+      bestD = d;
+      best = i;
+    }
+  }
+  return best;
+}
+
 export function snowLine(tSec: number, weather: number): number {
   return 0.22 + Math.sin(tSec * 0.05) * 0.02 - weather * 0.06;
 }

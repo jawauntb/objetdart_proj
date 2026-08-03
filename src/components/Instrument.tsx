@@ -4,8 +4,9 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import { getTimbreEngine } from "@/lib/timbre-engine";
-import { attachGestures } from "@/lib/gesture";
-import { tap as hapticTap, ripple } from "@/lib/haptics";
+import { attachGestures, THRESHOLDS } from "@/lib/gesture";
+import { onVessel } from "@/lib/vessel";
+import { tap as hapticTap, ripple, chop as hapticChop, roll as hapticRoll } from "@/lib/haptics";
 import {
   audibleFrequency,
   clamp,
@@ -68,6 +69,22 @@ export default function Instrument() {
   const lastHapticTick = useRef(0);
   const voices = useRef(new Map<number, { x: number; y: number; at: number }>());
   const cancelLesson = useRef<null | (() => void)>(null);
+  // three-finger twist: the plate's register — the instrument's own slow
+  // cycle, the way a room's twist advances its season. Octave shift ∈
+  // [-2, 2], one step per quarter turn like the lens above it.
+  const octaveRef = useRef(0);
+  const [octave, setOctave] = useState(0);
+  const seasonTwistAcc = useRef(0);
+  // three-finger drag: wind across the plate — a gust that colors every
+  // active voice's timbre for a moment, never silent, never a switch.
+  const [gust, setGust] = useState<{ dx: number; dy: number } | null>(null);
+  const gustDecay = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // three-finger hold: time dilation while held — the plate's ghosts and
+  // haptic ticks slow continuously with elapsed hold time.
+  const [dilation, setDilation] = useState(0);
+  // vessel + tutti flashes
+  const [tutti, setTutti] = useState(0);
+  const [night, setNight] = useState(false);
 
   const [pitchWindow, setPitchWindow] = useState<PitchWindow>({ lo: 0, w: 1 });
   const [wavelength, setWavelength] = useState(553);
@@ -201,7 +218,7 @@ export default function Instrument() {
       const y = rawY ?? clamp((clientY - rect.top) / rect.height, 0, 1);
       const { lo, w } = windowRef.current;
       const nm = wavelengthFromX(lo + x * w);
-      const freq = quantizeFrequency(audibleFrequency(nm), scaleModeRef.current);
+      const freq = quantizeFrequency(audibleFrequency(nm), scaleModeRef.current) * 2 ** octaveRef.current;
       return { x, y, nm, freq, spec: timbreAt(y), color: colorFromWavelength(nm) };
     };
 

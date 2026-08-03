@@ -35,6 +35,8 @@ import {
  * "eye" collapses the sea into a vortex; "clear sky" raises the barometer
  * to fair and stills the water to glass.
  */
+const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+
 export default function Storm() {
   // page-specific ambient bed: storm crash + wind hiss
   useEffect(() => { getFieldAudio().setAmbientProfile("storm"); }, []);
@@ -898,10 +900,12 @@ export default function Storm() {
         const { x, y } = toLocal(e.x, e.y);
         if (e.phase === "enter") {
           holdState.ceremony = false;
+          (holdState as { dwell?: boolean }).dwell = false;
+          holdZone = y < lines.clientHeight * SEA_TOP ? "sky" : "sea";
           // the touch still lands — the same verbs pointerdown spoke
           if (boostParticle(x, y, 0.5)) return;
           if (touchFuji(x, y)) return;
-          if (y < lines.clientHeight * SEA_TOP) {
+          if (holdZone === "sky") {
             lastStrikeXFracRef.current = x / Math.max(1, lines.clientWidth);
             spawnWindStreak(y, false);
             try { audio.spark(); } catch { /* noop */ }
@@ -912,10 +916,37 @@ export default function Storm() {
           return;
         }
         if (e.phase === "release") return;
-        // ceremony tier — the room's one solemn act: the eye of the storm
-        // opens (a second ceremony lets the sea close over it again)
+        // dwell tier — something visibly gathers under the finger: a cell
+        // of the storm plants in the sea (deepens the longer it holds), or
+        // the banked charge surges harder held in the sky.
+        const dwellState = holdState as { dwell?: boolean };
+        if (e.tier >= 2 && !dwellState.dwell && !holdState.ceremony) {
+          dwellState.dwell = true;
+          if (holdZone === "sea") {
+            const charge = Math.min(1, e.elapsed / 1800);
+            addCell(x, y, 0.4 + charge * 0.6);
+            spawnBurst(x, y, 8 + Math.round(charge * 10), 160);
+            stormSpikeRef.current = Math.min(0.4, stormSpikeRef.current + 0.06);
+            try { audio.thud(); } catch { /* noop */ }
+            try { haptics.storm(); } catch { /* noop */ }
+            useField.getState().recordTape("sigil", 0.6 + charge * 0.2, "storm/cell");
+          } else {
+            chargeRef.current = Math.min(1, chargeRef.current + 0.22);
+            try { audio.spark(); } catch { /* noop */ }
+            try { haptics.ripple(0.4); } catch { /* noop */ }
+          }
+        }
+        // ceremony tier — the room's one solemn act: over an existing cell
+        // it is snuffed out (the touch-reachable delete); over open water
+        // the eye of the storm opens (a second ceremony closes it again)
         if (e.tier >= 3 && !holdState.ceremony) {
           holdState.ceremony = true;
+          if (holdZone === "sea" && extinguishCellNear(x, y)) {
+            try { audio.thud(); } catch { /* noop */ }
+            try { haptics.chop(); } catch { /* noop */ }
+            useField.getState().recordTape("sigil", 0.3, "storm/dissolve");
+            return;
+          }
           const next = maelstromTargetRef.current < 0.5;
           maelstromTargetRef.current = next ? 1 : 0;
           setMaelstromOn(next);
@@ -929,6 +960,21 @@ export default function Storm() {
             try { haptics.roll(); } catch { /* noop */ }
           }
         }
+      },
+      twist: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          // three-finger twist: advance/rewind the storm's slow season
+          season = clamp01(season + e.angle * 0.12);
+          return;
+        }
+        // two-finger twist rotates the lens — felt weather ↔ pressure map
+        lens = clamp01(lens + e.angle * 0.4);
+      },
+      pan2: (e) => {
+        lastGestureAt = performance.now();
+        panXTarget = Math.max(-0.14, Math.min(0.14, panXTarget + e.dx * 0.0006));
+        panYTarget = Math.max(-0.1, Math.min(0.1, panYTarget + e.dy * 0.0006));
       },
       scrub: (e) => {
         lastGestureAt = performance.now();
@@ -953,11 +999,46 @@ export default function Storm() {
       },
     }, { wheelZoom: false });
 
+    // ── the vessel: the phone's own body reads the weather too ───────
+    const detachVessel = onVessel({
+      tilt: ({ gamma }) => {
+        if (reduce || asleep) return;
+        windDirRef.current += gamma * 0.0006;
+        setWindAngleDisplay(windDirRef.current);
+      },
+      shake: ({ intensity }) => {
+        if (reduce || asleep) return;
+        stormSpikeRef.current = Math.min(0.5, stormSpikeRef.current + intensity * 0.3);
+        chargeRef.current = Math.min(1, chargeRef.current + intensity * 0.2);
+        try { audio.thud(); } catch { /* noop */ }
+        try { haptics.storm(); } catch { /* noop */ }
+      },
+      knock: ({ intensity }) => {
+        if (reduce || asleep) return;
+        chargeRef.current = Math.min(1, chargeRef.current + 0.15 + intensity * 0.1);
+        try { audio.spark(); } catch { /* noop */ }
+        try { haptics.tap(); } catch { /* noop */ }
+      },
+      flip: ({ faceDown }) => {
+        // night: the storm settles toward calm until the phone turns back up
+        if (faceDown) {
+          calmRef.current = Math.max(calmRef.current, 0.6);
+          calmStartedRef.current = performance.now();
+        }
+      },
+    });
+
     const t0 = performance.now();
     let raf = 0;
     let lastUiSync = 0;
 
     const draw = (now: number) => {
+      const tier = gov.beginFrame(now);
+      if (asleep) {
+        raf = requestAnimationFrame(draw);
+        return;
+      }
+      const detail = detailForTier(tier);
       const w = lines.clientWidth;
       const h = lines.clientHeight;
 
@@ -970,6 +1051,24 @@ export default function Storm() {
       // the scrub-born gyre unwinds on its own over a few seconds
       gyre *= Math.exp(-frameDt * 0.4);
       if (gyre < 0.005) gyre = 0;
+      panX += (panXTarget - panX) * Math.min(1, frameDt * 3);
+      panY += (panYTarget - panY) * Math.min(1, frameDt * 3);
+
+      // storm cells: each keeps bumping its patch of sea until it decays
+      // (~14s) or a ceremony hold snuffs it out early.
+      for (let i = cells.length - 1; i >= 0; i--) {
+        const cell = cells[i];
+        const age = (simNow - cell.t0) / 1000;
+        if (age > 14) {
+          cells.splice(i, 1);
+          setHasBuilt(cells.length > 0);
+          continue;
+        }
+        if (Math.floor(age * 1.1) !== Math.floor((age - frameDt * timeScale) * 1.1)) {
+          manualCrestsRef.current.push({ x: cell.x, t0: simNow, strength: 14 * cell.strength });
+          if (manualCrestsRef.current.length > 12) manualCrestsRef.current.shift();
+        }
+      }
 
       stormSpikeRef.current *= 0.985;
       if (stormSpikeRef.current < 0.001) stormSpikeRef.current = 0;
@@ -1057,11 +1156,14 @@ export default function Storm() {
         if (uMaelstromLoc) gl.uniform1f(uMaelstromLoc, ml);
         if (uFlashLoc) gl.uniform1f(uFlashLoc, flashAdd);
         if (uChargeLoc) gl.uniform1f(uChargeLoc, cq);
+        if (uLensLoc) gl.uniform1f(uLensLoc, lens);
+        if (uSeasonLoc) gl.uniform1f(uSeasonLoc, season);
+        if (uPanLoc) gl.uniform2f(uPanLoc, panX, panY);
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       } else {
         const wctx = water.getContext("2d");
         if (wctx) {
-          const dpr = Math.min(window.devicePixelRatio || 1, 2);
+          const dpr = resolveDpr(tier, { embedded, reducedMotion: reduce });
           wctx.setTransform(dpr, 0, 0, dpr, 0, 0);
           const skyMix = (1 - s);
           wctx.fillStyle = `rgba(${Math.round(80 + skyMix * 160)},${Math.round(96 + skyMix * 144)},${Math.round(120 + skyMix * 110)},1)`;
@@ -1146,7 +1248,7 @@ export default function Storm() {
       lctx.stroke();
 
       // ambient wind rising as pressure drops.
-      if (!reduce && s > 0.32 && Math.random() < (s - 0.28) * 0.05) {
+      if (!reduce && s > 0.32 && Math.random() < (s - 0.28) * 0.05 * detail.particles) {
         spawnWindStreak(Math.random() * h * SEA_TOP * 0.9, s > 0.7);
       }
 
@@ -1208,7 +1310,7 @@ export default function Storm() {
       const step = w / samples;
       const breakThreshold = 0.85 - s * 0.30;
       const emitRate = s > 0.05 ? s * 120 : 0;
-      const emitProbPerCrest = Math.min(0.65, emitRate / 90);
+      const emitProbPerCrest = Math.min(0.65, emitRate / 90) * detail.particles;
 
       const windSkewX = Math.cos(windDirRef.current) * 6;
       const windPhase = Math.cos(windDirRef.current);
@@ -1366,6 +1468,21 @@ export default function Storm() {
         lctx.beginPath();
         lctx.arc(vortexCx, vortexCy, r0, 0, Math.PI * 2);
         lctx.fill();
+      }
+
+      // storm cells: a faint turning ring marks each planted cell so the
+      // hand can find it again to snuff it out.
+      for (const cell of cells) {
+        const age = (simNow - cell.t0) / 1000;
+        const life = Math.max(0, 1 - age / 14);
+        const cy = Math.max(cell.y, h * SEA_TOP + 10);
+        lctx.save();
+        lctx.strokeStyle = `rgba(200, 220, 255, ${(0.10 + life * 0.10) * cell.strength})`;
+        lctx.lineWidth = 1;
+        lctx.beginPath();
+        lctx.ellipse(cell.x, cy, 24 + Math.sin(simNow * 0.002 + cell.id) * 4, 9, 0, 0, Math.PI * 2);
+        lctx.stroke();
+        lctx.restore();
       }
 
       // ── particle integration + render ─────────────────────────
@@ -1532,8 +1649,24 @@ export default function Storm() {
       cancelAnimationFrame(raf);
       ro.disconnect();
       detachGestures();
+      detachVessel();
+      unvis();
+      ungal();
       dischargeRef.current = null;
+      clearCellsRef.current = () => {};
+      water.removeEventListener("webglcontextlost", onContextLost);
+      water.removeEventListener("webglcontextrestored", onContextRestored);
+      if (gl) {
+        if (glProg) gl.deleteProgram(glProg);
+        if (vbo) gl.deleteBuffer(vbo);
+      }
     };
+  }, []);
+
+  const letGo = useCallback(() => {
+    clearCellsRef.current();
+    getFieldAudio().thud();
+    haptics.roll();
   }, []);
 
   // ── barometer dial handlers ──────────────────────────────────────
@@ -1716,6 +1849,8 @@ export default function Storm() {
       </div>
 
       <div className="storm-gesture" aria-hidden="true">swipe sky to charge · sculpt the sea · turn pressure</div>
+
+      <LetGo label="let the storm pass" onLetGo={letGo} visible={hasBuilt} />
 
       {/* ── wind rose (top right) ────────────────────────────────── */}
       <div

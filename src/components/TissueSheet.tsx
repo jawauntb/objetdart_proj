@@ -16,24 +16,40 @@
  * falls, a bond that lets go can only make the sheet rougher. You hear the
  * break before you see it.
  *
- * Alive at rest: the sheet seethes, breathes on the shared 7 s clock, and a
- * peristaltic wave crosses it while the differentiation front creeps over
- * the morphogen and lands fates behind itself. One finger stroked across it
- * divides the cells it passes, each daughter taking half the mother's area.
- * One finger held draws the sheet in at that point — apical constriction,
- * which is to say gastrulation — deepening the longer it is held, and held
- * past the ceremony the pit closes over into a second layer. Three fingers
- * touch the world-law: drag is adhesion, and a sheet let loose comes apart
- * into dissonance; hold dilates the clock to a quarter, which you see as
- * the front stalling; twist turns the body axis and the pattern with it. A
- * flick tears. Two fingers drag to pan the frame over the dense sheet; two
- * fingers twist to the notation lens. Tilt is gravity, a shake strains every
- * bond, a knock rings the whole chord.
+ * Alive at rest: the sheet seethes, breathes on the shared 7 s clock, a
+ * peristaltic wave crosses it, the differentiation front creeps over the
+ * morphogen and lands fates behind itself — and, the room's own central
+ * verb shown before it is asked for, a cell divides on its own every few
+ * seconds, the news of it rippling outward through the plasm. One finger
+ * stroked across it divides the cells it passes, each daughter taking half
+ * the mother's area; a cell under the stroke visibly swells and starts to
+ * pinch along its own spindle axis well before the stroke is long enough
+ * to finish the division, so a stroke that stops short still shows the
+ * hand what a longer one does. One finger held squarely on a single cell
+ * draws it inward and, past the ceremony, resorbs it — apoptosis, its
+ * neighbours (already each other's neighbours, in a hex sheet) closing the
+ * gap it leaves without a new bond needing to be made. One finger held on
+ * the gaps between cells is the field's own solemn act instead: apical
+ * constriction deepening into gastrulation, closing over into a second
+ * layer past the same ceremony. A touch that lands on neither still lands
+ * somewhere — a ripple marks the point and nudges what plasm is near it.
+ * Three fingers touch the world-law: drag is adhesion, and a sheet let
+ * loose comes apart into dissonance; hold dilates the clock to a quarter,
+ * which you see as the front stalling; twist turns the body axis and the
+ * pattern with it; tap is tutti, one synchronized pulse of the whole
+ * chord. A flick tears. Two fingers drag to pan the frame over the dense
+ * sheet; two fingers twist to the notation lens. Tilt is gravity, a shake
+ * strains every bond, a knock rings the whole chord, and turning the sheet
+ * face-down is night. A press past the sheet's cap refuses visibly, not
+ * only in sound.
  *
  * The sheet persists in `objetdart:tissue:v1` with the quiet clear at the
  * bottom. Pinch is unbound — ScaleTravel owns it (the petal above, the
  * single cell below). Pan2 stays here: the global frame verb, inspection of
- * a sheet that would otherwise sit still under the hand.
+ * a sheet that would otherwise sit still under the hand. Breath is left to
+ * the candle, which already owns the microphone and the blow-out on every
+ * route; the sheet has no wind register of its own left to give it — three
+ * fingers already speak for the world-law here as adhesion, not weather.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -48,6 +64,7 @@ import {
   INNER_FATE,
   MAX_CELLS,
   advance,
+  apoptose,
   buildSheet,
   chordOf,
   commitFates,
@@ -73,6 +90,13 @@ import {
   type Sheet,
   type SheetPack,
 } from "@/lib/sheet";
+import {
+  createFrameGovernor,
+  detailForTier,
+  isEmbeddedFrame,
+  onVisibility,
+  resolveDpr,
+} from "@/lib/room-runtime";
 
 const STORE_KEY = "objetdart:tissue:v1";
 /** D3 — the root the whole sheet's harmony stands on. */
@@ -115,6 +139,16 @@ export default function TissueSheet() {
     };
     mq.addEventListener?.("change", onMq);
 
+    // ——— performance contract (room-runtime): governed detail, DPR ceiling,
+    // and a hard sleep while the tab is hidden ———
+    const embedded = isEmbeddedFrame();
+    const gov = createFrameGovernor(embedded ? "medium" : "high");
+    let sleeping = document.hidden;
+    const offVis = onVisibility((hidden) => {
+      sleeping = hidden;
+      if (hidden) gov.force("sleep");
+    });
+
     let width = 0;
     let height = 0;
     let rectLeft = 0;
@@ -136,6 +170,9 @@ export default function TissueSheet() {
     let gy = 0;
     let gxTarget = 0;
     let gyTarget = 0;
+    /** face-down is night: the sheet dims and slows until it's turned back */
+    let night = 0;
+    let nightTarget = 0;
 
     // ——— the frame ———
     let lens = 0;
@@ -158,10 +195,15 @@ export default function TissueSheet() {
     let lastPitToneAt = 0;
     /** the last hold tick — a hold that turns into a drag never releases */
     let pitTickAt = 0;
+    /** the one cell a hold landed squarely on — its own solemn act, not the field's */
+    let holdCellIdx = -1;
+    let holdResorbed = false;
     let strokeX = 0;
     let strokeY = 0;
     let strokeRun = 0;
     let strokeLive = false;
+    /** the cell currently charging toward division under the stroke */
+    let strokeCellIdx = -1;
     let selIdx = -1;
     let kbCharge = 0;
     let lastInteractionAt = performance.now();
@@ -175,6 +217,8 @@ export default function TissueSheet() {
     let bloomJ = -1;
     let wavePeriod = 6.4;
     let leaving = 0;
+    /** the room's own central verb, shown before it's asked for */
+    let nextAutoDivideAt = performance.now() + 2600;
 
     // ——— the sheet ———
     let cleared = false;
@@ -189,6 +233,27 @@ export default function TissueSheet() {
     const girth = new Float32Array(MAX_CELLS);
     for (let i = 0; i < MAX_CELLS; i++) girth[i] = 0.84 + ((hashSeed(i, 0x9a1) % 1000) / 1000) * 0.32;
     const morph = new Float64Array(MAX_CELLS);
+    // How close a cell is to dividing (the stroke's charge) and how far a
+    // held cell has drawn into itself toward apoptosis — both continuous,
+    // both visible while they accumulate, per SPEC's continuity law.
+    const divCharge = new Float32Array(MAX_CELLS);
+    const resorb = new Float32Array(MAX_CELLS);
+    // Touches and events that need a mark in the plasm at a point that may
+    // not be any particular cell — a miss, a refusal, a division's ripple,
+    // a resorption. Fixed-size ring so nothing allocates in the draw loop.
+    const MAX_MARKS = 6;
+    const markX = new Float32Array(MAX_MARKS);
+    const markY = new Float32Array(MAX_MARKS);
+    const markAt = new Float64Array(MAX_MARKS);
+    const markKind = new Uint8Array(MAX_MARKS); // 0 miss, 1 division, 2 refuse, 3 apoptosis
+    let markCursor = 0;
+    const pushMark = (x: number, y: number, kind: number) => {
+      markX[markCursor] = x;
+      markY[markCursor] = y;
+      markAt[markCursor] = performance.now();
+      markKind[markCursor] = kind;
+      markCursor = (markCursor + 1) % MAX_MARKS;
+    };
     let degrees = new Uint8Array(MAX_CELLS);
     let prevLive = new Uint8Array(0);
     let chord: Chord = { degree: [], num: [], den: [], ratio: [], weight: [] };
@@ -291,7 +356,7 @@ export default function TissueSheet() {
     // ——— geometry ———
     const resize = () => {
       const r = wrap.getBoundingClientRect();
-      const ratio = Math.min(2, window.devicePixelRatio || 1);
+      const ratio = resolveDpr(gov.tier(), { embedded, reducedMotion: reduced });
       width = Math.max(240, r.width);
       height = Math.max(320, r.height);
       rectLeft = r.left;
@@ -341,13 +406,37 @@ export default function TissueSheet() {
     });
 
     // ——— the acts ———
-    const divideAt = (x: number, y: number) => {
+    /** A cell resorbed: its own solemn act. Swaps `lit`/`girth`/charge
+     * arrays alongside the sheet's own index swap, so nothing the room is
+     * mid-animating jumps to a cell it was never happening to. */
+    const resorbCell = (i: number) => {
+      if (!sheet) return false;
+      const lastCell = sheet.n - 1;
+      const ok = apoptose(sheet, i);
+      if (!ok) return false;
+      if (i !== lastCell) {
+        lit[i] = lit[lastCell];
+        girth[i] = girth[lastCell];
+        divCharge[i] = divCharge[lastCell];
+      }
+      lit[lastCell] = 0;
+      divCharge[lastCell] = 0;
+      resorb[i] = 0;
+      if (selIdx === i || selIdx === lastCell) selIdx = -1;
+      if (strokeCellIdx === i || strokeCellIdx === lastCell) strokeCellIdx = -1;
+      return true;
+    };
+
+    const divideAt = (x: number, y: number, auto = false) => {
       if (!sheet) return;
       const i = nearestCell(sheet, x, y, 1.4);
       if (i < 0) return;
       if (sheet.n >= sheet.cap) {
+        if (auto) return; // the sheet is full; ambient life just skips a beat
+        pushMark(x, y, 2);
         try {
           audio.refuse();
+          haptics.chop();
         } catch {
           /* noop */
         }
@@ -360,12 +449,16 @@ export default function TissueSheet() {
       bloomAt = performance.now();
       bloomI = i;
       bloomJ = j;
+      divCharge[i] = 0;
+      divCharge[j] = 0;
       recomputeChord();
       soundCell(i, 0.18);
-      soundCell(j, 0.28);
+      soundCell(j, auto ? 0.3 : 0.22);
+      pushMark(sheet.px[i], sheet.py[i], 1);
       try {
         audio.spark();
-        haptics.bloom();
+        if (auto) haptics.bloom();
+        else haptics.detent();
       } catch {
         /* noop */
       }
@@ -393,6 +486,8 @@ export default function TissueSheet() {
           lastInteractionAt = performance.now();
           if (e.fingers === 2) return; // ScaleTravel's step back
           if (e.fingers === 3) {
+            // three-finger tap = tutti (grammar §5): one synchronized pulse
+            // of everything alive — the whole chord answers at once.
             soundChord(1.4);
             try {
               haptics.ripple(0.45);
@@ -413,6 +508,21 @@ export default function TissueSheet() {
               /* noop */
             }
             return;
+          }
+          // A tap that misses every cell still lands somewhere: a ripple
+          // marks the point itself and nudges whatever plasm is nearby, so
+          // the touch is never mute (grammar §6.4 — unbound gestures answer
+          // gently, never invisibly).
+          pushMark(p.x, p.y, 0);
+          for (let k = 0; k < sheet.n; k++) {
+            const dx = sheet.px[k] - p.x;
+            const dy = sheet.py[k] - p.y;
+            const d2 = dx * dx + dy * dy;
+            if (d2 > 6.5) continue;
+            const d = Math.sqrt(d2) || 1;
+            const f = (1 - d / 2.55) * 0.1 * (0.4 + e.intensity * 0.6);
+            sheet.px[k] += (dx / d) * f;
+            sheet.py[k] += (dy / d) * f;
           }
           stirTurbulence(0.05);
           try {
@@ -474,13 +584,19 @@ export default function TissueSheet() {
           }
           const p = toSheet(e.x, e.y);
           if (e.phase === "enter") {
-            pitActive = true;
             pitTickAt = performance.now();
             pitSealed = false;
             pitX = p.x;
             pitY = p.y;
             pitAmount = 0;
             selIdx = nearestCell(sheet, p.x, p.y, 1.2);
+            // A hold that lands squarely ON a cell targets that one cell —
+            // its own solemn act (apoptosis) — never the field-wide pit. A
+            // hold that lands in the gaps between cells is the field's act
+            // (gastrulation) instead. The two never fire together.
+            holdCellIdx = nearestCell(sheet, p.x, p.y, 0.5);
+            holdResorbed = false;
+            pitActive = holdCellIdx < 0;
             try {
               haptics.tap();
             } catch {
@@ -490,13 +606,55 @@ export default function TissueSheet() {
           }
           if (e.phase === "release") {
             pitActive = false;
+            holdCellIdx = -1;
             return;
           }
           pitTickAt = performance.now();
-          // Duration is the axis: the pit keeps deepening the longer the
-          // finger stays, and past the ceremony it closes over for good.
           pitX = p.x;
           pitY = p.y;
+
+          if (holdCellIdx >= 0) {
+            if (holdCellIdx >= sheet.n) {
+              holdCellIdx = -1;
+              return;
+            }
+            if (holdResorbed) return;
+            // Duration is the axis: the cell draws into itself the longer
+            // the hold stays, exactly as the field pit deepens — only here
+            // the draw is one cell's, not a neighbourhood's.
+            const amt = clamp01(e.elapsed / 2600);
+            resorb[holdCellIdx] = amt;
+            const now = performance.now();
+            if (now - lastPitToneAt > 260) {
+              lastPitToneAt = now;
+              try {
+                audio.playTone(ROOT_HZ * (1 - amt * 0.3), 0.4);
+                haptics.roll();
+              } catch {
+                /* noop */
+              }
+            }
+            if (e.tier >= 3) {
+              holdResorbed = true;
+              const cx = sheet.px[holdCellIdx];
+              const cy = sheet.py[holdCellIdx];
+              if (resorbCell(holdCellIdx)) {
+                recomputeChord();
+                pushMark(cx, cy, 3);
+                try {
+                  audio.thud();
+                  haptics.bloom();
+                } catch {
+                  /* noop */
+                }
+                dirty = true;
+              }
+            }
+            return;
+          }
+
+          // Duration is the axis: the pit keeps deepening the longer the
+          // finger stays, and past the ceremony it closes over for good.
           pitAmount = clamp01(e.elapsed / 2600);
           const now = performance.now();
           if (now - lastPitToneAt > 260) {
@@ -553,6 +711,7 @@ export default function TissueSheet() {
           }
           if (e.phase === "end") {
             strokeLive = false;
+            strokeCellIdx = -1;
             return;
           }
           if (!strokeLive) {
@@ -572,11 +731,17 @@ export default function TissueSheet() {
             sheet.px[i] += dxs * w;
             sheet.py[i] += dys * w;
           }
-          // ...and the cells along the stroke divide as it passes.
+          // ...and the cell nearest the stroke's tip visibly strains toward
+          // division the whole time the run accumulates — continuously, not
+          // only at the threshold — so a stroke that stops short still
+          // taught the hand what a longer one does.
+          strokeCellIdx = nearestCell(sheet, p.x, p.y, 1.3);
           strokeRun += step;
+          if (strokeCellIdx >= 0) divCharge[strokeCellIdx] = clamp01(strokeRun / 0.55);
           if (strokeRun > 0.55) {
             strokeRun = 0;
             divideAt(p.x, p.y);
+            strokeCellIdx = -1;
           }
           strokeX = p.x;
           strokeY = p.y;
@@ -712,6 +877,20 @@ export default function TissueSheet() {
           /* noop */
         }
       },
+      flip: ({ faceDown }) => {
+        // face-down is night: the sheet dims and slows almost still, and
+        // wakes exactly where it left off when turned back over
+        nightTarget = faceDown ? 1 : 0;
+        lastInteractionAt = performance.now();
+        if (faceDown) {
+          try {
+            audio.thud();
+            haptics.roll();
+          } catch {
+            /* noop */
+          }
+        }
+      },
     });
 
     // ——— keyboard ———
@@ -749,6 +928,7 @@ export default function TissueSheet() {
         selIdx = -1;
         kbCharge = 0;
         pitActive = false;
+        holdCellIdx = -1;
         return;
       }
       if (ev.key === "ArrowRight" || ev.key === "ArrowLeft" || ev.key === "ArrowUp" || ev.key === "ArrowDown") {
@@ -763,38 +943,42 @@ export default function TissueSheet() {
       if (ev.key === "Enter" || ev.key === " ") {
         ev.preventDefault();
         lastInteractionAt = performance.now();
-        if (selIdx < 0) selIdx = nearestCell(sheet, 0, 0);
-        if (selIdx < 0) return;
         if (!ev.repeat) {
+          if (selIdx < 0) selIdx = nearestCell(sheet, 0, 0);
+          if (selIdx < 0) return;
           // a press divides, as a stroke does
           divideAt(sheet.px[selIdx], sheet.py[selIdx]);
           kbCharge = 0;
+          pitSealed = false;
           return;
         }
-        // and a held key draws the sheet in, as a dwell does
+        // A held key always targets the one selected cell — the keyboard
+        // has no notion of "the gaps between cells" the way a touch does —
+        // so its ceremony is that cell's own solemn act: apoptosis. Once
+        // resorbed, `selIdx` clears (there's nothing left to re-target),
+        // so a still-held key must stop rather than pick a new cell.
+        if (pitSealed || selIdx < 0 || selIdx >= sheet.n) return;
         kbCharge = clamp01(kbCharge + 0.035);
-        pitActive = true;
-        pitTickAt = performance.now();
-        pitX = sheet.px[selIdx];
-        pitY = sheet.py[selIdx];
-        pitAmount = kbCharge;
+        resorb[selIdx] = kbCharge;
         const now = performance.now();
         if (now - lastPitToneAt > 260) {
           lastPitToneAt = now;
           try {
-            audio.playTone(ROOT_HZ * (1 - kbCharge * 0.42), 0.5);
+            audio.playTone(ROOT_HZ * (1 - kbCharge * 0.3), 0.4);
             haptics.roll();
           } catch {
             /* noop */
           }
         }
-        if (kbCharge >= 1 && !pitSealed) {
-          const n = sealPit(sheet, pitX, pitY, 2.1);
-          if (n > 0) {
-            pitSealed = true;
+        if (kbCharge >= 1) {
+          pitSealed = true;
+          const cx = sheet.px[selIdx];
+          const cy = sheet.py[selIdx];
+          if (resorbCell(selIdx)) {
             recomputeChord();
+            pushMark(cx, cy, 3);
             try {
-              audio.bell();
+              audio.thud();
               haptics.bloom();
             } catch {
               /* noop */
@@ -807,7 +991,6 @@ export default function TissueSheet() {
     const onKeyUp = (ev: KeyboardEvent) => {
       if (ev.key === "Enter" || ev.key === " ") {
         kbCharge = 0;
-        pitActive = false;
         pitSealed = false;
       }
     };
@@ -828,9 +1011,63 @@ export default function TissueSheet() {
       }
     }
 
+    // ——— fidelity: a cached translucency + grain sprite, baked once ———
+    // Real per-cell light transmission and cytoplasmic granularity would
+    // need a createRadialGradient per cell if drawn live — forbidden inside
+    // a per-element loop (SPEC's performance contract). Bake it once and
+    // stamp it with drawImage instead: the cost per cell is one blit no
+    // matter how many cells the sheet holds. The discrete-membrane look
+    // stays intact — this shades within a cell's own disc, it never blends
+    // neighbours together.
+    const cellSprite = document.createElement("canvas");
+    {
+      const SP = 48;
+      cellSprite.width = SP;
+      cellSprite.height = SP;
+      const sctx = cellSprite.getContext("2d");
+      if (sctx) {
+        const cx = SP / 2;
+        const cy = SP / 2;
+        const r = SP / 2;
+        const g = sctx.createRadialGradient(cx - r * 0.24, cy - r * 0.3, r * 0.05, cx, cy, r);
+        g.addColorStop(0, "rgba(255,255,255,0.55)");
+        g.addColorStop(0.55, "rgba(255,255,255,0.14)");
+        g.addColorStop(1, "rgba(255,255,255,0)");
+        sctx.fillStyle = g;
+        sctx.beginPath();
+        sctx.arc(cx, cy, r, 0, Math.PI * 2);
+        sctx.fill();
+        // cytoplasmic grain: a fixed, seeded scatter, so the sprite (and so
+        // every cell's shading) is identical on every load
+        let a = 0x51ed270b;
+        for (let k = 0; k < 90; k++) {
+          a = (Math.imul(a ^ (a >>> 15), 0x01000193) >>> 0) || 1;
+          const ang = ((a % 6283) / 1000);
+          a = (Math.imul(a ^ (a >>> 13), 0x01000193) >>> 0) || 1;
+          const rad = Math.sqrt((a % 1000) / 1000) * r * 0.86;
+          a = (Math.imul(a ^ (a >>> 11), 0x01000193) >>> 0) || 1;
+          const bright = (a % 1000) / 1000 > 0.5;
+          const sx = cx + Math.cos(ang) * rad;
+          const sy = cy + Math.sin(ang) * rad;
+          sctx.fillStyle = bright ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.12)";
+          sctx.beginPath();
+          sctx.arc(sx, sy, 0.6 + ((a >>> 3) % 100) / 260, 0, Math.PI * 2);
+          sctx.fill();
+        }
+      }
+    }
+
     // ——— the loop ———
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
+      const tier = gov.beginFrame(now);
+      if (sleeping) {
+        // no simulation, no draw — the automaton scan and everything below
+        // it is skipped entirely while the tab is hidden
+        last = now;
+        return;
+      }
+      const detail = detailForTier(tier);
       const delta = Math.min(64, now - last);
       last = now;
       const dt = delta / 1000;
@@ -848,10 +1085,22 @@ export default function TissueSheet() {
       }
       gx += (gxTarget - gx) * Math.min(1, dt * 2.5);
       gy += (gyTarget - gy) * Math.min(1, dt * 2.5);
+      night += (nightTarget - night) * Math.min(1, dt * (reduced ? 8 : 2));
       agitation *= Math.exp(-dt * 1.4);
-      if (!reduced) localT += dt * timeScale;
+      if (!reduced) localT += dt * timeScale * (1 - night * 0.7);
       if (leaving > 0) leaving = Math.max(0, leaving - dt * 0.7);
       for (let i = 0; i < lit.length; i++) if (lit[i] > 0) lit[i] = Math.max(0, lit[i] - dt * 1.5);
+      // the stroke's division-charge and a held cell's resorb amount both
+      // fade back down whenever the hand isn't actively deepening them —
+      // continuous in both directions, never a switch
+      const activeStrokeCell = strokeLive ? strokeCellIdx : -1;
+      const activeHoldCell = holdCellIdx >= 0 && now - pitTickAt <= 340 ? holdCellIdx : -1;
+      for (let i = 0; i < divCharge.length; i++) {
+        if (divCharge[i] > 0 && i !== activeStrokeCell) divCharge[i] = Math.max(0, divCharge[i] - dt * 0.9);
+      }
+      for (let i = 0; i < resorb.length; i++) {
+        if (resorb[i] > 0 && i !== activeHoldCell) resorb[i] = Math.max(0, resorb[i] - dt * 0.7);
+      }
 
       const audioT = audio.getAudioTime();
       const awake = audioT !== null;
@@ -916,10 +1165,21 @@ export default function TissueSheet() {
             /* noop */
           }
         }
+
+        // The room's own central verb, demonstrated before it's asked for:
+        // a cell divides on its own every few seconds, from the very first
+        // seconds a visitor arrives — not gated on idle, because the point
+        // is to teach the hand what stroking does before the hand tries.
+        if (!reduced && now >= nextAutoDivideAt && sheet.n < sheet.cap - 20) {
+          nextAutoDivideAt = now + 3800 + (hashSeed(Math.round(now / 100)) % 2600);
+          const k = hashSeed(Math.round(now / 71), sheet.n) % sheet.n;
+          divideAt(sheet.px[k], sheet.py[k], true);
+        }
       }
 
       // ——— render ———
       const warm = clamp01(rough / 4);
+      const dim = 1 - night * 0.72;
       const bg = ctx.createRadialGradient(
         width / 2,
         height * 0.46,
@@ -928,16 +1188,18 @@ export default function TissueSheet() {
         height * 0.46,
         Math.max(width, height) * 0.8,
       );
-      bg.addColorStop(0, `rgb(${16 + warm * 16}, ${15 + warm * 2}, ${19 - warm * 4})`);
-      bg.addColorStop(1, "rgb(6, 7, 10)");
+      bg.addColorStop(0, `rgb(${(16 + warm * 16) * dim}, ${(15 + warm * 2) * dim}, ${(19 - warm * 4) * dim})`);
+      bg.addColorStop(1, `rgb(${6 * dim}, ${7 * dim}, ${10 * dim})`);
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, width, height);
 
-      // the medium, drifting
+      // the medium, drifting — the count itself scales with the governed
+      // detail tier, so a laboring frame simply carries fewer motes
+      const moteCount = Math.max(4, Math.round(MOTES * detail.particles));
       if (lens < 0.9) {
-        ctx.fillStyle = `rgba(150, 168, 200, ${0.075 * (1 - lens)})`;
+        ctx.fillStyle = `rgba(150, 168, 200, ${0.075 * (1 - lens) * dim})`;
         ctx.beginPath();
-        for (let i = 0; i < MOTES; i++) {
+        for (let i = 0; i < moteCount; i++) {
           const mx = (motes[i * 3] + (reduced ? 0 : Math.sin(localT * 0.1 + i) * 0.03)) * width;
           const my = (motes[i * 3 + 1] + (reduced ? 0 : Math.cos(localT * 0.08 + i * 1.7) * 0.03)) * height;
           const rr = motes[i * 3 + 2] * (1 + breath * 0.25);
@@ -951,7 +1213,7 @@ export default function TissueSheet() {
         const n = sheet.n;
         const ox = width / 2 + viewX;
         const oy = height / 2 + viewY;
-        const alpha = (1 - leaving) * clamp01(1 - lens * 0.35);
+        const alpha = (1 - leaving) * clamp01(1 - lens * 0.35) * dim;
         const front = fateFront(sheet.t);
 
         // the morphogen, once per frame, for the front contour
@@ -982,17 +1244,22 @@ export default function TissueSheet() {
         }
 
         // — the bloom: each cell's own faint halo, one batched fill, so the
-        // sheet glows rather than sits flat on the dark —
-        ctx.beginPath();
-        for (let i = 0; i < n; i++) {
-          const rr = sheet.r[i] * scale * girth[i] * 1.75 * (1 - sheet.depth[i] * 0.5);
-          const px = ox + sheet.px[i] * scale;
-          const py = oy + sheet.py[i] * scale;
-          ctx.moveTo(px + rr, py);
-          ctx.arc(px, py, rr, 0, Math.PI * 2);
+        // sheet glows rather than sits flat on the dark — skipped at the
+        // lowest governed tier, where it is pure cost for little read —
+        const highDetail = tier === "high" || tier === "medium";
+        if (highDetail) {
+          ctx.beginPath();
+          for (let i = 0; i < n; i++) {
+            const rr =
+              sheet.r[i] * scale * girth[i] * 1.75 * (1 - sheet.depth[i] * 0.5) * (1 - resorb[i] * 0.8);
+            const px = ox + sheet.px[i] * scale;
+            const py = oy + sheet.py[i] * scale;
+            ctx.moveTo(px + rr, py);
+            ctx.arc(px, py, rr, 0, Math.PI * 2);
+          }
+          ctx.fillStyle = `rgba(150, 128, 96, ${0.055 * alpha})`;
+          ctx.fill();
         }
-        ctx.fillStyle = `rgba(150, 128, 96, ${0.055 * alpha})`;
-        ctx.fill();
 
         // — the cells: batched fills, one per fate and brightness band —
         // The morphogen is visible as light on the sheet long before the
@@ -1014,9 +1281,13 @@ export default function TissueSheet() {
               const wave = reduced
                 ? 0
                 : Math.sin(localT * waveK - (sheet.px[i] / Math.max(0.001, sheet.spanX)) * 2.2) * 0.08;
+              // a cell charging toward division swells taut; one drawing
+              // inward under a held finger shrinks toward its own centre —
+              // both continuous, so the eye reads the accumulation itself
               const rr =
-                sheet.r[i] * scale * girth[i] * (0.86 + wave + breath * 0.05 + lit[i] * 0.4) *
-                (1 - sheet.depth[i] * 0.45);
+                sheet.r[i] * scale * girth[i] *
+                (0.86 + wave + breath * 0.05 + lit[i] * 0.4 + divCharge[i] * 0.24) *
+                (1 - sheet.depth[i] * 0.45) * (1 - resorb[i] * 0.88);
               if (rr <= 0.2) continue;
               const px = ox + sheet.px[i] * scale;
               const py = oy + sheet.py[i] * scale;
@@ -1032,8 +1303,71 @@ export default function TissueSheet() {
             ctx.strokeStyle = `rgba(${FATE_TINT[f]}, ${(0.32 + band * 0.16) * boost * alpha})`;
             ctx.lineWidth = 0.9;
             ctx.stroke();
+            // a thin bright inner rim on the same path — real membrane
+            // thickness, light catching its inside edge, at zero extra cost
+            // (no new path, no gradient, just a second stroke of the one
+            // already built)
+            if (highDetail) {
+              ctx.strokeStyle = `rgba(252, 248, 238, ${(0.05 + band * 0.035) * boost * alpha})`;
+              ctx.lineWidth = 0.4;
+              ctx.stroke();
+            }
           }
         }
+
+        // — cytoplasm: transmitted light + grain, stamped from a cached
+        // sprite (never a per-cell gradient — SPEC's performance contract)
+        // so the cost per cell is one drawImage regardless of the sheet's
+        // size. Reserved for the top governed tier, where it's a free read.
+        if (highDetail && tier === "high" && cellSprite) {
+          ctx.save();
+          ctx.globalCompositeOperation = "lighter";
+          for (let i = 0; i < n; i++) {
+            const rr =
+              sheet.r[i] * scale * girth[i] * (1 - sheet.depth[i] * 0.45) * (1 - resorb[i] * 0.88);
+            if (rr <= 0.6) continue;
+            const px = ox + sheet.px[i] * scale;
+            const py = oy + sheet.py[i] * scale;
+            const size = rr * 2.1;
+            ctx.globalAlpha = (0.32 + lit[i] * 0.25) * alpha * (1 - sheet.depth[i] * 0.3);
+            ctx.drawImage(cellSprite, px - size / 2, py - size / 2, size, size);
+          }
+          ctx.restore();
+        }
+
+        // — a cell charging toward division: the spindle axis itself grows
+        // across it, the same axis `divideCell` actually splits along, so a
+        // stroke that stops short still shows exactly what would happen —
+        ctx.beginPath();
+        for (let i = 0; i < n; i++) {
+          if (divCharge[i] <= 0.03) continue;
+          const px = ox + sheet.px[i] * scale;
+          const py = oy + sheet.py[i] * scale;
+          const spindle = sheet.pol[i] + Math.PI / 2;
+          const len = sheet.r[i] * scale * girth[i] * 1.9 * divCharge[i];
+          const dxp = Math.cos(spindle) * len;
+          const dyp = Math.sin(spindle) * len;
+          ctx.moveTo(px - dxp, py - dyp);
+          ctx.lineTo(px + dxp, py + dyp);
+        }
+        ctx.strokeStyle = `rgba(248, 240, 224, ${0.55 * alpha})`;
+        ctx.lineWidth = 1.1;
+        ctx.stroke();
+
+        // — a cell drawing into itself under a held finger: the rim it's
+        // pulling away from stays lit a moment, an iris visibly closing —
+        ctx.beginPath();
+        for (let i = 0; i < n; i++) {
+          if (resorb[i] <= 0.03) continue;
+          const px = ox + sheet.px[i] * scale;
+          const py = oy + sheet.py[i] * scale;
+          const rr = sheet.r[i] * scale * girth[i] * (1 - sheet.depth[i] * 0.45);
+          ctx.moveTo(px + rr, py);
+          ctx.arc(px, py, rr, 0, Math.PI * 2);
+        }
+        ctx.strokeStyle = `rgba(226, 140, 108, ${0.5 * alpha})`;
+        ctx.lineWidth = 1;
+        ctx.stroke();
 
         // — the adhesion graph: four batched strokes, bucketed by strain —
         // Taut bonds glow warm; a bond near its breaking strain runs hot.
@@ -1172,6 +1506,28 @@ export default function TissueSheet() {
             0,
             Math.PI * 2,
           );
+          ctx.stroke();
+        }
+
+        // — marks: a touch that missed, a division's ripple, a refusal, a
+        // resorption — every one of them a ring at a point, not a cell, so
+        // the plasm answers even where there is nothing to hit. Colour
+        // alone tells the four apart; a refusal holds its radius rather
+        // than growing, which is what makes it read as "no".
+        const MARK_LIFE = 620;
+        const markTint = ["150, 168, 200", "248, 240, 224", "226, 92, 64", "226, 140, 108"];
+        for (let m = 0; m < MAX_MARKS; m++) {
+          const age = now - markAt[m];
+          if (markAt[m] <= 0 || age < 0 || age > MARK_LIFE) continue;
+          const u = age / MARK_LIFE;
+          const kind = markKind[m];
+          const px = ox + markX[m] * scale;
+          const py = oy + markY[m] * scale;
+          const rr = kind === 2 ? 3 + u * 5 : 2 + u * (kind === 1 ? 26 : 20);
+          ctx.strokeStyle = `rgba(${markTint[kind]}, ${(kind === 2 ? 0.6 : 0.4) * (1 - u) * alpha})`;
+          ctx.lineWidth = kind === 2 ? 1.6 : 1;
+          ctx.beginPath();
+          ctx.arc(px, py, rr, 0, Math.PI * 2);
           ctx.stroke();
         }
 

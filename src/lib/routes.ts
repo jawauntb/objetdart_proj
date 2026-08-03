@@ -1,3 +1,17 @@
+/**
+ * routes — the presentation half of the room manifest.
+ *
+ * SITE_ROUTES is *derived* from `ROOM_REGISTRY` (`src/lib/room-registry.ts`),
+ * which is the single place a new room registers itself. Do not hand-add an
+ * entry here: a route that exists in this file and not in the registry has no
+ * scale address, no declared gesture contract and no persistence key, and
+ * `scripts/test-room-contract.mjs` fails the moment the two lists disagree.
+ *
+ * Order is the registry's order, and it is load-bearing only for the exempt
+ * tail: `scaleOrderedNavigationKeys` walks the axis first and then emits laws,
+ * lenses and reading surfaces in registration order.
+ */
+
 import type { RouteSigilKind } from "@/components/RouteSigil";
 import { scaleOrderedNavigationKeys } from "@/lib/nav-order";
 import { roomRouteEntries } from "@/rooms/registry";
@@ -116,10 +130,14 @@ export const NAVIGATION_ROUTES: SiteRouteEntry[] = scaleOrderedNavigationKeys(
   return route;
 });
 
-const GALLERY_OMITTED_ROUTE_KEYS = new Set(["archive", "kept", "colophon", "guide"]);
-
+/**
+ * The swipe gallery is every room you can play. Reading surfaces are declared
+ * as such in the registry (`kind: "reading"`) rather than listed twice here —
+ * that second list was how a new reading surface used to sneak into a gallery
+ * that swipes between instruments.
+ */
 export const GALLERY_ROUTES = NAVIGATION_ROUTES.filter(
-  (route) => !GALLERY_OMITTED_ROUTE_KEYS.has(route.key),
+  (route) => !READING_SURFACE_KEYS.has(route.key),
 );
 
 export const DARK_ROUTE_PREFIXES = SITE_ROUTES

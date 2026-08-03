@@ -75,9 +75,17 @@ import {
   type MassPoint,
   type Ray,
 } from "@/lib/manifold-field";
-import { resolveDpr, onGalleryPause, onVisibility, isEmbeddedFrame } from "@/lib/room-runtime";
+import {
+  resolveDpr,
+  onGalleryPause,
+  onVisibility,
+  isEmbeddedFrame,
+  createFrameGovernor,
+  detailForTier,
+} from "@/lib/room-runtime";
 import { ScaleTravelOverlay, type EdgeUI } from "@/components/ScaleTravel";
 import LetGo from "@/components/LetGo";
+import { createGravityFieldRenderer, type GravityFieldRenderer } from "@/components/SpacetimeShader";
 
 const STORE_KEY = "objetdart:manifold:v1";
 const SCALE_S_KEY = "objetdart:scale:s";
@@ -161,6 +169,29 @@ function mix(a: number, b: number, t: number) {
   return a + (b - a) * t;
 }
 
+/**
+ * A radial falloff's *shape* is scale-invariant (its stop offsets are
+ * ratios), so one sprite drawn once can stand in for every
+ * `createRadialGradient` call that only ever varied in center/radius/alpha —
+ * exactly the per-mass shadow and evaporation flash below. Baked at full
+ * alpha; callers scale intensity with `ctx.globalAlpha`, size with
+ * `drawImage`'s destination rect. This is the room-runtime contract's
+ * sanctioned alternative to a shader for a single-color falloff.
+ */
+function makeRadialSprite(stops: Array<[number, string]>, size = 128): HTMLCanvasElement {
+  const c = document.createElement("canvas");
+  c.width = size;
+  c.height = size;
+  const sctx = c.getContext("2d");
+  if (sctx) {
+    const g = sctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+    for (const [offset, color] of stops) g.addColorStop(offset, color);
+    sctx.fillStyle = g;
+    sctx.fillRect(0, 0, size, size);
+  }
+  return c;
+}
+
 /** Band center → a gentle audible chime pitch: the register compressed
  *  (power law, monotone, invertible) into the middle of hearing. */
 function beadHz(band: ScaleBand): number {
@@ -197,6 +228,7 @@ function loadStored(): Stored | null {
 export default function ManifoldFold() {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const fieldCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const router = useRouter();
   const [travelUi, setTravelUi] = useState<EdgeUI>({ pressure: 0, towardLabel: null, crossing: false });
   const letGoRef = useRef<() => void>(() => {});
@@ -206,9 +238,41 @@ export default function ManifoldFold() {
   useEffect(() => {
     const wrap = wrapRef.current;
     const canvas = canvasRef.current;
+    const fieldCanvas = fieldCanvasRef.current;
     if (!wrap || !canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+
+    // ————— the shared curvature field (SpacetimeShader.tsx) —————
+    // the mesh's own well-shading loop stays cheap 2D sprites (above); this
+    // WebGL layer adds the one thing 2D compositing can't do well — a true
+    // per-pixel lensing ring around every live mass — shared with
+    // RelativityRoom's well glow. Additive, so it sits above the 2D canvas
+    // and needs no knowledge of what's beneath it; falls back to nothing
+    // (the 2D room is already complete without it) when WebGL is absent.
+    const field: GravityFieldRenderer | null = fieldCanvas ? createGravityFieldRenderer(fieldCanvas, "glow") : null;
+
+    // sprites for the two per-mass falloffs that used to allocate a fresh
+    // createRadialGradient every mass, every frame (room-runtime contract):
+    // the well's shadow (flat solid to 0.2R, fading to 0 by 3.2R — the same
+    // shape a nonzero-r0 gradient drew) and the evaporation flash.
+    const shadowSprite = makeRadialSprite([
+      [0, "rgba(0,0,0,1)"],
+      [0.0625, "rgba(0,0,0,1)"],
+      [1, "rgba(0,0,0,0)"],
+    ]);
+    const flashSprite = makeRadialSprite([
+      [0, "rgba(235,242,255,0.5)"],
+      [0.5, "rgba(180,200,245,0.18)"],
+      [1, "rgba(0,0,0,0)"],
+    ]);
+    // fixed-size buffer for the shared WebGL field pass — mutated in place
+    // every frame, never reallocated (room-runtime contract: no arrays/
+    // objects inside the RAF loop)
+    const fieldMasses: Array<{ x: number; y: number; r: number; strength: number }> = Array.from(
+      { length: MAX_MASSES },
+      () => ({ x: 0, y: 0, r: 0, strength: 0 }),
+    );
 
     // ————— state —————
     let masses: Mass[] = [];
@@ -246,8 +310,18 @@ export default function ManifoldFold() {
     let parY = 0;
     let parTX = 0;
     let parTY = 0;
+    // two-finger drag pans the frame (grammar §5) — a raw px offset that
+    // rides the same depth-layered parallax as the vessel's tilt, so both
+    // read as one consistent "the fold hangs beyond the glass" motion
+    let panX = 0;
+    let panY = 0;
+    const PAN_LIMIT = 140;
+    let lastPanSoundAt = 0;
     let lastTiltSoundAt = 0;
     let lastTuttiAt = 0;
+    let knockAt = -1e9;
+    let night = 0;
+    let nightTarget = 0;
     const beaconPhase = [0.4, 3.1];
     const beadSwell = new Array<number>(SCALE_BANDS.length).fill(0);
     const beadPos = SCALE_BANDS.map(() => ({ x: 0, y: 0 }));
@@ -385,9 +459,14 @@ export default function ManifoldFold() {
       return { verts, linkCount: web.links.length, nodes, motes };
     };
 
+    // ————— performance contract (room-runtime) —————
+    const gov = createFrameGovernor();
+    let sleeping = false;
+    let galleryPaused = false;
+
     const resize = () => {
       const r = wrap.getBoundingClientRect();
-      const ratio = resolveDpr(isEmbeddedFrame() ? "medium" : "high", { embedded: isEmbeddedFrame(), maxDpr: 1.5 });
+      const ratio = resolveDpr(gov.tier(), { embedded: isEmbeddedFrame(), reducedMotion: reduce, maxDpr: 1.5 });
       width = Math.max(320, Math.floor(r.width));
       height = Math.max(480, Math.floor(r.height));
       rectLeft = r.left;
@@ -397,6 +476,7 @@ export default function ManifoldFold() {
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
       ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+      field?.resize(width, height, ratio);
       // one speed of light for this viewport: rays and pulses both use it
       lightSpeed = 0.85 * Math.max(width, height);
       rayG = 50 * lightSpeed * lightSpeed;
@@ -584,8 +664,9 @@ export default function ManifoldFold() {
       tap: (e) => {
         lastInteractionAt = performance.now();
         if (e.fingers === 2) {
-          // step back: a raised lens lowers first; the marker clears a beat
-          // later so ScaleTravel skips its nudge on this same tap
+          // step back: a raised lens lowers first; then a panned frame comes
+          // home; the marker clears a beat later so ScaleTravel skips its
+          // nudge on this same tap
           if (lensSnapped === 1) {
             lensSnapped = 0;
             lensTarget = 0;
@@ -593,6 +674,14 @@ export default function ManifoldFold() {
             window.setTimeout(() => markLens(false), 0);
             try { haptics.lens(); } catch { /* noop */ }
             note(48, 160);
+            return;
+          }
+          if (Math.abs(panX) > 1 || Math.abs(panY) > 1) {
+            panX = 0;
+            panY = 0;
+            try { haptics.tap(); } catch { /* noop */ }
+            note(41, 220);
+            return;
           }
           return;
         }
@@ -786,6 +875,20 @@ export default function ManifoldFold() {
           lensTarget = snapped;
         }
       },
+      pan2: (e) => {
+        lastInteractionAt = performance.now();
+        // two fingers pan the frame — the fold hangs beyond the glass, so
+        // the whole scene slides depth-layered under the same parallax the
+        // vessel's tilt already drives
+        panX = clamp(panX + e.dx, -PAN_LIMIT, PAN_LIMIT);
+        panY = clamp(panY + e.dy, -PAN_LIMIT, PAN_LIMIT);
+        const now = performance.now();
+        if (now - lastPanSoundAt > 260) {
+          lastPanSoundAt = now;
+          const reach = Math.hypot(panX, panY) / PAN_LIMIT;
+          note(30 + Math.round(reach * 8), 90);
+        }
+      },
     });
 
     // ————— the vessel: the device is the fold's body (grammar §5) —————
@@ -815,6 +918,25 @@ export default function ManifoldFold() {
         firePulse(width * 0.5, height * 0.45, 0.6 + intensity * 0.6);
         note(24, 380);
         try { haptics.ripple(0.35 + intensity * 0.4); } catch { /* noop */ }
+      },
+      knock: ({ intensity }) => {
+        const now = performance.now();
+        if (now - knockAt < 420) return;
+        knockAt = now;
+        lastInteractionAt = now;
+        // a rap on the case rings the whole fold — a strong pulse from
+        // dead center, sharper and colder than the hand's own tap
+        firePulse(width * 0.5, height * 0.5, 0.9 + intensity * 0.6);
+        note(21 + Math.round(intensity * 6), 260);
+        try { haptics.roll(); } catch { /* noop */ }
+        useField.getState().recordTape("object", 0.4 + intensity * 0.4, "manifold/knock");
+      },
+      flip: ({ faceDown }) => {
+        nightTarget = faceDown ? 1 : 0;
+        lastInteractionAt = performance.now();
+        note(faceDown ? 19 : 33, 420);
+        try { haptics.roll(); } catch { /* noop */ }
+        useField.getState().recordTape("sigil", faceDown ? 0.25 : 0.45, faceDown ? "manifold/night" : "manifold/wake");
       },
     });
 
@@ -1035,11 +1157,14 @@ export default function ManifoldFold() {
     // ————— the loop —————
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
+      const tier = gov.beginFrame(now);
+      if (sleeping || galleryPaused) return; // no draw while hidden or embedded-paused
       if (!reduce && now - lastFrame < 30) return;
       lastFrame = now;
       const delta = Math.min(64, now - last);
       last = now;
       const dt = delta / 1000;
+      const detail = detailForTier(tier);
 
       // the season turns on its own; the room marks the crossing once —
       // a low note, a touch, the still rays re-bent under the new law
@@ -1065,10 +1190,11 @@ export default function ManifoldFold() {
       lens += (lensTarget - lens) * Math.min(1, dt * 6);
       // gyroscopic parallax eases toward the tilt target — opposite the
       // lean, because the fold hangs beyond the glass and the glass slides
-      const parGoalX = reduce ? 0 : -parTX * PAR_MAX;
-      const parGoalY = reduce ? 0 : -parTY * PAR_MAX;
+      const parGoalX = (reduce ? 0 : -parTX * PAR_MAX) + panX;
+      const parGoalY = (reduce ? 0 : -parTY * PAR_MAX) + panY;
       parX += (parGoalX - parX) * Math.min(1, dt * 5);
       parY += (parGoalY - parY) * Math.min(1, dt * 5);
+      night += (nightTarget - night) * Math.min(1, dt * 2.4);
 
       const pts = livePoints();
 
@@ -1120,16 +1246,19 @@ export default function ManifoldFold() {
       };
 
       // ————— the field grid: one displacement pass shared by mesh and web —————
-      const cols = Math.ceil(width / MESH_GAP) + 1;
-      const rows = Math.ceil(height / MESH_GAP) + 1;
+      // scaled by the frame governor's tier — a busy low-tier frame walks a
+      // sparser lattice rather than starving the rest of the room
+      const meshGap = MESH_GAP / Math.max(0.4, detail.samples);
+      const cols = Math.ceil(width / meshGap) + 1;
+      const rows = Math.ceil(height / meshGap) + 1;
       const vx: number[] = new Array(cols * rows);
       const vy: number[] = new Array(cols * rows);
       const dispX: number[] = new Array(cols * rows);
       const dispY: number[] = new Array(cols * rows);
       for (let j = 0; j < rows; j++) {
         for (let i = 0; i < cols; i++) {
-          const x = i * MESH_GAP;
-          const y = j * MESH_GAP;
+          const x = i * meshGap;
+          const y = j * meshGap;
           const d = dispAt(x, y, pts, now);
           const idx = j * cols + i;
           dispX[idx] = d.dx;
@@ -1142,8 +1271,8 @@ export default function ManifoldFold() {
       /** Bilinear sample of the mesh's displacement field — the web deforms
        *  with the same fabric for the cost of four reads. */
       const sampleDisp = (x: number, y: number): { dx: number; dy: number } => {
-        const gx = clamp(x / MESH_GAP, 0, cols - 1.001);
-        const gy = clamp(y / MESH_GAP, 0, rows - 1.001);
+        const gx = clamp(x / meshGap, 0, cols - 1.001);
+        const gy = clamp(y / meshGap, 0, rows - 1.001);
         const i0 = Math.floor(gx);
         const j0 = Math.floor(gy);
         const fx = gx - i0;
@@ -1252,6 +1381,7 @@ export default function ManifoldFold() {
       // ————— masses: unlit presences the fabric wells around —————
       ctx.save();
       ctx.translate(parX * PAR_MASS, parY * PAR_MASS);
+      let fieldMassCount = 0;
       for (const m of masses) {
         const rawX = m.nx * width;
         const rawY = m.ny * height;
@@ -1266,12 +1396,14 @@ export default function ManifoldFold() {
           R *= 1 - evapP * 0.85;
         }
         // the well's shadow deepens the ink (physics reads the unfolded field)
+        // — a cached sprite blitted with drawImage, never a per-mass gradient
         const depth = wellDepth(pts, rawX, rawY, SOFTENING);
-        const shade = ctx.createRadialGradient(mx, my, R * 0.2, mx, my, R * 3.2);
-        shade.addColorStop(0, `rgba(0, 0, 0, ${0.5 * (1 - evapP)})`);
-        shade.addColorStop(1, "rgba(0,0,0,0)");
-        ctx.fillStyle = shade;
-        ctx.fillRect(mx - R * 3.2, my - R * 3.2, R * 6.4, R * 6.4);
+        const shadeAlpha = 0.5 * (1 - evapP);
+        if (shadeAlpha > 0.01) {
+          ctx.globalAlpha = shadeAlpha;
+          ctx.drawImage(shadowSprite, mx - R * 3.2, my - R * 3.2, R * 6.4, R * 6.4);
+          ctx.globalAlpha = 1;
+        }
         ctx.fillStyle = `rgba(2, 3, 6, ${(0.92 - depth * 0.1) * (1 - evapP)})`;
         ctx.beginPath();
         ctx.arc(mx, my, R, 0, Math.PI * 2);
@@ -1290,20 +1422,39 @@ export default function ManifoldFold() {
           ctx.arc(mx, my, R + 7, -Math.PI / 2, -Math.PI / 2 + m.charge * Math.PI * 2);
           ctx.stroke();
         }
-        // the slow flash of evaporation
+        // the slow flash of evaporation — cached sprite, not a fresh gradient
         if (m.evapAt) {
           const flare = Math.sin(evapP * Math.PI);
           const fr = R + evapP * 90;
-          const flash = ctx.createRadialGradient(mx, my, 0, mx, my, fr);
-          flash.addColorStop(0, `rgba(235, 242, 255, ${0.5 * flare})`);
-          flash.addColorStop(0.5, `rgba(180, 200, 245, ${0.18 * flare})`);
-          flash.addColorStop(1, "rgba(0,0,0,0)");
-          ctx.fillStyle = flash;
-          ctx.fillRect(mx - fr, my - fr, fr * 2, fr * 2);
+          if (flare > 0.01) {
+            ctx.globalAlpha = flare;
+            ctx.drawImage(flashSprite, mx - fr, my - fr, fr * 2, fr * 2);
+            ctx.globalAlpha = 1;
+          }
+        }
+        // feed the shared curvature field (WebGL, drawn after this pass) —
+        // reusing the fixed-size buffer below, never allocating in the loop
+        if (fieldMassCount < fieldMasses.length) {
+          const fm = fieldMasses[fieldMassCount++];
+          fm.x = mx; fm.y = my; fm.r = R;
+          fm.strength = clamp01(m.m / 2.2) * (1 - evapP);
         }
       }
+      for (let k = fieldMassCount; k < fieldMasses.length; k++) fieldMasses[k].strength = 0;
 
       ctx.restore();
+
+      // ————— the curvature field: additive lensing ring, WebGL —————
+      // one shader pass sums every live mass's ring at once — the field
+      // fidelity upgrade (SPEC fix 2), shared verbatim with RelativityRoom.
+      if (field?.ok) {
+        field.draw(now, fieldMasses, {
+          core: [0.62, 0.75, 0.98],
+          ring: [0.78, 0.86, 1.0],
+          alpha: (1 - lens) * 0.8,
+          reduced: reduce,
+        });
+      }
 
       // ————— pulses: your ripple, racing the light at its own speed —————
       ctx.save();
@@ -1651,9 +1802,25 @@ export default function ManifoldFold() {
         ctx.fill();
       }
 
+      // flip face-down: the room sleeps and the light goes out of it
+      if (night > 0.004) {
+        ctx.fillStyle = `rgba(2, 2, 6, ${(night * 0.92).toFixed(3)})`;
+        ctx.fillRect(0, 0, width, height);
+      }
+
       if (dirty && now - lastSaveAt > 800) save(true);
     };
     raf = requestAnimationFrame(draw);
+    // no draw while hidden or paused inside a gallery iframe
+    const offVis = onVisibility((hiddenNow) => {
+      sleeping = hiddenNow;
+      if (hiddenNow) save(true);
+      if (!hiddenNow && !galleryPaused && !raf) raf = requestAnimationFrame(draw);
+    });
+    const offGallery = onGalleryPause((pausedNow) => {
+      galleryPaused = pausedNow;
+      if (!pausedNow && !sleeping && !raf) raf = requestAnimationFrame(draw);
+    });
 
     return () => {
       cancelAnimationFrame(raf);
@@ -1666,7 +1833,10 @@ export default function ManifoldFold() {
       wrap.removeEventListener("focus", onFocus);
       wrap.removeEventListener("blur", onBlur);
       document.removeEventListener("visibilitychange", onVis);
+      offVis();
+      offGallery();
       mq.removeEventListener?.("change", onMq);
+      field?.dispose();
       save(true);
     };
   }, [router]);
@@ -1681,6 +1851,7 @@ export default function ManifoldFold() {
         aria-label="the manifold — every scale kept in one fold; rest a finger and a mass gathers, the light bends to meet it and your ripple races it; hold a warm bead through the long moment to travel there; arrows walk, enter sets a mass and, held, collapses it; brackets walk the thread, enter travels"
       >
         <canvas ref={canvasRef} className="manifold-canvas" aria-hidden="true" />
+        <canvas ref={fieldCanvasRef} className="manifold-field-canvas" aria-hidden="true" />
       </div>
       <ScaleTravelOverlay ui={travelUi} />
 
@@ -1738,6 +1909,16 @@ export default function ManifoldFold() {
           cursor: crosshair;
           touch-action: none;
           z-index: 0;
+        }
+
+        .manifold-field-canvas {
+          position: absolute;
+          inset: 0;
+          width: 100%;
+          height: 100%;
+          display: block;
+          pointer-events: none;
+          z-index: 1;
         }
       ` }}
       />

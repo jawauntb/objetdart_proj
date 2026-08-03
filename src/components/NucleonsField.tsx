@@ -22,11 +22,16 @@
  * it must be thrown hard or it curves away and refuses. That is the whole
  * reason the universe builds heavy elements out of neutrons.
  *
- * So: hold on open field to condense a nucleon (a neutron at the long-press
- * tier; hold on into the ceremony and the vacuum pays for a proton instead).
- * Flick it into a drop. Tap a drop to strike it — the giant resonance, the
- * whole nucleus ringing. Hold a drop to the ceremony and it does the thing it
- * already wanted: beta, alpha, or fission. Scrub a drop to spin it up until
+ * So: what a hold does is decided by what the finger landed on, and it keeps
+ * paying the longer it is held. On the OPEN FIELD the vacuum visibly gathers
+ * from the touch tier, condenses a neutron at the dwell, BINDS it into a
+ * nucleus at the ceremony, and then keeps feeding that drop — one nucleon,
+ * then a dozen, then a hundred, up to iron and not one further (`accretedA`,
+ * `valleyNuclide`), so how long you press IS which nuclide you make. On a
+ * LOOSE NUCLEON the vacuum pays for charge instead: at the ceremony it turns
+ * neutron into proton. On a DROP the hold asks it for what it already wants:
+ * beta, alpha, or fission. Flick a loose nucleon into a drop.
+ * Tap a drop to strike it — the giant resonance, the whole nucleus ringing. Scrub a drop to spin it up until
  * angular momentum stretches it past holding and it splits — and the prompt
  * neutrons that fly out are captured by its neighbors, which is a chain
  * reaction, felt. Three fingers run a NEUTRON FLUX across the field, and a
@@ -406,6 +411,7 @@ export default function NucleonsField() {
     let sleeping = false;
     let paused = false;
     let lastFrameAt = 0;
+    let lastTier = gov.tier();
     const offVis = onVisibility((hidden) => {
       sleeping = hidden;
     });
@@ -1105,7 +1111,9 @@ export default function NucleonsField() {
         if (!hold.onExisting) {
           hold.gx = x;
           hold.gy = y;
-          hold.gather = clamp01((e.elapsed - TOUCH_MS) / (DWELL_MS - TOUCH_MS));
+          hold.gather = hold.seeded
+            ? Math.max(0, 1 - (e.elapsed - DWELL_MS) / 460) // it became the nucleon
+            : clamp01((e.elapsed - TOUCH_MS) / (DWELL_MS - TOUCH_MS));
           const nowG = performance.now();
           if (hold.gather > 0 && hold.gather < 1 && nowG - lastGatherNoteAt > 150) {
             lastGatherNoteAt = nowG;
@@ -1816,6 +1824,9 @@ export default function NucleonsField() {
       }
       if (!reduce && nowReal - lastFrameAt < 22) return;
       lastFrameAt = nowReal;
+      // the governor owns the drawing-buffer size too: a field that starts
+      // costing frames redraws itself smaller rather than dropping them
+      if (tier !== lastTier) { lastTier = tier; resize(); }
       const detail = detailForTier(tier);
       const dtReal = Math.min(64, nowReal - last);
       last = nowReal;

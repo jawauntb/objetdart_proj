@@ -9,8 +9,9 @@
 //
 // Migration on first load: reads the old per-page localStorage keys
 // (`objetdart:ocean:naturals:v1`, `objetdart:tide:naturals:v1`,
-// `objetdart:waves:naturals:v1`) and folds them into the new shared key,
-// then deletes the old ones. Users lose nothing.
+// `objetdart:waves:naturals:v1`, and the beach's own `objetdart:coast:v1`)
+// and folds them into the new shared key, then deletes the old ones. Users
+// lose nothing.
 
 // The sky is a zone of the same world: what /atmosphere gives to the wind
 // drifts across its own frame while nobody is watching, exactly as a shell
@@ -130,6 +131,46 @@ function validate(raw: unknown): WorldNatural | null {
   };
 }
 
+/** The beach's own pre-world store, retired by `migrateLegacy`. */
+export const LEGACY_COAST_KEY = "objetdart:coast:v1";
+
+/**
+ * Shape-adapter for the beach's private store, which predates the shared
+ * pool and looks nothing like it: `{ shells: [{ nx, ny, seed }] }`, no ids,
+ * no kinds, no timestamps. Folded forward rather than dropped — a visitor
+ * who left shells on the sand before /coast joined the pool still finds
+ * them there, and afterwards they can wash out to /tide like any other.
+ *
+ * Pure so the fold is testable without a Storage. Ids carry the array index
+ * as well as the seed: two shells planted at the same seed are still two
+ * shells, and per-object delete must not take both.
+ */
+export function coastShellsToNaturals(parsed: unknown, nowMs = Date.now()): WorldNatural[] {
+  const shells = (parsed as { shells?: unknown } | null | undefined)?.shells;
+  if (!Array.isArray(shells)) return [];
+  const out: WorldNatural[] = [];
+  for (let i = 0; i < shells.length; i++) {
+    const s = shells[i] as { nx?: unknown; ny?: unknown; seed?: unknown } | null;
+    if (!s || typeof s.nx !== "number" || typeof s.ny !== "number") continue;
+    if (!Number.isFinite(s.nx) || !Number.isFinite(s.ny)) continue;
+    const seed =
+      typeof s.seed === "number" && Number.isFinite(s.seed) ? Math.floor(s.seed) >>> 0 : i >>> 0;
+    out.push({
+      id: `coast-legacy-${seed}-${i}`,
+      kind: "seashell",
+      zone: "coast",
+      nx: Math.max(0, Math.min(1, s.nx)),
+      ny: Math.max(0, Math.min(1, s.ny)),
+      vx: 0,
+      seed,
+      // ordered oldest-first so the cap retires the ones left longest ago
+      createdAt: nowMs - (shells.length - i) * 1000,
+      lastSeen: nowMs,
+    });
+  }
+  return out;
+}
+
 // One-shot import from the old per-page keys. Runs once; the old keys are
 // removed after the fold so a second load reads clean.
 function migrateLegacy(store: Storage): WorldNatural[] {
@@ -153,6 +194,15 @@ function migrateLegacy(store: Storage): WorldNatural[] {
       /* skip */
     }
     store.removeItem(key);
+  }
+  const coastRaw = store.getItem(LEGACY_COAST_KEY);
+  if (coastRaw) {
+    try {
+      for (const n of coastShellsToNaturals(JSON.parse(coastRaw) as unknown)) found.push(n);
+    } catch {
+      /* skip */
+    }
+    store.removeItem(LEGACY_COAST_KEY);
   }
   return found;
 }
@@ -294,6 +344,21 @@ export function addNatural(
   persist(cache);
   notify();
   return n;
+}
+
+/**
+ * Take one natural back out of the world — the per-object delete every room
+ * owes its material. Returns false when nothing carried that id, so a room
+ * can tell "gone" from "was never there" instead of guessing.
+ */
+export function removeNatural(id: string): boolean {
+  const list = getAllNaturals();
+  const next = list.filter((n) => n.id !== id);
+  if (next.length === list.length) return false;
+  cache = next;
+  persist(cache);
+  notify();
+  return true;
 }
 
 /** Replace the cached list — used when a page has mutated positions per-frame

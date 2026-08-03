@@ -212,7 +212,7 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     page: "src/app/atlas/[region]/page.tsx",
     address: { band: "atlas" },
     frame: "yield",
-    chrome: "none",
+    chrome: "axis",
     keeps: "objetdart:atlas:naturals:v1",
     creates: "a natural",
     exempt: {},
@@ -339,6 +339,7 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     keeps: null,
     creates: null,
     exempt: {},
+    rawPointer: "the spectrum bars are a panel control, not the playable surface: each bar stops propagation so a tap on a harmonic never reaches the field behind it",
   },
   {
     key: "beyond",
@@ -423,7 +424,7 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     frame: "own",
     chrome: "none",
     keeps: "objetdart:loom:v1",
-    creates: null,
+    creates: "a crossing",
     exempt: {},
   },
   {
@@ -442,6 +443,7 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     keeps: null,
     creates: null,
     exempt: {},
+    rawPointer: "the wind vane and the barometer are instrument panels with pointer capture — continuous dials the engine has no verb for",
   },
   {
     key: "clouds",
@@ -509,6 +511,7 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     keeps: "objetdart:flowers:v1",
     creates: "a flower",
     exempt: {},
+    rawPointer: "reads contact count and the surf-line inset directly for the press-bloom; the engine reports intensity per event but no continuous pressure channel while held",
   },
   {
     key: "birds",
@@ -524,7 +527,7 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     frame: "yield",
     chrome: "travel+peers",
     keeps: "objetdart:birds:v1",
-    creates: null,
+    creates: "a bird",
     exempt: {},
   },
   {
@@ -918,6 +921,7 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     keeps: null,
     creates: null,
     exempt: {},
+    rawPointer: "tracks per-contact filaments; the engine speaks this as `voice`, and adopting it is owed work, not a permanent exemption",
   },
   {
     key: "pulse",
@@ -1022,6 +1026,7 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     keeps: "objetdart:jewel:facets:v1",
     creates: "a facet",
     exempt: {},
+    rawPointer: "arrests a spinning stone on the instant of contact, below any gesture threshold — the engine classifies tap and hold, and emits nothing at touchdown",
   },
   {
     key: "drop",
@@ -1056,7 +1061,7 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     frame: "yield",
     chrome: "travel+peers",
     keeps: "objetdart:seed:v1",
-    creates: null,
+    creates: "a seed",
     exempt: {},
   },
   {

@@ -210,10 +210,31 @@ assert.equal(entryScaleFor("/colophon"), null);
   assert.equal(travelNeighbor("flowers", 1), "earth", "the garden grows from the ground");
   assert.equal(travelNeighbor("flowers", -1), "tissue", "a petal is tissue before it is one cell");
   assert.equal(travelNeighbor("tissue", 1), "flowers", "a sheet belongs to what it is a sheet of");
-  assert.equal(travelNeighbor("earth", 1), "atlas", "the ground lies on the map");
+  // The ground zooms OUT along the metric axis, through the unbuilt
+  // neighbourhood and system, into the sky. It used to zoom out to /atlas —
+  // a band whose whole span (5.5–6.5) lies BELOW the earth's (6.5–9), so
+  // pinching out of the world landed you on something smaller than it. That
+  // was the last metric inversion on the upper axis and the one
+  // docs/plans/ground-and-sky.md §1 already promised did not exist. If an
+  // `up` override ever comes back on `earth`, this line fails.
+  assert.equal(travelNeighbor("earth", 1), "planets", "the ground climbs into its neighbourhood");
   assert.equal(travelNeighbor("earth", -1), "flowers", "the ground opens onto flowers");
   assert.equal(travelNeighbor("atlas", 1), "stars", "the map recedes into the sky");
   assert.equal(travelNeighbor("atlas", -1), "atmosphere", "the map descends into the air column");
+  // The whole upper axis, walked band by band, is now monotone in metres:
+  // every canonical up-door lands on a band whose floor is at least this
+  // band's ceiling. The bug: a future mereological override quietly
+  // inverting the metric again, the way `earth.up = "atlas"` did.
+  for (const id of ["olympus", "atmosphere", "atlas", "earth", "planets", "solar", "stars", "galaxy", "space"]) {
+    const here = SCALE_BANDS.find((b) => b.id === id);
+    const up = travelNeighbor(id, 1);
+    const there = SCALE_BANDS.find((b) => b.id === up);
+    assert.ok(there, `${id} must keep an upward door`);
+    assert.ok(
+      there.sMin >= here.sMax,
+      `${id} → ${up}: the upper axis may not zoom out to a smaller band`,
+    );
+  }
   assert.equal(travelNeighbor("olympus", -1), "coast", "the peak descends through fog to the sea");
   assert.equal(travelNeighbor("olympus", 1), "atmosphere", "the peak rises into the air");
   assert.equal(travelNeighbor("stars", -1), "atlas", "the sky descends onto the map");
@@ -222,7 +243,6 @@ assert.equal(entryScaleFor("/colophon"), null);
   // The upper axis is metric-monotone after the sky re-cut: no override
   // anywhere from the ground to the web — each of these is plain adjacency,
   // and an override sneaking back in (the old inverted galaxy door) fails here.
-  assert.equal(travelNeighbor("earth", 1), "atlas", "the ground still lies on the map");
   assert.equal(travelNeighbor("planets", 1), "solar", "the neighbourhood joins the system");
   assert.equal(travelNeighbor("planets", -1), "earth", "the neighbourhood holds the earth");
   assert.equal(travelNeighbor("solar", 1), "stars", "the system is one star among the vault");
@@ -249,9 +269,17 @@ assert.equal(entryScaleFor("/colophon"), null);
   assert.equal(travelNeighbor("birds", -1), "flowers", "the flock lands in the garden");
   assert.equal(travelNeighbor("birds", 1), "coast", "the flock carries out to the shore");
 
-  // Return the way you came, across the semantic doors.
-  const backToGround = resolveDestination("atlas", -1, { atlas: "earth" });
-  assert.equal(backToGround.id, "earth", "risen from the ground, the map returns you to it");
+  // Return the way you came, across the semantic doors. The ground is now
+  // ABOVE the map, so a hand that came down from the earth goes back UP —
+  // and the map's downward wall must not offer the earth at all (that offer
+  // was the inversion, seen from the other side).
+  const backToGround = resolveDestination("atlas", 1, { atlas: "earth" });
+  assert.equal(backToGround.id, "earth", "descended from the ground, the map returns you up to it");
+  assert.equal(
+    resolveDestination("atlas", -1, { atlas: "earth" }).id,
+    "atmosphere",
+    "memory of the ground cannot pull a downward pinch back up the axis",
+  );
   const backToGarden = resolveDestination("earth", -1, { earth: "flowers" });
   assert.equal(backToGarden.id, "flowers", "entered from the garden, descend to the garden");
   // Memory that names a band that is not a door in that direction never hijacks travel.
@@ -295,6 +323,10 @@ assert.equal(entryScaleFor("/colophon"), null);
     ["galaxy"],
     "the sky thins upward into the arms — /galaxy is built now",
   );
+  // Zooming out of the world reaches the sky, walking transparently through
+  // the unbuilt neighbourhood and system. The bug: the ground's ceiling
+  // offering the atlas — a band two decades SMALLER — so a hand pinching out
+  // of the world arrived at a map of part of it.
   assert.deepEqual(
     Array.from(travelOptions("earth", 1, {}), (b) => b.id),
     ["atlas", "planets"],
@@ -331,8 +363,8 @@ assert.equal(entryScaleFor("/colophon"), null);
   );
   assert.deepEqual(
     Array.from(travelOptions("earth", -1, {}), (b) => b.id),
-    ["flowers", "coast", "olympus"],
-    "the ground opens onto the garden, the beach, and the mountain",
+    ["flowers", "coast", "olympus", "atlas"],
+    "the ground opens onto the garden, the beach, the mountain, and the chart of itself",
   );
   assert.equal(bandAt(entryScaleFor("/ocean")).id, "coast");
   assert.equal(bandAt(entryScaleFor("/coast")).id, "coast");
@@ -389,22 +421,47 @@ assert.equal(entryScaleFor("/colophon"), null);
   assert.equal(routes(-1, "/soil")[0], "/cells", "soil crumbles into the living plasm");
   assert.equal(routes(-1, "/rocks")[0], "/molecules", "rock cleaves into its lattice");
 
-  // The ground's downward fork: garden first, then the strata. Both strata
-  // have shipped now, so each answers as itself rather than resolving
-  // through to the drop. The transparency law that carried them while they
-  // were only addresses is pinned below, on the memory case.
+  // The ground's downward fork: garden first, then the strata (both shipped),
+  // THEN the band grain's own lateral doors — the shore, the peak, the chart.
+  // Route doors LEAD a wall; they never empty it. The bug this pins is the
+  // one the user felt as weird navigation between Coast, Mountain and Earth:
+  // ROUTE_TRAVEL_OVERRIDES["/earth"] used to REPLACE the band grain and throw
+  // away TRAVEL_OVERRIDES.earth.extraDown.
   const earthDown = routes(-1, "/earth");
   assert.equal(earthDown[0], "/flowers", "the ground's first door down is still the garden");
   assert.deepEqual(
     earthDown,
-    ["/flowers", "/rocks", "/soil"],
-    "the ground opens onto the garden and both of the strata it is made of",
+    ["/flowers", "/rocks", "/soil", "/coast", "/mountain", "/atlas/origin"],
+    "a route override leads with the garden and strata, and the band grain's laterals survive",
   );
+  // Every band-grain door of the earth's floor is still on offer to a room
+  // that overrides that floor — containment, not a reordering check alone.
+  for (const bandDoor of travelOptions("earth", -1, {})) {
+    assert.ok(
+      earthDown.includes(bandDoor.route),
+      `the band's door ${bandDoor.route} must survive /earth's route override`,
+    );
+  }
 
   // The strata's own walls (travel FROM an address whose page is unbuilt
   // still resolves, so the rooms are playable the moment they ship).
-  assert.deepEqual(routes(1, "/soil"), ["/earth", "/flowers"], "soil returns to the ground or the garden");
-  assert.deepEqual(routes(1, "/rocks"), ["/earth", "/mountain"], "rock returns to the ground or rises as the peak");
+  // The strata lead their own walls and then inherit their band's (the drop
+  // rises to the shore, and to the petal the dew sat on) — same union law.
+  assert.deepEqual(
+    routes(1, "/soil"),
+    ["/earth", "/flowers", "/coast"],
+    "soil returns to the ground or the garden first, then keeps the drop band's shore",
+  );
+  assert.deepEqual(
+    routes(1, "/rocks"),
+    ["/earth", "/mountain", "/coast", "/flowers"],
+    "rock returns to the ground or rises as the peak first, then keeps its band's doors",
+  );
+  // …and the strata's leading doors really do lead: the union orders the
+  // route's own declaration ahead of everything the band contributes.
+  for (const [route, dir, led] of [["/soil", 1, "/earth"], ["/rocks", 1, "/earth"], ["/drop", -1, "/cells"]]) {
+    assert.equal(routes(dir, route)[0], led, `${route} must still lead its wall with ${led}`);
+  }
 
   // The peak's downward fork and the shore's doors.
   assert.deepEqual(

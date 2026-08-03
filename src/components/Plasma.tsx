@@ -11,6 +11,18 @@ import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
 import { useField } from "@/store/field";
+import { onVessel } from "@/lib/vessel";
+import LetGo from "@/components/LetGo";
+import {
+  createFrameGovernor,
+  createIdleWriter,
+  detailForTier,
+  isEmbeddedFrame,
+  onGalleryPause,
+  onVisibility,
+  resolveDpr,
+  type QualityTier,
+} from "@/lib/room-runtime";
 
 type OrbPalette = "candle" | "sea" | "flame" | "electric" | "aurora";
 
@@ -88,6 +100,14 @@ type Contact = {
 // A brief bright crackle spawned by a tap.
 type Flare = { x: number; y: number; t0: number; seed: number };
 
+// A kept filament — the globe's countable material, planted by a dwell
+// hold and standing on its own until a ceremony hold on it (or <LetGo/>)
+// lets it go. Stored in the sphere's own disc space so it survives resize.
+type KeptFilament = { nx: number; ny: number; seed: number };
+const MAX_FILAMENTS = 10;
+const FILAMENT_HIT = 0.14; // hit radius in disc-space for "on an existing one"
+const STORAGE_KEY = "objetdart:plasma:filaments:v1";
+
 /**
  * /plasma — a single tactile PLASMA GLOBE.
  *
@@ -113,6 +133,8 @@ export default function Plasma() {
   useEffect(() => { orbPaletteRef.current = orbPalette; }, [orbPalette]);
 
   const [readout, setReadout] = useState("dormant");
+  const [hasFilaments, setHasFilaments] = useState(false);
+  const letGoRef = useRef<() => void>(() => {});
 
   // shared mutable state read by the single rAF loop
   const contactsRef = useRef<Map<number, Contact>>(new Map());
@@ -180,6 +202,8 @@ export default function Plasma() {
       uniform float u_flash;       // tap / discharge bloom
       uniform vec2  u_cursor;      // primary contact in disc-UV [-1,1]; (-2,-2) = none
       uniform float u_scrub;       // local boost strength near cursor
+      uniform float u_season;      // 3-finger twist: slow warm/cool drift
+      uniform float u_polarity;    // 2-finger twist (the lens): 0..1 charge flip
       uniform vec3  u_pal_candle;
       uniform vec3  u_pal_flame;
       uniform vec3  u_pal_paper;
@@ -281,6 +305,14 @@ export default function Plasma() {
 
         col += vec3(1.0, 0.92, 0.84) * flash * 0.85 * (0.4 + bloom);
 
+        // two-finger twist = rotate the lens: the globe's charge flips —
+        // the hot band and the electric fringe swap their roles.
+        vec3 polarized = mix(col, electric * (hotMix + coreHi) + bandAColor * elec * 0.4, u_polarity * 0.6);
+        col = mix(col, polarized, u_polarity);
+
+        // three-finger twist = season: a slow warm/cool cast over the glass.
+        col *= mix(vec3(1.03, 0.97, 0.90), vec3(0.92, 0.98, 1.05), sin(u_season) * 0.5 + 0.5);
+
         float rimShade = smoothstep(0.86, 1.0, r) * 0.35;
         col *= (1.0 - rimShade);
 
@@ -302,6 +334,8 @@ export default function Plasma() {
       flash: WebGLUniformLocation | null;
       cursor: WebGLUniformLocation | null;
       scrub: WebGLUniformLocation | null;
+      season: WebGLUniformLocation | null;
+      polarity: WebGLUniformLocation | null;
       candle: WebGLUniformLocation | null;
       flame: WebGLUniformLocation | null;
       paper: WebGLUniformLocation | null;
@@ -355,6 +389,8 @@ export default function Plasma() {
           flash: gl.getUniformLocation(prog, "u_flash"),
           cursor: gl.getUniformLocation(prog, "u_cursor"),
           scrub: gl.getUniformLocation(prog, "u_scrub"),
+          season: gl.getUniformLocation(prog, "u_season"),
+          polarity: gl.getUniformLocation(prog, "u_polarity"),
           candle: gl.getUniformLocation(prog, "u_pal_candle"),
           flame: gl.getUniformLocation(prog, "u_pal_flame"),
           paper: gl.getUniformLocation(prog, "u_pal_paper"),
@@ -373,13 +409,40 @@ export default function Plasma() {
       electric: [...ORB_PALETTES.candle.electric] as [number, number, number],
     };
 
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    let reduced = mq.matches ? 1 : 0;
+    const onMq = () => { reduced = mq.matches ? 1 : 0; };
+    if (typeof mq.addEventListener === "function") mq.addEventListener("change", onMq);
+
+    // ── performance contract (room-runtime): frame governor + visibility
+    // sleep + DPR ceiling, shared with every other room on the site. ──
+    const embedded = isEmbeddedFrame();
+    const gov = createFrameGovernor(embedded ? "medium" : "high");
+    let tier: QualityTier = gov.tier();
+    let hidden = document.hidden;
+    let galleryPaused = false;
+    let faceDown = false;
+    let sleeping = false;
+    const syncSleep = () => { sleeping = hidden || galleryPaused || faceDown; };
+    const unvis = onVisibility((h) => { hidden = h; syncSleep(); });
+    const ungal = onGalleryPause((p) => { galleryPaused = p; syncSleep(); });
+
+    // WebGL context loss/restore: pause cleanly, pick back up on restore.
+    let contextLost = false;
+    const onLost = (ev: Event) => { ev.preventDefault(); contextLost = true; };
+    const onRestored = () => { contextLost = false; resize(); };
+    if (gl) {
+      orbCanvas.addEventListener("webglcontextlost", onLost);
+      orbCanvas.addEventListener("webglcontextrestored", onRestored);
+    }
+
     // ── geometry, refreshed on resize ───────────────────────────────
     let vw = 0, vh = 0;         // viewport (arcs canvas) size in CSS px
     let cx = 0, cy = 0;         // sphere center in CSS px, relative to root
     let radius = 0;             // sphere radius in CSS px
 
     const resize = () => {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = resolveDpr(tier, { embedded, reducedMotion: reduced === 1 });
       const rootRect = root.getBoundingClientRect();
       const sphRect = sphere.getBoundingClientRect();
       vw = Math.max(1, Math.floor(rootRect.width));
@@ -407,17 +470,96 @@ export default function Plasma() {
     ro.observe(sphere);
     window.addEventListener("resize", resize);
 
-    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
-    let reduced = mq.matches ? 1 : 0;
-    const onMq = () => { reduced = mq.matches ? 1 : 0; };
-    if (typeof mq.addEventListener === "function") mq.addEventListener("change", onMq);
-
     // ── ambient idle tendrils so the gas looks alive when untouched ──
     const ambient = [
       { a: 0.3, seed: 0.11 },
       { a: 2.4, seed: 0.53 },
       { a: 4.6, seed: 0.87 },
     ];
+
+    // ── the globe's kept material: standing filaments ──────────────
+    let filaments: KeptFilament[] = [];
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as { filaments?: KeptFilament[] };
+        if (Array.isArray(parsed.filaments)) filaments = parsed.filaments.slice(-MAX_FILAMENTS);
+      }
+    } catch { /* fresh */ }
+    setHasFilaments(filaments.length > 0);
+    const writer = createIdleWriter(() => {
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ filaments })); } catch { /* noop */ }
+      setHasFilaments(filaments.length > 0);
+    });
+    const nearestFilament = (nx: number, ny: number): number => {
+      let best = -1; let bestD = FILAMENT_HIT;
+      filaments.forEach((f, i) => {
+        const d = Math.hypot(f.nx - nx, f.ny - ny);
+        if (d < bestD) { bestD = d; best = i; }
+      });
+      return best;
+    };
+    const gather = { active: false, nx: 0, ny: 0, hit: -1, committed: false, amt: 0 };
+
+    // ── cached node sprite: the contact-node glow used to be a fresh
+    // createRadialGradient per filament per frame (forbidden — catastrophic
+    // on mobile). Baked once into an offscreen canvas, redrawn only when
+    // the cross-fading palette actually moves, then reused via drawImage. ──
+    const NODE_SPRITE = 96;
+    const nodeSprite = document.createElement("canvas");
+    nodeSprite.width = NODE_SPRITE;
+    nodeSprite.height = NODE_SPRITE;
+    const nodeSpriteCtx = nodeSprite.getContext("2d");
+    let lastSpritePaintAt = 0;
+    const paintNodeSprite = () => {
+      if (!nodeSpriteCtx) return;
+      const r = NODE_SPRITE / 2;
+      nodeSpriteCtx.clearRect(0, 0, NODE_SPRITE, NODE_SPRITE);
+      const g = nodeSpriteCtx.createRadialGradient(r, r, 0, r, r, r);
+      g.addColorStop(0, rgb(pal.paper, 0.9));
+      g.addColorStop(0.4, rgb(pal.electric, 0.5));
+      g.addColorStop(1, rgb(pal.electric, 0));
+      nodeSpriteCtx.fillStyle = g;
+      nodeSpriteCtx.beginPath();
+      nodeSpriteCtx.arc(r, r, r, 0, Math.PI * 2);
+      nodeSpriteCtx.fill();
+    };
+    paintNodeSprite();
+
+    // ── the vessel: the device itself is the globe's body ──
+    let tiltBendX = 0;
+    let tiltBendY = 0;
+    const detachVessel = onVessel({
+      tilt: ({ beta, gamma }) => {
+        if (reduced) return;
+        tiltBendX = clamp(gamma / 45, -1, 1);
+        tiltBendY = clamp((beta - 35) / 60, -1, 1);
+      },
+      shake: ({ intensity }) => {
+        if (reduced) return;
+        heatRef.current = clamp(heatRef.current + intensity * 0.35, 0, 1);
+        spark(cx, cy, 0.4 + intensity * 0.4);
+        try { haptics.chop(); } catch { /* noop */ }
+        try { getAudio().buzz(); } catch { /* noop */ }
+      },
+      knock: ({ intensity }) => {
+        spark(cx, cy, 0.5 + intensity * 0.4);
+        try { haptics.tap(); } catch { /* noop */ }
+        try { getAudio().thud(); } catch { /* noop */ }
+      },
+      flip: ({ faceDown: fd }) => {
+        faceDown = fd;
+        syncSleep();
+      },
+    });
+
+    // two-finger pan: an eased angle that turns the ambient ring + the
+    // kept filaments around the core.
+    const pan = { x: 0, tx: 0 };
+    // twist lens (two fingers): flips the globe's charge polarity.
+    const polarity = { v: 0, t: 0 };
+    // three-finger twist: the globe's season — a slow warm/cool drift.
+    let season = 0;
 
     // ── the room's clock + law-layer state (gesture grammar) ────────
     // Three fingers held dilate time; three fingers dragged bend every
@@ -442,6 +584,11 @@ export default function Plasma() {
     let lastGestureAt = performance.now();
     let lastContact = { x: 0, y: 0 }; // root-relative, for the discharge crack
     const holdState = { ceremony: false };
+    let twistAcc = 0;
+
+    // detail.particles scales fork count / segment density on lower tiers —
+    // set once per frame by the governor, read by every drawFilament call.
+    let detailScale = 1;
 
     // ── filament renderer ───────────────────────────────────────────
     // Draws a jagged, additively-glowing lightning path from the core to a
@@ -453,7 +600,7 @@ export default function Plasma() {
       const dx = ex - sx, dy = ey - sy;
       const len = Math.hypot(dx, dy) || 1;
       const nx = -dy / len, ny = dx / len; // unit perpendicular
-      const segs = Math.max(5, Math.min(16, Math.round(len / 26)));
+      const segs = Math.max(3, Math.min(16, Math.round((len / 26) * detailScale)));
       const amp = clamp(len * 0.13, 6, 46) * motion;
 
       const pts: Array<{ x: number; y: number }> = [];
@@ -493,7 +640,7 @@ export default function Plasma() {
       stroke(2.4 + bright * 1.4, coreCol);
 
       // a fork or two off the mid third
-      const forks = reduced ? 0 : 1 + (seed > 0.5 ? 1 : 0);
+      const forks = reduced ? 0 : Math.round((1 + (seed > 0.5 ? 1 : 0)) * detailScale);
       for (let k = 0; k < forks; k++) {
         const bi = Math.floor(segs * (0.4 + 0.18 * k + 0.1 * seed));
         const base = pts[Math.min(segs - 1, Math.max(1, bi))];
@@ -511,17 +658,13 @@ export default function Plasma() {
         arcsCtx.stroke();
       }
 
-      // contact node where the filament meets the glass / finger
+      // contact node where the filament meets the glass / finger — a cached
+      // sprite (see paintNodeSprite), never a fresh gradient per element.
       if (contact) {
         const rr = 5 + bright * 9;
-        const g = arcsCtx.createRadialGradient(ex, ey, 0, ex, ey, rr);
-        g.addColorStop(0, rgb(pal.paper, Math.min(1, 0.9 * bright)));
-        g.addColorStop(0.4, rgb(pal.electric, 0.5 * bright));
-        g.addColorStop(1, rgb(pal.electric, 0));
-        arcsCtx.fillStyle = g;
-        arcsCtx.beginPath();
-        arcsCtx.arc(ex, ey, rr, 0, Math.PI * 2);
-        arcsCtx.fill();
+        arcsCtx.globalAlpha = Math.min(1, bright);
+        arcsCtx.drawImage(nodeSprite, ex - rr, ey - rr, rr * 2, rr * 2);
+        arcsCtx.globalAlpha = 1;
       }
       arcsCtx.restore();
     };
@@ -533,6 +676,15 @@ export default function Plasma() {
     let raf = 0;
 
     const draw = (now: number) => {
+      tier = gov.beginFrame(now);
+      if (sleeping || contextLost) { raf = requestAnimationFrame(draw); return; }
+      const detail = detailForTier(tier);
+      detailScale = detail.particles;
+      // the shared node sprite is a cached bake, only repainted a few times
+      // a second as the cross-fading palette actually moves — never per
+      // filament, never per frame.
+      if (now - lastSpritePaintAt > 220) { lastSpritePaintAt = now; paintNodeSprite(); }
+
       const dt = Math.min(0.05, (now - lastFrame) / 1000);
       lastFrame = now;
       // three-finger time dilation: the globe's clock eases to ~1/4 speed
@@ -542,11 +694,24 @@ export default function Plasma() {
       const t = simT;
       const motion = reduced ? 0.28 : 1;
 
-      // the law-wind eases in, then dies back toward the vacuum's calm
+      // the law-wind eases in, then dies back toward the vacuum's calm —
+      // tilt adds a constant gravity lean on top of the hand's wind.
+      bendTX = clamp(bendTX + tiltBendX * dt * 0.6, -1.4, 1.4);
+      bendTY = clamp(bendTY + tiltBendY * dt * 0.6, -1.4, 1.4);
       bendX += (bendTX - bendX) * Math.min(1, dt * 4);
       bendY += (bendTY - bendY) * Math.min(1, dt * 4);
       bendTX *= Math.exp(-dt * 0.8);
       bendTY *= Math.exp(-dt * 0.8);
+
+      // two-finger pan eases toward its target — it turns the whole ring of
+      // ambient tendrils and kept filaments around the core, distinct from
+      // a one-finger drag (which only ever reaches the finger touching the
+      // glass). The lens (polarity) and the season drift on their own
+      // slow clocks.
+      pan.x += (pan.tx - pan.x) * Math.min(1, dt * 6);
+      polarity.v += (polarity.t - polarity.v) * Math.min(1, dt * 5);
+      if (!gather.active) gather.amt *= 0.88;
+      const panAngle = pan.x;
 
       const contacts = contactsRef.current;
       const active = contacts.size > 0;
@@ -639,6 +804,8 @@ export default function Plasma() {
         if (uni.flash) gl.uniform1f(uni.flash, flash);
         if (uni.cursor) gl.uniform2f(uni.cursor, curX, curY);
         if (uni.scrub) gl.uniform1f(uni.scrub, active ? scrub : 0);
+        if (uni.season) gl.uniform1f(uni.season, season);
+        if (uni.polarity) gl.uniform1f(uni.polarity, polarity.v);
         if (uni.candle) gl.uniform3f(uni.candle, pal.candle[0], pal.candle[1], pal.candle[2]);
         if (uni.flame) gl.uniform3f(uni.flame, pal.flameHot[0], pal.flameHot[1], pal.flameHot[2]);
         if (uni.paper) gl.uniform3f(uni.paper, pal.paper[0], pal.paper[1], pal.paper[2]);
@@ -660,10 +827,28 @@ export default function Plasma() {
       // ambient tendrils — faint, always drifting toward the rim
       const ambBright = (reduced ? 0.10 : 0.16) * (0.7 + heat * 0.6);
       for (const a of ambient) {
-        const ang = a.a + t * 0.15 * motion + Math.sin(t * 0.4 + a.seed * 6) * 0.5;
+        const ang = a.a + panAngle + t * 0.15 * motion + Math.sin(t * 0.4 + a.seed * 6) * 0.5;
         const ex = cx + Math.cos(ang) * radius * 0.94;
         const ey = cy + Math.sin(ang) * radius * 0.94;
         drawFilament(cx, cy, ex, ey, a.seed, t, ambBright, motion, false);
+      }
+
+      // kept filaments — the globe's countable material, standing on their
+      // own, turning slowly with the panned ring.
+      const cosP = Math.cos(panAngle), sinP = Math.sin(panAngle);
+      for (const f of filaments) {
+        const rx = f.nx * cosP - f.ny * sinP;
+        const ry = f.nx * sinP + f.ny * cosP;
+        const ex = cx + rx * radius * 0.93;
+        const ey = cy + ry * radius * 0.93;
+        drawFilament(cx, cy, ex, ey, f.seed, t, 0.5 + heat * 0.3, motion, true);
+      }
+      // a facet gathering under the held finger — legible from the moment
+      // the dwell tier is crossed, deepening the longer it's held.
+      if (gather.amt > 0.02) {
+        const gx = cx + gather.nx * radius * 0.93;
+        const gy = cy + gather.ny * radius * 0.93;
+        drawFilament(cx, cy, gx, gy, 0.42, t, gather.amt * 0.9, motion, true);
       }
 
       // one bright, writhing filament per finger
@@ -758,6 +943,41 @@ export default function Plasma() {
       return { x: clientX - rect.left, y: clientY - rect.top };
     };
 
+    const toDisc = (clientX: number, clientY: number) => {
+      const { x, y } = toLocal(clientX, clientY);
+      const px = x - cx, py = y - cy;
+      const d = Math.hypot(px, py) || 1;
+      const k = d > radius ? radius / d : 1;
+      const cosP = Math.cos(-pan.x), sinP = Math.sin(-pan.x);
+      const rx = (px * k) / radius, ry = (py * k) / radius;
+      // un-rotate by the current pan so the stored position is frame-stable
+      return { nx: rx * cosP - ry * sinP, ny: rx * sinP + ry * cosP };
+    };
+
+    const addFilament = (nx: number, ny: number) => {
+      const seed = ((nx * 5171 + ny * 3187 + filaments.length * 97) % 1000) / 1000;
+      filaments.push({ nx, ny, seed: Math.abs(seed) });
+      if (filaments.length > MAX_FILAMENTS) filaments.shift();
+      writer.schedule();
+      const { x, y } = toLocal(cx + nx * radius, cy + ny * radius);
+      spark(x, y, 0.6);
+      try { getAudio().spark(); } catch { /* noop */ }
+      try { haptics.ripple(0.5); } catch { /* noop */ }
+      recordTapeRef.current("kept", 0.6, "plasma/filament-planted");
+    };
+
+    const removeFilament = (idx: number) => {
+      if (idx < 0 || idx >= filaments.length) return;
+      const f = filaments[idx];
+      filaments.splice(idx, 1);
+      writer.schedule();
+      const { x, y } = toLocal(cx + f.nx * radius, cy + f.ny * radius);
+      spark(x, y, 1);
+      try { getAudio().bell(); } catch { /* noop */ }
+      try { haptics.bloom(); } catch { /* noop */ }
+      recordTapeRef.current("kept", 0.85, "plasma/filament-annihilated");
+    };
+
     // ── the contact layer — position only, no semantics ─────────────
     // The glass answers every finger with its own filament, including
     // second and third fingers the semantic engine reserves for frame
@@ -794,13 +1014,39 @@ export default function Plasma() {
 
     // ── gestures (the shared grammar — src/lib/gesture) ──────────────
     // One finger touches the plasma: tap cracks a spark, a held touch
-    // charges the core, ceremony blooms the corona. Three fingers touch
-    // the law: drag bends every arc, hold slows the globe. Pinch and
-    // pan2 stay unbound — the frame belongs to the scale manifold.
+    // charges the core, a dwell hold plants a filament, ceremony blooms
+    // the corona (or annihilates a filament held under it). Two fingers
+    // touch the map: pan2 turns the ring, twist flips the charge polarity
+    // (the lens — raises data-lens-raised so a two-finger tap can lower
+    // it, else the tap falls through to ScaleTravel's own step-back).
+    // Three fingers touch the law: drag bends every arc (weather), hold
+    // slows the globe (time dilation), twist turns the season, tap is
+    // tutti. Pinch stays unbound — the frame belongs to the manifold.
     const detachGestures = attachGestures(root, {
       tap: (e) => {
         lastGestureAt = performance.now();
-        if (e.fingers !== 1) return; // the vacuum absorbs frame/law taps
+        if (e.fingers === 3) {
+          // tutti — every filament answers at once, the globe stating itself.
+          flashRef.current = 1;
+          flashT0Ref.current = simNowMs;
+          spark(cx, cy, 0.9);
+          try { getAudio().bell(); } catch { /* noop */ }
+          try { haptics.bloom(); } catch { /* noop */ }
+          recordTapeRef.current("region", 0.7, "plasma/tutti");
+          return;
+        }
+        if (e.fingers === 2) {
+          // step back: lower the raised polarity lens first. ScaleTravel
+          // reads data-lens-raised and yields to us when this is set.
+          if (polarity.t > 0.5) {
+            polarity.t = 0;
+            root.removeAttribute("data-lens-raised");
+            try { haptics.tap(); } catch { /* noop */ }
+            try { getAudio().playNote(50, 120); } catch { /* noop */ }
+          }
+          return;
+        }
+        if (e.fingers !== 1) return;
         const { x, y } = toLocal(e.x, e.y);
         // tap intensity is the crack: bloom, sound and haptic ride the
         // same 0..1 from core.
@@ -808,6 +1054,29 @@ export default function Plasma() {
         try { getAudio().spark(); } catch { /* noop */ }
         try { haptics.chop(); } catch { /* noop */ }
         recordTapeRef.current("sigil", 0.5 + e.intensity * 0.3, "plasma/spark");
+      },
+      pan2: (e) => {
+        lastGestureAt = performance.now();
+        pan.tx += e.dx * 0.004;
+      },
+      twist: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          // three fingers turn the season: a slow warm/cool drift.
+          if (e.phase === "move") season += e.angle * 0.7;
+          return;
+        }
+        if (e.phase === "start") twistAcc = 0;
+        if (e.phase === "move") twistAcc += e.angle;
+        if (e.phase === "end" && Math.abs(twistAcc) > 0.9) {
+          polarity.t = polarity.t > 0.5 ? 0 : 1;
+          if (polarity.t > 0.5) root.setAttribute("data-lens-raised", "1");
+          else root.removeAttribute("data-lens-raised");
+          spark(cx, cy, 0.5);
+          try { haptics.lens(); } catch { /* noop */ }
+          try { getAudio().chime(); } catch { /* noop */ }
+          recordTapeRef.current("sigil", 0.6, "plasma/polarity");
+        }
       },
       drag: (e) => {
         lastGestureAt = performance.now();
@@ -875,6 +1144,10 @@ export default function Plasma() {
         if (e.fingers !== 1) return;
         if (e.phase === "enter") {
           holdState.ceremony = false;
+          const disc = toDisc(e.x, e.y);
+          gather.hit = nearestFilament(disc.nx, disc.ny);
+          gather.nx = disc.nx; gather.ny = disc.ny;
+          gather.active = true; gather.committed = false; gather.amt = 0;
           // the touch lands (a still hold never becomes a drag)
           const { x, y } = toLocal(e.x, e.y);
           spark(x, y, 0.4);
@@ -884,10 +1157,30 @@ export default function Plasma() {
           return;
         }
         if (e.phase === "release") {
+          gather.active = false;
           if (!holdState.ceremony && heatPeakRef.current <= 0.55) {
             try { getAudio().thud(); } catch { /* noop */ }
           }
           return;
+        }
+        if (gather.hit >= 0) {
+          // ceremony hold on an existing filament: its solemn act is
+          // annihilation — the touch-reachable delete.
+          if (e.tier >= 3 && !gather.committed) {
+            gather.committed = true;
+            gather.active = false;
+            removeFilament(gather.hit);
+          }
+          return;
+        }
+        // dwell on empty glass plants a filament — visibly gathering the
+        // moment the dwell tier is crossed, deepening the longer it's held.
+        if (e.tier >= 2) {
+          gather.amt = Math.min(1, gather.amt + 0.03);
+          if (!gather.committed) {
+            gather.committed = true;
+            addFilament(gather.nx, gather.ny);
+          }
         }
         // ceremony tier — the room's one solemn act: the corona. The whole
         // globe reaches out in every direction at once and blooms.
@@ -925,9 +1218,20 @@ export default function Plasma() {
       },
     }, { wheelZoom: false, manageStyle: false });
 
+    letGoRef.current = () => {
+      filaments = [];
+      writer.flush();
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ filaments: [] })); } catch { /* noop */ }
+      setHasFilaments(false);
+    };
+
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
+      unvis();
+      ungal();
+      detachVessel();
+      writer.flush();
       window.removeEventListener("resize", resize);
       if (typeof mq.removeEventListener === "function") mq.removeEventListener("change", onMq);
       detachGestures();
@@ -936,6 +1240,8 @@ export default function Plasma() {
       root.removeEventListener("pointerup", onContactUp);
       root.removeEventListener("pointercancel", onContactUp);
       if (gl) {
+        orbCanvas.removeEventListener("webglcontextlost", onLost);
+        orbCanvas.removeEventListener("webglcontextrestored", onRestored);
         try {
           if (buf) gl.deleteBuffer(buf);
           if (prog) gl.deleteProgram(prog);
@@ -945,6 +1251,13 @@ export default function Plasma() {
       }
     };
   }, [getAudio]);
+
+  const letGo = () => {
+    letGoRef.current();
+    try { getFieldAudio().thud(); } catch { /* noop */ }
+    try { haptics.roll(); } catch { /* noop */ }
+    setHasFilaments(false);
+  };
 
   const activeTone = rgb(ORB_PALETTES[orbPalette].electric, 1);
 
@@ -969,6 +1282,7 @@ export default function Plasma() {
         role="img"
         aria-label="A touch-responsive plasma globe; drag to draw electric filaments to your finger"
       />
+      <LetGo label="let the filaments go" onLetGo={letGo} visible={hasFilaments} />
 
       <div className="plasma-title" aria-hidden="true">
         <span>plasma / ionized globe</span>

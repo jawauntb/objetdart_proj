@@ -149,16 +149,26 @@ assert.equal(byId.get("olympus").parent, "atmosphere", "the peak rises into the 
 assert.equal(byId.get("atmosphere").parent, "atlas", "the air column hangs on the map");
 assert.equal(byId.get("birds").parent, "coast", "the flock carries out to the shore");
 assert.equal(byId.get("beyond").parent, "manifold", "beyond branches off the fold");
-// The unbuilt sky neighbourhoods hang where their outward doors open: the
-// planets under the system, the system under the vault of stars.
-assert.equal(byId.get("solar").parent, "stars", "the system is one star among the vault");
-assert.equal(byId.get("planets").parent, "solar", "the neighbourhood joins the system");
+// The sky neighbourhoods are trunk now, not branches: removing the ground's
+// `up = atlas` override let the trunk climb the metric axis unbroken —
+// flowers → earth → planets → solar → stars → galaxy → space → manifold.
+// They used to hang off the vault because the trunk leapt from the ground to
+// the map and rejoined the sky above them. The bug this catches is that
+// inversion coming back: reinstate `earth.up = "atlas"` and the trunk skips
+// two rungs, these three lines fail, and the map climbs back onto the spine.
+assert.equal(byId.get("solar").onTrunk, true, "the system is a rung of the trunk");
+assert.equal(byId.get("planets").onTrunk, true, "the neighbourhood is a rung of the trunk");
 assert.equal(byId.get("galaxy").onTrunk, true, "the galaxy is a rung of the trunk now");
-// The whole sea branch is one subtree, each step exactly one deeper.
-assert.equal(byId.get("atmosphere").depth, 1, "the air hangs one step off the trunk");
-assert.equal(byId.get("olympus").depth, 2, "the peak hangs under the air");
-assert.equal(byId.get("coast").depth, 3, "the shore hangs under the peak");
-assert.equal(byId.get("drop").depth, 4, "the drop hangs under the shore");
+assert.equal(byId.get("earth").onTrunk, true, "the ground is a rung, not a fork");
+// The map is the branch instead: a chart of a region of the ground, hanging
+// where its own outward door opens — the trunk passage up to the vault.
+assert.equal(byId.get("atlas").onTrunk, false, "the map hangs off the trunk");
+assert.equal(byId.get("atlas").parent, "stars", "the map recedes into the sky");
+// The whole sea branch is one subtree under it, each step exactly one deeper.
+assert.equal(byId.get("atmosphere").depth, 2, "the air hangs under the map");
+assert.equal(byId.get("olympus").depth, 3, "the peak hangs under the air");
+assert.equal(byId.get("coast").depth, 4, "the shore hangs under the peak");
+assert.equal(byId.get("drop").depth, 5, "the drop hangs under the shore");
 
 // — the derivation is a pure function of the graph: move a door, the tree moves —
 const stubBands = [

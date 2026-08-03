@@ -16,6 +16,15 @@
  *
  * Renders nothing until the hand is at a wall: then a vignette deepens with
  * edge pressure and the neighbor's name surfaces. No buttons, no chrome.
+ *
+ * Where a wall forks (the ground opens onto the garden, the strata, the
+ * shore and the peak), *where on the frame the pinch sits* chooses which
+ * door — lib/fork-regions.ts holds that law, `declareForkRegions` below
+ * lets a room replace the default geography with its own, and the vignette
+ * opens toward the offered door so the choice is felt before it commits.
+ * A centred pinch points at nothing and keeps the press-release-press
+ * carousel, which is still the whole story for keyboards and trackpads.
+ *
  * See lib/scale.ts for the physics and docs/gesture-grammar.md for the verb.
  */
 
@@ -48,6 +57,12 @@ import {
   type TravelDir,
   type TravelDoor,
 } from "@/lib/scale";
+import {
+  fanColumnCenter,
+  fanRegions,
+  resolveForkByPoint,
+  type ForkRegion,
+} from "@/lib/fork-regions";
 import { detent as hapticDetent, crossing as hapticCrossing, tap as hapticTap } from "@/lib/haptics";
 import { playTravelPassage } from "@/components/TravelPassage";
 
@@ -126,25 +141,111 @@ function doorsFor(route: string, from: ScaleBandId, dir: TravelDir): TravelDoor[
   }));
 }
 
-/** The door currently on offer toward `towardMetric` from `from`. */
+/**
+ * A wall is asked for its doors on every frame of a press — and answering
+ * costs a sessionStorage read and a JSON parse. The offer cannot change
+ * under a live press (arrival memory is written for the band being entered,
+ * so this room's own memory is fixed for the life of the mount), so one
+ * entry of cache per (route, band, direction) is enough to keep the hot
+ * path free of parsing and allocation.
+ */
+let doorCache: {
+  key: string;
+  doors: TravelDoor[];
+  routes: string[];
+  /** The default fan over those doors — built once, not once per frame. */
+  fan: ForkRegion[];
+} | null = null;
+
+function cachedWall(route: string, from: ScaleBandId, dir: TravelDir) {
+  const key = `${route}|${from}|${dir}`;
+  if (doorCache?.key !== key) {
+    const doors = doorsFor(route, from, dir);
+    const routes = doors.map((d) => d.route);
+    doorCache = { key, doors, routes, fan: fanRegions(routes) };
+  }
+  return doorCache;
+}
+
+// ——— Where the pinch happens chooses the door ————————————————————
+//
+// The press-release-press cycle above is a blind carousel: the hand cannot
+// see which door it is taking, it just presses again until the right name
+// surfaces. lib/fork-regions.ts holds the law that fixes that — regions of
+// the frame, each claiming a door, resolved by the pinch centroid. Every
+// fork wall gets `fanRegions` by default (the doors laid west→east across
+// the frame with a neutral disc in the middle); a room that knows its own
+// geography — the fog line, the ridge silhouette — replaces that default
+// through `declareForkRegions`. A centred pinch, or a point no region
+// claims, or a claim the travel graph does not offer, all answer null and
+// the cycle keeps the wall exactly as before.
+
+/** A pinch centroid in the room's frame: nx, ny ∈ [0,1], ny = 0 at the top. */
+type FramePoint = { nx: number; ny: number };
+
+const declaredForkRegions = new Map<string, readonly ForkRegion[]>();
+
+function forkKey(route: string, dir: TravelDir): string {
+  return `${route}|${dir}`;
+}
+
+/**
+ * A room declares the geography of one of its fork walls: the doors are
+ * named exactly as the travel graph names them here — by ROUTE, so
+ * `region("/coast", …)`, `horizonSplit(fogNy, "/mountain", "/coast")`.
+ * Returns the disposer; call it on unmount. Rooms may re-declare per frame
+ * (silhouetteSplit copies its samples, so a wall already being pressed
+ * cannot be redrawn under the hand).
+ */
+export function declareForkRegions(
+  route: string,
+  dir: TravelDir,
+  regions: readonly ForkRegion[] | null,
+): () => void {
+  const key = forkKey(route, dir);
+  if (regions && regions.length > 0) declaredForkRegions.set(key, regions);
+  else declaredForkRegions.delete(key);
+  return () => {
+    declaredForkRegions.delete(key);
+  };
+}
+
+/** The door on offer toward `towardMetric`, plus where it sits on the frame. */
+type Offered = { door: TravelDoor; idx: number; count: number };
+
 function offeredDoor(
   route: string,
   from: ScaleBandId,
   towardMetric: ScaleBandId,
   offer: WallOffer,
-): TravelDoor | null {
-  const options = doorsFor(route, from, dirToward(from, towardMetric));
+  point: FramePoint | null,
+): Offered | null {
+  const dir = dirToward(from, towardMetric);
+  const wall = cachedWall(route, from, dir);
+  const options = wall.doors;
   if (options.length === 0) return null;
-  return options[offer.idx % options.length];
+  let idx = offer.idx % options.length;
+  if (options.length > 1 && point) {
+    const regions = declaredForkRegions.get(forkKey(route, dir)) ?? wall.fan;
+    const picked = resolveForkByPoint(regions, point.nx, point.ny, wall.routes);
+    if (picked !== null) idx = wall.routes.indexOf(picked);
+  }
+  return { door: options[idx], idx, count: options.length };
 }
 
 export type EdgeUI = {
   pressure: number;
   towardLabel: string | null;
   crossing: boolean;
+  /**
+   * Where on the frame the offered door lies, 0..1 west→east — the vignette
+   * opens toward it so the choice is felt before it commits. Null (or
+   * absent) is the centred, undirected wall.
+   */
+  towardX?: number | null;
 };
 
-const IDLE_UI: EdgeUI = { pressure: 0, towardLabel: null, crossing: false };
+const IDLE_UI: EdgeUI = { pressure: 0, towardLabel: null, crossing: false, towardX: null };
 
 /**
  * Two-finger tap = step back (gesture grammar §5): if the room has a lens
@@ -164,8 +265,7 @@ function roomLensRaised(): boolean {
 function nearestNeighborLabel(route: string, s: number): string | null {
   const band = bandAt(s);
   const nearUpper = band.sMax - s < s - band.sMin;
-  const doors = doorsFor(route, band.id, nearUpper ? 1 : -1);
-  return doors[0]?.label ?? null;
+  return cachedWall(route, band.id, nearUpper ? 1 : -1).doors[0]?.label ?? null;
 }
 
 /**
@@ -199,9 +299,18 @@ function executeTravel(
   return { pressure: 1, towardLabel: door.label, crossing: true };
 }
 
-/** The shared wall presentation: edge vignette + serif whisper + ink fade. */
+/**
+ * The shared wall presentation: edge vignette + serif whisper + ink fade —
+ * and, at a fork, the side of the frame the offered door lies on answering
+ * under the fingers. The vignette's eye slides to that column and a warm
+ * bloom gathers there as the pressure builds, so *which* door this press
+ * takes is legible physically, before it commits, with no menu and no label
+ * beyond the whisper the wall always had.
+ */
 export function ScaleTravelOverlay({ ui }: { ui: EdgeUI }) {
   if (ui.pressure <= 0 && !ui.crossing) return null;
+
+  const fx = ui.towardX == null ? 50 : Math.max(0, Math.min(1, ui.towardX)) * 100;
 
   return (
     <div
@@ -213,12 +322,23 @@ export function ScaleTravelOverlay({ ui }: { ui: EdgeUI }) {
         zIndex: 60,
         background: ui.crossing
           ? "rgba(9, 11, 14, 0.96)"
-          : `radial-gradient(ellipse at center, transparent 52%, rgba(9, 11, 14, ${
+          : `radial-gradient(ellipse at ${fx.toFixed(1)}% 50%, transparent 52%, rgba(9, 11, 14, ${
               0.55 * ui.pressure
             }) 100%)`,
         transition: ui.crossing ? "background 360ms ease-in" : "none",
       }}
     >
+      {ui.towardX != null && !ui.crossing && (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            background: `radial-gradient(circle at ${fx.toFixed(1)}% 50%, rgba(255, 236, 200, ${(
+              0.17 * ui.pressure
+            ).toFixed(3)}) 0%, rgba(255, 236, 200, 0) 44%)`,
+          }}
+        />
+      )}
       {ui.towardLabel && (
         <div
           style={{
@@ -297,16 +417,19 @@ export function useBandEdgeTravel(
           if (state.pressing !== 0) advanceOfferOnDetent(r.offer, state.pressing, now);
         }
         if (e.type === "edge") {
-          const door = offeredDoor(route, bandAt(state.s).id, e.toward, r.offer);
+          // The adapter path carries no pinch centroid (the room owns the
+          // gesture and reports only zoom), so its forks keep the cycle.
+          const off = offeredDoor(route, bandAt(state.s).id, e.toward, r.offer, null);
           // No built door on offer: hold forever, promise nothing.
-          toward = door ? door.label : null;
-          if (!door && r.state) {
+          toward = off ? off.door.label : null;
+          if (!off && r.state) {
             r.state = { ...r.state, intentMs: Math.min(r.state.intentMs, 200) };
           }
         }
         if (e.type === "crossing") {
           const dir = dirToward(e.from, e.to);
-          const dest = offeredDoor(route, e.from, e.to, r.offer);
+          const off = offeredDoor(route, e.from, e.to, r.offer, null);
+          const dest = off?.door;
           if (dest && dest.route !== route) {
             recordEnteredFrom(dest.band.id, doorMemoryFor(route) ?? e.from);
             r.leaving = true;
@@ -402,6 +525,10 @@ export default function ScaleTravel({ route }: { route: string }) {
   const rafRef = useRef(0);
   const leavingRef = useRef(false);
   const offerRef = useRef<WallOffer>(freshOffer());
+  // Where the live pinch is on the frame, and which door that last chose —
+  // a change in the door is a felt event, not just a redrawn vignette.
+  const pointRef = useRef<FramePoint | null>(null);
+  const offeredRouteRef = useRef<string | null>(null);
 
   useEffect(() => {
     const entry = entryScaleFor(route);
@@ -422,6 +549,9 @@ export default function ScaleTravel({ route }: { route: string }) {
 
     let lastT = performance.now();
     let uiPressure = -1;
+    // The offered door's side of the frame persists while the wall fades, so
+    // letting go dims the bloom instead of snapping it back to centre.
+    let lastTowardX: number | null = null;
 
     const loop = (now: number) => {
       const st = stateRef.current;
@@ -434,22 +564,38 @@ export default function ScaleTravel({ route }: { route: string }) {
 
       noteOfferPressing(offerRef.current, state.pressing, now);
       let toward: string | null = null;
+      let towardX: number | null = null;
       for (const e of events) {
         if (e.type === "detent") {
           hapticDetent();
           if (state.pressing !== 0) advanceOfferOnDetent(offerRef.current, state.pressing, now);
         }
         if (e.type === "edge") {
-          const door = offeredDoor(route, bandAt(state.s).id, e.toward, offerRef.current);
+          const off = offeredDoor(
+            route,
+            bandAt(state.s).id,
+            e.toward,
+            offerRef.current,
+            pointRef.current,
+          );
           // No built door on offer: hold forever, promise nothing.
-          toward = door ? door.label : null;
-          if (!door) {
+          toward = off ? off.door.label : null;
+          towardX = off && off.count > 1 ? fanColumnCenter(off.idx, off.count) : null;
+          lastTowardX = towardX;
+          // The door answering under the fingers changed: let the hand feel
+          // it, so sliding across the wall reads as choosing, not drifting.
+          const offeredRoute = off ? off.door.route : null;
+          if (offeredRoute !== offeredRouteRef.current) {
+            if (offeredRouteRef.current !== null && offeredRoute !== null) hapticTap();
+            offeredRouteRef.current = offeredRoute;
+          }
+          if (!off) {
             stateRef.current = { ...state, intentMs: Math.min(state.intentMs, 200) };
           }
         }
         if (e.type === "crossing") {
           const dir = dirToward(e.from, e.to);
-          const dest = offeredDoor(route, e.from, e.to, offerRef.current);
+          const dest = offeredDoor(route, e.from, e.to, offerRef.current, pointRef.current)?.door;
           if (dest && dest.route !== route) {
             recordEnteredFrom(dest.band.id, doorMemoryFor(route) ?? e.from);
             leavingRef.current = true;
@@ -466,8 +612,10 @@ export default function ScaleTravel({ route }: { route: string }) {
         // Which wall is closer decides the whispered destination while idle.
         if (toward === null && edgePressure > 0) {
           toward = nearestNeighborLabel(route, state.s);
+          towardX = lastTowardX;
         }
-        setUi({ pressure: edgePressure, towardLabel: toward, crossing: false });
+        if (edgePressure === 0) lastTowardX = null;
+        setUi({ pressure: edgePressure, towardLabel: toward, crossing: false, towardX });
       }
 
       const resting =
@@ -489,10 +637,16 @@ export default function ScaleTravel({ route }: { route: string }) {
         pinch: (e) => {
           if (e.phase === "end") {
             inputRef.current = { zoomVel: 0, active: false };
+            pointRef.current = null;
+            offeredRouteRef.current = null;
           } else {
             // Spreading fingers = zoom in = toward smaller scales (s falls).
             inputRef.current = { zoomVel: -e.velocity, active: true };
             lastPinchAtRef.current = performance.now();
+            // Where the grip sits on the frame chooses the door at a fork.
+            const w = window.innerWidth || 1;
+            const h = window.innerHeight || 1;
+            pointRef.current = { nx: e.cx / w, ny: e.cy / h };
           }
           wake();
         },

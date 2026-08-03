@@ -1,6 +1,11 @@
 /**
  * coast — pure beach helpers for /coast.
- * Import-free: foam lace, wetness, tide line from small vectors.
+ *
+ * Import-free: the shore's whole state vector is a handful of numbers (time,
+ * moon, wind, season) and every function here is a deterministic map out of
+ * it. The section through the shore — sky, sea, wet sand, dry sand, dune —
+ * lives here too, because a tap has to be *read* before it can be answered,
+ * and both the renderer and the gesture table must read it the same way.
  */
 
 export function mulberry32(seed: number): () => number {
@@ -23,52 +28,344 @@ export function mix32(...parts: number[]): number {
   return h >>> 0;
 }
 
+const TAU = Math.PI * 2;
+
+function clamp01(v: number): number {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
 /** Tide line as a fraction of height (0 top, 1 bottom). */
 export function tideLine(tSec: number, moon: number): number {
   const swell = Math.sin(tSec * 0.11) * 0.04 + Math.sin(tSec * 0.03 + 1.7) * 0.03;
   return 0.58 + moon * 0.1 + swell;
 }
 
-/** Wetness 0..1 below the tide line with a soft capillary fringe. */
-export function sandWetness(ny: number, tide: number): number {
-  if (ny < tide - 0.08) return 0;
-  if (ny > tide + 0.02) return 1;
-  return Math.max(0, Math.min(1, (ny - (tide - 0.08)) / 0.1));
+// ——— the section through the shore ———
+//
+// Five materials stacked down the screen. The bands are defined relative to
+// the moving tide line so the shore stays a shore at every tide: the sea
+// band hangs above the waterline, the soaked sand hangs below it, and the
+// dune is pushed down whenever a spring tide would otherwise swallow the
+// dry beach (DRY_MIN guarantees the dry band never collapses to nothing).
+
+/** How far above the waterline the visible sea band reaches (the horizon). */
+export const SEA_BAND = 0.1;
+/** How far below the waterline the sand stays soaked. */
+export const WET_BAND = 0.08;
+/** Where the dune crest sits at an ordinary tide. */
+export const DUNE_BASE = 0.78;
+/** The dry beach is never allowed to be thinner than this. */
+export const DRY_MIN = 0.16;
+
+export const ZONE_ORDER = ["sky", "sea", "wet", "dry", "dune"] as const;
+export type CoastZone = (typeof ZONE_ORDER)[number];
+
+/** 0..4, the order the zones stack down the screen. */
+export function zoneIndex(zone: CoastZone): number {
+  return ZONE_ORDER.indexOf(zone);
 }
 
-export type FoamSpeck = { x: number; y: number; life: number; seed: number };
+/**
+ * The dune crest at column `nx`, as a fraction of height. Shaped by two
+ * sines so the ridge is not a ruler, and floored so a high tide pushes the
+ * dune down the screen instead of drowning the dry beach.
+ */
+export function duneLine(nx: number, tide: number): number {
+  const shape = Math.sin(nx * 4 + 0.4) * 0.04 + Math.sin(nx * 11) * 0.015;
+  return Math.max(DUNE_BASE + shape, tide + DRY_MIN);
+}
 
-export function spawnFoam(seed: number, x: number, y: number, n: number): FoamSpeck[] {
-  const rng = mulberry32(seed >>> 0 || 1);
+/**
+ * Which material a point lands on. This is the reading every gesture on
+ * /coast starts from — pressing into wet sand is not pressing into a dune.
+ */
+export function zoneAt(nx: number, ny: number, tide: number): CoastZone {
+  if (ny < tide - SEA_BAND) return "sky";
+  if (ny < tide) return "sea";
+  if (ny < tide + WET_BAND) return "wet";
+  return ny < duneLine(nx, tide) ? "dry" : "dune";
+}
+
+/** 0..1 position inside the zone the point falls in (0 = its seaward edge). */
+export function zoneDepth(nx: number, ny: number, tide: number): number {
+  const zone = zoneAt(nx, ny, tide);
+  switch (zone) {
+    case "sky":
+      return clamp01(ny / Math.max(1e-4, tide - SEA_BAND));
+    case "sea":
+      return clamp01((ny - (tide - SEA_BAND)) / SEA_BAND);
+    case "wet":
+      return clamp01((ny - tide) / WET_BAND);
+    case "dry": {
+      const top = tide + WET_BAND;
+      return clamp01((ny - top) / Math.max(1e-4, duneLine(nx, tide) - top));
+    }
+    default: {
+      const top = duneLine(nx, tide);
+      return clamp01((ny - top) / Math.max(1e-4, 1 - top));
+    }
+  }
+}
+
+/**
+ * How wet the sand is at screen-fraction `ny`. The waterline sits at `tide`;
+ * sand just below it is saturated by the swash and dries as the beach climbs
+ * toward the dunes. Above the waterline there is no sand to be wet — 0.
+ * `swash` (0..1, the surf breath) carries the soak farther up the beach, so
+ * the sheen visibly follows the sets rather than sitting still.
+ */
+export function sandWetness(ny: number, tide: number, swash = 0): number {
+  if (ny <= tide) return 0;
+  const reach = 0.05 + clamp01(swash) * 0.05;
+  const d = ny - tide;
+  const plateau = reach * 0.35;
+  if (d <= plateau) return 1;
+  return Math.max(0, 1 - (d - plateau) / (reach * 1.6));
+}
+
+// ——— the shore's voice ———
+//
+// Five materials, five answers. The registers are deliberately disjoint:
+// the sky is the top of the room and the dune is its floor, so a hand can
+// hear where it landed without looking. Timbre carries as much of the
+// difference as pitch — a dune rustles, dry sand thuds, wet sand plops,
+// the sea slaps, the sky rings.
+
+export type ZoneWave = "sine" | "triangle" | "square" | "sawtooth";
+
+export type ZoneVoice = {
+  /** midi note at the centre of the zone's register */
+  midi: number;
+  wave: ZoneWave;
+  /** seconds the answer lasts */
+  dur: number;
+  /** semitones the tone travels over its life — the shape of the answer */
+  glide: number;
+  toneGain: number;
+  /** band-passed noise: the material's grain */
+  noiseHz: number;
+  noiseQ: number;
+  noiseGain: number;
+  /** lowpass on the tone — how covered the answer sounds */
+  cutoffHz: number;
+};
+
+type ZoneTimbre = Omit<ZoneVoice, "midi"> & { base: number; span: number };
+
+const ZONE_TIMBRE: Record<CoastZone, ZoneTimbre> = {
+  // air: a thin ring that rises and hangs
+  sky: {
+    base: 79, span: 3,
+    wave: "sine", dur: 1.5, glide: 5,
+    toneGain: 0.034, noiseHz: 5200, noiseQ: 0.7, noiseGain: 0.009, cutoffHz: 7000,
+  },
+  // water: a slap that falls away, thick with low broadband hiss
+  sea: {
+    base: 54, span: 3,
+    wave: "sine", dur: 0.9, glide: -7,
+    toneGain: 0.052, noiseHz: 520, noiseQ: 0.6, noiseGain: 0.075, cutoffHz: 1400,
+  },
+  // soaked sand: a hollow plop, water squeezed out of the grains
+  wet: {
+    base: 66, span: 3,
+    wave: "triangle", dur: 0.45, glide: -2,
+    toneGain: 0.046, noiseHz: 1500, noiseQ: 3.2, noiseGain: 0.036, cutoffHz: 2600,
+  },
+  // dry sand: a short dull thud, almost no ring at all
+  dry: {
+    base: 43, span: 3,
+    wave: "square", dur: 0.22, glide: -4,
+    toneGain: 0.036, noiseHz: 300, noiseQ: 0.5, noiseGain: 0.05, cutoffHz: 420,
+  },
+  // marram: a low pedal under a long dry rustle
+  dune: {
+    base: 33, span: 3,
+    wave: "sawtooth", dur: 1.1, glide: 1,
+    toneGain: 0.022, noiseHz: 3400, noiseQ: 1.1, noiseGain: 0.062, cutoffHz: 300,
+  },
+};
+
+/**
+ * The note a zone answers with. `depth` (0..1 inside the zone) tilts the
+ * pitch within the zone's own register — never out of it — and `intensity`
+ * (0..1, how hard the hand meant it) opens the gains and lengthens the tail.
+ * Registers of different zones never overlap, so pitch alone identifies the
+ * material and timbre confirms it.
+ */
+export function zoneVoice(zone: CoastZone, depth: number, intensity: number): ZoneVoice {
+  const T = ZONE_TIMBRE[zone];
+  const d = clamp01(depth);
+  const i = clamp01(intensity);
+  return {
+    midi: T.base + (0.5 - d) * 2 * T.span + (i - 0.5) * 2,
+    wave: T.wave,
+    dur: T.dur * (0.7 + i * 0.7),
+    glide: T.glide * (0.6 + i * 0.8),
+    toneGain: T.toneGain * (0.45 + i * 0.95),
+    noiseHz: T.noiseHz * (0.85 + i * 0.35),
+    noiseQ: T.noiseQ,
+    noiseGain: T.noiseGain * (0.4 + i * 1.0),
+    cutoffHz: T.cutoffHz * (0.8 + i * 0.5),
+  };
+}
+
+// ——— aliveness ———
+
+/**
+ * The breath of the surf, 0..1 — the envelope the idle room runs on.
+ *
+ * Two swell components close in period beat against each other and a third,
+ * far slower one groups them, so waves arrive in *sets*: the shore is never
+ * metronomic and never still. `period` is the dominant swell period in
+ * seconds.
+ */
+export function surfBreath(tSec: number, period = 9): number {
+  const p = Math.max(0.5, period);
+  const a = Math.sin((tSec / p) * TAU);
+  const b = Math.sin((tSec / (p * 1.31)) * TAU + 0.7);
+  const sets = Math.sin((tSec / (p * 4.7)) * TAU + 2.1);
+  const v = (a * 0.55 + b * 0.45) * (0.62 + 0.38 * (0.5 + 0.5 * sets));
+  return clamp01(0.5 + v * 0.5);
+}
+
+/**
+ * The shore's slow cycle. Real beaches have two: the summer profile builds a
+ * berm and the sand sits high and wide; the winter storm profile drags it
+ * offshore into bars and the swell that took it is the biggest of the year.
+ * Berm and swell are therefore in antiphase, by construction, and the whole
+ * profile wraps — season is an angle, not a counter.
+ */
+export type SeasonProfile = {
+  /** -1 storm beach (sand offshore) … +1 summer berm (sand piled high) */
+  berm: number;
+  /** 0..1 swell energy */
+  swell: number;
+  /** 0..1 how green the marram is */
+  grass: number;
+  /** 0..1 light warmth */
+  warmth: number;
+  /** 0..1 how much foam the surf carries */
+  foam: number;
+};
+
+export function seasonProfile(season: number): SeasonProfile {
+  const s = ((season % 1) + 1) % 1;
+  const a = s * TAU;
+  const berm = Math.cos(a);
+  const swell = clamp01(0.5 - berm * 0.35);
+  return {
+    berm,
+    swell,
+    grass: clamp01(0.5 + 0.5 * Math.cos(a - 0.6)),
+    warmth: clamp01(0.5 + 0.5 * Math.cos(a)),
+    foam: clamp01(0.3 + swell * 0.6),
+  };
+}
+
+// ——— foam, grit, and blown grass ———
+//
+// One particle pool for everything the shore throws into the air. `tint`
+// picks which material it came off (0 water, 1 sand, 2 grass) so a dry-sand
+// puff never reads as sea foam. Ballistic: specks carry velocity and fall,
+// because a kicked handful of sand arcs and a burst of spray does not.
+
+export type FoamSpeck = {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  life: number;
+  /** life lost per second */
+  decay: number;
+  /** px radius at full life */
+  size: number;
+  /** 0 water, 1 sand, 2 grass */
+  tint: number;
+  seed: number;
+};
+
+export type FoamOpts = {
+  /** normalized radius the burst is scattered over */
+  spread?: number;
+  /** initial upward speed, normalized units/sec */
+  rise?: number;
+  /** outward speed, normalized units/sec */
+  drift?: number;
+  /** px radius at full life */
+  size?: number;
+  /** life lost per second */
+  decay?: number;
+  tint?: number;
+};
+
+export function spawnFoam(
+  seed: number,
+  x: number,
+  y: number,
+  n: number,
+  opts: FoamOpts = {},
+): FoamSpeck[] {
+  const spread = opts.spread ?? 0.05;
+  const rise = opts.rise ?? 0.05;
+  const drift = opts.drift ?? 0.03;
+  const size = opts.size ?? 3.4;
+  const decay = opts.decay ?? 0.55;
+  const tint = opts.tint ?? 0;
+  const rng = mulberry32((seed >>> 0) || 1);
   const out: FoamSpeck[] = [];
   for (let i = 0; i < n; i++) {
+    const a = rng() * TAU;
+    const r = Math.sqrt(rng());
     out.push({
-      x: x + (rng() - 0.5) * 0.08,
-      y: y + (rng() - 0.5) * 0.02,
-      life: 0.5 + rng() * 0.5,
+      x: x + Math.cos(a) * r * spread,
+      y: y + Math.sin(a) * r * spread * 0.45,
+      vx: Math.cos(a) * r * drift,
+      vy: -rise * (0.4 + rng() * 0.8),
+      life: 0.55 + rng() * 0.45,
+      decay: decay * (0.7 + rng() * 0.6),
+      size: size * (0.55 + rng() * 0.9),
+      tint,
       seed: mix32(seed, i, Math.round(x * 1000)),
     });
   }
   return out;
 }
 
-export function stepFoam(specks: FoamSpeck[], dt: number, wind: number): FoamSpeck[] {
-  const out: FoamSpeck[] = [];
-  for (const s of specks) {
-    const life = s.life - dt * (0.35 + Math.abs(wind) * 0.2);
+/**
+ * Advance the pool one step, **in place** — the RAF loop must not allocate.
+ * Specks are ballistic (gravity pulls them back down) and the wind carries
+ * them; dead ones are compacted out with the survivors' order preserved, and
+ * the same array is returned truncated.
+ */
+export function stepFoam(
+  specks: FoamSpeck[],
+  dt: number,
+  wind: number,
+  gravity = 0.1,
+): FoamSpeck[] {
+  let w = 0;
+  for (let i = 0; i < specks.length; i++) {
+    const s = specks[i];
+    const life = s.life - dt * (s.decay + Math.abs(wind) * 0.25);
     if (life <= 0) continue;
-    out.push({
-      ...s,
-      x: s.x + wind * dt * 0.04,
-      y: s.y - dt * 0.01,
-      life,
-    });
+    s.life = life;
+    s.vy += gravity * dt;
+    s.vx += wind * dt * 0.06;
+    s.x += s.vx * dt;
+    s.y += s.vy * dt;
+    specks[w++] = s;
   }
-  return out;
+  specks.length = w;
+  return specks;
 }
 
-/** Cap foam population — oldest (lowest life) retired first when over cap. */
+/**
+ * Cap the pool in place — the freshest (highest life) specks survive, the
+ * ones already dissolving are the ones the shore lets go of first.
+ */
 export function capFoam(specks: FoamSpeck[], max: number): FoamSpeck[] {
   if (specks.length <= max) return specks;
-  return specks.slice().sort((a, b) => b.life - a.life).slice(0, max);
+  specks.sort((a, b) => b.life - a.life);
+  specks.length = Math.max(0, max);
+  return specks;
 }

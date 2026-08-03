@@ -48,6 +48,18 @@ stars) is fully contained in this walk as plain pinch travel — just visited
 in metric order — so no door contortion was needed above the earth. There is
 **no metric inversion anywhere on the upper axis**.
 
+That last sentence was aspirational when this document was written: one
+inversion survived the re-cut, `earth.up = "atlas"`, sending a hand that
+pinched *out* of the world to a chart of part of it (atlas 5.5–6.5 against
+earth 6.5–9). It is gone. The ground now takes **no `up` override** and
+climbs the metric axis through `planets` and `solar` into the stars, and the
+atlas — a chart of a region of the ground, metrically smaller than it —
+became a door **in** (`earth.extraDown`) and the earth's hearth **peer** in
+`lib/peers.ts`, since a map is the same ground at another level of
+description. The `atlas → stars` trunk passage is untouched. The sentence is
+now true, and `test-scale.mjs` walks every band from `olympus` to `space`
+asserting each upward door lands on a band no smaller than the one it left.
+
 What the re-cut costs: nothing in room code. `scaleForRoomZoom` normalises a
 room's internal camera across whatever span its band has, so `/stars`, `/atlas`
 and `/space` re-mapped themselves. The one retune it forced was `/space`'s
@@ -74,10 +86,15 @@ The band grain cannot say any of that.
 So `scale.ts` grows a second, thin layer, consulted first:
 
 - **`ROUTE_TRAVEL_OVERRIDES`** — doors keyed by route prefix. Resolution
-  order: **exact route match → band override → metric adjacency**. A route
-  with an entry owns the wall it declares; a wall it stays silent on, and
-  every route without an entry, falls through to the band grain — so the band
-  grammar stays the default and this stays the exception.
+  order: **exact route match → band override → metric adjacency**, and the
+  three are **unioned in that order, not substituted**. A route with an
+  entry says which door its wall offers *first*; it never says which doors
+  its wall *has*. A wall it stays silent on, and every route without an
+  entry, falls through to the band grain — so the band grammar stays the
+  default and this stays the exception. (This layer shipped as a
+  replacement, and that quietly deleted `earth.extraDown` — the shore and
+  the peak became unreachable by a fresh pinch down from the ground, which
+  is what "weird navigation between coast and mountain and earth" was.)
 - **`DOOR_ROOMS`** — rooms that are destinations below the band grain
   (`/rocks`, `/soil`), each with `route: null` until its page ships. While
   null, a door onto it resolves through to the nearest built room of its band
@@ -102,16 +119,22 @@ weights and the room cameras are keyed to them. Doors bend; metres do not.
 
 ## 3. The door table (complete)
 
-Spatial forks cycle press → release → press, first door listed first.
+At a fork, **where on the frame the pinch sits chooses the door**: the doors
+are laid across the frame west→east in the offer order below
+(`lib/fork-regions.ts` → `fanRegions`, consumed by `ScaleTravel`), with a
+neutral disc in the middle. A centred pinch — and every trackpad, wheel and
+keyboard, which have no centroid — falls back to the press → release → press
+cycle, first door listed first.
 
 | from | direction | doors, in offer order | note |
 | --- | --- | --- | --- |
-| `/earth` | down | `/flowers` · `/rocks` · `/soil` | the ground's three-way fork: what grows from it, what it is made of |
-| `/soil` | up | `/earth` · `/flowers` | soil returns to the ground, or to the garden rooted in it |
-| `/soil` | down | `/cells` | soil crumbles into the living plasm |
-| `/rocks` | up | `/earth` · `/mountain` (olympus) | rock returns to the ground, or rises as the peak |
-| `/rocks` | down | `/molecules` | rock cleaves into its lattice — molecules, not life |
-| `/drop` | down | `/cells` | the drop magnifies what swims in it; tissue stays reachable via `/flowers` |
+| `/earth` | down | `/flowers` · `/rocks` · `/soil` · `/coast` · `/mountain` · `/atlas` | the route's own fork (what grows from it, what it is made of) leading, then the band grain it may not delete: the shore, the peak, and the chart of itself |
+| `/earth` | up | the planets → the system → `/stars` | no override: the ground climbs the metric axis, transparently through the unbuilt neighbourhoods |
+| `/soil` | up | `/earth` · `/flowers` · `/coast` | soil returns to the ground, or to the garden rooted in it, then its band's shore |
+| `/soil` | down | `/cells` · `/tissue` | soil crumbles into the living plasm; the band's sheet follows |
+| `/rocks` | up | `/earth` · `/mountain` (olympus) · `/coast` · `/flowers` | rock returns to the ground, or rises as the peak, then its band's doors |
+| `/rocks` | down | `/molecules` · `/tissue` | rock cleaves into its lattice — molecules, not life |
+| `/drop` | down | `/cells` · `/tissue` | the drop magnifies what swims in it; the band's sheet stays on the wall behind it |
 | `/drop` | up | `/coast` · `/flowers` | unchanged — band grain |
 | `/mountain` | down | `/coast` · `/rocks` · `/birds` | shore by default, then the strata, then the flock on the updraft |
 | `/coast` | down | `/drop` · `/birds` | the shore keeps its doors and opens onto the sky region |

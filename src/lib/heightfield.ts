@@ -1040,7 +1040,6 @@ export const HEIGHTFIELD_GLSL_FLOATS: Readonly<Record<string, number>> = {
 
 /** The integer constants — octave counts and loop budgets. */
 export const HEIGHTFIELD_GLSL_INTS: Readonly<Record<string, number>> = {
-  OCTAVES_MARCH,
   OCTAVES_SHADE,
   SWELL_OCTAVES,
   HORN_COUNT,
@@ -1115,7 +1114,7 @@ vec3 hf_smoothFbm(vec2 p, int octaves) {
   float m00 = 1.0, m01 = 0.0, m10 = 0.0, m11 = 1.0;
   float c = cos(OCTAVE_TURN) * LACUNARITY;
   float s = sin(OCTAVE_TURN) * LACUNARITY;
-  for (int i = 0; i < ${OCTAVES_SHADE}; i++) {
+  for (int i = 0; i < OCTAVES_SHADE; i++) {
     if (i >= octaves) break;
     vec3 n = hf_noised(vec2(m00 * p.x + m01 * p.y, m10 * p.x + m11 * p.y));
     v += amp * n.x;
@@ -1143,7 +1142,7 @@ vec4 hf_ridgedFbm(vec2 p, int octaves) {
   float m00 = 1.0, m01 = 0.0, m10 = 0.0, m11 = 1.0;
   float c = cos(OCTAVE_TURN) * LACUNARITY;
   float s = sin(OCTAVE_TURN) * LACUNARITY;
-  for (int i = 0; i < ${OCTAVES_SHADE}; i++) {
+  for (int i = 0; i < OCTAVES_SHADE; i++) {
     if (i >= octaves) break;
     vec3 n = hf_noised(vec2(m00 * p.x + m01 * p.y, m10 * p.x + m11 * p.y));
     float r = hf_ridgeFold(n.x);
@@ -1185,7 +1184,7 @@ vec3 hf_hornField(vec2 p, vec4 a, vec4 b) {
 
 vec3 hf_hornsAt(vec2 p) {
   vec3 acc = vec3(0.0);
-  for (int i = 0; i < ${HORN_COUNT}; i++) {
+  for (int i = 0; i < HORN_COUNT; i++) {
     acc += hf_hornField(p, uHornA[i], uHornB[i]);
   }
   return acc;
@@ -1283,6 +1282,16 @@ bool hf_marchTerrain(vec3 ro, vec3 rd, int octaves, int steps, int refine, out f
   }
   tHit = min(t, MARCH_MAX_KM);
   return false;
+}
+
+/**
+ * How near this ground stands to a contour line — 0 on one, 0.5 midway.
+ * The survey lens draws the field's own level sets, so the interval lives
+ * with the field.
+ */
+float hf_contourDistance(float h) {
+  float c = fract(h / CONTOUR_INTERVAL_KM);
+  return min(c, 1.0 - c);
 }
 
 // ——— matter: rock, snow, glacier, and the wind's own cornice ————
