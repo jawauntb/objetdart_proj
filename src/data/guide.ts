@@ -525,7 +525,7 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
     essence:
       "a sheet of a few hundred cells held together by an adhesion graph, where how many neighbours hold a cell is the interval that cell sings — six is the root, and a cell coming loose falls through fifths and thirds toward the tritone.",
     moves: [
-      "stroke across the sheet → the cells the stroke passes divide, each daughter taking half the mother's area",
+      "stroke across the sheet → the cells the stroke passes divide; both daughters bloom with a brighter note and haptic in the same frame",
       "hold one finger down → the sheet is drawn in at that point and a pit opens, deeper the longer it is held",
       "hold past the ceremony → the pit closes over and its floor becomes a second layer, sealed for good",
       "two fingers drag → pan the frame over the dense sheet, so you can inspect an edge without leaving the band",
@@ -541,6 +541,7 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
     ],
     finds: [
       "a bond letting go is audible before it is visible — the two cells it held drop a degree and sing a rougher interval in the same frame",
+      "after ~20s untouched, a short pale stroke crosses a few cells — the sheet showing its own verb, never a label",
       "a white contour creeps across the sheet: the differentiation front, landing fates behind itself, and under a three-finger hold you can watch it crawl",
       "the bonds are coloured by how hard they are being pulled, so you can see where the sheet is about to give before it gives",
       "the sheet is the same sheet at 60 and 120 hz — a fixed-step integrator, deterministic from its seed",

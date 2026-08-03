@@ -167,6 +167,12 @@ export default function TissueSheet() {
     let lastInteractionAt = performance.now();
     let glimmerAt = 0;
     let glimmerIdx = -1;
+    /** a short stroke the idle sheet draws across itself — grammar §6 */
+    let glimmerPath: { x: number; y: number }[] = [];
+    /** the two daughters of the last mitosis, lit as a bloom */
+    let bloomAt = 0;
+    let bloomI = -1;
+    let bloomJ = -1;
     let wavePeriod = 6.4;
     let leaving = 0;
 
@@ -351,11 +357,15 @@ export default function TissueSheet() {
       if (j < 0) return;
       lit[i] = 1;
       lit[j] = 1;
+      bloomAt = performance.now();
+      bloomI = i;
+      bloomJ = j;
       recomputeChord();
-      soundCell(j, 0.22);
+      soundCell(i, 0.18);
+      soundCell(j, 0.28);
       try {
         audio.spark();
-        haptics.detent();
+        haptics.bloom();
       } catch {
         /* noop */
       }
@@ -1089,15 +1099,43 @@ export default function TissueSheet() {
           ctx.arc(px, py, sheet.r[selIdx] * scale * 1.7 + 2, 0, Math.PI * 2);
           ctx.stroke();
         }
-        if (glimmerIdx >= 0 && glimmerIdx < n && now - glimmerAt < 1700) {
-          const u = (now - glimmerAt) / 1700;
-          ctx.strokeStyle = `rgba(238, 234, 219, ${0.3 * (1 - u)})`;
+        // mitosis bloom — both daughters flash as one becoming two
+        if (bloomI >= 0 && bloomJ >= 0 && now - bloomAt < 900) {
+          const u = (now - bloomAt) / 900;
+          const aBloom = (1 - u) * 0.55 * alpha;
+          for (const bi of [bloomI, bloomJ]) {
+            if (bi < 0 || bi >= n) continue;
+            const px = ox + sheet.px[bi] * scale;
+            const py = oy + sheet.py[bi] * scale;
+            const rr = sheet.r[bi] * scale * (1.4 + u * 1.8);
+            ctx.strokeStyle = `rgba(248, 232, 196, ${aBloom})`;
+            ctx.lineWidth = 1.4;
+            ctx.beginPath();
+            ctx.arc(px, py, rr, 0, Math.PI * 2);
+            ctx.stroke();
+          }
+        }
+
+        if (glimmerIdx >= 0 && glimmerIdx < n && now - glimmerAt < 2200) {
+          const u = (now - glimmerAt) / 2200;
+          // a short stroke path across a few cells — the sheet showing its verb
+          if (glimmerPath.length >= 2) {
+            ctx.beginPath();
+            ctx.moveTo(ox + glimmerPath[0].x * scale, oy + glimmerPath[0].y * scale);
+            for (let k = 1; k < glimmerPath.length; k++) {
+              ctx.lineTo(ox + glimmerPath[k].x * scale, oy + glimmerPath[k].y * scale);
+            }
+            ctx.strokeStyle = `rgba(238, 234, 219, ${0.42 * (1 - u) * alpha})`;
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+          }
+          ctx.strokeStyle = `rgba(238, 234, 219, ${0.28 * (1 - u)})`;
           ctx.lineWidth = 1;
           ctx.beginPath();
           ctx.arc(
             ox + sheet.px[glimmerIdx] * scale,
             oy + sheet.py[glimmerIdx] * scale,
-            4 + u * 42,
+            4 + u * 36,
             0,
             Math.PI * 2,
           );
@@ -1133,11 +1171,26 @@ export default function TissueSheet() {
         }
       }
 
-      // ——— glimmer: after ~20s idle, one cell answers on its own
+      // ——— glimmer: after ~20s idle, a short stroke crosses a few cells
       if (sheet && sheet.n > 0 && now - lastInteractionAt > 20000 && now - glimmerAt > 6500 && !reduced) {
         glimmerAt = now;
-        glimmerIdx = Math.floor((hashSeed(Math.round(now / 6500)) % 10000) / 10000 * sheet.n);
+        glimmerIdx = Math.floor(((hashSeed(Math.round(now / 6500)) % 10000) / 10000) * sheet.n);
         lit[glimmerIdx] = 0.5;
+        const ang = ((hashSeed(glimmerIdx, Math.round(now / 6500)) % 628) / 100) * 1;
+        const step = 1.35;
+        glimmerPath = [];
+        for (let k = 0; k < 4; k++) {
+          const gx = sheet.px[glimmerIdx] + Math.cos(ang) * step * (k - 0.5);
+          const gy = sheet.py[glimmerIdx] + Math.sin(ang) * step * (k - 0.5);
+          glimmerPath.push({ x: gx, y: gy });
+          const ci = nearestCell(sheet, gx, gy, 1.2);
+          if (ci >= 0) lit[ci] = Math.max(lit[ci], 0.45);
+        }
+        try {
+          soundCell(glimmerIdx, 0.12);
+        } catch {
+          /* noop */
+        }
       }
 
       // ——— the world-law, felt at the edge: a loose sheet reads warm
