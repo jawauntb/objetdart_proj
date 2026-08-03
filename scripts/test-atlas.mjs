@@ -251,24 +251,24 @@ assert.equal(
 );
 
 assert.deepEqual(
-  resolveAtlasGenerationInterruption({
+  { ...resolveAtlasGenerationInterruption({
     requestId: 8,
     generationId: "atlas-current",
     activeImage: "stable-sheet",
     incomingImage: "unrevealed-sheet",
     incomingRevealed: false,
-  }),
+  }) },
   { requestId: 9, generationId: null, activeImage: "stable-sheet" },
   "interaction before reveal should invalidate the ticket and keep the stable sheet",
 );
 assert.deepEqual(
-  resolveAtlasGenerationInterruption({
+  { ...resolveAtlasGenerationInterruption({
     requestId: 8,
     generationId: "atlas-current",
     activeImage: "stable-sheet",
     incomingImage: "visible-preview",
     incomingRevealed: true,
-  }),
+  }) },
   { requestId: 9, generationId: null, activeImage: "visible-preview" },
   "interaction after reveal should preserve the preview already under the user's hand",
 );
