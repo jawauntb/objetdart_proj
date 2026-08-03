@@ -1,64 +1,74 @@
 "use client";
 
 /**
- * RoomTemplate — a whole conformant room in eighty lines of material.
+ * RoomTemplate — a whole conformant room, and almost all of it is material.
  *
- * Copy this file, replace the mote with your object, replace the FIELD shader
- * with your background, and write your registry entry. Everything else is
- * already done: the gesture grammar routed by finger count, the vessel, the
- * frame governor, the visibility pause, the DPR ceiling, instanced rendering,
- * persistence through an idle writer, the shared `<LetGo>`, the glimmer, the
- * keyboard dialect, reduced motion.
+ * Copy this file, replace the FIELD shader with your background and the mote
+ * with your object, and write `src/rooms/<key>/room.config.ts`. Everything
+ * else is already done: `<RoomShell>` mounts the axis chrome, the complete
+ * gesture binding table, the vessel, the glimmer clock, the keyboard dialect,
+ * reduced motion and the quiet clear; `createGLStage` owns the context, the
+ * DPR tiers and the shared clocks; `scene/` gives your objects one shape and
+ * draws the whole population in a single instanced pass.
  *
  * That is the point. A room author's whole job is the visual and material
  * question — what is the thing, what does the field look like, what does each
- * verb mean in *this* material — and none of the wiring. This file passes
- * `npm run test:room-contract` unmodified; if a copy of it fails, the copy
- * removed something the contract needs.
+ * verb mean in *this* material — and none of the wiring.
  *
  * Read first: docs/new-room.md (the flow), docs/gesture-grammar.md (the
- * verbs), AGENTS.md (the laws). This file is deliberately NOT registered as a
- * route — it is a shape to copy, never a component to import.
+ * verbs), AGENTS.md (the laws). Deliberately NOT registered as a route: a
+ * shape to copy, never a component to import.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import LetGo from "@/components/LetGo";
-import { createPopulation, mulberry32, type SceneObjectSpec, type SceneObjectState } from "@/lib/scene/object";
-import { createRoomShell, type RoomShell } from "@/lib/scene/room";
+import RoomShell from "@/components/RoomShell";
+import { getFieldAudio } from "@/lib/audio";
+import * as haptics from "@/lib/haptics";
+import { createIdleWriter, detailForTier, onVisibility, createFrameGovernor } from "@/lib/room-runtime";
+import { createGLStage, FULLSCREEN_VERT_CLIP } from "@/lib/webgl/stage";
+import { clocksFrom } from "@/lib/webgl/sizing";
+import { createInstanceBuffer } from "@/lib/scene/instances";
+import { createPopulationLayer } from "@/lib/scene/population-layer";
+import { populationVoice } from "@/lib/scene/voice";
+import {
+  createPopulation,
+  mulberry32,
+  type SceneObjectSpec,
+  type SceneObjectState,
+  type StepContext,
+} from "@/lib/scene/object";
 
-// ——— 1. The registry entry this room would take. Copy it into
-// src/lib/room-registry.ts and the nav, the gallery, the guide's coverage,
-// the axis chrome and this contract all follow from it:
-//
-//   {
-//     key: "template", href: "/template", desc: "…", icon: "growth",
-//     cluster: "field", dark: true, kind: "room",
-//     source: "src/components/YourRoom.tsx", page: "src/app/template/page.tsx",
-//     address: { band: "drop" },          // or { exempt: "why it has no scale" }
-//     frame: "yield",                      // "own" only if you keep a camera
-//     chrome: "axis",                      // <AxisChrome route="/template" />
-//     keeps: STORAGE_KEY, creates: "a mote",
-//     exempt: {},                          // every binding you cannot express, with the reason
-//   }
+// ——— 1. The manifest this room would take. `src/rooms/<key>/room.config.ts`
+// declares where it is (route, sigil, placement, guide entry, chrome);
+// `src/lib/room-registry.ts` declares what it owes the grammar — its frame
+// ownership, its persistence key, the noun a dwell makes, and a written
+// reason for every global binding this material cannot express.
 
 const STORAGE_KEY = "objetdart:room-template:v1";
 
 // ——— 2. The background field. A fragment shader, because a field of light is
-// what a shader is for — 2D compositing can only imitate depth. `uv` is 0..1
-// with y down the page, `t` is seconds, and the room's law-layer uniforms
-// (uBreath, uWind, uGravity, uAgitation, uSeason) arrive already wired.
-const FIELD = `
-vec3 field(vec2 uv, float t) {
+// what a shader is for — 2D compositing can only imitate depth. The stage
+// binds the shared clocks for you: u_time, u_breath, u_turbulence, u_baseHz,
+// u_brightness, u_reduced, u_resolution.
+const FIELD = `precision mediump float;
+varying vec2 vUv;
+uniform vec2 u_resolution;
+uniform float u_time;
+uniform float u_breath;
+uniform float u_turbulence;
+uniform float u_brightness;
+uniform float u_wind;
+void main() {
+  vec2 uv = vUv * 0.5 + 0.5;
   vec2 p = uv - vec2(0.5, 0.55);
-  p.x *= uRes.x / max(1.0, uRes.y);
-  float d = length(p);
-  float haze = smoothstep(0.9, 0.02, d);
-  float drift = sin(uv.x * 5.0 + t * 0.08 + uWind * 2.0) * 0.5 + 0.5;
+  p.x *= u_resolution.x / max(1.0, u_resolution.y);
+  float haze = smoothstep(0.9, 0.02, length(p));
+  float drift = sin(uv.x * 5.0 + u_time * 0.08 + u_wind * 2.0) * 0.5 + 0.5;
   vec3 deep = vec3(0.031, 0.043, 0.063);
   vec3 warm = vec3(0.086, 0.078, 0.086);
-  vec3 c = mix(deep, warm, haze * (0.55 + 0.45 * uBreath) * (0.7 + 0.3 * drift));
-  c += vec3(0.03, 0.02, 0.01) * uAgitation;
-  return c;
+  vec3 c = mix(deep, warm, haze * (0.55 + 0.45 * u_breath) * (0.7 + 0.3 * drift));
+  c += vec3(0.03, 0.02, 0.01) * u_turbulence * u_brightness;
+  gl_FragColor = vec4(c, 1.0);
 }`;
 
 // ——— 3. The object. Its state is a small vector plus a seed (nothing about
@@ -215,73 +225,228 @@ const mote: SceneObjectSpec<Mote> = {
 export default function RoomTemplate() {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const shellRef = useRef<RoomShell | null>(null);
   const [standing, setStanding] = useState(0);
+  const letGoRef = useRef<() => void>(() => {});
+  const plantRef = useRef<(nx: number, ny: number) => void>(() => {});
+  const voiceRef = useRef<ReturnType<typeof populationVoice> | null>(null);
 
   useEffect(() => {
     const wrap = wrapRef.current;
     const canvas = canvasRef.current;
     if (!wrap || !canvas) return;
 
+    const audio = getFieldAudio();
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const population = createPopulation(mote);
-    const shell = createRoomShell({
-      wrap,
-      canvas,
-      population,
-      storageKey: STORAGE_KEY,
-      instanceBudget: 512,
-      layer: { field: FIELD, palette: ["#2c4a5c", "#c8732a", "#f3d77a"], fallback: "#0a0d12" },
-      onStanding: setStanding,
-      // Nothing is punished: a verb that reached no mote still answers softly
-      // in the field itself (grammar §6).
-      onUnanswered: () => {},
-    });
-    shellRef.current = shell;
 
-    // ——— 6. The keyboard dialect. Stillness never removes a verb, and no
-    // verb is touch-only: everything a finger can do, a key can do.
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Enter") {
-        const rng = mulberry32(population.items.length * 2654435761);
-        shell.spawnAt(0.25 + rng() * 0.5, 0.3 + rng() * 0.4);
+    // ——— 6. Persistence: a versioned key, written through an idle writer so
+    // a fast hand never writes localStorage once per gesture.
+    const writer = createIdleWriter(() => {
+      try {
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(population.serialize()));
+      } catch {
+        /* quota / private mode — the room still plays */
       }
+    });
+    try {
+      const raw = window.localStorage.getItem(STORAGE_KEY);
+      if (raw) population.load(JSON.parse(raw), performance.now());
+    } catch {
+      /* a fresh field */
+    }
+    setStanding(population.standing());
+
+    // ——— 7. The stage: one GL context, DPR through the quality tiers, the
+    // shared clocks, context-loss recovery and disposal — none of it here.
+    const stage = createGLStage(canvas, { wrap, label: "room-template", reducedMotion: reduced });
+    const prog = stage?.program(FULLSCREEN_VERT_CLIP, FIELD) ?? null;
+    const quad = stage && prog ? stage.fullscreenQuad(prog) : null;
+    const layer = stage ? createPopulationLayer(stage) : null;
+    const buffer = createInstanceBuffer(512);
+
+    // The world's own fields — properties of the room, not of any one thing
+    // standing in it. Objects read them from StepContext.
+    let wind = 0;
+    let agitation = 0;
+    let gravity = 0;
+    let season = 0;
+    let timeScale = 1;
+
+    voiceRef.current = populationVoice(population, {
+      size: () => ({ width: wrap.clientWidth, height: wrap.clientHeight }),
+      now: () => performance.now(),
+      onSpawn: () => {
+        audio.spark();
+        haptics.ripple(0.5);
+        writer.schedule();
+      },
+      onAnswered: (_e, answered) => {
+        if (answered > 0) writer.schedule();
+      },
+      world: {
+        wind: (dx) => {
+          wind = Math.max(-1, Math.min(1, wind + dx * 2.2));
+        },
+        season: (angle) => {
+          season = (season + angle / (Math.PI * 2) + 1) % 1;
+        },
+        agitate: (intensity) => {
+          agitation = Math.min(1, agitation + intensity);
+        },
+        gravity: (_beta, gamma) => {
+          gravity = Math.max(-1, Math.min(1, gamma / 45));
+        },
+        timeScale: (k) => {
+          timeScale = k;
+        },
+      },
+    });
+    plantRef.current = (nx, ny) => {
+      population.spawn(nx, ny, performance.now());
+      audio.spark();
+      haptics.ripple(0.5);
+      writer.schedule();
+      setStanding(population.standing());
     };
-    window.addEventListener("keydown", onKey);
+    letGoRef.current = () => {
+      // An exhale, never a blink: the population retires over a breath in its
+      // own material, and storage is written empty at once — an empty room is
+      // a remembered state, and nothing respawns over a deliberate clearing.
+      population.letGo();
+      try {
+        window.localStorage.setItem(
+          STORAGE_KEY,
+          JSON.stringify({ kind: population.spec.kind, items: [] }),
+        );
+      } catch {
+        /* noop */
+      }
+      writer.cancel();
+      setStanding(0);
+      audio.thud();
+      haptics.roll();
+    };
+
+    // ——— 8. The frame: governed, and asleep when the tab is hidden.
+    const gov = createFrameGovernor();
+    let hidden = false;
+    const offVisibility = onVisibility((h) => {
+      hidden = h;
+      if (h) gov.force("sleep");
+    });
+
+    const step: StepContext = {
+      dt: 0,
+      tMs: 0,
+      breath: 0.5,
+      detail: 1,
+      wind: 0,
+      gravity: 0,
+      agitation: 0,
+      season: 0,
+      timeScale: 1,
+      reducedMotion: reduced,
+    };
+
+    let raf = 0;
+    let last = performance.now();
+    let lastStanding = population.standing();
+    const draw = (t: number) => {
+      const tier = gov.beginFrame(t);
+      if (hidden) {
+        last = t;
+        raf = requestAnimationFrame(draw);
+        return;
+      }
+      const detail = detailForTier(tier);
+      const dt = Math.min(0.05, (t - last) / 1000) * timeScale;
+      last = t;
+      const tSec = audio.getAudioTime() ?? t / 1000;
+
+      wind *= 0.99;
+      agitation *= 0.96;
+
+      step.dt = dt;
+      step.tMs = t;
+      step.breath = reduced ? 0.5 : Math.sin(tSec * Math.PI * 2 * 0.14) * 0.5 + 0.5;
+      step.detail = detail.particles;
+      step.wind = wind;
+      step.gravity = gravity;
+      step.agitation = agitation;
+      step.season = season;
+      step.timeScale = timeScale;
+      population.step(step);
+
+      if (stage) {
+        const size = stage.beginFrame(
+          clocksFrom({ time: tSec, turbulence: agitation, reducedMotion: reduced }),
+          prog,
+        );
+        prog?.setFloat("u_wind", wind);
+        quad?.draw();
+        buffer.reset();
+        population.emit(
+          {
+            width: size.width,
+            height: size.height,
+            tMs: t,
+            breath: step.breath,
+            detail: detail.particles,
+            reducedMotion: reduced,
+          },
+          buffer,
+        );
+        layer?.draw(buffer);
+      }
+
+      const n = population.standing();
+      if (n !== lastStanding) {
+        lastStanding = n;
+        setStanding(n);
+      }
+      raf = requestAnimationFrame(draw);
+    };
+    raf = requestAnimationFrame(draw);
 
     return () => {
-      window.removeEventListener("keydown", onKey);
-      shell.detach();
-      shellRef.current = null;
+      cancelAnimationFrame(raf);
+      offVisibility();
+      writer.flush();
+      layer?.dispose();
+      quad?.dispose();
+      stage?.dispose();
+      voiceRef.current = null;
     };
   }, []);
 
-  // ——— 7. The quiet clear. Always the shared <LetGo>: it portals to
-  // document.body because a control rendered inside a `position: fixed` room
-  // wrapper is trapped in that stacking context under the tape's z-index in
-  // Chrome, and silently swallows every click. Never hand-roll this button.
-  const letGo = useCallback(() => shellRef.current?.letGo(), []);
+  // ——— 9. The quiet clear is always the shared <LetGo>, mounted by the
+  // shell: a control rendered inside a `position: fixed` room wrapper is
+  // trapped in that stacking context under the tape's z-index in Chrome and
+  // silently swallows every click. Never hand-roll this button.
+  const letGo = useCallback(() => letGoRef.current(), []);
 
   return (
-    <div ref={wrapRef} style={{ position: "fixed", inset: 0, background: "#0a0d12" }}>
-      <canvas
-        ref={canvasRef}
-        role="application"
-        tabIndex={0}
-        aria-label="a field of motes — touch one and it charges, rest a finger on empty ground and one gathers, hold longer and it seals"
-        style={{
-          position: "absolute",
-          inset: 0,
-          width: "100%",
-          height: "100%",
-          touchAction: "none",
-          userSelect: "none",
-        }}
-      />
-      <LetGo label="let the field go" onLetGo={letGo} visible={standing > 0} />
-      {/* ——— 8. The page mounts the chrome, never the room:
-          <AxisChrome route="/your-room" /> in src/app/your-room/page.tsx.
-          Never bind pinch or pan2 yourself unless the registry says
-          `frame: "own"`. See docs/new-room.md §1 for the ordinal decision. */}
-    </div>
+    <RoomShell
+      route="/room-template"
+      surfaceRef={wrapRef}
+      voice={voiceRef.current ?? undefined}
+      letGo={{ label: "let the field go", onLetGo: letGo, visible: standing > 0 }}
+      keyboard={{
+        // Nothing here is touch-only, and nothing is keyboard-only either.
+        enter: () => plantRef.current(0.5, 0.5),
+        enterHeld: (elapsed) => plantRef.current(0.3 + ((elapsed / 4000) % 0.4), 0.5),
+      }}
+      style={{ position: "fixed", inset: 0, background: "#0a0d12" }}
+    >
+      <div ref={wrapRef} style={{ position: "absolute", inset: 0 }}>
+        <canvas
+          ref={canvasRef}
+          role="application"
+          tabIndex={0}
+          aria-label="a field of motes — touch one and it charges, rest a finger on empty ground and one gathers, hold longer and it seals"
+          style={{ position: "absolute", inset: 0, width: "100%", height: "100%", touchAction: "none" }}
+        />
+      </div>
+    </RoomShell>
   );
 }

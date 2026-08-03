@@ -43,6 +43,9 @@ export default function Watch() {
 
   const cursor = useRef({ x: -9999, y: -9999, tx: -9999, ty: -9999, over: false });
   const detailRef = useRef(1); // detailForTier(tier).particles, set once per frame
+  const panRef = useRef({ x: 0, y: 0, tx: 0, ty: 0 }); // pan2: shifts the frame
+  const lensRef = useRef({ cur: 0, target: 0 }); // twist: the moonlit lens
+  const seasonRef = useRef(0); // 3-finger twist: the room's slow season
   const lit = useRef({ candle: 0, glass: 0, book: 0, record: 0, window: 0, clock: 0, music: 0, frame: 0 });
 
   // ── the room's clock + law-layer state (gesture grammar) ──
@@ -580,11 +583,54 @@ export default function Watch() {
     let lastGustCueAt = 0;
     let lastCrownAt = 0;
 
+    let lensTwistAcc = 0;
     const detachGestures = attachGestures(cv, {
       tap: (e) => {
         law.current.lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          // tutti — every lit object answers at once.
+          lit.current.candle = 1; lit.current.clock = 1; lit.current.music = 1;
+          lit.current.record = 1; lit.current.window = 1; lit.current.book = 1;
+          try { getFieldAudio().chime(); } catch { /* ignore */ }
+          try { haptics.bloom(); } catch { /* ignore */ }
+          useField.getState().recordTape("region", 0.6, "watch:tutti");
+          return;
+        }
+        if (e.fingers === 2) {
+          // step back: lower the raised moonlit lens first. ScaleTravel
+          // reads data-lens-raised and yields to us when this is set.
+          if (lensRef.current.target > 0.5) {
+            lensRef.current.target = 0;
+            cv.removeAttribute("data-lens-raised");
+            try { haptics.tap(); } catch { /* ignore */ }
+          }
+          return;
+        }
         if (e.fingers !== 1) return; // the room absorbs frame/law taps
         dispatchTap(e.x, e.y, e.intensity, e.count);
+      },
+      pan2: (e) => {
+        law.current.lastGestureAt = performance.now();
+        panRef.current.tx = Math.max(-36, Math.min(36, panRef.current.tx + e.dx * 0.2));
+        panRef.current.ty = Math.max(-24, Math.min(24, panRef.current.ty + e.dy * 0.2));
+      },
+      twist: (e) => {
+        law.current.lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          // three-finger twist = season: a slow warm/cool drift.
+          if (e.phase === "move") seasonRef.current += e.angle * 0.7;
+          return;
+        }
+        if (e.phase === "start") lensTwistAcc = 0;
+        if (e.phase === "move") lensTwistAcc += e.angle;
+        if (e.phase === "end" && Math.abs(lensTwistAcc) > 0.9) {
+          lensRef.current.target = lensRef.current.target > 0.5 ? 0 : 1;
+          if (lensRef.current.target > 0.5) cv.setAttribute("data-lens-raised", "1");
+          else cv.removeAttribute("data-lens-raised");
+          try { oneShotChime(getFieldAudio(), 900, 1100, 0.12); } catch { /* ignore */ }
+          try { haptics.lens(); } catch { /* ignore */ }
+          useField.getState().recordTape("sigil", 0.5, "watch:lens");
+        }
       },
       drag: (e) => {
         law.current.lastGestureAt = performance.now();
@@ -816,6 +862,23 @@ export default function Watch() {
     // keeps the tick and the haptic; the shiver and flinch stay still.
     const knockState = { at: -1e9, intensity: 0 };
     const detachVessel = onVessel({
+      tilt: ({ gamma }) => {
+        if (reduce) return;
+        // gravity leans the flame and the whole room's drag lean, gently.
+        candleState.current.dragLean += (gamma * 0.02 - candleState.current.dragLean) * 0.06;
+      },
+      shake: (e) => {
+        if (reduce) return;
+        law.current.lastGestureAt = performance.now();
+        law.current.gust = Math.max(-1, Math.min(1, law.current.gust + e.intensity * (Math.sin(performance.now() * 0.011) > 0 ? 1 : -1)));
+        try { haptics.chop(); } catch { /* ignore */ }
+        useField.getState().recordTape("region", 0.4, "watch:shake");
+      },
+      flip: ({ faceDown: fd }) => {
+        faceDown = fd;
+        syncSleep();
+        if (fd) { try { haptics.roll(); } catch { /* ignore */ } }
+      },
       knock: (e) => {
         const nowMs = performance.now();
         if (nowMs - knockState.at < 350) return;
@@ -861,6 +924,15 @@ export default function Watch() {
       if (sleeping) { raf = requestAnimationFrame(draw); return; }
       const detail = detailForTier(tier);
       detailRef.current = detail.particles;
+      // two-finger pan shifts the whole room within the frame, eased back
+      // to rest — distinct from a one-finger drag, which touches an object.
+      const pan = panRef.current;
+      pan.x += (pan.tx - pan.x) * 0.1;
+      pan.y += (pan.ty - pan.y) * 0.1;
+      pan.tx *= 0.92;
+      pan.ty *= 0.92;
+      ctx.save();
+      ctx.translate(pan.x, pan.y);
       // the room's own clock: three fingers dilate it, the crown winds it —
       // sun, pendulum, flame wobble and the little boat all read from simT
       const L = law.current;
@@ -976,6 +1048,22 @@ export default function Watch() {
       ctx.fillRect(g.winLeft, g.winTop, g.winRight - g.winLeft, g.winBottom - g.winTop);
       ctx.fillStyle = bgCache.sea!;
       ctx.fillRect(g.winLeft, seaTop, g.winRight - g.winLeft, g.winBottom - seaTop);
+
+      // twist (2 fingers) = rotate the lens: a moonlit register — the warm
+      // room cools and the window brightens, as if the eye adjusted to the
+      // dark outside. One fillRect, never a gradient per element.
+      const lens = lensRef.current;
+      lens.cur += (lens.target - lens.cur) * 0.06;
+      if (lens.cur > 0.01) {
+        ctx.fillStyle = `rgba(40, 60, 90, ${lens.cur * 0.22})`;
+        ctx.fillRect(0, 0, g.winLeft, g.h);
+        ctx.fillStyle = `rgba(210, 225, 255, ${lens.cur * 0.14})`;
+        ctx.fillRect(g.winLeft, g.winTop, g.winRight - g.winLeft, g.winBottom - g.winTop);
+      }
+      // three-finger twist = season: a slow, render-only warm/cool cast.
+      const seasonWarm = Math.sin(seasonRef.current) * 0.5 + 0.5;
+      ctx.fillStyle = `rgba(${Math.round(200 + 40 * seasonWarm)}, ${Math.round(150 + 20 * (1 - seasonWarm))}, ${Math.round(120 + 50 * (1 - seasonWarm))}, 0.018)`;
+      ctx.fillRect(0, 0, g.w, g.h);
 
       if (sun < 0.4) {
         const starAlpha = (0.4 - sun) * 2.2;
@@ -1103,7 +1191,7 @@ export default function Watch() {
         if (scintActive) {
           const scintN = Math.max(1, Math.round(6 * detailRef.current));
           for (let i = 0; i < scintN; i++) {
-            const ang = (i / 6) * Math.PI * 2 + t * 1.6;
+            const ang = (i / scintN) * Math.PI * 2 + t * 1.6;
             const rr = reflR * (1.5 + 0.7 * Math.sin(t * 5 + i));
             const sxk = reflX + Math.cos(ang) * rr;
             const syk = reflY + Math.sin(ang) * rr;
@@ -1766,12 +1854,15 @@ export default function Watch() {
         ctx.stroke();
       }
 
+      ctx.restore(); // matches the pan translate opened at the top of draw()
       raf = requestAnimationFrame(draw);
     };
     raf = requestAnimationFrame(draw);
 
     return () => {
       cancelAnimationFrame(raf);
+      unvis();
+      ungal();
       window.removeEventListener("resize", resize);
       window.removeEventListener("pointermove", onHover);
       window.removeEventListener("pointerleave", onLeave);

@@ -104,6 +104,7 @@ import {
   windVoice,
   type SkyPalette,
 } from "@/lib/heightfield";
+import { formatShaderError } from "@/lib/webgl/sizing";
 import {
   onVisibility,
   onGalleryPause,
@@ -440,20 +441,22 @@ export default function MountainPeak() {
     const buildGL = (): boolean => {
       if (!gl) return false;
       uni.clear();
-      const compile = (type: number, src: string) => {
+      // The shader is generated, so a failure has to say WHERE: the shared
+      // formatter prints the room, the stage and the offending source line.
+      const compile = (type: number, src: string, which: "vertex" | "fragment") => {
         const s = gl!.createShader(type);
         if (!s) return null;
         gl!.shaderSource(s, src);
         gl!.compileShader(s);
         if (!gl!.getShaderParameter(s, gl!.COMPILE_STATUS)) {
-          console.warn("mountain shader compile failed", gl!.getShaderInfoLog(s));
+          console.warn(formatShaderError("mountain", which, gl!.getShaderInfoLog(s), src));
           gl!.deleteShader(s);
           return null;
         }
         return s;
       };
-      vs = compile(gl.VERTEX_SHADER, VERT_SRC);
-      fs = compile(gl.FRAGMENT_SHADER, FRAG_SRC);
+      vs = compile(gl.VERTEX_SHADER, VERT_SRC, "vertex");
+      fs = compile(gl.FRAGMENT_SHADER, FRAG_SRC, "fragment");
       if (!vs || !fs) return false;
       const p = gl.createProgram();
       if (!p) return false;
@@ -461,7 +464,7 @@ export default function MountainPeak() {
       gl.attachShader(p, fs);
       gl.linkProgram(p);
       if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
-        console.warn("mountain program link failed", gl.getProgramInfoLog(p));
+        console.warn(formatShaderError("mountain", "link", gl.getProgramInfoLog(p)));
         gl.deleteProgram(p);
         return false;
       }
@@ -1010,6 +1013,36 @@ export default function MountainPeak() {
           fogLiftTarget = clamp(fogLiftTarget - 0.06, -FOG_BREATH_KM * 1.6, FOG_BREATH_KM * 2.4);
           audio.playNote(50, 160);
           haptics.ripple(0.3);
+        },
+        flick: (e) => {
+          // a stone thrown down the slope, the way the hand sent it and as
+          // fast as it was sent
+          lastTouchAt = performance.now();
+          const { x, y } = toLocal(e.x, e.y);
+          const speed = clamp(e.speed, 0.2, 2.4);
+          scree = scree.concat(
+            kickScree(mix32(screeSerial++, 7, Math.round(e.angle * 100)), x / Math.max(1, width), y / Math.max(1, height), 0.3 + speed * 0.3),
+          );
+          if (scree.length > 120) scree = scree.slice(-120);
+          audio.playNote(44 + Math.round(speed * 8), 180);
+          haptics.chop();
+        },
+        drum: (e) => {
+          // the patter between two zones is two calls into the range, and
+          // the range answers each at its own distance
+          lastTouchAt = performance.now();
+          const a = toLocal(e.ax, e.ay);
+          const b = toLocal(e.bx, e.by);
+          callOut(a.x, a.y, 0.4);
+          window.setTimeout(() => callOut(b.x, b.y, 0.4), 90);
+          haptics.tap();
+        },
+        rhythm: (e) => {
+          // a steady hand is answered in its own tempo, never with a lesson
+          if (e.stability < 0.6) return;
+          lastTouchAt = performance.now();
+          audio.playTone(90 + e.bpm * 0.4, 0.5);
+          haptics.tap();
         },
       },
       { wheelZoom: false },

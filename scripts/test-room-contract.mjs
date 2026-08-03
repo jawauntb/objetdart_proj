@@ -283,6 +283,24 @@ const VERB_FOR_BINDING = {
 };
 
 /** The verb names in every `verbs: [...]` array — read off the raw source. */
+/** The `RoomVoice` key each global binding arrives on (src/lib/gesture/defaults.ts). */
+const VOICE_FOR_BINDING = {
+  stepBack: "stepBack",
+  tutti: "tutti",
+  lens: "lens",
+  season: "season",
+  weather: "wind",
+  dilation: "timeScale",
+  dwell: "plant",
+  ceremony: "ceremony",
+  tilt: "gravity",
+  shake: "scatter",
+  knock: "knock",
+  flip: "night",
+  pan: null,
+};
+
+/** The verb names in every `verbs: [...]` array — read off the raw source. */
 function declaredVerbs(raw) {
   const out = new Set();
   const re = /verbs\s*:\s*\[/g;
@@ -367,9 +385,13 @@ for (const entry of ROOM_REGISTRY) {
   }
   const { raw, clean } = src;
 
-  // Rooms built on the scene shell delegate the wiring to createRoomShell.
-  const viaShell = /@\/lib\/scene\/room/.test(raw);
-  const verbs = viaShell ? declaredVerbs(raw) : null;
+  // Rooms built on <RoomShell> delegate the gesture table, the vessel, the
+  // glimmer clock, the keyboard dialect, the axis chrome and <LetGo> to it;
+  // rooms built on the scene model state their verbs in the object spec.
+  const viaRoomShell = /@\/components\/RoomShell/.test(raw);
+  const viaScene = /@\/lib\/scene\/(?:voice|object)/.test(raw);
+  const viaShell = viaRoomShell || viaScene;
+  const verbs = viaScene ? declaredVerbs(raw) : null;
 
   // — 1. the gesture engine, and no raw pointer wiring ———————————————
   const usesEngine = /attachGestures\s*\(/.test(clean) || viaShell;
@@ -447,9 +469,12 @@ for (const entry of ROOM_REGISTRY) {
       fail(key, `no probe for global binding "${binding}" — BINDING_PROBES must cover the grammar`);
       continue;
     }
+    const shellVerb = VERB_FOR_BINDING[binding];
     const answered = viaShell
-      ? VERB_FOR_BINDING[binding] === null ||
-        (verbs?.has(VERB_FOR_BINDING[binding]) ?? false) ||
+      ? shellVerb === null ||
+        (verbs?.has(shellVerb) ?? false) ||
+        (viaRoomShell && VOICE_FOR_BINDING[binding] != null &&
+          new RegExp(`(?:^|[\\s,{])${VOICE_FOR_BINDING[binding]}\\s*:`, "m").test(clean)) ||
         bound(probe)
       : bound(probe);
     if (!answered) oweBinding(key, binding);
@@ -502,7 +527,7 @@ for (const entry of ROOM_REGISTRY) {
   }
 
   // — 5. the quiet clear is the shared control ————————————————————
-  const usesLetGo = /@\/components\/LetGo/.test(raw);
+  const usesLetGo = /@\/components\/LetGo/.test(raw) || (viaRoomShell && /letGo\s*=\s*\{/.test(raw));
   if (entry.creates && !usesLetGo) {
     oweNote(
       key,
@@ -555,7 +580,7 @@ for (const entry of ROOM_REGISTRY) {
   // — 6. rooms with a scale address mount the chrome ——————————————
   const band = bandOf(entry);
   const pageSrc = there(entry.page) ? read(entry.page) : "";
-  const mountsAxis = /<AxisChrome/.test(pageSrc);
+  const mountsAxis = /<AxisChrome/.test(pageSrc) || viaRoomShell;
   const mountsTravel = /<ScaleTravel/.test(pageSrc);
   const mountsPeers = /<MetaNavigator/.test(pageSrc);
   const declared =

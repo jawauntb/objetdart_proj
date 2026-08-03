@@ -7,6 +7,7 @@ import { getFieldAudio } from "@/lib/audio";
 import { useField } from "@/store/field";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { THRESHOLDS } from "@/lib/gesture/core";
 import {
   createFrameGovernor,
   createIdleWriter,
@@ -423,6 +424,7 @@ function makeStarTexture(): THREE.CanvasTexture {
 export default function Coin() {
   const wrapRef = useRef<HTMLDivElement>(null);
   const hintRef = useRef<HTMLDivElement>(null);
+  const nightVeilRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -599,6 +601,9 @@ export default function Coin() {
     let lastSeasonSoundAt = 0;
     // two-finger drag pans the frame: the coin's position within the view
     const pan2 = { x: 0, y: 0, tx: 0, ty: 0 };
+    // flip face-down = night: the room hushes under a veil until turned back
+    let nightOn = false;
+    let nightAmt = 0;
     let lastGestureAt = performance.now();
     let lastGlimmerAt = 0;
     const _flipAxis = new THREE.Vector3();
@@ -887,6 +892,7 @@ export default function Coin() {
     // ── pop / jerk the phone → flip the coin toward the pop direction ──
     // watch for a sharp spike in linear acceleration; motionFlip debounces so
     // the pop and its rebound (decel) don't fire twice.
+    let lastKnockAt = 0;
     const onMotion = (e: DeviceMotionEvent) => {
       if (!sensorsOn) return;
       const a = e.acceleration ?? e.accelerationIncludingGravity;
@@ -898,6 +904,18 @@ export default function Coin() {
       if (mag > 20 || Math.abs(ax) > 15 || Math.abs(ay) > 15) {
         shine.v = 1; haptics.chop();
         motionFlip(ax, ay, now); // tumbles toward the pop direction
+      } else if (mag > THRESHOLDS.knockThresh && now - lastKnockAt > 400) {
+        // knock = wake / ring the room: a rap on the case, short of a pop —
+        // the medal answers with its bell, not a flip
+        lastKnockAt = now;
+        shine.v = Math.min(1, shine.v + 0.5);
+        try { A().bell(); } catch { /* noop */ }
+        try { haptics.tap(); } catch { /* noop */ }
+      }
+      // flip face-down = night: gravity alone (not the jerk-derived `a`) tells the face
+      const g = e.accelerationIncludingGravity;
+      if (g && g.z !== null && g.z !== undefined) {
+        nightOn = g.z < -7;
       }
     };
     const attachSensors = () => {
@@ -989,6 +1007,8 @@ export default function Coin() {
       pan2.ty *= Math.exp(-rawDt * 0.6);
       pan2.x += (pan2.tx - pan2.x) * Math.min(1, rawDt * 4);
       pan2.y += (pan2.ty - pan2.y) * Math.min(1, rawDt * 4);
+      nightAmt += ((nightOn ? 1 : 0) - nightAmt) * Math.min(1, rawDt * 1.4);
+      if (nightVeilRef.current) nightVeilRef.current.style.opacity = String(nightAmt * 0.82);
       const swayX = (haveOrient || drag.on ? 0 : Math.sin(idle * 0.6) * 0.12 * motion) + wind.y * 0.5;
       const swayY = (haveOrient || drag.on ? 0 : Math.cos(idle * 0.45) * 0.16 * motion) + wind.x * 0.6;
       tilt.x += (tilt.tx + swayX - tilt.x) * tiltEase;
@@ -1019,6 +1039,8 @@ export default function Coin() {
       }
       const tossing = flip.t < 1 ? Math.sin(Math.PI * flip.t) : 0;
       coinGroup.position.z = tossing * 3.2 * toss.amp;
+      coinGroup.position.x = pan2.x;
+      coinGroup.position.y = -pan2.y;
       // ease the slide-driven size, combined with the flip toss
       size.v += (size.t - size.v) * 0.16;
       coinGroup.scale.setScalar(size.v * (1 + tossing * 0.06));
@@ -1051,6 +1073,7 @@ export default function Coin() {
       // keeps climbing toward the sublime but never blows out to white
       bgUniforms.uLevel.value = 1 - Math.exp(-fill.glowV * 0.22);
       bgUniforms.uPulse.value = fill.pulse;
+      bgUniforms.uSeason.value = season.cur;
 
       // star glint: ride the highlight, fade out
       shine.v *= 0.92;
@@ -1108,6 +1131,11 @@ export default function Coin() {
         <div className="coin-title">objet&nbsp;d&rsquo;art — la médaille</div>
         <div className="coin-hint" ref={hintRef}>tap a spot to flip & play its note · tilt or pop to flip · slide to resize · twist with two fingers · rub to shine</div>
       </div>
+      <div
+        ref={nightVeilRef}
+        aria-hidden="true"
+        style={{ position: "absolute", inset: 0, zIndex: 5, background: "#010103", opacity: 0, pointerEvents: "none" }}
+      />
       <style dangerouslySetInnerHTML={{ __html: `
         .coin-hud {
           position: absolute; left: 0; right: 0; z-index: 10; pointer-events: none;

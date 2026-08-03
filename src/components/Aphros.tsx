@@ -174,6 +174,11 @@ export default function Aphros() {
     let lensTarget = 0;     // 0 painting … 1 drawing
     let lens = 0;
     let lensDetentSide = 0; // for the crossing tick
+    let season = 0;         // 0..1 cyclic, three-finger twist's own wheel
+    let lastSeasonFxAt = 0;
+    let panX = 0, panTargetX = 0; // pan2's elastic frame
+    let panY = 0, panTargetY = 0;
+    let nightAmt = 0, nightTarget = 0; // vessel flip
     let timeScaleTarget = 1;
     let timeScale = 1;
     let lastTouchAt = performance.now();
@@ -254,6 +259,26 @@ export default function Aphros() {
         if (reduced) return;
         agitation = Math.min(1, agitation + intensity);
         haptics.chop();
+      },
+      knock: (e) => {
+        // a knock on the vessel surges the whole sea. (Previously bound
+        // inside attachGestures, where device events never reach — the
+        // vessel bus is the only place `knock` actually fires.)
+        lastTouchAt = performance.now();
+        agitation = Math.min(1, agitation + 0.3 * e.intensity);
+        pushWake(0.5, SHELL_Y + 0.08, 1.0);
+        audio.thud();
+        haptics.storm();
+      },
+      flip: ({ faceDown }) => {
+        // face-down is night: the painting dims and the shore's time
+        // eases to a slow watch; flipping back wakes it with a flash.
+        lastTouchAt = performance.now();
+        nightTarget = faceDown ? 1 : 0;
+        timeScaleTarget = faceDown ? 0.25 : 1;
+        if (!faceDown) flash = Math.min(1, flash + 0.4);
+        try { faceDown ? audio.thud() : audio.spark(); } catch { /* noop */ }
+        haptics.bloom();
       },
     });
 
@@ -394,8 +419,19 @@ export default function Aphros() {
           }
         },
         twist: (e) => {
-          if (e.fingers === 3) return; // three fingers turn the season, not the lens
           lastTouchAt = performance.now();
+          if (e.fingers === 3) {
+            // three fingers turn the season: the water's own light drifts
+            // warm to cool and back over the room's slow cycle
+            if (e.phase === "start") return;
+            season = ((season + e.velocity * 0.012) % 1 + 1) % 1;
+            const now = performance.now();
+            if (now - lastSeasonFxAt > 900) {
+              lastSeasonFxAt = now;
+              haptics.tap();
+            }
+            return;
+          }
           // rotate the lens: painting ↔ its own preparatory drawing
           if (e.phase === "start") return;
           lensTarget = Math.max(0, Math.min(1, lensTarget + e.velocity * 0.010));
@@ -405,6 +441,14 @@ export default function Aphros() {
             haptics.lens();
             audio.playNote(side === 1 ? 85 : 81, 120);
           }
+        },
+        pan2: (e) => {
+          // two fingers pan the frame: a small elastic look-around over
+          // the painting, springing back once released (eased in draw()).
+          lastTouchAt = performance.now();
+          if (e.phase !== "move") return;
+          panTargetX = Math.max(-0.03, Math.min(0.03, panTargetX + (e.dx / Math.max(1, width)) * 0.4));
+          panTargetY = Math.max(-0.03, Math.min(0.03, panTargetY + (e.dy / Math.max(1, height)) * 0.4));
         },
         scrub: (e) => {
           lastTouchAt = performance.now();
@@ -417,14 +461,9 @@ export default function Aphros() {
         rhythm: (e) => {
           if (e.stability > 0.7) agitation = Math.min(1, agitation + 0.08);
         },
-        knock: (e) => {
-          // a knock on the vessel surges the whole sea
-          lastTouchAt = performance.now();
-          agitation = Math.min(1, agitation + 0.3 * e.intensity);
-          pushWake(0.5, SHELL_Y + 0.08, 1.0);
-          audio.thud();
-          haptics.storm();
-        },
+        // knock and flip are vessel (device) events, not DOM pointer
+        // gestures — bound above via onVessel, the bus that actually
+        // carries them.
         breath: (e) => {
           // breath on the candle-side brightens the foam a moment
           flash = Math.min(1, flash + e.strength * 0.5);
@@ -481,6 +520,9 @@ export default function Aphros() {
         uniform float uAgit;
         uniform float uFlash;
         uniform float uLens;
+        uniform float uSeason; // 0..1 cyclic, advanced by 3-finger twist
+        uniform vec2 uPan;     // pan2's small elastic frame offset
+        uniform float uNight;  // vessel flip face-down: 0 lit … 1 night
         uniform vec4 uBlooms[${MAX_BLOOMS}]; // x, y, size, alpha
         uniform int uBloomCount;
         uniform vec4 uWakes[${MAX_WAKES}];   // x, y, age, strength
@@ -600,7 +642,7 @@ export default function Aphros() {
         }
 
         void main() {
-          vec2 uv = vec2(vUv.x, 1.0 - vUv.y); // y = 0 top, 1 bottom
+          vec2 uv = vec2(vUv.x, 1.0 - vUv.y) + uPan; // y = 0 top, 1 bottom; pan2 offsets the whole frame
           float aspect = uRes.x / uRes.y;
           float t = uTime;
           float breath = sin(t * 6.28318 * 0.14) * 0.5 + 0.5; // the 7s clock
@@ -1042,6 +1084,9 @@ export default function Aphros() {
           col = pow(col, vec3(1.05));
           vec2 vc = vUv - 0.5;
           col *= 1.0 - dot(vc, vc) * 0.34;
+          // vessel flip: night — the painting dims as though a hand had
+          // covered the candle, continuous with uNight rather than a cut.
+          col *= 1.0 - uNight * 0.82;
           gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
         }
       `;
@@ -1075,6 +1120,9 @@ export default function Aphros() {
             const uAgitU = U("uAgit");
             const uFlashU = U("uFlash");
             const uLensU = U("uLens");
+            const uSeasonU = U("uSeason");
+            const uPanU = U("uPan");
+            const uNightU = U("uNight");
             const uBloomsU = U("uBlooms");
             const uBloomCountU = U("uBloomCount");
             const uWakesU = U("uWakes");
@@ -1118,6 +1166,12 @@ export default function Aphros() {
               agitation *= Math.exp(-rawDt / 2.8);
               flash *= Math.exp(-rawDt / 0.45);
               lens += (lensTarget - lens) * Math.min(1, rawDt * 5);
+              // pan2's elastic frame — springs back once the hand eases off
+              panX += (panTargetX - panX) * Math.min(1, rawDt * 4);
+              panY += (panTargetY - panY) * Math.min(1, rawDt * 4);
+              panTargetX *= Math.exp(-rawDt * 1.4);
+              panTargetY *= Math.exp(-rawDt * 1.4);
+              nightAmt += (nightTarget - nightAmt) * Math.min(1, rawDt * 2.2);
               live.wT = wT;
               pointerFx.strength *= Math.exp(-rawDt / 1.4);
               silkBoost *= Math.exp(-rawDt / 1.6);
@@ -1261,6 +1315,9 @@ export default function Aphros() {
               if (uAgitU) gl.uniform1f(uAgitU, agitation);
               if (uFlashU) gl.uniform1f(uFlashU, flash);
               if (uLensU) gl.uniform1f(uLensU, lens);
+              if (uSeasonU) gl.uniform1f(uSeasonU, season);
+              if (uPanU) gl.uniform2f(uPanU, panX, panY);
+              if (uNightU) gl.uniform1f(uNightU, nightAmt);
               if (uBloomsU) gl.uniform4fv(uBloomsU, bloomData);
               if (uBloomCountU) gl.uniform1i(uBloomCountU, bloomCount);
               if (uWakesU) gl.uniform4fv(uWakesU, wakeData);

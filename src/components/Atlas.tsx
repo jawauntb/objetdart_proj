@@ -418,6 +418,10 @@ export default function Atlas() {
   const removeNaturalRef = useRef<((id: string) => void) | null>(null);
   const clearNaturalsRef = useRef<(() => void) | null>(null);
   const [naturalsCount, setNaturalsCount] = useState(0);
+  // twist(2) = rotate the lens: the traverse mini-map (the map, not the
+  // territory) flashes into prominence — the same representation, read
+  // differently for a moment.
+  const [lensFlash, setLensFlash] = useState(false);
 
   const [metrics, setMetrics] = useState<MapMetrics>(EMPTY_METRICS);
   const [hotspots, setHotspots] = useState(DEFAULT_HOTSPOTS);
@@ -920,6 +924,82 @@ export default function Atlas() {
     };
     weatherTimer = setTimeout(fireWeather, 5000 + Math.random() * 4000);
 
+    // ── the frame and law, additive ──────────────────────────────
+    // Mounted alongside — never instead of — the hand-tuned pointer
+    // state machine below (its own pan/pinch/plant, already faithful to
+    // the grammar's material and frame verbs via useBandEdgeTravel).
+    // noCapture keeps that state machine as the sole owner of pointer
+    // capture; this layer only adds the verbs Atlas had none of yet.
+    // Exemptions, stated rather than forced: three-finger twist (season)
+    // has no honest target — the weather spawner's own comment already
+    // says the atlas keeps no day/night state, and inventing one only
+    // to bind this gesture would be exactly the forced meaning the
+    // grammar warns against.
+    let timeScale = 1;
+    let lensTimer: ReturnType<typeof setTimeout> | null = null;
+    let twoTwistAcc = 0;
+    const detachGrammar = attachGestures(stage, {
+      tap: (e) => {
+        if (e.fingers !== 3) return;
+        // tutti — every alive thing on the map answers together: a
+        // gentle synchronized cloud/weather beat plus the touch itself.
+        setPulse({ x: e.x, y: e.y, key: Date.now(), intensity: 0.5 });
+        try { getFieldAudio().chime(); } catch { /* noop */ }
+        try { haptics.ripple(0.4); } catch { /* noop */ }
+        recordTape("ripple", 0.4, "atlas/tutti");
+      },
+      twist: (e) => {
+        if (e.fingers === 3 || e.phase !== "move") return;
+        twoTwistAcc += e.angle;
+        if (Math.abs(twoTwistAcc) < THRESHOLDS.twistDeadzoneRad * 3) return;
+        twoTwistAcc = 0;
+        setLensFlash(true);
+        if (lensTimer) clearTimeout(lensTimer);
+        lensTimer = setTimeout(() => setLensFlash(false), 1600);
+        try { haptics.lens(); } catch { /* noop */ }
+        recordTape("region", 0.3, "atlas/lens");
+      },
+      drag: (e) => {
+        if (e.fingers !== 3) return;
+        // wind — a gust drawn from the room's own weather, leaning the
+        // direction the hand pushed
+        spawnGust();
+        const speed = Math.hypot(e.vx, e.vy);
+        if (speed > 0.05) {
+          try { haptics.chop(); } catch { /* noop */ }
+        }
+      },
+      hold: (e) => {
+        if (e.fingers !== 3) return;
+        if (e.phase === "release") { timeScale = 1; return; }
+        // time dilation while held — the sky and clouds slow continuously
+        timeScale = e.phase === "enter"
+          ? 1
+          : Math.max(0.15, 1 - Math.min(1, e.elapsed / THRESHOLDS.ceremonyMs) * 0.85);
+      },
+    }, { wheelZoom: false, manageStyle: false, noCapture: true });
+
+    // vessel: shake scatters a gust across the sky, a knock rings the
+    // map like tutti, and face-down is night — the overlay dims until
+    // the phone turns back over. Tilt has no honest gravity on a map
+    // seen from directly above, so it is left unbound.
+    let nightAlpha = 0;
+    let knockTimer: ReturnType<typeof setTimeout> | null = null;
+    const detachVessel = onVessel({
+      shake: () => {
+        spawnGust();
+        try { haptics.chop(); } catch { /* noop */ }
+        try { getFieldAudio().chime(); } catch { /* noop */ }
+      },
+      knock: () => {
+        setPulse({ x: (metricsRef.current.width || 0) / 2, y: (metricsRef.current.height || 0) / 2, key: Date.now(), intensity: 0.5 });
+        try { getFieldAudio().bell(); } catch { /* noop */ }
+        try { haptics.tap(); } catch { /* noop */ }
+        if (knockTimer) clearTimeout(knockTimer);
+      },
+      flip: ({ faceDown }) => { nightAlpha = faceDown ? 1 : 0; },
+    });
+
     // ── render loop ───────────────────────────────────────────────
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const t0 = performance.now();
@@ -927,7 +1007,38 @@ export default function Atlas() {
     let prevNow = t0;
     let lastSaveAt = t0;
 
+    // Performance contract: sleep the heavy per-frame work while the tab
+    // is hidden (the rAF loop itself keeps ticking cheaply so it wakes
+    // instantly), and read a quality tier from real frame time to scale
+    // the ambient cloud shadows on low-power devices.
+    const gov = createFrameGovernor();
+    let sleeping = false;
+    const offVisibility = onVisibility((hidden) => { sleeping = hidden; });
+
+    // Cloud shadows used to call ctx.createRadialGradient() for all 4
+    // clouds every single frame — forbidden inside a per-element loop.
+    // A radial gradient is a fixed shape (1 at center → 0 at the edge);
+    // only alpha and radius differ per cloud, so one normalized sprite,
+    // drawn once, covers every cloud via drawImage + globalAlpha.
+    const cloudSpriteSize = 256;
+    const cloudSprite = document.createElement("canvas");
+    cloudSprite.width = cloudSprite.height = cloudSpriteSize;
+    const spriteCtx = cloudSprite.getContext("2d");
+    if (spriteCtx) {
+      const r = cloudSpriteSize / 2;
+      const g = spriteCtx.createRadialGradient(r, r, 0, r, r, r);
+      g.addColorStop(0, "rgba(8, 14, 22, 1)");
+      g.addColorStop(1, "rgba(8, 14, 22, 0)");
+      spriteCtx.fillStyle = g;
+      spriteCtx.beginPath();
+      spriteCtx.arc(r, r, r, 0, Math.PI * 2);
+      spriteCtx.fill();
+    }
+
     const draw = (now: number) => {
+      const tier = gov.beginFrame(now);
+      if (sleeping) { raf = requestAnimationFrame(draw); return; } // no draw while hidden
+      const detail = detailForTier(tier);
       const rect = stage.getBoundingClientRect();
       const w = rect.width;
       const h = rect.height;
@@ -953,14 +1064,10 @@ export default function Atlas() {
         const cx = c.x * w;
         const cy = c.y * h;
         const rad = c.r * Math.min(w, h) * 1.8;
-        const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, rad);
-        g.addColorStop(0, `rgba(8, 14, 22, ${c.alpha})`);
-        g.addColorStop(1, "rgba(8, 14, 22, 0)");
-        ctx.fillStyle = g;
-        ctx.beginPath();
-        ctx.arc(cx, cy, rad, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.globalAlpha = c.alpha * detail.shadows;
+        ctx.drawImage(cloudSprite, cx - rad, cy - rad, rad * 2, rad * 2);
       }
+      ctx.globalAlpha = 1;
 
       // ── weather events (transient, frame-relative) ──────────────
       for (let i = weather.length - 1; i >= 0; i--) {
@@ -1005,6 +1112,7 @@ export default function Atlas() {
 
     return () => {
       cancelAnimationFrame(raf);
+      offVisibility();
       if (weatherTimer) clearTimeout(weatherTimer);
       persistNaturals();
       ro.disconnect();
