@@ -923,6 +923,7 @@ export default function RelativityRoom() {
         }
       },
       twist: (e) => {
+        if (e.fingers === 3) return; // three fingers turn the season, not the lens
         lastInteractionAt = performance.now();
         // two fingers rotate the lens: the felt room ↔ its spacetime record
         if (e.phase === "move") {

@@ -678,6 +678,7 @@ export default function FlowersGarden() {
         }
       },
       twist: (e) => {
+        if (e.fingers === 3) return; // three fingers turn the season, not the lens
         lastInteractionAt = performance.now();
         // two fingers rotate the lens: felt garden ↔ botanical diagram
         if (e.phase === "move") {

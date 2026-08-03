@@ -18,6 +18,7 @@ import {
   holdTier,
   intensityFrom,
   decomposeTwoPointer,
+  chordRotation,
   pathWinding,
   classifyInstrumentPair,
   classifyRelease,
@@ -59,7 +60,12 @@ export type GestureHandlers = {
   }) => void;
   flick?: (e: { fingers: number; angle: number; speed: number; x: number; y: number }) => void;
   pinch?: (e: { phase: Phase; scale: number; velocity: number; cx: number; cy: number }) => void;
-  twist?: (e: { phase: Phase; angle: number; velocity: number; cx: number; cy: number }) => void;
+  /**
+   * The angular channel, both registers of the stack: two fingers turn the
+   * lens (the map), three turn the season (the law). Handlers meaning the
+   * lens must ignore fingers === 3.
+   */
+  twist?: (e: { phase: Phase; fingers: number; angle: number; velocity: number; cx: number; cy: number }) => void;
   pan2?: (e: { phase: Phase; dx: number; dy: number; cx: number; cy: number }) => void;
   scrub?: (e: { winding: number; angularVelocity: number; cx: number; cy: number }) => void;
   /**
@@ -184,6 +190,10 @@ export function attachGestures(
   let dragging = false;
   let scrubFired = 0; // last winding at which scrub was emitted
   let two: { a: number; b: number; pa: Pt; pb: Pt; started: Set<"pinch" | "twist" | "pan2">; scaleAcc: number; rotAcc: number; panAcc: number; lastT: number } | null = null;
+  // three-finger chord rotation — the law's angular channel. Independent of
+  // the three-finger drag (weather), the way pinch/pan2/twist share two.
+  let three: { pts: Map<number, { x: number; y: number }>; rotAcc: number; started: boolean; lastT: number } | null = null;
+  let threeTwistFired = false;
   let tapCount = 0;
   let tapTime = -1e9;
   let tapFingersPending = 0;
@@ -268,7 +278,7 @@ export function attachGestures(
     if (!two) return;
     const c = centroid();
     if (two.started.has("pinch")) on.pinch?.({ phase: "end", scale: 1, velocity: 0, cx: c.x, cy: c.y });
-    if (two.started.has("twist")) on.twist?.({ phase: "end", angle: 0, velocity: 0, cx: c.x, cy: c.y });
+    if (two.started.has("twist")) on.twist?.({ phase: "end", fingers: 2, angle: 0, velocity: 0, cx: c.x, cy: c.y });
     if (two.started.has("pan2")) on.pan2?.({ phase: "end", dx: 0, dy: 0, cx: c.x, cy: c.y });
     two = null;
   };
@@ -472,7 +482,7 @@ export function attachGestures(
       }
       if (!two.started.has("twist") && Math.abs(two.rotAcc) > THRESHOLDS.twistDeadzoneRad) {
         two.started.add("twist");
-        on.twist?.({ phase: "start", angle: 0, velocity: 0, cx, cy });
+        on.twist?.({ phase: "start", fingers: 2, angle: 0, velocity: 0, cx, cy });
       }
       if (!two.started.has("pan2") && two.panAcc > THRESHOLDS.pan2DeadzonePx) {
         two.started.add("pan2");
@@ -482,7 +492,7 @@ export function attachGestures(
         on.pinch?.({ phase: "move", scale: d.scale, velocity: Math.log(d.scale) / (dtT / 1000), cx, cy });
       }
       if (two.started.has("twist")) {
-        on.twist?.({ phase: "move", angle: d.rotate, velocity: d.rotate / (dtT / 1000), cx, cy });
+        on.twist?.({ phase: "move", fingers: 2, angle: d.rotate, velocity: d.rotate / (dtT / 1000), cx, cy });
       }
       if (two.started.has("pan2")) on.pan2?.({ phase: "move", dx: d.dx, dy: d.dy, cx, cy });
       two.pa = { x: a.x, y: a.y };
@@ -490,6 +500,39 @@ export function attachGestures(
       two.lastT = now;
       if (two.started.size > 0) clearHold();
       return;
+    }
+
+    // Three-finger twist — the law's angular channel: the chord turning
+    // about its own centroid is the season's wheel. It shares the hand with
+    // the three-finger drag (weather) the way pinch/pan2/twist share two —
+    // independent channels of one grip, never rivals.
+    if (!poly && settled && sessionFingers === 3 && contacts.size === 3) {
+      const ids = [...contacts.keys()].sort((x, y) => x - y);
+      const cur = ids.map((id) => {
+        const cc = contacts.get(id)!;
+        return { x: cc.x, y: cc.y };
+      });
+      const t = three;
+      if (!t || ids.some((id) => !t.pts.has(id))) {
+        three = { pts: new Map(ids.map((id, i) => [id, cur[i]])), rotAcc: 0, started: false, lastT: now };
+      } else {
+        const prevPts = ids.map((id) => t.pts.get(id)!);
+        const d = chordRotation(prevPts, cur);
+        t.rotAcc += d;
+        const cen = centroid();
+        if (!t.started && Math.abs(t.rotAcc) > THRESHOLDS.twistDeadzoneRad) {
+          t.started = true;
+          threeTwistFired = true;
+          clearHold();
+          on.twist?.({ phase: "start", fingers: 3, angle: 0, velocity: 0, cx: cen.x, cy: cen.y });
+        }
+        if (t.started && d !== 0) {
+          const dtT = Math.max(1, now - t.lastT);
+          on.twist?.({ phase: "move", fingers: 3, angle: d, velocity: d / (dtT / 1000), cx: cen.x, cy: cen.y });
+        }
+        for (let i = 0; i < ids.length; i++) t.pts.set(ids[i], cur[i]);
+        t.lastT = now;
+      }
     }
 
     // One- or three-finger drag. On an instrument surface a moving finger is
@@ -536,6 +579,15 @@ export function attachGestures(
 
     if (two && (ev.pointerId === two.a || ev.pointerId === two.b)) endTwo();
 
+    // Any finger leaving dissolves the three-chord; the season wheel rests.
+    if (three) {
+      if (three.started) {
+        const cen = centroid();
+        on.twist?.({ phase: "end", fingers: 3, angle: 0, velocity: 0, cx: cen.x, cy: cen.y });
+      }
+      three = null;
+    }
+
     if (contacts.size > 0) return; // wait for the last finger
 
     if (settleTimer) clearTimeout(settleTimer);
@@ -545,7 +597,8 @@ export function attachGestures(
     const speed = Math.hypot(c.vx, c.vy);
     const kind = classifyRelease(duration, c.moved, speed);
 
-    if (kind === "tap" && wasSessionLead) {
+    // a chord that turned the season already spoke — it must not also tap
+    if (kind === "tap" && wasSessionLead && !threeTwistFired) {
       tapCount = tapFingersPending === sessionFingers ? tapTrain(tapCount, tapTime, now) : 1;
       tapFingersPending = sessionFingers;
       tapTime = now;
@@ -570,6 +623,7 @@ export function attachGestures(
     dragging = false;
     sessionFingers = 0;
     settled = false;
+    threeTwistFired = false;
   };
 
   const onCancel = (ev: PointerEvent) => {
@@ -582,11 +636,19 @@ export function attachGestures(
       if (voicePair && (ev.pointerId === voicePair.a || ev.pointerId === voicePair.b)) voicePair = null;
     }
     if (two) endTwo();
+    if (three) {
+      if (three.started) {
+        const cen = centroid();
+        on.twist?.({ phase: "end", fingers: 3, angle: 0, velocity: 0, cx: cen.x, cy: cen.y });
+      }
+      three = null;
+    }
     if (contacts.size === 0) {
       clearHold();
       dragging = false;
       sessionFingers = 0;
       settled = false;
+      threeTwistFired = false;
     }
   };
 

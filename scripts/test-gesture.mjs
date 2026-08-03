@@ -28,6 +28,7 @@ const {
   holdTier,
   intensityFrom,
   decomposeTwoPointer,
+  chordRotation,
   pathWinding,
   classifyInstrumentPair,
   classifyRelease,
@@ -76,6 +77,46 @@ const purePan = decomposeTwoPointer(
 assert.equal(purePan.dx, 5);
 assert.equal(purePan.dy, 7);
 assert.ok(Math.abs(purePan.scale - 1) < 1e-9 && Math.abs(purePan.rotate) < 1e-9);
+
+// — Chord rotation: the angular channel of a three-finger grip —
+const chord = [
+  { x: 100, y: 40 },
+  { x: 60, y: 140 },
+  { x: 160, y: 130 },
+];
+const spinChord = (pts, rad, tx = 0, ty = 0) => {
+  const cx = pts.reduce((a, p) => a + p.x, 0) / pts.length;
+  const cy = pts.reduce((a, p) => a + p.y, 0) / pts.length;
+  return pts.map((p) => ({
+    x: cx + (p.x - cx) * Math.cos(rad) - (p.y - cy) * Math.sin(rad) + tx,
+    y: cy + (p.x - cx) * Math.sin(rad) + (p.y - cy) * Math.cos(rad) + ty,
+  }));
+};
+assert.ok(
+  Math.abs(chordRotation(chord, spinChord(chord, 0.3)) - 0.3) < 1e-9,
+  "a rigid +0.3 rad turn about the centroid reads as +0.3",
+);
+assert.ok(
+  Math.abs(chordRotation(chord, spinChord(chord, -0.3)) + 0.3) < 1e-9,
+  "the sign follows the turn",
+);
+assert.ok(
+  Math.abs(chordRotation(chord, chord.map((p) => ({ x: p.x + 37, y: p.y - 19 })))) < 1e-9,
+  "carrying the whole chord says nothing about rotation",
+);
+const spread = (() => {
+  const cx = chord.reduce((a, p) => a + p.x, 0) / chord.length;
+  const cy = chord.reduce((a, p) => a + p.y, 0) / chord.length;
+  return chord.map((p) => ({ x: cx + (p.x - cx) * 1.5, y: cy + (p.y - cy) * 1.5 }));
+})();
+assert.ok(
+  Math.abs(chordRotation(chord, spread)) < 1e-9,
+  "a pure spread is a pinch, never a twist",
+);
+assert.ok(
+  Math.abs(chordRotation(chord, spinChord(chord, 0.3, 55, -22)) - 0.3) < 1e-9,
+  "a turn survives being carried across the glass",
+);
 
 // — Winding: a drawn circle is one turn; a line is none —
 const circle = [];
@@ -220,4 +261,4 @@ assert.equal(
   "a fresh still pair stays on probation inside the window",
 );
 
-console.log("gesture grammar tests passed");
+console.log("gesture grammar tests passed — the chord's angular channel holds");

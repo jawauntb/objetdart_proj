@@ -617,6 +617,7 @@ export default function CellsPlasm() {
         try { haptics.ripple(0.4); } catch { /* noop */ }
       },
       twist: (e) => {
+        if (e.fingers === 3) return; // three fingers turn the season, not the lens
         lastInteractionAt = performance.now();
         // two fingers rotate the lens: felt plasm ↔ stained slide
         if (e.phase === "move") {

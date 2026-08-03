@@ -1294,6 +1294,7 @@ export default function Growth() {
         dragUI.lastY = p.y;
       },
       twist: (e) => {
+        if (e.fingers === 3) return; // three fingers turn the season, not the lens
         lastInteractionAt = performance.now();
         // two fingers rotate the lens: felt vines ↔ the bare equations
         if (e.phase === "move") {

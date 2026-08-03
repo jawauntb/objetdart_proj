@@ -889,6 +889,7 @@ export default function AtomsField() {
         }
       },
       twist: (e) => {
+        if (e.fingers === 3) return; // three fingers turn the season, not the lens
         lastInteractionAt = performance.now();
         // two fingers rotate the lens: felt cloud ↔ orbital diagram
         if (e.phase === "move") {

@@ -467,6 +467,7 @@ export default function CircularityFourier() {
         }
       },
       twist: (e) => {
+        if (e.fingers === 3) return; // three fingers turn the season, not the lens
         lastGestureAtRef.current = performance.now();
         if (e.phase !== "move") return;
         // twist rotates the lens: the same object as circle or as wave
