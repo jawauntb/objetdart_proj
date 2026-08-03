@@ -1482,7 +1482,10 @@ export default function GalaxyArms() {
         -0.02,
       );
       setBasis(yaw, pitchCam, roll + (reduced ? 0 : 0.03 * Math.sin(T * 0.013)));
-      const fit = Math.max(BASE_RANGE, (0.98 * FOCAL) / Math.max(0.4, aspect));
+      // Frame the disc by the narrow axis, but never retreat so far that a
+      // tall phone frame turns the galaxy into a coin: past the cap the rim
+      // is allowed to run off the sides, which is what standing closer means.
+      const fit = Math.min(2.05, Math.max(BASE_RANGE, (0.98 * FOCAL) / Math.max(0.4, aspect)));
       fitScale = fit / BASE_RANGE;
       const range = fit * (1 - 0.24 * followLevel) + (reduced ? 0 : 0.05 * Math.sin(T * 0.019));
       // the eye leans toward a ridden star, but never leaves the room
