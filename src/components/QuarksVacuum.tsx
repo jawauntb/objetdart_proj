@@ -29,12 +29,13 @@
  * floor of the axis, and the integrator holds it).
  */
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
 import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
+import LetGo from "@/components/LetGo";
 import {
   ANTI_TINTS,
   COLOR_TINTS,
@@ -190,6 +191,9 @@ function midiOf(morph: HadronMorph): number {
 export default function QuarksVacuum() {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const letGoRef = useRef<() => void>(() => {});
+  // whether anything bound still stands in the vacuum — gates the quiet clear
+  const [standing, setStanding] = useState(false);
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -249,6 +253,10 @@ export default function QuarksVacuum() {
     const hold: { hadronId: string | null; onHadron: boolean; seededId: string | null; done: boolean } = {
       hadronId: null, onHadron: false, seededId: null, done: false,
     };
+    // the stilling: while true, saves are held so the annihilation sequence
+    // cannot resurrect what the hand has already let go of.
+    let clearing = false;
+    const letGoTimers: number[] = [];
 
     const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
     reduce = mq.matches;
@@ -257,6 +265,7 @@ export default function QuarksVacuum() {
 
     // ————— persistence —————
     const save = (force = false) => {
+      if (clearing) { dirty = false; return; } // the stilling already wrote its empty word
       const now = performance.now();
       if (!force && now - lastSaveAt < 800) { dirty = true; return; }
       lastSaveAt = now;
@@ -276,7 +285,9 @@ export default function QuarksVacuum() {
     };
 
     const stored = loadStored();
-    if (stored && stored.hadrons.length > 0) {
+    // an empty hadrons list is a real state (the vacuum was stilled) —
+    // starters do not respawn over a deliberate clearing.
+    if (stored) {
       hadrons = stored.hadrons.slice(-MAX_HADRONS).map((s) => {
         const h = makeHadron(s.seed, 0.5, 0.5, 1);
         const morph = h.morph;
@@ -296,6 +307,8 @@ export default function QuarksVacuum() {
       seedCount = hadrons.length;
       save(true);
     }
+    const syncStanding = () => setStanding(!clearing && hadrons.some((h) => !h.retiringAt));
+    syncStanding();
 
     // ————— helpers —————
     const audio = () => getFieldAudio();
@@ -420,6 +433,7 @@ export default function QuarksVacuum() {
       spraySparks(x, y, 4, 30);
       useField.getState().recordTape("object", 0.5, "quarks/condense");
       save();
+      syncStanding();
       return h;
     };
 
@@ -482,6 +496,7 @@ export default function QuarksVacuum() {
       spraySparks(bx, by, 10, 44);
       useField.getState().recordTape("sigil", 0.85, "quarks/snap");
       save();
+      syncStanding();
     };
 
     /** The ceremony: matter returns to light. */
@@ -503,7 +518,44 @@ export default function QuarksVacuum() {
       spraySparks(cx, cy, 8, 40);
       useField.getState().recordTape("sigil", 0.9, "quarks/annihilate");
       save();
+      syncStanding();
     };
+
+    // the whole-vacuum parting (LetGo, §8c): one low word, then every bound
+    // thing returns to light along the existing annihilation path, in
+    // sequence — an exhale, never a blink. Storage is written empty at once:
+    // a stilled vacuum is a remembered state, and the starters do not return.
+    const letGo = () => {
+      if (clearing) return;
+      const alive = hadrons.filter((h) => !h.retiringAt);
+      if (alive.length === 0) return;
+      try { audio().thud(); } catch { /* noop */ }
+      note(31, 520);
+      try { haptics.roll(); } catch { /* noop */ }
+      try {
+        window.localStorage.setItem(STORE_KEY, JSON.stringify({ hadrons: [] } satisfies Stored));
+      } catch { /* noop */ }
+      useField.getState().recordTape("object", 0.3, "quarks/letgo");
+      setStanding(false);
+      if (reduce) {
+        // reduced motion: a quick fade of light, no racing photon sequence
+        for (const h of alive) { h.charge = 0; h.retiringAt = performance.now(); }
+        if (drag.hadronId) { drag.hadronId = null; drag.quarkIdx = -1; }
+        return;
+      }
+      clearing = true;
+      alive.forEach((h, i) => {
+        letGoTimers.push(window.setTimeout(() => {
+          if (hadrons.includes(h) && !h.retiringAt) annihilate(h);
+        }, 160 + i * 240));
+      });
+      letGoTimers.push(window.setTimeout(() => {
+        clearing = false;
+        save(true); // anything condensed mid-stilling is kept honestly
+        syncStanding();
+      }, 160 + alive.length * 240 + 80));
+    };
+    letGoRef.current = letGo;
 
     // the raised-lens marker ScaleTravel reads before a step-back nudge
     const markLens = (raised: boolean) => {
@@ -1102,7 +1154,7 @@ export default function QuarksVacuum() {
       for (let hi = hadrons.length - 1; hi >= 0; hi--) {
         const h = hadrons[hi];
         if (h.retiringAt && now - h.retiringAt > RETIRE_MS) { hadrons.splice(hi, 1); dirty = true; continue; }
-        if (!h.closed) {
+        if (!h.closed && !h.retiringAt) {
           h.growth = clamp01(h.growth + dt * 0.4);
           if (h.growth >= 1) closeHadron(h);
         }
@@ -1352,6 +1404,10 @@ export default function QuarksVacuum() {
       detach();
       detachVessel();
       markLens(false);
+      for (const id of letGoTimers) window.clearTimeout(id);
+      // a stilling interrupted by leaving still ends stilled — the final
+      // save below must not resurrect what the hand already let go of.
+      if (clearing) { hadrons = []; clearing = false; }
       wrap.removeEventListener("keydown", onKeyDown);
       wrap.removeEventListener("keyup", onKeyUp);
       wrap.removeEventListener("focus", onFocus);
@@ -1373,6 +1429,8 @@ export default function QuarksVacuum() {
       >
         <canvas ref={canvasRef} className="quarks-canvas" aria-hidden="true" />
       </div>
+
+      <LetGo label="still the vacuum" onLetGo={() => letGoRef.current()} visible={standing} />
 
       <style
         dangerouslySetInnerHTML={{

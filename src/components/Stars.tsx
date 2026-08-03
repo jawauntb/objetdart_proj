@@ -6,6 +6,7 @@ import * as haptics from "@/lib/haptics";
 import { useField } from "@/store/field";
 import WaterText from "@/components/WaterText";
 import { useBandEdgeTravel } from "@/components/ScaleTravel";
+import LetGo from "@/components/LetGo";
 import {
   type Camera,
   type LayerId,
@@ -741,6 +742,10 @@ export default function Stars() {
   const automataRef = useRef<Map<LayerId, Float32Array>>(new Map());
   const consumedSeedRef = useRef<Map<LayerId, Set<number>>>(new Map());
   const memoryRef = useRef(loadCosmicMemoryV2());
+  // the forgetting (LetGo, §8c): what the sky is letting go of — born stars
+  // fade and black holes evaporate over a couple of breaths while the
+  // memory itself is already written empty.
+  const forgetRef = useRef<{ t0: number; dur: number; stars: BornStar[]; holes: UserBlackHole[] } | null>(null);
   const pageHiddenRef = useRef(false);
   const bornStarsRef = useRef<BornStar[]>(bornStars);
   const userBlackHolesRef = useRef<UserBlackHole[]>(userBlackHoles);
@@ -914,6 +919,39 @@ export default function Stars() {
     memoryRef.current.version = 2;
     saveCosmicMemoryV2(memoryRef.current);
   }, []);
+
+  // the whole-sky parting (LetGo, §8c): every layer's born stars fade and
+  // every kept black hole evaporates — an exhale, never a blink. The cosmic
+  // memory is written empty at once (an empty sky is a remembered state);
+  // the visible matter lingers only as ghosts while the light leaves.
+  const letSkyForget = useCallback(() => {
+    if (forgetRef.current) return;
+    const stars = bornStarsRef.current;
+    const holes = userBlackHolesRef.current;
+    const layers = memoryRef.current.layers;
+    const anywhere =
+      stars.length > 0 ||
+      holes.length > 0 ||
+      Object.values(layers).some(
+        (l) => l && ((l.bornStars?.length ?? 0) > 0 || (l.blackHoles?.length ?? 0) > 0),
+      );
+    if (!anywhere) return;
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const dur = reduce ? 420 : 1800;
+    forgetRef.current = { t0: performance.now(), dur, stars, holes };
+    window.setTimeout(() => { forgetRef.current = null; }, dur + 120);
+    bornStarsRef.current = [];
+    userBlackHolesRef.current = [];
+    setBornStars([]);
+    setUserBlackHoles([]);
+    consumedSeedRef.current.set(activeLayerRef.current, new Set());
+    memoryRef.current.layers = {};
+    saveCosmicMemoryV2(memoryRef.current);
+    try { getFieldAudio().thud(); } catch { /* noop */ }
+    try { getFieldAudio().playNote(33, 520); } catch { /* noop */ }
+    haptics.roll();
+    markSky("the sky forgets", "star", 0.4, "kept", "letgo");
+  }, [markSky]);
 
   const screenToSky = useCallback((x: number, y: number): { nx: number; ny: number } => {
     const ww = window.innerWidth || 1;
@@ -2818,10 +2856,44 @@ export default function Stars() {
           bctx.fill();
         }
       }
+      // the forgetting: ghost born stars linger and fade while the sky
+      // lets them go — the memory beneath them is already empty.
+      const forgetting = forgetRef.current;
+      const forgetFade = forgetting
+        ? Math.max(0, 1 - (nowMs - forgetting.t0) / forgetting.dur)
+        : 0;
+      if (forgetting && forgetFade > 0) {
+        for (const s of forgetting.stars) {
+          const { x, y } = bornStarPos(s, t);
+          const cullM = 18 + s.size * 8;
+          if (x < -cullM || x > w + cullM || y < -cullM || y > h + cullM) continue;
+          drawStar(s, x, y, s.brightness * forgetFade);
+        }
+      }
       bctx.restore();
 
       drawStaticBlackHolesActive(t, nowMs);
       drawUserBlackHoles(t, nowMs);
+      // the forgetting: kept black holes evaporate — horizons shrink and
+      // their light thins until the sky holds only what it was born with.
+      if (forgetting && forgetFade > 0) {
+        const fBase = Math.min(w, h);
+        const fZoom = cameraZoom(t);
+        for (const hole of forgetting.holes) {
+          const { x, y } = userHoleScreen(hole, t, nowMs);
+          const horizon =
+            fBase * (0.010 + hole.mass * 0.0065) * fZoom * (0.35 + 0.65 * forgetFade);
+          const lensR = horizon * (18 + hole.mass * 4.5);
+          if (x < -lensR || x > w + lensR || y < -lensR || y > h + lensR) continue;
+          drawBlackHoleActive({
+            x, y, horizon, lensR,
+            spin: hole.spin, tilt: 0.28 + hole.mass * 0.045,
+            hue: hole.hue, coolHue: (hole.hue + 185) % 360,
+            intensity: forgetFade, mass: hole.mass, key: `ghost-${hole.id}`,
+            inspiral: 0, lensCopy: false,
+          }, t, nowMs);
+        }
+      }
       drawCosmicEvents(nowMs);
       drawPlanetSystems(t);
 
@@ -3761,6 +3833,14 @@ export default function Stars() {
   }, [cancelPending, zoomIn, zoomOut]);
 
   // ── render ─────────────────────────────────────────────────────────
+  // anything the sky still keeps, on any layer — gates the quiet clear
+  const skyKeeps =
+    bornStars.length > 0 ||
+    userBlackHoles.length > 0 ||
+    Object.values(memoryRef.current.layers).some(
+      (l) => l != null && ((l.bornStars?.length ?? 0) > 0 || (l.blackHoles?.length ?? 0) > 0),
+    );
+
   return (
     <div
       data-touch-surface="true"
@@ -4030,6 +4110,8 @@ export default function Stars() {
           </span>
         </div>
       )}
+      <LetGo label="let the sky forget" onLetGo={letSkyForget} visible={skyKeeps} />
+
       <style
         dangerouslySetInnerHTML={{
           __html: `

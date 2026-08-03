@@ -11,7 +11,8 @@
  * bud → bloom → close (the bloom lands in the palm via haptics.bloom()).
  * Tap sways, three fingers are wind and time, a twist rotates the lens from
  * felt garden to botanical diagram. A ceremony hold on a spent flower wilts
- * it back into the soil; a quiet corner affordance lets the whole garden go.
+ * it back into the soil; the quiet clear control (LetGo, RoomTemplate §8c)
+ * at bottom-center lets the whole garden go.
  * Volunteers sprout on their own seeded schedule, bloom, and return to soil —
  * the room lives while watched and stays calm when glanced at. All breath
  * rides the site's shared 0.14 Hz swell. The garden persists in
@@ -24,6 +25,7 @@ import * as haptics from "@/lib/haptics";
 import { attachGestures, THRESHOLDS } from "@/lib/gesture";
 import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
+import LetGo from "@/components/LetGo";
 import {
   BLOOM_PEAK,
   GOLDEN_ANGLE,
@@ -1368,16 +1370,7 @@ export default function FlowersGarden() {
         <canvas ref={canvasRef} className="flowers-canvas" aria-hidden="true" />
       </div>
 
-      {plantedAlive > 0 && (
-        <button
-          type="button"
-          className="t-mono flowers-letgo"
-          onClick={() => letGoRef.current()}
-          aria-label="let the garden go — every flower returns to soil"
-        >
-          let the garden go
-        </button>
-      )}
+      <LetGo label="let the garden go" onLetGo={() => letGoRef.current()} visible={plantedAlive > 0} />
 
       <style
         dangerouslySetInnerHTML={{
@@ -1401,36 +1394,6 @@ export default function FlowersGarden() {
         .flowers-field:focus-visible {
           outline: 2px solid rgba(231, 172, 82, 0.7);
           outline-offset: -2px;
-        }
-
-        .flowers-letgo {
-          position: fixed;
-          left: calc(16px + env(safe-area-inset-left, 0px));
-          bottom: calc(18px + env(safe-area-inset-bottom, 0px));
-          z-index: 30;
-          appearance: none;
-          -webkit-appearance: none;
-          background: rgba(10, 18, 20, 0.35);
-          border: 1px solid rgba(242, 238, 230, 0.14);
-          color: rgba(221, 211, 190, 0.42);
-          font-size: 11px;
-          letter-spacing: 0.1em;
-          text-transform: lowercase;
-          line-height: 1;
-          padding: 0 12px;
-          min-height: 40px;
-          display: inline-flex;
-          align-items: center;
-          cursor: pointer;
-          transition: color 200ms ease, border-color 200ms ease;
-        }
-        .flowers-letgo:hover {
-          color: rgba(242, 238, 230, 0.75);
-          border-color: rgba(242, 238, 230, 0.35);
-        }
-        .flowers-letgo:focus-visible {
-          outline: 2px solid rgba(231, 172, 82, 0.7);
-          outline-offset: 2px;
         }
 
         body:has(.flowers-page) {

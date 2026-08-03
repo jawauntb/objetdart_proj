@@ -20,6 +20,7 @@ import {
   type WorldKind,
   type WorldNatural,
 } from "@/lib/world";
+import LetGo from "@/components/LetGo";
 
 /**
  * Waves — a wave-propagation instrument.
@@ -116,6 +117,9 @@ export default function Waves() {
   const [running, setRunning] = useState(true);
   const [mode, setMode] = useState<WaveMode>("ripple");
   const [readout, setReadout] = useState("ripple · c 0.34 · still");
+  // whether the pond still keeps anything — gates the quiet clear (§8c)
+  const letGoRef = useRef<() => void>(() => {});
+  const [keptHere, setKeptHere] = useState(false);
 
   useEffect(() => { speedRef.current = speed; }, [speed]);
   useEffect(() => { dampRef.current = damp; }, [damp]);
@@ -477,19 +481,46 @@ export default function Waves() {
       : kind === "koi" ? 0.014
       : 0.004;
     let naturals: WorldNatural[] = getNaturalsInZone("waves");
+    const syncKept = () => setKeptHere(naturals.length > 0);
+    syncKept();
     const unsubscribeWorld = subscribeNaturals(() => {
       naturals = getNaturalsInZone("waves");
+      syncKept();
     });
     const addNatural = (kind: NaturalKind, nx?: number, ny?: number) => {
       const finalNx = nx != null ? clamp(nx, 0.04, 0.96) : Math.random();
       const finalNy = ny != null ? clamp(ny, 0.10, 0.94) : 0.2 + Math.random() * 0.7;
       const created = worldAddNatural(kind, "waves", finalNx, finalNy, vxForKind(kind));
       naturals = getNaturalsInZone("waves");
+      syncKept();
       return created;
     };
     const persistNaturals = () => {
       worldCommitZone("waves", naturals);
     };
+
+    // the pond's parting (LetGo, §8c): this zone's keepsakes only — pads,
+    // leaves and koi ride the downstream current out over a couple of
+    // breaths, fading as they go; the world is written empty for this zone
+    // at once, so nothing floats back on reload.
+    type Departing = WorldNatural & { bx: number };
+    let departing: Departing[] = [];
+    let letGoAt = 0;
+    let letGoDur = 1800;
+    const letGo = () => {
+      if (naturals.length === 0) return;
+      departing = naturals.map((n) => ({ ...n, bx: n.nx }));
+      naturals = [];
+      letGoAt = performance.now();
+      letGoDur = reduceRef.current ? 420 : 1800;
+      worldCommitZone("waves", []);
+      try { getFieldAudio().thud(); } catch { /* noop */ }
+      try { getFieldAudio().playNote(36, 520); } catch { /* noop */ }
+      try { haptics.roll(); } catch { /* noop */ }
+      useField.getState().recordTape("object", 0.3, "waves/letgo");
+      setKeptHere(false);
+    };
+    letGoRef.current = letGo;
 
     // ── weather events (autonomic, transient) ───────────────────────
     // Every 9-17s a jittered scheduler fires one of six natural events:
@@ -917,6 +948,28 @@ export default function Waves() {
               else if (n.kind === "koi") drawKoiShadow(ctx, sx, sy, 28 + (n.seed & 15), nowSec, n.seed);
             }
           }
+          // the letting go: departing pond life rides the downstream
+          // current out, fading as the water takes it back.
+          if (departing.length > 0) {
+            const u = (now - letGoAt) / letGoDur;
+            if (u >= 1) {
+              departing = [];
+            } else {
+              ctx.save();
+              ctx.globalAlpha = 1 - u;
+              for (const d of departing) {
+                d.nx = (((d.bx + u * u * 0.2) % 1) + 1) % 1;
+                const sx = d.nx * width;
+                const sy = d.ny * height;
+                const bob = Math.sin(nowSec * 1.2 + d.seed * 0.001) * 1.4;
+                const rot = ((d.seed % 6283) / 1000);
+                if (d.kind === "lily") drawLilyPad(ctx, sx, sy + bob, 18 + (d.seed & 15), d.seed);
+                else if (d.kind === "leaf") drawFallenLeaf(ctx, sx, sy + bob, 10 + (d.seed & 7), rot + nowSec * 0.05, d.seed);
+                else if (d.kind === "koi") drawKoiShadow(ctx, sx, sy, 28 + (d.seed & 15), nowSec, d.seed);
+              }
+              ctx.restore();
+            }
+          }
           // draw weather overlays after the naturals so they read on top
           drawWeatherOverlay(ctx, weather, now, nowSec, width, height);
           // glimmer (§6): after ~20s of quiet the water itself sketches a
@@ -1117,6 +1170,8 @@ export default function Waves() {
           </output>
         </div>
       </MobileInstrumentPanel>
+
+      <LetGo label="give back to the sea" onLetGo={() => letGoRef.current()} visible={keptHere} />
 
       <style
         dangerouslySetInnerHTML={{
@@ -1505,6 +1560,22 @@ export default function Waves() {
 
           .waves-title strong {
             font-size: 62px;
+          }
+        }
+
+        /* this room's console already spans the bottom, so the quiet clear
+           lifts above it until the console folds into the sheet (§8c). */
+        body:has(.waves-instrument) .oda-letgo {
+          bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+        }
+        @media (max-width: 940px) {
+          body:has(.waves-instrument) .oda-letgo {
+            bottom: calc(282px + env(safe-area-inset-bottom, 0px));
+          }
+        }
+        @media (max-width: 720px) {
+          body:has(.waves-instrument) .oda-letgo {
+            bottom: max(18px, env(safe-area-inset-bottom, 0px));
           }
         }
       `,

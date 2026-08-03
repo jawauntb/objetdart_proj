@@ -15,6 +15,7 @@ import {
   type WorldKind,
   type WorldNatural,
 } from "@/lib/world";
+import LetGo from "@/components/LetGo";
 
 /**
  * /tide — the lunar gravity-phase instrument.
@@ -101,6 +102,10 @@ export default function Tide() {
   const [readout, setReadout] = useState("tide held");
   useEffect(() => { autoRef.current = auto; }, [auto]);
 
+  // whether this tideline still keeps anything — gates the quiet clear (§8c)
+  const letGoRef = useRef<() => void>(() => {});
+  const [keptHere, setKeptHere] = useState(false);
+
   // DOM ripples for taps on the open sea.
   const [ripples, setRipples] = useState<Array<{ id: number; x: number; y: number; size: number; tone: "gold" | "pale" }>>([]);
   const rippleIdRef = useRef(0);
@@ -159,8 +164,11 @@ export default function Tide() {
     // tide — the simulation IS the gameplay.
     type NaturalKind = Extract<WorldKind, "seashell" | "driftwood" | "starfish">;
     let naturals: WorldNatural[] = getNaturalsInZone("tide");
+    const syncKept = () => setKeptHere(naturals.length > 0);
+    syncKept();
     const unsubscribeWorld = subscribeNaturals(() => {
       naturals = getNaturalsInZone("tide");
+      syncKept();
     });
     const addNatural = (kind: NaturalKind, nx: number, ny: number) => {
       const created = worldAddNatural(
@@ -171,12 +179,36 @@ export default function Tide() {
         0, // /tide naturals stay put — the tide moves, not the shells
       );
       naturals = getNaturalsInZone("tide");
+      syncKept();
       return created;
     };
     const persistNaturals = () => {
       worldCommitZone("tide", naturals);
     };
     let lastNaturalsSaveAt = performance.now();
+
+    // the tideline's parting (LetGo, §8c): this zone's keepsakes only — the
+    // shells slip below the waterline and the sea takes them back over a
+    // couple of breaths; the world is written empty for this zone at once,
+    // so nothing washes back up on reload.
+    type Departing = WorldNatural & { bny: number; bx: number };
+    let departing: Departing[] = [];
+    let letGoAt = 0;
+    let letGoDur = 1800;
+    const letGo = () => {
+      if (naturals.length === 0) return;
+      departing = naturals.map((n) => ({ ...n, bny: n.ny, bx: n.nx }));
+      naturals = [];
+      letGoAt = performance.now();
+      letGoDur = reduceMotionRef.current ? 420 : 1800;
+      worldCommitZone("tide", []);
+      try { audio.thud(); } catch { /* noop */ }
+      try { audio.playNote(36, 520); } catch { /* noop */ }
+      try { haptics.roll(); } catch { /* noop */ }
+      recordTapeRef.current("object", 0.3, "tide/letgo");
+      setKeptHere(false);
+    };
+    letGoRef.current = letGo;
 
     // ── weather events (autonomic) ───────────────────────────────
     // Ephemeral things that happen against the moonlit sea while you
@@ -664,6 +696,20 @@ export default function Tide() {
       // back far enough. This is the whole gameplay of /tide made
       // literal: play the moon, expose the beach.
       drawTideNaturals(ctx, naturals, waterY, meanSeaY, swing, w, h, t);
+      // the letting go: departing shells slide under the waterline and the
+      // driftwood rides out, all fading as the sea takes them back.
+      if (departing.length > 0) {
+        const u = (performance.now() - letGoAt) / letGoDur;
+        if (u >= 1) {
+          departing = [];
+        } else {
+          for (const d of departing) {
+            if (d.kind === "driftwood") d.nx = (((d.bx + u * u * 0.14) % 1) + 1) % 1;
+            else d.ny = d.bny + u * u * 1.4;
+          }
+          drawTideNaturals(ctx, departing, waterY, meanSeaY, swing, w, h, t, 1 - u);
+        }
+      }
       // Boat lantern floats on the horizon at the sea surface.
       drawTideBoat(ctx, weather, simNow, w, h, waterY);
       // Fog roll drifts across the sea over ~40s.
@@ -1106,6 +1152,8 @@ export default function Tide() {
 
       <output className="tide-readout" aria-live="polite">{readout}</output>
 
+      <LetGo label="give back to the sea" onLetGo={() => letGoRef.current()} visible={keptHere} />
+
       <div
         className="tide-inscription-wrap"
         style={{ position: "fixed", left: 0, right: 0, bottom: 62, textAlign: "center", pointerEvents: "none", zIndex: 6 }}
@@ -1373,6 +1421,22 @@ export default function Tide() {
           .tide-title strong { font-size: 62px; }
           .tide-mobile-panel .tide-rail { grid-template-columns: 1fr; }
         }
+
+        /* this room's own furniture already stands at bottom-center, so the
+           quiet clear lifts above the readout and the inscription (§8c). */
+        body:has(.tide-instrument) .oda-letgo {
+          bottom: calc(100px + env(safe-area-inset-bottom, 0px));
+        }
+        @media (max-width: 940px) {
+          body:has(.tide-instrument) .oda-letgo {
+            bottom: calc(136px + env(safe-area-inset-bottom, 0px));
+          }
+        }
+        @media (max-width: 720px) {
+          body:has(.tide-instrument) .oda-letgo {
+            bottom: max(18px, env(safe-area-inset-bottom, 0px));
+          }
+        }
       `,
         }}
       />
@@ -1401,6 +1465,7 @@ function drawTideNaturals(
   w: number,
   _h: number,
   t: number,
+  fade = 1, // < 1 while the shore gives its keepsakes back to the sea
 ) {
   if (naturals.length === 0) return;
   const hiY = meanSeaY - swing;
@@ -1426,7 +1491,7 @@ function drawTideNaturals(
         tinted = true;
       }
     }
-    ctx.globalAlpha = alpha;
+    ctx.globalAlpha = alpha * fade;
     switch (n.kind) {
       case "seashell": drawTideSeashell(ctx, sx, sy, 5 + (1 - n.ny) * 3, n.seed, tinted); break;
       case "starfish": drawTideStarfish(ctx, sx, sy, 6 + (1 - n.ny) * 3, n.seed, tinted); break;

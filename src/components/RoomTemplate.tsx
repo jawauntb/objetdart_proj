@@ -19,6 +19,7 @@ import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
 import { onVessel } from "@/lib/vessel";
+import LetGo from "@/components/LetGo";
 
 // ——— 1. Determinism: every generated thing is a pure function of a seed.
 // The site-wide idiom — an inline integer hash + mulberry32. No Math.random,
@@ -259,9 +260,14 @@ export default function RoomTemplate() {
     };
   }, []);
 
-  // ——— 8c. The quiet clear: a tiny control at the bottom of every page that
-  // keeps things — hard to hit by accident, clear of browser chrome, in the
-  // room's own words. Visible only when something stands.
+  // ——— 8c. The quiet clear: the shared <LetGo> control at bottom-center of
+  // every page that keeps things — hard to hit by accident, clear of browser
+  // chrome, in the room's own words (lowercase, two of the three registers,
+  // five words or fewer). Visible only when something stands. The act is an
+  // exhale, never a blink-delete: in a real room, retire the population
+  // gracefully over ~1.5-2s in its own material (a quick fade under reduced
+  // motion). Storage is written empty at once — an empty room is a
+  // remembered state, and starters never respawn over a deliberate clearing.
   const letGo = () => {
     motesRef.current = [];
     try {
@@ -282,31 +288,7 @@ export default function RoomTemplate() {
         aria-label="a field of motes"
         style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
       />
-      {hasKept && (
-        <button
-          type="button"
-          onClick={letGo}
-          style={{
-            position: "fixed",
-            bottom: "max(18px, env(safe-area-inset-bottom))",
-            left: "50%",
-            transform: "translateX(-50%)",
-            minHeight: 40,
-            padding: "8px 14px",
-            background: "transparent",
-            border: "1px solid rgba(238, 234, 219, 0.18)",
-            borderRadius: 3,
-            color: "rgba(238, 234, 219, 0.5)",
-            fontFamily: "var(--font-mono, IBM Plex Mono, monospace)",
-            fontSize: 11,
-            letterSpacing: "0.06em",
-            cursor: "pointer",
-            zIndex: 30,
-          }}
-        >
-          let the field go
-        </button>
-      )}
+      <LetGo label="let the field go" onLetGo={letGo} visible={hasKept} />
       {/* ——— 10. Axis rooms mount ScaleTravel in their page.tsx:
           <ScaleTravel route="/your-room" /> — and NEVER bind pinch/pan2
           themselves. See docs/new-room.md §1 for the ordinal decision. */}
