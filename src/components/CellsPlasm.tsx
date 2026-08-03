@@ -19,6 +19,14 @@
  * blow across the stage gutters the candle. The plasm persists in
  * `objetdart:cells:v1`. Pinch is deliberately unbound here — ScaleTravel
  * owns it, so pinching travels the manifold.
+ *
+ * The dish keeps its own tide: real elapsed hours between visits are decoded
+ * by `catchUpCulture` (src/lib/cytology.ts) into a next generation — some
+ * cells divide into descendants, some settle and dim, the census eases
+ * toward the culture's own resting point. Deterministic and bounded (same
+ * law as `lib/world.ts`'s migrating naturals, applied to a genealogy instead
+ * of a scattering of objects) — never a loop over elapsed time, never more
+ * than MAX_CELLS residents.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -33,12 +41,15 @@ import LetGo from "@/components/LetGo";
 import {
   CELL_FAMILIES,
   MAX_CELLS,
+  catchUpCulture,
   cellFromSeed,
   daughterSeeds,
   hashSeed,
   membraneRadius,
   settlePopulation,
+  validateStoredCulture,
   type CellMorph,
+  type LineageCell,
 } from "@/lib/cytology";
 
 const STORE_KEY = "objetdart:cells:v1";
@@ -55,6 +66,10 @@ type Cell = {
   morph: CellMorph;
   /** 0..1 membrane closure; grows from nothing when seeded. */
   growth: number;
+  /** 0..1 — freshness; decays only across real elapsed hours away, never
+   *  within a session. Dims the cytoplasm's glow so a long-settled culture
+   *  reads as calm rather than cluttered. */
+  vitality: number;
   /** The membrane has closed at least once (bloom fired). */
   closed: boolean;
   /** 0..1 mitosis charge — the waist pinches as the ceremony deepens. */
@@ -85,7 +100,7 @@ type Vortex = { x: number; y: number; omega: number; born: number };
 
 type Speck = { x: number; y: number; vx: number; vy: number; born: number; life: number; r: number; color: string };
 
-type Stored = { cells: Array<{ id: string; seed: number; nx: number; ny: number; generation: number }> };
+type Stored = { cells: LineageCell[]; lastSeen: number };
 
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 const clamp01 = (v: number) => clamp(v, 0, 1);
@@ -109,7 +124,14 @@ function mixHex(a: string, b: string, t: number) {
   return `rgb(${r}, ${g}, ${bl})`;
 }
 
-function makeCell(seed: number, nx: number, ny: number, generation: number, growth: number): Cell {
+function makeCell(
+  seed: number,
+  nx: number,
+  ny: number,
+  generation: number,
+  growth: number,
+  vitality = 1,
+): Cell {
   const morph = cellFromSeed(seed);
   return {
     id: `ce-${seed.toString(36)}-${generation}`,
@@ -119,6 +141,7 @@ function makeCell(seed: number, nx: number, ny: number, generation: number, grow
     generation,
     morph,
     growth,
+    vitality,
     closed: growth >= 1,
     charge: 0,
     axis: (hashSeed(seed, 71) / 4294967296) * Math.PI * 2,
@@ -141,22 +164,16 @@ const STARTERS: Array<[number, number]> = [
   [0.5, 0.28],
 ];
 
+// Load, validate, and advance in one step: a bad or absent value degrades to
+// null (a fresh dish); a present one is decoded and carried across whatever
+// real time passed since it was last written — see catchUpCulture.
 function loadStored(): Stored | null {
   try {
     const raw = window.localStorage.getItem(STORE_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as Stored;
-    if (!parsed || !Array.isArray(parsed.cells)) return null;
-    return {
-      cells: parsed.cells.filter(
-        (c) =>
-          c &&
-          typeof c.seed === "number" &&
-          typeof c.nx === "number" &&
-          typeof c.ny === "number" &&
-          typeof c.generation === "number",
-      ),
-    };
+    const parsed = JSON.parse(raw) as unknown;
+    const nowMs = Date.now();
+    return catchUpCulture(validateStoredCulture(parsed, nowMs), nowMs);
   } catch {
     return null;
   }
@@ -258,7 +275,15 @@ export default function CellsPlasm() {
         const stored: Stored = {
           cells: cells
             .filter((c) => !c.retiringAt)
-            .map((c) => ({ id: c.id, seed: c.seed, nx: c.nx, ny: c.ny, generation: c.generation })),
+            .map((c) => ({
+              id: c.id,
+              seed: c.seed,
+              nx: c.nx,
+              ny: c.ny,
+              generation: c.generation,
+              vitality: c.vitality,
+            })),
+          lastSeen: Date.now(),
         };
         window.localStorage.setItem(STORE_KEY, JSON.stringify(stored));
       } catch { /* quota; the plasm lives on in memory */ }
@@ -270,7 +295,7 @@ export default function CellsPlasm() {
       // starters do not respawn over a deliberate clearing.
       cells = stored.cells
         .slice(-MAX_CELLS)
-        .map((c) => makeCell(c.seed, clamp01(c.nx), clamp01(c.ny), Math.max(0, c.generation), 1));
+        .map((c) => makeCell(c.seed, clamp01(c.nx), clamp01(c.ny), Math.max(0, c.generation), 1, c.vitality));
       seedCount = cells.length;
     } else {
       cells = STARTERS.map(([nx, ny], i) =>
@@ -460,7 +485,10 @@ export default function CellsPlasm() {
       note(40, 520);
       try { haptics.roll(); } catch { /* noop */ }
       try {
-        window.localStorage.setItem(STORE_KEY, JSON.stringify({ cells: [] } satisfies Stored));
+        window.localStorage.setItem(
+          STORE_KEY,
+          JSON.stringify({ cells: [], lastSeen: Date.now() } satisfies Stored),
+        );
       } catch { /* noop */ }
       useField.getState().recordTape("object", 0.3, "cells/letgo");
       setStanding(false);
@@ -911,6 +939,10 @@ export default function CellsPlasm() {
       const feltAlpha = (1 - lens) * fade;
       const slideAlpha = lens * fade;
       const streamT = reduce ? 0 : t * morph.stream.rate * (1 + c.streamBoost);
+      // a long-settled cell's glow dims (never its structure) — the legible
+      // trace of real time passed, and why a dense, long-neglected dish
+      // still reads as calm rather than lit up all at once
+      const vitalityGlow = 0.4 + 0.6 * c.vitality;
 
       ctx.save();
       ctx.translate(cx, cy);
@@ -921,9 +953,9 @@ export default function CellsPlasm() {
         const gatherA = c.growth < 1 ? 0.2 + 0.8 * c.growth * c.growth : 1;
         membranePath(c, R, t * 0.6, 1);
         const cyto = ctx.createRadialGradient(0, 0, R * 0.1, 0, 0, R * 1.05);
-        cyto.addColorStop(0, colorAlpha(fam[3], morph.cytoAlpha * 1.5 * feltAlpha * gatherA));
-        cyto.addColorStop(0.7, colorAlpha(fam[2], morph.cytoAlpha * feltAlpha * gatherA));
-        cyto.addColorStop(1, colorAlpha(fam[1], morph.cytoAlpha * 0.5 * feltAlpha * gatherA));
+        cyto.addColorStop(0, colorAlpha(fam[3], morph.cytoAlpha * 1.5 * feltAlpha * gatherA * vitalityGlow));
+        cyto.addColorStop(0.7, colorAlpha(fam[2], morph.cytoAlpha * feltAlpha * gatherA * vitalityGlow));
+        cyto.addColorStop(1, colorAlpha(fam[1], morph.cytoAlpha * 0.5 * feltAlpha * gatherA * vitalityGlow));
         ctx.fillStyle = cyto;
         ctx.fill();
         // membrane: a double line, the outer soft, the inner taut — while
@@ -980,24 +1012,24 @@ export default function CellsPlasm() {
           const oy = Math.sin(a) * R * o.orbit * 0.9;
           const os = R * o.size;
           if (o.kind === "vacuole") {
-            ctx.strokeStyle = colorAlpha(fam[4], 0.4 * feltAlpha);
+            ctx.strokeStyle = colorAlpha(fam[4], 0.4 * feltAlpha * vitalityGlow);
             ctx.lineWidth = Math.max(0.5, os * 0.16);
             ctx.beginPath();
             ctx.arc(ox, oy, os, 0, Math.PI * 2);
             ctx.stroke();
-            ctx.fillStyle = colorAlpha(fam[5], 0.1 * feltAlpha);
+            ctx.fillStyle = colorAlpha(fam[5], 0.1 * feltAlpha * vitalityGlow);
             ctx.fill();
           } else if (o.kind === "mitochondrion") {
             ctx.save();
             ctx.translate(ox, oy);
             ctx.rotate(o.tilt + (reduce ? 0 : a * 0.4));
-            ctx.fillStyle = colorAlpha(fam[3], 0.5 * feltAlpha);
+            ctx.fillStyle = colorAlpha(fam[3], 0.5 * feltAlpha * vitalityGlow);
             ctx.beginPath();
             ctx.ellipse(0, 0, os * o.ecc * 0.5, os * 0.5, 0, 0, Math.PI * 2);
             ctx.fill();
             ctx.restore();
           } else {
-            ctx.fillStyle = colorAlpha(fam[4], 0.6 * feltAlpha);
+            ctx.fillStyle = colorAlpha(fam[4], 0.6 * feltAlpha * vitalityGlow);
             ctx.beginPath();
             ctx.arc(ox, oy, os, 0, Math.PI * 2);
             ctx.fill();

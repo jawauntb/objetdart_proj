@@ -21,6 +21,14 @@ import {
   type WorldNatural,
 } from "@/lib/world";
 import LetGo from "@/components/LetGo";
+import {
+  onVisibility,
+  onGalleryPause,
+  resolveDpr,
+  createFrameGovernor,
+  createIdleWriter,
+  isEmbeddedFrame,
+} from "@/lib/room-runtime";
 
 /**
  * Waves — a wave-propagation instrument.
@@ -296,9 +304,16 @@ export default function Waves() {
       };
     };
 
+    const embedded = isEmbeddedFrame();
+    const governor = createFrameGovernor(embedded ? "medium" : "high");
+    let galleryPaused = false;
+    let paused = document.hidden;
+    const unvis = onVisibility((h) => { paused = h || galleryPaused; });
+    const ungal = onGalleryPause((p) => { galleryPaused = p; paused = document.hidden || p; });
+
     const resize = () => {
       const rect = root.getBoundingClientRect();
-      const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+      const dpr = resolveDpr(governor.tier(), { embedded, maxDpr: 1.5 });
       width = Math.max(320, Math.floor(rect.width));
       height = Math.max(480, Math.floor(rect.height));
       canvas.width = Math.floor(width * dpr);
@@ -498,6 +513,7 @@ export default function Waves() {
     const persistNaturals = () => {
       worldCommitZone("waves", naturals);
     };
+    const idlePersist = createIdleWriter(() => { persistNaturals(); }, 500);
 
     // the pond's parting (LetGo, §8c): this zone's keepsakes only — pads,
     // leaves and koi ride the downstream current out over a couple of
@@ -832,6 +848,12 @@ export default function Waves() {
     let prevDrawSec = performance.now() / 1000;
 
     const draw = (now: number) => {
+      if (paused) {
+        governor.force("sleep");
+        raf = window.setTimeout(() => { raf = requestAnimationFrame(draw); }, 200) as unknown as number;
+        return;
+      }
+      governor.beginFrame(now);
       last = now;
       const sim = simRef.current;
       if (!sim) {
@@ -1016,7 +1038,7 @@ export default function Waves() {
       // this makes sure the mutations get written before unmount races.
       if (naturals.length > 0 && now - lastNaturalsSaveAt > 4000) {
         lastNaturalsSaveAt = now;
-        persistNaturals();
+        idlePersist.schedule();
       }
 
       raf = requestAnimationFrame(draw);
@@ -1027,7 +1049,9 @@ export default function Waves() {
       cancelAnimationFrame(raf);
       if (weatherTimer) clearTimeout(weatherTimer);
       // final checkpoint so re-entry advances drift from now.
-      persistNaturals();
+      idlePersist.flush();
+      unvis();
+      ungal();
       unsubscribeWorld();
       observer.disconnect();
       window.removeEventListener("resize", resize);

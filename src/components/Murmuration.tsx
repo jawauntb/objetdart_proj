@@ -41,6 +41,15 @@ import { attachGestures } from "@/lib/gesture";
 import { onVessel } from "@/lib/vessel";
 import { stirTurbulence } from "@/lib/turbulence";
 import { spectralRegisterFor } from "@/lib/scale";
+import {
+  createFrameGovernor,
+  detailForTier,
+  isEmbeddedFrame,
+  onGalleryPause,
+  onVisibility,
+  resolveDpr,
+  type QualityTier,
+} from "@/lib/room-runtime";
 import LetGo from "@/components/LetGo";
 import {
   PARTIALS,
@@ -71,6 +80,8 @@ const SEASON_PULL = 1.6;
 const WIND_MAX = 5;
 const CAM_DIST = 78;
 const SKY_SEED = 0xb1d5;
+/** However tight the frame, there is still a flock up there. */
+const MIN_DRAWN = 500;
 
 type Character = { sep: number; ali: number; coh: number };
 type Stored = Character & { season: number; yaw: number; cleared?: boolean };
@@ -228,6 +239,11 @@ export default function Murmuration() {
 
     const audio = getFieldAudio();
     const register = spectralRegisterFor(BAND_S);
+    // The shared room runtime: one governor for the frame, one tier for the
+    // resolution and the population, and no flock flying in a hidden tab.
+    const embedded = isEmbeddedFrame();
+    const gov = createFrameGovernor(embedded ? "medium" : "high");
+    let paused = false;
     const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
     let reduced = mq.matches;
     const onMq = () => {
@@ -360,7 +376,9 @@ export default function Murmuration() {
     // The population the screen can carry — measured, capped, and thinned
     // further below if the frame will not hold it.
     const startRect = wrap.getBoundingClientRect();
-    const wanted = Math.round((startRect.width * startRect.height) / 300);
+    const wanted = Math.round(
+      ((startRect.width * startRect.height) / 300) * detailForTier(gov.tier()).particles,
+    );
     const state = seedFlock(SKY_SEED, flockSize(Math.min(2600, wanted)));
     let drawn = state.n;
 
@@ -376,7 +394,7 @@ export default function Murmuration() {
 
     const resize = () => {
       const r = wrap.getBoundingClientRect();
-      const ratio = Math.min(2, window.devicePixelRatio || 1);
+      const ratio = resolveDpr(gov.tier(), { embedded, reducedMotion: reduced });
       width = Math.max(240, r.width);
       height = Math.max(320, r.height);
       rectLeft = r.left;
@@ -426,7 +444,6 @@ export default function Murmuration() {
     let kbCharge = 0;
     let energy = 0; // reduced-motion budget: the sky moves when a hand asks
     let leaving = 0;
-    let frameAvg = 16;
     let thinnedAt = 0;
     const startedAt = performance.now();
     let uploaded = false;
@@ -864,18 +881,29 @@ export default function Murmuration() {
     // ——— the one loop ———
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
+      const tier = gov.beginFrame(now);
+      if (paused) {
+        last = now;
+        return;
+      }
       const deltaMs = Math.min(64, now - last);
       last = now;
       const dt = deltaMs / 1000;
-      frameAvg = frameAvg * 0.94 + deltaMs * 0.06;
 
       // A machine that cannot hold the frame loses birds rather than time —
-      // the flock thins a little, the room stays alive. Never in the first
-      // seconds, where the cost is the page still arriving.
-      if (now - startedAt > 5000 && frameAvg > 34 && drawn > 800 && now - thinnedAt > 4000) {
-        thinnedAt = now;
-        drawn = Math.max(800, Math.round(drawn * 0.8));
-        state.n = drawn;
+      // the flock thins toward the tier's share, the room stays alive. Never
+      // in the first seconds, where the cost is the page still arriving.
+      if (now - startedAt > 5000 && now - thinnedAt > 4000) {
+        const want = Math.max(MIN_DRAWN, Math.round(state.pos.length / 3 * detailForTier(tier).particles));
+        if (want < drawn) {
+          thinnedAt = now;
+          drawn = Math.max(MIN_DRAWN, Math.round(drawn * 0.8));
+          state.n = drawn;
+        } else if (want > drawn) {
+          thinnedAt = now;
+          drawn = Math.min(want, Math.round(drawn * 1.2) + 40);
+          state.n = drawn;
+        }
       }
 
       timeScale += (timeScaleTarget - timeScale) * Math.min(1, dt * 5);
@@ -1027,10 +1055,31 @@ export default function Murmuration() {
     };
     raf = requestAnimationFrame(draw);
 
+    // A flock in a hidden tab, or in a gallery card nobody is looking at,
+    // costs nothing: the clock stops rather than the sky racing.
+    let hiddenNow = false;
+    let galleryPaused = false;
+    const settlePause = () => {
+      const next = hiddenNow || galleryPaused;
+      if (next === paused) return;
+      paused = next;
+      if (!paused) last = performance.now();
+    };
+    const detachVisibility = onVisibility((hidden) => {
+      hiddenNow = hidden;
+      settlePause();
+    });
+    const detachGallery = onGalleryPause((p) => {
+      galleryPaused = p;
+      settlePause();
+    });
+
     return () => {
       observer.disconnect();
       detach();
       detachVessel();
+      detachVisibility();
+      detachGallery();
       wrap.removeEventListener("keydown", onKeyDown);
       wrap.removeEventListener("keyup", onKeyUp);
       mq.removeEventListener?.("change", onMq);

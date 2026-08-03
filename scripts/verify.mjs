@@ -5,8 +5,8 @@ const b = await chromium.launch({ executablePath: "/opt/pw-browsers/chromium_hea
 const p = await b.newPage({ viewport: { width: 950, height: 950 } });
 p.setDefaultTimeout(120000);
 const errs=[]; p.on("pageerror",e=>errs.push("EXC "+e.message)); p.on("console",m=>{if(m.type()==="error")errs.push("ERR "+m.text());});
-await p.goto("http://localhost:3000/movement?spin=0&view=top&shot=1", { waitUntil:"networkidle" });
-await p.waitForFunction(() => window.__movement && window.__movement.ready === true);
+await p.goto("http://localhost:3000/tourbillon?spin=0&view=top&shot=1", { waitUntil:"networkidle" });
+await p.waitForFunction(() => window.__tourbillon && window.__tourbillon.ready === true);
 await p.waitForTimeout(1500);
 await p.screenshot({ path: "iterations/iter-08/dial-geneve.png" });
 await p.getByRole("button",{name:"nacre"}).click(); await p.waitForTimeout(800);

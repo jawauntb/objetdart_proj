@@ -64,21 +64,21 @@ export const SCALE_BANDS: ScaleBand[] = [
   { id: "molecules", label: "molecules", route: "/molecules", sMin: -9.5, sMax: -8.8 },
   { id: "organics", label: "organic molecules", route: "/organics", sMin: -8.8, sMax: -8 },
   { id: "dna", label: "dna", route: "/dna", sMin: -8, sMax: -7.2 },
-  { id: "organelles", label: "organelles", route: null, sMin: -7.2, sMax: -5.8 },
+  { id: "organelles", label: "organelles", route: "/organelles", sMin: -7.2, sMax: -5.8 },
   { id: "cells", label: "cells", route: "/cells", sMin: -5.8, sMax: -4.4 },
-  { id: "tissue", label: "tissue", route: null, sMin: -4.4, sMax: -3.5 },
+  { id: "tissue", label: "tissue", route: "/tissue", sMin: -4.4, sMax: -3.5 },
   { id: "drop", label: "a drop", route: "/drop", sMin: -3.5, sMax: -1.5 },
   { id: "flowers", label: "flowers", route: "/flowers", sMin: -1.5, sMax: 0.5 },
   // The air above the garden: a wingspan is metres, a flock a hundred of them.
   { id: "birds", label: "birds", route: "/birds", sMin: 0.5, sMax: 2.2 },
-  { id: "coast", label: "the coast", route: "/ocean", sMin: 2.2, sMax: 3.4 },
+  { id: "coast", label: "the coast", route: "/coast", sMin: 2.2, sMax: 3.4 },
   // A peak stands kilometres over a valley tens of kilometres wide.
-  { id: "olympus", label: "olympus", route: null, sMin: 3.4, sMax: 4.5 },
+  { id: "olympus", label: "olympus", route: "/mountain", sMin: 3.4, sMax: 4.5 },
   { id: "atlas", label: "the atlas", route: "/atlas/origin", sMin: 4.5, sMax: 6.5 },
   { id: "earth", label: "the earth", route: "/earth", sMin: 6.5, sMax: 9 },
   { id: "stars", label: "the stars", route: "/stars", sMin: 9, sMax: 16.5 },
   // The nearest star is 4e16 m, a nebula 1e17-1e18, a galaxy 1e21.
-  { id: "space", label: "deep space", route: null, sMin: 16.5, sMax: 22 },
+  { id: "space", label: "deep space", route: "/space", sMin: 16.5, sMax: 22 },
   { id: "beyond", label: "beyond", route: "/beyond", sMin: 22, sMax: 25.5 },
   { id: "manifold", label: "the manifold", route: "/manifold", sMin: 25.5, sMax: 27 },
 ];
@@ -385,13 +385,17 @@ type TravelOverride = {
  * agreement is the tell that those bands were placed right.
  */
 const TRAVEL_OVERRIDES: Partial<Record<ScaleBandId, TravelOverride>> = {
-  drop: { up: "coast" }, // a drop returns to the sea
-  coast: { down: "drop" }, // and the sea gives the drop back
+  drop: { up: "coast" }, // a drop returns to the shore (beach before deep)
+  coast: { down: "drop", extraUp: ["earth"] }, // the shore gives the drop back;
+  // and opens laterally onto the land it borders
   tissue: { up: "flowers" }, // a sheet of cells belongs to what it is a sheet of
   flowers: { up: "earth", down: "tissue", extraDown: ["drop"] }, // a petal is
   // tissue before it is one cell; dew gathers on them too
-  earth: { up: "atlas", down: "flowers" }, // the ground lies on the map;
-  // things grow from it
+  earth: { up: "atlas", down: "flowers", extraDown: ["coast", "olympus"] }, // the
+  // ground lies on the map; things grow from it; the beach and the peak are
+  // lateral doors off the land (press, release, press again)
+  olympus: { down: "coast", extraUp: ["earth"] }, // the peak rises from fog;
+  // walking down from the land reaches the mountain; clouds are a peer, not a pinch
   atlas: { up: "stars" }, // the map recedes into the sky (the planet-globe
   // room will one day sit between them); it descends onto the peak by metric
   stars: { down: "atlas" }, // the sky descends onto the map, and thins upward
@@ -553,15 +557,66 @@ export function spectralRegisterFor(s: number): SpectralRegister {
   return { baseHz, lfoHz, brightness: 1 - u * 0.85 };
 }
 
+/**
+ * Lateral / sibling routes that share a band with a primary resident but
+ * are not themselves `SCALE_BANDS[].route`. Keep in lockstep with
+ * `PEER_CIRCLES` in `peers.ts` — `scripts/test-routes.mjs` asserts every
+ * peer room resolves here.
+ */
+const LATERAL_ROUTE_BANDS: { prefix: string; band: ScaleBandId }[] = [
+  // shore family + wave instruments
+  { prefix: "/tide", band: "coast" },
+  { prefix: "/waves", band: "coast" },
+  { prefix: "/ocean", band: "coast" },
+  { prefix: "/sine", band: "coast" },
+  { prefix: "/circularity", band: "coast" },
+  { prefix: "/pretext", band: "coast" },
+  { prefix: "/aphros", band: "coast" },
+  // peak weather
+  { prefix: "/clouds", band: "olympus" },
+  { prefix: "/storm", band: "olympus" },
+  // meadow under the flock
+  { prefix: "/growth", band: "flowers" },
+  // hearth
+  { prefix: "/fire", band: "earth" },
+  // night sky instruments
+  { prefix: "/comb", band: "stars" },
+  { prefix: "/beam", band: "stars" },
+  // cabinet at the drop
+  { prefix: "/seed", band: "drop" },
+  { prefix: "/coin", band: "drop" },
+  { prefix: "/jewel", band: "drop" },
+  { prefix: "/tourbillon", band: "drop" },
+  { prefix: "/watch", band: "drop" },
+  { prefix: "/plasma", band: "drop" },
+  { prefix: "/pulse", band: "drop" },
+  { prefix: "/charts", band: "drop" },
+  { prefix: "/dither", band: "drop" },
+];
+
 /** Where a route enters the manifold: center of its band. */
 export function entryScaleFor(route: string): number | null {
+  const path = route.split("?")[0] || route;
   for (const b of SCALE_BANDS) {
-    if (b.route && route.startsWith(b.route)) return (b.sMin + b.sMax) / 2;
+    if (b.route && (path === b.route || path.startsWith(`${b.route}/`))) {
+      return (b.sMin + b.sMax) / 2;
+    }
   }
-  // Coast shares one band across three shores.
-  if (route.startsWith("/tide") || route.startsWith("/waves")) {
-    const coast = SCALE_BANDS.find((b) => b.id === "coast");
-    if (coast) return (coast.sMin + coast.sMax) / 2;
+  // Longest-prefix match so /light does not steal /light/inverse later if
+  // a lateral is ever added under a shared stem.
+  let best: ScaleBandId | null = null;
+  let bestLen = -1;
+  for (const { prefix, band } of LATERAL_ROUTE_BANDS) {
+    if (path === prefix || path.startsWith(`${prefix}/`)) {
+      if (prefix.length > bestLen) {
+        best = band;
+        bestLen = prefix.length;
+      }
+    }
+  }
+  if (best) {
+    const band = SCALE_BANDS.find((b) => b.id === best);
+    if (band) return (band.sMin + band.sMax) / 2;
   }
   return null;
 }

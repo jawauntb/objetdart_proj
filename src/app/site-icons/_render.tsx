@@ -469,7 +469,7 @@ function renderSigil(
           })}
         </g>
       );
-    case "movement":
+    case "tourbillon":
       return (
         <g>
           <circle {...s} cx="44" cy="48" r="22" />

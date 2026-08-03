@@ -1,10 +1,13 @@
 "use client";
 
 import { useEffect } from "react";
-import { getFieldAudio } from "@/lib/audio";
+import dynamic from "next/dynamic";
 import SiteHeader from "@/components/SiteHeader";
 import ScaleTravel from "@/components/ScaleTravel";
-import Murmuration from "@/components/Murmuration";
+import MetaNavigator from "@/components/MetaNavigator";
+import { getFieldAudio } from "@/lib/audio";
+
+const Murmuration = dynamic(() => import("@/components/Murmuration"), { ssr: false });
 
 export default function BirdsPage() {
   useEffect(() => {
@@ -14,10 +17,9 @@ export default function BirdsPage() {
   return (
     <>
       <SiteHeader />
-      <main>
-        <Murmuration />
-      </main>
+      <Murmuration />
       <ScaleTravel route="/birds" />
+      <MetaNavigator route="/birds" />
     </>
   );
 }
