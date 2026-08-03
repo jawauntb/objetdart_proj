@@ -4,8 +4,18 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
+import LetGo from "@/components/LetGo";
+import {
+  onVisibility,
+  onGalleryPause,
+  resolveDpr,
+  createFrameGovernor,
+  isEmbeddedFrame,
+  detailForTier,
+} from "@/lib/room-runtime";
 
 /**
  * /storm — a PRESSURE + ELECTRICITY instrument.
@@ -111,14 +121,19 @@ export default function Storm() {
         )) as WebGLRenderingContext | null;
 
     let glProg: WebGLProgram | null = null;
+    let vbo: WebGLBuffer | null = null;
     let uTimeLoc: WebGLUniformLocation | null = null;
     let uResLoc: WebGLUniformLocation | null = null;
     let uStormLoc: WebGLUniformLocation | null = null;
     let uMaelstromLoc: WebGLUniformLocation | null = null;
     let uFlashLoc: WebGLUniformLocation | null = null;
     let uChargeLoc: WebGLUniformLocation | null = null;
+    let uLensLoc: WebGLUniformLocation | null = null;
+    let uSeasonLoc: WebGLUniformLocation | null = null;
+    let uPanLoc: WebGLUniformLocation | null = null;
 
-    if (gl) {
+    const setupProgram = () => {
+      if (!gl) return;
       const vert = `
         attribute vec2 a_pos;
         varying vec2 vUv;
@@ -135,6 +150,12 @@ export default function Storm() {
         uniform float uMaelstrom;
         uniform float uFlash;
         uniform float uCharge;
+        // uLens: 0 felt weather, 1 the pressure/temperature field as a map
+        // (two-finger twist). uSeason: the slow annual cycle, tropical warm
+        // toward arctic cold (three-finger twist).
+        uniform float uLens;
+        uniform float uSeason;
+        uniform vec2 uPan;
         varying vec2 vUv;
 
         float hash21(vec2 p) {
@@ -164,7 +185,7 @@ export default function Storm() {
         }
 
         void main() {
-          vec2 uv = vec2(vUv.x, 1.0 - vUv.y);
+          vec2 uv = vec2(vUv.x, 1.0 - vUv.y) + uPan;
           float t = uTime;
           float s = clamp(uStorm, 0.0, 1.0);
           float m = clamp(uMaelstrom, 0.0, 1.0);
@@ -194,6 +215,10 @@ export default function Storm() {
           vec3 seaSurface = vec3(0.165, 0.353, 0.549);
           vec3 seaMid     = vec3(0.106, 0.227, 0.392);
           vec3 seaDeep    = vec3(0.055, 0.145, 0.251);
+          // season: warm tropical toward cold arctic slate, a slow cycle
+          vec3 arctic = vec3(0.20, 0.24, 0.28);
+          seaSurface = mix(seaSurface, arctic * 1.3, uSeason * 0.5);
+          seaDeep = mix(seaDeep, arctic * 0.5, uSeason * 0.6);
 
           vec3 sea = mix(seaSurface, seaMid, smoothstep(0.0, 0.5, seaV));
           sea = mix(sea, seaDeep, smoothstep(0.5, 1.0, seaV));
@@ -242,6 +267,15 @@ export default function Storm() {
 
           color += vec3(uFlash);
           color = clamp(color, 0.0, 1.5);
+
+          // the lens: read the same field as pressure/temperature, not felt
+          if (uLens > 0.001) {
+            vec3 low = vec3(0.85, 0.15, 0.10);
+            vec3 high = vec3(0.10, 0.30, 0.85);
+            vec3 diagram = mix(low, high, s);
+            diagram += smoothstep(0.985, 1.0, fract(seaV * 7.0)) * 0.35;
+            color = mix(color, diagram, clamp(uLens, 0.0, 1.0));
+          }
 
           gl_FragColor = vec4(color, 1.0);
         }

@@ -14,6 +14,7 @@ import { THRESHOLDS } from "@/lib/gesture/core";
 import { onVessel, requestVessel, vesselAvailable } from "@/lib/vessel";
 import { shouldInvite } from "@/lib/candle";
 import { useField } from "@/store/field";
+import { createFrameGovernor, detailForTier, onVisibility as onDocVisibility, resolveDpr } from "@/lib/room-runtime";
 
 // ─────────────────────────────────────────────────────────────────────────
 // Objet d'Art · /drop — a living bead of RAINWATER.
@@ -867,7 +868,17 @@ export default function DropSphere() {
     const body = document.createElement("canvas");
     const bctx = body.getContext("2d");
     if (!fctx || !sctx || !bctx) { setFallback(true); return; }
-    const FS = coarse ? 0.42 : 0.5; // field render scale
+    const baseFS = coarse ? 0.42 : 0.5; // field render scale, ceiling
+    let FS = baseFS;
+
+    // ── the performance contract (src/lib/room-runtime) ────────────────
+    // A frame governor reads real frame time and hands back a quality
+    // tier; the field's own render resolution (and how often the
+    // expensive blur/threshold pass runs) rides that tier down under
+    // load instead of costing the same on every device.
+    const gov = createFrameGovernor();
+    let sleeping = false;
+    const offDocVisibility = onDocVisibility((hidden) => { sleeping = hidden; });
 
     let w = 0, h = 0, dpr = 1, fw = 0, fh = 0;
     // the canvas origin, cached here so the hover dialect never reads layout
@@ -875,7 +886,7 @@ export default function DropSphere() {
     const resize = () => {
       const rect = root.getBoundingClientRect();
       origin.x = rect.left; origin.y = rect.top;
-      dpr = Math.min(window.devicePixelRatio || 1, coarse ? 1.5 : 2);
+      dpr = resolveDpr(gov.tier(), { maxDpr: coarse ? 1.5 : 2, reducedMotion: reduceRef.current });
       w = Math.max(320, Math.floor(rect.width));
       h = Math.max(420, Math.floor(rect.height));
       sizeRef.current = { w, h };
@@ -891,6 +902,67 @@ export default function DropSphere() {
       body.width = fw; body.height = fh;
     };
     resize();
+
+    // ── pre-baked unit sprites (Fix 1: never createRadialGradient inside
+    // a per-drop loop). Each is a small offscreen canvas holding one
+    // radial gradient painted once; per-drop draws scale/translate a
+    // drawImage instead of allocating a fresh CanvasGradient every frame
+    // for every bead, every frame.
+    const makeRadialSprite = (
+      size: number,
+      stops: Array<[number, string]>,
+    ): HTMLCanvasElement => {
+      const c = document.createElement("canvas");
+      c.width = size; c.height = size;
+      const cx = c.getContext("2d");
+      if (cx) {
+        const rg = cx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+        for (const [off, color] of stops) rg.addColorStop(off, color);
+        cx.fillStyle = rg;
+        cx.fillRect(0, 0, size, size);
+      }
+      return c;
+    };
+    const causticSprite = makeRadialSprite(64, [
+      [0, "rgba(120,220,235,0.18)"],
+      [1, "rgba(120,220,235,0)"],
+    ]);
+    const wetHaloSprite = makeRadialSprite(64, [
+      [0, "rgba(70,150,180,0)"],
+      [0.68, "rgba(70,150,180,0)"],
+      [1, "rgba(70,150,180,0.12)"],
+    ]);
+    const fresnelSprite = makeRadialSprite(64, [
+      [0, "rgba(90,190,220,0)"],
+      [0.6, "rgba(90,190,220,0)"],
+      [1, "rgba(120,220,245,0.28)"],
+    ]);
+    const glintSprite = makeRadialSprite(64, [
+      [0, "rgba(255,255,255,0.95)"],
+      [0.5, "rgba(220,245,255,0.4)"],
+      [1, "rgba(220,245,255,0)"],
+    ]);
+    const glint2Sprite = makeRadialSprite(64, [
+      [0, "rgba(120,210,235,0.22)"],
+      [1, "rgba(120,210,235,0)"],
+    ]);
+    const bgSprite = makeRadialSprite(256, [
+      [0, "#04141d"],
+      [1, "#01070c"],
+    ]);
+    // background caustic bands are three fixed-shape linear gradients —
+    // hoisted the same way, drawn once and reused every frame.
+    const bandSprite = document.createElement("canvas");
+    bandSprite.width = 4; bandSprite.height = 120;
+    const bandCx = bandSprite.getContext("2d");
+    if (bandCx) {
+      const bg2 = bandCx.createLinearGradient(0, 0, 0, 120);
+      bg2.addColorStop(0, "rgba(20,60,80,0)");
+      bg2.addColorStop(0.5, "rgba(30,90,110,0.06)");
+      bg2.addColorStop(1, "rgba(20,60,80,0)");
+      bandCx.fillStyle = bg2;
+      bandCx.fillRect(0, 0, 4, 120);
+    }
 
     // first bead — centred, sized to the viewport
     if (dropsRef.current.length === 0) {
@@ -1176,7 +1248,24 @@ export default function DropSphere() {
       bctx.globalCompositeOperation = "source-over";
     };
 
+    let lastTier = gov.tier();
+    let bodyFrameCount = 0;
     const draw = (now: number) => {
+      const tier = gov.beginFrame(now);
+      const detail = detailForTier(tier);
+      if (sleeping) { raf = requestAnimationFrame(draw); return; } // no draw while hidden
+      if (tier !== lastTier) {
+        lastTier = tier;
+        // the field's own resolution rides the governor down under load —
+        // the expensive blur/threshold pass (drawBody) is the hazard, and
+        // fewer pixels there is the cheapest way to keep it off the hot path.
+        FS = baseFS * Math.max(0.45, detail.samples);
+        fw = Math.max(1, Math.floor(w * FS));
+        fh = Math.max(1, Math.floor(h * FS));
+        field.width = fw; field.height = fh;
+        sharp.width = fw; sharp.height = fh;
+        body.width = fw; body.height = fh;
+      }
       const dtRaw = (now - last) / 1000;
       last = now;
       // ease the law's time dilation in and out, then step warped time
@@ -1204,23 +1293,18 @@ export default function DropSphere() {
       const z = zoomRef.current.current;
       const mag = 1 + z * 3.4;
 
-      // background — a deep dark-field water body with slow caustic light
+      // background — a deep dark-field water body with slow caustic light.
+      // Fix 1: bg/band/caustic/halo gradients are pre-baked sprites (see
+      // setup above) blitted with drawImage — no per-frame, per-drop
+      // createRadialGradient/createLinearGradient allocation.
       g.clearRect(0, 0, w, h);
-      const bg = g.createRadialGradient(w * 0.5, h * 0.42, 0, w * 0.5, h * 0.5, Math.max(w, h) * 0.75);
-      bg.addColorStop(0, "#04141d");
-      bg.addColorStop(1, "#01070c");
-      g.fillStyle = bg;
-      g.fillRect(0, 0, w, h);
+      const bgR = Math.max(w, h) * 0.75;
+      g.drawImage(bgSprite, w * 0.5 - bgR, h * 0.5 - bgR, bgR * 2, bgR * 2);
       if (!reduceRef.current) {
         g.globalCompositeOperation = "lighter";
         for (let i = 0; i < 3; i++) {
           const cy = h * (0.3 + i * 0.22) + Math.sin(time * 0.2 + i) * 24;
-          const cg = g.createLinearGradient(0, cy - 60, 0, cy + 60);
-          cg.addColorStop(0, "rgba(20,60,80,0)");
-          cg.addColorStop(0.5, "rgba(30,90,110,0.06)");
-          cg.addColorStop(1, "rgba(20,60,80,0)");
-          g.fillStyle = cg;
-          g.fillRect(0, cy - 60, w, 120);
+          g.drawImage(bandSprite, 0, cy - 60, w, 120);
         }
         g.globalCompositeOperation = "source-over";
       }
@@ -1228,16 +1312,9 @@ export default function DropSphere() {
       // caustic bright spot beneath each bead + a wet halo
       g.globalCompositeOperation = "lighter";
       for (const d of drops) {
-        const cg = g.createRadialGradient(d.x, d.y + d.r * 0.7, 0, d.x, d.y + d.r * 0.7, d.r * 0.9);
-        cg.addColorStop(0, "rgba(120,220,235,0.18)");
-        cg.addColorStop(1, "rgba(120,220,235,0)");
-        g.fillStyle = cg;
-        g.beginPath(); g.ellipse(d.x, d.y + d.r * 0.72, d.r * 0.7, d.r * 0.3, 0, 0, TAU); g.fill();
-        const hg = g.createRadialGradient(d.x, d.y, d.r * 0.85, d.x, d.y, d.r * 1.25);
-        hg.addColorStop(0, "rgba(70,150,180,0.12)");
-        hg.addColorStop(1, "rgba(70,150,180,0)");
-        g.fillStyle = hg;
-        g.beginPath(); g.arc(d.x, d.y, d.r * 1.25, 0, TAU); g.fill();
+        const ccx = d.x, ccy = d.y + d.r * 0.72, crx = d.r * 0.7, cry = d.r * 0.3;
+        g.drawImage(causticSprite, ccx - crx, ccy - cry, crx * 2, cry * 2);
+        g.drawImage(wetHaloSprite, d.x - d.r * 1.25, d.y - d.r * 1.25, d.r * 2.5, d.r * 2.5);
       }
       g.globalCompositeOperation = "source-over";
 

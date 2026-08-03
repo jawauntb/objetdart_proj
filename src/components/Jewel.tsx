@@ -732,11 +732,43 @@ export default function Jewel() {
           return;
         }
         if (e.fingers !== 1) return;
-        if (e.phase === "enter") holdSealed = false;
-        if (e.phase === "release") { holdSealed = false; return; }
+        const rect = wrap.getBoundingClientRect();
+        const nx = (e.x - rect.left) / rect.width;
+        const ny = (e.y - rect.top) / rect.height;
+        if (e.phase === "enter") {
+          holdSealed = false;
+          const hit = overUi(e.x, e.y) ? -2 : nearestFacet(nx, ny);
+          gatherRef.current = { active: true, x: nx, y: ny, amt: 0, hit, committed: false };
+          return;
+        }
+        const g = gatherRef.current;
+        if (e.phase === "release") {
+          holdSealed = false;
+          g.active = false;
+          return;
+        }
+        if (g.hit === -2) return; // held over the stone rail — not the gem
+        if (g.hit >= 0) {
+          // ceremony hold on an existing facet: its solemn act is annihilation.
+          if (e.tier >= 3 && !g.committed) {
+            g.committed = true;
+            g.active = false;
+            removeFacet(g.hit);
+          }
+          return;
+        }
+        // dwell on empty space plants a facet — visibly gathering the moment
+        // the dwell tier is crossed, deepening the longer it's held.
+        if (e.tier >= 2) {
+          g.amt = Math.min(1, g.amt + 0.03);
+          if (!g.committed) {
+            g.committed = true;
+            addFacet(g.x, g.y);
+          }
+        }
         // ceremony — the room's one solemn act: the stone is sealed; it
         // flares to full fire and the cut is kept to the tape.
-        if (e.tier >= 3 && !holdSealed && !overUi(e.x, e.y)) {
+        if (e.tier >= 3 && !holdSealed) {
           holdSealed = true;
           fire.current = 1.9;
           spawnRipple(0.5, 0.42, 1.0, nowSec());
@@ -746,7 +778,12 @@ export default function Jewel() {
         }
       },
       twist: (e) => {
-        if (e.fingers === 3) return; // three fingers turn the season, not the lens
+        if (e.fingers === 3) {
+          // three fingers turn the season: the light's warm/cool cast drifts.
+          lastGestureAtRef.current = performance.now();
+          if (e.phase === "move") seasonRef.current += e.angle * 0.7;
+          return;
+        }
         lastGestureAtRef.current = performance.now();
         // two fingers rotate the lens: the stone turns over to its mirror
         // twin — the rose-champagne face — and snaps back on the next turn
@@ -754,6 +791,8 @@ export default function Jewel() {
         if (e.phase === "move") twistAcc += e.angle;
         if (e.phase === "end" && Math.abs(twistAcc) > 0.9) {
           flipLensRef.current.t = flipLensRef.current.t > 0.5 ? 0 : 1;
+          if (flipLensRef.current.t > 0.5) wrap.setAttribute("data-lens-raised", "1");
+          else wrap.removeAttribute("data-lens-raised");
           fire.current = Math.min(1.9, fire.current + 0.5);
           try { haptics.lens(); } catch { /* noop */ }
           try { getFieldAudio().chime(); } catch { /* noop */ }
@@ -786,6 +825,7 @@ export default function Jewel() {
     // FFT buffers
     const ripVec = new Float32Array(MAX_RIPPLES * 3);
     const ripStrVec = new Float32Array(MAX_RIPPLES);
+    const facetVec = new Float32Array(MAX_FACETS * 2);
     let fftBuf: Uint8Array | null = null;
 
     let raf = 0;
@@ -793,9 +833,16 @@ export default function Jewel() {
     t0Ref.current = t0;
     let lastFrame = t0;
     let lastGlimmerAt = 0;
+    let lastEarlyCueAt = 0;
     const draw = (now: number) => {
+      tier = gov.beginFrame(now);
+      if (sleeping || contextLost) { raf = requestAnimationFrame(draw); return; }
+      const detail = detailForTier(tier);
       const frameDt = Math.min(0.05, (now - lastFrame) / 1000);
       lastFrame = now;
+      // gathering facet: fades once released/committed, otherwise deepens.
+      const g = gatherRef.current;
+      if (!g.active) g.amt *= 0.88;
       // three-finger time dilation: the stone's clock eases to 1/4 speed
       const ts = timeScaleRef.current;
       ts.cur += (ts.target - ts.cur) * Math.min(1, frameDt * 5);
@@ -830,6 +877,14 @@ export default function Jewel() {
           fire.current = Math.min(1.7, fire.current + 0.45);
           try { getFieldAudio().playNote(PENTA[beatIdx % PENTA.length] + 12, 90); } catch { /* noop */ }
         }
+      }
+      // an early, physical suggestion of the central verb (turning the
+      // stone): once, a few seconds in, before the 20s idle glimmer ever
+      // fires — a faint glance of light sweeps the gem on its own.
+      if (!reducedRef.current && lastEarlyCueAt === 0 && now - t0 > 2600 && now - lastGestureAtRef.current > 2400) {
+        lastEarlyCueAt = now;
+        turn.current.vyaw += 0.02;
+        fire.current = Math.min(0.6, fire.current + 0.25);
       }
       // glimmer (grammar §6): after ~20s of quiet, a soft ripple lands
       // where a tap would ring — physical, never text.
@@ -898,7 +953,9 @@ export default function Jewel() {
       gl.uniform1f(uWarp, p.warp);
       gl.uniform1f(uEnergy, energy);
       gl.uniform3f(uBands, bLow, bMid, bHigh);
-      gl.uniform1f(uHue, 0.0);
+      // three-finger twist = season: the light's warm/cool cast drifts on
+      // its own slow cycle, nudged by the hand.
+      gl.uniform1f(uHue, Math.sin(seasonRef.current + tSec * 0.015) * 0.7);
       gl.uniform3f(uTint, tint.current.r, tint.current.g, tint.current.b);
       gl.uniform1f(uTintAmt, tint.current.amt);
       gl.uniform1f(uPour, Math.min(1, fire.current * 0.5));
@@ -910,6 +967,16 @@ export default function Jewel() {
       gl.uniform1f(uCut, cut.current.v);
       gl.uniform3fv(uRip, ripVec);
       gl.uniform1fv(uRipStr, ripStrVec);
+      const facets = facetsRef.current;
+      for (let i = 0; i < MAX_FACETS; i++) {
+        const f = facets[i];
+        facetVec[i * 2] = f ? f.x : -1;
+        facetVec[i * 2 + 1] = f ? f.y : -1;
+      }
+      gl.uniform2fv(uFacet, facetVec);
+      gl.uniform1f(uFacetN, facets.length);
+      gl.uniform1f(uGather, g.amt);
+      gl.uniform2f(uGatherPos, g.x, g.y);
 
       gl.clearColor(0, 0, 0, 0);
       gl.clear(gl.COLOR_BUFFER_BIT);
