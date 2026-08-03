@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import SiteHeader from "@/components/SiteHeader";
+import AxisChrome from "@/components/AxisChrome";
 import Pulse from "@/components/Pulse";
 
 export default function PulsePage() {
@@ -16,6 +17,7 @@ export default function PulsePage() {
       <main>
         <Pulse />
       </main>
+      <AxisChrome route="/pulse" />
     </>
   );
 }

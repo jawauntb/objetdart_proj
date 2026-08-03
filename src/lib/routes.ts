@@ -1,4 +1,5 @@
 import type { RouteSigilKind } from "@/components/RouteSigil";
+import { scaleOrderedNavigationKeys } from "@/lib/nav-order";
 
 export type SiteRouteCluster = "field" | "water" | "nature" | "mechanism";
 
@@ -29,12 +30,13 @@ export const SITE_ROUTES: SiteRouteEntry[] = [
   { key: "relativity",  icon: "stars",    href: "/relativity",                        desc: "light keeps its own covenant", cluster: "mechanism", dark: true },
   { key: "loom",        icon: "signal",   href: "/loom",                              desc: "one structure, every sense",   cluster: "mechanism", dark: true },
   { key: "storm",       icon: "storm",    href: "/storm",                             desc: "pressure · charge · discharge", cluster: "water",     dark: true },
-  { key: "clouds",      icon: "clouds",   href: "/clouds",                            desc: "olympus",                      cluster: "water",     dark: true },
+  { key: "clouds",      icon: "clouds",   href: "/clouds",                            desc: "the air floor, four banks deep", cluster: "water",     dark: true },
   { key: "mountain",    icon: "earth",    href: "/mountain",                          desc: "the peak above the fog",       cluster: "nature",    dark: true },
   { key: "aphros",      icon: "aphros",   href: "/aphros",                            desc: "play the shells",              cluster: "water" },
   { key: "flowers",     icon: "growth",   href: "/flowers",                           desc: "petals · symmetry",            cluster: "nature",    dark: true },
   { key: "birds",       icon: "growth",   href: "/birds",                             desc: "a murmuration",                cluster: "nature",    dark: true },
   { key: "cells",       icon: "aphros",   href: "/cells",                             desc: "the plasm keeps its own tide", cluster: "nature",    dark: true },
+  { key: "organelles",  icon: "aphros",   href: "/organelles",                        desc: "the organs before the body", cluster: "nature", dark: true },
   { key: "dna",         icon: "growth",   href: "/dna",                               desc: "the ladder that copies", cluster: "nature", dark: true },
   { key: "organics",    icon: "growth",   href: "/organics",                          desc: "what carbon does when it has time", cluster: "nature", dark: true },
   { key: "molecules",   icon: "growth",   href: "/molecules",                         desc: "what the bond holds, the solvent carries", cluster: "nature", dark: true },
@@ -76,50 +78,18 @@ export const SITE_ROUTE_BY_KEY = Object.fromEntries(
   SITE_ROUTES.map((route) => [route.key, route]),
 ) as Record<string, SiteRouteEntry>;
 
-const NAVIGATION_ROUTE_KEYS = [
-  "atlas",
-  "coin",
-  "beam",
-  "comb",
-  "stars",
-  "coast",
-  "ocean",
-  "clouds",
-  "mountain",
-  "waves",
-  "tourbillon",
-  "drop",
-  "seed",
-  "sine",
-  "circularity",
-  "beyond",
-  "light",
-  "music-color",
-  "signal",
-  "jewel",
-  "aphros",
-  "tide",
-  "storm",
-  "earth",
-  "flowers",
-  "birds",
-  "growth",
-  "pretext",
-  "dither",
-] as const;
-
-const NAVIGATION_ROUTE_KEY_SET = new Set<string>(NAVIGATION_ROUTE_KEYS);
-
-const PREFERRED_NAVIGATION_ROUTES = NAVIGATION_ROUTE_KEYS.map((key) => {
+/**
+ * Dropdown + gallery order — derived from SCALE_BANDS (large→small) and
+ * PEER_CIRCLES (MetaNavigator ring order at each rung). Do not hand-sort.
+ * See src/lib/nav-order.ts and docs/new-room.md.
+ */
+export const NAVIGATION_ROUTES: SiteRouteEntry[] = scaleOrderedNavigationKeys(
+  SITE_ROUTES.map((route) => ({ key: route.key, href: route.href })),
+).map((key) => {
   const route = SITE_ROUTE_BY_KEY[key];
   if (!route) throw new Error(`Unknown navigation route: ${key}`);
   return route;
 });
-
-export const NAVIGATION_ROUTES = [
-  ...PREFERRED_NAVIGATION_ROUTES,
-  ...SITE_ROUTES.filter((route) => !NAVIGATION_ROUTE_KEY_SET.has(route.key)),
-];
 
 const GALLERY_OMITTED_ROUTE_KEYS = new Set(["archive", "kept", "colophon", "guide"]);
 

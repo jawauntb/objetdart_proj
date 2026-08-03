@@ -13,6 +13,7 @@ export type SiteIconKey =
   | "coast"
   | "organics"
   | "dna"
+  | "organelles"
   | "charts"
   | "molecules"
   | "dither"
@@ -194,6 +195,19 @@ export const SITE_ICON_VISUALS = {
     accent2: "#9c3d33",
     ink: "#ffedc9",
   },
+  organelles: {
+    title: "Organelles",
+    description: "the organs before the body",
+    path: "/organelles",
+    shortName: "organelles",
+    kind: "circularity",
+    bg: "#080a0a",
+    bg2: "#1c2622",
+    glow: "#aad6be",
+    accent: "#86baa8",
+    accent2: "#e28c6c",
+    ink: "#e9f4ee",
+  },
   dna: {
     title: "DNA",
     description: "the ladder that copies",
@@ -287,7 +301,7 @@ export const SITE_ICON_VISUALS = {
   },
   clouds: {
     title: "Clouds",
-    description: "olympus and the air floor",
+    description: "the air floor, four banks deep",
     path: "/clouds",
     shortName: "clouds",
     kind: "clouds",
