@@ -37,6 +37,14 @@ const RADIAL_ORDER: ConcernKey[] = [
   "friendship",  // 7  ◤ upper-left
 ];
 
+// The glimmer clock, the same numbers <RoomShell> keeps for every room it
+// wraps: hint after ~20s of stillness, never more often than every 6s, and
+// let the tug run about a breath and a half before it settles. These are not
+// gesture thresholds — those live in src/lib/gesture/core.ts alone.
+const GLIMMER_IDLE_MS = 20000;
+const GLIMMER_REPEAT_MS = 6000;
+const GLIMMER_SPAN_MS = 1600;
+
 // SVG geometry
 const R_MAX = 220;
 const VIEW = 640;
@@ -550,7 +558,7 @@ export default function ConcernField() {
       pulseVoiceRef.current(k, 240);
       try { haptics.tap(); } catch { /* noop */ }
       if (clear) clearTimeout(clear);
-        clear = setTimeout(() => setGlimmer(null), GLIMMER_SPAN_MS);
+      clear = setTimeout(() => setGlimmer(null), GLIMMER_SPAN_MS);
     }, 1000);
     return () => {
       window.clearInterval(tick);
@@ -734,6 +742,9 @@ export default function ConcernField() {
                 const p = pointAt(i, concerns[k], rose);
                 const active = dragging === k;
                 const hover = hovering === k;
+                // the glimmer's direction: straight out along this concern's
+                // own axis, so the tug reads as the pull a hand would give it
+                const gv = axisVec(i, rose);
                 return (
                   <g key={`v-${k}`}>
                     {(active || hover) && (
@@ -757,6 +768,11 @@ export default function ConcernField() {
                       onPointerDown={(e) => {
                         e.preventDefault();
                         (e.target as Element).setPointerCapture?.(e.pointerId);
+                        touched();
+                        // the grab lands in three senses in the one frame: the
+                        // bead swells, the concern's tone comes up under the
+                        // finger (the effect above), and the case answers
+                        try { haptics.tap(); } catch { /* noop */ }
                         setDragging(k);
                       }}
                       onPointerEnter={() => setHovering(k)}
@@ -765,16 +781,29 @@ export default function ConcernField() {
                       <title>{`${k}: ${Math.round(concerns[k])}`}</title>
                     </circle>
                     {/* Visible bead — pointer-events disabled so the larger
-                        invisible target above receives all input. */}
-                    <circle
-                      cx={p.x}
-                      cy={p.y}
-                      r={active ? 7 : hover ? 6 : 5}
-                      fill="var(--candle)"
-                      stroke="var(--paper)"
-                      strokeWidth={1.5}
-                      style={{ pointerEvents: "none", transition: active ? "none" : "r var(--t)" }}
-                    />
+                        invisible target above receives all input. The glimmer
+                        rides this group, so only the drawn bead tugs: the
+                        touch target above it never moves, and neither does the
+                        stored weight. */}
+                    <g
+                      className={glimmer?.k === k ? "cf-glimmer" : undefined}
+                      key={glimmer?.k === k ? `g-${glimmer.key}` : undefined}
+                      style={{
+                        pointerEvents: "none",
+                        ["--cf-gx" as string]: gv.x.toFixed(3),
+                        ["--cf-gy" as string]: gv.y.toFixed(3),
+                      }}
+                    >
+                      <circle
+                        cx={p.x}
+                        cy={p.y}
+                        r={active ? 7 : hover ? 6 : 5}
+                        fill="var(--candle)"
+                        stroke="var(--paper)"
+                        strokeWidth={1.5}
+                        style={{ pointerEvents: "none", transition: active ? "none" : "r var(--t)" }}
+                      />
+                    </g>
                   </g>
                 );
               })}
@@ -943,6 +972,15 @@ export default function ConcernField() {
         </div>
       </div>
       <style>{`
+        /* the glimmer: one bead tugs out along its own axis and settles back,
+           overshooting a little on the way home the way a held thing does */
+        .cf-glimmer { animation: cf-tug ${GLIMMER_SPAN_MS}ms cubic-bezier(0.33, 0, 0.2, 1); }
+        @keyframes cf-tug {
+          0%   { transform: translate(0, 0); }
+          38%  { transform: translate(calc(var(--cf-gx, 0) * 13px), calc(var(--cf-gy, 0) * 13px)); }
+          72%  { transform: translate(calc(var(--cf-gx, 0) * -3px), calc(var(--cf-gy, 0) * -3px)); }
+          100% { transform: translate(0, 0); }
+        }
         .cf-tap-glow { animation: cf-glow-fade 700ms ease-out forwards; }
         .cf-beat {
           animation: cf-beat-out calc(460ms + var(--cf-dilation, 0) * 1400ms) ease-out forwards;
@@ -988,6 +1026,7 @@ export default function ConcernField() {
         /* flip face-down — night, until the phone turns back over */
         .concern-field__svg.is-night { opacity: 0.4; transition: opacity 900ms ease; }
         @media (prefers-reduced-motion: reduce) {
+          .cf-glimmer { animation: none; }
           .cf-tap-glow { animation-duration: 1ms; }
           .cf-beat, .cf-kept-bloom { animation: none; opacity: 0; }
           .concern-field__svg { filter: none; transition: none; }
