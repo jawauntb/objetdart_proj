@@ -964,7 +964,7 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     },
     frame: "yield",
     chrome: "none",
-    keeps: "objetdart:field:v1",
+    keeps: "objetdart:state:v1",
     creates: null,
     exempt: {},
     rawPointer:
