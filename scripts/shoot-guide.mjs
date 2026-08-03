@@ -35,7 +35,10 @@ try {
   process.exit(1);
 }
 
+const tsModuleCache = new Map();
+
 function loadTsModule(path) {
+  if (tsModuleCache.has(path)) return tsModuleCache.get(path);
   const filename = fileURLToPath(new URL(path, rootUrl));
   const source = readFileSync(filename, "utf8");
   const code = ts.transpileModule(source, {
@@ -47,9 +50,12 @@ function loadTsModule(path) {
     fileName: filename,
   }).outputText;
   const module = { exports: {} };
-  new Function("module", "exports", "require", code)(module, module.exports, () => {
-    throw new Error(`Unexpected require while loading ${path}`);
-  });
+  const requireShim = (id) => {
+    if (id.startsWith("@/")) return loadTsModule(`src/${id.slice(2)}.ts`);
+    throw new Error(`Unexpected require(${id}) while loading ${path}`);
+  };
+  new Function("module", "exports", "require", code)(module, module.exports, requireShim);
+  tsModuleCache.set(path, module.exports);
   return module.exports;
 }
 

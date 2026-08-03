@@ -14,7 +14,11 @@ function readRepoFile(path) {
   return readFileSync(new URL(path, rootUrl), "utf8");
 }
 
+const moduleCache = new Map();
+
 function loadTsModule(path, requireMap = {}) {
+  const cacheKey = `${path}::${Object.keys(requireMap).sort().join(",")}`;
+  if (!Object.keys(requireMap).length && moduleCache.has(path)) return moduleCache.get(path);
   const filename = fileURLToPath(new URL(path, rootUrl));
   const source = readFileSync(filename, "utf8");
   const code = ts.transpileModule(source, {
@@ -28,9 +32,15 @@ function loadTsModule(path, requireMap = {}) {
   const module = { exports: {} };
   const requireShim = (id) => {
     if (id in requireMap) return requireMap[id];
+    if (id.startsWith("@/")) {
+      const rel = `src/${id.slice(2)}.ts`;
+      return loadTsModule(rel, requireMap);
+    }
     throw new Error(`Unexpected require(${id}) while loading ${path}`);
   };
   new Function("module", "exports", "require", code)(module, module.exports, requireShim);
+  if (!Object.keys(requireMap).length) moduleCache.set(path, module.exports);
+  void cacheKey;
   return module.exports;
 }
 

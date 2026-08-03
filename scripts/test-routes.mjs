@@ -43,7 +43,17 @@ function loadTsModule(path, requireMap = {}) {
   return module.exports;
 }
 
-const routesModule = loadTsModule("src/lib/routes.ts");
+// Navigation order is derived from scale + peers — load those first so
+// routes.ts can require them through the shim (no hand-sorted key list).
+const scaleModule = loadTsModule("src/lib/scale.ts");
+const peersModule = loadTsModule("src/lib/peers.ts");
+const navOrderModule = loadTsModule("src/lib/nav-order.ts", {
+  "@/lib/scale": scaleModule,
+  "@/lib/peers": peersModule,
+});
+const routesModule = loadTsModule("src/lib/routes.ts", {
+  "@/lib/nav-order": navOrderModule,
+});
 const darkRoutesModule = loadTsModule("src/lib/dark-routes.ts", {
   "@/lib/routes": routesModule,
 });
@@ -60,6 +70,13 @@ const {
   SITE_ROUTES,
   isDarkRoutePath,
 } = routesModule;
+const {
+  scaleOrderedNavigationKeys,
+  axisNavigationKeys,
+  peerCircleAnchorBand,
+} = navOrderModule;
+const { SCALE_BANDS } = scaleModule;
+const { PEER_CIRCLES } = peersModule;
 const { isDarkRoute } = darkRoutesModule;
 
 const expectedKeys = [
@@ -118,37 +135,6 @@ const expectedKeys = [
   "colophon",
   "guide",
 ];
-const preferredNavigationKeys = [
-  "atlas",
-  "coin",
-  "beam",
-  "comb",
-  "stars",
-  "coast",
-  "ocean",
-  "clouds",
-  "mountain",
-  "waves",
-  "tourbillon",
-  "drop",
-  "seed",
-  "sine",
-  "circularity",
-  "beyond",
-  "light",
-  "music-color",
-  "signal",
-  "jewel",
-  "aphros",
-  "tide",
-  "storm",
-  "earth",
-  "flowers",
-  "birds",
-  "growth",
-  "pretext",
-  "dither",
-];
 const validClusters = new Set(["field", "water", "nature", "mechanism"]);
 const validIcons = new Set(
   [...readRepoFile("src/components/RouteSigil.tsx").matchAll(/case "([^"]+)":/g)].map((match) => match[1]),
@@ -163,15 +149,16 @@ const keys = SITE_ROUTES.map((route) => route.key);
 assert.equal(new Set(keys).size, keys.length, "route keys must be unique");
 assert.deepEqual([...keys].sort(), [...expectedKeys].sort(), "route registry must contain the public route set");
 
-const preferredNavigationKeySet = new Set(preferredNavigationKeys);
-const expectedNavigationKeys = [
-  ...preferredNavigationKeys,
-  ...keys.filter((key) => !preferredNavigationKeySet.has(key)),
-];
+// Navigation order is a pure function of SCALE_BANDS + PEER_CIRCLES + SITE_ROUTES.
+// A hand-sorted preferred list is exactly the debt this catches: if someone
+// reintroduces one, this equality against the deriver fails the moment the
+// graph and the list disagree.
+const routeRefs = SITE_ROUTES.map((route) => ({ key: route.key, href: route.href }));
+const expectedNavigationKeys = scaleOrderedNavigationKeys(routeRefs);
 assert.deepEqual(
   NAVIGATION_ROUTES.map((route) => route.key),
   expectedNavigationKeys,
-  "navigation should use the preferred order and append every remaining route stably",
+  "navigation must equal scaleOrderedNavigationKeys (no hand-sorted preferred list)",
 );
 assert.equal(NAVIGATION_ROUTES.length, SITE_ROUTES.length, "navigation should include every route exactly once");
 assert.equal(
@@ -180,6 +167,51 @@ assert.equal(
   "navigation order should not duplicate routes",
 );
 assert.ok(NAVIGATION_ROUTES.every(Boolean), "navigation order should contain only known routes");
+
+// Structural pins: manifold at the top of the axis, quanta at the bottom;
+// peer circles stay contiguous in ring order.
+const navKeys = NAVIGATION_ROUTES.map((route) => route.key);
+const axisKeys = axisNavigationKeys(routeRefs);
+assert.equal(axisKeys[0], "manifold", "axis opens at the manifold");
+assert.equal(axisKeys[axisKeys.length - 1], "quanta", "axis ends at the quanta");
+assert.ok(navKeys.indexOf("manifold") < navKeys.indexOf("stars"), "manifold above stars");
+assert.ok(navKeys.indexOf("stars") < navKeys.indexOf("earth"), "stars above earth");
+assert.ok(navKeys.indexOf("earth") < navKeys.indexOf("atlas"), "earth above atlas");
+assert.ok(navKeys.indexOf("mountain") < navKeys.indexOf("coast"), "peak above shore");
+assert.ok(navKeys.indexOf("coast") < navKeys.indexOf("birds"), "shore above birds");
+assert.ok(navKeys.indexOf("drop") < navKeys.indexOf("cells"), "drop above cells");
+assert.ok(navKeys.indexOf("cells") < navKeys.indexOf("organelles"), "cells above organelles");
+assert.ok(navKeys.indexOf("organelles") < navKeys.indexOf("quanta"), "organelles above quanta");
+for (const circle of PEER_CIRCLES) {
+  const idxs = circle.rooms.map((r) => navKeys.indexOf(r.key)).filter((i) => i >= 0);
+  assert.ok(idxs.length === circle.rooms.length, `peer circle ${circle.id} fully present in nav`);
+  for (let i = 1; i < idxs.length; i++) {
+    assert.equal(
+      idxs[i],
+      idxs[i - 1] + 1,
+      `peer circle ${circle.id} must stay contiguous in ring order`,
+    );
+  }
+  let best = circle.band;
+  let bestIdx = SCALE_BANDS.findIndex((b) => b.id === circle.band);
+  for (const room of circle.rooms) {
+    const i = SCALE_BANDS.findIndex((b) => b.id === room.band);
+    if (i > bestIdx) {
+      bestIdx = i;
+      best = room.band;
+    }
+  }
+  assert.equal(
+    peerCircleAnchorBand(circle),
+    best,
+    `peer circle ${circle.id} anchors at its highest band`,
+  );
+}
+assert.ok(
+  navKeys.indexOf("overlook") > navKeys.indexOf("quanta"),
+  "meta views of the tree sit after the axis",
+);
+
 assert.deepEqual(
   GALLERY_ROUTES.map((route) => route.key),
   expectedNavigationKeys.filter((key) => !["archive", "kept", "colophon", "guide"].includes(key)),

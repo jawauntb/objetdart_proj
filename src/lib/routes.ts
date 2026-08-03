@@ -1,4 +1,5 @@
 import type { RouteSigilKind } from "@/components/RouteSigil";
+import { scaleOrderedNavigationKeys } from "@/lib/nav-order";
 
 export type SiteRouteCluster = "field" | "water" | "nature" | "mechanism";
 
@@ -77,50 +78,18 @@ export const SITE_ROUTE_BY_KEY = Object.fromEntries(
   SITE_ROUTES.map((route) => [route.key, route]),
 ) as Record<string, SiteRouteEntry>;
 
-const NAVIGATION_ROUTE_KEYS = [
-  "atlas",
-  "coin",
-  "beam",
-  "comb",
-  "stars",
-  "coast",
-  "ocean",
-  "clouds",
-  "mountain",
-  "waves",
-  "tourbillon",
-  "drop",
-  "seed",
-  "sine",
-  "circularity",
-  "beyond",
-  "light",
-  "music-color",
-  "signal",
-  "jewel",
-  "aphros",
-  "tide",
-  "storm",
-  "earth",
-  "flowers",
-  "birds",
-  "growth",
-  "pretext",
-  "dither",
-] as const;
-
-const NAVIGATION_ROUTE_KEY_SET = new Set<string>(NAVIGATION_ROUTE_KEYS);
-
-const PREFERRED_NAVIGATION_ROUTES = NAVIGATION_ROUTE_KEYS.map((key) => {
+/**
+ * Dropdown + gallery order — derived from SCALE_BANDS (large→small) and
+ * PEER_CIRCLES (MetaNavigator ring order at each rung). Do not hand-sort.
+ * See src/lib/nav-order.ts and docs/new-room.md.
+ */
+export const NAVIGATION_ROUTES: SiteRouteEntry[] = scaleOrderedNavigationKeys(
+  SITE_ROUTES.map((route) => ({ key: route.key, href: route.href })),
+).map((key) => {
   const route = SITE_ROUTE_BY_KEY[key];
   if (!route) throw new Error(`Unknown navigation route: ${key}`);
   return route;
 });
-
-export const NAVIGATION_ROUTES = [
-  ...PREFERRED_NAVIGATION_ROUTES,
-  ...SITE_ROUTES.filter((route) => !NAVIGATION_ROUTE_KEY_SET.has(route.key)),
-];
 
 const GALLERY_OMITTED_ROUTE_KEYS = new Set(["archive", "kept", "colophon", "guide"]);
 
