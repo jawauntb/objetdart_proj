@@ -66,9 +66,11 @@ the law/lens exemption) in one sentence in the PR body.
 **Nav order follows the scale graph.** The header dropdown and home gallery
 are derived from `SCALE_BANDS` + `PEER_CIRCLES` (`src/lib/nav-order.ts`) —
 manifold at the top, quanta at the bottom, MetaNavigator peers contiguous in
-ring order. Never hand-sort `NAVIGATION_ROUTES`. Put the room on a band
-and/or in a peer circle; the nav updates itself. `scripts/test-routes.mjs`
-pins this.
+ring order. Never hand-sort `NAVIGATION_ROUTES`. Every extant interactive
+page belongs on the axis (band or peer circle) or in `SCALE_EXEMPT_KEYS`
+(laws / lenses / reading surfaces) — coin, tourbillon, sine, fire, and the
+rest of the cabinet/shore/sky/hearth rings included. Mount `AxisChrome`
+(or ScaleTravel + MetaNavigator). `scripts/test-routes.mjs` pins this.
 
 ## The field guide (`/guide`) — the documentation law
 

@@ -7,16 +7,16 @@
  * band, in ring order — so adding a peer to a circle updates the dropdown
  * without a second hand-maintained list.
  *
- * After the axis: meta views of the tree (overlook, relativity, loom), then
- * off-axis instruments and reading surfaces in SITE_ROUTES registration
- * order. Pure helpers; no DOM.
+ * After the axis: deliberate SCALE_EXEMPT_KEYS (laws, lenses, reading
+ * surfaces) in SITE_ROUTES registration order. Every other room must sit
+ * on a band or in a peer circle — leftovers are a bug, not a bucket.
  *
  * Law for agents: never hand-maintain dropdown order. Add the room to
  * SCALE_BANDS and/or PEER_CIRCLES; NAVIGATION_ROUTES re-derives itself.
  */
 
 import { SCALE_BANDS, type ScaleBand } from "@/lib/scale";
-import { PEER_CIRCLES, type PeerCircle } from "@/lib/peers";
+import { PEER_CIRCLES, SCALE_EXEMPT_KEY_SET, type PeerCircle } from "@/lib/peers";
 
 export type NavRouteRef = {
   key: string;
@@ -113,8 +113,8 @@ export function axisNavigationKeys(refs: NavRouteRef[]): string[] {
 }
 
 /**
- * Full navigation order: scale axis (peers expanded) → meta views of the
- * tree → remaining SITE_ROUTES in registration order.
+ * Full navigation order: scale axis (peers expanded) → exempt laws /
+ * lenses / reading surfaces in SITE_ROUTES registration order.
  */
 export function scaleOrderedNavigationKeys(refs: NavRouteRef[]): string[] {
   const seen = new Set<string>();
@@ -128,10 +128,12 @@ export function scaleOrderedNavigationKeys(refs: NavRouteRef[]): string[] {
 
   for (const key of axisNavigationKeys(refs)) emit(key);
 
-  // Views of the axis itself — after the fold, before free instruments.
-  for (const key of ["overlook", "relativity", "loom"]) emit(key);
+  // Exemptions only — anything else still unseen means a missing scale address.
+  for (const r of refs) {
+    if (SCALE_EXEMPT_KEY_SET.has(r.key)) emit(r.key);
+  }
 
-  // Everything else, stable in the author's SITE_ROUTES registration order.
+  // Safety net so a forgotten room still appears (tests will fail loudly).
   for (const r of refs) emit(r.key);
 
   return out;

@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import SiteHeader from "@/components/SiteHeader";
+import AxisChrome from "@/components/AxisChrome";
 import Charts from "@/components/Charts";
 
 export default function ChartsPage() {
@@ -16,6 +17,7 @@ export default function ChartsPage() {
       <main>
         <Charts />
       </main>
+      <AxisChrome route="/charts" />
     </>
   );
 }

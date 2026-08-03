@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import SiteHeader from "@/components/SiteHeader";
+import AxisChrome from "@/components/AxisChrome";
 import Aphros from "@/components/Aphros";
 
 export default function AphrosPage() {
@@ -16,6 +17,7 @@ export default function AphrosPage() {
       <main>
         <Aphros />
       </main>
+      <AxisChrome route="/aphros" />
     </>
   );
 }
