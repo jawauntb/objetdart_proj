@@ -31,6 +31,7 @@ export type SiteIconKey =
   | "plasma"
   | "pretext"
   | "pulse"
+  | "quarks"
   | "reading"
   | "relativity"
   | "signal"
@@ -480,6 +481,19 @@ export const SITE_ICON_VISUALS = {
     accent: "#83ffc8",
     accent2: "#f0c665",
     ink: "#dcffec",
+  },
+  quarks: {
+    title: "Quarks",
+    description: "nothing here can be alone",
+    path: "/quarks",
+    shortName: "quarks",
+    kind: "plasma",
+    bg: "#07080c",
+    bg2: "#191320",
+    glow: "#e7ac52",
+    accent: "#f2c56b",
+    accent2: "#4e7d8c",
+    ink: "#ffedc9",
   },
   reading: {
     title: "Reading",

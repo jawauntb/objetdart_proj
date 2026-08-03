@@ -42,7 +42,7 @@ export type ScaleBand = {
  * and audio registers are stable when the rooms arrive (plan W6).
  */
 export const SCALE_BANDS: ScaleBand[] = [
-  { id: "quarks", label: "quarks", route: null, sMin: -19, sMax: -14 },
+  { id: "quarks", label: "quarks", route: "/quarks", sMin: -19, sMax: -14 },
   { id: "atoms", label: "atoms", route: "/atoms", sMin: -14, sMax: -9.5 },
   { id: "molecules", label: "molecules", route: "/molecules", sMin: -9.5, sMax: -7 },
   { id: "cells", label: "cells", route: "/cells", sMin: -7, sMax: -3.5 },
