@@ -60,6 +60,7 @@ import {
   materialFromGround,
   paletteForSun,
   restingFogAltitude,
+  snowlineKm,
   sunDirection,
   windVector,
   windVoice,
@@ -88,8 +89,8 @@ const SEED = 0x0a1a;
 // sparse sample list would step over a Matterhorn between rings.
 const RANGES = [0.26, 0.85, 1.5, 2.2, 2.8, 3.5, 4.3, 5.2, 6.2, 7.4, 8.8, 12, 16];
 const ROCK: [number, number, number] = [0.30, 0.27, 0.235];
-const SNOW: [number, number, number] = [0.93, 0.95, 0.98];
-const GLACIER: [number, number, number] = [0.55, 0.68, 0.76]; // cold blue-grey ice
+const SNOW: [number, number, number] = [0.94, 0.96, 0.99];
+const GLACIER: [number, number, number] = [0.42, 0.62, 0.74]; // cold blue ice tongue
 // A real pinhole, and a long lens. 66° made every ridge a low bump: apparent
 // rise is focal-limited, and the massif's crests stand only ~0.26km over the
 // inversion at 4km. 35° is also simply how the mountain photographs that
@@ -364,6 +365,7 @@ export default function MountainPeak() {
 
       const sun = sunDirection(sunAz, sunElev);
       const pal: SkyPalette = paletteForSun(sunElev);
+      const snowKm = snowlineKm(season);
 
       ctx.clearRect(0, 0, width, height);
 
@@ -431,16 +433,17 @@ export default function MountainPeak() {
           if (near) y = Math.max(y, height * 0.66 + (col - 0.5) * horizonTilt * height * 0.06);
           if (y > height) continue;
 
-          let seen: [number, number, number];
-          let cornice = 0;
           if (lens > 0.5) {
-            seen = drowned ? [0.91, 0.89, 0.83] : [0.78, 0.75, 0.68];
+            ctx.fillStyle = rgb(drowned ? [0.91, 0.89, 0.83] : [0.78, 0.75, 0.68], 1);
+            ctx.fillRect(x, y, step + 1, height - y);
           } else if (near) {
             // the rock underfoot: ink-dark, barely touched by the light
-            seen = [0.055, 0.052, 0.06];
+            ctx.fillStyle = rgb([0.055, 0.052, 0.06], 1);
+            ctx.fillRect(x, y, step + 1, height - y);
           } else if (drowned) {
             // the sea itself, lit rather than painted
-            seen = mixc(pal.fog, pal.horizon, clamp01(1 - trans) * 0.45);
+            ctx.fillStyle = rgb(mixc(pal.fog, pal.horizon, clamp01(1 - trans) * 0.45), 1);
+            ctx.fillRect(x, y, step + 1, height - y);
           } else {
             const nLen = Math.hypot(-g.dhdx, 1, -g.dhdz) || 1;
             const lambert = clamp01(
@@ -448,38 +451,57 @@ export default function MountainPeak() {
             );
             const light = pal.ambient + pal.sunI * lambert;
             const m = materialFromGround(g, season, wind);
-            cornice = m.cornice;
+            const shade = (albedo: [number, number, number]): [number, number, number] => {
+              const lit = mixc(albedo, SNOW, m.cornice * 0.55);
+              const face: [number, number, number] = [
+                lit[0] * light,
+                lit[1] * light,
+                lit[2] * light,
+              ];
+              return mixc(pal.fog, face, Math.max(trans, 0.28));
+            };
+            // One fill per column — materials live in the albedo mix. A second
+            // tall snow rect was reading as a billboard pasted on the face.
             const albedo: [number, number, number] = [
               ROCK[0] * m.rock + SNOW[0] * m.snow + GLACIER[0] * m.glacier,
               ROCK[1] * m.rock + SNOW[1] * m.snow + GLACIER[1] * m.glacier,
               ROCK[2] * m.rock + SNOW[2] * m.snow + GLACIER[2] * m.glacier,
             ];
-            // cornice: brighten the lee arête toward snow white
-            const lit = mixc(albedo, SNOW, m.cornice * 0.55);
-            const face: [number, number, number] = [
-              lit[0] * light,
-              lit[1] * light,
-              lit[2] * light,
-            ];
-            // aerial perspective: every further ridge dissolves toward the sky
-            seen = mixc(pal.fog, face, trans);
+            ctx.fillStyle = rgb(shade(albedo), 1);
+            ctx.fillRect(x, y, step + 1, height - y);
+            // A short snow lip just under the crest when the hold is real —
+            // capped in screen pixels so it can never become a rectangle.
+            if (m.snow > 0.35 && h > snowKm) {
+              const capPx = clamp((h - snowKm) / 0.35, 0, 1) * Math.min(18, 220 / d);
+              if (capPx > 2) {
+                ctx.fillStyle = rgb(shade(SNOW), 0.85);
+                ctx.fillRect(x, y, step + 1, capPx);
+              }
+            }
+            // Glacier tongue: a cool band a little below the crest on bowls.
+            if (m.glacier > 0.35) {
+              const tonguePx = clamp(m.glacier, 0, 1) * Math.min(28, 320 / d);
+              const gap = Math.min(10, 120 / d);
+              if (tonguePx > 3) {
+                ctx.fillStyle = rgb(shade(GLACIER), 0.75);
+                ctx.fillRect(x, y + gap, step + 1, tonguePx);
+              }
+            }
             // knife-edge: a thin bright lip on the lee crest, drawn after fills
-            if (cornice > 0.18 && g.crease < 0.16 && trans > 0.12) {
+            if (m.cornice > 0.18 && g.crease < 0.16 && trans > 0.08) {
               crests.push({
                 x,
                 y,
-                a: cornice * trans,
+                a: m.cornice * Math.max(trans, 0.35),
                 w: step + 1,
               });
             }
           }
-          ctx.fillStyle = rgb(seen, 1);
-          ctx.fillRect(x, y, step + 1, height - y);
         }
       }
       for (const c of crests) {
-        ctx.fillStyle = rgb(SNOW, 0.35 + 0.5 * c.a);
-        ctx.fillRect(c.x, c.y - 1.5, c.w, 3);
+        ctx.fillStyle = rgb(SNOW, 0.45 + 0.5 * c.a);
+        ctx.fillRect(c.x, c.y - 2, c.w, 3.5);
       }
 
       // cairns
