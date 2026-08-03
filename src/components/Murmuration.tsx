@@ -84,8 +84,8 @@ import {
 const STORE_KEY = "objetdart:birds:v1";
 /** Centre of the birds band, in log10 metres — where the room sounds from. */
 const BAND_S = 1.35;
-/** The wild flock, before any hand has taught it anything. */
-const WILD = { sep: 1, ali: 1.3, coh: 1.6 };
+/** The wild aviary — enough cohesion for flyers to share a heading, not a ball. */
+const WILD = { sep: 1.35, ali: 0.7, coh: 0.45 };
 const SEASON_PULL = 1.6;
 const WIND_MAX = 5;
 const CAM_DIST = 78;
@@ -248,26 +248,40 @@ void main() {
   float z = max(p.z + u_camDist, 1.0);
   vec2 center = vec2(p.x * u_focalX / z, p.y * u_focalY / z) - u_viewOffset;
 
-  vec3 q = u_view * (a_pos + a_vel * 0.03);
+  // activities that live on the ground or water keep a side-on pose so the
+  // silhouette reads as a bird, not a spray of wing strokes.
+  float act = a_meta.w;
+  float grounded = step(3.5, act) * (1.0 - step(9.5, act)) // perch..strut
+                 + step(11.5, act) * (1.0 - step(12.5, act)) // display
+                 + step(13.5, act); // stalk
+  vec3 q = u_view * (a_pos + a_vel * 0.05);
   float z2 = max(q.z + u_camDist, 1.0);
   vec2 dir = vec2(q.x * u_focalX / z2, q.y * u_focalY / z2) - center;
   float L = length(dir);
-  vDir = L > 1e-6 ? dir / L : vec2(0.0, 1.0);
+  vec2 flyDir = L > 1e-5 ? dir / L : vec2(1.0, 0.0);
+  float face = a_vel.x >= 0.0 ? 1.0 : -1.0;
+  vDir = mix(flyDir, normalize(vec2(face, 0.12)), clamp(grounded, 0.0, 1.0));
 
   float sp = length(a_vel);
-  float ph = u_time * u_wingHz * (0.75 + sp * 0.035) + a_meta.x * 6.2831853;
+  float air = 1.0 - clamp(grounded, 0.0, 1.0);
+  float ph = u_time * u_wingHz * (0.85 + sp * 0.04) + a_meta.x * 6.2831853;
   float pw = u_pulseT - (a_pos.x + ${WORLD_X.toFixed(1)}) / ${(WORLD_X * 2).toFixed(1)} * 0.42;
   float pulse = (pw > 0.0 && pw < 0.6) ? sin(pw * 11.0) * exp(-pw * 5.0) : 0.0;
-  vWing = clamp(mix(0.5 + 0.5 * sin(ph), 0.6, u_reduced) + pulse * 0.55, 0.0, 1.2);
+  float beat = mix(0.55 + 0.45 * sin(ph), 0.62, u_reduced);
+  // folded on the ground; open and beating in the air
+  vWing = clamp(mix(0.12, beat, air) + pulse * 0.5 * air, 0.0, 1.15);
   vDepth = z;
-  vFade = clamp(1.0 - (z - u_camDist) / 110.0, 0.22, 1.0);
+  vFade = clamp(1.0 - (z - u_camDist) / 110.0, 0.28, 1.0);
   vTint = a_tint;
   vUv = a_corner;
   vKind = a_meta.z;
-  vActivity = a_meta.w;
-  float birdPx = u_resolution.y * (0.05 + 0.28 * clamp(a_meta.y, 0.0, 1.0));
+  vActivity = act;
+  // birdPx is a HALF-extent in pixels. Full height ≈ 1/20..1/3 of the screen.
+  float birdPx = u_resolution.y * (0.025 + 0.14 * clamp(a_meta.y, 0.0, 1.0));
   vec2 clipPx = vec2(2.0 / u_resolution.x, 2.0 / u_resolution.y);
-  gl_Position = vec4(center + a_corner * birdPx * clipPx, 0.0, 1.0);
+  // real depth so nearer birds win the soft blend instead of stacking into mush
+  float zNdc = clamp(z / (u_camDist + 120.0), 0.05, 0.98);
+  gl_Position = vec4(center + a_corner * birdPx * clipPx, zNdc, 1.0);
 }
 `;
 
@@ -292,23 +306,20 @@ uniform float u_night;
 uniform float u_hazeFrom;
 
 float ellipse(vec2 p, vec2 r) {
-  return 1.0 - smoothstep(0.96, 1.06, length(p / r));
+  return 1.0 - smoothstep(0.92, 1.05, length(p / max(r, vec2(0.001))));
 }
 float capsule(vec2 p, vec2 a, vec2 b, float r) {
   vec2 pa = p - a;
   vec2 ba = b - a;
-  float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
-  return 1.0 - smoothstep(r, r + 0.035, length(pa - ba * h));
+  float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-5), 0.0, 1.0);
+  return 1.0 - smoothstep(r, r + 0.04, length(pa - ba * h));
 }
-float tri(vec2 p, vec2 a, vec2 b, vec2 c) {
-  vec2 e0 = b - a, e1 = c - b, e2 = a - c;
-  vec2 v0 = p - a, v1 = p - b, v2 = p - c;
-  float s0 = e0.x * v0.y - e0.y * v0.x;
-  float s1 = e1.x * v1.y - e1.y * v1.x;
-  float s2 = e2.x * v2.y - e2.y * v2.x;
-  float inside = max(step(0.0, s0) * step(0.0, s1) * step(0.0, s2), step(s0, 0.0) * step(s1, 0.0) * step(s2, 0.0));
-  float d = min(min(abs(s0) / length(e0), abs(s1) / length(e1)), abs(s2) / length(e2));
-  return max(inside, 1.0 - smoothstep(0.0, 0.04, d));
+
+// thick wing lobe — never a hairline stick
+float wingLobe(vec2 p, float side, float open) {
+  vec2 c = vec2(side * (0.18 + 0.22 * open), -0.02 - 0.10 * open);
+  vec2 r = vec2(0.16 + 0.34 * open, 0.10 + 0.16 * open);
+  return ellipse(p - c, r);
 }
 
 float birdShape(vec2 p, float kind, float activity, float wing) {
@@ -316,72 +327,113 @@ float birdShape(vec2 p, float kind, float activity, float wing) {
   float display = step(11.5, activity) * (1.0 - step(12.5, activity));
   float hover = step(12.5, activity) * (1.0 - step(13.5, activity));
   float dive = step(10.5, activity) * (1.0 - step(11.5, activity));
-  float flap = mix(0.38, 1.05, wing);
+  float soar = step(9.5, activity) * (1.0 - step(10.5, activity));
+  float open = clamp(wing, 0.0, 1.15);
   float a = 0.0;
+
+  // finch / sparrow — small oval, short beak, compact wings
   if (kind > 6.5 && kind < 8.5) {
-    a = max(ellipse(p, vec2(0.30, 0.20)), tri(p, vec2(0.22, -0.05), vec2(0.95, -0.48 * flap), vec2(0.28, 0.08)));
-    a = max(a, tri(p, vec2(-0.22, -0.05), vec2(-0.95, -0.48 * flap), vec2(-0.28, 0.08)));
-    a = max(a, tri(p, vec2(0.28, 0.0), vec2(0.48, 0.06), vec2(0.28, 0.12)));
-  } else if (kind > 8.5 && kind < 9.5) {
-    a = max(ellipse(p, vec2(0.24, 0.13)), capsule(p, vec2(0.26, 0.02), vec2(0.72, 0.04), 0.025));
-    a = max(a, tri(p, vec2(0.02, 0.0), vec2(0.72, 0.68 * flap), vec2(0.12, 0.07)));
-    a = max(a, tri(p, vec2(-0.02, 0.0), vec2(-0.72, -0.68 * flap), vec2(-0.12, -0.07)));
-    a = max(a, hover * ellipse(p + vec2(0.0, 0.02), vec2(0.86, 0.28)) * 0.38);
-  } else if (kind > 4.5 && kind < 5.5) {
-    a = max(ellipse(p + vec2(0.05, 0.02), vec2(0.34, 0.28)), ellipse(p - vec2(0.27, 0.18), vec2(0.15, 0.13)));
-    a = max(a, tri(p, vec2(0.34, 0.16), vec2(0.55, 0.18), vec2(0.36, 0.24)));
-    a = max(a, capsule(p, vec2(-0.02, -0.24), vec2(-0.05, -0.58), 0.025));
-    a = max(a, capsule(p, vec2(0.15, -0.23), vec2(0.18, -0.56), 0.025));
-  } else if (kind > 3.5 && kind < 4.5) {
-    vec2 pp = p + vec2(0.0, swim * 0.12);
-    a = max(ellipse(pp, vec2(0.44, 0.22)), ellipse(pp - vec2(0.34, 0.13), vec2(0.16, 0.13)));
-    a = max(a, capsule(pp, vec2(0.43, 0.14), vec2(0.70, 0.13), 0.045));
-    a *= mix(1.0, smoothstep(-0.42, -0.06, p.y), swim);
-  } else if (kind > 1.5 && kind < 3.5) {
-    float k = mix(0.62, 1.12, max(wing, dive));
-    a = max(ellipse(p, vec2(0.28, 0.15)), tri(p, vec2(0.0, 0.02), vec2(1.0, -0.22 * k), vec2(0.18, -0.02)));
-    a = max(a, tri(p, vec2(0.0, 0.02), vec2(-1.0, -0.22 * k), vec2(-0.18, -0.02)));
-    a = max(a, tri(p, vec2(0.30, 0.0), vec2(0.58, 0.04), vec2(0.30, 0.10)));
-  } else if (kind > 5.5 && kind < 6.5) {
-    a = max(ellipse(p + vec2(0.02, 0.12), vec2(0.28, 0.33)), capsule(p, vec2(0.14, 0.22), vec2(0.28, 0.70), 0.055));
-    a = max(a, ellipse(p - vec2(0.31, 0.70), vec2(0.13, 0.10)));
-    a = max(a, capsule(p, vec2(-0.06, -0.18), vec2(-0.17, -0.78), 0.028));
-    a = max(a, capsule(p, vec2(0.13, -0.19), vec2(0.20, -0.78), 0.028));
-  } else if (kind > 9.5 && kind < 10.5) {
-    a = max(ellipse(p, vec2(0.31, 0.20)), capsule(p, vec2(0.20, 0.12), vec2(0.38, 0.34), 0.055));
-    a = max(a, capsule(p, vec2(0.37, 0.34), vec2(0.72, 0.16), 0.035));
-    a = max(a, capsule(p, vec2(-0.08, -0.18), vec2(-0.14, -0.68), 0.026));
-  } else if (kind > 10.5 && kind < 11.5) {
-    float fan = max(display, 0.35);
-    a = max(ellipse((p + vec2(0.28, 0.02)) * vec2(0.75, 1.0), vec2(0.55, 0.62)) * fan, ellipse(p, vec2(0.26, 0.17)));
-    a = max(a, capsule(p, vec2(0.18, 0.10), vec2(0.34, 0.42), 0.045));
-    a = max(a, tri(p, vec2(0.30, 0.42), vec2(0.42, 0.54), vec2(0.27, 0.48)));
-  } else if (kind > 11.5) {
-    a = max(ellipse(p, vec2(0.28, 0.16)), capsule(p, vec2(-0.15, -0.05), vec2(-0.82, -0.62), 0.05));
-    a = max(a, capsule(p, vec2(-0.05, -0.02), vec2(-0.55, 0.68), 0.038));
-    a = max(a, tri(p, vec2(0.24, 0.02), vec2(0.52, 0.08), vec2(0.25, 0.14)));
-  } else {
+    a = max(ellipse(p - vec2(0.02, 0.0), vec2(0.38, 0.26)), ellipse(p - vec2(0.34, 0.08), vec2(0.16, 0.14)));
+    a = max(a, capsule(p, vec2(0.42, 0.06), vec2(0.62, 0.04), 0.035));
+    a = max(a, wingLobe(p, 1.0, open * 0.85));
+    a = max(a, wingLobe(p, -1.0, open * 0.85));
+    a = max(a, ellipse(p + vec2(0.28, 0.02), vec2(0.16, 0.08))); // tail
+  }
+  // hummingbird — needle beak, blur disk when hovering
+  else if (kind > 8.5 && kind < 9.5) {
+    a = max(ellipse(p, vec2(0.28, 0.16)), capsule(p, vec2(0.24, 0.02), vec2(0.72, 0.03), 0.028));
+    a = max(a, wingLobe(p, 1.0, 0.55 + open * 0.7));
+    a = max(a, wingLobe(p, -1.0, 0.55 + open * 0.7));
+    a = max(a, hover * ellipse(p, vec2(0.78, 0.34)) * 0.32);
+    a = max(a, ellipse(p + vec2(0.22, 0.0), vec2(0.14, 0.06)));
+  }
+  // chicken — round, upright, short wings, legs
+  else if (kind > 4.5 && kind < 5.5) {
+    a = max(ellipse(p - vec2(0.02, 0.04), vec2(0.36, 0.32)), ellipse(p - vec2(0.22, 0.22), vec2(0.16, 0.14)));
+    a = max(a, capsule(p, vec2(0.30, 0.18), vec2(0.48, 0.16), 0.04));
+    a = max(a, ellipse(p - vec2(0.18, 0.34), vec2(0.08, 0.10))); // comb
+    a = max(a, wingLobe(p, 1.0, open * 0.35));
+    a = max(a, capsule(p, vec2(-0.06, -0.26), vec2(-0.10, -0.62), 0.03));
+    a = max(a, capsule(p, vec2(0.12, -0.26), vec2(0.16, -0.62), 0.03));
+  }
+  // duck — long body, low in water when swimming
+  else if (kind > 3.5 && kind < 4.5) {
+    vec2 pp = p + vec2(0.0, swim * 0.10);
+    a = max(ellipse(pp - vec2(0.02, 0.0), vec2(0.48, 0.24)), ellipse(pp - vec2(0.38, 0.10), vec2(0.18, 0.14)));
+    a = max(a, capsule(pp, vec2(0.48, 0.08), vec2(0.72, 0.06), 0.045));
+    a = max(a, wingLobe(pp, 1.0, open * 0.4));
+    a = max(a, ellipse(pp + vec2(0.36, 0.02), vec2(0.16, 0.08)));
+    a *= mix(1.0, smoothstep(-0.40, -0.02, p.y), swim);
+  }
+  // falcon / hawk — pointed wings, longer body
+  else if (kind > 1.5 && kind < 3.5) {
+    float span = mix(0.55, 1.05, max(open, max(dive, soar)));
+    a = max(ellipse(p, vec2(0.34, 0.16)), capsule(p, vec2(0.28, 0.02), vec2(0.58, 0.0), 0.035));
+    a = max(a, ellipse(p - vec2(0.22 * span, -0.04 * span), vec2(0.42 * span, 0.11 + 0.06 * open)));
+    a = max(a, ellipse(p - vec2(-0.22 * span, -0.04 * span), vec2(0.42 * span, 0.11 + 0.06 * open)));
+    a = max(a, ellipse(p + vec2(0.30, 0.0), vec2(0.20, 0.06)));
+  }
+  // emu — tall neck and legs, almost no wing
+  else if (kind > 5.5 && kind < 6.5) {
+    a = max(ellipse(p - vec2(0.0, 0.08), vec2(0.30, 0.34)), capsule(p, vec2(0.10, 0.30), vec2(0.18, 0.68), 0.06));
+    a = max(a, ellipse(p - vec2(0.28, 0.68), vec2(0.14, 0.11)));
+    a = max(a, capsule(p, vec2(-0.08, -0.22), vec2(-0.14, -0.78), 0.032));
+    a = max(a, capsule(p, vec2(0.12, -0.22), vec2(0.18, -0.78), 0.032));
+  }
+  // red ibis — curved bill, long legs
+  else if (kind > 9.5 && kind < 10.5) {
+    a = max(ellipse(p, vec2(0.34, 0.22)), capsule(p, vec2(0.24, 0.10), vec2(0.40, 0.30), 0.05));
+    a = max(a, capsule(p, vec2(0.40, 0.30), vec2(0.70, 0.12), 0.032));
+    a = max(a, wingLobe(p, 1.0, open * 0.55));
+    a = max(a, capsule(p, vec2(-0.06, -0.20), vec2(-0.10, -0.68), 0.028));
+    a = max(a, capsule(p, vec2(0.10, -0.20), vec2(0.14, -0.68), 0.028));
+  }
+  // peacock — fan when displaying
+  else if (kind > 10.5 && kind < 11.5) {
+    float fan = mix(0.28, 1.0, max(display, 0.2));
+    a = max(ellipse(p - vec2(-0.22, 0.04), vec2(0.50 * fan, 0.58 * fan)) * fan, ellipse(p, vec2(0.28, 0.18)));
+    a = max(a, capsule(p, vec2(0.20, 0.08), vec2(0.34, 0.36), 0.045));
+    a = max(a, ellipse(p - vec2(0.38, 0.40), vec2(0.08, 0.07))); // crest
+    a = max(a, wingLobe(p, 1.0, open * 0.3));
+    a = max(a, capsule(p, vec2(-0.04, -0.16), vec2(-0.06, -0.52), 0.025));
+  }
+  // bird of paradise — ornamental plumes
+  else if (kind > 11.5) {
+    a = max(ellipse(p, vec2(0.30, 0.18)), capsule(p, vec2(0.22, 0.04), vec2(0.48, 0.02), 0.035));
+    a = max(a, capsule(p, vec2(-0.12, -0.02), vec2(-0.70, -0.48), 0.055));
+    a = max(a, capsule(p, vec2(-0.04, 0.02), vec2(-0.48, 0.58), 0.04));
+    a = max(a, wingLobe(p, 1.0, open * 0.6));
+    a = max(a, wingLobe(p, -1.0, open * 0.35));
+  }
+  // parrot / cockatiel — hooked beak, crest on cockatiel
+  else {
     float crest = step(0.5, kind) * (1.0 - step(1.5, kind));
-    a = max(ellipse(p, vec2(0.32, 0.22)), ellipse(p - vec2(0.27, 0.15), vec2(0.16, 0.14)));
-    a = max(a, tri(p, vec2(0.36, 0.12), vec2(0.58, 0.05), vec2(0.38, 0.00)));
-    a = max(a, tri(p, vec2(0.24, 0.27), vec2(0.32, 0.62), vec2(0.38, 0.25)) * crest);
-    a = max(a, tri(p, vec2(-0.12, -0.02), vec2(-0.78, -0.34 * flap), vec2(-0.22, 0.05)));
+    a = max(ellipse(p, vec2(0.36, 0.26)), ellipse(p - vec2(0.28, 0.12), vec2(0.18, 0.16)));
+    a = max(a, capsule(p, vec2(0.38, 0.08), vec2(0.58, 0.0), 0.04)); // hook
+    a = max(a, ellipse(p - vec2(0.22, 0.34), vec2(0.07, 0.12)) * crest);
+    a = max(a, wingLobe(p, 1.0, open * 0.7));
+    a = max(a, wingLobe(p, -1.0, open * 0.45));
+    a = max(a, ellipse(p + vec2(0.28, 0.02), vec2(0.16, 0.08)));
   }
   return clamp(a, 0.0, 1.0);
 }
 
 void main() {
-  vec2 q = vec2(vUv.x * vDir.y - vUv.y * vDir.x, vUv.x * vDir.x + vUv.y * vDir.y);
+  // rotate local bird space so +x is heading
+  vec2 q = vec2(vUv.x * vDir.x + vUv.y * vDir.y, -vUv.x * vDir.y + vUv.y * vDir.x);
   float a = birdShape(q, vKind, vActivity, vWing);
-  if (a < 0.02) discard;
-  vec3 ink = mix(u_ink, vTint, 0.72);
-  ink = mix(ink, ink.bgr * 0.35 + vec3(0.02, 0.025, 0.04), u_night);
+  if (a < 0.12) discard;
+  vec3 ink = mix(u_ink, vTint, 0.86);
+  ink = mix(ink, ink * 0.55 + vec3(0.04, 0.05, 0.07), u_night * 0.85);
   float hb = clamp(gl_FragCoord.y / u_res.y, 0.0, 1.0) - u_horizon;
   vec3 back = hb >= 0.0
     ? mix(u_low, u_high, smoothstep(0.0, 0.48, hb))
     : mix(u_low, u_ground, smoothstep(0.0, 0.34, -hb));
-  float haze = clamp((vDepth - u_hazeFrom) / 130.0, 0.0, 1.0) * u_haze;
-  gl_FragColor = vec4(mix(ink, back, haze), a * vFade);
+  // keep individuals sharp — haze only softens the far ones a little
+  float haze = clamp((vDepth - u_hazeFrom) / 160.0, 0.0, 1.0) * u_haze * 0.45;
+  float rim = smoothstep(0.02, 0.18, a) * (1.0 - smoothstep(0.55, 0.95, a));
+  vec3 col = mix(ink, back, haze) + ink * rim * 0.18;
+  gl_FragColor = vec4(col, a * vFade);
 }
 `;
 
@@ -783,7 +835,7 @@ export default function Murmuration() {
         x: cx * width,
         y: cy * height,
         z: pz,
-        r: height * (0.05 + 0.28 * sizeNorm) * 0.42,
+        r: height * (0.025 + 0.14 * sizeNorm) * 0.55,
       };
     };
 
@@ -1497,6 +1549,9 @@ export default function Murmuration() {
 
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      gl.enable(gl.DEPTH_TEST);
+      gl.depthFunc(gl.LEQUAL);
+      gl.clear(gl.DEPTH_BUFFER_BIT);
       gl.useProgram(birdProg);
       gl.bindBuffer(gl.ARRAY_BUFFER, cornerBuf);
       gl.enableVertexAttribArray(uBird.corner);
@@ -1549,6 +1604,7 @@ export default function Murmuration() {
       gl.disableVertexAttribArray(uBird.vel);
       gl.disableVertexAttribArray(uBird.meta);
       if (uBird.tint >= 0) gl.disableVertexAttribArray(uBird.tint);
+      gl.disable(gl.DEPTH_TEST);
     };
     raf = requestAnimationFrame(draw);
 

@@ -50,8 +50,8 @@ export const BOUND_MARGIN = 7;
 export const MIN_BIRDS = 200;
 export const MAX_BIRDS = 4096;
 /** A living-room aviary: readable individuals, not a distant murmuration. */
-export const AVIARY_MIN = 18;
-export const AVIARY_MAX = 48;
+export const AVIARY_MIN = 12;
+export const AVIARY_MAX = 28;
 
 /** The integrator's one true step. Everything else accumulates into it. */
 export const FIXED_DT = 1 / 60;
@@ -374,49 +374,68 @@ function jitterPlace(base: Vec3, rng: () => number, spread: Vec3): Vec3 {
   };
 }
 
-function placeForActivity(activity: Activity, rng: () => number): Vec3 {
+/** Ring seats so the opening aviary doesn't stack every perch on one branch. */
+function meadowSeat(kindSlot: number, rng: () => number): Vec3 {
+  const seats: Vec3[] = [
+    { x: PLACES.tree.x - 2, y: PLACES.tree.y + 1.2, z: PLACES.tree.z },
+    { x: PLACES.fruit.x + 1, y: PLACES.fruit.y + 0.8, z: PLACES.fruit.z - 2 },
+    { x: PLACES.pond.x - 3, y: PLACES.pond.y, z: PLACES.pond.z + 2 },
+    { x: PLACES.drink.x + 2, y: PLACES.drink.y, z: PLACES.drink.z - 3 },
+    { x: PLACES.hay.x - 2, y: PLACES.hay.y, z: PLACES.hay.z + 1 },
+    { x: PLACES.grass.x - 8, y: PLACES.grass.y, z: PLACES.grass.z + 4 },
+    { x: PLACES.grass.x + 10, y: PLACES.grass.y, z: PLACES.grass.z - 6 },
+    { x: PLACES.tree.x + 6, y: PLACES.tree.y - 1, z: PLACES.tree.z - 8 },
+    { x: PLACES.pond.x + 4, y: PLACES.pond.y + 0.2, z: PLACES.pond.z - 6 },
+    { x: -20, y: 5.5, z: -8 },
+    { x: 18, y: 7.0, z: 12 },
+    { x: PLACES.hay.x - 8, y: PLACES.hay.y, z: PLACES.grass.z },
+    { x: PLACES.drink.x - 10, y: PLACES.drink.y, z: 14 },
+  ];
+  const base = seats[((kindSlot % seats.length) + seats.length) % seats.length];
+  return {
+    x: base.x + (rng() - 0.5) * 3.2,
+    y: base.y + (rng() - 0.5) * 1.4,
+    z: base.z + (rng() - 0.5) * 3.2,
+  };
+}
+
+function placeForActivity(activity: Activity, rng: () => number, kindSlot = 0): Vec3 {
   const j = (s: number) => (rng() - 0.5) * s;
   switch (activity) {
     case "perch":
-      return { x: PLACES.tree.x + j(3), y: PLACES.tree.y + j(2.5), z: PLACES.tree.z + j(3) };
+      return meadowSeat(kindSlot, rng);
     case "flap":
-      return { x: PLACES.tree.x + 2 + j(4), y: PLACES.tree.y + 1 + j(2), z: PLACES.tree.z + j(3) };
+      return { x: PLACES.tree.x + 2 + j(8), y: PLACES.tree.y + 1 + j(3), z: PLACES.tree.z + j(8) };
     case "hover":
-      return { x: PLACES.fruit.x + j(3), y: PLACES.fruit.y + 1.5 + j(2), z: PLACES.fruit.z + j(3) };
+      return { x: PLACES.fruit.x + j(6), y: PLACES.fruit.y + 1.5 + j(3), z: PLACES.fruit.z + j(6) };
     case "drink":
-      return { x: PLACES.drink.x + j(3), y: PLACES.drink.y + j(0.6), z: PLACES.drink.z + j(3) };
+      return { x: PLACES.drink.x + j(7), y: PLACES.drink.y + j(0.6), z: PLACES.drink.z + j(7) };
     case "eat":
       return rng() > 0.5
-        ? { x: PLACES.fruit.x + j(3), y: PLACES.fruit.y + j(1.2), z: PLACES.fruit.z + j(3) }
-        : { x: PLACES.hay.x + j(4), y: PLACES.hay.y + j(0.8), z: PLACES.hay.z + j(4) };
+        ? { x: PLACES.fruit.x + j(6), y: PLACES.fruit.y + j(1.2), z: PLACES.fruit.z + j(6) }
+        : { x: PLACES.hay.x + j(7), y: PLACES.hay.y + j(0.8), z: PLACES.hay.z + j(7) };
     case "swim":
-      return { x: PLACES.pond.x + j(4), y: PLACES.pond.y + j(0.4), z: PLACES.pond.z + j(4) };
+      return { x: PLACES.pond.x + j(6), y: PLACES.pond.y + j(0.4), z: PLACES.pond.z + j(6) };
     case "hop":
       return rng() > 0.45
-        ? { x: PLACES.grass.x + j(8), y: PLACES.grass.y + j(0.8), z: PLACES.grass.z + j(8) }
-        : { x: PLACES.hay.x + j(4), y: PLACES.hay.y + j(0.8), z: PLACES.hay.z + j(4) };
+        ? { x: PLACES.grass.x + j(14), y: PLACES.grass.y + j(0.8), z: PLACES.grass.z + j(14) }
+        : { x: PLACES.hay.x + j(8), y: PLACES.hay.y + j(0.8), z: PLACES.hay.z + j(8) };
     case "strut":
-      return { x: PLACES.grass.x + 4 + j(8), y: PLACES.grass.y + j(0.6), z: PLACES.grass.z + j(6) };
+      return { x: PLACES.grass.x + 4 + j(14), y: PLACES.grass.y + j(0.6), z: PLACES.grass.z + j(12) };
     case "display":
-      return { x: PLACES.grass.x + 5 + j(5), y: PLACES.grass.y + j(0.6), z: PLACES.grass.z + j(5) };
+      return meadowSeat(kindSlot + 5, rng);
     case "stalk":
-      return rng() > 0.5
-        ? { x: PLACES.drink.x + j(4), y: PLACES.drink.y + j(0.5), z: PLACES.drink.z + j(5) }
-        : { x: PLACES.grass.x + j(9), y: PLACES.grass.y + j(0.7), z: PLACES.grass.z + j(7) };
+      return meadowSeat(kindSlot + 9, rng);
     case "soar":
-      return { x: j(WORLD_X), y: 6 + rng() * 6, z: j(WORLD_Z) };
+      return { x: j(WORLD_X * 1.2), y: 6 + rng() * 6, z: j(WORLD_Z * 1.2) };
     case "dive":
     case "swoop":
-      return { x: j(WORLD_X), y: 4 + rng() * 6, z: j(WORLD_Z) };
+      return { x: j(WORLD_X * 1.1), y: 4 + rng() * 6, z: j(WORLD_Z * 1.1) };
     case "fly":
-      return { x: j(WORLD_X * 0.9), y: j(WORLD_Y * 0.7), z: j(WORLD_Z * 0.9) };
+      return { x: j(WORLD_X), y: 1 + rng() * 8, z: j(WORLD_Z) };
     case "flock":
     default:
-      return {
-        x: (rng() + rng() - 1) * WORLD_X * 0.55,
-        y: (rng() + rng() - 1) * WORLD_Y * 0.5,
-        z: (rng() + rng() - 1) * WORLD_Z * 0.55,
-      };
+      return meadowSeat(kindSlot, rng);
   }
 }
 
@@ -462,7 +481,8 @@ function writeBird(
   placeHint?: PlaceName | Vec3,
 ): void {
   const sp = BIRD_SPECIES[kind];
-  const place = placeForHint(placeHint, rng) ?? placeForActivity(activity, rng);
+  const slot = kindIndex(kind) + i * 3;
+  const place = placeForHint(placeHint, rng) ?? placeForActivity(activity, rng, slot);
   state.pos[i * 3] = clamp(place.x, -WORLD_X, WORLD_X);
   state.pos[i * 3 + 1] = clamp(place.y, -WORLD_Y, WORLD_Y);
   state.pos[i * 3 + 2] = clamp(place.z, -WORLD_Z, WORLD_Z);
@@ -475,7 +495,8 @@ function writeBird(
   state.vel[i * 3 + 1] = Math.sin(pitch) * spMul * (air || hover ? 1 : 0.2);
   state.vel[i * 3 + 2] = Math.sin(yaw) * Math.cos(pitch) * spMul;
   state.bird[i * 2] = rng();
-  state.bird[i * 2 + 1] = clamp((0.35 + rng() * 1.45) * sp.size, 0.35, 1.8);
+  // keep size diversity without letting every resident claim a third of the sky
+  state.bird[i * 2 + 1] = clamp((0.45 + rng() * 0.85) * sp.size, 0.4, 1.55);
   state.kindOf[i] = kindIndex(kind);
   state.activityOf[i] = activityIndex(activity);
   state.tint[i * 3] = sp.body[0];
@@ -525,7 +546,14 @@ export function seedAviary(seed: number, weather = 0, season = 0): FlockState {
   for (let i = 0; i < n; i++) {
     const kind = i < guarantee ? BIRD_KINDS[i] : BIRD_KINDS[Math.floor(rng() * BIRD_KINDS.length)];
     const sp = BIRD_SPECIES[kind];
-    const activity = pickActivity(sp, rng, i < guarantee || rng() < 0.62);
+    // Prefer a ground/water pose so the opening frame is a meadow of animals,
+    // not thirteen flyers collapsed into one murmuration ball.
+    let activity = pickActivity(sp, rng, i < guarantee || rng() < 0.7);
+    if (i < guarantee && isAirActivity(activity)) {
+      const grounded = sp.activities.find((a) => !isAirActivity(a));
+      if (grounded) activity = grounded;
+      else if (activity === "flock") activity = "fly";
+    }
     const place = sp.places[Math.floor(rng() * sp.places.length)];
     writeBird(state, i, kind, activity, rng, heading, place);
   }
@@ -778,10 +806,10 @@ export function stepFlock(state: FlockState, params: FlockParams, dt: number): v
       let az = 0;
       const phase = i * 0.37 + px * 0.05;
       if (act === "perch") {
-        ax += (PLACES.tree.x - px) * 1.2;
-        ay += (PLACES.tree.y - py) * 1.2;
-        az += (PLACES.tree.z - pz) * 1.2;
-        ax += Math.sin(phase) * 0.4;
+        // stay near the seat the bird was given — don't vacuum every perch to one trunk
+        ax += Math.sin(phase) * 0.55;
+        ay += Math.sin(phase * 1.7) * 0.25;
+        az += Math.cos(phase * 0.9) * 0.55;
       } else if (act === "hover") {
         ax += (PLACES.fruit.x - px) * 1.6 + Math.sin(phase * 5.7) * 0.9;
         ay += (PLACES.fruit.y + 1.6 - py) * 2.4 + Math.sin(phase * 11.0) * 0.45;
@@ -809,17 +837,16 @@ export function stepFlock(state: FlockState, params: FlockParams, dt: number): v
         if (Math.floor(phase * 8 + i) % 17 === 0) ay += 6;
       } else if (act === "strut") {
         ax += Math.sin(phase * 0.4) * 1.4;
-        ay += (PLACES.grass.y - py) * 2.0;
+        ay += Math.max(-2, PLACES.grass.y - py) * 1.2;
         az += Math.cos(phase * 0.35) * 1.1;
       } else if (act === "display") {
-        ax += (PLACES.grass.x + 5 - px) * 0.9 + Math.sin(phase * 0.7) * 0.7;
-        ay += (PLACES.grass.y - py) * 2.0;
-        az += (PLACES.grass.z - pz) * 0.9 + Math.cos(phase * 0.7) * 0.7;
+        ax += Math.sin(phase * 0.7) * 0.9;
+        ay += Math.max(-2, PLACES.grass.y - py) * 1.2;
+        az += Math.cos(phase * 0.7) * 0.9;
       } else if (act === "stalk") {
-        const home = px > 2 ? PLACES.drink : PLACES.grass;
-        ax += (home.x - px) * 0.55 + Math.sin(phase * 0.7) * 0.8;
-        ay += (home.y - py) * 2.0;
-        az += (home.z - pz) * 0.55 + Math.cos(phase * 0.6) * 0.8;
+        ax += Math.sin(phase * 0.7) * 1.0;
+        ay += Math.max(-2, PLACES.grass.y - py) * 1.2;
+        az += Math.cos(phase * 0.6) * 1.0;
       }
       // Soft wind only — residents feel a breeze, not a gale.
       ax += params.wind.x * 0.12;
