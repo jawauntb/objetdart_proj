@@ -120,6 +120,7 @@ assert.equal(
 // that skips a rung all break this line and nothing else in the suite.
 const LADDER = [
   "quarks",
+  "nucleons",
   "atoms",
   "molecules",
   "organics",

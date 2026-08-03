@@ -12,6 +12,7 @@ import {
   type GuideRoom,
 } from "@/data/guide";
 import { SITE_ROUTE_BY_KEY } from "@/lib/routes";
+import { auroraSpots, hexToRgba, resolveRoomPalette } from "@/lib/guide-aurora";
 
 // The one sanctioned reading surface where the site explains itself
 // (AGENTS.md, "the documentation law"). The rooms never explain; this page
@@ -38,27 +39,51 @@ export default function Guide() {
     rooms: GUIDE_ROOMS.filter((room) => clusterOf(room) === cluster),
   })).filter((group) => group.rooms.length > 0);
 
+  const spots = auroraSpots(GUIDE_ROOMS.map((room) => room.key));
+
   return (
     <div className="guide">
-      {/* threshold */}
+      {/* threshold — a room of its own: the album's full palette, breathing */}
       <header className="guide-hero">
-        <p className="t-eyebrow">the field guide</p>
-        <h1 className="t-h1 guide-hero-title">
-          <em>how to hold it</em>
-        </h1>
-        <p className="t-body guide-lede">
-          the rooms of this site never explain themselves — that is their law. everything is
-          meant to be found by a curious hand inside a minute of play. this page is the one
-          place the law is lifted: an onboarding walk for the first visit, the grammar every
-          room speaks, an exhaustive account of each room, and the workshop where the
-          machinery is kept.
-        </p>
-        <nav className="guide-toc t-mono" aria-label="guide sections">
-          <a href="#first-minute">the first minute</a>
-          <a href="#grammar">the grammar</a>
-          <a href="#rooms">the rooms</a>
-          <a href="#workshop">the workshop</a>
-        </nav>
+        <div className="guide-hero-room">
+          <div className="guide-aurora" aria-hidden="true">
+            {spots.map((spot) => (
+              <span
+                key={spot.key}
+                className="guide-aurora-spot"
+                style={{
+                  left: `${spot.leftPct}%`,
+                  top: `${spot.topPct}%`,
+                  width: spot.sizePx,
+                  height: spot.sizePx,
+                  background: `radial-gradient(circle at 40% 35%, ${hexToRgba(spot.color, 0.55)}, ${hexToRgba(spot.color2, 0.28)} 45%, transparent 72%)`,
+                  animationDelay: `${spot.delayMs}ms`,
+                  animationDuration: `${spot.durationMs}ms`,
+                }}
+              />
+            ))}
+          </div>
+          <div className="guide-hero-scrim" aria-hidden="true" />
+          <div className="guide-hero-text">
+            <p className="t-eyebrow guide-hero-eyebrow">the field guide</p>
+            <h1 className="t-h1 guide-hero-title">
+              <em>how to hold it</em>
+            </h1>
+            <p className="t-body guide-lede">
+              the rooms of this site never explain themselves — that is their law. everything
+              is meant to be found by a curious hand inside a minute of play. this page is the
+              one place the law is lifted: an onboarding walk for the first visit, the grammar
+              every room speaks, an exhaustive account of each room — every color here is a
+              real room&rsquo;s own — and the workshop where the machinery is kept.
+            </p>
+            <nav className="guide-toc t-mono" aria-label="guide sections">
+              <a href="#first-minute">the first minute</a>
+              <a href="#grammar">the grammar</a>
+              <a href="#rooms">the rooms</a>
+              <a href="#workshop">the workshop</a>
+            </nav>
+          </div>
+        </div>
       </header>
 
       {/* onboarding */}
@@ -129,8 +154,19 @@ export default function Guide() {
         {grouped.map((group) => (
           <div key={group.cluster} className="guide-cluster">
             <h3 className="t-eyebrow guide-cluster-title">{CLUSTER_LABELS[group.cluster]}</h3>
-            {group.rooms.map((room) => (
-              <article key={room.key} id={`room-${room.key}`} className="guide-room">
+            {group.rooms.map((room) => {
+              const palette = resolveRoomPalette(room.key);
+              return (
+              <article
+                key={room.key}
+                id={`room-${room.key}`}
+                className="guide-room"
+                style={{
+                  "--room-glow": palette.glow,
+                  "--room-accent2": palette.accent2,
+                  "--room-border": hexToRgba(palette.glow, 0.55),
+                } as React.CSSProperties}
+              >
                 <div className="guide-room-shot">
                   <Link href={room.href} aria-label={`enter ${room.title}`}>
                     <Image
@@ -145,6 +181,7 @@ export default function Guide() {
                 </div>
                 <div className="guide-room-text">
                   <header className="guide-room-head">
+                    <span className="guide-room-dot" aria-hidden="true" />
                     <h4 className="t-h3 guide-room-title">
                       <em>{room.title}</em>
                     </h4>
@@ -176,7 +213,8 @@ export default function Guide() {
                   ) : null}
                 </div>
               </article>
-            ))}
+              );
+            })}
           </div>
         ))}
       </section>
@@ -237,9 +275,58 @@ export default function Guide() {
   padding: var(--pad-y) var(--pad-x);
 }
 .guide a { transition: color var(--t); }
-.guide-hero { max-width: 760px; }
-.guide-hero-title { margin: 10px 0 18px; }
-.guide-lede { color: var(--ink-2); }
+.guide-hero { max-width: 100%; }
+.guide-hero-room {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  background:
+    radial-gradient(120% 160% at 12% -10%, rgba(79, 183, 200, 0.16), transparent 55%),
+    radial-gradient(130% 140% at 92% 118%, rgba(231, 185, 78, 0.14), transparent 60%),
+    linear-gradient(165deg, #0a0e17 0%, #10141f 55%, #140f1c 100%);
+  border: 1px solid rgba(232, 226, 213, 0.14);
+  padding: clamp(40px, 7vw, 76px) clamp(24px, 5vw, 64px) clamp(44px, 7vw, 80px);
+}
+.guide-aurora {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+.guide-aurora-spot {
+  position: absolute;
+  margin-left: -60px;
+  margin-top: -60px;
+  border-radius: 50%;
+  opacity: 0.68;
+  mix-blend-mode: screen;
+  animation: guide-breathe 7s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+@keyframes guide-breathe {
+  0%, 100% { transform: scale(0.92); opacity: 0.5; }
+  50% { transform: scale(1.08); opacity: 0.8; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .guide-aurora-spot { animation: none; opacity: 0.55; }
+}
+.guide-hero-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: linear-gradient(
+    100deg,
+    rgba(9, 12, 19, 0.86) 0%,
+    rgba(9, 12, 19, 0.62) 38%,
+    rgba(9, 12, 19, 0.22) 62%,
+    transparent 82%
+  );
+  pointer-events: none;
+}
+.guide-hero-text { position: relative; z-index: 1; max-width: 760px; }
+.guide-hero-eyebrow { color: rgba(232, 226, 213, 0.72); }
+.guide-hero-title { margin: 10px 0 18px; color: rgba(244, 238, 222, 0.98); }
+.guide-lede { color: rgba(232, 226, 213, 0.82); }
 .guide-toc {
   display: flex;
   flex-wrap: wrap;
@@ -251,7 +338,8 @@ export default function Guide() {
   min-height: 44px;
   display: inline-flex;
   align-items: center;
-  border-bottom: 1px solid var(--rule);
+  color: rgba(232, 226, 213, 0.86);
+  border-bottom: 1px solid rgba(232, 226, 213, 0.22);
 }
 .guide-toc a:hover { color: var(--candle); border-bottom-color: var(--candle); }
 .guide-section {
@@ -311,26 +399,34 @@ export default function Guide() {
   display: grid;
   grid-template-columns: minmax(0, 460px) 1fr;
   gap: clamp(18px, 3vw, 36px);
-  padding: 30px 0;
+  padding: 30px 0 30px 18px;
   border-top: 1px solid var(--rule);
+  border-left: 3px solid var(--room-border, var(--rule));
   align-items: start;
 }
 .guide-room-shot img {
   width: 100%;
   height: auto;
   display: block;
-  border: 1px solid var(--rule);
+  border: 1px solid var(--room-border, var(--rule));
 }
 .guide-room-shot { position: sticky; top: 84px; }
 .guide-room-head {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 6px 16px;
+  gap: 6px 12px;
+}
+.guide-room-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--room-glow), var(--room-accent2));
+  flex: none;
 }
 .guide-room-title { margin: 0; font-size: 26px; }
 .guide-room-href { font-size: 12px; color: var(--ink-2); }
-.guide-room-href:hover { color: var(--candle); }
+.guide-room-href:hover { color: var(--room-glow, var(--candle)); }
 .guide-room-scale { font-size: 11px; letter-spacing: 0.05em; color: var(--sea); margin-top: 6px; }
 .guide-room-essence { margin-top: 10px; color: var(--ink-2); font-style: italic; }
 .guide-moves { list-style: none; margin: 16px 0 0; padding: 0; }
@@ -356,9 +452,10 @@ export default function Guide() {
 .guide-api-line { font-size: 15px; color: var(--ink-2); margin-top: 4px; }
 .guide-api-line .t-mono { font-size: 11px; letter-spacing: 0.06em; }
 @media (max-width: 760px) {
-  .guide-room { grid-template-columns: 1fr; }
+  .guide-room { grid-template-columns: 1fr; padding-left: 14px; }
   .guide-room-shot { position: static; }
   .guide-moves li { grid-template-columns: 1fr; gap: 2px; }
+  .guide-hero-room { padding: 40px 20px 46px; }
 }
 `,
         }}
