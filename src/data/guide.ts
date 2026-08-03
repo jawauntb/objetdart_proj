@@ -581,7 +581,7 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
     ],
     finds: [
       "ducks sit low in the pond, hummingbirds blur at the fruiting canopy, raptors cut pointed wings through the upper air, peacocks and paradise birds open plumes, emus stand tall on the grass",
-      "the meadow under the horizon is one sky shader (tree, fruit, pond, hay, grass, clouds); the birds are instanced SDF quads, not images and not identical point sprites",
+      "the meadow under the horizon is one sky shader (tree, fruit, pond, hay, grass, clouds); the birds are instanced SDF quads with a dark rim so each body reads against dusk — not images, not identical point sprites",
       "the sound is the order parameter and nothing else: count the partials and you can read back how gathered the flock is — one animal is the harmonic series exactly, k× the fundamental",
       "a scattered flock calls more often than a gathered one, so the rate of the chatter is a second reading of the same number",
       "the wave of wingbeats after a knock crosses the sky rather than firing at once — the flock is wide, and the news takes time",
