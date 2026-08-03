@@ -869,55 +869,67 @@ export function nearObstruction(station: Station, seed: number, yaw: number): nu
 }
 
 /**
- * Which way he is looking.
+ * Which way he is looking — the camera's yaw itself, off-centre nudge and
+ * all, so exactly one function decides where this room opens and exactly
+ * one thing has to be true of what it returns.
  *
  * Two rules, and the second one is the whole of a bug. The first is the
- * obvious one: face the bearing whose crest subtends the largest angle, so
- * every seed gets its own peak to look at rather than a compass direction
- * that happens to be empty on this one.
+ * obvious one: face the crest that subtends the largest angle, so every
+ * seed gets its own peak to look at rather than a compass direction that
+ * happens to be empty on this one.
  *
  * On its own that rule reliably turns the camera into the hillside. The
  * largest angle anything ever subtends is the rock immediately in front of
  * your face, and the station stands on the flank of a cone that rises
  * SUMMIT_KM out of the range — so the scan swung 92 degrees off the way he
- * walked out and put the outcrop's own slope across half the frame, hit on
- * the marcher's FIRST step, twenty metres out. A picture of a rock.
+ * had walked out and laid the outcrop's own slope across half the frame,
+ * hit on the marcher's FIRST step, twenty metres from the eye. A picture of
+ * a rock, rendered impeccably.
  *
- * So the near field has to be clear before a bearing is eligible at all:
- * nothing within VIEW_NEAR_CLEAR_KM may stand above the eye. That is what
- * "looking out over" means, stated as arithmetic — and it is what makes the
- * far crest the subject rather than the nearest thing with a horizon.
+ * So the near field has to be clear before a yaw is eligible at all:
+ * nothing within VIEW_NEAR_CLEAR_KM, anywhere across the frame, may stand
+ * above the eye. That is what "looking out over" means, written as
+ * arithmetic — and it is what makes the far crest the subject rather than
+ * the nearest thing with a horizon.
  *
- * If no bearing is clear, he faces the way he walked out. That direction
- * has ground falling away along it by construction: it is how `stationFor`
+ * If nothing is clear, he faces the way he walked out: that direction has
+ * ground falling away along it by construction, which is how `stationFor`
  * found the ledge in the first place.
  */
 export function viewBearingFor(station: Station, seed: number): number {
-  let bearing = station.bearing;
+  let yaw = station.bearing + VIEW_OFFCENTRE;
   let best = -Infinity;
   let leastBlocked = Infinity;
-  let leastBlockedBearing = station.bearing;
+  let leastBlockedYaw = station.bearing + VIEW_OFFCENTRE;
   for (let b = 0; b < VIEW_BEARINGS; b++) {
-    const a = (b / VIEW_BEARINGS) * Math.PI * 2;
+    const a = (b / VIEW_BEARINGS) * Math.PI * 2 + VIEW_OFFCENTRE;
     if (Math.cos(a - station.bearing) < VIEW_BEHIND_COS) continue;
     const blocked = nearObstruction(station, seed, a);
     if (blocked < leastBlocked) {
       leastBlocked = blocked;
-      leastBlockedBearing = a;
+      leastBlockedYaw = a;
     }
     if (blocked >= 0) continue;
+    // the crest is scored where it will actually sit: off centre, which is
+    // where the head is turned to put it
+    const crest = a - VIEW_OFFCENTRE;
     for (const d of VIEW_PROBE_KM) {
       const ang =
-        (heightAt(station.x + Math.sin(a) * d, station.z + Math.cos(a) * d, seed, OCTAVES_MARCH) -
+        (heightAt(
+          station.x + Math.sin(crest) * d,
+          station.z + Math.cos(crest) * d,
+          seed,
+          OCTAVES_MARCH,
+        ) -
           station.y) /
         d;
       if (ang > best) {
         best = ang;
-        bearing = a;
+        yaw = a;
       }
     }
   }
-  return Number.isFinite(best) ? bearing : leastBlockedBearing;
+  return Number.isFinite(best) ? yaw : leastBlockedYaw;
 }
 
 // ——— the march ————————————————————————————————————————————————

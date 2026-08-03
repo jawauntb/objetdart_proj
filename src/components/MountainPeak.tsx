@@ -353,7 +353,7 @@ export default function MountainPeak() {
     const stX = station.x;
     const stZ = station.z;
     const eyeY = station.y;
-    const bestBearing = viewBearingFor(station, SEED);
+    const viewYaw = viewBearingFor(station, SEED);
 
     let cairns: Cairn[] = [];
     try {
@@ -489,7 +489,7 @@ export default function MountainPeak() {
     let scree: Scree[] = [];
     let tiltX = 0;
     let roll = 0; // the vessel is level with the world
-    let yaw = bestBearing + 0.16; // the head, turned — the summit off centre
+    let yaw = viewYaw; // the head, turned — the crest held off centre
     let yawTarget = yaw;
     let pitchPx = 0; // two-finger drag pans the frame
     let pitchTarget = 0;

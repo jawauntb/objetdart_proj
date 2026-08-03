@@ -23,6 +23,18 @@ const there = (p) => existsSync(new URL(p, rootUrl));
 const registryModule = loadTsModule("src/lib/room-registry.ts");
 const routesModule = loadTsModule("src/lib/routes.ts");
 
+/**
+ * The 2D calls DESIGN.md bans per frame, and the ledger that records who
+ * still owes them. Same three patterns scripts/test-room-paint.mjs ratchets,
+ * read from the same file, so the two laws can never disagree about a count.
+ */
+const BANNED_PAINT = {
+  createRadialGradient: /createRadialGradient\s*\(/g,
+  shadowBlur: /\bshadowBlur\s*=/g,
+  "ctx.filter blur": /\bctx\.filter\s*=|\.filter\s*=\s*[`"']blur\(/g,
+};
+const paintLedger = JSON.parse(readFileSync(new URL("scripts/room-paint-ledger.json", rootUrl), "utf8"));
+
 const {
   ROOM_REGISTRY,
   ROOM_BY_KEY,

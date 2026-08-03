@@ -222,8 +222,23 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "axis",
     keeps: "objetdart:atlas:naturals:v1",
     creates: "a natural",
-    exempt: {},
-  },
+    exempt: {
+      tilt:
+        "the map is seen from directly overhead, so there is no down for the device to lean " +
+        "toward: a tilt would slide the paper sideways under the reader rather than pull " +
+        "anything toward the ground, which is the one thing tilt means everywhere else",
+    },
+    rawPointer:
+      "the one-finger pan, the two-finger pinch and the inertia are a hand-tuned pointer state " +
+      "machine that already speaks the material and frame verbs and reports its residual zoom to " +
+      "the manifold through useBandEdgeTravel; the grammar layer is mounted alongside it with " +
+      "noCapture so the state machine stays the sole owner of pointer capture",
+    thresholds:
+      "MOBILE_ZOOM_SETTLE_MS and DESKTOP_ZOOM_SETTLE_MS are the camera's quiet-debounce — how " +
+      "long the view must stop moving before the room spends a tile generation on it — and the " +
+      "two differ because a phone's glide is shorter than a trackpad's. Neither classifies a " +
+      "contact: no hold, tap or chord is measured against them, and the room's one real gesture " +
+      "timing (the plant) is THRESHOLDS.dwellMs from gesture/core.ts",
   {
     key: "coast",
     href: "/coast",

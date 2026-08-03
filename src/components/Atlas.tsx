@@ -79,7 +79,6 @@ const MOBILE_ZOOM_SETTLE_MS = 520;
 const DESKTOP_ZOOM_SETTLE_MS = 620;
 const DRAG_THRESHOLD_PX = 14;
 const EDGE_TRAVEL_RATIO = 0.15;
-const GESTURE_SUPPRESS_MS = 280;
 // Long-press planting: hold on the map through the dwell tier to leave
 // a natural (mostly a cairn, sometimes a wildflower, rarely an animal
 // trail). This used to be a private 1800ms timer — a threshold shadowing
@@ -1000,12 +999,84 @@ export default function Atlas() {
         }
       },
       hold: (e) => {
-        if (e.fingers !== 3) return;
-        if (e.phase === "release") { timeScale = 1; return; }
-        // time dilation while held — the sky and clouds slow continuously
-        timeScale = e.phase === "enter"
-          ? 1
-          : Math.max(0.15, 1 - Math.min(1, e.elapsed / THRESHOLDS.ceremonyMs) * 0.85);
+        if (e.fingers === 3) {
+          if (e.phase === "release") { timeScale = 1; return; }
+          // time dilation while held — the sky and clouds slow continuously
+          timeScale = e.phase === "enter"
+            ? 1
+            : Math.max(0.15, 1 - Math.min(1, e.elapsed / THRESHOLDS.ceremonyMs) * 0.85);
+          return;
+        }
+        if (e.fingers !== 1) return;
+        // One finger dwelling on the ground is the create/delete law: from
+        // the touch tier something visibly gathers under the finger (so the
+        // hand learns the verb without being told), at the dwell tier it
+        // lands as a natural, past the dwell tier the gather keeps feeding
+        // it, and a ceremony hold on a mark already standing is the room's
+        // solemn act — its touch-reachable delete.
+        if (e.phase === "release") {
+          charge.active = false;
+          charge.amount = 0;
+          return;
+        }
+        if (e.phase === "enter") {
+          charge.active = true;
+          charge.x = e.x;
+          charge.y = e.y;
+          charge.amount = 0;
+          charge.planted = null;
+          charge.onId = naturalNear(e.x, e.y);
+          charge.sealed = false;
+          return;
+        }
+        if (!charge.active) return;
+        // Continuous, never a switch: the gather crosses 1 exactly at the
+        // dwell tier and keeps climbing toward the ceremony.
+        charge.amount = (e.elapsed - THRESHOLDS.tapMaxMs) /
+          (THRESHOLDS.dwellMs - THRESHOLDS.tapMaxMs);
+        if (charge.onId) {
+          // annihilate: a mark under the finger unmakes itself at the
+          // ceremony tier, after visibly fraying for the whole hold
+          if (e.tier >= 3 && !charge.sealed) {
+            charge.sealed = true;
+            removeNaturalRef.current?.(charge.onId);
+            setPulse({ x: e.x, y: e.y, key: Date.now(), intensity: 0.85 });
+            setStatus("the ground takes it back");
+            try { getFieldAudio().bell(); haptics.roll(); } catch { /* noop */ }
+            recordTape("region", 0.7, "atlas/annihilate");
+            charge.onId = null;
+            charge.active = false;
+          }
+          return;
+        }
+        if (e.tier >= 2 && !charge.planted && !busyRef.current) {
+          const mNow = metricsRef.current;
+          const place = addNaturalRef.current;
+          if (!mNow.width || !place) return;
+          const wpt = worldPointAtScreen(viewRef.current, mNow, e.x, e.y);
+          const addr = worldAddressRef.current;
+          const nx = wpt.wx - addr.wx;
+          const ny = wpt.wy - addr.wy;
+          if (!Number.isFinite(nx) || !Number.isFinite(ny)) return;
+          if (nx < 0 || ny < 0 || nx > 1 || ny > 1) return;
+          // Cairn is the default surprise; a wildflower shows up often
+          // enough to feel warm; a trail is a rare gift.
+          const roll = Math.random();
+          const kind: AtlasNaturalKind =
+            roll < 0.70 ? "cairn" :
+            roll < 0.95 ? "flower" :
+            "trail";
+          place(kind, nx, ny);
+          charge.planted = kind;
+          setPulse({ x: e.x, y: e.y, key: Date.now(), intensity: 0.7 });
+          setStatus(
+            kind === "cairn" ? "a cairn stands where you paused" :
+            kind === "flower" ? "a wildflower opens where you paused" :
+            "an animal trail crosses the ground",
+          );
+          try { getFieldAudio().chime(); haptics.roll(); } catch { /* noop */ }
+          recordTape("region", 0.68, "atlas/plant/" + kind);
+        }
       },
     }, { wheelZoom: false, manageStyle: false, noCapture: true });
 
@@ -2376,7 +2447,7 @@ export default function Atlas() {
     setInteracting(false);
     commitView(bounded, { animate: true });
     if (!cancelled && drag && !drag.moved && point) {
-      if (performance.now() - lastGestureAtRef.current < GESTURE_SUPPRESS_MS) {
+      if (performance.now() - lastGestureAtRef.current < THRESHOLDS.tapTrainMs) {
         dragRef.current = null;
         return;
       }
@@ -2537,7 +2608,7 @@ export default function Atlas() {
                   }}
                   onClick={(event) => {
                     event.stopPropagation();
-                    if (performance.now() - lastGestureAtRef.current < GESTURE_SUPPRESS_MS) return;
+                    if (performance.now() - lastGestureAtRef.current < THRESHOLDS.tapTrainMs) return;
                     if (dragRef.current?.moved || interactingRef.current) return;
                     enterHotspot(hotspot);
                   }}
