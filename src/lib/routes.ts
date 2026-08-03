@@ -29,7 +29,7 @@ export const SITE_ROUTES: SiteRouteEntry[] = [
   { key: "relativity",  icon: "stars",    href: "/relativity",                        desc: "light keeps its own covenant", cluster: "mechanism", dark: true },
   { key: "loom",        icon: "signal",   href: "/loom",                              desc: "one structure, every sense",   cluster: "mechanism", dark: true },
   { key: "storm",       icon: "storm",    href: "/storm",                             desc: "pressure · charge · discharge", cluster: "water",     dark: true },
-  { key: "clouds",      icon: "clouds",   href: "/clouds",                            desc: "olympus",                      cluster: "water",     dark: true },
+  { key: "clouds",      icon: "clouds",   href: "/clouds",                            desc: "the air floor, four banks deep", cluster: "water",     dark: true },
   { key: "mountain",    icon: "earth",    href: "/mountain",                          desc: "the peak above the fog",       cluster: "nature",    dark: true },
   { key: "aphros",      icon: "aphros",   href: "/aphros",                            desc: "play the shells",              cluster: "water" },
   { key: "flowers",     icon: "growth",   href: "/flowers",                           desc: "petals · symmetry",            cluster: "nature",    dark: true },

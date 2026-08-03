@@ -301,7 +301,7 @@ export const SITE_ICON_VISUALS = {
   },
   clouds: {
     title: "Clouds",
-    description: "olympus and the air floor",
+    description: "the air floor, four banks deep",
     path: "/clouds",
     shortName: "clouds",
     kind: "clouds",

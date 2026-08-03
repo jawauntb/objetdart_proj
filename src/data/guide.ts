@@ -375,7 +375,7 @@ export const GUIDE_ROOMS: GuideRoom[] = [
   },
   {
     key: "clouds",
-    title: "olympus",
+    title: "the air floor, four banks deep",
     href: "/clouds",
     scale: "the olympus band — peer of the mountain, between the coast and the atlas",
     essence: "the cloud floor — four banks of sky running a two-minute day, with a drifting chorus of air glyphs and weather you can gather by hand.",
