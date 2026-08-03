@@ -128,6 +128,11 @@ export default function HelixLadder() {
     /** the polymerase's position along the open strand, in bases */
     let polymerase = -1;
     let lastPolyAt = 0;
+    /** daughter length peeled off after a polymerase run (0 = none yet) */
+    let chromatid = 0;
+    /** 0..1 — how far the daughter has condensed into a chromatid */
+    let chromatidCoil = 0;
+    let chromatidFlash = 0;
     let lastInteractionAt = performance.now();
     let glimmerAt = 0;
     let selIdx = -1;
@@ -588,8 +593,25 @@ export default function HelixLadder() {
           if (polymerase < opened) {
             soundBase(polymerase, 130, true);
             polymerase += 1;
+          } else if (opened >= 4 && polymerase >= opened && chromatid < opened) {
+            // the open stretch is copied — a daughter ribbon peels aside
+            chromatid = opened;
+            chromatidCoil = Math.max(chromatidCoil, 0.08);
+            chromatidFlash = 1;
+            try {
+              audio.chime();
+              haptics.bloom();
+            } catch {
+              /* noop */
+            }
           }
         }
+      }
+      // free of the fork, the daughter condenses into a chromatid
+      if (chromatid > 0) {
+        const target = holdingOpen && polymerase < opened ? 0.2 : 1;
+        chromatidCoil += (target - chromatidCoil) * Math.min(1, dt * 1.4);
+        if (chromatidFlash > 0) chromatidFlash = Math.max(0, chromatidFlash - dt * 1.6);
       }
 
       // the world rewrites the code at its own rate — never at rest
@@ -630,6 +652,12 @@ export default function HelixLadder() {
           ctx.arc(dx, dy, dust[i * 3 + 2] * (1 + breath * 0.2), 0, Math.PI * 2);
           ctx.fill();
         }
+      }
+
+      if (n === 0 && chromatid > 0) {
+        chromatid = 0;
+        chromatidCoil = 0;
+        chromatidFlash = 0;
       }
 
       if (n > 0) {
@@ -762,6 +790,54 @@ export default function HelixLadder() {
           ctx.beginPath();
           ctx.arc(0, y, 9 + breath * 3, 0, Math.PI * 2);
           ctx.stroke();
+        }
+
+        // the daughter chromatid — a condensed complement peeled beside the ladder
+        if (chromatid > 0) {
+          const m = Math.min(chromatid, n);
+          const daughter = complement(seq).slice(0, m);
+          const peel = 0.35 + chromatidCoil * 0.9;
+          const cx = hw * (3.6 + peel * 2.4);
+          const coil = 1 + chromatidCoil * 1.8;
+          const hhC = hh * (0.55 + (1 - chromatidCoil) * 0.35);
+          const flash = chromatidFlash * 0.35;
+          ctx.save();
+          ctx.translate(cx, -hh * 0.15 * chromatidCoil);
+          ctx.globalAlpha = (0.55 + chromatidCoil * 0.35 + flash) * (1 - leaving);
+          // condensed backbone
+          ctx.beginPath();
+          for (let i = 0; i < m; i++) {
+            const r = rungAt(i, m, 0, coil);
+            const px = r.x1 * hw * (0.55 + chromatidCoil * 0.2);
+            const py = (i / Math.max(1, m - 1)) * 2 * hhC - hhC;
+            if (i === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+          }
+          ctx.strokeStyle = `rgba(206, 222, 250, ${0.45 + chromatidCoil * 0.35})`;
+          ctx.lineWidth = 1.6 + chromatidCoil;
+          ctx.stroke();
+          ctx.beginPath();
+          for (let i = 0; i < m; i++) {
+            const r = rungAt(i, m, 0, coil);
+            const px = r.x2 * hw * (0.55 + chromatidCoil * 0.2);
+            const py = (i / Math.max(1, m - 1)) * 2 * hhC - hhC;
+            if (i === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+          }
+          ctx.strokeStyle = `rgba(231, 172, 82, ${0.4 + chromatidCoil * 0.35})`;
+          ctx.lineWidth = 1.4 + chromatidCoil * 0.8;
+          ctx.stroke();
+          // a few base sparks along the chromatid
+          for (let i = 0; i < m; i += Math.max(1, Math.floor(m / 8))) {
+            const r = rungAt(i, m, 0, coil);
+            const py = (i / Math.max(1, m - 1)) * 2 * hhC - hhC;
+            const tint = BASE_TINT[daughter[i]];
+            ctx.fillStyle = `rgba(${tint}, ${0.55 + flash})`;
+            ctx.beginPath();
+            ctx.arc(((r.x1 + r.x2) * 0.5) * hw * 0.5, py, 2.2, 0, Math.PI * 2);
+            ctx.fill();
+          }
+          ctx.restore();
         }
 
         // the keyboard's mark

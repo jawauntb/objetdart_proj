@@ -596,7 +596,8 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
     moves: [
       "drag across the helix → unzips it; the hydrogen bonds break in order, each one a tick, and a gc-rich stretch is genuinely harder to pull",
       "keep the finger down while it is open → a polymerase runs the complement and plays the tune back in the mirror",
-      "let go → the ladder re-anneals",
+      "hold through the open stretch → a daughter ribbon peels beside the ladder and condenses into a chromatid",
+      "let go → the ladder re-anneals; the chromatid stays as the copy you made",
       "held enter → the same unzip and copy on a keyboard; release and it closes",
       "drag along the helix → supercoils it, winding turns into the length",
       "tap a rung → sounds that base's degree",
@@ -610,6 +611,7 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "the resistance of the unzip is the real hydrogen-bond count — two for a·t, three for g·c — so you can feel the composition before the lens tells you",
       "the weak a·t rungs shiver visibly more than the g·c ones, and more still as the world warms",
       "the melody climbs an octave every eight bases, so the ear hears how far along the strand the polymerase has reached",
+      "finish a polymerase run on an open stretch and a chromatid peels off — the copy made visible, not only heard",
     ],
     keeps: "the strand, with every mutation you or the world have made to it",
   },
