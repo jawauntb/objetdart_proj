@@ -293,13 +293,13 @@ assert.equal(entryScaleFor("/colophon"), null);
   );
   assert.deepEqual(
     Array.from(travelOptions("earth", 1, {}), (b) => b.id),
-    ["atlas", "stars"],
-    "the ground rises onto the map, or through the unbuilt neighbourhoods into the sky",
+    ["atlas", "planets"],
+    "the ground rises onto the map, or out to the planetary neighbourhood",
   );
   assert.deepEqual(
     Array.from(travelOptions("stars", -1, {}), (b) => b.id),
-    ["atlas", "earth"],
-    "the sky descends onto the map first, or walks the unbuilt system down to the ground",
+    ["atlas", "planets"],
+    "the sky descends onto the map first, or walks the unbuilt system down to the forge",
   );
   assert.deepEqual(
     Array.from(travelOptions("cells", 1, {}), (b) => b.id),
@@ -438,9 +438,14 @@ assert.equal(entryScaleFor("/colophon"), null);
     "a door-room memory resolves through its unbuilt address (flips to /soil when it lands)",
   );
   assert.equal(
+    routes(1, "/earth", { earth: "planets" })[0],
+    "/planets",
+    "travel that came down from the neighbourhood returns to it",
+  );
+  assert.equal(
     routes(1, "/earth", { earth: "stars" })[0],
-    "/stars",
-    "travel that resolved through the unbuilt system still returns to the sky",
+    "/atlas/origin",
+    "a memory of a band that is no longer a door falls back to the canonical one, never to a dead wall",
   );
   assert.deepEqual(
     routes(1, "/cells"),
