@@ -126,9 +126,9 @@ src/
     sigil-shape.ts                   — polygon points + ray-cast silhouette helpers
     slug.ts                          — title → URL slug; cycle helpers
     types.ts                         — domain types
-    room-registry.ts                 — THE manifest: one entry per room; routes,
-                                       nav, gallery and guide coverage derive from it
-    routes.ts                        — presentation half, derived from the registry
+    room-registry.ts                 — what each room owes the grammar, and the
+                                       written reason for whatever it cannot say
+    routes.ts                        — derived from src/rooms/ manifests
     nav-order.ts                     — dropdown order from SCALE_BANDS + PEER_CIRCLES
     scale.ts / peers.ts              — the scale manifold; bands, doors, peer circles
     gesture/                         — the semantic gesture engine + its thresholds
@@ -136,8 +136,9 @@ src/
     room-runtime.ts                  — frame governor, visibility pause, DPR, idle writer
     scene/object.ts                  — SceneObjectSpec: state + seed + declared verbs
     scene/instances.ts               — one Float32Array for a whole population
-    scene/gl.ts                      — background field shader + one instanced pass
-    scene/room.ts                    — createRoomShell: the wiring every room shares
+    scene/population-layer.ts        — the population as one instanced draw
+    scene/voice.ts                   — RoomShell's voice, translated into verbs
+    webgl/stage.ts                   — GL context, DPR tiers, clocks, instancing
 
   store/
     field.ts                         — Zustand: concerns, region, carried, kept,
@@ -159,27 +160,28 @@ No backend writes. Google Analytics is optional and env-gated; without a GA4 Mea
 A room is **a background field, a population of objects, and the shared buses** — and
 that sentence is now load-bearing structure rather than description.
 
-- **The manifest.** `src/lib/room-registry.ts` holds one entry per room: its route and
-  presentation, its scale address (a band, or an exemption with a stated reason), who
-  owns the two-finger frame verb, what chrome its page mounts, its persistence key, the
-  noun a dwell-hold creates, and a written reason for every global binding its material
-  cannot express. `SITE_ROUTES`, `NAVIGATION_ROUTES`, `GALLERY_ROUTES` and the guide's
-  expected key set are all derived from it. Adding a room is one entry plus a component.
+- **Two manifests, no third.** `src/rooms/<key>/room.config.ts` says *where a room is* —
+  route, sigil, placement on the axis, guide entry, chrome — and `SITE_ROUTES`, the peer
+  seats, the icon config and the guide all derive from it. `src/lib/room-registry.ts`
+  says *what a room owes the hand*: who owns the two-finger frame verb, its persistence
+  key, the noun a dwell-hold creates, and a written reason for every global binding its
+  material cannot express. The two are cross-checked, never duplicated.
 - **The object model.** `src/lib/scene/object.ts` gives the countable things in a room —
   atom, nucleon, shell, cell, flower, bird, star, mass, cairn — one shape: a small
   deterministic state vector plus a seed, a lifecycle (born → growing under a dwell →
   sealed by a ceremony → retiring over a breath), the verbs of the gesture grammar the
   thing declares it can answer, and an `emit` that writes **instance data** rather than
   draw calls. Claiming a verb without implementing it throws at construction.
-- **One draw call.** `src/lib/scene/gl.ts` renders the background as a fragment shader
-  and the whole population as a single instanced pass — an SDF disc with an additive
+- **One draw call.** `src/lib/scene/population-layer.ts` draws the whole population as a
+  single instanced pass on `src/lib/webgl/stage.ts` — an SDF disc with an additive
   corona. This replaces the codebase's most expensive habit: a `createRadialGradient`
   rebuilt per object per frame (~44 a frame on `/stars`), per-petal `shadowBlur`,
   per-nucleon halos. The 2D fallback draws the same instances from one cached sprite.
-- **The shell.** `src/lib/scene/room.ts` owns everything a room author kept rewriting
-  and kept getting wrong: the frame governor, the visibility and gallery pause, the DPR
-  ceiling, the resize observer, `attachGestures` routed by finger count into verbs,
-  `onVessel`, the idle persistence writer, the glimmer clock, and the `<LetGo>` exhale.
+- **The shell.** `<RoomShell>` mounts the axis chrome, the complete gesture binding
+  table, the vessel, the glimmer clock, the keyboard dialect and the `<LetGo>` exhale;
+  `createGLStage` owns the context, the DPR tiers, the shared clocks and teardown.
+  `src/lib/scene/voice.ts` is the one translation between the shell's verbs and the
+  population's.
 - **The enforcement.** `scripts/test-room-contract.mjs` reads the manifest and fails the
   build when a room drifts from it — raw pointer wiring, a private timing threshold, an
   unbound and unexempted global binding, an animation that never pauses when hidden, a

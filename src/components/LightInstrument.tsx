@@ -53,6 +53,7 @@ type PointerRecord = {
   downY: number;
   moved: boolean;
   freq: number;
+  ownMarkId: number;
 };
 
 const SCALE_LABELS: Record<ScaleMode, string> = {
@@ -164,6 +165,7 @@ export default function LightInstrument() {
       ...current.slice(-15),
       { id, x, y, wavelength: nm, audible: freq, color: markColor },
     ]);
+    return id;
   }, []);
 
   const showTouch = useCallback((id: number, x: number, y: number, freq: number, touchColor: string) => {
@@ -193,10 +195,11 @@ export default function LightInstrument() {
     recordLight(`kick/${Math.round(freq)}hz`, 0.9);
   }, [mapX, pulseFlash, recordLight]);
 
-  const findNearMark = useCallback((x: number, y: number): ToneMark | null => {
+  const findNearMark = useCallback((x: number, y: number, excludeId?: number): ToneMark | null => {
     let best: ToneMark | null = null;
     let bestD = 0.05;
     for (const mark of marksRef.current) {
+      if (mark.id === excludeId) continue;
       const d = Math.hypot(mark.x - x, mark.y - y);
       if (d < bestD) { bestD = d; best = mark; }
     }
@@ -344,12 +347,12 @@ export default function LightInstrument() {
           if (e.phase === "start") {
             void getFieldAudio().start();
             const { nm, freq, color: touchColor } = translationAt(x);
-            pointers.current.set(e.id, { downAt: performance.now(), downX: x, downY: y, moved: false, freq });
+            const ownMarkId = keepMark(x, y, nm, freq, touchColor);
+            pointers.current.set(e.id, { downAt: performance.now(), downX: x, downY: y, moved: false, freq, ownMarkId });
             chargeState.set(e.id, { sealed: false });
             getLight808().noteOn(String(e.id), freq, { brightness: 1 - y });
             setWavelength(nm);
             showTouch(e.id, x, y, freq, touchColor);
-            keepMark(x, y, nm, freq, touchColor);
             try { ripple(0.4 + (1 - y) * 0.4); } catch { /* noop */ }
             recordLight(`touch/${Math.round(nm)}nm/${Math.round(freq)}hz`, clamp(0.35 + (1 - y) * 0.4, 0.2, 1));
             return;
@@ -463,7 +466,11 @@ export default function LightInstrument() {
       z.cur += (z.target - z.cur) * 0.12;
       const p = panRef.current;
       p.cur += (p.target - p.cur) * 0.1;
-      const dilating = pointers.current.size >= 3;
+      // time dilation reads three fingers held largely still — a played
+      // chord (fingers still landing/gliding) should not slow the room.
+      let stationary = 0;
+      for (const r of pointers.current.values()) if (!r.moved) stationary++;
+      const dilating = stationary >= 3;
       timeScaleRef.current += ((dilating ? 3 : 1) - timeScaleRef.current) * 0.06;
       plate.style.setProperty("--light-zoom", z.cur.toFixed(4));
       plate.style.setProperty("--light-pan", p.cur.toFixed(4));
@@ -483,7 +490,7 @@ export default function LightInstrument() {
         if (tier < 2) continue;
         const chg = chargeState.get(id);
         if (!chg) continue;
-        const near = findNearMark(record.downX, record.downY);
+        const near = findNearMark(record.downX, record.downY, record.ownMarkId);
         const mode: "create" | "delete" = near ? "delete" : "create";
         active.push({ id, x: record.downX, y: record.downY, pct: Math.min(1, (elapsed - 900) / 1600), mode });
         if (!chg.sealed && tier >= 3) {

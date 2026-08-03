@@ -222,6 +222,8 @@ export default function Archive() {
   touchArchiveRef.current = touchArchive;
   const soloRef = useRef(solo);
   soloRef.current = solo;
+  const activeFilterCountRef = useRef(activeFilterCount);
+  activeFilterCountRef.current = activeFilterCount;
   const hasItems = items.length > 0;
 
   // flick on a card: the drawer shivers open, then the room steps in.
@@ -269,7 +271,7 @@ export default function Archive() {
       tap: (e) => {
         if (e.fingers === 2) {
           // step back: the filters retreat all at once
-          if (activeFilterCount === 0) return;
+          if (activeFilterCountRef.current === 0) return;
           useField.setState({
             archMedium: new Set(),
             archConcern: new Set(),
@@ -295,7 +297,7 @@ export default function Archive() {
       if (navTimer) clearTimeout(navTimer);
       if (tuttiTimer) clearTimeout(tuttiTimer);
     };
-  }, [hasItems, router, activeFilterCount, setSort]);
+  }, [hasItems, router, setSort]);
 
   // vessel: shake rattles every drawer at once, a knock rings the
   // archive like tutti, and face-down is night — the grid dims until

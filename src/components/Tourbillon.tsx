@@ -11,6 +11,14 @@ import { attachGestures } from "@/lib/gesture";
 import { onVessel } from "@/lib/vessel";
 import { relaxTurbulence, stirTurbulence } from "@/lib/turbulence";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
+import LetGo from "@/components/LetGo";
+import {
+  createFrameGovernor,
+  isEmbeddedFrame,
+  onGalleryPause,
+  resolveDpr,
+  type QualityTier,
+} from "@/lib/room-runtime";
 
 /**
  * /tourbillon — a real(ish) mechanical watch movement in Three.js, built
@@ -439,8 +447,15 @@ export default function Tourbillon() {
     const view0 = params.get("view") || "iso";
     const shotMode = params.get("shot") === "1"; // cheap render for headless capture
 
+    // ── performance contract (room-runtime): frame governor + DPR ceiling,
+    // shared with every other room. Visibility pause already lived here
+    // (below) — gallery-pause joins it. ──
+    const embedded = isEmbeddedFrame();
+    const gov = createFrameGovernor(embedded ? "medium" : "high");
+    let tier: QualityTier = gov.tier();
+
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
-    renderer.setPixelRatio(shotMode ? 1 : Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setPixelRatio(shotMode ? 1 : resolveDpr(tier, { embedded, reducedMotion: reduced }));
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = CFG.exposure;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -1340,6 +1355,7 @@ export default function Tourbillon() {
     const tick = () => {
       const sp = speedRef.current;
       const now = performance.now();
+      tier = gov.beginFrame(now);
       let dt = (now - lastNow) / 1000; lastNow = now;
       if (dt > 0.1) dt = 0.1;
       // three-finger time dilation eases the whole train to 1/4 speed
@@ -1474,8 +1490,9 @@ export default function Tourbillon() {
     // pause entirely while the tab is hidden — a hidden watch still keeps
     // real time (simAccum keeps summing dt on the next visible frame via
     // lastNow), it simply spends no frames rendering nobody is watching
+    let galleryPaused = false;
     const onVisibility = () => {
-      if (document.hidden) {
+      if (document.hidden || galleryPaused) {
         cancelAnimationFrame(raf);
       } else {
         lastNow = performance.now();
@@ -1483,10 +1500,15 @@ export default function Tourbillon() {
       }
     };
     document.addEventListener("visibilitychange", onVisibility);
+    const ungal = onGalleryPause((p) => {
+      galleryPaused = p;
+      onVisibility();
+    });
 
     return () => {
       cancelAnimationFrame(raf);
       document.removeEventListener("visibilitychange", onVisibility);
+      ungal();
       ro.disconnect();
       detachGestures();
       detachVessel();

@@ -666,7 +666,7 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     frame: "yield",
     chrome: "axis",
     keeps: "objetdart:beam:memory",
-    creates: null,
+    creates: "a kept sky",
     exempt: {},
   },
   {
@@ -689,7 +689,7 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     source: "src/components/LightInstrument.tsx",
     page: "src/app/light/page.tsx",
     address: { exempt: "a spectral meta-instrument, not a place" },
-    frame: "yield",
+    frame: "own",
     chrome: "none",
     keeps: null,
     creates: null,
@@ -771,7 +771,7 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     frame: "yield",
     chrome: "axis",
     keeps: "objetdart:charts:pinned:v1",
-    creates: null,
+    creates: "a pinned reading",
     exempt: {},
   },
   {

@@ -27,6 +27,17 @@ import * as THREE from "three";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
+import LetGo from "@/components/LetGo";
+import { attachGestures } from "@/lib/gesture";
+import { onVessel, requestVessel, vesselAvailable, vesselGranted } from "@/lib/vessel";
+import {
+  createFrameGovernor,
+  detailForTier,
+  isEmbeddedFrame,
+  onGalleryPause,
+  onVisibility,
+  resolveDpr,
+} from "@/lib/room-runtime";
 
 // the room remembers you — tempo, night, and how far apart you left the
 // suns all survive a reload, the way stars keeps its constellations
@@ -487,16 +498,9 @@ export default function Beam() {
   const [fallback, setFallback] = useState(false);
   const [motionUI, setMotionUI] = useState<"hidden" | "prompt" | "on">("hidden");
   const audioRef = useRef<BeamAudio | null>(null);
-  const armSensorsRef = useRef<() => void>(() => {});
-  const motionRef = useRef<{
-    armed: boolean;
-    lastMag: number | null;
-    lastShakeAt: number;
-    onOrient: ((e: DeviceOrientationEvent) => void) | null;
-    onMotion: ((e: DeviceMotionEvent) => void) | null;
-  }>({ armed: false, lastMag: null, lastShakeAt: 0, onOrient: null, onMotion: null });
   const tiltRef = useRef({ tx: 0, ty: 0 });
   const shakeRef = useRef({ pending: 0 });
+  const knockRef = useRef({ pending: 0 });
   const reduceRef = useRef(false);
 
   const [memory] = useState<BeamMemory>(loadMemory);
@@ -526,70 +530,45 @@ export default function Beam() {
     audioRef.current.kick();
   }, []);
 
+  // ── the vessel (shared bus, @/lib/vessel): tilt is parallax, shake is a
+  // burst of light, a knock rings one chime, and face-down is night — the
+  // room's own portrait/landscape swap (in the resize handler below) is a
+  // second, private discovery of day-for-night, not this binding.
   const armSensors = useCallback(() => {
-    if (typeof window === "undefined" || motionRef.current.armed) return;
-    motionRef.current.armed = true;
-
-    const onOrient = (e: DeviceOrientationEvent) => {
-      tiltRef.current.tx = clamp((e.gamma ?? 0) / 40, -1, 1);
-      tiltRef.current.ty = clamp((e.beta ?? 0) / 40, -1, 1);
-    };
-    const onMotion = (e: DeviceMotionEvent) => {
-      const a = e.accelerationIncludingGravity;
-      if (!a) return;
-      const mag = Math.hypot(a.x ?? 0, a.y ?? 0, a.z ?? 0);
-      const m = motionRef.current;
-      if (m.lastMag != null) {
-        const jolt = Math.abs(mag - m.lastMag);
-        const now = performance.now();
-        if (jolt > (reduceRef.current ? 22 : 14) && now - m.lastShakeAt > 700) {
-          m.lastShakeAt = now;
-          shakeRef.current.pending = clamp(jolt / 30, 0.4, 1);
-        }
-      }
-      m.lastMag = mag;
-    };
-    motionRef.current.onOrient = onOrient;
-    motionRef.current.onMotion = onMotion;
-
-    type PermCtor = { requestPermission?: () => Promise<"granted" | "denied"> };
-    const DOE = (window as unknown as { DeviceOrientationEvent?: PermCtor }).DeviceOrientationEvent;
-    const DME = (window as unknown as { DeviceMotionEvent?: PermCtor }).DeviceMotionEvent;
-    const add = () => {
-      window.addEventListener("deviceorientation", onOrient);
-      window.addEventListener("devicemotion", onMotion);
-      setMotionUI("on");
-    };
-    if (DOE && typeof DOE.requestPermission === "function") {
-      Promise.allSettled([DOE.requestPermission?.(), DME?.requestPermission?.()])
-        .then((res) => {
-          if (res.some((r) => r.status === "fulfilled" && r.value === "granted")) add();
-          else motionRef.current.armed = false;
-        })
-        .catch(() => { motionRef.current.armed = false; });
-    } else {
-      add();
-    }
+    void requestVessel().then((ok) => {
+      if (ok) setMotionUI("on");
+    });
   }, []);
-  armSensorsRef.current = armSensors;
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    const w = window as unknown as {
-      DeviceOrientationEvent?: { requestPermission?: () => Promise<string> };
-    };
-    const hasAny = "DeviceOrientationEvent" in window || "DeviceMotionEvent" in window;
-    if (!hasAny) { setMotionUI("hidden"); return; }
-    const needsPerm = !!(w.DeviceOrientationEvent && typeof w.DeviceOrientationEvent.requestPermission === "function");
-    if (needsPerm) setMotionUI("prompt");
-    else armSensors();
-    const m = motionRef.current;
-    return () => {
-      if (m.onOrient) window.removeEventListener("deviceorientation", m.onOrient);
-      if (m.onMotion) window.removeEventListener("devicemotion", m.onMotion);
-      m.armed = false; m.onOrient = null; m.onMotion = null;
-    };
-  }, [armSensors]);
+    if (!vesselAvailable()) { setMotionUI("hidden"); return; }
+    if (vesselGranted()) { setMotionUI("on"); return; }
+    void requestVessel().then((ok) => setMotionUI(ok ? "on" : "prompt"));
+  }, []);
+
+  useEffect(() => {
+    const detach = onVessel({
+      tilt: ({ beta, gamma }) => {
+        tiltRef.current.tx = clamp(gamma / 40, -1, 1);
+        tiltRef.current.ty = clamp(beta / 40, -1, 1);
+      },
+      shake: ({ intensity }) => {
+        if (reduceRef.current) return;
+        shakeRef.current.pending = clamp(intensity, 0.4, 1);
+      },
+      knock: ({ intensity }) => {
+        knockRef.current.pending = clamp(0.5 + intensity * 0.4, 0.5, 1);
+      },
+      flip: ({ faceDown }) => {
+        if (!faceDown) return;
+        nightWantRef.current = true;
+        setIsNight(true);
+        memRef.current.night = true;
+        saveMemory(memRef.current);
+      },
+    });
+    return detach;
+  }, []);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -607,14 +586,47 @@ export default function Beam() {
       setFallback(true);
       return;
     }
-    renderer.setPixelRatio(clamp(window.devicePixelRatio || 1, 1, 2));
+    // ── the shared performance contract ─────────────────────────────────
+    const embedded = isEmbeddedFrame();
+    const gov = createFrameGovernor(embedded ? "medium" : "high");
+    let hiddenDoc = document.hidden;
+    let galleryPaused = false;
+    let asleep = false;
+    const syncSleep = () => {
+      asleep = hiddenDoc || galleryPaused;
+      if (asleep) gov.force("sleep");
+    };
+    const unvis = onVisibility((h) => {
+      hiddenDoc = h;
+      syncSleep();
+    });
+    const ungal = onGalleryPause((p) => {
+      galleryPaused = p;
+      syncSleep();
+    });
+
+    renderer.setPixelRatio(resolveDpr(gov.tier(), { embedded, reducedMotion: reduceRef.current }));
     renderer.domElement.style.cssText = "display:block;width:100%;height:100%;touch-action:none;cursor:crosshair";
     renderer.domElement.setAttribute("role", "img");
     renderer.domElement.setAttribute(
       "aria-label",
-      "A luminous bloom of comet-shaped petals arranged in rings around two soft suns, breathing in and out of focus. Tap to refocus and send a ripple of light; press and hold to dilate the pupil toward night; slide or flick to gust wind through the petals; pinch to pull the two suns apart or merge them; twist two fingers to turn the whole formation; shake for a burst of light; tilt for parallax; and turn the phone sideways to trade day for night.",
+      "A luminous bloom of comet-shaped petals arranged in rings around two soft suns, breathing in and out of focus. Tap to refocus and send a ripple of light; press and hold to dilate the pupil toward night, and past a ceremony a meteor is called down; slide or flick to gust wind through the petals; pinch to pull the two suns apart or merge them; twist two fingers to turn the whole formation, three fingers to turn its season; two-finger drag carries the system, three-finger drag is wind, three-finger hold slows time; shake for a burst of light; tilt for parallax; and turn the phone face-down to trade day for night.",
     );
     host.appendChild(renderer.domElement);
+
+    // WebGL context loss (mobile GPU pressure, background tabs): stop
+    // touching the lost context and let the browser restore it. A full
+    // scene reinit on restore is out of scope — see the sweep report.
+    let contextLost = false;
+    const onContextLost = (ev: Event) => {
+      ev.preventDefault();
+      contextLost = true;
+    };
+    const onContextRestored = () => {
+      contextLost = false;
+    };
+    renderer.domElement.addEventListener("webglcontextlost", onContextLost, false);
+    renderer.domElement.addEventListener("webglcontextrestored", onContextRestored, false);
 
     // ── scene ────────────────────────────────────────────────────────────
     const scene = new THREE.Scene();
@@ -668,7 +680,9 @@ export default function Beam() {
     bgMesh.renderOrder = 0;
     scene.add(bgMesh);
 
-    // petals
+    // petals — allocated at the full count; the quality tier scales how
+    // many of them are actually drawn each frame (geo.instanceCount),
+    // never how many exist, so a phone loses petals rather than time.
     const COUNT = reduceRef.current ? 260 : 470;
     const plane = new THREE.PlaneGeometry(1, 1);
     const geo = new THREE.InstancedBufferGeometry();
@@ -676,6 +690,7 @@ export default function Beam() {
     geo.setAttribute("position", plane.getAttribute("position"));
     geo.setAttribute("uv", plane.getAttribute("uv"));
     geo.instanceCount = COUNT;
+    let lastInstanceSync = 0;
 
     const aRing = new Float32Array(COUNT);
     const aAng = new Float32Array(COUNT);
@@ -1131,7 +1146,7 @@ export default function Beam() {
             type="button"
             className="beam-motion-chip"
             aria-label="Enable motion so tilting adds parallax and shaking sends light through the petals"
-            onClick={() => { ensureAudio(); armSensorsRef.current(); }}
+            onClick={() => { ensureAudio(); armSensors(); }}
           >
             <span aria-hidden="true">◒</span>
             <span>tilt &amp; shake to play</span>

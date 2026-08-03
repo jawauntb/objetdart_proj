@@ -338,6 +338,35 @@ type PinchGesture = {
   view: MapView;
 };
 
+// The gesture grammar here, conservatively: the material and map layers
+// (one-finger drag/tap/plant, two-finger pinch through the band walls
+// via useBandEdgeTravel) are a hand-tuned pointer state machine that
+// already speaks the grammar faithfully — it is not migrated onto
+// attachGestures in this pass, because the risk of a subtle regression
+// in that physics (pinch floor/ceiling, plant-vs-drag disambiguation,
+// inertia) outweighs any benefit of moving working code, and the spec
+// that governs this room says so explicitly: preserve every behaviour,
+// do not redesign. The one real bug in that system — a private
+// ATLAS_PLANT_MS shadowing the grammar's own dwell tier — is fixed
+// (see its definition above). Everything the room had none of is
+// additive, mounted alongside via a second, noCapture attachGestures
+// call: three-finger tap (tutti), twist(2) (the lens — the traverse
+// chart, the map and not the territory, swells briefly), three-finger
+// drag (wind, drawn from the room's own weather), three-finger hold
+// (time dilation — the sim clock driving every periodic wobble slows
+// continuously while held), and the vessel (shake echoes a gust, a
+// knock is tutti, face-down is night). Three-finger twist (season) is
+// left unbound: the weather scheduler's own comment already says this
+// room keeps no day/night state, and inventing one only to answer a
+// gesture would be the forced meaning the grammar warns against. Tilt
+// is left unbound too — there is no honest gravity in a map seen from
+// directly above. The naturals a hand plants are the room's countable
+// material; the shared <LetGo/> below is their whole-field clear. A
+// per-mark ceremony-hold delete was deliberately not added: it would
+// share the same touch as the existing plant timer and could delete
+// the wrong mark or plant on top of the one being held — a correctness
+// risk the conservative mandate for this room says to leave alone
+// rather than rush.
 export default function Atlas() {
   const selectedRegionId = useField((state) => state.region);
   const setRegion = useField((state) => state.setRegion);
@@ -2580,7 +2609,11 @@ export default function Atlas() {
         })}
 
         {worldGlance.size > 1 && (
-          <div className="living-atlas__traverse" aria-hidden="true" data-map-ui="true">
+          <div
+            className={"living-atlas__traverse" + (lensFlash ? " is-lens" : "")}
+            aria-hidden="true"
+            data-map-ui="true"
+          >
             {worldGlance.cells.map((cell) => (
               <span
                 key={cell.key}
@@ -2947,6 +2980,21 @@ export default function Atlas() {
           background: rgba(248, 226, 150, .85);
           box-shadow: 0 0 8px rgba(239, 197, 92, .5);
         }
+        /* twist(2) = rotate the lens: the traverse chart — the map, not
+           the territory — swells into plain view for a moment. */
+        .living-atlas__traverse.is-lens {
+          opacity: 1;
+          transform: scale(1.7);
+          transform-origin: bottom right;
+          transition: transform 420ms cubic-bezier(.2,.7,.2,1), opacity 420ms ease;
+        }
+        .living-atlas__traverse:not(.is-lens) {
+          transition: transform 420ms cubic-bezier(.2,.7,.2,1), opacity 420ms ease;
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .living-atlas__traverse.is-lens,
+          .living-atlas__traverse:not(.is-lens) { transition: none; }
+        }
         .living-atlas__diffusion {
           position: absolute;
           z-index: 4;
@@ -3058,6 +3106,16 @@ export default function Atlas() {
           .living-atlas__image { transform: none; }
         }
       `}</style>
+      <LetGo
+        label="let the ground go"
+        visible={naturalsCount > 0}
+        onLetGo={() => {
+          clearNaturalsRef.current?.();
+          try { getFieldAudio().thud(); } catch { /* noop */ }
+          try { haptics.roll(); } catch { /* noop */ }
+          recordTape("kept", 0.3, "atlas/naturals/let-go");
+        }}
+      />
     </section>
   );
 }
