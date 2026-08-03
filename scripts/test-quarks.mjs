@@ -27,6 +27,7 @@ const {
   MAX_HADRONS,
   SNAP_RATIO,
   VACUUM_SLOT_MS,
+  VACUUM_MAX_LIFE_MS,
   hadronFromSeed,
   tubesOf,
   constituentCount,
@@ -36,7 +37,7 @@ const {
   shouldSnap,
   snapChildren,
   settlePopulation,
-  vacuumPairAt,
+  vacuumPairsAt,
   hashSeed,
 } = loadTsModule("src/lib/quarks.ts");
 
@@ -197,20 +198,55 @@ for (const seed of SEEDS) {
 // — The vacuum schedule: deterministic, bounded, alive but restful —
 {
   const fieldSeed = 0xf1e1d;
-  let born = 0;
-  for (let slot = 0; slot < 400; slot++) {
-    const a = vacuumPairAt(slot, fieldSeed);
-    const b = vacuumPairAt(slot, fieldSeed);
-    assert.deepEqual(a, b, "the same slot must always spark the same pair");
-    if (!a) continue;
-    born += 1;
-    assert.ok(a.nx > 0 && a.nx < 1 && a.ny > 0 && a.ny < 1, "pairs are born inside the field");
-    assert.ok(a.lifeMs > 0 && a.lifeMs < 4 * VACUUM_SLOT_MS, "virtual pairs die young");
-    assert.ok(a.color >= 0 && a.color < 3, "pair color in range");
-    assert.ok(a.sep > 0 && a.sep < 0.05, "virtual separation stays subtle");
+  const SLOTS = 400;
+  let restingSlots = 0;
+  for (let slot = 0; slot < SLOTS; slot++) {
+    const a = vacuumPairsAt(slot, fieldSeed);
+    const b = vacuumPairsAt(slot, fieldSeed);
+    assert.deepEqual(a, b, "the same slot must always spark the same pairs");
+    if (a.length === 0) restingSlots += 1;
+    for (const p of a) {
+      assert.ok(p.nx > 0 && p.nx < 1 && p.ny > 0 && p.ny < 1, "pairs are born inside the field");
+      // A pair that outlives the renderer's lookback window would vanish
+      // mid-life instead of annihilating — the window is sized from this.
+      assert.ok(
+        p.lifeMs > 0 && p.lifeMs <= VACUUM_MAX_LIFE_MS,
+        `a virtual pair must die inside the render window (${p.lifeMs})`,
+      );
+      assert.ok(p.color >= 0 && p.color < 3, "pair color in range");
+      assert.ok(p.sep > 0 && p.sep < 0.05, "virtual separation stays subtle");
+    }
   }
-  assert.ok(born > 100 && born < 300, `the vacuum seethes gently, not busily (${born}/400 slots)`);
-  const trace = (fs) => JSON.stringify(Array.from({ length: 100 }, (_, i) => vacuumPairAt(i, fs)));
+  assert.ok(restingSlots > 0, "the seethe must be uneven — some slots rest entirely");
+
+  // The density the room actually renders: how many pairs are alive at once.
+  // A near-empty vacuum (the old failure — the room read as black) and a
+  // cluttered one both fail here; the sine envelope means the visible load is
+  // gentler still. Sampled on the same clock the draw loop uses.
+  let aliveTotal = 0;
+  let samples = 0;
+  let peak = 0;
+  const back = Math.ceil(VACUUM_MAX_LIFE_MS / VACUUM_SLOT_MS);
+  for (let tMs = 20000; tMs < 20000 + SLOTS * VACUUM_SLOT_MS; tMs += 33) {
+    const nowSlot = Math.floor(tMs / VACUUM_SLOT_MS);
+    let alive = 0;
+    for (let slot = nowSlot - back; slot <= nowSlot; slot++) {
+      const age = tMs - slot * VACUUM_SLOT_MS;
+      if (age < 0) continue;
+      for (const p of vacuumPairsAt(slot, fieldSeed)) if (age <= p.lifeMs) alive += 1;
+    }
+    aliveTotal += alive;
+    peak = Math.max(peak, alive);
+    samples += 1;
+  }
+  const meanAlive = aliveTotal / samples;
+  assert.ok(
+    meanAlive > 6 && meanAlive < 18,
+    `the vacuum seethes: alive at once should read as a field, not a dot or a crowd (${meanAlive.toFixed(2)})`,
+  );
+  assert.ok(peak < 32, `even the busiest instant stays composed (${peak})`);
+
+  const trace = (fs) => JSON.stringify(Array.from({ length: 100 }, (_, i) => vacuumPairsAt(i, fs)));
   assert.notEqual(trace(fieldSeed + 1), trace(fieldSeed), "a different field seethes differently");
 }
 
