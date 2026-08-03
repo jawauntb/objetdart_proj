@@ -18,12 +18,13 @@
  * ScaleTravel owns it, so pinching travels the manifold.
  */
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
 import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
+import LetGo from "@/components/LetGo";
 import {
   CELL_FAMILIES,
   MAX_CELLS,
@@ -164,6 +165,9 @@ function midiOf(morph: CellMorph): number {
 export default function CellsPlasm() {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const letGoRef = useRef<() => void>(() => {});
+  // whether anything still stands in the plasm — gates the quiet clear
+  const [standing, setStanding] = useState(false);
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -250,7 +254,9 @@ export default function CellsPlasm() {
     };
 
     const stored = loadStored();
-    if (stored && stored.cells.length > 0) {
+    if (stored) {
+      // an empty cells list is a real state (the plasm was let rest) —
+      // starters do not respawn over a deliberate clearing.
       cells = stored.cells
         .slice(-MAX_CELLS)
         .map((c) => makeCell(c.seed, clamp01(c.nx), clamp01(c.ny), Math.max(0, c.generation), 1));
@@ -262,6 +268,8 @@ export default function CellsPlasm() {
       seedCount = cells.length;
       save(true);
     }
+    const syncStanding = () => setStanding(cells.some((c) => !c.retiringAt));
+    syncStanding();
 
     // ————— helpers —————
     const audio = () => getFieldAudio();
@@ -351,6 +359,7 @@ export default function CellsPlasm() {
       burst(x, y, [CELL_FAMILIES[c.morph.family][4], "#DDD3BE"], 7, 22);
       useField.getState().recordTape("object", 0.5, "cells/seed");
       save();
+      syncStanding();
       return c;
     };
 
@@ -392,7 +401,46 @@ export default function CellsPlasm() {
       ], 18, 52);
       useField.getState().recordTape("sigil", 0.85, "cells/mitosis");
       save();
+      syncStanding();
     };
+
+    // the whole-plasm parting (LetGo, §8c): every cell dims and lets its
+    // membrane soften while the motes disperse on one last slow wavefront —
+    // an exhale, never a blink. Storage is written empty at once: a rested
+    // plasm is a remembered state, and the starters do not return over it.
+    const letGo = () => {
+      const alive = cells.filter((c) => !c.retiringAt);
+      if (alive.length === 0) return;
+      const now = performance.now();
+      alive.forEach((c, i) => {
+        c.charge = 0;
+        c.retiringAt = reduce ? now : now + (i % 5) * 150 + twinkleHash(c.seed % 997) * 180;
+      });
+      hold.cellId = null;
+      hold.onExisting = false;
+      kbCellId = null;
+      kbCharge = 0;
+      if (!reduce) {
+        // motes disperse: one wide, gentle wavefront through everything
+        wavefronts.push({
+          x: width * 0.5,
+          y: height * 0.5,
+          born: now,
+          maxR: Math.max(width, height) * 0.6,
+          strength: 0.45,
+        });
+        brownianStorm = Math.min(1, brownianStorm + 0.4);
+      }
+      try { audio().thud(); } catch { /* noop */ }
+      note(40, 520);
+      try { haptics.roll(); } catch { /* noop */ }
+      try {
+        window.localStorage.setItem(STORE_KEY, JSON.stringify({ cells: [] } satisfies Stored));
+      } catch { /* noop */ }
+      useField.getState().recordTape("object", 0.3, "cells/letgo");
+      setStanding(false);
+    };
+    letGoRef.current = letGo;
 
     const perturb = (x: number, y: number, intensity: number) => {
       const maxR = Math.min(width, height) * (0.14 + intensity * 0.3);
@@ -924,7 +972,7 @@ export default function CellsPlasm() {
       for (let i = cells.length - 1; i >= 0; i--) {
         const c = cells[i];
         if (c.retiringAt && now - c.retiringAt > RETIRE_MS) { cells.splice(i, 1); dirty = true; continue; }
-        if (!c.closed) growCell(c, dt * 0.5); // a seeded cell finishes closing on its own
+        if (!c.closed && !c.retiringAt) growCell(c, dt * 0.5); // a seeded cell finishes closing on its own
         c.streamBoost *= Math.exp(-dt * 1.4);
         if (!hold.cellId || hold.cellId !== c.id) {
           if (kbCellId !== c.id) c.charge = Math.max(0, c.charge - dt * 1.6);
@@ -1164,6 +1212,8 @@ export default function CellsPlasm() {
       >
         <canvas ref={canvasRef} className="cells-canvas" aria-hidden="true" />
       </div>
+
+      <LetGo label="let the plasm rest" onLetGo={() => letGoRef.current()} visible={standing} />
 
       <style
         dangerouslySetInnerHTML={{

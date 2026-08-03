@@ -14,6 +14,7 @@ import {
   type WorldKind,
   type WorldNatural,
 } from "@/lib/world";
+import LetGo from "@/components/LetGo";
 
 /**
  * /ocean — the whole body of water, and a dive down through it.
@@ -58,6 +59,9 @@ export default function Ocean() {
   // tiny floating readout — the depth zone and a reading in metres of dark.
   const [zone, setZone] = useState("surface");
   const [depthM, setDepthM] = useState(0);
+  // whether this shore still keeps anything — gates the quiet clear (§8c)
+  const letGoRef = useRef<() => void>(() => {});
+  const [keptHere, setKeptHere] = useState(false);
 
   // Ambient audio bed: brown noise + swell LFO. Kept alongside the /stars
   // pattern so the room is never acoustically dead when the user arrives.
@@ -450,9 +454,12 @@ export default function Ocean() {
       : kind === "kelp" ? 0.006
       : 0.020;
     let naturals: WorldNatural[] = getNaturalsInZone("ocean");
+    const syncKept = () => setKeptHere(naturals.length > 0);
+    syncKept();
     // If another page adds/mutates naturals while we're mounted, resync.
     const unsubscribeWorld = subscribeNaturals(() => {
       naturals = getNaturalsInZone("ocean");
+      syncKept();
     });
     const addNatural = (kind: NaturalKind, nx?: number, ny?: number) => {
       const finalNx = nx != null ? Math.max(0.02, Math.min(0.98, nx)) : Math.random();
@@ -460,11 +467,35 @@ export default function Ocean() {
       const created = worldAddNatural(kind, "ocean", finalNx, finalNy, vxForKind(kind));
       // resync our local slice so the new one shows up this frame
       naturals = getNaturalsInZone("ocean");
+      syncKept();
       return created;
     };
     const persistNaturals = () => {
       worldCommitZone("ocean", naturals);
     };
+
+    // the shore's parting (LetGo, §8c): this zone's keepsakes only — the
+    // rest of the coast keeps its own counsel. Each thing rides the current
+    // out over a couple of breaths, fading as it goes; the world is written
+    // empty for this zone at once, so nothing resurfaces on reload.
+    type Departing = WorldNatural & { bx: number };
+    let departing: Departing[] = [];
+    let letGoAt = 0;
+    let letGoDur = 1800;
+    const letGo = () => {
+      if (naturals.length === 0) return;
+      departing = naturals.map((n) => ({ ...n, bx: n.nx }));
+      naturals = [];
+      letGoAt = performance.now();
+      letGoDur = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 420 : 1800;
+      worldCommitZone("ocean", []);
+      try { getFieldAudio().thud(); } catch { /* noop */ }
+      try { getFieldAudio().playNote(38, 520); } catch { /* noop */ }
+      try { haptics.roll(); } catch { /* noop */ }
+      useField.getState().recordTape("object", 0.3, "ocean/letgo");
+      setKeptHere(false);
+    };
+    letGoRef.current = letGo;
 
     // ── weather events (autonomic, transient) ────────────────────
     // Every 9-17s a jittered scheduler fires one of six natural events:
@@ -1266,6 +1297,23 @@ export default function Ocean() {
       // findable.
       drawNaturals(sctx, naturals, simNow, t, w, h, horizonY);
 
+      // the letting go: departing keepsakes drift off with the current,
+      // fading as the sea takes them back (a quick fade under reduce).
+      if (departing.length > 0) {
+        const u = (performance.now() - letGoAt) / letGoDur;
+        if (u >= 1) {
+          departing = [];
+        } else {
+          sctx.save();
+          sctx.globalAlpha = surfaceVis * (1 - u);
+          for (const d of departing) {
+            d.nx = (((d.bx + u * u * 0.16) % 1) + 1) % 1;
+          }
+          drawNaturals(sctx, departing, simNow, t, w, h, horizonY);
+          sctx.restore();
+        }
+      }
+
       // ── weather surface-layer (in front of wave): phosphor, whale,
       //    rogue afterglow, beachcomber reveal shimmer ────────────
       drawWeatherSurface(sctx, weather, simNow, w, h, horizonY);
@@ -1480,6 +1528,8 @@ export default function Ocean() {
       <output className="ocean-gauge" aria-live="polite" aria-label={`depth ${depthM} metres, ${zone}`}>
         {`${depthM} m · ${zone}`}
       </output>
+
+      <LetGo label="give back to the sea" onLetGo={() => letGoRef.current()} visible={keptHere} />
 
       <style
         dangerouslySetInnerHTML={{

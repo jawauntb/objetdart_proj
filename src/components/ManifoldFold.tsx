@@ -75,6 +75,7 @@ import {
   type Ray,
 } from "@/lib/manifold-field";
 import { ScaleTravelOverlay, type EdgeUI } from "@/components/ScaleTravel";
+import LetGo from "@/components/LetGo";
 
 const STORE_KEY = "objetdart:manifold:v1";
 const SCALE_S_KEY = "objetdart:scale:s";
@@ -196,6 +197,9 @@ export default function ManifoldFold() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const router = useRouter();
   const [travelUi, setTravelUi] = useState<EdgeUI>({ pressure: 0, towardLabel: null, crossing: false });
+  const letGoRef = useRef<() => void>(() => {});
+  // whether any mass still wells the fabric — gates the quiet clear
+  const [standing, setStanding] = useState(false);
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -297,7 +301,9 @@ export default function ManifoldFold() {
     };
 
     const stored = loadStored();
-    if (stored && stored.masses.length > 0) {
+    // an empty masses list is a real state (the fold was unbent) — the
+    // genesis mass does not respawn over a deliberate clearing.
+    if (stored) {
       masses = stored.masses.slice(-MAX_MASSES).map((m) => ({
         id: m.id,
         nx: clamp01(m.nx),
@@ -327,6 +333,8 @@ export default function ManifoldFold() {
       massSerial = 1;
       save(true);
     }
+    const syncStanding = () => setStanding(masses.some((m) => !m.evapAt));
+    syncStanding();
 
     // ————— helpers —————
     const audio = () => getFieldAudio();
@@ -459,6 +467,7 @@ export default function ManifoldFold() {
       staticRaysStale = true;
       useField.getState().recordTape("object", 0.6, "manifold/mass");
       save();
+      syncStanding();
       return m;
     };
 
@@ -484,7 +493,37 @@ export default function ManifoldFold() {
       staticRaysStale = true;
       useField.getState().recordTape("sigil", 0.85, "manifold/evaporate");
       save();
+      syncStanding();
     };
+
+    // the whole-fold parting (LetGo, §8c): every mass evaporates oldest-
+    // first along the existing collapse path and the fabric relaxes flat —
+    // an exhale, never a blink. Storage is written empty at once: an unbent
+    // fold is a remembered state, and the genesis mass does not return.
+    const letGo = () => {
+      const alive = masses.filter((m) => !m.evapAt).sort((a, b) => a.plantedAt - b.plantedAt);
+      if (alive.length === 0) return;
+      const now = performance.now();
+      alive.forEach((m, i) => {
+        m.charge = 0;
+        m.evapAt = reduce ? now : now + i * 150;
+        // each departure sends its own slow wave through everything
+        firePulse(m.nx * width, m.ny * height, (0.5 + m.m * 0.3) * (reduce ? 0.4 : 1));
+      });
+      if (kbMassId) { kbMassId = null; kbCharge = 0; }
+      hold.massId = null;
+      hold.mode = null;
+      staticRaysStale = true;
+      try { audio().thud(); } catch { /* noop */ }
+      note(26, 600);
+      try { haptics.roll(); } catch { /* noop */ }
+      try {
+        window.localStorage.setItem(STORE_KEY, JSON.stringify({ masses: [] } satisfies Stored));
+      } catch { /* noop */ }
+      useField.getState().recordTape("object", 0.3, "manifold/letgo");
+      setStanding(false);
+    };
+    letGoRef.current = letGo;
 
     const travelTo = (band: ScaleBand) => {
       if (!band.route || band.route === "/manifold" || leaving) return;
@@ -1548,6 +1587,8 @@ export default function ManifoldFold() {
         <canvas ref={canvasRef} className="manifold-canvas" aria-hidden="true" />
       </div>
       <ScaleTravelOverlay ui={travelUi} />
+
+      <LetGo label="unbend the fold" onLetGo={() => letGoRef.current()} visible={standing} />
 
       <style
         dangerouslySetInnerHTML={{
