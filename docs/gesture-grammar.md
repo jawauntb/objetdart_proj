@@ -160,6 +160,8 @@ available physical channel.
 
 | gesture | meaning everywhere |
 | --- | --- |
+| **two-finger tap** | **step back** — the frame retreats one step: a gentle zoom-out nudge within the band (never crossing a wall), one camera step out in rooms that own zoom, and if a lens is raised, it lowers |
+| **three-finger tap** | **tutti** — one synchronized pulse of everything alive in the room: every active element answers softly at once, the room stating itself |
 | pinch | zoom **within** the current scale band |
 | pinch held through the detent | **travel** to the neighboring band (with resistance + haptic click) |
 | twist | rotate the **lens** — change level of description at fixed scale |
@@ -177,6 +179,18 @@ available physical channel.
 Everything else — what a tap *does*, what grows on long-press, what the weather is made
 of — is the room's own register, interpreted in its material. Global bindings are the
 rhyme scheme; rooms write the lines.
+
+**Duration and intensity are continuous axes, never switches.** The tiers (touch /
+dwell / ceremony) mark thresholds where *kinds* of act begin, but within and beyond
+each tier the hold keeps counting and the room must keep answering: whatever a hold
+does should deepen the longer it is held, and whatever a tap does should scale with
+how hard it landed. A binding that fires identically at 900ms and at 2400ms is
+wasting the richest dimension the hand has.
+
+**The vessel is not optional decoration.** Once the candle has invited the senses
+(`lib/vessel.ts`), every room should hang from the world's real gravity: tilt gives
+parallax, weight, or lean; shake agitates in the room's own material; the device is
+the room's body, exactly as /coin has always known.
 
 ## 6. The discovery economy
 
