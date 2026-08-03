@@ -119,6 +119,11 @@ adapter second. The stack is also the *content* axis here: quarks are math-flavo
 atoms physics, molecules chemistry, cells biology, flowers upward phenomenology — the
 zoom traverses levels of explanation, not just meters.
 
+The matter kernels now tell the truth: `lib/atomics.ts` carries the real table H→Fe
+(ground-state shells, covalent valences, a binding-energy fusion curve peaking at iron)
+and `lib/chemistry.ts` a real compound library with curated balanced reactions —
+wiring `/atoms` and `/molecules` to these new capabilities is the follow-up lane.
+
 ## W8 — The overlook (future)
 
 A living map of the whole tree: the trunk and its branches rendered as one
