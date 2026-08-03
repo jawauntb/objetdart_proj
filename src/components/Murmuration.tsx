@@ -225,10 +225,13 @@ void main() {
   bool onGround = tHit > 0.8 && tHit < 220.0 && denom < 0.0;
 
   float a = y - u_horizon;
+  // clearer dusk: warmer low, cooler high, less muddy mid
+  vec3 skyLow = mix(u_low, vec3(0.55, 0.42, 0.30), 0.18);
+  vec3 skyHigh = mix(u_high, vec3(0.04, 0.06, 0.12), 0.25);
   vec3 col = a >= 0.0
-    ? mix(u_low, u_high, smoothstep(0.0, 0.48, a))
-    : mix(u_low, u_ground, smoothstep(0.0, 0.34, -a));
-  col += u_sunTint * 0.08 * exp(-abs(a) * 14.0);
+    ? mix(skyLow, skyHigh, smoothstep(0.0, 0.55, a))
+    : mix(skyLow, u_ground, smoothstep(0.0, 0.4, -a));
+  col += u_sunTint * 0.11 * exp(-abs(a) * 12.0);
   vec2 d2 = (vUv - u_sun.xy) * vec2(u_aspect, 1.0);
   float d = length(d2);
   col += u_sunTint * exp(-d * d * 26.0) * (0.34 + u_breath * 0.09) * u_sun.z;
@@ -280,39 +283,62 @@ void main() {
     vec3 hayCol = mix(vec3(0.58, 0.44, 0.18), vec3(0.78, 0.62, 0.28), noise(xz * 1.4));
     col = mix(col, hayCol, hay * (1.0 - pond));
 
-    // grass blades — thin capsules standing on the plane, denser near camera
+    // foreshortened grass carpet across the whole plane (not a circular island)
+    {
+      // anisotropic: denser in world-x, compressed along view depth so rows
+      // pack toward the horizon the way real turf does
+      float row = xz.x * 1.7 + xz.y * 0.35;
+      float colN = xz.y * 2.4 - xz.x * 0.2;
+      float turf = noise(vec2(row, colN * mix(1.0, 3.5, hazeG)));
+      float bladesFar = step(0.62, turf) * (1.0 - pond);
+      vec3 turfA = vec3(0.12, 0.30, 0.10);
+      vec3 turfB = vec3(0.22, 0.40, 0.14);
+      vec3 turfC = vec3(0.34, 0.42, 0.16);
+      col = mix(col, mix(turfA, turfB, turf), 0.35 * (1.0 - pond));
+      col = mix(col, turfC, bladesFar * 0.28 * (1.0 - hazeG * 0.5));
+    }
+
+    // near-field upright blades — projected stems with wind lean
     float bladeAmt = 0.0;
     vec3 bladeCol = vec3(0.0);
-    if (depth < 70.0 && pond < 0.5) {
-      vec2 base = floor(xz / CELL);
-      float dens = mix(0.75, 0.35, smoothstep(18.0, 60.0, depth));
+    if (depth < 55.0 && pond < 0.55) {
+      float cellSize = mix(0.32, 0.7, smoothstep(10.0, 45.0, depth));
+      vec2 base = floor(xz / cellSize);
+      float dens = mix(0.95, 0.5, smoothstep(12.0, 50.0, depth));
       for (int i = -2; i <= 2; i++) {
         for (int j = -2; j <= 2; j++) {
           vec2 cell = base + vec2(float(i), float(j));
           float rnd = hash21(cell);
-          if (rnd > dens) continue;
-          vec2 bp = (cell + vec2(hash21(cell + 1.3), hash21(cell + 2.7))) * CELL;
-          float ht = mix(0.45, 1.35, hash21(cell + 4.1));
-          // shorter blades farther away so the field thins with perspective
-          ht *= mix(1.0, 0.55, smoothstep(20.0, 65.0, depth));
-          float sway = sin(u_time * (1.1 + rnd * 0.8) + rnd * 40.0) * 0.18 * ht;
-          vec3 A = vec3(bp.x, GROUND_Y, bp.y);
-          vec3 B = vec3(bp.x + sway, GROUND_Y + ht, bp.y + sway * 0.35);
-          float rad = mix(0.018, 0.045, hash21(cell + 9.0));
-          float b = rayCapsule(ro, rd, worldToView(A), worldToView(B), rad, tHit);
-          if (b > bladeAmt) {
-            bladeAmt = b;
-            bladeCol = mix(vec3(0.12, 0.32, 0.10), vec3(0.30, 0.48, 0.16), hash21(cell + 5.5));
-            // dry tip
-            bladeCol = mix(bladeCol, vec3(0.55, 0.50, 0.22), hash21(cell + 6.2) * 0.35);
+          if (rnd <= dens) {
+            vec2 bp = (cell + vec2(hash21(cell + 1.3), hash21(cell + 2.7))) * cellSize;
+            float ht = mix(0.9, 2.4, hash21(cell + 4.1));
+            ht *= mix(1.2, 0.45, smoothstep(14.0, 50.0, depth));
+            float sway = sin(u_time * (1.1 + rnd * 0.8) + rnd * 40.0 + bp.x * 0.2) * 0.35 * ht;
+            vec3 A = vec3(bp.x, GROUND_Y, bp.y);
+            vec3 B = vec3(bp.x + sway, GROUND_Y + ht, bp.y + sway * 0.25);
+            float zA = worldToView(A).z + u_camDist;
+            if (zA >= 3.0) {
+              vec2 pa = projectWorld(A);
+              vec2 pb = projectWorld(B);
+              vec2 spv = ndc - pa;
+              vec2 ba = pb - pa;
+              float h = clamp(dot(spv, ba) / max(dot(ba, ba), 1e-5), 0.0, 1.0);
+              float stem = length(spv - ba * h);
+              float w = mix(0.0048, 0.0012, smoothstep(10.0, 50.0, zA));
+              w *= mix(1.4, 0.35, h); // sharp taper — a blade, not a post
+              float b = 1.0 - smoothstep(w, w + 0.0032, stem);
+              float nearCell = 1.0 - smoothstep(cellSize * 1.4, cellSize * 2.4, length(xz - bp));
+              b *= nearCell;
+              if (b > bladeAmt) {
+                bladeAmt = b;
+                bladeCol = mix(vec3(0.08, 0.28, 0.08), vec3(0.26, 0.48, 0.14), hash21(cell + 5.5));
+                bladeCol = mix(bladeCol, vec3(0.62, 0.56, 0.24), hash21(cell + 6.2) * 0.45 * h);
+              }
+            }
           }
         }
       }
-      // keep a soft carpet in the mid-distance where individual blades thin out
-      float carpet = noise(xz * 2.8 + u_time * 0.05);
-      float carpetM = smoothstep(0.55, 0.85, carpet) * smoothstep(14.0, 40.0, depth) * (1.0 - smoothstep(55.0, 80.0, depth));
-      col = mix(col, vec3(0.16, 0.34, 0.12), carpetM * 0.4);
-      col = mix(col, bladeCol, clamp(bladeAmt, 0.0, 1.0) * 0.92);
+      col = mix(col, bladeCol, clamp(bladeAmt, 0.0, 1.0));
     }
   } else if (a < 0.0) {
     // under the painted horizon but ray missed the plane — soft falloff
@@ -1097,8 +1123,9 @@ export default function Murmuration() {
     let visualT = 0;
     let timeScale = 1;
     let timeScaleTarget = 1;
-    let pitch = -0.06;
-    let pitchTarget = -0.06;
+    // look slightly into the meadow so the ground plane and grass blades read
+    let pitch = -0.14;
+    let pitchTarget = -0.14;
     let yawVel = 0;
     let lastCardinal = Math.round(yaw / (Math.PI / 2));
     let roll = 0;
