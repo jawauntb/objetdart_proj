@@ -568,7 +568,7 @@ export type DoorRef = ScaleBandId | RouteRef;
  * declaring a future room can never sever a door that works today.
  */
 export const DOOR_ROOMS: { prefix: RouteRef; band: ScaleBandId; label: string; route: string | null }[] = [
-  { prefix: "/rocks", band: "drop", label: "the rocks", route: null },
+  { prefix: "/rocks", band: "drop", label: "the rocks", route: "/rocks" },
   { prefix: "/soil", band: "drop", label: "the soil", route: null },
 ];
 
