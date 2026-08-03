@@ -135,6 +135,7 @@ const expectedKeys = [
   "drop",
   "seed",
   "rocks",
+  "soil",
   "coin",
   "watch",
   "archive",

@@ -33,8 +33,9 @@ import galaxy from "@/rooms/galaxy/room.config";
 import planets from "@/rooms/planets/room.config";
 import relativity from "@/rooms/relativity/room.config";
 import rocks from "@/rooms/rocks/room.config";
+import soil from "@/rooms/soil/room.config";
 
-export const ROOM_MANIFESTS = [beam, galaxy, planets, relativity, rocks] as const;
+export const ROOM_MANIFESTS = [beam, galaxy, planets, relativity, rocks, soil] as const;
 
 /** Literal union of every manifest-declared room key. */
 export type RoomKey = (typeof ROOM_MANIFESTS)[number]["key"];
