@@ -741,6 +741,61 @@ export function tearAcross(
   return cut;
 }
 
+// ——— apoptosis ————————————————————————————————————————————————
+
+/**
+ * A single cell resorbed — the room's other solemn act, and the
+ * touch-reachable per-cell delete. Every bond the cell held is dropped
+ * outright (not merely slackened: a stale edge left dangling could later
+ * heal into a bond that was never physically there once the slot is
+ * reused). The cell is then removed by swapping the last live cell into
+ * its slot, so `0..n-1` stays packed and every other index keeps its
+ * meaning.
+ *
+ * Nothing needs to be rewired to close the gap: in a hex sheet the six
+ * cells around any interior cell are already pairwise bonded to their
+ * neighbours in the ring (each pair sixty degrees apart sits exactly one
+ * `SPACING` from the other, same as from the centre), so the ring the
+ * removed cell sat inside was never held open only by that cell. Losing it
+ * just lets the ring relax onto the space, the way `advance`'s homing pull
+ * already does for every gap.
+ */
+export function apoptose(s: Sheet, i: number): boolean {
+  if (i < 0 || i >= s.n) return false;
+  let e = 0;
+  while (e < s.ecount) {
+    if (s.ea[e] === i || s.eb[e] === i) {
+      const last = s.ecount - 1;
+      s.ea[e] = s.ea[last];
+      s.eb[e] = s.eb[last];
+      s.restF[e] = s.restF[last];
+      s.live[e] = s.live[last];
+      s.ecount -= 1;
+      continue; // re-check this slot, which now holds the swapped edge
+    }
+    e += 1;
+  }
+  const lastCell = s.n - 1;
+  if (i !== lastCell) {
+    s.px[i] = s.px[lastCell];
+    s.py[i] = s.py[lastCell];
+    s.ox[i] = s.ox[lastCell];
+    s.oy[i] = s.oy[lastCell];
+    s.hx[i] = s.hx[lastCell];
+    s.hy[i] = s.hy[lastCell];
+    s.r[i] = s.r[lastCell];
+    s.pol[i] = s.pol[lastCell];
+    s.fate[i] = s.fate[lastCell];
+    s.depth[i] = s.depth[lastCell];
+    for (let k = 0; k < s.ecount; k++) {
+      if (s.ea[k] === lastCell) s.ea[k] = i;
+      if (s.eb[k] === lastCell) s.eb[k] = i;
+    }
+  }
+  s.n -= 1;
+  return true;
+}
+
 // ——— finding things ————————————————————————————————————————
 
 export function nearestCell(s: Sheet, x: number, y: number, maxDist = Infinity): number {

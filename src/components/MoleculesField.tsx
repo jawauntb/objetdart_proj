@@ -256,6 +256,7 @@ export default function MoleculesField() {
     let lastStreamSoundAt = 0;
     let lastScrubAt = 0;
     let lastChargeNoteAt = 0;
+    let lastSeasonSoundAt = 0;
     const hold: { molId: string | null; partnerId: string | null; onExisting: boolean; seeded: boolean; reacted: boolean } = {
       molId: null,
       partnerId: null,
@@ -865,8 +866,21 @@ export default function MoleculesField() {
         try { haptics.ripple(0.4); } catch { /* noop */ }
       },
       twist: (e) => {
-        if (e.fingers === 3) return; // three fingers turn the season, not the lens
         lastInteractionAt = performance.now();
+        if (e.fingers === 3) {
+          // three-finger twist = season: the solvent's own slow warm/cool
+          // cycle, wound directly by the turn — never the lens
+          if (e.phase === "move") {
+            season = (((season + e.angle / (Math.PI * 2)) % 1) + 1) % 1;
+            const now = performance.now();
+            if (now - lastSeasonSoundAt > 260) {
+              lastSeasonSoundAt = now;
+              note(32 + Math.round(season * 14), 180);
+              try { haptics.tap(); } catch { /* noop */ }
+            }
+          }
+          return; // never drives the lens
+        }
         // two fingers rotate the lens: felt matter ↔ structural formula
         if (e.phase === "move") {
           lensTarget = clamp01(lensTarget + e.angle / 1.7);
@@ -880,6 +894,17 @@ export default function MoleculesField() {
             else note(50, 160);
           }
           lensTarget = snapped;
+        }
+      },
+      pan2: (e) => {
+        // two-finger drag pans the frame: a peek, not a permanent move
+        lastInteractionAt = performance.now();
+        if (e.phase === "move") {
+          panTargetX = clamp(panTargetX + e.dx * 0.6, -48, 48);
+          panTargetY = clamp(panTargetY + e.dy * 0.6, -48, 48);
+        } else if (e.phase === "end") {
+          panTargetX = 0;
+          panTargetY = 0;
         }
       },
       scrub: (e) => {
@@ -934,6 +959,20 @@ export default function MoleculesField() {
         try { audio().spark(); } catch { /* noop */ }
         note(45, 200);
         try { (intensity > 0.7 ? haptics.storm : haptics.chop)(); } catch { /* noop */ }
+      },
+      flip: ({ faceDown }) => {
+        // face-down is night: the pool of light under the beaker goes down
+        nightTarget = faceDown ? 1 : 0;
+        lastInteractionAt = performance.now();
+        if (faceDown) {
+          try { audio().thud(); } catch { /* noop */ }
+          note(28, 600);
+          try { haptics.roll(); } catch { /* noop */ }
+        } else {
+          try { audio().spark(); } catch { /* noop */ }
+          note(46, 300);
+          try { haptics.bloom(); } catch { /* noop */ }
+        }
       },
     });
 
@@ -1586,6 +1625,7 @@ export default function MoleculesField() {
       observer.disconnect();
       detach();
       detachVessel();
+      offVis();
       markLens(false);
       wrap.removeEventListener("keydown", onKeyDown);
       wrap.removeEventListener("keyup", onKeyUp);
@@ -1609,15 +1649,7 @@ export default function MoleculesField() {
         <canvas ref={canvasRef} className="molecules-canvas" aria-hidden="true" />
       </div>
 
-      {hasMols && (
-        <button
-          type="button"
-          className="molecules-clear"
-          onClick={() => clearRef.current()}
-        >
-          let the solution clear
-        </button>
-      )}
+      <LetGo label="let the solution clear" onLetGo={() => clearRef.current()} visible={hasMols} />
 
       <style
         dangerouslySetInnerHTML={{
@@ -1673,28 +1705,6 @@ export default function MoleculesField() {
           z-index: 0;
         }
 
-        .molecules-clear {
-          position: fixed;
-          bottom: max(18px, env(safe-area-inset-bottom));
-          left: 50%;
-          transform: translateX(-50%);
-          min-height: 40px;
-          padding: 8px 14px;
-          background: transparent;
-          border: 1px solid rgba(238, 234, 219, 0.18);
-          border-radius: 3px;
-          color: rgba(238, 234, 219, 0.5);
-          font-family: var(--font-mono, "IBM Plex Mono", monospace);
-          font-size: 11px;
-          letter-spacing: 0.06em;
-          cursor: pointer;
-          z-index: 30;
-        }
-
-        .molecules-clear:focus-visible {
-          outline: 2px solid rgba(231, 172, 82, 0.7);
-          outline-offset: 2px;
-        }
       ` }}
       />
     </div>

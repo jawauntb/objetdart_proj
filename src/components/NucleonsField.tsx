@@ -1627,11 +1627,15 @@ export default function NucleonsField() {
 
       // the ceremony's halo while a hand asks
       if (d.charge > 0) {
-        const halo = ctx.createRadialGradient(0, 0, R * 0.2, 0, 0, R * (2.2 - d.charge * 0.5));
-        halo.addColorStop(0, colorAlpha("#E7AC52", 0.1 * d.charge * fade));
-        halo.addColorStop(1, "rgba(0,0,0,0)");
-        ctx.fillStyle = halo;
-        ctx.fillRect(-R * 2.4, -R * 2.4, R * 4.8, R * 4.8);
+        stamp(SPRITES.halo, 0, 0, R * (2.2 - d.charge * 0.5), 0.24 * d.charge * fade);
+      }
+      // the capture flash: one bright ring riding out from the skin
+      if (d.swell > 0.02) {
+        ctx.strokeStyle = colorAlpha("#F2EEE6", 0.5 * d.swell * feltAlpha);
+        ctx.lineWidth = Math.max(1, R * 0.06 * d.swell);
+        ctx.beginPath();
+        ctx.arc(0, 0, R * (1.2 + (1 - d.swell) * 0.9), 0, Math.PI * 2);
+        ctx.stroke();
       }
 
       // the electron halo — everything the betas have thrown away, still near
@@ -1652,16 +1656,9 @@ export default function NucleonsField() {
       ctx.rotate(d.spinPhase);
 
       // the skin: surface tension drawn as a soft rim, merlot when strained
-      const rim = ctx.createRadialGradient(0, 0, R * 0.4, 0, 0, R * 1.45);
-      rim.addColorStop(0, colorAlpha(strain > 0.4 ? NUCLEON_TINTS.strain[1] : "#2A1E12", 0.5 * feltAlpha));
-      rim.addColorStop(0.62, colorAlpha(strain > 0.4 ? NUCLEON_TINTS.strain[0] : "#1A1309", 0.28 * feltAlpha));
-      rim.addColorStop(1, "rgba(0,0,0,0)");
       ctx.save();
       ctx.scale(elong, squash);
-      ctx.fillStyle = rim;
-      ctx.beginPath();
-      ctx.arc(0, 0, R * 1.45, 0, Math.PI * 2);
-      ctx.fill();
+      stamp(strain > 0.4 ? SPRITES.rimStrained : SPRITES.rim, 0, 0, R * 1.45, feltAlpha);
       ctx.restore();
 
       // the giant resonance ring — the drop still humming from a strike
@@ -1676,9 +1673,10 @@ export default function NucleonsField() {
         ctx.restore();
       }
 
-      // the nucleons themselves — the drop is made of countable things
-      const sites = packOffsets(a, d.seed);
-      const mask = protonMask(d.z, a);
+      // the nucleons themselves — the drop is made of countable things.
+      // The packing is cached: it only ever changes when A does.
+      const sites = packFor(d);
+      const mask = d.packMask ?? protonMask(d.z, a);
       const jitter = reduce ? 0 : (0.03 + d.ring * 0.09) * R;
       const nr = Math.max(1, R * (a > 90 ? 0.1 : a > 30 ? 0.14 : 0.2));
       for (let i = 0; i < sites.length; i++) {
@@ -1765,6 +1763,22 @@ export default function NucleonsField() {
         if (d.retiringAt) continue;
         const x = px(d.n);
         const y = py(d.z);
+        // the road this drop took to become what it is: every capture is a
+        // step right, every beta a step up and left. The r-process, drawn.
+        if (d.walk.length >= 4) {
+          ctx.strokeStyle = "rgba(242, 197, 107, 0.34)";
+          ctx.lineWidth = 0.9;
+          ctx.beginPath();
+          ctx.moveTo(px(d.walk[0]), py(d.walk[1]));
+          for (let i = 2; i < d.walk.length; i += 2) ctx.lineTo(px(d.walk[i]), py(d.walk[i + 1]));
+          ctx.stroke();
+          for (let i = 0; i < d.walk.length - 2; i += 2) {
+            ctx.fillStyle = "rgba(242, 197, 107, 0.28)";
+            ctx.beginPath();
+            ctx.arc(px(d.walk[i]), py(d.walk[i + 1]), 1.2, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
         const mode = decayMode(d.z, d.n);
         const tint =
           mode === "stable"
@@ -2031,8 +2045,16 @@ export default function NucleonsField() {
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, width, height);
 
+      // the season's warmth: the field cold, or the furnace it takes to make
+      // anything heavier than iron — the same wheel three fingers turn
+      if (heat > 0.01) {
+        ctx.fillStyle = `rgba(155, 62, 30, ${0.05 + heat * 0.12})`;
+        ctx.fillRect(0, 0, width, height);
+      }
+
       // the vacuum's own faint grain
-      for (let i = 0; i < motes.length; i++) {
+      const moteShown = Math.max(12, Math.round(motes.length * detail.particles));
+      for (let i = 0; i < moteShown; i++) {
         const m = motes[i];
         const dx = reduce ? 0 : Math.sin(localT * 0.24 + m.p) * 6 + windX * 22;
         const dy = reduce ? 0 : Math.cos(localT * 0.19 + m.p * 1.4) * 6 + windY * 22;
@@ -2071,13 +2093,7 @@ export default function NucleonsField() {
           for (let i = 2; i < f.trail.length; i += 2) ctx.lineTo(f.trail[i], f.trail[i + 1]);
           ctx.stroke();
         }
-        const glow = ctx.createRadialGradient(f.x, f.y, 0.5, f.x, f.y, 11);
-        glow.addColorStop(0, colorAlpha(tint[3], 0.8 * (1 - lens)));
-        glow.addColorStop(1, "rgba(0,0,0,0)");
-        ctx.fillStyle = glow;
-        ctx.beginPath();
-        ctx.arc(f.x, f.y, 11, 0, Math.PI * 2);
-        ctx.fill();
+        stamp(f.kind === 0 ? SPRITES.neutron : SPRITES.proton, f.x, f.y, 11, 1 - lens);
         ctx.fillStyle = colorAlpha(tint[2], 0.95 * (1 - lens));
         ctx.beginPath();
         ctx.arc(f.x, f.y, 3.2, 0, Math.PI * 2);
@@ -2103,6 +2119,38 @@ export default function NucleonsField() {
         }
       }
 
+      // ——— the gathering under the finger ———
+      // From the touch tier on, the vacuum visibly draws in toward the hand:
+      // a ring closing and motes falling inward, tightening until a nucleon
+      // condenses at the dwell. Nothing is explained; the verb is watched.
+      const gk = hold.gather > 0 ? hold.gather : gatherFade;
+      if (gk > 0.01) {
+        const gx = hold.gx;
+        const gy = hold.gy;
+        const ease = gk * gk;
+        const ringR = 46 - 34 * ease;
+        stamp(SPRITES.gather, gx, gy, 10 + 22 * ease, 0.35 + 0.5 * ease);
+        ctx.strokeStyle = colorAlpha("#F2EEE6", 0.12 + 0.4 * ease);
+        ctx.lineWidth = 0.8 + ease * 1.4;
+        ctx.beginPath();
+        ctx.arc(gx, gy, ringR, 0, Math.PI * 2);
+        ctx.stroke();
+        if (!reduce) {
+          const spokes = 7;
+          for (let i = 0; i < spokes; i++) {
+            const ang = (i / spokes) * Math.PI * 2 + localT * 0.9 + gk * 3;
+            const r0 = ringR + 26 * (1 - ease);
+            const r1 = ringR + 4;
+            ctx.strokeStyle = colorAlpha(NUCLEON_TINTS.neutron[2], 0.1 + 0.35 * ease);
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(gx + Math.cos(ang) * r0, gy + Math.sin(ang) * r0);
+            ctx.lineTo(gx + Math.cos(ang) * r1, gy + Math.sin(ang) * r1);
+            ctx.stroke();
+          }
+        }
+      }
+
       // the keyboard's cursor, when a keyboard is driving
       if (cursorVisible) {
         ctx.strokeStyle = "rgba(242, 197, 107, 0.45)";
@@ -2114,25 +2162,50 @@ export default function NucleonsField() {
 
       drawChart(lens);
 
-      // the glimmer: after a long stillness, one neutron drifts through
+      // the glimmer (grammar §6.3): after a long stillness one neutron drifts
+      // through, and the vacuum gathers once where a press would land — the
+      // same ring the hand's own hold draws, so the room shows its verb
+      // without a word of it.
       if (!reduce && nowReal - lastInteractionAt > 20000 && nowReal - glimmerAt > 14000) {
         glimmerAt = nowReal;
         const k = hash01(nowReal * 0.11);
         spawnFree(0, -20, k * height * 0.8 + height * 0.1, 70 + k * 40, (k - 0.5) * 30);
+      }
+      if (nowReal - lastInteractionAt > 20000) {
+        const slot = Math.floor(nowReal / 9000);
+        const px = (0.24 + hash01(slot * 3.1) * 0.52) * width;
+        const py = (0.26 + hash01(slot * 7.7) * 0.46) * height;
+        const u = ((nowReal % 9000) / 9000) * 3;
+        if (u < 1) {
+          const ease = reduce ? 0.5 : u;
+          const alpha = Math.sin(ease * Math.PI) * 0.5;
+          stamp(SPRITES.gather, px, py, 12 + 16 * ease, alpha * 0.7);
+          ctx.strokeStyle = colorAlpha("#F2EEE6", alpha * 0.35);
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.arc(px, py, 46 - 30 * ease, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      }
+
+      // night — laid face-down, the field goes on making elements in the dark
+      if (night > 0.002) {
+        ctx.fillStyle = `rgba(3, 4, 6, ${night * 0.74})`;
+        ctx.fillRect(0, 0, width, height);
       }
 
       if (nuclei.some((d) => d.retiringAt && nowReal - d.retiringAt > RETIRE_MS)) {
         nuclei = nuclei.filter((d) => !d.retiringAt || nowReal - d.retiringAt <= RETIRE_MS);
       }
       save();
-
-      raf = requestAnimationFrame(frame);
     };
     raf = requestAnimationFrame(frame);
 
     return () => {
       mq.removeEventListener?.("change", onMq);
       observer.disconnect();
+      offVis();
+      offPause();
       detach();
       detachVessel();
       wrap.removeEventListener("keydown", onKeyDown);
@@ -2145,21 +2218,81 @@ export default function NucleonsField() {
   }, []);
 
   return (
-    <div
-      ref={wrapRef}
-      tabIndex={0}
-      role="application"
-      aria-label="a field of nuclei — drops of protons and neutrons that capture, decay, and split"
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "#050506",
-        outline: "none",
-        touchAction: "none",
-      }}
-    >
-      <canvas ref={canvasRef} style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
+    <div className="nucleons-page" data-touch-surface="true" data-pretext-ignore="true">
+      <div
+        ref={wrapRef}
+        className="nucleons-field"
+        tabIndex={0}
+        role="application"
+        aria-label="a field of nuclei — drops of protons and neutrons that capture, decay, and split; rest a finger on the open field and the vacuum gathers one, hold on and it binds into a drop that keeps gathering; three fingers dragged run a neutron flux, and a drop standing in it climbs the chart"
+      >
+        <canvas
+          ref={canvasRef}
+          className="nucleons-canvas"
+          aria-hidden="true"
+        />
+      </div>
       <LetGo label="let the drops disperse" onLetGo={() => stillRef.current()} visible={hasNuclei} />
+
+      <style
+        dangerouslySetInnerHTML={{
+          __html: `
+        .nucleons-page {
+          position: fixed;
+          inset: 0;
+          min-height: 100svh;
+          background: #050506;
+          overflow: hidden;
+        }
+
+        .nucleons-field {
+          position: relative;
+          min-height: 100svh;
+          isolation: isolate;
+          overflow: hidden;
+          outline: none;
+        }
+
+        .nucleons-field:focus-visible {
+          outline: 2px solid rgba(231, 172, 82, 0.7);
+          outline-offset: -2px;
+        }
+
+        body:has(.nucleons-page) {
+          overflow: hidden;
+          background: #050506;
+        }
+
+        body:has(.nucleons-page) header:not(.oda-site-header) {
+          background: transparent !important;
+          border-bottom: 0 !important;
+          backdrop-filter: none !important;
+          -webkit-backdrop-filter: none !important;
+        }
+
+        /* The tape is fixed across the bottom 40px at z-index 28 with
+           pointer-events:auto on fine pointers (for its hover labels) — over
+           a playable field it silently swallowed every press in that strip.
+           Its neighbours already hide it; this room had been the exception. */
+        body:has(.nucleons-page) .oda-field-watch,
+        body:has(.nucleons-page) .oda-candle-mark,
+        body:has(.nucleons-page) .oda-tape-shell,
+        body:has(.nucleons-page) .oda-sound-toggle {
+          display: none !important;
+        }
+
+        .nucleons-canvas {
+          position: absolute;
+          inset: 0;
+          width: 100%;
+          height: 100%;
+          display: block;
+          cursor: crosshair;
+          touch-action: none;
+          z-index: 0;
+        }
+      ` }}
+      />
     </div>
   );
 }

@@ -78,9 +78,12 @@ export default function Storm() {
   const lastLightningAt = useRef<number>(0);
   // bridge so React controls can trigger a discharge defined inside the loop.
   const dischargeRef = useRef<(() => void) | null>(null);
+  // bridge for LetGo — the room's kept storm cells, cleared from outside the loop.
+  const clearCellsRef = useRef<() => void>(() => {});
 
   const [pressureDisplay, setPressureDisplay] = useState(0.62);
   const [chargeDisplay, setChargeDisplay] = useState(0);
+  const [hasBuilt, setHasBuilt] = useState(false);
   const [maelstromOn, setMaelstromOn] = useState(false);
   const [dragMode, setDragMode] = useState<null | "baro" | "wind">(null);
   const [windAngleDisplay, setWindAngleDisplay] = useState(0);
@@ -308,6 +311,9 @@ export default function Storm() {
             uMaelstromLoc = gl.getUniformLocation(p, "uMaelstrom");
             uFlashLoc = gl.getUniformLocation(p, "uFlash");
             uChargeLoc = gl.getUniformLocation(p, "uCharge");
+            uLensLoc = gl.getUniformLocation(p, "uLens");
+            uSeasonLoc = gl.getUniformLocation(p, "uSeason");
+            uPanLoc = gl.getUniformLocation(p, "uPan");
 
             const buf = gl.createBuffer();
             gl.bindBuffer(gl.ARRAY_BUFFER, buf);
@@ -320,13 +326,43 @@ export default function Storm() {
             gl.enableVertexAttribArray(loc);
             gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
             gl.useProgram(p);
+            vbo = buf;
           }
         }
       }
-    }
+    };
+    setupProgram();
+
+    const onContextLost = (ev: Event) => {
+      ev.preventDefault();
+      glProg = null;
+    };
+    const onContextRestored = () => {
+      setupProgram();
+    };
+    water.addEventListener("webglcontextlost", onContextLost, false);
+    water.addEventListener("webglcontextrestored", onContextRestored, false);
+
+    const embedded = isEmbeddedFrame();
+    const gov = createFrameGovernor(embedded ? "medium" : "high");
+    let hiddenDoc = document.hidden;
+    let galleryPaused = false;
+    let asleep = false;
+    const syncSleep = () => {
+      asleep = hiddenDoc || galleryPaused;
+      if (asleep) gov.force("sleep");
+    };
+    const unvis = onVisibility((h) => {
+      hiddenDoc = h;
+      syncSleep();
+    });
+    const ungal = onGalleryPause((p) => {
+      galleryPaused = p;
+      syncSleep();
+    });
 
     const resize = () => {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = resolveDpr(gov.tier(), { embedded, reducedMotion: reduce });
       const w = wrap.clientWidth;
       const h = wrap.clientHeight;
       water.width = Math.floor(w * dpr);
@@ -418,6 +454,47 @@ export default function Storm() {
     let lastEntrainBeat = -1;
     let lastGestureAt = performance.now();
     const holdState = { ceremony: false };
+
+    // ── the map layer (two fingers) and the vessel ─────────────────
+    let lens = 0; // 0 felt weather, 1 the pressure/temperature field
+    let season = 0; // 0 warm, 1 arctic — the slow annual cycle
+    let panX = 0;
+    let panY = 0;
+    let panXTarget = 0;
+    let panYTarget = 0;
+    let holdZone: "sky" | "sea" | null = null;
+
+    // ── storm cells: the room's countable material ──────────────────
+    // A hand plants a localized cell of weather in the sea with a dwell
+    // hold; ceremony hold on an existing cell snuffs it; the eye (ceremony
+    // on open water) remains the room's other solemn act.
+    type StormCell = { id: number; x: number; y: number; t0: number; strength: number };
+    const cells: StormCell[] = [];
+    let nextCellId = 1;
+    const addCell = (x: number, y: number, strength: number) => {
+      cells.push({ id: ++nextCellId, x, y, t0: simNow, strength });
+      if (cells.length > 6) cells.shift();
+      setHasBuilt(true);
+    };
+    const extinguishCellNear = (x: number, y: number): boolean => {
+      let bestIdx = -1;
+      let bestD = 70;
+      for (let i = 0; i < cells.length; i++) {
+        const d = Math.hypot(cells[i].x - x, cells[i].y - y);
+        if (d < bestD) { bestD = d; bestIdx = i; }
+      }
+      if (bestIdx < 0) return false;
+      cells.splice(bestIdx, 1);
+      setHasBuilt(cells.length > 0);
+      return true;
+    };
+    clearCellsRef.current = () => {
+      cells.length = 0;
+      manualCrestsRef.current = [];
+      chargeRef.current = 0;
+      stormSpikeRef.current = 0;
+      setHasBuilt(false);
+    };
 
     const manualBump = (x: number, now: number): number => {
       let d = 0;
@@ -652,7 +729,28 @@ export default function Storm() {
     const detachGestures = attachGestures(lines, {
       tap: (e) => {
         lastGestureAt = performance.now();
-        if (e.fingers !== 1) return; // the weather absorbs frame/law taps
+        if (e.fingers === 2) {
+          // step back: lower a raised lens, else the storm eases its lean
+          if (lens > 0.02) {
+            lens = 0;
+          } else {
+            panXTarget = 0;
+            panYTarget = 0;
+            calmRef.current = Math.max(calmRef.current, 0.25);
+            calmStartedRef.current = performance.now();
+          }
+          haptics.tap();
+          return;
+        }
+        if (e.fingers === 3) {
+          // tutti — everything alive answers softly at once
+          stormSpikeRef.current = Math.min(0.5, stormSpikeRef.current + 0.12);
+          chargeRef.current = Math.min(1, chargeRef.current + 0.08);
+          for (const cell of cells) cell.strength = Math.min(1, cell.strength + 0.15);
+          try { audio.chime(); } catch { /* noop */ }
+          haptics.ripple(0.4);
+          return;
+        }
         const { x, y } = toLocal(e.x, e.y);
         const seaTopPx = lines.clientHeight * SEA_TOP;
         if (boostParticle(x, y, e.intensity)) return;

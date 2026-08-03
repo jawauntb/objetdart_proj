@@ -912,17 +912,19 @@ export default function Jewel() {
           }
           an.getByteFrequencyData(fftBuf);
           const n = fftBuf.length;
-          let sum = 0, lo = 0, mi = 0, hi = 0;
+          const stride = Math.max(1, Math.round(1 / Math.max(0.25, detail.samples)));
+          let sum = 0, lo = 0, mi = 0, hi = 0, count = 0;
           const loEnd = Math.floor(n * 0.12);
           const miEnd = Math.floor(n * 0.45);
-          for (let i = 0; i < n; i++) {
+          for (let i = 0; i < n; i += stride) {
             const v = fftBuf[i] / 255;
             sum += v;
+            count += 1;
             if (i < loEnd) lo += v;
             else if (i < miEnd) mi += v;
             else hi += v;
           }
-          const avg = sum / n;
+          const avg = sum / Math.max(1, count);
           energy = Math.max(energy, Math.min(1, avg * 2.6));
           bLow = Math.min(1, (lo / Math.max(1, loEnd)) * 1.6);
           bMid = Math.min(1, (mi / Math.max(1, miEnd - loEnd)) * 2.2);
@@ -985,18 +987,39 @@ export default function Jewel() {
     };
     raf = requestAnimationFrame(draw);
 
+    (wrap as HTMLDivElement & { __letGo?: () => void }).__letGo = () => {
+      facetsRef.current = [];
+      writer.flush();
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ facets: [] })); } catch { /* noop */ }
+      setHasFacets(false);
+    };
+
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
+      unvis();
+      ungal();
+      writer.flush();
       if (typeof mq.removeEventListener === "function") mq.removeEventListener("change", onMq);
       detachGestures();
+      detachVessel();
       wrap.removeEventListener("pointerdown", onContact);
       wrap.removeEventListener("pointermove", onHover);
       wrap.removeEventListener("pointerleave", onLeave);
+      canvas.removeEventListener("webglcontextlost", onLost);
+      canvas.removeEventListener("webglcontextrestored", onRestored);
       gl.deleteProgram(prog); gl.deleteShader(vs); gl.deleteShader(fs); gl.deleteBuffer(buf);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const letGo = () => {
+    const wrap = wrapRef.current as (HTMLDivElement & { __letGo?: () => void }) | null;
+    wrap?.__letGo?.();
+    try { getFieldAudio().thud(); } catch { /* noop */ }
+    try { haptics.roll(); } catch { /* noop */ }
+    setHasFacets(false);
+  };
 
   return (
     <div
@@ -1007,6 +1030,7 @@ export default function Jewel() {
       style={{ position: "fixed", inset: 0, background: "#0a0805" }}
     >
       <canvas ref={canvasRef} />
+      <LetGo label="let the facets go" onLetGo={letGo} visible={hasFacets} />
 
       {/* quiet chrome — the gem is the whole object */}
       <div className="jw-ui">

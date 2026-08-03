@@ -1206,16 +1206,33 @@ export default function DropSphere() {
       }
     };
 
-    const drawBody = () => {
+    // the dark-water tint is a fixed-shape gradient (only fh changes it) —
+    // hoisted out of the per-frame drawBody path and rebuilt on resize.
+    let tintGrad: CanvasGradient | null = null;
+    const buildTintGrad = () => {
+      if (fh <= 0) { tintGrad = null; return; }
+      const gr = bctx.createLinearGradient(0, 0, 0, fh);
+      gr.addColorStop(0, "rgba(24,74,96,0.95)");
+      gr.addColorStop(0.45, "rgba(10,40,58,0.96)");
+      gr.addColorStop(1, "rgba(4,16,28,0.97)");
+      tintGrad = gr;
+    };
+    buildTintGrad();
+
+    const drawBody = (detailNow: ReturnType<typeof detailForTier>) => {
       const drops = dropsRef.current;
       // metaball field: additive wobbly blobs
       fctx.setTransform(FS, 0, 0, FS, 0, 0);
       fctx.clearRect(0, 0, w, h);
       fctx.globalCompositeOperation = "lighter";
-      const N = coarse ? 30 : 44;
+      const N = Math.max(14, Math.round((coarse ? 30 : 44) * detailNow.particles));
       const gv = gravityRef.current;
       const lean = gv.mag * 0.13;
       for (const d of drops) {
+        // the blob's own silhouette is an organic wobble path (not a plain
+        // circle), so its fill gradient can't be a static sprite the way
+        // the fixed-shape glints above were — this stays a per-drop
+        // CanvasGradient, bounded by MAX_DROPS (≤5), never per-particle.
         const rad = fctx.createRadialGradient(d.x, d.y, 0, d.x, d.y, d.r * 1.75);
         rad.addColorStop(0, "rgba(255,255,255,1)");
         rad.addColorStop(0.55, "rgba(255,255,255,0.85)");
@@ -1227,7 +1244,11 @@ export default function DropSphere() {
       }
       fctx.globalCompositeOperation = "source-over";
 
-      // threshold → crisp liquid silhouette
+      // threshold → crisp liquid silhouette. ctx.filter is the one
+      // catastrophic-on-mobile call SPEC forbids per-frame; it's already
+      // running on the downsampled `field` buffer (FS, itself scaled down
+      // further under load above), and the caller throttles how often
+      // this whole function runs at low/medium tiers.
       sctx.setTransform(1, 0, 0, 1, 0, 0);
       sctx.clearRect(0, 0, fw, fh);
       sctx.filter = `blur(${(coarse ? 4 : 6)}px) contrast(26)`;
@@ -1237,11 +1258,7 @@ export default function DropSphere() {
       // tint the silhouette into dark water
       bctx.setTransform(1, 0, 0, 1, 0, 0);
       bctx.clearRect(0, 0, fw, fh);
-      const grad = bctx.createLinearGradient(0, 0, 0, fh);
-      grad.addColorStop(0, "rgba(24,74,96,0.95)");
-      grad.addColorStop(0.45, "rgba(10,40,58,0.96)");
-      grad.addColorStop(1, "rgba(4,16,28,0.97)");
-      bctx.fillStyle = grad;
+      bctx.fillStyle = tintGrad ?? "#0a2836";
       bctx.fillRect(0, 0, fw, fh);
       bctx.globalCompositeOperation = "destination-in";
       bctx.drawImage(sharp, 0, 0);
@@ -1347,8 +1364,10 @@ export default function DropSphere() {
         g.restore();
       }
 
-      // glass reads: fresnel rim, specular glint, inner shading — per bead
-      const N = 48;
+      // glass reads: fresnel rim, specular glint, inner shading — per bead.
+      // Fix 1: fr/sgl/sg2 are pre-baked sprites (setup above), blitted with
+      // drawImage instead of allocating a fresh CanvasGradient per bead.
+      const N = Math.max(16, Math.round(48 * detail.samples));
       const gv2 = gravityRef.current;
       const lean2 = gv2.mag * 0.13;
       for (const d of drops) {
@@ -1361,28 +1380,20 @@ export default function DropSphere() {
         smoothClosedPath(g, dropPoints(d, N, 1, 1, gv2.x, gv2.y, lean2));
         g.stroke();
         // soft aqua fresnel glow just inside the rim
-        const fr = g.createRadialGradient(d.x, d.y, d.r * 0.6, d.x, d.y, d.r);
-        fr.addColorStop(0, "rgba(90,190,220,0)");
-        fr.addColorStop(1, "rgba(120,220,245,0.28)");
-        g.fillStyle = fr;
-        g.beginPath(); g.arc(d.x, d.y, d.r, 0, TAU); g.fill();
+        g.drawImage(fresnelSprite, d.x - d.r, d.y - d.r, d.r * 2, d.r * 2);
         g.restore();
 
         // bright sharp specular glint (upper-left) + soft secondary
         g.save();
         g.globalCompositeOperation = "lighter";
         const gx = d.x - d.r * 0.38, gy = d.y - d.r * 0.42;
-        const sgl = g.createRadialGradient(gx, gy, 0, gx, gy, d.r * 0.22);
-        sgl.addColorStop(0, "rgba(255,255,255,0.95)");
-        sgl.addColorStop(0.5, "rgba(220,245,255,0.4)");
-        sgl.addColorStop(1, "rgba(220,245,255,0)");
-        g.fillStyle = sgl;
-        g.beginPath(); g.ellipse(gx, gy, d.r * 0.2, d.r * 0.13, -0.6, 0, TAU); g.fill();
-        const sg2 = g.createRadialGradient(d.x + d.r * 0.3, d.y + d.r * 0.36, 0, d.x + d.r * 0.3, d.y + d.r * 0.36, d.r * 0.3);
-        sg2.addColorStop(0, "rgba(120,210,235,0.22)");
-        sg2.addColorStop(1, "rgba(120,210,235,0)");
-        g.fillStyle = sg2;
-        g.beginPath(); g.arc(d.x + d.r * 0.3, d.y + d.r * 0.36, d.r * 0.3, 0, TAU); g.fill();
+        g.save();
+        g.translate(gx, gy);
+        g.rotate(-0.6);
+        g.drawImage(glintSprite, -d.r * 0.2, -d.r * 0.13, d.r * 0.4, d.r * 0.26);
+        g.restore();
+        const g2x = d.x + d.r * 0.3, g2y = d.y + d.r * 0.36;
+        g.drawImage(glint2Sprite, g2x - d.r * 0.3, g2y - d.r * 0.3, d.r * 0.6, d.r * 0.6);
         g.restore();
       }
 
