@@ -433,6 +433,31 @@ export const GUIDE_ROOMS: GuideRoom[] = [
     keeps: "the cells you've seeded, generation by generation",
   },
   {
+    key: "organelles",
+    title: "the organs before the body",
+    scale: "the organelles band — between dna and a whole cell",
+    href: "/organelles",
+    essence:
+      "a streaming plasm holding six organs, and one fixed amount of membrane between them — draw surface into any of them and the others visibly smooth to pay for it.",
+    moves: [
+      "tap an organelle → it rings its own timbre; how folded it is decides how many partials you hear",
+      "hold an organelle → the membrane budget flows into it while you hold, and the rest of the plasm pays in the same frame",
+      "circle a finger on an organelle → winds its folds deeper; the other way lets them out",
+      "drag an organelle → it moves through the flow, and the flow drags back",
+      "hold on open plasm (dwell) → the organ the cell is still missing condenses there",
+      "hold the nucleus to the ceremony → it opens onto the helix within",
+      "three fingers drag → the streaming rate; three fingers hold → the clock slows to a quarter; three fingers tap → every organ rings in size order",
+      "twist → raises the lens to the ledger, where the budget is drawn as shares of one constant total",
+      "tilt → the plasm pours; shake → it churns; knock → the nearest organ rings",
+    ],
+    finds: [
+      "a smooth vesicle is one sine, exactly — and a cristae-folded mitochondrion is a stack of partials, so you can hear how folded a thing is without looking",
+      "nothing is created here: the ledger's total never moves, however you push the membrane around",
+      "gather all six organs in one plasm and the cell membrane closes around them of its own accord",
+    ],
+    keeps: "the organs you've gathered, and how the membrane is shared between them",
+  },
+  {
     key: "dna",
     title: "the ladder that copies",
     scale: "the dna band — between organic molecules and organelles",
