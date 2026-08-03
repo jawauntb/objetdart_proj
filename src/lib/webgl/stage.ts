@@ -77,6 +77,13 @@ export type GLStageOptions = {
   maxDpr?: number;
   /** Ceiling on drawing-buffer pixels; 0 disables. Default ~4.2M (≈1440p×2). */
   maxPixels?: number;
+  /**
+   * Force the context loss on dispose to hand GPU memory back immediately.
+   * Off by default: a force-lost context can never be re-acquired on the same
+   * canvas, so this makes the element single-use. Only set it when the canvas
+   * is being discarded with the stage.
+   */
+  releaseContext?: boolean;
   onResize?: (size: StageSize) => void;
   onContextLost?: () => void;
   /** Rebuild programs here — every GL object is gone after a loss. */
@@ -460,10 +467,15 @@ export function createGLStage(
       buffers.clear();
       shaders.clear();
       programs.clear();
-      // Hand the GPU memory back now rather than at the whim of the GC — a
-      // site where you travel between rooms every few seconds otherwise walks
-      // into the browser's per-page context limit and loses the oldest room.
-      gl.getExtension("WEBGL_lose_context")?.loseContext();
+      // Every program, shader and buffer is already gone, which is the bulk
+      // of the memory. Forcing the context loss on top of that hands the rest
+      // back sooner — but it also POISONS THE CANVAS: a lost context is never
+      // re-acquired by `getContext` on the same element, so any remount onto
+      // the same <canvas> renders nothing. React StrictMode double-invokes
+      // every effect in development, so leaving this on by default made every
+      // stage room blank the moment it mounted. Opt in only where the canvas
+      // is genuinely being thrown away.
+      if (options.releaseContext) gl.getExtension("WEBGL_lose_context")?.loseContext();
     },
   };
 }

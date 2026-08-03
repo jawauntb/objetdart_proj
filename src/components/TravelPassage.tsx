@@ -36,10 +36,17 @@ import { SCALE_BANDS, type ScaleBand, type ScaleBandId } from "@/lib/scale";
 import { seededRandom } from "@/lib/manifold-field";
 import { getFieldAudio, setScaleRegister } from "@/lib/audio";
 import { detent as hapticDetent } from "@/lib/haptics";
+import { PITCH_DEFAULT, buildStars, starState, waveNumber } from "@/lib/spiral";
 
 // ——— The registry ———————————————————————————————————————————————
 
-export type PassageEdgeKey = "atlas->stars" | "stars->atlas";
+export type PassageEdgeKey =
+  | "atlas->stars"
+  | "stars->atlas"
+  | "stars->galaxy"
+  | "galaxy->stars"
+  | "galaxy->space"
+  | "space->galaxy";
 
 export type PassageSpec = {
   /** Full film length, ms. */
@@ -54,6 +61,13 @@ export type PassageSpec = {
   detentAt: number;
   /** True = the film plays forward (map → planet → stars); false = reversed. */
   out: boolean;
+  /**
+   * Which film this edge traverses: the atlas↔stars planet ("planet",
+   * default), the vault streaming into an arm seen edge-on ("arm",
+   * stars↔galaxy), or the spiral shrinking to one luminous node of the
+   * web ("node", galaxy↔space).
+   */
+  film?: "planet" | "arm" | "node";
 };
 
 export const PASSAGES: Partial<Record<PassageEdgeKey, PassageSpec>> = {
@@ -72,6 +86,47 @@ export const PASSAGES: Partial<Record<PassageEdgeKey, PassageSpec>> = {
     bellAt: 0.5,
     detentAt: 0.28,
     out: false,
+  },
+  // The vault's stars stream into an arm seen edge-on, and the arm opens
+  // into the spiral it belongs to. The return plays the same film back:
+  // the disc tilts to the band, and the band scatters into the vault.
+  "stars->galaxy": {
+    durationMs: 3600,
+    reducedMs: 1200,
+    navigateAt: 0.55,
+    bellAt: 0.5,
+    detentAt: 0.62,
+    out: true,
+    film: "arm",
+  },
+  "galaxy->stars": {
+    durationMs: 3600,
+    reducedMs: 1200,
+    navigateAt: 0.45,
+    bellAt: 0.52,
+    detentAt: 0.3,
+    out: false,
+    film: "arm",
+  },
+  // The spiral shrinks to one luminous node of the web between galaxies;
+  // the return dives into that node until its arms fill the frame.
+  "galaxy->space": {
+    durationMs: 3600,
+    reducedMs: 1200,
+    navigateAt: 0.55,
+    bellAt: 0.62,
+    detentAt: 0.7,
+    out: true,
+    film: "node",
+  },
+  "space->galaxy": {
+    durationMs: 3600,
+    reducedMs: 1200,
+    navigateAt: 0.45,
+    bellAt: 0.42,
+    detentAt: 0.3,
+    out: false,
+    film: "node",
   },
 };
 
@@ -206,6 +261,16 @@ type Film = {
 };
 
 function makeFilm(seed: number): Film | null {
+  const vignette = makeVignette();
+  // The breath of pale sea around the sphere: a ring, so the ramp rises off
+  // the limb and falls again — built once, blitted every frame.
+  const atmosphereSprite = makeRadialSprite([
+    [0, AURORA, 0],
+    [0.738, AURORA, 0],
+    [0.848, [120, 160, 168], 0.22],
+    [0.984, AURORA, 0],
+    [1, AURORA, 0],
+  ]);
   const nA = makeNoise2(seed ^ 0x9e3779b9);
   const nB = makeNoise2(seed ^ 0x85ebca6b);
   const nC = makeNoise2(seed ^ 0xc2b2ae35);
@@ -415,14 +480,7 @@ function makeFilm(seed: number): Film | null {
     if (atm > 0) {
       ctx.save();
       ctx.globalCompositeOperation = "lighter";
-      const g = ctx.createRadialGradient(cx, cy, R * 0.9, cx, cy, R * 1.2);
-      g.addColorStop(0, rgba(AURORA, 0));
-      g.addColorStop(0.45, rgba([120, 160, 168], 0.22 * atm));
-      g.addColorStop(1, rgba(AURORA, 0));
-      ctx.fillStyle = g;
-      ctx.beginPath();
-      ctx.arc(cx, cy, R * 1.22, 0, TAU);
-      ctx.fill();
+      blitGlow(ctx, atmosphereSprite, cx, cy, R * 1.22, atm);
       ctx.restore();
     }
 
@@ -472,14 +530,357 @@ function makeFilm(seed: number): Film | null {
     }
 
     // A quiet vignette holds the frame together.
-    const vg = ctx.createRadialGradient(cx, h / 2, m * 0.45, cx, h / 2, diag * 0.62);
-    vg.addColorStop(0, rgba(NIGHT, 0));
-    vg.addColorStop(1, rgba(NIGHT, 0.35));
-    ctx.fillStyle = vg;
-    ctx.fillRect(0, 0, w, h);
+    vignette(ctx, w, h, cx);
   }
 
   return { renderFrame };
+}
+
+
+// ——— Sprites: gradients built once, never per frame ————————————————
+// A radial gradient is expensive to construct and the films run at 60fps
+// through the whole passage. Every soft glow here is painted ONCE into a
+// small offscreen canvas and then blitted, so a frame costs draws, not
+// gradient objects. (The /stars room's per-frame gradients are the named
+// bottleneck this avoids.)
+
+type SpriteStop = readonly [offset: number, color: RGB, alpha: number];
+
+/**
+ * A radial ramp rasterised ONCE into an offscreen canvas. Every soft circle
+ * in every film comes through here — glows, the atmosphere ring, the frame's
+ * vignette — so the whole passage host constructs exactly one gradient per
+ * distinct look, at build time, and a frame costs blits instead.
+ */
+function makeRadialSprite(stops: readonly SpriteStop[], px = 128): HTMLCanvasElement | null {
+  if (typeof document === "undefined") return null;
+  const c = document.createElement("canvas");
+  c.width = px;
+  c.height = px;
+  const g = c.getContext("2d");
+  if (!g) return null;
+  const grad = g.createRadialGradient(px / 2, px / 2, 0, px / 2, px / 2, px / 2);
+  for (const [offset, color, alpha] of stops) {
+    grad.addColorStop(Math.max(0, Math.min(1, offset)), rgba(color, alpha));
+  }
+  g.fillStyle = grad;
+  g.fillRect(0, 0, px, px);
+  return c;
+}
+
+function makeGlowSprite(inner: RGB, outer: RGB, mid: number): HTMLCanvasElement | null {
+  return makeRadialSprite([
+    [0, inner, 1],
+    [0.5, mix(inner, outer, 0.5), mid],
+    [1, outer, 0],
+  ]);
+}
+
+function blitGlow(
+  ctx: CanvasRenderingContext2D,
+  sprite: HTMLCanvasElement | null,
+  cx: number,
+  cy: number,
+  r: number,
+  alpha: number,
+): void {
+  if (!sprite || r <= 0 || alpha <= 0.004) return;
+  const prev = ctx.globalAlpha;
+  ctx.globalAlpha = Math.min(1, alpha);
+  ctx.drawImage(sprite, cx - r, cy - r, r * 2, r * 2);
+  ctx.globalAlpha = prev;
+}
+
+/**
+ * The frame's vignette. Radially symmetric, so one sprite blitted over the
+ * frame is the same picture the per-frame gradient drew — and it survives a
+ * resize without rebuilding anything.
+ */
+function makeVignette(): (ctx: CanvasRenderingContext2D, w: number, h: number, cx?: number) => void {
+  const sprite = makeRadialSprite([
+    [0, NIGHT, 0],
+    [0.72, NIGHT, 0],
+    [1, NIGHT, 0.35],
+  ], 256);
+  return (ctx, w, h, cx) => {
+    if (!sprite) return;
+    const r = Math.hypot(w, h) * 0.62;
+    blitGlow(ctx, sprite, cx ?? w / 2, h / 2, r, 1);
+  };
+}
+
+// ——— The arm film (stars ↔ galaxy) ———————————————————————————————————
+//
+// One scene function of u ∈ [0, 1]:
+//   u = 0    the stellar vault — scattered stars filling the frame
+//   u ≈ 0.55 the stars have streamed into an arm seen edge-on: a milky
+//            band with a dust lane, planetfall's cousin — armfall
+//   u = 1    the disc has tilted open and the same stars are a spiral
+// The disc points are the SAME galaxy the room builds — one seed
+// (GalaxyArms' 0xa2135), the same buildStars, the same wave — subsampled
+// so the passage stays a film, not a simulation.
+
+const GALAXY_PASSAGE_SEED = 0xa2135; // keep in lockstep with GalaxyArms
+
+let bulgeSpriteCache: HTMLCanvasElement | null | undefined;
+/** Old gold at the heart of the disc — one sprite, both films, built once. */
+const bulgeSprite = {
+  get canvas(): HTMLCanvasElement | null {
+    if (bulgeSpriteCache === undefined) {
+      bulgeSpriteCache = makeGlowSprite(mix(PAPER, [231, 172, 82] as RGB, 0.5), CANDLE, 0.42);
+    }
+    return bulgeSpriteCache;
+  },
+};
+const ARM_FILM_STARS = 2200;
+
+type DiscPoint = { x: number; y: number; z: number; crowd: number; warm: number; size: number };
+
+function buildDiscPoints(): DiscPoint[] {
+  const field = buildStars(GALAXY_PASSAGE_SEED, 15000);
+  const k = waveNumber(PITCH_DEFAULT);
+  const shift = Math.atan2(k, 1);
+  const params = { patternPhase: 0.8, pitch: PITCH_DEFAULT, amp: 1, bar: 0.25 };
+  const step = Math.max(1, Math.floor(field.count / ARM_FILM_STARS));
+  const out: DiscPoint[] = [];
+  for (let i = 0; i < field.count && out.length < ARM_FILM_STARS; i += step) {
+    const st = starState(field.r[i], field.theta[i], 0, params);
+    const crowd = 0.5 + 0.5 * Math.cos(st.chi - shift);
+    out.push({
+      x: st.x,
+      y: st.y,
+      z: field.z[i],
+      crowd,
+      warm: field.hue[i],
+      size: 0.5 + field.size[i],
+    });
+  }
+  return out;
+}
+
+function drawSpiral(
+  ctx: CanvasRenderingContext2D,
+  pts: DiscPoint[],
+  cx: number,
+  cy: number,
+  scale: number,
+  incl: number,
+  spin: number,
+  alpha: number,
+  young: number,
+): void {
+  const ci = Math.cos(incl);
+  const cs = Math.cos(spin);
+  const sn = Math.sin(spin);
+  for (const p of pts) {
+    const x = p.x * cs - p.y * sn;
+    const y = p.x * sn + p.y * cs;
+    const sx = cx + x * scale;
+    const sy = cy + (y * ci + p.z * Math.sin(incl)) * scale;
+    const bright = alpha * (0.3 + 0.55 * p.size) * (0.55 + 0.9 * p.crowd * young);
+    const cold = p.crowd > 0.72 && p.warm < 0.6;
+    ctx.fillStyle = rgba(cold ? [150, 180, 250] : mix(PAPER, CANDLE, p.warm * 0.5), clamp01(bright));
+    const r = Math.max(0.6, (0.6 + p.size * 0.9) * Math.min(1.6, scale / 260));
+    ctx.fillRect(sx - r / 2, sy - r / 2, r, r);
+  }
+  // the bulge: old gold at the centre of any inclination
+  blitGlow(ctx, bulgeSprite.canvas, cx, cy, Math.max(6, scale * 0.16), 0.5 * alpha);
+}
+
+function makeArmFilm(): Film {
+  const pts = buildDiscPoints();
+  const vignette = makeVignette();
+  // Every disc point gets a scatter position — where it stands in the
+  // vault before the stream begins. Deterministic, one for one.
+  const rng = seededRandom(GALAXY_PASSAGE_SEED ^ 0x517a);
+  const scatter = pts.map(() => ({
+    x: rng(),
+    y: rng(),
+    tw: rng() * TAU,
+    lag: rng() * 0.22,
+  }));
+  const halo: Array<{ x: number; y: number; r: number; ph: number }> = [];
+  for (let i = 0; i < 240; i++) {
+    halo.push({ x: rng(), y: rng(), r: 0.4 + rng() * 1.2, ph: rng() * TAU });
+  }
+
+  function renderFrame(ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void {
+    const m = Math.min(w, h);
+    ctx.fillStyle = rgba(NIGHT, 1);
+    ctx.fillRect(0, 0, w, h);
+
+    // the vault behind everything — it thins as the stream leaves it
+    const vaultA = 1 - smoothstep(0.35, 0.8, u);
+    for (const s of halo) {
+      const tw = 0.6 + 0.4 * Math.sin(s.ph + u * 9);
+      ctx.fillStyle = rgba(PAPER, 0.5 * vaultA * tw);
+      ctx.fillRect(s.x * w, s.y * h, s.r, s.r);
+    }
+
+    const cx = w / 2;
+    const cy = h / 2;
+    // the disc's frame: edge-on through the middle of the film, open by the end
+    const incl = lerp(1.53, 0.6, smoothstep(0.45, 0.95, u));
+    const spin = 0.35 + u * 0.3;
+    const scale = m * lerp(0.75, 0.42, smoothstep(0.5, 0.95, u));
+    const stream = smoothstep(0.06, 0.55, u);
+    const young = smoothstep(0.5, 0.9, u);
+
+    // the milky band the stream is becoming — drawn under the stars
+    const bandA = smoothstep(0.25, 0.55, u) * (1 - smoothstep(0.75, 0.98, u) * 0.6);
+    if (bandA > 0.01) {
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(spin * 0.4 - 0.18);
+      const g = ctx.createLinearGradient(0, -m * 0.16, 0, m * 0.16);
+      g.addColorStop(0, rgba(PAPER, 0));
+      g.addColorStop(0.42, rgba(mix(PAPER, CANDLE, 0.25), 0.16 * bandA));
+      g.addColorStop(0.5, rgba(INK, 0.5 * bandA * (1 - young)));
+      g.addColorStop(0.58, rgba(mix(PAPER, CANDLE, 0.35), 0.16 * bandA));
+      g.addColorStop(1, rgba(PAPER, 0));
+      ctx.fillStyle = g;
+      ctx.fillRect(-w, -m * 0.16, w * 2, m * 0.32);
+      ctx.restore();
+    }
+
+    // the stars themselves: vault position → their seat in the disc
+    const ci = Math.cos(incl);
+    const cs = Math.cos(spin);
+    const sn = Math.sin(spin);
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i];
+      const sc = scatter[i];
+      const x = p.x * cs - p.y * sn;
+      const y = p.x * sn + p.y * cs;
+      const dx = cx + x * scale;
+      const dy = cy + (y * ci + p.z * Math.sin(incl)) * scale;
+      const tt = clamp01((stream - sc.lag) / (1 - sc.lag));
+      const e = easeInOut(tt);
+      const sx = lerp(sc.x * w, dx, e);
+      const sy = lerp(sc.y * h, dy, e);
+      const tw = 0.7 + 0.3 * Math.sin(sc.tw + u * 7);
+      const bright = (0.35 + 0.5 * p.size) * tw * (0.5 + 0.5 * e) * (0.6 + 0.9 * p.crowd * young);
+      const cold = p.crowd > 0.72 && p.warm < 0.6 && young > 0.2;
+      ctx.fillStyle = rgba(
+        cold ? [150, 180, 250] : mix(PAPER, CANDLE, p.warm * 0.45),
+        clamp01(bright),
+      );
+      const r = Math.max(0.7, 1.5 * p.size * (0.6 + 0.4 * e));
+      ctx.fillRect(sx - r / 2, sy - r / 2, r, r);
+    }
+
+    // once the disc opens, the bulge stands where all roads led
+    const bulgeA = smoothstep(0.55, 0.9, u);
+    blitGlow(ctx, bulgeSprite.canvas, cx, cy, scale * 0.16, 0.5 * bulgeA);
+
+    // a quiet vignette holds the frame together
+    vignette(ctx, w, h);
+  }
+
+  return { renderFrame };
+}
+
+// ——— The node film (galaxy ↔ space) ——————————————————————————————————
+//
+//   u = 0    the spiral fills the frame, inclined, turning
+//   u ≈ 0.6  it has shrunk to a bright grain drifting toward its seat
+//   u = 1    it is one luminous node of the web between galaxies
+// The web is seeded and still: knots, filaments to near neighbours, and
+// faint other-galaxies that were always there once the frame is wide
+// enough to hold them.
+
+function makeNodeFilm(): Film {
+  const pts = buildDiscPoints();
+  const vignette = makeVignette();
+  const warmKnotSprite = makeGlowSprite(CANDLE, CANDLE, 0.32);
+  const coolKnotSprite = makeGlowSprite(PAPER, PAPER, 0.28);
+  const nodeSprite = makeGlowSprite(PAPER, CANDLE, 0.5);
+  const rng = seededRandom(GALAXY_PASSAGE_SEED ^ 0x0de);
+  // the web, in screen fractions; our galaxy's seat is the knot nearest centre
+  const knots: Array<{ x: number; y: number; m: number }> = [];
+  for (let i = 0; i < 26; i++) {
+    knots.push({ x: 0.08 + rng() * 0.84, y: 0.08 + rng() * 0.84, m: 0.4 + rng() * 1 });
+  }
+  let seat = 0;
+  let seatD = 1e9;
+  for (let i = 0; i < knots.length; i++) {
+    const d = (knots[i].x - 0.5) ** 2 + (knots[i].y - 0.52) ** 2;
+    if (d < seatD) {
+      seatD = d;
+      seat = i;
+    }
+  }
+  const links: Array<[number, number]> = [];
+  for (let i = 0; i < knots.length; i++) {
+    const near: Array<{ j: number; d: number }> = [];
+    for (let j = 0; j < knots.length; j++) {
+      if (j === i) continue;
+      near.push({ j, d: (knots[j].x - knots[i].x) ** 2 + (knots[j].y - knots[i].y) ** 2 });
+    }
+    near.sort((a, b) => a.d - b.d);
+    for (let n = 0; n < 2; n++) {
+      const a = Math.min(i, near[n].j);
+      const b = Math.max(i, near[n].j);
+      if (!links.some(([p, q]) => p === a && q === b)) links.push([a, b]);
+    }
+  }
+
+  function renderFrame(ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void {
+    const m = Math.min(w, h);
+    ctx.fillStyle = rgba(NIGHT, 1);
+    ctx.fillRect(0, 0, w, h);
+
+    const e = easeInOut(u);
+    const seatX = knots[seat].x * w;
+    const seatY = knots[seat].y * h;
+    const cx = lerp(w / 2, seatX, smoothstep(0.25, 0.85, u));
+    const cy = lerp(h / 2, seatY, smoothstep(0.25, 0.85, u));
+    // the whole journey is one retreat: the disc's scale falls two orders
+    const scale = m * 0.62 * Math.pow(0.055, e);
+
+    // the web arrives only once the frame is wide enough to mean it
+    const webA = smoothstep(0.42, 0.85, u);
+    if (webA > 0.01) {
+      ctx.lineWidth = 1;
+      for (const [a, b] of links) {
+        ctx.strokeStyle = rgba([140, 176, 206], 0.3 * webA);
+        ctx.beginPath();
+        ctx.moveTo(knots[a].x * w, knots[a].y * h);
+        ctx.lineTo(knots[b].x * w, knots[b].y * h);
+        ctx.stroke();
+      }
+      for (let i = 0; i < knots.length; i++) {
+        const kn = knots[i];
+        const warm = i % 5 === 0;
+        blitGlow(
+          ctx,
+          warm ? warmKnotSprite : coolKnotSprite,
+          kn.x * w,
+          kn.y * h,
+          5 + kn.m * 9,
+          (warm ? 0.4 : 0.3) * webA,
+        );
+      }
+    }
+
+    // the spiral, at whatever size the retreat has left it
+    if (scale > 2.2) {
+      drawSpiral(ctx, pts, cx, cy, scale, 0.62, 0.35 + u * 1.1, 1 - 0.25 * webA, 1);
+    } else {
+      // small enough to be a node: one luminous grain among the others
+      blitGlow(ctx, nodeSprite, cx, cy, 10, 0.95);
+    }
+
+    vignette(ctx, w, h);
+  }
+
+  return { renderFrame };
+}
+
+function makeFilmFor(spec: PassageSpec): Film | null {
+  if (spec.film === "arm") return makeArmFilm();
+  if (spec.film === "node") return makeNodeFilm();
+  return makeFilm(PASSAGE_SEED);
 }
 
 // ——— The host and player ————————————————————————————————————————————
@@ -515,7 +916,7 @@ function PassagePlayer({
   useEffect(() => {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext("2d");
-    const film = ctx ? makeFilm(PASSAGE_SEED) : null;
+    const film = ctx ? makeFilmFor(passage.spec) : null;
     if (!canvas || !ctx || !film) {
       // No canvas — travel still happens, just without the film.
       try {
