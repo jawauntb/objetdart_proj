@@ -7,19 +7,19 @@ import ScaleTravel from "@/components/ScaleTravel";
 import MetaNavigator from "@/components/MetaNavigator";
 import { getFieldAudio } from "@/lib/audio";
 
-const DropSphere = dynamic(() => import("@/components/DropSphere"), { ssr: false });
+const CoastBeach = dynamic(() => import("@/components/CoastBeach"), { ssr: false });
 
-export default function DropPage() {
+export default function CoastPage() {
   useEffect(() => {
-    getFieldAudio().setAmbientProfile("aphros");
+    getFieldAudio().setAmbientProfile("ocean");
   }, []);
 
   return (
     <>
       <SiteHeader />
-      <DropSphere />
-      <ScaleTravel route="/drop" />
-      <MetaNavigator route="/drop" />
+      <CoastBeach />
+      <ScaleTravel route="/coast" />
+      <MetaNavigator route="/coast" />
     </>
   );
 }

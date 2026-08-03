@@ -193,6 +193,7 @@ assert.equal(entryScaleFor("/colophon"), null);
   assert.equal(travelNeighbor("atlas", 1), "stars", "the map recedes into the sky");
   assert.equal(travelNeighbor("atlas", -1), "olympus", "the map descends onto the peak");
   assert.equal(travelNeighbor("olympus", -1), "coast", "the peak descends through fog to the sea");
+  assert.equal(travelNeighbor("olympus", 1), "atlas", "the peak rises onto the map");
   assert.equal(travelNeighbor("stars", -1), "atlas", "the sky descends onto the map");
   assert.equal(travelNeighbor("manifold", 1), null, "the axis ends above the manifold");
   assert.equal(travelNeighbor("manifold", -1), "space", "the fold descends into the web");
@@ -231,12 +232,12 @@ assert.equal(entryScaleFor("/colophon"), null);
   const { travelOptions } = loadTsModule("src/lib/scale.ts");
   assert.deepEqual(
     Array.from(travelOptions("atlas", -1, {}), (b) => b.id),
-    ["coast", "earth"],
-    "the map opens inward onto the shore first, then the ground",
+    ["olympus", "earth"],
+    "the map opens inward onto the peak first, then the ground",
   );
   assert.deepEqual(
     Array.from(travelOptions("atlas", -1, { atlas: "earth" }), (b) => b.id),
-    ["earth", "coast"],
+    ["earth", "olympus"],
     "memory reorders the offer, never removes a door",
   );
   assert.deepEqual(
@@ -270,8 +271,8 @@ assert.equal(entryScaleFor("/colophon"), null);
   // life ladder and the vistas were declared must still work now, resolving
   // through the routeless addresses to the nearest built room.
   for (const [from, dir, expected] of [
-    ["atlas", -1, "coast"], // through /olympus
-    ["coast", 1, "atlas"], // through /olympus
+    ["atlas", -1, "olympus"], // peak is built
+    ["coast", 1, "olympus"], // peak stands above the fog
     ["flowers", -1, "cells"], // through /tissue
     ["manifold", -1, "stars"], // through /space
   ]) {
@@ -281,9 +282,20 @@ assert.equal(entryScaleFor("/colophon"), null);
   }
   assert.deepEqual(
     Array.from(travelOptions("coast", 1, {}), (b) => b.id),
-    ["atlas"],
-    "no fork, no cycling",
+    ["olympus", "earth"],
+    "the shore rises to the peak, and opens laterally onto the land",
   );
+  assert.deepEqual(
+    Array.from(travelOptions("earth", -1, {}), (b) => b.id),
+    ["flowers", "coast", "olympus"],
+    "the ground opens onto the garden, the beach, and the mountain",
+  );
+  assert.equal(bandAt(entryScaleFor("/ocean")).id, "coast");
+  assert.equal(bandAt(entryScaleFor("/coast")).id, "coast");
+  assert.equal(bandAt(entryScaleFor("/seed")).id, "drop");
+  assert.equal(bandAt(entryScaleFor("/clouds")).id, "olympus");
+  assert.equal(bandAt(entryScaleFor("/mountain")).id, "olympus");
+  assert.equal(bandAt(entryScaleFor("/birds")).id, "birds");
   for (const band of SCALE_BANDS) {
     for (const dir of [1, -1]) {
       for (const opt of travelOptions(band.id, dir, {})) {

@@ -8,7 +8,9 @@ export type SiteIconKey =
   | "atoms"
   | "beam"
   | "beyond"
+  | "birds"
   | "cells"
+  | "coast"
   | "organics"
   | "dna"
   | "charts"
@@ -30,6 +32,7 @@ export type SiteIconKey =
   | "light"
   | "loom"
   | "manifold"
+  | "mountain"
   | "movement"
   | "nucleons"
   | "ocean"
@@ -41,6 +44,7 @@ export type SiteIconKey =
   | "quarks"
   | "reading"
   | "relativity"
+  | "seed"
   | "signal"
   | "sine"
   | "stars"
@@ -164,6 +168,19 @@ export const SITE_ICON_VISUALS = {
     accent2: "#e0a2ff",
     ink: "#e8f7ff",
   },
+  birds: {
+    title: "Birds",
+    description: "a murmuration over the meadow",
+    path: "/birds",
+    shortName: "birds",
+    kind: "growth",
+    bg: "#8eb0c8",
+    bg2: "#dfe6c8",
+    glow: "#f4f0e0",
+    accent: "#2a2a30",
+    accent2: "#8fa86a",
+    ink: "#1c2420",
+  },
   cells: {
     title: "Cells",
     description: "the plasm keeps its own tide",
@@ -280,6 +297,19 @@ export const SITE_ICON_VISUALS = {
     accent: "#f5f7fb",
     accent2: "#b7c6de",
     ink: "#f7fbff",
+  },
+  coast: {
+    title: "Coast",
+    description: "the beach between land and sea",
+    path: "/coast",
+    shortName: "coast",
+    kind: "waves",
+    bg: "#7eb0d4",
+    bg2: "#cfe3f0",
+    glow: "#fff8e8",
+    accent: "#d2b98c",
+    accent2: "#2e6a86",
+    ink: "#1a2a30",
   },
   coin: {
     title: "Coin",
@@ -476,6 +506,19 @@ export const SITE_ICON_VISUALS = {
     accent2: "#8fb5e8",
     ink: "#eef4ff",
   },
+  mountain: {
+    title: "Mountain",
+    description: "the peak above the fog",
+    path: "/mountain",
+    shortName: "mountain",
+    kind: "earth",
+    bg: "#6a7a90",
+    bg2: "#3a342c",
+    glow: "#f0f4f8",
+    accent: "#d8d5d0",
+    accent2: "#8a8478",
+    ink: "#f7f4ee",
+  },
   movement: {
     title: "Movement",
     description: "a mechanical watch in three dimensions",
@@ -618,6 +661,19 @@ export const SITE_ICON_VISUALS = {
     accent: "#e7ac52",
     accent2: "#8fb5e8",
     ink: "#eaf3ff",
+  },
+  seed: {
+    title: "Seed",
+    description: "an embryo in dark soil",
+    path: "/seed",
+    shortName: "seed",
+    kind: "growth",
+    bg: "#0a0e0c",
+    bg2: "#1a140f",
+    glow: "#f3d77a",
+    accent: "#96be64",
+    accent2: "#6a4a28",
+    ink: "#f4ecd8",
   },
   signal: {
     title: "Signal",

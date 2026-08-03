@@ -7,19 +7,19 @@ import ScaleTravel from "@/components/ScaleTravel";
 import MetaNavigator from "@/components/MetaNavigator";
 import { getFieldAudio } from "@/lib/audio";
 
-const DropSphere = dynamic(() => import("@/components/DropSphere"), { ssr: false });
+const BirdsFlock = dynamic(() => import("@/components/BirdsFlock"), { ssr: false });
 
-export default function DropPage() {
+export default function BirdsPage() {
   useEffect(() => {
-    getFieldAudio().setAmbientProfile("aphros");
+    getFieldAudio().setAmbientProfile("wind");
   }, []);
 
   return (
     <>
       <SiteHeader />
-      <DropSphere />
-      <ScaleTravel route="/drop" />
-      <MetaNavigator route="/drop" />
+      <BirdsFlock />
+      <ScaleTravel route="/birds" />
+      <MetaNavigator route="/birds" />
     </>
   );
 }

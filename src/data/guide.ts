@@ -224,10 +224,31 @@ export const GUIDE_ROOMS: GuideRoom[] = [
 
   // --- water ---
   {
+    key: "coast",
+    title: "the beach · land meets sea",
+    href: "/coast",
+    scale: "the coast band — between birds and the mountain",
+    essence: "a living beach — wet sand, foam lace, a tide line, dunes — the shore that joins the land to the deep.",
+    moves: [
+      "tap → foam and a note at the waterline",
+      "hold (dwell) → plants a shell in the sand; ceremony keeps it",
+      "drag → draws a groove that the tide will forget",
+      "scrub → stirs a lace of foam along the swash",
+      "three-finger drag → wind across the beach",
+      "tilt / shake (once invited) → the horizon leans, or sand kicks into spray",
+      "two-finger hold to dwell → opens the shore's peer ring (coast · ocean · tide · waves)",
+    ],
+    finds: [
+      "the beach is the coast band's home; the deep, the tide, and the ripple tank sit beside it as peers",
+      "earth opens a lateral door down onto this shore — press, release, press again at the wall",
+    ],
+    keeps: "the shells you plant in the sand",
+  },
+  {
     key: "ocean",
     title: "the deep · dive down",
     href: "/ocean",
-    scale: "the coast band — between a drop and the atlas",
+    scale: "the coast band — peer of the beach, between a drop and the atlas",
     essence: "the whole body of water, and a dive straight down through it, from sunlit surface to the abyss.",
     moves: [
       "tap → a ripple at the surface, or a bioluminescent spark in the deep",
@@ -236,6 +257,7 @@ export const GUIDE_ROOMS: GuideRoom[] = [
       "two-finger drag, vertical → dives the camera down the water column",
       "three-finger drag / hold → wind, or the whole sea slowed to a quarter speed",
       "tilt / shake (once invited) → the sea leans and churns with the real device",
+      "two-finger hold to dwell → opens the shore peer ring toward the beach",
     ],
     finds: [
       "depth gates the vocabulary — planting only works near the surface, the abyss is deliberately quiet",
@@ -355,17 +377,41 @@ export const GUIDE_ROOMS: GuideRoom[] = [
     key: "clouds",
     title: "olympus",
     href: "/clouds",
+    scale: "the olympus band — peer of the mountain, between the coast and the atlas",
     essence: "the cloud floor — four banks of sky running a two-minute day, with a drifting chorus of air glyphs and weather you can gather by hand.",
     moves: [
       "tap → a cloud puff, or a whoosh from whichever glyph you touched",
       "hold, gathering charge → releases as a storm cell; held to the ceremony tier, the storm is kept with lightning",
       "drag → shears the wind locally; three fingers race the whole sky",
       "the sun/moon glyph → advances the day by a quarter turn",
+      "two-finger hold to dwell → opens the peak peer ring toward the mountain",
     ],
     finds: [
       "a storm's strength is exactly proportional to how long you held past the threshold",
       "the day cycle genuinely drives the palette — labels and tooltips flip between light and dark paper as it turns",
+      "the cloud floor and the mountain share one scale address — pinch travels the axis; the peer ring steps sideways",
     ],
+  },
+  {
+    key: "mountain",
+    title: "the peak above the fog",
+    href: "/mountain",
+    scale: "the olympus band — between the coast and the atlas",
+    essence: "a monumental peak — ridge, snow cap, mist, scree, and cairns you stack by hand.",
+    moves: [
+      "tap → an echo whose pitch follows the elevation",
+      "hold → places a cairn; ceremony stacks it taller",
+      "twist → turns the lens from felt mountain to contour diagram",
+      "scrub → clears a breath of fog",
+      "three-finger drag → gathers or clears weather",
+      "tilt / shake (once invited) → the massif leans, or scree loosens down the flank",
+      "two-finger hold to dwell → opens the peak peer ring toward the cloud floor",
+    ],
+    finds: [
+      "earth opens a lateral door down onto the mountain — press, release, press again",
+      "the cloud floor sits beside the peak as a peer, not above it on the pinch axis",
+    ],
+    keeps: "the cairns you stacked",
   },
   {
     key: "aphros",
@@ -391,7 +437,7 @@ export const GUIDE_ROOMS: GuideRoom[] = [
   {
     key: "flowers",
     title: "petals · symmetry",
-    scale: "the flowers band — between a drop and the coast",
+    scale: "the flowers band — between a drop and the birds",
     href: "/flowers",
     essence: "a dark garden where every flower is a deterministic species decoded from a seed, grown and bloomed entirely by hand.",
     moves: [
@@ -401,12 +447,35 @@ export const GUIDE_ROOMS: GuideRoom[] = [
       "drag → a breeze that sways nearby heads",
       "twist → turns the lens from felt garden to botanical diagram",
       "scrub → stirs pollen into the air",
+      "two-finger hold to dwell → opens the meadow peer ring toward the birds",
     ],
     finds: [
       "on a seeded daily schedule, flowers volunteer and live out a whole life unattended, faster when time isn't dilated",
       "the same botany decodes /growth's blossoms — a species opens the same way in both rooms",
+      "earth opens downward onto this garden — the ground's first inward door",
     ],
     keeps: "the flowers you've deliberately planted (volunteers don't persist)",
+  },
+  {
+    key: "birds",
+    title: "a murmuration",
+    href: "/birds",
+    scale: "the birds band — between flowers and the coast",
+    essence: "a living flock over a soft meadow-horizon — boids that startle, roost, and lean with the wind.",
+    moves: [
+      "tap → startles the nearest birds away from your hand",
+      "hold → roosts the nearest bird onto a perch; ceremony settles it deeper",
+      "drag → shears the wind the flock answers",
+      "scrub → retunes their call",
+      "three-finger drag → weather across the sky",
+      "tilt / shake (once invited) → the flock leans, or scatters",
+      "two-finger hold to dwell → opens the meadow peer ring toward the flowers",
+    ],
+    finds: [
+      "flock count softens with frame budget — the murmuration thins rather than janks",
+      "birds and flowers share a lateral door at meadow scale",
+    ],
+    keeps: "how many times a bird has roosted for you",
   },
   {
     key: "cells",
@@ -619,10 +688,12 @@ export const GUIDE_ROOMS: GuideRoom[] = [
       "long-press → compresses the rock, blooming a metamorphic glow",
       "tap or long-press the seismograph strip → a quake, rippling through the trace",
       "the stratum buttons → jump straight to any layer",
+      "pinch through the inward wall → the garden first; press again for the beach or the mountain",
     ],
     finds: [
       "merely moving your hand across the page draws on the seismograph — it's a real integrator, not decoration",
       "a quake's spike genuinely rings back and forth on the trace rather than just decaying",
+      "the ground keeps three inward doors — flowers, coast, olympus — cycled by repeated wall-press",
     ],
   },
   {
@@ -903,12 +974,34 @@ export const GUIDE_ROOMS: GuideRoom[] = [
       "knock the case (once invited) → one concentric shudder rings through every bead",
       "lay the phone face-down → night, and the water sleeps until you turn it back",
       "arrows → sink the lens and shove the water; shift with an arrow → flicks a droplet clear; enter → pokes the bead, and held to the ceremony stills it",
+      "two-finger hold to dwell → opens the dew peer ring toward a seed",
     ],
     finds: [
       "each of the nine microscopic species only fades in at its own depth, so diving in is genuinely discovering",
       "pulling a droplet off takes real force — speed, stretch, and size all have to agree at once",
       "a mouse hovering near the bead is felt before it lands: the surface leans toward the cursor and the life inside notices",
     ],
+  },
+  {
+    key: "seed",
+    title: "an embryo in dark soil",
+    href: "/seed",
+    scale: "the drop band — peer of the drop, between cells and flowers",
+    essence: "a single living seed in dark soil — husk, radicle, cotyledons — grown, rattled, and split by hand.",
+    moves: [
+      "tap → pokes the seed and rings a low note",
+      "hold → grows the radicle; ceremony splits the husk",
+      "drag → nudges its lean",
+      "scrub → stirs the soil around it",
+      "three-finger tap → a soft pulse through the field",
+      "tilt / shake / knock / flip (once invited) → lean, rattle, shudder, or sleep",
+      "two-finger hold to dwell → opens the dew peer ring toward the drop",
+    ],
+    finds: [
+      "growth deepens with how hard and how long you hold — a brief touch and a ceremony are different lives",
+      "a seed and a drop share one scale; the peer ring steps between them without leaving the band",
+    ],
+    keeps: "how far this seed has grown, and how many times it has split",
   },
   {
     key: "coin",
