@@ -581,8 +581,9 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
     ],
     finds: [
       "each of the thirteen kinds keeps its own silhouette and marks: hooked amazon beak, cockatiel crest, falcon malar and pointed wings, red-tailed fan, mallard spatulate bill, chicken comb, tall emu, goldfinch notch, sparrow bib, hummingbird needle, scarlet sickle bill, peacock eye-spots, paradise gold cape",
+      "shared across every body: an eye with pupil and glint, breast ruffles, feather barbs on open wings, and a soft mantle sheen — species only customize beak, crest, train and cape",
       "ducks sit low in the pond, hummingbirds blur at the fruiting canopy, raptors cut pointed wings through the upper air, peacocks and paradise birds open plumes, emus stand tall on the grass",
-      "the meadow under the horizon is one sky shader (tree, fruit, pond, hay, grass, clouds); the birds are instanced SDF quads with species accents and a dark rim — not images, not identical point sprites",
+      "the meadow is the same camera as the birds — a ground-plane ray with foreshortened grass blades, a circular pond and a projected tree at the flock's places; the birds are instanced SDF quads that grow nearer and keep a dark rim",
       "the sound is the order parameter and nothing else: count the partials and you can read back how gathered the flock is — one animal is the harmonic series exactly, k× the fundamental",
       "a scattered flock calls more often than a gathered one, so the rate of the chatter is a second reading of the same number",
       "the wave of wingbeats after a knock crosses the sky rather than firing at once — the flock is wide, and the news takes time",

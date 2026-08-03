@@ -27,8 +27,11 @@
  * clock, a tap is the tutti.
  *
  * The living aviary uses instanced billboard quads with per-kind SDF
- * silhouettes: large readable birds, still one WebGL pass and one rAF. No p5,
- * no animation library, no image assets (plan §3).
+ * silhouettes (shared eye / barb / ruffle primitives, species-custom beaks
+ * and trains): large readable birds, still one WebGL pass and one rAF. The
+ * meadow is the same camera as the birds — a ground-plane ray with foreshortened
+ * grass blades, pond and tree at the flock's PLACES. No p5, no animation
+ * library, no image assets (plan §3).
  *
  * The flock's character persists in `objetdart:birds:v1` with the quiet clear
  * at the bottom. Pinch is unbound — ScaleTravel owns it.
@@ -70,6 +73,7 @@ import {
   orderParameter,
   partialFreq,
   partialsForOrder,
+  PLACES,
   roostNearest,
   seedAviary,
   seasonGoal,
@@ -129,6 +133,18 @@ uniform float u_breath;
 uniform float u_time;
 uniform vec2 u_viewOffset;
 uniform float u_night;
+uniform mat3 u_view;
+uniform float u_camDist;
+uniform float u_focalX;
+uniform float u_focalY;
+
+// habitat anchors — same metres as flock.PLACES
+const float GROUND_Y = ${PLACES.grass.y.toFixed(2)};
+const vec2 POND_XZ = vec2(${PLACES.pond.x.toFixed(1)}, ${PLACES.pond.z.toFixed(1)});
+const vec2 HAY_XZ = vec2(${PLACES.hay.x.toFixed(1)}, ${PLACES.hay.z.toFixed(1)});
+const vec2 TREE_XZ = vec2(${PLACES.tree.x.toFixed(1)}, ${PLACES.tree.z.toFixed(1)});
+const float TREE_Y = ${PLACES.tree.y.toFixed(2)};
+const float CELL = 0.55;
 
 float hash21(vec2 p) {
   p = fract(p * vec2(123.34, 456.21));
@@ -146,19 +162,76 @@ float noise(vec2 p) {
   return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
 }
 
+// view → world (u_view is Rx·Ry, column-major)
+vec3 viewToWorld(vec3 v) {
+  return vec3(
+    u_view[0][0] * v.x + u_view[0][1] * v.y + u_view[0][2] * v.z,
+    u_view[1][0] * v.x + u_view[1][1] * v.y + u_view[1][2] * v.z,
+    u_view[2][0] * v.x + u_view[2][1] * v.y + u_view[2][2] * v.z
+  );
+}
+vec3 worldToView(vec3 w) {
+  return u_view * w;
+}
+// project a world point into the same NDC the birds use
+vec2 projectWorld(vec3 w) {
+  vec3 v = worldToView(w);
+  float z = max(v.z + u_camDist, 1.0);
+  return vec2(v.x * u_focalX / z, v.y * u_focalY / z) - u_viewOffset;
+}
+// soft distance from a ray (ro + t*rd, t>0) to a capsule segment
+float rayCapsule(vec3 ro, vec3 rd, vec3 a, vec3 b, float rad, float tMax) {
+  vec3 ba = b - a;
+  vec3 oa = ro - a;
+  float baba = max(dot(ba, ba), 1e-5);
+  float bard = dot(ba, rd);
+  float baoa = dot(ba, oa);
+  float rdoa = dot(rd, oa);
+  float rdrd = max(dot(rd, rd), 1e-5);
+  float denom = baba * rdrd - bard * bard;
+  float t = abs(denom) < 1e-5 ? 0.0 : (baba * rdoa - baoa * bard) / denom;
+  t = clamp(t, 0.0, tMax);
+  float h = clamp((baoa + t * bard) / baba, 0.0, 1.0);
+  float dist = length(oa + rd * t - ba * h);
+  return 1.0 - smoothstep(rad * 0.55, rad + 0.04, dist);
+}
+
 void main() {
+  // roll the frame the same way the vessel rolls the birds
   vec2 c = vUv - 0.5;
   float cs = cos(u_roll), sn = sin(u_roll);
   float y = (c.x * sn + c.y * cs) + 0.5;
   float x = (c.x * cs - c.y * sn) + 0.5;
-  x += u_viewOffset.x * 0.22;
-  y += u_viewOffset.y * 0.14;
-  // the real horizon, where the camera's own level lands on the screen
+  // NDC matching bird centers (aspect already folded into u_focalX)
+  vec2 ndc = vec2(x * 2.0 - 1.0, y * 2.0 - 1.0);
+
+  // camera ray in VIEW space: camera at (0,0,-camDist), looking +z
+  vec3 ro = vec3(0.0, 0.0, -u_camDist);
+  vec3 rd = normalize(vec3(
+    (ndc.x + u_viewOffset.x) / max(u_focalX, 0.2),
+    (ndc.y + u_viewOffset.y) / max(u_focalY, 0.2),
+    1.0
+  ));
+
+  // intersect world ground plane y = GROUND_Y
+  // Wy = viewM col1 · V = cp*Vy + sp*Vz  (viewM[3]=0, [4]=cp, [5]=sp)
+  float cp = u_view[1][1];
+  float sp = u_view[1][2];
+  float denom = cp * rd.y + sp * rd.z;
+  float tHit = -1.0;
+  if (abs(denom) > 1e-4) {
+    tHit = (GROUND_Y + sp * u_camDist) / denom;
+  }
+  bool onGround = tHit > 0.8 && tHit < 220.0 && denom < 0.0;
+
   float a = y - u_horizon;
+  // clearer dusk: warmer low, cooler high, less muddy mid
+  vec3 skyLow = mix(u_low, vec3(0.55, 0.42, 0.30), 0.18);
+  vec3 skyHigh = mix(u_high, vec3(0.04, 0.06, 0.12), 0.25);
   vec3 col = a >= 0.0
-    ? mix(u_low, u_high, smoothstep(0.0, 0.48, a))
-    : mix(u_low, u_ground, smoothstep(0.0, 0.34, -a));
-  col += u_sunTint * 0.08 * exp(-abs(a) * 14.0);
+    ? mix(skyLow, skyHigh, smoothstep(0.0, 0.55, a))
+    : mix(skyLow, u_ground, smoothstep(0.0, 0.4, -a));
+  col += u_sunTint * 0.11 * exp(-abs(a) * 12.0);
   vec2 d2 = (vUv - u_sun.xy) * vec2(u_aspect, 1.0);
   float d = length(d2);
   col += u_sunTint * exp(-d * d * 26.0) * (0.34 + u_breath * 0.09) * u_sun.z;
@@ -171,46 +244,156 @@ void main() {
     col = mix(col, mix(vec3(0.92, 0.90, 0.86), u_sunTint, 0.15), cm * 0.55);
   }
 
-  // —— meadow under the horizon: grass, pond, tree, hay, fruit ——
-  if (a < 0.0) {
-    float g = -a;
-    // grass texture
-    float blades = step(0.72, noise(vec2(x * 40.0 * u_aspect, g * 28.0)));
-    col += vec3(0.04, 0.06, 0.02) * blades * smoothstep(0.0, 0.2, g);
+  // —— meadow on the real ground plane (same camera as the birds) ——
+  if (onGround) {
+    vec3 hitV = ro + rd * tHit;
+    vec3 hitW = viewToWorld(hitV);
+    vec2 xz = hitW.xz;
+    float depth = tHit;
 
-    // pond (right meadow)
-    vec2 pondC = vec2(0.72, u_horizon - 0.10);
-    vec2 pq = (vec2(x, y) - pondC) * vec2(u_aspect * 1.2, 1.9);
-    float pd = length(pq);
-    float pond = 1.0 - smoothstep(0.085, 0.105, pd);
-    float shore = smoothstep(0.085, 0.105, pd) * (1.0 - smoothstep(0.105, 0.125, pd));
-    float ripple = noise(vec2(x * 14.0 + u_time * 0.15, y * 22.0));
-    vec3 water = mix(vec3(0.12, 0.28, 0.34), vec3(0.30, 0.48, 0.46), 0.3 + ripple * 0.4);
-    col = mix(col, vec3(0.42, 0.36, 0.24), shore);
+    // soil + living green, foreshortened by world noise (not screen UV)
+    float soil = noise(xz * 0.11);
+    float patch = noise(xz * 0.35 + 3.1);
+    vec3 dirt = vec3(0.16, 0.12, 0.07);
+    vec3 moss = vec3(0.14, 0.28, 0.12);
+    vec3 bladeGreen = vec3(0.18, 0.38, 0.14);
+    vec3 meadow = mix(dirt, moss, smoothstep(0.28, 0.72, soil));
+    meadow = mix(meadow, bladeGreen, smoothstep(0.45, 0.85, patch) * 0.55);
+    // wetter near the pond
+    float pondDist = length(xz - POND_XZ);
+    meadow = mix(meadow, vec3(0.12, 0.22, 0.14), (1.0 - smoothstep(6.0, 14.0, pondDist)) * 0.35);
+    // aerial perspective toward the horizon colour
+    float hazeG = smoothstep(28.0, 110.0, depth);
+    col = mix(meadow, mix(u_low, u_ground, 0.55), hazeG * 0.72);
+
+    // pond — circle on the ground plane (true ellipse after foreshortening)
+    float pondR = 5.8;
+    float pd = pondDist / pondR;
+    float pond = 1.0 - smoothstep(0.92, 1.08, pd);
+    float shore = smoothstep(0.88, 1.0, pd) * (1.0 - smoothstep(1.0, 1.22, pd));
+    float ripple = noise(xz * 0.55 + vec2(u_time * 0.12, u_time * 0.07));
+    vec3 water = mix(vec3(0.10, 0.26, 0.32), vec3(0.28, 0.46, 0.44), 0.25 + ripple * 0.45);
+    water = mix(water, u_sunTint, 0.08 + ripple * 0.06);
+    col = mix(col, vec3(0.40, 0.34, 0.22), shore);
     col = mix(col, water, pond);
 
-    // hay pile (far right)
-    vec2 hayC = vec2(0.88, u_horizon - 0.16);
-    float hay = 1.0 - smoothstep(0.055, 0.075, length((vec2(x, y) - hayC) * vec2(u_aspect * 1.5, 2.4)));
-    col = mix(col, mix(vec3(0.62, 0.48, 0.22), vec3(0.80, 0.64, 0.30), noise(vec2(x * 50.0, y * 40.0))), hay);
+    // hay pile — warm mound on the plane
+    float hayD = length((xz - HAY_XZ) / vec2(4.2, 3.4));
+    float hay = 1.0 - smoothstep(0.85, 1.15, hayD);
+    vec3 hayCol = mix(vec3(0.58, 0.44, 0.18), vec3(0.78, 0.62, 0.28), noise(xz * 1.4));
+    col = mix(col, hayCol, hay * (1.0 - pond));
 
-    // tree (left) — trunk + canopy + fruit
-    float trunkX = 0.22;
-    float trunk = (1.0 - smoothstep(0.008, 0.016, abs((x - trunkX) * u_aspect)))
-      * smoothstep(u_horizon - 0.22, u_horizon - 0.18, y)
-      * (1.0 - smoothstep(u_horizon - 0.02, u_horizon + 0.01, y));
-    col = mix(col, vec3(0.22, 0.14, 0.08), trunk);
-    float canopy = 0.0;
-    canopy = max(canopy, 1.0 - smoothstep(0.09, 0.11, length((vec2(x, y) - vec2(0.22, u_horizon + 0.02)) * vec2(u_aspect, 1.0))));
-    canopy = max(canopy, 1.0 - smoothstep(0.07, 0.09, length((vec2(x, y) - vec2(0.17, u_horizon + 0.05)) * vec2(u_aspect, 1.0))));
-    canopy = max(canopy, 1.0 - smoothstep(0.07, 0.09, length((vec2(x, y) - vec2(0.27, u_horizon + 0.04)) * vec2(u_aspect, 1.0))));
-    vec3 leaf = mix(vec3(0.10, 0.26, 0.12), vec3(0.22, 0.40, 0.16), noise(vec2(x * 18.0, y * 16.0)));
-    col = mix(col, leaf, canopy * 0.92);
-    for (int i = 0; i < 6; i++) {
-      float fi = float(i);
-      vec2 fc = vec2(0.16 + fi * 0.022, u_horizon - 0.01 + hash21(vec2(fi, 3.0)) * 0.06);
-      float fruit = (1.0 - smoothstep(0.008, 0.014, length((vec2(x, y) - fc) * vec2(u_aspect, 1.0)))) * canopy;
-      col = mix(col, mix(vec3(0.72, 0.18, 0.12), vec3(0.86, 0.52, 0.16), hash21(vec2(fi, 8.0))), fruit);
+    // foreshortened grass carpet across the whole plane (not a circular island)
+    {
+      // anisotropic: denser in world-x, compressed along view depth so rows
+      // pack toward the horizon the way real turf does
+      float row = xz.x * 1.7 + xz.y * 0.35;
+      float colN = xz.y * 2.4 - xz.x * 0.2;
+      float turf = noise(vec2(row, colN * mix(1.0, 3.5, hazeG)));
+      float bladesFar = step(0.62, turf) * (1.0 - pond);
+      vec3 turfA = vec3(0.12, 0.30, 0.10);
+      vec3 turfB = vec3(0.22, 0.40, 0.14);
+      vec3 turfC = vec3(0.34, 0.42, 0.16);
+      col = mix(col, mix(turfA, turfB, turf), 0.35 * (1.0 - pond));
+      col = mix(col, turfC, bladesFar * 0.28 * (1.0 - hazeG * 0.5));
+    }
+
+    // near-field upright blades — thin hairline stems under the birds' scale
+    float bladeAmt = 0.0;
+    vec3 bladeCol = vec3(0.0);
+    if (depth < 48.0 && pond < 0.55) {
+      float cellSize = mix(0.28, 0.55, smoothstep(10.0, 40.0, depth));
+      vec2 base = floor(xz / cellSize);
+      float dens = mix(0.97, 0.55, smoothstep(12.0, 45.0, depth));
+      float nearFade = 1.0 - smoothstep(32.0, 48.0, depth);
+      for (int i = -2; i <= 2; i++) {
+        for (int j = -2; j <= 2; j++) {
+          vec2 cell = base + vec2(float(i), float(j));
+          float rnd = hash21(cell);
+          if (rnd <= dens) {
+            vec2 bp = (cell + vec2(hash21(cell + 1.3), hash21(cell + 2.7))) * cellSize;
+            // keep blades shorter than a sparrow so they sit under the fauna
+            float ht = mix(0.35, 0.95, hash21(cell + 4.1));
+            ht *= mix(1.0, 0.4, smoothstep(14.0, 42.0, depth));
+            float sway = sin(u_time * (1.1 + rnd * 0.8) + rnd * 40.0 + bp.x * 0.2) * 0.22 * ht;
+            vec3 A = vec3(bp.x, GROUND_Y, bp.y);
+            vec3 B = vec3(bp.x + sway, GROUND_Y + ht, bp.y + sway * 0.2);
+            float zA = worldToView(A).z + u_camDist;
+            if (zA >= 3.0) {
+              vec2 pa = projectWorld(A);
+              vec2 pb = projectWorld(B);
+              vec2 spv = ndc - pa;
+              vec2 ba = pb - pa;
+              float h = clamp(dot(spv, ba) / max(dot(ba, ba), 1e-5), 0.0, 1.0);
+              float stem = length(spv - ba * h);
+              float w = mix(0.0022, 0.0007, smoothstep(10.0, 45.0, zA));
+              w *= mix(1.2, 0.25, h);
+              float b = 1.0 - smoothstep(w, w + 0.0018, stem);
+              float nearCell = 1.0 - smoothstep(cellSize * 1.3, cellSize * 2.2, length(xz - bp));
+              b *= nearCell * nearFade;
+              if (b > bladeAmt) {
+                bladeAmt = b;
+                bladeCol = mix(vec3(0.08, 0.28, 0.08), vec3(0.24, 0.44, 0.13), hash21(cell + 5.5));
+                bladeCol = mix(bladeCol, vec3(0.55, 0.50, 0.22), hash21(cell + 6.2) * 0.4 * h);
+              }
+            }
+          }
+        }
+      }
+      col = mix(col, bladeCol, clamp(bladeAmt, 0.0, 1.0) * 0.9);
+    }
+  } else if (a < 0.0) {
+    // under the painted horizon but ray missed the plane — soft falloff
+    col = mix(col, u_ground, 0.55);
+  }
+
+  // tree — trunk + canopy + fruit, projected with the bird camera
+  {
+    vec3 trunkBase = vec3(TREE_XZ.x, GROUND_Y, TREE_XZ.y);
+    vec3 trunkTop = vec3(TREE_XZ.x, TREE_Y + 3.2, TREE_XZ.y);
+    vec2 pb = projectWorld(trunkBase);
+    vec2 pt = projectWorld(trunkTop);
+    // only draw when both ends are in front
+    vec3 vb = worldToView(trunkBase);
+    vec3 vt = worldToView(trunkTop);
+    if (vb.z + u_camDist > 4.0 && vt.z + u_camDist > 4.0) {
+      vec2 pa = ndc - pb;
+      vec2 ba = pt - pb;
+      float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-5), 0.0, 1.0);
+      float trunkDist = length(pa - ba * h);
+      float trunkW = mix(0.012, 0.006, h);
+      float trunk = 1.0 - smoothstep(trunkW, trunkW + 0.01, trunkDist);
+      col = mix(col, vec3(0.24, 0.15, 0.08), trunk * 0.95);
+
+      // canopy lobes in world space, projected as soft discs
+      for (int k = 0; k < 4; k++) {
+        float fk = float(k);
+        vec3 cc = vec3(
+          TREE_XZ.x + (fk - 1.5) * 1.6,
+          TREE_Y + 3.8 + hash21(vec2(fk, 2.0)) * 1.4,
+          TREE_XZ.y + sin(fk * 1.7) * 1.8
+        );
+        vec2 pc = projectWorld(cc);
+        float zc = max(worldToView(cc).z + u_camDist, 1.0);
+        float rad = 3.2 * u_focalY / zc;
+        float canopy = 1.0 - smoothstep(rad * 0.75, rad, length(ndc - pc));
+        vec3 leaf = mix(vec3(0.10, 0.28, 0.12), vec3(0.22, 0.42, 0.16), hash21(vec2(fk, 4.0)));
+        col = mix(col, leaf, canopy * 0.88);
+      }
+      // fruit under the canopy
+      for (int i = 0; i < 6; i++) {
+        float fi = float(i);
+        vec3 fc = vec3(
+          TREE_XZ.x - 1.5 + fi * 0.7,
+          TREE_Y + 2.4 + hash21(vec2(fi, 3.0)) * 1.8,
+          TREE_XZ.y - 0.8 + hash21(vec2(fi, 7.0)) * 1.6
+        );
+        vec2 pf = projectWorld(fc);
+        float zf = max(worldToView(fc).z + u_camDist, 1.0);
+        float fr = 0.55 * u_focalY / zf;
+        float fruit = 1.0 - smoothstep(fr * 0.5, fr, length(ndc - pf));
+        col = mix(col, mix(vec3(0.72, 0.18, 0.12), vec3(0.86, 0.52, 0.16), hash21(vec2(fi, 8.0))), fruit);
+      }
     }
   }
 
@@ -276,8 +459,9 @@ void main() {
   vUv = a_corner;
   vKind = a_meta.z;
   vActivity = act;
-  // birdPx is a HALF-extent in pixels. Full height ≈ 1/20..1/3 of the screen.
-  float birdPx = u_resolution.y * (0.025 + 0.14 * clamp(a_meta.y, 0.0, 1.0));
+  // birdPx is a HALF-extent in pixels, scaled by depth so nearer birds grow.
+  float sizeNorm = clamp(a_meta.y, 0.0, 1.0);
+  float birdPx = u_resolution.y * (0.025 + 0.14 * sizeNorm) * clamp(u_camDist * 0.92 / z, 0.45, 1.85);
   vec2 clipPx = vec2(2.0 / u_resolution.x, 2.0 / u_resolution.y);
   // real depth so nearer birds win the soft blend instead of stacking into mush
   float zNdc = clamp(z / (u_camDist + 120.0), 0.05, 0.98);
@@ -314,6 +498,26 @@ float capsule(vec2 p, vec2 a, vec2 b, float r) {
   float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-5), 0.0, 1.0);
   return 1.0 - smoothstep(r * 0.9, r + 0.024, length(pa - ba * h));
 }
+// —— shared anatomy (every kind reuses these; species only customize placement) ——
+float eyeDot(vec2 p, vec2 c, float s) {
+  float ball = ellipse(p - c, vec2(s * 1.15, s));
+  float pupil = ellipse(p - (c + vec2(s * 0.15, 0.0)), vec2(s * 0.45, s * 0.42));
+  float glint = ellipse(p - (c + vec2(s * 0.28, s * 0.22)), vec2(s * 0.18, s * 0.16));
+  return max(ball, max(pupil, glint * 0.7));
+}
+float featherBarb(vec2 p, vec2 root, vec2 tip, float w) {
+  return capsule(p, root, tip, w);
+}
+// soft body ruffles along the breast / flank
+float ruffle(vec2 p, vec2 c, float span, float amp) {
+  float a = 0.0;
+  for (float i = 0.0; i < 4.0; i += 1.0) {
+    float t = (i + 0.5) / 4.0;
+    vec2 o = c + vec2(-span * 0.5 + span * t, sin(t * 6.2831853 + amp) * 0.04 * amp);
+    a = max(a, ellipse(p - o, vec2(0.055, 0.04)));
+  }
+  return a;
+}
 // hooked upper mandible — parrot / cockatiel
 float hookedBeak(vec2 p, vec2 root, float len) {
   float upper = capsule(p, root, root + vec2(len, -0.02 * len), 0.045 * len / 0.22);
@@ -321,26 +525,53 @@ float hookedBeak(vec2 p, vec2 root, float len) {
   float lower = capsule(p, root + vec2(0.02, -0.04), root + vec2(len * 0.55, -0.06), 0.028);
   return max(upper, max(hook, lower));
 }
-// folded wing tucked against the body (perched)
+// folded wing tucked against the body (perched) with soft primary tips
 float foldedWing(vec2 p, float y) {
-  return ellipse(p - vec2(-0.02, y), vec2(0.22, 0.11));
+  float body = ellipse(p - vec2(-0.02, y), vec2(0.22, 0.11));
+  float tip = featherBarb(p, vec2(-0.12, y - 0.02), vec2(-0.34, y - 0.08), 0.028);
+  return max(body, tip);
 }
-// open flight wing — pointed (falcon) or broad (hawk)
+// open flight wing — pointed (falcon) or broad (hawk), with primary notches
 float flightWing(vec2 p, float side, float open, float pointed) {
   float o = clamp(open, 0.05, 1.2);
   vec2 tip = vec2(side * (0.22 + 0.55 * o), -0.02 - 0.18 * o * (1.0 - 0.35 * pointed));
   vec2 mid = vec2(side * (0.12 + 0.22 * o), 0.04 - 0.04 * o);
   float lobe = ellipse(p - mid, vec2(0.18 + 0.32 * o, 0.07 + 0.10 * o * (1.0 - 0.4 * pointed)));
   float edge = capsule(p, vec2(side * 0.06, 0.02), tip, 0.03 + 0.02 * (1.0 - pointed));
-  return max(lobe, edge);
+  // fingered primaries
+  float fingers = 0.0;
+  for (float i = 0.0; i < 3.0; i += 1.0) {
+    float k = 0.55 + i * 0.14;
+    vec2 ft = tip + vec2(side * 0.08 * o, (i - 1.0) * 0.05 * o);
+    fingers = max(fingers, featherBarb(p, mid * k, ft, 0.018 + 0.01 * (1.0 - pointed)));
+  }
+  return max(lobe, max(edge, fingers));
 }
 float legPair(vec2 p, float stance, float thick) {
   float L = max(capsule(p, vec2(-0.06, -0.22), vec2(-0.08 - 0.04 * stance, -0.72), thick),
                 capsule(p, vec2(0.08, -0.22), vec2(0.10 + 0.04 * stance, -0.72), thick));
-  // simple feet
-  L = max(L, capsule(p, vec2(-0.08 - 0.04 * stance, -0.72), vec2(-0.16 - 0.04 * stance, -0.76), thick * 0.7));
-  L = max(L, capsule(p, vec2(0.10 + 0.04 * stance, -0.72), vec2(0.18 + 0.04 * stance, -0.76), thick * 0.7));
+  // three-toed feet
+  L = max(L, capsule(p, vec2(-0.08 - 0.04 * stance, -0.72), vec2(-0.18 - 0.04 * stance, -0.78), thick * 0.65));
+  L = max(L, capsule(p, vec2(-0.08 - 0.04 * stance, -0.72), vec2(-0.12 - 0.04 * stance, -0.82), thick * 0.55));
+  L = max(L, capsule(p, vec2(0.10 + 0.04 * stance, -0.72), vec2(0.20 + 0.04 * stance, -0.78), thick * 0.65));
+  L = max(L, capsule(p, vec2(0.10 + 0.04 * stance, -0.72), vec2(0.14 + 0.04 * stance, -0.82), thick * 0.55));
   return L;
+}
+// head anchor per kind — where the shared eye sits
+vec2 headOf(float kind) {
+  if (kind < 0.5) return vec2(0.30, 0.18);
+  if (kind < 1.5) return vec2(0.24, 0.14);
+  if (kind < 2.5) return vec2(0.48, 0.04);
+  if (kind < 3.5) return vec2(0.42, 0.04);
+  if (kind < 4.5) return vec2(0.42, 0.14);
+  if (kind < 5.5) return vec2(0.28, 0.30);
+  if (kind < 6.5) return vec2(0.30, 0.78);
+  if (kind < 7.5) return vec2(0.26, 0.10);
+  if (kind < 8.5) return vec2(0.22, 0.08);
+  if (kind < 9.5) return vec2(0.12, 0.06);
+  if (kind < 10.5) return vec2(0.36, 0.48);
+  if (kind < 11.5) return vec2(0.36, 0.50);
+  return vec2(0.22, 0.08);
 }
 
 float birdShape(vec2 p, float kind, float activity, float wing) {
@@ -522,13 +753,25 @@ float birdShape(vec2 p, float kind, float activity, float wing) {
     a = max(a, mix(foldedWing(p, 0.0), flightWing(p, 1.0, open, 0.5), air));
     a = max(a, mix(0.0, flightWing(p, -1.0, open * 0.5, 0.5), air));
   }
+
+  // —— shared life: eye + breast ruffles on every kind ——
+  vec2 head = headOf(kind);
+  float eyeS = kind < 6.5 && kind > 5.5 ? 0.035 : (kind < 9.5 && kind > 8.5 ? 0.028 : 0.04);
+  a = max(a, eyeDot(p, head + vec2(0.02, 0.02), eyeS));
+  // ruffles sit on the breast for grounded poses; quieter in flight
+  float ruf = ruffle(p, vec2(-0.02, -0.06), 0.28, 0.7 + open * 0.4);
+  a = max(a, ruf * mix(0.85, 0.35, air));
   return clamp(a, 0.0, 1.0);
 }
 
 // species marks painted in local bird space — beak, comb, cheek, train, cape…
+// shared: eye paint + feather sheen; custom: everything that names the species
 vec3 speciesInk(vec2 p, float kind, float activity, vec3 base) {
   vec3 c = base;
   float display = step(11.5, activity) * (1.0 - step(12.5, activity));
+  // feather sheen — cool rim along the upper mantle (shared)
+  float sheen = smoothstep(0.18, 0.02, abs(p.y - 0.08)) * smoothstep(0.35, -0.05, p.x);
+  c = mix(c, c * 1.25 + vec3(0.04, 0.05, 0.06), sheen * 0.35);
   if (kind < 0.5) {
     // parrot: warm horn beak + cheek blush
     float beak = smoothstep(0.42, 0.55, p.x) * smoothstep(0.22, -0.05, abs(p.y - 0.04));
@@ -606,6 +849,16 @@ vec3 speciesInk(vec2 p, float kind, float activity, vec3 base) {
                          capsule(p, vec2(-0.06, 0.0), vec2(-0.48, 0.28), 0.04)));
     c = mix(c, vec3(0.92, 0.72, 0.18), cape * 0.92);
   }
+  // eye paint — dark pupil, warm glint (shared; headOf places it)
+  vec2 head = headOf(kind);
+  vec2 ec = head + vec2(0.02, 0.02);
+  float eyeS = kind < 6.5 && kind > 5.5 ? 0.035 : (kind < 9.5 && kind > 8.5 ? 0.028 : 0.04);
+  float ball = ellipse(p - ec, vec2(eyeS * 1.15, eyeS));
+  float pupil = ellipse(p - (ec + vec2(eyeS * 0.15, 0.0)), vec2(eyeS * 0.45, eyeS * 0.42));
+  float glint = ellipse(p - (ec + vec2(eyeS * 0.28, eyeS * 0.22)), vec2(eyeS * 0.18, eyeS * 0.16));
+  c = mix(c, vec3(0.92, 0.90, 0.86), ball * 0.55);
+  c = mix(c, vec3(0.05, 0.05, 0.06), pupil);
+  c = mix(c, vec3(1.0, 0.98, 0.92), glint);
   return c;
 }
 
@@ -623,7 +876,7 @@ void main() {
   float haze = clamp((vDepth - u_hazeFrom) / 180.0, 0.0, 1.0) * u_haze * 0.22;
   float rim = smoothstep(0.14, 0.32, a) * (1.0 - smoothstep(0.40, 0.76, a));
   vec3 col = mix(ink, back, haze);
-  col = mix(col, col * 0.32, rim * 0.9);
+  col = mix(col, col * 0.28, rim * 0.85);
   col += vTint * (1.0 - rim) * 0.08;
   gl_FragColor = vec4(col, clamp(a * vFade * 1.06, 0.0, 1.0));
 }
@@ -728,20 +981,21 @@ export default function Murmuration() {
     let focalX = 1.9;
     const focalY = 1.9;
 
-    const compile = (type: number, src: string) => {
+    const compile = (type: number, src: string, label: string) => {
       const s = gl.createShader(type);
       if (!s) return null;
       gl.shaderSource(s, src);
       gl.compileShader(s);
       if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+        console.warn(`[birds] ${label} compile`, gl.getShaderInfoLog(s));
         gl.deleteShader(s);
         return null;
       }
       return s;
     };
-    const link = (vsrc: string, fsrc: string) => {
-      const vs = compile(gl.VERTEX_SHADER, vsrc);
-      const fs = compile(gl.FRAGMENT_SHADER, fsrc);
+    const link = (vsrc: string, fsrc: string, label: string) => {
+      const vs = compile(gl.VERTEX_SHADER, vsrc, `${label} vert`);
+      const fs = compile(gl.FRAGMENT_SHADER, fsrc, `${label} frag`);
       if (!vs || !fs) return null;
       const prog = gl.createProgram();
       if (!prog) return null;
@@ -750,12 +1004,15 @@ export default function Murmuration() {
       gl.linkProgram(prog);
       gl.deleteShader(vs);
       gl.deleteShader(fs);
-      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) return null;
+      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+        console.warn(`[birds] ${label} link`, gl.getProgramInfoLog(prog));
+        return null;
+      }
       return prog;
     };
 
-    const skyProg = link(SKY_VERT, SKY_FRAG);
-    const birdProg = link(BIRD_VERT, BIRD_FRAG);
+    const skyProg = link(SKY_VERT, SKY_FRAG, "sky");
+    const birdProg = link(BIRD_VERT, BIRD_FRAG, "bird");
     if (!skyProg || !birdProg) {
       setNoGl(true);
       return;
@@ -779,6 +1036,10 @@ export default function Murmuration() {
       time: gl.getUniformLocation(skyProg, "u_time"),
       viewOffset: gl.getUniformLocation(skyProg, "u_viewOffset"),
       night: gl.getUniformLocation(skyProg, "u_night"),
+      view: gl.getUniformLocation(skyProg, "u_view"),
+      camDist: gl.getUniformLocation(skyProg, "u_camDist"),
+      focalX: gl.getUniformLocation(skyProg, "u_focalX"),
+      focalY: gl.getUniformLocation(skyProg, "u_focalY"),
     };
     const uBird = {
       corner: gl.getAttribLocation(birdProg, "a_corner"),
@@ -864,8 +1125,9 @@ export default function Murmuration() {
     let visualT = 0;
     let timeScale = 1;
     let timeScaleTarget = 1;
-    let pitch = -0.06;
-    let pitchTarget = -0.06;
+    // look slightly into the meadow so the ground plane and grass blades read
+    let pitch = -0.10;
+    let pitchTarget = -0.10;
     let yawVel = 0;
     let lastCardinal = Math.round(yaw / (Math.PI / 2));
     let roll = 0;
@@ -1700,7 +1962,12 @@ export default function Murmuration() {
       }
       const sun = sunScreen();
       const horizon = horizonUv();
-      const ground = [low[0] * 0.16 + 0.012, low[1] * 0.16 + 0.014, low[2] * 0.17 + 0.02];
+      // warmer living meadow base — soil under green, not a dead grey wash
+      const ground = [
+        mix(0.10, low[0] * 0.22, 0.55),
+        mix(0.18, low[1] * 0.28, 0.55),
+        mix(0.08, low[2] * 0.18, 0.55),
+      ];
 
       gl.disable(gl.BLEND);
       gl.useProgram(skyProg);
@@ -1719,6 +1986,10 @@ export default function Murmuration() {
       gl.uniform1f(uSky.time, visualT);
       gl.uniform2f(uSky.viewOffset, viewOffsetX, viewOffsetY);
       gl.uniform1f(uSky.night, night);
+      gl.uniformMatrix3fv(uSky.view, false, viewM);
+      gl.uniform1f(uSky.camDist, CAM_DIST);
+      gl.uniform1f(uSky.focalX, focalX);
+      gl.uniform1f(uSky.focalY, focalY);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       gl.disableVertexAttribArray(uSky.pos);
 
