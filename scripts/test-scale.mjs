@@ -385,17 +385,16 @@ assert.equal(entryScaleFor("/colophon"), null);
   assert.equal(routes(-1, "/soil")[0], "/cells", "soil crumbles into the living plasm");
   assert.equal(routes(-1, "/rocks")[0], "/molecules", "rock cleaves into its lattice");
 
-  // The ground's downward fork: garden first, then the strata. /rocks has
-  // shipped, so it now answers as itself; /soil is still an address without
-  // a page and resolves through to the built room of its band — the drop —
-  // never to a 404 and never to a dead wall. When /soil lands too this
-  // becomes ["/flowers", "/rocks", "/soil"].
+  // The ground's downward fork: garden first, then the strata. Both strata
+  // have shipped now, so each answers as itself rather than resolving
+  // through to the drop. The transparency law that carried them while they
+  // were only addresses is pinned below, on the memory case.
   const earthDown = routes(-1, "/earth");
   assert.equal(earthDown[0], "/flowers", "the ground's first door down is still the garden");
   assert.deepEqual(
     earthDown,
-    ["/flowers", "/rocks", "/drop"],
-    "a built stratum answers as itself; an unbuilt one walks through rather than walling",
+    ["/flowers", "/rocks", "/soil"],
+    "the ground opens onto the garden and both of the strata it is made of",
   );
 
   // The strata's own walls (travel FROM an address whose page is unbuilt
@@ -413,7 +412,11 @@ assert.equal(entryScaleFor("/colophon"), null);
   assert.deepEqual(routes(1, "/coast"), ["/mountain", "/earth"], "the shore keeps its peak and its land");
 
   // Tissue stays reachable: the petal still opens into its sheet.
-  assert.deepEqual(routes(-1, "/flowers"), ["/tissue", "/drop"], "a petal opens into the sheet it is made of");
+  assert.deepEqual(
+    routes(-1, "/flowers"),
+    ["/tissue", "/drop", "/soil"],
+    "a petal opens into the sheet it is made of, the dew on it, and the ground it is rooted in",
+  );
 
   // A route with no override is transparent to the layer entirely — the
   // bug: the route grain swallowing band doors for innocent laterals.
@@ -434,8 +437,8 @@ assert.equal(entryScaleFor("/colophon"), null);
   );
   assert.equal(
     routes(1, "/cells", { cells: "/soil" })[0],
-    "/drop",
-    "a door-room memory resolves through its unbuilt address (flips to /soil when it lands)",
+    "/soil",
+    "a door-room memory reopens the room it came from, now that the room exists",
   );
   assert.equal(
     routes(1, "/earth", { earth: "planets" })[0],
@@ -449,8 +452,8 @@ assert.equal(entryScaleFor("/colophon"), null);
   );
   assert.deepEqual(
     routes(1, "/cells"),
-    ["/tissue", "/drop"],
-    "the plasm rises into its sheet, or back into the drop that held it",
+    ["/tissue", "/soil", "/drop"],
+    "the plasm rises into its sheet, the drop that held it, or the soil it crumbled out of",
   );
 
   // Round-trip law at the route grain: every door offered from every
