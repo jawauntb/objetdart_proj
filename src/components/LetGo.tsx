@@ -1,5 +1,8 @@
 "use client";
 
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
+
 /**
  * LetGo — the quiet clear control (RoomTemplate §8c), one shared shape.
  *
@@ -7,7 +10,8 @@
  * button held at bottom-center — the slot the site reserves for it, clear
  * of the candle and sound toggle at bottom-left and any toggles at bottom-
  * right, and clear of the browser's own chrome via the safe-area inset.
- * It renders only while something stands, sits under the candle (z 22 < 25),
+ * It renders only while something stands, sits clear of the candle (bottom-left)
+ * and above the tape that would otherwise swallow its clicks,
  * and is deliberately small so a wandering thumb never finds it by accident
  * — but its hit target stays a full 40px for the hand that means it.
  *
@@ -32,8 +36,18 @@ type LetGoProps = {
 };
 
 export default function LetGo({ label, onLetGo, visible }: LetGoProps) {
-  if (!visible) return null;
-  return (
+  // Portalled to <body>, and that is load-bearing rather than tidiness. Rooms
+  // wrap themselves in a `position: fixed` element, which in Chrome opens a
+  // stacking context whatever its z-index — so a control rendered inside the
+  // room was trapped in that context at an effective z-index of 0, underneath
+  // the tape's 28, and no z-index written here could lift it out. Rendered
+  // into the body it stands in the root context where its own z-index counts.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+  if (!visible || !mounted || typeof document === "undefined") return null;
+  return createPortal(
     <>
       <button type="button" className="oda-letgo" aria-label={label} onClick={onLetGo}>
         {label}
@@ -46,7 +60,13 @@ export default function LetGo({ label, onLetGo, visible }: LetGoProps) {
           left: 50%;
           transform: translateX(-50%);
           bottom: max(18px, env(safe-area-inset-bottom, 0px));
-          z-index: 22;
+          /* Above the tape (28), which is fixed across the bottom 40px with
+             pointer-events:auto on fine pointers for its hover labels — it was
+             swallowing every click on this control on desktop, in every room
+             that keeps anything. The tape is aria-hidden decoration; a control
+             the hand means to press outranks it. Still clear of the candle,
+             which sits bottom-left and never overlaps this slot. */
+          z-index: 29;
           appearance: none;
           -webkit-appearance: none;
           background: rgba(8, 10, 13, 0.32);
@@ -77,6 +97,7 @@ export default function LetGo({ label, onLetGo, visible }: LetGoProps) {
       `,
         }}
       />
-    </>
+    </>,
+    document.body,
   );
 }

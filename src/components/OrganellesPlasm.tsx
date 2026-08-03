@@ -339,7 +339,11 @@ export default function OrganellesPlasm() {
 
     // ——— the grammar ———
     const detachGestures = attachGestures(
-      wrap,
+      // On the CANVAS, not the wrapper (RoomTemplate §3). The engine takes
+      // pointer capture on whatever it is mounted to, and the quiet clear
+      // control is a DOM child of the wrapper — mounted there, the capture
+      // swallowed its clicks and the control could never be pressed.
+      canvas,
       {
         tap: (e) => {
           lastInteractionAt = performance.now();
