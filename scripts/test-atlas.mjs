@@ -1152,4 +1152,139 @@ assert.equal(SITE_ROUTE_BY_KEY.atlas.href, "/atlas/origin", "atlas should resolv
 assert.equal(SITE_ROUTE_BY_KEY.atlas.dark, true, "atlas should opt into dark site chrome");
 assert.equal(isDarkRoutePath("/atlas/origin"), true, "/atlas/origin should resolve as a dark route");
 
-console.log("atlas generation contract ok: parser, navigation metadata, and dark route");
+// ── the world chart: sheets take addresses, travel returns ────────────
+
+const atlasWorldModule = loadTsModule("src/lib/atlas-world.ts");
+const {
+  addressKey: worldAddressKey,
+  createAtlasWorld,
+  shiftAddress,
+  slideVectorFor,
+  zoomLabelTier,
+} = atlasWorldModule;
+
+// Travel must round-trip: a sign error in any cardinal delta strands the
+// traveler on a different address than the one they left.
+for (const [there, back] of [["east", "west"], ["west", "east"], ["north", "south"], ["south", "north"]]) {
+  const away = shiftAddress({ wx: 3, wy: -2 }, there);
+  assert.notDeepEqual(plain(away), { wx: 3, wy: -2 }, "travel " + there + " must move the address");
+  assert.deepEqual(
+    plain(shiftAddress(away, back)),
+    { wx: 3, wy: -2 },
+    "travel " + there + " then " + back + " must return to the departure address",
+  );
+}
+
+// Diagonal speculation must agree with cardinal composition, or a NW sheet
+// prefetched today would be unreachable by tomorrow's north-then-west walk.
+assert.equal(
+  worldAddressKey(shiftAddress({ wx: 0, wy: 0 }, "northwest")),
+  worldAddressKey(shiftAddress(shiftAddress({ wx: 0, wy: 0 }, "north"), "west")),
+  "northwest must land where north composed with west lands",
+);
+assert.equal(
+  worldAddressKey(shiftAddress({ wx: 0, wy: 0 }, "southeast")),
+  worldAddressKey(shiftAddress(shiftAddress({ wx: 0, wy: 0 }, "south"), "east")),
+  "southeast must land where south composed with east lands",
+);
+
+// The incoming sheet slides in from the side the traveler heads toward —
+// a flipped sign would animate every crossing backwards.
+for (const direction of ["north", "east", "south", "west"]) {
+  const delta = shiftAddress({ wx: 0, wy: 0 }, direction);
+  assert.deepEqual(
+    plain(slideVectorFor(direction)),
+    plain(delta),
+    "the " + direction + " slide vector must agree with its travel delta",
+  );
+}
+
+const sheetAt = (address, phase, image) => ({
+  address,
+  image,
+  hotspots: null,
+  seeds: null,
+  concept: "test ground",
+  phase,
+  depth: 1,
+});
+
+// The core promise: travel east then back west lands on the sheet that
+// was left — not a stranger, not nothing.
+const world = createAtlasWorld(8);
+world.remember(sheetAt({ wx: 0, wy: 0 }, "final", "origin-sheet"));
+world.remember(sheetAt({ wx: 1, wy: 0 }, "final", "east-sheet"));
+assert.equal(
+  world.recall(shiftAddress({ wx: 1, wy: 0 }, "west"))?.image,
+  "origin-sheet",
+  "returning west must recall the origin sheet instead of regenerating it",
+);
+
+// A settled final must not be erased by a late speculative preview.
+world.remember(sheetAt({ wx: 1, wy: 0 }, "preview", "stale-preview"));
+assert.equal(
+  world.recall({ wx: 1, wy: 0 })?.image,
+  "east-sheet",
+  "a late preview must not overwrite settled final ink",
+);
+assert.equal(
+  world.recall({ wx: 1, wy: 0 })?.phase,
+  "final",
+  "the kept sheet must keep its final phase after a stale preview arrives",
+);
+
+// A final upgrade replaces the preview it refines.
+world.remember(sheetAt({ wx: 0, wy: 1 }, "preview", "south-preview"));
+world.remember(sheetAt({ wx: 0, wy: 1 }, "final", "south-final"));
+assert.equal(
+  world.recall({ wx: 0, wy: 1 })?.image,
+  "south-final",
+  "a final must upgrade the preview beneath it",
+);
+
+// Bounded memory: the least recently walked ground slips away first, and
+// walking a sheet protects it.
+const smallWorld = createAtlasWorld(3);
+smallWorld.remember(sheetAt({ wx: 0, wy: 0 }, "final", "a"));
+smallWorld.remember(sheetAt({ wx: 1, wy: 0 }, "final", "b"));
+smallWorld.remember(sheetAt({ wx: 2, wy: 0 }, "final", "c"));
+smallWorld.recall({ wx: 0, wy: 0 });
+smallWorld.remember(sheetAt({ wx: 3, wy: 0 }, "final", "d"));
+assert.equal(
+  smallWorld.peek({ wx: 1, wy: 0 }),
+  null,
+  "the least recently walked sheet must be the one evicted at capacity",
+);
+assert.equal(
+  smallWorld.peek({ wx: 0, wy: 0 })?.image,
+  "a",
+  "recalling a sheet must protect it from eviction",
+);
+assert.equal(smallWorld.size(), 3, "the world must hold exactly its capacity after eviction");
+
+// Glances must not count as walking, or the traverse chart and edge
+// names would silently reorder eviction.
+const peekWorld = createAtlasWorld(2);
+peekWorld.remember(sheetAt({ wx: 0, wy: 0 }, "final", "first"));
+peekWorld.remember(sheetAt({ wx: 1, wy: 0 }, "final", "second"));
+peekWorld.peek({ wx: 0, wy: 0 });
+peekWorld.remember(sheetAt({ wx: 2, wy: 0 }, "final", "third"));
+assert.equal(
+  peekWorld.peek({ wx: 0, wy: 0 }),
+  null,
+  "peek must not protect a sheet from eviction",
+);
+
+// Label tiers must rise with descent and never fall back mid-zoom.
+const tierRank = { far: 0, mid: 1, near: 2 };
+let previousTierRank = -1;
+for (const zoom of [0.5, 1, 1.2, 1.34, 1.36, 2, 2.39, 2.41, 8, 64]) {
+  const rank = tierRank[zoomLabelTier(zoom)];
+  assert.ok(rank >= previousTierRank, "label tier must not fall as zoom rises (zoom " + zoom + ")");
+  previousTierRank = rank;
+}
+assert.equal(zoomLabelTier(1), "far", "the fit view must keep its labels quiet");
+assert.equal(zoomLabelTier(64), "near", "the deepest zoom must name the ground outright");
+assert.equal(zoomLabelTier(Number.NaN), "far", "a broken zoom reading must fail quiet, not loud");
+
+console.log("atlas generation contract ok: parser, navigation metadata, dark route, and world chart");
