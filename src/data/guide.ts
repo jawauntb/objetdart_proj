@@ -525,6 +525,7 @@ export const GUIDE_ROOMS: GuideRoom[] = [
       "stroke across the sheet → the cells the stroke passes divide, each daughter taking half the mother's area",
       "hold one finger down → the sheet is drawn in at that point and a pit opens, deeper the longer it is held",
       "hold past the ceremony → the pit closes over and its floor becomes a second layer, sealed for good",
+      "two fingers drag → pan the frame over the dense sheet, so you can inspect an edge without leaving the band",
       "flick → a tear; every bond the line crosses lets go at once and the chord roughens in the same frame",
       "circle a finger → the sheet swirls under it and the bonds it turns come under strain",
       "three fingers drag → adhesion, the world-law: run it down and the sheet comes apart, run it up and the bonds re-form",

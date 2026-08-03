@@ -26,12 +26,14 @@
  * touch the world-law: drag is adhesion, and a sheet let loose comes apart
  * into dissonance; hold dilates the clock to a quarter, which you see as
  * the front stalling; twist turns the body axis and the pattern with it. A
- * flick tears. Two fingers twist to the notation lens. Tilt is gravity, a
- * shake strains every bond, a knock rings the whole chord.
+ * flick tears. Two fingers drag to pan the frame over the dense sheet; two
+ * fingers twist to the notation lens. Tilt is gravity, a shake strains every
+ * bond, a knock rings the whole chord.
  *
  * The sheet persists in `objetdart:tissue:v1` with the quiet clear at the
  * bottom. Pinch is unbound — ScaleTravel owns it (the petal above, the
- * single cell below).
+ * single cell below). Pan2 stays here: the global frame verb, inspection of
+ * a sheet that would otherwise sit still under the hand.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -139,6 +141,13 @@ export default function TissueSheet() {
     let lens = 0;
     let lensTarget = 0;
     let lensSnapped = 0;
+    // two-finger drag pans the camera over the sheet (screen px). Targets
+    // ease toward the hand; reduced motion snaps so the frame never lags.
+    let viewX = 0;
+    let viewY = 0;
+    let viewTX = 0;
+    let viewTY = 0;
+    let lastPanCueAt = 0;
 
     // ——— the hand ———
     let pitActive = false;
@@ -308,9 +317,21 @@ export default function TissueSheet() {
     const observer = new ResizeObserver(resize);
     observer.observe(wrap);
 
+    const panLimit = () => {
+      // enough travel to bring a sheet edge toward the centre — denser
+      // sheets span more of the viewport, so the limit follows the lattice
+      if (sheet) {
+        return {
+          x: Math.max(48, sheet.spanX * scale * 0.9),
+          y: Math.max(48, sheet.spanY * scale * 0.9),
+        };
+      }
+      return { x: width * 0.35, y: height * 0.35 };
+    };
+
     const toSheet = (cx: number, cy: number) => ({
-      x: (clamp(cx - rectLeft, 0, width) - width / 2) / scale,
-      y: (clamp(cy - rectTop, 0, height) - height / 2) / scale,
+      x: (clamp(cx - rectLeft, 0, width) - width / 2 - viewX) / scale,
+      y: (clamp(cy - rectTop, 0, height) - height / 2 - viewY) / scale,
     });
 
     // ——— the acts ———
@@ -552,6 +573,29 @@ export default function TissueSheet() {
           if (e.phase === "move") lensTarget = clamp01(lensTarget + e.angle / 1.7);
           else if (e.phase === "end") setLens(lensTarget > 0.5 ? 1 : 0);
         },
+        pan2: (e) => {
+          // the global frame verb: two fingers slide the camera over the
+          // sheet. Pinch stays unbound — ScaleTravel owns scale travel.
+          lastInteractionAt = performance.now();
+          if (e.phase === "end") return;
+          const lim = panLimit();
+          // reduced motion: smaller steps, snapped with no ease lag
+          const gain = reduced ? 0.55 : 1;
+          viewTX = clamp(viewTX + e.dx * gain, -lim.x, lim.x);
+          viewTY = clamp(viewTY + e.dy * gain, -lim.y, lim.y);
+          if (reduced) {
+            viewX = viewTX;
+            viewY = viewTY;
+          }
+          if (e.phase === "start" || performance.now() - lastPanCueAt > 280) {
+            lastPanCueAt = performance.now();
+            try {
+              haptics.tap();
+            } catch {
+              /* noop */
+            }
+          }
+        },
         scrub: (e) => {
           lastInteractionAt = performance.now();
           if (!sheet) return;
@@ -752,6 +796,13 @@ export default function TissueSheet() {
       adhesion += (adhesionTarget - adhesion) * Math.min(1, dt * 3);
       axis += (axisTarget - axis) * Math.min(1, dt * 3);
       lens += (lensTarget - lens) * Math.min(1, dt * 6);
+      if (reduced) {
+        viewX = viewTX;
+        viewY = viewTY;
+      } else {
+        viewX += (viewTX - viewX) * Math.min(1, dt * 14);
+        viewY += (viewTY - viewY) * Math.min(1, dt * 14);
+      }
       gx += (gxTarget - gx) * Math.min(1, dt * 2.5);
       gy += (gyTarget - gy) * Math.min(1, dt * 2.5);
       agitation *= Math.exp(-dt * 1.4);
@@ -855,8 +906,8 @@ export default function TissueSheet() {
 
       if (sheet && sheet.n > 0) {
         const n = sheet.n;
-        const ox = width / 2;
-        const oy = height / 2;
+        const ox = width / 2 + viewX;
+        const oy = height / 2 + viewY;
         const alpha = (1 - leaving) * clamp01(1 - lens * 0.35);
         const front = fateFront(sheet.t);
 
