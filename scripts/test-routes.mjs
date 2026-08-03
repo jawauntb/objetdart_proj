@@ -102,7 +102,7 @@ const expectedKeys = [
   "charts",
   "dither",
   "time",
-  "movement",
+  "tourbillon",
   "jewel",
   "drop",
   "coin",
@@ -121,7 +121,7 @@ const preferredNavigationKeys = [
   "ocean",
   "clouds",
   "waves",
-  "movement",
+  "tourbillon",
   "drop",
   "sine",
   "circularity",
@@ -229,7 +229,7 @@ for (const path of ["/aphros", "/archive", "/colophon", "/timekeeper", "/coinage
 
 assert.equal(isDarkRoutePath("/"), true, "the scrolling home page should use dark chrome");
 
-for (const path of ["/", "/coin", "/coin/deep", "/movement", "/archive", "/timekeeper"]) {
+for (const path of ["/", "/coin", "/coin/deep", "/tourbillon", "/archive", "/timekeeper"]) {
   assert.equal(isDarkRoute(path), isDarkRoutePath(path), `isDarkRoute should delegate ${path}`);
 }
 

@@ -29,7 +29,7 @@ export type SiteIconKey =
   | "light"
   | "loom"
   | "manifold"
-  | "movement"
+  | "tourbillon"
   | "nucleons"
   | "ocean"
   | "overlook"
@@ -68,7 +68,7 @@ export type SiteIconKind =
   | "jewel"
   | "kept"
   | "light"
-  | "movement"
+  | "tourbillon"
   | "ocean"
   | "plasma"
   | "pretext"
@@ -462,12 +462,12 @@ export const SITE_ICON_VISUALS = {
     accent2: "#8fb5e8",
     ink: "#eef4ff",
   },
-  movement: {
-    title: "Movement",
-    description: "a mechanical watch in three dimensions",
-    path: "/movement",
-    shortName: "movement",
-    kind: "movement",
+  tourbillon: {
+    title: "Tourbillon",
+    description: "a mechanical watch in three dimensions, correcting for gravity",
+    path: "/tourbillon",
+    shortName: "tourbillon",
+    kind: "tourbillon",
     bg: "#090c11",
     bg2: "#282018",
     glow: "#e0b66a",
