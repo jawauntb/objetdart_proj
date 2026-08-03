@@ -775,14 +775,20 @@ export const GUIDE_ROOMS: GuideRoom[] = [
     moves: [
       "tap or drag → dents and sloshes the bead",
       "a fast, far drag → necks a whole new droplet off and hands it to your finger",
+      "flick → throws a droplet clear of the bead; over open water it sends a current through the cluster",
       "double-tap → bounces the bead",
-      "wheel or the zoom slider → dives into the water, revealing smaller life as you go",
+      "two fingers dragged down, or the wheel → sinks the lens into the water, revealing smaller life as you go",
       "tap a microbe → startles it into darting away",
       "hold to the ceremony tier → the water goes glass-calm",
+      "tilt → gravity, and the bead runs downhill; shake → sloshes it, and hard enough necks a droplet off",
+      "knock the case (once invited) → one concentric shudder rings through every bead",
+      "lay the phone face-down → night, and the water sleeps until you turn it back",
+      "arrows → sink the lens and shove the water; shift with an arrow → flicks a droplet clear; enter → pokes the bead, and held to the ceremony stills it",
     ],
     finds: [
       "each of the nine microscopic species only fades in at its own depth, so diving in is genuinely discovering",
       "pulling a droplet off takes real force — speed, stretch, and size all have to agree at once",
+      "a mouse hovering near the bead is felt before it lands: the surface leans toward the cursor and the life inside notices",
     ],
   },
   {
