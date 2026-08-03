@@ -271,13 +271,15 @@ async function runRouteExitCheck(browser) {
   await context.close();
 }
 
+// /aphros no longer carries the Greek-key frame — it is a frameless
+// full-viewport painting. The companion check now only asserts the route
+// loads clean (no console errors, no shader failures).
 async function runGreekFrameCompanionRoute(browser) {
   const context = await browser.newContext({ viewport: { width: 1280, height: 860 }, deviceScaleFactor: 1 });
   const page = await context.newPage();
   const messages = watchPage(page, "aphros-frame");
   await gotoRoute(page, "/aphros");
   await page.waitForTimeout(1200);
-  await assertGreekFrame(page, "aphros-frame");
   assert.deepEqual(messages, [], "aphros-frame: unexpected browser messages");
   await context.close();
 }
