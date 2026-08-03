@@ -108,6 +108,8 @@ export default function SeedEmbryo() {
     let galleryPaused = false;
     let lastTouchAt = performance.now();
     let glimmerAt = 0;
+    let earlyCueAt = 0;
+    const mountedAt = performance.now();
     let last = performance.now();
     let raf = 0;
     let running = true;
@@ -333,7 +335,11 @@ export default function SeedEmbryo() {
       ctx.translate(cx, cy);
       ctx.rotate(tiltX * 0.2 + wind * 0.1);
       const hue = 28 + morph.hue * 40;
-      ctx.fillStyle = `hsla(${hue}, 42%, ${28 + morph.open * 10}%, 0.92)`;
+      // three-finger twist = season: a slow render-only warm/cool cast.
+      const seasonWarm = Math.sin(season) * 0.5 + 0.5;
+      const seasonHue = hue + (seasonWarm - 0.5) * 22;
+      // twist-lens dims the husk so the bared root reads through it.
+      ctx.fillStyle = `hsla(${seasonHue}, 42%, ${28 + morph.open * 10}%, ${0.92 - lens.v * 0.5})`;
       ctx.beginPath();
       ctx.ellipse(0, 0, scale * (0.7 + split * 0.15), scale, 0, 0, Math.PI * 2);
       ctx.fill();
@@ -361,6 +367,12 @@ export default function SeedEmbryo() {
       ctx.fill();
       ctx.restore();
 
+      // an early, physical suggestion of the central verb (a hand can grow
+      // this) — once, a few seconds in, well before the 20s idle glimmer.
+      if (!reduced && !asleep && earlyCueAt === 0 && now - mountedAt > 2200 && now - lastTouchAt > 2000) {
+        earlyCueAt = now;
+        agitation = Math.min(1, agitation + 0.12);
+      }
       if (now - lastTouchAt > 20000 && now - glimmerAt > 6000 && !reduced && !asleep) glimmerAt = now;
       if (glimmerAt && now - glimmerAt < 1600) {
         const u = (now - glimmerAt) / 1600;
@@ -369,6 +381,7 @@ export default function SeedEmbryo() {
         ctx.arc(cx, cy, 16 + u * 40, 0, Math.PI * 2);
         ctx.stroke();
       }
+      ctx.restore();
 
       if (!asleep || agitation > 0.02) raf = requestAnimationFrame(draw);
       else {

@@ -18,7 +18,11 @@
  * new bound pair at the break. You can never isolate one.
  *
  * tap perturbs the vacuum (a spray of virtual pairs, intensity-scaled);
- * dwell on empty vacuum condenses a triplet that spins up from the field;
+ * dwell on empty vacuum condenses — and what it condenses is the hand's
+ * choice, made of duration alone: the seethe gathers visibly under the
+ * finger from the touch tier, the dwell buys the cheap thing (a quark and
+ * its own antiquark on one string), and a hand that keeps pressing past the
+ * baryon depth pays for the third quark and the closed loop of three;
  * the ceremony held on a hadron is annihilation — photon streaks racing
  * off at light speed; a flick throws a hadron whole (it moves as one,
  * never sheds a part); a scrub stirs the vacuum into a glowing ring of
@@ -27,9 +31,11 @@
  * face-down the room is night and the seethe goes on unwatched; a twist
  * rotates the lens to the bare mathematics — the Feynman view: vertices,
  * coiled gluon propagators, virtual pairs as closed loops, photons as
- * waving lines. The field persists in `objetdart:quarks:v1`. Pinch is
- * deliberately unbound — ScaleTravel owns it (nucleons above; the quanta
- * below).
+ * waving lines; three fingers twisted turn the season, from a vacuum nearly
+ * still to one boiling with pair production. The field persists in
+ * `objetdart:quarks:v1`. Deliberately unbound: pinch (ScaleTravel owns it —
+ * nucleons above, the quanta below) and two-finger pan, there being no frame
+ * to pan; two-finger tap lowers the lens.
  */
 
 import { useEffect, useRef, useState } from "react";

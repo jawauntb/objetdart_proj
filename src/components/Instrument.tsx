@@ -33,6 +33,21 @@ import { useField } from "@/store/field";
 // grammar: every finger is a `voice` (the polyphonic channel), pinch zooms
 // the pitch window for finer intervals, twist turns the scale lens
 // (penta → chroma → pure). No raw pointer wiring in the room.
+//
+// The rest of the stack, spoken in the same material: pan2 slides the
+// pitch window sideways (pinch's other half); a two-finger tap widens it
+// a notch, the frame's own step back; three fingers touch the law — tap
+// is tutti, twist steps the plate's register up/down an octave (its slow
+// cycle, the way a room's twist steps its season), drag is a wind that
+// colors the plate for a moment, and a hold stretches the room's ghosts
+// out for as long as it's held. The vessel: tilt leans the plate, shake
+// is a percussive burst, a knock rings it once, and face-down is night.
+// Long-press dwell and the ceremony hold have no target on an instrument
+// surface — poly surfaces silence `hold` for material fingers entirely
+// (gesture/index.ts never arms it while `voice` is bound), because every
+// finger already sounds the instant it lands; there is no separate
+// press-and-wait state to deepen. The three-finger hold above is the
+// law layer, never gated by `poly`, which is exactly why it still speaks.
 
 type ActiveTouch = {
   id: number;
@@ -294,9 +309,33 @@ export default function Instrument() {
         const nextLo = clamp(anchor - cxNorm * nextW, 0, 1 - nextW);
         setPitchWindow({ lo: nextLo, w: nextW });
       },
+      // two-finger drag pans the frame — pinch already zooms it, so this
+      // completes the pair: slide the pitch window sideways without
+      // changing its width.
+      pan2: (e) => {
+        const rect = plate.getBoundingClientRect();
+        const { lo, w } = windowRef.current;
+        const shift = -e.dx / rect.width;
+        const nextLo = clamp(lo + shift, 0, 1 - w);
+        setPitchWindow({ lo: nextLo, w });
+      },
       twist: (e) => {
-        if (e.fingers === 3) return; // three fingers turn the season, not the lens
         if (e.phase !== "move") return;
+        if (e.fingers === 3) {
+          // three-finger twist = season: the plate's register, one octave
+          // per quarter turn — the instrument's own slow cycle.
+          seasonTwistAcc.current += e.angle;
+          const seasonStep = Math.PI / 2;
+          while (Math.abs(seasonTwistAcc.current) >= seasonStep) {
+            const direction = seasonTwistAcc.current > 0 ? 1 : -1;
+            seasonTwistAcc.current -= direction * seasonStep;
+            octaveRef.current = clamp(octaveRef.current + direction, -2, 2);
+            setOctave(octaveRef.current);
+            recordInstrument(`season/octave-${octaveRef.current}`, 0.4);
+            try { hapticTap(); } catch { /* noop */ }
+          }
+          return;
+        }
         twistAcc.current += e.angle;
         const step = Math.PI / 2;
         while (Math.abs(twistAcc.current) >= step) {
@@ -311,10 +350,83 @@ export default function Instrument() {
           try { hapticTap(); } catch { /* noop */ }
         }
       },
+      // three-finger drag = wind across the plate: a gust that leans the
+      // background shimmer toward the drag direction and colors every
+      // sounding voice's brightness a little for as long as it moves.
+      drag: (e) => {
+        if (e.fingers !== 3) return;
+        if (e.phase === "end") { setGust(null); return; }
+        setGust({ dx: e.dx, dy: e.dy });
+        if (gustDecay.current) clearTimeout(gustDecay.current);
+        gustDecay.current = setTimeout(() => setGust(null), 260);
+        const speed = Math.hypot(e.vx, e.vy);
+        if (speed > 0.02) {
+          try { hapticChop(); } catch { /* noop */ }
+        }
+      },
+      // three-finger hold = time dilation while held: the plate's ghosts
+      // and haptic ticks stretch out continuously with elapsed hold time.
+      hold: (e) => {
+        if (e.fingers !== 3) return;
+        if (e.phase === "release") { setDilation(0); return; }
+        const level = Math.min(1, e.elapsed / THRESHOLDS.ceremonyMs);
+        setDilation(level);
+        if (e.phase === "enter") {
+          try { hapticRoll(); } catch { /* noop */ }
+        }
+      },
+      tap: (e) => {
+        // one finger is always a voice — the material layer already
+        // sounds on landing, so a tap there would double-answer a note
+        // that has already spoken.
+        if (e.fingers === 1) return;
+        if (e.fingers === 2) {
+          // step back: nudge the pitch window a notch wider, the way a
+          // raised lens lowers elsewhere.
+          const { lo, w } = windowRef.current;
+          const nextW = clamp(w * 1.35, 0.08, 1);
+          const cx = lo + w / 2;
+          const nextLo = clamp(cx - nextW / 2, 0, 1 - nextW);
+          setPitchWindow({ lo: nextLo, w: nextW });
+          try { hapticTap(); } catch { /* noop */ }
+          recordInstrument("step-back/window", 0.3);
+          return;
+        }
+        // tutti — every sounding voice and ghost answers once, together
+        setTutti(Date.now());
+        try { ripple(0.4); } catch { /* noop */ }
+        try { void getFieldAudio().start().then(() => getFieldAudio().chime()); } catch { /* noop */ }
+        recordInstrument("tutti", 0.5);
+      },
+    });
+
+    // vessel: tilt leans the plate itself (sight only, matching the
+    // template's own tilt), shake scatters a percussive burst, a knock
+    // rings the plate once, and face-down is night — the plate dims and
+    // quiets until the phone turns back over.
+    const detachVessel = onVessel({
+      tilt: ({ gamma }) => {
+        const bend = clamp(gamma / 45, -1, 1);
+        plate.style.setProperty("--instr-tilt", (bend * 3).toFixed(2) + "deg");
+      },
+      shake: ({ intensity }) => {
+        try { hapticChop(); } catch { /* noop */ }
+        try { getFieldAudio().buzz(); } catch { /* noop */ }
+        recordInstrument("vessel/shake", Math.max(0.2, intensity));
+      },
+      knock: () => {
+        setTutti(Date.now());
+        try { getFieldAudio().bell(); } catch { /* noop */ }
+        try { hapticTap(); } catch { /* noop */ }
+        recordInstrument("vessel/knock", 0.5);
+      },
+      flip: ({ faceDown }) => setNight(faceDown),
     });
 
     return () => {
       detach();
+      detachVessel();
+      if (gustDecay.current) clearTimeout(gustDecay.current);
       cancelLesson.current?.();
       cancelLesson.current = null;
       engine.stopAll();
@@ -333,7 +445,7 @@ export default function Instrument() {
       if (index === -1 || heldKeys.has(key)) return;
       event.preventDefault();
       heldKeys.add(key);
-      const freq = 110 * 2 ** (KEY_SEMITONES[index] / 12);
+      const freq = 110 * 2 ** (KEY_SEMITONES[index] / 12) * 2 ** octaveRef.current;
       getTimbreEngine().noteOn(`key:${key}`, freq, timbreAt(positionRef.current));
       useField.getState().recordTape("sigil", 0.4, `instrument/key/${key}`);
     };
@@ -367,7 +479,7 @@ export default function Instrument() {
 
   return (
     <div
-      className="instr-page"
+      className={"instr-page" + (night ? " is-night" : "")}
       data-touch-surface="true"
       data-pretext-ignore="true"
       style={{ "--instr-color": color } as React.CSSProperties}
@@ -375,13 +487,22 @@ export default function Instrument() {
     >
       <div
         ref={plateRef}
-        className="instr-plate"
+        className={
+          "instr-plate"
+          + (gust ? " is-gusting" : "")
+          + (dilation > 0 ? " is-dilating" : "")
+          + (tutti ? " is-tutti" : "")
+        }
         role="application"
         tabIndex={0}
         aria-label="the meta instrument — every finger is a voice; sideways is pitch, up and down morphs between harp, piano, guitar, tar, sitar, violin, saxophone and trumpet; pinch zooms the pitch range, twist changes the scale"
         style={{
           backgroundSize: `100% 100%, 100% 100%, ${plateBackground.size}`,
           backgroundPosition: `0 0, 0 0, ${plateBackground.positionX} 0`,
+          ["--instr-dilation" as string]: dilation,
+          ["--gust-x" as string]: `${gust?.dx ?? 0}px`,
+          ["--gust-y" as string]: `${gust?.dy ?? 0}px`,
+          ["--instr-octave" as string]: octave,
         }}
       >
         <div className="instr-bands" aria-hidden="true">
@@ -515,6 +636,8 @@ export default function Instrument() {
           background-repeat: no-repeat;
           box-shadow: inset 0 0 160px rgba(0,0,0,0.66);
           filter: saturate(0.72) brightness(0.82);
+          transform: rotate(var(--instr-tilt, 0deg));
+          transition: transform 260ms ease-out;
         }
         .instr-plate:after {
           content: "";
@@ -522,6 +645,38 @@ export default function Instrument() {
           inset: 0;
           background: radial-gradient(circle at 50% 50%, transparent 0 30%, rgba(2,3,3,0.35) 68%, rgba(2,3,3,0.7) 100%);
           pointer-events: none;
+        }
+        /* three-finger drag = wind — a warm shimmer leaning with the gust */
+        .instr-plate.is-gusting:before {
+          content: "";
+          position: absolute;
+          inset: 0;
+          z-index: 1;
+          pointer-events: none;
+          background: radial-gradient(
+            ellipse 60% 40% at calc(50% + var(--gust-x, 0px)) calc(50% + var(--gust-y, 0px)),
+            rgba(255, 240, 210, 0.14), transparent 70%
+          );
+        }
+        /* three-finger hold = time dilation — ghosts and grip stretch out
+           continuously with how long the room has been held */
+        .instr-plate.is-dilating .instr-finger.is-ghost,
+        .instr-plate.is-dilating .instr-grip-hand {
+          animation-duration: calc(900ms + var(--instr-dilation, 0) * 2400ms);
+        }
+        /* three-finger tap / a knock on the case — tutti, one shared pulse */
+        .instr-plate.is-tutti .instr-current {
+          animation: instrTutti 640ms ease-out;
+        }
+        @keyframes instrTutti {
+          0% { box-shadow: 0 0 0 rgba(255,255,255,0); }
+          40% { box-shadow: 0 0 60px rgba(255,255,255,0.5); }
+          100% { box-shadow: 0 0 0 rgba(255,255,255,0); }
+        }
+        /* flip face-down — night, until the phone turns back over */
+        .instr-page.is-night .instr-plate {
+          filter: saturate(0.4) brightness(0.42);
+          transition: filter 900ms ease;
         }
         .instr-bands {
           position: absolute;
@@ -576,6 +731,9 @@ export default function Instrument() {
           .instr-grip-hand {
             animation: none;
           }
+          .instr-plate { transform: none; transition: none; }
+          .instr-plate.is-tutti .instr-current { animation: none; }
+          .instr-page.is-night .instr-plate { transition: none; }
         }
         .instr-grip {
           position: absolute;

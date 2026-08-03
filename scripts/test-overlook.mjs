@@ -163,7 +163,7 @@ assert.equal(byId.get("earth").onTrunk, true, "the ground is a rung, not a fork"
 // The map is the branch instead: a chart of a region of the ground, hanging
 // where its own outward door opens — the trunk passage up to the vault.
 assert.equal(byId.get("atlas").onTrunk, false, "the map hangs off the trunk");
-assert.equal(byId.get("atlas").parent, "stars", "the map recedes into the sky");
+assert.equal(byId.get("atlas").parent, "earth", "the map hangs off the ground it charts");
 // The whole sea branch is one subtree under it, each step exactly one deeper.
 assert.equal(byId.get("atmosphere").depth, 2, "the air hangs under the map");
 assert.equal(byId.get("olympus").depth, 3, "the peak hangs under the air");
@@ -229,13 +229,20 @@ assert.ok(
   "a branch keeps its subtree root's side",
 );
 // The deepest branch still stands inside a 390px glance: the room clamps
-// its reach by MAX_ABS_X, and this is the number it clamps against. The
-// sea branch is four deep since the air column joined it (atmosphere →
-// olympus → coast → drop); a fifth step would crowd the glance and means
-// the cosmology grew a chain it should have folded.
+// its reach by MAX_ABS_X (branchDx divides the usable width by it), and
+// this is the number it clamps against. The sea branch is five deep since
+// the map left the trunk — removing the ground's inverted `up = "atlas"`
+// door put the whole ground↔sky climb on the spine and hung the chart, the
+// air column, the peak, the shore and the drop off it in one chain. A
+// sixth step means the cosmology grew a chain it should have folded.
 assert.ok(
-  Math.max(...tree.nodes.map((n) => Math.abs(place[n.id].x))) <= 4,
-  "no branch leans further than four steps off the trunk",
+  Math.max(...tree.nodes.map((n) => Math.abs(place[n.id].x))) <= 5,
+  "no branch leans further than five steps off the trunk",
+);
+assert.equal(
+  Math.abs(place.drop.x),
+  5,
+  "the sea chain is exactly map → air → peak → shore → drop, so the clamp above is measuring something",
 );
 assert.deepEqual(layoutTree(tree), place, "the layout is deterministic");
 

@@ -43,6 +43,13 @@ import { onVessel } from "@/lib/vessel";
 import { stirTurbulence } from "@/lib/turbulence";
 import LetGo from "@/components/LetGo";
 import {
+  createFrameGovernor,
+  detailForTier,
+  isEmbeddedFrame,
+  onVisibility,
+  resolveDpr,
+} from "@/lib/room-runtime";
+import {
   KIND_BASE_HZ,
   MAX_ORGANELLES,
   MEMBRANE_KINDS,
@@ -54,6 +61,7 @@ import {
   hashSeed,
   membraneCompleteness,
   membranePoint,
+  membraneRadius,
   missingKinds,
   mulberry32,
   organelleFromSeed,
@@ -158,8 +166,24 @@ export default function OrganellesPlasm() {
     let earnedClose = false;
     let leaving = false;
     let leaveGlow = 0;
+    let holdCeremonyDone = false; // guards the non-nucleus annihilate act
     const lit = new Float32Array(MAX_ORGANELLES);
     const vel = new Float32Array(MAX_ORGANELLES * 2);
+
+    // ————— performance contract —————
+    const gov = createFrameGovernor();
+    let sleeping = false;
+    const offVis = onVisibility((hidden) => { sleeping = hidden; });
+
+    // three-finger twist = season: the plasm's own slow cycle
+    let season = 0;
+    let lastSeasonSoundAt = 0;
+
+    // two-finger pan: the frame peeks, then eases home
+    let panX = 0;
+    let panY = 0;
+    let panTargetX = 0;
+    let panTargetY = 0;
 
     const plasm = new Float32Array(PLASM_MOTES * 4);
     const rngP = mulberry32(hashSeed(0x0b, 0x1e));
@@ -280,10 +304,36 @@ export default function OrganellesPlasm() {
       }
     };
 
+    // the raised-lens marker ScaleTravel reads before a step-back nudge
+    const markLens = (raised: boolean) => {
+      if (raised) wrap.dataset.lensRaised = "1";
+      else delete wrap.dataset.lensRaised;
+    };
+
+    /**
+     * Ceremony on a non-nucleus organ (tier ≥ 3) is its solemn act — and,
+     * because the invariant here is a budget, the touch-reachable delete
+     * that IS the act: the organ gives its whole membrane back to the plasm.
+     */
+    const annihilate = (i: number) => {
+      const list = listRef.current;
+      if (i < 0 || i >= list.length) return;
+      listRef.current = list.filter((_, k) => k !== i);
+      lit.fill(0);
+      try {
+        audio.thud();
+        haptics.roll();
+      } catch {
+        /* noop */
+      }
+      save();
+    };
+
     const setLens = (snapped: number) => {
       if (snapped === lensSnapped) return;
       lensSnapped = snapped;
       lensTarget = snapped;
+      markLens(snapped === 1);
       try {
         haptics.lens();
         if (snapped === 1) audio.chime();
@@ -338,7 +388,7 @@ export default function OrganellesPlasm() {
     // ——— canvas ———
     const resize = () => {
       const r = wrap.getBoundingClientRect();
-      const ratio = Math.min(2, window.devicePixelRatio || 1);
+      const ratio = resolveDpr(gov.tier(), { embedded: isEmbeddedFrame(), reducedMotion: reduced, maxDpr: 2 });
       width = Math.max(240, r.width);
       height = Math.max(320, r.height);
       rectLeft = r.left;
@@ -388,7 +438,22 @@ export default function OrganellesPlasm() {
       {
         tap: (e) => {
           lastInteractionAt = performance.now();
-          if (e.fingers === 2) return; // ScaleTravel's step back
+          if (e.fingers === 2) {
+            // step back: a raised lens lowers first; the marker clears a
+            // beat later so ScaleTravel skips its nudge on this same tap
+            if (lensSnapped === 1) {
+              lensSnapped = 0;
+              lensTarget = 0;
+              window.setTimeout(() => markLens(false), 0);
+              try {
+                haptics.lens();
+              } catch {
+                /* noop */
+              }
+              audio.playNote(44, 160);
+            }
+            return;
+          }
           if (e.fingers === 3) {
             tutti();
             return;
@@ -436,7 +501,11 @@ export default function OrganellesPlasm() {
           if (e.phase === "enter") {
             holdIdx = organelleAt(x, y);
             holdDone = false;
-            if (holdIdx < 0 && listRef.current.length < MAX_ORGANELLES) {
+            holdCeremonyDone = false;
+            if (holdIdx < 0) {
+              // dwell on open plasm always gathers something — at the
+              // population cap the eldest organ gives way (settlePopulation
+              // in condenseMissing), never a silent refusal
               condensing = { nx: x / width, ny: y / height, u: 0 };
             }
             return;

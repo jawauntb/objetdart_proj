@@ -7,6 +7,7 @@ import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
 import { THRESHOLDS } from "@/lib/gesture/core";
+import { onVessel } from "@/lib/vessel";
 import { buildReading } from "@/lib/reading";
 import type { ConcernKey } from "@/lib/types";
 
@@ -98,6 +99,12 @@ export default function ConcernField() {
   // ceremony hold at the center: 0..1 progress toward the keep
   const [ceremony, setCeremony] = useState(0);
   const [keptFlash, setKeptFlash] = useState(0);
+  // the law and vessel layers: three-finger tap (tutti), hold (time
+  // dilation while held) and the vessel (tilt/shake/knock/flip)
+  const [tutti, setTutti] = useState(0);
+  const [dilation, setDilation] = useState(0);
+  const [agitated, setAgitated] = useState(false);
+  const [night, setNight] = useState(false);
 
   // map a client-space pointer to a value on a given axis
   const valueFromPointer = (k: ConcernKey, clientX: number, clientY: number) => {

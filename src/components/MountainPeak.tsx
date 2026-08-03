@@ -249,14 +249,17 @@ void main() {
   if (hit) {
     vec3 p = ro + rd * tG;
     float h; vec2 grad; float crease; float ridge;
-    hf_groundAt(p.xz, uShadeOct, h, grad, crease, ridge);
+    // level of detail: past the middle distance an octave is finer than a
+    // pixel, and the fog has most of it anyway
+    hf_groundAt(p.xz, tG > 9.0 ? uMarchOct : uShadeOct, h, grad, crease, ridge);
     hitH = h;
     vec3 n = normalize(vec3(-grad.x, 1.0, -grad.y));
     vec4 m = hf_material(h, grad, crease, ridge, uSnowKm, uWind);
     vec3 albedo = uRock * m.x + uSnow * m.y + uGlacier * m.z;
     // the wind's cornice, lying on the lee crest where it actually forms
     albedo = mix(albedo, uSnow, m.w * 0.55);
-    float sh = softShadow(vec3(p.x, h, p.z) + n * 0.006, uSun, uShadowSteps);
+    // the sun's ray is worth casting where the eye can see the shadow land
+    float sh = softShadow(vec3(p.x, h, p.z) + n * 0.006, uSun, tG > 12.0 ? 0 : uShadowSteps);
     float ndl = max(dot(n, uSun), 0.0);
     float light = uAmbient * (0.65 + 0.35 * n.y) + uSunI * ndl * sh;
     // the arête itself catches the light along its edge
@@ -498,6 +501,7 @@ export default function MountainPeak() {
     let height = 0;
     let bufScale = 1;
     let tier: QualityTier = gov.tier();
+    let sizedFor: QualityTier = tier;
     const resize = () => {
       const rect = wrap.getBoundingClientRect();
       width = rect.width;
@@ -508,8 +512,11 @@ export default function MountainPeak() {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       // A ray-marcher pays for every pixel twice over — 64 field evaluations
       // deep — so the shader's own buffer takes resolveDpr under a marcher's
-      // ceiling, while the overlay the cairns are drawn on keeps all of it.
-      bufScale = Math.min(dpr, 1.25);
+      // own ceiling, which falls with the tier, while the overlay the cairns
+      // are drawn on keeps all of it.
+      const marchCeil = tier === "high" ? 1.25 : tier === "medium" ? 1 : 0.75;
+      bufScale = Math.min(dpr, marchCeil);
+      sizedFor = tier;
       glCanvas.width = Math.max(1, Math.round(width * bufScale));
       glCanvas.height = Math.max(1, Math.round(height * bufScale));
       if (gl) gl.viewport(0, 0, glCanvas.width, glCanvas.height);
@@ -1098,6 +1105,9 @@ export default function MountainPeak() {
       const wall = Math.min(0.05, (now - last) / 1000);
       last = now;
       tier = gov.beginFrame(now);
+      // the governor's verdict is a real instruction here: fewer march steps
+      // AND fewer pixels to march for
+      if (tier !== sizedFor && !asleep) resize();
       const detail = detailForTier(tier);
       timeScale += (timeScaleTarget - timeScale) * Math.min(1, wall * 6);
       const dt = wall * timeScale;
@@ -1159,7 +1169,7 @@ export default function MountainPeak() {
           // the budget the frame can afford, never past the loop's own bound
           gl.uniform1i(u("uSteps"), Math.max(18, Math.round(MARCH_STEPS * detail.samples)));
           gl.uniform1i(u("uRefine"), Math.max(4, Math.round(MARCH_REFINE * detail.samples)));
-          gl.uniform1i(u("uShadowSteps"), Math.round(24 * detail.shadows));
+          gl.uniform1i(u("uShadowSteps"), Math.round(18 * detail.shadows));
           gl.uniform1i(u("uMarchOct"), Math.max(3, Math.round(OCTAVES_MARCH * detail.samples)));
           gl.uniform1i(u("uShadeOct"), Math.max(4, Math.round(OCTAVES_SHADE * detail.samples)));
           gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);

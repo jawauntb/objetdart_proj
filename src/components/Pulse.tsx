@@ -11,8 +11,20 @@ import {
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { THRESHOLDS } from "@/lib/gesture/core";
+import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
+import LetGo from "@/components/LetGo";
+import {
+  createFrameGovernor,
+  detailForTier,
+  isEmbeddedFrame,
+  onGalleryPause,
+  onVisibility,
+  resolveDpr,
+  type QualityTier,
+} from "@/lib/room-runtime";
 
 /**
  * /pulse - embodied rhythm instrument.
@@ -356,9 +368,22 @@ export default function Pulse() {
       lastGlimmer: 0,
     };
 
+    // ── performance contract (room-runtime): frame governor + visibility
+    // sleep + DPR ceiling, shared with every other room on the site. ──
+    const embedded = isEmbeddedFrame();
+    const gov = createFrameGovernor(embedded ? "medium" : "high");
+    let tier: QualityTier = gov.tier();
+    let hidden = document.hidden;
+    let galleryPaused = false;
+    let faceDown = false;
+    let sleeping = false;
+    const syncSleep = () => { sleeping = hidden || galleryPaused || faceDown; };
+    const unvis = onVisibility((h) => { hidden = h; syncSleep(); });
+    const ungal = onGalleryPause((p) => { galleryPaused = p; syncSleep(); });
+
     const resize = () => {
       const rect = root.getBoundingClientRect();
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = resolveDpr(tier, { embedded, reducedMotion: reduceMotionRef.current });
       const w = Math.max(1, Math.floor(rect.width));
       const h = Math.max(1, Math.floor(rect.height));
       canvas.width = Math.floor(w * dpr);
@@ -373,8 +398,31 @@ export default function Pulse() {
     ro?.observe(root);
     window.addEventListener("resize", resize);
 
+    // ── the vessel: the device itself is the body ──
+    const detachVessel = onVessel({
+      tilt: ({ gamma }) => {
+        if (reduceMotionRef.current) return;
+        windRef.current.target = clamp(windRef.current.target + gamma * 0.004, -1.4, 1.4);
+      },
+      shake: ({ intensity }) => {
+        if (reduceMotionRef.current) return;
+        touchImpulseRef.current = clamp(touchImpulseRef.current + intensity * 0.6, 0, 2);
+        try { haptics.chop(); } catch { /* noop */ }
+      },
+      knock: ({ intensity }) => {
+        drumRef.current.queued = Math.min(3, drumRef.current.queued + 1);
+        touchImpulseRef.current = clamp(touchImpulseRef.current + 0.3 + intensity * 0.3, 0, 2);
+        try { haptics.tap(); } catch { /* noop */ }
+      },
+      flip: ({ faceDown: fd }) => { faceDown = fd; syncSleep(); },
+    });
+
     let raf = 0;
     const draw = (now: number) => {
+      tier = gov.beginFrame(now);
+      if (sleeping) { raf = requestAnimationFrame(draw); return; }
+      const detail = detailForTier(tier);
+      void detail;
       const rawDt = Math.min(0.08, (now - render.lastT) / 1000);
       render.lastT = now;
       const reduce = reduceMotionRef.current;

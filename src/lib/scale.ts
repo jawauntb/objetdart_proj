@@ -428,10 +428,12 @@ const TRAVEL_OVERRIDES: Partial<Record<ScaleBandId, TravelOverride>> = {
   olympus: { down: "coast", extraUp: ["earth"] }, // the peak rises from fog;
   // walking down from the land reaches the mountain; clouds are a peer, not a
   // pinch; its canonical ceiling is now the air column, resolving onto the map
-  atlas: { up: "stars" }, // the map recedes into the sky — the trunk passage
-  // TravelPassage films (map → globe → orbit → stars). It descends onto the
-  // peak through the air column by metric adjacency; the ground it charts is
-  // the hearth peer beside it, not a wall to pinch through
+  atlas: { up: "earth", extraUp: ["stars"] }, // the map's ceiling is the
+  // ground it charts — its metric neighbour, and the thing it is a chart OF.
+  // The trunk passage to the sky stays a declared door beside it (the
+  // TravelPassage film map → globe → orbit → stars, which is literally that
+  // walk), and remains the sky's canonical way down. Downward the map
+  // descends onto the peak through the air column by metric adjacency.
   stars: { down: "atlas" }, // the sky descends onto the map, and thins upward
   // into the galaxy, then the web, by metric adjacency
   space: { up: "manifold" }, // the web opens onto the fold; /beyond stays a

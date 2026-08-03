@@ -219,8 +219,9 @@ assert.equal(entryScaleFor("/colophon"), null);
   // `up` override ever comes back on `earth`, this line fails.
   assert.equal(travelNeighbor("earth", 1), "planets", "the ground climbs into its neighbourhood");
   assert.equal(travelNeighbor("earth", -1), "flowers", "the ground opens onto flowers");
-  assert.equal(travelNeighbor("atlas", 1), "stars", "the map recedes into the sky");
+  assert.equal(travelNeighbor("atlas", 1), "earth", "the map's ceiling is the ground it charts");
   assert.equal(travelNeighbor("atlas", -1), "atmosphere", "the map descends into the air column");
+  assert.equal(travelNeighbor("stars", -1), "atlas", "the sky's canonical way down is still the trunk passage");
   // The whole upper axis, walked band by band, is now monotone in metres:
   // every canonical up-door lands on a band whose floor is at least this
   // band's ceiling. The bug: a future mereological override quietly
@@ -301,6 +302,16 @@ assert.equal(entryScaleFor("/colophon"), null);
   assert.deepEqual(
     Array.from(travelOptions("atlas", -1, { atlas: "earth" }), (b) => b.id),
     ["earth", "atmosphere"],
+    "memory reorders the offer, never removes a door",
+  );
+  assert.deepEqual(
+    Array.from(travelOptions("atlas", 1, {}), (b) => b.id),
+    ["earth", "stars"],
+    "the map climbs to the ground it charts, and keeps the trunk passage to the sky beside it",
+  );
+  assert.deepEqual(
+    Array.from(travelOptions("atlas", 1, { atlas: "stars" }), (b) => b.id),
+    ["stars", "earth"],
     "memory reorders the offer, never removes a door",
   );
   assert.deepEqual(

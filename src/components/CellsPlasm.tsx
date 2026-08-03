@@ -1237,7 +1237,9 @@ export default function CellsPlasm() {
       // the stage: dark plasm, the candle pool beneath it, the objective's
       // iris. Repainted only when the lens turns or the pool's light moves;
       // otherwise it is one blit, and the whole frame budget goes to life.
-      const glowPulse = (reduce ? 0.1 : 0.09 + Math.sin(breath) * 0.03)
+      // season (three-finger twist) drifts the plasm's own slow warmth cycle
+      const seasonWarm = Math.max(0, Math.sin(season * Math.PI * 2)) * 0.02;
+      const glowPulse = ((reduce ? 0.1 : 0.09 + Math.sin(breath) * 0.03) + seasonWarm)
         * (1 - night * 0.85) * (1 - breathGust * 0.55);
       if (stageCtx && (Math.abs(lens - stageLens) > 0.003 || Math.abs(glowPulse - stageGlow) > 0.0015)) {
         stageLens = lens;
@@ -1262,10 +1264,11 @@ export default function CellsPlasm() {
       }
       ctx.drawImage(stage, 0, 0, width, height);
 
-      // brownian motes
+      // brownian motes — the fixed count scales with the frame governor's tier
+      const activeMotes = Math.max(12, Math.round(motes.length * detail.particles));
       ctx.save();
       ctx.globalCompositeOperation = lens > 0.5 ? "source-over" : "screen";
-      for (let i = 0; i < motes.length; i++) {
+      for (let i = 0; i < activeMotes; i++) {
         const m = motes[i];
         if (!reduce) {
           // brownian jitter — deterministic per mote, alive at rest
@@ -1432,6 +1435,7 @@ export default function CellsPlasm() {
       observer.disconnect();
       detach();
       detachVessel();
+      offVis();
       breathStop?.();
       markLens(false);
       wrap.removeEventListener("keydown", onKeyDown);

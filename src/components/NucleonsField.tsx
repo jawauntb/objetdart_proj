@@ -34,18 +34,23 @@
  * Tap a drop to strike it — the giant resonance, the whole nucleus ringing. Scrub a drop to spin it up until
  * angular momentum stretches it past holding and it splits — and the prompt
  * neutrons that fly out are captured by its neighbors, which is a chain
- * reaction, felt. Three fingers run a NEUTRON FLUX across the field, and a
- * drop standing in that wind climbs the chart of the nuclides one capture and
- * one beta at a time: the r-process, and the only way anything past iron has
- * ever been made — here or anywhere. Three fingers held dilate time; three
- * fingers tapped ask every drop to hum at once. A twist rotates the lens to
- * the chart of the nuclides itself — N against Z, the valley drawn, every
- * drop you have made plotted with its symbol and mass number, the one
- * lettered surface in the room and the only place the periodic table is
- * spelled out.
+ * reaction, felt. Three fingers dragged run a NEUTRON FLUX across the field
+ * — weather, not a shove: it keeps raining after the hand has gone, neutrons
+ * are drawn the last of the way in by the drops' capture cross-section, and a
+ * drop standing in that rain climbs the chart of the nuclides one capture and
+ * one beta at a time. That is the r-process, and it is the only way anything
+ * past iron has ever been made, here or anywhere. Three fingers held dilate
+ * time; three fingers tapped ask every drop to hum at once; three fingers
+ * TWISTED turn the season, from a cold vacuum to a furnace that rains
+ * neutrons on its own. A two-finger twist rotates the lens to the chart of
+ * the nuclides itself — N against Z, the valley drawn, every drop plotted
+ * with its symbol and mass number and the ROAD IT TOOK to become that, the
+ * one lettered surface in the room. Laid face-down the room is night and the
+ * drops go on decaying in the dark.
  *
- * The field persists in `objetdart:nucleons:v1`. Pinch is deliberately
- * unbound — ScaleTravel owns it (atoms above, quarks below).
+ * The field persists in `objetdart:nucleons:v1`. Deliberately unbound: pinch
+ * (ScaleTravel owns it — atoms above, quarks below) and two-finger pan,
+ * because the field has no frame to pan; two-finger tap lowers the lens.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -1115,7 +1120,7 @@ export default function NucleonsField() {
             ? Math.max(0, 1 - (e.elapsed - DWELL_MS) / 460) // it became the nucleon
             : clamp01((e.elapsed - TOUCH_MS) / (DWELL_MS - TOUCH_MS));
           const nowG = performance.now();
-          if (hold.gather > 0 && hold.gather < 1 && nowG - lastGatherNoteAt > 150) {
+          if (!hold.seeded && hold.gather > 0 && hold.gather < 1 && nowG - lastGatherNoteAt > 150) {
             lastGatherNoteAt = nowG;
             note(58 + Math.round(hold.gather * 14), 70);
           }

@@ -69,6 +69,7 @@ import {
   centroid,
   cullBird,
   flushNear,
+  isAirActivity,
   launchNearest,
   orderParameter,
   partialFreq,
@@ -1049,6 +1050,7 @@ export default function Murmuration() {
       meta: gl.getAttribLocation(birdProg, "a_meta"),
       view: gl.getUniformLocation(birdProg, "u_view"),
       camDist: gl.getUniformLocation(birdProg, "u_camDist"),
+      pan: gl.getUniformLocation(birdProg, "u_pan"),
       focalX: gl.getUniformLocation(birdProg, "u_focalX"),
       focalY: gl.getUniformLocation(birdProg, "u_focalY"),
       time: gl.getUniformLocation(birdProg, "u_time"),
@@ -1149,6 +1151,7 @@ export default function Murmuration() {
     let swirl = 0;
     let scatter = 0;
     let gather = 0;
+    let ceremonyReleaseFired = false;
     let wingHz = 7.2;
     let wingHzTarget = 7.2;
     let order = 0;
@@ -1517,6 +1520,32 @@ export default function Murmuration() {
           // flock comes in, and past the ceremony it settles onto the hand.
           gather = clamp01(e.elapsed / 2500);
           lurePullTarget = 4 + gather * 26;
+          // ceremony tier — the room's one solemn act: over a bird already
+          // roosted nearby it is released, launched back into flight (the
+          // touch-reachable delete); everywhere else the murmuration keeps
+          // settling onto the hand, deepening its bond permanently.
+          if (e.tier >= 3 && !ceremonyReleaseFired) {
+            ceremonyReleaseFired = true;
+            let nearIdx = -1;
+            let nearD = 3 * 3;
+            for (let i = 0; i < state.n; i++) {
+              if (isAirActivity(ACTIVITIES[state.activityOf[i]])) continue;
+              const dx = state.pos[i * 3] - p.x;
+              const dy = state.pos[i * 3 + 1] - p.y;
+              const dz = state.pos[i * 3 + 2] - p.z;
+              const d = dx * dx + dy * dy + dz * dz;
+              if (d < nearD) { nearD = d; nearIdx = i; }
+            }
+            if (nearIdx >= 0) {
+              launchNearest(state, p, { x: 0, y: 0.4, z: -1 }, MIN_SPEED + 4);
+              try {
+                haptics.chop();
+                audio.chime();
+              } catch {
+                /* noop */
+              }
+            }
+          }
           if (e.tier >= 3 && gather >= 1 && e.phase === "tick") {
             char.ali = clamp(char.ali + 0.006, 0.15, 2);
             char.coh = clamp(char.coh + 0.006, 0.15, 2);
@@ -1630,6 +1659,12 @@ export default function Murmuration() {
             }
           }
           if (e.phase === "end") save(performance.now());
+        },
+        pan2: (e) => {
+          lastInteractionAt = performance.now();
+          // two fingers pan the frame — a small, bounded lean of the view
+          panXTarget = clamp(panXTarget + e.dx * 0.0018, -0.3, 0.3);
+          panYTarget = clamp(panYTarget - e.dy * 0.0018, -0.22, 0.22);
         },
         scrub: (e) => {
           lastInteractionAt = performance.now();
@@ -2040,6 +2075,7 @@ export default function Murmuration() {
       divisor(uBird.meta, 1);
       gl.uniformMatrix3fv(uBird.view, false, viewM);
       gl.uniform1f(uBird.camDist, CAM_DIST);
+      gl.uniform2f(uBird.pan, panX, panY);
       gl.uniform1f(uBird.focalX, focalX);
       gl.uniform1f(uBird.focalY, focalY);
       gl.uniform1f(uBird.time, visualT);

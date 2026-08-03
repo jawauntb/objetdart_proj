@@ -1,297 +1,287 @@
 "use client";
 
 /**
- * RoomTemplate — the distilled shape of a room, ready to copy.
+ * RoomTemplate — a whole conformant room in eighty lines of material.
  *
- * This file compiles and runs (a field of breathing motes wired to every bus
- * the site owns) but is deliberately NOT registered as a route. To build a
- * new room: read docs/new-room.md, decide the room's place in the cosmology
- * (§1 there), copy this file under a new name, and replace the mote field
- * with your material. The numbered sections below are the contract — every
- * law they demonstrate is binding (INSPIRATION.md §5, docs/gesture-grammar.md).
+ * Copy this file, replace the mote with your object, replace the FIELD shader
+ * with your background, and write your registry entry. Everything else is
+ * already done: the gesture grammar routed by finger count, the vessel, the
+ * frame governor, the visibility pause, the DPR ceiling, instanced rendering,
+ * persistence through an idle writer, the shared `<LetGo>`, the glimmer, the
+ * keyboard dialect, reduced motion.
  *
- * What this template is NOT: a component to extend or import. Copy it.
- * Rooms own their material completely; only the buses are shared.
+ * That is the point. A room author's whole job is the visual and material
+ * question — what is the thing, what does the field look like, what does each
+ * verb mean in *this* material — and none of the wiring. This file passes
+ * `npm run test:room-contract` unmodified; if a copy of it fails, the copy
+ * removed something the contract needs.
+ *
+ * Read first: docs/new-room.md (the flow), docs/gesture-grammar.md (the
+ * verbs), AGENTS.md (the laws). This file is deliberately NOT registered as a
+ * route — it is a shape to copy, never a component to import.
  */
 
-import { useEffect, useRef, useState } from "react";
-import { getFieldAudio } from "@/lib/audio";
-import * as haptics from "@/lib/haptics";
-import { attachGestures } from "@/lib/gesture";
-import { onVessel } from "@/lib/vessel";
+import { useCallback, useEffect, useRef, useState } from "react";
 import LetGo from "@/components/LetGo";
+import { createPopulation, mulberry32, type SceneObjectSpec, type SceneObjectState } from "@/lib/scene/object";
+import { createRoomShell, type RoomShell } from "@/lib/scene/room";
 
-// ——— 1. Determinism: every generated thing is a pure function of a seed.
-// The site-wide idiom — an inline integer hash + mulberry32. No Math.random,
-// no Date.now in anything that renders (interaction timestamps are fine).
+// ——— 1. The registry entry this room would take. Copy it into
+// src/lib/room-registry.ts and the nav, the gallery, the guide's coverage,
+// the axis chrome and this contract all follow from it:
+//
+//   {
+//     key: "template", href: "/template", desc: "…", icon: "growth",
+//     cluster: "field", dark: true, kind: "room",
+//     source: "src/components/YourRoom.tsx", page: "src/app/template/page.tsx",
+//     address: { band: "drop" },          // or { exempt: "why it has no scale" }
+//     frame: "yield",                      // "own" only if you keep a camera
+//     chrome: "axis",                      // <AxisChrome route="/template" />
+//     keeps: STORAGE_KEY, creates: "a mote",
+//     exempt: {},                          // every binding you cannot express, with the reason
+//   }
 
-function hashSeed(...parts: number[]): number {
-  let h = 0x811c9dc5;
-  for (const p of parts) {
-    h ^= Math.round(p) & 0xffffffff;
-    h = Math.imul(h, 0x01000193);
-  }
-  return h >>> 0;
-}
-
-function mulberry32(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a |= 0;
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-type Mote = { id: number; seed: number; nx: number; ny: number; born: number };
-
-// ——— 8a. Persistence: versioned key, capped population, graceful retirement.
 const STORAGE_KEY = "objetdart:room-template:v1";
-const MAX_MOTES = 16;
+
+// ——— 2. The background field. A fragment shader, because a field of light is
+// what a shader is for — 2D compositing can only imitate depth. `uv` is 0..1
+// with y down the page, `t` is seconds, and the room's law-layer uniforms
+// (uBreath, uWind, uGravity, uAgitation, uSeason) arrive already wired.
+const FIELD = `
+vec3 field(vec2 uv, float t) {
+  vec2 p = uv - vec2(0.5, 0.55);
+  p.x *= uRes.x / max(1.0, uRes.y);
+  float d = length(p);
+  float haze = smoothstep(0.9, 0.02, d);
+  float drift = sin(uv.x * 5.0 + t * 0.08 + uWind * 2.0) * 0.5 + 0.5;
+  vec3 deep = vec3(0.031, 0.043, 0.063);
+  vec3 warm = vec3(0.086, 0.078, 0.086);
+  vec3 c = mix(deep, warm, haze * (0.55 + 0.45 * uBreath) * (0.7 + 0.3 * drift));
+  c += vec3(0.03, 0.02, 0.01) * uAgitation;
+  return c;
+}`;
+
+// ——— 3. The object. Its state is a small vector plus a seed (nothing about
+// it is random — the determinism law), and it declares exactly the verbs its
+// material can answer. Declare a verb without implementing it and
+// `createPopulation` throws before a stranger's hand ever finds the silence.
+
+type Mote = SceneObjectState & {
+  /** the thing's own slow cycle, so tutti and season have something to move. */
+  hue: number;
+  wobble: number;
+  charge: number;
+};
+
+const mote: SceneObjectSpec<Mote> = {
+  kind: "a mote",
+  cap: 24,
+
+  born(seed, nx, ny, tMs) {
+    const rng = mulberry32(seed);
+    return {
+      id: 0,
+      seed,
+      nx,
+      ny,
+      bornMs: tMs,
+      // Born small and legible: it *gathers* under the finger rather than
+      // appearing whole, so the dwell reads as making rather than clicking.
+      growth: 0.12,
+      sealedMs: null,
+      presence: 1,
+      hue: rng(),
+      wobble: rng() * Math.PI * 2,
+      charge: 0,
+    };
+  },
+
+  step(s, ctx) {
+    // Everything continuous: growth eases toward its target, charge bleeds
+    // off, the wobble rides the shared breath and the world's wind.
+    s.growth += (1 - s.growth) * Math.min(1, ctx.dt * 0.6);
+    s.charge *= 1 - Math.min(1, ctx.dt * 1.4);
+    if (!ctx.reducedMotion) {
+      s.wobble += ctx.dt * (0.4 + s.hue * 0.5);
+      s.nx = Math.max(0.02, Math.min(0.98, s.nx + ctx.wind * ctx.dt * 0.06));
+      s.ny = Math.max(0.02, Math.min(0.98, s.ny + ctx.gravity * ctx.dt * 0.02));
+    }
+  },
+
+  // ——— 4. Instance data, never draw calls. Eight numbers; the room draws the
+  // whole population in one pass. A `createRadialGradient` here — per object,
+  // per frame — is the single most expensive habit in this codebase.
+  emit(s, ctx, out) {
+    const sealed = s.sealedMs !== null;
+    const wob = ctx.reducedMotion ? 0 : Math.sin(s.wobble) * 3;
+    const r = (3 + s.growth * 9 + s.charge * 6) * (sealed ? 1.35 : 1);
+    out.push(
+      s.nx * ctx.width + wob,
+      s.ny * ctx.height,
+      r,
+      s.wobble,
+      s.hue,
+      0.35 + s.charge * 0.6 + ctx.breath * 0.15,
+      (Math.sin(s.wobble * 0.7) * 0.5 + 0.5) * (sealed ? 1 : 0.7),
+      s.presence * (0.5 + s.growth * 0.5),
+    );
+    // A sealed mote keeps a second, wider ember — the ceremony is visible at
+    // rest, not only at the moment it happened.
+    if (sealed) {
+      out.push(
+        s.nx * ctx.width + wob,
+        s.ny * ctx.height,
+        r * 2.4,
+        -s.wobble * 0.3,
+        Math.min(1, s.hue + 0.3),
+        0.9,
+        ctx.breath,
+        s.presence * 0.22,
+      );
+    }
+  },
+
+  // ——— 5. The verbs this material speaks, and what each one means here.
+  // Duration and intensity are axes, never switches: a tap scales with how
+  // hard it landed, and a hold keeps deepening past its tier.
+  verbs: [
+    "touch",
+    "stroke",
+    "dwell",
+    "ceremony",
+    "tutti",
+    "lens",
+    "season",
+    "wind",
+    "dilate",
+    "gravity",
+    "agitate",
+    "knock",
+    "night",
+  ],
+  respond: {
+    touch: (s, e) => {
+      s.charge = Math.min(1, s.charge + 0.35 * e.intensity);
+    },
+    stroke: (s, e) => {
+      s.nx = Math.max(0.02, Math.min(0.98, s.nx + e.dx));
+      s.ny = Math.max(0.02, Math.min(0.98, s.ny + e.dy));
+    },
+    dwell: (s, e) => {
+      // Keeps deepening: 2400ms must not feel like 900ms.
+      s.growth = Math.min(1, s.growth + e.elapsedMs / 90000);
+      s.charge = Math.min(1, s.charge + 0.02);
+    },
+    ceremony: (s, e) => {
+      // The room's one solemn act, and its touch-reachable delete: an unsealed
+      // mote is sealed; a sealed one is let go.
+      if (s.sealedMs === null) s.sealedMs = e.tMs;
+      else s.presence = 0.999;
+    },
+    tutti: (s) => {
+      s.charge = Math.min(1, s.charge + 0.5);
+    },
+    lens: (s, e) => {
+      // The lens turns the level of description, not the scale: here the mote
+      // reads as ember or as phase, and the twist crossfades between them.
+      s.wobble += e.angle * 0.5;
+      s.hue = (s.hue + e.angle / (Math.PI * 8) + 1) % 1;
+    },
+    season: (s, e) => {
+      s.hue = (s.hue + e.angle / (Math.PI * 2) + 1) % 1;
+    },
+    wind: (s, e) => {
+      s.wobble += e.dx * 6;
+    },
+    dilate: (s) => {
+      s.charge = Math.min(1, s.charge + 0.004);
+    },
+    gravity: (s, e) => {
+      s.nx = Math.max(0.02, Math.min(0.98, s.nx + e.dx * 0.004));
+    },
+    agitate: (s, e) => {
+      s.wobble += e.intensity * 3;
+      s.charge = Math.min(1, s.charge + e.intensity * 0.4);
+    },
+    knock: (s, e) => {
+      s.charge = Math.min(1, s.charge + 0.3 * e.intensity);
+    },
+    night: (s, e) => {
+      s.charge = e.intensity > 0.5 ? 0 : s.charge;
+    },
+  },
+};
 
 export default function RoomTemplate() {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [hasKept, setHasKept] = useState(false);
-  const motesRef = useRef<Mote[]>([]);
+  const shellRef = useRef<RoomShell | null>(null);
+  const [standing, setStanding] = useState(0);
 
   useEffect(() => {
     const wrap = wrapRef.current;
     const canvas = canvasRef.current;
     if (!wrap || !canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
 
-    const audio = getFieldAudio();
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-
-    let width = 0;
-    let height = 0;
-    const resize = () => {
-      const rect = wrap.getBoundingClientRect();
-      const ratio = Math.min(2, window.devicePixelRatio || 1);
-      width = rect.width;
-      height = rect.height;
-      canvas.width = Math.round(width * ratio);
-      canvas.height = Math.round(height * ratio);
-      ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-    };
-    resize();
-    const observer = new ResizeObserver(resize);
-    observer.observe(wrap);
-
-    // Load what was kept; the room remembers.
-    try {
-      const raw = window.localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as { motes?: Mote[] };
-        if (Array.isArray(parsed.motes)) motesRef.current = parsed.motes.slice(-MAX_MOTES);
-      }
-    } catch {
-      /* a fresh field */
-    }
-    setHasKept(motesRef.current.length > 0);
-
-    const save = () => {
-      try {
-        window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ motes: motesRef.current }));
-      } catch {
-        /* noop */
-      }
-      setHasKept(motesRef.current.length > 0);
-    };
-
-    // ——— 4/8b. State the hand can read: tilt and agitation feed the render.
-    let tiltX = 0;
-    let agitation = 0;
-    let lastTouchAt = performance.now(); // for the glimmer (7)
-    let glimmerAt = 0;
-
-    // ——— 5. The vessel: passive subscription. The candle owns permission —
-    // a room NEVER requests; it simply receives nothing until granted.
-    const detachVessel = onVessel({
-      tilt: ({ gamma }) => {
-        if (!reduced) tiltX = Math.max(-1, Math.min(1, gamma / 45));
-      },
-      shake: ({ intensity }) => {
-        if (reduced) return;
-        agitation = Math.min(1, agitation + intensity);
-        haptics.chop();
-      },
-    });
-
-    const addMote = (nx: number, ny: number) => {
-      const m: Mote = {
-        id: hashSeed(motesRef.current.length, Math.round(nx * 997), Math.round(ny * 991)),
-        seed: hashSeed(Math.round(nx * 8191), Math.round(ny * 4093), motesRef.current.length),
-        nx,
-        ny,
-        born: performance.now(),
-      };
-      motesRef.current.push(m);
-      // Oldest retired gracefully — never silently truncated.
-      if (motesRef.current.length > MAX_MOTES) motesRef.current.shift();
-      save();
-      return m;
-    };
-
-    // ——— 3. The grammar. Global verbs pre-wired; your material interprets
-    // them. Thresholds come from gesture/core and NOWHERE else. Never bind
-    // pinch/pan2 — ScaleTravel owns two-finger travel on axis rooms (10).
-    const detachGestures = attachGestures(
+    const population = createPopulation(mote);
+    const shell = createRoomShell({
+      wrap,
       canvas,
-      {
-        tap: (e) => {
-          lastTouchAt = performance.now();
-          if (e.fingers === 3) {
-            // tutti — one synchronized soft pulse of everything alive.
-            agitation = Math.min(1, agitation + 0.25);
-            audio.chime();
-            haptics.ripple(0.4);
-            return;
-          }
-          if (e.fingers === 2) return; // step back — ScaleTravel's verb.
-          // ——— 6. Two senses in the same frame: sight (render reads
-          // agitation) + sound + touch, all scaled by intensity — never a
-          // constant where the hand offered a magnitude.
-          agitation = Math.min(1, agitation + 0.15 * e.intensity);
-          audio.playNote(52 + Math.round(e.intensity * 12), 180);
-          haptics.tap();
-        },
-        hold: (e) => {
-          lastTouchAt = performance.now();
-          if (e.fingers !== 1) return; // 3-finger hold = time dilation: wire
-          // your room's clock to ×0.25 while held (omitted in the template).
-          if (e.phase === "enter" && e.tier >= 1) {
-            // Plant at the touch tier — never silent, never late.
-            const m = addMote(e.x / Math.max(1, width), e.y / Math.max(1, height));
-            audio.spark();
-            haptics.ripple(0.5);
-            void m;
-          }
-          // ——— 4. Duration is an axis: keep deepening while held. A hold
-          // that does the same thing at 900ms and 2400ms is a violation.
-          if (e.phase === "tick") agitation = Math.min(1, agitation + e.elapsed / 60000);
-          if (e.phase === "release" && e.tier >= 3) {
-            // Ceremony: the room's ONE solemn act.
-            audio.bell();
-            haptics.bloom();
-          }
-        },
-        drag: (e) => {
-          lastTouchAt = performance.now();
-          if (e.fingers === 3 && !reduced) {
-            // Wind — the law layer pushes the whole material.
-            tiltX = Math.max(-1, Math.min(1, tiltX + e.dx * 0.002));
-          }
-        },
-        scrub: () => {
-          lastTouchAt = performance.now();
-          // Stir — a discovered verb; answer in your material.
-          agitation = Math.min(1, agitation + 0.2);
-          audio.playNote(64, 240);
-          haptics.ripple(0.4);
-        },
-        rhythm: (e) => {
-          // Entrain the room's clock to the hand's tempo for ~9s.
-          if (e.stability > 0.7) agitation = Math.min(1, agitation + 0.1);
-        },
-      },
-      { wheelZoom: false },
-    );
+      population,
+      storageKey: STORAGE_KEY,
+      instanceBudget: 512,
+      layer: { field: FIELD, palette: ["#2c4a5c", "#c8732a", "#f3d77a"], fallback: "#0a0d12" },
+      onStanding: setStanding,
+      // Nothing is punished: a verb that reached no mote still answers softly
+      // in the field itself (grammar §6).
+      onUnanswered: () => {},
+    });
+    shellRef.current = shell;
 
-    // ——— 2. The shared breath: every room breathes on the one clock.
-    let raf = 0;
-    const draw = () => {
-      const t = audio.getAudioTime() ?? performance.now() / 1000;
-      const breath = reduced ? 0 : Math.sin(t * Math.PI * 2 * 0.14) * 0.5 + 0.5;
-      agitation *= 0.985;
-
-      ctx.clearRect(0, 0, width, height);
-      ctx.fillStyle = "#0a0d12";
-      ctx.fillRect(0, 0, width, height);
-
-      const now = performance.now();
-      for (const m of motesRef.current) {
-        const rng = mulberry32(m.seed);
-        const wobble = reduced ? 0 : Math.sin(t * (0.4 + rng() * 0.5) + rng() * 7) * 4;
-        const x = m.nx * width + wobble + tiltX * 18 * rng();
-        const y = m.ny * height + (reduced ? 0 : Math.cos(t * 0.3 + rng() * 5) * 3);
-        const r = 2.2 + rng() * 3 + breath * 1.6 + agitation * 3;
-        ctx.beginPath();
-        ctx.fillStyle = `rgba(243, 215, 122, ${0.35 + breath * 0.25 + agitation * 0.3})`;
-        ctx.arc(x, y, r, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      // ——— 7. Glimmer: after ~20s idle, one physical hint. Never text.
-      if (now - lastTouchAt > 20000 && now - glimmerAt > 6000 && !reduced) {
-        glimmerAt = now;
-      }
-      if (glimmerAt && now - glimmerAt < 1600) {
-        const u = (now - glimmerAt) / 1600;
-        ctx.beginPath();
-        ctx.strokeStyle = `rgba(238, 234, 219, ${0.25 * (1 - u)})`;
-        ctx.arc(width * 0.5, height * 0.6, 14 + u * 34, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-
-      raf = requestAnimationFrame(draw);
-    };
-    raf = requestAnimationFrame(draw);
-
-    // ——— 9. The keyboard dialect: nothing is touch-only.
+    // ——— 6. The keyboard dialect. Stillness never removes a verb, and no
+    // verb is touch-only: everything a finger can do, a key can do.
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Enter") {
-        addMote(0.3 + 0.4 * mulberry32(hashSeed(motesRef.current.length))(), 0.5);
-        audio.spark();
+        const rng = mulberry32(population.items.length * 2654435761);
+        shell.spawnAt(0.25 + rng() * 0.5, 0.3 + rng() * 0.4);
       }
     };
     window.addEventListener("keydown", onKey);
 
     return () => {
-      observer.disconnect();
-      detachGestures();
-      detachVessel();
       window.removeEventListener("keydown", onKey);
-      cancelAnimationFrame(raf);
+      shell.detach();
+      shellRef.current = null;
     };
   }, []);
 
-  // ——— 8c. The quiet clear: the shared <LetGo> control at bottom-center of
-  // every page that keeps things — hard to hit by accident, clear of browser
-  // chrome, in the room's own words (lowercase, two of the three registers,
-  // five words or fewer). Visible only when something stands. The act is an
-  // exhale, never a blink-delete: in a real room, retire the population
-  // gracefully over ~1.5-2s in its own material (a quick fade under reduced
-  // motion). Storage is written empty at once — an empty room is a
-  // remembered state, and starters never respawn over a deliberate clearing.
-  const letGo = () => {
-    motesRef.current = [];
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ motes: [] }));
-    } catch {
-      /* noop */
-    }
-    setHasKept(false);
-    getFieldAudio().thud();
-    haptics.roll();
-  };
+  // ——— 7. The quiet clear. Always the shared <LetGo>: it portals to
+  // document.body because a control rendered inside a `position: fixed` room
+  // wrapper is trapped in that stacking context under the tape's z-index in
+  // Chrome, and silently swallows every click. Never hand-roll this button.
+  const letGo = useCallback(() => shellRef.current?.letGo(), []);
 
   return (
     <div ref={wrapRef} style={{ position: "fixed", inset: 0, background: "#0a0d12" }}>
       <canvas
         ref={canvasRef}
         role="application"
-        aria-label="a field of motes"
-        style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
+        tabIndex={0}
+        aria-label="a field of motes — touch one and it charges, rest a finger on empty ground and one gathers, hold longer and it seals"
+        style={{
+          position: "absolute",
+          inset: 0,
+          width: "100%",
+          height: "100%",
+          touchAction: "none",
+          userSelect: "none",
+        }}
       />
-      <LetGo label="let the field go" onLetGo={letGo} visible={hasKept} />
-      {/* ——— 10. Axis rooms mount ScaleTravel in their page.tsx:
-          <ScaleTravel route="/your-room" /> — and NEVER bind pinch/pan2
-          themselves. See docs/new-room.md §1 for the ordinal decision. */}
+      <LetGo label="let the field go" onLetGo={letGo} visible={standing > 0} />
+      {/* ——— 8. The page mounts the chrome, never the room:
+          <AxisChrome route="/your-room" /> in src/app/your-room/page.tsx.
+          Never bind pinch or pan2 yourself unless the registry says
+          `frame: "own"`. See docs/new-room.md §1 for the ordinal decision. */}
     </div>
   );
 }

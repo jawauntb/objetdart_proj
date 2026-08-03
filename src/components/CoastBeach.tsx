@@ -728,7 +728,6 @@ export default function CoastBeach() {
     const marks: Mark[] = [];
     const grooves = new Float32Array(GROOVE_MAX * GROOVE_STRIDE);
     let grooveHead = 0;
-    let grooveCount = 0;
     const touchBuf = new Float32Array(MAX_TOUCH * 4);
     const touches: Array<{ x: number; y: number; t0: number; z: number; s: number }> = [];
     let departing: Departing[] = [];
@@ -747,7 +746,12 @@ export default function CoastBeach() {
     const panTarget = { x: 0, y: 0 };
     let timeScale = 1;
     let timeScaleTarget = 1;
+    // Two clocks. `simT` is the room's own, and it starts near zero so the
+    // shader's float32 keeps its precision on the fast swell components.
+    // The tide and the surf sets run on the wall clock instead, so the
+    // shore a visitor walks in on is where the world actually is.
     let simT = 0;
+    const tideEpoch = (Date.now() % 86_400_000) / 1000;
     const pulse = [0, 0, 0, 0, 0];
     let breathWind = 0;
 
@@ -778,8 +782,8 @@ export default function CoastBeach() {
       syncSleep();
     });
 
-    const tideNow = () => tideLine(simT, moon);
-    const surfNow = () => surfBreath(simT, 9 - seasonProfile(season).swell * 3);
+    const tideNow = () => tideLine(tideEpoch + simT, moon);
+    const surfNow = () => surfBreath(tideEpoch + simT, 9 - seasonProfile(season).swell * 3);
 
     const toLocal = (cx: number, cy: number) => {
       const r = wrap.getBoundingClientRect();
@@ -811,7 +815,6 @@ export default function CoastBeach() {
       grooves[i + 4] = 1;
       grooves[i + 5] = kind;
       grooveHead = (grooveHead + 1) % GROOVE_MAX;
-      grooveCount = Math.min(GROOVE_MAX, grooveCount + 1);
     };
 
     const throwFoam = (
@@ -895,11 +898,35 @@ export default function CoastBeach() {
     };
 
     // ——— shells: creation, deepening, and the sea taking one back ———
+    //
+    // Every shell's look is a deterministic function of its seed, resolved
+    // once and cached: the RAF loop must not build a PRNG per object per
+    // frame just to ask a shell what colour it has always been.
+    type ShellStyle = {
+      drop: number; hue: number; rot: number; r: number;
+      a: number; b: number;
+    };
+    const styleCache = new Map<string, ShellStyle>();
+    const styleFor = (n: WorldNatural): ShellStyle => {
+      const hit = styleCache.get(n.id);
+      if (hit) return hit;
+      const rng = mulberry32((n.seed >>> 0) || 1);
+      const st: ShellStyle = {
+        drop: rng(),
+        hue: 26 + rng() * 44,
+        rot: rng() * Math.PI,
+        r: 5 + rng() * 4,
+        a: rng(),
+        b: rng(),
+      };
+      if (styleCache.size > 192) styleCache.clear();
+      styleCache.set(n.id, st);
+      return st;
+    };
+
     const beachY = (n: WorldNatural, tide: number) => {
       // things that washed in from another zone arrive at the waterline
-      if (n.ny <= tide + 0.005) {
-        return tide + 0.012 + mulberry32(n.seed >>> 0 || 1)() * (0.06 + 0.04);
-      }
+      if (n.ny <= tide + 0.005) return tide + 0.012 + styleFor(n).drop * 0.1;
       return n.ny;
     };
 
@@ -1459,17 +1486,15 @@ export default function CoastBeach() {
     };
 
     const drawNatural = (n: WorldNatural, px: number, py: number, alpha: number, scale: number) => {
-      const rng = mulberry32(n.seed >>> 0 || 1);
-      const hue = 26 + rng() * 44;
-      const rot = rng() * Math.PI;
-      const r = (5 + rng() * 4) * scale;
+      const st = styleFor(n);
+      const r = st.r * scale;
       ctx.globalAlpha = alpha;
       ctx.save();
       ctx.translate(px, py);
-      ctx.rotate(rot);
+      ctx.rotate(st.rot);
       switch (n.kind) {
         case "kelp":
-          ctx.strokeStyle = `hsla(${90 + rng() * 30}, 32%, 26%, 0.85)`;
+          ctx.strokeStyle = `hsla(${90 + st.a * 30}, 32%, 26%, 0.85)`;
           ctx.lineWidth = 2.2 * scale;
           ctx.beginPath();
           ctx.moveTo(-r * 1.8, 0);
@@ -1477,11 +1502,11 @@ export default function CoastBeach() {
           ctx.stroke();
           break;
         case "driftwood":
-          ctx.fillStyle = `hsla(${28 + rng() * 12}, 20%, ${38 + rng() * 14}%, 0.9)`;
+          ctx.fillStyle = `hsla(${28 + st.a * 12}, 20%, ${38 + st.b * 14}%, 0.9)`;
           ctx.fillRect(-r * 2.2, -r * 0.35, r * 4.4, r * 0.7);
           break;
         case "starfish": {
-          ctx.fillStyle = `hsla(${12 + rng() * 16}, 55%, ${52 + rng() * 12}%, 0.9)`;
+          ctx.fillStyle = `hsla(${12 + st.a * 16}, 55%, ${52 + st.b * 12}%, 0.9)`;
           ctx.beginPath();
           for (let i = 0; i < 10; i++) {
             const a = (i / 10) * Math.PI * 2;
@@ -1496,7 +1521,7 @@ export default function CoastBeach() {
           break;
         }
         case "sanddollar":
-          ctx.fillStyle = `hsla(42, 22%, ${76 + rng() * 10}%, 0.92)`;
+          ctx.fillStyle = `hsla(42, 22%, ${76 + st.a * 10}%, 0.92)`;
           ctx.beginPath();
           ctx.arc(0, 0, r, 0, Math.PI * 2);
           ctx.fill();
@@ -1512,7 +1537,7 @@ export default function CoastBeach() {
           break;
         default: {
           // a scallop: a fan with ribs
-          ctx.fillStyle = `hsla(${hue}, 38%, ${64 + rng() * 18}%, 0.92)`;
+          ctx.fillStyle = `hsla(${st.hue}, 38%, ${64 + st.a * 18}%, 0.92)`;
           ctx.beginPath();
           ctx.ellipse(0, 0, r * 1.25, r * 0.85, 0, 0, Math.PI * 2);
           ctx.fill();

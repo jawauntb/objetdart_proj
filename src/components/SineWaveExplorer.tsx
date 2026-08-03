@@ -15,6 +15,16 @@ import { holdTier, pathWinding, THRESHOLDS } from "@/lib/gesture/core";
 import { getTimbreEngine } from "@/lib/timbre-engine";
 import type { TimbreBlend, TimbreSpec } from "@/lib/timbre";
 import { useField } from "@/store/field";
+import { onVessel } from "@/lib/vessel";
+import LetGo from "@/components/LetGo";
+import {
+  createFrameGovernor,
+  detailForTier,
+  onVisibility,
+  onGalleryPause,
+  resolveDpr,
+  isEmbeddedFrame,
+} from "@/lib/room-runtime";
 
 type WaveMode = "source" | "interference" | "standing";
 
@@ -221,6 +231,7 @@ function drawImpulses(
   impulses: Impulse[],
   now: number,
   tone: string,
+  coreGrad: CanvasGradient,
 ) {
   ctx.save();
   ctx.globalCompositeOperation = "screen";
@@ -235,13 +246,19 @@ function drawImpulses(
     ctx.arc(impulse.x, impulse.y, radius, 0, Math.PI * 2);
     ctx.stroke();
 
-    const core = ctx.createRadialGradient(impulse.x, impulse.y, 0, impulse.x, impulse.y, radius * 0.64);
-    core.addColorStop(0, colorAlpha(tone, alpha * 0.22));
-    core.addColorStop(1, "rgba(0, 0, 0, 0)");
-    ctx.fillStyle = core;
+    // one cached unit-space gradient (built once, per current tone), never
+    // reallocated per impulse — transform + globalAlpha reproduce the
+    // original per-impulse radius and alpha exactly (SPEC perf contract).
+    const coreR = radius * 0.64;
+    ctx.save();
+    ctx.translate(impulse.x, impulse.y);
+    ctx.scale(coreR, coreR);
+    ctx.globalAlpha = alpha * 0.22;
+    ctx.fillStyle = coreGrad;
     ctx.beginPath();
-    ctx.arc(impulse.x, impulse.y, radius * 0.64, 0, Math.PI * 2);
+    ctx.arc(0, 0, 1, 0, Math.PI * 2);
     ctx.fill();
+    ctx.restore();
   }
   ctx.restore();
 }
@@ -313,9 +330,42 @@ export default function SineWaveExplorer() {
     let energy = 0;
     let lastPhaseSync = 0;
 
+    // ————— performance contract (room-runtime) —————
+    const embedded = isEmbeddedFrame();
+    const governor = createFrameGovernor(embedded ? "medium" : "high");
+    let currentTier = governor.tier();
+    let detail = detailForTier(currentTier);
+    let docHidden = false;
+    let galleryPaused = embedded;
+    let sleeping = docHidden || galleryPaused;
+    const offVisibility = onVisibility((hidden) => {
+      docHidden = hidden;
+      sleeping = docHidden || galleryPaused;
+      if (sleeping) governor.force("sleep");
+    });
+    const offGalleryPause = onGalleryPause((paused) => {
+      galleryPaused = paused;
+      sleeping = docHidden || galleryPaused;
+      if (sleeping) governor.force("sleep");
+    });
+
+    // cached per-mode impulse-core gradients — built once, reused every
+    // frame via transform + globalAlpha (never inside the impulse loop)
+    const coreGradCache = new Map<string, CanvasGradient>();
+    const coreGradFor = (tone: string) => {
+      let g = coreGradCache.get(tone);
+      if (!g) {
+        g = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+        g.addColorStop(0, colorAlpha(tone, 1));
+        g.addColorStop(1, "rgba(0,0,0,0)");
+        coreGradCache.set(tone, g);
+      }
+      return g;
+    };
+
     const resize = () => {
       const rect = root.getBoundingClientRect();
-      const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+      const dpr = resolveDpr(currentTier, { embedded, reducedMotion: reduceMotionRef.current, maxDpr: 1.5 });
       width = Math.max(320, Math.floor(rect.width));
       height = Math.max(520, Math.floor(rect.height));
       canvas.width = Math.floor(width * dpr);
@@ -331,6 +381,9 @@ export default function SineWaveExplorer() {
     window.addEventListener("resize", resize);
 
     const draw = (now: number) => {
+      const tier = governor.beginFrame(now);
+      if (sleeping) { raf = requestAnimationFrame(draw); return; } // hard pause
+      if (tier !== currentTier) { currentTier = tier; detail = detailForTier(tier); resize(); }
       const delta = Math.min(48, now - last);
       last = now;
       const reduce = reduceMotionRef.current;
@@ -523,7 +576,7 @@ export default function SineWaveExplorer() {
       ctx.restore();
 
       impulsesRef.current = impulsesRef.current.filter((impulse) => now - impulse.born < impulse.life);
-      drawImpulses(ctx, impulsesRef.current, now, cfg.tone);
+      drawImpulses(ctx, impulsesRef.current, now, cfg.tone, coreGradFor(cfg.tone));
 
       // glimmer (grammar §6): after ~20s of quiet, a faint touch-ring floats
       // on the wave where a finger would land — physical, never text.

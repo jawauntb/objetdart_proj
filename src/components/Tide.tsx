@@ -278,6 +278,7 @@ export default function Tide() {
     // without a touch on the water.
     let tiltLean = 0;
     let candleLit = true;
+    let candleFlameAmt = 1;
 
     // find an existing tideline natural under a screen point (for the
     // ceremony hold's touch-reachable delete), reusing the same band
@@ -599,6 +600,35 @@ export default function Tide() {
         try { haptics.tap(); } catch { /* noop */ }
         recordTapeRef.current("ripple", 0.4 + e.intensity * 0.4, "tide/skip");
       },
+      // tilt is gravity — these rooms of all rooms must lean: the swell
+      // drifts toward the phone's low edge and the candle flame leans
+      // the same way real wax would.
+      tilt: ({ gamma }) => {
+        if (reduceMotionRef.current) return;
+        tiltLean = Math.max(-1, Math.min(1, gamma / 45));
+        windTarget = clamp(windTarget + tiltLean * 0.01, -1, 1);
+      },
+      shake: ({ intensity }) => {
+        if (reduceMotionRef.current) return;
+        lastGestureAt = performance.now();
+        windTarget = clamp(windTarget + (Math.random() - 0.5) * intensity * 1.4, -1, 1);
+        stirs.push({ x: window.innerWidth * 0.5, y: window.innerHeight * 0.64, t0: simNow, sign: Math.random() < 0.5 ? 1 : -1 });
+        if (stirs.length > 4) stirs.shift();
+        try { audio.thud(); } catch { /* noop */ }
+        try { haptics.storm(); } catch { /* noop */ }
+        recordTapeRef.current("ripple", 0.4 + intensity * 0.5, "tide/shake");
+      },
+      // flip face-down: night, doubly — the room slows and the sill
+      // candle is snuffed; flipping back relights it.
+      flip: ({ faceDown }) => {
+        lastGestureAt = performance.now();
+        timeScaleTarget = faceDown ? 0.3 : 1;
+        candleLit = !faceDown;
+        try { if (faceDown) audio.thud(); else audio.spark(); } catch { /* noop */ }
+        try { haptics.bloom(); } catch { /* noop */ }
+        if (!faceDown) candleSparkRef.current = performance.now();
+        recordTapeRef.current("candle", faceDown ? 0.3 : 0.6, faceDown ? "tide/snuff" : "tide/relight");
+      },
     });
 
     // Desktop hover — the candle still leans toward a passing hand.
@@ -816,6 +846,11 @@ export default function Tide() {
       ctx.fillStyle = skyG;
       ctx.fillRect(0, 0, w, h);
 
+      // pan2's frame: the stars and meteors carry the parallax so the
+      // mechanism and shore stay put under the finger.
+      ctx.save();
+      ctx.translate(panX, panY);
+
       // stars (deterministic constellation, faint twinkle) — count scales
       // with the frame governor's detail tier under load.
       ctx.fillStyle = "rgba(240, 244, 248, 0.6)";
@@ -831,6 +866,7 @@ export default function Tide() {
 
       // meteor streaks sit above the sea, behind the mechanism
       drawTideMeteors(ctx, weather, simNow);
+      ctx.restore();
 
       // ── sea: its level rises and falls with the computed tide ─────
       const meanSeaY = h * 0.64;
@@ -976,6 +1012,10 @@ export default function Tide() {
       }
 
       // ── tide staff: a shore ruler with HIGH / MEAN / LOW + float ──
+      // twist's lens fades the instrument reading toward the bare felt sea.
+      const instrumentAlpha = 1 - lensLevel * 0.85;
+      ctx.save();
+      ctx.globalAlpha = instrumentAlpha;
       const staffX = w < 620 ? 30 : 52;
       const hiY = meanSeaY - swing;
       const loY = meanSeaY + swing;
@@ -1008,6 +1048,7 @@ export default function Tide() {
       ctx.beginPath();
       ctx.arc(staffX, floatY, 9, 0, TAU);
       ctx.stroke();
+      ctx.restore();
 
       // ── the mechanism: Earth, water ellipse, orbit, Moon, Sun ─────
       const ex = w * 0.5;
@@ -1016,7 +1057,9 @@ export default function Tide() {
       const orbitR = Math.min(w * 0.32, h * 0.24);
       const sunOrbitR = orbitR * 1.34;
 
-      // orbit rings
+      // orbit rings — fade with the same lens as the staff
+      ctx.save();
+      ctx.globalAlpha = instrumentAlpha;
       ctx.strokeStyle = "rgba(220, 235, 255, 0.12)";
       ctx.lineWidth = 1;
       ctx.beginPath();
@@ -1026,6 +1069,7 @@ export default function Tide() {
       ctx.beginPath();
       ctx.arc(ex, ey, sunOrbitR, 0, TAU);
       ctx.stroke();
+      ctx.restore();
 
       // alignment line — glows near spring (syzygy)
       const springGlow = clamp((align - 0.2) / 0.8, 0, 1);
@@ -1160,9 +1204,16 @@ export default function Tide() {
       candleLean.current += (leanTarget - candleLean.current) * 0.15;
       const leanX = candleLean.current;
 
+      // vessel flip (night): the flame amount eases toward lit/snuffed —
+      // continuous, never a hard cut, so it reads as the candle actually
+      // guttering rather than a switch flipping.
+      candleFlameAmt += ((candleLit ? 1 : 0) - candleFlameAmt) * Math.min(1, dtSec * 2.2);
+
       const sparkAge = candleSparkRef.current ? now - candleSparkRef.current : Infinity;
       const sparkBoost = sparkAge < 350 ? 1 - sparkAge / 350 : 0;
       const flickerR = (40 + Math.sin(t * 3.4) * 6 + Math.sin(t * 7.1) * 3) * (motion || 1) * (1 + sparkBoost * 0.6);
+      ctx.save();
+      ctx.globalAlpha = candleFlameAmt;
       const halo = ctx.createRadialGradient(candleX, candleBaseY - candleH - 10, 0, candleX, candleBaseY - candleH - 10, flickerR);
       halo.addColorStop(0, `rgba(255, 200, 130, ${0.5 + sparkBoost * 0.4})`);
       halo.addColorStop(0.4, `rgba(200, 115, 42, ${0.28 + sparkBoost * 0.3})`);
@@ -1171,6 +1222,7 @@ export default function Tide() {
       ctx.beginPath();
       ctx.arc(candleX, candleBaseY - candleH - 10, flickerR, 0, TAU);
       ctx.fill();
+      ctx.restore();
 
       ctx.fillStyle = "rgba(242, 238, 230, 0.95)";
       ctx.fillRect(candleX - candleW / 2, candleBaseY - candleH, candleW, candleH);
@@ -1184,6 +1236,8 @@ export default function Tide() {
       ctx.lineTo(candleX, candleBaseY - candleH - 9);
       ctx.stroke();
       const flameJitter = motion ? Math.sin(t * 9) * 1.2 + Math.cos(t * 5.3) * 0.8 : 0;
+      ctx.save();
+      ctx.globalAlpha = candleFlameAmt;
       ctx.fillStyle = "rgba(255, 200, 130, 0.85)";
       ctx.beginPath();
       ctx.moveTo(candleX, candleBaseY - candleH - 9);
@@ -1196,6 +1250,7 @@ export default function Tide() {
       ctx.quadraticCurveTo(candleX + 2.6 + leanX * 0.6, candleBaseY - candleH - 13, candleX + leanX * 0.4, candleBaseY - candleH - 20);
       ctx.quadraticCurveTo(candleX - 2.6 + leanX * 0.6, candleBaseY - candleH - 13, candleX, candleBaseY - candleH - 9);
       ctx.fill();
+      ctx.restore();
 
       // Firefly weather event: a tiny warm speck loops near the candle
       drawTideFirefly(ctx, weather, simNow, candleX, candleBaseY - candleH - 18);

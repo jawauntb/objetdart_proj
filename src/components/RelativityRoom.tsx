@@ -52,7 +52,7 @@
  * place, and a law keeps no belongings.
  */
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
@@ -77,6 +77,16 @@ import {
   properTimeRatio,
   simultaneityGapMs,
 } from "@/lib/relativity";
+import {
+  resolveDpr,
+  onGalleryPause,
+  onVisibility,
+  isEmbeddedFrame,
+  createFrameGovernor,
+  detailForTier,
+} from "@/lib/room-runtime";
+import { createGravityFieldRenderer, type GravityFieldRenderer } from "@/components/SpacetimeShader";
+import LetGo from "@/components/LetGo";
 
 const MAX_MASSES = 4;
 const RAY_COUNT = 5;
@@ -225,16 +235,62 @@ function hash01(n: number) {
   return x - Math.floor(x);
 }
 
+/** See ManifoldFold.tsx for the rationale — a radial falloff's shape is
+ *  scale-invariant, so one cached sprite replaces every per-mass
+ *  `createRadialGradient` call that only ever varied center/radius/alpha. */
+function makeRadialSprite(stops: Array<[number, string]>, size = 128): HTMLCanvasElement {
+  const c = document.createElement("canvas");
+  c.width = size;
+  c.height = size;
+  const sctx = c.getContext("2d");
+  if (sctx) {
+    const g = sctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+    for (const [offset, color] of stops) g.addColorStop(offset, color);
+    sctx.fillStyle = g;
+    sctx.fillRect(0, 0, size, size);
+  }
+  return c;
+}
+
 export default function RelativityRoom() {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const fieldCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const letGoRef = useRef<() => void>(() => {});
+  // whether any mass currently wells the room — gates the quiet clear
+  const [standing, setStanding] = useState(false);
 
   useEffect(() => {
     const wrap = wrapRef.current;
     const canvas = canvasRef.current;
+    const fieldCanvas = fieldCanvasRef.current;
     if (!wrap || !canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+
+    // the shared curvature field (SpacetimeShader.tsx) — the same additive
+    // lensing-ring pass ManifoldFold drives, unifying the two rooms' well
+    // shading in one fragment shader instead of two duplicated CPU loops.
+    const field: GravityFieldRenderer | null = fieldCanvas ? createGravityFieldRenderer(fieldCanvas, "glow") : null;
+    const fieldMasses: Array<{ x: number; y: number; r: number; strength: number }> = Array.from(
+      { length: MAX_MASSES },
+      () => ({ x: 0, y: 0, r: 0, strength: 0 }),
+    );
+
+    // sprites for the per-mass falloffs that used to allocate a fresh
+    // createRadialGradient every mass, every frame — see ManifoldFold for
+    // the identical technique and rationale (a radial falloff's shape is
+    // scale-invariant; one sprite blitted with drawImage stands in for all).
+    const shadowSprite = makeRadialSprite([
+      [0, "rgba(0,0,0,1)"],
+      [0.0625, "rgba(0,0,0,1)"],
+      [1, "rgba(0,0,0,0)"],
+    ]);
+    const flashSprite = makeRadialSprite([
+      [0, "rgba(235,242,255,0.5)"],
+      [0.5, "rgba(180,200,245,0.18)"],
+      [1, "rgba(0,0,0,0)"],
+    ]);
 
     // ————— state —————
     let masses: Mass[] = [];

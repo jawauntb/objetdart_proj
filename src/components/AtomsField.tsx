@@ -24,16 +24,25 @@
  * to iron, the nuclei merge into the real product with a radiating blast —
  * shockwave ring, flash, photon streaks — scaled by the released binding
  * energy; past iron the nuclei strain, shudder, and dim instead of
- * flashing — the stellar dead end, felt. When two compatible atoms drift
+ * flashing — and the whole field goes heavy and sags DOWNWARD, toward the
+ * band below where the only road past iron has ever run. The stellar dead
+ * end, felt, and pointing. When two compatible atoms drift
  * near, a faint dashed arc breathes between them after a beat — the room
- * proposing the pair-ceremony, never text. Three fingers run a field wind
- * or dilate time, a scrub precesses the orbitals, a twist rotates the lens
- * to the orbital diagram (thin measured rings, energy rungs, the element's
- * symbol and Z in thin mono — the one lettered surface). A flick still
- * ionizes as it throws: the shed electron streaks off behind the hurled
- * cloud. The field persists in `objetdart:atoms:v1`; a quiet control at
- * the bottom stills it. Pinch is deliberately unbound — ScaleTravel owns
- * it (molecules above; nucleons below).
+ * proposing the pair-ceremony, never text. A bond is drawn the way the
+ * table says it is shared: the electronegativity gap pools the shared light
+ * toward whichever atom pulls harder, and past Pauling's ionic gap it stops
+ * being a share at all — two charged rings, and two notes instead of one.
+ * Three fingers run a field wind or dilate time, three fingers TWISTED turn
+ * the season from a cold vacuum to the inside of a star where electrons jump
+ * unbidden, a scrub precesses the orbitals, a two-finger twist rotates the
+ * lens to the orbital diagram (thin measured rings, energy rungs, the
+ * element's symbol and Z in thin mono — the one lettered surface). A flick
+ * still ionizes as it throws: the shed electron streaks off behind the
+ * hurled cloud. A knock on the case rings the whole field; laid face-down
+ * the room is night. The field persists in `objetdart:atoms:v1`; the shared
+ * quiet control stills it. Deliberately unbound: pinch (ScaleTravel owns it
+ * — molecules above, nucleons below) and two-finger pan, there being no
+ * frame to pan; two-finger tap lowers the lens.
  */
 
 import { useEffect, useRef, useState } from "react";

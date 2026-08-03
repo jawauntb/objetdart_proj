@@ -221,6 +221,14 @@ export default function StructureLoom() {
     let lastPhase: Phase = s.phase;
     let lastCross = 0; // audio time of last threshold entry (for flashes)
     let selShift = 0; // most recent selection shift, for the readout
+    // three-finger twist = season: leans the structure's own clock
+    let season = 0;
+    let seasonTarget = 0;
+    let seasonSnapped = 0;
+    let lastSeasonSoundAt = 0;
+    // flip face-down = night
+    let night = false;
+    let nightAmt = 0;
 
     // persistence — a small kept-crossings count (the only memory this room asks)
     let crossings = 0;
@@ -319,6 +327,17 @@ export default function StructureLoom() {
         s = { ...s, coherence: Math.max(0, s.coherence - 0.15 * intensity) };
         haptics.chop();
       },
+      // knock = wake / ring the room: a rap on the case pours a small tutti
+      // pulse (rhymes with /coin, /flowers, /growth, /overlook)
+      knock: () => {
+        pour = Math.min(1, pour + 0.12);
+        audio.chime();
+        try { haptics.ripple(0.4); } catch { /* noop */ }
+      },
+      // flip face-down = night: the loom dims and hushes until turned back
+      flip: ({ faceDown }) => {
+        night = faceDown;
+      },
     });
 
     // ——— pouring attention: a pulse (tap) or a sustained pour (hold) ———
@@ -394,8 +413,35 @@ export default function StructureLoom() {
           choice = Math.max(-1, Math.min(1, choice + (e.scale - 1) * 1.2));
           if (s.phase === "agency") selShift = selectionShift(s, choice);
         },
+        pan2: (e) => {
+          // two-finger drag pans the frame: it nudges the same selection
+          // bias pinch does (there is no wider frame here to scroll — the
+          // structure's whole state is always on screen), so a hand that
+          // reaches with two fingers instead of pinching still steers.
+          if (e.phase === "end") return;
+          choice = Math.max(-1, Math.min(1, choice + e.dx * 0.003));
+          if (s.phase === "agency") selShift = selectionShift(s, choice);
+        },
         twist: (e) => {
-          if (e.fingers === 3) return; // three fingers turn the season, not the lens
+          if (e.fingers === 3) {
+            // three fingers turn the season — here, the structure's own
+            // decay rate: spring quickens the clock toward its next
+            // crossing, winter lets it linger. Continuous while turning.
+            if (e.phase === "move") {
+              seasonTarget += e.angle / (Math.PI / 2);
+              const cur = Math.floor(((seasonTarget % 4) + 4) % 4);
+              if (cur !== seasonSnapped) {
+                seasonSnapped = cur;
+                const now = performance.now();
+                if (now - lastSeasonSoundAt > 180) {
+                  lastSeasonSoundAt = now;
+                  audio.playNote(45 + cur * 2, 220);
+                  try { haptics.detent(); } catch { /* noop */ }
+                }
+              }
+            }
+            return;
+          }
           if (e.phase !== "move") return;
           lensTarget = Math.max(0, Math.min(1, lensTarget + e.angle / 1.6));
         },
@@ -457,12 +503,16 @@ export default function StructureLoom() {
       const nowMs = performance.now();
       const tier = governor.beginFrame(nowMs);
       if (sleeping) { raf = requestAnimationFrame(draw); return; } // hard pause
-      if (tier !== currentTier) { currentTier = tier; resize(); }
+      if (tier !== currentTier) { currentTier = tier; detail = detailForTier(tier); resize(); }
       const now = audio.getAudioTime() ?? nowMs / 1000;
       let dt = now - last;
       last = now;
       if (!(dt > 0) || dt > 0.25) dt = 1 / 60;
-      dt *= clockScale;
+      season += (seasonTarget - season) * Math.min(1, dt * 3);
+      nightAmt += ((night ? 1 : 0) - nightAmt) * Math.min(1, dt * 1.4);
+      const seasonIdx = Math.floor(((season % 4) + 4) % 4);
+      const seasonMul = [1.25, 1.0, 0.8, 0.55][seasonIdx];
+      dt *= clockScale * seasonMul;
 
       // ——— advance the ONE structure ———
       // tilt leans the gathering: a lean adds a little attention on its side.
@@ -505,9 +555,11 @@ export default function StructureLoom() {
 
       driveSound();
 
-      // rolling buffer for the live invariant table
+      // rolling buffer for the live invariant table — its window scales
+      // with the governed detail tier, so lower tiers walk less history
       buffer.push(s);
-      if (buffer.length > 220) buffer.shift();
+      const bufCap = Math.max(60, Math.round(220 * detail.samples));
+      if (buffer.length > bufCap) buffer.shift();
 
       // ——— render ———
       const breath = reduced ? 0.5 : Math.sin(now * Math.PI * 2 * 0.14) * 0.5 + 0.5;
@@ -517,6 +569,12 @@ export default function StructureLoom() {
 
       if (lens > 0.02) drawLens(now);
       if (lens < 0.98) drawEmbodiments(now, breath);
+
+      // night (vessel: flip face-down) — the loom hushes under a veil
+      if (nightAmt > 0.01) {
+        ctx.fillStyle = `rgba(1, 2, 4, ${nightAmt * 0.72})`;
+        ctx.fillRect(0, 0, width, height);
+      }
 
       // update the table snapshot a few times a second (not every frame)
       if (now - tableAt > 0.25) {
