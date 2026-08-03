@@ -11,18 +11,32 @@
  * Tap excites: an electron jumps a shell (ring flash, rising note) and
  * decays back after a beat (falling note, a soft photon streak); intensity
  * decides the jump size. A drag sweeps the field and the clouds lean
- * toward the finger. Dwell on open space condenses a new atom. The
- * ceremony held where two atoms are near is COVALENCE: they share a bond,
- * lobes merging — the bond is the order-independent hash of both seeds,
- * the bridge toward molecules. Three fingers run a field wind or dilate
- * time, a scrub precesses the orbitals, a twist rotates the lens to the
- * orbital diagram (thin measured rings, energy rungs — no letters here).
- * A flick ionizes: an electron streaks out and falls home again. The field
- * persists in `objetdart:atoms:v1`. Pinch is deliberately unbound —
- * ScaleTravel owns it (molecules above; quarks below, still unbuilt).
+ * toward the finger (and clouds under the finger ride it). Dwell on open
+ * space condenses a new atom. The ceremony held where two atoms are near
+ * is COVALENCE: they share a bond, lobes merging — the bond is the
+ * order-independent hash of both seeds, and it obeys the real law
+ * (src/lib/atomics.ts covalentPair): bond order is the lesser appetite,
+ * drawn as one, two, or three strands; noble gases — and atoms whose
+ * appetite is spent — refuse with a soft elastic rebuff and a low refuse
+ * tone, never silence. FUSION is the other verb, kinetic where covalence
+ * is ceremonial: drive two atoms together hard (flick one into another, or
+ * slow time with a three-finger hold and drag them together fast) and, up
+ * to iron, the nuclei merge into the real product with a radiating blast —
+ * shockwave ring, flash, photon streaks — scaled by the released binding
+ * energy; past iron the nuclei strain, shudder, and dim instead of
+ * flashing — the stellar dead end, felt. When two compatible atoms drift
+ * near, a faint dashed arc breathes between them after a beat — the room
+ * proposing the pair-ceremony, never text. Three fingers run a field wind
+ * or dilate time, a scrub precesses the orbitals, a twist rotates the lens
+ * to the orbital diagram (thin measured rings, energy rungs, the element's
+ * symbol and Z in thin mono — the one lettered surface). A flick still
+ * ionizes as it throws: the shed electron streaks off behind the hurled
+ * cloud. The field persists in `objetdart:atoms:v1`; a quiet control at
+ * the bottom stills it. Pinch is deliberately unbound — ScaleTravel owns
+ * it (molecules above; quarks below, still unbuilt).
  */
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
@@ -33,10 +47,18 @@ import {
   MAX_ATOMS,
   MAX_RING,
   atomFromSeed,
+  blastMagnitude,
+  canFuse,
   covalentBond,
+  covalentPair,
+  elementFromSeed,
+  elementOf,
   excitedRing,
+  fuseProduct,
+  fusionEnergy,
   hashSeed,
   settlePopulation,
+  wantsBond,
   type AtomMorph,
 } from "@/lib/atomics";
 
@@ -62,6 +84,11 @@ type AtomEnt = {
   precessBoost: number;
   /** Ionization dimming, 0..1, decays. */
   dim: number;
+  /** Nuclear strain tremor (the iron wall), 0..1, decays. */
+  shudder: number;
+  /** Kinetic velocity, px/s — the fusion channel (flick throws, hard drags). */
+  kvx: number;
+  kvy: number;
   precessPhase: number;
   birth: number;
   retiringAt: number;
@@ -72,7 +99,17 @@ type AtomEnt = {
   sr: number;
 };
 
-type CovBond = { aId: string; bId: string; seed: number };
+type CovBond = {
+  aId: string;
+  bId: string;
+  seed: number;
+  /** Real bond order from covalentPair — the strands drawn. */
+  order: 1 | 2 | 3;
+  /** Rest length factor over the two cloud radii (kernel radii + order). */
+  restK: number;
+};
+type Blast = { x: number; y: number; born: number; maxR: number; mag: number };
+type Hint = { aId: string; bId: string; since: number; alpha: number };
 type Mote = { x: number; y: number; vx: number; vy: number };
 type Speck = { x: number; y: number; vx: number; vy: number; born: number; life: number; r: number; color: string; streak?: boolean };
 type PendingNote = { at: number; midi: number; ms: number };
@@ -118,6 +155,9 @@ function makeAtom(seed: number, nx: number, ny: number, growth: number): AtomEnt
     charge: 0,
     precessBoost: 0,
     dim: 0,
+    shudder: 0,
+    kvx: 0,
+    kvy: 0,
     precessPhase: (hashSeed(seed, 97) / 4294967296) * Math.PI * 2,
     birth: performance.now(),
     retiringAt: 0,
@@ -163,6 +203,9 @@ function midiOf(morph: AtomMorph): number {
 export default function AtomsField() {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  // §8c — the quiet clear: visible only when atoms stand; wired by the effect
+  const [hasAtoms, setHasAtoms] = useState(false);
+  const stillRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -178,6 +221,9 @@ export default function AtomsField() {
     const motes: Mote[] = [];
     const specks: Speck[] = [];
     const pendingNotes: PendingNote[] = [];
+    const blasts: Blast[] = [];
+    const hints = new Map<string, Hint>(); // bond-hint arcs between compatible neighbors
+    const fuseCooldown = new Map<string, number>();
     let width = 0;
     let height = 0;
     let rectLeft = 0;
@@ -236,6 +282,7 @@ export default function AtomsField() {
     // ————— persistence —————
     const save = (force = false) => {
       const now = performance.now();
+      setHasAtoms(atoms.some((a) => !a.retiringAt));
       if (!force && now - lastSaveAt < 800) { dirty = true; return; }
       lastSaveAt = now;
       dirty = false;
@@ -253,8 +300,29 @@ export default function AtomsField() {
       } catch { /* quota; the vacuum keeps its own counsel */ }
     };
 
+    /** How many bonds the atom's element still wants — the real appetite. */
+    const appetiteOf = (a: AtomEnt): number => {
+      const el = elementOf(a.morph.z);
+      if (!el) return 0;
+      let held = 0;
+      for (const b of bonds) if (b.aId === a.id || b.bId === a.id) held += 1;
+      return wantsBond(el) - held;
+    };
+
+    /** The real pairing law for two atoms (null = nobles, no bond). */
+    const pairingOf = (a: AtomEnt, b: AtomEnt) => {
+      const ea = elementOf(a.morph.z);
+      const eb = elementOf(b.morph.z);
+      return ea && eb ? covalentPair(ea, eb) : null;
+    };
+
     const bondBetween = (a: AtomEnt, b: AtomEnt) => {
-      bonds.push({ aId: a.id, bId: b.id, seed: covalentBond(a.seed, b.seed).seed });
+      const cb = covalentBond(a.seed, b.seed);
+      const pair = pairingOf(a, b);
+      const order = (pair ? pair.order : 1) as 1 | 2 | 3;
+      // rest from the kernel: radii through covalentBond.rest, the higher
+      // orders pulling closer as covalentPair says they do
+      bonds.push({ aId: a.id, bId: b.id, seed: cb.seed, order, restK: cb.rest * (1 - 0.08 * (order - 1)) });
     };
 
     const stored = loadStored();
@@ -278,6 +346,7 @@ export default function AtomsField() {
       seedCount = atoms.length;
       save(true);
     }
+    setHasAtoms(atoms.length > 0);
 
     // ————— helpers —————
     const audio = () => getFieldAudio();
@@ -431,8 +500,28 @@ export default function AtomsField() {
       useField.getState().recordTape("ripple", 0.4 + intensity * 0.4, "atoms/excite");
     };
 
+    // the covalence law refuses: nobles (and spent appetites) rebuff softly —
+    // an elastic push apart, a low refuse tone, never silence
+    const rebuff = (a: AtomEnt, b: AtomEnt) => {
+      const dx = b.sx - a.sx;
+      const dy = b.sy - a.sy;
+      const d = Math.max(1, Math.hypot(dx, dy));
+      a.pushX -= (dx / d) * 34;
+      a.pushY -= (dy / d) * 34;
+      b.pushX += (dx / d) * 34;
+      b.pushY += (dy / d) * 34;
+      a.shudder = Math.min(1, a.shudder + 0.35);
+      b.shudder = Math.min(1, b.shudder + 0.35);
+      try { audio().refuse(); } catch { /* noop */ }
+      note(30, 260);
+      try { haptics.ripple(0.3); } catch { /* noop */ }
+      burst((a.sx + b.sx) / 2, (a.sy + b.sy) / 2, ["#2C4A5C", "#4E7D8C"], 5, 16);
+    };
+
     const covalesce = (a: AtomEnt, b: AtomEnt) => {
       if (!a.closed || !b.closed || a.retiringAt || b.retiringAt || areBonded(a, b)) return;
+      const pair = pairingOf(a, b);
+      if (!pair || appetiteOf(a) <= 0 || appetiteOf(b) <= 0) { rebuff(a, b); return; }
       bondBetween(a, b);
       const cb = covalentBond(a.seed, b.seed);
       // covalence: one solemn act, three senses in one frame
@@ -446,6 +535,168 @@ export default function AtomsField() {
       ], 18, 46);
       useField.getState().recordTape("sigil", 0.85, "atoms/covalence");
       save();
+    };
+
+    // ————— fusion: the kinetic verb (collision, not ceremony) —————
+
+    /**
+     * A deterministic seed whose element IS the fusion product: walk the
+     * pair's hash chain until elementFromSeed lands on z. Pure — the same
+     * parents always beget the same child.
+     */
+    const seedForElement = (sa: number, sb: number, z: number): number | null => {
+      for (let k = 0; k < 120000; k++) {
+        const s = hashSeed(Math.min(sa, sb), Math.max(sa, sb), 0xfa57, k);
+        if (elementFromSeed(s).z === z) return s;
+      }
+      return null;
+    };
+
+    /** The radiating blast — the room's brightest moment, scaled by mag. */
+    const blast = (x: number, y: number, mag: number, family: number) => {
+      const minDim = Math.min(width, height);
+      blasts.push({ x, y, born: performance.now(), maxR: minDim * (0.22 + 0.55 * mag), mag });
+      if (blasts.length > 4) blasts.shift();
+      if (!reduce) {
+        // photon streaks radiating from the merged nucleus
+        const n = 8 + Math.round(mag * 16);
+        const fam = ATOM_FAMILIES[family as 0 | 1 | 2 | 3];
+        for (let i = 0; i < n; i++) {
+          const ang = (i / n) * Math.PI * 2 + twinkleHash(i + n) * 0.5;
+          specks.push({
+            x, y,
+            vx: Math.cos(ang) * (240 + mag * 320) * (0.6 + twinkleHash(i * 5 + 2) * 0.6),
+            vy: Math.sin(ang) * (240 + mag * 320) * (0.6 + twinkleHash(i * 7 + 3) * 0.6),
+            born: performance.now(),
+            life: 700 + twinkleHash(i * 3 + 1) * 800,
+            r: 1.4,
+            color: i % 3 === 0 ? "#F7F3EA" : fam[5],
+            streak: true,
+          });
+        }
+        // the shockwave shoves the rest of the field outward
+        const reach = minDim * (0.3 + mag * 0.4);
+        for (const o of atoms) {
+          if (o.retiringAt || o.sr <= 0) continue;
+          const dx = o.sx - x;
+          const dy = o.sy - y;
+          const d = Math.hypot(dx, dy);
+          if (d > 1 && d < reach) {
+            const k = (1 - d / reach) * (26 + 90 * mag);
+            o.pushX += (dx / d) * k;
+            o.pushY += (dy / d) * k;
+          }
+        }
+      }
+      // the blast is layered from the organ's own one-shots
+      try { audio().bell(); } catch { /* noop */ }
+      try { audio().thud(); } catch { /* noop */ }
+      if (mag > 0.35) { try { audio().spark(); } catch { /* noop */ } }
+      note(30 + Math.round(mag * 6), 480);
+      noteLater(120, 42 + Math.round(mag * 10), 300);
+      try { (mag > 0.55 ? haptics.storm : haptics.bloom)(); } catch { /* noop */ }
+    };
+
+    // past iron, fusion costs more than it pays: the nuclei strain, shudder,
+    // and dim instead of flashing — the iron wall, felt
+    const ironWall = (a: AtomEnt, b: AtomEnt) => {
+      const dx = b.sx - a.sx;
+      const dy = b.sy - a.sy;
+      const d = Math.max(1, Math.hypot(dx, dy));
+      // the elastic bounce: whatever closing speed remains is returned
+      const closing = ((a.kvx - b.kvx) * dx + (a.kvy - b.kvy) * dy) / d;
+      const k = Math.max(40, closing * 0.7);
+      a.kvx -= (dx / d) * k;
+      a.kvy -= (dy / d) * k;
+      b.kvx += (dx / d) * k;
+      b.kvy += (dy / d) * k;
+      a.shudder = 1;
+      b.shudder = 1;
+      a.dim = Math.min(1, a.dim + 0.6);
+      b.dim = Math.min(1, b.dim + 0.6);
+      try { audio().refuse(); } catch { /* noop */ }
+      note(26, 420);
+      try { haptics.chop(); } catch { /* noop */ }
+    };
+
+    const attemptFusion = (a: AtomEnt, b: AtomEnt) => {
+      if (!a.closed || !b.closed || a.retiringAt || b.retiringAt) return;
+      const now = performance.now();
+      const key = a.id < b.id ? `${a.id}|${b.id}` : `${b.id}|${a.id}`;
+      const cool = fuseCooldown.get(key);
+      if (cool && now - cool < 900) return;
+      fuseCooldown.set(key, now);
+      const za = a.morph.z;
+      const zb = b.morph.z;
+      if (!canFuse(za, zb)) { ironWall(a, b); return; }
+      const product = fuseProduct(za, zb);
+      const seed = product ? seedForElement(a.seed, b.seed, product.z) : null;
+      if (!product || seed == null) { ironWall(a, b); return; }
+      const energy = fusionEnergy(za, zb);
+      const mag = blastMagnitude(energy);
+      const mx = (a.sx + b.sx) / 2;
+      const my = (a.sy + b.sy) / 2;
+      // the two nuclei become one: bonds fall away with the reactants
+      bonds = bonds.filter((q) => q.aId !== a.id && q.bId !== a.id && q.aId !== b.id && q.bId !== b.id);
+      atoms = atoms.filter((q) => q !== a && q !== b);
+      const p = makeAtom(seed, clamp01(mx / Math.max(1, width)), clamp(my / Math.max(1, height), 0.09, 0.92), 1);
+      atoms.push(p);
+      retireOldest();
+      if (mag > 0) blast(mx, my, mag, p.morph.family);
+      useField.getState().recordTape("sigil", Math.min(1, 0.7 + mag * 0.3), "atoms/fusion");
+      save();
+    };
+
+    /** The nearest other closed atom to a — the keyboard throw's target. */
+    const nearestAtomOther = (a: AtomEnt): AtomEnt | null => {
+      let best: AtomEnt | null = null;
+      let bestD = Infinity;
+      for (const o of atoms) {
+        if (o === a || o.retiringAt || !o.closed) continue;
+        const d = Math.hypot(o.sx - a.sx, o.sy - a.sy);
+        if (d < bestD) { bestD = d; best = o; }
+      }
+      return best;
+    };
+
+    /** The nearest closed atom roughly along a throw's direction. */
+    const atomAlongCone = (from: AtomEnt, angle: number): AtomEnt | null => {
+      const ux = Math.cos(angle);
+      const uy = Math.sin(angle);
+      let best: AtomEnt | null = null;
+      let bestD = Infinity;
+      for (const o of atoms) {
+        if (o === from || o.retiringAt || !o.closed) continue;
+        const dx = o.sx - from.sx;
+        const dy = o.sy - from.sy;
+        const d = Math.hypot(dx, dy);
+        if (d < 1 || d > Math.min(width, height) * 0.55) continue;
+        if ((dx * ux + dy * uy) / d < 0.86) continue; // ~30° cone
+        if (d < bestD) { bestD = d; best = o; }
+      }
+      return best;
+    };
+
+    // §8c — still the field: electrons streak away, the clouds let go
+    stillRef.current = () => {
+      const now = performance.now();
+      for (const a of atoms) {
+        if (a.retiringAt) continue;
+        a.retiringAt = now;
+        if (!reduce && a.sr > 0) {
+          const shed = Math.min(6, Math.max(2, a.morph.shells * 2));
+          for (let i = 0; i < shed; i++) {
+            const ang = (i / shed) * Math.PI * 2 + twinkleHash(a.seed + i) * 0.9;
+            photonStreak(a, ang, 130 + twinkleHash(i + 5) * 90, ATOM_FAMILIES[a.morph.family][5]);
+          }
+        }
+      }
+      bonds = [];
+      hints.clear();
+      try { window.localStorage.setItem(STORE_KEY, JSON.stringify({ atoms: [], bonds: [] })); } catch { /* noop */ }
+      setHasAtoms(false);
+      try { audio().thud(); } catch { /* noop */ }
+      try { haptics.roll(); } catch { /* noop */ }
     };
 
     // the raised-lens marker ScaleTravel reads before a step-back nudge
@@ -595,10 +846,19 @@ export default function AtomsField() {
           sweepStrength = 0;
           return;
         }
-        // one finger sweeps the field — probability leans toward the hand
+        // one finger sweeps the field — probability leans toward the hand,
+        // and a cloud under the finger rides it (the slow road to fusion:
+        // dilate time with three fingers, then drive one atom into another)
         sweepX = x;
         sweepY = y;
         sweepStrength = Math.min(1, sweepStrength + 0.2);
+        for (const a of atoms) {
+          if (a.retiringAt || !a.closed || a.sr <= 0) continue;
+          if (Math.hypot(x - a.sx, y - a.sy) < Math.max(48, a.sr * 1.1)) {
+            a.kvx = clamp(a.kvx + e.vx * 3.2, -520, 520);
+            a.kvy = clamp(a.kvy + e.vy * 3.2, -520, 520);
+          }
+        }
         const now = performance.now();
         if (now - lastSweepSoundAt > 300) {
           lastSweepSoundAt = now;
@@ -608,19 +868,25 @@ export default function AtomsField() {
       },
       flick: (e) => {
         lastInteractionAt = performance.now();
-        // a flick ionizes: an electron streaks away, the cloud dims, and
-        // after a beat it falls home with a soft return
+        // a flick THROWS the cloud along the hand's vector — the fusion
+        // road — and ionizes as it goes: the shed electron streaks off
+        // behind the hurled nucleus, and after a beat it falls home
         const { x, y } = toLocal(e.x, e.y);
         const a = nearestAtom(x, y);
         if (!a) return;
         const speed = clamp(e.speed, 0.6, 2.4);
-        photonStreak(a, e.angle, 220 * speed, ATOM_FAMILIES[a.morph.family][5]);
+        a.kvx = clamp(a.kvx + Math.cos(e.angle) * 220 * speed, -520, 520);
+        a.kvy = clamp(a.kvy + Math.sin(e.angle) * 220 * speed, -520, 520);
+        photonStreak(a, e.angle + Math.PI, 220 * speed, ATOM_FAMILIES[a.morph.family][5]);
         a.dim = Math.min(1, a.dim + 0.6);
-        a.pushX -= Math.cos(e.angle) * 8;
-        a.pushY -= Math.sin(e.angle) * 8;
         note(midiOf(a.morph) + 12, 90);
         noteLater(650, midiOf(a.morph) + 3, 220);
         try { haptics.ripple(0.4); } catch { /* noop */ }
+        if (reduce) {
+          // stillness never removes a verb: the throw resolves directly
+          const b = atomAlongCone(a, e.angle);
+          if (b) attemptFusion(a, b);
+        }
       },
       twist: (e) => {
         lastInteractionAt = performance.now();
@@ -691,6 +957,19 @@ export default function AtomsField() {
         if (ev.key === "ArrowRight") cursorNx = clamp(cursorNx + step, 0.05, 0.95);
         if (ev.key === "ArrowUp") cursorNy = clamp(cursorNy - step, 0.08, 0.95);
         if (ev.key === "ArrowDown") cursorNy = clamp(cursorNy + step, 0.08, 0.95);
+        return;
+      }
+      if ((ev.key === "Enter" || ev.key === " ") && ev.shiftKey) {
+        // the keyboard's throw: shift-enter hurls the atom under the cursor
+        // at its nearest neighbor — fusion or the iron wall, same physics
+        ev.preventDefault();
+        lastInteractionAt = performance.now();
+        if (ev.repeat) return;
+        if (!cursorVisible) { cursorVisible = true; return; }
+        const a = atomAt(cursorNx * width, cursorNy * height);
+        if (!a || !a.closed) return;
+        const b = nearestAtomOther(a);
+        if (b) attemptFusion(a, b);
         return;
       }
       if (ev.key === "Enter" || ev.key === " ") {
@@ -794,7 +1073,13 @@ export default function AtomsField() {
       }
 
       ctx.save();
-      ctx.translate(cx, cy);
+      // nuclear strain: the shudder of a refused fusion (stillness keeps
+      // only the dimming — the tremor is motion, and motion is honored)
+      const tremor = !reduce && a.shudder > 0.02 ? a.shudder * R * 0.05 : 0;
+      ctx.translate(
+        cx + (tremor ? Math.sin(performance.now() * 0.09 + a.precessPhase) * tremor : 0),
+        cy + (tremor ? Math.cos(performance.now() * 0.11 + a.precessPhase) * tremor : 0),
+      );
 
       // the covalence ceremony: a warm halo tightens as lobes reach
       if (a.charge > 0) {
@@ -946,6 +1231,17 @@ export default function AtomsField() {
         ctx.moveTo(0, -R * 0.05);
         ctx.lineTo(0, R * 0.05);
         ctx.stroke();
+        // the element's name in the measured register — symbol and Z, thin
+        // mono; the lens is the one lettered surface of this band
+        const symSize = Math.max(10, Math.round(R * 0.18));
+        ctx.font = `300 ${symSize}px "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace`;
+        ctx.textAlign = "left";
+        ctx.textBaseline = "alphabetic";
+        ctx.fillStyle = colorAlpha(ink, 0.85 * lensAlpha);
+        ctx.fillText(morph.symbol, -R * 1.16, -R * 0.86);
+        ctx.font = `300 ${Math.max(8, Math.round(symSize * 0.7))}px "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace`;
+        ctx.fillStyle = colorAlpha(ink, 0.5 * lensAlpha);
+        ctx.fillText(String(morph.z), -R * 1.16, -R * 0.86 + symSize * 0.85);
       }
 
       ctx.restore();
@@ -962,6 +1258,11 @@ export default function AtomsField() {
         const midX = (pa.sx + pb.sx) / 2;
         const midY = (pa.sy + pb.sy) / 2;
         const d = Math.max(1, Math.hypot(pb.sx - pa.sx, pb.sy - pa.sy));
+        const ux = (pb.sx - pa.sx) / d;
+        const uy = (pb.sy - pa.sy) / d;
+        // strand offsets: bond order drawn honestly — H–H one strand,
+        // O=O two, N≡N three (the kernel's covalentPair decided b.order)
+        const strandOffs = b.order === 1 ? [0] : b.order === 2 ? [-1, 1] : [-1.6, 0, 1.6];
         const feltAlpha = 1 - lens;
         if (feltAlpha > 0.02) {
           // merged lobes: a shared luminous field between the pair
@@ -979,19 +1280,37 @@ export default function AtomsField() {
           ctx.fillStyle = g;
           ctx.fill();
           ctx.restore();
+          // the luminous strands of the shared pair(s)
+          const spacing = Math.max(2.2, Math.min(pa.sr, pb.sr) * 0.12);
+          const x1 = pa.sx + ux * pa.sr * 0.5;
+          const y1 = pa.sy + uy * pa.sr * 0.5;
+          const x2 = pb.sx - ux * pb.sr * 0.5;
+          const y2 = pb.sy - uy * pb.sr * 0.5;
+          const glowPulse2 = reduce ? 0.85 : 0.75 + Math.sin(t * 1.7 + cb.tone) * 0.25;
+          ctx.lineCap = "round";
+          for (const o of strandOffs) {
+            const ox = -uy * o * spacing;
+            const oy = ux * o * spacing;
+            ctx.strokeStyle = colorAlpha(ATOM_FAMILIES[pa.morph.family][5], 0.24 * feltAlpha * glowPulse2);
+            ctx.lineWidth = Math.max(1, Math.min(pa.sr, pb.sr) * 0.045);
+            ctx.beginPath();
+            ctx.moveTo(x1 + ox, y1 + oy);
+            ctx.lineTo(x2 + ox, y2 + oy);
+            ctx.stroke();
+          }
         }
         if (lens > 0.02) {
-          // the diagram draws covalence as a measured double line
-          const nx = (pb.sy - pa.sy) / d;
-          const ny = -(pb.sx - pa.sx) / d;
+          // the diagram draws covalence as the true count of measured lines
           const off = 2.4;
           ctx.strokeStyle = colorAlpha("#DDD3BE", 0.55 * lens);
           ctx.lineWidth = 0.8;
           ctx.beginPath();
-          ctx.moveTo(pa.sx + nx * off, pa.sy + ny * off);
-          ctx.lineTo(pb.sx + nx * off, pb.sy + ny * off);
-          ctx.moveTo(pa.sx - nx * off, pa.sy - ny * off);
-          ctx.lineTo(pb.sx - nx * off, pb.sy - ny * off);
+          for (const o of strandOffs) {
+            const ox = -uy * o * off;
+            const oy = ux * o * off;
+            ctx.moveTo(pa.sx + ox, pa.sy + oy);
+            ctx.lineTo(pb.sx + ox, pb.sy + oy);
+          }
           ctx.stroke();
         }
       }
@@ -1039,8 +1358,7 @@ export default function AtomsField() {
         const pb = byId.get(b.bId);
         if (!pa || !pb || pa.retiringAt || pb.retiringAt) continue;
         if (pa.sr <= 0 || pb.sr <= 0) continue; // not drawn yet: no geometry to spring against
-        const cb = covalentBond(pa.seed, pb.seed);
-        const rest = (pa.sr + pb.sr) * cb.rest;
+        const rest = (pa.sr + pb.sr) * b.restK; // kernel radii, order-tightened
         const dx = pb.sx - pa.sx;
         const dy = pb.sy - pa.sy;
         const d = Math.max(1, Math.hypot(dx, dy));
@@ -1056,6 +1374,9 @@ export default function AtomsField() {
         if (a.retiringAt && now - a.retiringAt > RETIRE_MS) { atoms.splice(i, 1); dirty = true; continue; }
         if (!a.closed) growAtom(a, dt * 0.45);
         a.dim = Math.max(0, a.dim - dt * 0.9);
+        a.shudder *= Math.exp(-dt * 2.4);
+        a.kvx *= Math.exp(-dt * 0.7);
+        a.kvy *= Math.exp(-dt * 0.7);
         a.precessBoost *= Math.exp(-dt * 0.8);
         if (!hold.atomId || hold.atomId !== a.id) {
           if (kbAtomId !== a.id && hold.partnerId !== a.id) a.charge = Math.max(0, a.charge - dt * 1.6);
@@ -1074,12 +1395,58 @@ export default function AtomsField() {
           const d = a.morph.drift;
           const wx = Math.sin(localT * d.rate + d.ax) * 0.0028;
           const wy = Math.cos(localT * d.rate * 0.8 + d.ay) * 0.0024;
-          const vx = wx + (a.pushX + gravX * 26) / Math.max(1, width);
-          const vy = wy + (a.pushY + gravY * 26) / Math.max(1, height);
+          const vx = wx + (a.pushX + a.kvx + gravX * 26) / Math.max(1, width);
+          const vy = wy + (a.pushY + a.kvy + gravY * 26) / Math.max(1, height);
           a.nx = clamp(a.nx + vx * dt * timeScale, 0.08, 0.92);
           a.ny = clamp(a.ny + vy * dt * timeScale, 0.09, 0.92);
           a.pushX *= Math.exp(-dt * 2.2);
           a.pushY *= Math.exp(-dt * 2.2);
+        }
+      }
+
+      // fusion — the kinetic verb: two nuclei DRIVEN together hard enough
+      // merge (or, past iron, strain and refuse). Closing speed is read from
+      // the undilated impulses, so time dilation aids aim without a penalty.
+      let fused = false;
+      for (let i = 0; i < atoms.length && !fused; i++) {
+        const a = atoms[i];
+        if (a.retiringAt || !a.closed || a.sr <= 0) continue;
+        for (let j = i + 1; j < atoms.length; j++) {
+          const b = atoms[j];
+          if (b.retiringAt || !b.closed || b.sr <= 0 || areBonded(a, b)) continue;
+          const dx = b.sx - a.sx;
+          const dy = b.sy - a.sy;
+          const d = Math.hypot(dx, dy);
+          if (d < 1 || d > (a.sr + b.sr) * 0.55) continue;
+          const closing =
+            ((a.kvx + a.pushX - b.kvx - b.pushX) * dx + (a.kvy + a.pushY - b.kvy - b.pushY) * dy) / d;
+          if (closing > 110) { attemptFusion(a, b); fused = true; break; }
+        }
+      }
+
+      // the bond-hint: when two compatible atoms drift near, the room
+      // proposes the pair-ceremony — a dashed arc after a beat, never text
+      const hintSeen = new Set<string>();
+      for (let i = 0; i < atoms.length; i++) {
+        const a = atoms[i];
+        if (a.retiringAt || !a.closed || a.sr <= 0) continue;
+        for (let j = i + 1; j < atoms.length; j++) {
+          const b = atoms[j];
+          if (b.retiringAt || !b.closed || b.sr <= 0 || areBonded(a, b)) continue;
+          const d = Math.hypot(b.sx - a.sx, b.sy - a.sy);
+          if (d > (a.sr + b.sr) * 2.0 || d < (a.sr + b.sr) * 0.55) continue;
+          if (!pairingOf(a, b) || appetiteOf(a) <= 0 || appetiteOf(b) <= 0) continue;
+          const key = a.id < b.id ? `${a.id}|${b.id}` : `${b.id}|${a.id}`;
+          hintSeen.add(key);
+          if (!hints.has(key)) hints.set(key, { aId: a.id, bId: b.id, since: now, alpha: 0 });
+        }
+      }
+      for (const [key, h] of hints) {
+        if (!hintSeen.has(key)) {
+          h.alpha = Math.max(0, h.alpha - dt * 1.8); // fades as they part
+          if (h.alpha <= 0) hints.delete(key);
+        } else if (now - h.since > 900) {
+          h.alpha = Math.min(1, h.alpha + dt * 1.2); // glimmers after a beat
         }
       }
 
@@ -1131,6 +1498,35 @@ export default function AtomsField() {
 
       // bonds beneath, then atoms by size (small behind, large in front)
       drawBonds(localT);
+
+      // bond-hint glimmer — a faint dashed arc breathing between the pair
+      for (const h of hints.values()) {
+        if (h.alpha <= 0.02) continue;
+        const pa = atoms.find((q) => q.id === h.aId);
+        const pb = atoms.find((q) => q.id === h.bId);
+        if (!pa || !pb || pa.retiringAt || pb.retiringAt || pa.sr <= 0 || pb.sr <= 0) continue;
+        const dx = pb.sx - pa.sx;
+        const dy = pb.sy - pa.sy;
+        const d = Math.max(1, Math.hypot(dx, dy));
+        const ux = dx / d;
+        const uy = dy / d;
+        const x1 = pa.sx + ux * pa.sr * 0.8;
+        const y1 = pa.sy + uy * pa.sr * 0.8;
+        const x2 = pb.sx - ux * pb.sr * 0.8;
+        const y2 = pb.sy - uy * pb.sr * 0.8;
+        const bow = d * 0.16;
+        const mx2 = (x1 + x2) / 2 - uy * bow;
+        const my2 = (y1 + y2) / 2 + ux * bow;
+        const breathe = reduce ? 0.75 : 0.6 + 0.4 * Math.sin(now / 700 + (h.since % 1000));
+        ctx.setLineDash([3, 6]);
+        ctx.strokeStyle = colorAlpha("#E7AC52", 0.2 * h.alpha * breathe);
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.quadraticCurveTo(mx2, my2, x2, y2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
       const sorted = [...atoms].sort((a, b) => a.morph.radius - b.morph.radius);
       for (const a of sorted) drawAtom(a, localT, breath);
 
@@ -1174,6 +1570,43 @@ export default function AtomsField() {
           ctx.beginPath();
           ctx.arc(s.x, s.y, s.r * (1 + age * 0.6), 0, Math.PI * 2);
           ctx.fill();
+        }
+      }
+      ctx.restore();
+
+      // blasts — the radiating fusion wave, the room's brightest moment;
+      // under reduced motion it becomes a still ring and a flash, no shake
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      for (let i = blasts.length - 1; i >= 0; i--) {
+        const bl = blasts[i];
+        const age = (now - bl.born) / 1000;
+        if (age >= 1) { blasts.splice(i, 1); continue; }
+        // the light flash at the heart, brightest in the first beats
+        if (age < 0.3) {
+          const fA = (1 - age / 0.3) * (0.22 + 0.4 * bl.mag);
+          const fg = ctx.createRadialGradient(bl.x, bl.y, 2, bl.x, bl.y, bl.maxR * 0.9);
+          fg.addColorStop(0, `rgba(247, 243, 234, ${fA})`);
+          fg.addColorStop(0.35, `rgba(242, 197, 107, ${fA * 0.6})`);
+          fg.addColorStop(1, "rgba(0,0,0,0)");
+          ctx.fillStyle = fg;
+          ctx.beginPath();
+          ctx.arc(bl.x, bl.y, bl.maxR * 0.9, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        const eased = 1 - (1 - age) * (1 - age);
+        const rr = reduce ? bl.maxR * 0.5 : bl.maxR * eased;
+        ctx.strokeStyle = colorAlpha("#F2C56B", (1 - age) * (0.3 + 0.4 * bl.mag));
+        ctx.lineWidth = reduce ? 1.4 : 1.6 + bl.mag * 2.6;
+        ctx.beginPath();
+        ctx.arc(bl.x, bl.y, rr, 0, Math.PI * 2);
+        ctx.stroke();
+        if (!reduce) {
+          ctx.strokeStyle = colorAlpha("#F7F3EA", (1 - age) * 0.22 * bl.mag);
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.arc(bl.x, bl.y, rr * 0.72, 0, Math.PI * 2);
+          ctx.stroke();
         }
       }
       ctx.restore();
@@ -1234,10 +1667,20 @@ export default function AtomsField() {
         className="atoms-field"
         role="application"
         tabIndex={0}
-        aria-label="a vacuum where probability keeps watch — touch and an electron climbs, rest a finger and an atom gathers; hold where two clouds drift near and they share a bond; arrows walk, enter excites and, held beside a neighbor, joins"
+        aria-label="a vacuum where probability keeps watch — touch and an electron climbs, rest a finger and an atom gathers; hold where two clouds drift near and they share a bond (nobles refuse); flick one cloud into another and the nuclei fuse, up to iron; arrows walk, enter excites and, held beside a neighbor, joins; shift-enter hurls at the nearest neighbor"
       >
         <canvas ref={canvasRef} className="atoms-canvas" aria-hidden="true" />
       </div>
+
+      {hasAtoms && (
+        <button
+          type="button"
+          className="atoms-still"
+          onClick={() => stillRef.current()}
+        >
+          still the field
+        </button>
+      )}
 
       <style
         dangerouslySetInnerHTML={{
@@ -1291,6 +1734,29 @@ export default function AtomsField() {
           cursor: crosshair;
           touch-action: none;
           z-index: 0;
+        }
+
+        .atoms-still {
+          position: fixed;
+          bottom: max(18px, env(safe-area-inset-bottom));
+          left: 50%;
+          transform: translateX(-50%);
+          min-height: 40px;
+          padding: 8px 14px;
+          background: transparent;
+          border: 1px solid rgba(238, 234, 219, 0.18);
+          border-radius: 3px;
+          color: rgba(238, 234, 219, 0.5);
+          font-family: var(--font-mono, "IBM Plex Mono", monospace);
+          font-size: 11px;
+          letter-spacing: 0.06em;
+          cursor: pointer;
+          z-index: 30;
+        }
+
+        .atoms-still:focus-visible {
+          outline: 2px solid rgba(231, 172, 82, 0.7);
+          outline-offset: 2px;
         }
       ` }}
       />
