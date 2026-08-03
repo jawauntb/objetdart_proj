@@ -5,13 +5,13 @@ const b = await chromium.launch({ executablePath: "/opt/pw-browsers/chromium_hea
 const p = await b.newPage({ viewport: { width: 950, height: 950 } });
 p.setDefaultTimeout(120000);
 const errs=[]; p.on("pageerror",e=>errs.push("EXC "+e.message)); p.on("console",m=>{if(m.type()==="error")errs.push("ERR "+m.text());});
-// aventurine on /movement
-await p.goto("http://localhost:3100/movement?spin=0&view=top&shot=1", { waitUntil:"networkidle" });
-await p.waitForFunction(() => window.__movement && window.__movement.ready === true);
+// aventurine on /tourbillon
+await p.goto("http://localhost:3100/tourbillon?spin=0&view=top&shot=1", { waitUntil:"networkidle" });
+await p.waitForFunction(() => window.__tourbillon && window.__tourbillon.ready === true);
 await p.waitForTimeout(1200);
 await p.getByRole("button",{name:"aventurine"}).click(); await p.waitForTimeout(900);
 await p.screenshot({ path: "iterations/iter-10/aventurine-fixed.png" });
-console.log("movement errs:", errs.length?errs.join("|"):"none"); errs.length=0;
+console.log("tourbillon errs:", errs.length?errs.join("|"):"none"); errs.length=0;
 // jewel page
 await p.goto("http://localhost:3100/jewel", { waitUntil:"networkidle" });
 await p.waitForTimeout(2500);

@@ -928,18 +928,25 @@ export const GUIDE_ROOMS: GuideRoom[] = [
     ],
   },
   {
-    key: "movement",
-    title: "mechanical movement",
-    href: "/movement",
-    essence: "a fully modeled watch calibre in 3D — mainspring, going train, escapement, balance wheel — that you orbit, wind, and set by hand.",
+    key: "tourbillon",
+    title: "the carriage against gravity",
+    href: "/tourbillon",
+    essence: "a fully modeled watch calibre in 3D — mainspring, going train, escapement, balance wheel, and a tourbillon carriage that turns once a minute so the case's own lean never has the last word.",
     moves: [
       "tap a part → wind the mainspring, still the movement, or cycle its speed; each gear rings its own pitch",
       "scrub (circle a finger) → turns the crown, ratcheting the mainspring",
       "hold to the ceremony tier → sets the watch to true local time",
       "twist → opens the case, dial off, bare going train",
+      "three fingers twist → cycles the dial through genève stripes, aventurine, and nacre",
+      "two fingers tap → steps the camera back; three fingers tap → rings every gear at once",
+      "tilt the device (a resting cursor stands in without one) → leans the case; shake or knock it → the balance swings wide and rings",
       "drag empty space → orbits the camera around the whole calibre",
     ],
-    finds: ["the parts are the interface — tapping the crown does exactly what winding does, and it visibly depresses"],
+    finds: [
+      "the parts are the interface — tapping the crown does exactly what winding does, and it visibly depresses",
+      "the cage under the balance never stops turning, on its own, whether the case is leaning or dead level",
+      "lean the case hard and hold it: the balance's glow swings warm then cool as the cage carries it through the position, proof the average still lands at zero",
+    ],
   },
   {
     key: "jewel",
@@ -1104,7 +1111,7 @@ export const GUIDE_WORKSHOP: GuideWorkshopPart[] = [
   {
     title: "how it is made",
     paragraphs: [
-      "next.js 14 app router, typescript, tailwind kept light, zustand for the one shared store. every room is a thin page in src/app with its real body in src/components. the seas and skies are fragment shaders on webgl canvases; the surface forms are 2d canvas; the deep objects — the movement, the drop — are three.js; the prose that bends around sigils is measured line by line with pretext. all of it procedural: no stock, no sound packs, no downloaded assets anywhere.",
+      "next.js 14 app router, typescript, tailwind kept light, zustand for the one shared store. every room is a thin page in src/app with its real body in src/components. the seas and skies are fragment shaders on webgl canvases; the surface forms are 2d canvas; the deep objects — the tourbillon, the drop — are three.js; the prose that bends around sigils is measured line by line with pretext. all of it procedural: no stock, no sound packs, no downloaded assets anywhere.",
       "every sound comes from one web audio graph (src/lib/audio.ts) whose lfo clocks are shared with the visuals, so what you see breathes with what you hear. haptics ride the same intensity axis. and everything generated — sigil, music, flower, constellation — is a deterministic function of a small state vector: your night sounds like yours, always.",
     ],
   },

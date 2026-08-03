@@ -8,12 +8,12 @@ const browser = await chromium.launch({
 });
 const page = await browser.newPage({ viewport: { width: 900, height: 900 } });
 page.setDefaultTimeout(120000);
-await page.goto("http://localhost:3000/movement?spin=0&view=iso&shot=1", { waitUntil: "networkidle" });
-await page.waitForFunction(() => window.__movement && window.__movement.ready === true);
+await page.goto("http://localhost:3000/tourbillon?spin=0&view=iso&shot=1", { waitUntil: "networkidle" });
+await page.waitForFunction(() => window.__tourbillon && window.__tourbillon.ready === true);
 await page.waitForTimeout(1000);
 await page.getByRole("button", { name: "aventurine" }).click();
 await page.waitForTimeout(800);
-await page.evaluate(() => window.__movement.setView("top"));
+await page.evaluate(() => window.__tourbillon.setView("top"));
 await page.waitForTimeout(700);
 await page.screenshot({ path: "iterations/iter-07/aventurine.png" });
 console.log("saved aventurine");
