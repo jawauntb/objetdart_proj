@@ -63,7 +63,7 @@ export const SCALE_BANDS: ScaleBand[] = [
   // used to take one step from a water molecule to a living plasm.
   { id: "molecules", label: "molecules", route: "/molecules", sMin: -9.5, sMax: -8.8 },
   { id: "organics", label: "organic molecules", route: "/organics", sMin: -8.8, sMax: -8 },
-  { id: "dna", label: "dna", route: null, sMin: -8, sMax: -7.2 },
+  { id: "dna", label: "dna", route: "/dna", sMin: -8, sMax: -7.2 },
   { id: "organelles", label: "organelles", route: null, sMin: -7.2, sMax: -5.8 },
   { id: "cells", label: "cells", route: "/cells", sMin: -5.8, sMax: -4.4 },
   { id: "tissue", label: "tissue", route: null, sMin: -4.4, sMax: -3.5 },
