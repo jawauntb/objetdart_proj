@@ -428,6 +428,30 @@ export const GUIDE_ROOMS: GuideRoom[] = [
     keeps: "the cells you've seeded, generation by generation",
   },
   {
+    key: "organics",
+    title: "what carbon does when it has time",
+    scale: "the organic-molecules band — between molecules and dna",
+    href: "/organics",
+    essence:
+      "a warm solvent holding loose carbon, nitrogen and oxygen, and the chains a hand talks them into — where a strained molecule beats aloud and the beating stops at the tetrahedral angle.",
+    moves: [
+      "tap a chain → a thermal kick; the geometry bends and the beating starts again",
+      "drag a loose atom onto a chain end → it bonds where valence allows, and is pushed firmly away where it does not",
+      "hold on open solvent (dwell) → condenses a new chain, bond by bond",
+      "hold on a chain → the fold; the press itself is the folding time, extended through nucleated to a locked coil",
+      "three fingers drag → warmth, which holds every chain off its floor",
+      "three fingers hold → the field's clock slows to a quarter",
+      "twist → raises the lens to skeletal notation, where what you built is named",
+      "tilt → a current through the solvent; shake → a thermal scatter; knock → one sharp spike",
+    ],
+    finds: [
+      "the beat rate is the strain, exactly: a chain at its minimum makes no beat at all, and the room falls quiet as it settles",
+      "hexane, glucose and glycine are all reachable by hand, and two glycines held together give up a water",
+      "a fully folded chain is a coil — which is the backbone the ladder one band up is made of",
+    ],
+    keeps: "the chains you've built, and how far each one has folded",
+  },
+  {
     key: "molecules",
     title: "what the bond holds, the solvent carries",
     scale: "the molecules band — between atoms and cells",

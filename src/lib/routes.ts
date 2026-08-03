@@ -32,6 +32,7 @@ export const SITE_ROUTES: SiteRouteEntry[] = [
   { key: "aphros",      icon: "aphros",   href: "/aphros",                            desc: "play the shells",              cluster: "water" },
   { key: "flowers",     icon: "growth",   href: "/flowers",                           desc: "petals · symmetry",            cluster: "nature",    dark: true },
   { key: "cells",       icon: "aphros",   href: "/cells",                             desc: "the plasm keeps its own tide", cluster: "nature",    dark: true },
+  { key: "organics",    icon: "growth",   href: "/organics",                          desc: "what carbon does when it has time", cluster: "nature", dark: true },
   { key: "molecules",   icon: "growth",   href: "/molecules",                         desc: "what the bond holds, the solvent carries", cluster: "nature", dark: true },
   { key: "atoms",       icon: "plasma",   href: "/atoms",                             desc: "probability breathes around a bright nucleus", cluster: "mechanism", dark: true },
   { key: "nucleons",    icon: "plasma",   href: "/nucleons",                          desc: "the valley makes the elements", cluster: "mechanism", dark: true },
