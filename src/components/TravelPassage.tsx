@@ -37,6 +37,14 @@ import { seededRandom } from "@/lib/manifold-field";
 import { getFieldAudio, setScaleRegister } from "@/lib/audio";
 import { detent as hapticDetent } from "@/lib/haptics";
 import { PITCH_DEFAULT, buildStars, starState, waveNumber } from "@/lib/spiral";
+import {
+  worldFromLatent,
+  worldFromSeed,
+  worldColors,
+  hashSeed as forgeHash,
+  RING_MIN,
+  type World,
+} from "@/lib/worldforge";
 
 // ——— The registry ———————————————————————————————————————————————
 
@@ -46,7 +54,13 @@ export type PassageEdgeKey =
   | "stars->galaxy"
   | "galaxy->stars"
   | "galaxy->space"
-  | "space->galaxy";
+  | "space->galaxy"
+  | "earth->planets"
+  | "planets->earth"
+  | "planets->solar"
+  | "solar->planets"
+  | "planets->stars"
+  | "stars->planets";
 
 export type PassageSpec = {
   /** Full film length, ms. */
@@ -64,13 +78,77 @@ export type PassageSpec = {
   /**
    * Which film this edge traverses: the atlas↔stars planet ("planet",
    * default), the vault streaming into an arm seen edge-on ("arm",
-   * stars↔galaxy), or the spiral shrinking to one luminous node of the
-   * web ("node", galaxy↔space).
+   * stars↔galaxy), the spiral shrinking to one luminous node of the web
+   * ("node", galaxy↔space), the globe becoming one bead among forged
+   * worlds ("beads", earth↔planets), or those worlds falling onto their
+   * orbits as the sun ignites ("orbitfall", planets↔solar).
    */
-  film?: "planet" | "arm" | "node";
+  film?: "planet" | "arm" | "node" | "beads" | "orbitfall";
 };
 
 export const PASSAGES: Partial<Record<PassageEdgeKey, PassageSpec>> = {
+  // The globe shrinks to one bead among worlds — /earth hands its focused
+  // object to /planets as that room's container (the handoff-anchor law).
+  "earth->planets": {
+    durationMs: 3200,
+    reducedMs: 1200,
+    navigateAt: 0.52,
+    bellAt: 0.44,
+    detentAt: 0.6,
+    out: true,
+    film: "beads",
+  },
+  "planets->earth": {
+    durationMs: 3200,
+    reducedMs: 1200,
+    navigateAt: 0.45,
+    bellAt: 0.52,
+    detentAt: 0.3,
+    out: false,
+    film: "beads",
+  },
+  // The focused world falls onto its orbit line; the sun ignites at centre
+  // — /planets hands its worlds to /solar as planets of one system.
+  "planets->solar": {
+    durationMs: 3200,
+    reducedMs: 1200,
+    navigateAt: 0.52,
+    bellAt: 0.58,
+    detentAt: 0.66,
+    out: true,
+    film: "orbitfall",
+  },
+  "solar->planets": {
+    durationMs: 3200,
+    reducedMs: 1200,
+    navigateAt: 0.45,
+    bellAt: 0.4,
+    detentAt: 0.3,
+    out: false,
+    film: "orbitfall",
+  },
+  // The solar band is an address before it is a room, so travel out of the
+  // forge resolves *through* it to the stars (scale.ts, firstBuiltAlong).
+  // That crossing really does pass the system, so it plays the system's
+  // film; when /solar ships, the direct edges above take it back.
+  "planets->stars": {
+    durationMs: 3200,
+    reducedMs: 1200,
+    navigateAt: 0.52,
+    bellAt: 0.58,
+    detentAt: 0.66,
+    out: true,
+    film: "orbitfall",
+  },
+  "stars->planets": {
+    durationMs: 3200,
+    reducedMs: 1200,
+    navigateAt: 0.45,
+    bellAt: 0.4,
+    detentAt: 0.3,
+    out: false,
+    film: "orbitfall",
+  },
   "atlas->stars": {
     durationMs: 3500,
     reducedMs: 1200,
@@ -877,9 +955,346 @@ function makeNodeFilm(): Film {
   return { renderFrame };
 }
 
+// ——— The forged-world films (earth ↔ planets, planets ↔ solar) ————————
+//
+// Both films borrow the /planets decoder itself: every body on screen is a
+// point in the same 12-dim latent the forge room sculpts — the earth of the
+// beads film is simply a hand-chosen latent (sea-heavy, iced, clouded), so
+// the container of one band and the material of the next are literally the
+// same object under the same map.
+
+/** The earth as a point in the forge's latent space. */
+const EARTH_LATENT = [0.62, 0.66, 0.86, 0.42, 0.08, 0.55, 0.38, 0.32, 0.6, 0.2, 0.28, 0.62];
+
+/** The supporting cast — the neighbourhood the globe joins. */
+function castWorlds(seed: number, n: number): World[] {
+  const out: World[] = [];
+  for (let i = 0; i < n; i++) out.push(worldFromSeed(forgeHash(seed, i + 1)));
+  return out;
+}
+
+/**
+ * A soft radial falloff built from stacked translucent discs. Twelve fills
+ * beat one `createRadialGradient` per frame — the gradient object is
+ * allocated and rasterized every call, which is exactly the debt
+ * `scripts/test-room-paint.mjs` ratchets down.
+ */
+function haloRings(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  rInner: number,
+  rOuter: number,
+  col: RGB,
+  peak: number,
+): void {
+  if (peak <= 0.002 || rOuter <= rInner) return;
+  const steps = 12;
+  ctx.fillStyle = rgba(col, peak / steps);
+  for (let i = steps; i >= 1; i--) {
+    const r = rInner + ((rOuter - rInner) * i) / steps;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, TAU);
+    ctx.fill();
+  }
+}
+
+/** The frame's quiet darkening, from the shared hoisted sprite. */
+const forgeVignette = makeVignette();
+
+/**
+ * A small painted world: lit disc, sea/land tint, terminator, optional
+ * ring — cheap enough to draw a dozen per frame at bead size.
+ */
+function drawBead(
+  ctx: CanvasRenderingContext2D,
+  w: World,
+  x: number,
+  y: number,
+  r: number,
+  alpha: number,
+): void {
+  if (alpha <= 0 || r <= 0.5) return;
+  const col = worldColors(w);
+  const base = mix(col.landHi, col.seaShallow, w.ocean * 0.8);
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  if (w.ring > RING_MIN) {
+    ctx.strokeStyle = rgba(col.ringCol, 0.55);
+    ctx.lineWidth = Math.max(0.7, r * 0.16);
+    ctx.beginPath();
+    ctx.ellipse(x, y, r * 1.7, r * 0.55, -w.tiltRad * 0.8, Math.PI, TAU);
+    ctx.stroke();
+  }
+  // Lit disc, then the night side as one offset disc clipped to it — the
+  // /planets shader's own construction, and no per-frame gradient (the paint
+  // ledger: scripts/test-room-paint.mjs).
+  ctx.fillStyle = rgba(mix(base, PAPER, 0.18), 1);
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, TAU);
+  ctx.fill();
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, TAU);
+  ctx.clip();
+  ctx.fillStyle = rgba(mix(base, NIGHT, 0.8), 0.85);
+  ctx.beginPath();
+  ctx.arc(x + r * 0.62, y + r * 0.5, r, 0, TAU);
+  ctx.fill();
+  ctx.restore();
+  if (w.atmoDepth > 0.1) {
+    ctx.strokeStyle = rgba(col.atmo, 0.3 * w.atmoDepth);
+    ctx.lineWidth = Math.max(0.6, r * 0.08);
+    ctx.beginPath();
+    ctx.arc(x, y, r * 1.06, 0, TAU);
+    ctx.stroke();
+  }
+  if (w.ring > RING_MIN) {
+    ctx.strokeStyle = rgba(col.ringCol, 0.8);
+    ctx.lineWidth = Math.max(0.7, r * 0.16);
+    ctx.beginPath();
+    ctx.ellipse(x, y, r * 1.7, r * 0.55, -w.tiltRad * 0.8, 0, Math.PI);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/** Dust — the forge room's visible reserve, thickening as it nears. */
+function drawForgeDust(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  seed: number,
+  alpha: number,
+  drift: number,
+): void {
+  if (alpha <= 0) return;
+  const rng = seededRandom(seed);
+  for (let i = 0; i < 130; i++) {
+    const x = (rng() + drift * 0.02 * rng()) % 1;
+    const y = rng();
+    const dr = rng();
+    const tw = 0.55 + 0.45 * Math.sin(drift * (0.5 + dr) * 6 + dr * 9);
+    ctx.fillStyle = rgba(mix(PAPER, CANDLE, dr * 0.4), alpha * tw * (0.2 + dr * 0.5));
+    ctx.fillRect(x * w, y * h, dr > 0.85 ? 1.6 : 1, dr > 0.85 ? 1.6 : 1);
+  }
+}
+
+/**
+ * The full-texture globe used at film scale: the same equirect trick as
+ * the chart film, but painted from a forge-latent World.
+ */
+function makeGlobePainter(w: World, seed: number): ((
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  R: number,
+  u: number,
+) => void) | null {
+  const nA = makeNoise2(seed ^ 0x9e3779b9);
+  const nB = makeNoise2(seed ^ 0x85ebca6b);
+  const nC = makeNoise2(seed ^ 0xc2b2ae35);
+  const G = 144;
+  const landF = new Float32Array(G * G);
+  const cloudF = new Float32Array(G * G);
+  for (let j = 0; j < G; j++) {
+    const lat = (j / (G - 1) - 0.5) * Math.PI;
+    for (let i = 0; i < G; i++) {
+      const lon = (i / G) * TAU;
+      const cx = Math.cos(lon);
+      const sx = Math.sin(lon);
+      landF[j * G + i] =
+        0.55 * fbm(nA, cx * 1.7 + 9.2, lat * 1.9 + 7.7, 3) +
+        0.45 * fbm(nB, sx * 1.7 + 3.1, lat * 1.9 + 21.4, 3);
+      cloudF[j * G + i] = fbm(nC, cx * 2.2 + lat * 0.6 + 4.2, sx * 2.2 - lat * 0.9 + 8.8, 2);
+    }
+  }
+  const sampleG = (F: Float32Array, lon: number, lat: number): number => {
+    let li = lon / TAU;
+    li -= Math.floor(li);
+    const i = Math.min(G - 1, (li * G) | 0);
+    const j = Math.min(G - 1, (clamp01(lat / Math.PI + 0.5) * G) | 0);
+    return F[j * G + i];
+  };
+  let tex: HTMLCanvasElement;
+  let tctx: CanvasRenderingContext2D | null;
+  let img: ImageData;
+  const TEXG = 160;
+  try {
+    tex = document.createElement("canvas");
+    tex.width = TEXG;
+    tex.height = TEXG;
+    tctx = tex.getContext("2d");
+    if (!tctx) return null;
+    img = tctx.createImageData(TEXG, TEXG);
+  } catch {
+    return null;
+  }
+  const col = worldColors(w);
+  const seaTh = 0.34 + w.ocean * 0.33;
+  const iceEdge = 1.5 - w.ice * 0.85;
+  return (ctx, x, y, R, u) => {
+    const spin = 0.7 + u * 1.9;
+    const d = img.data;
+    for (let j = 0; j < TEXG; j++) {
+      const y0 = ((j + 0.5) / TEXG) * 2 - 1;
+      for (let i = 0; i < TEXG; i++) {
+        const x0 = ((i + 0.5) / TEXG) * 2 - 1;
+        const o = (j * TEXG + i) * 4;
+        const r2 = x0 * x0 + y0 * y0;
+        if (r2 > 1.04) {
+          d[o + 3] = 0;
+          continue;
+        }
+        const edgeA = clamp01((1.02 - r2) / 0.06);
+        const z0 = Math.sqrt(Math.max(0.0001, 1 - Math.min(1, r2)));
+        const lon = spin + Math.asin(Math.max(-0.9995, Math.min(0.9995, x0)));
+        const lat = Math.asin(Math.max(-0.9995, Math.min(0.9995, y0))) * 0.97;
+        const landness = sampleG(landF, lon, lat) - seaTh;
+        let c: RGB;
+        if (landness > 0) c = mix(col.landLo, col.landHi, clamp01(landness * 3.4));
+        else c = mix(col.seaShallow, col.seaDeep, 0.25 + clamp01(-landness * 5) * 0.75);
+        const ice = smoothstep(iceEdge, iceEdge + 0.22, Math.abs(lat));
+        if (ice > 0) c = mix(c, col.ice, ice * 0.92);
+        const cl = smoothstep(0.62, 0.8, sampleG(cloudF, lon + u * 1.2, lat));
+        if (cl > 0) c = mix(c, PAPER, cl * 0.5 * w.cloud * 1.4);
+        const dayS = -0.5 * x0 - 0.22 * y0 + 0.84 * z0;
+        const day = smoothstep(-0.06, 0.32, dayS);
+        c = mix(mix(c, NIGHT, 0.84), c, day);
+        const shade = 0.42 + 0.58 * z0;
+        d[o] = c[0] * shade;
+        d[o + 1] = c[1] * shade;
+        d[o + 2] = c[2] * shade;
+        d[o + 3] = edgeA * 255;
+      }
+    }
+    tctx!.putImageData(img, 0, 0);
+    ctx.drawImage(tex, x - R, y - R, R * 2, R * 2);
+  };
+}
+
+/**
+ * earth ↔ planets — "beads": u = 0 the globe fills the frame (the earth,
+ * decoded from a fixed forge latent); as u rises it shrinks to one bead
+ * among the forged worlds, the dust reserve shimmering in around it.
+ */
+function makeBeadsFilm(seed: number): Film | null {
+  const earth = worldFromLatent(EARTH_LATENT, seed ^ 0xea);
+  const paintGlobe = makeGlobePainter(earth, seed ^ 0xea);
+  if (!paintGlobe) return null;
+  const cast = castWorlds(seed, 8);
+  const rng = seededRandom(seed ^ 0xbead);
+  const anchors = cast.map(() => ({
+    x: 0.14 + rng() * 0.72,
+    y: 0.16 + rng() * 0.66,
+  }));
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    const m = Math.min(w, h);
+    ctx.fillStyle = rgba(NIGHT, 1);
+    ctx.fillRect(0, 0, w, h);
+    // The neighbourhood's dust arrives as the globe lets go of the frame.
+    drawForgeDust(ctx, w, h, seed ^ 0xd057, smoothstep(0.25, 0.75, u) * 0.55, u * 3);
+    // The other worlds condense in, one by one.
+    const beadIn = smoothstep(0.35, 0.85, u);
+    cast.forEach((cw, i) => {
+      const a = clamp01(beadIn * cast.length - i * 0.55);
+      drawBead(ctx, cw, anchors[i].x * w, anchors[i].y * h, m * 0.05 * cw.radius01 * 1.6, a * 0.95);
+    });
+    // The globe: from filling the frame to one bead among them.
+    const R = lerp(0.62 * m, 0.055 * m, easeInOut(smoothstep(0.05, 0.9, u)));
+    const gx = lerp(0.5, 0.36, smoothstep(0.4, 0.95, u)) * w;
+    const gy = lerp(0.46, 0.4, smoothstep(0.4, 0.95, u)) * h;
+    // Atmosphere breath around it, fading as it becomes a bead.
+    const atmA = 0.25 * (1 - u * 0.6);
+    haloRings(ctx, gx, gy, R * 0.98, R * 1.3, [120, 160, 168], atmA);
+    paintGlobe(ctx, gx, gy, R, u);
+    // A quiet vignette holds the frame together — stacked rings, not a
+    // per-frame gradient (the paint ledger: scripts/test-room-paint.mjs).
+    forgeVignette(ctx, w, h);
+  };
+  return { renderFrame };
+}
+
+/**
+ * planets ↔ solar — "orbitfall": u = 0 the focused world hangs free among
+ * its neighbours; as u rises it falls onto its orbit line, the others
+ * settle onto theirs, and the sun ignites at centre.
+ */
+function makeOrbitfallFilm(seed: number): Film {
+  const focusW = worldFromSeed(forgeHash(seed, 99));
+  const cast = castWorlds(seed ^ 0x501a, 5);
+  const rng = seededRandom(seed ^ 0x0f11);
+  const free = cast.map(() => ({
+    x: 0.16 + rng() * 0.68,
+    y: 0.14 + rng() * 0.6,
+    th: rng() * TAU,
+  }));
+  const focusTh = 0.6; // where on its orbit the focused world lands
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    const m = Math.min(w, h);
+    const cx = w / 2;
+    const cy = h / 2;
+    ctx.fillStyle = rgba(NIGHT, 1);
+    ctx.fillRect(0, 0, w, h);
+    // The dust thins as the system orders itself.
+    drawForgeDust(ctx, w, h, seed ^ 0xd057, (1 - smoothstep(0.2, 0.7, u)) * 0.5, u * 2);
+    const settle = easeInOut(smoothstep(0.12, 0.78, u));
+    const ignite = smoothstep(0.45, 0.85, u);
+    // Orbit lines draw themselves in as the worlds find them.
+    const orbitA = smoothstep(0.25, 0.7, u);
+    const orbits = [0.14, 0.2, 0.27, 0.34, 0.41, 0.48];
+    if (orbitA > 0) {
+      ctx.strokeStyle = rgba(PAPER, 0.16 * orbitA);
+      ctx.lineWidth = 1;
+      for (const or of orbits) {
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, or * m * 1.35, or * m * 0.62, 0, 0, TAU);
+        ctx.stroke();
+      }
+    }
+    // The supporting worlds settle onto their rails.
+    cast.forEach((cw, i) => {
+      const or = orbits[i + 1];
+      const th = free[i].th + u * 0.6;
+      const ox = cx + Math.cos(th) * or * m * 1.35;
+      const oy = cy + Math.sin(th) * or * m * 0.62;
+      const x = lerp(free[i].x * w, ox, settle);
+      const y = lerp(free[i].y * h, oy, settle);
+      drawBead(ctx, cw, x, y, m * 0.045 * cw.radius01 * (1.5 - u * 0.5), 0.95);
+    });
+    // The sun ignites at centre — candle-gold, then white-hot core.
+    if (ignite > 0) {
+      const sunR = m * (0.02 + ignite * 0.05);
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      haloRings(ctx, cx, cy, sunR * 0.6, sunR * 8, CANDLE, 0.2 * ignite);
+      ctx.fillStyle = rgba(PAPER, 0.95 * ignite);
+      ctx.beginPath();
+      ctx.arc(cx, cy, sunR, 0, TAU);
+      ctx.fill();
+      ctx.restore();
+    } else {
+      // Before ignition, only a rumor of gathering light.
+      haloRings(ctx, cx, cy, 0, m * 0.1, CANDLE, 0.04 * smoothstep(0.1, 0.45, u));
+    }
+    // The focused world falls onto its own orbit.
+    const or = orbits[0] + 0.13;
+    const th = focusTh + u * 0.4;
+    const fx = lerp(0.5 * w, cx + Math.cos(th) * or * m * 1.35, settle);
+    const fy = lerp(0.44 * h, cy + Math.sin(th) * or * m * 0.62, settle);
+    const fR = lerp(m * 0.16, m * 0.05, easeInOut(smoothstep(0.08, 0.85, u)));
+    drawBead(ctx, focusW, fx, fy, fR, 1);
+    forgeVignette(ctx, w, h);
+  };
+  return { renderFrame };
+}
+
+/** One place that knows which film an edge traverses. */
 function makeFilmFor(spec: PassageSpec): Film | null {
   if (spec.film === "arm") return makeArmFilm();
   if (spec.film === "node") return makeNodeFilm();
+  if (spec.film === "beads") return makeBeadsFilm(PASSAGE_SEED ^ 0x1a2b3c);
+  if (spec.film === "orbitfall") return makeOrbitfallFilm(PASSAGE_SEED ^ 0x077e11);
   return makeFilm(PASSAGE_SEED);
 }
 

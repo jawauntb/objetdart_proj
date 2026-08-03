@@ -113,6 +113,7 @@ const expectedKeys = [
   "quanta",
   "fire",
   "earth",
+  "planets",
   "growth",
   "stars",
   "galaxy",
