@@ -1,7 +1,9 @@
 import type { RouteSigilKind } from "@/components/RouteSigil";
 import { scaleOrderedNavigationKeys } from "@/lib/nav-order";
+import { roomRouteEntries } from "@/rooms/registry";
+import type { SiteRouteCluster } from "@/rooms/types";
 
-export type SiteRouteCluster = "field" | "water" | "nature" | "mechanism";
+export type { SiteRouteCluster };
 
 export type SiteRouteEntry = {
   key: string;
@@ -15,6 +17,24 @@ export type SiteRouteEntry = {
   homePriority?: number;
 };
 
+/**
+ * Rows contributed by room manifests (`src/rooms/<key>/room.config.ts`).
+ * A *new* room needs no edit in this file at all — it lands in the trailing
+ * spread below. `manifestRoute(key)` exists only so already-shipped rooms can
+ * migrate to a manifest without moving in the registration order (that order
+ * is the dropdown's exempt tail).
+ */
+const MANIFEST_ROUTE_ROWS = roomRouteEntries() as SiteRouteEntry[];
+const MANIFEST_ROUTE_BY_KEY = new Map(MANIFEST_ROUTE_ROWS.map((row) => [row.key, row]));
+const PLACED_MANIFEST_KEYS = new Set<string>();
+
+function manifestRoute(key: string): SiteRouteEntry {
+  const row = MANIFEST_ROUTE_BY_KEY.get(key);
+  if (!row) throw new Error(`No room manifest for "${key}" — see src/rooms/index.ts`);
+  PLACED_MANIFEST_KEYS.add(key);
+  return row;
+}
+
 export const SITE_ROUTES: SiteRouteEntry[] = [
   { key: "atlas",       icon: "atlas",    href: "/atlas/origin",                    desc: "the living map",                 cluster: "field",     dark: true, homePriority: 10 },
   { key: "coast",       icon: "waves",    href: "/coast",                             desc: "the beach · land meets sea",    cluster: "water",     dark: true, homePriority: 7 },
@@ -27,7 +47,7 @@ export const SITE_ROUTES: SiteRouteEntry[] = [
   { key: "beyond",      icon: "waves",    href: "/beyond",                            desc: "novel wave field",             cluster: "water",     dark: true, homePriority: 10 },
   { key: "manifold",    icon: "stars",    href: "/manifold",                          desc: "every scale kept in one fold", cluster: "field",     dark: true },
   { key: "overlook",    icon: "growth",   href: "/overlook",                          desc: "the whole tree kept in one glance", cluster: "field", dark: true },
-  { key: "relativity",  icon: "stars",    href: "/relativity",                        desc: "light keeps its own covenant", cluster: "mechanism", dark: true },
+  manifestRoute("relativity"),
   { key: "loom",        icon: "signal",   href: "/loom",                              desc: "one structure, every sense",   cluster: "mechanism", dark: true },
   { key: "storm",       icon: "storm",    href: "/storm",                             desc: "pressure · charge · discharge", cluster: "water",     dark: true },
   { key: "clouds",      icon: "clouds",   href: "/clouds",                            desc: "the air floor, four banks deep", cluster: "water",     dark: true },
@@ -51,7 +71,7 @@ export const SITE_ROUTES: SiteRouteEntry[] = [
   { key: "stars",       icon: "stars",    href: "/stars",                             desc: "the night sky",                cluster: "nature",    dark: true, homePriority: 6 },
   { key: "space",       icon: "stars",    href: "/space",                             desc: "the web that holds the light", cluster: "nature",    dark: true },
   { key: "comb",        icon: "stars",    href: "/comb",                              desc: "comb the light · the cowlick stays", cluster: "nature", homePriority: 9 },
-  { key: "beam",        icon: "growth",   href: "/beam",                              desc: "the eye of heaven · bokeh petals",   cluster: "nature", homePriority: 10 },
+  manifestRoute("beam"),
   { key: "signal",      icon: "signal",   href: "/signal",                            desc: "music is also waves",          cluster: "mechanism", dark: true },
   { key: "light",       icon: "plasma",   href: "/light",                             desc: "color music",                  cluster: "mechanism", dark: true },
   { key: "music-color", icon: "plasma",   href: "/light/inverse",                     desc: "notes into color",             cluster: "mechanism", dark: true },
@@ -72,6 +92,9 @@ export const SITE_ROUTES: SiteRouteEntry[] = [
   { key: "kept",        icon: "kept",     href: "/kept",                              desc: "a private trail",              cluster: "field",     homePriority: 6 },
   { key: "colophon",    icon: "colophon", href: "/colophon",                         desc: "what kept this",               cluster: "field" },
   { key: "guide",       icon: "colophon", href: "/guide",                            desc: "how to hold it",               cluster: "field" },
+  // Every manifest room not already placed above. New rooms arrive here with
+  // no edit to this file.
+  ...MANIFEST_ROUTE_ROWS.filter((row) => !PLACED_MANIFEST_KEYS.has(row.key)),
 ];
 
 export const PRIMARY_ROUTE_KEYS = ["atlas", "tide", "waves", "watch"] as const;

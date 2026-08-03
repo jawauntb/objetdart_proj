@@ -34,6 +34,8 @@ function loadTsModule(path, requireMap = {}) {
   const module = { exports: {} };
   const requireShim = (id) => {
     if (id in requireMap) return requireMap[id];
+    // Room manifests (src/rooms/**) resolve like any other "@/" module.
+    if (id.startsWith("@/")) return loadTsModule(`src/${id.slice(2)}.ts`, requireMap);
     throw new Error(`Unexpected require(${id}) while loading ${path}`);
   };
   // Run in the current realm rather than a vm context: newer Node versions
