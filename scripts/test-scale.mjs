@@ -298,8 +298,8 @@ assert.equal(entryScaleFor("/colophon"), null);
   );
   assert.deepEqual(
     Array.from(travelOptions("stars", -1, {}), (b) => b.id),
-    ["atlas", "planets"],
-    "the sky descends onto the map first, or walks the unbuilt system down to the forge",
+    ["atlas", "solar"],
+    "the sky descends onto the map first, or falls back into the system beneath it",
   );
   assert.deepEqual(
     Array.from(travelOptions("cells", 1, {}), (b) => b.id),

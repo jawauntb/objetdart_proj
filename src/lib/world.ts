@@ -313,3 +313,91 @@ export function subscribeNaturals(fn: () => void): () => void {
 }
 
 export const WORLD_LIMITS = { MAX_NATURALS, MAX_PER_ZONE } as const;
+
+// ——— the world clock ————————————————————————————————————————————
+//
+// Some rooms advance on real elapsed time whether or not anyone watches —
+// the solar system keeps orbiting between visits the way a shell keeps
+// drifting between zones. Those rooms read this once at mount: it reports
+// when the room was first founded (its epoch) and how long the world ran
+// unwatched since the last visit, then stamps the new visit. The room owes
+// the rest: fold `elapsedMs` into its state in closed form (O(1) — never a
+// loop replaying the absence), and touch the wall clock nowhere else.
+
+export type WorldClockReading = {
+  /** When this key first joined the world, ms since epoch. */
+  epochMs: number;
+  /** Previous visit's stamp, ms since epoch (equals epochMs on first read). */
+  lastSeenMs: number;
+  /** The read itself, ms since epoch. */
+  nowMs: number;
+  /** nowMs − lastSeenMs, clamped non-negative — the unwatched span. */
+  elapsedMs: number;
+};
+
+const CLOCK_KEY = "objetdart:world:clock:v1";
+
+type ClockEntry = { epochMs: number; lastSeenMs: number };
+
+function loadClocks(store: Storage): Record<string, ClockEntry> {
+  try {
+    const raw = store.getItem(CLOCK_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") return {};
+    const out: Record<string, ClockEntry> = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (!v || typeof v !== "object") continue;
+      const e = v as Record<string, unknown>;
+      if (typeof e.epochMs !== "number" || typeof e.lastSeenMs !== "number") continue;
+      out[k] = { epochMs: e.epochMs, lastSeenMs: e.lastSeenMs };
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Read the persistent clock for `key`, stamping this visit. One call per
+ * mount; the returned `elapsedMs` is the whole absence, ready for a single
+ * closed-form advance. SSR-safe: without storage, a zero-elapsed reading.
+ */
+export function readWorldClock(key: string): WorldClockReading {
+  const nowMs = Date.now();
+  const store = safe();
+  if (!store) return { epochMs: nowMs, lastSeenMs: nowMs, nowMs, elapsedMs: 0 };
+  const clocks = loadClocks(store);
+  const entry = clocks[key] ?? { epochMs: nowMs, lastSeenMs: nowMs };
+  const reading: WorldClockReading = {
+    epochMs: entry.epochMs,
+    lastSeenMs: entry.lastSeenMs,
+    nowMs,
+    elapsedMs: Math.max(0, nowMs - entry.lastSeenMs),
+  };
+  clocks[key] = { epochMs: entry.epochMs, lastSeenMs: nowMs };
+  try {
+    store.setItem(CLOCK_KEY, JSON.stringify(clocks));
+  } catch {
+    /* quota; the reading still stands */
+  }
+  return reading;
+}
+
+/**
+ * Re-stamp `key` without reading (e.g. on pagehide, so the next absence is
+ * measured from the leaving, not the arriving).
+ */
+export function stampWorldClock(key: string): void {
+  const store = safe();
+  if (!store) return;
+  const clocks = loadClocks(store);
+  const nowMs = Date.now();
+  const entry = clocks[key] ?? { epochMs: nowMs, lastSeenMs: nowMs };
+  clocks[key] = { epochMs: entry.epochMs, lastSeenMs: nowMs };
+  try {
+    store.setItem(CLOCK_KEY, JSON.stringify(clocks));
+  } catch {
+    /* noop */
+  }
+}

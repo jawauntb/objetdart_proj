@@ -11,6 +11,7 @@ export type RouteSigilKind =
   | "earth"
   | "growth"
   | "stars"
+  | "solar"
   | "signal"
   | "plasma"
   | "pulse"
@@ -175,6 +176,18 @@ function renderSigil(
           />
           {/* a small dot at the inflection point */}
           <circle cx="11.5" cy="12" r="0.9" fill={s.stroke} stroke="none" />
+        </>
+      );
+    case "solar":
+      // two foreshortened rings about a filled centre, one world standing on
+      // each — the system seen edge-on, as the room itself draws it
+      return (
+        <>
+          <ellipse {...s} cx="12" cy="12" rx="5.2" ry="2.2" />
+          <ellipse {...s} cx="12" cy="12" rx="8.6" ry="3.6" />
+          <circle cx="12" cy="12" r="1.5" fill={s.stroke} stroke="none" />
+          <circle cx="16.4" cy="13.2" r="1" fill={s.stroke} stroke="none" />
+          <circle cx="7.6" cy="10.9" r="0.8" fill={s.stroke} stroke="none" />
         </>
       );
     case "stars":

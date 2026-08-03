@@ -60,7 +60,9 @@ export type PassageEdgeKey =
   | "planets->solar"
   | "solar->planets"
   | "planets->stars"
-  | "stars->planets";
+  | "stars->planets"
+  | "solar->stars"
+  | "stars->solar";
 
 export type PassageSpec = {
   /** Full film length, ms. */
@@ -81,9 +83,11 @@ export type PassageSpec = {
    * stars↔galaxy), the spiral shrinking to one luminous node of the web
    * ("node", galaxy↔space), the globe becoming one bead among forged
    * worlds ("beads", earth↔planets), or those worlds falling onto their
-   * orbits as the sun ignites ("orbitfall", planets↔solar).
+   * orbits as the sun ignites ("orbitfall", planets↔solar), or the whole
+   * system receding until its sun is one warm point of the vault
+   * ("sunfall", solar↔stars).
    */
-  film?: "planet" | "arm" | "node" | "beads" | "orbitfall";
+  film?: "planet" | "arm" | "node" | "beads" | "orbitfall" | "sunfall";
 };
 
 export const PASSAGES: Partial<Record<PassageEdgeKey, PassageSpec>> = {
@@ -205,6 +209,25 @@ export const PASSAGES: Partial<Record<PassageEdgeKey, PassageSpec>> = {
     detentAt: 0.3,
     out: false,
     film: "node",
+  },  // The system lets go of the frame until its sun is one warm point taking
+  // its seat in the vault; the return re-condenses it exactly.
+  "solar->stars": {
+    durationMs: 3200,
+    reducedMs: 1200,
+    navigateAt: 0.55,
+    bellAt: 0.42,
+    detentAt: 0.64,
+    out: true,
+    film: "sunfall",
+  },
+  "stars->solar": {
+    durationMs: 3200,
+    reducedMs: 1200,
+    navigateAt: 0.45,
+    bellAt: 0.52,
+    detentAt: 0.3,
+    out: false,
+    film: "sunfall",
   },
 };
 
@@ -1290,11 +1313,129 @@ function makeOrbitfallFilm(seed: number): Film {
 }
 
 /** One place that knows which film an edge traverses. */
+
+// ——— The sunfall (solar ↔ stars) ————————————————————————————————————
+//
+// One scene function of u ∈ [0, 1]:
+//   u = 0    the solar system fills the frame — sun, orbits, moving worlds
+//   u ≈ 0.5  the orbits have shrunk to a bright knot; the vault thickens
+//   u = 1    deep night; the sun is one warm point among the stars, drifted
+//            a little off centre to take its seat in the sky
+// Outbound (solar → stars) plays u forward; the return is the same drawing
+// reversed, so the descent re-condenses the system exactly. It is the
+// orbitfall's next rung: that film ignites the sun, this one hands it to
+// the vault.
+
+const SUNFALL_SEED = 0x50a1f2d; // one sun, always yours
+
+function makeSunfallFilm(): Film {
+  const rng = seededRandom(SUNFALL_SEED ^ 0x2fd11e3);
+  const vignette = makeVignette();
+  const glow = makeGlowSprite(mix(PAPER, CANDLE, 0.35), CANDLE, 0.4);
+  const stars: Array<{ x: number; y: number; r: number; ph: number; warm: boolean }> = [];
+  for (let i = 0; i < 420; i++) {
+    stars.push({ x: rng(), y: rng(), r: 0.5 + rng() * 1.3, ph: rng() * TAU, warm: rng() > 0.93 });
+  }
+  // A small fixed system for the film — five worlds, Kepler-timed so the
+  // inner ones visibly run during the crossing.
+  const cols: RGB[] = [
+    mix(SEA, PAPER, 0.4),
+    mix(KEPT, PAPER, 0.45),
+    mix(CANDLE, PAPER, 0.3),
+    mix(PAPER, SEA, 0.2),
+    mix(AURORA, PAPER, 0.3),
+  ];
+  const worlds: Array<{ rad: number; ph: number; size: number; col: RGB; ecc: number }> = [];
+  for (let i = 0; i < 5; i++) {
+    worlds.push({
+      rad: 0.2 + i * 0.19 + rng() * 0.04,
+      ph: rng() * TAU,
+      size: 2.2 + rng() * 2.4,
+      col: cols[i],
+      ecc: 0.94 - rng() * 0.12,
+    });
+  }
+
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    const m = Math.min(w, h);
+    const diag = Math.hypot(w, h);
+
+    ctx.fillStyle = rgba(NIGHT, 1);
+    ctx.fillRect(0, 0, w, h);
+
+    // The vault thickens as the system lets go of the frame.
+    const sCount = Math.floor(stars.length * smoothstep(0.18, 0.85, u));
+    const sAlpha = smoothstep(0.22, 0.8, u);
+    for (let i = 0; i < sCount; i++) {
+      const st = stars[i];
+      const tw = 0.7 + 0.3 * Math.sin(st.ph + u * 6);
+      ctx.fillStyle = rgba(st.warm ? CANDLE : PAPER, sAlpha * tw * 0.85);
+      ctx.fillRect(st.x * w, st.y * h, st.r, st.r);
+    }
+    // A faint milky band, late.
+    const band = smoothstep(0.55, 0.95, u);
+    if (band > 0.01) {
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.translate(w / 2, h / 2);
+      ctx.rotate(-0.5);
+      ctx.fillStyle = rgba(PAPER, 0.05 * band);
+      ctx.fillRect(-diag, -h * 0.1, diag * 2, h * 0.2);
+      ctx.restore();
+    }
+
+    // The camera's retreat: an exponential shrink from full frame to a
+    // point, and a slow drift as the sun takes its seat among the stars.
+    const S = 0.62 * m * Math.exp(-5.1 * smoothstep(0.02, 0.95, u));
+    const seat = smoothstep(0.55, 0.98, u);
+    const cx = w / 2 + seat * 0.17 * w;
+    const cy = h / 2 - seat * 0.13 * h;
+    const squash = 0.66;
+    const fade = 1 - smoothstep(0.32, 0.72, u); // orbits and worlds let go first
+
+    if (fade > 0.01) {
+      ctx.lineWidth = 1;
+      for (const wd of worlds) {
+        ctx.strokeStyle = rgba(PAPER, 0.11 * fade);
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, S * wd.rad, S * wd.rad * squash * wd.ecc, 0.2, 0, TAU);
+        ctx.stroke();
+      }
+      // The worlds keep moving as they go — Kepler runs during the crossing.
+      for (const wd of worlds) {
+        const ang = wd.ph + (u * 7.2) / Math.pow(wd.rad, 1.5);
+        const px = cx + Math.cos(ang + 0.2) * S * wd.rad;
+        const py = cy + Math.sin(ang + 0.2) * S * wd.rad * squash * wd.ecc;
+        ctx.fillStyle = rgba(wd.col, 0.9 * fade);
+        ctx.beginPath();
+        ctx.arc(px, py, Math.max(0.4, ((wd.size * S) / (0.62 * m)) * 4 + 0.6), 0, TAU);
+        ctx.fill();
+      }
+    }
+
+    // The sun: a candle that never quite goes out — it becomes a star.
+    const tw = 0.8 + 0.2 * Math.sin(u * 31 + 1.3);
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    blitGlow(ctx, glow, cx, cy, Math.max(4, S * 0.24 + 6) * 2.2, 0.9 * tw);
+    ctx.restore();
+    ctx.fillStyle = rgba(mix(PAPER, CANDLE, 0.25), 0.95);
+    ctx.beginPath();
+    ctx.arc(cx, cy, Math.max(1.3, S * 0.06 + 1.2), 0, TAU);
+    ctx.fill();
+
+    vignette(ctx, w, h);
+  };
+
+  return { renderFrame };
+}
+
 function makeFilmFor(spec: PassageSpec): Film | null {
   if (spec.film === "arm") return makeArmFilm();
   if (spec.film === "node") return makeNodeFilm();
   if (spec.film === "beads") return makeBeadsFilm(PASSAGE_SEED ^ 0x1a2b3c);
   if (spec.film === "orbitfall") return makeOrbitfallFilm(PASSAGE_SEED ^ 0x077e11);
+  if (spec.film === "sunfall") return makeSunfallFilm();
   return makeFilm(PASSAGE_SEED);
 }
 
