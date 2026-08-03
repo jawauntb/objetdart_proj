@@ -141,6 +141,12 @@ export default function OrganellesPlasm() {
     let glimmerIdx = 0;
     let selIdx = -1;
     let kbCharge = 0;
+    /** two-finger frame pan — pinch stays with ScaleTravel */
+    let viewX = 0;
+    let viewY = 0;
+    let viewTX = 0;
+    let viewTY = 0;
+    let lastPanCueAt = 0;
     let dragIdx = -1;
     let holdIdx = -1;
     let holdDone = false;
@@ -346,9 +352,14 @@ export default function OrganellesPlasm() {
     observer.observe(wrap);
 
     const unit = () => Math.min(width, height) * 0.055;
+    const panLimit = () => ({
+      x: Math.max(48, width * 0.28),
+      y: Math.max(48, height * 0.28),
+    });
+    /** Screen point → plasm space (accounts for the two-finger frame pan). */
     const toLocal = (cx: number, cy: number) => ({
-      x: clamp(cx - rectLeft, 0, width),
-      y: clamp(cy - rectTop, 0, height),
+      x: clamp(cx - rectLeft, 0, width) - viewX,
+      y: clamp(cy - rectTop, 0, height) - viewY,
     });
 
     const organelleAt = (x: number, y: number): number => {
@@ -515,7 +526,8 @@ export default function OrganellesPlasm() {
           lastInteractionAt = performance.now();
           // Circling on an organ winds its folds deeper; the other way lets
           // them out — and either way the plasm keeps its total.
-          const i = organelleAt(e.cx - rectLeft, e.cy - rectTop);
+          const { x: sx, y: sy } = toLocal(e.cx, e.cy);
+          const i = organelleAt(sx, sy);
           if (i >= 0) {
             draw_(i, clamp(e.angularVelocity, -8, 8) * 0.02);
             const now = performance.now();
@@ -534,7 +546,8 @@ export default function OrganellesPlasm() {
         },
         flick: (e) => {
           lastInteractionAt = performance.now();
-          const i = organelleAt(e.x - rectLeft, e.y - rectTop);
+          const { x: fx, y: fy } = toLocal(e.x, e.y);
+          const i = organelleAt(fx, fy);
           if (i < 0) return;
           const speed = clamp(e.speed / 2400, 0.1, 1);
           vel[i * 2] += Math.cos(e.angle) * speed * 0.4;
@@ -545,6 +558,26 @@ export default function OrganellesPlasm() {
           lastInteractionAt = performance.now();
           if (e.phase === "move") lensTarget = clamp01(lensTarget + e.angle / 1.7);
           else if (e.phase === "end") setLens(lensTarget > 0.5 ? 1 : 0);
+        },
+        pan2: (e) => {
+          lastInteractionAt = performance.now();
+          if (e.phase === "end") return;
+          const lim = panLimit();
+          const gain = reduced ? 0.55 : 1;
+          viewTX = clamp(viewTX + e.dx * gain, -lim.x, lim.x);
+          viewTY = clamp(viewTY + e.dy * gain, -lim.y, lim.y);
+          if (reduced) {
+            viewX = viewTX;
+            viewY = viewTY;
+          }
+          if (e.phase === "start" || performance.now() - lastPanCueAt > 280) {
+            lastPanCueAt = performance.now();
+            try {
+              haptics.tap();
+            } catch {
+              /* noop */
+            }
+          }
         },
         rhythm: (e) => {
           if (e.stability > 0.65) tutti();
@@ -664,6 +697,13 @@ export default function OrganellesPlasm() {
       pour += (pourTarget - pour) * Math.min(1, dt * 2.4);
       churn *= Math.exp(-dt * 0.9);
       lens += (lensTarget - lens) * Math.min(1, dt * 6);
+      if (reduced) {
+        viewX = viewTX;
+        viewY = viewTY;
+      } else {
+        viewX += (viewTX - viewX) * Math.min(1, dt * 14);
+        viewY += (viewTY - viewY) * Math.min(1, dt * 14);
+      }
       for (let i = 0; i < lit.length; i++) if (lit[i] > 0) lit[i] = Math.max(0, lit[i] - dt * 1.3);
 
       const list = listRef.current;
@@ -731,6 +771,10 @@ export default function OrganellesPlasm() {
       bg.addColorStop(1, "rgb(8, 10, 10)");
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, width, height);
+
+      // the frame slides under two fingers; the dark stays put
+      ctx.save();
+      ctx.translate(viewX, viewY);
 
       // the cytoplasm, streaming
       const U = unit();
@@ -876,6 +920,8 @@ export default function OrganellesPlasm() {
         ctx.arc(x, y, U * (0.6 + condensing.u * 1.2), -Math.PI / 2, -Math.PI / 2 + condensing.u * Math.PI * 2);
         ctx.stroke();
       }
+
+      ctx.restore(); // end frame pan
 
       // ——— the ledger: the budget drawn as shares of one constant total
       if (lens > 0.45 && list.length > 0) {
