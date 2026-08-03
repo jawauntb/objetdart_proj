@@ -285,20 +285,31 @@ assert.equal(parsed.mode, "generate", "generate should remain the canonical mode
 const spaceStyle = resolveAtlasVisualStyle("space nebula chart");
 assert.equal(spaceStyle.id, "space", "space prompts should select the space atlas pack");
 assert.match(spaceStyle.primary, /deep-space|nebula|constellation/i, "space style should dominate the visual language");
-assert.match(spaceStyle.dna, /Catalan portolan residue/i, "every style should keep a faint Catalan atlas residue");
+assert.match(spaceStyle.dna, /Do not render a medieval Catalan portolan/i, "craft DNA should forbid a default Catalan costume");
 assert.match(
   formatAtlasVisualStyleClause(spaceStyle),
-  /Catalan portolan residue/,
-  "formatted style clauses should keep the Catalan DNA attached",
+  /Do not render a medieval Catalan portolan/,
+  "formatted style clauses should keep the anti-Catalan default attached",
 );
 
 const fireStyle = resolveAtlasVisualStyle("fire forest");
 assert.equal(fireStyle.id, "fire", "the first matched theme token should win style selection");
 assert.match(fireStyle.primary, /volcanic|ember|molten/i, "fire prompts should not stay locked to Catalan blue portolan paint");
 
+const heavenStyle = resolveAtlasVisualStyle("Heaven");
+assert.equal(heavenStyle.id, "heaven", "heaven prompts should select the paradise pack");
+assert.match(heavenStyle.primary, /celestial|paradise|luminous/i, "heaven should look like heaven, not a portolan");
+
+const coinStyle = resolveAtlasVisualStyle("a world of coins");
+assert.equal(coinStyle.id, "coin", "coin prompts should select the coin-world pack");
+
+const cityStyle = resolveAtlasVisualStyle("New York City");
+assert.equal(cityStyle.id, "city", "named cities should select the civic pack");
+
 const fallbackStyle = resolveAtlasVisualStyle("quiet marble quarries");
 assert.equal(fallbackStyle.id, "concept", "unknown prompts should fall back to concept-shaped style");
-assert.match(fallbackStyle.dna, /Catalan portolan residue/i, "fallback style must still keep Catalan DNA");
+assert.match(fallbackStyle.primary, /visual concept as its own world-map/i, "fallback style should put the subject first");
+assert.match(fallbackStyle.dna, /Do not render a medieval Catalan portolan/i, "fallback style must not force Catalan DNA");
 
 const defaultProviderConfig = resolveAtlasProviderConfig({ OPENAI_API_KEY: "openai-test-key" });
 const defaultProvider = plain(defaultProviderConfig);
@@ -321,13 +332,26 @@ assert.equal(defaultBody.output_format, "webp", "final generation should request
 assert.equal(defaultBody.output_compression, 92, "final generation should avoid low-quality compression artifacts");
 const defaultPrompt = defaultBody.prompt;
 assert.match(defaultPrompt, /deep-space|nebula|constellation/i, "provider prompts should mutate toward the concept theme");
-assert.match(defaultPrompt, /Catalan portolan residue/i, "provider prompts should retain ~5% Catalan atlas DNA");
+assert.match(defaultPrompt, /Do not restyle it as a default antique Catalan atlas/i, "provider prompts should forbid the Catalan default");
 assert.match(defaultPrompt, /<visual_concept>space nebula<\/visual_concept>/, "concept text should stay inside the subject tag");
 assert.doesNotMatch(
   defaultPrompt.split("<visual_concept>")[0] ?? "",
   /richly illuminated Catalan portolan chart translated into a dark contemporary instrument/,
   "the old always-Catalan primary clause should no longer dominate themed prompts",
 );
+assert.doesNotMatch(
+  defaultPrompt,
+  /faint Catalan portolan residue/i,
+  "provider prompts should no longer inject Catalan residue into every subject",
+);
+
+await generateAtlasImage(
+  parseAtlasGenerationRequest({ prompt: "Heaven", mode: "generate" }),
+  resolveAtlasProviderConfig({ OPENAI_API_KEY: "openai-test-key" }),
+);
+const heavenCall = providerCalls.filter((call) => call.url === "https://api.openai.com/v1/images/generations").at(-1);
+assert.ok(heavenCall, "heaven generation should call GPT Image");
+assert.match(JSON.parse(heavenCall.init.body).prompt, /celestial|paradise/i, "heaven should ask for paradise visual language");
 
 const openAIProvider = resolveAtlasProviderConfig({ OPENAI_API_KEY: "openai-test-key" }, "openai");
 assert.equal(openAIProvider.provider, "openai", "OpenAI should be an allowlisted final provider");
