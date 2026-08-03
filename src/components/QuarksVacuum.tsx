@@ -22,7 +22,9 @@
  * the ceremony held on a hadron is annihilation — photon streaks racing
  * off at light speed; a flick throws a hadron whole (it moves as one,
  * never sheds a part); a scrub stirs the vacuum into a glowing ring of
- * pair production; three fingers run a field wind or dilate time; a twist
+ * pair production; three fingers run a field wind or dilate time; a knock
+ * on the case rings the field's door and everything bound answers; laid
+ * face-down the room is night and the seethe goes on unwatched; a twist
  * rotates the lens to the bare mathematics — the Feynman view: vertices,
  * coiled gluon propagators, virtual pairs as closed loops, photons as
  * waving lines. The field persists in `objetdart:quarks:v1`. Pinch is
@@ -37,11 +39,13 @@ import { attachGestures } from "@/lib/gesture";
 import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import LetGo from "@/components/LetGo";
+import { entryScaleFor, spectralRegisterFor } from "@/lib/scale";
 import {
   ANTI_TINTS,
   COLOR_TINTS,
   MAX_HADRONS,
   SNAP_RATIO,
+  VACUUM_MAX_LIFE_MS,
   VACUUM_SLOT_MS,
   confinementForce,
   hadronFromSeed,
@@ -50,12 +54,35 @@ import {
   shouldSnap,
   snapChildren,
   tubesOf,
-  vacuumPairAt,
+  vacuumPairsAt,
   type HadronMorph,
 } from "@/lib/quarks";
 
 const STORE_KEY = "objetdart:quarks:v1";
 const RETIRE_MS = 1400;
+
+/**
+ * The room's place on the axis, sounded. This deep, the register rings high
+ * and breathes quick — and every pitch in the room is an offset from it
+ * rather than a number someone liked. Move the band and the whole room
+ * retunes with it.
+ */
+const REGISTER = spectralRegisterFor(entryScaleFor("/quarks") ?? -17);
+/** The band's fundamental under the site's monotone pitch law (as /overlook
+ *  chimes it): power-compressed into the audible span. */
+const RING_MIDI = Math.round(
+  69 + 12 * Math.log2(
+    Math.min(1250, Math.max(60, 220 * Math.pow(REGISTER.baseHz / 220, 0.62))) / 440,
+  ),
+);
+/** Hadron voices sit one octave under the ring, so a field of them can stack
+ *  into a chord without any single voice leaving the register. */
+const VOICE_MIDI = RING_MIDI - 12;
+/** Three octaves under the ring: the vacuum beneath the voices, the room's
+ *  low word. */
+const FLOOR_MIDI = RING_MIDI - 36;
+/** Degrees the empty vacuum answers a stroke with, left edge to right. */
+const STIR_DEGREES = [0, 2, 5, 7, 9];
 /** One fixed field: the same vacuum seethes the same way for everyone. */
 const FIELD_SEED = hashSeed(97, 311, 8);
 /** Finger spring on a grabbed quark, normalized/s² per unit offset. */
@@ -105,13 +132,13 @@ function twinkleHash(n: number) {
   return x - Math.floor(x);
 }
 
-function mixHex(a: string, b: string, t: number) {
+function mixHex(a: string, b: string, t: number): string {
   const va = parseInt(a.slice(1), 16);
   const vb = parseInt(b.slice(1), 16);
   const r = Math.round(((va >> 16) & 255) * (1 - t) + ((vb >> 16) & 255) * t);
   const g = Math.round(((va >> 8) & 255) * (1 - t) + ((vb >> 8) & 255) * t);
   const bl = Math.round((va & 255) * (1 - t) + (vb & 255) * t);
-  return `rgb(${r}, ${g}, ${bl})`;
+  return `#${((r << 16) | (g << 8) | bl).toString(16).padStart(6, "0")}`;
 }
 
 /** Lay a hadron's quarks out at rest around a center, oriented by phase. */
@@ -156,10 +183,13 @@ function makeHadron(seed: number, cx: number, cy: number, growth: number): Hadro
   };
 }
 
-// the first look is never an empty vacuum — a triplet and a pair, kept
+// the first look is never a near-empty vacuum — a field already bound,
+// spread so no two hadrons share a quadrant
 const STARTERS: Array<{ nx: number; ny: number; triplet: boolean }> = [
-  { nx: 0.38, ny: 0.42, triplet: true },
-  { nx: 0.68, ny: 0.62, triplet: false },
+  { nx: 0.30, ny: 0.30, triplet: true },
+  { nx: 0.70, ny: 0.38, triplet: false },
+  { nx: 0.38, ny: 0.68, triplet: false },
+  { nx: 0.72, ny: 0.72, triplet: true },
 ];
 
 function starterSeed(i: number, triplet: boolean): number {
@@ -186,7 +216,7 @@ function loadStored(): Stored | null {
 
 /** midi voice of a hadron — the bright granular end of the axis */
 function midiOf(morph: HadronMorph): number {
-  return 67 + morph.voice + (morph.kind === "triplet" ? 3 : 0);
+  return VOICE_MIDI + morph.voice + (morph.kind === "triplet" ? 3 : 0);
 }
 
 export default function QuarksVacuum() {
@@ -231,6 +261,9 @@ export default function QuarksVacuum() {
     // the vessel: gravity's drift on the vacuum (-1..1)
     let tiltLeanX = 0;
     let tiltLeanY = 0;
+    // face-down: the room dims toward night, and comes back when turned over
+    let night = 0;
+    let nightTarget = 0;
     let lastTiltSoundAt = 0;
     let lastTuttiAt = 0;
     let lastInteractionAt = performance.now();
@@ -454,7 +487,7 @@ export default function QuarksVacuum() {
     const perturb = (x: number, y: number, intensity: number) => {
       const n = 3 + Math.round(clamp01(intensity) * 7);
       spraySparks(x, y, n, 26 + intensity * 40);
-      note(79 + Math.round(intensity * 5), 90);
+      note(RING_MIDI - 5 + Math.round(intensity * 5), 90);
       try { haptics.tap(); } catch { /* noop */ }
       useField.getState().recordTape("ripple", 0.3 + intensity * 0.4, "quarks/perturb");
     };
@@ -492,7 +525,7 @@ export default function QuarksVacuum() {
       // three senses in one frame: bell, bloom, a shiver of virtual sparks
       try { audio().bell(); } catch { /* noop */ }
       try { haptics.bloom(); } catch { /* noop */ }
-      note(52 + h.morph.voice, 420);
+      note(FLOOR_MIDI + 9 + h.morph.voice, 420);
       noteLater(90, midiOf(h.morph) + 5, 180);
       spraySparks(bx, by, 10, 44);
       useField.getState().recordTape("sigil", 0.85, "quarks/snap");
@@ -531,7 +564,7 @@ export default function QuarksVacuum() {
       const alive = hadrons.filter((h) => !h.retiringAt);
       if (alive.length === 0) return;
       try { audio().thud(); } catch { /* noop */ }
-      note(31, 520);
+      note(FLOOR_MIDI - 12, 520);
       try { haptics.roll(); } catch { /* noop */ }
       try {
         window.localStorage.setItem(STORE_KEY, JSON.stringify({ hadrons: [] } satisfies Stored));
@@ -590,7 +623,7 @@ export default function QuarksVacuum() {
             lensTarget = 0;
             window.setTimeout(() => markLens(false), 0);
             try { haptics.lens(); } catch { /* noop */ }
-            note(43, 160);
+            note(FLOOR_MIDI, 160);
           }
           return;
         }
@@ -602,7 +635,7 @@ export default function QuarksVacuum() {
       hold: (e) => {
         lastInteractionAt = performance.now();
         if (e.fingers === 3) {
-          if (e.phase === "enter") { timeScaleTarget = 0.25; try { haptics.tap(); } catch { /* noop */ } note(31, 300); }
+          if (e.phase === "enter") { timeScaleTarget = 0.25; try { haptics.tap(); } catch { /* noop */ } note(FLOOR_MIDI - 12, 300); }
           if (e.phase === "release") timeScaleTarget = 1;
           return;
         }
@@ -677,7 +710,7 @@ export default function QuarksVacuum() {
           const mag = Math.hypot(windTargetX, windTargetY);
           if (mag > 0.5 && now - lastWindSoundAt > 520) {
             lastWindSoundAt = now;
-            note(33 + Math.round(mag * 5), 280);
+            note(FLOOR_MIDI - 10 + Math.round(mag * 5), 280);
             try { haptics.chop(); } catch { /* noop */ }
           }
           return;
@@ -702,11 +735,18 @@ export default function QuarksVacuum() {
           drag.x = x;
           drag.y = y;
         } else {
-          // the empty vacuum absorbs a stroke with a faint wake of pairs
+          // Most of the field is open vacuum, so this is the likeliest first
+          // thing a hand does: it must sound. The stroke leaves a wake of
+          // pairs and wakes a degree of the vacuum where it passes — the run
+          // climbs from left edge to right, so a sweep is a phrase.
           const now = performance.now();
-          if (now - lastStirSparkAt > 240) {
+          if (now - lastStirSparkAt > 200) {
             lastStirSparkAt = now;
-            spraySparks(x, y, 1, 10);
+            const drift = clamp01(Math.hypot(e.vx, e.vy) * 0.5);
+            spraySparks(x, y, 1 + Math.round(drift * 2), 10 + drift * 14);
+            const deg = STIR_DEGREES[Math.min(4, Math.floor(clamp01(x / Math.max(1, width)) * 5))];
+            note(RING_MIDI - 12 + deg, 70);
+            try { haptics.tap(); } catch { /* noop */ }
           }
         }
       },
@@ -738,7 +778,7 @@ export default function QuarksVacuum() {
             markLens(snapped === 1);
             try { haptics.lens(); } catch { /* noop */ }
             if (snapped === 1) { try { audio().chime(); } catch { /* noop */ } }
-            else note(43, 160);
+            else note(FLOOR_MIDI, 160);
           }
           lensTarget = snapped;
         }
@@ -764,7 +804,7 @@ export default function QuarksVacuum() {
               life: 420 + twinkleHash(i * 9.7 + now) * 380,
             });
           }
-          note(74 + Math.round(Math.abs(e.winding) * 2), 90);
+          note(RING_MIDI - 10 + Math.round(Math.abs(e.winding) * 2), 90);
           try { haptics.ripple(0.3); } catch { /* noop */ }
         }
       },
@@ -773,7 +813,9 @@ export default function QuarksVacuum() {
     // ————— the vessel: the device is the vacuum's body (grammar §5) —————
     // Subscribed passively — nothing flows until the candle has invited the
     // senses. Tilt = the vacuum drifts downhill (hadrons and field lines
-    // lean with real gravity); shake = a burst of virtual pairs.
+    // lean with real gravity); shake = a burst of virtual pairs; a knock on
+    // the case rings the field's door; face-down is night.
+    let lastKnockAt = 0;
     const detachVessel = onVessel({
       tilt: ({ beta, gamma }) => {
         if (reduce) { tiltLeanX = 0; tiltLeanY = 0; return; }
@@ -783,7 +825,7 @@ export default function QuarksVacuum() {
         const now = performance.now();
         if (mag > 0.55 && now - lastTiltSoundAt > 1400) {
           lastTiltSoundAt = now;
-          note(33 + Math.round(mag * 4), 240); // the drift's low word
+          note(FLOOR_MIDI - 10 + Math.round(mag * 4), 240); // the drift's low word
         }
       },
       shake: ({ intensity }) => {
@@ -800,9 +842,41 @@ export default function QuarksVacuum() {
           );
         }
         for (const h of hadrons) h.shiver = Math.min(1, h.shiver + 0.3 + intensity * 0.4);
-        note(79, 90);
-        noteLater(90, 84, 70);
+        note(RING_MIDI - 5, 90);
+        noteLater(90, RING_MIDI, 70);
         try { (intensity > 0.7 ? haptics.storm : haptics.chop)(); } catch { /* noop */ }
+      },
+      knock: ({ intensity }) => {
+        const now = performance.now();
+        if (now - lastKnockAt < 350) return;
+        lastKnockAt = now;
+        lastInteractionAt = now;
+        // a knock on the case is a knock on the room's door: one wavefront
+        // of pair production crosses the field and everything bound answers
+        note(RING_MIDI - 12 + Math.round(intensity * 7), 130);
+        try { (intensity > 0.6 ? haptics.chop : haptics.tap)(); } catch { /* noop */ }
+        if (!reduce) {
+          rings.push({ x: width / 2, y: height / 2, r: minDim() * 0.14, born: now, life: 1100 });
+          if (rings.length > 6) rings.splice(0, rings.length - 6);
+          spraySparks(width / 2, height / 2, 5 + Math.round(intensity * 6), minDim() * 0.22);
+        }
+        tutti();
+      },
+      flip: ({ faceDown }) => {
+        const want = faceDown ? 1 : 0;
+        if (nightTarget === want) return;
+        nightTarget = want;
+        lastInteractionAt = performance.now();
+        if (faceDown) {
+          // night: the field goes on seething, unwatched
+          note(FLOOR_MIDI - 12, 620);
+          try { haptics.roll(); } catch { /* noop */ }
+        } else {
+          note(FLOOR_MIDI + 12, 240);
+          noteLater(140, RING_MIDI - 12, 200);
+          try { haptics.ripple(0.35); } catch { /* noop */ }
+        }
+        useField.getState().recordTape("object", faceDown ? 0.2 : 0.45, "quarks/night");
       },
     });
 
@@ -983,7 +1057,7 @@ export default function QuarksVacuum() {
       }
     };
 
-    const drawHadron = (h: HadronEnt, breath: number) => {
+    const drawHadron = (h: HadronEnt, breath: number, quick: number) => {
       const morph = h.morph;
       const md = minDim();
       let fade = 1;
@@ -1037,7 +1111,7 @@ export default function QuarksVacuum() {
           const tintB = morph.antis[j] ? ANTI_TINTS[morph.colors[j]] : COLOR_TINTS[morph.colors[j]];
           const grad = ctx.createLinearGradient(qa.sx, qa.sy, qb.sx, qb.sy);
           grad.addColorStop(0, colorAlpha(tintA, (0.3 + strain * 0.55) * feltAlpha * closeT));
-          grad.addColorStop(0.5, colorAlpha(mixHexToHex("#F2EEE6", tintA, 0.5), (0.2 + strain * 0.7) * feltAlpha * closeT));
+          grad.addColorStop(0.5, colorAlpha(mixHex("#F2EEE6", tintA, 0.5), (0.2 + strain * 0.7) * feltAlpha * closeT));
           grad.addColorStop(1, colorAlpha(tintB, (0.3 + strain * 0.55) * feltAlpha * closeT));
           ctx.strokeStyle = grad;
           ctx.lineWidth = Math.max(0.8, (3.4 - strain * 2.1) * grow);
@@ -1072,7 +1146,9 @@ export default function QuarksVacuum() {
         const q = h.quarks[qi];
         const anti = morph.antis[qi];
         const tint = anti ? ANTI_TINTS[morph.colors[qi]] : COLOR_TINTS[morph.colors[qi]];
-        const cr = morph.core * md * grow * (reduce ? 1 : 1 + Math.sin(breath * 2 + morph.breathOffset + qi * 2.1) * 0.1);
+        // the cores flicker at the band's own rate, not the sea's — this deep
+        // on the axis the breath is quick (lib/scale, spectralRegisterFor)
+        const cr = morph.core * md * grow * (reduce ? 1 : 1 + Math.sin(quick + morph.breathOffset + qi * 2.1) * 0.1);
 
         if (feltAlpha > 0.02) {
           const g = ctx.createRadialGradient(q.sx, q.sy, 0, q.sx, q.sy, cr * 3.2);
@@ -1113,15 +1189,6 @@ export default function QuarksVacuum() {
       }
     };
 
-    function mixHexToHex(a: string, b: string, t: number): string {
-      const va = parseInt(a.slice(1), 16);
-      const vb = parseInt(b.slice(1), 16);
-      const r = Math.round(((va >> 16) & 255) * (1 - t) + ((vb >> 16) & 255) * t);
-      const g = Math.round(((va >> 8) & 255) * (1 - t) + ((vb >> 8) & 255) * t);
-      const bl = Math.round((va & 255) * (1 - t) + (vb & 255) * t);
-      return `#${((r << 16) | (g << 8) | bl).toString(16).padStart(6, "0")}`;
-    }
-
     // ————— the loop —————
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
@@ -1138,6 +1205,7 @@ export default function QuarksVacuum() {
       windTargetX *= Math.exp(-dt * 0.5);
       windTargetY *= Math.exp(-dt * 0.5);
       lens += (lensTarget - lens) * Math.min(1, dt * 6);
+      night += (nightTarget - night) * Math.min(1, dt * 1.6);
 
       for (let i = pendingNotes.length - 1; i >= 0; i--) {
         if (now >= pendingNotes[i].at) {
@@ -1149,6 +1217,7 @@ export default function QuarksVacuum() {
       const audioT = (() => { try { return audio().getAudioTime(); } catch { return null; } })();
       const bt = audioT != null ? audioT : now / 1000;
       const breath = bt * Math.PI * 2 * 0.14;
+      const quick = bt * Math.PI * 2 * REGISTER.lfoHz;
       const md = minDim();
 
       // ————— physics: confinement, the anti-spring —————
@@ -1294,24 +1363,29 @@ export default function QuarksVacuum() {
       // ————— the seethe: scheduled virtual pairs on the shared clock —————
       if (reduce) {
         // seething stilled: a fixed constellation of faint pairs
-        for (let slot = 0; slot < 14; slot++) {
-          const p = vacuumPairAt(slot, FIELD_SEED);
-          if (!p) continue;
-          drawVirtualPair(p.nx * width, p.ny * height, p.angle, p.sep * md, p.color, 0.55, 0.5);
+        for (let slot = 0; slot < 8; slot++) {
+          for (const p of vacuumPairsAt(slot, FIELD_SEED)) {
+            drawVirtualPair(p.nx * width, p.ny * height, p.angle, p.sep * md, p.color, 0.55, 0.5);
+          }
         }
       } else {
         // slots ride the shared clock; dilation stretches each pair's life,
-        // so under a three-finger hold the seethe lingers long enough to SEE
+        // so under a three-finger hold the seethe lingers long enough to SEE.
+        // The lookback covers exactly the longest life still on screen — no
+        // fixed window that either truncates a dilated pair or costs frames
+        // scanning slots that died long ago.
         const btMs = bt * 1000;
         const nowSlot = Math.floor(btMs / VACUUM_SLOT_MS);
-        for (let slot = nowSlot - 16; slot <= nowSlot; slot++) {
-          const p = vacuumPairAt(slot, FIELD_SEED);
-          if (!p) continue;
+        const back = Math.min(64, Math.ceil(VACUUM_MAX_LIFE_MS / timeScale / VACUUM_SLOT_MS));
+        for (let slot = nowSlot - back; slot <= nowSlot; slot++) {
           const age = btMs - slot * VACUUM_SLOT_MS;
-          const life = p.lifeMs / timeScale;
-          if (age < 0 || age > life) continue;
-          const env = Math.sin((age / life) * Math.PI);
-          drawVirtualPair(p.nx * width, p.ny * height, p.angle, p.sep * md, p.color, env, env);
+          if (age < 0) continue;
+          for (const p of vacuumPairsAt(slot, FIELD_SEED)) {
+            const life = p.lifeMs / timeScale;
+            if (age > life) continue;
+            const env = Math.sin((age / life) * Math.PI);
+            drawVirtualPair(p.nx * width, p.ny * height, p.angle, p.sep * md, p.color, env, env);
+          }
         }
       }
 
@@ -1338,7 +1412,7 @@ export default function QuarksVacuum() {
       }
 
       // hadrons
-      for (const h of hadrons) drawHadron(h, breath);
+      for (const h of hadrons) drawHadron(h, breath, quick);
 
       // photons: straight racing streaks (felt) / waving lines (lens)
       ctx.save();
@@ -1379,6 +1453,12 @@ export default function QuarksVacuum() {
         ctx.beginPath();
         ctx.arc(gx, gy, 14 + pulse * 8, 0, Math.PI * 2);
         ctx.stroke();
+      }
+
+      // night — laid face-down, the field keeps seething under the dark
+      if (night > 0.002) {
+        ctx.fillStyle = `rgba(4, 5, 8, ${night * 0.72})`;
+        ctx.fillRect(0, 0, width, height);
       }
 
       // keyboard cursor

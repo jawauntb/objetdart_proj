@@ -1,7 +1,7 @@
 /**
- * Quarks — the confinement kernel for /quarks (plan W6, the floor of the
- * scale axis, 10⁻¹⁸ m). At this depth there are no things left, only
- * relations, and the kernel is the relations made exact.
+ * Quarks — the confinement kernel for /quarks (plan W6, the confinement
+ * band at 10⁻¹⁸ m, with the quanta below it). At this depth there are no
+ * things left, only relations, and the kernel is the relations made exact.
  *
  * A hadron IS its seed: the low bit decides pair (quark–antiquark) or
  * triplet (three quarks); the color assignment always sums to white — a
@@ -19,7 +19,7 @@
  */
 
 /** Hard population cap for the vacuum; births beyond it retire the oldest. */
-export const MAX_HADRONS = 6;
+export const MAX_HADRONS = 9;
 
 /**
  * The three color charges, worn as the site's token families — candle
@@ -229,7 +229,14 @@ export function settlePopulation<T>(
 // ——— The vacuum that is never empty ———
 
 /** Width of one vacuum scheduling slot on the shared clock, ms. */
-export const VACUUM_SLOT_MS = 340;
+export const VACUUM_SLOT_MS = 150;
+
+/**
+ * Longest a virtual pair can live, ms. The renderer sizes its lookback
+ * window from this, so a pair may never outlive it or it would pop out of
+ * existence mid-life instead of annihilating.
+ */
+export const VACUUM_MAX_LIFE_MS = 1100;
 
 export type VirtualPair = {
   /** Birth position, 0..1 of the field. */
@@ -247,19 +254,28 @@ export type VirtualPair = {
 
 /**
  * Deterministic seeded scheduling of the vacuum's seethe: which virtual
- * pair, if any, sparks into being in time slot `slot`. Same slot, same
- * spark, forever — the vacuum is alive but it is not random. Roughly half
- * of all slots rest: the field seethes gently, not busily.
+ * pairs, if any, spark into being in time slot `slot`. Same slot, same
+ * sparks, forever — the vacuum is alive but it is not random.
+ *
+ * A slot sparks a handful or rests entirely, so the seethe is uneven the
+ * way a real fluctuation is: bursts and lulls, never a metronome and never
+ * a grid. The counts are deliberately unequal — the vacuum is never empty,
+ * but it is never busy either.
  */
-export function vacuumPairAt(slot: number, fieldSeed: number): VirtualPair | null {
+export function vacuumPairsAt(slot: number, fieldSeed: number): VirtualPair[] {
   const rng = mulberry32(mix32(hashSeed(slot, fieldSeed, 0xacc) || 1));
-  if (rng() < 0.48) return null;
-  return {
-    nx: 0.05 + rng() * 0.9,
-    ny: 0.08 + rng() * 0.84,
-    color: Math.floor(rng() * 3),
-    lifeMs: 380 + rng() * 640,
-    angle: rng() * Math.PI * 2,
-    sep: 0.008 + rng() * 0.018,
-  };
+  const r = rng();
+  const count = r < 0.12 ? 0 : r < 0.3 ? 1 : r < 0.54 ? 2 : r < 0.76 ? 3 : r < 0.92 ? 4 : 5;
+  const pairs: VirtualPair[] = [];
+  for (let i = 0; i < count; i++) {
+    pairs.push({
+      nx: 0.05 + rng() * 0.9,
+      ny: 0.08 + rng() * 0.84,
+      color: Math.floor(rng() * 3),
+      lifeMs: 420 + rng() * (VACUUM_MAX_LIFE_MS - 420),
+      angle: rng() * Math.PI * 2,
+      sep: 0.008 + rng() * 0.018,
+    });
+  }
+  return pairs;
 }
