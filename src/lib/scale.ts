@@ -378,6 +378,35 @@ export function resolveDestination(
   return n ? SCALE_BANDS.find((b) => b.id === n) ?? null : null;
 }
 
+/**
+ * Every built door leading out of `id` in direction `dir`, resolved-first.
+ * A fork (the earth holds both the atlas and the flowers; the fold holds
+ * the stars and the beyond) offers its doors in this order; pressing the
+ * wall takes the first, releasing and pressing again cycles to the next.
+ */
+export function travelOptions(
+  id: ScaleBandId,
+  dir: TravelDir,
+  enteredFrom: EnteredFromMap,
+): ScaleBand[] {
+  const options: ScaleBand[] = [];
+  const seen = new Set<ScaleBandId>();
+  const add = (b: ScaleBand | null | undefined) => {
+    if (b && b.route && b.id !== id && !seen.has(b.id)) {
+      seen.add(b.id);
+      options.push(b);
+    }
+  };
+  add(resolveDestination(id, dir, enteredFrom));
+  const canonical = travelNeighbor(id, dir);
+  add(canonical ? SCALE_BANDS.find((b) => b.id === canonical) : null);
+  // Any band whose opposite-direction door points here is also a way out.
+  for (const b of SCALE_BANDS) {
+    if (travelNeighbor(b.id, (dir === 1 ? -1 : 1) as TravelDir) === id) add(b);
+  }
+  return options;
+}
+
 /** Arrival position: upward travel enters at the lower wall, downward at the upper. */
 export function entryScaleInto(dest: ScaleBand, dir: TravelDir): number {
   const mid = (dest.sMin + dest.sMax) / 2;
