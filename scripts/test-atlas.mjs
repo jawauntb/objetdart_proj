@@ -205,7 +205,11 @@ const {
   resolveAtlasProviderConfig,
   resolveAtlasVisualStyle,
 } = atlasModule;
-const { resolveAtlasEdgeTravel } = atlasNavigationModule;
+const {
+  atlasGenerationIsCurrent,
+  resolveAtlasEdgeTravel,
+  resolveAtlasGenerationInterruption,
+} = atlasNavigationModule;
 const { prepareAtlasSourceImage: prepareCroppedSource } = croppedSourceModule;
 const { prepareAtlasSourceImage: prepareUncroppedSource } = uncroppedSourceModule;
 assert.equal(
@@ -224,6 +228,50 @@ assert.equal(
   "atlas-crop should export the browser Canvas crop helper",
 );
 const { SITE_ROUTE_BY_KEY, isDarkRoutePath } = routesModule;
+
+assert.equal(
+  atlasGenerationIsCurrent(8, 8, "atlas-current", "atlas-current"),
+  true,
+  "the active Atlas generation should be allowed to commit",
+);
+assert.equal(
+  atlasGenerationIsCurrent(8, 9, "atlas-current", null),
+  false,
+  "a camera interaction must make an older Atlas response stale",
+);
+assert.equal(
+  atlasGenerationIsCurrent(8, 8, "atlas-old", "atlas-new"),
+  false,
+  "a replaced generation id must reject the old response even when request ids match",
+);
+assert.equal(
+  atlasGenerationIsCurrent(8, 8, "atlas-old", null),
+  false,
+  "a completed or cancelled ticket must reject a delayed response",
+);
+
+assert.deepEqual(
+  resolveAtlasGenerationInterruption({
+    requestId: 8,
+    generationId: "atlas-current",
+    activeImage: "stable-sheet",
+    incomingImage: "unrevealed-sheet",
+    incomingRevealed: false,
+  }),
+  { requestId: 9, generationId: null, activeImage: "stable-sheet" },
+  "interaction before reveal should invalidate the ticket and keep the stable sheet",
+);
+assert.deepEqual(
+  resolveAtlasGenerationInterruption({
+    requestId: 8,
+    generationId: "atlas-current",
+    activeImage: "stable-sheet",
+    incomingImage: "visible-preview",
+    incomingRevealed: true,
+  }),
+  { requestId: 9, generationId: null, activeImage: "visible-preview" },
+  "interaction after reveal should preserve the preview already under the user's hand",
+);
 
 const parsed = plain(parseAtlasGenerationRequest({
   prompt: "  fire   forest  ",

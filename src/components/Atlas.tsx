@@ -20,7 +20,12 @@ import {
   type AtlasBatchKind,
   type AtlasClipRect,
 } from "@/lib/atlas-batch";
-import { ATLAS_ZOOM_SPEC, resolveAtlasEdgeTravel } from "@/lib/atlas-navigation";
+import {
+  ATLAS_ZOOM_SPEC,
+  atlasGenerationIsCurrent,
+  resolveAtlasGenerationInterruption,
+  resolveAtlasEdgeTravel,
+} from "@/lib/atlas-navigation";
 import { prepareAtlasSourceImage } from "@/lib/atlas-source";
 import { getFieldAudio } from "@/lib/audio";
 import { intensityFrom } from "@/lib/gesture/core";
@@ -63,6 +68,16 @@ type MapMetrics = {
   mapHeight: number;
 };
 type MapSeeds = Record<Direction, string>;
+type GenerationIntent = {
+  mode: GenerationMode;
+  subjectPrompt: string;
+  focus?: { x: number; y: number; zoom: number };
+  direction?: Direction;
+  clip?: AtlasClipRect;
+  optimisticSeeds?: MapSeeds;
+  prefetchNeighbors?: boolean;
+  sourceImage?: string;
+};
 type MarkKind = "coin" | "flower" | "ship" | "star" | "tower";
 type MapHotspot = {
   id: string;
@@ -313,6 +328,8 @@ export default function Atlas() {
   const crossfadeRef = useRef<number | null>(null);
   const revealRef = useRef<number | null>(null);
   const incomingImageRef = useRef<string | null>(null);
+  const incomingRevealedRef = useRef(false);
+  const incomingCommitRef = useRef<(() => void) | null>(null);
   const regionSettleRef = useRef<number | null>(null);
   const zoomSettleRef = useRef<number | null>(null);
   const freeZoomParentRef = useRef<MapSnapshot | null>(null);
@@ -325,6 +342,14 @@ export default function Atlas() {
   const inertiaRef = useRef<number | null>(null);
   const interactingRef = useRef(false);
   const generationDepthRef = useRef(0);
+  const generationModeRef = useRef<GenerationMode | null>(null);
+  const generationViewRef = useRef<MapView | null>(null);
+  const generationIntentRef = useRef<GenerationIntent | null>(null);
+  const interruptedGenerationRef = useRef<GenerationIntent | null>(null);
+  const forceSettledZoomRef = useRef(false);
+  // Fit-to-view pinch contractions only mint a wider chart after the fingers
+  // settle — never mid-gesture, or a late response can land under a moving hand.
+  const pendingWiderTerritoryRef = useRef(false);
   const neighborSheetsRef = useRef(new Map<AtlasBatchDirection, NeighborSheet>());
   const neighborAbortRef = useRef<AbortController | null>(null);
   const pointerStartRef = useRef<PointerPoint | null>(null);
@@ -431,6 +456,11 @@ export default function Atlas() {
     let vy = clamp(velocity.y, -48, 48);
     if (Math.hypot(vx, vy) < 0.8) {
       commitView(boundView(viewRef.current, metricsRef.current), { animate: true });
+      if (
+        forceSettledZoomRef.current
+        || interruptedGenerationRef.current
+        || pendingWiderTerritoryRef.current
+      ) queueSettledZoom();
       return;
     }
     let last = performance.now();
@@ -440,6 +470,7 @@ export default function Atlas() {
       vx *= Math.pow(0.9, dt);
       vy *= Math.pow(0.9, dt);
       if (tryEdgeTravel({ x: vx, y: vy })) {
+        forceSettledZoomRef.current = false;
         inertiaRef.current = null;
         return;
       }
@@ -448,7 +479,12 @@ export default function Atlas() {
         interactingRef.current = false;
         setInteracting(false);
         commitView(boundView(viewRef.current, metricsRef.current), { animate: true });
-        if (viewRef.current.zoom > 1.08) queueSettledZoom();
+        if (
+          viewRef.current.zoom > 1.08
+          || forceSettledZoomRef.current
+          || interruptedGenerationRef.current
+          || pendingWiderTerritoryRef.current
+        ) queueSettledZoom();
         return;
       }
       applyLiveView(boundView({
@@ -848,51 +884,103 @@ export default function Atlas() {
     };
   }, []);
 
-  const settleCrossfade = () => {
+  const discardCrossfade = () => {
     if (crossfadeRef.current !== null) window.clearTimeout(crossfadeRef.current);
     if (revealRef.current !== null) window.clearTimeout(revealRef.current);
-    const pending = incomingImageRef.current;
-    if (pending) {
-      activeImageRef.current = pending;
-      setActiveImage(pending);
-    }
+    crossfadeRef.current = null;
+    revealRef.current = null;
     incomingImageRef.current = null;
+    incomingRevealedRef.current = false;
+    incomingCommitRef.current = null;
     setIncomingImage(null);
     setIncomingVisible(false);
   };
 
-  const crossfadeTo = (source: string) => {
+  const settleCrossfade = () => {
+    const pending = incomingImageRef.current;
+    if (pending) {
+      incomingCommitRef.current?.();
+      incomingCommitRef.current = null;
+      activeImageRef.current = pending;
+      setActiveImage(pending);
+    }
+    discardCrossfade();
+  };
+
+  const settleVisibleCrossfade = () => {
+    if (incomingRevealedRef.current) settleCrossfade();
+    else discardCrossfade();
+  };
+
+  const crossfadeTo = (source: string, commitMetadata?: () => void) => {
     const nextSource = responsiveMapSource(source, metricsRef.current.width);
     settleCrossfade();
     if (!nextSource || nextSource === activeImageRef.current) return;
     incomingImageRef.current = nextSource;
+    incomingRevealedRef.current = false;
+    incomingCommitRef.current = commitMetadata ?? null;
     setIncomingVisible(false);
     setIncomingImage(nextSource);
     const crossfadeMs = metricsRef.current.width > 0 && metricsRef.current.width <= MOBILE_BREAKPOINT
       ? MOBILE_CROSSFADE_MS
       : DESKTOP_CROSSFADE_MS;
-    revealRef.current = window.setTimeout(() => setIncomingVisible(true), 24);
+    revealRef.current = window.setTimeout(() => {
+      revealRef.current = null;
+      incomingRevealedRef.current = true;
+      incomingCommitRef.current?.();
+      incomingCommitRef.current = null;
+      setIncomingVisible(true);
+    }, 24);
     crossfadeRef.current = window.setTimeout(() => {
+      crossfadeRef.current = null;
       activeImageRef.current = nextSource;
       incomingImageRef.current = null;
+      incomingRevealedRef.current = false;
+      incomingCommitRef.current?.();
+      incomingCommitRef.current = null;
       setActiveImage(nextSource);
       setIncomingImage(null);
       setIncomingVisible(false);
     }, crossfadeMs);
   };
 
-  const clearNeighborSheets = () => {
+  const stopNeighborGeneration = () => {
     neighborAbortRef.current?.abort();
     neighborAbortRef.current = null;
+  };
+
+  const clearNeighborSheets = () => {
+    stopNeighborGeneration();
     neighborSheetsRef.current.clear();
   };
 
-  const invalidateGeneration = () => {
-    requestRef.current += 1;
-    generationIdRef.current = null;
+  const invalidateGeneration = ({ preserveRevealedImage = false } = {}) => {
+    if (preserveRevealedImage) {
+      const interrupted = resolveAtlasGenerationInterruption({
+        requestId: requestRef.current,
+        generationId: generationIdRef.current,
+        activeImage: activeImageRef.current,
+        incomingImage: incomingImageRef.current,
+        incomingRevealed: incomingRevealedRef.current,
+      });
+      requestRef.current = interrupted.requestId;
+      generationIdRef.current = interrupted.generationId;
+      if (interrupted.activeImage !== activeImageRef.current) {
+        activeImageRef.current = interrupted.activeImage;
+        setActiveImage(interrupted.activeImage);
+      }
+    } else {
+      requestRef.current += 1;
+      generationIdRef.current = null;
+    }
     phaseRankRef.current = 0;
+    generationModeRef.current = null;
+    generationViewRef.current = null;
+    generationIntentRef.current = null;
     abortRef.current?.abort();
     abortRef.current = null;
+    stopNeighborGeneration();
+    discardCrossfade();
     if (regionSettleRef.current !== null) window.clearTimeout(regionSettleRef.current);
     if (zoomSettleRef.current !== null) window.clearTimeout(zoomSettleRef.current);
     regionSettleRef.current = null;
@@ -901,8 +989,40 @@ export default function Atlas() {
     setBusyFocus(null);
   };
 
+  const hasPendingGenerationWork = () => Boolean(
+    generationIdRef.current
+    || abortRef.current
+    || incomingImageRef.current
+    || regionSettleRef.current !== null
+    || zoomSettleRef.current !== null
+  );
+
+  const interruptGenerationForInteraction = () => {
+    if (!hasPendingGenerationWork()) return null;
+    const interruptedIntent = generationIntentRef.current;
+    const preservedRevealedImage = Boolean(
+      incomingImageRef.current && incomingRevealedRef.current,
+    );
+    invalidateGeneration({ preserveRevealedImage: true });
+    // Refine intents keep their subject (hotspot / preview upgrade). Stash
+    // them so a settle can resume exactly one redraw. Zoom/shift intents are
+    // rebuilt from the settled camera instead — replaying their old focus
+    // would paint the previous viewport under the new one.
+    if (interruptedIntent?.mode === "refine") {
+      interruptedGenerationRef.current = interruptedIntent;
+    }
+    if (interruptedIntent) {
+      setStatus(
+        preservedRevealedImage
+          ? "movement kept the visible chart · final ink paused"
+          : "movement paused the redraw · settle to redraw this view",
+      );
+    }
+    return interruptedIntent ? { intent: interruptedIntent, preservedRevealedImage } : null;
+  };
+
   const captureSnapshot = (): MapSnapshot => {
-    settleCrossfade();
+    settleVisibleCrossfade();
     return {
       image: activeImageRef.current,
       hotspots,
@@ -1054,9 +1174,10 @@ export default function Atlas() {
             && activeImageRef.current
             && activeImageRef.current.startsWith("data:")
           ) {
-            crossfadeTo(image);
-            if (next.hotspots) setHotspots(next.hotspots);
-            if (next.seeds) setSeeds(next.seeds);
+            crossfadeTo(image, () => {
+              if (next.hotspots) setHotspots(next.hotspots);
+              if (next.seeds) setSeeds(next.seeds);
+            });
             setRenderPhase("final");
             setStatus("new territory to the " + slot.direction + " · final chart settled");
           }
@@ -1084,6 +1205,7 @@ export default function Atlas() {
       }
     });
     await Promise.allSettled(workers);
+    if (neighborAbortRef.current === controller) neighborAbortRef.current = null;
   };
 
   const generateMap = async ({
@@ -1094,25 +1216,36 @@ export default function Atlas() {
     clip,
     optimisticSeeds,
     prefetchNeighbors = true,
-  }: {
-    mode: GenerationMode;
-    subjectPrompt: string;
-    focus?: { x: number; y: number; zoom: number };
-    direction?: Direction;
-    clip?: AtlasClipRect;
-    optimisticSeeds?: MapSeeds;
-    prefetchNeighbors?: boolean;
-  }) => {
-    invalidateGeneration();
-    settleCrossfade();
+    sourceImage,
+  }: GenerationIntent) => {
+    invalidateGeneration({ preserveRevealedImage: true });
     if (prefetchNeighbors) clearNeighborSheets();
     const requestId = ++requestRef.current;
     const clientGenerationId = generationId(requestId);
     generationIdRef.current = clientGenerationId;
     phaseRankRef.current = 0;
+    generationModeRef.current = mode;
+    generationViewRef.current = { ...viewRef.current };
+    generationIntentRef.current = {
+      mode,
+      subjectPrompt,
+      focus,
+      direction,
+      clip,
+      optimisticSeeds,
+      prefetchNeighbors,
+      sourceImage,
+    };
+    interruptedGenerationRef.current = null;
     const controller = new AbortController();
     abortRef.current = controller;
-    const currentImage = activeImageRef.current;
+    const generationIsCurrent = () => atlasGenerationIsCurrent(
+      requestId,
+      requestRef.current,
+      clientGenerationId,
+      generationIdRef.current,
+    );
+    const currentImage = sourceImage ?? activeImageRef.current;
     const depth = generationDepthRef.current;
     const resolvedClip = clip
       ?? (mode === "zoom" && focus ? clipRectForFocus(focus) : undefined)
@@ -1134,6 +1267,7 @@ export default function Atlas() {
     let sourceImageCropped = false;
     if (usesClippedSource && currentImage && resolvedClip) {
       const preparedSource = await prepareAtlasSourceImage(currentImage, resolvedClip);
+      if (controller.signal.aborted || !generationIsCurrent()) return;
       imageForRequest = preparedSource.currentImage;
       sourceImageCropped = preparedSource.sourceImageCropped;
     }
@@ -1170,7 +1304,7 @@ export default function Atlas() {
       if (!response.ok) throw new Error("The atlas could not be redrawn.");
       const data = await response.json() as unknown;
       if (!isRecord(data)) throw new Error("The atlas returned an unreadable chart.");
-      if (requestId !== requestRef.current || generationIdRef.current !== clientGenerationId) return;
+      if (!generationIsCurrent()) return;
       const generation = isRecord(data.generation) ? data.generation : {};
       const echoedId = typeof generation.generationId === "string" ? generation.generationId : clientGenerationId;
       const echoedPhase = generation.phase === "preview" || generation.phase === "final" ? generation.phase : phase;
@@ -1180,11 +1314,13 @@ export default function Atlas() {
       phaseRankRef.current = rank;
       setRenderPhase(phase);
       const nextHotspots = normaliseHotspots(data.hotspots);
-      if (nextHotspots) setHotspots(nextHotspots);
-      setSeeds((current) => normaliseSeeds(data.seeds, current));
+      const commitMetadata = () => {
+        if (nextHotspots) setHotspots(nextHotspots);
+        setSeeds((current) => normaliseSeeds(data.seeds, current));
+      };
       if (typeof data.dataUrl === "string" && data.dataUrl) {
         landedImage = data.dataUrl;
-        crossfadeTo(data.dataUrl);
+        crossfadeTo(data.dataUrl, commitMetadata);
         if (mode === "zoom" || mode === "shift") {
           renderedZoomRef.current = 1;
           lastZoomRequestKeyRef.current = null;
@@ -1203,6 +1339,7 @@ export default function Atlas() {
                   : "a new atlas has surfaced",
         );
       } else {
+        commitMetadata();
         setStatus(phase === "preview" ? "the local chart is refining…" : "the local atlas is ready to explore");
       }
       if (phase === "final") {
@@ -1215,7 +1352,7 @@ export default function Atlas() {
       requestPhase("preview"),
       requestPhase("final"),
     ]);
-    if (controller.signal.aborted || requestId !== requestRef.current || generationIdRef.current !== clientGenerationId) return;
+    if (controller.signal.aborted || !generationIsCurrent()) return;
     const rejected = results.filter((result) => result.status === "rejected");
     if (rejected.length === 2) {
       const failure = rejected[0] as PromiseRejectedResult;
@@ -1236,8 +1373,28 @@ export default function Atlas() {
         });
       }
     }
+    abortRef.current = null;
+    generationIdRef.current = null;
+    phaseRankRef.current = 0;
+    generationModeRef.current = null;
+    generationViewRef.current = null;
+    generationIntentRef.current = null;
     setBusy(false);
     setBusyFocus(null);
+  };
+
+  const scheduleGeneration = (intent: GenerationIntent, delayMs: number) => {
+    if (regionSettleRef.current !== null) window.clearTimeout(regionSettleRef.current);
+    const settledSelection = requestRef.current;
+    generationModeRef.current = intent.mode;
+    generationViewRef.current = { ...viewRef.current };
+    generationIntentRef.current = intent;
+    setBusy(true);
+    regionSettleRef.current = window.setTimeout(() => {
+      regionSettleRef.current = null;
+      if (settledSelection !== requestRef.current) return;
+      void generateMap(intent);
+    }, delayMs);
   };
 
   const enterHotspot = (hotspot: MapHotspot) => {
@@ -1273,22 +1430,37 @@ export default function Atlas() {
       // Sound and haptics are progressive enhancement.
     }
     recordTape("region", 0.84, "atlas/zoom/" + hotspot.id);
-    const settledSelection = requestRef.current;
-    setBusy(true);
-    regionSettleRef.current = window.setTimeout(() => {
-      regionSettleRef.current = null;
-      if (settledSelection !== requestRef.current) return;
-      void generateMap({
-        mode: "refine",
-        subjectPrompt: [concept, hotspot.prompt || hotspot.label].filter(Boolean).join(" · "),
-        focus: { x: hotspot.x, y: hotspot.y, zoom: nextZoom },
-      });
+    scheduleGeneration({
+      mode: "refine",
+      subjectPrompt: [concept, hotspot.prompt || hotspot.label].filter(Boolean).join(" · "),
+      focus: { x: hotspot.x, y: hotspot.y, zoom: nextZoom },
     }, 480);
   };
 
   const applyNeighborSheet = (direction: Direction, neighbor: NeighborSheet) => {
     if (!neighbor.image) return false;
-    invalidateGeneration();
+    // Entering a cached preview must not bump the parent request ticket or
+    // abort the neighbor batch — an in-flight final for this direction still
+    // owns the upgrade path (see prefetchNeighborBatch). Only cancel the
+    // primary chart generation under the old sheet.
+    if (neighbor.phase === "preview") {
+      generationIdRef.current = null;
+      phaseRankRef.current = 0;
+      generationModeRef.current = null;
+      generationViewRef.current = null;
+      generationIntentRef.current = null;
+      abortRef.current?.abort();
+      abortRef.current = null;
+      discardCrossfade();
+      if (regionSettleRef.current !== null) window.clearTimeout(regionSettleRef.current);
+      if (zoomSettleRef.current !== null) window.clearTimeout(zoomSettleRef.current);
+      regionSettleRef.current = null;
+      zoomSettleRef.current = null;
+      setBusy(false);
+      setBusyFocus(null);
+    } else {
+      invalidateGeneration();
+    }
     historyRef.current = [];
     setHistoryDepth(0);
     freeZoomParentRef.current = null;
@@ -1299,10 +1471,11 @@ export default function Atlas() {
     renderedZoomRef.current = 1;
     activeNeighborDirectionRef.current = direction;
     setConcept(neighbor.concept);
-    if (neighbor.hotspots) setHotspots(neighbor.hotspots);
-    if (neighbor.seeds) setSeeds(neighbor.seeds);
     commitView(centerView(metricsRef.current, 1), { animate: true });
-    crossfadeTo(neighbor.image);
+    crossfadeTo(neighbor.image, () => {
+      if (neighbor.hotspots) setHotspots(neighbor.hotspots);
+      if (neighbor.seeds) setSeeds(neighbor.seeds);
+    });
     setRenderPhase(neighbor.phase === "final" ? "final" : "preview");
     setStatus(
       neighbor.phase === "final"
@@ -1313,12 +1486,25 @@ export default function Atlas() {
     setGenerationDepth(generationDepthRef.current);
     // Keep the cache entry so a later Pro final can upgrade the live sheet.
     neighborSheetsRef.current.set(direction, neighbor);
-    void prefetchNeighborBatch({
-      sourceImage: neighbor.image,
-      subjectPrompt: neighbor.concept,
-      depth: generationDepthRef.current,
-      parentRequestId: requestRef.current,
-    });
+    if (neighbor.phase === "preview") {
+      // Fallback refine only when the speculative batch is already gone;
+      // otherwise the in-flight final upgrades this live sheet itself.
+      if (!neighborAbortRef.current) {
+        scheduleGeneration({
+          mode: "refine",
+          subjectPrompt: neighbor.concept,
+          prefetchNeighbors: false,
+          sourceImage: neighbor.image,
+        }, 80);
+      }
+    } else {
+      void prefetchNeighborBatch({
+        sourceImage: neighbor.image,
+        subjectPrompt: neighbor.concept,
+        depth: generationDepthRef.current,
+        parentRequestId: requestRef.current,
+      });
+    }
     return true;
   };
 
@@ -1384,7 +1570,6 @@ export default function Atlas() {
   const beginFreeZoom = () => {
     if (!freeZoomParentRef.current) {
       freeZoomParentRef.current = captureSnapshot();
-      invalidateGeneration();
     }
   };
 
@@ -1392,13 +1577,39 @@ export default function Atlas() {
     if (zoomSettleRef.current !== null) window.clearTimeout(zoomSettleRef.current);
     zoomSettleRef.current = window.setTimeout(() => {
       zoomSettleRef.current = null;
+      const interruptedGeneration = interruptedGenerationRef.current;
+      if (interruptedGeneration) {
+        interruptedGenerationRef.current = null;
+        freeZoomParentRef.current = null;
+        pendingWiderTerritoryRef.current = false;
+        void generateMap(interruptedGeneration);
+        return;
+      }
+      if (pendingWiderTerritoryRef.current) {
+        pendingWiderTerritoryRef.current = false;
+        freeZoomParentRef.current = null;
+        lastWidenAtRef.current = 0;
+        lastZoomRequestKeyRef.current = null;
+        requestWiderTerritory(true);
+        return;
+      }
       const current = viewRef.current;
       const parent = freeZoomParentRef.current;
       if (!parent) return;
+      const forceRedraw = forceSettledZoomRef.current;
+      forceSettledZoomRef.current = false;
       const renderedZoom = renderedZoomRef.current;
       const delta = current.zoom - renderedZoom;
-      if (Math.abs(delta) < ZOOM_SETTLE_DELTA) {
+      if (Math.abs(delta) < ZOOM_SETTLE_DELTA && !forceRedraw) {
         freeZoomParentRef.current = null;
+        return;
+      }
+
+      if (forceRedraw && current.zoom <= 1.08) {
+        freeZoomParentRef.current = null;
+        lastWidenAtRef.current = 0;
+        lastZoomRequestKeyRef.current = null;
+        requestWiderTerritory(true);
         return;
       }
 
@@ -1497,10 +1708,10 @@ export default function Atlas() {
   // Returns true only when a wider-chart generation was actually dispatched;
   // a false means the room has already answered this extreme (busy, debounce,
   // or dedupe) and any further pinch-out is the manifold's to catch.
-  const requestWiderTerritory = (): boolean => {
-    if (busy) return false;
+  const requestWiderTerritory = (force = false): boolean => {
+    if (hasPendingGenerationWork()) return false;
     const nowMs = performance.now();
-    if (nowMs - lastWidenAtRef.current < 1500) return false;
+    if (!force && nowMs - lastWidenAtRef.current < 1500) return false;
     const current = viewRef.current;
     const m = metricsRef.current;
     if (!m.width) return false;
@@ -1513,7 +1724,7 @@ export default function Atlas() {
       zoom: MIN_ZOOM,
     };
     const key = [concept, "wider-from-fit", Math.round(focus.x * 8), Math.round(focus.y * 8)].join("|");
-    if (key === lastZoomRequestKeyRef.current) return false;
+    if (!force && key === lastZoomRequestKeyRef.current) return false;
     lastZoomRequestKeyRef.current = key;
     const parent = captureSnapshot();
     invalidateGeneration();
@@ -1537,6 +1748,11 @@ export default function Atlas() {
     if ((event.target as HTMLElement).closest("form, input, [data-map-ui]")) return;
     event.preventDefault();
     stopInertia();
+    const interruptedGeneration = interruptGenerationForInteraction();
+    if (interruptedGeneration) {
+      forceSettledZoomRef.current = true;
+      if (!freeZoomParentRef.current) freeZoomParentRef.current = captureSnapshot();
+    }
     const rect = stageRef.current?.getBoundingClientRect();
     if (!rect) return;
     const current = viewRef.current;
@@ -1548,6 +1764,11 @@ export default function Atlas() {
     // sheet has already answered (busy, debounced, or the same wider view
     // was minted), the residue goes to the manifold wall toward the earth.
     if (event.deltaY > 0 && current.zoom <= MIN_ZOOM + 0.02) {
+      if (interruptedGeneration || forceSettledZoomRef.current) {
+        resetScaleEdge();
+        queueSettledZoom();
+        return;
+      }
       if (requestWiderTerritory()) resetScaleEdge();
       else reportScaleEdge(current.zoom, attemptedVel);
       return;
@@ -1576,10 +1797,6 @@ export default function Atlas() {
     if (!rect) return;
     event.preventDefault();
     stopInertia();
-    if (zoomSettleRef.current !== null) {
-      window.clearTimeout(zoomSettleRef.current);
-      zoomSettleRef.current = null;
-    }
     event.currentTarget.setPointerCapture(event.pointerId);
     const point = { x: event.clientX - rect.left, y: event.clientY - rect.top };
     // intensity from the best physical channel (force → contact area),
@@ -1653,7 +1870,6 @@ export default function Atlas() {
       }, ATLAS_PLANT_MS);
       plantTimersRef.current.set(pid, plantTimer);
     } else if (pointersRef.current.size === 2) {
-      beginFreeZoom();
       markGesture();
       pinchZoomRef.current = true;
       pinchAtRef.current = performance.now();
@@ -1685,10 +1901,8 @@ export default function Atlas() {
       // Contracting pinch at fit-to-view is a request for wider territory.
       // When the sheet has already answered (busy, debounced, deduped),
       // the continued contraction becomes manifold wall pressure below.
-      let mintedWider = false;
-      if (distance < prev.distance * 0.94 && viewRef.current.zoom <= MIN_ZOOM + 0.02) {
-        mintedWider = requestWiderTerritory();
-      }
+      const wantsWider = distance < prev.distance * 0.94
+        && viewRef.current.zoom <= MIN_ZOOM + 0.02;
       const zoom = clamp(prev.view.zoom * (distance / Math.max(1, prev.distance)), MIN_ZOOM, MAX_ZOOM);
       // Incremental pinch around the live midpoint keeps mobile two-finger zoom stable.
       const worldX = (midpoint.x - prev.view.x) / prev.view.zoom;
@@ -1698,14 +1912,35 @@ export default function Atlas() {
         x: midpoint.x - worldX * zoom,
         y: midpoint.y - worldY * zoom,
       }, metricsRef.current, 48);
+      const generationView = generationViewRef.current;
+      const generationCameraChanged = generationModeRef.current !== null
+        && generationView !== null
+        && (
+          Math.abs(next.x - generationView.x) > 0.5
+          || Math.abs(next.y - generationView.y) > 0.5
+          || Math.abs(next.zoom - generationView.zoom) > 0.001
+        );
+      if (generationCameraChanged) {
+        const interruptedGeneration = interruptGenerationForInteraction();
+        if (interruptedGeneration && interruptedGeneration.intent.mode !== "refine") {
+          forceSettledZoomRef.current = true;
+        }
+      }
+      beginFreeZoom();
       applyLiveView(next);
       pinchRef.current = { distance, midpoint, view: next };
+      // Defer wider-chart minting until fingers settle — mid-gesture dispatch
+      // is what lets a stale wider sheet land under a still-moving pinch.
+      if (wantsWider && !forceSettledZoomRef.current) {
+        pendingWiderTerritoryRef.current = true;
+        resetScaleEdge();
+      }
       // Residual pinch past a held extreme → the band walls: attempted
       // minus achieved ln-ratio per second, zero inside the sheet's range.
       const nowMs = performance.now();
       const dtMs = nowMs - pinchAtRef.current;
       pinchAtRef.current = nowMs;
-      if (mintedWider) {
+      if (pendingWiderTerritoryRef.current || generationCameraChanged) {
         resetScaleEdge();
       } else if (dtMs > 0) {
         const attempted = distance / Math.max(1, prev.distance);
@@ -1722,6 +1957,11 @@ export default function Atlas() {
     if (Math.hypot(dx, dy) > DRAG_THRESHOLD_PX) {
       if (!drag.moved) {
         markGesture();
+        const interruptedGeneration = interruptGenerationForInteraction();
+        if (interruptedGeneration && interruptedGeneration.intent.mode !== "refine") {
+          forceSettledZoomRef.current = true;
+          if (!freeZoomParentRef.current) freeZoomParentRef.current = captureSnapshot();
+        }
         // Moving past the drag threshold means this is not a hold; drop
         // any pending plant timer for this finger.
         const pending = plantTimersRef.current.get(event.pointerId);
@@ -1799,6 +2039,7 @@ export default function Atlas() {
       return;
     }
     if (!cancelled && drag?.moved && tryEdgeTravel(drag.velocity)) {
+      forceSettledZoomRef.current = false;
       dragRef.current = null;
       return;
     }
@@ -1811,6 +2052,7 @@ export default function Atlas() {
     ];
     const crossed = overflow.sort((a, b) => b[1] - a[1])[0];
     if (!cancelled && crossed[1] > edgeMargin * 0.35) {
+      forceSettledZoomRef.current = false;
       interactingRef.current = false;
       setInteracting(false);
       commitView(bounded, { animate: true });
@@ -1828,6 +2070,7 @@ export default function Atlas() {
     setInteracting(false);
     commitView(bounded, { animate: true });
     if (!cancelled && drag && !drag.moved && point) {
+      forceSettledZoomRef.current = false;
       if (performance.now() - lastGestureAtRef.current < GESTURE_SUPPRESS_MS) {
         dragRef.current = null;
         return;
@@ -1839,7 +2082,12 @@ export default function Atlas() {
         setStatus("the water remembers the touch");
         recordTape("ripple", 0.3 + lastTapIntensityRef.current * 0.3, "atlas/water");
       }
-    } else if (viewRef.current.zoom > 1.08) {
+    } else if (
+      viewRef.current.zoom > 1.08
+      || forceSettledZoomRef.current
+      || interruptedGenerationRef.current
+      || pendingWiderTerritoryRef.current
+    ) {
       queueSettledZoom();
     }
     dragRef.current = null;
