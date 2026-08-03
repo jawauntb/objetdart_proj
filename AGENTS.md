@@ -53,6 +53,16 @@ and static) will damage it.
   before generalizing it into `lib/`.
 - Honor `prefers-reduced-motion`, keep keyboard access, and verify at 390px width.
 
+## Building a new room
+
+Start from **`docs/new-room.md`** and copy **`src/components/RoomTemplate.tsx`**
+(a compilable scaffold wired to every bus — gestures, vessel, audio, haptics,
+persistence with the quiet clear control, glimmer, keyboard, reduced motion).
+The first decision is always ordinal: find the level where the room fits on
+the quark→manifold axis, prefer deepening an existing band over adding rooms,
+and branch only where containment genuinely forks. State the placement (or
+the law/lens exemption) in one sentence in the PR body.
+
 ## Working on the code
 
 - Next.js 14 App Router + TypeScript + Tailwind + Zustand. Rooms live in

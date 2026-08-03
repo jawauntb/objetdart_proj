@@ -119,6 +119,16 @@ adapter second. The stack is also the *content* axis here: quarks are math-flavo
 atoms physics, molecules chemistry, cells biology, flowers upward phenomenology — the
 zoom traverses levels of explanation, not just meters.
 
+## W8 — The overlook (future)
+
+A living map of the whole tree: the trunk and its branches rendered as one
+navigable, touchable view — sibling objects gathered at each level the way
+scaleofuniverse.com crowds a scale with objects, but alive (each node
+breathing with its room's own material, tappable to hear its register,
+ceremony to travel). Candidate seed: grow it from the manifold's bead-thread,
+which already renders the trunk; the overlook adds the branches and the
+sibling density. Build after the travel graph stabilizes.
+
 ## W7 — Twist-lens (after W1)
 
 Lens registry + global twist binding: at fixed scale, twist rotates the level of
