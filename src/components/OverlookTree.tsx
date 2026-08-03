@@ -202,6 +202,32 @@ function drawVignette(
       }
       break;
     }
+    case "nucleons": {
+      // one liquid drop: packed gold and parchment nucleons in a taut skin
+      const R = r * 0.42 * (1 + breath * 0.05);
+      ctx.strokeStyle = "rgba(242, 197, 107, 0.3)";
+      ctx.lineWidth = 0.8;
+      ctx.beginPath();
+      ctx.arc(0, 0, R * 1.18, 0, Math.PI * 2);
+      ctx.stroke();
+      for (let i = 0; i < g.pairs.length; i += 3) {
+        const px = g.pairs[i] * R * 0.62;
+        const py = g.pairs[i + 1] * R * 0.62;
+        const jit = Math.sin(t * (1.4 + g.pairs[i + 2] * 1.8) + g.pairs[i + 2] * 9) * R * 0.05;
+        const isP = g.pairs[i + 2] > 0.5;
+        ctx.fillStyle = isP ? "rgba(231, 172, 82, 0.85)" : "rgba(221, 211, 190, 0.7)";
+        ctx.beginPath();
+        ctx.arc(px + jit, py - jit, R * 0.16, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      // one beta electron, thrown and kept near — the sea-blue tell
+      const ea = t * 0.9;
+      ctx.fillStyle = "rgba(105, 151, 164, 0.8)";
+      ctx.beginPath();
+      ctx.arc(Math.cos(ea) * R * 1.5, Math.sin(ea) * R * 1.05, 1.4, 0, Math.PI * 2);
+      ctx.fill();
+      break;
+    }
     case "atoms": {
       // electron shells breathing around a bright nucleus
       ctx.fillStyle = "rgba(255, 226, 170, 0.9)";

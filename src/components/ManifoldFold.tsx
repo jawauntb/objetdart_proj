@@ -17,7 +17,7 @@
  * strong wave through everything.
  *
  * The filament: one luminous thread woven through the fabric carrying the
- * twelve scale bands as beads, quarks to manifold — built rooms candle-
+ * scale bands as beads, the axis floor to the manifold — built rooms candle-
  * warm, unbuilt embers. Tap a bead and it chimes at its band's spectral
  * register (compressed into a gentle audible range): the site heard as one
  * instrument from above. Ceremony on a built bead travels there — every
@@ -547,7 +547,7 @@ export default function ManifoldFold() {
     };
 
     // three-finger tap = tutti (grammar §5): the whole axis states itself —
-    // the twelve beads glimmer in sequence, a fast arpeggio of every band
+    // the beads glimmer in sequence, a fast arpeggio of every band
     const tutti = () => {
       const now = performance.now();
       if (now - lastTuttiAt < 1400) return;
@@ -1545,7 +1545,7 @@ export default function ManifoldFold() {
           }
         }
 
-        // beads: the twelve bands, in order, quarks to this room
+        // beads: every band, in order, the axis floor to this room
         for (let k = 0; k < SCALE_BANDS.length; k++) {
           const band = SCALE_BANDS[k];
           const u = (k + 0.5) / SCALE_BANDS.length;

@@ -13,6 +13,7 @@
 
 export type ScaleBandId =
   | "quarks"
+  | "nucleons"
   | "atoms"
   | "molecules"
   | "organics"
@@ -49,7 +50,8 @@ export type ScaleBand = {
  * and audio registers are stable when the rooms arrive (plan W6).
  */
 export const SCALE_BANDS: ScaleBand[] = [
-  { id: "quarks", label: "quarks", route: "/quarks", sMin: -19, sMax: -14 },
+  { id: "quarks", label: "quarks", route: "/quarks", sMin: -19, sMax: -15 },
+  { id: "nucleons", label: "nucleons", route: "/nucleons", sMin: -15, sMax: -14 },
   { id: "atoms", label: "atoms", route: "/atoms", sMin: -14, sMax: -9.5 },
   // The life ladder. Carbon chains at ~0.9nm (hexane, glucose), a folded
   // protein at 4-10nm, the helix 2nm across with an 11nm nucleosome, a

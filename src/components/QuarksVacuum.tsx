@@ -25,7 +25,7 @@
  * rotates the lens to the bare mathematics — the Feynman view: vertices,
  * coiled gluon propagators, virtual pairs as closed loops, photons as
  * waving lines. The field persists in `objetdart:quarks:v1`. Pinch is
- * deliberately unbound — ScaleTravel owns it (atoms above; below is the
+ * deliberately unbound — ScaleTravel owns it (nucleons above; below is the
  * floor of the axis, and the integrator holds it).
  */
 

@@ -449,7 +449,7 @@ export const GUIDE_ROOMS: GuideRoom[] = [
   {
     key: "atoms",
     title: "probability breathes around a bright nucleus",
-    scale: "the atoms band — between quarks and molecules",
+    scale: "the atoms band — between nucleons and molecules",
     href: "/atoms",
     essence: "a near-vacuum of soft probability clouds obeying real covalence and real fusion, all the way up to iron.",
     moves: [
@@ -464,6 +464,29 @@ export const GUIDE_ROOMS: GuideRoom[] = [
       "shift+enter throws the atom under the keyboard cursor at its nearest neighbor, the same fusion physics as a flick",
     ],
     keeps: "the atoms and bonds you've made",
+  },
+  {
+    key: "nucleons",
+    title: "the valley makes the elements",
+    scale: "the nucleons band — between quarks and atoms",
+    href: "/nucleons",
+    essence: "a dark field of nuclei as charged liquid drops — gold protons and parchment neutrons packed in a breathing skin — every size, hum, and appetite decided by the semi-empirical mass formula.",
+    moves: [
+      "tap a drop → the giant resonance rings it; struck hard, a strained drop shakes a neutron loose",
+      "hold on open field (dwell) → condenses a free neutron; keep holding to the ceremony and the vacuum pays for a proton instead",
+      "flick a free nucleon into a drop → a neutron always walks in; a proton must arrive fast enough to climb the coulomb barrier or it is turned away",
+      "hold a drop to the ceremony tier → it does the thing it already wanted: beta, alpha, or fission",
+      "scrub a drop → spins it toward a spindle; a fissile drop spun past holding necks and splits, throwing prompt neutrons at its neighbors",
+      "three-finger drag → a neutron flux across the field — the r-process, one capture and one beta at a time",
+      "drive two drops together hard → they merge into a heavier element, or bounce off each other's charge",
+      "twist → turns the lens to the chart of the nuclides — n against z, the valley drawn, every drop plotted with its symbol",
+    ],
+    finds: [
+      "nuclei off the valley of stability decay on their own clock, faster the farther off they sit — the room changes element while nobody touches it",
+      "a knock on the case shakes a neutron loose from the heaviest drop",
+      "at a = 238 the valley bottoms out at uranium — not placed by hand, it falls out of the energy",
+    ],
+    keeps: "the nuclei you've made, element by element",
   },
   {
     key: "quarks",
@@ -906,7 +929,7 @@ export const GUIDE_WORKSHOP: GuideWorkshopPart[] = [
   {
     title: "the scale manifold",
     paragraphs: [
-      "the album mounts one logarithmic axis from 10⁻¹⁹ meters to the spacetime manifold: quarks, atoms, molecules, cells, a drop, flowers, the coast, the atlas, the earth, the stars, beyond, the manifold. within a band, pinch zooms freely and rubber-bands at the walls; crossing a wall takes sustained intent — hold the pinch through the resistance and a haptic detent marks the door. the focused object of one band becomes the container of the next, so it stays one world. scale also chooses the sound: sub-bass and minute-long lfos at the cosmic end, mids at human scale, granular shimmer among the atoms — zooming is a glissando on the site's one instrument.",
+      "the album mounts one logarithmic axis from 10⁻¹⁹ meters to the spacetime manifold: quarks, nucleons, atoms, molecules, cells, a drop, flowers, the coast, the atlas, the earth, the stars, beyond, the manifold. within a band, pinch zooms freely and rubber-bands at the walls; crossing a wall takes sustained intent — hold the pinch through the resistance and a haptic detent marks the door. the focused object of one band becomes the container of the next, so it stays one world. scale also chooses the sound: sub-bass and minute-long lfos at the cosmic end, mids at human scale, granular shimmer among the atoms — zooming is a glissando on the site's one instrument.",
     ],
   },
   {
