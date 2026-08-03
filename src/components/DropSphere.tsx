@@ -10,8 +10,10 @@ import {
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { THRESHOLDS } from "@/lib/gesture/core";
+import { onVessel, requestVessel, vesselAvailable } from "@/lib/vessel";
+import { shouldInvite } from "@/lib/candle";
 import { useField } from "@/store/field";
-import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
 
 // ─────────────────────────────────────────────────────────────────────────
 // Objet d'Art · /drop — a living bead of RAINWATER.
@@ -620,7 +622,7 @@ export default function DropSphere() {
 
   const reduceRef = useRef(false);
   const dropsRef = useRef<Drop[]>([]);
-  const zoomRef = useRef({ slider: 0, impulse: 0, current: 0, vel: 0 });
+  const zoomRef = useRef({ slider: 0, current: 0, vel: 0 });
   // gesture-driven grab state: which bead the finger holds, and where the
   // finger is (canvas-local) so the draw loop can critically-damp toward it.
   const dragRef = useRef({ active: false, drop: -1, x: 0, y: 0, lastX: 0, lastY: 0, throttle: 0, pullAt: 0 });
@@ -631,32 +633,29 @@ export default function DropSphere() {
   // smoothed in-plane gravity vector (unit-ish, x→right, y→down) from tilt,
   // plus its magnitude for the meniscus lean. Updated every frame in step().
   const gravityRef = useRef({ tx: 0, ty: 0, x: 0, y: 0, mag: 0 });
-  // device-motion bookkeeping + the listeners we attach, for clean teardown.
-  const motionRef = useRef<{
-    armed: boolean;
-    lastMag: number | null;
-    lastShakeAt: number;
-    gentleAt: number;
-    onOrient: ((e: DeviceOrientationEvent) => void) | null;
-    onMotion: ((e: DeviceMotionEvent) => void) | null;
-  }>({ armed: false, lastMag: null, lastShakeAt: 0, gentleAt: 0, onOrient: null, onMotion: null });
+  // flipped once the vessel actually speaks, so the invitation can retire
+  const vesselOnRef = useRef(false);
 
-  const [dive, setDive] = useState(0);
   const [readout, setReadout] = useState("surface · zoom 0.00 · 1 drop");
   const [fallback, setFallback] = useState(false);
-  // "hidden" (no sensors / auto-armed) | "prompt" (iOS needs a tap) | "on"
+  // "hidden" (no sensors / declined) | "prompt" (the invitation) | "on"
   const [motionUI, setMotionUI] = useState<"hidden" | "prompt" | "on">("hidden");
 
   const recordTape = useField((s) => s.recordTape);
 
-  useEffect(() => { zoomRef.current.slider = dive; }, [dive]);
+  const vesselSpoke = useCallback(() => {
+    if (vesselOnRef.current) return;
+    vesselOnRef.current = true;
+    setMotionUI("on");
+  }, []);
 
-  const armSensorsRef = useRef<() => void>(() => {});
   const ensureAudio = useCallback(() => {
     if (!audioRef.current) audioRef.current = createWaterAudio();
     audioRef.current.kick();
-    // first touch is a user gesture — a good moment to request motion on iOS.
-    try { armSensorsRef.current(); } catch { /* noop */ }
+    // a real touch is the only moment iOS will open the vessel's senses
+    if (shouldInvite("vessel")) {
+      void requestVessel().then((ok) => setMotionUI(ok ? "on" : "hidden"));
+    }
   }, []);
 
   useEffect(() => {
@@ -667,8 +666,6 @@ export default function DropSphere() {
     mq.addEventListener?.("change", update);
     return () => mq.removeEventListener?.("change", update);
   }, []);
-
-  const dropCount = useCallback(() => dropsRef.current.length, []);
 
   // spawn a new droplet by splitting an existing bead — necks then pinches off
   const splitLargest = useCallback(() => {
@@ -843,92 +840,8 @@ export default function DropSphere() {
     recordTape("object", 0.7, "drop/bounce");
   }, [recordTape]);
 
-  // ── device motion: tilt to roll water downhill, shake to scatter ───────
-  const armSensors = useCallback(() => {
-    if (typeof window === "undefined" || motionRef.current.armed) return;
-    motionRef.current.armed = true;
-
-    const onOrient = (e: DeviceOrientationEvent) => {
-      // gamma: left/right tilt (deg), beta: front/back tilt (deg). Flat = calm
-      // bead; tilt any way and gravity leans that way and the water runs downhill.
-      const gx = (e.gamma ?? 0) / 50;
-      const gy = (e.beta ?? 0) / 50;
-      const g = gravityRef.current;
-      g.tx = clamp(gx, -1, 1);
-      g.ty = clamp(gy, -1, 1);
-    };
-
-    const onMotion = (e: DeviceMotionEvent) => {
-      const a = e.accelerationIncludingGravity;
-      if (!a) return;
-      const mag = Math.hypot(a.x ?? 0, a.y ?? 0, a.z ?? 0);
-      const m = motionRef.current;
-      const reduced = reduceRef.current;
-      if (m.lastMag != null) {
-        const jolt = Math.abs(mag - m.lastMag);
-        if (jolt > (reduced ? 9 : 5)) {
-          const amt = clamp(jolt / 26, 0, 1);
-          agitate(amt);
-          const now = performance.now();
-          if (jolt > (reduced ? 22 : 15) && now - m.lastShakeAt > 520) {
-            m.lastShakeAt = now;
-            shakeScatter(amt);
-          } else if (now - m.gentleAt > 220) {
-            m.gentleAt = now;
-            try { audioRef.current?.ripple(clamp(0.2 + amt * 0.6, 0.2, 0.8)); } catch { /* noop */ }
-            try { haptics.ripple(0.2 + amt * 0.4); } catch { /* noop */ }
-          }
-        }
-      }
-      m.lastMag = mag;
-    };
-
-    motionRef.current.onOrient = onOrient;
-    motionRef.current.onMotion = onMotion;
-
-    type PermCtor = { requestPermission?: () => Promise<"granted" | "denied"> };
-    const DOE = (window as unknown as { DeviceOrientationEvent?: PermCtor }).DeviceOrientationEvent;
-    const DME = (window as unknown as { DeviceMotionEvent?: PermCtor }).DeviceMotionEvent;
-    const add = () => {
-      window.addEventListener("deviceorientation", onOrient);
-      window.addEventListener("devicemotion", onMotion);
-      setMotionUI("on");
-    };
-    if (DOE && typeof DOE.requestPermission === "function") {
-      Promise.allSettled([
-        DOE.requestPermission?.(),
-        DME?.requestPermission?.(),
-      ]).then((res) => {
-        if (res.some((r) => r.status === "fulfilled" && r.value === "granted")) add();
-        else { motionRef.current.armed = false; }
-      }).catch(() => { motionRef.current.armed = false; });
-    } else {
-      add();
-    }
-  }, [agitate, shakeScatter]);
-  armSensorsRef.current = armSensors;
-
-  // decide the motion affordance on mount; auto-arm where no permission is
-  // needed (Android/desktop), show a "tilt to play" chip on iOS, clean up.
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const w = window as unknown as {
-      DeviceOrientationEvent?: { requestPermission?: () => Promise<string> };
-      DeviceMotionEvent?: unknown;
-    };
-    const hasOrient = "DeviceOrientationEvent" in window;
-    const hasMotion = "DeviceMotionEvent" in window;
-    if (!hasOrient && !hasMotion) { setMotionUI("hidden"); return; }
-    const needsPerm = !!(w.DeviceOrientationEvent && typeof w.DeviceOrientationEvent.requestPermission === "function");
-    if (needsPerm) setMotionUI("prompt");
-    else armSensors();
-    const m = motionRef.current;
-    return () => {
-      if (m.onOrient) window.removeEventListener("deviceorientation", m.onOrient);
-      if (m.onMotion) window.removeEventListener("devicemotion", m.onMotion);
-      m.armed = false; m.onOrient = null; m.onMotion = null;
-    };
-  }, [armSensors]);
+  // the invitation stands until the vessel speaks or the platform refuses
+  useEffect(() => { setMotionUI(vesselAvailable() ? "prompt" : "hidden"); }, []);
 
   // ── main loop ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -956,8 +869,11 @@ export default function DropSphere() {
     const FS = coarse ? 0.42 : 0.5; // field render scale
 
     let w = 0, h = 0, dpr = 1, fw = 0, fh = 0;
+    // the canvas origin, cached here so the hover dialect never reads layout
+    const origin = { x: 0, y: 0 };
     const resize = () => {
       const rect = root.getBoundingClientRect();
+      origin.x = rect.left; origin.y = rect.top;
       dpr = Math.min(window.devicePixelRatio || 1, coarse ? 1.5 : 2);
       w = Math.max(320, Math.floor(rect.width));
       h = Math.max(420, Math.floor(rect.height));
@@ -1006,8 +922,7 @@ export default function DropSphere() {
       const topM = 70, botM = coarse ? 150 : 120;
 
       // zoom easing
-      zs.impulse *= Math.exp(-dt * 2.2);
-      const target = clamp(zs.slider + zs.impulse, 0, 1);
+      const target = zs.slider;
       const prevZ = zs.current;
       zs.current = mix(zs.current, target, 1 - Math.exp(-dt * 6));
       zs.vel = Math.abs(zs.current - prevZ) / Math.max(dt, 0.001);
@@ -1325,30 +1240,33 @@ export default function DropSphere() {
     };
     raf = requestAnimationFrame(draw);
 
+    // the desktop reading of pan2: a trackpad's two fingers arrive as wheel,
+    // so scrolling down must sink the lens exactly as dragging down does.
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       ensureAudio();
       const zs = zoomRef.current;
-      zs.impulse = clamp(zs.impulse - e.deltaY * 0.0009, -0.25, 1);
+      const before = zs.slider;
+      zs.slider = clamp(zs.slider + e.deltaY * 0.0011, 0, 1);
+      if (zs.slider === before) return;
       const now = performance.now();
       if (now - dragRef.current.throttle > 110) {
         dragRef.current.throttle = now;
-        const depth = clamp(zs.slider + zs.impulse, 0, 1);
-        try { audioRef.current?.drip(depth); } catch { /* noop */ }
+        try { audioRef.current?.drip(zs.slider); } catch { /* noop */ }
         try { haptics.chop(); } catch { /* noop */ }
-        recordTape("sigil", 0.3 + depth * 0.5, "drop/dive");
+        recordTape("sigil", 0.3 + zs.slider * 0.5, "drop/dive");
       }
     };
     canvas.addEventListener("wheel", onWheel, { passive: false });
 
     // ── gestures (the shared grammar — src/lib/gesture) ─────────────
     // One finger touches the water: tap pokes or darts, double-tap
-    // bounces, drag grabs/sloshes/necks a droplet off, dwell grabs, the
-    // ceremony hold stills the bead to glass. Two-finger pinch is left to
-    // the scale manifold on document.body (zoom keeps its slider and the
-    // wheel). Three fingers touch the law: drag swirls the interior
-    // weather, hold dilates time. Device tilt/shake stays on its own
-    // permission-aware wiring (armSensors) — see note in the effect above.
+    // bounces, drag grabs/sloshes/necks a droplet off, flick throws one
+    // clear, dwell grabs, the ceremony hold stills the bead to glass. Two
+    // fingers touch the frame: pan2 sinks the lens into the water; pinch
+    // is left to the scale manifold on document.body. Three fingers touch
+    // the law: drag swirls the interior weather, hold dilates time. The
+    // device is the vessel (lib/vessel), subscribed below.
     const toLocal = (clientX: number, clientY: number) => {
       const rect = canvas.getBoundingClientRect();
       return { x: clientX - rect.left, y: clientY - rect.top };
@@ -1371,6 +1289,26 @@ export default function DropSphere() {
         try { haptics.roll(); } catch { /* noop */ }
         recordTape("ripple", clamp(0.3 + spd * 0.001, 0.3, 0.95), "drop/fling");
       }
+    };
+    // A droplet necked off the rim and thrown along `angle` at `thrown` px/s.
+    // Beads too small (or a full field) hand over no child — the whole bead
+    // goes instead, so the verb always answers.
+    const flickOff = (d: Drop, angle: number, thrown: number) => {
+      const cx = Math.cos(angle), cy = Math.sin(angle);
+      const spd = clamp(thrown, 0, 900);
+      const dr = dragRef.current;
+      const gave = pullApart(d, d.x + cx * d.r * 1.02, d.y + cy * d.r * 1.02, spd);
+      const thrownOne = gave ? dropsRef.current[dropsRef.current.length - 1] : d;
+      thrownOne.grabbed = false;
+      thrownOne.vx = (gave ? 0 : thrownOne.vx) + cx * (170 + spd * 0.55);
+      thrownOne.vy = (gave ? 0 : thrownOne.vy) + cy * (170 + spd * 0.55);
+      // the leading edge flattens — kept light, the tear already rings the modes
+      poke(thrownOne, angle, gave ? 0.07 : 0.09);
+      dr.drop = -1;
+      dr.active = false;
+      try { audioRef.current?.ripple(clamp(spd / 700, 0.3, 0.9)); } catch { /* noop */ }
+      try { haptics.roll(); } catch { /* noop */ }
+      recordTape(gave ? "object" : "ripple", gave ? 0.85 : 0.7, gave ? "drop/flick" : "drop/throw");
     };
     const detachGestures = attachGestures(canvas, {
       tap: (e) => {
@@ -1545,6 +1483,45 @@ export default function DropSphere() {
           }
         }
       },
+      flick: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers !== 1) return;
+        ensureAudio();
+        const { x: px, y: py } = toLocal(e.x, e.y);
+        const dr = dragRef.current;
+        const held = dr.drop !== -1 ? dropsRef.current.find((o) => o.id === dr.drop) : undefined;
+        const bead = held ?? dropsRef.current[hitDrop(px, py)];
+        if (bead) { flickOff(bead, e.angle, e.speed * 1000); return; }
+        // a flick over open water is a current: the cluster streams that way
+        const push = Math.min(900, e.speed * 1000) * 0.14;
+        for (const d of dropsRef.current) {
+          d.vx += Math.cos(e.angle) * push;
+          d.vy += Math.sin(e.angle) * push;
+          poke(d, e.angle + Math.PI, 0.05);
+        }
+        try { audioRef.current?.ripple(0.35); } catch { /* noop */ }
+        try { haptics.chop(); } catch { /* noop */ }
+        recordTape("ripple", 0.4, "drop/current");
+      },
+      pan2: (e) => {
+        // the global frame verb — /drop's frame is a lens in the water, so
+        // two fingers dragged down sink it toward the smaller life
+        lastGestureAt = performance.now();
+        if (e.phase === "start") { ensureAudio(); return; }
+        if (e.phase !== "move") return;
+        if (Math.abs(e.dy) <= Math.abs(e.dx) * 1.1) return; // vertical intent only
+        const zs = zoomRef.current;
+        const before = zs.slider;
+        zs.slider = clamp(zs.slider + (e.dy / Math.max(1, h)) * 1.35, 0, 1);
+        if (zs.slider === before) return;
+        const nowMs = performance.now();
+        if (nowMs - dragRef.current.throttle > 110) {
+          dragRef.current.throttle = nowMs;
+          try { audioRef.current?.drip(zs.slider); } catch { /* noop */ }
+          try { haptics.chop(); } catch { /* noop */ }
+          recordTape("sigil", 0.3 + zs.slider * 0.5, "drop/dive");
+        }
+      },
       scrub: (e) => {
         lastGestureAt = performance.now();
         const nowMs = performance.now();
@@ -1580,34 +1557,174 @@ export default function DropSphere() {
       },
     }, { wheelZoom: false });
 
+    // Desktop hover is the grammar's quiet dialect (hover ≈ light touch):
+    // the surface dimples under the cursor, the life inside notices, and
+    // water just out of reach leans toward the hand. Throttled to ~70ms,
+    // reading the cached origin so no move costs a layout.
+    const graze = { at: 0, bead: -1 };
+    const onHover = (ev: PointerEvent) => {
+      if (ev.pointerType === "touch" || dragRef.current.active) return;
+      const nowMs = performance.now();
+      if (nowMs - graze.at < 70) return;
+      graze.at = nowMs;
+      const px = ev.clientX - origin.x, py = ev.clientY - origin.y;
+      const drops = dropsRef.current;
+      const hit = hitDrop(px, py);
+      if (hit === -1) {
+        graze.bead = -1;
+        // surface tension reaches for a cursor passing close by
+        let near: Drop | null = null;
+        let nearD = Infinity;
+        for (const d of drops) {
+          const dist = Math.hypot(px - d.x, py - d.y);
+          if (dist < d.r * 2.1 && dist < nearD) { nearD = dist; near = d; }
+        }
+        if (near) poke(near, Math.atan2(py - near.y, px - near.x), -0.012);
+        return;
+      }
+      const d = drops[hit];
+      poke(d, Math.atan2(py - d.y, px - d.x), 0.014);
+      for (const m of d.mic) if (m.dart <= 0 && Math.random() < 0.06) m.dart = 0.3;
+      if (graze.bead !== d.id) {
+        graze.bead = d.id;
+        lastGestureAt = nowMs;
+        try { audioRef.current?.drip(0.18); } catch { /* noop */ }
+        try { haptics.tap(); } catch { /* noop */ }
+      }
+    };
+    const onLeave = () => { graze.bead = -1; };
+    canvas.addEventListener("pointermove", onHover);
+    canvas.addEventListener("pointerleave", onLeave);
+
+    // ── the keyboard dialect: the same verbs, quieter ────────────────
+    // arrows sink the lens and shove the water, shift+arrow flicks a
+    // droplet clear, Enter pokes and — held to the ceremony — stills it.
+    const largest = (): Drop | undefined => {
+      const drops = dropsRef.current;
+      let best = drops[0];
+      for (const d of drops) if (d.r > best.r) best = d;
+      return best;
+    };
+    let keyFrom = 0;
+    let keyStilled = false;
+    const onKeyDown = (ev: KeyboardEvent) => {
+      const d = largest();
+      if (!d) return;
+      const vertical = ev.key === "ArrowUp" || ev.key === "ArrowDown";
+      const lateral = ev.key === "ArrowLeft" || ev.key === "ArrowRight";
+      const press = ev.key === "Enter" || ev.key === " ";
+      if (!vertical && !lateral && !press) return;
+      ev.preventDefault();
+      lastGestureAt = performance.now();
+      ensureAudio();
+      if (ev.shiftKey && (vertical || lateral)) {
+        const angle = vertical
+          ? (ev.key === "ArrowUp" ? -Math.PI / 2 : Math.PI / 2)
+          : (ev.key === "ArrowLeft" ? Math.PI : 0);
+        if (!ev.repeat) flickOff(d, angle, 520);
+        return;
+      }
+      if (vertical) {
+        const zs = zoomRef.current;
+        zs.slider = clamp(zs.slider + (ev.key === "ArrowDown" ? 0.05 : -0.05), 0, 1);
+        try { audioRef.current?.drip(zs.slider); } catch { /* noop */ }
+        try { haptics.chop(); } catch { /* noop */ }
+        recordTape("sigil", 0.3 + zs.slider * 0.5, "drop/dive");
+        return;
+      }
+      if (lateral) {
+        const ang = ev.key === "ArrowLeft" ? Math.PI : 0;
+        d.grabbed = false;
+        d.vx += Math.cos(ang) * 190;
+        poke(d, ang + Math.PI, 0.1);
+        try { audioRef.current?.ripple(0.45); } catch { /* noop */ }
+        try { haptics.ripple(0.35); } catch { /* noop */ }
+        recordTape("ripple", 0.4, "drop/push");
+        return;
+      }
+      if (!ev.repeat) { keyFrom = performance.now(); keyStilled = false; }
+      if (ev.repeat) {
+        if (keyStilled || performance.now() - keyFrom < THRESHOLDS.ceremonyMs) return;
+        keyStilled = true;
+        for (const m of d.modes) { m.a *= 0.05; m.v = 0; }
+        d.vx = 0; d.vy = 0;
+        try { audioRef.current?.gloop(); } catch { /* noop */ }
+        try { haptics.bloom(); } catch { /* noop */ }
+        recordTape("object", 0.9, "drop/still");
+        return;
+      }
+      poke(d, rand(0, TAU), 0.18);
+      try { audioRef.current?.drip(0.55); } catch { /* noop */ }
+      try { haptics.ripple(0.45); } catch { /* noop */ }
+      recordTape("ripple", 0.5, "drop/poke");
+    };
+    canvas.addEventListener("keydown", onKeyDown);
+
+    // ── the vessel (lib/vessel): the device is the bead's own weather ──
+    // Tilt is gravity and the water runs downhill; a shake sloshes and, hard
+    // enough, necks a droplet off; a knock on the case rings one concentric
+    // shudder through every bead; face-down is night and the water sleeps.
+    const detachVessel = onVessel({
+      tilt: ({ beta, gamma }) => {
+        vesselSpoke();
+        const gv = gravityRef.current;
+        gv.tx = clamp(gamma / 50, -1, 1);
+        gv.ty = clamp(beta / 50, -1, 1);
+      },
+      shake: ({ intensity }) => {
+        vesselSpoke();
+        lastGestureAt = performance.now();
+        agitate(intensity);
+        if (intensity > 0.45) { shakeScatter(intensity); return; }
+        try { audioRef.current?.ripple(clamp(0.2 + intensity * 0.6, 0.2, 0.8)); } catch { /* noop */ }
+        try { haptics.ripple(0.2 + intensity * 0.4); } catch { /* noop */ }
+      },
+      knock: ({ intensity }) => {
+        vesselSpoke();
+        lastGestureAt = performance.now();
+        for (const d of dropsRef.current) {
+          for (const m of d.modes) m.v += (m.k % 2 === 0 ? 1 : -1) * (3 + intensity * 9);
+          for (const mb of d.mic) mb.dart = Math.max(mb.dart, 0.5);
+        }
+        try { audioRef.current?.drip(0.4 + intensity * 0.5); } catch { /* noop */ }
+        try { haptics.tap(); } catch { /* noop */ }
+        recordTape("object", 0.4 + intensity * 0.4, "drop/knock");
+      },
+      flip: ({ faceDown }) => {
+        vesselSpoke();
+        lastGestureAt = performance.now();
+        timeScaleTarget = faceDown ? 0.2 : 1;
+        if (faceDown) {
+          for (const d of dropsRef.current) {
+            for (const m of d.modes) { m.a *= 0.2; m.v = 0; }
+            d.vx *= 0.15; d.vy *= 0.15;
+          }
+          try { audioRef.current?.gloop(); } catch { /* noop */ }
+          try { haptics.bloom(); } catch { /* noop */ }
+          recordTape("object", 0.8, "drop/night");
+          return;
+        }
+        for (const d of dropsRef.current) poke(d, rand(0, TAU), 0.08);
+        try { audioRef.current?.drip(0.5); } catch { /* noop */ }
+        try { haptics.ripple(0.4); } catch { /* noop */ }
+        recordTape("ripple", 0.5, "drop/wake");
+      },
+    });
+
     return () => {
       cancelAnimationFrame(raf);
       obs.disconnect();
       window.removeEventListener("resize", resize);
       canvas.removeEventListener("wheel", onWheel);
+      canvas.removeEventListener("pointermove", onHover);
+      canvas.removeEventListener("pointerleave", onLeave);
+      canvas.removeEventListener("keydown", onKeyDown);
       detachGestures();
+      detachVessel();
       try { audioRef.current?.dispose(); } catch { /* noop */ }
       audioRef.current = null;
     };
-  }, [bounceDrop, dartMicrobe, ensureAudio, hitDrop, pullApart, recordTape]);
-
-  const onDive = (v: number) => {
-    setDive(v);
-    zoomRef.current.slider = v;
-    ensureAudio();
-    const now = performance.now();
-    if (now - dragRef.current.throttle > 110) {
-      dragRef.current.throttle = now;
-      try { audioRef.current?.drip(v); } catch { /* noop */ }
-      try { haptics.chop(); } catch { /* noop */ }
-      recordTape("sigil", 0.3 + v * 0.5, "drop/dive");
-    }
-  };
-
-  const onSplit = () => {
-    ensureAudio();
-    splitLargest();
-  };
+  }, [agitate, bounceDrop, dartMicrobe, ensureAudio, hitDrop, pullApart, recordTape, shakeScatter, vesselSpoke]);
 
   return (
     <div
@@ -1621,8 +1738,9 @@ export default function DropSphere() {
         <canvas
           ref={canvasRef}
           className="drop-canvas"
-          role="img"
-          aria-label="A living bead of rainwater. Tilt or shake your phone to make it roll, slide and scatter; drag it to slosh and fling it; flick a droplet off a bead to split it, or drag droplets together to merge them; double-tap a bead to make it bounce; and zoom in — with the dive control or the scroll wheel — to reveal the microscopic life swimming inside."
+          role="application"
+          tabIndex={0}
+          aria-label="A living bead of rainwater. Tilt or shake your phone to make it roll, slide and scatter; drag it to slosh and fling it; flick a droplet off a bead to split it, or drag droplets together to merge them; double-tap a bead to make it bounce; and sink two fingers down the water — or the scroll wheel — to reveal the microscopic life swimming inside. Arrow keys sink the lens and shove the water, shift with an arrow flicks a droplet clear, enter pokes the bead and held stills it."
         />
       )}
 
@@ -1638,14 +1756,16 @@ export default function DropSphere() {
       </div>
 
       <div className="drop-hud">
-        <span className="drop-play-hint" aria-hidden="true">tap · drag · hold</span>
         <output className="drop-readout" aria-live="polite">{readout}</output>
         {motionUI === "prompt" && (
           <button
             type="button"
             className="drop-motion-chip"
             aria-label="Enable motion so you can tilt and shake your phone to play with the water"
-            onClick={() => { ensureAudio(); armSensors(); }}
+            onClick={() => {
+              ensureAudio();
+              void requestVessel().then((ok) => setMotionUI(ok ? "on" : "hidden"));
+            }}
           >
             <span aria-hidden="true">◒</span>
             <span>tilt &amp; shake to play</span>
@@ -1657,32 +1777,6 @@ export default function DropSphere() {
             <span>tilt &amp; shake live</span>
           </div>
         )}
-        <MobileInstrumentPanel
-          className="drop-mobile-panel"
-          title="depth & water"
-          triggerLabel="tune"
-          summary={readout}
-        >
-          <div className="drop-console" aria-label="droplet controls">
-            <label className="drop-pill drop-dive-pill">
-              <span>zoom</span>
-              <input
-                type="range" min={0} max={1} step={0.001} value={dive}
-                aria-label="dive into the droplet to reveal the life inside"
-                onChange={(e) => onDive(Number(e.target.value))}
-              />
-            </label>
-            <button
-              type="button"
-              className="drop-pill drop-split"
-              aria-label="split the droplet in two"
-              onClick={onSplit}
-              disabled={dropCount() >= MAX_DROPS}
-            >
-              <span>split</span>
-            </button>
-          </div>
-        </MobileInstrumentPanel>
       </div>
 
       <style
@@ -1712,6 +1806,11 @@ export default function DropSphere() {
           z-index: 0;
         }
         .drop-canvas:active { cursor: grabbing; }
+        .drop-canvas:focus { outline: none; }
+        .drop-canvas:focus-visible {
+          outline: 1px solid rgba(150, 220, 245, 0.55);
+          outline-offset: -4px;
+        }
 
         .drop-fallback {
           position: absolute;
@@ -1787,8 +1886,6 @@ export default function DropSphere() {
           pointer-events: none;
         }
 
-        .drop-play-hint { display: none; }
-
         .drop-motion-chip {
           display: inline-flex;
           align-items: center;
@@ -1822,85 +1919,6 @@ export default function DropSphere() {
         }
         @keyframes dropMotionFade { to { opacity: 0; visibility: hidden; } }
 
-        .drop-console {
-          display: flex;
-          gap: 10px;
-          padding: 8px;
-          border: 1px solid rgba(150, 220, 245, 0.16);
-          border-radius: 999px;
-          background: rgba(4, 20, 30, 0.55);
-          backdrop-filter: blur(18px);
-          -webkit-backdrop-filter: blur(18px);
-          box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
-          pointer-events: auto;
-        }
-
-        .drop-pill {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          min-height: 48px;
-          padding: 0 18px;
-          border: 0;
-          border-radius: 999px;
-          background: rgba(180, 235, 250, 0.06);
-          font-family: var(--font-mono);
-          font-size: 11px;
-          color: rgba(206, 238, 250, 0.72);
-          text-transform: lowercase;
-        }
-        .drop-pill span { flex: none; }
-        .drop-split {
-          cursor: pointer;
-          transition: background 0.2s ease, opacity 0.2s ease;
-          letter-spacing: 0.08em;
-          color: rgba(224, 248, 255, 0.92);
-        }
-        .drop-split:hover { background: rgba(120, 220, 245, 0.16); }
-        .drop-split:active { background: rgba(120, 220, 245, 0.26); }
-        .drop-split:disabled { opacity: 0.4; cursor: not-allowed; }
-
-        .drop-pill input {
-          -webkit-appearance: none;
-          appearance: none;
-          width: 150px;
-          height: 28px;
-          margin: 0;
-          background: transparent;
-          cursor: pointer;
-        }
-        .drop-dive-pill input::-webkit-slider-runnable-track {
-          height: 4px;
-          border-radius: 999px;
-          background: linear-gradient(90deg, rgba(90,180,210,0.3), rgba(160,235,255,0.9));
-        }
-        .drop-dive-pill input::-moz-range-track {
-          height: 4px;
-          border-radius: 999px;
-          background: linear-gradient(90deg, rgba(90,180,210,0.3), rgba(160,235,255,0.9));
-        }
-        .drop-pill input::-webkit-slider-thumb {
-          -webkit-appearance: none;
-          appearance: none;
-          width: 16px;
-          height: 16px;
-          margin-top: -6px;
-          border: 0;
-          border-radius: 999px;
-          background: #eafcff;
-          box-shadow: 0 0 14px rgba(150, 230, 255, 0.9);
-          cursor: pointer;
-        }
-        .drop-pill input::-moz-range-thumb {
-          width: 16px;
-          height: 16px;
-          border: 0;
-          border-radius: 999px;
-          background: #eafcff;
-          box-shadow: 0 0 14px rgba(150, 230, 255, 0.9);
-          cursor: pointer;
-        }
-
         body:has(.drop-sphere) { overflow: hidden; background: #01070c; }
         body:has(.drop-sphere) header:not(.oda-site-header) { display: none !important; }
         body:has(.drop-sphere) .oda-field-watch,
@@ -1911,65 +1929,17 @@ export default function DropSphere() {
         @media (max-width: 820px) {
           .drop-title { top: 70px; left: 22px; }
           .drop-title strong { font-size: 74px; }
-          .drop-console { flex-direction: row; }
-          .drop-pill input { width: 40vw; max-width: 170px; }
         }
 
         @media (max-width: 720px) {
           .drop-hud {
-            bottom: calc(122px + env(safe-area-inset-bottom, 0px));
+            bottom: calc(34px + env(safe-area-inset-bottom, 0px));
             gap: 8px;
-          }
-          .drop-play-hint {
-            display: block;
-            color: rgba(212, 240, 250, 0.66);
-            font-family: var(--font-mono);
-            font-size: 10px;
-            letter-spacing: 0.08em;
-            text-transform: lowercase;
-            text-shadow: 0 2px 12px rgba(0, 0, 0, 0.8);
-            pointer-events: none;
-          }
-          .drop-readout { display: none; }
-          .drop-mobile-panel .mobile-instrument-panel__trigger {
-            border-color: rgba(150, 220, 245, 0.34);
-            background: rgba(4, 20, 30, 0.86);
-            color: rgba(224, 248, 255, 0.94);
-            pointer-events: auto;
-          }
-          .drop-mobile-panel .mobile-instrument-panel__sheet {
-            background: rgba(3, 17, 26, 0.98);
-            border-color: rgba(150, 220, 245, 0.22);
-          }
-          .drop-mobile-panel .drop-console {
-            display: grid;
-            grid-template-columns: minmax(0, 1fr) auto;
-            gap: 10px;
-            padding: 0;
-            border: 0;
-            border-radius: 0;
-            background: transparent;
-            box-shadow: none;
-            backdrop-filter: none;
-            -webkit-backdrop-filter: none;
-          }
-          .drop-mobile-panel .drop-pill {
-            min-width: 0;
-            min-height: 56px;
-            border: 1px solid rgba(150, 220, 245, 0.16);
-            border-radius: 10px;
-            padding: 0 14px;
-            background: rgba(180, 235, 250, 0.06);
-          }
-          .drop-mobile-panel .drop-pill input {
-            width: 100%;
-            max-width: none;
           }
         }
 
         @media (max-width: 520px) {
           .drop-title strong { font-size: 56px; }
-          .drop-mobile-panel .drop-console { grid-template-columns: 1fr; }
         }
       `,
         }}
