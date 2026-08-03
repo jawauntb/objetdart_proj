@@ -332,16 +332,36 @@ export function residualScaleInput(
 // (the earth holds both the atlas and the flowers), you return the way you
 // came: every band remembers the neighbor you last crossed from.
 
-export type TravelDir = -1 | 1; // -1 = toward smaller scales, +1 = toward larger
+export type TravelDir = -1 | 1; // -1 = inward/smaller, +1 = outward/larger
 
-const TRAVEL_OVERRIDES: Partial<Record<ScaleBandId, { up?: ScaleBandId; down?: ScaleBandId }>> = {
+type TravelOverride = {
+  up?: ScaleBandId;
+  down?: ScaleBandId;
+  /** Additional non-canonical doors (forks beyond the reverse-pointer rule). */
+  extraUp?: ScaleBandId[];
+  extraDown?: ScaleBandId[];
+};
+
+/**
+ * The author's cosmology, stated as doors. Containment, inside → outside:
+ * quarks ⊂ atoms ⊂ molecules ⊂ cells ⊂ {drop, flowers} ; drop ⊂ coast ;
+ * flowers grow from the earth (the ground, the strata) ; coast and earth are
+ * both ON the atlas (the map holds the land and the shore) ; the atlas
+ * recedes into the stars ; the stars open onto the fold. /beyond branches
+ * off the fold. Metric spans are untouched — sound and physics keep them.
+ */
+const TRAVEL_OVERRIDES: Partial<Record<ScaleBandId, TravelOverride>> = {
   drop: { up: "coast" }, // a drop returns to the sea
   coast: { down: "drop" }, // and the sea gives the drop back
-  flowers: { up: "earth", down: "cells" }, // a garden on the planet; a petal opens into cells
-  stars: { up: "manifold" }, // the sky opens straight onto the fold
-  manifold: { down: "stars" }, // and the fold descends into stars — /beyond is a
-  // branch off the trunk (an abstraction, not a place between places),
-  // reachable by memory: leave through it and it will receive you back.
+  flowers: { up: "earth", down: "cells", extraDown: ["drop"] }, // petals open
+  // into cells; dew gathers on them too
+  earth: { up: "atlas", down: "flowers" }, // the ground lies on the map;
+  // things grow from it
+  atlas: { up: "stars" }, // the map recedes into the sky (the planet-globe
+  // room will one day sit between them)
+  stars: { up: "manifold", down: "atlas" }, // the sky opens onto the fold
+  manifold: { down: "stars" }, // /beyond is a branch off the trunk,
+  // reachable by fork doors and received back by memory
 };
 
 /** Canonical travel neighbor: mereological override, else metric adjacency. */
@@ -354,25 +374,45 @@ export function travelNeighbor(id: ScaleBandId, dir: TravelDir): ScaleBandId | n
   return n ? n.id : null;
 }
 
+/**
+ * Every door out of `id` in direction `dir`, built or not: the canonical
+ * neighbor, any band whose opposite door points here, and declared extras
+ * (in both directions, so every extra door swings both ways and the
+ * round-trip law survives).
+ */
+function structuralDoors(id: ScaleBandId, dir: TravelDir): ScaleBandId[] {
+  const doors: ScaleBandId[] = [];
+  const add = (b: ScaleBandId | null | undefined) => {
+    if (b && b !== id && !doors.includes(b)) doors.push(b);
+  };
+  add(travelNeighbor(id, dir));
+  const opposite: TravelDir = dir === 1 ? -1 : 1;
+  for (const b of SCALE_BANDS) {
+    if (travelNeighbor(b.id, opposite) === id) add(b.id);
+    const o = TRAVEL_OVERRIDES[b.id];
+    const theirExtras = opposite === 1 ? o?.extraUp : o?.extraDown;
+    if (theirExtras?.includes(id)) add(b.id);
+  }
+  const own = TRAVEL_OVERRIDES[id];
+  for (const b of (dir === 1 ? own?.extraUp : own?.extraDown) ?? []) add(b);
+  return doors;
+}
+
 export type EnteredFromMap = Partial<Record<ScaleBandId, ScaleBandId>>;
 
 /**
  * Where travel in `dir` actually goes from `id`: the remembered origin if it
- * lies in that direction (you return the way you came), else the canonical
- * neighbor. Returns the full band, or null at the ends of the axis.
+ * is one of this direction's doors (you return the way you came), else the
+ * canonical neighbor. Returns the full band, or null at the axis's ends.
  */
 export function resolveDestination(
   id: ScaleBandId,
   dir: TravelDir,
   enteredFrom: EnteredFromMap,
 ): ScaleBand | null {
-  const self = SCALE_BANDS.find((b) => b.id === id);
   const rememberedId = enteredFrom[id];
-  if (self && rememberedId && rememberedId !== id) {
-    const r = SCALE_BANDS.find((b) => b.id === rememberedId);
-    if (r && (dir === 1 ? r.sMin >= self.sMax - 1e-9 : r.sMax <= self.sMin + 1e-9)) {
-      return r;
-    }
+  if (rememberedId && rememberedId !== id && structuralDoors(id, dir).includes(rememberedId)) {
+    return SCALE_BANDS.find((b) => b.id === rememberedId) ?? null;
   }
   const n = travelNeighbor(id, dir);
   return n ? SCALE_BANDS.find((b) => b.id === n) ?? null : null;
@@ -398,11 +438,8 @@ export function travelOptions(
     }
   };
   add(resolveDestination(id, dir, enteredFrom));
-  const canonical = travelNeighbor(id, dir);
-  add(canonical ? SCALE_BANDS.find((b) => b.id === canonical) : null);
-  // Any band whose opposite-direction door points here is also a way out.
-  for (const b of SCALE_BANDS) {
-    if (travelNeighbor(b.id, (dir === 1 ? -1 : 1) as TravelDir) === id) add(b);
+  for (const doorId of structuralDoors(id, dir)) {
+    add(SCALE_BANDS.find((b) => b.id === doorId));
   }
   return options;
 }

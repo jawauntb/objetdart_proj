@@ -178,9 +178,13 @@ assert.equal(entryScaleFor("/colophon"), null);
 
   assert.equal(travelNeighbor("drop", 1), "coast", "a drop returns to the sea");
   assert.equal(travelNeighbor("coast", -1), "drop", "the sea gives the drop back");
-  assert.equal(travelNeighbor("flowers", 1), "earth", "the garden grows on the planet");
+  assert.equal(travelNeighbor("flowers", 1), "earth", "the garden grows from the ground");
   assert.equal(travelNeighbor("flowers", -1), "cells", "a petal opens into cells");
-  assert.equal(travelNeighbor("earth", -1), "atlas", "earth descends to the atlas by default");
+  assert.equal(travelNeighbor("earth", 1), "atlas", "the ground lies on the map");
+  assert.equal(travelNeighbor("earth", -1), "flowers", "the ground opens onto flowers");
+  assert.equal(travelNeighbor("atlas", 1), "stars", "the map recedes into the sky");
+  assert.equal(travelNeighbor("atlas", -1), "coast", "the map descends to the shore by default");
+  assert.equal(travelNeighbor("stars", -1), "atlas", "the sky descends onto the map");
   assert.equal(travelNeighbor("cells", 1), "drop", "cells rise into the drop by default");
   assert.equal(travelNeighbor("manifold", 1), null, "the axis ends above the manifold");
   assert.equal(travelNeighbor("manifold", -1), "stars", "the fold descends into stars");
@@ -191,12 +195,12 @@ assert.equal(entryScaleFor("/colophon"), null);
   assert.equal(travelNeighbor("beyond", 1), "manifold", "beyond still opens upward");
   assert.equal(travelNeighbor("beyond", -1), "stars", "beyond still descends to stars");
 
-  // Return the way you came: earth remembers which child you rose from.
-  const viaFlowers = resolveDestination("earth", -1, { earth: "flowers" });
-  assert.equal(viaFlowers.id, "flowers", "entered from the garden, descend to the garden");
-  const viaAtlas = resolveDestination("earth", -1, { earth: "atlas" });
-  assert.equal(viaAtlas.id, "atlas", "entered from the atlas, descend to the atlas");
-  // Memory in the wrong direction never hijacks travel.
+  // Return the way you came, across the semantic doors.
+  const backToGround = resolveDestination("atlas", -1, { atlas: "earth" });
+  assert.equal(backToGround.id, "earth", "risen from the ground, the map returns you to it");
+  const backToGarden = resolveDestination("earth", -1, { earth: "flowers" });
+  assert.equal(backToGarden.id, "flowers", "entered from the garden, descend to the garden");
+  // Memory that names a band that is not a door in that direction never hijacks travel.
   const wrongWay = resolveDestination("drop", -1, { drop: "coast" });
   assert.equal(wrongWay.id, "cells", "memory of an upward door cannot answer a downward push");
 
@@ -204,19 +208,34 @@ assert.equal(entryScaleFor("/colophon"), null);
   // reaches a branch for the first time (press, release, press again).
   const { travelOptions } = loadTsModule("src/lib/scale.ts");
   assert.deepEqual(
-    Array.from(travelOptions("earth", -1, {}), (b) => b.id),
-    ["atlas", "flowers"],
-    "the earth offers the atlas first, then the garden",
+    Array.from(travelOptions("atlas", -1, {}), (b) => b.id),
+    ["coast", "earth"],
+    "the map opens inward onto the shore first, then the ground",
   );
   assert.deepEqual(
-    Array.from(travelOptions("earth", -1, { earth: "flowers" }), (b) => b.id),
-    ["flowers", "atlas"],
+    Array.from(travelOptions("atlas", -1, { atlas: "earth" }), (b) => b.id),
+    ["earth", "coast"],
     "memory reorders the offer, never removes a door",
+  );
+  assert.deepEqual(
+    Array.from(travelOptions("flowers", -1, {}), (b) => b.id),
+    ["cells", "drop"],
+    "a petal opens into cells, and dew gathers on it too",
+  );
+  assert.deepEqual(
+    Array.from(travelOptions("drop", 1, {}), (b) => b.id),
+    ["coast", "flowers"],
+    "a drop rises to the sea, or to the petal it sat on",
   );
   assert.deepEqual(
     Array.from(travelOptions("manifold", -1, {}), (b) => b.id),
     ["stars", "beyond"],
     "the fold offers stars first, then the beyond",
+  );
+  assert.deepEqual(
+    Array.from(travelOptions("stars", 1, {}), (b) => b.id),
+    ["manifold", "beyond"],
+    "the sky opens onto the fold, and the beyond is the second door",
   );
   assert.deepEqual(
     Array.from(travelOptions("cells", 1, {}), (b) => b.id),
