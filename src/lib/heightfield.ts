@@ -54,6 +54,23 @@ export function mulberry32(seed: number): () => number {
 }
 
 /**
+ * How far apart two seeds can stand, in km.
+ *
+ * Load-bearing, and smaller than it looks like it should be. The offset is
+ * the only thing a seed means to the field, so the temptation is to spread
+ * seeds over thousands of kilometres. But the offset is also what sets the
+ * MAGNITUDE of every coordinate the noise is evaluated at: the range itself
+ * is only MARCH_MAX_KM across, and a ±2048 km offset put the finest octave's
+ * lattice coordinate past 16000, where a float32 mantissa has 2e-3 to spend
+ * on a number the field differentiates. A few hundred kilometres is already
+ * many wavelengths of the coarsest octave — every seed gets its own range —
+ * and it keeps the shader's arithmetic in the part of float32 that still
+ * has digits. It also stays inside one HASH_MOD period (289 / BASE_FREQ ≈
+ * 1763 km), so two seeds cannot alias onto the same mountain.
+ */
+export const SEED_SPREAD_KM = 512;
+
+/**
  * A seed is a translation of the noise field, nothing more — which is what
  * makes the same seed the same mountain, always, in JS and in GLSL alike
  * (the shader receives these two numbers as a uniform and never hashes).
@@ -65,19 +82,52 @@ export function seedOffset(seed: number): [number, number] {
   if (seed === offsetMemoSeed) return offsetMemo;
   const rng = mulberry32(hashSeed(seed, 0x0a1a));
   offsetMemoSeed = seed;
-  offsetMemo = [(rng() - 0.5) * 4096, (rng() - 0.5) * 4096];
+  offsetMemo = [(rng() - 0.5) * SEED_SPREAD_KM, (rng() - 0.5) * SEED_SPREAD_KM];
   return offsetMemo;
 }
 
-// ——— the noise basis: the water's own, given a derivative ————————
+// ——— the noise basis, and the one place precision is not free ————
 //
-// hash21/vnoise are the house idiom, lifted unchanged from the sea
-// (src/components/Sea.tsx, src/components/Ocean.tsx) so the fog and the
-// water it resolves into are literally made of the same grain. The one
-// refinement: a quintic fade instead of the cubic, because this field is
-// differentiated rather than merely sampled, and the quintic's derivative
-// vanishes at the cell walls — with the cubic, curvature would step across
-// every lattice line and the shading would show it as a faint square grid.
+// vnoise is the house idiom, lifted from the sea (src/components/Sea.tsx,
+// src/components/Ocean.tsx) so the fog and the water it resolves into are
+// made of the same grain, with a quintic fade instead of the cubic because
+// this field is differentiated rather than merely sampled — the quintic's
+// derivative vanishes at the cell walls, and with the cubic the curvature
+// would step across every lattice line and the shading would show it as a
+// faint square grid.
+//
+// The hash is NOT the house idiom, and the reason is the whole of the bug
+// this file was rewritten to fix. `fract(p * 123.34)` then
+// `p += dot(p, p + 45.32)` then `fract(p.x * p.y)` is a fine hash in a
+// shader that stays near the origin and a catastrophe in one that does not:
+// the first `fract` throws away every digit above the decimal point, so
+// whatever rounding the input carried is all that is left, and the two
+// following steps multiply that residue by ~45 and then by ~50. Evaluated
+// in float64 by this file and in float32 by the shader generated from it,
+// the two answers stop agreeing entirely — measured at the room's own
+// station, |Δhash| ran to 0.35 on a value that lives in [0,1], at EVERY
+// octave. The shader was therefore marching a completely different mountain
+// from the one the suite checks, the eye — placed by this file, 1.7 m above
+// this file's ground — stood ~170 m inside the shader's rock, every ray hit
+// on its first step, and /mountain rendered as one flat rock-coloured
+// rectangle. Nothing in node could see it, because node has no float32.
+//
+// So the hash is an exact one instead. Every intermediate below is an
+// integer under 2^24, which float32 and float64 both hold exactly, and the
+// only division is by HASH_MOD, whose quotient's fractional part is never
+// nearer an integer than 1/HASH_MOD — so `floor` cannot disagree either.
+// Two languages, one answer, bit for bit. scripts/test-heightfield.mjs
+// pins that by running the whole hash again under Math.fround.
+
+/**
+ * The permutation modulus: 17², chosen because
+ * `v -> (HASH_MUL·v + 1)·v mod 17²` is a bijection there (it is not, on a
+ * prime), so each round is a shuffle rather than a collapse. 289 is also
+ * small enough that the largest product it can produce,
+ * (34·288 + 1)·288 = 2820384, sits comfortably under float32's 2^24.
+ */
+export const HASH_MOD = 289;
+export const HASH_MUL = 34;
 
 function fract(v: number): number {
   return v - Math.floor(v);
@@ -92,13 +142,31 @@ function smoothstep(e0: number, e1: number, x: number): number {
   return t * t * (3 - 2 * t);
 }
 
+function hashWrap(v: number): number {
+  return v - HASH_MOD * Math.floor(v / HASH_MOD);
+}
+
+function hashPermute(v: number): number {
+  return hashWrap((HASH_MUL * v + 1) * v);
+}
+
+/**
+ * A lattice point → [0,1). Three rounds, and the second and third fold the
+ * other coordinate back in: with a single `permute(permute(x) + y)` every
+ * row of the field is the same sequence shifted, and value noise built on
+ * that shows the shift as diagonal corduroy across the whole range.
+ *
+ * Periodic with period HASH_MOD in both axes by construction. At the
+ * coarsest octave that is 1763 km, far past MARCH_MAX_KM; at the finest it
+ * is 23 km, carrying 15 m of amplitude — and each octave is turned, so no
+ * two repeats line up in world space.
+ */
 export function hash21(x: number, y: number): number {
-  let px = fract(x * 123.34);
-  let py = fract(y * 456.21);
-  const d = px * (px + 45.32) + py * (py + 45.32);
-  px += d;
-  py += d;
-  return fract(px * py);
+  const wx = hashWrap(x);
+  const wy = hashWrap(y);
+  const a = hashPermute(wx);
+  const b = hashPermute(hashWrap(a + wy));
+  return hashPermute(hashWrap(b + wx)) / HASH_MOD;
 }
 
 /** Value noise in [0,1] with its exact gradient: [v, dv/dx, dv/dy]. */
@@ -626,6 +694,130 @@ export function submerged(
   return submergedDepth(x, z, fogAltitude, seed, phase, octaves) > 0;
 }
 
+// ——— where the wanderer stands ————————————————————————————————
+
+/** How far above the inversion the composition wants the eye, in km. */
+export const STATION_ABOVE_FOG_KM = 0.11;
+/** Bearings walked down off the apex looking for that altitude. */
+export const STATION_BEARINGS = 64;
+export const STATION_INNER_KM = 0.12;
+export const STATION_MAX_KM = 3;
+export const STATION_STEP_KM = 0.04;
+
+export type Station = {
+  x: number;
+  z: number;
+  /** Eye altitude in km: EYE_KM above the ground under it. */
+  y: number;
+  /** Bearing from the apex out to the ledge — the way the wanderer faces. */
+  bearing: number;
+  /** How far out along that bearing the ledge stands, km. */
+  reach: number;
+};
+
+/**
+ * The ledge the figure with his back to us is standing on.
+ *
+ * NOT the apex. The outcrop stands SUMMIT_KM over the ridges, so an eye set
+ * a hundred metres above the inversion at the origin is three quarters of a
+ * kilometre inside its own mountain and every ray hits rock on its first
+ * step. A painted room could cheat that; a marched one cannot. So the ledge
+ * is found: walk out from the apex along each bearing until the ground has
+ * fallen to the altitude the composition wants, and stand on the flank that
+ * reaches it soonest — nearest the summit, so the peak is still overhead.
+ *
+ * The fallback matters as much as the search. If no bearing reaches the
+ * target inside STATION_MAX_KM — a seed whose massif simply stands high —
+ * the answer is the lowest ground found, never the apex the loop started
+ * from. Returning the apex is the failure mode this whole function exists
+ * to refuse, and it is the one an unwritten `else` produces.
+ *
+ * The eye then sits EYE_KM over the HIGHER of the two terrains, the one the
+ * marcher walks (OCTAVES_MARCH) and the one the shader shades
+ * (OCTAVES_SHADE); they disagree by metres, and taking the lower one puts
+ * the camera under the other.
+ */
+export function stationFor(seed: number, aboveFogKm = STATION_ABOVE_FOG_KM): Station {
+  const target = restingFogAltitude(seed) + aboveFogKm;
+  let bestX = 0;
+  let bestZ = 0;
+  let bestBearing = 0;
+  let bestReach = Infinity;
+  let lowX = 0;
+  let lowZ = 0;
+  let lowBearing = 0;
+  let lowReach = STATION_INNER_KM;
+  let lowest = Infinity;
+  for (let b = 0; b < STATION_BEARINGS; b++) {
+    const a = (b / STATION_BEARINGS) * Math.PI * 2;
+    for (let s = STATION_INNER_KM; s <= STATION_MAX_KM; s += STATION_STEP_KM) {
+      const x = Math.sin(a) * s;
+      const z = Math.cos(a) * s;
+      const h = heightAt(x, z, seed, OCTAVES_MARCH);
+      if (h < lowest) {
+        lowest = h;
+        lowX = x;
+        lowZ = z;
+        lowBearing = a;
+        lowReach = s;
+      }
+      if (h <= target) {
+        if (s < bestReach) {
+          bestReach = s;
+          bestX = x;
+          bestZ = z;
+          bestBearing = a;
+        }
+        break;
+      }
+    }
+  }
+  if (!Number.isFinite(bestReach)) {
+    bestX = lowX;
+    bestZ = lowZ;
+    bestBearing = lowBearing;
+    bestReach = lowReach;
+  }
+  const y =
+    Math.max(
+      heightAt(bestX, bestZ, seed, OCTAVES_MARCH),
+      heightAt(bestX, bestZ, seed, OCTAVES_SHADE),
+    ) + EYE_KM;
+  return { x: bestX, z: bestZ, y, bearing: bestBearing, reach: bestReach };
+}
+
+export const VIEW_BEARINGS = 192;
+/** How far behind him the scan refuses to look — the outcrop is back there. */
+export const VIEW_BEHIND_COS = -0.34;
+export const VIEW_PROBE_KM = [1.5, 2.2, 3, 4, 5.5, 7, 9] as const;
+
+/**
+ * Which way he is looking: the bearing whose crest subtends the largest
+ * angle from this station, so every seed gets its own peak to face rather
+ * than a compass direction that happens to be empty on this one. Bearings
+ * back over the outcrop he is standing on are refused — that way is the
+ * rock at his heels, which fills the frame and subtends the most of all.
+ */
+export function viewBearingFor(station: Station, seed: number): number {
+  let bearing = station.bearing;
+  let best = -Infinity;
+  for (let b = 0; b < VIEW_BEARINGS; b++) {
+    const a = (b / VIEW_BEARINGS) * Math.PI * 2;
+    if (Math.cos(a - station.bearing) < VIEW_BEHIND_COS) continue;
+    for (const d of VIEW_PROBE_KM) {
+      const ang =
+        (heightAt(station.x + Math.sin(a) * d, station.z + Math.cos(a) * d, seed, OCTAVES_MARCH) -
+          station.y) /
+        d;
+      if (ang > best) {
+        best = ang;
+        bearing = a;
+      }
+    }
+  }
+  return bearing;
+}
+
 // ——— the march ————————————————————————————————————————————————
 
 /** The budget, stated before the loop was written (plan §3). */
@@ -1005,6 +1197,8 @@ export function glslFloat(v: number): string {
 
 /** The float constants the GLSL shares with the TS, by their GLSL names. */
 export const HEIGHTFIELD_GLSL_FLOATS: Readonly<Record<string, number>> = {
+  HASH_MOD,
+  HASH_MUL,
   LACUNARITY,
   GAIN,
   OCTAVE_TURN,
@@ -1074,10 +1268,22 @@ uniform vec4 uHornA[${HORN_COUNT}];
 // cos(angle), sin(angle), aniso, unused
 uniform vec4 uHornB[${HORN_COUNT}];
 
+/**
+ * The exact hash, in the precision it actually runs in. Every intermediate
+ * here is an integer under 2^24 and every division is by HASH_MOD, so this
+ * function returns bit for bit what the TS above returns --- which is the
+ * only reason the eye the TS places is above the ground this shader draws.
+ */
+float hf_hashWrap(float v) { return v - HASH_MOD * floor(v / HASH_MOD); }
+
+float hf_hashPermute(float v) { return hf_hashWrap((HASH_MUL * v + 1.0) * v); }
+
 float hf_hash21(vec2 p) {
-  p = fract(p * vec2(123.34, 456.21));
-  p += dot(p, p + 45.32);
-  return fract(p.x * p.y);
+  float wx = hf_hashWrap(p.x);
+  float wy = hf_hashWrap(p.y);
+  float a = hf_hashPermute(wx);
+  float b = hf_hashPermute(hf_hashWrap(a + wy));
+  return hf_hashPermute(hf_hashWrap(b + wx)) / HASH_MOD;
 }
 
 /** value noise in [0,1] with its exact gradient: (v, dv/dx, dv/dy) */

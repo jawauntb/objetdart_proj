@@ -151,6 +151,10 @@ const expectedKeys = [
   "kept",
   "colophon",
   "guide",
+  // rooms that arrived through src/rooms/<key>/room.config.ts
+  "cabinet",
+  "compass",
+  "orb",
 ];
 const validClusters = new Set(["field", "water", "nature", "mechanism"]);
 const validIcons = new Set(

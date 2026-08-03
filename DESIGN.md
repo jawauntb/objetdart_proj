@@ -41,19 +41,39 @@ These two axioms — three registers, water-as-template — predict almost every
 
 ### `/` (the home page)
 
-A single scrolling page with five sections separated by hairlines, plus the candle + sound toggle floating as fixed UI on every route.
+**A scrolling gallery of live route previews.** Not an instrument: `src/app/page.tsx`
+renders `SiteHeader` + `ScrollingGallery` and nothing else. The gallery walks
+`GALLERY_ROUTES` — the derived scale order, manifold at the top, quanta at the
+bottom — mounting each room in an iframe that is paused unless it is the active or
+entered card, and posting `{ type: "objetdart:room", pause }` across the boundary.
+The home page therefore answers no gesture of its own; every verb belongs to the
+room inside the frame.
 
-1. **Threshold** — `t-h1` hero in Cormorant Garamond 300 italic ("A candle inside the command center, facing the sea."), each word a separately-laid-out span with a 7-second breathing loop and a 0.18s phase offset per word, so they ripple like a slow wave across the line. Eyebrow "an instrument" top-left; live local clock top-right; if you've kept any readings, a candle-underlined "N kept" appears next to the clock. Below the hero: a mono subline ("handle the objects · calibrate concern · route the atlas · leave a reading"), an `enter ↓` button, and the **Sea**.
-2. **Concern Field** — a single radar polygon laid over eight radial axes (concern compass). Drag any vertex; the polygon morphs in real time, the corresponding concern's audio voice holds a tone, the value updates, the reading text re-flows, the atlas regions tagged with that concern halo briefly. Below: preset chips that ghost-preview when hovered. A `read the room →` button jumps to Reading.
-3. **Atlas** — a hand-authored 16:10 SVG map with nine irregular region shapes, each with its own decorative sigil (wavy shoreline, contour rings, dashed road, branching delta, etc.). Below the map: an object tray of 11 glyphs. Two interaction modes: tap a region then another to draw a route, or carry an object onto a region to trigger that combo's effect. A side drawer slides in from the right when a region is selected, with a generated reading shaped around a region-sigil.
-4. **Reading** — generated live from current state. Italic headline; a large user-sigil floated top-right (~360px); three paragraphs of prose laid out by Pretext line-by-line, each line's width derived from the polygon's silhouette so the prose hugs the sigil edge. Below the prose: an "ask the room" text input that sends to Claude/Gemini and returns one paragraph appended in voice. At the bottom: the small clickable sigil mini-mark next to the permalink — clicking plays the user's sigil as procedural music for ~12s. Buttons: `keep this reading`, `permalink ⌁ copy`.
-5. **Sea** — the Atlantic returns between Reading and Archive; same shader, smaller height. Frames the archive entrance.
-6. **Archive** — sticky left-rail of multi-select filters (medium / concern / object / phase + free-text search + sort). To the right of the rail: an `imagine a drawer` form (title + concern chips) that POSTs to `/api/imagine-entry` and adds an AI-generated entry to localStorage, then below it the canonical 12 archive entries as cards with status pills, year, title, fn, and a small per-entry sigil derived from the entry's tagged concerns.
-7. **Colophon** — three short paragraphs of prose ("what this is, and isn't"), credits, mailto.
+It replaced a seven-section scroll journey (Threshold hero, the concern compass,
+the atlas, the generated reading, the sea, the archive, the colophon). Those
+surfaces did not go away — they became routes:
+
+- **`/cabinet`** — the case that was the home instrument. `src/components/HomeCabinet.tsx`:
+  a three.js armature of gold rings under glass with every route hung on it as a gem,
+  clustered field / water / nature / mechanism, plus a dust field, a patina that
+  deepens across visits, and embers a dwell plants and a ceremony hold lets go.
+  Deliberately off the scale axis — a case holding every scale is a view of the
+  tree, like `/overlook` and `/loom`.
+- **`/compass`** — the concern compass, the site's founding interaction.
+  `src/components/ConcernField.tsx`: eight concerns as radial axes with a draggable
+  polygon, each vertex holding that concern's own tone while dragged; twist turns
+  the rose, three-finger twist walks the presets, a dwell charges an axis, and a
+  hold at the center keeps the reading. Also off the axis: it measures attention,
+  not metres.
+- **`/orb`** — plasma discs, a peer of `/plasma` at the drop.
+  `src/components/PlasmaOrb.tsx`: the old decorative orb widget, rebuilt as a
+  population you can gather and let go, drawn in one fullscreen fragment shader.
+- **`/atlas/origin`**, **`/kept`**, **`/archive`**, **`/colophon`** — the map, the
+  trail, the drawers and the prose, each on its own route as before.
 
 ### Other routes
 
-- `/atlas/[region]` — opens the home page with that region's drawer pre-open.
+- `/atlas/[region]` — the living map, opened on that region's drawer.
 - `/archive/[slug]` — individual entry with its tags, italic dek, candle-bordered pull-quote, three real body paragraphs (Cormorant 20px) that wrap around the entry's sigil via Pretext, sticky meta panel.
 - `/reading/[hash]` — read-only shared reading. Decodes hash, builds the same reading text, renders with a *big* sigil, three columns of prose, "step into this room →" to overwrite local state, "← your own room" to go back. Has its own per-hash OG image (`/reading/[hash]/opengraph-image`) showing the sender's actual polygon.
 - `/kept` — your trail. Cards with sigil + date + headline + `compare ↔` toggle + `forget`. Two-selection mode reveals a `compare →` banner.
@@ -78,7 +98,10 @@ A single scrolling page with five sections separated by hairlines, plus the cand
 src/
   app/
     layout.tsx                       — html shell, fonts, candle + sound toggle global
-    page.tsx                         — home: sections + Sea + sound toggle (in layout)
+    page.tsx                         — home: SiteHeader + ScrollingGallery, nothing else
+    cabinet/page.tsx                 — the case (HomeCabinet), off the scale axis
+    compass/page.tsx                 — the concern compass (ConcernField), off the axis
+    orb/page.tsx                     — plasma discs (PlasmaOrb), a peer of /plasma at the drop
     icon.svg                         — favicon (sigil-shaped)
     apple-icon.tsx                   — apple-touch icon (180x180 ImageResponse)
     opengraph-image.tsx              — site-wide OG (Cormorant + JetBrains)
@@ -102,7 +125,10 @@ src/
     Archive.tsx                      — filters + cards + imagine
     CandleMark.tsx                   — fixed candle SVG, flickers
     Colophon.tsx                     — page body
-    ConcernField.tsx                 — the compass (radar polygon, drag, tones)
+    ConcernField.tsx                 — /compass (radar polygon, drag, tones, the rose lens)
+    HomeCabinet.tsx                  — /cabinet (the gold armature, the gems, the embers)
+    PlasmaOrb.tsx                    — /orb (a population of plasma discs, one shader)
+    ScrollingGallery.tsx             — /, the paused-iframe gallery of every room
     ConcernSigil.tsx                 — small polygon glyph (reusable everywhere)
     KeptConstellation.tsx            — kept-readings-as-stars on the sea
     MorphText.tsx                    — paragraph crossfade
@@ -114,7 +140,7 @@ src/
     Sigil.tsx                        — the candle sigil (◦│)
     SiteFooter.tsx, SiteHeader.tsx   — nav
     SoundToggle.tsx                  — bottom-right "wake the sea" button
-    Threshold.tsx                    — hero + sea + constellation
+    Threshold.tsx                    — the old hero + sea + constellation (unmounted since the gallery)
 
   data/
     content.ts                       — concerns, presets, regions, objects, archive
@@ -403,7 +429,7 @@ If you're an agent or reviewer, here's the order I'd suggest you do this in:
 4. **Press `read the room →`**, then click the small sigil next to the permalink. You should hear ~12 seconds of music that is *this* night's specifically.
 5. **Type a question into "ask the room."** This is the only AI surface in the main flow. If the answer doesn't feel of-a-piece with the rest, the system prompt is wrong.
 6. Open `/atlas/spirit`, `/archive/the-harbor-system`, `/kept` (after keeping a couple of readings), and `/compare?a=<hash>&b=<hash>`.
-7. Open the home page on mobile (≤414px). Confirm: hero, sea, compass (single-column rows), atlas, archive cards all read. The compass drag is the only known weak interaction here; everything else should be solid.
+7. Open the home page on mobile (≤414px). Confirm the gallery scrolls, each card's room loads and the inactive ones stay paused. Then walk `/cabinet`, `/compass`, `/atlas/origin` and `/archive` at the same width: the case's ring collapses to its drawer, the compass reads single-column, the map and the cards hold. The compass drag is still the weakest interaction on a phone; everything else should be solid.
 
 Push back hardest on the **Known gaps & open questions** section. Items 2, 3, and 10 are the biggest live debates.
 

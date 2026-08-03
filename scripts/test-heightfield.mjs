@@ -249,16 +249,25 @@ const spread = (n, r) => Array.from({ length: n }, () => (rng() - 0.5) * r);
 // a set of measure zero. So the headline assertion compares an integral of
 // the analytic gradient against a difference of the height function —
 // two independent computations of the same number.
+//
+// The integrator's own resolution is part of the assertion. A ridged field
+// has a kink at every octave's fold, and the midpoint rule loses O(ds) at
+// each one — so with too few samples the number this compares against is
+// the quadrature's error, not the gradient's, and the threshold becomes a
+// race between them. Fewer paths, each integrated far more finely, keeps
+// the same budget and moves the measurement floor an order of magnitude
+// below the tolerance: at N = 12000 the residual converges like 1/N, which
+// is how one can tell it is the rule and not the gradient.
 for (const seed of [1, 0xbeef, 0x5eed, 991]) {
   let worstRel = 0;
-  for (let k = 0; k < 40; k++) {
+  for (let k = 0; k < 14; k++) {
     const x0 = (rng() - 0.5) * 30;
     const z0 = (rng() - 0.5) * 30;
     const a = rng() * Math.PI * 2;
     const L = 0.4 + rng() * 0.8;
     const dx = Math.cos(a);
     const dz = Math.sin(a);
-    const N = 4000;
+    const N = 12000;
     const ds = L / N;
     let integral = 0;
     for (let i = 0; i < N; i++) {

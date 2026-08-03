@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useField } from "@/store/field";
 import { CONCERNS, PRESET_KEYS, PRESETS } from "@/data/content";
 import { getFieldAudio } from "@/lib/audio";
@@ -42,24 +43,28 @@ const VIEW = 640;
 const CX = VIEW / 2;
 const CY = VIEW / 2;
 
-function axisAngle(i: number) {
+// `rose` is the lens: twist (2 fingers) turns the whole compass, and every
+// geometry function below takes the same offset — the render path and the
+// hit-test path are literally one map, so what a hand sees is always what it
+// can grab however far the rose has been turned.
+function axisAngle(i: number, rose = 0) {
   // start at top, go clockwise
-  return -Math.PI / 2 + (i * Math.PI * 2) / 8;
+  return -Math.PI / 2 + (i * Math.PI * 2) / 8 + rose;
 }
 
-function axisVec(i: number) {
-  const a = axisAngle(i);
+function axisVec(i: number, rose = 0) {
+  const a = axisAngle(i, rose);
   return { x: Math.cos(a), y: Math.sin(a) };
 }
 
-function pointAt(i: number, value: number) {
-  const v = axisVec(i);
+function pointAt(i: number, value: number, rose = 0) {
+  const v = axisVec(i, rose);
   const r = (value / 100) * R_MAX;
   return { x: CX + v.x * r, y: CY + v.y * r };
 }
 
-function labelAt(i: number, pad = 32) {
-  const v = axisVec(i);
+function labelAt(i: number, pad = 32, rose = 0) {
+  const v = axisVec(i, rose);
   return {
     x: CX + v.x * (R_MAX + pad),
     y: CY + v.y * (R_MAX + pad),
@@ -73,6 +78,7 @@ function labelAt(i: number, pad = 32) {
 }
 
 export default function ConcernField() {
+  const router = useRouter();
   const concerns = useField((s) => s.concerns);
   const preset = useField((s) => s.preset);
   const setConcern = useField((s) => s.setConcern);
@@ -105,6 +111,12 @@ export default function ConcernField() {
   const [dilation, setDilation] = useState(0);
   const [agitated, setAgitated] = useState(false);
   const [night, setNight] = useState(false);
+  // the lens: how far the rose has been turned, in radians. Continuous with
+  // the twist, never stepped — a quarter turn is a quarter turn.
+  const [rose, setRose] = useState(0);
+  const roseRef = useRef(0);
+  // the dwell's charge, so a resting finger is visible from the tier it crosses
+  const [charging, setCharging] = useState<{ k: ConcernKey; grip: number } | null>(null);
 
   // map a client-space pointer to a value on a given axis
   const valueFromPointer = (k: ConcernKey, clientX: number, clientY: number) => {
@@ -117,7 +129,7 @@ export default function ConcernField() {
     if (!ctm) return null;
     const local = pt.matrixTransform(ctm.inverse());
     const i = RADIAL_ORDER.indexOf(k);
-    const v = axisVec(i);
+    const v = axisVec(i, roseRef.current);
     const dx = local.x - CX;
     const dy = local.y - CY;
     const t = (dx * v.x + dy * v.y) / R_MAX;
@@ -217,7 +229,7 @@ export default function ConcernField() {
     const nearestVertex = (x: number, y: number): { k: ConcernKey; d: number } | null => {
       let best: { k: ConcernKey; d: number } | null = null;
       RADIAL_ORDER.forEach((k, i) => {
-        const p = pointAt(i, concernsRef.current[k]);
+        const p = pointAt(i, concernsRef.current[k], roseRef.current);
         const d = Math.hypot(p.x - x, p.y - y);
         if (!best || d < best.d) best = { k, d };
       });
@@ -246,22 +258,27 @@ export default function ConcernField() {
     // center gathers toward the keep
     const center = { active: false, fired: false };
 
-    // Exemptions, stated rather than forced: the compass has exactly one
-    // representation — the polygon itself, whose geometry (axisAngle /
-    // pointAt) is also the hit-test math for the founding vertex drag.
-    // Rotating or panning that view would desync what a hand sees from
-    // what it can grab, for a "lens" or "frame" this room doesn't
-    // otherwise have — so twist (2 fingers) and pan2 are left unbound.
-    // The compass also has no world of its own to hold a season or
-    // weather (it is one fixed shape, not a place with a slow cycle), so
-    // three-finger twist and three-finger drag are left unbound too.
+    // The lens, the season and the weather, which an earlier pass left
+    // unbound on the reasoning that rotating the view would desync what a
+    // hand sees from what it can grab. It would have — but only because the
+    // rotation was not threaded through the geometry. `axisAngle(i, rose)`
+    // now feeds the render path AND `valueFromPointer` / `nearestVertex`
+    // both, so the rose can turn freely and the grab still lands on the
+    // bead under the finger. Only pan2 stays unbound, and it stays unbound
+    // for the reason every yielded-frame room has: there is no camera here
+    // to move.
     let tuttiTimer: ReturnType<typeof setTimeout> | null = null;
+    let seasonAcc = 0;
+    let chargeTarget: { k: ConcernKey; from: number } | null = null;
     const detach = attachGestures(svg as unknown as HTMLElement, {
       tap: (e) => {
         if (e.fingers === 2) {
-          // step back: the compass has no camera of its own, so this
-          // steps back up the page — the same retreat a raised lens owes.
-          document.getElementById("threshold")?.scrollIntoView({ behavior: "smooth", block: "start" });
+          // step back: the compass has no camera of its own, so the frame
+          // retreats the only way it can — the rose returns to true north
+          // and the page steps back to the top of the room.
+          setRose(0);
+          roseRef.current = 0;
+          window.scrollTo({ top: 0, behavior: "smooth" });
           try { haptics.tap(); } catch { /* noop */ }
           return;
         }
@@ -285,6 +302,52 @@ export default function ConcernField() {
         pulseVoice(hit.k, 160);
         try { haptics.ripple(0.2 + e.intensity * 0.4); } catch { /* noop */ }
         recordTape("ripple", 0.3 + e.intensity * 0.4, hit.k);
+      },
+      twist: (e) => {
+        if (e.phase !== "move") return;
+        if (e.fingers === 3) {
+          // season — the room's slow cycle is the run of named presets, and
+          // three fingers walk it forward or back. Continuous in the angle:
+          // a quarter turn is one preset, and a tenth of a turn is a tenth
+          // of the way there, so nothing latches.
+          seasonAcc += e.angle;
+          const step = Math.PI / 2;
+          while (Math.abs(seasonAcc) >= step) {
+            const direction = seasonAcc > 0 ? 1 : -1;
+            seasonAcc -= direction * step;
+            const st = useField.getState();
+            const at = PRESET_KEYS.indexOf(st.preset ?? PRESET_KEYS[0]);
+            const from = at >= 0 ? at : 0;
+            const next = PRESET_KEYS[(from + direction + PRESET_KEYS.length) % PRESET_KEYS.length];
+            st.applyPreset(next);
+            try { getFieldAudio().bell(); } catch { /* noop */ }
+            try { haptics.detent(); } catch { /* noop */ }
+          }
+          return;
+        }
+        // lens — the rose turns under the hand; which concern sits at the
+        // top is the level of description this surface can change.
+        roseRef.current += e.angle;
+        setRose(roseRef.current);
+        try { haptics.lens(); } catch { /* noop */ }
+      },
+      drag: (e) => {
+        if (e.fingers !== 3) return;
+        // weather — a gust across the rose. Every concern downwind gains
+        // what the upwind ones lose, in proportion to how squarely it faces
+        // the push, so the shape leans without the total running away.
+        const mag = Math.hypot(e.dx, e.dy);
+        if (mag < 0.001) return;
+        const ux = e.dx / mag;
+        const uy = e.dy / mag;
+        const gust = Math.min(3.5, mag * 0.06);
+        const st = useField.getState();
+        RADIAL_ORDER.forEach((k, i) => {
+          const v = axisVec(i, roseRef.current);
+          const lean = v.x * ux + v.y * uy;
+          const now = concernsRef.current[k] ?? 50;
+          st.setConcern(k, Math.max(0, Math.min(100, Math.round(now + lean * gust))));
+        });
       },
       rhythm: (e) => {
         // a steady tapped tempo: the dominant concern's voice falls into
@@ -322,7 +385,9 @@ export default function ConcernField() {
         if (e.fingers !== 1 || draggingRef.current) return;
         if (e.phase === "release") {
           center.active = false;
+          chargeTarget = null;
           setCeremony(0);
+          setCharging(null);
           return;
         }
         if (e.phase === "enter") {
@@ -331,9 +396,33 @@ export default function ConcernField() {
             local && Math.hypot(local.x - CX, local.y - CY) < R_MAX * 0.38,
           );
           center.fired = false;
+          chargeTarget = null;
+          if (!center.active && local) {
+            // a hold out on the rose charges the axis it landed on
+            const hit = nearestVertex(local.x, local.y);
+            if (hit && hit.d <= 96) chargeTarget = { k: hit.k, from: concernsRef.current[hit.k] ?? 50 };
+          }
           if (!center.active) return;
         }
-        if (!center.active) return;
+        if (!center.active) {
+          // dwell (tier >= 2) — the charge. A resting finger grows its
+          // concern outward continuously, so 900ms and 2400ms leave
+          // measurably different weights, and it is visible from the tier
+          // it crosses rather than only when the hand comes off.
+          if (!chargeTarget) return;
+          if (e.tier >= 2) {
+            const grip = Math.max(0, 1 - Math.exp(-(e.elapsed - THRESHOLDS.dwellMs) / 1400));
+            const grown = chargeTarget.from + (100 - chargeTarget.from) * grip;
+            setConcern(chargeTarget.k, Math.max(0, Math.min(100, Math.round(grown))));
+            setCharging({ k: chargeTarget.k, grip });
+            if (e.tier >= 3) {
+              // holding past the ceremony tier out here is still the charge,
+              // deepening — the solemn act belongs to the center alone
+              try { haptics.ripple(0.2 + grip * 0.5); } catch { /* noop */ }
+            }
+          }
+          return;
+        }
         setCeremony(Math.min(1, e.elapsed / THRESHOLDS.ceremonyMs));
         // the ceremony: the reading is kept — the same act as the keep
         // button, spoken by the oldest surface's own hand
@@ -409,18 +498,18 @@ export default function ConcernField() {
       pulseTimers.forEach((t) => clearTimeout(t));
       try { getFieldAudio().releaseAllConcernTones(); } catch { /* noop */ }
     };
-  }, [recordTape]);
+  }, [recordTape, setConcern]);
 
   // build the polygon points string
   const polygonPoints = RADIAL_ORDER.map((k, i) => {
-    const p = pointAt(i, concerns[k]);
+    const p = pointAt(i, concerns[k], rose);
     return `${p.x},${p.y}`;
   }).join(" ");
 
   // preset ghost — preview the polygon shape of a hovered preset
   const ghostPoints = hoverPreset && PRESETS[hoverPreset]
     ? RADIAL_ORDER.map((k, i) => {
-        const p = pointAt(i, PRESETS[hoverPreset][k]);
+        const p = pointAt(i, PRESETS[hoverPreset][k], rose);
         return `${p.x},${p.y}`;
       }).join(" ")
     : null;
@@ -496,7 +585,7 @@ export default function ConcernField() {
 
               {/* axes */}
               {RADIAL_ORDER.map((k, i) => {
-                const end = pointAt(i, 100);
+                const end = pointAt(i, 100, rose);
                 const active = dragging === k || hovering === k;
                 return (
                   <line
@@ -544,7 +633,7 @@ export default function ConcernField() {
               {/* labels + readouts */}
               {RADIAL_ORDER.map((k, i) => {
                 const meta = CONCERNS.find((c) => c.id === k)!;
-                const l = labelAt(i, 36);
+                const l = labelAt(i, 36, rose);
                 const value = concerns[k];
                 const active = dragging === k || hovering === k;
                 return (
@@ -584,7 +673,7 @@ export default function ConcernField() {
 
               {/* vertices (last so they sit on top) */}
               {RADIAL_ORDER.map((k, i) => {
-                const p = pointAt(i, concerns[k]);
+                const p = pointAt(i, concerns[k], rose);
                 const active = dragging === k;
                 const hover = hovering === k;
                 return (
@@ -636,7 +725,7 @@ export default function ConcernField() {
               <g pointerEvents="none">
                 {/* tap glow: the vertex-pull halo, bloomed by tap intensity */}
                 {tapGlow && (() => {
-                  const p = pointAt(RADIAL_ORDER.indexOf(tapGlow.k), concerns[tapGlow.k]);
+                  const p = pointAt(RADIAL_ORDER.indexOf(tapGlow.k), concerns[tapGlow.k], rose);
                   return (
                     <circle
                       key={`glow-${tapGlow.key}`}
@@ -650,7 +739,7 @@ export default function ConcernField() {
                 })()}
                 {/* rhythm beat: the dominant concern's vertex answers the tempo */}
                 {beat && (() => {
-                  const p = pointAt(RADIAL_ORDER.indexOf(beat.k), concerns[beat.k]);
+                  const p = pointAt(RADIAL_ORDER.indexOf(beat.k), concerns[beat.k], rose);
                   return (
                     <circle
                       key={`beat-${beat.key}`}
@@ -661,6 +750,23 @@ export default function ConcernField() {
                       fill="none"
                       stroke="var(--candle)"
                       strokeWidth={1.2}
+                    />
+                  );
+                })()}
+                {/* dwell: the charge gathering under a resting finger, out on
+                    the rose — visible from the tier it crosses, and it keeps
+                    thickening for as long as the hand stays */}
+                {charging && (() => {
+                  const p = pointAt(RADIAL_ORDER.indexOf(charging.k), concerns[charging.k], rose);
+                  return (
+                    <circle
+                      cx={p.x}
+                      cy={p.y}
+                      r={9 + charging.grip * 26}
+                      fill={`rgba(200,115,42,${0.06 + charging.grip * 0.16})`}
+                      stroke="var(--candle)"
+                      strokeWidth={0.8 + charging.grip * 2.2}
+                      strokeOpacity={0.3 + charging.grip * 0.5}
                     />
                   );
                 })()}
@@ -740,7 +846,18 @@ export default function ConcernField() {
         <div className="concern-field__next-row" style={{ marginTop: 56, display: "flex", justifyContent: "flex-end" }}>
           <button
             className="concern-field__next"
-            onClick={() => document.getElementById("reading")?.scrollIntoView({ behavior: "smooth" })}
+            onClick={() => {
+              // the polygon read back to you — the same reading the ceremony
+              // keeps, at its own permalink
+              const st = useField.getState();
+              const reading = buildReading({
+                concerns: st.concerns,
+                region: st.region,
+                carriedObject: st.carriedObject,
+              });
+              try { getFieldAudio().bell(); } catch { /* noop */ }
+              router.push(`/reading/${reading.hash}`);
+            }}
             style={{
               background: "none",
               border: "1px solid var(--rule)",

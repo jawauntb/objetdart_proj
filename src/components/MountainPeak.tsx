@@ -79,19 +79,17 @@ import {
   type Cairn,
 } from "@/lib/mountain";
 import {
-  EYE_KM,
   FOG_BREATH_KM,
-  OCTAVES_MARCH,
-  OCTAVES_SHADE,
   MARCH_REFINE,
   MARCH_STEPS,
+  OCTAVES_MARCH,
+  OCTAVES_SHADE,
   SUN_NIGHT_ELEVATION,
   callAnswer,
   echoMidi,
   fogSurfaceAt,
   fogTransmittance,
   groundAt,
-  heightAt,
   heightfieldGlsl,
   materialFromGround,
   packHorns,
@@ -99,7 +97,9 @@ import {
   restingFogAltitude,
   seedOffset,
   snowlineKm,
+  stationFor,
   sunDirection,
+  viewBearingFor,
   windVector,
   windVoice,
   type SkyPalette,
@@ -137,8 +137,6 @@ const FOV = 0.62;
 /** Two-finger tap steps the frame back — a wider lens, never past this. */
 const FOV_MAX = 1.05;
 const FOV_STEP = 0.11;
-/** How far above the inversion the wanderer stands, in km. */
-const STATION_ABOVE_FOG_KM = 0.11;
 /** A cairn is reachable within this fraction of the frame's height. */
 const CAIRN_TOUCH_R = 0.06;
 
@@ -343,62 +341,19 @@ export default function MountainPeak() {
     const horns = packHorns(SEED);
     const offset = seedOffset(SEED);
 
-    // ——— where the wanderer stands ————————————————————————————
-    // NOT on the apex. A marched room cannot fake the station: the outcrop
-    // stands 1.15 km over the ridges, so an eye set a hundred metres above
-    // the inversion at the origin is buried three quarters of a kilometre
-    // inside its own mountain and every ray hits rock on its first step.
-    // So the ledge is found rather than assumed — walk out from the apex
-    // along each bearing until the ground has fallen to the altitude the
-    // composition wants, and stand on the flank that reaches it soonest.
+    // ——— where the wanderer stands, and what he is looking at ————
+    // Both are laws of the field, not of the renderer, so both live in
+    // heightfield.ts and are pinned in node (scripts/test-heightfield.mjs):
+    // the eye stands strictly above the ground under it, the ground falls
+    // away in front of it, and the frame holds range as well as sky. A
+    // marched room cannot fake the station the way a painted one could —
+    // stand on the apex and the whole frame is the rock you are inside.
     const restingFog = restingFogAltitude(SEED);
-    const stationTarget = restingFog + STATION_ABOVE_FOG_KM;
-    let stX = 0;
-    let stZ = 0;
-    let stBearing = 0;
-    let nearest = Infinity;
-    for (let b = 0; b < 64; b++) {
-      const a = (b / 64) * Math.PI * 2;
-      for (let s = 0.12; s <= 3; s += 0.04) {
-        const x = Math.sin(a) * s;
-        const z = Math.cos(a) * s;
-        if (heightAt(x, z, SEED, OCTAVES_MARCH) <= stationTarget) {
-          if (s < nearest) {
-            nearest = s;
-            stX = x;
-            stZ = z;
-            stBearing = a;
-          }
-          break;
-        }
-      }
-    }
-    // The eye stands EYE_KM over the higher of the two terrains — the one
-    // the marcher walks and the one the shader draws (heightfield.ts
-    // `eyeAltitude`, the same bug it was written from).
-    const eyeY =
-      Math.max(
-        heightAt(stX, stZ, SEED, OCTAVES_MARCH),
-        heightAt(stX, stZ, SEED, OCTAVES_SHADE),
-      ) + EYE_KM;
-    // He faces outward, the summit at his back, and looks for the crest
-    // that subtends the largest angle from this station — every seed gets
-    // its own peak to look at, held a little off centre. One scan, at mount.
-    let bestBearing = stBearing;
-    let bestAngle = -Infinity;
-    for (let b = 0; b < 192; b++) {
-      const a = (b / 192) * Math.PI * 2;
-      // never back over the outcrop he is standing on
-      if (Math.cos(a - stBearing) < -0.34) continue;
-      for (const d of [1.5, 2.2, 3, 4, 5.5, 7, 9]) {
-        const ang =
-          (heightAt(stX + Math.sin(a) * d, stZ + Math.cos(a) * d, SEED, OCTAVES_MARCH) - eyeY) / d;
-        if (ang > bestAngle) {
-          bestAngle = ang;
-          bestBearing = a;
-        }
-      }
-    }
+    const station = stationFor(SEED);
+    const stX = station.x;
+    const stZ = station.z;
+    const eyeY = station.y;
+    const bestBearing = viewBearingFor(station, SEED);
 
     let cairns: Cairn[] = [];
     try {
