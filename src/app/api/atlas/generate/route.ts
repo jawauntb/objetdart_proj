@@ -81,7 +81,16 @@ export async function POST(request: Request) {
     }
 
     try {
-      const result = await generateAtlasImage(input, providerConfig, request.signal);
+      // Final GPT Image calls routinely outlive edge/proxy patience. Tying them
+      // to request.signal marks long still-running draws as "cancelled" when the
+      // client connection drops, so the browser never receives the upgrade and
+      // the sheet stays on Flux forever. Preview stays abortable; finals use the
+      // provider timeout alone.
+      const result = await generateAtlasImage(
+        input,
+        providerConfig,
+        phase === "final" ? undefined : request.signal,
+      );
       return json(
         {
           ...result,

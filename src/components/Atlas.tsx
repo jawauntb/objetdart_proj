@@ -1351,17 +1351,52 @@ export default function Atlas() {
       }
     };
 
-    const results = await Promise.allSettled([
-      requestPhase("preview"),
-      requestPhase("final"),
-    ]);
-    if (controller.signal.aborted || !generationIsCurrent()) return;
-    const rejected = results.filter((result) => result.status === "rejected");
-    if (rejected.length === 2) {
-      const failure = rejected[0] as PromiseRejectedResult;
-      setStatus(failure.reason instanceof Error ? failure.reason.message : "The atlas held its present shape.");
+    // Preview first, then final. Parallel finals were dying as cancelled/408 when
+    // the long GPT Image connection outlived the edge — the sheet stuck on Flux.
+    // Sequential + one retry gives the final a fresh request after Klein lands.
+    let previewFailed = false;
+    let finalFailed = false;
+    try {
+      await requestPhase("preview");
+    } catch (error) {
+      previewFailed = true;
+      if (controller.signal.aborted || !generationIsCurrent()) {
+        abortRef.current = null;
+        generationIdRef.current = null;
+        phaseRankRef.current = 0;
+        generationViewRef.current = null;
+        generationIntentRef.current = null;
+        setBusy(false);
+        setBusyFocus(null);
+        return;
+      }
+      setStatus(error instanceof Error ? error.message : "The atlas held its present shape.");
+    }
+    if (!controller.signal.aborted && generationIsCurrent()) {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          await requestPhase("final");
+          finalFailed = false;
+          break;
+        } catch {
+          finalFailed = true;
+          if (controller.signal.aborted || !generationIsCurrent()) break;
+        }
+      }
+    }
+    if (controller.signal.aborted || !generationIsCurrent()) {
+      abortRef.current = null;
+      generationIdRef.current = null;
+      phaseRankRef.current = 0;
+      generationViewRef.current = null;
+      generationIntentRef.current = null;
+      setBusy(false);
+      setBusyFocus(null);
+      return;
+    }
+    if (previewFailed && finalFailed) {
       setRenderPhase("error");
-    } else if (results[1].status === "rejected" && phaseRankRef.current === 1) {
+    } else if (finalFailed && phaseRankRef.current === 1) {
       setStatus("the quick chart is ready · the final ink held back");
     } else if (phaseRankRef.current > 0 && (mode === "generate" || mode === "zoom" || mode === "shift")) {
       // First successful place is depth 0 → cardinal4. Later landings use diagonal2.
@@ -1406,23 +1441,25 @@ export default function Atlas() {
     invalidateGeneration();
     freeZoomParentRef.current = null;
     lastZoomRequestKeyRef.current = null;
-    const nextZoom = Math.max(2.15, Math.min(3, viewRef.current.zoom + 0.85));
-    renderedZoomRef.current = nextZoom;
-    const next = boundView({
-      zoom: nextZoom,
-      x: metricsRef.current.width / 2 - hotspot.x * metricsRef.current.mapWidth * nextZoom,
-      y: metricsRef.current.height / 2 - hotspot.y * metricsRef.current.mapHeight * nextZoom,
-    }, metricsRef.current);
+    activeNeighborDirectionRef.current = null;
+    clearNeighborSheets();
+    // A mark is a door into that thing's own world — a coin opens a coin map,
+    // not a refined patch of the parent Catalan sheet.
+    const subject = (hotspot.prompt || hotspot.label).replace(/ +/g, " ").trim();
+    generationDepthRef.current = 0;
+    setGenerationDepth(0);
+    setConcept(subject);
     setFocusedId(hotspot.id);
     setFocusedLabel(hotspot.label);
     setRegion(hotspot.regionId);
-    commitView(next, { animate: true });
+    renderedZoomRef.current = 1;
+    commitView(centerView(metricsRef.current, 1), { animate: true });
     // the region halo answers with the same weight the finger gave it
     const tapPoint = pointerStartRef.current;
     if (tapPoint) {
       setPulse({ x: tapPoint.x, y: tapPoint.y, key: Date.now(), intensity: lastTapIntensityRef.current });
     }
-    setStatus("diffusing detail around " + hotspot.label.toLowerCase());
+    setStatus("opening a world of " + subject.toLowerCase());
     setRenderPhase("local");
     try {
       getFieldAudio().chime();
@@ -1430,12 +1467,12 @@ export default function Atlas() {
     } catch {
       // Sound and haptics are progressive enhancement.
     }
-    recordTape("region", 0.84, "atlas/zoom/" + hotspot.id);
+    recordTape("region", 0.84, "atlas/enter/" + hotspot.id);
     scheduleGeneration({
-      mode: "refine",
-      subjectPrompt: [concept, hotspot.prompt || hotspot.label].filter(Boolean).join(" · "),
-      focus: { x: hotspot.x, y: hotspot.y, zoom: nextZoom },
-    }, 480);
+      mode: "generate",
+      subjectPrompt: subject,
+      optimisticSeeds: localSeeds(subject),
+    }, 280);
   };
 
   const applyNeighborSheet = (direction: Direction, neighbor: NeighborSheet) => {
