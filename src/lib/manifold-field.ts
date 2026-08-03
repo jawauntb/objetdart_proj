@@ -142,6 +142,94 @@ export function geodesicStep(
 }
 
 // ————————————————————————————————————————————————————————————————————
+// Seasons of the law — the metric's own weather. The room's field turns
+// slowly through four regimes on its own clock, each the same masses
+// wearing a different law: attract (the familiar fabric), drag (every
+// well also swirls — a Lense-Thirring hand, tangential, one power
+// steeper in falloff than the pull), expand (attraction thinned under an
+// outward term that grows with distance from the frame's anchor), repel
+// (the far side of the fold — the same field, sign reversed). The one
+// pinned law survives every season: light bends, light never hurries.
+
+export type LawSeason = "attract" | "drag" | "expand" | "repel";
+export const LAW_SEASONS: readonly LawSeason[] = ["attract", "drag", "expand", "repel"];
+
+/** How much of the pull survives an expand season. */
+export const EXPAND_BIND = 0.35;
+/** Tangential gain of the drag season's swirl. */
+export const DRAG_SWIRL = 2.6;
+
+export function seasonAccelAt(
+  season: LawSeason,
+  masses: readonly MassPoint[],
+  x: number,
+  y: number,
+  g: number,
+  soft: number = SOFTENING,
+  anchorX = 0,
+  anchorY = 0,
+  hubble = 0,
+): { ax: number; ay: number } {
+  const base = accelAt(masses, x, y, g, soft);
+  if (season === "attract") return base;
+  if (season === "repel") return { ax: -base.ax, ay: -base.ay };
+  if (season === "drag") {
+    // the swirl: per-mass, at right angles to the pull, magnitude
+    // ~ g·m·soft/d³ — one power steeper than the radial 1/r², so the
+    // twist lives near the wells and the far field stays Newtonian
+    let tx = 0;
+    let ty = 0;
+    const s2 = soft * soft;
+    for (const p of masses) {
+      const dx = p.x - x;
+      const dy = p.y - y;
+      const d2 = dx * dx + dy * dy + s2;
+      const inv = (g * p.m * soft) / (d2 * d2);
+      tx += -dy * inv * DRAG_SWIRL;
+      ty += dx * inv * DRAG_SWIRL;
+    }
+    return { ax: base.ax + tx, ay: base.ay + ty };
+  }
+  // expand: the pull thinned, plus an outward term linear in distance
+  return {
+    ax: base.ax * EXPAND_BIND + (x - anchorX) * hubble,
+    ay: base.ay * EXPAND_BIND + (y - anchorY) * hubble,
+  };
+}
+
+/**
+ * geodesicStep under a season of the law. Identical contract: bend,
+ * renormalize to exactly c, move; a rest ray stays at rest. The speed
+ * limit is season-proof — that is the point of pinning it here.
+ */
+export function seasonGeodesicStep(
+  season: LawSeason,
+  masses: readonly MassPoint[],
+  ray: Ray,
+  dtSec: number,
+  c: number,
+  g: number,
+  soft: number = SOFTENING,
+  anchorX = 0,
+  anchorY = 0,
+  hubble = 0,
+): Ray {
+  const { ax, ay } = seasonAccelAt(season, masses, ray.x, ray.y, g, soft, anchorX, anchorY, hubble);
+  let vx = ray.vx + ax * dtSec;
+  let vy = ray.vy + ay * dtSec;
+  const sp = Math.sqrt(vx * vx + vy * vy);
+  if (sp > 0) {
+    const r = c / sp;
+    vx *= r;
+    vy *= r;
+  } else {
+    vx = ray.vx;
+    vy = ray.vy;
+  }
+  return { x: ray.x + vx * dtSec, y: ray.y + vy * dtSec, vx, vy };
+}
+
+// ————————————————————————————————————————————————————————————————————
 // The cosmic web: the fabric's grain is the large-scale structure of the
 // universe — luminous filaments meeting at nodes, dark voids between.
 // Everything here is a deterministic function of one integer seed.

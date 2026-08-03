@@ -61,16 +61,17 @@ import { useField } from "@/store/field";
 import { SCALE_BANDS, spectralRegisterFor, type ScaleBand } from "@/lib/scale";
 import {
   SOFTENING,
-  accelAt,
   boundFraction,
   buildCosmicWeb,
   foldPoint,
-  geodesicStep,
   placeMotes,
   rimSteerRay,
   scaleFactor,
+  seasonAccelAt,
+  seasonGeodesicStep,
   timeDilation,
   wellDepth,
+  type LawSeason,
   type MassPoint,
   type Ray,
 } from "@/lib/manifold-field";
@@ -935,6 +936,40 @@ export default function ManifoldFold() {
     };
     const rulerY = () => height * 0.84;
 
+    // ————— seasons of the law — the metric's own weather —————
+    // The field turns through four regimes on its own slow clock: the
+    // familiar pull, then a swirling frame-drag, then expansion, then a
+    // brief spell of the fold's far side where gravity pushes. Nothing
+    // is asked of the hand; the room simply does not sit still. Every
+    // gesture keeps its meaning inside whichever season is blowing, and
+    // the speed of light holds through all four (tested).
+    const SEASON_SPANS: Array<{ s: LawSeason; ms: number }> = [
+      { s: "attract", ms: 75000 },
+      { s: "drag", ms: 45000 },
+      { s: "expand", ms: 45000 },
+      { s: "repel", ms: 25000 },
+    ];
+    const SEASON_CYCLE = SEASON_SPANS.reduce((acc, sp) => acc + sp.ms, 0);
+    const seasonEpoch = performance.now();
+    const seasonAt = (nowMs: number): LawSeason => {
+      let tt = (nowMs - seasonEpoch) % SEASON_CYCLE;
+      for (const span of SEASON_SPANS) {
+        if (tt < span.ms) return span.s;
+        tt -= span.ms;
+      }
+      return "attract";
+    };
+    let currentSeason: LawSeason = "attract";
+    const SEASON_NOTE: Record<LawSeason, number> = { attract: 26, drag: 33, expand: 21, repel: 29 };
+    const SEASON_WASH: Record<LawSeason, string | null> = {
+      attract: null,
+      drag: "rgba(150, 120, 220, 0.050)",
+      expand: "rgba(90, 140, 190, 0.050)",
+      repel: "rgba(210, 120, 70, 0.045)",
+    };
+    /** Expansion's outward term, px/s² per px from the frame's center. */
+    const HUBBLE_PX = 0.02;
+
     /** Reduced motion: light as a few still geodesic curves, bent honestly
      *  (and straightened when the lens shows the bare metric). */
     const rebuildStaticRays = (pts: MassPoint[]) => {
@@ -947,7 +982,10 @@ export default function ManifoldFold() {
         let r: Ray = { x: -10, y: y0, vx: lightSpeed, vy: 0 };
         const path = [{ x: r.x, y: r.y }];
         for (let s = 0; s < 420; s++) {
-          r = geodesicStep(pts, r, dt, lightSpeed, gEff, SOFTENING);
+          r = seasonGeodesicStep(
+            currentSeason, pts, r, dt, lightSpeed, gEff, SOFTENING,
+            width / 2, height / 2, HUBBLE_PX * (1 - lensSnapped),
+          );
           // the fold holds even stilled light: rim streams curl, never exit
           if (lensSnapped === 0) {
             r = rimSteerRay(r, width / 2, height / 2, width / 2, height / 2, dt, lightSpeed);
@@ -967,6 +1005,16 @@ export default function ManifoldFold() {
       const delta = Math.min(64, now - last);
       last = now;
       const dt = delta / 1000;
+
+      // the season turns on its own; the room marks the crossing once —
+      // a low note, a touch, the still rays re-bent under the new law
+      const seasonNow = seasonAt(now);
+      if (seasonNow !== currentSeason) {
+        currentSeason = seasonNow;
+        staticRaysStale = true;
+        note(SEASON_NOTE[currentSeason], 700);
+        try { haptics.tap(); } catch { /* noop */ }
+      }
 
       timeScale += (timeScaleTarget - timeScale) * Math.min(1, dt * 5);
       rayScale += (rayScaleTarget - rayScale) * Math.min(1, dt * 5);
@@ -1012,6 +1060,13 @@ export default function ManifoldFold() {
       bg.addColorStop(1, "#060810");
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, width, height);
+      // the season's veil — the same room in a different weather of law,
+      // gone entirely when the lens shows the bare metric
+      const wash = SEASON_WASH[currentSeason];
+      if (wash && lens < 1) {
+        ctx.fillStyle = wash;
+        ctx.fillRect(0, 0, width, height);
+      }
       const breathA = reduce ? 0.05 : 0.04 + Math.sin(localT * Math.PI * 2 * 0.14) * 0.015;
       const halo = ctx.createRadialGradient(width * 0.5, height * 0.42, 20, width * 0.5, height * 0.42, Math.max(width, height) * 0.8);
       halo.addColorStop(0, `rgba(120, 150, 210, ${breathA + lens * 0.02})`);
@@ -1239,7 +1294,10 @@ export default function ManifoldFold() {
         const stepDt = (dt * rayScale) / 4;
         for (const r of rays) {
           for (let s = 0; s < 4; s++) {
-            const st = geodesicStep(pts, r, stepDt, lightSpeed, gEff, SOFTENING);
+            const st = seasonGeodesicStep(
+              currentSeason, pts, r, stepDt, lightSpeed, gEff, SOFTENING,
+              width / 2, height / 2, HUBBLE_PX * (1 - lens),
+            );
             r.x = st.x; r.y = st.y; r.vx = st.vx; r.vy = st.vy;
             // frame-dragging: the wind leans on the light too (then the
             // step's renormalization keeps the speed limit honest)
@@ -1278,7 +1336,10 @@ export default function ManifoldFold() {
             }
           }
           // doppler tint: falling in leans blue, climbing out leans red
-          const a = accelAt(pts, r.x, r.y, gEff, SOFTENING);
+          const a = seasonAccelAt(
+            currentSeason, pts, r.x, r.y, gEff, SOFTENING,
+            width / 2, height / 2, HUBBLE_PX * (1 - lens),
+          );
           const am = Math.hypot(a.ax, a.ay);
           let w = 0;
           if (am > 1) {

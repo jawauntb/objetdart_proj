@@ -304,6 +304,80 @@ function runRay(masses, ray, steps, dt = 1 / 240) {
   assert.ok(returned, "the curl carries the ray back inward, not just around");
 }
 
+// ————— seasons of the law: four regimes, one speed limit —————
+{
+  const { seasonAccelAt, seasonGeodesicStep, LAW_SEASONS, EXPAND_BIND } = loadTsModule(
+    "src/lib/manifold-field.ts",
+  );
+  const masses = [{ x: 200, y: 200, m: 2 }];
+  const probe = { x: 320, y: 200 }; // due east of the well
+
+  // repel is the exact negation of attract, everywhere sampled
+  for (const [px, py] of [[320, 200], [140, 260], [500, 90]]) {
+    const a = seasonAccelAt("attract", masses, px, py, 900);
+    const r = seasonAccelAt("repel", masses, px, py, 900);
+    assert.ok(
+      Math.abs(a.ax + r.ax) < 1e-12 && Math.abs(a.ay + r.ay) < 1e-12,
+      "repel mirrors attract exactly",
+    );
+  }
+
+  // drag adds a purely tangential hand: the radial projection of the
+  // season's extra acceleration is zero, the tangential part is not
+  {
+    const a = seasonAccelAt("attract", masses, probe.x, probe.y, 900);
+    const d = seasonAccelAt("drag", masses, probe.x, probe.y, 900);
+    const ex = d.ax - a.ax;
+    const ey = d.ay - a.ay;
+    const radial = (ex * (masses[0].x - probe.x) + ey * (masses[0].y - probe.y));
+    assert.ok(Math.abs(radial) < 1e-9, "the swirl does not pull, only turns");
+    assert.ok(Math.hypot(ex, ey) > 1e-6, "the swirl exists");
+  }
+
+  // and the swirl dies faster with distance than the pull does
+  {
+    const swirlAt = (dist) => {
+      const a = seasonAccelAt("attract", masses, 200 + dist, 200, 900);
+      const d = seasonAccelAt("drag", masses, 200 + dist, 200, 900);
+      return Math.hypot(d.ax - a.ax, d.ay - a.ay);
+    };
+    const pullAt = (dist) => {
+      const a = seasonAccelAt("attract", masses, 200 + dist, 200, 900);
+      return Math.hypot(a.ax, a.ay);
+    };
+    const swirlRatio = swirlAt(240) / swirlAt(120);
+    const pullRatio = pullAt(240) / pullAt(120);
+    assert.ok(swirlRatio < pullRatio, "frame-dragging is a near-field hand");
+  }
+
+  // expand pushes outward from the anchor, harder farther away, and
+  // thins the pull by exactly EXPAND_BIND when no hubble term is given
+  {
+    const near = seasonAccelAt("expand", [], 300, 250, 900, 26, 250, 250, 0.02);
+    const far = seasonAccelAt("expand", [], 450, 250, 900, 26, 250, 250, 0.02);
+    assert.ok(near.ax > 0 && far.ax > near.ax, "the recession grows with distance");
+    const a = seasonAccelAt("attract", masses, probe.x, probe.y, 900);
+    const e = seasonAccelAt("expand", masses, probe.x, probe.y, 900, 26, probe.x, probe.y, 0);
+    assert.ok(
+      Math.abs(e.ax - a.ax * EXPAND_BIND) < 1e-12,
+      "expansion thins the pull to its bound fraction",
+    );
+  }
+
+  // the speed limit is season-proof: after many steps under any law,
+  // every ray still moves at exactly c, and a rest ray stays at rest
+  for (const season of LAW_SEASONS) {
+    let ray = { x: 60, y: 190, vx: 300, vy: 0 };
+    for (let s = 0; s < 200; s++) {
+      ray = seasonGeodesicStep(season, masses, ray, 1 / 120, 300, 900, 26, 250, 250, 0.02);
+    }
+    const sp = Math.hypot(ray.vx, ray.vy);
+    assert.ok(Math.abs(sp - 300) < 1e-9, `light never hurries in the ${season} season`);
+    const still = seasonGeodesicStep(season, [], { x: 90, y: 90, vx: 0, vy: 0 }, 1 / 120, 300, 900);
+    assert.equal(Math.hypot(still.vx, still.vy), 0, "a rest ray on flat fabric stays at rest in every season");
+  }
+}
+
 console.log(
-  "manifold field ok: straight when flat, bent by mass, bounded, one speed of light — and now a seeded web, a breathing a(t), held neighborhoods, a closed fold",
+  "manifold field ok: straight when flat, bent by mass, bounded, one speed of light — and now a seeded web, a breathing a(t), held neighborhoods, a closed fold, four seasons of the law under one speed limit",
 );
