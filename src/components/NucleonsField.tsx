@@ -1600,7 +1600,9 @@ export default function NucleonsField() {
         retireScale = 1 + u * 0.4;
       }
       const breathScale = reduce ? 1 : 1 + Math.sin(breath + d.spinPhase) * 0.03;
-      const R = radiusOf(d.z, d.n) * grow * breathScale * retireScale * (1 + d.ring * 0.1);
+      // the swell of a fresh capture: the drop takes the nucleon in and
+      // settles back over a breath, so growth is something you watch happen
+      const R = radiusOf(d.z, d.n) * grow * breathScale * retireScale * (1 + d.ring * 0.1 + d.swell * 0.22);
       if (R < 1) return;
       const cx = d.nx * width;
       const cy = d.ny * height;
@@ -1815,6 +1817,11 @@ export default function NucleonsField() {
       windTargetX *= 0.985;
       windTargetY *= 0.985;
       tuttiPulse *= 0.94;
+      night += (nightTarget - night) * Math.min(1, dtReal * 0.0016);
+      gatherFade = Math.max(0, gatherFade - dtReal * 0.0022);
+      // the flux outlives the sweep that raised it — a wind you set going
+      const heat = 0.5 - 0.5 * Math.cos(season * Math.PI * 2);
+      flux = Math.max(0, flux - dtReal * 0.00022);
 
       // pending notes
       for (let i = pendingNotes.length - 1; i >= 0; i--) {
@@ -1824,23 +1831,41 @@ export default function NucleonsField() {
         }
       }
 
-      // the flux: a sustained wind keeps pulling neutrons out of the vacuum
+      // the flux: a sustained wind keeps pulling neutrons out of the vacuum,
+      // and it rains hard enough to read as rain. This is the r-process —
+      // the only road anything past iron has ever taken, here or anywhere.
       const windMag = Math.hypot(windX, windY);
-      if (windMag > 0.12 && frees.length < MAX_FREE) {
-        fluxDebt += windMag * dtReal * 0.012;
+      if (flux > 0.02 && frees.length < MAX_FREE) {
+        fluxDebt += flux * dtReal * 0.055;
         while (fluxDebt >= 1 && frees.length < MAX_FREE) {
           fluxDebt -= 1;
           const k = hash01(nowReal * 0.37 + frees.length);
-          const fromX = windX >= 0 ? -20 : width + 20;
-          const fromY = windY >= 0 ? -20 : height + 20;
-          const alongEdge = Math.abs(windX) > Math.abs(windY);
+          const dirX = windMag > 0.05 ? windX / Math.max(0.05, windMag) : 0;
+          const dirY = windMag > 0.05 ? windY / Math.max(0.05, windMag) : 1;
+          const alongEdge = Math.abs(dirX) > Math.abs(dirY);
+          const speed = 190 + flux * 260;
           spawnFree(
             0,
-            alongEdge ? fromX : k * width,
-            alongEdge ? k * height : fromY,
-            windX * 320,
-            windY * 320,
+            alongEdge ? (dirX >= 0 ? -20 : width + 20) : k * width,
+            alongEdge ? k * height : dirY >= 0 ? -20 : height + 20,
+            dirX * speed + (k - 0.5) * 40,
+            dirY * speed + (k - 0.5) * 40,
           );
+        }
+        const nowF = performance.now();
+        if (flux > 0.3 && nowF - lastFluxSoundAt > 900) {
+          lastFluxSoundAt = nowF;
+          note(30 + Math.round(flux * 8), 420);
+        }
+      }
+      // the furnace season rains on its own: leave the room warm and it goes
+      // on climbing the chart without a hand on it
+      if (heat > 0.35 && frees.length < MAX_FREE) {
+        ambientDebt += (heat - 0.35) * dtReal * 0.0016;
+        while (ambientDebt >= 1 && frees.length < MAX_FREE) {
+          ambientDebt -= 1;
+          const k = hash01(nowReal * 0.53 + frees.length * 7);
+          spawnFree(0, k * width, -18, (k - 0.5) * 60, 120 + heat * 120);
         }
       }
 
@@ -1850,6 +1875,7 @@ export default function NucleonsField() {
         d.spin *= Math.exp(-dt * 0.55);
         d.spinPhase += (reduce ? 0 : d.spin * 1.6 + 0.08) * dt;
         d.ring *= Math.exp(-dt * 1.9);
+        d.swell *= Math.exp(-dt * 1.5);
         if (d.growth < 1) d.growth = clamp01(d.growth + dt * 1.6);
         else d.closed = true;
 
@@ -1930,6 +1956,27 @@ export default function NucleonsField() {
           if (!reduce) {
             f.vx += tiltLeanX * 40 * dt * 60;
             f.vy += tiltLeanY * 40 * dt * 60;
+          }
+          // the capture cross-section: a neutron that comes near a drop is
+          // pulled the rest of the way in. It is why a flux works at all —
+          // and it is what makes the r-process steerable by hand instead of
+          // a lottery of near misses.
+          if (f.kind === 0) {
+            let bestD = Infinity;
+            let target: Nucleus | null = null;
+            for (const d of nuclei) {
+              if (d.retiringAt || !d.closed || d.sr <= 0) continue;
+              const dist = Math.hypot(f.x - d.sx, f.y - d.sy);
+              if (dist < d.sr * 5 + 60 && dist < bestD) {
+                bestD = dist;
+                target = d;
+              }
+            }
+            if (target && bestD > 1) {
+              const pull = (1 - bestD / (target.sr * 5 + 60)) * 520;
+              f.vx += ((target.sx - f.x) / bestD) * pull * dt;
+              f.vy += ((target.sy - f.y) / bestD) * pull * dt;
+            }
           }
           f.vx *= Math.exp(-dt * 0.35);
           f.vy *= Math.exp(-dt * 0.35);

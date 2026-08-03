@@ -1061,12 +1061,15 @@ export default function MoleculesField() {
       ctx.translate(cx, cy);
 
       // the reaction ceremony leans in: a warm halo tightens around the pair
+      // — a cached sprite stamped with drawImage, never a per-molecule gradient
       if (m.charge > 0) {
-        const halo = ctx.createRadialGradient(0, 0, R * 0.2, 0, 0, R * (1.9 - m.charge * 0.5));
-        halo.addColorStop(0, colorAlpha("#E7AC52", 0.1 * m.charge * fade));
-        halo.addColorStop(1, "rgba(0,0,0,0)");
-        ctx.fillStyle = halo;
-        ctx.fillRect(-R * 2, -R * 2, R * 4, R * 4);
+        const haloR = R * (1.9 - m.charge * 0.5);
+        stampSprite(
+          "mol-charge-halo",
+          [[0, "rgba(231, 172, 82, 1)"], [1, "rgba(0,0,0,0)"]],
+          0, 0, haloR,
+          0.1 * m.charge * fade,
+        );
       }
 
       // — felt pass: warm orbs and glowing bonds under candlelight —
@@ -1075,11 +1078,12 @@ export default function MoleculesField() {
         // carries a permanent quiet warmth of its own (CO₂'s tell)
         const haloK = Math.max(Math.min(1, m.heat), morph.felt === "greenhouse" ? 0.4 : 0);
         if (haloK > 0.15) {
-          const hg = ctx.createRadialGradient(0, 0, R * 0.1, 0, 0, R * 1.5);
-          hg.addColorStop(0, colorAlpha(fam[4], 0.05 * haloK * feltAlpha));
-          hg.addColorStop(1, "rgba(0,0,0,0)");
-          ctx.fillStyle = hg;
-          ctx.fillRect(-R * 1.6, -R * 1.6, R * 3.2, R * 3.2);
+          stampSprite(
+            `mol-heat-${morph.family}`,
+            [[0, colorAlpha(fam[4], 1)], [1, "rgba(0,0,0,0)"]],
+            0, 0, R * 1.5,
+            0.05 * haloK * feltAlpha,
+          );
         }
         ctx.lineCap = "round";
         for (let i = 0; i < morph.bonds.length; i++) {
@@ -1130,14 +1134,18 @@ export default function MoleculesField() {
           if (!touched && !m.closed) continue;
           const a = morph.atoms[i];
           const or = R * a.size * (a.letter === "C" ? 1 : 1.25);
-          const og = ctx.createRadialGradient(pts[i].x, pts[i].y, or * 0.1, pts[i].x, pts[i].y, or * 1.6);
-          og.addColorStop(0, colorAlpha(fam[Math.min(5, a.tone + 2)], 0.85 * feltAlpha));
-          og.addColorStop(0.6, colorAlpha(fam[a.tone], 0.5 * feltAlpha));
-          og.addColorStop(1, "rgba(0,0,0,0)");
-          ctx.fillStyle = og;
-          ctx.beginPath();
-          ctx.arc(pts[i].x, pts[i].y, or * 1.6, 0, Math.PI * 2);
-          ctx.fill();
+          // stop ratios (0.85 / 0.5) are baked into the sprite; feltAlpha is
+          // the only per-frame factor, applied uniformly via globalAlpha
+          stampSprite(
+            `mol-atom-${morph.family}-${a.tone}`,
+            [
+              [0, colorAlpha(fam[Math.min(5, a.tone + 2)], 0.85)],
+              [0.6, colorAlpha(fam[a.tone], 0.5)],
+              [1, "rgba(0,0,0,0)"],
+            ],
+            pts[i].x, pts[i].y, or * 1.6,
+            feltAlpha,
+          );
         }
       }
 
@@ -1343,9 +1351,12 @@ export default function MoleculesField() {
         }
       }
 
-      // background — the solvent after dark; the lens dims it to a blackboard
-      const bgTop = mixHex("#0e0b10", "#161018", lens);
-      const bgMid = mixHex("#120e12", "#1d1520", lens);
+      // background — the solvent after dark; the lens dims it to a blackboard.
+      // season (three-finger twist) drifts the solvent's ambient warmth on its
+      // own slow cycle, independent of the lens's felt↔notation axis.
+      const seasonWarm = 0.5 + 0.5 * Math.sin(season * Math.PI * 2);
+      const bgTop = mixHex(mixHex("#0e0b10", "#181009", seasonWarm * 0.4), "#161018", lens);
+      const bgMid = mixHex(mixHex("#120e12", "#1c1610", seasonWarm * 0.4), "#1d1520", lens);
       const bgLow = mixHex("#151013", "#191118", lens);
       const bg = ctx.createLinearGradient(0, 0, 0, height);
       bg.addColorStop(0, bgTop);
@@ -1355,7 +1366,7 @@ export default function MoleculesField() {
       ctx.fillRect(0, 0, width, height);
       // the candle beneath the bench: a breathing warm pool of light
       // greenhouseGlow is CO₂'s tell — the candle pool warms with the census
-      const glowPulse = (reduce ? 0.08 : 0.07 + Math.sin(breath) * 0.025) + greenhouseGlow;
+      const glowPulse = ((reduce ? 0.08 : 0.07 + Math.sin(breath) * 0.025) + greenhouseGlow + seasonWarm * 0.02) * (1 - night * 0.85);
       const glow = ctx.createRadialGradient(width * 0.5, height * 0.44, 10, width * 0.5, height * 0.44, Math.max(width, height) * 0.72);
       glow.addColorStop(0, `rgba(231, 172, 82, ${glowPulse + lens * 0.05})`);
       glow.addColorStop(0.55, "rgba(200, 115, 42, 0.04)");
@@ -1367,11 +1378,17 @@ export default function MoleculesField() {
       iris.addColorStop(1, `rgba(4, 3, 5, ${0.45 + lens * 0.2})`);
       ctx.fillStyle = iris;
       ctx.fillRect(0, 0, width, height);
+      // face-down is night: the pool of light goes down until the phone turns back
+      if (night > 0.01) {
+        ctx.fillStyle = `rgba(4, 3, 5, ${night * 0.6})`;
+        ctx.fillRect(0, 0, width, height);
+      }
 
-      // solvent motes
+      // solvent motes — the fixed count scales with the frame governor's tier
+      const activeMotes = Math.max(8, Math.round(motes.length * detail.particles));
       ctx.save();
       ctx.globalCompositeOperation = lens > 0.5 ? "source-over" : "screen";
-      for (let i = 0; i < motes.length; i++) {
+      for (let i = 0; i < activeMotes; i++) {
         const m = motes[i];
         if (!reduce) {
           const seethe = 7 * (1 + thermalStorm * 4); // the spike seethes, then cools
