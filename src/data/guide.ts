@@ -433,6 +433,31 @@ export const GUIDE_ROOMS: GuideRoom[] = [
     keeps: "the cells you've seeded, generation by generation",
   },
   {
+    key: "dna",
+    title: "the ladder that copies",
+    scale: "the dna band — between organic molecules and organelles",
+    href: "/dna",
+    essence:
+      "one helix standing in the dark, where the strand and its melody are the same object seen twice — four bases, four scale degrees, and the tune reads back into the sequence it came from.",
+    moves: [
+      "drag across the helix → unzips it; the hydrogen bonds break in order, each one a tick, and a gc-rich stretch is genuinely harder to pull",
+      "let go → the ladder re-anneals",
+      "hold while it is open → a polymerase runs the complement and plays the tune back in the mirror",
+      "drag along the helix → supercoils it, winding turns into the length",
+      "tap a rung → sounds that base's degree",
+      "three fingers drag → the mutation temperature; the world begins rewriting the code on its own",
+      "three fingers tap → the whole strand played as its melody; three fingers hold → the clock slows to a quarter",
+      "twist → raises the lens to notation: the letters, the transcript, the melting point, and the melody drawn as a contour",
+      "tilt → the ladder leans; shake → a mutation burst; knock → one rung rings",
+    ],
+    finds: [
+      "the resistance of the unzip is the real hydrogen-bond count — two for a·t, three for g·c — so you can feel the composition before the lens tells you",
+      "the weak a·t rungs shiver visibly more than the g·c ones, and more still as the world warms",
+      "the melody climbs an octave every eight bases, so the ear hears how far along the strand the polymerase has reached",
+    ],
+    keeps: "the strand, with every mutation you or the world have made to it",
+  },
+  {
     key: "organics",
     title: "what carbon does when it has time",
     scale: "the organic-molecules band — between molecules and dna",

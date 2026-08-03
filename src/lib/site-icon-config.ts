@@ -10,6 +10,7 @@ export type SiteIconKey =
   | "beyond"
   | "cells"
   | "organics"
+  | "dna"
   | "charts"
   | "molecules"
   | "dither"
@@ -175,6 +176,19 @@ export const SITE_ICON_VISUALS = {
     accent: "#f2c56b",
     accent2: "#9c3d33",
     ink: "#ffedc9",
+  },
+  dna: {
+    title: "DNA",
+    description: "the ladder that copies",
+    path: "/dna",
+    shortName: "dna",
+    kind: "growth",
+    bg: "#07080c",
+    bg2: "#1d2231",
+    glow: "#e7ac52",
+    accent: "#86baa8",
+    accent2: "#96b2e2",
+    ink: "#e9f1ff",
   },
   organics: {
     title: "Organics",

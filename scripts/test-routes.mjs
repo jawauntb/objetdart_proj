@@ -80,6 +80,7 @@ const expectedKeys = [
   "aphros",
   "flowers",
   "cells",
+  "dna",
   "organics",
   "molecules",
   "atoms",
