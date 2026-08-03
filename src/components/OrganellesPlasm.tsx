@@ -20,14 +20,15 @@
  * timbre. Hold one and the budget flows into it while you hold — the others
  * pay, in the same frame. Circle a finger on one to wind its folds deeper,
  * the other way to let them out. Dwell on open plasm and the organ the cell
- * is still missing condenses there; gather all six and the cell membrane
- * closes around them of its own accord — when the ring settles the plasm
- * becomes the cell above (the handoff up). Hold the nucleus to the ceremony
- * and it opens onto the helix within — the door down. Twist raises the lens
- * to the ledger, where the budget is drawn as shares of one constant total.
- * Three fingers hold the world-law: drag is the streaming rate, hold dilates
- * the clock, tap is the tutti. Tilt pours the plasm; a shake churns it; a
- * knock rings the nearest organ.
+ * is still missing condenses there; the ghost membrane grows with the set,
+ * and its well gathers organs toward the forming cell. Gather all six and
+ * the cell membrane settles closed — then the plasm becomes the cell above
+ * (the handoff up). Hold the nucleus to the ceremony and it opens onto the
+ * helix within — the door down. Twist raises the lens to the ledger, where
+ * the budget is drawn as shares of one constant total. Three fingers hold
+ * the world-law: drag is the streaming rate, hold dilates the clock, tap is
+ * the tutti. Tilt pours the plasm; a shake churns it; a knock rings the
+ * nearest organ.
  *
  * Persists in `objetdart:organelles:v1` with the quiet clear at the bottom.
  * Pinch is unbound — ScaleTravel owns it (cells above, dna below).
@@ -46,10 +47,12 @@ import {
   MAX_ORGANELLES,
   MEMBRANE_KINDS,
   brightness,
+  cellWellPull,
   foldedness,
   harmonicsFor,
   hasFullSet,
   hashSeed,
+  membraneCompleteness,
   membranePoint,
   missingKinds,
   mulberry32,
@@ -197,7 +200,7 @@ export default function OrganellesPlasm() {
       );
     }
     closed = hasFullSet(listRef.current);
-    closing = closed ? 1 : 0;
+    closing = membraneCompleteness(listRef.current);
     setHasKept(listRef.current.length > 0);
 
     const save = () => {
@@ -490,11 +493,17 @@ export default function OrganellesPlasm() {
             return;
           }
           if (dragIdx >= 0 && dragIdx < listRef.current.length) {
-            const o = listRef.current[dragIdx];
+            const nx0 = clamp(x / width, 0.06, 0.94);
+            const ny0 = clamp(y / height, 0.08, 0.92);
+            const minDim = Math.max(1, Math.min(width, height));
+            const aspectX = width / minDim;
+            const aspectY = height / minDim;
+            const pull = cellWellPull(nx0, ny0, membraneCompleteness(listRef.current), aspectX, aspectY);
+            const nx = clamp(nx0 + pull.x * pull.strength * 0.018, 0.06, 0.94);
+            const ny = clamp(ny0 + pull.y * pull.strength * 0.018, 0.08, 0.92);
             listRef.current = listRef.current.map((q, k) =>
-              k === dragIdx ? { ...q, nx: clamp(x / width, 0.06, 0.94), ny: clamp(y / height, 0.08, 0.92) } : q,
+              k === dragIdx ? { ...q, nx, ny } : q,
             );
-            void o;
             // the flow drags back: a wake through the plasm
             churn = Math.min(1, churn + Math.abs(e.dx + e.dy) * 0.0016);
             return;
@@ -663,6 +672,7 @@ export default function OrganellesPlasm() {
 
       // the cell membrane closes around a full set, of its own accord —
       // and when that ring settles, the plasm becomes the cell above
+      const completeness = membraneCompleteness(list);
       const full = hasFullSet(list);
       if (full && !closed) {
         closed = true;
@@ -678,18 +688,24 @@ export default function OrganellesPlasm() {
         closed = false;
         earnedClose = false;
       }
-      closing += ((closed ? 1 : 0) - closing) * Math.min(1, dt * 1.4);
+      closing += ((closed ? 1 : completeness) - closing) * Math.min(1, dt * 1.4);
       if (leaveGlow > 0) leaveGlow = Math.max(0, leaveGlow - dt * 2.2);
       if (earnedClose && closing > 0.98 && !leaving) intoTheCell();
 
       // the plasm streams and carries its organs with it
       if (!reduced) {
+        const minDim = Math.max(1, Math.min(width, height));
+        const aspectX = width / minDim;
+        const aspectY = height / minDim;
         for (let i = 0; i < list.length; i++) {
           if (i === dragIdx) continue;
           const o = list[i];
           const flow = streaming * 0.02;
           const swirl = Math.sin(localT * 0.3 + o.nx * 6) * flow + pour * 0.03;
           const drift = Math.cos(localT * 0.24 + o.ny * 5) * flow;
+          const pull = cellWellPull(o.nx, o.ny, completeness, aspectX, aspectY);
+          vel[i * 2] += pull.x * pull.strength * 0.1 * dt;
+          vel[i * 2 + 1] += pull.y * pull.strength * 0.1 * dt;
           let nx = o.nx + (vel[i * 2] + swirl) * dt;
           let ny = o.ny + (vel[i * 2 + 1] + drift) * dt;
           vel[i * 2] *= Math.exp(-dt * 1.2);
@@ -740,14 +756,17 @@ export default function OrganellesPlasm() {
         }
       }
 
-      // the cell membrane, closing — and brightening as the handoff lands
+      // the cell membrane ghost: one sixth of the ring for each kind present,
+      // then the last sixth settles before the handoff up.
       if (closing > 0.01) {
         const r = Math.min(width, height) * 0.44;
-        ctx.strokeStyle = `rgba(170, 214, 190, ${0.1 + closing * 0.28 + leaveGlow * 0.5})`;
-        ctx.lineWidth = 1 + closing * 1.6 + leaveGlow * 1.4;
+        ctx.strokeStyle = `rgba(170, 214, 190, ${0.04 + closing * 0.3 + leaveGlow * 0.5})`;
+        ctx.lineWidth = 0.7 + closing * 1.7 + leaveGlow * 1.4;
+        ctx.lineCap = "round";
         ctx.beginPath();
         ctx.arc(width / 2, height / 2, r * (0.92 + breath * 0.02), -Math.PI / 2, -Math.PI / 2 + closing * Math.PI * 2);
         ctx.stroke();
+        ctx.lineCap = "butt";
       }
 
       // the organelles

@@ -2,7 +2,9 @@
 // disagrees with the analytic answer for the one case we can check by hand,
 // a redistribution that creates or destroys membrane (the room's entire
 // claim), a clamp that leaks the leftover, a timbre map you could not read
-// backwards, and a "smooth" vesicle that is not actually a sine.
+// backwards, a "smooth" vesicle that is not actually a sine, a ghost ring
+// filled by duplicates, and a gather field that pulls sideways or from
+// everywhere instead of only at the cell well.
 
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -190,6 +192,27 @@ for (const radius of [0.3, 1, 1.7, 2.4]) {
   // duplicates do not fake a set
   const dupes = ["nucleus", "nucleus", "nucleus"].map((k, i) => M.organelleFromSeed(k, i));
   assert.equal(M.hasFullSet(dupes), false, "three nuclei are still one kind");
+  assert.equal(M.membraneCompleteness(dupes), 1 / 6, "and only draw one sixth of the ghost ring");
+  const partialSet = ["nucleus", "er", "er", "vacuole"].map((k, i) => M.organelleFromSeed(k, i));
+  assert.equal(M.membraneCompleteness(partialSet), 3 / 6, "the ring fraction is unique kinds over six");
+  assert.equal(M.membraneCompleteness(full), 1, "and a complete set draws a complete ghost");
+}
+// The forming membrane is also a well: it acts near the center and near the
+// ghost ring, but it must not become a room-wide hidden gravity field.
+{
+  const inside = M.cellWellPull(0.56, 0.5, 0.5);
+  assert.ok(inside.strength > 0, "near the well, the cell gathers");
+  assert.ok(inside.x < -0.99 && Math.abs(inside.y) < 1e-9, "and the pull points toward the center");
+
+  const onRingDim = M.cellWellPull(0.5 + M.CELL_GHOST_RADIUS, 0.5, 0.2);
+  const onRingReady = M.cellWellPull(0.5 + M.CELL_GHOST_RADIUS, 0.5, 1);
+  assert.ok(onRingDim.strength > 0, "the ghost membrane catches an organ brushed against it");
+  assert.ok(onRingReady.strength > onRingDim.strength, "the well strengthens as the set fills");
+  assert.ok(onRingReady.x < -0.99 && Math.abs(onRingReady.y) < 1e-9, "the ring also pulls inward");
+
+  const outside = M.cellWellPull(0.95, 0.95, 1);
+  assert.equal(outside.strength, 0, "outside the well band, the room does not secretly gather");
+  assert.deepEqual(M.cellWellPull(0.5, 0.5, 1), { x: 0, y: 0, strength: 0 }, "the exact center is stable");
 }
 {
   const many = Array.from({ length: M.MAX_ORGANELLES + 4 }, (_, i) =>

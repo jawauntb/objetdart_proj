@@ -503,6 +503,7 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "hold an organelle → the membrane budget flows into it while you hold, and the rest of the plasm pays in the same frame",
       "circle a finger on an organelle → winds its folds deeper; the other way lets them out",
       "drag an organelle → it moves through the flow, and the flow drags back",
+      "drag an organelle near the ghost membrane → the growing ring pulls it gently inward, gathering the cell by hand",
       "hold on open plasm (dwell) → the organ the cell is still missing condenses there",
       "hold the nucleus to the ceremony → it opens onto the helix within",
       "three fingers drag → the streaming rate; three fingers hold → the clock slows to a quarter; three fingers tap → every organ rings in size order",
