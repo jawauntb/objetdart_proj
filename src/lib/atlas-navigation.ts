@@ -33,6 +33,45 @@ export type AtlasPanVelocity = {
 };
 
 /**
+ * A generated phase may alter the sheet only while both parts of its ticket
+ * still own the live viewport. Camera interactions invalidate the sequence;
+ * replacement generations also replace the opaque id.
+ */
+export function atlasGenerationIsCurrent(
+  requestId: number,
+  currentRequestId: number,
+  generationId: string,
+  currentGenerationId: string | null,
+): boolean {
+  return requestId === currentRequestId && generationId === currentGenerationId;
+}
+
+export type AtlasGenerationInterruptionState = {
+  requestId: number;
+  generationId: string | null;
+  activeImage: string;
+  incomingImage: string | null;
+  incomingRevealed: boolean;
+};
+
+/**
+ * Invalidate the old viewport ticket and choose the image that should remain
+ * under the user's hand. An incoming sheet is safe to preserve only after it
+ * has actually become visible; an unrevealed response is still stale work.
+ */
+export function resolveAtlasGenerationInterruption(
+  state: AtlasGenerationInterruptionState,
+): Pick<AtlasGenerationInterruptionState, "requestId" | "generationId" | "activeImage"> {
+  return {
+    requestId: state.requestId + 1,
+    generationId: null,
+    activeImage: state.incomingImage && state.incomingRevealed
+      ? state.incomingImage
+      : state.activeImage,
+  };
+}
+
+/**
  * Resolve outward travel only when the sheet is actually at an edge.
  * Fast movement through the middle of a zoomed sheet is ordinary panning.
  */
