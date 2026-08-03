@@ -220,7 +220,13 @@ void main() {
   vec2 sp = vec2(dot(rel, u_right), dot(rel, u_up)) * u_focal / zc;
   float extent = (0.010 + 0.022 * a_meta.y + 0.032 * grown)
                * (1.0 + 3.4 * a_dyn.y + 1.7 * a_dyn.x);
-  float r = min(extent * (0.5 + 0.5 * u_fit) / zc, 1.6);
+  // NOT scaled by u_fit, and capped well inside clip space. A tall frame
+  // stands the camera further back; a galaxy that keeps its angular size
+  // while the camera retreats means more of the web crowded into the same
+  // pixels, and at 390px the filaments merged into grey continents. Letting
+  // zc alone set the size is both the honest perspective and what keeps a
+  // void looking like a void on a phone.
+  float r = min(extent / zc, 0.42);
   vec2 off = a_corner * r;
   gl_Position = vec4((sp.x + off.x) / u_aspect, sp.y + off.y, 0.0, 1.0);
   v_uv = a_corner;
@@ -229,7 +235,10 @@ void main() {
   v_dyn = a_dyn;
   // near things are brighter, but never blinding; the breath rides on top
   v_bright = (1.0 + 4.4 * grown) / (0.75 + zc * 0.9)
-           * (0.82 + 0.18 * u_breath) * (1.0 - 0.88 * u_night) * (1.0 - 0.85 * u_veil) * u_fit
+           * (0.82 + 0.18 * u_breath) * (1.0 - 0.88 * u_night) * (1.0 - 0.85 * u_veil)
+           // compensate for the further stand-off on a tall frame, but BOUND
+           // it: scaling exposure by the raw fit washed 390px out to a sheet
+           * clamp(u_fit, 0.9, 1.12)
            * (1.0 + 2.4 * a_dyn.x);
 }
 `;
