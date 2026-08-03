@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useField } from "@/store/field";
 import { CONCERNS, PRESET_KEYS, PRESETS } from "@/data/content";
@@ -117,6 +117,22 @@ export default function ConcernField() {
   const roseRef = useRef(0);
   // the dwell's charge, so a resting finger is visible from the tier it crosses
   const [charging, setCharging] = useState<{ k: ConcernKey; grip: number } | null>(null);
+  // The glimmer (docs/gesture-grammar.md §6.3). The instruction that used to
+  // sit above this compass is gone, and a room does not get to be silent about
+  // its own material instead — so after ~20s of stillness one bead tugs
+  // outward along its axis and settles back, sounding its own concern as it
+  // goes. Physical, never text; it moves nothing that is stored, so the shape
+  // the visitor left is exactly the shape they come back to.
+  const [glimmer, setGlimmer] = useState<{ k: ConcernKey; key: number } | null>(null);
+  const glimmerOnRef = useRef(false);
+  glimmerOnRef.current = glimmer != null;
+  const lastContactRef = useRef(0);
+  const pulseVoiceRef = useRef<(k: ConcernKey, ms?: number) => void>(() => {});
+  /** any hand on the rose resets the idle clock and puts the glimmer away */
+  const touched = useCallback(() => {
+    lastContactRef.current = performance.now();
+    if (glimmerOnRef.current) setGlimmer(null);
+  }, []);
 
   // map a client-space pointer to a value on a given axis
   const valueFromPointer = (k: ConcernKey, clientX: number, clientY: number) => {
@@ -253,6 +269,9 @@ export default function ConcernField() {
         pulseTimers.add(t);
       } catch { /* noop */ }
     };
+    // the glimmer clock below sounds the same voice the hand would hear, so
+    // the hint and the answer are one instrument rather than two
+    pulseVoiceRef.current = pulseVoice;
 
     // ceremony hold bookkeeping: only a hold born near the polygon's
     // center gathers toward the keep
@@ -272,6 +291,7 @@ export default function ConcernField() {
     let chargeTarget: { k: ConcernKey; from: number } | null = null;
     const detach = attachGestures(svg as unknown as HTMLElement, {
       tap: (e) => {
+        touched();
         if (e.fingers === 2) {
           // step back: the compass has no camera of its own, so the frame
           // retreats the only way it can — the rose returns to true north
@@ -304,6 +324,7 @@ export default function ConcernField() {
         recordTape("ripple", 0.3 + e.intensity * 0.4, hit.k);
       },
       twist: (e) => {
+        touched();
         if (e.phase !== "move") return;
         if (e.fingers === 3) {
           // season — the room's slow cycle is the run of named presets, and
@@ -332,6 +353,7 @@ export default function ConcernField() {
         try { haptics.lens(); } catch { /* noop */ }
       },
       drag: (e) => {
+        touched();
         if (e.fingers !== 3) return;
         // weather — a gust across the rose. Every concern downwind gains
         // what the upwind ones lose, in proportion to how squarely it faces
@@ -350,6 +372,7 @@ export default function ConcernField() {
         });
       },
       rhythm: (e) => {
+        touched();
         // a steady tapped tempo: the dominant concern's voice falls into
         // the hand's pulse for ~8s
         if (e.stability <= 0.7) return;
@@ -374,6 +397,7 @@ export default function ConcernField() {
         recordTape("sigil", 0.5, `compass/entrain-${dominant}`);
       },
       hold: (e) => {
+        touched();
         if (e.fingers === 3) {
           // three-finger hold = time dilation while held: the compass's
           // own answers (tap glow, rhythm beat) slow continuously with
@@ -498,7 +522,41 @@ export default function ConcernField() {
       pulseTimers.forEach((t) => clearTimeout(t));
       try { getFieldAudio().releaseAllConcernTones(); } catch { /* noop */ }
     };
-  }, [recordTape, setConcern]);
+  }, [recordTape, setConcern, touched]);
+
+  // ── the glimmer clock ──────────────────────────────────────────────
+  // Same shape and the same numbers as <RoomShell>'s: ~20s of stillness,
+  // and no more often than every 6s after that. The compass is not inside
+  // the shell (it owns its own engine mount, for the founding drag), so it
+  // keeps the clock itself rather than inventing a different one.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduce) return; // reduced motion: the room stays still and says nothing
+    lastContactRef.current = performance.now();
+    let last = 0;
+    let turn = 0;
+    let clear: ReturnType<typeof setTimeout> | null = null;
+    const tick = window.setInterval(() => {
+      const now = performance.now();
+      if (now - lastContactRef.current < GLIMMER_IDLE_MS) return;
+      if (now - last < GLIMMER_REPEAT_MS) return;
+      last = now;
+      // walk the rose rather than picking one bead forever, so a long idle
+      // shows the hand that all eight are the same kind of thing
+      const k = RADIAL_ORDER[turn % RADIAL_ORDER.length];
+      turn += 1;
+      setGlimmer({ k, key: now });
+      pulseVoiceRef.current(k, 240);
+      try { haptics.tap(); } catch { /* noop */ }
+      if (clear) clearTimeout(clear);
+        clear = setTimeout(() => setGlimmer(null), GLIMMER_SPAN_MS);
+    }, 1000);
+    return () => {
+      window.clearInterval(tick);
+      if (clear) clearTimeout(clear);
+    };
+  }, []);
 
   // build the polygon points string
   const polygonPoints = RADIAL_ORDER.map((k, i) => {

@@ -45,6 +45,7 @@ const SHADER_ROOMS = [
   { route: "/storm", why: "the cell and its rain" },
   { route: "/fire", why: "the flame" },
   { route: "/plasma", why: "the globe" },
+  { route: "/orb", why: "the whole population of discs is one fullscreen pass" },
   { route: "/jewel", why: "the stone's fire" },
   { route: "/aphros", why: "the foam" },
   { route: "/birds", why: "the meadow" },

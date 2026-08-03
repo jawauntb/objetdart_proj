@@ -65,8 +65,8 @@ export function mulberry32(seed: number): () => number {
  * on a number the field differentiates. A few hundred kilometres is already
  * many wavelengths of the coarsest octave — every seed gets its own range —
  * and it keeps the shader's arithmetic in the part of float32 that still
- * has digits. It also stays inside one HASH_MOD period (289 / BASE_FREQ ≈
- * 1763 km), so two seeds cannot alias onto the same mountain.
+ * has digits. It also stays inside one HASH_MOD period (512 / BASE_FREQ ≈
+ * 3123 km), so two seeds cannot alias onto the same mountain.
  */
 export const SEED_SPREAD_KM = 512;
 
@@ -113,20 +113,31 @@ export function seedOffset(seed: number): [number, number] {
 // rectangle. Nothing in node could see it, because node has no float32.
 //
 // So the hash is an exact one instead. Every intermediate below is an
-// integer under 2^24, which float32 and float64 both hold exactly, and the
-// only division is by HASH_MOD, whose quotient's fractional part is never
-// nearer an integer than 1/HASH_MOD — so `floor` cannot disagree either.
-// Two languages, one answer, bit for bit. scripts/test-heightfield.mjs
-// pins that by running the whole hash again under Math.fround.
+// integer under 2^24, which float32 and float64 both hold exactly, and
+// every division is by a power of two, which is exact in both. Nothing
+// rounds anywhere, so the two languages return the same bits — not nearly
+// the same number, the same bits. scripts/test-heightfield.mjs pins that by
+// running the whole hash again under Math.fround.
 
 /**
- * The permutation modulus: 17², chosen because
- * `v -> (HASH_MUL·v + 1)·v mod 17²` is a bijection there (it is not, on a
- * prime), so each round is a shuffle rather than a collapse. 289 is also
- * small enough that the largest product it can produce,
- * (34·288 + 1)·288 = 2820384, sits comfortably under float32's 2^24.
+ * The permutation modulus, and why it is a power of two.
+ *
+ * `v -> (HASH_MUL·v + 1)·v mod M` is a bijection whenever HASH_MUL is even:
+ * the difference of two outputs factors as (x−y)·(HASH_MUL·(x+y) + 1), and
+ * that second factor is odd, so it is invertible mod any 2^k. A shuffle,
+ * then, never a collapse — and unlike an odd modulus it needs no division:
+ * 1/512 is exact, so `floor(v · HASH_INV_MOD)` and `v · HASH_INV_MOD`
+ * round-trip identically in float32 and float64 rather than merely closely.
+ * (289 = 17² is the other bijective choice and was measured against this
+ * one: same distribution, twenty times the lattice correlation, three
+ * divides per hash instead of three multiplies, and agreement only to 3e-8
+ * instead of exact.)
+ *
+ * The largest product it can produce, (34·511 + 1)·511 = 8878625, sits well
+ * under float32's exactly-representable 2^24.
  */
-export const HASH_MOD = 289;
+export const HASH_MOD = 512;
+export const HASH_INV_MOD = 1 / 512;
 export const HASH_MUL = 34;
 
 function fract(v: number): number {
@@ -143,7 +154,7 @@ function smoothstep(e0: number, e1: number, x: number): number {
 }
 
 function hashWrap(v: number): number {
-  return v - HASH_MOD * Math.floor(v / HASH_MOD);
+  return v - HASH_MOD * Math.floor(v * HASH_INV_MOD);
 }
 
 function hashPermute(v: number): number {
@@ -157,16 +168,17 @@ function hashPermute(v: number): number {
  * that shows the shift as diagonal corduroy across the whole range.
  *
  * Periodic with period HASH_MOD in both axes by construction. At the
- * coarsest octave that is 1763 km, far past MARCH_MAX_KM; at the finest it
- * is 23 km, carrying 15 m of amplitude — and each octave is turned, so no
- * two repeats line up in world space.
+ * coarsest octave that is 3123 km, a hundred times MARCH_MAX_KM; at the
+ * finest it is 41 km, still past the marcher's own horizon, and carrying
+ * 15 m of amplitude — and each octave is turned, so no two repeats could
+ * line up in world space even if the eye could reach them.
  */
 export function hash21(x: number, y: number): number {
   const wx = hashWrap(x);
   const wy = hashWrap(y);
   const a = hashPermute(wx);
   const b = hashPermute(hashWrap(a + wy));
-  return hashPermute(hashWrap(b + wx)) / HASH_MOD;
+  return hashPermute(hashWrap(b + wx)) * HASH_INV_MOD;
 }
 
 /** Value noise in [0,1] with its exact gradient: [v, dv/dx, dv/dy]. */
@@ -696,8 +708,28 @@ export function submerged(
 
 // ——— where the wanderer stands ————————————————————————————————
 
-/** How far above the inversion the composition wants the eye, in km. */
-export const STATION_ABOVE_FOG_KM = 0.11;
+/**
+ * How far above the inversion the composition wants the eye — measured in
+ * the fog's OWN scale heights, which is the only unit that means anything
+ * here and the whole of a second bug.
+ *
+ * A hundred metres over the fog top sounds like standing above the fog. It
+ * is not: density falls as exp(−Δ/FOG_SCALE_HEIGHT_KM), and with a scale
+ * height of 290 m, 110 m up still leaves 0.70 of the fog's full density in
+ * the air at the eye — about half a kilometre of horizontal visibility. The
+ * room rendered exactly that, a uniform grey wash with a ridge somewhere in
+ * it, and the number gave no hint, because 0.11 km is not comparable to
+ * anything unless you already know what it is being compared to.
+ *
+ * Two and a half scale heights leaves 8% — clear air at the eye, a kilometre
+ * still legible at 40%, the far range fading at 8 km. That is the picture:
+ * near ridges crisp, distant ones dissolving, and the fog a sea you are
+ * standing over rather than weather you are standing in. Written as a
+ * multiple so raising FOG_SCALE_HEIGHT_KM can never quietly drown the eye
+ * again.
+ */
+export const STATION_FOG_CLEARANCE = 2.5;
+export const STATION_ABOVE_FOG_KM = STATION_FOG_CLEARANCE * FOG_SCALE_HEIGHT_KM;
 /** Bearings walked down off the apex looking for that altitude. */
 export const STATION_BEARINGS = 64;
 export const STATION_INNER_KM = 0.12;
@@ -1198,6 +1230,7 @@ export function glslFloat(v: number): string {
 /** The float constants the GLSL shares with the TS, by their GLSL names. */
 export const HEIGHTFIELD_GLSL_FLOATS: Readonly<Record<string, number>> = {
   HASH_MOD,
+  HASH_INV_MOD,
   HASH_MUL,
   LACUNARITY,
   GAIN,
@@ -1274,7 +1307,7 @@ uniform vec4 uHornB[${HORN_COUNT}];
  * function returns bit for bit what the TS above returns --- which is the
  * only reason the eye the TS places is above the ground this shader draws.
  */
-float hf_hashWrap(float v) { return v - HASH_MOD * floor(v / HASH_MOD); }
+float hf_hashWrap(float v) { return v - HASH_MOD * floor(v * HASH_INV_MOD); }
 
 float hf_hashPermute(float v) { return hf_hashWrap((HASH_MUL * v + 1.0) * v); }
 
@@ -1283,7 +1316,7 @@ float hf_hash21(vec2 p) {
   float wy = hf_hashWrap(p.y);
   float a = hf_hashPermute(wx);
   float b = hf_hashPermute(hf_hashWrap(a + wy));
-  return hf_hashPermute(hf_hashWrap(b + wx)) / HASH_MOD;
+  return hf_hashPermute(hf_hashWrap(b + wx)) * HASH_INV_MOD;
 }
 
 /** value noise in [0,1] with its exact gradient: (v, dv/dx, dv/dy) */

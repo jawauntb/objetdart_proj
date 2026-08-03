@@ -106,12 +106,21 @@ function matchAt(clean, from, open, close) {
 }
 
 /**
- * The body of `name: (…) => …` inside an object literal, or null. Handler
- * bodies, not the whole file: a room that merely mentions `fingers === 3` in
- * its draw loop has not bound tutti.
+ * Every body of `name: (…) => …` in the file, concatenated, or null when the
+ * room writes no such handler. Handler bodies, not the whole file: a room that
+ * merely mentions `fingers === 3` in its draw loop has not bound tutti.
+ *
+ * *Every* body, not the first: a room may mount more than one gesture surface
+ * (Tourbillon binds the SVG dial and the WebGL stage; Signal binds its stage
+ * and a single transport button), and which one happens to appear first in the
+ * file is an accident of editing order, not a statement about the grammar. The
+ * first-body-only reading called /signal's two-finger tap unbound while the
+ * source plainly bound it forty lines further down — a false red, and a false
+ * red is how a law gets deleted.
  */
 function handlerBody(clean, name) {
   const re = new RegExp(`(?:^|[\\s,{(])${name}\\s*:\\s*(?:async\\s*)?\\(`, "g");
+  const found = [];
   let m;
   while ((m = re.exec(clean))) {
     const paren = clean.indexOf("(", m.index + m[0].length - 1);
@@ -124,8 +133,8 @@ function handlerBody(clean, name) {
     while (j < clean.length && /\s/.test(clean[j])) j++;
     if (clean[j] === "{") {
       const end = matchAt(clean, j, "{", "}");
-      if (end > 0) return clean.slice(j, end + 1);
-      return null;
+      if (end > 0) found.push(clean.slice(j, end + 1));
+      continue;
     }
     // expression body — up to the next top-level comma
     let depth = 0;
@@ -133,12 +142,12 @@ function handlerBody(clean, name) {
       const ch = clean[k];
       if ("([{".includes(ch)) depth++;
       else if (")]}".includes(ch)) {
-        if (depth === 0) return clean.slice(j, k);
+        if (depth === 0) { found.push(clean.slice(j, k)); break; }
         depth--;
-      } else if (ch === "," && depth === 0) return clean.slice(j, k);
+      } else if (ch === "," && depth === 0) { found.push(clean.slice(j, k)); break; }
     }
   }
-  return null;
+  return found.length ? found.join("\n;\n") : null;
 }
 
 /** The object literal handed to onVessel(…), or null. */

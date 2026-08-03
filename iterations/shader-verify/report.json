@@ -3,28 +3,8 @@
     "route": "/mountain",
     "why": "the range is ray-marched per pixel",
     "status": "threw",
-    "detail": "TimeoutError: page.screenshot: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - taking page screenshot\u001b[22m\n\u001b[2m  - waiting for fonts to load...\u001b[22m\n",
-    "gl": {
-      "canvases": [
-        {
-          "kind": "webgl",
-          "w": 900,
-          "h": 700
-        },
-        {
-          "kind": "2d",
-          "w": 900,
-          "h": 700
-        },
-        {
-          "kind": "2d",
-          "w": 900,
-          "h": 40
-        }
-      ],
-      "anyGl": true,
-      "sized": true
-    },
+    "detail": "TimeoutError: page.goto: Timeout 45000ms exceeded.\nCall log:\n\u001b[2m  - navigating to \"http://127.0.0.1:3114/mountain\", waiting until \"networkidle\"\u001b[22m\n",
+    "gl": null,
     "paint": null
   }
 ]
