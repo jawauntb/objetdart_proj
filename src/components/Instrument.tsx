@@ -16,6 +16,12 @@ import {
   wavelengthFromX,
   type ScaleMode,
 } from "@/lib/light-music";
+import {
+  instrumentLesson,
+  playLesson,
+  timbreGravity,
+  type LessonGhost,
+} from "@/lib/instrument-lesson";
 import { TIMBRE_CHAIN, timbreAt } from "@/lib/timbre";
 import { useField } from "@/store/field";
 
@@ -60,11 +66,17 @@ export default function Instrument() {
   const twistAcc = useRef(0);
   const lastMorphTick = useRef(0);
   const lastHapticTick = useRef(0);
+  const voices = useRef(new Map<number, { x: number; y: number; at: number }>());
+  const cancelLesson = useRef<null | (() => void)>(null);
 
   const [pitchWindow, setPitchWindow] = useState<PitchWindow>({ lo: 0, w: 1 });
   const [wavelength, setWavelength] = useState(553);
   const [position, setPosition] = useState(0.5);
   const [touches, setTouches] = useState<ActiveTouch[]>([]);
+  const [ghosts, setGhosts] = useState<LessonGhost[]>([]);
+  const [grip, setGrip] = useState<null | { a: { x: number; y: number }; b: { x: number; y: number } }>(null);
+  const [isListening, setIsListening] = useState(false);
+  const [lessonLabel, setLessonLabel] = useState("");
   const [scaleMode, setScaleMode] = useState<ScaleMode>("chroma");
 
   windowRef.current = pitchWindow;
@@ -87,15 +99,106 @@ export default function Instrument() {
     useField.getState().recordTape("sigil", intensity, `instrument/${meta}`);
   }, []);
 
+  const plateXFromSpectrum = useCallback((spectrumX: number) => {
+    const { lo, w } = windowRef.current;
+    return clamp((spectrumX - lo) / w, 0, 1);
+  }, []);
+
+  const stopLesson = useCallback(() => {
+    cancelLesson.current?.();
+    cancelLesson.current = null;
+    getTimbreEngine().stopAll();
+    voices.current.clear();
+    setTouches([]);
+    setGhosts([]);
+    setGrip(null);
+    setLessonLabel("");
+    setIsListening(false);
+  }, []);
+
+  const playListen = useCallback(() => {
+    void getFieldAudio().start();
+    cancelLesson.current?.();
+    getTimbreEngine().stopAll();
+    const fullWindow = { lo: 0, w: 1 };
+    windowRef.current = fullWindow;
+    setPitchWindow(fullWindow);
+    scaleModeRef.current = "penta";
+    setScaleMode("penta");
+    voices.current.clear();
+    setTouches([]);
+    setGhosts([]);
+    setGrip(null);
+    setIsListening(true);
+    setLessonLabel("");
+    recordInstrument("lesson/listen", 0.7);
+    try { ripple(0.5); } catch { /* noop */ }
+
+    cancelLesson.current = playLesson(instrumentLesson(), {
+      on: (e) => {
+        const spec = timbreAt(e.y);
+        const touchColor = colorFromWavelength(wavelengthFromX(e.x));
+        const plateX = plateXFromSpectrum(e.x);
+        getTimbreEngine().noteOn(`lesson:${e.id}`, e.freq, spec);
+        setWavelength(wavelengthFromX(e.x));
+        setPosition(e.y);
+        setGhosts((current) => [
+          ...current.filter((ghost) => ghost.id !== e.id),
+          {
+            id: e.id,
+            x: plateX,
+            y: e.y,
+            note: e.note,
+            voice: e.voice ?? spec.label,
+            color: touchColor,
+          },
+        ]);
+      },
+      off: (e) => {
+        getTimbreEngine().noteOff(`lesson:${e.id}`);
+        setGhosts((current) => current.filter((ghost) => ghost.id !== e.id));
+      },
+      morph: (e) => {
+        const spec = timbreAt(e.y);
+        getTimbreEngine().morph(`lesson:${e.id}`, spec);
+        setPosition(e.y);
+        setGhosts((current) =>
+          current.map((ghost) =>
+            ghost.id === e.id ? { ...ghost, y: e.y, voice: e.voice ?? spec.label } : ghost,
+          ),
+        );
+      },
+      window: (e) => {
+        const next = { lo: e.lo, w: e.w };
+        windowRef.current = next;
+        setPitchWindow(next);
+      },
+      lens: (e) => {
+        scaleModeRef.current = e.mode;
+        setScaleMode(e.mode);
+      },
+      grip: (e) => setGrip({ a: e.a, b: e.b }),
+      ungrip: () => setGrip(null),
+      label: (text) => setLessonLabel(text),
+      done: () => {
+        cancelLesson.current = null;
+        setGhosts([]);
+        setGrip(null);
+        setLessonLabel("");
+        setIsListening(false);
+      },
+    });
+  }, [plateXFromSpectrum, recordInstrument]);
+
   useEffect(() => {
     const plate = plateRef.current;
     if (!plate) return;
     const engine = getTimbreEngine();
 
-    const translationAt = (clientX: number, clientY: number) => {
+    const translationAt = (clientX: number, clientY: number, rawY?: number) => {
       const rect = plate.getBoundingClientRect();
       const x = clamp((clientX - rect.left) / rect.width, 0, 1);
-      const y = clamp((clientY - rect.top) / rect.height, 0, 1);
+      const y = rawY ?? clamp((clientY - rect.top) / rect.height, 0, 1);
       const { lo, w } = windowRef.current;
       const nm = wavelengthFromX(lo + x * w);
       const freq = quantizeFrequency(audibleFrequency(nm), scaleModeRef.current);
@@ -116,10 +219,14 @@ export default function Instrument() {
 
     const detach = attachGestures(plate, {
       voice: (e) => {
-        const t = translationAt(e.x, e.y);
+        const rect = plate.getBoundingClientRect();
+        const rawY = clamp((e.y - rect.top) / rect.height, 0, 1);
         const key = `v${e.id}`;
         if (e.phase === "start") {
+          const y = timbreGravity(rawY, 0.35);
+          const t = translationAt(e.x, e.y, y);
           void getFieldAudio().start();
+          voices.current.set(e.id, { x: t.x, y, at: performance.now() });
           engine.noteOn(key, t.freq, t.spec);
           setWavelength(t.nm);
           setPosition(t.y);
@@ -129,14 +236,24 @@ export default function Instrument() {
           return;
         }
         if (e.phase === "move") {
+          const prev = voices.current.get(e.id);
+          const now = performance.now();
+          const plateX = clamp((e.x - rect.left) / rect.width, 0, 1);
+          let y = rawY;
+          if (prev) {
+            const dt = Math.max(16, now - prev.at);
+            const speed = Math.hypot(plateX - prev.x, rawY - prev.y) / dt;
+            y = speed < 0.0012 ? timbreGravity(rawY, 0.28) : rawY;
+          }
+          const t = translationAt(e.x, e.y, y);
+          voices.current.set(e.id, { x: t.x, y, at: now });
           engine.glide(key, t.freq);
-          const tick = performance.now();
-          if (tick - lastMorphTick.current > 60) {
-            lastMorphTick.current = tick;
+          if (now - lastMorphTick.current > 60) {
+            lastMorphTick.current = now;
             engine.morph(key, t.spec);
           }
-          if (tick - lastHapticTick.current > 110) {
-            lastHapticTick.current = tick;
+          if (now - lastHapticTick.current > 110) {
+            lastHapticTick.current = now;
             try { hapticTap(); } catch { /* noop */ }
           }
           setWavelength(t.nm);
@@ -145,6 +262,7 @@ export default function Instrument() {
           return;
         }
         // end or cancel — a canceled voice was a grip forming, let it go fast
+        voices.current.delete(e.id);
         engine.noteOff(key);
         hideTouch(e.id);
         if (e.phase === "cancel") recordInstrument("voice/became-grip", 0.24);
@@ -180,6 +298,8 @@ export default function Instrument() {
 
     return () => {
       detach();
+      cancelLesson.current?.();
+      cancelLesson.current = null;
       engine.stopAll();
     };
   }, [recordInstrument]);
@@ -211,6 +331,13 @@ export default function Instrument() {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       heldKeys.forEach((key) => getTimbreEngine().noteOff(`key:${key}`));
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      cancelLesson.current?.();
+      getTimbreEngine().stopAll();
     };
   }, []);
 
@@ -253,6 +380,37 @@ export default function Instrument() {
             </span>
           ))}
         </div>
+        {grip && (
+          <svg className="instr-grip" aria-hidden="true" viewBox="0 0 100 100" preserveAspectRatio="none">
+            <line
+              x1={grip.a.x * 100}
+              y1={grip.a.y * 100}
+              x2={grip.b.x * 100}
+              y2={grip.b.y * 100}
+            />
+          </svg>
+        )}
+        {grip && (
+          <>
+            <span className="instr-grip-hand" style={{ left: `${grip.a.x * 100}%`, top: `${grip.a.y * 100}%` }} />
+            <span className="instr-grip-hand" style={{ left: `${grip.b.x * 100}%`, top: `${grip.b.y * 100}%` }} />
+          </>
+        )}
+        {ghosts.map((ghost) => (
+          <span
+            key={`g-${ghost.id}`}
+            className="instr-finger is-ghost"
+            style={{
+              left: `${ghost.x * 100}%`,
+              top: `${ghost.y * 100}%`,
+              borderColor: ghost.color ?? "rgba(255,255,255,0.7)",
+              boxShadow: `0 0 36px ${ghost.color ?? "rgba(255,255,255,0.45)"}`,
+            }}
+          >
+            <strong>{ghost.note}</strong>
+            <em>{ghost.voice ?? "listen"}</em>
+          </span>
+        ))}
         {touches.map((touch) => (
           <span
             key={touch.id}
@@ -271,7 +429,7 @@ export default function Instrument() {
         <div className="instr-current" aria-hidden="true">
           <span>{blend.label}</span>
           <strong>{currentNote}</strong>
-          <em>{formatHz(audible)}</em>
+          <em>{lessonLabel || formatHz(audible)}</em>
         </div>
       </div>
 
@@ -288,13 +446,20 @@ export default function Instrument() {
 
       <footer className="instr-hud instr-hud-bottom">
         <div className="instr-actions" aria-label="instrument links">
+          <button
+            type="button"
+            className={isListening ? "instr-on" : undefined}
+            onClick={isListening ? stopLesson : playListen}
+          >
+            {isListening ? "listening" : "listen"}
+          </button>
           <Link href="/timbre">timbre</Link>
           <Link href="/light">light</Link>
         </div>
         <p className="instr-hint">
-          fingers are voices, landed apart they stay voices · slide to bend and
-          to become another instrument · pinch to zoom the pitch range · twist
-          to turn the scale lens
+          {lessonLabel
+            ? lessonLabel
+            : "listen once · every finger a voice · pinch zooms · twist turns the lens"}
         </p>
       </footer>
 
@@ -379,6 +544,45 @@ export default function Instrument() {
           mix-blend-mode: screen;
           z-index: 4;
           pointer-events: none;
+        }
+        .instr-finger.is-ghost {
+          border-style: dashed;
+          opacity: 0.8;
+          animation: instrGhost 900ms ease-in-out infinite;
+        }
+        @keyframes instrGhost {
+          0%, 100% { transform: translate(-50%, -50%) scale(0.96); opacity: 0.64; }
+          50% { transform: translate(-50%, -50%) scale(1.04); opacity: 0.94; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .instr-finger.is-ghost,
+          .instr-grip-hand {
+            animation: none;
+          }
+        }
+        .instr-grip {
+          position: absolute;
+          inset: 0;
+          z-index: 3;
+          pointer-events: none;
+          overflow: visible;
+        }
+        .instr-grip line {
+          stroke: rgba(245, 214, 91, 0.55);
+          stroke-width: 0.35;
+          stroke-dasharray: 1.2 1.2;
+        }
+        .instr-grip-hand {
+          position: absolute;
+          width: clamp(52px, 11vw, 76px);
+          aspect-ratio: 1;
+          border: 1.5px dashed rgba(245, 214, 91, 0.72);
+          border-radius: 50%;
+          transform: translate(-50%, -50%);
+          background: rgba(245, 214, 91, 0.08);
+          z-index: 3;
+          pointer-events: none;
+          animation: instrGhost 900ms ease-in-out infinite;
         }
         .instr-finger strong {
           color: white;
@@ -490,11 +694,13 @@ export default function Instrument() {
           pointer-events: auto;
           width: fit-content;
         }
+        .instr-actions button,
         .instr-actions a {
           min-height: 42px;
           display: inline-flex;
           align-items: center;
           padding: 0 14px;
+          border: 0;
           background: rgba(8,10,9,0.7);
           backdrop-filter: blur(6px);
           color: rgba(245, 240, 230, 0.88);
@@ -503,6 +709,11 @@ export default function Instrument() {
           line-height: 1;
           text-transform: lowercase;
           text-decoration: none;
+          cursor: pointer;
+        }
+        .instr-actions button.instr-on {
+          color: #f5d65b;
+          box-shadow: inset 0 0 18px rgba(245, 214, 91, 0.22);
         }
         .instr-hint {
           margin: 0;
