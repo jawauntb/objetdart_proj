@@ -12,6 +12,11 @@
  * Pure and import-free by law: same seed = same cell, forever. No DOM, no
  * audio, no side effects — node-testable standalone (scripts/test-cytology.mjs).
  * The room that renders these (CellsPlasm) owns canvas, sound, and haptics.
+ *
+ * The culture's own clock (advanceCulture / catchUpCulture, below) lives here
+ * too, for the same reason: it is a pure decode of (stored state, elapsed
+ * real hours) into the next culture, deterministic and node-testable, with
+ * no DOM or wall-clock read inside it — the room passes Date.now() in.
  */
 
 /** Hard population cap for the plasm; divisions beyond it retire the oldest. */
@@ -228,4 +233,192 @@ export function daughterSeeds(seed: number, generation: number): [number, number
 export function settlePopulation<T>(cells: T[], cap: number = MAX_CELLS): { kept: T[]; retired: T[] } {
   const over = Math.max(0, cells.length - Math.max(1, cap));
   return { kept: cells.slice(over), retired: cells.slice(0, over) };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// The culture's own clock — accumulating persistence (plan the-third-law).
+//
+// A dish left overnight has gone on without you: some cells divided into
+// descendants, some settled and dimmed, the population eased toward its own
+// resting point. The whole gap is captured in ONE relaxation step per cell —
+// never a loop over elapsed hours — so a dish opened after six months costs
+// exactly what one opened after six minutes costs. That is the bound: cost
+// is a function of population size (≤ MAX_CELLS), never of elapsed time.
+//
+// Growth and thinning are the same formula read two ways: population relaxes
+// exponentially toward STEADY_POPULATION from either side. Left below it, a
+// lone cell's descendants fill the dish in; left above it (someone divided
+// fast right before closing the tab), the eldest settle and the census eases
+// back down. Bounded, deterministic, and it never touches an empty dish —
+// letting the culture rest (LetGo) is the only way to zero it, and it stays
+// zero until a hand plants something new.
+
+export const HOUR_MS = 3_600_000;
+/** Hours beyond which nothing further changes. The relaxation below already
+ *  saturates well inside this; it exists so a corrupt or far-future stored
+ *  clock can't be fed an astronomical exponent. */
+export const MAX_CATCHUP_H = 24 * 60; // 60 days
+/** The population's own resting point. Comfortably under MAX_CELLS so a
+ *  dish grown large by hand still has room to visibly ease back, and one
+ *  left dividing from a single cell has room to visibly fill in. */
+export const STEADY_POPULATION = 14;
+/** e-folding time of the relaxation toward STEADY_POPULATION, hours. */
+const RELAX_TAU_H = 40;
+/** e-folding time of a cell's vitality decay toward its floor, hours. */
+const VITALITY_TAU_H = 30;
+/** A settled cell never reads as fully spent — it dims, it does not go dark. */
+export const VITALITY_FLOOR = 0.35;
+/** Bounded positional wander applied once per catch-up, nx units. */
+const MAX_DRIFT = 0.05;
+const DRIFT_TAU_H = 60;
+
+function clamp(v: number, a: number, b: number): number {
+  return Math.max(a, Math.min(b, v));
+}
+function clamp01(v: number): number {
+  return clamp(v, 0, 1);
+}
+
+/** One resident as the culture's persisted state knows it — a compact
+ *  vector, never frame data. Position, lineage depth, and freshness are
+ *  enough to redraw a whole cell from `cellFromSeed`. */
+export type LineageCell = {
+  id: string;
+  seed: number;
+  nx: number;
+  ny: number;
+  generation: number;
+  /** 0..1 — how recently this cell (or an ancestor at this spot) was fresh.
+   *  Starts at 1 on seeding or division; decays only across real elapsed
+   *  time between visits, never within a live session. */
+  vitality: number;
+};
+
+export type StoredCulture = { cells: LineageCell[]; lastSeen: number };
+
+/** Deterministic per-seed angle, reused for both division offset and the
+ *  bounded drift nudge (a different salt keeps the two independent). */
+function seedAngle(seed: number, salt: number): number {
+  return (hashSeed(seed, salt) / 4294967296) * Math.PI * 2;
+}
+
+/**
+ * Advance a culture across `hoursAway` real hours in one closed-form pass.
+ * Pure and deterministic: identical inputs always produce the identical
+ * culture. An empty dish is a real, remembered state — nothing grows from
+ * nothing, so it is returned untouched.
+ */
+export function advanceCulture(cells: LineageCell[], hoursAwayRaw: number): LineageCell[] {
+  if (cells.length === 0) return cells;
+  const hoursAway = clamp(hoursAwayRaw, 0, MAX_CATCHUP_H);
+  if (hoursAway <= 0) return cells;
+
+  const decay = Math.exp(-hoursAway / VITALITY_TAU_H);
+  let pool: LineageCell[] = cells.map((c) => ({
+    ...c,
+    vitality: Math.max(VITALITY_FLOOR, Math.min(1, c.vitality * decay)),
+  }));
+
+  const target =
+    STEADY_POPULATION + (pool.length - STEADY_POPULATION) * Math.exp(-hoursAway / RELAX_TAU_H);
+  const rounded = Math.max(1, Math.min(MAX_CELLS, Math.round(target)));
+
+  if (rounded > pool.length) {
+    // growth: the healthiest resident divides first, seed breaking ties so
+    // the same gap always cascades through the same lineage.
+    let growable = Math.min(rounded - pool.length, MAX_CELLS - pool.length);
+    let guard = 0;
+    while (growable > 0 && pool.length > 0 && guard < MAX_CELLS * 2) {
+      guard += 1;
+      pool.sort((a, b) => b.vitality - a.vitality || a.seed - b.seed);
+      const parent = pool[0];
+      const [sa, sb] = daughterSeeds(parent.seed, parent.generation);
+      const gen = parent.generation + 1;
+      const axis = seedAngle(parent.seed, 71);
+      const off = 0.05;
+      const a: LineageCell = {
+        id: `ce-${sa.toString(36)}-${gen}`,
+        seed: sa,
+        nx: clamp01(parent.nx + Math.cos(axis) * off),
+        ny: clamp(parent.ny + Math.sin(axis) * off, 0.06, 0.96),
+        generation: gen,
+        vitality: 1,
+      };
+      const b: LineageCell = {
+        id: `ce-${sb.toString(36)}-${gen}`,
+        seed: sb,
+        nx: clamp01(parent.nx - Math.cos(axis) * off),
+        ny: clamp(parent.ny - Math.sin(axis) * off, 0.06, 0.96),
+        generation: gen,
+        vitality: 1,
+      };
+      pool = pool.filter((c) => c !== parent);
+      pool.push(a, b);
+      growable -= 1;
+    }
+  } else if (rounded < pool.length) {
+    // thinning: the lowest-vitality residents settle out first — a census
+    // easing back to the dish's own resting point, never to nothing.
+    const shrink = pool.length - rounded;
+    pool = [...pool].sort((a, b) => a.vitality - b.vitality || a.seed - b.seed).slice(shrink);
+  }
+
+  // bounded drift: survivors wander a little further from where they were
+  // left, saturating with elapsed time — never a teleport, never unbounded.
+  pool = pool.map((c) => {
+    const mag = MAX_DRIFT * (1 - Math.exp(-hoursAway / DRIFT_TAU_H));
+    const a = seedAngle(c.seed, 911);
+    return {
+      ...c,
+      nx: clamp01(c.nx + Math.cos(a) * mag),
+      ny: clamp(c.ny + Math.sin(a) * mag, 0.05, 0.96),
+    };
+  });
+
+  return settlePopulation(pool, MAX_CELLS).kept;
+}
+
+/** Validate one persisted resident. Never throws; a malformed entry is
+ *  simply dropped rather than corrupting the culture. */
+function validateLineageCell(raw: unknown): LineageCell | null {
+  if (!raw || typeof raw !== "object") return null;
+  const n = raw as Record<string, unknown>;
+  if (typeof n.id !== "string") return null;
+  if (typeof n.seed !== "number" || !Number.isFinite(n.seed)) return null;
+  if (typeof n.nx !== "number" || !Number.isFinite(n.nx)) return null;
+  if (typeof n.ny !== "number" || !Number.isFinite(n.ny)) return null;
+  const generation =
+    typeof n.generation === "number" && Number.isFinite(n.generation) ? Math.max(0, Math.floor(n.generation)) : 0;
+  const vitality = typeof n.vitality === "number" && Number.isFinite(n.vitality) ? clamp01(n.vitality) : 1;
+  return { id: n.id, seed: n.seed >>> 0, nx: clamp01(n.nx), ny: clamp01(n.ny), generation, vitality };
+}
+
+/**
+ * Decode a persisted culture from an arbitrary parsed JSON value. Corrupt,
+ * partial, or absent state degrades to a well-formed empty culture rather
+ * than throwing — a bad localStorage value must never break the room.
+ */
+export function validateStoredCulture(raw: unknown, nowMs: number): StoredCulture {
+  const empty: StoredCulture = { cells: [], lastSeen: nowMs };
+  if (!raw || typeof raw !== "object") return empty;
+  const n = raw as Record<string, unknown>;
+  const cells = Array.isArray(n.cells)
+    ? n.cells.map(validateLineageCell).filter((c): c is LineageCell => c != null).slice(-MAX_CELLS)
+    : [];
+  // A missing/invalid clock reads as "just seen now" — first load after this
+  // shipped, or a legacy record with no clock, never fast-forwards a culture
+  // that was never actually left alone.
+  const lastSeen = typeof n.lastSeen === "number" && Number.isFinite(n.lastSeen) ? n.lastSeen : nowMs;
+  return { cells, lastSeen };
+}
+
+/**
+ * The single entry point a room calls on load: decode the elapsed real
+ * hours since `stored.lastSeen` and advance the culture across the gap. A
+ * clock set backwards (or a stored future timestamp) reads as zero elapsed —
+ * never negative, never a jump.
+ */
+export function catchUpCulture(stored: StoredCulture, nowMs: number): StoredCulture {
+  const hoursAway = Math.max(0, (nowMs - stored.lastSeen) / HOUR_MS);
+  return { cells: advanceCulture(stored.cells, hoursAway), lastSeen: nowMs };
 }
