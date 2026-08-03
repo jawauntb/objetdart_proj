@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import SiteHeader from "@/components/SiteHeader";
 import ScaleTravel from "@/components/ScaleTravel";
+import MetaNavigator from "@/components/MetaNavigator";
 import Waves from "@/components/Waves";
 
 export default function WavesPage() {
@@ -16,6 +17,7 @@ export default function WavesPage() {
         <Waves />
       </main>
       <ScaleTravel route="/waves" />
+      <MetaNavigator route="/waves" />
     </>
   );
 }

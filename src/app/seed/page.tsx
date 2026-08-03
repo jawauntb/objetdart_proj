@@ -7,19 +7,19 @@ import ScaleTravel from "@/components/ScaleTravel";
 import MetaNavigator from "@/components/MetaNavigator";
 import { getFieldAudio } from "@/lib/audio";
 
-const DropSphere = dynamic(() => import("@/components/DropSphere"), { ssr: false });
+const SeedEmbryo = dynamic(() => import("@/components/SeedEmbryo"), { ssr: false });
 
-export default function DropPage() {
+export default function SeedPage() {
   useEffect(() => {
-    getFieldAudio().setAmbientProfile("aphros");
+    getFieldAudio().setAmbientProfile("garden");
   }, []);
 
   return (
     <>
       <SiteHeader />
-      <DropSphere />
-      <ScaleTravel route="/drop" />
-      <MetaNavigator route="/drop" />
+      <SeedEmbryo />
+      <ScaleTravel route="/seed" />
+      <MetaNavigator route="/seed" />
     </>
   );
 }
