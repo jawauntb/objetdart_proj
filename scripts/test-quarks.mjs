@@ -31,6 +31,9 @@ const {
   VACUUM_SLOT_MS,
   VACUUM_MAX_LIFE_MS,
   hadronFromSeed,
+  kindForDepth,
+  seedForKind,
+  BARYON_DEPTH,
   tubesOf,
   constituentCount,
   colorCharge,
@@ -54,6 +57,40 @@ for (const seed of SEEDS.slice(0, 24)) {
   assert.ok(distinct.size > SEEDS.length * 0.9, "different seeds should decode to different hadrons");
   const kinds = new Set(SEEDS.map((seed) => hadronFromSeed(seed).kind));
   assert.deepEqual([...kinds].sort(), ["pair", "triplet"], "the seed space must reach both kinds");
+}
+
+// — The hand's choice of meson or baryon, made of duration alone. The bugs
+//   this catches: a depth map that flips the two kinds (so a light press
+//   makes the expensive thing), a seed rewrite that decodes back to the
+//   other kind, and a rewrite that is not idempotent (so holding through the
+//   threshold twice would flap).
+{
+  assert.equal(kindForDepth(0), "pair", "the cheap thing comes first");
+  assert.equal(kindForDepth(BARYON_DEPTH - 1e-9), "pair", "…right up to the threshold");
+  assert.equal(kindForDepth(BARYON_DEPTH), "triplet", "and the threshold itself pays for three");
+  assert.equal(kindForDepth(1), "triplet", "as does anything deeper");
+  let flips = 0;
+  let prev = kindForDepth(0);
+  for (let d = 0; d <= 1.0001; d += 0.005) {
+    const k = kindForDepth(d);
+    if (k !== prev) flips += 1;
+    prev = k;
+  }
+  assert.equal(flips, 1, "depth crosses the choice exactly once — never back again");
+
+  for (const seed of SEEDS) {
+    for (const kind of ["pair", "triplet"]) {
+      const s = seedForKind(seed, kind);
+      assert.equal(hadronFromSeed(s).kind, kind, `seedForKind must actually decode to ${kind}`);
+      assert.equal(seedForKind(s, kind), s, "and saying it twice must change nothing");
+      assert.ok(s >= 0 && s <= 0xffffffff, "seeds stay unsigned 32-bit");
+    }
+    assert.notEqual(
+      seedForKind(seed, "pair"),
+      seedForKind(seed, "triplet"),
+      "the two kinds cannot share a seed",
+    );
+  }
 }
 
 // — Structure: the kind lives in the low bit (snapChildren writes child

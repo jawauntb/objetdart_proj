@@ -262,6 +262,25 @@ export default function FlowersGarden() {
     const hold: { plantId: string | null; doneId: string | null } = { plantId: null, doneId: null };
     let keyWilt: { id: string; t0: number } | null = null;
 
+    // ————— performance contract (room-runtime): governed detail, hard sleep
+    // while hidden or gallery-paused, DPR ceiling by tier —————
+    const embedded = isEmbeddedFrame();
+    const governor = createFrameGovernor(embedded ? "medium" : "high");
+    let currentTier = governor.tier();
+    let detail = detailForTier(currentTier);
+    let docHidden = false;
+    let galleryPaused = embedded;
+    let sleeping = docHidden || galleryPaused;
+    // two-finger pan (grammar §5): offsets the frame, clamped to a gentle range
+    let panX = 0;
+    let panY = 0;
+    let panTargetX = 0;
+    let panTargetY = 0;
+    // three-finger twist = season (grammar §5): a slow cyclic tint + growth mood
+    let season = 0; // 0..4, wraps — spring/summer/autumn/winter
+    let seasonTarget = 0;
+    let seasonSnapped = 0;
+
     // fingertip charge — visual only; every semantic threshold stays in the
     // gesture engine. These listeners never plant, never time gestures: they
     // only let the draw loop show the soil answering from the first ms of
@@ -285,6 +304,17 @@ export default function FlowersGarden() {
     reduce = mq.matches;
     const onMq = () => { reduce = mq.matches; };
     mq.addEventListener?.("change", onMq);
+
+    const offVisibility = onVisibility((hidden) => {
+      docHidden = hidden;
+      sleeping = docHidden || galleryPaused;
+      if (sleeping) governor.force("sleep");
+    });
+    const offGalleryPause = onGalleryPause((paused) => {
+      galleryPaused = paused;
+      sleeping = docHidden || galleryPaused;
+      if (sleeping) governor.force("sleep");
+    });
 
     const syncPlanted = () => {
       setPlantedAlive(plants.filter((p) => !p.volunteer && p.wiltAt == null).length);
@@ -326,9 +356,14 @@ export default function FlowersGarden() {
     const audio = () => getFieldAudio();
     const note = (midi: number, ms = 120) => { try { audio().playNote(midi, ms); } catch { /* noop */ } };
 
+    // background wash + ambient glow — recomputed only on resize, never per
+    // frame (a per-frame createLinearGradient/createRadialGradient is the
+    // hazard the performance contract forbids).
+    let bgGrad: CanvasGradient | null = null;
+    let glowGrad: CanvasGradient | null = null;
     const resize = () => {
       const r = wrap.getBoundingClientRect();
-      const ratio = resolveDpr(isEmbeddedFrame() ? "medium" : "high", { embedded: isEmbeddedFrame(), maxDpr: 1.5 });
+      const ratio = resolveDpr(currentTier, { embedded, reducedMotion: reduce, maxDpr: 1.5 });
       width = Math.max(320, Math.floor(r.width));
       height = Math.max(480, Math.floor(r.height));
       rectLeft = r.left;
@@ -338,6 +373,14 @@ export default function FlowersGarden() {
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
       ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+      bgGrad = ctx.createLinearGradient(0, 0, 0, height);
+      bgGrad.addColorStop(0, "#0a1214");
+      bgGrad.addColorStop(0.62, "#0d1a1c");
+      bgGrad.addColorStop(1, "#122023");
+      glowGrad = ctx.createRadialGradient(width * 0.5, height * 0.3, 10, width * 0.5, height * 0.42, Math.max(width, height) * 0.7);
+      glowGrad.addColorStop(0, "rgba(231, 172, 82, 0.10)");
+      glowGrad.addColorStop(0.5, "rgba(78, 125, 140, 0.05)");
+      glowGrad.addColorStop(1, "rgba(0,0,0,0)");
     };
     resize();
     const observer = new ResizeObserver(resize);
@@ -685,8 +728,34 @@ export default function FlowersGarden() {
           }
         }
       },
+      pan2: (e) => {
+        lastInteractionAt = performance.now();
+        // two-finger drag pans the frame — a gentle, self-centering window
+        // onto the bed (the garden has no wider world to travel to yet)
+        panTargetX = clamp(panTargetX + e.dx * 0.6, -width * 0.16, width * 0.16);
+        panTargetY = clamp(panTargetY + e.dy * 0.6, -height * 0.12, height * 0.12);
+      },
       twist: (e) => {
-        if (e.fingers === 3) return; // three fingers turn the season, not the lens
+        if (e.fingers === 3) {
+          // three fingers turn the season — the law layer's slow cycle.
+          // Continuous: the season keeps advancing while the wrist turns,
+          // and crosses into the next quarter with a felt click.
+          lastInteractionAt = performance.now();
+          if (e.phase === "move") {
+            seasonTarget += e.angle / (Math.PI / 2);
+            const now = performance.now();
+            const cur = Math.floor(((seasonTarget % 4) + 4) % 4);
+            if (cur !== seasonSnapped) {
+              seasonSnapped = cur;
+              if (now - lastTiltSoundAt > 180) {
+                lastTiltSoundAt = now;
+                note(45 + cur * 2, 220);
+                try { haptics.detent(); } catch { /* noop */ }
+              }
+            }
+          }
+          return;
+        }
         lastInteractionAt = performance.now();
         // two fingers rotate the lens: felt garden ↔ botanical diagram
         if (e.phase === "move") {
@@ -884,6 +953,11 @@ export default function FlowersGarden() {
     const shadowGrad = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
     shadowGrad.addColorStop(0, "rgba(4, 8, 10, 0.55)");
     shadowGrad.addColorStop(1, "rgba(4, 8, 10, 0)");
+    // one shared unit-space press-glimmer gradient, transformed + alpha-scaled
+    // per frame instead of recreated (the same trick as shadowGrad above)
+    const glimmerGrad = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+    glimmerGrad.addColorStop(0, "#E7AC52");
+    glimmerGrad.addColorStop(1, "rgba(231, 172, 82, 0)");
 
     // the bloom moment overshoots, then settles — the ceremony of opening
     const bloomPulseOf = (p: Plant, now: number): number => {
@@ -1058,7 +1132,7 @@ export default function FlowersGarden() {
       if (feltAlpha > 0.02) {
         const shR = Math.max(0.05, geo.headRadius * boost * 1.15) * size;
         ctx.save();
-        ctx.translate(bx, by + 2);
+        ctx.translate(bx + panX, by + panY + 2);
         ctx.scale(shR, shR * 0.26);
         ctx.globalAlpha = 0.32 * feltAlpha * (0.4 + 0.6 * geo.openness);
         ctx.fillStyle = shadowGrad;
@@ -1069,7 +1143,7 @@ export default function FlowersGarden() {
       }
 
       ctx.save();
-      ctx.translate(bx, by);
+      ctx.translate(bx + panX, by + panY);
       ctx.rotate(lean);
       ctx.scale(size, size * (1 - 0.18 * wiltW));
 
@@ -1143,11 +1217,11 @@ export default function FlowersGarden() {
         ctx.restore();
         if (h === 0) {
           // record screen-space head + base for hit tests (sway ignored — small)
-          p.hx = bx + head.x * size;
-          p.hy = by + head.y * size;
+          p.hx = bx + panX + head.x * size;
+          p.hy = by + panY + head.y * size;
           p.hr = geo.headRadius * size * boost * Math.max(1, sp.petal.length);
-          p.bx = bx;
-          p.by = by;
+          p.bx = bx + panX;
+          p.by = by + panY;
         }
       }
       ctx.restore();
@@ -1156,6 +1230,13 @@ export default function FlowersGarden() {
     // ————— the loop —————
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
+      const tier = governor.beginFrame(now);
+      if (sleeping) return; // hard pause: tab hidden or gallery parent paused
+      if (tier !== currentTier) {
+        currentTier = tier;
+        detail = detailForTier(tier);
+        resize(); // also re-resolves DPR for the new tier
+      }
       if (!reduce && now - lastFrame < 30) return;
       lastFrame = now;
       const delta = Math.min(64, now - last);
@@ -1168,6 +1249,14 @@ export default function FlowersGarden() {
       wind += (windTarget + tiltWind - wind) * Math.min(1, dt * 2.2);
       windTarget *= Math.exp(-dt * 0.5);
       lens += (lensTarget - lens) * Math.min(1, dt * 6);
+      // two-finger pan eases toward its target and gently springs home — the
+      // garden always has a rest frame to return to
+      panTargetX *= Math.exp(-dt * 0.4);
+      panTargetY *= Math.exp(-dt * 0.4);
+      panX += (panTargetX - panX) * Math.min(1, dt * 4);
+      panY += (panTargetY - panY) * Math.min(1, dt * 4);
+      // season eases toward wherever the three-finger twist left it
+      season += (seasonTarget - season) * Math.min(1, dt * 3);
 
       // shared breath: the audio swell clock when audible, RAF when not
       const audioT = (() => { try { return audio().getAudioTime(); } catch { return null; } })();
@@ -1201,25 +1290,26 @@ export default function FlowersGarden() {
         p.swayX += p.swayV * dt * timeScale;
       }
 
-      // background — a garden after dark, lit by the candle families
-      const bg = ctx.createLinearGradient(0, 0, 0, height);
-      bg.addColorStop(0, "#0a1214");
-      bg.addColorStop(0.62, "#0d1a1c");
-      bg.addColorStop(1, "#122023");
-      ctx.fillStyle = bg;
+      // background — a garden after dark, lit by the candle families. Season
+      // tints the wash toward its own light without leaving the palette.
+      ctx.fillStyle = bgGrad ?? "#0a1214";
       ctx.fillRect(0, 0, width, height);
-      const glow = ctx.createRadialGradient(width * 0.5, height * 0.3, 10, width * 0.5, height * 0.42, Math.max(width, height) * 0.7);
-      glow.addColorStop(0, "rgba(231, 172, 82, 0.10)");
-      glow.addColorStop(0.5, "rgba(78, 125, 140, 0.05)");
-      glow.addColorStop(1, "rgba(0,0,0,0)");
-      ctx.fillStyle = glow;
+      const seasonTint = ["rgba(78,140,90,0.05)", "rgba(231,172,82,0.07)", "rgba(200,110,60,0.07)", "rgba(120,150,190,0.06)"];
+      const si = Math.floor(((season % 4) + 4) % 4);
+      ctx.fillStyle = seasonTint[si];
       ctx.fillRect(0, 0, width, height);
-      // drifting parchment motes
+      ctx.save();
+      ctx.translate(panX * 0.3, panY * 0.3);
+      ctx.fillStyle = glowGrad ?? "rgba(231,172,82,0.1)";
+      ctx.fillRect(-panX, -panY, width + Math.abs(panX) * 2, height + Math.abs(panY) * 2);
+      ctx.restore();
+      // drifting parchment motes — count scaled by the governed detail tier
       ctx.save();
       ctx.globalCompositeOperation = "screen";
-      for (let i = 0; i < 60; i++) {
-        const px = twinkleHash(i + 401) * width;
-        const py = twinkleHash(i + 809) * height;
+      const moteCount = Math.max(6, Math.round(60 * detail.particles));
+      for (let i = 0; i < moteCount; i++) {
+        const px = twinkleHash(i + 401) * width + panX * 0.5;
+        const py = twinkleHash(i + 809) * height + panY * 0.5;
         const tw = reduce ? 0.1 : 0.09 + Math.sin(localT * 0.5 + i) * 0.05;
         ctx.fillStyle = colorAlpha(i % 4 === 0 ? "#E7AC52" : "#DDD3BE", Math.max(0, tw));
         ctx.beginPath();
@@ -1283,17 +1373,21 @@ export default function FlowersGarden() {
         ctx.arc(0, 0, 1, 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
-        // gathering glimmer, converging on the fingertip
+        // gathering glimmer, converging on the fingertip — a cached unit
+        // gradient transformed + alpha-scaled, never recreated per frame
+        const rr = reduce ? 16 : 26 - 12 * u;
         ctx.save();
         ctx.globalCompositeOperation = "lighter";
-        const rr = reduce ? 16 : 26 - 12 * u;
-        const gg = ctx.createRadialGradient(pressX, pressY, 0, pressX, pressY, rr);
-        gg.addColorStop(0, colorAlpha("#E7AC52", 0.1 + 0.24 * u));
-        gg.addColorStop(1, "rgba(231, 172, 82, 0)");
-        ctx.fillStyle = gg;
+        ctx.translate(pressX, pressY);
+        ctx.scale(rr, rr);
+        ctx.globalAlpha = 0.1 + 0.24 * u;
+        ctx.fillStyle = glimmerGrad;
         ctx.beginPath();
-        ctx.arc(pressX, pressY, rr, 0, Math.PI * 2);
+        ctx.arc(0, 0, 1, 0, Math.PI * 2);
         ctx.fill();
+        ctx.restore();
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
         if (!reduce) {
           ctx.fillStyle = colorAlpha("#F2C56B", 0.2 + 0.3 * u);
           for (let k = 0; k < 6; k++) {

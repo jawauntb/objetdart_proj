@@ -14,6 +14,13 @@ import { relaxTurbulence, stirTurbulence } from "@/lib/turbulence";
 import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import MobileInstrumentPanel, { MOBILE_QUERY } from "@/components/MobileInstrumentPanel";
+import {
+  createFrameGovernor,
+  detailForTier,
+  isEmbeddedFrame,
+  onVisibility,
+  resolveDpr,
+} from "@/lib/room-runtime";
 
 /**
  * /time — a playable relativity instrument.
@@ -97,6 +104,11 @@ export default function TimeManifold() {
   // ── frame layer (two fingers) ──
   const lensRef = useRef({ cur: 0, target: 0 }); // 0 worldline · 1 felt duration · 2 metric
   const panRef = useRef({ x: 0, y: 0, tx: 0, ty: 0 });
+  // ── law layer, angular channel (three-finger twist) ──
+  // the room's slow cycle is cosmic epoch: 0 young and hot, 1 late and cold.
+  // it tints the manifold's own palette and drifts the well's idle hum —
+  // a season the hand can turn forward or back, never a switch.
+  const epochRef = useRef({ cur: 0.18, target: 0.18 });
   // ── vessel layer (the device) ──
   // Gravity's lean is a mass on a spring, not a reading: the target comes
   // from the smoothed tilt, and the well takes about a second to settle.
@@ -145,13 +157,33 @@ export default function TimeManifold() {
     let height = 0;
     let raf = 0;
     let last = performance.now();
+    // clock faces (60 ticks × 2 dials) never change shape between frames —
+    // cache them to an offscreen sprite per (radius, accent) instead of
+    // walking the 60-iteration loop every frame.
+    const tickSprites = new Map<string, HTMLCanvasElement>();
     if (nextRadiateAtRef.current < 0) {
       nextRadiateAtRef.current = last + 5000 + Math.random() * 6000;
     }
 
+    // ── performance contract (room-runtime): a frame governor picks a
+    // quality tier from real frame time, and the DPR ceiling + a hard sleep
+    // while hidden ride on it. Nothing here draws while the tab can't see it.
+    const gov = createFrameGovernor();
+    let sleeping = false;
+    const offVis = onVisibility((hidden) => {
+      sleeping = hidden;
+      if (!hidden && !raf) {
+        last = performance.now();
+        raf = requestAnimationFrame(draw);
+      }
+    });
+
     const resize = () => {
       const rect = root.getBoundingClientRect();
-      const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+      const dpr = resolveDpr(gov.tier(), {
+        embedded: isEmbeddedFrame(),
+        reducedMotion: reduceRef.current,
+      });
       width = Math.max(320, Math.floor(rect.width));
       height = Math.max(480, Math.floor(rect.height));
       canvas.width = Math.floor(width * dpr);
@@ -159,6 +191,7 @@ export default function TimeManifold() {
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      tickSprites.clear(); // dpr changed — cached clock faces are stale
     };
 
     resize();
@@ -169,6 +202,9 @@ export default function TimeManifold() {
     const draw = (now: number) => {
       const delta = Math.min(60, now - last);
       last = now;
+      const tier = gov.beginFrame(now);
+      if (sleeping) { raf = 0; return; } // no draw while hidden — resumed by onVisibility
+      const detail = detailForTier(tier);
 
       const reduce = reduceRef.current;
       const vel = velRef.current;
@@ -429,8 +465,9 @@ export default function TimeManifold() {
       if (wMetric > 0.02) {
         ctx.save();
         ctx.lineWidth = 1.1;
-        const colStep = Math.max(52, width / 6);
-        const rowStep = Math.max(52, height / 8);
+        const fieldSparsity = 1 / Math.max(0.4, detail.samples);
+        const colStep = Math.max(52, (width / 6) * fieldSparsity);
+        const rowStep = Math.max(52, (height / 8) * fieldSparsity);
         const arm = Math.min(colStep, rowStep) * 0.3;
         // anchored to the manifold like the lattice, so the field slides under
         // a panning frame instead of riding along with it
@@ -462,25 +499,38 @@ export default function TimeManifold() {
       }
 
       // ── worldline (glowing geodesic) ──
-      const SAMPLES = 90;
+      // sample count scales with the frame governor's tier; the glow is a
+      // cheap additive pass (two wider, fainter strokes under the line)
+      // rather than a per-frame ctx.shadowBlur, which is catastrophic on
+      // mobile at this line's length.
+      const SAMPLES = Math.max(24, Math.round(90 * detail.samples));
       const lineA = 0.34 + wGeo * 0.61 + wFelt * 0.2;
-      ctx.save();
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-      ctx.shadowColor = colorAlpha(GEO, 0.65 * lineA);
-      ctx.shadowBlur = reduce ? 0 : 16;
-      ctx.strokeStyle = colorAlpha(GEO, lineA);
-      ctx.lineWidth = 1.4 + 2 * (wGeo + wFelt);
-      ctx.beginPath();
-      // a storm shivers the geodesic — the same calm↔storm axis the haptics ride
+      const pts: [number, number][] = [];
       const shiver = storm * 3.2;
       for (let i = 0; i <= SAMPLES; i += 1) {
         const [wx, wy] = warp(...baseAt(i / SAMPLES));
         const j = shiver > 0.02 ? Math.sin(i * 1.7 + now * 0.006) * shiver : 0;
-        if (i === 0) ctx.moveTo(wx, wy);
-        else ctx.lineTo(wx + j, wy);
+        pts.push([wx + j, wy]);
       }
-      ctx.stroke();
+      ctx.save();
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      const strokePath = () => {
+        ctx.beginPath();
+        pts.forEach(([px, py], i) => (i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py)));
+        ctx.stroke();
+      };
+      if (!reduce) {
+        ctx.strokeStyle = colorAlpha(GEO, lineA * 0.16);
+        ctx.lineWidth = 7 + 4 * (wGeo + wFelt);
+        strokePath();
+        ctx.strokeStyle = colorAlpha(GEO, lineA * 0.28);
+        ctx.lineWidth = 3.6 + 3 * (wGeo + wFelt);
+        strokePath();
+      }
+      ctx.strokeStyle = colorAlpha(GEO, lineA);
+      ctx.lineWidth = 1.4 + 2 * (wGeo + wFelt);
+      strokePath();
       ctx.restore();
 
       // ── proper-time ticks strung along the worldline ──
@@ -628,8 +678,8 @@ export default function TimeManifold() {
       const cyClock = clamp(height * 0.16, 92, 210);
       const r = clamp(S * 0.088, 40, Math.min(width * 0.2, cyClock - 30));
       const off = r * 1.42;
-      drawClock(ctx, dialX - off, cyClock, r, coordRef.current, LIGHT, "coordinate");
-      drawClock(ctx, dialX + off, cyClock, r, properRef.current, GEO, "proper");
+      drawClock(ctx, tickSprites, dialX - off, cyClock, r, coordRef.current, LIGHT, "coordinate");
+      drawClock(ctx, tickSprites, dialX + off, cyClock, r, properRef.current, GEO, "proper");
       // γ bridge between the dials
       ctx.save();
       ctx.fillStyle = "rgba(246, 241, 224, 0.6)";
@@ -1415,8 +1465,40 @@ export default function TimeManifold() {
   );
 }
 
+/** Ticks never change shape between frames — cached once per (radius, accent). */
+function getTickSprite(cache: Map<string, HTMLCanvasElement>, r: number, accent: string): HTMLCanvasElement {
+  const key = `${Math.round(r)}|${accent}`;
+  const cached = cache.get(key);
+  if (cached) return cached;
+  const res = 2; // supersample so the cached face stays crisp under the ctx's own dpr transform
+  const size = Math.max(2, Math.ceil(r * 2 * res));
+  const sprite = document.createElement("canvas");
+  sprite.width = size;
+  sprite.height = size;
+  const sctx = sprite.getContext("2d");
+  if (sctx) {
+    sctx.translate(size / 2, size / 2);
+    sctx.scale(res, res);
+    for (let i = 0; i < 60; i += 1) {
+      const major = i % 5 === 0;
+      const a = (i / 60) * TAU;
+      const outer = r - 3;
+      const inner = r - (major ? 10 : 5);
+      sctx.strokeStyle = colorAlpha(accent, major ? 0.7 : 0.32);
+      sctx.lineWidth = major ? 1.4 : 0.7;
+      sctx.beginPath();
+      sctx.moveTo(Math.sin(a) * outer, -Math.cos(a) * outer);
+      sctx.lineTo(Math.sin(a) * inner, -Math.cos(a) * inner);
+      sctx.stroke();
+    }
+  }
+  cache.set(key, sprite);
+  return sprite;
+}
+
 function drawClock(
   ctx: CanvasRenderingContext2D,
+  tickSprites: Map<string, HTMLCanvasElement>,
   cx: number,
   cy: number,
   r: number,
@@ -1434,19 +1516,9 @@ function drawClock(
   ctx.strokeStyle = colorAlpha(accent, 0.55);
   ctx.stroke();
 
-  // ticks
-  for (let i = 0; i < 60; i += 1) {
-    const major = i % 5 === 0;
-    const a = (i / 60) * TAU;
-    const outer = r - 3;
-    const inner = r - (major ? 10 : 5);
-    ctx.strokeStyle = colorAlpha(accent, major ? 0.7 : 0.32);
-    ctx.lineWidth = major ? 1.4 : 0.7;
-    ctx.beginPath();
-    ctx.moveTo(cx + Math.sin(a) * outer, cy - Math.cos(a) * outer);
-    ctx.lineTo(cx + Math.sin(a) * inner, cy - Math.cos(a) * inner);
-    ctx.stroke();
-  }
+  // ticks — drawn once to an offscreen sprite, blitted every frame
+  const sprite = getTickSprite(tickSprites, r, accent);
+  ctx.drawImage(sprite, cx - r, cy - r, r * 2, r * 2);
 
   const secA = ((ms / 1000) % 60) / 60 * TAU;
   const minA = ((ms / 60000) % 60) / 60 * TAU;

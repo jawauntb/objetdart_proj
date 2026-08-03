@@ -46,14 +46,24 @@
 import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
-import { attachGestures } from "@/lib/gesture";
+import { THRESHOLDS, attachGestures } from "@/lib/gesture";
 import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import LetGo from "@/components/LetGo";
 import {
+  createFrameGovernor,
+  detailForTier,
+  isEmbeddedFrame,
+  onGalleryPause,
+  onVisibility,
+  resolveDpr,
+} from "@/lib/room-runtime";
+import {
+  HAND_MAX_A,
   MAX_A,
   MAX_NUCLEI,
   NUCLEON_TINTS,
+  accretedA,
   alphaQ,
   betaMinusQ,
   betaPlusQ,
@@ -71,6 +81,7 @@ import {
   packOffsets,
   settlePopulation,
   symbolFor,
+  valleyNuclide,
   type DecayMode,
 } from "@/lib/nucleons";
 
@@ -79,6 +90,10 @@ const RETIRE_MS = 1500;
 const MOTE_COUNT = 70;
 /** Free nucleons in flight at once; the flux trims the oldest. */
 const MAX_FREE = 26;
+/** The hold tiers, read from the grammar — never redefined here. */
+const TOUCH_MS = THRESHOLDS.tapMaxMs;
+const DWELL_MS = THRESHOLDS.dwellMs;
+const CEREMONY_MS = THRESHOLDS.ceremonyMs;
 /** Screen speed (px/s) that counts as one unit of collision energy. */
 const ENERGY_SPEED = 260;
 /** MeV delivered by a projectile arriving at ENERGY_SPEED. */
@@ -99,6 +114,14 @@ type Nucleus = {
   closed: boolean;
   /** 0..1 giant resonance, decays: the whole drop ringing after a strike. */
   ring: number;
+  /** 0..1 capture swell, decays — the drop visibly taking a nucleon in. */
+  swell: number;
+  /** The walk this drop has taken across the chart: n, z, n, z, … */
+  walk: number[];
+  /** Cached packing (only ever changes when A does). */
+  pack: Array<{ x: number; y: number }> | null;
+  packA: number;
+  packMask: boolean[] | null;
   /** Angular momentum from stirring — deforms the drop toward a spindle. */
   spin: number;
   spinPhase: number;
@@ -225,6 +248,11 @@ function makeNucleus(z: number, n: number, nx: number, ny: number, growth: numbe
     growth,
     closed: growth >= 1,
     ring: 0,
+    swell: 0,
+    walk: [n, z],
+    pack: null,
+    packA: -1,
+    packMask: null,
     spin: 0,
     spinPhase: hash01(seed) * Math.PI * 2,
     charge: 0,
@@ -306,6 +334,17 @@ export default function NucleonsField() {
     let windTargetX = 0;
     let windTargetY = 0;
     let fluxDebt = 0;
+    /** 0..1 — how hard the neutron wind is blowing, and for how long it
+     *  keeps blowing after the hand lets go. A flux is weather, not a shove. */
+    let flux = 0;
+    let lastFluxSoundAt = 0;
+    /** The room's slow cycle, 0..1: the vacuum cold ↔ the furnace. */
+    let season = 0.12;
+    let seasonSpokenAt = 0;
+    let ambientDebt = 0;
+    /** face-down: the field goes on making elements in the dark. */
+    let night = 0;
+    let nightTarget = 0;
     let timeScale = 1;
     let timeScaleTarget = 1;
     let lens = 0;
@@ -327,13 +366,50 @@ export default function NucleonsField() {
     let cursorVisible = false;
     let kbCharge = 0;
     let kbId: string | null = null;
-    const hold: { id: string | null; onExisting: boolean; seeded: boolean; freeId: number | null; asked: boolean } = {
+    let lastAccreteAt = 0;
+    let lastGatherNoteAt = 0;
+    const hold: {
+      id: string | null;
+      onExisting: boolean;
+      seeded: boolean;
+      freeId: number | null;
+      /** the loose nucleon was already here when the finger landed */
+      carried: boolean;
+      asked: boolean;
+      /** the drop this hold bound out of the vacuum, still gathering */
+      nucId: string | null;
+      /** 0..1 — what has visibly gathered under the finger so far */
+      gather: number;
+      gx: number;
+      gy: number;
+      atCeiling: boolean;
+    } = {
       id: null,
       onExisting: false,
       seeded: false,
       freeId: null,
+      carried: false,
       asked: false,
+      nucId: null,
+      gather: 0,
+      gx: 0,
+      gy: 0,
+      atCeiling: false,
     };
+    /** The gathering the room keeps drawing for a breath after the hand goes. */
+    let gatherFade = 0;
+
+    // ————— the room runtime: govern frames, sleep when unwatched —————
+    const gov = createFrameGovernor();
+    let sleeping = false;
+    let paused = false;
+    let lastFrameAt = 0;
+    const offVis = onVisibility((hidden) => {
+      sleeping = hidden;
+    });
+    const offPause = onGalleryPause((p) => {
+      paused = p;
+    });
 
     const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
     reduce = mq.matches;
@@ -391,9 +467,63 @@ export default function NucleonsField() {
     }
     setHasNuclei(nuclei.length > 0);
 
+    // ————— sprites: every glow this room draws is baked once —————
+    // A radial gradient built inside a per-element loop is the single most
+    // expensive thing a 2D canvas can do; these are drawn with drawImage
+    // instead, at whatever radius the moment asks for.
+    const sprite = (stops: Array<[number, string]>, size = 96): HTMLCanvasElement => {
+      const c = document.createElement("canvas");
+      c.width = size;
+      c.height = size;
+      const g = c.getContext("2d");
+      if (g) {
+        const grad = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+        for (const [stop, color] of stops) grad.addColorStop(stop, color);
+        g.fillStyle = grad;
+        g.fillRect(0, 0, size, size);
+      }
+      return c;
+    };
+    const glowSprite = (hex: string) =>
+      sprite([
+        [0, colorAlpha(hex, 0.85)],
+        [0.35, colorAlpha(hex, 0.34)],
+        [1, "rgba(0,0,0,0)"],
+      ], 64);
+    const SPRITES = {
+      neutron: glowSprite(NUCLEON_TINTS.neutron[3]),
+      proton: glowSprite(NUCLEON_TINTS.proton[3]),
+      /** the drop's skin, calm and strained */
+      rim: sprite([
+        [0.28, colorAlpha("#2A1E12", 0.5)],
+        [0.62, colorAlpha("#1A1309", 0.28)],
+        [1, "rgba(0,0,0,0)"],
+      ]),
+      rimStrained: sprite([
+        [0.28, colorAlpha(NUCLEON_TINTS.strain[1], 0.5)],
+        [0.62, colorAlpha(NUCLEON_TINTS.strain[0], 0.28)],
+        [1, "rgba(0,0,0,0)"],
+      ]),
+      halo: sprite([
+        [0, "rgba(231, 172, 82, 0.5)"],
+        [1, "rgba(0,0,0,0)"],
+      ]),
+      gather: sprite([
+        [0, "rgba(242, 238, 230, 0.42)"],
+        [0.45, "rgba(221, 211, 190, 0.14)"],
+        [1, "rgba(0,0,0,0)"],
+      ]),
+    };
+    const stamp = (img: HTMLCanvasElement, x: number, y: number, r: number, alpha: number) => {
+      if (alpha <= 0.004 || r <= 0.3) return;
+      ctx.globalAlpha = Math.min(1, alpha);
+      ctx.drawImage(img, x - r, y - r, r * 2, r * 2);
+      ctx.globalAlpha = 1;
+    };
+
     const resize = () => {
       const r = wrap.getBoundingClientRect();
-      const ratio = Math.min(window.devicePixelRatio || 1, 1.5);
+      const ratio = resolveDpr(gov.tier(), { embedded: isEmbeddedFrame(), reducedMotion: reduce });
       width = Math.max(320, Math.floor(r.width));
       height = Math.max(480, Math.floor(r.height));
       rectLeft = r.left;
