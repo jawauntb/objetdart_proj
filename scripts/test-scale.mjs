@@ -204,27 +204,27 @@ assert.equal(entryScaleFor("/colophon"), null);
   // reaches a branch for the first time (press, release, press again).
   const { travelOptions } = loadTsModule("src/lib/scale.ts");
   assert.deepEqual(
-    travelOptions("earth", -1, {}).map((b) => b.id),
+    Array.from(travelOptions("earth", -1, {}), (b) => b.id),
     ["atlas", "flowers"],
     "the earth offers the atlas first, then the garden",
   );
   assert.deepEqual(
-    travelOptions("earth", -1, { earth: "flowers" }).map((b) => b.id),
+    Array.from(travelOptions("earth", -1, { earth: "flowers" }), (b) => b.id),
     ["flowers", "atlas"],
     "memory reorders the offer, never removes a door",
   );
   assert.deepEqual(
-    travelOptions("manifold", -1, {}).map((b) => b.id),
+    Array.from(travelOptions("manifold", -1, {}), (b) => b.id),
     ["stars", "beyond"],
     "the fold offers stars first, then the beyond",
   );
   assert.deepEqual(
-    travelOptions("cells", 1, {}).map((b) => b.id),
+    Array.from(travelOptions("cells", 1, {}), (b) => b.id),
     ["drop", "flowers"],
     "cells rise into the drop first, then the garden",
   );
   assert.deepEqual(
-    travelOptions("coast", 1, {}).map((b) => b.id),
+    Array.from(travelOptions("coast", 1, {}), (b) => b.id),
     ["atlas"],
     "no fork, no cycling",
   );
