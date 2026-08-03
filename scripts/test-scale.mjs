@@ -363,8 +363,12 @@ assert.equal(entryScaleFor("/colophon"), null);
 // grain lets a drop sink into the plasm while a rock on the same span
 // cleaves into molecules. Each assertion names the bug it catches.
 {
+  // Array.from, not .map: the module is loaded in its own realm, so an
+  // array it built is not deepStrictEqual to a literal here however equal
+  // its contents. Every other comparison in this file normalises the same
+  // way — this helper was the one that did not.
   const routes = (dir, route, mem = {}) =>
-    travelOptionsForRoute(route, dir, mem).map((d) => d.route);
+    Array.from(travelOptionsForRoute(route, dir, mem), (d) => d.route);
 
   // A route override beats its band's door — the bug: the route layer
   // declared but never consulted, every drop-band room still falling to tissue.
@@ -381,13 +385,18 @@ assert.equal(entryScaleFor("/colophon"), null);
   assert.equal(routes(-1, "/soil")[0], "/cells", "soil crumbles into the living plasm");
   assert.equal(routes(-1, "/rocks")[0], "/molecules", "rock cleaves into its lattice");
 
-  // The ground's downward fork: garden first, then the strata. While /rocks
-  // and /soil are addresses without pages they resolve through to the built
-  // room of their band — the drop — never to a 404 and never to a dead wall.
-  // When the strata rooms land this flips to ["/flowers", "/rocks", "/soil"].
+  // The ground's downward fork: garden first, then the strata. /rocks has
+  // shipped, so it now answers as itself; /soil is still an address without
+  // a page and resolves through to the built room of its band — the drop —
+  // never to a 404 and never to a dead wall. When /soil lands too this
+  // becomes ["/flowers", "/rocks", "/soil"].
   const earthDown = routes(-1, "/earth");
   assert.equal(earthDown[0], "/flowers", "the ground's first door down is still the garden");
-  assert.deepEqual(earthDown, ["/flowers", "/drop"], "unbuilt strata walk through, they do not wall");
+  assert.deepEqual(
+    earthDown,
+    ["/flowers", "/rocks", "/drop"],
+    "a built stratum answers as itself; an unbuilt one walks through rather than walling",
+  );
 
   // The strata's own walls (travel FROM an address whose page is unbuilt
   // still resolves, so the rooms are playable the moment they ship).
@@ -397,8 +406,8 @@ assert.equal(entryScaleFor("/colophon"), null);
   // The peak's downward fork and the shore's doors.
   assert.deepEqual(
     routes(-1, "/mountain"),
-    ["/coast", "/drop", "/birds"],
-    "the peak descends to the shore, the strata (through the drop), the flock",
+    ["/coast", "/rocks", "/birds"],
+    "the peak descends to the shore, the rock it stands on, the flock",
   );
   assert.deepEqual(routes(-1, "/coast"), ["/drop", "/birds"], "the shore gives the drop back, and opens onto the flock");
   assert.deepEqual(routes(1, "/coast"), ["/mountain", "/earth"], "the shore keeps its peak and its land");
