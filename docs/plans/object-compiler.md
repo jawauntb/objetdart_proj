@@ -280,6 +280,16 @@ Audit the compiler's own coherence and package it as something a stranger could 
   contains user paths). A stranger with a fresh clone plus a Claude API key and this
   repository must be able to run M4 without touching M1's data at all — the
   retrieval bank replaces the corpus at inference time.
+- **The room-authoring transcripts are in subagent files, not parents.** M1's first
+  extractor pass rolled subagent transcripts into a single parent-session summary,
+  which obscured every paired sample the compiler actually needs to learn from. The
+  seven post-consolidation rooms (`/atmosphere` / `/solar` / `/soil` / `/planets` /
+  `/galaxy` / `/rocks` / `/beam`) were all built by subagents spawned from one parent
+  session (`1d1704ae`); their prompts are of the shape *"Salvage and land the `/X`
+  room for the objet d'art repo…"* and each writes into its own worktree at
+  `.claude/worktrees/agent-<hex>/`. **Every subagent is its own intent-arc and its own
+  row in `sessions.jsonl`.** The parent's `subagent_count` is a rollup for that
+  parent; the substantive work lives one layer down.
 
 ## What we are not doing
 
@@ -297,6 +307,26 @@ Audit the compiler's own coherence and package it as something a stranger could 
 - **We are not making an autonomous PR-opener.** The harness lands on a branch. A
   human still reads the diff, plays the room, decides whether to merge. The
   compiler's output is a *proposal*, not a commitment.
+
+## Future direction — skip the source, compile straight to the binary
+
+Once M4–M6 have proven the loop on source code, the same tomography argument holds
+one layer down: `K` need not emit TypeScript at all. The reward-computable target is
+the built `next` bundle plus the guide screenshot; the source is a *waypoint*, not
+the goal. A future variant of the compiler learns `K': spec → bundle` directly —
+skipping the readable TSX, the shader-string authoring step, and the whole
+`tsc → next build` pipeline. Same `spec.yaml` on the front; a compiled artifact on
+the back; the same harness (visual smoke test + gesture responsiveness probe
+against the shell contract) as reward.
+
+This is faster (no compile step per proposal) and cheaper (the model emits fewer
+tokens per room). It is also *less legible* — a human can no longer read the diff.
+So this direction is **only pursued after** the source-emitting compiler has been
+proven to produce rooms that a reviewer would sign off on unchanged. Until then,
+readability is the reason the compiler emits source: it lets a human debug the
+proposal instead of accepting an opaque artifact. Note this here so a future agent
+does not skip a step; do not build it until M4 is landing rooms without repair on
+first attempt with `p ≥ 0.6`.
 
 ## Directory conventions
 
@@ -329,6 +359,38 @@ paragraph is needed, it belongs in the milestone section above and this file owe
 that edit.
 
 <!-- append below this line -->
+
+### 2026-08-04 — M1 in progress
+
+Data extraction landed. Ten hand-audits produced (six from local sessions, four from
+merged PR diffs). The load-bearing finding: **subagent transcripts are the corpus**.
+The initial extractor treated a parent session as the row and rolled subagents into
+a `subagent_count`; that model was wrong. The extractor now emits one row per
+transcript (parent OR subagent), with `parent_session_id` linking children to their
+supervising session. Every one of the five recent post-consolidation rooms was
+built by a *subagent* of parent session `1d1704ae` — those subagent transcripts are
+the `(prompt, files-touched, worktree-diff)` triples M2 will read.
+
+- Ran the extractor; produced `data/object-compiler/sessions.jsonl` with 66 rows
+  (9 parents + 57 subagents) from `~/.claude/projects/-Users-jawaun-objetdart-proj/`.
+- Refactored `scripts/object-compiler/extract-corpus.py` to emit per-transcript rows.
+  See the git diff on this PR for the shape.
+- Ten hand-audits sit under `data/object-compiler/audits/agent-{A,B,C,D}.md`.
+- Two known extractor followups: (i) `tool_call_count` on parent rows is the count
+  from the parent transcript only, but the visual output during my earlier run
+  reported ~4000 for `1d1704ae` — that was a bug in the earlier rollup logic and
+  is now corrected; (ii) `files_touched` sometimes includes worktree paths under
+  `.claude/worktrees/agent-<hex>/` — those need to be *un-worktree'd* back to
+  repo-relative paths before M2 compares them against `git log`. Not a blocker for
+  M1's exit; M2's first task.
+- Corpus size after this pass: `sessions.jsonl` at ~60KB, so cheap to reread.
+
+**What the next agent should pick up first:** run `git log --all --oneline
+--since='2026-07-25' | grep -i "-room"` and pair each `/X-room` branch to its
+subagent transcript by the `first_user_message` field (search for `"Salvage and land
+the \`/X\` room"` or `"Build and land the \`/X\` room"`). That mapping is M2's
+seed: each pair is one `(spec, realization)` sample. Aim for a table of 7 clean
+pairs — that's already enough to derive the schema.
 
 ## The one-line summary
 

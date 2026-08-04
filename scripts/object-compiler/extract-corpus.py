@@ -77,7 +77,7 @@ import json
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Iterator
+from typing import Any, Iterator
 
 # ---------------------------------------------------------------------------
 # defaults — tuned to this machine; every path is overrideable by a flag.
@@ -115,6 +115,8 @@ FIRST_USER_MESSAGE_MAX = 2000
 @dataclass
 class SessionSummary:
     session_id: str
+    kind: str = "parent"  # "parent" (top-level jsonl) or "subagent" (child agent-*.jsonl)
+    parent_session_id: str | None = None  # set on subagent rows; None on parents
     first_user_message: str = ""
     cwd: str = ""
     git_branch: str | None = None
@@ -122,7 +124,7 @@ class SessionSummary:
     tool_call_count: int = 0
     timestamp_first: str = ""
     timestamp_last: str = ""
-    subagent_count: int = 0
+    subagent_count: int = 0  # parent rows: count of children; subagent rows: 0
     line_count: int = 0
     source_path: str = ""
 
@@ -130,6 +132,8 @@ class SessionSummary:
         return json.dumps(
             {
                 "session_id": self.session_id,
+                "kind": self.kind,
+                "parent_session_id": self.parent_session_id,
                 "first_user_message": self.first_user_message,
                 "cwd": self.cwd,
                 "git_branch": self.git_branch,
@@ -202,50 +206,85 @@ def _first_user_text(entry: dict[str, Any]) -> str | None:
     return None
 
 
-def summarize_session(path: Path, subagent_paths: list[Path]) -> SessionSummary:
-    """Fold a top-level session and all its subagent transcripts into one summary."""
-    summary = SessionSummary(session_id=path.stem, source_path=str(path))
-    summary.subagent_count = len(subagent_paths)
-
-    all_paths: Iterable[Path] = [path, *subagent_paths]
+def _summarize_single_file(
+    path: Path,
+    session_id: str,
+    kind: str,
+    parent_session_id: str | None,
+) -> SessionSummary:
+    """Read ONE .jsonl transcript and return its summary. No cross-file rollup."""
+    summary = SessionSummary(
+        session_id=session_id,
+        kind=kind,
+        parent_session_id=parent_session_id,
+        source_path=str(path),
+    )
     first_user_captured = False
 
-    for p in all_paths:
-        for entry in _iter_session_lines(p):
-            summary.line_count += 1
+    for entry in _iter_session_lines(path):
+        summary.line_count += 1
 
-            ts = entry.get("timestamp")
-            if isinstance(ts, str):
-                if not summary.timestamp_first or ts < summary.timestamp_first:
-                    summary.timestamp_first = ts
-                if ts > summary.timestamp_last:
-                    summary.timestamp_last = ts
+        ts = entry.get("timestamp")
+        if isinstance(ts, str):
+            if not summary.timestamp_first or ts < summary.timestamp_first:
+                summary.timestamp_first = ts
+            if ts > summary.timestamp_last:
+                summary.timestamp_last = ts
 
-            cwd = entry.get("cwd")
-            if isinstance(cwd, str) and cwd:
-                summary.cwd = cwd  # last one wins; usually stable across a session
+        cwd = entry.get("cwd")
+        if isinstance(cwd, str) and cwd:
+            summary.cwd = cwd
 
-            branch = entry.get("gitBranch")
-            if isinstance(branch, str) and branch:
-                summary.git_branch = branch
+        branch = entry.get("gitBranch")
+        if isinstance(branch, str) and branch:
+            summary.git_branch = branch
 
-            if not first_user_captured:
-                text = _first_user_text(entry)
-                if text is not None:
-                    summary.first_user_message = text[:FIRST_USER_MESSAGE_MAX]
-                    first_user_captured = True
+        if not first_user_captured:
+            text = _first_user_text(entry)
+            if text is not None:
+                summary.first_user_message = text[:FIRST_USER_MESSAGE_MAX]
+                first_user_captured = True
 
-            msg = entry.get("message") or {}
-            for block in msg.get("content") or []:
-                if not isinstance(block, dict):
-                    continue
-                if block.get("type") == "tool_use":
-                    summary.tool_call_count += 1
-                    fp = _extract_file_from_tool_use(block)
-                    if fp:
-                        summary.files_touched.add(fp)
+        msg = entry.get("message") or {}
+        for block in msg.get("content") or []:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_use":
+                summary.tool_call_count += 1
+                fp = _extract_file_from_tool_use(block)
+                if fp:
+                    summary.files_touched.add(fp)
 
     return summary
+
+
+def summarize_session(path: Path, subagent_paths: list[Path]) -> list[SessionSummary]:
+    """
+    Produce one summary row for the parent transcript plus one per subagent.
+
+    Subagents each get their own row (with parent_session_id link and
+    kind="subagent") because each subagent is its own intent-arc — often the
+    one that actually opened the PR the parent supervised. Rolling them into
+    a single parent row hides the paired-data structure the compiler needs.
+    """
+    parent_id = path.stem
+    parent = _summarize_single_file(
+        path, session_id=parent_id, kind="parent", parent_session_id=None
+    )
+    parent.subagent_count = len(subagent_paths)
+
+    subs: list[SessionSummary] = []
+    for sp in subagent_paths:
+        # subagent filenames look like `agent-<hex>.jsonl`; the stem is a good id.
+        subs.append(
+            _summarize_single_file(
+                sp,
+                session_id=sp.stem,
+                kind="subagent",
+                parent_session_id=parent_id,
+            )
+        )
+    return [parent, *subs]
 
 
 # ---------------------------------------------------------------------------
@@ -315,20 +354,32 @@ def main(argv: list[str]) -> int:
 
     out.parent.mkdir(parents=True, exist_ok=True)
     written = 0
+    parents = 0
+    subagents_written = 0
     with out.open("w", encoding="utf-8") as fh:
         for top, subagents in sessions:
-            summary = summarize_session(top, subagents)
-            fh.write(summary.to_json_line())
-            fh.write("\n")
-            written += 1
+            rows = summarize_session(top, subagents)
+            for row in rows:
+                fh.write(row.to_json_line())
+                fh.write("\n")
+                written += 1
+                if row.kind == "parent":
+                    parents += 1
+                else:
+                    subagents_written += 1
+            head = rows[0]
             print(
-                f"[ok] {summary.session_id[:8]}… "
-                f"lines={summary.line_count} tools={summary.tool_call_count} "
-                f"files={len(summary.files_touched)} "
-                f"branch={summary.git_branch or '-'}"
+                f"[ok] {head.session_id[:8]}… "
+                f"parent lines={head.line_count} tools={head.tool_call_count} "
+                f"files={len(head.files_touched)} "
+                f"subagents={len(rows) - 1} "
+                f"branch={head.git_branch or '-'}"
             )
 
-    print(f"[done] wrote {written} session summaries → {out}")
+    print(
+        f"[done] wrote {written} rows "
+        f"({parents} parents + {subagents_written} subagents) → {out}"
+    )
     return 0
 
 
