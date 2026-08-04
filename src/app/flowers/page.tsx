@@ -3,8 +3,7 @@
 import { useEffect } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import SiteHeader from "@/components/SiteHeader";
-import ScaleTravel from "@/components/ScaleTravel";
-import MetaNavigator from "@/components/MetaNavigator";
+import AxisChrome from "@/components/AxisChrome";
 import FlowersGarden from "@/components/FlowersGarden";
 
 export default function FlowersPage() {
@@ -16,8 +15,7 @@ export default function FlowersPage() {
       <main>
         <FlowersGarden />
       </main>
-      <ScaleTravel route="/flowers" />
-      <MetaNavigator route="/flowers" />
+      <AxisChrome route="/flowers" />
     </>
   );
 }

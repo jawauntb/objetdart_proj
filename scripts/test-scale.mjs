@@ -739,4 +739,23 @@ assert.ok(atlasIn.elapsed >= TRAVEL_INTENT_MS, "adapter walls keep the sustained
   }
 }
 
+// — High-traffic vertical doors (pinch walls) ————————————————————————
+// The bug this catches is a cosmology edit that severs a walk people take
+// every session: shore↔peak, ground↔garden, map↔ground, web↔fold. Lateral
+// peer-ring placement is pinned in test-routes.mjs beside PEER_CIRCLES.
+{
+  const routes = (dir, route, mem = {}) =>
+    Array.from(travelOptionsForRoute(route, dir, mem), (d) => d.route);
+
+  assert.ok(routes(1, "/coast").includes("/mountain"), "shore climbs to the peak");
+  assert.ok(routes(1, "/coast").includes("/earth"), "shore opens laterally onto the land");
+  assert.ok(routes(-1, "/mountain").includes("/coast"), "peak descends to the shore");
+  assert.equal(routes(-1, "/earth")[0], "/flowers", "ground's first inward door is the garden");
+  assert.ok(routes(-1, "/earth").includes("/coast"), "ground keeps the beach on its floor");
+  assert.ok(routes(-1, "/earth").includes("/atlas/origin"), "ground keeps the chart on its floor");
+  assert.equal(routes(1, "/atlas/origin")[0], "/earth", "map's ceiling is the ground it charts");
+  assert.equal(routes(1, "/space")[0], "/manifold", "web opens onto the fold");
+  assert.equal(routes(-1, "/manifold")[0], "/space", "fold descends into the web");
+}
+
 console.log("scale manifold tests passed");
