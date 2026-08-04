@@ -298,17 +298,24 @@ export default function Guide() {
   margin-left: -60px;
   margin-top: -60px;
   border-radius: 50%;
-  opacity: 0.68;
-  mix-blend-mode: screen;
+  opacity: 0.72;
   animation: guide-breathe 7s ease-in-out infinite;
-  will-change: transform, opacity;
 }
 @keyframes guide-breathe {
-  0%, 100% { transform: scale(0.92); opacity: 0.5; }
-  50% { transform: scale(1.08); opacity: 0.8; }
+  0%, 100% { transform: scale(0.92); opacity: 0.55; }
+  50% { transform: scale(1.08); opacity: 0.85; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .guide-aurora-spot { animation: none; opacity: 0.55; }
+  /* fully hide instead of just pausing — the compositor cost survives paused animation */
+  .guide-aurora { display: none; }
+}
+/* Touch devices (iPad, iPhone, Android tablets/phones) skip the aurora entirely.
+ * 20 blurred radial-gradient blobs on continuous scale animation reliably froze
+ * iPad Safari — one GPU layer per spot, and the previous mix-blend-mode: screen
+ * forced full offscreen composition every frame. The aurora is decorative; a
+ * static room-lit hero is still the intended look on touch. */
+@media (pointer: coarse) {
+  .guide-aurora { display: none; }
 }
 .guide-hero-scrim {
   position: absolute;
@@ -456,6 +463,12 @@ export default function Guide() {
   .guide-room-shot { position: static; }
   .guide-moves li { grid-template-columns: 1fr; gap: 2px; }
   .guide-hero-room { padding: 40px 20px 46px; }
+}
+/* iPad-class widths (portrait 820, small landscape) and any coarse pointer
+ * skip position: sticky on the room shots. 55 simultaneously sticky elements
+ * are cheap on desktop but a scroll-thread killer on iPad Safari. */
+@media (max-width: 1024px), (pointer: coarse) {
+  .guide-room-shot { position: static; }
 }
 `,
         }}
