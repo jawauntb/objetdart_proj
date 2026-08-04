@@ -58,7 +58,14 @@ import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
 import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
-import { SCALE_BANDS, spectralRegisterFor, type ScaleBand } from "@/lib/scale";
+import {
+  SCALE_BANDS,
+  entryScaleInto,
+  spectralRegisterFor,
+  type EnteredFromMap,
+  type ScaleBand,
+  type ScaleBandId,
+} from "@/lib/scale";
 import {
   SOFTENING,
   boundFraction,
@@ -84,11 +91,13 @@ import {
   detailForTier,
 } from "@/lib/room-runtime";
 import { ScaleTravelOverlay, type EdgeUI } from "@/components/ScaleTravel";
+import { playTravelPassage } from "@/components/TravelPassage";
 import LetGo from "@/components/LetGo";
 import { createGravityFieldRenderer, type GravityFieldRenderer } from "@/components/SpacetimeShader";
 
 const STORE_KEY = "objetdart:manifold:v1";
 const SCALE_S_KEY = "objetdart:scale:s";
+const ENTERED_FROM_KEY = "objetdart:scale:enteredFrom:v1";
 const MAX_MASSES = 7;
 const RAY_COUNT = 6;
 const TRAIL_MAX = 26;
@@ -610,13 +619,25 @@ export default function ManifoldFold() {
     const travelTo = (band: ScaleBand) => {
       if (!band.route || band.route === "/manifold" || leaving) return;
       leaving = true;
-      // the crossing presentation, exactly as the axis speaks it
+      // Bead travel descends the axis: land just inside the destination's ceiling,
+      // same as every other downward crossing ScaleTravel makes.
+      const sLand = entryScaleInto(band, -1);
       try { haptics.crossing(); } catch { /* noop */ }
       try {
-        window.sessionStorage.setItem(SCALE_S_KEY, String((band.sMin + band.sMax) / 2));
+        window.sessionStorage.setItem(SCALE_S_KEY, String(sLand));
+        const raw = window.sessionStorage.getItem(ENTERED_FROM_KEY);
+        const map = (raw ? JSON.parse(raw) : {}) as EnteredFromMap;
+        map[band.id as ScaleBandId] = "manifold";
+        window.sessionStorage.setItem(ENTERED_FROM_KEY, JSON.stringify(map));
       } catch { /* noop */ }
-      setTravelUi({ pressure: 1, towardLabel: band.label, crossing: true });
       useField.getState().recordTape("region", 0.8, `manifold/travel:${band.id}`);
+      // Shared passage bus — registered trunk films when present, else the
+      // default. Ink fade only if the host is unmounted (SSR / tests).
+      if (playTravelPassage("manifold", band, sLand, () => router.push(band.route as string))) {
+        setTravelUi({ pressure: 0, towardLabel: null, crossing: false });
+        return;
+      }
+      setTravelUi({ pressure: 1, towardLabel: band.label, crossing: true });
       window.setTimeout(() => router.push(band.route as string), 380);
     };
 
