@@ -39,7 +39,31 @@ const OPENAI_GENERATIONS_URL = "https://api.openai.com/v1/images/generations";
 const OPENAI_EDITS_URL = "https://api.openai.com/v1/images/edits";
 const OPENROUTER_IMAGE_MODEL = "black-forest-labs/flux.2-klein-4b";
 const OPENROUTER_PRO_IMAGE_MODEL = "black-forest-labs/flux.2-pro";
+const OPENROUTER_FLUX_FLEX_IMAGE_MODEL = "black-forest-labs/flux.2-flex";
+const OPENROUTER_FLUX_MAX_IMAGE_MODEL = "black-forest-labs/flux.2-max";
+const OPENROUTER_NANO2_IMAGE_MODEL = "google/gemini-3.1-flash-image";
+const OPENROUTER_SEEDREAM_IMAGE_MODEL = "bytedance-seed/seedream-4.5";
 const OPENROUTER_IMAGES_URL = "https://openrouter.ai/api/v1/images";
+
+// Every OpenRouter model the atlas may target. The route is switchable by env
+// (ATLAS_IMAGE_PROVIDER=openrouter-nano2 etc.) so we can bake-off without a
+// code change; the allowlist keeps the runtime honest.
+type OpenRouterImageModel =
+  | typeof OPENROUTER_IMAGE_MODEL
+  | typeof OPENROUTER_PRO_IMAGE_MODEL
+  | typeof OPENROUTER_FLUX_FLEX_IMAGE_MODEL
+  | typeof OPENROUTER_FLUX_MAX_IMAGE_MODEL
+  | typeof OPENROUTER_NANO2_IMAGE_MODEL
+  | typeof OPENROUTER_SEEDREAM_IMAGE_MODEL;
+
+const OPENROUTER_MODEL_ALLOWLIST: readonly OpenRouterImageModel[] = [
+  OPENROUTER_IMAGE_MODEL,
+  OPENROUTER_PRO_IMAGE_MODEL,
+  OPENROUTER_FLUX_FLEX_IMAGE_MODEL,
+  OPENROUTER_FLUX_MAX_IMAGE_MODEL,
+  OPENROUTER_NANO2_IMAGE_MODEL,
+  OPENROUTER_SEEDREAM_IMAGE_MODEL,
+];
 const OPENAI_OUTPUT_QUALITY = "high";
 const OPENAI_OUTPUT_FORMAT = "webp";
 const OPENAI_OUTPUT_COMPRESSION = 92;
@@ -112,7 +136,7 @@ export type AtlasProviderConfig =
     }
   | {
       provider: "openrouter";
-      model: typeof OPENROUTER_IMAGE_MODEL | typeof OPENROUTER_PRO_IMAGE_MODEL;
+      model: OpenRouterImageModel;
       apiKey: string | null;
     };
 
@@ -238,15 +262,29 @@ export function resolveAtlasProviderConfig(
       apiKey: normalizeServerSecret(environment.OPENROUTER_API_KEY),
     };
   }
-  if (provider === "openrouter-pro") {
-    return {
-      provider: "openrouter",
-      model: OPENROUTER_PRO_IMAGE_MODEL,
-      apiKey: normalizeServerSecret(environment.OPENROUTER_API_KEY),
-    };
+  if (Object.prototype.hasOwnProperty.call(OPENROUTER_SELECTOR_MODELS, provider)) {
+    const model = OPENROUTER_SELECTOR_MODELS[provider];
+    if (model) {
+      return {
+        provider: "openrouter",
+        model,
+        apiKey: normalizeServerSecret(environment.OPENROUTER_API_KEY),
+      };
+    }
   }
   throw new AtlasProviderConfigurationError();
 }
+
+// Env-string → OpenRouter model. Set ATLAS_IMAGE_PROVIDER to one of these
+// selectors and the final phase renders through that model with no code change.
+// Preview still runs Klein 4B (see resolveAtlasPhaseProviderConfig).
+const OPENROUTER_SELECTOR_MODELS: Record<string, OpenRouterImageModel | undefined> = {
+  "openrouter-pro": OPENROUTER_PRO_IMAGE_MODEL,
+  "openrouter-flex": OPENROUTER_FLUX_FLEX_IMAGE_MODEL,
+  "openrouter-max": OPENROUTER_FLUX_MAX_IMAGE_MODEL,
+  "openrouter-nano2": OPENROUTER_NANO2_IMAGE_MODEL,
+  "openrouter-seedream": OPENROUTER_SEEDREAM_IMAGE_MODEL,
+};
 
 export function resolveAtlasPhaseProviderConfig(
   environment: Record<string, string | undefined>,
@@ -451,7 +489,7 @@ function assertValidProviderConfig(providerConfig: AtlasProviderConfig): void {
   const validOpenAI = providerConfig.provider === "openai"
     && providerConfig.model === OPENAI_IMAGE_MODEL;
   const validOpenRouter = providerConfig.provider === "openrouter"
-    && (providerConfig.model === OPENROUTER_IMAGE_MODEL || providerConfig.model === OPENROUTER_PRO_IMAGE_MODEL);
+    && OPENROUTER_MODEL_ALLOWLIST.includes(providerConfig.model);
   if (!validOpenAI && !validOpenRouter) throw new AtlasProviderConfigurationError();
 }
 
@@ -807,12 +845,12 @@ async function generateWithOpenAI(
 async function generateWithOpenRouter(
   request: AtlasGenerationRequest,
   prompt: string,
-  model: typeof OPENROUTER_IMAGE_MODEL | typeof OPENROUTER_PRO_IMAGE_MODEL,
+  model: OpenRouterImageModel,
   apiKey: string,
   signal: AbortSignal,
 ): Promise<ProviderArtifact> {
   const body: {
-    model: typeof OPENROUTER_IMAGE_MODEL | typeof OPENROUTER_PRO_IMAGE_MODEL;
+    model: OpenRouterImageModel;
     prompt: string;
     output_format: "png";
     n: 1;
