@@ -45,6 +45,30 @@ palette:
   accent2: "#96b2e2"
   ink:     "#eeeadb"
 
+visual_style:
+  composition: silhouette
+  subject: "a shelf tray of brine with faceted stones lifted out of it — each stone the Wulff hull of its own lattice"
+  form_language: [SDF, hand-painted, ink-line]
+  motion_character: still
+  registers:
+    - "the dark cabinet, deepening toward the floor — via bg"
+    - "the shallow brine's deep column and the tray's shaded ellipse — via bg2"
+    - "the highlight along a facet turned toward the upper-left lamp — via glow"
+    - "warm topaz / gold / calcite stone tints — via accent"
+    - "cool grey and blue stone tints (quartz, pyrite) and the meniscus rim — via accent2"
+    - "the lattice-lens ink drawn over dark tiles — via ink"
+  reference_notes:
+    - "a nineteenth-century mineralogy cabinet plate: seven or eight ideal habits lined up on a dark ground"
+    - "a jeweler's tray under a single warm lamp, its rim rimmed with creeping salt"
+    - "each stone is a literal polyhedron with visible flat-shaded facet edges, not a rendered blob"
+  banned_forms:
+    - "no createRadialGradient, no shadowBlur per AGENTS.md"
+    - "no hand-drawn silhouettes — every outline is the Wulff hull of the lattice family"
+    - "no arbitrary cuts — a cleavage line always follows the nearest cleavage-orbit plane"
+    - "no fan-seam artefacts inside a facet — the triangulation is masked out"
+  mood: "cabinet-quiet, jeweled, the tray waiting; each stone alone with its symmetry"
+  gesture_feedback_style: "a tap rings the full spectrum of the stone's reciprocal lattice; a drag turns it in place while its lattice comes with it; a flick cleaves along the nearest allowed plane and both halves keep their mass"
+
 verbs_answered:
   - tap
   - dwell

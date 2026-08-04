@@ -42,6 +42,29 @@ palette:
   accent2: "#4e7d8c"
   ink: "#f2eee6"
 
+visual_style:
+  composition: top-down
+  subject: "one star, a fixed budget of dust, and up to nine worlds — each a lit sphere decoded from its 12-dim latent"
+  form_language: [SDF, value-noise-FBM, hand-painted]
+  motion_character: cyclic
+  registers:
+    - "deep space behind everything — via bg"
+    - "the ocean-blue face of a cold world and the dust disc's outer haze — via bg2"
+    - "the star's warmth and the ochre / firelight of an inner burnt world — via glow"
+    - "the ink of the world card and the pale ring band — via accent"
+    - "cool outer worlds and the sea shallows — via accent2"
+    - "the twelve-spoke lens spokes and label ink — via ink"
+  reference_notes:
+    - "the way an early Cassini plate paints Saturn — a ringed disc against velvet space"
+    - "planet portraits from a school atlas: visibly ochre-and-blue continents over a lit sphere"
+    - "the dust-ring shimmer of an orrery photograph — a brightness that IS the mass reserve"
+  banned_forms:
+    - "no createRadialGradient, no shadowBlur per AGENTS.md"
+    - "no side-section or first-person view; no drawn continents (all terrain is fbm3 decoded from the latent)"
+    - "no sprite planets — every world is an instanced SDF disc decoded live and each ring is a real equatorial-plane pass"
+  mood: "attentive making; the field visibly dims as you forge, brightens as you let go"
+  gesture_feedback_style: "a hold on open dust condenses a world under the finger (radius saturates on ACCRETION_TAU_MS); the accretion halo is drawn on the 2D overlay while the sphere below decodes the latent live"
+
 verbs_answered:
   - tap
   - dwell

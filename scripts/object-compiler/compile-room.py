@@ -446,12 +446,19 @@ def _call_slot_prompt(slot: str, spec: Spec) -> str:
 
     one_shots = _retrieve_one_shots(slot, spec)
 
+    # visual_style is the design-context block consumed by slot-shader.md
+    # (and, in principle, any future slot prompt that wants it). Emit it as a
+    # yaml block; an empty block is legal (older specs may not carry the
+    # field yet), and the prompt handles the absent-visual-style case.
+    visual_style_block = _yaml_block(spec.raw.get("visual_style", {}))
+
     subs: dict[str, str] = {
         "one_shot_examples":         one_shots,
         "shader_intent":             str(spec.raw.get("shader_intent", "")),
         "domain_intent":             str(spec.raw.get("domain_intent", "")),
         "verb_intent":               str(spec.raw.get("verb_intent", "")),
         "palette_and_uniforms":      _yaml_block(spec.raw.get("palette", {})),
+        "visual_style":              visual_style_block,
         "declared_surface":          _read_declared_surface(slot, spec),
         "verbs_answered_with_briefs": _yaml_block({
             v: spec.raw.get("verbs", {}).get(v, "")

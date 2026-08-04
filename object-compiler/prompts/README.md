@@ -55,6 +55,29 @@ retrieval bank by *description of where to look*, not by hard-coded content —
 the compiler resolves the reference at call time so that a room landing later
 this week can appear as an example next week without editing any prompt.
 
+## Design context: `visual_style`
+
+The M2 schema carries an optional **`visual_style`** block (composition,
+subject, form language, motion character, palette registers by function,
+reference notes, banned forms, mood, gesture-feedback style — see
+`object-compiler/schema/room-spec.schema.yaml`). It is not per-room brief; it
+is the design vocabulary that `shader_intent` (and, where useful, other
+briefs) speaks *inside*.
+
+**`slot-shader.md` consumes it** via a `{{visual_style}}` substitution — the
+shader slot reads the block field by field before it reads the room-specific
+brief, so the two land as one full brief on the LLM. Older specs that pre-date
+`visual_style` still compile: when the block is absent, the substitution is
+empty and the prompt tells the model to skip that section and go straight to
+the brief.
+
+The other slot prompts (`slot-domain.md`, `slot-verbs.md`, `slot-pins.md`) do
+not consume `visual_style` — the block is about how the room looks and moves,
+which is the shader's domain. If a future slot wants a piece of it (for
+example, `slot-verbs.md` reading `gesture_feedback_style` to keep tap answers
+consistent across rooms), add a matching `{{visual_style}}` reference to that
+prompt and a matching substitution key in `compile-room.py::_call_slot_prompt`.
+
 ## Prompt style — the voice this repo speaks
 
 The prompts inherit the same voice rules as the rest of the codebase

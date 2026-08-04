@@ -77,11 +77,119 @@ dialect*, not as content to copy.
 {{one_shot_examples}}
 ```
 
+## Design context — the room's visual language
+
+The compiler substitutes the spec's `visual_style` block below this line if
+one is present. This is *design context*, not the per-room brief: the picture
+of what the room should look and move like, distinct from `shader_intent`
+which follows and gives the room-specific instruction. Together they are the
+full brief — `visual_style` establishes the vocabulary, `shader_intent`
+speaks it. If the block below is empty (an older spec, authored before
+`visual_style` landed), skip this section and go straight to the brief.
+
+```yaml
+{{visual_style}}
+```
+
+Read the block field by field. Each field is load-bearing.
+
+- **`composition`** — the framing. `side-section` is a vertical slice drawn
+  as if the ground were sliced open and viewed from the front; `top-down`
+  looks straight down onto a plan; `first-person` looks out from a body
+  inside the room; `ambient-column` is a vertical column of material with
+  no ground or sky boundary; `cutaway` reveals a normally hidden interior;
+  `silhouette` reads as the outline of a form against its field. Compose
+  the shader to that framing — do not draw a different picture than the
+  composition names.
+
+- **`subject`** — the noun phrase this shader is a picture of. Say it
+  once, clearly, in the first comment line of the shader body (as in
+  `// the air column, marched as a volume` or `// the soil, cut open`).
+  Every register and every gesture the shader answers is a lens on that
+  one subject.
+
+- **`mood`** — the emotional register, named alongside the subject in the
+  same top comment. Mood is not decoration: it decides how a register
+  reads. A "kept" ochre in a *wet* mood is different paint than the same
+  ochre in a *sun-bleached* mood.
+
+- **`form_language`** — the techniques the shader leans on. Each token in
+  the list is a specific instruction:
+  - `watercolor` — soft-edged, layered washes; blend by averaging noise
+    fields, not by hard masks.
+  - `hand-painted` — visible brush direction, deliberate imperfection;
+    let hash-noise perturb the boundary of every register.
+  - `ink-line` — a hairline overlaid on the field (via the 2D layer if
+    the room is `2d-over-shader`); inside the shader, a thin dark
+    register at the discontinuity of a signed distance.
+  - `SDF` — signed distance functions as the primary geometry; use
+    `smoothstep` on the distance to render, never a hard threshold.
+  - `value-noise-FBM` — fractal Brownian motion built from value or
+    hash noise; layer three to five octaves with amplitude halving.
+  - `ray-marched` — sphere-trace or volume-march the field; step count
+    from `uSteps`, never a hard-coded loop.
+  - `point-cloud` — many small marks at hashed positions; the population
+    layer draws the SDF discs, but a shader can still paint a stipple
+    field beneath them.
+  - `ribbon-flow` — long, thin curves aligned to a flow field; draw as
+    signed distance to a warped line.
+  - `stipple` — many small dots at deterministic positions; hash the
+    grid, drop a dot where density falls below a threshold.
+  Emit every named technique in the field. A room whose `form_language`
+  lists `watercolor` and `SDF` should read as watercolor washes *and* be
+  built on signed distances — not one or the other.
+
+- **`motion_character`** — how the material animates on the site's shared
+  seven-second clock (`uTime` and `uBreath`):
+  - `still` — no `uTime` in the shader body except as a hash seed. The
+    material holds.
+  - `breathing` — a low-frequency LFO on brightness or scale, tied to
+    `uBreath` (0..1 over 7s). Amplitude small, never garish.
+  - `drifting` — a slow lateral or vertical translation of one register;
+    `uTime * small_speed` on a noise sample point.
+  - `pulsing` — a discrete beat, sharp attack and slow decay. Trigger off
+    a clamped, eased `sin(uTime * 2π / period)`.
+  - `cyclic` — a full period-based waveform, smooth and continuous over
+    one loop of the shared clock.
+  - `ballistic` — an event-triggered burst; the JS side signals the event
+    via a uniform (for example `uEventPulse` decaying from 1 to 0), and
+    the shader paints the decay.
+  - `stochastic` — hash-driven twinkle or jitter, per-pixel per-frame,
+    but seeded so a paused frame is stable.
+  Whichever character is named, `uReduced > 0.5` MUST collapse it toward
+  `still`. The reference examples show the pattern.
+
+- **`registers`** — one entry per hex→role mapping. NAME each register in
+  a comment in the shader (as in `// #6E5A2E — the kept ochre, humus's
+  stored carbon`). Legibility is a design law: a reader scanning the
+  shader should be able to point at any colour and say what it means
+  physically. When the register list disagrees with the spec's `palette`,
+  `visual_style.registers` is the authority for *meaning*; `palette` still
+  supplies the six site-manifest slots.
+
+- **`reference_notes`** — free-text references from the author. Honor them
+  verbatim; do not paraphrase them into inventions. If a note says "the
+  ochre reads like the underside of a cliff at low tide", the shader
+  should have an ochre that could plausibly be read that way.
+
+- **`gesture_feedback_style`** — how ripples, dwells, and ceremonies
+  appear visually. This is the design-consistency knob: two rooms sharing
+  a `gesture_feedback_style` should have visibly related answers to a
+  tap. Match the described style in the shader's event-response code —
+  or, in a `2d-over-shader` room, in what the shader leaves room for the
+  2D layer to draw over.
+
+- **`banned_forms`** — verbatim, non-negotiable. Do not emit anything
+  matching the descriptions in this list. This is stricter than the site's
+  global paint bar; it is the room's OWN taste, and it overrides a
+  would-be clever alternative.
+
 ## The brief
 
 The compiler substitutes the `shader_intent` field from the spec below this
 line before it calls you. Follow it exactly; do not extend the brief with
-inventions.
+inventions. Read it as the room-specific instruction that *speaks* the
+vocabulary the `visual_style` block just established.
 
 ```
 {{shader_intent}}

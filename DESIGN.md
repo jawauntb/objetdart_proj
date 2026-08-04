@@ -376,6 +376,8 @@ Motion: every transition `320ms cubic-bezier(.2,.6,.2,1)`. Slider drag halos the
 
 Imagery: no stock, no AI-illustration, no 3D. Icons: 1px hairline, 24×24, used only for object glyphs.
 
+**Compiler descriptor.** Every room's design language now lands as a `visual_style` block under `object-compiler/schema/` — the compiler's internal instrument brief for the vigil each room keeps, not the site's public copy. The five palette registers above map into the block's `registers` field: each hex kept in the vellum carries a written role the slot-filler calibrates against. The motion vocabulary — 7s breath, tidal drift, candle glimmer — maps into `motion_character` (breathing / drifting / pulsing / cyclic). This is the operational descriptor of the vigil, one layer down from the room shell: what an instrument should look and breathe like before its shader is written, kept as data instead of prose.
+
 ---
 
 ## What's deliberately not there (anti-patterns we resisted)

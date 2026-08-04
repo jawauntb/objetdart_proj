@@ -32,6 +32,18 @@ description: >
   `test:room-contract`, `test:routes`, `test:paint`, `test:guide`, and
   `test:scene`.
 
+  The three LLM slots (`shader_intent`, `domain_intent`, `verb_intent`) are
+  the per-room briefs the compiler hands to the slot-filler. The optional
+  `visual_style` block sits alongside them as *design context*: a structured
+  picture of what the room should look like — composition, subject, form
+  language, motion character, palette registers by function, references,
+  banned forms, mood, gesture-feedback style. When present it does not
+  replace `shader_intent`; it hands the shader author the visual vocabulary
+  the brief assumes. `slot-shader.md` (and, where useful, `slot-verbs.md`)
+  SHOULD consume it. Older specs without a `visual_style` block still
+  compile — the field is optional for backward compat until it is filled in
+  from the landed screenshots.
+
 type: object
 additionalProperties: false
 required:
@@ -511,6 +523,142 @@ properties:
       keeps:
         type: string
         description: What the room remembers between visits.
+
+  # ——— visual style (design context for the shader slot) ——————————————
+
+  visual_style:
+    type: object
+    additionalProperties: false
+    description: >
+      Design brief for what the room SHOULD LOOK LIKE — the picture-diff
+      between a landed `public/guide/<key>.jpg` and the shader that produced
+      it, structured. `shader_intent` remains the specific, per-room brief;
+      this block is the DESIGN CONTEXT the brief assumes: composition,
+      subject, form language, motion character, palette registers by
+      function, reference notes, banned forms, mood, and gesture-feedback
+      style. Every field is optional so existing specs keep compiling until
+      the block is filled in from the landed screenshot; when present, the
+      slot-shader prompt (and, where relevant, slot-verbs) SHOULD consume
+      it. All fields carry pictorial vocabulary — nouns and adjectives a
+      designer would say aloud — not technical GLSL.
+    properties:
+      composition:
+        type: string
+        description: >
+          How the room is framed. `side-section` shows a vertical slice
+          (soil is a side-section cutaway; atmosphere is a side-section
+          ambient column). `top-down` looks down (galaxy). `first-person`
+          places the viewer inside. `ambient-column` is a full-viewport
+          vertical field with no framing chrome. `cutaway` opens a section
+          through a solid. `silhouette` shows only the outline against a
+          field.
+        enum:
+          - side-section
+          - top-down
+          - first-person
+          - ambient-column
+          - cutaway
+          - silhouette
+      subject:
+        type: string
+        description: >
+          One-line noun phrase for what the shader is depicting — the
+          thing a viewer would name if asked what they see. E.g. "a hand's
+          width of wet ground with a small pool over an aquifer", "a
+          heliocentric map of orbits on paper".
+      form_language:
+        type: array
+        description: >
+          How the material is painted, as a small set of vocabulary tokens
+          a shader author would recognise. Multiple values allowed (a
+          watercolor SDF room is legal). Tokens: `watercolor` (soft
+          bleeds, wet-into-wet), `hand-painted` (visible brush and grain),
+          `ink-line` (thin dark hairlines), `SDF` (signed-distance
+          primitives with anti-aliased edges), `value-noise-FBM` (layered
+          value noise), `ray-marched` (volumetric marching through a
+          field), `point-cloud` (many small marks), `ribbon-flow` (long
+          streaming curves), `stipple` (dotted texture).
+        items:
+          type: string
+          enum:
+            - watercolor
+            - hand-painted
+            - ink-line
+            - SDF
+            - value-noise-FBM
+            - ray-marched
+            - point-cloud
+            - ribbon-flow
+            - stipple
+      motion_character:
+        type: string
+        description: >
+          The shader's temporal character. `still` sits and waits.
+          `breathing` moves on the site's 7s clock (the default for most
+          rooms). `drifting` moves without an obvious period. `pulsing`
+          has a repeating beat. `cyclic` runs a longer named loop (a
+          year, a tide). `ballistic` fires in discrete bursts (geyser's
+          erupt phase). `stochastic` is noise-driven, no clock.
+        enum:
+          - still
+          - breathing
+          - drifting
+          - pulsing
+          - cyclic
+          - ballistic
+          - stochastic
+      registers:
+        type: array
+        description: >
+          The palette registers by function — one string per assignment,
+          each naming what a hex slot ACTUALLY PAINTS in this room.
+          Bridges the abstract palette (`bg`, `bg2`, `glow`, `accent`,
+          `accent2`, `ink`) to the concrete registers the shader draws.
+          E.g. "deep water: bg→bg2", "mineral bloom: accent2",
+          "sunlit highlight: glow", "root/hypha line: accent2 at 0.6α".
+          Arrow (→) permitted for gradients.
+        items:
+          type: string
+      reference_notes:
+        type: array
+        description: >
+          Concrete visual references a designer would name aloud. Free
+          text, one image or comparison per entry. E.g. "like a wet
+          cross-section of clay in a jar; the aquifer register echoes
+          the ocean's depth gradient", "reads as an ink-line orrery on
+          warm paper". Not for URLs — these are described references,
+          the kind a shader author carries in their head.
+        items:
+          type: string
+      banned_forms:
+        type: array
+        description: >
+          The explicit no-fly list for this room. Always includes at
+          least the AGENTS.md room-quality bar (no `createRadialGradient`,
+          no per-frame `shadowBlur`, no `ctx.filter` blur, no per-object
+          gradient pass, no allocation in the RAF loop). May add
+          room-specific negatives — "no cartoon puffiness on the plume",
+          "no visible seam between layers", "no rainbow gradient" — where
+          a landed screenshot exposed the failure mode.
+        items:
+          type: string
+      mood:
+        type: string
+        description: >
+          One-line felt sense — the emotional register the visual should
+          land in. "contemplative and low" / "anticipatory then eruptive"
+          / "buoyant, weightless, held". Not a marketing verb; the
+          adjective a visitor would offer unprompted after a minute in
+          the room.
+      gesture_feedback_style:
+        type: string
+        description: >
+          How touch shows up in the visual — bridges the shader to the
+          verb handlers. "ripple wavefront that decays radially", "burn-in
+          halo that fades over 3s", "displacement wave under the surface",
+          "brush-mark that stays until the ceremony hold clears it".
+          This tells the slot-verbs author what visual language the
+          shader will accept for `stir()`, `press()`, `plant()`, etc.
 
   # ——— the three LLM slots ————————————————————————————————————————————
 
