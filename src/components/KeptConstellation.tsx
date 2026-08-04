@@ -6,7 +6,8 @@ import { useField } from "@/store/field";
 import { decodeReadingHash } from "@/lib/reading";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
-import { attachGestures } from "@/lib/gesture";
+import { attachGestures, THRESHOLDS } from "@/lib/gesture";
+import { onVessel } from "@/lib/vessel";
 import ConcernSigil from "@/components/ConcernSigil";
 import type { ConcernKey } from "@/lib/types";
 
@@ -18,10 +19,24 @@ import type { ConcernKey } from "@/lib/types";
  * sigil with the headline. Click opens the shared-reading view.
  * Renders nothing if there's nothing kept.
  *
- * The grammar adds two verbs (tap-to-open stays exactly as it was):
- * a long-press on a star lets its sigil play its ~12s phrase, and a
- * flick sends it streaking briefly before it settles home — a kept
- * night is never lost.
+ * The grammar adds several verbs (tap-to-open stays exactly as it was):
+ * a long-press on a star lets its sigil play its ~12s phrase, deepening
+ * continuously toward the ceremony tier, where releasing seals the star's
+ * one solemn act — it forgets the reading, the same touch-reachable
+ * delete every countable room owes its material. A flick sends a star
+ * streaking briefly before it settles home. Three-finger tap is tutti —
+ * every visible star answers together. The vessel: a tilt leans the
+ * whole sky (sight only, matching the template's own tilt); a shake
+ * scatters the stars in a brief shiver; a knock rings them awake; face
+ * down is night, and the sky dims until the phone turns back over.
+ *
+ * This overlay sits on the home sea without owning it (manageStyle and
+ * pointer capture are both off, and its own div is pointer-events:none
+ * except for the star links) — so the frame/law verbs that belong to a
+ * camera or a world (two-finger tap/twist/pan2, three-finger
+ * twist/drag/hold) are left to the room underneath that actually owns
+ * scale, lens and weather; binding them here would either do nothing
+ * honest or fight that room's own answer to the same gesture.
  */
 function hashToPos(hash: string): { x: number; y: number } {
   let h = 0;
@@ -37,6 +52,7 @@ function hashToPos(hash: string): { x: number; y: number } {
 export default function KeptConstellation() {
   const kept = useField((s) => s.keptReadings);
   const loadFromStorage = useField((s) => s.loadFromStorage);
+  const forgetReading = useField((s) => s.forgetReading);
 
   const wrapRef = useRef<HTMLDivElement>(null);
   // stars the engine can hit-test, refreshed every render
@@ -50,6 +66,15 @@ export default function KeptConstellation() {
   const consumedAtRef = useRef(-1e9);
   const [sounding, setSounding] = useState<string | null>(null);
   const [streak, setStreak] = useState<{ hash: string; dx: number; dy: number; key: number } | null>(null);
+  // dwell → ceremony: the held star charges continuously (law 2: duration
+  // is an axis, never a switch), then seals — forgotten — at the ceremony
+  // tier. This is the touch-reachable delete for a countable material.
+  const [charging, setCharging] = useState<{ hash: string; level: number } | null>(null);
+  const [exhaling, setExhaling] = useState<string | null>(null);
+  // vessel: night (flip face-down) and a brief agitation flash (shake)
+  const [night, setNight] = useState(false);
+  const [agitated, setAgitated] = useState(false);
+  const [tutti, setTutti] = useState(0);
 
   useEffect(() => { loadFromStorage(); }, [loadFromStorage]);
 
@@ -69,7 +94,12 @@ export default function KeptConstellation() {
     if (!wrap) return;
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     let played = false;
+    let sealed = false;
+    let heldHash: string | null = null;
     let streakTimer: ReturnType<typeof setTimeout> | null = null;
+    let tuttiTimer: ReturnType<typeof setTimeout> | null = null;
+    let agitateTimer: ReturnType<typeof setTimeout> | null = null;
+    let exhaleTimer: ReturnType<typeof setTimeout> | null = null;
 
     const starAt = (clientX: number, clientY: number) => {
       const rect = wrap.getBoundingClientRect();
@@ -91,18 +121,33 @@ export default function KeptConstellation() {
     const detach = attachGestures(wrap, {
       hold: (e) => {
         if (e.fingers !== 1) return;
-        if (e.phase === "enter") { played = false; return; }
-        if (e.phase === "release") {
-          if (played) consumedAtRef.current = performance.now();
+        if (e.phase === "enter") {
+          played = false;
+          sealed = false;
+          heldHash = starAt(e.x, e.y)?.hash ?? null;
+          if (heldHash) setCharging({ hash: heldHash, level: 0 });
           return;
         }
+        if (e.phase === "release") {
+          if (played || sealed) consumedAtRef.current = performance.now();
+          heldHash = null;
+          setCharging(null);
+          return;
+        }
+        if (!heldHash) return;
+        // duration is continuous — the charge keeps deepening from the
+        // touch tier all the way to the ceremony tier, never a flat switch
+        const level = Math.min(
+          1,
+          Math.max(0, (e.elapsed - THRESHOLDS.tapMaxMs) / (THRESHOLDS.ceremonyMs - THRESHOLDS.tapMaxMs)),
+        );
+        setCharging({ hash: heldHash, level });
         // dwell tier — long-press means charge, everywhere: the star's
         // sigil plays its own ~12s phrase
         if (e.tier >= 2 && !played) {
           played = true;
-          const star = starFor(e.x, e.y);
+          const star = starsRef.current.find((s) => s.hash === heldHash);
           if (!star || playingRef.current) return;
-          consumedAtRef.current = performance.now();
           playingRef.current = star.hash;
           setSounding(star.hash);
           try { haptics.ripple(0.5); } catch { /* noop */ }
@@ -113,6 +158,24 @@ export default function KeptConstellation() {
               playingRef.current = null;
               setSounding((h) => (h === star.hash ? null : h));
             });
+        }
+        // ceremony tier — the star's one solemn act: sealed, then forgotten.
+        // This is also the touch-reachable delete for a countable material.
+        if (e.tier >= 3 && !sealed) {
+          sealed = true;
+          const star = starsRef.current.find((s) => s.hash === heldHash);
+          const hash = heldHash;
+          if (!star) return;
+          consumedAtRef.current = performance.now();
+          try { haptics.bloom(); } catch { /* noop */ }
+          setExhaling(hash);
+          if (exhaleTimer) clearTimeout(exhaleTimer);
+          exhaleTimer = setTimeout(() => {
+            setExhaling((h) => (h === hash ? null : h));
+            forgetReading(hash);
+            try { getFieldAudio().thud(); } catch { /* noop */ }
+            useField.getState().recordTape("kept", 0.35, "constellation/forget");
+          }, 460);
         }
       },
       flick: (e) => {
@@ -133,13 +196,57 @@ export default function KeptConstellation() {
         if (streakTimer) clearTimeout(streakTimer);
         streakTimer = setTimeout(() => setStreak(null), 950);
       },
+      tap: (e) => {
+        // two-finger step back and the lens/frame/law verbs belong to the
+        // sea underneath this overlay (see the file doc comment) — only
+        // tutti, a material-layer verb every alive thing answers, is ours.
+        if (e.fingers !== 3) return;
+        if (starsRef.current.length === 0) return;
+        setTutti(Date.now());
+        try { haptics.ripple(0.4); } catch { /* noop */ }
+        try { getFieldAudio().chime(); } catch { /* noop */ }
+        useField.getState().recordTape("sigil", 0.4, "constellation/tutti");
+        if (tuttiTimer) clearTimeout(tuttiTimer);
+        tuttiTimer = setTimeout(() => setTutti(0), 900);
+      },
     }, { wheelZoom: false, manageStyle: false, noCapture: true });
+
+    // vessel: tilt leans the sky (sight only, matching the site's own
+    // tilt precedent), shake scatters the stars, knock rings them awake,
+    // and face-down is night — the sky dims until the phone turns back.
+    const detachVessel = onVessel({
+      tilt: ({ gamma }) => {
+        if (reduce) return;
+        const lean = Math.max(-1, Math.min(1, gamma / 45));
+        wrap.style.setProperty("--kept-tilt", (lean * 5).toFixed(2) + "px");
+      },
+      shake: () => {
+        if (reduce) return;
+        setAgitated(true);
+        try { haptics.chop(); } catch { /* noop */ }
+        try { getFieldAudio().chime(); } catch { /* noop */ }
+        if (agitateTimer) clearTimeout(agitateTimer);
+        agitateTimer = setTimeout(() => setAgitated(false), 480);
+      },
+      knock: () => {
+        setTutti(Date.now());
+        try { getFieldAudio().bell(); } catch { /* noop */ }
+        try { haptics.tap(); } catch { /* noop */ }
+        if (tuttiTimer) clearTimeout(tuttiTimer);
+        tuttiTimer = setTimeout(() => setTutti(0), 900);
+      },
+      flip: ({ faceDown }) => setNight(faceDown),
+    });
 
     return () => {
       detach();
+      detachVessel();
       if (streakTimer) clearTimeout(streakTimer);
+      if (tuttiTimer) clearTimeout(tuttiTimer);
+      if (agitateTimer) clearTimeout(agitateTimer);
+      if (exhaleTimer) clearTimeout(exhaleTimer);
     };
-  }, []);
+  }, [forgetReading]);
 
   if (visible.length === 0) return null;
 
@@ -158,6 +265,12 @@ export default function KeptConstellation() {
           e.stopPropagation();
         }
       }}
+      className={
+        "kept-sky-layer"
+        + (night ? " is-night" : "")
+        + (agitated ? " is-agitated" : "")
+        + (tutti ? " is-tutti" : "")
+      }
       style={{
         position: "absolute",
         inset: 0,
@@ -169,6 +282,8 @@ export default function KeptConstellation() {
         const p = r.pos;
         const isSounding = sounding === r.hash;
         const isStreaking = streak?.hash === r.hash;
+        const isCharging = charging?.hash === r.hash;
+        const isExhaling = exhaling === r.hash;
         return (
           <Link
             key={r.hash}
@@ -177,6 +292,8 @@ export default function KeptConstellation() {
               "kept-star"
               + (isSounding ? " is-sounding" : "")
               + (isStreaking ? " is-streaking" : "")
+              + (isCharging ? " is-charging" : "")
+              + (isExhaling ? " is-exhaling" : "")
             }
             aria-label={r.headline}
             draggable={false}
@@ -193,6 +310,7 @@ export default function KeptConstellation() {
                     ["--streak-y" as string]: `${streak?.dy ?? 0}px`,
                   }
                 : null),
+              ...(isCharging ? { ["--charge" as string]: charging?.level ?? 0 } : null),
             }}
           >
             <span className="kept-star-inner" key={isStreaking ? streak?.key : undefined}>
@@ -277,6 +395,48 @@ export default function KeptConstellation() {
           animation: kept-streak 900ms cubic-bezier(.18,.7,.28,1.15) both;
           filter: drop-shadow(0 0 14px rgba(220, 240, 255, 0.85));
         }
+        /* held star charges continuously toward the ceremony tier */
+        .kept-star.is-charging .kept-star-inner {
+          transform: scale(calc(1 + var(--charge, 0) * 1.1));
+          filter: drop-shadow(0 0 calc(4px + var(--charge, 0) * 16px) rgba(232,178,120,0.8));
+        }
+        .kept-star.is-charging .kept-star-halo {
+          opacity: calc(0.65 + var(--charge, 0) * 0.35);
+          transform: scale(calc(1 + var(--charge, 0) * 3.4));
+          background: radial-gradient(circle, rgba(232,178,120,0.4), rgba(232,178,120,0));
+        }
+        /* the ceremony seals it — one swell, then it dissolves and is forgotten */
+        .kept-star.is-exhaling {
+          animation: kept-exhale 460ms ease-in both;
+          pointer-events: none;
+        }
+        @keyframes kept-exhale {
+          0% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+          35% { opacity: 0.95; transform: translate(-50%, -50%) scale(1.5); }
+          100% { opacity: 0; transform: translate(-50%, -50%) scale(0.25); }
+        }
+        /* three-finger tap / a knock on the case — tutti, every star answers once */
+        .kept-sky-layer.is-tutti .kept-star-inner {
+          animation: kept-sound 700ms ease-out;
+          filter: drop-shadow(0 0 14px rgba(220, 240, 255, 0.8));
+        }
+        /* shake scatters the stars in a brief shiver */
+        .kept-sky-layer.is-agitated .kept-star {
+          animation: kept-twinkle 4.2s ease-in-out infinite, kept-shudder 420ms ease-in-out;
+        }
+        @keyframes kept-shudder {
+          0%, 100% { margin: 0; }
+          25% { margin: -3px 0 0 4px; }
+          50% { margin: 3px 0 0 -3px; }
+          75% { margin: -2px 0 0 -3px; }
+        }
+        /* flip face-down — night, until the phone turns back over */
+        .kept-sky-layer.is-night .kept-star { opacity: 0.22; }
+        .kept-sky-layer {
+          transform: translate3d(var(--kept-tilt, 0px), 0, 0);
+          transition: transform 260ms ease-out;
+        }
+        .kept-sky-layer.is-night .kept-star { transition: opacity 900ms ease; }
         .kept-star-label {
           position: absolute;
           left: 50%;
@@ -319,6 +479,10 @@ export default function KeptConstellation() {
           .kept-star { animation: none; }
           .kept-star.is-streaking .kept-star-inner { animation: none; }
           .kept-star.is-sounding .kept-star-inner { animation: none; transform: scale(1.9); }
+          .kept-star.is-exhaling { animation: none; opacity: 0; }
+          .kept-sky-layer.is-tutti .kept-star-inner { animation: none; }
+          .kept-sky-layer.is-agitated .kept-star { animation: none; }
+          .kept-sky-layer { transition: none; transform: none; }
         }
       `}</style>
     </div>

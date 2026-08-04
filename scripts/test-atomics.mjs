@@ -18,8 +18,10 @@ function loadTsModule(path) {
     fileName: filename,
   }).outputText;
   const module = { exports: {} };
-  const sandbox = { module, exports: module.exports };
-  vm.runInNewContext(code, sandbox, { filename });
+  // Same realm as the test: vm.runInNewContext builds arrays, objects and
+  // strings on a foreign prototype chain, so deepStrictEqual rejects them
+  // against host literals of identical content.
+  new Function("module", "exports", code)(module, module.exports);
   return module.exports;
 }
 
@@ -37,6 +39,9 @@ const {
   bondSeed,
   covalentBond,
   covalentPair,
+  bondPolarity,
+  bondCharacter,
+  IONIC_GAP,
   wantsBond,
   canFuse,
   fuseProduct,
@@ -303,6 +308,71 @@ for (let i = 0; i < 40; i++) {
   const bCC = blastMagnitude(eCC);
   assert.ok(bHH > 0 && bHH < 1 && bCC > 0 && bCC < 1, "blast magnitude lives in (0,1)");
   assert.ok(bHH > bCC, "the hotter fusion radiates the bigger wave");
+}
+
+// — Polarity: the electronegativity column finally does work. The bugs this
+//   catches: an abs() creeping into the signed form (so the room can no
+//   longer tell which end the charge pools at), a subtraction written the
+//   wrong way round, a threshold that lets an ionic pair read as covalent,
+//   and a bond whose polarity depends on which atom the ceremony began on.
+{
+  const byZ = (z) => elementOf(z);
+  const H = byZ(1), He = byZ(2), Na = byZ(11), Cl = byZ(17), O = byZ(8), C = byZ(6), F = byZ(9);
+
+  assert.equal(bondPolarity(H, H), 0, "a homonuclear pair shares evenly");
+  assert.equal(bondCharacter(H, H), "covalent", "H–H is the honest share");
+  for (const other of [H, O, Na]) {
+    assert.equal(bondPolarity(He, other), 0, "a noble pulls on nothing");
+    assert.equal(bondPolarity(other, He), 0, "…from either side");
+  }
+  // antisymmetry — the sign is the whole point
+  for (const [a, b] of [[H, O], [Na, Cl], [C, H], [Na, F]]) {
+    assert.ok(
+      Math.abs(bondPolarity(a, b) + bondPolarity(b, a)) < 1e-12,
+      "polarity must be antisymmetric, so its sign names the end that takes",
+    );
+    assert.equal(bondCharacter(a, b), bondCharacter(b, a), "character is a fact about the pair");
+  }
+  assert.ok(bondPolarity(Na, Cl) > 0, "chlorine takes from sodium, not the other way");
+  assert.ok(bondPolarity(Cl, Na) < 0, "and the sign flips with the order");
+
+  assert.equal(bondCharacter(Na, Cl), "ionic", "Na–Cl is a transfer, not a share");
+  assert.equal(bondCharacter(O, H), "polar", "O–H is lopsided but still shared");
+  assert.equal(bondCharacter(C, H), "covalent", "C–H is near enough to even");
+  assert.ok(
+    Math.abs(Na.electronegativity - Cl.electronegativity) >= IONIC_GAP,
+    "the ionic verdict has to come from the real gap, not a hand-placed case",
+  );
+
+  // monotone: a wider gap never reads as the more even bond
+  const rank = { covalent: 0, polar: 1, ionic: 2 };
+  const pairs = [];
+  for (const a of ELEMENTS) {
+    for (const b of ELEMENTS) {
+      if (a.valence <= 0 || b.valence <= 0) continue;
+      pairs.push([Math.abs(a.electronegativity - b.electronegativity), rank[bondCharacter(a, b)]]);
+    }
+  }
+  pairs.sort((p, q) => p[0] - q[0]);
+  for (let i = 1; i < pairs.length; i++) {
+    assert.ok(pairs[i][1] >= pairs[i - 1][1], "character must be monotone in the gap");
+  }
+
+  // the bond the room actually draws carries it, order-independently
+  const sa = SEEDS[3];
+  const sb = SEEDS[9];
+  const bond = covalentBond(sa, sb);
+  assert.equal(bond.polarity, covalentBond(sb, sa).polarity, "a bond's polarity is not a matter of order");
+  assert.equal(bond.character, covalentBond(sb, sa).character, "nor is its character");
+  assert.ok(bond.polarity >= 0 && bond.polarity <= 1, "the drawn polarity is a magnitude in 0..1");
+  {
+    const ea = elementFromSeed(sa);
+    const eb = elementFromSeed(sb);
+    assert.ok(
+      Math.abs(bond.polarity - Math.abs(bondPolarity(ea, eb))) < 1e-12,
+      "the bond must carry the real gap between its two elements",
+    );
+  }
 }
 
 // — Bounded population: endless condensation never overflows and always

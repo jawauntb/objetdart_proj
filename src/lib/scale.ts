@@ -389,12 +389,14 @@ type TravelOverride = {
  * quarks ⊂ atoms ⊂ molecules ⊂ organics ⊂ dna ⊂ organelles ⊂ cells ⊂ tissue
  * ⊂ {drop, flowers} ; drop ⊂ coast ; flowers grow from the earth (the ground,
  * the strata) ; birds fly over the garden and out to the shore ; the peak
- * stands above the fog that is the sea ; coast and earth are both ON the
- * atlas (the map holds the land and the shore) ; the atlas recedes into the
- * stars ; the stars thin into the galaxy, the galaxy into the web ; the web
- * opens onto the fold. /beyond branches off the fold. Metric spans stay
- * physical — sound keeps them. Doors below the band grain (the ground's
- * strata: /rocks, /soil) live in ROUTE_TRAVEL_OVERRIDES further down.
+ * stands above the fog that is the sea ; the atlas is a chart of a region of
+ * the ground, so it sits UNDER the earth on the axis and recedes into the
+ * stars along the album's trunk (the /atlas ↔ /stars passage film) ; the
+ * ground itself climbs the metric axis into the sky ; the stars thin into
+ * the galaxy, the galaxy into the web ; the web opens onto the fold.
+ * /beyond branches off the fold. Metric spans stay physical — sound keeps
+ * them. Doors below the band grain (the ground's strata: /rocks, /soil)
+ * live in ROUTE_TRAVEL_OVERRIDES further down.
  *
  * The life ladder needs no overrides at all: for once part-of and smaller-than
  * agree the whole way down, and so do the flock's neighbours (the garden below,
@@ -408,15 +410,30 @@ const TRAVEL_OVERRIDES: Partial<Record<ScaleBandId, TravelOverride>> = {
   tissue: { up: "flowers" }, // a sheet of cells belongs to what it is a sheet of
   flowers: { up: "earth", down: "tissue", extraDown: ["drop"] }, // a petal is
   // tissue before it is one cell; dew gathers on them too
-  earth: { up: "atlas", down: "flowers", extraDown: ["coast", "olympus"] }, // the
-  // ground lies on the map; things grow from it; the beach and the peak are
-  // lateral doors off the land (press, release, press again)
+  earth: { down: "flowers", extraDown: ["coast", "olympus", "atlas"] }, // things
+  // grow from the ground; the beach and the peak are lateral doors off the
+  // land; and the chart of a region of it lies one band DOWN (atlas spans
+  // 5.5–6.5 against the earth's 6.5–9 — a map sheet is smaller than the
+  // world it maps), so the map is a door in, never a door out.
+  // Upward the ground takes NO override: it climbs the metric axis through
+  // the planetary neighbourhood and the system (both addresses without
+  // rooms, transparent to travel) into the stars. It used to zoom out to
+  // /atlas — the one surviving metric inversion on the upper axis, and a
+  // direct contradiction of docs/plans/ground-and-sky.md §1, which declares
+  // that axis inversion-free. The atlas is a chart of a REGION of the ground
+  // (s 5.5–6.5 against the earth's 6.5–9): metrically smaller, and a
+  // different level of description rather than a different size. It is
+  // reached laterally now — the hearth peer ring in lib/peers.ts — and by
+  // pinch from the peak below it and the sky above it.
   olympus: { down: "coast", extraUp: ["earth"] }, // the peak rises from fog;
   // walking down from the land reaches the mountain; clouds are a peer, not a
   // pinch; its canonical ceiling is now the air column, resolving onto the map
-  atlas: { up: "stars" }, // the map recedes into the sky — the trunk passage;
-  // the earth, the planets and the system are reached by their own doors, and
-  // it descends onto the peak through the air column by metric adjacency
+  atlas: { up: "earth", extraUp: ["stars"] }, // the map's ceiling is the
+  // ground it charts — its metric neighbour, and the thing it is a chart OF.
+  // The trunk passage to the sky stays a declared door beside it (the
+  // TravelPassage film map → globe → orbit → stars, which is literally that
+  // walk), and remains the sky's canonical way down. Downward the map
+  // descends onto the peak through the air column by metric adjacency.
   stars: { down: "atlas" }, // the sky descends onto the map, and thins upward
   // into the galaxy, then the web, by metric adjacency
   space: { up: "manifold" }, // the web opens onto the fold; /beyond stays a
@@ -581,11 +598,30 @@ type RouteTravelOverride = {
 };
 
 /**
- * A route with an entry here OWNS the wall it declares: the listed doors
- * replace the band grain's offer on that wall (memory of a band-grain door
- * still answers — see travelOptionsForRoute). A wall it stays silent on
- * falls through to the band. Route-level doors swing both ways, exactly
- * like band extras: each declaration also opens the reverse door.
+ * A route with an entry here LEADS the wall it declares — it never empties
+ * it. Resolution order on one wall, in offer order, deduped by the room a
+ * door actually lands in:
+ *
+ *   1. the remembered origin, when it is a door of this wall (you return
+ *      the way you came);
+ *   2. the route's own `up`/`down` — or, if it names none, the band's
+ *      canonical neighbour;
+ *   3. the route's `extraUp`/`extraDown`;
+ *   4. the WHOLE band grain for this wall (`structuralDoors`: the band's
+ *      canonical neighbour, its `extraUp`/`extraDown`, and every band whose
+ *      opposite door points back here);
+ *   5. route-level reverse pointers (routes whose own wall opens onto this
+ *      room), so route doors swing both ways exactly like band extras.
+ *
+ * Step 4 is a *union*, not a replacement. It used to be a replacement, and
+ * that silently deleted doors: `/earth`'s override named the garden and the
+ * strata, which threw away the band grain's own `earth.extraDown` — so a
+ * fresh pinch down from the ground could never reach the shore or the peak
+ * again, and they only answered when `enteredFrom` happened to remember
+ * arriving that way. A route declares which door comes FIRST; the band
+ * declares which doors EXIST. Pinned in scripts/test-scale.mjs.
+ *
+ * A wall a route stays silent on falls through to the band grain entirely.
  */
 export const ROUTE_TRAVEL_OVERRIDES: Partial<Record<string, RouteTravelOverride>> = {
   // The ground forks three ways going down: things grow from it, and it is
@@ -714,9 +750,11 @@ function reverseRouteDoorRefs(path: string, homeId: ScaleBandId, dir: TravelDir)
 /**
  * Every built door out of `route` in direction `dir`, resolved-first — the
  * route-aware form of travelOptions, consulted by ScaleTravel whenever the
- * room knows its route. Resolution order: exact route override, else the
- * band grain (band override, else metric adjacency). Doors onto unbuilt
- * addresses — band or route — resolve through to the nearest built room.
+ * room knows its route. Resolution order is the five steps documented over
+ * ROUTE_TRAVEL_OVERRIDES: the route's doors lead, the band grain's doors
+ * follow, and the union is deduped by the room each door lands in. Doors
+ * onto unbuilt addresses — band or route — resolve through to the nearest
+ * built room.
  *
  * Memory: you return the way you came. A remembered origin answers when it
  * is a structural door of this wall at either grain, or when its own wall,
@@ -747,10 +785,11 @@ export function travelOptionsForRoute(
       const n = travelNeighbor(homeId, dir);
       if (n) refs.push(n);
     }
-    refs.push(...extraRefs, ...reverses);
-  } else {
-    refs.push(...structuralDoors(homeId, dir), ...reverses);
+    refs.push(...extraRefs);
   }
+  // The band grain always follows, never gets replaced: a route says which
+  // door is offered FIRST, the band says which doors exist at all.
+  refs.push(...structuralDoors(homeId, dir), ...reverses);
 
   // The remembered origin, validated against this wall (see doc above).
   let rememberedRef: DoorRef | null = null;
@@ -760,8 +799,9 @@ export function travelOptionsForRoute(
       ? doorRoomFor(raw)?.prefix ?? scaleBandIdForRoute(raw)
       : (raw as ScaleBandId);
     if (wanted && wanted !== homeId) {
-      const memRefs = owned ? [...refs, ...structuralDoors(homeId, dir)] : refs;
-      let valid = memRefs.includes(wanted);
+      // `refs` already carries the band grain, so a band-grain memory needs
+      // no special case: the union made the old memRefs patch redundant.
+      let valid = refs.includes(wanted);
       if (!valid) {
         const originRoute = wanted.startsWith("/")
           ? wanted
@@ -880,6 +920,8 @@ export const LATERAL_ROUTE_BANDS: { prefix: string; band: ScaleBandId }[] = [
   { prefix: "/tourbillon", band: "drop" },
   { prefix: "/watch", band: "drop" },
   { prefix: "/plasma", band: "drop" },
+  // the loose discs beside the sealed globe — same matter, same size
+  { prefix: "/orb", band: "drop" },
   { prefix: "/pulse", band: "drop" },
   { prefix: "/charts", band: "drop" },
   { prefix: "/dither", band: "drop" },

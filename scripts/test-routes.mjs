@@ -53,8 +53,15 @@ const navOrderModule = loadTsModule("src/lib/nav-order.ts", {
   "@/lib/scale": scaleModule,
   "@/lib/peers": peersModule,
 });
+// SITE_ROUTES is derived from the room registry (src/lib/room-registry.ts) —
+// one entry per room, everything else read off it. See test-room-contract.mjs.
+const roomRegistryModule = loadTsModule("src/lib/room-registry.ts", {
+  "@/lib/scale": scaleModule,
+  "@/lib/peers": peersModule,
+});
 const routesModule = loadTsModule("src/lib/routes.ts", {
   "@/lib/nav-order": navOrderModule,
+  "@/lib/room-registry": roomRegistryModule,
 });
 const darkRoutesModule = loadTsModule("src/lib/dark-routes.ts", {
   "@/lib/routes": routesModule,
@@ -144,6 +151,10 @@ const expectedKeys = [
   "kept",
   "colophon",
   "guide",
+  // rooms that arrived through src/rooms/<key>/room.config.ts
+  "cabinet",
+  "compass",
+  "orb",
 ];
 const validClusters = new Set(["field", "water", "nature", "mechanism"]);
 const validIcons = new Set(
@@ -236,6 +247,38 @@ for (const route of SITE_ROUTES) {
   assert.ok(!(onAxis && exempt), `${route.key} cannot be both on-axis and exempt`);
 }
 assert.ok(SCALE_EXEMPT_KEYS.includes("guide"), "guide stays a reading-surface exemption");
+
+// Completeness, from the other end: the axis check above can only police
+// pages that made it into SITE_ROUTES, so a whole room can escape it simply
+// by never registering. That shipped: src/app/compare has been a real page
+// for months, registered nowhere, invisible to every assertion here. Walk
+// src/app instead and require every page's root segment to be either a
+// registered route or a declared SCALE_EXEMPT_KEYS entry. The bug this
+// catches is the next unregistered room — a page a hand can reach that the
+// axis, the dropdown and the guide all believe does not exist.
+{
+  const pageRoots = new Set(
+    walkRepoFiles("src/app")
+      .filter((path) => /\/page\.tsx?$/.test(path))
+      .map((path) => path.replace(/^src\/app\//, "").split("/")[0])
+      .filter((seg) => seg && !seg.startsWith("[") && !seg.startsWith("_") && !/^page\.tsx?$/.test(seg)),
+  );
+  const registeredRoots = new Set(SITE_ROUTES.map((r) => r.href.split("/")[1]).filter(Boolean));
+  for (const root of pageRoots) {
+    if (root === "api") continue;
+    assert.ok(
+      registeredRoots.has(root) || SCALE_EXEMPT_KEY_SET.has(root),
+      `src/app/${root} is a page nothing knows about — register it in SITE_ROUTES or declare it in SCALE_EXEMPT_KEYS`,
+    );
+  }
+  // Keep the checker honest: it must actually be looking at the two pages
+  // that are on disk and deliberately unregistered, not vacuously passing.
+  for (const root of ["compare", "reading"]) {
+    assert.ok(pageRoots.has(root), `${root} must be found on disk for this check to mean anything`);
+    assert.equal(registeredRoots.has(root), false, `${root} is deliberately unregistered`);
+    assert.ok(SCALE_EXEMPT_KEY_SET.has(root), `${root} must carry a declared exemption`);
+  }
+}
 assert.ok(axisKeySet.has("coin"), "coin sits on the axis (cabinet at the drop)");
 assert.ok(axisKeySet.has("tourbillon"), "tourbillon sits on the axis (cabinet at the drop)");
 assert.ok(axisKeySet.has("fire"), "fire sits on the axis (hearth with earth)");

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import { getTimbreEngine } from "@/lib/timbre-engine";
-import { tap as hapticTap, ripple } from "@/lib/haptics";
+import { tap as hapticTap, ripple, roll, chop, lens as hapticLens, bloom as hapticBloom } from "@/lib/haptics";
 import {
   audibleFrequency,
   clamp,
@@ -21,8 +21,13 @@ import {
   timbreLesson,
   type LessonGhost,
 } from "@/lib/instrument-lesson";
-import { TIMBRE_CHAIN, timbreAt } from "@/lib/timbre";
+import { TIMBRE_CHAIN, timbreAt, type TimbreBlend } from "@/lib/timbre";
 import { useField } from "@/store/field";
+import { attachGestures } from "@/lib/gesture";
+import { holdTier } from "@/lib/gesture/core";
+import { onVessel } from "@/lib/vessel";
+import { onVisibility } from "@/lib/room-runtime";
+import LetGo from "@/components/LetGo";
 
 type ActiveTouch = {
   id: number;
@@ -31,6 +36,16 @@ type ActiveTouch = {
   color: string;
   note: string;
   voice: string;
+};
+
+type KeptChord = {
+  id: number;
+  x: number;
+  y: number;
+  nm: number;
+  freq: number;
+  spec: TimbreBlend;
+  color: string;
 };
 
 const SCALE_LABELS: Record<ScaleMode, string> = {
@@ -46,11 +61,22 @@ const KEY_SEMITONES = [0, 3, 5, 7, 10, 12, 15, 17, 19];
 
 export default function TimbreInstrument() {
   const plateRef = useRef<HTMLDivElement | null>(null);
-  const pointers = useRef(new Map<number, { x: number; y: number; at: number }>());
+  const pointers = useRef(new Map<number, { x: number; y: number; at: number; downAt: number; moved: boolean; ownMarkId: number }>());
   const lastMorphTick = useRef(0);
   const scaleModeRef = useRef<ScaleMode>("chroma");
   const positionRef = useRef(0.5);
   const cancelLesson = useRef<null | (() => void)>(null);
+  const markId = useRef(0);
+  const keptRef = useRef<KeptChord[]>([]);
+
+  // ── frame-layer state (two/three-finger verbs) ─────────────────────
+  const zoomRef = useRef({ cur: 1, target: 1 });
+  const panRef = useRef({ cur: 0, target: 0 });
+  const lensTwistAccRef = useRef(0);
+  const timeScaleRef = useRef(1);
+  const windLastAtRef = useRef(0);
+  const nightRef = useRef(false);
+  const lastTouchAtRef = useRef(0);
 
   const [wavelength, setWavelength] = useState(553);
   const [position, setPosition] = useState(0.5);
@@ -59,9 +85,21 @@ export default function TimbreInstrument() {
   const [isListening, setIsListening] = useState(false);
   const [lessonLabel, setLessonLabel] = useState("");
   const [scaleMode, setScaleMode] = useState<ScaleMode>("chroma");
+  const [kept, setKept] = useState<KeptChord[]>([]);
+  const [isReplaying, setIsReplaying] = useState(false);
+  const [charges, setCharges] = useState<Array<{ id: number; x: number; y: number; pct: number; mode: "create" | "delete" }>>([]);
+  const [glimmering, setGlimmering] = useState(false);
+  const glimmeringRef = useRef(false);
+  useEffect(() => { glimmeringRef.current = glimmering; }, [glimmering]);
+  useEffect(() => onVisibility((hidden) => {
+    if (hidden) setGlimmering(false);
+  }), []);
+  const isListeningRef = useRef(false);
+  useEffect(() => { isListeningRef.current = isListening; }, [isListening]);
 
   scaleModeRef.current = scaleMode;
   positionRef.current = position;
+  keptRef.current = kept;
 
   const color = useMemo(() => colorFromWavelength(wavelength), [wavelength]);
   const audible = useMemo(
@@ -85,13 +123,20 @@ export default function TimbreInstrument() {
     };
   }, []);
 
+  // pinch zooms into a narrower slice of pitch; pan2 shifts which slice
+  // sits under the plate — the map layer over the same material.
+  const mapX = useCallback((x: number) => {
+    const mapped = 0.5 + (x - 0.5) / zoomRef.current.cur + panRef.current.cur;
+    return clamp(mapped, 0, 1);
+  }, []);
+
   // x is pitch (and color, through the light bridge); y is which instrument
   const translationAt = useCallback((x: number, y: number) => {
-    const nm = wavelengthFromX(x);
+    const nm = wavelengthFromX(mapX(x));
     const freq = quantizeFrequency(audibleFrequency(nm), scaleModeRef.current);
     const spec = timbreAt(y);
     return { nm, freq, spec, color: colorFromWavelength(nm) };
-  }, []);
+  }, [mapX]);
 
   const showTouch = useCallback((id: number, x: number, y: number, freq: number, touchColor: string, voice: string) => {
     setTouches((current) => {
@@ -105,56 +150,68 @@ export default function TimbreInstrument() {
     setTouches((current) => current.filter((touch) => touch.id !== id));
   }, []);
 
-  const handlePointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    void getFieldAudio().start();
-    const { x, y: rawY } = plateXY(event.clientX, event.clientY);
-    // Band gravity: a slow hand settles onto an instrument, a fast one morphs.
-    const y = timbreGravity(rawY, 0.35);
-    const { nm, freq, spec, color: touchColor } = translationAt(x, y);
+  // ── create/delete: the room's material is countable (a kept chord).
+  const keepChord = useCallback((x: number, y: number, nm: number, freq: number, spec: TimbreBlend, chordColor: string) => {
+    const id = markId.current++;
+    setKept((current) => [...current.slice(-11), { id, x, y, nm, freq, spec, color: chordColor }]);
+    return id;
+  }, []);
 
-    pointers.current.set(event.pointerId, { x, y, at: performance.now() });
-    getTimbreEngine().noteOn(String(event.pointerId), freq, spec);
-    setWavelength(nm);
-    setPosition(y);
-    showTouch(event.pointerId, x, y, freq, touchColor, spec.label);
-    try { ripple(0.4 + (1 - y) * 0.3); } catch { /* noop */ }
-    recordTimbre(`${spec.label.replace(/\s/g, "")}/${Math.round(freq)}hz`, clamp(0.3 + spec.mix * 0.3, 0.2, 1));
-
-    try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* noop */ }
-  }, [plateXY, recordTimbre, showTouch, translationAt]);
-
-  const handlePointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    const prev = pointers.current.get(event.pointerId);
-    if (!prev) return;
-    const { x, y: rawY } = plateXY(event.clientX, event.clientY);
-    const now = performance.now();
-    const dt = Math.max(16, now - prev.at);
-    const speed = Math.hypot(x - prev.x, rawY - prev.y) / dt;
-    // Slow motion pulls toward the nearest instrument band; a quick stroke stays free.
-    const y = speed < 0.0012 ? timbreGravity(rawY, 0.28) : rawY;
-    pointers.current.set(event.pointerId, { x, y, at: now });
-    const { nm, freq, spec, color: touchColor } = translationAt(x, y);
-    const engine = getTimbreEngine();
-
-    engine.glide(String(event.pointerId), freq);
-    const tick = now;
-    if (tick - lastMorphTick.current > 60) {
-      lastMorphTick.current = tick;
-      engine.morph(String(event.pointerId), spec);
-      try { hapticTap(); } catch { /* noop */ }
+  const findNearKept = useCallback((x: number, y: number, excludeId?: number): KeptChord | null => {
+    let best: KeptChord | null = null;
+    let bestD = 0.05;
+    for (const chord of keptRef.current) {
+      if (chord.id === excludeId) continue;
+      const d = Math.hypot(chord.x - x, chord.y - y);
+      if (d < bestD) { bestD = d; best = chord; }
     }
-    setWavelength(nm);
-    setPosition(y);
-    showTouch(event.pointerId, x, y, freq, touchColor, spec.label);
-  }, [plateXY, showTouch, translationAt]);
+    return best;
+  }, []);
 
-  const handlePointerEnd = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    if (pointers.current.delete(event.pointerId)) {
-      getTimbreEngine().noteOff(String(event.pointerId));
+  const forgetChord = useCallback((id: number) => {
+    setKept((current) => current.filter((chord) => chord.id !== id));
+    try { roll(); } catch { /* noop */ }
+    try { getFieldAudio().thud(); } catch { /* noop */ }
+    recordTimbre("memory/forget", 0.5);
+  }, [recordTimbre]);
+
+  const replayKept = useCallback(() => {
+    const chords = keptRef.current;
+    if (chords.length === 0) {
+      try { getFieldAudio().refuse(); } catch { /* noop */ }
+      recordTimbre("memory/empty", 0.24);
+      return;
     }
-    hideTouch(event.pointerId);
-    try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* noop */ }
-  }, [hideTouch]);
+    setIsReplaying(true);
+    recordTimbre("memory/replay", 0.85);
+    chords.forEach((chord, index) => {
+      window.setTimeout(() => {
+        const id = `replay:${chord.id}`;
+        getTimbreEngine().noteOn(id, chord.freq, chord.spec);
+        setWavelength(chord.nm);
+        setPosition(chord.y);
+        window.setTimeout(() => getTimbreEngine().noteOff(id), 240);
+      }, index * 260);
+    });
+    window.setTimeout(() => setIsReplaying(false), chords.length * 260 + 420);
+  }, [recordTimbre]);
+
+  const letGoKept = useCallback(() => {
+    setKept([]);
+    try { getFieldAudio().thud(); } catch { /* noop */ }
+    recordTimbre("memory/clear", 0.34);
+  }, [recordTimbre]);
+
+  const tuttiBurst = useCallback(() => {
+    if (keptRef.current.length > 0) {
+      replayKept();
+    } else {
+      try { getFieldAudio().chime(); } catch { /* noop */ }
+    }
+    recordTimbre("tutti", 0.6);
+    try { roll(); } catch { /* noop */ }
+  }, [recordTimbre, replayKept]);
+
 
   const stopLesson = useCallback(() => {
     cancelLesson.current?.();
@@ -220,6 +277,201 @@ export default function TimbreInstrument() {
     try { hapticTap(); } catch { /* noop */ }
   }, []);
 
+  // ── the gesture surface ──────────────────────────────────────────────
+  // Polyphonic (binds `voice`): every finger is an independent voice that
+  // sounds the instant it lands — several fingers stack a chord across
+  // instruments (grammar §3). A together-landed pair moving against each
+  // other is reclaimed as the frame layer: pinch magnifies the pitch axis,
+  // twist(2) rotates the lens through the scale modes, pan2 shifts which
+  // slice of the mapping sits under the plate.
+  //
+  // Three-finger law-layer channels are silenced by the engine on any
+  // surface binding `voice` (see LightInstrument.tsx for the same note);
+  // time dilation and wind are reconstructed from the raw voice count,
+  // season is exempted — the one sacrifice grammar §3 names for instrument
+  // surfaces.
+  useEffect(() => {
+    const plate = plateRef.current;
+    if (!plate) return;
+    const chargeState = new Map<number, { sealed: boolean }>();
+
+    const detachGestures = attachGestures(
+      plate,
+      {
+        voice: (e) => {
+          lastTouchAtRef.current = performance.now();
+          const { x, y: rawY } = plateXY(e.x, e.y);
+          if (e.phase === "start") {
+            void getFieldAudio().start();
+            // Band gravity: a slow hand settles onto an instrument.
+            const y = timbreGravity(rawY, 0.35);
+            const { nm, freq, spec, color: touchColor } = translationAt(x, y);
+            const ownMarkId = keepChord(x, y, nm, freq, spec, touchColor);
+            pointers.current.set(e.id, { x, y, at: performance.now(), downAt: performance.now(), moved: false, ownMarkId });
+            chargeState.set(e.id, { sealed: false });
+            getTimbreEngine().noteOn(String(e.id), freq, spec);
+            setWavelength(nm);
+            setPosition(y);
+            showTouch(e.id, x, y, freq, touchColor, spec.label);
+            try { ripple(0.4 + (1 - y) * 0.3); } catch { /* noop */ }
+            recordTimbre(`${spec.label.replace(/\s/g, "")}/${Math.round(freq)}hz`, clamp(0.3 + spec.mix * 0.3, 0.2, 1));
+            return;
+          }
+          const prev = pointers.current.get(e.id);
+          if (e.phase === "move") {
+            if (!prev) return;
+            const now = performance.now();
+            const dt = Math.max(16, now - prev.at);
+            const speed = Math.hypot(x - prev.x, rawY - prev.y) / dt;
+            // Slow motion pulls toward the nearest instrument band; a quick stroke stays free.
+            const y = speed < 0.0012 ? timbreGravity(rawY, 0.28) : rawY;
+            if (!prev.moved && Math.hypot(x - prev.x, y - prev.y) > 0.02) {
+              prev.moved = true;
+              if (pointers.current.size >= 3) {
+                const now2 = performance.now();
+                if (now2 - windLastAtRef.current > 220) {
+                  windLastAtRef.current = now2;
+                  const { freq } = translationAt(x, y);
+                  getTimbreEngine().noteOn("wind", freq, timbreAt(y));
+                  window.setTimeout(() => getTimbreEngine().noteOff("wind"), 90);
+                  try { chop(); } catch { /* noop */ }
+                  recordTimbre("wind", 0.4);
+                }
+              }
+            }
+            pointers.current.set(e.id, { x, y, at: now, downAt: prev.downAt, moved: prev.moved, ownMarkId: prev.ownMarkId });
+            const { nm, freq, spec, color: touchColor } = translationAt(x, y);
+            const engine = getTimbreEngine();
+            engine.glide(String(e.id), freq);
+            if (now - lastMorphTick.current > 60) {
+              lastMorphTick.current = now;
+              engine.morph(String(e.id), spec);
+              try { hapticTap(); } catch { /* noop */ }
+            }
+            setWavelength(nm);
+            setPosition(y);
+            showTouch(e.id, x, y, freq, touchColor, spec.label);
+            return;
+          }
+          // end / cancel
+          pointers.current.delete(e.id);
+          chargeState.delete(e.id);
+          getTimbreEngine().noteOff(String(e.id));
+          hideTouch(e.id);
+        },
+        pinch: (e) => {
+          lastTouchAtRef.current = performance.now();
+          if (e.phase === "move") {
+            zoomRef.current.target = clamp(zoomRef.current.target * e.scale, 1, 3);
+          }
+        },
+        twist: (e) => {
+          if (e.fingers === 3) return; // season — see the exemption note above
+          lastTouchAtRef.current = performance.now();
+          if (e.phase === "start") lensTwistAccRef.current = 0;
+          if (e.phase === "move") lensTwistAccRef.current += e.angle;
+          if (e.phase === "end" && Math.abs(lensTwistAccRef.current) > Math.PI / 2) {
+            cycleScale();
+            try { hapticLens(); } catch { /* noop */ }
+          }
+        },
+        pan2: (e) => {
+          lastTouchAtRef.current = performance.now();
+          if (e.phase !== "move") return;
+          panRef.current.target = clamp(panRef.current.target + e.dx * 0.0006, -0.4, 0.4);
+        },
+        tap: (e) => {
+          lastTouchAtRef.current = performance.now();
+          if (e.fingers === 2) {
+            // step back: leave the lesson, else nudge the zoom home.
+            if (isListeningRef.current) {
+              stopLesson();
+            } else if (Math.abs(zoomRef.current.target - 1) > 0.02) {
+              zoomRef.current.target = 1;
+            }
+            try { hapticTap(); } catch { /* noop */ }
+            return;
+          }
+          if (e.fingers === 3) {
+            // tutti — one synchronized pulse of everything alive.
+            tuttiBurst();
+          }
+        },
+      },
+      { wheelZoom: false },
+    );
+
+    const detachVessel = onVessel({
+      tilt: ({ gamma }) => {
+        panRef.current.target = clamp(panRef.current.target + gamma * 0.0006, -0.4, 0.4);
+      },
+      shake: () => { tuttiBurst(); },
+      knock: () => {
+        try { getFieldAudio().chime(); } catch { /* noop */ }
+        try { hapticBloom(); } catch { /* noop */ }
+        recordTimbre("vessel/knock", 0.6);
+      },
+      flip: ({ faceDown }) => { nightRef.current = faceDown; },
+    });
+
+    let raf = 0;
+    const ease = () => {
+      raf = requestAnimationFrame(ease);
+      const z = zoomRef.current;
+      z.cur += (z.target - z.cur) * 0.12;
+      const p = panRef.current;
+      p.cur += (p.target - p.cur) * 0.1;
+      let stationary = 0;
+      for (const r of pointers.current.values()) if (!r.moved) stationary++;
+      const dilating = stationary >= 3;
+      timeScaleRef.current += ((dilating ? 3 : 1) - timeScaleRef.current) * 0.06;
+      plate.style.setProperty("--timbre-zoom", z.cur.toFixed(4));
+      plate.style.setProperty("--timbre-pan", p.cur.toFixed(4));
+      plate.style.setProperty("--timbre-time-scale", timeScaleRef.current.toFixed(3));
+      plate.style.setProperty("--timbre-night", nightRef.current ? "0.5" : "0");
+    };
+    raf = requestAnimationFrame(ease);
+
+    // create/delete poll: dwell/ceremony never reach `on.hold` on a poly
+    // surface, so a stationary voice's elapsed time is read by hand each
+    // tick, sharing the one classifier (`holdTier`) rather than a new one.
+    const chargeTimer = window.setInterval(() => {
+      const now = performance.now();
+      const active: Array<{ id: number; x: number; y: number; pct: number; mode: "create" | "delete" }> = [];
+      for (const [id, record] of pointers.current) {
+        if (record.moved) continue;
+        const elapsed = now - record.downAt;
+        const tier = holdTier(elapsed);
+        if (tier < 2) continue;
+        const chg = chargeState.get(id);
+        if (!chg) continue;
+        const near = findNearKept(record.x, record.y, record.ownMarkId);
+        const mode: "create" | "delete" = near ? "delete" : "create";
+        active.push({ id, x: record.x, y: record.y, pct: Math.min(1, (elapsed - 900) / 1600), mode });
+        if (!chg.sealed && tier >= 3) {
+          chg.sealed = true;
+          try { hapticBloom(); } catch { /* noop */ }
+          if (mode === "delete" && near) forgetChord(near.id);
+          else replayKept();
+        }
+      }
+      setCharges(active);
+      if (now - lastTouchAtRef.current > 20000) {
+        setGlimmering((g) => (g ? g : true));
+      } else if (glimmeringRef.current) {
+        setGlimmering(false);
+      }
+    }, 90);
+
+    return () => {
+      detachGestures();
+      detachVessel();
+      cancelAnimationFrame(raf);
+      window.clearInterval(chargeTimer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ── desktop keyboard — pentatonic row voiced by the last touched timbre ──
   useEffect(() => {
     const heldKeys = new Set<string>();
@@ -267,15 +519,45 @@ export default function TimbreInstrument() {
     >
       <div
         ref={plateRef}
-        className="timbre-plate"
+        className={`timbre-plate${glimmering ? " is-glimmering" : ""}`}
         role="application"
         tabIndex={0}
         aria-label="meta instrument — sideways is pitch, up and down morphs between harp, piano, guitar, tar, sitar, violin, saxophone and trumpet; several fingers stack chords"
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerEnd}
-        onPointerCancel={handlePointerEnd}
+        style={{
+          "--timbre-zoom": 1,
+          "--timbre-pan": 0,
+          "--timbre-time-scale": 1,
+          "--timbre-night": 0,
+        } as React.CSSProperties}
       >
+        <div className="timbre-night-veil" aria-hidden="true" />
+        {charges.map((charge) => (
+          <span
+            key={charge.id}
+            className={`timbre-charge timbre-charge--${charge.mode}`}
+            aria-hidden="true"
+            style={{
+              left: `${charge.x * 100}%`,
+              top: `${charge.y * 100}%`,
+              width: 24 + charge.pct * 60,
+              height: 24 + charge.pct * 60,
+              opacity: 0.25 + charge.pct * 0.55,
+            }}
+          />
+        ))}
+        {kept.map((chord) => (
+          <span
+            key={`k-${chord.id}`}
+            className="timbre-kept-mark"
+            aria-hidden="true"
+            style={{
+              left: `${chord.x * 100}%`,
+              top: `${chord.y * 100}%`,
+              borderColor: chord.color,
+              boxShadow: `0 0 24px ${chord.color}`,
+            }}
+          />
+        ))}
         <div className="timbre-bands" aria-hidden="true">
           {TIMBRE_CHAIN.map((voice, index) => (
             <span
@@ -346,6 +628,9 @@ export default function TimbreInstrument() {
             {isListening ? "listening" : "listen"}
           </button>
           <button type="button" onClick={cycleScale}>{SCALE_LABELS[scaleMode]}</button>
+          <button type="button" onClick={replayKept} disabled={isReplaying || isListening}>
+            {isReplaying ? "replaying" : `replay · ${kept.length} kept`}
+          </button>
           <Link href="/light">light</Link>
         </div>
         <p className="timbre-hint">
@@ -354,6 +639,8 @@ export default function TimbreInstrument() {
             : "rest on a band and it becomes that instrument · listen, then stack your own chord"}
         </p>
       </footer>
+
+      <LetGo label="let the chords go" onLetGo={letGoKept} visible={kept.length > 0} />
 
       <style
         dangerouslySetInnerHTML={{
@@ -389,8 +676,53 @@ export default function TimbreInstrument() {
             linear-gradient(180deg, rgba(255,255,255,0.06), transparent 20%, rgba(0,0,0,0.5) 100%),
             linear-gradient(90deg, #8e2318 0%, #d83a2e 10.2%, #f08a28 30.4%, #f5d65b 39.1%, #4fca75 51.1%, #45b8e8 64.1%, #5574f7 75.1%, #9a63ee 90.6%, #7a43d8 100%);
           background-blend-mode: normal, normal, normal;
+          background-size: 100% 100%, 100% 100%, calc(100% * var(--timbre-zoom, 1)) 100%;
+          background-position: 0 0, 0 0, calc(50% - var(--timbre-pan, 0) * 100%) 0;
           box-shadow: inset 0 0 160px rgba(0,0,0,0.66);
           filter: saturate(0.72) brightness(0.82);
+        }
+        .timbre-night-veil {
+          position: absolute;
+          inset: 0;
+          background: #020302;
+          opacity: var(--timbre-night, 0);
+          transition: opacity 900ms ease;
+          pointer-events: none;
+          z-index: 1;
+        }
+        .timbre-charge {
+          position: absolute;
+          margin-left: -30px;
+          margin-top: -30px;
+          border-radius: 50%;
+          border: 1.5px solid rgba(255, 230, 190, 0.9);
+          pointer-events: none;
+          z-index: 6;
+        }
+        .timbre-charge--delete {
+          border-color: rgba(255, 120, 100, 0.9);
+        }
+        .timbre-kept-mark {
+          position: absolute;
+          width: 10px;
+          height: 10px;
+          margin-left: -5px;
+          margin-top: -5px;
+          border: 1px solid currentColor;
+          border-radius: 50%;
+          opacity: 0.7;
+          pointer-events: none;
+          z-index: 2;
+        }
+        @keyframes timbreGlimmerBands {
+          0%, 100% { opacity: 0.44; }
+          50% { opacity: 0.92; }
+        }
+        .timbre-plate.is-glimmering .timbre-bands span {
+          animation: timbreGlimmerBands 1.8s ease;
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .timbre-plate.is-glimmering .timbre-bands span { animation: none; }
         }
         .timbre-plate:after {
           content: "";
@@ -452,7 +784,7 @@ export default function TimbreInstrument() {
         .timbre-finger.is-ghost {
           border-style: dashed;
           opacity: 0.8;
-          animation: timbreGhost 900ms ease-in-out infinite;
+          animation: timbreGhost calc(900ms * var(--timbre-time-scale, 1)) ease-in-out infinite;
         }
         @keyframes timbreGhost {
           0%, 100% { transform: translate(-50%, -50%) scale(0.96); opacity: 0.64; }

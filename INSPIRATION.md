@@ -130,6 +130,13 @@ translated into **exactly the channels the device has**, and nothing else:
   finger count addresses the stack (one finger the material, two the frame, three the
   law; the device is the vessel). Every room interprets the same grammar in its own
   register. No room invents a control a hand cannot discover in ten seconds of play.
+- **Lower the friction to the next reward.** Habits form when the gap between intention
+  and payoff shrinks — activation energy down, willpower optional. Gestures and rapid
+  taps (1 / 3 / 5 / *n*) exist for that reason: the hand reaches the next incremental
+  bit of sight-sound-haptic reward without menus, mode switches, or instructions. A
+  binding that makes the visitor work for the reward (or that does nothing on a clear
+  tap) raises friction and kills the loop. Prefer depth that scales with rhythm and
+  duration over another control to learn.
 - **Every meaningful state change should be simultaneously visible, audible, and — where
   hardware allows — tangible.** The compass drag renders in the same frame as its tone.
   Haptics (`src/lib/haptics.ts`) speak sea-words: tap, ripple, chop, roll, storm.
@@ -185,9 +192,11 @@ regression even if the code is clean.
 5. **Three registers.** Devotional / operational / oceanic. A surface is on-voice when at
    least two are present and none dominates — this binds prose, UI copy, and the system
    prompts of every AI endpoint.
-6. **No controls to learn.** The gesture grammar of §3, discoverable by play. Prefer
-   pressure, duration, and motion over buttons; prefer detents and resistance over
-   settings.
+6. **No controls to learn; lower friction to the reward.** The gesture grammar of §3,
+   discoverable by play. Prefer pressure, duration, rhythm (rapid taps), and motion
+   over buttons; prefer detents and resistance over settings. The next incremental
+   payoff should be one cheap gesture away — that is how the rooms stay habit-forming
+   without demanding willpower.
 7. **Anti-patterns stand.** The list in `DESIGN.md` (no marketing verbs, no emoji in
    product copy, no drop shadows, no "coming soon", no autoplay audio, reduced-motion
    always honored, etc.) applies to every new room.

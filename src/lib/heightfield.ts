@@ -54,6 +54,23 @@ export function mulberry32(seed: number): () => number {
 }
 
 /**
+ * How far apart two seeds can stand, in km.
+ *
+ * Load-bearing, and smaller than it looks like it should be. The offset is
+ * the only thing a seed means to the field, so the temptation is to spread
+ * seeds over thousands of kilometres. But the offset is also what sets the
+ * MAGNITUDE of every coordinate the noise is evaluated at: the range itself
+ * is only MARCH_MAX_KM across, and a ±2048 km offset put the finest octave's
+ * lattice coordinate past 16000, where a float32 mantissa has 2e-3 to spend
+ * on a number the field differentiates. A few hundred kilometres is already
+ * many wavelengths of the coarsest octave — every seed gets its own range —
+ * and it keeps the shader's arithmetic in the part of float32 that still
+ * has digits. It also stays inside one HASH_MOD period (512 / BASE_FREQ ≈
+ * 3123 km), so two seeds cannot alias onto the same mountain.
+ */
+export const SEED_SPREAD_KM = 512;
+
+/**
  * A seed is a translation of the noise field, nothing more — which is what
  * makes the same seed the same mountain, always, in JS and in GLSL alike
  * (the shader receives these two numbers as a uniform and never hashes).
@@ -65,19 +82,63 @@ export function seedOffset(seed: number): [number, number] {
   if (seed === offsetMemoSeed) return offsetMemo;
   const rng = mulberry32(hashSeed(seed, 0x0a1a));
   offsetMemoSeed = seed;
-  offsetMemo = [(rng() - 0.5) * 4096, (rng() - 0.5) * 4096];
+  offsetMemo = [(rng() - 0.5) * SEED_SPREAD_KM, (rng() - 0.5) * SEED_SPREAD_KM];
   return offsetMemo;
 }
 
-// ——— the noise basis: the water's own, given a derivative ————————
+// ——— the noise basis, and the one place precision is not free ————
 //
-// hash21/vnoise are the house idiom, lifted unchanged from the sea
-// (src/components/Sea.tsx, src/components/Ocean.tsx) so the fog and the
-// water it resolves into are literally made of the same grain. The one
-// refinement: a quintic fade instead of the cubic, because this field is
-// differentiated rather than merely sampled, and the quintic's derivative
-// vanishes at the cell walls — with the cubic, curvature would step across
-// every lattice line and the shading would show it as a faint square grid.
+// vnoise is the house idiom, lifted from the sea (src/components/Sea.tsx,
+// src/components/Ocean.tsx) so the fog and the water it resolves into are
+// made of the same grain, with a quintic fade instead of the cubic because
+// this field is differentiated rather than merely sampled — the quintic's
+// derivative vanishes at the cell walls, and with the cubic the curvature
+// would step across every lattice line and the shading would show it as a
+// faint square grid.
+//
+// The hash is NOT the house idiom, and the reason is the whole of the bug
+// this file was rewritten to fix. `fract(p * 123.34)` then
+// `p += dot(p, p + 45.32)` then `fract(p.x * p.y)` is a fine hash in a
+// shader that stays near the origin and a catastrophe in one that does not:
+// the first `fract` throws away every digit above the decimal point, so
+// whatever rounding the input carried is all that is left, and the two
+// following steps multiply that residue by ~45 and then by ~50. Evaluated
+// in float64 by this file and in float32 by the shader generated from it,
+// the two answers stop agreeing entirely — measured at the room's own
+// station, |Δhash| ran to 0.35 on a value that lives in [0,1], at EVERY
+// octave. The shader was therefore marching a completely different mountain
+// from the one the suite checks, the eye — placed by this file, 1.7 m above
+// this file's ground — stood ~170 m inside the shader's rock, every ray hit
+// on its first step, and /mountain rendered as one flat rock-coloured
+// rectangle. Nothing in node could see it, because node has no float32.
+//
+// So the hash is an exact one instead. Every intermediate below is an
+// integer under 2^24, which float32 and float64 both hold exactly, and
+// every division is by a power of two, which is exact in both. Nothing
+// rounds anywhere, so the two languages return the same bits — not nearly
+// the same number, the same bits. scripts/test-heightfield.mjs pins that by
+// running the whole hash again under Math.fround.
+
+/**
+ * The permutation modulus, and why it is a power of two.
+ *
+ * `v -> (HASH_MUL·v + 1)·v mod M` is a bijection whenever HASH_MUL is even:
+ * the difference of two outputs factors as (x−y)·(HASH_MUL·(x+y) + 1), and
+ * that second factor is odd, so it is invertible mod any 2^k. A shuffle,
+ * then, never a collapse — and unlike an odd modulus it needs no division:
+ * 1/512 is exact, so `floor(v · HASH_INV_MOD)` and `v · HASH_INV_MOD`
+ * round-trip identically in float32 and float64 rather than merely closely.
+ * (289 = 17² is the other bijective choice and was measured against this
+ * one: same distribution, twenty times the lattice correlation, three
+ * divides per hash instead of three multiplies, and agreement only to 3e-8
+ * instead of exact.)
+ *
+ * The largest product it can produce, (34·511 + 1)·511 = 8878625, sits well
+ * under float32's exactly-representable 2^24.
+ */
+export const HASH_MOD = 512;
+export const HASH_INV_MOD = 1 / 512;
+export const HASH_MUL = 34;
 
 function fract(v: number): number {
   return v - Math.floor(v);
@@ -92,13 +153,32 @@ function smoothstep(e0: number, e1: number, x: number): number {
   return t * t * (3 - 2 * t);
 }
 
+function hashWrap(v: number): number {
+  return v - HASH_MOD * Math.floor(v * HASH_INV_MOD);
+}
+
+function hashPermute(v: number): number {
+  return hashWrap((HASH_MUL * v + 1) * v);
+}
+
+/**
+ * A lattice point → [0,1). Three rounds, and the second and third fold the
+ * other coordinate back in: with a single `permute(permute(x) + y)` every
+ * row of the field is the same sequence shifted, and value noise built on
+ * that shows the shift as diagonal corduroy across the whole range.
+ *
+ * Periodic with period HASH_MOD in both axes by construction. At the
+ * coarsest octave that is 3123 km, a hundred times MARCH_MAX_KM; at the
+ * finest it is 41 km, still past the marcher's own horizon, and carrying
+ * 15 m of amplitude — and each octave is turned, so no two repeats could
+ * line up in world space even if the eye could reach them.
+ */
 export function hash21(x: number, y: number): number {
-  let px = fract(x * 123.34);
-  let py = fract(y * 456.21);
-  const d = px * (px + 45.32) + py * (py + 45.32);
-  px += d;
-  py += d;
-  return fract(px * py);
+  const wx = hashWrap(x);
+  const wy = hashWrap(y);
+  const a = hashPermute(wx);
+  const b = hashPermute(hashWrap(a + wy));
+  return hashPermute(hashWrap(b + wx)) * HASH_INV_MOD;
 }
 
 /** Value noise in [0,1] with its exact gradient: [v, dv/dx, dv/dy]. */
@@ -626,6 +706,234 @@ export function submerged(
   return submergedDepth(x, z, fogAltitude, seed, phase, octaves) > 0;
 }
 
+// ——— where the wanderer stands ————————————————————————————————
+
+/**
+ * How far above the inversion the composition wants the eye — measured in
+ * the fog's OWN scale heights, which is the only unit that means anything
+ * here and the whole of a second bug.
+ *
+ * A hundred metres over the fog top sounds like standing above the fog. It
+ * is not: density falls as exp(−Δ/FOG_SCALE_HEIGHT_KM), and with a scale
+ * height of 290 m, 110 m up still leaves 0.70 of the fog's full density in
+ * the air at the eye — about half a kilometre of horizontal visibility. The
+ * room rendered exactly that, a uniform grey wash with a ridge somewhere in
+ * it, and the number gave no hint, because 0.11 km is not comparable to
+ * anything unless you already know what it is being compared to.
+ *
+ * Two and a half scale heights leaves 8% — clear air at the eye, a kilometre
+ * still legible at 40%, the far range fading at 8 km. That is the picture:
+ * near ridges crisp, distant ones dissolving, and the fog a sea you are
+ * standing over rather than weather you are standing in. Written as a
+ * multiple so raising FOG_SCALE_HEIGHT_KM can never quietly drown the eye
+ * again.
+ */
+export const STATION_FOG_CLEARANCE = 2.5;
+export const STATION_ABOVE_FOG_KM = STATION_FOG_CLEARANCE * FOG_SCALE_HEIGHT_KM;
+/** Bearings walked down off the apex looking for that altitude. */
+export const STATION_BEARINGS = 64;
+export const STATION_INNER_KM = 0.12;
+export const STATION_MAX_KM = 3;
+export const STATION_STEP_KM = 0.04;
+
+export type Station = {
+  x: number;
+  z: number;
+  /** Eye altitude in km: EYE_KM above the ground under it. */
+  y: number;
+  /** Bearing from the apex out to the ledge — the way the wanderer faces. */
+  bearing: number;
+  /** How far out along that bearing the ledge stands, km. */
+  reach: number;
+};
+
+/**
+ * The ledge the figure with his back to us is standing on.
+ *
+ * NOT the apex. The outcrop stands SUMMIT_KM over the ridges, so an eye set
+ * a hundred metres above the inversion at the origin is three quarters of a
+ * kilometre inside its own mountain and every ray hits rock on its first
+ * step. A painted room could cheat that; a marched one cannot. So the ledge
+ * is found: walk out from the apex along each bearing until the ground has
+ * fallen to the altitude the composition wants, and stand on the flank that
+ * reaches it soonest — nearest the summit, so the peak is still overhead.
+ *
+ * The fallback matters as much as the search. If no bearing reaches the
+ * target inside STATION_MAX_KM — a seed whose massif simply stands high —
+ * the answer is the lowest ground found, never the apex the loop started
+ * from. Returning the apex is the failure mode this whole function exists
+ * to refuse, and it is the one an unwritten `else` produces.
+ *
+ * The eye then sits EYE_KM over the HIGHER of the two terrains, the one the
+ * marcher walks (OCTAVES_MARCH) and the one the shader shades
+ * (OCTAVES_SHADE); they disagree by metres, and taking the lower one puts
+ * the camera under the other.
+ */
+export function stationFor(seed: number, aboveFogKm = STATION_ABOVE_FOG_KM): Station {
+  const target = restingFogAltitude(seed) + aboveFogKm;
+  let bestX = 0;
+  let bestZ = 0;
+  let bestBearing = 0;
+  let bestReach = Infinity;
+  let lowX = 0;
+  let lowZ = 0;
+  let lowBearing = 0;
+  let lowReach = STATION_INNER_KM;
+  let lowest = Infinity;
+  for (let b = 0; b < STATION_BEARINGS; b++) {
+    const a = (b / STATION_BEARINGS) * Math.PI * 2;
+    for (let s = STATION_INNER_KM; s <= STATION_MAX_KM; s += STATION_STEP_KM) {
+      const x = Math.sin(a) * s;
+      const z = Math.cos(a) * s;
+      const h = heightAt(x, z, seed, OCTAVES_MARCH);
+      if (h < lowest) {
+        lowest = h;
+        lowX = x;
+        lowZ = z;
+        lowBearing = a;
+        lowReach = s;
+      }
+      if (h <= target) {
+        if (s < bestReach) {
+          bestReach = s;
+          bestX = x;
+          bestZ = z;
+          bestBearing = a;
+        }
+        break;
+      }
+    }
+  }
+  if (!Number.isFinite(bestReach)) {
+    bestX = lowX;
+    bestZ = lowZ;
+    bestBearing = lowBearing;
+    bestReach = lowReach;
+  }
+  const y =
+    Math.max(
+      heightAt(bestX, bestZ, seed, OCTAVES_MARCH),
+      heightAt(bestX, bestZ, seed, OCTAVES_SHADE),
+    ) + EYE_KM;
+  return { x: bestX, z: bestZ, y, bearing: bestBearing, reach: bestReach };
+}
+
+export const VIEW_BEARINGS = 192;
+/** How far behind him the scan refuses to look — the outcrop is back there. */
+export const VIEW_BEHIND_COS = -0.34;
+export const VIEW_PROBE_KM = [1.5, 2.2, 3, 4, 5.5, 7, 9] as const;
+/**
+ * The near field the view must have clear, in km. Load-bearing: a vista is
+ * ground that falls AWAY from you, and without this rule the scan below
+ * cannot tell one from a hillside.
+ */
+export const VIEW_NEAR_CLEAR_KM = 1.3;
+export const VIEW_NEAR_SAMPLES = 13;
+/**
+ * Half the frame, in radians, and the reason the check is a fan rather than
+ * a ray. The camera's own horizontal half-angle at rest is FOV/2 ≈ 0.31;
+ * this is a little wider, so the composition survives the head being
+ * turned. A visitor who steps the lens back past it is choosing to, which
+ * is a different thing from opening on a wall of rock.
+ */
+export const VIEW_FRAME_HALF = 0.34;
+export const VIEW_FRAME_SAMPLES = 9;
+/** The head, turned: the crest is held off centre rather than dead ahead. */
+export const VIEW_OFFCENTRE = 0.16;
+
+/**
+ * How far the ground rises toward the eye across the whole frame, as a
+ * tangent: positive means something in shot stands above you and you are
+ * looking into a slope, negative means the ground falls away and you are
+ * looking out over it. Zero is eye level.
+ *
+ * A fan, not a ray, because the frame is a fan — checking only the centre
+ * line is how a slope ends up filling half the picture while the bearing it
+ * was tested on stays perfectly clear.
+ */
+export function nearObstruction(station: Station, seed: number, yaw: number): number {
+  let worst = -Infinity;
+  for (let f = 0; f < VIEW_FRAME_SAMPLES; f++) {
+    // VIEW_FRAME_SAMPLES is a compile-time constant (>1); spreading across
+    // the fan needs the (n-1) denominator, never a single-sample branch.
+    const a =
+      yaw + (f / (VIEW_FRAME_SAMPLES - 1) - 0.5) * 2 * VIEW_FRAME_HALF;
+    const sa = Math.sin(a);
+    const ca = Math.cos(a);
+    for (let i = 1; i <= VIEW_NEAR_SAMPLES; i++) {
+      const d = (i / VIEW_NEAR_SAMPLES) * VIEW_NEAR_CLEAR_KM;
+      const h = heightAt(station.x + sa * d, station.z + ca * d, seed, OCTAVES_MARCH);
+      const rise = (h - station.y) / d;
+      if (rise > worst) worst = rise;
+    }
+  }
+  return worst;
+}
+
+/**
+ * Which way he is looking — the camera's yaw itself, off-centre nudge and
+ * all, so exactly one function decides where this room opens and exactly
+ * one thing has to be true of what it returns.
+ *
+ * Two rules, and the second one is the whole of a bug. The first is the
+ * obvious one: face the crest that subtends the largest angle, so every
+ * seed gets its own peak to look at rather than a compass direction that
+ * happens to be empty on this one.
+ *
+ * On its own that rule reliably turns the camera into the hillside. The
+ * largest angle anything ever subtends is the rock immediately in front of
+ * your face, and the station stands on the flank of a cone that rises
+ * SUMMIT_KM out of the range — so the scan swung 92 degrees off the way he
+ * had walked out and laid the outcrop's own slope across half the frame,
+ * hit on the marcher's FIRST step, twenty metres from the eye. A picture of
+ * a rock, rendered impeccably.
+ *
+ * So the near field has to be clear before a yaw is eligible at all:
+ * nothing within VIEW_NEAR_CLEAR_KM, anywhere across the frame, may stand
+ * above the eye. That is what "looking out over" means, written as
+ * arithmetic — and it is what makes the far crest the subject rather than
+ * the nearest thing with a horizon.
+ *
+ * If nothing is clear, he faces the way he walked out: that direction has
+ * ground falling away along it by construction, which is how `stationFor`
+ * found the ledge in the first place.
+ */
+export function viewBearingFor(station: Station, seed: number): number {
+  let yaw = station.bearing + VIEW_OFFCENTRE;
+  let best = -Infinity;
+  let leastBlocked = Infinity;
+  let leastBlockedYaw = station.bearing + VIEW_OFFCENTRE;
+  for (let b = 0; b < VIEW_BEARINGS; b++) {
+    const a = (b / VIEW_BEARINGS) * Math.PI * 2 + VIEW_OFFCENTRE;
+    if (Math.cos(a - station.bearing) < VIEW_BEHIND_COS) continue;
+    const blocked = nearObstruction(station, seed, a);
+    if (blocked < leastBlocked) {
+      leastBlocked = blocked;
+      leastBlockedYaw = a;
+    }
+    if (blocked >= 0) continue;
+    // the crest is scored where it will actually sit: off centre, which is
+    // where the head is turned to put it
+    const crest = a - VIEW_OFFCENTRE;
+    for (const d of VIEW_PROBE_KM) {
+      const ang =
+        (heightAt(
+          station.x + Math.sin(crest) * d,
+          station.z + Math.cos(crest) * d,
+          seed,
+          OCTAVES_MARCH,
+        ) -
+          station.y) /
+        d;
+      if (ang > best) {
+        best = ang;
+        yaw = a;
+      }
+    }
+  }
+  return Number.isFinite(best) ? yaw : leastBlockedYaw;
+}
+
 // ——— the march ————————————————————————————————————————————————
 
 /** The budget, stated before the loop was written (plan §3). */
@@ -861,8 +1169,10 @@ export function materialFromGround(
   const notCrest = smoothstep(0.06, 0.18, g.crease);
   let glacier = clamp01(valleyW * gentle * iceAlt * notCrest);
 
-  const flat = 1 / (1 + slope * SNOW_SLOPE_K);
-  const held = clamp01((g.h - snowKm) / SNOW_HOLD_KM) * flat;
+  // `flatness`, not `flat`: GLSL ES 1.00 reserves that word, and the two
+  // copies of this classifier are kept legible line for line.
+  const flatness = 1 / (1 + slope * SNOW_SLOPE_K);
+  const held = clamp01((g.h - snowKm) / SNOW_HOLD_KM) * flatness;
   const scour = 1 - clamp01((g.h - (snowKm + SNOW_SCOUR_ABOVE_KM)) / SNOW_SCOUR_WIDTH_KM);
   let snow = clamp01(held * scour) * (1 - glacier);
   let rock = clamp01(1 - snow - glacier);
@@ -966,3 +1276,413 @@ export function fogRegisterFraction(fogAltitude: number): number {
 
 /** Contour interval when the lens is raised, km. */
 export const CONTOUR_INTERVAL_KM = 0.1;
+
+// ——— the same function, written for the GPU ————————————————————
+//
+// Everything above is a closed-form per-ray function, which is precisely
+// what a fragment shader wants: one pixel, one ray, no geometry. The room
+// marches it per pixel, so the chunk below is the field again in GLSL.
+//
+// Two rules keep the copy honest, because a second differently-behaving
+// height field is the determinism law's worst failure — the room would
+// draw a mountain the suite has never checked:
+//
+//  1. **Every shared constant is injected**, never retyped. The preamble is
+//     generated from the exported numbers themselves (`glslFloat` round
+//     trips a double through its decimal form), so a constant cannot be
+//     edited here and left stale there.
+//  2. **Everything seed-derived is a uniform.** The seed offset and the
+//     horn table are computed by the JS above and handed to the shader,
+//     which never hashes a seed. There is exactly one `hornsForSeed`.
+//
+// scripts/test-heightfield.mjs pins both: the body may not name a constant
+// the preamble does not define, and may not contain the decimal form of a
+// named constant as a bare literal.
+
+/** A JS double as a GLSL float literal that parses back to the same double. */
+export function glslFloat(v: number): string {
+  if (!Number.isFinite(v)) throw new Error(`no GLSL literal for ${v}`);
+  let s = String(v);
+  if (/[eE]/.test(s)) {
+    if (!s.includes(".")) s = s.replace(/[eE]/, ".0e");
+    return s;
+  }
+  if (!s.includes(".")) s += ".0";
+  return s;
+}
+
+/** The float constants the GLSL shares with the TS, by their GLSL names. */
+export const HEIGHTFIELD_GLSL_FLOATS: Readonly<Record<string, number>> = {
+  HASH_MOD,
+  HASH_INV_MOD,
+  HASH_MUL,
+  LACUNARITY,
+  GAIN,
+  OCTAVE_TURN,
+  BASE_FREQ,
+  SWELL_RATIO,
+  RIDGE_AMP_KM,
+  SUMMIT_KM,
+  SUMMIT_RADIUS_KM,
+  SUMMIT_EPS_KM,
+  ENVELOPE_FLOOR,
+  HORN_EPS_KM,
+  HORN_POWER,
+  HEIGHT_MAX_KM,
+  CORNICE_CREASE_LO,
+  CORNICE_CREASE_HI,
+  CORNICE_SLOPE_LO,
+  CORNICE_SLOPE_HI,
+  GLACIER_BELOW_SNOWLINE_KM,
+  GLACIER_BAND_KM,
+  GLACIER_SLOPE_MAX,
+  SNOW_HOLD_KM,
+  SNOW_SCOUR_ABOVE_KM,
+  SNOW_SCOUR_WIDTH_KM,
+  SNOW_SLOPE_K,
+  FOG_SCALE_HEIGHT_KM,
+  FOG_EXTINCTION,
+  FOG_WAVE_KM,
+  FOG_TAU_MAX,
+  MARCH_MAX_KM,
+  MARCH_MIN_STEP_KM,
+  MARCH_RELAX,
+  MARCH_GROWTH,
+  CONTOUR_INTERVAL_KM,
+};
+
+/** The integer constants — octave counts and loop budgets. */
+export const HEIGHTFIELD_GLSL_INTS: Readonly<Record<string, number>> = {
+  OCTAVES_SHADE,
+  SWELL_OCTAVES,
+  HORN_COUNT,
+  MARCH_STEPS,
+  MARCH_REFINE,
+};
+
+/** The generated preamble: every shared number, in GLSL, from the source. */
+export function heightfieldGlslConstants(): string {
+  const lines: string[] = [];
+  for (const [name, v] of Object.entries(HEIGHTFIELD_GLSL_INTS)) {
+    lines.push(`const int ${name} = ${Math.round(v)};`);
+  }
+  for (const [name, v] of Object.entries(HEIGHTFIELD_GLSL_FLOATS)) {
+    lines.push(`const float ${name} = ${glslFloat(v)};`);
+  }
+  return lines.join("\n");
+}
+
+/**
+ * The field, mirrored. Loop bounds are literals because GLSL ES 1.00 needs
+ * them constant; the caller's own budget rides in as `steps`, never above
+ * the literal, which is what keeps the march bounded in the shader exactly
+ * as `marchTerrain` is bounded in node.
+ */
+export const HEIGHTFIELD_GLSL_BODY = `
+uniform vec2 uSeedOffset;
+// cx, cz, amp, radius
+uniform vec4 uHornA[${HORN_COUNT}];
+// cos(angle), sin(angle), aniso, unused
+uniform vec4 uHornB[${HORN_COUNT}];
+
+/**
+ * The exact hash, in the precision it actually runs in. Every intermediate
+ * here is an integer under 2^24 and every division is by HASH_MOD, so this
+ * function returns bit for bit what the TS above returns --- which is the
+ * only reason the eye the TS places is above the ground this shader draws.
+ */
+float hf_hashWrap(float v) { return v - HASH_MOD * floor(v * HASH_INV_MOD); }
+
+float hf_hashPermute(float v) { return hf_hashWrap((HASH_MUL * v + 1.0) * v); }
+
+float hf_hash21(vec2 p) {
+  float wx = hf_hashWrap(p.x);
+  float wy = hf_hashWrap(p.y);
+  float a = hf_hashPermute(wx);
+  float b = hf_hashPermute(hf_hashWrap(a + wy));
+  return hf_hashPermute(hf_hashWrap(b + wx)) * HASH_INV_MOD;
+}
+
+/** value noise in [0,1] with its exact gradient: (v, dv/dx, dv/dy) */
+vec3 hf_noised(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = p - i;
+  vec2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+  vec2 du = 30.0 * f * f * (f * (f - 2.0) + 1.0);
+  float a = hf_hash21(i);
+  float b = hf_hash21(i + vec2(1.0, 0.0));
+  float c = hf_hash21(i + vec2(0.0, 1.0));
+  float d = hf_hash21(i + vec2(1.0, 1.0));
+  float k1 = b - a;
+  float k2 = c - a;
+  float k3 = a - b - c + d;
+  return vec3(
+    a + k1 * u.x + k2 * u.y + k3 * u.x * u.y,
+    du.x * (k1 + k3 * u.y),
+    du.y * (k2 + k3 * u.x)
+  );
+}
+
+float hf_ridgeFold(float v) { return 1.0 - abs(2.0 * v - 1.0); }
+float hf_ridgeFoldSlope(float v) {
+  float s = 2.0 * v - 1.0;
+  return s == 0.0 ? 0.0 : (s > 0.0 ? -2.0 : 2.0);
+}
+
+/** smooth fbm in [0,1] with its exact gradient */
+vec3 hf_smoothFbm(vec2 p, int octaves) {
+  float v = 0.0;
+  float dx = 0.0;
+  float dy = 0.0;
+  float amp = 1.0;
+  float norm = 0.0;
+  float m00 = 1.0, m01 = 0.0, m10 = 0.0, m11 = 1.0;
+  float c = cos(OCTAVE_TURN) * LACUNARITY;
+  float s = sin(OCTAVE_TURN) * LACUNARITY;
+  for (int i = 0; i < OCTAVES_SHADE; i++) {
+    if (i >= octaves) break;
+    vec3 n = hf_noised(vec2(m00 * p.x + m01 * p.y, m10 * p.x + m11 * p.y));
+    v += amp * n.x;
+    dx += amp * (n.y * m00 + n.z * m10);
+    dy += amp * (n.y * m01 + n.z * m11);
+    norm += amp;
+    amp *= GAIN;
+    float a00 = c * m00 - s * m10;
+    float a01 = c * m01 - s * m11;
+    float a10 = s * m00 + c * m10;
+    float a11 = s * m01 + c * m11;
+    m00 = a00; m01 = a01; m10 = a10; m11 = a11;
+  }
+  return vec3(v / norm, dx / norm, dy / norm);
+}
+
+/** ridged fbm: (v, dv/dx, dv/dy, crease) */
+vec4 hf_ridgedFbm(vec2 p, int octaves) {
+  float v = 0.0;
+  float dx = 0.0;
+  float dy = 0.0;
+  float amp = 1.0;
+  float norm = 0.0;
+  float crease = 1.0;
+  float m00 = 1.0, m01 = 0.0, m10 = 0.0, m11 = 1.0;
+  float c = cos(OCTAVE_TURN) * LACUNARITY;
+  float s = sin(OCTAVE_TURN) * LACUNARITY;
+  for (int i = 0; i < OCTAVES_SHADE; i++) {
+    if (i >= octaves) break;
+    vec3 n = hf_noised(vec2(m00 * p.x + m01 * p.y, m10 * p.x + m11 * p.y));
+    float r = hf_ridgeFold(n.x);
+    float g = hf_ridgeFoldSlope(n.x);
+    v += amp * r;
+    dx += amp * g * (n.y * m00 + n.z * m10);
+    dy += amp * g * (n.y * m01 + n.z * m11);
+    norm += amp;
+    if (i < 2) crease = min(crease, abs(2.0 * n.x - 1.0));
+    amp *= GAIN;
+    float a00 = c * m00 - s * m10;
+    float a01 = c * m01 - s * m11;
+    float a10 = s * m00 + c * m10;
+    float a11 = s * m01 + c * m11;
+    m00 = a00; m01 = a01; m10 = a10; m11 = a11;
+  }
+  return vec4(v / norm, dx / norm, dy / norm, crease);
+}
+
+/** one soft-L1 horn: (h, dh/dx, dh/dz) */
+vec3 hf_hornField(vec2 p, vec4 a, vec4 b) {
+  vec2 q = p - a.xy;
+  float ca = b.x;
+  float sa = b.y;
+  float u = ca * q.x - sa * q.y;
+  float v = sa * q.x + ca * q.y;
+  float sx = a.w;
+  float sz = a.w / b.z;
+  float au = sqrt(u * u + HORN_EPS_KM * HORN_EPS_KM);
+  float av = sqrt(v * v + HORN_EPS_KM * HORN_EPS_KM);
+  float invRoot2 = 1.0 / sqrt(2.0);
+  float rho = (au / sx + av / sz) * invRoot2;
+  float h = a.z * exp(-pow(rho, HORN_POWER));
+  float dhdr = -h * HORN_POWER * pow(rho, HORN_POWER - 1.0);
+  float dhdu = dhdr * (u / au) * (invRoot2 / sx);
+  float dhdv = dhdr * (v / av) * (invRoot2 / sz);
+  return vec3(h, dhdu * ca + dhdv * sa, -dhdu * sa + dhdv * ca);
+}
+
+vec3 hf_hornsAt(vec2 p) {
+  vec3 acc = vec3(0.0);
+  for (int i = 0; i < HORN_COUNT; i++) {
+    acc += hf_hornField(p, uHornA[i], uHornB[i]);
+  }
+  return acc;
+}
+
+/**
+ * The ground. h in km, grad in km per km, crease and ridge for the
+ * material classifier --- the same terms, differentiated the same way.
+ */
+void hf_groundAt(vec2 xz, int octaves, out float h, out vec2 grad, out float crease, out float ridge) {
+  vec2 p = (xz + uSeedOffset) * BASE_FREQ;
+  vec4 r = hf_ridgedFbm(p, octaves);
+  vec3 sw = hf_smoothFbm(p * SWELL_RATIO, SWELL_OCTAVES);
+
+  float env = ENVELOPE_FLOOR + (1.0 - ENVELOPE_FLOOR) * sw.x;
+  float denv = 1.0 - ENVELOPE_FLOOR;
+
+  float hR = RIDGE_AMP_KM * r.x * env;
+  float dRx = RIDGE_AMP_KM * (r.y * BASE_FREQ * env + r.x * denv * sw.y * BASE_FREQ * SWELL_RATIO);
+  float dRz = RIDGE_AMP_KM * (r.z * BASE_FREQ * env + r.x * denv * sw.z * BASE_FREQ * SWELL_RATIO);
+
+  float s = sqrt(dot(xz, xz) + SUMMIT_EPS_KM * SUMMIT_EPS_KM);
+  float g = SUMMIT_KM * exp(-s / SUMMIT_RADIUS_KM);
+  vec2 dG = (-g / SUMMIT_RADIUS_KM) * (xz / s);
+  vec3 horns = hf_hornsAt(xz);
+
+  h = hR + g + horns.x;
+  grad = vec2(dRx + dG.x + horns.y, dRz + dG.y + horns.z);
+  crease = r.w;
+  ridge = r.x;
+}
+
+float hf_heightAt(vec2 xz, int octaves) {
+  float h; vec2 grad; float crease; float ridge;
+  hf_groundAt(xz, octaves, h, grad, crease, ridge);
+  return h;
+}
+
+// --------- the fog, integrated by hand ------------------------------------------------------------------------------------------------
+
+float hf_fogDensity(float y, float fogAltitude) {
+  return exp(-(y - fogAltitude) / FOG_SCALE_HEIGHT_KM);
+}
+
+float hf_fogOpticalDepth(float y0, float dirY, float dist, float fogAltitude) {
+  float d = max(0.0, dist);
+  if (abs(dirY) < 1e-7) return min(FOG_TAU_MAX, d * hf_fogDensity(y0, fogAltitude));
+  float e0 = hf_fogDensity(y0, fogAltitude);
+  float e1 = hf_fogDensity(y0 + dirY * d, fogAltitude);
+  float tau = (FOG_SCALE_HEIGHT_KM / dirY) * (e0 - e1);
+  return min(FOG_TAU_MAX, max(0.0, tau));
+}
+
+float hf_fogTransmittance(float y0, float dirY, float dist, float fogAltitude) {
+  return exp(-FOG_EXTINCTION * hf_fogOpticalDepth(y0, dirY, dist, fogAltitude));
+}
+
+float hf_fogSurfaceAt(vec2 xz, float fogAltitude, float phase) {
+  float n = hf_smoothFbm(vec2(xz.x * 0.21 + phase * 0.05, xz.y * 0.21 - phase * 0.03), 3).x;
+  return fogAltitude + FOG_WAVE_KM * (n * 2.0 - 1.0);
+}
+
+// --------- the march ------------------------------------------------------------------------------------------------------------------------------------------------
+
+/**
+ * The distance-bounded heightfield march, step for step. \`steps\` and
+ * \`refine\` are the frame's own budget and never exceed the literals the
+ * loops are written with.
+ */
+bool hf_marchTerrain(vec3 ro, vec3 rd, int octaves, int steps, int refine, out float tHit) {
+  float t = 0.02;
+  float prevT = t;
+  for (int i = 0; i < MARCH_STEPS; i++) {
+    if (i >= steps) break;
+    float py = ro.y + rd.y * t;
+    if (t > MARCH_MAX_KM) { tHit = MARCH_MAX_KM; return false; }
+    if (py > HEIGHT_MAX_KM && rd.y >= 0.0) { tHit = t; return false; }
+    float h = hf_heightAt(ro.xz + rd.xz * t, octaves);
+    float gap = py - h;
+    if (gap < 0.0) {
+      float lo = prevT;
+      float hi = t;
+      for (int k = 0; k < MARCH_REFINE; k++) {
+        if (k >= refine) break;
+        float mid = (lo + hi) * 0.5;
+        float gy = ro.y + rd.y * mid;
+        float gh = hf_heightAt(ro.xz + rd.xz * mid, octaves);
+        if (gy - gh < 0.0) hi = mid; else lo = mid;
+      }
+      tHit = (lo + hi) * 0.5;
+      return true;
+    }
+    prevT = t;
+    t += max(MARCH_MIN_STEP_KM, max(MARCH_RELAX * gap, MARCH_GROWTH * t));
+  }
+  tHit = min(t, MARCH_MAX_KM);
+  return false;
+}
+
+/**
+ * How near this ground stands to a contour line --- 0 on one, 0.5 midway.
+ * The survey lens draws the field's own level sets, so the interval lives
+ * with the field.
+ */
+float hf_contourDistance(float h) {
+  float c = fract(h / CONTOUR_INTERVAL_KM);
+  return min(c, 1.0 - c);
+}
+
+// --------- matter: rock, snow, glacier, and the wind's own cornice ------------
+
+float hf_corniceStrength(float crease, vec2 grad, vec2 wind) {
+  float slope = length(grad);
+  float crest = 1.0 - smoothstep(CORNICE_CREASE_LO, CORNICE_CREASE_HI, crease);
+  float steep = smoothstep(CORNICE_SLOPE_LO, CORNICE_SLOPE_HI, slope);
+  vec2 uphill = slope > 0.0 ? grad / slope : vec2(0.0);
+  float lee = clamp(-dot(wind, uphill), 0.0, 1.0);
+  return max(crest * steep * lee, 0.0);
+}
+
+/** (rock, snow, glacier, cornice) --- the weights partition the face */
+vec4 hf_material(float h, vec2 grad, float crease, float ridge, float snowKm, vec2 wind) {
+  float slope = length(grad);
+  float valleyW = 1.0 - smoothstep(0.4, 0.62, ridge);
+  float gentle = 1.0 - smoothstep(GLACIER_SLOPE_MAX - 0.1, GLACIER_SLOPE_MAX + 0.14, slope);
+  float iceAlt = smoothstep(
+    snowKm - GLACIER_BELOW_SNOWLINE_KM - GLACIER_BAND_KM,
+    snowKm - GLACIER_BELOW_SNOWLINE_KM,
+    h
+  );
+  float notCrest = smoothstep(0.06, 0.18, crease);
+  float glacier = clamp(valleyW * gentle * iceAlt * notCrest, 0.0, 1.0);
+
+  float flatness = 1.0 / (1.0 + slope * SNOW_SLOPE_K);
+  float held = clamp((h - snowKm) / SNOW_HOLD_KM, 0.0, 1.0) * flatness;
+  float scour = 1.0 - clamp((h - (snowKm + SNOW_SCOUR_ABOVE_KM)) / SNOW_SCOUR_WIDTH_KM, 0.0, 1.0);
+  float snow = clamp(held * scour, 0.0, 1.0) * (1.0 - glacier);
+  float rock = clamp(1.0 - snow - glacier, 0.0, 1.0);
+
+  float total = rock + snow + glacier;
+  if (total > 0.0) {
+    rock /= total; snow /= total; glacier /= total;
+  } else {
+    rock = 1.0; snow = 0.0; glacier = 0.0;
+  }
+  float cornice = hf_corniceStrength(crease, grad, wind) * (snow + glacier);
+  return vec4(rock, snow, glacier, cornice);
+}
+`;
+
+/** The whole chunk: the generated constants, then the mirrored field. */
+export function heightfieldGlsl(): string {
+  return `${heightfieldGlslConstants()}\n${HEIGHTFIELD_GLSL_BODY}`;
+}
+
+/**
+ * The horn table as the shader takes it — two vec4 arrays, so the seed's
+ * horns are placed exactly once, in JS, by `hornsForSeed`.
+ */
+export function packHorns(seed: number): { a: Float32Array; b: Float32Array } {
+  const horns = hornsForSeed(seed);
+  const a = new Float32Array(HORN_COUNT * 4);
+  const b = new Float32Array(HORN_COUNT * 4);
+  for (let i = 0; i < HORN_COUNT; i++) {
+    const h = horns[i];
+    a[i * 4 + 0] = h.cx;
+    a[i * 4 + 1] = h.cz;
+    a[i * 4 + 2] = h.amp;
+    a[i * 4 + 3] = h.radius;
+    b[i * 4 + 0] = Math.cos(h.angle);
+    b[i * 4 + 1] = Math.sin(h.angle);
+    b[i * 4 + 2] = h.aniso;
+    b[i * 4 + 3] = 0;
+  }
+  return { a, b };
+}

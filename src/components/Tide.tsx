@@ -6,6 +6,7 @@ import { useField } from "@/store/field";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
 import { onVessel } from "@/lib/vessel";
+import { createFrameGovernor, detailForTier, onVisibility, resolveDpr } from "@/lib/room-runtime";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
 import {
   addNatural as worldAddNatural,
@@ -155,6 +156,11 @@ export default function Tide() {
     let raf = 0;
     const t0 = performance.now();
 
+    // ── the performance contract (src/lib/room-runtime) ─────────────
+    const gov = createFrameGovernor();
+    let sleeping = false;
+    const offVisibility = onVisibility((hidden) => { sleeping = hidden; });
+
     // ── persistent tideline naturals (from the shared world) ────
     // Shells, driftwood, starfish left along the shore live in the shared
     // pool (see src/lib/world.ts). /tide only shows things whose zone is
@@ -244,11 +250,66 @@ export default function Tide() {
     let lastScrubAt = 0;
     const stirs: Array<{ x: number; y: number; t0: number; sign: number }> = [];
     let lastGestureAt = performance.now();
-    const holdState: { planted: boolean; skipped: boolean; settled: boolean; body: "moon" | "sun" | null } =
-      { planted: false, skipped: false, settled: false, body: null };
+    const holdState: {
+      planted: boolean;
+      skipped: boolean;
+      settled: boolean;
+      body: "moon" | "sun" | null;
+      naturalIdx: number; // >= 0 while holding an existing shell/starfish/driftwood
+    } = { planted: false, skipped: false, settled: false, body: null, naturalIdx: -1 };
+
+    // two-finger drag pans the frame (grammar §5): a small elastic parallax
+    // on the sky layer only — the mechanism and shore stay put under the
+    // finger so grab/hit-testing never drifts.
+    let panX = 0, panTargetX = 0;
+    let panY = 0, panTargetY = 0;
+
+    // twist rotates the lens (grammar §5): the mechanism's instrument
+    // markings (orbit rings, alignment line, tide staff) fade toward a
+    // bare, felt reading of the same night — a level of description, not
+    // a new mechanic. Guarded against three fingers, which turn the season.
+    let lensLevel = 0; // 0 = full mechanism … 1 = felt
+    let lensDetentSide = 0;
+    // three-finger twist turns the season: the Sun's own place on its
+    // ring, exactly the astronomy already driving spring/neap and phase.
+    let seasonFxAt = 0;
+
+    // vessel tilt: gravity leans the swell and the candle flame even
+    // without a touch on the water.
+    let tiltLean = 0;
+    let candleLit = true;
+    let candleFlameAmt = 1;
+
+    // find an existing tideline natural under a screen point (for the
+    // ceremony hold's touch-reachable delete), reusing the same band
+    // geometry drawTideNaturals uses to place them.
+    const hitNatural = (px: number, py: number): number => {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      const meanSeaY = h * 0.64;
+      const swing = h * 0.085;
+      const hiY = meanSeaY - swing;
+      const loY = meanSeaY + swing;
+      const bandH = loY - hiY;
+      const tideN = clamp(
+        (bodyTide(moonAngRef.current, MOON_AMP) + bodyTide(sunAngRef.current, SUN_AMP)) / (MOON_AMP + SUN_AMP),
+        -1, 1,
+      );
+      const waterY = meanSeaY - tideN * swing;
+      let best = -1;
+      let bestD = 26;
+      for (let i = 0; i < naturals.length; i++) {
+        const n = naturals[i];
+        const sx = n.nx * w;
+        const sy = n.kind === "driftwood" ? waterY - 3 : hiY + n.ny * bandH;
+        const d = Math.hypot(px - sx, py - sy);
+        if (d < bestD) { bestD = d; best = i; }
+      }
+      return best;
+    };
 
     const resize = () => {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = resolveDpr(gov.tier(), { reducedMotion: reduceMotionRef.current });
       cv.width = Math.floor(window.innerWidth * dpr);
       cv.height = Math.floor(window.innerHeight * dpr);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -380,13 +441,37 @@ export default function Tide() {
           holdState.settled = false;
           holdState.body = grab(e.x, e.y);
           if (holdState.body) grabRef.current = holdState.body;
+          // ceremony hold on an existing natural is its solemn act — the
+          // touch-reachable delete the create/delete law asks for. A hold
+          // that lands on a shell/starfish/driftwood tracks it instead of
+          // planting a new one.
+          holdState.naturalIdx = holdState.body ? -1 : hitNatural(e.x, e.y);
           return;
         }
         if (e.phase === "release") {
           if (holdState.body) grabRef.current = null;
+          holdState.naturalIdx = -1;
           return;
         }
         if (holdState.body) return; // holding a body just keeps hold of it
+        if (holdState.naturalIdx >= 0) {
+          const n = naturals[holdState.naturalIdx];
+          if (!n) { holdState.naturalIdx = -1; return; }
+          const nx = n.nx * window.innerWidth;
+          // ceremony tier — the tide reclaims it
+          if (e.tier >= 3 && !holdState.settled) {
+            holdState.settled = true;
+            naturals.splice(holdState.naturalIdx, 1);
+            persistNaturals();
+            syncKept();
+            try { audio.thud(); } catch { /* noop */ }
+            try { audio.playNote(33, 420); } catch { /* noop */ }
+            try { haptics.bloom(); } catch { /* noop */ }
+            addRipple(nx, e.y, 100, "pale");
+            recordTapeRef.current("sigil", 0.75, "tide/reclaim");
+          }
+          return;
+        }
         // dwell tier — plant a natural on the tideline. Kind depends on the
         // tide: low tide yields shells, high tide floats driftwood.
         if (e.tier >= 2 && !holdState.planted && !holdState.skipped) {
@@ -422,6 +507,40 @@ export default function Tide() {
           try { haptics.bloom(); } catch { /* noop */ }
           addRipple(e.x, e.y, 110, "gold");
           recordTapeRef.current("sigil", 0.9, "tide/settle");
+        }
+      },
+      pan2: (e) => {
+        // two fingers pan the frame: a small elastic look-around on the
+        // sky's own stars/meteors, springing back once released (below).
+        lastGestureAt = performance.now();
+        if (e.phase !== "move") return;
+        panTargetX = clamp(panTargetX + e.dx * 0.35, -40, 40);
+        panTargetY = clamp(panTargetY + e.dy * 0.35, -24, 24);
+      },
+      twist: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          // three fingers turn the season: the Sun's own place on its
+          // ring — the same astronomy that already drives spring/neap
+          // and the Moon's phase, just advanced by hand instead of drag.
+          if (e.phase === "start") return;
+          sunAngRef.current = (sunAngRef.current + e.velocity * 0.012) % TAU;
+          const nowMs = performance.now();
+          if (nowMs - seasonFxAt > 260) {
+            seasonFxAt = nowMs;
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+          return;
+        }
+        // rotate the lens: the mechanism's own instrument markings fade
+        // toward a bare, felt reading of the same night sea.
+        if (e.phase === "start") return;
+        lensLevel = clamp(lensLevel + e.velocity * 0.012, 0, 1);
+        const side = lensLevel > 0.5 ? 1 : 0;
+        if (side !== lensDetentSide) {
+          lensDetentSide = side;
+          try { haptics.lens(); } catch { /* noop */ }
+          try { audio.playNote(side === 1 ? 45 : 50, 140); } catch { /* noop */ }
         }
       },
       scrub: (e) => {
@@ -480,6 +599,35 @@ export default function Tide() {
         try { audio.playNote(52, 90); } catch { /* noop */ }
         try { haptics.tap(); } catch { /* noop */ }
         recordTapeRef.current("ripple", 0.4 + e.intensity * 0.4, "tide/skip");
+      },
+      // tilt is gravity — these rooms of all rooms must lean: the swell
+      // drifts toward the phone's low edge and the candle flame leans
+      // the same way real wax would.
+      tilt: ({ gamma }) => {
+        if (reduceMotionRef.current) return;
+        tiltLean = Math.max(-1, Math.min(1, gamma / 45));
+        windTarget = clamp(windTarget + tiltLean * 0.01, -1, 1);
+      },
+      shake: ({ intensity }) => {
+        if (reduceMotionRef.current) return;
+        lastGestureAt = performance.now();
+        windTarget = clamp(windTarget + (Math.random() - 0.5) * intensity * 1.4, -1, 1);
+        stirs.push({ x: window.innerWidth * 0.5, y: window.innerHeight * 0.64, t0: simNow, sign: Math.random() < 0.5 ? 1 : -1 });
+        if (stirs.length > 4) stirs.shift();
+        try { audio.thud(); } catch { /* noop */ }
+        try { haptics.storm(); } catch { /* noop */ }
+        recordTapeRef.current("ripple", 0.4 + intensity * 0.5, "tide/shake");
+      },
+      // flip face-down: night, doubly — the room slows and the sill
+      // candle is snuffed; flipping back relights it.
+      flip: ({ faceDown }) => {
+        lastGestureAt = performance.now();
+        timeScaleTarget = faceDown ? 0.3 : 1;
+        candleLit = !faceDown;
+        try { if (faceDown) audio.thud(); else audio.spark(); } catch { /* noop */ }
+        try { haptics.bloom(); } catch { /* noop */ }
+        if (!faceDown) candleSparkRef.current = performance.now();
+        recordTapeRef.current("candle", faceDown ? 0.3 : 0.6, faceDown ? "tide/snuff" : "tide/relight");
       },
     });
 
@@ -581,8 +729,70 @@ export default function Tide() {
     };
     weatherTimer = setTimeout(fireWeather, 4500 + Math.random() * 4500);
 
+    // ── cached sprites (Fix 1: never createRadialGradient/createLinear-
+    // Gradient inside a per-frame or per-element draw) ─────────────────
+    // The moon's lit lens: a clip + radial gradient recomputed 60x/sec
+    // was the named hazard. It only actually depends on illumination and
+    // the sun's absolute angle, both of which move slowly — so it's
+    // rendered to an offscreen sprite once per bucket and reused with
+    // drawImage until the bucket changes.
+    const MOON_SPRITE_R = 64;
+    const moonSprite = document.createElement("canvas");
+    moonSprite.width = MOON_SPRITE_R * 2;
+    moonSprite.height = MOON_SPRITE_R * 2;
+    const moonSpriteCtx = moonSprite.getContext("2d");
+    let moonSpriteKey = "";
+    const paintMoonSprite = (illum: number, sunAngAbs: number) => {
+      if (!moonSpriteCtx) return;
+      const R = MOON_SPRITE_R;
+      moonSpriteCtx.clearRect(0, 0, R * 2, R * 2);
+      moonSpriteCtx.save();
+      moonSpriteCtx.translate(R, R);
+      moonSpriteCtx.beginPath();
+      moonSpriteCtx.arc(0, 0, R, 0, TAU);
+      moonSpriteCtx.fillStyle = "rgba(40, 54, 78, 1)";
+      moonSpriteCtx.fill();
+      moonSpriteCtx.save();
+      moonSpriteCtx.beginPath();
+      moonSpriteCtx.arc(0, 0, R, 0, TAU);
+      moonSpriteCtx.clip();
+      const lx = Math.cos(sunAngAbs) * R * 0.9;
+      const ly = Math.sin(sunAngAbs) * R * 0.9;
+      const lit = moonSpriteCtx.createRadialGradient(lx, ly, 0, lx, ly, R * (0.7 + illum * 1.8));
+      lit.addColorStop(0, "rgba(244, 246, 250, 0.98)");
+      lit.addColorStop(1, "rgba(244, 246, 250, 0)");
+      moonSpriteCtx.fillStyle = lit;
+      moonSpriteCtx.fillRect(-R, -R, R * 2, R * 2);
+      moonSpriteCtx.restore();
+      moonSpriteCtx.strokeStyle = "rgba(226, 236, 250, 0.55)";
+      moonSpriteCtx.lineWidth = 1;
+      moonSpriteCtx.beginPath();
+      moonSpriteCtx.arc(0, 0, R, 0, TAU);
+      moonSpriteCtx.stroke();
+      moonSpriteCtx.restore();
+    };
+    // A driftwood plank's body was a fresh createLinearGradient per
+    // natural, every frame, inside the naturals-draw loop — the literal
+    // per-element-loop violation. One 100×6 sprite, drawImage-scaled.
+    const driftwoodSprite = document.createElement("canvas");
+    driftwoodSprite.width = 100;
+    driftwoodSprite.height = 6;
+    const driftwoodSpriteCtx = driftwoodSprite.getContext("2d");
+    if (driftwoodSpriteCtx) {
+      const g = driftwoodSpriteCtx.createLinearGradient(0, 0, 0, 6);
+      g.addColorStop(0, "rgba(214, 196, 168, 0.94)");
+      g.addColorStop(1, "rgba(120, 92, 72, 0.9)");
+      driftwoodSpriteCtx.fillStyle = g;
+      driftwoodSpriteCtx.beginPath();
+      driftwoodSpriteCtx.ellipse(50, 3, 50, 2.8, 0, 0, TAU);
+      driftwoodSpriteCtx.fill();
+    }
+
     // ── render loop ─────────────────────────────────────────────────
     const draw = (nowMs: number) => {
+      const tier = gov.beginFrame(nowMs);
+      if (sleeping) { raf = requestAnimationFrame(draw); return; } // no draw while hidden
+      const detail = detailForTier(tier);
       const now = nowMs;
       if (lastFrameAt == null) lastFrameAt = nowMs;
       const dtSec = Math.min(0.1, Math.max(0, (nowMs - lastFrameAt) / 1000));
@@ -596,6 +806,15 @@ export default function Tide() {
       wind += (windTarget - wind) * Math.min(1, dtSec * 2.4);
       windTarget *= Math.exp(-dtSec * 0.5);
       windPhase += wind * dtSec * 2.2;
+      // pan2's elastic frame — springs back toward centre once the hand
+      // eases off, exactly like wind above.
+      panX += (panTargetX - panX) * Math.min(1, dtSec * 4);
+      panY += (panTargetY - panY) * Math.min(1, dtSec * 4);
+      panTargetX *= Math.exp(-dtSec * 1.4);
+      panTargetY *= Math.exp(-dtSec * 1.4);
+      // twist's lens relaxes very slightly toward the mechanism reading
+      // when idle so a stray rotation never permanently hides the staff.
+      if (performance.now() - lastGestureAt > 4000) lensLevel *= Math.exp(-dtSec * 0.08);
       const t = simT;
       const w = window.innerWidth;
       const h = window.innerHeight;
@@ -627,9 +846,16 @@ export default function Tide() {
       ctx.fillStyle = skyG;
       ctx.fillRect(0, 0, w, h);
 
-      // stars (deterministic constellation, faint twinkle)
+      // pan2's frame: the stars and meteors carry the parallax so the
+      // mechanism and shore stay put under the finger.
+      ctx.save();
+      ctx.translate(panX, panY);
+
+      // stars (deterministic constellation, faint twinkle) — count scales
+      // with the frame governor's detail tier under load.
       ctx.fillStyle = "rgba(240, 244, 248, 0.6)";
-      for (let i = 0; i < 70; i++) {
+      const starCount = Math.max(12, Math.round(70 * detail.particles));
+      for (let i = 0; i < starCount; i++) {
         const sx = (((Math.sin(i * 12.9898) * 43758.5453) % 1) + 1) % 1;
         const sy = (((Math.sin(i * 78.233) * 43758.5453) % 1) + 1) % 1;
         const tw = 0.6 + 0.4 * Math.sin(t * 1.4 + i * 1.3);
@@ -640,6 +866,7 @@ export default function Tide() {
 
       // meteor streaks sit above the sea, behind the mechanism
       drawTideMeteors(ctx, weather, simNow);
+      ctx.restore();
 
       // ── sea: its level rises and falls with the computed tide ─────
       const meanSeaY = h * 0.64;
@@ -695,7 +922,7 @@ export default function Tide() {
       // shell placed higher up is only exposed when the water pulls
       // back far enough. This is the whole gameplay of /tide made
       // literal: play the moon, expose the beach.
-      drawTideNaturals(ctx, naturals, waterY, meanSeaY, swing, w, h, t);
+      drawTideNaturals(ctx, naturals, waterY, meanSeaY, swing, w, h, t, driftwoodSprite);
       // the letting go: departing shells slide under the waterline and the
       // driftwood rides out, all fading as the sea takes them back.
       if (departing.length > 0) {
@@ -707,7 +934,7 @@ export default function Tide() {
             if (d.kind === "driftwood") d.nx = (((d.bx + u * u * 0.14) % 1) + 1) % 1;
             else d.ny = d.bny + u * u * 1.4;
           }
-          drawTideNaturals(ctx, departing, waterY, meanSeaY, swing, w, h, t, 1 - u);
+          drawTideNaturals(ctx, departing, waterY, meanSeaY, swing, w, h, t, driftwoodSprite, 1 - u);
         }
       }
       // Boat lantern floats on the horizon at the sea surface.
@@ -785,6 +1012,10 @@ export default function Tide() {
       }
 
       // ── tide staff: a shore ruler with HIGH / MEAN / LOW + float ──
+      // twist's lens fades the instrument reading toward the bare felt sea.
+      const instrumentAlpha = 1 - lensLevel * 0.85;
+      ctx.save();
+      ctx.globalAlpha = instrumentAlpha;
       const staffX = w < 620 ? 30 : 52;
       const hiY = meanSeaY - swing;
       const loY = meanSeaY + swing;
@@ -817,6 +1048,7 @@ export default function Tide() {
       ctx.beginPath();
       ctx.arc(staffX, floatY, 9, 0, TAU);
       ctx.stroke();
+      ctx.restore();
 
       // ── the mechanism: Earth, water ellipse, orbit, Moon, Sun ─────
       const ex = w * 0.5;
@@ -825,7 +1057,9 @@ export default function Tide() {
       const orbitR = Math.min(w * 0.32, h * 0.24);
       const sunOrbitR = orbitR * 1.34;
 
-      // orbit rings
+      // orbit rings — fade with the same lens as the staff
+      ctx.save();
+      ctx.globalAlpha = instrumentAlpha;
       ctx.strokeStyle = "rgba(220, 235, 255, 0.12)";
       ctx.lineWidth = 1;
       ctx.beginPath();
@@ -835,6 +1069,7 @@ export default function Tide() {
       ctx.beginPath();
       ctx.arc(ex, ey, sunOrbitR, 0, TAU);
       ctx.stroke();
+      ctx.restore();
 
       // alignment line — glows near spring (syzygy)
       const springGlow = clamp((align - 0.2) / 0.8, 0, 1);
@@ -917,34 +1152,15 @@ export default function Tide() {
       ctx.beginPath();
       ctx.arc(mx, my, moonR * (grabbedMoon ? 2 : 1.6), 0, TAU);
       ctx.fill();
-      // dark disc
-      ctx.fillStyle = "rgba(40, 54, 78, 1)";
-      ctx.beginPath();
-      ctx.arc(mx, my, moonR, 0, TAU);
-      ctx.fill();
-      // lit crescent/gibbous: clip to the disc, draw a lit lens toward the Sun
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(mx, my, moonR, 0, TAU);
-      ctx.clip();
-      const lit = ctx.createRadialGradient(
-        mx + Math.cos(sunAng) * moonR * 0.9,
-        my + Math.sin(sunAng) * moonR * 0.9,
-        0,
-        mx + Math.cos(sunAng) * moonR * 0.9,
-        my + Math.sin(sunAng) * moonR * 0.9,
-        moonR * (0.7 + illum * 1.8),
-      );
-      lit.addColorStop(0, "rgba(244, 246, 250, 0.98)");
-      lit.addColorStop(1, "rgba(244, 246, 250, 0)");
-      ctx.fillStyle = lit;
-      ctx.fillRect(mx - moonR, my - moonR, moonR * 2, moonR * 2);
-      ctx.restore();
-      ctx.strokeStyle = "rgba(226, 236, 250, 0.55)";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.arc(mx, my, moonR, 0, TAU);
-      ctx.stroke();
+      // dark disc + lit crescent/gibbous: Fix 1's named hazard — this was
+      // a clip + createRadialGradient every frame. Now a sprite, painted
+      // only when illum/sunAng cross into a new bucket, blitted otherwise.
+      const moonKey = `${Math.round(illum * 48)}_${Math.round((((sunAng % TAU) + TAU) % TAU) * 24)}`;
+      if (moonKey !== moonSpriteKey) {
+        moonSpriteKey = moonKey;
+        paintMoonSprite(illum, sunAng);
+      }
+      ctx.drawImage(moonSprite, mx - moonR, my - moonR, moonR * 2, moonR * 2);
 
       // Moon halo weather event: soft cool ring around the moon
       drawTideMoonhalo(ctx, weather, simNow, mx, my, moonR);
@@ -988,9 +1204,16 @@ export default function Tide() {
       candleLean.current += (leanTarget - candleLean.current) * 0.15;
       const leanX = candleLean.current;
 
+      // vessel flip (night): the flame amount eases toward lit/snuffed —
+      // continuous, never a hard cut, so it reads as the candle actually
+      // guttering rather than a switch flipping.
+      candleFlameAmt += ((candleLit ? 1 : 0) - candleFlameAmt) * Math.min(1, dtSec * 2.2);
+
       const sparkAge = candleSparkRef.current ? now - candleSparkRef.current : Infinity;
       const sparkBoost = sparkAge < 350 ? 1 - sparkAge / 350 : 0;
       const flickerR = (40 + Math.sin(t * 3.4) * 6 + Math.sin(t * 7.1) * 3) * (motion || 1) * (1 + sparkBoost * 0.6);
+      ctx.save();
+      ctx.globalAlpha = candleFlameAmt;
       const halo = ctx.createRadialGradient(candleX, candleBaseY - candleH - 10, 0, candleX, candleBaseY - candleH - 10, flickerR);
       halo.addColorStop(0, `rgba(255, 200, 130, ${0.5 + sparkBoost * 0.4})`);
       halo.addColorStop(0.4, `rgba(200, 115, 42, ${0.28 + sparkBoost * 0.3})`);
@@ -999,6 +1222,7 @@ export default function Tide() {
       ctx.beginPath();
       ctx.arc(candleX, candleBaseY - candleH - 10, flickerR, 0, TAU);
       ctx.fill();
+      ctx.restore();
 
       ctx.fillStyle = "rgba(242, 238, 230, 0.95)";
       ctx.fillRect(candleX - candleW / 2, candleBaseY - candleH, candleW, candleH);
@@ -1012,6 +1236,8 @@ export default function Tide() {
       ctx.lineTo(candleX, candleBaseY - candleH - 9);
       ctx.stroke();
       const flameJitter = motion ? Math.sin(t * 9) * 1.2 + Math.cos(t * 5.3) * 0.8 : 0;
+      ctx.save();
+      ctx.globalAlpha = candleFlameAmt;
       ctx.fillStyle = "rgba(255, 200, 130, 0.85)";
       ctx.beginPath();
       ctx.moveTo(candleX, candleBaseY - candleH - 9);
@@ -1024,6 +1250,7 @@ export default function Tide() {
       ctx.quadraticCurveTo(candleX + 2.6 + leanX * 0.6, candleBaseY - candleH - 13, candleX + leanX * 0.4, candleBaseY - candleH - 20);
       ctx.quadraticCurveTo(candleX - 2.6 + leanX * 0.6, candleBaseY - candleH - 13, candleX, candleBaseY - candleH - 9);
       ctx.fill();
+      ctx.restore();
 
       // Firefly weather event: a tiny warm speck loops near the candle
       drawTideFirefly(ctx, weather, simNow, candleX, candleBaseY - candleH - 18);
@@ -1093,6 +1320,7 @@ export default function Tide() {
 
     return () => {
       cancelAnimationFrame(raf);
+      offVisibility();
       if (weatherTimer) clearTimeout(weatherTimer);
       persistNaturals();
       unsubscribeWorld();
@@ -1465,6 +1693,7 @@ function drawTideNaturals(
   w: number,
   _h: number,
   t: number,
+  driftwoodSprite: CanvasImageSource | null,
   fade = 1, // < 1 while the shore gives its keepsakes back to the sea
 ) {
   if (naturals.length === 0) return;
@@ -1495,7 +1724,7 @@ function drawTideNaturals(
     switch (n.kind) {
       case "seashell": drawTideSeashell(ctx, sx, sy, 5 + (1 - n.ny) * 3, n.seed, tinted); break;
       case "starfish": drawTideStarfish(ctx, sx, sy, 6 + (1 - n.ny) * 3, n.seed, tinted); break;
-      case "driftwood": drawTideDriftwood(ctx, sx, sy, 22 + (1 - n.ny) * 12, n.seed); break;
+      case "driftwood": drawTideDriftwood(ctx, sx, sy, 22 + (1 - n.ny) * 12, n.seed, driftwoodSprite); break;
     }
   }
   ctx.globalAlpha = 1;
@@ -1548,18 +1777,29 @@ function drawTideStarfish(ctx: CanvasRenderingContext2D, x: number, y: number, r
   ctx.restore();
 }
 
-function drawTideDriftwood(ctx: CanvasRenderingContext2D, x: number, y: number, len: number, seed: number) {
+function drawTideDriftwood(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  len: number,
+  seed: number,
+  sprite: CanvasImageSource | null,
+) {
   const rot = Math.sin(seed * 0.021) * 0.4;
   ctx.save();
   ctx.translate(x, y);
   ctx.rotate(rot);
-  const g = ctx.createLinearGradient(0, -3, 0, 3);
-  g.addColorStop(0, "rgba(214, 196, 168, 0.94)");
-  g.addColorStop(1, "rgba(120, 92, 72, 0.9)");
-  ctx.fillStyle = g;
-  ctx.beginPath();
-  ctx.ellipse(0, 0, len * 0.5, 2.8, 0, 0, Math.PI * 2);
-  ctx.fill();
+  // Fix 1: the gradient body is a pre-baked sprite (see paintMoonSprite's
+  // neighbour, driftwoodSprite, in the draw effect) — no per-natural,
+  // per-frame createLinearGradient in this loop.
+  if (sprite) {
+    ctx.drawImage(sprite, -len * 0.5, -2.8, len, 5.6);
+  } else {
+    ctx.fillStyle = "rgba(160, 130, 100, 0.9)";
+    ctx.beginPath();
+    ctx.ellipse(0, 0, len * 0.5, 2.8, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
   ctx.strokeStyle = "rgba(96, 68, 46, 0.55)";
   ctx.lineWidth = 0.5;
   for (let i = 0; i < 3; i++) {

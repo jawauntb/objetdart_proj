@@ -5,6 +5,32 @@ You are working on **objet d'art**: an album-like total artwork of interactive r
 and normal product instincts (add controls, add copy, add libraries, make it efficient
 and static) will damage it.
 
+## Why this file changed
+
+Everything below used to be here in prose, correctly stated, and an audit still found:
+
+- **`/earth`** never adopted the gesture engine at all — raw `PointerEvent` listeners, a
+  private **540ms `setTimeout`** re-implementing the hold tiers, no `onVessel`, no
+  persistence, no creatable object. A direct violation of a documented law, shipped and
+  merged.
+- **`/stars`** (4517 lines) — the same, 100% raw wiring, no vessel layer, no
+  three-finger layer.
+- **Thirty of thirty-five rooms** never called `createFrameGovernor` / `onVisibility` /
+  `resolveDpr` / `detailForTier`. No visibility pause, no DPR ceiling, no quality tier.
+- **`src/lib/fork-regions.ts`** was built, tested, merged — with **zero consumers**.
+- `pan2` was absent from every room audited; tutti, twist-lens, three-finger twist and
+  hold, knock and flip were missing case by case.
+- **`/mountain`** bound three-finger *tap* to season — which the grammar assigns to
+  three-finger *twist* — leaving tutti unbound. A private dialect, exactly as forbidden.
+- **`AtomsField`** hand-rolled a clear button instead of the shared `<LetGo>`,
+  reintroducing the stacking-context bug `<LetGo>` exists to fix.
+- Mounting conventions differed per room; `/atlas/[region]` mounted nothing at all.
+
+Prose did not hold the line. **So the laws are executable now.** `npm test` runs
+`test:room-contract`, which reads `src/lib/room-registry.ts` and fails the build when a
+room drifts from it. A red contract test is the law working. Fix the room, or write the
+reasoned exemption into the registry. **Never delete the entry you should be updating.**
+
 ## Required reading, in order
 
 1. **`INSPIRATION.md`** — the angle: why rooms must be lifelike, interactive, and
@@ -15,43 +41,91 @@ and static) will damage it.
    material, two the representation/frame, three the world-law; the device itself is
    the vessel — tilt, shake, knock, flip, breath). Global bindings are fixed site-wide;
    rooms add discoveries, never private dialects or thresholds.
-3. **`docs/plans/scale-manifold-build-plan.md`** — the active build: one log-scale axis
-   from the quantum fields to the spacetime manifold, band detents, handoff anchors, twist-lens,
-   scale-as-spectral-register. Workstreams, lanes, and the checkpoint to retreat to.
-4. **`DESIGN.md`** — what exists and why each piece looks the way it does (v2 of the
-   home instrument; brand tokens; anti-patterns; known gaps).
-5. **`docs/page-feel-audit.md`** — per-route state of play and improvement batches.
+3. **`src/lib/room-registry.ts`** — the manifest. One entry per room: route, scale
+   address, frame ownership, chrome, persistence key, creatable noun, and a written
+   reason for every global binding the material cannot express.
+4. **`docs/plans/scale-manifold-build-plan.md`** — the active build: one log-scale axis
+   from the quantum fields to the spacetime manifold, band detents, handoff anchors,
+   twist-lens, scale-as-spectral-register.
+5. **`DESIGN.md`** — what exists and why each piece looks the way it does.
+6. **`docs/page-feel-audit.md`** — per-route state of play and improvement batches.
 
-## The laws, compressed (full versions in INSPIRATION.md §5)
+## The laws, and the test that checks each one
+
+Full versions in INSPIRATION.md §5. Every law here names its enforcement; a law with a
+test is a law, a law without one is a wish.
+
+| law | checked by |
+| --- | --- |
+| a room registers once, in `ROOM_REGISTRY`; nav, gallery, guide coverage and chrome derive from it | `test:room-contract`, `test:routes` |
+| rooms bind meanings through `attachGestures` — **never raw pointer wiring** | `test:room-contract` (§1) |
+| thresholds live in `src/lib/gesture/core.ts` **alone** | `test:room-contract` (§2) |
+| every global binding is implemented or carries a written exemption | `test:room-contract` (§3) |
+| a room that animates pauses when hidden and governs its frame | `test:room-contract` (§4) |
+| the whole-field clear is the shared `<LetGo>` | `test:room-contract` (§5) |
+| a room with a scale address mounts axis chrome | `test:room-contract` (§6) |
+| no room-facing resolver ships with nobody calling it | `test:room-contract` (§7) |
+| an object that claims a gesture verb implements it | `test:scene` |
+| navigation order is derived from the scale graph, never hand-sorted | `test:routes` |
+| the guide documents exactly the rooms that exist, with screenshots | `test:guide` |
+| every room key sits on a band, in a peer circle, or in `SCALE_EXEMPT_KEYS` | `test:routes` |
+
+And the laws that no test can reach — hold these yourself:
 
 - Everything generated is a **deterministic function of a small state vector** (the
-  concern polygon, a seed). No model calls in the state-rendering loop.
+  concern polygon, a seed). No `Math.random`, no model calls in the render loop.
 - **Procedural over assets**: Web Audio synthesis, shaders, parametric models — not
   sound packs, stock, or AI illustration.
 - **Join the shared buses**, don't grow private ones: `src/lib/audio.ts` (one audio
-  graph), `src/lib/haptics.ts` (haptic bus + iOS Core Haptics bridge),
-  `src/lib/turbulence.ts` (shared intensity), `src/lib/world.ts` (shared persistent
-  world), `src/lib/gesture/` (the semantic gesture engine — never raw pointer wiring
-  in new rooms), `src/lib/scale.ts` (the scale manifold: bands, detents, registers).
-- **Gesture grammar only** (`docs/gesture-grammar.md`): rooms bind meanings from the
-  grammar via `attachGestures`; thresholds live in `gesture/core.ts` alone. Global
-  bindings (pinch = zoom in band, pinch-through-detent = travel, twist = rotate the
-  lens, 3-finger = weather/time, long-press = grow, shake/tilt/knock/flip/breath =
-  vessel) mean the same thing in every room. No control a hand can't discover in ten
-  seconds. No instructions, ever.
-- **Every new page takes a scale address.** Even a standalone room should know where
-  it lives on the quark→manifold axis (`SCALE_BANDS` in `src/lib/scale.ts`) and what
-  its spectral register is (`spectralRegisterFor`), so it can join the manifold and
-  the album's one-instrument sound without rework. If it truly has no physical scale
-  (e.g. a reading surface), say so in the PR — that's a deliberate exemption.
+  graph), `src/lib/haptics.ts`, `src/lib/turbulence.ts`, `src/lib/world.ts`,
+  `src/lib/gesture/`, `src/lib/scale.ts`, `src/lib/room-runtime.ts`, `src/lib/scene/`.
+- **Duration and intensity are continuous axes, never switches.** A hold must keep
+  deepening past its tier; a tap must scale with `e.intensity`. A binding that fires
+  identically at 900ms and at 2400ms is a bug the tests cannot see and you must.
+- **Lower friction to the next reward.** Gestures and rapid multi-taps (1 / 3 / 5 / *n*)
+  exist so the hand reaches the next sight-sound-haptic payoff without menus or
+  willpower — the same habit loop as any other low-activation-energy reward. Prefer a
+  richer grammar binding over a control that must be learned; a tap that does nothing
+  is raised friction, and raised friction is a bug.
 - **State lands in ≥2 senses in the same frame** (sight + sound at minimum; haptics
   where hardware allows). The water on `/` is the reference feel.
+- **No instructions, ever.** No new explanatory copy, labels, tooltips, or onboarding.
+  Discovery is physical: glimmers only, after ~20s idle.
 - **Voice**: lowercase product copy, two of the three registers
   (devotional/operational/oceanic) in every line, no marketing verbs, no emoji.
-  Anti-pattern list in `DESIGN.md` applies everywhere.
 - **Build in one room, then extract the law** — prove a mechanic on a single route
-  before generalizing it into `lib/`.
-- Honor `prefers-reduced-motion`, keep keyboard access, and verify at 390px width.
+  before generalizing it into `lib/`. And having extracted it, **wire it into that
+  room in the same PR**: `fork-regions.ts` is what happens when you skip that half.
+- Honor `prefers-reduced-motion`, keep keyboard access, verify at 390px width.
+
+## What a room is
+
+**A background field, a population of objects, and the shared buses.** Not a canvas and
+a pile of closures — that shape is what produced a `createRadialGradient` inside
+`for (const a of atoms)`, per-nucleon halos, per-petal shadowBlur, and ~44 gradient
+allocations a frame on `/stars`. Every object drawing itself is one defect wearing two
+faces: no shared object model, and no shared renderer.
+
+`src/lib/scene/` is both halves:
+
+- **`scene/object.ts`** — a `SceneObjectSpec`: a small deterministic state vector plus a
+  seed, a lifecycle (born → growing under a dwell → sealed by a ceremony → retiring),
+  the **verbs of the grammar it declares it can answer**, and an `emit` that writes
+  *instance data* — never draw calls. Declare a verb without a handler and
+  `createPopulation` throws; `test:scene` pins that.
+- **`scene/instances.ts`** — one Float32Array for the whole population, allocated once
+  at capacity. Eight numbers per object.
+- **`scene/gl.ts`** — the room's two passes: the background field as a fragment shader,
+  then the entire population in **one instanced draw**, an SDF disc with an additive
+  corona instead of a gradient per object per frame. Degrades to a 2D path that still
+  draws from one cached sprite; handles context loss; disposes.
+- **`scene/room.ts`** — `createRoomShell`: the frame governor, the visibility and
+  gallery pause, the DPR ceiling, the resize observer, `attachGestures` routed by finger
+  count into verbs, `onVessel`, the idle persistence writer, the glimmer clock, `letGo`.
+
+A room author writes the field shader, the object, and what each verb means in *that*
+material. Nothing else. `src/components/RoomTemplate.tsx` is the whole shape, and it
+passes the contract test unmodified.
 
 ## The room quality bar — non-negotiable
 
@@ -121,10 +195,8 @@ once, as its `place`; `<RoomShell>` mounts `AxisChrome` from it.
 
 ## The field guide (`/guide`) — the documentation law
 
-`/guide` is the one sanctioned reading surface where the site explains itself: an
-onboarding walk, the gesture grammar, exhaustive per-room instructions with a
-screenshot of every room, and the workshop (system + HTTP API) docs. It exists so
-the rooms never have to — in-room copy stays instruction-free, always.
+`/guide` is the one sanctioned reading surface where the site explains itself. It exists
+so the rooms never have to — in-room copy stays instruction-free, always.
 
 - Content lives in the room's own **`room.config.ts`** (`guide:`) for rooms with
   a manifest, and in **`src/data/guide.ts`** for the rest, plus the shared
@@ -172,6 +244,43 @@ the rooms never have to — in-room copy stays instruction-free, always.
 - AI endpoints (`src/app/api/*`) prefer `ANTHROPIC_API_KEY`, fall back to
   `GEMINI_API_KEY`, and must keep the hard-coded voice rules in their system prompts.
 - Deploys: Railway from `main` (see `docs/railway-autodeploy.md`).
+
+## The pre-merge checklist — all of it, every time
+
+Nothing here is optional, and none of it is new. It is written as a list because the
+audit above is what happened when it was written as paragraphs.
+
+- [ ] `npx tsc --noEmit` clean for the files you touched.
+- [ ] `npm test` green — including `test:room-contract`. If it is red **because of your
+      room**, you are not done. If it is red because of a room you did not touch, say so
+      in the PR body and name the room.
+- [ ] Your room calls **`attachGestures`** (or `createRoomShell`) and wires **no raw
+      `pointerdown` / `touchstart`** on its playable surface.
+- [ ] It defines **no timing constant of its own**. Every threshold comes from
+      `gesture/core.ts`.
+- [ ] **Every global binding** in `docs/gesture-grammar.md` §5 is implemented, or its
+      registry entry carries a sentence saying what the material cannot express.
+      Especially the commonly-skipped: two-finger tap (step back), three-finger tap
+      (tutti), twist (lens, guarded with `if (e.fingers === 3) return;`), three-finger
+      twist (season), three-finger drag (wind), three-finger hold (time dilation),
+      dwell (plant/grow), ceremony hold (the one solemn act), and the vessel's four —
+      tilt, shake, **knock**, **flip**.
+- [ ] Nothing fires identically at 900ms and 2400ms. Duration deepens; intensity scales.
+- [ ] The room **pauses when hidden** (`onVisibility`) and governs its frame
+      (`createFrameGovernor` + `detailForTier` + `resolveDpr`), or the shell does it.
+- [ ] **No `createRadialGradient` / `createLinearGradient` inside a loop over the
+      material.** No per-frame `shadowBlur` or `filter: blur()`. No allocation in the
+      RAF loop. Objects describe themselves as instances.
+- [ ] If the material is countable: a **dwell creates** one (legibly, while it happens),
+      **holding longer deepens** it, a **ceremony hold is its solemn act and its
+      touch-reachable delete**, and the whole-field clear is the shared **`<LetGo>`**.
+      Every verb has a touch path — nothing reachable only by right-click or keyboard.
+- [ ] The room mounts **`<AxisChrome route="…" />`** from its page, and binds pinch or
+      `pan2` only if the registry says `frame: "own"`.
+- [ ] Reduced motion, keyboard, and 390px all still work.
+- [ ] No new explanatory copy. No emoji. Two of three registers in any line you wrote.
+- [ ] `src/data/guide.ts` updated and the screenshot re-shot, in this PR.
+- [ ] Anything you extracted into `src/lib/` has a consumer in `src/`, in this PR.
 
 ## Litmus test before you ship
 

@@ -1,25 +1,60 @@
 "use client";
 
+/**
+ * /cabinet — the case that used to be the home page.
+ *
+ * Built as the home instrument, mounted at `/`, and left behind when `/`
+ * became a scrolling gallery of route previews: for a while this file was
+ * 1,200 lines of finished room that nothing imported. It is a room, so it
+ * lives at a room's route now, and the two things it was still missing as a
+ * section — a countable material, and the solemn act that takes one away —
+ * arrived with the route: embers, gathered under a resting finger and let go
+ * by a hold that blooms.
+ *
+ * It takes no scale address on purpose (`src/rooms/cabinet/room.config.ts`):
+ * a case holding every route at once is a view of the tree, like `/overlook`
+ * and `/loom`, not a rung on it.
+ */
+
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
+import LetGo from "@/components/LetGo";
 import RouteSigil from "@/components/RouteSigil";
 import ConcernSigil from "@/components/ConcernSigil";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
+import { attachGestures } from "@/lib/gesture";
+import { THRESHOLDS } from "@/lib/gesture/core";
+import { onVessel } from "@/lib/vessel";
+import { createFrameGovernor, detailForTier, isEmbeddedFrame, onVisibility, resolveDpr } from "@/lib/room-runtime";
 import { SITE_ROUTE_BY_KEY, SITE_ROUTES, type SiteRouteCluster, type SiteRouteEntry } from "@/lib/routes";
 import { useField } from "@/store/field";
 import type { ConcernKey } from "@/lib/types";
+
+/** An ember a dwell gathered: a small light the case keeps. */
+type Ember = {
+  /** world units on the case's plane */
+  x: number;
+  y: number;
+  /** 0..1, how long the hand stayed — the dwell's duration made visible */
+  weight: number;
+  /** cluster index, so it burns in the colour of the current it was born in */
+  current: number;
+};
 
 type HomeCabinetPatina = {
   glow: number;
   visits: number;
   routes: Record<string, number>;
   cluster: SiteRouteCluster;
+  embers: Ember[];
 };
 
-const STORAGE_KEY = "objetdart:home-cabinet:v1";
+const STORAGE_KEY = "objetdart:cabinet:v2";
+/** The case holds this many embers; the oldest is retired to make room. */
+const EMBER_CAP = 32;
 
 const CLUSTERS: Array<{
   id: SiteRouteCluster;
@@ -38,11 +73,14 @@ const CLUSTERS: Array<{
 const CLUSTER_BY_ID = Object.fromEntries(CLUSTERS.map((cluster) => [cluster.id, cluster])) as Record<SiteRouteCluster, typeof CLUSTERS[number]>;
 const CLUSTER_INDEX_BY_ID = Object.fromEntries(CLUSTERS.map((cluster, index) => [cluster.id, index])) as Record<SiteRouteCluster, number>;
 
-const LOCAL_ENTRIES: Array<{ key: string; label: string; anchor: string; desc: string; icon: SiteRouteEntry["icon"] }> = [
-  { key: "field", label: "field", anchor: "concern-field", desc: "the concern compass", icon: "atlas" },
-  { key: "chart", label: "chart", anchor: "live-chart", desc: "the departure swell", icon: "charts" },
-  { key: "atlas", label: "atlas", anchor: "atlas", desc: "the territories", icon: "atlas" },
-  { key: "reading", label: "reading", anchor: "reading", desc: "the room speaks back", icon: "kept" },
+// The four surfaces the case opens onto directly. They were page anchors while
+// the cabinet was the home page's first screen; every one of them is a route of
+// its own now, so they are links and nothing on this face is dead.
+const LOCAL_ENTRIES: Array<{ key: string; label: string; href: string; desc: string; icon: SiteRouteEntry["icon"] }> = [
+  { key: "compass", label: "compass", href: "/compass", desc: "the concern compass", icon: "atlas" },
+  { key: "charts", label: "chart", href: "/charts", desc: "the departure swell", icon: "charts" },
+  { key: "atlas", label: "atlas", href: "/atlas/origin", desc: "the territories", icon: "atlas" },
+  { key: "kept", label: "kept", href: "/kept", desc: "the room speaks back", icon: "kept" },
 ];
 
 const LOCAL_ENTRY_BY_KEY = Object.fromEntries(LOCAL_ENTRIES.map((entry) => [entry.key, entry])) as Record<string, typeof LOCAL_ENTRIES[number]>;
@@ -59,7 +97,26 @@ const SORTED_ROUTES_BY_CLUSTER = Object.fromEntries(
 ) as Record<SiteRouteCluster, SiteRouteEntry[]>;
 
 function blankPatina(): HomeCabinetPatina {
-  return { glow: 0, visits: 0, routes: {}, cluster: "field" };
+  return { glow: 0, visits: 0, routes: {}, cluster: "field", embers: [] };
+}
+
+function safeEmbers(raw: unknown): Ember[] {
+  if (!Array.isArray(raw)) return [];
+  const out: Ember[] = [];
+  for (const item of raw.slice(-EMBER_CAP)) {
+    if (!item || typeof item !== "object") continue;
+    const e = item as Partial<Ember>;
+    const x = Number(e.x);
+    const y = Number(e.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    out.push({
+      x: Math.max(-9, Math.min(9, x)),
+      y: Math.max(-7, Math.min(7, y)),
+      weight: Math.max(0, Math.min(1, Number(e.weight) || 0)),
+      current: Math.max(0, Math.min(CLUSTERS.length - 1, Math.floor(Number(e.current) || 0))),
+    });
+  }
+  return out;
 }
 
 function safePatina(raw: string | null): HomeCabinetPatina {
@@ -72,6 +129,7 @@ function safePatina(raw: string | null): HomeCabinetPatina {
       visits: Math.max(0, Number(parsed.visits) || 0),
       routes: parsed.routes && typeof parsed.routes === "object" ? parsed.routes : {},
       cluster,
+      embers: safeEmbers(parsed.embers),
     };
   } catch {
     return blankPatina();
@@ -112,12 +170,30 @@ function dominantConcern(concerns: Record<ConcernKey, number>): ConcernKey {
 
 export default function HomeCabinet() {
   const stageRef = useRef<HTMLDivElement | null>(null);
+  const sectionRef = useRef<HTMLElement | null>(null);
   const patinaRef = useRef<HomeCabinetPatina>(blankPatina());
   const activeKeyRef = useRef("atlas");
   const clusterRef = useRef<SiteRouteCluster>("field");
   const pointerRef = useRef({ x: 0, y: 0, pulse: 0 });
   const saveTimerRef = useRef<number | null>(null);
   const lastFeedbackRef = useRef(0);
+  // frame/law/vessel state, read once per tick — never allocated inside it
+  const panRef = useRef({ x: 0, y: 0 });
+  const gustRef = useRef(0);
+  const timeScaleRef = useRef(1);
+  const tuttiRef = useRef(0);
+  const tiltRef = useRef({ x: 0, y: 0 });
+  const agitationRef = useRef(0);
+  const nightRef = useRef(0);
+  /** 0..1, the case's slow cycle — three-finger twist walks it, continuously. */
+  const seasonRef = useRef(0);
+  // The embers are the case's countable material, and the only thing in it a
+  // hand makes rather than finds. `emberRef` is what the render loop reads;
+  // the patina is what survives the visit; `standing` is only what <LetGo> needs.
+  const emberRef = useRef<Ember[]>([]);
+  const growingRef = useRef<Ember | null>(null);
+  const [standing, setStanding] = useState(0);
+  const [night, setNight] = useState(false);
 
   const concerns = useField((state) => state.concerns);
   const keptReadings = useField((state) => state.keptReadings);
@@ -142,6 +218,8 @@ export default function HomeCabinet() {
     const next = { ...loaded, visits: loaded.visits + 1 };
     patinaRef.current = next;
     clusterRef.current = next.cluster;
+    emberRef.current = next.embers.slice(-EMBER_CAP);
+    setStanding(emberRef.current.length);
     setPatina(next);
     setSelectedCluster(next.cluster);
     savePatina(next);
@@ -165,12 +243,19 @@ export default function HomeCabinet() {
       glow: Math.min(80, current.glow + amount),
       visits: current.visits,
       cluster,
+      embers: current.embers,
       routes: {
         ...current.routes,
         [routeKey]: (current.routes[routeKey] ?? 0) + 1,
       },
     };
     persistLater(next);
+  }, [persistLater]);
+
+  const commitEmbers = useCallback(() => {
+    const current = patinaRef.current;
+    persistLater({ ...current, embers: emberRef.current.slice(-EMBER_CAP) });
+    setStanding(emberRef.current.length);
   }, [persistLater]);
 
   const selectRoute = useCallback((route: SiteRouteEntry, source: "hover" | "focus" | "activate" = "hover") => {
@@ -199,36 +284,267 @@ export default function HomeCabinet() {
     if (first) selectRoute(first, source);
   }, [selectRoute]);
 
-  const scrollToAnchor = useCallback((anchor: string, meta: string) => {
-    const element = document.getElementById(anchor);
-    if (!element) return;
-    pointerRef.current.pulse = 1;
-    element.scrollIntoView({ behavior: "smooth", block: "start" });
-    addPatina(meta, "field", 0.8);
-    try { haptics.ripple(0.4); } catch { /* noop */ }
-    try { getFieldAudio().chime(); } catch { /* noop */ }
-    useField.getState().recordTape("region", 0.58, `home/${meta}`);
-    if (anchor === "live-chart") {
-      try {
-        window.dispatchEvent(new CustomEvent("oda:sea-nudge", { detail: { direction: 1, source: "home-cabinet" } }));
-      } catch { /* noop */ }
-    }
-  }, [addPatina]);
+  // Contact point → the case's own plane (z = 0). The camera is the fixed one
+  // built below: perspective, fov 36, 14 units back. Both the plant and the
+  // ceremony read this, so what a hand touches and what it reaches are one map.
+  const worldFromClient = useCallback((clientX: number, clientY: number) => {
+    const rect = sectionRef.current?.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return { x: 0, y: 0 };
+    const halfH = Math.tan((36 / 2) * (Math.PI / 180)) * 14;
+    const halfW = halfH * (rect.width / rect.height);
+    return {
+      x: ((clientX - rect.left) / rect.width - 0.5) * 2 * halfW,
+      y: -((clientY - rect.top) / rect.height - 0.5) * 2 * halfH,
+    };
+  }, []);
 
+  const emberNear = useCallback((x: number, y: number): Ember | null => {
+    let best: Ember | null = null;
+    let bestD = Infinity;
+    for (const e of emberRef.current) {
+      const d = Math.hypot(e.x - x, e.y - y);
+      if (d < 0.9 + e.weight * 0.9 && d < bestD) {
+        bestD = d;
+        best = e;
+      }
+    }
+    return best;
+  }, []);
+
+  const letGoEmbers = useCallback(() => {
+    // an exhale, never a blink: the case dims its embers away and writes the
+    // patina empty at once, so an emptied case stays empty
+    emberRef.current = [];
+    growingRef.current = null;
+    persistLater({ ...patinaRef.current, embers: [] });
+    setStanding(0);
+    try { getFieldAudio().thud(); } catch { /* noop */ }
+    try { haptics.roll(); } catch { /* noop */ }
+  }, [persistLater]);
+
+  // Continuous hover parallax has no classified-gesture equivalent (the
+  // grammar's contacts only exist between a pointerdown and pointerup) —
+  // this is the desktop "hover ≈ light touch" register from the grammar's
+  // own desktop-equivalents table, not a raw gesture state machine, so it
+  // stays a plain listener. The engine mount below owns every real verb.
   const onPointerMove = (event: React.PointerEvent<HTMLElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
     pointerRef.current.x = ((event.clientX - rect.left) / rect.width - 0.5) * 2;
     pointerRef.current.y = ((event.clientY - rect.top) / rect.height - 0.5) * 2;
   };
 
-  const onPointerDown = (event: React.PointerEvent<HTMLElement>) => {
-    if ((event.target as HTMLElement).closest("a, button")) return;
-    pointerRef.current.pulse = 1;
-    addPatina(`surface-${selectedCluster}`, selectedCluster, 0.18);
-    try { haptics.tap(); } catch { /* noop */ }
-    try { getFieldAudio().playNote(activeCluster.pitch, 70); } catch { /* noop */ }
-    useField.getState().recordTape("ripple", 0.32, `home/${selectedCluster}`);
-  };
+  // gesture layer — one finger on open ground is the old surface-touch
+  // pulse, now classified by the engine instead of firing on every raw
+  // pointerdown. Two/three fingers add the frame and law the cabinet was
+  // missing: two-finger tap steps back to the field; twist(2) rotates the
+  // lens through the four route clusters; pan2 nudges the whole
+  // assembly, which eases back like it's on a spring; three-finger tap
+  // is tutti; three-finger drag is wind through the dust; three-finger
+  // twist turns the case's season; three-finger hold dilates the
+  // cabinet's own time while held. A one-finger dwell on open glass
+  // gathers an ember, and a hold that reaches the ceremony tier lets one
+  // go — the case's only made thing, and its only solemn act.
+  useEffect(() => {
+    const section = sectionRef.current;
+    if (!section) return;
+    let twistAcc = 0;
+    let tuttiTimer: ReturnType<typeof setTimeout> | null = null;
+    let ceremonyTarget: Ember | null = null;
+    let holdOnFurniture = false;
+    const detach = attachGestures(section, {
+      tap: (e) => {
+        if (document.elementFromPoint(e.x, e.y)?.closest("a, button")) return;
+        if (e.fingers === 1) {
+          pointerRef.current.pulse = Math.max(0.35, e.intensity);
+          addPatina(`surface-${clusterRef.current}`, clusterRef.current, 0.08 + e.intensity * 0.2);
+          try { haptics.tap(); } catch { /* noop */ }
+          try {
+            getFieldAudio().playNote(
+              CLUSTER_BY_ID[clusterRef.current].pitch,
+              50 + e.intensity * 90,
+            );
+          } catch { /* noop */ }
+          useField.getState().recordTape("ripple", 0.2 + e.intensity * 0.4, `cabinet/${clusterRef.current}`);
+          return;
+        }
+        if (e.fingers === 2) {
+          // step back: the case has no camera to retreat, so it lets go of
+          // whatever the hand had raised — the lens returns to the field,
+          // centered, and the pan spring is released with it.
+          activeKeyRef.current = "atlas";
+          clusterRef.current = "field";
+          panRef.current = { x: 0, y: 0 };
+          setActiveKey("atlas");
+          setSelectedCluster("field");
+          try { haptics.tap(); } catch { /* noop */ }
+          return;
+        }
+        if (e.fingers >= 3) {
+          // tutti — every gem, the dust and the core answer at once, by
+          // exactly how hard the three fingers landed
+          tuttiRef.current = Math.max(0.4, e.intensity);
+          pointerRef.current.pulse = 1;
+          try { haptics.ripple(0.25 + e.intensity * 0.45); } catch { /* noop */ }
+          try { getFieldAudio().chime(); } catch { /* noop */ }
+          addPatina("tutti", clusterRef.current, 0.12);
+          if (tuttiTimer) clearTimeout(tuttiTimer);
+          tuttiTimer = setTimeout(() => { tuttiRef.current = 0; }, 700);
+        }
+      },
+      twist: (e) => {
+        if (e.phase !== "move") return;
+        if (e.fingers === 3) {
+          // the case's season: the light walks from warm to cold and back,
+          // continuously with the angle turned, never in steps
+          seasonRef.current = (seasonRef.current + e.angle / (Math.PI * 2) + 1) % 1;
+          return;
+        }
+        twistAcc += e.angle;
+        const step = Math.PI / 2;
+        while (Math.abs(twistAcc) >= step) {
+          const direction = twistAcc > 0 ? 1 : -1;
+          twistAcc -= direction * step;
+          const idx = CLUSTER_INDEX_BY_ID[clusterRef.current];
+          const nextCluster = CLUSTERS[(idx + direction + CLUSTERS.length) % CLUSTERS.length].id;
+          selectCluster(nextCluster, "focus");
+          try { haptics.lens(); } catch { /* noop */ }
+        }
+      },
+      pan2: (e) => {
+        if (e.phase === "end") return;
+        panRef.current = {
+          x: Math.max(-1, Math.min(1, panRef.current.x + e.dx * 0.0025)),
+          y: Math.max(-1, Math.min(1, panRef.current.y + e.dy * 0.0025)),
+        };
+      },
+      drag: (e) => {
+        if (e.fingers !== 3) return;
+        gustRef.current = Math.max(-1, Math.min(1, gustRef.current + e.dx * 0.01));
+      },
+      hold: (e) => {
+        if (e.fingers >= 3) {
+          if (e.phase === "release") { timeScaleRef.current = 1; return; }
+          timeScaleRef.current = e.phase === "enter"
+            ? 1
+            : Math.max(0.2, 1 - Math.min(1, e.elapsed / THRESHOLDS.ceremonyMs) * 0.8);
+          return;
+        }
+        if (e.fingers !== 1) return;
+
+        if (e.phase === "enter") {
+          // a hold that begins on the furniture belongs to the furniture; the
+          // check lives here alone so a release still lands whatever it lands on
+          if (document.elementFromPoint(e.x, e.y)?.closest("a, button")) {
+            ceremonyTarget = null;
+            growingRef.current = null;
+            holdOnFurniture = true;
+            return;
+          }
+          holdOnFurniture = false;
+          const at = worldFromClient(e.x, e.y);
+          ceremonyTarget = emberNear(at.x, at.y);
+          growingRef.current = null;
+          return;
+        }
+        if (holdOnFurniture && e.phase !== "release") return;
+
+        if (e.phase === "release") {
+          if (growingRef.current) commitEmbers();
+          growingRef.current = null;
+          ceremonyTarget = null;
+          holdOnFurniture = false;
+          return;
+        }
+
+        // ceremony (tier >= 3): the hold that began on an ember lets it go —
+        // the case's one solemn act, and the delete a thumb can reach.
+        if (e.tier >= 3 && ceremonyTarget) {
+          const gone = ceremonyTarget;
+          ceremonyTarget = null;
+          emberRef.current = emberRef.current.filter((x) => x !== gone);
+          commitEmbers();
+          tuttiRef.current = Math.max(tuttiRef.current, 0.5);
+          try { haptics.bloom(); } catch { /* noop */ }
+          try { getFieldAudio().thud(); } catch { /* noop */ }
+          return;
+        }
+        if (ceremonyTarget) {
+          // while the ceremony gathers, the ember it is about to release
+          // brightens — the act is legible before it lands
+          ceremonyTarget.weight = Math.min(
+            1,
+            ceremonyTarget.weight + Math.min(1, e.elapsed / THRESHOLDS.ceremonyMs) * 0.02,
+          );
+          return;
+        }
+
+        // dwell (tier >= 2): an ember gathers under the finger from the moment
+        // the tier is crossed, and keeps deepening for as long as the hand
+        // stays — never the same thing at 900ms and at 2400ms.
+        if (e.tier >= 2) {
+          if (!growingRef.current) {
+            const at = worldFromClient(e.x, e.y);
+            if (emberRef.current.length >= EMBER_CAP) emberRef.current.shift();
+            const born: Ember = {
+              x: at.x,
+              y: at.y,
+              weight: 0,
+              current: CLUSTER_INDEX_BY_ID[clusterRef.current],
+            };
+            emberRef.current = [...emberRef.current, born];
+            growingRef.current = born;
+            setStanding(emberRef.current.length);
+            try { haptics.ripple(0.35); } catch { /* noop */ }
+            try { getFieldAudio().spark(); } catch { /* noop */ }
+          }
+          const at = worldFromClient(e.x, e.y);
+          growingRef.current.x = at.x;
+          growingRef.current.y = at.y;
+          growingRef.current.weight = 1 - Math.exp(-e.elapsed / 1800);
+          pointerRef.current.pulse = Math.max(pointerRef.current.pulse, growingRef.current.weight);
+        }
+      },
+    }, { wheelZoom: false, manageStyle: false, noCapture: true });
+
+    const releaseHold = () => { timeScaleRef.current = 1; };
+    section.addEventListener("pointerup", releaseHold);
+    section.addEventListener("pointercancel", releaseHold);
+
+    // vessel: tilt leans the whole assembly beyond the hover parallax,
+    // shake agitates the dust field, a knock is tutti, and face-down is
+    // night — the lights ease down until the phone turns back over.
+    const detachVessel = onVessel({
+      tilt: ({ beta, gamma }) => {
+        tiltRef.current = {
+          x: Math.max(-1, Math.min(1, gamma / 45)),
+          y: Math.max(-1, Math.min(1, beta / 45)),
+        };
+      },
+      shake: ({ intensity }) => {
+        agitationRef.current = Math.min(1, agitationRef.current + intensity);
+        try { haptics.chop(); } catch { /* noop */ }
+      },
+      knock: () => {
+        tuttiRef.current = 1;
+        try { getFieldAudio().bell(); } catch { /* noop */ }
+        try { haptics.tap(); } catch { /* noop */ }
+        if (tuttiTimer) clearTimeout(tuttiTimer);
+        tuttiTimer = setTimeout(() => { tuttiRef.current = 0; }, 700);
+      },
+      flip: ({ faceDown }) => {
+        nightRef.current = faceDown ? 1 : 0;
+        setNight(faceDown);
+      },
+    });
+
+    return () => {
+      detach();
+      detachVessel();
+      section.removeEventListener("pointerup", releaseHold);
+      section.removeEventListener("pointercancel", releaseHold);
+      if (tuttiTimer) clearTimeout(tuttiTimer);
+    };
+  }, [addPatina, selectCluster, commitEmbers, emberNear, worldFromClient]);
 
   useEffect(() => {
     const host = stageRef.current;
@@ -375,6 +691,29 @@ export default function HomeCabinet() {
     );
     scene.add(dust);
 
+    // The embers: one Points object for the whole population, its typed arrays
+    // allocated once at capacity and rewritten in place. Nothing about the
+    // population is O(history) and nothing is a second draw call.
+    const emberPositions = new Float32Array(EMBER_CAP * 3);
+    const emberColors = new Float32Array(EMBER_CAP * 3);
+    const emberGeometry = new THREE.BufferGeometry()
+      .setAttribute("position", new THREE.BufferAttribute(emberPositions, 3))
+      .setAttribute("color", new THREE.BufferAttribute(emberColors, 3));
+    emberGeometry.setDrawRange(0, 0);
+    const emberMaterial = new THREE.PointsMaterial({
+      size: 0.34,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.9,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      sizeAttenuation: true,
+    });
+    const embers = new THREE.Points(emberGeometry, emberMaterial);
+    root.add(embers);
+    const emberTint = new THREE.Color();
+    const emberWarm = new THREE.Color(0xfff2bf);
+
     const key = new THREE.DirectionalLight(0xfff0c4, 3.2);
     key.position.set(3, 4, 6);
     scene.add(key);
@@ -385,11 +724,21 @@ export default function HomeCabinet() {
     rose.position.set(4, 1.8, 5);
     scene.add(rose);
 
+    // Performance contract: a quality tier from real frame time, an
+    // explicit DPR ceiling (2 on embedded/mobile, 2 otherwise — matching
+    // the room's prior clamp exactly at "high"), and a hard sleep while
+    // the tab is hidden. No allocation happens inside tick() below.
+    const gov = createFrameGovernor();
+    let sleeping = false;
+    const offVisibility = onVisibility((hidden) => { sleeping = hidden; });
+    const embedded = isEmbeddedFrame();
+
     const resize = () => {
       const rect = host.getBoundingClientRect();
       const width = Math.max(1, Math.floor(rect.width));
       const height = Math.max(1, Math.floor(rect.height));
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      const dpr = resolveDpr(gov.tier(), { embedded, reducedMotion: reduce, maxDpr: 2 });
+      renderer.setPixelRatio(dpr);
       renderer.setSize(width, height, false);
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
@@ -403,27 +752,57 @@ export default function HomeCabinet() {
     let glowEase = patinaRef.current.glow;
     let rotX = 0;
     let rotY = 0;
+    let panX = 0;
+    let panY = 0;
+    let simTime = 0;
+    let lastTier = gov.tier();
     const tick = (now: number) => {
-      const dt = Math.min(0.05, (now - last) / 1000);
+      const tier = gov.beginFrame(now);
+      if (tier !== lastTier) { lastTier = tier; resize(); }
+      const dtReal = Math.min(0.05, (now - last) / 1000);
       last = now;
-      const t = now * 0.001;
+      if (sleeping) { raf = requestAnimationFrame(tick); return; } // no draw while hidden
+
+      // three-finger hold dilates the cabinet's own time, eased so it
+      // never snaps; every periodic term below reads simTime, not the
+      // wall clock, so the whole assembly genuinely slows.
+      const timeScale = timeScaleRef.current;
+      const dt = dtReal * timeScale;
+      simTime += dt;
+      const t = simTime;
       const motion = reduce ? 0 : 1;
       const pointer = pointerRef.current;
       pointer.pulse *= 0.92;
+      const tutti = tuttiRef.current;
+      tuttiRef.current *= 0.9;
+      const agitation = agitationRef.current;
+      agitationRef.current *= 0.94;
+      const nightLevel = nightRef.current;
       glowEase += (patinaRef.current.glow - glowEase) * 0.035;
       const level = 1 - Math.exp(-glowEase * 0.055);
 
-      rotY += (pointer.x * 0.26 - rotY) * 0.06;
-      rotX += (-pointer.y * 0.16 - rotX) * 0.06;
+      // pan2 eases the whole assembly off-center, then springs back —
+      // a grabbed pan, not a permanent camera move.
+      panX += (panRef.current.x * 1.1 - panX) * 0.08;
+      panY += (panRef.current.y * 0.9 - panY) * 0.08;
+      panRef.current.x *= 0.9;
+      panRef.current.y *= 0.9;
+      root.position.x = panX;
+      root.position.y = -panY;
+
+      const tilt = tiltRef.current;
+      rotY += (pointer.x * 0.26 + tilt.x * 0.22 - rotY) * 0.06;
+      rotX += (-pointer.y * 0.16 - tilt.y * 0.16 - rotX) * 0.06;
       root.rotation.y = rotY + Math.sin(t * 0.16) * 0.05 * motion;
       root.rotation.x = rotX + Math.cos(t * 0.19) * 0.035 * motion;
       mainRing.rotation.z = t * 0.035 * motion;
       crossRing.rotation.z = -t * 0.06 * motion;
       tiltedRing.rotation.z = t * 0.044 * motion;
-      lens.scale.setScalar(1 + Math.sin(t * 1.2) * 0.018 * motion + pointer.pulse * 0.04);
+      lens.scale.setScalar(1 + Math.sin(t * 1.2) * 0.018 * motion + pointer.pulse * 0.04 + tutti * 0.06);
       core.rotation.y = t * 0.5 * motion;
       core.rotation.z = -t * 0.36 * motion;
-      (candle as THREE.MeshStandardMaterial).emissiveIntensity = 0.35 + pointer.pulse * 0.8 + level * 0.3;
+      (candle as THREE.MeshStandardMaterial).emissiveIntensity =
+        (0.35 + pointer.pulse * 0.8 + level * 0.3 + tutti * 0.5) * (1 - nightLevel * 0.7);
       (glass as THREE.MeshPhysicalMaterial).emissiveIntensity = 0.22 + pointer.pulse * 0.18 + level * 0.22;
 
       const active = activeKeyRef.current;
@@ -436,12 +815,53 @@ export default function HomeCabinet() {
         mesh.rotation.x += dt * (0.9 + baseScale) * motion;
         mesh.rotation.y += dt * 0.8 * motion;
         mesh.position.z = (route.homePriority ? 0.34 : -0.12) + Math.sin(t * 0.9 + angle * 3) * 0.08 * motion + (isActive ? 0.26 : 0);
-        material.emissiveIntensity = (isActive ? 0.84 : isCluster ? 0.34 : 0.08) + pointer.pulse * 0.12 + level * 0.18;
+        material.emissiveIntensity =
+          ((isActive ? 0.84 : isCluster ? 0.34 : 0.08) + pointer.pulse * 0.12 + level * 0.18 + tutti * 0.4)
+          * (1 - nightLevel * 0.6);
       });
-      dust.rotation.z = -t * 0.015 * motion;
-      (dust.material as THREE.PointsMaterial).opacity = 0.34 + level * 0.24 + pointer.pulse * 0.16;
-      sea.intensity = 1.7 + level * 1.2 + pointer.pulse * 0.8;
-      rose.intensity = 1.1 + level * 1.0;
+      // three-finger drag = wind: a gust speeds or reverses the dust
+      // drift for as long as it's pushed, decaying back to the ambient
+      // rate; shake agitates the same field in its own material.
+      dust.rotation.z = (-t * 0.015 + gustRef.current * 0.02) * motion;
+      gustRef.current *= 0.9;
+      (dust.material as THREE.PointsMaterial).opacity =
+        (0.34 + level * 0.24 + pointer.pulse * 0.16 + agitation * 0.3) * detailForTier(tier).particles;
+      // the embers: written in place, one draw, drawRange sized to the living
+      // population — O(visible), never O(history)
+      const list = emberRef.current;
+      const shown = Math.min(EMBER_CAP, list.length);
+      const growingNow = growingRef.current;
+      for (let i = 0; i < shown; i += 1) {
+        const e = list[i];
+        const lift = Math.sin(t * 0.7 + e.x * 0.9 + e.y * 0.6) * 0.16 * motion;
+        emberPositions[i * 3] = e.x;
+        emberPositions[i * 3 + 1] = e.y + lift;
+        emberPositions[i * 3 + 2] = 0.55 + e.weight * 0.5;
+        emberTint.set(CLUSTERS[e.current].color).lerp(emberWarm, 0.2 + e.weight * 0.5);
+        // the one under the finger burns brightest, so a plant is legible
+        // from the instant the dwell tier is crossed
+        const heat =
+          (0.32 + e.weight * 0.85 + tutti * 0.5 + (e === growingNow ? 0.7 : 0)) *
+          (1 - nightLevel * 0.65);
+        emberColors[i * 3] = emberTint.r * heat;
+        emberColors[i * 3 + 1] = emberTint.g * heat;
+        emberColors[i * 3 + 2] = emberTint.b * heat;
+      }
+      emberGeometry.setDrawRange(0, shown);
+      emberGeometry.attributes.position.needsUpdate = true;
+      emberGeometry.attributes.color.needsUpdate = true;
+      emberMaterial.size = 0.3 * detailForTier(tier).particles + 0.12;
+
+      // the season: the case's own slow cycle, warm to cold and back, turned
+      // by the three-finger twist and read here as light temperature
+      const season = seasonRef.current;
+      const warmth = 0.5 + Math.cos(season * Math.PI * 2) * 0.5;
+      sea.intensity =
+        (1.7 + level * 1.2 + pointer.pulse * 0.8 + tutti * 0.6) *
+        (0.55 + (1 - warmth) * 0.9) *
+        (1 - nightLevel * 0.55);
+      rose.intensity = (1.1 + level * 1.0 + agitation * 0.4) * (1 - nightLevel * 0.55);
+      key.intensity = 3.2 * (0.6 + warmth * 0.7) * (1 - nightLevel * 0.5);
 
       renderer.render(scene, camera);
       raf = requestAnimationFrame(tick);
@@ -470,6 +890,7 @@ export default function HomeCabinet() {
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
+      offVisibility();
       reduceMotion.removeEventListener?.("change", updateReduce);
       delete (window as unknown as Record<string, unknown>).__homeCabinet;
       routeGems.forEach(({ material, line }) => {
@@ -489,6 +910,8 @@ export default function HomeCabinet() {
       candle.dispose();
       dust.geometry.dispose();
       (dust.material as THREE.PointsMaterial).dispose();
+      emberGeometry.dispose();
+      emberMaterial.dispose();
       renderer.dispose();
       env.dispose();
       pmrem.dispose();
@@ -498,12 +921,12 @@ export default function HomeCabinet() {
 
   return (
     <section
-      id="threshold"
-      className="home-cabinet"
+      id="cabinet"
+      ref={sectionRef}
+      className={"home-cabinet" + (night ? " is-night" : "")}
       data-touch-surface="true"
       data-pretext-ignore="true"
       onPointerMove={onPointerMove}
-      onPointerDown={onPointerDown}
       style={{
         ["--active-color" as string]: activeCluster.color,
         ["--active-glow" as string]: activeCluster.glow,
@@ -537,23 +960,22 @@ export default function HomeCabinet() {
         </div>
       </div>
 
-      <div className="home-cabinet__local" aria-label="home instruments">
+      <div className="home-cabinet__local" aria-label="the case's own doors">
         {LOCAL_ENTRIES.map((entry) => (
-          <button
+          <Link
             key={entry.key}
-            type="button"
+            href={entry.href}
             aria-label={`${entry.label}: ${entry.desc}`}
-            onClick={() => scrollToAnchor(entry.anchor, entry.key)}
             onFocus={() => {
-              activeKeyRef.current = entry.key === "reading" ? "kept" : entry.key;
-              setActiveKey(entry.key === "reading" ? "kept" : entry.key);
+              activeKeyRef.current = entry.key;
+              setActiveKey(entry.key);
               setSelectedCluster("field");
               clusterRef.current = "field";
             }}
           >
             <RouteSigil kind={entry.icon} size={18} />
             <span>{entry.label}</span>
-          </button>
+          </Link>
         ))}
       </div>
 
@@ -578,7 +1000,7 @@ export default function HomeCabinet() {
         {SITE_ROUTES.map((route, index) => (
           <Link
             key={route.key}
-            href={route.anchor ? `#${route.anchor}` : route.href}
+            href={route.href}
             className={`home-cabinet__hotspot${activeKey === route.key ? " is-active" : ""}${selectedCluster === route.cluster ? " is-cluster" : ""}`}
             style={{
               ...hotspotStyle(route, index),
@@ -587,13 +1009,7 @@ export default function HomeCabinet() {
             aria-label={`${route.key}: ${route.desc}`}
             onMouseEnter={() => selectRoute(route)}
             onFocus={() => selectRoute(route, "focus")}
-            onClick={(event) => {
-              selectRoute(route, "activate");
-              if (route.anchor) {
-                event.preventDefault();
-                scrollToAnchor(route.anchor, route.key);
-              }
-            }}
+            onClick={() => selectRoute(route, "activate")}
           >
             <RouteSigil kind={route.icon} size={18} />
             <span>{route.key}</span>
@@ -605,17 +1021,11 @@ export default function HomeCabinet() {
         {routesInCluster.map((route) => (
           <Link
             key={route.key}
-            href={route.anchor ? `#${route.anchor}` : route.href}
+            href={route.href}
             className={activeKey === route.key ? "is-active" : ""}
             onMouseEnter={() => selectRoute(route)}
             onFocus={() => selectRoute(route, "focus")}
-            onClick={(event) => {
-              selectRoute(route, "activate");
-              if (route.anchor) {
-                event.preventDefault();
-                scrollToAnchor(route.anchor, route.key);
-              }
-            }}
+            onClick={() => selectRoute(route, "activate")}
           >
             <RouteSigil kind={route.icon} size={17} />
             <span>{route.key}</span>
@@ -626,6 +1036,8 @@ export default function HomeCabinet() {
       <div className="home-cabinet__edge" aria-hidden="true">
         <span />
       </div>
+
+      <LetGo label="let the embers go" onLetGo={letGoEmbers} visible={standing > 0} />
 
       <style>{`
         .home-cabinet {
@@ -736,7 +1148,7 @@ export default function HomeCabinet() {
           gap: 8px;
           width: min(560px, calc(100vw - var(--pad-x) * 2));
         }
-        .home-cabinet__local button,
+        .home-cabinet__local a,
         .home-cabinet__clusters button,
         .home-cabinet__drawer a,
         .home-cabinet__hotspot {
@@ -747,7 +1159,7 @@ export default function HomeCabinet() {
           text-transform: lowercase;
           cursor: pointer;
         }
-        .home-cabinet__local button {
+        .home-cabinet__local a {
           display: inline-flex;
           align-items: center;
           justify-content: center;
@@ -760,8 +1172,8 @@ export default function HomeCabinet() {
           font-size: 12px;
           transition: border-color var(--t), color var(--t), background var(--t), transform var(--t);
         }
-        .home-cabinet__local button:hover,
-        .home-cabinet__local button:focus-visible {
+        .home-cabinet__local a:hover,
+        .home-cabinet__local a:focus-visible {
           border-color: var(--active-color);
           color: #fff6da;
           background: rgba(255,244,207,0.08);
@@ -964,7 +1376,7 @@ export default function HomeCabinet() {
             width: auto;
             grid-template-columns: repeat(4, minmax(0, 1fr));
           }
-          .home-cabinet__local button {
+          .home-cabinet__local a {
             padding: 0 6px;
             font-size: 11px;
           }
@@ -982,18 +1394,40 @@ export default function HomeCabinet() {
           .home-cabinet__route-line {
             max-width: 31ch;
           }
-          .home-cabinet__local button span {
+          .home-cabinet__local a span {
             display: none;
           }
-          .home-cabinet__local button {
+          .home-cabinet__local a {
             min-width: 0;
           }
         }
         @media (prefers-reduced-motion: reduce) {
-          .home-cabinet__local button,
+          .home-cabinet__local a,
           .home-cabinet__clusters button,
           .home-cabinet__drawer a,
           .home-cabinet__hotspot {
+            transition: none;
+          }
+        }
+        /* flip face-down — night, until the phone turns back over. The
+           WebGL lights ease down inside tick(); this dims the DOM
+           furniture around them the same way. */
+        .home-cabinet.is-night .home-cabinet__title,
+        .home-cabinet.is-night .home-cabinet__lens,
+        .home-cabinet.is-night .home-cabinet__local,
+        .home-cabinet.is-night .home-cabinet__clusters,
+        .home-cabinet.is-night .home-cabinet__drawer,
+        .home-cabinet.is-night .home-cabinet__ring {
+          opacity: 0.5;
+          transition: opacity 900ms ease;
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .home-cabinet.is-night .home-cabinet__title,
+          .home-cabinet.is-night .home-cabinet__lens,
+          .home-cabinet.is-night .home-cabinet__local,
+          .home-cabinet.is-night .home-cabinet__clusters,
+          .home-cabinet.is-night .home-cabinet__drawer,
+          .home-cabinet.is-night .home-cabinet__ring {
             transition: none;
           }
         }
@@ -1012,6 +1446,13 @@ function savePatina(patina: HomeCabinetPatina) {
         visits: patina.visits,
         cluster: patina.cluster,
         routes: patina.routes,
+        // capped, oldest first out: an emptied case is a remembered state
+        embers: patina.embers.slice(-EMBER_CAP).map((e) => ({
+          x: +e.x.toFixed(3),
+          y: +e.y.toFixed(3),
+          weight: +e.weight.toFixed(3),
+          current: e.current,
+        })),
       }),
     );
   } catch { /* noop */ }

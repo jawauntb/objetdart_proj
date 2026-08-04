@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useField } from "@/store/field";
 import { CONCERNS, PRESET_KEYS, PRESETS } from "@/data/content";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
 import { THRESHOLDS } from "@/lib/gesture/core";
+import { onVessel } from "@/lib/vessel";
 import { buildReading } from "@/lib/reading";
 import type { ConcernKey } from "@/lib/types";
 
@@ -35,30 +37,42 @@ const RADIAL_ORDER: ConcernKey[] = [
   "friendship",  // 7  ◤ upper-left
 ];
 
+// The glimmer clock, the same numbers <RoomShell> keeps for every room it
+// wraps: hint after ~20s of stillness, never more often than every 6s, and
+// let the tug run about a breath and a half before it settles. These are not
+// gesture thresholds — those live in src/lib/gesture/core.ts alone.
+const GLIMMER_IDLE_MS = 20000;
+const GLIMMER_REPEAT_MS = 6000;
+const GLIMMER_SPAN_MS = 1600;
+
 // SVG geometry
 const R_MAX = 220;
 const VIEW = 640;
 const CX = VIEW / 2;
 const CY = VIEW / 2;
 
-function axisAngle(i: number) {
+// `rose` is the lens: twist (2 fingers) turns the whole compass, and every
+// geometry function below takes the same offset — the render path and the
+// hit-test path are literally one map, so what a hand sees is always what it
+// can grab however far the rose has been turned.
+function axisAngle(i: number, rose = 0) {
   // start at top, go clockwise
-  return -Math.PI / 2 + (i * Math.PI * 2) / 8;
+  return -Math.PI / 2 + (i * Math.PI * 2) / 8 + rose;
 }
 
-function axisVec(i: number) {
-  const a = axisAngle(i);
+function axisVec(i: number, rose = 0) {
+  const a = axisAngle(i, rose);
   return { x: Math.cos(a), y: Math.sin(a) };
 }
 
-function pointAt(i: number, value: number) {
-  const v = axisVec(i);
+function pointAt(i: number, value: number, rose = 0) {
+  const v = axisVec(i, rose);
   const r = (value / 100) * R_MAX;
   return { x: CX + v.x * r, y: CY + v.y * r };
 }
 
-function labelAt(i: number, pad = 32) {
-  const v = axisVec(i);
+function labelAt(i: number, pad = 32, rose = 0) {
+  const v = axisVec(i, rose);
   return {
     x: CX + v.x * (R_MAX + pad),
     y: CY + v.y * (R_MAX + pad),
@@ -72,6 +86,7 @@ function labelAt(i: number, pad = 32) {
 }
 
 export default function ConcernField() {
+  const router = useRouter();
   const concerns = useField((s) => s.concerns);
   const preset = useField((s) => s.preset);
   const setConcern = useField((s) => s.setConcern);
@@ -98,6 +113,34 @@ export default function ConcernField() {
   // ceremony hold at the center: 0..1 progress toward the keep
   const [ceremony, setCeremony] = useState(0);
   const [keptFlash, setKeptFlash] = useState(0);
+  // the law and vessel layers: three-finger tap (tutti), hold (time
+  // dilation while held) and the vessel (tilt/shake/knock/flip)
+  const [tutti, setTutti] = useState(0);
+  const [dilation, setDilation] = useState(0);
+  const [agitated, setAgitated] = useState(false);
+  const [night, setNight] = useState(false);
+  // the lens: how far the rose has been turned, in radians. Continuous with
+  // the twist, never stepped — a quarter turn is a quarter turn.
+  const [rose, setRose] = useState(0);
+  const roseRef = useRef(0);
+  // the dwell's charge, so a resting finger is visible from the tier it crosses
+  const [charging, setCharging] = useState<{ k: ConcernKey; grip: number } | null>(null);
+  // The glimmer (docs/gesture-grammar.md §6.3). The instruction that used to
+  // sit above this compass is gone, and a room does not get to be silent about
+  // its own material instead — so after ~20s of stillness one bead tugs
+  // outward along its axis and settles back, sounding its own concern as it
+  // goes. Physical, never text; it moves nothing that is stored, so the shape
+  // the visitor left is exactly the shape they come back to.
+  const [glimmer, setGlimmer] = useState<{ k: ConcernKey; key: number } | null>(null);
+  const glimmerOnRef = useRef(false);
+  glimmerOnRef.current = glimmer != null;
+  const lastContactRef = useRef(0);
+  const pulseVoiceRef = useRef<(k: ConcernKey, ms?: number) => void>(() => {});
+  /** any hand on the rose resets the idle clock and puts the glimmer away */
+  const touched = useCallback(() => {
+    lastContactRef.current = performance.now();
+    if (glimmerOnRef.current) setGlimmer(null);
+  }, []);
 
   // map a client-space pointer to a value on a given axis
   const valueFromPointer = (k: ConcernKey, clientX: number, clientY: number) => {
@@ -110,7 +153,7 @@ export default function ConcernField() {
     if (!ctm) return null;
     const local = pt.matrixTransform(ctm.inverse());
     const i = RADIAL_ORDER.indexOf(k);
-    const v = axisVec(i);
+    const v = axisVec(i, roseRef.current);
     const dx = local.x - CX;
     const dy = local.y - CY;
     const t = (dx * v.x + dy * v.y) / R_MAX;
@@ -210,7 +253,7 @@ export default function ConcernField() {
     const nearestVertex = (x: number, y: number): { k: ConcernKey; d: number } | null => {
       let best: { k: ConcernKey; d: number } | null = null;
       RADIAL_ORDER.forEach((k, i) => {
-        const p = pointAt(i, concernsRef.current[k]);
+        const p = pointAt(i, concernsRef.current[k], roseRef.current);
         const d = Math.hypot(p.x - x, p.y - y);
         if (!best || d < best.d) best = { k, d };
       });
@@ -234,14 +277,49 @@ export default function ConcernField() {
         pulseTimers.add(t);
       } catch { /* noop */ }
     };
+    // the glimmer clock below sounds the same voice the hand would hear, so
+    // the hint and the answer are one instrument rather than two
+    pulseVoiceRef.current = pulseVoice;
 
     // ceremony hold bookkeeping: only a hold born near the polygon's
     // center gathers toward the keep
     const center = { active: false, fired: false };
 
+    // The lens, the season and the weather, which an earlier pass left
+    // unbound on the reasoning that rotating the view would desync what a
+    // hand sees from what it can grab. It would have — but only because the
+    // rotation was not threaded through the geometry. `axisAngle(i, rose)`
+    // now feeds the render path AND `valueFromPointer` / `nearestVertex`
+    // both, so the rose can turn freely and the grab still lands on the
+    // bead under the finger. Only pan2 stays unbound, and it stays unbound
+    // for the reason every yielded-frame room has: there is no camera here
+    // to move.
+    let tuttiTimer: ReturnType<typeof setTimeout> | null = null;
+    let seasonAcc = 0;
+    let chargeTarget: { k: ConcernKey; from: number } | null = null;
     const detach = attachGestures(svg as unknown as HTMLElement, {
       tap: (e) => {
-        if (e.fingers !== 1) return; // the compass absorbs frame/law taps
+        touched();
+        if (e.fingers === 2) {
+          // step back: the compass has no camera of its own, so the frame
+          // retreats the only way it can — the rose returns to true north
+          // and the page steps back to the top of the room.
+          setRose(0);
+          roseRef.current = 0;
+          window.scrollTo({ top: 0, behavior: "smooth" });
+          try { haptics.tap(); } catch { /* noop */ }
+          return;
+        }
+        if (e.fingers === 3) {
+          // tutti — every vertex answers together, once
+          RADIAL_ORDER.forEach((k, i) => pulseVoice(k, 90 + i * 6));
+          setTutti(Date.now());
+          if (tuttiTimer) clearTimeout(tuttiTimer);
+          tuttiTimer = setTimeout(() => setTutti(0), 700);
+          try { haptics.ripple(0.45); } catch { /* noop */ }
+          recordTape("sigil", 0.45, "compass/tutti");
+          return;
+        }
         const local = toSvg(e.x, e.y);
         if (!local) return;
         const hit = nearestVertex(local.x, local.y);
@@ -253,7 +331,56 @@ export default function ConcernField() {
         try { haptics.ripple(0.2 + e.intensity * 0.4); } catch { /* noop */ }
         recordTape("ripple", 0.3 + e.intensity * 0.4, hit.k);
       },
+      twist: (e) => {
+        touched();
+        if (e.phase !== "move") return;
+        if (e.fingers === 3) {
+          // season — the room's slow cycle is the run of named presets, and
+          // three fingers walk it forward or back. Continuous in the angle:
+          // a quarter turn is one preset, and a tenth of a turn is a tenth
+          // of the way there, so nothing latches.
+          seasonAcc += e.angle;
+          const step = Math.PI / 2;
+          while (Math.abs(seasonAcc) >= step) {
+            const direction = seasonAcc > 0 ? 1 : -1;
+            seasonAcc -= direction * step;
+            const st = useField.getState();
+            const at = PRESET_KEYS.indexOf(st.preset ?? PRESET_KEYS[0]);
+            const from = at >= 0 ? at : 0;
+            const next = PRESET_KEYS[(from + direction + PRESET_KEYS.length) % PRESET_KEYS.length];
+            st.applyPreset(next);
+            try { getFieldAudio().bell(); } catch { /* noop */ }
+            try { haptics.detent(); } catch { /* noop */ }
+          }
+          return;
+        }
+        // lens — the rose turns under the hand; which concern sits at the
+        // top is the level of description this surface can change.
+        roseRef.current += e.angle;
+        setRose(roseRef.current);
+        try { haptics.lens(); } catch { /* noop */ }
+      },
+      drag: (e) => {
+        touched();
+        if (e.fingers !== 3) return;
+        // weather — a gust across the rose. Every concern downwind gains
+        // what the upwind ones lose, in proportion to how squarely it faces
+        // the push, so the shape leans without the total running away.
+        const mag = Math.hypot(e.dx, e.dy);
+        if (mag < 0.001) return;
+        const ux = e.dx / mag;
+        const uy = e.dy / mag;
+        const gust = Math.min(3.5, mag * 0.06);
+        const st = useField.getState();
+        RADIAL_ORDER.forEach((k, i) => {
+          const v = axisVec(i, roseRef.current);
+          const lean = v.x * ux + v.y * uy;
+          const now = concernsRef.current[k] ?? 50;
+          st.setConcern(k, Math.max(0, Math.min(100, Math.round(now + lean * gust))));
+        });
+      },
       rhythm: (e) => {
+        touched();
         // a steady tapped tempo: the dominant concern's voice falls into
         // the hand's pulse for ~8s
         if (e.stability <= 0.7) return;
@@ -278,10 +405,21 @@ export default function ConcernField() {
         recordTape("sigil", 0.5, `compass/entrain-${dominant}`);
       },
       hold: (e) => {
+        touched();
+        if (e.fingers === 3) {
+          // three-finger hold = time dilation while held: the compass's
+          // own answers (tap glow, rhythm beat) slow continuously with
+          // how long the hand has stayed.
+          if (e.phase === "release") { setDilation(0); return; }
+          setDilation(Math.min(1, e.elapsed / THRESHOLDS.ceremonyMs));
+          return;
+        }
         if (e.fingers !== 1 || draggingRef.current) return;
         if (e.phase === "release") {
           center.active = false;
+          chargeTarget = null;
           setCeremony(0);
+          setCharging(null);
           return;
         }
         if (e.phase === "enter") {
@@ -290,9 +428,33 @@ export default function ConcernField() {
             local && Math.hypot(local.x - CX, local.y - CY) < R_MAX * 0.38,
           );
           center.fired = false;
+          chargeTarget = null;
+          if (!center.active && local) {
+            // a hold out on the rose charges the axis it landed on
+            const hit = nearestVertex(local.x, local.y);
+            if (hit && hit.d <= 96) chargeTarget = { k: hit.k, from: concernsRef.current[hit.k] ?? 50 };
+          }
           if (!center.active) return;
         }
-        if (!center.active) return;
+        if (!center.active) {
+          // dwell (tier >= 2) — the charge. A resting finger grows its
+          // concern outward continuously, so 900ms and 2400ms leave
+          // measurably different weights, and it is visible from the tier
+          // it crosses rather than only when the hand comes off.
+          if (!chargeTarget) return;
+          if (e.tier >= 2) {
+            const grip = Math.max(0, 1 - Math.exp(-(e.elapsed - THRESHOLDS.dwellMs) / 1400));
+            const grown = chargeTarget.from + (100 - chargeTarget.from) * grip;
+            setConcern(chargeTarget.k, Math.max(0, Math.min(100, Math.round(grown))));
+            setCharging({ k: chargeTarget.k, grip });
+            if (e.tier >= 3) {
+              // holding past the ceremony tier out here is still the charge,
+              // deepening — the solemn act belongs to the center alone
+              try { haptics.ripple(0.2 + grip * 0.5); } catch { /* noop */ }
+            }
+          }
+          return;
+        }
         setCeremony(Math.min(1, e.elapsed / THRESHOLDS.ceremonyMs));
         // the ceremony: the reading is kept — the same act as the keep
         // button, spoken by the oldest surface's own hand
@@ -326,24 +488,94 @@ export default function ConcernField() {
       },
     }, { wheelZoom: false, manageStyle: false, noCapture: true });
 
+    // vessel: tilt leans the whole compass (sight only, matching the
+    // template's own tilt), shake agitates every vertex in a brief
+    // shiver, a knock rings it like tutti, and face-down is night — the
+    // compass dims until the phone turns back over.
+    let agitateTimer: ReturnType<typeof setTimeout> | null = null;
+    const detachVessel = onVessel({
+      tilt: ({ gamma }) => {
+        if (reduce) return;
+        // A drop-shadow offset, never a transform — the compass's
+        // geometry is also its own hit-test math (see the note above),
+        // so tilt only ever casts a lean, it never moves a vertex.
+        const lean = Math.max(-1, Math.min(1, gamma / 45));
+        svg.style.setProperty("--cf-tilt", (lean * 7).toFixed(1) + "px");
+      },
+      shake: () => {
+        if (reduce) return;
+        setAgitated(true);
+        try { haptics.chop(); } catch { /* noop */ }
+        try { getFieldAudio().chime(); } catch { /* noop */ }
+        if (agitateTimer) clearTimeout(agitateTimer);
+        agitateTimer = setTimeout(() => setAgitated(false), 460);
+      },
+      knock: () => {
+        RADIAL_ORDER.forEach((k, i) => pulseVoice(k, 90 + i * 6));
+        setTutti(Date.now());
+        try { getFieldAudio().bell(); } catch { /* noop */ }
+        try { haptics.tap(); } catch { /* noop */ }
+        if (tuttiTimer) clearTimeout(tuttiTimer);
+        tuttiTimer = setTimeout(() => setTutti(0), 700);
+      },
+      flip: ({ faceDown }) => setNight(faceDown),
+    });
+
     return () => {
       detach();
+      detachVessel();
       if (beatTimer) clearInterval(beatTimer);
+      if (tuttiTimer) clearTimeout(tuttiTimer);
+      if (agitateTimer) clearTimeout(agitateTimer);
       pulseTimers.forEach((t) => clearTimeout(t));
       try { getFieldAudio().releaseAllConcernTones(); } catch { /* noop */ }
     };
-  }, [recordTape]);
+  }, [recordTape, setConcern, touched]);
+
+  // ── the glimmer clock ──────────────────────────────────────────────
+  // Same shape and the same numbers as <RoomShell>'s: ~20s of stillness,
+  // and no more often than every 6s after that. The compass is not inside
+  // the shell (it owns its own engine mount, for the founding drag), so it
+  // keeps the clock itself rather than inventing a different one.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduce) return; // reduced motion: the room stays still and says nothing
+    lastContactRef.current = performance.now();
+    let last = 0;
+    let turn = 0;
+    let clear: ReturnType<typeof setTimeout> | null = null;
+    const tick = window.setInterval(() => {
+      const now = performance.now();
+      if (now - lastContactRef.current < GLIMMER_IDLE_MS) return;
+      if (now - last < GLIMMER_REPEAT_MS) return;
+      last = now;
+      // walk the rose rather than picking one bead forever, so a long idle
+      // shows the hand that all eight are the same kind of thing
+      const k = RADIAL_ORDER[turn % RADIAL_ORDER.length];
+      turn += 1;
+      setGlimmer({ k, key: now });
+      pulseVoiceRef.current(k, 240);
+      try { haptics.tap(); } catch { /* noop */ }
+      if (clear) clearTimeout(clear);
+      clear = setTimeout(() => setGlimmer(null), GLIMMER_SPAN_MS);
+    }, 1000);
+    return () => {
+      window.clearInterval(tick);
+      if (clear) clearTimeout(clear);
+    };
+  }, []);
 
   // build the polygon points string
   const polygonPoints = RADIAL_ORDER.map((k, i) => {
-    const p = pointAt(i, concerns[k]);
+    const p = pointAt(i, concerns[k], rose);
     return `${p.x},${p.y}`;
   }).join(" ");
 
   // preset ghost — preview the polygon shape of a hovered preset
   const ghostPoints = hoverPreset && PRESETS[hoverPreset]
     ? RADIAL_ORDER.map((k, i) => {
-        const p = pointAt(i, PRESETS[hoverPreset][k]);
+        const p = pointAt(i, PRESETS[hoverPreset][k], rose);
         return `${p.x},${p.y}`;
       }).join(" ")
     : null;
@@ -351,14 +583,14 @@ export default function ConcernField() {
   return (
     <section id="concern-field" className="rule" data-touch-surface="true" style={{ scrollMarginTop: 72 }}>
       <div className="wrap">
-        <div className="t-eyebrow">concern field · drag the points</div>
+        {/* The room says what it is and nothing about how to work it: it was a
+            section of a scrolling page once, where a line of instruction was
+            fair, and it is a room now, where it is not (AGENTS.md, "no
+            instructions, ever"). Every move it answers lives in the guide. */}
+        <div className="t-eyebrow">concern field</div>
         <h2 className="t-h2 italic" style={{ marginTop: 12, marginBottom: 12 }}>
           weights maintained against time
         </h2>
-        <p className="t-meta italic" style={{ color: "var(--ink-2)", maxWidth: "56ch", marginTop: 0 }}>
-          eight concerns, eight axes. each vertex of the polygon is your weight
-          on that axis. drag it inward or outward. the shape is your night.
-        </p>
 
         <div
           className="concern-field__stage"
@@ -375,6 +607,12 @@ export default function ConcernField() {
               viewBox={`0 0 ${VIEW} ${VIEW}`}
               role="group"
               aria-label="concern compass"
+              className={
+                "concern-field__svg"
+                + (tutti ? " is-tutti" : "")
+                + (agitated ? " is-agitated" : "")
+                + (night ? " is-night" : "")
+              }
               style={{
                 display: "block",
                 width: "100%",
@@ -385,6 +623,7 @@ export default function ConcernField() {
                 // the vertex pointerdown captures the drag for value-setting.
                 touchAction: "pan-y",
                 userSelect: "none",
+                ["--cf-dilation" as string]: dilation,
               }}
             >
               {/* concentric rings */}
@@ -412,7 +651,7 @@ export default function ConcernField() {
 
               {/* axes */}
               {RADIAL_ORDER.map((k, i) => {
-                const end = pointAt(i, 100);
+                const end = pointAt(i, 100, rose);
                 const active = dragging === k || hovering === k;
                 return (
                   <line
@@ -460,7 +699,7 @@ export default function ConcernField() {
               {/* labels + readouts */}
               {RADIAL_ORDER.map((k, i) => {
                 const meta = CONCERNS.find((c) => c.id === k)!;
-                const l = labelAt(i, 36);
+                const l = labelAt(i, 36, rose);
                 const value = concerns[k];
                 const active = dragging === k || hovering === k;
                 return (
@@ -500,9 +739,12 @@ export default function ConcernField() {
 
               {/* vertices (last so they sit on top) */}
               {RADIAL_ORDER.map((k, i) => {
-                const p = pointAt(i, concerns[k]);
+                const p = pointAt(i, concerns[k], rose);
                 const active = dragging === k;
                 const hover = hovering === k;
+                // the glimmer's direction: straight out along this concern's
+                // own axis, so the tug reads as the pull a hand would give it
+                const gv = axisVec(i, rose);
                 return (
                   <g key={`v-${k}`}>
                     {(active || hover) && (
@@ -526,6 +768,11 @@ export default function ConcernField() {
                       onPointerDown={(e) => {
                         e.preventDefault();
                         (e.target as Element).setPointerCapture?.(e.pointerId);
+                        touched();
+                        // the grab lands in three senses in the one frame: the
+                        // bead swells, the concern's tone comes up under the
+                        // finger (the effect above), and the case answers
+                        try { haptics.tap(); } catch { /* noop */ }
                         setDragging(k);
                       }}
                       onPointerEnter={() => setHovering(k)}
@@ -534,16 +781,29 @@ export default function ConcernField() {
                       <title>{`${k}: ${Math.round(concerns[k])}`}</title>
                     </circle>
                     {/* Visible bead — pointer-events disabled so the larger
-                        invisible target above receives all input. */}
-                    <circle
-                      cx={p.x}
-                      cy={p.y}
-                      r={active ? 7 : hover ? 6 : 5}
-                      fill="var(--candle)"
-                      stroke="var(--paper)"
-                      strokeWidth={1.5}
-                      style={{ pointerEvents: "none", transition: active ? "none" : "r var(--t)" }}
-                    />
+                        invisible target above receives all input. The glimmer
+                        rides this group, so only the drawn bead tugs: the
+                        touch target above it never moves, and neither does the
+                        stored weight. */}
+                    <g
+                      className={glimmer?.k === k ? "cf-glimmer" : undefined}
+                      key={glimmer?.k === k ? `g-${glimmer.key}` : undefined}
+                      style={{
+                        pointerEvents: "none",
+                        ["--cf-gx" as string]: gv.x.toFixed(3),
+                        ["--cf-gy" as string]: gv.y.toFixed(3),
+                      }}
+                    >
+                      <circle
+                        cx={p.x}
+                        cy={p.y}
+                        r={active ? 7 : hover ? 6 : 5}
+                        fill="var(--candle)"
+                        stroke="var(--paper)"
+                        strokeWidth={1.5}
+                        style={{ pointerEvents: "none", transition: active ? "none" : "r var(--t)" }}
+                      />
+                    </g>
                   </g>
                 );
               })}
@@ -552,7 +812,7 @@ export default function ConcernField() {
               <g pointerEvents="none">
                 {/* tap glow: the vertex-pull halo, bloomed by tap intensity */}
                 {tapGlow && (() => {
-                  const p = pointAt(RADIAL_ORDER.indexOf(tapGlow.k), concerns[tapGlow.k]);
+                  const p = pointAt(RADIAL_ORDER.indexOf(tapGlow.k), concerns[tapGlow.k], rose);
                   return (
                     <circle
                       key={`glow-${tapGlow.key}`}
@@ -566,7 +826,7 @@ export default function ConcernField() {
                 })()}
                 {/* rhythm beat: the dominant concern's vertex answers the tempo */}
                 {beat && (() => {
-                  const p = pointAt(RADIAL_ORDER.indexOf(beat.k), concerns[beat.k]);
+                  const p = pointAt(RADIAL_ORDER.indexOf(beat.k), concerns[beat.k], rose);
                   return (
                     <circle
                       key={`beat-${beat.key}`}
@@ -577,6 +837,23 @@ export default function ConcernField() {
                       fill="none"
                       stroke="var(--candle)"
                       strokeWidth={1.2}
+                    />
+                  );
+                })()}
+                {/* dwell: the charge gathering under a resting finger, out on
+                    the rose — visible from the tier it crosses, and it keeps
+                    thickening for as long as the hand stays */}
+                {charging && (() => {
+                  const p = pointAt(RADIAL_ORDER.indexOf(charging.k), concerns[charging.k], rose);
+                  return (
+                    <circle
+                      cx={p.x}
+                      cy={p.y}
+                      r={9 + charging.grip * 26}
+                      fill={`rgba(200,115,42,${0.06 + charging.grip * 0.16})`}
+                      stroke="var(--candle)"
+                      strokeWidth={0.8 + charging.grip * 2.2}
+                      strokeOpacity={0.3 + charging.grip * 0.5}
                     />
                   );
                 })()}
@@ -622,9 +899,10 @@ export default function ConcernField() {
               }}
             >
               {(() => {
-                const lit = dragging ?? hovering;
-                if (!lit) return "drag any point — opposites face across the compass";
-                const c = CONCERNS.find((x) => x.id === lit);
+                // lit by whatever the hand is on; silent otherwise. The
+                // reserved line keeps the layout from jumping.
+                const lit = dragging ?? hovering ?? charging?.k ?? null;
+                const c = lit ? CONCERNS.find((x) => x.id === lit) : null;
                 return c ? c.inscription : "";
               })()}
             </div>
@@ -632,7 +910,7 @@ export default function ConcernField() {
         </div>
 
         {/* presets */}
-        <div className="t-eyebrow" style={{ marginTop: 56 }}>presets · snap the polygon</div>
+        <div className="t-eyebrow" style={{ marginTop: 56 }}>presets</div>
         <div className="concern-field__presets" style={{ marginTop: 12, display: "flex", flexWrap: "wrap", gap: 8 }}>
           {PRESET_KEYS.map((name) => {
             const on = preset === name;
@@ -656,7 +934,18 @@ export default function ConcernField() {
         <div className="concern-field__next-row" style={{ marginTop: 56, display: "flex", justifyContent: "flex-end" }}>
           <button
             className="concern-field__next"
-            onClick={() => document.getElementById("reading")?.scrollIntoView({ behavior: "smooth" })}
+            onClick={() => {
+              // the polygon read back to you — the same reading the ceremony
+              // keeps, at its own permalink
+              const st = useField.getState();
+              const reading = buildReading({
+                concerns: st.concerns,
+                region: st.region,
+                carriedObject: st.carriedObject,
+              });
+              try { getFieldAudio().bell(); } catch { /* noop */ }
+              router.push(`/reading/${reading.hash}`);
+            }}
             style={{
               background: "none",
               border: "1px solid var(--rule)",
@@ -683,8 +972,20 @@ export default function ConcernField() {
         </div>
       </div>
       <style>{`
+        /* the glimmer: one bead tugs out along its own axis and settles back,
+           overshooting a little on the way home the way a held thing does */
+        .cf-glimmer { animation: cf-tug ${GLIMMER_SPAN_MS}ms cubic-bezier(0.33, 0, 0.2, 1); }
+        @keyframes cf-tug {
+          0%   { transform: translate(0, 0); }
+          38%  { transform: translate(calc(var(--cf-gx, 0) * 13px), calc(var(--cf-gy, 0) * 13px)); }
+          72%  { transform: translate(calc(var(--cf-gx, 0) * -3px), calc(var(--cf-gy, 0) * -3px)); }
+          100% { transform: translate(0, 0); }
+        }
         .cf-tap-glow { animation: cf-glow-fade 700ms ease-out forwards; }
-        .cf-beat { animation: cf-beat-out 460ms ease-out forwards; transform-origin: center; transform-box: fill-box; }
+        .cf-beat {
+          animation: cf-beat-out calc(460ms + var(--cf-dilation, 0) * 1400ms) ease-out forwards;
+          transform-origin: center; transform-box: fill-box;
+        }
         .cf-kept-bloom { animation: cf-kept-open 900ms ease-out forwards; }
         @keyframes cf-glow-fade {
           from { opacity: 1; }
@@ -698,9 +999,39 @@ export default function ConcernField() {
           from { opacity: 0.85; r: 24; }
           to { opacity: 0; r: ${R_MAX}; }
         }
+        /* vessel: a lean cast as a shadow, never a moved vertex */
+        .concern-field__svg {
+          filter: drop-shadow(var(--cf-tilt, 0px) 6px 14px rgba(21,23,26,0.22));
+          transition: filter 260ms ease-out;
+        }
+        /* three-finger tap / a knock on the case — tutti, one shared pulse */
+        .concern-field__svg.is-tutti polygon:first-of-type {
+          animation: cf-tutti 640ms ease-out;
+        }
+        @keyframes cf-tutti {
+          0% { filter: none; }
+          40% { filter: drop-shadow(0 0 18px rgba(200,115,42,0.6)); }
+          100% { filter: none; }
+        }
+        /* shake — a brief shiver through the whole compass */
+        .concern-field__svg.is-agitated {
+          animation: cf-shudder 420ms ease-in-out;
+        }
+        @keyframes cf-shudder {
+          0%, 100% { transform: translate(0, 0); }
+          25% { transform: translate(3px, -2px); }
+          50% { transform: translate(-3px, 2px); }
+          75% { transform: translate(2px, 2px); }
+        }
+        /* flip face-down — night, until the phone turns back over */
+        .concern-field__svg.is-night { opacity: 0.4; transition: opacity 900ms ease; }
         @media (prefers-reduced-motion: reduce) {
+          .cf-glimmer { animation: none; }
           .cf-tap-glow { animation-duration: 1ms; }
           .cf-beat, .cf-kept-bloom { animation: none; opacity: 0; }
+          .concern-field__svg { filter: none; transition: none; }
+          .concern-field__svg.is-tutti polygon:first-of-type { animation: none; }
+          .concern-field__svg.is-agitated { animation: none; }
         }
         @media (max-width: 720px) {
           .concern-field__stage {

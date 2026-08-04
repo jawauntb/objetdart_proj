@@ -52,7 +52,7 @@
  * place, and a law keeps no belongings.
  */
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
@@ -77,6 +77,16 @@ import {
   properTimeRatio,
   simultaneityGapMs,
 } from "@/lib/relativity";
+import {
+  resolveDpr,
+  onGalleryPause,
+  onVisibility,
+  isEmbeddedFrame,
+  createFrameGovernor,
+  detailForTier,
+} from "@/lib/room-runtime";
+import { createGravityFieldRenderer, type GravityFieldRenderer } from "@/components/SpacetimeShader";
+import LetGo from "@/components/LetGo";
 
 const MAX_MASSES = 4;
 const RAY_COUNT = 5;
@@ -225,16 +235,67 @@ function hash01(n: number) {
   return x - Math.floor(x);
 }
 
+/** See ManifoldFold.tsx for the rationale — a radial falloff's shape is
+ *  scale-invariant, so one cached sprite replaces every per-mass
+ *  `createRadialGradient` call that only ever varied center/radius/alpha. */
+function makeRadialSprite(stops: Array<[number, string]>, size = 128): HTMLCanvasElement {
+  const c = document.createElement("canvas");
+  c.width = size;
+  c.height = size;
+  const sctx = c.getContext("2d");
+  if (sctx) {
+    const g = sctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+    for (const [offset, color] of stops) g.addColorStop(offset, color);
+    sctx.fillStyle = g;
+    sctx.fillRect(0, 0, size, size);
+  }
+  return c;
+}
+
 export default function RelativityRoom() {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const fieldCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const letGoRef = useRef<() => void>(() => {});
+  // whether any mass currently wells the room — gates the quiet clear
+  const [standing, setStanding] = useState(false);
 
   useEffect(() => {
     const wrap = wrapRef.current;
     const canvas = canvasRef.current;
+    const fieldCanvas = fieldCanvasRef.current;
     if (!wrap || !canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+
+    // the shared curvature field (SpacetimeShader.tsx) — the same additive
+    // lensing-ring pass ManifoldFold drives, unifying the two rooms' well
+    // shading in one fragment shader instead of two duplicated CPU loops.
+    const field: GravityFieldRenderer | null = fieldCanvas ? createGravityFieldRenderer(fieldCanvas, "glow") : null;
+    const fieldMasses: Array<{ x: number; y: number; r: number; strength: number }> = Array.from(
+      { length: MAX_MASSES },
+      () => ({ x: 0, y: 0, r: 0, strength: 0 }),
+    );
+
+    // sprites for the per-mass falloffs that used to allocate a fresh
+    // createRadialGradient every mass, every frame — see ManifoldFold for
+    // the identical technique and rationale (a radial falloff's shape is
+    // scale-invariant; one sprite blitted with drawImage stands in for all).
+    const shadowSprite = makeRadialSprite([
+      [0, "rgba(0,0,0,1)"],
+      [0.0625, "rgba(0,0,0,1)"],
+      [1, "rgba(0,0,0,0)"],
+    ]);
+    const flashSprite = makeRadialSprite([
+      [0, "rgba(235,242,255,0.5)"],
+      [0.5, "rgba(180,200,245,0.18)"],
+      [1, "rgba(0,0,0,0)"],
+    ]);
+
+    // ————— performance contract (room-runtime) —————
+    const gov = createFrameGovernor();
+    let sleeping = false;
+    let galleryPaused = false;
 
     // ————— state —————
     let masses: Mass[] = [];
@@ -252,6 +313,18 @@ export default function RelativityRoom() {
     let rectTop = 0;
     let c = 600; // px/s — the one speed; rays, pulses, rings all ride it
     let rayG = 0;
+    // the law's own weather (three-finger twist, grammar §5 "season"): 0 is
+    // the room's ordinary attraction, 1 turns it fully inside out — light
+    // and matter pushed instead of pulled. Continuous, never a switch.
+    let season = 0;
+    let seasonTarget = 0;
+    let lawG = 0; // rayG signed by the season, recomputed once per frame
+    // two-finger drag pans the frame (grammar §5) — px, smoothed
+    let panX = 0;
+    let panY = 0;
+    let panTX = 0;
+    let panTY = 0;
+    const PAN_LIMIT = 130;
     let clockGap = 150;
     let clockHalfW = 36;
     let raf = 0;
@@ -313,6 +386,9 @@ export default function RelativityRoom() {
     let aetherY = 0;
     let lastTiltSoundAt = 0;
     let lastTuttiAt = 0;
+    let lastKnockAt = -1e9;
+    let night = 0;
+    let nightTarget = 0;
     let lastInteractionAt = performance.now();
     let focused = false;
     let cursorNx = 0.5;
@@ -384,7 +460,7 @@ export default function RelativityRoom() {
 
     const resize = () => {
       const r = wrap.getBoundingClientRect();
-      const ratio = Math.min(window.devicePixelRatio || 1, 1.5);
+      const ratio = resolveDpr(gov.tier(), { embedded: isEmbeddedFrame(), reducedMotion: reduce, maxDpr: 1.5 });
       width = Math.max(320, Math.floor(r.width));
       height = Math.max(480, Math.floor(r.height));
       rectLeft = r.left;
@@ -394,6 +470,7 @@ export default function RelativityRoom() {
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
       ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+      field?.resize(width, height, ratio);
       // one speed of light for this viewport — rays, pulses, rings, comets' ceiling
       c = 0.85 * Math.max(width, height);
       rayG = 50 * c * c; // manifold strengths: whips and slingshots, not drift
@@ -603,6 +680,7 @@ export default function RelativityRoom() {
       try { haptics.ripple(0.4); } catch { /* noop */ }
       staticRaysStale = true;
       useField.getState().recordTape("object", 0.6, "relativity/mass");
+      syncStanding();
       return m;
     };
 
@@ -625,7 +703,32 @@ export default function RelativityRoom() {
       try { haptics.roll(); } catch { /* noop */ }
       staticRaysStale = true;
       useField.getState().recordTape("sigil", 0.85, "relativity/collapse");
+      syncStanding();
     };
+
+    const syncStanding = () => setStanding(masses.some((m) => !m.evapAt));
+
+    // the whole-room parting (LetGo, §8c): every mass evaporates oldest-
+    // first along the existing collapse path — an exhale, never a blink.
+    // This room keeps no belongings (no persistence), so there is nothing
+    // to write empty; letting go simply clears what stands right now.
+    const letGo = () => {
+      const alive = masses.filter((m) => !m.evapAt).sort((a, b) => a.plantedAt - b.plantedAt);
+      if (alive.length === 0) return;
+      const now0 = performance.now();
+      alive.forEach((m, i) => {
+        m.charge = 0;
+        m.evapAt = reduce ? now0 : now0 + i * 150;
+        firePulse(m.nx * width, m.ny * height, (0.5 + m.m * 0.3) * (reduce ? 0.4 : 1));
+      });
+      staticRaysStale = true;
+      try { audio().thud(); } catch { /* noop */ }
+      note(26, 600);
+      try { haptics.roll(); } catch { /* noop */ }
+      useField.getState().recordTape("object", 0.3, "relativity/letgo");
+      setStanding(false);
+    };
+    letGoRef.current = letGo;
 
     const throwComet = (x: number, y: number, angle: number, speedPxMs: number) => {
       const effort = speedPxMs * 1000; // px/s of intent
@@ -731,12 +834,19 @@ export default function RelativityRoom() {
       tap: (e) => {
         lastInteractionAt = performance.now();
         if (e.fingers === 2) {
-          // step back: a raised lens lowers — the frame retreats one step
+          // step back: a raised lens lowers first, then a panned frame comes home
           if (lensSnapped === 1) {
             lensSnapped = 0;
             lensTarget = 0;
             try { haptics.lens(); } catch { /* noop */ }
             note(48, 160);
+            return;
+          }
+          if (Math.abs(panTX) > 1 || Math.abs(panTY) > 1) {
+            panTX = 0;
+            panTY = 0;
+            try { haptics.tap(); } catch { /* noop */ }
+            note(41, 220);
           }
           return;
         }
@@ -923,7 +1033,19 @@ export default function RelativityRoom() {
         }
       },
       twist: (e) => {
-        if (e.fingers === 3) return; // three fingers turn the season, not the lens
+        if (e.fingers === 3) {
+          // three fingers turn the season: the law's own weather, attraction
+          // sliding continuously toward its own inversion and back
+          lastInteractionAt = performance.now();
+          if (e.phase === "move") {
+            seasonTarget = clamp01(seasonTarget + e.angle / 2.6);
+            try { audio().holdConcernTone("season", 20 + seasonTarget * 60); } catch { /* noop */ }
+          } else if (e.phase === "end") {
+            try { audio().releaseConcernTone("season"); } catch { /* noop */ }
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+          return;
+        }
         lastInteractionAt = performance.now();
         // two fingers rotate the lens: the felt room ↔ its spacetime record
         if (e.phase === "move") {
@@ -938,6 +1060,14 @@ export default function RelativityRoom() {
           }
           lensTarget = snapped;
         }
+      },
+      pan2: (e) => {
+        lastInteractionAt = performance.now();
+        // two fingers pan the frame — the mesh and its masses slide; the
+        // clocks, car, lantern, and beacons stay put, exactly where the
+        // hand can still reach them
+        panTX = clamp(panTX + e.dx, -PAN_LIMIT, PAN_LIMIT);
+        panTY = clamp(panTY + e.dy, -PAN_LIMIT, PAN_LIMIT);
       },
     });
 
@@ -971,6 +1101,22 @@ export default function RelativityRoom() {
         }
         note(45, 180);
         try { (intensity > 0.7 ? haptics.storm : haptics.chop)(); } catch { /* noop */ }
+      },
+      knock: ({ intensity }) => {
+        const now = performance.now();
+        if (now - lastKnockAt < 420) return;
+        lastKnockAt = now;
+        lastInteractionAt = now;
+        // a rap on the case: one pulse from dead center, sharper than a tap
+        firePulse(width * 0.5, height * 0.5, 0.85 + intensity * 0.6);
+        note(41 + Math.round(intensity * 6), 240);
+        try { haptics.roll(); } catch { /* noop */ }
+      },
+      flip: ({ faceDown }) => {
+        nightTarget = faceDown ? 1 : 0;
+        lastInteractionAt = performance.now();
+        note(faceDown ? 22 : 45, 400);
+        try { haptics.roll(); } catch { /* noop */ }
       },
     });
 
@@ -1130,7 +1276,7 @@ export default function RelativityRoom() {
         let r: Ray = { x: -10, y: y0, vx: c, vy: 0 };
         const path = [{ x: r.x, y: r.y }];
         for (let s = 0; s < 420; s++) {
-          r = geodesicStep(pts, r, dt, c, rayG, SOFTENING);
+          r = geodesicStep(pts, r, dt, c, lawG, SOFTENING);
           path.push({ x: r.x, y: r.y });
           if (r.x < -40 || r.x > width + 40 || r.y < -40 || r.y > height + 40) break;
         }
@@ -1378,14 +1524,22 @@ export default function RelativityRoom() {
     // ————— the loop —————
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
+      const tier = gov.beginFrame(now);
+      if (sleeping || galleryPaused) return; // no draw while hidden or embedded-paused
       if (!reduce && now - lastFrame < 30) return;
       lastFrame = now;
       const delta = Math.min(64, now - last);
       last = now;
       const dt = delta / 1000;
+      const detail = detailForTier(tier);
 
       timeScale += (timeScaleTarget - timeScale) * Math.min(1, dt * 5);
       rayScale += (rayScaleTarget - rayScale) * Math.min(1, dt * 5);
+      season += (seasonTarget - season) * Math.min(1, dt * 3);
+      lawG = rayG * (1 - 2 * season);
+      panX += (panTX - panX) * Math.min(1, dt * 8);
+      panY += (panTY - panY) * Math.min(1, dt * 8);
+      night += (nightTarget - night) * Math.min(1, dt * 2.4);
       if (!reduce) localT += dt * timeScale;
       lightT += dt * (reduce ? 1 : rayScale);
       windX += (windTargetX - windX) * Math.min(1, dt * 2.2);
@@ -1421,7 +1575,7 @@ export default function RelativityRoom() {
       const matterCap = MATTER_CAP * c;
       for (let i = comets.length - 1; i >= 0; i--) {
         const q = comets[i];
-        const a = accelAt(pts, q.x, q.y, rayG * 0.35, SOFTENING);
+        const a = accelAt(pts, q.x, q.y, lawG * 0.35, SOFTENING);
         q.vx += (a.ax + aetherX * c * 0.4) * dt * timeScale;
         q.vy += (a.ay + aetherY * c * 0.4) * dt * timeScale;
         const sp = Math.hypot(q.vx, q.vy);
@@ -1461,17 +1615,29 @@ export default function RelativityRoom() {
       halo.addColorStop(1, "rgba(0,0,0,0)");
       ctx.fillStyle = halo;
       ctx.fillRect(0, 0, width, height);
+      // the season's veil — the law leaning toward its own inversion
+      if (season > 0.02) {
+        ctx.fillStyle = `rgba(220, 120, 70, ${(season * 0.05).toFixed(3)})`;
+        ctx.fillRect(0, 0, width, height);
+      }
+
+      // two fingers pan the frame — mesh and masses are the room's "map"
+      // layer, so they're what visibly rides the pan (matching ManifoldFold)
+      ctx.save();
+      ctx.translate(panX, panY);
 
       // ————— the mesh: hairlines, welling only where mass gathers —————
+      // grid resolution scales with the frame governor's tier
+      const meshGap = MESH_GAP / Math.max(0.4, detail.samples);
       if (pts.length > 0 || pulses.length > 0) {
-        const cols = Math.ceil(width / MESH_GAP) + 1;
-        const rows = Math.ceil(height / MESH_GAP) + 1;
+        const cols = Math.ceil(width / meshGap) + 1;
+        const rows = Math.ceil(height / meshGap) + 1;
         const vx: number[] = new Array(cols * rows);
         const vy: number[] = new Array(cols * rows);
         for (let j = 0; j < rows; j++) {
           for (let i = 0; i < cols; i++) {
-            const x = i * MESH_GAP;
-            const y = j * MESH_GAP;
+            const x = i * meshGap;
+            const y = j * meshGap;
             const d = dispAt(x, y, pts);
             vx[j * cols + i] = x + d.dx;
             vy[j * cols + i] = y + d.dy;
@@ -1498,6 +1664,9 @@ export default function RelativityRoom() {
       }
 
       // ————— masses: dark presences with a cold rim —————
+      // the two per-mass falloffs are cached sprites blitted with drawImage
+      // (never a fresh createRadialGradient per mass, per frame)
+      let fieldMassCount = 0;
       for (const m of masses) {
         const mx = m.nx * width;
         const my = m.ny * height;
@@ -1509,11 +1678,12 @@ export default function RelativityRoom() {
           R *= 1 - evapP * 0.85;
         }
         const depth = wellDepth(pts, mx, my, SOFTENING);
-        const shade = ctx.createRadialGradient(mx, my, R * 0.2, mx, my, R * 3.2);
-        shade.addColorStop(0, `rgba(0, 0, 0, ${0.5 * (1 - evapP)})`);
-        shade.addColorStop(1, "rgba(0,0,0,0)");
-        ctx.fillStyle = shade;
-        ctx.fillRect(mx - R * 3.2, my - R * 3.2, R * 6.4, R * 6.4);
+        const shadeAlpha = 0.5 * (1 - evapP);
+        if (shadeAlpha > 0.01) {
+          ctx.globalAlpha = shadeAlpha;
+          ctx.drawImage(shadowSprite, mx - R * 3.2, my - R * 3.2, R * 6.4, R * 6.4);
+          ctx.globalAlpha = 1;
+        }
         ctx.fillStyle = `rgba(2, 3, 6, ${(0.92 - depth * 0.1) * (1 - evapP)})`;
         ctx.beginPath();
         ctx.arc(mx, my, R, 0, Math.PI * 2);
@@ -1533,13 +1703,31 @@ export default function RelativityRoom() {
         if (m.evapAt) {
           const flare = Math.sin(evapP * Math.PI);
           const fr = R + evapP * 90;
-          const flash = ctx.createRadialGradient(mx, my, 0, mx, my, fr);
-          flash.addColorStop(0, `rgba(235, 242, 255, ${0.5 * flare})`);
-          flash.addColorStop(0.5, `rgba(180, 200, 245, ${0.18 * flare})`);
-          flash.addColorStop(1, "rgba(0,0,0,0)");
-          ctx.fillStyle = flash;
-          ctx.fillRect(mx - fr, my - fr, fr * 2, fr * 2);
+          if (flare > 0.01) {
+            ctx.globalAlpha = flare;
+            ctx.drawImage(flashSprite, mx - fr, my - fr, fr * 2, fr * 2);
+            ctx.globalAlpha = 1;
+          }
         }
+        if (fieldMassCount < fieldMasses.length) {
+          const fm = fieldMasses[fieldMassCount++];
+          fm.x = mx + panX; fm.y = my + panY; fm.r = R;
+          fm.strength = clamp01(m.m / 2.0) * (1 - evapP);
+        }
+      }
+      for (let k = fieldMassCount; k < fieldMasses.length; k++) fieldMasses[k].strength = 0;
+      ctx.restore();
+
+      // ————— the curvature field: additive lensing ring, WebGL —————
+      // shared verbatim with ManifoldFold (SPEC fix 2) — one shader pass
+      // sums every live mass's ring instead of a per-mass gradient
+      if (field?.ok) {
+        field.draw(now, fieldMasses, {
+          core: [0.7, 0.62, 0.95],
+          ring: [0.86, 0.78, 1.0],
+          alpha: (1 - lens) * 0.75,
+          reduced: reduce,
+        });
       }
 
       // ————— pulses: your ring, at exactly c, first across any line —————
@@ -1585,7 +1773,7 @@ export default function RelativityRoom() {
         const stepDt = (dt * rayScale) / 4;
         for (const r of rays) {
           for (let s = 0; s < 4; s++) {
-            const st = geodesicStep(pts, r, stepDt, c, rayG, SOFTENING);
+            const st = geodesicStep(pts, r, stepDt, c, lawG, SOFTENING);
             r.x = st.x; r.y = st.y; r.vx = st.vx; r.vy = st.vy;
             if (aetherX !== 0 || aetherY !== 0) {
               r.vx += aetherX * c * 0.5 * stepDt;
@@ -1621,7 +1809,7 @@ export default function RelativityRoom() {
             }
           }
           // doppler tint: blue falling in, red climbing out
-          const a = accelAt(pts, r.x, r.y, rayG, SOFTENING);
+          const a = accelAt(pts, r.x, r.y, lawG, SOFTENING);
           const am = Math.hypot(a.ax, a.ay);
           let w = 0;
           if (am > 1) {
@@ -2254,8 +2442,23 @@ export default function RelativityRoom() {
         ctx.arc(cx, cy, 2, 0, Math.PI * 2);
         ctx.fill();
       }
+
+      // flip face-down: the room sleeps and the light goes out of it
+      if (night > 0.004) {
+        ctx.fillStyle = `rgba(2, 2, 6, ${(night * 0.92).toFixed(3)})`;
+        ctx.fillRect(0, 0, width, height);
+      }
     };
     raf = requestAnimationFrame(draw);
+    // no draw while hidden or paused inside a gallery iframe
+    const offVis = onVisibility((hiddenNow) => {
+      sleeping = hiddenNow;
+      if (!hiddenNow && !galleryPaused && !raf) raf = requestAnimationFrame(draw);
+    });
+    const offGallery = onGalleryPause((pausedNow) => {
+      galleryPaused = pausedNow;
+      if (!pausedNow && !sleeping && !raf) raf = requestAnimationFrame(draw);
+    });
 
     return () => {
       cancelAnimationFrame(raf);
@@ -2267,7 +2470,11 @@ export default function RelativityRoom() {
       wrap.removeEventListener("focus", onFocus);
       wrap.removeEventListener("blur", onBlur);
       mq.removeEventListener?.("change", onMq);
+      offVis();
+      offGallery();
+      field?.dispose();
       try { getFieldAudio().releaseConcernTone("love"); } catch { /* noop */ }
+      try { getFieldAudio().releaseConcernTone("season"); } catch { /* noop */ }
     };
   }, []);
 
@@ -2281,7 +2488,10 @@ export default function RelativityRoom() {
         aria-label="relativity — light keeps its own covenant; tap and your ring runs at the one speed, flick matter and watch it lose the race, drag a clock and hear its tick slow, rest a finger and a mass gathers to slow the beacons near it; tap the gliding car and one flash strikes its rear first by the room's count, drag the car to set its pace and watch it fall short of its resting ghost, flick the haloed beacon and it journeys home younger, its rings fewer; arrows walk, enter pulses and, held, gathers, collapses, or retunes the car; escape lowers the lens"
       >
         <canvas ref={canvasRef} className="relativity-canvas" aria-hidden="true" />
+        <canvas ref={fieldCanvasRef} className="relativity-field-canvas" aria-hidden="true" />
       </div>
+
+      <LetGo label="let the field go" onLetGo={() => letGoRef.current()} visible={standing} />
 
       <style
         dangerouslySetInnerHTML={{
@@ -2335,6 +2545,16 @@ export default function RelativityRoom() {
           cursor: crosshair;
           touch-action: none;
           z-index: 0;
+        }
+
+        .relativity-field-canvas {
+          position: absolute;
+          inset: 0;
+          width: 100%;
+          height: 100%;
+          display: block;
+          pointer-events: none;
+          z-index: 1;
         }
       ` }}
       />

@@ -42,11 +42,13 @@ export type PeerCircle = {
 };
 
 /**
- * Deliberate exemptions from the scale axis. These still appear in
- * SITE_ROUTES / the dropdown, but after the quark→manifold walk:
- * meta views of the tree, spectral meta-instruments, and reading surfaces.
- * If a room is neither here nor on a band/peer circle, tests fail — that
- * failure means find its place, don't silence the test.
+ * Deliberate exemptions from the scale axis: meta views of the tree,
+ * spectral meta-instruments, and reading surfaces. Most are registered in
+ * SITE_ROUTES and simply sit after the quark→manifold walk in the dropdown;
+ * the last two are pages that exist on disk and are deliberately NOT
+ * registered at all. Either way this list is the one place an exemption is
+ * declared. If a page is neither here nor on a band/peer circle, tests fail
+ * — that failure means find its place, don't silence the test.
  */
 const CORE_SCALE_EXEMPT_KEYS = [
   "overlook",
@@ -61,6 +63,15 @@ const CORE_SCALE_EXEMPT_KEYS = [
   "kept",
   "colophon",
   "guide", // reading surfaces
+  // /compare and /reading/[hash] are pages on disk that are deliberately
+  // NOT in SITE_ROUTES: they are reading surfaces over a kept reading,
+  // reached only from /kept and from a shared permalink, and they would be
+  // noise in the gallery. Listing them here is the standing answer to "why
+  // does this page escape the axis"; scripts/test-routes.mjs pins the list
+  // against src/app so the next unregistered room fails loudly instead of
+  // slipping past the completeness check the way /compare did.
+  "compare",
+  "reading",
 ] as const;
 
 /** Core exemptions plus every manifest room that declared `place.kind === "exempt"`. */
@@ -92,9 +103,17 @@ const CORE_PEER_CIRCLES: PeerCircle[] = [
   {
     id: "hearth",
     band: "earth",
+    // The ground, its fire, and its map. The atlas keeps its own band (it is
+    // a chart of a region, metrically smaller than the globe) but it is not
+    // a size away from the earth — it is the same ground at a different
+    // level of description, which is a lateral door, not a pinch. Removing
+    // `earth.up = "atlas"` from the travel graph took the map off the axis's
+    // up-wall; this is where it lands instead. Circle anchors at earth
+    // (the highest band among its rooms), so the nav order is unchanged.
     rooms: [
       { key: "earth", href: "/earth", label: "the earth", band: "earth" },
       { key: "fire", href: "/fire", label: "fire", band: "earth" },
+      { key: "atlas", href: "/atlas/origin", label: "the atlas", band: "atlas" },
     ],
   },
   {

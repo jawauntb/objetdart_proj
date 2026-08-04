@@ -48,6 +48,14 @@ import {
 } from "@/lib/scale";
 import { deriveTree, layoutTree, type OverlookNode } from "@/lib/overlook-tree";
 import { ScaleTravelOverlay, type EdgeUI } from "@/components/ScaleTravel";
+import {
+  createFrameGovernor,
+  detailForTier,
+  onVisibility,
+  onGalleryPause,
+  resolveDpr,
+  isEmbeddedFrame,
+} from "@/lib/room-runtime";
 
 const SCALE_S_KEY = "objetdart:scale:s";
 const LEAF_MAX = 24;
@@ -176,9 +184,14 @@ function drawVignette(
   r: number,
   t: number,
   breath: number,
+  /** Governed detail (room-runtime): 1 = full richness, lower tiers stride
+   * through the heavier procedural arrays (spiral/flock/web) instead of
+   * re-walking every element every frame regardless of quality tier. */
+  richness = 1,
 ) {
   const g = GEOM.get(id);
   if (!g) return;
+  const stride3 = richness < 0.45 ? 6 : richness < 0.8 ? 3 : 0; // step in array units of 3
   switch (id) {
     case "quanta": {
       // the field floor: one photon crossing forever, one heavy ripple dying
@@ -214,7 +227,7 @@ function drawVignette(
     }
     case "quarks": {
       // seething virtual pairs: born together, gone together
-      for (let i = 0; i < g.pairs.length; i += 3) {
+      for (let i = 0; i < g.pairs.length; i += 3 + stride3) {
         const px = g.pairs[i] * r * 0.6;
         const py = g.pairs[i + 1] * r * 0.6;
         const ph = (t * (0.7 + g.pairs[i + 2] * 0.9) + g.pairs[i + 2] * 7) % 1;
@@ -242,7 +255,7 @@ function drawVignette(
       ctx.beginPath();
       ctx.arc(0, 0, R * 1.18, 0, Math.PI * 2);
       ctx.stroke();
-      for (let i = 0; i < g.pairs.length; i += 3) {
+      for (let i = 0; i < g.pairs.length; i += 3 + stride3) {
         const px = g.pairs[i] * R * 0.62;
         const py = g.pairs[i + 1] * R * 0.62;
         const jit = Math.sin(t * (1.4 + g.pairs[i + 2] * 1.8) + g.pairs[i + 2] * 9) * R * 0.05;
@@ -532,7 +545,7 @@ function drawVignette(
     case "birds": {
       // the flock as one animal: every bird on its own lane, all of them
       // wheeling one way, the wingbeats never quite together
-      for (let i = 0; i < g.flock.length; i += 3) {
+      for (let i = 0; i < g.flock.length; i += 3 + stride3) {
         const lane = g.flock[i];
         const rr = g.flock[i + 1];
         const wph = g.flock[i + 2];
@@ -661,7 +674,7 @@ function drawVignette(
       const rot = t * 0.06;
       ctx.save();
       ctx.rotate(rot);
-      for (let i = 0; i < g.spiral.length; i += 3) {
+      for (let i = 0; i < g.spiral.length; i += 3 + stride3) {
         const glow = g.spiral[i + 2];
         ctx.fillStyle = `rgba(238, 232, 210, ${0.25 + glow * 0.5})`;
         const sz = 0.8 + glow * 1.1;
@@ -678,10 +691,10 @@ function drawVignette(
       // the web: light gathered where something invisible is dense, the
       // filaments between the knots drifting on the longest clock here
       const drift = Math.sin(t * 0.04) * r * 0.05;
-      for (let i = 0; i < g.web.length; i += 3) {
+      for (let i = 0; i < g.web.length; i += 3 + stride3) {
         const xi = g.web[i] * r * 0.72 + drift;
         const yi = g.web[i + 1] * r * 0.72;
-        for (let j = i + 3; j < g.web.length; j += 3) {
+        for (let j = i + 3; j < g.web.length; j += 3 + stride3) {
           const xj = g.web[j] * r * 0.72 + drift;
           const yj = g.web[j + 1] * r * 0.72;
           const d = Math.hypot(xj - xi, yj - yi);
@@ -694,7 +707,7 @@ function drawVignette(
           ctx.stroke();
         }
       }
-      for (let i = 0; i < g.web.length; i += 3) {
+      for (let i = 0; i < g.web.length; i += 3 + stride3) {
         const x = g.web[i] * r * 0.72 + drift;
         const y = g.web[i + 1] * r * 0.72;
         const m = g.web[i + 2];
@@ -811,12 +824,40 @@ export default function OverlookTree() {
     const hold: { idx: number; done: boolean } = { idx: -1, done: false };
     let holdCharge = 0;
 
+    // ————— performance contract (room-runtime) —————
+    const embedded = isEmbeddedFrame();
+    const governor = createFrameGovernor(embedded ? "medium" : "high");
+    let currentTier = governor.tier();
+    let detail = detailForTier(currentTier);
+    let docHidden = false;
+    let galleryPaused = embedded;
+    let sleeping = docHidden || galleryPaused;
+    // three-finger twist = season: a slow tint over the whole tree's light
+    let season = 0;
+    let seasonTarget = 0;
+    let seasonSnapped = 0;
+    let lastSeasonSoundAt = 0;
+    // flip face-down = night
+    let night = false;
+    let nightAmt = 0;
+
     const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
     reduce = mq.matches;
     const onMq = () => {
       reduce = mq.matches;
     };
     mq.addEventListener?.("change", onMq);
+
+    const offVisibility = onVisibility((hidden) => {
+      docHidden = hidden;
+      sleeping = docHidden || galleryPaused;
+      if (sleeping) governor.force("sleep");
+    });
+    const offGalleryPause = onGalleryPause((paused) => {
+      galleryPaused = paused;
+      sleeping = docHidden || galleryPaused;
+      if (sleeping) governor.force("sleep");
+    });
 
     const audio = () => getFieldAudio();
     const note = (midi: number, ms = 120) => {
@@ -860,9 +901,12 @@ export default function OverlookTree() {
       baseDiscs.set(n.id, c);
     }
 
+    // background wash — recomputed only on resize, never per frame
+    let bgGrad: CanvasGradient | null = null;
+    let haloGrad: CanvasGradient | null = null;
     const resize = () => {
       const r = wrap.getBoundingClientRect();
-      const ratio = Math.min(window.devicePixelRatio || 1, 1.5);
+      const ratio = resolveDpr(currentTier, { embedded, reducedMotion: reduce, maxDpr: 1.5 });
       width = Math.max(320, Math.floor(r.width));
       height = Math.max(480, Math.floor(r.height));
       rectLeft = r.left;
@@ -872,6 +916,13 @@ export default function OverlookTree() {
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
       ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+      bgGrad = ctx.createLinearGradient(0, 0, 0, height);
+      bgGrad.addColorStop(0, "#060810");
+      bgGrad.addColorStop(0.55, "#05070d");
+      bgGrad.addColorStop(1, "#04060b");
+      haloGrad = ctx.createRadialGradient(width * 0.5, height * 0.16, 10, width * 0.5, height * 0.16, Math.max(width, height) * 0.7);
+      haloGrad.addColorStop(0, "rgba(140, 160, 215, 1)");
+      haloGrad.addColorStop(1, "rgba(0,0,0,0)");
     };
     resize();
     const observer = new ResizeObserver(resize);
@@ -1138,7 +1189,25 @@ export default function OverlookTree() {
         zoomTarget = clamp(zoomTarget * e.scale, ZOOM_MIN, ZOOM_MAX);
       },
       twist: (e) => {
-        if (e.fingers === 3) return; // three fingers turn the season, not the lens
+        if (e.fingers === 3) {
+          // three fingers turn the season — a slow tint over the whole
+          // tree's light, continuous while the wrist keeps turning
+          lastInteractionAt = performance.now();
+          if (e.phase === "move") {
+            seasonTarget += e.angle / (Math.PI / 2);
+            const now = performance.now();
+            const cur = Math.floor(((seasonTarget % 4) + 4) % 4);
+            if (cur !== seasonSnapped) {
+              seasonSnapped = cur;
+              if (now - lastSeasonSoundAt > 180) {
+                lastSeasonSoundAt = now;
+                note(45 + cur * 2, 220);
+                try { haptics.detent(); } catch { /* noop */ }
+              }
+            }
+          }
+          return;
+        }
         lastInteractionAt = performance.now();
         // two fingers rotate the lens: living tree ↔ the bare graph
         if (e.phase === "move") {
@@ -1187,6 +1256,17 @@ export default function OverlookTree() {
         } catch {
           /* noop */
         }
+      },
+      // knock = wake / ring the room: a rap on the case rings the whole
+      // tree (rhymes with /coin, /flowers, /growth)
+      knock: () => {
+        lastInteractionAt = performance.now();
+        tutti();
+      },
+      // flip face-down = night: the tree dims and hushes until turned back
+      flip: ({ faceDown }) => {
+        night = faceDown;
+        if (!faceDown) lastInteractionAt = performance.now();
       },
     });
 
@@ -1249,6 +1329,13 @@ export default function OverlookTree() {
     let lastFrame = 0;
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
+      const tier = governor.beginFrame(now);
+      if (sleeping) return; // hard pause: tab hidden or gallery parent paused
+      if (tier !== currentTier) {
+        currentTier = tier;
+        detail = detailForTier(tier);
+        resize();
+      }
       if (reduce && now - lastFrame < 90) return;
       lastFrame = now;
       const delta = Math.min(64, now - last);
@@ -1259,6 +1346,8 @@ export default function OverlookTree() {
       if (!reduce) localT += dt * timeScale;
       zoom += (zoomTarget - zoom) * Math.min(1, dt * 8);
       lens += (lensTarget - lens) * Math.min(1, dt * 6);
+      season += (seasonTarget - season) * Math.min(1, dt * 3);
+      nightAmt += ((night ? 1 : 0) - nightAmt) * Math.min(1, dt * 1.4);
       sway += swayVel * dt;
       swayVel = swayVel * Math.exp(-dt * 1.2) - sway * dt * 2.4;
       sway *= Math.exp(-dt * 0.5);
@@ -1294,24 +1383,20 @@ export default function OverlookTree() {
       }
 
       // ————— background: ink with a faint high glow at the crown —————
-      const bg = ctx.createLinearGradient(0, 0, 0, height);
-      bg.addColorStop(0, "#060810");
-      bg.addColorStop(0.55, "#05070d");
-      bg.addColorStop(1, "#04060b");
-      ctx.fillStyle = bg;
+      ctx.fillStyle = bgGrad ?? "#060810";
       ctx.fillRect(0, 0, width, height);
-      const halo = ctx.createRadialGradient(
-        width * 0.5,
-        height * 0.16,
-        10,
-        width * 0.5,
-        height * 0.16,
-        Math.max(width, height) * 0.7,
-      );
-      halo.addColorStop(0, `rgba(140, 160, 215, ${0.05 + breath * 0.02})`);
-      halo.addColorStop(1, "rgba(0,0,0,0)");
-      ctx.fillStyle = halo;
+      ctx.save();
+      ctx.globalAlpha = 0.05 + breath * 0.02;
+      ctx.fillStyle = haloGrad ?? "rgba(140,160,215,0.06)";
       ctx.fillRect(0, 0, width, height);
+      ctx.restore();
+      // three-finger twist's season: a slow tint over the whole tree's light
+      if (season !== 0 || seasonTarget !== 0) {
+        const seasonTint = ["rgba(90,150,110,0.05)", "rgba(231,172,82,0.06)", "rgba(200,110,60,0.06)", "rgba(120,150,200,0.06)"];
+        const si = Math.floor(((season % 4) + 4) % 4);
+        ctx.fillStyle = seasonTint[si];
+        ctx.fillRect(0, 0, width, height);
+      }
 
       // node screen positions once per frame (hit tests + edges + ruler)
       for (let i = 0; i < NODES.length; i++) {
@@ -1416,7 +1501,7 @@ export default function OverlookTree() {
           ctx.arc(x, y, r * 0.94, 0, Math.PI * 2);
           ctx.clip();
           ctx.translate(x + parX * PAR_VIGNETTE, y + parY * PAR_VIGNETTE);
-          drawVignette(ctx, n.id, r, vigT + n.order * 3.7, breath);
+          drawVignette(ctx, n.id, r, vigT + n.order * 3.7, breath, detail.particles);
           ctx.restore();
 
           // a swelling answer to touch: warm rim rising with the chime
@@ -1491,6 +1576,12 @@ export default function OverlookTree() {
         ctx.restore();
       }
 
+      // night (vessel: flip face-down) — the tree hushes under a veil
+      if (nightAmt > 0.01) {
+        ctx.fillStyle = `rgba(1, 2, 5, ${nightAmt * 0.72})`;
+        ctx.fillRect(0, 0, width, height);
+      }
+
       // glimmer ring, physical only
       if (glimmerAt && now - glimmerAt < 1600 && !reduce) {
         const u = (now - glimmerAt) / 1600;
@@ -1512,6 +1603,8 @@ export default function OverlookTree() {
       observer.disconnect();
       detach();
       detachVessel();
+      offVisibility();
+      offGalleryPause();
       wrap.removeEventListener("keydown", onKeyDown);
       wrap.removeEventListener("keyup", onKeyUp);
       mq.removeEventListener?.("change", onMq);

@@ -9,6 +9,7 @@ import {
 } from "@/lib/dither-avatar";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { onVisibility } from "@/lib/room-runtime";
 import { useField } from "@/store/field";
 import styles from "./dither.module.css";
 
@@ -134,6 +135,9 @@ function DitherChart({
   const lastGestureAtRef = useRef(0);
   const ghostRef = useRef(-1); // 0..1 while the idle glimmer sweeps; -1 off
   const [replayNonce, setReplayNonce] = useState(0);
+  useEffect(() => onVisibility((hidden) => {
+    if (hidden) ghostRef.current = -1;
+  }), []);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -210,8 +214,6 @@ function DitherChart({
         }
         ctx.strokeStyle = color;
         ctx.lineWidth = focus === key ? 2.5 : 1.6;
-        ctx.shadowColor = color;
-        ctx.shadowBlur = dimmed ? 0 : focus === key ? 16 : 7;
         ctx.beginPath();
         points.forEach((point, index) => {
           if (index === 0) ctx.moveTo(point.x, point.y);

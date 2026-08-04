@@ -2,6 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
+import { attachGestures } from "@/lib/gesture";
+import { onVessel } from "@/lib/vessel";
+import { onVisibility, resolveDpr } from "@/lib/room-runtime";
+import * as haptics from "@/lib/haptics";
 
 /**
  * PhaseChart — per-phase candlestick whose SHAPE is the phenomenology.
@@ -289,6 +293,10 @@ export default function PhaseChart({
   const dragRef = useRef<{ active: boolean; lastIdx: number; lastAt: number }>({
     active: false, lastIdx: -1, lastAt: 0,
   });
+  // twist(2) rotates the lens: candles ↔ a smoothed line — the same close
+  // series read at a different level of description.
+  const chartModeRef = useRef<0 | 1>(0);
+  const lensTwistAccRef = useRef(0);
 
   // Hovered candle drives both the canvas highlight (re-draw) and the
   // tooltip in the DOM overlay.
@@ -347,7 +355,7 @@ export default function PhaseChart({
     };
 
     const resize = () => {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = resolveDpr("high", { reducedMotion: reduce });
       const w = canvas.clientWidth;
       const h = canvas.clientHeight;
       canvas.width = Math.max(1, Math.floor(w * dpr));
@@ -380,6 +388,34 @@ export default function PhaseChart({
         const t = (p - yMin) / (yMax - yMin);
         return h - t * h;
       };
+
+      if (chartModeRef.current === 1) {
+        // the lens, rotated: the felt shape of the close series alone.
+        ctx.beginPath();
+        let started = false;
+        for (let i = 0; i < series.length; i++) {
+          const t = progress[i] ?? 1;
+          if (t <= 0) continue;
+          const cx = padL + i * slot + slot / 2;
+          const y = yOf(series[i].close);
+          if (!started) { ctx.moveTo(cx, y); started = true; } else { ctx.lineTo(cx, y); }
+        }
+        ctx.strokeStyle = toRgba(accent, 0.85);
+        ctx.lineWidth = 1.6;
+        ctx.stroke();
+        for (let i = 0; i < series.length; i++) {
+          const t = progress[i] ?? 1;
+          if (t <= 0) continue;
+          const cx = padL + i * slot + slot / 2;
+          const y = yOf(series[i].close);
+          const isHovered = i === currentHover && !reduce;
+          ctx.beginPath();
+          ctx.fillStyle = isHovered ? "rgba(255,255,255,0.95)" : toRgba(accent, 0.6);
+          ctx.arc(cx, y, isHovered ? 3.4 : 1.8, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        return;
+      }
 
       for (let i = 0; i < series.length; i++) {
         const c = series[i];
@@ -437,18 +473,24 @@ export default function PhaseChart({
       currentHover = h;
       // Re-draw assuming the cascade is already complete; on initial
       // mount before scroll-in this just means everything's still at 0.
-      drawAt(currentProgress);
+      drawAt(progressBuf);
     };
 
-    // Keep the most recent progress so the hover re-draw above can
-    // reuse it. Updated by the cascade tick.
-    let currentProgress: number[] = new Array<number>(CANDLE_COUNT).fill(0);
+    // Keep the most recent progress so the hover re-draw above can reuse
+    // it. Allocated once and mutated in place — SPEC forbids allocation
+    // inside the RAF loop, and this cascade used to allocate a fresh
+    // array every tick.
+    const progressBuf: number[] = new Array<number>(CANDLE_COUNT).fill(0);
+
+    // no cascade drawing while the tab/frame is hidden.
+    let sleeping = document.hidden;
+    const offVisibility = onVisibility((hidden) => { sleeping = hidden; });
 
     if (reduce) {
       // Static, fully drawn — no cascade.
-      currentProgress = new Array<number>(CANDLE_COUNT).fill(1);
-      drawAt(currentProgress);
-      return () => ro.disconnect();
+      progressBuf.fill(1);
+      drawAt(progressBuf);
+      return () => { ro.disconnect(); offVisibility(); };
     }
 
     // IntersectionObserver: when the canvas crosses threshold 0.3,
@@ -458,26 +500,25 @@ export default function PhaseChart({
     let startTime = 0;
 
     const tick = (now: number) => {
+      if (sleeping) { raf = requestAnimationFrame(tick); return; }
       if (!startTime) startTime = now;
       const elapsed = now - startTime;
       const overall = Math.min(1, elapsed / DRAW_IN_MS);
       // Stagger: each candle gets a small window inside [0,1].
-      const progress: number[] = new Array(CANDLE_COUNT);
       for (let i = 0; i < CANDLE_COUNT; i++) {
         const start = i / (CANDLE_COUNT + 4);
         const end = start + 4 / (CANDLE_COUNT + 4);
         const local = (overall - start) / (end - start);
-        progress[i] = local <= 0 ? 0 : local >= 1 ? 1 : easeOut(local);
+        progressBuf[i] = local <= 0 ? 0 : local >= 1 ? 1 : easeOut(local);
       }
-      currentProgress = progress;
-      drawAt(progress);
+      drawAt(progressBuf);
       if (overall < 1) {
         raf = requestAnimationFrame(tick);
       }
     };
 
     // Idle initial draw — empty.
-    drawAt(currentProgress);
+    drawAt(progressBuf);
 
     const io = new IntersectionObserver(
       (entries) => {
@@ -496,6 +537,7 @@ export default function PhaseChart({
     return () => {
       io.disconnect();
       ro.disconnect();
+      offVisibility();
       if (raf) cancelAnimationFrame(raf);
     };
   }, [kind, accent]);
@@ -540,61 +582,127 @@ export default function PhaseChart({
     try { getFieldAudio().playNote(midi, 200); } catch { /* noop */ }
   };
 
+  // Cosmetic hover only (desktop mouse, no button down) — not a gesture,
+  // never claims a threshold. The material verbs (tap/drag/twist/tutti)
+  // are bound below via attachGestures.
   const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const idx = hitTest(e.clientX, e.clientY);
-    if (idx !== hoverIdx) {
-      setHoverIdx(idx);
-      if (idx >= 0) {
-        const wrap = wrapRef.current;
-        if (wrap) {
-          const wrect = wrap.getBoundingClientRect();
-          const lc = layoutRef.current[idx];
-          const canvas = canvasRef.current;
-          const crect = canvas ? canvas.getBoundingClientRect() : wrect;
-          setTip({
-            x: (crect.left - wrect.left) + lc.cx,
-            y: (crect.top - wrect.top) - 6,
-          });
-        }
-      } else {
-        setTip(null);
+    if (idx === hoverIdx) return;
+    setHoverIdx(idx);
+    if (idx >= 0) {
+      const wrap = wrapRef.current;
+      if (wrap) {
+        const wrect = wrap.getBoundingClientRect();
+        const lc = layoutRef.current[idx];
+        const canvas = canvasRef.current;
+        const crect = canvas ? canvas.getBoundingClientRect() : wrect;
+        setTip({
+          x: (crect.left - wrect.left) + lc.cx,
+          y: (crect.top - wrect.top) - 6,
+        });
       }
+    } else {
+      setTip(null);
     }
-    // drag scrubbing — only if pointer is down and idx advanced
-    if (dragRef.current.active && idx >= 0 && idx !== dragRef.current.lastIdx) {
-      const now = performance.now();
-      if (now - dragRef.current.lastAt >= DRAG_NOTE_MS) {
-        playForCandle(idx);
-        dragRef.current.lastIdx = idx;
-        dragRef.current.lastAt = now;
-      }
-    }
-  };
-
-  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    const idx = hitTest(e.clientX, e.clientY);
-    if (idx < 0) return;
-    // immediate click → note. Mark drag so subsequent moves can scrub.
-    dragRef.current.active = true;
-    dragRef.current.lastIdx = idx;
-    dragRef.current.lastAt = performance.now();
-    playForCandle(idx);
-    // capture pointer so we keep receiving moves outside the wrapper
-    try { (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId); } catch { /* noop */ }
-  };
-
-  const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
-    dragRef.current.active = false;
-    dragRef.current.lastIdx = -1;
-    try { (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId); } catch { /* noop */ }
   };
 
   const onPointerLeave = () => {
     setHoverIdx(-1);
     setTip(null);
-    dragRef.current.active = false;
-    dragRef.current.lastIdx = -1;
   };
+
+  // ── the gesture surface ─────────────────────────────────────────────
+  // One finger touches the material: the instant of contact (below any
+  // gesture threshold) strikes the tapped candle's note, same precedent
+  // as Jewel.tsx's onContact; dragging then scrubs through the series.
+  // Two fingers touch the map: twist rotates the lens between candles and
+  // the smoothed line. Globals scaled to this widget's size: pinch/pan2
+  // are exempt — a fixed 24-candle strip has no zoomable/pannable range.
+  // Vessel: knock rings the chart; shake/tilt/flip are exempt — several
+  // instances of this chart often share one page, and a device-wide shake
+  // triggering every one at once would be noise, not music.
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+
+    const onContact = (ev: PointerEvent) => {
+      const idx = hitTest(ev.clientX, ev.clientY);
+      if (idx < 0) return;
+      dragRef.current.active = true;
+      dragRef.current.lastIdx = idx;
+      dragRef.current.lastAt = performance.now();
+      playForCandle(idx);
+    };
+    wrap.addEventListener("pointerdown", onContact);
+
+    const detachGestures = attachGestures(
+      wrap,
+      {
+        drag: (e) => {
+          if (e.fingers !== 1) return;
+          if (e.phase === "end") {
+            dragRef.current.active = false;
+            dragRef.current.lastIdx = -1;
+            return;
+          }
+          if (!dragRef.current.active) return;
+          const idx = hitTest(e.x, e.y);
+          if (idx >= 0 && idx !== dragRef.current.lastIdx) {
+            const now = performance.now();
+            if (now - dragRef.current.lastAt >= DRAG_NOTE_MS) {
+              playForCandle(idx);
+              dragRef.current.lastIdx = idx;
+              dragRef.current.lastAt = now;
+            }
+          }
+        },
+        twist: (e) => {
+          if (e.fingers === 3) return; // season — no world-law axis on this widget
+          if (e.phase === "start") lensTwistAccRef.current = 0;
+          if (e.phase === "move") lensTwistAccRef.current += e.angle;
+          if (e.phase === "end" && Math.abs(lensTwistAccRef.current) > Math.PI / 2) {
+            chartModeRef.current = chartModeRef.current === 0 ? 1 : 0;
+            const canvas = canvasRef.current as unknown as { __waveDraw?: (h: number) => void } | null;
+            canvas?.__waveDraw?.(hoverIdx);
+            try { haptics.lens(); } catch { /* noop */ }
+          }
+        },
+        tap: (e) => {
+          if (e.fingers === 2) {
+            // step back: a gentle deselect.
+            setHoverIdx(-1);
+            setTip(null);
+            try { haptics.tap(); } catch { /* noop */ }
+            return;
+          }
+          if (e.fingers === 3) {
+            // tutti — one synchronized pulse of everything alive: the
+            // whole series struck as a fast arpeggio.
+            const lc = layoutRef.current;
+            lc.forEach((c, i) => window.setTimeout(() => playForCandle(c.index), i * 18));
+            try { haptics.ripple(0.6); } catch { /* noop */ }
+          }
+        },
+      },
+      { wheelZoom: false },
+    );
+
+    const detachVessel = onVessel({
+      knock: () => {
+        const lc = layoutRef.current;
+        if (lc.length === 0) return;
+        playForCandle(lc[Math.floor(lc.length / 2)].index);
+        try { haptics.tap(); } catch { /* noop */ }
+      },
+    });
+
+    return () => {
+      wrap.removeEventListener("pointerdown", onContact);
+      detachGestures();
+      detachVessel();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kind]);
 
   // Tooltip OHLC for the hovered candle (read at render time).
   const tipCandle = hoverIdx >= 0 ? layoutRef.current[hoverIdx] : null;
@@ -604,10 +712,7 @@ export default function PhaseChart({
       ref={wrapRef}
       style={{ position: "relative", width: "100%", maxWidth: 540 }}
       onPointerMove={onPointerMove}
-      onPointerDown={onPointerDown}
-      onPointerUp={onPointerUp}
       onPointerLeave={onPointerLeave}
-      onPointerCancel={onPointerLeave}
     >
       <canvas
         ref={canvasRef}

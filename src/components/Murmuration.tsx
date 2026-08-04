@@ -69,6 +69,7 @@ import {
   centroid,
   cullBird,
   flushNear,
+  isAirActivity,
   launchNearest,
   orderParameter,
   partialFreq,
@@ -1101,6 +1102,21 @@ export default function Murmuration() {
     gl.bindBuffer(gl.ARRAY_BUFFER, metaBuf);
     gl.bufferData(gl.ARRAY_BUFFER, meta, gl.DYNAMIC_DRAW);
 
+    // WebGL context loss (mobile GPU pressure, background tabs): the draw
+    // loop stops touching the lost context rather than throwing, and the
+    // browser is allowed to restore it. A full flock reinit on restore is
+    // deliberately out of scope here — see the sweep report.
+    let contextLost = false;
+    const onContextLost = (ev: Event) => {
+      ev.preventDefault();
+      contextLost = true;
+    };
+    const onContextRestored = () => {
+      contextLost = false;
+    };
+    canvas.addEventListener("webglcontextlost", onContextLost, false);
+    canvas.addEventListener("webglcontextrestored", onContextRestored, false);
+
     const resize = () => {
       const r = wrap.getBoundingClientRect();
       const ratio = resolveDpr(gov.tier(), { embedded, reducedMotion: reduced });
@@ -1149,6 +1165,7 @@ export default function Murmuration() {
     let swirl = 0;
     let scatter = 0;
     let gather = 0;
+    let ceremonyReleaseFired = false;
     let wingHz = 7.2;
     let wingHzTarget = 7.2;
     let order = 0;
@@ -1517,6 +1534,32 @@ export default function Murmuration() {
           // flock comes in, and past the ceremony it settles onto the hand.
           gather = clamp01(e.elapsed / 2500);
           lurePullTarget = 4 + gather * 26;
+          // ceremony tier — the room's one solemn act: over a bird already
+          // roosted nearby it is released, launched back into flight (the
+          // touch-reachable delete); everywhere else the murmuration keeps
+          // settling onto the hand, deepening its bond permanently.
+          if (e.tier >= 3 && !ceremonyReleaseFired) {
+            ceremonyReleaseFired = true;
+            let nearIdx = -1;
+            let nearD = 3 * 3;
+            for (let i = 0; i < state.n; i++) {
+              if (isAirActivity(ACTIVITIES[state.activityOf[i]])) continue;
+              const dx = state.pos[i * 3] - p.x;
+              const dy = state.pos[i * 3 + 1] - p.y;
+              const dz = state.pos[i * 3 + 2] - p.z;
+              const d = dx * dx + dy * dy + dz * dz;
+              if (d < nearD) { nearD = d; nearIdx = i; }
+            }
+            if (nearIdx >= 0) {
+              launchNearest(state, p, { x: 0, y: 0.4, z: -1 }, MIN_SPEED + 4);
+              try {
+                haptics.chop();
+                audio.chime();
+              } catch {
+                /* noop */
+              }
+            }
+          }
           if (e.tier >= 3 && gather >= 1 && e.phase === "tick") {
             char.ali = clamp(char.ali + 0.006, 0.15, 2);
             char.coh = clamp(char.coh + 0.006, 0.15, 2);

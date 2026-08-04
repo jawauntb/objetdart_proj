@@ -98,6 +98,30 @@ export function tubesOf(kind: HadronKind): Array<[number, number]> {
 }
 
 /**
+ * How deep a condensing hold must go before the vacuum can afford three
+ * quarks instead of two. Under it the field pays for the cheap thing — a
+ * quark and its own antiquark, one string; past it the hand has poured in
+ * enough for a closed loop of three. The choice of meson or baryon is made
+ * of duration alone, so it needs no control and no word.
+ */
+export const BARYON_DEPTH = 0.6;
+
+/** What a condensing hold of this depth (0..1) can bind. Monotone in depth. */
+export function kindForDepth(depth: number): HadronKind {
+  return depth >= BARYON_DEPTH ? "triplet" : "pair";
+}
+
+/**
+ * Rewrite a seed so it decodes to the wanted kind — the kind IS the low bit
+ * (hadronFromSeed and snapChildren both rest on that), and this is the one
+ * sanctioned way to say so. Idempotent, and everything else about the hadron
+ * survives the rewrite.
+ */
+export function seedForKind(seed: number, kind: HadronKind): number {
+  return (kind === "triplet" ? (seed >>> 0) | 1 : (seed >>> 0) & ~1) >>> 0;
+}
+
+/**
  * Decode a seed into a full hadron. Pure: same seed, same hadron. The low
  * bit of the seed IS the kind — snapChildren relies on this to write the
  * kind of each child into its seed.

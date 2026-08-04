@@ -305,6 +305,46 @@ export function bondSeed(a: number, b: number): number {
   return hashSeed(lo, hi, 0x0b0d);
 }
 
+// —————————————————————————————————————————————————————————— bond polarity
+
+/**
+ * Pauling's rule of thumb: an electronegativity gap this wide is no longer
+ * sharing, it is taking — the pair sits on one atom and the bond is ionic.
+ */
+export const IONIC_GAP = 1.7;
+/** Below this the pull is even enough to call the sharing honest. */
+export const POLAR_GAP = 0.4;
+/** The widest gap this table can show (F 3.98 − K 0.82) — the polarity unit. */
+const MAX_GAP = 3.16;
+
+export type BondCharacter = "covalent" | "polar" | "ionic";
+
+/**
+ * Signed bond polarity, −1..1: how much harder `b` pulls on the shared pair
+ * than `a` does, normalized by the widest gap the table holds. Antisymmetric
+ * by construction — bondPolarity(a, b) === −bondPolarity(b, a) — so the sign
+ * always says which end the charge pools at. Zero for a homonuclear pair
+ * (nothing to pull against) and zero wherever no bond exists at all (a noble
+ * gas pulls on nothing, so it cannot pull unevenly).
+ */
+export function bondPolarity(a: ElementDef, b: ElementDef): number {
+  if (a.valence <= 0 || b.valence <= 0) return 0;
+  const d = (b.electronegativity - a.electronegativity) / MAX_GAP;
+  return Math.max(-1, Math.min(1, d));
+}
+
+/**
+ * What kind of bond the gap makes: even sharing, a lopsided share, or an
+ * outright transfer. Monotone in |Δχ| — a wider gap never returns a more
+ * covalent verdict.
+ */
+export function bondCharacter(a: ElementDef, b: ElementDef): BondCharacter {
+  if (a.valence <= 0 || b.valence <= 0) return "covalent";
+  const d = Math.abs(a.electronegativity - b.electronegativity);
+  if (d >= IONIC_GAP) return "ionic";
+  return d >= POLAR_GAP ? "polar" : "covalent";
+}
+
 export type CovalentBond = {
   seed: number;
   /** Rest separation as a multiple of the two cloud radii summed. */
@@ -313,6 +353,10 @@ export type CovalentBond = {
   tone: number;
   /** 0..1 — how brightly the merged lobes gleam (climbs with bond order). */
   gleam: number;
+  /** 0..1 unsigned polarity — how lopsided the sharing is (symmetric). */
+  polarity: number;
+  /** Even sharing, lopsided sharing, or an outright transfer. */
+  character: BondCharacter;
 };
 
 /**
@@ -334,6 +378,10 @@ export function covalentBond(a: number, b: number): CovalentBond {
     rest: 0.66 + 0.3 * Math.max(0, Math.min(1, radii)),
     tone: Math.floor(rng() * 12),
     gleam: 0.35 + 0.18 * (pair ? pair.order : 0) + rng() * 0.1,
+    // |Δχ| is symmetric, so the bond's polarity is a fact about the pair,
+    // exactly like its seed — only the room decides which end it pools at.
+    polarity: Math.abs(bondPolarity(ea, eb)),
+    character: bondCharacter(ea, eb),
   };
 }
 

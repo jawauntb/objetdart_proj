@@ -18,7 +18,11 @@
  * new bound pair at the break. You can never isolate one.
  *
  * tap perturbs the vacuum (a spray of virtual pairs, intensity-scaled);
- * dwell on empty vacuum condenses a triplet that spins up from the field;
+ * dwell on empty vacuum condenses — and what it condenses is the hand's
+ * choice, made of duration alone: the seethe gathers visibly under the
+ * finger from the touch tier, the dwell buys the cheap thing (a quark and
+ * its own antiquark on one string), and a hand that keeps pressing past the
+ * baryon depth pays for the third quark and the closed loop of three;
  * the ceremony held on a hadron is annihilation — photon streaks racing
  * off at light speed; a flick throws a hadron whole (it moves as one,
  * never sheds a part); a scrub stirs the vacuum into a glowing ring of
@@ -27,21 +31,32 @@
  * face-down the room is night and the seethe goes on unwatched; a twist
  * rotates the lens to the bare mathematics — the Feynman view: vertices,
  * coiled gluon propagators, virtual pairs as closed loops, photons as
- * waving lines. The field persists in `objetdart:quarks:v1`. Pinch is
- * deliberately unbound — ScaleTravel owns it (nucleons above; the quanta
- * below).
+ * waving lines; three fingers twisted turn the season, from a vacuum nearly
+ * still to one boiling with pair production. The field persists in
+ * `objetdart:quarks:v1`. Deliberately unbound: pinch (ScaleTravel owns it —
+ * nucleons above, the quanta below) and two-finger pan, there being no frame
+ * to pan; two-finger tap lowers the lens.
  */
 
 import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
-import { attachGestures } from "@/lib/gesture";
+import { THRESHOLDS, attachGestures } from "@/lib/gesture";
 import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import LetGo from "@/components/LetGo";
 import { entryScaleFor, spectralRegisterFor } from "@/lib/scale";
 import {
+  createFrameGovernor,
+  detailForTier,
+  isEmbeddedFrame,
+  onGalleryPause,
+  onVisibility,
+  resolveDpr,
+} from "@/lib/room-runtime";
+import {
   ANTI_TINTS,
+  BARYON_DEPTH,
   COLOR_TINTS,
   MAX_HADRONS,
   SNAP_RATIO,
@@ -50,6 +65,8 @@ import {
   confinementForce,
   hadronFromSeed,
   hashSeed,
+  kindForDepth,
+  seedForKind,
   settlePopulation,
   shouldSnap,
   snapChildren,
@@ -60,6 +77,9 @@ import {
 
 const STORE_KEY = "objetdart:quarks:v1";
 const RETIRE_MS = 1400;
+/** The hold tiers, read from the grammar — never redefined here. */
+const TOUCH_MS = THRESHOLDS.tapMaxMs;
+const DWELL_MS = THRESHOLDS.dwellMs;
 
 /**
  * The room's place on the axis, sounded. This deep, the register rings high
@@ -284,9 +304,35 @@ export default function QuarksVacuum() {
     const drag: { hadronId: string | null; quarkIdx: number; x: number; y: number } = {
       hadronId: null, quarkIdx: -1, x: 0, y: 0,
     };
-    const hold: { hadronId: string | null; onHadron: boolean; seededId: string | null; done: boolean } = {
+    const hold: {
+      hadronId: string | null;
+      onHadron: boolean;
+      seededId: string | null;
+      done: boolean;
+      /** 0..1 — what the vacuum has visibly gathered under the finger */
+      gather: number;
+      gx: number;
+      gy: number;
+      /** 0..1 — how much the hand has poured in since the condensation */
+      depth: number;
+      forged: boolean;
+    } = {
       hadronId: null, onHadron: false, seededId: null, done: false,
+      gather: 0, gx: 0, gy: 0, depth: 0, forged: false,
     };
+    let gatherFade = 0;
+    let lastGatherNoteAt = 0;
+    /** the room's slow cycle, 0..1: a still vacuum ↔ a boiling one */
+    let season = 0.15;
+    let seasonSpokenAt = 0;
+
+    // ————— the room runtime: govern frames, sleep when unwatched —————
+    const gov = createFrameGovernor();
+    let sleeping = false;
+    let paused = false;
+    let lastTier = gov.tier();
+    const offVis = onVisibility((hidden) => { sleeping = hidden; });
+    const offPause = onGalleryPause((p) => { paused = p; });
     // the stilling: while true, saves are held so the annihilation sequence
     // cannot resurrect what the hand has already let go of.
     let clearing = false;
@@ -351,9 +397,53 @@ export default function QuarksVacuum() {
       pendingNotes.push({ at: performance.now() + delayMs, midi, ms });
     };
 
+    // ————— sprites: the two soft glows this room draws, baked once —————
+    const sprite = (stops: Array<[number, string]>, size = 64): HTMLCanvasElement => {
+      const c = document.createElement("canvas");
+      c.width = size;
+      c.height = size;
+      const g = c.getContext("2d");
+      if (g) {
+        const grad = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+        for (const [stop, color] of stops) grad.addColorStop(stop, color);
+        g.fillStyle = grad;
+        g.fillRect(0, 0, size, size);
+      }
+      return c;
+    };
+    // one core sprite per tint (quark and anti alike) — the per-quark radial
+    // gradient used to be rebuilt every frame for every constituent
+    const CORE_SPRITES = new Map<string, HTMLCanvasElement>();
+    for (const hex of [...COLOR_TINTS, ...ANTI_TINTS]) {
+      CORE_SPRITES.set(hex, sprite([
+        [0, colorAlpha("#F7F3EA", 0.85)],
+        [0.3, colorAlpha(hex, 0.55)],
+        [1, "rgba(0,0,0,0)"],
+      ]));
+    }
+    const CORONA_SPRITE = sprite([
+      [0, "rgba(247, 243, 234, 0.5)"],
+      [1, "rgba(0,0,0,0)"],
+    ]);
+    const CEREMONY_SPRITE = sprite([
+      [0, "rgba(247, 243, 234, 0.34)"],
+      [1, "rgba(0,0,0,0)"],
+    ]);
+    const GATHER_SPRITE = sprite([
+      [0, "rgba(242, 238, 230, 0.38)"],
+      [0.45, "rgba(231, 172, 82, 0.14)"],
+      [1, "rgba(0,0,0,0)"],
+    ]);
+    const stamp = (img: HTMLCanvasElement, x: number, y: number, r: number, alpha: number) => {
+      if (alpha <= 0.004 || r <= 0.3) return;
+      ctx.globalAlpha = Math.min(1, alpha);
+      ctx.drawImage(img, x - r, y - r, r * 2, r * 2);
+      ctx.globalAlpha = 1;
+    };
+
     const resize = () => {
       const r = wrap.getBoundingClientRect();
-      const ratio = Math.min(window.devicePixelRatio || 1, 1.5);
+      const ratio = resolveDpr(gov.tier(), { embedded: isEmbeddedFrame(), reducedMotion: reduce });
       width = Math.max(320, Math.floor(r.width));
       height = Math.max(480, Math.floor(r.height));
       rectLeft = r.left;
@@ -453,10 +543,20 @@ export default function QuarksVacuum() {
       }
     };
 
-    const condense = (x: number, y: number): HadronEnt | null => {
+    /**
+     * The vacuum condenses what the hand has paid for: at the dwell it can
+     * only afford the cheap thing — one quark and its own antiquark on a
+     * single string — and a hand that keeps pressing pays for the third
+     * quark and the closed loop. `depth` is that payment, 0..1, and
+     * kindForDepth is the whole choice. No control, no word: duration.
+     */
+    const condense = (x: number, y: number, depth = 0): HadronEnt | null => {
       const nx = clamp(x / width, 0.08, 0.92);
       const ny = clamp(y / height, 0.1, 0.92);
-      const seed = (hashSeed(Math.round(nx * 811), Math.round(ny * 809), seedCount) | 1) >>> 0;
+      const seed = seedForKind(
+        hashSeed(Math.round(nx * 811), Math.round(ny * 809), seedCount),
+        kindForDepth(depth),
+      );
       seedCount += 1;
       const h = makeHadron(seed, nx, ny, 0.04);
       hadrons.push(h);
@@ -469,6 +569,36 @@ export default function QuarksVacuum() {
       save();
       syncStanding();
       return h;
+    };
+
+    /**
+     * The third quark arrives. A hand that keeps pouring in past the baryon
+     * depth turns the pair it was making into a triplet, in place: the same
+     * spot, the same growth, one more constituent and a loop of three tubes
+     * instead of one string. This is how "make a different one" is said here.
+     */
+    const forgeTriplet = (h: HadronEnt): HadronEnt | null => {
+      if (h.morph.kind === "triplet") return h;
+      let cx = 0;
+      let cy = 0;
+      for (const q of h.quarks) {
+        cx += q.nx;
+        cy += q.ny;
+      }
+      cx /= h.quarks.length;
+      cy /= h.quarks.length;
+      const grown = makeHadron(seedForKind(h.seed, "triplet"), cx, cy, Math.min(0.92, h.growth));
+      hadrons = hadrons.filter((q) => q.id !== h.id);
+      hadrons.push(grown);
+      const px = cx * width;
+      const py = cy * height;
+      try { audio().bell(); } catch { /* noop */ }
+      note(midiOf(grown.morph) + 4, 220);
+      try { haptics.bloom(); } catch { /* noop */ }
+      spraySparks(px, py, 7, 30);
+      useField.getState().recordTape("object", 0.65, "quarks/triplet");
+      syncStanding();
+      return grown;
     };
 
     const closeHadron = (h: HadronEnt) => {
@@ -647,6 +777,11 @@ export default function QuarksVacuum() {
           hold.onHadron = !!h;
           hold.seededId = null;
           hold.done = false;
+          hold.gather = 0;
+          hold.depth = 0;
+          hold.forged = false;
+          hold.gx = x;
+          hold.gy = y;
           return;
         }
         if (e.phase === "release") {
@@ -655,10 +790,26 @@ export default function QuarksVacuum() {
           hold.hadronId = null;
           hold.onHadron = false;
           hold.seededId = null;
+          gatherFade = hold.gather;
+          hold.gather = 0;
           save();
           return;
         }
-        // ticks (~80ms)
+        // ticks (~80ms). On the open vacuum the seethe visibly draws inward
+        // under the finger from the touch tier on, tightening until a hadron
+        // condenses at the dwell — the verb is watched, never explained.
+        if (!hold.onHadron) {
+          hold.gx = x;
+          hold.gy = y;
+          hold.gather = hold.seededId
+            ? Math.max(0, 1 - (e.elapsed - DWELL_MS) / 460) // it became the hadron
+            : clamp01((e.elapsed - TOUCH_MS) / (DWELL_MS - TOUCH_MS));
+          const nowG = performance.now();
+          if (!hold.seededId && hold.gather > 0 && hold.gather < 1 && nowG - lastGatherNoteAt > 150) {
+            lastGatherNoteAt = nowG;
+            note(RING_MIDI - 16 + Math.round(hold.gather * 14), 70);
+          }
+        }
         if (hold.done) return;
         if (hold.onHadron && hold.hadronId) {
           // the ceremony: the hadron gathers toward its own undoing
@@ -677,8 +828,19 @@ export default function QuarksVacuum() {
             annihilate(h);
           }
         } else if (hold.seededId) {
-          // a triplet this hand is condensing — keep holding, it keeps gathering
-          const h = hadrons.find((q) => q.id === hold.seededId);
+          // the hadron this hand is condensing — keep holding and the vacuum
+          // keeps paying: the strings fill in, and past the baryon depth the
+          // third quark arrives and the pair becomes a triplet
+          hold.depth = clamp01((e.elapsed - DWELL_MS) / 1600);
+          let h = hadrons.find((q) => q.id === hold.seededId);
+          if (h && !hold.forged && kindForDepth(hold.depth) === "triplet" && h.morph.kind === "pair") {
+            hold.forged = true;
+            const grown = forgeTriplet(h);
+            if (grown) {
+              hold.seededId = grown.id;
+              h = grown;
+            }
+          }
           if (h && !h.closed) {
             h.growth = clamp01(h.growth + 0.0011 * 80 * (1 + e.intensity * 0.6));
             if (h.growth >= 1) closeHadron(h);
@@ -694,8 +856,10 @@ export default function QuarksVacuum() {
             }
           }
         } else if (e.tier >= 2 && !hold.onHadron) {
-          // dwell on the empty vacuum: condense — long-press means grow, everywhere
-          const h = condense(x, y);
+          // dwell on the empty vacuum: condense — long-press means grow,
+          // everywhere. What it condenses is decided by how long the hand
+          // stays: the cheap pair now, the triplet if it keeps paying.
+          const h = condense(x, y, hold.depth);
           if (h) hold.seededId = h.id;
         }
       },
@@ -766,7 +930,22 @@ export default function QuarksVacuum() {
         try { haptics.ripple(0.4); } catch { /* noop */ }
       },
       twist: (e) => {
-        if (e.fingers === 3) return; // three fingers turn the season, not the lens
+        if (e.fingers === 3) {
+          // three fingers turn the season: the vacuum's own temperature —
+          // wound one way it goes nearly still, wound the other it boils and
+          // the seethe fills the field
+          if (e.phase !== "move") return;
+          lastInteractionAt = performance.now();
+          season = (season - e.angle / (Math.PI * 2) + 1) % 1;
+          const now = performance.now();
+          if (now - seasonSpokenAt > 260) {
+            seasonSpokenAt = now;
+            const seethe = 0.5 - 0.5 * Math.cos(season * Math.PI * 2);
+            note(FLOOR_MIDI + Math.round(seethe * 24), 200);
+            try { haptics.detent(); } catch { /* noop */ }
+          }
+          return;
+        }
         lastInteractionAt = performance.now();
         // two fingers rotate the lens: the felt field ↔ the bare mathematics
         if (e.phase === "move") {
@@ -930,11 +1109,24 @@ export default function QuarksVacuum() {
           }
           kbCharge = clamp01(kbCharge + (ev.repeat ? 0.08 : 0.02));
           if (kbCharge >= 0.35 && !kbHadronId) {
-            const seeded = condense(x, y);
+            const seeded = condense(x, y, 0);
             if (seeded) kbHadronId = seeded.id;
           }
           if (kbHadronId) {
-            const seeded = hadrons.find((q) => q.id === kbHadronId);
+            let seeded = hadrons.find((q) => q.id === kbHadronId);
+            // the keyboard keeps the same choice: a key held past the baryon
+            // depth pays for the third quark, exactly as a finger does
+            if (
+              seeded &&
+              seeded.morph.kind === "pair" &&
+              kindForDepth(clamp01((kbCharge - 0.35) / (1 - 0.35))) === "triplet"
+            ) {
+              const grown = forgeTriplet(seeded);
+              if (grown) {
+                kbHadronId = grown.id;
+                seeded = grown;
+              }
+            }
             if (seeded && !seeded.closed) {
               seeded.growth = clamp01(seeded.growth + 0.08);
               if (seeded.growth >= 1) closeHadron(seeded);
@@ -1079,11 +1271,7 @@ export default function QuarksVacuum() {
         const cx = h.quarks.reduce((s, q) => s + q.sx, 0) / h.quarks.length;
         const cy = h.quarks.reduce((s, q) => s + q.sy, 0) / h.quarks.length;
         const hr = md * 0.11 * (1.4 - h.charge * 0.5);
-        const halo = ctx.createRadialGradient(cx, cy, 1, cx, cy, hr);
-        halo.addColorStop(0, colorAlpha("#F7F3EA", 0.12 * h.charge * fade));
-        halo.addColorStop(1, "rgba(0,0,0,0)");
-        ctx.fillStyle = halo;
-        ctx.fillRect(cx - hr, cy - hr, hr * 2, hr * 2);
+        stamp(CEREMONY_SPRITE, cx, cy, hr, 0.36 * h.charge * fade);
       }
 
       // — flux tubes: luminous strings; brighter and thinner as they strain —
@@ -1109,29 +1297,38 @@ export default function QuarksVacuum() {
           const cyq = my + py * sag;
           const tintA = morph.antis[i] ? ANTI_TINTS[morph.colors[i]] : COLOR_TINTS[morph.colors[i]];
           const tintB = morph.antis[j] ? ANTI_TINTS[morph.colors[j]] : COLOR_TINTS[morph.colors[j]];
-          const grad = ctx.createLinearGradient(qa.sx, qa.sy, qb.sx, qb.sy);
-          grad.addColorStop(0, colorAlpha(tintA, (0.3 + strain * 0.55) * feltAlpha * closeT));
-          grad.addColorStop(0.5, colorAlpha(mixHex("#F2EEE6", tintA, 0.5), (0.2 + strain * 0.7) * feltAlpha * closeT));
-          grad.addColorStop(1, colorAlpha(tintB, (0.3 + strain * 0.55) * feltAlpha * closeT));
-          ctx.strokeStyle = grad;
+          // Two half-strings and a pale heart instead of a per-tube linear
+          // gradient — the endpoints move every frame, so a gradient here
+          // could never be cached, and this reads the same at a fraction of
+          // the cost. The colour still runs from one quark's charge to the
+          // other's, through white at the middle.
           ctx.lineWidth = Math.max(0.8, (3.4 - strain * 2.1) * grow);
+          const endX = h.closed ? qb.sx : qa.sx + (qb.sx - qa.sx) * closeT;
+          const endY = h.closed ? qb.sy : qa.sy + (qb.sy - qa.sy) * closeT;
+          const heartX = h.closed ? cxq : (qa.sx + endX) / 2;
+          const heartY = h.closed ? cyq : (qa.sy + endY) / 2;
+          ctx.strokeStyle = colorAlpha(tintA, (0.3 + strain * 0.55) * feltAlpha * closeT);
           ctx.beginPath();
           ctx.moveTo(qa.sx, qa.sy);
-          if (h.closed) ctx.quadraticCurveTo(cxq, cyq, qb.sx, qb.sy);
-          else {
-            // a tube still closing draws only part of its road
-            const tx = qa.sx + (qb.sx - qa.sx) * closeT;
-            const ty = qa.sy + (qb.sy - qa.sy) * closeT;
-            ctx.lineTo(tx, ty);
-          }
+          ctx.quadraticCurveTo(heartX, heartY, (qa.sx + endX) / 2, (qa.sy + endY) / 2);
+          ctx.stroke();
+          ctx.strokeStyle = colorAlpha(tintB, (0.3 + strain * 0.55) * feltAlpha * closeT);
+          ctx.beginPath();
+          ctx.moveTo((qa.sx + endX) / 2, (qa.sy + endY) / 2);
+          ctx.quadraticCurveTo(heartX, heartY, endX, endY);
+          ctx.stroke();
+          ctx.strokeStyle = colorAlpha(
+            mixHex("#F2EEE6", tintA, 0.5),
+            (0.2 + strain * 0.7) * feltAlpha * closeT,
+          );
+          ctx.lineWidth = Math.max(0.6, (2 - strain * 1.2) * grow);
+          ctx.beginPath();
+          ctx.moveTo(qa.sx + (endX - qa.sx) * 0.32, qa.sy + (endY - qa.sy) * 0.32);
+          ctx.quadraticCurveTo(heartX, heartY, qa.sx + (endX - qa.sx) * 0.68, qa.sy + (endY - qa.sy) * 0.68);
           ctx.stroke();
           // near the snap the string cries: a pale corona at midpoint
           if (strain > 0.55) {
-            const cg = ctx.createRadialGradient(mx, my, 0, mx, my, 16 * strain);
-            cg.addColorStop(0, colorAlpha("#F7F3EA", 0.25 * (strain - 0.55) * feltAlpha));
-            cg.addColorStop(1, "rgba(0,0,0,0)");
-            ctx.fillStyle = cg;
-            ctx.fillRect(mx - 20, my - 20, 40, 40);
+            stamp(CORONA_SPRITE, mx, my, 16 * strain, 0.5 * (strain - 0.55) * feltAlpha);
           }
         }
 
@@ -1151,14 +1348,8 @@ export default function QuarksVacuum() {
         const cr = morph.core * md * grow * (reduce ? 1 : 1 + Math.sin(quick + morph.breathOffset + qi * 2.1) * 0.1);
 
         if (feltAlpha > 0.02) {
-          const g = ctx.createRadialGradient(q.sx, q.sy, 0, q.sx, q.sy, cr * 3.2);
-          g.addColorStop(0, colorAlpha("#F7F3EA", 0.85 * feltAlpha * grow));
-          g.addColorStop(0.3, colorAlpha(tint, 0.55 * feltAlpha * grow));
-          g.addColorStop(1, "rgba(0,0,0,0)");
-          ctx.fillStyle = g;
-          ctx.beginPath();
-          ctx.arc(q.sx, q.sy, cr * 3.2, 0, Math.PI * 2);
-          ctx.fill();
+          const core = CORE_SPRITES.get(tint);
+          if (core) stamp(core, q.sx, q.sy, cr * 3.2, feltAlpha * grow);
           if (anti) {
             // an antiquark wears its color as a ring, not a heart
             ctx.strokeStyle = colorAlpha(COLOR_TINTS[morph.colors[qi]], 0.5 * feltAlpha);
@@ -1192,11 +1383,19 @@ export default function QuarksVacuum() {
     // ————— the loop —————
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
+      const tier = gov.beginFrame(now);
+      // unwatched, the vacuum seethes on without costing a frame
+      if (sleeping || paused) { last = now; return; }
       if (!reduce && now - lastFrame < 30) return;
       lastFrame = now;
+      // the governor owns the drawing-buffer size too
+      if (tier !== lastTier) { lastTier = tier; resize(); }
+      const detail = detailForTier(tier);
       const delta = Math.min(64, now - last);
       last = now;
       const dt = delta / 1000;
+      const seethe = 0.5 - 0.5 * Math.cos(season * Math.PI * 2);
+      gatherFade = Math.max(0, gatherFade - dt * 2.2);
 
       timeScale += (timeScaleTarget - timeScale) * Math.min(1, dt * 5);
       if (!reduce) localT += dt * timeScale;
@@ -1340,10 +1539,18 @@ export default function QuarksVacuum() {
       ctx.fillStyle = glow;
       ctx.fillRect(0, 0, width, height);
 
+      // the season's own colour: a still vacuum is nearly black, a boiling
+      // one carries the faintest heat of all that pair production
+      if (seethe > 0.01) {
+        ctx.fillStyle = `rgba(120, 74, 40, ${0.02 + seethe * 0.05})`;
+        ctx.fillRect(0, 0, width, height);
+      }
+
       // field-line shimmer: short faint strokes leaning with a slow phase
       ctx.save();
-      const shimmerAlpha = (1 - lens * 0.6) * 0.05;
-      for (let i = 0; i < 36; i++) {
+      const shimmerAlpha = (1 - lens * 0.6) * 0.05 * (0.7 + seethe * 0.6);
+      const shimmerCount = Math.max(8, Math.round(36 * detail.particles));
+      for (let i = 0; i < shimmerCount; i++) {
         const fx = twinkleHash(i * 13.3) * width;
         const fy = twinkleHash(i * 29.7) * height;
         const baseA = twinkleHash(i * 7.9) * Math.PI * 2;
@@ -1377,10 +1584,17 @@ export default function QuarksVacuum() {
         const btMs = bt * 1000;
         const nowSlot = Math.floor(btMs / VACUUM_SLOT_MS);
         const back = Math.min(64, Math.ceil(VACUUM_MAX_LIFE_MS / timeScale / VACUUM_SLOT_MS));
+        // the season decides how much of the schedule the field shows: a
+        // cold vacuum keeps most of its fluctuations to itself, a boiling one
+        // shows them all. The schedule itself never changes — determinism.
+        const shown = (0.45 + seethe * 0.75) * detail.particles;
         for (let slot = nowSlot - back; slot <= nowSlot; slot++) {
           const age = btMs - slot * VACUUM_SLOT_MS;
           if (age < 0) continue;
-          for (const p of vacuumPairsAt(slot, FIELD_SEED)) {
+          const pairs = vacuumPairsAt(slot, FIELD_SEED);
+          const take = Math.min(pairs.length, Math.round(pairs.length * shown + 0.35));
+          for (let pi = 0; pi < take; pi++) {
+            const p = pairs[pi];
             const life = p.lifeMs / timeScale;
             if (age > life) continue;
             const env = Math.sin((age / life) * Math.PI);
@@ -1441,18 +1655,51 @@ export default function QuarksVacuum() {
       }
       ctx.restore();
 
-      // glimmer — after quiet, a ring where a dwell would land (never text)
+      // ——— the gathering under the finger ———
+      // the seethe drawing inward, tightening until it condenses at the
+      // dwell: the create verb, shown while it happens
+      const gk = hold.gather > 0 ? hold.gather : gatherFade;
+      if (gk > 0.01) {
+        const ease = gk * gk;
+        const ringR = 44 - 32 * ease;
+        stamp(GATHER_SPRITE, hold.gx, hold.gy, 10 + 20 * ease, 0.3 + 0.5 * ease);
+        ctx.strokeStyle = colorAlpha("#E7AC52", 0.1 + 0.38 * ease);
+        ctx.lineWidth = 0.8 + ease * 1.2;
+        ctx.beginPath();
+        ctx.arc(hold.gx, hold.gy, ringR, 0, Math.PI * 2);
+        ctx.stroke();
+        if (!reduce) {
+          for (let i = 0; i < 6; i++) {
+            const ang = (i / 6) * Math.PI * 2 + localT * 1.3 + gk * 3;
+            const r0 = ringR + 24 * (1 - ease);
+            ctx.strokeStyle = colorAlpha(COLOR_TINTS[i % 3], 0.1 + 0.3 * ease);
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(hold.gx + Math.cos(ang) * r0, hold.gy + Math.sin(ang) * r0);
+            ctx.lineTo(hold.gx + Math.cos(ang) * (ringR + 3), hold.gy + Math.sin(ang) * (ringR + 3));
+            ctx.stroke();
+          }
+        }
+      }
+
+      // glimmer (grammar §6.3) — after quiet the same gathering ripples once
+      // where a press would land, never a word
       const idleMs = now - lastInteractionAt;
       if (idleMs > 20000) {
         const slot = Math.floor(now / 9000);
         const gx = (0.25 + twinkleHash(slot) * 0.5) * width;
         const gy = (0.25 + twinkleHash(slot + 7) * 0.5) * height;
-        const pulse = reduce ? 0.5 : 0.5 + Math.sin(now / 480) * 0.5;
-        ctx.strokeStyle = colorAlpha("#E7AC52", 0.1 + pulse * 0.12);
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.arc(gx, gy, 14 + pulse * 8, 0, Math.PI * 2);
-        ctx.stroke();
+        const u = ((now % 9000) / 9000) * 3;
+        if (u < 1) {
+          const ease = reduce ? 0.5 : u;
+          const alpha = Math.sin(ease * Math.PI);
+          stamp(GATHER_SPRITE, gx, gy, 10 + 16 * ease, alpha * 0.5);
+          ctx.strokeStyle = colorAlpha("#E7AC52", alpha * 0.3);
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.arc(gx, gy, 44 - 30 * ease, 0, Math.PI * 2);
+          ctx.stroke();
+        }
       }
 
       // night — laid face-down, the field keeps seething under the dark
@@ -1483,6 +1730,8 @@ export default function QuarksVacuum() {
     return () => {
       cancelAnimationFrame(raf);
       observer.disconnect();
+      offVis();
+      offPause();
       detach();
       detachVessel();
       markLens(false);

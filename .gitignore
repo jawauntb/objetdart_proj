@@ -9,3 +9,10 @@ tsconfig.tsbuildinfo
 ios/ObjetCoin/build/
 *.xcarchive
 .vercel
+
+# agent scratch probes — never shipped
+scripts/_*.mjs
+.probe.mjs
+.gen.mjs
+.emit.mjs
+_sim.mjs

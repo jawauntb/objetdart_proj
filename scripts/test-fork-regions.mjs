@@ -251,6 +251,103 @@ function mulberry32(seed) {
   assert.deepEqual(F.silhouetteSplit([0.3, NaN, 0.4], "a", "b"), [], "one NaN sample poisons the whole ridge — refuse it");
 }
 
+// —— the default fan: a wall has as many sides as it has doors ————————
+// The bugs: columns indexed backwards (the west of the frame taking the
+// LAST door offered, so every fork answers the opposite of where the hand
+// pointed); a fan built for a wall with one door, which would make an
+// un-forked wall depend on where the pinch happened; and a dead zone that
+// either swallows the frame (no fork is ever pickable) or does not exist
+// (a pinch in the middle commits to a door instead of falling back to the
+// press-release-press cycle, which is the ONLY path a trackpad or a
+// keyboard has).
+{
+  const doors = ["/flowers", "/coast", "/mountain"];
+  const regions = F.fanRegions(doors);
+  // West → east, in offer order. Sample off the vertical centre so the
+  // neutral disc is not in play.
+  assert.equal(F.resolveForkByPoint(regions, 0.05, 0.05, doors), "/flowers", "the west column is the first door offered");
+  assert.equal(F.resolveForkByPoint(regions, 0.5, 0.05, doors), "/coast", "the middle column is the second");
+  assert.equal(F.resolveForkByPoint(regions, 0.95, 0.05, doors), "/mountain", "the east column is the last");
+  // The neutral middle: a hand that did not point keeps the cycle.
+  assert.equal(F.resolveForkByPoint(regions, 0.5, 0.5, doors), null, "a centred pinch points at nothing");
+  assert.equal(
+    F.resolveForkByPoint(regions, 0.5, 0.5 - F.FORK_NEUTRAL_RADIUS + 1e-6, doors),
+    null,
+    "…a hair inside the disc's rim, still nothing",
+  );
+  assert.equal(
+    F.resolveForkByPoint(regions, 0.5, 0.5 - F.FORK_NEUTRAL_RADIUS - 1e-6, doors),
+    "/coast",
+    "…a hair outside it the middle door answers: the dead zone must not swallow its own column",
+  );
+  // A wall with one door is not a fork, and must not become position-dependent.
+  assert.deepEqual(F.fanRegions(["/coast"]), [], "one door needs no geography");
+  assert.deepEqual(F.fanRegions([]), [], "no doors, no geography");
+  assert.deepEqual(F.fanRegions(doors, NaN), [], "a non-finite dead zone declares nothing");
+  // Every point outside the disc lands in exactly one column, for every
+  // door count a real wall can have — the seam law, swept.
+  const rand = mulberry32(0x5eed);
+  for (let n = 2; n <= 6; n++) {
+    const set = Array.from({ length: n }, (_, i) => `d${i}`);
+    const rs = F.fanRegions(set);
+    assert.equal(rs.length, n, `a ${n}-door wall has ${n} sides`);
+    for (let i = 0; i < 400; i++) {
+      const nx = rand();
+      const ny = rand();
+      const claims = rs.filter((r) => r.test(nx, ny)).length;
+      const inside = (nx - 0.5) ** 2 + (ny - 0.5) ** 2 < F.FORK_NEUTRAL_RADIUS ** 2;
+      assert.equal(claims, inside ? 0 : 1, `exactly one claim outside the disc at (${nx}, ${ny})`);
+    }
+    // Each column must be reachable, or a door would be unpickable forever.
+    for (let i = 0; i < n; i++) {
+      const cx = F.fanColumnCenter(i, n);
+      assert.equal(F.resolveForkByPoint(rs, cx, 0.02, set), set[i], `door ${i} of ${n} is reachable at its own column`);
+    }
+  }
+  // fanColumnCenter is the presentation's read of the same geometry: the
+  // centre it names must fall in the column it names. A drifted formula
+  // would open the vignette toward the wrong door — the exact "which door
+  // is this press taking?" confusion the fan exists to remove.
+  for (let n = 1; n <= 6; n++) {
+    for (let i = 0; i < n; i++) {
+      const cx = F.fanColumnCenter(i, n);
+      assert.ok(cx > i / n && cx < (i + 1) / n, `column ${i}/${n} centre sits inside its own column`);
+    }
+  }
+  assert.equal(F.fanColumnCenter(0, 1), 0.5, "an unforked wall has no side");
+  assert.equal(F.fanColumnCenter(9, 3), F.fanColumnCenter(2, 3), "an out-of-range index clamps, never wraps");
+}
+
+// —— the law is wired to a wall, not shelved ————————————————————————
+// This module shipped complete, tested, documented — and with ZERO
+// consumers anywhere in src/, for a whole release. Every fork in the album
+// was still resolved by the blind press-release-press carousel, which is
+// precisely the "weird navigation" the fork regions exist to end. A green
+// unit suite over an unreachable module is the failure mode this guards.
+{
+  const { readdirSync, statSync } = await import("node:fs");
+  const walk = (dir) =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const child = `${dir}/${e.name}`;
+      if (e.isDirectory()) return walk(child);
+      return statSync(child).isFile() && /\.tsx?$/.test(e.name) ? [child] : [];
+    });
+  const srcDir = fileURLToPath(new URL("src", rootUrl));
+  const consumers = walk(srcDir).filter(
+    (f) =>
+      !f.endsWith("/lib/fork-regions.ts") &&
+      /from\s+"@\/lib\/fork-regions"/.test(readFileSync(f, "utf8")),
+  );
+  assert.ok(consumers.length > 0, "fork-regions must have at least one consumer in src/");
+  const wall = consumers.map((f) => readFileSync(f, "utf8")).join("\n");
+  assert.match(wall, /resolveForkByPoint\s*\(/, "a consumer must actually resolve a fork by point");
+  assert.match(
+    wall,
+    /fanRegions\s*\(/,
+    "every fork wall must get the default geography, or only rooms that opted in would be pickable",
+  );
+}
+
 console.log(
-  "fork-regions ok: the pinch point picks the door with y honest to the frame, unclaimed points and unoffered doors refuse to the cycle, no door is ever invented over 500 fuzzed walls, order breaks ties both ways, every boundary lands on exactly one side along swept lines, declared walls hold still, and 200 pinches repeated five times each never changed their answer",
+  "fork-regions ok: the pinch point picks the door with y honest to the frame, unclaimed points and unoffered doors refuse to the cycle, no door is ever invented over 500 fuzzed walls, order breaks ties both ways, every boundary lands on exactly one side along swept lines, declared walls hold still, 200 pinches repeated five times each never changed their answer, the default fan lays 2–6 doors west to east with a neutral middle that hands the wall back to the cycle, and the law is wired to a real travel wall rather than shelved",
 );

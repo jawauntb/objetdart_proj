@@ -5,6 +5,7 @@ import { getFieldAudio } from "@/lib/audio";
 import { useField } from "@/store/field";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { onVessel } from "@/lib/vessel";
 import { relaxTurbulence, stirTurbulence } from "@/lib/turbulence";
 import {
   addNatural as worldAddNatural,
@@ -14,7 +15,7 @@ import {
   type WorldKind,
   type WorldNatural,
 } from "@/lib/world";
-import { resolveDpr, onGalleryPause, onVisibility, isEmbeddedFrame } from "@/lib/room-runtime";
+import { resolveDpr, onGalleryPause, onVisibility, isEmbeddedFrame, createFrameGovernor, detailForTier } from "@/lib/room-runtime";
 import LetGo from "@/components/LetGo";
 
 /**
@@ -93,10 +94,17 @@ export default function Ocean() {
     let uTiltLoc: WebGLUniformLocation | null = null;
     let uTurbLoc: WebGLUniformLocation | null = null;
     let uDepthLoc: WebGLUniformLocation | null = null;
+    let uSeasonLoc: WebGLUniformLocation | null = null;
     let uRipplesLoc: WebGLUniformLocation | null = null;
     let uRippleCountLoc: WebGLUniformLocation | null = null;
+    let waterBuf: WebGLBuffer | null = null;
 
-    if (gl) {
+    // Factored so the whole program (shaders, buffer, uniform locations)
+    // can be rebuilt after a lost/restored context — GPU resources don't
+    // survive loss even though the JS WebGLRenderingContext object does.
+    const compileWaterProgram = () => {
+      if (!gl) return;
+      glProg = null;
       const vert = `
         attribute vec2 a_pos;
         varying vec2 vUv;
@@ -112,6 +120,7 @@ export default function Ocean() {
         uniform float uSwell;   // audio swell LFO, ~-1..1
         uniform float uTurb;    // storm axis 0..~1 (shake / hard press)
         uniform float uDepth;   // dive depth 0 (surface) .. 1 (abyss)
+        uniform float uSeason;  // 0..1 cyclic, advanced by 3-finger twist
         uniform vec2 uTilt;     // device tilt bias
         uniform vec4 uRipples[12]; // xy uv, z age sec, w strength
         uniform int uRippleCount;
@@ -251,6 +260,12 @@ export default function Ocean() {
           float wash = sin(wuv.x * 1.8 + t * 0.12) * sin(wuv.y * 2.6 - t * 0.07);
           color += wash * 0.022 * vec3(0.85, 0.92, 1.0);
 
+          // the room's season (three-finger twist): the water's own light
+          // drifts warm to cool and back over the slow cycle — small,
+          // continuous, never a switch.
+          float seasonHue = sin(uSeason * 6.28318);
+          color += seasonHue * 0.030 * vec3(0.10, 0.02, -0.06);
+
           // ── sky ────────────────────────────────────────────────
           // a Hokusai sky: warm cream/beige, faintly deeper at the very top,
           // paling to a misty haze at the skyline. ties to the paper palette.
@@ -259,6 +274,7 @@ export default function Ocean() {
           vec3 sky = mix(skyTop, skyLow, smoothstep(0.0, horizon, uv.y));
           // faint sun bloom in the sky above the glint column
           sky += col * exp(-pow((horizon - uv.y) * 6.0, 2.0)) * 0.10;
+          sky += seasonHue * 0.020 * vec3(0.08, 0.02, -0.05);
 
           // horizon haze: blend a soft warm band so the seam is atmospheric.
           float seam = smoothstep(horizon - 0.04, horizon, uv.y)
@@ -348,11 +364,12 @@ export default function Ocean() {
             uTiltLoc = gl.getUniformLocation(p, "uTilt");
             uTurbLoc = gl.getUniformLocation(p, "uTurb");
             uDepthLoc = gl.getUniformLocation(p, "uDepth");
+            uSeasonLoc = gl.getUniformLocation(p, "uSeason");
             uRipplesLoc = gl.getUniformLocation(p, "uRipples");
             uRippleCountLoc = gl.getUniformLocation(p, "uRippleCount");
 
-            const buf = gl.createBuffer();
-            gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+            waterBuf = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, waterBuf);
             gl.bufferData(
               gl.ARRAY_BUFFER,
               new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]),
@@ -365,7 +382,24 @@ export default function Ocean() {
           }
         }
       }
-    }
+    };
+    compileWaterProgram();
+
+    // WebGL context loss/restore: pause GL draws (the 2D fallback path
+    // already used when `gl` is null covers the frames in between) and
+    // rebuild the whole program once the context comes back.
+    let glContextLost = false;
+    const onContextLost = (ev: Event) => {
+      ev.preventDefault();
+      glContextLost = true;
+      glProg = null;
+    };
+    const onContextRestored = () => {
+      glContextLost = false;
+      compileWaterProgram();
+    };
+    water.addEventListener("webglcontextlost", onContextLost, false);
+    water.addEventListener("webglcontextrestored", onContextRestored, false);
 
     // ── resize ────────────────────────────────────────────────────
     const resize = () => {
@@ -377,7 +411,7 @@ export default function Ocean() {
       surf.width = Math.floor(w * dpr);
       surf.height = Math.floor(h * dpr);
       sctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      if (gl) gl.viewport(0, 0, water.width, water.height);
+      if (gl && !glContextLost) gl.viewport(0, 0, water.width, water.height);
     };
     resize();
     const ro = new ResizeObserver(resize);
@@ -579,6 +613,13 @@ export default function Ocean() {
     let lastDragEmit = 0;
     let lastWindFxAt = 0;
     let lastScrubAt = 0;
+    // twist rotates the lens: the Great Wave (Hokusai's own image of this
+    // water) fades in/out over the water itself — a level of description,
+    // not a new mechanic. Three-finger twist turns the season instead.
+    let heroLens = 1;
+    let lensDetentSide = 1;
+    let season = 0;
+    let lastSeasonFxAt = 0;
 
     // ── device sensors ────────────────────────────────────────────
     const tiltTarget = { x: 0, y: 0 };
@@ -586,6 +627,7 @@ export default function Ocean() {
     let sensorsArmed = false;
     let lastAccelMag: number | null = null;
     let lastShakeAt = 0;
+    let lastKnockAt = 0;
     // flip detection: watch beta+gamma for a rapid crossing (phone rotated
     // face-down or spun on its own axis in < 350ms)
     let lastOrient: { beta: number; gamma: number; t: number } | null = null;
@@ -636,6 +678,15 @@ export default function Ocean() {
       const mag = Math.hypot(a.x ?? 0, a.y ?? 0, a.z ?? 0);
       if (lastAccelMag != null) {
         const jolt = Math.abs(mag - lastAccelMag);
+        // knock: a sharp spike without the sustained variance of a shake —
+        // a rap on the case, not an agitation. Rings one ripple at centre.
+        if (jolt <= 13 && mag > 22 && performance.now() - lastKnockAt > 600) {
+          lastKnockAt = performance.now();
+          addRipple(surf.clientWidth * 0.5, seaLevelPx(), 30 + Math.min(1, mag / 44) * 20);
+          try { getFieldAudio().chime(); } catch { /* noop */ }
+          try { haptics.tap(); } catch { /* noop */ }
+          useField.getState().recordTape("ripple", 0.6, "ocean/knock");
+        }
         if (jolt > 13) {
           stirTurbulence(Math.min(0.6, jolt / 34));
           const now = performance.now();
@@ -703,6 +754,13 @@ export default function Ocean() {
     const detachGestures = attachGestures(wrap, {
       tap: (e) => {
         lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          addRipple((surf.clientWidth || 1) / 2, seaLevelPx(), 56 + e.intensity * 44);
+          stirTurbulence(0.1 + e.intensity * 0.12);
+          haptics.ripple(e.intensity);
+          try { getFieldAudio().chime(); } catch { /* noop */ }
+          return;
+        }
         if (e.fingers !== 1) return; // the sea absorbs frame/law taps
         armSensors();
         const { x, y } = toLocal(e.x, e.y);
@@ -885,6 +943,32 @@ export default function Ocean() {
         const h = surf.clientHeight || 1;
         depthTargetRef.current = clamp01(depthTargetRef.current + (e.dy / h) * 1.35);
       },
+      twist: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          // three fingers turn the season — the water's own light drifts
+          // warm to cool and back over the room's slow cycle
+          if (e.phase === "start") return;
+          season = (((season + e.velocity * 0.012) % 1) + 1) % 1;
+          const nowMs = performance.now();
+          if (nowMs - lastSeasonFxAt > 900) {
+            lastSeasonFxAt = nowMs;
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+          return;
+        }
+        // rotate the lens: Hokusai's own image of this water fades in and
+        // out over the water itself — a level of description, not a
+        // second mechanic.
+        if (e.phase === "start") return;
+        heroLens = clamp01(heroLens - e.velocity * 0.012);
+        const side = heroLens > 0.5 ? 1 : 0;
+        if (side !== lensDetentSide) {
+          lensDetentSide = side;
+          try { haptics.lens(); } catch { /* noop */ }
+          try { getFieldAudio().playTone(side === 1 ? 68 : 60, 0.3); } catch { /* noop */ }
+        }
+      },
       scrub: (e) => {
         lastGestureAt = performance.now();
         const nowMs = performance.now();
@@ -916,6 +1000,22 @@ export default function Ocean() {
         entrainUntil = performance.now() + 9000;
       },
     }, { wheelZoom: false });
+    const detachVessel = onVessel({
+      tilt: ({ gamma }) => {
+        windXTarget = Math.max(-1, Math.min(1, gamma / 35));
+      },
+      shake: ({ intensity }) => {
+        stirTurbulence(Math.min(0.2, intensity * 0.14));
+        haptics.chop();
+      },
+      knock: ({ intensity }) => {
+        addRipple((surf.clientWidth || 1) / 2, seaLevelPx(), 36 + intensity * 28);
+        try { getFieldAudio().bell(); } catch { /* noop */ }
+      },
+      flip: ({ faceDown }) => {
+        timeScaleTarget = faceDown ? 0.25 : 1;
+      },
+    });
 
     // Desktop hover is the grammar's quiet dialect (hover ≈ light touch):
     // the halo follows and the water barely dimples. All contact gestures
@@ -1055,6 +1155,17 @@ export default function Ocean() {
     let lastZone = "surface";
     let lastMReport = 0;
     let lastM = -1;
+
+    // ── the performance contract (src/lib/room-runtime) ─────────────
+    // resolveDpr already gates the drawing-buffer size (resize, above);
+    // the governor + visibility/gallery-pause subscriptions were imported
+    // but never wired to the loop itself — the room drew every frame
+    // whether the tab was visible or not.
+    const gov = createFrameGovernor();
+    let sleeping = false;
+    let galleryPaused = false;
+    const offVisibility = onVisibility((hidden) => { sleeping = hidden; });
+    const offGalleryPause = onGalleryPause((paused) => { galleryPaused = paused; });
     // periodic naturals persistence — the visible drift is applied per
     // frame; without this the mutations only get written on unmount.
     let lastNaturalsSaveAt = performance.now();
@@ -1086,6 +1197,9 @@ export default function Ocean() {
     };
 
     const draw = (now: number) => {
+      const tier = gov.beginFrame(now);
+      if (sleeping || galleryPaused) { raf = requestAnimationFrame(draw); return; } // no draw while hidden
+      const detail = detailForTier(tier);
       const w = surf.clientWidth;
       const h = surf.clientHeight;
       const dt = Math.min(60, now - prevNow);
@@ -1147,6 +1261,7 @@ export default function Ocean() {
         if (uSwellLoc) gl.uniform1f(uSwellLoc, swellLfo + turb * 0.6);
         if (uTurbLoc) gl.uniform1f(uTurbLoc, Math.min(1, turb));
         if (uDepthLoc) gl.uniform1f(uDepthLoc, depth);
+        if (uSeasonLoc) gl.uniform1f(uSeasonLoc, season);
         // wind leans the whole sea the way the three fingers pushed it
         if (uTiltLoc) gl.uniform2f(uTiltLoc, tiltSmoothed.x * 0.028 + windX * 0.02, tiltSmoothed.y * 0.022);
 
@@ -1207,7 +1322,7 @@ export default function Ocean() {
       // foam crest lines marching toward the viewer; spacing widens with
       // perspective so they read as receding swells. Faster + taller than a
       // pond so the water visibly travels.
-      const crests = 7;
+      const crests = Math.max(3, Math.round(7 * detail.particles));
       for (let i = 0; i < crests; i++) {
         const f = i / (crests - 1);
         // perspective: cluster near horizon, spread near the bottom
@@ -1256,10 +1371,18 @@ export default function Ocean() {
       // curling lip so the swell always leans downhill toward the low edge.
       const tiltSway = tiltSmoothed.x;
       const tiltPitch = tiltSmoothed.y;
-      drawFuji(sctx, w, h, horizonY);
-      drawDistantSwells(sctx, w, h, horizonY, t * motion, swellMod);
-      drawGreatWave(sctx, w, h, horizonY, t * motion, swellMod, tiltSway, tiltPitch);
-      drawSecondaryWave(sctx, w, h, horizonY, t * motion, swellMod, tiltSway);
+      // twist's lens: the hero composition fades independently of the
+      // dive-driven surfaceVis, so a rotated-away lens stays gone at any
+      // depth and a raised one returns the moment the hand releases it.
+      if (heroLens > 0.01) {
+        sctx.save();
+        sctx.globalAlpha = surfaceVis * heroLens;
+        drawFuji(sctx, w, h, horizonY);
+        drawDistantSwells(sctx, w, h, horizonY, t * motion, swellMod);
+        drawGreatWave(sctx, w, h, horizonY, t * motion, swellMod, tiltSway, tiltPitch);
+        drawSecondaryWave(sctx, w, h, horizonY, t * motion, swellMod, tiltSway);
+        sctx.restore();
+      }
 
       // ── auto-ambient crashers: a real wave train, denser and biased
       //    left→right so the ocean visibly propagates. A steady tapped
@@ -1471,17 +1594,26 @@ export default function Ocean() {
 
     return () => {
       cancelAnimationFrame(raf);
+      offVisibility();
+      offGalleryPause();
       if (weatherTimer) clearTimeout(weatherTimer);
       // final drift-checkpoint so re-entry advances from now.
       persistNaturals();
       unsubscribeWorld();
       ro.disconnect();
       detachGestures();
+      detachVessel();
       surf.removeEventListener("pointermove", onHover);
       surf.removeEventListener("pointerleave", onLeave);
       surf.removeEventListener("wheel", onWheel);
       window.removeEventListener("deviceorientation", onOrient);
       window.removeEventListener("devicemotion", onMotion);
+      water.removeEventListener("webglcontextlost", onContextLost);
+      water.removeEventListener("webglcontextrestored", onContextRestored);
+      if (gl) {
+        if (glProg) gl.deleteProgram(glProg);
+        if (waterBuf) gl.deleteBuffer(waterBuf);
+      }
     };
   }, []);
 

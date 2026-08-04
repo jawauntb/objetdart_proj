@@ -39,6 +39,13 @@ import { relaxTurbulence, stirTurbulence } from "@/lib/turbulence";
 import { useField } from "@/store/field";
 import LetGo from "@/components/LetGo";
 import {
+  createFrameGovernor,
+  detailForTier,
+  isEmbeddedFrame,
+  onVisibility,
+  resolveDpr,
+} from "@/lib/room-runtime";
+import {
   CELL_FAMILIES,
   MAX_CELLS,
   catchUpCulture,
@@ -263,6 +270,41 @@ export default function CellsPlasm() {
     const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
     reduce = mq.matches;
     const onMq = () => { reduce = mq.matches; };
+    // ————— performance contract —————
+    const gov = createFrameGovernor();
+    let sleeping = false;
+    const offVis = onVisibility((hidden) => { sleeping = hidden; });
+
+    // three-finger twist = season: the culture's own slow cycle
+    let season = 0;
+    let lastSeasonSoundAt = 0;
+
+    // two-finger pan: the frame peeks, then eases home
+    let panX = 0;
+    let panY = 0;
+    let panTargetX = 0;
+    let panTargetY = 0;
+
+    // cached radial-gradient sprite for the per-cell cytoplasm — baked once
+    // per palette key, stamped with drawImage; never a per-cell gradient
+    const spriteCache = new Map<string, HTMLCanvasElement>();
+    const SPRITE_REF = 128;
+    const radialSprite = (key: string, stops: Array<[number, string]>): HTMLCanvasElement | null => {
+      let c = spriteCache.get(key);
+      if (c) return c;
+      c = document.createElement("canvas");
+      c.width = SPRITE_REF;
+      c.height = SPRITE_REF;
+      const sctx = c.getContext("2d");
+      if (!sctx) return null;
+      const rad = SPRITE_REF / 2;
+      const g = sctx.createRadialGradient(rad, rad, 0, rad, rad, rad);
+      for (const [o, color] of stops) g.addColorStop(o, color);
+      sctx.fillStyle = g;
+      sctx.fillRect(0, 0, SPRITE_REF, SPRITE_REF);
+      spriteCache.set(key, c);
+      return c;
+    };
     mq.addEventListener?.("change", onMq);
 
     // ————— persistence —————
@@ -322,7 +364,7 @@ export default function CellsPlasm() {
 
     const resize = () => {
       const r = wrap.getBoundingClientRect();
-      const ratio = Math.min(window.devicePixelRatio || 1, 2);
+      const ratio = resolveDpr(gov.tier(), { embedded: isEmbeddedFrame(), reducedMotion: reduce, maxDpr: 2 });
       width = Math.max(320, Math.floor(r.width));
       height = Math.max(480, Math.floor(r.height));
       rectLeft = r.left;
@@ -721,8 +763,21 @@ export default function CellsPlasm() {
         try { haptics.ripple(0.4); } catch { /* noop */ }
       },
       twist: (e) => {
-        if (e.fingers === 3) return; // three fingers turn the season, not the lens
         lastInteractionAt = performance.now();
+        if (e.fingers === 3) {
+          // three-finger twist = season: the culture's own slow cycle,
+          // never the lens
+          if (e.phase === "move") {
+            season = (((season + e.angle / (Math.PI * 2)) % 1) + 1) % 1;
+            const now = performance.now();
+            if (now - lastSeasonSoundAt > 260) {
+              lastSeasonSoundAt = now;
+              note(36 + Math.round(season * 14), 180);
+              try { haptics.tap(); } catch { /* noop */ }
+            }
+          }
+          return;
+        }
         // two fingers rotate the lens: felt plasm ↔ stained slide
         if (e.phase === "move") {
           lensTarget = clamp01(lensTarget + e.angle / 1.7);
@@ -736,6 +791,17 @@ export default function CellsPlasm() {
             else note(48, 160);
           }
           lensTarget = snapped;
+        }
+      },
+      pan2: (e) => {
+        // two-finger drag pans the frame: a peek, not a permanent move
+        lastInteractionAt = performance.now();
+        if (e.phase === "move") {
+          panTargetX = clamp(panTargetX + e.dx * 0.6, -48, 48);
+          panTargetY = clamp(panTargetY + e.dy * 0.6, -48, 48);
+        } else if (e.phase === "end") {
+          panTargetX = 0;
+          panTargetY = 0;
         }
       },
       scrub: (e) => {
@@ -949,15 +1015,26 @@ export default function CellsPlasm() {
 
       // — felt pass: warm translucent body under candlelight —
       if (feltAlpha > 0.02) {
-        // cytoplasm gathers as the membrane closes
+        // cytoplasm gathers as the membrane closes. The gradient is a cached
+        // sprite (fixed ratios baked in, the dynamic factor folded into a
+        // single globalAlpha scalar — see the comment above) clipped to the
+        // membrane's own irregular path, never a per-cell gradient.
         const gatherA = c.growth < 1 ? 0.2 + 0.8 * c.growth * c.growth : 1;
         membranePath(c, R, t * 0.6, 1);
-        const cyto = ctx.createRadialGradient(0, 0, R * 0.1, 0, 0, R * 1.05);
-        cyto.addColorStop(0, colorAlpha(fam[3], morph.cytoAlpha * 1.5 * feltAlpha * gatherA * vitalityGlow));
-        cyto.addColorStop(0.7, colorAlpha(fam[2], morph.cytoAlpha * feltAlpha * gatherA * vitalityGlow));
-        cyto.addColorStop(1, colorAlpha(fam[1], morph.cytoAlpha * 0.5 * feltAlpha * gatherA * vitalityGlow));
-        ctx.fillStyle = cyto;
-        ctx.fill();
+        ctx.save();
+        ctx.clip();
+        const cytoR = R * 1.05;
+        const cytoSprite = radialSprite(`cell-cyto-${morph.family}`, [
+          [0, colorAlpha(fam[3], 1)],
+          [0.7, colorAlpha(fam[2], 2 / 3)],
+          [1, colorAlpha(fam[1], 1 / 3)],
+        ]);
+        if (cytoSprite) {
+          ctx.globalAlpha = morph.cytoAlpha * 1.5 * feltAlpha * gatherA * vitalityGlow;
+          ctx.drawImage(cytoSprite, -cytoR, -cytoR, cytoR * 2, cytoR * 2);
+          ctx.globalAlpha = 1;
+        }
+        ctx.restore();
         // membrane: a double line, the outer soft, the inner taut — while
         // growing it is an open arc, still finding its way around
         ctx.lineCap = "round";
@@ -1087,9 +1164,19 @@ export default function CellsPlasm() {
     // ————— the loop —————
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
+      const tier = gov.beginFrame(now);
+      if (sleeping) return; // no draw while the document is hidden
+      const detail = detailForTier(tier);
       const delta = Math.min(64, now - last);
       last = now;
       const dt = delta / 1000;
+
+      // two-finger pan: the frame eases toward the hand's nudge, then home
+      panX += (panTargetX - panX) * Math.min(1, dt * 5);
+      panY += (panTargetY - panY) * Math.min(1, dt * 5);
+      canvas.style.transform = (Math.abs(panX) > 0.05 || Math.abs(panY) > 0.05)
+        ? `translate(${panX.toFixed(1)}px, ${panY.toFixed(1)}px)`
+        : "";
 
       // night falls gently and lifts a little quicker — turning the slide
       // back over should feel like the lamp coming up, not a slow dawn
@@ -1150,7 +1237,9 @@ export default function CellsPlasm() {
       // the stage: dark plasm, the candle pool beneath it, the objective's
       // iris. Repainted only when the lens turns or the pool's light moves;
       // otherwise it is one blit, and the whole frame budget goes to life.
-      const glowPulse = (reduce ? 0.1 : 0.09 + Math.sin(breath) * 0.03)
+      // season (three-finger twist) drifts the plasm's own slow warmth cycle
+      const seasonWarm = Math.max(0, Math.sin(season * Math.PI * 2)) * 0.02;
+      const glowPulse = ((reduce ? 0.1 : 0.09 + Math.sin(breath) * 0.03) + seasonWarm)
         * (1 - night * 0.85) * (1 - breathGust * 0.55);
       if (stageCtx && (Math.abs(lens - stageLens) > 0.003 || Math.abs(glowPulse - stageGlow) > 0.0015)) {
         stageLens = lens;
@@ -1175,10 +1264,11 @@ export default function CellsPlasm() {
       }
       ctx.drawImage(stage, 0, 0, width, height);
 
-      // brownian motes
+      // brownian motes — the fixed count scales with the frame governor's tier
+      const activeMotes = Math.max(12, Math.round(motes.length * detail.particles));
       ctx.save();
       ctx.globalCompositeOperation = lens > 0.5 ? "source-over" : "screen";
-      for (let i = 0; i < motes.length; i++) {
+      for (let i = 0; i < activeMotes; i++) {
         const m = motes[i];
         if (!reduce) {
           // brownian jitter — deterministic per mote, alive at rest
@@ -1345,6 +1435,7 @@ export default function CellsPlasm() {
       observer.disconnect();
       detach();
       detachVessel();
+      offVis();
       breathStop?.();
       markLens(false);
       wrap.removeEventListener("keydown", onKeyDown);

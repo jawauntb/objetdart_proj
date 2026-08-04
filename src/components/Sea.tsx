@@ -6,7 +6,9 @@ import { useField } from "@/store/field";
 import type { ConcernKey } from "@/lib/types";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { onVessel, requestVessel } from "@/lib/vessel";
 import { relaxTurbulence, stirTurbulence } from "@/lib/turbulence";
+import { createFrameGovernor, detailForTier, onVisibility, resolveDpr } from "@/lib/room-runtime";
 
 /**
  * The Atlantic.
@@ -131,8 +133,14 @@ export default function Sea({
     let uRipplesLoc: WebGLUniformLocation | null = null;
     let uRippleCountLoc: WebGLUniformLocation | null = null;
     let uConcernTintLoc: WebGLUniformLocation | null = null;
+    let waterBuf: WebGLBuffer | null = null;
 
-    if (gl) {
+    // Factored so the whole program can be rebuilt after a lost/restored
+    // context — GPU resources don't survive loss even though the JS
+    // WebGLRenderingContext object does.
+    const compileWaterProgram = () => {
+      if (!gl) return;
+      glProg = null;
       const vert = `
         attribute vec2 a_pos;
         varying vec2 vUv;
@@ -295,8 +303,8 @@ export default function Sea({
             uRippleCountLoc = gl.getUniformLocation(p, "uRippleCount");
             uConcernTintLoc = gl.getUniformLocation(p, "u_concern_tint");
 
-            const buf = gl.createBuffer();
-            gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+            waterBuf = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, waterBuf);
             gl.bufferData(
               gl.ARRAY_BUFFER,
               new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]),
@@ -309,11 +317,33 @@ export default function Sea({
           }
         }
       }
-    }
+    };
+    compileWaterProgram();
+
+    // WebGL context loss/restore: pause GL draws (the 2D lines layer and
+    // the existing `!gl` gradient fallback already carry the frames in
+    // between) and rebuild the whole program once it comes back.
+    let glContextLost = false;
+    const onGlContextLost = (ev: Event) => {
+      ev.preventDefault();
+      glContextLost = true;
+      glProg = null;
+    };
+    const onGlContextRestored = () => {
+      glContextLost = false;
+      compileWaterProgram();
+    };
+    water.addEventListener("webglcontextlost", onGlContextLost, false);
+    water.addEventListener("webglcontextrestored", onGlContextRestored, false);
+
+    // ── the performance contract (src/lib/room-runtime) ─────────────
+    const gov = createFrameGovernor();
+    let sleeping = false;
+    const offVisibility = onVisibility((hidden) => { sleeping = hidden; });
 
     // ── resize handler ────────────────────────────────────────────
     const resize = () => {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = resolveDpr(gov.tier(), { maxDpr: 2 });
       const w = wrap.clientWidth;
       const h = wrap.clientHeight;
       water.width = Math.floor(w * dpr);
@@ -321,7 +351,7 @@ export default function Sea({
       lines.width = Math.floor(w * dpr);
       lines.height = Math.floor(h * dpr);
       lctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      if (gl) gl.viewport(0, 0, water.width, water.height);
+      if (gl && !glContextLost) gl.viewport(0, 0, water.width, water.height);
     };
     resize();
     const ro = new ResizeObserver(resize);
@@ -340,64 +370,46 @@ export default function Sea({
     const pressureOf = (e: PointerEvent) => (e.pressure > 0 ? e.pressure : 0.5);
     const strengthScale = (p: number) => 0.6 + p * 0.95;
 
-    // The phone's own sensors. Guarded behind a permission request fired from
-    // the first touch (iOS requires a user gesture); silent no-op elsewhere.
+    // The phone's own sensors, on the shared vessel bus (§ vessel: tilt,
+    // shake, knock, flip) rather than a private permission dialect — a
+    // grant made on any other room already arms this one silently.
     const tiltTarget = { x: 0, y: 0 };
     const tiltSmoothed = { x: 0, y: 0 };
-    let sensorsArmed = false;
-    let lastAccelMag: number | null = null;
-    let lastShakeAt = 0;
+    let nightAmt = 0;
+    let nightTarget = 0;
 
-    const onOrient = (e: DeviceOrientationEvent) => {
-      // gamma: left/right tilt (deg), beta: front/back tilt (deg). Lean the
-      // water toward the low edge. Small, clamped — a slosh, not a flood.
-      const gx = (e.gamma ?? 0) / 45;          // -1..1 across a 45° roll
-      const gy = ((e.beta ?? 45) - 45) / 45;   // 0 at a natural reading angle
-      tiltTarget.x = Math.max(-1, Math.min(1, gx));
-      tiltTarget.y = Math.max(-1, Math.min(1, gy));
-    };
-    const onMotion = (e: DeviceMotionEvent) => {
-      const a = e.accelerationIncludingGravity;
-      if (!a) return;
-      const mag = Math.hypot(a.x ?? 0, a.y ?? 0, a.z ?? 0);
-      if (lastAccelMag != null) {
-        const jolt = Math.abs(mag - lastAccelMag);
-        if (jolt > 13) {
-          // shake = storm. Stir the shared axis, and answer in all three
-          // senses at once: the sea churns, the hand is hit, the room thuds.
-          stirTurbulence(Math.min(0.5, jolt / 38));
-          const now = performance.now();
-          if (now - lastShakeAt > 320) {
-            lastShakeAt = now;
-            haptics.storm();
-            try { getFieldAudio().thud(); } catch { /* noop */ }
-          }
-        }
-      }
-      lastAccelMag = mag;
-    };
-    const armSensors = () => {
-      if (sensorsArmed) return;
-      sensorsArmed = true;
-      type PermCtor = { requestPermission?: () => Promise<"granted" | "denied"> };
-      const DOE = (window as unknown as { DeviceOrientationEvent?: PermCtor }).DeviceOrientationEvent;
-      const DME = (window as unknown as { DeviceMotionEvent?: PermCtor }).DeviceMotionEvent;
-      const add = () => {
-        window.addEventListener("deviceorientation", onOrient);
-        window.addEventListener("devicemotion", onMotion);
-      };
-      // iOS 13+ gates motion behind an explicit permission prompt.
-      if (DOE && typeof DOE.requestPermission === "function") {
-        Promise.allSettled([
-          DOE.requestPermission?.(),
-          DME?.requestPermission?.(),
-        ]).then((res) => {
-          if (res.some((r) => r.status === "fulfilled" && r.value === "granted")) add();
-        }).catch(() => { /* noop */ });
-      } else {
-        add();
-      }
-    };
+    const armSensors = () => { void requestVessel(); };
+    const detachVessel = onVessel({
+      tilt: ({ beta, gamma }) => {
+        // gamma: left/right tilt (deg), beta: front/back tilt (deg). Lean
+        // the water toward the low edge. Small, clamped — a slosh, not a
+        // flood. These rooms of all rooms must lean.
+        const gx = gamma / 45;          // -1..1 across a 45° roll
+        const gy = (beta - 45) / 45;    // 0 at a natural reading angle
+        tiltTarget.x = Math.max(-1, Math.min(1, gx));
+        tiltTarget.y = Math.max(-1, Math.min(1, gy));
+      },
+      shake: ({ intensity }) => {
+        // shake = storm. Stir the shared axis, and answer in all three
+        // senses at once: the sea churns, the hand is hit, the room thuds.
+        stirTurbulence(Math.min(0.5, intensity * 0.65));
+        haptics.storm();
+        try { getFieldAudio().thud(); } catch { /* noop */ }
+      },
+      knock: ({ intensity }) => {
+        // a rap on the case rings the water at its centre.
+        addRipple(lines.clientWidth * 0.5, lines.clientHeight * 0.5, 22 + intensity * 24);
+        try { getFieldAudio().chime(); } catch { /* noop */ }
+        haptics.tap();
+      },
+      flip: ({ faceDown }) => {
+        // face-down is night: the water dims and hushes; flipping back
+        // wakes it. Continuous — eased in the render loop, never a cut.
+        nightTarget = faceDown ? 1 : 0;
+        try { faceDown ? getFieldAudio().thud() : getFieldAudio().chime(); } catch { /* noop */ }
+        haptics.bloom();
+      },
+    });
 
     const onDown = (e: PointerEvent) => {
       const r = lines.getBoundingClientRect();
@@ -466,7 +478,45 @@ export default function Sea({
     let lastWindFxAt = 0;
     let lastScrubAt = 0;
     const gyre = { dir: 1 as 1 | -1, strength: 0, phase: 0 };
+    // pan2's small elastic frame (folded into the water's own tilt uniform
+    // below — no new shader surface needed).
+    let panX = 0, panTargetX = 0;
+    let panY = 0, panTargetY = 0;
+    // twist rotates the lens: the same water calm ↔ its full turbulent
+    // voice — a level of description, done with the amplitude this room
+    // already modulates by (swellMod), not a new mechanic.
+    let calm = 0;
+    let calmDetentSide = 0;
+    // three-finger twist turns the season: a slow warm↔cool drift folded
+    // into the existing concern tint uniform.
+    let season = 0;
+    let lastSeasonFxAt = 0;
     const detachGestures = attachGestures(wrap, {
+      twist: (e) => {
+        if (e.fingers === 3) {
+          if (e.phase === "start") return;
+          season = (((season + e.velocity * 0.012) % 1) + 1) % 1;
+          const nowMs = performance.now();
+          if (nowMs - lastSeasonFxAt > 900) {
+            lastSeasonFxAt = nowMs;
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+          return;
+        }
+        if (e.phase === "start") return;
+        calm = Math.max(0, Math.min(1, calm + e.velocity * 0.012));
+        const side = calm > 0.5 ? 1 : 0;
+        if (side !== calmDetentSide) {
+          calmDetentSide = side;
+          try { haptics.lens(); } catch { /* noop */ }
+          try { getFieldAudio().playTone(side === 1 ? 58 : 66, 0.3); } catch { /* noop */ }
+        }
+      },
+      pan2: (e) => {
+        if (e.phase !== "move") return;
+        panTargetX = Math.max(-1, Math.min(1, panTargetX + e.dx * 0.006));
+        panTargetY = Math.max(-1, Math.min(1, panTargetY + e.dy * 0.006));
+      },
       drag: (e) => {
         if (e.fingers !== 3 || e.phase === "end") return;
         // three fingers touch the law: the wind leans the whole body of
@@ -547,6 +597,9 @@ export default function Sea({
     ];
 
     const draw = (now: number) => {
+      const tier = gov.beginFrame(now);
+      if (sleeping) { raf = requestAnimationFrame(draw); return; } // no draw while hidden
+      const detail = detailForTier(tier);
       const w = lines.clientWidth;
       const h = lines.clientHeight;
 
@@ -557,6 +610,7 @@ export default function Sea({
       const t = audioT != null ? audioT : (now - t0) / 1000;
       const dtMs = Math.min(60, now - lastDrawAt);
       lastDrawAt = now;
+      nightAmt += (nightTarget - nightAmt) * Math.min(1, (dtMs / 1000) * 2.2);
 
       // wind (three-finger drag) eases in, then dies back toward calm;
       // the gyre a circling finger stirred slowly unwinds
@@ -572,6 +626,15 @@ export default function Sea({
       const swellLfo = Math.sin(t * Math.PI * 2 * 0.14);
       const driftLfo = Math.sin(t * Math.PI * 2 * 0.03);
       let swellMod = 1 + swellLfo * 0.28 + driftLfo * 0.10;
+
+      // pan2's elastic frame — springs back once the hand eases off.
+      panX += (panTargetX - panX) * Math.min(1, (dtMs / 1000) * 4);
+      panY += (panTargetY - panY) * Math.min(1, (dtMs / 1000) * 4);
+      panTargetX *= Math.exp(-(dtMs / 1000) * 1.4);
+      panTargetY *= Math.exp(-(dtMs / 1000) * 1.4);
+      // twist's lens: calm damps the swell's own expressive amplitude
+      // toward a mirror-still reading of the same water.
+      swellMod *= 1 - calm * 0.6;
 
       // ── lerp smoothed concern state toward target ─────────────
       // When reduced-motion is set we snap to the neutral baseline so we
@@ -630,10 +693,25 @@ export default function Sea({
         if (uTimeLoc) gl.uniform1f(uTimeLoc, t);
         if (uResLoc) gl.uniform2f(uResLoc, water.width, water.height);
         if (uSwellLoc) gl.uniform1f(uSwellLoc, swellLfo + turb * 0.6);
-        // the wind leans the whole body of water the way it was pushed
-        if (uTiltLoc) gl.uniform2f(uTiltLoc, tiltSmoothed.x * 0.03 + windX * 0.02, tiltSmoothed.y * 0.03);
+        // the wind leans the whole body of water the way it was pushed;
+        // pan2 adds its own small elastic offset to the same uniform.
+        if (uTiltLoc) {
+          gl.uniform2f(
+            uTiltLoc,
+            tiltSmoothed.x * 0.03 + windX * 0.02 + panX * 0.05,
+            tiltSmoothed.y * 0.03 + panY * 0.05,
+          );
+        }
         if (uConcernTintLoc) {
-          gl.uniform3f(uConcernTintLoc, sm.tint[0], sm.tint[1], sm.tint[2]);
+          // season (3-finger twist) folds a slow warm↔cool drift into the
+          // same tint channel the concern mood already uses.
+          const seasonHue = reduce ? 0 : Math.sin(season * Math.PI * 2);
+          gl.uniform3f(
+            uConcernTintLoc,
+            sm.tint[0] + seasonHue * 0.03,
+            sm.tint[1] + seasonHue * 0.006,
+            sm.tint[2] - seasonHue * 0.018,
+          );
         }
 
         // pack active ripples into a vec4[12] uniform: (uvX, uvY, ageSec, strength)
@@ -711,7 +789,8 @@ export default function Sea({
         lctx.strokeStyle = sw.line;
         lctx.lineWidth = 1.4;
         lctx.beginPath();
-        for (let x = 0; x <= w; x += 4) {
+        const lineStep = Math.max(4, Math.round(4 / detail.samples));
+        for (let x = 0; x <= w; x += lineStep) {
           const phase = x * sw.freq + t * sw.speed * motion + drift;
           const base =
             Math.sin(phase) +
@@ -756,6 +835,13 @@ export default function Sea({
         }
       }
 
+      // vessel flip: night — a single flat wash, never a gradient, so it
+      // costs nothing extra per frame.
+      if (nightAmt > 0.003) {
+        lctx.fillStyle = `rgba(4, 8, 16, ${(nightAmt * 0.55).toFixed(3)})`;
+        lctx.fillRect(0, 0, w, h);
+      }
+
       raf = requestAnimationFrame(draw);
     };
     raf = requestAnimationFrame(draw);
@@ -769,8 +855,14 @@ export default function Sea({
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
       lines.removeEventListener("pointerleave", onLeave);
-      window.removeEventListener("deviceorientation", onOrient);
-      window.removeEventListener("devicemotion", onMotion);
+      detachVessel();
+      offVisibility();
+      water.removeEventListener("webglcontextlost", onGlContextLost);
+      water.removeEventListener("webglcontextrestored", onGlContextRestored);
+      if (gl) {
+        if (glProg) gl.deleteProgram(glProg);
+        if (waterBuf) gl.deleteBuffer(waterBuf);
+      }
     };
   }, []);
 

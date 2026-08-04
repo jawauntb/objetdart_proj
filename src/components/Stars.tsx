@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
+import { attachGestures, THRESHOLDS } from "@/lib/gesture";
+import { onVessel, requestVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import WaterText from "@/components/WaterText";
 import { useBandEdgeTravel } from "@/components/ScaleTravel";
@@ -39,7 +41,15 @@ import {
   tickAutomata,
   zoomAtScreen,
 } from "@/lib/stars/nestedCosmos";
-import { resolveDpr, onGalleryPause, onVisibility, isEmbeddedFrame } from "@/lib/room-runtime";
+import {
+  createFrameGovernor,
+  detailForTier,
+  resolveDpr,
+  onGalleryPause,
+  onVisibility,
+  isEmbeddedFrame,
+  type QualityTier,
+} from "@/lib/room-runtime";
 
 /**
  * /stars — nested living cosmos.
@@ -328,12 +338,16 @@ function makeId(prefix: string): string {
 const STORAGE_KEY = "objetdart:constellations:v1";
 const RANDOM_SUPERNOVA_MS = 18000;
 const DEFAULT_CAMERA: Camera = { panX: 0.5, panY: 0.5, zoom: 1 };
-/** Tap vs hold: only after this does a press become a black-hole accretion. */
-const HOLD_BH_MS = 820;
-/** Wait before arming hold so a second finger can start a pinch cleanly. */
-const HOLD_ARM_DELAY_MS = 160;
-const PAN_MOVE_PX = 20;
-const NAV_SUPPRESS_MS = 420;
+/**
+ * Tap / dwell / ceremony are the grammar's, never this room's — they live in
+ * `lib/gesture/core.ts` and arrive as `e.tier`. What the room owns is only
+ * what each tier *means* here: the well opens at dwell, the horizon keeps
+ * swelling past ceremony, a constellation frays and lets go at ceremony.
+ */
+const WELL_MASS_PER_SEC = 0.66;
+
+/** The lens ladder: what the sky is, what it is made of, what it is doing. */
+const LENS_RUNGS = 3; // 0 visible · 1 spectral/temperature · 2 gravitational
 
 // ── spectral palette ─────────────────────────────────────────────────
 // Approximate stellar locus colors (RGB 0..255). O/B blue, A white,
@@ -347,6 +361,24 @@ const SPECTRAL_RGB: Record<Spectral, [number, number, number]> = {
   K: [255, 210, 161],
   M: [255, 167, 114],
 };
+
+// The temperature lens (twist, rung 1): the same seven classes at their
+// real blackbody chromaticity — saturated toward the true stellar locus
+// instead of prettified. Turning the lens stops showing what the sky looks
+// like and starts showing what it is made of.
+const SPECTRAL_TRUE: Record<Spectral, [number, number, number]> = {
+  O: [104, 146, 255],
+  B: [148, 180, 255],
+  A: [214, 228, 255],
+  F: [255, 250, 232],
+  G: [255, 230, 160],
+  K: [255, 180, 100],
+  M: [255, 112, 54],
+};
+
+// The gravitational lens (rung 2): starlight drains to a single pale value
+// so nothing competes with the curvature drawn over it.
+const LENS_GRAV_RGB: [number, number, number] = [198, 204, 216];
 
 // real-universe relative prevalence (rough M-K main-sequence weights):
 // M dominates by a huge margin; O is vanishingly rare. These weights
@@ -382,6 +414,8 @@ const NEBULA_PALETTES: Array<{
   { name: "magenta+blue",  a: [210, 90, 200], b: [110, 130, 230] },
   { name: "coral+pink",    a: [240, 130, 110], b: [240, 170, 200] },
 ];
+
+const NEBULA_PALETTE_BY_NAME = new Map(NEBULA_PALETTES.map((p) => [p.name, p]));
 
 // ── field generation ─────────────────────────────────────────────────
 
@@ -643,18 +677,16 @@ type GravityWell = {
   x: number;
   y: number;
   t0: number;
-  pointerId: number | null;
-  mass: number; // grows while holding
-  mode: "pending" | "pan" | "accrete";
+  mass: number;    // grows for as long as the hand stays — never plateaus
+  gather: number;  // 0..1 before the dwell tier: matter visibly collecting
+  mode: "gather" | "accrete";
 };
 
-type PointerIntent = {
-  x: number;
-  y: number;
-  starIdx: number;
-  nebulaIdx: number;
-  inMilkyWay: boolean;
-};
+/** Where a hold began — the only thing the well needs to remember. */
+type PointerIntent = { x: number; y: number };
+
+/** A saved constellation coming undone under a ceremony hold. */
+type Fraying = { id: string; t0: number };
 
 // A mote of matter falling into a black hole. Lives in the hole's local
 // polar frame (radius as a fraction of min(w,h); angle in radians) so the
@@ -718,6 +750,158 @@ function smoothstep(edge0: number, edge1: number, x: number): number {
   return t * t * (3 - 2 * t);
 }
 
+// ── baked falloff sprites ────────────────────────────────────────────
+// Every soft edge in this sky used to be a canvas gradient allocated inside
+// a per-element loop; at galactic depth that was well over a thousand
+// allocations a frame just for the star field. But a falloff is a function
+// of colour alone — its radius is only a scale and its brightness only an
+// alpha — so each one is baked once into an offscreen canvas and stamped
+// with drawImage for ever after. The look is unchanged: same stops, same
+// compositing order, same number of passes.
+
+/** offset · alpha · optional colour override for that stop. */
+type Stop = readonly [number, number, (readonly [number, number, number])?];
+
+const FALL_HALO: readonly Stop[] = [[0, 0.2], [0.4, 0.08], [1, 0]];
+const FALL_GLOW: readonly Stop[] = [[0, 0.55], [0.5, 0.18], [1, 0]];
+const FALL_SOFT: readonly Stop[] = [[0, 1], [1, 0]];
+const FALL_BREATH: readonly Stop[] = [[0, 1], [0.6, 0.4], [1, 0]];
+const FALL_BLOOM: readonly Stop[] = [[0, 0.22], [0.45, 0.09], [1, 0]];
+const FALL_SPARK: readonly Stop[] = [[0, 1], [0.6, 0.325], [1, 0]];
+const FALL_PGLOW: readonly Stop[] = [[0, 1], [0.42, 0.333], [1, 0]];
+const FALL_DARK: readonly Stop[] = [[0, 1], [0.74, 0.98], [1, 0]];
+const FALL_COLLAPSE: readonly Stop[] = [[0, 0.96], [0.72, 0.7], [1, 0]];
+const FALL_BLAST: readonly Stop[] = [[0, 0.38, [255, 255, 230]], [0.18, 0.22], [0.72, 0.07], [1, 0]];
+const FALL_PULSAR: readonly Stop[] = [[0, 0.9, [255, 255, 255]], [0.5, 0.5], [1, 0]];
+const FALL_HEAD: readonly Stop[] = [[0, 0.9, [255, 255, 255]], [0.4, 0.4], [1, 0]];
+const FALL_TIDAL: readonly Stop[] = [[0, 0.5, [255, 244, 220]], [0.3, 0.28], [1, 0]];
+const FALL_NOVA: readonly Stop[] = [[0, 0.6, [255, 255, 245]], [0.35, 0.3], [1, 0]];
+const FALL_SFORM: readonly Stop[] = [[0, 0.16], [0.5, 0.07], [1, 0]];
+const FALL_MERGER: readonly Stop[] = [[0, 0.6, [255, 250, 255]], [0.3, 0.34], [1, 0]];
+
+/** Sprite tags — one baked family per falloff profile. */
+const TAG_HALO = 0;
+const TAG_GLOW = 1;
+const TAG_SOFT = 2;
+const TAG_BREATH = 3;
+const TAG_BLOOM = 4;
+const TAG_SPARK = 5;
+const TAG_PGLOW = 6;
+const TAG_SPIKE_H = 7;
+const TAG_SPIKE_V = 8;
+const TAG_DARK = 9;
+const TAG_COLLAPSE = 10;
+const TAG_BLAST = 11;
+const TAG_PULSAR = 12;
+const TAG_HEAD = 13;
+const TAG_TIDAL = 14;
+const TAG_NOVA = 15;
+const TAG_SFORM = 16;
+const TAG_MERGER = 17;
+
+/**
+ * Baked radius, px. Everything scales from here with drawImage — small
+ * enough that stamping a 0.4px star is a cheap minification, large enough
+ * that the biggest halo at full zoom never looks resampled.
+ */
+const SPRITE_R = 40;
+const SPIKE_L = 128;
+
+const spriteCache = new Map<number, HTMLCanvasElement>();
+
+function bakeDot(r: number, g: number, b: number, fall: readonly Stop[]): HTMLCanvasElement {
+  const c = document.createElement("canvas");
+  const S = SPRITE_R * 2;
+  c.width = S;
+  c.height = S;
+  const ctx = c.getContext("2d");
+  if (!ctx) return c;
+  const grad = ctx.createRadialGradient(SPRITE_R, SPRITE_R, 0, SPRITE_R, SPRITE_R, SPRITE_R);
+  for (const st of fall) {
+    const c = st[2];
+    const sr = c ? c[0] : r;
+    const sg = c ? c[1] : g;
+    const sb = c ? c[2] : b;
+    grad.addColorStop(st[0], `rgba(${sr}, ${sg}, ${sb}, ${st[1]})`);
+  }
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, S, S);
+  return c;
+}
+
+function bakeSpike(r: number, g: number, b: number, vertical: boolean): HTMLCanvasElement {
+  const c = document.createElement("canvas");
+  c.width = vertical ? 8 : SPIKE_L;
+  c.height = vertical ? SPIKE_L : 8;
+  const ctx = c.getContext("2d");
+  if (!ctx) return c;
+  const grad = vertical
+    ? ctx.createLinearGradient(0, 0, 0, SPIKE_L)
+    : ctx.createLinearGradient(0, 0, SPIKE_L, 0);
+  grad.addColorStop(0, `rgba(${r}, ${g}, ${b}, 0)`);
+  grad.addColorStop(0.5, `rgba(${r}, ${g}, ${b}, 0.75)`);
+  grad.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, c.width, c.height);
+  return c;
+}
+
+/**
+ * One sprite per (falloff, colour), keyed by a packed integer so the hot
+ * path builds no strings. Colours in this room come from a handful of fixed
+ * palettes, so the cache saturates within a second and never grows.
+ */
+function sprite(tag: number, r: number, g: number, b: number, fall: readonly Stop[]): HTMLCanvasElement {
+  const ri = r < 0 ? 0 : r > 255 ? 255 : r | 0;
+  const gi = g < 0 ? 0 : g > 255 ? 255 : g | 0;
+  const bi = b < 0 ? 0 : b > 255 ? 255 : b | 0;
+  const key = tag * 0x1000000 + (ri << 16) + (gi << 8) + bi;
+  let s = spriteCache.get(key);
+  if (s === undefined) {
+    s = tag === TAG_SPIKE_H || tag === TAG_SPIKE_V
+      ? bakeSpike(ri, gi, bi, tag === TAG_SPIKE_V)
+      : bakeDot(ri, gi, bi, fall);
+    spriteCache.set(key, s);
+  }
+  return s;
+}
+
+/** Stamp a baked falloff centred at (x, y) out to `radius`, at `alpha`. */
+function stamp(
+  ctx: CanvasRenderingContext2D,
+  sp: HTMLCanvasElement,
+  x: number,
+  y: number,
+  radius: number,
+  alpha: number,
+): void {
+  if (radius <= 0 || alpha <= 0.002) return;
+  const prev = ctx.globalAlpha;
+  ctx.globalAlpha = prev * (alpha > 1 ? 1 : alpha);
+  ctx.drawImage(sp, x - radius, y - radius, radius * 2, radius * 2);
+  ctx.globalAlpha = prev;
+}
+
+/**
+ * Gradient memo for the few falloffs that genuinely change shape (an
+ * accretion disk's inner rim moves with mass and zoom). Keys are packed
+ * numbers, never strings; a canvas gradient is painted in the transform
+ * live at fill time, so callers translate to the element's origin first
+ * and quantise the radii they key on.
+ */
+function makeGradCache(): (key: number, build: () => CanvasGradient) => CanvasGradient {
+  const m = new Map<number, CanvasGradient>();
+  return (key, build) => {
+    let g = m.get(key);
+    if (g === undefined) {
+      if (m.size > 480) m.clear();
+      g = build();
+      m.set(key, g);
+    }
+    return g;
+  };
+}
+
 export default function Stars() {
   // page-specific ambient bed: very faint cosmic noise + sine drones
   useEffect(() => { getFieldAudio().setAmbientProfile("cosmic"); }, []);
@@ -742,7 +926,6 @@ export default function Stars() {
   const [hoveredSaved, setHoveredSaved] = useState<string | null>(null);
   const [hoveredNebula, setHoveredNebula] = useState<number | null>(null);
   const [hoveredMilkyWay, setHoveredMilkyWay] = useState(false);
-  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [camera, setCamera] = useState<Camera>(DEFAULT_CAMERA);
   const [activeLayer, setActiveLayer] = useState<LayerId>("galactic");
   const [skyPulse, setSkyPulse] = useState<SkyPulse | null>(null);
@@ -769,17 +952,11 @@ export default function Stars() {
     x: 0,
     y: 0,
     t0: 0,
-    pointerId: null,
     mass: 0,
-    mode: "pending",
+    gather: 0,
+    mode: "gather",
   });
   const pointerIntentRef = useRef<PointerIntent | null>(null);
-  const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
-  const pinchRef = useRef<{ dist: number; zoom: number } | null>(null);
-  // Per-event pinch distance, achieved zoom, and time — the manifold's
-  // residual velocity is the attempted ratio minus what the camera took.
-  const pinchFrameRef = useRef<{ dist: number; zoom: number; at: number } | null>(null);
-  const holdTimerRef = useRef<number>(0);
   // The scale manifold at the walls: pinching out past zoom 1 opens onto
   // /manifold (with /beyond as the second-press fork door); pinching in
   // past zoom 14 dives to /atlas. Inside 1..14 the nested layers above
@@ -789,10 +966,41 @@ export default function Stars() {
     release: releaseScaleEdge,
     overlay: scaleEdgeOverlay,
   } = useBandEdgeTravel("/stars", STARS_ZOOM_SPEC);
-  /** True while pinch/wheel navigation owns the gesture — blocks star/BH commits. */
-  const navGestureRef = useRef(false);
-  const suppressCommitUntilRef = useRef(0);
   const milkyPulseRef = useRef<number>(0); // performance.now() of last MW click
+
+  // ── the layers above the material (grammar §3) ────────────────────
+  // two fingers turn the lens, three turn the law, the device is the vessel.
+  /** Continuous lens position 0..2 while a hand turns it. */
+  const lensRef = useRef(0);
+  /** Where the ease is heading — the rung during a rest, the turn mid-twist. */
+  const lensSnapRef = useRef(0);
+  /** The rung itself. Only this changes the room's description of the sky. */
+  const lensRungRef = useRef(0);
+  const [lensRung, setLensRung] = useState(0);
+  /** Precession: three fingers walk the constellations through the year. */
+  const seasonRef = useRef(0);
+  /** Interstellar wind — three-finger drag combs the gas off the stars. */
+  const windRef = useRef({ vx: 0, vy: 0, ox: 0, oy: 0 });
+  /** Time dilation while three fingers rest on the sky. */
+  const timeScaleRef = useRef(1);
+  const timeScaleTargetRef = useRef(1);
+  /** One synchronized answer from everything alive (three-finger tap). */
+  const tuttiRef = useRef(0);
+  /** A knock on the case rings the sky: a bell front racing outward. */
+  const knockRef = useRef<{ t0: number; x: number; y: number } | null>(null);
+  /** Face-down: the sky deepens and the simulation idles down. */
+  const nightRef = useRef(0);
+  const nightTargetRef = useRef(0);
+  /** Tilt = parallax lean on the dome. */
+  const leanRef = useRef({ x: 0, y: 0 });
+  /** A saved constellation slackening under a ceremony hold. */
+  const frayRef = useRef<Fraying | null>(null);
+  /** Shift held: the desktop dialect of "add this star to the shape". */
+  const shiftRef = useRef(false);
+  /** Last hand contact — the glimmer waits on this. */
+  const lastTouchRef = useRef(0);
+  /** Render quality, resolved by the frame governor. */
+  const qualityRef = useRef<QualityTier>("high");
   // hover flags also mirrored into refs so the RAF loop can read them cheaply
   const hoveredNebulaRef = useRef<number | null>(null);
   const hoveredMilkyWayRef = useRef<boolean>(false);
@@ -929,51 +1137,30 @@ export default function Stars() {
     applyCamera(next, true);
   }, [applyCamera]);
 
-  const clearHoldTimer = useCallback(() => {
-    if (holdTimerRef.current) {
-      window.clearTimeout(holdTimerRef.current);
-      holdTimerRef.current = 0;
-    }
-  }, []);
-
-  const abortTouchWell = useCallback((el?: HTMLCanvasElement | null) => {
-    clearHoldTimer();
+  /** Let the well go without committing anything (cancel, second finger). */
+  const abortWell = useCallback(() => {
     const well = gravityWellRef.current;
-    if (well.pointerId != null && el) {
-      try { el.releasePointerCapture(well.pointerId); } catch { /* noop */ }
-    }
-    gravityWellRef.current = {
-      active: false,
-      x: well.x,
-      y: well.y,
-      t0: well.t0,
-      pointerId: null,
-      mass: 0,
-      mode: "pending",
-    };
+    well.active = false;
+    well.mass = 0;
+    well.gather = 0;
+    well.mode = "gather";
     pointerIntentRef.current = null;
-  }, [clearHoldTimer]);
-
-  const markNavGesture = useCallback(() => {
-    navGestureRef.current = true;
-    suppressCommitUntilRef.current = performance.now() + NAV_SUPPRESS_MS;
+    frayRef.current = null;
   }, []);
 
   const zoomIn = useCallback(() => {
-    markNavGesture();
     zoomBy(ZOOM_STEP);
     haptics.ripple(0.38);
     markSky("deeper in", "nebula", 0.38, "object", "zoom-in");
     try { getFieldAudio().chime(); } catch { /* noop */ }
-  }, [markNavGesture, markSky, zoomBy]);
+  }, [markSky, zoomBy]);
 
   const zoomOut = useCallback(() => {
-    markNavGesture();
     zoomBy(-ZOOM_STEP);
     haptics.tap();
     markSky("wider field", "star", 0.34, "object", "zoom-out");
     try { getFieldAudio().spark(); } catch { /* noop */ }
-  }, [markNavGesture, markSky, zoomBy]);
+  }, [markSky, zoomBy]);
 
   const persistCosmicMemory = useCallback((
     born: BornStar[] = bornStarsRef.current,
@@ -1056,7 +1243,13 @@ export default function Stars() {
     ];
   }, []);
 
-  const birthStarAt = useCallback((x: number, y: number) => {
+  /**
+   * A star is struck out of the sky, and how hard it was struck is how much
+   * of a star it is: intensity (force, then contact area, then approach
+   * speed — whatever the hardware can actually feel) sets its mass, its
+   * light, and whether it is bright enough to carry diffraction spikes.
+   */
+  const birthStarAt = useCallback((x: number, y: number, intensity = 0.5) => {
     const { nx, ny } = screenToSky(x, y);
     const seed = Math.floor((Date.now() + x * 997 + y * 431) % 0xFFFFFFFF);
     const rng = makeRng(seed);
@@ -1067,6 +1260,7 @@ export default function Stars() {
       [238, 156, 204],
     ];
     const rgb = palettes[Math.floor(rng() * palettes.length)];
+    const force = 0.5 + intensity; // 0.5 (feather) .. 1.5 (a real strike)
     const born: BornStar = {
       id:
         typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -1074,11 +1268,11 @@ export default function Stars() {
           : `s-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
       nx,
       ny,
-      size: 0.75 + rng() * 1.8,
-      brightness: 0.66 + rng() * 0.30,
+      size: (0.75 + rng() * 1.8) * force,
+      brightness: Math.min(1, (0.66 + rng() * 0.3) * (0.72 + intensity * 0.56)),
       twinklePhase: rng() * Math.PI * 2,
       twinkleAmt: 0.22 + rng() * 0.52,
-      spikeLen: rng() > 0.52 ? 5 + rng() * 8 : 0,
+      spikeLen: rng() > 0.72 - intensity * 0.34 ? (5 + rng() * 8) * force : 0,
       rgb,
       createdAt: Date.now(),
     };
@@ -1086,7 +1280,7 @@ export default function Stars() {
     bornStarsRef.current = nextStars;
     setBornStars(nextStars);
     persistCosmicMemory(nextStars, userBlackHolesRef.current);
-    heatSky(nx, ny, 0.35);
+    heatSky(nx, ny, 0.2 + intensity * 0.34);
     addCosmicEvent({
       kind: "birth",
       x,
@@ -1094,11 +1288,16 @@ export default function Stars() {
       life: 3.4,
       seed,
       rgb,
-      power: 0.95 + rng() * 0.40,
+      power: (0.95 + rng() * 0.4) * force,
     });
-    haptics.ripple(0.48);
+    haptics.ripple(0.28 + intensity * 0.42);
     markSky("star born", "birth", 0.72, "object", "star-birth");
-    try { getFieldAudio().chime(); } catch { /* noop */ }
+    try {
+      const audio = getFieldAudio();
+      audio.chime();
+      // heavier stars ring lower — the strike is audible as well as visible
+      audio.playTone(520 / force, 0.18 + intensity * 0.22);
+    } catch { /* noop */ }
   }, [addCosmicEvent, heatSky, markSky, persistCosmicMemory, screenToSky]);
 
   /** Find the born star nearest a screen point, within radiusPx. */
@@ -1563,27 +1762,22 @@ export default function Stars() {
     setNamePos(null);
   }, [markSky]);
 
-  // delete a saved constellation (with confirmation)
+  // Unbind a saved constellation. The old two-step (right-click, then
+  // right-click again to confirm) is now physical and touch-reachable: a
+  // ceremony hold on the shape slackens and frays its lines while the hand
+  // stays, and only the completed ceremony calls this. Letting go early
+  // snaps the lines back — the confirmation is the holding.
   const deleteSaved = useCallback(
     (id: string) => {
-      if (deleteConfirm === id) {
-        const list = savedRef.current.filter((c) => c.id !== id);
-        setSaved(list);
-        persistSaved(list);
-        setDeleteConfirm(null);
-        haptics.roll();
-        markSky("constellation forgotten", "gravity", 0.62, "object", "forget");
-      } else {
-        setDeleteConfirm(id);
-        haptics.chop();
-        markSky("confirm forget", "gravity", 0.36, "object", "forget-confirm");
-        // auto-clear confirmation after a few seconds
-        setTimeout(() => {
-          setDeleteConfirm((cur) => (cur === id ? null : cur));
-        }, 3000);
-      }
+      const list = savedRef.current.filter((c) => c.id !== id);
+      if (list.length === savedRef.current.length) return;
+      setSaved(list);
+      persistSaved(list);
+      haptics.roll();
+      try { getFieldAudio().thud(); } catch { /* noop */ }
+      markSky("constellation forgotten", "gravity", 0.62, "object", "forget");
     },
-    [deleteConfirm, markSky, persistSaved],
+    [markSky, persistSaved],
   );
 
   // ── canvas init + render loop ──────────────────────────────────────
@@ -1608,11 +1802,56 @@ export default function Stars() {
     if (!sctx) return;
 
     let raf = 0;
-    const t0 = performance.now();
+
+    // Gradient memos for the handful of falloffs whose *shape* moves (an
+    // accretion disk's rim tracks mass and zoom). Everything with a fixed
+    // shape is a baked sprite; nothing here allocates on a steady frame.
+    // One memo per family so the keys stay small and cannot collide.
+    const gPlanet = makeGradCache();
+    const gWorld = makeGradCache();
+    const gJet = makeGradCache();
+    const gDisk = makeGradCache();
+    const gPhoton = makeGradCache();
+    const gBeam = makeGradCache();
+    const gTail = makeGradCache();
+    const gBurst = makeGradCache();
+    const gSky = makeGradCache();
+    const gNight = makeGradCache();
+    const gQuasar = makeGradCache();
+    const gWell = makeGradCache();
+
+    // ── interstellar dust — the medium the wind actually combs ───────
+    // Seeded motes in normalized sky space. They drift on their own slow
+    // current when nobody is touching (the sky is never still), and lean
+    // into the wind when three fingers push, so weather lands in the
+    // material instead of in a number. Flat pixels: no gradient, no blur.
+    const DUST_N = 200;
+    const dust = new Float32Array(DUST_N * 3); // nx, ny, phase
+    {
+      const drng = makeRng(0xd05715);
+      for (let i = 0; i < DUST_N; i++) {
+        dust[i * 3] = drng();
+        dust[i * 3 + 1] = drng();
+        dust[i * 3 + 2] = drng() * Math.PI * 2;
+      }
+    }
+
+    // The frame governor: real frame time picks the quality tier, the tier
+    // picks the DPR and how much of the field is drawn at all.
+    const gov = createFrameGovernor();
+    let detail = detailForTier("high");
+    let tier: QualityTier = "high";
+    let simT = 0;      // dilated clock — three fingers slow this, not the wall
+    let lastFrame = 0;
+    let frameDilation = 1; // read by the per-frame integrators (infall, etc.)
 
     let w = window.innerWidth;
     let h = window.innerHeight;
-    let dpr = resolveDpr(isEmbeddedFrame() ? "medium" : "high", { embedded: isEmbeddedFrame(), maxDpr: 2 });
+    let dpr = resolveDpr(isEmbeddedFrame() ? "medium" : "high", {
+      embedded: isEmbeddedFrame(),
+      reducedMotion: reduce,
+      maxDpr: 2,
+    });
 
     // ── static-layer painter ──────────────────────────────────────
     // Paint the universe that never changes: gradient sky, Milky Way
@@ -1896,7 +2135,9 @@ export default function Stars() {
     };
 
     const resize = () => {
-      dpr = resolveDpr(isEmbeddedFrame() ? "medium" : "high", { embedded: isEmbeddedFrame(), maxDpr: 2 });
+      // The governor's tier is the DPR ceiling: a phone that starts to
+      // labour drops backing-store resolution before it drops frames.
+      dpr = resolveDpr(tier, { embedded: isEmbeddedFrame(), reducedMotion: reduce, maxDpr: 2 });
       w = window.innerWidth;
       h = window.innerHeight;
       bg.width = w * dpr;
@@ -1917,6 +2158,10 @@ export default function Stars() {
       return cameraRef.current.zoom * breath;
     };
 
+    // Scratch camera reused every call — worldPos runs thousands of times a
+    // frame and must not allocate.
+    const camScratch: Camera = { panX: 0.5, panY: 0.5, zoom: 1 };
+
     const worldPos = (
       nx: number,
       ny: number,
@@ -1925,15 +2170,18 @@ export default function Stars() {
     ): { x: number; y: number } => {
       const cam = cameraRef.current;
       const breath = motion ? 1 + Math.sin(t * 0.05) * 0.012 : 1;
-      const ang = rotate && motion ? t * 0.003 : 0;
-      return skyToScreen(
-        { ...cam, zoom: cam.zoom * breath },
-        nx,
-        ny,
-        w,
-        h,
-        ang,
-      );
+      // three fingers turn the season: the whole field precesses, walking
+      // the constellations through the year without moving the camera.
+      const ang = (rotate && motion ? t * 0.003 : 0) + (rotate ? seasonRef.current : 0);
+      camScratch.panX = cam.panX;
+      camScratch.panY = cam.panY;
+      camScratch.zoom = cam.zoom * breath;
+      const p = skyToScreen(camScratch, nx, ny, w, h, ang);
+      // the vessel leaning: the near sky slides further than the deep field
+      const lean = leanRef.current;
+      p.x += lean.x * 22;
+      p.y += lean.y * 22;
+      return p;
     };
 
     // idle drift — even a lone hole should feel alive. Small, slow, seeded
@@ -2117,38 +2365,32 @@ export default function Stars() {
     // Layered draw for a single star at (x, y). For most stars this is
     // 2 passes (glow + core); for the brightest, we add a 4-pointed
     // cross flare (telescope diffraction).
+    //
+    // Same layers, same order, same stops as before — but the two soft
+    // passes are baked sprites stamped with drawImage instead of a pair of
+    // canvas gradients built from scratch for every star of every frame.
+    // At galactic depth that is ~1400 allocations a frame removed; the core
+    // stays a flat arc fill so its edge never softens.
     const drawStar = (
       s: Pick<Star, "rgb" | "size" | "spikeLen">,
       x: number,
       y: number,
       alpha: number,
+      rgbOverride?: readonly [number, number, number],
     ): void => {
-      const [r, g, b] = s.rgb;
+      const src = rgbOverride ?? s.rgb;
+      const r = src[0];
+      const g = src[1];
+      const b = src[2];
       const size = s.size * Math.min(2.2, Math.sqrt(cameraRef.current.zoom));
 
       // outer halo — only for stars that have it (medium+)
       if (size > 1.0) {
-        const haloR = size * 5.5;
-        const halo = bctx.createRadialGradient(x, y, 0, x, y, haloR);
-        halo.addColorStop(0,    `rgba(${r}, ${g}, ${b}, ${(alpha * 0.20).toFixed(3)})`);
-        halo.addColorStop(0.4,  `rgba(${r}, ${g}, ${b}, ${(alpha * 0.08).toFixed(3)})`);
-        halo.addColorStop(1,    `rgba(${r}, ${g}, ${b}, 0)`);
-        bctx.fillStyle = halo;
-        bctx.beginPath();
-        bctx.arc(x, y, haloR, 0, Math.PI * 2);
-        bctx.fill();
+        stamp(bctx, sprite(TAG_HALO, r, g, b, FALL_HALO), x, y, size * 5.5, alpha);
       }
 
       // mid glow — soft bloom around the core
-      const glowR = size * 2.4;
-      const glow = bctx.createRadialGradient(x, y, 0, x, y, glowR);
-      glow.addColorStop(0,    `rgba(${r}, ${g}, ${b}, ${(alpha * 0.55).toFixed(3)})`);
-      glow.addColorStop(0.5,  `rgba(${r}, ${g}, ${b}, ${(alpha * 0.18).toFixed(3)})`);
-      glow.addColorStop(1,    `rgba(${r}, ${g}, ${b}, 0)`);
-      bctx.fillStyle = glow;
-      bctx.beginPath();
-      bctx.arc(x, y, glowR, 0, Math.PI * 2);
-      bctx.fill();
+      stamp(bctx, sprite(TAG_GLOW, r, g, b, FALL_GLOW), x, y, size * 2.4, alpha);
 
       // core — slightly desaturated toward white for hot reading
       const coreAlpha = Math.min(1, alpha * 1.1);
@@ -2168,21 +2410,12 @@ export default function Stars() {
         // thin highlight at center crossings — composite as lighter so
         // overlapping nebulae receive the spike's full brightness.
         const prev = bctx.globalCompositeOperation;
+        const prevA = bctx.globalAlpha;
         bctx.globalCompositeOperation = "lighter";
-        // horizontal spike — linear gradient that fades from center
-        const hg = bctx.createLinearGradient(x - len, y, x + len, y);
-        hg.addColorStop(0,    `rgba(${cr}, ${cg}, ${cb}, 0)`);
-        hg.addColorStop(0.5,  `rgba(${cr}, ${cg}, ${cb}, ${(alpha * 0.75).toFixed(3)})`);
-        hg.addColorStop(1,    `rgba(${cr}, ${cg}, ${cb}, 0)`);
-        bctx.fillStyle = hg;
-        bctx.fillRect(x - len, y - 0.6, len * 2, 1.2);
-        // vertical spike
-        const vg = bctx.createLinearGradient(x, y - len, x, y + len);
-        vg.addColorStop(0,    `rgba(${cr}, ${cg}, ${cb}, 0)`);
-        vg.addColorStop(0.5,  `rgba(${cr}, ${cg}, ${cb}, ${(alpha * 0.75).toFixed(3)})`);
-        vg.addColorStop(1,    `rgba(${cr}, ${cg}, ${cb}, 0)`);
-        bctx.fillStyle = vg;
-        bctx.fillRect(x - 0.6, y - len, 1.2, len * 2);
+        bctx.globalAlpha = prevA * Math.min(1, alpha);
+        bctx.drawImage(sprite(TAG_SPIKE_H, cr, cg, cb, FALL_SOFT), x - len, y - 0.6, len * 2, 1.2);
+        bctx.drawImage(sprite(TAG_SPIKE_V, cr, cg, cb, FALL_SOFT), x - 0.6, y - len, 1.2, len * 2);
+        bctx.globalAlpha = prevA;
         bctx.globalCompositeOperation = prev;
       }
     };
@@ -2210,14 +2443,7 @@ export default function Stars() {
         bctx.translate(x, y);
         bctx.rotate(rot);
 
-        const glow = bctx.createRadialGradient(0, 0, 0, 0, 0, r * 4.4);
-        glow.addColorStop(0, `rgba(${br}, ${bg}, ${bb}, ${(0.18 * a).toFixed(3)})`);
-        glow.addColorStop(0.42, `rgba(${br}, ${bg}, ${bb}, ${(0.06 * a).toFixed(3)})`);
-        glow.addColorStop(1, `rgba(${br}, ${bg}, ${bb}, 0)`);
-        bctx.fillStyle = glow;
-        bctx.beginPath();
-        bctx.arc(0, 0, r * 4.4, 0, Math.PI * 2);
-        bctx.fill();
+        stamp(bctx, sprite(TAG_PGLOW, br, bg, bb, FALL_PGLOW), 0, 0, r * 4.4, 0.18 * a);
 
         bctx.save();
         bctx.scale(1, p.ringTilt);
@@ -2233,10 +2459,20 @@ export default function Stars() {
         bctx.stroke();
         bctx.restore();
 
-        const planet = bctx.createRadialGradient(-r * 0.45, -r * 0.55, r * 0.1, 0, 0, r * 1.25);
-        planet.addColorStop(0, `rgba(255, 255, 245, ${(0.90 * a).toFixed(3)})`);
-        planet.addColorStop(0.38, `rgba(${br}, ${bg}, ${bb}, ${(0.88 * a).toFixed(3)})`);
-        planet.addColorStop(1, `rgba(${Math.max(0, br - 90)}, ${Math.max(0, bg - 90)}, ${Math.max(0, bb - 90)}, ${(0.92 * a).toFixed(3)})`);
+        // lit limb: the only falloff here whose shape is offset, so it keys
+        // on the palette index and a quantised radius rather than baking.
+        const aq = Math.round(a * 12);
+        const planet = gPlanet(
+          i * 100000 + Math.round(r * 4) * 32 + aq,
+          () => {
+            const gd = bctx.createRadialGradient(-r * 0.45, -r * 0.55, r * 0.1, 0, 0, r * 1.25);
+            const av = aq / 12;
+            gd.addColorStop(0, `rgba(255, 255, 245, ${(0.9 * av).toFixed(3)})`);
+            gd.addColorStop(0.38, `rgba(${br}, ${bg}, ${bb}, ${(0.88 * av).toFixed(3)})`);
+            gd.addColorStop(1, `rgba(${Math.max(0, br - 90)}, ${Math.max(0, bg - 90)}, ${Math.max(0, bb - 90)}, ${(0.92 * av).toFixed(3)})`);
+            return gd;
+          },
+        );
         bctx.fillStyle = planet;
         bctx.beginPath();
         bctx.arc(0, 0, r, 0, Math.PI * 2);
@@ -2288,10 +2524,20 @@ export default function Stars() {
           bctx.stroke();
           bctx.restore();
         }
-        const body = bctx.createRadialGradient(-r * 0.4, -r * 0.5, r * 0.1, 0, 0, r * 1.2);
-        body.addColorStop(0, `hsla(${p.hue.toFixed(0)}, 55%, 88%, ${(0.9 * a).toFixed(3)})`);
-        body.addColorStop(0.4, `hsla(${p.hue.toFixed(0)}, 65%, 62%, ${(0.85 * a).toFixed(3)})`);
-        body.addColorStop(1, `hsla(${p.hue.toFixed(0)}, 70%, 26%, ${(0.9 * a).toFixed(3)})`);
+        const hq = Math.round(p.hue / 6);
+        const aq = Math.round(a * 12);
+        const body = gWorld(
+          hq * 100000 + Math.round(r * 4) * 32 + aq,
+          () => {
+            const hue = (hq * 6).toFixed(0);
+            const av = aq / 12;
+            const gd = bctx.createRadialGradient(-r * 0.4, -r * 0.5, r * 0.1, 0, 0, r * 1.2);
+            gd.addColorStop(0, `hsla(${hue}, 55%, 88%, ${(0.9 * av).toFixed(3)})`);
+            gd.addColorStop(0.4, `hsla(${hue}, 65%, 62%, ${(0.85 * av).toFixed(3)})`);
+            gd.addColorStop(1, `hsla(${hue}, 70%, 26%, ${(0.9 * av).toFixed(3)})`);
+            return gd;
+          },
+        );
         bctx.fillStyle = body;
         bctx.beginPath();
         bctx.arc(0, 0, r, 0, Math.PI * 2);
@@ -2347,7 +2593,8 @@ export default function Stars() {
       const horizonN = horizon / (base * zoom);
       const iscoN = diskInner / (base * zoom);
       const lensN = lensR / (base * zoom);
-      const step = motion ? 1 : 0.32;
+      // infall runs on the sky's clock, so it slows with it
+      const step = (motion ? 1 : 0.32) * frameDilation;
       // feed the hole — always something falling in. Motes frozen at the
       // horizon hold their light but not a place in the live pool.
       let liveMotes = 0;
@@ -2490,11 +2737,24 @@ export default function Stars() {
         bctx.globalCompositeOperation = "lighter";
         const jetLen = diskOuter * (2.0 + v.mass * 0.6);
         const flick = 0.55 + 0.45 * Math.sin(t * 9 + v.mass * 3);
+        const chq = Math.round(coolHue / 6);
+        const jlq = Math.round(jetLen / 4);
+        const prevJetA = bctx.globalAlpha;
+        // the beams' whole gradient scales with one factor, so the shape is
+        // cached and the flicker rides globalAlpha
+        bctx.globalAlpha = prevJetA * Math.min(1, jetP * flick);
         for (const dir of [-1, 1]) {
-          const jg = bctx.createLinearGradient(0, 0, 0, dir * jetLen);
-          jg.addColorStop(0, `hsla(${coolHue}, 100%, 90%, ${(0.5 * jetP * flick).toFixed(3)})`);
-          jg.addColorStop(0.5, `hsla(${coolHue}, 100%, 80%, ${(0.16 * jetP * flick).toFixed(3)})`);
-          jg.addColorStop(1, `hsla(${coolHue}, 100%, 70%, 0)`);
+          const jg = gJet(
+            chq * 100000 + jlq * 4 + (dir > 0 ? 1 : 0),
+            () => {
+              const hue = (chq * 6).toFixed(0);
+              const gd = bctx.createLinearGradient(0, 0, 0, dir * jlq * 4);
+              gd.addColorStop(0, `hsla(${hue}, 100%, 90%, 0.5)`);
+              gd.addColorStop(0.5, `hsla(${hue}, 100%, 80%, 0.16)`);
+              gd.addColorStop(1, `hsla(${hue}, 100%, 70%, 0)`);
+              return gd;
+            },
+          );
           bctx.fillStyle = jg;
           const wBase = Math.max(1.2, horizon * 0.34);
           bctx.beginPath();
@@ -2522,15 +2782,32 @@ export default function Stars() {
       // the middle glows in the hole's own light, and the rim cools to
       // ember red (infrared). More mass, hotter edge.
       const heat = Math.min(1, 0.55 + v.mass * 0.16);
-      const disk = bctx.createRadialGradient(0, 0, diskInner, 0, 0, diskOuter);
-      disk.addColorStop(0, `hsla(${hue}, ${(34 + 30 * (1 - heat)).toFixed(0)}%, ${(86 + heat * 9).toFixed(0)}%, ${(0.55 * diskA).toFixed(3)})`);
-      disk.addColorStop(0.3, `hsla(${hue}, 95%, 66%, ${(0.32 * diskA).toFixed(3)})`);
-      disk.addColorStop(0.62, `hsla(${hue + 14}, 90%, 52%, ${(0.16 * diskA).toFixed(3)})`);
-      disk.addColorStop(1, `hsla(8, 92%, 42%, 0)`);
+      // every stop scales by diskA, so the shape caches and the brightness
+      // rides globalAlpha — the feeding flare still breathes, for free
+      const hq = Math.round(hue / 6);
+      const htq = Math.round(heat * 10);
+      const dinq = Math.round(diskInner * 2);
+      const doutq = Math.round(diskOuter * 2);
+      const disk = gDisk(
+        hq * 1e8 + htq * 1e6 + (dinq % 1000) * 1000 + (doutq % 1000),
+        () => {
+          const hu = hq * 6;
+          const ht = htq / 10;
+          const gd = bctx.createRadialGradient(0, 0, dinq / 2, 0, 0, Math.max(dinq / 2 + 0.1, doutq / 2));
+          gd.addColorStop(0, `hsla(${hu}, ${(34 + 30 * (1 - ht)).toFixed(0)}%, ${(86 + ht * 9).toFixed(0)}%, 0.55)`);
+          gd.addColorStop(0.3, `hsla(${hu}, 95%, 66%, 0.32)`);
+          gd.addColorStop(0.62, `hsla(${hu + 14}, 90%, 52%, 0.16)`);
+          gd.addColorStop(1, `hsla(8, 92%, 42%, 0)`);
+          return gd;
+        },
+      );
+      const prevDiskA = bctx.globalAlpha;
+      bctx.globalAlpha = prevDiskA * Math.min(1, diskA);
       bctx.fillStyle = disk;
       bctx.beginPath();
       bctx.arc(0, 0, diskOuter, 0, Math.PI * 2);
       bctx.fill();
+      bctx.globalAlpha = prevDiskA;
 
       // swirling orbital streaks — inner rings turn faster, all flicker
       const streaks = motion ? 11 : 4;
@@ -2589,25 +2866,31 @@ export default function Stars() {
 
       // hot inner edge / Hawking shimmer at the horizon
       const hawk = motion ? 0.7 + 0.3 * Math.sin(t * 6 + v.mass * 5) : 0.7;
-      const photon = bctx.createRadialGradient(0, 0, horizon * 0.86, 0, 0, horizon * (3 + feed));
-      photon.addColorStop(0, `hsla(${hue}, 100%, 86%, ${(0.32 * intensity * hawk * (1 + feed)).toFixed(3)})`);
-      photon.addColorStop(0.52, `hsla(${coolHue}, 100%, 74%, ${(0.15 * intensity).toFixed(3)})`);
-      photon.addColorStop(1, "rgba(0, 0, 0, 0)");
+      const hotq = Math.round(hawk * (1 + feed) * 8);
+      const feedq = Math.round(feed * 8);
+      const horq = Math.round(horizon * 2);
+      const hOut = (horq / 2) * (3 + feedq / 8);
+      const photon = gPhoton(
+        hq * 1e9 + Math.round(coolHue / 12) * 1e7 + hotq * 1e5 + feedq * 1e4 + (horq % 10000),
+        () => {
+          const gd = bctx.createRadialGradient(0, 0, (horq / 2) * 0.86, 0, 0, Math.max(0.1, hOut));
+          gd.addColorStop(0, `hsla(${hq * 6}, 100%, 86%, ${(0.32 * (hotq / 8)).toFixed(3)})`);
+          gd.addColorStop(0.52, `hsla(${coolHue.toFixed(0)}, 100%, 74%, 0.15)`);
+          gd.addColorStop(1, "rgba(0, 0, 0, 0)");
+          return gd;
+        },
+      );
+      const prevPhA = bctx.globalAlpha;
+      bctx.globalAlpha = prevPhA * Math.min(1, intensity);
       bctx.fillStyle = photon;
       bctx.beginPath();
-      bctx.arc(0, 0, horizon * (3 + feed), 0, Math.PI * 2);
+      bctx.arc(0, 0, hOut, 0, Math.PI * 2);
       bctx.fill();
+      bctx.globalAlpha = prevPhA;
       bctx.globalCompositeOperation = "source-over";
 
-      // dark singularity
-      const core = bctx.createRadialGradient(0, 0, 0, 0, 0, horizon * 1.48);
-      core.addColorStop(0, "rgba(0, 0, 0, 1)");
-      core.addColorStop(0.74, "rgba(0, 0, 0, 0.98)");
-      core.addColorStop(1, "rgba(0, 0, 0, 0)");
-      bctx.fillStyle = core;
-      bctx.beginPath();
-      bctx.arc(0, 0, horizon * 1.48, 0, Math.PI * 2);
-      bctx.fill();
+      // dark singularity — colourless, so one baked sprite serves every hole
+      stamp(bctx, sprite(TAG_DARK, 0, 0, 0, FALL_DARK), 0, 0, horizon * 1.48, 1);
       bctx.restore();
     };
 
@@ -2704,14 +2987,7 @@ export default function Stars() {
           const bloom = Math.sin(Math.PI * u);
           const ringR = base * (0.012 + u * 0.090) * ev.power;
           bctx.globalCompositeOperation = "lighter";
-          const glow = bctx.createRadialGradient(0, 0, 0, 0, 0, ringR * 1.8);
-          glow.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${(0.22 * bloom).toFixed(3)})`);
-          glow.addColorStop(0.45, `rgba(${r}, ${g}, ${b}, ${(0.09 * bloom).toFixed(3)})`);
-          glow.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
-          bctx.fillStyle = glow;
-          bctx.beginPath();
-          bctx.arc(0, 0, ringR * 1.8, 0, Math.PI * 2);
-          bctx.fill();
+          stamp(bctx, sprite(TAG_BLOOM, r, g, b, FALL_BLOOM), 0, 0, ringR * 1.8, bloom);
           bctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${(0.48 * (1 - u)).toFixed(3)})`;
           bctx.lineWidth = 1.2;
           bctx.beginPath();
@@ -2731,15 +3007,7 @@ export default function Stars() {
           const shell = base * (0.025 + u * 0.42) * ev.power;
           const alpha = Math.pow(1 - u, 0.82);
           bctx.globalCompositeOperation = "lighter";
-          const blast = bctx.createRadialGradient(0, 0, 0, 0, 0, shell * 1.12);
-          blast.addColorStop(0, `rgba(255, 255, 230, ${(0.38 * alpha).toFixed(3)})`);
-          blast.addColorStop(0.18, `rgba(${r}, ${g}, ${b}, ${(0.22 * alpha).toFixed(3)})`);
-          blast.addColorStop(0.72, `rgba(${r}, ${g}, ${b}, ${(0.07 * alpha).toFixed(3)})`);
-          blast.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
-          bctx.fillStyle = blast;
-          bctx.beginPath();
-          bctx.arc(0, 0, shell * 1.12, 0, Math.PI * 2);
-          bctx.fill();
+          stamp(bctx, sprite(TAG_BLAST, r, g, b, FALL_BLAST), 0, 0, shell * 1.12, alpha);
           bctx.strokeStyle = `rgba(255, 232, 170, ${(0.62 * alpha).toFixed(3)})`;
           bctx.lineWidth = 1.6;
           bctx.beginPath();
@@ -2770,10 +3038,17 @@ export default function Stars() {
           for (const d of [0, Math.PI]) {
             bctx.save();
             bctx.rotate(beamAng + d);
-            const bg = bctx.createLinearGradient(0, 0, beamLen, 0);
-            bg.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${(0.5 * life01 * strobe).toFixed(3)})`);
-            bg.addColorStop(0.4, `rgba(${r}, ${g}, ${b}, ${(0.14 * life01 * strobe).toFixed(3)})`);
-            bg.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
+            const bg = gBeam(
+              (r << 16) + (g << 8) + b,
+              () => {
+                const gd = bctx.createLinearGradient(0, 0, beamLen, 0);
+                gd.addColorStop(0, `rgba(${r}, ${g}, ${b}, 0.5)`);
+                gd.addColorStop(0.4, `rgba(${r}, ${g}, ${b}, 0.14)`);
+                gd.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
+                return gd;
+              },
+            );
+            bctx.globalAlpha = Math.min(1, life01 * strobe);
             bctx.fillStyle = bg;
             const halfW = base * 0.03;
             bctx.beginPath();
@@ -2783,17 +3058,10 @@ export default function Stars() {
             bctx.lineTo(beamLen, -halfW);
             bctx.closePath();
             bctx.fill();
+            bctx.globalAlpha = 1;
             bctx.restore();
           }
-          const cr = base * 0.02;
-          const cg2 = bctx.createRadialGradient(0, 0, 0, 0, 0, cr);
-          cg2.addColorStop(0, `rgba(255, 255, 255, ${(0.9 * life01 * strobe).toFixed(3)})`);
-          cg2.addColorStop(0.5, `rgba(${r}, ${g}, ${b}, ${(0.5 * life01).toFixed(3)})`);
-          cg2.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
-          bctx.fillStyle = cg2;
-          bctx.beginPath();
-          bctx.arc(0, 0, cr, 0, Math.PI * 2);
-          bctx.fill();
+          stamp(bctx, sprite(TAG_PULSAR, r, g, b, FALL_PULSAR), 0, 0, base * 0.02, life01 * strobe);
         } else if (ev.kind === "comet") {
           // a comet streaking across with a glowing tail
           const ang = ev.ang ?? 0;
@@ -2805,38 +3073,37 @@ export default function Stars() {
           const tx = hx - Math.cos(ang) * tailLen;
           const ty = hy - Math.sin(ang) * tailLen;
           bctx.globalCompositeOperation = "lighter";
-          const tg = bctx.createLinearGradient(hx, hy, tx, ty);
-          tg.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${(0.7 * fade).toFixed(3)})`);
-          tg.addColorStop(0.4, `rgba(180, 210, 255, ${(0.22 * fade).toFixed(3)})`);
-          tg.addColorStop(1, "rgba(180, 210, 255, 0)");
+          // the tail is drawn in its own frame so its gradient is cacheable:
+          // head at the origin, tail running down +x
+          const tlq = Math.max(2, Math.round(Math.hypot(tx - hx, ty - hy) / 2) * 2);
+          const tg = gTail(
+            tlq * 1e7 + (r << 16) + (g << 8) + b,
+            () => {
+              const gd = bctx.createLinearGradient(0, 0, tlq, 0);
+              gd.addColorStop(0, `rgba(${r}, ${g}, ${b}, 0.7)`);
+              gd.addColorStop(0.4, "rgba(180, 210, 255, 0.22)");
+              gd.addColorStop(1, "rgba(180, 210, 255, 0)");
+              return gd;
+            },
+          );
+          bctx.save();
+          bctx.translate(hx, hy);
+          bctx.rotate(Math.atan2(ty - hy, tx - hx));
+          bctx.globalAlpha = Math.min(1, fade);
           bctx.strokeStyle = tg;
           bctx.lineWidth = Math.max(1.4, base * 0.006);
           bctx.lineCap = "round";
           bctx.beginPath();
-          bctx.moveTo(hx, hy);
-          bctx.lineTo(tx, ty);
+          bctx.moveTo(0, 0);
+          bctx.lineTo(tlq, 0);
           bctx.stroke();
-          const hg = bctx.createRadialGradient(hx, hy, 0, hx, hy, base * 0.02);
-          hg.addColorStop(0, `rgba(255, 255, 255, ${(0.9 * fade).toFixed(3)})`);
-          hg.addColorStop(0.4, `rgba(${r}, ${g}, ${b}, ${(0.4 * fade).toFixed(3)})`);
-          hg.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
-          bctx.fillStyle = hg;
-          bctx.beginPath();
-          bctx.arc(hx, hy, base * 0.02, 0, Math.PI * 2);
-          bctx.fill();
+          bctx.restore();
+          stamp(bctx, sprite(TAG_HEAD, r, g, b, FALL_HEAD), hx, hy, base * 0.02, fade);
         } else if (ev.kind === "tidal") {
           // tidal disruption flare — a star shredded into a spiral stream
           const flare = Math.sin(Math.PI * Math.min(1, u * 1.7));
           bctx.globalCompositeOperation = "lighter";
-          const fr = base * 0.09;
-          const fg2 = bctx.createRadialGradient(0, 0, 0, 0, 0, fr);
-          fg2.addColorStop(0, `rgba(255, 244, 220, ${(0.5 * flare).toFixed(3)})`);
-          fg2.addColorStop(0.3, `rgba(${r}, ${g}, ${b}, ${(0.28 * flare).toFixed(3)})`);
-          fg2.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
-          bctx.fillStyle = fg2;
-          bctx.beginPath();
-          bctx.arc(0, 0, fr, 0, Math.PI * 2);
-          bctx.fill();
+          stamp(bctx, sprite(TAG_TIDAL, r, g, b, FALL_TIDAL), 0, 0, base * 0.09, flare);
           const base0 = ev.ang ?? 0;
           for (let i = 0; i < 24; i++) {
             const p = i / 24;
@@ -2852,16 +3119,8 @@ export default function Stars() {
         } else if (ev.kind === "nova") {
           // nova flash — a quick brilliant bloom + thin ring, no remnant
           const fl = Math.pow(1 - u, 1.5);
-          const rr = base * 0.11;
           bctx.globalCompositeOperation = "lighter";
-          const ng = bctx.createRadialGradient(0, 0, 0, 0, 0, rr);
-          ng.addColorStop(0, `rgba(255, 255, 245, ${(0.6 * fl).toFixed(3)})`);
-          ng.addColorStop(0.35, `rgba(${r}, ${g}, ${b}, ${(0.3 * fl).toFixed(3)})`);
-          ng.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
-          bctx.fillStyle = ng;
-          bctx.beginPath();
-          bctx.arc(0, 0, rr, 0, Math.PI * 2);
-          bctx.fill();
+          stamp(bctx, sprite(TAG_NOVA, r, g, b, FALL_NOVA), 0, 0, base * 0.11, fl);
           bctx.strokeStyle = `rgba(255, 240, 210, ${(0.5 * (1 - u)).toFixed(3)})`;
           bctx.lineWidth = 1.3;
           bctx.beginPath();
@@ -2872,15 +3131,7 @@ export default function Stars() {
           const cond = 1 - u;
           const bloom = Math.sin(Math.PI * u);
           bctx.globalCompositeOperation = "lighter";
-          const gr = base * (0.14 * cond + 0.02);
-          const gg = bctx.createRadialGradient(0, 0, 0, 0, 0, gr);
-          gg.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${(0.16 * bloom).toFixed(3)})`);
-          gg.addColorStop(0.5, `rgba(${r}, ${g}, ${b}, ${(0.07 * bloom).toFixed(3)})`);
-          gg.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
-          bctx.fillStyle = gg;
-          bctx.beginPath();
-          bctx.arc(0, 0, gr, 0, Math.PI * 2);
-          bctx.fill();
+          stamp(bctx, sprite(TAG_SFORM, r, g, b, FALL_SFORM), 0, 0, base * (0.14 * cond + 0.02), bloom);
           for (let i = 0; i < 10; i++) {
             const a = hash01(ev.seed + i * 71) * Math.PI * 2;
             const d = base * (0.015 + 0.05 * (1 - cond)) * (0.5 + hash01(ev.seed + i * 97));
@@ -2899,10 +3150,17 @@ export default function Stars() {
           bctx.globalCompositeOperation = "lighter";
           const len = base * 0.72;
           for (const d of [-1, 1]) {
-            const bg = bctx.createLinearGradient(0, 0, 0, d * len);
-            bg.addColorStop(0, `rgba(240, 255, 220, ${(0.85 * fl).toFixed(3)})`);
-            bg.addColorStop(0.5, `rgba(${r}, ${g}, ${b}, ${(0.3 * fl).toFixed(3)})`);
-            bg.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
+            const bg = gBurst(
+              (d > 0 ? 1 : 0) * 1e8 + (r << 16) + (g << 8) + b,
+              () => {
+                const gd = bctx.createLinearGradient(0, 0, 0, d * len);
+                gd.addColorStop(0, "rgba(240, 255, 220, 0.85)");
+                gd.addColorStop(0.5, `rgba(${r}, ${g}, ${b}, 0.3)`);
+                gd.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
+                return gd;
+              },
+            );
+            bctx.globalAlpha = Math.min(1, fl);
             bctx.fillStyle = bg;
             const halfW = base * 0.012;
             bctx.beginPath();
@@ -2913,27 +3171,14 @@ export default function Stars() {
             bctx.closePath();
             bctx.fill();
           }
-          const cr = base * 0.03;
-          const cg2 = bctx.createRadialGradient(0, 0, 0, 0, 0, cr);
-          cg2.addColorStop(0, `rgba(255, 255, 255, ${(0.9 * fl).toFixed(3)})`);
-          cg2.addColorStop(1, "rgba(255, 255, 255, 0)");
-          bctx.fillStyle = cg2;
-          bctx.beginPath();
-          bctx.arc(0, 0, cr, 0, Math.PI * 2);
-          bctx.fill();
+          bctx.globalAlpha = 1;
+          stamp(bctx, sprite(TAG_SOFT, 255, 255, 255, FALL_SOFT), 0, 0, base * 0.03, 0.9 * fl);
         } else if (ev.kind === "merger") {
           // black-hole merger burst — a bright ringing flash at the union
           const bl = Math.pow(1 - u, 0.7);
           bctx.globalCompositeOperation = "lighter";
           const br = base * (0.03 + u * 0.14) * ev.power;
-          const mg = bctx.createRadialGradient(0, 0, 0, 0, 0, base * 0.16);
-          mg.addColorStop(0, `rgba(255, 250, 255, ${(0.6 * bl).toFixed(3)})`);
-          mg.addColorStop(0.3, `rgba(${r}, ${g}, ${b}, ${(0.34 * bl).toFixed(3)})`);
-          mg.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
-          bctx.fillStyle = mg;
-          bctx.beginPath();
-          bctx.arc(0, 0, base * 0.16, 0, Math.PI * 2);
-          bctx.fill();
+          stamp(bctx, sprite(TAG_MERGER, r, g, b, FALL_MERGER), 0, 0, base * 0.16, bl);
           bctx.strokeStyle = `rgba(230, 210, 255, ${(0.6 * bl).toFixed(3)})`;
           bctx.lineWidth = 2;
           bctx.beginPath();
@@ -2952,14 +3197,7 @@ export default function Stars() {
             bctx.stroke();
           }
           bctx.globalCompositeOperation = "source-over";
-          const core = bctx.createRadialGradient(0, 0, 0, 0, 0, rOuter * 0.62);
-          core.addColorStop(0, `rgba(0, 0, 0, ${(0.96 * (1 - implosion * 0.24)).toFixed(3)})`);
-          core.addColorStop(0.72, "rgba(0, 0, 0, 0.70)");
-          core.addColorStop(1, "rgba(0, 0, 0, 0)");
-          bctx.fillStyle = core;
-          bctx.beginPath();
-          bctx.arc(0, 0, rOuter * 0.62, 0, Math.PI * 2);
-          bctx.fill();
+          stamp(bctx, sprite(TAG_COLLAPSE, 0, 0, 0, FALL_COLLAPSE), 0, 0, rOuter * 0.62, 1 - implosion * 0.24);
         }
 
         bctx.restore();
@@ -2967,12 +3205,63 @@ export default function Stars() {
     };
 
     const draw = (now: number) => {
-      const t = (now - t0) / 1000;
       const nowMs = now;
+      // Hidden means asleep: no frame is measured, nothing is drawn, and
+      // the governor keeps the tier it earned while it was being watched.
       if (pageHiddenRef.current) {
         raf = requestAnimationFrame(draw);
         return;
       }
+      const nextTier = gov.beginFrame(now);
+      if (nextTier !== tier) {
+        tier = nextTier;
+        detail = detailForTier(tier);
+        const nextDpr = resolveDpr(tier, { embedded: isEmbeddedFrame(), reducedMotion: reduce, maxDpr: 2 });
+        if (Math.abs(nextDpr - dpr) > 0.01) {
+          dpr = nextDpr;
+          resize();
+        }
+      }
+      // The clock the sky runs on. Three fingers resting on the field slow
+      // it; face-down slows it further. The wall clock keeps its own time —
+      // only what is alive here is dilated.
+      const wallDt = lastFrame > 0 ? Math.min(0.064, (now - lastFrame) / 1000) : 0.016;
+      lastFrame = now;
+      const ease = Math.min(1, wallDt * 5);
+      timeScaleRef.current += (timeScaleTargetRef.current - timeScaleRef.current) * ease;
+      nightRef.current += (nightTargetRef.current - nightRef.current) * Math.min(1, wallDt * 1.6);
+      const dilation = timeScaleRef.current * (1 - 0.55 * nightRef.current);
+      frameDilation = dilation;
+      simT += wallDt * dilation;
+      const t = simT; // the sky's own seconds
+      const night = nightRef.current;
+
+      // the lens settles toward its rung between turns
+      lensRef.current += (lensSnapRef.current - lensRef.current) * Math.min(1, wallDt * 6);
+      const lensPos = lensRef.current;
+      const lensSpectral = Math.max(0, 1 - Math.abs(lensPos - 1));
+      const lensGrav = Math.max(0, 1 - Math.abs(lensPos - 2));
+
+      // the wind lets go slowly — dust keeps travelling after the hand stops
+      const wind = windRef.current;
+      wind.ox += wind.vx * wallDt;
+      wind.oy += wind.vy * wallDt;
+      wind.vx *= Math.exp(-wallDt * 0.9);
+      wind.vy *= Math.exp(-wallDt * 0.9);
+      wind.ox *= Math.exp(-wallDt * 0.16);
+      wind.oy *= Math.exp(-wallDt * 0.16);
+
+      // one synchronised answer from everything alive
+      const tuttiU = tuttiRef.current > 0 ? (nowMs - tuttiRef.current) / 1500 : 2;
+      const tutti = tuttiU >= 0 && tuttiU < 1 ? Math.sin(Math.PI * tuttiU) : 0;
+
+      // a knock on the case: a bell front racing out through the field
+      const knock = knockRef.current;
+      const knockU = knock ? (nowMs - knock.t0) / 1800 : 2;
+      if (knock && knockU >= 1) knockRef.current = null;
+      const knockR = knock && knockU < 1 ? Math.hypot(w, h) * knockU : -1;
+      const knockAmp = knock && knockU < 1 ? Math.pow(1 - knockU, 1.4) : 0;
+      const knockBand = Math.min(w, h) * 0.12;
       const field = activeFieldRef.current;
       const STARS = field.stars;
       const NEBULAE = field.nebulae;
@@ -2988,23 +3277,38 @@ export default function Stars() {
       bctx.clearRect(0, 0, w, h);
       // Continuous night fill so pan/zoom never flashes a hard black frame edge.
       {
-        const sky = bctx.createLinearGradient(0, 0, 0, h);
-        sky.addColorStop(0, "#000204");
-        sky.addColorStop(0.55, "#04060c");
-        sky.addColorStop(1, "#070a12");
+        // one gradient for the life of this viewport, not one per frame
+        const sky = gSky(Math.round(h), () => {
+          const gd = bctx.createLinearGradient(0, 0, 0, h);
+          gd.addColorStop(0, "#000204");
+          gd.addColorStop(0.55, "#04060c");
+          gd.addColorStop(1, "#070a12");
+          return gd;
+        });
         bctx.fillStyle = sky;
         bctx.fillRect(0, 0, w, h);
       }
       const zoom = cameraZoom(t);
       bctx.save();
       // Only soften during layer crossfade — otherwise keep the deep field solid.
-      bctx.globalAlpha = fade < 0.999 ? 0.55 + 0.45 * fade : 1;
+      // Face-down night draws the gas down toward the dark it came from; the
+      // temperature lens burns the coloured wash off so only stars are left.
+      bctx.globalAlpha = (fade < 0.999 ? 0.55 + 0.45 * fade : 1)
+        * (1 - 0.72 * night)
+        * (1 - 0.55 * lensSpectral - 0.35 * lensGrav);
       bctx.translate(w * 0.5, h * 0.5);
       bctx.scale(zoom, zoom);
       // pan is already in worldPos; static is painted in layer-local normalized
       // space — shift by camera pan so deep field tracks navigation.
       const cam = cameraRef.current;
-      bctx.translate((0.5 - cam.panX) * w, (0.5 - cam.panY) * h);
+      // The wind combs the gas: the deep field slides against the star
+      // field, and the vessel's lean parallaxes it a third as far as the
+      // near sky, so the dome reads as depth rather than a flat card.
+      const lean = leanRef.current;
+      bctx.translate(
+        (0.5 - cam.panX) * w + wind.ox + lean.x * 7,
+        (0.5 - cam.panY) * h + wind.oy + lean.y * 7,
+      );
       bctx.drawImage(staticCanvas, -w * 0.5, -h * 0.5, w, h);
       bctx.restore();
 
@@ -3014,14 +3318,57 @@ export default function Stars() {
         const era = 0.5 + 0.5 * Math.sin(t * 0.028);
         const driftX = w * (0.22 + 0.58 * (0.5 + 0.5 * Math.sin(t * 0.019)));
         const driftY = h * (0.24 + 0.42 * (0.5 + 0.5 * Math.cos(t * 0.016)));
-        const night = bctx.createRadialGradient(driftX, driftY, 0, driftX, driftY, Math.min(w, h) * 0.92);
-        night.addColorStop(0, `rgba(80, 120, 180, ${(0.020 + era * 0.018).toFixed(3)})`);
-        night.addColorStop(0.45, `rgba(130, 80, 170, ${(0.010 + (1 - era) * 0.012).toFixed(3)})`);
-        night.addColorStop(1, "rgba(0, 0, 0, 0)");
+        // built at the origin and carried under the drift by the transform,
+        // so 32 era buckets cover every frame this room will ever draw
+        const eraQ = Math.round(era * 31);
+        const nightR = Math.min(w, h) * 0.92;
+        const night = gNight(eraQ * 1e5 + Math.round(nightR), () => {
+          const e = eraQ / 31;
+          const gd = bctx.createRadialGradient(0, 0, 0, 0, 0, nightR);
+          gd.addColorStop(0, `rgba(80, 120, 180, ${(0.02 + e * 0.018).toFixed(3)})`);
+          gd.addColorStop(0.45, `rgba(130, 80, 170, ${(0.01 + (1 - e) * 0.012).toFixed(3)})`);
+          gd.addColorStop(1, "rgba(0, 0, 0, 0)");
+          return gd;
+        });
         bctx.save();
         bctx.globalCompositeOperation = "screen";
+        bctx.translate(driftX, driftY);
         bctx.fillStyle = night;
-        bctx.fillRect(0, 0, w, h);
+        bctx.fillRect(-driftX, -driftY, w, h);
+        bctx.restore();
+      }
+
+      // ── dust ─────────────────────────────────────────────────────
+      // The wind is only real if something is carried by it.
+      {
+        const dn = Math.floor(DUST_N * detail.particles);
+        const windSpeed = Math.hypot(wind.vx, wind.vy);
+        const streak = Math.min(14, windSpeed * 0.045);
+        const ux = windSpeed > 1 ? wind.vx / windSpeed : 0;
+        const uy = windSpeed > 1 ? wind.vy / windSpeed : 0;
+        const dustA = (1 - 0.72 * night) * (1 - 0.6 * lensGrav) * (1 - 0.3 * lensSpectral);
+        bctx.save();
+        bctx.globalCompositeOperation = "lighter";
+        for (let i = 0; i < dn; i++) {
+          const ph = dust[i * 3 + 2];
+          const p = worldPos(
+            dust[i * 3] + Math.sin(t * 0.021 + ph) * 0.012,
+            dust[i * 3 + 1] + Math.cos(t * 0.017 + ph * 1.7) * 0.009,
+            t,
+            false,
+          );
+          const x = p.x + wind.ox * 1.4;
+          const y = p.y + wind.oy * 1.4;
+          if (x < -24 || x > w + 24 || y < -24 || y > h + 24) continue;
+          const a = (0.045 + 0.05 * (0.5 + 0.5 * Math.sin(t * 0.55 + ph))) * dustA;
+          if (a <= 0.004) continue;
+          bctx.fillStyle = `rgba(150, 162, 188, ${a.toFixed(3)})`;
+          if (streak > 1.5) {
+            bctx.fillRect(x - ux * streak, y - uy * streak, 1 + streak * Math.abs(ux), 1 + streak * Math.abs(uy));
+          } else {
+            bctx.fillRect(x, y, 1.1, 1.1);
+          }
+        }
         bctx.restore();
       }
 
@@ -3043,18 +3390,9 @@ export default function Stars() {
           const { x: px, y: py } = worldPos(n.nx, n.ny, t, false);
           const base = Math.min(w, h);
           const r = base * n.rBase * 0.9 * zoom;
-          const palette = NEBULA_PALETTES.find((p) => p.name === n.paletteName)
-            ?? NEBULA_PALETTES[0];
+          const palette = NEBULA_PALETTE_BY_NAME.get(n.paletteName) ?? NEBULA_PALETTES[0];
           const [pr, pg, pb] = palette.a;
-          const a = 0.08 * env;
-          const grad = bctx.createRadialGradient(px, py, 0, px, py, r);
-          grad.addColorStop(0,    `rgba(${pr}, ${pg}, ${pb}, ${a.toFixed(3)})`);
-          grad.addColorStop(0.6,  `rgba(${pr}, ${pg}, ${pb}, ${(a * 0.4).toFixed(3)})`);
-          grad.addColorStop(1,    `rgba(${pr}, ${pg}, ${pb}, 0)`);
-          bctx.fillStyle = grad;
-          bctx.beginPath();
-          bctx.arc(px, py, r, 0, Math.PI * 2);
-          bctx.fill();
+          stamp(bctx, sprite(TAG_BREATH, pr, pg, pb, FALL_BREATH), px, py, r, 0.08 * env);
         }
         bctx.globalCompositeOperation = prev;
       }
@@ -3076,7 +3414,15 @@ export default function Stars() {
 
       bctx.save();
       const consumed = consumedSeedRef.current.get(field.id);
+      // The field thins on a struggling frame instead of dropping frames:
+      // the faintest stars go first, and they are the ones nobody counts.
+      const starCut = STARS.length * (detail.particles < 1 ? detail.particles : 1);
+      // Which palette the lens is showing. The rung is discrete — the sky is
+      // either being looked at or being measured — while the turn itself
+      // (the wash burning off, the mass field rising) is continuous.
+      const rung = lensRungRef.current;
       for (let i = 0; i < STARS.length; i++) {
+        if (i >= starCut) break;
         const s = STARS[i];
         const { x, y } = starPos(i, t);
         // generous off-screen culling — bigger stars have larger
@@ -3098,8 +3444,32 @@ export default function Stars() {
         if (inBand && mwPulse > 0) {
           alpha = Math.min(1, alpha + 0.35 * mwPulse);
         }
+        // the room stating itself: every star answers at once, softly
+        if (tutti > 0) alpha = Math.min(1, alpha + 0.42 * tutti);
+        // the knock's bell front sweeping outward through the field
+        if (knockAmp > 0) {
+          const dk = Math.abs(Math.hypot(x - knock!.x, y - knock!.y) - knockR);
+          if (dk < knockBand) {
+            alpha = Math.min(1, alpha + 0.55 * knockAmp * (1 - dk / knockBand));
+          }
+        }
+        // the temperature lens reads brightness off the class, not the eye:
+        // the hot rare stars blaze and the red dwarfs sink toward ember.
+        if (rung === 1) {
+          const heat = s.spectral === "O" ? 1 : s.spectral === "B" ? 0.9
+            : s.spectral === "A" ? 0.78 : s.spectral === "F" ? 0.62
+            : s.spectral === "G" ? 0.5 : s.spectral === "K" ? 0.36 : 0.22;
+          alpha *= 0.45 + heat * 1.05;
+        }
+        alpha *= 1 - 0.5 * night;
 
-        drawStar(s, x, y, alpha);
+        drawStar(
+          s,
+          x,
+          y,
+          alpha,
+          rung === 1 ? SPECTRAL_TRUE[s.spectral] : rung === 2 ? LENS_GRAV_RGB : undefined,
+        );
 
         if (motion && s.twinkleAmt > 0) {
           const flare = Math.max(
@@ -3143,18 +3513,18 @@ export default function Stars() {
         if (x < -cullM || x > w + cullM || y < -cullM || y > h + cullM) continue;
         const bornAge = Math.min(1, (Date.now() - s.createdAt) / 2200);
         const tw = 0.5 + 0.5 * Math.sin(t * (2.4 + s.twinkleAmt) + s.twinklePhase);
-        const alpha = s.brightness * (0.34 + bornAge * 0.66) * (1 - s.twinkleAmt * 0.34 + s.twinkleAmt * 0.34 * tw);
-        drawStar(s, x, y, alpha);
+        let alpha = s.brightness * (0.34 + bornAge * 0.66) * (1 - s.twinkleAmt * 0.34 + s.twinkleAmt * 0.34 * tw);
+        if (tutti > 0) alpha = Math.min(1, alpha + 0.42 * tutti);
+        if (knockAmp > 0) {
+          const dk = Math.abs(Math.hypot(x - knock!.x, y - knock!.y) - knockR);
+          if (dk < knockBand) alpha = Math.min(1, alpha + 0.55 * knockAmp * (1 - dk / knockBand));
+        }
+        alpha *= 1 - 0.5 * night;
+        drawStar(s, x, y, alpha, rung === 2 ? LENS_GRAV_RGB : undefined);
         const [r, g, b] = s.rgb;
         const newborn = 1 - bornAge;
         if (newborn > 0.02) {
-          const halo = bctx.createRadialGradient(x, y, 0, x, y, 34 + s.size * 12);
-          halo.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${(0.22 * newborn).toFixed(3)})`);
-          halo.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
-          bctx.fillStyle = halo;
-          bctx.beginPath();
-          bctx.arc(x, y, 34 + s.size * 12, 0, Math.PI * 2);
-          bctx.fill();
+          stamp(bctx, sprite(TAG_SOFT, r, g, b, FALL_SOFT), x, y, 34 + s.size * 12, 0.22 * newborn);
         }
       }
       // the forgetting: ghost born stars linger and fade while the sky
@@ -3220,15 +3590,22 @@ export default function Stars() {
           const { x, y } = worldPos(q.nx, q.ny, t, false);
           const pulse = 0.55 + 0.45 * Math.sin(t * 2.4 + q.phase);
           const r = Math.min(w, h) * 0.012 * q.power * (0.8 + pulse * 0.4) * cameraZoom(t);
-          const col = `hsla(${q.hue}, 70%, 72%, ${(0.22 * pulse * fade).toFixed(3)})`;
-          const g = bctx.createRadialGradient(x, y, 0, x, y, r * 6);
-          g.addColorStop(0, `hsla(${q.hue}, 90%, 88%, ${(0.55 * pulse).toFixed(3)})`);
-          g.addColorStop(0.35, col);
-          g.addColorStop(1, `hsla(${q.hue}, 70%, 60%, 0)`);
-          bctx.fillStyle = g;
+          const qg = gQuasar(Math.round(q.hue), () => {
+            const gd = bctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+            gd.addColorStop(0, `hsla(${q.hue}, 90%, 88%, 0.55)`);
+            gd.addColorStop(0.35, `hsla(${q.hue}, 70%, 72%, 0.22)`);
+            gd.addColorStop(1, `hsla(${q.hue}, 70%, 60%, 0)`);
+            return gd;
+          });
+          bctx.save();
+          bctx.translate(x, y);
+          bctx.scale(r * 6, r * 6);
+          bctx.globalAlpha = Math.min(1, pulse * fade);
+          bctx.fillStyle = qg;
           bctx.beginPath();
-          bctx.arc(x, y, r * 6, 0, Math.PI * 2);
+          bctx.arc(0, 0, 1, 0, Math.PI * 2);
           bctx.fill();
+          bctx.restore();
           // jet
           bctx.strokeStyle = `hsla(${q.hue}, 80%, 80%, ${(0.28 * pulse).toFixed(3)})`;
           bctx.lineWidth = 1.2;
@@ -3240,13 +3617,110 @@ export default function Stars() {
         bctx.restore();
       }
 
+      // ── the gravitational lens (rung 2) ──────────────────────────
+      // The map made explicit: a lattice of the sky pushed through the same
+      // deflection the starlight already obeys, plus the mass contours of
+      // every horizon. Nothing new is simulated — the geometry that was
+      // always bending the field is simply drawn.
+      if (lensGrav > 0.02) {
+        const cols = 15;
+        const rows = 11;
+        bctx.save();
+        bctx.globalCompositeOperation = "lighter";
+        bctx.lineWidth = 0.7;
+        bctx.strokeStyle = `rgba(126, 152, 220, ${(0.3 * lensGrav).toFixed(3)})`;
+        for (let r0 = 0; r0 <= rows; r0++) {
+          bctx.beginPath();
+          for (let c0 = 0; c0 <= cols * 2; c0++) {
+            const p = lensPoint((c0 / (cols * 2)) * w, (r0 / rows) * h, t);
+            if (c0 === 0) bctx.moveTo(p.x, p.y);
+            else bctx.lineTo(p.x, p.y);
+          }
+          bctx.stroke();
+        }
+        for (let c0 = 0; c0 <= cols; c0++) {
+          bctx.beginPath();
+          for (let r0 = 0; r0 <= rows * 2; r0++) {
+            const p = lensPoint((c0 / cols) * w, (r0 / (rows * 2)) * h, t);
+            if (r0 === 0) bctx.moveTo(p.x, p.y);
+            else bctx.lineTo(p.x, p.y);
+          }
+          bctx.stroke();
+        }
+        // mass contours — one ring per e-fold of the potential
+        const lBase = Math.min(w, h);
+        const lZoom = cameraZoom(t);
+        for (const hole of userBlackHolesRef.current) {
+          const hp = userHoleScreen(hole, t, nowMs);
+          const hr = lBase * (0.01 + hole.mass * 0.0065) * lZoom;
+          for (let k = 1; k <= 4; k++) {
+            bctx.strokeStyle = `rgba(206, 176, 255, ${(0.24 * lensGrav / k).toFixed(3)})`;
+            bctx.beginPath();
+            bctx.arc(hp.x, hp.y, hr * Math.pow(2.2, k), 0, Math.PI * 2);
+            bctx.stroke();
+          }
+        }
+        bctx.restore();
+      }
+
       const well = gravityWellRef.current;
+      // The dwell has not landed yet, but the sky already knows: matter
+      // gathers under the finger from the first quarter-second, so the hand
+      // learns what holding means without being told a thing.
+      if (well.active && well.mode === "gather" && well.gather > 0.01) {
+        const gr = 10 + well.gather * 46;
+        bctx.save();
+        bctx.globalCompositeOperation = "lighter";
+        stamp(bctx, sprite(TAG_SOFT, 176, 196, 255, FALL_SOFT), well.x, well.y, gr, 0.3 * well.gather);
+        bctx.strokeStyle = `rgba(190, 206, 255, ${(0.34 * well.gather).toFixed(3)})`;
+        bctx.lineWidth = 1;
+        bctx.beginPath();
+        bctx.arc(well.x, well.y, gr * (1.25 - 0.45 * well.gather), 0, Math.PI * 2);
+        bctx.stroke();
+        // infalling flecks, drawn tighter the longer the hand stays
+        for (let i = 0; i < 8; i++) {
+          const a = i * 0.785 + t * 1.4;
+          const rr = gr * (1.5 - well.gather * 0.9);
+          bctx.fillStyle = `rgba(226, 234, 255, ${(0.5 * well.gather).toFixed(3)})`;
+          bctx.fillRect(well.x + Math.cos(a) * rr, well.y + Math.sin(a) * rr, 1.6, 1.6);
+        }
+        bctx.restore();
+      }
+      // ── glimmer ──────────────────────────────────────────────────
+      // After a long silence the sky hints, and only ever physically: a
+      // gathering opens and closes where a held finger would open one.
+      // No copy, no label, nothing to dismiss.
+      if (lastTouchRef.current === 0) lastTouchRef.current = nowMs;
+      const idle = nowMs - lastTouchRef.current;
+      if (idle > 20000 && !well.active && motion && night < 0.5) {
+        const beat = ((idle - 20000) / 5200) % 1;
+        const gl = Math.sin(Math.PI * beat);
+        if (gl > 0.02) {
+          const k = Math.floor((idle - 20000) / 5200);
+          const gx = w * (0.2 + hash01(k * 7919 + 3) * 0.6);
+          const gy = h * (0.28 + hash01(k * 104729 + 11) * 0.44);
+          const gr = 12 + gl * 40;
+          bctx.save();
+          bctx.globalCompositeOperation = "lighter";
+          stamp(bctx, sprite(TAG_SOFT, 176, 196, 255, FALL_SOFT), gx, gy, gr, 0.15 * gl);
+          bctx.strokeStyle = `rgba(190, 206, 255, ${(0.15 * gl).toFixed(3)})`;
+          bctx.lineWidth = 1;
+          bctx.beginPath();
+          bctx.arc(gx, gy, gr * (1.4 - 0.5 * gl), 0, Math.PI * 2);
+          bctx.stroke();
+          bctx.restore();
+        }
+      }
+
       // Horizon only after a committed hold — longer hold ⇒ wider event horizon.
       if (well.active && well.mode === "accrete") {
-        const grow = Math.min(1, well.mass / 2.8);
+        // The horizon never plateaus: the first seconds open it fast, and
+        // past the ceremony tier it keeps widening, slower but without end.
+        const grow = 1 - Math.exp(-well.mass / 1.5);
+        const deep = Math.max(0, well.mass - 2.2);
         const base = Math.min(w, h);
-        const coreR = 8 + grow * 36;
-        const ringR = base * (0.05 + grow * 0.16);
+        const coreR = 8 + grow * 36 + deep * 9;
+        const ringR = base * (0.05 + grow * 0.16 + deep * 0.035);
         bctx.save();
         bctx.translate(well.x, well.y);
         bctx.rotate(t * 0.9);
@@ -3261,15 +3735,22 @@ export default function Stars() {
           bctx.stroke();
         }
         bctx.globalCompositeOperation = "source-over";
-        const lens = bctx.createRadialGradient(0, 0, 0, 0, 0, ringR * 1.6);
-        lens.addColorStop(0, "rgba(0, 0, 0, 0.92)");
-        lens.addColorStop(0.32, "rgba(0, 0, 0, 0.62)");
-        lens.addColorStop(0.58, `rgba(15, 24, 46, ${(0.26 * grow).toFixed(3)})`);
-        lens.addColorStop(1, "rgba(15, 24, 46, 0)");
+        const growQ = Math.round(grow * 16);
+        const lens = gWell(growQ, () => {
+          const gd = bctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+          gd.addColorStop(0, "rgba(0, 0, 0, 0.92)");
+          gd.addColorStop(0.32, "rgba(0, 0, 0, 0.62)");
+          gd.addColorStop(0.58, `rgba(15, 24, 46, ${(0.26 * (growQ / 16)).toFixed(3)})`);
+          gd.addColorStop(1, "rgba(15, 24, 46, 0)");
+          return gd;
+        });
+        bctx.save();
+        bctx.scale(ringR * 1.6, ringR * 1.6);
         bctx.fillStyle = lens;
         bctx.beginPath();
-        bctx.arc(0, 0, ringR * 1.6, 0, Math.PI * 2);
+        bctx.arc(0, 0, 1, 0, Math.PI * 2);
         bctx.fill();
+        bctx.restore();
         bctx.fillStyle = "rgba(0, 0, 0, 0.98)";
         bctx.beginPath();
         bctx.arc(0, 0, coreR, 0, Math.PI * 2);
@@ -3293,10 +3774,18 @@ export default function Stars() {
 
       // saved constellations
       const hovered = hoveredSavedRef.current;
+      const fraying = frayRef.current;
       for (const c of savedRef.current) {
         const isHover = hovered === c.id;
-        const lineAlpha = isHover ? 0.55 : 0.28;
-        fctx.strokeStyle = `rgba(232, 226, 213, ${lineAlpha})`;
+        // A ceremony hold on a kept shape unbinds it — and the unbinding is
+        // visible the whole time it is happening. The lines go slack and
+        // fray toward the release; let go early and they snap back.
+        const fray = fraying && fraying.id === c.id
+          ? Math.min(1, (nowMs - fraying.t0) / 2500)
+          : 0;
+        const slack = fray > 0 ? fray * fray * 16 : 0;
+        const lineAlpha = (isHover ? 0.55 : 0.28) * (1 - fray * 0.75);
+        fctx.strokeStyle = `rgba(232, 226, 213, ${lineAlpha.toFixed(3)})`;
         fctx.lineWidth = isHover ? 1.2 : 0.9;
         fctx.beginPath();
         let lastValid: { x: number; y: number } | null = null;
@@ -3304,10 +3793,12 @@ export default function Stars() {
           const idx = c.starIndices[i];
           if (idx < 0 || idx >= activeFieldRef.current.stars.length) continue;
           const p = starPos(idx, t);
+          const jx = slack > 0 ? (hash01(idx * 7919 + i) - 0.5) * slack : 0;
+          const jy = slack > 0 ? (hash01(idx * 104729 + i) - 0.5) * slack : 0;
           if (i === 0 || !lastValid) {
-            fctx.moveTo(p.x, p.y);
+            fctx.moveTo(p.x + jx, p.y + jy);
           } else {
-            fctx.lineTo(p.x, p.y);
+            fctx.lineTo(p.x + jx, p.y + jy);
           }
           lastValid = p;
         }
@@ -3317,10 +3808,10 @@ export default function Stars() {
         for (const idx of c.starIndices) {
           if (idx < 0 || idx >= activeFieldRef.current.stars.length) continue;
           const p = starPos(idx, t);
-          fctx.strokeStyle = `rgba(232, 226, 213, ${isHover ? 0.65 : 0.35})`;
+          fctx.strokeStyle = `rgba(232, 226, 213, ${((isHover ? 0.65 : 0.35) * (1 - fray * 0.7)).toFixed(3)})`;
           fctx.lineWidth = 0.9;
           fctx.beginPath();
-          fctx.arc(p.x, p.y, 4.5, 0, Math.PI * 2);
+          fctx.arc(p.x, p.y, 4.5 + fray * 5, 0, Math.PI * 2);
           fctx.stroke();
         }
 
@@ -3357,14 +3848,7 @@ export default function Stars() {
           const u = (nowMs - sp.t0) / 1000 / SPARK_LIFE; // 0..1
           const a = 1 - u;
           const rad = 2 + u * 14;
-          const hg = fctx.createRadialGradient(sp.x, sp.y, 0, sp.x, sp.y, rad + 6);
-          hg.addColorStop(0,   `rgba(255, 230, 170, ${0.55 * a})`);
-          hg.addColorStop(0.6, `rgba(255, 230, 170, ${0.18 * a})`);
-          hg.addColorStop(1,   "rgba(255, 230, 170, 0)");
-          fctx.fillStyle = hg;
-          fctx.beginPath();
-          fctx.arc(sp.x, sp.y, rad + 6, 0, Math.PI * 2);
-          fctx.fill();
+          stamp(fctx, sprite(TAG_SPARK, 255, 230, 170, FALL_SPARK), sp.x, sp.y, rad + 6, 0.55 * a);
           fctx.fillStyle = `rgba(255, 240, 200, ${0.95 * a})`;
           fctx.beginPath();
           fctx.arc(sp.x, sp.y, 1.6, 0, Math.PI * 2);
@@ -3389,14 +3873,7 @@ export default function Stars() {
           const idx = pend[i];
           const p = starPos(idx, t);
           const pulse = motion ? 0.55 + 0.45 * Math.sin(t * 2.8 + i * 0.5) : 0.7;
-          const hg = fctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 18);
-          hg.addColorStop(0,   `rgba(255, 230, 170, ${0.32 * pulse})`);
-          hg.addColorStop(0.6, `rgba(255, 230, 170, ${0.10 * pulse})`);
-          hg.addColorStop(1,   "rgba(255, 230, 170, 0)");
-          fctx.fillStyle = hg;
-          fctx.beginPath();
-          fctx.arc(p.x, p.y, 18, 0, Math.PI * 2);
-          fctx.fill();
+          stamp(fctx, sprite(TAG_SPARK, 255, 230, 170, FALL_SPARK), p.x, p.y, 18, 0.32 * pulse);
           fctx.fillStyle = "rgba(255, 240, 200, 0.95)";
           fctx.beginPath();
           fctx.arc(p.x, p.y, 1.8, 0, Math.PI * 2);
@@ -3541,324 +4018,632 @@ export default function Stars() {
     return null;
   }, []);
 
-  // ── pointer handlers ───────────────────────────────────────────────
-  const onPointerDown = useCallback(
-    (e: React.PointerEvent<HTMLCanvasElement>) => {
-      if (namingRef.current) return;
-      const rect = (e.currentTarget as HTMLCanvasElement).getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-      pointersRef.current.set(e.pointerId, { x, y });
+  // ── the grammar ────────────────────────────────────────────────────
+  // Everything below is a meaning bound to a verb from
+  // docs/gesture-grammar.md through `attachGestures`. This room owns only
+  // what each verb means in starlight; the thresholds that decide when a
+  // press becomes a dwell, or when two fingers become a pinch, live in
+  // lib/gesture/core.ts and nowhere else. The old machine here — hand-rolled
+  // pinch math, pixel-counted tap-vs-drag, two nested hold timers, manual
+  // pointer capture, a private wheel listener — is gone.
 
-      // Second finger = pinch/zoom owns the gesture. Never birth or swallow.
-      if (pointersRef.current.size >= 2) {
-        const pts = [...pointersRef.current.values()];
-        const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-        pinchRef.current = { dist: Math.max(1, dist), zoom: cameraRef.current.zoom };
-        pinchFrameRef.current = {
-          dist: Math.max(1, dist),
-          zoom: cameraRef.current.zoom,
-          at: performance.now(),
-        };
-        markNavGesture();
-        abortTouchWell(e.currentTarget);
-        return;
-      }
+  /** One finger's path, kept only so a closed loop can gather a shape. */
+  const pathRef = useRef<number[]>([]);
+  const frayTierRef = useRef(0);
+  const wellTierRef = useRef(0);
+  const wellToneRef = useRef(0);
+  const seasonVoiceRef = useRef(0);
+  const windVoiceRef = useRef(0);
 
-      if (e.button === 2) {
-        const savedId = findSavedAt(x, y);
-        if (savedId) deleteSaved(savedId);
-        return;
-      }
+  const openNaming = useCallback((x: number, y: number) => {
+    const ww = window.innerWidth;
+    const mobile = ww < 700;
+    setNamePos({
+      x: mobile ? ww / 2 : Math.max(20, Math.min(ww - 280, x + 24)),
+      y: mobile ? 110 : Math.max(20, Math.min(window.innerHeight - 80, y + 24)),
+    });
+    setNaming(true);
+  }, []);
 
-      // Fresh single-finger press after nav: ignore until suppress window ends.
-      if (performance.now() < suppressCommitUntilRef.current || navGestureRef.current) {
-        return;
-      }
+  /** Add a star to the shape being drawn. */
+  const extendShape = useCallback((idx: number, x: number, y: number) => {
+    const cur = pendingRef.current;
+    if (cur.length > 0 && cur[cur.length - 1] === idx) return;
+    const next = [...cur, idx];
+    pendingRef.current = next;
+    setPending(next);
+    lastClickPos.current = { x, y };
+    haptics.ripple(0.34 + Math.min(0.34, cur.length * 0.08));
+    markSky(`${next.length} stars chosen`, "star", 0.42, "object", `select-${next.length}`);
+    try { getFieldAudio().chime(); } catch { /* noop */ }
+  }, [markSky]);
 
-      const idx = findStarAt(x, y);
-      if (e.shiftKey && idx >= 0) {
-        const cur = pendingRef.current;
-        if (cur.length > 0 && cur[cur.length - 1] === idx) return;
-        setPending([...cur, idx]);
-        lastClickPos.current = { x, y };
-        haptics.ripple(0.34 + Math.min(0.34, cur.length * 0.08));
-        markSky(`${cur.length + 1} stars chosen`, "star", 0.42, "object", `select-${cur.length + 1}`);
-        try { getFieldAudio().chime(); } catch { /* noop */ }
-        return;
-      }
-
-      if (pendingRef.current.length > 0) cancelPending();
-
-      pointerIntentRef.current = {
-        x,
-        y,
-        starIdx: idx,
-        nebulaIdx: findNebulaAt(x, y),
-        inMilkyWay: isInMilkyWay(x, y),
-      };
-      gravityWellRef.current = {
-        active: true,
-        x,
-        y,
-        t0: performance.now(),
-        pointerId: e.pointerId,
-        mass: 0,
-        mode: "pending",
-      };
-      // Do NOT capture yet — capture steals the second finger and breaks pinch zoom.
-      clearHoldTimer();
-      const pointerId = e.pointerId;
-      holdTimerRef.current = window.setTimeout(() => {
-        // Still only one finger? Arm the real hold clock.
-        if (pointersRef.current.size !== 1) return;
-        if (navGestureRef.current) return;
-        const well = gravityWellRef.current;
-        if (!well.active || well.pointerId !== pointerId || well.mode !== "pending") return;
-        holdTimerRef.current = window.setTimeout(() => {
-          if (pointersRef.current.size !== 1 || navGestureRef.current) return;
-          const w2 = gravityWellRef.current;
-          if (!w2.active || w2.pointerId !== pointerId || w2.mode !== "pending") return;
-          w2.mode = "accrete";
-          w2.mass = 0.05;
-          try {
-            const canvas = fgRef.current;
-            if (canvas) canvas.setPointerCapture(pointerId);
-          } catch { /* noop */ }
-          haptics.roll();
-          markSky("horizon opening", "gravity", 0.42, "sigil", "accrete-start", false);
-        }, Math.max(0, HOLD_BH_MS - HOLD_ARM_DELAY_MS));
-      }, HOLD_ARM_DELAY_MS);
-    },
-    [abortTouchWell, cancelPending, clearHoldTimer, deleteSaved, findNebulaAt, findSavedAt, findStarAt, isInMilkyWay, markNavGesture, markSky],
-  );
-
-  const onPointerMove = useCallback(
-    (e: React.PointerEvent<HTMLCanvasElement>) => {
-      const rect = (e.currentTarget as HTMLCanvasElement).getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-      if (pointersRef.current.has(e.pointerId)) {
-        pointersRef.current.set(e.pointerId, { x, y });
-      }
-
-      // pinch zoom — never create matter while navigating
-      if (pointersRef.current.size >= 2) {
-        markNavGesture();
-        abortTouchWell(e.currentTarget);
-        if (!pinchRef.current) {
-          const pts = [...pointersRef.current.values()];
-          const dist = Math.max(1, Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y));
-          pinchRef.current = { dist, zoom: cameraRef.current.zoom };
-          pinchFrameRef.current = { dist, zoom: cameraRef.current.zoom, at: performance.now() };
-        }
-        const pts = [...pointersRef.current.values()];
-        const dist = Math.max(1, Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y));
-        const scale = dist / Math.max(1, pinchRef.current.dist);
-        const midX = (pts[0].x + pts[1].x) * 0.5;
-        const midY = (pts[0].y + pts[1].y) * 0.5;
-        const ww = window.innerWidth;
-        const wh = window.innerHeight;
-        applyCamera(zoomAtScreen(cameraRef.current, midX, midY, pinchRef.current.zoom * scale, ww, wh), true);
-        // Residual pinch at a zoom wall belongs to the manifold: the camera
-        // above clamps to [1, 14]; whatever ln-ratio the clamp swallowed
-        // this frame is what the hand is still saying.
-        const frame = pinchFrameRef.current;
-        const nowMs = performance.now();
-        if (frame && nowMs > frame.at) {
-          const attempted = dist / frame.dist;
-          const achieved = cameraRef.current.zoom / Math.max(1e-6, frame.zoom);
-          const vel =
-            Math.log(attempted / Math.max(1e-6, achieved)) / ((nowMs - frame.at) / 1000);
-          reportScaleEdge(cameraRef.current.zoom, vel);
-        }
-        pinchFrameRef.current = { dist, zoom: cameraRef.current.zoom, at: nowMs };
-        return;
-      }
-
-      if (navGestureRef.current) return;
-
-      const well = gravityWellRef.current;
-      if (well.active && well.pointerId === e.pointerId) {
-        const intent = pointerIntentRef.current;
-        const held = performance.now() - well.t0;
-        const move = intent ? Math.hypot(x - intent.x, y - intent.y) : 0;
-        // Drag always wins: pan should never become a black hole mid-swipe.
-        if (well.mode !== "pan" && move > PAN_MOVE_PX) {
-          well.mode = "pan";
-          well.mass = 0;
-          clearHoldTimer();
-          try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* noop */ }
-        }
-        if (well.mode === "pan") {
-          const ww = window.innerWidth;
-          const wh = window.innerHeight;
-          applyCamera(panByScreen(cameraRef.current, x - well.x, y - well.y, ww, wh));
-          well.x = x;
-          well.y = y;
-        } else {
-          well.x = x;
-          well.y = y;
-          if (well.mode === "accrete" && held >= HOLD_BH_MS) {
-            // Longer hold → wider / heavier horizon.
-            well.mass = Math.min(3.2, (held - HOLD_BH_MS) / 1600);
-            const sky = screenToSky(x, y);
-            const pull = 0.0009 * (0.4 + well.mass);
-            let changed = false;
-            const next = bornStarsRef.current.map((s) => {
-              const dx = sky.nx - s.nx;
-              const dy = sky.ny - s.ny;
-              const d2 = dx * dx + dy * dy + 0.0002;
-              if (d2 > 0.08) return s;
-              changed = true;
-              return {
-                ...s,
-                nx: clampPan(s.nx + (dx / Math.sqrt(d2)) * pull),
-                ny: clampPan(s.ny + (dy / Math.sqrt(d2)) * pull),
-                vx: (s.vx ?? 0) + dx * pull * 8,
-                vy: (s.vy ?? 0) + dy * pull * 8,
-              };
-            });
-            if (changed) {
-              bornStarsRef.current = next;
-              setBornStars(next);
-            }
-          }
-        }
-      }
-      setHoveredSaved(findSavedAt(x, y));
-      setHoveredNebula(findNebulaAt(x, y));
-      setHoveredMilkyWay(isInMilkyWay(x, y));
-    },
-    [abortTouchWell, applyCamera, clearHoldTimer, findSavedAt, findNebulaAt, isInMilkyWay, markNavGesture, reportScaleEdge, screenToSky],
-  );
-
-  const endPointer = useCallback((e: React.PointerEvent<HTMLCanvasElement>, commit: boolean) => {
-    pointersRef.current.delete(e.pointerId);
-    clearHoldTimer();
-
-    const wasNav = navGestureRef.current || pinchRef.current != null
-      || performance.now() < suppressCommitUntilRef.current;
-
-    if (pointersRef.current.size < 2) {
-      if (pinchRef.current) releaseScaleEdge();
-      pinchRef.current = null;
-      pinchFrameRef.current = null;
+  /**
+   * A finger circling the sky gathers what it enclosed. This is the touch
+   * path to a constellation — no modifier key, no menu: draw the shape you
+   * mean and the stars inside it bind, then ask to be named.
+   */
+  const gatherShapeIn = useCallback((cx: number, cy: number, radius: number) => {
+    const fn = starPosRef.current;
+    if (!fn) return;
+    const tt = performance.now() / 1000;
+    const stars = activeFieldRef.current.stars;
+    const found: Array<{ idx: number; ang: number }> = [];
+    for (let i = 0; i < stars.length; i++) {
+      const p = fn(i, tt);
+      const dx = p.x - cx;
+      const dy = p.y - cy;
+      if (dx * dx + dy * dy > radius * radius) continue;
+      if (stars[i].size < 0.9 && stars[i].brightness < 0.6) continue;
+      found.push({ idx: i, ang: Math.atan2(dy, dx) });
     }
-    if (pointersRef.current.size === 0) {
-      if (navGestureRef.current || wasNav) {
-        suppressCommitUntilRef.current = performance.now() + NAV_SUPPRESS_MS;
-      }
-      navGestureRef.current = false;
-    }
+    if (found.length < 3) return;
+    found.sort((a, b) => a.ang - b.ang);
+    const picked = found.slice(0, 12).map((f) => f.idx);
+    pendingRef.current = picked;
+    setPending(picked);
+    lastClickPos.current = { x: cx, y: cy };
+    haptics.roll();
+    try { getFieldAudio().bell(); } catch { /* noop */ }
+    markSky(`${picked.length} stars gathered`, "star", 0.6, "object", "gather");
+    openNaming(cx, cy);
+  }, [markSky, openNaming]);
 
-    const well = gravityWellRef.current;
-    if (well.pointerId !== e.pointerId) {
-      try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* noop */ }
+  /** Raise or lower the lens. Discrete rungs; the turn between them is not. */
+  const setLensRungTo = useCallback((n: number) => {
+    const next = Math.max(0, Math.min(LENS_RUNGS - 1, Math.round(n)));
+    lensSnapRef.current = next;
+    lensRef.current = Math.max(0, Math.min(LENS_RUNGS - 1, lensRef.current));
+    if (next === lensRungRef.current) return;
+    lensRungRef.current = next;
+    setLensRung(next);
+    haptics.lens();
+    try { getFieldAudio().playTone(180 + next * 150, 0.26); } catch { /* noop */ }
+    markSky(
+      next === 0 ? "visible sky" : next === 1 ? "by temperature" : "by curvature",
+      next === 2 ? "gravity" : "nebula",
+      0.4,
+      "region",
+      `lens-${next}`,
+      false,
+    );
+  }, [markSky]);
+
+  /** Two-finger tap: the frame retreats one step, lens first. */
+  const stepBack = useCallback(() => {
+    if (lensRungRef.current > 0) {
+      setLensRungTo(lensRungRef.current - 1);
+      return;
+    }
+    zoomOut();
+  }, [setLensRungTo, zoomOut]);
+
+  /** Three-finger tap: every living thing in the sky answers at once. */
+  const tuttiNow = useCallback(() => {
+    tuttiRef.current = performance.now();
+    const nebulae = activeFieldRef.current.nebulae;
+    const now = performance.now();
+    breathsRef.current = nebulae.map((_, i) => ({ idx: i, t0: now }));
+    haptics.roll();
+    try {
+      const audio = getFieldAudio();
+      audio.playNote(33, 900);
+      window.setTimeout(() => { try { audio.playNote(45, 700); } catch { /* noop */ } }, 110);
+      window.setTimeout(() => { try { audio.playNote(52, 600); } catch { /* noop */ } }, 220);
+    } catch { /* noop */ }
+    markSky("the whole sky answers", "star", 0.66, "region", "tutti", false);
+  }, [markSky]);
+
+  /** One finger on the material. Intensity is how hard the sky was struck. */
+  const singleTapAt = useCallback((x: number, y: number, intensity: number) => {
+    const idx = findStarAt(x, y);
+    const shape = pendingRef.current;
+
+    // desktop dialect of the same verb — shift keeps the shape open
+    if (shiftRef.current && idx >= 0) {
+      extendShape(idx, x, y);
+      return;
+    }
+    // a shape already being drawn: stars join it, and touching the star it
+    // began from closes the loop and asks for a name
+    if (shape.length > 0 && idx >= 0) {
+      if (shape.length >= 3 && idx === shape[0]) {
+        openNaming(x, y);
+        return;
+      }
+      extendShape(idx, x, y);
+      return;
+    }
+    if (shape.length > 0) cancelPending();
+
+    // a star you made answers rather than crowding another on top
+    const bs = findBornStarAt(x, y);
+    if (bs) {
+      answerBornStar(bs, x, y);
+      return;
+    }
+    if (idx >= 0) {
+      const star = activeFieldRef.current.stars[idx];
+      // how hard the tap landed decides what the star can be made to do: a
+      // firm strike will tip a marginal star over into collapse
+      const push = 0.62 + intensity * 0.76;
+      if (star && (star.size * push > 1.55 || star.brightness * push > 0.78)) {
+        const p = starPosRef.current?.(idx, performance.now() / 1000) ?? { x, y };
+        supernovaAt(p.x, p.y, star.rgb);
+      } else {
+        birthStarAt(x, y, intensity);
+      }
+      return;
+    }
+    const nebIdx = findNebulaAt(x, y);
+    if (nebIdx >= 0) {
+      breathsRef.current = [
+        ...breathsRef.current.filter((b) => b.idx !== nebIdx),
+        { idx: nebIdx, t0: performance.now() },
+      ];
+      spawnStarForm(x, y);
+      haptics.roll();
+      markSky("nebula birthlight", "nebula", 0.62, "sigil", "nebula");
+      try { getFieldAudio().bell(); } catch { /* noop */ }
+      return;
+    }
+    if (isInMilkyWay(x, y)) {
+      milkyPulseRef.current = performance.now();
+      birthStarAt(x, y, intensity);
+      haptics.roll();
+      markSky("milky way brightened", "nebula", 0.62, "region", "milky-way");
+      try { getFieldAudio().bell(); } catch { /* noop */ }
+      return;
+    }
+    birthStarAt(x, y, intensity);
+  }, [
+    answerBornStar, birthStarAt, cancelPending, extendShape, findBornStarAt, findNebulaAt,
+    findStarAt, isInMilkyWay, markSky, openNaming, spawnStarForm, supernovaAt,
+  ]);
+
+  const doubleTapAt = useCallback((x: number, y: number) => {
+    const id = findSavedNameAt(x, y);
+    if (id) {
+      const c = savedRef.current.find((cc) => cc.id === id);
+      if (!c) return;
+      setNameValue(c.name);
+      setEditingId(id);
+      openNaming(x, y);
+      haptics.tap();
+      markSky("rename constellation", "kept", 0.38, "object", "rename-open");
+      return;
+    }
+    // a world condenses out of the disk of a star you made
+    const bs = findBornStarAt(x, y);
+    if (bs) {
+      condensePlanetAt(bs, x, y);
+      return;
+    }
+    // open sky: the next weather in the cycle, summoned by hand
+    const summoners = [spawnComet, spawnPulsar, spawnNova, spawnTidalFlare, spawnStarForm, spawnGrb];
+    const pick = summoners[summonRef.current % summoners.length];
+    summonRef.current += 1;
+    pick(x, y);
+  }, [
+    condensePlanetAt, findBornStarAt, findSavedNameAt, markSky, openNaming,
+    spawnComet, spawnGrb, spawnNova, spawnPulsar, spawnStarForm, spawnTidalFlare,
+  ]);
+
+  /** The hold, in one place: gather → horizon, or a kept shape coming undone. */
+  const onHoldEvent = useCallback((e: {
+    fingers: number;
+    phase: "enter" | "tick" | "release";
+    elapsed: number;
+    tier: number;
+    intensity: number;
+    x: number;
+    y: number;
+  }) => {
+    if (namingRef.current) return;
+    lastTouchRef.current = performance.now();
+
+    // three fingers rest on the law: the sky's clock stretches, and keeps
+    // stretching for as long as they stay
+    if (e.fingers === 3) {
+      if (e.phase === "release") {
+        timeScaleTargetRef.current = 1;
+        try { getFieldAudio().spark(); } catch { /* noop */ }
+        return;
+      }
+      if (e.phase === "enter") {
+        haptics.detent();
+        try { getFieldAudio().playNote(28, 900); } catch { /* noop */ }
+        markSky("time thickens", "gravity", 0.4, "region", "dilation", false);
+      }
+      timeScaleTargetRef.current = Math.max(0.05, 1 - Math.min(0.95, e.elapsed / 3600));
+      return;
+    }
+    if (e.fingers !== 1) {
+      // two fingers address the frame, not the material — the well lets go
+      if (gravityWellRef.current.active || frayRef.current) abortWell();
       return;
     }
 
-    const held = performance.now() - well.t0;
-    const intent = pointerIntentRef.current;
-    const move = intent ? Math.hypot(well.x - intent.x, well.y - intent.y) : 0;
-    const allowCommit = commit && !wasNav;
+    const well = gravityWellRef.current;
 
-    if (allowCommit) {
-      if (well.mode === "pan") {
-        // pan complete — quiet
-      } else if (well.mode === "accrete") {
-        // Only a real hold (entered accrete) births/grows a hole.
-        releaseAccretion(well.x, well.y, held, well.mass);
-      } else if (!intent || move > PAN_MOVE_PX) {
-        // aborted / tiny jitter — ignore
-      } else if (findBornStarAt(well.x, well.y)) {
-        // a star you made answers rather than crowding another on top
-        const bs = findBornStarAt(well.x, well.y)!;
-        answerBornStar(bs, well.x, well.y);
-      } else if (intent.starIdx >= 0) {
-        const star = activeFieldRef.current.stars[intent.starIdx];
-        if (star && (star.size > 1.55 || star.brightness > 0.78)) {
-          const p = starPosRef.current?.(intent.starIdx, performance.now() / 1000) ?? { x: well.x, y: well.y };
-          supernovaAt(p.x, p.y, star.rgb);
-        } else {
-          birthStarAt(well.x, well.y);
-        }
-      } else if (intent.nebulaIdx >= 0) {
-        const nebIdx = intent.nebulaIdx;
-        breathsRef.current = [
-          ...breathsRef.current.filter((b) => b.idx !== nebIdx),
-          { idx: nebIdx, t0: performance.now() },
-        ];
-        spawnStarForm(well.x, well.y);
-        haptics.roll();
-        markSky("nebula birthlight", "nebula", 0.62, "sigil", "nebula");
-        try { getFieldAudio().bell(); } catch { /* noop */ }
-      } else if (intent.inMilkyWay) {
-        milkyPulseRef.current = performance.now();
-        birthStarAt(well.x, well.y);
-        haptics.roll();
-        markSky("milky way brightened", "nebula", 0.62, "region", "milky-way");
-        try { getFieldAudio().bell(); } catch { /* noop */ }
-      } else {
-        birthStarAt(well.x, well.y);
+    if (e.phase === "enter" && !well.active && !frayRef.current) {
+      // what lies under the hand decides what holding means
+      const savedId = findSavedAt(e.x, e.y);
+      if (savedId) {
+        frayTierRef.current = 1;
+        frayRef.current = { id: savedId, t0: performance.now() - e.elapsed };
+        haptics.tap();
+        try { getFieldAudio().buzz(); } catch { /* noop */ }
+        return;
+      }
+      pointerIntentRef.current = { x: e.x, y: e.y };
+      well.active = true;
+      well.x = e.x;
+      well.y = e.y;
+      well.t0 = performance.now() - e.elapsed;
+      well.mass = 0;
+      well.gather = 0;
+      well.mode = "gather";
+      wellToneRef.current = 0;
+      wellTierRef.current = 1;
+      // the vessel is invited from inside a real gesture, never demanded
+      void requestVessel();
+      return;
+    }
+
+    const fray = frayRef.current;
+    if (fray) {
+      if (e.phase === "release") {
+        // let go before the ceremony completes and the lines snap back
+        frayRef.current = null;
+        haptics.tap();
+        try { getFieldAudio().chime(); } catch { /* noop */ }
+        return;
+      }
+      if (e.tier >= 3) {
+        frayRef.current = null;
+        deleteSaved(fray.id);
+        return;
+      }
+      if (e.tier > frayTierRef.current) {
+        frayTierRef.current = e.tier;
+        haptics.detent();
+        try { getFieldAudio().playTone(150, 0.3); } catch { /* noop */ }
+      }
+      return;
+    }
+
+    if (!well.active) return;
+
+    if (e.phase === "release") {
+      const intent = pointerIntentRef.current;
+      const moved = intent ? Math.hypot(e.x - intent.x, e.y - intent.y) : 0;
+      if (well.mode === "accrete") {
+        releaseAccretion(well.x, well.y, e.elapsed, well.mass);
+      } else if (moved <= THRESHOLDS.moveTolPx) {
+        // a slow touch is still a touch — the sky answers it as a tap
+        singleTapAt(well.x, well.y, e.intensity);
+      }
+      abortWell();
+      return;
+    }
+
+    well.x = e.x;
+    well.y = e.y;
+
+    if (e.tier < 2) {
+      // legible before it is committed: matter visibly collecting under
+      // the finger from the moment the touch tier is crossed
+      well.mode = "gather";
+      well.gather = Math.max(0, Math.min(1, (e.elapsed - THRESHOLDS.tapMaxMs) / (THRESHOLDS.dwellMs - THRESHOLDS.tapMaxMs)));
+      return;
+    }
+
+    if (well.mode !== "accrete") {
+      well.mode = "accrete";
+      well.gather = 1;
+      haptics.roll();
+      markSky("horizon opening", "gravity", 0.42, "sigil", "accrete-start", false);
+    }
+
+    // Continuous, never a switch: the horizon keeps swelling for as long as
+    // the hand stays — through the ceremony tier and past it.
+    const held = (e.elapsed - THRESHOLDS.dwellMs) / 1000;
+    well.mass = Math.max(0, held) * WELL_MASS_PER_SEC * (0.62 + e.intensity * 0.9);
+
+    // the ceremony tier is a threshold, not a ceiling: it is marked, and
+    // then the horizon goes on opening
+    const nowMs = performance.now();
+    if (e.tier > wellTierRef.current) {
+      wellTierRef.current = e.tier;
+      if (e.tier >= 3) {
+        haptics.detent();
+        markSky("the horizon deepens", "gravity", 0.7, "sigil", "accrete-deep", false);
       }
     }
 
-    gravityWellRef.current.active = false;
-    gravityWellRef.current.pointerId = null;
-    gravityWellRef.current.mass = 0;
-    gravityWellRef.current.mode = "pending";
-    pointerIntentRef.current = null;
-    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* noop */ }
-  }, [answerBornStar, birthStarAt, clearHoldTimer, findBornStarAt, markSky, releaseAccretion, releaseScaleEdge, spawnStarForm, supernovaAt]);
+    // the deepening voice: the tone falls as the horizon widens
+    if (nowMs - wellToneRef.current > 620) {
+      wellToneRef.current = nowMs;
+      try { getFieldAudio().playTone(196 / (0.8 + well.mass * 0.55), 0.22); } catch { /* noop */ }
+      haptics.ripple(0.18 + Math.min(0.5, well.mass * 0.16));
+    }
 
-  const onPointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
-    endPointer(e, true);
-  }, [endPointer]);
+    // matter falls toward the well while it grows
+    const sky = screenToSky(e.x, e.y);
+    const pull = 0.0009 * (0.4 + well.mass);
+    let changed = false;
+    const next = bornStarsRef.current.map((s) => {
+      const dx = sky.nx - s.nx;
+      const dy = sky.ny - s.ny;
+      const d2 = dx * dx + dy * dy + 0.0002;
+      if (d2 > 0.08) return s;
+      changed = true;
+      return {
+        ...s,
+        nx: clampPan(s.nx + (dx / Math.sqrt(d2)) * pull),
+        ny: clampPan(s.ny + (dy / Math.sqrt(d2)) * pull),
+        vx: (s.vx ?? 0) + dx * pull * 8,
+        vy: (s.vy ?? 0) + dy * pull * 8,
+      };
+    });
+    if (changed) {
+      bornStarsRef.current = next;
+      setBornStars(next);
+    }
+  }, [abortWell, deleteSaved, findSavedAt, markSky, releaseAccretion, screenToSky, singleTapAt]);
 
-  const onPointerCancel = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
-    endPointer(e, false);
-  }, [endPointer]);
+  // The bindings change every render (they close over fresh state), but the
+  // engine attaches once. One ref carries the current table across.
+  const bindingsRef = useRef({
+    singleTapAt, doubleTapAt, onHoldEvent, stepBack, tuttiNow, setLensRungTo,
+    gatherShapeIn, applyCamera, reportScaleEdge, releaseScaleEdge, abortWell, markSky,
+  });
+  bindingsRef.current = {
+    singleTapAt, doubleTapAt, onHoldEvent, stepBack, tuttiNow, setLensRungTo,
+    gatherShapeIn, applyCamera, reportScaleEdge, releaseScaleEdge, abortWell, markSky,
+  };
 
-  const onDoubleClick = useCallback(
-    (e: React.MouseEvent<HTMLCanvasElement>) => {
-      const rect = (e.currentTarget as HTMLCanvasElement).getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-      const id = findSavedNameAt(x, y);
-      if (!id) {
-        // double-tap a star you made — a world condenses out of its disk
-        const bs = findBornStarAt(x, y);
-        if (bs) {
-          condensePlanetAt(bs, x, y);
+  useEffect(() => {
+    const el = fgRef.current;
+    if (!el) return;
+    const touched = () => { lastTouchRef.current = performance.now(); };
+
+    return attachGestures(el, {
+      tap: (e) => {
+        touched();
+        if (namingRef.current) return;
+        if (e.fingers === 2) {
+          bindingsRef.current.stepBack();
           return;
         }
-        // double-tap empty space summons the next cosmic event in the cycle
-        const summoners = [spawnComet, spawnPulsar, spawnNova, spawnTidalFlare, spawnStarForm, spawnGrb];
-        const pick = summoners[summonRef.current % summoners.length];
-        summonRef.current += 1;
-        pick(x, y);
-        return;
-      }
-      const c = savedRef.current.find((cc) => cc.id === id);
-      if (!c) return;
-      const w = window.innerWidth;
-      const mobile = w < 700;
-      const clampedX = mobile ? w / 2 : Math.max(20, Math.min(w - 280, x + 24));
-      const clampedY = mobile ? 110 : Math.max(20, Math.min(window.innerHeight - 80, y + 24));
-      setNamePos({ x: clampedX, y: clampedY });
-      setNameValue(c.name);
-      setEditingId(id);
-      setNaming(true);
-      haptics.tap();
-      markSky("rename constellation", "kept", 0.38, "object", "rename-open");
-    },
-    [condensePlanetAt, findBornStarAt, findSavedNameAt, markSky, spawnComet, spawnPulsar, spawnNova, spawnTidalFlare, spawnStarForm, spawnGrb],
-  );
+        if (e.fingers === 3) {
+          bindingsRef.current.tuttiNow();
+          return;
+        }
+        if (e.fingers !== 1) return;
+        void requestVessel();
+        if (e.count >= 2) {
+          bindingsRef.current.doubleTapAt(e.x, e.y);
+          return;
+        }
+        bindingsRef.current.singleTapAt(e.x, e.y, e.intensity);
+      },
 
-  const onContextMenu = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
+      hold: (e) => bindingsRef.current.onHoldEvent(e),
+
+      drag: (e) => {
+        touched();
+        if (namingRef.current) return;
+        // three fingers on the law: interstellar wind, combing the gas off
+        // the star field and dragging the dust with it
+        if (e.fingers === 3) {
+          if (e.phase === "end") return;
+          const wind = windRef.current;
+          wind.vx = Math.max(-900, Math.min(900, wind.vx + e.dx * 7));
+          wind.vy = Math.max(-900, Math.min(900, wind.vy + e.dy * 7));
+          const now = performance.now();
+          if (now - windVoiceRef.current > 240) {
+            windVoiceRef.current = now;
+            const speed = Math.min(1, Math.hypot(wind.vx, wind.vy) / 700);
+            haptics.ripple(0.2 + speed * 0.4);
+            try { getFieldAudio().playTone(90 + speed * 220, 0.18); } catch { /* noop */ }
+          }
+          return;
+        }
+        if (e.fingers !== 1) return;
+        if (e.phase === "start") {
+          bindingsRef.current.abortWell();
+          pathRef.current.length = 0;
+        }
+        if (e.phase === "end") return;
+        const path = pathRef.current;
+        path.push(e.x, e.y);
+        if (path.length > 480) path.splice(0, 2);
+        bindingsRef.current.applyCamera(
+          panByScreen(cameraRef.current, e.dx, e.dy, window.innerWidth || 1, window.innerHeight || 1),
+        );
+      },
+
+      // a closed loop, drawn deliberately: the stars inside it bind
+      scrub: (e) => {
+        if (namingRef.current) return;
+        if (Math.abs(e.winding) < 1.2) return;
+        const path = pathRef.current;
+        if (path.length < 24) return;
+        let cx = 0;
+        let cy = 0;
+        const n = path.length / 2;
+        for (let i = 0; i < path.length; i += 2) {
+          cx += path[i];
+          cy += path[i + 1];
+        }
+        cx /= n;
+        cy /= n;
+        let rr = 0;
+        for (let i = 0; i < path.length; i += 2) rr += Math.hypot(path[i] - cx, path[i + 1] - cy);
+        rr = (rr / n) * 1.12;
+        path.length = 0;
+        bindingsRef.current.gatherShapeIn(cx, cy, rr);
+      },
+
+      pinch: (e) => {
+        touched();
+        if (namingRef.current) return;
+        bindingsRef.current.abortWell();
+        if (e.phase === "end") {
+          bindingsRef.current.releaseScaleEdge();
+          return;
+        }
+        if (e.phase === "start") return;
+        const ww = window.innerWidth || 1;
+        const wh = window.innerHeight || 1;
+        const z0 = cameraRef.current.zoom;
+        bindingsRef.current.applyCamera(
+          zoomAtScreen(cameraRef.current, e.cx, e.cy, z0 * e.scale, ww, wh),
+          true,
+        );
+        // Whatever the band walls swallowed is what the hand is still
+        // saying: the residual ln-ratio belongs to the manifold.
+        const attempted = Math.log(Math.max(1e-9, e.scale));
+        const achieved = Math.log(Math.max(1e-9, cameraRef.current.zoom / Math.max(1e-9, z0)));
+        const rate = Math.abs(attempted) > 1e-9 ? e.velocity / attempted : 0;
+        bindingsRef.current.reportScaleEdge(cameraRef.current.zoom, (attempted - achieved) * rate);
+      },
+
+      pan2: (e) => {
+        touched();
+        if (namingRef.current || e.phase !== "move") return;
+        bindingsRef.current.applyCamera(
+          panByScreen(cameraRef.current, e.dx, e.dy, window.innerWidth || 1, window.innerHeight || 1),
+        );
+      },
+
+      twist: (e) => {
+        touched();
+        if (namingRef.current) return;
+        if (e.fingers === 3) {
+          // three fingers turn the season: the sky precesses, walking the
+          // constellations through the year
+          if (e.phase !== "move") return;
+          seasonRef.current += e.angle * 0.85;
+          const now = performance.now();
+          if (now - seasonVoiceRef.current > 260) {
+            seasonVoiceRef.current = now;
+            haptics.tap();
+            try {
+              getFieldAudio().playTone(
+                220 + ((seasonRef.current % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2) * 40,
+                0.16,
+              );
+            } catch { /* noop */ }
+          }
+          return;
+        }
+        if (e.phase === "start") return;
+        if (e.phase === "end") {
+          bindingsRef.current.setLensRungTo(lensRef.current);
+          return;
+        }
+        const next = Math.max(0, Math.min(LENS_RUNGS - 1, lensRef.current + e.angle / 1.5));
+        lensRef.current = next;
+        lensSnapRef.current = next;
+      },
+
+      // a steady pulse and the whole sky answers on the beat
+      rhythm: (e) => {
+        if (namingRef.current) return;
+        if (e.stability > 0.66) bindingsRef.current.tuttiNow();
+      },
+    });
   }, []);
+
+  /**
+   * Hover — the desktop dialect of a light touch (grammar §1), and the one
+   * channel the semantic engine deliberately does not model, because a
+   * mouse resting on the sky is not a gesture. Mouse only; a finger never
+   * generates it.
+   */
+  useEffect(() => {
+    const el = fgRef.current;
+    if (!el) return;
+    let last = 0;
+    const onHover = (ev: PointerEvent) => {
+      if (ev.pointerType !== "mouse" || ev.buttons !== 0) return;
+      const now = performance.now();
+      if (now - last < 60) return;
+      last = now;
+      setHoveredSaved(findSavedAt(ev.clientX, ev.clientY));
+      setHoveredNebula(findNebulaAt(ev.clientX, ev.clientY));
+      setHoveredMilkyWay(isInMilkyWay(ev.clientX, ev.clientY));
+    };
+    el.addEventListener("pointermove", onHover);
+    return () => el.removeEventListener("pointermove", onHover);
+  }, [findNebulaAt, findSavedAt, isInMilkyWay]);
+
+  // ── the vessel ─────────────────────────────────────────────────────
+  // The device's own body: gravity leans the dome, a shake unbinds the
+  // dust, a knock on the case rings the field, face-down is night.
+  useEffect(() => {
+    const reduce = typeof window !== "undefined"
+      && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    return onVessel({
+      tilt: ({ beta, gamma }) => {
+        if (reduce) return;
+        const lean = leanRef.current;
+        const gx = Math.max(-1, Math.min(1, gamma / 38));
+        const gy = Math.max(-1, Math.min(1, (beta - 42) / 55));
+        lean.x += (gx - lean.x) * 0.16;
+        lean.y += (gy - lean.y) * 0.16;
+      },
+      shake: ({ intensity }) => {
+        lastTouchRef.current = performance.now();
+        // agitation in this material: loose dust unbinds and the orbits of
+        // everything you made are perturbed off their tracks
+        const wind = windRef.current;
+        const seed = Math.floor(performance.now());
+        wind.vx += (hash01(seed) - 0.5) * 700 * (0.4 + intensity);
+        wind.vy += (hash01(seed ^ 0x9e37) - 0.5) * 420 * (0.4 + intensity);
+        const stars = bornStarsRef.current;
+        if (stars.length) {
+          const next = stars.map((s, i) => ({
+            ...s,
+            vx: (s.vx ?? 0) + (hash01(seed + i * 131) - 0.5) * 0.14 * (0.5 + intensity),
+            vy: (s.vy ?? 0) + (hash01(seed + i * 977) - 0.5) * 0.14 * (0.5 + intensity),
+          }));
+          bornStarsRef.current = next;
+          setBornStars(next);
+        }
+        haptics.chop();
+        try { getFieldAudio().thud(); } catch { /* noop */ }
+        markSky("the dust unbinds", "gravity", 0.6, "region", "shake", false);
+      },
+      knock: ({ intensity }) => {
+        lastTouchRef.current = performance.now();
+        // a rap on the case is a bell struck through the whole field
+        knockRef.current = {
+          t0: performance.now(),
+          x: (window.innerWidth || 1) * 0.5,
+          y: (window.innerHeight || 1) * 0.5,
+        };
+        haptics.detent();
+        try {
+          const audio = getFieldAudio();
+          audio.bell();
+          window.setTimeout(() => {
+            try { audio.playTone(96 + intensity * 60, 0.9); } catch { /* noop */ }
+          }, 90);
+        } catch { /* noop */ }
+        markSky("the sky rings", "star", 0.7, "region", "knock", false);
+      },
+      flip: ({ faceDown }) => {
+        nightTargetRef.current = faceDown ? 1 : 0;
+        try { getFieldAudio()[faceDown ? "thud" : "spark"](); } catch { /* noop */ }
+        if (faceDown) haptics.roll();
+        markSky(faceDown ? "night" : "the sky returns", "nebula", 0.34, "region", "night", false);
+      },
+    });
+  }, [markSky]);
 
   // The sky is not a static wallpaper: once in a while a visible bright
   // star dies on its own. It is rare enough to feel discovered, not noisy.
@@ -3922,20 +4707,28 @@ export default function Stars() {
         else spawnGrb(p.x, p.y);
       }
       const bias = LAYER_PROFILES[activeLayerRef.current].weatherBias;
-      timer = window.setTimeout(fire, (9000 + Math.random() * 8000) / bias);
+      // the cosmic weather runs on the sky's dilated clock too: three
+      // fingers held down stretch the wait between events, and a
+      // face-down phone stretches it further still
+      const dilation = Math.max(0.08, timeScaleRef.current * (1 - 0.55 * nightRef.current));
+      timer = window.setTimeout(fire, (9000 + Math.random() * 8000) / bias / dilation);
     };
     timer = window.setTimeout(fire, 5000 + Math.random() * 5000);
     return () => window.clearTimeout(timer);
   }, [spawnComet, spawnPulsar, spawnNova, spawnStarForm, spawnTidalFlare, spawnGrb]);
 
-  // automata tick + page visibility + wheel zoom
+  // ── the room runtime: sleep when unseen, tick the density automata ──
+  // Both the document's own visibility and the gallery frame's pause
+  // protocol are hard sleep bits: a hidden sky costs nothing at all.
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const onVis = () => { pageHiddenRef.current = document.hidden; };
-    onVis();
-    document.addEventListener("visibilitychange", onVis);
+    let hidden = false;
+    let paused = false;
+    const settle = () => { pageHiddenRef.current = hidden || paused; };
+    const offVis = onVisibility((h) => { hidden = h; settle(); });
+    const offPause = onGalleryPause((p) => { paused = p; settle(); });
     const autoId = window.setInterval(() => {
-      if (document.hidden) return;
+      if (pageHiddenRef.current) return;
       const layer = activeLayerRef.current;
       let grid = automataRef.current.get(layer);
       if (!grid) {
@@ -3944,37 +4737,12 @@ export default function Stars() {
       }
       automataRef.current.set(layer, tickAutomata(grid));
     }, 1600);
-    const onWheel = (e: WheelEvent) => {
-      if (namingRef.current) return;
-      const target = e.target as HTMLElement | null;
-      if (!target?.closest?.(".stars-root")) return;
-      e.preventDefault();
-      // Trackpad pinch / wheel zoom is navigation — never a black hole.
-      navGestureRef.current = true;
-      suppressCommitUntilRef.current = performance.now() + NAV_SUPPRESS_MS;
-      abortTouchWell(fgRef.current);
-      const delta = -Math.sign(e.deltaY) * (e.ctrlKey ? 0.22 : 0.4);
-      const z0 = cameraRef.current.zoom;
-      const dz = delta * ZOOM_STEP * 0.55;
-      zoomBy(dz, e.clientX, e.clientY);
-      // Whatever the clamp swallowed is residual intent for the manifold:
-      // attempted minus achieved ln-ratio, at the gesture engine's wheel
-      // rate. Strictly inside the range this is zero and nothing stirs.
-      reportScaleEdge(
-        cameraRef.current.zoom,
-        Math.log(Math.max(0.05, z0 + dz) / cameraRef.current.zoom) * 60,
-      );
-      window.setTimeout(() => {
-        if (pointersRef.current.size === 0) navGestureRef.current = false;
-      }, NAV_SUPPRESS_MS);
-    };
-    window.addEventListener("wheel", onWheel, { passive: false });
     return () => {
-      document.removeEventListener("visibilitychange", onVis);
+      offVis();
+      offPause();
       window.clearInterval(autoId);
-      window.removeEventListener("wheel", onWheel);
     };
-  }, [abortTouchWell, reportScaleEdge, zoomBy]);
+  }, []);
 
   // ── black-hole mergers — hierarchical pairs + soft N-body dance ────
   // Closest pair inspirals; when it commits, the next queued pair can
@@ -3982,9 +4750,19 @@ export default function Stars() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    let lastTick = performance.now();
     const tick = () => {
-      if (document.hidden) return;
+      if (pageHiddenRef.current) return;
       const nowMs = performance.now();
+      // An inspiral is an orbit, and orbits obey the sky's dilated clock:
+      // while three fingers rest on the field the fall is held open by
+      // pushing the merger's own start time forward.
+      const dilation = Math.max(0.05, timeScaleRef.current * (1 - 0.55 * nightRef.current));
+      const wallStep = nowMs - lastTick;
+      lastTick = nowMs;
+      if (mergerRef.current && dilation < 0.999) {
+        mergerRef.current.tStartMs += wallStep * (1 - dilation);
+      }
       let holes = userBlackHolesRef.current;
 
       // soft N-body nudge among free holes (and active accretion well)
@@ -4169,10 +4947,22 @@ export default function Stars() {
     return () => window.clearInterval(id);
   }, []);
 
-  // ── keyboard: Enter (name) / Escape (cancel) ───────────────────────
+  // ── keyboard ───────────────────────────────────────────────────────
+  // The same verbs, reachable without a hand on the glass. Nothing here is
+  // a control to learn — it is the accessibility baseline for the gestures
+  // above: space is the hold (press to gather, keep holding to open a
+  // horizon, release to commit), backspace is the ceremony, brackets turn
+  // the lens, and the sky answers t as it answers three fingers.
   useEffect(() => {
+    const centre = (): { x: number; y: number } => ({
+      x: (window.innerWidth || 1) * 0.5,
+      y: (window.innerHeight || 1) * 0.5,
+    });
+
     const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Shift") shiftRef.current = true;
       if (namingRef.current) return;
+      lastTouchRef.current = performance.now();
       if (e.key === "+" || e.key === "=") {
         e.preventDefault();
         zoomIn();
@@ -4181,6 +4971,60 @@ export default function Stars() {
       if (e.key === "-" || e.key === "_") {
         e.preventDefault();
         zoomOut();
+        return;
+      }
+      if (e.key === "[") {
+        e.preventDefault();
+        setLensRungTo(lensRungRef.current - 1);
+        return;
+      }
+      if (e.key === "]") {
+        e.preventDefault();
+        setLensRungTo(lensRungRef.current + 1);
+        return;
+      }
+      if (e.key === "t" || e.key === "T") {
+        e.preventDefault();
+        tuttiNow();
+        return;
+      }
+      if (e.key === "Backspace" || e.key === "Delete") {
+        // the ceremony, without the holding: unbind the shape under the
+        // cursor, or the most recently kept one
+        const id = hoveredSavedRef.current ?? savedRef.current[0]?.id;
+        if (id) {
+          e.preventDefault();
+          deleteSaved(id);
+        }
+        return;
+      }
+      if (e.key === " ") {
+        e.preventDefault();
+        const well = gravityWellRef.current;
+        const c = centre();
+        if (!e.repeat) {
+          well.active = true;
+          well.x = c.x;
+          well.y = c.y;
+          well.t0 = performance.now();
+          well.mass = 0;
+          well.gather = 0;
+          well.mode = "gather";
+          void requestVessel();
+          return;
+        }
+        if (!well.active) return;
+        const held = performance.now() - well.t0;
+        if (held < THRESHOLDS.dwellMs) {
+          well.gather = Math.max(0, Math.min(1, (held - THRESHOLDS.tapMaxMs) / (THRESHOLDS.dwellMs - THRESHOLDS.tapMaxMs)));
+          return;
+        }
+        if (well.mode !== "accrete") {
+          well.mode = "accrete";
+          well.gather = 1;
+          haptics.roll();
+        }
+        well.mass = ((held - THRESHOLDS.dwellMs) / 1000) * WELL_MASS_PER_SEC;
         return;
       }
       if (e.key === "Escape" && pendingRef.current.length > 0) {
@@ -4201,9 +5045,31 @@ export default function Stars() {
         setNaming(true);
       }
     };
+
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key === "Shift") shiftRef.current = false;
+      if (e.key !== " " || namingRef.current) return;
+      const well = gravityWellRef.current;
+      if (!well.active) return;
+      const held = performance.now() - well.t0;
+      if (well.mode === "accrete") {
+        releaseAccretion(well.x, well.y, held, well.mass);
+      } else {
+        singleTapAt(well.x, well.y, 0.5);
+      }
+      abortWell();
+    };
+
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [cancelPending, zoomIn, zoomOut]);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keyup", onKeyUp);
+    };
+  }, [
+    abortWell, cancelPending, deleteSaved, releaseAccretion, setLensRungTo,
+    singleTapAt, tuttiNow, zoomIn, zoomOut,
+  ]);
 
   // ── render ─────────────────────────────────────────────────────────
   // anything the sky still keeps, on any layer — gates the quiet clear
@@ -4217,6 +5083,9 @@ export default function Stars() {
   return (
     <div
       data-touch-surface="true"
+      // the shared step-back convention: a raised lens is lowered before the
+      // frame retreats (see ScaleTravel's roomLensRaised)
+      data-lens-raised={lensRung > 0 ? "1" : undefined}
       className="stars-root"
       style={{
         position: "fixed",
@@ -4239,13 +5108,9 @@ export default function Stars() {
       />
       <canvas
         ref={fgRef}
+        tabIndex={0}
         aria-label="a living night sky with star births, supernovae, pulsars, comets, nebulae, galaxies, and feeding, merging black holes"
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerCancel={onPointerCancel}
-        onDoubleClick={onDoubleClick}
-        onContextMenu={onContextMenu}
+        onContextMenu={(e) => e.preventDefault()}
         style={{
           position: "absolute",
           inset: 0,
@@ -4394,27 +5259,6 @@ export default function Stars() {
       >
         tap to birth · hold for a hole · drag to pan · pinch/trackpad to zoom
       </div>
-
-      {/* delete-confirmation toast */}
-      {deleteConfirm && (
-        <div
-          style={{
-            position: "fixed",
-            left: 0,
-            right: 0,
-            top: 200,
-            textAlign: "center",
-            pointerEvents: "none",
-            color: "rgba(232, 226, 213, 0.82)",
-            fontFamily: "var(--font-text)",
-            fontSize: 12,
-            letterSpacing: "0.08em",
-            textTransform: "lowercase",
-          }}
-        >
-          right-click again to forget this constellation
-        </div>
-      )}
 
       {/* name input */}
       {naming && namePos && (

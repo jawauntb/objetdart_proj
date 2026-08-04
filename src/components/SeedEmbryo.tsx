@@ -89,11 +89,27 @@ export default function SeedEmbryo() {
     let wind = 0;
     let agitation = 0;
     let pressure = 0;
+    // two-finger pan: shifts the whole frame, eased back toward center —
+    // distinct from one-finger drag (which tilts the seed's own body).
+    let frameX = 0;
+    let frameY = 0;
+    let frameTX = 0;
+    let frameTY = 0;
+    // twist (2 fingers): an x-ray lens baring the root system.
+    const lens = { v: 0, t: 0 };
+    let twistAcc = 0;
+    // three-finger twist: the slow season, a render-only warm/cool cast.
+    let season = 0;
+    // three-finger hold: time dilation while held.
+    let timeScale = 1;
+    let timeScaleTarget = 1;
     let asleep = false;
     let hidden = document.hidden;
     let galleryPaused = false;
     let lastTouchAt = performance.now();
     let glimmerAt = 0;
+    let earlyCueAt = 0;
+    const mountedAt = performance.now();
     let last = performance.now();
     let raf = 0;
     let running = true;
@@ -145,18 +161,39 @@ export default function SeedEmbryo() {
         tap: (e) => {
           lastTouchAt = performance.now();
           if (e.fingers === 3) {
+            // tutti — the whole seed answers at once.
             agitation = Math.min(1, agitation + 0.3);
             audio.chime();
             haptics.ripple(0.45);
             return;
           }
-          if (e.fingers === 2) return;
+          if (e.fingers === 2) {
+            // step back: lower the raised root-lens first. ScaleTravel
+            // reads data-lens-raised and yields to us when this is set.
+            if (lens.t > 0.5) {
+              lens.t = 0;
+              canvas.removeAttribute("data-lens-raised");
+              audio.playNote(50, 120);
+              haptics.tap();
+            }
+            return;
+          }
           agitation = Math.min(1, agitation + 0.12 * e.intensity);
           audio.playNote(48 + Math.round(e.intensity * 14), 160);
           haptics.tap();
         },
         hold: (e) => {
           lastTouchAt = performance.now();
+          if (e.fingers === 3) {
+            // three-finger hold = time dilation while held.
+            if (e.phase === "enter") {
+              timeScaleTarget = 0.25;
+              audio.playNote(36, 260);
+              haptics.tap();
+            }
+            if (e.phase === "release") timeScaleTarget = 1;
+            return;
+          }
           if (e.fingers !== 1) return;
           if (e.phase === "enter") {
             pressure = 0.4;
@@ -186,6 +223,32 @@ export default function SeedEmbryo() {
             tiltY = Math.max(-1, Math.min(1, tiltY + e.dy * 0.0015));
           }
         },
+        pan2: (e) => {
+          lastTouchAt = performance.now();
+          // two-finger drag pans the frame — the composition shifts, the
+          // seed's own body (tilt/wind) stays exactly where it is.
+          frameTX = Math.max(-40, Math.min(40, frameTX + e.dx * 0.3));
+          frameTY = Math.max(-40, Math.min(40, frameTY + e.dy * 0.3));
+        },
+        twist: (e) => {
+          lastTouchAt = performance.now();
+          if (e.fingers === 3) {
+            // three-finger twist = season: a slow render-only warm/cool cast.
+            if (e.phase === "move") season += e.angle * 0.7;
+            return;
+          }
+          // twist (2 fingers) = rotate the lens: an x-ray view baring the
+          // root system beneath the husk.
+          if (e.phase === "start") twistAcc = 0;
+          if (e.phase === "move") twistAcc += e.angle;
+          if (e.phase === "end" && Math.abs(twistAcc) > 0.9) {
+            lens.t = lens.t > 0.5 ? 0 : 1;
+            if (lens.t > 0.5) canvas.setAttribute("data-lens-raised", "1");
+            else canvas.removeAttribute("data-lens-raised");
+            audio.chime();
+            haptics.tap();
+          }
+        },
         scrub: () => {
           lastTouchAt = performance.now();
           agitation = Math.min(1, agitation + 0.2);
@@ -206,14 +269,21 @@ export default function SeedEmbryo() {
       tier = gov.beginFrame(now);
       const detail = detailForTier(tier);
 
+      // three-finger hold = time dilation while held.
+      timeScale += (timeScaleTarget - timeScale) * Math.min(1, dt * 5);
       if (!asleep && !reduced) {
-        morph = growMorph(morph, dt * detail.simHz / 60, pressure);
+        morph = growMorph(morph, dt * timeScale * detail.simHz / 60, pressure);
         if (pressure > 0) writer.schedule();
       }
       agitation *= reduced ? 0.9 : 0.985;
       wind *= 0.98;
+      frameX += (frameTX - frameX) * Math.min(1, dt * 6);
+      frameY += (frameTY - frameY) * Math.min(1, dt * 6);
+      frameTX *= 0.9;
+      frameTY *= 0.9;
+      lens.v += (lens.t - lens.v) * Math.min(1, dt * 5);
 
-      const t = audio.getAudioTime() ?? now / 1000;
+      const t = (audio.getAudioTime() ?? now / 1000) * timeScale;
       const breath = reduced ? 0.5 : Math.sin(t * Math.PI * 2 * 0.14) * 0.5 + 0.5;
 
       ctx.clearRect(0, 0, width, height);
@@ -223,6 +293,11 @@ export default function SeedEmbryo() {
       g.addColorStop(1, "#0a0e0c");
       ctx.fillStyle = g;
       ctx.fillRect(0, 0, width, height);
+
+      // two-finger pan shifts the whole frame; the seed's own physics
+      // (tilt/wind) stay put underneath it.
+      ctx.save();
+      ctx.translate(frameX, frameY);
 
       // soil motes
       const moteN = Math.floor(40 * detail.particles);
@@ -238,9 +313,9 @@ export default function SeedEmbryo() {
       const cy = height * 0.52 + tiltY * 18;
       const scale = Math.min(width, height) * 0.16 * morph.mass;
 
-      // radicle
+      // radicle — the twist-lens bares the root system: brighter, thicker.
       if (morph.radicle > 0.02) {
-        ctx.strokeStyle = `rgba(120,160,90,${0.45 + morph.radicle * 0.4})`;
+        ctx.strokeStyle = `rgba(${120 + lens.v * 60},${160 + lens.v * 60},90,${0.45 + morph.radicle * 0.4 + lens.v * 0.3})`;
         ctx.lineWidth = 2 + morph.radicle * 3;
         ctx.beginPath();
         ctx.moveTo(cx, cy + scale * 0.2);
@@ -260,7 +335,11 @@ export default function SeedEmbryo() {
       ctx.translate(cx, cy);
       ctx.rotate(tiltX * 0.2 + wind * 0.1);
       const hue = 28 + morph.hue * 40;
-      ctx.fillStyle = `hsla(${hue}, 42%, ${28 + morph.open * 10}%, 0.92)`;
+      // three-finger twist = season: a slow render-only warm/cool cast.
+      const seasonWarm = Math.sin(season) * 0.5 + 0.5;
+      const seasonHue = hue + (seasonWarm - 0.5) * 22;
+      // twist-lens dims the husk so the bared root reads through it.
+      ctx.fillStyle = `hsla(${seasonHue}, 42%, ${28 + morph.open * 10}%, ${0.92 - lens.v * 0.5})`;
       ctx.beginPath();
       ctx.ellipse(0, 0, scale * (0.7 + split * 0.15), scale, 0, 0, Math.PI * 2);
       ctx.fill();
@@ -288,6 +367,12 @@ export default function SeedEmbryo() {
       ctx.fill();
       ctx.restore();
 
+      // an early, physical suggestion of the central verb (a hand can grow
+      // this) — once, a few seconds in, well before the 20s idle glimmer.
+      if (!reduced && !asleep && earlyCueAt === 0 && now - mountedAt > 2200 && now - lastTouchAt > 2000) {
+        earlyCueAt = now;
+        agitation = Math.min(1, agitation + 0.12);
+      }
       if (now - lastTouchAt > 20000 && now - glimmerAt > 6000 && !reduced && !asleep) glimmerAt = now;
       if (glimmerAt && now - glimmerAt < 1600) {
         const u = (now - glimmerAt) / 1600;
@@ -296,6 +381,7 @@ export default function SeedEmbryo() {
         ctx.arc(cx, cy, 16 + u * 40, 0, Math.PI * 2);
         ctx.stroke();
       }
+      ctx.restore();
 
       if (!asleep || agitation > 0.02) raf = requestAnimationFrame(draw);
       else {

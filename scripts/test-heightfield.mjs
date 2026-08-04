@@ -249,16 +249,25 @@ const spread = (n, r) => Array.from({ length: n }, () => (rng() - 0.5) * r);
 // a set of measure zero. So the headline assertion compares an integral of
 // the analytic gradient against a difference of the height function —
 // two independent computations of the same number.
+//
+// The integrator's own resolution is part of the assertion. A ridged field
+// has a kink at every octave's fold, and the midpoint rule loses O(ds) at
+// each one — so with too few samples the number this compares against is
+// the quadrature's error, not the gradient's, and the threshold becomes a
+// race between them. Fewer paths, each integrated far more finely, keeps
+// the same budget and moves the measurement floor an order of magnitude
+// below the tolerance: at N = 12000 the residual converges like 1/N, which
+// is how one can tell it is the rule and not the gradient.
 for (const seed of [1, 0xbeef, 0x5eed, 991]) {
   let worstRel = 0;
-  for (let k = 0; k < 40; k++) {
+  for (let k = 0; k < 14; k++) {
     const x0 = (rng() - 0.5) * 30;
     const z0 = (rng() - 0.5) * 30;
     const a = rng() * Math.PI * 2;
     const L = 0.4 + rng() * 0.8;
     const dx = Math.cos(a);
     const dz = Math.sin(a);
-    const N = 4000;
+    const N = 12000;
     const ds = L / N;
     let integral = 0;
     for (let i = 0; i < N; i++) {
@@ -832,6 +841,145 @@ for (let s = 0; s < 60; s++) {
   );
 }
 
+// —— the same function, written twice ————————————————————————————
+// The room marches this field per pixel in GLSL, so the field exists in two
+// languages, and a second differently-behaving copy is the determinism
+// law's worst failure: the room would draw a mountain nothing here has ever
+// checked. Node cannot run GLSL, so what is pinned is the two mechanisms
+// that make a divergence impossible rather than merely unlikely — the
+// constants are injected from these very exports, and nothing seed-derived
+// is recomputed on the GPU.
+{
+  // 1. The injection round-trips. The bug: a formatter that prints a float
+  // "nicely" — BASE_FREQ is 1/6.1 = 0.16393442622950818, and shipping 0.164
+  // to the shader moves every ridge in the range by a kilometre while both
+  // copies still look correct.
+  for (const [name, value] of Object.entries(F.HEIGHTFIELD_GLSL_FLOATS)) {
+    const lit = F.glslFloat(value);
+    assert.equal(Number.parseFloat(lit), value, `${name} survives the trip into GLSL (${lit})`);
+    assert.ok(/[.]/.test(lit), `${name} is a GLSL float literal, not an int (${lit})`);
+  }
+  // an int written as a float, or a float written as an int, is a compile
+  // error on the GPU and silence in node
+  assert.equal(F.glslFloat(3), "3.0");
+  assert.equal(F.glslFloat(-0.34), "-0.34");
+  assert.equal(Number.parseFloat(F.glslFloat(1e-7)), 1e-7);
+  assert.ok(/[.]/.test(F.glslFloat(1e-7)), "even in exponent form");
+
+  const preamble = F.heightfieldGlslConstants();
+  const body = F.HEIGHTFIELD_GLSL_BODY;
+  const defined = new Map();
+  for (const line of preamble.split("\n")) {
+    const m = /^const (int|float) ([A-Z0-9_]+) = (-?[0-9.eE+-]+);$/.exec(line.trim());
+    assert.ok(m, `every preamble line declares one constant (${line})`);
+    defined.set(m[2], Number.parseFloat(m[3]));
+  }
+  for (const [name, value] of Object.entries({
+    ...F.HEIGHTFIELD_GLSL_INTS,
+    ...F.HEIGHTFIELD_GLSL_FLOATS,
+  })) {
+    assert.ok(defined.has(name), `${name} reaches the shader`);
+    assert.equal(defined.get(name), value, `${name} reaches it unchanged`);
+  }
+
+  // 2. Names, both ways. The bug: a constant renamed in TS while the GLSL
+  // keeps saying the old name (a shader that fails to compile at runtime,
+  // in the browser, where this suite is not looking), or a constant left in
+  // the preamble that the body has quietly stopped using — which is what an
+  // inlined literal looks like from here.
+  const used = new Set(body.match(/\b[A-Z][A-Z0-9_]{2,}\b/g) ?? []);
+  for (const name of used) {
+    assert.ok(defined.has(name), `the shader body names only constants it is given (${name})`);
+  }
+  for (const name of defined.keys()) {
+    assert.ok(used.has(name), `${name} is actually used by the shader, not stale in the preamble`);
+  }
+
+  // 3. And no bare copies — the failure the SPEC names: a second, silently
+  // different height field, typed into the GLSL by hand. The four excluded
+  // constants share their exact decimal form with an honest literal of the
+  // same value in the same source (GAIN's 0.5 with the bisection midpoint,
+  // SUMMIT_RADIUS_KM's 0.62 with the glacier's valley threshold,
+  // SUMMIT_EPS_KM's 0.02 with the march's first step, MARCH_MAX_KM's 30.0
+  // with the quintic fade's, CONTOUR_INTERVAL_KM's 0.1 with the glacier
+  // slope band's half-width) — everything else must be named.
+  const shared = new Set([
+    "GAIN",
+    "SUMMIT_RADIUS_KM",
+    "SUMMIT_EPS_KM",
+    "MARCH_MAX_KM",
+    "CONTOUR_INTERVAL_KM",
+  ]);
+  const names = Object.keys(F.HEIGHTFIELD_GLSL_FLOATS);
+  let checkedInline = 0;
+  for (const name of names) {
+    if (shared.has(name)) continue;
+    checkedInline++;
+    const lit = F.glslFloat(F.HEIGHTFIELD_GLSL_FLOATS[name]);
+    // a whole literal, not a digit of a longer one: 0.2 is not 0.21
+    const bare = new RegExp(`(?<![0-9.])${lit.replace(/[.+]/g, "\\$&")}(?![0-9])`);
+    assert.ok(
+      !bare.test(body),
+      `${name} is named in the shader, never retyped as ${lit}`,
+    );
+  }
+  assert.ok(
+    checkedInline > (names.length * 2) / 3,
+    `most constants are checked for inlining (${checkedInline}/${names.length})`,
+  );
+
+  // 3b. ASCII, comments included. GLSL ES 1.00 declares an ASCII source
+  // character set, and drivers that enforce it reject the whole shader over
+  // an em dash in a comment — which fails silently into the 2D fallback,
+  // i.e. into exactly the flat room this shader exists to replace.
+  const nonAscii = [...`${preamble}\n${body}`].filter((c) => c.charCodeAt(0) > 127);
+  assert.equal(nonAscii.length, 0, `the shader source is ASCII (found ${nonAscii.join("")})`);
+
+  // 4. The budget is the same budget. The marcher's loops are written with
+  // these bounds as literals because GLSL ES 1.00 demands constants; if the
+  // shader's ceiling drifted above the one the march is tested against, the
+  // room would be spending a budget nothing here has ever measured.
+  assert.ok(
+    new RegExp(`for \\(int i = 0; i < MARCH_STEPS; i\\+\\+\\)`).test(body),
+    "the shader's march runs to MARCH_STEPS, by name",
+  );
+  assert.ok(
+    new RegExp(`for \\(int k = 0; k < MARCH_REFINE; k\\+\\+\\)`).test(body),
+    "and refines to MARCH_REFINE, by name",
+  );
+  assert.ok(/if \(i >= steps\) break;/.test(body), "and the frame's own budget can only lower it");
+  assert.ok(/if \(k >= refine\) break;/.test(body), "including the refinement");
+
+  // 5. Nothing seed-derived is computed twice. The horn table is placed once
+  // by hornsForSeed and handed over; the bug it forecloses is a shader that
+  // re-hashes the seed and grows its own horns somewhere else.
+  for (const seed of [0x0a1a, 0xbeef, 7]) {
+    const packed = F.packHorns(seed);
+    const horns = F.hornsForSeed(seed);
+    assert.equal(packed.a.length, F.HORN_COUNT * 4, "one vec4 per horn");
+    assert.equal(packed.b.length, F.HORN_COUNT * 4);
+    for (let i = 0; i < F.HORN_COUNT; i++) {
+      const h = horns[i];
+      assert.ok(Math.abs(packed.a[i * 4 + 0] - h.cx) < 1e-6, "the packed horn stands where it was placed");
+      assert.ok(Math.abs(packed.a[i * 4 + 1] - h.cz) < 1e-6);
+      assert.ok(Math.abs(packed.a[i * 4 + 2] - h.amp) < 1e-6, "with the amplitude it was given");
+      assert.ok(Math.abs(packed.a[i * 4 + 3] - h.radius) < 1e-6);
+      // the angle travels as its own cosine and sine, so the shader never
+      // calls a trig function on a number it did not receive
+      assert.ok(Math.abs(packed.b[i * 4 + 0] - Math.cos(h.angle)) < 1e-6, "turned the way it was turned");
+      assert.ok(Math.abs(packed.b[i * 4 + 1] - Math.sin(h.angle)) < 1e-6);
+      assert.ok(Math.abs(packed.b[i * 4 + 2] - h.aniso) < 1e-6);
+      assert.ok(
+        Math.abs(Math.hypot(packed.b[i * 4 + 0], packed.b[i * 4 + 1]) - 1) < 1e-6,
+        "and the pair really is a rotation",
+      );
+    }
+  }
+  // The offset is the whole of what a seed means to the field, and it is a
+  // uniform for the same reason.
+  assert.deepEqual(F.seedOffset(0x0a1a), F.seedOffset(0x0a1a), "the seed's offset is a fact about the seed");
+}
+
 console.log(
-  "heightfield ok: analytic ∂h agreeing with finite differences off the creases over 4 seeds, horn ∂h smooth and path-integrable, horns deterministic on the ring with separation, the ridge fold C⁰ but not C¹, the range bounded including horns so the marcher's ceiling exit is sound, cornice lee/windward asymmetry and glacier material classification, fog optical depth matching both hand-computable cases and monotone in path length, raising the fog only ever drowning more land, 64 steps never exceeded with a vertical hit landing where the height says, the sun palette continuous and never darkening as it climbs, and every echo bounded in time",
+  "heightfield ok: analytic ∂h agreeing with finite differences off the creases over 4 seeds, horn ∂h smooth and path-integrable, horns deterministic on the ring with separation, the ridge fold C⁰ but not C¹, the range bounded including horns so the marcher's ceiling exit is sound, cornice lee/windward asymmetry and glacier material classification, fog optical depth matching both hand-computable cases and monotone in path length, raising the fog only ever drowning more land, 64 steps never exceeded with a vertical hit landing where the height says, the sun palette continuous and never darkening as it climbs, every echo bounded in time, and the GLSL mirror fed only by injected constants and a pre-placed horn table",
 );

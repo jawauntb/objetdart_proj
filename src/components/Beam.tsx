@@ -27,6 +27,17 @@ import * as THREE from "three";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
+import LetGo from "@/components/LetGo";
+import { attachGestures } from "@/lib/gesture";
+import { onVessel, requestVessel, vesselAvailable, vesselGranted } from "@/lib/vessel";
+import {
+  createFrameGovernor,
+  detailForTier,
+  isEmbeddedFrame,
+  onGalleryPause,
+  onVisibility,
+  resolveDpr,
+} from "@/lib/room-runtime";
 
 // the room remembers you — tempo, night, and how far apart you left the
 // suns all survive a reload, the way stars keeps its constellations
@@ -487,16 +498,9 @@ export default function Beam() {
   const [fallback, setFallback] = useState(false);
   const [motionUI, setMotionUI] = useState<"hidden" | "prompt" | "on">("hidden");
   const audioRef = useRef<BeamAudio | null>(null);
-  const armSensorsRef = useRef<() => void>(() => {});
-  const motionRef = useRef<{
-    armed: boolean;
-    lastMag: number | null;
-    lastShakeAt: number;
-    onOrient: ((e: DeviceOrientationEvent) => void) | null;
-    onMotion: ((e: DeviceMotionEvent) => void) | null;
-  }>({ armed: false, lastMag: null, lastShakeAt: 0, onOrient: null, onMotion: null });
   const tiltRef = useRef({ tx: 0, ty: 0 });
   const shakeRef = useRef({ pending: 0 });
+  const knockRef = useRef({ pending: 0 });
   const reduceRef = useRef(false);
 
   const [memory] = useState<BeamMemory>(loadMemory);
@@ -505,6 +509,10 @@ export default function Beam() {
   const tempoRef = useRef(memory.tempo ?? 1);
   const nightWantRef = useRef(!!memory.night);
   const memRef = useRef<BeamMemory>({ ...memory });
+  const [hasKept, setHasKept] = useState(
+    memory.tempo !== undefined || memory.night !== undefined || memory.sep !== undefined,
+  );
+  const clearBeamRef = useRef<() => void>(() => {});
 
   const onTempo = useCallback((value: number) => {
     const v = clamp(value, 0.25, 2.5);
@@ -512,6 +520,7 @@ export default function Beam() {
     tempoRef.current = v;
     memRef.current.tempo = v;
     saveMemory(memRef.current);
+    setHasKept(true);
   }, []);
 
   const onNightToggle = useCallback(() => {
@@ -519,6 +528,7 @@ export default function Beam() {
     setIsNight(nightWantRef.current);
     memRef.current.night = nightWantRef.current;
     saveMemory(memRef.current);
+    setHasKept(true);
   }, []);
 
   const ensureAudio = useCallback(() => {
@@ -526,70 +536,46 @@ export default function Beam() {
     audioRef.current.kick();
   }, []);
 
+  // ── the vessel (shared bus, @/lib/vessel): tilt is parallax, shake is a
+  // burst of light, a knock rings one chime, and face-down is night — the
+  // room's own portrait/landscape swap (in the resize handler below) is a
+  // second, private discovery of day-for-night, not this binding.
   const armSensors = useCallback(() => {
-    if (typeof window === "undefined" || motionRef.current.armed) return;
-    motionRef.current.armed = true;
-
-    const onOrient = (e: DeviceOrientationEvent) => {
-      tiltRef.current.tx = clamp((e.gamma ?? 0) / 40, -1, 1);
-      tiltRef.current.ty = clamp((e.beta ?? 0) / 40, -1, 1);
-    };
-    const onMotion = (e: DeviceMotionEvent) => {
-      const a = e.accelerationIncludingGravity;
-      if (!a) return;
-      const mag = Math.hypot(a.x ?? 0, a.y ?? 0, a.z ?? 0);
-      const m = motionRef.current;
-      if (m.lastMag != null) {
-        const jolt = Math.abs(mag - m.lastMag);
-        const now = performance.now();
-        if (jolt > (reduceRef.current ? 22 : 14) && now - m.lastShakeAt > 700) {
-          m.lastShakeAt = now;
-          shakeRef.current.pending = clamp(jolt / 30, 0.4, 1);
-        }
-      }
-      m.lastMag = mag;
-    };
-    motionRef.current.onOrient = onOrient;
-    motionRef.current.onMotion = onMotion;
-
-    type PermCtor = { requestPermission?: () => Promise<"granted" | "denied"> };
-    const DOE = (window as unknown as { DeviceOrientationEvent?: PermCtor }).DeviceOrientationEvent;
-    const DME = (window as unknown as { DeviceMotionEvent?: PermCtor }).DeviceMotionEvent;
-    const add = () => {
-      window.addEventListener("deviceorientation", onOrient);
-      window.addEventListener("devicemotion", onMotion);
-      setMotionUI("on");
-    };
-    if (DOE && typeof DOE.requestPermission === "function") {
-      Promise.allSettled([DOE.requestPermission?.(), DME?.requestPermission?.()])
-        .then((res) => {
-          if (res.some((r) => r.status === "fulfilled" && r.value === "granted")) add();
-          else motionRef.current.armed = false;
-        })
-        .catch(() => { motionRef.current.armed = false; });
-    } else {
-      add();
-    }
+    void requestVessel().then((ok) => {
+      if (ok) setMotionUI("on");
+    });
   }, []);
-  armSensorsRef.current = armSensors;
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    const w = window as unknown as {
-      DeviceOrientationEvent?: { requestPermission?: () => Promise<string> };
-    };
-    const hasAny = "DeviceOrientationEvent" in window || "DeviceMotionEvent" in window;
-    if (!hasAny) { setMotionUI("hidden"); return; }
-    const needsPerm = !!(w.DeviceOrientationEvent && typeof w.DeviceOrientationEvent.requestPermission === "function");
-    if (needsPerm) setMotionUI("prompt");
-    else armSensors();
-    const m = motionRef.current;
-    return () => {
-      if (m.onOrient) window.removeEventListener("deviceorientation", m.onOrient);
-      if (m.onMotion) window.removeEventListener("devicemotion", m.onMotion);
-      m.armed = false; m.onOrient = null; m.onMotion = null;
-    };
-  }, [armSensors]);
+    if (!vesselAvailable()) { setMotionUI("hidden"); return; }
+    if (vesselGranted()) { setMotionUI("on"); return; }
+    void requestVessel().then((ok) => setMotionUI(ok ? "on" : "prompt"));
+  }, []);
+
+  useEffect(() => {
+    const detach = onVessel({
+      tilt: ({ beta, gamma }) => {
+        tiltRef.current.tx = clamp(gamma / 40, -1, 1);
+        tiltRef.current.ty = clamp(beta / 40, -1, 1);
+      },
+      shake: ({ intensity }) => {
+        if (reduceRef.current) return;
+        shakeRef.current.pending = clamp(intensity, 0.4, 1);
+      },
+      knock: ({ intensity }) => {
+        knockRef.current.pending = clamp(0.5 + intensity * 0.4, 0.5, 1);
+      },
+      flip: ({ faceDown }) => {
+        if (!faceDown) return;
+        nightWantRef.current = true;
+        setIsNight(true);
+        memRef.current.night = true;
+        saveMemory(memRef.current);
+        setHasKept(true);
+      },
+    });
+    return detach;
+  }, []);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -607,14 +593,47 @@ export default function Beam() {
       setFallback(true);
       return;
     }
-    renderer.setPixelRatio(clamp(window.devicePixelRatio || 1, 1, 2));
+    // ── the shared performance contract ─────────────────────────────────
+    const embedded = isEmbeddedFrame();
+    const gov = createFrameGovernor(embedded ? "medium" : "high");
+    let hiddenDoc = document.hidden;
+    let galleryPaused = false;
+    let asleep = false;
+    const syncSleep = () => {
+      asleep = hiddenDoc || galleryPaused;
+      if (asleep) gov.force("sleep");
+    };
+    const unvis = onVisibility((h) => {
+      hiddenDoc = h;
+      syncSleep();
+    });
+    const ungal = onGalleryPause((p) => {
+      galleryPaused = p;
+      syncSleep();
+    });
+
+    renderer.setPixelRatio(resolveDpr(gov.tier(), { embedded, reducedMotion: reduceRef.current }));
     renderer.domElement.style.cssText = "display:block;width:100%;height:100%;touch-action:none;cursor:crosshair";
     renderer.domElement.setAttribute("role", "img");
     renderer.domElement.setAttribute(
       "aria-label",
-      "A luminous bloom of comet-shaped petals arranged in rings around two soft suns, breathing in and out of focus. Tap to refocus and send a ripple of light; press and hold to dilate the pupil toward night; slide or flick to gust wind through the petals; pinch to pull the two suns apart or merge them; twist two fingers to turn the whole formation; shake for a burst of light; tilt for parallax; and turn the phone sideways to trade day for night.",
+      "A luminous bloom of comet-shaped petals arranged in rings around two soft suns, breathing in and out of focus. Tap to refocus and send a ripple of light; press and hold to dilate the pupil toward night, and past a ceremony a meteor is called down; slide or flick to gust wind through the petals; pinch to pull the two suns apart or merge them; twist two fingers to turn the whole formation, three fingers to turn its season; two-finger drag carries the system, three-finger drag is wind, three-finger hold slows time; shake for a burst of light; tilt for parallax; and turn the phone face-down to trade day for night.",
     );
     host.appendChild(renderer.domElement);
+
+    // WebGL context loss (mobile GPU pressure, background tabs): stop
+    // touching the lost context and let the browser restore it. A full
+    // scene reinit on restore is out of scope — see the sweep report.
+    let contextLost = false;
+    const onContextLost = (ev: Event) => {
+      ev.preventDefault();
+      contextLost = true;
+    };
+    const onContextRestored = () => {
+      contextLost = false;
+    };
+    renderer.domElement.addEventListener("webglcontextlost", onContextLost, false);
+    renderer.domElement.addEventListener("webglcontextrestored", onContextRestored, false);
 
     // ── scene ────────────────────────────────────────────────────────────
     const scene = new THREE.Scene();
@@ -668,7 +687,9 @@ export default function Beam() {
     bgMesh.renderOrder = 0;
     scene.add(bgMesh);
 
-    // petals
+    // petals — allocated at the full count; the quality tier scales how
+    // many of them are actually drawn each frame (geo.instanceCount),
+    // never how many exist, so a phone loses petals rather than time.
     const COUNT = reduceRef.current ? 260 : 470;
     const plane = new THREE.PlaneGeometry(1, 1);
     const geo = new THREE.InstancedBufferGeometry();
@@ -676,6 +697,7 @@ export default function Beam() {
     geo.setAttribute("position", plane.getAttribute("position"));
     geo.setAttribute("uv", plane.getAttribute("uv"));
     geo.instanceCount = COUNT;
+    let lastInstanceSync = 0;
 
     const aRing = new Float32Array(COUNT);
     const aAng = new Float32Array(COUNT);
@@ -776,11 +798,18 @@ export default function Beam() {
     let nightMix = night ? 1 : 0;
     let flash = 0;
     let merged = false;
-    let landscape: boolean | null = null;
 
-    type P = { x0: number; y0: number; x: number; y: number; px: number; py: number; pt: number; t0: number; moved: boolean };
-    const pointers = new Map<number, P>();
-    let pinch: { d0: number; a0: number; sep0: number; rot0: number; cx0: number; cy0: number; bx0: number; by0: number } | null = null;
+    // LetGo — the quiet clear: the room's kept character (tempo, night,
+    // how far apart you left the suns) returns to its resting defaults.
+    clearBeamRef.current = () => {
+      sepTarget = 0.66;
+      onTempo(1);
+      if (nightWantRef.current) onNightToggle();
+      memRef.current = {};
+      saveMemory(memRef.current);
+      setHasKept(false);
+    };
+    let landscape: boolean | null = null;
 
     const toWorld = (cx: number, cy: number): [number, number] => {
       const rect = renderer.domElement.getBoundingClientRect();
@@ -789,90 +818,41 @@ export default function Beam() {
       return [x, y];
     };
 
-    const onPointerDown = (e: PointerEvent) => {
-      ensureAudio();
-      renderer.domElement.setPointerCapture?.(e.pointerId);
-      pointers.set(e.pointerId, {
-        x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY,
-        px: e.clientX, py: e.clientY, pt: performance.now(),
-        t0: performance.now(), moved: false,
-      });
-      if (pointers.size === 2) {
-        const [a, b] = [...pointers.values()];
-        pinch = {
-          d0: Math.max(24, Math.hypot(b.x - a.x, b.y - a.y)),
-          a0: Math.atan2(b.y - a.y, b.x - a.x),
-          sep0: sepTarget,
-          rot0: rotExtra,
-          cx0: (a.x + b.x) / 2,
-          cy0: (a.y + b.y) / 2,
-          bx0: baryTarget.x,
-          by0: baryTarget.y,
-        };
-      }
-    };
+    // ── gestures (the shared grammar — src/lib/gesture) ─────────────────
+    // One finger touches the light: tap refocuses and sends a ripple, drag
+    // or a flick gusts the petals, dwell dilates the pupil (deepens the
+    // longer it holds) and ceremony calls a meteor down in a deep exhale.
+    // Two fingers touch the map: pinch pulls the suns apart or together,
+    // twist turns the formation, pan carries the whole system across the
+    // sky. Three fingers touch the law: drag is wind, hold dilates time,
+    // twist turns the season, tap is tutti. Beam owns pinch/pan2/twist
+    // itself — ScaleTravel is not mounted here (AxisChrome travel={false}).
+    let holdTicked = false;
+    let ceremonyFired = false;
+    let timeScaleTarget = 1;
+    let timeScale = 1;
+    let weatherOffset = 0;
 
-    const onPointerMove = (e: PointerEvent) => {
-      const p = pointers.get(e.pointerId);
-      if (!p) return;
-      const fromX = p.x, fromY = p.y, fromT = p.pt;
-      p.px = fromX; p.py = fromY;
-      p.x = e.clientX; p.y = e.clientY; p.pt = performance.now();
-      if (!p.moved && Math.hypot(p.x - p.x0, p.y - p.y0) > 10) p.moved = true;
-
-      if (pointers.size >= 2 && pinch) {
-        const [a, b] = [...pointers.values()];
-        const d = Math.max(24, Math.hypot(b.x - a.x, b.y - a.y));
-        const ang = Math.atan2(b.y - a.y, b.x - a.x);
-        sepTarget = clamp(pinch.sep0 * (d / pinch.d0), 0.04, 0.9);
-        rotExtra = pinch.rot0 - (ang - pinch.a0);
-        const rect = renderer.domElement.getBoundingClientRect();
-        const cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
-        baryTarget.x = clamp(pinch.bx0 + ((cx - pinch.cx0) / rect.width) * 2 * aspect, -0.6, 0.6);
-        baryTarget.y = clamp(pinch.by0 - ((cy - pinch.cy0) / rect.height) * 2, -0.6, 0.6);
-        return;
-      }
-
-      if (p.moved) {
-        const dx = p.x - fromX, dy = p.y - fromY;
-        const dist = Math.hypot(dx, dy);
-        if (dist > 1) {
-          const dtms = Math.max(8, p.pt - fromT);
-          const speed = dist / dtms;
-          uniforms.uGustDir.value.set(dx / dist, -dy / dist);
-          gustAmt = clamp(gustAmt + speed * 0.25, 0, 1.4);
-          try { audioRef.current?.whoosh(clamp(speed * 0.7, 0, 1)); } catch { /* noop */ }
+    const detachGestures = attachGestures(renderer.domElement, {
+      tap: (e) => {
+        ensureAudio();
+        if (e.fingers === 2) {
+          // step back: a focus pinned by a tap breathes free again
+          focusBreathing = true;
+          try { haptics.tap(); } catch { /* noop */ }
+          return;
         }
-      }
-    };
-
-    const onPointerEnd = (e: PointerEvent) => {
-      const p = pointers.get(e.pointerId);
-      if (!p) return;
-      pointers.delete(e.pointerId);
-      if (pointers.size < 2 && pinch) {
-        pinch = null;
-        // remember how far apart you left the suns
-        memRef.current.sep = sepTarget;
-        saveMemory(memRef.current);
-      }
-      const held = (performance.now() - p.t0) / 1000;
-
-      if (pupilTarget > 0 && pointers.size === 0) {
-        // releasing a long press is its own gesture: the deep exhale — a
-        // wide slow wave of light rolls out from where you held
-        pupilTarget = 0;
-        const [wx, wy] = toWorld(p.x, p.y);
-        uniforms.uRipple.value.set(wx, wy, 0);
-        uniforms.uRippleAmp.value = 2.1;
-        try { audioRef.current?.exhale(); } catch { /* noop */ }
-        try { haptics.ripple(0.5); } catch { /* noop */ }
-        return;
-      }
-
-      if (!p.moved && held < 0.3 && e.type !== "pointercancel") {
+        if (e.fingers === 3) {
+          // tutti — the formation answers softly at once
+          uniforms.uRipple.value.set(uniforms.uSunA.value.x, uniforms.uSunA.value.y, 0);
+          uniforms.uRippleAmp.value = 1.4;
+          flash = Math.max(flash, 0.4);
+          try { audioRef.current?.chime(0.5); } catch { /* noop */ }
+          try { haptics.ripple(0.4); } catch { /* noop */ }
+          return;
+        }
         // tap: refocus to that ring and send light running outward
-        const [wx, wy] = toWorld(p.x, p.y);
+        const [wx, wy] = toWorld(e.x, e.y);
         const da = Math.hypot(wx - uniforms.uSunA.value.x, wy - uniforms.uSunA.value.y);
         const db = Math.hypot(wx - uniforms.uSunB.value.x, wy - uniforms.uSunB.value.y);
         focusTarget = clamp(Math.min(da, db) / 1.2, 0, 1);
@@ -881,31 +861,119 @@ export default function Beam() {
         uniforms.uRippleAmp.value = 1;
         try { audioRef.current?.chime(1 - focusTarget); } catch { /* noop */ }
         try { haptics.tap(); } catch { /* noop */ }
-        return;
-      }
-
-      if (p.moved) {
-        const dtms = Math.max(16, performance.now() - p.pt + 16);
-        const speed = Math.hypot(p.x - p.px, p.y - p.py) / dtms;
-        if (speed > 0.6) {
-          gustAmt = clamp(gustAmt + speed * 0.5, 0, 2);
-          try { audioRef.current?.whoosh(1); } catch { /* noop */ }
-          try { haptics.chop(); } catch { /* noop */ }
+      },
+      drag: (e) => {
+        ensureAudio();
+        if (e.fingers === 3) {
+          if (e.phase === "end") return;
+          // three fingers drag the weather: wind through the petals, and
+          // the season's phase leans with the push
+          const dist = Math.hypot(e.dx, e.dy);
+          if (dist > 0.5) {
+            uniforms.uGustDir.value.set(e.dx / dist, -e.dy / dist);
+            gustAmt = clamp(gustAmt + dist * 0.01, 0, 2);
+          }
+          weatherOffset += e.dx * 0.0006;
+          return;
         }
-      }
-    };
-
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      focusTarget = clamp(focusTarget + e.deltaY * 0.0008, 0, 1);
-      focusBreathing = false;
-    };
-
-    renderer.domElement.addEventListener("pointerdown", onPointerDown);
-    renderer.domElement.addEventListener("pointermove", onPointerMove);
-    renderer.domElement.addEventListener("pointerup", onPointerEnd);
-    renderer.domElement.addEventListener("pointercancel", onPointerEnd);
-    renderer.domElement.addEventListener("wheel", onWheel, { passive: false });
+        if (e.fingers !== 1 || e.phase === "end") return;
+        const dist = Math.hypot(e.dx, e.dy);
+        if (dist > 1) {
+          uniforms.uGustDir.value.set(e.dx / dist, -e.dy / dist);
+          gustAmt = clamp(gustAmt + dist * 0.02, 0, 1.4);
+          try { audioRef.current?.whoosh(clamp(dist * 0.05, 0, 1)); } catch { /* noop */ }
+        }
+      },
+      flick: (e) => {
+        if (e.fingers !== 1) return;
+        gustAmt = clamp(gustAmt + Math.min(2, e.speed * 0.8), 0, 2);
+        try { audioRef.current?.whoosh(1); } catch { /* noop */ }
+        try { haptics.chop(); } catch { /* noop */ }
+      },
+      hold: (e) => {
+        ensureAudio();
+        if (e.fingers === 3) {
+          // three fingers hold the law: time dilates to a quarter speed
+          if (e.phase === "enter") {
+            timeScaleTarget = 0.25;
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+          if (e.phase === "release") timeScaleTarget = 1;
+          return;
+        }
+        if (e.fingers !== 1) return;
+        if (e.phase === "enter") {
+          holdTicked = false;
+          ceremonyFired = false;
+          return;
+        }
+        if (e.phase === "release") {
+          if (pupilTarget > 0) {
+            // releasing the dwell is its own gesture: the deep exhale — a
+            // wide slow wave of light rolls out from where you held
+            pupilTarget = 0;
+            const [wx, wy] = toWorld(e.x, e.y);
+            uniforms.uRipple.value.set(wx, wy, 0);
+            uniforms.uRippleAmp.value = 2.1;
+            try { audioRef.current?.exhale(); } catch { /* noop */ }
+            try { haptics.ripple(0.5); } catch { /* noop */ }
+          }
+          return;
+        }
+        // dwell tier: the pupil dilates — grows the longer it holds
+        if (e.tier >= 1) {
+          if (!holdTicked) { holdTicked = true; try { haptics.ripple(0.4); } catch { /* noop */ } }
+          pupilTarget = 1;
+        }
+        // ceremony — the room's one solemn act: a meteor is called down
+        // (if none is already in flight) with a grand exhale of light
+        if (e.tier >= 3 && !ceremonyFired) {
+          ceremonyFired = true;
+          const [wx, wy] = toWorld(e.x, e.y);
+          if (uniforms.uMeteorAge.value >= 90) {
+            const dir = new THREE.Vector2(-wx, -wy);
+            if (dir.lengthSq() < 1e-6) dir.set(1, 0); else dir.normalize();
+            uniforms.uMeteorA.value.set(wx, wy);
+            uniforms.uMeteorD.value.copy(dir);
+            uniforms.uMeteorAge.value = 0;
+          }
+          uniforms.uRipple.value.set(wx, wy, 0);
+          uniforms.uRippleAmp.value = 2.6;
+          flash = Math.max(flash, 0.7);
+          try { audioRef.current?.bell(); } catch { /* noop */ }
+          try { haptics.bloom(); } catch { /* noop */ }
+        }
+      },
+      pinch: (e) => {
+        ensureAudio();
+        if (e.phase === "end") {
+          memRef.current.sep = sepTarget;
+          saveMemory(memRef.current);
+          setHasKept(true);
+          return;
+        }
+        if (e.phase !== "move") return;
+        // spreading fingers pulls the suns apart; closing merges them
+        sepTarget = clamp(sepTarget * e.scale, 0.04, 0.9);
+      },
+      twist: (e) => {
+        ensureAudio();
+        if (e.fingers === 3) {
+          // three-finger twist: advance/rewind the formation's season
+          if (e.phase === "move") weatherOffset += e.angle * 0.5;
+          return;
+        }
+        // two-finger twist turns the whole formation
+        if (e.phase === "move") rotExtra -= e.angle;
+      },
+      pan2: (e) => {
+        ensureAudio();
+        // two fingers carry the system across the sky
+        const rect = renderer.domElement.getBoundingClientRect();
+        baryTarget.x = clamp(baryTarget.x + (e.dx / rect.width) * 2 * aspect, -0.6, 0.6);
+        baryTarget.y = clamp(baryTarget.y - (e.dy / rect.height) * 2, -0.6, 0.6);
+      },
+    }, { wheelZoom: true });
 
     const resize = () => {
       const rect = host.getBoundingClientRect();
@@ -925,6 +993,7 @@ export default function Beam() {
         setIsNight(nightWantRef.current);
         memRef.current.night = nightWantRef.current;
         saveMemory(memRef.current);
+        setHasKept(true);
       }
       landscape = nowLandscape;
     };
@@ -943,13 +1012,29 @@ export default function Beam() {
     let last = performance.now();
     const step = (now: number) => {
       raf = requestAnimationFrame(step);
+      const tier = gov.beginFrame(now);
       const dt = clamp((now - last) / 1000, 0.001, 0.05);
       last = now;
-      if (document.hidden || !rtScene || !rtA || !rtB) return;
+      if (asleep || contextLost || !rtScene || !rtA || !rtB) return;
       const reduced = reduceRef.current;
+      // the quality tier thins the petals actually drawn, never simulated
+      if (now - lastInstanceSync > 600) {
+        lastInstanceSync = now;
+        geo.instanceCount = Math.max(80, Math.round(COUNT * detailForTier(tier).particles));
+      }
+      // three-finger hold dilates time; a knock rings one chime
+      timeScale = mix(timeScale, timeScaleTarget, 1 - Math.exp(-dt * 5));
+      if (knockRef.current.pending > 0) {
+        const kAmt = knockRef.current.pending;
+        knockRef.current.pending = 0;
+        uniforms.uRipple.value.set(uniforms.uSunA.value.x, uniforms.uSunA.value.y, 0);
+        uniforms.uRippleAmp.value = 1.2 + kAmt * 0.6;
+        flash = Math.max(flash, 0.3 + kAmt * 0.2);
+        try { audioRef.current?.chime(kAmt); } catch { /* noop */ }
+      }
       // the tempo dial scales the whole clock — rotation, wave, weather,
       // twinkle, the waltz of the suns, even how often meteors come
-      const speed = (reduced ? 0.35 : 1) * tempoRef.current;
+      const speed = (reduced ? 0.35 : 1) * tempoRef.current * timeScale;
       simT += dt * speed;
 
       // day and night follow the want set by the panel or by flipping the phone
@@ -972,17 +1057,6 @@ export default function Beam() {
         uniforms.uMeteorAge.value = 0;
         meteorNext = simT + 16 + Math.random() * 28;
         try { audioRef.current?.chime(0.9); } catch { /* noop */ }
-      }
-
-      // long-press: a still finger past 0.38s dilates the pupil
-      if (pointers.size === 1) {
-        const p = [...pointers.values()][0];
-        if (!p.moved && (now - p.t0) / 1000 > 0.38) {
-          if (pupilTarget === 0) {
-            try { haptics.ripple(0.4); } catch { /* noop */ }
-          }
-          pupilTarget = 1;
-        }
       }
 
       if (shakeRef.current.pending > 0 && !reduced) {
@@ -1039,8 +1113,8 @@ export default function Beam() {
       uniforms.uPar.value.x = mix(uniforms.uPar.value.x, tiltRef.current.tx, 1 - Math.exp(-dt * 4));
       uniforms.uPar.value.y = mix(uniforms.uPar.value.y, -tiltRef.current.ty, 1 - Math.exp(-dt * 4));
 
-      // weather
-      const phase = simT * 0.022;
+      // weather — three-finger twist/drag walk weatherOffset forward or back
+      const phase = simT * 0.022 + weatherOffset;
       const wi = ((Math.floor(phase) % WEATHERS.length) + WEATHERS.length) % WEATHERS.length;
       const wf = phase - Math.floor(phase);
       const sm = wf * wf * (3 - 2 * wf);
@@ -1097,11 +1171,11 @@ export default function Beam() {
     return () => {
       cancelAnimationFrame(raf);
       window.removeEventListener("resize", resize);
-      renderer.domElement.removeEventListener("pointerdown", onPointerDown);
-      renderer.domElement.removeEventListener("pointermove", onPointerMove);
-      renderer.domElement.removeEventListener("pointerup", onPointerEnd);
-      renderer.domElement.removeEventListener("pointercancel", onPointerEnd);
-      renderer.domElement.removeEventListener("wheel", onWheel);
+      detachGestures();
+      unvis();
+      ungal();
+      renderer.domElement.removeEventListener("webglcontextlost", onContextLost);
+      renderer.domElement.removeEventListener("webglcontextrestored", onContextRestored);
       reduceQuery.removeEventListener?.("change", onReduce);
       rtScene?.dispose(); rtA?.dispose(); rtB?.dispose();
       geo.dispose(); plane.dispose(); bgGeo.dispose(); postGeo.dispose();
@@ -1110,8 +1184,15 @@ export default function Beam() {
       try { host.removeChild(renderer.domElement); } catch { /* noop */ }
       try { audioRef.current?.dispose(); } catch { /* noop */ }
       audioRef.current = null;
+      clearBeamRef.current = () => {};
     };
   }, [ensureAudio]);
+
+  const letGo = useCallback(() => {
+    clearBeamRef.current();
+    try { getFieldAudio().thud(); } catch { /* noop */ }
+    try { haptics.roll(); } catch { /* noop */ }
+  }, []);
 
   return (
     <div className="beam-stage" ref={hostRef}>
@@ -1120,6 +1201,7 @@ export default function Beam() {
           <div className="beam-fallback-eye" />
         </div>
       )}
+      <LetGo label="let the beam rest" onLetGo={letGo} visible={hasKept} />
       <div className="beam-title" aria-hidden="true">
         <span>the eye of heaven</span>
         <strong>beam</strong>
@@ -1131,7 +1213,7 @@ export default function Beam() {
             type="button"
             className="beam-motion-chip"
             aria-label="Enable motion so tilting adds parallax and shaking sends light through the petals"
-            onClick={() => { ensureAudio(); armSensorsRef.current(); }}
+            onClick={() => { ensureAudio(); armSensors(); }}
           >
             <span aria-hidden="true">◒</span>
             <span>tilt &amp; shake to play</span>

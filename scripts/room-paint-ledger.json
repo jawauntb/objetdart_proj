@@ -1,7 +1,4 @@
 {
-  "src/components/Atlas.tsx": {
-    "createRadialGradient": 2
-  },
   "src/components/AtomsField.tsx": {
     "createRadialGradient": 7
   },
@@ -105,9 +102,6 @@
     "createRadialGradient": 3,
     "shadowBlur": 3
   },
-  "src/components/TissueSheet.tsx": {
-    "createRadialGradient": 2
-  },
   "src/components/Tourbillon.tsx": {
     "createRadialGradient": 4,
     "shadowBlur": 2
@@ -117,8 +111,5 @@
   },
   "src/components/Watch.tsx": {
     "createRadialGradient": 4
-  },
-  "src/components/Waves.tsx": {
-    "createRadialGradient": 3
   }
 }

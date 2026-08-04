@@ -1,12 +1,22 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import GreekKeyFrame from "@/components/GreekKeyFrame";
 import WaterText from "@/components/WaterText";
+import LetGo from "@/components/LetGo";
+import {
+  onVisibility,
+  onGalleryPause,
+  resolveDpr,
+  createFrameGovernor,
+  isEmbeddedFrame,
+  detailForTier,
+} from "@/lib/room-runtime";
 
 type WeatherCell = {
   id: number;
@@ -110,6 +120,8 @@ export default function Clouds() {
   // shows the right icon (sun in day phases, moon in night phases).
   const [iconIsSun, setIconIsSun] = useState(true);
   const [pressCharge, setPressCharge] = useState(0);
+  const [hasBuilt, setHasBuilt] = useState(false);
+  const clearWeatherRef = useRef<() => void>(() => {});
   const weatherMarkIdRef = useRef(0);
   const [weatherMarks, setWeatherMarks] = useState<
     Array<{ id: number; label: string; level: number }>
@@ -134,6 +146,8 @@ export default function Clouds() {
     const octx = overlay.getContext("2d");
     if (!octx) return;
 
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
     // ── WebGL setup ─────────────────────────────────────────────────
     const gl =
       (sky.getContext("webgl", { antialias: false, premultipliedAlpha: false }) ||
@@ -152,12 +166,18 @@ export default function Clouds() {
     let uWindLoc: WebGLUniformLocation | null = null;
     let uDriftLoc: WebGLUniformLocation | null = null;
     let uPuffsLoc: WebGLUniformLocation | null = null;
+    let uLensLoc: WebGLUniformLocation | null = null;
+    let uSeasonLoc: WebGLUniformLocation | null = null;
+    let uPanLoc: WebGLUniformLocation | null = null;
+    let uMaxStepsLoc: WebGLUniformLocation | null = null;
+    let vbo: WebGLBuffer | null = null;
     let lastChargeSync = 0;
     // 4 slots of vec4(uv.x, uv.y, strength, spare) handed to the shader each
     // frame — the hand's condensation, injected into the volume itself.
     const puffData = new Float32Array(16);
 
-    if (gl) {
+    const setupProgram = () => {
+      if (!gl) return;
       const vert = `
         attribute vec2 a_pos;
         varying vec2 vUv;
@@ -177,6 +197,15 @@ export default function Clouds() {
         uniform vec2 uWind;     // drag-driven shear vector
         uniform vec2 uDrift;    // accumulated wind travel, in cloud-field units
         uniform vec4 uPuffs[4]; // xy = screen uv, z = strength (<0 = storm cell), w = height bias
+        // uLens: the sky as seen (0) → the moisture/temperature field, a
+        // false-colour diagram (1) — two-finger twist, a level of
+        // description. uSeason: the slow annual cycle, clear toward
+        // overcast (three-finger twist). uPan: two fingers lean the view.
+        uniform float uLens;
+        uniform float uSeason;
+        uniform vec2 uPan;
+        // ray-march step budget — scaled down at lower performance tiers.
+        uniform float uMaxSteps;
         varying vec2 vUv;
 
         // The cloud deck lives between these two altitudes. The camera sits
@@ -359,8 +388,9 @@ export default function Clouds() {
           }
           gDark = clamp(gDark, 0.0, 1.0);
 
-          // stormy stretch of the day — heavier extinction, less sun
-          float stormy = smoothstep(0.55, 0.85, uPhase);
+          // stormy stretch of the day — heavier extinction, less sun.
+          // season is the same knob turned slowly, clear toward overcast.
+          float stormy = clamp(smoothstep(0.55, 0.85, uPhase) + uSeason * 0.35, 0.0, 1.0);
 
           // ── camera: standing under the deck, looking out and up ──
           vec2 sp = uv - 0.5;
@@ -368,8 +398,8 @@ export default function Clouds() {
           // the drag shear tips the whole view, so pushed wind is felt as
           // the deck leaning, not just sliding
           vec3 rd = normalize(vec3(
-            sp.x + uWind.x * 0.045,
-            sp.y + 0.320 + uWind.y * 0.030,
+            sp.x + uWind.x * 0.045 + uPan.x,
+            sp.y + 0.320 + uWind.y * 0.030 + uPan.y,
             0.82
           ));
           vec3 ro = vec3(0.0, 0.0, 0.0);
@@ -460,7 +490,7 @@ export default function Clouds() {
             float t = t0 + dtBig * jitter;
             float sigma = 2.5 + stormy * 1.7 + gDark * 2.6;
             for (int i = 0; i < 64; i++) {
-              if (trans < 0.04 || t > t1) break;
+              if (float(i) >= uMaxSteps || trans < 0.04 || t > t1) break;
               vec3 p = ro + rd * t;
               float d = density(p, clamp(1.35 - t * 0.011, 0.0, 1.0));
               if (d > 0.002) {
@@ -521,6 +551,16 @@ export default function Clouds() {
           col *= 0.84 + vignette * 0.20;
 
           col = clamp(col, 0.0, 1.0);
+
+          // the lens: the same field read as moisture/temperature, not sky
+          if (uLens > 0.001) {
+            vec3 dryC = vec3(0.85, 0.55, 0.10);
+            vec3 wetC = vec3(0.10, 0.35, 0.85);
+            vec3 diagram = mix(dryC, wetC, clamp(gDark + trans * 0.3, 0.0, 1.0));
+            diagram += smoothstep(0.985, 1.0, fract(uv.y * 11.0 + uPhase)) * 0.3;
+            col = mix(col, diagram, clamp(uLens, 0.0, 1.0));
+          }
+
           gl_FragColor = vec4(col, 1.0);
         }
       `;
@@ -556,6 +596,10 @@ export default function Clouds() {
             uWindLoc = gl.getUniformLocation(p, "uWind");
             uDriftLoc = gl.getUniformLocation(p, "uDrift");
             uPuffsLoc = gl.getUniformLocation(p, "uPuffs[0]");
+            uLensLoc = gl.getUniformLocation(p, "uLens");
+            uSeasonLoc = gl.getUniformLocation(p, "uSeason");
+            uPanLoc = gl.getUniformLocation(p, "uPan");
+            uMaxStepsLoc = gl.getUniformLocation(p, "uMaxSteps");
 
             const buf = gl.createBuffer();
             gl.bindBuffer(gl.ARRAY_BUFFER, buf);
@@ -568,10 +612,42 @@ export default function Clouds() {
             gl.enableVertexAttribArray(loc);
             gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
             gl.useProgram(p);
+            vbo = buf;
           }
         }
       }
-    }
+    };
+    setupProgram();
+
+    // WebGL context can be lost (mobile GPU pressure, background tabs) and
+    // restored later — reinit the program rather than staying dark forever.
+    const onContextLost = (ev: Event) => {
+      ev.preventDefault();
+      glProg = null;
+    };
+    const onContextRestored = () => {
+      setupProgram();
+    };
+    sky.addEventListener("webglcontextlost", onContextLost, false);
+    sky.addEventListener("webglcontextrestored", onContextRestored, false);
+
+    const embedded = isEmbeddedFrame();
+    const gov = createFrameGovernor(embedded ? "medium" : "high");
+    let hiddenDoc = document.hidden;
+    let galleryPaused = false;
+    let asleep = false;
+    const syncSleep = () => {
+      asleep = hiddenDoc || galleryPaused;
+      if (asleep) gov.force("sleep");
+    };
+    const unvis = onVisibility((h) => {
+      hiddenDoc = h;
+      syncSleep();
+    });
+    const ungal = onGalleryPause((p) => {
+      galleryPaused = p;
+      syncSleep();
+    });
 
     // ── resize ─────────────────────────────────────────────────────
     // The volume march is the expensive pass, so the sky canvas renders
@@ -581,7 +657,7 @@ export default function Clouds() {
     // a workstation both land near 60fps.
     let skyScale = 0.55;
     const resize = () => {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = resolveDpr(gov.tier(), { embedded, reducedMotion: reduce });
       const w = wrap.clientWidth;
       const h = wrap.clientHeight;
       sky.width = Math.max(2, Math.floor(w * dpr * skyScale));
@@ -599,7 +675,6 @@ export default function Clouds() {
     ro.observe(wrap);
 
     // ── interaction ────────────────────────────────────────────────
-    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     let nextWeatherId = 0;
     let activeWindStroke: WindStroke | null = null;
     let lastWindMark = 0;
@@ -623,6 +698,35 @@ export default function Clouds() {
     let lastScrubAt = 0;
     let lastGestureAt = performance.now();
     const holdState = { ceremony: false };
+
+    // ── the map layer (two fingers) and the vessel ─────────────────
+    let lens = 0; // 0 the sky as seen, 1 the moisture/temperature field
+    let season = 0; // 0 clear, 1 overcast — the slow annual cycle
+    let panX = 0;
+    let panY = 0;
+    let panXTarget = 0;
+    let panYTarget = 0;
+
+    const dissolveWeatherCellNear = (x: number, y: number): boolean => {
+      let bestIdx = -1;
+      let bestD = 80;
+      for (let i = 0; i < weatherCells.length; i++) {
+        const d = Math.hypot(weatherCells[i].x - x, weatherCells[i].y - y);
+        if (d < bestD) { bestD = d; bestIdx = i; }
+      }
+      if (bestIdx < 0) return false;
+      weatherCells.splice(bestIdx, 1);
+      setHasBuilt(weatherCells.length > 0);
+      return true;
+    };
+    clearWeatherRef.current = () => {
+      weatherCells.length = 0;
+      rainVeils.length = 0;
+      windStrokes.length = 0;
+      cloudPuffs.length = 0;
+      lightnings.current = [];
+      setHasBuilt(false);
+    };
 
     // build a jagged path from (x0, y0) to (x1, y1) with mid-jitter forks
     const makeBolt = (x0: number, y0: number, x1: number, y1: number) => {
@@ -672,6 +776,7 @@ export default function Clouds() {
         rain: kind === "storm" ? 0.45 + Math.random() * 0.35 + strength * 0.22 : Math.random() * 0.10,
       });
       if (weatherCells.length > 20) weatherCells.shift();
+      setHasBuilt(true);
     };
 
     const seedRainVeil = (x: number, y: number, strength: number, width = 180) => {
@@ -822,7 +927,27 @@ export default function Clouds() {
     const detachGestures = attachGestures(overlay, {
       tap: (e) => {
         lastGestureAt = performance.now();
-        if (e.fingers !== 1) return; // the sky absorbs frame/law taps
+        if (e.fingers === 2) {
+          // step back: lower a raised lens, else the sky eases its lean.
+          // ScaleTravel (document.body) reads data-lens-raised so this tap
+          // and the shared scale step-back never both answer at once.
+          if (lens > 0.02) {
+            lens = 0;
+            wrap.dataset.lensRaised = "";
+          } else {
+            panXTarget = 0;
+            panYTarget = 0;
+          }
+          haptics.tap();
+          return;
+        }
+        if (e.fingers === 3) {
+          // tutti — everything alive answers softly at once
+          for (const cell of weatherCells) cell.strength = Math.min(1, cell.strength + 0.12);
+          try { getFieldAudio().chime(); } catch { /* noop */ }
+          haptics.ripple(0.4);
+          return;
+        }
         const { x: px, y: py } = trackPointer(e.x, e.y);
         const g = glyphAt(px, py);
         if (g) {
@@ -949,11 +1074,19 @@ export default function Clouds() {
           }
           return;
         }
-        // ceremony tier — the room's one solemn act: the storm is kept.
-        // The cell seeds at full strength, rain closes around it, and the
-        // sky answers with one great bolt.
+        // ceremony tier — the room's one solemn act: over an existing cell
+        // it dissolves (the touch-reachable delete); over open sky the
+        // storm is kept — the cell seeds at full strength, rain closes
+        // around it, and the sky answers with one great bolt.
         if (e.tier >= 3 && !holdState.ceremony) {
           holdState.ceremony = true;
+          if (dissolveWeatherCellNear(pointer.current.x, pointer.current.y)) {
+            try { getFieldAudio().thud(); } catch { /* noop */ }
+            try { haptics.chop(); } catch { /* noop */ }
+            addWeatherMark("dissolved", 0.3);
+            useField.getState().recordTape("sigil", 0.3, "clouds/dissolve");
+            return;
+          }
           seedWeatherCell(pointer.current.x, pointer.current.y, "storm", 1);
           seedRainVeil(pointer.current.x - 90, pointer.current.y + 44, 0.9, 200);
           seedRainVeil(pointer.current.x + 90, pointer.current.y + 52, 0.9, 200);
@@ -962,6 +1095,22 @@ export default function Clouds() {
           addWeatherMark("kept storm", 1);
           useField.getState().recordTape("sigil", 1, "clouds/ceremony");
         }
+      },
+      twist: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          // three-finger twist: advance/rewind the sky's slow season
+          season = clamp(season + e.angle * 0.12, 0, 1);
+          return;
+        }
+        // two-finger twist rotates the lens — sky as seen ↔ moisture map
+        lens = clamp(lens + e.angle * 0.4, 0, 1);
+        wrap.dataset.lensRaised = lens > 0.02 ? "1" : "";
+      },
+      pan2: (e) => {
+        lastGestureAt = performance.now();
+        panXTarget = clamp(panXTarget + e.dx * 0.0006, -0.16, 0.16);
+        panYTarget = clamp(panYTarget + e.dy * 0.0006, -0.12, 0.12);
       },
       scrub: (e) => {
         lastGestureAt = performance.now();
@@ -991,6 +1140,31 @@ export default function Clouds() {
         entrainUntil = performance.now() + 9000;
       },
     }, { wheelZoom: false });
+
+    // ── the vessel: the phone's own body is weather too ──────────────
+    const detachVessel = onVessel({
+      tilt: ({ gamma }) => {
+        if (reduce || asleep) return;
+        windTargetX = clamp(windTargetX + gamma * 0.0008, -1, 1);
+      },
+      shake: ({ intensity }) => {
+        if (reduce || asleep) return;
+        for (const cell of weatherCells) cell.strength = Math.min(1, cell.strength + intensity * 0.3);
+        try { getFieldAudio().thud(); } catch { /* noop */ }
+        try { haptics.storm(); } catch { /* noop */ }
+        addWeatherMark("scattered", 0.6);
+      },
+      knock: ({ intensity }) => {
+        if (reduce || asleep) return;
+        seedWeatherCell(overlay.clientWidth * 0.5, overlay.clientHeight * 0.3, "vapor", 0.3 + intensity * 0.3);
+        try { getFieldAudio().spark(); } catch { /* noop */ }
+        try { haptics.tap(); } catch { /* noop */ }
+      },
+      flip: ({ faceDown }) => {
+        // night: face-down settles the sky's phase toward dusk/night early
+        if (faceDown) phaseOffsetRef.current += 0.02;
+      },
+    });
 
     // Desktop hover is the grammar's quiet dialect (hover ≈ light touch):
     // the hovered sky thickens locally and glyphs notice a passing hand.
@@ -1446,6 +1620,12 @@ export default function Clouds() {
     let lastQualityCheck = performance.now();
 
     const draw = (now: number) => {
+      const tier = gov.beginFrame(now);
+      if (asleep) {
+        raf = requestAnimationFrame(draw);
+        return;
+      }
+      const detail = detailForTier(tier);
       const w = overlay.clientWidth;
       const h = overlay.clientHeight;
       const frameDt = Math.min(0.05, (now - lastFrameMs) / 1000);
@@ -1454,6 +1634,8 @@ export default function Clouds() {
       timeScale += (timeScaleTarget - timeScale) * Math.min(1, frameDt * 5);
       simElapsed += frameDt * timeScale;
       simNowMs += frameDt * 1000 * timeScale;
+      panX += (panXTarget - panX) * Math.min(1, frameDt * 3);
+      panY += (panYTarget - panY) * Math.min(1, frameDt * 3);
       const elapsed = simElapsed;
       const motionElapsed = reduce ? 0 : elapsed;
       elapsedRef.v = elapsed;
@@ -1558,6 +1740,10 @@ export default function Clouds() {
         }
         if (uPressLoc) gl.uniform1f(uPressLoc, pressSmoothed);
         if (uWindLoc) gl.uniform2f(uWindLoc, windX, windY);
+        if (uLensLoc) gl.uniform1f(uLensLoc, lens);
+        if (uSeasonLoc) gl.uniform1f(uSeasonLoc, season);
+        if (uPanLoc) gl.uniform2f(uPanLoc, panX, panY);
+        if (uMaxStepsLoc) gl.uniform1f(uMaxStepsLoc, Math.max(12, Math.round(64 * detail.samples)));
         // pick the most recent active lightning for flash
         let flash = 0;
         for (const l of lightnings.current) {
@@ -1574,7 +1760,7 @@ export default function Clouds() {
         // Fallback: paint a flat sky color so the page isn't blank.
         const sctx = sky.getContext("2d");
         if (sctx) {
-          const dpr = Math.min(window.devicePixelRatio || 1, 2);
+          const dpr = resolveDpr(tier, { embedded, reducedMotion: reduce });
           sctx.setTransform(dpr, 0, 0, dpr, 0, 0);
           sctx.fillStyle = "#7ba3cf";
           sctx.fillRect(0, 0, w, h);
@@ -1793,13 +1979,30 @@ export default function Clouds() {
       cancelAnimationFrame(raf);
       ro.disconnect();
       detachGestures();
+      detachVessel();
+      unvis();
+      ungal();
       overlay.removeEventListener("pointermove", onHover);
       overlay.removeEventListener("pointerleave", onHoverLeave);
+      sky.removeEventListener("webglcontextlost", onContextLost);
+      sky.removeEventListener("webglcontextrestored", onContextRestored);
+      delete wrap.dataset.lensRaised;
+      if (gl) {
+        if (glProg) gl.deleteProgram(glProg);
+        if (vbo) gl.deleteBuffer(vbo);
+      }
+      clearWeatherRef.current = () => {};
     };
     // We intentionally keep this effect dependency-free — the loop reads live
     // refs and only the banner color depends on phaseLight, which is set from
     // inside the loop via the React closure.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const letGo = useCallback(() => {
+    clearWeatherRef.current();
+    getFieldAudio().thud();
+    haptics.roll();
   }, []);
 
   // Frame color flips between dark-on-light and cream-on-dark depending on
@@ -1840,6 +2043,8 @@ export default function Clouds() {
           cursor: "crosshair",
         }}
       />
+
+      <LetGo label="let the sky clear" onLetGo={letGo} visible={hasBuilt} />
 
       {/* Classical Hellenic window border — a Greek key meander on all four
           sides framing the sky. The shared header stays available, but is

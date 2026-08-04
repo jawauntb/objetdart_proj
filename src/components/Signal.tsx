@@ -9,6 +9,11 @@ import { stirTurbulence } from "@/lib/turbulence";
 import type { ConcernKey } from "@/lib/types";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
 import WaterText from "@/components/WaterText";
+import { attachGestures } from "@/lib/gesture";
+import { holdTier } from "@/lib/gesture/core";
+import { onVessel } from "@/lib/vessel";
+import { createFrameGovernor, detailForTier, onVisibility, resolveDpr } from "@/lib/room-runtime";
+import LetGo from "@/components/LetGo";
 
 // Same mapping as audio.ts — duplicated here only so the UI can label the
 // chosen mood/tempo without having to call into the engine. Keep in sync.
@@ -160,6 +165,71 @@ function compactPrompt(prompt: string, max = 46): string {
   return `${clean.slice(0, max - 3).trimEnd()}...`;
 }
 
+/**
+ * A kept-signal pill — the create/delete law's "existing one": tap replays
+ * it, ceremony hold (tier 3) is its touch-reachable delete. A tiny room of
+ * its own, mounting attachGestures on a single button the same way the
+ * canvas mounts it on the whole surface.
+ */
+function KeptSignalPill({
+  label,
+  title,
+  onReplay,
+  onDelete,
+}: {
+  label: string;
+  title: string;
+  onReplay: () => void;
+  onDelete: () => void;
+}) {
+  const ref = useRef<HTMLButtonElement | null>(null);
+  const [sealing, setSealing] = useState(0);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    return attachGestures(
+      el,
+      {
+        tap: (e) => {
+          if (e.fingers !== 1) return;
+          onReplay();
+        },
+        hold: (e) => {
+          if (e.fingers !== 1) return;
+          if (e.phase === "release") { setSealing(0); return; }
+          setSealing(e.tier >= 2 ? (e.elapsed - 900) / 1600 : 0);
+          if (e.tier >= 3) onDelete();
+        },
+      },
+    );
+  }, [onReplay, onDelete]);
+  return (
+    <button
+      ref={ref}
+      type="button"
+      title={title}
+      style={{
+        border: `1px solid rgba(244, 238, 222, ${0.18 + sealing * 0.4})`,
+        background: sealing > 0 ? `rgba(255, 120, 90, ${0.08 + sealing * 0.22})` : "rgba(10, 19, 34, 0.45)",
+        color: "rgba(244, 238, 222, 0.76)",
+        borderRadius: 999,
+        padding: "4px 9px",
+        fontFamily: "var(--font-text)",
+        fontSize: 11,
+        fontStyle: "italic",
+        cursor: "pointer",
+        maxWidth: 160,
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        flex: "0 0 auto",
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
 export default function Signal() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const fftSmooth = useRef<Float32Array | null>(null);
@@ -210,10 +280,32 @@ export default function Signal() {
   // rendered waveform at a given x, fading over DISTORT_LIFE seconds.
   type WaveDistortion = { x: number; amount: number; t0: number };
   const distortionsRef = useRef<WaveDistortion[]>([]);
-  // active drag pointer (only one finger drives the "play" gesture)
-  const wavePointerId = useRef<number | null>(null);
-  const lastDragYRef = useRef<number | null>(null);
   const lastChimeAt = useRef<number>(0);
+
+  // ── the gesture surface is polyphonic: every finger is an independent
+  // voice — a note the instant it lands (grammar §3, instrument surfaces).
+  // Only a together-landed pair moving against each other is reclaimed as
+  // the frame layer (pinch/twist/pan2); staggered fingers stay voices.
+  type VoiceRegion = "spectrum" | "waveform" | "spiral" | null;
+  type VoiceState = { region: VoiceRegion; lastX: number; lastY: number; t0: number; sealed: boolean; charging: boolean };
+  const voiceStateRef = useRef<Map<number, VoiceState>>(new Map());
+  // twist(2) rotates the lens — the level of description: spectrum ↔
+  // waveform ↔ the felt sound (spiral). A discrete state advanced by
+  // accumulated turn, smoothed continuously for the draw loop.
+  const lensIndexRef = useRef(0);
+  const lensTwistAccRef = useRef(0);
+  const lensBlendRef = useRef([1, 1, 1]); // smoothed emphasis per layer
+  // pinch zooms the spiral within its own frame; pan2 pans its center.
+  const zoomRef = useRef({ cur: 1, target: 1 });
+  const panRef = useRef({ curX: 0, curY: 0, targetX: 0, targetY: 0 });
+  // tutti / step-back flashes — a soft synchronized pulse across layers.
+  const tuttiRef = useRef(0);
+  // last touch, for the idle glimmer (grammar §6).
+  const lastTouchAtRef = useRef(0);
+  const glimmerAtRef = useRef(0);
+  // vessel: tilt leans the spiral; flip face-down dims the room for night.
+  const tiltRef = useRef(0);
+  const nightRef = useRef(false);
 
   // ── compose state ────────────────────────────────────────────────
   // composeHandle is held in a ref so the render loop can read end time
@@ -502,6 +594,25 @@ export default function Signal() {
     try { getFieldAudio().thud(); } catch { /* noop */ }
   }, [activePrompt, composeModel, composeSource, keptSignals, oceanicCoda, persistKeptSignals, recordTape]);
 
+  // touch-reachable per-item delete (ceremony hold on a kept pill, see
+  // <KeptSignalPill> below) — the create/delete law's "existing one".
+  const removeKeptSignal = useCallback((id: string) => {
+    setKeptSignals((prev) => {
+      const next = prev.filter((signal) => signal.id !== id);
+      try { localStorage.setItem(KEPT_SIGNALS_KEY, JSON.stringify(next)); } catch { /* noop */ }
+      return next;
+    });
+    haptics.roll();
+    try { getFieldAudio().thud(); } catch { /* noop */ }
+  }, []);
+
+  // whole-field clear — the shared <LetGo/>, never a hand-rolled button.
+  const letGoKeptSignals = useCallback(() => {
+    persistKeptSignals([]);
+    haptics.roll();
+    try { getFieldAudio().thud(); } catch { /* noop */ }
+  }, [persistKeptSignals]);
+
   const replayKeptSignal = useCallback((signal: KeptSignal) => {
     promptTextRef.current = signal.prompt;
     setPromptText(signal.prompt);
@@ -660,7 +771,18 @@ export default function Signal() {
     }
   }, [micActive]);
 
-  // ── render loop ──────────────────────────────────────────────────────
+  // mirrors of live values the mount-once gesture effect below needs to
+  // read without re-binding the whole surface every render.
+  const keepActiveSignalRef = useRef(keepActiveSignal);
+  useEffect(() => { keepActiveSignalRef.current = keepActiveSignal; }, [keepActiveSignal]);
+  const stopComposeRef = useRef(stopCompose);
+  useEffect(() => { stopComposeRef.current = stopCompose; }, [stopCompose]);
+  const composingRef = useRef(composing);
+  useEffect(() => { composingRef.current = composing; }, [composing]);
+  const composePendingRef = useRef(composePending);
+  useEffect(() => { composePendingRef.current = composePending; }, [composePending]);
+
+  // ── render loop + gesture surface ──────────────────────────────────────
   useEffect(() => {
     const cv = canvasRef.current;
     if (!cv) return;
@@ -677,11 +799,34 @@ export default function Signal() {
     let raf = 0;
     const t0 = performance.now();
 
+    // ── performance contract (room-runtime): governor + visibility pause
+    // + DPR ceiling + tier-scaled detail. No draw while document.hidden.
+    const gov = createFrameGovernor();
+    let sleeping = document.hidden;
+    const offVisibility = onVisibility((hidden) => { sleeping = hidden; });
+
+    // cached gradients — rebuilt only on resize, never per frame.
+    let bgGrad: CanvasGradient | null = null;
+    let specFillGrad: CanvasGradient | null = null;
+    const rebuildGradients = (w: number, h: number) => {
+      const bg = ctx2d.createLinearGradient(0, 0, 0, h);
+      bg.addColorStop(0,    "#0a1322");
+      bg.addColorStop(0.5,  "#15243a");
+      bg.addColorStop(1,    "#0a1322");
+      bgGrad = bg;
+      const specFill = ctx2d.createLinearGradient(0, 0, w, 0);
+      specFill.addColorStop(0,    "rgba(255, 180, 110, 0.18)");
+      specFill.addColorStop(0.5,  "rgba(190, 190, 175, 0.14)");
+      specFill.addColorStop(1,    "rgba(120, 200, 235, 0.18)");
+      specFillGrad = specFill;
+    };
+
     const resize = () => {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = resolveDpr(gov.tier(), { reducedMotion: reduce });
       cv.width = window.innerWidth * dpr;
       cv.height = window.innerHeight * dpr;
       ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
+      rebuildGradients(window.innerWidth, window.innerHeight);
     };
     resize();
     window.addEventListener("resize", resize);
@@ -691,29 +836,228 @@ export default function Signal() {
     const mix = (c1: [number, number, number], c2: [number, number, number], t: number) =>
       [lerp(c1[0], c2[0], t), lerp(c1[1], c2[1], t), lerp(c1[2], c2[2], t)] as const;
 
-    // deterministic star field — frozen if reduced motion
+    // deterministic star field — frozen if reduced motion. Built once
+    // (never per frame); the drawn count scales with the frame governor's
+    // detail tier instead of allocating a smaller array.
     const STARS = Array.from({ length: 110 }, (_, i) => ({
       sx: ((Math.sin(i * 12.9898) * 43758.5453) % 1 + 1) % 1,
       sy: (((Math.sin(i * 78.233) * 43758.5453) % 1) + 1) % 1,
       ph: (Math.sin(i * 5.71) * 100) % 6.28,
     }));
 
+    // reused analyser buffers — allocated once, resized only when the
+    // analyser's bin/fft size actually changes (mic swap, first start).
+    let freqBuf: Uint8Array | null = null;
+    let timeBuf: Uint8Array | null = null;
+
+    // ── the gesture surface ────────────────────────────────────────────
+    // One finger is a voice — a note the instant it lands, since several
+    // fingers may play different spectrum bars at once (grammar §3,
+    // instrument surfaces). A together-landed pair moving against each
+    // other is reclaimed as the frame layer: pinch zooms the spiral,
+    // twist(2) rotates the lens between spectrum / waveform / the felt
+    // sound, pan2 pans the spiral's center.
+    //
+    // Three-finger law-layer verbs (weather/time-dilation/season) are a
+    // documented exemption here: gesture/index.ts silences drag/hold/twist
+    // for any finger count on surfaces that bind `voice` — a chord is
+    // always independent voices there, never reclaimed past a pair. Only
+    // tap survives finger-count routing on a poly surface (still fires
+    // from classifyRelease regardless of the poly flag), which is why
+    // two-/three-finger tap still carry their global meaning below.
+    const regionAt = (x: number, y: number): VoiceRegion => {
+      const { waveY, waveAmp, spiralR, cx, cy } = layoutRef.current;
+      const specBaseline = window.innerHeight * 0.34;
+      if (y < specBaseline + 12) return "spectrum";
+      if (waveAmp > 0 && Math.abs(y - waveY) < waveAmp + 14) return "waveform";
+      const dRadius = Math.hypot(x - cx, y - cy);
+      if (dRadius < spiralR * 0.55 && dRadius > spiralR * 0.05) return "spiral";
+      return null;
+    };
+
+    const playSpectrumTone = (x: number) => {
+      const u = Math.max(0, Math.min(1, x / window.innerWidth));
+      const an = sourceAnalyser.current;
+      if (an) {
+        const c = getFieldAudio().getAudioContext();
+        if (c) {
+          const trueBin = u * an.frequencyBinCount;
+          const freq = (trueBin * c.sampleRate) / an.fftSize;
+          void playFreq(Math.max(60, Math.min(6000, freq)));
+          return;
+        }
+      }
+      // fallback pentatonic shape so the page still feels alive before the
+      // analyser/context is ready.
+      const fallback = [220, 277, 330, 415, 494, 587, 698][Math.floor(u * NBINS) % 7];
+      void playFreq(fallback);
+    };
+
+    const detachGestures = attachGestures(
+      cv,
+      {
+        voice: (e) => {
+          lastTouchAtRef.current = performance.now();
+          if (!sourceAnalyser.current) {
+            const a = getFieldAudio();
+            void a.start();
+            setAudioStarted(true);
+            const an = a.getAnalyser();
+            if (an) sourceAnalyser.current = an;
+          }
+          const rect = cv.getBoundingClientRect();
+          const x = e.x - rect.left;
+          const y = e.y - rect.top;
+          if (e.phase === "start") {
+            const region = regionAt(x, y);
+            voiceStateRef.current.set(e.id, {
+              region, lastX: x, lastY: y, t0: performance.now(), sealed: false, charging: false,
+            });
+            if (region === "spectrum") {
+              haptics.ripple(e.intensity);
+              playSpectrumTone(x);
+            } else if (region === "spiral") {
+              try { getFieldAudio().bell(); } catch { /* noop */ }
+              haptics.roll();
+            }
+            return;
+          }
+          const st = voiceStateRef.current.get(e.id);
+          if (!st) return;
+          if (e.phase === "move") {
+            if (st.region === "waveform") {
+              const { waveAmp } = layoutRef.current;
+              const dy = y - st.lastY;
+              if (Math.abs(dy) > 0.5 && waveAmp > 0) {
+                const amount = Math.max(-waveAmp, Math.min(waveAmp, dy * 3 * (0.6 + e.intensity * 0.9)));
+                distortionsRef.current.push({ x, amount, t0: performance.now() });
+                if (distortionsRef.current.length > 80) distortionsRef.current = distortionsRef.current.slice(-80);
+                stirTurbulence(Math.min(0.06, Math.abs(dy) / 600));
+                const now = performance.now();
+                if (now - lastChimeAt.current > 140) {
+                  lastChimeAt.current = now;
+                  try { getFieldAudio().chime(); } catch { /* noop */ }
+                  haptics.chop();
+                }
+              }
+            }
+            st.lastX = x;
+            st.lastY = y;
+            return;
+          }
+          // end / cancel
+          voiceStateRef.current.delete(e.id);
+        },
+        pinch: (e) => {
+          lastTouchAtRef.current = performance.now();
+          if (e.phase === "move") {
+            zoomRef.current.target = Math.max(0.6, Math.min(1.9, zoomRef.current.target * e.scale));
+          }
+        },
+        twist: (e) => {
+          if (e.fingers === 3) return; // season — unavailable on this poly surface, see above
+          lastTouchAtRef.current = performance.now();
+          if (e.phase === "start") lensTwistAccRef.current = 0;
+          if (e.phase === "move") lensTwistAccRef.current += e.angle;
+          if (e.phase === "end") {
+            if (Math.abs(lensTwistAccRef.current) > Math.PI / 2) {
+              const dir = lensTwistAccRef.current > 0 ? 1 : -1;
+              lensIndexRef.current = (lensIndexRef.current + dir + 3) % 3;
+              try { getFieldAudio().chime(); } catch { /* noop */ }
+              haptics.lens();
+              recordTape("sigil", 0.5, "signal/lens");
+            }
+            lensTwistAccRef.current = 0;
+          }
+        },
+        pan2: (e) => {
+          lastTouchAtRef.current = performance.now();
+          if (e.phase !== "move") return;
+          const maxPan = Math.min(window.innerWidth, window.innerHeight) * 0.16;
+          panRef.current.targetX = Math.max(-maxPan, Math.min(maxPan, panRef.current.targetX + e.dx * 0.6));
+          panRef.current.targetY = Math.max(-maxPan, Math.min(maxPan, panRef.current.targetY + e.dy * 0.6));
+        },
+        tap: (e) => {
+          lastTouchAtRef.current = performance.now();
+          if (e.fingers === 2) {
+            // step back: lower a raised lens; else nudge the zoom back;
+            // else step fully out of an active receive.
+            if (lensIndexRef.current !== 0) {
+              lensIndexRef.current = 0;
+            } else if (Math.abs(zoomRef.current.target - 1) > 0.02) {
+              zoomRef.current.target = 1;
+            } else if (composingRef.current || composePendingRef.current) {
+              stopComposeRef.current();
+            }
+            haptics.tap();
+            return;
+          }
+          if (e.fingers === 3) {
+            // tutti — one synchronized pulse of everything alive.
+            tuttiRef.current = 1;
+            try { getFieldAudio().chime(); } catch { /* noop */ }
+            haptics.ripple(0.6);
+            recordTape("sigil", 0.5, "signal/tutti");
+          }
+        },
+      },
+      { wheelZoom: false },
+    );
+
+    // ── the vessel: tilt leans the spiral, shake/knock ring the room ────
+    const detachVessel = onVessel({
+      tilt: ({ gamma }) => {
+        if (reduce) return;
+        tiltRef.current = Math.max(-1, Math.min(1, gamma / 45));
+      },
+      shake: ({ intensity }) => {
+        if (reduce) return;
+        tuttiRef.current = Math.max(tuttiRef.current, 0.5 + intensity * 0.5);
+        haptics.chop();
+      },
+      knock: () => {
+        try { getFieldAudio().bell(); } catch { /* noop */ }
+        haptics.tap();
+        tuttiRef.current = Math.max(tuttiRef.current, 0.6);
+      },
+      flip: ({ faceDown }) => {
+        nightRef.current = faceDown;
+      },
+    });
+
     const draw = (now: number) => {
+      const tier = gov.beginFrame(now);
+      raf = requestAnimationFrame(draw);
+      if (sleeping) return; // no draw while the tab/frame is hidden
+
+      const detail = detailForTier(tier);
       const w = window.innerWidth;
       const h = window.innerHeight;
       const t = (now - t0) / 1000;
 
-      // ── 1. BACKGROUND ─────────────────────────────────────────────
-      const bg = ctx2d.createLinearGradient(0, 0, 0, h);
-      bg.addColorStop(0,    "#0a1322");
-      bg.addColorStop(0.5,  "#15243a");
-      bg.addColorStop(1,    "#0a1322");
-      ctx2d.fillStyle = bg;
-      ctx2d.fillRect(0, 0, w, h);
+      // continuous eases for the frame-layer verbs (never a switch).
+      zoomRef.current.cur += (zoomRef.current.target - zoomRef.current.cur) * 0.12;
+      panRef.current.curX += (panRef.current.targetX - panRef.current.curX) * 0.1;
+      panRef.current.curY += (panRef.current.targetY - panRef.current.curY) * 0.1;
+      tuttiRef.current *= 0.9;
+      const blend = lensBlendRef.current;
+      for (let i = 0; i < 3; i++) {
+        const target = i === lensIndexRef.current ? 1.4 : 0.72;
+        blend[i] += (target - blend[i]) * 0.08;
+      }
 
-      // soft drifting noise/star field
+      // ── 1. BACKGROUND ─────────────────────────────────────────────
+      ctx2d.fillStyle = bgGrad ?? "#0a1322";
+      ctx2d.fillRect(0, 0, w, h);
+      if (nightRef.current) {
+        ctx2d.fillStyle = "rgba(0, 0, 0, 0.32)";
+        ctx2d.fillRect(0, 0, w, h);
+      }
+
+      // soft drifting noise/star field — count scales with detail tier.
+      const starCount = Math.max(8, Math.round(STARS.length * detail.particles));
       ctx2d.fillStyle = "rgba(220, 228, 240, 0.55)";
-      for (let i = 0; i < STARS.length; i++) {
+      for (let i = 0; i < starCount; i++) {
         const s = STARS[i];
         const x = s.sx * w;
         const y = s.sy * h;
@@ -724,15 +1068,11 @@ export default function Signal() {
       ctx2d.globalAlpha = 1;
 
       const an = sourceAnalyser.current;
-      if (!an) {
-        // visualiser idles until first tap — the prompt overlay handles UX
-        raf = requestAnimationFrame(draw);
-        return;
-      }
+      if (!an) return; // visualiser idles until first tap — the overlay handles UX
 
       const binCount = an.frequencyBinCount;            // fftSize / 2
-      const freqBuf = new Uint8Array(binCount);
-      const timeBuf = new Uint8Array(an.fftSize);
+      if (!freqBuf || freqBuf.length !== binCount) freqBuf = new Uint8Array(binCount);
+      if (!timeBuf || timeBuf.length !== an.fftSize) timeBuf = new Uint8Array(an.fftSize);
       an.getByteFrequencyData(freqBuf);
       an.getByteTimeDomainData(timeBuf);
 
@@ -756,6 +1096,7 @@ export default function Signal() {
 
       const specBaseline = h * 0.34;
       const specMax = 120;
+      const specEmphasis = blend[0] + tuttiRef.current * 0.3;
 
       // filled area underneath — additive feel via low-alpha amber→cyan
       ctx2d.beginPath();
@@ -769,13 +1110,10 @@ export default function Signal() {
       }
       ctx2d.lineTo(w, specBaseline);
       ctx2d.closePath();
-      // single gradient fill spanning amber → cyan
-      const specFill = ctx2d.createLinearGradient(0, 0, w, 0);
-      specFill.addColorStop(0,    "rgba(255, 180, 110, 0.18)");
-      specFill.addColorStop(0.5,  "rgba(190, 190, 175, 0.14)");
-      specFill.addColorStop(1,    "rgba(120, 200, 235, 0.18)");
-      ctx2d.fillStyle = specFill;
+      ctx2d.globalAlpha = Math.min(1, specEmphasis);
+      ctx2d.fillStyle = specFillGrad ?? "rgba(190, 190, 175, 0.14)";
       ctx2d.fill();
+      ctx2d.globalAlpha = 1;
 
       // line on top — segmented so each segment is its own amber→cyan stop
       ctx2d.lineWidth = 1.4;
@@ -787,7 +1125,7 @@ export default function Signal() {
         const y2 = specBaseline - smoothed[i + 1] * specMax;
         const tt = i / (NBINS - 1);
         const [r, g, b] = mix(AMBER, CYAN, tt);
-        ctx2d.strokeStyle = `rgba(${r.toFixed(0)}, ${g.toFixed(0)}, ${b.toFixed(0)}, 0.85)`;
+        ctx2d.strokeStyle = `rgba(${r.toFixed(0)}, ${g.toFixed(0)}, ${b.toFixed(0)}, ${Math.min(1, 0.85 * specEmphasis).toFixed(3)})`;
         ctx2d.beginPath();
         ctx2d.moveTo(x1, y1);
         ctx2d.lineTo(x2, y2);
@@ -797,6 +1135,7 @@ export default function Signal() {
       // ── 3. WAVEFORM BAND ──────────────────────────────────────────
       const waveY = h * 0.65;
       const waveAmp = Math.min(110, h * 0.10);
+      const waveEmphasis = blend[1] + tuttiRef.current * 0.3;
 
       // prune expired distortions, then sum the surviving ones at each x.
       distortionsRef.current = distortionsRef.current.filter(
@@ -820,7 +1159,7 @@ export default function Signal() {
       };
 
       // glow underneath — fat, low-alpha pass
-      ctx2d.strokeStyle = "rgba(244, 238, 222, 0.18)";
+      ctx2d.strokeStyle = `rgba(244, 238, 222, ${(0.18 * waveEmphasis).toFixed(3)})`;
       ctx2d.lineWidth = 6;
       ctx2d.lineJoin = "round";
       ctx2d.beginPath();
@@ -834,7 +1173,7 @@ export default function Signal() {
       ctx2d.stroke();
 
       // crisp line — pale cream
-      ctx2d.strokeStyle = "rgba(244, 238, 222, 0.85)";
+      ctx2d.strokeStyle = `rgba(244, 238, 222, ${Math.min(1, 0.85 * waveEmphasis).toFixed(3)})`;
       ctx2d.lineWidth = 1.3;
       ctx2d.beginPath();
       for (let i = 0; i < timeBuf.length; i++) {
@@ -848,19 +1187,21 @@ export default function Signal() {
 
       // ── 4. NAUTILUS SPIRAL ────────────────────────────────────────
       // log spiral, ~6 turns. Each angle samples the time-domain buffer.
-      const cx = w * 0.5;
-      const cy = h * 0.5;
+      // pinch zooms it, pan2/tilt shift its center — the map layer.
+      const cx = w * 0.5 + panRef.current.curX + tiltRef.current * 14;
+      const cy = h * 0.5 + panRef.current.curY;
       const turns = 6;
       const thetaMax = turns * Math.PI * 2;
       const b = 0.18;
       // base scale so the outer turn nearly fills the smaller viewport axis
-      const aBase = Math.min(w, h) * 0.42 / Math.exp(b * thetaMax);
-      const SAMPLES = 1200; // dense path for smooth stroke
+      const aBase = (Math.min(w, h) * 0.42 / Math.exp(b * thetaMax)) * zoomRef.current.cur;
+      const SAMPLES = Math.max(240, Math.round(1200 * detail.samples)); // dense path for smooth stroke
       const spiralAmp = Math.min(w, h) * 0.07;
       // outer-turn radius — used for hover hit-testing.
       const spiralR = aBase * Math.exp(b * thetaMax);
+      const spiralEmphasis = blend[2] + tuttiRef.current * 0.3;
 
-      // publish layout so the event handlers can hit-test against the same
+      // publish layout so the gesture handlers hit-test against the same
       // numbers we just rendered (avoids any layout drift on resize).
       layoutRef.current = { waveY, waveAmp, spiralR, cx, cy };
 
@@ -891,7 +1232,7 @@ export default function Signal() {
         if (i === 0) { prevX = x; prevY = y; continue; }
         const [rr, gg, bb] = mix(AMBER, CYAN, u);
         // outer turns slightly more visible than inner; hover brightens a bit
-        const alpha = (0.30 + u * 0.55) * (spiralHoverRef.current ? 1.15 : 1);
+        const alpha = (0.30 + u * 0.55) * (spiralHoverRef.current ? 1.15 : 1) * spiralEmphasis;
         ctx2d.strokeStyle = `rgba(${rr.toFixed(0)}, ${gg.toFixed(0)}, ${bb.toFixed(0)}, ${Math.min(1, alpha).toFixed(3)})`;
         ctx2d.beginPath();
         ctx2d.moveTo(prevX, prevY);
@@ -904,10 +1245,49 @@ export default function Signal() {
       // a faint inner pip — gives the spiral a center
       ctx2d.fillStyle = "rgba(255, 200, 150, 0.55)";
       ctx2d.beginPath();
-      ctx2d.arc(cx, cy, 2.2, 0, Math.PI * 2);
+      ctx2d.arc(cx, cy, 2.2 + tuttiRef.current * 2, 0, Math.PI * 2);
       ctx2d.fill();
 
-      raf = requestAnimationFrame(draw);
+      // ── 5. create/delete: dwell on the spiral seals the live signal ──
+      // (grammar's create/delete law). Something visibly gathers under the
+      // finger from the moment the dwell tier crosses, and holding through
+      // the ceremony tier deepens it into the room's one solemn act.
+      for (const [, st] of voiceStateRef.current) {
+        if (st.region !== "spiral" || st.sealed) continue;
+        const elapsed = now - st.t0;
+        const tier = holdTier(elapsed);
+        if (tier < 2) continue;
+        st.charging = true;
+        const growth = Math.min(1, (elapsed - 900) / 1600); // 0 at dwell → 1 at ceremony
+        ctx2d.beginPath();
+        ctx2d.strokeStyle = `rgba(255, 210, 160, ${(0.25 + growth * 0.5).toFixed(3)})`;
+        ctx2d.lineWidth = 1.5;
+        ctx2d.arc(st.lastX, st.lastY, 10 + growth * 26, 0, Math.PI * 2);
+        ctx2d.stroke();
+        if (tier === 2 && !st.sealed) {
+          // dwell crossed once — create/keep the active signal now.
+          st.sealed = true; // gate to one commit per hold session
+          keepActiveSignalRef.current();
+        }
+        if (tier >= 3) {
+          // ceremony — deepen into the solemn act: seal it with a bell.
+          try { getFieldAudio().bell(); } catch { /* noop */ }
+          haptics.bloom();
+          tuttiRef.current = Math.max(tuttiRef.current, 0.8);
+        }
+      }
+
+      // ── 6. glimmer (grammar §6): after ~20s idle, one physical hint ──
+      if (!reduce && now - lastTouchAtRef.current > 20000 && now - glimmerAtRef.current > 6500) {
+        glimmerAtRef.current = now;
+      }
+      if (glimmerAtRef.current && now - glimmerAtRef.current < 1400) {
+        const u = (now - glimmerAtRef.current) / 1400;
+        ctx2d.beginPath();
+        ctx2d.strokeStyle = `rgba(238, 234, 219, ${(0.28 * (1 - u)).toFixed(3)})`;
+        ctx2d.arc(cx, cy, spiralR * 0.3 + u * 30, 0, Math.PI * 2);
+        ctx2d.stroke();
+      }
     };
 
     raf = requestAnimationFrame(draw);
@@ -915,7 +1295,11 @@ export default function Signal() {
     return () => {
       cancelAnimationFrame(raf);
       window.removeEventListener("resize", resize);
+      offVisibility();
+      detachGestures();
+      detachVessel();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // cleanup mic on unmount
@@ -938,127 +1322,21 @@ export default function Signal() {
     audio.playTone(freq, durSec);
   }, []);
 
-  // ── canvas pointer handlers ─────────────────────────────────────────
-  const onCanvasPointerDown = useCallback(
-    (e: React.PointerEvent<HTMLCanvasElement>) => {
-      const cv = e.currentTarget;
-      const rect = cv.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-      const press = e.pressure > 0 ? e.pressure : 0.5;
-      const { waveY, waveAmp, spiralR, cx, cy } = layoutRef.current;
-      const h = window.innerHeight;
-      const specBaseline = h * 0.34;
-
-      // ── spectrum bar tap (upper band) ──
-      // Bars rise upward from specBaseline. Treat the whole region above the
-      // baseline (with a tiny grace below) as tappable.
-      if (y < specBaseline + 12) {
-        haptics.ripple(press);
-        const u = Math.max(0, Math.min(1, x / window.innerWidth));
-        const bin = Math.floor(u * NBINS);
-        // Map bin → frequency using the analyser's actual sample rate so the
-        // tone matches what that bar is showing.
-        const an = sourceAnalyser.current;
-        if (an) {
-          const c = getFieldAudio().getAudioContext();
-          if (c) {
-            const trueBin = u * an.frequencyBinCount;
-            const freq = (trueBin * c.sampleRate) / an.fftSize;
-            void playFreq(Math.max(60, Math.min(6000, freq)));
-            return;
-          }
-        }
-        // fallback when the analyser/context isn't ready yet — pleasant
-        // pentatonic shape so the page still feels alive on first tap.
-        const fallback = [220, 277, 330, 415, 494, 587, 698][bin % 7];
-        void playFreq(fallback);
-        return;
-      }
-
-      // ── waveform drag start (narrow horizontal band) ──
-      if (waveAmp > 0 && Math.abs(y - waveY) < waveAmp + 14) {
-        cv.setPointerCapture(e.pointerId);
-        wavePointerId.current = e.pointerId;
-        lastDragYRef.current = y;
-        haptics.ripple(press);
-        return;
-      }
-
-      // ── spiral click → bell swell.
-      // The outer half of the spiral overlaps the spectrum + waveform bands,
-      // so only the inner ~55% of the spiral's radius triggers the click.
-      // The hover affordance still uses the full radius (see pointermove).
-      const dRadius = Math.hypot(x - cx, y - cy);
-      if (dRadius < spiralR * 0.55 && dRadius > spiralR * 0.05) {
-        try { getFieldAudio().bell(); } catch { /* noop */ }
-        haptics.roll();
-      }
-    },
-    [playFreq],
-  );
-
-  const onCanvasPointerMove = useCallback(
-    (e: React.PointerEvent<HTMLCanvasElement>) => {
-      const cv = e.currentTarget;
-      const rect = cv.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-      const { spiralR, cx, cy, waveAmp } = layoutRef.current;
-
-      // spiral hover state — match the click hit-test (inner core only).
-      // The outer turns overlap the spectrum/waveform bands and we don't
-      // want to claim those clicks visually with a cursor change.
-      const dRadius = Math.hypot(x - cx, y - cy);
-      setSpiralHover(dRadius < spiralR * 0.55 && dRadius > spiralR * 0.05);
-
-      // active drag: inject a distortion proportional to the vertical delta
-      if (wavePointerId.current === e.pointerId && waveAmp > 0) {
-        const lastY = lastDragYRef.current ?? y;
-        const dy = y - lastY;
-        if (Math.abs(dy) > 0.5) {
-          // harder press digs a deeper trough — pressure scales the throw.
-          const press = e.pressure > 0 ? e.pressure : 0.5;
-          // signed amount clamped to ±waveAmp so the displacement stays in
-          // the band visually.
-          const amount = Math.max(-waveAmp, Math.min(waveAmp, dy * 3 * (0.6 + press * 0.9)));
-          distortionsRef.current.push({
-            x,
-            amount,
-            t0: performance.now(),
-          });
-          // limit the buffer — keep last 80 only
-          if (distortionsRef.current.length > 80) {
-            distortionsRef.current = distortionsRef.current.slice(-80);
-          }
-          // chop the water harder the faster/heavier you drag.
-          stirTurbulence(Math.min(0.06, Math.abs(dy) / 600));
-          // throttled chime + haptic so they don't machine-gun on fast drags
-          const now = performance.now();
-          if (now - lastChimeAt.current > 140) {
-            lastChimeAt.current = now;
-            try { getFieldAudio().chime(); } catch { /* noop */ }
-            haptics.chop();
-          }
-          lastDragYRef.current = y;
-        }
-        // suppress the parent's onClick start handler
-        e.stopPropagation();
-      }
-    },
-    [],
-  );
-
-  const onCanvasPointerUp = useCallback(
-    (e: React.PointerEvent<HTMLCanvasElement>) => {
-      if (wavePointerId.current === e.pointerId) {
-        try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* noop */ }
-        wavePointerId.current = null;
-        lastDragYRef.current = null;
-      }
-    },
-    [],
-  );
+  // ── desktop hover only ───────────────────────────────────────────────
+  // All material interaction moved to attachGestures (see the render-loop
+  // effect below, "the gesture surface"). This is cosmetic-only cursor
+  // feedback for a mouse hovering the spiral's inner core — not a gesture,
+  // never claims a threshold, and doesn't compete with pointer capture
+  // (same precedent as Jewel.tsx's onHover).
+  const onCanvasPointerMove = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+    const cv = e.currentTarget;
+    const rect = cv.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const { spiralR, cx, cy } = layoutRef.current;
+    const dRadius = Math.hypot(x - cx, y - cy);
+    setSpiralHover(dRadius < spiralR * 0.55 && dRadius > spiralR * 0.05);
+  }, []);
 
   const onCanvasPointerLeave = useCallback(() => {
     setSpiralHover(false);
@@ -1113,16 +1391,7 @@ export default function Signal() {
       <canvas
         ref={canvasRef}
         aria-label="signal — a real-time visualisation of the room's sound"
-        onPointerDown={(e) => {
-          // Stop propagation so the wrapper div's "tap to start audio" click
-          // doesn't double-fire alongside our interactive layer.
-          e.stopPropagation();
-          if (!audioStarted) void ensureAudio();
-          onCanvasPointerDown(e);
-        }}
         onPointerMove={onCanvasPointerMove}
-        onPointerUp={onCanvasPointerUp}
-        onPointerCancel={onCanvasPointerUp}
         onPointerLeave={onCanvasPointerLeave}
         style={{
           display: "block",
@@ -1698,33 +1967,13 @@ export default function Signal() {
                 kept
               </span>
               {keptSignals.slice(0, 5).map((signal) => (
-                <button
+                <KeptSignalPill
                   key={signal.id}
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    replayKeptSignal(signal);
-                  }}
+                  label={signal.label}
                   title={signal.prompt}
-                  style={{
-                    border: "1px solid rgba(244, 238, 222, 0.18)",
-                    background: "rgba(10, 19, 34, 0.45)",
-                    color: "rgba(244, 238, 222, 0.76)",
-                    borderRadius: 999,
-                    padding: "4px 9px",
-                    fontFamily: "var(--font-text)",
-                    fontSize: 11,
-                    fontStyle: "italic",
-                    cursor: "pointer",
-                    maxWidth: 160,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                    flex: "0 0 auto",
-                  }}
-                >
-                  {signal.label}
-                </button>
+                  onReplay={() => replayKeptSignal(signal)}
+                  onDelete={() => removeKeptSignal(signal.id)}
+                />
               ))}
             </div>
           )}
@@ -1921,6 +2170,8 @@ export default function Signal() {
       </div>
       </div>
       </MobileInstrumentPanel>
+
+      <LetGo label="let the kept signals go" onLetGo={letGoKeptSignals} visible={keptSignals.length > 0} />
 
       <style>{`
         body:has(.signal-root) .oda-field-watch,

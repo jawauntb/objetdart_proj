@@ -41,6 +41,14 @@ import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
 import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
+import LetGo from "@/components/LetGo";
+import {
+  createFrameGovernor,
+  detailForTier,
+  isEmbeddedFrame,
+  onVisibility,
+  resolveDpr,
+} from "@/lib/room-runtime";
 import {
   MAX_MOLECULES,
   MOLECULE_FAMILIES,
@@ -248,6 +256,7 @@ export default function MoleculesField() {
     let lastStreamSoundAt = 0;
     let lastScrubAt = 0;
     let lastChargeNoteAt = 0;
+    let lastSeasonSoundAt = 0;
     const hold: { molId: string | null; partnerId: string | null; onExisting: boolean; seeded: boolean; reacted: boolean } = {
       molId: null,
       partnerId: null,
@@ -260,6 +269,56 @@ export default function MoleculesField() {
     reduce = mq.matches;
     const onMq = () => { reduce = mq.matches; };
     mq.addEventListener?.("change", onMq);
+
+    // ————— performance contract: frame governor + visibility sleep —————
+    const gov = createFrameGovernor();
+    let sleeping = false;
+    const offVis = onVisibility((hidden) => { sleeping = hidden; });
+
+    // the world-law's slow cycle (three-finger twist): the solvent's own
+    // season, 0..1 cyclic — a warm/cool drift in the candlelight, nothing else
+    let season = 0;
+
+    // the vessel's flip: face-down is night, the pool of light goes down
+    let night = 0;
+    let nightTarget = 0;
+
+    // two-finger pan: the frame peeks a little in the hand's direction, then
+    // eases back — the map layer's translation, never a permanent move
+    let panX = 0;
+    let panY = 0;
+    let panTargetX = 0;
+    let panTargetY = 0;
+
+    // ————— cached radial-gradient sprites: baked once per palette key,
+    // stamped with drawImage every frame — never a createRadialGradient
+    // inside the per-molecule / per-atom loops —————
+    const spriteCache = new Map<string, HTMLCanvasElement>();
+    const SPRITE_REF = 128;
+    const radialSprite = (key: string, stops: Array<[number, string]>): HTMLCanvasElement | null => {
+      let c = spriteCache.get(key);
+      if (c) return c;
+      c = document.createElement("canvas");
+      c.width = SPRITE_REF;
+      c.height = SPRITE_REF;
+      const sctx = c.getContext("2d");
+      if (!sctx) return null;
+      const rad = SPRITE_REF / 2;
+      const g = sctx.createRadialGradient(rad, rad, 0, rad, rad, rad);
+      for (const [o, color] of stops) g.addColorStop(o, color);
+      sctx.fillStyle = g;
+      sctx.fillRect(0, 0, SPRITE_REF, SPRITE_REF);
+      spriteCache.set(key, c);
+      return c;
+    };
+    const stampSprite = (key: string, stops: Array<[number, string]>, cx: number, cy: number, r: number, alpha: number) => {
+      if (r <= 0 || alpha <= 0.002) return;
+      const sprite = radialSprite(key, stops);
+      if (!sprite) return;
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(sprite, cx - r, cy - r, r * 2, r * 2);
+      ctx.globalAlpha = 1;
+    };
 
     // ————— persistence —————
     const save = (force = false) => {
@@ -305,7 +364,7 @@ export default function MoleculesField() {
 
     const resize = () => {
       const r = wrap.getBoundingClientRect();
-      const ratio = Math.min(window.devicePixelRatio || 1, 1.5);
+      const ratio = resolveDpr(gov.tier(), { embedded: isEmbeddedFrame(), reducedMotion: reduce, maxDpr: 1.5 });
       width = Math.max(320, Math.floor(r.width));
       height = Math.max(480, Math.floor(r.height));
       rectLeft = r.left;
@@ -807,8 +866,21 @@ export default function MoleculesField() {
         try { haptics.ripple(0.4); } catch { /* noop */ }
       },
       twist: (e) => {
-        if (e.fingers === 3) return; // three fingers turn the season, not the lens
         lastInteractionAt = performance.now();
+        if (e.fingers === 3) {
+          // three-finger twist = season: the solvent's own slow warm/cool
+          // cycle, wound directly by the turn — never the lens
+          if (e.phase === "move") {
+            season = (((season + e.angle / (Math.PI * 2)) % 1) + 1) % 1;
+            const now = performance.now();
+            if (now - lastSeasonSoundAt > 260) {
+              lastSeasonSoundAt = now;
+              note(32 + Math.round(season * 14), 180);
+              try { haptics.tap(); } catch { /* noop */ }
+            }
+          }
+          return; // never drives the lens
+        }
         // two fingers rotate the lens: felt matter ↔ structural formula
         if (e.phase === "move") {
           lensTarget = clamp01(lensTarget + e.angle / 1.7);
@@ -822,6 +894,17 @@ export default function MoleculesField() {
             else note(50, 160);
           }
           lensTarget = snapped;
+        }
+      },
+      pan2: (e) => {
+        // two-finger drag pans the frame: a peek, not a permanent move
+        lastInteractionAt = performance.now();
+        if (e.phase === "move") {
+          panTargetX = clamp(panTargetX + e.dx * 0.6, -48, 48);
+          panTargetY = clamp(panTargetY + e.dy * 0.6, -48, 48);
+        } else if (e.phase === "end") {
+          panTargetX = 0;
+          panTargetY = 0;
         }
       },
       scrub: (e) => {
@@ -876,6 +959,37 @@ export default function MoleculesField() {
         try { audio().spark(); } catch { /* noop */ }
         note(45, 200);
         try { (intensity > 0.7 ? haptics.storm : haptics.chop)(); } catch { /* noop */ }
+      },
+      knock: ({ intensity }) => {
+        if (reduce) return;
+        lastInteractionAt = performance.now();
+        // a rap on the case rings the beaker: one wavefront through the
+        // whole solvent, center-out, felt and heard together
+        wavefronts.push({
+          x: width * 0.5,
+          y: height * 0.5,
+          born: performance.now(),
+          maxR: Math.max(width, height) * 0.55,
+          strength: 0.4 + intensity * 0.5,
+        });
+        if (wavefronts.length > 8) wavefronts.shift();
+        try { audio().thud(); } catch { /* noop */ }
+        note(33, 260);
+        try { haptics.detent(); } catch { /* noop */ }
+      },
+      flip: ({ faceDown }) => {
+        // face-down is night: the pool of light under the beaker goes down
+        nightTarget = faceDown ? 1 : 0;
+        lastInteractionAt = performance.now();
+        if (faceDown) {
+          try { audio().thud(); } catch { /* noop */ }
+          note(28, 600);
+          try { haptics.roll(); } catch { /* noop */ }
+        } else {
+          try { audio().spark(); } catch { /* noop */ }
+          note(46, 300);
+          try { haptics.bloom(); } catch { /* noop */ }
+        }
       },
     });
 
@@ -1003,12 +1117,15 @@ export default function MoleculesField() {
       ctx.translate(cx, cy);
 
       // the reaction ceremony leans in: a warm halo tightens around the pair
+      // — a cached sprite stamped with drawImage, never a per-molecule gradient
       if (m.charge > 0) {
-        const halo = ctx.createRadialGradient(0, 0, R * 0.2, 0, 0, R * (1.9 - m.charge * 0.5));
-        halo.addColorStop(0, colorAlpha("#E7AC52", 0.1 * m.charge * fade));
-        halo.addColorStop(1, "rgba(0,0,0,0)");
-        ctx.fillStyle = halo;
-        ctx.fillRect(-R * 2, -R * 2, R * 4, R * 4);
+        const haloR = R * (1.9 - m.charge * 0.5);
+        stampSprite(
+          "mol-charge-halo",
+          [[0, "rgba(231, 172, 82, 1)"], [1, "rgba(0,0,0,0)"]],
+          0, 0, haloR,
+          0.1 * m.charge * fade,
+        );
       }
 
       // — felt pass: warm orbs and glowing bonds under candlelight —
@@ -1017,11 +1134,12 @@ export default function MoleculesField() {
         // carries a permanent quiet warmth of its own (CO₂'s tell)
         const haloK = Math.max(Math.min(1, m.heat), morph.felt === "greenhouse" ? 0.4 : 0);
         if (haloK > 0.15) {
-          const hg = ctx.createRadialGradient(0, 0, R * 0.1, 0, 0, R * 1.5);
-          hg.addColorStop(0, colorAlpha(fam[4], 0.05 * haloK * feltAlpha));
-          hg.addColorStop(1, "rgba(0,0,0,0)");
-          ctx.fillStyle = hg;
-          ctx.fillRect(-R * 1.6, -R * 1.6, R * 3.2, R * 3.2);
+          stampSprite(
+            `mol-heat-${morph.family}`,
+            [[0, colorAlpha(fam[4], 1)], [1, "rgba(0,0,0,0)"]],
+            0, 0, R * 1.5,
+            0.05 * haloK * feltAlpha,
+          );
         }
         ctx.lineCap = "round";
         for (let i = 0; i < morph.bonds.length; i++) {
@@ -1072,14 +1190,18 @@ export default function MoleculesField() {
           if (!touched && !m.closed) continue;
           const a = morph.atoms[i];
           const or = R * a.size * (a.letter === "C" ? 1 : 1.25);
-          const og = ctx.createRadialGradient(pts[i].x, pts[i].y, or * 0.1, pts[i].x, pts[i].y, or * 1.6);
-          og.addColorStop(0, colorAlpha(fam[Math.min(5, a.tone + 2)], 0.85 * feltAlpha));
-          og.addColorStop(0.6, colorAlpha(fam[a.tone], 0.5 * feltAlpha));
-          og.addColorStop(1, "rgba(0,0,0,0)");
-          ctx.fillStyle = og;
-          ctx.beginPath();
-          ctx.arc(pts[i].x, pts[i].y, or * 1.6, 0, Math.PI * 2);
-          ctx.fill();
+          // stop ratios (0.85 / 0.5) are baked into the sprite; feltAlpha is
+          // the only per-frame factor, applied uniformly via globalAlpha
+          stampSprite(
+            `mol-atom-${morph.family}-${a.tone}`,
+            [
+              [0, colorAlpha(fam[Math.min(5, a.tone + 2)], 0.85)],
+              [0.6, colorAlpha(fam[a.tone], 0.5)],
+              [1, "rgba(0,0,0,0)"],
+            ],
+            pts[i].x, pts[i].y, or * 1.6,
+            feltAlpha,
+          );
         }
       }
 
@@ -1140,8 +1262,11 @@ export default function MoleculesField() {
     // ————— the loop —————
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
+      const tier = gov.beginFrame(now);
+      if (sleeping) return; // no draw while the document is hidden
       if (!reduce && now - lastFrame < 30) return;
       lastFrame = now;
+      const detail = detailForTier(tier);
       const delta = Math.min(64, now - last);
       last = now;
       const dt = delta / 1000;
@@ -1155,6 +1280,13 @@ export default function MoleculesField() {
       lens += (lensTarget - lens) * Math.min(1, dt * 6);
       thermalStorm *= Math.exp(-dt * 0.9);
       tuttiPulse *= Math.exp(-dt * 2.4);
+      night += (nightTarget - night) * Math.min(1, dt * (nightTarget > night ? 1.6 : 2.8));
+      // two-finger pan: the frame eases toward the hand's nudge, then home
+      panX += (panTargetX - panX) * Math.min(1, dt * 5);
+      panY += (panTargetY - panY) * Math.min(1, dt * 5);
+      canvas.style.transform = (Math.abs(panX) > 0.05 || Math.abs(panY) > 0.05)
+        ? `translate(${panX.toFixed(1)}px, ${panY.toFixed(1)}px)`
+        : "";
       // the vessel's lean: solvent convection runs downhill with real gravity
       const gravX = streamX + tiltLeanX * 0.5;
       const gravY = streamY + tiltLeanY * 0.5;
@@ -1275,9 +1407,12 @@ export default function MoleculesField() {
         }
       }
 
-      // background — the solvent after dark; the lens dims it to a blackboard
-      const bgTop = mixHex("#0e0b10", "#161018", lens);
-      const bgMid = mixHex("#120e12", "#1d1520", lens);
+      // background — the solvent after dark; the lens dims it to a blackboard.
+      // season (three-finger twist) drifts the solvent's ambient warmth on its
+      // own slow cycle, independent of the lens's felt↔notation axis.
+      const seasonWarm = 0.5 + 0.5 * Math.sin(season * Math.PI * 2);
+      const bgTop = mixHex(mixHex("#0e0b10", "#181009", seasonWarm * 0.4), "#161018", lens);
+      const bgMid = mixHex(mixHex("#120e12", "#1c1610", seasonWarm * 0.4), "#1d1520", lens);
       const bgLow = mixHex("#151013", "#191118", lens);
       const bg = ctx.createLinearGradient(0, 0, 0, height);
       bg.addColorStop(0, bgTop);
@@ -1287,7 +1422,7 @@ export default function MoleculesField() {
       ctx.fillRect(0, 0, width, height);
       // the candle beneath the bench: a breathing warm pool of light
       // greenhouseGlow is CO₂'s tell — the candle pool warms with the census
-      const glowPulse = (reduce ? 0.08 : 0.07 + Math.sin(breath) * 0.025) + greenhouseGlow;
+      const glowPulse = ((reduce ? 0.08 : 0.07 + Math.sin(breath) * 0.025) + greenhouseGlow + seasonWarm * 0.02) * (1 - night * 0.85);
       const glow = ctx.createRadialGradient(width * 0.5, height * 0.44, 10, width * 0.5, height * 0.44, Math.max(width, height) * 0.72);
       glow.addColorStop(0, `rgba(231, 172, 82, ${glowPulse + lens * 0.05})`);
       glow.addColorStop(0.55, "rgba(200, 115, 42, 0.04)");
@@ -1299,11 +1434,17 @@ export default function MoleculesField() {
       iris.addColorStop(1, `rgba(4, 3, 5, ${0.45 + lens * 0.2})`);
       ctx.fillStyle = iris;
       ctx.fillRect(0, 0, width, height);
+      // face-down is night: the pool of light goes down until the phone turns back
+      if (night > 0.01) {
+        ctx.fillStyle = `rgba(4, 3, 5, ${night * 0.6})`;
+        ctx.fillRect(0, 0, width, height);
+      }
 
-      // solvent motes
+      // solvent motes — the fixed count scales with the frame governor's tier
+      const activeMotes = Math.max(8, Math.round(motes.length * detail.particles));
       ctx.save();
       ctx.globalCompositeOperation = lens > 0.5 ? "source-over" : "screen";
-      for (let i = 0; i < motes.length; i++) {
+      for (let i = 0; i < activeMotes; i++) {
         const m = motes[i];
         if (!reduce) {
           const seethe = 7 * (1 + thermalStorm * 4); // the spike seethes, then cools
@@ -1501,6 +1642,7 @@ export default function MoleculesField() {
       observer.disconnect();
       detach();
       detachVessel();
+      offVis();
       markLens(false);
       wrap.removeEventListener("keydown", onKeyDown);
       wrap.removeEventListener("keyup", onKeyUp);
@@ -1524,15 +1666,7 @@ export default function MoleculesField() {
         <canvas ref={canvasRef} className="molecules-canvas" aria-hidden="true" />
       </div>
 
-      {hasMols && (
-        <button
-          type="button"
-          className="molecules-clear"
-          onClick={() => clearRef.current()}
-        >
-          let the solution clear
-        </button>
-      )}
+      <LetGo label="let the solution clear" onLetGo={() => clearRef.current()} visible={hasMols} />
 
       <style
         dangerouslySetInnerHTML={{
@@ -1588,28 +1722,6 @@ export default function MoleculesField() {
           z-index: 0;
         }
 
-        .molecules-clear {
-          position: fixed;
-          bottom: max(18px, env(safe-area-inset-bottom));
-          left: 50%;
-          transform: translateX(-50%);
-          min-height: 40px;
-          padding: 8px 14px;
-          background: transparent;
-          border: 1px solid rgba(238, 234, 219, 0.18);
-          border-radius: 3px;
-          color: rgba(238, 234, 219, 0.5);
-          font-family: var(--font-mono, "IBM Plex Mono", monospace);
-          font-size: 11px;
-          letter-spacing: 0.06em;
-          cursor: pointer;
-          z-index: 30;
-        }
-
-        .molecules-clear:focus-visible {
-          outline: 2px solid rgba(231, 172, 82, 0.7);
-          outline-offset: 2px;
-        }
       ` }}
       />
     </div>

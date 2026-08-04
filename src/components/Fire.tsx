@@ -4,8 +4,18 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import WaterText from "@/components/WaterText";
+import LetGo from "@/components/LetGo";
+import {
+  onVisibility,
+  onGalleryPause,
+  resolveDpr,
+  createFrameGovernor,
+  isEmbeddedFrame,
+  detailForTier,
+} from "@/lib/room-runtime";
 
 type Ember = {
   alive: boolean;
@@ -62,6 +72,8 @@ export default function Fire() {
   });
 
   const [heatReadout, setHeatReadout] = useState(0.32);
+  const [hasBuilt, setHasBuilt] = useState(false);
+  const clearAllRef = useRef<() => void>(() => {});
   const [fireMarks, setFireMarks] = useState<Array<{ id: number; label: string; tone: string; level: number }>>([
     { id: 0, label: "banked", tone: "#d45a24", level: 0.34 },
   ]);
@@ -94,6 +106,7 @@ export default function Fire() {
         )) as WebGLRenderingContext | null;
 
     let program: WebGLProgram | null = null;
+    let vbo: WebGLBuffer | null = null;
     let uTimeLoc: WebGLUniformLocation | null = null;
     let uResLoc: WebGLUniformLocation | null = null;
     let uPointerLoc: WebGLUniformLocation | null = null;
@@ -101,8 +114,12 @@ export default function Fire() {
     let uPressLoc: WebGLUniformLocation | null = null;
     let uWindLoc: WebGLUniformLocation | null = null;
     let uIgnitionLoc: WebGLUniformLocation | null = null;
+    let uLensLoc: WebGLUniformLocation | null = null;
+    let uSeasonLoc: WebGLUniformLocation | null = null;
+    let uPanLoc: WebGLUniformLocation | null = null;
 
-    if (gl) {
+    const setupProgram = () => {
+      if (!gl) return;
       const vert = `
         attribute vec2 a_pos;
         varying vec2 vUv;
@@ -120,6 +137,14 @@ export default function Fire() {
         uniform float uPress;
         uniform float uWind;
         uniform float uIgnition;
+        // uLens: 0 = the flame as felt, 1 = the pressure/heat field as a
+        // false-colour diagram (two-finger twist — a level of description,
+        // not a different fire). uSeason: the hearth's slow cycle, 0 roaring
+        // toward 1 banked low (three-finger twist).
+        uniform float uLens;
+        uniform float uSeason;
+        // uPan: two-finger drag leans the whole bed inside the frame.
+        uniform vec2 uPan;
         varying vec2 vUv;
 
         float hash21(vec2 p) {
@@ -165,7 +190,7 @@ export default function Fire() {
         }
 
         void main() {
-          vec2 uv = vUv;
+          vec2 uv = vUv + uPan;
           float aspect = uRes.x / max(1.0, uRes.y);
           float t = uTime;
 
@@ -190,6 +215,9 @@ export default function Fire() {
           heat += local * (0.22 + uPress * 0.45);
           heat += pressure * 0.46;
           heat += uIgnition * smoothstep(0.86, 0.0, uv.y) * (0.16 + plumeNoise * 0.28);
+          // season: the hearth's slow cycle banks the bed down toward embers
+          // and ash the further toward winter it turns.
+          heat *= mix(1.15, 0.5, uSeason);
           heat = clamp(heat, 0.0, 1.0);
 
           vec3 bgTop = vec3(0.012, 0.010, 0.014);
@@ -206,6 +234,17 @@ export default function Fire() {
           col += (ash - 0.5) * 0.018;
           float vignette = smoothstep(0.92, 0.18, distance(vUv, vec2(0.50, 0.54)));
           col *= 0.74 + vignette * 0.30;
+
+          // the lens: fold in a false-colour pressure/temperature diagram —
+          // the same heat field, read as a map instead of felt as a flame.
+          if (uLens > 0.001) {
+            vec3 cold = vec3(0.03, 0.05, 0.22);
+            vec3 hot = vec3(0.95, 0.12, 0.05);
+            vec3 diagram = mix(cold, hot, heat);
+            float iso = smoothstep(0.985, 1.0, fract(heat * 9.0));
+            diagram += iso * 0.5;
+            col = mix(col, diagram, clamp(uLens, 0.0, 1.0));
+          }
 
           gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
         }
@@ -241,6 +280,9 @@ export default function Fire() {
             uPressLoc = gl.getUniformLocation(p, "uPress");
             uWindLoc = gl.getUniformLocation(p, "uWind");
             uIgnitionLoc = gl.getUniformLocation(p, "uIgnition");
+            uLensLoc = gl.getUniformLocation(p, "uLens");
+            uSeasonLoc = gl.getUniformLocation(p, "uSeason");
+            uPanLoc = gl.getUniformLocation(p, "uPan");
 
             const buf = gl.createBuffer();
             gl.bindBuffer(gl.ARRAY_BUFFER, buf);
@@ -249,13 +291,45 @@ export default function Fire() {
             gl.enableVertexAttribArray(loc);
             gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
             gl.useProgram(p);
+            vbo = buf;
           }
         }
       }
-    }
+    };
+    setupProgram();
+
+    // WebGL context can be lost (mobile GPU pressure, background tabs) and
+    // restored later — reinit the program rather than staying dark forever.
+    const onContextLost = (ev: Event) => {
+      ev.preventDefault();
+      program = null;
+    };
+    const onContextRestored = () => {
+      setupProgram();
+    };
+    heatCanvas.addEventListener("webglcontextlost", onContextLost, false);
+    heatCanvas.addEventListener("webglcontextrestored", onContextRestored, false);
+
+    const embedded = isEmbeddedFrame();
+    const gov = createFrameGovernor(embedded ? "medium" : "high");
+    let hidden = document.hidden;
+    let galleryPaused = false;
+    let asleep = false;
+    const syncSleep = () => {
+      asleep = hidden || galleryPaused;
+      if (asleep) gov.force("sleep");
+    };
+    const unvis = onVisibility((h) => {
+      hidden = h;
+      syncSleep();
+    });
+    const ungal = onGalleryPause((p) => {
+      galleryPaused = p;
+      syncSleep();
+    });
 
     const resize = () => {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = resolveDpr(gov.tier(), { embedded, reducedMotion: reduce });
       const w = wrap.clientWidth;
       const h = wrap.clientHeight;
       heatCanvas.width = Math.floor(w * dpr);
@@ -309,6 +383,16 @@ export default function Fire() {
     let lastGestureAt = performance.now();
     const holdState = { ceremony: false };
 
+    // ── the map layer (two fingers) and the vessel ─────────────────
+    let lens = 0; // 0 felt flame, 1 the pressure/heat field as a diagram
+    let season = 0; // 0 roaring, 1 banked low — the hearth's slow cycle
+    let panX = 0;
+    let panY = 0;
+    let panXTarget = 0;
+    let panYTarget = 0;
+    let bank = 0; // face-down night: the fire banks itself down
+    let bankTarget = 0;
+
     const spawnEmber = (x: number, y: number, vx: number, vy: number, strength = 1) => {
       for (let tries = 0; tries < emberPool.length; tries++) {
         const idx = (emberHint + tries) % emberPool.length;
@@ -352,7 +436,43 @@ export default function Fire() {
         strength,
         radius: 120 + strength * 120,
       });
+      // At the population cap the oldest gives way rather than the touch
+      // silently doing nothing.
       if (wells.length > 8) wells.shift();
+      setHasBuilt(true);
+    };
+
+    /** Ceremony hold ON an existing well is its solemn act — snuffed out
+     * immediately rather than left to fade, a small dark puff answering. */
+    const extinguishWellNear = (x: number, y: number): boolean => {
+      let bestIdx = -1;
+      let bestDist = Infinity;
+      for (let i = 0; i < wells.length; i++) {
+        const d = Math.hypot(wells[i].x - x, wells[i].y - y);
+        if (d < wells[i].radius * 0.7 && d < bestDist) {
+          bestDist = d;
+          bestIdx = i;
+        }
+      }
+      if (bestIdx < 0) return false;
+      const well = wells[bestIdx];
+      wells.splice(bestIdx, 1);
+      for (let i = 0; i < 10; i++) {
+        const a = Math.random() * Math.PI * 2;
+        spawnEmber(well.x + Math.cos(a) * 6, well.y + Math.sin(a) * 6, Math.cos(a) * 16, -20 - Math.random() * 20, 0.35);
+      }
+      setHasBuilt(wells.length > 0);
+      return true;
+    };
+
+    clearAllRef.current = () => {
+      wells.length = 0;
+      strokes.length = 0;
+      for (const e of emberPool) e.alive = false;
+      ignitionAmp = 0;
+      windTarget = 0;
+      gutter = 0;
+      setHasBuilt(false);
     };
 
     const beginStroke = (x: number, y: number) => {
@@ -412,13 +532,41 @@ export default function Fire() {
 
     // ── gestures (the shared grammar — src/lib/gesture) ─────────────
     // One finger touches the fire: tap seeds an ember, drag bends
-    // convection, dwell compresses white heat, ceremony blooms it fully.
-    // Three fingers touch the law: drag is crosswind, hold slows time.
-    // Pinch and pan2 stay unbound — the frame belongs to the manifold.
+    // convection, dwell compresses white heat, ceremony blooms it fully
+    // (or, over an existing well, snuffs it — the touch-reachable delete).
+    // Two fingers touch the map: twist reads the bed as a felt flame or a
+    // pressure/heat diagram; drag pans the frame's lean; tap steps back.
+    // Three fingers touch the law: drag is crosswind, hold slows time,
+    // twist turns the hearth's slow season, tap is tutti.
     const detachGestures = attachGestures(fxCanvas, {
       tap: (e) => {
         lastGestureAt = performance.now();
-        if (e.fingers !== 1) return; // the bed absorbs frame/law taps
+        if (e.fingers === 2) {
+          // step back: lower a raised lens, else the fire eases off its lean.
+          // ScaleTravel (document.body) reads data-lens-raised to know
+          // whether this tap should lower the lens instead of stepping the
+          // scale back — the two never both answer the same tap.
+          if (lens > 0.02) {
+            lens = 0;
+            wrap.dataset.lensRaised = "";
+          } else {
+            panXTarget = 0;
+            panYTarget = 0;
+            windTarget *= 0.4;
+          }
+          haptics.tap();
+          return;
+        }
+        if (e.fingers === 3) {
+          // tutti — everything alive answers softly at once
+          ignitionAmp = Math.max(ignitionAmp, 0.4 + e.intensity * 0.2);
+          ignitionT0 = simNow;
+          for (const well of wells) well.strength = Math.min(1, well.strength + 0.15);
+          try { audio.chime(); } catch { /* noop */ }
+          haptics.ripple(0.4);
+          markFire("tutti", "#ffe4b8", 0.7);
+          return;
+        }
         const p = trackPointer(e.x, e.y);
         // tap intensity is the strike: ember count, ignition and haptic
         // all ride the same 0..1 from core.
@@ -545,19 +693,44 @@ export default function Fire() {
           }
           return;
         }
-        // ceremony tier — the room's one solemn act: the pyre blooms fully,
-        // white through the whole bed, and is kept.
+        // ceremony tier — the room's one solemn act: over an existing well
+        // it is annihilated (the touch-reachable delete); over open bed the
+        // pyre blooms fully, white through the whole bed, and is kept.
         if (e.tier >= 3 && !holdState.ceremony) {
           holdState.ceremony = true;
-          addWell(p.x, p.y, 1);
-          burst(p.x, p.y, 44, 1.5);
-          ignitionAmp = 1;
-          ignitionT0 = simNow;
-          try { audio.bell(); } catch { /* noop */ }
-          try { haptics.bloom(); } catch { /* noop */ }
-          markFire("sealed in white", "#dcecff", 1);
-          useField.getState().recordTape("sigil", 1, "fire/ceremony");
+          if (extinguishWellNear(p.x, p.y)) {
+            try { audio.thud(); } catch { /* noop */ }
+            try { haptics.chop(); } catch { /* noop */ }
+            markFire("snuffed", "#5a4438", 0.3);
+            useField.getState().recordTape("sigil", 0.3, "fire/extinguish");
+          } else {
+            addWell(p.x, p.y, 1);
+            burst(p.x, p.y, 44, 1.5);
+            ignitionAmp = 1;
+            ignitionT0 = simNow;
+            try { audio.bell(); } catch { /* noop */ }
+            try { haptics.bloom(); } catch { /* noop */ }
+            markFire("sealed in white", "#dcecff", 1);
+            useField.getState().recordTape("sigil", 1, "fire/ceremony");
+          }
         }
+      },
+      twist: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          // three-finger twist: advance/rewind the hearth's slow season
+          season = clamp(season + e.angle * 0.12, 0, 1);
+          return;
+        }
+        // two-finger twist rotates the lens — felt flame ↔ heat diagram
+        lens = clamp(lens + e.angle * 0.4, 0, 1);
+        wrap.dataset.lensRaised = lens > 0.02 ? "1" : "";
+      },
+      pan2: (e) => {
+        lastGestureAt = performance.now();
+        // two fingers pan the frame — the bed leans inside the stage
+        panXTarget = clamp(panXTarget + e.dx * 0.0006, -0.14, 0.14);
+        panYTarget = clamp(panYTarget + e.dy * 0.0006, -0.1, 0.1);
       },
       scrub: (e) => {
         lastGestureAt = performance.now();
@@ -592,6 +765,37 @@ export default function Fire() {
         entrainUntil = performance.now() + 9000;
       },
     }, { wheelZoom: false });
+
+    // ── the vessel: the phone's own body is the hearth's other hand ──
+    const detachVessel = onVessel({
+      tilt: ({ gamma }) => {
+        if (reduce || asleep) return;
+        windTarget = clamp(windTarget + gamma * 0.0009, -1, 1);
+      },
+      shake: ({ intensity }) => {
+        if (reduce || asleep) return;
+        gutter = Math.min(1, gutter + intensity * 0.6);
+        const w = fxCanvas.clientWidth;
+        const h = fxCanvas.clientHeight;
+        for (let i = 0; i < 12; i++) {
+          spawnEmber(Math.random() * w, h * (0.7 + Math.random() * 0.25), (Math.random() - 0.5) * 220, -(40 + Math.random() * 90), 0.9);
+        }
+        try { audio.thud(); } catch { /* noop */ }
+        try { haptics.storm(); } catch { /* noop */ }
+        markFire("scattered", "#f5b15a", 0.7);
+      },
+      knock: ({ intensity }) => {
+        if (reduce || asleep) return;
+        ignitionAmp = Math.max(ignitionAmp, 0.3 + intensity * 0.3);
+        ignitionT0 = simNow;
+        try { audio.spark(); } catch { /* noop */ }
+        try { haptics.tap(); } catch { /* noop */ }
+      },
+      flip: ({ faceDown }) => {
+        // night: the fire banks itself down until the phone turns back up
+        bankTarget = faceDown ? 1 : 0;
+      },
+    });
 
     // Desktop hover is the grammar's quiet dialect (hover ≈ light touch):
     // heat shimmer still gathers under a passing hand. All contact
@@ -673,6 +877,12 @@ export default function Fire() {
     };
 
     const draw = (now: number) => {
+      const tier = gov.beginFrame(now);
+      if (asleep) {
+        raf = requestAnimationFrame(draw);
+        return;
+      }
+      const detail = detailForTier(tier);
       const w = fxCanvas.clientWidth;
       const h = fxCanvas.clientHeight;
       const dt = Math.min(0.05, (now - lastFrame) / 1000);
@@ -687,6 +897,9 @@ export default function Fire() {
       if (!pointerRef.current.pressed) windTarget *= Math.pow(0.001, dt / 2.4);
       wind += (windTarget - wind) * Math.min(1, dt * 4.5);
       gutter *= Math.exp(-dt * 2.4);
+      panX += (panXTarget - panX) * Math.min(1, dt * 3);
+      panY += (panYTarget - panY) * Math.min(1, dt * 3);
+      bank += (bankTarget - bank) * Math.min(1, dt * 1.2);
 
       const held = pointerRef.current.pressed ? (now - pointerRef.current.pressStart) / 1000 : 0;
       const pressTarget = pointerRef.current.pressed ? clamp(held / 1.35, 0, 1) : 0;
@@ -707,7 +920,7 @@ export default function Fire() {
       }
 
       const ignitionAge = (simNow - ignitionT0) / 1000;
-      const ignition = Math.max(0, ignitionAmp * Math.exp(-ignitionAge * 2.2) - gutter * 0.4);
+      const ignition = Math.max(0, (ignitionAmp * Math.exp(-ignitionAge * 2.2) - gutter * 0.4) * (1 - bank * 0.85));
       if (ignition < 0.01 && ignitionAmp > 0.01 && gutter < 0.02) ignitionAmp = 0;
 
       if (now - lastMarkSync > 140) {
@@ -724,11 +937,14 @@ export default function Fire() {
         if (uPressLoc) gl.uniform1f(uPressLoc, pressSmoothed);
         if (uWindLoc) gl.uniform1f(uWindLoc, wind);
         if (uIgnitionLoc) gl.uniform1f(uIgnitionLoc, ignition);
+        if (uLensLoc) gl.uniform1f(uLensLoc, lens);
+        if (uSeasonLoc) gl.uniform1f(uSeasonLoc, clamp(season + bank * 0.5, 0, 1));
+        if (uPanLoc) gl.uniform2f(uPanLoc, panX, panY);
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       } else {
         const ctx = heatCanvas.getContext("2d");
         if (ctx) {
-          const dpr = Math.min(window.devicePixelRatio || 1, 2);
+          const dpr = resolveDpr(tier, { embedded, reducedMotion: reduce });
           ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
           const g = ctx.createLinearGradient(0, 0, 0, h);
           g.addColorStop(0, "#050304");
@@ -753,7 +969,7 @@ export default function Fire() {
       }
 
       if (!reduce) {
-        emberAcc += (24 + ignition * 58 + pressSmoothed * 36) * dt;
+        emberAcc += (24 + ignition * 58 + pressSmoothed * 36) * dt * detail.particles;
         while (emberAcc > 1) {
           emberAcc -= 1;
           const x = Math.random() * w;
@@ -831,10 +1047,26 @@ export default function Fire() {
       cancelAnimationFrame(raf);
       ro.disconnect();
       detachGestures();
+      detachVessel();
+      unvis();
+      ungal();
       fxCanvas.removeEventListener("pointermove", onHover);
       fxCanvas.removeEventListener("pointerleave", onHoverLeave);
+      heatCanvas.removeEventListener("webglcontextlost", onContextLost);
+      heatCanvas.removeEventListener("webglcontextrestored", onContextRestored);
+      delete wrap.dataset.lensRaised;
+      if (gl) {
+        if (program) gl.deleteProgram(program);
+        if (vbo) gl.deleteBuffer(vbo);
+      }
     };
   }, [markFire]);
+
+  const letGo = useCallback(() => {
+    clearAllRef.current();
+    getFieldAudio().thud();
+    haptics.roll();
+  }, []);
 
   return (
     <div
@@ -998,6 +1230,8 @@ export default function Fire() {
           </span>
         ))}
       </div>
+
+      <LetGo label="let the fire bank down" onLetGo={letGo} visible={hasBuilt} />
 
       <WaterText
         className="fire-legend"

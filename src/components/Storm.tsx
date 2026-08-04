@@ -4,8 +4,18 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
+import LetGo from "@/components/LetGo";
+import {
+  onVisibility,
+  onGalleryPause,
+  resolveDpr,
+  createFrameGovernor,
+  isEmbeddedFrame,
+  detailForTier,
+} from "@/lib/room-runtime";
 
 /**
  * /storm — a PRESSURE + ELECTRICITY instrument.
@@ -25,6 +35,8 @@ import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
  * "eye" collapses the sea into a vortex; "clear sky" raises the barometer
  * to fair and stills the water to glass.
  */
+const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+
 export default function Storm() {
   // page-specific ambient bed: storm crash + wind hiss
   useEffect(() => { getFieldAudio().setAmbientProfile("storm"); }, []);
@@ -68,9 +80,12 @@ export default function Storm() {
   const lastLightningAt = useRef<number>(0);
   // bridge so React controls can trigger a discharge defined inside the loop.
   const dischargeRef = useRef<(() => void) | null>(null);
+  // bridge for LetGo — the room's kept storm cells, cleared from outside the loop.
+  const clearCellsRef = useRef<() => void>(() => {});
 
   const [pressureDisplay, setPressureDisplay] = useState(0.62);
   const [chargeDisplay, setChargeDisplay] = useState(0);
+  const [hasBuilt, setHasBuilt] = useState(false);
   const [maelstromOn, setMaelstromOn] = useState(false);
   const [dragMode, setDragMode] = useState<null | "baro" | "wind">(null);
   const [windAngleDisplay, setWindAngleDisplay] = useState(0);
@@ -111,14 +126,19 @@ export default function Storm() {
         )) as WebGLRenderingContext | null;
 
     let glProg: WebGLProgram | null = null;
+    let vbo: WebGLBuffer | null = null;
     let uTimeLoc: WebGLUniformLocation | null = null;
     let uResLoc: WebGLUniformLocation | null = null;
     let uStormLoc: WebGLUniformLocation | null = null;
     let uMaelstromLoc: WebGLUniformLocation | null = null;
     let uFlashLoc: WebGLUniformLocation | null = null;
     let uChargeLoc: WebGLUniformLocation | null = null;
+    let uLensLoc: WebGLUniformLocation | null = null;
+    let uSeasonLoc: WebGLUniformLocation | null = null;
+    let uPanLoc: WebGLUniformLocation | null = null;
 
-    if (gl) {
+    const setupProgram = () => {
+      if (!gl) return;
       const vert = `
         attribute vec2 a_pos;
         varying vec2 vUv;
@@ -135,6 +155,12 @@ export default function Storm() {
         uniform float uMaelstrom;
         uniform float uFlash;
         uniform float uCharge;
+        // uLens: 0 felt weather, 1 the pressure/temperature field as a map
+        // (two-finger twist). uSeason: the slow annual cycle, tropical warm
+        // toward arctic cold (three-finger twist).
+        uniform float uLens;
+        uniform float uSeason;
+        uniform vec2 uPan;
         varying vec2 vUv;
 
         float hash21(vec2 p) {
@@ -164,7 +190,7 @@ export default function Storm() {
         }
 
         void main() {
-          vec2 uv = vec2(vUv.x, 1.0 - vUv.y);
+          vec2 uv = vec2(vUv.x, 1.0 - vUv.y) + uPan;
           float t = uTime;
           float s = clamp(uStorm, 0.0, 1.0);
           float m = clamp(uMaelstrom, 0.0, 1.0);
@@ -194,6 +220,10 @@ export default function Storm() {
           vec3 seaSurface = vec3(0.165, 0.353, 0.549);
           vec3 seaMid     = vec3(0.106, 0.227, 0.392);
           vec3 seaDeep    = vec3(0.055, 0.145, 0.251);
+          // season: warm tropical toward cold arctic slate, a slow cycle
+          vec3 arctic = vec3(0.20, 0.24, 0.28);
+          seaSurface = mix(seaSurface, arctic * 1.3, uSeason * 0.5);
+          seaDeep = mix(seaDeep, arctic * 0.5, uSeason * 0.6);
 
           vec3 sea = mix(seaSurface, seaMid, smoothstep(0.0, 0.5, seaV));
           sea = mix(sea, seaDeep, smoothstep(0.5, 1.0, seaV));
@@ -243,6 +273,15 @@ export default function Storm() {
           color += vec3(uFlash);
           color = clamp(color, 0.0, 1.5);
 
+          // the lens: read the same field as pressure/temperature, not felt
+          if (uLens > 0.001) {
+            vec3 low = vec3(0.85, 0.15, 0.10);
+            vec3 high = vec3(0.10, 0.30, 0.85);
+            vec3 diagram = mix(low, high, s);
+            diagram += smoothstep(0.985, 1.0, fract(seaV * 7.0)) * 0.35;
+            color = mix(color, diagram, clamp(uLens, 0.0, 1.0));
+          }
+
           gl_FragColor = vec4(color, 1.0);
         }
       `;
@@ -274,6 +313,9 @@ export default function Storm() {
             uMaelstromLoc = gl.getUniformLocation(p, "uMaelstrom");
             uFlashLoc = gl.getUniformLocation(p, "uFlash");
             uChargeLoc = gl.getUniformLocation(p, "uCharge");
+            uLensLoc = gl.getUniformLocation(p, "uLens");
+            uSeasonLoc = gl.getUniformLocation(p, "uSeason");
+            uPanLoc = gl.getUniformLocation(p, "uPan");
 
             const buf = gl.createBuffer();
             gl.bindBuffer(gl.ARRAY_BUFFER, buf);
@@ -286,13 +328,43 @@ export default function Storm() {
             gl.enableVertexAttribArray(loc);
             gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
             gl.useProgram(p);
+            vbo = buf;
           }
         }
       }
-    }
+    };
+    setupProgram();
+
+    const onContextLost = (ev: Event) => {
+      ev.preventDefault();
+      glProg = null;
+    };
+    const onContextRestored = () => {
+      setupProgram();
+    };
+    water.addEventListener("webglcontextlost", onContextLost, false);
+    water.addEventListener("webglcontextrestored", onContextRestored, false);
+
+    const embedded = isEmbeddedFrame();
+    const gov = createFrameGovernor(embedded ? "medium" : "high");
+    let hiddenDoc = document.hidden;
+    let galleryPaused = false;
+    let asleep = false;
+    const syncSleep = () => {
+      asleep = hiddenDoc || galleryPaused;
+      if (asleep) gov.force("sleep");
+    };
+    const unvis = onVisibility((h) => {
+      hiddenDoc = h;
+      syncSleep();
+    });
+    const ungal = onGalleryPause((p) => {
+      galleryPaused = p;
+      syncSleep();
+    });
 
     const resize = () => {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = resolveDpr(gov.tier(), { embedded, reducedMotion: reduce });
       const w = wrap.clientWidth;
       const h = wrap.clientHeight;
       water.width = Math.floor(w * dpr);
@@ -384,6 +456,47 @@ export default function Storm() {
     let lastEntrainBeat = -1;
     let lastGestureAt = performance.now();
     const holdState = { ceremony: false };
+
+    // ── the map layer (two fingers) and the vessel ─────────────────
+    let lens = 0; // 0 felt weather, 1 the pressure/temperature field
+    let season = 0; // 0 warm, 1 arctic — the slow annual cycle
+    let panX = 0;
+    let panY = 0;
+    let panXTarget = 0;
+    let panYTarget = 0;
+    let holdZone: "sky" | "sea" | null = null;
+
+    // ── storm cells: the room's countable material ──────────────────
+    // A hand plants a localized cell of weather in the sea with a dwell
+    // hold; ceremony hold on an existing cell snuffs it; the eye (ceremony
+    // on open water) remains the room's other solemn act.
+    type StormCell = { id: number; x: number; y: number; t0: number; strength: number };
+    const cells: StormCell[] = [];
+    let nextCellId = 1;
+    const addCell = (x: number, y: number, strength: number) => {
+      cells.push({ id: ++nextCellId, x, y, t0: simNow, strength });
+      if (cells.length > 6) cells.shift();
+      setHasBuilt(true);
+    };
+    const extinguishCellNear = (x: number, y: number): boolean => {
+      let bestIdx = -1;
+      let bestD = 70;
+      for (let i = 0; i < cells.length; i++) {
+        const d = Math.hypot(cells[i].x - x, cells[i].y - y);
+        if (d < bestD) { bestD = d; bestIdx = i; }
+      }
+      if (bestIdx < 0) return false;
+      cells.splice(bestIdx, 1);
+      setHasBuilt(cells.length > 0);
+      return true;
+    };
+    clearCellsRef.current = () => {
+      cells.length = 0;
+      manualCrestsRef.current = [];
+      chargeRef.current = 0;
+      stormSpikeRef.current = 0;
+      setHasBuilt(false);
+    };
 
     const manualBump = (x: number, now: number): number => {
       let d = 0;
@@ -618,7 +731,31 @@ export default function Storm() {
     const detachGestures = attachGestures(lines, {
       tap: (e) => {
         lastGestureAt = performance.now();
-        if (e.fingers !== 1) return; // the weather absorbs frame/law taps
+        if (e.fingers === 2) {
+          // step back: lower a raised lens, else the storm eases its lean.
+          // ScaleTravel (document.body) reads data-lens-raised so this tap
+          // and the shared scale step-back never both answer at once.
+          if (lens > 0.02) {
+            lens = 0;
+            wrap.dataset.lensRaised = "";
+          } else {
+            panXTarget = 0;
+            panYTarget = 0;
+            calmRef.current = Math.max(calmRef.current, 0.25);
+            calmStartedRef.current = performance.now();
+          }
+          haptics.tap();
+          return;
+        }
+        if (e.fingers === 3) {
+          // tutti — everything alive answers softly at once
+          stormSpikeRef.current = Math.min(0.5, stormSpikeRef.current + 0.12);
+          chargeRef.current = Math.min(1, chargeRef.current + 0.08);
+          for (const cell of cells) cell.strength = Math.min(1, cell.strength + 0.15);
+          try { audio.chime(); } catch { /* noop */ }
+          haptics.ripple(0.4);
+          return;
+        }
         const { x, y } = toLocal(e.x, e.y);
         const seaTopPx = lines.clientHeight * SEA_TOP;
         if (boostParticle(x, y, e.intensity)) return;
@@ -766,10 +903,12 @@ export default function Storm() {
         const { x, y } = toLocal(e.x, e.y);
         if (e.phase === "enter") {
           holdState.ceremony = false;
+          (holdState as { dwell?: boolean }).dwell = false;
+          holdZone = y < lines.clientHeight * SEA_TOP ? "sky" : "sea";
           // the touch still lands — the same verbs pointerdown spoke
           if (boostParticle(x, y, 0.5)) return;
           if (touchFuji(x, y)) return;
-          if (y < lines.clientHeight * SEA_TOP) {
+          if (holdZone === "sky") {
             lastStrikeXFracRef.current = x / Math.max(1, lines.clientWidth);
             spawnWindStreak(y, false);
             try { audio.spark(); } catch { /* noop */ }
@@ -780,10 +919,37 @@ export default function Storm() {
           return;
         }
         if (e.phase === "release") return;
-        // ceremony tier — the room's one solemn act: the eye of the storm
-        // opens (a second ceremony lets the sea close over it again)
+        // dwell tier — something visibly gathers under the finger: a cell
+        // of the storm plants in the sea (deepens the longer it holds), or
+        // the banked charge surges harder held in the sky.
+        const dwellState = holdState as { dwell?: boolean };
+        if (e.tier >= 2 && !dwellState.dwell && !holdState.ceremony) {
+          dwellState.dwell = true;
+          if (holdZone === "sea") {
+            const charge = Math.min(1, e.elapsed / 1800);
+            addCell(x, y, 0.4 + charge * 0.6);
+            spawnBurst(x, y, 8 + Math.round(charge * 10), 160);
+            stormSpikeRef.current = Math.min(0.4, stormSpikeRef.current + 0.06);
+            try { audio.thud(); } catch { /* noop */ }
+            try { haptics.storm(); } catch { /* noop */ }
+            useField.getState().recordTape("sigil", 0.6 + charge * 0.2, "storm/cell");
+          } else {
+            chargeRef.current = Math.min(1, chargeRef.current + 0.22);
+            try { audio.spark(); } catch { /* noop */ }
+            try { haptics.ripple(0.4); } catch { /* noop */ }
+          }
+        }
+        // ceremony tier — the room's one solemn act: over an existing cell
+        // it is snuffed out (the touch-reachable delete); over open water
+        // the eye of the storm opens (a second ceremony closes it again)
         if (e.tier >= 3 && !holdState.ceremony) {
           holdState.ceremony = true;
+          if (holdZone === "sea" && extinguishCellNear(x, y)) {
+            try { audio.thud(); } catch { /* noop */ }
+            try { haptics.chop(); } catch { /* noop */ }
+            useField.getState().recordTape("sigil", 0.3, "storm/dissolve");
+            return;
+          }
           const next = maelstromTargetRef.current < 0.5;
           maelstromTargetRef.current = next ? 1 : 0;
           setMaelstromOn(next);
@@ -797,6 +963,22 @@ export default function Storm() {
             try { haptics.roll(); } catch { /* noop */ }
           }
         }
+      },
+      twist: (e) => {
+        lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          // three-finger twist: advance/rewind the storm's slow season
+          season = clamp01(season + e.angle * 0.12);
+          return;
+        }
+        // two-finger twist rotates the lens — felt weather ↔ pressure map
+        lens = clamp01(lens + e.angle * 0.4);
+        wrap.dataset.lensRaised = lens > 0.02 ? "1" : "";
+      },
+      pan2: (e) => {
+        lastGestureAt = performance.now();
+        panXTarget = Math.max(-0.14, Math.min(0.14, panXTarget + e.dx * 0.0006));
+        panYTarget = Math.max(-0.1, Math.min(0.1, panYTarget + e.dy * 0.0006));
       },
       scrub: (e) => {
         lastGestureAt = performance.now();
@@ -821,11 +1003,46 @@ export default function Storm() {
       },
     }, { wheelZoom: false });
 
+    // ── the vessel: the phone's own body reads the weather too ───────
+    const detachVessel = onVessel({
+      tilt: ({ gamma }) => {
+        if (reduce || asleep) return;
+        windDirRef.current += gamma * 0.0006;
+        setWindAngleDisplay(windDirRef.current);
+      },
+      shake: ({ intensity }) => {
+        if (reduce || asleep) return;
+        stormSpikeRef.current = Math.min(0.5, stormSpikeRef.current + intensity * 0.3);
+        chargeRef.current = Math.min(1, chargeRef.current + intensity * 0.2);
+        try { audio.thud(); } catch { /* noop */ }
+        try { haptics.storm(); } catch { /* noop */ }
+      },
+      knock: ({ intensity }) => {
+        if (reduce || asleep) return;
+        chargeRef.current = Math.min(1, chargeRef.current + 0.15 + intensity * 0.1);
+        try { audio.spark(); } catch { /* noop */ }
+        try { haptics.tap(); } catch { /* noop */ }
+      },
+      flip: ({ faceDown }) => {
+        // night: the storm settles toward calm until the phone turns back up
+        if (faceDown) {
+          calmRef.current = Math.max(calmRef.current, 0.6);
+          calmStartedRef.current = performance.now();
+        }
+      },
+    });
+
     const t0 = performance.now();
     let raf = 0;
     let lastUiSync = 0;
 
     const draw = (now: number) => {
+      const tier = gov.beginFrame(now);
+      if (asleep) {
+        raf = requestAnimationFrame(draw);
+        return;
+      }
+      const detail = detailForTier(tier);
       const w = lines.clientWidth;
       const h = lines.clientHeight;
 
@@ -838,6 +1055,24 @@ export default function Storm() {
       // the scrub-born gyre unwinds on its own over a few seconds
       gyre *= Math.exp(-frameDt * 0.4);
       if (gyre < 0.005) gyre = 0;
+      panX += (panXTarget - panX) * Math.min(1, frameDt * 3);
+      panY += (panYTarget - panY) * Math.min(1, frameDt * 3);
+
+      // storm cells: each keeps bumping its patch of sea until it decays
+      // (~14s) or a ceremony hold snuffs it out early.
+      for (let i = cells.length - 1; i >= 0; i--) {
+        const cell = cells[i];
+        const age = (simNow - cell.t0) / 1000;
+        if (age > 14) {
+          cells.splice(i, 1);
+          setHasBuilt(cells.length > 0);
+          continue;
+        }
+        if (Math.floor(age * 1.1) !== Math.floor((age - frameDt * timeScale) * 1.1)) {
+          manualCrestsRef.current.push({ x: cell.x, t0: simNow, strength: 14 * cell.strength });
+          if (manualCrestsRef.current.length > 12) manualCrestsRef.current.shift();
+        }
+      }
 
       stormSpikeRef.current *= 0.985;
       if (stormSpikeRef.current < 0.001) stormSpikeRef.current = 0;
@@ -925,11 +1160,14 @@ export default function Storm() {
         if (uMaelstromLoc) gl.uniform1f(uMaelstromLoc, ml);
         if (uFlashLoc) gl.uniform1f(uFlashLoc, flashAdd);
         if (uChargeLoc) gl.uniform1f(uChargeLoc, cq);
+        if (uLensLoc) gl.uniform1f(uLensLoc, lens);
+        if (uSeasonLoc) gl.uniform1f(uSeasonLoc, season);
+        if (uPanLoc) gl.uniform2f(uPanLoc, panX, panY);
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       } else {
         const wctx = water.getContext("2d");
         if (wctx) {
-          const dpr = Math.min(window.devicePixelRatio || 1, 2);
+          const dpr = resolveDpr(tier, { embedded, reducedMotion: reduce });
           wctx.setTransform(dpr, 0, 0, dpr, 0, 0);
           const skyMix = (1 - s);
           wctx.fillStyle = `rgba(${Math.round(80 + skyMix * 160)},${Math.round(96 + skyMix * 144)},${Math.round(120 + skyMix * 110)},1)`;
@@ -1014,7 +1252,7 @@ export default function Storm() {
       lctx.stroke();
 
       // ambient wind rising as pressure drops.
-      if (!reduce && s > 0.32 && Math.random() < (s - 0.28) * 0.05) {
+      if (!reduce && s > 0.32 && Math.random() < (s - 0.28) * 0.05 * detail.particles) {
         spawnWindStreak(Math.random() * h * SEA_TOP * 0.9, s > 0.7);
       }
 
@@ -1076,7 +1314,7 @@ export default function Storm() {
       const step = w / samples;
       const breakThreshold = 0.85 - s * 0.30;
       const emitRate = s > 0.05 ? s * 120 : 0;
-      const emitProbPerCrest = Math.min(0.65, emitRate / 90);
+      const emitProbPerCrest = Math.min(0.65, emitRate / 90) * detail.particles;
 
       const windSkewX = Math.cos(windDirRef.current) * 6;
       const windPhase = Math.cos(windDirRef.current);
@@ -1234,6 +1472,21 @@ export default function Storm() {
         lctx.beginPath();
         lctx.arc(vortexCx, vortexCy, r0, 0, Math.PI * 2);
         lctx.fill();
+      }
+
+      // storm cells: a faint turning ring marks each planted cell so the
+      // hand can find it again to snuff it out.
+      for (const cell of cells) {
+        const age = (simNow - cell.t0) / 1000;
+        const life = Math.max(0, 1 - age / 14);
+        const cy = Math.max(cell.y, h * SEA_TOP + 10);
+        lctx.save();
+        lctx.strokeStyle = `rgba(200, 220, 255, ${(0.10 + life * 0.10) * cell.strength})`;
+        lctx.lineWidth = 1;
+        lctx.beginPath();
+        lctx.ellipse(cell.x, cy, 24 + Math.sin(simNow * 0.002 + cell.id) * 4, 9, 0, 0, Math.PI * 2);
+        lctx.stroke();
+        lctx.restore();
       }
 
       // ── particle integration + render ─────────────────────────
@@ -1400,8 +1653,25 @@ export default function Storm() {
       cancelAnimationFrame(raf);
       ro.disconnect();
       detachGestures();
+      detachVessel();
+      unvis();
+      ungal();
       dischargeRef.current = null;
+      clearCellsRef.current = () => {};
+      water.removeEventListener("webglcontextlost", onContextLost);
+      water.removeEventListener("webglcontextrestored", onContextRestored);
+      delete wrap.dataset.lensRaised;
+      if (gl) {
+        if (glProg) gl.deleteProgram(glProg);
+        if (vbo) gl.deleteBuffer(vbo);
+      }
     };
+  }, []);
+
+  const letGo = useCallback(() => {
+    clearCellsRef.current();
+    getFieldAudio().thud();
+    haptics.roll();
   }, []);
 
   // ── barometer dial handlers ──────────────────────────────────────
@@ -1584,6 +1854,8 @@ export default function Storm() {
       </div>
 
       <div className="storm-gesture" aria-hidden="true">swipe sky to charge · sculpt the sea · turn pressure</div>
+
+      <LetGo label="let the storm pass" onLetGo={letGo} visible={hasBuilt} />
 
       {/* ── wind rose (top right) ────────────────────────────────── */}
       <div

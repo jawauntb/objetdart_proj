@@ -358,6 +358,71 @@ for (const seed of [1, 42, 0x5eed, 0xbeef, 991]) {
   assert.equal(S.divideCell(small, -1, 1), -1, "and an index off the sheet does nothing");
 }
 
+// —— apoptosis: a cell resorbed, the ring around it left intact ——————
+// The bugs this catches: a removed cell's bonds left dangling so they
+// could heal back into a phantom edge once the slot is reused (the killed
+// edges must be compacted out of the live range, not merely marked dead);
+// the index-swap that keeps 0..n-1 packed mis-wiring an edge that pointed
+// at the swapped-in cell, producing a self-loop or a dangling reference;
+// and neighbours that were already bonded to each other losing that bond
+// as a side effect of removing the cell between them.
+{
+  const sheet = S.buildSheet(11, 7, 7, 0.07);
+  const i = 24; // interior, six neighbours
+  const neighbours = [];
+  for (let e = 0; e < sheet.ecount; e++) {
+    if (sheet.ea[e] === i) neighbours.push(sheet.eb[e]);
+    else if (sheet.eb[e] === i) neighbours.push(sheet.ea[e]);
+  }
+  assert.equal(neighbours.length, 6, "the mother is interior");
+  // Adjacent neighbours around a hex ring are one SPACING apart from each
+  // other too, so at least some of them are already mutually bonded —
+  // that's the bond the gap is supposed to close on.
+  const ringBondsBefore = [];
+  for (let a = 0; a < neighbours.length; a++) {
+    for (let b = a + 1; b < neighbours.length; b++) {
+      const p = neighbours[a];
+      const q = neighbours[b];
+      for (let e = 0; e < sheet.ecount; e++) {
+        if (!sheet.live[e]) continue;
+        if ((sheet.ea[e] === p && sheet.eb[e] === q) || (sheet.eb[e] === p && sheet.ea[e] === q)) {
+          ringBondsBefore.push([p, q]);
+        }
+      }
+    }
+  }
+  assert.ok(ringBondsBefore.length > 0, "some ring neighbours are already bonded to each other");
+
+  const nBefore = sheet.n;
+  const ecountBefore = sheet.ecount;
+  const ok = S.apoptose(sheet, i);
+  assert.ok(ok, "apoptosis on a real cell succeeds");
+  assert.equal(sheet.n, nBefore - 1, "exactly one cell is gone");
+  assert.equal(sheet.ecount, ecountBefore - 6, "exactly the six bonds it held are gone with it");
+
+  for (let e = 0; e < sheet.ecount; e++) {
+    assert.notEqual(sheet.ea[e], sheet.eb[e], "the index swap never produces a self-loop edge");
+  }
+  // The only index the removal ever renames is the old last cell, swapped
+  // into the gap's slot — everything else keeps its meaning.
+  const after = (x) => (x === nBefore - 1 ? i : x);
+  for (const [p0, q0] of ringBondsBefore) {
+    const p = after(p0);
+    const q = after(q0);
+    const stillLive = sheet.live.slice(0, sheet.ecount).some((lv, e) => {
+      if (!lv) return false;
+      const a = sheet.ea[e];
+      const b = sheet.eb[e];
+      return (a === p && b === q) || (b === p && a === q);
+    });
+    assert.ok(stillLive, `ring neighbours ${p0}-${q0} stay bonded — the gap closes on an edge that was already there`);
+  }
+
+  assert.equal(S.apoptose(sheet, -1), false, "an index off the sheet does nothing");
+  assert.equal(S.apoptose(sheet, sheet.n), false, "and neither does one at n");
+  assert.equal(sheet.n, nBefore - 1, "refused calls change nothing");
+}
+
 // —— differentiation is a function of place and clock ————————————
 {
   const field = S.morphogenField(0x30);
@@ -518,5 +583,5 @@ for (const seed of [1, 42, 0x5eed, 0xbeef, 991]) {
 }
 
 console.log(
-  "sheet ok: the verlet sheet identical at 60 and 120 Hz over a full second, relaxation removing exactly its stiffness fraction per pass and converging on a strained lattice, an interior cell knit by exactly six bonds, the chord reading back into the degree spectrum it came from, every single cut bond strictly raising the dissonance, mitosis conserving area to 1e-12 with every neighbour rewired to exactly one daughter, differentiation pure and monotone, constriction bounded away from zero, and storage returning the sheet still singing its chord",
+  "sheet ok: the verlet sheet identical at 60 and 120 Hz over a full second, relaxation removing exactly its stiffness fraction per pass and converging on a strained lattice, an interior cell knit by exactly six bonds, the chord reading back into the degree spectrum it came from, every single cut bond strictly raising the dissonance, mitosis conserving area to 1e-12 with every neighbour rewired to exactly one daughter, apoptosis dropping exactly the bonds it held with no self-loop left behind and the ring around it still closed, differentiation pure and monotone, constriction bounded away from zero, and storage returning the sheet still singing its chord",
 );

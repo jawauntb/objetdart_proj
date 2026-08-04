@@ -37,6 +37,14 @@ export const MAX_NUCLEI = 6;
 /** The heaviest drop the field will hold together at all. */
 export const MAX_A = 260;
 
+/**
+ * The heaviest drop a bare hand can gather out of the vacuum: iron — the
+ * same wall /atoms hits from above, for the same reason. Everything past it
+ * has to be built by neutron capture in a flux, which is the r-process and
+ * the only road to the actinides that has ever existed.
+ */
+export const HAND_MAX_A = 56;
+
 // ————————————————————————————————————————— the semi-empirical mass formula
 
 /**
@@ -366,6 +374,33 @@ export function nuclideFromSeed(seed: number): Nuclide {
   const a = 2 + Math.floor(Math.pow(rng(), 2.1) * 54);
   const z = mostStableZ(a);
   return { z, n: a - z };
+}
+
+/**
+ * How many nucleons a hand has gathered by holding, counted from the moment
+ * the binding tier is crossed: one at the tier, then an accelerating
+ * accretion — the vacuum pays faster the longer it is asked — saturating at
+ * iron and never going past it. Monotone non-decreasing in heldMs, zero
+ * before the tier, so a hold is a continuous axis and not a switch: how long
+ * the hand presses IS which nuclide it makes.
+ */
+export function accretedA(heldMs: number, tierMs = 2500): number {
+  if (!(heldMs >= tierMs)) return 0;
+  const s = (heldMs - tierMs) / 1000;
+  return Math.min(HAND_MAX_A, 1 + Math.floor(s * s * 3.5));
+}
+
+/**
+ * The nuclide a gathered mass settles into: the floor of the valley at that
+ * mass number, so anything a hand builds is born stable-ish and has to be
+ * driven off the valley (by flux, by strike) to become interesting. A = 1 is
+ * the vacuum's cheapest gift — a lone neutron, which is itself unstable.
+ */
+export function valleyNuclide(a: number): Nuclide {
+  const ai = Math.max(1, Math.floor(a));
+  if (ai <= 1) return { z: 0, n: 1 };
+  const z = mostStableZ(ai);
+  return { z, n: ai - z };
 }
 
 /**

@@ -52,6 +52,13 @@ import { stirTurbulence } from "@/lib/turbulence";
 import { SCALE_BANDS, entryScaleInto } from "@/lib/scale";
 import LetGo from "@/components/LetGo";
 import {
+  resolveDpr,
+  onGalleryPause,
+  onVisibility,
+  isEmbeddedFrame,
+  createFrameGovernor,
+} from "@/lib/room-runtime";
+import {
   DENSITY_GRID,
   DENSITY_THRESHOLD,
   GROWTH_MAX,
@@ -653,8 +660,13 @@ export default function DeepSpaceWeb() {
       save();
     };
 
+    // ——— performance contract (room-runtime) ———
+    const gov = createFrameGovernor();
+    let sleeping = false;
+    let galleryPaused = false;
+
     // ——— geometry ———
-    const dpr = () => Math.min(1.5, window.devicePixelRatio || 1);
+    const dpr = () => resolveDpr(gov.tier(), { embedded: isEmbeddedFrame(), reducedMotion: reduced, maxDpr: 1.5 });
     const resize = () => {
       const r = wrap.getBoundingClientRect();
       const ratio = dpr();
@@ -709,7 +721,27 @@ export default function DeepSpaceWeb() {
       else angle?.drawArraysInstancedANGLE(gl!.TRIANGLE_STRIP, 0, verts, instances);
     };
 
-    if (gl && (gl2 || angle)) {
+    // The GL setup below (programs, buffers, texture) is wrapped in a
+    // function so `webglcontextrestored` can rebuild it in place — mobile
+    // GPUs reclaim contexts on backgrounding, and this room previously had
+    // no recovery path at all.
+    const teardownGL = () => {
+      if (!gl) return;
+      for (const b of [quadBuf, cornerBuf, posBuf, metaBuf, meta2Buf, dynBuf]) {
+        if (b) gl.deleteBuffer(b);
+      }
+      if (volTex) gl.deleteTexture(volTex);
+      if (volProg) gl.deleteProgram(volProg);
+      if (galProg) gl.deleteProgram(galProg);
+      quadBuf = cornerBuf = posBuf = metaBuf = meta2Buf = dynBuf = null;
+      volTex = null;
+      volProg = null;
+      galProg = null;
+      glOk = false;
+    };
+
+    const initGL = () => {
+      if (gl && (gl2 || angle)) {
       const compile = (type: number, src: string) => {
         const sh = gl.createShader(type);
         if (!sh) return null;
@@ -813,7 +845,20 @@ export default function DeepSpaceWeb() {
           dyn: gl.getAttribLocation(galProg, "a_dyn"),
         };
       }
-    }
+      }
+    };
+    initGL();
+
+    const onGlLost = (ev: Event) => {
+      ev.preventDefault();
+      glOk = false;
+    };
+    const onGlRestored = () => {
+      teardownGL();
+      initGL();
+    };
+    glCanvas.addEventListener("webglcontextlost", onGlLost, false);
+    glCanvas.addEventListener("webglcontextrestored", onGlRestored, false);
 
     // ——— the grammar ———
     const detachGestures = attachGestures(
@@ -950,6 +995,13 @@ export default function DeepSpaceWeb() {
           // a circling hand rolls the sky about the line of sight
           rollVel += e.angularVelocity * 0.02;
         },
+        pan2: (e) => {
+          lastInteractionAt = performance.now();
+          // two fingers pan the frame — the same parallax one finger already
+          // gives the volume, addressed at the map layer instead of the material
+          panX = clamp(panX - (e.dx / Math.max(1, width)) * 1.4, -0.8, 0.8);
+          panY = clamp(panY + (e.dy / Math.max(1, height)) * 1.0, -0.55, 0.55);
+        },
         rhythm: (e) => {
           if (e.stability > 0.68) tutti();
         },
@@ -1081,6 +1133,8 @@ export default function DeepSpaceWeb() {
     // ——— the loop ———
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
+      gov.beginFrame(now);
+      if (sleeping || galleryPaused) return; // no draw while hidden or embedded-paused
       const delta = Math.min(64, now - last);
       last = now;
       const dt = delta / 1000;
@@ -1348,6 +1402,15 @@ export default function DeepSpaceWeb() {
       }
     };
     raf = requestAnimationFrame(draw);
+    // no draw while hidden or paused inside a gallery iframe
+    const offVis = onVisibility((hiddenNow) => {
+      sleeping = hiddenNow;
+      if (!hiddenNow && !galleryPaused && !raf) raf = requestAnimationFrame(draw);
+    });
+    const offGallery = onGalleryPause((pausedNow) => {
+      galleryPaused = pausedNow;
+      if (!pausedNow && !sleeping && !raf) raf = requestAnimationFrame(draw);
+    });
 
     return () => {
       observer.disconnect();
@@ -1356,15 +1419,12 @@ export default function DeepSpaceWeb() {
       wrap.removeEventListener("keydown", onKeyDown);
       wrap.removeEventListener("keyup", onKeyUp);
       mq.removeEventListener?.("change", onMq);
+      offVis();
+      offGallery();
+      glCanvas.removeEventListener("webglcontextlost", onGlLost);
+      glCanvas.removeEventListener("webglcontextrestored", onGlRestored);
       cancelAnimationFrame(raf);
-      if (gl) {
-        for (const b of [quadBuf, cornerBuf, posBuf, metaBuf, meta2Buf, dynBuf]) {
-          if (b) gl.deleteBuffer(b);
-        }
-        if (volTex) gl.deleteTexture(volTex);
-        if (volProg) gl.deleteProgram(volProg);
-        if (galProg) gl.deleteProgram(galProg);
-      }
+      teardownGL();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

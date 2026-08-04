@@ -7,6 +7,16 @@ import { THRESHOLDS } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import * as haptics from "@/lib/haptics";
+import LetGo from "@/components/LetGo";
+import {
+  createFrameGovernor,
+  detailForTier,
+  isEmbeddedFrame,
+  onGalleryPause,
+  onVisibility,
+  resolveDpr,
+  type QualityTier,
+} from "@/lib/room-runtime";
 
 /**
  * /watch — the "object that emanates."
@@ -30,8 +40,17 @@ export default function Watch() {
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [whisperState, setWhisperState] = useState<Whisper | null>(null);
+  // the wall's kept material: small pinned snapshots of the room, planted
+  // by a dwell hold on bare wall, annihilated by a ceremony hold on one.
+  const pinsRef = useRef<Array<{ x: number; y: number; seed: number }>>([]);
+  const [hasPins, setHasPins] = useState(false);
+  const PIN_KEY = "objetdart:watch:pins:v1";
 
   const cursor = useRef({ x: -9999, y: -9999, tx: -9999, ty: -9999, over: false });
+  const detailRef = useRef(1); // detailForTier(tier).particles, set once per frame
+  const panRef = useRef({ x: 0, y: 0, tx: 0, ty: 0 }); // pan2: shifts the frame
+  const lensRef = useRef({ cur: 0, target: 0 }); // twist: the moonlit lens
+  const seasonRef = useRef(0); // 3-finger twist: the room's slow season
   const lit = useRef({ candle: 0, glass: 0, book: 0, record: 0, window: 0, clock: 0, music: 0, frame: 0 });
 
   // ── the room's clock + law-layer state (gesture grammar) ──
@@ -154,14 +173,48 @@ export default function Watch() {
     law.current.lastFrameAt = -1;
     law.current.lastGestureAt = performance.now();
 
+    // ── performance contract (room-runtime): frame governor + visibility
+    // sleep + DPR ceiling, shared with every other room on the site. ──
+    const embedded = isEmbeddedFrame();
+    const gov = createFrameGovernor(embedded ? "medium" : "high");
+    let tier: QualityTier = gov.tier();
+    let hidden = document.hidden;
+    let galleryPaused = false;
+    let faceDown = false;
+    let sleeping = false;
+    const syncSleep = () => { sleeping = hidden || galleryPaused || faceDown; };
+    const unvis = onVisibility((h) => { hidden = h; syncSleep(); });
+    const ungal = onGalleryPause((p) => { galleryPaused = p; syncSleep(); });
+
     const resize = () => {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = resolveDpr(tier, { embedded, reducedMotion: reduce });
       cv.width = window.innerWidth * dpr;
       cv.height = window.innerHeight * dpr;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     };
     resize();
     window.addEventListener("resize", resize);
+
+    // ── cached background sprites (room-runtime perf contract): the wall,
+    // sky and sea used to allocate a fresh CanvasGradient every frame —
+    // rebuilt now only every few frames (their color drifts on a ~12s
+    // breath, so a few frames of lag is invisible) instead of all 60. ──
+    const bgCache = { frame: 0, wall: null as CanvasGradient | null, sky: null as CanvasGradient | null, sea: null as CanvasGradient | null };
+    // window-breath fog: a per-touch bloom that used to bake a fresh radial
+    // gradient every element every frame — now one shared sprite.
+    const breathSprite = document.createElement("canvas");
+    breathSprite.width = 128;
+    breathSprite.height = 128;
+    const breathSpriteCtx = breathSprite.getContext("2d");
+    if (breathSpriteCtx) {
+      const bg = breathSpriteCtx.createRadialGradient(64, 64, 0, 64, 64, 64);
+      bg.addColorStop(0, "rgba(245, 245, 250, 1)");
+      bg.addColorStop(1, "rgba(245, 245, 250, 0)");
+      breathSpriteCtx.fillStyle = bg;
+      breathSpriteCtx.beginPath();
+      breathSpriteCtx.arc(64, 64, 64, 0, Math.PI * 2);
+      breathSpriteCtx.fill();
+    }
 
     // geometry — re-derive object positions every frame to follow viewport.
     const geometry = () => {
@@ -526,6 +579,32 @@ export default function Watch() {
     // the law: drag gusts wind through the room, hold slows its time.
     // A circling finger turns the crown of the room's day.
     // Pinch and pan2 stay unbound — the frame belongs to the manifold.
+    // the wall's kept pins — loaded once, saved on every change.
+    try {
+      const raw = localStorage.getItem(PIN_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as { pins?: Array<{ x: number; y: number; seed: number }> };
+        if (Array.isArray(parsed.pins)) pinsRef.current = parsed.pins.slice(-24);
+      }
+    } catch { /* fresh */ }
+    setHasPins(pinsRef.current.length > 0);
+    const savePins = () => {
+      try { localStorage.setItem(PIN_KEY, JSON.stringify({ pins: pinsRef.current })); } catch { /* noop */ }
+      setHasPins(pinsRef.current.length > 0);
+    };
+    const nearestPin = (x: number, y: number): number => {
+      let best = -1; let bestD = 26;
+      pinsRef.current.forEach((p, i) => {
+        const d = Math.hypot(p.x - x, p.y - y);
+        if (d < bestD) { bestD = d; best = i; }
+      });
+      return best;
+    };
+    let holdPinHit = -1;
+    let holdPinX = 0;
+    let holdPinY = 0;
+    let holdPinCommitted = false;
+
     let dragKind: "" | "candle" | "record" | "glass" = "";
     let dragLastAngle = 0;
     let dragLastAudioAt = 0;
@@ -535,11 +614,54 @@ export default function Watch() {
     let lastGustCueAt = 0;
     let lastCrownAt = 0;
 
+    let lensTwistAcc = 0;
     const detachGestures = attachGestures(cv, {
       tap: (e) => {
         law.current.lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          // tutti — every lit object answers at once.
+          lit.current.candle = 1; lit.current.clock = 1; lit.current.music = 1;
+          lit.current.record = 1; lit.current.window = 1; lit.current.book = 1;
+          try { getFieldAudio().chime(); } catch { /* ignore */ }
+          try { haptics.bloom(); } catch { /* ignore */ }
+          useField.getState().recordTape("region", 0.6, "watch:tutti");
+          return;
+        }
+        if (e.fingers === 2) {
+          // step back: lower the raised moonlit lens first. ScaleTravel
+          // reads data-lens-raised and yields to us when this is set.
+          if (lensRef.current.target > 0.5) {
+            lensRef.current.target = 0;
+            cv.removeAttribute("data-lens-raised");
+            try { haptics.tap(); } catch { /* ignore */ }
+          }
+          return;
+        }
         if (e.fingers !== 1) return; // the room absorbs frame/law taps
         dispatchTap(e.x, e.y, e.intensity, e.count);
+      },
+      pan2: (e) => {
+        law.current.lastGestureAt = performance.now();
+        panRef.current.tx = Math.max(-36, Math.min(36, panRef.current.tx + e.dx * 0.2));
+        panRef.current.ty = Math.max(-24, Math.min(24, panRef.current.ty + e.dy * 0.2));
+      },
+      twist: (e) => {
+        law.current.lastGestureAt = performance.now();
+        if (e.fingers === 3) {
+          // three-finger twist = season: a slow warm/cool drift.
+          if (e.phase === "move") seasonRef.current += e.angle * 0.7;
+          return;
+        }
+        if (e.phase === "start") lensTwistAcc = 0;
+        if (e.phase === "move") lensTwistAcc += e.angle;
+        if (e.phase === "end" && Math.abs(lensTwistAcc) > 0.9) {
+          lensRef.current.target = lensRef.current.target > 0.5 ? 0 : 1;
+          if (lensRef.current.target > 0.5) cv.setAttribute("data-lens-raised", "1");
+          else cv.removeAttribute("data-lens-raised");
+          try { oneShotChime(getFieldAudio(), 900, 1100, 0.12); } catch { /* ignore */ }
+          try { haptics.lens(); } catch { /* ignore */ }
+          useField.getState().recordTape("sigil", 0.5, "watch:lens");
+        }
       },
       drag: (e) => {
         law.current.lastGestureAt = performance.now();
@@ -684,12 +806,41 @@ export default function Watch() {
           holdWhat = hitTest(e.x, e.y);
           holdSnuffed = false;
           holdVigil = false;
+          if (holdWhat === "wall") {
+            holdPinX = e.x; holdPinY = e.y;
+            holdPinHit = nearestPin(e.x, e.y);
+            holdPinCommitted = false;
+          }
           return;
         }
         if (e.phase === "release") {
           // a firm short press still speaks the tap verb (no punishment)
           if (e.tier === 1) dispatchTap(e.x, e.y, e.intensity, 1);
           holdWhat = "";
+          return;
+        }
+        if (holdWhat === "wall") {
+          if (holdPinHit >= 0) {
+            // ceremony hold on an existing pin: its solemn act is
+            // annihilation — the touch-reachable delete.
+            if (e.tier >= 3 && !holdPinCommitted) {
+              holdPinCommitted = true;
+              pinsRef.current.splice(holdPinHit, 1);
+              savePins();
+              try { getFieldAudio().bell(); } catch { /* ignore */ }
+              try { haptics.bloom(); } catch { /* ignore */ }
+              useField.getState().recordTape("kept", 0.8, "watch:pin-let-go");
+            }
+          } else if (e.tier >= 2 && !holdPinCommitted) {
+            // dwell on bare wall plants a pinned snapshot of the room.
+            holdPinCommitted = true;
+            pinsRef.current.push({ x: holdPinX, y: holdPinY, seed: Math.round(holdPinX * 97 + holdPinY * 53) });
+            if (pinsRef.current.length > 24) pinsRef.current.shift();
+            savePins();
+            try { getFieldAudio().spark(); } catch { /* ignore */ }
+            try { haptics.ripple(0.5); } catch { /* ignore */ }
+            useField.getState().recordTape("kept", 0.6, "watch:pin-planted");
+          }
           return;
         }
         if (holdWhat !== "candle") return;
@@ -771,6 +922,23 @@ export default function Watch() {
     // keeps the tick and the haptic; the shiver and flinch stay still.
     const knockState = { at: -1e9, intensity: 0 };
     const detachVessel = onVessel({
+      tilt: ({ gamma }) => {
+        if (reduce) return;
+        // gravity leans the flame and the whole room's drag lean, gently.
+        candleState.current.dragLean += (gamma * 0.02 - candleState.current.dragLean) * 0.06;
+      },
+      shake: (e) => {
+        if (reduce) return;
+        law.current.lastGestureAt = performance.now();
+        law.current.gust = Math.max(-1, Math.min(1, law.current.gust + e.intensity * (Math.sin(performance.now() * 0.011) > 0 ? 1 : -1)));
+        try { haptics.chop(); } catch { /* ignore */ }
+        useField.getState().recordTape("region", 0.4, "watch:shake");
+      },
+      flip: ({ faceDown: fd }) => {
+        faceDown = fd;
+        syncSleep();
+        if (fd) { try { haptics.roll(); } catch { /* ignore */ } }
+      },
       knock: (e) => {
         const nowMs = performance.now();
         if (nowMs - knockState.at < 350) return;
@@ -812,6 +980,19 @@ export default function Watch() {
 
     // ── render loop ──────────────────────────────────────────────
     const draw = (now: number) => {
+      tier = gov.beginFrame(now);
+      if (sleeping) { raf = requestAnimationFrame(draw); return; }
+      const detail = detailForTier(tier);
+      detailRef.current = detail.particles;
+      // two-finger pan shifts the whole room within the frame, eased back
+      // to rest — distinct from a one-finger drag, which touches an object.
+      const pan = panRef.current;
+      pan.x += (pan.tx - pan.x) * 0.1;
+      pan.y += (pan.ty - pan.y) * 0.1;
+      pan.tx *= 0.92;
+      pan.ty *= 0.92;
+      ctx.save();
+      ctx.translate(pan.x, pan.y);
       // the room's own clock: three fingers dilate it, the crown winds it —
       // sun, pendulum, flame wobble and the little boat all read from simT
       const L = law.current;
@@ -892,12 +1073,6 @@ export default function Watch() {
       const wallR = 28 - cold * 16 + warmShift * 8;
       const wallG2 = 22 - cold * 10 + warmShift * 4;
       const wallB = 18 - cold * 2 + cold * 6 + breath * 2;
-      const wallGrad = ctx.createLinearGradient(0, 0, 0, g.h);
-      wallGrad.addColorStop(0, `rgba(${wallR | 0}, ${wallG2 | 0}, ${wallB | 0}, 1)`);
-      wallGrad.addColorStop(1, `rgba(${(wallR * 0.5) | 0}, ${(wallG2 * 0.55) | 0}, ${(wallB * 0.8) | 0}, 1)`);
-      ctx.fillStyle = wallGrad;
-      ctx.fillRect(0, 0, g.w, g.h);
-
       // ── window: sky + sea ──
       const skyR = 10 + sun * 90 + dawnWarmth * 80;
       const skyG = 18 + sun * 110 + dawnWarmth * 60;
@@ -905,19 +1080,50 @@ export default function Watch() {
       const seaR = 8 + sun * 30;
       const seaG = 18 + sun * 50;
       const seaB = 38 + sun * 70;
-
-      const skyGrad = ctx.createLinearGradient(0, g.winTop, 0, g.winBottom * 0.7);
-      skyGrad.addColorStop(0, `rgb(${skyR | 0}, ${skyG | 0}, ${skyB | 0})`);
-      skyGrad.addColorStop(1, `rgb(${(skyR * 0.8) | 0}, ${(skyG * 0.8) | 0}, ${(skyB * 0.85) | 0})`);
-      ctx.fillStyle = skyGrad;
-      ctx.fillRect(g.winLeft, g.winTop, g.winRight - g.winLeft, g.winBottom - g.winTop);
-
       const seaTop = g.winTop + (g.winBottom - g.winTop) * 0.65;
-      const seaGrad = ctx.createLinearGradient(0, seaTop, 0, g.winBottom);
-      seaGrad.addColorStop(0, `rgb(${(seaR + 10) | 0}, ${(seaG + 20) | 0}, ${(seaB + 20) | 0})`);
-      seaGrad.addColorStop(1, `rgb(${seaR | 0}, ${seaG | 0}, ${seaB | 0})`);
-      ctx.fillStyle = seaGrad;
+
+      // wall/sky/sea gradients used to be rebuilt every frame — their color
+      // only drifts on the ~12s breath, so rebuilding every few frames
+      // (throttled harder on lower tiers) is visually identical and a
+      // fraction of the allocation cost.
+      bgCache.frame++;
+      const bgThrottle = tier === "low" || tier === "sleep" ? 6 : tier === "medium" ? 4 : 3;
+      if (!bgCache.wall || bgCache.frame % bgThrottle === 0) {
+        const wallGrad = ctx.createLinearGradient(0, 0, 0, g.h);
+        wallGrad.addColorStop(0, `rgba(${wallR | 0}, ${wallG2 | 0}, ${wallB | 0}, 1)`);
+        wallGrad.addColorStop(1, `rgba(${(wallR * 0.5) | 0}, ${(wallG2 * 0.55) | 0}, ${(wallB * 0.8) | 0}, 1)`);
+        bgCache.wall = wallGrad;
+        const skyGrad = ctx.createLinearGradient(0, g.winTop, 0, g.winBottom * 0.7);
+        skyGrad.addColorStop(0, `rgb(${skyR | 0}, ${skyG | 0}, ${skyB | 0})`);
+        skyGrad.addColorStop(1, `rgb(${(skyR * 0.8) | 0}, ${(skyG * 0.8) | 0}, ${(skyB * 0.85) | 0})`);
+        bgCache.sky = skyGrad;
+        const seaGrad = ctx.createLinearGradient(0, seaTop, 0, g.winBottom);
+        seaGrad.addColorStop(0, `rgb(${(seaR + 10) | 0}, ${(seaG + 20) | 0}, ${(seaB + 20) | 0})`);
+        seaGrad.addColorStop(1, `rgb(${seaR | 0}, ${seaG | 0}, ${seaB | 0})`);
+        bgCache.sea = seaGrad;
+      }
+      ctx.fillStyle = bgCache.wall!;
+      ctx.fillRect(0, 0, g.w, g.h);
+      ctx.fillStyle = bgCache.sky!;
+      ctx.fillRect(g.winLeft, g.winTop, g.winRight - g.winLeft, g.winBottom - g.winTop);
+      ctx.fillStyle = bgCache.sea!;
       ctx.fillRect(g.winLeft, seaTop, g.winRight - g.winLeft, g.winBottom - seaTop);
+
+      // twist (2 fingers) = rotate the lens: a moonlit register — the warm
+      // room cools and the window brightens, as if the eye adjusted to the
+      // dark outside. One fillRect, never a gradient per element.
+      const lens = lensRef.current;
+      lens.cur += (lens.target - lens.cur) * 0.06;
+      if (lens.cur > 0.01) {
+        ctx.fillStyle = `rgba(40, 60, 90, ${lens.cur * 0.22})`;
+        ctx.fillRect(0, 0, g.winLeft, g.h);
+        ctx.fillStyle = `rgba(210, 225, 255, ${lens.cur * 0.14})`;
+        ctx.fillRect(g.winLeft, g.winTop, g.winRight - g.winLeft, g.winBottom - g.winTop);
+      }
+      // three-finger twist = season: a slow, render-only warm/cool cast.
+      const seasonWarm = Math.sin(seasonRef.current) * 0.5 + 0.5;
+      ctx.fillStyle = `rgba(${Math.round(200 + 40 * seasonWarm)}, ${Math.round(150 + 20 * (1 - seasonWarm))}, ${Math.round(120 + 50 * (1 - seasonWarm))}, 0.018)`;
+      ctx.fillRect(0, 0, g.w, g.h);
 
       if (sun < 0.4) {
         const starAlpha = (0.4 - sun) * 2.2;
@@ -1043,8 +1249,9 @@ export default function Watch() {
         ctx.arc(reflX, reflY, reflR * 2.2, 0, 7);
         ctx.fill();
         if (scintActive) {
-          for (let i = 0; i < 6; i++) {
-            const ang = (i / 6) * Math.PI * 2 + t * 1.6;
+          const scintN = Math.max(1, Math.round(6 * detailRef.current));
+          for (let i = 0; i < scintN; i++) {
+            const ang = (i / scintN) * Math.PI * 2 + t * 1.6;
             const rr = reflR * (1.5 + 0.7 * Math.sin(t * 5 + i));
             const sxk = reflX + Math.cos(ang) * rr;
             const syk = reflY + Math.sin(ang) * rr;
@@ -1069,21 +1276,23 @@ export default function Watch() {
       ctx.stroke();
 
       windowBreath.current = windowBreath.current.filter((b) => now - b.t0 < 1400);
-      windowBreath.current.forEach((b) => {
-        const age = (now - b.t0) / 1400;
-        const r = 36 + age * 18;
-        const a = 0.18 * (1 - age);
-        const fg = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, r);
-        fg.addColorStop(0, `rgba(245, 245, 250, ${a})`);
-        fg.addColorStop(1, `rgba(245, 245, 250, 0)`);
+      if (windowBreath.current.length > 0 && breathSpriteCtx) {
         ctx.save();
         ctx.beginPath();
         ctx.rect(g.winLeft + 3, g.winTop + 3, g.winRight - g.winLeft - 6, g.winBottom - g.winTop - 6);
         ctx.clip();
-        ctx.fillStyle = fg;
-        ctx.fillRect(b.x - r, b.y - r, r * 2, r * 2);
+        // a cached sprite (baked once above), never a fresh gradient per
+        // touch bloom per frame.
+        for (const b of windowBreath.current) {
+          const age = (now - b.t0) / 1400;
+          const r = 36 + age * 18;
+          const a = 0.18 * (1 - age);
+          ctx.globalAlpha = a;
+          ctx.drawImage(breathSprite, b.x - r, b.y - r, r * 2, r * 2);
+        }
+        ctx.globalAlpha = 1;
         ctx.restore();
-      });
+      }
 
       // sill
       ctx.fillStyle = "rgba(76, 54, 34, 0.95)";
@@ -1306,6 +1515,18 @@ export default function Watch() {
           ctx.stroke();
         }
       });
+
+      // ── pinned snapshots — the wall's kept material ──
+      for (const p of pinsRef.current) {
+        ctx.fillStyle = "rgba(210, 190, 150, 0.14)";
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 5.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "rgba(240, 220, 180, 0.85)";
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 1.6, 0, Math.PI * 2);
+        ctx.fill();
+      }
 
       // ── table ──
       const tableY = g.tableTop;
@@ -1705,12 +1926,15 @@ export default function Watch() {
         ctx.stroke();
       }
 
+      ctx.restore(); // matches the pan translate opened at the top of draw()
       raf = requestAnimationFrame(draw);
     };
     raf = requestAnimationFrame(draw);
 
     return () => {
       cancelAnimationFrame(raf);
+      unvis();
+      ungal();
       window.removeEventListener("resize", resize);
       window.removeEventListener("pointermove", onHover);
       window.removeEventListener("pointerleave", onLeave);
@@ -1721,6 +1945,14 @@ export default function Watch() {
       if (recordState.clickTimer !== null) clearTimeout(recordState.clickTimer);
     };
   }, [whisperState]);
+
+  const letGoPins = () => {
+    pinsRef.current = [];
+    try { localStorage.setItem(PIN_KEY, JSON.stringify({ pins: [] })); } catch { /* noop */ }
+    setHasPins(false);
+    try { getFieldAudio().thud(); } catch { /* ignore */ }
+    try { haptics.roll(); } catch { /* ignore */ }
+  };
 
   // Whisper rendering uses a tiny overlay <div> rather than canvas — gives
   // us crisp italic typography matching the rest of the site, and the hover
@@ -1789,6 +2021,7 @@ export default function Watch() {
         }}
       />
       {renderWhisper()}
+      <LetGo label="let the pinned wall go" onLetGo={letGoPins} visible={hasPins} />
       <div className="watch-room-title" aria-hidden="true">the room</div>
       <style>{`
         /* Hide the global site chrome so the room fills the true viewport. */

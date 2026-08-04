@@ -18,8 +18,10 @@ function loadTsModule(path) {
     fileName: filename,
   }).outputText;
   const module = { exports: {} };
-  const sandbox = { module, exports: module.exports };
-  vm.runInNewContext(code, sandbox, { filename });
+  // Same realm as the test: vm.runInNewContext builds arrays, objects and
+  // strings on a foreign prototype chain, so deepStrictEqual rejects them
+  // against host literals of identical content.
+  new Function("module", "exports", code)(module, module.exports);
   return module.exports;
 }
 
@@ -40,6 +42,9 @@ const {
   coulombBarrier,
   captureQ,
   nuclideFromSeed,
+  accretedA,
+  valleyNuclide,
+  HAND_MAX_A,
   packOffsets,
   settlePopulation,
   symbolFor,
@@ -170,6 +175,44 @@ for (let i = 0; i < 200; i++) {
   assert.equal(nuc.z, mostStableZ(a), "a seeded drop sits on the valley floor");
   assert.ok(a >= 2 && a <= 56, `starters stay light (A=${a})`);
   assert.deepEqual(nuclideFromSeed(i * 2654435761), nuc, "same seed, same drop");
+}
+
+// — What a hand can gather by holding. The bugs this catches: a hold that
+//   fires once and stops deepening (the whole complaint), an accretion that
+//   walks past iron and hands the actinides over without the flux, and an
+//   off-by-one at the tier that makes the first press produce nothing.
+{
+  assert.equal(accretedA(0), 0, "nothing is gathered before the tier");
+  assert.equal(accretedA(2499), 0, "…not one nucleon early");
+  assert.equal(accretedA(2500), 1, "the tier itself yields exactly one");
+  let prev = 0;
+  for (let ms = 0; ms <= 60000; ms += 25) {
+    const a = accretedA(ms);
+    assert.ok(a >= prev, `accretion must never go backwards (${ms}ms)`);
+    assert.ok(a <= HAND_MAX_A, `a bare hand must never gather past iron (${ms}ms → A=${a})`);
+    prev = a;
+  }
+  assert.equal(accretedA(1e9), HAND_MAX_A, "an endless hold saturates at the iron wall");
+  assert.ok(accretedA(4500) > accretedA(3500), "the same hold, held longer, is a heavier drop");
+  // a different tier moves the whole curve, and only that
+  assert.equal(accretedA(900, 900), 1, "the tier is a parameter, not a constant baked in");
+  assert.equal(accretedA(899, 900), 0, "…on both sides of it");
+}
+
+// — The nuclide a gathered mass settles into sits on the valley floor, and
+//   the ceiling of the hand is literally iron-56. If mostStableZ ever drifts
+//   this is the assertion that notices.
+{
+  assert.deepEqual(valleyNuclide(1), { z: 0, n: 1 }, "the cheapest gift is a lone neutron");
+  assert.deepEqual(valleyNuclide(0), { z: 0, n: 1 }, "and nothing smaller exists");
+  for (let a = 2; a <= HAND_MAX_A; a++) {
+    const nuc = valleyNuclide(a);
+    assert.equal(nuc.z + nuc.n, a, `valleyNuclide(${a}) must conserve nucleons`);
+    assert.equal(nuc.z, mostStableZ(a), `valleyNuclide(${a}) must sit on the valley floor`);
+    assert.ok(nuc.n >= 0, "no negative neutrons");
+  }
+  assert.deepEqual(valleyNuclide(HAND_MAX_A), { z: 26, n: 30 }, "the hand's ceiling is iron-56 itself");
+  assert.equal(decayMode(26, 30), "stable", "and iron-56 is where the drop stops wanting");
 }
 
 // — Packing is deterministic, sized to A, and stays inside the drop.

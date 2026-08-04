@@ -15,6 +15,16 @@ import * as haptics from "@/lib/haptics";
 import { onVessel } from "@/lib/vessel";
 import { relaxTurbulence, stirTurbulence } from "@/lib/turbulence";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
+import LetGo from "@/components/LetGo";
+import {
+  createFrameGovernor,
+  detailForTier,
+  isEmbeddedFrame,
+  onGalleryPause,
+  onVisibility,
+  resolveDpr,
+  type QualityTier,
+} from "@/lib/room-runtime";
 
 /**
  * Charts — /charts route.
@@ -319,6 +329,9 @@ function solveTweakForRSI(
 export default function Charts() {
   // page-specific ambient bed: faint clockwork ticks
   useEffect(() => { getFieldAudio().setAmbientProfile("clockwork"); }, []);
+  useEffect(() => onVisibility((hidden) => {
+    if (hidden) getFieldAudio().setAmbientProfile("ocean");
+  }), []);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -379,6 +392,8 @@ export default function Charts() {
   const scanScaleRef = useRef({ cur: 1, target: 1 });     // 3-finger hold dilates it
   const entrainRef = useRef({ bpm: 0, until: 0, lastBeat: -1, pulse: 0 });
   const lastGestureAtRef = useRef(0);
+  const panRef = useRef({ x: 0, y: 0, tx: 0, ty: 0 }); // pan2: shifts the frame
+  const seasonRef = useRef(0); // 3-finger twist: the market's slow season
 
   // ── vessel state (the device is the plate's gravity) ──
   const tiltRef = useRef({ target: 0, cur: 0, over: false, lastCueAt: 0 });
@@ -484,8 +499,17 @@ export default function Charts() {
       typeof window !== "undefined" &&
       window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+    // ── performance contract (room-runtime): frame governor + DPR ceiling,
+    // shared with every other room. Visibility pause already lived here
+    // (document.hidden below) — gallery-pause joins it. ──
+    const embedded = isEmbeddedFrame();
+    const gov = createFrameGovernor(embedded ? "medium" : "high");
+    let tier: QualityTier = gov.tier();
+    let galleryPaused = false;
+    const ungal = onGalleryPause((p) => { galleryPaused = p; });
+
     const resize = () => {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = resolveDpr(tier, { embedded, reducedMotion: reduce });
       const w = canvas.clientWidth;
       const h = canvas.clientHeight;
       canvas.width = Math.max(1, Math.floor(w * dpr));
@@ -532,15 +556,18 @@ export default function Charts() {
     let restedWhileHidden = false;
 
     const draw = (now: number) => {
+      tier = gov.beginFrame(now);
+      const detail = detailForTier(tier);
       const L = layoutRef.current;
       if (!L) {
         raf = requestAnimationFrame(draw);
         return;
       }
-      // a hidden tab costs nothing: one settled frame so the plate is never
-      // blank, then no paint at all, and the clock resumes from here rather
-      // than jumping the breath forward
-      if (document.hidden) {
+      // a hidden tab (or a paused gallery iframe) costs nothing: one
+      // settled frame so the plate is never blank, then no paint at all,
+      // and the clock resumes from here rather than jumping the breath
+      // forward
+      if (document.hidden || galleryPaused) {
         scanRef.current.lastFrameAt = -1;
         if (restedWhileHidden) {
           raf = requestAnimationFrame(draw);
@@ -613,12 +640,29 @@ export default function Charts() {
       const lens = lensRef.current;
       lens.cur += (lens.target - lens.cur) * 0.08;
 
-      drawPanel1(ctx, L, candles, hoverIdx, p1RangeRef, lens.cur, waveOff);
+      // two-finger pan (pan2) shifts the whole frame, eased back to rest —
+      // distinct from a one-finger drag, which manipulates the data itself.
+      const pan = panRef.current;
+      pan.x += (pan.tx - pan.x) * 0.12;
+      pan.y += (pan.ty - pan.y) * 0.12;
+      pan.tx *= 0.9;
+      pan.ty *= 0.9;
+
+      ctx.save();
+      ctx.translate(pan.x, pan.y);
+      drawPanel1(ctx, L, candles, hoverIdx, p1RangeRef, lens.cur, waveOff, detail.particles);
       drawPanel2(ctx, L, d1, d1Ema, p2RangeRef, waveOff);
       drawPanel3(ctx, L, rsi, p3RangeRef, waveOff);
 
       // volatility handle lives in the left gutter beside Panel 1
       drawVolHandle(ctx, L, volRef.current);
+      ctx.restore();
+
+      // three-finger twist = season: a slow, render-only warm/cool cast —
+      // one fillRect, never a per-element gradient.
+      const seasonWarm = Math.sin(seasonRef.current) * 0.5 + 0.5;
+      ctx.fillStyle = `rgba(${Math.round(200 + 40 * seasonWarm)}, ${Math.round(150 + 20 * (1 - seasonWarm))}, ${Math.round(120 + 60 * (1 - seasonWarm))}, 0.02)`;
+      ctx.fillRect(0, 0, L.width, L.height);
 
       // panel separators
       ctx.strokeStyle = "rgba(232,226,213,0.08)";
@@ -716,6 +760,7 @@ export default function Charts() {
 
     return () => {
       ro.disconnect();
+      ungal();
       if (raf) cancelAnimationFrame(raf);
     };
   }, [candles, d1, d1Ema, rsi, hoverIdx]);
@@ -946,6 +991,18 @@ export default function Charts() {
     addChartMark("pinned", "amber", 0.86);
   };
 
+  // whole-field clear — the shared <LetGo/>, never a hand-rolled button.
+  const letGoPinned = () => {
+    setPinned(null);
+    if (typeof window !== "undefined") {
+      try { localStorage.removeItem(PIN_KEY); } catch { /* noop */ }
+    }
+    try { getFieldAudio().thud(); } catch { /* noop */ }
+    haptics.roll();
+    recordTape("kept", 0.4, "charts/let-go");
+    addChartMark("let go", "pale", 0.4);
+  };
+
   // latest chrome actions for the stable gesture handlers
   const onGenerateRef = useRef(onGenerate);
   const onPinRef = useRef(onPin);
@@ -973,6 +1030,25 @@ export default function Charts() {
     const detach = attachGestures(overlay, {
       tap: (e) => {
         lastGestureAtRef.current = performance.now();
+        if (e.fingers === 3) {
+          // tutti — every panel answers at once, the plate stating itself.
+          rippleRef.current = { t0: performance.now(), amp: 0.7, dir: 1 };
+          playNote(52, 200);
+          try { haptics.bloom(); } catch { /* noop */ }
+          recordTape("region", 0.6, "charts/tutti");
+          return;
+        }
+        if (e.fingers === 2) {
+          // step back: lower the raised lens first. ScaleTravel reads
+          // data-lens-raised and yields to us when this is set.
+          if (lensRef.current.target > 0.5) {
+            lensRef.current.target = 0;
+            overlay.removeAttribute("data-lens-raised");
+            try { haptics.tap(); } catch { /* noop */ }
+            recordTape("sigil", 0.4, "charts/lens-candles");
+          }
+          return;
+        }
         if (e.fingers !== 1) return; // the plate absorbs frame/law taps
         if (e.count === 3) {
           // a triple tap reseeds the field — the same act as the generate
@@ -1214,9 +1290,18 @@ export default function Charts() {
           try { haptics.bloom(); } catch { /* noop */ }
         }
       },
-      twist: (e) => {
-        if (e.fingers === 3) return; // three fingers turn the season, not the lens
+      pan2: (e) => {
         lastGestureAtRef.current = performance.now();
+        panRef.current.tx = Math.max(-30, Math.min(30, panRef.current.tx + e.dx * 0.25));
+        panRef.current.ty = Math.max(-20, Math.min(20, panRef.current.ty + e.dy * 0.25));
+      },
+      twist: (e) => {
+        lastGestureAtRef.current = performance.now();
+        if (e.fingers === 3) {
+          // three-finger twist = season: a slow warm/cool drift.
+          if (e.phase === "move") seasonRef.current += e.angle * 0.7;
+          return;
+        }
         if (e.phase !== "move") return;
         // twist rotates the lens: the same series as candlestick chart or
         // as the raw walk beneath it
@@ -1225,6 +1310,8 @@ export default function Charts() {
         while (Math.abs(twistAcc) >= step) {
           twistAcc -= Math.sign(twistAcc) * step;
           lensRef.current.target = lensRef.current.target > 0.5 ? 0 : 1;
+          if (lensRef.current.target > 0.5) overlay.setAttribute("data-lens-raised", "1");
+          else overlay.removeAttribute("data-lens-raised");
           playNote(lensRef.current.target > 0.5 ? 64 : 57, 140);
           try { haptics.lens(); } catch { /* noop */ }
           recordTape("sigil", 0.5, lensRef.current.target > 0.5 ? "charts/lens-walk" : "charts/lens-candles");
@@ -1539,6 +1626,8 @@ export default function Charts() {
         </div>
       </MobileInstrumentPanel>
 
+      <LetGo label="let the pinned reading go" onLetGo={letGoPinned} visible={pinned !== null} />
+
       {/* scoped styling — mobile stack */}
       <style
         dangerouslySetInnerHTML={{
@@ -1697,6 +1786,7 @@ function drawPanel1(
   rangeRef: React.MutableRefObject<{ yMin: number; yMax: number }>,
   lensT = 0,
   waveOff?: (i: number) => number,
+  detailParticles = 1,
 ) {
   const top = L.p1Top + 6;
   const bot = L.p1Top + L.p1H - 6;
@@ -1784,8 +1874,9 @@ function drawPanel1(
     const bodyH = Math.max(1, bodyBot - bodyTop);
     ctx.fillRect(cx - bw / 2, bodyTop, bw, bodyH);
 
-    // tweak indicator — a small bright marker at the manipulated close
-    if (Math.abs(c.tweak) > 0.001) {
+    // tweak indicator — a small bright marker at the manipulated close.
+    // A decorative extra draw, so it scales off first on lower tiers.
+    if (Math.abs(c.tweak) > 0.001 && detailParticles > 0.5) {
       ctx.fillStyle = "rgba(255,180,110,0.95)";
       ctx.beginPath();
       ctx.arc(cxPx, yClose, 2.2, 0, Math.PI * 2);
@@ -1799,12 +1890,8 @@ function drawPanel1(
   if (lensT > 0.02) {
     ctx.save();
     ctx.globalAlpha = lensT;
-    ctx.strokeStyle = "rgba(255,190,124,0.92)";
-    ctx.lineWidth = 1.8;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
-    ctx.shadowColor = "rgba(255,180,110,0.5)";
-    ctx.shadowBlur = 8 * lensT;
     ctx.beginPath();
     for (let i = 0; i < candles.length; i++) {
       const off = waveOff ? waveOff(i) * h * 0.05 : 0;
@@ -1813,6 +1900,13 @@ function drawPanel1(
       if (i === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     }
+    // additive glow pass instead of ctx.shadowBlur — the same path, once
+    // wide and dim underneath, once crisp on top.
+    ctx.strokeStyle = "rgba(255,180,110,0.35)";
+    ctx.lineWidth = 1.8 + 7;
+    ctx.stroke();
+    ctx.strokeStyle = "rgba(255,190,124,0.92)";
+    ctx.lineWidth = 1.8;
     ctx.stroke();
     ctx.restore();
   }

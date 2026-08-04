@@ -1,0 +1,17 @@
+[
+  {
+    "route": "/mountain",
+    "why": "the range is ray-marched per pixel",
+    "status": "ok",
+    "detail": "2026-08-03 local Chromium verification: ray-marched range rendered at 900×700 and 390×844 after 4–5s; WebGL canvas was live, no page errors, shader compile failures, or GL errors. The mobile buffer was 293×633 under its low-tier DPR ceiling.",
+    "gl": {
+      "canvases": [
+        { "kind": "webgl", "w": 900, "h": 700 },
+        { "kind": "2d", "w": 900, "h": 700 }
+      ],
+      "anyGl": true,
+      "sized": true
+    },
+    "paint": null
+  }
+]

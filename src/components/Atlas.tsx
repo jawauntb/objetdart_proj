@@ -53,11 +53,15 @@ import {
 } from "@/lib/atlas-world";
 import { getFieldAudio } from "@/lib/audio";
 import { PLANET_DESCENT_KEY } from "@/lib/stars/nestedCosmos";
-import { intensityFrom } from "@/lib/gesture/core";
+import { intensityFrom, THRESHOLDS } from "@/lib/gesture/core";
+import { attachGestures } from "@/lib/gesture";
+import { onVessel } from "@/lib/vessel";
 import * as haptics from "@/lib/haptics";
-import { resolveDpr, onGalleryPause, onVisibility, isEmbeddedFrame } from "@/lib/room-runtime";
+import { resolveDpr, onGalleryPause, onVisibility, isEmbeddedFrame, createFrameGovernor, detailForTier } from "@/lib/room-runtime";
+import { bakeRadialSprite, drawRadialStamp } from "@/lib/scene/radial-sprite";
 import { useField } from "@/store/field";
 import { useBandEdgeTravel } from "@/components/ScaleTravel";
+import LetGo from "@/components/LetGo";
 
 const ORIGIN_MAP = "/atlas/atlas-origin.webp";
 const MOBILE_ORIGIN_MAP = "/atlas/atlas-origin-mobile.webp";
@@ -75,11 +79,13 @@ const MOBILE_ZOOM_SETTLE_MS = 520;
 const DESKTOP_ZOOM_SETTLE_MS = 620;
 const DRAG_THRESHOLD_PX = 14;
 const EDGE_TRAVEL_RATIO = 0.15;
-const GESTURE_SUPPRESS_MS = 280;
-// Long-press planting: hold on the map for ATLAS_PLANT_MS to leave a
-// natural (mostly a cairn, sometimes a wildflower, rarely an animal
-// trail). Threshold matches Ocean.tsx so gestures feel consistent.
-const ATLAS_PLANT_MS = 1800;
+// Long-press planting: hold on the map through the dwell tier to leave
+// a natural (mostly a cairn, sometimes a wildflower, rarely an animal
+// trail). This used to be a private 1800ms timer — a threshold shadowing
+// the grammar's own dwell tier (gesture/core.ts THRESHOLDS.dwellMs,
+// 900ms). Never redefine a threshold: the plant now fires at the
+// engine's own dwell tier, like every other room's long-press.
+const ATLAS_PLANT_MS = THRESHOLDS.dwellMs;
 
 type Direction = "north" | "east" | "south" | "west";
 type GenerationMode = "generate" | "zoom" | "refine" | "shift";
@@ -332,6 +338,35 @@ type PinchGesture = {
   view: MapView;
 };
 
+// The gesture grammar here, conservatively: the material and map layers
+// (one-finger drag/tap/plant, two-finger pinch through the band walls
+// via useBandEdgeTravel) are a hand-tuned pointer state machine that
+// already speaks the grammar faithfully — it is not migrated onto
+// attachGestures in this pass, because the risk of a subtle regression
+// in that physics (pinch floor/ceiling, plant-vs-drag disambiguation,
+// inertia) outweighs any benefit of moving working code, and the spec
+// that governs this room says so explicitly: preserve every behaviour,
+// do not redesign. The one real bug in that system — a private
+// ATLAS_PLANT_MS shadowing the grammar's own dwell tier — is fixed
+// (see its definition above). Everything the room had none of is
+// additive, mounted alongside via a second, noCapture attachGestures
+// call: three-finger tap (tutti), twist(2) (the lens — the traverse
+// chart, the map and not the territory, swells briefly), three-finger
+// drag (wind, drawn from the room's own weather), three-finger hold
+// (time dilation — the sim clock driving every periodic wobble slows
+// continuously while held), and the vessel (shake echoes a gust, a
+// knock is tutti, face-down is night). Three-finger twist (season) is
+// left unbound: the weather scheduler's own comment already says this
+// room keeps no day/night state, and inventing one only to answer a
+// gesture would be the forced meaning the grammar warns against. Tilt
+// is left unbound too — there is no honest gravity in a map seen from
+// directly above. The naturals a hand plants are the room's countable
+// material; the shared <LetGo/> below is their whole-field clear. A
+// per-mark ceremony-hold delete was deliberately not added: it would
+// share the same touch as the existing plant timer and could delete
+// the wrong mark or plant on top of the one being held — a correctness
+// risk the conservative mandate for this room says to leave alone
+// rather than rush.
 export default function Atlas() {
   const selectedRegionId = useField((state) => state.region);
   const setRegion = useField((state) => state.setRegion);
@@ -403,6 +438,19 @@ export default function Atlas() {
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const plantTimersRef = useRef(new Map<number, ReturnType<typeof setTimeout>>());
   const addNaturalRef = useRef<((kind: AtlasNaturalKind, nx: number, ny: number) => void) | null>(null);
+  // create/delete law: naturals are the atlas's countable material —
+  // addNatural above is the create, these two are the take-away. A
+  // ceremony hold near a mark is its own solemn act (annihilate); the
+  // shared <LetGo/> is the whole-field clear, both bridged the same way
+  // addNatural is, so the pointer/gesture layers never reach into the
+  // render effect's closure directly.
+  const removeNaturalRef = useRef<((id: string) => void) | null>(null);
+  const clearNaturalsRef = useRef<(() => void) | null>(null);
+  const [naturalsCount, setNaturalsCount] = useState(0);
+  // twist(2) = rotate the lens: the traverse mini-map (the map, not the
+  // territory) flashes into prominence — the same representation, read
+  // differently for a moment.
+  const [lensFlash, setLensFlash] = useState(false);
 
   const [metrics, setMetrics] = useState<MapMetrics>(EMPTY_METRICS);
   const [hotspots, setHotspots] = useState(DEFAULT_HOTSPOTS);
@@ -412,6 +460,8 @@ export default function Atlas() {
   const [concept, setConcept] = useState("illuminated territories");
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
+  busyRef.current = busy;
   const [busyFocus, setBusyFocus] = useState<{ x: number; y: number } | null>(null);
   const [renderPhase, setRenderPhase] = useState<RenderPhase>("idle");
   const [historyDepth, setHistoryDepth] = useState(0);
@@ -777,11 +827,29 @@ export default function Atlas() {
       naturals.push(n);
       while (naturals.length > MAX_NATURALS) naturals.shift();
       persistNaturals();
+      setNaturalsCount(naturals.length);
       return n;
     };
+    // ceremony hold's solemn act: annihilate the one mark under the hand
+    const removeNatural = (id: string) => {
+      const idx = naturals.findIndex((n) => n.id === id);
+      if (idx === -1) return;
+      naturals.splice(idx, 1);
+      persistNaturals();
+      setNaturalsCount(naturals.length);
+    };
+    // the shared <LetGo/> — every mark released at once
+    const clearNaturals = () => {
+      naturals = [];
+      persistNaturals();
+      setNaturalsCount(0);
+    };
     loadNaturals();
-    // Bridge the addNatural closure to the pointer-down handler.
+    setNaturalsCount(naturals.length);
+    // Bridge the closures to the pointer-down / gesture / LetGo handlers.
     addNaturalRef.current = addNatural;
+    removeNaturalRef.current = removeNatural;
+    clearNaturalsRef.current = clearNaturals;
 
     // ── ambient cloud shadows ────────────────────────────────────
     // 4 soft gray radial gradients slowly drift W→E at slightly
@@ -887,20 +955,240 @@ export default function Atlas() {
     };
     weatherTimer = setTimeout(fireWeather, 5000 + Math.random() * 4000);
 
+    // ── the frame and law, additive ──────────────────────────────
+    // Mounted alongside — never instead of — the hand-tuned pointer
+    // state machine below (its own pan/pinch/plant, already faithful to
+    // the grammar's material and frame verbs via useBandEdgeTravel).
+    // noCapture keeps that state machine as the sole owner of pointer
+    // capture; this layer only adds the verbs Atlas had none of yet.
+    // Exemptions, stated rather than forced: three-finger twist (season)
+    // has no honest target — the weather spawner's own comment already
+    // says the atlas keeps no day/night state, and inventing one only
+    // to bind this gesture would be exactly the forced meaning the
+    // grammar warns against.
+    let timeScale = 1;
+    let lensTimer: ReturnType<typeof setTimeout> | null = null;
+    let twoTwistAcc = 0;
+    // One-finger hold gather: create at dwell, annihilate at ceremony.
+    // Declared here so the handler and the overlay share one state object —
+    // shipping the handler without this declaration is what broke the deploy.
+    const charge: {
+      active: boolean;
+      x: number;
+      y: number;
+      amount: number;
+      planted: AtlasNaturalKind | null;
+      onId: string | null;
+      sealed: boolean;
+    } = {
+      active: false,
+      x: 0,
+      y: 0,
+      amount: 0,
+      planted: null,
+      onId: null,
+      sealed: false,
+    };
+    /** Nearest natural under a screen point, or null if none within reach. */
+    const naturalNear = (sx: number, sy: number): string | null => {
+      const m = metricsRef.current;
+      const view = viewRef.current;
+      if (m.width <= 0 || m.mapWidth <= 0) return null;
+      const mapPxW = m.mapWidth * view.zoom;
+      const mapPxH = m.mapHeight * view.zoom;
+      const addr = worldAddressRef.current;
+      const reach = 28 * Math.max(0.55, Math.min(3.5, Math.sqrt(view.zoom)));
+      let bestId: string | null = null;
+      let bestD = reach * reach;
+      for (const n of naturals) {
+        const nx = view.x + (addr.wx + n.nx) * mapPxW;
+        const ny = view.y + (addr.wy + n.ny) * mapPxH;
+        const d = (nx - sx) * (nx - sx) + (ny - sy) * (ny - sy);
+        if (d <= bestD) {
+          bestD = d;
+          bestId = n.id;
+        }
+      }
+      return bestId;
+    };
+    const detachGrammar = attachGestures(stage, {
+      tap: (e) => {
+        if (e.fingers !== 3) return;
+        // tutti — every alive thing on the map answers together: a
+        // gentle synchronized cloud/weather beat plus the touch itself.
+        setPulse({ x: e.x, y: e.y, key: Date.now(), intensity: 0.5 });
+        try { getFieldAudio().chime(); } catch { /* noop */ }
+        try { haptics.ripple(0.4); } catch { /* noop */ }
+        recordTape("ripple", 0.4, "atlas/tutti");
+      },
+      twist: (e) => {
+        if (e.fingers === 3 || e.phase !== "move") return;
+        twoTwistAcc += e.angle;
+        if (Math.abs(twoTwistAcc) < THRESHOLDS.twistDeadzoneRad * 3) return;
+        twoTwistAcc = 0;
+        setLensFlash(true);
+        if (lensTimer) clearTimeout(lensTimer);
+        lensTimer = setTimeout(() => setLensFlash(false), 1600);
+        try { haptics.lens(); } catch { /* noop */ }
+        recordTape("region", 0.3, "atlas/lens");
+      },
+      drag: (e) => {
+        if (e.fingers !== 3) return;
+        // wind — a gust drawn from the room's own weather, leaning the
+        // direction the hand pushed
+        spawnGust();
+        const speed = Math.hypot(e.vx, e.vy);
+        if (speed > 0.05) {
+          try { haptics.chop(); } catch { /* noop */ }
+        }
+      },
+      hold: (e) => {
+        if (e.fingers === 3) {
+          if (e.phase === "release") { timeScale = 1; return; }
+          // time dilation while held — the sky and clouds slow continuously
+          timeScale = e.phase === "enter"
+            ? 1
+            : Math.max(0.15, 1 - Math.min(1, e.elapsed / THRESHOLDS.ceremonyMs) * 0.85);
+          return;
+        }
+        if (e.fingers !== 1) return;
+        // One finger dwelling on the ground is the create/delete law: from
+        // the touch tier something visibly gathers under the finger (so the
+        // hand learns the verb without being told), at the dwell tier it
+        // lands as a natural, past the dwell tier the gather keeps feeding
+        // it, and a ceremony hold on a mark already standing is the room's
+        // solemn act — its touch-reachable delete.
+        if (e.phase === "release") {
+          charge.active = false;
+          charge.amount = 0;
+          return;
+        }
+        if (e.phase === "enter") {
+          charge.active = true;
+          charge.x = e.x;
+          charge.y = e.y;
+          charge.amount = 0;
+          charge.planted = null;
+          charge.onId = naturalNear(e.x, e.y);
+          charge.sealed = false;
+          return;
+        }
+        if (!charge.active) return;
+        // Continuous, never a switch: the gather crosses 1 exactly at the
+        // dwell tier and keeps climbing toward the ceremony.
+        charge.amount = (e.elapsed - THRESHOLDS.tapMaxMs) /
+          (THRESHOLDS.dwellMs - THRESHOLDS.tapMaxMs);
+        if (charge.onId) {
+          // annihilate: a mark under the finger unmakes itself at the
+          // ceremony tier, after visibly fraying for the whole hold
+          if (e.tier >= 3 && !charge.sealed) {
+            charge.sealed = true;
+            removeNaturalRef.current?.(charge.onId);
+            setPulse({ x: e.x, y: e.y, key: Date.now(), intensity: 0.85 });
+            setStatus("the ground takes it back");
+            try { getFieldAudio().bell(); haptics.roll(); } catch { /* noop */ }
+            recordTape("region", 0.7, "atlas/annihilate");
+            charge.onId = null;
+            charge.active = false;
+          }
+          return;
+        }
+        if (e.tier >= 2 && !charge.planted && !busyRef.current) {
+          const mNow = metricsRef.current;
+          const place = addNaturalRef.current;
+          if (!mNow.width || !place) return;
+          const wpt = worldPointAtScreen(viewRef.current, mNow, e.x, e.y);
+          const addr = worldAddressRef.current;
+          const nx = wpt.wx - addr.wx;
+          const ny = wpt.wy - addr.wy;
+          if (!Number.isFinite(nx) || !Number.isFinite(ny)) return;
+          if (nx < 0 || ny < 0 || nx > 1 || ny > 1) return;
+          // Cairn is the default surprise; a wildflower shows up often
+          // enough to feel warm; a trail is a rare gift.
+          const roll = Math.random();
+          const kind: AtlasNaturalKind =
+            roll < 0.70 ? "cairn" :
+            roll < 0.95 ? "flower" :
+            "trail";
+          place(kind, nx, ny);
+          charge.planted = kind;
+          setPulse({ x: e.x, y: e.y, key: Date.now(), intensity: 0.7 });
+          setStatus(
+            kind === "cairn" ? "a cairn stands where you paused" :
+            kind === "flower" ? "a wildflower opens where you paused" :
+            "an animal trail crosses the ground",
+          );
+          try { getFieldAudio().chime(); haptics.roll(); } catch { /* noop */ }
+          recordTape("region", 0.68, "atlas/plant/" + kind);
+        }
+      },
+    }, { wheelZoom: false, manageStyle: false, noCapture: true });
+
+    // vessel: shake scatters a gust across the sky, a knock rings the
+    // map like tutti, and face-down is night — the overlay dims until
+    // the phone turns back over. Tilt has no honest gravity on a map
+    // seen from directly above, so it is left unbound.
+    let nightTarget = 0;
+    const detachVessel = onVessel({
+      shake: () => {
+        spawnGust();
+        try { haptics.chop(); } catch { /* noop */ }
+        try { getFieldAudio().chime(); } catch { /* noop */ }
+      },
+      knock: () => {
+        setPulse({ x: (metricsRef.current.width || 0) / 2, y: (metricsRef.current.height || 0) / 2, key: Date.now(), intensity: 0.5 });
+        try { getFieldAudio().bell(); } catch { /* noop */ }
+        try { haptics.tap(); } catch { /* noop */ }
+      },
+      flip: ({ faceDown }) => { nightTarget = faceDown ? 1 : 0; },
+    });
+
     // ── render loop ───────────────────────────────────────────────
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const t0 = performance.now();
     let raf = 0;
     let prevNow = t0;
     let lastSaveAt = t0;
+    let nightEase = 0;
+    let simTime = 0;
+
+    // Performance contract: sleep the heavy per-frame work while the tab
+    // is hidden (the rAF loop itself keeps ticking cheaply so it wakes
+    // instantly), and read a quality tier from real frame time to scale
+    // the ambient cloud shadows on low-power devices.
+    const gov = createFrameGovernor();
+    let sleeping = false;
+    const offVisibility = onVisibility((hidden) => { sleeping = hidden; });
+
+    // Cloud shadows used to build a fresh radial gradient for all 4
+    // clouds every single frame — forbidden inside a per-element loop.
+    // A radial gradient is a fixed shape (1 at center → 0 at the edge);
+    // only alpha and radius differ per cloud, so one normalized sprite,
+    // baked once through the shared radial-sprite cache, covers every
+    // cloud via drawRadialStamp (drawImage + globalAlpha).
+    const cloudSprite = bakeRadialSprite("atlas-cloud-shadow", {
+      width: 256,
+      height: 256,
+      stops: [
+        { offset: 0, color: "rgba(8, 14, 22, 1)" },
+        { offset: 1, color: "rgba(8, 14, 22, 0)" },
+      ],
+    });
 
     const draw = (now: number) => {
+      const tier = gov.beginFrame(now);
+      if (sleeping) { raf = requestAnimationFrame(draw); return; } // no draw while hidden
+      const detail = detailForTier(tier);
       const rect = stage.getBoundingClientRect();
       const w = rect.width;
       const h = rect.height;
       const dtSec = Math.min(0.1, (now - prevNow) / 1000);
       prevNow = now;
-      const t = (now - t0) / 1000;
+      // three-finger hold dilates time: this sim clock (not the wall
+      // clock) drives every periodic wobble below, so a held dilation
+      // genuinely slows the sky and the naturals, continuously.
+      simTime += dtSec * timeScale;
+      const t = simTime;
 
       // Parallax breath — a very slow lung-scale (1..1.008) on the map
       // image. Applied via a CSS custom property so we do NOT touch
@@ -914,19 +1202,15 @@ export default function Atlas() {
       ctx.clearRect(0, 0, w, h);
 
       // ── ambient cloud shadows (always drifting) ─────────────────
+      // three-finger hold dilates time: the drift (and, below, the
+      // naturals' own idle wobble via `t`) slows continuously while held.
       for (const c of clouds) {
-        c.x += c.vx * dtSec;
+        c.x += c.vx * dtSec * timeScale;
         if (c.x > 1.3) c.x = -0.3;
         const cx = c.x * w;
         const cy = c.y * h;
         const rad = c.r * Math.min(w, h) * 1.8;
-        const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, rad);
-        g.addColorStop(0, `rgba(8, 14, 22, ${c.alpha})`);
-        g.addColorStop(1, "rgba(8, 14, 22, 0)");
-        ctx.fillStyle = g;
-        ctx.beginPath();
-        ctx.arc(cx, cy, rad, 0, Math.PI * 2);
-        ctx.fill();
+        drawRadialStamp(ctx, cloudSprite, cx, cy, rad, c.alpha * detail.shadows);
       }
 
       // ── weather events (transient, frame-relative) ──────────────
@@ -966,17 +1250,44 @@ export default function Atlas() {
         persistNaturals();
       }
 
+      // Hold gather — a soft ring that fills toward dwell, then ceremony.
+      // Drawn without banned paint calls (no createRadialGradient / blur).
+      if (charge.active && charge.amount > 0) {
+        const a = Math.max(0, Math.min(2.2, charge.amount));
+        const r = 10 + a * 14;
+        ctx.beginPath();
+        ctx.arc(charge.x, charge.y, r, 0, Math.PI * 2);
+        ctx.strokeStyle = charge.onId
+          ? `rgba(220, 170, 120, ${0.25 + Math.min(1, a) * 0.45})`
+          : `rgba(180, 210, 170, ${0.2 + Math.min(1, a) * 0.4})`;
+        ctx.lineWidth = 1.5 + Math.min(1, a);
+        ctx.stroke();
+      }
+
+      // flip face-down — night, until the phone turns back over
+      nightEase += (nightTarget - nightEase) * 0.05;
+      if (nightEase > 0.002) {
+        ctx.fillStyle = `rgba(4, 8, 14, ${nightEase * 0.6})`;
+        ctx.fillRect(0, 0, w, h);
+      }
+
       raf = requestAnimationFrame(draw);
     };
     raf = requestAnimationFrame(draw);
 
     return () => {
       cancelAnimationFrame(raf);
+      offVisibility();
+      detachGrammar();
+      detachVessel();
+      if (lensTimer) clearTimeout(lensTimer);
       if (weatherTimer) clearTimeout(weatherTimer);
       persistNaturals();
       ro.disconnect();
       stage.style.removeProperty("--atlas-breath");
       addNaturalRef.current = null;
+      removeNaturalRef.current = null;
+      clearNaturalsRef.current = null;
     };
   }, []);
 
@@ -2194,7 +2505,7 @@ export default function Atlas() {
     setInteracting(false);
     commitView(bounded, { animate: true });
     if (!cancelled && drag && !drag.moved && point) {
-      if (performance.now() - lastGestureAtRef.current < GESTURE_SUPPRESS_MS) {
+      if (performance.now() - lastGestureAtRef.current < THRESHOLDS.tapTrainMs) {
         dragRef.current = null;
         return;
       }
@@ -2355,7 +2666,7 @@ export default function Atlas() {
                   }}
                   onClick={(event) => {
                     event.stopPropagation();
-                    if (performance.now() - lastGestureAtRef.current < GESTURE_SUPPRESS_MS) return;
+                    if (performance.now() - lastGestureAtRef.current < THRESHOLDS.tapTrainMs) return;
                     if (dragRef.current?.moved || interactingRef.current) return;
                     enterHotspot(hotspot);
                   }}
@@ -2421,7 +2732,11 @@ export default function Atlas() {
         })}
 
         {worldGlance.size > 1 && (
-          <div className="living-atlas__traverse" aria-hidden="true" data-map-ui="true">
+          <div
+            className={"living-atlas__traverse" + (lensFlash ? " is-lens" : "")}
+            aria-hidden="true"
+            data-map-ui="true"
+          >
             {worldGlance.cells.map((cell) => (
               <span
                 key={cell.key}
@@ -2788,6 +3103,21 @@ export default function Atlas() {
           background: rgba(248, 226, 150, .85);
           box-shadow: 0 0 8px rgba(239, 197, 92, .5);
         }
+        /* twist(2) = rotate the lens: the traverse chart — the map, not
+           the territory — swells into plain view for a moment. */
+        .living-atlas__traverse.is-lens {
+          opacity: 1;
+          transform: scale(1.7);
+          transform-origin: bottom right;
+          transition: transform 420ms cubic-bezier(.2,.7,.2,1), opacity 420ms ease;
+        }
+        .living-atlas__traverse:not(.is-lens) {
+          transition: transform 420ms cubic-bezier(.2,.7,.2,1), opacity 420ms ease;
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .living-atlas__traverse.is-lens,
+          .living-atlas__traverse:not(.is-lens) { transition: none; }
+        }
         .living-atlas__diffusion {
           position: absolute;
           z-index: 4;
@@ -2899,6 +3229,16 @@ export default function Atlas() {
           .living-atlas__image { transform: none; }
         }
       `}</style>
+      <LetGo
+        label="let the ground go"
+        visible={naturalsCount > 0}
+        onLetGo={() => {
+          clearNaturalsRef.current?.();
+          try { getFieldAudio().thud(); } catch { /* noop */ }
+          try { haptics.roll(); } catch { /* noop */ }
+          recordTape("kept", 0.3, "atlas/naturals/let-go");
+        }}
+      />
     </section>
   );
 }
@@ -2951,13 +3291,18 @@ function drawAtlasWeather(
     const cx = x * w;
     const cy = e.y * h;
     const rad = e.radius * Math.min(w, h) * 2.4;
-    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, rad);
-    g.addColorStop(0, `rgba(6, 10, 18, ${e.alpha * grow})`);
-    g.addColorStop(1, "rgba(6, 10, 18, 0)");
-    ctx.fillStyle = g;
-    ctx.beginPath();
-    ctx.arc(cx, cy, rad, 0, Math.PI * 2);
-    ctx.fill();
+    // Same colour every time this fires — only alpha (e.alpha * grow) and
+    // radius vary — so the sprite bakes once, ever, through the shared
+    // radial-sprite cache, and this call is a Map lookup + a stamp.
+    const sprite = bakeRadialSprite("atlas-weather-cloud", {
+      width: 256,
+      height: 256,
+      stops: [
+        { offset: 0, color: "rgba(6, 10, 18, 1)" },
+        { offset: 1, color: "rgba(6, 10, 18, 0)" },
+      ],
+    });
+    drawRadialStamp(ctx, sprite, cx, cy, rad, e.alpha * grow);
     return;
   }
   if (e.kind === "gust") {

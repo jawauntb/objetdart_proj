@@ -26,25 +26,21 @@ a field — add the field.
 Before writing anything, place the room in the cosmology. Answer in order:
 
 1. **Is it a *place* with a physical scale?** Then it lives on the axis.
-   - Does its scale fall inside an existing band? Then it probably isn't a new
-     room — it's new life inside an existing one (a new species in the garden,
-     a new creature in the plasm). Prefer deepening a band over adding rooms.
+   - Does its scale fall inside an existing band? Then it probably isn't a new room —
+     it's new life inside an existing one (a new species in the garden, a new creature
+     in the plasm). Prefer deepening a band over adding rooms.
    - Does it genuinely need its own band position? Give it a scale address in
-     `SCALE_BANDS` (`src/lib/scale.ts`), and decide its **doors**: default is
-     the metric neighbors; override in `TRAVEL_OVERRIDES` when containment
-     says otherwise (a drop belongs to the sea, not to the next size up). A
-     room that shares a band with siblings but needs its own vertical doors
-     uses `ROUTE_TRAVEL_OVERRIDES` (see `docs/plans/ground-and-sky.md`).
-2. **Is it a *law*, *lens*, or *abstraction*?** Then it takes no scale address
-   (the `/relativity` precedent — note the deliberate exemption in the PR), or
-   it branches off the band it comments on (the `/beyond` precedent).
-3. **Keep the tree shallow.** Branches exist only where containment genuinely
-   forks (the earth holds both the atlas and the flowers). The fork-door
-   mechanic (press, release, press again) carries two or three doors per wall
-   gracefully; if you're about to give a wall a fourth door, the cosmology is
-   probably wrong — look for the level you're missing.
-4. **State the decision in the PR body.** One sentence: where it sits, what
-   its doors are, or why it's exempt.
+     `SCALE_BANDS` (`src/lib/scale.ts`), and decide its **doors**: default is the metric
+     neighbors; override in `TRAVEL_OVERRIDES` when containment says otherwise (a drop
+     belongs to the sea, not to the next size up). A room that shares a band with
+     siblings but needs its own vertical doors uses `ROUTE_TRAVEL_OVERRIDES`.
+2. **Is it a *law*, *lens*, or *abstraction*?** Then it takes no scale address (the
+   `/relativity` precedent — write the exemption into your registry entry's
+   `address: { exempt: "…" }` and add the key to `SCALE_EXEMPT_KEYS`), or it branches
+   off the band it comments on (the `/beyond` precedent).
+3. **Keep the tree shallow.** Branches exist only where containment genuinely forks. If
+   you're about to give a wall a fourth door, the cosmology is probably wrong — look for
+   the level you're missing.
 
 ## 2. Write the material inside `<RoomShell>`
 
@@ -94,24 +90,25 @@ per population, context-loss recovery, and complete teardown.
 every law below — read it once, then use the shell. Its numbered sections are
 the contract:
 
-1. deterministic seeds (hash + mulberry32, no `Math.random`, no `Date.now` in
-   render logic)
-2. the shared breath (`getAudioTime`, ~7s, 0.14 Hz)
-3. gesture bindings — the global verbs pre-wired, marked where your material
-   interprets them; thresholds come from `gesture/core` and nowhere else
-4. duration and intensity as continuous axes (the law: nothing fires
-   identically at 900ms and 2400ms)
-5. the vessel (tilt/shake via `lib/vessel` — passive subscription; the candle
-   owns permission)
-6. sound through `lib/audio`'s existing API only; haptics through
-   `lib/haptics`
-7. glimmer after ~20s idle — physical, never text
-8. persistence: versioned key, capped population, oldest retired gracefully,
-   and the quiet clear control at the bottom (hard to hit by accident, clear
-   of browser chrome)
-9. keyboard dialect (arrows / Enter / held Enter / Esc) and reduced motion
-   (stillness never removes a verb)
-10. ScaleTravel mount (rooms on the axis) — never bind pinch/pan2 yourself
+```ts
+{
+  key: "template",
+  href: "/template",
+  desc: "…",                       // lowercase, no marketing verbs; the nav shows it
+  icon: "growth",                  // a RouteSigil kind
+  cluster: "field",
+  dark: true,
+  kind: "room",                    // "room" | "instrument" | "reading"
+  source: "src/components/YourRoom.tsx",
+  page: "src/app/template/page.tsx",
+  address: { band: "drop" },       // or { exempt: "why it has no physical scale" }
+  frame: "yield",                  // "own" only if you keep your own camera
+  chrome: "axis",                  // <AxisChrome route="/template" />
+  keeps: "objetdart:template:v1",  // or null
+  creates: "a mote",               // the noun a dwell makes, or null
+  exempt: {},                      // every global binding you cannot express, + why
+}
+```
 
 ## 3. Declare it once
 
@@ -170,16 +167,26 @@ Rooms that predate the manifest still carry hand-written rows in `routes.ts`,
 side. When you touch one of those rooms, migrating it to a manifest is a small,
 welcome PR — it deletes four scattered edits and adds one file.
 
-## 4. Test what can lie
+`src/components/RoomTemplate.tsx` is a whole conformant room. It passes
+`npm run test:room-contract` unmodified. Copy it, rename it, and change two things:
 
-Extract the room's laws into a pure, import-free `src/lib/<something>.ts` and
-pin them in a `scripts/test-<something>.mjs` (loadTsModule pattern) wired into
-the chain. Falsifiable only — determinism, conservation, monotonicity, caps,
-round trips. If you can't name the bug an assertion would catch, don't write
-it. Interaction wiring gets no tests; the engine's classifiers are already
-covered.
+1. **`FIELD`** — the background, as a GLSL `vec3 field(vec2 uv, float t)`. A field of
+   light is what a fragment shader is for; 2D compositing can only imitate depth. The
+   room's law-layer uniforms (`uBreath`, `uWind`, `uGravity`, `uAgitation`, `uSeason`,
+   `uDetail`, `uRes`) arrive already wired.
+2. **The object spec** — your material as a `SceneObjectSpec`:
+   - `born(seed, nx, ny, tMs)` — deterministic. No `Math.random`, ever.
+   - `step(s, ctx)` — in place; read `ctx.wind`, `ctx.gravity`, `ctx.season`,
+     `ctx.breath`, `ctx.timeScale`.
+   - `emit(s, ctx, out)` — **eight numbers**, not draw calls. The room draws the whole
+     population in one instanced pass.
+   - `verbs` + `respond` — the verbs of the grammar your material can answer. Declare
+     one without a handler and `createPopulation` throws.
 
-## 5. The bar before you open the PR
+`createRoomShell` (`src/lib/scene/room.ts`) does the rest: the gesture engine routed by
+finger count (one finger the material, two the frame, three the law), the vessel, the
+frame governor, the visibility and gallery pause, the DPR ceiling, the resize observer,
+the idle persistence writer, the glimmer clock, and `letGo`.
 
 Walk **AGENTS.md, "the room quality bar"** line by line — shader material,
 every verb answered, create *and* delete of things that interact, the room's
