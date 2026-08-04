@@ -40,6 +40,7 @@ const atmosphere = {
       "the hundred kilometres of air above the summit, side on and marched as a volume — the blue is the optical depth of the real barometric column, and the clouds a hand makes are parcels of that column lifted until their own vapour condenses.",
     moves: [
       "tap → a pressure ring, sounded at the pressure where it lands — deep near the ground, thin and high aloft — and a push on whatever cloud stands there",
+      "rapid taps (1 / 3 / 5 / n) → ring → seed a puff → warm a tower → the column scatters",
       "press → lifts and warms the air under the finger; it condenses at its own cloud base and starts to build",
       "keep pressing → the parcel warms further, hangs its base higher, and climbs higher still; hold to the ceremony and the candle is given to the wind as a lantern, and kept",
       "drag → stirs the air at that altitude and carries the cloud you are inside; layers slide against each other but the column keeps its momentum",

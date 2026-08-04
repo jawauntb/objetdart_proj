@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures, enableBreath } from "@/lib/gesture";
+import { tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import { onVessel, requestVessel } from "@/lib/vessel";
 import { shouldInvite } from "@/lib/candle";
 import { bakeRadialSprite } from "@/lib/scene/radial-sprite";
@@ -1158,15 +1159,33 @@ export default function CoastBeach() {
           const s = shellAt(nx, ny);
           if (s) {
             const tide = tideNow();
-            voice.say(zoneVoice(zoneAt(nx, beachY(s, tide), tide), 0.25, 0.55 + e.intensity * 0.45));
-            throwFoam(mix32(s.seed, e.x), s.nx, beachY(s, tide), 8, {
+            const shellGain = 0.55 + e.intensity * 0.45 + tapTrainDepth(e.count) * 0.35;
+            voice.say(zoneVoice(zoneAt(nx, beachY(s, tide), tide), 0.25, shellGain));
+            throwFoam(mix32(s.seed, e.x), s.nx, beachY(s, tide), Math.round(8 + tapTrainDepth(e.count) * 10), {
               spread: 0.02, rise: 0.06, drift: 0.03, size: 4.0, decay: 0.9, tint: 0,
             });
-            addTouch(s.nx, beachY(s, tide), "wet", 0.5 + e.intensity * 0.45);
-            haptics.ripple(0.4);
+            addTouch(s.nx, beachY(s, tide), "wet", 0.5 + e.intensity * 0.45 + tapTrainDepth(e.count) * 0.3);
+            haptics.ripple(0.4 + tapTrainDepth(e.count) * 0.25);
             return;
           }
-          answer(nx, ny, e.intensity, e.count === 1 ? 1 : 1.5);
+          // rapid-tap ladder: print → break → surge → shore tutti
+          const tier = tapTrainTier(e.count);
+          const depth = tapTrainDepth(e.count);
+          if (tier === "n") {
+            tutti(0.75 + e.intensity * 0.4 + depth * 0.25);
+            answer(nx, ny, e.intensity, 2.4 + depth);
+            return;
+          }
+          if (tier === 5) {
+            voice.breakWave(0.55 + e.intensity * 0.4 + depth * 0.2);
+            answer(nx, ny, e.intensity, 2.0 + depth * 0.5);
+            return;
+          }
+          if (tier === 3) {
+            answer(nx, ny, e.intensity, 1.55 + depth * 0.45);
+            return;
+          }
+          answer(nx, ny, e.intensity, 1 + depth * 0.35);
         },
 
         hold: (e) => {

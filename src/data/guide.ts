@@ -408,6 +408,7 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "a peak above the sea of fog — cold gray rock, wind-held snow, blue ice in the bowls, scree, and cairns kept by hand.",
     moves: [
       "tap → an echo whose pitch follows the elevation",
+      "rapid taps (1 / 3 / 5 / n) → echo → scree → ridge answer → every cairn at once",
       "one-finger drag → turns the head and pitches the look down the slope toward the feet",
       "two-finger pan → the frame yaws and pitches together",
       "hold → places a cairn; ceremony stacks it taller",
@@ -576,8 +577,8 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "tilt the device → wind, camera sway, haptic ticks and a small retune; the birds bank into the real vessel",
       "shake → every resident flushes into flight and the aviary bursts outward",
       "tap a bird → that species answers in its own body: hummingbird hovers, peacock displays, duck swims, raptor soars or dives, chicken hops, ibis stalks",
-      "tap empty air → nearby birds scatter and call",
       "rapid taps (1 / 3 / 5 / n) → startle → spawn → cull (or flush) → clear the sky",
+      "tap empty air → nearby birds scatter and call",
       "hold one finger → feeds and grows the nearest bird into eating; held on empty meadow, the nearest bird roosts and the flock gathers to the hand",
       "drag one finger → steers the wind and pushes birds aside",
       "flick → a gust, and launches the nearest bird into a swoop or flight",

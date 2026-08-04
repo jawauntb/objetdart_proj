@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures, THRESHOLDS } from "@/lib/gesture";
+import { tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import { onVessel, requestVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import WaterText from "@/components/WaterText";
@@ -4229,6 +4230,46 @@ export default function Stars() {
     spawnComet, spawnGrb, spawnNova, spawnPulsar, spawnStarForm, spawnTidalFlare,
   ]);
 
+  /**
+   * Rapid-tap ladder beyond a single birth: nova → rarer weather → rarest.
+   * Returns true when an object-specific double-tap meaning claimed the train.
+   */
+  const trainTapAt = useCallback((
+    x: number,
+    y: number,
+    tier: 3 | 5 | "n",
+    depth: number,
+    intensity: number,
+  ): boolean => {
+    const id = findSavedNameAt(x, y);
+    if (id) {
+      doubleTapAt(x, y);
+      return true;
+    }
+    const bs = findBornStarAt(x, y);
+    if (bs) {
+      doubleTapAt(x, y);
+      return true;
+    }
+    void intensity;
+    if (tier === 3) {
+      spawnNova(x, y);
+      if (depth > 0.45) spawnComet(x + 12, y - 8);
+      return true;
+    }
+    if (tier === 5) {
+      spawnPulsar(x, y);
+      if (depth > 0.55) spawnTidalFlare(x - 10, y + 6);
+      return true;
+    }
+    spawnGrb(x, y);
+    if (depth > 0.7) spawnNova(x + 18, y + 10);
+    return true;
+  }, [
+    doubleTapAt, findBornStarAt, findSavedNameAt,
+    spawnComet, spawnGrb, spawnNova, spawnPulsar, spawnTidalFlare,
+  ]);
+
   /** The hold, in one place: gather → horizon, or a kept shape coming undone. */
   const onHoldEvent = useCallback((e: {
     fingers: number;
@@ -4396,11 +4437,11 @@ export default function Stars() {
   // The bindings change every render (they close over fresh state), but the
   // engine attaches once. One ref carries the current table across.
   const bindingsRef = useRef({
-    singleTapAt, doubleTapAt, onHoldEvent, stepBack, tuttiNow, setLensRungTo,
+    singleTapAt, doubleTapAt, trainTapAt, onHoldEvent, stepBack, tuttiNow, setLensRungTo,
     gatherShapeIn, applyCamera, reportScaleEdge, releaseScaleEdge, abortWell, markSky,
   });
   bindingsRef.current = {
-    singleTapAt, doubleTapAt, onHoldEvent, stepBack, tuttiNow, setLensRungTo,
+    singleTapAt, doubleTapAt, trainTapAt, onHoldEvent, stepBack, tuttiNow, setLensRungTo,
     gatherShapeIn, applyCamera, reportScaleEdge, releaseScaleEdge, abortWell, markSky,
   };
 
@@ -4423,11 +4464,14 @@ export default function Stars() {
         }
         if (e.fingers !== 1) return;
         void requestVessel();
-        if (e.count >= 2) {
-          bindingsRef.current.doubleTapAt(e.x, e.y);
+        // rapid-tap ladder: birth → nova → rarer weather → rarest burst
+        const tier = tapTrainTier(e.count);
+        const depth = tapTrainDepth(e.count);
+        if (tier === 1) {
+          bindingsRef.current.singleTapAt(e.x, e.y, e.intensity * (1 + depth * 0.35));
           return;
         }
-        bindingsRef.current.singleTapAt(e.x, e.y, e.intensity);
+        bindingsRef.current.trainTapAt(e.x, e.y, tier, depth, e.intensity);
       },
 
       hold: (e) => bindingsRef.current.onHoldEvent(e),
