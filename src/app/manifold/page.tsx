@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import SiteHeader from "@/components/SiteHeader";
-import ScaleTravel from "@/components/ScaleTravel";
+import AxisChrome from "@/components/AxisChrome";
 import ManifoldFold from "@/components/ManifoldFold";
 
 export default function ManifoldPage() {
@@ -15,7 +15,7 @@ export default function ManifoldPage() {
       <main>
         <ManifoldFold />
       </main>
-      <ScaleTravel route="/manifold" />
+      <AxisChrome route="/manifold" />
     </>
   );
 }

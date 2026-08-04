@@ -3,8 +3,7 @@
 import { useEffect } from "react";
 import dynamic from "next/dynamic";
 import SiteHeader from "@/components/SiteHeader";
-import ScaleTravel from "@/components/ScaleTravel";
-import MetaNavigator from "@/components/MetaNavigator";
+import AxisChrome from "@/components/AxisChrome";
 import { getFieldAudio } from "@/lib/audio";
 
 const CoastBeach = dynamic(() => import("@/components/CoastBeach"), { ssr: false });
@@ -18,8 +17,7 @@ export default function CoastPage() {
     <>
       <SiteHeader />
       <CoastBeach />
-      <ScaleTravel route="/coast" />
-      <MetaNavigator route="/coast" />
+      <AxisChrome route="/coast" />
     </>
   );
 }

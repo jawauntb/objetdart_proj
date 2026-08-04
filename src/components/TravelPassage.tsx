@@ -1578,6 +1578,370 @@ function makeSunfallFilm(): Film {
   return { renderFrame };
 }
 
+
+// ——— High-traffic ground / vista / ceiling films ——————————————————————
+//
+// Authored with u = 0 at the lower-s end of the edge and u = 1 at the
+// higher-s end. PassagePlayer reverses u when `spec.out` is false.
+
+/** coast ↔ olympus — the fog sea rises until the peak stands above it. */
+function makeFogClimbFilm(seed: number): Film {
+  const n = makeNoise2(seed ^ 0x0c0a57);
+  const RIDGE = 64;
+  const ridges: Float32Array[] = [0, 1, 2].map((r) => {
+    const arr = new Float32Array(RIDGE);
+    for (let i = 0; i < RIDGE; i++) {
+      const x = i / (RIDGE - 1);
+      const v = fbm(n, x * (2.8 + r * 1.8) + r * 11.1, r * 7.3, 4);
+      arr[i] = 1 - Math.abs(2 * v - 1);
+    }
+    return arr;
+  });
+  const rng = seededRandom(seed ^ 0x50a);
+  const swell = Array.from({ length: 5 }, () => ({
+    y: 0.55 + rng() * 0.28,
+    speed: 0.15 + rng() * 0.5,
+    len: 0.25 + rng() * 0.3,
+    ph: rng(),
+  }));
+
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    const climb = easeInOut(smoothstep(0.04, 0.92, u));
+    const g = ctx.createLinearGradient(0, 0, 0, h);
+    g.addColorStop(0, rgba(mix([168, 196, 214], [92, 128, 168], climb), 1));
+    g.addColorStop(0.55, rgba(mix([210, 222, 230], [140, 168, 196], climb), 1));
+    g.addColorStop(1, rgba(mix(SEA, [48, 62, 78], climb * 0.5), 1));
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+
+    for (let r = 2; r >= 0; r--) {
+      const rise = smoothstep(0.12 + r * 0.1, 0.78 + r * 0.06, u);
+      const baseY = h * (0.78 - r * 0.07) - rise * h * (0.22 + r * 0.04);
+      const amp = h * (0.1 + r * 0.07) * (0.35 + rise * 0.65);
+      ctx.beginPath();
+      ctx.moveTo(-2, h + 2);
+      for (let i = 0; i < RIDGE; i++) {
+        const x = (i / (RIDGE - 1)) * (w + 4) - 2;
+        ctx.lineTo(x, baseY - ridges[r][i] * amp);
+      }
+      ctx.lineTo(w + 2, h + 2);
+      ctx.closePath();
+      const dark: RGB = r === 2 ? [22, 26, 34] : r === 1 ? [38, 44, 56] : [58, 66, 82];
+      ctx.fillStyle = rgba(mix(dark, [120, 140, 160], (1 - rise) * 0.25), 1);
+      ctx.fill();
+    }
+
+    const fogA = (1 - smoothstep(0.35, 0.9, u)) * 0.72;
+    if (fogA > 0.01) {
+      const fogY = h * (0.58 + climb * 0.18);
+      for (const s of swell) {
+        for (let k = 0; k < 3; k++) {
+          const cx = ((s.ph + k / 3 + (1 - u) * s.speed) % 1.3) - 0.15;
+          ctx.fillStyle = rgba([220, 228, 236], fogA * (0.45 + 0.35 * Math.sin(s.ph * 9 + k)));
+          ctx.beginPath();
+          ctx.ellipse(cx * w, fogY + (s.y - 0.7) * h * 0.2, (s.len * w) / 2, Math.max(3, h * 0.018), 0, 0, TAU);
+          ctx.fill();
+        }
+      }
+    }
+  };
+
+  return { renderFrame };
+}
+
+/** earth ↔ flowers — the ground opens into a meadow of candle-warm blooms. */
+function makeGardenFilm(seed: number): Film {
+  const rng = seededRandom(seed ^ 0x6a7de4);
+  const blooms: Array<{ x: number; y: number; r: number; hue: number; ph: number }> = [];
+  for (let i = 0; i < 48; i++) {
+    blooms.push({
+      x: 0.08 + rng() * 0.84,
+      y: 0.42 + rng() * 0.5,
+      r: 0.012 + rng() * 0.028,
+      hue: rng(),
+      ph: rng() * TAU,
+    });
+  }
+  const cols: RGB[] = [
+    mix(CANDLE, PAPER, 0.25),
+    mix(KEPT, PAPER, 0.35),
+    mix([180, 90, 110], PAPER, 0.3),
+    mix(AURORA, PAPER, 0.4),
+  ];
+
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    const meadow = easeInOut(smoothstep(0.05, 0.88, u));
+    const g = ctx.createLinearGradient(0, 0, 0, h);
+    g.addColorStop(0, rgba(mix([120, 148, 168], [168, 196, 180], meadow), 1));
+    g.addColorStop(0.45, rgba(mix([90, 110, 70], [70, 104, 62], meadow), 1));
+    g.addColorStop(1, rgba(mix([48, 42, 28], [36, 48, 30], meadow), 1));
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+
+    const landA = 1 - smoothstep(0.2, 0.75, u);
+    if (landA > 0.02) {
+      ctx.fillStyle = rgba([62, 58, 44], 0.55 * landA);
+      ctx.beginPath();
+      ctx.moveTo(0, h * 0.52);
+      ctx.quadraticCurveTo(w * 0.35, h * 0.42, w * 0.55, h * 0.5);
+      ctx.quadraticCurveTo(w * 0.8, h * 0.58, w, h * 0.48);
+      ctx.lineTo(w, h);
+      ctx.lineTo(0, h);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    const bloomIn = smoothstep(0.18, 0.85, 1 - u);
+    for (let i = 0; i < blooms.length; i++) {
+      const b = blooms[i];
+      const a = clamp01(bloomIn * blooms.length * 0.55 - i * 0.35) * (0.55 + 0.45 * Math.sin(b.ph + u * 4));
+      if (a <= 0.02) continue;
+      const col = cols[i % cols.length];
+      const r = b.r * Math.min(w, h) * (0.7 + a * 0.5);
+      ctx.fillStyle = rgba(col, a * 0.9);
+      ctx.beginPath();
+      ctx.arc(b.x * w, b.y * h, r, 0, TAU);
+      ctx.fill();
+      ctx.fillStyle = rgba(mix(col, PAPER, 0.35), a * 0.7);
+      for (let p = 0; p < 4; p++) {
+        const ang = b.ph + (p * TAU) / 4 + u;
+        ctx.beginPath();
+        ctx.ellipse(
+          b.x * w + Math.cos(ang) * r * 0.9,
+          b.y * h + Math.sin(ang) * r * 0.9,
+          r * 0.55,
+          r * 0.28,
+          ang,
+          0,
+          TAU,
+        );
+        ctx.fill();
+      }
+    }
+  };
+
+  return { renderFrame };
+}
+
+/** atlas ↔ earth — parchment chart curls onto the turning globe. */
+function makeChartLandFilm(seed: number): Film | null {
+  const earth = worldFromLatent(EARTH_LATENT, seed ^ 0xc4a7);
+  const paintGlobe = makeGlobePainter(earth, seed ^ 0xc4a7);
+  if (!paintGlobe) return null;
+  const n = makeNoise2(seed ^ 0x11a7);
+  const TEXM = 256;
+  let map: HTMLCanvasElement;
+  try {
+    map = document.createElement("canvas");
+    map.width = TEXM;
+    map.height = TEXM;
+    const mctx = map.getContext("2d");
+    if (!mctx) return null;
+    const img = mctx.createImageData(TEXM, TEXM);
+    const d = img.data;
+    for (let j = 0; j < TEXM; j++) {
+      for (let i = 0; i < TEXM; i++) {
+        const x = i / TEXM;
+        const y = j / TEXM;
+        const o = (j * TEXM + i) * 4;
+        const land = fbm(n, x * 3.1 + 4.2, y * 3.1 + 1.7, 4) - 0.5;
+        let col: RGB = land > 0
+          ? mix(PAPER2, KEPT, 0.12 + Math.min(0.55, land * 2.8))
+          : mix(PAPER, SEA, 0.1 + Math.min(0.45, -land * 2));
+        const coast = 1 - Math.min(1, Math.abs(land) / 0.016);
+        if (coast > 0) col = mix(col, INK, coast * 0.7);
+        d[o] = col[0];
+        d[o + 1] = col[1];
+        d[o + 2] = col[2];
+        d[o + 3] = 255;
+      }
+    }
+    mctx.putImageData(img, 0, 0);
+  } catch {
+    return null;
+  }
+
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    const m = Math.min(w, h);
+    ctx.fillStyle = rgba(mix(PAPER, NIGHT, smoothstep(0.35, 0.85, u) * 0.85), 1);
+    ctx.fillRect(0, 0, w, h);
+
+    const mapA = 1 - smoothstep(0.25, 0.78, u);
+    if (mapA > 0.01) {
+      const scale = lerp(1.08, 1.45, smoothstep(0.2, 0.9, u));
+      const mw = Math.max(w, h) * scale;
+      ctx.globalAlpha = mapA;
+      ctx.drawImage(map, (w - mw) / 2, (h - mw) / 2 + u * h * 0.08, mw, mw);
+      ctx.globalAlpha = 1;
+    }
+
+    const globeIn = smoothstep(0.2, 0.85, u);
+    if (globeIn > 0.02) {
+      const R = lerp(0.22 * m, 0.48 * m, easeInOut(globeIn));
+      const gx = w / 2;
+      const gy = h * 0.48;
+      haloRings(ctx, gx, gy, R * 0.95, R * 1.28, [120, 160, 168], 0.22 * globeIn);
+      paintGlobe(ctx, gx, gy, R, u * 0.7);
+    }
+  };
+
+  return { renderFrame };
+}
+
+/** earth ↔ coast — the land meets the sea; the strand walks across the frame. */
+function makeStrandFilm(seed: number): Film {
+  const n = makeNoise2(seed ^ 0x57a4d);
+  const rng = seededRandom(seed ^ 0xc0a5);
+  const foam: Array<{ x: number; y: number; r: number; ph: number }> = [];
+  for (let i = 0; i < 36; i++) {
+    foam.push({ x: rng(), y: rng() * 0.35, r: 0.8 + rng() * 2.2, ph: rng() * TAU });
+  }
+
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    const landFrac = easeInOut(smoothstep(0.05, 0.9, u));
+    const shoreX = w * (0.28 + landFrac * 0.44);
+
+    const g = ctx.createLinearGradient(0, 0, 0, h);
+    g.addColorStop(0, rgba(mix([150, 186, 210], [120, 148, 168], landFrac), 1));
+    g.addColorStop(1, rgba(mix(SEA, [70, 90, 60], landFrac * 0.35), 1));
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+
+    ctx.fillStyle = rgba(SEA, 0.85);
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    for (let i = 0; i <= 48; i++) {
+      const t = i / 48;
+      const y = t * h;
+      const wobble = (fbm(n, t * 3.2 + u, 2.1, 3) - 0.5) * w * 0.06;
+      ctx.lineTo(shoreX + wobble, y);
+    }
+    ctx.lineTo(0, h);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = rgba(mix(KEPT, [70, 90, 52], 0.35), 0.92);
+    ctx.beginPath();
+    ctx.moveTo(w, 0);
+    for (let i = 0; i <= 48; i++) {
+      const t = i / 48;
+      const y = t * h;
+      const wobble = (fbm(n, t * 3.2 + u, 2.1, 3) - 0.5) * w * 0.06;
+      ctx.lineTo(shoreX + wobble, y);
+    }
+    ctx.lineTo(w, h);
+    ctx.closePath();
+    ctx.fill();
+
+    const foamA = (1 - Math.abs(landFrac - 0.5) * 1.4) * 0.7;
+    if (foamA > 0.05) {
+      for (const f of foam) {
+        const y = (0.15 + f.y * 0.7) * h;
+        const wobble = (fbm(n, f.y * 3.2 + u, 2.1, 3) - 0.5) * w * 0.06;
+        const tw = 0.6 + 0.4 * Math.sin(f.ph + u * 8);
+        ctx.fillStyle = rgba(PAPER, foamA * tw * 0.75);
+        ctx.beginPath();
+        ctx.arc(shoreX + wobble + (f.x - 0.5) * 10, y, f.r, 0, TAU);
+        ctx.fill();
+      }
+    }
+  };
+
+  return { renderFrame };
+}
+
+/** space ↔ manifold — the web stretches until the fold's mesh takes the frame. */
+function makeFoldFilm(seed: number): Film {
+  const rng = seededRandom(seed ^ 0xf01d);
+  const vignette = makeVignette();
+  const knotSprite = makeGlowSprite(PAPER, CANDLE, 0.45);
+  const knots: Array<{ x: number; y: number; m: number }> = [];
+  for (let i = 0; i < 22; i++) {
+    knots.push({ x: 0.1 + rng() * 0.8, y: 0.1 + rng() * 0.8, m: 0.4 + rng() * 1 });
+  }
+  const links: Array<[number, number]> = [];
+  for (let i = 0; i < knots.length; i++) {
+    const near: Array<{ j: number; d: number }> = [];
+    for (let j = 0; j < knots.length; j++) {
+      if (j === i) continue;
+      near.push({ j, d: (knots[j].x - knots[i].x) ** 2 + (knots[j].y - knots[i].y) ** 2 });
+    }
+    near.sort((a, b) => a.d - b.d);
+    for (let n = 0; n < 2; n++) {
+      const a = Math.min(i, near[n].j);
+      const b = Math.max(i, near[n].j);
+      if (!links.some(([p, q]) => p === a && q === b)) links.push([a, b]);
+    }
+  }
+
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    ctx.fillStyle = rgba(NIGHT, 1);
+    ctx.fillRect(0, 0, w, h);
+
+    const fold = easeInOut(smoothstep(0.08, 0.92, u));
+    const webA = (1 - smoothstep(0.35, 0.88, u)) * 0.95;
+    if (webA > 0.02) {
+      ctx.lineWidth = 1;
+      for (const [a, b] of links) {
+        const ax = lerp(knots[a].x, 0.5 + (knots[a].x - 0.5) * 1.15, fold);
+        const ay = lerp(knots[a].y, 0.5 + (knots[a].y - 0.5) * 1.15, fold);
+        const bx = lerp(knots[b].x, 0.5 + (knots[b].x - 0.5) * 1.15, fold);
+        const by = lerp(knots[b].y, 0.5 + (knots[b].y - 0.5) * 1.15, fold);
+        ctx.strokeStyle = rgba([140, 176, 206], 0.35 * webA);
+        ctx.beginPath();
+        ctx.moveTo(ax * w, ay * h);
+        ctx.lineTo(bx * w, by * h);
+        ctx.stroke();
+      }
+      for (const kn of knots) {
+        const x = lerp(kn.x, 0.5 + (kn.x - 0.5) * 1.15, fold) * w;
+        const y = lerp(kn.y, 0.5 + (kn.y - 0.5) * 1.15, fold) * h;
+        blitGlow(ctx, knotSprite, x, y, 6 + kn.m * 8, 0.45 * webA);
+      }
+    }
+
+    const meshA = smoothstep(0.25, 0.85, u);
+    if (meshA > 0.02) {
+      const gap = Math.max(22, Math.min(w, h) / 18);
+      ctx.strokeStyle = rgba(mix(PAPER, CANDLE, 0.2), 0.22 * meshA);
+      ctx.lineWidth = 1;
+      const well = 0.12 * fold;
+      for (let x = 0; x <= w + gap; x += gap) {
+        ctx.beginPath();
+        for (let y = 0; y <= h; y += 8) {
+          const nx = (x / w - 0.5) * 2;
+          const ny = (y / h - 0.5) * 2;
+          const r2 = nx * nx + ny * ny;
+          const pull = well / (0.15 + r2);
+          const px = x - nx * pull * w * 0.35;
+          const py = y - ny * pull * h * 0.35;
+          if (y === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+      }
+      for (let y = 0; y <= h + gap; y += gap) {
+        ctx.beginPath();
+        for (let x = 0; x <= w; x += 8) {
+          const nx = (x / w - 0.5) * 2;
+          const ny = (y / h - 0.5) * 2;
+          const r2 = nx * nx + ny * ny;
+          const pull = well / (0.15 + r2);
+          const px = x - nx * pull * w * 0.35;
+          const py = y - ny * pull * h * 0.35;
+          if (x === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+      }
+    }
+
+    vignette(ctx, w, h);
+  };
+
+  return { renderFrame };
+}
+
 function makeFilmFor(spec: PassageSpec): Film | null {
   if (spec.film === "arm") return makeArmFilm();
   if (spec.film === "node") return makeNodeFilm();
@@ -1586,6 +1950,11 @@ function makeFilmFor(spec: PassageSpec): Film | null {
   if (spec.film === "sunfall") return makeSunfallFilm();
   if (spec.film === "peakair") return makePeakAirFilm(PASSAGE_SEED ^ 0x0a7a11);
   if (spec.film === "airmap") return makeAirMapFilm(PASSAGE_SEED ^ 0x0a7a22);
+  if (spec.film === "fogclimb") return makeFogClimbFilm(PASSAGE_SEED ^ 0x0f0671);
+  if (spec.film === "garden") return makeGardenFilm(PASSAGE_SEED ^ 0x0a7de4);
+  if (spec.film === "chartland") return makeChartLandFilm(PASSAGE_SEED ^ 0x0c4a71);
+  if (spec.film === "strand") return makeStrandFilm(PASSAGE_SEED ^ 0x057a4d);
+  if (spec.film === "fold") return makeFoldFilm(PASSAGE_SEED ^ 0x0f01d0);
   return makeFilm(PASSAGE_SEED);
 }
 

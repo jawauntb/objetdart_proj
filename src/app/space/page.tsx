@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import SiteHeader from "@/components/SiteHeader";
-import ScaleTravel from "@/components/ScaleTravel";
+import AxisChrome from "@/components/AxisChrome";
 import DeepSpaceWeb from "@/components/DeepSpaceWeb";
 
 export default function SpacePage() {
@@ -17,7 +17,7 @@ export default function SpacePage() {
       <main>
         <DeepSpaceWeb />
       </main>
-      <ScaleTravel route="/space" />
+      <AxisChrome route="/space" />
     </>
   );
 }

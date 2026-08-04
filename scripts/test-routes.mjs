@@ -296,6 +296,78 @@ for (const room of allPeerRooms()) {
   );
 }
 
+// Horizontal vs vertical: high-traffic pairs that meet by pinch must not
+// share a peer ring (and the reverse). earth↔atlas is the deliberate
+// exception — a chart of the ground is both hearth peer and a door in.
+{
+  const circleOf = (href) =>
+    PEER_CIRCLES.find((c) =>
+      c.rooms.some((r) => href === r.href || href.startsWith(`${r.href}/`)),
+    );
+  assert.equal(circleOf("/earth")?.id, "hearth", "earth sits in the hearth ring");
+  assert.equal(circleOf("/atlas/origin")?.id, "hearth", "atlas is a hearth peer of the ground");
+  assert.equal(circleOf("/coast")?.id, "shore", "coast sits in the shore ring");
+  assert.equal(circleOf("/mountain")?.id, "peak", "mountain sits in the peak ring");
+  assert.equal(circleOf("/flowers")?.id, "meadow", "flowers sit in the meadow ring");
+  assert.notEqual(circleOf("/coast")?.id, circleOf("/mountain")?.id, "shore and peak meet by pinch, not as peers");
+  assert.notEqual(circleOf("/flowers")?.id, circleOf("/earth")?.id, "garden and ground meet by pinch, not as peers");
+}
+
+// Band + peer rooms mount travel chrome (AxisChrome / RoomShell / ScaleTravel)
+// and peer rings mount a lateral door (AxisChrome / RoomShell / MetaNavigator).
+// Intentional travel={false}: rooms that still own pinch themselves.
+{
+  const TRAVEL_OWNED = new Set(["/stars", "/atlas/origin", "/beam", "/tourbillon"]);
+  const pageRoots = walkRepoFiles("src/app")
+    .filter((path) => /\/page\.tsx?$/.test(path));
+  const pageFor = (href) => {
+    const want = href.replace(/^\//, "").split("/")[0];
+    return pageRoots.find((p) => {
+      const seg = p.replace(/^src\/app\//, "").split("/")[0];
+      return seg === want;
+    });
+  };
+  const mounts = (source, names) => names.some((n) => source.includes(n));
+  for (const band of SCALE_BANDS) {
+    if (!band.route) continue;
+    const page = pageFor(band.route);
+    assert.ok(page, `band ${band.id} route ${band.route} must have a page`);
+    const src = readRepoFile(page);
+    // RoomShell may live in the component the page imports — accept either.
+    const compMount = [...src.matchAll(/from "@\/components\/(\w+)"/g)].some((m) => {
+      try {
+        return readRepoFile(`src/components/${m[1]}.tsx`).includes("RoomShell");
+      } catch {
+        return false;
+      }
+    });
+    assert.ok(
+      mounts(src, ["AxisChrome", "ScaleTravel", "RoomShell"]) || compMount,
+      `${band.route} must mount AxisChrome, RoomShell, or ScaleTravel`,
+    );
+  }
+  for (const room of allPeerRooms()) {
+    const page = pageFor(room.href);
+    assert.ok(page, `peer ${room.key} href ${room.href} must have a page`);
+    const src = readRepoFile(page);
+    const compShell = [...src.matchAll(/from "@\/components\/(\w+)"/g)].some((m) => {
+      try {
+        return readRepoFile(`src/components/${m[1]}.tsx`).includes("RoomShell");
+      } catch {
+        return false;
+      }
+    });
+    assert.ok(
+      mounts(src, ["AxisChrome", "MetaNavigator", "RoomShell"]) || compShell,
+      `${room.href} must mount peer chrome (AxisChrome / MetaNavigator / RoomShell)`,
+    );
+    if (TRAVEL_OWNED.has(room.href.split("?")[0]) || TRAVEL_OWNED.has(`/${room.key}`)) {
+      // Own-pinch rooms keep travel off; peers still mounted above.
+      continue;
+    }
+  }
+}
+
 assert.deepEqual(
   GALLERY_ROUTES.map((route) => route.key),
   expectedNavigationKeys.filter((key) => !["archive", "kept", "colophon", "guide"].includes(key)),
