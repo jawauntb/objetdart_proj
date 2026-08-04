@@ -1,8 +1,8 @@
 # Atlas image generation
 
-Status: architecture note for v1 plus a preserved future OpenRouter/FLUX path. No FLUX runtime integration is implemented by this document.
+Status: v1 GPT Image 2 default with a live OpenRouter adapter already wired for six switchable models. Flip `ATLAS_IMAGE_PROVIDER` in the deploy environment to change the final-phase provider without a code change.
 
-Last verified against the live provider documentation and OpenRouter model-discovery endpoints: **2026-07-20**.
+Last verified against the live provider documentation and OpenRouter model-discovery endpoints: **2026-08-04**.
 
 ## Decision summary
 
@@ -11,7 +11,13 @@ Last verified against the live provider documentation and OpenRouter model-disco
 - **V1 refinement flow:** zoom/regeneration uses the current rendered map as the image input to `gpt-image-2`, rather than reconstructing the map from coordinates.
 - **Immediate interaction:** pan, zoom, and fold happen on the client immediately. They do not wait for generation and remain available if generation fails.
 - **UI boundary:** there is no visible coordinate editor, provider picker, model picker, or prompt-engineering panel. Coordinates/transforms may exist as private client state, but the only creative text input is the concept.
-- **Future provider:** preserve a server-only adapter slot for OpenRouter. As of the verification date, the only FLUX.2 Klein model exposed by OpenRouter's image-model inventory is `black-forest-labs/flux.2-klein-4b`.
+- **Live OpenRouter adapter:** `generateWithOpenRouter` in `src/lib/atlas-generation.ts` is wired and exercised in tests. It targets `POST https://openrouter.ai/api/v1/images` and accepts any model in `OPENROUTER_MODEL_ALLOWLIST`. The current allowlist is:
+  - `black-forest-labs/flux.2-klein-4b` — the preview draft (always used, regardless of final selector)
+  - `black-forest-labs/flux.2-pro` — BFL midweight
+  - `black-forest-labs/flux.2-flex` — BFL latency-optimized sibling of Pro
+  - `black-forest-labs/flux.2-max` — BFL quality upgrade over Pro (slower)
+  - `google/gemini-3.1-flash-image` (Nano Banana 2) — Google's flash-tier image model; ~90% of OpenRouter image traffic
+  - `bytedance-seed/seedream-4.5` — ByteDance's flagship, flat $0.04/image, painterly bent
 
 ## V1 experience and failure behavior
 
@@ -243,19 +249,24 @@ The missing size/aspect-ratio control is the main unresolved fit issue for a map
 - OpenRouter requires `OPENROUTER_API_KEY` and sends it as a Bearer token.
 - Neither secret may use a `NEXT_PUBLIC_` prefix or be returned to the browser.
 
-### Proposed Atlas configuration contract
+### Live Atlas configuration contract
 
-These names are an architecture proposal and do not exist until the provider-neutral route implements them:
+Model selection is server-side and driven by a single env var — the model slug is not free-form and there is no client override:
 
 ```dotenv
-# V1
+# V1 default (final phase → OpenAI, preview phase → OpenRouter Klein 4B)
 ATLAS_IMAGE_PROVIDER=openai
-ATLAS_IMAGE_MODEL=gpt-image-2
 OPENAI_API_KEY=...
+OPENROUTER_API_KEY=...
 
-# Future OpenRouter/FLUX switch
-ATLAS_IMAGE_PROVIDER=openrouter
-ATLAS_IMAGE_MODEL=black-forest-labs/flux.2-klein-4b
+# Env-flip selectors for the OpenRouter final path
+#   openrouter          → black-forest-labs/flux.2-klein-4b
+#   openrouter-pro      → black-forest-labs/flux.2-pro
+#   openrouter-flex     → black-forest-labs/flux.2-flex
+#   openrouter-max      → black-forest-labs/flux.2-max
+#   openrouter-nano2    → google/gemini-3.1-flash-image      (Nano Banana 2)
+#   openrouter-seedream → bytedance-seed/seedream-4.5
+ATLAS_IMAGE_PROVIDER=openrouter-nano2
 OPENROUTER_API_KEY=...
 
 # Optional OpenRouter attribution headers only
@@ -263,12 +274,22 @@ OPENROUTER_SITE_URL=https://example.com
 OPENROUTER_APP_NAME="objet d'art atlas"
 ```
 
-Rules for the eventual implementation:
+Preview always resolves to Klein 4B regardless of the final selector, so switching finals never breaks the fast draft path.
 
-- `ATLAS_IMAGE_PROVIDER` is an allowlisted server enum, never free-form client input.
-- `ATLAS_IMAGE_MODEL` is validated against a provider-specific allowlist. For OpenRouter, additionally confirm it is present in `/api/v1/images/models` at deployment/startup or during a release check.
-- Do not silently fall back from OpenAI to OpenRouter or between models. A change in model can materially change visuals, cost, privacy, and terms.
-- `OPENROUTER_SITE_URL` maps to the optional `HTTP-Referer` header; `OPENROUTER_APP_NAME` maps to optional `X-Title`. They are not authentication requirements.
+Rules the implementation enforces:
+
+- `ATLAS_IMAGE_PROVIDER` is an allowlisted server enum, never free-form client input. `resolveAtlasProviderConfig` uses `Object.hasOwn` against a fixed selector table so prototype keys like `constructor` cannot slip through.
+- OpenRouter models are validated against `OPENROUTER_MODEL_ALLOWLIST` at request time. Introducing a new model requires a code change plus a discovery check via `openrouter.ai/api/v1/images/models` before flipping in prod.
+- No silent fallback between providers or models — a change in slug materially changes visuals, cost, privacy, and terms.
+- `OPENROUTER_SITE_URL` maps to optional `HTTP-Referer`; `OPENROUTER_APP_NAME` maps to optional `X-Title`. Neither is an authentication requirement.
+
+### Bake-off harness
+
+Before flipping the production final selector, run `scratchpad/atlas-image-bakeoff.mjs`. It hits the OpenRouter Image API directly across every selector for a shared set of concepts and writes PNGs + timings to `scratchpad/bakeoff-out/`. This is the concrete way to satisfy items 4-7 of the revalidation checklist below.
+
+```bash
+OPENROUTER_API_KEY=... node scratchpad/atlas-image-bakeoff.mjs
+```
 
 ## Licensing and operational constraints
 

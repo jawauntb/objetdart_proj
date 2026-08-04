@@ -410,11 +410,69 @@ const proCall = providerCalls.find((call) => {
 });
 assert.ok(proCall, "the Pro adapter should call OpenRouter with the verified model slug");
 
+// Four env-flip selectors added for the OpenRouter model bake-off. Each must
+// route through the OpenRouter adapter with the verified model slug, and each
+// must actually reach the OpenRouter Image API when generation runs.
+const OPENROUTER_SELECTOR_MATRIX = [
+  ["openrouter-flex", "black-forest-labs/flux.2-flex"],
+  ["openrouter-max", "black-forest-labs/flux.2-max"],
+  ["openrouter-nano2", "google/gemini-3.1-flash-image"],
+  ["openrouter-seedream", "bytedance-seed/seedream-4.5"],
+];
+for (const [selector, expectedModel] of OPENROUTER_SELECTOR_MATRIX) {
+  const config = resolveAtlasProviderConfig(
+    { OPENROUTER_API_KEY: "openrouter-test-key" },
+    selector,
+  );
+  assert.equal(config.provider, "openrouter", `${selector} should route through OpenRouter`);
+  assert.equal(config.model, expectedModel, `${selector} should pin ${expectedModel}`);
+
+  const phaseConfig = resolveAtlasPhaseProviderConfig({
+    ATLAS_IMAGE_PROVIDER: selector,
+    OPENROUTER_API_KEY: "openrouter-test-key",
+  }, "final");
+  assert.equal(phaseConfig.model, expectedModel, `final phase should honor ${selector}`);
+
+  const generated = plain(await generateAtlasImage(
+    parseAtlasGenerationRequest({ prompt: "fire forest", mode: "generate" }),
+    config,
+  ));
+  assert.equal(generated.generation.model, expectedModel, `${selector} result metadata should name ${expectedModel}`);
+  const call = providerCalls.find((entry) => {
+    if (entry.url !== "https://openrouter.ai/api/v1/images") return false;
+    return JSON.parse(entry.init.body).model === expectedModel;
+  });
+  assert.ok(call, `${selector} should send its model slug to the OpenRouter Image API`);
+}
+
+// Preview stays pinned to Klein 4B regardless of which final selector is in play.
+for (const [selector] of OPENROUTER_SELECTOR_MATRIX) {
+  const preview = resolveAtlasPhaseProviderConfig({
+    ATLAS_IMAGE_PROVIDER: selector,
+    OPENAI_API_KEY: "openai-test-key",
+    OPENROUTER_API_KEY: "openrouter-test-key",
+  }, "preview");
+  assert.equal(
+    preview.model,
+    "black-forest-labs/flux.2-klein-4b",
+    `preview must stay on Klein 4B even when final is ${selector}`,
+  );
+}
+
 assertRequestError(
   () => resolveAtlasProviderConfig({}, "untrusted-provider"),
   "invalid_provider_configuration",
   "unknown provider configuration must be rejected rather than reflected or silently selected",
 );
+
+// Prototype-key lookups must not slip past the OpenRouter selector allowlist.
+for (const proto of ["constructor", "__proto__", "toString", "hasOwnProperty"]) {
+  assertRequestError(
+    () => resolveAtlasProviderConfig({}, proto),
+    "invalid_provider_configuration",
+    `${proto} must be rejected as a provider selector, not resolved via prototype`,
+  );
+}
 
 assertRequestError(
   () => parseAtlasGenerationRequest({
