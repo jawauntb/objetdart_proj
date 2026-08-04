@@ -26,7 +26,32 @@ export type PassageEdgeKey =
   | "olympus->atmosphere"
   | "atmosphere->olympus"
   | "atmosphere->atlas"
-  | "atlas->atmosphere";
+  | "atlas->atmosphere"
+  | "coast->olympus"
+  | "olympus->coast"
+  | "earth->flowers"
+  | "flowers->earth"
+  | "atlas->earth"
+  | "earth->atlas"
+  | "earth->coast"
+  | "coast->earth"
+  | "space->manifold"
+  | "manifold->space";
+
+export type PassageFilm =
+  | "planet"
+  | "arm"
+  | "node"
+  | "beads"
+  | "orbitfall"
+  | "sunfall"
+  | "peakair"
+  | "airmap"
+  | "fogclimb"
+  | "garden"
+  | "chartland"
+  | "strand"
+  | "fold";
 
 export type PassageSpec = {
   durationMs: number;
@@ -35,7 +60,7 @@ export type PassageSpec = {
   bellAt: number;
   detentAt: number;
   out: boolean;
-  film?: "planet" | "arm" | "node" | "beads" | "orbitfall" | "sunfall" | "peakair" | "airmap";
+  film?: PassageFilm;
 };
 
 /**
@@ -210,6 +235,97 @@ export const PASSAGES: Partial<Record<PassageEdgeKey, PassageSpec>> = {
     detentAt: 0.3,
     out: false,
     film: "sunfall",
+  },
+  // ——— High-traffic ground / vista / ceiling edges ———
+  "coast->olympus": {
+    durationMs: 3000,
+    reducedMs: 1100,
+    navigateAt: 0.52,
+    bellAt: 0.44,
+    detentAt: 0.6,
+    out: true,
+    film: "fogclimb",
+  },
+  "olympus->coast": {
+    durationMs: 3000,
+    reducedMs: 1100,
+    navigateAt: 0.45,
+    bellAt: 0.52,
+    detentAt: 0.3,
+    out: false,
+    film: "fogclimb",
+  },
+  "earth->flowers": {
+    durationMs: 3000,
+    reducedMs: 1100,
+    navigateAt: 0.48,
+    bellAt: 0.4,
+    detentAt: 0.58,
+    out: false,
+    film: "garden",
+  },
+  "flowers->earth": {
+    durationMs: 3000,
+    reducedMs: 1100,
+    navigateAt: 0.52,
+    bellAt: 0.56,
+    detentAt: 0.32,
+    out: true,
+    film: "garden",
+  },
+  "atlas->earth": {
+    durationMs: 3200,
+    reducedMs: 1100,
+    navigateAt: 0.52,
+    bellAt: 0.42,
+    detentAt: 0.6,
+    out: true,
+    film: "chartland",
+  },
+  "earth->atlas": {
+    durationMs: 3200,
+    reducedMs: 1100,
+    navigateAt: 0.45,
+    bellAt: 0.54,
+    detentAt: 0.3,
+    out: false,
+    film: "chartland",
+  },
+  "earth->coast": {
+    durationMs: 3000,
+    reducedMs: 1100,
+    navigateAt: 0.48,
+    bellAt: 0.4,
+    detentAt: 0.58,
+    out: false,
+    film: "strand",
+  },
+  "coast->earth": {
+    durationMs: 3000,
+    reducedMs: 1100,
+    navigateAt: 0.52,
+    bellAt: 0.56,
+    detentAt: 0.32,
+    out: true,
+    film: "strand",
+  },
+  "space->manifold": {
+    durationMs: 3400,
+    reducedMs: 1200,
+    navigateAt: 0.55,
+    bellAt: 0.48,
+    detentAt: 0.64,
+    out: true,
+    film: "fold",
+  },
+  "manifold->space": {
+    durationMs: 3400,
+    reducedMs: 1200,
+    navigateAt: 0.45,
+    bellAt: 0.52,
+    detentAt: 0.3,
+    out: false,
+    film: "fold",
   },
 };
 
