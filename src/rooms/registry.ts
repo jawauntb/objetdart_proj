@@ -33,6 +33,7 @@ import beam from "@/rooms/beam/room.config";
 import cabinet from "@/rooms/cabinet/room.config";
 import compass from "@/rooms/compass/room.config";
 import galaxy from "@/rooms/galaxy/room.config";
+import geyser from "@/rooms/geyser/room.config";
 import orb from "@/rooms/orb/room.config";
 import planets from "@/rooms/planets/room.config";
 import relativity from "@/rooms/relativity/room.config";
@@ -47,6 +48,7 @@ export const ROOM_MANIFESTS = [
   cabinet,
   compass,
   galaxy,
+  geyser,
   orb,
   planets,
   relativity,
@@ -151,7 +153,11 @@ export function roomPeerCircleIds(): string[] {
 /**
  * Splice manifest seats into a circle's hand-written ring. `ringAfter` names
  * the seat a room sits behind; an unknown or absent anchor appends. Pure and
- * order-stable: the same inputs always yield the same ring.
+ * order-stable: the same inputs always yield the same ring. Multi-pass so a
+ * seat whose anchor is itself a later-declared manifest seat still lands in
+ * the right place (a hard requirement when `ROOM_MANIFESTS` is alphabetical
+ * and a room like `/geyser` names `/spring` — later in the alphabet — as
+ * its ringAfter).
  */
 export function mergePeerRing<T extends { key: string }>(
   base: readonly T[],
@@ -159,15 +165,37 @@ export function mergePeerRing<T extends { key: string }>(
   make: (seat: DerivedPeerSeat) => T,
 ): T[] {
   const ring: T[] = [...base];
-  // Two seats behind the same anchor must keep declaration order, so each
-  // anchor remembers where its last seat landed and the next one follows it.
   const lastFor = new Map<string, string>();
-  for (const seat of seats) {
-    if (ring.some((r) => r.key === seat.key)) continue;
-    const anchor = seat.ringAfter ? lastFor.get(seat.ringAfter) ?? seat.ringAfter : null;
-    const at = anchor ? ring.findIndex((r) => r.key === anchor) : -1;
-    if (at >= 0) ring.splice(at + 1, 0, make(seat));
-    else ring.push(make(seat));
+  const remaining: DerivedPeerSeat[] = seats.filter(
+    (seat) => !ring.some((r) => r.key === seat.key),
+  );
+  // Iterate until a pass makes no progress. Each pass either places seats
+  // whose anchors are now in the ring, or falls back to appending anything
+  // still unplaced at the tail (an unknown anchor cannot ever be resolved).
+  let guard = remaining.length + 1;
+  while (remaining.length > 0 && guard-- > 0) {
+    let progressed = false;
+    for (let i = 0; i < remaining.length; i++) {
+      const seat = remaining[i];
+      const anchor = seat.ringAfter
+        ? lastFor.get(seat.ringAfter) ?? seat.ringAfter
+        : null;
+      const at = anchor ? ring.findIndex((r) => r.key === anchor) : -1;
+      if (!seat.ringAfter || at >= 0) {
+        if (at >= 0) ring.splice(at + 1, 0, make(seat));
+        else ring.push(make(seat));
+        if (seat.ringAfter) lastFor.set(seat.ringAfter, seat.key);
+        remaining.splice(i, 1);
+        i--;
+        progressed = true;
+      }
+    }
+    if (!progressed) break;
+  }
+  // Anything left has an anchor nothing will ever supply — append at the tail
+  // in declared order so the ring is still deterministic.
+  for (const seat of remaining) {
+    ring.push(make(seat));
     if (seat.ringAfter) lastFor.set(seat.ringAfter, seat.key);
   }
   return ring;

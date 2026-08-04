@@ -154,6 +154,7 @@ const expectedKeys = [
   // rooms that arrived through src/rooms/<key>/room.config.ts
   "cabinet",
   "compass",
+  "geyser",
   "orb",
   "spring",
 ];

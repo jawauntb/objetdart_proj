@@ -57,6 +57,11 @@ Emitted line schema (per line of `prs.jsonl`):
       "commit_messages": [str],     each commit's subject+body
       "ci_outcome": "success"|"failure"|"cancelled"|"unknown",
       "task_family": str | null,    coarse label; may be "unknown"
+
+      # Only when --include-patches is passed:
+      "patch_path": str,            repo-relative path to the saved .patch file
+      "patch_bytes": int,           size on disk of the patch file
+      "patch_hunks": int,           count of "@@" hunk headers in the patch
     }
 
 Also emits `data/object-compiler/prs-census.md`: totals, date range, family
@@ -87,6 +92,11 @@ GIT = "git"
 # Default output paths, relative to the repo root.
 DEFAULT_OUT = "data/object-compiler/prs.jsonl"
 DEFAULT_CENSUS = "data/object-compiler/prs-census.md"
+DEFAULT_PATCHES_DIR = "data/object-compiler/pr-diffs"
+
+# 512 KB — patches larger than this are still saved, but logged as "big" so
+# a downstream consumer can budget accordingly. Never silently truncated.
+BIG_PATCH_THRESHOLD = 512 * 1024
 
 # Fields we request from `gh pr list` in one shot.
 # NOTE: `commits` is deliberately omitted — including it triggers a GraphQL
@@ -345,6 +355,232 @@ def git_commit_count(repo: Path, merge_sha: str | None) -> int:
         return int((proc.stdout or "0").strip())
     except ValueError:
         return 0
+
+
+# --- patch extraction ----------------------------------------------------
+
+
+def _git_patch_bytes(repo: Path, merge_sha: str, *, timeout: int = 60) -> bytes:
+    """Return the PR's patch as raw bytes, or b'' if unavailable.
+
+    Strategy (in order):
+      1. `git show --format='' --patch <sha>` — this is the spec-mandated
+         primary path. It works cleanly for squash- and rebase-merged PRs.
+         For a **merge commit** (two parents) `git show` emits the *combined*
+         diff, which is empty for a clean merge — we detect that and fall
+         through to (2).
+      2. `git diff <sha>^..<sha>` — first-parent to merge, which yields the
+         full set of changes the feature branch introduced. Works uniformly
+         for merge-commit, squash, and rebase merges. Empty return means
+         the SHA is missing locally.
+
+    Byte-mode is deliberate: patches routinely contain non-UTF-8 payloads
+    (binary blobs, mixed encodings inside GLSL string literals, snapshot
+    fixtures). Text mode would raise on the first offender.
+    """
+    show_cmd = [
+        GIT, "-C", str(repo), "show",
+        "--format=",  # empty format — suppress the commit header
+        "--patch",
+        "--no-color",
+        merge_sha,
+    ]
+    proc = subprocess.run(
+        show_cmd, capture_output=True, timeout=timeout, check=False,
+    )
+    if proc.returncode == 0 and proc.stdout:
+        return proc.stdout
+
+    diff_cmd = [
+        GIT, "-C", str(repo), "diff",
+        "--no-color",
+        f"{merge_sha}^..{merge_sha}",
+    ]
+    proc = subprocess.run(
+        diff_cmd, capture_output=True, timeout=timeout, check=False,
+    )
+    if proc.returncode == 0 and proc.stdout:
+        return proc.stdout
+
+    return b""
+
+
+def _gh_pr_diff_bytes(repo: Path, pr_number: int, *, timeout: int = 90) -> bytes:
+    """Fetch a PR's diff via `gh pr diff` — the last-resort fallback.
+
+    Only invoked when both git strategies come back empty (missing SHA,
+    shallow clone, empty combined diff). Byte-mode so the same encoding
+    quirks handled in `_git_patch_bytes` don't crash us here.
+    """
+    cmd = [
+        GH, "pr", "diff", str(pr_number),
+        "--repo", _repo_slug(repo),
+    ]
+    proc = subprocess.run(
+        cmd, capture_output=True, timeout=timeout, check=False,
+    )
+    if proc.returncode != 0:
+        return b""
+    return proc.stdout or b""
+
+
+def _count_hunks(patch: bytes) -> int:
+    """Count `@@` hunk headers in a unified-diff payload.
+
+    A hunk header is a line whose first two characters are `@@`. Chunks of
+    context inside a patch also may show `@@` inside indented lines (e.g., a
+    file whose contents mention `@@`), which is why we anchor to
+    start-of-line only. Robust enough for corpus stats.
+    """
+    if not patch:
+        return 0
+    count = 0
+    # Iterate line-by-line without splitting into a huge list.
+    start = 0
+    n = len(patch)
+    while start < n:
+        end = patch.find(b"\n", start)
+        if end == -1:
+            end = n
+        line = patch[start:end]
+        if line.startswith(b"@@ "):
+            count += 1
+        start = end + 1
+    return count
+
+
+def extract_patch(
+    *,
+    repo: Path,
+    pr_number: int,
+    merge_sha: str | None,
+    patch_path: Path,
+    existing_bytes: int | None,
+    quiet: bool,
+) -> tuple[int, int, bool] | None:
+    """Materialize one PR's patch on disk. Returns (bytes, hunks, was_regenerated).
+
+    Idempotent: if `patch_path` already exists AND `existing_bytes` matches
+    the on-disk size, we neither re-run git nor rewrite the file — we just
+    read the existing patch to recount hunks and return.
+
+    Returns None on hard failure (both git and gh came back empty and no
+    prior patch file existed on disk).
+    """
+    # Fast path: prior run's file is present and its size matches what
+    # `prs.jsonl` recorded — trust it, recount hunks from disk.
+    if (
+        existing_bytes is not None
+        and patch_path.exists()
+        and patch_path.stat().st_size == existing_bytes
+    ):
+        try:
+            data = patch_path.read_bytes()
+        except OSError:
+            data = b""
+        return existing_bytes, _count_hunks(data), False
+
+    # Try git first (whether or not a stale file exists — we regenerate).
+    data = b""
+    if merge_sha:
+        try:
+            data = _git_patch_bytes(repo, merge_sha)
+        except subprocess.TimeoutExpired:
+            _log(f"  patch: git timeout for PR #{pr_number}", quiet=quiet)
+            data = b""
+
+    # Fallback: gh pr diff.
+    if not data:
+        try:
+            data = _gh_pr_diff_bytes(repo, pr_number)
+        except subprocess.TimeoutExpired:
+            _log(f"  patch: gh timeout for PR #{pr_number}", quiet=quiet)
+            data = b""
+
+    if not data:
+        # Preserve any pre-existing file on disk — don't wipe it with an
+        # empty write. If none existed either, this PR has no patch.
+        if patch_path.exists() and patch_path.stat().st_size > 0:
+            existing = patch_path.read_bytes()
+            return patch_path.stat().st_size, _count_hunks(existing), False
+        _log(
+            f"  patch: no diff available for PR #{pr_number} "
+            f"(sha={merge_sha or 'None'})",
+            quiet=quiet,
+        )
+        return None
+
+    patch_path.parent.mkdir(parents=True, exist_ok=True)
+    patch_path.write_bytes(data)
+    n_bytes = len(data)
+    hunks = _count_hunks(data)
+    if n_bytes > BIG_PATCH_THRESHOLD:
+        _log(
+            f"  patch: PR #{pr_number} is {n_bytes / 1024:.0f} KB "
+            f"({hunks} hunks) — larger than {BIG_PATCH_THRESHOLD // 1024} KB",
+            quiet=quiet,
+        )
+    return n_bytes, hunks, True
+
+
+def _load_previous_patch_stats(
+    prs_jsonl: Path,
+) -> dict[int, tuple[int, str]]:
+    """Read the existing prs.jsonl (if any) and return {pr_number: (patch_bytes, patch_path)}.
+
+    Missing file, missing fields, or a malformed row → that PR simply isn't
+    in the returned dict. Callers treat that as "no prior state".
+    """
+    stats: dict[int, tuple[int, str]] = {}
+    if not prs_jsonl.exists():
+        return stats
+    try:
+        with prs_jsonl.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                num = row.get("pr_number")
+                pb = row.get("patch_bytes")
+                pp = row.get("patch_path")
+                if isinstance(num, int) and isinstance(pb, int) and isinstance(pp, str):
+                    stats[num] = (pb, pp)
+    except OSError:
+        pass
+    return stats
+
+
+def _load_previous_ci_outcomes(prs_jsonl: Path) -> dict[int, str]:
+    """Read the existing prs.jsonl (if any) and return {pr_number: ci_outcome}.
+
+    Used by --skip-ci to preserve prior CI outcomes across reruns instead of
+    silently downgrading them to "unknown" — critical when re-running to
+    add patches without re-polling the GitHub API.
+    """
+    outcomes: dict[int, str] = {}
+    if not prs_jsonl.exists():
+        return outcomes
+    try:
+        with prs_jsonl.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                num = row.get("pr_number")
+                oc = row.get("ci_outcome")
+                if isinstance(num, int) and isinstance(oc, str) and oc:
+                    outcomes[num] = oc
+    except OSError:
+        pass
+    return outcomes
 
 
 def _repo_slug(repo: Path) -> str:
@@ -668,6 +904,73 @@ def write_census(rows: list[dict[str, Any]], out_path: Path) -> None:
         lines.append(f"| {outcome} | {count} |")
     lines.append("")
 
+    # --- patch archive section ---------------------------------------------
+    # Only render when at least one row carries the patch_bytes field, i.e.
+    # the extractor was run with --include-patches. Otherwise this section
+    # would be empty noise.
+    patch_sizes = [
+        int(r["patch_bytes"]) for r in rows
+        if isinstance(r.get("patch_bytes"), int) and r["patch_bytes"] > 0
+    ]
+    if patch_sizes:
+        total_bytes = sum(patch_sizes)
+        sorted_sizes = sorted(patch_sizes)
+        n = len(sorted_sizes)
+
+        def _pct(p: float) -> int:
+            # Nearest-rank percentile (safe on tiny samples).
+            k = max(0, min(n - 1, int(round(p * (n - 1)))))
+            return sorted_sizes[k]
+
+        median = _pct(0.5)
+        p95 = _pct(0.95)
+        max_bytes = sorted_sizes[-1]
+
+        big_hunk_rows = [
+            r for r in rows
+            if isinstance(r.get("patch_hunks"), int) and r["patch_hunks"] > 50
+        ]
+        empty_patches = [
+            r for r in rows
+            if isinstance(r.get("patch_bytes"), int) and r["patch_bytes"] == 0
+        ]
+        big_patch_rows = [
+            r for r in rows
+            if isinstance(r.get("patch_bytes"), int)
+            and r["patch_bytes"] > BIG_PATCH_THRESHOLD
+        ]
+
+        def _fmt_bytes(b: int) -> str:
+            if b >= 1024 * 1024:
+                return f"{b / (1024 * 1024):.2f} MB"
+            if b >= 1024:
+                return f"{b / 1024:.1f} KB"
+            return f"{b} B"
+
+        lines.append("## Patch archive")
+        lines.append("")
+        lines.append("Per-PR patch content extracted with `--include-patches`.")
+        lines.append(
+            "Patches live at `data/object-compiler/pr-diffs/<pr_number>.patch` "
+            "(gitignored — corpus artifact, not repo asset)."
+        )
+        lines.append("")
+        lines.append("| stat | value |")
+        lines.append("| --- | ---: |")
+        lines.append(f"| PRs with a patch | {n} |")
+        lines.append(f"| PRs with no patch available | {len(empty_patches)} |")
+        lines.append(f"| Total patch bytes | {total_bytes} ({_fmt_bytes(total_bytes)}) |")
+        lines.append(f"| Median patch size | {median} ({_fmt_bytes(median)}) |")
+        lines.append(f"| P95 patch size | {p95} ({_fmt_bytes(p95)}) |")
+        lines.append(f"| Max patch size | {max_bytes} ({_fmt_bytes(max_bytes)}) |")
+        lines.append(
+            f"| PRs with > 50 hunks (big-refactor tail) | {len(big_hunk_rows)} |"
+        )
+        lines.append(
+            f"| PRs above 512 KB threshold | {len(big_patch_rows)} |"
+        )
+        lines.append("")
+
     out_path.write_text("\n".join(lines), encoding="utf-8")
 
 
@@ -790,6 +1093,23 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="skip the per-PR `gh pr checks` call (mark every ci_outcome unknown)",
     )
     parser.add_argument(
+        "--include-patches",
+        action="store_true",
+        help=(
+            "extract each PR's patch (git show / gh pr diff fallback) to "
+            "--pr-diffs-dir and add patch_path/patch_bytes/patch_hunks "
+            "fields to every row. I/O-heavier; opt-in."
+        ),
+    )
+    parser.add_argument(
+        "--pr-diffs-dir",
+        default=DEFAULT_PATCHES_DIR,
+        help=(
+            "directory to write per-PR .patch files into "
+            "(repo-relative or absolute; only used with --include-patches)"
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="fetch and classify but do not write output files",
@@ -855,8 +1175,21 @@ def main(argv: list[str]) -> int:
         )
 
     if args.skip_ci:
-        ci_map: dict[int, str] = {int(p["number"]): "unknown" for p in kept}
-        _log("  --skip-ci: marking every PR ci_outcome=unknown", quiet=args.quiet)
+        # Preserve prior CI outcomes from the existing prs.jsonl (if any)
+        # rather than downgrading every row to "unknown". Any PR not in the
+        # prior file is left as "unknown" — which is what --skip-ci would
+        # have produced anyway.
+        prior_ci = _load_previous_ci_outcomes(out_path)
+        ci_map = {
+            int(p["number"]): prior_ci.get(int(p["number"]), "unknown")
+            for p in kept
+        }
+        preserved = sum(1 for v in ci_map.values() if v != "unknown")
+        _log(
+            f"  --skip-ci: preserved {preserved}/{len(kept)} prior CI outcomes; "
+            f"remainder marked unknown",
+            quiet=args.quiet,
+        )
     else:
         _log(f"  polling CI outcomes for {len(kept)} PRs...", quiet=args.quiet)
         ci_map = _iter_ci_outcomes(repo, kept, quiet=args.quiet)
@@ -873,6 +1206,73 @@ def main(argv: list[str]) -> int:
                 ci_outcome=ci_map.get(num, "unknown"),
                 added_paths=added_by_pr.get(num, set()),
             )
+        )
+
+    # Optional: extract per-PR patches to disk and stamp the three new fields
+    # onto each row. Opt-in via --include-patches because it is I/O-heavier
+    # (a `git show` per PR, ~a few seconds of wall time for a 261-PR archive).
+    if args.include_patches:
+        patches_dir = _resolve_out(repo, args.pr_diffs_dir)
+        patches_dir.mkdir(parents=True, exist_ok=True)
+        prev_stats = _load_previous_patch_stats(out_path)
+        _log(
+            f"  extracting patches for {len(rows)} PRs -> {patches_dir}",
+            quiet=args.quiet,
+        )
+
+        n_ok = 0
+        n_reused = 0
+        n_regen = 0
+        n_missing = 0
+        n_big = 0
+        for i, row in enumerate(rows, start=1):
+            num = int(row["pr_number"])
+            patch_rel = f"{args.pr_diffs_dir.rstrip('/')}/{num}.patch"
+            patch_abs = _resolve_out(repo, patch_rel)
+            prev = prev_stats.get(num)
+            prev_bytes = prev[0] if prev else None
+
+            result = extract_patch(
+                repo=repo,
+                pr_number=num,
+                merge_sha=row.get("merge_sha"),
+                patch_path=patch_abs,
+                existing_bytes=prev_bytes,
+                quiet=args.quiet,
+            )
+
+            if result is None:
+                n_missing += 1
+                # No patch anywhere — leave the three fields empty/zero so
+                # downstream consumers can filter them out.
+                row["patch_path"] = patch_rel
+                row["patch_bytes"] = 0
+                row["patch_hunks"] = 0
+                continue
+
+            n_bytes, hunks, was_regen = result
+            n_ok += 1
+            if was_regen:
+                n_regen += 1
+            else:
+                n_reused += 1
+            if n_bytes > BIG_PATCH_THRESHOLD:
+                n_big += 1
+            row["patch_path"] = patch_rel
+            row["patch_bytes"] = n_bytes
+            row["patch_hunks"] = hunks
+
+            if i % 50 == 0:
+                _log(
+                    f"    patches: {i}/{len(rows)} processed "
+                    f"({n_reused} reused, {n_regen} regenerated)",
+                    quiet=args.quiet,
+                )
+
+        _log(
+            f"  patches: {n_ok} ok ({n_reused} reused, {n_regen} regenerated); "
+            f"{n_missing} unavailable; {n_big} > {BIG_PATCH_THRESHOLD // 1024} KB",
+            quiet=args.quiet,
         )
 
     if args.dry_run:
