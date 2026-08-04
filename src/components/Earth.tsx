@@ -1685,13 +1685,10 @@ export default function Earth() {
           markLens();
         },
 
-        // two fingers touch the representation: the section slides under the eye
-        pan2: (e) => {
-          lastTouchAt = performance.now();
-          if (e.phase === "end") return;
-          frameX = clamp(frameX + e.dx, -(OVERSCAN - 6), OVERSCAN - 6);
-          frameY = clamp(frameY + e.dy, -(OVERSCAN - 6), OVERSCAN - 6);
-        },
+        // pan2 is unbound on purpose: AxisChrome mounts ScaleTravel, which
+        // owns the two-finger frame channel (pinch → zoom / travel). A private
+        // section-slide here stole that channel and drew fault slip as "the
+        // line thingy" instead of travel. Faults stay one-finger (drag/flick).
 
         // a circular scrub is the auger: it turns and the column answers
         scrub: (e) => {

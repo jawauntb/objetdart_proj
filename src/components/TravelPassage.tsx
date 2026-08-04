@@ -10,9 +10,9 @@
  * orbit, and the sky thickens into stars. Travelling back down plays the
  * same film reversed. ~3.5s, and a tap anywhere skips to the end.
  *
- * Architecture: a registry (PASSAGES) keyed by travel edge, consumed by the
- * shared travel execution. Edges without an entry keep the ink fade exactly
- * as before. The overlay must survive the route change (router.push fires
+ * Architecture: a registry (PASSAGES in lib/travel-passage.ts) keyed by travel
+ * edge, consumed by the shared travel execution. Unregistered edges take the
+ * shared default film — no hard cuts. The overlay must survive the route change (router.push fires
  * mid-passage so the destination loads behind the film), so it is rendered
  * by TravelPassageHost, mounted once in the ROOT LAYOUT — the App Router
  * never remounts the root layout on navigation, so the host, its canvas,
@@ -47,232 +47,16 @@ import {
   type World,
 } from "@/lib/worldforge";
 
-// ——— The registry ———————————————————————————————————————————————
+import {
+  DEFAULT_PASSAGE,
+  PASSAGES,
+  resolvePassageSpec,
+  type PassageEdgeKey,
+  type PassageSpec,
+} from "@/lib/travel-passage";
 
-export type PassageEdgeKey =
-  | "atlas->stars"
-  | "stars->atlas"
-  | "stars->galaxy"
-  | "galaxy->stars"
-  | "galaxy->space"
-  | "space->galaxy"
-  | "earth->planets"
-  | "planets->earth"
-  | "planets->solar"
-  | "solar->planets"
-  | "planets->stars"
-  | "stars->planets"
-  | "solar->stars"
-  | "stars->solar"
-  | "olympus->atmosphere"
-  | "atmosphere->olympus"
-  | "atmosphere->atlas"
-  | "atlas->atmosphere";
-
-export type PassageSpec = {
-  /** Full film length, ms. */
-  durationMs: number;
-  /** Reduced-motion length (three cross-dissolved stills), ms. */
-  reducedMs: number;
-  /** Fraction of the duration at which router.push fires behind the film. */
-  navigateAt: number;
-  /** Fraction at which the low bell sounds — planetfall. */
-  bellAt: number;
-  /** Fraction at which the orbit detent lands in the hand. */
-  detentAt: number;
-  /** True = the film plays forward (map → planet → stars); false = reversed. */
-  out: boolean;
-  /**
-   * Which film this edge traverses: the atlas↔stars planet ("planet",
-   * default), the vault streaming into an arm seen edge-on ("arm",
-   * stars↔galaxy), the spiral shrinking to one luminous node of the web
-   * ("node", galaxy↔space), the globe becoming one bead among forged
-   * worlds ("beads", earth↔planets), or those worlds falling onto their
-   * orbits as the sun ignites ("orbitfall", planets↔solar), or the whole
-   * system receding until its sun is one warm point of the vault
-   * ("sunfall", solar↔stars).
-   */
-  film?: "planet" | "arm" | "node" | "beads" | "orbitfall" | "sunfall" | "peakair" | "airmap";
-};
-
-export const PASSAGES: Partial<Record<PassageEdgeKey, PassageSpec>> = {
-  // the summit drops away and the air itself becomes the material
-  "olympus->atmosphere": {
-    durationMs: 3200,
-    reducedMs: 1100,
-    navigateAt: 0.55,
-    bellAt: 0.46,
-    detentAt: 0.62,
-    out: true,
-    film: "peakair",
-  },
-  "atmosphere->olympus": {
-    durationMs: 3200,
-    reducedMs: 1100,
-    navigateAt: 0.45,
-    bellAt: 0.56,
-    detentAt: 0.3,
-    out: false,
-    film: "peakair",
-  },
-  // through the last haze the ground resolves into the hand-drawn map
-  "atmosphere->atlas": {
-    durationMs: 3200,
-    reducedMs: 1100,
-    navigateAt: 0.55,
-    bellAt: 0.72,
-    detentAt: 0.62,
-    out: true,
-    film: "airmap",
-  },
-  "atlas->atmosphere": {
-    durationMs: 3200,
-    reducedMs: 1100,
-    navigateAt: 0.45,
-    bellAt: 0.32,
-    detentAt: 0.3,
-    out: false,
-    film: "airmap",
-  },
-  // The globe shrinks to one bead among worlds — /earth hands its focused
-  // object to /planets as that room's container (the handoff-anchor law).
-  "earth->planets": {
-    durationMs: 3200,
-    reducedMs: 1200,
-    navigateAt: 0.52,
-    bellAt: 0.44,
-    detentAt: 0.6,
-    out: true,
-    film: "beads",
-  },
-  "planets->earth": {
-    durationMs: 3200,
-    reducedMs: 1200,
-    navigateAt: 0.45,
-    bellAt: 0.52,
-    detentAt: 0.3,
-    out: false,
-    film: "beads",
-  },
-  // The focused world falls onto its orbit line; the sun ignites at centre
-  // — /planets hands its worlds to /solar as planets of one system.
-  "planets->solar": {
-    durationMs: 3200,
-    reducedMs: 1200,
-    navigateAt: 0.52,
-    bellAt: 0.58,
-    detentAt: 0.66,
-    out: true,
-    film: "orbitfall",
-  },
-  "solar->planets": {
-    durationMs: 3200,
-    reducedMs: 1200,
-    navigateAt: 0.45,
-    bellAt: 0.4,
-    detentAt: 0.3,
-    out: false,
-    film: "orbitfall",
-  },
-  // The solar band is an address before it is a room, so travel out of the
-  // forge resolves *through* it to the stars (scale.ts, firstBuiltAlong).
-  // That crossing really does pass the system, so it plays the system's
-  // film; when /solar ships, the direct edges above take it back.
-  "planets->stars": {
-    durationMs: 3200,
-    reducedMs: 1200,
-    navigateAt: 0.52,
-    bellAt: 0.58,
-    detentAt: 0.66,
-    out: true,
-    film: "orbitfall",
-  },
-  "stars->planets": {
-    durationMs: 3200,
-    reducedMs: 1200,
-    navigateAt: 0.45,
-    bellAt: 0.4,
-    detentAt: 0.3,
-    out: false,
-    film: "orbitfall",
-  },
-  "atlas->stars": {
-    durationMs: 3500,
-    reducedMs: 1200,
-    navigateAt: 0.55,
-    bellAt: 0.4,
-    detentAt: 0.62,
-    out: true,
-  },
-  "stars->atlas": {
-    durationMs: 3500,
-    reducedMs: 1200,
-    navigateAt: 0.45,
-    bellAt: 0.5,
-    detentAt: 0.28,
-    out: false,
-  },
-  // The vault's stars stream into an arm seen edge-on, and the arm opens
-  // into the spiral it belongs to. The return plays the same film back:
-  // the disc tilts to the band, and the band scatters into the vault.
-  "stars->galaxy": {
-    durationMs: 3600,
-    reducedMs: 1200,
-    navigateAt: 0.55,
-    bellAt: 0.5,
-    detentAt: 0.62,
-    out: true,
-    film: "arm",
-  },
-  "galaxy->stars": {
-    durationMs: 3600,
-    reducedMs: 1200,
-    navigateAt: 0.45,
-    bellAt: 0.52,
-    detentAt: 0.3,
-    out: false,
-    film: "arm",
-  },
-  // The spiral shrinks to one luminous node of the web between galaxies;
-  // the return dives into that node until its arms fill the frame.
-  "galaxy->space": {
-    durationMs: 3600,
-    reducedMs: 1200,
-    navigateAt: 0.55,
-    bellAt: 0.62,
-    detentAt: 0.7,
-    out: true,
-    film: "node",
-  },
-  "space->galaxy": {
-    durationMs: 3600,
-    reducedMs: 1200,
-    navigateAt: 0.45,
-    bellAt: 0.42,
-    detentAt: 0.3,
-    out: false,
-    film: "node",
-  },  // The system lets go of the frame until its sun is one warm point taking
-  // its seat in the vault; the return re-condenses it exactly.
-  "solar->stars": {
-    durationMs: 3200,
-    reducedMs: 1200,
-    navigateAt: 0.55,
-    bellAt: 0.42,
-    detentAt: 0.64,
-    out: true,
-    film: "sunfall",
-  },
-  "stars->solar": {
-    durationMs: 3200,
-    reducedMs: 1200,
-    navigateAt: 0.45,
-    bellAt: 0.52,
-    detentAt: 0.3,
-    out: false,
-    film: "sunfall",
-  },
-};
+export type { PassageEdgeKey, PassageSpec };
+export { DEFAULT_PASSAGE, PASSAGES, resolvePassageSpec };
 
 // ——— The bus between executeTravel and the host in the root layout ———
 
@@ -290,9 +74,10 @@ let hostCue: ((p: ActivePassage) => void) | null = null;
 let passageNonce = 0;
 
 /**
- * Play the registered passage for this travel edge, if one exists and the
- * host is mounted. Returns true when the passage owns the transition (the
- * caller must NOT run its own fade/navigation); false = keep the ink fade.
+ * Play the passage for this travel edge. Every edge gets a film — registered
+ * trunk films when present, otherwise the shared default. Returns true when
+ * the passage owns the transition (caller must NOT run its own fade/nav);
+ * false only when the host is unmounted (SSR / tests without a layout).
  */
 export function playTravelPassage(
   from: ScaleBandId,
@@ -301,8 +86,7 @@ export function playTravelPassage(
   navigate: () => void,
 ): boolean {
   if (typeof window === "undefined" || !hostCue) return false;
-  const spec = PASSAGES[`${from}->${dest.id}` as PassageEdgeKey];
-  if (!spec) return false;
+  const spec = resolvePassageSpec(from, dest);
   // A missing origin band only costs the register glide, never the film —
   // edges may be registered ahead of a band's declaration landing.
   const fromBand = SCALE_BANDS.find((b) => b.id === from);

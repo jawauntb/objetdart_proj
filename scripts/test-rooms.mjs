@@ -300,6 +300,22 @@ assert.ok(
   "intensity is a continuous axis — a hard tap must answer louder than a soft one",
 );
 
+// Rapid-tap ladder: count 1 / 3 / 5 / n deepens the soft acknowledgement.
+// Catches the bug where tapTrain capped at 3 and trains past that were silent
+// or flat — the low-friction reward loop needs a rising payoff.
+const trainHeard = [];
+const train = roomGestureBindings({
+  senses: { sound: (s) => trainHeard.push(s), touch: () => {} },
+  voice: {},
+});
+for (const count of [1, 3, 5, 7]) {
+  train.tap?.({ fingers: 1, count, intensity: 0.5, x: 0, y: 0 });
+}
+assert.equal(trainHeard.length, 4, "every train tier answers");
+assert.ok(trainHeard[1] > trainHeard[0], "tier 3 answers louder than 1");
+assert.ok(trainHeard[2] > trainHeard[1], "tier 5 answers louder than 3");
+assert.ok(trainHeard[3] > trainHeard[2], "tier n answers louder than 5");
+
 // A room that speaks a verb gets it instead of the acknowledgement.
 const spokenRun = exercise({
   tap: () => {},

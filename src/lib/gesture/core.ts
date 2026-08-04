@@ -17,8 +17,10 @@ export const THRESHOLDS = {
   /** Hold tiers: touch → dwell → ceremony. */
   dwellMs: 900,
   ceremonyMs: 2500,
-  /** Window for tap trains (double/triple). */
+  /** Window for tap trains (1 / 3 / 5 / n). */
   tapTrainMs: 280,
+  /** How deep a train may count before the next tap only deepens intensity. */
+  tapTrainCap: 9,
   /** Movement past this many px commits a drag (kills tap/hold). */
   moveTolPx: 12,
   /** Release speed above this is a flick, px/ms. */
@@ -271,7 +273,29 @@ export function classifyRelease(durationMs: number, movedPx: number, releaseVel:
 
 /** Running tap-train count: 1, 2, 3… while taps stay inside the window. */
 export function tapTrain(prevCount: number, prevTimeMs: number, nowMs: number): number {
-  return nowMs - prevTimeMs <= THRESHOLDS.tapTrainMs ? Math.min(3, prevCount + 1) : 1;
+  return nowMs - prevTimeMs <= THRESHOLDS.tapTrainMs
+    ? Math.min(THRESHOLDS.tapTrainCap, prevCount + 1)
+    : 1;
+}
+
+/**
+ * Site-wide rapid-tap tiers — the low-friction reward ladder.
+ * Rooms bind special meanings at 1 / 3 / 5 / n; counts between those
+ * deepen the previous tier's intensity rather than inventing a private dialect.
+ */
+export type TapTrainTier = 1 | 3 | 5 | "n";
+
+export function tapTrainTier(count: number): TapTrainTier {
+  if (count >= 7) return "n";
+  if (count >= 5) return 5;
+  if (count >= 3) return 3;
+  return 1;
+}
+
+/** Continuous 0..1 depth for soft acknowledgements that scale with the train. */
+export function tapTrainDepth(count: number): number {
+  const c = count < 1 ? 1 : count > THRESHOLDS.tapTrainCap ? THRESHOLDS.tapTrainCap : count;
+  return (c - 1) / (THRESHOLDS.tapTrainCap - 1);
 }
 
 export type Rhythm = { bpm: number; stability: number };

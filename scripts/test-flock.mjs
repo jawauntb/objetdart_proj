@@ -337,9 +337,13 @@ assert.equal(F.seedFlock(1, 900).pos.length, 900 * 3, "three numbers per bird, n
   }
   assert.ok(held < F.WORLD_X * 0.6, `the cohesive flock settles at a radius (${held})`);
   assert.ok(
-    F.spread(loose.pos, loose.n) > held * 1.8,
-    "and the same sky without it runs to the walls",
+    F.spread(loose.pos, loose.n) > held * 1.25,
+    "without cohesion the flock is looser — the mid-sky well keeps it from roosting on the wall",
   );
+  // Center-field law: even the loose sky's centroid stays mid-volume.
+  const c = F.centroid(loose.pos, loose.n);
+  const cr = Math.hypot(c.x, c.y, c.z);
+  assert.ok(cr < F.WORLD_X * 0.45, `loose centroid stays mid-sky (got ${cr})`);
 }
 
 // —— separation keeps them off each other ————————————————————————

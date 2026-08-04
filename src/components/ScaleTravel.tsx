@@ -270,10 +270,10 @@ function nearestNeighborLabel(route: string, s: number): string | null {
 
 /**
  * The shared travel execution: haptic roll, persist the landing position so
- * the destination room enters just inside its wall, then go. Edges with a
- * registered passage (TravelPassage.PASSAGES — the atlas ↔ stars trunk)
- * travel through the film: the passage owns the screen and navigation fires
- * mid-passage behind it. Every other edge keeps the ink fade exactly as-is.
+ * the destination room enters just inside its wall, then go. Every edge plays
+ * a film — registered trunk passages when present, otherwise the shared
+ * default in TravelPassage. The ink fade remains only when the passage host
+ * is not mounted (SSR / tests).
  */
 function executeTravel(
   router: { push: (href: string) => void },
