@@ -1,0 +1,170 @@
+# planets — worlds condense from kept dust
+#
+# Round-trip-derived from src/rooms/planets/room.config.ts and
+# src/lib/worldforge.ts. The `latent` invariant type: a 12-dim latent point
+# IS a world, decoded into terrain, ocean, air, ring, moons and spin, and
+# read back off the world exactly.
+
+key: planets
+component_name: PlanetForge
+
+placement:
+  kind: band
+  band: planets
+
+sigil: stars
+desc: "worlds condense from kept dust"
+cluster: nature
+dark: true
+home_priority: 10
+ambient_profile: cosmic
+storage_key: "objetdart:planets:v2"
+
+invariant: >
+  a compact 12-dimensional latent per world — radius, ocean fraction,
+  terrain family, relief, atmosphere tint and depth, axial tilt, day length,
+  cloud cover, ring density, moon retinue, polar ice — decoded into a world
+  and read back off the world exactly. one fixed budget of dust binds them
+  all.
+
+material: 2d-over-shader
+noun: world
+
+domain_lib:
+  name: worldforge
+  invariant_type: latent
+
+palette:
+  bg: "#090b0e"
+  bg2: "#1e3440"
+  glow: "#c8732a"
+  accent: "#ddd3be"
+  accent2: "#4e7d8c"
+  ink: "#f2eee6"
+
+verbs_answered:
+  - tap
+  - dwell
+  - ceremony
+  - drag
+  - flick
+  - twist
+  - twist3
+  - tap3
+  - drag3
+  - hold3
+  - scrub
+  - arrows
+  - tilt
+  - shake
+  - knock
+  - flip
+
+guide:
+  title: "worlds condense from kept dust"
+  scale: "the planets band — between the ground and the system"
+  essence: >
+    a star, one fixed budget of dust, and the worlds a hand condenses out of
+    it. each world is a compact latent vector decoded into terrain, ocean,
+    air, ring, moons and spin — and read back off the world exactly. the
+    orbit you leave a world in writes its surface: near the star its seas
+    boil, far out the ice takes it.
+  moves:
+    - "hold on open dust → a world condenses under the finger and keeps growing for as long as you hold; it joins the disc on the orbit of the place it was made"
+    - "hold on a world → keeps accreting onto that one, drawing the field's reserve down as it grows"
+    - "tap a world → it comes forward and states its chord; tap the dark → the dust stirs where the finger landed"
+    - "rapid taps (1 / 3 / 5 / n) → stir / chord → bright flash → a world condenses → the forge answers tutti"
+    - "drag a world → it goes where the hand goes and keeps the throw when you let go"
+    - "flick a world → a real throw; fling one into the star and it is eaten, and its mass comes back as dust"
+    - "let two worlds meet → they merge, mass conserved, the child wearing both parents' vectors; what will not fit is ejected"
+    - "circle a finger around a world → winds its ring denser, the other way lets it out — a felt click where the ring condenses"
+    - "twist → the focused world turns under the hand, and enough turn raises the lens: twelve spokes, the latent read back live"
+    - "three fingers drag → sideways turns the star up and down and every climate answers; up and down leans the axis"
+    - "three-finger twist → runs the whole system's clock; three-finger hold → time slows while held; three-finger tap → tutti"
+    - "tilt (once invited) → the field leans into real gravity; shake → every orbit is perturbed; knock → the focused world answers with its chord; face-down → night"
+    - "arrow keys → walk the field and raise or flood the focused world; [ and ] → dim and brighten the star; backspace → let one world go"
+  finds:
+    - "the shimmer of the disc is the mass reserve itself — forge greedily and the field visibly dims until something is let go"
+    - "nothing fires the same at 900ms and 2400ms: accretion is one continuous curve of the held time"
+    - "park a world close in and its oceans boil away and its air escapes; throw it out and ice takes the whole surface"
+    - "a world close to the star is tidally braked — its day lengthens toward its year, and the fast ones visibly flatten at the poles"
+    - "each world's chord is read off its vector: ringed worlds carry a fifth the bare ones lack"
+  keeps: "the worlds you forged, where in their orbits they are, and a deliberate clearing"
+
+# ——— the three LLM slots ————————————————————————————————————————————————
+
+shader_intent: >
+  paint one fixed disc: a star at centre, a thin dust ring, and up to nine
+  worlds on their own orbits. draw four passes: (1) the background — dark
+  space with faint noise; (2) the dust disc, a soft ring whose radial
+  brightness IS the current mass reserve (`DUST_TOTAL` minus what the
+  worlds hold), so forging greedily visibly dims the field; (3) the star,
+  an SDF disc with a corona whose warmth reads the star's current
+  luminosity; (4) each world as one instanced SDF disc with its shader
+  decoding the world's 12-dim latent into surface colour, cloud pattern
+  and ring bokeh — an ocean coordinate that raises land moves the world's
+  colour from blue toward ochre in the same frame. climate is not a decal:
+  the star heats close-in worlds until the shader burns off their ocean
+  and thins their atmosphere, and cools far-out ones until the shader ices
+  them over. the 2D overlay draws the accretion halo under the finger and,
+  when the twist lens is up, the twelve spokes of the focused world's
+  latent, one per dimension. palette registers: `bg` is deep space, `bg2`
+  is the dust plane, `glow` the star's warmth and the inner worlds'
+  ochre, `accent` the ink of the world card, `accent2` the outer cool
+  blue, `ink` the lens spokes. the visible invariant is invertible: the
+  shader draws only what `worldFromLatent` decoded.
+
+domain_intent: >
+  write `src/lib/worldforge.ts` as the planet latent (INSPIRATION.md §6).
+  `LATENT_DIM = 12`, `MAX_WORLDS = 9`, `DUST_TOTAL = 1` (one fixed budget
+  of dust, mass conserved). export `worldFromLatent(latent[12]) -> World`
+  as an affine decode — radius from `RADIUS_MIN..RADIUS_MAX`, ocean
+  fraction, terrain family, relief, atmosphere tint and depth, axial tilt
+  bounded by `TILT_MAX`, day length in `DAY_MIN..DAY_MAX`, cloud cover,
+  ring density (visible above `RING_MIN`), moon retinue up to `MOON_MAX`,
+  polar ice. export `latentFromWorld(world) -> latent[12]` as the exact
+  inverse — the round trip is the room's whole thesis; if it drifts the
+  room is decoration. sculpting is movement of the point: `raiseLand(lat,
+  dLand)` lifts the terrain coordinate and drops the ocean one in the
+  same call; `windRing(lat, dRing)` moves the ring density. export
+  `accretionRadius(holdMs)` — a saturating exponential curve with
+  `ACCRETION_TAU_MS = 1400` — so nothing fires the same at 900ms and
+  2400ms, and a ceremony hold approaches the maximum without leaping to
+  it. export `merge(a, b)` — mass conserving, the child wearing an
+  interpolated latent weighted by mass; what will not fit is ejected as
+  dust. export `climateFor(world, distanceToStar, luminosity)` so the
+  same latent parked close in boils its ocean and far out ices over.
+  export `chordFor(latent) -> Voice[]` and its inverse `latentTraits(chord)`
+  — ringed worlds carry a fifth the bare ones lack, so the chord reads
+  the vector back. constants: `MASS_MIN = 0.02`, `MASS_SPAN = 0.26`. no
+  DOM, no audio, no `Math.random`, no `Date.now`; the seed is passed in.
+
+verb_intent: >
+  every handler reads and writes the field's `{ worlds[], reserve,
+  starLuminosity }` ref. `dwell` on open dust condenses a world under the
+  finger — held time is the accretion clock, `accretionRadius(holdMs)`
+  grows the radius, and the dust reserve is drawn down by the mass added;
+  ceremony holds approach `RADIUS_MAX`. `dwell` on an existing world
+  keeps accreting onto that one. `tap` on a world plays its `chordFor`
+  and brings it forward as `focused`; `tap` on the dark stirs the dust
+  where the finger landed. `drag` on a world moves it in space, keeping
+  the throw when released. `flick` throws — hard enough into the star,
+  the star eats the world and returns its mass to `reserve`. two worlds
+  that meet call `merge`; what will not fit is ejected. `scrub` (finger
+  circling around a world) winds the ring — clockwise densifies, other
+  way rarefies; each condense fires a felt click. `twist` on a focused
+  world turns it under the hand; enough turn raises the lens (twelve
+  spokes, the latent read back live). `tap` fingers === 2 lowers the
+  lens (stepBack). `drag3` writes the world-law: horizontal turns the
+  star's luminosity up or down (every climate answers via
+  `climateFor`), vertical leans the axis. `twist3` runs the whole
+  system's clock. `hold3` slows the sim clock while held. `tap3` (tutti)
+  fires every world's chord at once. the vessel: `tilt` writes a
+  gravity vector that the perturbation layer uses to lean orbits;
+  `shake` perturbs every orbit; `knock` sounds the focused world's
+  chord; `flip` is night. `arrows` walk the field; enter raises or
+  floods the focused world (writes into `ocean fraction` and `relief`);
+  `[` and `]` dim and brighten the star; backspace lets one world go
+  (mass returns to reserve). no room-local timing constants — the
+  handlers read `ACCRETION_TAU_MS` from `worldforge.ts` and all tier
+  gates from `gesture/core.ts`.

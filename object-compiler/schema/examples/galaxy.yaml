@@ -1,0 +1,175 @@
+# galaxy — the wave the stars stream through
+#
+# Round-trip-derived from src/rooms/galaxy/room.config.ts and src/lib/spiral.ts.
+# The `field` invariant type: a density wave in a differentially rotating disc.
+# 180,000 stars each on their own orbit, poured through a two-armed pattern
+# turning at one pattern speed — the arm is not made of particular stars but
+# is the place where the crowd happens.
+
+key: galaxy
+component_name: GalaxyArms
+
+placement:
+  kind: band
+  band: galaxy
+
+sigil: stars
+desc: "the wave the stars stream through"
+cluster: nature
+dark: true
+ambient_profile: cosmic
+storage_key: "objetdart:galaxy:v1"
+
+invariant: >
+  a density wave in a differentially rotating disc: every star on its own
+  circular orbit at Ω(R), the arms one standing pattern turning rigidly at
+  one pattern speed Ωp, and the corotation circle the one radius where the
+  two clocks agree. the arms are where the crowd happens, not what the
+  crowd is made of.
+
+material: 2d-over-shader
+noun: star
+
+domain_lib:
+  name: spiral
+  invariant_type: field
+
+palette:
+  bg: "#04070f"
+  bg2: "#181330"
+  glow: "#7d9bd8"
+  accent: "#c8732a"
+  accent2: "#b9c9e8"
+  ink: "#e9edf8"
+
+verbs_answered:
+  - tap
+  - dwell
+  - ceremony
+  - drag
+  - flick
+  - twist
+  - twist3
+  - tap3
+  - drag3
+  - hold3
+  - scrub
+  - arrows
+  - tilt
+  - shake
+  - knock
+  - flip
+
+guide:
+  title: "the wave the stars stream through"
+  scale: "the galaxy band — between the stars and the web"
+  essence: >
+    one spiral galaxy from inside its arms: a differentially rotating disc
+    of a hundred and eighty thousand stars, each on its own orbit, poured
+    through a two-armed density wave that turns at one pattern speed. the
+    arms are not made of stars — they are the standing crowd the stars
+    pass through — and the register the room sounds in is the pattern's
+    own, near sub-bass, so the turn you hear is the turn you see.
+  moves:
+    - "drag one finger → leans the eye around the disc; the near arm sweeps over the far"
+    - "flick → the lean keeps going, and eases"
+    - "two fingers drag → holds the frame: swing round the disc, and tip it the whole way from face-on to its own rim"
+    - "tap a star → it rings at its own orbital speed — the inner disc always higher, the rotation curve as melody"
+    - "hold → the eye takes the nearest star and rides its orbit; every arm it crosses lands as one felt tick, faster near the centre, silent at corotation"
+    - "keep holding past the dwell → the same finger gathers gas where it rests, and a star-forming region stands there, caught in the shear from the moment it exists"
+    - "let go past the ceremony → the region goes off; its shell runs outward, shoves and lights what it passes, and where it reaches the next patch of gas it lights that too"
+    - "tap a knot → it brightens and takes on gas; tap it twice → it blows out and the disc closes over it"
+    - "three fingers drag → the world-law: sideways winds the pattern speed, up and down opens or closes the arms — the arms re-pitch and the register re-tunes in the same breath"
+    - "three fingers twist → turns the pattern itself by hand"
+    - "three fingers held → the veil: the stars dim and the standing wave shows alone with its corotation circle; held past the ceremony, a bar grows at the centre and stays"
+    - "three fingers tap → the rotation curve as one arpeggio, centre to rim"
+    - "circle a finger → rolls the sky about the line of sight"
+    - "twist → raises the lens: the crest's own log spiral, the corotation circle, and the rotation curve drawn flat where the halo holds it"
+    - "tilt → leans the disc; shake → the disc heats and cools back into order; knock → the bar rings; face-down → night, and at night the stars go out and the wave glows on"
+    - "arrows → left and right lean the eye, up and down walk a ring along the rotation curve, each step heard; enter → follows the nearest star on the ring; held enter → rides it deeper, then gathers gas; esc → lowers everything"
+  finds:
+    - "watch one patch of arm and its stars leave it — inside corotation they overtake the pattern, outside it the pattern overtakes them, and the crossing beat you feel while riding is exactly that mismatch"
+    - "a knot you plant is drawn into an arc while you watch, faster the further in you put it: matter cannot hold an arm open, which is the whole reason the arms are a wave instead"
+    - "set off two knots near each other and the second lights when the first one's shell arrives — not on a timer, but when the blast actually gets there"
+    - "the young blue light sits only on the crest, because the crest is where the crowd compresses the gas — the arm is lit by its own physics, not painted"
+    - "an untouched room sounds precisely the note the scale axis assigns this band; wind the law with three fingers and you can hear how far you have bent it"
+  keeps: "the stars you have ridden through an arm, and the gas and remnants you left in the disc"
+
+# ——— the three LLM slots ————————————————————————————————————————————————
+
+shader_intent: >
+  paint a spiral galaxy from inside its arms. the disc is one large ellipse
+  filling most of the frame; the eye can be leaned around it and tipped from
+  face-on to rim. three passes: (1) a background — deep space with faint
+  noise; (2) the disc's stellar population as ~180,000 instanced points,
+  each one an SDF disc with a small additive corona, its position given by
+  its own circular orbit at Ω(R) offset by the wave's small excursion
+  `starDisplacement(R, phi, t, Ωp)`; (3) the emergent arms — nothing here
+  draws a spiral, the arms EMERGE from where the crowd of small excursions
+  compresses the disc, and the shader reads that compression as a
+  brightness boost, with young blue light sitting only on the crest because
+  that is where the gas is being crowded. star-forming knots are planted by
+  a dwell and light up with age, their shells expanding by a real signal
+  speed so a second knot lit near the first fires only when the shell
+  actually gets there. `flip` (night) draws the veil: the stars go out and
+  the standing wave glows on with its corotation circle visible. the 2D
+  overlay carries the twist lens (the crest's own log spiral, the
+  corotation circle, the rotation curve drawn flat where the halo holds
+  it). palette: `bg` deep space, `bg2` the disc's outer haze, `glow` the
+  young blue crest, `accent` the warm bulge, `accent2` the far cool arm,
+  `ink` the lens ink. the visible invariant is the wave, not the stars —
+  the arms are lit by their physics, not painted.
+
+domain_intent: >
+  write `src/lib/spiral.ts` around a `Disc = { seed, Vflat, Rcore, Redge,
+  Omega_p, m: 2, pitch, arms }` and a `Star = { R, phi0, seed }`. export
+  `omegaAt(R, disc)` for a flat rotation curve with a linear-rising solid
+  body inside `R_CORE`; `orbitPhi(star, t, disc)` — every star on its own
+  circular orbit, closed form. export `starDisplacement(R, phi, t, disc)`
+  — a small wave-locked excursion that, summed over the population, IS the
+  arm; nothing in this file draws a spiral, the arms emerge from where the
+  displacement compresses the disc. export `patternHzFor(disc, s)` — the
+  pattern's audio frequency, centred exactly on `spectralRegisterFor` at
+  the band's middle (`s = 18.75`) so an untouched room sounds precisely
+  the band's note. export `orbitHzFor(R, disc)` — a star's tone frequency
+  proportional to its `omegaAt(R)`, so the inner disc rings higher (the
+  rotation curve as melody). export `armCrossings(star, t, disc)` — the
+  wave phase advances at `m·|Ω − Ωp|`; each wrap is one arm crossed, so
+  the crossing beat IS the frequency mismatch. export `knotAge(planted,
+  t)` and `knotShellRadius(planted, t, disc)` — a real speed of light for
+  supernova shells, not a timer, so a second knot lights only when the
+  shell actually arrives. constants: `V_FLAT = 0.055`, `R_CORE = 0.12`,
+  disc edge `R = 1`, star count ~180,000 (declared `POP` in the module).
+  pure math, no imports, no DOM — node-testable in `test-spiral.mjs`.
+
+verb_intent: >
+  the population is drawn once per frame; every handler edits either the
+  disc (Ωp, pitch, arms) or a small collection of knots. `tap` on a star
+  rings `orbitHzFor` — the inner disc always higher. `tap` on a knot
+  brightens it and gives it gas; tap twice blows it out and the disc
+  closes over it. `drag` (one finger) leans the eye around the disc;
+  `flick` keeps the lean going with easing. `dwell` grabs the nearest
+  star and rides its orbit — `armCrossings` fires a felt tick every wrap.
+  keep the finger held past the dwell tier and the same contact gathers
+  gas at that radius — a knot stands there, caught in the shear from the
+  moment it exists (the handler writes a knot into the disc's knots list
+  with a real planted time so the shell advances by
+  `knotShellRadius`). release past the ceremony tier and the knot goes
+  off; the shell shoves and lights what it passes, and lights the next
+  patch when it arrives. `drag3` writes the world-law: horizontal winds
+  `Omega_p` (the arms re-pitch and the register re-tunes via
+  `patternHzFor`), vertical opens or closes the arms (writes `pitch`).
+  `twist3` turns the pattern itself by hand. `hold3` (three-finger held)
+  is the veil: the stars dim (the shader gets a `veil` uniform), the
+  standing wave shows alone with its corotation circle; past the
+  ceremony a bar grows at the centre and stays. `tap3` (tutti) plays the
+  rotation curve as one arpeggio from centre to rim. `scrub` (finger
+  circling) rolls the sky about the line of sight. `twist` (two-finger)
+  raises the lens; `tap` fingers === 2 lowers it. the vessel: `tilt`
+  leans the disc, `shake` heats the disc and cools back into order (a
+  temporary velocity dispersion), `knock` rings the bar, `flip` is night
+  (draws the veil). `arrows`: left/right lean the eye, up/down walk a
+  ring along the rotation curve (each step heard); enter follows the
+  nearest star; held enter rides it deeper then gathers gas; esc lowers
+  everything. every duration reads from `gesture/core.ts`; every
+  physical constant reads from `spiral.ts`.

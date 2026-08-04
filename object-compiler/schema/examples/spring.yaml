@@ -1,0 +1,204 @@
+# /spring — a natural spring, at the drop band, next to the stones and the soil.
+#
+# Placement is the ordinal decision (docs/new-room.md §1). At ~10⁻³·⁵–10⁻¹·⁵ m
+# a spring is a hand's width of ground where the water table breaches: the
+# same section as /soil, the same lattice register as /rocks, but the material
+# that comes up is *live water on the move*. It joins the cabinet ring behind
+# `/soil` (`ringAfter: soil`), so the twist order stays: /drop → /seed → /rocks
+# → /soil → /spring → /coin → …. That places the spring inside the drop band
+# for `SITE_ROUTES`, `LATERAL_ROUTE_BANDS` and the header dropdown; a peer of
+# the drop above it, of the soil the water crosses, and of the rocks the water
+# is filtered through.
+#
+# The sigil is "growth" — "drop" was the temptation because a spring IS a
+# drop that keeps coming, but /drop itself already carries that mark, and a
+# spring's whole invariant is the LIVING WATER, not the drop-shaped instant.
+# The growth glyph rhymes with /soil next to it in the ring and reads
+# correctly for a room whose reward is the aquifer refilling under a rainy
+# fortnight.
+
+key: spring
+
+placement:
+  kind: peer
+  circle: cabinet
+  band: drop
+  label: "the spring"
+  ringAfter: soil
+
+sigil: growth
+desc: "the aquifer, ringing at its head"
+cluster: nature
+dark: true
+home_priority: 9
+ambient_profile: waves
+storage_key: "objetdart:spring:v1"
+
+invariant: >
+  a two-cell hydraulic ledger — an aquifer head H(t) under the ground and a
+  small pool level L(t) at the surface — with a seep between them driven by
+  Darcy flow (H − L)·throat, a weir carrying the pool over its lip, and
+  climate acting as recharge W and evaporation E. every ripple, ring and
+  wet-halo is a lens over those two numbers and the seep flux between them.
+
+material: 2d-over-shader
+noun: seep
+
+domain_lib:
+  name: springflow
+  invariant_type: ledger
+
+palette:
+  bg:      "#050a0c"
+  bg2:     "#0e2530"
+  glow:    "#a9d8e6"
+  accent:  "#4a91a8"
+  accent2: "#c9b988"
+  ink:     "#e6efe8"
+
+verbs_answered:
+  - tap
+  - dwell
+  - ceremony
+  - drag
+  - flick
+  - twist
+  - twist3
+  - tap3
+  - drag3
+  - hold3
+  - scrub
+  - drum
+  - arrows
+  - tilt
+  - shake
+  - knock
+  - flip
+
+guide:
+  title: "the spring — head, seep, ring"
+  scale: >
+    the drop band — cabinet peer behind the soil, ahead of the coin: a hand's
+    width of wet ground in section, where the aquifer under it breaches and
+    its water rings its own head.
+  essence: >
+    a two-cell hydraulic ledger — an aquifer under the ground and a small
+    pool over it — with a seep between them and a lip the pool spills over.
+    the water's pitch IS the head that pushed it up, so from the ringing you
+    can read the depth of the water below the ground; nothing on the shelf
+    is created except what the rain gives back or the sun quietly takes.
+  moves:
+    - "tap → a ripple, and the water rings at the local head; deep water rings low, and where the finger lands the pool answers first"
+    - "dwell → plants a seep, its rate climbing the head under it; keep pressing and the seep's throat widens, drawing more of the aquifer through"
+    - "ceremony (hold to the tier) → opens the seep to the aquifer at full — a small artesian rise, kept between visits"
+    - "drag → the surface film slides, and the pool climbs the far edge; layers of the pool slip against each other without changing the ledger"
+    - "flick → throws the standing bubble at that point — a cast bell over the water, the ring the head that shaped it"
+    - "twist → raises the flow lens: H(t), L(t), the flux between, the weir line, and the pool as a barometer of the aquifer below it"
+    - "twist3 → turns the year; from thaw's peak flow to summer's low, the aquifer emptying and refilling"
+    - "tap3 → tutti; every seep and every bubble rings at once, one chord across the whole ledger"
+    - "drag3 → the world-law: down is rain (W up), across is evaporation (E up or down)"
+    - "hold3 → time dilation while held; the ledger's clock runs slow"
+    - "scrub → stirs the pool from above; the surface rotates until the vorticity bleeds off through the walls"
+    - "drum (two hands alternating) → the wave field between them sings its beat over the pool"
+    - "arrows → walk the surface cursor; enter held plants and deepens a seep at the cursor; escape lowers the lens"
+    - "tilt / shake / knock / flip (once invited) → the pool leans, the surface scatters, a struck stone rings the pool, face-down is night"
+  finds:
+    - "the pitch is the head, and the map is invertible — a ring of the same note twice comes from the same depth of water below"
+    - "a spring left running through summer empties its aquifer; a rainy fortnight refills it and the pitch climbs by itself"
+    - "two seeps within a hand's width share the same aquifer, so widening one quiets the other — the head is common"
+    - "a drowned lip stops giving: raise the pool past the weir crest and the flux out of it exceeds what the seep can put in"
+    - "the water's ring was in the ground before you touched it — a fortnight's absence is read off a closed-form ledger, not replayed"
+  keeps: >
+    the current head, the pool level, every seep with its throat and its
+    ring, the season the year had reached, and the hour it was last looked
+    at.
+
+# ——— the three LLM slots ————————————————————————————————————————————————
+
+shader_intent: >
+  paint one hand-width of wet ground in section, seen from the front. the
+  upper third is air; below it the ground meets the pool at a wavy waterline.
+  in the pool: the surface highlight is a low-angle Snell reflection of the
+  sky palette, ripples propagate as gaussian wavefronts from every live seep
+  and from pointer taps (all passed as a `vec4[24]` uniform), and the
+  underwater dark is a monotone depth gradient in `bg` → `bg2`. in the
+  ground: horizontal moisture bands, wettest along the waterline and drying
+  upward with an `exp(-y/λ)` — the load-bearing map is HEAD → COLOR, so the
+  wet halo around a seep is exactly as bright as its live flux the domain
+  module reports (invert the wet-halo brightness and you recover the local
+  flux). every seep is drawn as an SDF disc with an additive corona through
+  the shared instanced pass (`src/lib/scene/population-layer.ts` and
+  `src/lib/webgl/stage.ts`); no `createRadialGradient`, no per-frame
+  allocation. a hand-drawn mineral bloom at the wet edge is a value-noise
+  FBM modulated by the moisture band, so the room ages visibly as the ledger
+  runs. palette registers: `bg` is wet dark under the water, `bg2` is the
+  pool's deep column, `glow` is the sunlit water surface (the load-bearing
+  highlight), `accent` is the cold register (water in motion), `accent2` is
+  the warm register (mineral bloom at the wet edge), `ink` is readable text
+  over the darkest tile. the twist lens is a second render path: H(t) and
+  L(t) drawn as bars, the flux curve between them, the weir line, every
+  seep's throat as a labelled tick — the ledger read back off the water.
+
+domain_intent: >
+  write `src/lib/springflow.ts` around one exported `SpringState = { H, L,
+  seeps, tau }`. H is aquifer head (m), L is pool level (m), tau is seconds
+  of maturity. climate `Climate = { warmth, wet }` drives two linear
+  responses: recharge `W(warmth, wet)` and evaporation `E(warmth, wet)`,
+  each bounded, so the drowned corner of the weather is where the pool
+  drowns its own lip rather than the fastest spring in the room. the rate
+  laws are the two-cell ledger:
+      dH/dt = W − k_seep · (H − L) · Σ throat_i
+      dL/dt = k_seep · (H − L) · Σ throat_i − E − Q_lip
+      Q_lip = c_w · max(0, L − L_lip)^(3/2)
+  when Σ throat is stable between visits the coupled ODEs have a closed-form
+  solution (two-eigenvalue linear system), so `advanceExact(state, seconds,
+  climate)` is one matrix exponential per stable interval, never a Euler
+  catch-up loop. cap elapsed at `MAX_ELAPSED_S` = 14 days so a month away is
+  not a century of drift. the LOAD-BEARING INVERTIBLE MAP is HEAD → PITCH:
+  `ringHzFor(head)` is a monotone function of H (`f(head) = base·2^(H/scale)`),
+  and `headForRingHz(hz)` exactly inverts it. from the sound alone you
+  recover the head; the test pins the round-trip across seeds and heads.
+  export a bounded scatter (`SCATTER_STEPS`) that reports its budget, a
+  deterministic `mulberry32(hashSeed(storageKey, index))` seed for every
+  seep's phase, and a `totalWater(state)` observable so the test can check
+  conservation across a plant, a decay and a season turn. no DOM, no audio,
+  no `Math.random`, no `Date.now`.
+
+verb_intent: >
+  every handler reads `SpringState` from a stable `apiRef` and forwards to a
+  method on `SpringApi` (mirrors `src/components/SoilGround.tsx` around line
+  375's `voiceRef = useRef<RoomVoice>(...)` pattern). `tap` rings the water
+  at the finger, pitch derived from the local head via `ringHzFor` — a
+  smaller `e.intensity` rings a smaller ripple, and the pitch alone tells
+  the head, so a tap at the deep pool never sounds like a tap at the wet
+  edge. `dwell` plants a seep at the finger with throat 0; while held, the
+  throat widens by an increasing but saturating function of `e.elapsed`, so
+  a two-second dwell widens twice as far as a one-second dwell but a
+  ten-second dwell only widens 1.5× as far as five. `ceremony` seals the
+  seep at full throat and writes it to the shared `world.ts` bus so it
+  keeps between visits. `drag` slides the surface film — a linear pool-tilt
+  proportional to `e.dx`, `e.dy`, the ledger unchanged. `flick` throws the
+  standing bubble at that point (mass-conserving; the bubble carries the
+  ring pitch it had). `scrub` (a finger circling) writes an angular
+  velocity into the surface vortex, which decays back to zero on its own
+  clock. `drum` (two hands alternating) beats the wave field between the
+  two contact zones. `twist` raises the flow lens; a `tap` with `e.fingers
+  === 2` (step back) lowers it. `drag3` writes into `Climate` — `e.dy` is
+  rate-of-change on W (recharge; down is rain), `e.dx` is rate-of-change on
+  E (evaporation), both bounded so a maximal drag can never take W below
+  zero or E above the sun's own limit. `twist3` moves the year through
+  `Climate`'s combined `warmth` axis, and `advanceExact` catches the ledger
+  up on the closed form. `hold3` slows the room's clock (a real dt scale,
+  not an animation trick). `tap3` (tutti) rings every seep at once — one
+  chord read from the whole ledger. the vessel: `tilt` leans the surface
+  highlight, `shake` scatters the pool (an event that decays back), `knock`
+  rings the pool as a struck stone — the pitch is `ringHzFor(H)` again, and
+  the audio path is `spectralRegisterFor(s)` for the band's register.
+  `flip` is night; the surface highlight goes to a moon register and the
+  ledger keeps its closed-form clock. `arrows` walk a surface cursor; enter
+  held is a keyboard dwell; escape lowers the lens. no room-local timing
+  constants — every threshold is from `gesture/core.ts`.
+
+chrome:
+  travel: true
+  peers: true
