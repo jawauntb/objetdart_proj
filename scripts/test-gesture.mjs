@@ -35,6 +35,8 @@ const {
   classifyInstrumentPair,
   classifyRelease,
   tapTrain,
+  tapTrainTier,
+  tapTrainDepth,
   rhythmFrom,
   shakeIntensity,
   drumAlternation,
@@ -137,11 +139,20 @@ assert.equal(classifyRelease(1200, 3, 0.0), "hold-release");
 assert.equal(classifyRelease(300, 80, 1.2), "flick");
 assert.equal(classifyRelease(600, 80, 0.1), "drag-end");
 
-// — Tap trains cap at 3 and reset outside the window —
+// — Tap trains climb past triple (tiers 1 / 3 / 5 / n) and reset outside the window —
 assert.equal(tapTrain(1, 1000, 1000 + THRESHOLDS.tapTrainMs), 2);
 assert.equal(tapTrain(2, 1000, 1200), 3);
-assert.equal(tapTrain(3, 1000, 1200), 3, "caps at triple");
+assert.equal(tapTrain(3, 1000, 1200), 4, "trains keep counting past triple");
+assert.equal(tapTrain(THRESHOLDS.tapTrainCap, 1000, 1200), THRESHOLDS.tapTrainCap, "caps at tapTrainCap");
 assert.equal(tapTrain(2, 1000, 1000 + THRESHOLDS.tapTrainMs + 1), 1, "window resets");
+assert.equal(tapTrainTier(1), 1);
+assert.equal(tapTrainTier(3), 3);
+assert.equal(tapTrainTier(5), 5);
+assert.equal(tapTrainTier(7), "n");
+assert.equal(tapTrainTier(9), "n");
+assert.ok(tapTrainDepth(1) === 0, "first tap is the floor of the ladder");
+assert.ok(tapTrainDepth(THRESHOLDS.tapTrainCap) === 1, "cap is the top of the ladder");
+assert.ok(tapTrainDepth(5) > tapTrainDepth(3), "deeper trains deepen the soft ack");
 
 // — Rhythm: a steady 120bpm train is heard as one —
 const steady = [0, 500, 1000, 1500, 2000];

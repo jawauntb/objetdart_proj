@@ -30,7 +30,7 @@ hardware exposes, each given one consistent meaning.
 | dimension | derivation | expressive meaning |
 | --- | --- | --- |
 | chord size | simultaneous contacts (settle window ~40ms) | **which layer of the stack you're addressing** (§3) |
-| tap count | taps within 280ms windows | single / double / triple |
+| tap count | taps within 280ms windows | rapid-tap tiers **1 / 3 / 5 / n** (count keeps rising; rooms bind specials at those rungs) |
 | intensity | force → area → approach-velocity, best available | how hard you meant it (0..1) |
 | velocity / flick | release speed + direction | throwing, skipping, dismissing |
 | direction | continuous angle, or 8-way | steering |
@@ -128,7 +128,7 @@ moving, and the desktop wheel, still zoom.)
 Rooms receive semantic events, never raw pointers:
 
 ```
-tap        { fingers 1–3, count 1–3, intensity, x, y }
+tap        { fingers 1–3, count 1…9 (tiers 1 / 3 / 5 / n), intensity, x, y }
 hold       { fingers, phase: enter|tick|release, elapsed, tier, pressure, x, y }
 drag       { fingers 1|3, dx, dy, velocity, path, phase }
 flick      { fingers, angle, speed }
@@ -156,7 +156,8 @@ breath     { strength }                        // opt-in, candle contexts only
 
 Shared thresholds (centralized in `gesture/core.ts`, never redefined per room):
 hold tiers **250ms** (touch) / **900ms** (dwell) / **2500ms** (ceremony); tap window
-280ms; chord settle 40ms; scrub at ¾ winding; flick above 0.6 px/ms; voice stagger 80ms
+280ms with train cap 9 and site-wide tiers **1 / 3 / 5 / n** (`tapTrainTier`, n ≥ 7);
+chord settle 40ms; scrub at ¾ winding; flick above 0.6 px/ms; voice stagger 80ms
 and pair-decide 180ms on instrument surfaces. A drum patter commits at three landings
 alternating between two zones inside a 1.2s window (a same-spot roll or a chord's
 simultaneous landings never drum); an arpeggio is a chord whose landings spread past
@@ -169,6 +170,7 @@ the 40ms settle with no entrance more than 600ms after the last. Intensity alway
 | --- | --- |
 | **two-finger tap** | **step back** — the frame retreats one step: a gentle zoom-out nudge within the band (never crossing a wall), one camera step out in rooms that own zoom, and if a lens is raised, it lowers |
 | **three-finger tap** | **tutti** — one synchronized pulse of everything alive in the room: every active element answers softly at once, the room stating itself |
+| **rapid one-finger taps** | **train** — tiers 1 / 3 / 5 / n deepen the material's payoff (soft default acknowledgement scales with count; rooms bind page-specific specials at those rungs) |
 | pinch | zoom **within** the current scale band |
 | pinch held through the detent | **travel** to the neighboring band (with resistance + haptic click) |
 | twist | rotate the **lens** — change level of description at fixed scale |

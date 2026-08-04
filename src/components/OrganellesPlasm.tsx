@@ -49,6 +49,7 @@ import {
   onVisibility,
   resolveDpr,
 } from "@/lib/room-runtime";
+import { centerFieldForce } from "@/lib/scene/center-field";
 import {
   KIND_BASE_HZ,
   MAX_ORGANELLES,
@@ -580,14 +581,16 @@ export default function OrganellesPlasm() {
             return;
           }
           if (dragIdx >= 0 && dragIdx < listRef.current.length) {
-            const nx0 = clamp(x / width, 0.06, 0.94);
-            const ny0 = clamp(y / height, 0.08, 0.92);
+            // Soft mid-frame well, not a 0.06/0.94 edge roost.
+            const nx0 = clamp(x / width, 0.02, 0.98);
+            const ny0 = clamp(y / height, 0.02, 0.98);
             const minDim = Math.max(1, Math.min(width, height));
             const aspectX = width / minDim;
             const aspectY = height / minDim;
             const pull = cellWellPull(nx0, ny0, membraneCompleteness(listRef.current), aspectX, aspectY);
-            const nx = clamp(nx0 + pull.x * pull.strength * 0.018, 0.06, 0.94);
-            const ny = clamp(ny0 + pull.y * pull.strength * 0.018, 0.08, 0.92);
+            const field = centerFieldForce(nx0, ny0);
+            const nx = clamp(nx0 + pull.x * pull.strength * 0.018 + field.ax * 0.01, 0.02, 0.98);
+            const ny = clamp(ny0 + pull.y * pull.strength * 0.018 + field.ay * 0.01, 0.02, 0.98);
             listRef.current = listRef.current.map((q, k) =>
               k === dragIdx ? { ...q, nx, ny } : q,
             );
@@ -863,16 +866,18 @@ export default function OrganellesPlasm() {
           const swirl = Math.sin(localT * 0.3 + o.nx * 6) * flow + pour * 0.03;
           const drift = Math.cos(localT * 0.24 + o.ny * 5) * flow;
           const pull = cellWellPull(o.nx, o.ny, completeness, aspectX, aspectY);
-          vel[i * 2] += pull.x * pull.strength * 0.1 * dt;
-          vel[i * 2 + 1] += pull.y * pull.strength * 0.1 * dt;
+          const field = centerFieldForce(o.nx, o.ny);
+          vel[i * 2] += (pull.x * pull.strength * 0.1 + field.ax * 0.55) * dt;
+          vel[i * 2 + 1] += (pull.y * pull.strength * 0.1 + field.ay * 0.55) * dt;
           let nx = o.nx + (vel[i * 2] + swirl) * dt;
           let ny = o.ny + (vel[i * 2 + 1] + drift) * dt;
           vel[i * 2] *= Math.exp(-dt * 1.2);
           vel[i * 2 + 1] *= Math.exp(-dt * 1.2);
-          if (nx < 0.07 || nx > 0.93) vel[i * 2] = -vel[i * 2] * 0.7;
-          if (ny < 0.09 || ny > 0.91) vel[i * 2 + 1] = -vel[i * 2 + 1] * 0.7;
-          nx = clamp(nx, 0.06, 0.94);
-          ny = clamp(ny, 0.08, 0.92);
+          // Hard safety only — the resting law is the center field, not the rim.
+          if (nx < 0.02 || nx > 0.98) vel[i * 2] = -vel[i * 2] * 0.55;
+          if (ny < 0.02 || ny > 0.98) vel[i * 2 + 1] = -vel[i * 2 + 1] * 0.55;
+          nx = clamp(nx, 0.02, 0.98);
+          ny = clamp(ny, 0.02, 0.98);
           list[i] = { ...o, nx, ny };
         }
       }

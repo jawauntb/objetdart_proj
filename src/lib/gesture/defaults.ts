@@ -19,6 +19,7 @@
  */
 
 import type { GestureHandlers } from "@/lib/gesture";
+import { tapTrainDepth } from "@/lib/gesture/core";
 
 /**
  * The site-wide meanings, as a table the tests can walk. `owner: "shell"`
@@ -76,6 +77,11 @@ export type RoomSenses = {
  * grammar's continuous magnitudes and must never be treated as switches.
  */
 export type RoomVoice = {
+  /**
+   * One-finger tap train. `count` keeps rising inside the train window
+   * (capped in `gesture/core.ts`); rooms bind special payoffs at tiers
+   * 1 / 3 / 5 / n via `tapTrainTier(count)` — the low-friction reward ladder.
+   */
   tap?: (e: { fingers: number; count: number; intensity: number; x: number; y: number }) => void;
   stepBack?: (e: { x: number; y: number }) => void;
   tutti?: (e: { intensity: number }) => void;
@@ -189,8 +195,14 @@ export function roomGestureBindings(ctx: RoomBindingContext): GestureHandlers {
         else answer(0.3, 0.75);
         return;
       }
-      if (voice.tap) voice.tap(e);
-      else answer(0.25 + e.intensity * 0.5, 0.45);
+      if (voice.tap) {
+        voice.tap(e);
+        return;
+      }
+      // Soft train: each extra tap in the window deepens the payoff — the
+      // low-friction ladder rooms upgrade at tiers 1 / 3 / 5 / n.
+      const depth = tapTrainDepth(e.count);
+      answer(0.22 + e.intensity * 0.45 + depth * 0.32, 0.5 - depth * 0.18);
     },
 
     hold: (e) => {

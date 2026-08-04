@@ -64,7 +64,10 @@ export const MAX_FRAME_SEC = 0.25;
 const ALIGN_K = 2.4;
 const COH_K = 0.85;
 const SEP_K = 26;
-const BOUND_K = 4.5;
+/** Soft wall — strong enough to turn a bird, never a place to rest. */
+const BOUND_K = 3.6;
+/** Mid-sky well: gentle — enough that the centroid prefers the heart, not a roost. */
+const CENTER_K = 0.09;
 
 export type Vec3 = { x: number; y: number; z: number };
 
@@ -975,6 +978,11 @@ export function stepFlock(state: FlockState, params: FlockParams, dt: number): v
         }
       }
     }
+
+    // Mid-sky well first — so the soft wall is a bounce, not a roost.
+    ax += -px * CENTER_K;
+    ay += -py * CENTER_K * 0.85;
+    az += -pz * CENTER_K;
 
     // the air turns them back before the wall has to
     if (px > WORLD_X - BOUND_MARGIN) ax -= BOUND_K * (px - (WORLD_X - BOUND_MARGIN));
