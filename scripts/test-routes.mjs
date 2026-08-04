@@ -155,6 +155,7 @@ const expectedKeys = [
   "cabinet",
   "compass",
   "orb",
+  "spring",
 ];
 const validClusters = new Set(["field", "water", "nature", "mechanism"]);
 const validIcons = new Set(

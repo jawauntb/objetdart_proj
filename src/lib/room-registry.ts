@@ -1179,6 +1179,19 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     creates: "a body",
     exempt: {},
   },
+  {
+    key: "spring",
+    href: "/spring",
+    kind: "room",
+    source: "src/components/Spring.tsx",
+    page: "src/app/spring/page.tsx",
+    address: { band: "drop" },
+    frame: "yield",
+    chrome: "axis",
+    keeps: "objetdart:spring:v1",
+    creates: "a seep",
+    exempt: {},
+  },
 ];
 
 export const ROOM_BY_KEY: Record<string, RoomEntry> = Object.fromEntries(
