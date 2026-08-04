@@ -37,6 +37,7 @@ import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import { stirTurbulence } from "@/lib/turbulence";
 import LetGo from "@/components/LetGo";
@@ -583,29 +584,100 @@ export default function OrganicsField() {
           if (e.fingers !== 1) return;
           const { x, y } = toLocal(e.x, e.y);
           const pi = nearestChain(x, y, scaleOf() * 4);
-          if (pi >= 0) {
-            kick(placedRef.current[pi], 0.18 + e.intensity * 0.5);
+          // rapid-tap ladder 1 / 3 / 5 / n — counts between tiers deepen intensity
+          const tier = tapTrainTier(e.count);
+          const base = tier === "n" ? 7 : tier;
+          const deepen = Math.min(1, (e.count - base) * 0.5);
+          const amp = e.intensity * (0.75 + deepen * 0.55);
+          if (tier === 1) {
+            if (pi >= 0) {
+              kick(placedRef.current[pi], 0.16 + amp * 0.55);
+              try {
+                haptics.tap();
+              } catch {
+                /* noop */
+              }
+              return;
+            }
+            for (const p of placedRef.current) {
+              const c = chainScreen(p);
+              const d = Math.hypot(x - c.x, y - c.y);
+              const w = Math.max(0, 1 - d / (Math.min(width, height) * 0.6));
+              if (w > 0.02) kick(p, (0.06 + amp * 0.16) * w);
+            }
+            stirTurbulence(0.06 + amp * 0.1);
             try {
+              audio.playNote(48 + Math.round(amp * 10), 140);
               haptics.tap();
             } catch {
               /* noop */
             }
             return;
           }
-          // open solvent: a thermal kick spends itself on everything nearby
+          if (tier === 3) {
+            // spawn: bond a loose atom, or condense a new chain
+            const li = nearestLoose(x, y, scaleOf() * 3.5);
+            if (li >= 0 && tryBond(li, x, y)) return;
+            condenseAt(clamp01(x / width), clamp01(y / height), 2 + Math.round(deepen * 3));
+            return;
+          }
+          if (tier === 5) {
+            // rupture: a sealed coil comes apart; an open chain gets a hard kick
+            if (pi >= 0) {
+              const p = placedRef.current[pi];
+              if (p.chain.fold >= 0.98) {
+                placedRef.current = placedRef.current.filter((q) => q !== p);
+                try {
+                  audio.thud();
+                  haptics.roll();
+                } catch {
+                  /* noop */
+                }
+                save();
+              } else {
+                kick(p, 0.55 + deepen * 0.45);
+                warmthTarget = Math.min(1, warmthTarget + 0.18 + deepen * 0.2);
+                try {
+                  haptics.chop();
+                } catch {
+                  /* noop */
+                }
+              }
+            } else {
+              spawnLoose(2 + Math.round(deepen * 2), hashSeed(Math.round(x), Math.round(y), placedRef.current.length));
+              stirTurbulence(0.12);
+              try {
+                audio.playNote(40, 200);
+                haptics.detent();
+              } catch {
+                /* noop */
+              }
+            }
+            return;
+          }
+          // n: rewrite — warmth spikes and every nearby chain re-beats
+          warmthTarget = Math.min(1, warmthTarget + 0.45 + deepen * 0.35);
+          const R = Math.min(width, height) * (0.45 + deepen * 0.2);
           for (const p of placedRef.current) {
             const c = chainScreen(p);
             const d = Math.hypot(x - c.x, y - c.y);
-            const w = Math.max(0, 1 - d / (Math.min(width, height) * 0.6));
-            if (w > 0.02) kick(p, (0.06 + e.intensity * 0.16) * w);
+            if (d > R) continue;
+            kick(p, 0.28 + deepen * 0.35);
+            // unlock a sealed fold so the rewrite can land in geometry
+            if (p.chain.fold > 0.5) {
+              p.chain = { ...p.chain, fold: Math.max(0, p.chain.fold - 0.35 - deepen * 0.2) };
+              p.heldMs = 0;
+            }
           }
-          stirTurbulence(0.06 + e.intensity * 0.1);
+          if (pi < 0) condenseAt(clamp01(x / width), clamp01(y / height), 4);
+          stirTurbulence(0.14 + deepen * 0.12);
           try {
-            audio.playNote(48 + Math.round(e.intensity * 10), 140);
-            haptics.tap();
+            audio.bell();
+            haptics.bloom();
           } catch {
             /* noop */
           }
+          save();
         },
         hold: (e) => {
           lastInteractionAt = performance.now();

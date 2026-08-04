@@ -33,6 +33,7 @@ import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures, enableBreath } from "@/lib/gesture";
+import { tapTrainTier } from "@/lib/gesture/core";
 import { onVessel, requestVessel } from "@/lib/vessel";
 import { shouldInvite } from "@/lib/candle";
 import { relaxTurbulence, stirTurbulence } from "@/lib/turbulence";
@@ -617,7 +618,66 @@ export default function CellsPlasm() {
         if (e.fingers === 3) { tutti(); return; }
         if (e.fingers !== 1) return; // anything else is gently absorbed
         const { x, y } = toLocal(e.x, e.y);
-        perturb(x, y, e.intensity);
+        // rapid-tap ladder 1 / 3 / 5 / n — counts between tiers deepen intensity
+        const tier = tapTrainTier(e.count);
+        const base = tier === "n" ? 7 : tier;
+        const deepen = Math.min(1, (e.count - base) * 0.5);
+        const amp = e.intensity * (0.75 + deepen * 0.55);
+        if (tier === 1) {
+          perturb(x, y, amp);
+          return;
+        }
+        if (tier === 3) {
+          // mitosis: nearest closed cell divides; open plasm seeds one
+          const hit = cellAt(x, y);
+          const c = hit && hit.closed && !hit.retiringAt
+            ? hit
+            : cells.find((q) => !q.retiringAt && q.closed) ?? null;
+          if (c) {
+            c.streamBoost = Math.min(2.4, c.streamBoost + 0.25 + deepen * 0.55);
+            divideCell(c);
+          } else {
+            seedCell(x, y);
+          }
+          return;
+        }
+        if (tier === 5) {
+          // rupture: the nearest cell lets its membrane go
+          const c = cellAt(x, y) ?? cells.find((q) => !q.retiringAt) ?? null;
+          if (c && !c.retiringAt) {
+            c.retiringAt = performance.now();
+            note(midiOf(c.morph) - 12, 280 + deepen * 140);
+            try { audio().thud(); } catch { /* noop */ }
+            try { haptics.roll(); } catch { /* noop */ }
+            burst(
+              c.sx, c.sy,
+              [CELL_FAMILIES[c.morph.family][3], "#DDD3BE"],
+              10 + Math.round(deepen * 8),
+              36 + deepen * 16,
+            );
+            save();
+            syncStanding();
+          } else {
+            perturb(x, y, amp * 1.35);
+          }
+          return;
+        }
+        // n: rewrite — a wave of mitosis through the nearby culture
+        const R = Math.min(width, height) * (0.28 + deepen * 0.18);
+        const nearby = cells.filter(
+          (c) => !c.retiringAt && c.closed && Math.hypot(c.sx - x, c.sy - y) <= R,
+        );
+        const budget = 2 + Math.round(deepen * 2);
+        let divided = 0;
+        for (const c of nearby) {
+          if (divided >= budget) break;
+          // re-find: prior divides may have removed parents from the live list
+          if (!cells.includes(c)) continue;
+          divideCell(c);
+          divided += 1;
+        }
+        if (divided === 0) seedCell(x, y);
+        else perturb(x, y, 0.7 + deepen * 0.45);
       },
       hold: (e) => {
         lastInteractionAt = performance.now();

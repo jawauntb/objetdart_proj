@@ -39,6 +39,7 @@ import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import LetGo from "@/components/LetGo";
@@ -711,7 +712,62 @@ export default function MoleculesField() {
         if (e.fingers === 3) { tutti(); return; }
         if (e.fingers !== 1) return; // anything else is gently absorbed
         const { x, y } = toLocal(e.x, e.y);
-        thermalKick(x, y, e.intensity);
+        // rapid-tap ladder 1 / 3 / 5 / n — counts between tiers deepen intensity
+        const tier = tapTrainTier(e.count);
+        const base = tier === "n" ? 7 : tier;
+        const deepen = Math.min(1, (e.count - base) * 0.5);
+        const amp = e.intensity * (0.75 + deepen * 0.55);
+        if (tier === 1) {
+          thermalKick(x, y, amp);
+          return;
+        }
+        if (tier === 3) {
+          // spawn: condense a molecule under the hand (or warm one already there)
+          const hit = molAt(x, y);
+          if (hit && !hit.retiringAt) {
+            hit.heat = Math.min(2, hit.heat + 0.55 + deepen * 0.5);
+            note(midiOf(hit.morph), 160 + deepen * 80);
+            try { haptics.detent(); } catch { /* noop */ }
+            burst(hit.sx, hit.sy, [MOLECULE_FAMILIES[hit.morph.family][5], "#E7AC52"], 8, 28);
+          } else {
+            const m = condense(x, y);
+            if (m) m.heat = Math.min(2, 0.6 + deepen * 0.5);
+          }
+          return;
+        }
+        if (tier === 5) {
+          // rupture: the nearest molecule dissolves
+          const m = molAt(x, y) ?? mols.find((q) => !q.retiringAt) ?? null;
+          if (m && !m.retiringAt) {
+            m.retiringAt = performance.now();
+            note(midiOf(m.morph) - 12, 280 + deepen * 120);
+            try { audio().thud(); } catch { /* noop */ }
+            try { haptics.roll(); } catch { /* noop */ }
+            burst(m.sx, m.sy, [MOLECULE_FAMILIES[m.morph.family][3], "#DDD3BE"], 10, 34);
+            save();
+          } else {
+            thermalKick(x, y, amp * 1.35);
+          }
+          return;
+        }
+        // n: rewrite — fire a reaction with a docked partner, or a heat storm
+        const m = molAt(x, y) ?? mols.find((q) => !q.retiringAt && q.closed) ?? null;
+        if (m && !m.retiringAt && m.closed) {
+          const partner = dockPartner(m);
+          if (partner) {
+            react(m, partner);
+            return;
+          }
+        }
+        thermalKick(x, y, 0.85 + deepen * 0.5);
+        for (const q of mols) {
+          if (q.retiringAt) continue;
+          if (Math.hypot(q.sx - x, q.sy - y) < Math.min(width, height) * 0.35) {
+            q.heat = Math.min(2, q.heat + 0.7 + deepen * 0.4);
+          }
+        }
+        try { audio().bell(); } catch { /* noop */ }
+        try { haptics.bloom(); } catch { /* noop */ }
       },
       hold: (e) => {
         lastInteractionAt = performance.now();
