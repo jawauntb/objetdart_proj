@@ -39,6 +39,7 @@ import { useRouter } from "next/navigation";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import { stirTurbulence } from "@/lib/turbulence";
 import LetGo from "@/components/LetGo";
@@ -462,25 +463,88 @@ export default function OrganellesPlasm() {
           if (e.fingers !== 1) return;
           const { x, y } = toLocal(e.x, e.y);
           const i = organelleAt(x, y);
-          if (i >= 0) {
-            selIdx = i;
-            ring(i, 0.6 + e.intensity * 0.6);
+          // rapid-tap ladder 1 / 3 / 5 / n — counts between tiers deepen intensity
+          const tier = tapTrainTier(e.count);
+          const base = tier === "n" ? 7 : tier;
+          const deepen = Math.min(1, (e.count - base) * 0.5);
+          const amp = e.intensity * (0.75 + deepen * 0.55);
+          if (tier === 1) {
+            if (i >= 0) {
+              selIdx = i;
+              ring(i, 0.55 + amp * 0.65);
+              try {
+                haptics.tap();
+              } catch {
+                /* noop */
+              }
+              return;
+            }
+            churn = Math.min(1, churn + 0.15 + amp * 0.22);
+            stirTurbulence(0.05);
             try {
+              audio.playNote(41, 180);
               haptics.tap();
             } catch {
               /* noop */
             }
             return;
           }
-          // open plasm: the streaming takes a nudge
-          churn = Math.min(1, churn + 0.15 + e.intensity * 0.2);
-          stirTurbulence(0.05);
-          try {
-            audio.playNote(41, 180);
-            haptics.tap();
-          } catch {
-            /* noop */
+          if (tier === 3) {
+            // draw membrane into the organ, or condense what the cell still lacks
+            if (i >= 0) {
+              selIdx = i;
+              draw_(i, 0.1 + amp * 0.16 + deepen * 0.08);
+              ring(i, 0.75 + deepen * 0.25);
+              try {
+                haptics.detent();
+              } catch {
+                /* noop */
+              }
+              save();
+            } else {
+              condenseMissing(x / width, y / height);
+            }
+            return;
           }
+          if (tier === 5) {
+            // rupture: the organ gives its membrane back to the plasm
+            if (i >= 0) {
+              annihilate(i);
+            } else {
+              churn = Math.min(1, churn + 0.35 + deepen * 0.25);
+              stirTurbulence(0.12 + deepen * 0.1);
+              try {
+                audio.thud();
+                haptics.chop();
+              } catch {
+                /* noop */
+              }
+            }
+            return;
+          }
+          // n: rewrite — gather every missing organ, then the whole ledger rings
+          const missing = missingKinds(listRef.current);
+          if (missing.length > 0) {
+            const nSpawn = Math.min(missing.length, 1 + Math.round(deepen * 2));
+            for (let k = 0; k < nSpawn; k++) {
+              const ang = (k / Math.max(1, nSpawn)) * Math.PI * 2;
+              const r = 0.08 + deepen * 0.04;
+              condenseMissing(
+                clamp01(x / width + Math.cos(ang) * r),
+                clamp01(y / height + Math.sin(ang) * r),
+              );
+            }
+          } else if (i >= 0) {
+            draw_(i, 0.2 + deepen * 0.12);
+            ring(i, 1);
+            try {
+              haptics.bloom();
+            } catch {
+              /* noop */
+            }
+            save();
+          }
+          tutti();
         },
         hold: (e) => {
           lastInteractionAt = performance.now();

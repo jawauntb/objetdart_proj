@@ -22,7 +22,7 @@
  * back in the mirror. Let go and it re-anneals. One finger along the helix
  * supercoils it. Tap a rung to sound its degree. Three fingers touch the
  * world-law: drag is the mutation temperature, hold dilates the clock,
- * tap plays the whole strand as its melody. Twist raises the lens to
+ * tap trains climb 1 / 3 / 5 / n (sound, rewrite, mutate, burst). Twist raises the lens to
  * notation — the letters, the transcript, the melting point. Tilt leans
  * the ladder; a shake is a mutation burst; a knock rings one rung. Held
  * Enter is the same road on a keyboard.
@@ -36,6 +36,7 @@ import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import { stirTurbulence } from "@/lib/turbulence";
 import LetGo from "@/components/LetGo";
@@ -397,41 +398,104 @@ export default function HelixLadder() {
           if (e.fingers !== 1) return;
           const { x, y } = toLocal(e.x, e.y);
           const i = rungAtPoint(x, y);
-          if (i >= 0) {
-            selIdx = i;
-            // double-tap rewrites the nucleotide itself — A→T→G→C — so the
-            // rung is material, not only a key on the melody.
-            if (e.count >= 2) {
-              const next = cycleBase(seqRef.current, i);
-              if (next !== seqRef.current) {
-                seqRef.current = next;
-                litRung[i] = 1;
-                soundBase(i, 280 + Math.round(e.intensity * 180));
-                try {
-                  haptics.bloom();
-                } catch {
-                  /* noop */
-                }
-                save();
+          // rapid-tap ladder 1 / 3 / 5 / n — counts between tiers deepen intensity
+          const tier = tapTrainTier(e.count);
+          const base = tier === "n" ? 7 : tier;
+          const deepen = Math.min(1, (e.count - base) * 0.5);
+          const amp = e.intensity * (0.75 + deepen * 0.55);
+          if (tier === 1) {
+            if (i >= 0) {
+              selIdx = i;
+              soundBase(i, 200 + Math.round(amp * 220));
+              try {
+                haptics.tap();
+              } catch {
+                /* noop */
               }
               return;
             }
-            soundBase(i, 220 + Math.round(e.intensity * 200));
+            stirTurbulence(0.05);
             try {
+              audio.playNote(38, 220);
               haptics.tap();
             } catch {
               /* noop */
             }
             return;
           }
-          // open dark: the whole ladder rings once, softly
-          stirTurbulence(0.05);
+          if (tier === 3) {
+            // rewrite: cycle the nucleotide A→T→G→C (was double-tap)
+            const t = i >= 0 ? i : Math.floor(seqRef.current.length / 2);
+            if (t < 0 || t >= seqRef.current.length) return;
+            selIdx = t;
+            const next = cycleBase(seqRef.current, t);
+            if (next !== seqRef.current) {
+              seqRef.current = next;
+              litRung[t] = 1;
+              soundBase(t, 260 + Math.round(amp * 180));
+              try {
+                haptics.bloom();
+              } catch {
+                /* noop */
+              }
+              save();
+            }
+            return;
+          }
+          if (tier === 5) {
+            // rupture: a true mutation at the rung (or a snip when cold and short)
+            const t = i >= 0 ? i : Math.floor(seqRef.current.length / 2);
+            if (t < 0 || t >= seqRef.current.length) return;
+            selIdx = t;
+            if (temperature > 0.05 || seqRef.current.length <= MIN_BASES) {
+              const next = mutate(seqRef.current, t, hashSeed(t, Math.round(amp * 1000)));
+              if (next !== seqRef.current) {
+                seqRef.current = next;
+                litRung[t] = 1;
+                soundBase(t, 280 + Math.round(deepen * 80));
+                try {
+                  haptics.chop();
+                  audio.playNote(31, 260);
+                } catch {
+                  /* noop */
+                }
+                save();
+              }
+            } else if (seqRef.current.length > MIN_BASES) {
+              const seq = seqRef.current;
+              seqRef.current = seq.slice(0, t).concat(seq.slice(t + 1));
+              selIdx = Math.min(t, seqRef.current.length - 1);
+              try {
+                audio.thud();
+                haptics.roll();
+              } catch {
+                /* noop */
+              }
+              save();
+            }
+            return;
+          }
+          // n: rewrite — a local mutation burst, then the strand sings what it became
+          const seq = seqRef.current;
+          if (seq.length === 0) return;
+          const center = i >= 0 ? i : Math.floor(seq.length / 2);
+          const hits = 3 + Math.round(deepen * 4);
+          let next = seq;
+          for (let k = 0; k < hits; k++) {
+            const idx = Math.max(0, Math.min(seq.length - 1, center + (k % 2 === 0 ? k : -k)));
+            next = mutate(next, idx, hashSeed(k, idx, Math.round(amp * 500)));
+            litRung[idx] = 1;
+          }
+          seqRef.current = next;
+          save();
+          stirTurbulence(0.15 + deepen * 0.2);
           try {
-            audio.playNote(38, 220);
-            haptics.tap();
+            audio.playNote(31, 300);
+            haptics.bloom();
           } catch {
             /* noop */
           }
+          playStrand(false);
         },
         hold: (e) => {
           lastInteractionAt = performance.now();

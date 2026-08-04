@@ -801,5 +801,5 @@ export async function enableBreath(on: GestureHandlers): Promise<(() => void) | 
   };
 }
 
-export { THRESHOLDS } from "./core";
-export type { HoldTier, Rhythm } from "./core";
+export { THRESHOLDS, tapTrain, tapTrainTier, tapTrainDepth } from "./core";
+export type { HoldTier, Rhythm, TapTrainTier } from "./core";

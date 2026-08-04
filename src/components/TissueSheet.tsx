@@ -56,6 +56,7 @@ import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import { stirTurbulence } from "@/lib/turbulence";
 import LetGo from "@/components/LetGo";
@@ -501,37 +502,101 @@ export default function TissueSheet() {
           if (e.fingers !== 1 || !sheet) return;
           const p = toSheet(e.x, e.y);
           const i = nearestCell(sheet, p.x, p.y, 1.1);
-          if (i >= 0) {
-            selIdx = i;
-            soundCell(i, 0.26 + e.intensity * 0.3);
+          // rapid-tap ladder 1 / 3 / 5 / n — counts between tiers deepen intensity
+          const tier = tapTrainTier(e.count);
+          const base = tier === "n" ? 7 : tier;
+          const deepen = Math.min(1, (e.count - base) * 0.5);
+          const amp = e.intensity * (0.75 + deepen * 0.55);
+          if (tier === 1) {
+            if (i >= 0) {
+              selIdx = i;
+              soundCell(i, 0.24 + amp * 0.35);
+              try {
+                haptics.tap();
+              } catch {
+                /* noop */
+              }
+              return;
+            }
+            // A tap that misses every cell still lands somewhere: a ripple
+            // marks the point itself and nudges whatever plasm is nearby, so
+            // the touch is never mute (grammar §6.4 — unbound gestures answer
+            // gently, never invisibly).
+            pushMark(p.x, p.y, 0);
+            for (let k = 0; k < sheet.n; k++) {
+              const dx = sheet.px[k] - p.x;
+              const dy = sheet.py[k] - p.y;
+              const d2 = dx * dx + dy * dy;
+              if (d2 > 6.5) continue;
+              const d = Math.sqrt(d2) || 1;
+              const f = (1 - d / 2.55) * 0.1 * (0.4 + amp * 0.6);
+              sheet.px[k] += (dx / d) * f;
+              sheet.py[k] += (dy / d) * f;
+            }
+            stirTurbulence(0.05);
             try {
+              audio.playTone(ROOT_HZ * 0.5, 0.3);
               haptics.tap();
             } catch {
               /* noop */
             }
             return;
           }
-          // A tap that misses every cell still lands somewhere: a ripple
-          // marks the point itself and nudges whatever plasm is nearby, so
-          // the touch is never mute (grammar §6.4 — unbound gestures answer
-          // gently, never invisibly).
-          pushMark(p.x, p.y, 0);
-          for (let k = 0; k < sheet.n; k++) {
+          if (tier === 3) {
+            // mitosis: the nearest cell divides (stroke's reward, now a train)
+            divideAt(p.x, p.y, false);
+            if (deepen > 0.2) {
+              const j = nearestCell(sheet, p.x + 0.4, p.y - 0.3, 1.6);
+              if (j >= 0) divideAt(sheet.px[j], sheet.py[j], true);
+            }
+            return;
+          }
+          if (tier === 5) {
+            // rupture: apoptosis of the nearest cell
+            const t = i >= 0 ? i : nearestCell(sheet, p.x, p.y, 1.6);
+            if (t >= 0 && resorbCell(t)) {
+              recomputeChord();
+              pushMark(p.x, p.y, 2);
+              try {
+                audio.thud();
+                haptics.roll();
+              } catch {
+                /* noop */
+              }
+              dirty = true;
+              save();
+            } else {
+              pushMark(p.x, p.y, 0);
+              strainAll(0.35 + deepen * 0.4);
+              try {
+                audio.refuse();
+                haptics.chop();
+              } catch {
+                /* noop */
+              }
+            }
+            return;
+          }
+          // n: rewrite — a cluster of divisions rewrites the local epithelium
+          const budget = 2 + Math.round(deepen * 3);
+          const sites: Array<{ x: number; y: number }> = [];
+          for (let k = 0; k < sheet.n && sites.length < budget; k++) {
             const dx = sheet.px[k] - p.x;
             const dy = sheet.py[k] - p.y;
-            const d2 = dx * dx + dy * dy;
-            if (d2 > 6.5) continue;
-            const d = Math.sqrt(d2) || 1;
-            const f = (1 - d / 2.55) * 0.1 * (0.4 + e.intensity * 0.6);
-            sheet.px[k] += (dx / d) * f;
-            sheet.py[k] += (dy / d) * f;
+            if (dx * dx + dy * dy > 4.5) continue;
+            sites.push({ x: sheet.px[k], y: sheet.py[k] });
           }
-          stirTurbulence(0.05);
-          try {
-            audio.playTone(ROOT_HZ * 0.5, 0.3);
-            haptics.tap();
-          } catch {
-            /* noop */
+          if (sites.length === 0) divideAt(p.x, p.y, false);
+          else {
+            sites.forEach((s, n) => divideAt(s.x, s.y, n > 0));
+            strainAll(0.2 + deepen * 0.25);
+            try {
+              audio.bell();
+              haptics.bloom();
+            } catch {
+              /* noop */
+            }
+            save();
           }
         },
         hold: (e) => {
