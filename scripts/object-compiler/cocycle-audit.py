@@ -203,13 +203,16 @@ def _derive_or_load(room_key: str) -> dict[str, Any]:
                 return json.loads(rc.stdout)
             except json.JSONDecodeError:
                 pass
-    example = DEFAULT_EXAMPLES_DIR / f"{key}.spec.yaml"
-    if not example.exists():
-        raise FileNotFoundError(
-            f"no chart available for `{key}`: neither derive-spec.py nor "
-            f"{example} produced a spec."
-        )
-    return load_spec(example)
+    # Prefer `<key>.yaml` (the shape the hand-authored specs actually ship
+    # as); fall back to `<key>.spec.yaml` for the pre-rename convention.
+    for suffix in (".yaml", ".spec.yaml"):
+        example = DEFAULT_EXAMPLES_DIR / f"{key}{suffix}"
+        if example.exists():
+            return load_spec(example)
+    raise FileNotFoundError(
+        f"no chart available for `{key}`: neither derive-spec.py nor "
+        f"{DEFAULT_EXAMPLES_DIR / f'{key}.yaml'} produced a spec."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -282,8 +285,16 @@ def _classify(a: Any, b: Any) -> Transform:
     if isinstance(a, str) and isinstance(b, str):
         ai, bi = _hex_to_int(a), _hex_to_int(b)
         if ai is not None and bi is not None:
+            # Normalize delta=0 to identity so `_same_map` doesn't classify
+            # `hex_shift(0)` and `identity` as different maps (Theory Atlas
+            # TA-2 wants agreement on the map itself, and shift-by-zero IS
+            # the identity map).
+            if bi == ai:
+                return Transform("identity", from_=a, to=b)
             return Transform("hex_shift", delta=bi - ai, from_=a, to=b)
     if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        if b == a:
+            return Transform("identity", from_=a, to=b)
         return Transform("num_add", delta=b - a, from_=a, to=b)
     return Transform("set", from_=a, to=b)
 

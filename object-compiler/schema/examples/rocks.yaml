@@ -1,0 +1,144 @@
+# /rocks — the mineral seat of the drop band.
+#
+# Round-trip-derived from src/rooms/rocks/room.config.ts, src/lib/crystal.ts,
+# and src/components/RockShelf.tsx. Adjacent to /soil and /spring in the
+# cabinet peer ring; the lattice register of the drop band, where the drop is
+# water and the seed is alive.
+
+key: rocks
+component_name: RockShelf
+
+placement:
+  kind: peer
+  circle: cabinet
+  band: drop
+  label: "the stones"
+  ringAfter: seed
+
+sigil: earth
+desc: "the lattice you can hear"
+cluster: nature
+dark: true
+home_priority: 9
+ambient_profile: earth
+storage_key: "objetdart:rocks:v1"
+
+invariant: >
+  a lattice — a metric (axial lengths and angles), a centering, a point
+  group, and the cleavage family the group carries; every face of the room
+  is that one object seen again, and the invertible map is reciprocal
+  lattice → ring partials, so readLattice recovers system, centering, and
+  axial ratio from the sound alone.
+
+material: 2d-over-shader
+noun: stone
+
+domain_lib:
+  name: crystal
+  invariant_type: lattice
+
+palette:
+  bg:      "#05070a"
+  bg2:     "#141a24"
+  glow:    "#dfe7f2"
+  accent:  "#f3d77a"
+  accent2: "#96b2e2"
+  ink:     "#eeeadb"
+
+verbs_answered:
+  - tap
+  - dwell
+  - ceremony
+  - drag
+  - flick
+  - twist
+  - twist3
+  - tap3
+  - drag3
+  - hold3
+  - scrub
+  - drum
+  - arrows
+  - tilt
+  - shake
+  - knock
+  - flip
+
+guide:
+  title: "the lattice you can hear"
+  scale: >
+    the drop band — a peer beside the drop and the seed, and the stratum
+    the ground and the peak both open onto.
+  essence: >
+    a tray of brine with stones still coming out of it — salt, quartz,
+    calcite, pyrite, zircon, topaz — each shaped by its own crystal
+    lattice, split along its own cleavage planes, ranked by its own
+    hardness, and ringing with the partials that lattice allows.
+  moves:
+    - "tap a stone → it rings its own ring; the partial ratios are its allowed reflections"
+    - "tap the wet dark → a grain of salt, and the brine takes a little more into it"
+    - "drag a stone → turns it in your fingers, facets sweeping the light, and it keeps the turn when you let go"
+    - "flick across a stone → it cleaves, and the fracture follows the nearest lattice plane rather than your line"
+    - "hold on the wet dark → plants a nucleus and feeds it from the tray for as long as you hold"
+    - "hold a nodule to the ceremony tier → the geode opens and its lining faces out"
+    - "three-finger drag → how much the brine is holding; drag it far enough down and the stones go back into solution"
+    - "three-finger hold → the clock runs at a quarter; three-finger twist → the season, the brine run hot then cold"
+    - "three-finger tap → every stone on the shelf rings at once"
+    - "twist → raises the lattice lens: the ring drawn as its reflections, the cleavage traces across the stone"
+    - "scrub → stirs the brine, driving the solvent off so it holds more"
+    - "tilt / shake / knock / flip (once invited) → the light leans, salt snows out of solution, the tray rings, the room sleeps"
+    - "arrows → step between stones · enter → ring one · held enter → feed it, then split it · esc → lower the lens"
+  finds:
+    - "a face-centred salt and a primitive pyrite are both cubes and do not sound alike — half of salt's reflections are missing, and you can hear the gap"
+    - "turning a stone turns which cleavage plane your strike can find; the same strike on the same stone always finds the same plane"
+    - "a cleaved half holds exactly the mass it took with it, so two small stones ring higher than the one they came from"
+    - "stones left lying against each other do not stay equal — the larger quietly takes the smaller, and what it eats it speaks lower for"
+    - "a grooved stone loses its clarity as well as its polish: you can see the scratch and hear the ring go dull"
+  keeps: "every stone, its species and seed and the cuts made in it, and how much is still dissolved in the tray"
+
+shader_intent: >
+  a shelf-level view of the tray of brine with stones coming out of it.
+  each stone is a per-instance SDF whose habit is the Wulff hull of the
+  reciprocal-lattice family the domain module reports — a cubic salt is a
+  literal cube, a hexagonal quartz a prism, and every fracture follows a
+  lattice plane. the wet dark below is a shallow depth column from `bg` to
+  `bg2` with a specular-reflection ripple at the brine's surface; the
+  facets pick up `glow` where the light lands and `accent` where they turn
+  away. `accent2` marks the mineral bloom the brine crusts along its
+  edges; `ink` is the lens line colour. the invariant the shader must
+  respect: a stone's outline is exactly its lattice's Wulff hull — no
+  hand-drawn silhouettes.
+
+domain_intent: >
+  write `src/lib/crystal.ts` around one `LatticeState = { system, centering,
+  a, b, c, alpha, beta, gamma, pointGroup, cleavage }` per stone. the
+  load-bearing invertible map is reciprocal → partials: `partialsFor(state)`
+  emits the sorted magnitudes of the allowed reciprocal-lattice vectors
+  and `readLattice(partials)` recovers the system and axial ratio.
+  `growStep(state, dtSec, brine)` is an analytic exponential-decay pull on
+  the pocket of solution, so the same habit reaches the same shape at any
+  rate. `cleavageAt(state, ray)` returns the nearest cleavage-orbit plane,
+  never an arbitrary cut. `speciesFromRing(partials)` names the mineral.
+  no DOM, no audio, no `Math.random`, no `Date.now`.
+
+verb_intent: >
+  `tap` on a stone rings its `partialsFor(state)` — a whole spectrum in one
+  gesture. `tap` on the wet dark seeds a grain of salt at that point.
+  `dwell` on the wet dark plants a nucleus and pulls mass out of the brine
+  under it while held. `ceremony` opens the tracked nodule as a geode and
+  writes its liner out. `drag` on a stone turns it — a rotation on its own
+  axis that keeps its facet-count and its lattice; the drag angle sticks
+  when let go. `flick` splits the stone along the nearest cleavage plane
+  via `cleavageAt`. `scrub` stirs the brine, raising its solute limit.
+  `drag3` writes into the brine's saturation; too far and stones dissolve.
+  `twist3` turns the season, heat and cold pulled through the brine.
+  `hold3` slows the room clock. `tap3` rings every stone on the shelf at
+  once. `twist` (two-finger) raises the lattice lens. `arrows` step between
+  stones; enter rings; held enter feeds and splits; escape lowers the lens.
+  `tilt`, `shake`, `knock`, `flip` lean the tray, jostle the brine, ring
+  the tray, and sleep the room. every timing constant comes from
+  `gesture/core.ts`.
+
+chrome:
+  travel: true
+  peers: true

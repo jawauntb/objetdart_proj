@@ -45,7 +45,7 @@ import json
 import math
 import statistics
 import sys
-from collections import Counter, defaultdict
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -282,13 +282,23 @@ def run_ecology(args: argparse.Namespace) -> int:
     runs = _load_runs(runs_dir)
     print(f"[ecology] loaded {len(runs)} runs from {runs_dir}")
 
-    if len(runs) < MIN_RUNS_FOR_UPDATE:
+    if len(runs) < MIN_RUNS_FOR_UPDATE and not args.emit_prior_below_threshold:
         print(
             f"[ecology] fewer than {MIN_RUNS_FOR_UPDATE} runs available; "
             f"CT-2's bound is asymptotic. Skipping update.",
             file=sys.stderr,
         )
         return 1
+    if len(runs) < MIN_RUNS_FOR_UPDATE:
+        # Phase-1 mode: emit the (uniform) prior as strategy.yaml so downstream
+        # tooling has a shape to consume. CT-2's monotone-improvement bound
+        # does NOT hold on this output — it is the base kernel K_0, not an
+        # updated one.
+        print(
+            f"[ecology] fewer than {MIN_RUNS_FOR_UPDATE} runs available "
+            f"(N={len(runs)}); emitting the uniform prior. Not a CT-2 update.",
+            file=sys.stderr,
+        )
 
     prior = _uniform_prior()
     updated: dict[str, dict[Any, float]] = {}
@@ -336,6 +346,10 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
                    help="Output path for the updated strategy.yaml.")
     p.add_argument("--dry-run", action="store_true",
                    help="Print the update summary and the yaml body without writing.")
+    p.add_argument("--emit-prior-below-threshold", action="store_true",
+                   help=("Emit the uniform-prior strategy.yaml even when fewer than "
+                         f"{MIN_RUNS_FOR_UPDATE} runs exist. NOT a CT-2 update; only useful "
+                         "for phase-1 bookkeeping."))
     return p.parse_args(argv)
 
 

@@ -488,6 +488,82 @@ to attempt the full slot-fill against a real `claude` invocation; or
 (b) render `spring.yaml` and hand-fill the five slots inline (I am the
 LLM here, and probably going forward — the user confirmed this).
 
+### 2026-08-04 — phase-1 (corpus widening + first diagnostics)
+
+Phase-1 landed the widened corpus, the first cocycle audit, and the
+uniform-prior strategy.yaml. Report at
+`data/object-compiler/audits/phase-1.md` (~2400 words).
+
+- **Corpus widened** from 66 rows to 327 by pulling in Codex (216 rows)
+  and Cursor (35 rows) transcripts alongside Claude Code's 76.
+  `data/object-compiler/sessions.jsonl` now carries an `agent_source`
+  field on every row (`claude-local` / `codex` / `cursor`).
+  `data/object-compiler/sessions-census.md` is the parallel agents'
+  own report on the widening.
+- **Room-authoring signal is small even after widening.** Only 21
+  sessions touched `src/rooms/<key>/room.config.ts` (17 claude-local +
+  4 cursor); Codex's 216 rows produced zero manifest touches because
+  Codex's contributions predate the post-consolidation shell — its
+  edits live in `src/components/*.tsx` and are off-hypothesis by
+  construction. CT-1's global bound (N ≥ c · M · ln(M/ε)) is met
+  4× over globally but *not* per-family: the `new-room` family the
+  compiler learns from is 21 samples over 10 rooms.
+- **Cross-agent finding.** Claude-local and cursor both build post-
+  consolidation rooms, but cursor's per-session file-touch footprint
+  is 2–3× claude-local's on the same rooms (galaxy: cursor 138 files
+  vs claude-local 21). That means `agent_source` predicts strategy
+  independent of spec — a signal to add to `SpecFingerprint` in the
+  ecology loop, but NOT to the room-spec schema itself.
+- **`pairs.jsonl` and `prs.jsonl` did not land** in phase-1's window.
+  The join to merged PRs is the first thing phase-2 must unblock —
+  all `match_strategy` and per-family PR-footprint claims depend on
+  it. Report writes off `sessions.jsonl` alone and labels every
+  ambiguity accordingly.
+- **First cocycle audit ran cleanly.** Over 7 rooms with real specs
+  (`atmosphere/galaxy/planets/rocks/soil/solar/spring`; the phase-1
+  session derived a `rocks.yaml` from its room.config.ts), 35 triples
+  produced 32 `glue` + 3 `missing_latent` verdicts. All three
+  `missing_latent` are classifier false positives: `_same_map` in
+  `cocycle-audit.py` treats `hex_shift(delta=0)` as distinct from
+  `identity` when they are the same map. Fixing that
+  normalisation turns all three into `glue`. **Load-bearing
+  reading: the schema, as it stands, is not quotienting a hidden
+  latent coordinate across the seven audited rooms.** No schema
+  field needs to be added on the strength of this audit.
+- **Ecology loop emitted the uniform prior.** With 0 harness runs
+  in `data/object-compiler/runs/` (M4's spring was a hand-fill,
+  not a harness outcome), CT-2's asymptotic bound does not apply.
+  A phase-1 flag (`--emit-prior-below-threshold`) writes
+  `strategy.yaml` as K_0 so downstream tooling has a shape.
+  All five parameters (`model_temperature`, `n_shot_count`,
+  `retrieval_top_k`, `repair_max_tries`, `template_variant`)
+  sit at uniform, KL from prior = 0 nats.
+- **What phase-2 must do differently.** In dependency order:
+  (i) fix `_same_map` identity normalisation in
+  `cocycle-audit.py`; (ii) land `pairs.jsonl` + `prs.jsonl` from
+  the parallel agents; (iii) modify `harness.py` to write an
+  explicit `strategy` block per run; (iv) randomise
+  `retrieval_top_k` in `compile-room.py` so CT-2 has real
+  variance to update on; (v) filter `sessions.jsonl` by
+  `merge_sha ≥ 929efa6` before feeding pairs.jsonl (drops
+  Codex's pre-consolidation weight without dropping its
+  rows). One concrete schema followup surfaced from §4 of the
+  phase-1 report: a `physical_constants` block would shrink the
+  domain slot without changing the shape of the deterministic
+  half.
+- **Revised phase-2 target.** The task's proposed 250-sample
+  target is not reachable from the transcript stream — those
+  rooms would have to be *built*. CT-1's bound at ε = 0.05
+  suggests ~80 landed rooms is sufficient for consistency. §7
+  of the phase-1 report proposes 80 as the honest target;
+  phase-2 should adopt or refute that number early.
+
+**What the next agent should pick up first:** the classifier fix
+in `cocycle-audit.py` (small, one-file), then rerun the audit
+against the same seven rooms and confirm all-glue. That closes
+phase-1's one loose diagnostic thread. After that, unblock
+`pairs.jsonl` before writing any more per-family statistics.
+
 ## The one-line summary
 
 **Object Compiler learns `K: spec → room` from this project's own transcripts and
