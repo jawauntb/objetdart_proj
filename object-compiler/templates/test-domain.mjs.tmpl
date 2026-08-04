@@ -1,0 +1,38 @@
+// object-compiler template — docs/plans/object-compiler.md M3.
+// Consumes: spec.domain_lib.name, spec.route.
+// One LLM slot below carries the pins; the loader boilerplate is verbatim.
+
+// The {{spec.route}} laws. Every assertion names the bug it catches — a
+// test that only restates a constant back at itself is not a test.
+
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import * as ts from "typescript";
+
+const rootUrl = new URL("../", import.meta.url);
+
+function loadTsModule(path) {
+  const filename = fileURLToPath(new URL(path, rootUrl));
+  const source = readFileSync(filename, "utf8");
+  const code = ts.transpileModule(source, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2020,
+      esModuleInterop: true,
+    },
+    fileName: filename,
+  }).outputText;
+  const module = { exports: {} };
+  new Function("module", "exports", "require", code)(module, module.exports, (id) => {
+    throw new Error(`Unexpected require(${id}) while loading ${path}`);
+  });
+  return module.exports;
+}
+
+const M = loadTsModule("src/lib/{{spec.domain_lib.name}}.ts");
+
+const near = (a, b, rel, msg) =>
+  assert.ok(Math.abs(a - b) <= rel * Math.abs(b), `${msg} (got ${a}, want ~${b})`);
+
+// __SLOT_PINS__

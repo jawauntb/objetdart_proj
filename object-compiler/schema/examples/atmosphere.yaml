@@ -1,0 +1,177 @@
+# atmosphere — the air column above the peak
+#
+# Round-trip-derived from src/rooms/atmosphere/room.config.ts (the merged room)
+# and src/lib/aircolumn.ts (its physics). The three intent slots are what the
+# LLM would be briefed to produce; everything else is deterministic.
+
+key: atmosphere
+component_name: AirColumn
+
+placement:
+  kind: band
+  band: atmosphere
+
+sigil: clouds
+desc: "the air column, weighed in colour"
+cluster: nature
+dark: true
+ambient_profile: wind
+# The atmosphere's canonical registry row currently has `keeps: null` — the
+# lanterns persist through the shared world bus rather than through this room's
+# own idle writer, so no local storage_key is emitted.
+
+invariant: >
+  a vertical profile of the air — pressure, density and temperature against
+  altitude under one lapse rate — plus a wind field sheared across the column.
+  every colour, ring and lantern is a lens over the same three numbers.
+
+material: 2d-over-shader
+noun: lantern
+
+domain_lib:
+  name: aircolumn
+  invariant_type: column
+
+palette:
+  bg: "#0a1526"
+  bg2: "#7f9cc0"
+  glow: "#dfe9f6"
+  accent: "#f3d77a"
+  accent2: "#8fb5d8"
+  ink: "#eef5ff"
+
+verbs_answered:
+  - tap
+  - dwell
+  - ceremony
+  - drag
+  - flick
+  - twist
+  - twist3
+  - tap3
+  - drag3
+  - hold3
+  - scrub
+  - drum
+  - arrows
+  - tilt
+  - shake
+  - knock
+  - flip
+
+guide:
+  title: "the air column, weighed in colour"
+  scale: "the atmosphere band — between the mountain and the atlas"
+  essence: >
+    the hundred kilometres of air above the summit, side on and marched as a
+    volume — the blue is the optical depth of the real barometric column, and
+    the clouds a hand makes are parcels of that column lifted until their own
+    vapour condenses.
+  moves:
+    - "tap → a pressure ring, sounded at the pressure where it lands — deep near the ground, thin and high aloft — and a push on whatever cloud stands there"
+    - "rapid taps (1 / 3 / 5 / n) → ring → seed a puff → warm a tower → the column scatters"
+    - "press → lifts and warms the air under the finger; it condenses at its own cloud base and starts to build"
+    - "keep pressing → the parcel warms further, hangs its base higher, and climbs higher still; hold to the ceremony and the candle is given to the wind as a lantern, and kept"
+    - "drag → stirs the air at that altitude and carries the cloud you are inside; layers slide against each other but the column keeps its momentum"
+    - "flick → tears a cloud apart and throws the rag downwind"
+    - "three-finger drag → the world-law: the lapse rate up and down, the sun along its arc — every cloud answers in the same frame"
+    - "three-finger twist → the season: how much water this air carries, so every cloud base moves at once"
+    - "twist → raises the lens: isobars crowding toward the ground, the tropopause, the wind profile, the temperature and dew-point curves"
+    - "scrub → winds a vortex; the cloud it finds turns on its own axis"
+    - "drumming → gusts the air between the two places the hands alternate over"
+    - "three-finger tap → tutti: every cloud and lantern answers at once"
+    - "three-finger hold → time dilation while held"
+    - "tilt / shake / knock / face-down (once invited) → the vessel is wind; a shake gusts and tears, a knock rings the column from the ground up, face-down is night"
+    - "keyboard → enter (held) lifts and warms a parcel, backspace tears the last one, arrows walk the sun and the lapse rate, [ and ] turn the season, escape lowers the lens"
+  finds:
+    - "a short press makes a puff that sinks back; a long one warms the parcel past the level of free convection and it builds a tower by itself"
+    - "steepen the lapse rate and every cloud grows taller — an unstable column really does hold deeper convection"
+    - "dry the season out and every cloud base rises together, because a drier parcel has to be lifted further before it saturates"
+    - "two clouds that drift into each other merge, and the merged one carries exactly the mass and the spin of both"
+    - "leave a cloud standing in the jet and the shear tears it apart without anyone touching it"
+    - "walk the sun down to the horizon and the reds arrive by subtraction — the same λ⁻⁴ that keeps noon blue"
+  keeps: "the lanterns you gave to the wind — they drift on their layer's wind between visits"
+
+# ——— the three LLM slots ————————————————————————————————————————————————
+
+shader_intent: >
+  paint the atmosphere in section: sky along the top three-quarters, a soft
+  land silhouette at the bottom. the sky's colour is not chosen — it is the
+  optical depth of the real barometric column integrated in closed form
+  channel by channel, so blue overhead and red at a low sun both arise from
+  the same λ⁻⁴ Rayleigh law applied to the actual pressure profile the
+  domain module reports. carry three layers stacked over each other: (1) the
+  base sky, τ(alt, sun) evaluated per pixel, so raising the sun changes the
+  whole column at once; (2) a cloud pass — a small population of parcels
+  each with an altitude, a temperature and a mass, drawn as
+  SDF-anchored soft blobs and lit from above so bases are dark and tops are
+  bright; (3) the hand's own marks (pressure rings, the ceremony lantern's
+  candle glow, the vortex the scrub is winding), drawn onto a 2D overlay
+  that reads pointer position. the visitor's press warms the parcel under
+  their finger and lifts it, which the shader shows by moving the parcel's
+  cloud base up on the vertical axis. the twist lens is a second render
+  path: draw isobars, the tropopause, the wind profile, the T/Td curves as
+  fine ink lines over the sky. palette registers: `bg` is midnight column,
+  `bg2` is the daytime column, `glow` is the lantern warmth, `accent` is the
+  low-sun subtractive red, `accent2` is the cool cloud base, `ink` is the
+  lens's line colour. the visible invariant is the map from optical depth to
+  colour — inverting the sky's rgb should recover the profile.
+
+domain_intent: >
+  write `src/lib/aircolumn.ts` around one exported `Profile` type: sea-level
+  pressure P0, sea-level temperature T0, lapse rate Γ (bounded between a
+  near-isothermal floor and the dry adiabat, so the column never inverts
+  and never steepens past what the physics allows), a stratosphere floor
+  temperature, and top-of-atmosphere at the Kármán line (100 km). export
+  `pressureFor(alt, profile)`, `temperatureFor(alt, profile)`,
+  `densityFor(alt, profile)` — each in closed form (troposphere is a power
+  law of altitude, stratosphere an exponential, both antiderivatives one
+  line). export `opticalDepth(profile, altitudeKm, sunElevation, channel)`
+  that integrates τ along a straight ray, no marching. export
+  `altitudeForPressure(profile, p)` as the exact inverse of `pressureFor`
+  — the invertibility of the profile is the room's whole thesis. export
+  `pressureForMidi(midi)` and its inverse for the audio side. add a stir
+  layer of sine modes whose vertical integrals are identically zero, so
+  hand-driven layer motion conserves total momentum. mass check as a
+  pinnable test: the whole column's weight in kg/m² equals P0/g. add a
+  parcel model: given an altitude and a temperature offset, compute the
+  level of free convection and the equilibrium cloud base. no DOM, no
+  audio, no `Math.random`, no `Date.now`. one bounded scatter loop
+  (SCATTER_STEPS) that reports the number of samples it took, so its
+  budget is a returned number, not a promise.
+
+verb_intent: >
+  every handler reads `Profile` and the current cloud population from a
+  ref, writes back a new one, and rings the audio bus. `tap` sounds one
+  pressure ring at the y-pressure of the tap and, if a cloud sits there,
+  gives it a soft push (`pressureForMidi` picks the note). `dwell` at any
+  altitude warms the parcel under the finger and lifts it — the LFC is
+  computed from `Profile` and the parcel's temperature offset, so a short
+  press makes a puff that sinks back and a long one builds a real tower;
+  the mass grown per ms is a saturating curve of the held time, never
+  identical at 900ms and 2400ms. `ceremony` seals the growing parcel into
+  a lantern, which then rides its own altitude's wind and is written to
+  `world.ts` so it drifts between visits. `drag` stirs the air at the
+  drag's altitude via the sine-mode field (net momentum zero), and
+  carries any cloud caught in that layer. `flick` tears a cloud apart —
+  the mass is preserved but distributed downwind as a smaller parcel.
+  `scrub` (a finger circling in place) winds a vortex that turns
+  whatever cloud it finds. `drum` (two hands alternating) gusts wind
+  between the two contact zones. `twist` (two-finger) raises the lens
+  render path; `tap` with `fingers === 2` (stepBack) lowers it. `drag3`
+  writes into `Profile`: the horizontal component slides the sun along
+  its arc; the vertical steepens or shallows the lapse rate. `twist3`
+  moves the season, which changes the water content of the air — every
+  cloud's base recomputes at once. `hold3` slows the room's clock while
+  held (a real dt scale, not an animation trick). `tap3` (tutti) pulses
+  every cloud and every lantern in one frame — one chord across all
+  altitudes. the vessel: `tilt` leans the whole sky, `shake` gusts and
+  tears (repeats a `flick` across the population), `knock` rings the
+  column from the ground up as a low bell (uses `spectralRegisterFor`
+  for the band note), `flip` is night — the sun goes below the horizon
+  and the shader recomputes on the same profile. `arrows` walk the sun
+  and the lapse rate; enter held is a keyboard dwell; backspace tears
+  the last cloud. no room-local timing constants: every threshold is
+  from `gesture/core.ts`; the parcel's saturating growth curve reads
+  its time constant from a domain export, not a magic number in the
+  handler.

@@ -20,3 +20,4 @@ _sim.mjs
 # local scratchpad: downloaded videos + extracted frames (do not commit)
 videos/
 data/object-compiler/
+__pycache__/

@@ -1,0 +1,34 @@
+<!-- object-compiler template — docs/plans/object-compiler.md M3.
+     Consumes: spec.key, ComponentName.
+     Two literal edits to src/rooms/registry.ts; the tool never rewrites
+     the file itself because ROOM_MANIFESTS' order is alphabetical and
+     merge-conflict-sensitive. -->
+
+# Registry patch — `src/rooms/registry.ts`
+
+Two edits, alphabetical placement. Do not hand-add the room to any other
+registry — `SITE_ROUTES`, nav order, peer seats, the icon config, the guide
+and `scripts/test-routes.mjs` all derive themselves from `ROOM_MANIFESTS`.
+
+## 1. Add the import
+
+Insert alphabetically among the other `import <key> from "@/rooms/<key>/room.config";`
+lines:
+
+```ts
+import {{spec.key}} from "@/rooms/{{spec.key}}/room.config";
+```
+
+## 2. Add to `ROOM_MANIFESTS`
+
+Insert alphabetically in the `ROOM_MANIFESTS` array literal:
+
+```ts
+  {{spec.key}},
+```
+
+## Verification
+
+`npm run test:rooms` fails if the room's `place`, its band linkage, or its
+guide drift from the manifest — a red row there is the derivation working;
+edit the manifest, never the registry the manifest feeds.

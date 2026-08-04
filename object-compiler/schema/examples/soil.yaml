@@ -1,0 +1,177 @@
+# soil — compost, minerals, roots
+#
+# Round-trip-derived from src/rooms/soil/room.config.ts and src/lib/humus.ts.
+# The peer-placement example: seated in the cabinet ring at the drop band,
+# beside the drop, the seed, and the rocks; opens up to the ground and the
+# garden by declared route-level travel overrides.
+
+key: soil
+component_name: SoilGround
+
+placement:
+  kind: peer
+  circle: cabinet
+  band: drop
+  label: "the soil"
+  ringAfter: rocks
+
+sigil: growth
+desc: "compost · minerals · roots"
+cluster: nature
+dark: true
+home_priority: 9
+ambient_profile: earth
+storage_key: "objetdart:soil:v2"
+
+invariant: >
+  one nutrient ledger held in five pools — litter, humus, mineral, mycelium,
+  root — where litter rots to humus, humus mineralises, and the roots and
+  fungi standing in the section are two of those pools rather than things
+  drawn on top of them.
+
+material: 2d-over-shader
+noun: root
+
+domain_lib:
+  name: humus
+  invariant_type: ledger
+
+palette:
+  bg: "#0a0806"
+  bg2: "#1d1209"
+  glow: "#c6a874"
+  accent: "#8a5a30"
+  accent2: "#e4d8ba"
+  ink: "#efe3cc"
+
+verbs_answered:
+  - tap
+  - dwell
+  - ceremony
+  - drag
+  - flick
+  - twist
+  - twist3
+  - tap3
+  - drag3
+  - hold3
+  - scrub
+  - drum
+  - arrows
+  - tilt
+  - shake
+  - knock
+  - flip
+
+guide:
+  title: "compost · minerals · roots"
+  scale: "the drop band — cabinet peer of the drop and the seed, and the ground's lower door: a hand's width of earth in section, opening up to the ground and the garden, down into the plasm"
+  essence: >
+    one nutrient ledger held in five pools — litter, humus, mineral, mycelium,
+    root — where litter rots to humus, humus mineralizes, and the roots and
+    fungi standing in the section are two of those pools rather than things
+    drawn on top of them.
+  moves:
+    - "tap the ground → lifts a handful at that depth and sounds it; the surface and the floor are different soils, and hear different"
+    - "tap a root or a fungus → sounds that life alone, its mass its pitch"
+    - "hold (dwell) → presses litter down into humus, deeper the longer it is held"
+    - "hold to the ceremony tier → plants a life where the finger is: up in the litter it is a fungus, down in the mineral a root. its body is taken out of the litter lying there, so a spent surface refuses"
+    - "drag a life up past the surface → it comes out of the ground with the hand and lands back on the litter it was made from — planting run backwards, over the same ledger"
+    - "flick → throws whatever the hand had hold of; over bare ground it throws a clod instead"
+    - "drag → rakes the ground, stirring the layering flat and setting the grains chattering"
+    - "scrub → turns the compost; the pile answers an octave down"
+    - "drum (two hands alternating) → sifts the section: the grit rings, the fines fall through"
+    - "three-finger drag → the weather: across is warmth, down is rain"
+    - "three-finger twist → turns the year through thaw, high summer, fall, frost — and the soil ages by the span it names"
+    - "three-finger hold → slows the room's clock while held"
+    - "three-finger tap → the whole ledger sounded at once"
+    - "two-finger twist → raises the ledger lens: the five pools as a bar, the timbre in numbers, the roots and fungi counted, and what grew while you were away"
+    - "arrows → move the depth cursor and sample there; held enter presses and at full charge plants; delete pulls out what is under the cursor"
+    - "tilt / shake / knock / flip (once invited) → lean, turn the ground over, settle the grains, or let it sleep"
+    - "pinch through the edge → up to the ground it is the ground of, or the garden rooted in it; down into the plasm"
+    - "two-finger hold to dwell → opens the cabinet peer ring toward the drop, the seed, and the other handhelds"
+  finds:
+    - "two roots planted within a hand's width take each other's supper, and the weaker one starves; a fungus planted beside a root feeds it and is paid back — the hypha between them is drawn only where the network actually holds one"
+    - "depth is the decision: a root reaches the mineral by going down, a fungus eats the litter lying on top, so the same press means a different life at a different height"
+    - "the sound is the ledger, not a reaction to it: litter sets the brightness, humus the damping, mineral the ring, mycelium the beat, and the mass the pitch — a rotted handful is audibly fewer voices than a fresh one"
+    - "nothing here is created; planting, pulling, pressing, raking and shaking only move nutrient between pools, and the total changes only when the shared coast drops something on the surface"
+    - "warmth doubles the rotting every ten degrees and a drowned soil goes slower than a moist one, so the sourest corner of the weather is the wet one, not the cold one"
+    - "the roots grew while you were away — a fortnight's absence is read off a closed-form trajectory, not replayed"
+  keeps: "the ledger, every life standing in it and how big it has grown, the season the year had reached, and the hour it was last looked at"
+
+# ——— the three LLM slots ————————————————————————————————————————————————
+
+shader_intent: >
+  a section through a hand's width of ground, horizon at the top quarter,
+  the earth filling the rest. the shader paints the section in layers: (1)
+  the sky-and-air band above HORIZON, dim and static; (2) the litter, a
+  bright ochre grain that darkens as its pool empties; (3) the humus below
+  it, soft dark brown; (4) the mineral, cool grey with fleck highlights;
+  the boundaries between layers are not painted lines — they are read from
+  the ledger's fractions, so a wetter, hotter section shows a visibly
+  smaller litter band because the pool has moved. lives (roots and fungi)
+  live in a second draw call on an overlay: roots as tapering lines
+  reaching down to their reach depth, fungi as filaments radiating from
+  their body, hyphae as slightly meandering curves between them (drawn only
+  where the graph actually holds an edge). the lens (raised by two-finger
+  twist) draws the five pools as a bar chart across the section, the
+  timbre in numbers, and what grew while you were away. palette registers:
+  `bg` is the dark under the ground, `bg2` the deep mineral, `glow` the
+  litter's warmth, `accent` the humus, `accent2` the pale root/hypha
+  colour, `ink` the lens line colour. the invariant the shader must
+  respect: the visible boundaries move only when the ledger moves — never
+  as animation, always as consequence of `advance()`.
+
+domain_intent: >
+  write `src/lib/humus.ts` around one `SoilState = { pools: {litter, humus,
+  mineral, mycelium, root}, tau: number }`. the five-pool ledger, plus the
+  seconds of maturity the soil has lived. two closed-form advances,
+  neither replaying history: (1) `advanceChemistry(state, dtSec, climate)`
+  — the linear cascade litter → humus → mineral is triangular so it has
+  an exact solution: `l(t) = l₀·exp(−k₁·t)`, `h(t)` the two-exponential
+  convolution, mineral closing the sum. rates carry real soil science: a
+  Q₁₀ of 2 (decomposition doubles per 10 °C) and a moisture response that
+  peaks near 60% pore saturation and falls off when waterlogged. (2)
+  `advanceBiology(orgs, dtSec, links)` — logistic growth toward a
+  carrying capacity set by what is locally available, divided by
+  neighbours competing for it and multiplied by mycorrhizal links found;
+  closed form of logistic growth means one `exp()` per organism, so a
+  visit after a month is O(organisms), never O(elapsed). export
+  `mixOf(state)` (fractions summing to one), `totalOf(state)`,
+  `normalizePools(raw)` for reading storage back. export `mixFromTimbre`
+  and `totalFromTimbre` — the LOADED map (litter → centroid, humus →
+  damping, mineral → ring/decay, mycelium → beat, mass → pitch) must be
+  invertible or the room is decoration. `MAX_TOTAL = 1`, `MIN_TOTAL =
+  0.04`, `MAX_ELAPSED_S = 14 * 24 * 3600` so a month away can never
+  become a century. `Climate = { warmth: 0..1, wet: 0..1 }`. `threadsBetween(orgs,
+  reach)`, `reachAt(tau, mycelium)`, `componentCount`,
+  `largestComponentShare` for the hypha graph. no DOM, no audio, no
+  `Math.random`, no `Date.now`.
+
+verb_intent: >
+  every handler mutates a `SoilState` ref and then rings the audio bus with
+  the ledger it just wrote — the sound IS the ledger, not a reaction to it.
+  `tap` on the ground at (x, depth) reads `mixOf(state)` and sounds it —
+  centroid from litter, damping from humus, ring from mineral, beat from
+  mycelium, pitch from local mass; surface and floor are different soils and
+  hear different. `tap` on a root or fungus sounds that life alone with its
+  mass as pitch. `dwell` on the litter presses it into humus — an amount
+  proportional to held time on a saturating curve, so a short press moves
+  little and a long one moves a lot. `ceremony` (hold ≥ tier 3) plants a
+  life: up in the litter it is a fungus, down in the mineral a root; its
+  body is subtracted from the litter that funded it, so a spent surface
+  refuses. `drag` upward past the surface pulls the life out (planting run
+  backwards over the same ledger). `flick` throws whatever the hand had
+  hold of; over bare ground it throws a clod. `drag` in place rakes and
+  stirs. `scrub` turns the compost — the pile answers an octave down.
+  `drum` sifts. `drag3` writes into `Climate`: horizontal is warmth,
+  vertical is wet. `twist3` advances or retreats the year through
+  `advanceChemistry` with fast `dtSec`. `hold3` slows the room's clock
+  while held. `tap3` sounds the whole ledger at once. `twist` (two-finger)
+  raises the lens; `tap` fingers === 2 lowers it. `arrows` move the depth
+  cursor and sample there; held enter presses and at full charge plants;
+  delete pulls out what is under the cursor. the vessel: `tilt` leans the
+  section (a real gravity vector against the vertical), `shake` turns the
+  ground over (some litter drops into humus, some mineral rises), `knock`
+  settles the grains, `flip` is sleep. every timing constant comes from
+  `gesture/core.ts`; the domain owns the physics constants.

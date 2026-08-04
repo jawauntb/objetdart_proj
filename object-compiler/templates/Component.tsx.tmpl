@@ -1,0 +1,212 @@
+// object-compiler template — docs/plans/object-compiler.md M3.
+// Consumes: spec.key, spec.route, spec.storage_key, spec.palette.bg,
+//           ComponentName (PascalCase of key), spec.aria_label.
+// Three LLM slots below carry the creative work; the boilerplate is verbatim.
+"use client";
+
+/**
+ * {{spec.route}} — {{spec.guide.title}}. See docs/plans/object-compiler.md
+ * §"Three creative slots" for what belongs in each slot.
+ */
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getFieldAudio } from "@/lib/audio";
+import * as haptics from "@/lib/haptics";
+import { getTurbulence, relaxTurbulence, stirTurbulence } from "@/lib/turbulence";
+import RoomShell from "@/components/RoomShell";
+import type { RoomVoice } from "@/lib/gesture/defaults";
+import { createGLStage, FULLSCREEN_VERT_UNIT } from "@/lib/webgl/stage";
+import { clocksFrom } from "@/lib/webgl/sizing";
+import {
+  onVisibility,
+  onGalleryPause,
+  createIdleWriter,
+  createFrameGovernor,
+  isEmbeddedFrame,
+} from "@/lib/room-runtime";
+// __SLOT_DOMAIN_IMPORTS__
+
+/** Persistence key — versioned; a schema change bumps the suffix. */
+const STORE_KEY = "{{spec.storage_key}}";
+/** How often the idle writer flushes to storage while a hand is present. */
+const SAVE_EVERY_MS = 4000;
+
+const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
+const clamp01 = (v: number) => clamp(v, 0, 1);
+
+/**
+ * The material. Everything from the uniforms down through main() lives in the
+ * slot below; the wrapping backtick template is boilerplate so an empty slot
+ * still parses as TypeScript.
+ */
+const FRAG = `
+precision highp float;
+
+uniform vec2  uRes;
+uniform float uTime;
+uniform float uBreath;
+uniform float uTurbulence;
+uniform float uReduced;
+
+varying vec2 vUv;
+
+// __SLOT_SHADER_BODY__
+`;
+
+export default function {{ComponentName}}() {
+  const surfaceRef = useRef<HTMLCanvasElement | null>(null);
+  const overlayRef = useRef<HTMLCanvasElement | null>(null);
+  const apiRef = useRef<Record<string, unknown> | null>(null);
+  const [hasKept, setHasKept] = useState(false);
+
+  useEffect(() => {
+    const surface = surfaceRef.current;
+    const overlay = overlayRef.current;
+    if (!surface || !overlay) return;
+
+    const audio = getFieldAudio();
+    let reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const embedded = isEmbeddedFrame();
+    const gov = createFrameGovernor(embedded ? "medium" : "high");
+
+    // ——— the small state vector — read back from storage if present ———
+    let stored: unknown = null;
+    try {
+      const raw = window.localStorage.getItem(STORE_KEY);
+      if (raw) stored = JSON.parse(raw);
+    } catch {
+      /* the section is empty */
+    }
+    void stored;
+
+    let hidden = document.hidden;
+    let galleryPaused = false;
+    let asleep = false;
+    let last = performance.now();
+    let raf = 0;
+    let running = true;
+
+    const syncSleep = () => {
+      asleep = hidden || galleryPaused;
+      if (asleep) gov.force("sleep");
+    };
+    const unvis = onVisibility((h) => {
+      hidden = h;
+      syncSleep();
+    });
+    const ungal = onGalleryPause((p) => {
+      galleryPaused = p;
+      syncSleep();
+    });
+
+    const writer = createIdleWriter(() => {
+      // The idle writer serializes the state vector back to STORE_KEY.
+      // Slot fill wires the domain state in; the writer's cadence is shared.
+      try {
+        window.localStorage.setItem(STORE_KEY, JSON.stringify({ v: 1 }));
+      } catch {
+        /* storage full or unavailable */
+      }
+    });
+
+    // ——— the shared GL harness ———
+    const stage = createGLStage(surface, {
+      label: "{{spec.key}}",
+      wrap: surface.parentElement,
+      overlay,
+      renderScale: embedded ? 0.42 : 0.6,
+      quality: embedded ? "medium" : "high",
+      reducedMotion: reduced,
+      embedded,
+    });
+    const prog = stage?.program(FULLSCREEN_VERT_UNIT, FRAG) ?? null;
+    const quad = stage && prog ? stage.fullscreenQuad(prog, "unit") : null;
+
+    // ——— the hand's verbs, in this room's material ———
+    // __SLOT_VERB_HANDLERS__
+
+    // ——— the loop ———
+    const draw = (now: number) => {
+      if (!running) return;
+      const dtRaw = Math.min(0.05, (now - last) / 1000);
+      last = now;
+      const tier = gov.beginFrame(now);
+      void tier;
+      void dtRaw;
+
+      relaxTurbulence(now);
+      const agitation = getTurbulence();
+      const t = audio.getAudioTime() ?? now / 1000;
+
+      if (stage && prog && quad && !stage.contextLost() && !asleep) {
+        prog.use();
+        stage.beginFrame(
+          clocksFrom({ time: reduced ? 12 : t, turbulence: agitation, reducedMotion: reduced }),
+          prog,
+        );
+        quad.draw();
+      }
+
+      raf = requestAnimationFrame(draw);
+    };
+    raf = requestAnimationFrame(draw);
+
+    return () => {
+      running = false;
+      apiRef.current = null;
+      unvis();
+      ungal();
+      writer.flush();
+      quad?.dispose();
+      stage?.dispose();
+      cancelAnimationFrame(raf);
+    };
+  }, []);
+
+  // The verbs, in the shell's vocabulary. Each reads through apiRef so the
+  // engine never loses an in-flight hold when React re-renders. Slot fill
+  // populates the handler bodies; this object is what RoomShell receives.
+  const voice = useMemo<RoomVoice>(() => ({}), []);
+
+  const letGo = useCallback(() => {
+    getFieldAudio().thud();
+    haptics.roll();
+    setHasKept(false);
+  }, []);
+
+  return (
+    <RoomShell
+      route="{{spec.route}}"
+      surfaceRef={surfaceRef}
+      voice={voice}
+      letGo={{ label: "let go", onLetGo: letGo, visible: hasKept }}
+      style={{ position: "fixed", inset: 0, background: "{{spec.palette.bg}}" }}
+    >
+      <canvas
+        ref={surfaceRef}
+        role="application"
+        tabIndex={0}
+        aria-label="{{spec.aria_label}}"
+        style={{
+          position: "absolute",
+          inset: 0,
+          width: "100%",
+          height: "100%",
+          touchAction: "none",
+          outline: "none",
+        }}
+      />
+      <canvas
+        ref={overlayRef}
+        aria-hidden
+        style={{
+          position: "absolute",
+          inset: 0,
+          width: "100%",
+          height: "100%",
+          pointerEvents: "none",
+        }}
+      />
+    </RoomShell>
+  );
+}

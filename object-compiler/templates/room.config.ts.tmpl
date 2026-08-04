@@ -1,0 +1,45 @@
+// object-compiler template — docs/plans/object-compiler.md M3.
+// Consumes: spec.key, spec.route, spec.sigil, spec.desc, spec.cluster,
+//           spec.dark, spec.home_priority, spec.placement, spec.icon (palette
+//           + names), spec.guide (title/scale/essence/moves/finds/keeps).
+// Deterministic — no LLM slot. Every field comes from the spec.
+import type { RoomManifest } from "@/rooms/types";
+
+/**
+ * {{spec.route}} — {{spec.guide.title}}.
+ *
+ * {{spec.placement_note}}
+ */
+const {{spec.key}} = {
+  key: "{{spec.key}}",
+  href: "{{spec.route}}",
+  sigil: "{{spec.sigil}}",
+  desc: "{{spec.desc}}",
+  cluster: "{{spec.cluster}}",
+  dark: {{spec.dark}},
+  place: {{spec.placement_literal}},
+  icon: {
+    title: "{{spec.icon.title}}",
+    description: "{{spec.icon.description}}",
+    path: "{{spec.route}}",
+    shortName: "{{spec.icon.short_name}}",
+    kind: "{{spec.sigil}}",
+    bg: "{{spec.palette.bg}}",
+    bg2: "{{spec.palette.bg2}}",
+    glow: "{{spec.palette.glow}}",
+    accent: "{{spec.palette.accent}}",
+    accent2: "{{spec.palette.accent2}}",
+    ink: "{{spec.palette.ink}}",
+  },
+  guide: {
+    title: "{{spec.guide.title}}",
+    scale: "{{spec.guide.scale}}",
+    essence:
+      "{{spec.guide.essence}}",
+    moves: {{spec.guide.moves | as_list}},
+    finds: {{spec.guide.finds | as_list}},
+    keeps: "{{spec.guide.keeps}}",
+  },
+} as const satisfies RoomManifest;
+
+export default {{spec.key}};

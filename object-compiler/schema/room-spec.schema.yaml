@@ -1,0 +1,562 @@
+# room-spec.schema.yaml — the M2 contract of docs/plans/object-compiler.md
+#
+# JSON Schema, YAML-serialised. The coarsest specification that, together with
+# three LLM-filled creative slots (shader body, domain law, verb wiring),
+# deterministically produces the file shape of a post-consolidation room:
+#
+#   src/rooms/<key>/room.config.ts       ← from placement, palette, cluster, guide
+#   src/app/<key>/page.tsx                ← from key + ambient_profile
+#   src/app/<key>/layout.tsx              ← template constant
+#   src/components/<Room>.tsx             ← shell wiring + verb_intent (LLM)
+#   src/lib/<domain>.ts                   ← domain_intent (LLM)
+#   scripts/test-<domain>.mjs             ← derivable from domain_lib
+#   src/lib/room-registry.ts (patch)      ← key, creates, keeps, exempt
+#   src/rooms/index.ts (patch)            ← one import line
+#
+# Field names are the CONTRACT. Renaming a field breaks every spec that
+# authored against it, so `key`, `placement`, `cluster`, `noun`, `verbs_answered`
+# and the three intent slots stay verbatim. Additive change only.
+#
+# The fields that a good agent given ONLY this spec cannot recover — the shader
+# strings, the physics pure functions, the per-verb wiring — are named as
+# `*_intent` here and described as briefs. See object-compiler/schema/README.md
+# for the reason those three are LLM slots and the rest deterministic.
+
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "https://objetdart/object-compiler/room-spec.schema.yaml"
+title: "Room Spec"
+description: >
+  The one paragraph of intent, structured. A `spec.yaml` valid against this
+  schema is enough — together with the shared-system reference at
+  `object-compiler/reference/` — to produce a room that passes
+  `test:room-contract`, `test:routes`, `test:paint`, `test:guide`, and
+  `test:scene`.
+
+type: object
+additionalProperties: false
+required:
+  - key
+  - placement
+  - sigil
+  - desc
+  - cluster
+  - ambient_profile
+  - invariant
+  - material
+  - noun
+  - domain_lib
+  - palette
+  - verbs_answered
+  - guide
+  - shader_intent
+  - domain_intent
+  - verb_intent
+
+properties:
+
+  # ——— identity ————————————————————————————————————————————————————
+
+  key:
+    type: string
+    description: >
+      Registry key. Kebab-case, three to sixteen letters, must equal the
+      folder name at `src/rooms/<key>/` and the route segment. Also the
+      guide entry key and the screenshot filename (`public/guide/<key>.jpg`).
+    pattern: "^[a-z][a-z0-9-]{2,15}$"
+
+  component_name:
+    type: string
+    description: >
+      PascalCase name of the component file at
+      `src/components/<component_name>.tsx`. Optional — the compiler
+      defaults to a straight `capitalize(key)`, which is correct for
+      most rooms. Every post-consolidation example overrides this
+      with a richer concept name (soil → `SoilGround`, atmosphere →
+      `AirColumn`, solar → `SolarSystem`, planets → `PlanetForge`,
+      galaxy → `GalaxyArms`), so overriding is the norm rather than
+      the exception here.
+    pattern: "^[A-Z][A-Za-z0-9]{2,31}$"
+
+  # ——— cosmology ———————————————————————————————————————————————————
+
+  placement:
+    description: >
+      Where the room sits on the quark→manifold axis. Either the primary
+      resident of a band, or a seat inside a peer circle. `band` names
+      exactly one `SCALE_BANDS` entry; `circle` names one `PEER_CIRCLES`
+      ring. Exempt rooms (laws, lenses, reading surfaces) are not written
+      by this compiler — they lack the material a spec describes.
+    oneOf:
+      - type: object
+        additionalProperties: false
+        required: [kind, band]
+        properties:
+          kind:
+            const: band
+          band:
+            type: string
+            description: >
+              A band id from `src/lib/scale.ts` `SCALE_BANDS`: one of
+              `quanta`, `quarks`, `nucleons`, `atoms`, `molecules`,
+              `organics`, `dna`, `organelles`, `cells`, `tissue`, `drop`,
+              `flowers`, `birds`, `coast`, `olympus`, `atmosphere`,
+              `atlas`, `earth`, `planets`, `solar`, `stars`, `galaxy`,
+              `space`, `beyond`, `manifold`. The band's `route` must
+              point at `/<key>`, or that link is set in the same PR.
+            enum:
+              - quanta
+              - quarks
+              - nucleons
+              - atoms
+              - molecules
+              - organics
+              - dna
+              - organelles
+              - cells
+              - tissue
+              - drop
+              - flowers
+              - birds
+              - coast
+              - olympus
+              - atmosphere
+              - atlas
+              - earth
+              - planets
+              - solar
+              - stars
+              - galaxy
+              - space
+              - beyond
+              - manifold
+      - type: object
+        additionalProperties: false
+        required: [kind, circle, band, label]
+        properties:
+          kind:
+            const: peer
+          circle:
+            type: string
+            description: >
+              Peer-circle id from `src/lib/peers.ts` `PEER_CIRCLES`: one
+              of `sky`, `hearth`, `peak`, `shore`, `meadow`, `cabinet`.
+              A new ring is a cosmology decision — never a typo, never
+              introduced by the compiler.
+            enum: [sky, hearth, peak, shore, meadow, cabinet]
+          band:
+            type: string
+            description: >
+              The band the seat physically sits in (same list as the
+              `band` placement's `band`).
+          label:
+            type: string
+            description: >
+              How the ring names this seat — the string a peer twist
+              shows and the dropdown lists.
+          ringAfter:
+            type: string
+            description: >
+              The peer key this seat sits after in the ring. Pins ring
+              order deterministically so it never depends on import
+              order. Omitted only for the ring's first seat.
+
+  sigil:
+    type: string
+    description: >
+      `RouteSigilKind` glyph the header dropdown and the home gallery
+      draw. One of the values `RouteSigil` actually renders in
+      `src/components/RouteSigil.tsx` — do not invent new sigils here.
+    enum:
+      - atlas
+      - tide
+      - waves
+      - storm
+      - clouds
+      - aphros
+      - fire
+      - earth
+      - growth
+      - stars
+      - solar
+      - signal
+      - plasma
+      - pulse
+      - charts
+      - watch
+      - archive
+      - kept
+      - colophon
+
+  icon_kind:
+    type: string
+    description: >
+      `SiteIconKind` used for the favicon, apple-touch icon and
+      opengraph card. Optional — the compiler falls back to `sigil`
+      when omitted, which is correct for four of the five example
+      rooms. Name it explicitly only when the icon should differ from
+      the header glyph (as in solar, where the sigil is a heliocentric
+      mark but the icon reads as `stars`).
+    enum:
+      - aphros
+      - archive
+      - atlas
+      - beyond
+      - charts
+      - circularity
+      - clouds
+      - coin
+      - colophon
+      - compare
+      - earth
+      - fire
+      - flowers
+      - growth
+      - home
+      - jewel
+      - kept
+      - light
+      - tourbillon
+      - ocean
+      - plasma
+      - pretext
+      - pulse
+      - reading
+      - signal
+      - sine
+      - stars
+      - storm
+      - tide
+      - time
+      - watch
+      - waves
+
+  cluster:
+    type: string
+    description: >
+      Home-gallery grouping (`SiteRouteCluster` in `src/rooms/types.ts`).
+      Every post-consolidation room the compiler was trained on is
+      `nature`; the other three exist for older families and are legal
+      but rare.
+    enum: [nature, field, water, mechanism]
+
+  desc:
+    type: string
+    description: >
+      One lowercase line for the header dropdown and for
+      `icon.description` — always the same string. Distinct from
+      `guide.title`, which may drop qualifiers the dropdown keeps (as
+      in solar: dropdown "the system assembled · kept on real time",
+      guide title "the system assembled").
+
+  chrome:
+    type: object
+    additionalProperties: false
+    description: >
+      What `<RoomShell>` mounts for this room. Optional — the compiler
+      defaults to `{ travel: true, peers: true }`, which is right for
+      every post-consolidation example. Set `travel: false` only when
+      the room owns pinch itself (as `/beam` does, pulling its binary
+      suns apart).
+    properties:
+      travel:
+        type: boolean
+        description: >
+          Pinch-owned scale travel. Default true; false while the room
+          owns pinch.
+      peers:
+        type: boolean
+        description: >
+          Lateral peer ring. Default true; no-ops when the route has no
+          circle.
+
+  dark:
+    type: boolean
+    description: >
+      Dark chrome for this route and its children. All five example
+      rooms are true.
+    default: true
+
+  home_priority:
+    type: integer
+    description: >
+      Home-gallery weight when the room earns a larger tile. Optional.
+    minimum: 1
+    maximum: 12
+
+  # ——— sound bed ————————————————————————————————————————————————————
+
+  ambient_profile:
+    type: string
+    description: >
+      Argument the room's `page.tsx` passes to
+      `getFieldAudio().setAmbientProfile(...)`. Names one of the beds
+      defined by `AmbientProfile` in `src/lib/audio.ts`. The band's own
+      register (`spectralRegisterFor(s)`) is still applied on top;
+      this only picks the timbre of the ambient bed.
+    enum:
+      - ocean
+      - aphros
+      - tide
+      - waves
+      - watch
+      - pretext
+      - storm
+      - wind
+      - fire
+      - earth
+      - cosmic
+      - monitor
+      - electric
+      - garden
+      - clockwork
+      - archive
+      - entry
+      - atlas
+      - colophon
+      - compare
+      - kept
+      - reading
+      - signal
+      - vacuum
+      - beyond
+      - circularity
+      - flowers
+      - light
+      - sine
+      - time
+      - silent
+
+  # ——— persistence ————————————————————————————————————————————————————
+
+  storage_key:
+    type: string
+    description: >
+      The `localStorage` key `createIdleWriter` writes the room's kept
+      state under. Convention `objetdart:<key>:v<n>`. Optional — a room
+      that keeps nothing of its own (its persistence rides through the
+      shared `world.ts` bus) may omit this; the compiler will emit
+      `keeps: null` in the registry.
+    pattern: "^objetdart:[a-z0-9-]+:v[0-9]+$"
+
+  # ——— material ————————————————————————————————————————————————————————
+
+  invariant:
+    type: string
+    description: >
+      One-line technical description of the room's invariant object —
+      the small deterministic thing every representation is a lens over.
+      This is the sentence that opens the header doc of `src/lib/<domain>.ts`.
+      Example: "a set of orbital elements per body under Kepler's law."
+
+  material:
+    type: string
+    description: >
+      How the field is painted. `shader` is a fullscreen fragment
+      program with no 2D overlay; `2d-over-shader` adds a thin 2D pass
+      for the hand's own marks and the lens. All five post-consolidation
+      rooms are `2d-over-shader`; a pure shader room is legal but rare.
+    enum: [shader, "2d-over-shader"]
+
+  noun:
+    type: string
+    description: >
+      The countable thing a dwell creates. Singular, lowercase, no
+      article. Written verbatim into the `creates:` field of the room's
+      `room-registry.ts` entry (prefixed with an article there).
+
+  # ——— domain library ——————————————————————————————————————————————————
+
+  domain_lib:
+    type: object
+    additionalProperties: false
+    required: [name, invariant_type]
+    description: >
+      The pure physics module the room's laws live in. Owned entirely
+      by the LLM's `domain_intent` slot; the schema only names it and
+      classifies the shape of its invariant.
+    properties:
+      name:
+        type: string
+        description: >
+          Bare filename stem in `src/lib/`. The compiler writes
+          `src/lib/<name>.ts` and pairs it with `scripts/test-<name>.mjs`.
+        pattern: "^[a-z][a-z0-9]{1,23}$"
+      invariant_type:
+        type: string
+        description: >
+          Which shape of invariant the domain speaks. This picks the
+          test skeleton and the retrieval bank slice for the domain
+          slot. `latent` — a compact vector decoded into a world.
+          `ledger` — a currency held in a few pools that only moves
+          between them. `lattice` — a discrete crystal-like grid with
+          allowed transitions. `field` — a continuous scalar or vector
+          field over a region. `flock` — many independent agents under
+          a shared law. `column` — a vertical profile integrated in
+          closed form. `orbit` — orbital / phase-space elements per
+          body. `chain` — a linear polymer / sequence with local rules.
+        enum: [latent, ledger, lattice, field, flock, column, orbit, chain]
+
+  # ——— palette ————————————————————————————————————————————————————————
+
+  palette:
+    type: object
+    additionalProperties: false
+    required: [bg, bg2, glow, accent, accent2, ink]
+    description: >
+      Six hex colours used by the favicon, the apple-touch icon, the
+      opengraph card, the manifest — and, by convention, the shader's
+      base colour registers. Set once, threaded through
+      `RoomManifest.icon`.
+    properties:
+      bg:
+        type: string
+        description: page background (paper of the room)
+        pattern: "^#[0-9a-fA-F]{6}$"
+      bg2:
+        type: string
+        description: secondary background — the deeper card / horizon
+        pattern: "^#[0-9a-fA-F]{6}$"
+      glow:
+        type: string
+        description: the warm accent, sigils, the candle in the corner
+        pattern: "^#[0-9a-fA-F]{6}$"
+      accent:
+        type: string
+        description: primary accent — mid-value cool or warm
+        pattern: "^#[0-9a-fA-F]{6}$"
+      accent2:
+        type: string
+        description: secondary accent — supporting midtone
+        pattern: "^#[0-9a-fA-F]{6}$"
+      ink:
+        type: string
+        description: primary text and mark colour
+        pattern: "^#[0-9a-fA-F]{6}$"
+
+  # ——— gesture answers —————————————————————————————————————————————————
+
+  verbs_answered:
+    type: array
+    description: >
+      Which global verbs the material answers. Names from the fixed
+      grammar (`docs/gesture-grammar.md` §5). Any verb the material
+      genuinely cannot express carries an entry in `exempt` on the
+      generated `room-registry.ts` row instead — the compiler asks for
+      that reason as part of the slot brief. An empty array is legal
+      only for a declared reading surface, which is out of scope for
+      this schema.
+    minItems: 3
+    items:
+      type: string
+      enum:
+        - tap
+        - dwell
+        - ceremony
+        - drag
+        - flick
+        - twist
+        - twist3
+        - tap3
+        - drag3
+        - hold3
+        - scrub
+        - drum
+        - arrows
+        - tilt
+        - shake
+        - knock
+        - flip
+
+  # ——— guide entry ——————————————————————————————————————————————————————
+
+  guide:
+    type: object
+    additionalProperties: false
+    required: [title, essence, moves]
+    description: >
+      The room's field-guide entry. Written verbatim into
+      `RoomManifest.guide`. The moves array is exhaustive per grammar;
+      the finds array holds the rewards a patient hand discovers; keeps
+      names what persists between visits (empty string if nothing does).
+    properties:
+      title:
+        type: string
+        description: one line, lowercase, matches the room's own line
+      scale:
+        type: string
+        description: >
+          Where it sits on the quark→manifold axis, in the room's own
+          words. Optional — bands render a default from `SCALE_BANDS`
+          when omitted, but every example spec includes it.
+      essence:
+        type: string
+        description: >
+          One paragraph, three to six sentences, no marketing verbs,
+          no emoji. The one place the site describes what this room IS.
+      moves:
+        type: array
+        description: >
+          Every gesture the material answers, each reading "verb →
+          answer". Not for beginners — for the hand that has already
+          arrived. One line per verb; group verbs that answer the same
+          motion.
+        minItems: 3
+        items:
+          type: string
+      finds:
+        type: array
+        description: The non-obvious rewards a patient hand finds.
+        items:
+          type: string
+      keeps:
+        type: string
+        description: What the room remembers between visits.
+
+  # ——— the three LLM slots ————————————————————————————————————————————
+
+  shader_intent:
+    type: string
+    description: >
+      A brief for the shader body. Paragraph form, concrete enough that
+      a good agent reading ONLY this — plus the retrieval bank — could
+      produce a fragment shader whose look and feel matches the merged
+      room. Say what layers are stacked (depth gradient, noise, warp,
+      caustics), what the visitor's hand does to those layers (ripple
+      injection, warp, extinction), what the palette means physically
+      (this glow is a temperature, this accent is an optical depth),
+      and which representation is INVERTIBLE (the sky's colour is the
+      column's weight; the tone's pitch is the orbital frequency). The
+      shader carries the room's look but not its laws — the laws live
+      in `domain_intent`.
+
+  domain_intent:
+    type: string
+    description: >
+      A brief for the pure physics module (`src/lib/<domain_lib.name>.ts`).
+      Paragraph form, concrete enough that a good agent could produce a
+      module whose exports match the invariant the room reads back off
+      the material. Say what the invariant is (a ledger of five pools;
+      a vector of orbital elements per body; a compact latent per
+      world); what the closed-form advance is (a linear cascade solved
+      exactly; Kepler's equation solved to tolerance; a two-exponential
+      decay); what the loading map into audio is and how to invert it
+      (litter sets centroid, mineral sets ring — `mixFromTimbre` reads
+      it back); and which constants carry the physics (Q₁₀ for
+      decomposition; the sea-level pressure; the flat rotation curve).
+      No DOM, no audio, no `Math.random`, no `Date.now`.
+
+  verb_intent:
+    type: string
+    description: >
+      A brief for how each verb in `verbs_answered` maps into the
+      domain physics. Paragraph form, concrete enough that a good agent
+      could write the `attachGestures`-fed handlers whose failing
+      would be a bug the room's `test-<domain>.mjs` catches. Say what
+      tap does (sounds an object; on empty ground stirs the field);
+      what dwell does (grows the reserve, planted at ceremony); how
+      duration deepens and how intensity scales, so nothing fires
+      identically at 900ms and 2400ms; how the three-finger world-law
+      verbs write into the domain state (weather is warmth-across and
+      rain-down; season winds τ; dilation slows the room clock while
+      held). Name the pure functions the handlers call, not a control
+      panel.
