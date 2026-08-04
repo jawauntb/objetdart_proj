@@ -16,3 +16,7 @@ scripts/_*.mjs
 .gen.mjs
 .emit.mjs
 _sim.mjs
+
+# local scratchpad: downloaded videos + extracted frames (do not commit)
+videos/
+data/object-compiler/
