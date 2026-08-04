@@ -49,6 +49,64 @@ Everything above is enough to emit `room.config.ts`, `page.tsx`,
 skeleton, and the `<RoomShell>` scaffolding inside the room's component
 file — no LLM needed.
 
+## The `visual_style` block — the design context for the shader slot
+
+`shader_intent` is a paragraph brief. On its own it carries what the shader
+DOES; it does not carry what the room SHOULD LOOK LIKE with any of the
+vocabulary a designer would reach for. That gap is why /spring's shader
+landed simple and /geyser's crossfade was hand-tuned: the picture-diff
+between the rendered room and its `public/guide/<key>.jpg` was mediated by
+prose alone. `visual_style` closes that gap by structuring the design
+context the brief assumes. It gives the slot-shader author (and, where
+useful, the slot-verbs author) a name for the composition, the subject, the
+form language, the temporal character, the palette registers *by function*,
+the reference images a designer would cite, the explicit no-fly list, the
+mood, and the visual language for gesture feedback. All fields are
+optional; a spec without a `visual_style` block still compiles.
+
+To author one: study the landed screenshot and answer each field in the
+vocabulary a colleague would use to point at the picture. Concrete
+examples:
+
+- **`composition`** — pick one of `side-section`, `top-down`,
+  `first-person`, `ambient-column`, `cutaway`, `silhouette`. Soil is a
+  `side-section` cutaway; atmosphere is an `ambient-column`; galaxy is
+  `top-down`.
+- **`subject`** — a one-line noun phrase: *"a hand's width of wet ground
+  with a small pool over an aquifer"*, *"a heliocentric map of orbits on
+  warm paper"*.
+- **`form_language`** — one or more tokens from the enum: `watercolor`,
+  `hand-painted`, `ink-line`, `SDF`, `value-noise-FBM`, `ray-marched`,
+  `point-cloud`, `ribbon-flow`, `stipple`. Multiple values are legal — a
+  watercolor SDF room is a real thing.
+- **`motion_character`** — `still` / `breathing` / `drifting` / `pulsing`
+  / `cyclic` / `ballistic` / `stochastic`. `breathing` picks up the site's
+  7s clock; `ballistic` fits an erupt phase; `cyclic` fits a year-scale
+  loop.
+- **`registers`** — one string per palette-slot assignment, mapping the
+  abstract hex to what it PAINTS: *"deep water: bg→bg2"*, *"mineral
+  bloom: accent2"*, *"sunlit highlight: glow"*. Arrow (→) permitted for
+  gradients.
+- **`reference_notes`** — described references, not URLs: *"like a wet
+  cross-section of clay in a jar; the aquifer register echoes the ocean's
+  depth gradient"*, *"reads as an ink-line orrery on warm paper"*.
+- **`banned_forms`** — always includes the AGENTS.md bar (no
+  `createRadialGradient`, no per-frame `shadowBlur`, no `ctx.filter`);
+  add room-specific negatives when a landed screenshot exposed a failure
+  mode: *"no cartoon puffiness on the plume"*, *"no visible seam between
+  layers"*.
+- **`mood`** — one line, felt sense: *"contemplative and low"*,
+  *"anticipatory then eruptive"*, *"buoyant, weightless, held"*. Not a
+  marketing verb; the adjective a visitor would offer unprompted.
+- **`gesture_feedback_style`** — how touch shows up: *"ripple wavefront
+  that decays radially"*, *"burn-in halo that fades over 3s"*,
+  *"displacement wave under the surface"*. This bridges the shader to
+  the verb handlers.
+
+When a `visual_style` block is present, `slot-shader.md` consumes it
+alongside `shader_intent`; the shader author gets both the specific brief
+and the design vocabulary the brief assumes.
+
 ## What the schema does not capture (the three LLM slots)
 
 Three creative degrees of freedom remain, and the plan's tomography argument

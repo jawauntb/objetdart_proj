@@ -564,6 +564,52 @@ against the same seven rooms and confirm all-glue. That closes
 phase-1's one loose diagnostic thread. After that, unblock
 `pairs.jsonl` before writing any more per-family statistics.
 
+### 2026-08-04 — visual_style schema addition (pre-phase-2)
+
+The user's ask, verbatim: "we need to describe the screenshots in guide so we
+can make a design style that knows what stuff should look like generally,
+also to help guide it." Cashed out: the compiler's shader slot was a single
+prose blob (`shader_intent`), and prose reweights unevenly — nothing in the
+schema told a slot-filler whether it was calibrating a side-section cutaway
+with hand-drawn ink or a first-person ray-marched fog. Structuring those
+axes closes the gap.
+
+- **The four-field intuition.** `composition + subject + form_language +
+  motion_character` makes the shader brief structural instead of prose.
+  Each field addresses one calibration dial the slot-filler was previously
+  guessing: what view of the world it paints, what it paints, what visual
+  instrument does the painting, and how the painting moves once painted.
+  The remaining fields (`registers`, `reference_notes`, `banned_forms`,
+  `mood`, `gesture_feedback_style`) constrain the fill further without
+  widening the degrees of freedom.
+- **Backfill.** All nine existing example specs now carry a `visual_style`
+  block derived from the landed `public/guide/<key>.jpg` plus the actual
+  FRAG shader body — no invented aesthetics, only recovered ones. Recovery
+  is the operational check: if the block cannot be written from what
+  already exists in the room, the block is wrong.
+- **Pipeline change.** `object-compiler/prompts/slot-shader.md` now reads
+  `visual_style` FIRST as design context, THEN `shader_intent` as the
+  room-specific brief. The renderer passes both to the LLM in that order.
+  `visual_style` is the site-invariant register for rooms inside a cluster;
+  `shader_intent` is what makes each instrument distinct.
+- **Why this matters for CT-1.** The design language was previously an
+  implicit distribution over `shader_intent` prose — a latent coordinate
+  the schema failed to quotient. Moving those axes into identifiable
+  fields shrinks the hypothesis family the slot-filler chooses from,
+  which is exactly what CT-1's identification rate rewards. Expected
+  effect at scale: tighter cross-room consistency inside a cluster, and
+  a sharper cocycle-audit signal when a spec genuinely calibrates
+  outside its neighbours.
+- **What phase-2 should watch for.** Is a compiled room's `visual_style`
+  recoverable from the guide screenshot alone? The falsifiability test:
+  take a landed room's `public/guide/<key>.jpg`, hand it to an LLM cold,
+  ask it to fill `visual_style` from scratch, then diff against the
+  authored block. High recovery means the schema addition is doing real
+  work; low recovery means the block is unfalsifiable prose and the
+  four-field intuition needs another calibration pass. Run this
+  retrospective against three rooms before shipping the next cluster —
+  that is the falsifiability of the whole design-descriptor idea.
+
 ## The one-line summary
 
 **Object Compiler learns `K: spec → room` from this project's own transcripts and

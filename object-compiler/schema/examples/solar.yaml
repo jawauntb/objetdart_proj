@@ -40,6 +40,29 @@ palette:
   accent2: "#7cac96"
   ink: "#f4efe4"
 
+visual_style:
+  composition: top-down
+  subject: "the solar system seen from above the ecliptic — a granulated sun, six thin orbit ellipses, small lit planetary discs"
+  form_language: [SDF, value-noise-FBM, ink-line, hand-painted]
+  motion_character: cyclic
+  registers:
+    - "deep space between the stars — via bg"
+    - "the zodiacal dust plane and the outer vignette — via bg2"
+    - "the sun's granulated corona and hot inner worlds — via glow"
+    - "paper the notation lens is drawn on, and the lit face of a body — via accent"
+    - "cool outer bodies and the pale halo of the milky band — via accent2"
+    - "the lens ink and the thin orbit rings — via ink"
+  reference_notes:
+    - "an old orrery diagram, but with a real limb-darkened granulated sun instead of a brass ball"
+    - "a plate in a Kepler treatise — thin ellipses, dots on them, one bright centre"
+    - "a milky-way band leaned across the frame as a rotated fbm ridge, never as a stamp"
+  banned_forms:
+    - "no createRadialGradient, no shadowBlur per AGENTS.md"
+    - "no first-person or side-section — the ecliptic is looked down onto, then leaned"
+    - "no drawn spiral for the milky band; no sprite planets — every body is an instanced SDF lit sphere"
+  mood: "quiet clockwork; the room keeps ticking on real elapsed time whether or not anyone is watching"
+  gesture_feedback_style: "a tap flares a body and sounds its orbital frequency; a drag pulls its semi-major from the pointer's radius (the voice drops as Kepler demands); a held condensation grows a new world on the sky, released onto a clean circle"
+
 verbs_answered:
   - tap
   - dwell
