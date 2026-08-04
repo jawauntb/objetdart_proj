@@ -47,11 +47,12 @@
  * because a marched room cannot cheat the station the way a painted one
  * could: stand at the apex and the whole frame is the rock you are inside.
  *
- * One finger turns the head, two fingers are the frame (pan, the lens, a
+ * One finger turns the head and pitches the look — down the slope toward
+ * the feet, up into the horns — two fingers are the frame (pan, the lens, a
  * step back), three are the world-law (weather, season, time), and the
- * vessel is the body: tilt is the horizon, shake sends scree down, a knock
- * on the case rings the peak, face-down is night, and a breath draws the
- * fog down off the range.
+ * vessel is the body: tilt rolls the horizon and tips the gaze with beta,
+ * shake sends scree down, a knock on the case rings the peak, face-down is
+ * night, and a breath draws the fog down off the range.
  *
  * A call is answered: tap and the ridge under your finger answers at the
  * delay its distance actually implies, lower the further it stands.
@@ -64,6 +65,7 @@ import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures, enableBreath } from "@/lib/gesture";
+import { tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import { onVessel, requestVessel } from "@/lib/vessel";
 import { shouldInvite } from "@/lib/candle";
 import LetGo from "@/components/LetGo";
@@ -84,8 +86,12 @@ import {
   MARCH_STEPS,
   OCTAVES_MARCH,
   OCTAVES_SHADE,
+  PITCH_MAX,
+  PITCH_MIN,
   SUN_NIGHT_ELEVATION,
+  applyCameraPitch,
   callAnswer,
+  clampPitch,
   echoMidi,
   fogSurfaceAt,
   fogTransmittance,
@@ -94,6 +100,7 @@ import {
   materialFromGround,
   packHorns,
   paletteForSun,
+  pitchFromVesselBeta,
   restingFogAltitude,
   seedOffset,
   snowlineKm,
@@ -125,9 +132,14 @@ const SEED = 0x0a1a;
 // Only the 2D fallback paints these now: thirteen distance cards, near to
 // far. The shader has no ranges at all — it has a ray.
 const RANGES = [0.26, 0.85, 1.5, 2.2, 2.8, 3.5, 4.3, 5.2, 6.2, 7.4, 8.8, 12, 16];
-const ROCK: [number, number, number] = [0.30, 0.27, 0.235];
-const SNOW: [number, number, number] = [0.94, 0.96, 0.99];
-const GLACIER: [number, number, number] = [0.42, 0.62, 0.74]; // cold blue ice tongue
+/** Cold gray rock — desaturated, a little blue in the shadow grain. */
+const ROCK: [number, number, number] = [0.38, 0.37, 0.36];
+/** High alpine snow: near-white with a cool cast, never warm paper. */
+const SNOW: [number, number, number] = [0.96, 0.975, 0.995];
+/** Glacier ice tongue — deep blue that reads as ice, not chalk. */
+const GLACIER: [number, number, number] = [0.28, 0.52, 0.72];
+/** Cool fill that lands on shaded snow and the lee of a ridge. */
+const SHADOW_COOL: [number, number, number] = [0.55, 0.68, 0.88];
 // A real pinhole, and a long lens. 66° made every ridge a low bump: apparent
 // rise is focal-limited, and the massif's crests stand only ~0.26km over the
 // inversion at 4km. 35° is also simply how the mountain photographs that
@@ -172,10 +184,11 @@ precision highp float;
 ${heightfieldGlsl()}
 
 uniform vec2 uRes;
-uniform float uHorizonPx;   // the horizon, in drawing-buffer px from the bottom
+uniform float uHorizonPx;   // level horizon, drawing-buffer px from the bottom
 uniform float uFocal;       // pinhole focal length, drawing-buffer px
 uniform float uRoll;        // the vessel's own horizon
 uniform float uYaw;
+uniform float uPitch;       // head pitch, radians — negative looks to the feet
 uniform vec3 uEye;
 uniform vec3 uSun;
 uniform vec3 uSunCol;
@@ -185,6 +198,7 @@ uniform vec3 uFogCol;
 uniform vec3 uRock;
 uniform vec3 uSnow;
 uniform vec3 uGlacier;
+uniform vec3 uShadowCool;
 uniform float uAmbient;
 uniform float uSunI;
 uniform float uFogAlt;
@@ -220,11 +234,18 @@ float softShadow(vec3 p, vec3 sun, int steps) {
 }
 
 void main() {
+  // Level pinhole, then pitch, then yaw — pitch is a real camera axis into
+  // the march, not a 2D horizon slide. Negative uPitch tips the gaze toward
+  // the feet and the downslope under the ledge.
   vec2 q = vec2(gl_FragCoord.x - 0.5 * uRes.x, gl_FragCoord.y - uHorizonPx);
   float cr = cos(uRoll);
   float sr = sin(uRoll);
   q = vec2(cr * q.x - sr * q.y, sr * q.x + cr * q.y);
   vec3 cam = normalize(vec3(q.x, q.y, uFocal));
+  float cp = cos(uPitch);
+  float sp = sin(uPitch);
+  // Same matrix as applyCameraPitch: negative uPitch drops the gaze.
+  cam = vec3(cam.x, cp * cam.y + sp * cam.z, -sp * cam.y + cp * cam.z);
   float cy = cos(uYaw);
   float sy = sin(uYaw);
   vec3 rd = vec3(cy * cam.x + sy * cam.z, cam.y, -sy * cam.x + cy * cam.z);
@@ -254,18 +275,27 @@ void main() {
     hitH = h;
     vec3 n = normalize(vec3(-grad.x, 1.0, -grad.y));
     vec4 m = hf_material(h, grad, crease, ridge, uSnowKm, uWind);
-    vec3 albedo = uRock * m.x + uSnow * m.y + uGlacier * m.z;
+    // Cold gray rock picks up a little crease grain so faces read as stone,
+    // not a flat taupe card; snow stays near-white; ice keeps its blue.
+    vec3 rockFace = uRock * (0.88 + 0.14 * ridge + 0.10 * (1.0 - smoothstep(0.0, 0.22, crease)));
+    vec3 albedo = rockFace * m.x + uSnow * m.y + uGlacier * m.z;
     // the wind's cornice, lying on the lee crest where it actually forms
-    albedo = mix(albedo, uSnow, m.w * 0.55);
+    albedo = mix(albedo, uSnow, m.w * 0.62);
     // the sun's ray is worth casting where the eye can see the shadow land
     float sh = softShadow(vec3(p.x, h, p.z) + n * 0.006, uSun, tG > 12.0 ? 0 : uShadowSteps);
     float ndl = max(dot(n, uSun), 0.0);
-    float light = uAmbient * (0.65 + 0.35 * n.y) + uSunI * ndl * sh;
-    // the arete itself catches the light along its edge
-    light += (1.0 - smoothstep(0.0, 0.05, crease)) * uSunI * 0.1 * sh;
-    // ice is not chalk: a low sheen on the glacier tongues
-    float spec = pow(max(dot(normalize(uSun - rd), n), 0.0), 34.0) * (m.z * 0.5 + m.y * 0.14) * sh;
-    vec3 face = albedo * light + uSunCol * uSunI * spec * 0.35;
+    float light = uAmbient * (0.58 + 0.42 * n.y) + uSunI * ndl * sh;
+    // knife-edge aretes: a sharper rim light so ridgelines cut the sky
+    float arete = 1.0 - smoothstep(0.0, 0.028, crease);
+    light += arete * uSunI * 0.16 * sh;
+    // ice is not chalk: a low sheen on the glacier tongues and hard snow
+    float spec = pow(max(dot(normalize(uSun - rd), n), 0.0), 40.0) * (m.z * 0.62 + m.y * 0.18) * sh;
+    vec3 face = albedo * light + uSunCol * uSunI * spec * 0.4;
+    // blue in the shade: snow and ice borrow sky, rock stays cooler gray
+    float shade = (1.0 - ndl * sh);
+    face = mix(face, face * uShadowCool, shade * (m.y * 0.55 + m.z * 0.7 + m.x * 0.18));
+    // a thin ice-blue on the darkest glacier bowls
+    face = mix(face, uGlacier * (0.35 + 0.4 * light), m.z * shade * 0.35);
     groundT = hf_fogTransmittance(ro.y, rd.y, tG, uFogAlt);
     ground = mix(uFogCol, face, max(groundT, 0.28));
     drowned = h < hf_fogSurfaceAt(p.xz, uFogAlt, uPhase) ? 1.0 : 0.0;
@@ -438,6 +468,7 @@ export default function MountainPeak() {
       gl.uniform3f(u("uRock"), ROCK[0], ROCK[1], ROCK[2]);
       gl.uniform3f(u("uSnow"), SNOW[0], SNOW[1], SNOW[2]);
       gl.uniform3f(u("uGlacier"), GLACIER[0], GLACIER[1], GLACIER[2]);
+      gl.uniform3f(u("uShadowCool"), SHADOW_COOL[0], SHADOW_COOL[1], SHADOW_COOL[2]);
       gl.uniform3f(u("uEye"), stX, eyeY, stZ);
       return true;
     };
@@ -491,8 +522,11 @@ export default function MountainPeak() {
     let roll = 0; // the vessel is level with the world
     let yaw = viewYaw; // the head, turned — the crest held off centre
     let yawTarget = yaw;
-    let pitchPx = 0; // two-finger drag pans the frame
+    /** Head pitch in radians — negative looks down the slope toward the feet. */
+    let pitch = 0;
     let pitchTarget = 0;
+    /** Vessel beta contribution, absolute against a held-phone rest. */
+    let tiltPitch = 0;
     let fov = FOV;
     let fovTarget = FOV;
     /** the world-law: how high the sea of fog stands, in km off its rest */
@@ -560,10 +594,14 @@ export default function MountainPeak() {
      */
     const focalPx = () => Math.max(width, height, 1) / 2 / Math.tan(fov / 2);
 
+    /** Combined head pitch: hand + vessel, clamped to the composition. */
+    const viewPitch = () => clampPitch(pitch + tiltPitch);
+
     /** The camera, in JS — the same pinhole the fragment shader builds. */
     const rayFor = (px: number, py: number): [number, number, number] => {
       const focal = focalPx();
-      const horizonY = height * 0.46 + pitchPx;
+      // Level horizon reference — pitch is applied to the ray, not the 2D line.
+      const horizonY = height * 0.46;
       let qx = px - width * 0.5;
       let qy = horizonY - py;
       const cr = Math.cos(roll);
@@ -573,12 +611,14 @@ export default function MountainPeak() {
       qx = rx;
       qy = ry;
       const len = Math.hypot(qx, qy, focal) || 1;
-      const cx = qx / len;
-      const cyy = qy / len;
-      const cz = focal / len;
+      const pitched = applyCameraPitch([qx / len, qy / len, focal / len], viewPitch());
       const cy = Math.cos(yaw);
       const sy = Math.sin(yaw);
-      return [cy * cx + sy * cz, cyy, -sy * cx + cy * cz];
+      return [
+        cy * pitched[0] + sy * pitched[2],
+        pitched[1],
+        -sy * pitched[0] + cy * pitched[2],
+      ];
     };
 
     /** The call, and the answer the distance owes it. */
@@ -719,7 +759,9 @@ export default function MountainPeak() {
         // the vessel is level with the world: the horizon answers the hand
         roll = clamp(gamma / 90, -0.35, 0.35) * 0.6;
         yawTarget = clamp(yawTarget + gamma * 0.00012, -3.2, 3.2);
-        void beta;
+        // tip the phone forward and the gaze tips toward the feet / downslope
+        tiltPitch = pitchFromVesselBeta(beta);
+        glDirty = true;
       },
       shake: ({ intensity }) => {
         if (reduced || asleep) return;
@@ -804,7 +846,37 @@ export default function MountainPeak() {
           }
           if (e.fingers !== 1) return;
           const { x, y } = toLocal(e.x, e.y);
-          callOut(x, y, e.intensity);
+          // rapid-tap ladder: echo → scree → ridge answer → tutti
+          const tier = tapTrainTier(e.count);
+          const depth = tapTrainDepth(e.count);
+          if (tier === "n") {
+            soundTutti(0.7 + e.intensity * 0.5 + depth * 0.25);
+            scree = scree.concat(
+              kickScree(mix32(screeSerial++, 13), x / Math.max(1, width), y / Math.max(1, height), 0.55 + depth * 0.35),
+            );
+            if (scree.length > 120) scree = scree.slice(-120);
+            return;
+          }
+          if (tier === 5) {
+            callOut(x, y, Math.min(1, e.intensity + 0.35 + depth * 0.3));
+            scree = scree.concat(
+              kickScree(mix32(screeSerial++, 17), x / Math.max(1, width), y / Math.max(1, height), 0.4 + depth * 0.3),
+            );
+            if (scree.length > 120) scree = scree.slice(-120);
+            fogLiftTarget = Math.min(0.35, fogLiftTarget + 0.04 + depth * 0.06);
+            haptics.ripple(0.35 + depth * 0.25);
+            return;
+          }
+          if (tier === 3) {
+            callOut(x, y, Math.min(1, e.intensity + 0.2 + depth * 0.25));
+            scree = scree.concat(
+              kickScree(mix32(screeSerial++, 19), x / Math.max(1, width), y / Math.max(1, height), 0.28 + depth * 0.25),
+            );
+            if (scree.length > 120) scree = scree.slice(-120);
+            haptics.tap();
+            return;
+          }
+          callOut(x, y, e.intensity * (1 + depth * 0.3));
           haptics.tap();
         },
         hold: (e) => {
@@ -926,14 +998,15 @@ export default function MountainPeak() {
             return;
           }
           if (e.fingers !== 1) return;
-          // one finger turns the head
+          // one finger turns the head and pitches the look — drag down to the feet
           yawTarget = clamp(yawTarget - e.dx * 0.0022, -3.2, 3.2);
+          pitchTarget = clampPitch(pitchTarget - e.dy * 0.002);
         },
         pan2: (e) => {
-          // two fingers are the frame: the whole view pans under them
+          // two fingers are the frame: yaw and pitch under the whole view
           lastTouchAt = performance.now();
           yawTarget = clamp(yawTarget - e.dx * 0.0016, -3.2, 3.2);
-          pitchTarget = clamp(pitchTarget + e.dy * 0.6, -height * 0.32, height * 0.32);
+          pitchTarget = clampPitch(pitchTarget - e.dy * 0.0016);
         },
         twist: (e) => {
           lastTouchAt = performance.now();
@@ -1129,20 +1202,21 @@ export default function MountainPeak() {
       if (!asleep) scree = stepScree(scree, dt).slice(-Math.floor(120 * detail.particles));
 
       yaw += (yawTarget - yaw) * Math.min(1, wall * 3);
-      pitchPx += (pitchTarget - pitchPx) * Math.min(1, wall * 4);
+      pitch += (pitchTarget - pitch) * Math.min(1, wall * 4);
       fov += (fovTarget - fov) * Math.min(1, wall * 3);
       lens += (lensTarget - lens) * Math.min(1, wall * 5);
       sunElev += (sunElevTarget - sunElev) * Math.min(1, wall * 1.4);
       fogLift += (fogLiftTarget - fogLift) * Math.min(1, wall * 1.6);
       fogLiftTarget *= Math.exp(-wall * 0.09); // the inversion always returns
       tutti *= Math.exp(-wall * 2.4);
+      const headPitch = viewPitch();
       // Everything the shader is a function of, in one number. Under reduced
       // motion the picture is only redrawn when this moves — so the room is
       // still until a hand moves it, and no state can quietly stop reaching
       // the screen because someone forgot to flag it.
       const sig =
         yaw +
-        pitchPx * 0.01 +
+        headPitch * 4 +
         roll * 4 +
         fov * 7 +
         lens * 5 +
@@ -1164,7 +1238,9 @@ export default function MountainPeak() {
       const sun = sunDirection(sunAz, sunElev);
       const pal: SkyPalette = paletteForSun(sunElev);
       const snowKm = snowlineKm(season);
-      const horizonY = height * 0.46 + pitchPx;
+      // 2D fallback only: the pitched horizon as a pinhole would place it.
+      // The shader keeps a level uHorizonPx and applies uPitch to the ray.
+      const horizonY = height * 0.46 + Math.tan(headPitch) * focalPx();
 
       // ——— the range, one ray per pixel ———
       if (glOk && gl && prog && !contextLost && !asleep) {
@@ -1176,10 +1252,12 @@ export default function MountainPeak() {
           glDirty = false;
           gl.useProgram(prog);
           gl.uniform2f(u("uRes"), glCanvas.width, glCanvas.height);
-          gl.uniform1f(u("uHorizonPx"), (height - horizonY) * bufScale);
+          // Level horizon — pitch lives in uPitch so the march sees the feet.
+          gl.uniform1f(u("uHorizonPx"), (height - height * 0.46) * bufScale);
           gl.uniform1f(u("uFocal"), focalPx() * bufScale);
           gl.uniform1f(u("uRoll"), roll);
           gl.uniform1f(u("uYaw"), yaw);
+          gl.uniform1f(u("uPitch"), headPitch);
           gl.uniform3f(u("uSun"), sun[0], sun[1], sun[2]);
           gl.uniform3f(u("uSunCol"), pal.sun[0], pal.sun[1], pal.sun[2]);
           gl.uniform3f(u("uZenith"), pal.zenith[0], pal.zenith[1], pal.zenith[2]);
@@ -1313,9 +1391,13 @@ export default function MountainPeak() {
       if (e.key === "Backspace" || e.key === "Delete") {
         if (cairns.length) topple(cairns.length - 1);
       }
-      // and on the world-law: the fog rises and falls
-      if (e.key === "ArrowUp") fogLiftTarget = clamp(fogLiftTarget + 0.06, -FOG_BREATH_KM * 1.6, FOG_BREATH_KM * 2.4);
-      if (e.key === "ArrowDown") fogLiftTarget = clamp(fogLiftTarget - 0.06, -FOG_BREATH_KM * 1.6, FOG_BREATH_KM * 2.4);
+      // and on the world-law: the fog rises and falls — shift pitches the head
+      if (e.key === "ArrowUp" && e.shiftKey) pitchTarget = clampPitch(pitchTarget + 0.08);
+      else if (e.key === "ArrowDown" && e.shiftKey) pitchTarget = clampPitch(pitchTarget - 0.08);
+      else if (e.key === "PageUp") pitchTarget = clampPitch(pitchTarget + 0.08);
+      else if (e.key === "PageDown") pitchTarget = clampPitch(pitchTarget - 0.08);
+      else if (e.key === "ArrowUp") fogLiftTarget = clamp(fogLiftTarget + 0.06, -FOG_BREATH_KM * 1.6, FOG_BREATH_KM * 2.4);
+      else if (e.key === "ArrowDown") fogLiftTarget = clamp(fogLiftTarget - 0.06, -FOG_BREATH_KM * 1.6, FOG_BREATH_KM * 2.4);
       if (e.key === "ArrowLeft") yawTarget = clamp(yawTarget - 0.12, -3.2, 3.2);
       if (e.key === "ArrowRight") yawTarget = clamp(yawTarget + 0.12, -3.2, 3.2);
       if (e.key === "Escape") {

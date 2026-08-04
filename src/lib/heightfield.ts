@@ -286,6 +286,15 @@ export const SNOW_HOLD_KM = 0.30;
 export const SNOW_SCOUR_ABOVE_KM = 0.52;
 export const SNOW_SCOUR_WIDTH_KM = 0.22;
 export const SNOW_SLOPE_K = 2.6;
+/**
+ * How much a face's aspect against the wind moves snow hold. Lee faces keep
+ * a white mantle; windward faces scour toward bare rock — the same asymmetry
+ * the cornice already knows, applied to the whole snow weight.
+ */
+export const SNOW_ASPECT_LEE = 1.22;
+export const SNOW_ASPECT_WINDWARD = 0.52;
+export const SNOW_ASPECT_LO = -0.15;
+export const SNOW_ASPECT_HI = 0.55;
 
 /**
  * No ground anywhere can stand higher than this. Load-bearing: the marcher
@@ -841,6 +850,53 @@ export const VIEW_FRAME_SAMPLES = 9;
 /** The head, turned: the crest is held off centre rather than dead ahead. */
 export const VIEW_OFFCENTRE = 0.16;
 
+// ——— the head, pitched ————————————————————————————————————————————
+//
+// A marched room that only yaws is a painted postcard: the ground under the
+// feet never enters the frame. Pitch is the missing axis — look down the
+// slope toward the scree, look up into the horns. The numbers are radians;
+// the vessel's beta and the hand's vertical drag both land here.
+
+/** How far the head may tip toward the feet — past this the outcrop fills the frame. */
+export const PITCH_MIN = -0.72;
+/** How far the head may tip toward the sky. */
+export const PITCH_MAX = 0.42;
+/** Held-phone rest angle the vessel treats as a level look, degrees. */
+export const PITCH_REST_BETA = 45;
+/** Radians of pitch per degree of beta away from rest. */
+export const PITCH_BETA_SCALE = 0.012;
+
+/** Clamp the head's pitch into the range the composition can still hold. */
+export function clampPitch(pitch: number): number {
+  return pitch < PITCH_MIN ? PITCH_MIN : pitch > PITCH_MAX ? PITCH_MAX : pitch;
+}
+
+/**
+ * Vessel beta → pitch. Tip the phone forward (beta falls below rest) and the
+ * look tips toward the feet; tip it back and the horns climb into frame.
+ * Absolute, not accumulated — the vessel is a horizon, not a trackball.
+ */
+export function pitchFromVesselBeta(beta: number, restBeta = PITCH_REST_BETA): number {
+  return clampPitch((beta - restBeta) * PITCH_BETA_SCALE);
+}
+
+/**
+ * Rotate a camera-space ray by pitch about the local X axis. Negative pitch
+ * drops the gaze (feet / downslope); positive lifts it (sky / horns).
+ *
+ * Sign is deliberate and opposite the right-hand "positive = look down"
+ * textbook form: the room speaks "negative is toward the feet", so the
+ * matrix is written to that noun rather than forcing every caller to negate.
+ */
+export function applyCameraPitch(
+  cam: [number, number, number],
+  pitch: number,
+): [number, number, number] {
+  const cp = Math.cos(pitch);
+  const sp = Math.sin(pitch);
+  return [cam[0], cp * cam[1] + sp * cam[2], -sp * cam[1] + cp * cam[2]];
+}
+
 /**
  * How far the ground rises toward the eye across the whole frame, as a
  * tangent: positive means something in shot stands above you and you are
@@ -1174,7 +1230,15 @@ export function materialFromGround(
   const flatness = 1 / (1 + slope * SNOW_SLOPE_K);
   const held = clamp01((g.h - snowKm) / SNOW_HOLD_KM) * flatness;
   const scour = 1 - clamp01((g.h - (snowKm + SNOW_SCOUR_ABOVE_KM)) / SNOW_SCOUR_WIDTH_KM);
-  let snow = clamp01(held * scour) * (1 - glacier);
+  // Aspect against the wind: lee faces keep a white mantle, windward faces
+  // scour toward rock — slope alone left every ridge evenly sugared.
+  const uphillX = slope > 0 ? g.dhdx / slope : 0;
+  const uphillZ = slope > 0 ? g.dhdz / slope : 0;
+  const windDot = wind[0] * uphillX + wind[1] * uphillZ;
+  const aspect =
+    SNOW_ASPECT_LEE +
+    (SNOW_ASPECT_WINDWARD - SNOW_ASPECT_LEE) * smoothstep(SNOW_ASPECT_LO, SNOW_ASPECT_HI, windDot);
+  let snow = clamp01(held * scour * aspect) * (1 - glacier);
   let rock = clamp01(1 - snow - glacier);
 
   const total = rock + snow + glacier;
@@ -1340,6 +1404,10 @@ export const HEIGHTFIELD_GLSL_FLOATS: Readonly<Record<string, number>> = {
   SNOW_SCOUR_ABOVE_KM,
   SNOW_SCOUR_WIDTH_KM,
   SNOW_SLOPE_K,
+  SNOW_ASPECT_LEE,
+  SNOW_ASPECT_WINDWARD,
+  SNOW_ASPECT_LO,
+  SNOW_ASPECT_HI,
   FOG_SCALE_HEIGHT_KM,
   FOG_EXTINCTION,
   FOG_WAVE_KM,
@@ -1646,7 +1714,15 @@ vec4 hf_material(float h, vec2 grad, float crease, float ridge, float snowKm, ve
   float flatness = 1.0 / (1.0 + slope * SNOW_SLOPE_K);
   float held = clamp((h - snowKm) / SNOW_HOLD_KM, 0.0, 1.0) * flatness;
   float scour = 1.0 - clamp((h - (snowKm + SNOW_SCOUR_ABOVE_KM)) / SNOW_SCOUR_WIDTH_KM, 0.0, 1.0);
-  float snow = clamp(held * scour, 0.0, 1.0) * (1.0 - glacier);
+  // Aspect against the wind: lee keeps white, windward scours to rock.
+  vec2 uphill = slope > 0.0 ? grad / slope : vec2(0.0);
+  float windDot = dot(wind, uphill);
+  float aspect = mix(
+    SNOW_ASPECT_LEE,
+    SNOW_ASPECT_WINDWARD,
+    smoothstep(SNOW_ASPECT_LO, SNOW_ASPECT_HI, windDot)
+  );
+  float snow = clamp(held * scour * aspect, 0.0, 1.0) * (1.0 - glacier);
   float rock = clamp(1.0 - snow - glacier, 0.0, 1.0);
 
   float total = rock + snow + glacier;

@@ -690,6 +690,49 @@ for (let s = 0; s < 60; s++) {
   );
 }
 
+// —— the head pitches: look down is a real camera axis ——————————————
+// The bug: a "pitch" that only slides a 2D horizon line, so the march never
+// sees the feet and vessel beta is inert. These pin the pure helpers the
+// room wires into uPitch.
+{
+  assert.equal(F.clampPitch(0), 0);
+  assert.equal(F.clampPitch(F.PITCH_MIN - 1), F.PITCH_MIN, "pitch cannot tip past the feet stop");
+  assert.equal(F.clampPitch(F.PITCH_MAX + 1), F.PITCH_MAX, "or past the sky stop");
+  assert.ok(F.PITCH_MIN < 0 && F.PITCH_MAX > 0, "the head can look both down and up");
+
+  // Tip the phone forward (beta below rest) → look down (negative pitch).
+  assert.ok(
+    F.pitchFromVesselBeta(F.PITCH_REST_BETA - 30) < 0,
+    "tipping the vessel forward pitches toward the feet",
+  );
+  assert.ok(
+    F.pitchFromVesselBeta(F.PITCH_REST_BETA + 30) > 0,
+    "tipping it back pitches toward the sky",
+  );
+  assert.ok(
+    Math.abs(F.pitchFromVesselBeta(F.PITCH_REST_BETA)) < 1e-12,
+    "at rest the vessel leaves the look level",
+  );
+  assert.ok(
+    F.pitchFromVesselBeta(F.PITCH_REST_BETA - 30) >
+      F.pitchFromVesselBeta(F.PITCH_REST_BETA - 60),
+    "a deeper tip is a deeper look-down — continuous, not a switch",
+  );
+
+  // applyCameraPitch is a rotation about X: length preserved, negative pitch
+  // drops the forward ray's Y so the march can hit the downslope.
+  const level = F.applyCameraPitch([0, 0, 1], 0);
+  assert.ok(Math.abs(level[0]) < 1e-12 && Math.abs(level[1]) < 1e-12 && Math.abs(level[2] - 1) < 1e-12);
+  const down = F.applyCameraPitch([0, 0, 1], -0.4);
+  assert.ok(down[1] < -0.3, `negative pitch drops the gaze (dy=${down[1]})`);
+  assert.ok(Math.abs(Math.hypot(down[0], down[1], down[2]) - 1) < 1e-12, "pitch preserves ray length");
+  const up = F.applyCameraPitch([0, 0, 1], 0.4);
+  assert.ok(up[1] > 0.3, "positive pitch lifts the gaze");
+  // A side component is unchanged — pitch is about local X, not a roll.
+  const side = F.applyCameraPitch([0.6, 0, 0.8], -0.25);
+  assert.ok(Math.abs(side[0] - 0.6) < 1e-12, "pitch leaves the camera-X component alone");
+}
+
 // —— cornices and materials: wind-shaped snow over rock and ice ——————
 // The bugs: cornices on both sides of a ridge, material weights that do
 // not partition the surface, or a glacier rule that ignores valley shape.
@@ -716,6 +759,24 @@ for (let s = 0; s < 60; s++) {
   );
   assert.equal(snowDom.kind, "snow", "high flat ridge classifies as snow");
   assert.ok(snowDom.snow > snowDom.rock && snowDom.snow > snowDom.glacier, "high flat ridge is snow-dominant");
+
+  // Aspect: the same slope above the snowline holds more snow on the lee
+  // than windward — without this, every ridge is evenly sugared.
+  const leeSnow = F.materialFromGround(
+    { h: snowline + 0.22, dhdx: 0.35, dhdz: 0, crease: 0.3, foldMargin: 0.2, ridge: 0.75 },
+    season,
+    [-1, 0], // wind from -x; uphill +x is lee
+  );
+  const windwardSnow = F.materialFromGround(
+    { h: snowline + 0.22, dhdx: -0.35, dhdz: 0, crease: 0.3, foldMargin: 0.2, ridge: 0.75 },
+    season,
+    [-1, 0], // uphill −x faces the wind
+  );
+  assert.ok(
+    leeSnow.snow > windwardSnow.snow,
+    `lee aspect holds more snow than windward (${leeSnow.snow} vs ${windwardSnow.snow})`,
+  );
+  assert.ok(windwardSnow.rock > leeSnow.rock, "and windward shows more rock");
 
   const rockDom = F.materialFromGround(
     { h: snowline + 0.3, dhdx: 1.2, dhdz: 0.4, crease: 0.5, foldMargin: 0.15, ridge: 0.85 },
@@ -981,5 +1042,5 @@ for (let s = 0; s < 60; s++) {
 }
 
 console.log(
-  "heightfield ok: analytic ∂h agreeing with finite differences off the creases over 4 seeds, horn ∂h smooth and path-integrable, horns deterministic on the ring with separation, the ridge fold C⁰ but not C¹, the range bounded including horns so the marcher's ceiling exit is sound, cornice lee/windward asymmetry and glacier material classification, fog optical depth matching both hand-computable cases and monotone in path length, raising the fog only ever drowning more land, 64 steps never exceeded with a vertical hit landing where the height says, the sun palette continuous and never darkening as it climbs, every echo bounded in time, and the GLSL mirror fed only by injected constants and a pre-placed horn table",
+  "heightfield ok: analytic ∂h agreeing with finite differences off the creases over 4 seeds, horn ∂h smooth and path-integrable, horns deterministic on the ring with separation, the ridge fold C⁰ but not C¹, the range bounded including horns so the marcher's ceiling exit is sound, camera pitch helpers looking down on negative pitch and answering vessel beta, cornice lee/windward asymmetry with aspect-held snow and glacier material classification, fog optical depth matching both hand-computable cases and monotone in path length, raising the fog only ever drowning more land, 64 steps never exceeded with a vertical hit landing where the height says, the sun palette continuous and never darkening as it climbs, every echo bounded in time, and the GLSL mirror fed only by injected constants and a pre-placed horn table",
 );
