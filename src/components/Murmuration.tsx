@@ -1050,7 +1050,6 @@ export default function Murmuration() {
       meta: gl.getAttribLocation(birdProg, "a_meta"),
       view: gl.getUniformLocation(birdProg, "u_view"),
       camDist: gl.getUniformLocation(birdProg, "u_camDist"),
-      pan: gl.getUniformLocation(birdProg, "u_pan"),
       focalX: gl.getUniformLocation(birdProg, "u_focalX"),
       focalY: gl.getUniformLocation(birdProg, "u_focalY"),
       time: gl.getUniformLocation(birdProg, "u_time"),
@@ -1675,12 +1674,6 @@ export default function Murmuration() {
           }
           if (e.phase === "end") save(performance.now());
         },
-        pan2: (e) => {
-          lastInteractionAt = performance.now();
-          // two fingers pan the frame — a small, bounded lean of the view
-          panXTarget = clamp(panXTarget + e.dx * 0.0018, -0.3, 0.3);
-          panYTarget = clamp(panYTarget - e.dy * 0.0018, -0.22, 0.22);
-        },
         scrub: (e) => {
           lastInteractionAt = performance.now();
           energy = 1.4;
@@ -2090,7 +2083,6 @@ export default function Murmuration() {
       divisor(uBird.meta, 1);
       gl.uniformMatrix3fv(uBird.view, false, viewM);
       gl.uniform1f(uBird.camDist, CAM_DIST);
-      gl.uniform2f(uBird.pan, panX, panY);
       gl.uniform1f(uBird.focalX, focalX);
       gl.uniform1f(uBird.focalY, focalY);
       gl.uniform1f(uBird.time, visualT);

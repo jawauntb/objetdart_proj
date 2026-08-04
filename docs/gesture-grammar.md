@@ -208,7 +208,9 @@ No gesture is ever documented in the UI. Instead every room must satisfy:
    scale neighbor yet still honors twist and weather).
 2. **At least three room-specific discoveries** beyond the globals — things a curious
    hand finds within sixty seconds of play, each rewarding in at least two senses in the
-   same frame.
+   same frame. Rapid multi-taps (1 / 3 / 5 / *n*) and other cheap rhythms are first-class
+   here: they lower the friction between intention and the next incremental reward, which
+   is why the rooms stay habit-forming without menus or willpower.
 3. **Glimmers, not labels.** After ~20s of idle or single-verb play, the room may hint
    physically — a ripple where a scrub would land, a brief shiver suggesting shake —
    never with text.

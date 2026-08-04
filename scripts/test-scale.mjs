@@ -296,13 +296,8 @@ assert.equal(entryScaleFor("/colophon"), null);
   // rooms ship, the transparency law shortening the walk by one.
   assert.deepEqual(
     Array.from(travelOptions("atlas", -1, {}), (b) => b.id),
-    ["atmosphere", "earth"],
-    "the map opens inward onto the air column first, then the ground",
-  );
-  assert.deepEqual(
-    Array.from(travelOptions("atlas", -1, { atlas: "earth" }), (b) => b.id),
-    ["earth", "atmosphere"],
-    "memory reorders the offer, never removes a door",
+    ["atmosphere"],
+    "the map opens inward onto the air column — the ground it charts is UP, not in",
   );
   assert.deepEqual(
     Array.from(travelOptions("atlas", 1, {}), (b) => b.id),
@@ -340,8 +335,8 @@ assert.equal(entryScaleFor("/colophon"), null);
   // of the world arrived at a map of part of it.
   assert.deepEqual(
     Array.from(travelOptions("earth", 1, {}), (b) => b.id),
-    ["atlas", "planets"],
-    "the ground rises onto the map, or out to the planetary neighbourhood",
+    ["planets"],
+    "the ground climbs the metric axis — the atlas is a chart DOWN of a region, never a door out",
   );
   assert.deepEqual(
     Array.from(travelOptions("stars", -1, {}), (b) => b.id),
@@ -375,7 +370,7 @@ assert.equal(entryScaleFor("/colophon"), null);
   assert.deepEqual(
     Array.from(travelOptions("earth", -1, {}), (b) => b.id),
     ["flowers", "coast", "olympus", "atlas"],
-    "the ground opens onto the garden, the beach, the mountain, and the chart of itself",
+    "the ground opens onto the garden, the beach, the mountain, and the chart of a region of itself",
   );
   assert.equal(bandAt(entryScaleFor("/ocean")).id, "coast");
   assert.equal(bandAt(entryScaleFor("/coast")).id, "coast");
@@ -519,8 +514,8 @@ assert.equal(entryScaleFor("/colophon"), null);
   );
   assert.equal(
     routes(1, "/earth", { earth: "stars" })[0],
-    "/atlas/origin",
-    "a memory of a band that is no longer a door falls back to the canonical one, never to a dead wall",
+    "/planets",
+    "a memory of a band that is no longer a door falls back to the canonical climb, never to a dead wall",
   );
   assert.deepEqual(
     routes(1, "/cells"),

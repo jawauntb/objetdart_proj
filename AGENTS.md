@@ -82,6 +82,11 @@ And the laws that no test can reach — hold these yourself:
 - **Duration and intensity are continuous axes, never switches.** A hold must keep
   deepening past its tier; a tap must scale with `e.intensity`. A binding that fires
   identically at 900ms and at 2400ms is a bug the tests cannot see and you must.
+- **Lower friction to the next reward.** Gestures and rapid multi-taps (1 / 3 / 5 / *n*)
+  exist so the hand reaches the next sight-sound-haptic payoff without menus or
+  willpower — the same habit loop as any other low-activation-energy reward. Prefer a
+  richer grammar binding over a control that must be learned; a tap that does nothing
+  is raised friction, and raised friction is a bug.
 - **State lands in ≥2 senses in the same frame** (sight + sound at minimum; haptics
   where hardware allows). The water on `/` is the reference feel.
 - **No instructions, ever.** No new explanatory copy, labels, tooltips, or onboarding.

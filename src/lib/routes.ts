@@ -14,6 +14,7 @@
 
 import type { RouteSigilKind } from "@/components/RouteSigil";
 import { scaleOrderedNavigationKeys } from "@/lib/nav-order";
+import { READING_SURFACE_KEYS } from "@/lib/room-registry";
 import { roomRouteEntries } from "@/rooms/registry";
 import type { SiteRouteCluster } from "@/rooms/types";
 
