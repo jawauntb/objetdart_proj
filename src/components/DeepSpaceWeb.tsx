@@ -47,6 +47,7 @@ import { useRouter } from "next/navigation";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import { stirTurbulence } from "@/lib/turbulence";
 import { SCALE_BANDS, entryScaleInto } from "@/lib/scale";
@@ -873,11 +874,71 @@ export default function DeepSpaceWeb() {
           }
           if (e.fingers !== 1) return;
           const { x, y } = toLocal(e.x, e.y);
+          // rapid-tap ladder: ring → neighbor flare → veil peek → web tutti
+          const tier = tapTrainTier(e.count);
+          const depth = tapTrainDepth(e.count);
           const i = galaxyAt(x, y);
+          if (tier === "n") {
+            tutti();
+            stirTurbulence(0.1 + depth * 0.08);
+            return;
+          }
+          if (tier === 5) {
+            veilTarget = Math.min(0.42, 0.22 + depth * 0.2);
+            voiceVeil(performance.now());
+            if (i >= 0) {
+              selIdx = i;
+              soundGalaxy(i, 900 + Math.round(e.intensity * 600), 1.1 + depth * 0.3);
+              flare[i] = Math.max(flare[i], 0.45 + e.intensity * 0.4);
+              if (depth > 0.55) markResolved(i);
+            } else {
+              stirTurbulence(0.08 + depth * 0.06);
+              try {
+                audio.playNote(22, 1100);
+                haptics.roll();
+              } catch {
+                /* noop */
+              }
+            }
+            return;
+          }
+          if (tier === 3) {
+            if (i >= 0) {
+              selIdx = i;
+              soundGalaxy(i, 800 + Math.round(e.intensity * 700), 1 + depth * 0.25);
+              flare[i] = Math.max(flare[i], 0.35 + e.intensity * 0.45);
+              // neighbors along the filament answer with it
+              for (let k = 0; k < count; k++) {
+                if (k === i) continue;
+                if (!isLit(galaxies[k].density, growth, DENSITY_THRESHOLD)) continue;
+                const dx = galaxies[k].x - galaxies[i].x;
+                const dy = galaxies[k].y - galaxies[i].y;
+                const dz = galaxies[k].z - galaxies[i].z;
+                if (dx * dx + dy * dy + dz * dz < 0.085) {
+                  flare[k] = Math.max(flare[k], 0.2 + depth * 0.25);
+                  window.setTimeout(() => soundGalaxy(k, 520), 80 + Math.round(depth * 60));
+                }
+              }
+              try {
+                haptics.ripple(0.35 + depth * 0.2);
+              } catch {
+                /* noop */
+              }
+              return;
+            }
+            stirTurbulence(0.06 + depth * 0.05);
+            try {
+              audio.playNote(26, 800);
+              haptics.tap();
+            } catch {
+              /* noop */
+            }
+            return;
+          }
           if (i >= 0) {
             selIdx = i;
-            soundGalaxy(i, 700 + Math.round(e.intensity * 700));
-            flare[i] = Math.max(flare[i], 0.25 + e.intensity * 0.4);
+            soundGalaxy(i, 700 + Math.round(e.intensity * 700 * (1 + depth * 0.3)));
+            flare[i] = Math.max(flare[i], 0.25 + e.intensity * 0.4 + depth * 0.2);
             try {
               haptics.tap();
             } catch {
@@ -886,7 +947,7 @@ export default function DeepSpaceWeb() {
             return;
           }
           // open void: the whole web answers once, very low and very soft
-          stirTurbulence(0.04);
+          stirTurbulence(0.04 + depth * 0.03);
           try {
             audio.playNote(24, 900);
             haptics.tap();

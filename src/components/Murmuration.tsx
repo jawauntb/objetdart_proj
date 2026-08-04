@@ -41,6 +41,7 @@ import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures, enableBreath } from "@/lib/gesture";
+import { tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import { onVessel, requestVessel } from "@/lib/vessel";
 import { stirTurbulence } from "@/lib/turbulence";
 import { spectralRegisterFor } from "@/lib/scale";
@@ -1443,15 +1444,30 @@ export default function Murmuration() {
           }
           if (e.fingers !== 1) return;
           const at = screenToWorld(e.x, e.y);
-          if (e.count >= 3) {
+          // rapid-tap ladder: startle → spawn → cull → clear the sky
+          const tier = tapTrainTier(e.count);
+          const depth = tapTrainDepth(e.count);
+          if (tier === "n") {
+            clearBirds(state);
+            metaDirty = true;
+            uploaded = false;
+            drawn = state.n;
+            leaving = Math.max(leaving, 0.75 + depth * 0.2);
+            try {
+              audio.thud();
+              haptics.roll();
+            } catch {
+              /* noop */
+            }
+            return;
+          }
+          if (tier === 5) {
             const hit = birdAtScreen(e.x, e.y);
             if (hit >= 0) cullAt(hit);
             else {
-              clearBirds(state);
-              metaDirty = true;
-              uploaded = false;
-              drawn = state.n;
-              leaving = Math.max(leaving, 0.75);
+              flushNear(state, at, 16 + e.intensity * 10 + depth * 8);
+              startle(at, 40 + e.intensity * 50 + depth * 30);
+              call(1.0 + e.intensity * 0.4);
               try {
                 audio.thud();
                 haptics.roll();
@@ -1461,18 +1477,19 @@ export default function Murmuration() {
             }
             return;
           }
-          if (e.count === 2) {
+          if (tier === 3) {
             spawnAt(at);
-            stirTurbulence(0.05);
+            if (depth > 0.35) spawnAt({ x: at.x + 0.4, y: at.y, z: at.z - 0.3 });
+            stirTurbulence(0.05 + depth * 0.06);
             return;
           }
           const hit = birdAtScreen(e.x, e.y);
-          if (hit >= 0 && reactBird(hit, at, e.intensity)) return;
+          if (hit >= 0 && reactBird(hit, at, e.intensity * (1 + depth * 0.4))) return;
           // one finger in the air: the birds nearest it break away —
           // residents flush into flight, the murmuration startles.
-          flushNear(state, at, 10 + e.intensity * 8);
-          startle(at, 26 + e.intensity * 60);
-          call(0.7 + e.intensity * 0.5);
+          flushNear(state, at, 10 + e.intensity * 8 + depth * 6);
+          startle(at, 26 + e.intensity * 60 + depth * 24);
+          call(0.7 + e.intensity * 0.5 + depth * 0.35);
           try {
             haptics.tap();
           } catch {

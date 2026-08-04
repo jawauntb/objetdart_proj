@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import LetGo from "@/components/LetGo";
 import { useField } from "@/store/field";
@@ -1437,25 +1438,53 @@ export default function Earth() {
           const sx = sceneX(e.x);
           const sy = sceneY(e.y);
           const hit = specimenAt(sx, sy);
+          const tier = tapTrainTier(e.count);
+          const depth = tapTrainDepth(e.count);
           if (hit >= 0) {
             const sp = specimens[hit];
             const hue = STRATA[stratumIndex(sp.stratum)].accent;
             addMineralMark({
               x: sp.nx * viewW,
               y: sp.ny * viewH,
-              life: 1.4,
-              size: 8 + sp.depth * 12,
+              life: 1.4 + depth * 0.8,
+              size: 8 + sp.depth * 12 + depth * 6,
               hue,
               kind: "glint",
               angle: hash(sp.seed) * Math.PI,
               phase: hash(sp.seed * 5) * Math.PI * 2,
             });
-            clickSpikes.push({ t0: clock, strength: 0.3 + e.intensity * 0.4 });
-            try { audio.playNote(52 + Math.round(sp.depth * 12), 160); } catch { /* noop */ }
+            clickSpikes.push({ t0: clock, strength: 0.3 + e.intensity * 0.4 + depth * 0.35 });
+            try { audio.playNote(52 + Math.round(sp.depth * 12), 160 + Math.round(depth * 80)); } catch { /* noop */ }
             haptics.tap();
+            if (tier === 5 || tier === "n") {
+              compressAt(sx, sy, 0.55 + e.intensity * 0.35 + depth * 0.4);
+            }
             return;
           }
-          tapAt(sx, sy, e.intensity);
+          // rapid-tap ladder: seed → quake → mineral cascade → full rupture
+          if (tier === "n") {
+            quakeAt(sx, sy, 1.15 + e.intensity * 0.55 + depth * 0.25);
+            compressAt(sx, sy, 0.95 + depth * 0.35);
+            erodeAt(sx, Math.min(sy, Z.strataTop + 8), 1.1 + depth);
+            return;
+          }
+          if (tier === 5) {
+            quakeAt(sx, sy, 0.85 + e.intensity * 0.45);
+            const stratum = stratumAt(sy);
+            if (stratum) seedMineral(sx, sy, stratum, 1.1 + depth * 0.5);
+            const strataH = Math.max(1, Z.strataBot - Z.strataTop);
+            for (let i = 0; i < STRATA.length; i += 2) {
+              const s = STRATA[i];
+              const yy = Z.strataTop + mix(s.top, s.bottom, 0.45) * strataH;
+              seedMineral(sx + (hash(clock + i) - 0.5) * 40, yy, s, 0.55 + depth * 0.4);
+            }
+            return;
+          }
+          if (tier === 3) {
+            quakeAt(sx, sy, 0.55 + e.intensity * 0.55 + depth * 0.35);
+            return;
+          }
+          tapAt(sx, sy, e.intensity * (1 + depth * 0.35));
         },
 
         hold: (e) => {

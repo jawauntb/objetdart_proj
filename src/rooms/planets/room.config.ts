@@ -41,6 +41,7 @@ const planets = {
       "hold on open dust → a world condenses under the finger and keeps growing for as long as you hold; it joins the disc on the orbit of the place it was made",
       "hold on a world → keeps accreting onto that one, drawing the field's reserve down as it grows",
       "tap a world → it comes forward and states its chord; tap the dark → the dust stirs where the finger landed",
+      "rapid taps (1 / 3 / 5 / n) → stir / chord → bright flash → a world condenses → the forge answers tutti",
       "drag a world → it goes where the hand goes and keeps the throw when you let go",
       "flick a world → a real throw; fling one into the star and it is eaten, and its mass comes back as dust",
       "let two worlds meet → they merge, mass conserved, the child wearing both parents' vectors; what will not fit is ejected",

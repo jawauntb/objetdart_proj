@@ -35,6 +35,7 @@ import RoomShell from "@/components/RoomShell";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import type { RoomVoice } from "@/lib/gesture/defaults";
+import { tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import { createGLStage, type GLProgram, type GLStage } from "@/lib/webgl/stage";
 import { clocksFrom } from "@/lib/webgl/sizing";
 import {
@@ -490,7 +491,7 @@ let entryUid = 1;
 
 /** What the shell's voice reaches, once the field is running. */
 type ForgeApi = {
-  tap: (e: { intensity: number; x: number; y: number }) => void;
+  tap: (e: { intensity: number; x: number; y: number; count?: number }) => void;
   stepBack: () => void;
   tutti: () => void;
   plant: (e: { x: number; y: number }) => void;
@@ -806,10 +807,58 @@ export default function PlanetForge() {
 
     const api: ForgeApi = {
       tap: (ev) => {
+        const tier = tapTrainTier(ev.count ?? 1);
+        const depth = tapTrainDepth(ev.count ?? 1);
         const hit = hitWorld(ev.x, ev.y);
+        if (tier === "n") {
+          entries.forEach((e, i) => {
+            worldChord(e.world).forEach((m) => audio.playNote(m + 12, 280 + i * 36));
+            e.flash = Math.min(1, e.flash + 0.55 + depth * 0.2);
+          });
+          starFlash = Math.min(1, starFlash + 0.55 + depth * 0.2);
+          agitation = Math.min(1, agitation + 0.35 + depth * 0.2);
+          haptics.ripple(0.45 + depth * 0.2);
+          return;
+        }
+        if (tier === 5) {
+          if (hit) {
+            focusId = hit.e.id;
+            hit.e.flash = 1;
+            sayWorld(hit.e);
+            agitation = Math.min(1, agitation + 0.2 + depth * 0.15);
+            haptics.bloom();
+            return;
+          }
+          const born = birthWorld(toFieldX(ev.x), toFieldY(ev.y), 400 + depth * 900);
+          if (born) {
+            starFlash = Math.min(1, starFlash + 0.4);
+            return;
+          }
+          stir = { x: ev.x, y: ev.y, life: 1 + depth };
+          agitation = Math.min(1, agitation + 0.2);
+          audio.playTone(90 + ev.intensity * 80, 0.18);
+          haptics.tap();
+          return;
+        }
+        if (tier === 3) {
+          if (hit) {
+            focusId = hit.e.id;
+            hit.e.flash = Math.min(1, hit.e.flash + 0.85 + depth * 0.15);
+            sayWorld(hit.e);
+            starFlash = Math.min(1, starFlash + 0.25);
+            haptics.ripple(0.35 + depth * 0.2);
+            return;
+          }
+          focusId = 0;
+          stir = { x: ev.x, y: ev.y, life: 1.2 + depth * 0.4 };
+          agitation = Math.min(1, agitation + 0.15 + depth * 0.15);
+          audio.playTone(80 + ev.intensity * 90, 0.16);
+          haptics.ripple(0.3);
+          return;
+        }
         if (hit) {
           focusId = hit.e.id === focusId ? 0 : hit.e.id;
-          hit.e.flash = Math.min(1, hit.e.flash + 0.6);
+          hit.e.flash = Math.min(1, hit.e.flash + 0.6 + depth * 0.2);
           sayWorld(hit.e);
           haptics.tap();
           return;
@@ -817,7 +866,7 @@ export default function PlanetForge() {
         // Never a dead touch: the dust answers where the finger landed.
         focusId = 0;
         stir = { x: ev.x, y: ev.y, life: 1 };
-        audio.playTone(70 + ev.intensity * 70, 0.14);
+        audio.playTone(70 + ev.intensity * 70 * (1 + depth * 0.25), 0.14);
         haptics.tap();
       },
       stepBack: () => {

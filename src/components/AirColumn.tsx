@@ -60,6 +60,7 @@ import {
 } from "@/lib/world";
 import RoomShell from "@/components/RoomShell";
 import type { RoomVoice } from "@/lib/gesture/defaults";
+import { tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import { createGLStage, FULLSCREEN_VERT_UNIT } from "@/lib/webgl/stage";
 import { clocksFrom } from "@/lib/webgl/sizing";
 import {
@@ -506,7 +507,7 @@ void main() {
 `;
 /** What the hand's verbs reach: set once the stage and the loop exist. */
 type Air = {
-  tap: (x: number, y: number, intensity: number) => void;
+  tap: (x: number, y: number, intensity: number, count?: number) => void;
   tutti: () => void;
   plant: (x: number, y: number) => void;
   deepen: (elapsed: number, x: number, y: number) => void;
@@ -729,12 +730,44 @@ export default function AirColumn() {
 
     // ——— the hand's verbs, in the room's own material ———
     const air: Air = {
-      tap: (x, y, intensity) => {
+      tap: (x, y, intensity, count = 1) => {
         const zKm = zForY(y);
+        const xKm = xKmForPx(x);
+        // rapid-tap ladder: ring → seed puff → warm tower → column scatter
+        const tier = tapTrainTier(count);
+        const depth = tapTrainDepth(count);
+        if (tier === "n") {
+          stirTurbulence(0.18 + intensity * 0.25 + depth * 0.15);
+          stirAtAltitude(zKm, 0.35 + depth * 0.25);
+          for (const p of parcels) p.w += 0.0006 + depth * 0.0004;
+          pushRing(x, y);
+          soundAltitude(zKm, 320 + Math.round(intensity * 220));
+          haptics.roll();
+          return;
+        }
+        if (tier === 5) {
+          const p = seedParcel(xKm, zKm, 1.8 + depth * 2.2);
+          relift(p, 2.4 + depth * 2);
+          p.mass = clamp(p.mass + 0.35 + depth * 0.4, 0, 4.2);
+          pushRing(x, y);
+          soundAltitude(p.lclKm, 260 + Math.round(intensity * 200));
+          stirAtAltitude(zKm, 0.18 + depth * 0.15);
+          haptics.bloom();
+          return;
+        }
+        if (tier === 3) {
+          const p = seedParcel(xKm, zKm, 0.7 + depth * 0.8);
+          pushRing(x, y);
+          soundAltitude(zKm, 220 + Math.round(intensity * 180));
+          haptics.ripple(0.3 + depth * 0.25);
+          void p;
+          return;
+        }
         pushRing(x, y);
-        soundAltitude(zKm, 200 + Math.round(intensity * 180));
-        const near = nearestParcel(xKmForPx(x), zKm);
-        if (near) near.w += 0.0004 + intensity * 0.0008;
+        soundAltitude(zKm, 200 + Math.round(intensity * 180 * (1 + depth * 0.3)));
+        const near = nearestParcel(xKm, zKm);
+        if (near) near.w += 0.0004 + intensity * 0.0008 + depth * 0.0005;
+        haptics.tap();
       },
       tutti: () => {
         stirTurbulence(0.22);
@@ -1169,7 +1202,7 @@ export default function AirColumn() {
   // engine never loses an in-flight hold when React re-renders.
   const voice = useMemo<RoomVoice>(
     () => ({
-      tap: (e) => airRef.current?.tap(e.x, e.y, e.intensity),
+      tap: (e) => airRef.current?.tap(e.x, e.y, e.intensity, e.count),
       tutti: () => airRef.current?.tutti(),
       plant: (e) => airRef.current?.plant(e.x, e.y),
       deepen: (e) => airRef.current?.deepen(e.elapsed, e.x, e.y),
