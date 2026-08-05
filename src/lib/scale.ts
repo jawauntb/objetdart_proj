@@ -904,6 +904,7 @@ export const LATERAL_ROUTE_BANDS: { prefix: string; band: ScaleBandId }[] = [
   { prefix: "/pretext", band: "coast" },
   { prefix: "/aphros", band: "coast" },
   { prefix: "/reef", band: "coast" },
+  { prefix: "/tidepool", band: "coast" },
   // peak weather
   { prefix: "/clouds", band: "olympus" },
   { prefix: "/storm", band: "olympus" },

@@ -1,0 +1,373 @@
+# coin — a gold medal · tilt · flip
+#
+# Round-trip-derived from src/components/Coin.tsx (1,161 lines). The `latent`
+# invariant type: a single medal is the room's object — a Three.js PBR gold
+# cylinder with two engraved bump-mapped faces — and the aventurine night
+# behind it is a monotonically-climbing brilliance latent (fill.v, fill.glow,
+# fill.pulse) that fills bottom-to-top and never falls.
+#
+# Coin is the peer of watch, jewel, tourbillon and sine in the cabinet ring
+# — a handheld, not a scale-band inhabitant, though the manifest addresses
+# it at `band: drop`. It carries a single object and a fill latent, which
+# is why several verbs (dwell, tutti, tilt, shake, knock, flip) are
+# registered as exempt in room-registry: a single medal has no population
+# for those verbs to address. What it DOES answer, it answers with a whole
+# aventurine sky.
+
+key: coin
+
+placement:
+  kind: peer
+  circle: cabinet
+  band: drop
+  label: "a gold medal"
+  ringAfter: watch
+
+sigil: watch          # coin is a cabinet peer of watch; no dedicated coin sigil in `RouteSigilKind`
+icon_kind: coin       # SiteIconKind has a coin glyph the favicon/opengraph use
+desc: "a gold medal · tilt · flip"
+cluster: mechanism
+dark: true
+home_priority: 9
+ambient_profile: light
+storage_key: "objetdart:coin:aventurine"
+
+invariant: >
+  one PBR gold coin (Saint-Benedict "Jubilee" medal) with two engraved
+  bump-mapped faces and a milled edge, plus a monotonically-climbing
+  aventurine brilliance latent — fill.v (0..1 coverage, fills bottom to
+  top), fill.glow (permanent brilliance, never falls, asymptotically
+  approaches sublime), fill.pulse (the live radiant flash per
+  interaction, decays). every interaction writes into the latent; the
+  night sky reads it and the coin plays sectored notes on it (eight
+  compass sectors × three concordant intervals — root, fifth, octave —
+  scaled by coin size).
+
+material: 2d-over-shader
+noun: strike
+
+domain_lib:
+  name: coinstate
+  invariant_type: latent
+
+palette:
+  bg:      "#0a0d1c"
+  bg2:     "#1a1440"
+  glow:    "#e9b23a"
+  accent:  "#c8732a"
+  accent2: "#6a83d8"
+  ink:     "#f2eee6"
+
+visual_style:
+  subject: "a real gold Saint-Benedict medal hanging in an aventurine night that fills and brightens the more you handle it"
+  form_language: [SDF, value-noise-FBM, hand-painted, point-cloud]
+  motion_character: still
+  reference_notes:
+    - "the real Saint-Benedict Jubilee medal — a cross-face with V·R·S·N·S·M·V rim legend and the CSSPB quadrants, and a figure-face with the standing saint holding cross and Rule of Benedict, chalice-with-serpent and raven at his feet"
+    - "aventurine cabochon photographs: a deep-navy field seeded with gold, sapphire and copper flecks, each with an iridescent diamond fire that turns as it catches light"
+    - "the Cassini engravings of Saturn where the ring is drawn as a plate of light — the medal here is drawn with the same weight of specular gold"
+  mood: "ceremonial and heavier the longer you handle it; the room permanently brightens with every touch, never fading"
+  gesture_feedback_style: "a tap flips the medal toward the touch and rings that sector's note (root); a drag rubs it to a shine; a twist rotates it in-plane and past 2.4 rad turns it over; the aventurine night flashes on every interaction (fill.pulse), climbs monotonically (fill.glow), and fills bottom-to-top with every strike (fill.v)"
+
+verbs_answered:
+  - tap
+  - drag
+  - flick
+  - twist
+  - twist3
+  - drag3
+  - hold3
+  - scrub
+  - drum
+  - arrows
+
+guide:
+  title: "a gold medal · tilt · flip"
+  scale: "the drop band — cabinet peer among the handhelds"
+  essence: >
+    a real gold medal hanging in an aventurine night that permanently
+    brightens the more you handle it. every strike, twist and flip
+    lays another fleck of gold, sapphire or copper into the deep-navy
+    field around the coin, and the field never dims. the medal's own
+    notes are a c-major octave — do re mi fa sol la ti do — voiced
+    for the coin's current size (small = brighter, large = gong-heavy).
+  moves:
+    - "tap → flips the coin toward your touch and rings that direction's note (root)"
+    - "drag → resizes it (horizontal) or tilts it (vertical); a fast drag rubs it to a shine"
+    - "flick → throws it — a higher toss, its sector-note fifth on the way"
+    - "twist (two-finger) → rotates it in-plane; each 45° crossing rings a note; a full turn (>2.4 rad) turns the medal over to its other face"
+    - "scrub (one finger circling) → turns the coin in-plane, the octave sweeps"
+    - "hold to the ceremony tier → blesses the medal, its largest single gift of brilliance"
+    - "twist3 (three-finger twist) → laps the night's hue through a slow season cycle"
+    - "drag3 (three-finger drag) → the world-law: wind rocks the hanging medal and shivers the aventurine"
+    - "hold3 (three-finger hold) → time slows to 1/4 while held"
+    - "drum (a steady rhythm) → the night twinkles in time; the entrained pulse writes into the aventurine"
+    - "tilt the phone → the coin leans, and a sudden tilt spike flips it that way (motionFlip debounced 700ms)"
+    - "pop the phone (a hard shake, motion.acceleration > 20) → tumbles it toward the pop direction"
+    - "knock the case (motion between 12 and 20) → the medal rings its bell, does NOT flip"
+    - "flip face-down → night falls; a veil dims the room until turned back"
+  finds:
+    - "every interaction adds permanent brilliance to the night sky around it — it only ever climbs, asymptotically, never fading"
+    - "the coin's voice depends on its size: small → adds a bright upper octave; large (size > 1.35) → adds a low brass/gong weight with a bell shimmer"
+    - "a sudden tilt spike vs. a knock is a magnitude threshold — knock rings the bell, pop tumbles the coin (motionFlip debounces so pop and rebound don't fire twice)"
+    - "the aventurine field grows more iridescent as fill.glow climbs — flecks catch light that used to pass over them (thresh − uLevel · 0.16)"
+
+# ——— the "alive at rest" / "make and unmake" / "haptics" contract ————————
+# Round-trip-derived from src/components/Coin.tsx. Coin declares only one
+# addressable object — the medal itself — and a monotonic aventurine
+# latent that reads back through the shader. LetGo would erase the fill
+# but is not wired for coin (deliberate: the whole point is that the
+# brilliance NEVER falls). The room-registry exempts tutti, dwell, tilt,
+# shake, knock and flip because a single medal is not a population.
+life:
+  population:
+    depth_note: >
+      one: the medal is the room's single object, a PBR mesh that never
+      duplicates; the aventurine latent is a `field` in shader terms but
+      not a `population` in the schema's dwell-creates-one sense. this
+      is why room-registry exempts dwell (a held coin already brakes
+      itself, no second coin to plant), tilt (world-space gravity is
+      the medal's minted orientation), shake (agitation makes the
+      deterministic spin unreadable), knock (no room-door to wake),
+      flip (face-down is already a physical orientation), and tutti
+      (no population to synchronize).
+    objects:
+      - noun: medal
+        max_count: 1
+        state_shape: "PBR mesh (front + back CanvasTexture bump maps, milled-edge reed texture, ACESFilmicToneMapping), tilt (x, y, tx, ty), spin.z, size (v, t), flip quaternions (q0, q1, base, t=0..1), season, pan2, plus the aventurine latent { fill.v, fill.glow, fill.pulse }"
+        lifecycle: "born once on mount → PBR + relief textures cached at module scope so a remount keeps its brilliance → lives forever (no retire path — deliberate)"
+        persistence: localStorage
+        creates_via_verb: tap
+        retires_via: [LetGo]
+        implementation_hint: "single Three.js mesh + inline latent + persisted through the room's own storage_key via createIdleWriter"
+  breath:
+    period_seconds: 7
+    reads:
+      - "idle-driven sway on the tilt refs: swayX = sin(idle · 0.6) · 0.12 · motion, swayY = cos(idle · 0.45) · 0.16 · motion"
+      - "the aventurine shader reads uTime for twinkle phase and uPulse for the live flash"
+      - "wind.x, wind.y decay on exp(-rawDt · 0.8) so a three-finger wind eases back over a breath"
+    behavior_at_rest: "the medal sways gently on a 1.6-second cycle; the aventurine flecks twinkle on their own seeded per-fleck clocks (tw = 0.5 + 0.5 · sin(uTime · (1.2 + h · 4) · (1 + uLevel · 1.6) + h · 30)); the brighter the room has become, the faster and deeper the twinkle"
+  glimmer:
+    after_idle_ms: 20000
+    visual: "if 20s have passed since the last gesture and 9s since the last glimmer, shine.v is nudged to at least 0.35 — the star glint breathes over the relief where a rub would shine it; no text, no menu, no explanation"
+  haptics_grammar:
+    tap: ripple
+    drag: tap
+    flick: chop
+    twist: tap
+    twist3: detent
+    drag3: chop
+    hold3: tap
+    scrub: null
+    drum: null
+    arrows: null
+  make_unmake:
+    letgo_clears_population: false
+    ceremony_is: "the medal is blessed — a ceremony hold flares the shine, brightens the aventurine night for good (adds 0.12 to fill.glow, which never falls), rings the bell, and writes the moment into the site's own tape (recordTape 'kept' 0.9 'coin/blessing')"
+
+# ——— phase 7: DEPTH ————————————————————————————————————————————————————
+# coin's density lives most heavily in the aventurine state — every
+# interaction writes into a monotonic latent that visibly changes what
+# the shader paints, so day-1 and day-30 are visibly different rooms.
+# it is the anti-slideshow room by construction.
+
+shader_layers:
+  - name: aventurine dusk field
+    brief: >
+      The base of the room: a fullscreen ShaderMaterial (bgQuad) with
+      uAspect, uSeason, uPulse, uFill, uLevel and uTime uniforms. Below
+      the fill height, the field is dusk-dark; above it, a deep-navy
+      aventurine base with a small horizon glow. The horizon ember is
+      an exp(-((uv.y - uFill) / 0.045)²) band whose brightness scales
+      with (1 - uFill · 0.7) and is gated by step(0.02, uFill).
+    register: "bg+bg2"
+    order: background
+  - name: aventurine fleck layers (four scales)
+    brief: >
+      Four calls to `layer(uv, scale, thresh, seed, col)` at scales 70,
+      130, 220, 320 — the deepest is fine diamond dust, the shallowest
+      is the visible fleck field. Each fleck has a tight SDF core plus
+      four- and eight-point radiating star fire, twinkling on its own
+      seeded phase, coloured through mix(gold, sapphire, copper) with
+      an iridescent diamond fire painted OVER the base colour as uLevel
+      climbs. The hue-preserving roll-off (scol / (1 + m · 0.5)) keeps
+      vivid carats vivid without ever blowing to white.
+    register: "glow+accent+accent2"
+    order: midground
+  - name: PBR gold coin
+    brief: >
+      Three.js MeshStandardMaterial (metalness = 1, roughness = 0.22) on
+      a CylinderGeometry, with front / back CanvasTexture bump maps
+      carrying the full Saint-Benedict relief and a milled reed edge
+      texture. Lit by a hard directional key (0xfff4e2, 3.4), a rim
+      light (0xffe6b0, 1.6), an ambient (0x40381f, 0.5), and a
+      PMREM'd RoomEnvironment for the specular glints. ACESFilmicToneMapping
+      + exposure 1.15.
+    register: "glow"
+    order: midground
+  - name: star glint sprite
+    brief: >
+      A 4-point Sprite in front of the coin (AdditiveBlending, no
+      depth test) whose opacity is `shine.v` — set to 1 on flip, decays
+      passively. On idle glimmer, nudged to 0.35 so the room shines
+      without a hand on it.
+    register: "glow"
+    order: foreground
+  - name: night veil (DOM element)
+    brief: >
+      The `nightVeilRef` div's opacity is set to nightAmt · 0.82 —
+      a black overlay that eases in when the phone is face-down
+      (gravity.z < -7) and eases back out on turn-over. The DOM
+      element sits over the WebGL canvas but under any accessible
+      overlay chrome.
+    register: "ink"
+    order: overlay
+
+discoverables:
+  - trigger: "hold to the ceremony tier (tier ≥ 3) while one finger is on the coin"
+    response: "the medal is blessed: shine.v = 1, addPoints(0.12) — the largest single gift of brilliance — audio.bell(), haptics.bloom(), and 'kept 0.9 coin/blessing' on the site's tape; the aventurine night keeps that brilliance forever"
+    register: multiple
+  - trigger: "twist the coin past 2.4 rad accumulated in a single gesture (twistAcc from start to end)"
+    response: "the coin turns over to its other face — a full turn of the wrist carries it through 180° on doFlip(sign(twistAcc), 0); flipSound(); toss.amp = 1.1"
+    register: multiple
+  - trigger: "shake the phone hard enough that acceleration magnitude > 20 (or any axis > 15)"
+    response: "the coin tumbles toward the pop direction (motionFlip debounced 700ms so the pop and rebound don't fire twice); shine.v = 1; haptics.chop()"
+    register: multiple
+  - trigger: "shake the phone in the knock band (magnitude > THRESHOLDS.knockThresh but < 20) with at least 400ms since the last knock"
+    response: "the medal rings its bell (audio.bell), shine.v climbs by 0.5, haptics.tap fires; the coin does NOT flip — knock and pop are different events on the same axis"
+    register: multiple
+  - trigger: "tap a rhythm with stability > 0.7 through attachGestures' rhythm callback"
+    response: "the aventurine night twinkles in time — entrain.bpm and entrain.until latched; every beat lands as fill.pulse += 0.3 and a note on the 90 + beatIdx%8 scale"
+    register: sight
+  - trigger: "let the room sit untouched for 20 seconds"
+    response: "the glimmer clock fires: shine.v is nudged to at least 0.35, the star glint breathes over the relief; physical, wordless, on the room's own timer"
+    register: sight
+  - trigger: "handle the coin at extreme sizes — hold the drag at size.v > 1.35 or < 0.8"
+    response: "the voice changes: large adds a low brass/gong weight one octave down plus a bell shimmer; small adds a bright upper octave; the same tap plays a genuinely different note-body at either extreme"
+    register: sound
+
+state_machine:
+  states:
+    - name: day
+      description: "the default; nightAmt = 0; the aventurine sky is visible in full colour"
+      visible_change: "the coin catches the key light; the aventurine flecks twinkle at their default rate; the room's ambient bed is 'light'"
+    - name: night
+      description: "the phone is face-down; gravity.z < -7 sets nightOn = true; nightAmt eases toward 1 at rate 1.4 · dt"
+      visible_change: "the veil overlay lifts to opacity nightAmt · 0.82 — the whole room hushes under black; when the phone is turned back, night eases out and the aventurine returns"
+    - name: dilated
+      description: "three fingers held; timeScale.target = 0.25 (a quarter of wall time)"
+      visible_change: "the twinkle slows; the sway eases; the flip animation slerps at a quarter speed; audio events fire on the same rhythms but the room reads as taken out of the world"
+    - name: entrained
+      description: "a rhythm was tapped (stability > 0.7); entrain.bpm and entrain.until are set; every beat pulses the aventurine"
+      visible_change: "fill.pulse rises by 0.3 on every beat; a note fires; the sky's twinkle syncs to the tapped tempo"
+    - name: blessed
+      description: "a ceremony hold has fired at least once; fill.glow is now 0.12+ higher than it would have been"
+      visible_change: "every interaction from here on happens over a brighter base; the aventurine flecks catch light at a lower threshold; the shader visibly reads a MORE lit room"
+    - name: hue/season
+      description: "three-finger twist has laid a season phase on the night; season.cur ∈ [0, 4) cycles the hue"
+      visible_change: "seasonTint = 0.026 · cos(2π · (vec3(0, 0.33, 0.67) + uSeason · 0.25)) rolls the aventurine's base hue through a slow year"
+  transitions:
+    - from: day
+      to: night
+      trigger: "vessel flip event: gravity.z < -7; nightOn = true; nightAmt eases to 1"
+    - from: night
+      to: day
+      trigger: "gravity.z ≥ -7; nightOn = false; nightAmt eases back to 0"
+    - from: "*"
+      to: dilated
+      trigger: "three-finger hold enter; timeScale.target = 0.25"
+    - from: dilated
+      to: "*"
+      trigger: "three-finger hold release; timeScale.target = 1"
+    - from: "*"
+      to: entrained
+      trigger: "attachGestures' rhythm callback fires with stability > 0.7; entrain.bpm ← e.bpm (clamped 40..160), entrain.until = now + 8000"
+    - from: entrained
+      to: "*"
+      trigger: "now > entrain.until; the tapped tempo has run its 8s course"
+    - from: "*"
+      to: blessed
+      trigger: "one-finger hold reaches tier ≥ 3; addPoints(0.12) writes into fill.glow (permanently); the state has no way back — blessing is monotonic"
+    - from: "*"
+      to: hue/season
+      trigger: "three-finger twist writes season.target += e.angle / (π/2); the season snaps every 1 lap"
+
+# ——— the three LLM slots ————————————————————————————————————————————————
+# /coin was hand-authored, not compiled; these three intents describe
+# what a compiler-driven run would produce given the same brief.
+
+shader_intent: >
+  paint one aventurine night in a fullscreen ShaderMaterial and one
+  PBR gold coin in the scene above it. the night has three loops: a
+  dusk-below / navy-above fill divided at uFill with a warm horizon
+  ember at the boundary; four scales of value-noise fleck (70, 130,
+  220, 320 cells per view) where each fleck has a tight SDF core, four-
+  and eight-point radiating star fire, and a per-fleck twinkle phase
+  driven by seeded hash on the cell id; and an iridescent diamond fire
+  layer that grows over the base colour as uLevel climbs, so a room
+  played a hundred times shows visibly more diamond fire than the same
+  room played once. the coin above is a Three.js MeshStandardMaterial
+  on a CylinderGeometry with front / back CanvasTexture bump maps
+  carrying the full Saint-Benedict relief (V·R·S·N·S·M·V rim, CSSPB
+  quadrants, the standing figure with cross and Rule, chalice-serpent
+  and raven at the feet); a milled reed edge; a hard directional key +
+  rim + PMREM'd RoomEnvironment for specular glints. face-down = night
+  = a DOM veil at opacity nightAmt · 0.82 above the WebGL canvas. no
+  createRadialGradient per frame (the star sprite is baked once);
+  every frame is one draw for the aventurine, one for the coin, one
+  for the veil.
+
+domain_intent: >
+  write `src/lib/coinstate.ts` around one latent
+  `CoinLatent = { fill: number, glow: number, pulse: number, season:
+  number }` where `fill` is 0..1 aventurine coverage (fills bottom to
+  top), `glow` is a MONOTONIC brilliance latent that only ever climbs
+  (asymptotically toward 1 via `1 - exp(-glow · 0.22)`), `pulse` is
+  the live radiant flash per interaction that decays on `pulse *=
+  0.93` per frame, and `season` is a 0..4 hue lap. export
+  `addPoints(latent, a): void` — the ONE writer, called by every verb
+  handler, that raises fill and glow monotonically and adds `a * 2.2
+  + 0.06` to pulse. export `sectorOf(dx, dy) → 0..7` — screen-space
+  angle to one of eight compass sectors, centred on the compass
+  directions. export `voice(latent, size, midi)` — one c-major note
+  scaled by coin size: size > 1.35 adds a −12 octave and a bell,
+  size < 0.8 adds a +12 octave. export `motionFlip(dx, dy, now)` —
+  the pop-vs-knock discriminator with its 700ms debounce (knock:
+  magnitude between THRESHOLDS.knockThresh and 20, no flip; pop:
+  magnitude > 20, tumble toward the direction). the persistence is
+  `objetdart:coin:aventurine`, gated by `createIdleWriter`. no DOM,
+  no audio, no `Math.random`, no `Date.now`; the timer is passed in.
+
+verb_intent: >
+  every verb writes into the coin's transient refs (tilt, spin, drag,
+  wind, timeScale, season, pan2) and calls `addPoints(a)` for its
+  contribution to the aventurine latent. `tap` (one-finger) flips the
+  coin toward the touch: `sectorOf(dx, dy)` picks the direction, its
+  root-note plays via `voice(midi)`, `shine.v = 0.6 + e.intensity ·
+  0.4`, and `doFlip(dx, dy)` runs the quaternion slerp. `drag` (one-
+  finger) resizes on `e.dx` and tilts on `e.dy`; a fast drag rubs the
+  coin (shine.v climbs by speed · 0.02 and haptics.tap fires every
+  120ms). `flick` throws the coin higher (toss.amp = 1.2 + e.speed ·
+  0.35) and flips it toward the throw angle. `twist` (two-finger) —
+  each 45° crossing calls `spinBy` which rings the sector's octave
+  note; when |twistAcc| > 2.4 rad the coin turns over. `scrub` (one-
+  finger circling) spins the coin by π/4 in the direction of the
+  winding. `hold` at tier ≥ 3 blesses the medal — the room's solemn
+  act — writing 0.12 to fill.glow (permanent) and playing the bell.
+  `twist3` writes season.target += e.angle / (π/2) — the night's hue
+  laps; each cross rings a note and detent haptic. `drag3` writes into
+  wind.x, wind.y (clamped ±1); wind rocks the hanging medal and
+  shivers the aventurine every 700ms. `hold3` writes timeScale.target
+  = 0.25 (a quarter of wall time). `rhythm` (with stability > 0.7)
+  writes entrain.bpm and entrain.until = now + 8000; every beat
+  pulses the aventurine (fill.pulse += 0.3) and plays a note. the
+  vessel: deviceorientation writes tilt.ty/tilt.tx (leans, and a
+  sudden change > 11 fires motionFlip); devicemotion discriminates
+  knock (bell only) from pop (tumble); face-down (gravity.z < -7)
+  writes nightOn = true and the veil eases in. `arrows` walk the
+  frame's pan2 but are otherwise absorbed by the medal. all
+  thresholds from `gesture/core.ts`; `addPoints` from `coinstate.ts`.
+
+chrome:
+  travel: true
+  peers: true

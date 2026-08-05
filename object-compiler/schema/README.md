@@ -223,6 +223,126 @@ lanterns are never actively retired (only shifted out when the cap is
 hit). Where a room fails part of the bar, say so in the spec's comments
 — those failures are what the quality-check test exists to catch.
 
+## Depth — the four axes phase 7 added
+
+Phase 6 landed the compiler-generated rooms (`/spring`, `/geyser`,
+`/pebble`, `/reef`, `/root`, `/marsh`) and named the gap between them
+and the hand-authored deep references (`/stars`, `/planets`, `/coin`,
+`/molecules`): every mechanical check passed, but the compiled rooms
+felt THIN. The schema up to phase 6 captured *contract* — item 1
+(shader), 2 (grammar), 3 (make-and-unmake shape), 5 (breath), 6
+(haptics), 7 (performance) — but not *density*. How many shader
+layers the material stacks, how many populations move through it,
+how many rewards the patient hand finds, how many distinct states the
+material passes through: those axes were invisible to the spec.
+
+Phase 7 adds four optional blocks so a spec can DECLARE its depth.
+Every block is optional at the top level; every existing spec still
+validates unchanged. When a future spec DECLARES them,
+`test:room-depth` (Track C) will check the counts against the deep-
+reference floor.
+
+### `shader_layers` — the material's stacked passes
+
+An array of at least three `{ name, brief, register, order? }` items.
+Each layer is a discrete render pass or a composited element the
+shader draws. AGENTS.md §"quality bar" item 1 says the material is a
+shader; the phase-6 gap is that "the material is a shader" and "the
+material is a RICH shader" are two different things.
+
+Concrete example — /stars declares nine layers (the schema requires 3,
+the deep reference clears it):
+
+```yaml
+shader_layers:
+  - name: deep-field static canvas
+    brief: "pareto-distributed stars, five to seven nebulae, one to three
+            black holes with accretion disks … blit each frame; static
+            between resizes"
+    register: "bg+bg2"
+    order: background
+  - name: nebula pass
+    brief: "three to five wisps per nebula, each with its own offset,
+            rotation, squashY and seeded noise phase; softens toward the
+            finger"
+    register: "accent+accent2"
+    order: midground
+  - name: black-hole accretion + lensing pass
+    brief: "hot inner rim moving with mass and zoom, an infalling-mote
+            cloud dilating to a stop at the horizon, a lensing halo
+            displacing starlight in a real geometric warp"
+    register: "glow+accent2"
+    order: midground
+  # …six more, ending with…
+  - name: constellation + lens overlay
+    brief: "hairline strokes for pending shapes, lens rung notation at
+            rungs 1 (MK chromaticity) and 2 (geodesic net), well gather
+            ring, sky-pulse ribbon"
+    register: "ink+glow"
+    order: overlay
+```
+
+A room with fewer than three shader layers is a slideshow.
+
+### Multi-population — `life.population.objects` at ≥ 2
+
+Phase 7 does NOT tighten the schema's `minItems` on `objects` (that
+would break every single-population spec). Instead it adds a
+`life.population.depth_note` field where a spec argues why THIS
+population count (1, 2, 3, 5) is honest — /stars answers "three: the
+sky-born stars, the user's black holes, and the user's condensed
+worlds"; /spring answers "one: every other lens is a reading OFF the
+seeps rather than an object of its own." When a spec's `depth_note`
+argues for ≥ 2 populations, `test:room-depth` (Track C) checks that
+the room actually implements them.
+
+### `discoverables` — the rewards a patient hand finds
+
+An array of at least three `{ trigger, response, register? }` items.
+NOT the room's visible grammar (which lives in `guide.moves`); these
+are what `guide.finds` already gestures at, structured — the rewards
+a visitor collects when the room's laws lock into themselves.
+
+/stars: the merger chirp, the double-tap world condensation, the
+horizon that keeps swelling past ceremony, the constellation loop
+closing, the lens rung raising through curvature, the pinch handoff
+at the band edges, the idle event on the layer seed.
+
+/molecules: the water-from-hydrogen-and-oxygen equation firing with
+its true stoichiometry, the endothermic N₂ + O₂ indraw, the CO₂
+warm-tell, water-finds-water, the mass-scaled kick response, the
+structural-formula lens.
+
+AGENTS.md's "lower friction to the next reward" law depends on there
+being a next reward — density requires at least three.
+
+### `state_machine` — distinct modes of the material
+
+`{ states: [{name, description, visible_change?}], transitions:
+[{from, to, trigger}] }`. `states` requires at least two.
+
+Concrete example — /geyser declares four states (calm → charging →
+eruption → cooling); /stars declares ten (four zoom layers × three
+lens rungs × night × dilated × forgetting); /planets declares six
+(day, night, dilated, lens/twelve-spoke, merge-in-flight, scattering);
+/coin declares six (day, night, dilated, entrained, blessed,
+hue/season). A room with a single state is a slideshow.
+
+`from: "*"` means "from any state" — used for transitions that fire
+on a vessel event or a ceremony hold regardless of the current mode.
+
+### Why phase 7 exists
+
+The phase-6 recompile of `/spring`, `/geyser`, `/pebble`, `/reef`,
+`/root`, `/marsh` produced rooms that passed `test:room-contract`,
+`test:paint`, `test:room-quality` and the phase-6 heuristic-tightening
+checks — but a walkthrough named a felt gap the tests could not see:
+one population, one shader layer, no discoverables, one state. The
+phase-7 blocks make that gap CAPTURABLE in the schema itself. The
+retrieval anchors (`examples/{stars,planets,coin,molecules}.yaml`)
+teach a compiler-driven run what a room clearing the density bar
+actually declares across all four axes.
+
 ## What the schema does not capture (the three LLM slots)
 
 Three creative degrees of freedom remain, and the plan's tomography argument

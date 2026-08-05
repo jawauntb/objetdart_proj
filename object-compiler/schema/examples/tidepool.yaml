@@ -1,0 +1,420 @@
+# /tidepool — a coastal tide pool with real ecological depth.
+#
+# Placement is the ordinal decision (docs/new-room.md §1). At the coast band
+# the tide pool is the shore's held pocket — between two swells the water
+# stays behind on the rock shelf and a small ecology fills what the ocean
+# left. Where /aphros paints the surface foam, /waves paints the wavefront,
+# /reef paints the colony below the tideline, the tide pool paints the
+# window between them: a shallow bowl of water that fills and empties on a
+# real 33-second tide clock, and the creatures inside it who read the water
+# the way a room reads its own breath.
+#
+# The sigil is "aphros" — a tide pool is what happens where the foam
+# retreats and something small stays, so the room joins the shore ring
+# behind /reef (`ringAfter: reef`) and the twist order becomes:
+# /coast → /ocean → /tide → /waves → /sine → /circularity → /pretext →
+# /aphros → /reef → /tidepool → /coast. A peer of the sea's other five
+# instruments; a peer whose material is time-across-a-cycle, not
+# frequency-across-a-column.
+#
+# The invariant type is **lattice** — three species of creature sit at
+# discrete anchor points on the pool floor and walls, each carrying its own
+# small state (curl, retreat, biomass), while the pool water level itself
+# rides a shared closed-form tidal cycle plus a storm displacement. The
+# retrieval bank slice for lattice is /rocks and /reef; the tide pool is
+# the LIVING refinement of the same shape — the anchor points are alive
+# and the substrate is timed.
+
+key: tidepool
+component_name: TidePool
+
+placement:
+  kind: peer
+  circle: shore
+  band: coast
+  label: "the tide pool"
+  ringAfter: reef
+
+sigil: aphros
+desc: "the pocket, held between the swells"
+cluster: nature
+dark: true
+home_priority: 9
+ambient_profile: tide
+storage_key: "objetdart:tidepool:v1"
+
+invariant: >
+  a shallow rock pool holding three species at discrete anchor points on
+  its floor — snails on the rock rim, anemones in the deeper hollows, algae
+  fronds along the sunlit shelf — under a closed-form tidal water level
+  cycle H(t) = H_MEAN + H_AMP · sin(2π · t / TIDE_PERIOD_S) plus a storm
+  displacement, and a state machine (low tide / high tide / storm) whose
+  transitions are functions of H(t) alone, so the ecology is deterministic
+  from seed and never a random draw.
+
+material: 2d-over-shader
+noun: creature
+
+domain_lib:
+  name: tidewater
+  invariant_type: lattice
+
+palette:
+  bg:      "#050f14"
+  bg2:     "#0f2a2b"
+  glow:    "#f2c07a"
+  accent:  "#3a8a76"
+  accent2: "#b8543a"
+  ink:     "#ecefe6"
+
+visual_style:
+  subject: "a hand's width of sunlit rock pool in section — a shallow bowl of water on a granite shelf, snails on the rim, anemones in the hollows, kelp fronds along the sunlit shelf, and the swell reaching for the pool's edge from the ocean side"
+  form_language: [SDF, value-noise-FBM, point-cloud, hand-painted]
+  motion_character: cyclic
+  reference_notes:
+    - "an intertidal-ecology plate: warm sunlit surface caustics above, kelp-green depth below, rock rim raking the light on both sides — the pool sits between the granite and the horizon"
+    - "each creature is an SDF disc plus a small silhouette: snail shells read as low warm spheres, anemones as star-clusters of five to seven radial spokes whose curl the state reads, kelp fronds as ribbons attached at the shelf"
+    - "the water level H(t) rides a slow 33-second sine plus a storm displacement; the shader reads the same H the physics does and paints the waterline exactly where the level sits"
+    - "the biofilm on the rocks is a slow value-noise FBM whose brightness responds to the domain's biofilm scalar — a warmed pool blooms visibly on the granite"
+  mood: "patient, held, oceanic — the pool has been here for a thousand tides before the visitor arrived, and the visitor's hand disturbs one cycle of one small ecology inside it"
+  gesture_feedback_style: "a tap rings a creature at its own note (snails ring warm, anemones ring cool, kelp doesn't ring — it shivers); a dwell recruits a new creature whose kind is decided by where the finger sits (rim → snail, hollow → anemone, shelf → kelp); a ceremony seals a creature as a keeper (the room's touch-reachable trophy); a knock startles every anemone in the pool — tentacles snap shut, snails retreat"
+
+verbs_answered:
+  - tap
+  - dwell
+  - ceremony
+  - drag
+  - flick
+  - twist
+  - twist3
+  - tap3
+  - drag3
+  - hold3
+  - scrub
+  - drum
+  - arrows
+  - tilt
+  - shake
+  - knock
+  - flip
+
+guide:
+  title: "the tide pool — pocket, kept between the swells"
+  scale: >
+    the coast band — shore peer behind the reef, ahead of the coast itself:
+    a hand's width of sunlit rock pool in section, where three species of
+    creature settle a bowl of water the ocean left behind, and the tide's
+    thirty-three second clock rules the whole small world.
+  essence: >
+    a rock pool holding three species at discrete anchor points — snails
+    on the rim, anemones in the hollows, kelp fronds along the sunlit
+    shelf — under a closed-form tidal water level and a state machine
+    (low tide / high tide / storm) whose transitions the water level
+    alone decides. every tap reads a creature at its kind; every dwell
+    plants one at the finger and grows it on a saturating curve; every
+    ceremony seals the creature as a keeper the room remembers between
+    visits. the pool is what happens between the ocean and the rock —
+    nothing in the pool was created except what the tide brought.
+  moves:
+    - "tap → a ripple crosses the water surface, and the nearest creature answers at its kind: a snail rings warm, an anemone rings cool, a kelp frond shivers without pitch — the map from kind to sound is invertible and legible"
+    - "dwell → plants a creature at the finger, kind decided by where the finger sits (rim → snail, hollow → anemone, shelf → kelp); the biomass climbs on a saturating curve as long as the finger presses"
+    - "ceremony (hold to the tier) → seals the creature as a keeper — one snail per pool becomes the room's kept keeper, an anchor the pool remembers between visits"
+    - "drag → the current lens shears across the water column above the pool; kelp fronds bend with the drag, snails and anemones do not"
+    - "flick → throws a small wavefront across the pool surface — the shader reads a ripple; the creatures do not startle unless the flick is strong"
+    - "twist → raises the pool lens: the water level H(t) as a ticked bar, the current state (low / high / storm), each population's count and mean biomass"
+    - "twist3 → turns the tide clock by hand — a full 33-second cycle in one twist, so a slow twister can watch the pool empty and fill and empty again in a minute"
+    - "tap3 → tutti; every creature answers at once — one chord of three kinds, low warm from the snails, cool from the anemones, a shiver from the kelp"
+    - "drag3 → world-law: down is warmth (climate warmth ↑), across is wet (rain ↑ → the storm displacement grows)"
+    - "hold3 → time dilation while held; the tide clock runs slow so the ecology can be inspected between transitions"
+    - "scrub → agitates the pool water column; a scrubbing finger stirs the surface and every kelp frond bends toward the finger"
+    - "drum (two hands alternating) → the tidal beat between two zones — a feeding pulse that briefly lifts biomass in the neighborhoods of both hands"
+    - "arrows → walk the pool cursor along the rim / hollow / shelf; enter held plants and matures a creature at the cursor; escape lowers the lens"
+    - "tilt / shake / knock / flip (once invited) → the water leans, the surface scatters (every anemone curls), a struck pool startles every anemone (tentacles snap shut, snails retreat), face-down is night — the biofilm dims and the state machine cools"
+  finds:
+    - "the pool empties and fills every 33 seconds — a hand watching one full cycle can name every creature by how it reads the water level"
+    - "tap on an anemone during LOW TIDE and its tentacles curl (defensive — the anemone is exposed and the visitor's finger reads as threat)"
+    - "shake the vessel while touching a snail (once shake is invited) and the snail retreats into its shell — a warm bell rings and the biomass reads unchanged"
+    - "a breath from the candle (candle-invited) warms the water, and the biofilm on the rocks blooms visibly across the granite — a slow bright pass on the rocks"
+    - "a hand that dwells during HIGH TIDE near an anemone opens the anemone fully — the tentacles reach further than at low tide, and the anemone rings at its brightest"
+    - "the storm state raises white foam on the surface and every creature reads it — snails retreat, anemones curl, kelp thrashes; a knock during storm is a rare event the room remembers"
+  keeps: >
+    every keeper creature (snails, anemones, kelp) with kind, position,
+    biomass, and phase; the tide clock's current τ so a returning visitor
+    finds the pool at the right water level; the climate (warmth, wet)
+    the world-law hand last wrote.
+
+# ——— the "alive at rest" / "make and unmake" / "haptics" contract ————————
+# Round-trip-derived from the intent of the physics library (tidewater.ts):
+# three species share one lattice, born by dwelling on the pool, sealed at
+# ceremony (kept between visits), retired by knockSweep or LetGo. Every
+# object rides SceneObjectSpec — one instanced draw per population.
+life:
+  population:
+    depth_note: >
+      three populations share the same substrate; snails GRAZE the algae
+      (algae growth rate falls near a snail's neighborhood), anemones
+      FILTER the algae (a small biomass drift from algae to anemones
+      each tick), and the state machine READS all three (a storm curls
+      every anemone and retreats every snail). the depth of the tide
+      pool is that no population is a decoration — each acts on the
+      others through the shared field and the shared state.
+    objects:
+      - noun: snail
+        max_count: 12  # SNAIL_CAP
+        state_shape: "id, x, y, biomass (0..MAX_BIOMASS=1), retreated (bool — hides in shell), phase seed"
+        lifecycle: "born under dwell along the rim (plantCreature at biomass 0) → biomass climbs on saturating logistic while held → sealed at ceremony (kept between visits as the pool's keeper snail) → retires via <LetGo> (population-wide) or via knockSweep (unsealed snails retreat but stay; only LetGo removes)"
+        persistence: LetGo
+        creates_via_verb: dwell
+        retires_via: [LetGo]
+        implementation_hint: SceneObjectSpec
+      - noun: anemone
+        max_count: 8  # ANEMONE_CAP
+        state_shape: "id, x, y, biomass (0..MAX_BIOMASS=1), curl (0=open .. 1=fully closed), phase seed, sealed"
+        lifecycle: "born under ceremony (a hollow accepts an anemone only via ceremonial planting — the room's solemn plant) → biomass climbs on the tick as filtering from algae feeds it → curl responds to the state machine (storm → curl=1, low tide → curl=0.5, high tide → curl=0) → retires via <LetGo> only"
+        persistence: LetGo
+        creates_via_verb: ceremony
+        retires_via: [LetGo]
+        implementation_hint: SceneObjectSpec
+      - noun: kelp
+        max_count: 10  # KELP_CAP
+        state_shape: "id, x, y, biomass (0..MAX_BIOMASS=1), bendPhase (drag deflection), phase seed"
+        lifecycle: "born by seed-scatter on the shelf when the visitor first arrives (initState scatters KELP_INITIAL kelp fronds along the sunlit shelf, deterministic from seedKey) → biomass grows on the tick under high illumination → bends under drag on the shared current axis → retires via <LetGo> only (kelp is ambient — not a keeper species)"
+        persistence: LetGo
+        creates_via_verb: dwell
+        retires_via: [LetGo]
+        implementation_hint: SceneObjectSpec
+  breath:
+    period_seconds: 7
+    reads:
+      - "uBreath uniform (fragment shader — water column brightens `0.86 + 0.14 * uBreath`)"
+      - "uBreath uniform (Snell surface highlight `0.85 + 0.15 * uBreath`)"
+      - "uBreath uniform (biofilm bloom on the rock `0.6 + uBreath * 0.4`)"
+      - "uBreath uniform (creature corona `0.5 + uBreath * 0.5`)"
+    behavior_at_rest: "four visible registers ride the 7s clock — the water column brightens ±14%, the Snell highlight rides ±15%, the biofilm bloom on the granite swells ±40%, and every creature's corona breathes ±50% — over the top of the slower 33s tide cycle so the pool is never still"
+  glimmer:
+    after_idle_ms: 20000
+    visual: "one creature (chosen by `state.tau * 1013 % state.count`) breathes a wider ring, alone, and nothing is said — the glimmer handler dispatches on kind: a snail retreats and returns in one breath, an anemone opens one tentacle wider, a kelp frond bends and returns"
+  haptics_grammar:
+    tap: ripple
+    dwell: tap
+    ceremony: bloom
+    flick: chop
+    twist: lens
+    twist3: detent
+    tap3: roll
+    scrub: tap
+    drum: tap
+    knock: detent
+    arrows: tap
+  make_unmake:
+    letgo_clears_population: true
+    ceremony_is: "planting an anemone in a hollow — the room's one solemn act, and the only way an anemone arrives; snails and kelp arrive under ordinary dwell, but anemones require the ceremony because they anchor for years once placed"
+
+# ——— PHASE-7 DEPTH BLOCKS ————————————————————————————————————————
+# See data/object-compiler/audits/phase-7-depth-schema.md. These four
+# blocks are additive to the M2 schema (Track A phase 7) and capture the
+# density axes the compiler's zero-hand-patch pass proved were missing:
+# shader_layers, discoverables, state_machine, life.population.depth_note.
+# test-room-depth.mjs (Track C) will check the counts against the deep-
+# reference floor once landed. Until then, every count here is a promise.
+
+# Migrated to the phase-7 schema shape (task 7A). The prior draft carried
+# extra fields (`reads`, `visible_change` on shader_layers; `reward`,
+# `reads_state`, `verb` on discoverables; `id`, `condition`,
+# `visible_effect`, `duration_seconds_at_period` on states; `clock`,
+# `uniform` on state_machine) that the phase-7 schema does not accept.
+# The content is preserved — merged into `brief`, `response`,
+# `description`, `visible_change` — so the promise is unchanged.
+shader_layers:
+  - name: tidal_water_level
+    order: background
+    register: "bg"
+    brief: "the waterline rides H(t) — a 33s sine plus a storm displacement — and the sky-above/water-below split moves with it; reads uTide and uState"
+  - name: sunlit_surface
+    order: midground
+    register: "glow"
+    brief: "a Snell highlight tracks the moving waterline, caustics ripple across the sunlit shelf; warmth (uClimate.x) shifts the highlight from cool to golden; reads uBreath, uClimate, uTide"
+  - name: rock_and_biofilm
+    order: midground
+    register: "accent2"
+    brief: "the granite rim and shelf are value-noise FBM; the biofilm scalar (uBiofilm) modulates a warm bloom brighter after a candle-warmed pool; reads uBiofilm, uBreath"
+  - name: creature_silhouettes
+    order: foreground
+    register: "accent"
+    brief: "each creature draws through the shared instanced pass (createPopulationLayer); an anemone's curl collapses its five-spoke star to a knot under uState 'storm', a kelp frond bends toward uCurrent, a snail's retreat reads uCreatureFlags[i]; reads uState, uCurrent, uCreatureFlags"
+  - name: sky_reflection
+    order: overlay
+    register: "ink"
+    brief: "above the waterline: a shallow sky whose colour reads uNight and whose reflection ghosts onto the pool surface only during LOW TIDE (when the surface is glassy); reads uNight, uState"
+
+discoverables:
+  - trigger: "tap on an anemone while state_machine.current == 'low_tide'"
+    response: "the anemone's tentacles curl fully (curl = 1); a defensive haptic (chop) fires; the anemone's ring pitch drops by an octave"
+    register: multiple
+  - trigger: "shake the vessel (once invited) while touching a snail"
+    response: "the snail's retreated flag flips true for 3 seconds; a warm bell rings; the biomass is unchanged (retreat is a pose, not a loss)"
+    register: multiple
+  - trigger: "the candle invitation lands (breath verb becomes available) and the visitor breathes on the pool"
+    response: "the biofilm scalar climbs by 0.35 over one breath; a slow warm pass moves across the granite; the state may transition from cold-water low_tide to warmed-water low_tide with visibly brighter biofilm"
+    register: sight
+  - trigger: "dwell near an anemone while state_machine.current == 'high_tide' for at least 1.5 seconds"
+    response: "the anemone opens fully (curl = 0), its tentacles reach 30% farther than at any other state, and the anemone rings at its brightest pitch — audio + haptic bloom"
+    register: multiple
+  - trigger: "a knock during state_machine.current == 'storm'"
+    response: "every anemone snaps shut, every snail retreats, foam appears on the pool surface, and the room persists a `stormKnockCount` in its keeps — a returning visitor sees the pool remembers the storm"
+    register: multiple
+
+state_machine:
+  states:
+    - name: low_tide
+      description: "H(t) < H_MEAN - H_AMP * 0.35; ~11s of the 33s tidal period"
+      visible_change: "water level low; anemones exposed above the waterline (curl = 0.5 at rest); snails visible; kelp fronds hang limp; biofilm reads brightly on the rocks"
+    - name: high_tide
+      description: "H(t) > H_MEAN + H_AMP * 0.35; ~11s of the 33s tidal period"
+      visible_change: "water level high; anemones fully submerged (curl = 0 at rest, wide open); snails covered; kelp fronds float upward; caustics dance across the whole floor"
+    - name: mid_tide
+      description: "otherwise — the transition band between the two extremes; ~11s of the 33s tidal period"
+      visible_change: "water at the mean line; the shader crossfades between the two extremes; creatures relax to their between poses"
+    - name: storm
+      description: "climate.wet > STORM_THRESHOLD (0.85); the visitor sets and clears the storm through drag3"
+      visible_change: "the mean level lifts, chop appears on the surface, foam builds along the rim, every creature reads it — anemones curl to 1, snails retreat, kelp thrashes; the biofilm reads dimmer under the churn"
+  transitions:
+    - from: low_tide
+      to: high_tide
+      trigger: "H(t) crossing zero on the way up (uState.x → uState.y in the vec4 packing)"
+    - from: high_tide
+      to: low_tide
+      trigger: "H(t) crossing zero on the way down"
+    - from: mid_tide
+      to: low_tide
+      trigger: "H(t) crossing the -0.35 · H_AMP threshold"
+    - from: mid_tide
+      to: high_tide
+      trigger: "H(t) crossing the +0.35 · H_AMP threshold"
+    - from: "*"
+      to: storm
+      trigger: "climate.wet crossing STORM_THRESHOLD (0.85)"
+    - from: storm
+      to: mid_tide
+      trigger: "climate.wet falling below STORM_THRESHOLD"
+
+# ——— the three LLM slots ————————————————————————————————————————————————
+
+shader_intent: >
+  paint one hand-width of sunlit rock pool in section, seen from the front.
+  the load-bearing horizontal is the WATERLINE — a moving line that reads
+  H(t) directly from the domain. above the waterline: shallow sky, warmed
+  by uClimate.x (warmth) toward glow at high warmth, cooled toward bg at
+  low. below the waterline: a green-teal water column deepening to bg2
+  toward the bottom, with caustics riding across it from a Snell surface
+  highlight that itself tracks the moving waterline. the granite rim and
+  shelf are painted by value-noise FBM whose brightness reads the biofilm
+  scalar (uBiofilm) so a candle-warmed pool blooms visibly across the rock.
+  every creature draws through the shared instanced pass
+  (createPopulationLayer), one instanced draw per population — snails as
+  low warm discs on the rim, anemones as five-to-seven-spoke stars in the
+  hollows whose spokes collapse under uState.w (storm) or under a low-tide
+  tap, kelp fronds as vertical ribbons anchored on the shelf whose bend
+  reads uCurrent. state weights (uState = vec4(low, high, mid, storm)) sum
+  to 1 and drive layer parameters: the waterline sits at H(t), which
+  correlates with the low/high weights; the storm weight raises foam and
+  chop and reduces the biofilm brightness. the tide clock (uTide, seconds
+  0..TIDE_PERIOD_S) is the pool's slow breath. palette registers: `bg` is
+  the deep water dark, `bg2` is the shallow shelf column, `glow` is warm
+  sunlit water and sunlit-anemone highlight, `accent` is kelp-teal water
+  in motion, `accent2` is anemone rust (the anemone's own color, warm and
+  read-back-off), `ink` is legible text over the darkest tile. the twist
+  lens is a second render path: H(t) as a ticked bar, the current state
+  weights as four small bars, each population's count and mean biomass.
+  MUST include AT LEAST FIVE `// layer:` comment blocks matching
+  spec.shader_layers: tidal_water_level, sunlit_surface, rock_and_biofilm,
+  creature_silhouettes, sky_reflection. every layer that reads uState in
+  its `reads` array MUST have uState on at least one term in its block —
+  a dead uniform is a bug.
+
+domain_intent: >
+  write `src/lib/tidewater.ts` around one exported `PoolState = { snails,
+  anemones, kelp, climate, tau, seedKey }`. `snails`, `anemones`, `kelp`
+  are `Creature[]` where each Creature is `{ id, x, y, biomass, kind
+  ('snail' | 'anemone' | 'kelp'), curl (anemone only, else 0), retreated
+  (snail only, else false), bendPhase (kelp only, else 0), sealed, phase
+  }`. `climate` is `{ warmth, wet }`, `tau` is seconds. the load-bearing
+  scalar is `H(t) = H_MEAN + H_AMP * sin(2π * t / TIDE_PERIOD_S) +
+  stormDisplacement(climate.wet)` — the tide water level. TIDE_PERIOD_S =
+  33 (a 33-second cycle, so a patient hand watches the pool empty and
+  fill in one minute). stormDisplacement is 0 while climate.wet < 0.85,
+  climbing to H_AMP once wet passes the threshold — so a wind up on
+  drag3 raises the mean level and triggers the storm state. the
+  invertible map is BIOMASS → PITCH per kind: snails ring warm
+  (SNAIL_PITCH_BASE_HZ * 2^(-biomass / PITCH_SCALE)), anemones ring cool
+  (ANEMONE_PITCH_BASE_HZ * 2^(-biomass / PITCH_SCALE)), kelp does not
+  ring (no pitch, only a shiver). `sizeForRingHz(hz, kind)` recovers the
+  biomass from a pitch and kind — the round-trip is pinned by the test.
+  `advanceExact(state, seconds, climate)` walks the elapsed time forward
+  as ONE closed-form step: snail and kelp biomass follow a saturating
+  logistic `b(t+dt) = 1 - (1 - b(t)) * exp(-r_eff * dt)`, where r_eff for
+  snails depends on the local algae density (grazing feeds the snail,
+  which reduces the algae's r); r_eff for kelp scales with illumination
+  (higher warmth → faster kelp growth); anemones' biomass grows by
+  filtering — a small drift b_anemone += FILTER_C * sum(b_kelp_near) *
+  dt. the tide advance is closed-form (sine, no integration). state
+  weights (low_tide, high_tide, mid_tide, storm) are read-off functions
+  of H(t) and climate.wet — see `stateWeights(state, t)`. exports:
+  `plantCreature(state, x, y)` (kind decided by position — rim → snail,
+  hollow → anemone (rejected if not via ceremony), shelf → kelp), a
+  `ceremonyPlantAnemone(state, x, y)` (the only way an anemone appears),
+  `deepenCreature(state, id, dBiomass)`, `sealCreature(state, id)` (the
+  keeper), `knockStartle(state, intensity)` (every anemone.curl → 1,
+  every snail.retreated → true, kelp.bendPhase spikes), `breathWarm(state,
+  amount)` (bumps state.biofilm; state carries `biofilm: number` in
+  0..1), `waterLevel(t)` (the pure H(t) function), `stateWeights(state,
+  t)` (returns { low, high, mid, storm } summing to 1), `nearestCreature
+  (state, x, y, within)`, `meanBiomass(state)`, `poolBounds(x, y)`.
+  no DOM, no audio, no `Math.random`, no `Date.now`. use adaptive
+  sub-stepping if any tick is a Euler step (phase-6 CFL guidance);
+  everything else is closed-form.
+
+verb_intent: >
+  every handler reads `PoolState` from a stable `apiRef` and forwards to
+  a method on `PoolApi` (mirrors Reef's imperative surface). `tap` rings
+  the nearest creature at its kind's pitch — snails warm, anemones cool,
+  kelp shiver only. tap DURING low_tide state on an anemone fires
+  discoverable 1 (anemone curls, curl → 1, haptics.chop). tap DURING
+  high_tide on an anemone opens it wider. `dwell` plants a creature at
+  the finger with biomass 0; kind decided by position (rim/hollow/
+  shelf); anemone slot REFUSES a dwell — audio.refuse — because an
+  anemone arrives only under `ceremony`. `dwell` DURING high_tide near
+  an anemone (found in radius 0.1) fires discoverable 4: the anemone's
+  curl relaxes to 0, its biomass gets a small bump, its ring rings at
+  the brightest pitch. `ceremony` calls `ceremonyPlantAnemone(state, x,
+  y)` — the room's solemn act — and writes it to persistence. `drag`
+  writes into `state.current` (kelp-only visual — kelp fronds bend);
+  under storm state, drag chops the water further. `flick` throws a
+  small wavefront that only startles kelp. `scrub` (finger circling)
+  writes into a `state.stir` that decays and bends kelp toward the
+  finger. `drum` (two hands alternating) beats a feeding pulse — briefly
+  raises anemone biomass in the two hand neighborhoods. `twist` raises
+  the pool lens; step-back (`tap` with `e.fingers === 2`) lowers it.
+  `twist3` turns the tide clock — a full 33s cycle in one twist. `drag3`
+  writes into `climate` — dx is warmth-across, dy is wet-down; crossing
+  wet > 0.85 activates the storm state. `hold3` slows the clock.
+  `tap3` (tutti) rings every creature at once — a three-note chord
+  (snails, anemones, kelp shiver). vessel verbs: `tilt` leans the water
+  visual (uLean); `shake` (invited) fires discoverable 2 if a snail
+  underneath — snail.retreated = true for 3s, warm bell rings; `knock`
+  calls `knockStartle(state, intensity)` — every anemone curls, every
+  snail retreats, and DURING storm state fires discoverable 5 (the pool
+  persists a stormKnockCount in its keeps). `flip` faces down for night
+  (uNight → 1); `arrows` walk the pool cursor; enter-held is a keyboard
+  dwell that plants and matures; enter-held past ceremony tier seals
+  the anemone (if the cursor sits in a hollow). the `breath` verb (the
+  candle invitation) fires discoverable 3 — `breathWarm(state, 0.35)`
+  bumps biofilm, biofilm scalar climbs, the shader reads it and blooms
+  the granite. every verb also sets writer.schedule() where state
+  changes; the closed-form clock advances at watched-speed
+  (WATCHED_SPEED = 60 ledger seconds per real second) so a patient hand
+  sees the tide cycle roll over in ~30s of real time.
+
+chrome:
+  travel: true
+  peers: true

@@ -162,6 +162,7 @@ const expectedKeys = [
   "reef",
   "root",
   "spring",
+  "tidepool",
 ];
 const validClusters = new Set(["field", "water", "nature", "mechanism"]);
 const validIcons = new Set(

@@ -1,0 +1,411 @@
+# molecules — what the bond holds, the solvent carries
+#
+# Round-trip-derived from src/components/MoleculesField.tsx (1,785 lines)
+# and src/lib/chemistry.ts + src/lib/stoichiometry.ts. The `chain`
+# invariant type: each molecule is a compound-keyed atom/bond graph with
+# honest bond multiplicity, drifting and tumbling in a solvent that
+# obeys real curated reactions with stoichiometry.
+
+key: molecules
+component_name: MoleculesField
+
+placement:
+  kind: band
+  band: molecules
+
+sigil: growth
+desc: "what the bond holds, the solvent carries"
+cluster: nature
+dark: true
+home_priority: 8
+ambient_profile: garden
+storage_key: "objetdart:molecules:v1"
+
+invariant: >
+  a solvent field carrying up to MAX_MOLECULES=18 compound molecules,
+  each a compound key (H2, O2, H2O, CO2, N2, CH4, NH3, C2H5OH, …) with
+  honest bond multiplicity and a family tint, plus a curated table of
+  real reactions with real stoichiometry (2H2 + O2 → 2H2O, N2 + O2 →
+  2NO, CH4 + 2O2 → CO2 + 2H2O …). every compound also carries one
+  behavioral tell: CO2 warms the field faintly (greenhouseGlow),
+  flammables shiver near heat, inert airs drift serene, water finds
+  water (hydrogen-bond lean). every molecule is a deterministic
+  function of a seed; every reaction fires only where the equation
+  holds and the counts truly hold.
+
+material: 2d-over-shader
+noun: molecule
+
+domain_lib:
+  name: chemistry
+  invariant_type: chain
+
+palette:
+  bg:      "#050a0e"
+  bg2:     "#0f1a24"
+  glow:    "#e7ac52"
+  accent:  "#7a9dd0"
+  accent2: "#a670c8"
+  ink:     "#e6efe8"
+
+visual_style:
+  subject: "a dark solvent field with a handful of small molecules drifting, tumbling, and reacting with real chemistry"
+  form_language: [SDF, hand-painted, ink-line, value-noise-FBM, point-cloud]
+  motion_character: drifting
+  reference_notes:
+    - "the classic organic-chemistry blackboard: skeletal formulae in white chalk on a dark field, single and double and triple bonds drawn honestly"
+    - "solvent-scale microscopy: tumbling irregular shapes in a dark viscous field, occasional lighting from a chemiluminescent reaction"
+    - "the reactable-neighbor hint reads like a dashed molecular-orbital arc between two shapes — the way a chemistry paper indicates a possible transition state, but breathing"
+  mood: "attentive and reagent-aware; the solvent is patient, the reactions decisive"
+  gesture_feedback_style: "a tap kicks the field thermally; a hold on open field condenses a molecule bond by bond (bloom on the last bond); a hold near a compatible partner charges a real reaction, and at the ceremony tier it FIRES with true stoichiometry — the equation's products replace the reactants, one exothermic energy shiver per exothermic equation, one indraw per endothermic"
+
+verbs_answered:
+  - tap
+  - dwell
+  - ceremony
+  - drag
+  - flick
+  - twist
+  - twist3
+  - tap3
+  - drag3
+  - hold3
+  - scrub
+  - drum
+  - arrows
+  - tilt
+  - shake
+  - knock
+  - flip
+
+guide:
+  title: "what the bond holds, the solvent carries"
+  scale: "the molecules band — between atoms and cells"
+  essence: >
+    a solvent of drifting, tumbling molecules with honest bond orders
+    and real curated reaction chemistry. hold two compatible ones near
+    each other through a ceremony and the equation fires with its true
+    stoichiometry — 2 H₂ near 1 O₂ genuinely yields two waters,
+    releasing an energy shiver; N₂ + O₂ draws light inward as the one
+    endothermic equation (lightning's work).
+  moves:
+    - "tap → a thermal kick, lighter molecules flying further than heavy ones"
+    - "triple-tap → condenses a molecule under the hand, or warms one already there"
+    - "five-tap → rupture — the nearest molecule dissolves"
+    - "rapid train past seven → fires a reaction with a docked partner, or a heat storm through the solvent"
+    - "hold on open field (dwell) → condenses a molecule, bond by bond"
+    - "hold a molecule near a compatible partner → charges a real reaction; at the ceremony tier it fires"
+    - "flick → throws a molecule tumbling with a doppler pair of notes"
+    - "twist → turns the lens to the structural formula, true bond multiplicity drawn honestly"
+    - "three-finger drag → convection — the whole solvent turns over"
+    - "three-finger hold → time slows to a quarter while held"
+    - "three-finger tap → tutti — every closed molecule chimes at once"
+    - "tilt (once invited) → the solvent leans gravitationally; shake → a thermal storm; knock → the nearest molecule answers; face-down → night"
+  finds:
+    - "every compound has one behavioral tell — CO₂ warms the whole field, water finds water and leans together"
+    - "a dashed arc breathes between two molecules that could react, proposed without a word of text"
+    - "the reaction fires only where the equation exists AND the counts truly hold — 2 H₂ + 1 O₂ requires actually two hydrogens in the neighbourhood, not one hydrogen and a wish"
+    - "kick response ∝ 1/√(molecular weight) — a hydrogen flies from a tap that a benzene shrugs off"
+  keeps: "the molecules you've condensed"
+
+# ——— the "alive at rest" / "make and unmake" / "haptics" contract ————————
+# Round-trip-derived from src/components/MoleculesField.tsx.
+life:
+  population:
+    depth_note: >
+      three: (1) the molecules themselves — up to MAX_MOLECULES=18,
+      each an addressable compound with its own family tint, mass
+      coefficient, and bond graph; (2) the docking pair (`hold`) that
+      forms transiently as a ceremony deepens — two molecules leaning
+      toward each other under a shared `charge` variable that is the
+      whole road to a real reaction; (3) the mote field (MOTE_COUNT=80)
+      of solvent noise moving on the convection stream. the molecules
+      persist through <LetGo>; the pair is transient, disbanded on
+      release or on ceremony-fires; the mote field is ephemeral and
+      redrawn each frame.
+    objects:
+      - noun: molecule
+        max_count: 18   # MAX_MOLECULES from src/lib/chemistry.ts
+        state_shape: "id, seed, nx, ny, morph (compound + family + bond graph + voice), built (0..bonds.length while condensing), closed, charge (0..1), rot, spin, heat, massK (∝ 1/√MW), birth, retiringAt, pushX/pushY, screen-space cache (sx, sy, sr)"
+        lifecycle: "born under dwell on open field (condense at position, built = 0 → grows one bond at a time as the hold deepens, haptics.bloom() as the last bond closes) OR born from a reaction firing (product replaces reactants at the reaction site) → lives on the solvent's convection → retires by (a) flick past the field edge, (b) rupture (5-tap dissolves the nearest), (c) reaction (its atoms fold into the product), (d) shift out when MAX_MOLECULES exceeded, or (e) <LetGo>"
+        persistence: LetGo
+        creates_via_verb: dwell
+        retires_via: [flick, tap, ceremony, LetGo]
+        implementation_hint: "inline array (mols) + persisted through the room's own storage_key as {seed, nx, ny}"
+      - noun: docking pair
+        max_count: 1   # only one hold at a time
+        state_shape: "molId, partnerId, onExisting, seeded, reacted — the pair's shared charge lives on both molecules' `.charge` field"
+        lifecycle: "born from a hold on a molecule that has a compatible partner in reach (dockPartner returns non-null) → charge climbs on `clamp01((elapsed - 900) / 1600)` while the pair leans together (push vectors keep them within (sr_a + sr_b) · 0.9) → sealed at tier ≥ 3 when the reaction actually fires (products replace reactants) → dissolves on release, on incompatibility, or on reaction"
+        persistence: ephemeral
+        creates_via_verb: dwell
+        retires_via: [ceremony, tap]
+        implementation_hint: "single `hold` object in the effect closure + shared `.charge` on the two molecules"
+      - noun: mote
+        max_count: 80   # MOTE_COUNT
+        state_shape: "x, y, vx, vy — a small drifting particle riding the solvent convection"
+        lifecycle: "born once at genesis by a seeded RNG → drifts on the convection stream (streamX, streamY + tiltLeanX, tiltLeanY) → never retires (redrawn each frame, wrapped at the field edge)"
+        persistence: ephemeral
+        creates_via_verb: tap
+        retires_via: [LetGo]
+        implementation_hint: "inline array (motes) drawn as small point-sprites; not persisted, redrawn each frame"
+  breath:
+    period_seconds: 7
+    reads:
+      - "the solvent's own breath is written into the ambient bed (`garden` profile) — not read as a shader uniform (this room's shader is thin, mostly a canvas 2D pass)"
+      - "greenhouseGlow (the CO₂ tell) rises with each CO₂ molecule and fades on its own clock, adding a faint warm haze to the whole field"
+      - "the bond-hint dashed arc between reactable neighbours breathes on a 1.4s cycle — proposed without a word of text"
+    behavior_at_rest: "molecules tumble on their own seeded phases; motes drift on the convection stream; the bond-hint arcs between reactable pairs pulse gently; if any CO₂ molecules exist, the field warms slightly (greenhouseGlow > 0)"
+  glimmer:
+    after_idle_ms: 20000
+    visual: "one molecule catches a small ripple wavefront centred on itself (haptics.ripple + a note on midiOf) — its family's tint brightens for half a breath and settles"
+  haptics_grammar:
+    tap: tap
+    dwell: bloom
+    ceremony: bloom
+    drag: ripple
+    flick: chop
+    twist: lens
+    twist3: detent
+    tap3: ripple
+    drag3: chop
+    hold3: tap
+    scrub: null
+    drum: ripple
+    knock: bloom
+    shake: storm
+    tilt: null
+    flip: null
+    arrows: tap
+  make_unmake:
+    letgo_clears_population: true
+    ceremony_is: "a ceremony hold with a docked partner FIRES the reaction — 2 H₂ + O₂ genuinely yields two waters; the equation's products replace the reactants at the reaction site, exothermic reactions release an energy shiver (wavefront + burst), and the one endothermic equation (N₂ + O₂ → 2 NO) DRAWS light inward as an indraw — lightning's work made visible"
+
+# ——— phase 7: DEPTH ————————————————————————————————————————————————————
+# molecules is the reference for laws-that-emerge-into-behavior: every
+# discoverable is a real physics fact drawn honestly, and the state
+# machine is a lattice of gesture-driven lens rungs × night × dilation.
+
+shader_layers:
+  - name: solvent dark field
+    brief: >
+      The base of the room: a dark canvas 2D fill in `bg` with a subtle
+      value-noise texture. Modulated live by `greenhouseGlow` — the CO₂
+      tell adds a warm haze in proportion to the CO₂ count. The one
+      layer that reads a compound behavioural tell directly into the
+      base field.
+    register: "bg+bg2"
+    order: background
+  - name: mote drift
+    brief: >
+      MOTE_COUNT=80 small point-sprites drifting on the convection
+      stream (streamX + tiltLeanX, streamY + tiltLeanY). Redrawn every
+      frame; wrapped at the field edge. Reads the vessel's tilt into
+      the drift direction, so the solvent visibly obeys gravity when
+      the phone is leaned.
+    register: "ink"
+    order: background
+  - name: molecule bodies + bond strands
+    brief: >
+      One per molecule (up to 18): a family-tinted SDF body plus honest
+      bond strands drawn as single, double or triple (N≡N draws three
+      parallel lines; a double bond draws two; a single one). The bond
+      multiplicity comes from `morph.bonds[].order`, not a decal. The
+      molecule's `heat` field brightens the body live; its `charge`
+      field pushes it toward its docking partner.
+    register: "accent+accent2+glow"
+    order: midground
+  - name: bond-hint dashed arcs
+    brief: >
+      Between every pair of reactable neighbours (reactionForPair
+      returns non-null AND stoichiometric counts hold), a faint dashed
+      arc breathes on a 1.4s cycle. The dash phase advances on
+      hint.alpha, which eases in over the pair's proximity time and
+      out when they separate. The one visible language for what CAN
+      happen without saying it — proposed, never labelled.
+    register: "accent"
+    order: midground
+  - name: wavefronts and indraws
+    brief: >
+      Every exothermic reaction spawns a Wavefront (x, y, born, maxR,
+      strength) — a ring expanding at a real speed. The one endothermic
+      equation (N₂ + O₂) spawns an Indraw — a ring COLLAPSING inward,
+      drawing light in. Both are drawn additively over the field.
+      Specks (a small dust of colour) burst from every reaction and
+      rupture.
+    register: "glow+accent"
+    order: foreground
+  - name: 2D overlay — structural formula lens + tutti chord + vortex
+    brief: >
+      When the twist lens is raised (lensSnapped = 1), every molecule
+      is redrawn as a skeletal structural formula — hairline bonds
+      with real skeletal letters (H, O, C, N, …) — the ONE lettered
+      surface in the room. Also draws the vortex swirl from `scrub`,
+      the stir marks from `drag`, and the tutti pulse as a whole-field
+      ring.
+    register: "ink"
+    order: overlay
+
+discoverables:
+  - trigger: "hold two H₂ molecules near an O₂ molecule until the ceremony tier fires"
+    response: "the equation resolves to 2 H₂ + O₂ → 2 H₂O with its true stoichiometry — the reactants at the site are consumed exactly, the two water products condense at the reaction site with their proper family tint, an exothermic Wavefront expands outward at signal speed, a burst of specks flies, haptics.bloom() fires, and the sound resolves to the water chord"
+    register: multiple
+  - trigger: "hold N₂ near O₂ through a ceremony (the one endothermic pair)"
+    response: "the equation N₂ + O₂ → 2 NO fires as an INDRAW — a ring COLLAPSING inward rather than expanding out; the field visibly draws light in toward the reaction site as the endothermic step pays its energy cost; a lower note fires than any exothermic reaction; two NO molecules condense at the site"
+    register: multiple
+  - trigger: "place a CO₂ molecule and wait — no gesture, just observe"
+    response: "greenhouseGlow rises in proportion to the CO₂ count; the whole field visibly warms; the solvent's dark register lifts a step toward glow; the ONE behavioural tell CO₂ has that other compounds don't"
+    register: sight
+  - trigger: "place two water molecules near each other"
+    response: "water finds water — the hydrogen-bond lean pushes them into each other gently, the pair sits closer than uncorrelated pairs would; each other compound has its own tell (flammables shiver near heat, inert airs drift serene, …)"
+    register: sight
+  - trigger: "flick a hydrogen molecule and a benzene molecule with the same speed"
+    response: "the hydrogen flies visibly farther — massK ∝ 1/√(molecular weight), so H₂ (mass 2) travels ~6× as far as C₆H₆ (mass 78); the doppler note follows suit"
+    register: multiple
+  - trigger: "twist past the lens threshold"
+    response: "the room repaints as the structural-formula lens — every molecule as a hairline skeletal formula with real skeletal letters (H, O, C, N, …) drawn honestly with bond multiplicity; the one lettered surface in the room, and the only place the site names atoms in language"
+    register: sight
+  - trigger: "rapid-tap n (past seven taps in the train) on a closed molecule with a docked partner"
+    response: "the rewrite fires — the reaction runs on the same equation table as a ceremony, but from a percussive rather than a solemn input; a whole-field bell rings; haptics.bloom() and audio.bell()"
+    register: multiple
+
+state_machine:
+  states:
+    - name: solvent/default
+      description: "the normal room; lensSnapped = 0; timeScale = 1; no night; no entrainment; molecules drift and tumble on their own"
+      visible_change: "molecules tumble, motes drift, bond-hints breathe on reactable pairs; the ambient bed is 'garden'"
+    - name: lens/structural
+      description: "twist has raised the lens (lensSnapped = 1); the room draws structural formulae instead of blob bodies"
+      visible_change: "every molecule redraws as a hairline skeletal formula with real letters and honest bond multiplicity; the two-finger tap steps back to the default"
+    - name: night
+      description: "the vessel flip event (faceDown = true) hushes the room"
+      visible_change: "the solvent darkens, the mote field dims, the bond-hint arcs dim; the audio bed hushes"
+    - name: dilated
+      description: "three fingers held; timeScaleTarget = 0.25"
+      visible_change: "molecule tumble slows, mote drift slows, the convection stream freezes; a matching detent haptic and a low tone announce the entry"
+    - name: reaction-in-flight
+      description: "a docked pair's charge has climbed to 1 and the reaction is firing over the equation clock"
+      visible_change: "the reactants scatter as specks; the products condense with their family tint; a Wavefront expands (exothermic) or an Indraw collapses (endothermic); haptics.bloom fires; a chord plays"
+    - name: entrained
+      description: "attachGestures' rhythm callback fired with stability > 0.7; entrainedBpm and entrainedUntil are set"
+      visible_change: "the vibration modes of every molecule are entrained to the tapped bpm; the sound of the room syncs to the visitor's tempo"
+    - name: convection/wind
+      description: "three fingers dragging; streamTargetX and streamTargetY are non-zero"
+      visible_change: "the whole solvent turns over; molecules and motes both ride the stream; a haptics.chop fires at the entry"
+    - name: tutti
+      description: "three-finger tap fired; every closed molecule is about to chime at once"
+      visible_change: "a whole-field ring expands; every closed molecule plays its midiOf note simultaneously; haptics.ripple fires"
+  transitions:
+    - from: solvent/default
+      to: lens/structural
+      trigger: "twist past the lens threshold; lensSnapped = 1"
+    - from: lens/structural
+      to: solvent/default
+      trigger: "two-finger tap (stepBack); lensSnapped = 0"
+    - from: "*"
+      to: night
+      trigger: "vessel flip event faceDown → true; nightAmt eases toward 1"
+    - from: "*"
+      to: dilated
+      trigger: "three-finger hold enter; timeScaleTarget = 0.25"
+    - from: dilated
+      to: "*"
+      trigger: "three-finger hold release; timeScaleTarget = 1"
+    - from: "*"
+      to: reaction-in-flight
+      trigger: "a docked pair's charge crosses 1 (ceremony tier ≥ 3) OR a rapid-tap n hits on a closed molecule with a docked partner"
+    - from: reaction-in-flight
+      to: solvent/default
+      trigger: "the reaction has fired — products placed, reactants scattered, wavefront/indraw dispatched"
+    - from: "*"
+      to: entrained
+      trigger: "rhythm callback stability > 0.7; entrainedBpm ← bpm, entrainedUntil = now + 8000"
+    - from: entrained
+      to: "*"
+      trigger: "now > entrainedUntil"
+    - from: "*"
+      to: convection/wind
+      trigger: "three-finger drag with |vx|² + |vy|² > 0.25; streamTargetX ← e.vx · 1.4, streamTargetY ← e.vy · 1.4"
+    - from: "*"
+      to: tutti
+      trigger: "three-finger tap (fingers === 3); every closed molecule.plays chord at once"
+
+# ——— the three LLM slots ————————————————————————————————————————————————
+# /molecules was hand-authored; these three intents describe what a
+# compiler-driven run would produce given the same brief.
+
+shader_intent: >
+  paint a dark solvent field on canvas 2D as the base — value noise on
+  `bg`, a warm-haze offset per CO₂ molecule (`greenhouseGlow` — the
+  compound's behavioural tell). Draw MOTE_COUNT=80 point-sprites
+  drifting on the convection stream (streamX + tiltLeanX, streamY +
+  tiltLeanY), redrawn each frame and wrapped at the field edge. Draw
+  each of up to MAX_MOLECULES=18 molecules as a family-tinted SDF body
+  with honest bond strands — N≡N draws three parallel lines, C=O draws
+  two, C-C draws one — read from `morph.bonds[].order` rather than any
+  decal. Between every reactable pair (reactionForPair returns
+  non-null AND stoichiometric counts hold), breathe a dashed arc as a
+  bond-hint on a 1.4s cycle. Every reaction spawns a Wavefront (an
+  exothermic ring expanding outward at a real speed) or an Indraw (the
+  one endothermic equation's ring COLLAPSING inward, drawing light in
+  — lightning's work). When the twist lens is up (lensSnapped = 1),
+  redraw every molecule as a hairline skeletal formula with real
+  skeletal letters — the ONE lettered surface in the room. All done
+  on a 2D canvas — the shader load is deliberately thin because the
+  visual density lives in the population, the reactions, and the
+  discoverables, not in the shader body. Palette registers: `bg` dark
+  solvent, `bg2` the mote drift, `glow` the exothermic wavefronts,
+  `accent` the compound tints (families 0–3), `accent2` the compound
+  tints (families 4–7), `ink` the lens strokes.
+
+domain_intent: >
+  write `src/lib/chemistry.ts` around a curated compound table
+  `COMPOUNDS: readonly Compound[]` (H₂, O₂, H₂O, CO₂, N₂, CH₄, NH₃,
+  C₂H₅OH, C₆H₆, …) each carrying atom counts, honest bonds with
+  multiplicity, a family index, a voice offset, and a molecular
+  weight. export `MAX_MOLECULES = 18`, `MOLECULE_FAMILIES` (the
+  family-tint palette), `molecularWeight(compound)`, `hashSeed`,
+  `moleculeFromSeed(seed) → MoleculeMorph`, `compoundByKey`,
+  `compoundFromSeed`, and `settlePopulation` (the ODE that stabilises
+  drift, tumble, and thermal decay). alongside it, `src/lib/
+  stoichiometry.ts` carries the curated equation table
+  `REACTIONS: readonly Reaction[]` — every reaction is a real
+  chemistry equation with true stoichiometry (2 H₂ + O₂ → 2 H₂O; CH₄
+  + 2 O₂ → CO₂ + 2 H₂O; N₂ + O₂ → 2 NO — the one endothermic;
+  NH₃ + HCl → NH₄Cl; …). export `reactionForPair(a, b) → Reaction |
+  null` and `resolveReaction(reaction, neighborhood) → Products |
+  null` — the pair must have an equation AND the counts must truly
+  hold, so 2 H₂ + O₂ requires TWO hydrogens near ONE oxygen, not one
+  and a wish. export `reactionProductSeed` — the deterministic seed
+  for a reaction's product molecule, so the same reactants in the
+  same neighbourhood always yield the same product with the same
+  behavioural tell. no DOM, no audio, no `Math.random`, no `Date.now`;
+  all timing constants and the tap-train tiers come from
+  `gesture/core.ts`.
+
+verb_intent: >
+  every handler reads `mols`, the effect-closure state. `tap` (one-
+  finger) with tapTrainTier — 1 fires `thermalKick(x, y, amp)`, 3
+  condenses a molecule (or warms one already there — heat += 0.55 +
+  deepen · 0.5), 5 ruptures the nearest, n rewrites via a docked
+  reaction or a heat storm. two-finger tap steps back (lens/structural
+  → solvent/default). three-finger tap is tutti. `dwell` (`hold` in
+  attachGestures) on open field seeds condense; on an existing
+  molecule with a compatible partner, charges the pair; at tier ≥ 3
+  fires the reaction via `react(m, partner)` which reads the
+  equation from `stoichiometry.ts`. `drag` (one-finger) writes a
+  solvent stir (push vectors on nearby molecules); `drag3` writes the
+  convection stream (streamTargetX, streamTargetY). `flick` throws a
+  molecule with massK-scaled speed and a doppler note. `twist` raises
+  the structural-formula lens; `twist3` runs the season (writes
+  seasonRef). `hold3` writes timeScaleTarget = 0.25. `scrub` writes
+  a vortex; `drum` beats the wave field between two zones. `rhythm`
+  entrains the vibration modes. the vessel: `tilt` writes tiltLeanX,
+  tiltLeanY (the solvent's gravitational lean); `shake` writes
+  thermalStorm (a thermal spike); `knock` rings the nearest molecule
+  with its family chord; `flip` writes night. `arrows` walk a
+  keyboard cursor. all thresholds from `gesture/core.ts`; all
+  reactions from `stoichiometry.ts`.
+
+chrome:
+  travel: true
+  peers: true
