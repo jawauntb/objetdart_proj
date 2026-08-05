@@ -20,6 +20,7 @@ type CoreSiteIconKey =
   | "beyond"
   | "birds"
   | "cells"
+  | "city"
   | "tissue"
   | "coast"
   | "organics"
@@ -313,6 +314,21 @@ const CORE_SITE_ICON_VISUALS = {
     accent: "#f8d879",
     accent2: "#3d7ba7",
     ink: "#fff2bf",
+  },
+  city: {
+    // A small settlement, identity by causal role: home → store → event → tree,
+    // people walking their needs across the plots that answer them.
+    title: "City",
+    description: "a small settlement whose parts are what they do",
+    path: "/city",
+    shortName: "city",
+    kind: "atlas",
+    bg: "#0e0f13",
+    bg2: "#1a1a1f",
+    glow: "#e8bb81",
+    accent: "#c8732a",
+    accent2: "#4a916a",
+    ink: "#f4eede",
   },
   comb: {
     title: "Comb",

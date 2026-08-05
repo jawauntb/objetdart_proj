@@ -52,6 +52,7 @@ function manifestRoute(key: string): SiteRouteEntry {
 
 export const SITE_ROUTES: SiteRouteEntry[] = [
   { key: "atlas",       icon: "atlas",    href: "/atlas/origin",                    desc: "the living map",                 cluster: "field",     dark: true, homePriority: 10 },
+  { key: "city",        icon: "atlas",    href: "/city",                             desc: "a settlement · homes · stores · events", cluster: "field", dark: true },
   { key: "coast",       icon: "waves",    href: "/coast",                             desc: "the beach · land meets sea",    cluster: "water",     dark: true, homePriority: 7 },
   { key: "ocean",       icon: "waves",    href: "/ocean",                             desc: "the deep · dive down",          cluster: "water",     dark: true, homePriority: 7 },
   { key: "tide",        icon: "tide",     href: "/tide",                              desc: "move the moon",                cluster: "water",     dark: true, homePriority: 9 },

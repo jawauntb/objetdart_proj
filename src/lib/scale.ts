@@ -903,13 +903,15 @@ export const LATERAL_ROUTE_BANDS: { prefix: string; band: ScaleBandId }[] = [
   { prefix: "/circularity", band: "coast" },
   { prefix: "/pretext", band: "coast" },
   { prefix: "/aphros", band: "coast" },
+  { prefix: "/reef", band: "coast" },
   // peak weather
   { prefix: "/clouds", band: "olympus" },
   { prefix: "/storm", band: "olympus" },
   // meadow under the flock
   { prefix: "/growth", band: "flowers" },
-  // hearth
+  // hearth — the ground and what people made on it
   { prefix: "/fire", band: "earth" },
+  { prefix: "/city", band: "atlas" },
   // night sky instruments
   { prefix: "/comb", band: "stars" },
   { prefix: "/beam", band: "stars" },

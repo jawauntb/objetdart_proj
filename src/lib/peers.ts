@@ -114,6 +114,10 @@ const CORE_PEER_CIRCLES: PeerCircle[] = [
       { key: "earth", href: "/earth", label: "the earth", band: "earth" },
       { key: "fire", href: "/fire", label: "fire", band: "earth" },
       { key: "atlas", href: "/atlas/origin", label: "the atlas", band: "atlas" },
+      // A city is a settlement on the atlas — same ground at a different level
+      // of description: dwellings, stores, and events instead of coastlines.
+      // Belongs in the hearth ring beside its container.
+      { key: "city", href: "/city", label: "a city", band: "atlas" },
     ],
   },
   {
