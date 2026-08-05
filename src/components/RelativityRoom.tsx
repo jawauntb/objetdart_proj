@@ -63,9 +63,13 @@ import {
   SOFTENING,
   accelAt,
   geodesicStep,
+  mergeBodies,
+  ringdownEnvelope,
+  stepMutualGravity,
   timeDilation,
   wellDepth,
   type MassPoint,
+  type OrbitBody,
   type Ray,
 } from "@/lib/manifold-field";
 import {
@@ -109,6 +113,13 @@ const RING_TAU = 1.4; // seconds of proper time per accreted beacon ring
 const RINGS_SHOWN = 12; // rings drawn before the oldest merge inward
 const TDOT_TAU = 0.12; // proper-time tick spacing on lens worldlines
 const REUNION_MS = 4000; // how long the twins compare rings side by side
+/** Physics BETWEEN the masses: mutual gravity, tuned gentler than /manifold
+ *  since this room's field is meant to be watched up close. */
+const MUTUAL_G = 1000;
+const MASS_SPEED_CAP = 180;
+const MERGE_UNIT = 9;
+const STAGE_COMPACTION: readonly number[] = [1, 0.68, 0.42];
+const STAGE_MASS_GAIN: readonly number[] = [1, 1.7, 2.1];
 
 type Mass = {
   id: string;
@@ -120,6 +131,11 @@ type Mass = {
   settled: boolean;
   charge: number;
   evapAt: number;
+  /** px/s — a settled mass pulls its neighbors, and is pulled in turn. */
+  vx: number;
+  vy: number;
+  /** 0 star, 1 neutron star, 2 black hole — double-tap collapses a step. */
+  stage: 0 | 1 | 2;
 };
 
 type RayState = {
@@ -666,7 +682,7 @@ export default function RelativityRoom() {
       if (pulses.length > MAX_PULSES) pulses.shift();
     };
 
-    const placeMass = (x: number, y: number, settled: boolean): Mass => {
+    const placeMass = (x: number, y: number, settled: boolean, vx = 0, vy = 0): Mass => {
       const m: Mass = {
         id: `rm-${massSerial++}`,
         nx: clamp(x / width, 0.05, 0.95),
@@ -677,6 +693,9 @@ export default function RelativityRoom() {
         settled,
         charge: 0,
         evapAt: 0,
+        vx,
+        vy,
+        stage: 0,
       };
       masses.push(m);
       const alive = masses.filter((q) => !q.evapAt);
@@ -715,6 +734,148 @@ export default function RelativityRoom() {
     };
 
     const syncStanding = () => setStanding(masses.some((m) => !m.evapAt));
+
+    // ————— physics BETWEEN the masses: mutual gravity, merger, ringdown —————
+    const playRingdown = (freqHz: number, strength: number) => {
+      const damping = 2.1;
+      let k = 0;
+      const beats = 6;
+      const step = () => {
+        if (k >= beats) return;
+        const env = Math.abs(ringdownEnvelope(k * 0.16, freqHz, damping));
+        if (env > 0.04) note(Math.max(14, Math.round(20 + strength * 8 - k * 0.7)), 260);
+        k += 1;
+        window.setTimeout(step, 150);
+      };
+      step();
+    };
+
+    /** Two masses close their gap and become one — mass and momentum exactly
+     *  conserved, landing in sight, sound and haptics at once. */
+    const mergeMasses = (a: Mass, b: Mass, into: OrbitBody) => {
+      a.m = into.m;
+      a.nx = clamp01(into.x / width);
+      a.ny = clamp01(into.y / height);
+      a.vx = into.vx;
+      a.vy = into.vy;
+      a.stage = Math.max(a.stage, b.stage) as 0 | 1 | 2;
+      a.settled = true;
+      a.growth = 1;
+      a.charge = 0;
+      const bi = masses.indexOf(b);
+      if (bi >= 0) masses.splice(bi, 1);
+      firePulse(a.nx * width, a.ny * height, 1.4 + into.m * 0.3);
+      try { audio().bell(); } catch { /* noop */ }
+      try { haptics.storm(); } catch { /* noop */ }
+      playRingdown(22 + Math.round(clamp01(into.m / 3) * 10), clamp01(into.m / 3));
+      staticRaysStale = true;
+      useField.getState().recordTape("sigil", 0.9, "relativity/merge");
+      syncStanding();
+    };
+
+    /** One step of mutual gravity among every settled mass, then a merge
+     *  pass — runs every frame, gestured or not. */
+    const stepMassPhysics = (dt: number) => {
+      const alive = masses.filter((m) => !m.evapAt && m.settled);
+      if (alive.length < 2) return;
+      if (!(dt > 0)) return;
+      const bodies: OrbitBody[] = alive.map((m) => ({ x: m.nx * width, y: m.ny * height, m: m.m, vx: m.vx, vy: m.vy }));
+      const stepped = stepMutualGravity(bodies, dt, MUTUAL_G, SOFTENING * 1.5, MASS_SPEED_CAP);
+      stepped.forEach((b, i) => {
+        const m = alive[i];
+        m.nx = clamp(b.x / width, 0.03, 0.97);
+        m.ny = clamp(b.y / height, 0.05, 0.95);
+        m.vx = b.vx;
+        m.vy = b.vy;
+      });
+      const { merges } = mergeBodies(stepped, MERGE_UNIT);
+      if (merges.length === 0) return;
+      const findIdx = (body: OrbitBody) => stepped.findIndex((s) => s.x === body.x && s.y === body.y && s.m === body.m);
+      for (const ev of merges) {
+        const ia = findIdx(ev.a);
+        const ib = findIdx(ev.b);
+        if (ia < 0 || ib < 0 || ia === ib) continue;
+        mergeMasses(alive[ia], alive[ib], ev.into);
+      }
+    };
+
+    /** Double-tap on a mass: collapse it one step denser — star, neutron
+     *  star, black hole. */
+    const collapseStage = (m: Mass) => {
+      if (m.evapAt) return;
+      if (m.stage >= 2) {
+        firePulse(m.nx * width, m.ny * height, 0.6);
+        note(16, 260);
+        try { haptics.tap(); } catch { /* noop */ }
+        return;
+      }
+      const next = (m.stage + 1) as 0 | 1 | 2;
+      m.m *= STAGE_MASS_GAIN[next] / STAGE_MASS_GAIN[m.stage];
+      m.stage = next;
+      m.settled = true;
+      m.growth = 1;
+      firePulse(m.nx * width, m.ny * height, 0.9 + next * 0.5);
+      note(next === 1 ? 26 : 15, 520);
+      try { haptics.roll(); } catch { /* noop */ }
+      staticRaysStale = true;
+      useField.getState().recordTape("sigil", 0.75, next === 1 ? "relativity/neutron-star" : "relativity/black-hole");
+    };
+
+    /** Double-tap on empty fabric: the next rarity in a fixed, deterministic
+     *  cycle — a passing body, a gravitational-wave burst, or a bent ray. */
+    let emptySummonIdx = 0;
+    const summonEmpty = (x: number, y: number, intensity: number) => {
+      const kinds = ["passing-body", "gravitational-wave", "bent-ray"] as const;
+      const kind = kinds[emptySummonIdx % kinds.length];
+      emptySummonIdx += 1;
+      if (kind === "passing-body") {
+        const edge = Math.floor(hash01(massSerial * 7 + 3) * 4);
+        let sx = x;
+        let sy = y;
+        if (edge === 0) sx = -30;
+        else if (edge === 1) sx = width + 30;
+        else if (edge === 2) sy = -30;
+        else sy = height + 30;
+        const toward = Math.atan2(y - sy, x - sx) + (hash01(massSerial * 13 + 1) - 0.5) * 0.5;
+        const speed = 50 + intensity * 55;
+        placeMass(sx, sy, true, Math.cos(toward) * speed, Math.sin(toward) * speed);
+        return;
+      }
+      if (kind === "gravitational-wave") {
+        firePulse(x, y, 0.7 + intensity * 0.6);
+        window.setTimeout(() => firePulse(x, y, 0.5 + intensity * 0.4), 90);
+        note(30, 900);
+        try { haptics.ripple(0.5); } catch { /* noop */ }
+        return;
+      }
+      const angle = hash01(massSerial * 19 + 7) * Math.PI * 2;
+      rays.push({ x, y, vx: Math.cos(angle) * c, vy: Math.sin(angle) * c, trail: [] });
+      if (rays.length > RAY_COUNT * 2) rays.shift();
+      note(44, 200);
+      try { haptics.tap(); } catch { /* noop */ }
+    };
+
+    /** Triple-tap: a binary inspiral and merger, run to completion in a few
+     *  seconds, ringdown included. */
+    const forceInspiral = (x: number, y: number): boolean => {
+      const alive = masses.filter((m) => !m.evapAt && m.settled);
+      if (alive.length < 2) return false;
+      alive.sort((a, b) => Math.hypot(a.nx * width - x, a.ny * height - y) - Math.hypot(b.nx * width - x, b.ny * height - y));
+      const a = alive[0];
+      const b = alive[1];
+      const dx = b.nx * width - a.nx * width;
+      const dy = b.ny * height - a.ny * height;
+      const d = Math.hypot(dx, dy) || 1;
+      const speed = 65 + Math.min(d, 260) * 0.4;
+      a.vx += (-dy / d) * speed * (a.m > b.m ? 0.4 : 1);
+      a.vy += (dx / d) * speed * (a.m > b.m ? 0.4 : 1);
+      b.vx += (dy / d) * speed * (b.m > a.m ? 0.4 : 1);
+      b.vy += (-dx / d) * speed * (b.m > a.m ? 0.4 : 1);
+      note(24, 500);
+      try { haptics.ripple(0.6); } catch { /* noop */ }
+      useField.getState().recordTape("sigil", 0.85, "relativity/inspiral");
+      return true;
+    };
 
     // the whole-room parting (LetGo, §8c): every mass evaporates oldest-
     // first along the existing collapse path — an exhale, never a blink.

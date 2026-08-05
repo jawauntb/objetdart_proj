@@ -44,6 +44,9 @@ const {
   settlePopulation,
   vacuumPairsAt,
   hashSeed,
+  recombineSeeds,
+  reconfineSeeds,
+  RECONNECT_REACH,
 } = loadTsModule("src/lib/quarks.ts");
 
 const SEEDS = Array.from({ length: 200 }, (_, i) => hashSeed(i + 1, 47, 5));
@@ -287,6 +290,59 @@ for (const seed of SEEDS) {
 
   const trace = (fs) => JSON.stringify(Array.from({ length: 100 }, (_, i) => vacuumPairsAt(i, fs)));
   assert.notEqual(trace(fieldSeed + 1), trace(fieldSeed), "a different field seethes differently");
+}
+
+// — COLOUR RECONNECTION: two hadrons brought close trade constituents and
+//   each leaves with a partner it did not arrive with. The bug this catches
+//   is the obvious cheap implementation — hand a quark across and let the
+//   kinds drift, which strands a two-quark remnant out of a triplet, i.e.
+//   something that is not a colour singlet and therefore is not a thing.
+{
+  assert.ok(RECONNECT_REACH > 0 && RECONNECT_REACH < 1, "the reach is a fraction of the field");
+  for (let i = 0; i < 200; i++) {
+    const a = hashSeed(i, 0x11);
+    const b = hashSeed(i, 0x22);
+    const [c1, c2] = recombineSeeds(a, b);
+    const ka = hadronFromSeed(a).kind;
+    const kb = hadronFromSeed(b).kind;
+    const kinds = [hadronFromSeed(c1).kind, hadronFromSeed(c2).kind].sort();
+    assert.deepEqual(kinds, [ka, kb].sort(), "reconnection preserves the kinds as a multiset");
+    assert.equal(
+      constituentCount(hadronFromSeed(c1)) + constituentCount(hadronFromSeed(c2)),
+      constituentCount(hadronFromSeed(a)) + constituentCount(hadronFromSeed(b)),
+      "no quark is created or destroyed by a reconnection",
+    );
+    assert.ok(isWhite(hadronFromSeed(c1)) && isWhite(hadronFromSeed(c2)), "both children are white");
+    assert.ok(c1 !== a && c1 !== b && c2 !== a && c2 !== b, "a third thing walks away, never a parent");
+    assert.notEqual(c1, c2, "and the two children are two things");
+    const swapped = recombineSeeds(b, a);
+    assert.deepEqual([...swapped].sort(), [c1, c2].sort(), "the same event seen from either side");
+  }
+}
+
+// — DECONFINEMENT and the reconfinement that always follows. A plasma may
+//   re-sort quarks; it may never leave one alone, and it may never quietly
+//   lose or invent one. The failing case is an even quark count freezing out
+//   a triplet and stranding a single quark with nothing to bind to.
+{
+  for (let n = 1; n <= 9; n++) {
+    for (let s = 0; s < 40; s++) {
+      const seeds = [];
+      for (let i = 0; i < n; i++) seeds.push(hashSeed(n, s, i));
+      const before = seeds.reduce((t, q) => t + constituentCount(hadronFromSeed(q)), 0);
+      const out = reconfineSeeds(seeds, s);
+      const after = out.reduce((t, q) => t + constituentCount(hadronFromSeed(q)), 0);
+      assert.equal(after, before, `the plasma conserves quarks (n=${n}, seed=${s})`);
+      assert.ok(out.length > 0, "something always freezes back out");
+      for (const q of out) {
+        const m = hadronFromSeed(q);
+        assert.ok(constituentCount(m) >= 2, "nothing freezes out alone");
+        assert.ok(isWhite(m), "everything that freezes out is white");
+      }
+      assert.deepEqual(reconfineSeeds(seeds, s), out, "freeze-out is deterministic");
+    }
+  }
+  assert.deepEqual(reconfineSeeds([], 3), [], "an empty plasma freezes out nothing");
 }
 
 console.log(

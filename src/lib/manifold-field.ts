@@ -230,6 +230,126 @@ export function seasonGeodesicStep(
 }
 
 // ————————————————————————————————————————————————————————————————————
+// Bodies that move — the physics BETWEEN the masses, not just the field
+// they leave behind. /manifold and /relativity plant masses that used to
+// sit wherever they were dropped; a body here also carries a velocity, so
+// the same softened law that bends light and wells the fabric (accelAt)
+// can be turned on the masses themselves: they pull each other into orbit,
+// spiral in, and — when two centers close inside their combined merge
+// radius — coalesce into one body that is neither parent, its mass their
+// exact sum and its momentum their exact sum, never a shortcut through
+// either.
+// ————————————————————————————————————————————————————————————————————
+
+export type OrbitBody = MassPoint & { vx: number; vy: number };
+
+/**
+ * One leapfrog-ish step of mutual Newtonian gravity among the bodies
+ * themselves (every pair, softened exactly like accelAt). Speed is capped
+ * so a close pass can't mint an unplayable escape velocity; a rest pair at
+ * the softening radius accelerates toward each other, never away — the one
+ * property the room's "attract" law promises and a bug could quietly flip.
+ */
+export function stepMutualGravity(
+  bodies: readonly OrbitBody[],
+  dtSec: number,
+  g: number,
+  soft: number = SOFTENING,
+  maxSpeed: number = Infinity,
+): OrbitBody[] {
+  const n = bodies.length;
+  const ax = new Array<number>(n).fill(0);
+  const ay = new Array<number>(n).fill(0);
+  const s2 = soft * soft;
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      const a = bodies[i];
+      const b = bodies[j];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const d2 = dx * dx + dy * dy + s2;
+      const inv = g / (d2 * Math.sqrt(d2));
+      ax[i] += dx * inv * b.m;
+      ay[i] += dy * inv * b.m;
+      ax[j] -= dx * inv * a.m;
+      ay[j] -= dy * inv * a.m;
+    }
+  }
+  return bodies.map((b, i) => {
+    let vx = b.vx + ax[i] * dtSec;
+    let vy = b.vy + ay[i] * dtSec;
+    const sp = Math.sqrt(vx * vx + vy * vy);
+    if (sp > maxSpeed && sp > 0) {
+      vx *= maxSpeed / sp;
+      vy *= maxSpeed / sp;
+    }
+    return { x: b.x + vx * dtSec, y: b.y + vy * dtSec, vx, vy, m: b.m };
+  });
+}
+
+/** Contact radius for a body of mass m: heavier bodies merge from further
+ *  apart, so a merge reads as two real horizons touching, not a coincidence
+ *  of the softening length. */
+export function mergeRadiusFor(m: number, unit: number = 6): number {
+  return unit * Math.sqrt(Math.max(0, m));
+}
+
+export type MergeEvent = { a: OrbitBody; b: OrbitBody; into: OrbitBody };
+
+/**
+ * Coalesce every pair of bodies whose centers sit inside their combined
+ * contact radius into one body: mass is the exact sum (never a cap, never
+ * an average), position and velocity are the mass-weighted mean — the
+ * momentum-conserving merge — so the third body is provably neither
+ * parent alone and nothing was lost. Handles chains (A absorbs B, the
+ * result immediately close enough to C) in one pass by re-checking the
+ * merged body against the rest of the list.
+ */
+export function mergeBodies(
+  bodies: readonly OrbitBody[],
+  unit: number = 6,
+): { bodies: OrbitBody[]; merges: MergeEvent[] } {
+  const alive = bodies.map((b) => ({ ...b }));
+  const merges: MergeEvent[] = [];
+  for (let i = 0; i < alive.length; i++) {
+    for (let j = alive.length - 1; j > i; j--) {
+      const a = alive[i];
+      const b = alive[j];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const d = Math.sqrt(dx * dx + dy * dy);
+      const rMerge = mergeRadiusFor(a.m, unit) + mergeRadiusFor(b.m, unit);
+      if (d > rMerge) continue;
+      const m = a.m + b.m;
+      const into: OrbitBody = {
+        m,
+        x: (a.x * a.m + b.x * b.m) / m,
+        y: (a.y * a.m + b.y * b.m) / m,
+        vx: (a.vx * a.m + b.vx * b.m) / m,
+        vy: (a.vy * a.m + b.vy * b.m) / m,
+      };
+      merges.push({ a, b, into });
+      alive.splice(j, 1);
+      alive[i] = into;
+    }
+  }
+  return { bodies: alive, merges };
+}
+
+/**
+ * A quasi-normal-mode ringdown: a damped sinusoid, amplitude 1 at t=0,
+ * falling toward 0 and never negative-then-positive-forever — the shape a
+ * merged pair's remnant actually rings with. Strictly bounded by the decay
+ * envelope e^(-damping·t) at every t, and strictly quieter at any later
+ * time than an earlier one at the same phase, which is what makes a bug
+ * that flips the sign of the decay term visible to a test.
+ */
+export function ringdownEnvelope(t: number, freqHz: number, dampingPerSec: number): number {
+  if (t < 0) return 0;
+  return Math.exp(-Math.max(0, dampingPerSec) * t) * Math.cos(2 * Math.PI * freqHz * t);
+}
+
+// ————————————————————————————————————————————————————————————————————
 // The cosmic web: the fabric's grain is the large-scale structure of the
 // universe — luminous filaments meeting at nodes, dark voids between.
 // Everything here is a deterministic function of one integer seed.

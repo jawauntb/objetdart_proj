@@ -45,6 +45,10 @@ const {
   FOLD_U_MAX,
   RIM_STEER_START,
   rimSteerRay,
+  stepMutualGravity,
+  mergeRadiusFor,
+  mergeBodies,
+  ringdownEnvelope,
 } = loadTsModule("src/lib/manifold-field.ts");
 
 const C = 600; // px/s, arbitrary but fixed
@@ -380,6 +384,119 @@ function runRay(masses, ray, steps, dt = 1 / 240) {
   }
 }
 
+// ————— mutual gravity, merging, ringdown: physics BETWEEN the masses —————
+{
+  const G = 4e4;
+
+  // two bodies at rest fall toward each other, not apart — the sign a
+  // flipped subtraction would get backwards
+  {
+    const a = { x: 100, y: 100, m: 1, vx: 0, vy: 0 };
+    const b = { x: 260, y: 100, m: 1, vx: 0, vy: 0 };
+    const next = stepMutualGravity([a, b], 1 / 60, G);
+    assert.ok(next[0].vx > 0, "the left body accelerates toward its partner");
+    assert.ok(next[1].vx < 0, "the right body accelerates toward its partner, not away");
+    assert.ok(
+      Math.abs(next[0].m * next[0].vx + next[1].m * next[1].vx) < 1e-9,
+      "momentum starts and stays at zero for a symmetric pair",
+    );
+  }
+
+  // the speed cap actually caps: a devastating close pass still comes out
+  // under maxSpeed, never silently exceeding it
+  {
+    const a = { x: 100, y: 100, m: 50, vx: 0, vy: 0 };
+    const b = { x: 101, y: 100, m: 50, vx: 0, vy: 0 };
+    const capped = stepMutualGravity([a, b], 1 / 30, G, SOFTENING, 40);
+    for (const body of capped) {
+      assert.ok(Math.hypot(body.vx, body.vy) <= 40 + 1e-6, "mutual gravity honors the speed cap");
+    }
+  }
+
+  // an orbiting pair with a real tangential kick stays roughly the same
+  // distance apart over many short steps rather than collapsing or fleeing
+  // — the qualitative signature of an orbit, not a straight-line fall
+  {
+    // near-circular speed at r=220 for a 400-mass primary: v = sqrt(g*M/r)
+    let bodies = [
+      { x: 0, y: 0, m: 400, vx: 0, vy: 0 },
+      { x: 220, y: 0, m: 1, vx: 0, vy: 40 },
+    ];
+    let minD = Infinity;
+    let maxD = 0;
+    for (let s = 0; s < 300; s++) {
+      bodies = stepMutualGravity(bodies, 1 / 60, 900, SOFTENING, 2000);
+      const d = Math.hypot(bodies[1].x - bodies[0].x, bodies[1].y - bodies[0].y);
+      minD = Math.min(minD, d);
+      maxD = Math.max(maxD, d);
+    }
+    assert.ok(minD > 90, "the light body does not plunge straight into the heavy one");
+    assert.ok(maxD < 500, "the light body does not fly off to infinity either");
+  }
+
+  // mergeRadiusFor grows with mass: a heavier body reaches contact from
+  // further away
+  {
+    assert.ok(mergeRadiusFor(4) > mergeRadiusFor(1), "heavier bodies have a wider contact radius");
+    assert.equal(mergeRadiusFor(0), 0, "a massless body has no contact radius");
+  }
+
+  // a merge conserves mass exactly and momentum exactly, and the result is
+  // neither parent's mass or velocity alone
+  {
+    const a = { x: 100, y: 100, m: 2, vx: 10, vy: 0 };
+    const b = { x: 104, y: 100, m: 6, vx: -2, vy: 3 };
+    const { bodies, merges } = mergeBodies([a, b], 6);
+    assert.equal(bodies.length, 1, "two touching bodies merge into one");
+    assert.equal(merges.length, 1, "exactly one merge event is reported");
+    const into = merges[0].into;
+    assert.equal(into.m, 8, "merged mass is the exact sum of its parents");
+    const px = a.m * a.vx + b.m * b.vx;
+    const py = a.m * a.vy + b.m * b.vy;
+    assert.ok(Math.abs(into.vx * into.m - px) < 1e-9, "merged momentum matches the sum, x");
+    assert.ok(Math.abs(into.vy * into.m - py) < 1e-9, "merged momentum matches the sum, y");
+    assert.notEqual(into.m, a.m);
+    assert.notEqual(into.m, b.m);
+  }
+
+  // bodies far apart never merge, however long the mass
+  {
+    const a = { x: 0, y: 0, m: 1000, vx: 0, vy: 0 };
+    const b = { x: 5000, y: 0, m: 1000, vx: 0, vy: 0 };
+    const { bodies, merges } = mergeBodies([a, b], 6);
+    assert.equal(bodies.length, 2, "distant bodies stay distant, however massive");
+    assert.equal(merges.length, 0);
+  }
+
+  // a three-body chain merges in one pass: A+B touch, and the combined
+  // body then also touches C
+  {
+    const a = { x: 0, y: 0, m: 2, vx: 0, vy: 0 };
+    const b = { x: 8, y: 0, m: 2, vx: 0, vy: 0 };
+    const c = { x: 16, y: 0, m: 2, vx: 0, vy: 0 };
+    const { bodies, merges } = mergeBodies([a, b, c], 6);
+    assert.equal(bodies.length, 1, "a chain of contact merges to one body in one pass");
+    assert.equal(bodies[0].m, 6, "the chain's merged mass is the full sum");
+    assert.equal(merges.length, 2, "a three-body chain reports two merge events");
+  }
+
+  // the ringdown envelope decays: bounded by e^-damping*t at every sample,
+  // and strictly quieter one full period later at the same damping
+  {
+    assert.equal(ringdownEnvelope(0, 5, 2), 1, "the ringdown starts at full amplitude");
+    for (const t of [0, 0.05, 0.1, 0.3, 0.7, 1.4]) {
+      const env = ringdownEnvelope(t, 5, 2);
+      assert.ok(Math.abs(env) <= Math.exp(-2 * t) + 1e-9, "the ringdown never exceeds its decay envelope");
+    }
+    const period = 1 / 5;
+    assert.ok(
+      Math.abs(ringdownEnvelope(period, 5, 2)) < Math.abs(ringdownEnvelope(0, 5, 2)),
+      "one period later, the same phase rings quieter — the decay is real, not cosmetic",
+    );
+    assert.equal(ringdownEnvelope(-1, 5, 2), 0, "no ringdown before the merger that causes it");
+  }
+}
+
 console.log(
-  "manifold field ok: straight when flat, bent by mass, bounded, one speed of light — and now a seeded web, a breathing a(t), held neighborhoods, a closed fold, four seasons of the law under one speed limit",
+  "manifold field ok: straight when flat, bent by mass, bounded, one speed of light — and now a seeded web, a breathing a(t), held neighborhoods, a closed fold, four seasons of the law under one speed limit, mutual gravity that orbits and merges, and a ringdown that actually decays",
 );

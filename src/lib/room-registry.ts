@@ -183,6 +183,39 @@ export type RoomEntry = {
   /** Why an animating room needs no `createFrameGovernor`. */
   governor?: string;
   /**
+   * Why this material has no tap-train ladder. `gesture/core.ts` publishes the
+   * rungs — 1 / 3 / 5 / n — and `scripts/test-room-liveness.mjs` requires every
+   * interactive room to read `e.count` and to branch at a rung above 3, because
+   * an audit found forty-six rooms where a double tap did exactly what a single
+   * tap did. A sentence here says what the material cannot express at the top
+   * of the ladder; silence is not an answer.
+   */
+  taps?: string;
+  /**
+   * **The force between the objects, and what a merge or reaction produces.**
+   * Required of every room whose material is countable (`creates` non-null).
+   *
+   * This is the one property no regex can read honestly, and the one that
+   * separates /stars — where a black hole consumes the star that drifts near
+   * it and two holes inspiral into a third thing that is neither parent —
+   * from a field of decals with a particle count. So the room states it in a
+   * sentence a reviewer can falsify by playing it: which law acts between the
+   * objects (gravity at astronomical scale, charge and bonding at molecular,
+   * adhesion and pressure at cellular, flow and drag in fluids), and what
+   * comes out when two of them meet.
+   *
+   * "they repel a little" is not an answer. Name the product.
+   */
+  interacts?: string;
+  /**
+   * Why a `Math.random()` call in this room is not a broken seed — an audio
+   * noise buffer filled once, a DOM id. Everything rendered is a deterministic
+   * function of a small state vector; that law had no test until
+   * `test:room-liveness`, and twenty-six room components were rolling live.
+   * The sentence is a licence for the calls it names, not for the file.
+   */
+  nondeterminism?: string;
+  /**
    * Why a constant whose *name* reads like a gesture tier is not one. The
    * contract test flags any `const FOO_SETTLE_MS = 520` because "settle",
    * "hold", "tap" and "tier" are the grammar's own words, and it cannot tell
@@ -689,6 +722,16 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     keeps: "objetdart:constellations:v1",
     creates: "a star",
     exempt: {},
+    // The worked example the `interacts` field exists to elicit — read this
+    // one before writing yours, and read Stars.tsx before believing it.
+    interacts:
+      "gravity, in one field every object shares: a black hole's horizon draws nearby stars " +
+      "in and consumes them (they leave the sky and stay gone, kept in consumedSeedIds); two " +
+      "user black holes within reach enter an inspiral and merge into a single heavier hole, " +
+      "ringing a gravitational wave across the field as they go; a planet condensed beside a " +
+      "star takes an orbit around it and keeps it. Nothing here is a decal — every object is " +
+      "in the same force field as every other, and the room keeps spawning and collapsing on " +
+      "its own timers when no hand is on it",
   },
   {
     key: "space",

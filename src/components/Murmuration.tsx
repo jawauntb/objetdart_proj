@@ -70,13 +70,16 @@ import {
   centroid,
   cullBird,
   flushNear,
+  hashSeed,
   isAirActivity,
   launchNearest,
+  mulberry32,
   orderParameter,
   partialFreq,
   partialsForOrder,
   PLACES,
   roostNearest,
+  roostSeveral,
   seedAviary,
   seasonGoal,
   seasonIndex,
@@ -1176,6 +1179,7 @@ export default function Murmuration() {
     let lastCallAt = 0;
     let lastInteractionAt = performance.now();
     let glimmerAt = 0;
+    let autonomousBucket = -1;
     let kbCharge = 0;
     let energy = 0; // reduced-motion budget: the sky moves when a hand asks
     let leaving = 0;
@@ -1397,6 +1401,125 @@ export default function Murmuration() {
       return gone;
     };
 
+    // ——— double-tap ladder: flush a held bird, or cycle rarer sky events ———
+    // Deterministic cycling, not Math.random — the same sequence of taps
+    // always summons the same order of events (matches /stars's summoner).
+    let skyEventCounter = 0;
+    const predatorState = { active: false, x: 0, y: 0, z: 0, vx: 0, vz: 0, until: 0, birdIdx: -1 };
+    const thermalState = { active: false, x: 0, z: 0, until: 0 };
+
+    const flushBirdDramatic = (i: number, at: { x: number; y: number; z: number }, intensity: number) => {
+      if (i < 0 || i >= state.n) return;
+      setBirdActivity(i, isAirActivity(ACTIVITIES[state.activityOf[i]]) ? "swoop" : "fly");
+      state.vel[i * 3] += (state.pos[i * 3] - at.x) * 0.5;
+      state.vel[i * 3 + 1] += 5 + intensity * 4;
+      state.vel[i * 3 + 2] += (state.pos[i * 3 + 2] - at.z) * 0.5;
+      // the flock answers: a real repulsion pulse through the shared lure —
+      // not a scripted reaction on the tapped bird alone
+      flushNear(state, at, 20 + intensity * 14);
+      startle(at, 50 + intensity * 70);
+      call(1.1 + intensity * 0.5);
+      chirp(i, 1.2);
+      try {
+        haptics.chop();
+        audio.thud();
+      } catch {
+        /* noop */
+      }
+    };
+
+    const spawnPredator = (at: { x: number; y: number; z: number }) => {
+      thermalState.active = false;
+      predatorState.active = true;
+      predatorState.x = at.x;
+      predatorState.y = Math.max(at.y, 3);
+      predatorState.z = at.z;
+      predatorState.vx = 0;
+      predatorState.vz = 0;
+      predatorState.until = performance.now() + 7000;
+      let idx = predatorState.birdIdx;
+      if (idx < 0 || idx >= state.n || (kindOf(idx) !== "falcon" && kindOf(idx) !== "hawk")) {
+        idx = spawnBird(state, "falcon", { x: predatorState.x, y: predatorState.y, z: predatorState.z });
+      }
+      predatorState.birdIdx = idx;
+      if (idx >= 0) setBirdActivity(idx, "dive");
+      try {
+        audio.playTone(register.baseHz * 0.42, 0.55);
+        haptics.chop();
+      } catch {
+        /* noop */
+      }
+    };
+
+    const spawnThermal = (at: { x: number; y: number; z: number }) => {
+      predatorState.active = false;
+      thermalState.active = true;
+      thermalState.x = at.x;
+      thermalState.z = at.z;
+      thermalState.until = performance.now() + 8000;
+      try {
+        audio.playTone(register.baseHz * 1.6, 0.4);
+        haptics.ripple(0.3);
+      } catch {
+        /* noop */
+      }
+    };
+
+    const callRoost = (at: { x: number; y: number; z: number }) => {
+      predatorState.active = false;
+      const n = Math.min(6, Math.max(2, Math.floor(state.n * 0.3)));
+      roostSeveral(state, at, n);
+      metaDirty = true;
+      try {
+        audio.chime();
+        haptics.bloom();
+      } catch {
+        /* noop */
+      }
+    };
+
+    const cycleSkyEvent = (at: { x: number; y: number; z: number }) => {
+      const events = [spawnPredator, spawnThermal, callRoost];
+      const pick = events[skyEventCounter % events.length];
+      skyEventCounter += 1;
+      pick(at);
+    };
+
+    // ——— triple tap: the whole animal forms and collapses a shape ———
+    // A ring expands out of the tap, spins as one body, then collapses to a
+    // point — driven entirely through the same lure/lurePull/swirl forces
+    // the hand always uses, so the shape is the flock's own physics, not a
+    // scripted path for the birds to sit on.
+    let musterUntil = 0;
+    let musterDuration = 5200;
+    let musterOrigin = { x: 0, y: 0, z: 0 };
+    let musterDir = 1;
+    let musterSpins = 1;
+    let musterRadius = 10;
+    let musterEndFired = true;
+
+    const startMuster = (at: { x: number; y: number; z: number }, intensity: number, depth: number) => {
+      const rng = mulberry32(hashSeed(Math.round(at.x * 97), Math.round(at.z * 131), skyEventCounter + 7));
+      musterOrigin = at;
+      musterDuration = 5200 + depth * 1600;
+      musterUntil = performance.now() + musterDuration;
+      musterDir = rng() > 0.5 ? 1 : -1;
+      musterSpins = 1.4 + rng() * 1.3;
+      musterRadius = 8 + rng() * 8 + intensity * 4;
+      musterEndFired = false;
+      char.coh = clamp(char.coh + 0.22 + intensity * 0.18, 0.15, 2);
+      char.ali = clamp(char.ali + 0.18 + intensity * 0.14, 0.15, 2);
+      save(performance.now());
+      pulse();
+      call(1.4 + intensity * 0.5);
+      try {
+        haptics.bloom();
+        audio.chime();
+      } catch {
+        /* noop */
+      }
+    };
+
     let breathStop: (() => void) | null = null;
     const armVessel = () => {
       void requestVessel().catch(() => {
@@ -1445,9 +1568,22 @@ export default function Murmuration() {
           }
           if (e.fingers !== 1) return;
           const at = screenToWorld(e.x, e.y);
-          // rapid-tap ladder: startle → spawn → cull → clear the sky
+          // the tap ladder: single is the ordinary answer; a true double tap
+          // (exactly two) transforms what's under the finger — flush a held
+          // bird, or on open sky summon the next of a cycling set; a triple
+          // musters the whole animal into a shape and lets it collapse.
+          if (e.count === 2) {
+            const hit = birdAtScreen(e.x, e.y);
+            if (hit >= 0) flushBirdDramatic(hit, at, e.intensity);
+            else cycleSkyEvent(at);
+            return;
+          }
           const tier = tapTrainTier(e.count);
           const depth = tapTrainDepth(e.count);
+          if (tier === 3) {
+            startMuster(at, e.intensity, depth);
+            return;
+          }
           if (tier === "n") {
             clearBirds(state);
             metaDirty = true;
@@ -1476,12 +1612,6 @@ export default function Murmuration() {
                 /* noop */
               }
             }
-            return;
-          }
-          if (tier === 3) {
-            spawnAt(at);
-            if (depth > 0.35) spawnAt({ x: at.x + 0.4, y: at.y, z: at.z - 0.3 });
-            stirTurbulence(0.05 + depth * 0.06);
             return;
           }
           const hit = birdAtScreen(e.x, e.y);
@@ -2039,6 +2169,71 @@ export default function Murmuration() {
       const t = audio.getAudioTime() ?? now / 1000;
       const breath = reduced ? 0.5 : Math.sin(t * Math.PI * 2 * 0.14) * 0.5 + 0.5;
 
+      // ——— the predator: autonomous pursuit, felt as a real repulsion field ———
+      if (predatorState.active) {
+        if (now > predatorState.until) {
+          predatorState.active = false;
+        } else {
+          const c = centroid(state.pos, state.n);
+          const dx = c.x - predatorState.x;
+          const dz = c.z - predatorState.z;
+          const d = Math.hypot(dx, dz) || 1;
+          predatorState.vx += (dx / d) * 7 * dt + Math.sin(visualT * 1.3) * 1.6 * dt;
+          predatorState.vz += (dz / d) * 7 * dt + Math.cos(visualT * 1.1) * 1.6 * dt;
+          const sp = Math.hypot(predatorState.vx, predatorState.vz);
+          const maxSp = 10;
+          if (sp > maxSp) {
+            predatorState.vx *= maxSp / sp;
+            predatorState.vz *= maxSp / sp;
+          }
+          predatorState.x = clamp(predatorState.x + predatorState.vx * dt, -WORLD_X + 2, WORLD_X - 2);
+          predatorState.z = clamp(predatorState.z + predatorState.vz * dt, -WORLD_Z + 2, WORLD_Z - 2);
+          predatorState.y += (6 - predatorState.y) * Math.min(1, dt * 2);
+          const idx = predatorState.birdIdx;
+          if (idx >= 0 && idx < state.n) {
+            state.pos[idx * 3] = predatorState.x;
+            state.pos[idx * 3 + 1] = predatorState.y;
+            state.pos[idx * 3 + 2] = predatorState.z;
+            state.vel[idx * 3] = predatorState.vx;
+            state.vel[idx * 3 + 2] = predatorState.vz;
+            metaDirty = true;
+          }
+        }
+      }
+      if (thermalState.active && now > thermalState.until) thermalState.active = false;
+
+      // ——— the muster: a ring the flock forms and then collapses ———
+      let musterLure: { x: number; y: number; z: number } | null = null;
+      let musterLurePull = 0;
+      let musterSwirl = 0;
+      if (musterUntil > now) {
+        const remain = musterUntil - now;
+        const phase = clamp01(1 - remain / musterDuration);
+        const formPhase = clamp01(phase / 0.62);
+        const ringAngle = musterDir * formPhase * Math.PI * 2 * musterSpins;
+        const radius = phase < 0.62
+          ? mix(1.5, musterRadius, Math.sin(formPhase * Math.PI * 0.5))
+          : mix(musterRadius, 0.6, clamp01((phase - 0.62) / 0.38));
+        musterLure = {
+          x: musterOrigin.x + Math.cos(ringAngle) * radius,
+          y: musterOrigin.y + Math.sin(phase * Math.PI * 2) * 3.2,
+          z: musterOrigin.z + Math.sin(ringAngle) * radius,
+        };
+        musterLurePull = phase < 0.62 ? 9 + radius * 0.7 : 24 + (phase - 0.62) * 60;
+        musterSwirl = musterDir * (phase < 0.85 ? 20 : 6);
+      } else if (!musterEndFired) {
+        musterEndFired = true;
+        // the collapse resolves into one voice — the room's biggest event
+        call(2.0);
+        pulse();
+        try {
+          haptics.bloom();
+          audio.chime();
+        } catch {
+          /* noop */
+        }
+      }
+
       // the law the flock is living under this frame
       const p: FlockParams = {
         separation: char.sep * (1 + scatter * 0.9),
@@ -2047,9 +2242,13 @@ export default function Murmuration() {
         wind,
         goal: seasonGoal(season),
         goalPull: SEASON_PULL * (1 - scatter * 0.5),
-        lure,
-        lurePull: lurePull + (leaving > 0 ? -14 * leaving : 0),
-        swirl,
+        lure: musterLure ?? lure,
+        lurePull: musterLure ? musterLurePull : lurePull + (leaving > 0 ? -14 * leaving : 0),
+        swirl: musterLure ? musterSwirl : swirl,
+        predator: predatorState.active ? { x: predatorState.x, y: predatorState.y, z: predatorState.z } : undefined,
+        predatorStrength: predatorState.active ? 44 : 0,
+        thermal: thermalState.active ? { x: thermalState.x, y: 0, z: thermalState.z } : undefined,
+        thermalStrength: thermalState.active ? 5.5 : 0,
       };
 
       // Fixed timestep, accumulator inside: the same second of real time is
@@ -2081,6 +2280,25 @@ export default function Murmuration() {
       if (now - lastInteractionAt > 20000 && now - glimmerAt > 9000 && !reduced) {
         glimmerAt = now;
         pulse();
+      }
+
+      // aliveness: the sky keeps its own weather with no hand on it — a
+      // thermal rises unattended on a deterministic clock (a seeded bucket
+      // of real time, never Math.random), and a couple of soarers ride it.
+      {
+        const AUTON_PERIOD_MS = 41000;
+        const bucket = Math.floor(now / AUTON_PERIOD_MS);
+        if (bucket !== autonomousBucket) {
+          autonomousBucket = bucket;
+          if (!predatorState.active && !thermalState.active && musterUntil <= now) {
+            const rng = mulberry32(hashSeed(SKY_SEED, bucket));
+            if (rng() < 0.7) {
+              const ang = rng() * Math.PI * 2;
+              const r = 5 + rng() * 12;
+              spawnThermal({ x: Math.cos(ang) * r, y: 0, z: Math.sin(ang) * r });
+            }
+          }
+        }
       }
 
       // ——— render ———

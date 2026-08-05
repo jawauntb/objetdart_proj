@@ -237,6 +237,84 @@ export function snapChildren(parentSeed: number, breakIndex: number): number[] {
   return [(h1 | 1) >>> 0, (h2 & ~1) >>> 0];
 }
 
+// ——— what two hadrons do to each other: colour reconnection ———
+
+/**
+ * How near two hadrons must come, as a fraction of the smaller dimension,
+ * before their flux tubes notice each other at all. Inside this the colour
+ * fields overlap and a gluon can be traded; outside it each hadron is white
+ * and the other one cannot see it — which is why nuclear forces are short
+ * ranged even though the colour force never falls off.
+ */
+export const RECONNECT_REACH = 0.16;
+
+/**
+ * COLOUR RECONNECTION. Two hadrons brought close swap a constituent through
+ * the gluon field, and the strings re-form across the pair: the tubes that
+ * ran inside each hadron now run BETWEEN them, and when they part, each
+ * leaves with a partner it did not arrive with.
+ *
+ * The rule the children obey — the only rule there is down here — is that
+ * nothing may leave un-white. So the kinds are preserved as a multiset
+ * (pair + pair → pair + pair, triplet + pair → triplet + pair): a triplet
+ * cannot hand a quark to a pair without leaving two quarks behind, which is
+ * not a colour singlet and therefore is not a thing.
+ *
+ * Deterministic and order-independent: recombine(a, b) and recombine(b, a)
+ * describe the same event seen from either side, so they return the same
+ * pair of children (as a set). Neither child is either parent — the whole
+ * point is that a third thing walks away.
+ */
+export function recombineSeeds(seedA: number, seedB: number): [number, number] {
+  const lo = Math.min(seedA >>> 0, seedB >>> 0);
+  const hi = Math.max(seedA >>> 0, seedB >>> 0);
+  const kindLo = hadronFromSeed(lo).kind;
+  const kindHi = hadronFromSeed(hi).kind;
+  let round = 0;
+  for (;;) {
+    const c1 = seedForKind(hashSeed(lo, hi, 0x9e3d, round), kindLo);
+    const c2 = seedForKind(hashSeed(lo, hi, 0x51ed, round), kindHi);
+    // a child that decodes to a parent is not a new thing; walk on
+    if (c1 !== lo && c1 !== hi && c2 !== lo && c2 !== hi && c1 !== c2) return [c1, c2];
+    round += 1;
+    if (round > 64) return [seedForKind((lo ^ 0x5bf03635) >>> 0, kindLo), seedForKind((hi ^ 0x27d4eb2f) >>> 0, kindHi)];
+  }
+}
+
+/**
+ * DECONFINEMENT, and the reconfinement that always follows it. Heat the
+ * vacuum past the point where the strings can hold and the quarks stop
+ * belonging to any particular hadron — a plasma, briefly, the state the
+ * whole universe was in for its first microsecond. It does not last: as it
+ * cools every quark must find partners again, and what condenses out is a
+ * fresh set of white hadrons carrying the same constituent census.
+ *
+ * Returns the seeds of the hadrons that freeze out of a plasma made from
+ * `seeds`. Total constituent count is conserved exactly — the plasma cannot
+ * create or destroy quarks, only re-sort them — and the freeze-out is
+ * deterministic in (seeds, seed).
+ */
+export function reconfineSeeds(seeds: number[], seed: number): number[] {
+  if (seeds.length === 0) return [];
+  let quarks = 0;
+  for (const s of seeds) quarks += constituentCount(hadronFromSeed(s));
+  const rng = mulberry32(mix32(hashSeed(quarks, seeds.length, seed) || 1));
+  const out: number[] = [];
+  let left = quarks;
+  let i = 0;
+  while (left >= 2) {
+    // a triplet only freezes out where three quarks are still available —
+    // and never where taking three would strand a single quark with nothing
+    // to bind to, because a lone quark is the one thing this room forbids
+    const wantTriplet = left >= 3 && left !== 4 && (left === 3 || rng() < 0.42);
+    const kind: HadronKind = wantTriplet ? "triplet" : "pair";
+    out.push(seedForKind(hashSeed(seed, i, quarks, left), kind));
+    left -= wantTriplet ? 3 : 2;
+    i += 1;
+  }
+  return out;
+}
+
 /**
  * Enforce the population cap: the oldest residents (front of the list,
  * which the room keeps in arrival order) annihilate first, gracefully,

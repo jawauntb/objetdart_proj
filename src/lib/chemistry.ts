@@ -599,6 +599,125 @@ export function moleculeFromSeed(seed: number): MoleculeMorph {
   };
 }
 
+// ——————————————————————————————————————————————— how a molecule actually moves
+
+/** Whether the compound's frame is collinear — the count of modes turns on it. */
+export function isLinear(c: Compound): boolean {
+  return c.shape === "linear" || c.shape === "diatomic";
+}
+
+/**
+ * How many independent ways this molecule can VIBRATE. The count is not a
+ * choice: a molecule of N atoms has 3N degrees of freedom, three of which
+ * are the whole body translating and three (two, if it is a straight line —
+ * spinning a line about its own axis moves nothing) are it rotating. What is
+ * left over is vibration.
+ *
+ *   nonlinear: 3N − 6      linear: 3N − 5
+ *
+ * Water gets 3, carbon dioxide 4 (one more, though it has the same atom
+ * count — because it is straight), a diatomic exactly 1: the single stretch.
+ * Skeletal depictions still count their implicit hydrogens, because the real
+ * molecule has them whatever the drawing shows.
+ */
+export function vibrationalModeCount(c: Compound): number {
+  let n = 0;
+  for (const part of c.formula) n += part.count;
+  if (n < 2) return 0;
+  return isLinear(c) ? 3 * n - 5 : 3 * n - 6;
+}
+
+export type VibrationKind = "stretch" | "bend" | "rock" | "breathe";
+
+export type VibrationMode = {
+  kind: VibrationKind;
+  /** Wavenumber, cm⁻¹ — where the mode absorbs infrared. */
+  wavenumber: number;
+  /** Whether the mode changes the dipole (only those absorb IR at all). */
+  irActive: boolean;
+};
+
+/**
+ * The named modes a room can actually show, in the order a spectroscopist
+ * would list them: lowest wavenumber first. Real numbers where reality has
+ * them — water's bend at 1595 cm⁻¹ under its symmetric stretch at 3657 and
+ * its asymmetric at 3756; CO₂'s bend at 667, its IR-DARK symmetric stretch
+ * at 1333 (the two oxygens move out together, the dipole never changes, and
+ * that is exactly why it is invisible in the infrared while the asymmetric
+ * stretch at 2349 is the band that makes CO₂ a greenhouse gas at all).
+ *
+ * The mode count matches `vibrationalModeCount`; where a compound has more
+ * modes than reality has famous names, the remainder are filled in as
+ * degenerate bends scaled from the compound's own bonds — deterministic, and
+ * always ordered by wavenumber.
+ */
+export function vibrationalModes(c: Compound): VibrationMode[] {
+  const named: Record<string, VibrationMode[]> = {
+    H2O: [
+      { kind: "bend", wavenumber: 1595, irActive: true },
+      { kind: "stretch", wavenumber: 3657, irActive: true },
+      { kind: "stretch", wavenumber: 3756, irActive: true },
+    ],
+    CO2: [
+      { kind: "bend", wavenumber: 667, irActive: true },
+      { kind: "bend", wavenumber: 667, irActive: true },
+      { kind: "stretch", wavenumber: 1333, irActive: false },
+      { kind: "stretch", wavenumber: 2349, irActive: true },
+    ],
+    N2: [{ kind: "stretch", wavenumber: 2359, irActive: false }],
+    O2: [{ kind: "stretch", wavenumber: 1580, irActive: false }],
+    H2: [{ kind: "stretch", wavenumber: 4161, irActive: false }],
+    CO: [{ kind: "stretch", wavenumber: 2143, irActive: true }],
+    NO: [{ kind: "stretch", wavenumber: 1876, irActive: true }],
+    HCl: [{ kind: "stretch", wavenumber: 2886, irActive: true }],
+    NaCl: [{ kind: "stretch", wavenumber: 364, irActive: true }],
+  };
+  const want = vibrationalModeCount(c);
+  const have = named[c.key] ?? [];
+  const out: VibrationMode[] = have.slice(0, want).map((m) => ({ ...m }));
+  // the unnamed remainder: bends and stretches scaled off the compound's own
+  // bond orders, so a heavier, floppier frame hums lower than a tight one
+  let order = 0;
+  for (const b of c.bonds) order += b.order;
+  const base = 380 + (order / Math.max(1, c.bonds.length)) * 520;
+  for (let i = out.length; i < want; i++) {
+    const stretch = i % 3 === 2;
+    out.push({
+      kind: c.shape === "ring" && !stretch ? "breathe" : stretch ? "stretch" : i % 3 === 1 ? "rock" : "bend",
+      wavenumber: Math.round(base * (stretch ? 2.6 : 1) + i * 37),
+      irActive: c.felt !== "nonpolar" && c.felt !== "inert",
+    });
+  }
+  out.sort((a, b) => a.wavenumber - b.wavenumber);
+  return out;
+}
+
+/**
+ * The mode this molecule answers a strike with, given a 0..1 blow. A soft
+ * touch sets the lowest (floppiest) mode going; a harder one reaches up the
+ * ladder toward the stiff stretches. Monotone in strength — nothing here
+ * fires the same at 0.1 and at 0.9 — and deterministic.
+ */
+export function modeForStrength(c: Compound, strength: number): VibrationMode | null {
+  const modes = vibrationalModes(c);
+  if (modes.length === 0) return null;
+  const u = Math.max(0, Math.min(1, strength));
+  return modes[Math.min(modes.length - 1, Math.floor(u * modes.length * 0.999))];
+}
+
+/**
+ * A wavenumber (cm⁻¹) carried down into the audible register, Hz. The true
+ * frequency is c·ν̃ ≈ 3·10¹⁰ Hz per cm⁻¹; this is the same law under a
+ * log-preserving change of octave, so a stiffer bond is literally a higher
+ * note and the whole infrared spectrum sits inside four octaves a room can
+ * actually sound. Strictly monotone in the wavenumber.
+ */
+export function vibrationPitchHz(wavenumber: number): number {
+  const w = Math.max(200, Math.min(4400, wavenumber));
+  const u = Math.log(w / 200) / Math.log(4400 / 200);
+  return 110 * Math.pow(16, u);
+}
+
 // —————————————————————————————————————————————————————————————— the reactions
 
 export type Reaction = {

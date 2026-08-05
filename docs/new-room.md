@@ -107,8 +107,59 @@ the contract:
   keeps: "objetdart:template:v1",  // or null
   creates: "a mote",               // the noun a dwell makes, or null
   exempt: {},                      // every global binding you cannot express, + why
+  interacts: "…",                  // required when `creates` is set — see §2b below
 }
 ```
+
+## 2b. The three things a new room ships from the start
+
+`test:room-liveness` fails a room that skips any of these, because an audit
+found forty-six rooms where a double tap did what a single tap did and thirty-six
+travel edges playing a turning globe over a crossing it had nothing to do with.
+They are not polish added later; they are what makes the room a room.
+
+**A tap ladder.** Bind `tap`, read `e.count`, and climb the site-wide rungs
+through `tapTrainTier` — 1 / 3 / 5 / *n*, from `gesture/core.ts`, never a private
+dialect of your own:
+
+```ts
+tap: (e) => {
+  const tier = tapTrainTier(e.count);
+  const depth = tapTrainDepth(e.count);            // 0..1, for the in-between taps
+  if (tier === "n") { /* the peal — the rarest thing the room can do */ return; }
+  if (tier === 5)   { /* larger still, scaled by e.intensity */        return; }
+  if (tier === 3)   { /* the transformation: this thing becomes another kind
+                         of thing, or gives birth to a satellite of itself */ return; }
+  /* tier 1: the room's ordinary answer, scaled by e.intensity */
+},
+```
+
+Spend real fidelity at the top rung — that is the moment a visitor tells someone
+else about. A rung that repeats the previous rung 30% louder is a loudness knob,
+not a ladder, and the test reads it as one.
+
+**Physics between the objects.** A population is objects that act on each other,
+not a particle count: gravity at astronomical scale, charge and bonding at
+molecular, adhesion and pressure at cellular, flow and drag in fluids. Two of
+them meeting must be able to **merge, react or consume** — producing a third
+thing that is neither parent — and the collision lands in sight, sound and
+haptics in the same frame. Population caps stay; at the cap the oldest gives way
+*visibly*, never as a silent no-op. Then say what you built in the registry's
+`interacts` field, in one sentence naming the force and the product. `/stars` is
+the worked example, in the code and in its registry entry.
+
+**A film on every edge you open.** If your room takes a band, `travelOptions`
+now offers edges in and out of it. Each one needs a `PassageSpec` with a `film`
+in `src/lib/travel-passage.ts` and a `make…Film` dispatched from `makeFilmFor`
+in `src/components/TravelPassage.tsx`. A film is a pure function of `u ∈ [0,1]`
+and a seed — the return leg replays it backward and must land on the same frames
+— and it depicts *what actually happens between those two scales*, not a zoom.
+An unregistered edge is not silent: it plays `DEFAULT_PASSAGE`, which is the
+chart curling onto a turning globe.
+
+**And no `Math.random()`,** anywhere in the room. `hashSeed` / `seededRandom`,
+seeded from the room's small state vector, or a named reason in the registry's
+`nondeterminism` field.
 
 ## 3. Declare it once
 
@@ -187,6 +238,12 @@ welcome PR — it deletes four scattered edits and adds one file.
 finger count (one finger the material, two the frame, three the law), the vessel, the
 frame governor, the visibility and gallery pause, the DPR ceiling, the resize observer,
 the idle persistence writer, the glimmer clock, and `letGo`.
+
+`born(seed, …)` and `step` are where the seed law and the inter-object physics
+meet: `step` reads the whole population, so it is the honest place for the force
+one object exerts on another and for the merge that consumes two and returns a
+third. Whatever you write there is what the registry's `interacts` sentence has
+to be true about.
 
 Walk **AGENTS.md, "the room quality bar"** line by line — shader material,
 every verb answered, create *and* delete of things that interact, the room's

@@ -36,7 +36,28 @@ export type PassageEdgeKey =
   | "earth->coast"
   | "coast->earth"
   | "space->manifold"
-  | "manifold->space";
+  | "manifold->space"
+  // ——— The small-scale spine, quanta → drop (both directions) ———
+  | "quanta->quarks"
+  | "quarks->quanta"
+  | "quarks->nucleons"
+  | "nucleons->quarks"
+  | "nucleons->atoms"
+  | "atoms->nucleons"
+  | "atoms->molecules"
+  | "molecules->atoms"
+  | "molecules->organics"
+  | "organics->molecules"
+  | "organics->dna"
+  | "dna->organics"
+  | "dna->organelles"
+  | "organelles->dna"
+  | "organelles->cells"
+  | "cells->organelles"
+  | "cells->tissue"
+  | "tissue->cells"
+  | "tissue->drop"
+  | "drop->tissue";
 
 export type PassageFilm =
   | "planet"
@@ -51,7 +72,18 @@ export type PassageFilm =
   | "garden"
   | "chartland"
   | "strand"
-  | "fold";
+  | "fold"
+  // ——— The small-scale spine ———
+  | "quantum"
+  | "confine"
+  | "shell"
+  | "bond"
+  | "chain"
+  | "helix"
+  | "chromatin"
+  | "membrane"
+  | "sheet"
+  | "dissolve";
 
 export type PassageSpec = {
   durationMs: number;
@@ -326,6 +358,188 @@ export const PASSAGES: Partial<Record<PassageEdgeKey, PassageSpec>> = {
     detentAt: 0.3,
     out: false,
     film: "fold",
+  },
+  // ——— The small-scale spine, quanta → drop ———
+  // Quicker than the astronomical trunk: nothing here needs 3.5s to read.
+  "quanta->quarks": {
+    durationMs: 2200,
+    reducedMs: 850,
+    navigateAt: 0.5,
+    bellAt: 0.42,
+    detentAt: 0.6,
+    out: true,
+    film: "quantum",
+  },
+  "quarks->quanta": {
+    durationMs: 2200,
+    reducedMs: 850,
+    navigateAt: 0.45,
+    bellAt: 0.55,
+    detentAt: 0.3,
+    out: false,
+    film: "quantum",
+  },
+  "quarks->nucleons": {
+    durationMs: 2000,
+    reducedMs: 800,
+    navigateAt: 0.5,
+    bellAt: 0.44,
+    detentAt: 0.6,
+    out: true,
+    film: "confine",
+  },
+  "nucleons->quarks": {
+    durationMs: 2000,
+    reducedMs: 800,
+    navigateAt: 0.45,
+    bellAt: 0.52,
+    detentAt: 0.3,
+    out: false,
+    film: "confine",
+  },
+  "nucleons->atoms": {
+    durationMs: 2450,
+    reducedMs: 900,
+    navigateAt: 0.5,
+    bellAt: 0.4,
+    detentAt: 0.62,
+    out: true,
+    film: "shell",
+  },
+  "atoms->nucleons": {
+    durationMs: 2450,
+    reducedMs: 900,
+    navigateAt: 0.45,
+    bellAt: 0.55,
+    detentAt: 0.3,
+    out: false,
+    film: "shell",
+  },
+  "atoms->molecules": {
+    durationMs: 2150,
+    reducedMs: 850,
+    navigateAt: 0.5,
+    bellAt: 0.46,
+    detentAt: 0.62,
+    out: true,
+    film: "bond",
+  },
+  "molecules->atoms": {
+    durationMs: 2150,
+    reducedMs: 850,
+    navigateAt: 0.45,
+    bellAt: 0.5,
+    detentAt: 0.3,
+    out: false,
+    film: "bond",
+  },
+  "molecules->organics": {
+    durationMs: 2300,
+    reducedMs: 880,
+    navigateAt: 0.5,
+    bellAt: 0.42,
+    detentAt: 0.6,
+    out: true,
+    film: "chain",
+  },
+  "organics->molecules": {
+    durationMs: 2300,
+    reducedMs: 880,
+    navigateAt: 0.45,
+    bellAt: 0.55,
+    detentAt: 0.3,
+    out: false,
+    film: "chain",
+  },
+  "organics->dna": {
+    durationMs: 2500,
+    reducedMs: 900,
+    navigateAt: 0.5,
+    bellAt: 0.42,
+    detentAt: 0.62,
+    out: true,
+    film: "helix",
+  },
+  "dna->organics": {
+    durationMs: 2500,
+    reducedMs: 900,
+    navigateAt: 0.45,
+    bellAt: 0.55,
+    detentAt: 0.3,
+    out: false,
+    film: "helix",
+  },
+  "dna->organelles": {
+    durationMs: 2450,
+    reducedMs: 900,
+    navigateAt: 0.5,
+    bellAt: 0.44,
+    detentAt: 0.62,
+    out: true,
+    film: "chromatin",
+  },
+  "organelles->dna": {
+    durationMs: 2450,
+    reducedMs: 900,
+    navigateAt: 0.45,
+    bellAt: 0.55,
+    detentAt: 0.3,
+    out: false,
+    film: "chromatin",
+  },
+  "organelles->cells": {
+    durationMs: 2300,
+    reducedMs: 880,
+    navigateAt: 0.5,
+    bellAt: 0.42,
+    detentAt: 0.62,
+    out: true,
+    film: "membrane",
+  },
+  "cells->organelles": {
+    durationMs: 2300,
+    reducedMs: 880,
+    navigateAt: 0.45,
+    bellAt: 0.55,
+    detentAt: 0.3,
+    out: false,
+    film: "membrane",
+  },
+  "cells->tissue": {
+    durationMs: 2300,
+    reducedMs: 880,
+    navigateAt: 0.5,
+    bellAt: 0.44,
+    detentAt: 0.62,
+    out: true,
+    film: "sheet",
+  },
+  "tissue->cells": {
+    durationMs: 2300,
+    reducedMs: 880,
+    navigateAt: 0.45,
+    bellAt: 0.55,
+    detentAt: 0.3,
+    out: false,
+    film: "sheet",
+  },
+  "tissue->drop": {
+    durationMs: 2500,
+    reducedMs: 900,
+    navigateAt: 0.5,
+    bellAt: 0.44,
+    detentAt: 0.62,
+    out: true,
+    film: "dissolve",
+  },
+  "drop->tissue": {
+    durationMs: 2500,
+    reducedMs: 900,
+    navigateAt: 0.45,
+    bellAt: 0.55,
+    detentAt: 0.3,
+    out: false,
+    film: "dissolve",
   },
 };
 

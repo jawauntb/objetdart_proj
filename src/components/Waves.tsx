@@ -1044,6 +1044,9 @@ export default function Waves() {
     // real air; vessel tilt adds a steady gravity-lean to the same vector.
     let lensPos = 0; // 0..2 continuous — surface / equation / felt
     let seasonPos = 0; // 0..1 wrapping — the sun's slow walk
+    // deterministic double-tap-on-empty-water cycle: drop → gust → stone.
+    // Advances one step per double tap, never Math.random.
+    let doubleEmptyCycle = 0;
     let windDirX = 1;
     let windDirY = 0;
     let windStrength = 0;
@@ -1113,6 +1116,81 @@ export default function Waves() {
         const trainTier = tapTrainTier(e.count);
         const trainDepth = tapTrainDepth(e.count);
         const cfg = MODES.find((it) => it.id === modeRef.current) ?? MODES[0];
+
+        // double tap: on a raised source, splits it in two so the pair beats
+        // as real independent emitters; on open water, cycles a deterministic
+        // set of rarer disturbances — a drop, a gust-line, a dropped stone.
+        if (e.count === 2) {
+          if (modeRef.current === "string") {
+            pluck1D(nx, ny, 0.55 + e.intensity * 0.35);
+            pluck1D(clamp(nx + (nx < 0.5 ? 0.2 : -0.2), 0.05, 0.95), 0.5, 0.4);
+            try { getFieldAudio().playNote(cfg.midi + 7, 220); } catch { /* noop */ }
+            try { haptics.ripple(0.5); } catch { /* noop */ }
+            return;
+          }
+          let nearest: WaveSource | null = null;
+          let nearestD = 0.055;
+          for (const s of sources) {
+            const d = Math.hypot(s.nx - nx, s.ny - ny);
+            if (d < nearestD) { nearestD = d; nearest = s; }
+          }
+          if (nearest && sources.length < MAX_SOURCES) {
+            // split into two coherent emitters, a half-turn out of phase —
+            // the pair now genuinely beats in the shared field rather than
+            // ringing a single tone alone
+            const halfStrength = Math.max(0.14, nearest.strength * 0.62);
+            const ang = (((nearest.id * 2654435761) % 1000) / 1000) * Math.PI * 2;
+            const off = 0.045 + trainDepth * 0.02;
+            sourceIdCounter += 1;
+            const twin: WaveSource = {
+              id: sourceIdCounter,
+              nx: clamp(nearest.nx + Math.cos(ang) * off, 0.04, 0.96),
+              ny: clamp(nearest.ny + Math.sin(ang) * off, 0.06, 0.94),
+              strength: halfStrength,
+              phase: 0.5,
+            };
+            nearest.strength = halfStrength;
+            nearest.phase = 0;
+            sources.push(twin);
+            drop2D(nearest.nx, nearest.ny, 0.45 + e.intensity * 0.3);
+            drop2D(twin.nx, twin.ny, 0.45 + e.intensity * 0.3);
+            try { getFieldAudio().chime(); } catch { /* noop */ }
+            try { getFieldAudio().playTone(cfg.midi * 6 + 40, 0.22); } catch { /* noop */ }
+            try { haptics.roll(); } catch { /* noop */ }
+            useField.getState().recordTape("object", 0.75, "waves/split-source");
+            idleSourcePersist.schedule();
+            refreshKept();
+            return;
+          }
+          // open water: cycle drop → gust-line → dropped stone, seeded by a
+          // simple advancing counter (deterministic, not Math.random)
+          const kind = doubleEmptyCycle % 3;
+          doubleEmptyCycle += 1;
+          if (kind === 0) {
+            drop2D(nx, ny, 0.75 + e.intensity * 0.5);
+            try { getFieldAudio().chime(); } catch { /* noop */ }
+          } else if (kind === 1) {
+            const ang = (((nx * 137 + ny * 971) % 1) + 1) % 1 * Math.PI * 2; // deterministic from tap position
+            const ux = Math.cos(ang);
+            const uy = Math.sin(ang);
+            for (let k = -2; k <= 2; k += 1) {
+              drop2D(
+                clamp(nx + ux * k * 0.05, 0.03, 0.97),
+                clamp(ny + uy * k * 0.05, 0.05, 0.95),
+                0.22 + e.intensity * 0.2,
+              );
+            }
+            try { getFieldAudio().playTone(96 + e.intensity * 40, 0.3); } catch { /* noop */ }
+          } else {
+            // a stone: a slow, heavy, wide trough that keeps settling
+            drop2D(nx, ny, -(0.9 + e.intensity * 0.5));
+            drop2D(nx, ny, 0.3 + e.intensity * 0.2);
+            try { getFieldAudio().thud(); } catch { /* noop */ }
+          }
+          try { haptics.ripple(0.4 + trainDepth * 0.2); } catch { /* noop */ }
+          useField.getState().recordTape("ripple", 0.55, `waves/double-${kind}`);
+          return;
+        }
         if (trainTier === "n") {
           // seven and more: the crescendo — a rain of drops round the hand,
           // wider and harder with every extra tap
@@ -1153,18 +1231,62 @@ export default function Waves() {
           return;
         }
         if (trainTier === 3) {
-          // three taps set a beating pair beside the strike — the moiré of
-          // interference blooms under the hand
+          // triple tap: a rogue wave. Not a scripted third drop — the tank
+          // is scanned for where its *existing* wavefronts already sum
+          // constructively (real superposition, read straight out of the
+          // finite-difference field), and the strike pours its energy in
+          // there. Where the sea is already piling up, it now breaks.
           if (modeRef.current === "string") {
-            pluck1D(nx, 0.5, 0.7);
-            pluck1D(clamp(nx + 0.12, 0.05, 0.95), 0.5, 0.45);
+            const sim = simRef.current;
+            let peak = 0;
+            let peakAt = 0.5;
+            if (sim) {
+              for (let i = 2; i < sim.sN - 2; i += 1) {
+                const h = Math.abs(sim.sa[i]);
+                if (h > peak) { peak = h; peakAt = i / (sim.sN - 1); }
+              }
+            }
+            pluck1D(nx, 0.5, 0.55 + e.intensity * 0.4);
+            pluck1D(peakAt, 0.5, 0.5 + Math.min(1.4, peak * 2.2));
           } else {
-            drop2D(nx, ny, 0.6 + e.intensity * 0.5);
-            drop2D(clamp(nx - 0.09, 0.02, 0.98), ny, 0.45 + trainDepth * 0.2);
-            drop2D(clamp(nx + 0.09, 0.02, 0.98), ny, 0.45 + trainDepth * 0.2);
+            const sim = simRef.current;
+            let bestX = nx;
+            let bestY = ny;
+            let bestH = sim ? Math.abs(sim.a[
+              clamp(Math.round(ny * sim.gh), 0, sim.gh - 1) * sim.gw
+              + clamp(Math.round(nx * sim.gw), 0, sim.gw - 1)
+            ]) : 0;
+            if (sim) {
+              const { gw, gh, a } = sim;
+              const ring = 24;
+              for (let k = 0; k < ring; k += 1) {
+                const ang = (k / ring) * Math.PI * 2;
+                const px = clamp(nx + Math.cos(ang) * 0.16, 0.04, 0.96);
+                const py = clamp(ny + Math.sin(ang) * 0.16, 0.06, 0.94);
+                const gx = clamp(Math.round(px * gw), 0, gw - 1);
+                const gy = clamp(Math.round(py * gh), 0, gh - 1);
+                const h = Math.abs(a[gy * gw + gx]);
+                if (h > bestH) { bestH = h; bestX = px; bestY = py; }
+              }
+            }
+            // amplitude scales with how much constructive energy was
+            // already sitting there, so the rogue wave is genuinely emergent
+            const amp = (0.75 + e.intensity * 0.55) * (1 + Math.min(2.4, bestH * 3.4));
+            drop2D(bestX, bestY, amp);
+            drop2D(nx, ny, 0.4 + e.intensity * 0.3);
+            const dx = bestX - 0.5;
+            const dy = bestY - 0.5;
+            const dl = Math.hypot(dx, dy) || 1;
+            drop2D(
+              clamp(bestX + (dx / dl) * 0.06, 0.03, 0.97),
+              clamp(bestY + (dy / dl) * 0.06, 0.05, 0.95),
+              amp * 0.45,
+            );
           }
-          try { getFieldAudio().playNote(cfg.midi + 4, 200); } catch { /* noop */ }
-          try { haptics.ripple(0.45 + trainDepth * 0.25); } catch { /* noop */ }
+          energyRef.current = 1;
+          try { getFieldAudio().bell(); } catch { /* noop */ }
+          try { haptics.storm(); } catch { /* noop */ }
+          useField.getState().recordTape("ripple", 0.85, "waves/rogue");
           return;
         }
         // tap intensity is the drop: amplitude rides the same 0..1, and the

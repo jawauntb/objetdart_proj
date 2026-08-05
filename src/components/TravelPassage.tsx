@@ -1942,6 +1942,842 @@ function makeFoldFilm(seed: number): Film {
   return { renderFrame };
 }
 
+// ——— The small-scale spine, quanta ↔ drop ————————————————————————————
+//
+// Ten films for the ten trunk edges the astronomical trunk left dark (the
+// whole quanta→quarks→nucleons→atoms→molecules→organics→dna→organelles→
+// cells→tissue→drop run used to fall back to a plain 2400ms breath — the
+// only films a visitor ever saw were the planetary ones). Each depicts the
+// actual physical relationship between its two scales, not a zoom:
+// excitations condensing into a bound triplet, confinement tubes drawing
+// closed, a nucleus receding as its cloud blooms, two clouds overlapping
+// into a bond, a backbone lengthening, a strand twisting shut into a helix,
+// the helix coiling into a membrane-bound body, a membrane closing around a
+// working interior, cells adhering into a sheet, and the sheet dissolving
+// into the water it lives in. All ten are quicker than the astronomical
+// films — nothing here needs 3.5s to read. Every one is a pure function of
+// u and a seed: randomness is drawn once at film-build time into fixed
+// arrays, never inside renderFrame, so the return leg's backward replay
+// lands on exactly the frames the outbound leg drew.
+
+// Color-charge triplet — the three primaries a bound state cancels to white.
+const CHARGE_RED: RGB = [214, 74, 66];
+const CHARGE_GREEN: RGB = [92, 186, 108];
+const CHARGE_BLUE: RGB = [88, 128, 224];
+const CHARGE_COLORS: RGB[] = [CHARGE_RED, CHARGE_GREEN, CHARGE_BLUE];
+
+/**
+ * quanta ↔ quarks — "quantum": the vacuum's seethe resolving into a bound
+ * triplet.
+ *   u = 0   virtual pairs flicker in and out everywhere, colorless, none
+ *           of them lasting
+ *   u ≈ 0.6 three of them stop flickering and take a color charge
+ *   u = 1   three color-charged points, tied by confinement tubes, standing
+ *           in a tight triangle — a quark triplet
+ * The rest of the seethe never stops; only the chosen three condense.
+ */
+function makeQuantumFilm(seed: number): Film {
+  const rng = seededRandom(seed);
+  const FLICKER = 140;
+  const flicker: Array<{ x: number; y: number; ph: number; freq: number }> = [];
+  for (let i = 0; i < FLICKER; i++) {
+    flicker.push({ x: rng(), y: rng(), ph: rng() * TAU, freq: 3 + rng() * 5 });
+  }
+  const chargeSprites = CHARGE_COLORS.map((c) => makeGlowSprite(mix(c, PAPER, 0.3), c, 0.5));
+  // The three that condense: seeded scatter start → a fixed tight triangle.
+  const quarks = CHARGE_COLORS.map((_, i) => ({
+    sx: 0.32 + rng() * 0.36,
+    sy: 0.28 + rng() * 0.4,
+    ang: (i / 3) * TAU - Math.PI / 2,
+  }));
+
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    const m = Math.min(w, h);
+    ctx.fillStyle = rgba(NIGHT, 1);
+    ctx.fillRect(0, 0, w, h);
+
+    // The seethe: always flickering, thinning as the triplet takes over.
+    const seetheA = 1 - smoothstep(0.4, 0.95, u) * 0.55;
+    for (const f of flicker) {
+      const v = 0.5 + 0.5 * Math.sin(f.ph + u * f.freq * TAU);
+      const a = Math.max(0, v - 0.35) * 1.4 * seetheA;
+      if (a <= 0.01) continue;
+      ctx.fillStyle = rgba(PAPER, a * 0.55);
+      ctx.fillRect(f.x * w, f.y * h, 1.1, 1.1);
+    }
+
+    const condense = easeInOut(smoothstep(0.15, 0.88, u));
+    const cx = w / 2;
+    const cy = h / 2;
+    const R = m * 0.1;
+    const pos = quarks.map((q) => {
+      const tx = cx + Math.cos(q.ang) * R;
+      const ty = cy + Math.sin(q.ang) * R;
+      return { x: lerp(q.sx * w, tx, condense), y: lerp(q.sy * h, ty, condense) };
+    });
+
+    // Confinement tubes: they draw closed as the triplet condenses.
+    const tubeA = smoothstep(0.3, 0.85, u);
+    if (tubeA > 0.01) {
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.lineWidth = Math.max(1, m * 0.006 * condense);
+      for (let i = 0; i < 3; i++) {
+        const a = pos[i];
+        const b = pos[(i + 1) % 3];
+        const g = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
+        g.addColorStop(0, rgba(CHARGE_COLORS[i], 0.5 * tubeA));
+        g.addColorStop(1, rgba(CHARGE_COLORS[(i + 1) % 3], 0.5 * tubeA));
+        ctx.strokeStyle = g;
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // The quarks themselves, gaining color as they condense.
+    const chargeIn = smoothstep(0.1, 0.7, u);
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    for (let i = 0; i < 3; i++) {
+      blitGlow(ctx, chargeSprites[i], pos[i].x, pos[i].y, m * (0.02 + condense * 0.035), 0.55 + 0.4 * chargeIn);
+    }
+    ctx.restore();
+  };
+
+  return { renderFrame };
+}
+
+/**
+ * quarks ↔ nucleons — "confine": the three confinement tubes drawing closed
+ * into one nucleon's skin.
+ *   u = 0   the quark triplet, spread in its confinement triangle, three
+ *           colors held apart by the tubes between them
+ *   u ≈ 0.6 the tubes draw closed, the colors blur toward white as they
+ *           cancel
+ *   u = 1   one nucleon: a single bound skin, no color visible from outside
+ * Confinement made visible: the triplet never separates, it only closes.
+ */
+function makeConfineFilm(seed: number): Film {
+  const rng = seededRandom(seed);
+  const chargeSprites = CHARGE_COLORS.map((c) => makeGlowSprite(mix(c, PAPER, 0.3), c, 0.5));
+  const skinSprite = makeGlowSprite(mix(PAPER, CANDLE, 0.25), CANDLE, 0.4);
+  const quarks = CHARGE_COLORS.map((_, i) => ({ ang: (i / 3) * TAU - Math.PI / 2 }));
+  // A quiet scatter behind everything — the vacuum this nucleon sits in.
+  const dust: Array<{ x: number; y: number; ph: number }> = [];
+  for (let i = 0; i < 60; i++) dust.push({ x: rng(), y: rng(), ph: rng() * TAU });
+
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    const m = Math.min(w, h);
+    ctx.fillStyle = rgba(NIGHT, 1);
+    ctx.fillRect(0, 0, w, h);
+
+    for (const d of dust) {
+      const a = 0.14 * (0.5 + 0.5 * Math.sin(d.ph + u * 4));
+      ctx.fillStyle = rgba(PAPER, a);
+      ctx.fillRect(d.x * w, d.y * h, 1, 1);
+    }
+
+    const close = easeInOut(smoothstep(0.08, 0.82, u));
+    const cx = w / 2;
+    const cy = h / 2;
+    const R = m * 0.16 * (1 - close * 0.94);
+    const pos = quarks.map((q) => ({
+      x: cx + Math.cos(q.ang) * R,
+      y: cy + Math.sin(q.ang) * R,
+    }));
+
+    const tubeA = 1 - smoothstep(0.55, 0.92, u) * 0.85;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.lineWidth = Math.max(1, m * 0.008);
+    for (let i = 0; i < 3; i++) {
+      const a = pos[i];
+      const b = pos[(i + 1) % 3];
+      const g = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
+      g.addColorStop(0, rgba(CHARGE_COLORS[i], 0.55 * tubeA));
+      g.addColorStop(1, rgba(CHARGE_COLORS[(i + 1) % 3], 0.55 * tubeA));
+      ctx.strokeStyle = g;
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+    }
+    const colorA = 1 - smoothstep(0.5, 0.95, u);
+    if (colorA > 0.01) {
+      for (let i = 0; i < 3; i++) {
+        blitGlow(ctx, chargeSprites[i], pos[i].x, pos[i].y, m * 0.028, 0.7 * colorA);
+      }
+    }
+    ctx.restore();
+
+    // The skin: color-neutral, bound — it grows in as the colors cancel.
+    const skinA = smoothstep(0.35, 0.9, u);
+    if (skinA > 0.01) {
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      blitGlow(ctx, skinSprite, cx, cy, m * (0.05 + skinA * 0.09), 0.85 * skinA);
+      ctx.restore();
+      ctx.fillStyle = rgba(mix(PAPER, CANDLE, 0.15), 0.9 * skinA);
+      ctx.beginPath();
+      ctx.arc(cx, cy, m * 0.05 * skinA, 0, TAU);
+      ctx.fill();
+    }
+  };
+
+  return { renderFrame };
+}
+
+/**
+ * nucleons ↔ atoms — "shell": the nucleus receding to a point as the
+ * electron cloud's probability shells bloom around it. The real story of
+ * the atom — not a planet with moons, a point and the mostly-empty cloud
+ * around it.
+ *   u = 0   the nucleon fills the frame, a single bound skin
+ *   u ≈ 0.5 it recedes to a bright point at centre
+ *   u = 1   probability shells have bloomed around that point
+ */
+function makeShellFilm(seed: number): Film {
+  const rng = seededRandom(seed);
+  const skinSprite = makeGlowSprite(mix(PAPER, CANDLE, 0.25), CANDLE, 0.4);
+  const SHELLS = 4;
+  // Electron specks: seeded angle + shell index + phase, radius fixed per shell.
+  const specks: Array<{ shell: number; ang: number; ph: number; drift: number }> = [];
+  for (let s = 0; s < SHELLS; s++) {
+    const n = 10 + s * 8;
+    for (let i = 0; i < n; i++) {
+      specks.push({ shell: s, ang: rng() * TAU, ph: rng() * TAU, drift: 0.4 + rng() * 0.8 });
+    }
+  }
+
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    const m = Math.min(w, h);
+    ctx.fillStyle = rgba(NIGHT, 1);
+    ctx.fillRect(0, 0, w, h);
+    const cx = w / 2;
+    const cy = h / 2;
+
+    const recede = easeInOut(smoothstep(0.05, 0.55, u));
+    const nucR = lerp(m * 0.42, m * 0.012, recede);
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    blitGlow(ctx, skinSprite, cx, cy, Math.max(2, nucR * 1.6), 0.9);
+    ctx.restore();
+    ctx.fillStyle = rgba(mix(PAPER, CANDLE, 0.12), 0.95);
+    ctx.beginPath();
+    ctx.arc(cx, cy, Math.max(1, nucR * 0.5), 0, TAU);
+    ctx.fill();
+
+    // Shells bloom outward, outer ones later — mostly empty space between them.
+    const bloom = smoothstep(0.3, 0.98, u);
+    for (const sp of specks) {
+      const shellR = m * (0.06 + sp.shell * 0.09);
+      const reach = clamp01(bloom * (SHELLS + 1) - sp.shell);
+      if (reach <= 0) continue;
+      const r = shellR * (0.4 + 0.6 * reach);
+      const wobble = 1 + 0.06 * Math.sin(sp.ph + u * sp.drift * 6);
+      const x = cx + Math.cos(sp.ang + u * sp.drift) * r * wobble;
+      const y = cy + Math.sin(sp.ang + u * sp.drift) * r * wobble;
+      const tw = 0.5 + 0.5 * Math.sin(sp.ph + u * 5);
+      ctx.fillStyle = rgba(mix(AURORA, PAPER, 0.3), reach * tw * 0.55);
+      ctx.fillRect(x, y, 1.3, 1.3);
+    }
+    // A faint shell ring per level — the probability, not a boundary.
+    for (let s = 0; s < SHELLS; s++) {
+      const reach = clamp01(bloom * (SHELLS + 1) - s);
+      if (reach <= 0.02) continue;
+      ctx.strokeStyle = rgba(AURORA, 0.05 * reach);
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(cx, cy, m * (0.06 + s * 0.09), 0, TAU);
+      ctx.stroke();
+    }
+  };
+
+  return { renderFrame };
+}
+
+/**
+ * atoms ↔ molecules — "bond": two clouds overlapping and a bond forming in
+ * the shared lobe.
+ *   u = 0   two clouds, each a nucleus point and its shell, apart
+ *   u ≈ 0.7 they overlap; a bond lobe brightens in the shared lens
+ *   u = 1   one molecule — two nuclei held by the shared electron pair
+ */
+function makeBondFilm(seed: number): Film {
+  const rng = seededRandom(seed);
+  const cloudSprite = makeGlowSprite(mix(AURORA, PAPER, 0.3), AURORA, 0.35);
+  const nucSprite = makeGlowSprite(mix(PAPER, CANDLE, 0.25), CANDLE, 0.4);
+  const bondSprite = makeGlowSprite(PAPER, mix(PAPER, CANDLE, 0.4), 0.5);
+  const jitter = { a: rng() * TAU, b: rng() * TAU };
+
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    const m = Math.min(w, h);
+    ctx.fillStyle = rgba(NIGHT, 1);
+    ctx.fillRect(0, 0, w, h);
+    const cy = h / 2;
+    const close = easeInOut(smoothstep(0.05, 0.85, u));
+    const sep = lerp(m * 0.42, m * 0.1, close);
+    const ax = w / 2 - sep;
+    const bx = w / 2 + sep;
+    const cloudR = m * 0.2;
+
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    blitGlow(ctx, cloudSprite, ax, cy, cloudR, 0.4);
+    blitGlow(ctx, cloudSprite, bx, cy, cloudR, 0.4);
+    ctx.restore();
+
+    // The bond: brightest where the clouds overlap.
+    const overlap = clamp01((cloudR * 2 - sep * 2) / (cloudR * 2));
+    if (overlap > 0.02) {
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      const midx = (ax + bx) / 2;
+      blitGlow(ctx, bondSprite, midx, cy, cloudR * 0.55 * overlap, 0.85 * overlap);
+      ctx.restore();
+    }
+
+    const tw = (ph: number) => 0.8 + 0.2 * Math.sin(ph + u * 5);
+    ctx.fillStyle = rgba(mix(PAPER, CANDLE, 0.15), 0.95);
+    ctx.beginPath();
+    ctx.arc(ax, cy, m * 0.014 * tw(jitter.a), 0, TAU);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(bx, cy, m * 0.014 * tw(jitter.b), 0, TAU);
+    ctx.fill();
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    blitGlow(ctx, nucSprite, ax, cy, m * 0.03, 0.6);
+    blitGlow(ctx, nucSprite, bx, cy, m * 0.03, 0.6);
+    ctx.restore();
+  };
+
+  return { renderFrame };
+}
+
+const CHAIN_LINKS = 14;
+
+/**
+ * molecules ↔ organics — "chain": a chain lengthening, carbon backbone
+ * articulating.
+ *   u = 0   the bonded pair from the last edge, small, at centre
+ *   u = 1   a carbon backbone has articulated across the frame, zigzagging,
+ *           side groups snapping onto it as it lengthens
+ */
+function makeChainFilm(seed: number): Film {
+  const rng = seededRandom(seed);
+  const nucSprite = makeGlowSprite(mix(PAPER, CANDLE, 0.25), CANDLE, 0.4);
+  const sideColors: RGB[] = [mix(AURORA, PAPER, 0.3), mix(SEA, PAPER, 0.35), mix(KEPT, PAPER, 0.3)];
+  const sides = Array.from({ length: CHAIN_LINKS }, () => ({
+    has: rng() > 0.5,
+    ang: rng() > 0.5 ? -1 : 1,
+    col: sideColors[Math.floor(rng() * sideColors.length)],
+  }));
+
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    const m = Math.min(w, h);
+    ctx.fillStyle = rgba(NIGHT, 1);
+    ctx.fillRect(0, 0, w, h);
+    const cx = w / 2;
+    const cy = h / 2;
+
+    const grow = smoothstep(0.05, 0.95, u);
+    const span = lerp(m * 0.06, w * 0.78, easeInOut(grow));
+    const step = span / (CHAIN_LINKS - 1);
+    const amp = lerp(0, m * 0.05, smoothstep(0.1, 0.55, u));
+    const x0 = cx - span / 2;
+
+    const nodes: Array<{ x: number; y: number; a: number }> = [];
+    for (let i = 0; i < CHAIN_LINKS; i++) {
+      const reach = clamp01(grow * CHAIN_LINKS - i * 0.75);
+      const x = x0 + step * i;
+      const y = cy + (i % 2 === 0 ? -amp : amp);
+      nodes.push({ x, y, a: reach });
+    }
+
+    ctx.strokeStyle = rgba(mix(PAPER, CANDLE, 0.1), 0.6);
+    ctx.lineWidth = Math.max(1, m * 0.006);
+    ctx.beginPath();
+    let started = false;
+    for (const n of nodes) {
+      if (n.a < 0.05) continue;
+      if (!started) {
+        ctx.moveTo(n.x, n.y);
+        started = true;
+      } else {
+        ctx.lineTo(n.x, n.y);
+      }
+    }
+    ctx.stroke();
+
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i];
+      if (n.a < 0.05) continue;
+      ctx.save();
+      ctx.globalAlpha = n.a;
+      ctx.globalCompositeOperation = "lighter";
+      blitGlow(ctx, nucSprite, n.x, n.y, m * 0.016, 0.7);
+      ctx.restore();
+      ctx.fillStyle = rgba(mix(PAPER, CANDLE, 0.1), 0.9 * n.a);
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, m * 0.007, 0, TAU);
+      ctx.fill();
+
+      const s = sides[i];
+      if (s.has) {
+        const sideReach = clamp01((n.a - 0.4) / 0.6);
+        if (sideReach > 0.01) {
+          const sy = n.y + s.ang * amp * 1.3;
+          ctx.strokeStyle = rgba(s.col, 0.4 * sideReach);
+          ctx.lineWidth = Math.max(1, m * 0.004);
+          ctx.beginPath();
+          ctx.moveTo(n.x, n.y);
+          ctx.lineTo(n.x, sy);
+          ctx.stroke();
+          ctx.fillStyle = rgba(s.col, 0.85 * sideReach);
+          ctx.beginPath();
+          ctx.arc(n.x, sy, m * 0.009, 0, TAU);
+          ctx.fill();
+        }
+      }
+    }
+  };
+
+  return { renderFrame };
+}
+
+const HELIX_N = 22;
+const HELIX_TURNS = 2.6;
+const BASE_TINTS: RGB[] = [
+  mix(AURORA, PAPER, 0.2),
+  mix([200, 120, 150] as RGB, PAPER, 0.2),
+  mix(KEPT, PAPER, 0.15),
+  mix(SEA, PAPER, 0.25),
+];
+
+/**
+ * organics ↔ dna — "helix": the strand twisting closed into the double
+ * helix, base-pair rungs snapping in.
+ *   u = 0   the backbone, flat, from the last edge
+ *   u = 1   it has twisted closed into the double helix, rungs snapped in
+ *           as the strands wind
+ */
+function makeHelixFilm(seed: number): Film {
+  const rng = seededRandom(seed);
+  const bases = Array.from({ length: HELIX_N }, () => Math.floor(rng() * BASE_TINTS.length));
+
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    const m = Math.min(w, h);
+    ctx.fillStyle = rgba(NIGHT, 1);
+    ctx.fillRect(0, 0, w, h);
+    const cx = w / 2;
+    const cy = h / 2;
+    const span = h * 0.72;
+    const y0 = cy - span / 2;
+    const twist = easeInOut(smoothstep(0.05, 0.85, u));
+    const radius = m * 0.09 * twist;
+
+    const strandA: Array<{ x: number; y: number; z: number }> = [];
+    const strandB: Array<{ x: number; y: number; z: number }> = [];
+    for (let i = 0; i < HELIX_N; i++) {
+      const t = i / (HELIX_N - 1);
+      const ang = t * TAU * HELIX_TURNS;
+      const y = y0 + t * span;
+      strandA.push({ x: cx + Math.cos(ang) * radius, y, z: Math.sin(ang) });
+      strandB.push({ x: cx + Math.cos(ang + Math.PI) * radius, y, z: Math.sin(ang + Math.PI) });
+    }
+
+    const drawStrand = (pts: typeof strandA) => {
+      ctx.beginPath();
+      for (let i = 0; i < pts.length; i++) {
+        const p = pts[i];
+        if (i === 0) ctx.moveTo(p.x, p.y);
+        else ctx.lineTo(p.x, p.y);
+      }
+      ctx.stroke();
+    };
+    ctx.strokeStyle = rgba(mix(PAPER, CANDLE, 0.15), 0.75);
+    ctx.lineWidth = Math.max(1.2, m * 0.007);
+    drawStrand(strandA);
+    drawStrand(strandB);
+
+    // Rungs snap in progressively, back strand behind, front in front.
+    const rungIn = smoothstep(0.25, 0.98, u);
+    for (let i = 0; i < HELIX_N; i++) {
+      const reach = clamp01(rungIn * HELIX_N - i * 0.9);
+      if (reach <= 0.02) continue;
+      const a = strandA[i];
+      const b = strandB[i];
+      const depth = 0.5 + 0.5 * a.z;
+      ctx.strokeStyle = rgba(BASE_TINTS[bases[i]], 0.65 * reach * (0.4 + 0.6 * depth));
+      ctx.lineWidth = Math.max(1, m * 0.005) * (0.6 + 0.4 * depth);
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+    }
+    // Backbone nodes, brighter once the twist has begun to open them out.
+    const nodeA = clamp01(twist * 4);
+    for (let i = 0; i < HELIX_N; i++) {
+      for (const p of [strandA[i], strandB[i]]) {
+        const depth = 0.5 + 0.5 * p.z;
+        ctx.fillStyle = rgba(mix(PAPER, CANDLE, 0.1), (0.5 + 0.5 * depth) * (0.3 + 0.7 * nodeA));
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, m * 0.006 * (0.6 + 0.4 * depth), 0, TAU);
+        ctx.fill();
+      }
+    }
+  };
+
+  return { renderFrame };
+}
+
+/**
+ * dna ↔ organelles — "chromatin": the helix coiling into chromatin and
+ * receding into a membrane-bound body.
+ *   u = 0   the double helix, small, at centre
+ *   u ≈ 0.5 it coils around a widening loop — supercoiling into chromatin
+ *   u = 1   condensed into a membrane-bound body, faint neighbour
+ *           organelles already keeping it company
+ */
+function makeChromatinFilm(seed: number): Film {
+  const rng = seededRandom(seed);
+  const bases = Array.from({ length: HELIX_N }, () => Math.floor(rng() * BASE_TINTS.length));
+  const membraneSprite = makeGlowSprite(mix(AURORA, PAPER, 0.35), AURORA, 0.3);
+  const neighborTints: RGB[] = [mix(KEPT, PAPER, 0.3), mix(SEA, PAPER, 0.3), mix(CANDLE, PAPER, 0.35)];
+  const neighbors = neighborTints.map((col, i) => ({
+    ang: (i / neighborTints.length) * TAU + rng() * 0.6,
+    dist: 0.22 + rng() * 0.1,
+    r: 0.5 + rng() * 0.4,
+    col,
+  }));
+
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    const m = Math.min(w, h);
+    ctx.fillStyle = rgba(NIGHT, 1);
+    ctx.fillRect(0, 0, w, h);
+    const cx = w / 2;
+    const cy = h / 2;
+
+    const coil = easeInOut(smoothstep(0.02, 0.6, u));
+    const condense = easeInOut(smoothstep(0.45, 0.98, u));
+    // The helix's own centreline sweeps a widening loop as it supercoils,
+    // then the whole assembly shrinks toward the organelle's seat.
+    const loopR = m * 0.1 * coil;
+    const scale = lerp(1, 0.16, condense);
+    const span = h * 0.5 * scale;
+
+    for (let i = 0; i < HELIX_N; i++) {
+      const t = i / (HELIX_N - 1);
+      const loopAng = t * TAU * 2.2;
+      const lx = cx + Math.cos(loopAng) * loopR * (1 - condense);
+      const ly = cy + Math.sin(loopAng) * loopR * (1 - condense) * 0.6 - span / 2 + t * span;
+      const ang = t * TAU * HELIX_TURNS;
+      const radius = m * 0.05 * scale;
+      const ax = lx + Math.cos(ang) * radius;
+      const bx = lx + Math.cos(ang + Math.PI) * radius;
+      const z = Math.sin(ang);
+      const depth = 0.5 + 0.5 * z;
+      ctx.fillStyle = rgba(BASE_TINTS[bases[i]], (0.35 + 0.35 * depth) * (1 - condense * 0.7));
+      ctx.beginPath();
+      ctx.arc(ax, ly, Math.max(0.6, m * 0.006 * (1 - condense * 0.6)), 0, TAU);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(bx, ly, Math.max(0.6, m * 0.006 * (1 - condense * 0.6)), 0, TAU);
+      ctx.fill();
+    }
+
+    // Faint neighbour organelles, keeping company as this one seals shut.
+    const neighborA = smoothstep(0.55, 0.98, u);
+    if (neighborA > 0.01) {
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      for (const n of neighbors) {
+        const nx = cx + Math.cos(n.ang) * m * n.dist;
+        const ny = cy + Math.sin(n.ang) * m * n.dist * 0.8;
+        blitGlow(ctx, membraneSprite, nx, ny, m * 0.05 * n.r, 0.3 * neighborA);
+      }
+      ctx.restore();
+    }
+
+    // The membrane closes around the condensed body.
+    const membraneA = smoothstep(0.55, 1, u);
+    if (membraneA > 0.01) {
+      ctx.strokeStyle = rgba(AURORA, 0.5 * membraneA);
+      ctx.lineWidth = Math.max(1, m * 0.006);
+      ctx.beginPath();
+      ctx.arc(cx, cy, m * 0.1 * scale + m * 0.02, 0, TAU);
+      ctx.stroke();
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      blitGlow(ctx, membraneSprite, cx, cy, m * 0.16 * scale + m * 0.03, 0.35 * membraneA);
+      ctx.restore();
+    }
+  };
+
+  return { renderFrame };
+}
+
+const MEMBRANE_LOBES = 9;
+
+/**
+ * organelles ↔ cells — "membrane": the membrane closing around a working
+ * interior.
+ *   u = 0   loose organelles, no boundary
+ *   u = 1   a membrane has closed around them; cytoplasm grain fills what
+ *           used to be empty frame
+ */
+function makeMembraneFilm(seed: number): Film {
+  const rng = seededRandom(seed);
+  const wobble = new Float32Array(MEMBRANE_LOBES);
+  for (let i = 0; i < MEMBRANE_LOBES; i++) wobble[i] = rng();
+  const organelleTints: RGB[] = [
+    mix(AURORA, PAPER, 0.25),
+    mix(KEPT, PAPER, 0.3),
+    mix(SEA, PAPER, 0.3),
+    mix(CANDLE, PAPER, 0.3),
+  ];
+  // Sprites built once, outside the frame loop — never per organelle per frame.
+  const organelleSprites = organelleTints.map((c) => makeGlowSprite(mix(c, PAPER, 0.3), c, 0.35));
+  const organelles = organelleTints.map((col, i) => ({
+    freeAng: rng() * TAU,
+    freeDist: 0.3 + rng() * 0.35,
+    ang: (i / organelleTints.length) * TAU + rng() * 0.4,
+    dist: 0.14 + rng() * 0.16,
+    r: 0.5 + rng() * 0.4,
+    col,
+  }));
+  const grain: Array<{ x: number; y: number; a: number }> = [];
+  for (let i = 0; i < 90; i++) grain.push({ x: rng(), y: rng(), a: 0.3 + rng() * 0.5 });
+
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    const m = Math.min(w, h);
+    ctx.fillStyle = rgba(NIGHT, 1);
+    ctx.fillRect(0, 0, w, h);
+    const cx = w / 2;
+    const cy = h / 2;
+    const close = easeInOut(smoothstep(0.1, 0.92, u));
+
+    // Organelles drift from loose scatter to their settled interior anchors.
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    for (let i = 0; i < organelles.length; i++) {
+      const o = organelles[i];
+      const fx = cx + Math.cos(o.freeAng) * m * o.freeDist;
+      const fy = cy + Math.sin(o.freeAng) * m * o.freeDist * 0.8;
+      const sx = cx + Math.cos(o.ang) * m * o.dist;
+      const sy = cy + Math.sin(o.ang) * m * o.dist * 0.8;
+      const x = lerp(fx, sx, close);
+      const y = lerp(fy, sy, close);
+      blitGlow(ctx, organelleSprites[i], x, y, m * 0.045 * o.r, 0.55);
+    }
+    ctx.restore();
+
+    // Cytoplasm grain fills in behind, once there is an inside to fill.
+    const grainA = smoothstep(0.3, 0.9, u);
+    if (grainA > 0.01) {
+      for (const g of grain) {
+        const dx = g.x - 0.5;
+        const dy = g.y - 0.5;
+        if (dx * dx + dy * dy > 0.22) continue;
+        ctx.fillStyle = rgba(mix(AURORA, PAPER, 0.4), grainA * g.a * 0.3);
+        ctx.fillRect(g.x * w, g.y * h, 1, 1);
+      }
+    }
+
+    // The membrane: a blobby closed curve, growing from a ring to the cell wall.
+    const membraneA = smoothstep(0.15, 0.7, u);
+    if (membraneA > 0.01) {
+      const baseR = lerp(m * 0.05, m * 0.4, close);
+      ctx.beginPath();
+      for (let i = 0; i <= MEMBRANE_LOBES; i++) {
+        const t = (i % MEMBRANE_LOBES) / MEMBRANE_LOBES;
+        const ang = t * TAU;
+        const wob = 1 + (wobble[i % MEMBRANE_LOBES] - 0.5) * 0.16;
+        const x = cx + Math.cos(ang) * baseR * wob;
+        const y = cy + Math.sin(ang) * baseR * wob;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      ctx.strokeStyle = rgba(mix(PAPER, AURORA, 0.3), 0.7 * membraneA);
+      ctx.lineWidth = Math.max(1.2, m * 0.008);
+      ctx.stroke();
+    }
+  };
+
+  return { renderFrame };
+}
+
+const SHEET_ROWS = 5;
+const SHEET_COLS = 5;
+
+/** A hex-tiled anchor grid, shared by the sheet and dissolve films so the
+ * tissue they both look at is the same mosaic. */
+function buildHexAnchors(): Array<{ x: number; y: number }> {
+  const out: Array<{ x: number; y: number }> = [];
+  for (let r = 0; r < SHEET_ROWS; r++) {
+    for (let c = 0; c < SHEET_COLS; c++) {
+      const x = 0.5 + (c - (SHEET_COLS - 1) / 2) * 0.19 + (r % 2 === 0 ? 0.095 : -0.095);
+      const y = 0.5 + (r - (SHEET_ROWS - 1) / 2) * 0.165;
+      out.push({ x, y });
+    }
+  }
+  return out;
+}
+
+/**
+ * cells ↔ tissue — "sheet": cells adhering into a sheet, junctions forming.
+ *   u = 0   one cell, membrane and all, centred and large
+ *   u = 1   a tessellated sheet of adhered cells, junctions glowing at
+ *           every shared edge
+ */
+function makeSheetFilm(seed: number): Film {
+  const rng = seededRandom(seed);
+  const anchors = buildHexAnchors();
+  const centerI = Math.floor(anchors.length / 2);
+  const scatter = anchors.map((a, i) => (i === centerI ? a : { x: rng(), y: rng() }));
+  const membraneCol = mix(PAPER, AURORA, 0.3);
+  const cellR = 0.1;
+
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    const m = Math.min(w, h);
+    ctx.fillStyle = rgba(NIGHT, 1);
+    ctx.fillRect(0, 0, w, h);
+
+    const settle = easeInOut(smoothstep(0.08, 0.85, u));
+    const zoomOut = lerp(2.6, 1, smoothstep(0.15, 0.95, u));
+    const cx = w / 2;
+    const cy = h / 2;
+
+    const cellIn = smoothstep(0.05, 0.7, u);
+    const pos = anchors.map((a, i) => {
+      const s = scatter[i];
+      const nx = lerp(s.x, a.x, settle);
+      const ny = lerp(s.y, a.y, settle);
+      return { x: cx + (nx - 0.5) * m * zoomOut, y: cy + (ny - 0.5) * m * zoomOut };
+    });
+
+    for (let i = 0; i < pos.length; i++) {
+      const reach = i === centerI ? 1 : clamp01(cellIn * pos.length - i * 0.3);
+      if (reach <= 0.02) continue;
+      const p = pos[i];
+      const r = m * cellR * zoomOut * (0.85 + 0.15 * reach);
+      ctx.fillStyle = rgba(mix(AURORA, NIGHT, 0.82), 0.5 * reach);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r, 0, TAU);
+      ctx.fill();
+      ctx.strokeStyle = rgba(membraneCol, 0.6 * reach);
+      ctx.lineWidth = Math.max(1, m * 0.004);
+      ctx.stroke();
+    }
+
+    // Adhesion junctions: bright points where neighbours have closed distance.
+    const junctionA = smoothstep(0.4, 0.98, u);
+    if (junctionA > 0.01) {
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      for (let i = 0; i < pos.length; i++) {
+        for (let j = i + 1; j < pos.length; j++) {
+          const dx = pos[i].x - pos[j].x;
+          const dy = pos[i].y - pos[j].y;
+          const d = Math.hypot(dx, dy);
+          const rr = m * cellR * zoomOut * 2.05;
+          if (d > rr) continue;
+          const mx = (pos[i].x + pos[j].x) / 2;
+          const my = (pos[i].y + pos[j].y) / 2;
+          ctx.fillStyle = rgba(PAPER, junctionA * 0.6);
+          ctx.beginPath();
+          ctx.arc(mx, my, Math.max(1, m * 0.005), 0, TAU);
+          ctx.fill();
+        }
+      }
+      ctx.restore();
+    }
+  };
+
+  return { renderFrame };
+}
+
+/**
+ * tissue ↔ drop — "dissolve": the sheet dissolving into the water it lives
+ * in.
+ *   u = 0   the tessellated sheet, junctions and all
+ *   u = 1   the sheet has let go into the water — one drop, ripples
+ *           answering a surface no longer solid
+ */
+function makeDissolveFilm(seed: number): Film {
+  const rng = seededRandom(seed);
+  const anchors = buildHexAnchors();
+  const jitter = anchors.map(() => ({ ph: rng() * TAU }));
+  const membraneCol = mix(PAPER, AURORA, 0.3);
+  const dropSprite = makeGlowSprite([150, 235, 250], [70, 150, 190], 0.4);
+  const cellR = 0.1;
+
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    const m = Math.min(w, h);
+    ctx.fillStyle = rgba(NIGHT, 1);
+    ctx.fillRect(0, 0, w, h);
+    const cx = w / 2;
+    const cy = h / 2;
+
+    const erode = easeInOut(smoothstep(0.1, 0.85, u));
+    const gather = smoothstep(0.35, 0.98, u);
+
+    // The sheet's cells drift apart and lose their edges as they go.
+    const sheetA = 1 - smoothstep(0.3, 0.85, u);
+    if (sheetA > 0.02) {
+      for (let i = 0; i < anchors.length; i++) {
+        const a = anchors[i];
+        const j = jitter[i];
+        const spread = erode * 0.5;
+        const x = cx + (a.x - 0.5 + Math.cos(j.ph) * spread) * m;
+        const y = cy + (a.y - 0.5 + Math.sin(j.ph) * spread) * m;
+        const r = m * cellR * (1 - erode * 0.35);
+        ctx.fillStyle = rgba(mix(AURORA, NIGHT, 0.82), 0.4 * sheetA);
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, TAU);
+        ctx.fill();
+        ctx.strokeStyle = rgba(membraneCol, (0.55 - erode * 0.4) * sheetA);
+        ctx.lineWidth = Math.max(1, m * 0.004);
+        ctx.stroke();
+      }
+    }
+
+    // The drop: everything the sheet was made of, held now by surface tension.
+    if (gather > 0.01) {
+      const R = m * 0.32 * gather;
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      blitGlow(ctx, dropSprite, cx, cy, R * 1.3, 0.6 * gather);
+      ctx.restore();
+      ctx.fillStyle = rgba([150, 220, 235], 0.35 * gather);
+      ctx.beginPath();
+      ctx.arc(cx, cy, R, 0, TAU);
+      ctx.fill();
+      // Ripples, answering a surface no longer solid.
+      for (let k = 0; k < 3; k++) {
+        const rp = (u * 2.2 + k / 3) % 1;
+        ctx.strokeStyle = rgba([200, 240, 250], (1 - rp) * 0.3 * gather);
+        ctx.lineWidth = Math.max(1, m * 0.004);
+        ctx.beginPath();
+        ctx.arc(cx, cy, R * (0.3 + rp * 1.1), 0, TAU);
+        ctx.stroke();
+      }
+      // One highlight glint.
+      ctx.fillStyle = rgba(PAPER, 0.6 * gather);
+      ctx.beginPath();
+      ctx.ellipse(cx - R * 0.32, cy - R * 0.32, R * 0.14, R * 0.08, -0.6, 0, TAU);
+      ctx.fill();
+    }
+  };
+
+  return { renderFrame };
+}
+
 function makeFilmFor(spec: PassageSpec): Film | null {
   if (spec.film === "arm") return makeArmFilm();
   if (spec.film === "node") return makeNodeFilm();
@@ -1955,8 +2791,37 @@ function makeFilmFor(spec: PassageSpec): Film | null {
   if (spec.film === "chartland") return makeChartLandFilm(PASSAGE_SEED ^ 0x0c4a71);
   if (spec.film === "strand") return makeStrandFilm(PASSAGE_SEED ^ 0x057a4d);
   if (spec.film === "fold") return makeFoldFilm(PASSAGE_SEED ^ 0x0f01d0);
+  if (spec.film === "quantum") return makeQuantumFilm(PASSAGE_SEED ^ 0x0900a1);
+  if (spec.film === "confine") return makeConfineFilm(PASSAGE_SEED ^ 0x0c0f19);
+  if (spec.film === "shell") return makeShellFilm(PASSAGE_SEED ^ 0x05e11c);
+  if (spec.film === "bond") return makeBondFilm(PASSAGE_SEED ^ 0x0b04d0);
+  if (spec.film === "chain") return makeChainFilm(PASSAGE_SEED ^ 0x0c4a1e);
+  if (spec.film === "helix") return makeHelixFilm(PASSAGE_SEED ^ 0x0e11c5);
+  if (spec.film === "chromatin") return makeChromatinFilm(PASSAGE_SEED ^ 0x0c4084);
+  if (spec.film === "membrane") return makeMembraneFilm(PASSAGE_SEED ^ 0x0eeb4a);
+  if (spec.film === "sheet") return makeSheetFilm(PASSAGE_SEED ^ 0x05ee70);
+  if (spec.film === "dissolve") return makeDissolveFilm(PASSAGE_SEED ^ 0x0d1550);
   return makeFilm(PASSAGE_SEED);
 }
+
+/**
+ * Test-only surface: the node test scripts (scripts/lib/load-ts.mjs) load
+ * this module directly and need the pure spine-film factories to assert
+ * determinism — they are otherwise internal to makeFilmFor. Never consumed
+ * by the app itself.
+ */
+export const __spineFilmFactories: Record<string, (seed: number) => Film> = {
+  quantum: makeQuantumFilm,
+  confine: makeConfineFilm,
+  shell: makeShellFilm,
+  bond: makeBondFilm,
+  chain: makeChainFilm,
+  helix: makeHelixFilm,
+  chromatin: makeChromatinFilm,
+  membrane: makeMembraneFilm,
+  sheet: makeSheetFilm,
+  dissolve: makeDissolveFilm,
+};
 
 // ——— The host and player ————————————————————————————————————————————
 

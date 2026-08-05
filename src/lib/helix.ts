@@ -140,6 +140,100 @@ export function openFraction(seq: Base[], temperature: number): number {
   return opened / seq.length;
 }
 
+// ——— annealing: what one strand does to another ————————————————————
+
+/** A probe shorter than this cannot find its place — it is noise, not a site. */
+export const MIN_PROBE = 4;
+
+export type AnnealSite = {
+  /** Where on the template the probe's first base sits. */
+  index: number;
+  /** 0..1 — the fraction of the probe that is truly complementary there. */
+  score: number;
+  /** Hydrogen bonds actually formed — the real ledger, 2 per A·T, 3 per G·C. */
+  bonds: number;
+};
+
+/**
+ * Where a loose fragment finds its home on a template: the offset whose
+ * complementarity is highest, ties going to the earliest site so the search
+ * is deterministic. This is sequence recognition, not proximity — a probe
+ * that matches nowhere returns its best bad site with a low score, and the
+ * room is free to let it drift on.
+ */
+export function bestAnnealSite(template: Base[], probe: Base[]): AnnealSite | null {
+  if (probe.length < MIN_PROBE || template.length < probe.length) return null;
+  let best: AnnealSite | null = null;
+  for (let off = 0; off + probe.length <= template.length; off++) {
+    let matched = 0;
+    let bonds = 0;
+    for (let k = 0; k < probe.length; k++) {
+      if (COMPLEMENT[template[off + k]] === probe[k]) {
+        matched += 1;
+        bonds += H_BONDS[probe[k]];
+      }
+    }
+    const score = matched / probe.length;
+    if (!best || score > best.score) best = { index: off, score, bonds };
+  }
+  return best;
+}
+
+/**
+ * Whether a duplex of `bonds` hydrogen bonds over `pairs` rungs survives a
+ * given temperature (0..1 of the room's own heat axis). The threshold is the
+ * bond density, so a G·C-rich fragment genuinely outlasts an A·T-rich one of
+ * the same length — the ledger doing the work, not a constant.
+ */
+export const DENATURE_HEAT = 0.92;
+export function annealHolds(bonds: number, pairs: number, temperature: number): boolean {
+  if (pairs <= 0) return false;
+  const density = bonds / (pairs * 3); // 1 for an all-G·C duplex, ⅔ for all-A·T
+  return temperature < density * DENATURE_HEAT;
+}
+
+/**
+ * Repair: an annealed fragment is read into the template, so the template
+ * becomes the complement of the probe across the site. A perfectly matched
+ * probe changes nothing (a repair enzyme that rewrites a correct strand is
+ * a bug); a mismatched one changes exactly the mismatched positions, and
+ * never the strand's length.
+ */
+export function spliceInto(template: Base[], probe: Base[], index: number): Base[] {
+  if (index < 0 || probe.length === 0 || index + probe.length > template.length) return template;
+  const out = [...template];
+  for (let k = 0; k < probe.length; k++) out[index + k] = COMPLEMENT[probe[k]];
+  return out;
+}
+
+/**
+ * A fragment cut from a template, already complementary to it — what a
+ * primer or a repair patch actually is. `drift` mismatches that many bases
+ * deterministically, so a patch can arrive imperfect and still find its site.
+ */
+export function fragmentFrom(template: Base[], index: number, length: number, drift: number, seed: number): Base[] {
+  const n = Math.max(MIN_PROBE, Math.min(template.length, Math.floor(length)));
+  const start = Math.max(0, Math.min(template.length - n, Math.floor(index)));
+  const out = complement(template.slice(start, start + n));
+  const d = Math.max(0, Math.min(n, Math.floor(drift)));
+  // DISTINCT sites, drawn from a seeded shuffle. Two mismatches rolled
+  // independently can land on the same base and undo each other, which
+  // would silently hand back a perfect probe when an imperfect one was
+  // asked for — the shuffle makes `drift` mean what it says.
+  const order: number[] = [];
+  for (let k = 0; k < n; k++) order.push(k);
+  const rng = mulberry32(hashSeed(seed, n, start));
+  for (let k = n - 1; k > 0; k--) {
+    const j = Math.floor(rng() * (k + 1));
+    const tmp = order[k];
+    order[k] = order[j];
+    order[j] = tmp;
+  }
+  let seq = out;
+  for (let k = 0; k < d; k++) seq = mutate(seq, order[k], hashSeed(seed, order[k], 3));
+  return seq;
+}
+
 // ——— the melody: the same object, heard ————————————————————————
 
 /**

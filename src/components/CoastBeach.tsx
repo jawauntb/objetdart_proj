@@ -25,6 +25,14 @@ import {
   mulberry32,
   mix32,
   SEA_BAND,
+  createSandProfile,
+  sandProfileAt,
+  breakerRunup,
+  breakerLifeSec,
+  breakerReach,
+  applyBreakerToProfile,
+  relaxSandProfile,
+  SAND_PROFILE_MAX,
   type CoastZone,
   type ZoneVoice,
   type FoamSpeck,
@@ -122,7 +130,26 @@ uniform float uPulseDune;
 uniform vec4  uTouch[8]; // x, y, age(s), zoneIndex + strength
 uniform int   uTouchCount;
 uniform float uDetail;
+uniform float uSandProfile[24]; // what breakers have done to the beach, by column
+uniform vec4  uBreak[3];        // nx, spread, power, runup — active breakers
+uniform int   uBreakCount;
 varying vec2 vUv;
+
+// linear read of the sand-profile bank — a coarse drift, not a heightmap
+float sandProfileG(float nx) {
+  float f = clamp(nx, 0.0, 1.0) * 23.0;
+  float i0 = floor(f);
+  float t = f - i0;
+  int idx0 = int(i0);
+  int idx1 = idx0 + 1;
+  float a = 0.0;
+  float b = 0.0;
+  for (int i = 0; i < 24; i++) {
+    if (i == idx0) a = uSandProfile[i];
+    if (i == idx1) b = uSandProfile[i];
+  }
+  return mix(a, b, t);
+}
 
 float hash21(vec2 p) {
   p = fract(p * vec2(123.34, 456.21));
@@ -773,6 +800,37 @@ export default function CoastBeach() {
     let lastBreatheAt = 0;
     let prevSurf = 0;
     let lastTutti = 0;
+
+    // ——— breakers: the beach's own countable, physical event ———
+    // A raised breaker runs its real swash up the beach (lib/coast's
+    // asymmetric run-up curve) and, while it runs, moves both the sand
+    // profile and any shells caught in its lateral reach — a wave that
+    // actually rearranges the shore instead of a decal painted over it.
+    type Breaker = { nx: number; spread: number; power: number; t0: number };
+    let breakers: Breaker[] = [];
+    const MAX_BREAKERS = 4;
+    const sandProfile = createSandProfile();
+    const breakUniform = new Float32Array(3 * 4); // up to 3 visualized: nx, spread, power, runup
+
+    // a tide pool opened on the wet sand: a shallow held patch that lingers
+    // and slowly drains — the wet band's own countable thing
+    type TidePool = { nx: number; ny: number; r: number; t0: number };
+    let tidePools: TidePool[] = [];
+    const MAX_TIDE_POOLS = 3;
+
+    const raiseBreaker = (bnx: number, power: number) => {
+      breakers.push({
+        nx: clamp(bnx, 0.04, 0.96),
+        spread: 0.09 + clamp01(power) * 0.08,
+        power: clamp01(power),
+        t0: simT,
+      });
+      if (breakers.length > MAX_BREAKERS) breakers.shift();
+      voice.breakWave(0.55 + power * 0.45);
+      audio.thud();
+      haptics.storm();
+      pulse[1] = Math.min(1, pulse[1] + 0.6);
+    };
 
     const syncSleep = () => {
       asleep = hidden || galleryPaused;
@@ -1698,6 +1756,37 @@ export default function CoastBeach() {
         }
         for (let i = departing.length - 1; i >= 0; i--) {
           if (now - departing[i].t0 > departing[i].dur) departing.splice(i, 1);
+        }
+
+        // ——— breakers: real swash moving real sand and real shells ———
+        if (breakers.length) {
+          for (let i = breakers.length - 1; i >= 0; i--) {
+            const b = breakers[i];
+            const age = simT - b.t0;
+            if (age > breakerLifeSec(b.power)) { breakers.splice(i, 1); continue; }
+            const runup = breakerRunup(age, b.power);
+            applyBreakerToProfile(sandProfile, b.nx, b.spread, b.power, runup, dt, 0.045);
+            // the swash carries anything it reaches: onshore on the rise,
+            // a weaker drag back on the drain — net onshore, like real surf
+            const rising = age < 0.30 + b.power * 0.16;
+            const carry = (rising ? 1 : -0.35) * runup * dt * (0.05 + b.power * 0.05);
+            for (const s of shells) {
+              const dx = s.nx - b.nx;
+              const lateral = Math.exp(-(dx * dx) / (2 * b.spread * b.spread));
+              if (lateral < 0.05) continue;
+              const sy = beachY(s, tide);
+              if (sy < tide - 0.01) continue; // only the beach, not the open sea
+              s.ny = clamp(sy + carry * lateral, tide + 0.008, 0.985);
+              s.nx = clamp(s.nx + (mulberry32(mix32(s.seed, i))() - 0.5) * lateral * dt * 0.06, 0.02, 0.98);
+              writer.schedule();
+            }
+          }
+        }
+        relaxSandProfile(sandProfile, dt, 140);
+
+        // tide pools slowly drain back into the sand
+        for (let i = tidePools.length - 1; i >= 0; i--) {
+          if (simT - tidePools[i].t0 > 22) tidePools.splice(i, 1);
         }
       }
 
