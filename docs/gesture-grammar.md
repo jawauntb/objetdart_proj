@@ -139,7 +139,10 @@ scrub      { winding, angularVelocity, cx, cy } // circular path, any finger cou
 voice      { id, phase: start|move|end|cancel, x, y, intensity } // polyphonic surfaces:
            // one stream per finger; binding it switches the surface's dialect
            // (hold/drag/scrub silenced, correlated pairs may cancel into pinch/twist)
-span       { spread, phase }                   // two fingers held apart, static
+span       { spread, elapsed, phase, cx, cy, ax, ay, bx, by } // two fingers held
+           // apart, static: the sustained interval. enters after stillness,
+           // ticks with the live spread, releases on lift / drift / any
+           // pinch-twist-pan claim — a span that moves is a frame gesture
 rhythm     { bpm, stability }                  // from tap trains
 drum       { hits, alternation, x, y, ax, ay, bx, by } // multi-point patter:
            // the committing hit plus the two zones the hands alternate
@@ -157,7 +160,8 @@ breath     { strength }                        // opt-in, candle contexts only
 Shared thresholds (centralized in `gesture/core.ts`, never redefined per room):
 hold tiers **250ms** (touch) / **900ms** (dwell) / **2500ms** (ceremony); tap window
 280ms with train cap 9 and site-wide tiers **1 / 3 / 5 / n** (`tapTrainTier`, n ≥ 7);
-chord settle 40ms; scrub at ¾ winding; flick above 0.6 px/ms; voice stagger 80ms
+chord settle 40ms; scrub at ¾ winding; flick above 0.6 px/ms; span enters after
+350ms of two-finger stillness (16px drift tolerance); voice stagger 80ms
 and pair-decide 180ms on instrument surfaces. A drum patter commits at three landings
 alternating between two zones inside a 1.2s window (a same-spot roll or a chord's
 simultaneous landings never drum); an arpeggio is a chord whose landings spread past

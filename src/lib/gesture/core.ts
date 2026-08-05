@@ -60,6 +60,20 @@ export const THRESHOLDS = {
   drumAlternationMin: 0.7,
   /** An entrance later than this after the previous is a new phrase, not the same arpeggio. */
   arpeggioGapMaxMs: 600,
+  /**
+   * Span (grammar §1 "spread", §4): two fingers held apart, static — the
+   * sustained interval. Enters once the pair has stood still this long;
+   * deliberately shorter than dwellMs (a span is a chord being held, not a
+   * plant) and far longer than chordSettleMs (a chord landing is not yet a
+   * span).
+   */
+  spanEnterMs: 350,
+  /**
+   * A span finger may breathe this many px without breaking the interval —
+   * looser than moveTolPx because two pressed fingers pivot each other.
+   * Motion past it (or any pinch/twist/pan claim) ends the span.
+   */
+  spanTolPx: 16,
 } as const;
 
 export type HoldTier = 0 | 1 | 2 | 3;
@@ -426,4 +440,23 @@ export function classifyArpeggio(landingsMs: number[]): ArpeggioVerdict | null {
 
 function clamp01(v: number): number {
   return Math.min(1, Math.max(0, v));
+}
+
+/**
+ * Span (grammar §1 "spread", §4): is a two-finger grip currently a sustained
+ * interval? True only while the pair stands still — no frame channel has
+ * claimed the grip, neither finger has wandered past spanTolPx, and the
+ * chord has stood at least spanEnterMs. Pure so the DOM half and the tests
+ * read one law: a pinch is never a span, and a span that moves stops being
+ * one.
+ */
+export function spanHolds(
+  elapsedMs: number,
+  movedA: number,
+  movedB: number,
+  claimedChannels: number,
+): boolean {
+  if (claimedChannels > 0) return false;
+  if (movedA > THRESHOLDS.spanTolPx || movedB > THRESHOLDS.spanTolPx) return false;
+  return elapsedMs >= THRESHOLDS.spanEnterMs;
 }

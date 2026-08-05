@@ -1081,6 +1081,8 @@ export default function Waves() {
     let lastWindFxAt = 0;
     let lastWindToneAt = 0;
     let lastScrubAt = 0;
+    let lastSpanDriveAt = 0;
+    let lastSpanToneAt = 0;
     const detachGestures = attachGestures(canvas, {
       tap: (e) => {
         lastGestureAt = performance.now();
@@ -1365,6 +1367,57 @@ export default function Waves() {
         if (e.stability <= 0.7) return;
         entrainInterval = Math.max(500, Math.min(2400, 60000 / e.bpm));
         entrainUntil = performance.now() + 9000;
+      },
+      span: (e) => {
+        // the sustained interval: two still fingers pin a beating pair — twin
+        // sources driven together whose interference stands between the
+        // fingertips, fringe spacing set by the spread. Holding longer drives
+        // it deeper; the pair falls silent the moment the interval closes.
+        lastGestureAt = performance.now();
+        const rect = canvas.getBoundingClientRect();
+        const ax = clamp((e.ax - rect.left) / Math.max(1, rect.width), 0.02, 0.98);
+        const ay = clamp((e.ay - rect.top) / Math.max(1, rect.height), 0.02, 0.98);
+        const bx = clamp((e.bx - rect.left) / Math.max(1, rect.width), 0.02, 0.98);
+        const by = clamp((e.by - rect.top) / Math.max(1, rect.height), 0.02, 0.98);
+        const depth = Math.min(1, e.elapsed / 6000); // sustain keeps deepening
+        const nowMs = performance.now();
+        if (e.phase === "release") {
+          // the interval closes: one settling trough at each source
+          if (modeRef.current !== "string") {
+            drop2D(ax, ay, -0.3 - depth * 0.3);
+            drop2D(bx, by, -0.3 - depth * 0.3);
+          }
+          try { haptics.ripple(0.25 + depth * 0.35); } catch { /* noop */ }
+          useField.getState().recordTape("ripple", 0.4 + depth * 0.4, "waves/span");
+          return;
+        }
+        if (e.phase === "enter") {
+          energyRef.current = Math.min(1, energyRef.current + 0.25);
+          try { haptics.tap(); } catch { /* noop */ }
+        }
+        // drive the pair in phase — every other tick keeps the integrator calm
+        if (nowMs - lastSpanDriveAt < 140) return;
+        lastSpanDriveAt = nowMs;
+        const amp = 0.14 + depth * 0.3;
+        if (modeRef.current === "string") {
+          // a double stop: both positions sound together, the interval theirs
+          pluck1D(ax, 0.5, amp);
+          pluck1D(bx, 0.5, amp * 0.9);
+        } else {
+          drop2D(ax, ay, amp);
+          drop2D(bx, by, amp);
+        }
+        if (nowMs - lastSpanToneAt > 900) {
+          lastSpanToneAt = nowMs;
+          // the audible interval widens with the spread and settles with depth
+          const cfg = MODES.find((it) => it.id === modeRef.current) ?? MODES[0];
+          const step = Math.round(3 + clamp(e.spread / Math.max(1, rect.width), 0, 1) * 9);
+          try {
+            getFieldAudio().playNote(cfg.midi, 220 + depth * 260);
+            getFieldAudio().playNote(cfg.midi + step, 220 + depth * 260);
+          } catch { /* noop */ }
+          try { haptics.ripple(0.2 + depth * 0.3); } catch { /* noop */ }
+        }
       },
     }, { wheelZoom: false });
 

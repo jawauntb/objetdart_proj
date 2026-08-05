@@ -349,6 +349,7 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "the \"tune\" sliders → speed, damping, drop size",
       "scrub (circle a finger) → stirs the pond into a turning current",
       "a steady tapped pulse → the pond's own life falls in with your tempo",
+      "two still fingers held apart → a beating pair stands between them, sounding their interval; on the string, a double stop — the longer the hold, the deeper it drives",
     ],
     finds: [
       "one long hold passes through three stops — lily, leaf, koi — a single press grows a small ecology",

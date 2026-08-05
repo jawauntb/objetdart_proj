@@ -42,6 +42,7 @@ const {
   drumAlternation,
   classifyDrum,
   classifyArpeggio,
+  spanHolds,
 } = loadTsModule("src/lib/gesture/core.ts");
 
 // — Hold tiers: touch → dwell → ceremony —
@@ -272,6 +273,34 @@ assert.equal(
   }),
   "undecided",
   "a fresh still pair stays on probation inside the window",
+);
+
+
+// ————— span: two fingers held apart, static (grammar §1 "spread", §4) —————
+// The law: stillness + time = span; motion or a claimed frame channel never.
+assert.equal(
+  spanHolds(THRESHOLDS.spanEnterMs + 1, 2, 3, 0), true,
+  "a still pair past the enter window sustains an interval",
+);
+assert.equal(
+  spanHolds(THRESHOLDS.spanEnterMs - 1, 2, 3, 0), false,
+  "a chord landing is not yet a span — the enter window gates it",
+);
+assert.equal(
+  spanHolds(THRESHOLDS.spanEnterMs + 500, THRESHOLDS.spanTolPx + 1, 0, 0), false,
+  "a finger wandering past the tolerance breaks the interval",
+);
+assert.equal(
+  spanHolds(THRESHOLDS.spanEnterMs + 500, 2, 3, 1), false,
+  "a grip claimed by pinch/twist/pan is a frame gesture, never a span",
+);
+assert.ok(
+  THRESHOLDS.spanEnterMs < THRESHOLDS.dwellMs,
+  "a span is a chord being held, not a plant — it must enter before the dwell tier",
+);
+assert.ok(
+  THRESHOLDS.spanEnterMs > THRESHOLDS.chordSettleMs * 2,
+  "a span must not fire while the chord is still landing",
 );
 
 console.log("gesture grammar tests passed — the chord's angular channel holds");
