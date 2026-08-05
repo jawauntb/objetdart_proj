@@ -33,9 +33,22 @@ const V3 = class {
   // Fake project — the identity so the visibility rules can be tested.
   project(_cam) { return this; }
 };
+// A stub Matrix4 — the pure module never operates on the matrices
+// itself (it hands them to the ShaderPass via uniform values); the
+// stub only needs a constructor and a `copy` method so the uniform
+// default `new THREE.Matrix4()` and the composer's later
+// `uniforms.uInverseView.value.copy(cam.matrixWorld)` both live.
+const M4 = class {
+  constructor() { this.elements = new Array(16).fill(0); }
+  copy(other) {
+    for (let i = 0; i < 16; i += 1) this.elements[i] = other.elements[i];
+    return this;
+  }
+};
 const threeStub = {
   Vector2: V2,
   Vector3: V3,
+  Matrix4: M4,
 };
 const shaderPassStub = {
   ShaderPass: class {
@@ -61,9 +74,15 @@ const mod = loadTsModule("src/lib/city-godrays.ts", {
 const {
   GODRAYS_GATE_HALF_WIDTH,
   GODRAYS_SAMPLES,
+  VOLUMETRIC_FOG_GATE_HALF_WIDTH,
+  VOLUMETRIC_FOG_STEPS,
+  VOLUMETRIC_FOG_FLOOR,
+  VOLUMETRIC_FOG_PEAK,
   godraysStrengthForDay,
   godraysGateOpen,
   distanceToNearestHorizonCrossing,
+  volumetricFogDensityForDay,
+  henyeyGreensteinPhase,
   projectSunToScreen,
   createCityGodraysPass,
   cityGodraysShader,
@@ -283,8 +302,214 @@ assert.ok(
   "fragment shader short-circuits when strength is zero",
 );
 
+// ─────────────────────────────────────────────────────────────────────────────
+// R10-7: participating-media volumetric fog
+// The pass now carries a 20-step raymarch alongside the shaft accumulator.
+// The pure-math halves — density curve + phase function + gate constants —
+// live here so the composer can consult them per frame and a test can pin
+// them without WebGL. A regression that dropped the noon floor, or narrowed
+// the fog gate below the shaft gate, or flipped the phase function's
+// isotropic anchor, would drift the R10-7 fix; the tests pin the invariants.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── fog constants ────────────────────────────────────────────────────────
+// The fog gate is TWICE the shaft gate so haze arrives before the shafts
+// fire and outlasts them on either side of the horizon crossing.
+assert.equal(
+  VOLUMETRIC_FOG_GATE_HALF_WIDTH,
+  0.16,
+  "fog gate is 0.16 (twice the shaft gate) per R10-7",
+);
+assert.ok(
+  VOLUMETRIC_FOG_GATE_HALF_WIDTH >= 2 * GODRAYS_GATE_HALF_WIDTH - 1e-9,
+  "fog gate half-width must be ≥ 2× shaft gate half-width (haze envelopes shafts)",
+);
+// The brief calls for 16-24 raymarch steps; 20 is the middle of the range.
+assert.equal(VOLUMETRIC_FOG_STEPS, 20, "20 raymarch steps per the brief");
+// Floor and peak — the harbour is never sterile, and a horizon crossing
+// reads as thick without smothering the emissive towers.
+assert.ok(VOLUMETRIC_FOG_FLOOR > 0, "fog floor is > 0 (photorealistic rooms never read sterile)");
+assert.ok(VOLUMETRIC_FOG_PEAK > VOLUMETRIC_FOG_FLOOR, "fog peak > fog floor");
+
+// ── volumetricFogDensityForDay — the four cardinal times ─────────────────
+// The fog density peaks at horizon crossings, collapses to a non-zero floor
+// at noon and midnight. Pinned so a regression can't drift the curve.
+{
+  const s = volumetricFogDensityForDay(0);
+  assert.ok(
+    Math.abs(s - VOLUMETRIC_FOG_PEAK) < 1e-9,
+    `dawn horizon should peak at fog=${VOLUMETRIC_FOG_PEAK}; got ${s}`,
+  );
+}
+{
+  const s = volumetricFogDensityForDay(0.25);
+  assert.ok(
+    Math.abs(s - VOLUMETRIC_FOG_FLOOR) < 1e-9,
+    `noon should sit at the fog floor ${VOLUMETRIC_FOG_FLOOR}; got ${s}`,
+  );
+}
+{
+  const s = volumetricFogDensityForDay(0.5);
+  assert.ok(
+    Math.abs(s - VOLUMETRIC_FOG_PEAK) < 1e-9,
+    `dusk horizon should peak at fog=${VOLUMETRIC_FOG_PEAK}; got ${s}`,
+  );
+}
+{
+  const s = volumetricFogDensityForDay(0.75);
+  assert.ok(
+    Math.abs(s - VOLUMETRIC_FOG_FLOOR) < 1e-9,
+    `midnight should sit at the fog floor ${VOLUMETRIC_FOG_FLOOR}; got ${s}`,
+  );
+}
+
+// ── density is monotone on each side of a crossing ───────────────────────
+// Walk noon → dawn: density must not decrease as we approach df=0.
+{
+  let prev = -Infinity;
+  for (let i = 0; i <= 20; i += 1) {
+    const df = 0.25 - (0.25 * i) / 20;
+    const s = volumetricFogDensityForDay(df);
+    assert.ok(
+      s >= prev - 1e-9,
+      `fog density must not decrease approaching dawn; df=${df} s=${s} prev=${prev}`,
+    );
+    prev = s;
+  }
+}
+// Walk noon → dusk: density must not decrease as we approach df=0.5.
+{
+  let prev = -Infinity;
+  for (let i = 0; i <= 20; i += 1) {
+    const df = 0.25 + (0.25 * i) / 20;
+    const s = volumetricFogDensityForDay(df);
+    assert.ok(
+      s >= prev - 1e-9,
+      `fog density must not decrease approaching dusk; df=${df} s=${s} prev=${prev}`,
+    );
+    prev = s;
+  }
+}
+
+// ── density is bounded across the whole day ──────────────────────────────
+for (let i = 0; i < 200; i += 1) {
+  const df = i / 200;
+  const s = volumetricFogDensityForDay(df);
+  assert.ok(
+    Number.isFinite(s) && s >= VOLUMETRIC_FOG_FLOOR - 1e-9 && s <= VOLUMETRIC_FOG_PEAK + 1e-9,
+    `fog density in [floor, peak], finite; df=${df} s=${s}`,
+  );
+}
+
+// ── the fog envelope covers the shafts ───────────────────────────────────
+// At every dayFraction where god-rays fire, fog density must be > the floor
+// so the shafts scatter through participating media, not clear air.
+for (let i = 0; i < 200; i += 1) {
+  const df = i / 200;
+  if (godraysGateOpen(df)) {
+    const fog = volumetricFogDensityForDay(df);
+    assert.ok(
+      fog > VOLUMETRIC_FOG_FLOOR + 1e-9,
+      `where shafts fire, fog must be lifted above the floor; df=${df} fog=${fog}`,
+    );
+  }
+}
+
+// ── Henyey-Greenstein phase function ─────────────────────────────────────
+// g=0 collapses to isotropic (constant 1 regardless of angle). Positive g
+// is forward-scattering: cosTheta=1 (looking at the sun) gets a strong
+// halo; cosTheta=-1 (looking away from the sun) gets attenuated. Pinned
+// so a shader-side rename cannot silently drop the H-G weight.
+{
+  // g=0: isotropic — value is the same at every cos(theta).
+  const a = henyeyGreensteinPhase(1, 0);
+  const b = henyeyGreensteinPhase(0, 0);
+  const c = henyeyGreensteinPhase(-1, 0);
+  assert.ok(
+    Math.abs(a - 1) < 1e-9 && Math.abs(b - 1) < 1e-9 && Math.abs(c - 1) < 1e-9,
+    `H-G with g=0 must be isotropic (value 1) at every angle; got ${a}, ${b}, ${c}`,
+  );
+}
+{
+  // g=0.6: forward peak > isotropic > backscatter attenuation.
+  const fwd = henyeyGreensteinPhase(1, 0.6);
+  const iso = henyeyGreensteinPhase(0, 0.6);
+  const bck = henyeyGreensteinPhase(-1, 0.6);
+  assert.ok(fwd > iso, `H-G(g=0.6) forward peak > isotropic; fwd=${fwd} iso=${iso}`);
+  assert.ok(iso > bck, `H-G(g=0.6) isotropic > backscatter; iso=${iso} bck=${bck}`);
+  // The forward peak should be substantially brighter than backscatter —
+  // this is what gives the harbour fog its bright halo around the sun.
+  assert.ok(fwd > 4 * bck, `H-G(g=0.6) forward peak dominates backscatter; fwd/bck = ${fwd / bck}`);
+}
+{
+  // g=-0.3: backscatter regime — backward > isotropic > forward.
+  const fwd = henyeyGreensteinPhase(1, -0.3);
+  const iso = henyeyGreensteinPhase(0, -0.3);
+  const bck = henyeyGreensteinPhase(-1, -0.3);
+  assert.ok(bck > iso, `H-G(g<0) backscatter > isotropic; bck=${bck} iso=${iso}`);
+  assert.ok(iso > fwd, `H-G(g<0) isotropic > forward; iso=${iso} fwd=${fwd}`);
+}
+
+// ── new uniforms live on the constructed pass ────────────────────────────
+// The composer writes to these per frame; if a future rename dropped one,
+// the composer would compile but every frame would silently write into a
+// phantom uniform and the raymarch would fall back to the identity defaults.
+{
+  const p = createCityGodraysPass();
+  for (const name of [
+    "uSunDir",
+    "uCameraPos",
+    "uInverseProjection",
+    "uInverseView",
+    "uFogDensity",
+    "uFogColor",
+    "uFogHeight",
+    "uFogHeightFalloff",
+    "uFogPhaseG",
+    "uTime",
+    "uFogMarchMax",
+  ]) {
+    assert.ok(p.uniforms[name], `pass.uniforms.${name} exists (composer writes it per frame)`);
+  }
+  assert.equal(p.uniforms.uFogDensity.value, 0, "initial uFogDensity is 0 (identity register)");
+  assert.equal(p.uniforms.uFogPhaseG.value, 0.6, "initial uFogPhaseG is 0.6 (Mie regime)");
+  assert.equal(p.uniforms.uFogHeight.value, 0.05, "initial uFogHeight is 0.05 (WATER_PLANE_Y)");
+  assert.equal(p.uniforms.uFogHeightFalloff.value, 40, "initial uFogHeightFalloff is 40m");
+}
+
+// ── shader carries the raymarch ──────────────────────────────────────────
+// A quick smoke check that the fragment shader has the participating-media
+// composition (Beer-Lambert transmittance × source + in-scatter, plus the
+// SAME transmittance attenuating the shaft accumulator so shafts scatter
+// through the fog volume, not on top of it).
+{
+  const frag = cityGodraysShader.fragmentShader || "";
+  assert.ok(
+    frag.includes(`const int FOG_STEPS = ${VOLUMETRIC_FOG_STEPS}`),
+    "fragment shader stamps the fog step count as a WebGL-1 loop bound",
+  );
+  assert.ok(frag.includes("uInverseProjection"), "shader reads inverse projection for view-ray reconstruction");
+  assert.ok(frag.includes("uInverseView"), "shader reads inverse view for world-space lift");
+  assert.ok(frag.includes("uFogDensity"), "shader reads the day-driven fog density");
+  assert.ok(frag.includes("phaseHG"), "shader evaluates a Henyey-Greenstein phase function");
+  assert.ok(frag.includes("uFogColor"), "shader tints the in-scatter with the horizon fog colour");
+  assert.ok(
+    frag.includes("transmittance") && frag.includes("inScatter"),
+    "shader composites transmittance × source + inScatter (Beer-Lambert)",
+  );
+  assert.ok(
+    frag.includes("shaft * transmittance"),
+    "shafts are attenuated by the SAME transmittance the fog carries — they scatter THROUGH the volume",
+  );
+}
+
 console.log(
   "city-godrays ok: strength ramps 0→1→0 across the two horizon-crossing gates, " +
   "pinned at dawn/noon/dusk/midnight + the gate edges, wrap-aware, 24 radial taps, " +
-  "luminance-clamped, sun-visibility flag rides the projection.",
+  "luminance-clamped, sun-visibility flag rides the projection; " +
+  "participating-media fog density peaks at dusk/dawn (0.28), holds a non-zero " +
+  "floor (0.06) at noon/midnight, gate 0.16 envelopes the shafts, 20 raymarch " +
+  "steps, Henyey-Greenstein phase function isotropic at g=0 and forward-scattering " +
+  "at g=0.6, and the SAME transmittance attenuates the shafts so they scatter " +
+  "through the fog volume — R10-7.",
 );

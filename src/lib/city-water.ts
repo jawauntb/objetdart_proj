@@ -334,7 +334,14 @@ function getWaveNormalTexture(): THREE.DataTexture {
 const WATER_PLANE_WIDTH = 96;   // spans the full city width plus a margin
 const WATER_PLANE_DEPTH = 32;   // ~1/3 the field depth is a plausible harbour
 const WATER_PLANE_CENTER_Z = 50; // beyond the +z edge of the ±40 field
-const WATER_PLANE_Y = 0.05;      // just above worldGround (y=0) so it draws on top
+/**
+ * World-space Y of the harbour surface. Exported so downstream passes
+ * (the participating-media fog raymarch inside city-godrays.ts) can
+ * bound their view rays against the SAME plane the reflector sits on,
+ * instead of hard-coding the constant in two places and drifting them
+ * silently.
+ */
+export const WATER_PLANE_Y = 0.05; // just above worldGround (y=0) so it draws on top
 
 // Proxies live at world scale behind the plane; the reflector camera
 // looking upward from below the plane sees these as a silhouetted skyline.

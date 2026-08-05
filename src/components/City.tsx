@@ -61,7 +61,11 @@ import {
   noteForSeason,
   type CityRole,
 } from "@/lib/city-audio";
-import { createCityComposer, type CityComposer } from "@/lib/city-composer";
+import {
+  createCityComposer,
+  type CityComposer,
+  type VolumetricFogFrame,
+} from "@/lib/city-composer";
 import {
   createCityClouds,
   cloudHorizonPink,
@@ -94,6 +98,7 @@ import {
 } from "@/lib/city-skyline-ring";
 import {
   createCityWater,
+  WATER_PLANE_Y,
   type CityWater,
   type CityWaterProxy,
 } from "@/lib/city-water";
@@ -1180,6 +1185,14 @@ export default function City() {
     // "sun grazing horizon lights the underside of a cloud pink".
     const CLOUD_HORIZON_DIR = new THREE.Vector3();
     const cloudHorizonPinkRGB = { r: 1, g: 1, b: 1 };
+    // Scratch fog-tint colour reused each frame by the participating-
+    // media volumetric fog raymarch. Sampled from the same
+    // `fogColorFromSky(citySky.currentState)` the world scene's flat
+    // FogExp2 already reads — so the volumetric read and the flat
+    // FogExp2 read agree on the horizon hue and R10-7's flat-wall
+    // complaint dissolves. Kept as a per-mount instance so the tick
+    // does not allocate a Color per frame.
+    const volFogColor = new THREE.Color();
 
     // The world ground: baked streets + sidewalks + curbs + a settlement-
     // scale road overlay the visitor paints onto. The seed is the persisted
@@ -2422,6 +2435,28 @@ export default function City() {
       // it wakes up.
       const sunScreen = projectSunToScreen(citySun.sunPosition, cityCam.camera);
 
+      // R10-7: the participating-media fog frame. Hands the god-rays
+      // pass everything its 20-step raymarch needs — the perspective
+      // camera (which the pass inverts to reconstruct a per-pixel
+      // world-space view ray), the sun's world position (which the
+      // pass normalises to a unit direction for the H-G phase
+      // function), the harbour surface Y (which the raymarch bounds
+      // itself against so a downward-looking ray stops at the water
+      // instead of continuing beneath it), and the fog tint sampled
+      // from the current sky (the SAME hue the world scene's flat
+      // FogExp2 already reads — the two agree so the volumetric
+      // read enters as continuous with the pre-existing distance
+      // blend). One `fogColorFromSky` sample per frame is cheap:
+      // the citySky module already updates its state on a 64-slot
+      // rhythm so the underlying colour is nearly constant here.
+      volFogColor.copy(fogColorFromSky(citySky.currentState));
+      const volFog: VolumetricFogFrame = {
+        camera: cityCam.camera,
+        sunWorldPos: citySun.sunPosition,
+        fogColor: volFogColor,
+        waterY: WATER_PLANE_Y,
+      };
+
       // The four RenderPasses live inside the composer now. Bloom threshold /
       // strength / radius ride the same dayFraction the shaders do — the
       // ember rises as the sun sets. Tier gates the bloom entirely on
@@ -2429,9 +2464,11 @@ export default function City() {
       // pitch01 rides the eased camera pitch — the composer's Bokeh DOF
       // ramps in as the frame climbs toward bird's-eye. SSAO is tier-gated
       // inside the composer, so we don't touch it here. sunScreen drives
-      // the god-rays pass — visible only during dawn/dusk horizon
-      // crossings and only at high tier, per the brief.
-      composer.render(df, tier, cityCam.pitch01(), sunScreen);
+      // the god-rays SHAFT accumulator (visible only during dawn/dusk
+      // horizon crossings), while volFog drives the participating-media
+      // volumetric raymarch that runs all day at low density and thickens
+      // through the horizon-crossing window — R10-7.
+      composer.render(df, tier, cityCam.pitch01(), sunScreen, volFog);
       drawOverlay();
       raf = requestAnimationFrame(tick);
     };
