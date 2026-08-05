@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import WaterText from "@/components/WaterText";
@@ -380,6 +381,7 @@ export default function Fire() {
     let entrainUntil = 0;
     let lastEntrainBeat = -1;
     let lastScrubAt = 0;
+    let lastSpanVoiceAt = 0;
     let lastGestureAt = performance.now();
     const holdState = { ceremony: false };
 
@@ -568,6 +570,47 @@ export default function Fire() {
           return;
         }
         const p = trackPointer(e.x, e.y);
+        // rapid-tap ladder (tiers 1 / 3 / 5 / n from gesture/core): ember →
+        // spark fountain → the draft opens → the whole bed roars. Depth keeps
+        // rising between rungs, so tap seven and tap nine are not the same.
+        const tier = tapTrainTier(e.count);
+        const depth = tapTrainDepth(e.count);
+        if (tier === "n") {
+          // crescendo: the bed roars — every well brightens, the flame leaps
+          for (const well of wells) well.strength = Math.min(1, well.strength + 0.2 + depth * 0.2);
+          burst(p.x, p.y, 26 + Math.round(depth * 18), 1.1 + depth * 0.5);
+          ignitionAmp = Math.max(ignitionAmp, 0.7 + depth * 0.3);
+          ignitionT0 = simNow;
+          try { audio.playNote(48 + Math.round(depth * 12), 240); } catch { /* noop */ }
+          try { haptics.storm(); } catch { /* noop */ }
+          markFire("the bed roars", "#ffe4b8", 0.85 + depth * 0.15);
+          useField.getState().recordTape("ripple", 0.8 + depth * 0.2, "fire/roar");
+          return;
+        }
+        if (tier === 5) {
+          // the draft opens: a rising column pulls sparks straight up the flue
+          for (let i = 0; i < 18; i++) {
+            const off = (i / 18 - 0.5) * 26;
+            spawnEmber(p.x + off, p.y + Math.abs(off) * 0.4, off * 0.6 + wind * 40, -(240 + Math.random() * 200) * (0.8 + depth * 0.4), 1);
+          }
+          ignitionAmp = Math.max(ignitionAmp, 0.5 + e.intensity * 0.2 + depth * 0.2);
+          ignitionT0 = simNow;
+          try { audio.chime(); } catch { /* noop */ }
+          try { haptics.ripple(0.5 + depth * 0.3); } catch { /* noop */ }
+          markFire("the draft opens", "#dcecff", 0.7 + depth * 0.2);
+          useField.getState().recordTape("ripple", 0.6 + depth * 0.2, "fire/draft");
+          return;
+        }
+        if (tier === 3) {
+          // a spark fountain hurled off the strike, sideways and up
+          burst(p.x, p.y, 16 + Math.round(depth * 10), 0.85 + e.intensity * 0.4 + depth * 0.3);
+          ignitionAmp = Math.max(ignitionAmp, 0.38 + e.intensity * 0.2 + depth * 0.15);
+          ignitionT0 = simNow;
+          try { audio.spark(); } catch { /* noop */ }
+          try { haptics.chop(); } catch { /* noop */ }
+          markFire("spark fountain", "#f5b15a", 0.55 + depth * 0.25);
+          return;
+        }
         // tap intensity is the strike: ember count, ignition and haptic
         // all ride the same 0..1 from core.
         const yBias = p.h * (0.70 + Math.random() * 0.22);
@@ -654,13 +697,18 @@ export default function Fire() {
       hold: (e) => {
         lastGestureAt = performance.now();
         if (e.fingers === 3) {
-          // three fingers hold the law: the fire slows to a quarter speed
+          // three fingers hold the law: time keeps thickening for as long as
+          // the hand stays — a hold at 900ms and one at 2400ms are different
+          // depths of the same stillness, never one switch.
+          if (e.phase === "release") {
+            timeScaleTarget = 1;
+            return;
+          }
+          timeScaleTarget = 1 - 0.82 * clamp(e.elapsed / 2600, 0, 1);
           if (e.phase === "enter") {
-            timeScaleTarget = 0.25;
             try { audio.playNote(36, 260); } catch { /* noop */ }
             try { haptics.tap(); } catch { /* noop */ }
           }
-          if (e.phase === "release") timeScaleTarget = 1;
           return;
         }
         if (e.fingers !== 1) return;
@@ -757,6 +805,49 @@ export default function Fire() {
         try { haptics.ripple(0.35); } catch { /* noop */ }
         markFire("whirl", "#f0a44f", 0.6);
         useField.getState().recordTape("ripple", 0.5, "fire/whirl");
+      },
+      span: (e) => {
+        lastGestureAt = performance.now();
+        // two still fingers are the bellows: they hold a channel of draft
+        // open, and the bed between the fingertips brightens and streams
+        // sparks up the interval for as long as it is sustained — deeper the
+        // longer it is held, wider the further the fingers stand apart.
+        if (e.phase === "release") {
+          releaseStroke(false);
+          try { haptics.ripple(0.2 + clamp(e.elapsed / 4000, 0, 1) * 0.3); } catch { /* noop */ }
+          markFire("bellows eased", "#c8927a", 0.35 + clamp(e.elapsed / 4000, 0, 1) * 0.3);
+          return;
+        }
+        const a = toLocal(e.ax, e.ay);
+        const b = toLocal(e.bx, e.by);
+        const deep = clamp(e.elapsed / 3200, 0, 1);
+        if (e.phase === "enter") {
+          try { audio.playNote(41, 320); } catch { /* noop */ }
+          try { haptics.tap(); } catch { /* noop */ }
+          markFire("bellows", "#f0a44f", 0.5);
+          useField.getState().recordTape("region", 0.45, "fire/bellows");
+        }
+        const nowMs = performance.now();
+        if (nowMs - lastSpanVoiceAt > 260) {
+          lastSpanVoiceAt = nowMs;
+          // sparks stream up the held interval, more of them the deeper the
+          // sustain; the drawn note climbs the same axis.
+          const n = 3 + Math.round(deep * 6);
+          for (let i = 0; i < n; i++) {
+            const u = (i + 0.5) / n;
+            spawnEmber(
+              a.x + (b.x - a.x) * u,
+              a.y + (b.y - a.y) * u,
+              (Math.random() - 0.5) * 30 + wind * 60,
+              -(70 + deep * 200 + Math.random() * 70),
+              0.6 + deep * 0.6,
+            );
+          }
+          ignitionAmp = Math.max(ignitionAmp, 0.24 + deep * 0.42);
+          ignitionT0 = simNow;
+          try { audio.playNote(41 + Math.round(deep * 14), 180); } catch { /* noop */ }
+          try { haptics.ripple(0.12 + deep * 0.3); } catch { /* noop */ }
+        }
       },
       rhythm: (e) => {
         // a steady tapped pulse: the bed's breath falls in with the hand

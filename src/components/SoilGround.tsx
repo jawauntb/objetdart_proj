@@ -50,6 +50,7 @@ import { clocksFrom } from "@/lib/webgl/sizing";
 import { createGLStage, FULLSCREEN_VERT_UNIT, type GLProgram, type GLStage } from "@/lib/webgl/stage";
 import { createIdleWriter } from "@/lib/room-runtime";
 import type { RoomVoice } from "@/lib/gesture/defaults";
+import { tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import {
   MAX_ORGANISMS,
   POOLS,
@@ -333,7 +334,7 @@ function rootSkeleton(o: Organism): Seg[] {
 
 /** The imperative surface the room's voice speaks to. */
 type SoilApi = {
-  tap: (x: number, y: number, intensity: number) => void;
+  tap: (x: number, y: number, intensity: number, count: number) => void;
   beginPress: (x: number, y: number) => void;
   grabAt: (x: number, y: number) => void;
   tutti: (intensity: number) => void;
@@ -346,8 +347,8 @@ type SoilApi = {
   turnCompost: (angularVelocity: number) => void;
   lens: (angle: number, end: boolean) => void;
   season: (angle: number, end: boolean) => void;
-  meter: (stability: number) => void;
-  sift: () => void;
+  meter: (bpm: number, stability: number) => void;
+  sift: (hits: number, alternation: number) => void;
   turnOver: (intensity: number) => void;
   lean: (gamma: number) => void;
   settleGrains: (intensity: number) => void;
@@ -373,7 +374,7 @@ export default function SoilGround() {
   // A stable voice: RoomShell reads it through a ref, and every verb delegates
   // to whatever the effect has published, so the engine never loses a hold.
   const voiceRef = useRef<RoomVoice>({
-    tap: (e) => apiRef.current?.tap(e.x, e.y, e.intensity),
+    tap: (e) => apiRef.current?.tap(e.x, e.y, e.intensity, e.count),
     plant: (e) => apiRef.current?.beginPress(e.x, e.y),
     tutti: (e) => apiRef.current?.tutti(e.intensity),
     deepen: (e) => apiRef.current?.deepen(e.x, e.y, e.elapsed, e.tier),
@@ -388,8 +389,8 @@ export default function SoilGround() {
     stir: (e) => apiRef.current?.turnCompost(e.angularVelocity),
     lens: (e) => apiRef.current?.lens(e.angle, e.velocity === 0),
     season: (e) => apiRef.current?.season(e.angle, e.velocity === 0),
-    rhythm: (e) => apiRef.current?.meter(e.stability),
-    drum: () => apiRef.current?.sift(),
+    rhythm: (e) => apiRef.current?.meter(e.bpm, e.stability),
+    drum: (e) => apiRef.current?.sift(e.hits, e.alternation),
     scatter: (e) => apiRef.current?.turnOver(e.intensity),
     gravity: (e) => apiRef.current?.lean(e.gamma),
     knock: (e) => apiRef.current?.settleGrains(e.intensity),
@@ -566,6 +567,9 @@ export default function SoilGround() {
     /** the life the hand closed on, if any: what a throw or a lift takes out */
     let grabbedId: number | null = null;
     let seasonSaid = 0;
+    /** a steady tapped pulse entrains the ground's turning for a while */
+    let entrainRate = 1;
+    let entrainUntil = 0;
     let edges: Edge[] = [];
     let islands = 0;
     let knit = 0;
@@ -861,16 +865,66 @@ export default function SoilGround() {
 
     // ——— what each verb MEANS here ———
     apiRef.current = {
-      tap: (x, y, intensity) => {
+      tap: (x, y, intensity, count) => {
         const { nx, ny } = toLocal(x, y);
         cursorX = nx;
         cursorY = ny;
         grabX = nx;
         grabY = ny;
         cursorLit = 1;
+        // the rapid-tap ladder (tiers 1 / 3 / 5 / n from gesture/core):
+        // a handful → the worms turn → a shower → the whole section drums.
+        const tier = tapTrainTier(count);
+        const depth = tapTrainDepth(count);
+        if (tier === "n") {
+          // crescendo: the full ledger at full voice, every life answering
+          sound(mixOf(soil), totalOf(soil), 1 + depth * 0.6);
+          for (const o of orgs) mark(o.nx, HORIZON + o.ny * (1 - HORIZON), 0.5 + depth * 0.5, o.kind === "root" ? 1 : 2);
+          stir = Math.min(1, stir + 0.4 + depth * 0.3);
+          stirTurbulence(0.12 + depth * 0.1);
+          try {
+            haptics.storm();
+          } catch {
+            /* noop */
+          }
+          return;
+        }
+        if (tier === 5) {
+          // the patter reads as rain: the surface wets, dust settles, and
+          // the rot quickens through the same climate the weather drives
+          dWet = clamp(dWet + 0.1 + depth * 0.12, -0.6, 0.6);
+          for (let i = 0; i < 4; i++) mark(clamp01(nx + (i - 1.5) * 0.09), HORIZON + 0.02 + (i % 2) * 0.03, 0.4 + depth * 0.3, 0);
+          try {
+            audio.playTone(420 + depth * 260, 0.22);
+            haptics.ripple(0.35 + depth * 0.3);
+          } catch {
+            /* noop */
+          }
+          return;
+        }
+        if (tier === 3) {
+          // the worms turn: the litter under the patter is worked down
+          const moved = pressDown(0.008 + depth * 0.01 + intensity * 0.006);
+          mark(nx, ny, 0.45 + depth * 0.3, 0);
+          const t = timbreOfState(soil);
+          try {
+            audio.playTone(hzForMidi(t.midi) * 0.5, 0.18 + depth * 0.12);
+            haptics.chop();
+          } catch {
+            /* noop */
+          }
+          if (moved <= 0) {
+            try {
+              audio.buzz();
+            } catch {
+              /* noop */
+            }
+          }
+          return;
+        }
         const found = nearestOrganism(orgs, nx, depthOf(ny), 0.09);
         if (found) soundLife(found);
-        else liftHandful(nx, ny, intensity);
+        else liftHandful(nx, ny, intensity + depth * 0.3);
       },
       tutti: (intensity) => {
         sound(mixOf(soil), totalOf(soil), 0.9 + intensity * 0.3);
@@ -1040,15 +1094,31 @@ export default function SoilGround() {
         }
         seasonSaid = 1;
       },
-      meter: (stability) => {
-        if (stability > 0.68) sound(mixOf(soil), totalOf(soil), 0.8);
-      },
-      sift: () => {
-        // two-handed sifting: the grit rings and the fines fall through
-        const t = timbreOfState(soil);
-        stir = Math.min(1, stir + 0.3);
+      meter: (bpm, stability) => {
+        if (stability <= 0.68) return;
+        // the ground's turning entrains to the hand's pulse: a quick steady
+        // patter composts the season faster, a slow one lets the year idle —
+        // the tempo is the axis, not the fact of the rhythm
+        entrainRate = clamp(bpm / 72, 0.5, 2.4);
+        entrainUntil = performance.now() + 8000;
+        stir = Math.min(1, stir + 0.12 + stability * 0.1);
+        sound(mixOf(soil), totalOf(soil), 0.55 + stability * 0.45);
         try {
-          audio.playTone(t.centroidHz * 1.5, t.ringSec * 0.5);
+          haptics.tap();
+        } catch {
+          /* noop */
+        }
+      },
+      sift: (hits, alternation) => {
+        // two-handed sifting: the grit rings and the fines fall through —
+        // a stricter, longer patter passes more of the humus to mineral
+        const t = timbreOfState(soil);
+        stir = Math.min(1, stir + 0.18 + alternation * 0.25);
+        const res = transfer(soil, "humus", "mineral", 0.0016 * hits * alternation);
+        soil = res.state;
+        if (res.moved > 0) save();
+        try {
+          audio.playTone(t.centroidHz * (1.2 + alternation * 0.6), t.ringSec * (0.3 + Math.min(6, hits) * 0.06));
           haptics.roll();
         } catch {
           /* noop */
@@ -1216,7 +1286,8 @@ export default function SoilGround() {
       // one step per frame, and a step per frame lands where one long step
       // would, so watching and being away are the same law.
       const climate = climateAt(season, dWarm, dWet);
-      const res = settle(soil, orgs, dt * timeScale * WATCHED_SPEED, climate);
+      const pulse = performance.now() < entrainUntil ? entrainRate : 1;
+      const res = settle(soil, orgs, dt * timeScale * WATCHED_SPEED * pulse, climate);
       soil = res.state;
       orgs = res.organisms;
       if (res.died.length > 0) {
