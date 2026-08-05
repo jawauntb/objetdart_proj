@@ -97,6 +97,140 @@ const clamp01 = (v: number) => clamp(v, 0, 1);
 const MAX_RIPPLES = 24;
 
 /**
+ * The population-layer fragment shader, room-specialized for the tide pool's
+ * three species. The shared SPRITE_VERT (in `@/lib/scene/population-layer`)
+ * declares five varyings — `vLocal` (the sprite-local -1.9..1.9 quad
+ * coordinate, unrotated), `vHue`, `vGlow`, `vPhase`, `vAlpha` — plus the
+ * three palette uniforms `u_palA` (ACCENT teal), `u_palB` (ACCENT2 coral),
+ * `u_palC` (GLOW gold). We hijack `vPhase`'s integer part as a shape
+ * selector (0 = snail spiral, 1 = anemone body, 2 = anemone tentacle
+ * corona, 3 = kelp ribbon); the fractional part carries the sprite's
+ * breath phase. `vGlow` carries a creature-specific parameter (curl for
+ * anemones, bend for kelp, sealed weight for snails). Together this lets
+ * every creature render its real silhouette in the shared instanced draw
+ * instead of a generic SDF disc.
+ */
+const POPULATION_FRAG = `precision mediump float;
+varying vec2 vLocal;
+varying float vHue;
+varying float vGlow;
+varying float vPhase;
+varying float vAlpha;
+uniform vec3 u_palA;
+uniform vec3 u_palB;
+uniform vec3 u_palC;
+
+vec3 pickPalette(float h) {
+  h = clamp(h, 0.0, 1.0);
+  return h < 0.5 ? mix(u_palA, u_palB, h * 2.0) : mix(u_palB, u_palC, (h - 0.5) * 2.0);
+}
+
+// Snail — an archimedean spiral shell + soft warm body. The spiral is
+// evaluated in polar coords: log-r * turns - theta drops to zero exactly
+// on the spiral curve, so smoothstep against |that| paints the shell's
+// bands. sealed snails carry a brighter rim (via vGlow).
+float sdfSnail(vec2 p, float sealedWeight, float breathPulse) {
+  float r = length(p);
+  if (r > 1.55) return 0.0;
+  float theta = atan(p.y, p.x);
+  // Body — a warm disc, slightly larger when sealed.
+  float bodyR = 0.85 + sealedWeight * 0.12 + breathPulse * 0.04;
+  float body = smoothstep(bodyR, bodyR * 0.55, r);
+  // Spiral bands — 2.3 turns of a log-spiral.
+  float turns = 2.3;
+  float spiralArg = log(max(r, 0.02)) * turns - theta / 6.2832 * turns;
+  float bandDist = abs(fract(spiralArg + 0.5) - 0.5);
+  float band = smoothstep(0.16, 0.05, bandDist) * body * 0.85;
+  // Central dark eye of the spiral.
+  float eye = smoothstep(0.06, 0.10, r);
+  return clamp(body * (0.62 + band * 0.55) * eye, 0.0, 1.0);
+}
+
+// Anemone body — a soft disc that shrinks to a small knot when curled.
+// vGlow carries the curl scalar (0 = open, 1 = fully closed).
+float sdfAnemoneBody(vec2 p, float curl, float breathPulse) {
+  float r = length(p);
+  float bodyR = mix(0.55, 0.22, curl) + breathPulse * 0.03;
+  return smoothstep(bodyR, bodyR * 0.5, r);
+}
+
+// Anemone tentacles — N=8 radial rays. Ray length collapses toward zero
+// as curl → 1 (storm state, tap-during-low-tide), and their width
+// thickens into a tight knot so the collapse reads clearly.
+float sdfAnemoneTentacles(vec2 p, float curl, float breathPulse) {
+  float r = length(p);
+  if (r < 0.30) return 0.0;
+  float theta = atan(p.y, p.x);
+  const float N = 8.0;
+  float sector = 6.2832 / N;
+  float phaseA = theta - floor(theta / sector + 0.5) * sector;
+  float tentacleLen = mix(1.6, 0.55, curl) + breathPulse * 0.05;
+  float tentacleWidth = mix(0.045, 0.11, curl);
+  float alongRay = smoothstep(tentacleLen, 0.25, r);
+  float crossRay = 1.0 - smoothstep(tentacleWidth * 0.5, tentacleWidth * 1.4, abs(phaseA) * (r + 0.2));
+  return clamp(alongRay * crossRay, 0.0, 1.0);
+}
+
+// Kelp — vertical ribbon anchored at the sprite's bottom. vGlow carries
+// the bend scalar (remapped from -1..1 to 0..1); the ribbon displaces
+// horizontally more toward the tip than the base, and tapers upward so
+// the frond has a felt weight.
+float sdfKelp(vec2 p, float bendNorm, float breathPulse, float phase) {
+  float bend = (bendNorm - 0.5) * 2.0;
+  // Vertical position along the frond — the sprite's local y goes from
+  // -1.9 (top) to +1.9 (bottom). Anchor at the bottom; tip at the top.
+  float alongFrond = clamp((1.9 - p.y) / 3.4, 0.0, 1.0);
+  float tipStrength = alongFrond * alongFrond;
+  // Displaced x: more bend near the tip; sway rides the sprite phase.
+  float sway = sin(phase * 6.2832 * 2.0 + breathPulse * 3.0) * 0.10;
+  float dispX = p.x - (bend + sway) * (0.85 * tipStrength);
+  // Ribbon width tapers from base to tip.
+  float widthAtY = mix(0.28, 0.10, tipStrength);
+  float ribbon = 1.0 - smoothstep(widthAtY * 0.55, widthAtY * 1.05, abs(dispX));
+  // Vertical bounds — softly clip beyond the frond.
+  float verticalMask = smoothstep(1.85, 1.55, abs(p.y));
+  // A darker centerline down the frond suggests the midrib.
+  float midrib = 1.0 - smoothstep(widthAtY * 0.15, widthAtY * 0.02, abs(dispX)) * 0.35;
+  return clamp(ribbon * verticalMask * midrib, 0.0, 1.0);
+}
+
+void main() {
+  float shapeF = floor(vPhase + 0.001);
+  float subPhase = fract(vPhase);
+  float breathPulse = 0.5 + 0.5 * sin(subPhase * 6.2832);
+  vec3 c;
+  float a = 0.0;
+  if (shapeF < 0.5) {
+    // snail spiral — a warm shell whose sealed rim reads brighter.
+    float sealedWeight = clamp(vGlow, 0.0, 1.0);
+    a = sdfSnail(vLocal, sealedWeight, breathPulse);
+    c = pickPalette(vHue) * (0.7 + 0.55 * (1.0 - length(vLocal) * 0.4)) + u_palC * sealedWeight * 0.32;
+  } else if (shapeF < 1.5) {
+    // anemone body
+    float curl = clamp(vGlow, 0.0, 1.0);
+    a = sdfAnemoneBody(vLocal, curl, breathPulse);
+    c = pickPalette(vHue) * (0.65 + 0.55 * (1.0 - length(vLocal) * 0.5));
+  } else if (shapeF < 2.5) {
+    // anemone tentacles
+    float curl = clamp(vGlow, 0.0, 1.0);
+    a = sdfAnemoneTentacles(vLocal, curl, breathPulse);
+    c = pickPalette(vHue) * (0.55 + 0.5 * (1.0 - curl));
+  } else {
+    // kelp ribbon — teal-green, biased toward u_palA (accent teal) with a
+    // slight u_palC (glow) tip highlight.
+    float bendNorm = clamp(vGlow, 0.0, 1.0);
+    a = sdfKelp(vLocal, bendNorm, breathPulse, subPhase);
+    float tipMix = 1.0 - clamp(length(vLocal.xy - vec2(0.0, 1.5)) / 3.0, 0.0, 1.0);
+    c = mix(u_palA, mix(u_palA, u_palC, 0.35), tipMix);
+    c *= 0.55 + 0.35 * breathPulse;
+  }
+  a *= vAlpha;
+  if (a <= 0.003) discard;
+  gl_FragColor = vec4(c * a, a);
+}
+`;
+
+/**
  * The material. Everything from the uniforms down through main() lives in the
  * slot below; the wrapping backtick template is boilerplate so an empty slot
  * still parses as TypeScript.
@@ -129,15 +263,18 @@ uniform float uStir;      // scrub agitation
 uniform float uLens;      // twist lens raise
 
 // The palette — six registers set once from the manifest.
-const vec3 BG      = vec3(0.020, 0.059, 0.078);  // deep water dark
-const vec3 BG2     = vec3(0.059, 0.165, 0.169);  // shallow shelf column
-const vec3 GLOW    = vec3(0.949, 0.753, 0.478);  // sunlit water / anemone highlight
-const vec3 ACCENT  = vec3(0.227, 0.541, 0.463);  // kelp teal
-const vec3 ACCENT2 = vec3(0.722, 0.329, 0.227);  // anemone rust
+// bg = deep water dark; bg2 = warm brown wet rock; glow = bright sunlit gold;
+// accent = teal water (the shallow water column); accent2 = coral orange
+// biofilm; ink = legible pale over the darkest tile.
+const vec3 BG      = vec3(0.016, 0.071, 0.125);  // #041220 deep water dark
+const vec3 BG2     = vec3(0.302, 0.180, 0.102);  // #4d2e1a warm brown rock
+const vec3 GLOW    = vec3(1.000, 0.851, 0.478);  // #ffd97a bright sunlit gold
+const vec3 ACCENT  = vec3(0.239, 0.620, 0.761);  // #3d9ec2 teal shallow water
+const vec3 ACCENT2 = vec3(0.878, 0.478, 0.231);  // #e07a3b coral biofilm
 const vec3 INK     = vec3(0.925, 0.937, 0.902);
-const vec3 SKY     = vec3(0.482, 0.729, 0.769);  // shallow sky through the surface
-const vec3 GRANITE = vec3(0.129, 0.145, 0.157);  // wet granite rim
-const vec3 FOAM    = vec3(0.910, 0.945, 0.933);  // storm foam
+const vec3 SKY     = vec3(0.612, 0.816, 0.910);  // day sky, glow-tinted at horizon
+const vec3 SKY_HIGH = vec3(0.196, 0.376, 0.596); // upper sky, cooler
+const vec3 FOAM    = vec3(0.965, 0.980, 0.960);  // storm foam
 
 const float POOL_X_MIN = ${POOL_X_MIN.toFixed(3)};
 const float POOL_X_MAX = ${POOL_X_MAX.toFixed(3)};
@@ -167,6 +304,15 @@ float fbm(vec2 p) {
   for (int i = 0; i < 4; i++) { v += a * vnoise(p); p *= 2.11; a *= 0.53; }
   return v;
 }
+// Three-octave caustic cell FBM — the sunlit-surface network the caustics ride.
+// Kept separate so the caustic term is a real function of position, not a scalar
+// per pixel, and reads distinct from the granite bloom FBM.
+float causticFBM(vec2 p) {
+  float v = 0.0;
+  float a = 0.5;
+  for (int i = 0; i < 3; i++) { v += a * vnoise(p); p = p * 2.03 + vec2(1.7, 0.6); a *= 0.62; }
+  return v;
+}
 
 void main() {
   vec2 uv = vec2(vUv.x, 1.0 - vUv.y);
@@ -177,95 +323,190 @@ void main() {
   // The waterline reads uWaterY directly — the shader and the physics
   // agree on where the water is. A small wave overlays uWaterY so the
   // surface reads alive; storm state (uState.w) adds chop and lifts the
-  // mean. This is the load-bearing spatial split of the whole room.
-  float wavelet = sin(uv.x * 18.0 + uTime * 1.2) * 0.004
-                 + sin(uv.x * 41.0 - uTime * 0.7 + uTide * 0.2) * 0.002;
-  float chop = uState.w * (sin(uv.x * 55.0 + uTime * 4.5) * 0.010
-                           + sin(uv.x * 91.0 - uTime * 3.1) * 0.006);
+  // mean. Reads uState.w and uTide. This is the load-bearing spatial
+  // split of the whole room — every branch below tests uv.y against it.
+  float wavelet = sin(uv.x * 18.0 + uTime * 1.2) * 0.005
+                 + sin(uv.x * 41.0 - uTime * 0.7 + uTide * 0.2) * 0.003;
+  float chop = uState.w * (sin(uv.x * 55.0 + uTime * 4.5) * 0.014
+                           + sin(uv.x * 91.0 - uTime * 3.1) * 0.008);
   float waterlineY = uWaterY + wavelet + chop;
-  // Whether we are above (sky) or below (water) drives the primary split.
   float depthBelow = clamp((uv.y - waterlineY) / max(0.02, POOL_Y_MAX - waterlineY), 0.0, 1.0);
   float overRock = float(uv.x < POOL_X_MIN || uv.x > POOL_X_MAX || uv.y > POOL_Y_MAX);
   float overRim = float(uv.y < POOL_Y_MIN);
 
-  if (uv.y < waterlineY && overRim < 0.5) {
+  if (uv.y < waterlineY && overRim < 0.5 && overRock < 0.5) {
     // layer: sky_reflection
-    // Above the waterline: shallow sky. Reads uNight (face-down invitees
-    // see night) and uState.x (low tide) — a glassy surface reflects the
-    // sky, high tide bleeds air-to-water blending. Reads uState in its
-    // brightness term (LAYER RULE — dead uniform is a bug).
-    float k = clamp(uv.y / max(1e-3, waterlineY), 0.0, 1.0);
-    vec3 airTone = mix(SKY, GLOW * 0.72, (1.0 - k) * (0.4 + uClimate.x * 0.6));
+    // Above the waterline: a real sky. A bright glow-tinted horizon band
+    // near the waterline blends up through a warmer mid to a cooler high
+    // sky; a sun disc rides climate.x's warmth axis. Reads uState (low
+    // tide brightens the reflection; high tide sinks the horizon band
+    // into the water; storm dims and desaturates) and uNight (face-down
+    // sinks to night). This is the whole reason a hand looking down at
+    // the pool sees a horizon at all.
+    float above = clamp((waterlineY - uv.y) / max(1e-3, waterlineY - POOL_Y_MIN), 0.0, 1.0);
+    // Horizon → high sky gradient.
+    vec3 horizonTone = mix(GLOW, mix(SKY, GLOW, 0.35), 0.55);
+    vec3 skyMid = mix(SKY, SKY_HIGH, 0.30 + uClimate.x * 0.15);
+    vec3 airTone = mix(horizonTone, skyMid, pow(above, 0.9));
+    airTone = mix(airTone, SKY_HIGH * 0.75, pow(above, 3.0));
+    // A bright horizon band right at the waterline (the sun on the sea)
+    float horizonBand = exp(-pow((waterlineY - uv.y) * 12.0, 2.0));
+    airTone += GLOW * horizonBand * (0.42 + 0.15 * uBreath) * (0.6 + uClimate.x * 0.4);
+    // Sun disc — moves subtly with climate.x, breathes with uBreath.
+    float sunX = 0.62 + sin(uTime * 0.05) * 0.02;
+    float sunY = waterlineY - 0.10 - uClimate.x * 0.05;
+    vec2 sd = (uv - vec2(sunX, sunY)) * vec2(aspect, 1.0);
+    float sunR = 0.030;
+    float sun = smoothstep(sunR * 1.1, sunR * 0.5, length(sd));
+    float sunHalo = exp(-dot(sd, sd) * 90.0);
+    airTone += GLOW * (sun * 0.65 + sunHalo * 0.35) * (0.75 + 0.25 * uBreath);
+    // Cirrus streaks — long thin FBM bands.
+    float cirrus = fbm(vec2(uv.x * 5.0 * aspect + uTime * 0.02, uv.y * 26.0));
+    cirrus = smoothstep(0.55, 0.85, cirrus) * (0.35 + uClimate.x * 0.25);
+    airTone = mix(airTone, mix(airTone, vec3(1.0), 0.6), cirrus * (1.0 - above * 0.5));
     airTone *= 0.86 + 0.14 * uBreath;
-    // Low tide brightens the sky reflection (glassy surface); storm
-    // darkens it with churn.
-    float lowGlass = uState.x;
-    float stormDim = uState.w;
-    airTone *= 0.85 + 0.15 * lowGlass;
-    airTone *= 1.0 - 0.25 * stormDim;
-    // Face-down: dim the sky.
-    airTone *= 1.0 - uNight * 0.72;
+    // State branches — visibly reshape the sky per state.
+    if (uState.x > 0.5) {
+      // low_tide: brightest sky, glassy surface, sharper horizon.
+      airTone *= 1.10;
+      airTone += GLOW * horizonBand * 0.10;
+    }
+    if (uState.y > 0.5) {
+      // high_tide: horizon sinks; the sky reads deeper and wetter.
+      airTone *= 0.94;
+      airTone = mix(airTone, ACCENT, 0.08);
+    }
+    if (uState.z > 0.4) {
+      // mid_tide: returning — a small warming pass, restful.
+      airTone += GLOW * 0.04;
+    }
+    if (uState.w > 0.02) {
+      // storm: heavy overcast, glow retreats, the sky flattens toward BG.
+      airTone = mix(airTone, mix(BG, SKY_HIGH, 0.35), uState.w * 0.65);
+      airTone *= 1.0 - 0.30 * uState.w;
+    }
+    airTone *= 1.0 - uNight * 0.78;
     col = airTone;
     gl_FragColor = vec4(col, 1.0);
     return;
   }
 
-  // Everything from here is either the granite rim/floor OR the water column.
+  // Everything from here is either the wet rock rim/floor OR the water column.
 
   // layer: rock_and_biofilm
-  // The granite rim (top strip) and the floor plus the biofilm bloom.
-  // Reads uBiofilm and uBreath — a warm pool's biofilm blooms visibly.
+  // The warm brown wet rock (BG2) — the rim above the pool AND the rock
+  // outside the pool bounds share this register. Layered FBM (coarse +
+  // fine + edge grain) gives the granite a real texture; the biofilm
+  // (uBiofilm) modulates coral-orange (ACCENT2) patches concentrated
+  // near the water's edge. Reads uBiofilm, uBreath, uState.w (storm
+  // dims rock briefly), uNight (face-down).
   if (uv.y < POOL_Y_MIN) {
     // Rock rim above the pool.
-    vec3 rock = mix(GRANITE, GRANITE * 1.6, hash21(floor(uv * uRes * 0.5)));
-    float bloom = fbm(uv * vec2(24.0 * aspect, 24.0));
-    rock += ACCENT2 * bloom * uBiofilm * 0.5;
+    float grain = hash21(floor(uv * uRes * 0.4));
+    float coarse = fbm(uv * vec2(8.0 * aspect, 6.0));
+    float fine = fbm(uv * vec2(48.0 * aspect, 42.0) + vec2(2.7, 3.1));
+    vec3 rock = mix(BG2 * 0.55, BG2 * 1.25, coarse);
+    rock = mix(rock, rock * (0.7 + grain * 0.6), 0.35);
+    rock += BG2 * fine * 0.20;
+    // Wet sheen along the bottom edge (nearest the pool).
+    float wetSheen = smoothstep(POOL_Y_MIN - 0.06, POOL_Y_MIN, uv.y);
+    rock += GLOW * wetSheen * 0.22 * (1.0 - uNight * 0.7);
+    // Biofilm — multi-octave FBM patches, denser near the water.
+    float bloom1 = fbm(uv * vec2(24.0 * aspect, 18.0));
+    float bloom2 = fbm(uv * vec2(56.0 * aspect, 44.0) + vec2(1.3, 0.7));
+    float biofilm = pow(bloom1 * 0.7 + bloom2 * 0.3, 1.4);
+    float wetBias = 0.4 + wetSheen * 0.6;
+    rock += ACCENT2 * biofilm * uBiofilm * wetBias * 0.95;
+    // Deeper crevices — dark FBM veins for granite depth.
+    float crev = smoothstep(0.72, 0.92, fbm(uv * vec2(14.0 * aspect, 12.0) + vec2(0.9, 2.4)));
+    rock *= 1.0 - crev * 0.40;
     rock *= 0.86 + 0.14 * uBreath;
-    rock *= 1.0 - uNight * 0.6;
-    // Storm dims the exposed granite briefly.
-    rock *= 1.0 - uState.w * 0.15;
+    rock *= 1.0 - uNight * 0.62;
+    rock *= 1.0 - uState.w * 0.18;
     col = rock;
     gl_FragColor = vec4(col, 1.0);
     return;
   }
 
   if (uv.x < POOL_X_MIN || uv.x > POOL_X_MAX || uv.y > POOL_Y_MAX) {
-    // Rock rim outside the pool bounds — same rock model, deeper tone
-    // toward the outer edge so the pool sits in a real granite bowl.
+    // layer: rock_and_biofilm (outer rock — the granite bowl the pool
+    // sits inside). Reads uBiofilm, uBreath, uNight.
     float outsideness = 0.0;
     if (uv.x < POOL_X_MIN) outsideness = (POOL_X_MIN - uv.x) / POOL_X_MIN;
     if (uv.x > POOL_X_MAX) outsideness = (uv.x - POOL_X_MAX) / max(1e-3, 1.0 - POOL_X_MAX);
     if (uv.y > POOL_Y_MAX) outsideness = max(outsideness, (uv.y - POOL_Y_MAX) / max(1e-3, 1.0 - POOL_Y_MAX));
-    vec3 rock = mix(GRANITE, GRANITE * 0.55, clamp(outsideness, 0.0, 1.0));
-    // The biofilm reaches out onto the wet rock immediately next to the pool.
-    float wetBand = 1.0 - smoothstep(0.0, 0.06, outsideness);
+    outsideness = clamp(outsideness, 0.0, 1.0);
+    float grain = hash21(floor(uv * uRes * 0.4));
+    float coarse = fbm(uv * vec2(10.0 * aspect, 10.0) + vec2(0.4, 1.1));
+    vec3 rock = mix(BG2 * 1.05, BG2 * 0.32, outsideness);
+    rock = mix(rock, rock * (0.7 + grain * 0.6), 0.30);
+    rock += BG2 * coarse * 0.25;
+    // A brighter wet sheen right at the waterline — where the water
+    // rises up the granite the rock reads glossy gold.
+    float waterEdge = 1.0 - smoothstep(0.0, 0.05, outsideness);
+    float nearWater = 1.0 - smoothstep(0.0, 0.09, abs(uv.y - waterlineY));
+    rock += GLOW * waterEdge * (0.32 + nearWater * 0.35) * (1.0 - uNight * 0.7);
+    // Biofilm.
     float bloom = fbm(uv * vec2(28.0 * aspect, 28.0) + vec2(uv.y * 4.0, 0.0));
-    rock += ACCENT2 * bloom * uBiofilm * wetBand * 0.7 * (0.6 + uBreath * 0.4);
+    float bloomFine = fbm(uv * vec2(72.0 * aspect, 64.0) + vec2(2.1, 3.7));
+    float biofilm = pow(bloom * 0.7 + bloomFine * 0.3, 1.3);
+    float wetBand = 1.0 - smoothstep(0.0, 0.10, outsideness);
+    rock += ACCENT2 * biofilm * uBiofilm * wetBand * 1.05 * (0.6 + uBreath * 0.4);
+    // Cracks and crevices — dark FBM veins.
+    float crev = smoothstep(0.70, 0.90, fbm(uv * vec2(18.0 * aspect, 14.0) + vec2(3.1, 0.4)));
+    rock *= 1.0 - crev * 0.35;
     rock *= 1.0 - uNight * 0.62;
+    rock *= 1.0 - uState.w * 0.12;
     col = rock;
     gl_FragColor = vec4(col, 1.0);
     return;
   }
 
   // Underwater — the pool itself.
-  float dnorm = depthBelow;
-  vec3 waterCol = mix(BG2, BG, dnorm * dnorm);
+  // The refracted sample coordinate — a small horizontal wobble below the
+  // waterline distorts what lives underneath. The refraction is stronger
+  // near the surface and eases with depth, so kelp far below reads sharper
+  // than a snail just under the meniscus.
+  float refractAmp = (1.0 - depthBelow * 0.7) * 0.014;
+  float refractDx = sin((uv.y - waterlineY) * 42.0 + uTime * 0.9 + uv.x * 6.0) * refractAmp
+                  + sin((uv.y - waterlineY) * 91.0 - uTime * 1.4) * refractAmp * 0.4;
+  vec2 uvR = vec2(uv.x + refractDx, uv.y);
+
+  // Water column: exponential darkening with depth (real absorption
+  // falloff), from ACCENT teal at the surface toward BG deep-water dark.
+  float depthFall = 1.0 - exp(-depthBelow * 2.6);
+  vec3 waterCol = mix(ACCENT, BG, depthFall);
+  // Warmth tints the shallow column toward glow; the deep stays dark.
+  waterCol = mix(waterCol, mix(waterCol, GLOW, 0.35 * (1.0 - depthFall)), uClimate.x);
   waterCol *= 0.86 + 0.14 * uBreath;
-  // Warmth tints the water toward glow when warm.
-  waterCol = mix(waterCol, mix(waterCol, GLOW, 0.05), uClimate.x);
 
   // layer: sunlit_surface
-  // A Snell highlight tracks the moving waterline; caustics ripple
-  // across the shelf, driven by fbm modulated by uTime and uState.x
-  // (low tide is glassy; high tide is caustic-rich). Reads uState.
-  float surfBand = exp(-pow((uv.y - waterlineY) * 90.0, 2.0));
-  float breathSurf = 0.85 + 0.15 * uBreath;
-  float warmMix = mix(0.4, 1.0, uClimate.x);
-  waterCol += mix(SKY, GLOW, warmMix) * surfBand * 0.55 * breathSurf;
-  // Caustics: brighter under high tide (uState.y raises them), dim in storm.
-  float caustic = fbm(vec2(uv.x * 20.0 * aspect, (uv.y - waterlineY) * 8.0 - uTime * 0.4));
-  caustic *= (0.6 + uState.y * 0.6) * (1.0 - uState.w * 0.7);
-  waterCol += mix(SKY, GLOW, warmMix * 0.8) * caustic * caustic * 0.18 * (1.0 - dnorm);
+  // A bright Snell highlight at the waterline; caustic cells rippling
+  // across the shelf. Reads uBreath, uClimate.x (warmth), uTide, uState
+  // (low_tide is glassy — one clean band; high_tide is caustic-rich —
+  // dancing cells across the whole floor; mid_tide is soft; storm
+  // scours the caustics away). Refraction rides uv → uvR above.
+  float surfBand = exp(-pow((uv.y - waterlineY) * 78.0, 2.0));
+  vec3 surfTone = mix(GLOW, mix(SKY, GLOW, uClimate.x), 0.55);
+  waterCol += surfTone * surfBand * 0.85 * (0.85 + 0.15 * uBreath);
+  // A wider soft glow just below the surface.
+  float underGlow = exp(-pow((uv.y - waterlineY - 0.025) * 28.0, 2.0));
+  waterCol += GLOW * underGlow * 0.24 * (0.5 + uState.y * 0.5);
+  // Caustics — three-octave value-noise cells shifted by time; pow gives
+  // the network its filament-cell shape; only under high tide are they
+  // in full voice; storm scrubs them out.
+  vec2 causticUV = vec2(
+    uvR.x * 9.0 * aspect + uTime * 0.16 + uCurrent * 0.5,
+    (uvR.y - waterlineY) * 3.6 - uTime * 0.11
+  );
+  float c1 = causticFBM(causticUV);
+  float c2 = causticFBM(causticUV * 2.4 + vec2(1.7, 2.3));
+  float c3 = causticFBM(causticUV * 5.7 + vec2(3.1, 0.9));
+  float caustic = pow(c1 * 0.55 + c2 * 0.30 + c3 * 0.15, 2.6);
+  caustic *= (0.5 + uState.y * 0.75);
+  caustic *= (1.0 - uState.w * 0.85);
+  caustic *= (1.0 - depthBelow * 0.55);
+  waterCol += mix(GLOW, mix(GLOW, SKY, 0.3), 1.0 - uClimate.x) * caustic * 0.95;
 
   // Ripple wavefronts from taps and flicks.
   float wave = 0.0;
@@ -279,37 +520,64 @@ void main() {
     float ring = exp(-pow((dist - rad) * 22.0, 2.0));
     wave += ring * r.w * exp(-age * 1.4);
   }
-  waterCol += ACCENT * wave * 0.55;
+  waterCol += mix(ACCENT, GLOW, 0.35) * wave * 0.75;
 
   // Stir — a scrubbing finger swirls the surface.
   if (uStir > 0.02) {
     vec2 sp = (uv - vec2(0.5, waterlineY + 0.08)) * vec2(aspect, 1.0);
     float ang = atan(sp.y, sp.x);
     float rr = length(sp);
-    waterCol += ACCENT * uStir * 0.18 * sin(ang * 4.0 + uTime * 3.0)
+    waterCol += ACCENT * uStir * 0.22 * sin(ang * 4.0 + uTime * 3.0)
               * exp(-rr * rr * 8.0);
   }
 
-  // Storm foam on the surface.
-  if (uState.w > 0.02) {
-    float foamMask = exp(-pow((uv.y - waterlineY) * 40.0, 2.0));
-    float foamCells = fbm(vec2(uv.x * 42.0 * aspect + uTime * 0.6, uv.y * 22.0 + uTime * 0.5));
-    waterCol = mix(waterCol, FOAM, foamMask * foamCells * uState.w * 0.65);
+  // Particulate motes — drifting downward through the water column.
+  // 24 cells (6 x 4), each carrying at most one mote, offset by hash so
+  // they never grid-align. The motes glide downward on a slow uTime term
+  // and drift horizontally with uCurrent — a real particulate field, not
+  // a static noise pattern. Storm scatters them (uState.w rides down the
+  // count). Motes read GLOW so they behave as backlit particles.
+  {
+    vec2 moteUV = uv * vec2(6.0 * aspect, 4.0)
+                  + vec2(uCurrent * 0.8, -uTime * 0.06);
+    vec2 moteCell = floor(moteUV);
+    vec2 moteFrac = fract(moteUV);
+    float moteSeed = hash21(moteCell);
+    vec2 moteOff = vec2(hash21(moteCell + 3.7), hash21(moteCell - 1.3));
+    float moteDist = length(moteFrac - moteOff);
+    float mR = 0.05 + moteSeed * 0.06;
+    float mote = smoothstep(mR, mR * 0.45, moteDist);
+    float alive = step(0.28, moteSeed);
+    float notStorm = 1.0 - uState.w * 0.7;
+    waterCol += GLOW * mote * alive * notStorm * (0.35 + moteSeed * 0.5) * (1.0 - depthBelow * 0.5);
   }
 
-  // Vessel tilt — the water leans a hair with uLean.
-  waterCol *= 1.0 - 0.06 * abs(uLean) * (1.0 - dnorm);
+  // Storm foam + sediment stirring.
+  if (uState.w > 0.02) {
+    float foamMask = exp(-pow((uv.y - waterlineY) * 34.0, 2.0));
+    float foamCells = fbm(vec2(uv.x * 48.0 * aspect + uTime * 0.7, uv.y * 26.0 + uTime * 0.5));
+    waterCol = mix(waterCol, FOAM, foamMask * foamCells * uState.w * 0.75);
+    // Storm sediment: deeper water reads darker under churn.
+    float sediment = fbm(vec2(uv.x * 12.0 * aspect, uv.y * 7.0 - uTime * 0.4));
+    waterCol *= 1.0 - 0.32 * uState.w * sediment * depthBelow;
+  }
 
-  // Night dim (face-down).
+  // Vessel tilt.
+  waterCol *= 1.0 - 0.06 * abs(uLean) * (1.0 - depthBelow);
+  // Night.
   waterCol *= 1.0 - uNight * 0.55;
 
   // layer: creature_silhouettes
-  // Reads uState — a storm collapses anemone silhouettes to knots; low
-  // tide exposes them. The actual SDF discs draw through the shared
-  // instanced pass (createPopulationLayer) — this layer is only the
-  // shader-side hint that a storm darkens what the population layer will
-  // draw over. Reads uState.w.
-  waterCol *= 1.0 - 0.10 * uState.w * clamp(1.0 - dnorm, 0.0, 1.0);
+  // Underwater state-modulation footprint. A storm darkens what the
+  // population layer draws over (uState.w), low_tide brightens the shelf
+  // (uState.x) so anemone silhouettes read against a paler ground,
+  // high_tide (uState.y) enriches the near-surface caustic wash. This is
+  // the shader's promise that state actually reaches the population's
+  // reading — a snail on the rim during storm sits over a darker column
+  // than the same snail during low_tide.
+  waterCol *= 1.0 - 0.14 * uState.w * clamp(1.0 - depthBelow, 0.0, 1.0);
+  waterCol *= 1.0 + 0.10 * uState.x * (1.0 - depthBelow);
+  waterCol += ACCENT * 0.06 * uState.y * (1.0 - depthBelow);
 
   // Vignette.
   vec2 vd = (uv - vec2(0.5, 0.5)) * vec2(aspect, 1.0);
@@ -525,6 +793,21 @@ export default function Tidepool() {
     // ledger (state.creatures), which is the phase-7 cross-population
     // interaction requirement. Every render goes through one shared
     // createPopulationLayer draw call.
+    // ——— shape-select encoding ———
+    // The shared SPRITE_VERT gives the population fragment shader four
+    // varyings; we hijack `phase`'s integer part as a shape selector so
+    // each creature draws its own silhouette in the shared instanced
+    // pass. Fractional part carries the sprite's breath phase; hue
+    // carries color; glow carries a creature-specific parameter (sealed
+    // weight for snails, curl for anemones, bend for kelp).
+    //
+    //   SHAPE_SNAIL          = 0 + breathPhase(0..1)
+    //   SHAPE_ANEMONE_BODY   = 1 + breathPhase(0..1)
+    //   SHAPE_ANEMONE_CORONA = 2 + breathPhase(0..1)
+    //   SHAPE_KELP           = 3 + breathPhase(0..1)
+    const shapeSlot = (shape: number, phase01: number) =>
+      shape + Math.min(0.999, Math.max(0, phase01));
+
     const snailSpec: SceneObjectSpec<SnailView> = {
       kind: "snail",
       cap: SNAIL_CAP,
@@ -551,17 +834,22 @@ export default function Tidepool() {
       emit(s, ctx, out) {
         const px = s.nx * ctx.width;
         const py = s.ny * ctx.height;
-        const baseR = Math.max(3, ctx.width * 0.010);
-        // Retreated snails shrink to a small warm dot — the shell.
-        const size = s.retreated ? 0.55 : 0.9 + s.biomassVal * 0.4;
-        const bright = 0.35 + s.biomassVal * 0.5 + ctx.breath * 0.15;
+        // Snails are shell-sized; a modest radius keeps them on the rim.
+        const baseR = Math.max(6, ctx.width * 0.018);
+        // Retreated snails shrink into the shell; sealed keepers grow a
+        // touch larger and read a brighter rim (via glow → shader).
+        const retreatMul = s.retreated ? 0.55 : 1.0;
+        const size = retreatMul * (0.85 + s.biomassVal * 0.5);
+        const breath01 = 0.5 + 0.5 * Math.sin(
+          ctx.tMs * 0.001 * 1.1 + s.phase * Math.PI * 2,
+        );
         out.push(
           px, py,
           baseR * size * (s.sealed ? 1.15 : 1),
-          s.phase * Math.PI * 2,
-          s.sealed ? 0.9 : 0.2, // hue: sealed → warm rust, young → glow
-          bright,
-          Math.sin(ctx.tMs * 0.001 * 1.1 + s.phase * Math.PI * 2) * 0.5 + 0.5,
+          0, // rotation left to the SDF (spiral is rotationally distinct on its own)
+          s.sealed ? 0.85 : 0.20,      // hue: sealed → warm gold; young → teal-ish
+          s.sealed ? 1.0 : 0.35,       // glow → sealed weight (shader reads this)
+          shapeSlot(0, breath01),      // phase → SHAPE_SNAIL + subPhase
           s.presence,
         );
       },
@@ -594,33 +882,38 @@ export default function Tidepool() {
       emit(s, ctx, out) {
         const px = s.nx * ctx.width;
         const py = s.ny * ctx.height;
-        const baseR = Math.max(4, ctx.width * 0.014);
-        // Curl collapses the star silhouette: fully curled anemones are
-        // small tight knots; open anemones spread wider and brighter.
+        // Anemones want room for tentacles — larger radius so the outer
+        // rays reach past the body's own footprint.
+        const baseR = Math.max(9, ctx.width * 0.028);
         const openness = 1 - s.curl;
-        const size = 0.55 + s.biomassVal * 0.45 + openness * 0.35;
-        const bright = 0.35 + s.biomassVal * 0.35 + openness * 0.4 + ctx.breath * 0.10;
+        const size = 0.75 + s.biomassVal * 0.35 + openness * 0.25;
+        const bodyHue = 0.60;   // anemone body: warm accent2 register
+        const tentacleHue = 0.85; // tentacles: pushed toward glow highlight
+        const breath01 = 0.5 + 0.5 * Math.sin(
+          ctx.tMs * 0.001 * 0.8 + s.phase * Math.PI * 2,
+        );
+        const bodyR = baseR * size * (s.sealed ? 1.15 : 1);
+        // Anemone body — a compact center that shrinks under curl.
         out.push(
           px, py,
-          baseR * size * (s.sealed ? 1.20 : 1),
-          s.phase * Math.PI * 2 + openness * 1.2,
-          0.65, // hue: anemone rust (accent2)
-          bright,
-          Math.sin(ctx.tMs * 0.001 * 0.8 + s.phase * Math.PI * 2) * 0.5 + 0.5,
-          s.presence * (0.5 + openness * 0.5),
+          bodyR,
+          0,
+          bodyHue,
+          s.curl,                 // glow → curl (0=open, 1=closed)
+          shapeSlot(1, breath01), // phase → SHAPE_ANEMONE_BODY + subPhase
+          s.presence,
         );
-        // A second additive corona brightens when open (the tentacles).
-        if (openness > 0.15) {
-          out.push(
-            px, py,
-            baseR * 2.4 * openness,
-            -s.phase * Math.PI * 2,
-            0.85,
-            openness * (0.8 + s.biomassVal * 0.4),
-            ctx.breath,
-            s.presence * Math.min(1, openness * 0.9),
-          );
-        }
+        // Tentacle corona — the same disc size, but the SDF paints only the
+        // rays; this pass is what makes an anemone read as an anemone.
+        out.push(
+          px, py,
+          bodyR * 1.55,
+          0,
+          tentacleHue,
+          s.curl,
+          shapeSlot(2, breath01),
+          s.presence * (0.35 + openness * 0.65),
+        );
       },
       verbs: [],
       respond: {},
@@ -648,33 +941,47 @@ export default function Tidepool() {
         if (s.growth < 1) s.growth = Math.min(1, s.growth + ctx.dt * 0.7);
       },
       emit(s, ctx, out) {
+        // Kelp draws as one tall vertical ribbon rising from the shelf
+        // toward the surface. The physics places kelp at s.ny on the
+        // SHELF band (SHELF_Y_MIN..HOLLOW_Y_MIN, 0.35..0.55 in normalized
+        // pool coords), which — at mean tide — sits half above the
+        // waterline. To keep the frond reading as a submerged frond
+        // reaching UP toward the surface (rather than sticking into the
+        // sky), we anchor at max(s.ny, 0.55) so every kelp starts from
+        // the deep shelf and grows upward.
         const px = s.nx * ctx.width;
-        const py = s.ny * ctx.height;
-        const baseR = Math.max(3, ctx.width * 0.011);
-        // Kelp draws as a vertical ribbon: two-blob emission (base + tip)
-        // approximates a frond in the shared SDF-disc primitive.
-        const bend = s.bendPhase; // -1..1 lateral deflection
-        const tipX = px + bend * baseR * 5.5;
-        const tipY = py - (0.4 + s.biomassVal * 0.6) * baseR * 7;
-        // Base — anchored on the shelf.
+        // Anchor kelp on the deeper end of the shelf so the frond has
+        // room to rise up in the water column without sticking above
+        // the mean waterline. The physics places kelp at s.ny within
+        // 0.35..0.55; we bias toward the deeper part of that band.
+        const anchorNy = Math.max(s.ny, 0.62);
+        const anchorY = anchorNy * ctx.height;
+        // Height climbs with biomass but stays modest — a kelp frond
+        // reaches roughly a quarter-pool up from its anchor, never past
+        // the shelf's upper edge. This keeps every frond visibly in the
+        // water at mean tide.
+        const maxRiseNy = 0.10;
+        const heightNy = maxRiseNy * (0.45 + s.biomassVal * 0.55);
+        const heightPx = heightNy * ctx.height;
+        // Sprite center halfway up the frond; SDF anchor is at the
+        // bottom of the sprite (vLocal.y = +1.9), tip at the top
+        // (vLocal.y = -1.9).
+        const centerY = anchorY - heightPx * 0.5;
+        const spriteR = Math.max(heightPx * 0.55, ctx.width * 0.03);
+        const bendNorm = (s.bendPhase + 1) * 0.5; // -1..1 → 0..1
+        // Deterministic subPhase from creature phase — no Date.now, no
+        // Math.random. Breath rides tMs * phase so each frond sways at
+        // its own rate.
+        const subPhase = (s.phase + (ctx.tMs * 0.0003) % 1) % 1;
+        const alpha = s.presence * (0.75 + s.biomassVal * 0.25);
         out.push(
-          px, py,
-          baseR * (0.55 + s.biomassVal * 0.35),
-          s.phase * Math.PI * 2,
-          0.42, // hue: kelp teal (accent)
-          0.28 + s.biomassVal * 0.25,
-          Math.sin(ctx.tMs * 0.001 * 0.7 + s.phase * Math.PI * 2) * 0.5 + 0.5,
-          s.presence,
-        );
-        // Tip — where the frond fingers reach.
-        out.push(
-          tipX, tipY,
-          baseR * (0.4 + s.biomassVal * 0.5),
-          s.phase * Math.PI * 2 + 1.4,
-          0.42,
-          0.24 + s.biomassVal * 0.20 + ctx.breath * 0.06,
-          Math.sin(ctx.tMs * 0.001 * 0.9 + s.phase * Math.PI * 2) * 0.5 + 0.5,
-          s.presence * 0.85,
+          px, centerY,
+          spriteR,
+          0,
+          0.30,          // hue: kelp teal (bias toward u_palA accent)
+          bendNorm,      // glow → bend (0..1)
+          shapeSlot(3, subPhase),
+          alpha,
         );
       },
       verbs: [],
@@ -686,7 +993,9 @@ export default function Tidepool() {
     const kelps = createPopulation(kelpSpec);
     const populationLayer = stage
       ? createPopulationLayer(stage, {
-          palette: ["#3a8a76", "#b8543a", "#f2c07a"], // accent, accent2, glow
+          // u_palA = teal water, u_palB = coral biofilm, u_palC = sunlit gold
+          palette: ["#3d9ec2", "#e07a3b", "#ffd97a"],
+          frag: POPULATION_FRAG,
         })
       : null;
     const instanceBuffer = createInstanceBuffer(MAX_CREATURES * 3);

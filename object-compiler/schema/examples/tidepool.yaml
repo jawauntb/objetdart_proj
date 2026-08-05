@@ -60,11 +60,11 @@ domain_lib:
   invariant_type: lattice
 
 palette:
-  bg:      "#050f14"
-  bg2:     "#0f2a2b"
-  glow:    "#f2c07a"
-  accent:  "#3a8a76"
-  accent2: "#b8543a"
+  bg:      "#041220"
+  bg2:     "#4d2e1a"
+  glow:    "#ffd97a"
+  accent:  "#3d9ec2"
+  accent2: "#e07a3b"
   ink:     "#ecefe6"
 
 visual_style:

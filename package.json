@@ -65,6 +65,7 @@
     "test:scene": "node scripts/test-scene.mjs",
     "test:room-quality": "node scripts/test-room-quality.mjs",
     "test:room-depth": "node scripts/test-room-depth.mjs",
+    "test:room-visual": "node scripts/test-room-visual.mjs",
     "test:center-field": "node scripts/test-center-field.mjs",
     "test:travel-passage": "node scripts/test-travel-passage.mjs",
     "test:city": "node scripts/test-city.mjs",
