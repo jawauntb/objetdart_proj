@@ -62,6 +62,10 @@ const {
   colorForInstance,
   ROLE_COLOR,
   BUILDING_ROLES,
+  roofPitchForSeed,
+  roofUnitHeightFor,
+  hasChimneyForSeed,
+  eventVariantForSeed,
 } = mod;
 
 // ——— BUILDING_ROLES holds the four civic roles that get their own mesh ——
@@ -177,7 +181,51 @@ for (const role of ["home", "store", "event", "tree"]) {
   assert.ok(d > 0.05, "home vs event tints are distinguishable in color-space");
 }
 
+// ——— compound-geometry knobs: roof pitch, chimney, event variant —————————
+// The compound geometry pass introduces four small pure knobs that pick a
+// home's roof pitch, a home's chimney presence, and an event tower's
+// silhouette variant. Each must be deterministic per seed and produce a
+// legible spread across many seeds so the settlement doesn't collapse
+// into one prefab silhouette.
+
+// Determinism.
+assert.equal(roofPitchForSeed(101), roofPitchForSeed(101), "roofPitch is pure in seed");
+assert.equal(eventVariantForSeed(202), eventVariantForSeed(202), "eventVariant is pure in seed");
+assert.equal(hasChimneyForSeed(303), hasChimneyForSeed(303), "chimney presence is pure in seed");
+
+// Spread — every bucket gets hit.
+{
+  const pitchCounts = [0, 0, 0];
+  const variantCounts = [0, 0, 0];
+  let chimneyOn = 0;
+  const N = 400;
+  for (let s = 0; s < N; s += 1) {
+    const seed = s * 173 + 5;
+    const p = roofPitchForSeed(seed);
+    const v = eventVariantForSeed(seed);
+    assert.ok(p === 0 || p === 1 || p === 2, "roof pitch is one of 0/1/2");
+    assert.ok(v === 0 || v === 1 || v === 2, "event variant is one of 0/1/2");
+    pitchCounts[p] += 1;
+    variantCounts[v] += 1;
+    if (hasChimneyForSeed(seed)) chimneyOn += 1;
+  }
+  for (const c of pitchCounts) assert.ok(c > 20, "each roof pitch bucket gets some homes: " + c);
+  for (const c of variantCounts) assert.ok(c > 20, "each event variant bucket gets some towers: " + c);
+  const chimneyFrac = chimneyOn / N;
+  assert.ok(chimneyFrac > 0.4 && chimneyFrac < 0.7,
+    "about half of homes have chimneys (got " + chimneyFrac + ")");
+}
+
+// Roof height buckets are monotone: steep > medium > shallow. If the
+// buckets ever collapsed to the same height the block would read as one
+// uniform roofline and the "48 individuals" property would fail.
+assert.ok(roofUnitHeightFor(0) < roofUnitHeightFor(1), "roof pitch 0 (shallow) < pitch 1 (medium)");
+assert.ok(roofUnitHeightFor(1) < roofUnitHeightFor(2), "roof pitch 1 (medium) < pitch 2 (steep)");
+assert.ok(roofUnitHeightFor(0) > 0, "shallow roof has positive height");
+assert.ok(roofUnitHeightFor(2) < 1, "steep roof stays below the wall's own height");
+
 console.log(
   "city-geometry ok: role→height ladder strict (home<store<event), footprint means climb, " +
-  "sealed brightens, palette distinct, hashUnit deterministic and evenly spread.",
+  "sealed brightens, palette distinct, hashUnit deterministic and evenly spread, " +
+  "roof pitch/chimney/event silhouette knobs deterministic and spread across buckets.",
 );
