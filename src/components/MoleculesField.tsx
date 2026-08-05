@@ -1404,10 +1404,35 @@ export default function MoleculesField() {
       const flex = reduce ? 0 : Math.sin(t * Math.PI * 2 * morph.flex.rateHz + morph.flex.phase) * morph.flex.amp;
       const cosR = Math.cos(m.rot);
       const sinR = Math.sin(m.rot);
+      // A REAL MODE, running. The mode's own wavenumber sets both how fast it
+      // goes and how the skeleton moves: a STRETCH drives the atoms radially,
+      // in and out along their bonds; a BEND drives them across, so the angle
+      // opens and closes while the lengths hold; a RING BREATHES as a whole.
+      // Nothing here is a generic wobble — the shape of the motion is the
+      // name of the mode.
+      const vib = m.vib && !reduce ? m.vib : null;
+      const vRate = vib ? 0.9 + (vib.wavenumber / 4000) * 5.5 : 0;
+      const vPhase = vib ? Math.sin(t * Math.PI * 2 * vRate) * vib.amp : 0;
       return morph.atoms.map((a, i) => {
         const stretch = 1 + flex * Math.sin(morph.modes[i]);
-        const px = a.x * stretch;
-        const py = a.y * stretch;
+        let px = a.x * stretch;
+        let py = a.y * stretch;
+        if (vib) {
+          const r = Math.hypot(px, py) || 1e-6;
+          if (vib.kind === "stretch" || vib.kind === "breathe") {
+            // along the bond: the frame swells and closes on itself
+            const s = 1 + vPhase * 0.16 * (vib.kind === "breathe" ? 1 : (i === 0 ? -0.4 : 1));
+            px *= s;
+            py *= s;
+          } else {
+            // across it: the angle opens and closes, the lengths do not
+            const across = vPhase * 0.2 * (i % 2 === 0 ? 1 : -1);
+            const nx2 = px - (py / r) * across * r;
+            const ny2 = py + (px / r) * across * r;
+            px = nx2;
+            py = ny2;
+          }
+        }
         const jx = jAmp * Math.sin(t * Math.PI * 2 * jRate + morph.modes[i]);
         const jy = jAmp * Math.cos(t * Math.PI * 2 * jRate * 0.93 + morph.modes[i] * 1.7);
         return {
@@ -1609,6 +1634,25 @@ export default function MoleculesField() {
       streamTargetY *= Math.exp(-dt * 0.5);
       lens += (lensTarget - lens) * Math.min(1, dt * 6);
       thermalStorm *= Math.exp(-dt * 0.9);
+      // a catalyst is not consumed by the reactions it enables — it only ever
+      // drifts out of the neighbourhood, which is far slower
+      catalyst = Math.max(0, catalyst - dt * 0.045);
+      solvent += (solventTarget - solvent) * Math.min(1, dt * 1.2);
+
+      // ——— the solution's own life, with no hand on it ———
+      //
+      // A room that is still when untouched has failed. Brownian motion is
+      // real motion: molecules that touch keep touching, and now and then one
+      // of those meetings arrives with enough energy to clear its barrier and
+      // the reaction simply happens. On the same seeded clock the bench also
+      // warms and cools a little, which is what changes how often that is.
+      if (!reduce && now - lastInteractionAt > 4000) {
+        const phase = Math.sin(now * 0.00013) * 0.5 + 0.5;
+        for (const m of mols) {
+          if (m.retiringAt || !m.closed) continue;
+          m.heat = Math.min(2, m.heat + dt * 0.22 * (0.4 + phase));
+        }
+      }
       tuttiPulse *= Math.exp(-dt * 2.4);
       night += (nightTarget - night) * Math.min(1, dt * (nightTarget > night ? 1.6 : 2.8));
       // two-finger pan: the frame eases toward the hand's nudge, then home
@@ -1759,6 +1803,10 @@ export default function MoleculesField() {
         const m = mols[i];
         if (m.retiringAt && now - m.retiringAt > RETIRE_MS) { mols.splice(i, 1); dirty = true; continue; }
         if (!m.closed) buildMol(m, dt * 0.9); // a condensing molecule finishes on its own
+        // a mode does not run forever: the energy is radiated away, and what
+        // radiates it is the dipole changing, which is why it stops
+        if (m.vib && now >= m.vib.until) m.vib = null;
+        else if (m.vib) m.vib.amp *= Math.exp(-dt * 0.55);
         m.heat *= Math.exp(-dt * 0.7);
         m.spin *= Math.exp(-dt * 1.1);
         if (m.morph.felt === "inert") {

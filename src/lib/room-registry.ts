@@ -340,6 +340,13 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     keeps: "objetdart:world:v1",
     creates: "a natural",
     exempt: {},
+    interacts:
+      "gravity: the moon and the sun are each a real tidal bulge (bodyTide), and the shore reads " +
+      "their sum, never either alone — dragging one body around the sky changes the swash even if " +
+      "the other never moves. A tier-5+ tap on a body forces syzygy (the other body's angle snaps " +
+      "to align with it), which is what a spring tide actually is: two bulges genuinely " +
+      "superposing, not a scripted 'big wave' — the surge that follows visibly floods the shore " +
+      "and keeps deepening the longer the train continues.",
   },
   {
     key: "waves",
@@ -353,6 +360,14 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     keeps: "objetdart:world:v1",
     creates: "a natural",
     exempt: {},
+    interacts:
+      "real superposition: every raised source and every tap injects a pulse into the same " +
+      "finite-difference height field (2D wave equation), so two sources genuinely interfere — " +
+      "constructive and destructive fringes are computed, not painted. A tier-3 tap on a source " +
+      "splits it into two coherent emitters that beat against each other in the shared field; a " +
+      "tier-5 tap scans the field for where its own wavefronts are already piling up and pours " +
+      "energy in there, so the rogue wave that results is emergent from real interference, never " +
+      "a scripted extra drop.",
   },
   {
     key: "sine",
@@ -559,6 +574,12 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     keeps: "objetdart:aphros:v2",
     creates: "a bloom",
     exempt: {},
+    interacts:
+      "surface tension: a tier-3 tap on a bloom bursts it into daughters, area-conserving (child " +
+      "size² summed equals the parent's), thrown outward and only briefly locked from re-merging " +
+      "— the population cap gives way visibly by ascending the oldest bloom into the shell rather " +
+      "than dropping it silently. A tier-5 tap blooms the whole sea at once, scattering foam " +
+      "across the surface under the shell's own light.",
   },
   {
     key: "flowers",
