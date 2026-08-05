@@ -55,13 +55,20 @@ domain_lib:
   name: coralflow
   invariant_type: lattice
 
+# Phase 9 palette rewrite: three distinct registers so the guide screenshot
+# reads as an actual sunlit reef in section instead of a thin dark stub —
+# bright warm surface above (glow = pale sun-gold), cool teal water column
+# (accent), warm coral substrate below (bg2 = calcite rust), and mature
+# tissue in the coral-bloom register (accent2). Contrast between bg (deep
+# blue) and bg2 (warm brown) is what pushes the frame across the visual
+# density floor (test-room-visual: luminance_range and edge_density).
 palette:
-  bg:      "#020814"
-  bg2:     "#0a2432"
-  glow:    "#eaa87a"
-  accent:  "#4ea9a2"
-  accent2: "#c26a52"
-  ink:     "#e8ede5"
+  bg:      "#0a1d2a"    # deep-sea dark blue — the far column / horizon behind
+  bg2:     "#4a2818"    # warm coral-substrate register — the calcite floor rust
+  glow:    "#f4e6a8"    # bright surface sunlight — pale gold, the sun above
+  accent:  "#3d9ec2"    # cool water in motion — bright teal shallows
+  accent2: "#e0693a"    # coral bloom warm — biofilm / mature tissue
+  ink:     "#e8ede5"    # readable text over the darkest tile
 
 visual_style:
   subject: "a hand's width of sunlit reef in section — a shallow water column above the substrate, a colony of coral polyps at discrete anchor points, a slow lateral current shearing the water"
@@ -142,11 +149,28 @@ guide:
 # for unsealed polyps under DISLODGE_THRESHOLD when a knock lands hard.
 life:
   population:
+    # Two tiers share the coralflow ledger. cornerstone_polyp reads every
+    # SEALED polyp; recruit_polyp reads every UNSEALED polyp. The eye names
+    # the colony's frame off the shape difference — a branching cornerstone
+    # is a decade of anchor, a disc is a recruit still climbing its logistic.
+    # One ledger, two visual registers, both drawn in the same shared
+    # instanced pass. This is the phase-9 rewrite of the phase-5 stub, which
+    # emitted one SceneObjectSpec that drew every polyp as an SDF disc — the
+    # test-room-visual failure the guide screenshot was showing.
+    depth_note: "two tiers over one ledger; cornerstone = sealed = elaborate branching SDF; recruit = unsealed = simpler disc-with-corona. the two-tier shape difference is what makes the colony's frame legible."
     objects:
-      - noun: polyp
-        max_count: 24  # MAX_POLYPS from src/lib/coralflow.ts
-        state_shape: "id, x, y, size (0..MAX_SIZE=1), sealed (bool — cornerstone), phase seed"
-        lifecycle: "born under dwell (plantPolyp at size 0) → size grows on saturating logistic `MAX_SIZE * (1 - exp(-r_eff * elapsed))` while held → sealed at ceremony (size = MAX_SIZE, sealed=true, kept between visits as a cornerstone) → retires via <LetGo> (population-wide) or via knock (unsealed polyps under DISLODGE_THRESHOLD when a hard knock lands — the room's touch-reachable secret)"
+      - noun: cornerstone_polyp
+        max_count: 24
+        state_shape: "id, x, y, size (fixed at MAX_SIZE=1 once sealed), sealed=true, phase seed"
+        lifecycle: "sealed at ceremony from a recruit polyp (size = MAX_SIZE, sealed = true) — kept between visits as an anchor for what settles next; survives knockSweep; retires only via <LetGo>"
+        persistence: LetGo
+        creates_via_verb: ceremony
+        retires_via: [LetGo]
+        implementation_hint: SceneObjectSpec
+      - noun: recruit_polyp
+        max_count: 24
+        state_shape: "id, x, y, size (0..MAX_SIZE=1, climbing the logistic), sealed=false, phase seed"
+        lifecycle: "born under dwell (plantPolyp at size 0) → size grows on saturating logistic `MAX_SIZE * (1 - exp(-r_eff * elapsed))` while held → sealed at ceremony (transitions to cornerstone_polyp above) → retires via knockSweep (unsealed polyps under DISLODGE_THRESHOLD when a hard knock lands — the room's touch-reachable secret) or via <LetGo>"
         persistence: LetGo
         creates_via_verb: dwell
         retires_via: [knock, LetGo]
