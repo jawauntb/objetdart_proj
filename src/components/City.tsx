@@ -1158,6 +1158,13 @@ export default function City() {
     skyline.sun.castShadow = false;
     skyline.ground.visible = false;
     skyline.scene.fog = null;
+    // Attach the PMREM sky IBL to the skyline so glass and metal facades
+    // reflect the actual sky. Without this, the event tower's transmission
+    // + iridescence + clearcoat all sample scene.environment=null and read
+    // as flat plastic instead of curtain-wall glass. citySky.update rebakes
+    // the env into a new texture on hour boundaries; the reassignment below
+    // in the tick loop keeps the skyline scene pointed at the fresh one.
+    skyline.setEnvironment(citySky.environment);
 
     // ── perspective camera (coupled zoom+pitch) ─────────────────────────
     // One camera drives both the world sky pass and the skyline pass.
@@ -1953,8 +1960,7 @@ export default function City() {
       const shadowsOn = tier === "medium" || tier === "high";
       if (renderer.shadowMap.enabled !== shadowsOn) {
         renderer.shadowMap.enabled = shadowsOn;
-        skyline.mesh.castShadow = shadowsOn;
-        skyline.mesh.receiveShadow = shadowsOn;
+        skyline.setShadows(shadowsOn);
       }
       // Sun + sky are driven by the world scene's citySun/citySky below;
       // the skyline's own hemi/sun/ambient are held at intensity 0 so the
@@ -1983,11 +1989,18 @@ export default function City() {
       const df = dayFraction(cityTimeMs);
       citySky.update(df);
       citySun.update(df);
+      // The skyline's per-role emissive intensity + hourly atlas rebake
+      // rides the same dayFraction the sky does. Setting it every frame is
+      // cheap (the atlas redraw is behind its own 24-slot change detector).
+      skyline.setDayFrac(df);
       if (Math.floor(df * 64) !== lastSkySlot) {
         lastSkySlot = Math.floor(df * 64);
         // The environment texture identity changes on each PMREM re-run;
         // re-assign it to the scene so materials pick up the new IBL.
+        // Same texture drives the skyline's PBR glass — without this the
+        // event tower's iridescence + transmission reads flat.
         worldScene.environment = citySky.environment;
+        skyline.setEnvironment(citySky.environment);
         worldFog.color.copy(fogColorFromSky(citySky.currentState));
         // Shadow-map allocation follows the current tier. Cheap on
         // matched tiers — only reallocates on transitions.
@@ -2004,7 +2017,10 @@ export default function City() {
       // strength / radius ride the same dayFraction the shaders do — the
       // ember rises as the sun sets. Tier gates the bloom entirely on
       // low/sleep so slow devices keep hitting frame budget.
-      composer.render(df, tier);
+      // pitch01 rides the eased camera pitch — the composer's Bokeh DOF
+      // ramps in as the frame climbs toward bird's-eye. SSAO is tier-gated
+      // inside the composer, so we don't touch it here.
+      composer.render(df, tier, cityCam.pitch01());
       drawOverlay();
       raf = requestAnimationFrame(tick);
     };
@@ -2362,22 +2378,24 @@ export default function City() {
     // bornMs / growMs clock as the atlas emblems so a newly planted plot
     // rises visibly out of the plane.
     function syncSkylineInstances(): void {
-      const n = plots.length;
       const growMs = reduceMotion ? 250 : 380;
-      for (let i = 0; i < n; i += 1) {
-        const plot = plots[i];
+      // Route each plot to its role's InstancedMesh via syncPlots — one
+      // pass, per-role bookkeeping is inside the geometry module so this
+      // call site doesn't need to know the split. Grow-in factor rides
+      // the same bornMs / growMs clock as the atlas emblems.
+      const view = plots.map((plot) => {
         const age = cityTimeMs - plot.bornMs;
         const bornT = age >= growMs ? 1 : Math.max(0.02, age / growMs);
-        skyline.updateInstance(i, {
+        return {
           role: plot.role,
           seed: plot.seed,
           x: plot.x,
           y: plot.y,
           sealed: plot.sealed,
           bornT,
-        });
-      }
-      skyline.setCount(n);
+        };
+      });
+      skyline.syncPlots(view);
     }
 
     // Integer → [0,1) hash, splashed on the same shape as Mulberry32's

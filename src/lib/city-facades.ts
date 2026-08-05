@@ -48,8 +48,8 @@
  */
 
 import * as THREE from "three";
-import { emissiveIntensityForDay as _dropShimEmissive, litFractionForDay, windowIsLit } from "./city-windows";
-import type { PlotRole } from "./city";
+import { emissiveIntensityForDay as _dropShimEmissive, litFractionForDay, windowIsLit } from "@/lib/city-windows";
+import type { PlotRole } from "@/lib/city";
 
 // Re-export for callers that expect the emissive dial to live alongside
 // the material factories. The pure implementation is in city-windows.ts
