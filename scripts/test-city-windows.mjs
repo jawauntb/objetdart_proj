@@ -180,9 +180,190 @@ for (let i = 0; i <= 20; i += 1) {
 assert.equal(countLit(0xC17A, 0), 0, "no lit windows at zero fraction");
 assert.equal(countLit(0xC17A, 1), 48, "every window lit at full fraction");
 
+// ── real geometric window openings — the frame-lattice ladder ───────────
+//
+// R6-A: home + store facades finally carry a real InstancedMesh window-
+// frame lattice. Each frame is a small extruded rectangle-with-hole that
+// protrudes ~8cm from the wall face, so grazing sunset light rakes across
+// a real edge and the bloom pass catches genuine self-shadow. The pure
+// math that drives the lattice — how many frames per plot, and where on
+// the plot each one sits — is testable without three; the tests below
+// pin the ladder so a grid refactor can't silently drop a wall's worth
+// of windows or misalign the frame ring with the pane.
+
+const frames = loadTsModule("src/lib/city-window-frames-pure.ts");
+const {
+  WINDOW_FACES,
+  faceYawFor,
+  windowsPerPlot,
+  WINDOW_FRAME_DEPTH_M,
+  WINDOW_FRAME_OUTER,
+  WINDOW_FRAME_INNER,
+  windowFramePlacement,
+  WINDOW_GRIDS_PURE,
+} = frames;
+
+// The four faces are the four cardinal walls, distinct and no duplicates.
+assert.equal(WINDOW_FACES.length, 4, "four wall faces, one lattice — no more, no less");
+const faceSet = new Set(WINDOW_FACES);
+assert.equal(faceSet.size, 4, "wall faces must be distinct — the lattice is not double-stamped");
+
+// Face yaws land at 0, +π/2, π, -π/2 (in some order). Every frame's
+// outward normal must be one of the four cardinals.
+const yaws = WINDOW_FACES.map(f => faceYawFor(f)).sort((a, b) => a - b);
+const cardinals = [-Math.PI / 2, 0, Math.PI / 2, Math.PI];
+for (let i = 0; i < 4; i += 1) {
+  assert.ok(
+    Math.abs(yaws[i] - cardinals[i]) < 1e-9,
+    `face yaw ${yaws[i].toFixed(4)} must land on a cardinal (${cardinals[i].toFixed(4)})`,
+  );
+}
+
+// The counts. Home = 3 × 3 × 4 = 36; store = 5 × 4 × 4 = 80; tree /
+// event / empty carry no lattice.
+assert.equal(windowsPerPlot("home"), 36, "home plot contributes 36 frames — 3×3 grid × 4 walls");
+assert.equal(windowsPerPlot("store"), 80, "store plot contributes 80 frames — 5×4 grid × 4 walls");
+assert.equal(windowsPerPlot("tree"), 0, "tree plots do not carry window frames — a park has no walls");
+assert.equal(windowsPerPlot("event"), 0, "event towers own their curtain-wall geometry — no lattice");
+assert.equal(windowsPerPlot("empty"), 0, "empty plots draw nothing");
+
+// The grids match the emissive canvas: same rows × cols so a lit cell on
+// the canvas and its frame ring on the wall are in perfect register.
+assert.deepEqual(WINDOW_GRIDS_PURE.home,  { rows: 3, cols: 3 }, "home grid pinned at 3×3");
+assert.deepEqual(WINDOW_GRIDS_PURE.store, { rows: 5, cols: 4 }, "store grid pinned at 5×4");
+
+// The protrusion is exactly the value the brief calls out (6–8cm) —
+// enough for a rake shadow at grazing angles, small enough that the
+// silhouette at bird's-eye still reads as one flat wall.
+assert.ok(
+  WINDOW_FRAME_DEPTH_M >= 0.06 && WINDOW_FRAME_DEPTH_M <= 0.08 + 1e-9,
+  `frame depth ${WINDOW_FRAME_DEPTH_M} must be in the 6–8cm band the brief calls for`,
+);
+
+// Frame outer must exceed inner so the ring is not a solid box.
+assert.ok(
+  WINDOW_FRAME_INNER < WINDOW_FRAME_OUTER,
+  "the frame's inner opening must be smaller than its outer — otherwise there's no hole for the pane",
+);
+
+// ── placement geometry — the wall face is real ───────────────────────────
+//
+// On a plot centered at origin, a 4×4×4 home with yaw=0, the +Z face's
+// center window (row 1, col 1 in a 3×3 grid) must sit AT the wall's
+// front face (z ≈ sz/2 + frameDepth/2), at half-height (y ≈ yScale/2),
+// on the plot's centerline (x ≈ 0). Any drift means the lattice is not
+// aligned with the wall.
+
+{
+  const home = WINDOW_GRIDS_PURE.home;
+  const p = windowFramePlacement(
+    0, 0, 0,        // cx, cz, yaw
+    4, 4, 4,        // sx, sz, yScale
+    home.rows, home.cols,
+    0,              // face: +Z
+    1, 1,           // row 1 of 3 (center), col 1 of 3 (center)
+  );
+  assert.ok(Math.abs(p.x) < 1e-6, `center window on +Z face must sit on the centerline — got x=${p.x}`);
+  const expectedZ = 4 / 2 + WINDOW_FRAME_DEPTH_M / 2;
+  assert.ok(
+    Math.abs(p.z - expectedZ) < 1e-6,
+    `center +Z window must protrude ${WINDOW_FRAME_DEPTH_M / 2} past the wall face — got z=${p.z}, expected ${expectedZ}`,
+  );
+  // Row 1 in a 3-row grid is the MIDDLE row — cell center at (1+0.5) *
+  // (4/3) = 2.0 — exactly half the wall height.
+  assert.ok(
+    Math.abs(p.y - 2.0) < 1e-6,
+    `center row must sit at half-height — got y=${p.y}, expected 2.0`,
+  );
+  // The window is 78% of its cell in both axes.
+  const cellW = 4 / 3;
+  const cellH = 4 / 3;
+  assert.ok(
+    Math.abs(p.winW - cellW * WINDOW_FRAME_OUTER) < 1e-6,
+    `window width ${p.winW} must be cell × frame_outer (${cellW * WINDOW_FRAME_OUTER})`,
+  );
+  assert.ok(
+    Math.abs(p.winH - cellH * WINDOW_FRAME_OUTER) < 1e-6,
+    `window height ${p.winH} must be cell × frame_outer (${cellH * WINDOW_FRAME_OUTER})`,
+  );
+}
+
+// The -Z face mirrors the +Z face: same center window, opposite side of
+// the plot. This is the check that the plot is symmetric front-to-back.
+{
+  const home = WINDOW_GRIDS_PURE.home;
+  const pFront = windowFramePlacement(0, 0, 0, 4, 4, 4, home.rows, home.cols, 0, 1, 1);
+  const pBack  = windowFramePlacement(0, 0, 0, 4, 4, 4, home.rows, home.cols, 1, 1, 1);
+  assert.ok(
+    Math.abs(pFront.z + pBack.z) < 1e-6,
+    `+Z and -Z center windows must sit at opposite z — got ${pFront.z} and ${pBack.z}`,
+  );
+  assert.ok(
+    Math.abs(pFront.y - pBack.y) < 1e-6,
+    "front and back center windows sit at the same height",
+  );
+}
+
+// A store facade: 5 rows × 4 cols. Every window on the +Z face must lie
+// on the plane z = sz/2 + frameDepth/2 (± noise from x-tangent = 0 test).
+// Sample the whole face and check.
+{
+  const store = WINDOW_GRIDS_PURE.store;
+  const sx = 5, sz = 4, yScale = 10;
+  const wallHalfWithLip = sz / 2 + WINDOW_FRAME_DEPTH_M / 2;
+  for (let r = 0; r < store.rows; r += 1) {
+    for (let c = 0; c < store.cols; c += 1) {
+      const p = windowFramePlacement(0, 0, 0, sx, sz, yScale, store.rows, store.cols, 0, r, c);
+      assert.ok(
+        Math.abs(p.z - wallHalfWithLip) < 1e-6,
+        `every +Z-face store frame must sit on the wall plane — got z=${p.z} at (r=${r},c=${c})`,
+      );
+      // Row 0 sits at the ground floor (base of wall); row R-1 sits near
+      // the roof. The window sequence must climb monotonically in y.
+      const expectedY = (r + 0.5) * (yScale / store.rows);
+      assert.ok(
+        Math.abs(p.y - expectedY) < 1e-6,
+        `store row ${r} must sit at y=${expectedY} — got y=${p.y}`,
+      );
+      // Every window fits within the wall in the tangent direction —
+      // no frame pokes past the corners.
+      assert.ok(
+        p.x + p.winW / 2 <= sx / 2 + 1e-6 && p.x - p.winW / 2 >= -sx / 2 - 1e-6,
+        `store window at (r=${r},c=${c}) tangent x=${p.x} must stay inside sx=${sx}`,
+      );
+    }
+  }
+}
+
+// Yaw obeys plot rotation. A home rotated by π/2 (a right turn) has its
+// +Z face point along world +X — the center +Z window must sit at world
+// x = sx/2 + frameDepth/2, z ≈ 0.
+{
+  const home = WINDOW_GRIDS_PURE.home;
+  const yaw = Math.PI / 2;
+  const p = windowFramePlacement(0, 0, yaw, 4, 4, 4, home.rows, home.cols, 0, 1, 1);
+  const expectedX = 4 / 2 + WINDOW_FRAME_DEPTH_M / 2;
+  assert.ok(
+    Math.abs(p.x - expectedX) < 1e-6,
+    `plot yawed +90° puts +Z face's center window at world +x — got x=${p.x}, expected ${expectedX}`,
+  );
+  assert.ok(
+    Math.abs(p.z) < 1e-6,
+    `plot yawed +90° puts +Z face's center window at world z=0 — got z=${p.z}`,
+  );
+}
+
+// Determinism: same inputs → same outputs. No wall clock, no drift.
+{
+  const a = windowFramePlacement(1.2, -0.7, 0.4, 5, 3, 7, 5, 4, 0, 2, 1);
+  const b = windowFramePlacement(1.2, -0.7, 0.4, 5, 3, 7, 5, 4, 0, 2, 1);
+  assert.deepEqual(a, b, "windowFramePlacement is a pure function — same inputs give same outputs");
+}
+
 console.log(
   `city-windows ok: dawn ${dawn.toFixed(3)} → noon ${noon.toFixed(3)} → dusk ${dusk.toFixed(3)} → midnight ${midnight.toFixed(3)}, ` +
   `peak at hour ${peakHour.toFixed(3)}, ` +
   `seeds spread ${(max - min).toFixed(3)} at dusk with mean ${mean.toFixed(3)}, ` +
-  `per-cell gate is monotone through the evening lift — the dusk moment is pinned.`,
+  `per-cell gate is monotone through the evening lift — the dusk moment is pinned. ` +
+  `Frame lattice: home=36, store=80, tree/event=0; ${WINDOW_FRAME_DEPTH_M * 100}cm protrusion; +Z / -Z / +X / -X faces land on the wall.`,
 );
