@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import { getTimbreEngine } from "@/lib/timbre-engine";
-import { attachGestures, THRESHOLDS } from "@/lib/gesture";
+import { attachGestures, THRESHOLDS, tapTrainDepth, tapTrainTier } from "@/lib/gesture";
 import { onVessel } from "@/lib/vessel";
 import { tap as hapticTap, ripple, chop as hapticChop, roll as hapticRoll } from "@/lib/haptics";
 import {
@@ -84,6 +84,8 @@ export default function Instrument() {
   const lastHapticTick = useRef(0);
   const voices = useRef(new Map<number, { x: number; y: number; at: number }>());
   const cancelLesson = useRef<null | (() => void)>(null);
+  // the last note a finger voiced — the pitch the entrained beat echoes
+  const lastVoice = useRef({ freq: 220, y: 0.5 });
   // three-finger twist: the plate's register — the instrument's own slow
   // cycle, the way a room's twist advances its season. Octave shift ∈
   // [-2, 2], one step per quarter turn like the lens above it.
@@ -259,6 +261,7 @@ export default function Instrument() {
           const t = translationAt(e.x, e.y, y);
           void getFieldAudio().start();
           voices.current.set(e.id, { x: t.x, y, at: performance.now() });
+          lastVoice.current = { freq: t.freq, y };
           engine.noteOn(key, t.freq, t.spec);
           setWavelength(t.nm);
           setPosition(t.y);
@@ -279,6 +282,7 @@ export default function Instrument() {
           }
           const t = translationAt(e.x, e.y, y);
           voices.current.set(e.id, { x: t.x, y, at: now });
+          lastVoice.current = { freq: t.freq, y };
           engine.glide(key, t.freq);
           if (now - lastMorphTick.current > 60) {
             lastMorphTick.current = now;
@@ -376,10 +380,63 @@ export default function Instrument() {
         }
       },
       tap: (e) => {
-        // one finger is always a voice — the material layer already
-        // sounds on landing, so a tap there would double-answer a note
-        // that has already spoken.
-        if (e.fingers === 1) return;
+        // one finger is always a voice — the landing note is tier 1's own
+        // acknowledgement — but the train's higher rungs (3 / 5 / n) are
+        // the plate's reward ladder, spoken in the tapped instrument.
+        if (e.fingers === 1) {
+          const tier = tapTrainTier(e.count);
+          if (tier === 1) return; // the voice that just sounded already answered
+          const depth = tapTrainDepth(e.count);
+          const t = translationAt(e.x, e.y);
+          if (tier === 3) {
+            // three rapid taps: the voice under the hand strums its own
+            // triad — root, third, fifth in that one instrument
+            [0, 4, 7].forEach((iv, i) => {
+              window.setTimeout(() => {
+                const id = `train3:${i}`;
+                engine.noteOn(id, t.freq * 2 ** (iv / 12), t.spec);
+                window.setTimeout(() => engine.noteOff(id), 220);
+              }, i * 70);
+            });
+            setWavelength(t.nm);
+            setPosition(t.y);
+            try { ripple(0.4 + e.intensity * 0.3); } catch { /* noop */ }
+            recordInstrument("train/strum", 0.55);
+            return;
+          }
+          if (tier === 5) {
+            // five: a glissando across the open pitch window — the whole
+            // visible slice of the spectrum strummed in this instrument
+            const rect = plate.getBoundingClientRect();
+            for (let i = 0; i < 8; i++) {
+              window.setTimeout(() => {
+                const step = translationAt(rect.left + (i / 7) * rect.width, e.y, t.y);
+                const id = `train5:${i}`;
+                engine.noteOn(id, step.freq, step.spec);
+                setWavelength(step.nm);
+                window.setTimeout(() => engine.noteOff(id), 160);
+              }, i * 90);
+            }
+            try { hapticChop(); } catch { /* noop */ }
+            recordInstrument("train/glissando", 0.7);
+            return;
+          }
+          // seven and beyond: the orchestra — every instrument in the chain
+          // sounds the tapped pitch at once, swelling with the train
+          TIMBRE_CHAIN.forEach((_, i) => {
+            window.setTimeout(() => {
+              const yy = i / (TIMBRE_CHAIN.length - 1);
+              const id = `trainN:${i}`;
+              engine.noteOn(id, t.freq, timbreAt(yy));
+              window.setTimeout(() => engine.noteOff(id), 300 + Math.round(depth * 300));
+            }, i * 30);
+          });
+          setWavelength(t.nm);
+          setTutti(Date.now());
+          try { ripple(0.6 + depth * 0.3); } catch { /* noop */ }
+          recordInstrument("train/orchestra", 0.7 + depth * 0.3);
+          return;
+        }
         if (e.fingers === 2) {
           // step back: nudge the pitch window a notch wider, the way a
           // raised lens lowers elsewhere.
@@ -392,11 +449,28 @@ export default function Instrument() {
           recordInstrument("step-back/window", 0.3);
           return;
         }
-        // tutti — every sounding voice and ghost answers once, together
+        // tutti — every sounding voice and ghost answers once, together,
+        // as hard as the chord landed
         setTutti(Date.now());
-        try { ripple(0.4); } catch { /* noop */ }
+        try { ripple(0.3 + e.intensity * 0.5); } catch { /* noop */ }
         try { void getFieldAudio().start().then(() => getFieldAudio().chime()); } catch { /* noop */ }
-        recordInstrument("tutti", 0.5);
+        recordInstrument("tutti", 0.4 + e.intensity * 0.4);
+      },
+      rhythm: (e) => {
+        // a steady tapped pulse entrains the plate: the last-voiced note
+        // echoes on each beat for a phrase, the readout flashing in time
+        if (e.stability <= 0.7 || e.bpm < 40 || e.bpm > 180) return;
+        const beatMs = 60000 / e.bpm;
+        for (let i = 0; i < 6; i++) {
+          window.setTimeout(() => {
+            const id = `beat:${i}`;
+            engine.noteOn(id, lastVoice.current.freq, timbreAt(lastVoice.current.y));
+            window.setTimeout(() => engine.noteOff(id), Math.min(220, beatMs * 0.6));
+            setTutti(Date.now() + i);
+            try { hapticTap(); } catch { /* noop */ }
+          }, Math.round(i * beatMs));
+        }
+        recordInstrument("entrain", 0.5);
       },
     });
 
@@ -564,7 +638,7 @@ export default function Instrument() {
             <em>{touch.voice}</em>
           </span>
         ))}
-        <div className="instr-current" aria-hidden="true">
+        <div className="instr-current" aria-hidden="true" key={tutti}>
           <span>{blend.label}</span>
           <strong>{currentNote}</strong>
           <em>{lessonLabel || formatHz(audible)}</em>

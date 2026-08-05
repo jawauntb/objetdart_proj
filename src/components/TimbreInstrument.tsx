@@ -24,7 +24,7 @@ import {
 import { TIMBRE_CHAIN, timbreAt, type TimbreBlend } from "@/lib/timbre";
 import { useField } from "@/store/field";
 import { attachGestures } from "@/lib/gesture";
-import { holdTier } from "@/lib/gesture/core";
+import { holdTier, tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import { onVisibility } from "@/lib/room-runtime";
 import LetGo from "@/components/LetGo";
@@ -96,6 +96,8 @@ export default function TimbreInstrument() {
   }), []);
   const isListeningRef = useRef(false);
   useEffect(() => { isListeningRef.current = isListening; }, [isListening]);
+  const isReplayingRef = useRef(false);
+  useEffect(() => { isReplayingRef.current = isReplaying; }, [isReplaying]);
 
   scaleModeRef.current = scaleMode;
   positionRef.current = position;
@@ -175,7 +177,9 @@ export default function TimbreInstrument() {
     recordTimbre("memory/forget", 0.5);
   }, [recordTimbre]);
 
-  const replayKept = useCallback(() => {
+  // gapMs is the pace of the walk — the default reading pace, or the hand's
+  // own beat when a steady tap tempo has entrained the plate (rhythm verb).
+  const replayKept = useCallback((gapMs = 260) => {
     const chords = keptRef.current;
     if (chords.length === 0) {
       try { getFieldAudio().refuse(); } catch { /* noop */ }
@@ -190,10 +194,10 @@ export default function TimbreInstrument() {
         getTimbreEngine().noteOn(id, chord.freq, chord.spec);
         setWavelength(chord.nm);
         setPosition(chord.y);
-        window.setTimeout(() => getTimbreEngine().noteOff(id), 240);
-      }, index * 260);
+        window.setTimeout(() => getTimbreEngine().noteOff(id), Math.min(240, gapMs * 0.9));
+      }, index * gapMs);
     });
-    window.setTimeout(() => setIsReplaying(false), chords.length * 260 + 420);
+    window.setTimeout(() => setIsReplaying(false), chords.length * gapMs + 420);
   }, [recordTimbre]);
 
   const letGoKept = useCallback(() => {
@@ -202,14 +206,16 @@ export default function TimbreInstrument() {
     recordTimbre("memory/clear", 0.34);
   }, [recordTimbre]);
 
-  const tuttiBurst = useCallback(() => {
+  // one pulse of everything alive, scaled by how hard the chord (or the
+  // shaken case) meant it — magnitude is never a switch
+  const tuttiBurst = useCallback((strength = 0.6) => {
     if (keptRef.current.length > 0) {
       replayKept();
     } else {
       try { getFieldAudio().chime(); } catch { /* noop */ }
     }
-    recordTimbre("tutti", 0.6);
-    try { roll(); } catch { /* noop */ }
+    recordTimbre("tutti", strength);
+    try { ripple(0.3 + strength * 0.6); } catch { /* noop */ }
   }, [recordTimbre, replayKept]);
 
 
@@ -382,6 +388,64 @@ export default function TimbreInstrument() {
         },
         tap: (e) => {
           lastTouchAtRef.current = performance.now();
+          if (e.fingers === 1) {
+            // the landing voice already answered this strike — the train's
+            // higher rungs are the plate's reward ladder (tiers 1 / 3 / 5 / n)
+            const tier = tapTrainTier(e.count);
+            if (tier === 1) return; // the note that just sounded is the acknowledgement
+            const depth = tapTrainDepth(e.count);
+            const { x, y } = plateXY(e.x, e.y);
+            const settled = timbreGravity(y, 0.35);
+            const { freq, spec, nm } = translationAt(x, settled);
+            if (tier === 3) {
+              // three rapid taps: the instrument under the hand strums its
+              // own triad — root, third, fifth in that one voice
+              [0, 4, 7].forEach((iv, i) => {
+                window.setTimeout(() => {
+                  const id = `train3:${i}`;
+                  getTimbreEngine().noteOn(id, freq * 2 ** (iv / 12), spec);
+                  window.setTimeout(() => getTimbreEngine().noteOff(id), 220);
+                }, i * 70);
+              });
+              setWavelength(nm);
+              setPosition(settled);
+              try { ripple(0.4 + e.intensity * 0.3); } catch { /* noop */ }
+              recordTimbre("train/strum", 0.55);
+              return;
+            }
+            if (tier === 5) {
+              // five: the chain walk — the same pitch carried through all
+              // eight instruments, softest pluck to brightest blown voice
+              TIMBRE_CHAIN.forEach((_, i) => {
+                window.setTimeout(() => {
+                  const yy = i / (TIMBRE_CHAIN.length - 1);
+                  const id = `train5:${i}`;
+                  getTimbreEngine().noteOn(id, freq, timbreAt(yy));
+                  setPosition(yy);
+                  window.setTimeout(() => getTimbreEngine().noteOff(id), 200);
+                }, i * 110);
+              });
+              setWavelength(nm);
+              try { chop(); } catch { /* noop */ }
+              recordTimbre("train/chain-walk", 0.7);
+              return;
+            }
+            // seven and beyond: the orchestra — every instrument sounds the
+            // tapped pitch at once, and the chord swells with the train
+            TIMBRE_CHAIN.forEach((_, i) => {
+              window.setTimeout(() => {
+                const yy = i / (TIMBRE_CHAIN.length - 1);
+                const id = `trainN:${i}`;
+                getTimbreEngine().noteOn(id, freq, timbreAt(yy));
+                window.setTimeout(() => getTimbreEngine().noteOff(id), 300 + Math.round(depth * 300));
+              }, i * 30);
+            });
+            setWavelength(nm);
+            setPosition(settled);
+            try { hapticBloom(); } catch { /* noop */ }
+            recordTimbre("train/orchestra", 0.7 + depth * 0.3);
+            return;
+          }
           if (e.fingers === 2) {
             // step back: leave the lesson, else nudge the zoom home.
             if (isListeningRef.current) {
@@ -393,9 +457,19 @@ export default function TimbreInstrument() {
             return;
           }
           if (e.fingers === 3) {
-            // tutti — one synchronized pulse of everything alive.
-            tuttiBurst();
+            // tutti — one synchronized pulse of everything alive, as hard
+            // as the chord landed.
+            tuttiBurst(0.4 + e.intensity * 0.5);
           }
+        },
+        rhythm: (e) => {
+          // a steady tapped pulse entrains the plate: the kept chords
+          // replay in the hand's own tempo — the memory keeping your time
+          if (e.stability <= 0.7 || e.bpm < 40 || e.bpm > 180) return;
+          if (keptRef.current.length === 0 || isReplayingRef.current) return;
+          replayKept(Math.max(250, Math.min(1200, 60000 / e.bpm)));
+          try { hapticTap(); } catch { /* noop */ }
+          recordTimbre("entrain", 0.5);
         },
       },
       { wheelZoom: false },
@@ -405,11 +479,12 @@ export default function TimbreInstrument() {
       tilt: ({ gamma }) => {
         panRef.current.target = clamp(panRef.current.target + gamma * 0.0006, -0.4, 0.4);
       },
-      shake: () => { tuttiBurst(); },
-      knock: () => {
+      shake: ({ intensity }) => { tuttiBurst(Math.max(0.3, intensity)); },
+      knock: ({ intensity }) => {
+        // a rap on the case rings the plate — harder raps ring brighter
         try { getFieldAudio().chime(); } catch { /* noop */ }
         try { hapticBloom(); } catch { /* noop */ }
-        recordTimbre("vessel/knock", 0.6);
+        recordTimbre("vessel/knock", 0.4 + intensity * 0.5);
       },
       flip: ({ faceDown }) => { nightRef.current = faceDown; },
     });
@@ -628,7 +703,7 @@ export default function TimbreInstrument() {
             {isListening ? "listening" : "listen"}
           </button>
           <button type="button" onClick={cycleScale}>{SCALE_LABELS[scaleMode]}</button>
-          <button type="button" onClick={replayKept} disabled={isReplaying || isListening}>
+          <button type="button" onClick={() => replayKept()} disabled={isReplaying || isListening}>
             {isReplaying ? "replaying" : `replay · ${kept.length} kept`}
           </button>
           <Link href="/light">light</Link>
