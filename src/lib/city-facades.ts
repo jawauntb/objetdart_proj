@@ -341,6 +341,27 @@ export {
 } from "@/lib/city-window-frames-pure";
 export type { WindowFace } from "@/lib/city-window-frames-pure";
 
+// The event tower's real-world curtain-wall detail (mullion grid + per-
+// pane roughness/tint jitter) lives in a sibling module so this file
+// stays a materials palette rather than a shader factory. Re-export the
+// public surface here so callers that already reach for city-facades
+// find both.
+export {
+  applyCurtainWallShader,
+  makeCurtainWallMaterial,
+  curtainWallTierFor,
+  equatorRadiusForVariant,
+  columnCountForRadius,
+  STORY_HEIGHT_M,
+  MULLION_PITCH_M,
+  MULLION_THICKNESS_M,
+  PANE_ROUGH_MIN,
+  PANE_ROUGH_MAX,
+  PANE_TINT_COOL,
+  PANE_TINT_WARM,
+} from "@/lib/city-curtainwall";
+export type { CurtainWallTier, CurtainWallHandle, CurtainWallUniforms } from "@/lib/city-curtainwall";
+
 import {
   WINDOW_FRAME_INNER,
   WINDOW_FRAME_OUTER,
