@@ -505,11 +505,20 @@ type ForgeApi = {
   stir: (e: { winding: number; cx: number; cy: number }) => void;
   lens: (e: { velocity: number }) => void;
   season: (e: { velocity: number }) => void;
-  rhythm: (e: { stability: number }) => void;
+  rhythm: (e: { bpm: number; stability: number }) => void;
   drum: (e: { hits: number; alternation: number; x: number; y: number }) => void;
+  sustain: (e: {
+    phase: "enter" | "tick" | "release";
+    spread: number;
+    elapsed: number;
+    ax: number;
+    ay: number;
+    bx: number;
+    by: number;
+  }) => void;
   scatter: (e: { intensity: number }) => void;
   gravity: (e: { beta: number; gamma: number }) => void;
-  knock: () => void;
+  knock: (e: { intensity: number }) => void;
   night: (e: { faceDown: boolean }) => void;
   glimmer: () => void;
   reducedMotion: (r: boolean) => void;
@@ -812,6 +821,8 @@ export default function PlanetForge() {
       lastToneAt: number;
     } | null = null;
     let stir: { x: number; y: number; life: number } | null = null;
+    /** The two worlds a span holds at once, by id, and its voice cadence. */
+    let spanPair: { a: number; b: number; lastVoiceAt: number } | null = null;
 
     const api: ForgeApi = {
       tap: (ev) => {
@@ -1081,14 +1092,73 @@ export default function PlanetForge() {
         }, 220);
       },
       rhythm: (ev) => {
-        if (ev.stability <= 0.7) return;
-        agitation = Math.min(1, agitation + 0.08);
-        starFlash = Math.min(1, starFlash + 0.2);
+        if (ev.stability <= 0.6) return;
+        const f = focused();
+        if (f) {
+          // the hand's pulse entrains the world's day: one rotation every
+          // four beats — held until the tide slowly takes it back
+          f.spin = clamp((TAU * ev.bpm) / (60 * 4), 0.1, 30);
+          f.flash = Math.min(1, f.flash + 0.4 + ev.stability * 0.2);
+          audio.playTone(120 + ev.bpm, 0.12);
+          haptics.detent();
+          return;
+        }
+        agitation = Math.min(1, agitation + 0.08 + ev.stability * 0.08);
+        starFlash = Math.min(1, starFlash + 0.2 + ev.stability * 0.2);
+        audio.playTone(90, 0.1);
       },
       drum: (ev) => {
-        agitation = Math.min(1, agitation + 0.12 * ev.alternation);
-        stir = { x: ev.x, y: ev.y, life: 1 };
-        audio.playTone(140 + ev.hits * 20, 0.08);
+        // the patter plays the disc between the hands: the nearest world
+        // takes the beat as spin, alternating with the pattern, and the
+        // dust takes the rest
+        const hit = hitWorld(ev.x, ev.y, 3);
+        if (hit) {
+          hit.e.spin += (ev.hits % 2 === 0 ? 1 : -1) * 0.5 * (0.4 + ev.alternation);
+          hit.e.flash = Math.min(1, hit.e.flash + 0.25 + ev.alternation * 0.2);
+          audio.playTone(160 + ev.hits * 24, 0.08);
+        } else {
+          audio.playTone(140 + ev.hits * 20, 0.08);
+        }
+        agitation = Math.min(1, agitation + 0.1 + 0.12 * ev.alternation);
+        stir = { x: ev.x, y: ev.y, life: 1 + ev.alternation * 0.5 };
+        haptics.tap();
+      },
+      sustain: (ev) => {
+        if (ev.phase === "release") {
+          spanPair = null;
+          return;
+        }
+        if (ev.phase === "enter" || !spanPair) {
+          spanPair = {
+            a: hitWorld(ev.ax, ev.ay, 2.4)?.e.id ?? 0,
+            b: hitWorld(ev.bx, ev.by, 2.4)?.e.id ?? 0,
+            lastVoiceAt: 0,
+          };
+        }
+        const now = performance.now();
+        if (now - spanPair.lastVoiceAt < 640) return;
+        spanPair.lastVoiceAt = now;
+        const aId = spanPair.a;
+        const bId = spanPair.b;
+        const ea = entries.find((w) => w.id === aId) ?? null;
+        const eb = entries.find((w) => w.id === bId) ?? null;
+        const voiceMs = 260 + Math.min(900, ev.elapsed * 0.25);
+        if (ea && eb && ea !== eb) {
+          // two worlds held at once are one sustained duet — each chord
+          // read off its vector, the interval deepening as it is held
+          worldChord(ea.world).forEach((m, i) => audio.playNote(m + 24, voiceMs + i * 60));
+          worldChord(eb.world).forEach((m, i) => audio.playNote(m + 12, voiceMs + i * 60));
+          ea.flash = Math.min(1, ea.flash + 0.3);
+          eb.flash = Math.min(1, eb.flash + 0.3);
+          haptics.ripple(0.2 + Math.min(0.25, ev.elapsed / 8000));
+          return;
+        }
+        // over open dust the star hums under the held interval, longer the
+        // longer it is held, and the disc shimmers between the fingers
+        starFlash = Math.min(1, starFlash + 0.15);
+        stir = { x: (ev.ax + ev.bx) / 2, y: (ev.ay + ev.by) / 2, life: 1 };
+        audio.playNote(33, Math.round(voiceMs * 1.6));
+        haptics.ripple(0.15);
       },
       scatter: (ev) => {
         agitation = Math.min(1, agitation + ev.intensity);
@@ -1106,17 +1176,19 @@ export default function PlanetForge() {
         tiltX = clamp(gamma / 45, -1, 1);
         tiltY = clamp((beta - 40) / 60, -1, 1);
       },
-      knock: () => {
+      knock: (ev) => {
+        // a firmer rap on the case lands lower and rings longer
+        const k = clamp(ev.intensity, 0, 1);
         const f = focused() ?? entries[entries.length - 1];
         if (!f) {
-          starFlash = 1;
-          audio.playNote(33, 600);
+          starFlash = Math.min(1, 0.6 + k * 0.4);
+          audio.playNote(33 - Math.round(k * 5), 500 + Math.round(k * 400));
           return;
         }
-        sayWorld(f, 12, 400);
-        f.flash = 1;
+        sayWorld(f, 12, 320 + Math.round(k * 300));
+        f.flash = Math.min(1, 0.6 + k * 0.4);
         haptics.tap();
-        agitation = Math.min(1, agitation + 0.25);
+        agitation = Math.min(1, agitation + 0.15 + k * 0.2);
       },
       night: ({ faceDown }) => {
         nightVeil = faceDown ? 1 : 0;
@@ -1689,9 +1761,10 @@ export default function PlanetForge() {
       season: (e) => apiRef.current?.season(e),
       rhythm: (e) => apiRef.current?.rhythm(e),
       drum: (e) => apiRef.current?.drum(e),
+      sustain: (e) => apiRef.current?.sustain(e),
       scatter: (e) => apiRef.current?.scatter(e),
       gravity: (e) => apiRef.current?.gravity(e),
-      knock: () => apiRef.current?.knock(),
+      knock: (e) => apiRef.current?.knock(e),
       night: (e) => apiRef.current?.night(e),
     }),
     [],

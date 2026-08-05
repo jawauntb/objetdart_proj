@@ -688,11 +688,7 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "axis",
     keeps: "objetdart:constellations:v1",
     creates: "a star",
-    exempt: {
-      dilation: "the star field's clock is astronomical position rather than room-time; holding it would falsify the orbital representation",
-      dwell: "constellations are named from a completed contact path, not grown under a stationary finger",
-      ceremony: "the kept sky is sealed by naming a constellation; there is no separate ceremony that can safely retire a shared star",
-    },
+    exempt: {},
   },
   {
     key: "space",
