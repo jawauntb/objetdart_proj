@@ -1355,11 +1355,12 @@ export default function Earth() {
       useField.getState().recordTape("sigil", 1, "earth/core");
     };
 
-    /** three-finger tap: every live thing in the room answers at once */
-    const tutti = () => {
+    /** three-finger tap: every live thing in the room answers at once,
+     *  as loudly as the chord landed — intensity is an axis, not a switch */
+    const tutti = (intensity = 0.5) => {
       tuttiAt = clock;
-      clickSpikes.push({ t0: clock, strength: 0.9 });
-      pressure.target = Math.min(1, pressure.target + 0.4);
+      clickSpikes.push({ t0: clock, strength: 0.7 + intensity * 0.5 });
+      pressure.target = Math.min(1, pressure.target + 0.3 + intensity * 0.25);
       for (let i = 0; i < specimens.length; i++) {
         const sp = specimens[i];
         addMineralMark({
@@ -1374,11 +1375,12 @@ export default function Earth() {
         });
       }
       for (let i = 0; i < STRATA.length; i++) {
-        try { audio.playNote(40 + i * 4, 320); } catch { /* noop */ }
+        try { audio.playNote(40 + i * 4, 260 + Math.round(intensity * 240)); } catch { /* noop */ }
       }
-      haptics.roll();
+      if (intensity > 0.75) haptics.bloom();
+      else haptics.roll();
       markEarth("tutti", "#fff0c8");
-      useField.getState().recordTape("region", 0.7, "earth/tutti");
+      useField.getState().recordTape("region", 0.5 + intensity * 0.4, "earth/tutti");
     };
 
     // ——————————————————————————————————————————————————————
@@ -1414,6 +1416,7 @@ export default function Earth() {
     let gathering: { x: number; y: number; t0: number; kind: MineralKind; hue: string } | null = null;
 
     const dragState = { lastFault: 0, lastHaptic: 0, startX: 0, startY: 0, zone: "surface" as "strata" | "surface" | "seismo" };
+    const spanState = { lastVoice: 0, lastCrack: 0 };
 
     const detachGestures = attachGestures(
       fg,
@@ -1432,7 +1435,7 @@ export default function Earth() {
             return;
           }
           if (e.fingers === 3) {
-            tutti();
+            tutti(e.intensity);
             return;
           }
           const sx = sceneX(e.x);
@@ -1719,18 +1722,82 @@ export default function Earth() {
         // section-slide here stole that channel and drew fault slip as "the
         // line thingy" instead of travel. Faults stay one-finger (drag/flick).
 
-        // a circular scrub is the auger: it turns and the column answers
+        // two still fingers hold a standing load across the column: each
+        // fingertip sounds the stratum under it and the pair is an interval —
+        // the section between them creeps, fractures, and keeps loading for
+        // as long as the interval is sustained. A span that moves is a frame
+        // gesture and the engine never lets it reach here.
+        span: (e) => {
+          lastTouchAt = performance.now();
+          const ax = sceneX(e.ax);
+          const ay = sceneY(e.ay);
+          const bx = sceneX(e.bx);
+          const by = sceneY(e.by);
+          const deep = clamp01(e.elapsed / 3600);
+          if (e.phase === "release") {
+            shear.target *= 0.5;
+            pressure.target = Math.min(pressure.target, 0.45);
+            clickSpikes.push({ t0: clock, strength: 0.25 + deep * 0.5 });
+            haptics.ripple(0.2 + deep * 0.35);
+            markEarth("load eased", "#c9b691");
+            useField.getState().recordTape("region", 0.3 + deep * 0.4, "earth/span");
+            return;
+          }
+          pressure.target = Math.min(1, 0.25 + deep * 0.65);
+          if (e.phase === "enter") {
+            const sa = stratumAt(ay);
+            const sb = stratumAt(by);
+            try {
+              audio.playNote(34 + (sa ? stratumIndex(sa.id) * 3 : 0), 420);
+              audio.playNote(34 + (sb ? stratumIndex(sb.id) * 3 : 0) + 7, 420);
+            } catch { /* noop */ }
+            haptics.tap();
+            markEarth("standing load", "#e8d9ae");
+            return;
+          }
+          // the sustain keeps speaking: the two strata as an interval, closing
+          // toward unison as the load deepens, with creep fractures between
+          if (clock - spanState.lastVoice > 460) {
+            spanState.lastVoice = clock;
+            const sa = stratumAt(ay);
+            const sb = stratumAt(by);
+            try {
+              audio.playNote(34 + (sa ? stratumIndex(sa.id) * 3 : 0), 240);
+              audio.playNote(34 + (sb ? stratumIndex(sb.id) * 3 : 0) + Math.max(1, Math.round(7 - deep * 6)), 240);
+            } catch { /* noop */ }
+            haptics.ripple(0.12 + deep * 0.4);
+          }
+          if (deep > 0.2 && clock - spanState.lastCrack > 620) {
+            spanState.lastCrack = clock;
+            const u = 0.25 + hash(clock) * 0.5;
+            addFracture(ax + (bx - ax) * u, ay + (by - ay) * u, 0.25 + deep * 0.6, "#e8d9ae");
+            clickSpikes.push({ t0: clock, strength: 0.15 + deep * 0.45 });
+          }
+        },
+
+        // a circular scrub is the auger: it turns and the column answers —
+        // how far it has wound is how deep it has bitten, and how fast it is
+        // turning is how hard the cuttings ring. Velocity is an axis here.
         scrub: (e) => {
           lastTouchAt = performance.now();
           const sx = sceneX(e.cx);
           const sy = sceneY(e.cy);
           const stratum = stratumAt(sy);
-          pressure.target = Math.min(1, pressure.target + 0.3);
-          if (stratum) seedMineral(sx, sy, stratum, 1.2);
-          else erodeAt(sx, sy, 1.1);
-          clickSpikes.push({ t0: clock, strength: 0.6 });
-          try { audio.playNote(44, 200); } catch { /* noop */ }
-          haptics.roll();
+          const bite = clamp(Math.abs(e.winding), 0.75, 3) / 3;
+          const spin = clamp(Math.abs(e.angularVelocity) / 8, 0, 1);
+          pressure.target = Math.min(1, pressure.target + 0.2 + bite * 0.35);
+          if (stratum) seedMineral(sx, sy, stratum, 0.7 + bite * 0.9 + spin * 0.3);
+          else erodeAt(sx, sy, 0.7 + bite * 0.8);
+          // a full second turn brings up cuttings from the layers below
+          if (bite > 0.55 && stratum) {
+            const strataH = Math.max(1, Z.strataBot - Z.strataTop);
+            const below = STRATA[Math.min(STRATA.length - 1, stratumIndex(stratum.id) + 2)];
+            seedMineral(sx + (hash(clock) - 0.5) * 26, Z.strataTop + mix(below.top, below.bottom, 0.5) * strataH, below, 0.5 + bite * 0.5);
+          }
+          clickSpikes.push({ t0: clock, strength: 0.35 + bite * 0.4 + spin * 0.25 });
+          try { audio.playNote(40 + Math.round(spin * 12), 140 + Math.round(bite * 180)); } catch { /* noop */ }
+          if (spin > 0.6) haptics.chop();
+          else haptics.roll();
         },
 
         // a fast release along the strata throws a slip
@@ -1760,7 +1827,7 @@ export default function Earth() {
       // pinch belongs to the axis here: /earth mounts AxisChrome with travel
       // on, so ScaleTravel owns the frame's radial channel end to end.
       // Exempt for want of material: `voice` (this is rock, not an
-      // instrument surface), `span`, `drum`, `arpeggio`, `rhythm`, and
+      // instrument surface), `drum`, `arpeggio`, `rhythm`, and
       // `breath` (the candle owns the breath site-wide).
       { wheelZoom: false },
     );
