@@ -80,6 +80,7 @@ import {
   type CitySky,
 } from "@/lib/city-sky";
 import { createCitySun, type CitySun } from "@/lib/city-sun";
+import { createCitySunDisk, type CitySunDisk } from "@/lib/city-sun-disk";
 import {
   baselineLitFractionForDay,
   emissiveIntensityForDay,
@@ -1160,6 +1161,25 @@ export default function City() {
     // reference leaks out of this constructor.
     const citySun: CitySun = createCitySun({ hemiIntensity: 0.35 });
     citySun.addToScene(worldScene);
+
+    // ── visible sun disk ────────────────────────────────────────────────
+    // The godrays shafts and the Preetham sky both act as if the sun sits
+    // at citySun.sunPosition, but neither of them draws a discrete disk.
+    // Every photograph the brief pins carries an unmistakable bright disk
+    // at the origin of the light — the SF afternoon, the London dusk, the
+    // Zootopia sunrise. This module owns that disk: a billboarded plane at
+    // the sun's world-space position, drawn AFTER the sky (renderOrder=0)
+    // and BEFORE the cloud slab (renderOrder=1). Cloud alpha therefore
+    // occludes the disk pixel-by-pixel wherever a stratocumulus drifts
+    // across, with no shader wiring beyond ordering. The shader carries
+    // Chapman-style limb darkening, chromatic Rayleigh extinction that
+    // reddens toward the limb, and a hot inner core boosted 4.5× so
+    // UnrealBloom's threshold sieve reads it as a bright point and
+    // haloes it — the characteristic photographic bloom flare around
+    // the sun. Anchored to the same solarDirection the sky, godrays,
+    // and clouds all read from, so the four stay locked over the day.
+    const citySunDisk: CitySunDisk = createCitySunDisk();
+    worldScene.add(citySunDisk.mesh);
 
     // ── volumetric clouds ──────────────────────────────────────────────
     // A raymarched slab at ~800 m altitude that occludes the sun disk and
@@ -2259,6 +2279,18 @@ export default function City() {
       const df = dayFraction(cityTimeMs);
       citySky.update(df);
       citySun.update(df);
+      // Feed the billboarded sun disk. Anchors on the camera's world
+      // position + citySun.sunPosition (the same solar direction the sky,
+      // godrays, and clouds already read from) so the disk always sits
+      // at ~1.1° across regardless of the visitor's location and stays
+      // locked to the direction the light travels. Tier gate is inside
+      // update(); sleep tier hides the mesh, below-horizon hides it too.
+      citySunDisk.update({
+        dayFraction: df,
+        sunPosition: citySun.sunPosition,
+        camera: cityCam.camera,
+        tier,
+      });
       // Feed the raymarched cloud slab. Sun tone rides the sun light's
       // colour × intensity so a golden dawn paints golden edges; ambient
       // rides the Preetham zenith (from the same analytical model the
@@ -3414,6 +3446,9 @@ export default function City() {
       // shadow-map allocation. Both drop cleanly before the renderer.
       citySky.dispose();
       citySun.dispose();
+      // Sun disk owns a PlaneGeometry + a ShaderMaterial. Small but the
+      // shader compilation is worth releasing before the renderer.
+      citySunDisk.dispose();
       // Clouds own a PlaneGeometry + a ShaderMaterial (rebuilt on tier
       // transitions). Drop them before the renderer.
       cityClouds.dispose();
