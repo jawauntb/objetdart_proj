@@ -233,4 +233,113 @@ assert.ok(
   "R10-5: SSR runs a reduced 16 march steps on medium tier",
 );
 
+// ——— R1-0 perf: idle-guard on the mirror RT ————————————————————————————————
+//
+// The reflection RT re-renders the entire skyline every frame at 60Hz — a
+// perfect duplicate of the primary pass and ~50–100 draw calls per pass.
+// The idle guard holds the RT when nothing has changed and, on medium tier,
+// caps refresh at 30Hz even when the scene moves. `mirrorRefreshDecision`
+// is the pure kernel of that guard; here we pin its behaviour without a
+// WebGL context.
+
+const { mirrorRefreshDecision, mirrorDaySlot, mirrorPlotSig, MIRROR_DAY_SLOTS } = mod;
+
+assert.equal(typeof mirrorRefreshDecision, "function", "R1-0: mirrorRefreshDecision is exported");
+assert.equal(typeof mirrorDaySlot,         "function", "R1-0: mirrorDaySlot is exported");
+assert.equal(typeof mirrorPlotSig,         "function", "R1-0: mirrorPlotSig is exported");
+assert.equal(MIRROR_DAY_SLOTS,  24, "R1-0: day is bucketed into 24 slots for the idle guard");
+
+// mirrorDaySlot: bucketing across the day cycle
+assert.equal(mirrorDaySlot(0),        0, "day slot 0 at dawn");
+assert.equal(mirrorDaySlot(0.5),     12, "day slot 12 at dusk");
+assert.equal(mirrorDaySlot(1 - 1e-9), 23, "day slot 23 at end-of-night, before wrap");
+assert.equal(mirrorDaySlot(1),        0, "day slot wraps continuously at 1");
+assert.equal(mirrorDaySlot(-0.5),    12, "day slot handles negative fractions");
+assert.equal(mirrorDaySlot(NaN),      0, "day slot survives NaN");
+
+// mirrorPlotSig: same plots produce same sig; a seal-flip changes it
+const p1 = [
+  { role: "home",  sealed: false, seed: 1 },
+  { role: "store", sealed: true,  seed: 2 },
+];
+const p2 = [
+  { role: "home",  sealed: false, seed: 1 },
+  { role: "store", sealed: true,  seed: 2 },
+];
+assert.equal(mirrorPlotSig(p1), mirrorPlotSig(p2), "R1-0: identical plot lists share a signature");
+const p3 = [
+  { role: "home",  sealed: true,  seed: 1 }, // sealed flipped
+  { role: "store", sealed: true,  seed: 2 },
+];
+assert.notEqual(mirrorPlotSig(p1), mirrorPlotSig(p3), "R1-0: seal flip changes the plot signature");
+const p4 = p1.slice(0, 1);
+assert.notEqual(mirrorPlotSig(p1), mirrorPlotSig(p4), "R1-0: length change changes the signature");
+
+// mirrorRefreshDecision: the invariants the perf claim depends on
+// First frame always renders — the RT starts empty.
+assert.equal(
+  mirrorRefreshDecision({ hasRendered: false, camChanged: false, epochChanged: false, mediumFrameParity: 0, tier: "high" }),
+  "render",
+  "R1-0: first frame renders",
+);
+// High tier idle: no invalidator → skip.
+assert.equal(
+  mirrorRefreshDecision({ hasRendered: true, camChanged: false, epochChanged: false, mediumFrameParity: 0, tier: "high" }),
+  "skip-idle",
+  "R1-0: high-tier idle holds the previous RT",
+);
+// High tier moving: camera changed → render.
+assert.equal(
+  mirrorRefreshDecision({ hasRendered: true, camChanged: true, epochChanged: false, mediumFrameParity: 0, tier: "high" }),
+  "render",
+  "R1-0: high-tier moving camera invalidates the RT",
+);
+// High tier day-slot flip: epoch changed → render.
+assert.equal(
+  mirrorRefreshDecision({ hasRendered: true, camChanged: false, epochChanged: true, mediumFrameParity: 0, tier: "high" }),
+  "render",
+  "R1-0: day-slot flip invalidates the RT even without camera motion",
+);
+// Medium tier idle even-parity: no invalidator, still idle → skip.
+assert.equal(
+  mirrorRefreshDecision({ hasRendered: true, camChanged: false, epochChanged: false, mediumFrameParity: 0, tier: "medium" }),
+  "skip-idle",
+  "R1-0: medium-tier idle holds the previous RT",
+);
+// Medium tier moving, odd-parity: parity gate skips.
+assert.equal(
+  mirrorRefreshDecision({ hasRendered: true, camChanged: true, epochChanged: false, mediumFrameParity: 1, tier: "medium" }),
+  "skip-medium-parity",
+  "R1-0: medium-tier caps refresh at 30Hz — odd-parity frames skip",
+);
+// Medium tier moving, even-parity: renders.
+assert.equal(
+  mirrorRefreshDecision({ hasRendered: true, camChanged: true, epochChanged: false, mediumFrameParity: 0, tier: "medium" }),
+  "render",
+  "R1-0: medium-tier even-parity moving frame renders",
+);
+// Low tier: guard treats it as the high-tier idle case — the SSR mesh is
+// hidden on low so the render is skipped naturally. Sanity check the branch.
+assert.equal(
+  mirrorRefreshDecision({ hasRendered: true, camChanged: false, epochChanged: false, mediumFrameParity: 0, tier: "low" }),
+  "skip-idle",
+  "R1-0: low tier holds when nothing changed",
+);
+
+// Source-level check: the onBeforeRender path early-returns on skip, and
+// the update path bumps sceneEpoch on tier flip. Guard against a future
+// refactor accidentally removing the guard body.
+assert.ok(
+  /mirrorRefreshDecision\s*\(/.test(waterSrc),
+  "R1-0: onBeforeRender consults mirrorRefreshDecision",
+);
+assert.ok(
+  /sceneEpoch\s*=\s*\(sceneEpoch\s*\+\s*1\)/.test(waterSrc),
+  "R1-0: update path bumps sceneEpoch when invalidators change",
+);
+assert.ok(
+  /getMirrorStats/.test(waterSrc),
+  "R1-0: CityWater exposes getMirrorStats for perf instrumentation",
+);
+
 console.log("test-city-water: ok");
