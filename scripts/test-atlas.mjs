@@ -202,8 +202,8 @@ function loadAtlasRoute(environment) {
 const {
   atlasOperationForRequest,
   clipRectForBatchDirection,
-  clipRectForFocus,
   createAtlasGenerationContext,
+  formatAtlasPerspectiveClause,
   formatAtlasVisualStyleClause,
   generateAtlasImage,
   parseAtlasGenerationRequest,
@@ -335,7 +335,16 @@ assert.ok(defaultCall, "default generation should call GPT Image 2");
 const defaultBody = JSON.parse(defaultCall.init.body);
 assert.equal(defaultBody.model, "gpt-image-2", "final generation should use GPT Image 2");
 assert.equal(defaultBody.quality, "high", "final generation should request high rendering quality");
-assert.equal(defaultBody.size, "1344x1008", "desktop final generation should preserve the Atlas sheet aspect ratio");
+// Sheet geometry, asserted as geometry: the desktop sheet must carry the
+// room's 4:3 map ratio and enough pixels to fill a 2x stage, because the
+// pyramid holds every drawing within ~1.15x of its own fit and the only
+// softness left to fix at the widest view is device-pixel deficit.
+{
+  const [w, h] = defaultBody.size.split("x").map(Number);
+  assert.ok(Math.abs(w / h - 4 / 3) < 0.01, "desktop final generation should preserve the Atlas sheet aspect ratio");
+  assert.ok(w >= 1600, "a desktop sheet must out-resolve a 2x stage or the widest view is soft before any zoom");
+  assert.ok(w % 16 === 0 && h % 16 === 0, "sheet dimensions must stay 16px aligned for the providers");
+}
 assert.equal(defaultBody.output_format, "webp", "final generation should request a compact lossless-looking web format");
 assert.equal(defaultBody.output_compression, 92, "final generation should avoid low-quality compression artifacts");
 const defaultPrompt = defaultBody.prompt;
@@ -721,16 +730,7 @@ for (const [direction, view, velocity] of edgeTravelCases) {
   );
 }
 
-const focusClip = clipRectForFocus({ x: 0.4, y: 0.6, zoom: 2 });
-assert.ok(focusClip.width < 1 && focusClip.height < 1, "zoom focus clips should be a bounded region with buffer");
-assert.ok(
-  focusClip.x <= 0.4 && focusClip.x + focusClip.width >= 0.4,
-  "focus clip should contain the focus x",
-);
-assert.ok(
-  focusClip.y <= 0.6 && focusClip.y + focusClip.height >= 0.6,
-  "focus clip should contain the focus y",
-);
+const focusClip = clipRectForBatchDirection("southeast");
 
 const preparedCroppedSource = plain(await prepareCroppedSource("data:image/png;base64,parent", focusClip));
 assert.deepEqual(
@@ -990,7 +990,12 @@ assert.equal(canonicalPreviewBody.input_references?.length, 1, "shift preview sh
 assert.ok(canonicalFinalBody.get("image") instanceof Blob, "shift final should sample from the current map");
 assert.equal(canonicalFinalBody.get("model"), "gpt-image-2", "shift final should edit with GPT Image 2");
 assert.equal(canonicalFinalBody.get("quality"), "high", "shift final should request high rendering quality");
-assert.equal(canonicalFinalBody.get("size"), "896x1616", "mobile shift final should preserve the authored portrait sheet geometry");
+{
+  const [w, h] = String(canonicalFinalBody.get("size")).split("x").map(Number);
+  assert.ok(Math.abs(w / h - 853 / 1538) < 0.01, "mobile shift final should preserve the authored portrait sheet geometry");
+  assert.ok(w >= 1100, "a phone sheet must out-resolve a 3x 390px stage as far as the providers allow");
+  assert.ok(w % 16 === 0 && h % 16 === 0, "sheet dimensions must stay 16px aligned for the providers");
+}
 const [mobileOutputWidth, mobileOutputHeight] = canonicalFinalBody.get("size").split("x").map(Number);
 assert.equal(mobileOutputWidth % 16, 0, "mobile output width should align to the image model's 16px grid");
 assert.equal(mobileOutputHeight % 16, 0, "mobile output height should align to the image model's 16px grid");
@@ -1448,13 +1453,31 @@ const {
   exploredBounds,
   fitZoomForBounds,
   focusForSheet,
-  hasZoomHeadroom,
   placeChildRect,
   resolvePlaneEdgeTravel,
-  tileNeedsDetail,
   viewForCenter,
   worldCenter,
 } = atlasPlaneModule;
+
+const atlasPyramidModule = loadTsModule("src/lib/atlas-pyramid.ts");
+const {
+  PYRAMID_DETAIL_MAGNIFICATION,
+  PYRAMID_MAX_DEPTH,
+  PYRAMID_PLANE_ZOOM_CEILING,
+  PYRAMID_RATIO,
+  demoteView,
+  promotableTile,
+  promoteRect,
+  promoteTiles,
+  promoteView,
+  pyramidClipForFocus,
+  pyramidLayerBlend,
+  pyramidNeedsDetail,
+  pyramidPerspective,
+  pyramidZoomCeiling,
+  tileCoversViewport,
+  tileMagnification,
+} = atlasPyramidModule;
 
 const PLANE_METRICS = { width: 1200, height: 900, mapWidth: 1200, mapHeight: 900 };
 
@@ -1523,7 +1546,7 @@ assert.deepEqual(plain(cellAt({ wx: 0.999, wy: -1.001 })), { wx: 0, wy: -2 }, "c
   const localFocus = focusForSheet(view, PLANE_METRICS, sheetRect);
   assert.ok(Math.abs(localFocus.x - 0.7) < 1e-9 && Math.abs(localFocus.y - 0.4) < 1e-9, "focus must be sheet-local");
   assert.ok(Math.abs(localFocus.zoom - 3) < 1e-9, "a root sheet's focus zoom is the camera zoom");
-  const child = placeChildRect(sheetRect, clipRectForFocus(localFocus));
+  const child = placeChildRect(sheetRect, pyramidClipForFocus(localFocus));
   assert.ok(
     child.x <= 1.7 && 1.7 <= child.x + child.width && child.y <= 0.4 && 0.4 <= child.y + child.height,
     "the child rect must contain the looked-at point",
@@ -1541,60 +1564,258 @@ assert.deepEqual(plain(cellAt({ wx: 0.999, wy: -1.001 })), { wx: 0, wy: -2 }, "c
   assert.equal(deepestTileAt([elsewhere], { wx: 0.5, wy: 0.5 }), null, "no covering tile means no ground");
 }
 
+// ── the pyramid: the law that keeps an endless zoom sharp ─────────────
+
 // The pyramid's termination: a parent outrun at zoom 2 stops wanting
 // detail once its half-width child lands under the camera.
 {
-  const parent = { id: "p", rect: { x: 0, y: 0, width: 1, height: 1 }, level: 0, image: "p", phase: "final" };
-  const child = { id: "c", rect: { x: 0.25, y: 0.25, width: 0.5, height: 0.5 }, level: 1, image: "c", phase: "final" };
-  assert.equal(tileNeedsDetail(parent, 2), true, "a doubled zoom must outrun the root sheet");
-  assert.equal(tileNeedsDetail(child, 2), false, "the landed child must satisfy the same zoom");
-  assert.equal(tileNeedsDetail(child, 4), true, "outrunning the child asks for the next level down");
+  const parent = { x: 0, y: 0, width: 1, height: 1 };
+  const child = { x: 0.25, y: 0.25, width: 0.5, height: 0.5 };
+  assert.equal(pyramidNeedsDetail(parent, 2), true, "a doubled zoom must outrun the root sheet");
+  assert.equal(pyramidNeedsDetail(child, 2), false, "the landed child must satisfy the same zoom");
+  assert.equal(pyramidNeedsDetail(child, 4), true, "outrunning the child asks for the next level down");
 }
 
-// hasZoomHeadroom: a working margin against MAX_ZOOM, not just the bare
-// tileNeedsDetail threshold — a child right at the edge of what the
-// camera can ever reach again is treated as dry even if one exact
-// crossing might technically still land.
+// The sharpness law, stated as arithmetic: a child is asked for at the
+// detail threshold and lands at ratio × that of its own fit. If the ratio
+// ever stopped being < 1/threshold, every landed child would already be
+// magnified past the ceiling it exists to enforce, and the descent would
+// compound blur instead of clearing it.
 {
-  const wide = { x: 0, y: 0, width: 0.5, height: 0.5 };
-  const narrow = { x: 0, y: 0, width: 0.02, height: 0.02 };
-  assert.equal(hasZoomHeadroom(wide, 64), true, "a half-width child still has zoom to spare under 64x");
-  assert.equal(hasZoomHeadroom(narrow, 64), false, "a 2%-width child has run out of headroom under 64x");
-  assert.equal(hasZoomHeadroom({ x: 0, y: 0, width: 1, height: 1 }, 1.4), false, "a camera with almost no zoom range never has headroom");
+  const bornAt = PYRAMID_RATIO * PYRAMID_DETAIL_MAGNIFICATION;
+  assert.ok(
+    bornAt < 1,
+    "a freshly landed child must be downsampled, not already stretched — otherwise the pyramid adds blur",
+  );
+  // ...and landing it must actually satisfy the camera that asked.
+  const zoomThatAsked = PYRAMID_DETAIL_MAGNIFICATION;
+  const childRect = { x: 0.25, y: 0.25, width: PYRAMID_RATIO, height: PYRAMID_RATIO };
+  assert.equal(
+    pyramidNeedsDetail(childRect, zoomThatAsked),
+    false,
+    "the child a zoom asked for must answer that zoom, or the pyramid never terminates",
+  );
+  assert.ok(
+    Math.abs(tileMagnification(childRect, zoomThatAsked) - bornAt) < 1e-12,
+    "magnification at birth must be ratio × threshold",
+  );
 }
 
-// Without re-rooting, a same-plane pyramid's required zoom compounds
-// every level (each child's rect shrinks, so outrunning it again needs
-// more zoom) until it exceeds what the camera can ever reach — this is
-// the ceiling the fix removes, documented here so it cannot regress
-// silently back in.
+// Twelve layers of real ground, and the camera never leaves the plane's
+// own range. This is the whole claim of the descent: depth lives in the
+// stack, not in a transform scale of four thousand.
+{
+  let span = 1;
+  for (let layer = 0; layer < 12; layer += 1) span *= PYRAMID_RATIO;
+  assert.ok(
+    span * (1 / PYRAMID_RATIO) ** 12 === 1,
+    "twelve promotions must be exactly twelve halvings of the ground",
+  );
+  assert.equal(
+    pyramidZoomCeiling(11, 64),
+    PYRAMID_PLANE_ZOOM_CEILING,
+    "inside the pyramid a harder pinch buys deeper ground, not a stretched sheet",
+  );
+  assert.equal(
+    pyramidZoomCeiling(PYRAMID_MAX_DEPTH, 64),
+    64,
+    "at the bottom of the descent the deep clamp — and the coast wall behind it — must open again",
+  );
+  assert.ok(PYRAMID_MAX_DEPTH >= 12, "the room promises twelve layers; the depth budget must exceed it");
+}
+
+// The clip is exactly the ratio, centered, and held inside the parent —
+// a buffered clip shrinks by less than the ratio and flattens the pyramid
+// until each generated layer buys almost no new detail.
+{
+  const middle = pyramidClipForFocus({ x: 0.5, y: 0.5 });
+  assert.equal(middle.width, PYRAMID_RATIO, "a child must draw exactly the ratio of its parent's ground");
+  assert.ok(Math.abs(middle.x - 0.25) < 1e-12, "a centered focus must centre the clip");
+  const corner = pyramidClipForFocus({ x: 0.02, y: 0.99 });
+  assert.equal(corner.x, 0, "a clip at the western edge must not run outside the parent");
+  assert.ok(Math.abs(corner.y + corner.height - 1) < 1e-12, "a clip at the southern edge must stop at the parent's edge");
+}
+
+// The crossfade: a child is fully present at the magnification it was
+// born at and gone once the camera has pulled well back, so an outer view
+// never shows a hard rectangle of some other drawing floating on the
+// parent.
+{
+  const child = { rect: { x: 0, y: 0, width: PYRAMID_RATIO, height: PYRAMID_RATIO }, level: 1 };
+  const bornZoom = PYRAMID_DETAIL_MAGNIFICATION;
+  assert.equal(pyramidLayerBlend(child, bornZoom), 1, "a child must be fully present at the zoom that asked for it");
+  assert.equal(pyramidLayerBlend(child, bornZoom * 4), 1, "and stay present as the camera goes deeper");
+  assert.equal(pyramidLayerBlend(child, bornZoom * 0.4), 0, "and be gone once the camera has pulled back past it");
+  const mid = pyramidLayerBlend(child, bornZoom * 0.75);
+  assert.ok(mid > 0 && mid < 1, "the fade must be a ramp, not a switch");
+  assert.equal(
+    pyramidLayerBlend({ rect: { x: 0, y: 0, width: 4, height: 4 }, level: -2 }, 0.01),
+    1,
+    "an ancestor is the floor under everything and never fades",
+  );
+}
+
+// Promotion is a change of coordinates, not a move: the anchor becomes
+// the unit cell and every screen position is preserved exactly. A bug
+// here is a visible jolt on every single descent.
+{
+  const anchor = { x: 0.25, y: 0.5, width: 0.5, height: 0.5 };
+  const view = { x: -340, y: -155, zoom: 2.4 };
+  const promoted = promoteView(view, PLANE_METRICS, anchor);
+  const screenOf = (v, wx, wy) => ({
+    x: v.x + wx * PLANE_METRICS.mapWidth * v.zoom,
+    y: v.y + wy * PLANE_METRICS.mapHeight * v.zoom,
+  });
+  for (const [wx, wy] of [[0.3, 0.55], [0.7, 0.9], [0.25, 0.5]]) {
+    const before = screenOf(view, wx, wy);
+    const rebased = promoteRect({ x: wx, y: wy, width: 0, height: 0 }, anchor);
+    const after = screenOf(promoted, rebased.x, rebased.y);
+    assert.ok(
+      Math.abs(before.x - after.x) < 1e-9 && Math.abs(before.y - after.y) < 1e-9,
+      "promotion must not move a single point on screen",
+    );
+  }
+  // ...and the ascent is its exact inverse, so descending and rising are
+  // one reversible map rather than two lossy ones.
+  const back = demoteView(promoted, PLANE_METRICS, anchor);
+  assert.ok(
+    Math.abs(back.x - view.x) < 1e-9
+    && Math.abs(back.y - view.y) < 1e-9
+    && Math.abs(back.zoom - view.zoom) < 1e-9,
+    "demoteView must invert promoteView exactly",
+  );
+  assert.ok(Math.abs(promoted.zoom - view.zoom * anchor.width) < 1e-12, "promotion must rebase the zoom by the anchor's span");
+}
+
+// A promoted frame keeps its ancestors (they fill the margins until the
+// new plane grows children of its own) and renumbers levels around the
+// anchor, which is what lets the same detail logic run at any depth.
+{
+  const anchor = { x: 0.25, y: 0.25, width: 0.5, height: 0.5 };
+  const tiles = [
+    { id: "root", rect: { x: 0, y: 0, width: 1, height: 1 }, level: 0, image: "r", phase: "final" },
+    { id: "kid", rect: anchor, level: 1, image: "k", phase: "final" },
+    { id: "gone", rect: { x: 8, y: 8, width: 1, height: 1 }, level: 0, image: "g", phase: "final" },
+  ];
+  const promoted = promoteTiles(tiles, anchor, 1);
+  const byId = Object.fromEntries(promoted.map((tile) => [tile.id, tile]));
+  assert.ok(byId.kid, "the promoted child must survive as the plane's own ground");
+  assert.equal(byId.kid.level, 0, "the anchor becomes level zero");
+  assert.deepEqual(
+    plain(byId.kid.rect),
+    { x: 0, y: 0, width: 1, height: 1 },
+    "the anchor becomes the unit cell exactly",
+  );
+  assert.equal(byId.root.level, -1, "the parent stays mounted as an ancestor beneath it");
+  assert.equal(byId.root.rect.width, 2, "and spans twice the promoted sheet, as a halving implies");
+  assert.equal(byId.gone, undefined, "ground far outside the promoted neighbourhood is left to the descent stack");
+}
+
+// Promotion waits for the child to own the whole viewport. That is what
+// makes the rebased camera legal without a re-centring snap — and it is
+// why promoting cannot leave an empty margin on screen.
+{
+  const cover = { x: 0, y: 0, width: 1, height: 1 };
+  const covering = { x: 0, y: 0, zoom: 1 };
+  assert.equal(tileCoversViewport(cover, covering, PLANE_METRICS), true, "a fitted cell covers the frame");
+  assert.equal(
+    tileCoversViewport(cover, { x: 0, y: 0, zoom: 0.6 }, PLANE_METRICS),
+    false,
+    "a cell smaller than the frame leaves margin and must not promote",
+  );
+  const tiles = [
+    { id: "root", rect: cover, level: 0, image: "r", phase: "final" },
+    { id: "small", rect: { x: 0.25, y: 0.25, width: 0.5, height: 0.5 }, level: 1, image: "s", phase: "final" },
+  ];
+  assert.equal(
+    promotableTile(tiles, covering, PLANE_METRICS),
+    null,
+    "a child that does not yet fill the frame is not promotable",
+  );
+  // Zoom in until that half-width child fills the frame: view centred on it.
+  const zoomed = { x: -0.25 * PLANE_METRICS.mapWidth * 2, y: -0.25 * PLANE_METRICS.mapHeight * 2, zoom: 2 };
+  assert.equal(
+    promotableTile(tiles, zoomed, PLANE_METRICS)?.id,
+    "small",
+    "once the child owns the viewport it becomes the plane",
+  );
+  assert.equal(
+    promotableTile([tiles[0]], zoomed, PLANE_METRICS),
+    null,
+    "the plane's own ground is already where it belongs and never promotes itself",
+  );
+}
+
+// The descent must change what kind of map this is, not only how sharp
+// it is: twelve renderings of the same continental survey is a slideshow.
+{
+  const registers = new Set();
+  for (let depth = 0; depth < 12; depth += 1) registers.add(pyramidPerspective(depth));
+  assert.equal(registers.size, 12, "each of the twelve promised layers must name a different cartographic register");
+  assert.equal(
+    pyramidPerspective(400),
+    pyramidPerspective(11),
+    "past the ladder's end the deepest register must hold, not fall off the end",
+  );
+  const clause = formatAtlasPerspectiveClause(5);
+  assert.ok(clause.includes(pyramidPerspective(5)), "the generator must be told which register this sheet is");
+  assert.match(clause, /5 zoom layers below/, "and how deep it stands");
+}
+
+// The ceiling promotion removes, kept here so it cannot creep back in.
+// A same-plane pyramid compounds: each child's rect shrinks by the ratio,
+// so the zoom needed to outrun it again grows geometrically, and past a
+// handful of levels it exceeds anything the camera can ever reach — the
+// room's real "goes blurry and never gets crisp again" failure.
 {
   const MAX_ZOOM = 64;
   let rect = { x: 0, y: 0, width: 1, height: 1 };
   let reachedLevel = 0;
-  for (let level = 0; level < 20; level += 1) {
-    const neededZoom = 1.45 / rect.width;
+  for (let level = 0; level < 40; level += 1) {
+    const neededZoom = PYRAMID_DETAIL_MAGNIFICATION / rect.width;
     if (neededZoom > MAX_ZOOM) break;
     reachedLevel = level + 1;
-    rect = placeChildRect(rect, clipRectForFocus({ x: 0.5, y: 0.5, zoom: neededZoom }));
+    rect = placeChildRect(rect, pyramidClipForFocus({ x: 0.5, y: 0.5 }));
   }
-  assert.ok(reachedLevel < 13, "an unbounded same-plane pyramid must hit its MAX_ZOOM ceiling well short of level 13");
+  assert.ok(
+    reachedLevel < 13,
+    "an unbounded same-plane pyramid must hit its zoom ceiling well short of level 13 — this is the failure promotion exists to remove",
+  );
 }
 
-// The endless pyramid: re-rooting whenever hasZoomHeadroom says the well
-// is dry keeps every crossing within MAX_ZOOM indefinitely — the same
-// worst-case sequence above, but landing a re-root resets the next level
-// back to a full unit cell instead of compounding forever. This must
-// clear at least twelve levels, the room's stated depth floor.
+// ...and the same sequence, promoted. Re-expressing the frame around each
+// child that takes the viewport puts the required zoom back where it
+// started, so it never grows at all: sixty-four levels stay inside the
+// plane's own ceiling, with the camera's numbers exact at every one.
 {
-  const MAX_ZOOM = 64;
+  const metrics = PLANE_METRICS;
   let rect = { x: 0, y: 0, width: 1, height: 1 };
+  let view = viewForCenter(metrics, { wx: 0.5, wy: 0.5 }, 1);
+  let worstZoom = 0;
   for (let level = 0; level < 64; level += 1) {
-    const neededZoom = 1.45 / rect.width;
-    assert.ok(neededZoom <= MAX_ZOOM + 1e-9, `level ${level} must stay reachable within MAX_ZOOM once re-rooting is honored`);
-    const child = placeChildRect(rect, clipRectForFocus({ x: 0.5, y: 0.5, zoom: neededZoom }));
-    rect = hasZoomHeadroom(child, MAX_ZOOM) ? child : { x: 0, y: 0, width: 1, height: 1 };
+    // Press in until the ground under the camera wants a deeper drawing.
+    view = viewForCenter(
+      metrics,
+      { wx: rect.x + rect.width / 2, wy: rect.y + rect.height / 2 },
+      PYRAMID_DETAIL_MAGNIFICATION / rect.width,
+    );
+    worstZoom = Math.max(worstZoom, view.zoom);
+    assert.ok(
+      view.zoom <= pyramidZoomCeiling(level, 64) + 1e-9,
+      `level ${level} must stay reachable inside the plane's own ceiling once promotion is honored`,
+    );
+    const child = placeChildRect(rect, pyramidClipForFocus({ x: 0.5, y: 0.5 }));
+    // Deepen, then promote once the child owns the frame — the frame
+    // re-expression is what resets the requirement instead of compounding it.
+    view = viewForCenter(metrics, { wx: child.x + child.width / 2, wy: child.y + child.height / 2 }, 1 / child.width);
+    assert.ok(tileCoversViewport(child, view, metrics), `level ${level} child must own the frame before promotion`);
+    view = promoteView(view, metrics, child);
+    rect = promoteRect(child, child);
   }
+  assert.ok(
+    worstZoom <= PYRAMID_PLANE_ZOOM_CEILING,
+    `sixty-four promoted levels must never ask the camera past the plane ceiling; asked ${worstZoom.toFixed(2)}`,
+  );
 }
 
 // Frontier travel: only pressing past the explored edge asks for new

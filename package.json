@@ -59,6 +59,7 @@
     "test:instrument-lesson": "node scripts/test-instrument-lesson.mjs",
     "test:dither-avatar": "node scripts/test-dither-avatar.mjs",
     "compare:atlas-providers": "node scripts/compare-atlas-providers.mjs",
+    "smoke:atlas-descent": "node scripts/smoke-atlas-descent.mjs",
     "smoke:home": "node scripts/smoke-home.mjs",
     "smoke:clouds": "node scripts/smoke-clouds.mjs",
     "test:room-contract": "node scripts/test-room-contract.mjs",

@@ -33,6 +33,13 @@ export type PlaneTile = {
   level: number;
   image: string;
   phase: PlaneTilePhase;
+  /**
+   * The previous plane's ground, held under a landing newcomer while it
+   * covers. Retirement is a separate axis from level: a promoted frame
+   * carries live *ancestors* at negative levels, and those are the floor
+   * of the world, not something on its way out.
+   */
+  retiring?: boolean;
 };
 
 function clamp(value: number, min: number, max: number): number {
@@ -203,42 +210,6 @@ export function deepestTileAt(tiles: PlaneTile[], point: PlanePoint): PlaneTile 
     if (!best || tile.level >= best.level) best = tile;
   }
   return best;
-}
-
-/**
- * Whether the camera has outrun a tile's native detail: the tile is being
- * magnified past its own fit by more than the threshold, so the ground
- * under the viewer deserves a deeper drawing. Landing that child shrinks
- * the deepest rect and the same zoom no longer wants more — the pyramid's
- * termination condition.
- */
-export function tileNeedsDetail(tile: PlaneTile, zoom: number, threshold = 1.45): boolean {
-  return zoom * tile.rect.width >= threshold;
-}
-
-/**
- * Whether landing this child still leaves the camera room to ask for at
- * least one further level in place before its own ceiling makes the next
- * crossing physically unreachable.
- *
- * tileNeedsDetail's threshold recurs every level against a shrinking
- * rect.width, so the zoom required to trigger level N+1 grows
- * geometrically with depth. Left unchecked, that requirement eventually
- * exceeds maxZoom and a tile is stuck over-magnified with no sharper
- * drawing the camera can ever reach — the "endless" zoom quietly stops
- * being endless a few levels down. `headroom` keeps a safety margin
- * against real zoom overshoot during the settle debounce (the camera
- * rarely stops exactly on the threshold), and is deliberately generous
- * since a false "no headroom" only costs one extra plane re-root, while a
- * false "has headroom" costs a tile that can never be resolved.
- */
-export function hasZoomHeadroom(
-  childRect: PlaneRect,
-  maxZoom: number,
-  threshold = 1.45,
-  headroom = 2,
-): boolean {
-  return maxZoom * childRect.width >= threshold * headroom;
 }
 
 export type PlaneVelocity = { x: number; y: number };

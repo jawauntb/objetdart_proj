@@ -13,6 +13,7 @@ import {
 } from "@/lib/atlas-batch";
 import { pixelBoundsForClip } from "@/lib/atlas-crop";
 import { atlasQuarterLabel, atlasReachesLabel } from "@/lib/atlas-naming";
+import { pyramidPerspective } from "@/lib/atlas-pyramid";
 
 export type {
   AtlasBatchDirection,
@@ -27,7 +28,6 @@ export type {
 export {
   ATLAS_CLIP_BUFFER,
   clipRectForBatchDirection,
-  clipRectForFocus,
   clipRectForShiftDirection,
   formatAtlasClipClause,
   normalizeClipRect,
@@ -780,6 +780,18 @@ export function atlasUsesSourceImage(
   return atlasOperationForRequest(request) === "edit";
 }
 
+/**
+ * Descending must change *what kind of map this is*, not only how sharp it
+ * is. Twelve layers of the same continental survey re-rendered twelve times
+ * is a slideshow; twelve layers that walk continent → district → street →
+ * grain is a scale manifold. `pyramidPerspective` is the ladder, and the
+ * generator is told where on it this sheet stands.
+ */
+export function formatAtlasPerspectiveClause(depth: number): string {
+  const register = pyramidPerspective(depth);
+  return `This sheet stands ${Math.max(0, Math.floor(depth))} zoom layers below the outermost chart of this world, so draw it as ${register}. Subject matter, not just resolution, belongs to that register: show what is actually legible at this scale and let the wider forms fall outside the frame.`;
+}
+
 function atlasAction(request: AtlasGenerationRequest): string {
   const clipClause = request.clip ? formatAtlasClipClause(request.clip) : null;
   const batchHeading = request.batchDirection
@@ -793,6 +805,7 @@ function atlasAction(request: AtlasGenerationRequest): string {
       batchHeading,
       `Create an entirely new full-resolution atlas sheet of the place around ${x}% from the left and ${y}% from the top at roughly ${request.focus.zoom.toFixed(1)}x depth.`,
       "This is a native close view filling the whole frame with denser, sharper geography of that region — invent fine detail appropriate to this depth.",
+      formatAtlasPerspectiveClause(request.generationDepth ?? 0),
       "Do not produce a soft, blurry, pixelated, or stretched upscale of a previous map. Continuity of lore with the parent concept matters; pixel-copying it does not.",
       "The result must itself be zoomable and pannable again.",
     ].filter(Boolean).join(" ");
@@ -801,6 +814,7 @@ function atlasAction(request: AtlasGenerationRequest): string {
     return [
       batchHeading,
       "Create an entirely new full-resolution atlas sheet of a deeper view of this concept, filling the whole frame with denser, sharper geography.",
+      formatAtlasPerspectiveClause(request.generationDepth ?? 0),
       "Do not produce a soft, blurry, pixelated, or stretched upscale of a previous map.",
       "The result must itself be zoomable and pannable again.",
     ].filter(Boolean).join(" ");
@@ -1207,7 +1221,14 @@ async function throwForProviderResponse(response: Response): Promise<never> {
 function chooseOutputSize(viewport?: AtlasViewport): string {
   // Atlas keeps authored portrait sheets on phones and landscape sheets on
   // wider screens, so generated edits inherit the same map geometry.
-  return viewport && viewport.width <= 760 ? "896x1616" : "1344x1008";
+  //
+  // The sheet is never magnified past ~1.15x its own frame-fit (the pyramid
+  // sees to that), so the remaining softness was pure device-pixel deficit:
+  // a 1344-wide sheet filling a 1280 CSS-px stage on a 2x screen is drawn
+  // from 1344 pixels into 2560, and no amount of deeper zoom fixes the
+  // widest view. Both sheets now carry enough pixels for a 2x stage, still
+  // 16px-aligned and still on the Atlas map ratios (4:3, 853/1538).
+  return viewport && viewport.width <= 760 ? "1152x2080" : "1792x1344";
 }
 
 
