@@ -2266,12 +2266,16 @@ export default function QuarksVacuum() {
         ctx.save();
         ctx.globalCompositeOperation = "screen";
         ctx.lineWidth = 0.7;
-        for (let i = 0; i < plasma.quarks.length; i++) {
+        // O(visible), never O(everything): the haze is a budget, and the
+        // frame governor's tier spends it
+        let links = Math.round(90 * detail.particles);
+        for (let i = 0; i < plasma.quarks.length && links > 0; i++) {
           const qa = plasma.quarks[i];
-          for (let j = i + 1; j < plasma.quarks.length; j++) {
+          for (let j = i + 1; j < plasma.quarks.length && links > 0; j++) {
             const qb = plasma.quarks[j];
             const d = Math.hypot(qa.nx - qb.nx, qa.ny - qb.ny);
             if (d > 0.34) continue;
+            links -= 1;
             ctx.strokeStyle = colorAlpha(
               mixHex(COLOR_TINTS[qa.color], COLOR_TINTS[qb.color], 0.5),
               0.16 * (1 - d / 0.34) * feltA * (0.5 + plasma.heat * 0.5),

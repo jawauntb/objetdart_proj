@@ -591,6 +591,18 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     frame: "own",
     chrome: "axis",
     keeps: "objetdart:flowers:v1",
+    interacts:
+      "light, root space, and pollen that actually travels. Shade is one-directional — only a "
+      + "taller neighbour standing inside a plant's canopy takes its light, so a seedling never "
+      + "shades the flower above it — and root discs share the soil by their true circle-overlap "
+      + "area (lib/botany shadeFrom, rootOverlap). What is left is vigour, and vigour is what a "
+      + "plant grows and blooms on, so a crowded corner visibly thins itself and frost takes the "
+      + "weakest first. Grains leave an open head on the wind, or ride a pollinator working the "
+      + "garden head to head, and where one lands on another open flower A SEED SETS whose genome "
+      + "is half of each parent — crossLatent takes each locus from one parent or the other, "
+      + "never an average, so the child is a real flower that is neither parent and its hybrid "
+      + "genome is persisted. The top rung races a season the length of the garden. Unattended, "
+      + "volunteers sprout, heads shed pollen, and pollinators arrive",
     creates: "a flower",
     exempt: {
       dwell: "the garden's pressure-bloom is continuous from contact and already owns its growth axis; a second dwell plant would duplicate a flower at the same contact",
@@ -632,6 +644,17 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     frame: "yield",
     chrome: "travel",
     keeps: "objetdart:tissue:v1",
+    interacts:
+      "adhesion and mechanical strain, in one lattice. Every cell is bonded to its neighbours by "
+      + "a real rest length, and the position-based solver passes any displacement ring by ring: a "
+      + "division now shoves the ring around it outward and the lattice carries that shove across "
+      + "the sheet, straining bonds at the far edge — and bonds are drawn and voiced by their "
+      + "strain, so the propagation is seen and heard. Past BREAK_STRAIN a bond lets go and the "
+      + "chord roughens. Cells struck on the 3-rung divide AND commit one fate further along the "
+      + "morphogen, so a struck cell becomes a different kind of cell and its neighbours' chord "
+      + "moves with it. The top rung is gastrulation: a blastopore opens and a whole region folds "
+      + "in and under, the cells that go under becoming a terminal second germ layer while the "
+      + "count stays exactly what it was. The sheet divides and differentiates on its own front",
     creates: "a cell",
     exempt: {},
   },
@@ -645,6 +668,18 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     frame: "yield",
     chrome: "travel",
     keeps: "objetdart:cells:v1",
+    interacts:
+      "adhesion, signalling, competition and phagocytosis — four forces, all real. Cadherin "
+      + "binding is homophilic (lib/cytology adhesionBetween), so cells of a lineage hold each "
+      + "other far harder than strangers and like visibly sorts with like, junctions drawn where "
+      + "two membranes hold; overlapping membranes push back. One finite supply is divided by "
+      + "uptake area to the last crumb, so a crowded dish starves proportionally, the weakest dim "
+      + "and are resorbed, and a nutrient bloom brings them back. A division, a meal or a tap "
+      + "emits a signal that WALKS the culture — every cell it reaches answers in its own voice "
+      + "and passes it on. And a cell 1.8× another's area engulfs it: what stands afterwards is "
+      + "neither the eater nor the eaten (engulfSeed keeps the phagocyte's lineage nibble and "
+      + "re-rolls everything above it, and it is larger by exactly the area it swallowed). "
+      + "Unattended, the healthiest cell divides, the culture signals, and food drifts in",
     creates: "a cell",
     exempt: {},
   },
@@ -658,6 +693,18 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     frame: "yield",
     chrome: "travel",
     keeps: "objetdart:organelles:v1",
+    interacts:
+      "the membrane budget, and traffic across it. A vesicle is not a new object in the ledger: "
+      + "budding takes area OUT of its parent and fusion puts exactly that back, so the plasm's "
+      + "total never moves through a whole secretory pathway (ten hand-offs leave the ledger where "
+      + "it started, pinned in test-membrane). Parcels know where they are going — raw cargo to the "
+      + "er, folded cargo to the golgi, mature cargo out through the rim — and each station "
+      + "ADVANCES what it is handed one real step, so what leaves a golgi that was handed folded "
+      + "cargo is a mature granule that is neither the vesicle that arrived nor the organ it met. "
+      + "Mature parcels are released at the ghost membrane. A mitochondrion with membrane enough "
+      + "divides, halving its surface rather than copying it; a smaller one fires atp and the whole "
+      + "cytoplasm visibly quickens. The top rung is a metabolic cascade from the lowest voice to "
+      + "the highest. Unattended, stations bud and mitochondria fire on their own seeded clocks",
     creates: "an organelle",
     exempt: {},
   },
@@ -671,6 +718,18 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     frame: "yield",
     chrome: "travel",
     keeps: "objetdart:dna:v1",
+    interacts:
+      "complementarity and heat. Loose fragments drift in the nucleoplasm and find their site on "
+      + "the ladder BY SEQUENCE — lib/helix bestAnnealSite scores every offset, so a probe cut "
+      + "from position 5 goes to position 5 and nothing snaps to whatever is nearest on screen. "
+      + "Bound, it holds only while its own hydrogen-bond ledger can stand the temperature "
+      + "(annealHolds: a G·C-rich patch outlasts an A·T one of the same length), and the "
+      + "three-finger heat visibly melts them off. A fragment that holds long enough is READ INTO "
+      + "the template — spliceInto rewrites exactly the mismatched bases and nothing else, so what "
+      + "stands afterwards is neither the strand that was there nor the patch that landed. The top "
+      + "rung replicates the whole strand: the fork runs its length and a complete daughter "
+      + "chromatid peels off and condenses. Unattended, primers arrive, genes are transcribed as "
+      + "bubbles, and the heat spikes and melts what was bound",
     creates: "a base pair",
     exempt: {},
   },
@@ -684,6 +743,18 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     frame: "yield",
     chrome: "travel",
     keeps: "objetdart:organics:v1",
+    interacts:
+      "polarity and hydrogen bonding. Every chain's dipole is computed from the groups it "
+      + "actually carries (lib/organic polarity), so a pure hydrocarbon is EXACTLY indifferent "
+      + "and two polar chains reach for each other with a real 1/d³ dipole force; close enough, "
+      + "donors and acceptors pair and a hydrogen bond is drawn dotted between them. A bond that "
+      + "holds on ends the chemistry allows LIGATES: the acid end and the amine end condense into "
+      + "one chain that is neither parent (two glycines make glycylglycine, which the room then "
+      + "names) and exactly one water walks off as a loose oxygen — product + water = the two "
+      + "parents, atom for atom, checked in test-organic. Water run the other way hydrolyses a "
+      + "peptide bond and one chain becomes two. The top rung is a polymerisation cascade down "
+      + "the whole population, one join per beat. Unattended, the solvent keeps condensing new "
+      + "chains and hydrolysing old ones on its own seeded clock",
     creates: "a chain",
     exempt: {},
   },
@@ -1185,6 +1256,17 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     frame: "yield",
     chrome: "travel+peers",
     keeps: "objetdart:seed:v1",
+    interacts:
+      "one pot, one rain, and whoever is nearest drinks. Water percolates down through the soil "
+      + "as real drops and the NEAREST kernel takes each one, so two seeds planted close share a "
+      + "single rain between them and both come on slower — crowding is felt as time. Uptake "
+      + "saturates and softens the husk, which is the only reason a split ever comes (lib/seed "
+      + "imbibe), and germination then runs in botanical order, the radicle always before the "
+      + "leaves. A kernel carried all the way to a shoot SETS SEEDS: daughters with their own "
+      + "seed bits, deterministic in the parent's, which drop into the same soil and immediately "
+      + "start competing with it for the same water. At the cap the eldest kernel gives way "
+      + "audibly. Unattended, it rains on its own seeded clock and watered seeds germinate stage "
+      + "by stage with no hand present",
     creates: "a seed",
     exempt: {
       dwell: "the seed's phenology is already advanced by its existing pressure interaction; a second dwell plant would create an impossible duplicate embryo",
