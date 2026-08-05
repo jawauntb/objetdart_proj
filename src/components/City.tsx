@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import LetGo from "@/components/LetGo";
 import { attachGestures } from "@/lib/gesture";
-import { holdTier } from "@/lib/gesture/core";
+import { holdTier, tapTrainDepth, tapTrainTier, THRESHOLDS } from "@/lib/gesture/core";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { onVessel } from "@/lib/vessel";
@@ -79,6 +79,15 @@ import {
  * job is to trace an instantaneous causal fact over the settlement.
  *
  *   one finger tap    → ripple this ground; the city notices where you touched
+ *   rapid taps        → the train (tiers 1 / 3 / 5 / n): three raps knock on
+ *                        the nearest door and its neighbors turn toward it;
+ *                        five ring a market bell that feeds the near and
+ *                        turns a leaver back; seven and more, a carillon —
+ *                        every plot rings and the whole town gathers
+ *   steady taps (≥4)  → rhythm; the day entrains to the hand's tempo for a
+ *                        few breaths
+ *   circular scrub    → stirs the weather the way the hand circles, and the
+ *                        people caught inside the circle turn to its center
  *   one finger dwell  → plant a plot. keep holding and it climbs the civic
  *                        ladder: home → store → event → tree (each rung is
  *                        a different answer to a different need)
@@ -90,9 +99,11 @@ import {
  *                        gather to the nearest event
  *   three-finger drag → wind; pushes weather across the settlement
  *   three-finger twist→ season; the year turns and the trees follow
- *   three-finger hold → time dilation; the day runs at 1/4
+ *   three-finger hold → time dilation; the day slows the longer the hold,
+ *                        down toward stillness at the ceremony tier
  *   tilt              → rain leans across the field
- *   knock             → the city's bell tolls once — people gather
+ *   knock             → the city's bell tolls once, carrying as far as the
+ *                        rap was hard — the people in its reach gather
  *   flip              → night, whatever the day said
  *
  *   arrow keys        → a plot cursor drifts across the field (the visible
@@ -958,6 +969,19 @@ export default function City() {
 
     let dragRoadStart: { x: number; y: number } | null = null;
 
+    // The tap-train's visible answer: an echo ring expanding from the
+    // tapped ground (deeper trains draw deeper rings), and a carillon —
+    // every plot ringing at once — for tutti and the train's crescendo.
+    // Both are drawn by the overlay in the same frame the sound lands.
+    let tapEcho: { x: number; y: number; startedAt: number; depth: number } | null = null;
+    let carillonStartedAt = -1e9;
+    let carillonStrength = 0;
+    // Rhythm entrainment: the hand's steady tempo becomes the day's pace
+    // for a few breaths — faster than the resting pulse quickens the city
+    // clock, slower stretches it — then the day returns to its own gait.
+    let entrainScale = 1;
+    let entrainUntil = 0;
+
     let cityTimeMs = 0;
     let cityTimeScale = 1;
     let lastFrameAt = performance.now();
@@ -1165,15 +1189,88 @@ export default function City() {
       tap: (e) => {
         markInteraction();
         if (e.fingers === 1) {
+          // the train (tiers 1 / 3 / 5 / n): each rung is a civic act,
+          // and between the rungs the echo only deepens.
+          const tier = tapTrainTier(e.count);
+          const depth = tapTrainDepth(e.count);
+          tapEcho = { x: e.x, y: e.y, startedAt: performance.now(), depth };
+          if (e.count === 3) {
+            // three raps knock on the nearest door: the plot answers in
+            // its own note and a fifth, and its neighbors turn toward it.
+            const door = plotAt(e.x, e.y) ?? nearestPlot(e.x / width, e.y / height);
+            if (door && isPlayableRole(door.role)) {
+              const note = noteForPlot({ role: door.role, seed: door.seed });
+              ringChord([note, note + 7], 300, 40);
+              for (const person of people) {
+                if (person.phase === "leaving") continue;
+                const d2 = (person.x - door.x) ** 2 + (person.y - door.y) ** 2;
+                if (d2 < 0.05) {
+                  person.targetPlotId = door.id;
+                  person.need = "gather";
+                }
+              }
+              plantRingWeight = 1;
+            } else {
+              ring(noteForRole("home") - 12, 260);
+            }
+            try { haptics.roll(); } catch { /* noop */ }
+            return;
+          }
+          if (e.count === 5) {
+            // five ring a market bell: everyone within its carry is fed
+            // a little, and a leaver still inside it turns back — the
+            // train can call a departure home.
+            const nx = e.x / width;
+            const ny = e.y / height;
+            ringChord(chordForCeremony("store"), 420, 30);
+            for (const person of people) {
+              const d2 = (person.x - nx) ** 2 + (person.y - ny) ** 2;
+              if (d2 >= 0.1) continue;
+              person.fed = Math.min(1, person.fed + 0.35);
+              person.unmetSinceMs = null;
+              if (person.phase === "leaving") {
+                person.phase = "settled";
+                person.leavingTo = null;
+                person.leavingSinceMs = null;
+                person.targetPlotId = null;
+              }
+            }
+            try { haptics.bloom(); } catch { /* noop */ }
+            return;
+          }
+          if (tier === "n") {
+            // seven and more — the carillon: every plot rings, the sky
+            // clears a step, and the whole town is called in to rest,
+            // deeper with every further tap in the train.
+            carillonStartedAt = performance.now();
+            carillonStrength = Math.min(1, 0.6 + (e.count - 7) * 0.2);
+            try { A().bell(); } catch { /* noop */ }
+            const voices = plots.slice(0, 6).map((p) =>
+              isPlayableRole(p.role) ? noteForPlot({ role: p.role, seed: p.seed }) : noteForRole("home"));
+            if (voices.length > 0) ringChord(voices, 480, 36);
+            for (const person of people) {
+              if (person.phase === "leaving") continue;
+              person.targetPlotId = person.homeId;
+              person.need = "rest";
+            }
+            weatherRain = Math.max(0, weatherRain - 0.3 * carillonStrength);
+            try { haptics.storm(); } catch { /* noop */ }
+            return;
+          }
+          // tier 1, and the counts between rungs: the ground (or the
+          // plot under the tap) acknowledges, scaled by how hard the
+          // tap landed and how deep the train has run.
           const p = plotAt(e.x, e.y);
           if (p && isPlayableRole(p.role)) {
-            plantRingWeight = 0.9;
-            ring(noteForPlot({ role: p.role, seed: p.seed }), 220);
-            try { haptics.ripple(0.3 + e.intensity * 0.35); } catch { /* noop */ }
+            plantRingWeight = 0.55 + e.intensity * 0.3 + depth * 0.15;
+            ring(noteForPlot({ role: p.role, seed: p.seed }), 180 + e.intensity * 120 + depth * 80);
+            try { haptics.ripple(0.25 + e.intensity * 0.35 + depth * 0.2); } catch { /* noop */ }
           } else {
             try { haptics.tap(); } catch { /* noop */ }
           }
         } else if (e.fingers === 3) {
+          // tutti — as loud as the hand meant it: the bells carry on
+          // e.intensity and every plot answers in the same frame.
           const events = plots.filter((p) => p.role === "event");
           for (const person of people) {
             if (events.length > 0) {
@@ -1185,8 +1282,10 @@ export default function City() {
               person.need = "gather";
             }
           }
+          carillonStartedAt = performance.now();
+          carillonStrength = 0.35 + e.intensity * 0.5;
           try { A().bell(); } catch { /* noop */ }
-          ringChord(bellChord(events.length), 380, 28);
+          ringChord(bellChord(events.length), 280 + e.intensity * 220, 28);
           try { haptics.roll(); } catch { /* noop */ }
         }
       },
@@ -1194,11 +1293,14 @@ export default function City() {
       hold: (e) => {
         markInteraction();
         if (e.fingers === 3) {
+          if (e.phase === "release") { cityTimeScale = 1; return; }
           if (e.phase === "enter") {
-            cityTimeScale = 0.25;
             try { haptics.tap(); } catch { /* noop */ }
           }
-          if (e.phase === "release") cityTimeScale = 1;
+          // time dilation is a continuous axis, never a switch: the day
+          // keeps slowing the longer the hold — a quarter pace by the
+          // dwell tier, on toward near-stillness at the ceremony tier.
+          cityTimeScale = Math.max(0.06, 1 - 0.94 * Math.min(1, e.elapsed / THRESHOLDS.ceremonyMs));
           return;
         }
         if (e.fingers !== 1) return;
@@ -1283,7 +1385,6 @@ export default function City() {
           idleWrite.schedule();
           return;
         }
-        if (e.fingers === 3) return;
         if (e.phase !== "move") return;
         if (Math.abs(e.angle) < Math.PI / 3) return;
         cycleLens(e.angle > 0 ? 1 : -1);
@@ -1302,9 +1403,44 @@ export default function City() {
         }
       },
 
-      scrub: () => {
+      scrub: (e) => {
         markInteraction();
-        try { haptics.tap(); } catch { /* noop */ }
+        // stir — the circular path is a weather verb in this material:
+        // the hand whips wind up in the direction it circles (harder
+        // circling, harder wind), a deep stir drags rain out of the sky,
+        // and the people caught inside the circle turn toward its
+        // center like a round-dance called on the green.
+        const dir = e.winding > 0 ? 1 : -1;
+        const whip = dir * Math.min(0.6, 0.15 + Math.abs(e.angularVelocity) * 0.25);
+        weatherWind = Math.max(-1, Math.min(1, weatherWind + whip));
+        weatherRain = Math.min(1, weatherRain + Math.min(0.25, Math.abs(e.winding) * 0.08));
+        const nx = e.cx / width;
+        const ny = e.cy / height;
+        const center = plotAt(e.cx, e.cy) ?? nearestPlot(nx, ny);
+        if (center) {
+          for (const person of people) {
+            if (person.phase === "leaving") continue;
+            const d2 = (person.x - nx) ** 2 + (person.y - ny) ** 2;
+            if (d2 < 0.04) {
+              person.targetPlotId = center.id;
+              person.need = "gather";
+            }
+          }
+        }
+        ring(noteForSeason(season) + (dir > 0 ? 7 : -5), 200);
+        try { haptics.ripple(Math.min(1, 0.3 + Math.abs(e.angularVelocity) * 0.4)); } catch { /* noop */ }
+      },
+
+      rhythm: (e) => {
+        markInteraction();
+        if (e.stability < 0.55) return;
+        // entrain — the hand's steady tempo becomes the day's pace for
+        // a few breaths: 72bpm holds the day, faster quickens the sun,
+        // slower stretches the afternoon. Stability buys duration.
+        entrainScale = Math.max(0.35, Math.min(3, e.bpm / 72));
+        entrainUntil = performance.now() + 4000 + e.stability * 4000;
+        ring(noteForRole("event") + 12, 180);
+        try { haptics.detent(); } catch { /* noop */ }
       },
     }, { wheelZoom: false });
 
@@ -1320,16 +1456,22 @@ export default function City() {
         dragRoadStart = null;
         weatherWind = Math.max(-1, Math.min(1, weatherWind + (e.intensity - 0.5) * 0.4));
       },
-      knock: () => {
+      knock: (e) => {
         markInteraction();
+        // the toll carries as far as the rap was hard: a soft knock
+        // turns only the near neighbors, a hard one the whole town.
         const events = plots.filter((p) => p.role === "event");
         try { A().bell(); } catch { /* noop */ }
-        ringChord(bellChord(events.length), 380, 28);
+        ringChord(bellChord(events.length), 300 + e.intensity * 220, 28);
         try { haptics.detent(); } catch { /* noop */ }
         if (events.length === 0) return;
+        const reach = 0.25 + e.intensity * 0.75;
         for (const person of people) {
-          person.targetPlotId = events[0].id;
-          person.need = "gather";
+          const d2 = (person.x - events[0].x) ** 2 + (person.y - events[0].y) ** 2;
+          if (d2 < reach * reach) {
+            person.targetPlotId = events[0].id;
+            person.need = "gather";
+          }
         }
       },
       flip: (e) => {
@@ -1470,7 +1612,10 @@ export default function City() {
       void tier; // detail is read per-frame from detailForTier below
       const dt = Math.min(66, now - lastFrameAt);
       lastFrameAt = now;
-      cityTimeMs += dt * cityTimeScale;
+      // rhythm entrainment rides on top of dilation: the hand's tempo
+      // paces the day for a few breaths, then the pace eases back to 1.
+      const entrain = now < entrainUntil ? entrainScale : 1;
+      cityTimeMs += dt * cityTimeScale * entrain;
       uTime += reduceMotion ? 0 : dt * 0.001;
       advanceKeyboardCursor(dt);
       advanceKeyboardPlant();
@@ -1532,6 +1677,19 @@ export default function City() {
       const r = 22 / Math.min(width, height);
       let best: Plot | null = null;
       let bestD = r * r;
+      for (const plot of plots) {
+        const d = (plot.x - nx) ** 2 + (plot.y - ny) ** 2;
+        if (d < bestD) { bestD = d; best = plot; }
+      }
+      return best;
+    }
+
+    // Unlike plotAt (a fingertip's reach), this answers with the nearest
+    // plot at any distance — the door a knock-train raps on, the center a
+    // stir gathers around. Null only in an empty city.
+    function nearestPlot(nx: number, ny: number): Plot | null {
+      let best: Plot | null = null;
+      let bestD = Infinity;
       for (const plot of plots) {
         const d = (plot.x - nx) ** 2 + (plot.y - ny) ** 2;
         if (d < bestD) { bestD = d; best = plot; }
@@ -1898,6 +2056,42 @@ export default function City() {
         fgctx.beginPath();
         fgctx.arc(px, py, r, 0, Math.PI * 2);
         fgctx.stroke();
+      }
+
+      // tap-train echo — one ring expanding from the tapped ground, its
+      // weight riding the train's depth: the visible half of the ladder
+      // whose audible half is the ring/chord the tap handler played.
+      if (tapEcho) {
+        const age = performance.now() - tapEcho.startedAt;
+        if (age > 700) {
+          tapEcho = null;
+        } else {
+          const t = age / 700;
+          const alpha = (1 - t) * (0.22 + tapEcho.depth * 0.4);
+          fgctx.strokeStyle = `rgba(255, 232, 178, ${alpha.toFixed(3)})`;
+          fgctx.lineWidth = 1.5 + tapEcho.depth * 1.5;
+          fgctx.beginPath();
+          fgctx.arc(tapEcho.x, tapEcho.y, 10 + t * (24 + tapEcho.depth * 34), 0, Math.PI * 2);
+          fgctx.stroke();
+        }
+      }
+
+      // carillon — tutti and the train's crescendo: every plot rings a
+      // brief ring at once, the whole settlement stating itself in one
+      // frame with the bells.
+      {
+        const carAge = performance.now() - carillonStartedAt;
+        if (carAge < 1100 && carillonStrength > 0) {
+          const t = carAge / 1100;
+          const alpha = (1 - t) * 0.4 * carillonStrength;
+          fgctx.strokeStyle = `rgba(246, 230, 180, ${alpha.toFixed(3)})`;
+          fgctx.lineWidth = 1.5;
+          for (const plot of plots) {
+            fgctx.beginPath();
+            fgctx.arc(plot.x * width, plot.y * height, 14 + t * 36, 0, Math.PI * 2);
+            fgctx.stroke();
+          }
+        }
       }
 
       // roads (thin strokes over the ground shader)
