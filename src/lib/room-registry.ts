@@ -247,7 +247,10 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     source: "src/components/City.tsx",
     page: "src/app/city/page.tsx",
     address: { band: "atlas" },
-    frame: "yield",
+    // The room owns its own perspective camera and the pinch that couples
+    // zoom with pitch (bird's-eye Currier & Ives → SF/London eye-level).
+    // ScaleTravel yields the pinch verb to the material here.
+    frame: "own",
     chrome: "axis",
     keeps: "objetdart:city:v1",
     creates: "a plot",
