@@ -60,6 +60,23 @@ const bokehStub = {
   },
 };
 const outputStub = { OutputPass: stubClass };
+// ShaderPass — the painterly module imports this at load-time. The
+// composer imports the painterly module at load-time, so this stub is
+// reachable through the alias chain the loader traverses.
+const shaderPassStub = {
+  ShaderPass: class {
+    constructor(shader) {
+      this.enabled = true;
+      const src = shader && shader.uniforms ? shader.uniforms : {};
+      this.uniforms = {};
+      for (const k of Object.keys(src)) {
+        this.uniforms[k] = { value: src[k] ? src[k].value : null };
+      }
+    }
+    setSize() {}
+    dispose() {}
+  },
+};
 const runtimeStub = {}; // types only, no runtime members used by pure fns
 
 const mod = loadTsModule("src/lib/city-composer.ts", {
@@ -71,6 +88,7 @@ const mod = loadTsModule("src/lib/city-composer.ts", {
     "three/examples/jsm/postprocessing/SSAOPass.js": ssaoStub,
     "three/examples/jsm/postprocessing/BokehPass.js": bokehStub,
     "three/examples/jsm/postprocessing/OutputPass.js": outputStub,
+    "three/examples/jsm/postprocessing/ShaderPass.js": shaderPassStub,
     "@/lib/room-runtime": runtimeStub,
   },
 });

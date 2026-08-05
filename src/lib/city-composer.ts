@@ -51,6 +51,11 @@ import { SSAOPass } from "three/examples/jsm/postprocessing/SSAOPass.js";
 import { BokehPass } from "three/examples/jsm/postprocessing/BokehPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 
+import {
+  createCityPainterlyPass,
+  painterlyStrengthForPitch,
+  type CityPainterlyPass,
+} from "@/lib/city-painterly";
 import type { QualityTier } from "@/lib/room-runtime";
 
 export type CityComposer = {
@@ -368,10 +373,34 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
     composer.addPass(bokehPass);
   }
 
+  // Painterly register-shift — the Currier & Ives LUT-like overlay that
+  // arrives when the visitor pinches to bird's-eye. Runs between bloom
+  // and OutputPass so the ember still catches (bloom writes into the
+  // linear buffer this pass samples) but the sRGB tonemap OutputPass
+  // performs still gets the painterly buffer, not a re-quantised sRGB
+  // one. Cheap enough to keep enabled on every tier — one texture
+  // fetch, ~30 ALU ops per fragment. `enabled` is toggled off only when
+  // the strength curve is exactly zero (pitch01 <= 0.6) to skip the
+  // GPU work when the frame is photoreal.
+  const painterlyPass: CityPainterlyPass = createCityPainterlyPass();
+  painterlyPass.enabled = false;
+  composer.addPass(painterlyPass);
+
   // OutputPass writes the linear working buffer to the canvas as sRGB and
   // applies the renderer's tonemapping (ACESFilmic, set in City.tsx).
   const outputPass = new OutputPass();
   composer.addPass(outputPass);
+
+  // Time origin for the paper-grain drift. Not wall-clock — we want a
+  // monotonic counter that resets with the composer instance so a
+  // remount doesn't cause the grain to jump. dtMs is not threaded
+  // through the composer's render(), so we use performance.now() with
+  // a captured epoch — the delta between successive frames is what
+  // the grain reads, and the epoch subtracts out.
+  const mountEpochMs =
+    typeof performance !== "undefined" && typeof performance.now === "function"
+      ? performance.now()
+      : 0;
 
   // First-time sizing — the room resizes us again immediately from its
   // ResizeObserver, but we start off in a reasonable place either way.
@@ -390,6 +419,10 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
   // pitch has visibly advanced. A smoothstep at 8 samples across
   // [0.55..0.85] is still perceptually smooth to a human eye.
   let lastDofSlot = -1;
+  // Quantised painterly slot — same trick, same eight-slot resolution.
+  // The ramp lives in [0.6..0.9] and eight samples give ~4° of pitch
+  // per slot, imperceptible on a human pinch.
+  let lastPainterlySlot = -1;
 
   const composerLike = composer as unknown as {
     render(delta?: number): void;
@@ -414,10 +447,19 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
         // water module still handles its own high/medium/low visible-mesh
         // swap inside update(); this gate is defence in depth.
         if (waterPass) waterPass.enabled = tier !== "sleep";
+        // Painterly register-shift keeps living at every non-sleep tier
+        // — the brief calls it out as cheap enough to keep at low tier
+        // (one full-screen sample; the aesthetic split into two
+        // registers matters more than a fraction of a millisecond).
+        // Sleep tier skips it entirely because sleep drops all overlays.
+        // High tier gets a marginally deeper vignette so the paper-edge
+        // halo reads on the big screens that carry the extra headroom.
+        painterlyPass.uniforms.uVignette.value = tier === "high" ? 1.15 : 1.0;
         lastTier = tier;
-        // Force the ember + DOF to recompute after a tier flip.
+        // Force the ember + DOF + painterly to recompute after a tier flip.
         lastEmberSlot = -1;
         lastDofSlot = -1;
+        lastPainterlySlot = -1;
         // When we drop below high tier the Bokeh uniforms must return to
         // zero so a later high-tier re-entry starts from a clean ramp —
         // otherwise the leftover maxblur from the last high-tier frame
@@ -448,6 +490,39 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
           bloomPass.radius = p.radius * radiusMul;
           lastEmberSlot = slot;
         }
+      }
+
+      // Painterly register-shift lives outside the tier gate — the pass
+      // is cheap enough to keep at low tier per the brief. Sleep tier
+      // still disables it (defence in depth against wall-of-black frames
+      // the sleep pipeline sometimes chooses to emit). We update the
+      // strength ramp and the paper-grain time uniform every tick.
+      if (tier !== "sleep") {
+        const p = pitch01 == null ? 0 : pitch01;
+        const s = painterlyStrengthForPitch(p);
+        // Toggle enabled only when strength crosses zero — below 0.6
+        // pitch the pass is a no-op; skipping the draw saves the
+        // texture fetch AND the JS-side pass invocation.
+        painterlyPass.enabled = s > 0;
+        if (painterlyPass.enabled) {
+          const slot = Math.floor(p * 8);
+          if (slot !== lastPainterlySlot) {
+            painterlyPass.uniforms.uStrength.value = s;
+            lastPainterlySlot = slot;
+          }
+          // Time uniform advances every frame — the paper grain needs
+          // its own realtime axis so the drift reads as a living
+          // material, not a frozen texture. This is one number-write
+          // per frame; cheap.
+          const nowMs =
+            typeof performance !== "undefined" &&
+            typeof performance.now === "function"
+              ? performance.now()
+              : 0;
+          painterlyPass.uniforms.uTime.value = (nowMs - mountEpochMs) / 1000;
+        }
+      } else {
+        painterlyPass.enabled = false;
       }
 
       if (bokehPass && bokehPass.enabled) {
@@ -489,6 +564,9 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
       // Bokeh holds its own depth target; setSize rebuilds it and
       // updates the aspect uniform.
       if (bokehPass) bokehPass.setSize(w, h);
+      // Painterly needs the pixel size for the grain scale — without
+      // this the grain would strobe as the browser adjusts DPR.
+      painterlyPass.uniforms.uResolution.value.set(w * pixelRatio, h * pixelRatio);
     },
     dispose() {
       // Composer.dispose() (three r160+) drops the target + pass buffers.
@@ -530,6 +608,18 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
         if (typeof bo.dispose === "function") {
           try {
             bo.dispose();
+          } catch {
+            /* noop */
+          }
+        }
+      }
+      // Painterly pass holds a ShaderMaterial + FullScreenQuad — the
+      // three r160+ dispose method drops both.
+      {
+        const pa = painterlyPass as unknown as { dispose?: () => void };
+        if (typeof pa.dispose === "function") {
+          try {
+            pa.dispose();
           } catch {
             /* noop */
           }
