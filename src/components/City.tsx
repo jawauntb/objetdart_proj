@@ -2431,7 +2431,9 @@ export default function City() {
       // Route each plot to its role's InstancedMesh via syncPlots — one
       // pass, per-role bookkeeping is inside the geometry module so this
       // call site doesn't need to know the split. Grow-in factor rides
-      // the same bornMs / growMs clock as the atlas emblems.
+      // the same bornMs / growMs clock as the atlas emblems. streetYaw
+      // is the nearest road angle; the geometry module snaps the plot's
+      // yaw to it so streets and buildings finally agree.
       const view = plots.map((plot) => {
         const age = cityTimeMs - plot.bornMs;
         const bornT = age >= growMs ? 1 : Math.max(0.02, age / growMs);
@@ -2442,9 +2444,45 @@ export default function City() {
           y: plot.y,
           sealed: plot.sealed,
           bornT,
+          streetYaw: nearestRoadYaw(plot.x, plot.y),
         };
       });
       skyline.syncPlots(view);
+    }
+
+    // The nearest road segment's yaw, in radians, if one is close enough
+    // to visibly influence the plot's orientation. Returns NaN if no
+    // road is within ~0.12 (normalized-plot-coord units) of the plot;
+    // callers treat non-finite as "no snap, use seed drift". The angle
+    // is measured off the road's dx/dy in NORMALIZED coords, converted
+    // to world-space yaw by negating (world Z grows the opposite way of
+    // plot Y in normToWorld's frame).
+    function nearestRoadYaw(nx: number, ny: number): number {
+      const SNAP_RADIUS_SQ = 0.12 * 0.12;
+      let bestD2 = SNAP_RADIUS_SQ;
+      let bestAng = NaN;
+      for (const road of roads) {
+        const dx = road.x2 - road.x1;
+        const dy = road.y2 - road.y1;
+        const len2 = dx * dx + dy * dy;
+        if (len2 < 1e-8) continue;
+        // Distance from (nx, ny) to the segment.
+        const t = Math.max(0, Math.min(1,
+          ((nx - road.x1) * dx + (ny - road.y1) * dy) / len2));
+        const px = road.x1 + t * dx;
+        const py = road.y1 + t * dy;
+        const d2 = (nx - px) ** 2 + (ny - py) ** 2;
+        if (d2 < bestD2) {
+          bestD2 = d2;
+          // normToWorld maps (nx, ny) → (worldX, worldZ) directly, so
+          // plot-space (dx, dy) becomes world-space (dx_world, dz_world).
+          // To align the building's default +Z axis with the road
+          // direction, yaw = atan2(dx_world, dz_world). Building faces
+          // then land parallel to the street.
+          bestAng = Math.atan2(dx, dy);
+        }
+      }
+      return bestAng;
     }
 
     // Integer → [0,1) hash, splashed on the same shape as Mulberry32's
