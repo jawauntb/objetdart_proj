@@ -935,6 +935,7 @@ export const LATERAL_ROUTE_BANDS: { prefix: string; band: ScaleBandId }[] = [
   { prefix: "/spring", band: "drop" },
   { prefix: "/geyser", band: "drop" },
   { prefix: "/root", band: "drop" },
+  { prefix: "/marsh", band: "drop" },
 ];
 
 /** Where a route enters the manifold: center of its band. */
