@@ -254,6 +254,9 @@ function exercise(voice, { travelOwnsFrame = true } = {}) {
   );
   run("flick", (b) => b.flick?.({ fingers: 1, angle: 0.4, speed: 1.5, x: 1, y: 2 }));
   run("scrub", (b) => b.scrub?.({ winding: 0.9, angularVelocity: 0.3, cx: 1, cy: 2 }));
+  run("span", (b) =>
+    b.span?.({ phase: "enter", spread: 140, elapsed: 400, cx: 1, cy: 2, ax: 0, ay: 0, bx: 140, by: 0 }),
+  );
   run("twist", (b) =>
     b.twist?.({ phase: "start", fingers: 2, angle: 0.3, velocity: 0.1, cx: 1, cy: 2 }),
   );

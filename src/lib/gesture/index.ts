@@ -24,6 +24,7 @@ import {
   classifyRelease,
   classifyDrum,
   classifyArpeggio,
+  spanHolds,
   tapTrain,
   tapTrainTier,
   tapTrainDepth,
@@ -71,6 +72,28 @@ export type GestureHandlers = {
   twist?: (e: { phase: Phase; fingers: number; angle: number; velocity: number; cx: number; cy: number }) => void;
   pan2?: (e: { phase: Phase; dx: number; dy: number; cx: number; cy: number }) => void;
   scrub?: (e: { winding: number; angularVelocity: number; cx: number; cy: number }) => void;
+  /**
+   * Two fingers held apart, static (grammar §1 "spread", §4): a sustained
+   * interval, like holding a chord. Enters after THRESHOLDS.spanEnterMs of
+   * stillness, ticks with the live spread (px between the fingertips), and
+   * releases when a finger lifts, wanders past spanTolPx, or the grip is
+   * claimed by pinch/twist/pan2 — a span that moves is a frame gesture, and
+   * a frame gesture is never a span. `elapsed` keeps counting past every
+   * tick on purpose: sustain is a continuous axis, never a switch. Not
+   * emitted on instrument surfaces, where a still pair is two held voices.
+   */
+  span?: (e: {
+    phase: "enter" | "tick" | "release";
+    spread: number;
+    elapsed: number;
+    cx: number;
+    cy: number;
+    /** the two fingertips holding the interval open, screen px */
+    ax: number;
+    ay: number;
+    bx: number;
+    by: number;
+  }) => void;
   /**
    * Polyphonic channel for instrument surfaces. Binding this switches the
    * surface's dialect: every finger is an independent voice that starts
@@ -190,6 +213,11 @@ export function attachGestures(
   let settleTimer: ReturnType<typeof setTimeout> | null = null;
   let holdTimer: ReturnType<typeof setInterval> | null = null;
   let holdActive = false;
+  let spanActive = false;
+  let spanSpread = 0;
+  let spanStart = 0;
+  let spanA: Pt = { x: 0, y: 0 };
+  let spanB: Pt = { x: 0, y: 0 };
   let dragging = false;
   let scrubFired = 0; // last winding at which scrub was emitted
   let two: { a: number; b: number; pa: Pt; pb: Pt; started: Set<"pinch" | "twist" | "pan2">; scaleAcc: number; rotAcc: number; panAcc: number; lastT: number } | null = null;
@@ -241,11 +269,63 @@ export function attachGestures(
     holdActive = false;
   };
 
+  // Span — the two-finger analogue of the hold: the grip standing still.
+  // Shares the hold's clock; a claimed channel or a wandering finger ends it.
+  const releaseSpan = () => {
+    if (spanActive && on.span) {
+      on.span({
+        phase: "release",
+        spread: spanSpread,
+        elapsed: performance.now() - spanStart,
+        cx: (spanA.x + spanB.x) / 2,
+        cy: (spanA.y + spanB.y) / 2,
+        ax: spanA.x,
+        ay: spanA.y,
+        bx: spanB.x,
+        by: spanB.y,
+      });
+    }
+    spanActive = false;
+  };
+
+  const pollSpan = () => {
+    if (!two || !on.span) return;
+    const a = contacts.get(two.a);
+    const b = contacts.get(two.b);
+    if (!a || !b) return;
+    const now = performance.now();
+    const elapsed = now - Math.max(a.t0, b.t0);
+    if (!spanHolds(elapsed, a.moved, b.moved, two.started.size)) {
+      releaseSpan();
+      return;
+    }
+    spanSpread = Math.hypot(a.x - b.x, a.y - b.y);
+    spanA = { x: a.x, y: a.y };
+    spanB = { x: b.x, y: b.y };
+    if (!spanActive) spanStart = Math.max(a.t0, b.t0);
+    on.span({
+      phase: spanActive ? "tick" : "enter",
+      spread: spanSpread,
+      elapsed,
+      cx: (a.x + b.x) / 2,
+      cy: (a.y + b.y) / 2,
+      ax: a.x,
+      ay: a.y,
+      bx: b.x,
+      by: b.y,
+    });
+    spanActive = true;
+  };
+
   const armHold = () => {
     if (holdTimer) clearInterval(holdTimer);
     holdTimer = setInterval(() => {
       const c = sessionStart();
-      if (!c || dragging || two) return;
+      if (!c || dragging) return;
+      if (two) {
+        pollSpan();
+        return;
+      }
       const elapsed = performance.now() - c.t0;
       const tier = holdTier(elapsed);
       if (tier >= 1 && on.hold) {
@@ -283,6 +363,7 @@ export function attachGestures(
 
   const endTwo = () => {
     if (!two) return;
+    releaseSpan();
     const c = centroid();
     if (two.started.has("pinch")) on.pinch?.({ phase: "end", scale: 1, velocity: 0, cx: c.x, cy: c.y });
     if (two.started.has("twist")) on.twist?.({ phase: "end", fingers: 2, angle: 0, velocity: 0, cx: c.x, cy: c.y });
@@ -402,9 +483,11 @@ export function attachGestures(
       settleTimer = setTimeout(settle, THRESHOLDS.chordSettleMs);
     } else if (contacts.size === 2 && sessionFingers === 1 && !poly) {
       // A second finger joined late: promote to a two-finger frame gesture.
+      // Re-arm the shared clock — with `two` set it polls the span instead.
       clearHold();
       sessionFingers = 2;
       beginTwo();
+      armHold();
     } else {
       sessionFingers = contacts.size;
     }
@@ -505,7 +588,10 @@ export function attachGestures(
       two.pa = { x: a.x, y: a.y };
       two.pb = { x: b.x, y: b.y };
       two.lastT = now;
-      if (two.started.size > 0) clearHold();
+      if (two.started.size > 0) {
+        clearHold();
+        releaseSpan();
+      }
       return;
     }
 
