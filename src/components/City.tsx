@@ -89,6 +89,10 @@ import { createSkylineScene, type SkylineScene } from "@/lib/city-geometry";
 import { createCityGround, type CityGround } from "@/lib/city-ground";
 import { createCityInfill, type CityInfill } from "@/lib/city-infill";
 import {
+  createCitySkylineRing,
+  type CitySkylineRing,
+} from "@/lib/city-skyline-ring";
+import {
   createCityWater,
   type CityWater,
   type CityWaterProxy,
@@ -1248,6 +1252,37 @@ export default function City() {
     infill.setTier(governor.tier());
     skyline.scene.add(infill.group);
 
+    // ── skyline landmark punctuation ring ───────────────────────────────
+    // The infill's 600 flat-topped boxes solve density — the horizon
+    // is no longer empty sky. But density alone reads as a wall of
+    // rectangles; every reference the brief pins (SF, London, Zootopia)
+    // carries a horizon that is punctuated: a spire here, a water tank
+    // there, a pitched gable, a stepped mansard. The skyline ring is
+    // that punctuation — 80 taller landmarks (28..70 m, above the plot
+    // event tower's ~50 m so a distant steeple pokes past the near
+    // peak) with four distinct roof caps drawn from a weighted per-
+    // seed pick: flat 35 %, pitched 25 %, water tank 20 %, spire 20 %.
+    //
+    // Four InstancedMeshes ride inside one group — one base body pool
+    // for all 80 buildings, plus three per-cap-shape pools sized to the
+    // count of that cap in the landmark list. All share the world
+    // scene's FogExp2, the PMREM sky IBL, the sun's PCF shadows, and
+    // the composer's bloom pass; the body + cap materials both light
+    // on the same dusk emissive curve the plot facades and the infill
+    // already ride, so at dusk landmarks glow window by window on the
+    // same clock as the settlement.
+    //
+    // Seed is nudged with a different salt from the infill so the two
+    // ring layers pick independent cells — no landmark ever sits inside
+    // an infill building.
+    const skylineRing: CitySkylineRing = createCitySkylineRing({
+      seed: cityGroundSeed ^ 0x51de11,
+      shadows: true,
+    });
+    skylineRing.setEnvironment(citySky.environment);
+    skylineRing.setTier(governor.tier());
+    skyline.scene.add(skylineRing.group);
+
     // ── perspective camera (coupled zoom+pitch) ─────────────────────────
     // One camera drives both the world sky pass and the skyline pass.
     // Pinch travels a shared zoom scalar; pitch and distance ride the
@@ -2138,6 +2173,10 @@ export default function City() {
         // plot skyline does; the same tier gate that turns off the sun
         // PCF PCF for the plot scene turns it off for the ring.
         infill.setShadows(shadowsOn);
+        // The landmark ring's base + three cap meshes cast shadows on
+        // the same tier gate — a spire's shadow onto the infill roof
+        // deck is one of the readings that sells the horizon depth.
+        skylineRing.setShadows(shadowsOn);
       }
       // Sun + sky are driven by the world scene's citySun/citySky below;
       // the skyline's own hemi/sun/ambient are held at intensity 0 so the
@@ -2266,6 +2305,13 @@ export default function City() {
       // in one scalar assignment — no rebuild on transitions.
       infill.setDayFrac(df);
       infill.setTier(tier);
+      // The landmark ring rides the same day: base + cap materials
+      // both light on emissiveIntensityForDay so at dusk copper spires
+      // and pitched-tile gables glow with the same warmth the plot
+      // facades carry. The tier flip resizes each of the four inner
+      // meshes' counts in one pass; no rebuild on transitions.
+      skylineRing.setDayFrac(df);
+      skylineRing.setTier(tier);
       if (Math.floor(df * 64) !== lastSkySlot) {
         lastSkySlot = Math.floor(df * 64);
         // The environment texture identity changes on each PMREM re-run;
@@ -2278,6 +2324,10 @@ export default function City() {
         // catch the current sky's reflected light — the ring reads as
         // the SAME city as the plot skyline, not a separate diorama.
         infill.setEnvironment(citySky.environment);
+        // Landmark ring re-samples the same PMREM slot on the same
+        // 64-per-day cadence so a copper spire mirrors the current
+        // dusk sky, not the previous slot's.
+        skylineRing.setEnvironment(citySky.environment);
         worldFog.color.copy(fogColorFromSky(citySky.currentState));
         // Shadow-map allocation follows the current tier. Cheap on
         // matched tiers — only reallocates on transitions.
@@ -3231,6 +3281,12 @@ export default function City() {
       // Drop it before the skyline so the group.remove(mesh) call lands
       // on a scene that still exists.
       infill.dispose();
+      // Skyline ring holds one base InstancedMesh + three cap
+      // InstancedMeshes + BoxGeometry + prism + cylinder + cone +
+      // two MeshStandardMaterials + four aEmit InstancedBufferAttributes.
+      // Drop it alongside the infill before the skyline scene tears
+      // down so its group.remove calls land on a live scene.
+      skylineRing.dispose();
       skyline.dispose();
       // The harbour holds the Reflector's RT + its own material graph and
       // the layer-1 proxy meshes. Dispose it before the composer so the
