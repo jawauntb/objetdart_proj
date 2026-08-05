@@ -5,6 +5,7 @@ import { getFieldAudio } from "@/lib/audio";
 import { useField } from "@/store/field";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import { createFrameGovernor, detailForTier, onVisibility, resolveDpr } from "@/lib/room-runtime";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
@@ -244,6 +245,7 @@ export default function Tide() {
     let wind = 0;
     let windTarget = 0;
     let windPhase = 0;               // accumulated directional swell drift
+    let surge = 0;                   // rapid-tap lunar surge — extra swell, decays
     let lastWindFxAt = 0;
     let entrainBpm = 0;
     let entrainUntil = 0;
@@ -345,7 +347,28 @@ export default function Tide() {
     const detachGestures = attachGestures(cv, {
       tap: (e) => {
         lastGestureAt = performance.now();
-        if (e.fingers !== 1) return; // the night absorbs frame/law taps
+        if (e.fingers === 3) {
+          // tutti — everything alive over the night sea answers at once:
+          // the moon and the sun each ring their own note, the shells and
+          // driftwood shimmer where the tide left them, the candle flares.
+          const g3 = geomRef.current;
+          try { audio.playNote(62, 240); } catch { /* noop */ }
+          try { audio.playNote(57, 340); } catch { /* noop */ }
+          try { audio.chime(); } catch { /* noop */ }
+          addRipple(g3.moon.x, g3.moon.y, 44 + e.intensity * 30, "gold");
+          addRipple(g3.sun.x, g3.sun.y, 44 + e.intensity * 30, "gold");
+          const wT = window.innerWidth;
+          const hT = window.innerHeight;
+          const hiT = hT * 0.64 - hT * 0.085;
+          for (const n of naturals.slice(0, 5)) {
+            addRipple(n.nx * wT, hiT + n.ny * hT * 0.17, 26 + e.intensity * 18, "pale");
+          }
+          candleSparkRef.current = performance.now();
+          try { haptics.roll(); } catch { /* noop */ }
+          recordTapeRef.current("sigil", 0.6 + e.intensity * 0.3, "tide/tutti");
+          return;
+        }
+        if (e.fingers !== 1) return; // the night absorbs frame taps
         const body = grab(e.x, e.y);
         if (body) {
           try { audio.playNote(body === "moon" ? 62 : 57, 140); } catch { /* noop */ }
@@ -359,11 +382,55 @@ export default function Tide() {
           addRipple(e.x, e.y, Math.max(70, g.earth.r * 2.4), "gold");
           return;
         }
-        // a tap on the open sea — chime and a ring sized by how hard it landed
+        // the rapid-tap ladder on the open sea: a ring, a firefly, a
+        // skipped stone, then a lunar surge — the night's cheap rewards.
+        const trainTier = tapTrainTier(e.count);
+        const trainDepth = tapTrainDepth(e.count);
+        if (trainTier === "n") {
+          // seven and more: the swell itself surges, and a meteor crosses
+          surge = Math.min(1.6, surge + 0.7 + trainDepth * 0.5);
+          spawnMeteor();
+          addRipple(e.x, e.y, 120 + trainDepth * 60, "gold");
+          try { audio.bell(); } catch { /* noop */ }
+          try { audio.playNote(40, 620); } catch { /* noop */ }
+          try { haptics.storm(); } catch { /* noop */ }
+          recordTapeRef.current("ripple", 0.9, "tide/surge");
+          return;
+        }
+        if (trainTier === 5) {
+          // five taps skip a stone — the knock's touch-reachable twin
+          const nowSkip = performance.now();
+          if (!stoneSkip || nowSkip - stoneSkip.t0 >= 1600) {
+            stoneSkip = {
+              t0: nowSkip,
+              intensity: 0.4 + e.intensity * 0.5,
+              bounces: [
+                { at: 300, fx: 0.30, done: false },
+                { at: 560, fx: 0.46, done: false },
+                { at: 760, fx: 0.56, done: false },
+              ],
+            };
+            try { audio.playNote(52, 90); } catch { /* noop */ }
+            try { haptics.tap(); } catch { /* noop */ }
+            recordTapeRef.current("ripple", 0.6, "tide/skip");
+          }
+          return;
+        }
+        if (trainTier === 3) {
+          // three taps wake a firefly by the candle
+          spawnFirefly();
+          addRipple(e.x, e.y, 60 + trainDepth * 30, "pale");
+          try { audio.chime(); } catch { /* noop */ }
+          try { haptics.ripple(0.4 + trainDepth * 0.3); } catch { /* noop */ }
+          recordTapeRef.current("ripple", 0.5, "tide/firefly");
+          return;
+        }
+        // a tap on the open sea — chime and a ring sized by how hard it
+        // landed, widening as a train builds toward the next rung
         try { audio.chime(); } catch { /* noop */ }
-        try { haptics.ripple(0.15 + e.intensity * 0.4); } catch { /* noop */ }
+        try { haptics.ripple(0.15 + e.intensity * 0.4 + trainDepth * 0.2); } catch { /* noop */ }
         recordTapeRef.current("ripple", 0.24, "tide/sea");
-        addRipple(e.x, e.y, 46 + e.intensity * 54, "pale");
+        addRipple(e.x, e.y, 46 + e.intensity * 54 + trainDepth * 26, "pale");
       },
       drag: (e) => {
         lastGestureAt = performance.now();
@@ -425,13 +492,14 @@ export default function Tide() {
       hold: (e) => {
         lastGestureAt = performance.now();
         if (e.fingers === 3) {
-          // three fingers hold the law: the night slows while held
+          // three fingers hold the law: the night slows while held, and
+          // keeps slowing — deeper at 2400ms than at 900ms, never a switch
           if (e.phase === "enter") {
-            timeScaleTarget = 0.25;
             try { audio.playNote(36, 260); } catch { /* noop */ }
             try { haptics.tap(); } catch { /* noop */ }
           }
           if (e.phase === "release") timeScaleTarget = 1;
+          else timeScaleTarget = 1 - 0.78 * Math.min(1, e.elapsed / 2400);
           return;
         }
         if (e.fingers !== 1) return;
@@ -806,6 +874,8 @@ export default function Tide() {
       wind += (windTarget - wind) * Math.min(1, dtSec * 2.4);
       windTarget *= Math.exp(-dtSec * 0.5);
       windPhase += wind * dtSec * 2.2;
+      // the tapped surge rolls back out over a few breaths
+      surge *= Math.exp(-dtSec * 0.55);
       // pan2's elastic frame — springs back toward centre once the hand
       // eases off, exactly like wind above.
       panX += (panTargetX - panX) * Math.min(1, dtSec * 4);
@@ -903,7 +973,7 @@ export default function Tide() {
         for (let x = 0; x <= w; x += 4) {
           const ph = x * s.freq + (t * speed + windPhase * 40 * s.freq) * motion;
           const v = Math.sin(ph) + 0.35 * Math.sin(ph * 2.3);
-          const yy = y0 + v * s.amp;
+          const yy = y0 + v * s.amp * (1 + surge * 0.9);
           if (x === 0) ctx.moveTo(x, yy);
           else ctx.lineTo(x, yy);
         }

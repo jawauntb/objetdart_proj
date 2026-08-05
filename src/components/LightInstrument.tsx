@@ -25,7 +25,7 @@ import {
 } from "@/lib/instrument-lesson";
 import { useField } from "@/store/field";
 import { attachGestures } from "@/lib/gesture";
-import { holdTier } from "@/lib/gesture/core";
+import { holdTier, tapTrainTier } from "@/lib/gesture/core";
 import { onVessel, requestVessel, vesselAvailable, vesselGranted } from "@/lib/vessel";
 import { onVisibility } from "@/lib/room-runtime";
 import LetGo from "@/components/LetGo";
@@ -95,6 +95,9 @@ export default function LightInstrument() {
   const windLastAtRef = useRef(0);
   const nightRef = useRef(false);
   const lastTouchAtRef = useRef(0);
+  // rhythm entrainment: a steadily tapped pulse puts a kick on the beat for
+  // a few bars, the plate flashing with it. Cleared when `until` passes.
+  const entrainRef = useRef({ bpm: 0, until: 0, lastBeat: -1 });
 
   const [wavelength, setWavelength] = useState(532);
   const [marks, setMarks] = useState<ToneMark[]>([]);
@@ -440,9 +443,11 @@ export default function LightInstrument() {
             return;
           }
           if (e.fingers === 3) {
-            // tutti — one synchronized pulse of everything alive.
+            // tutti — one synchronized pulse of everything alive, felt as
+            // hard as the strike that asked for it.
             tuttiBurst();
-            recordLight("tutti", 0.6);
+            try { ripple(0.4 + e.intensity * 0.5); } catch { /* noop */ }
+            recordLight("tutti", 0.4 + e.intensity * 0.4);
             return;
           }
           if (e.fingers !== 1) return;
@@ -454,6 +459,55 @@ export default function LightInstrument() {
             subKick(x);
           }
           lastTapPos = { x, y };
+          // the train tiers (1 / 3 / 5 / n from gesture/core): the voice
+          // already sounded on landing; rapid taps climb the plate's own
+          // ladder — one color's chord, the whole spectrum, the sub floor.
+          const trainTier = tapTrainTier(e.count);
+          if (trainTier === 3 && e.count === 3) {
+            // three taps bloom a triad of light — the tapped color with its
+            // just third and fifth, one chord out of one wavelength
+            const { freq } = translationAt(x);
+            getLight808().strum([freq, freq * 1.25, freq * 1.5], 0.09);
+            pulseFlash();
+            try { ripple(0.55); } catch { /* noop */ }
+            recordLight("train/triad", 0.55);
+          } else if (trainTier === 5 && e.count === 5) {
+            // five taps run the whole spectrum — red through violet in one
+            // sweep, the entire mapping performed at once
+            const run: number[] = [];
+            for (let i = 0; i <= 8; i++) run.push(translationAt(i / 8).freq);
+            getLight808().strum(run, 0.055);
+            pulseFlash();
+            try { roll(); } catch { /* noop */ }
+            recordLight("train/spectrum-run", 0.75);
+          } else if (trainTier === "n") {
+            // seven and beyond: the crescendo — the sub floor answers every
+            // further strike where it lands
+            subKick(x);
+            recordLight(`train/crescendo/${e.count}`, Math.min(1, 0.6 + (e.count - 7) * 0.08));
+          }
+        },
+        rhythm: (e) => {
+          // a steady tapped pulse: the 808 takes the hand's tempo — a kick
+          // walks on the beat for a few bars, the plate flashing with it
+          if (e.stability <= 0.7 || e.bpm < 40 || e.bpm > 200) return;
+          lastTouchAtRef.current = performance.now();
+          entrainRef.current = { bpm: e.bpm, until: performance.now() + 7000, lastBeat: -1 };
+          try { hapticTap(); } catch { /* noop */ }
+          recordLight(`entrain/${Math.round(e.bpm)}bpm`, 0.6);
+        },
+        drum: (e) => {
+          // drumming two spots plays the interval between the hands — both
+          // colors sound together, the space between them made audible
+          lastTouchAtRef.current = performance.now();
+          const a = toXY(e.ax, e.ay);
+          const b = toXY(e.bx, e.by);
+          const fa = translationAt(a.x).freq;
+          const fb = translationAt(b.x).freq;
+          getLight808().strum([Math.min(fa, fb), Math.max(fa, fb)], 0.05);
+          pulseFlash();
+          try { hapticTap(); } catch { /* noop */ }
+          recordLight("drum/interval", 0.4 + e.alternation * 0.3);
         },
       },
       { wheelZoom: false },
@@ -476,6 +530,21 @@ export default function LightInstrument() {
       for (const r of pointers.current.values()) if (!r.moved) stationary++;
       const dilating = stationary >= 3;
       timeScaleRef.current += ((dilating ? 3 : 1) - timeScaleRef.current) * 0.06;
+      // the entrained pulse: a kick walks on the hand's beat until it lapses
+      const ent = entrainRef.current;
+      if (ent.bpm > 0) {
+        const nowMs = performance.now();
+        if (nowMs < ent.until) {
+          const beatIdx = Math.floor(nowMs / (60000 / ent.bpm));
+          if (beatIdx !== ent.lastBeat) {
+            ent.lastBeat = beatIdx;
+            getLight808().kick(40);
+            pulseFlash();
+          }
+        } else {
+          ent.bpm = 0;
+        }
+      }
       plate.style.setProperty("--light-zoom", z.cur.toFixed(4));
       plate.style.setProperty("--light-pan", p.cur.toFixed(4));
       plate.style.setProperty("--light-season", `${((seasonRef.current / 8) * 360).toFixed(1)}deg`);

@@ -11,7 +11,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "npm run test:routes && npm run test:atlas && npm run test:analytics && npm run test:light-music && npm run test:timbre && npm run test:instrument-lesson && npm run test:dither-avatar && npm run test:gesture && npm run test:candle && npm run test:scale && npm run test:fork-regions && npm run test:room-runtime && npm run test:rooms && npm run test:paint && npm run test:audio-register && npm run test:botany && npm run test:growth-phenology && npm run test:membrane && npm run test:helix && npm run test:crystal && npm run test:humus && npm run test:cosmicweb && npm run test:spiral && npm run test:organic && npm run test:sheet && npm run test:cytology && npm run test:chemistry && npm run test:stoichiometry && npm run test:atomics && npm run test:quarks && npm run test:nucleons && npm run test:quanta && npm run test:relativity && npm run test:manifold-field && npm run test:overlook && npm run test:structure && npm run test:seed && npm run test:coast && npm run test:heightfield && npm run test:mountain && npm run test:aircolumn && npm run test:flock && npm run test:orbits && npm run test:worldforge && npm run test:city && npm run test:city-audio && npm run test:guide && npm run test:room-contract && npm run test:scene && npm run test:room-quality && npm run test:center-field && npm run test:travel-passage",
+    "test": "npm run test:routes && npm run test:atlas && npm run test:analytics && npm run test:light-music && npm run test:timbre && npm run test:instrument-lesson && npm run test:dither-avatar && npm run test:gesture && npm run test:candle && npm run test:scale && npm run test:fork-regions && npm run test:room-runtime && npm run test:rooms && npm run test:paint && npm run test:audio-register && npm run test:botany && npm run test:growth-phenology && npm run test:membrane && npm run test:helix && npm run test:crystal && npm run test:humus && npm run test:cosmicweb && npm run test:spiral && npm run test:organic && npm run test:sheet && npm run test:cytology && npm run test:chemistry && npm run test:stoichiometry && npm run test:atomics && npm run test:quarks && npm run test:nucleons && npm run test:quanta && npm run test:relativity && npm run test:manifold-field && npm run test:overlook && npm run test:structure && npm run test:seed && npm run test:coast && npm run test:heightfield && npm run test:mountain && npm run test:aircolumn && npm run test:flock && npm run test:orbits && npm run test:worldforge && npm run test:city && npm run test:city-audio && npm run test:city-windows && npm run test:guide && npm run test:room-contract && npm run test:scene && npm run test:room-quality && npm run test:center-field && npm run test:travel-passage",
     "test:seed": "node scripts/test-seed.mjs",
     "test:orbits": "node scripts/test-orbits.mjs",
     "test:flock": "node scripts/test-flock.mjs",
@@ -67,7 +67,8 @@
     "test:center-field": "node scripts/test-center-field.mjs",
     "test:travel-passage": "node scripts/test-travel-passage.mjs",
     "test:city": "node scripts/test-city.mjs",
-    "test:city-audio": "node scripts/test-city-audio.mjs"
+    "test:city-audio": "node scripts/test-city-audio.mjs",
+    "test:city-windows": "node scripts/test-city-windows.mjs"
   },
   "dependencies": {
     "@chenglou/pretext": "^0.0.8",

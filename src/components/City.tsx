@@ -64,6 +64,10 @@ import {
 import { createCityComposer, type CityComposer } from "@/lib/city-composer";
 import { createCitySky, fogColorFromSky, type CitySky } from "@/lib/city-sky";
 import { createCitySun, type CitySun } from "@/lib/city-sun";
+import {
+  baselineLitFractionForDay,
+  emissiveIntensityForDay,
+} from "@/lib/city-windows";
 
 /**
  * /city — a small settlement whose identity IS its causal roles.
@@ -695,6 +699,19 @@ const PLOT_FRAG = /* glsl */`
   uniform vec3  uTintEvent;
   uniform vec3  uTintTree;
   uniform float uNight;
+  // The city-wide baseline lit fraction for the current hour, in [0,1].
+  // Fed from baselineLitFractionForDay(dayFraction) on the CPU each frame so
+  // the shader reads the same law scripts/test-city-windows.mjs pins.
+  // Every window's per-cell hash is compared against this (times a small
+  // per-plot amplitude drift) to decide on/off.
+  uniform float uWindowLit;
+  // The emissive intensity scalar for the current hour. Fed from
+  // emissiveIntensityForDay(dayFraction). Muted at noon, ~1.6 at dusk,
+  // dropped back to ~0.4 at midnight. Multiplied against the warm-window
+  // color so the emissive contribution crosses UnrealBloom's dusk
+  // threshold (0.55) and blooms — the halo the brief calls the emotional
+  // peak of the room.
+  uniform float uWindowIntensity;
 
   vec2 atlasUv(vec2 local, float role){
     float col = clamp(role, 0.0, 3.0);
@@ -795,6 +812,68 @@ const PLOT_FRAG = /* glsl */`
 
     // night cast — a plot at night is dimmer and cooler
     col = mix(col, col * vec3(0.28, 0.40, 0.68), uNight * 0.55);
+
+    // ── emissive windows ─────────────────────────────────────────────────
+    // The emotional peak of the room: warm tungsten windows glowing one
+    // by one through dusk against the cool blue evening. The per-plot lit
+    // fraction is the CPU curve (uWindowLit, baselineLitFractionForDay)
+    // amplitude-drifted by the per-plot seed exactly like
+    // city-windows.litFractionForDay does, so the pinned law is what draws
+    // here. Then a grid of cells is walked, each with its own hash into
+    // [0,1]; a cell whose hash sits below the plot's lit fraction is on.
+    // Trees and empty plots do not draw windows.
+    //
+    // The emissive is added AFTER the day/night tint so it stays warm
+    // through the cool cast. UnrealBloom in the composer picks pixels above
+    // its threshold — at dusk the threshold drops to ~0.55, and warm-color
+    // × uWindowIntensity comfortably crosses it, producing the halo.
+    if (vRole < 2.5) {
+      // per-plot amplitude — mirrors litFractionForDay's amp dial
+      float ampSeed = fract(sin(abs(vSeed) * 0.1010101 * 2.5 + 0.4123) * 43758.5453);
+      float amp = 0.75 + ampSeed * 0.5;
+      float plotLit = clamp(uWindowLit * amp, 0.0, 1.0);
+
+      // Grid size per role — home a modest 3×3, store a 4×5, event a
+      // curtain-wall 6×14. Matches WINDOW_GRIDS in city-facades.ts so a
+      // future 3D-geometry PR reads the same layout the icons here do.
+      vec2 grid;
+      if (vRole < 0.5)      grid = vec2(3.0, 3.0);      // home
+      else if (vRole < 1.5) grid = vec2(4.0, 5.0);      // store: 4 cols × 5 rows
+      else                  grid = vec2(6.0, 14.0);     // event: 6 cols × 14 rows
+
+      // The window band sits in the tile's central area so the plate rim
+      // stays free — a house's roof, a store's awning, a tower's base
+      // remain readable. Central box: (0.20..0.80) × (0.28..0.86).
+      vec2 tile = (vUv - vec2(0.20, 0.28)) / vec2(0.60, 0.58);
+      if (tile.x > 0.0 && tile.x < 1.0 && tile.y > 0.0 && tile.y < 1.0) {
+        vec2 cell = floor(tile * grid);
+        vec2 f2   = fract(tile * grid);
+        // Per-cell hash: same shape as city-windows.windowIsLit — cell
+        // (row, col) + plot seed → a stable value in [0,1] that doesn't
+        // change across frames. Windows do NOT flicker.
+        float h = fract(sin(cell.x * 12.9898 + cell.y * 78.233 + vSeed * 37.719) * 43758.5453);
+        // The gate: cell on when its hash is below the plot's lit fraction.
+        // As the hour crosses dusk, more cells satisfy this — the block
+        // lights up one by one, deterministic by seed.
+        float gate = step(h, plotLit);
+        // A soft interior — the pane isn't a filled rectangle, it has a
+        // frame of slightly cooler tungsten. Keeps the read as "window"
+        // instead of "flat swatch". Central inset ~0.14 of the cell.
+        vec2 pad = abs(f2 - 0.5);
+        float inner = step(pad.x, 0.36) * step(pad.y, 0.36);
+        vec3 warm  = vec3(1.00, 0.77, 0.54);
+        vec3 frame = vec3(0.86, 0.55, 0.28);
+        // Base window color is the frame; the inner box overrides to the
+        // full warm. Multiplied by uWindowIntensity + gate so noon is
+        // completely off.
+        vec3 windowColor = mix(frame, warm, inner);
+        col += windowColor * gate * uWindowIntensity;
+        // The dusk moment also colors the plate a touch warmer to sell
+        // the interior-light-spilling-onto-brickwork read. Subtle — 12%
+        // of the emissive scalar.
+        col *= 1.0 + 0.12 * uWindowIntensity * gate * inner;
+      }
+    }
 
     // sealed: a raised warm ring at the tile's rim
     if (vSealed > 0.5) {
@@ -926,6 +1005,14 @@ export default function City() {
       uTintEvent: { value: new THREE.Vector3(...ROLE_TINT.event) },
       uTintTree:  { value: new THREE.Vector3(...ROLE_TINT.tree) },
       uNight:    { value: 0 },
+      // The two dials the emissive-window emissive rides. Both are pure
+      // functions of dayFraction (city-windows.ts, pinned by
+      // test-city-windows.mjs), computed on the CPU each frame in the tick
+      // loop below and pushed here. The reason we don't reimplement the
+      // curve in GLSL is single-sourcing: one pure JS function is what the
+      // test pins, and the shader reads the number the test would have.
+      uWindowLit:       { value: 0 },
+      uWindowIntensity: { value: 0 },
     };
     const plotMat = new THREE.ShaderMaterial({
       uniforms: plotUniforms,
@@ -1793,11 +1880,11 @@ export default function City() {
       plotUniforms.uNight.value = nightAmt;
       // Preetham sky + directional sun. Both are quantised on the same
       // 64-slot-per-day rhythm — on frames where the sun has not visibly
-      // moved, `update()` is a cheap early-out. When the slot advances,
+      // moved, update() is a cheap early-out. When the slot advances,
       // the sky re-bakes into a cube RT, PMREM re-prefilters into the
       // scene environment IBL, the sun light repositions + recolours,
       // and the fog picks up the new horizon colour. Everything the
-      // future PBR glass and lit windows will hang off.
+      // future PBR glass hangs off.
       const df = dayFraction(cityTimeMs);
       citySky.update(df);
       citySun.update(df);
@@ -1811,6 +1898,13 @@ export default function City() {
         // matched tiers — only reallocates on transitions.
         citySun.applyTier(tier);
       }
+      // The dusk-and-lit-windows dials. Both are pure functions of
+      // dayFraction (from src/lib/city-windows.ts, pinned by the
+      // test-city-windows.mjs ladder — dawn=0, noon=0, dusk~0.7,
+      // midnight~0.4). Bloom in the composer picks up warm emissive
+      // pixels above threshold at dusk, and the whole block glows.
+      plotUniforms.uWindowLit.value = baselineLitFractionForDay(df);
+      plotUniforms.uWindowIntensity.value = emissiveIntensityForDay(df);
       // The three RenderPasses live inside the composer now. Bloom threshold /
       // strength / radius ride the same dayFraction the shaders do — the
       // ember rises as the sun sets. Tier gates the bloom entirely on

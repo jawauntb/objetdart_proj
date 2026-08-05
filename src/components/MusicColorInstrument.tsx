@@ -15,6 +15,8 @@ import {
   type MusicColorExportKind,
 } from "@/lib/music-color-export";
 import { attachGestures } from "@/lib/gesture";
+import { tapTrainTier } from "@/lib/gesture/core";
+import { tap as hapticTap, ripple as hapticRipple, roll as hapticRoll } from "@/lib/haptics";
 import { useField } from "@/store/field";
 
 type MusicCell = Exclude<ParsedMusicToken, { kind: "invalid" }>;
@@ -129,6 +131,12 @@ export default function MusicColorInstrument() {
   const [interpretError, setInterpretError] = useState("");
   const timersRef = useRef<number[]>([]);
   const surfaceRef = useRef<HTMLDivElement | null>(null);
+  // the gesture surface mounts once; these refs keep it reading the live
+  // score without re-binding on every edit.
+  const cellsRef = useRef<MusicCell[]>([]);
+  const beatMsRef = useRef(500);
+  const matrixSizeRef = useRef(1);
+  const playScoreRef = useRef<() => void>(() => {});
 
   const parsed = useMemo(() => parseMusicInput(score), [score]);
   const cells = useMemo(() => parsed.tokens.filter(isMusicCell), [parsed.tokens]);
@@ -162,8 +170,97 @@ export default function MusicColorInstrument() {
     };
   }, []);
   useEffect(() => {
+    cellsRef.current = cells;
+    beatMsRef.current = beatMs;
+    matrixSizeRef.current = matrixSize;
+  }, [cells, beatMs, matrixSize]);
+
+  // ── the gesture surface ────────────────────────────────────────────
+  // The inverse lens is a fixed map, not a world — its registry entry
+  // exempts the frame/law/vessel verbs and this table honors that by
+  // absorbing them. What the material honestly supports is the one-finger
+  // material layer: the translated cells themselves are playable. A tap
+  // sounds the cell it lands on; the train tiers (1 / 3 / 5 / n from
+  // gesture/core) climb the translation — one cell, its row, the whole
+  // score, then an octave crescendo.
+  useEffect(() => {
     const surface = surfaceRef.current;
-    return surface ? attachGestures(surface, {}) : undefined;
+    if (!surface) return;
+
+    const cellAt = (clientX: number, clientY: number): number | null => {
+      const el = document.elementFromPoint(clientX, clientY);
+      const hit = el instanceof Element ? el.closest("[data-mc-cell]") : null;
+      if (!hit) return null;
+      const index = Number(hit.getAttribute("data-mc-cell"));
+      return Number.isFinite(index) && cellsRef.current[index] ? index : null;
+    };
+
+    // sound one cell and light it for as long as it rings; `lift` raises
+    // the pitch in octaves for the crescendo rung.
+    const soundCell = (index: number, durMs: number, lift = 0) => {
+      const cell = cellsRef.current[index];
+      if (!cell) return;
+      setActiveIndex(index);
+      const audio = getFieldAudio();
+      tonesForCell(cell).forEach((tone) => {
+        try { audio.playTone(tone.frequency * Math.pow(2, lift), Math.min(1.2, durMs / 1000)); } catch { /* noop */ }
+      });
+      const timer = window.setTimeout(() => {
+        setActiveIndex((current) => (current === index ? null : current));
+      }, durMs);
+      timersRef.current.push(timer);
+    };
+
+    return attachGestures(surface, {
+      tap: (e) => {
+        if (e.fingers !== 1) return; // the exempted layers stay absorbed
+        const index = cellAt(e.x, e.y);
+        if (index == null) return; // buttons, the score field: not material
+        void getFieldAudio().start();
+        const trainTier = tapTrainTier(e.count);
+        if (trainTier === 3 && e.count === 3) {
+          // three taps play the phrase — the tapped cell's whole matrix
+          // row lights and sounds in score time
+          const size = matrixSizeRef.current;
+          const row = Math.floor(index / size);
+          let delay = 0;
+          for (let col = 0; col < size; col++) {
+            const at = row * size + col;
+            const cell = cellsRef.current[at];
+            if (!cell) continue;
+            const durMs = Math.max(120, cell.duration * beatMsRef.current);
+            const timer = window.setTimeout(() => soundCell(at, durMs), delay);
+            timersRef.current.push(timer);
+            delay += durMs;
+          }
+          try { hapticRipple(0.5); } catch { /* noop */ }
+          recordMusicColor(`train/row/${row}`, 0.55);
+          return;
+        }
+        if (trainTier === 5 && e.count === 5) {
+          // five taps perform the whole translation — the full score plays
+          playScoreRef.current();
+          try { hapticRoll(); } catch { /* noop */ }
+          return;
+        }
+        if (trainTier === "n") {
+          // seven and beyond: the crescendo — the cell climbs an octave
+          // rung with every further strike
+          soundCell(index, 300, Math.min(2, (e.count - 6) * 0.5));
+          try { hapticRipple(0.7); } catch { /* noop */ }
+          recordMusicColor(`train/crescendo/${e.count}`, Math.min(1, 0.6 + (e.count - 7) * 0.08));
+          return;
+        }
+        // one tap sounds one cell — longer notes ring longer, and a firmer
+        // strike sustains further into the note
+        const cell = cellsRef.current[index];
+        soundCell(index, Math.max(160, cell.duration * beatMsRef.current * (0.6 + e.intensity * 0.6)));
+        try { hapticTap(); } catch { /* noop */ }
+        recordMusicColor(`tap/${index}`, 0.3 + e.intensity * 0.3);
+      },
+    });
+    // recordMusicColor only reaches through the store; the rest is refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const clearTimers = () => {
@@ -272,6 +369,7 @@ export default function MusicColorInstrument() {
     }, elapsed + 180);
     timersRef.current.push(doneTimer);
   };
+  playScoreRef.current = playScore;
 
   const copyMatrix = async () => {
     try {
@@ -418,6 +516,7 @@ export default function MusicColorInstrument() {
               {cells.map((cell, index) => (
                 <span
                   key={`${cell.raw}-${index}`}
+                  data-mc-cell={index}
                   className={activeIndex === index ? "is-active" : undefined}
                   style={{
                     ...colorBandStyle(cell),
@@ -448,6 +547,7 @@ export default function MusicColorInstrument() {
               {matrixCells.map((cell, index) => (
                 <div
                   key={index}
+                  data-mc-cell={cell ? index : undefined}
                   className={`music-color-cell ${cell?.kind === "rest" ? "is-rest" : ""} ${cell?.kind === "chord" ? "is-chord" : ""} ${!cell ? "is-empty" : ""} ${activeIndex === index ? "is-active" : ""}`}
                   style={cell && cell.kind !== "rest" ? {
                     "--cell-color": cell.color,

@@ -929,7 +929,17 @@ export default function DropSphere() {
         const rg = cx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
         for (const [off, color] of stops) rg.addColorStop(off, color);
         cx.fillStyle = rg;
-        cx.fillRect(0, 0, size, size);
+        // Fill the disc the gradient actually describes, never the sprite's
+        // bounding box. A radial gradient continues past its outer radius
+        // with the LAST stop's colour, so a fillRect here hands every corner
+        // outside that circle a flat wash of it — and a sprite whose rim is
+        // its brightest stop then paints its own square. That is exactly
+        // what put two hard-edged boxes around every bead: the fresnel rim
+        // (0.28 alpha at offset 1, drawn at 2r) and the wet halo (0.12 at
+        // offset 1, drawn at 2.5r), nested and clipping the drop.
+        cx.beginPath();
+        cx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
+        cx.fill();
       }
       return c;
     };
@@ -937,10 +947,15 @@ export default function DropSphere() {
       [0, "rgba(120,220,235,0.18)"],
       [1, "rgba(120,220,235,0)"],
     ]);
+    // Wetness dissipates into the water — it peaks just outside the bead and
+    // is gone by the sprite's rim. Ending on its brightest stop instead left
+    // a faint hard ring at the disc's edge (and, before the clip above, a
+    // flat wash over the whole sprite box).
     const wetHaloSprite = makeRadialSprite(64, [
       [0, "rgba(70,150,180,0)"],
       [0.68, "rgba(70,150,180,0)"],
-      [1, "rgba(70,150,180,0.12)"],
+      [0.86, "rgba(70,150,180,0.12)"],
+      [1, "rgba(70,150,180,0)"],
     ]);
     const fresnelSprite = makeRadialSprite(64, [
       [0, "rgba(90,190,220,0)"],

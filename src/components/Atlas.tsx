@@ -41,6 +41,7 @@ import {
   type PlaneRect,
   type PlaneTile,
 } from "@/lib/atlas-plane";
+import { atlasBaseConcept, atlasNamePart } from "@/lib/atlas-naming";
 import { prepareAtlasSourceImage } from "@/lib/atlas-source";
 import {
   ATLAS_WORLD_ORIGIN,
@@ -257,24 +258,22 @@ function normaliseSeeds(value: unknown, fallback: MapSeeds): MapSeeds {
   };
 }
 
+// The optimistic twin of the server's edge naming: shown the instant a
+// concept is submitted, before any sheet has landed. It used to carry its
+// own private word families (ember/smoke/cinder, tower/market/alley…),
+// which meant the edges visibly changed their names when the server's
+// answer arrived — and, since an edge name is the subject Atlas generates
+// for the ground beyond it, the two vocabularies disagreed about what the
+// neighboring world even was. Both sides now name the same way: the
+// subject, and which way you left it.
 function localSeeds(prompt: string): MapSeeds {
-  const lower = prompt.toLowerCase();
-  const families: Array<[string, [string, string, string, string]]> = [
-    ["fire", ["ember", "smoke", "cinder", "flame"]],
-    ["forest", ["canopy", "moss", "root", "fern"]],
-    ["water", ["rain", "current", "depth", "mist"]],
-    ["city", ["tower", "market", "alley", "gate"]],
-    ["dream", ["memory", "sleep", "omen", "echo"]],
-  ];
-  const found = families.find(([key]) => lower.includes(key));
-  const words = prompt.trim().split(/ +/).filter(Boolean);
-  const seeds = found?.[1] ?? [
-    words[0] || "memory",
-    words[1] || "matter",
-    (words[0] || "desire") + " below",
-    (words[1] || words[0] || "tide") + " beyond",
-  ];
-  return { north: seeds[0], east: seeds[1], south: seeds[2], west: seeds[3] };
+  const base = atlasBaseConcept(prompt);
+  return {
+    north: base + " · northern reaches",
+    east: base + " · eastern reaches",
+    south: base + " · southern reaches",
+    west: base + " · western reaches",
+  };
 }
 
 function generationId(sequence: number) {
@@ -2900,7 +2899,7 @@ export default function Atlas() {
                   data-hotspot={hotspot.id}
                 >
                   <span className="living-atlas__mark"><MapMark kind={hotspot.kind} /></span>
-                  <span className="living-atlas__label">{hotspot.label.toLowerCase()}</span>
+                  <span className="living-atlas__label">{atlasNamePart(hotspot.label).toLowerCase()}</span>
                 </button>
               );
             })}
@@ -2951,7 +2950,7 @@ export default function Atlas() {
               }
               data-edge={direction}
             >
-              <span>{edgeName}</span>
+              <span>{atlasNamePart(edgeName)}</span>
             </button>
           );
         })}
