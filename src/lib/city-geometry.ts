@@ -91,7 +91,13 @@ import {
   overlayGherkinDiamondMask,
   type BuiltEventTower,
 } from "@/lib/city-towers";
-import { buildFacadeAtlas, type FacadeAtlas } from "@/lib/city-textures";
+import {
+  buildFacadeAtlas,
+  buildLeafTexture,
+  leafTintForSeason,
+  type FacadeAtlas,
+  type LeafTexture,
+} from "@/lib/city-textures";
 import {
   applyCurtainWallShader,
   curtainWallTierFor,
@@ -156,6 +162,17 @@ export type SkylineScene = {
   setDayFrac(day: number): void;
   setEnvironment(env: THREE.Texture | null): void;
   setShadows(on: boolean): void;
+  /** Update the LOD reference position — the camera, in world coords.
+   *  Call this each frame BEFORE `syncPlots` so the next matrix write
+   *  picks the correct near/far leaf variant per tree. Passing null
+   *  falls back to always-near (matches the pre-LOD behaviour). */
+  setLodCamera(pos: THREE.Vector3 | null): void;
+  /** Update the seasonal leaf tint that multiplies through the shared
+   *  leaf-cluster texture. Called from City.tsx when the season changes
+   *  via the 3-finger twist. Spring is yellow-green, summer deep green,
+   *  fall ochre, winter near-neutral (paired with treeFoliage(season)
+   *  shrinking the canopy scale to bare-branch). */
+  setSeason(season: "spring" | "summer" | "fall" | "winter"): void;
   dispose(): void;
 };
 
@@ -540,6 +557,180 @@ function makeHomeWaterTowerGeometry(): THREE.BufferGeometry {
   return mergeHomeGeometries([leg1, leg2, leg3, leg4, tank, cap]);
 }
 
+// ── tree geometry builders (branch skeleton + leaf-cluster quads) ───────
+//
+// Trees used to be a single flattened icosphere. Every reference photo the
+// city is built against — SF's Marina park benches, London City's Postman's
+// Park, any dusk-and-window plate the brief is chasing — shows a canopy as
+// a cluster of leaf outlines standing on visible branch structure, not a
+// smooth green solid. The icosphere read diorama at any zoom past mid
+// (verifier R10-3 called it out) and no post-process pass could rescue
+// that first read.
+//
+// The replacement is a real tree: 5 branch cylinders radiating from the
+// top of the trunk into a canopy of transparent-alpha leaf-cluster quads,
+// cross-oriented so no viewpoint sees the tree edge-on. Everything sits
+// in unit space (y in [0, ~1.15]) and rides the plot's (sx, yScale, sz)
+// scale matrix through — same convention as home/store extras — so a
+// larger tree seed grows both taller AND broader in proportion.
+//
+// Two LOD steps: `treeLeavesNear` fires below the near threshold with all
+// 12 leaf-cluster quads visible; `treeLeavesFar` fires beyond with a
+// single Y-aligned billboard quad. The branch skeleton is cheap and stays
+// on for every LOD; the leaves are the expensive part.
+
+/** Vertex layout for a merged tree geometry: position, normal, uv. */
+function mergeTreeGeometries(geos: THREE.BufferGeometry[]): THREE.BufferGeometry {
+  const nonIndexed: THREE.BufferGeometry[] = geos.map((g) => {
+    const gi = g.index ? g.toNonIndexed() : g;
+    if (!gi.attributes.normal) gi.computeVertexNormals();
+    if (!gi.attributes.uv) {
+      // Pad a zero uv so the merged buffer is a rectangle — some sub-
+      // geos (cylinders) already have uvs, some (cross-quads authored
+      // by hand) already have them too, but any missing uv would break
+      // the merge. Compute a default (0,0) uv so the attribute always
+      // exists.
+      const zeros = new Float32Array(gi.attributes.position.count * 2);
+      gi.setAttribute("uv", new THREE.BufferAttribute(zeros, 2));
+    }
+    return gi;
+  });
+  let total = 0;
+  for (const g of nonIndexed) total += g.attributes.position.count;
+  const positions = new Float32Array(total * 3);
+  const normals   = new Float32Array(total * 3);
+  const uvs       = new Float32Array(total * 2);
+  let off = 0;
+  for (const g of nonIndexed) {
+    const p = g.attributes.position;
+    const n = g.attributes.normal;
+    const u = g.attributes.uv;
+    for (let i = 0; i < p.count; i += 1) {
+      positions[(off + i) * 3 + 0] = p.getX(i);
+      positions[(off + i) * 3 + 1] = p.getY(i);
+      positions[(off + i) * 3 + 2] = p.getZ(i);
+      normals[(off + i) * 3 + 0] = n.getX(i);
+      normals[(off + i) * 3 + 1] = n.getY(i);
+      normals[(off + i) * 3 + 2] = n.getZ(i);
+      uvs[(off + i) * 2 + 0] = u.getX(i);
+      uvs[(off + i) * 2 + 1] = u.getY(i);
+    }
+    off += p.count;
+  }
+  for (const g of geos) { try { g.dispose(); } catch { /* noop */ } }
+  for (const g of nonIndexed) {
+    if (!geos.includes(g)) { try { g.dispose(); } catch { /* noop */ } }
+  }
+  const out = new THREE.BufferGeometry();
+  out.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  out.setAttribute("normal",   new THREE.BufferAttribute(normals, 3));
+  out.setAttribute("uv",       new THREE.BufferAttribute(uvs, 2));
+  return out;
+}
+
+/**
+ * Positions of the leaf-cluster stamps in unit tree space. Six stamps —
+ * one crown, five around it — deterministic so a Y-billboard fallback
+ * can hit the same footprint the near LOD stakes out.
+ */
+export const TREE_LEAF_CLUSTER_POSITIONS: readonly {
+  x: number; y: number; z: number;
+}[] = (() => {
+  const out: { x: number; y: number; z: number }[] = [];
+  // Crown — one leaf stamp sitting on top of the canopy centre. Reads as
+  // the tree's high point when the light rakes across it at dusk.
+  out.push({ x: 0.00, y: 0.90, z: 0.00 });
+  // Five stamps around the crown at radius ~0.30 in unit space (→ ~1.5m
+  // world once (sx = sz ≈ 4-6) multiply through). Angles 72° apart so
+  // the canopy reads round from directly above.
+  const r = 0.30;
+  for (let k = 0; k < 5; k += 1) {
+    const th = (k / 5) * Math.PI * 2 + 0.4;
+    // Y jitter so the outer clusters don't sit on a perfect ring — the
+    // eye reads a slight varying height as "leaves reaching for light".
+    const yOffset = 0.55 + (Math.sin(k * 1.7) * 0.5 + 0.5) * 0.28;
+    out.push({ x: Math.cos(th) * r, y: yOffset, z: Math.sin(th) * r });
+  }
+  return out;
+})();
+
+/**
+ * Build the branch skeleton — trunk stub already exists as `treeTrunk`,
+ * but this geometry adds five short branches radiating outward and up
+ * from the top of the trunk. The trunk itself is not repeated here so
+ * shadow-caster count stays low. Returns a merged BufferGeometry with
+ * (position, normal, uv) — bark UVs on each cylinder.
+ */
+export function buildTreeBranchGeometry(): THREE.BufferGeometry {
+  const trunkTopY = 0.42; // where the existing treeTrunk ends
+  const pieces: THREE.BufferGeometry[] = [];
+  // Five branches. Each branch is a short cylinder from the trunk top
+  // out toward the corresponding leaf-cluster position (skip the crown
+  // stamp — the trunk itself carries the crown).
+  const branchRadius = 0.028;
+  for (let k = 0; k < 5; k += 1) {
+    const tip = TREE_LEAF_CLUSTER_POSITIONS[k + 1]; // skip crown
+    const base = { x: 0, y: trunkTopY, z: 0 };
+    const dx = tip.x - base.x;
+    const dy = tip.y - base.y;
+    const dz = tip.z - base.z;
+    const len = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
+    // Cylinder created along +Y from y=0..len. Rotate to align with
+    // (dx,dy,dz) then translate to base.
+    const g = new THREE.CylinderGeometry(branchRadius * 0.6, branchRadius, len, 6, 1, false);
+    // Cylinder is centred at y=len/2 with axis along +Y. Translate so
+    // its base sits at y=0, then rotate to align +Y with the tip vector,
+    // then move to the trunk top.
+    g.translate(0, len / 2, 0);
+    // Rotation: find the rotation quaternion from +Y to the tip vector.
+    const up = new THREE.Vector3(0, 1, 0);
+    const dir = new THREE.Vector3(dx, dy, dz).normalize();
+    const q = new THREE.Quaternion().setFromUnitVectors(up, dir);
+    g.applyQuaternion(q);
+    g.translate(base.x, base.y, base.z);
+    pieces.push(g);
+  }
+  return mergeTreeGeometries(pieces);
+}
+
+/**
+ * Build the "near" leaf-cluster geometry — 12 crossed quads (2 per
+ * cluster stamp position) so a viewer at ground level always sees some
+ * leaves face-on regardless of yaw around the tree. Each quad carries
+ * a full [0,1]² uv so the leaf-cluster texture maps once per quad.
+ */
+export function buildTreeLeavesNearGeometry(): THREE.BufferGeometry {
+  const quadSize = 0.55; // unit space; scaled through by (sx, yScale, sz)
+  const pieces: THREE.BufferGeometry[] = [];
+  for (const p of TREE_LEAF_CLUSTER_POSITIONS) {
+    // Two crossed quads at 90° yaw offset.
+    for (let axis = 0; axis < 2; axis += 1) {
+      const g = new THREE.PlaneGeometry(quadSize, quadSize, 1, 1);
+      // Rotate by axis * 90° around Y so the two quads intersect
+      // through the cluster centre — a classic cross-tree cheat.
+      g.rotateY(axis === 0 ? 0 : Math.PI / 2);
+      g.translate(p.x, p.y, p.z);
+      pieces.push(g);
+    }
+  }
+  return mergeTreeGeometries(pieces);
+}
+
+/**
+ * Build the "far" leaf billboard — one large Y-axis-aligned quad the
+ * width of the canopy footprint, painted with the leaf-cluster texture
+ * so a tree beyond the LOD threshold still reads as leaves. Centered on
+ * the canopy midpoint (unit y ~0.75). Y-billboard, not full-billboard,
+ * so it holds its footprint when the camera dolly-zooms.
+ */
+export function buildTreeLeavesFarGeometry(): THREE.BufferGeometry {
+  const w = 0.85;
+  const h = 0.95;
+  const g = new THREE.PlaneGeometry(w, h, 1, 1);
+  g.translate(0, 0.75, 0);
+  return g;
+}
+
 // ── emissive atlas dims (per role) ──────────────────────────────────────
 
 const EMISSIVE_CANVAS_SIZE: Record<Exclude<PlotRole, "empty">, { w: number; h: number }> = {
@@ -598,7 +789,25 @@ type ExtraInstanced = {
   /** Per-instance Y-scale multiplier. Used for the roof: a home's roof
    *  height depends on the seeded pitch bucket. */
   yScaleFn?: (seed: number) => number;
+  /** LOD gate. When present, the extra draws only when the plot's
+   *  camera-distance LOD tier matches. "near" — draws when the camera
+   *  is closer than `TREE_LOD_THRESHOLD_M`; "far" — draws beyond it.
+   *  Used to switch the tree canopy between the crossed-quad cluster
+   *  (near) and a single Y-billboard (far). Skipping is done by
+   *  writing a zero-scale matrix, same convention as `presence`. */
+  lodTag?: "near" | "far";
 };
+
+/**
+ * Camera-distance threshold (world units) at which trees switch from
+ * the near LOD (12 crossed leaf-cluster quads) to the far LOD (1
+ * Y-billboard). The number sits inside the city's own footprint —
+ * CITY_HALF = 40, so a corner-to-corner distance is ~113m; the LOD
+ * changes as the camera dollies out from a leaf-close-up to a
+ * whole-skyline framing. Trees the camera sits inside always render
+ * the full crossed-quad canopy; distant trees drop to a billboard so
+ * bloom + DOF still land on a leaf silhouette, not a coin of paint. */
+export const TREE_LOD_THRESHOLD_M = 55;
 
 // ── event tower per-plot bookkeeping ─────────────────────────────────────
 //
@@ -861,15 +1070,31 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
   storeFrameMesh.name = "cityFrame.store";
   scene.add(storeFrameMesh);
 
-  // ── tree role: plaza disc + trunk + canopy ──────────────────────
+  // ── tree role: plaza disc + trunk + branch skeleton + leaf clusters ──
   //
-  // "Tree" is a small park: a paved circular plaza with a single
-  // canopy tree in the center. The plot's plot-space is used for the
-  // plaza extent; the tree sits on top.
+  // "Tree" is a small park: a paved circular plaza with a real tree in
+  // the middle. The tree is:
   //
-  // The plaza is a very shallow cylinder (or CircleGeometry — we use
-  // a flat CircleGeometry so it doesn't cast a suspect z-buffer edge
-  // when it sits at y≈0).
+  //   plaza    — a paved CircleGeometry sitting at ground level.
+  //   trunk    — a short bark-textured cylinder rising to y=0.42.
+  //   branches — 5 short cylinders radiating from the trunk top into
+  //              the canopy, each pointing at a leaf-cluster stamp
+  //              position (see `TREE_LEAF_CLUSTER_POSITIONS`).
+  //   leavesN  — 12 transparent-alpha leaf-cluster quads at each
+  //              stamp, crossed 90° so the canopy reads leaves from
+  //              any viewing yaw. Uses `buildLeafTexture` from
+  //              city-textures, so grazing sunset light rim-lights
+  //              the leaf edge through the normal map — the reading
+  //              the icosphere fundamentally could not carry.
+  //   leavesF  — 1 large Y-axis billboard for the far LOD (r > 60m in
+  //              world units — for a city with CITY_HALF=40 that's
+  //              anything near the corners of the settlement).
+  //
+  // Every part is an InstancedMesh sharing the tree's primary index. A
+  // seed change swaps the plot's yaw and per-instance tint but does
+  // NOT rebuild geometry — the canopy is the same shape for every
+  // seed, and the seeded variety lives in the per-instance leaf tint
+  // (which drifts with season).
   const treePlazaGeo = new THREE.CircleGeometry(0.55, 24);
   treePlazaGeo.rotateX(-Math.PI / 2);
   treePlazaGeo.translate(0, 0.02, 0);
@@ -884,13 +1109,63 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
   const treeTrunk = makeInstanced(treeTrunkGeo, treeTrunkMat);
   scene.add(treeTrunk);
 
-  // Canopy — a slightly flattened icosphere for a natural leaf mass.
-  const treeCanopyGeo = new THREE.IcosahedronGeometry(0.42, 1);
-  treeCanopyGeo.scale(1.0, 0.85, 1.0);
-  treeCanopyGeo.translate(0, 0.72, 0);
-  const treeCanopyMat = facadeMaterialFor("tree", 0, atlasSet) as THREE.MeshStandardMaterial;
-  const treeCanopy = makeInstanced(treeCanopyGeo, treeCanopyMat);
-  scene.add(treeCanopy);
+  // Branch skeleton — 5 short cylinders radiating from the trunk top.
+  // Bark material shared with the trunk so a viewer close enough to
+  // read one reads the other. Cast + receive shadow — a branch's
+  // shadow across the plaza is the ground truth read the icosphere
+  // never had.
+  const treeBranchesGeo = buildTreeBranchGeometry();
+  const treeBranches = makeInstanced(treeBranchesGeo, treeTrunkMat);
+  treeBranches.name = "cityTree.branches";
+  scene.add(treeBranches);
+
+  // Leaf-cluster texture — one 256×256 RGBA tile carrying five pointed-
+  // oval leaves with alpha=0 outside the leaf shape, and one normal
+  // map that gives every leaf a small dome so grazing light rim-lights
+  // the leaf edge. Shared across every tree instance.
+  const leafTex: LeafTexture = buildLeafTexture({ tilePx: 256 });
+
+  // Near-LOD leaf material — transparent + alpha-test. alphaTest at 0.5
+  // resolves the leaf edge against the depth buffer without the classic
+  // transparent sort artefacts; the anti-aliased edge in the texture
+  // still gives a soft outline in the alpha-tested silhouette because
+  // the texture ramps rather than steps. Double-sided so a viewer
+  // seeing the back of a leaf still gets a leaf, not a hole.
+  const treeLeavesMat = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    roughness: 0.82,
+    metalness: 0.02,
+    map: leafTex.albedo,
+    normalMap: leafTex.normal,
+    transparent: true,
+    alphaTest: 0.35,
+    side: THREE.DoubleSide,
+  });
+  treeLeavesMat.name = "cityTree.leaves";
+
+  const treeLeavesNearGeo = buildTreeLeavesNearGeometry();
+  const treeLeavesNear = makeInstanced(treeLeavesNearGeo, treeLeavesMat);
+  treeLeavesNear.name = "cityTree.leavesNear";
+  scene.add(treeLeavesNear);
+
+  const treeLeavesFarGeo = buildTreeLeavesFarGeometry();
+  const treeLeavesFar = makeInstanced(treeLeavesFarGeo, treeLeavesMat);
+  treeLeavesFar.name = "cityTree.leavesFar";
+  scene.add(treeLeavesFar);
+
+  // The `treeLeavesNear` mesh is the InstancedBuildingSlot primary — the
+  // per-instance color drift `colorForInstance("tree", seed, sealed)`
+  // returns a green tint, which multiplies through the leaf-cluster
+  // texture and reads as per-plot leaf-color variety. Branches, trunk,
+  // plaza, and far-billboard sit as `perInstanceColor: false` extras so
+  // their bark / stone materials keep their own colour.
+  //
+  // LOD swap: `treeLeavesNear` (primary) and `treeLeavesFar` (extra)
+  // both live at all times; `writeInstancedPlot` for tree role writes a
+  // zero-scale matrix for whichever LOD is inactive for the plot's
+  // camera distance, so exactly one of the two variants draws per plot.
+  const treeCanopy = treeLeavesNear;
+  const treeCanopyMat = treeLeavesMat;
 
   // ── assemble instanced-role slots ────────────────────────────────
 
@@ -962,17 +1237,22 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
     peakIntensity: PEAK_EMISSIVE.store,
   };
 
-  // Tree's PRIMARY is the canopy — that's what per-instance color drift
-  // (ROLE_COLOR.tree = green) should tint. Plaza (stone-gray) and trunk
-  // (bark) are extras that keep their material color; they don't take
-  // the per-instance color multiplier so the plaza never turns green.
+  // Tree's PRIMARY is the near-LOD leaf-cluster canopy — that's what
+  // per-instance color drift (ROLE_COLOR.tree = green) should tint on the
+  // leaf albedo. Plaza (stone-gray), trunk + branches (bark), and the
+  // far-LOD billboard are extras that keep their own material colour;
+  // the far billboard is `lodTag: "far"` so writeInstancedPlot only
+  // draws it beyond the LOD threshold.
   const treeSlot: InstancedBuildingSlot = {
     role: "tree",
-    primaryMesh: treeCanopy,
-    wallMaterial: treeCanopyMat,
+    primaryMesh: treeCanopy,           // treeLeavesNear
+    wallMaterial: treeCanopyMat,       // treeLeavesMat
     extras: [
-      { mesh: treePlaza, material: treePlazaMat, perInstanceColor: false },
-      { mesh: treeTrunk, material: treeTrunkMat, perInstanceColor: false },
+      { mesh: treePlaza,     material: treePlazaMat,   perInstanceColor: false },
+      { mesh: treeTrunk,     material: treeTrunkMat,   perInstanceColor: false },
+      { mesh: treeBranches,  material: treeTrunkMat,   perInstanceColor: false },
+      { mesh: treeLeavesFar, material: treeLeavesMat,  perInstanceColor: false,
+        lodTag: "far" },
     ],
     emissiveCanvas: null,
     emissiveTexture: null,
@@ -1082,6 +1362,26 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
   const _c = new THREE.Color();
   const _extraColor = new THREE.Color();
 
+  // ── LOD reference position ───────────────────────────────────────
+  //
+  // Set by `setLodCamera`. When null the tree extras with lodTag="far"
+  // are always skipped and lodTag="near" always drawn — matches the
+  // pre-LOD behaviour so headless smoke paths still get a canopy.
+  let _lodCameraPos: THREE.Vector3 | null = null;
+
+  /** Return the LOD tier — "near" or "far" — for a plot given the
+   *  currently-set camera position. When no camera has been set, all
+   *  plots are considered "near". */
+  function lodTierForPlot(plot: PlotInstance): "near" | "far" {
+    if (!_lodCameraPos) return "near";
+    const w = normToWorld(plot.x, plot.y);
+    const dx = w.x - _lodCameraPos.x;
+    const dy = 0 - _lodCameraPos.y;
+    const dz = w.z - _lodCameraPos.z;
+    const d2 = dx * dx + dy * dy + dz * dz;
+    return d2 > TREE_LOD_THRESHOLD_M * TREE_LOD_THRESHOLD_M ? "far" : "near";
+  }
+
   // Compute the plot's yaw. Snap to street if streetYaw is finite; else
   // fall back to a small ±10° seed drift so an isolated plot reads as
   // organic and not gridded.
@@ -1110,10 +1410,25 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
     const yScale = Math.max(0.02, plot.bornT) * fullH;
     const yaw = yawFor(plot);
 
+    // Compute the LOD tier once per plot — the primary mesh and every
+    // extra with `lodTag` consult the same answer, so a near/far
+    // switch flips both InstancedMeshes for the plot in one write.
+    // Only the tree role currently uses LOD; other roles ignore it.
+    const isTree = plot.role === "tree";
+    const lodTier: "near" | "far" = isTree ? lodTierForPlot(plot) : "near";
+    const primaryLodOff = isTree && lodTier === "far";
+
     // Primary body.
     _pos.set(w.x, 0, w.z);
     _q.setFromAxisAngle(_yAxis, yaw);
-    _s.set(sx, yScale, sz);
+    if (primaryLodOff) {
+      // Tree at far range — the primary is the near-LOD leaf cluster.
+      // Zero-scale it out; the "far" extra (Y-billboard) will carry
+      // the canopy this frame.
+      _s.set(0, 0, 0);
+    } else {
+      _s.set(sx, yScale, sz);
+    }
     _m.compose(_pos, _q, _s);
     slot.primaryMesh.setMatrixAt(i, _m);
     _c.copy(colorForInstance(plot.role, plot.seed, plot.sealed));
@@ -1138,7 +1453,20 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
     // upload stays coherent — the mesh renders as nothing for that
     // instance without a separate visibility flag.
     for (const extra of slot.extras) {
-      const skip = extra.presence ? !extra.presence(plot.seed) : false;
+      // LOD gate — an extra tagged "near" is invisible when the plot is
+      // in the far tier, and vice versa. Combines with `presence` (both
+      // must pass to draw).
+      const lodSkip = extra.lodTag ? extra.lodTag !== lodTier : false;
+      const skip = lodSkip || (extra.presence ? !extra.presence(plot.seed) : false);
+      // Far-LOD billboards Y-face the camera so a distant tree reads as
+      // a canopy silhouette from any dolly angle. Only override yaw
+      // when a camera is set — otherwise leave the plot's own yaw so
+      // the headless smoke path stays deterministic.
+      let extraYaw = yaw;
+      if (extra.lodTag === "far" && _lodCameraPos) {
+        extraYaw = Math.atan2(_lodCameraPos.x - w.x, _lodCameraPos.z - w.z);
+      }
+      _q.setFromAxisAngle(_yAxis, extraYaw);
       if (skip) {
         _pos.set(w.x, 0, w.z);
         _s.set(0, 0, 0);
@@ -1468,9 +1796,11 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
       flip(storeSlot.primaryMesh);
       flip(storeParapet);
       flip(storeAwning);
-      flip(treeSlot.primaryMesh);
+      flip(treeSlot.primaryMesh);        // treeLeavesNear
+      flip(treePlaza);
       flip(treeTrunk);
-      flip(treeCanopy);
+      flip(treeBranches);
+      flip(treeLeavesFar);
       flip(homeFrameMesh);
       flip(storeFrameMesh);
       for (const s of eventSlots) {
@@ -1483,6 +1813,21 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
       rooftop.setShadows(on);
     },
 
+    setLodCamera(pos: THREE.Vector3 | null) {
+      _lodCameraPos = pos;
+    },
+
+    setSeason(season: "spring" | "summer" | "fall" | "winter") {
+      // The shared leaf material's `.color` is the seasonal multiplier
+      // that turns the atlas's mid-green leaf into the season's tint.
+      // The per-instance color (from colorForInstance) multiplies on
+      // top of this, so each tree still reads as its own seed within
+      // the season's palette.
+      const tint = leafTintForSeason(season);
+      treeLeavesMat.color.setRGB(tint.r, tint.g, tint.b);
+      treeLeavesMat.needsUpdate = true;
+    },
+
     dispose() {
       const disposeInstanced = (im: THREE.InstancedMesh) => {
         try { im.geometry.dispose(); } catch { /* noop */ }
@@ -1493,7 +1838,10 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
       disposeInstanced(homeHvac);
       disposeInstanced(homeWaterTower);
       disposeInstanced(storeBody); disposeInstanced(storeParapet); disposeInstanced(storeAwning);
-      disposeInstanced(treePlaza); disposeInstanced(treeTrunk); disposeInstanced(treeCanopy);
+      disposeInstanced(treePlaza); disposeInstanced(treeTrunk);
+      disposeInstanced(treeBranches);
+      disposeInstanced(treeLeavesNear);
+      disposeInstanced(treeLeavesFar);
       // The two window-frame lattices SHARE one ExtrudeGeometry; free
       // it once by disposing the geometry off just one of the meshes.
       try { frameGeo.dispose(); } catch { /* noop */ }
@@ -1504,7 +1852,13 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
       homeHvacMat.dispose();
       homeWaterTowerMat.dispose();
       storeWallMat.dispose(); storeParapetMat.dispose(); storeAwningMat.dispose();
-      treePlazaMat.dispose(); treeTrunkMat.dispose(); treeCanopyMat.dispose();
+      treePlazaMat.dispose(); treeTrunkMat.dispose();
+      // treeLeavesMat is `treeCanopyMat`; also disposes the shared
+      // material behind treeLeavesNear + treeLeavesFar.
+      try { treeLeavesMat.dispose(); } catch { /* noop */ }
+      // Free leaf-cluster texture (RGBA albedo + normal). Its two
+      // CanvasTextures fed the leaves material we just disposed.
+      try { leafTex.dispose(); } catch { /* noop */ }
       if (homeEmiss.texture) try { homeEmiss.texture.dispose(); } catch { /* noop */ }
       if (storeEmiss.texture) try { storeEmiss.texture.dispose(); } catch { /* noop */ }
       for (const s of eventSlots) {

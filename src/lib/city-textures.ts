@@ -782,6 +782,256 @@ function clamp8(v: number): number {
   return v < 0 ? 0 : v > 255 ? 255 : Math.round(v);
 }
 
+// ── leaf-cluster texture — the transparent-alpha canopy tile ────────────────
+//
+// Trees used to be a single flattened icosphere carrying the tree tile of the
+// PBR atlas as a green-ish opaque wrap. Read as diorama at any zoom past the
+// mid tier. Real trees never present as a smooth green solid — the eye reads
+// leaf outlines, sunlight-through-canopy holes, and rim-light on a leaf edge
+// long before it reads the silhouette.
+//
+// The fix is a cluster of transparent-alpha leaf quads standing on a branch
+// skeleton. This module authors the leaf-cluster texture: one 256×256 tile
+// carrying five pointed-oval leaves in a small sprig arrangement, with alpha
+// = 0 outside the leaf shape and a soft anti-aliased edge so the tree reads
+// as leaves at any zoom. A companion normal map gives each leaf a rounded
+// dome so grazing sunset light rim-lights the canopy edge.
+//
+// Everything up to `buildLeafTexture` is a pure function of pixel + tile —
+// the test file walks the predicates without a canvas.
+
+/** The number of leaves stamped into one cluster tile. */
+export const LEAF_LEAVES_PER_TILE = 5;
+
+/**
+ * The 5 leaves in a cluster tile. Each entry is
+ *   { cx, cy, a, b, rot }
+ * where (cx, cy) is the leaf center in [0,1]² of the tile, (a, b) are the
+ * half-axes of the leaf ellipse (a = long axis, b = short axis, in the tile's
+ * [0,1] coord system), and rot is the leaf's rotation in radians. The layout
+ * reads as a small sprig — one central leaf and four fanning around it.
+ */
+export const LEAF_CLUSTER_LAYOUT: readonly {
+  cx: number; cy: number; a: number; b: number; rot: number;
+}[] = [
+  { cx: 0.50, cy: 0.50, a: 0.38, b: 0.15, rot: 0.00 },
+  { cx: 0.32, cy: 0.34, a: 0.24, b: 0.10, rot: -0.85 },
+  { cx: 0.68, cy: 0.34, a: 0.24, b: 0.10, rot: 0.85 },
+  { cx: 0.32, cy: 0.66, a: 0.24, b: 0.10, rot: -2.30 },
+  { cx: 0.68, cy: 0.66, a: 0.24, b: 0.10, rot: 2.30 },
+];
+
+/**
+ * Squared normalised distance from (px, py) in [0, tilePx) to leaf `k`
+ * of LEAF_CLUSTER_LAYOUT. r² <= 1 means the pixel is inside the leaf
+ * ellipse. Returns the LARGEST value if the pixel is in NO leaf.
+ */
+export function leafClusterR2(px: number, py: number, tilePx: number): {
+  best: number; leaf: number;
+} {
+  const u = px / tilePx;
+  const v = py / tilePx;
+  let best = 1e9;
+  let bestLeaf = -1;
+  for (let k = 0; k < LEAF_CLUSTER_LAYOUT.length; k += 1) {
+    const L = LEAF_CLUSTER_LAYOUT[k];
+    const dx = u - L.cx;
+    const dy = v - L.cy;
+    const cs = Math.cos(-L.rot);
+    const sn = Math.sin(-L.rot);
+    const rx = dx * cs - dy * sn;
+    const ry = dx * sn + dy * cs;
+    const r2 = (rx * rx) / (L.a * L.a) + (ry * ry) / (L.b * L.b);
+    if (r2 < best) { best = r2; bestLeaf = k; }
+  }
+  return { best, leaf: bestLeaf };
+}
+
+/**
+ * Alpha at (px, py) — 1 inside a leaf, 0 outside, smooth on a narrow band
+ * around the leaf boundary so the leaf edge anti-aliases without a hard
+ * pixel staircase. The band width is ~2% of a leaf's short axis.
+ */
+export function leafClusterAlphaAt(px: number, py: number, tilePx: number): number {
+  const { best } = leafClusterR2(px, py, tilePx);
+  // r² in [0,1] is inside the leaf; the smooth band goes from r²=0.92 to
+  // r²=1.06 so the alpha ramps down over a couple of pixels.
+  if (best <= 0.92) return 1;
+  if (best >= 1.06) return 0;
+  const t = (1.06 - best) / (1.06 - 0.92);
+  return t * t * (3 - 2 * t); // smoothstep
+}
+
+/**
+ * Height field for the leaf-cluster normal map. Every leaf reads as a small
+ * dome — mid-vein high, edges low — so a normal map derived from finite
+ * differences puts the rim of every leaf perpendicular to grazing light.
+ * Outside a leaf the height falls to 0 (background); the alpha mask hides
+ * that region anyway but the normal texture still needs a value.
+ */
+export function leafClusterHeightAt(px: number, py: number, tilePx: number): number {
+  const { best, leaf } = leafClusterR2(px, py, tilePx);
+  if (best >= 1.0 || leaf < 0) return 0.3;
+  // Height = 0.5 at the leaf's edge (flush with the branch plane), 0.85 at
+  // the mid-vein. A subtle mid-vein groove: subtract a narrow negative on
+  // the rotated y-axis around 0.
+  const L = LEAF_CLUSTER_LAYOUT[leaf];
+  const u = px / tilePx;
+  const v = py / tilePx;
+  const dx = u - L.cx;
+  const dy = v - L.cy;
+  const cs = Math.cos(-L.rot);
+  const sn = Math.sin(-L.rot);
+  const ry = dx * sn + dy * cs;
+  // Vein groove: |ry / L.b| very small → dip.
+  const veinDip = Math.exp(-Math.pow(ry / (L.b * 0.15), 2)) * 0.06;
+  const dome = 0.5 + (1 - best) * 0.4;
+  return Math.max(0, Math.min(1, dome - veinDip));
+}
+
+/**
+ * Normal at (px, py) — tangent-space, unit vector. Computed by central
+ * differences on `leafClusterHeightAt`, exactly the shape the facade atlas
+ * uses so the leaf normal map plugs into a MeshStandardMaterial the same
+ * way brick/plaster/mullion/bark maps do.
+ */
+export function leafClusterNormalAt(px: number, py: number, tilePx: number): {
+  nx: number; ny: number; nz: number;
+} {
+  const step = 1;
+  const hL = leafClusterHeightAt(px - step, py, tilePx);
+  const hR = leafClusterHeightAt(px + step, py, tilePx);
+  const hU = leafClusterHeightAt(px, py - step, tilePx);
+  const hD = leafClusterHeightAt(px, py + step, tilePx);
+  const z = 5.0;
+  const nx = -(hR - hL);
+  const ny = -(hD - hU);
+  const nz = 1.0 / z;
+  const mag = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+  return { nx: nx / mag, ny: ny / mag, nz: nz / mag };
+}
+
+/**
+ * Leaf-cluster albedo colour. The material's own base tint multiplies
+ * through, so the atlas encodes a green mid-tone plus a small per-leaf
+ * variation. Outside a leaf the RGB is neutral but alpha=0 anyway.
+ */
+export function leafClusterAlbedoAt(px: number, py: number, tilePx: number): {
+  r: number; g: number; b: number; a: number;
+} {
+  const { best, leaf } = leafClusterR2(px, py, tilePx);
+  const a = leafClusterAlphaAt(px, py, tilePx);
+  if (a <= 0.001) return { r: 0.5, g: 0.5, b: 0.5, a: 0 };
+  // Base leaf green. Small hue jitter per leaf index so a cluster reads as
+  // five leaves not one repeated stamp.
+  const per = leaf >= 0 ? (leaf * 0.13) % 1 : 0;
+  const rimT = Math.min(1, Math.max(0, (best - 0.3) / 0.7));
+  // Interior lighter, edge slightly darker + more saturated.
+  const r = 0.42 + per * 0.08 - rimT * 0.12;
+  const g = 0.62 + per * 0.05 - rimT * 0.05;
+  const b = 0.28 + per * 0.04 - rimT * 0.10;
+  return { r, g, b, a };
+}
+
+/**
+ * The leaf-cluster texture built at scene time. Two CanvasTextures — one
+ * RGBA albedo with alpha in the alpha channel, one tangent-space normal.
+ * The caller feeds these into a MeshStandardMaterial with
+ *   { map, normalMap, alphaTest: 0.5, transparent: true, side: DoubleSide }
+ * so the leaf-edge alpha resolves against depth without the classic
+ * transparency sort artefacts.
+ */
+export type LeafTexture = {
+  albedoCanvas: HTMLCanvasElement;
+  normalCanvas: HTMLCanvasElement;
+  albedo: THREE.CanvasTexture;
+  normal: THREE.CanvasTexture;
+  dispose(): void;
+};
+
+export type LeafTextureOptions = {
+  tilePx?: number;
+};
+
+export function buildLeafTexture(opts: LeafTextureOptions = {}): LeafTexture {
+  const tilePx = Math.max(64, Math.floor(opts.tilePx ?? 256));
+  const albedoCanvas = document.createElement("canvas");
+  albedoCanvas.width = tilePx;
+  albedoCanvas.height = tilePx;
+  const normalCanvas = document.createElement("canvas");
+  normalCanvas.width = tilePx;
+  normalCanvas.height = tilePx;
+  const aCtx = albedoCanvas.getContext("2d");
+  const nCtx = normalCanvas.getContext("2d");
+  if (aCtx && nCtx) {
+    const aImg = aCtx.createImageData(tilePx, tilePx);
+    const nImg = nCtx.createImageData(tilePx, tilePx);
+    const aData = aImg.data;
+    const nData = nImg.data;
+    let i = 0;
+    for (let y = 0; y < tilePx; y += 1) {
+      for (let x = 0; x < tilePx; x += 1) {
+        const alb = leafClusterAlbedoAt(x, y, tilePx);
+        aData[i]     = clamp8(alb.r * 255);
+        aData[i + 1] = clamp8(alb.g * 255);
+        aData[i + 2] = clamp8(alb.b * 255);
+        aData[i + 3] = clamp8(alb.a * 255);
+        const n = leafClusterNormalAt(x, y, tilePx);
+        nData[i]     = clamp8((n.nx * 0.5 + 0.5) * 255);
+        nData[i + 1] = clamp8((n.ny * 0.5 + 0.5) * 255);
+        nData[i + 2] = clamp8((n.nz * 0.5 + 0.5) * 255);
+        nData[i + 3] = 255;
+        i += 4;
+      }
+    }
+    aCtx.putImageData(aImg, 0, 0);
+    nCtx.putImageData(nImg, 0, 0);
+  }
+  const albedo = new THREE.CanvasTexture(albedoCanvas);
+  albedo.colorSpace = THREE.SRGBColorSpace;
+  albedo.magFilter = THREE.LinearFilter;
+  albedo.minFilter = THREE.LinearMipmapLinearFilter;
+  albedo.wrapS = THREE.ClampToEdgeWrapping;
+  albedo.wrapT = THREE.ClampToEdgeWrapping;
+  albedo.generateMipmaps = true;
+  albedo.anisotropy = 4;
+  albedo.needsUpdate = true;
+
+  const normal = new THREE.CanvasTexture(normalCanvas);
+  normal.colorSpace = THREE.NoColorSpace;
+  normal.magFilter = THREE.LinearFilter;
+  normal.minFilter = THREE.LinearMipmapLinearFilter;
+  normal.wrapS = THREE.ClampToEdgeWrapping;
+  normal.wrapT = THREE.ClampToEdgeWrapping;
+  normal.generateMipmaps = true;
+  normal.needsUpdate = true;
+
+  function dispose(): void {
+    try { albedo.dispose(); } catch { /* noop */ }
+    try { normal.dispose(); } catch { /* noop */ }
+  }
+  return { albedoCanvas, normalCanvas, albedo, normal, dispose };
+}
+
+// ── seasonal leaf tint law ─────────────────────────────────────────────────
+//
+// The one input trees answer is the season. The material's `.color` is the
+// seasonal multiplier that turns the atlas's mid-green leaf into spring
+// yellow-green, summer deep green, fall ochre, winter bare-branch grey. The
+// canopy scale rides the same axis via `treeFoliage(season)` in city.ts, so
+// winter shrinks the canopy AND desaturates every leaf.
+
+export type LeafSeasonTint = { r: number; g: number; b: number };
+
+export function leafTintForSeason(season: "spring" | "summer" | "fall" | "winter"): LeafSeasonTint {
+  switch (season) {
+    case "spring": return { r: 1.05, g: 1.15, b: 0.65 }; // yellow-green new growth
+    case "summer": return { r: 0.90, g: 1.10, b: 0.65 }; // full deep green
+    case "fall":   return { r: 1.35, g: 0.85, b: 0.35 }; // ochre / red-orange
+    case "winter": return { r: 0.55, g: 0.50, b: 0.45 }; // bare branches — near-neutral, the alpha carries the "gone" reading
+  }
+}
+
 function clamp01(v: number): number {
   return v < 0 ? 0 : v > 1 ? 1 : v;
 }
