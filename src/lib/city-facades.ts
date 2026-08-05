@@ -310,6 +310,102 @@ export function drawEmissiveWindowCanvas(
   return canvas;
 }
 
+// ── real geometric window openings ───────────────────────────────────────
+//
+// At close zoom (post-f7543df pinch camera lets the visitor reach ground
+// level) the emissive canvas alone read as painted wallpaper — a flat
+// decal, no parallax, no self-shadow contact. This block adds a real
+// picture-frame lattice PROTRUDING from every wall: a small extruded
+// rectangle-with-hole per window, ~8cm deep in world meters, sitting on
+// the wall face with the emissive glow visible THROUGH the hole. Grazing
+// sunset light rakes the frame; bloom picks up genuine self-shadow at
+// the frame edge. The pane finally reads as backlit glass, not a decal.
+//
+// The lattice is driven by the SAME `WINDOW_GRIDS[role]` the emissive
+// canvas uses, so a lit cell on the canvas and a frame ring on the wall
+// are in perfect register. Four faces per plot: +Z, -Z, +X, -X.
+//
+// The pure math (which face, which cell, which world position) lives in
+// city-window-frames-pure.ts so `test-city-windows.mjs` can pin it
+// without pulling THREE in. This module owns the THREE-side factories:
+// the shared ExtrudeGeometry and the painted-trim material.
+
+export {
+  WINDOW_FACES,
+  faceYawFor,
+  windowsPerPlot,
+  WINDOW_FRAME_OUTER,
+  WINDOW_FRAME_INNER,
+  WINDOW_FRAME_DEPTH_M,
+  windowFramePlacement,
+} from "@/lib/city-window-frames-pure";
+export type { WindowFace } from "@/lib/city-window-frames-pure";
+
+import {
+  WINDOW_FRAME_INNER,
+  WINDOW_FRAME_OUTER,
+} from "@/lib/city-window-frames-pure";
+
+/**
+ * The window-frame material — a warm off-white painted trim that reads
+ * against the brick / plaster body without stealing the emissive show.
+ * Slightly rough so the sunset picks it up softly, low metalness (paint
+ * is a dielectric). One shared material across all home + store frames.
+ */
+export function makeWindowFrameMaterial(): THREE.MeshStandardMaterial {
+  const m = new THREE.MeshStandardMaterial({
+    color: 0xE8DFCE,
+    roughness: 0.78,
+    metalness: 0.05,
+  });
+  m.name = "cityFacade.windowFrame";
+  return m;
+}
+
+/**
+ * Build the window-frame ExtrudeGeometry: outer rectangle [-0.5..0.5]²
+ * with a rectangular hole sized by WINDOW_FRAME_INNER / WINDOW_FRAME_OUTER,
+ * extruded from local z=0 to z=1 (bevel disabled — a cleaner silhouette).
+ * The caller's per-instance matrix scales x/y to the window's world
+ * width/height and z to WINDOW_FRAME_DEPTH_M so the frame protrudes 8cm
+ * regardless of building height.
+ *
+ * The geometry is authored once and shared across every home + store
+ * plot via the two lattice InstancedMeshes — the entire settlement's
+ * ~5,500 frame instances share ONE tiny buffer.
+ */
+export function makeWindowFrameGeometry(): THREE.ExtrudeGeometry {
+  const outer = 0.5;
+  // Ratio of inner-to-outer is FRAME_INNER / FRAME_OUTER (both are
+  // fractions of the cell; the frame geometry's inner is in its OWN
+  // local frame so the ratio is what carries over).
+  const innerRatio = WINDOW_FRAME_INNER / WINDOW_FRAME_OUTER;
+  const inner = outer * innerRatio;
+  const shape = new THREE.Shape();
+  shape.moveTo(-outer, -outer);
+  shape.lineTo( outer, -outer);
+  shape.lineTo( outer,  outer);
+  shape.lineTo(-outer,  outer);
+  shape.lineTo(-outer, -outer);
+  const hole = new THREE.Path();
+  hole.moveTo(-inner, -inner);
+  hole.lineTo( inner, -inner);
+  hole.lineTo( inner,  inner);
+  hole.lineTo(-inner,  inner);
+  hole.lineTo(-inner, -inner);
+  shape.holes.push(hole);
+  const geo = new THREE.ExtrudeGeometry(shape, {
+    depth: 1.0,
+    bevelEnabled: false,
+    steps: 1,
+    curveSegments: 1,
+  });
+  // ExtrudeGeometry emits from local z=0 to z=+depth. We want the back
+  // face at z=0 (sits on the wall) and the front face at z=+1 (protrudes
+  // outward). That is already the default — no translate needed.
+  return geo;
+}
+
 /**
  * Convenience: allocate a canvas at (width, height) and draw the window
  * layer into it. Returns both the canvas and a THREE.CanvasTexture that
