@@ -290,9 +290,7 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "travel+peers",
     keeps: "objetdart:world:v1",
     creates: "a natural",
-    exempt: {
-      tutti: "the tide is one continuous waterline rather than a population of independent objects; its synchronized answer is already the shared tide phase",
-    },
+    exempt: {},
   },
   {
     key: "waves",
