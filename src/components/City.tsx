@@ -97,6 +97,10 @@ import {
   type CitySkylineRing,
 } from "@/lib/city-skyline-ring";
 import {
+  createCityBackdropDome,
+  type CityBackdropDome,
+} from "@/lib/city-backdrop-dome";
+import {
   createCityWater,
   WATER_PLANE_Y,
   type CityWater,
@@ -1303,6 +1307,31 @@ export default function City() {
     skylineRing.setTier(governor.tier());
     skyline.scene.add(skylineRing.group);
 
+    // ── horizon backdrop dome ───────────────────────────────────────────
+    // R10-6 — beyond the last infill silhouette at r≈500 m, the world's
+    // FogExp2 fades to a flat solid. Every photographic reference the
+    // brief pins carries a layered warm-underside haze with faint
+    // distant-building silhouettes in it — the horizon depth cue that
+    // reads as "there is more city out there, dissolving through the
+    // air" rather than "the world ends and turns into flat sky".
+    //
+    // This module owns that layer. A cylinder at r=2000 m sits outside
+    // every existing ring but well short of the Preetham sky mesh at
+    // 4.5e5 m. Its inner face carries a distant-skyline luminance mask
+    // (multi-octave GPU value noise on azimuth) tinted from the same
+    // Preetham state that paints the sky itself — so the dome's horizon
+    // agrees with the sky's horizon on the same clock: cool blue at
+    // noon, warm ember at dusk, deep indigo at midnight.
+    //
+    // One draw call. No textures. No per-frame CPU work beyond a scalar
+    // uniform push per sky-slot change. The dome hides on sleep tier.
+    const backdropDome: CityBackdropDome = createCityBackdropDome({
+      seed: cityGroundSeed ^ 0xdec01a,
+    });
+    backdropDome.setSkyState(citySky.currentState);
+    backdropDome.setTier(governor.tier());
+    skyline.scene.add(backdropDome.group);
+
     // ── perspective camera (coupled zoom+pitch) ─────────────────────────
     // One camera drives both the world sky pass and the skyline pass.
     // Pinch travels a shared zoom scalar; pitch and distance ride the
@@ -1327,11 +1356,16 @@ export default function City() {
     // The dusk-and-lit-windows moment doubles the way the brief calls for:
     // warm emissive windows glow at the water surface exactly as they do
     // in the tower above.
+    // R10-5: the SSR water samples the citySky background cubemap as its
+    // grazing-angle fallback. The cube identity is stable across the
+    // PMREM re-bake (only the prefiltered `environment` swaps out), so
+    // one setEnvMap here is enough for the whole session.
     const water: CityWater = createCityWater({
       width: 1,
       height: 1,
       pixelRatio: dpr,
       skylineScene: skyline.scene,
+      envMap: citySky.background,
     });
 
     // ── traffic (cars + boats + lamp posts) ─────────────────────────────
@@ -2335,6 +2369,13 @@ export default function City() {
       // meshes' counts in one pass; no rebuild on transitions.
       skylineRing.setDayFrac(df);
       skylineRing.setTier(tier);
+      // The backdrop dome rides the same day fraction — its dusk and
+      // night uniforms sweep through the ember and moonlit-haze curves,
+      // so at dusk the horizon underbelly reads warm and at midnight it
+      // sits in a cool indigo band. The tier flip only toggles visibility
+      // (sleep → hidden); active tiers all draw the same single mesh.
+      backdropDome.setDayFrac(df);
+      backdropDome.setTier(tier);
       if (Math.floor(df * 64) !== lastSkySlot) {
         lastSkySlot = Math.floor(df * 64);
         // The environment texture identity changes on each PMREM re-run;
@@ -2351,6 +2392,12 @@ export default function City() {
         // 64-per-day cadence so a copper spire mirrors the current
         // dusk sky, not the previous slot's.
         skylineRing.setEnvironment(citySky.environment);
+        // The backdrop dome samples the SAME Preetham state the sky
+        // itself was baked from — its horizon tint is derived from the
+        // sun's altitude, turbidity, and Rayleigh/Mie coefficients, so
+        // the ember at the base of the dome agrees with the ember the
+        // sky paints just above.
+        backdropDome.setSkyState(citySky.currentState);
         worldFog.color.copy(fogColorFromSky(citySky.currentState));
         // Shadow-map allocation follows the current tier. Cheap on
         // matched tiers — only reallocates on transitions.
@@ -3342,6 +3389,10 @@ export default function City() {
       // Drop it alongside the infill before the skyline scene tears
       // down so its group.remove calls land on a live scene.
       skylineRing.dispose();
+      // The backdrop dome holds one CylinderGeometry + one
+      // ShaderMaterial. Drop it before the skyline scene tears down
+      // so group.remove(mesh) lands on a live scene.
+      backdropDome.dispose();
       skyline.dispose();
       // The harbour holds the Reflector's RT + its own material graph and
       // the layer-1 proxy meshes. Dispose it before the composer so the
