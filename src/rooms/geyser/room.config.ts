@@ -67,6 +67,58 @@ const geyser = {
     ],
     keeps: "the current head, the temperature, the phase the column is in, the count of eruptions ever fired, the season the year had reached, and the hour it was last looked at.",
   },
+  // ——— the room quality bar, structured ————————————————————————————————
+  // Round-trip-derived from Geyser.tsx + geyserflow.ts. The declared noun in
+  // the spec is `eruption` (the phase-change event); the countable population
+  // that actually persists is `heatMarks` (a warmed patch of ground that
+  // pushes T upward). The knock verb is a touch-reachable secret: a strong
+  // knock near the trigger can push a building state over into fire.
+  life: {
+    population: {
+      objects: [
+        {
+          noun: "heat-mark",
+          max_count: 16,
+          state_shape: "id, x, y, strength (contribution to T), t0, decay time constant",
+          lifecycle:
+            "born under dwell (plantHeatMark, strength grows on saturating curve of e.elapsed) → contributes to T while alive → the ceremony verb calls manualErupt (fires the column whether E was ready or not, increments eruptions count) → retires by exponential decay after eruption dumps T",
+          persistence: "LetGo",
+          creates_via_verb: "dwell",
+          retires_via: ["ceremony", "LetGo"],
+          implementation_hint:
+            "inline array — state.heatMarks: HeatMark[] in src/lib/geyserflow.ts. Phase-4 note: not yet migrated to SceneObjectSpec.",
+        },
+      ],
+    },
+    breath: {
+      period_seconds: 7,
+      reads: ["uBreath"],
+      behavior_at_rest:
+        "air column brightens/dims by ±14%, surface highlight rides ±15%, the hot mineral rim swells by ±40%. Between eruptions the throat pulses gently — a gaussian ring migrating up from the mouth whose brightness is monotone in T.",
+    },
+    glimmer: {
+      after_idle_ms: 20000,
+      visual:
+        "one heat mark's corona lightens for half a breath (visual only), or the throat emits a wider ring as the phase quietly builds.",
+    },
+    haptics_grammar: {
+      tap: "ripple",     // ringHere → haptics.ripple(0.3 + weight * 0.35)
+      dwell: "tap",      // plantHeatMark → haptics.tap()
+      ceremony: "bloom", // manualErupt → haptics.bloom() (the touch-reachable ignition)
+      flick: "chop",     // bubble thrown → haptics.chop()
+      twist: "lens",     // cycle lens raise → haptics.lens()
+      twist3: "detent",  // year walk detent
+      tap3: "roll",      // tutti → haptics.roll()
+      drum: "tap",       // beat between zones
+      knock: "bloom",    // touch-reachable secret: a knock near the trigger fires (attempt.fired → haptics.bloom())
+      arrows: "tap",     // keyTap
+    },
+    make_unmake: {
+      letgo_clears_population: true,
+      ceremony_is:
+        "fires the throat manually (manualErupt) — a ballistic eruption whether or not the trigger E was ready, and increments the persistent eruptions count",
+    },
+  },
 } as const satisfies RoomManifest;
 
 export default geyser;

@@ -117,6 +117,55 @@ guide:
     - "the chord is the third law made audible: read any voice's frequency back and you have its orbit"
   keeps: "the epoch and every element — precessed orbits, planted worlds, their weights, the sun's own weight, and the pace of the days"
 
+# ——— the "alive at rest" / "make and unmake" / "haptics" contract ————————
+# Round-trip-derived from src/components/SolarSystem.tsx and src/lib/orbits.ts.
+# Two shapes of body live here: the six planets (fixed count, PLANET_COUNT=6,
+# each has orbital elements that only change under three-finger law verbs and
+# mutual perturbations — they don't come and go) and the comets (up to
+# MAX_COMETS=6, born from a hold on open sky, and where the make-and-unmake
+# story actually lives). A comet swallowed by the sun returns its mass to the
+# dust reserve — retirement is a physical event, not a silent shift.
+life:
+  population:
+    objects:
+      - noun: body
+        max_count: 12   # PLANET_COUNT (6) + MAX_COMETS (6)
+        state_shape: "a, e, incl, omega, phase, mass, seed — six orbital elements + mass + seed"
+        lifecycle: "for planets: created once at genesis, precess under mutual perturbations, merge when two touch (mass-conserved). for comets: born under a hold on open sky (mass = massForHold(elapsed), velocity = the finger's drift), retired by falling into the sun (mass returned to dust reserve), being flicked past escape speed (leaves the system), or by MAX_COMETS shift (oldest wanderer)."
+        persistence: localStorage
+        creates_via_verb: dwell
+        retires_via: [flick, ceremony, LetGo]
+        implementation_hint: "inline array + persisted through the room's own storage_key"
+  breath:
+    period_seconds: 7
+    reads:
+      - "the reduced-motion / sin-based `breath` in SolarSystem.tsx (`Math.sin(audioT * TAU * 0.14) * 0.5 + 0.5`) — the room mixes its OWN 7s breath (0.14 Hz) into the sun radius and the corona swell"
+    behavior_at_rest: "the sun's SDF radius and its corona swell by `breath * 1.6 + sunFlare * 6` on every 7s cycle; the planets keep to their real-time orbits underneath, so the room is continuously advancing whether or not anyone watches"
+  glimmer:
+    after_idle_ms: 20000
+    visual: "one orbit flashes briefly — a chosen body brightens and its arc lights up for half a breath, then fades"
+  haptics_grammar:
+    tap: tap                # tap a body → haptics.tap()
+    dwell: bloom            # condense a comet under the finger → haptics.bloom()
+    ceremony: bloom         # grand conjunction fires bloom
+    drag: tap               # drag a world → tap chatter on each significant step
+    flick: chop             # throw a body → haptics.chop() (a real launch)
+    twist: lens             # notation lens
+    twist3: detent          # season wind
+    tap3: ripple            # tutti — the chord across all bodies
+    drag3: tap              # world-law wind (mu / epoch)
+    hold3: null             # time dilation
+    scrub: ripple           # orbit-tracing ticks (soft ripples per crossing)
+    drum: ripple            # dust between two zones
+    knock: roll             # ring the sun as a low bell
+    shake: chop             # jostles the wanderers
+    tilt: null              # ecliptic lean
+    flip: null              # night
+    arrows: tap
+  make_unmake:
+    letgo_clears_population: true   # LetGo returns condensed worlds to dust; the original planets stay (they aren't visitor-made)
+    ceremony_is: "the grand conjunction — the phases are pulled to a common line and released, each body then shearing open at its own rate"
+
 # ——— the three LLM slots ————————————————————————————————————————————————
 
 shader_intent: >

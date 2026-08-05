@@ -147,6 +147,56 @@ guide:
     of eruptions ever fired, the season the year had reached, and the hour
     it was last looked at.
 
+# ——— the "alive at rest" / "make and unmake" / "haptics" contract ————————
+# Round-trip-derived from src/components/Geyser.tsx and src/lib/geyserflow.ts.
+# The room's declared noun is `eruption`, but the actual countable object
+# the hand plants is a HeatMark (a warmed patch of ground that pushes the
+# state's T upward). Vents are conceptual (one, at the throat). MAX_HEAT_MARKS
+# = 16. The eruption itself is a phase-change event, not a countable object.
+# Persistence via the room's own storage_key.
+life:
+  population:
+    objects:
+      - noun: heat-mark
+        max_count: 16   # MAX_HEAT_MARKS from src/lib/geyserflow.ts
+        state_shape: "id, x, y, strength (contribution to T), t0, decay time constant"
+        lifecycle: "born under dwell (plantHeatMark at cursor, strength grows on saturating curve of e.elapsed) → contributes to T while alive → sealed by ceremony (manualErupt — the room's touch-reachable ignition, whether or not E was ready) → retires by exponential decay after eruption dumps T"
+        persistence: LetGo
+        creates_via_verb: dwell
+        retires_via: [ceremony, LetGo]
+        implementation_hint: "inline array `state.heatMarks: HeatMark[]` + createIdleWriter through the room's own storage_key"
+  breath:
+    period_seconds: 7
+    reads:
+      - "uBreath uniform (fragment shader — air column airCol *= 0.86 + 0.14 * uBreath)"
+      - "uBreath uniform (Snell surface highlight 0.85 + 0.15 * uBreath)"
+      - "uBreath uniform (hot-register mineral bloom `0.6 + uBreath * 0.4`)"
+    behavior_at_rest: "air column brightens/dims by ±14%, surface highlight rides ±15%, the hot mineral rim swells by ±40% — the throat pulses gently between eruptions, a slow gaussian ring migrating up from the mouth whose brightness is monotone in T"
+  glimmer:
+    after_idle_ms: 20000
+    visual: "one heat mark's corona lightens for half a breath (visual only), or the throat emits a wider ring as the phase quietly builds"
+  haptics_grammar:
+    tap: tap                # ring the throat at the local head → haptics.tap()
+    dwell: tap              # plantHeatMark → tap; deepen ticks are silent
+    ceremony: bloom         # manualErupt → haptics.bloom() (the touch-reachable ignition)
+    drag: null              # surface film slides — ledger unchanged, no haptic
+    flick: chop             # bubble thrown → haptics.chop()
+    twist: lens             # cycle lens raise → haptics.lens()
+    twist3: detent          # walking the year through advanceExact
+    tap3: roll              # tutti across all three phase registers → haptics.roll()
+    drag3: null             # world-law writes (rain / warmth) — continuous, no haptic
+    hold3: null             # time dilation
+    scrub: null             # stirCool writes into T — audible, not felt
+    drum: tap               # a beat between two zones
+    knock: bloom            # the touch-reachable secret: a strong knock CAN fire the geyser (E > E_HIGH − intensity·κ) → bloom on ignition, detent otherwise
+    shake: null             # scatter — no per-event haptic
+    tilt: null              # continuous lean
+    flip: null              # night toggle
+    arrows: tap             # moveCursor / keyTap
+  make_unmake:
+    letgo_clears_population: true   # `clear` → state = initState(SEED); heat marks empty, phase returns to "building", eruptions count resets
+    ceremony_is: "firing the throat manually (manualErupt) — a ballistic eruption whether or not the trigger E was ready, and increments the persistent eruptions count"
+
 # ——— the three LLM slots ————————————————————————————————————————————————
 
 shader_intent: >

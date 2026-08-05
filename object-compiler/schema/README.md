@@ -107,6 +107,105 @@ When a `visual_style` block is present, `slot-shader.md` consumes it
 alongside `shader_intent`; the shader author gets both the specific brief
 and the design vocabulary the brief assumes.
 
+## The `life` block — the room quality bar, structured
+
+AGENTS.md §"The room quality bar — non-negotiable" pins seven items every
+room owes. The rest of the schema covers items 1 (shader), 4 (real laws)
+and 7 (performance) directly — the material is a shader by the `material`
+field, the laws live in `domain_lib`, the shell mounts the frame governor.
+Items 2 (whole grammar) and 3 (make and unmake), 5 (alive at rest), and 6
+(two senses — haptics on every meaningful act) are only IMPLICIT in the
+older schema: an author reading `verbs_answered` alone cannot tell whether
+the resulting room will fire a haptic on tap, whether the population has
+a real retirement path, whether the shader actually reads `uBreath`. The
+`life:` block closes that gap.
+
+Every field is optional; the block itself is optional so older specs still
+compile. When present, the compiler treats the block as a promise its test
+hooks will check (`scripts/test-room-quality.mjs`). The block has four
+sections:
+
+- **`life.population`** — item 3. One or more `objects` entries, each
+  naming a countable inhabitant with `noun`, `max_count` (the cap the
+  room actually enforces — `MAX_LANTERNS`, `MAX_SEEPS`, `MAX_WORLDS`),
+  `state_shape`, `lifecycle` (the born → growing → sealed → retiring
+  arc), `persistence` (one of `world` / `LetGo` / `localStorage` /
+  `ephemeral`), `creates_via_verb` (usually `dwell`), `retires_via` (an
+  array of verbs; usually `[ceremony, LetGo]`), and
+  `implementation_hint` (`SceneObjectSpec` / `inline array` / `world.ts
+  registry`). Omit the whole `population` block for a room that
+  genuinely has no countable objects (rare — even `/rocks` has stones);
+  when present, `objects` MUST be non-empty.
+- **`life.breath`** — item 5. `period_seconds` (default 7 to match the
+  site's shared LFO), `reads` (an array naming what the shader or
+  component reads — `uBreath uniform`, `getBreath()`, `clocks.breath`),
+  and `behavior_at_rest` (one line describing what visibly changes when
+  nothing is being touched).
+- **`life.glimmer`** — item 5, second half. `after_idle_ms` (default
+  20000 per AGENTS.md) and `visual` (one line — the concrete event, not
+  "a small animation").
+- **`life.haptics_grammar`** — item 6. A key per verb the room
+  implements; the key names must be a subset of `verbs_answered`.
+  Values are pattern names from `src/lib/haptics.ts` (`ripple`, `roll`,
+  `chop`, `tap`, `storm`, `detent`, `crossing`, `lens`, `bloom`) or
+  `null` when a verb genuinely has no haptic. `tap` uses a strict enum
+  because it is the most consequential single choice; the other verbs
+  take a string so any current or future export is legal.
+- **`life.make_unmake`** — two questions the schema poses so a spec
+  cannot fudge item 3. `letgo_clears_population` (does `<LetGo>` empty
+  the population, per AGENTS.md's "an emptied room stays empty"?) and
+  `ceremony_is` (a one-line description of the room's one solemn act).
+
+Concrete example, from `examples/atmosphere.yaml`:
+
+```yaml
+life:
+  population:
+    objects:
+      - noun: parcel
+        max_count: 10
+        state_shape: "id, xKm, zKm, mass, w, spin, lclKm, t0"
+        lifecycle: "born under press → warmed and lifted while held → sealed as lantern at ceremony"
+        persistence: ephemeral
+        creates_via_verb: dwell
+        retires_via: [ceremony, flick, tap]
+        implementation_hint: "inline array (parcels[])"
+      - noun: lantern
+        max_count: 12
+        state_shape: "id, zone='sky', nx, ny, magnitude"
+        lifecycle: "born from a parcel at ceremony → drifts on its layer's wind → retires ONLY silently when MAX_LANTERNS exceeded (real bug worth flagging)"
+        persistence: world
+        creates_via_verb: ceremony
+        retires_via: [LetGo]
+        implementation_hint: "world.ts registry"
+  breath:
+    period_seconds: 7
+    reads: ["uBreath uniform"]
+    behavior_at_rest: "the sky swell in the shader widens and narrows the whole column on the 7s clock"
+  glimmer:
+    after_idle_ms: 20000
+    visual: "a soft ring emitted from a random parcel or lantern point"
+  haptics_grammar:
+    tap: tap
+    dwell: bloom
+    ceremony: bloom
+    flick: chop
+    scrub: chop
+    twist: lens
+    tap3: ripple
+    knock: bloom
+    # ...
+  make_unmake:
+    letgo_clears_population: true
+    ceremony_is: "giving a candle to the wind as a lantern"
+```
+
+Truthful description matters more than pretty targeting: atmosphere's
+lantern lifecycle above documents the real merged room, including that
+lanterns are never actively retired (only shifted out when the cap is
+hit). Where a room fails part of the bar, say so in the spec's comments
+— those failures are what the quality-check test exists to catch.
+
 ## What the schema does not capture (the three LLM slots)
 
 Three creative degrees of freedom remain, and the plan's tomography argument

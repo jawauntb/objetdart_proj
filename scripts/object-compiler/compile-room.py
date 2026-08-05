@@ -68,32 +68,35 @@ REGISTRY_PATH = REPO_ROOT / "src" / "rooms" / "registry.ts"
 
 WORKTREE_ROOT = REPO_ROOT / ".claude" / "worktrees"
 
-# The four in-file markers the template pass writes. Filling replaces the
+# The five in-file markers the template pass writes. Filling replaces the
 # marker with its LLM output; leaving the marker in place means the slot is
 # still open. Resumability is a textual property, not a database one.
 SLOT_MARKERS = {
-    "shader": "__SLOT_SHADER_BODY__",
-    "domain": "__SLOT_DOMAIN_LAW__",
-    "verbs":  "__SLOT_VERB_HANDLERS__",
-    "pins":   "__SLOT_PINS__",
+    "shader":     "__SLOT_SHADER_BODY__",
+    "domain":     "__SLOT_DOMAIN_LAW__",
+    "verbs":      "__SLOT_VERB_HANDLERS__",
+    "pins":       "__SLOT_PINS__",
+    "population": "__SLOT_POPULATION__",
 }
 
 # Which slot prompt each marker calls into.
 SLOT_PROMPTS = {
-    "shader": "slot-shader.md",
-    "domain": "slot-domain.md",
-    "verbs":  "slot-verbs.md",
-    "pins":   "slot-pins.md",
+    "shader":     "slot-shader.md",
+    "domain":     "slot-domain.md",
+    "verbs":      "slot-verbs.md",
+    "pins":       "slot-pins.md",
+    "population": "slot-population.md",
 }
 
 # Which file each slot lands in, relative to the worktree root, with a key
 # whose {name} is substituted from spec.key. Multiple slots may share a file
-# (shader + verbs both live in Room.tsx).
+# (shader + verbs + population all live in Room.tsx).
 SLOT_TARGET_TEMPLATES = {
-    "shader": "src/components/{Room}.tsx",
-    "domain": "src/lib/{domain}.ts",
-    "verbs":  "src/components/{Room}.tsx",
-    "pins":   "scripts/test-{domain}.mjs",
+    "shader":     "src/components/{Room}.tsx",
+    "domain":     "src/lib/{domain}.ts",
+    "verbs":      "src/components/{Room}.tsx",
+    "pins":       "scripts/test-{domain}.mjs",
+    "population": "src/components/{Room}.tsx",
 }
 
 # Timeouts (seconds). Every subprocess call names one; there is no default.
@@ -462,6 +465,14 @@ def _call_slot_prompt(slot: str, spec: Spec) -> str:
     # field yet), and the prompt handles the absent-visual-style case.
     visual_style_block = _yaml_block(spec.raw.get("visual_style", {}))
 
+    # life is the schema block that makes a room feel alive: population,
+    # breath, glimmer, haptics_grammar, make_unmake. slot-shader.md reads
+    # life_breath; slot-population.md reads life_population + life_haptics;
+    # slot-verbs.md reads life_haptics_grammar + life_population. An empty
+    # block is legal (older specs may not carry the field yet); each prompt
+    # handles the absent-life case.
+    life_block = spec.raw.get("life", {}) or {}
+
     subs: dict[str, str] = {
         "one_shot_examples":         one_shots,
         "shader_intent":             str(spec.raw.get("shader_intent", "")),
@@ -469,6 +480,11 @@ def _call_slot_prompt(slot: str, spec: Spec) -> str:
         "verb_intent":               str(spec.raw.get("verb_intent", "")),
         "palette_and_uniforms":      _yaml_block(spec.raw.get("palette", {})),
         "visual_style":              visual_style_block,
+        "life":                      _yaml_block(life_block),
+        "life_population":           _yaml_block(life_block.get("population", {})),
+        "life_breath":               _yaml_block(life_block.get("breath", {})),
+        "life_glimmer":              _yaml_block(life_block.get("glimmer", {})),
+        "life_haptics_grammar":      _yaml_block(life_block.get("haptics_grammar", {})),
         "declared_surface":          _read_declared_surface(slot, spec),
         "verbs_answered_with_briefs": _yaml_block({
             v: spec.raw.get("verbs", {}).get(v, "")

@@ -154,6 +154,56 @@ guide:
     - "the same mineral can be identified from the ring even under deep polish; the load-bearing map only damps, does not erase"
   keeps: "the pebble's lattice (system, centering, axial ratios), its growth-ring history, the current polish depth, and the season the stream is at."
 
+# ——— the "alive at rest" / "make and unmake" / "haptics" contract ————————
+# Round-trip-derived from src/components/Pebble.tsx and src/lib/pebblecore.ts.
+# Pebble's declared noun is `cut`, but the population that actually persists
+# is `growthRings[]` (a stone's accretion history). MAX_GROWTH_RINGS = 24.
+# An initial seed ring at radius 0.05 always exists — the array is never
+# empty. Population is grown by dwell (polishStep tick per hold-cadence
+# adds surface accretion), sealed by ceremony (polishDepth = POLISH_MAX).
+# Cleavage cuts split the stone into two halves each with their own history.
+# Persistence via the room's own storage_key.
+life:
+  population:
+    objects:
+      - noun: growth-ring
+        max_count: 24   # MAX_GROWTH_RINGS from src/lib/pebblecore.ts
+        state_shape: "id, radius, mineral (species), thickness, seed"
+        lifecycle: "born when `growStep` adds a ring (rare — driven by brine saturation over long simulated time); grows further while dwell-polishing → sealed at ceremony (polishDepth = POLISH_MAX, kept between visits as the pebble the sea has finished with) → retires only via LetGo; a cleavage flick splits the whole stone into two, each keeping its own growth-ring history"
+        persistence: LetGo
+        creates_via_verb: dwell
+        retires_via: [LetGo]
+        implementation_hint: "inline array `state.growthRings: GrowthRing[]` + createIdleWriter through the room's own storage_key"
+  breath:
+    period_seconds: 7
+    reads:
+      - "uBreath uniform (fragment shader — stone interior brightness `col *= 0.94 + 0.06 * uBreath`)"
+    behavior_at_rest: "the stone's interior colour breathes by ±6% on the 7s clock — the mineral body reads as breathing under the polish, the polished shell's Fresnel highlight tracks the raking light"
+  glimmer:
+    after_idle_ms: 20000
+    visual: "the polished shell's highlight brightens for a beat (visual only) — the stone catches the cabinet's raking lamp"
+  haptics_grammar:
+    tap: tap                # tap the stone → rings the damped partials; a polished pebble rings shorter → haptics.tap()
+    dwell: tap              # polishStep tick per hold-cadence
+    ceremony: bloom         # polishDepth = POLISH_MAX → haptics.bloom()
+    drag: null              # rotation in the section — visual only, no haptic
+    flick: chop             # cleaves along the nearest allowed plane → haptics.chop()
+    twist: lens             # lattice lens raise → haptics.lens()
+    twist3: detent          # season through advanceExact
+    tap3: roll              # tutti — every growth ring rings at once → haptics.roll()
+    drag3: null             # climate write, continuous
+    hold3: null             # time dilation
+    scrub: null             # cabinet raking-light stir; audio-only
+    drum: tap               # two-point tap on the stone
+    knock: detent           # rings the stone as a struck bell → haptics.detent()
+    shake: null             # cabinet dust ripple; turbulence axis
+    tilt: null              # section lean
+    flip: null              # night toggle
+    arrows: tap             # step between rings; enter rings the current one
+  make_unmake:
+    letgo_clears_population: true   # `clear` → state = initState(SEED); growthRings return to a single seed ring, polishDepth to 0
+    ceremony_is: "polishing the stone to POLISH_MAX in one commit — kept between visits as the pebble the sea has finished with"
+
 # ——— the three LLM slots ————————————————————————————————————————————————
 
 shader_intent: >

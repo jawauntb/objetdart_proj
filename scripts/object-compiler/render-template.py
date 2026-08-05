@@ -193,6 +193,16 @@ LEFTOVER_SUB_RE = re.compile(r"\{\{\s*(spec\.|ComponentName)")
 
 SLOT_RE = re.compile(r"__SLOT_[A-Z_]+__")
 
+# The synthesized life-wire paths — pre-baked TS code the compiler emits
+# deterministically from spec.life (see preprocess_spec). Kept as a set so
+# render_template's substitution engine can skip the JSON-string escaping
+# it applies to ordinary scalars.
+_LIFE_WIRE_PATHS = frozenset({
+    "life.breath_uniform_wire",
+    "life.idle_writer_setup",
+    "life.idle_writer_cleanup",
+})
+
 
 def pascal_case(key: str) -> str:
     parts = re.split(r"[-_\s]+", key)
@@ -306,8 +316,14 @@ def render_template(text: str, spec: dict, component_name: str) -> str:
         # Pre-baked TS literals (fields like `placement_literal`) are already
         # valid TS syntax — do not re-escape them. Detect by suffix or by the
         # opening brace/bracket that marks a literal object or array.
-        pre_baked = dotted.endswith("_literal") or (
-            s.lstrip().startswith(("{", "["))
+        #
+        # The three synthesized `life.*` wires (breath uniform handle, idle
+        # writer setup, idle writer cleanup) are pre-baked code the compiler
+        # emits deterministically from spec.life; treat them like `_literal`.
+        pre_baked = (
+            dotted.endswith("_literal")
+            or dotted in _LIFE_WIRE_PATHS
+            or s.lstrip().startswith(("{", "["))
         )
         if pre_baked:
             return s
@@ -427,7 +443,81 @@ def preprocess_spec(spec: dict) -> dict:
     for k in ("bg", "bg2", "glow", "accent", "accent2", "ink"):
         palette.setdefault(k, "#000000")
 
+    # life — the schema block that makes a room feel alive: population, breath,
+    # glimmer, haptics_grammar, make_unmake. Any of these missing collapses to
+    # an empty block; the compiler still renders (the compiled room is just
+    # less alive). The three `_wire` fields synthesized here are pre-baked TS
+    # that Component.tsx.tmpl substitutes into fixed positions — the LLM never
+    # sees these, they are the deterministic half of the alive-at-rest wiring.
+    life = spec.get("life")
+    if not isinstance(life, dict):
+        life = {}
+        spec["life"] = life
+    _synthesize_life_wires(life)
+
     return spec
+
+
+def _synthesize_life_wires(life: dict) -> None:
+    """Fill in life.breath_uniform_wire, life.idle_writer_setup, and
+    life.idle_writer_cleanup — the three deterministic sub-inserts
+    Component.tsx.tmpl reads. Called by preprocess_spec.
+
+    - breath_uniform_wire: a local handle to the shared uBreath uniform, so
+      the population step context (and any JS-side beat) can read the same
+      value the shader sees. Emitted only when spec.life.breath.reads
+      includes "uBreath"; otherwise empty (a dead handle is a bug the
+      reader spends time chasing).
+    - idle_writer_setup: the glimmer clock. Runs after spec.life.glimmer's
+      idle window and pulses the room's visual glimmer — never text.
+    - idle_writer_cleanup: the matching teardown, emitted into the useEffect
+      return so the writer detaches with the room.
+    """
+    breath_raw = life.get("breath")
+    breath: dict = breath_raw if isinstance(breath_raw, dict) else {}
+    reads = breath.get("reads") or []
+    # A read entry may be the bare identifier "uBreath" or a descriptive string
+    # like "uBreath uniform (fragment shader — dust glow, glint, humus)". Match
+    # either shape: the spec author's voice should not decide the wire.
+    reads_uBreath = isinstance(reads, list) and any(
+        isinstance(r, str) and "uBreath" in r for r in reads
+    )
+    if reads_uBreath:
+        life["breath_uniform_wire"] = (
+            "// life.breath.reads includes uBreath — the harness already writes\n"
+            "    // this uniform through stage.beginFrame → clocksFrom; the local\n"
+            "    // handle below lets population.step read the same value.\n"
+            "    const uniformBreath = prog?.location(\"uBreath\") ?? null;\n"
+            "    void uniformBreath;"
+        )
+    else:
+        life["breath_uniform_wire"] = (
+            "// life.breath.reads is empty or omits uBreath — no handle emitted."
+        )
+
+    glimmer_raw = life.get("glimmer")
+    glimmer: dict = glimmer_raw if isinstance(glimmer_raw, dict) else {}
+    after_ms = glimmer.get("after_idle_ms")
+    try:
+        after_ms_int = int(after_ms) if after_ms is not None else 20000
+    except (TypeError, ValueError):
+        after_ms_int = 20000
+    if life.get("glimmer") or after_ms is not None:
+        life["idle_writer_setup"] = (
+            f"const idle = createIdleWriter(surface, {{ afterMs: {after_ms_int} }});\n"
+            f"    idle.attach();"
+        )
+        life["idle_writer_cleanup"] = "idle.detach();"
+    else:
+        # No glimmer block — the room takes the shell's default idle writer
+        # (already wired above via `writer`) and the compiler emits nothing.
+        life["idle_writer_setup"] = (
+            "// life.glimmer omitted — the room takes the shell's default idle window."
+        )
+        life["idle_writer_cleanup"] = (
+            "// life.glimmer omitted — no dedicated glimmer writer to detach."
+        )
+    return
 
 
 # ---------------------------------------------------------------------------

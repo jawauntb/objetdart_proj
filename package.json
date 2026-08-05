@@ -63,6 +63,7 @@
     "smoke:clouds": "node scripts/smoke-clouds.mjs",
     "test:room-contract": "node scripts/test-room-contract.mjs",
     "test:scene": "node scripts/test-scene.mjs",
+    "test:room-quality": "node scripts/test-room-quality.mjs",
     "test:center-field": "node scripts/test-center-field.mjs",
     "test:travel-passage": "node scripts/test-travel-passage.mjs"
   },
