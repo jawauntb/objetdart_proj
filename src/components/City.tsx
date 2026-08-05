@@ -82,6 +82,10 @@ import {
   type CityWater,
   type CityWaterProxy,
 } from "@/lib/city-water";
+import {
+  createCityTraffic,
+  type CityTraffic,
+} from "@/lib/city-traffic";
 
 /**
  * /city — a small settlement whose identity IS its causal roles.
@@ -1202,6 +1206,40 @@ export default function City() {
       pixelRatio: dpr,
     });
 
+    // ── traffic (cars + boats + lamp posts) ─────────────────────────────
+    // Three InstancedMeshes: cars along the visitor-drawn road graph, boats
+    // crossing the harbour strip along +z, lamp posts every 8 m on both
+    // kerbs of every road. Headlights + bulbs are emissive under a night
+    // gate (nightAmt>0.3) so the composer's bloom pass turns them into
+    // warm halos in the dusk-and-lit-windows moment. No punctual lights
+    // hit the scene — bloom alone sells the halo. Empty roads = zero
+    // cars visible; the traffic module gates cleanly.
+    //
+    // The traffic group joins skyline.scene so it renders through the
+    // same cityCam.camera as the towers, shares the depth buffer with
+    // them (a tall event tower occludes cars behind it correctly), and
+    // its emissive pixels feed the composer's bloom pyramid.
+    //
+    // Harbour geometry mirrors what city-water.ts computes:
+    //   plane width  = 96 (spans the city width plus a margin)
+    //   plane depth  = 32
+    //   plane centre z = 50 (beyond the +z edge of the ±40 field)
+    //   surface y     = 0.05 (just above worldGround at y=0)
+    // The city-traffic module owns no camera; it just needs the
+    // strip's world extents.
+    const traffic: CityTraffic = createCityTraffic({
+      harbour: {
+        centerZ: 50,
+        depth: 32,
+        halfWidth: 48,
+        surfaceY: 0.05,
+      },
+      seed: cityGroundSeed ^ 0x7a4c,
+    });
+    // Attach the group to the skyline scene so bloom picks up the
+    // emissive quads and bulbs, and depth-tests against the towers.
+    skyline.scene.add(traffic.group);
+
     // ── composer ─────────────────────────────────────────────────────────
     // The tick loop hands its passes to this composer so bright pixels
     // can bloom and the workflow stays linear. Sized 1×1 here — the
@@ -1660,6 +1698,10 @@ export default function City() {
               // eviction; still cheap.
               roads.shift();
               cityGround.setRoads(roads);
+              // Traffic reads the road list wholesale; a shift on the
+              // ground overlay must be mirrored here or the oldest road's
+              // lamps stay in the frame.
+              traffic.setRoads(roads);
             }
             const road: Road = {
               x1: dragRoadStart.x, y1: dragRoadStart.y,
@@ -1671,6 +1713,11 @@ export default function City() {
             // one texture upload — the 3D pass now shows the same road
             // the 2D overlay traces.
             cityGround.addRoad(road.x1, road.y1, road.x2, road.y2);
+            // Hand the road list to the traffic module. Lamp posts
+            // relayout on the +8m grid along both kerbs; cars pick up the
+            // new road as one they may hop onto at the next wrap. Cheap
+            // (one InstancedMesh matrix write per lamp).
+            traffic.setRoads(roads);
             try { haptics.chop(); } catch { /* noop */ }
           }
           dragRoadStart = null;
@@ -2074,6 +2121,18 @@ export default function City() {
         // ignored by the water module; a structural cast avoids a per-
         // frame allocation.
         plots: plots as unknown as ReadonlyArray<CityWaterProxy>,
+      });
+
+      // Advance the 24 cars along the road graph, cross the 6 boats on
+      // the harbour strip, and drive the emissive gate on the lamp
+      // bulbs + headlight quads. The tier boolean drops the traffic on
+      // sleep (group.visible = false). The wake proxies returned here
+      // are for a future PR that reads them into the reflector — for
+      // now the emissive strip alone is what carries the harbour life.
+      traffic.update({
+        dtMs: dt,
+        night: nightAmt,
+        tier,
       });
 
       // Project the sun's world-space position to NDC for the god-rays
@@ -2994,6 +3053,10 @@ export default function City() {
       // Wipe the painted-road overlay too — LetGo is the room-wide clear
       // and the 3D pass must forget the roads the 2D overlay just did.
       cityGround.clearRoads();
+      // Cars fall off (no road to advance along), lamps disappear —
+      // the traffic group renders an empty settlement, which is what
+      // the visitor asked for.
+      traffic.setRoads([]);
       activePlant = null;
       idleWrite.schedule();
     };
@@ -3038,6 +3101,11 @@ export default function City() {
       // the layer-1 proxy meshes. Dispose it before the composer so the
       // composer's own targets can drop cleanly right after.
       water.dispose();
+      // Traffic owns three InstancedMeshes + a handful of PBR materials +
+      // the small extruded geometries the vehicles/lamps ride on. Drop
+      // them before the renderer so the GL context they belong to still
+      // exists at teardown.
+      traffic.dispose();
       // Composer holds bloom pyramid RTs — drop them before disposing
       // the renderer that owns their GL context.
       composer.dispose();
