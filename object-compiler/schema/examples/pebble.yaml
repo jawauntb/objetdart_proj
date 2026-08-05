@@ -173,7 +173,7 @@ life:
         persistence: LetGo
         creates_via_verb: dwell
         retires_via: [LetGo]
-        implementation_hint: "inline array `state.growthRings: GrowthRing[]` + createIdleWriter through the room's own storage_key"
+        implementation_hint: "inline array — kept inline because growth rings are ANNULAR tint bands inside one stone SDF, not disc primitives at various world positions; the population-layer's SDF disc + additive corona is the wrong primitive for concentric-annulus rendering"
   breath:
     period_seconds: 7
     reads:

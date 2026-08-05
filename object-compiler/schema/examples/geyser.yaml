@@ -164,7 +164,7 @@ life:
         persistence: LetGo
         creates_via_verb: dwell
         retires_via: [ceremony, LetGo]
-        implementation_hint: "inline array `state.heatMarks: HeatMark[]` + createIdleWriter through the room's own storage_key"
+        implementation_hint: SceneObjectSpec
   breath:
     period_seconds: 7
     reads:

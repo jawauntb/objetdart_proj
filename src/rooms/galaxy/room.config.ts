@@ -63,6 +63,23 @@ const galaxy = {
     ],
     keeps: "the stars you have ridden through an arm, and the gas and remnants you left in the disc",
   },
+  // ——— the room quality bar, structured ————————————————————————————————
+  // Phase 4 (Track 2) migration: writeStore() at every gesture endpoint
+  // moved to a shared idle writer from room-runtime. Kept stars and
+  // star-forming regions still persist to objetdart:galaxy:v1 in the
+  // same shape; only the WRITER is different.
+  life: {
+    glimmer: {
+      after_idle_ms: 20000,
+      visual:
+        "one star-forming region on the crest catches a small brightening, and the pattern's own soft arpeggio walks the ring — the disc answers a quiet room with the register the scale axis assigns this band.",
+    },
+    make_unmake: {
+      letgo_clears_population: true,
+      ceremony_is:
+        "a ceremony hold on a gas-gathering finger ignites its region — the shell runs outward, lights what it passes, and where it reaches the next patch of gas it lights that too",
+    },
+  },
 } as const satisfies RoomManifest;
 
 export default galaxy;

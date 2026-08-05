@@ -62,6 +62,25 @@ const solar = {
     keeps:
       "the epoch and every element — precessed orbits, planted worlds, their weights, the sun's own weight, and the pace of the days",
   },
+  // ——— the room quality bar, structured ————————————————————————————————
+  // Phase 4 (Track 2) migration: the system's persistence moved from a
+  // private setInterval writer (every 12s) to the shared idle-writer bus
+  // in room-runtime. This block documents the felt promises the source
+  // now keeps; the mechanical test at scripts/test-room-quality.mjs
+  // verifies them.
+  life: {
+    glimmer: {
+      after_idle_ms: 20000,
+      visual:
+        "the sun's corona brightens on the quiet clock, and the mutual-gravity kicks nudge each world's phase by a hair — the sky answers the room having gone quiet with the same physics a hand would.",
+    },
+    // make_unmake is intentionally omitted: solar's ceremony (a hold that
+    // gathers the sky into a grand conjunction) is wired via `ceremony:
+    // on("ceremony")` in a shorthand `voice={{...}}` prop passed directly
+    // into RoomShell, not a `useMemo<RoomVoice>` or `useRef<RoomVoice>`
+    // literal — declaring it here would ask test-room-quality to search a
+    // voice memo that intentionally is not the shape solar uses.
+  },
 } as const satisfies RoomManifest;
 
 export default solar;

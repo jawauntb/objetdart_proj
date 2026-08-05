@@ -3,6 +3,7 @@
 import { create } from "zustand";
 import type { ConcernKey, PhaseKey } from "@/lib/types";
 import { CONCERNS, PRESETS, REGIONS, OBJECTS } from "@/data/content";
+import { createIdleWriter } from "@/lib/room-runtime";
 
 type Medium = string;
 
@@ -111,17 +112,43 @@ const STORAGE_KEY = "objetdart:state:v1";
 const KEPT_KEY = "objetdart:kept:v1";
 const IMAGINED_KEY = "objetdart:imagined:v1";
 
+// The pending snapshot, staged before the idle writer flushes. A fast
+// drag can hit `persist()` on every rAF frame; the writer coalesces the
+// writes so localStorage.setItem runs once at idle instead of 60/sec,
+// which is the SoilGround-pattern regression test:room-quality catches.
+// The shape on disk at objetdart:state:v1 is unchanged.
+let pendingSnapshot: Partial<FieldState> | null = null;
+const fieldPersistWriter =
+  typeof window === "undefined"
+    ? null
+    : createIdleWriter(() => {
+        const s = pendingSnapshot;
+        if (!s) return;
+        pendingSnapshot = null;
+        try {
+          const minimal = {
+            concerns: s.concerns,
+            preset: s.preset,
+            region: s.region,
+            carriedObject: s.carriedObject,
+          };
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(minimal));
+        } catch { /* noop */ }
+      });
+
 function persist(s: Partial<FieldState>) {
   if (typeof window === "undefined") return;
-  try {
-    const minimal = {
-      concerns: s.concerns,
-      preset: s.preset,
-      region: s.region,
-      carriedObject: s.carriedObject,
-    };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(minimal));
-  } catch { /* noop */ }
+  pendingSnapshot = s;
+  fieldPersistWriter?.schedule();
+}
+
+/**
+ * Force-flush any pending field persistence. Called by the concern
+ * field when it detaches, so a hand that lifts and immediately closes
+ * the tab still lands the last drag.
+ */
+export function flushFieldPersist() {
+  fieldPersistWriter?.flush();
 }
 
 function persistKept(list: KeptReading[]) {

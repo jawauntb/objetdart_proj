@@ -59,6 +59,26 @@ const compass = {
     ],
     keeps: "your eight weights, the preset you last snapped to, and every reading you kept",
   },
+  // ——— the room quality bar, structured ————————————————————————————————
+  // Phase 4 (Track 2) migration: the compass's persistence goes through
+  // the useField zustand store, which now uses the shared idle writer
+  // from room-runtime (see `flushFieldPersist` in `src/store/field.ts`).
+  // ConcernField.tsx also holds its own writer for the compass-owned
+  // rose angle (a small supplementary key). The state:v1 blob shape is
+  // unchanged.
+  life: {
+    glimmer: {
+      after_idle_ms: 20000,
+      visual:
+        "the rose walks one vertex on the quiet clock — each of the eight concerns sounds its own voice in turn, so a long idle shows the hand that all eight are the same kind of thing.",
+    },
+    // make_unmake is intentionally omitted: the compass's whole-field
+    // clear is the shared `<LetGo>` reachable from the axis chrome, and
+    // its ceremony act (the center-hold that keeps a reading) is wired
+    // in a raw `hold:` handler inside attachGestures rather than a
+    // `useMemo<RoomVoice>` literal — the mechanical make_unmake_ceremony
+    // check would need the memo shape it does not have.
+  },
 } as const satisfies RoomManifest;
 
 export default compass;

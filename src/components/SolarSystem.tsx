@@ -47,6 +47,7 @@ import * as haptics from "@/lib/haptics";
 import RoomShell from "@/components/RoomShell";
 import { createGLStage, FULLSCREEN_VERT_CLIP } from "@/lib/webgl/stage";
 import { clocksFrom } from "@/lib/webgl/sizing";
+import { createIdleWriter } from "@/lib/room-runtime";
 import { readWorldClock, stampWorldClock } from "@/lib/world";
 import {
   A_MAX,
@@ -805,7 +806,7 @@ export default function SolarSystem() {
         resync();
         lose(el, out.kind);
       }
-      save();
+      scheduleSave();
     };
 
     // ——— the engine the shell speaks to ———
@@ -910,7 +911,7 @@ export default function SolarSystem() {
         if (holdInfo) holdInfo.ceremonyFired = true;
         if (!el) return;
         beginConjunction(positionAt(el, mu, simS).angle);
-        save();
+        scheduleSave();
       },
       settle: (e) => {
         const info = holdInfo;
@@ -952,7 +953,7 @@ export default function SolarSystem() {
           // the hand asked for an orbit the sun will not hold
           lose(undefined, out.kind);
         }
-        save();
+        scheduleSave();
       },
       timeScale: (k) => {
         dilation = Math.max(0.03, k);
@@ -970,7 +971,7 @@ export default function SolarSystem() {
             } catch {
               /* noop */
             }
-            save();
+            scheduleSave();
           }
           dragIdx = -1;
           return;
@@ -1194,14 +1195,18 @@ export default function SolarSystem() {
     };
     window.addEventListener("keydown", onThrowKey);
 
-    // ——— persistence cadence: leaving stamps the clock ———
-    const onHide = () => save();
+    // ——— persistence cadence: the shared idle writer coalesces rapid saves ———
+    // and flushes on hide/unmount. The synchronous setInterval that used to
+    // hammer the storage every 12s regardless of change was the SoilGround
+    // pattern the room-runtime bus exists to end.
+    const writer = createIdleWriter(save);
+    const scheduleSave = () => writer.schedule();
+    const onHide = () => writer.flush();
     window.addEventListener("pagehide", onHide);
     const onVis = () => {
-      if (document.visibilityState === "hidden") save();
+      if (document.visibilityState === "hidden") writer.flush();
     };
     document.addEventListener("visibilitychange", onVis);
-    const saveTimer = window.setInterval(save, 12000);
 
     // ——— the frame ———
     let raf = 0;
@@ -1231,7 +1236,7 @@ export default function SolarSystem() {
           for (const ev of res.lost) lose(before[ev.index], ev.fate);
           if (res.lost.length) {
             resync();
-            save();
+            scheduleSave();
           }
           // and what touches, merges
           const hit = firstCollision(bodies, mu, simS);
@@ -1252,7 +1257,7 @@ export default function SolarSystem() {
               /* noop */
             }
             if (merged.kind === "bound") voice(merged.el, 2.2);
-            save();
+            scheduleSave();
           }
         }
         // the locks the system has found, re-read a few times a second
@@ -1300,7 +1305,7 @@ export default function SolarSystem() {
       }
       if (seasonDirty && now - lastSeasonAt > 400) {
         seasonDirty = false;
-        save();
+        scheduleSave();
       }
 
       // acts in flight
@@ -1628,7 +1633,7 @@ export default function SolarSystem() {
       window.removeEventListener("keydown", onThrowKey);
       window.removeEventListener("pagehide", onHide);
       document.removeEventListener("visibilitychange", onVis);
-      window.clearInterval(saveTimer);
+      writer.flush();
       save();
       engineRef.current = null;
       skyQuad?.dispose();

@@ -85,8 +85,7 @@ const geyser = {
           persistence: "LetGo",
           creates_via_verb: "dwell",
           retires_via: ["ceremony", "LetGo"],
-          implementation_hint:
-            "inline array — state.heatMarks: HeatMark[] in src/lib/geyserflow.ts. Phase-4 note: not yet migrated to SceneObjectSpec.",
+          implementation_hint: "SceneObjectSpec",
         },
       ],
     },

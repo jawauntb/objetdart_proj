@@ -34,6 +34,14 @@ import {
   createFrameGovernor,
   isEmbeddedFrame,
 } from "@/lib/room-runtime";
+import {
+  createPopulation,
+  mulberry32 as sceneMulberry32,
+  type SceneObjectSpec,
+  type SceneObjectState,
+} from "@/lib/scene/object";
+import { createInstanceBuffer } from "@/lib/scene/instances";
+import { createPopulationLayer } from "@/lib/scene/population-layer";
 // __SLOT_DOMAIN_IMPORTS__
 import {
   MAX_SEEPS,
@@ -54,6 +62,7 @@ import {
   sealSeep,
   totalWater,
   type Climate,
+  type Seep,
   type SpringState,
 } from "@/lib/springflow";
 
@@ -78,6 +87,20 @@ const WATCHED_SPEED = 60;
 
 const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
 const clamp01 = (v: number) => clamp(v, 0, 1);
+
+/**
+ * The seep, in the shared scene model's vocabulary. The physics ledger
+ * (`state.seeps: Seep[]` in springflow.ts) is authoritative; this view is
+ * the render half, synced from the ledger each frame so the shared
+ * `createPopulation` + `createPopulationLayer` can draw every seep in
+ * one instanced pass.
+ */
+type SeepView = SceneObjectState & {
+  throat: number;
+  flux: number;
+  sealed: boolean;
+  phase: number;
+};
 
 type StoredSpring = {
   v: 1;
@@ -265,22 +288,13 @@ void main() {
   float bloomBand = smoothstep(0.18, 0.45, moisture) * (1.0 - smoothstep(0.55, 0.9, moisture));
   col += ACCENT2 * bloom * bloomBand * 0.9 * (0.6 + uBreath * 0.4);
 
-  // ——— every seep, as an SDF disc plus an additive corona ———
-  // Load-bearing map: corona brightness = flux, monotone. Invert the halo
-  // and you recover what the ledger is doing at that seep.
-  for (int i = 0; i < ${MAX_SEEPS}; i++) {
-    if (i >= uSeepCount) break;
-    vec4 s = uSeeps[i];
-    vec2 dp = (uv - s.xy) * vec2(aspect, 1.0);
-    float dist = length(dp);
-    float r = 0.018;
-    float disc = smoothstep(r + 0.006, r - 0.002, dist);
-    col = mix(col, ACCENT2 * 0.9, disc * 0.72);
-    // corona: brightness monotone in flux (uSeeps[i].z is H-units/s)
-    float fluxBright = clamp(s.z * 4.0e4, 0.0, 1.6);
-    float corona = exp(-dist * dist * 60.0) * fluxBright;
-    col += ACCENT * corona * 0.6 + GLOW * corona * 0.18;
-  }
+  // The seep disc + additive corona lives in the shared population-layer
+  // (src/lib/scene/population-layer.ts) — one instanced draw for all seeps.
+  // The load-bearing FLUX to CORONA-BRIGHTNESS map is preserved there, on the
+  // seepSpec's emit: glow = clamp(s.flux * 4e4, 0, 1.6). Invert the halo,
+  // recover the ledger. This shader still reports every seep to the pool via
+  // uSeeps so the underwater seep-pulse rings still ride the head to phase
+  // map inside the pool branch above.
 
   // vignette + night
   vec2 vd = (uv - vec2(0.5, 0.5)) * vec2(aspect, 1.0);
@@ -448,6 +462,90 @@ export default function Spring() {
     });
     const prog = stage?.program(FULLSCREEN_VERT_UNIT, FRAG) ?? null;
     const quad = stage && prog ? stage.fullscreenQuad(prog, "unit") : null;
+
+    // ——— the seep, as the shared scene model reads it ———
+    // The ledger owns the seeps (springflow.ts) — physics stays where physics
+    // lives. This SceneObjectSpec is the seep's declaration in the site's
+    // shared vocabulary, and the population/layer below is the render half:
+    // one instanced draw for every seep the pool holds.
+    // waterline is captured by closure so a seep sitting below the pool
+    // surface fades (the "the water reveals seeps as it drops" invariant).
+    let waterlineU = 0.42;
+    const seepSpec: SceneObjectSpec<SeepView> = {
+      kind: "seep",
+      cap: MAX_SEEPS,
+      born(seed, nx, ny, tMs) {
+        const rng = sceneMulberry32(seed);
+        return {
+          id: 0,
+          seed,
+          nx,
+          ny,
+          bornMs: tMs,
+          growth: 0.4,
+          sealedMs: null,
+          presence: 1,
+          throat: 0,
+          flux: 0,
+          sealed: false,
+          phase: rng(),
+        };
+      },
+      step(s, ctx) {
+        // Growth eases toward 1 while the disc reads as growing under the
+        // finger; the physics library is what actually moves the throat.
+        if (s.growth < 1) s.growth = Math.min(1, s.growth + ctx.dt * 0.9);
+      },
+      emit(s, ctx, out) {
+        const px = s.nx * ctx.width;
+        const py = s.ny * ctx.height;
+        const baseR = Math.max(2.5, ctx.width * 0.011);
+        // Underwater seeps read dimmer — the pool's own reflection covers
+        // them until the water drops. Above the waterline they read as full.
+        const underwater = s.ny > waterlineU + 0.008 ? 1 : 0;
+        const visibility = underwater
+          ? 0.28 + s.throat * 0.35
+          : 0.85 + s.throat * 0.15;
+        const discAlpha = s.presence * visibility * (0.5 + s.growth * 0.5);
+        // The seep's body: an ACCENT2-hued disc that reads warmer when sealed.
+        out.push(
+          px, py,
+          baseR * (s.sealed ? 1.15 : 1),
+          s.phase * Math.PI * 2,
+          s.sealed ? 0.92 : 0.75,
+          0.28 + s.throat * 0.28 + ctx.breath * 0.12,
+          Math.sin(ctx.tMs * 0.001 * 1.4 + s.phase * Math.PI * 2) * 0.5 + 0.5,
+          discAlpha,
+        );
+        // The corona: brightness monotone in flux — the load-bearing map.
+        // (invert corona brightness and you recover this seep's live flux)
+        const fluxBright = Math.min(1.6, Math.max(0, s.flux) * 4e4);
+        if (fluxBright > 0.01) {
+          out.push(
+            px, py,
+            baseR * 3.4,
+            -s.phase * Math.PI * 2,
+            0.4 + s.throat * 0.2,
+            fluxBright,
+            ctx.breath,
+            s.presence * Math.min(1, fluxBright * 0.55) * (0.4 + visibility * 0.6),
+          );
+        }
+      },
+      // Verb routing lives on the imperative SpringApi below — the physics
+      // library is the authority for a seep's state, and re-declaring the
+      // handlers here would fork two truths. The room still gets one
+      // instanced draw per frame via the population layer.
+      verbs: [],
+      respond: {},
+    };
+    const population = createPopulation(seepSpec);
+    const populationLayer = stage
+      ? createPopulationLayer(stage, {
+          palette: ["#4a91a8", "#c9b988", "#a9d8e6"], // accent, accent2, glow
+        })
+      : null;
+    const instanceBuffer = createInstanceBuffer(MAX_SEEPS * 2);
 
     // ——— what the shader reads: one Float32Array each, allocated once ———
     const seepU = new Float32Array(MAX_SEEPS * 4);
@@ -851,6 +949,54 @@ export default function Spring() {
     apiRef.current = engine;
     void dwellStartElapsed;
 
+    /**
+     * Pull every seep out of the physics ledger into the shared population's
+     * items array. The item-per-seep is preserved across frames by matching
+     * `id` — new seeps spawn, seeps that vanished from the ledger start
+     * retiring (population.step decrements presence). Items are stable
+     * objects; only their fields update per frame.
+     */
+    const syncPopulationFromLedger = (now: number) => {
+      const items = population.items;
+      const ledger: Seep[] = state.seeps;
+      // Mark items whose seep is gone as retiring — the population's own
+      // step will fade them out gracefully.
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.presence < 1) continue;
+        if (!ledger.some((s) => s.id === item.id)) item.presence = 0.999;
+      }
+      // Upsert every live seep.
+      for (const seep of ledger) {
+        let item = items.find((it) => it.id === seep.id && it.presence >= 1);
+        if (!item) {
+          item = {
+            id: seep.id,
+            seed: hashSeed(state.seedKey, seep.id),
+            nx: seep.x,
+            ny: seep.y,
+            bornMs: now,
+            growth: 0.05,
+            sealedMs: seep.sealed ? now : null,
+            presence: 1,
+            throat: seep.throat,
+            flux: seep.flux,
+            sealed: seep.sealed,
+            phase: seep.phase,
+          };
+          items.push(item);
+        } else {
+          item.nx = seep.x;
+          item.ny = seep.y;
+          item.throat = seep.throat;
+          item.flux = seep.flux;
+          item.sealed = seep.sealed;
+          item.phase = seep.phase;
+          if (seep.sealed && item.sealedMs === null) item.sealedMs = now;
+        }
+      }
+    };
+
     // ——— the loop ———
     const draw = (now: number) => {
       if (!running) return;
@@ -928,6 +1074,39 @@ export default function Spring() {
         const rippleLoc = prog.location("uRipples[0]");
         if (rippleLoc) stage.gl.uniform4fv(rippleLoc, rippleU);
         quad.draw();
+
+        // ——— the seeps, as one instanced draw ———
+        // Sync the shared population from the ledger — the physics is the
+        // authority, the population is the render view. Then step it once
+        // (so retiring items ride out their fade) and emit every seep into
+        // the shared instance buffer.
+        waterlineU = clamp01(0.42 + (0.55 - clamp01(state.L)) * 0.10);
+        syncPopulationFromLedger(now);
+        population.step({
+          dt: Math.min(0.05, dtRaw),
+          tMs: now,
+          breath: 0.5,
+          detail: 1,
+          wind: 0,
+          gravity: 0,
+          agitation,
+          season: 0,
+          timeScale,
+          reducedMotion: reduced,
+        });
+        instanceBuffer.reset();
+        population.emit(
+          {
+            width: stage.size.width,
+            height: stage.size.height,
+            tMs: now,
+            breath: reduced ? 0.5 : 0.5 + 0.5 * Math.sin(t * Math.PI * 2 / 7),
+            detail: 1,
+            reducedMotion: reduced,
+          },
+          instanceBuffer,
+        );
+        populationLayer?.draw(instanceBuffer);
       }
 
       // ——— the twist lens: the ledger, drawn back off the water ———
@@ -994,6 +1173,7 @@ export default function Spring() {
       unvis();
       ungal();
       writer.flush();
+      populationLayer?.dispose();
       quad?.dispose();
       stage?.dispose();
       cancelAnimationFrame(raf);

@@ -61,6 +61,22 @@ const planets = {
     ],
     keeps: "the worlds you forged, where in their orbits they are, and a deliberate clearing",
   },
+  // ——— the room quality bar, structured ————————————————————————————————
+  // Phase 4 (Track 2) migration: the direct save() calls at every plant,
+  // retire and seasonRest event moved to a shared idle writer from
+  // room-runtime; on-disk shape at objetdart:planets:v2 is unchanged.
+  life: {
+    glimmer: {
+      after_idle_ms: 20000,
+      visual:
+        "each world catches a small phase-nudge on the quiet clock and the disc's shimmer eases — the forge answers a still room by making its own reserve visible.",
+    },
+    make_unmake: {
+      letgo_clears_population: true,
+      ceremony_is:
+        "a ceremony hold on a growing world seals its accretion — the mass reserve settles, the world takes its final vector, and the disc closes on it",
+    },
+  },
 } as const satisfies RoomManifest;
 
 export default planets;

@@ -549,18 +549,39 @@ properties:
       Design brief for what the room SHOULD LOOK LIKE — the picture-diff
       between a landed `public/guide/<key>.jpg` and the shader that produced
       it, structured. `shader_intent` remains the specific, per-room brief;
-      this block is the DESIGN CONTEXT the brief assumes: composition,
-      subject, form language, motion character, palette registers by
-      function, reference notes, banned forms, mood, and gesture-feedback
+      this block is the DESIGN CONTEXT the brief assumes: subject, form
+      language, motion character, reference notes, mood, and gesture-feedback
       style. Every field is optional so existing specs keep compiling until
       the block is filled in from the landed screenshot; when present, the
       slot-shader prompt (and, where relevant, slot-verbs) SHOULD consume
       it. All fields carry pictorial vocabulary — nouns and adjectives a
       designer would say aloud — not technical GLSL.
+
+      **As of phase 4, `composition`, `registers`, and `banned_forms`
+      live in `object-compiler/design/authoring_style.yaml` — the shared
+      design language.** The phase-2 falsifiability audit (see
+      `data/object-compiler/audits/phase-2-visual-style.md`) showed those
+      three fields drift when recovered from screenshots alone (mean
+      agreement rates 0.42, 0.50, 0.50) because they encode DECISIONS the
+      site makes once, not observations about a single room. Per-room
+      specs may still declare them here for overrides, but the LLM
+      slot-shader prompt reads the site-wide values first. The fields
+      below are marked `deprecated: true` for that reason — old specs
+      still validate; new specs should leave them out and let the shared
+      artifact carry the design law.
     properties:
       composition:
         type: string
+        deprecated: true
         description: >
+          [Deprecated — phase 4] Moved to
+          `object-compiler/design/authoring_style.yaml` under
+          `compositions`. Old specs may still carry this as a per-room
+          override; new specs should omit it and let the shared artifact
+          name the taxonomy. Phase-2 audit found this the least-agreed
+          field (0.42) because the authored value encodes a design-law
+          commitment invisible in the rendered frame.
+
           How the room is framed. `side-section` shows a vertical slice
           (soil is a side-section cutaway; atmosphere is a side-section
           ambient column). `top-down` looks down (galaxy). `first-person`
@@ -625,7 +646,18 @@ properties:
           - stochastic
       registers:
         type: array
+        deprecated: true
         description: >
+          [Deprecated — phase 4] Moved to
+          `object-compiler/design/authoring_style.yaml` under `registers`.
+          The site-wide default now names the canonical hex-role → what-
+          it-paints mapping once; per-room specs may still restate it
+          here as an override, but new specs should omit unless the room
+          genuinely paints a different meaning onto the same six palette
+          slots. Phase-2 audit found this recoverable in STRUCTURE but
+          not in specific assignment (0.50) — the mapping is a design
+          decision, not a visible feature.
+
           The palette registers by function — one string per assignment,
           each naming what a hex slot ACTUALLY PAINTS in this room.
           Bridges the abstract palette (`bg`, `bg2`, `glow`, `accent`,
@@ -648,7 +680,20 @@ properties:
           type: string
       banned_forms:
         type: array
+        deprecated: true
         description: >
+          [Deprecated — phase 4] Moved to
+          `object-compiler/design/authoring_style.yaml` under
+          `banned_forms`. The AGENTS.md paint bar is site-wide law, not
+          per-room description, and belongs in the shared artifact. A
+          per-room spec may still add room-specific negatives here (e.g.
+          "no drawn spiral — arms emerge from the population"), but new
+          specs should keep this list to the truly room-specific bans
+          and let the shared artifact carry the standard AGENTS ones.
+          Phase-2 audit found the standard bans trivially recoverable
+          (they descend from a global rule) and the room-specific ones
+          almost never recoverable from image alone (0.50).
+
           The explicit no-fly list for this room. Always includes at
           least the AGENTS.md room-quality bar (no `createRadialGradient`,
           no per-frame `shadowBlur`, no `ctx.filter` blur, no per-object

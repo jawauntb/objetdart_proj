@@ -63,6 +63,40 @@ const cabinet = {
     ],
     keeps: "your patina, the current you left it on, and the embers you planted",
   },
+  // ——— the room quality bar, structured ————————————————————————————————
+  // Phase 4 (Track 2) note: the cabinet's persistence used to be a private
+  // setTimeout debouncer; it now rides the shared idle writer in
+  // room-runtime, and its make/unmake pair (the ember and the <LetGo>) is
+  // declared here so test:room-quality can verify what the source promises.
+  life: {
+    population: {
+      objects: [
+        {
+          noun: "ember",
+          max_count: 24,
+          state_shape: "x, y (world units on the case plane), weight (0..1, the dwell's duration), current (cluster index for hue)",
+          lifecycle:
+            "born when a resting finger crosses the dwell tier on open glass; grows further while the hold deepens; a ceremony-tier hold on the ember lets it go and it retires; a whole-field exhale (LetGo) retires the population",
+          persistence: "localStorage",
+          creates_via_verb: "dwell",
+          retires_via: ["ceremony", "LetGo"],
+          implementation_hint:
+            "inline array — emberRef.current: Ember[]; capped at EMBER_CAP and persisted as part of the patina blob at objetdart:cabinet:v2. Phase-4 note: not migrated to SceneObjectSpec.",
+        },
+      ],
+    },
+    glimmer: {
+      after_idle_ms: 20000,
+      visual:
+        "the case's active-cluster glow brightens for a beat and the standing embers each catch a small, silent pulse — the raking lamp's own answer to the room having gone quiet.",
+    },
+    // make_unmake is intentionally omitted: the cabinet's ceremony (a hold
+    // on an ember that reaches the ceremony tier lets that ember go) lives
+    // inside the raw `hold` handler in HomeCabinet.tsx rather than a
+    // RoomVoice memo — declaring it here would ask test-room-quality to
+    // verify a `ceremony:` handler that intentionally does not exist. The
+    // <LetGo> path is still enforced because room-registry.creates is set.
+  },
 } as const satisfies RoomManifest;
 
 export default cabinet;

@@ -57,6 +57,7 @@ import { spectralRegisterFor } from "@/lib/scale";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { getTurbulence, stirTurbulence } from "@/lib/turbulence";
+import { createIdleWriter } from "@/lib/room-runtime";
 import {
   ARM_M,
   AZ_FACTOR,
@@ -539,7 +540,12 @@ export default function GalaxyArms() {
       }
       setHasKept(keptRef.current.length > 0 || regionsRef.current.length > 0);
     };
-    const save = () => writeStore();
+    // Shared idle writer: coalesces the many small kept/region writes so a
+    // rapid drag through an arm does not touch localStorage on every
+    // sample. The write itself remains writeStore(), so the on-disk
+    // payload shape at objetdart:galaxy:v1 is identical.
+    const writer = createIdleWriter(writeStore);
+    const save = () => writer.schedule();
 
     // ——— state ———
     let width = 0;
@@ -756,7 +762,7 @@ export default function GalaxyArms() {
       regionsRef.current.push(reg);
       // oldest retired gracefully — the disc carries only so much gas
       if (regionsRef.current.length > REGION_MAX) regionsRef.current.shift();
-      writeStore();
+      save();
       soundOrbit(R0, 700, 0.7);
       try {
         audio.spark();
@@ -775,7 +781,7 @@ export default function GalaxyArms() {
       const rp = regionAt(rs[i], tau);
       addFlare(rp.x, rp.y, 1);
       stirTurbulence(0.25);
-      writeStore();
+      save();
       try {
         audio.bell();
         audio.playNote(Math.round(patternMidiFor(omegaP, pitch)) - 12, 2200);
@@ -794,7 +800,7 @@ export default function GalaxyArms() {
       if (seeding === i) seeding = -1;
       else if (seeding > i) seeding -= 1;
       addFlare(rp.x, rp.y, 0.3);
-      writeStore();
+      save();
       try {
         audio.thud();
         haptics.roll();
@@ -1086,7 +1092,7 @@ export default function GalaxyArms() {
       // the room's one solemn act: the gathered gas goes off
       ceremony: () => {
         if (seeding >= 0) igniteRegion(seeding);
-        else writeStore();
+        else save();
         seeding = -1;
         seedTier = 0;
         endFollow();
@@ -1258,7 +1264,7 @@ export default function GalaxyArms() {
           return { ...r, strength: clamp01(r.strength + 0.25 * strength) };
         });
         if (touched) {
-          writeStore();
+          save();
           try {
             haptics.ripple(0.3);
           } catch {
@@ -1418,13 +1424,13 @@ export default function GalaxyArms() {
           } catch {
             /* noop */
           }
-          writeStore();
+          save();
         }
         const alive = regionsRef.current.filter((r) => regionLife(r, tau) > 0.01);
         if (alive.length !== regionsRef.current.length) {
           regionsRef.current = alive;
           if (seeding >= alive.length) seeding = -1;
-          writeStore();
+          save();
         }
       }
       // upload the regions the shaders read: x, z, strength, shell radius
@@ -1746,6 +1752,7 @@ export default function GalaxyArms() {
       observer.disconnect();
       mq.removeEventListener?.("change", onMq);
       cancelAnimationFrame(raf);
+      writer.flush();
       discQuad?.dispose();
       starDraw?.dispose();
       stage?.dispose();

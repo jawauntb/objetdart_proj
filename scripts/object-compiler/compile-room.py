@@ -62,6 +62,27 @@ PROMPTS_DIR = COMPILER_ROOT / "prompts"
 SCHEMA_PATH = COMPILER_ROOT / "schema" / "room-spec.schema.yaml"
 EXAMPLES_DIR = COMPILER_ROOT / "schema" / "examples"
 
+# The site's authoring style — the cross-room design language every
+# room shares. Loaded once at module scope and threaded into every
+# slot-prompt substitution alongside the per-room visual_style block.
+# See object-compiler/design/authoring_style.yaml for the artifact and
+# data/object-compiler/audits/phase-4-visual-style-split.md for why
+# the site-wide vocabulary lives in its own file rather than being
+# restated in every room's spec.
+AUTHORING_STYLE_PATH = COMPILER_ROOT / "design" / "authoring_style.yaml"
+
+
+def _load_authoring_style() -> str:
+    """Read the shared authoring-style YAML once at module load. Returns the
+    raw text so the LLM sees the same bytes the human author sees; a missing
+    file becomes an empty block that older prompts handle gracefully."""
+    if AUTHORING_STYLE_PATH.exists():
+        return AUTHORING_STYLE_PATH.read_text(encoding="utf-8")
+    return "# (authoring_style.yaml not found; the compiler will still run but the slot-shader prompt loses its site-wide design context)"
+
+
+AUTHORING_STYLE_TEXT = _load_authoring_style()
+
 RENDER_TEMPLATE = REPO_ROOT / "scripts" / "object-compiler" / "render-template.py"
 APPLY_SIDE_PATCHES = REPO_ROOT / "scripts" / "object-compiler" / "apply-side-patches.py"
 REGISTRY_PATH = REPO_ROOT / "src" / "rooms" / "registry.ts"
@@ -463,6 +484,14 @@ def _call_slot_prompt(slot: str, spec: Spec) -> str:
     # (and, in principle, any future slot prompt that wants it). Emit it as a
     # yaml block; an empty block is legal (older specs may not carry the
     # field yet), and the prompt handles the absent-visual-style case.
+    #
+    # As of phase 4 (see data/object-compiler/audits/phase-4-visual-style-
+    # split.md), the slot-shader prompt reads TWO blocks: the shared
+    # `authoring_style.yaml` (site-wide design language — palette,
+    # compositions, canonical registers, banned forms, form-language
+    # taxonomy, motion grammar, gesture defaults) FIRST, then the per-room
+    # `visual_style` block as room-specific refinements. Both are threaded
+    # in below.
     visual_style_block = _yaml_block(spec.raw.get("visual_style", {}))
 
     # life is the schema block that makes a room feel alive: population,
@@ -480,6 +509,7 @@ def _call_slot_prompt(slot: str, spec: Spec) -> str:
         "verb_intent":               str(spec.raw.get("verb_intent", "")),
         "palette_and_uniforms":      _yaml_block(spec.raw.get("palette", {})),
         "visual_style":              visual_style_block,
+        "authoring_style":           AUTHORING_STYLE_TEXT,
         "life":                      _yaml_block(life_block),
         "life_population":           _yaml_block(life_block.get("population", {})),
         "life_breath":               _yaml_block(life_block.get("breath", {})),

@@ -155,7 +155,7 @@ life:
         persistence: LetGo
         creates_via_verb: dwell
         retires_via: [LetGo]
-        implementation_hint: "inline array + createIdleWriter through the room's own storage_key (phase-4 note: population is `state.seeps: Seep[]` in springflow.ts, not yet migrated to SceneObjectSpec)"
+        implementation_hint: SceneObjectSpec
   breath:
     period_seconds: 7
     reads:

@@ -1041,7 +1041,7 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     key: "guide",
     href: "/guide",
     kind: "reading",
-    source: "src/components/Guide.tsx",
+    source: "src/app/guide/page.tsx",
     page: "src/app/guide/page.tsx",
     address: { exempt: "a reading surface — the one place the site explains itself" },
     frame: "yield",

@@ -86,7 +86,7 @@ const pebble = {
           creates_via_verb: "dwell",
           retires_via: ["LetGo"],
           implementation_hint:
-            "inline array — state.growthRings: GrowthRing[] in src/lib/pebblecore.ts. Phase-4 note: not yet migrated to SceneObjectSpec.",
+            "inline array — state.growthRings: GrowthRing[] in src/lib/pebblecore.ts. Kept inline: growth rings are ANNULAR tint bands inside the single stone SDF (each entry contributes a smoothstep(radius − t·0.6, radius) − smoothstep(radius, radius + t·0.6) weight to sectionTint), not disc-primitives at various world positions. The population-layer's SDF disc + additive corona is the wrong primitive for concentric-annulus rendering, so the migration would either weaken the invariant ('every growth ring is the domain's growthHistory read live, not decoration') or fork a second population-layer shader. See data/object-compiler/audits/phase-4-population-migration.md.",
         },
       ],
     },

@@ -10,6 +10,7 @@ import { attachGestures } from "@/lib/gesture";
 import { THRESHOLDS } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import { buildReading } from "@/lib/reading";
+import { createIdleWriter } from "@/lib/room-runtime";
 import type { ConcernKey } from "@/lib/types";
 
 /**
@@ -565,6 +566,40 @@ export default function ConcernField() {
       if (clear) clearTimeout(clear);
     };
   }, []);
+
+  // ── idle persistence, on the shared room-runtime bus ─────────────
+  // The concern field's own state lives in the useField zustand store,
+  // and the store now debounces its own writes through createIdleWriter
+  // (see src/store/field.ts). This second writer belongs to the compass
+  // itself: it persists the lens angle (`rose`) — a small piece of
+  // compass-owned state that used to be session-only — as a supplement
+  // to the store's blob, keeping the two facts on the same shared bus
+  // rather than growing a private setInterval save. Load happens at
+  // mount; the writer schedules on rose change and flushes on detach.
+  const ROSE_KEY = "objetdart:compass:rose";
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = window.localStorage.getItem(ROSE_KEY);
+      if (raw) {
+        const n = Number.parseFloat(raw);
+        if (Number.isFinite(n)) {
+          setRose(n);
+          roseRef.current = n;
+        }
+      }
+    } catch { /* noop */ }
+  }, []);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const writer = createIdleWriter(() => {
+      try {
+        window.localStorage.setItem(ROSE_KEY, String(roseRef.current));
+      } catch { /* noop */ }
+    });
+    writer.schedule();
+    return () => writer.flush();
+  }, [rose]);
 
   // build the polygon points string
   const polygonPoints = RADIAL_ORDER.map((k, i) => {

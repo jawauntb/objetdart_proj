@@ -32,6 +32,7 @@ import { attachGestures } from "@/lib/gesture";
 import { onVessel, requestVessel, vesselAvailable, vesselGranted } from "@/lib/vessel";
 import {
   createFrameGovernor,
+  createIdleWriter,
   detailForTier,
   isEmbeddedFrame,
   onGalleryPause,
@@ -513,23 +514,35 @@ export default function Beam() {
     memory.tempo !== undefined || memory.night !== undefined || memory.sep !== undefined,
   );
   const clearBeamRef = useRef<() => void>(() => {});
+  // Shared idle-persistence bus. Coalesces the several places that used to
+  // call `saveMemory` synchronously (tempo, night, sep, orientation-flip,
+  // letGo) so a rapid state change during a gesture writes localStorage
+  // once at idle instead of on every event. Same on-disk shape at
+  // objetdart:beam:memory.
+  const persistRef = useRef<ReturnType<typeof createIdleWriter> | null>(null);
+  if (persistRef.current === null && typeof window !== "undefined") {
+    persistRef.current = createIdleWriter(() => saveMemory(memRef.current));
+  }
+  const schedulePersist = useCallback(() => {
+    persistRef.current?.schedule();
+  }, []);
 
   const onTempo = useCallback((value: number) => {
     const v = clamp(value, 0.25, 2.5);
     setTempo(v);
     tempoRef.current = v;
     memRef.current.tempo = v;
-    saveMemory(memRef.current);
+    schedulePersist();
     setHasKept(true);
-  }, []);
+  }, [schedulePersist]);
 
   const onNightToggle = useCallback(() => {
     nightWantRef.current = !nightWantRef.current;
     setIsNight(nightWantRef.current);
     memRef.current.night = nightWantRef.current;
-    saveMemory(memRef.current);
+    schedulePersist();
     setHasKept(true);
-  }, []);
+  }, [schedulePersist]);
 
   const ensureAudio = useCallback(() => {
     if (!audioRef.current) audioRef.current = createBeamAudio();
@@ -570,12 +583,12 @@ export default function Beam() {
         nightWantRef.current = true;
         setIsNight(true);
         memRef.current.night = true;
-        saveMemory(memRef.current);
+        schedulePersist();
         setHasKept(true);
       },
     });
     return detach;
-  }, []);
+  }, [schedulePersist]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -806,7 +819,11 @@ export default function Beam() {
       onTempo(1);
       if (nightWantRef.current) onNightToggle();
       memRef.current = {};
-      saveMemory(memRef.current);
+      // letGo is a solemn act — flush the writer so the empty memory
+      // hits the disk before the exhale finishes, rather than waiting
+      // for the next idle window.
+      persistRef.current?.schedule();
+      persistRef.current?.flush();
       setHasKept(false);
     };
     let landscape: boolean | null = null;
@@ -948,7 +965,7 @@ export default function Beam() {
         ensureAudio();
         if (e.phase === "end") {
           memRef.current.sep = sepTarget;
-          saveMemory(memRef.current);
+          schedulePersist();
           setHasKept(true);
           return;
         }
@@ -992,7 +1009,7 @@ export default function Beam() {
         nightWantRef.current = !nightWantRef.current;
         setIsNight(nightWantRef.current);
         memRef.current.night = nightWantRef.current;
-        saveMemory(memRef.current);
+        schedulePersist();
         setHasKept(true);
       }
       landscape = nowLandscape;
@@ -1185,8 +1202,9 @@ export default function Beam() {
       try { audioRef.current?.dispose(); } catch { /* noop */ }
       audioRef.current = null;
       clearBeamRef.current = () => {};
+      persistRef.current?.flush();
     };
-  }, [ensureAudio]);
+  }, [ensureAudio, schedulePersist]);
 
   const letGo = useCallback(() => {
     clearBeamRef.current();

@@ -1,0 +1,149 @@
+# The site's authoring style — the design language every room shares.
+# This is the CROSS-ROOM design vocabulary; per-room specifics
+# (subject, mood, reference_notes, motion_character, form_language)
+# still live in each room's spec.yaml under `visual_style:`.
+#
+# The falsifiability test in phase 2 (see
+# data/object-compiler/audits/phase-2-visual-style.md) landed the
+# per-room `visual_style` block at 0.63 average agreement rate —
+# partial. Four fields recovered cleanly enough to earn their place
+# in the schema (subject 0.83, reference_notes 0.83, motion_character
+# 0.75, mood 0.75); three fields drifted (composition 0.42,
+# registers 0.50, banned_forms 0.50) because they encode DECISIONS
+# made once for the site — not observations about a single room.
+# The pre-registered rule for a partial score was to "keep the
+# reliably-recovered fields, move drifting ones to design-notes."
+# This file is that companion artifact.
+#
+# The slot-shader prompt reads this file FIRST as the site-wide
+# default, then reads each room's `visual_style` block as
+# refinements over the same vocabulary. Only when a per-room block
+# overrides a shared field does the per-room win.
+
+palette:
+  # From DESIGN.md §"Brand & visual system (Tidewater Vellum)".
+  # These are the tokens the site paints itself with; every room's
+  # `palette:` block binds these six hex slots to concrete registers
+  # (which is what the per-room `visual_style.registers` used to
+  # describe, before this file took the shared vocabulary out).
+  paper: "#F2EEE6"           # --paper — page background, warm vellum
+  paper_2: "#E8E2D5"         # --paper-2 — panel / card surfaces
+  ink: "#15171A"             # --ink — primary text, mark
+  ink_2: "#3A3D42"           # --ink-2 — secondary text
+  rule: "rgba(21,23,26,0.18)"  # --rule — hairlines, dividers
+  candle: "#C8732A"          # --candle — warm accent (slider fill, active state)
+  sea: "#2C4A5C"             # --sea — cold accent (atlas regions, focus ring)
+
+compositions:
+  # The six framings a room can choose from. The per-room spec's
+  # `visual_style.composition` picks ONE of these; the shared
+  # vocabulary is the enumeration itself, kept here so the slot-
+  # shader prompt sees the whole taxonomy every time it writes.
+  - side-section       # vertical slice viewed from the front (soil, atmosphere)
+  - top-down           # plan view looking straight down (solar, galaxy)
+  - first-person       # viewer inside the room, looking out
+  - ambient-column     # full-viewport vertical field, no ground or sky boundary
+  - cutaway            # section opened through a solid to reveal its interior
+  - silhouette         # outline of a form against its field (rocks)
+
+registers:
+  # Canonical mapping from palette-role to what it typically paints.
+  # A per-room `visual_style.registers` block RESTATES how this
+  # room binds each role — it can override the default, but the
+  # default is what the slot-shader prompt assumes when a room
+  # does not restate. The six roles below track `palette.bg`,
+  # `palette.bg2`, `palette.glow`, `palette.accent`,
+  # `palette.accent2`, `palette.ink` in the per-room spec.
+  bg: "the darkest register — deep interior, farthest away (night sky, deep water, cabinet dark)"
+  bg2: "the middle-dark — the mass the room stands on (subsoil, mid-water, horizon haze)"
+  glow: "the highlight — a candle, a sunlit surface, an emitter (the warm accent, DESIGN.md #C8732A)"
+  accent: "the cold register — water in motion, cool metals, cool stones (DESIGN.md #2C4A5C)"
+  accent2: "the warm register — mineral bloom, ember, hearth, root ink"
+  ink: "readable text and hairline marks over the darkest tile"
+
+banned_forms:
+  # The room-quality bar from AGENTS.md §"The room quality bar"
+  # (item 1) and DESIGN.md §"What's deliberately not there",
+  # enforced by `npm run test:paint` and `npm run test:room-
+  # contract`. Named here verbatim so the slot-shader prompt
+  # quotes them into every room without having to re-derive them
+  # from the docs.
+  - "no createRadialGradient inside a per-frame loop"
+  - "no createLinearGradient inside a per-frame loop"
+  - "no shadowBlur on paths per frame"
+  - "no ctx.filter blur"
+  - "no per-frame allocation in the render loop"
+  - "no Math.random in the render loop"
+  - "no Date.now in the render loop"
+  - "no per-object gradient pass"
+  - "no emoji anywhere in product copy"
+  - "no drop shadows or glow on text"
+  - "no marketing verbs in room copy (discover, explore, unlock, journey, transform, empower, dive)"
+  - "no cartoon puffiness — the site's material is a shader, not a cartoon"
+  - "no autoplay of audio; first user gesture starts every sound"
+
+form_language_taxonomy:
+  # The vocabulary each per-room `visual_style.form_language`
+  # array picks a subset of. The schema enum lists these tokens;
+  # this file names what each one MEANS as a shader-authoring
+  # instruction, so the slot-shader prompt reads the same
+  # definitions the schema author had in mind.
+  watercolor:
+    description: "hand-painted washes, blended by averaging noise fields, not by hard masks; deliberate imperfection at the edge"
+    typical_registers: [bg, bg2, accent2]
+  hand_painted:
+    description: "brushstroke texture — visible brush direction, painterly rather than photographic; let hash-noise perturb every register boundary"
+    typical_registers: [bg2, accent, accent2]
+  ink_line:
+    description: "1px hairline ink accents — the typographic register; inside the shader, a thin dark line at the discontinuity of a signed distance"
+    typical_registers: [ink, ink_2]
+  sdf:
+    description: "signed-distance functions as primary geometry; smoothstep on the distance, never a hard threshold"
+    typical_registers: [glow, accent, accent2]
+  value_noise_fbm:
+    description: "layered value or hash noise, three-to-five octaves with amplitude halving; the site's cloud, moss, stipple, aerosol texture"
+    typical_registers: [bg, bg2, accent2]
+  ray_marched:
+    description: "sphere-trace or volume-march through a field; step count from uSteps, never a hard-coded loop; for depth-having materials"
+    typical_registers: [bg, bg2, glow]
+  point_cloud:
+    description: "many small marks at hashed positions — galaxies, dust, seeds; population layer draws SDF discs, the shader may paint a stipple beneath"
+    typical_registers: [glow, accent2, ink]
+  ribbon_flow:
+    description: "long, thin curves aligned to a velocity field — galaxy arms, wave lines; draw as signed distance to a warped line"
+    typical_registers: [accent, accent2]
+  stipple:
+    description: "many small dots at deterministic positions; hash the grid, drop a dot where density falls below a threshold"
+    typical_registers: [ink, accent2]
+
+motion_grammar:
+  # The site's shared clocks — the LFO periods every room breathes
+  # on. `uBreath` is the 7s respiration mapped to 0..1 in
+  # `src/lib/webgl/sizing.ts` (BREATH_HZ = 0.14). `uTime` is the
+  # shared audio-locked clock. The `motion_characters` list is the
+  # enum the per-room `visual_style.motion_character` picks from.
+  breath_period_seconds: 7          # the whole album's shared LFO
+  tide_period_seconds: 33.3         # slower, less common but shared
+  glimmer_idle_ms: 20000            # how long before glimmers appear at rest (RoomShell GLIMMER_IDLE_MS)
+  motion_characters:
+    - still         # no uTime except as a hash seed — the material holds
+    - breathing     # low-frequency LFO on brightness or scale, tied to uBreath
+    - drifting      # slow lateral or vertical translation of one register
+    - pulsing       # discrete beat, sharp attack and slow decay
+    - cyclic        # full period-based waveform, smooth over one loop
+    - ballistic     # event-triggered burst; JS side signals via a uniform
+    - stochastic    # hash-driven twinkle or jitter, seeded so a paused frame is stable
+
+gesture_feedback_defaults:
+  # The shared vocabulary for how touch registers visually. A
+  # per-room `visual_style.gesture_feedback_style` is a
+  # REFINEMENT of these defaults — the room's specific paint over
+  # the same visual language, not a replacement. Verbs listed here
+  # correspond to `docs/gesture-grammar.md` §5 and the enum in
+  # `verbs_answered`.
+  tap: "ripple wavefront propagating and decaying — the sea's template extended to every material"
+  dwell: "burn-in halo that grows while held and fades on release; the reserve the visitor is banking"
+  ceremony: "the solemn act — full commit, visible bloom, kept between visits"
+  drag: "the material carries the pointer's motion; whatever is under the finger comes with it and remembers"
+  flick: "a mark thrown with residue — the object carries momentum away from the release point"
+  twist: "the lens rotates; a scale readout appears in the corner briefly, then fades"

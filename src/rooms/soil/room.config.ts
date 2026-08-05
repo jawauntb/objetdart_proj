@@ -71,6 +71,23 @@ const soil = {
     keeps:
       "the ledger, every life standing in it and how big it has grown, the season the year had reached, and the hour it was last looked at",
   },
+  // ——— the room quality bar, structured ————————————————————————————————
+  // Phase 4 (Track 2) migration: the private SAVE_EVERY_MS throttle and
+  // the dirty flag are gone; the ground's ledger now rides the shared
+  // idle writer from room-runtime. The payload at objetdart:soil:v2 is
+  // byte-for-byte the same as before — only the WRITER is different.
+  life: {
+    glimmer: {
+      after_idle_ms: 20000,
+      visual:
+        "a root or a fungus standing in the section catches a small brightening from its own pool, and one grain of the section chatters — the ground answers a quiet room with the timbre its ledger already carries.",
+    },
+    make_unmake: {
+      letgo_clears_population: true,
+      ceremony_is:
+        "a hold that reaches the ceremony tier plants a life where the finger is — a fungus in the litter, a root in the mineral — and its body is taken out of the litter lying there, so a spent surface refuses",
+    },
+  },
 } as const satisfies RoomManifest;
 
 export default soil;

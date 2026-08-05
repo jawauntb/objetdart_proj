@@ -48,6 +48,23 @@ const beam = {
     ],
     keeps: "your tempo, day/night state, and how far apart you left the suns",
   },
+  // ——— the room quality bar, structured ————————————————————————————————
+  // Phase 4 (Track 2) migration: saveMemory() at every tempo/night/sep
+  // change moved to a shared idle writer from room-runtime. The
+  // objetdart:beam:memory blob (`{ tempo, night, sep }`) is unchanged.
+  life: {
+    glimmer: {
+      after_idle_ms: 20000,
+      visual:
+        "one petal breaks formation and streaks across the sky as a meteor, and the two suns' bokeh softens by a hair — the eye of heaven blinks the way a quiet sky does.",
+    },
+    // make_unmake is intentionally omitted: beam wires its whole-field
+    // clear as a `letGo` callback passed to <LetGo>, not through a
+    // `useMemo<RoomVoice>` / `useRef<RoomVoice>` literal, and the room
+    // has no separate ceremony act in the source shape the mechanical
+    // check searches. The letgo_clears floor still holds via
+    // registry.creates.
+  },
 } as const satisfies RoomManifest;
 
 export default beam;

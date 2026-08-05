@@ -48,6 +48,7 @@ import { getAllNaturals } from "@/lib/world";
 import { spectralRegisterFor, entryScaleFor } from "@/lib/scale";
 import { clocksFrom } from "@/lib/webgl/sizing";
 import { createGLStage, FULLSCREEN_VERT_UNIT, type GLProgram, type GLStage } from "@/lib/webgl/stage";
+import { createIdleWriter } from "@/lib/room-runtime";
 import type { RoomVoice } from "@/lib/gesture/defaults";
 import {
   MAX_ORGANISMS,
@@ -87,7 +88,6 @@ import {
 } from "@/lib/humus";
 
 const STORE_KEY = "objetdart:soil:v2";
-const SAVE_EVERY_MS = 4000;
 /** How many times real time the ground turns while someone is watching. */
 const WATCHED_SPEED = 60;
 /** What one natural that washed up on the shared coast is worth, fallen here. */
@@ -502,16 +502,14 @@ export default function SoilGround() {
     }
     setHasKept(orgs.length > 0);
 
-    let dirty = true;
-    let lastSaveAt = -1e9;
-    const save = (force = false) => {
-      const t = performance.now();
-      if (!force && t - lastSaveAt < SAVE_EVERY_MS) {
-        dirty = true;
-        return;
-      }
-      lastSaveAt = t;
-      dirty = false;
+    // Shared idle writer. The private SAVE_EVERY_MS throttle this room used
+    // to roll had exactly the SoilGround-pattern hazard test:room-quality
+    // exists to catch — the manual `dirty` flag could hold a pending save
+    // that a fast pagehide missed. The writer coalesces through
+    // requestIdleCallback and flushes on unmount / hide, so the payload
+    // shape at objetdart:soil:v2 is unchanged but nothing is lost between
+    // visits.
+    const writeStore = () => {
       try {
         const payload: Stored = {
           pools: soil.pools,
@@ -524,6 +522,15 @@ export default function SoilGround() {
         window.localStorage.setItem(STORE_KEY, JSON.stringify(payload));
       } catch {
         /* quota; the ground keeps going */
+      }
+    };
+    const writer = createIdleWriter(writeStore);
+    const save = (force = false) => {
+      if (force) {
+        writer.schedule();
+        writer.flush();
+      } else {
+        writer.schedule();
       }
     };
     save(true);
@@ -1222,7 +1229,8 @@ export default function SoilGround() {
           /* noop */
         }
       }
-      if (dirty && now - lastSaveAt > SAVE_EVERY_MS) save();
+      // idle persistence is coalesced by the shared writer; every discrete
+      // event that changes the ground already schedules through save().
       rebuildLiving(now);
 
       const mix = mixOf(soil);
@@ -1396,7 +1404,7 @@ export default function SoilGround() {
     reducedRef.current = setReduced;
 
     return () => {
-      save(true);
+      writer.flush();
       cancelAnimationFrame(raf);
       apiRef.current = null;
       reducedRef.current = null;

@@ -38,6 +38,7 @@ import type { RoomVoice } from "@/lib/gesture/defaults";
 import { tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import { createGLStage, type GLProgram, type GLStage } from "@/lib/webgl/stage";
 import { clocksFrom } from "@/lib/webgl/sizing";
+import { createIdleWriter } from "@/lib/room-runtime";
 import {
   DUST_TOTAL,
   MASS_MIN,
@@ -622,7 +623,12 @@ export default function PlanetForge() {
     const reserve = () =>
       Math.max(0, DUST_TOTAL - entries.reduce((s, e) => s + massOf(e.world), 0));
 
-    const save = () => {
+    // The write itself is factored out so the shared idle writer can call
+    // it after the requestIdleCallback debounce. The on-disk payload shape
+    // at objetdart:planets:v2 is byte-for-byte the same as before; only the
+    // trigger changes — from per-event synchronous localStorage.setItem to
+    // an idle-coalesced write on the room-runtime bus.
+    const writeStore = () => {
       try {
         const payload: Stored = {
           worlds: entries.map((e) => ({
@@ -645,6 +651,8 @@ export default function PlanetForge() {
       }
       setHasKept(entries.length > 0);
     };
+    const writer = createIdleWriter(writeStore);
+    const save = () => writer.schedule();
 
     const spinFor = (w: World) => TAU / (w.dayHours * DAY_SECONDS_PER_HOUR);
 
@@ -1658,7 +1666,8 @@ export default function PlanetForge() {
       window.removeEventListener("keyup", onKeyUp);
       window.clearTimeout(seasonRest);
       apiRef.current = null;
-      save();
+      writer.flush();
+      writeStore();
       stage?.dispose();
     };
   }, []);

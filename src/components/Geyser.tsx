@@ -33,6 +33,14 @@ import {
   createFrameGovernor,
   isEmbeddedFrame,
 } from "@/lib/room-runtime";
+import {
+  createPopulation,
+  mulberry32 as sceneMulberry32,
+  type SceneObjectSpec,
+  type SceneObjectState,
+} from "@/lib/scene/object";
+import { createInstanceBuffer } from "@/lib/scene/instances";
+import { createPopulationLayer } from "@/lib/scene/population-layer";
 // __SLOT_DOMAIN_IMPORTS__
 import {
   MAX_HEAT_MARKS,
@@ -83,6 +91,18 @@ const WATCHED_SPEED = 60;
 
 const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
 const clamp01 = (v: number) => clamp(v, 0, 1);
+
+/**
+ * The heat-mark, in the shared scene model's vocabulary. The physics ledger
+ * (`state.heatMarks: HeatMark[]` in geyserflow.ts) is authoritative; this
+ * view is the render half, synced from the ledger each frame so
+ * `createPopulation` + `createPopulationLayer` can draw every heat-mark in
+ * one instanced pass.
+ */
+type HeatMarkView = SceneObjectState & {
+  heatVal: number;
+  phaseSeed: number;
+};
 
 type StoredGeyser = {
   v: 1;
@@ -319,21 +339,11 @@ void main() {
                     (1.0 - smoothstep(0.55, 0.9, ground_glow));
   col += mix(ACCENT2, GLOW, hot) * bloom * bloomBand * 0.6 * (0.6 + uBreath * 0.4);
 
-  // ——— every heat marker, as an SDF disc plus an additive corona ———
-  // Load-bearing map: corona brightness = heat, monotone. Invert the halo
-  // and you recover what the palm left behind.
-  for (int i = 0; i < ${MAX_HEAT_MARKS}; i++) {
-    if (i >= uHeatCount) break;
-    vec4 m = uHeatMarks[i];
-    vec2 dp = (uv - m.xy) * vec2(aspect, 1.0);
-    float dist = length(dp);
-    float r = 0.014;
-    float disc = smoothstep(r + 0.006, r - 0.002, dist);
-    col = mix(col, ACCENT2 * 0.85, disc * 0.5);
-    float heatBright = clamp(m.z / max(1e-3, ${DWELL_T_MAX.toFixed(4)}), 0.0, 1.6);
-    float corona = exp(-dist * dist * 60.0) * heatBright;
-    col += ACCENT2 * corona * 0.7 + GLOW * corona * 0.18;
-  }
+  // The heat-mark disc + additive corona lives in the shared population-layer
+  // (src/lib/scene/population-layer.ts) — one instanced draw for every mark.
+  // The load-bearing HEAT to CORONA-BRIGHTNESS map is preserved there, on
+  // the heatSpec's emit: glow = clamp(m.heat / DWELL_T_MAX, 0, 1.6). Invert
+  // the halo, recover the ground temperature the palm left behind.
 
   // Vignette + night
   vec2 vd = (uv - vec2(0.5, 0.5)) * vec2(aspect, 1.0);
@@ -513,6 +523,73 @@ export default function Geyser() {
     });
     const prog = stage?.program(FULLSCREEN_VERT_UNIT, FRAG) ?? null;
     const quad = stage && prog ? stage.fullscreenQuad(prog, "unit") : null;
+
+    // ——— the heat-mark, as the shared scene model reads it ———
+    // The ledger (state.heatMarks in geyserflow.ts) is authoritative; this
+    // spec declares the mark in shared vocabulary, and the population/layer
+    // below is the render half — every heat mark on the ground drawn in
+    // one instanced pass.
+    const heatSpec: SceneObjectSpec<HeatMarkView> = {
+      kind: "heat-mark",
+      cap: MAX_HEAT_MARKS,
+      born(seed, nx, ny, tMs) {
+        const rng = sceneMulberry32(seed);
+        return {
+          id: 0,
+          seed,
+          nx,
+          ny,
+          bornMs: tMs,
+          growth: 0.3,
+          sealedMs: null,
+          presence: 1,
+          heatVal: 0,
+          phaseSeed: rng(),
+        };
+      },
+      step(s, ctx) {
+        if (s.growth < 1) s.growth = Math.min(1, s.growth + ctx.dt * 0.9);
+      },
+      emit(s, ctx, out) {
+        const px = s.nx * ctx.width;
+        const py = s.ny * ctx.height;
+        const baseR = Math.max(2, ctx.width * 0.009);
+        const heatBright = Math.min(1.6, s.heatVal / Math.max(1e-3, DWELL_T_MAX));
+        // A warm-register disc where the palm rested.
+        out.push(
+          px, py,
+          baseR,
+          s.phaseSeed * Math.PI * 2,
+          0.55, // accent2-ish hue in the layer palette
+          0.24 + heatBright * 0.3,
+          Math.sin(ctx.tMs * 0.001 * 0.9 + s.phaseSeed * Math.PI * 2) * 0.5 + 0.5,
+          s.presence * (0.4 + s.growth * 0.6),
+        );
+        // The corona: brightness monotone in heat — the load-bearing map.
+        if (heatBright > 0.01) {
+          out.push(
+            px, py,
+            baseR * 3.6,
+            -s.phaseSeed * Math.PI * 2,
+            0.7, // toward glow in the palette
+            heatBright,
+            ctx.breath,
+            s.presence * Math.min(1, heatBright * 0.7),
+          );
+        }
+      },
+      // Verb routing lives on the imperative GeyserApi below — the physics
+      // library owns state; the population is the render mirror.
+      verbs: [],
+      respond: {},
+    };
+    const population = createPopulation(heatSpec);
+    const populationLayer = stage
+      ? createPopulationLayer(stage, {
+          palette: ["#5aa89c", "#e88c4a", "#f0c690"], // accent, accent2, glow
+        })
+      : null;
+    const instanceBuffer = createInstanceBuffer(MAX_HEAT_MARKS * 2);
 
     // ——— uniform buffers allocated once ———
     const heatU = new Float32Array(MAX_HEAT_MARKS * 4);
@@ -902,6 +979,45 @@ export default function Geyser() {
     };
     apiRef.current = engine;
 
+    /**
+     * Pull every heat-mark out of the physics ledger into the shared
+     * population's items array. Items are matched by `id`, so their
+     * per-frame identity is stable — new marks spawn, marks that vanished
+     * from the ledger start retiring.
+     */
+    const syncPopulationFromLedger = (now: number) => {
+      const items = population.items;
+      const ledger: HeatMark[] = state.heatMarks;
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.presence < 1) continue;
+        if (!ledger.some((m) => m.id === item.id)) item.presence = 0.999;
+      }
+      for (const m of ledger) {
+        let item = items.find((it) => it.id === m.id && it.presence >= 1);
+        if (!item) {
+          item = {
+            id: m.id,
+            seed: hashSeed(state.seedKey, m.id),
+            nx: m.x,
+            ny: m.y,
+            bornMs: now,
+            growth: 0.05,
+            sealedMs: null,
+            presence: 1,
+            heatVal: m.heat,
+            phaseSeed: m.phase,
+          };
+          items.push(item);
+        } else {
+          item.nx = m.x;
+          item.ny = m.y;
+          item.heatVal = m.heat;
+          item.phaseSeed = m.phase;
+        }
+      }
+    };
+
     // ——— the loop ———
     const draw = (now: number) => {
       if (!running) return;
@@ -994,6 +1110,36 @@ export default function Geyser() {
         const rippleLoc = prog.location("uRipples[0]");
         if (rippleLoc) stage.gl.uniform4fv(rippleLoc, rippleU);
         quad.draw();
+
+        // ——— the heat-marks, as one instanced draw ———
+        // Sync the population from the ledger, step it, emit every mark
+        // into the shared instance buffer, and hand it off to the layer.
+        syncPopulationFromLedger(now);
+        population.step({
+          dt: Math.min(0.05, dtRaw),
+          tMs: now,
+          breath: 0.5,
+          detail: 1,
+          wind: 0,
+          gravity: 0,
+          agitation,
+          season: 0,
+          timeScale,
+          reducedMotion: reduced,
+        });
+        instanceBuffer.reset();
+        population.emit(
+          {
+            width: stage.size.width,
+            height: stage.size.height,
+            tMs: now,
+            breath: reduced ? 0.5 : 0.5 + 0.5 * Math.sin(t * Math.PI * 2 / 7),
+            detail: 1,
+            reducedMotion: reduced,
+          },
+          instanceBuffer,
+        );
+        populationLayer?.draw(instanceBuffer);
       }
 
       // ——— the twist lens: the cycle, drawn back off the water ———
@@ -1066,6 +1212,7 @@ export default function Geyser() {
       unvis();
       ungal();
       writer.flush();
+      populationLayer?.dispose();
       quad?.dispose();
       stage?.dispose();
       cancelAnimationFrame(raf);

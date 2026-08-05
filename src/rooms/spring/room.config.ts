@@ -87,8 +87,7 @@ const spring = {
           persistence: "LetGo",
           creates_via_verb: "dwell",
           retires_via: ["LetGo"],
-          implementation_hint:
-            "inline array — state.seeps: Seep[] in src/lib/springflow.ts, drawn as a uSeeps[16] uniform block. Phase-4 note: not yet migrated to SceneObjectSpec.",
+          implementation_hint: "SceneObjectSpec",
         },
       ],
     },

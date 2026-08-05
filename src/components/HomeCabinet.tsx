@@ -28,7 +28,7 @@ import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
 import { THRESHOLDS } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
-import { createFrameGovernor, detailForTier, isEmbeddedFrame, onVisibility, resolveDpr } from "@/lib/room-runtime";
+import { createFrameGovernor, createIdleWriter, detailForTier, isEmbeddedFrame, onVisibility, resolveDpr } from "@/lib/room-runtime";
 import { SITE_ROUTE_BY_KEY, SITE_ROUTES, type SiteRouteCluster, type SiteRouteEntry } from "@/lib/routes";
 import { useField } from "@/store/field";
 import type { ConcernKey } from "@/lib/types";
@@ -175,7 +175,11 @@ export default function HomeCabinet() {
   const activeKeyRef = useRef("atlas");
   const clusterRef = useRef<SiteRouteCluster>("field");
   const pointerRef = useRef({ x: 0, y: 0, pulse: 0 });
-  const saveTimerRef = useRef<number | null>(null);
+  // The shared idle-persistence bus. Coalesces rapid patina updates so a
+  // fast hover walk across the case does not hammer localStorage on each
+  // frame. Recreated per mount so a fresh visit starts with an empty
+  // pending queue.
+  const persistWriterRef = useRef<ReturnType<typeof createIdleWriter> | null>(null);
   const lastFeedbackRef = useRef(0);
   // frame/law/vessel state, read once per tick — never allocated inside it
   const panRef = useRef({ x: 0, y: 0 });
@@ -222,9 +226,14 @@ export default function HomeCabinet() {
     setStanding(emberRef.current.length);
     setPatina(next);
     setSelectedCluster(next.cluster);
+    // The shared idle writer: coalesces rapid patina updates and writes
+    // through room-runtime's requestIdleCallback path, replacing the
+    // private setTimeout debouncer this room used to roll.
+    persistWriterRef.current = createIdleWriter(() => savePatina(patinaRef.current));
     savePatina(next);
     return () => {
-      if (saveTimerRef.current != null) window.clearTimeout(saveTimerRef.current);
+      persistWriterRef.current?.flush();
+      persistWriterRef.current = null;
       savePatina(patinaRef.current);
     };
   }, []);
@@ -233,8 +242,7 @@ export default function HomeCabinet() {
     patinaRef.current = next;
     setPatina(next);
     if (typeof window === "undefined") return;
-    if (saveTimerRef.current != null) window.clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = window.setTimeout(() => savePatina(patinaRef.current), 250);
+    persistWriterRef.current?.schedule();
   }, []);
 
   const addPatina = useCallback((routeKey: string, cluster: SiteRouteCluster, amount: number) => {
@@ -311,9 +319,13 @@ export default function HomeCabinet() {
     return best;
   }, []);
 
-  const letGoEmbers = useCallback(() => {
-    // an exhale, never a blink: the case dims its embers away and writes the
-    // patina empty at once, so an emptied case stays empty
+  // <LetGo> handler: the case's whole-field clear. An exhale, never a
+  // blink — dims the ember population away and writes the patina empty at
+  // once, so an emptied case stays empty across reloads. Named `letGo` (the
+  // shell's convention) rather than the old `letGoEmbers` so the room's
+  // grammar reads the same in test-room-quality as it does in every other
+  // room's RoomShell wiring.
+  const letGo = useCallback(() => {
     emberRef.current = [];
     growingRef.current = null;
     persistLater({ ...patinaRef.current, embers: [] });
@@ -1037,7 +1049,7 @@ export default function HomeCabinet() {
         <span />
       </div>
 
-      <LetGo label="let the embers go" onLetGo={letGoEmbers} visible={standing > 0} />
+      <LetGo label="let the embers go" onLetGo={letGo} visible={standing > 0} />
 
       <style>{`
         .home-cabinet {
