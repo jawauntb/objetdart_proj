@@ -62,6 +62,7 @@ import {
   type CityRole,
 } from "@/lib/city-audio";
 import { createCityComposer, type CityComposer } from "@/lib/city-composer";
+import { exposureForDay } from "@/lib/city-grading";
 import { createCitySky, fogColorFromSky, type CitySky } from "@/lib/city-sky";
 import { createCitySun, type CitySun } from "@/lib/city-sun";
 import {
@@ -954,7 +955,11 @@ export default function City() {
     renderer.setPixelRatio(dpr);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.05;
+    // Initial exposure — the per-slot tick below rewrites this from
+    // exposureForDay(dayFraction) so the value pinned here is only the
+    // pre-first-frame default. Seeding with the noon value means a first
+    // paint before the tick has run cannot flash a dark frame.
+    renderer.toneMappingExposure = exposureForDay(0.25);
     // Composer's RenderPasses control their own clear. Renderer autoClear
     // must stay on so composer's first pass gets a clean slate; the old
     // manual renderer.clear() before render() is gone below.
@@ -2019,6 +2024,14 @@ export default function City() {
       const df = dayFraction(cityTimeMs);
       citySky.update(df);
       citySun.update(df);
+      // Tone-mapping exposure rides the same axis the sky and sun do.
+      // exposureForDay is a pure smoothstep-piecewise on dayFraction —
+      // ~1.4 at noon (hold the sky before the ACES knee clips the sun
+      // disk), ~0.9 at each horizon (the roll-over), ~0.7 at midnight
+      // (lift the emissive-window mids so bloom does emotional work
+      // rather than fighting a highlight clip). Cheap: one scalar per
+      // frame, no allocation, no GL state churn.
+      renderer.toneMappingExposure = exposureForDay(df);
       // The skyline's per-role emissive intensity + hourly atlas rebake
       // rides the same dayFraction the sky does. Setting it every frame is
       // cheap (the atlas redraw is behind its own 24-slot change detector).
