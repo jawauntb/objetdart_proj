@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
@@ -465,6 +466,10 @@ export default function Storm() {
     let panXTarget = 0;
     let panYTarget = 0;
     let holdZone: "sky" | "sea" | null = null;
+    // the dwell-planted cell still under the finger, fed while the hold lasts
+    let heldCellId = -1;
+    // span — two fingers resting: the storm holds its breath while they stay
+    let spanHold = 0;
 
     // ── storm cells: the room's countable material ──────────────────
     // A hand plants a localized cell of weather in the sea with a dwell
@@ -748,21 +753,71 @@ export default function Storm() {
           return;
         }
         if (e.fingers === 3) {
-          // tutti — everything alive answers softly at once
-          stormSpikeRef.current = Math.min(0.5, stormSpikeRef.current + 0.12);
-          chargeRef.current = Math.min(1, chargeRef.current + 0.08);
-          for (const cell of cells) cell.strength = Math.min(1, cell.strength + 0.15);
+          // tutti — everything alive answers softly at once, as loud as asked
+          stormSpikeRef.current = Math.min(0.5, stormSpikeRef.current + 0.08 + e.intensity * 0.1);
+          chargeRef.current = Math.min(1, chargeRef.current + 0.05 + e.intensity * 0.08);
+          for (const cell of cells) cell.strength = Math.min(1, cell.strength + 0.1 + e.intensity * 0.12);
           try { audio.chime(); } catch { /* noop */ }
-          haptics.ripple(0.4);
+          haptics.ripple(0.3 + e.intensity * 0.3);
           return;
         }
         const { x, y } = toLocal(e.x, e.y);
+        const w = lines.clientWidth;
         const seaTopPx = lines.clientHeight * SEA_TOP;
+        const sky = y < seaTopPx;
+        // rapid-tap ladder (tiers from gesture/core): the low-friction rungs
+        const tier = tapTrainTier(e.count);
+        const depth = tapTrainDepth(e.count);
+        if (tier === "n") {
+          // the crescendo: the tempest itself answers — charge saturates,
+          // the sea rears, every planted cell surges with the train
+          lastStrikeXFracRef.current = x / Math.max(1, w);
+          chargeRef.current = Math.min(1, chargeRef.current + 0.3 + depth * 0.4);
+          stormSpikeRef.current = Math.min(0.5, stormSpikeRef.current + 0.1 + depth * 0.12);
+          for (const cell of cells) cell.strength = Math.min(1, cell.strength + 0.12 + depth * 0.1);
+          spawnBurst(x, Math.max(y, seaTopPx + 6), 10 + Math.round(depth * 14), 200 + depth * 90);
+          if (chargeRef.current > 0.5) dischargeAt(lastStrikeXFracRef.current);
+          else { try { audio.thud(); } catch { /* noop */ } }
+          try { haptics.storm(); } catch { /* noop */ }
+          useField.getState().recordTape("ripple", 0.8 + depth * 0.2, "storm/crescendo");
+          return;
+        }
+        if (tier >= 3 && sky) {
+          // three taps fork the sky: the bank lets go where the train lands;
+          // five march the strike across the front, bolt answering bolt
+          lastStrikeXFracRef.current = x / Math.max(1, w);
+          chargeRef.current = Math.max(chargeRef.current, 0.3 + depth * 0.4);
+          dischargeAt(lastStrikeXFracRef.current);
+          if (tier >= 5) {
+            const step = 0.14 + depth * 0.08;
+            window.setTimeout(() => dischargeAt(clamp01(lastStrikeXFracRef.current - step)), 180);
+            window.setTimeout(() => dischargeAt(clamp01(lastStrikeXFracRef.current + step)), 360);
+          }
+          return;
+        }
+        if (tier >= 3) {
+          // in the sea the train raises a set: crest after crest walking out
+          // from the tapped water, three abreast at three, spray at five
+          for (let k = -1; k <= 1; k++) {
+            manualCrestsRef.current.push({ x: x + k * (36 + depth * 30), t0: simNow, strength: 18 + depth * 18 });
+          }
+          if (manualCrestsRef.current.length > 12) {
+            manualCrestsRef.current.splice(0, manualCrestsRef.current.length - 12);
+          }
+          if (tier >= 5) {
+            spawnBurst(x, y, 12 + Math.round(depth * 12), 220 + depth * 80);
+            stormSpikeRef.current = Math.min(0.5, stormSpikeRef.current + 0.06 + depth * 0.08);
+          }
+          try { audio.thud(); } catch { /* noop */ }
+          try { haptics.chop(); } catch { /* noop */ }
+          useField.getState().recordTape("ripple", 0.6 + depth * 0.2, "storm/set");
+          return;
+        }
         if (boostParticle(x, y, e.intensity)) return;
         if (touchFuji(x, y)) return;
-        if (y < seaTopPx) {
+        if (sky) {
           // SKY — a tap releases banked charge, or banks a little more.
-          lastStrikeXFracRef.current = x / Math.max(1, lines.clientWidth);
+          lastStrikeXFracRef.current = x / Math.max(1, w);
           spawnWindStreak(y, false);
           if (chargeRef.current > 0.12) {
             dischargeAt(lastStrikeXFracRef.current);
@@ -890,13 +945,14 @@ export default function Storm() {
       hold: (e) => {
         lastGestureAt = performance.now();
         if (e.fingers === 3) {
-          // three fingers hold the law: the storm slows to a quarter speed
+          // three fingers hold the law: time keeps thickening the longer
+          // they stay — a moment at 900ms, near-stillness by 2400ms
+          if (e.phase === "release") { timeScaleTarget = 1; return; }
+          timeScaleTarget = 1 - 0.75 * clamp01(e.elapsed / 2000);
           if (e.phase === "enter") {
-            timeScaleTarget = 0.25;
             try { audio.playNote(36, 260); } catch { /* noop */ }
             try { haptics.tap(); } catch { /* noop */ }
           }
-          if (e.phase === "release") timeScaleTarget = 1;
           return;
         }
         if (e.fingers !== 1) return;
@@ -904,6 +960,7 @@ export default function Storm() {
         if (e.phase === "enter") {
           holdState.ceremony = false;
           (holdState as { dwell?: boolean }).dwell = false;
+          heldCellId = -1;
           holdZone = y < lines.clientHeight * SEA_TOP ? "sky" : "sea";
           // the touch still lands — the same verbs pointerdown spoke
           if (boostParticle(x, y, 0.5)) return;
@@ -928,6 +985,7 @@ export default function Storm() {
           if (holdZone === "sea") {
             const charge = Math.min(1, e.elapsed / 1800);
             addCell(x, y, 0.4 + charge * 0.6);
+            heldCellId = cells.length ? cells[cells.length - 1].id : -1;
             spawnBurst(x, y, 8 + Math.round(charge * 10), 160);
             stormSpikeRef.current = Math.min(0.4, stormSpikeRef.current + 0.06);
             try { audio.thud(); } catch { /* noop */ }
@@ -937,6 +995,27 @@ export default function Storm() {
             chargeRef.current = Math.min(1, chargeRef.current + 0.22);
             try { audio.spark(); } catch { /* noop */ }
             try { haptics.ripple(0.4); } catch { /* noop */ }
+          }
+        } else if (e.tier >= 2 && dwellState.dwell && !holdState.ceremony) {
+          // duration is an axis: the hold keeps feeding what it planted —
+          // the sea cell fattens toward a squall, the sky bank keeps rising
+          if (holdZone === "sea" && heldCellId >= 0) {
+            const held = cells.find((c) => c.id === heldCellId);
+            if (held) {
+              held.strength = Math.min(1, held.strength + 0.004);
+              if (e.elapsed % 700 < 60) {
+                manualCrestsRef.current.push({ x: held.x, t0: simNow, strength: 12 + held.strength * 14 });
+                if (manualCrestsRef.current.length > 12) manualCrestsRef.current.shift();
+                try { audio.playTone(52 + held.strength * 26, 0.07); } catch { /* noop */ }
+                try { haptics.ripple(0.15 + held.strength * 0.2); } catch { /* noop */ }
+              }
+            }
+          } else if (holdZone === "sky") {
+            chargeRef.current = Math.min(1, chargeRef.current + 0.005);
+            if (e.elapsed % 700 < 60) {
+              try { audio.playTone(360 + chargeRef.current * 900, 0.05); } catch { /* noop */ }
+              try { haptics.ripple(0.1 + chargeRef.current * 0.2); } catch { /* noop */ }
+            }
           }
         }
         // ceremony tier — the room's one solemn act: over an existing cell
@@ -986,14 +1065,73 @@ export default function Storm() {
         if (nowMs - lastScrubAt < 700) return;
         lastScrubAt = nowMs;
         // circling stirs a gyre — the wave train winds toward the spiral
-        // for a few seconds, spray curling with it, then eases back
-        gyre = Math.min(0.85, gyre + 0.4);
+        // for a few seconds, spray curling with it; a faster hand winds it
+        // harder, and the water's own note deepens with the whirl
+        const vig = clamp01(Math.abs(e.angularVelocity) / 1.6);
+        gyre = Math.min(0.85, gyre + 0.25 + vig * 0.35);
         const { x, y } = toLocal(e.cx, e.cy);
         const seaY = Math.max(y, lines.clientHeight * SEA_TOP + 10);
-        spawnBurst(x, seaY, 10, 180);
-        try { audio.playNote(48, 200); } catch { /* noop */ }
-        try { haptics.ripple(0.4); } catch { /* noop */ }
-        useField.getState().recordTape("ripple", 0.6, "storm/gyre");
+        spawnBurst(x, seaY, 8 + Math.round(vig * 10), 160 + vig * 90);
+        try { audio.playNote(48 - Math.round(vig * 7), 200 + vig * 160); } catch { /* noop */ }
+        try { haptics.ripple(0.3 + vig * 0.3); } catch { /* noop */ }
+        useField.getState().recordTape("ripple", 0.5 + vig * 0.3, "storm/gyre");
+      },
+      span: (e) => {
+        lastGestureAt = performance.now();
+        // span — two still fingers hold the weather's breath: the sea
+        // flattens for as long as the interval stands, broader with the
+        // spread, deeper with the wait, and lets go as a surge sized by both
+        if (e.phase === "release") {
+          const pent = spanHold;
+          spanHold = 0;
+          stormSpikeRef.current = Math.min(0.5, stormSpikeRef.current + 0.12 + pent * 0.25);
+          manualCrestsRef.current.push({ x: toLocal(e.cx, e.cy).x, t0: simNow, strength: 16 + pent * 22 });
+          if (manualCrestsRef.current.length > 12) manualCrestsRef.current.shift();
+          try { audio.thud(); } catch { /* noop */ }
+          try { haptics.storm(); } catch { /* noop */ }
+          useField.getState().recordTape("ripple", 0.5 + pent * 0.4, "storm/exhale");
+          return;
+        }
+        spanHold = clamp01(e.elapsed / 2500) * (0.6 + clamp01(e.spread / 500) * 0.4);
+        if (e.phase === "enter") {
+          try { audio.playNote(31, 420); } catch { /* noop */ }
+          try { haptics.ripple(0.25); } catch { /* noop */ }
+        } else if (e.elapsed % 700 < 60) {
+          // the interval itself is audible: two low tones spaced by the spread
+          try {
+            audio.playTone(56, 0.1);
+            audio.playTone(56 * (1.2 + clamp01(e.spread / 420) * 0.8), 0.09);
+          } catch { /* noop */ }
+          try { haptics.ripple(0.1 + spanHold * 0.15); } catch { /* noop */ }
+        }
+      },
+      drum: (e) => {
+        lastGestureAt = performance.now();
+        // drumming plays the space between the hands: each landing kicks
+        // its own zone — crests in the sea, streaks and charge in the sky —
+        // and a patter that straddles the sea line arcs a bolt between them
+        const hit = toLocal(e.x, e.y);
+        const za = toLocal(e.ax, e.ay);
+        const zb = toLocal(e.bx, e.by);
+        const seaTopPx = lines.clientHeight * SEA_TOP;
+        const roll = clamp01(e.hits / 9);
+        if (hit.y < seaTopPx) {
+          chargeRef.current = Math.min(1, chargeRef.current + 0.05 + e.alternation * 0.05);
+          spawnWindStreak(hit.y, roll > 0.5);
+          try { audio.playTone(300 + chargeRef.current * 500, 0.05); } catch { /* noop */ }
+        } else {
+          manualCrestsRef.current.push({ x: hit.x, t0: simNow, strength: 12 + roll * 16 });
+          if (manualCrestsRef.current.length > 12) manualCrestsRef.current.shift();
+          try { audio.playTone(58 + roll * 20, 0.07); } catch { /* noop */ }
+        }
+        try { haptics.tap(); } catch { /* noop */ }
+        if (e.hits >= 5 && e.alternation > 0.85 && (za.y < seaTopPx) !== (zb.y < seaTopPx)) {
+          const skyZone = za.y < seaTopPx ? za : zb;
+          lastStrikeXFracRef.current = skyZone.x / Math.max(1, lines.clientWidth);
+          chargeRef.current = Math.max(chargeRef.current, 0.45);
+          dischargeAt(lastStrikeXFracRef.current);
+          useField.getState().recordTape("ripple", 0.9, "storm/antiphon");
+        }
       },
       rhythm: (e) => {
         // a steady tapped pulse: the surge falls in with the hand
@@ -1108,7 +1246,9 @@ export default function Storm() {
       }
 
       const dialTarget = reduce ? Math.min(stormTargetRef.current, 0.3) : stormTargetRef.current;
-      const target = Math.min(1, dialTarget + stormSpikeRef.current) * calmFactor;
+      // the span's held breath: the sea flattens as long as (and as deep as)
+      // two fingers keep the interval
+      const target = Math.min(1, dialTarget + stormSpikeRef.current) * calmFactor * (1 - spanHold * 0.7);
       stormRef.current += (target - stormRef.current) * 0.10;
       const s = stormRef.current;
 
