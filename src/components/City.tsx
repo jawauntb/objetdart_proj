@@ -1,49 +1,5 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import LetGo from "@/components/LetGo";
-import { attachGestures } from "@/lib/gesture";
-import { getFieldAudio } from "@/lib/audio";
-import * as haptics from "@/lib/haptics";
-import { onVessel } from "@/lib/vessel";
-import {
-  createFrameGovernor,
-  createIdleWriter,
-  detailForTier,
-  onGalleryPause,
-  onVisibility,
-  resolveDpr,
-} from "@/lib/room-runtime";
-import {
-  CITY_DAY_MS,
-  HESITATION_SPEED_FACTOR,
-  PLOT_DWELL_MS,
-  REGULAR_VISITS_TO_BECOME_REGULAR,
-  SEASON_ORDER,
-  dayFraction,
-  dwellersPerHome,
-  headingFor,
-  hesitationBetween,
-  isDaytime,
-  isRegularOf,
-  mulberry,
-  nearestEdgePoint,
-  needFor,
-  nextSeason,
-  recordVisit,
-  roleForDwell,
-  stepTowards,
-  targetForNeedWithRegular,
-  treeFoliage,
-  type CityLens,
-  type Need,
-  type PersonPhase,
-  type PlotRole,
-  type PlotSample,
-  type Season,
-  type VisitRecord,
-} from "@/lib/city";
-
 /**
  * /city — a small settlement whose identity IS its causal roles.
  *
@@ -69,8 +25,21 @@ import {
  *   knock             → the city's bell tolls once — people gather
  *   flip              → night, whatever the day said
  *
- * The laws are extracted to `src/lib/city.ts` and pinned by test-city.mjs;
- * this file is only rendering + gesture translation.
+ * v2 moves the material to WebGL. The ground is a fragment shader (soil
+ * grain, hydrology veins, evening horizon, day-night off `dayFraction`,
+ * season tint, wet-ground darkening + specular sheen, wind-leaned rain);
+ * the plots are one instanced draw over per-role SDFs (home = warm gable +
+ * breathing chimney, store = awning + open front, event = pinwheel of
+ * gathering sparks, tree = canopy shaped by `treeFoliage(season)`);
+ * people are one instanced draw of heading-aligned slivers whose tint
+ * carries the phased arc (arrival / consolidation / belonging / leaving)
+ * and whose paler alpha marks a hesitation. Canvas 2D remains only as a
+ * thin overlay for roads, the dwell ring, satisfaction halos and the
+ * micro-community ring on plots with two or more regulars.
+ *
+ * The causal laws in `src/lib/city.ts` are untouched — this file is
+ * rendering + gesture translation, and the tests in `test-city.mjs` pin
+ * every function this room reads.
  *
  * The population is the density that manufactures the city's possibilities:
  * every dweller carries a heading (so a street of walkers reads as a street
@@ -86,10 +55,65 @@ import {
  * the rendering.
  */
 
+import { useEffect, useRef, useState } from "react";
+import LetGo from "@/components/LetGo";
+import { attachGestures } from "@/lib/gesture";
+import { getFieldAudio } from "@/lib/audio";
+import * as haptics from "@/lib/haptics";
+import { onVessel } from "@/lib/vessel";
+import {
+  createFrameGovernor,
+  createIdleWriter,
+  detailForTier,
+  onGalleryPause,
+  onVisibility,
+  resolveDpr,
+} from "@/lib/room-runtime";
+import { clocksFrom } from "@/lib/webgl/sizing";
+import {
+  createGLStage,
+  FULLSCREEN_VERT_UNIT,
+  type FullscreenQuad,
+  type GLProgram,
+  type GLStage,
+  type InstancedDraw,
+} from "@/lib/webgl/stage";
+import { spectralRegisterFor, entryScaleFor } from "@/lib/scale";
+import {
+  CITY_DAY_MS,
+  HESITATION_SPEED_FACTOR,
+  PLOT_DWELL_MS,
+  SEASON_ORDER,
+  dayFraction,
+  dwellersPerHome,
+  headingFor,
+  hesitationBetween,
+  isDaytime,
+  isRegularOf,
+  mulberry,
+  nearestEdgePoint,
+  needFor,
+  nextSeason,
+  recordVisit,
+  roleForDwell,
+  stepTowards,
+  targetForNeedWithRegular,
+  treeFoliage,
+  type CityLens,
+  type Need,
+  type PersonPhase,
+  type PlotRole,
+  type PlotSample,
+  type Season,
+  type VisitRecord,
+} from "@/lib/city";
+
 const STORAGE_KEY = "objetdart:city:v1";
 const MAX_PLOTS = 48;
 const MAX_PEOPLE = 96;
 const MAX_ROADS = 32;
+/** Neighborhood radius (normalized) for the density-as-engine signal. */
+const NEIGHBOR_R = 0.14;
 
 type Plot = {
   id: number;
@@ -98,7 +122,7 @@ type Plot = {
   y: number;
   role: PlotRole;
   dwellStartMs: number;
-  liveDwellMs: number; // grows while the finger is still down
+  liveDwellMs: number;
   sealed: boolean;
   bornMs: number;
 };
@@ -113,26 +137,12 @@ type Person = {
   need: Need;
   fed: number;
   rested: number;
-  // heading (radians) is the person's facing — the direction the last non-trivial
-  // step took them. Renderer draws each dweller as a small sliver along heading.
   heading: number;
-  // "arriving" until the first arrival at home; then "settled" — the phased arc.
   phase: PersonPhase;
-  // the plot they most recently arrived at for food. Same plot as last time
-  // deepens the count; a different plot resets it. See `recordVisit` in city.ts.
   foodVisit: VisitRecord | null;
   gatherVisit: VisitRecord | null;
-  // once foodVisit.visits crosses REGULAR_VISITS_TO_BECOME_REGULAR, the plot
-  // becomes this person's regular store — same for events. These slots feed
-  // `targetForNeedWithRegular`, and the plot's regular-count is derived by
-  // scanning people at draw time.
   regularStoreId: number | null;
   regularEventId: number | null;
-  // hesitation: true while the current need has two plots at nearly-equal
-  // distance. Slows the step by HESITATION_SPEED_FACTOR and marks the person
-  // visually. `hesitationSince` is when the state entered — used to gate a
-  // route swap so a hesitating person does not thrash between targets every
-  // frame; a real hesitation buys a second look, then commits.
   hesitating: boolean;
   hesitationSince: number;
 };
@@ -146,42 +156,356 @@ type Persisted = {
   cityTimeMs: number;
 };
 
-const ROLE_COLORS: Record<PlotRole, string> = {
-  empty: "rgba(232, 226, 213, 0.20)",
-  home:  "rgba(232, 187, 129, 0.92)", // warm candle
-  store: "rgba(200, 115, 42, 0.95)",  // deep candle
-  event: "rgba(255, 232, 178, 0.98)", // event flare
-  tree:  "rgba(74, 145, 106, 0.90)",  // canopy
+const SEASON_INDEX: Record<Season, number> = {
+  spring: 0,
+  summer: 1,
+  fall: 2,
+  winter: 3,
 };
 
-const SEASON_TINT: Record<Season, [number, number, number]> = {
-  spring: [214, 232, 210],
-  summer: [232, 222, 190],
-  fall:   [212, 168, 122],
-  winter: [204, 210, 220],
+/** Season-tinted ground base colour, sampled in the fragment shader. */
+const SEASON_RGB: Record<Season, [number, number, number]> = {
+  spring: [0.44, 0.53, 0.36],
+  summer: [0.62, 0.55, 0.32],
+  fall: [0.56, 0.36, 0.20],
+  winter: [0.44, 0.48, 0.53],
 };
+
+// ——— the ground: soil, hydrology, weather ————————————————————————————————
+
+const FRAG_GROUND = `
+precision highp float;
+varying vec2 vUv;
+uniform vec2 uResolution;
+uniform float uTime;
+uniform float uBreath;
+uniform float uDayF;       // 0..1, dayFraction()
+uniform float uIsDay;      // 1 during the working half, 0 at night
+uniform vec3  uSeasonRGB;  // season-tinted base
+uniform float uSeasonF;    // 0..3, continuous — a season detent smoothed
+uniform float uWet;        // 0..1, weatherRain
+uniform float uWind;       // -1..1
+uniform float uLens;       // 0 map, 1 hydrology, 2 satisfaction
+uniform float uReduced;
+uniform float uPress;      // 0..1, active dwell (raises soil in a halo)
+uniform vec2  uPressAt;    // where the finger stands, in 0..1 uv
+
+float hash21(vec2 p){
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+float vnoise(vec2 p){
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  float a = hash21(i);
+  float b = hash21(i + vec2(1.0, 0.0));
+  float c = hash21(i + vec2(0.0, 1.0));
+  float d = hash21(i + vec2(1.0, 1.0));
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
+}
+float fbm(vec2 p){
+  float v = 0.0; float a = 0.5;
+  for (int i = 0; i < 5; i++){
+    v += a * vnoise(p);
+    p *= 2.03;
+    a *= 0.54;
+  }
+  return v;
+}
+
+void main(){
+  vec2 uv = vUv;
+  float aspect = uResolution.x / max(1.0, uResolution.y);
+
+  // ——— sky above the horizon ———
+  // dayFraction maps: 0 dawn, 0.25 noon, 0.5 dusk, 0.75 midnight.
+  // brightness of the sky rides that cosine so the horizon warms toward dusk.
+  float f = uDayF;
+  float diurnal = 0.5 + 0.5 * cos((f - 0.25) * 6.2831853);
+  float light = mix(0.28, 1.0, diurnal);
+
+  vec3 seasonBase = uSeasonRGB;
+  vec3 skyTop = seasonBase * light * vec3(0.86, 0.94, 1.04);
+  vec3 skyLow = seasonBase * light * 0.72;
+  // ember horizon at dawn / dusk
+  float ember = smoothstep(0.03, 0.22, min(f, 1.0 - f));
+  vec3 emberCol = mix(vec3(0.42, 0.16, 0.06), vec3(0.98, 0.62, 0.28), diurnal);
+  vec3 horizonBand = mix(emberCol, vec3(0.0), ember);
+
+  float horizon = 0.42;
+  vec3 col;
+  if (uv.y < horizon){
+    // sky
+    float k = uv.y / horizon;
+    col = mix(skyTop, skyLow, pow(k, 1.3));
+    col += horizonBand * exp(-pow((uv.y - horizon) / 0.10, 2.0)) * 0.5;
+    // a slow drift of cloud, thicker in winter
+    float clouds = fbm(vec2(uv.x * 3.0 + uTime * 0.006 * (1.0 + uWind * 0.6), uv.y * 6.0));
+    float cover = 0.28 + 0.08 * sin(uSeasonF * 1.5) + uWet * 0.35;
+    col = mix(col, vec3(0.62, 0.58, 0.55) * light, smoothstep(0.55, 0.85, clouds) * cover);
+  } else {
+    // ground — soil, tinted by season, with texture that varies by depth
+    float d = (uv.y - horizon) / (1.0 - horizon);
+    vec3 groundBase = seasonBase * light * 0.68;
+    vec3 groundDeep = seasonBase * light * 0.42;
+    col = mix(groundBase, groundDeep, d * d);
+    // grain — soil is grainy, not smooth
+    vec2 gp = floor(uv * uResolution * 0.5);
+    col *= 0.86 + 0.24 * hash21(gp);
+    // aggregate (clods / peds)
+    float ped = fbm(uv * vec2(14.0 * aspect, 14.0));
+    col *= 0.9 + 0.2 * ped;
+    // hydrology: a sinuous drain across the middle of the field,
+    // stronger and darker under the "hydrology" lens
+    float meanderY = horizon + 0.28 + sin(uv.x * 6.5 + uTime * 0.05) * 0.05;
+    float streamDist = abs(uv.y - meanderY) - (0.008 + 0.006 * sin(uv.x * 22.0));
+    float stream = 1.0 - smoothstep(0.0, 0.012, streamDist);
+    float lensStream = mix(0.20, 0.85, step(0.5, uLens) * step(uLens, 1.5));
+    col = mix(col, vec3(0.08, 0.20, 0.30), stream * lensStream);
+
+    // wet ground: darken the whole soil, add a specular sheen where the
+    // slope catches sun — a light film of water reads as darkening and
+    // brightening at once, the way a puddle does
+    col *= 1.0 - uWet * 0.18;
+    float slope = smoothstep(0.05, 0.45, d);
+    float sheen = pow(vnoise(uv * vec2(60.0, 60.0)), 3.0);
+    col += vec3(0.75, 0.86, 0.94) * sheen * uWet * slope * 0.35;
+
+    // press ring — the ground answers where a finger stands
+    vec2 pr = (uv - uPressAt) * vec2(aspect, 1.0);
+    float pd = length(pr);
+    col += vec3(0.30, 0.22, 0.12) * uPress * exp(-pd * pd / 0.006);
+
+    // vignette so the edges quiet
+    vec2 vd = (uv - vec2(0.5, 0.7)) * vec2(aspect, 1.0);
+    col *= 1.0 - 0.35 * smoothstep(0.20, 1.10, dot(vd, vd));
+  }
+
+  // rain streaks in the shader — thin diagonal lines, wind-leaned,
+  // drawn only when there is weather. Under reduced motion we still show
+  // rain, but frozen: a stationary pattern is legibly "under weather"
+  // without adding a shake.
+  if (uWet > 0.02){
+    vec2 rp = uv * vec2(90.0, 40.0);
+    rp.x += uWind * (uv.y * 40.0);
+    float advance = mix(0.0, uTime * (2.5 + uWet * 6.0), 1.0 - uReduced);
+    rp.y -= advance;
+    float col1 = smoothstep(0.98, 1.0, hash21(floor(rp)));
+    float col2 = smoothstep(0.995, 1.0, hash21(floor(rp * vec2(1.7, 1.3)) + 33.0));
+    float streaks = max(col1, col2) * uWet;
+    col = mix(col, vec3(0.72, 0.80, 0.88), streaks * 0.55);
+  }
+
+  // night veil for a passed-dusk sky (day-clock only — the vessel's
+  // face-down flip runs a separate DOM overlay on top, so night can land
+  // in two channels at once)
+  float night = 1.0 - uIsDay;
+  col = mix(col, col * vec3(0.32, 0.36, 0.48), night * 0.35);
+
+  gl_FragColor = vec4(col, 1.0);
+}`;
+
+// ——— the plots: one instanced draw over per-role SDFs ————————————————————
+// Each plot occupies a small quad in screen space; the fragment shader
+// branches on the role and renders the causal identity directly. Density
+// and micro-community counts feed the fragment as per-instance uniforms
+// so a plot literally glows brighter beside its neighbors, and a plot
+// with regulars wears a soft warm halo without any texture atlas.
+
+const VERT_PLOT = `
+attribute vec2 a_corner;
+attribute vec2 a_center;
+attribute vec4 a_props;    // role, sizePx, sealed, dwellFrac
+attribute vec4 a_extras;   // foliage(0..1), density(0..1), regulars(0..1), bornAge(s)
+uniform vec2 uResolution;
+varying vec2 vLocal;
+varying vec4 vProps;
+varying vec4 vExtras;
+void main(){
+  vec2 pxCenter = a_center * uResolution;
+  float roleScale = mix(1.0, 1.35, step(3.5, a_props.x));
+  float born = clamp(a_extras.w * 3.0, 0.0, 1.0);
+  float size = a_props.y * roleScale * mix(0.6, 1.0, born);
+  vec2 offset = a_corner * size;
+  vec2 px = pxCenter + offset;
+  vec2 clip = (px / uResolution) * 2.0 - 1.0;
+  gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
+  vLocal = a_corner;
+  vProps = a_props;
+  vExtras = a_extras;
+}`;
+
+const FRAG_PLOT = `
+precision highp float;
+varying vec2 vLocal;
+varying vec4 vProps;
+varying vec4 vExtras;
+uniform float uTime;
+uniform float uBreath;
+
+float sdBox(vec2 p, vec2 b){
+  vec2 d = abs(p) - b;
+  return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0);
+}
+
+vec4 drawHome(vec2 p, float sealed, float density){
+  // a warm gable over a lit rectangle, with a chimney flame that breathes
+  float body = sdBox(p - vec2(0.0, 0.15), vec2(0.55, 0.40));
+  float roof = max(abs(p.x) + (p.y - 0.15) * 1.6 - 0.9, -(p.y - 0.6));
+  float shell = min(body, roof);
+  float m = smoothstep(0.02, -0.02, shell);
+  vec3 warm = mix(vec3(0.55, 0.35, 0.20), vec3(0.92, 0.72, 0.36), 0.5 + 0.5 * density);
+  vec3 col = warm;
+  float win = sdBox(p - vec2(0.0, 0.10), vec2(0.16, 0.14));
+  col = mix(col, vec3(1.00, 0.86, 0.52), smoothstep(0.02, -0.02, win));
+  float flame = smoothstep(0.10, 0.0, distance(p, vec2(0.30, -0.55 + 0.05 * sin(uTime * 3.0))));
+  col = mix(col, vec3(1.00, 0.72, 0.30), flame * (0.6 + 0.4 * uBreath));
+  float outline = abs(shell) < 0.03 && sealed > 0.5 ? 1.0 : 0.0;
+  col = mix(col, vec3(0.98, 0.94, 0.80), outline * 0.7);
+  return vec4(col, m);
+}
+
+vec4 drawStore(vec2 p, float sealed, float density){
+  // rectangular body with a bright awning and a darker open front
+  float body = sdBox(p - vec2(0.0, 0.06), vec2(0.60, 0.45));
+  float m = smoothstep(0.02, -0.02, body);
+  vec3 warm = mix(vec3(0.66, 0.36, 0.16), vec3(0.90, 0.48, 0.22), 0.4 + 0.6 * density);
+  vec3 col = warm;
+  float awning = sdBox(p - vec2(0.0, -0.32), vec2(0.62, 0.11));
+  col = mix(col, vec3(0.96, 0.86, 0.40), smoothstep(0.02, -0.02, awning));
+  float door = sdBox(p - vec2(0.0, 0.28), vec2(0.32, 0.18));
+  col = mix(col, vec3(0.12, 0.09, 0.07), smoothstep(0.02, -0.02, door));
+  float outline = abs(body) < 0.03 && sealed > 0.5 ? 1.0 : 0.0;
+  col = mix(col, vec3(0.98, 0.94, 0.80), outline * 0.7);
+  return vec4(col, m);
+}
+
+vec4 drawEvent(vec2 p, float sealed, float density){
+  // a bright pinwheel of gathering sparks over a small stage
+  float ang = atan(p.y, p.x);
+  float rad = length(p);
+  float petals = 0.5 + 0.5 * cos(ang * 5.0 + uTime * 1.7);
+  float star = smoothstep(0.85, 0.0, rad + petals * 0.18);
+  vec3 col = mix(vec3(0.86, 0.58, 0.16), vec3(1.00, 0.94, 0.66), star);
+  float pole = sdBox(p - vec2(0.0, 0.10), vec2(0.04, 0.44));
+  col = mix(col, vec3(0.22, 0.16, 0.10), smoothstep(0.01, -0.01, pole));
+  float flag = sdBox(p - vec2(0.20 + 0.06 * sin(uTime * 2.0), -0.28), vec2(0.20, 0.10));
+  col = mix(col, vec3(0.94, 0.34, 0.28), smoothstep(0.02, -0.02, flag));
+  float spark = smoothstep(0.90, 0.30, rad) * pow(0.5 + 0.5 * sin(ang * 12.0 + uTime * 6.0), 6.0);
+  col += vec3(1.0, 0.86, 0.44) * spark * density;
+  float outline = smoothstep(0.03, 0.0, abs(rad - 0.85)) * sealed;
+  col = mix(col, vec3(0.98, 0.94, 0.80), outline * 0.7);
+  float m = smoothstep(0.90, 0.0, rad);
+  return vec4(col, m);
+}
+
+vec4 drawTree(vec2 p, float sealed, float foliage){
+  // trunk plus a canopy shaped by treeFoliage(season)
+  float trunk = sdBox(p - vec2(0.0, 0.35), vec2(0.07, 0.30));
+  float canopyR = mix(0.30, 0.80, foliage);
+  float canopyD = length(p - vec2(0.0, -0.10)) - canopyR;
+  float wobble = 0.06 * sin(atan(p.y + 0.10, p.x) * 6.0 + uTime * 0.5);
+  canopyD += wobble;
+  float m = max(smoothstep(0.02, -0.02, canopyD), smoothstep(0.02, -0.02, trunk));
+  vec3 green = mix(vec3(0.34, 0.30, 0.20), vec3(0.24, 0.55, 0.28), foliage);
+  vec3 col = green;
+  col = mix(col, vec3(0.30, 0.20, 0.12), smoothstep(0.01, -0.01, trunk));
+  float outline = smoothstep(0.02, 0.0, abs(canopyD)) * sealed;
+  col = mix(col, vec3(0.98, 0.94, 0.80), outline * 0.7);
+  return vec4(col, m);
+}
+
+void main(){
+  float role = vProps.x;
+  float sealed = vProps.z;
+  float dwell = vProps.w;
+  float foliage = vExtras.x;
+  float density = vExtras.y;
+  float regulars = vExtras.z;
+
+  vec4 shape = vec4(0.0);
+  if (role < 1.5)      shape = drawHome(vLocal, sealed, density);
+  else if (role < 2.5) shape = drawStore(vLocal, sealed, density);
+  else if (role < 3.5) shape = drawEvent(vLocal, sealed, density);
+  else                 shape = drawTree(vLocal, sealed, foliage);
+
+  // micro-community halo: regulars soften a warm ring around the plot —
+  // "a store is where THESE people eat", drawn on the material itself.
+  float haloD = length(vLocal) - 1.05;
+  float halo = smoothstep(0.15, 0.0, abs(haloD));
+  vec3 col = shape.rgb + vec3(0.36, 0.24, 0.10) * halo * regulars * 0.5;
+  float m = max(shape.a, halo * regulars * 0.35);
+
+  // dwell hint — a plot climbing the ladder glimmers along its silhouette
+  float glimmer = smoothstep(0.4, 1.0, dwell) * (0.5 + 0.5 * sin(uTime * 6.0));
+  col += vec3(1.0, 0.90, 0.50) * glimmer * m * 0.25;
+
+  if (m < 0.02) discard;
+  gl_FragColor = vec4(col, m);
+}`;
+
+// ——— the people: one instanced draw, heading-aligned slivers ———————————
+// A dweller is a small quad rotated onto its heading, coloured by phase
+// (arrival cool → belonging warm → leaving grey), and paled while
+// hesitating. Regulars carry a warm cast, exactly as the canvas-2D layer
+// did — the code just lives on the GPU now.
+
+const VERT_PERSON = `
+attribute vec2 a_corner;
+attribute vec2 a_center;
+attribute vec4 a_state;    // cos(h), sin(h), phase(0 arriving / 1 settled), flags (bit0 hesitating, bit1 regular)
+uniform vec2 uResolution;
+varying vec2 vLocal;
+varying vec4 vState;
+void main(){
+  vec2 pxCenter = a_center * uResolution;
+  // sliver is 6px along heading, 2.4px across
+  vec2 body = vec2(a_corner.x * 3.0, a_corner.y * 1.2);
+  vec2 rotated = vec2(
+    body.x * a_state.x - body.y * a_state.y,
+    body.x * a_state.y + body.y * a_state.x
+  );
+  vec2 px = pxCenter + rotated;
+  vec2 clip = (px / uResolution) * 2.0 - 1.0;
+  gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
+  vLocal = a_corner;
+  vState = a_state;
+}`;
+
+const FRAG_PERSON = `
+precision mediump float;
+varying vec2 vLocal;
+varying vec4 vState;
+void main(){
+  float d = length(vLocal);
+  if (d > 1.0) discard;
+  float m = smoothstep(1.0, 0.5, d);
+  float phase = vState.z;
+  float flags = vState.w;
+  float hesitating = floor(mod(flags, 2.0));
+  float regular    = floor(mod(flags / 2.0, 2.0));
+  vec3 arriving = vec3(0.34, 0.44, 0.68);
+  vec3 settled  = vec3(0.13, 0.14, 0.16);
+  vec3 warmReg  = vec3(0.78, 0.45, 0.16);
+  vec3 base = mix(arriving, settled, phase);
+  vec3 col = mix(base, warmReg, regular);
+  float alpha = m * mix(0.85, 0.55, hesitating);
+  gl_FragColor = vec4(col, alpha);
+}`;
 
 export default function City() {
   const wrapRef = useRef<HTMLDivElement | null>(null);
-  const bgCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const fgCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  // A separate DOM layer over the field, tied to the vessel's face-down flip.
-  // The tick loop pokes its opacity directly — same pattern the coin uses,
-  // so no React state churns on a device motion event.
+  const glCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const overlayRef = useRef<HTMLCanvasElement | null>(null);
   const nightVeilRef = useRef<HTMLDivElement | null>(null);
-  // The hint fades once the visitor has planted anything — no on-the-nose
-  // dismissal, just a small quieting.
   const hintRef = useRef<HTMLDivElement | null>(null);
-  // The room "stands" (LetGo is shown) whenever anything has been kept —
-  // any plot at all is enough. Sealed plots persist across visits, unsealed
-  // ones are the ones that follow the dwell.
-  // Deliberately not a dep of the mount effect: the effect owns the plot
-  // arrays for the whole life of the room, and remounting on a standing-poll
-  // flip would tear down the canvas contexts (fatal once this becomes WebGL).
+  // The room "stands" (LetGo is shown) whenever any plot exists. This
+  // state is deliberately not a dep of the mount effect — remounting on a
+  // standing-poll flip would tear the WebGL context down every time the
+  // first plot appears or the last one leaves.
   const [hasKept, setHasKept] = useState(false);
-  // A stable callback for the <LetGo> click: dispatches the shared event the
-  // frame loop already listens for. The event pattern lets the effect own
-  // all mutation of the plot arrays.
   const letGo = () => {
     try { window.dispatchEvent(new Event("letgo")); } catch { /* noop */ }
     setHasKept(false);
@@ -189,26 +513,23 @@ export default function City() {
 
   useEffect(() => {
     const wrap = wrapRef.current;
-    const bg = bgCanvasRef.current;
-    const fg = fgCanvasRef.current;
-    if (!wrap || !bg || !fg) return;
+    const glCanvas = glCanvasRef.current;
+    const overlay = overlayRef.current;
+    if (!wrap || !glCanvas || !overlay) return;
+    // TypeScript narrowing does not survive the nested closures below —
+    // capture the guarded elements once as non-null aliases.
+    const wrapEl = wrap;
 
-    const bgctxMaybe = bg.getContext("2d");
-    const fgctxMaybe = fg.getContext("2d");
-    if (!bgctxMaybe || !fgctxMaybe) return;
-    // Aliased to non-nullable constants so TypeScript keeps the narrowing
-    // through every nested closure below without hitting the reassignment
-    // limitation that resets narrowing across function boundaries.
-    const bgctx: CanvasRenderingContext2D = bgctxMaybe;
-    const fgctx: CanvasRenderingContext2D = fgctxMaybe;
+    // ── quality tier + DPR through the shared runtime ────────────────────
+    const embedded = window.self !== window.top;
+    const reduceMotion =
+      typeof window !== "undefined" && window.matchMedia
+        ? window.matchMedia("(prefers-reduced-motion: reduce)").matches
+        : false;
+    const populationSpeed = reduceMotion ? 0.4 : 1;
+    const governor = createFrameGovernor(embedded ? "medium" : "high");
 
     // ── state ────────────────────────────────────────────────────────────
-    const embedded = window.self !== window.top;
-    const governor = createFrameGovernor(embedded ? "medium" : "high");
-    let dpr = resolveDpr("high");
-    let width = 0;
-    let height = 0;
-
     const plots: Plot[] = [];
     const people: Person[] = [];
     const roads: Road[] = [];
@@ -216,44 +537,31 @@ export default function City() {
     let nextPlotId = 1;
     let nextPersonId = 1;
 
-    // active plant — while a finger is down on empty ground, this rises up
-    // the role ladder. Released short → the plot keeps whichever role it hit.
     let activePlant: Plot | null = null;
     let activePlantStartedAt = 0;
     let plantRingWeight = 0;
 
-    // roads being traced by the current drag
+    // roads being traced by the current drag — the live pointer is kept so
+    // the preview segment is drawn honestly on every frame the finger is down
     let dragRoadStart: { x: number; y: number } | null = null;
+    let dragRoadLive: { x: number; y: number } | null = null;
 
     let cityTimeMs = 0;
     let cityTimeScale = 1;
     let lastFrameAt = performance.now();
 
     let season: Season = "spring";
+    let seasonPhase = 0;
     let lens: CityLens = "map";
-    let weatherRain = 0;      // 0..1
-    let weatherWind = 0;      // -1..1
+    let lensFade = 0;
+    let weatherRain = 0;
+    let weatherWind = 0;
 
-    let reduceMotion = false;
-    if (typeof window !== "undefined" && window.matchMedia) {
-      reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    }
-    // Population walk slowdown under reduced motion — a settlement still
-    // breathes, but the small figures move at a calmer pace so the field
-    // does not ripple against the visitor's setting.
-    const populationSpeed = reduceMotion ? 0.4 : 1;
-
-    // The night veil: face-down = night, tracked as a boolean the flip
-    // handler flips and the tick loop eases into a real opacity on the
-    // separate `nightVeilRef` element (Coin's pattern). Kept out of React
-    // state so a vessel event never re-renders.
     let nightOn = false;
     let nightAmt = 0;
-    // Hint-hidden edge tracker so the tick loop only writes to the DOM
-    // when the state flips, not every frame.
     let hintHidden = false;
 
-    // ── restore ─────────────────────────────────────────────────────────
+    // ── restore ──────────────────────────────────────────────────────────
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
@@ -263,35 +571,18 @@ export default function City() {
             plots.push({ ...p, dwellStartMs: 0, liveDwellMs: 0 });
             nextPlotId = Math.max(nextPlotId, p.id + 1);
           }
-          if (SEASON_ORDER.includes(parsed.season)) season = parsed.season;
+          if (SEASON_ORDER.includes(parsed.season)) {
+            season = parsed.season;
+            seasonPhase = SEASON_INDEX[season];
+          }
           cityTimeMs = Number.isFinite(parsed.cityTimeMs) ? parsed.cityTimeMs : 0;
         }
       }
-    } catch { /* corrupt persistence is silently discarded — it is not the visitor's problem */ }
+    } catch { /* corrupt persistence is silently discarded */ }
 
-    // spawn initial residents from any restored homes
     respawnPeopleFromHomes();
 
-    // ── sizing ──────────────────────────────────────────────────────────
-    const resize = () => {
-      const rect = wrap.getBoundingClientRect();
-      width = Math.max(240, Math.floor(rect.width));
-      height = Math.max(240, Math.floor(rect.height));
-      dpr = resolveDpr(governor.tier());
-      for (const c of [bg, fg]) {
-        c.width = Math.floor(width * dpr);
-        c.height = Math.floor(height * dpr);
-        c.style.width = `${width}px`;
-        c.style.height = `${height}px`;
-      }
-      bgctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      fgctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    };
-    resize();
-    const observer = new ResizeObserver(resize);
-    observer.observe(wrap);
-
-    // ── audio + haptics wake ─────────────────────────────────────────────
+    // ── audio ────────────────────────────────────────────────────────────
     const A = () => getFieldAudio();
 
     // ── persistence writer ───────────────────────────────────────────────
@@ -310,11 +601,57 @@ export default function City() {
     };
     const idleWrite = createIdleWriter(saveState);
 
+    // ── the stage: the shader for the whole field ───────────────────────
+    let stage: GLStage | null = null;
+    let groundProg: GLProgram | null = null;
+    let groundQuad: FullscreenQuad | null = null;
+    let plotProg: GLProgram | null = null;
+    let plotDraw: InstancedDraw | null = null;
+    let personProg: GLProgram | null = null;
+    let personDraw: InstancedDraw | null = null;
+    // one Float32Array per attribute, sized to the population cap once
+    const plotCenter = new Float32Array(MAX_PLOTS * 2);
+    const plotProps = new Float32Array(MAX_PLOTS * 4);
+    const plotExtras = new Float32Array(MAX_PLOTS * 4);
+    const personCenter = new Float32Array(MAX_PEOPLE * 2);
+    const personState = new Float32Array(MAX_PEOPLE * 4);
+
+    const buildPrograms = () => {
+      if (!stage) return;
+      groundProg = stage.program(FULLSCREEN_VERT_UNIT, FRAG_GROUND);
+      groundQuad = groundProg ? stage.fullscreenQuad(groundProg, "unit") : null;
+      plotProg = stage.program(VERT_PLOT, FRAG_PLOT);
+      plotDraw = plotProg ? stage.instanced(plotProg) : null;
+      personProg = stage.program(VERT_PERSON, FRAG_PERSON);
+      personDraw = personProg ? stage.instanced(personProg) : null;
+      const corners = new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]);
+      if (plotDraw) plotDraw.attribute("a_corner", corners, 2, 0);
+      if (personDraw) personDraw.attribute("a_corner", corners, 2, 0);
+      const gl = stage.gl;
+      gl.disable(gl.DEPTH_TEST);
+      gl.enable(gl.BLEND);
+      gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    };
+
+    stage = createGLStage(glCanvas, {
+      wrap,
+      label: "city",
+      overlay,
+      reducedMotion: reduceMotion,
+      embedded,
+      quality: governor.tier(),
+      contextAttributes: { alpha: false, antialias: false, depth: false },
+      onContextRestored: () => buildPrograms(),
+    });
+    if (stage) buildPrograms();
+    const overlayCtx = stage?.overlay2d ?? overlay.getContext("2d");
+    const register = spectralRegisterFor(entryScaleFor("/city") ?? 4.5);
+    let currentDpr = resolveDpr(governor.tier(), { embedded, reducedMotion: reduceMotion });
+
     // ── gestures ─────────────────────────────────────────────────────────
     const detach = attachGestures(wrap, {
       tap: (e) => {
         if (e.fingers === 1) {
-          // ripple this ground; if the tap hit a plot, brighten it
           const p = plotAt(e.x, e.y);
           if (p) {
             plantRingWeight = 0.9;
@@ -324,14 +661,16 @@ export default function City() {
             try { haptics.tap(); } catch { /* noop */ }
           }
         } else if (e.fingers === 3) {
-          // tutti — every home rings, people gather to the nearest event
           const events = plots.filter((p) => p.role === "event");
           for (const person of people) {
             if (events.length > 0) {
-              const target = events.reduce((best, ev) => {
-                const d2 = (ev.x - person.x) ** 2 + (ev.y - person.y) ** 2;
-                return d2 < best.d ? { d: d2, ev } : best;
-              }, { d: Infinity, ev: events[0] });
+              const target = events.reduce(
+                (best, ev) => {
+                  const d2 = (ev.x - person.x) ** 2 + (ev.y - person.y) ** 2;
+                  return d2 < best.d ? { d: d2, ev } : best;
+                },
+                { d: Infinity, ev: events[0] },
+              );
               person.targetPlotId = target.ev.id;
               person.need = "gather";
             }
@@ -353,8 +692,6 @@ export default function City() {
         if (e.fingers !== 1) return;
 
         if (e.phase === "enter") {
-          // start a plant. If the tap landed on an existing plot, dwell
-          // deepens THAT plot instead — no duplicate on the same ground.
           const existing = plotAt(e.x, e.y);
           if (existing && !existing.sealed) {
             activePlant = existing;
@@ -366,8 +703,8 @@ export default function City() {
             const plot: Plot = {
               id: nextPlotId++,
               seed,
-              x: e.x / width,
-              y: e.y / height,
+              x: e.x / stageWidth(),
+              y: e.y / stageHeight(),
               role: "home",
               dwellStartMs: performance.now(),
               liveDwellMs: 0,
@@ -377,7 +714,6 @@ export default function City() {
             plots.push(plot);
             activePlant = plot;
             activePlantStartedAt = plot.dwellStartMs;
-            // a home spawns its residents immediately
             spawnDwellersFor(plot);
             try { A().playNote(52, 240); } catch { /* noop */ }
             try { haptics.tap(); } catch { /* noop */ }
@@ -386,9 +722,6 @@ export default function City() {
 
         if (e.phase === "tick" && activePlant) {
           activePlant.liveDwellMs = performance.now() - activePlantStartedAt;
-          // At the dwell tier the plot is still climbing the civic ladder —
-          // home → store → event → tree. That climb is the verb "dwell" in
-          // this material: a longer press is a deeper answer to a real need.
           if (e.tier >= 2 && !activePlant.sealed) {
             const newRole = roleForDwell(activePlant.liveDwellMs);
             if (newRole !== activePlant.role) {
@@ -398,7 +731,6 @@ export default function City() {
               plantRingWeight = 1;
             }
           }
-          // ceremony seals the plot at its current role — the one solemn act
           if (e.tier >= 3 && !activePlant.sealed) {
             activePlant.sealed = true;
             try { A().bell(); } catch { /* noop */ }
@@ -416,7 +748,6 @@ export default function City() {
 
       drag: (e) => {
         if (e.fingers === 3) {
-          // three-finger drag — wind rolls the weather across the city
           if (e.phase === "end") return;
           weatherWind = Math.max(-1, Math.min(1, weatherWind + e.dx * 0.006));
           weatherRain = Math.max(0, Math.min(1, weatherRain + Math.abs(e.dy) * 0.002));
@@ -424,7 +755,12 @@ export default function City() {
         }
         if (e.fingers !== 1) return;
         if (e.phase === "start") {
-          dragRoadStart = { x: e.x / width, y: e.y / height };
+          dragRoadStart = { x: e.x / stageWidth(), y: e.y / stageHeight() };
+          dragRoadLive = { ...dragRoadStart };
+          return;
+        }
+        if (e.phase === "move") {
+          dragRoadLive = { x: e.x / stageWidth(), y: e.y / stageHeight() };
           return;
         }
         if (e.phase === "end") {
@@ -432,19 +768,19 @@ export default function City() {
             if (roads.length >= MAX_ROADS) roads.shift();
             roads.push({
               x1: dragRoadStart.x, y1: dragRoadStart.y,
-              x2: e.x / width, y2: e.y / height,
+              x2: e.x / stageWidth(), y2: e.y / stageHeight(),
               bornMs: cityTimeMs,
             });
             try { haptics.chop(); } catch { /* noop */ }
           }
           dragRoadStart = null;
+          dragRoadLive = null;
         }
       },
 
       twist: (e) => {
         if (e.fingers === 3) {
           if (e.phase !== "move") return;
-          // season detent — one 90° crossing steps the year
           const detent = Math.PI / 2;
           if (Math.abs(e.angle) < detent * 0.9) return;
           season = nextSeason(season, e.angle > 0 ? 1 : -1);
@@ -453,24 +789,21 @@ export default function City() {
           idleWrite.schedule();
           return;
         }
-        if (e.fingers === 3) return;
         if (e.phase !== "move") return;
-        // two-finger twist — rotate the lens through map / hydrology / satisfaction
         if (Math.abs(e.angle) < Math.PI / 3) return;
         const lenses: CityLens[] = ["map", "hydrology", "satisfaction"];
         const cur = lenses.indexOf(lens);
         lens = lenses[(cur + (e.angle > 0 ? 1 : -1) + lenses.length) % lenses.length];
+        lensFade = 1;
         try { haptics.lens(); } catch { /* noop */ }
       },
 
       flick: (e) => {
         if (e.fingers !== 1) return;
-        // a flick from the ground → ring a chime at that point;
-        // people nearby drift toward it (a brief attractor)
         try { A().playNote(60 + Math.floor(e.angle * 4) % 12, 260); } catch { /* noop */ }
         try { haptics.chop(); } catch { /* noop */ }
-        const px = e.x / width;
-        const py = e.y / height;
+        const px = e.x / stageWidth();
+        const py = e.y / stageHeight();
         for (const person of people) {
           const d2 = (person.x - px) ** 2 + (person.y - py) ** 2;
           if (d2 < 0.09) person.need = "gather";
@@ -482,23 +815,18 @@ export default function City() {
       },
     }, { wheelZoom: false });
 
-    // ── vessel: tilt / shake / knock / flip through the shared onVessel bus ─
-    // The city's world-law channel. Each verb is chosen so its meaning IS its
-    // causal effect on the settlement — tilt rains on it, a knock rings the
-    // bell and gathers the people, face-down is night regardless of the sun.
+    // ── vessel: tilt / shake / knock / flip ──────────────────────────────
     const detachVessel = onVessel({
       tilt: (e) => {
-        // gravity leans across the settlement: rain follows the lean
         const lean = Math.min(1, Math.hypot(e.beta, e.gamma) / 45);
         weatherRain = Math.max(weatherRain, lean * 0.9);
       },
       shake: (e) => {
-        // agitation scatters the pending drag — a shaken city drops its road
         dragRoadStart = null;
+        dragRoadLive = null;
         weatherWind = Math.max(-1, Math.min(1, weatherWind + (e.intensity - 0.5) * 0.4));
       },
       knock: () => {
-        // one bell across the town, the people gather to the nearest event
         try { A().bell(); } catch { /* noop */ }
         try { haptics.detent(); } catch { /* noop */ }
         const events = plots.filter((p) => p.role === "event");
@@ -509,11 +837,8 @@ export default function City() {
         }
       },
       flip: (e) => {
-        // face-down is night, no matter what the day said — jump city time
-        // to mid-night; face-up returns to whatever day the clock had
-        // reached. The veil (nightVeilRef) darkens the whole field alongside,
-        // so the settlement's dusk lands in two channels at once — the
-        // simulated day-clock and the room-wide overlay.
+        // face-down is night: the day-clock jumps to midnight AND the DOM
+        // veil darkens, so dusk lands in two channels at once.
         nightOn = e.faceDown;
         if (e.faceDown) {
           cityTimeMs = Math.floor(cityTimeMs / CITY_DAY_MS) * CITY_DAY_MS + CITY_DAY_MS * 0.75;
@@ -523,7 +848,7 @@ export default function City() {
       },
     });
 
-    // ── pause and visibility ────────────────────────────────────────────
+    // ── pause + visibility ───────────────────────────────────────────────
     let docHidden = document.hidden;
     let galleryPaused = embedded;
     const applyPause = () => {
@@ -533,11 +858,7 @@ export default function City() {
     const offVisibility = onVisibility((hidden) => { docHidden = hidden; applyPause(); });
     const offGallery = onGalleryPause((paused) => { galleryPaused = paused; applyPause(); });
 
-    // ── frame loop ──────────────────────────────────────────────────────
-    // Same pattern the rest of the album's hand-authored rooms use: rAF into
-    // a tick, governor.beginFrame(now) returns the tier we should draw at,
-    // and hardPaused / sleeping short-circuit to a quiet 4Hz wake so the
-    // room does not spin its wheels while another tab or gallery holds it.
+    // ── frame loop ───────────────────────────────────────────────────────
     let stopped = false;
     let raf = 0;
     let slowWake: ReturnType<typeof setTimeout> | null = null;
@@ -548,41 +869,56 @@ export default function City() {
         return;
       }
       const tier = governor.beginFrame(now);
-      void tier; // detail is read per-frame from detailForTier below
+      const detail = detailForTier(tier);
+      const nextDpr = resolveDpr(tier, { embedded, reducedMotion: reduceMotion });
+      if (nextDpr !== currentDpr) {
+        currentDpr = nextDpr;
+        stage?.measure();
+      }
       const dt = Math.min(66, now - lastFrameAt);
       lastFrameAt = now;
       cityTimeMs += dt * cityTimeScale;
+      // season phase eases toward the discrete detent so the tree canopy
+      // grows across the change instead of snapping
+      const targetPhase = SEASON_INDEX[season];
+      seasonPhase += (targetPhase - seasonPhase) * Math.min(1, dt * 0.003);
       stepPopulation(dt * populationSpeed);
       decayWeather(dt);
+      lensFade = Math.max(0, lensFade - dt * 0.0018);
       plantRingWeight = Math.max(0, plantRingWeight - dt * 0.002);
-      // ease the night veil toward its target (face-down = night). Under
-      // reduced motion we still let it move — a fade to black is a color
-      // change, not a shake — just a touch faster so it lands quietly.
+      // night veil eases toward its target; a color change is fine under
+      // reduced motion (it is not a shake), only a touch faster.
       const nightEase = reduceMotion ? 0.10 : Math.min(1, dt * 0.0025);
       nightAmt += ((nightOn ? 1 : 0) - nightAmt) * nightEase;
       if (nightVeilRef.current) {
         nightVeilRef.current.style.opacity = String(nightAmt * 0.82);
       }
-      // hint fades to nothing once the visitor has planted a single plot —
-      // the settlement takes it from here. Written only on the transition
-      // so this loop stays quiet DOM-wise.
+      // hint fades once anything has been planted — edge-triggered, not per-frame
       const wantHintHidden = plots.length > 0;
       if (hintRef.current && wantHintHidden !== hintHidden) {
         hintHidden = wantHintHidden;
         hintRef.current.style.opacity = wantHintHidden ? "0" : "";
       }
-      drawBackground();
-      drawForeground();
+      drawFrame(now, detail);
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
 
-    // ── helpers ─────────────────────────────────────────────────────────
+    // ── helpers ──────────────────────────────────────────────────────────
+
+    function stageWidth(): number {
+      return stage?.size.width ?? wrapEl.clientWidth ?? 1;
+    }
+    function stageHeight(): number {
+      return stage?.size.height ?? wrapEl.clientHeight ?? 1;
+    }
 
     function plotAt(px: number, py: number): Plot | null {
-      const nx = px / width;
-      const ny = py / height;
-      const r = 22 / Math.min(width, height); // touch radius in normalized units
+      const w = stageWidth();
+      const h = stageHeight();
+      const nx = px / w;
+      const ny = py / h;
+      const r = 22 / Math.min(w, h);
       let best: Plot | null = null;
       let bestD = r * r;
       for (const plot of plots) {
@@ -631,9 +967,6 @@ export default function City() {
     function respawnPeopleFromHomes(): void {
       people.length = 0;
       for (const p of plots) {
-        if (p.role === "home" || p.role === "store" || p.role === "event") {
-          // homes reliably spawn; the others are inhabited by history
-        }
         if (p.role === "home") spawnDwellersFor(p);
       }
     }
@@ -641,10 +974,10 @@ export default function City() {
     function roleTier(role: PlotRole): number {
       switch (role) {
         case "empty": return 0;
-        case "home": return 1;
+        case "home":  return 1;
         case "store": return 2;
         case "event": return 3;
-        case "tree": return 4;
+        case "tree":  return 4;
       }
     }
 
@@ -655,22 +988,18 @@ export default function City() {
       // land on a settled person — an arriving dweller has one target and
       // one job (get home). Every visible slowdown is a hesitation, and
       // every hesitation is a genuine same-need tradeoff, not a stutter.
-      const HESITATION_SWAP_MS = 550; // "a real hesitation buys a second look, then commits"
-      const ARRIVAL_MS = 260; // once close to home for ~1/4s, they belong
+      const HESITATION_SWAP_MS = 550;
+      const ARRIVAL_MS = 260;
       for (const person of people) {
         const prevX = person.x;
         const prevY = person.y;
 
-        // decay
         person.fed = Math.max(0, person.fed - dt * 0.00003);
         person.rested = Math.max(0, person.rested - dt * 0.00002);
 
-        // ── target selection ────────────────────────────────────────────
         let chosenNeed: Need;
         let regularForNeed: number | null = null;
         if (person.phase === "arriving") {
-          // an arriving dweller has one job: reach home. Their need is rest
-          // and their target is fixed to their own home id — no wandering.
           chosenNeed = "rest";
           if (person.need !== chosenNeed || person.targetPlotId !== person.homeId) {
             person.need = chosenNeed;
@@ -695,9 +1024,6 @@ export default function City() {
           }
         }
 
-        // ── hesitation: two same-need plots, close in distance ─────────
-        // Only settled people can hesitate — an arriving traveller has no
-        // choice to make. Rest never hesitates: home is unique.
         if (person.phase === "settled" && (chosenNeed === "food" || chosenNeed === "gather")) {
           const h = hesitationBetween(
             { x: person.x, y: person.y },
@@ -709,10 +1035,6 @@ export default function City() {
               person.hesitating = true;
               person.hesitationSince = cityTimeMs;
             }
-            // A hesitation past HESITATION_SWAP_MS commits to the alternate
-            // once — the person swaps and the state clears. That is the
-            // visible route-swap; without it a hesitation would just be a
-            // permanent slowdown, not a tradeoff.
             if (h.secondBestId != null &&
                 h.secondBestId !== person.targetPlotId &&
                 cityTimeMs - person.hesitationSince > HESITATION_SWAP_MS) {
@@ -726,7 +1048,6 @@ export default function City() {
           }
         }
 
-        // ── step ────────────────────────────────────────────────────────
         if (person.targetPlotId != null) {
           const target = plots.find((p) => p.id === person.targetPlotId);
           if (target) {
@@ -745,10 +1066,8 @@ export default function City() {
             if (arrived) {
               if (target.role === "store") person.fed = Math.min(1, person.fed + dt * 0.0015);
               if (target.role === "event") person.rested = Math.min(1, person.rested + dt * 0.0004);
-              if (target.role === "home") person.rested = Math.min(1, person.rested + dt * 0.0012);
-              // the phased arc: an arriving dweller who touches home is now settled.
+              if (target.role === "home")  person.rested = Math.min(1, person.rested + dt * 0.0012);
               if (person.phase === "arriving" && target.id === person.homeId) {
-                // require a short close-in dwell so a flyover does not settle them
                 if (!person.hesitationSince) person.hesitationSince = cityTimeMs;
                 else if (cityTimeMs - person.hesitationSince > ARRIVAL_MS) {
                   person.phase = "settled";
@@ -756,9 +1075,6 @@ export default function City() {
                   person.hesitationSince = 0;
                 }
               }
-              // regulars: on arrival at a store/event, deepen (or reset) the
-              // per-need ledger and lift the person to "regular" once they
-              // cross the threshold. Same plot as last time → visits += 1.
               if (person.phase === "settled" && target.role === "store") {
                 person.foodVisit = recordVisit(person.foodVisit, target.id);
                 if (isRegularOf(person.foodVisit, target.id)) person.regularStoreId = target.id;
@@ -771,7 +1087,6 @@ export default function City() {
           }
         }
 
-        // ── heading: face where the last step took us ───────────────────
         person.heading = headingFor(
           { x: prevX, y: prevY },
           { x: person.x, y: person.y },
@@ -781,11 +1096,14 @@ export default function City() {
     }
 
     function personOnRoad(person: Person): boolean {
-      // rough — if the person is within a fixed normalized distance of any
-      // road segment, they are on it. Enough to feel the speedup.
       for (const road of roads) {
-        const t = clamp(((person.x - road.x1) * (road.x2 - road.x1) + (person.y - road.y1) * (road.y2 - road.y1))
-          / Math.max(1e-6, (road.x2 - road.x1) ** 2 + (road.y2 - road.y1) ** 2), 0, 1);
+        const denom = Math.max(1e-6, (road.x2 - road.x1) ** 2 + (road.y2 - road.y1) ** 2);
+        const t = clamp(
+          ((person.x - road.x1) * (road.x2 - road.x1) +
+            (person.y - road.y1) * (road.y2 - road.y1)) / denom,
+          0,
+          1,
+        );
         const px = road.x1 + t * (road.x2 - road.x1);
         const py = road.y1 + t * (road.y2 - road.y1);
         if ((person.x - px) ** 2 + (person.y - py) ** 2 < 0.0004) return true;
@@ -798,134 +1116,61 @@ export default function City() {
       weatherWind *= Math.exp(-dt * 0.00015);
     }
 
-    // ── drawing ─────────────────────────────────────────────────────────
-
-    function drawBackground(): void {
-      const detail = detailForTier(governor.tier());
-      bgctx.clearRect(0, 0, width, height);
-
-      // day-night gradient (linear, not radial — paint-test safe)
-      const f = dayFraction(cityTimeMs);
-      const day = isDaytime(cityTimeMs);
-      const [sr, sg, sb] = SEASON_TINT[season];
-      const light = day ? 1 : 0.28 + 0.16 * Math.cos(f * Math.PI * 2);
-      const skyR = Math.floor(sr * light);
-      const skyG = Math.floor(sg * light);
-      const skyB = Math.floor(sb * light);
-      const groundR = Math.floor(sr * light * 0.72);
-      const groundG = Math.floor(sg * light * 0.72);
-      const groundB = Math.floor(sb * light * 0.68);
-
-      const grad = bgctx.createLinearGradient(0, 0, 0, height);
-      grad.addColorStop(0, `rgb(${skyR}, ${skyG}, ${skyB})`);
-      grad.addColorStop(1, `rgb(${groundR}, ${groundG}, ${groundB})`);
-      bgctx.fillStyle = grad;
-      bgctx.fillRect(0, 0, width, height);
-
-      // subtle grid — a plain map, in the "map" lens
-      if (lens === "map" && detail.samples >= 1) {
-        bgctx.strokeStyle = `rgba(21, 23, 26, ${day ? 0.06 : 0.10})`;
-        bgctx.lineWidth = 1;
-        const step = 48;
-        bgctx.beginPath();
-        for (let x = 0; x < width; x += step) {
-          bgctx.moveTo(x, 0);
-          bgctx.lineTo(x, height);
-        }
-        for (let y = 0; y < height; y += step) {
-          bgctx.moveTo(0, y);
-          bgctx.lineTo(width, y);
-        }
-        bgctx.stroke();
+    /** density-as-engine: how many peer plots stand within a hand's width. */
+    function densityAt(px: number, py: number, selfId: number): number {
+      let n = 0;
+      for (const q of plots) {
+        if (q.id === selfId) continue;
+        const d = Math.hypot(q.x - px, q.y - py);
+        if (d < NEIGHBOR_R) n += 1;
       }
-
-      // hydrology overlay — soft blue meander lines
-      if (lens === "hydrology") {
-        bgctx.strokeStyle = "rgba(44, 74, 92, 0.32)";
-        bgctx.lineWidth = 2.5;
-        bgctx.beginPath();
-        for (let x = 0; x < width; x += 3) {
-          const y = height * 0.55 + Math.sin(x * 0.02 + cityTimeMs * 0.0005) * 26;
-          if (x === 0) bgctx.moveTo(x, y); else bgctx.lineTo(x, y);
-        }
-        bgctx.stroke();
-      }
+      return Math.min(1, n / 6);
     }
 
-    function drawForeground(): void {
-      fgctx.clearRect(0, 0, width, height);
+    // ── drawing ──────────────────────────────────────────────────────────
 
-      // roads
-      fgctx.strokeStyle = "rgba(21, 23, 26, 0.35)";
-      fgctx.lineWidth = 3;
-      fgctx.lineCap = "round";
-      for (const road of roads) {
-        fgctx.beginPath();
-        fgctx.moveTo(road.x1 * width, road.y1 * height);
-        fgctx.lineTo(road.x2 * width, road.y2 * height);
-        fgctx.stroke();
-      }
+    function drawFrame(now: number, detail: { simHz: number; samples: number }): void {
+      void detail;
+      const t = A().getAudioTime() ?? now / 1000;
+      const clocks = clocksFrom({
+        time: t,
+        turbulence: Math.abs(weatherWind),
+        register,
+        reducedMotion: reduceMotion,
+      });
 
-      // (a live drag-preview stroke was dropped: we do not carry the
-      // pointer's live position outside the drag handler, so the branch
-      // could only ever draw a beginPath()/stroke() with no lineTo — a
-      // no-op that still ran on every frame. The road lands legibly on
-      // release; the road-in-progress is felt in the haptic ripple, not
-      // pre-drawn.)
+      if (!stage || !groundProg || !groundQuad) return;
+      const size = stage.beginFrame(clocks, groundProg);
+      const width = size.width;
+      const height = size.height;
 
-      // plots
-      for (const plot of plots) {
-        const px = plot.x * width;
-        const py = plot.y * height;
-        const isTree = plot.role === "tree";
-        const treeScale = isTree ? treeFoliage(season) : 1;
-        const baseSize = plot.sealed ? 12 : 9;
-        const size = baseSize * (0.6 + 0.4 * treeScale);
-        fgctx.fillStyle = ROLE_COLORS[plot.role];
-        if (plot.role === "tree") {
-          // trees are round canopies
-          fgctx.beginPath();
-          fgctx.arc(px, py, size, 0, Math.PI * 2);
-          fgctx.fill();
-        } else if (plot.role === "event") {
-          // events flare — a soft diamond
-          fgctx.beginPath();
-          fgctx.moveTo(px, py - size);
-          fgctx.lineTo(px + size, py);
-          fgctx.lineTo(px, py + size);
-          fgctx.lineTo(px - size, py);
-          fgctx.closePath();
-          fgctx.fill();
-        } else {
-          // homes and stores are little rects
-          fgctx.fillRect(px - size, py - size, size * 2, size * 2);
-        }
-        if (plot.sealed) {
-          fgctx.strokeStyle = "rgba(232, 226, 213, 0.75)";
-          fgctx.lineWidth = 1.5;
-          fgctx.strokeRect(px - size - 2, py - size - 2, size * 2 + 4, size * 2 + 4);
-        }
-      }
+      // ── ground ────────────────────────────────────────────────────────
+      const dayF = dayFraction(cityTimeMs);
+      const isDay = isDaytime(cityTimeMs) ? 1 : 0;
+      const rgb = SEASON_RGB[season];
+      const pressAt = activePlant
+        ? { x: activePlant.x, y: activePlant.y }
+        : dragRoadLive ?? { x: -1, y: -1 };
+      const pressActive = activePlant
+        ? Math.min(1, plantRingWeight + 0.35)
+        : dragRoadLive ? 0.35 : 0;
 
-      // active plant dwell ring
-      if (activePlant && !activePlant.sealed) {
-        const dwell = activePlant.liveDwellMs;
-        const nextThreshold = nextRoleThreshold(activePlant.role);
-        const prev = prevRoleThreshold(activePlant.role);
-        const frac = nextThreshold ? Math.min(1, (dwell - prev) / (nextThreshold - prev)) : 1;
-        const px = activePlant.x * width;
-        const py = activePlant.y * height;
-        fgctx.strokeStyle = `rgba(255, 232, 178, ${0.55 + plantRingWeight * 0.35})`;
-        fgctx.lineWidth = 2;
-        fgctx.beginPath();
-        fgctx.arc(px, py, 22 + frac * 12, 0, Math.PI * 2);
-        fgctx.stroke();
-      }
+      groundProg.setFloat("uDayF", dayF);
+      groundProg.setFloat("uIsDay", isDay);
+      groundProg.setVec3("uSeasonRGB", rgb[0], rgb[1], rgb[2]);
+      groundProg.setFloat("uSeasonF", seasonPhase);
+      groundProg.setFloat("uWet", weatherRain);
+      groundProg.setFloat("uWind", weatherWind);
+      groundProg.setFloat(
+        "uLens",
+        lens === "map" ? 0 : lens === "hydrology" ? 1 : 2,
+      );
+      groundProg.setFloat("uReduced", reduceMotion ? 1 : 0);
+      groundProg.setFloat("uPress", pressActive);
+      groundProg.setVec2("uPressAt", pressAt.x, pressAt.y);
+      groundQuad.draw();
 
-      // micro-communities: a plot with two or more regulars carries a small,
-      // warm ring, its diameter widening with the count. The ring is the
-      // visible record of the plot's identity densifying from a role into a
-      // community — "a store is where THESE people eat", drawn.
+      // regular-count per plot, computed once per frame from the people
       const regularCountByPlot = new Map<number, number>();
       for (const person of people) {
         if (person.regularStoreId != null) {
@@ -941,136 +1186,171 @@ export default function City() {
           );
         }
       }
-      for (const plot of plots) {
-        const count = regularCountByPlot.get(plot.id) ?? 0;
-        if (count < 2) continue; // one regular is a habit, two is a community
-        const px = plot.x * width;
-        const py = plot.y * height;
-        const radius = 16 + count * 3;
-        fgctx.strokeStyle = `rgba(232, 187, 129, ${Math.min(0.55, 0.18 + count * 0.08)})`;
-        fgctx.lineWidth = 1.5;
-        fgctx.beginPath();
-        fgctx.arc(px, py, radius, 0, Math.PI * 2);
-        fgctx.stroke();
+
+      // ── plots ─────────────────────────────────────────────────────────
+      if (plotProg && plotDraw && plots.length > 0) {
+        const foliage = treeFoliage(season);
+        for (let i = 0; i < plots.length; i += 1) {
+          const p = plots[i];
+          plotCenter[i * 2 + 0] = p.x;
+          plotCenter[i * 2 + 1] = p.y;
+          plotProps[i * 4 + 0] = roleTier(p.role);
+          plotProps[i * 4 + 1] = p.sealed ? 26 : 20;
+          plotProps[i * 4 + 2] = p.sealed ? 1 : 0;
+          const next = nextRoleThreshold(p.role);
+          const prev = prevRoleThreshold(p.role);
+          const dwellFrac = next
+            ? Math.min(1, Math.max(0, (p.liveDwellMs - prev) / (next - prev)))
+            : 1;
+          plotProps[i * 4 + 3] = dwellFrac;
+          plotExtras[i * 4 + 0] = foliage;
+          plotExtras[i * 4 + 1] = densityAt(p.x, p.y, p.id);
+          plotExtras[i * 4 + 2] = Math.min(1, (regularCountByPlot.get(p.id) ?? 0) / 4);
+          plotExtras[i * 4 + 3] = Math.min(3, (cityTimeMs - p.bornMs) / 1000);
+        }
+        plotProg.use();
+        plotProg.setVec2("uResolution", width, height);
+        plotProg.setFloat("uTime", now / 1000);
+        plotProg.setFloat("uBreath", clocks.breath);
+        plotDraw.attribute("a_center", plotCenter.subarray(0, plots.length * 2), 2, 1);
+        plotDraw.attribute("a_props", plotProps.subarray(0, plots.length * 4), 4, 1);
+        plotDraw.attribute("a_extras", plotExtras.subarray(0, plots.length * 4), 4, 1);
+        plotDraw.draw(stage.gl.TRIANGLE_STRIP, 4, plots.length);
+        plotDraw.reset();
       }
 
-      // people. Each dweller is a small heading-aligned sliver — a line
-      // segment along their facing angle. Arrivals carry a faint tail from
-      // where they came in; regulars carry a slightly warmer head so the
-      // eye can pick a community out of a crowd; hesitating people are
-      // marked with a paler body so a tradeoff is legible.
-      for (const person of people) {
-        const px = person.x * width;
-        const py = person.y * height;
-        const cos = Math.cos(person.heading);
-        const sin = Math.sin(person.heading);
-        // body is a short line along heading (~5px), longer if arriving so a
-        // walker coming in from the edge reads as a mover, not a dot
-        const length = person.phase === "arriving" ? 6 : 5;
-        const bx = px + cos * (length * 0.5);
-        const by = py + sin * (length * 0.5);
-        const tx = px - cos * (length * 0.5);
-        const ty = py - sin * (length * 0.5);
-        // arrival tail — from the person back toward their home, a faint hint
-        // of the phased arc (only during arriving, and only when far enough
-        // from home that the tail has room to draw)
-        if (person.phase === "arriving") {
-          const home = plots.find((p) => p.id === person.homeId);
-          if (home) {
-            const hx = home.x * width;
-            const hy = home.y * height;
-            const dx = px - hx;
-            const dy = py - hy;
-            const dLen = Math.hypot(dx, dy);
-            if (dLen > 16) {
-              const backLen = Math.min(14, dLen * 0.25);
-              fgctx.strokeStyle = "rgba(232, 226, 213, 0.18)";
-              fgctx.lineWidth = 1;
-              fgctx.beginPath();
-              fgctx.moveTo(px, py);
-              fgctx.lineTo(px + (dx / dLen) * backLen, py + (dy / dLen) * backLen);
-              fgctx.stroke();
-            }
+      // ── people ────────────────────────────────────────────────────────
+      if (personProg && personDraw && people.length > 0) {
+        for (let i = 0; i < people.length; i += 1) {
+          const person = people[i];
+          personCenter[i * 2 + 0] = person.x;
+          personCenter[i * 2 + 1] = person.y;
+          personState[i * 4 + 0] = Math.cos(person.heading);
+          personState[i * 4 + 1] = Math.sin(person.heading);
+          personState[i * 4 + 2] = person.phase === "arriving" ? 0 : 1;
+          const hesitating = person.hesitating ? 1 : 0;
+          const isRegular = person.regularStoreId != null || person.regularEventId != null ? 1 : 0;
+          personState[i * 4 + 3] = hesitating + isRegular * 2;
+        }
+        personProg.use();
+        personProg.setVec2("uResolution", width, height);
+        personDraw.attribute("a_center", personCenter.subarray(0, people.length * 2), 2, 1);
+        personDraw.attribute("a_state", personState.subarray(0, people.length * 4), 4, 1);
+        personDraw.draw(stage.gl.TRIANGLE_STRIP, 4, people.length);
+        personDraw.reset();
+      }
+
+      // ── overlay (canvas 2D thin layer) ────────────────────────────────
+      if (overlayCtx) {
+        overlayCtx.clearRect(0, 0, width, height);
+
+        // roads — the strokes a drag has traced across the ground
+        if (roads.length > 0 || dragRoadStart) {
+          overlayCtx.strokeStyle = "rgba(21, 23, 26, 0.42)";
+          overlayCtx.lineWidth = 3;
+          overlayCtx.lineCap = "round";
+          for (const road of roads) {
+            overlayCtx.beginPath();
+            overlayCtx.moveTo(road.x1 * width, road.y1 * height);
+            overlayCtx.lineTo(road.x2 * width, road.y2 * height);
+            overlayCtx.stroke();
+          }
+          if (dragRoadStart && dragRoadLive) {
+            overlayCtx.strokeStyle = "rgba(200, 115, 42, 0.55)";
+            overlayCtx.lineWidth = 2;
+            overlayCtx.setLineDash([4, 6]);
+            overlayCtx.beginPath();
+            overlayCtx.moveTo(dragRoadStart.x * width, dragRoadStart.y * height);
+            overlayCtx.lineTo(dragRoadLive.x * width, dragRoadLive.y * height);
+            overlayCtx.stroke();
+            overlayCtx.setLineDash([]);
           }
         }
-        // body
-        const bodyAlpha = person.hesitating ? 0.55 : 0.85;
-        const bodyColor = person.regularStoreId != null || person.regularEventId != null
-          ? `rgba(200, 115, 42, ${bodyAlpha + 0.05})` // regulars carry a warm cast
-          : `rgba(21, 23, 26, ${bodyAlpha})`;
-        fgctx.strokeStyle = bodyColor;
-        fgctx.lineWidth = 2;
-        fgctx.lineCap = "round";
-        fgctx.beginPath();
-        fgctx.moveTo(tx, ty);
-        fgctx.lineTo(bx, by);
-        fgctx.stroke();
-        // small head dot to keep dwellers legible at 390px width
-        fgctx.fillStyle = bodyColor;
-        fgctx.beginPath();
-        fgctx.arc(bx, by, 1.4, 0, Math.PI * 2);
-        fgctx.fill();
-      }
 
-      // satisfaction lens — draw halos around plots by how many people are near
-      if (lens === "satisfaction") {
+        // active plant dwell ring
+        if (activePlant && !activePlant.sealed) {
+          const next = nextRoleThreshold(activePlant.role);
+          const prev = prevRoleThreshold(activePlant.role);
+          const frac = next
+            ? Math.min(1, (activePlant.liveDwellMs - prev) / (next - prev))
+            : 1;
+          const px = activePlant.x * width;
+          const py = activePlant.y * height;
+          overlayCtx.strokeStyle = `rgba(255, 232, 178, ${0.55 + plantRingWeight * 0.35})`;
+          overlayCtx.lineWidth = 2;
+          overlayCtx.beginPath();
+          overlayCtx.arc(px, py, 22 + frac * 12, 0, Math.PI * 2);
+          overlayCtx.stroke();
+        }
+
+        // micro-community ring — a plot with 2+ regulars is not just a
+        // role, it is a community of the people who keep coming back
         for (const plot of plots) {
-          if (plot.role !== "home" && plot.role !== "store" && plot.role !== "event") continue;
-          let visitors = 0;
-          for (const person of people) {
-            if ((person.x - plot.x) ** 2 + (person.y - plot.y) ** 2 < 0.005) visitors += 1;
-          }
-          if (visitors === 0) continue;
-          fgctx.strokeStyle = `rgba(74, 145, 106, ${Math.min(0.55, visitors * 0.18)})`;
-          fgctx.lineWidth = 4;
-          fgctx.beginPath();
-          fgctx.arc(plot.x * width, plot.y * height, 14 + visitors * 2, 0, Math.PI * 2);
-          fgctx.stroke();
+          const count = regularCountByPlot.get(plot.id) ?? 0;
+          if (count < 2) continue;
+          const px = plot.x * width;
+          const py = plot.y * height;
+          const radius = 22 + count * 3;
+          overlayCtx.strokeStyle = `rgba(232, 187, 129, ${Math.min(0.55, 0.18 + count * 0.08)})`;
+          overlayCtx.lineWidth = 1.5;
+          overlayCtx.beginPath();
+          overlayCtx.arc(px, py, radius, 0, Math.PI * 2);
+          overlayCtx.stroke();
         }
-      }
 
-      // rain streaks (weatherRain) — plain lines, safe for paint test.
-      // Under reduced motion the layer is frozen: the streaks are drawn
-      // from a stationary seed so the sky is still "under weather" without
-      // any animated fall — the settlement is still legibly damp.
-      if (weatherRain > 0.01) {
-        fgctx.strokeStyle = `rgba(44, 74, 92, ${0.15 + weatherRain * 0.35})`;
-        fgctx.lineWidth = 1;
-        const count = Math.floor(weatherRain * 60);
-        const seedT = reduceMotion ? 1 : Math.floor(cityTimeMs / 40);
-        const rng = mulberry(seedT);
-        for (let i = 0; i < count; i += 1) {
-          const x = rng() * width;
-          const y = reduceMotion
-            ? rng() * height
-            : ((rng() * height) + (cityTimeMs * 0.4)) % height;
-          const wind = weatherWind * 22;
-          fgctx.beginPath();
-          fgctx.moveTo(x, y);
-          fgctx.lineTo(x + wind, y + 12);
-          fgctx.stroke();
+        // satisfaction lens — a soft ring on plots with the most visitors
+        if (lens === "satisfaction") {
+          for (const plot of plots) {
+            if (plot.role !== "home" && plot.role !== "store" && plot.role !== "event") continue;
+            let visitors = 0;
+            for (const person of people) {
+              if ((person.x - plot.x) ** 2 + (person.y - plot.y) ** 2 < 0.005) visitors += 1;
+            }
+            if (visitors === 0) continue;
+            overlayCtx.strokeStyle = `rgba(74, 145, 106, ${Math.min(0.55, visitors * 0.18)})`;
+            overlayCtx.lineWidth = 4;
+            overlayCtx.beginPath();
+            overlayCtx.arc(plot.x * width, plot.y * height, 18 + visitors * 2, 0, Math.PI * 2);
+            overlayCtx.stroke();
+          }
+        }
+
+        // lens name — a small named line that fades after each rotation
+        if (lensFade > 0.02) {
+          overlayCtx.globalAlpha = Math.min(1, lensFade);
+          overlayCtx.font = "300 12px ui-monospace, 'SF Mono', Menlo, monospace";
+          overlayCtx.fillStyle = "rgba(228, 212, 178, 0.7)";
+          overlayCtx.textAlign = "center";
+          const label =
+            lens === "map"
+              ? "map — the plain reading"
+              : lens === "hydrology"
+                ? "hydrology — the water's own map"
+                : "satisfaction — where the feet gather";
+          overlayCtx.fillText(label, width / 2, height - 32);
+          overlayCtx.globalAlpha = 1;
         }
       }
     }
 
     function nextRoleThreshold(role: PlotRole): number | null {
-      if (role === "home") return PLOT_DWELL_MS.store;
+      if (role === "home")  return PLOT_DWELL_MS.store;
       if (role === "store") return PLOT_DWELL_MS.event;
       if (role === "event") return PLOT_DWELL_MS.tree;
       return null;
     }
     function prevRoleThreshold(role: PlotRole): number {
-      if (role === "home") return 0;
+      if (role === "home")  return 0;
       if (role === "store") return PLOT_DWELL_MS.home;
       if (role === "event") return PLOT_DWELL_MS.store;
-      if (role === "tree") return PLOT_DWELL_MS.event;
+      if (role === "tree")  return PLOT_DWELL_MS.event;
       return 0;
     }
     function clamp(v: number, lo: number, hi: number): number {
       return v < lo ? lo : v > hi ? hi : v;
     }
 
-    // <LetGo> support — the shared clear button dispatches a "letgo" event.
+    // ── LetGo support ────────────────────────────────────────────────────
     const onLetGo = () => {
       plots.length = 0;
       people.length = 0;
@@ -1080,12 +1360,9 @@ export default function City() {
     };
     window.addEventListener("letgo", onLetGo);
 
-    // Poll the room's "standing" state so the <LetGo> button appears only
-    // while something is kept. Cheap — 8Hz is enough to catch a first plot.
-    // We track the last-broadcast standing state in a local so this effect
-    // stays `[]`-mounted; reading `hasKept` from the enclosing closure would
-    // either force this effect back onto the plot arrays (a full remount,
-    // which is what Item 1's WebGL context must never do) or go stale here.
+    // Poll the room's "standing" state on an edge tracker so this effect
+    // stays `[]`-mounted — remounting on a standing-poll flip would tear
+    // the WebGL context down every time a plot appears or disappears.
     let standingBroadcast = plots.length > 0;
     setHasKept(standingBroadcast);
     const standingInterval = window.setInterval(() => {
@@ -1101,7 +1378,6 @@ export default function City() {
       if (raf) cancelAnimationFrame(raf);
       if (slowWake) clearTimeout(slowWake);
       detach();
-      observer.disconnect();
       offVisibility();
       offGallery();
       detachVessel();
@@ -1110,10 +1386,15 @@ export default function City() {
       idleWrite.flush();
       idleWrite.cancel();
       saveState();
+      if (stage) {
+        groundQuad?.dispose();
+        plotDraw?.dispose();
+        personDraw?.dispose();
+        stage.dispose();
+      }
     };
-    // Mount once. All room mutation flows through refs and the event/letgo
-    // channels above; the standing-poll broadcasts into React state
-    // without re-entering this effect.
+    // Mount once. Every mutation flows through refs and the /letgo event;
+    // the standing-poll broadcasts into React state without re-entering.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1128,8 +1409,16 @@ export default function City() {
         background: "#0e0f13",
       }}
     >
-      <canvas ref={bgCanvasRef} style={{ position: "absolute", inset: 0 }} />
-      <canvas ref={fgCanvasRef} style={{ position: "absolute", inset: 0 }} />
+      <canvas
+        ref={glCanvasRef}
+        aria-hidden
+        style={{ position: "absolute", inset: 0, display: "block", width: "100%", height: "100%" }}
+      />
+      <canvas
+        ref={overlayRef}
+        aria-hidden
+        style={{ position: "absolute", inset: 0, display: "block", width: "100%", height: "100%" }}
+      />
       {/* Night veil — face-down flips this from transparent to a deep dusk
           across the whole field. Positioned above the canvases but below
           the HUD/LetGo so the small copy stays readable at night. */}
