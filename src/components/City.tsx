@@ -62,6 +62,7 @@ import {
   type CityRole,
 } from "@/lib/city-audio";
 import { createCityComposer, type CityComposer } from "@/lib/city-composer";
+import { projectSunToScreen } from "@/lib/city-godrays";
 import { exposureForDay } from "@/lib/city-grading";
 import { createCitySky, fogColorFromSky, type CitySky } from "@/lib/city-sky";
 import { createCitySun, type CitySun } from "@/lib/city-sun";
@@ -2075,14 +2076,25 @@ export default function City() {
         plots: plots as unknown as ReadonlyArray<CityWaterProxy>,
       });
 
+      // Project the sun's world-space position to NDC for the god-rays
+      // pass. The composer only samples this when the horizon-crossing
+      // gate is open AND the tier is high; on ~99% of frames the god-
+      // rays pass short-circuits at uStrength=0 and the projection is
+      // effectively unused. Kept unconditional here so the projection
+      // result is stable and the pass sees a fresh sunScreen every tick
+      // it wakes up.
+      const sunScreen = projectSunToScreen(citySun.light.position, cityCam.camera);
+
       // The four RenderPasses live inside the composer now. Bloom threshold /
       // strength / radius ride the same dayFraction the shaders do — the
       // ember rises as the sun sets. Tier gates the bloom entirely on
       // low/sleep so slow devices keep hitting frame budget.
       // pitch01 rides the eased camera pitch — the composer's Bokeh DOF
       // ramps in as the frame climbs toward bird's-eye. SSAO is tier-gated
-      // inside the composer, so we don't touch it here.
-      composer.render(df, tier, cityCam.pitch01());
+      // inside the composer, so we don't touch it here. sunScreen drives
+      // the god-rays pass — visible only during dawn/dusk horizon
+      // crossings and only at high tier, per the brief.
+      composer.render(df, tier, cityCam.pitch01(), sunScreen);
       drawOverlay();
       raf = requestAnimationFrame(tick);
     };
