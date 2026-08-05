@@ -57,6 +57,7 @@ import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { THRESHOLDS, attachGestures } from "@/lib/gesture";
+import { tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import LetGo from "@/components/LetGo";
@@ -997,17 +998,18 @@ export default function NucleonsField() {
       else delete wrap.dataset.lensRaised;
     };
 
-    const tutti = () => {
+    // tutti: every drop hums at once, as brightly as the three fingers asked
+    const tutti = (gain = 0.6) => {
       const now = performance.now();
       if (now - lastTuttiAt < 1400) return;
       lastTuttiAt = now;
-      tuttiPulse = 1;
+      tuttiPulse = 0.55 + gain * 0.45;
       nuclei
         .filter((d) => !d.retiringAt && d.closed)
         .slice(0, 8)
-        .forEach((d, i) => noteLater(i * 55, midiOf(d.z, d.n), 90));
+        .forEach((d, i) => noteLater(i * 55, midiOf(d.z, d.n), 70 + Math.round(gain * 40)));
       try {
-        haptics.tap();
+        haptics.ripple(0.2 + gain * 0.3);
       } catch {
         /* noop */
       }
@@ -1032,13 +1034,18 @@ export default function NucleonsField() {
           return;
         }
         if (e.fingers === 3) {
-          tutti();
+          tutti(clamp01(0.35 + e.intensity * 0.65));
           return;
         }
         if (e.fingers !== 1) return;
         const { x, y } = toLocal(e.x, e.y);
         const d = nucleusAt(x, y);
-        if (d) {
+        // rapid-tap ladder 1 / 3 / 5 / n — counts between tiers deepen intensity
+        const trainTier = tapTrainTier(e.count);
+        const trainBase = trainTier === "n" ? 7 : trainTier;
+        const deepen = Math.min(1, (e.count - trainBase) * 0.5);
+        if (trainTier === 1) {
+          if (!d) return;
           // the giant resonance: the whole drop rings, and a strained one
           // can shake a neutron loose
           d.ring = Math.min(1, d.ring + 0.35 + e.intensity * 0.55);
@@ -1059,13 +1066,110 @@ export default function NucleonsField() {
             }
           }
           useField.getState().recordTape("ripple", 0.35 + e.intensity * 0.4, "nucleons/strike");
+          return;
+        }
+        if (trainTier === 3) {
+          // the photoneutron: three sharp strikes knock a neutron out of any
+          // drop, strained or not — the hammer reaching what one tap only
+          // reaches on the fissile. On open field the strikes shake one out
+          // of the vacuum itself.
+          if (d && d.n > 1) {
+            const ang = hash01(d.seed + e.count) * Math.PI * 2;
+            retune(d, d.z, d.n - 1);
+            d.ring = Math.min(1, d.ring + 0.5 + deepen * 0.3);
+            spawnFree(
+              0,
+              d.sx + Math.cos(ang) * d.sr,
+              d.sy + Math.sin(ang) * d.sr,
+              Math.cos(ang) * (210 + deepen * 120),
+              Math.sin(ang) * (210 + deepen * 120),
+            );
+            try {
+              audio().spark();
+            } catch {
+              /* noop */
+            }
+            note(midiOf(d.z, d.n) + 4, 140);
+            try {
+              haptics.detent();
+            } catch {
+              /* noop */
+            }
+            useField.getState().recordTape("ripple", 0.5 + deepen * 0.3, "nucleons/photoneutron");
+          } else {
+            spawnFree(0, x, y, 0, 0);
+            try {
+              audio().spark();
+            } catch {
+              /* noop */
+            }
+            note(70, 160);
+            try {
+              haptics.ripple(0.4);
+            } catch {
+              /* noop */
+            }
+          }
+          return;
+        }
+        if (trainTier === 5) {
+          // five strikes ask the drop NOW: it does the thing it already
+          // wanted — beta, alpha, fission — without waiting out its clock.
+          // A stable drop sings its stillness; the open field gives a spray.
+          if (d) {
+            d.ring = 1;
+            resolve(d, true);
+            try {
+              haptics.chop();
+            } catch {
+              /* noop */
+            }
+          } else {
+            const n = 3 + Math.round(deepen * 2);
+            for (let i = 0; i < n; i++) {
+              const ang = (i / n) * Math.PI * 2 + hash01(e.count + i) * 0.7;
+              spawnFree(0, x, y, Math.cos(ang) * 180, Math.sin(ang) * 180);
+            }
+            try {
+              audio().spark();
+            } catch {
+              /* noop */
+            }
+            note(72, 140);
+            try {
+              haptics.ripple(0.5);
+            } catch {
+              /* noop */
+            }
+          }
+          return;
+        }
+        // n: the drumroll summons the rain — the train run past seven raises
+        // the neutron flux itself, and every drop rings under the weather
+        flux = clamp01(flux + 0.28 + deepen * 0.3);
+        tuttiPulse = Math.max(tuttiPulse, 0.5 + deepen * 0.5);
+        for (const q of nuclei) {
+          if (q.retiringAt || !q.closed) continue;
+          q.ring = Math.min(1, q.ring + 0.25 + deepen * 0.2);
+        }
+        note(30 + Math.round(flux * 8), 420);
+        try {
+          audio().thud();
+        } catch {
+          /* noop */
+        }
+        try {
+          haptics.bloom();
+        } catch {
+          /* noop */
         }
       },
       hold: (e) => {
         lastInteractionAt = performance.now();
         if (e.fingers === 3) {
+          // dilation is an axis: the field keeps slowing for as long as the
+          // three fingers stay — 900ms and 2400ms are different stillnesses
           if (e.phase === "enter") {
-            timeScaleTarget = 0.25;
             try {
               haptics.tap();
             } catch {
@@ -1073,7 +1177,11 @@ export default function NucleonsField() {
             }
             note(32, 300);
           }
-          if (e.phase === "release") timeScaleTarget = 1;
+          if (e.phase === "release") {
+            timeScaleTarget = 1;
+            return;
+          }
+          timeScaleTarget = 1 - 0.85 * clamp01(e.elapsed / 2400);
           return;
         }
         if (e.fingers !== 1) return;
@@ -1407,6 +1515,51 @@ export default function NucleonsField() {
           } catch {
             /* noop */
           }
+        }
+      },
+      rhythm: (e) => {
+        lastInteractionAt = performance.now();
+        // the hand's pulse hurries the field's clocks: a steady tempo pulls
+        // every drop off the valley closer to the thing it already wants —
+        // decay entrained to the visitor, steadier taps pulling harder
+        if (e.stability < 0.55 || e.bpm < 40 || e.bpm > 220) return;
+        const now = performance.now();
+        let pulled = 0;
+        for (const d of nuclei) {
+          if (d.retiringAt || !d.closed || !Number.isFinite(d.decayAt)) continue;
+          const remain = d.decayAt - now;
+          if (remain <= 0) continue;
+          d.decayAt = now + remain * (1 - 0.28 * e.stability);
+          d.ring = Math.min(1, d.ring + 0.12);
+          pulled += 1;
+        }
+        if (pulled > 0) {
+          note(36 + Math.round(e.bpm / 20), 120);
+          try {
+            haptics.tap();
+          } catch {
+            /* noop */
+          }
+        }
+      },
+      drum: (e) => {
+        lastInteractionAt = performance.now();
+        // two hands drumming two spots volley neutrons across the space
+        // between them — each alternating hit fires one from the struck zone
+        // toward the other, and the drops standing in the crossfire capture
+        // what flies past. A chain reaction, played.
+        const a = toLocal(e.ax, e.ay);
+        const b = toLocal(e.bx, e.by);
+        const from = e.hits % 2 === 0 ? a : b;
+        const to = e.hits % 2 === 0 ? b : a;
+        const dd = Math.max(1, Math.hypot(to.x - from.x, to.y - from.y));
+        const speed = 240 + e.alternation * 160;
+        spawnFree(0, from.x, from.y, ((to.x - from.x) / dd) * speed, ((to.y - from.y) / dd) * speed);
+        note(64 + (e.hits % 2) * 5, 80);
+        try {
+          haptics.tap();
+        } catch {
+          /* noop */
         }
       },
     });
