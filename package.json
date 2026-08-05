@@ -83,7 +83,8 @@
     "test:city-textures": "node scripts/test-city-textures.mjs",
     "test:city-rooftop": "node scripts/test-city-rooftop.mjs",
     "test:city-pedestrians": "node scripts/test-city-pedestrians.mjs",
-    "test:city-curtainwall": "node scripts/test-city-curtainwall.mjs"
+    "test:city-curtainwall": "node scripts/test-city-curtainwall.mjs",
+    "test:city-skyline-ring": "node scripts/test-city-skyline-ring.mjs"
   },
   "dependencies": {
     "@chenglou/pretext": "^0.0.8",
