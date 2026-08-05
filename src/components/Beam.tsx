@@ -29,6 +29,7 @@ import * as haptics from "@/lib/haptics";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
 import LetGo from "@/components/LetGo";
 import { attachGestures } from "@/lib/gesture";
+import { tapTrainTier } from "@/lib/gesture/core";
 import { onVessel, requestVessel, vesselAvailable, vesselGranted } from "@/lib/vessel";
 import {
   createFrameGovernor,
@@ -849,6 +850,9 @@ export default function Beam() {
     let timeScaleTarget = 1;
     let timeScale = 1;
     let weatherOffset = 0;
+    // train tiers: the shimmer-wind sprint and the quickened waltz, decaying
+    let waveBurst = 0;
+    let waltzBurst = 0;
 
     const detachGestures = attachGestures(renderer.domElement, {
       tap: (e) => {
@@ -860,24 +864,50 @@ export default function Beam() {
           return;
         }
         if (e.fingers === 3) {
-          // tutti — the formation answers softly at once
+          // tutti — the formation answers softly at once, as bright as the strike
           uniforms.uRipple.value.set(uniforms.uSunA.value.x, uniforms.uSunA.value.y, 0);
-          uniforms.uRippleAmp.value = 1.4;
-          flash = Math.max(flash, 0.4);
-          try { audioRef.current?.chime(0.5); } catch { /* noop */ }
-          try { haptics.ripple(0.4); } catch { /* noop */ }
+          uniforms.uRippleAmp.value = 1.1 + e.intensity * 0.6;
+          flash = Math.max(flash, 0.25 + e.intensity * 0.3);
+          try { audioRef.current?.chime(0.3 + e.intensity * 0.4); } catch { /* noop */ }
+          try { haptics.ripple(0.3 + e.intensity * 0.3); } catch { /* noop */ }
           return;
         }
-        // tap: refocus to that ring and send light running outward
+        // tap: refocus to that ring and send light running outward — the
+        // ripple as wide as the strike was hard
         const [wx, wy] = toWorld(e.x, e.y);
         const da = Math.hypot(wx - uniforms.uSunA.value.x, wy - uniforms.uSunA.value.y);
         const db = Math.hypot(wx - uniforms.uSunB.value.x, wy - uniforms.uSunB.value.y);
         focusTarget = clamp(Math.min(da, db) / 1.2, 0, 1);
         focusBreathing = false;
         uniforms.uRipple.value.set(wx, wy, 0);
-        uniforms.uRippleAmp.value = 1;
+        uniforms.uRippleAmp.value = 0.75 + e.intensity * 0.5;
         try { audioRef.current?.chime(1 - focusTarget); } catch { /* noop */ }
         try { haptics.tap(); } catch { /* noop */ }
+        // the train tiers (1 / 3 / 5 / n from gesture/core): rapid taps climb
+        // the formation's own ladder — the wind, the waltz, the blaze
+        const trainTier = tapTrainTier(e.count);
+        if (trainTier === 3 && e.count === 3) {
+          // three taps send the shimmer-wind sprinting round the rings —
+          // the orbiting crest of light breaks into a run
+          waveBurst = 1;
+          flash = Math.max(flash, 0.25);
+          try { audioRef.current?.whoosh(0.9); } catch { /* noop */ }
+          try { haptics.ripple(0.5); } catch { /* noop */ }
+        } else if (trainTier === 5 && e.count === 5) {
+          // five taps quicken the waltz — the two suns swing hard around
+          // their barycenter, petals streaming to keep formation
+          waltzBurst = 1;
+          flash = Math.max(flash, 0.4);
+          try { audioRef.current?.bell(); } catch { /* noop */ }
+          try { haptics.bloom(); } catch { /* noop */ }
+        } else if (trainTier === "n") {
+          // seven and beyond: the crescendo — every further strike brightens
+          // the bloom and spins the whole formation faster
+          flash = Math.max(flash, clamp(0.3 + (e.count - 6) * 0.1, 0.3, 1));
+          rotSpeed = clamp(rotSpeed + 0.06, 0.14, 0.8);
+          try { audioRef.current?.chime(clamp(0.4 + (e.count - 7) * 0.09, 0.4, 1)); } catch { /* noop */ }
+          try { (e.count === 7 ? haptics.storm : () => haptics.ripple(0.55))(); } catch { /* noop */ }
+        }
       },
       drag: (e) => {
         ensureAudio();
@@ -907,6 +937,29 @@ export default function Beam() {
         try { audioRef.current?.whoosh(1); } catch { /* noop */ }
         try { haptics.chop(); } catch { /* noop */ }
       },
+      scrub: (e) => {
+        ensureAudio();
+        // a circling finger stirs the whole formation after the hand — the
+        // rings turn with the winding, faster the faster you circle
+        const spin = clamp(Math.abs(e.angularVelocity) * 60, 0.2, 1.4);
+        rotExtra -= e.winding * 0.35;
+        rotSpeed = clamp(0.14 + spin * 0.3, 0.14, 0.7);
+        const [wx, wy] = toWorld(e.cx, e.cy);
+        uniforms.uRipple.value.set(wx, wy, 0);
+        uniforms.uRippleAmp.value = 0.9 + Math.min(1, Math.abs(e.winding)) * 0.6;
+        try { audioRef.current?.whoosh(clamp(spin, 0.3, 1)); } catch { /* noop */ }
+        try { haptics.ripple(0.35); } catch { /* noop */ }
+      },
+      rhythm: (e) => {
+        // a steady tapped pulse: the room's whole clock — rotation, wave,
+        // waltz, weather — entrains to the hand's tempo and keeps it
+        if (e.stability <= 0.7 || e.bpm < 40 || e.bpm > 200) return;
+        ensureAudio();
+        onTempo(clamp(e.bpm / 76, 0.25, 2.5));
+        flash = Math.max(flash, 0.3);
+        try { audioRef.current?.chime(0.7); } catch { /* noop */ }
+        try { haptics.lens(); } catch { /* noop */ }
+      },
       hold: (e) => {
         ensureAudio();
         if (e.fingers === 3) {
@@ -927,20 +980,21 @@ export default function Beam() {
         if (e.phase === "release") {
           if (pupilTarget > 0) {
             // releasing the dwell is its own gesture: the deep exhale — a
-            // wide slow wave of light rolls out from where you held
+            // wave of light as wide and slow as the hold was long
             pupilTarget = 0;
             const [wx, wy] = toWorld(e.x, e.y);
             uniforms.uRipple.value.set(wx, wy, 0);
-            uniforms.uRippleAmp.value = 2.1;
+            uniforms.uRippleAmp.value = 1.4 + clamp(e.elapsed / 2500, 0, 1) * 1.2;
             try { audioRef.current?.exhale(); } catch { /* noop */ }
-            try { haptics.ripple(0.5); } catch { /* noop */ }
+            try { haptics.ripple(0.3 + clamp(e.elapsed / 2500, 0, 1) * 0.4); } catch { /* noop */ }
           }
           return;
         }
-        // dwell tier: the pupil dilates — grows the longer it holds
+        // dwell tier: the pupil dilates, and keeps dilating for as long as
+        // the hold lasts — 900ms is a squint, 2400ms is nearly night
         if (e.tier >= 1) {
           if (!holdTicked) { holdTicked = true; try { haptics.ripple(0.4); } catch { /* noop */ } }
-          pupilTarget = 1;
+          pupilTarget = clamp(e.elapsed / 2500, 0.35, 1);
         }
         // ceremony — the room's one solemn act: a meteor is called down
         // (if none is already in flight) with a grand exhale of light
@@ -1089,7 +1143,9 @@ export default function Beam() {
       rotSpeed = mix(rotSpeed, 0.14, 1 - Math.exp(-dt * 0.6));
       uniforms.uRot.value += (rotSpeed * speed) * dt;
       uniforms.uChi.value = 0.32 + 0.3 * Math.sin(simT * 0.05);
-      uniforms.uWaveAng.value += dt * speed * 0.55;
+      // three taps sent the shimmer-wind sprinting; it eases back to a walk
+      uniforms.uWaveAng.value += dt * speed * (0.55 + waveBurst * 3.4);
+      waveBurst = mix(waveBurst, 0, 1 - Math.exp(-dt * 1.4));
       gustAmt = mix(gustAmt, 0, 1 - Math.exp(-dt * 2.2));
       uniforms.uGustAmt.value = gustAmt;
       flash = mix(flash, 0, 1 - Math.exp(-dt * 4));
@@ -1114,7 +1170,9 @@ export default function Beam() {
       } else if (merged && sep > 0.2) {
         merged = false;
       }
-      orbAng += dt * speed * 0.11;
+      // five taps quicken the waltz; the swing decays back to the slow turn
+      orbAng += dt * speed * (0.11 + waltzBurst * 0.9);
+      waltzBurst = mix(waltzBurst, 0, 1 - Math.exp(-dt * 1.1));
       bary = bary.lerp(baryTarget, 1 - Math.exp(-dt * 3));
       const rot = uniforms.uRot.value + rotExtra;
       const ca = Math.cos(orbAng), sa = Math.sin(orbAng);
@@ -1204,7 +1262,7 @@ export default function Beam() {
       clearBeamRef.current = () => {};
       persistRef.current?.flush();
     };
-  }, [ensureAudio, schedulePersist]);
+  }, [ensureAudio, schedulePersist, onTempo, onNightToggle]);
 
   const letGo = useCallback(() => {
     clearBeamRef.current();

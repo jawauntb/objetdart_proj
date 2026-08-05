@@ -36,14 +36,17 @@ const beam = {
     essence:
       "a binary pair of soft suns wearing rings of comet-petal bokeh, sweeping through a day of shifting color.",
     moves: [
-      "tap → refocuses the depth of field at that point",
-      "hold → the pupil dilates toward night; release → a slow exhale ripples outward",
-      "drag → a gust leans the petals",
+      "tap → refocuses the depth of field at that point, the ripple as wide as the strike",
+      "rapid taps → three send the shimmer-wind sprinting round the rings; five quicken the suns' waltz; seven and beyond blaze the whole bloom",
+      "hold → the pupil keeps dilating for as long as you hold; release → an exhale as wide as the hold was long",
+      "drag → a gust leans the petals; circle a finger → stirs the whole formation after your hand",
+      "tap a steady beat → the room's clock entrains to your tempo and keeps it",
       "pinch → pulls the two suns apart or reels them together",
       "the tempo slider and \"let night fall\" → scale the whole clock, or force night",
     ],
     finds: [
       "squeezing the two suns close enough merges them into one with a flash, and they drift back apart on their own",
+      "a steady tapped pulse becomes the room's remembered tempo — it survives a reload the way the suns' separation does",
       "a petal breaks formation and streaks across the sky as a meteor every so often, on its own",
     ],
     keeps: "your tempo, day/night state, and how far apart you left the suns",
