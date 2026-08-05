@@ -44,13 +44,18 @@ const {
 
 const pitchBird = pitchForZoom(0);
 const pitchEye = pitchForZoom(1);
-assert.ok(pitchBird > 1.2, "bird's-eye pitch is near-nadir (>70°); got " + (pitchBird * 180 / Math.PI));
+// bird's-eye pitch is helicopter-tilt (>60°) but not floorplan-nadir; the
+// old 78° near-nadir read as a floorplan, not a photograph.
+assert.ok(pitchBird > 1.0 && pitchBird < 1.35, "bird's-eye pitch is helicopter (60-78°); got " + (pitchBird * 180 / Math.PI));
 assert.ok(pitchEye < 0.25, "eye-level pitch is near-horizon (<15°); got " + (pitchEye * 180 / Math.PI));
 assert.ok(pitchBird > pitchEye, "pitch decreases as zoom climbs from bird's-eye to eye-level");
 
 const distBird = distanceForZoom(0);
 const distEye = distanceForZoom(1);
-assert.ok(distBird > 100, "bird's-eye distance is helicopter-altitude (>100 units); got " + distBird);
+// Bird's-eye altitude tightened from 165 to keep the 80-unit city
+// filling the frame rather than shrinking into a satellite thumbnail;
+// still comfortably above the tallest tower.
+assert.ok(distBird > 90, "bird's-eye distance is helicopter-altitude (>90 units); got " + distBird);
 assert.ok(distEye < 40, "eye-level distance is near a tower (<40 units); got " + distEye);
 assert.ok(distBird > distEye, "distance shrinks as zoom climbs");
 
@@ -89,7 +94,11 @@ assert.equal(distanceForZoom(2), distanceForZoom(1), "over-clamped zoom returns 
 // eye-level) would put the entire skyline in the upper half of the
 // screen — the exact ugly-crop the coupling is designed to prevent.
 
-assert.ok(lookYForZoom(0) < 1, "at bird's-eye we aim close to ground");
+// Bird's-eye aim was y=0.3 — the shadows on the pavement. Photographs of
+// cities aim at the mass, not the floor. New default aims at short-building
+// mid-height (2-3 units) at the bird's-eye end, still lifting toward
+// mid-skyline (~7 units) at eye-level so the horizon centers the frame.
+assert.ok(lookYForZoom(0) >= 1 && lookYForZoom(0) <= 4, "at bird's-eye we aim on the mass, not the ground");
 assert.ok(lookYForZoom(1) > 4, "at eye-level we aim well above ground");
 assert.ok(lookYForZoom(1) > lookYForZoom(0), "look-at Y rises with zoom-in");
 

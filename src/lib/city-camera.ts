@@ -57,8 +57,12 @@ export const CAM_FAR = 2000;
  */
 export function pitchForZoom(zoom01: number): number {
   const z = Math.max(0, Math.min(1, zoom01));
-  const highDeg = 78; // bird's-eye — near-nadir
-  const lowDeg = 8;   // eye-level — near-horizon
+  // 72° at bird's-eye was near-nadir — read as a floorplan, not a
+  // photograph. 72° still gives a strong helicopter feel while keeping
+  // the buildings' vertical silhouette visible. Eye-level end lifted
+  // from 8° to 10° so the horizon doesn't clip the tallest tower's tip.
+  const highDeg = 72;
+  const lowDeg = 10;
   const deg = highDeg * (1 - z) + lowDeg * z;
   return deg * (Math.PI / 180);
 }
@@ -71,9 +75,13 @@ export function pitchForZoom(zoom01: number): number {
  */
 export function distanceForZoom(zoom01: number): number {
   const z = Math.max(0, Math.min(1, zoom01));
-  const far = 165; // bird's-eye altitude
-  const near = 22; // eye-level distance to the nearest tower
-  const t = z * z * (3 - 2 * z); // smoothstep
+  // Old bird's-eye altitude of 165 units on an 80-unit-wide city left the
+  // settlement small in the frame with a huge empty sky above. 115 pulls
+  // the frame in so the city fills the ground half of the canvas even at
+  // full pull-back — the postcard aesthetic, not a satellite thumbnail.
+  const far = 115;
+  const near = 22;
+  const t = z * z * (3 - 2 * z);
   return far * (1 - t) + near * t;
 }
 
@@ -85,7 +93,12 @@ export function distanceForZoom(zoom01: number): number {
  */
 export function lookYForZoom(zoom01: number): number {
   const z = Math.max(0, Math.min(1, zoom01));
-  return 0.3 + 6.5 * z;
+  // Lift the bird's-eye aim from y=0.3 to y=2.5 so the camera looks *at*
+  // the middle of the settlement's short buildings rather than at their
+  // shadows on the ground — cities photograph well when the aim is on
+  // the mass, not the pavement. Eye-level end unchanged at ~6.8 so the
+  // skyline sits at horizon height as it did.
+  return 2.5 + 4.3 * z;
 }
 
 /**
