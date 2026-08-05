@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 import LetGo from "@/components/LetGo";
 import { attachGestures } from "@/lib/gesture";
-import { THRESHOLDS } from "@/lib/gesture/core";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { onVessel } from "@/lib/vessel";
@@ -122,9 +121,19 @@ export default function City() {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const bgCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const fgCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  // A separate DOM layer over the field, tied to the vessel's face-down flip.
+  // The tick loop pokes its opacity directly — same pattern the coin uses,
+  // so no React state churns on a device motion event.
+  const nightVeilRef = useRef<HTMLDivElement | null>(null);
+  // The hint fades once the visitor has planted anything — no on-the-nose
+  // dismissal, just a small quieting.
+  const hintRef = useRef<HTMLDivElement | null>(null);
   // The room "stands" (LetGo is shown) whenever anything has been kept —
   // any plot at all is enough. Sealed plots persist across visits, unsealed
   // ones are the ones that follow the dwell.
+  // Deliberately not a dep of the mount effect: the effect owns the plot
+  // arrays for the whole life of the room, and remounting on a standing-poll
+  // flip would tear down the canvas contexts (fatal once this becomes WebGL).
   const [hasKept, setHasKept] = useState(false);
   // A stable callback for the <LetGo> click: dispatches the shared event the
   // frame loop already listens for. The event pattern lets the effect own
@@ -185,6 +194,20 @@ export default function City() {
     if (typeof window !== "undefined" && window.matchMedia) {
       reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     }
+    // Population walk slowdown under reduced motion — a settlement still
+    // breathes, but the small figures move at a calmer pace so the field
+    // does not ripple against the visitor's setting.
+    const populationSpeed = reduceMotion ? 0.4 : 1;
+
+    // The night veil: face-down = night, tracked as a boolean the flip
+    // handler flips and the tick loop eases into a real opacity on the
+    // separate `nightVeilRef` element (Coin's pattern). Kept out of React
+    // state so a vessel event never re-renders.
+    let nightOn = false;
+    let nightAmt = 0;
+    // Hint-hidden edge tracker so the tick loop only writes to the DOM
+    // when the state flips, not every frame.
+    let hintHidden = false;
 
     // ── restore ─────────────────────────────────────────────────────────
     try {
@@ -443,9 +466,15 @@ export default function City() {
       },
       flip: (e) => {
         // face-down is night, no matter what the day said — jump city time
-        // to mid-night; face-up returns to whatever day the clock had reached
+        // to mid-night; face-up returns to whatever day the clock had
+        // reached. The veil (nightVeilRef) darkens the whole field alongside,
+        // so the settlement's dusk lands in two channels at once — the
+        // simulated day-clock and the room-wide overlay.
+        nightOn = e.faceDown;
         if (e.faceDown) {
           cityTimeMs = Math.floor(cityTimeMs / CITY_DAY_MS) * CITY_DAY_MS + CITY_DAY_MS * 0.75;
+          try { A().playNote(38, 320); } catch { /* noop */ }
+          try { haptics.detent(); } catch { /* noop */ }
         }
       },
     });
@@ -479,9 +508,25 @@ export default function City() {
       const dt = Math.min(66, now - lastFrameAt);
       lastFrameAt = now;
       cityTimeMs += dt * cityTimeScale;
-      stepPopulation(dt);
+      stepPopulation(dt * populationSpeed);
       decayWeather(dt);
       plantRingWeight = Math.max(0, plantRingWeight - dt * 0.002);
+      // ease the night veil toward its target (face-down = night). Under
+      // reduced motion we still let it move — a fade to black is a color
+      // change, not a shake — just a touch faster so it lands quietly.
+      const nightEase = reduceMotion ? 0.10 : Math.min(1, dt * 0.0025);
+      nightAmt += ((nightOn ? 1 : 0) - nightAmt) * nightEase;
+      if (nightVeilRef.current) {
+        nightVeilRef.current.style.opacity = String(nightAmt * 0.82);
+      }
+      // hint fades to nothing once the visitor has planted a single plot —
+      // the settlement takes it from here. Written only on the transition
+      // so this loop stays quiet DOM-wise.
+      const wantHintHidden = plots.length > 0;
+      if (hintRef.current && wantHintHidden !== hintHidden) {
+        hintHidden = wantHintHidden;
+        hintRef.current.style.opacity = wantHintHidden ? "0" : "";
+      }
       drawBackground();
       drawForeground();
       raf = requestAnimationFrame(tick);
@@ -670,17 +715,12 @@ export default function City() {
         fgctx.stroke();
       }
 
-      // active drag preview
-      if (dragRoadStart) {
-        fgctx.strokeStyle = "rgba(200, 115, 42, 0.55)";
-        fgctx.lineWidth = 2;
-        fgctx.setLineDash([4, 6]);
-        fgctx.beginPath();
-        fgctx.moveTo(dragRoadStart.x * width, dragRoadStart.y * height);
-        // we do not know pointer live-position outside the drag handler — the preview lands on release
-        fgctx.stroke();
-        fgctx.setLineDash([]);
-      }
+      // (a live drag-preview stroke was dropped: we do not carry the
+      // pointer's live position outside the drag handler, so the branch
+      // could only ever draw a beginPath()/stroke() with no lineTo — a
+      // no-op that still ran on every frame. The road lands legibly on
+      // release; the road-in-progress is felt in the haptic ripple, not
+      // pre-drawn.)
 
       // plots
       for (const plot of plots) {
@@ -758,16 +798,21 @@ export default function City() {
         }
       }
 
-      // rain streaks (weatherRain) — plain lines, safe for paint test
-      if (weatherRain > 0.01 && !reduceMotion) {
+      // rain streaks (weatherRain) — plain lines, safe for paint test.
+      // Under reduced motion the layer is frozen: the streaks are drawn
+      // from a stationary seed so the sky is still "under weather" without
+      // any animated fall — the settlement is still legibly damp.
+      if (weatherRain > 0.01) {
         fgctx.strokeStyle = `rgba(44, 74, 92, ${0.15 + weatherRain * 0.35})`;
         fgctx.lineWidth = 1;
         const count = Math.floor(weatherRain * 60);
-        const seedT = Math.floor(cityTimeMs / 40);
+        const seedT = reduceMotion ? 1 : Math.floor(cityTimeMs / 40);
         const rng = mulberry(seedT);
         for (let i = 0; i < count; i += 1) {
           const x = rng() * width;
-          const y = ((rng() * height) + (cityTimeMs * 0.4)) % height;
+          const y = reduceMotion
+            ? rng() * height
+            : ((rng() * height) + (cityTimeMs * 0.4)) % height;
           const wind = weatherWind * 22;
           fgctx.beginPath();
           fgctx.moveTo(x, y);
@@ -806,9 +851,18 @@ export default function City() {
 
     // Poll the room's "standing" state so the <LetGo> button appears only
     // while something is kept. Cheap — 8Hz is enough to catch a first plot.
+    // We track the last-broadcast standing state in a local so this effect
+    // stays `[]`-mounted; reading `hasKept` from the enclosing closure would
+    // either force this effect back onto the plot arrays (a full remount,
+    // which is what Item 1's WebGL context must never do) or go stale here.
+    let standingBroadcast = plots.length > 0;
+    setHasKept(standingBroadcast);
     const standingInterval = window.setInterval(() => {
       const standing = plots.length > 0;
-      if (standing !== hasKept) setHasKept(standing);
+      if (standing !== standingBroadcast) {
+        standingBroadcast = standing;
+        setHasKept(standing);
+      }
     }, 125);
 
     return () => {
@@ -826,7 +880,11 @@ export default function City() {
       idleWrite.cancel();
       saveState();
     };
-  }, [hasKept]);
+    // Mount once. All room mutation flows through refs and the event/letgo
+    // channels above; the standing-poll broadcasts into React state
+    // without re-entering this effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div
@@ -841,7 +899,50 @@ export default function City() {
     >
       <canvas ref={bgCanvasRef} style={{ position: "absolute", inset: 0 }} />
       <canvas ref={fgCanvasRef} style={{ position: "absolute", inset: 0 }} />
+      {/* Night veil — face-down flips this from transparent to a deep dusk
+          across the whole field. Positioned above the canvases but below
+          the HUD/LetGo so the small copy stays readable at night. */}
+      <div
+        ref={nightVeilRef}
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          inset: 0,
+          zIndex: 3,
+          background: "#04060b",
+          opacity: 0,
+          pointerEvents: "none",
+          transition: "opacity 220ms ease",
+        }}
+      />
+      <div className="city-hud">
+        <div className="city-title">objet&nbsp;d&rsquo;art &mdash; la cit&eacute;</div>
+        <div className="city-hint" ref={hintRef}>
+          a settlement made of the care it takes
+        </div>
+      </div>
       <LetGo label="let the city go" onLetGo={letGo} visible={hasKept} />
+      <style dangerouslySetInnerHTML={{ __html: `
+        .city-hud {
+          position: absolute; left: 0; right: 0; z-index: 10; pointer-events: none;
+          top: 0; padding: calc(70px + env(safe-area-inset-top,0px)) 20px 0;
+          display: grid; gap: 6px; justify-items: center; text-align: center;
+        }
+        .city-title {
+          font-family: var(--font-fraunces, var(--font-serif, Georgia), serif);
+          font-weight: 600; font-size: clamp(20px, 4.5vw, 30px);
+          background: linear-gradient(180deg,#fff6da,#f6e6b4 30%,#e7b94e 70%,#b8860b 100%);
+          -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: #e7b94e;
+          text-shadow: 0 2px 16px rgba(0,0,0,0.5);
+        }
+        .city-hint {
+          font-family: var(--font-mono, ui-monospace, monospace);
+          font-size: 11px; letter-spacing: 0.14em; text-transform: lowercase;
+          color: rgba(246,230,180,0.6);
+          transition: opacity .6s ease;
+        }
+        @media (max-width: 560px){ .city-hint{ font-size: 10px; padding: 0 18px; line-height: 1.45; } }
+      ` }} />
     </div>
   );
 }
