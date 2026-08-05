@@ -353,6 +353,35 @@ assert.doesNotMatch(
   "provider prompts should no longer inject Catalan residue into every subject",
 );
 
+// Landmark NAMES must never reach the image model. The hotspot labels are
+// navigation text and the seeds for neighboring ground; they are drawn from
+// a small fixed word pool, so dictating them as art direction ("embody
+// copper delta as a distinct illustrated landmark") grew the same generic
+// cartography on every unrelated subject — a map of a nebula told to render
+// a copper river delta duly rendered one. Only the four POSITIONS are the
+// atlas's to dictate; what stands at them belongs to the subject.
+{
+  const nebulaContext = plain(createAtlasGenerationContext("space nebula"));
+  assert.equal(nebulaContext.hotspots.length, 4, "a concept should still anchor four reachable landmarks");
+  assert.doesNotMatch(defaultPrompt, /\bembody\b/i, "the prompt must not dictate what a landmark is");
+  for (const hotspot of nebulaContext.hotspots) {
+    assert.ok(
+      !defaultPrompt.includes(hotspot.label),
+      `the invented label "${hotspot.label}" must never be handed to the image model as art direction`,
+    );
+  }
+  // The spatial contract survives: every hotspot's position is still asked
+  // for, so invisible touch targets keep landing on real visual features.
+  for (const hotspot of nebulaContext.hotspots) {
+    const x = Math.round(hotspot.x * 100);
+    const y = Math.round(hotspot.y * 100);
+    assert.ok(
+      defaultPrompt.includes(`${x}% from the left and ${y}% from the top`),
+      `the prompt must still anchor a landmark at ${x}%,${y}% for the hand to reach`,
+    );
+  }
+}
+
 await generateAtlasImage(
   parseAtlasGenerationRequest({ prompt: "Heaven", mode: "generate" }),
   resolveAtlasProviderConfig({ OPENAI_API_KEY: "openai-test-key" }),
@@ -517,6 +546,73 @@ for (const hotspot of firstContext.hotspots) {
   assert.ok(hotspot.id && hotspot.label, "hotspots should have stable identities and labels");
   assert.ok(Number.isFinite(hotspot.x) && hotspot.x >= 0 && hotspot.x <= 1, "hotspot x should be normalized");
   assert.ok(Number.isFinite(hotspot.y) && hotspot.y >= 0 && hotspot.y <= 1, "hotspot y should be normalized");
+}
+
+// ── the naming law: derived ground stays inside its subject ────────────
+// A hotspot label is the subject Atlas generates when you enter that
+// landmark; an edge seed is the subject it generates beyond that edge. So
+// a name drawn from our own vocabulary does not merely mislabel the map —
+// it replaces the world. These pin that every derived name still carries
+// the concept, and that hopping can never accrete one.
+const atlasNamingModule = loadTsModule("src/lib/atlas-naming.ts");
+const { atlasBaseConcept, atlasNamePart, atlasQuarterLabel, atlasReachesLabel } = atlasNamingModule;
+
+assert.equal(atlasBaseConcept("tokyo"), "tokyo", "a bare concept is its own base");
+assert.equal(atlasBaseConcept("tokyo · eastern reaches"), "tokyo", "a qualifier must strip back to the base subject");
+assert.equal(atlasBaseConcept("  fire   forest  "), "fire forest", "the base must collapse stray whitespace");
+assert.equal(atlasBaseConcept("· only a qualifier"), "· only a qualifier", "a nameless base must fall back to the whole string, never empty");
+assert.equal(atlasNamePart("tokyo · north quarter"), "north quarter", "the map prints the part, not the whole subject");
+assert.equal(atlasNamePart("tokyo"), "tokyo", "an unqualified name prints itself");
+
+// Crossing a border must not rename the world. This is the regression that
+// let a Tokyo map's east edge be "copper harbor", which then generated an
+// actual copper harbor and reseeded the next hop from that.
+for (const direction of ["north", "east", "south", "west"]) {
+  for (const concept of ["tokyo", "Heaven", "a cathedral of bone"]) {
+    const base = atlasBaseConcept(concept);
+    assert.ok(
+      atlasQuarterLabel(concept, direction).startsWith(base),
+      `entering a ${direction} landmark of "${concept}" must stay inside that subject`,
+    );
+    assert.ok(
+      atlasReachesLabel(concept, direction).startsWith(base),
+      `crossing ${direction} from "${concept}" must stay inside that subject`,
+    );
+  }
+}
+
+// Every hop re-derives from the base, so a long walk can never grow an
+// unbounded prompt (the route caps concepts at 240 characters).
+{
+  let walked = "fire forest";
+  for (let hop = 0; hop < 24; hop += 1) {
+    walked = atlasReachesLabel(walked, hop % 2 === 0 ? "east" : "north");
+    assert.ok(walked.length <= 64, `a ${hop + 1}-hop walk must not accrete qualifiers (${walked.length} chars)`);
+    assert.equal(atlasBaseConcept(walked), "fire forest", "a walk must never lose the subject it started from");
+  }
+}
+
+// A district and the ground beyond that same edge are different places,
+// so they must not collapse to one string.
+for (const direction of ["north", "east", "south", "west"]) {
+  assert.notEqual(
+    atlasQuarterLabel("fire forest", direction),
+    atlasReachesLabel("fire forest", direction),
+    `a ${direction} district and the ${direction} territory beyond it must name different ground`,
+  );
+}
+assert.deepEqual(
+  Object.values(plain(createAtlasGenerationContext("fire forest")).seeds).sort(),
+  ["fire forest · eastern reaches", "fire forest · northern reaches", "fire forest · southern reaches", "fire forest · western reaches"],
+  "edges must name the subject's own outward reaches",
+);
+// Concept casing reaches the slug now that labels carry the visitor's text.
+for (const hotspot of plain(createAtlasGenerationContext("Tokyo")).hotspots) {
+  assert.ok(
+    /^[a-z0-9-]+$/.test(hotspot.id),
+    `a hotspot id must stay a clean slug even from capitalized concepts (got "${hotspot.id}")`,
+  );
+  assert.ok(hotspot.id.includes("tokyo"), `a hotspot id should keep the subject readable (got "${hotspot.id}")`);
 }
 
 const generatedWithOpenRouter = plain(await generateAtlasImage(
