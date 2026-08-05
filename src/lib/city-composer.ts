@@ -221,6 +221,14 @@ export type CityComposerOptions = {
    * camera the water pass runs with, and if the two cameras diverged the
    * mirrored horizon would slide off the water surface at any pitch
    * other than the one the water module was built for.
+   *
+   * R6-C note: city-water.ts's `createCityWater` is now handed the same
+   * skylineScene we pass here for the skyline RenderPass. The reflector
+   * patches its own onBeforeRender to render that scene into its RT so
+   * the mirror carries the real extruded prisms, not a proxy box field.
+   * From the composer's angle nothing changes — the water pass still
+   * calls into the reflector at the ordered moment; the reflector just
+   * paints a truer picture into its own RT before its own shader samples.
    */
   waterScene?: THREE.Scene;
   waterCam?: THREE.Camera;

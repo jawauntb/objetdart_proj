@@ -5,10 +5,26 @@
  * room; the harbour is what doubles it, because the sky burning behind the
  * tallest sealed plot burns twice — once in the tower's glass, once in the
  * water. This module owns the water world: a THREE.Reflector plane along
- * the +z edge of the city footprint, a set of building proxies behind the
- * plane (only visible to the reflector's virtualCamera, via layer 1), a
- * hemisphere sky whose tint tracks dayFraction, and a scrolled wave normal
- * that ripples the reflection at ~0.02 uv/s.
+ * the +z edge of the city footprint, a scrolled wave normal that ripples the
+ * reflection at ~0.02 uv/s, and — since R6 — the REAL extruded skyline
+ * rendered into the reflector's RT, so what you see doubled on the water is
+ * the same towers, lit windows, and moving cars the eye is looking at above
+ * the surface.
+ *
+ * The R6 fix — real skyline in the mirror:
+ *   Before R6 the reflection carried a layer-1 field of MeshStandardMaterial
+ *   proxy boxes: a tiny surrogate skyline whose warm dusk emissive tried to
+ *   stand in for the actual towers. The London-at-dusk brief died at the
+ *   waterline because what you saw doubled was a box field, not the actual
+ *   city — the emotional peak deflated at the exact place it was meant to
+ *   burn twice. R6-C fixes it: `createCityWater` now takes the same
+ *   `skylineScene` the composer runs in its RenderPass, and the reflector's
+ *   `onBeforeRender` is patched to render THAT scene into the RT after the
+ *   sky-dome pass. The layer-1 proxy field is retired (proxyHeightFor still
+ *   exported for legacy tests) and the sky dome writes no depth so the real
+ *   towers occlude it cleanly at every camera pitch. Traffic — the cars on
+ *   the road graph, the boats crossing the strip — lives in that same
+ *   skylineScene and rides along for free in the mirror.
  *
  * The rebase — cityCam owns the frame:
  *   Before f7543df the water module carried its own fixed perspective
@@ -23,18 +39,19 @@
  *   is then the reflection of the same eye the visitor is looking through.
  *
  * How it composes into /city:
- *   City.tsx builds this water = createCityWater(...) and hands its scene
- *   + cityCam.camera to createCityComposer as a water RenderPass, drawn
- *   AFTER the skyline and BEFORE bloom. RenderPass runs with clear:false
- *   (colors from earlier passes stay); depth is preserved from the
- *   skyline pass so tall buildings still occlude the water beyond them.
+ *   City.tsx builds this water = createCityWater({ skylineScene, ... }) and
+ *   hands its scene + cityCam.camera to createCityComposer as a water
+ *   RenderPass, drawn AFTER the skyline and BEFORE bloom. RenderPass runs
+ *   with clear:false (colors from earlier passes stay); depth is preserved
+ *   from the skyline pass so tall buildings still occlude the water beyond
+ *   them.
  *
  * Tier gating (the door B/C/D depend on):
  *   high, medium  → Reflector runs; its RT is 0.7 × canvas on high, 0.5 ×
- *                   on medium. The wave normal scrolls; the proxies mirror
- *                   the tallest sealed plots as tiny towers on the horizon
- *                   — a placeholder skyline the real C-tier buildings will
- *                   replace in a later PR.
+ *                   on medium. Wave normal scrolls; the reflector's
+ *                   virtualCamera renders the real skylineScene into its
+ *                   RT after the sky-dome — the mirror carries the same
+ *                   towers, lit windows, and cars the eye sees above.
  *   low           → Reflector is hidden; a cheaper static mirror mesh
  *                   takes its place, painting the sky gradient with a
  *                   wave normal-map highlight but no live reflection.
@@ -367,6 +384,21 @@ export type CityWaterOptions = {
   height: number;
   /** initial pixel ratio — matches renderer.getPixelRatio() at mount */
   pixelRatio: number;
+  /**
+   * The real 3D skyline scene the composer already renders in its skyline
+   * RenderPass. When provided, the reflector renders THIS scene into its
+   * RT from the virtualCamera — the same extruded prisms, PBR facades,
+   * lit windows, and traffic that live above the water surface show up
+   * doubled below it. When absent (tests, mocks), the reflector falls back
+   * to sampling only the sky-dome — the mirror stays cheap-and-flat but
+   * the pipeline still runs.
+   *
+   * IMPORTANT: this scene must NOT include the water plane itself, or the
+   * reflector would render its own surface into its own reflection.
+   * City.tsx satisfies this by keeping the water plane inside water.scene
+   * and everything else inside skyline.scene.
+   */
+  skylineScene?: THREE.Scene;
 };
 
 /**
@@ -482,44 +514,180 @@ export function createCityWater(opts: CityWaterOptions): CityWater {
       }
     `,
   });
+  // depthWrite off: after the R6 fix we render skylineScene into the same
+  // RT as a second pass, and the towers must occlude the sky dome pixel-
+  // perfect without fighting a far-plane depth from the dome itself. The
+  // dome fills the color buffer but leaves the depth buffer at 1.0, so any
+  // tower fragment wins the depth test cleanly. depthTest stays on so
+  // early-Z can still skip fragments hidden behind opaque terrain (there
+  // is none in the reflection, but keeping the state consistent avoids
+  // surprises if a future opaque proxy is re-added).
+  skyMat.depthWrite = false;
   const sky = new THREE.Mesh(skyGeo, skyMat);
+  // renderOrder = -1 so the dome draws first, painting the background before
+  // the (currently empty) reflector scene contents. When we chain a second
+  // renderer.render(skylineScene, virtualCamera) with autoClear=false, this
+  // is what fills the horizon color the towers stand against.
+  sky.renderOrder = -1;
   sky.position.set(0, -5, WATER_PLANE_CENTER_Z + 15);
   sky.layers.set(1);
   scene.add(sky);
 
-  // ── building proxies (layer 1, mirror-only) ──────────────────────────
-  // WATER_PROXY_COUNT boxes sitting behind the water plane at world scale.
-  // Each frame we read the tallest sealed plots into them, remapping city-
-  // normalized x into world X across the harbour's width. The proxies live
-  // on layer 1 so only the reflection sees them — the main view is unaffected.
+  // ── building proxies (layer 1, mirror-only, legacy fallback) ────────
+  // Retired by R6: when `skylineScene` is provided, the reflector renders
+  // the real extruded prism skyline into its RT (see the onBeforeRender
+  // patch below), so no proxy field is needed. When skylineScene is
+  // absent — the test-shim path, or a future caller that hasn't wired
+  // the skyline yet — we still populate the layer-1 proxy field so the
+  // mirror carries a something-shaped-like-a-city rather than an empty
+  // sky. The `proxyHeightFor` pure helper stays exported either way, and
+  // the ladder it encodes is still exercised by test-city-water.mjs.
+  const hasRealSkyline = !!opts.skylineScene;
   const proxyGeo = new THREE.BoxGeometry(1, 1, 1);
   const proxyGroup = new THREE.Group();
   proxyGroup.layers.set(1);
   const proxies: THREE.Mesh[] = [];
-  for (let i = 0; i < WATER_PROXY_COUNT; i += 1) {
-    const mat = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(0.28, 0.30, 0.36),
-      metalness: 0.15,
-      roughness: 0.55,
-      emissive: new THREE.Color(0.0, 0.0, 0.0),
-    });
-    const m = new THREE.Mesh(proxyGeo, mat);
-    m.visible = false;
-    m.layers.set(1);
-    proxyGroup.add(m);
-    proxies.push(m);
-  }
-  scene.add(proxyGroup);
+  if (!hasRealSkyline) {
+    for (let i = 0; i < WATER_PROXY_COUNT; i += 1) {
+      const mat = new THREE.MeshStandardMaterial({
+        color: new THREE.Color(0.28, 0.30, 0.36),
+        metalness: 0.15,
+        roughness: 0.55,
+        emissive: new THREE.Color(0.0, 0.0, 0.0),
+      });
+      const m = new THREE.Mesh(proxyGeo, mat);
+      m.visible = false;
+      m.layers.set(1);
+      proxyGroup.add(m);
+      proxies.push(m);
+    }
+    scene.add(proxyGroup);
 
-  // A soft warm directional so the proxy boxes catch a sunset side — the
-  // reflection reads as buildings with a lit side rather than flat cubes.
-  const sunProxy = new THREE.DirectionalLight(0xffe0b0, 1.4);
-  sunProxy.position.set(-60, 80, 20);
-  sunProxy.layers.set(1);
-  scene.add(sunProxy);
-  const ambientProxy = new THREE.AmbientLight(0x8899bb, 0.6);
-  ambientProxy.layers.set(1);
-  scene.add(ambientProxy);
+    // A soft warm directional so the proxy boxes catch a sunset side — the
+    // reflection reads as buildings with a lit side rather than flat cubes.
+    const sunProxy = new THREE.DirectionalLight(0xffe0b0, 1.4);
+    sunProxy.position.set(-60, 80, 20);
+    sunProxy.layers.set(1);
+    scene.add(sunProxy);
+    const ambientProxy = new THREE.AmbientLight(0x8899bb, 0.6);
+    ambientProxy.layers.set(1);
+    scene.add(ambientProxy);
+  }
+
+  // ── real-skyline mirror (R6-C) ───────────────────────────────────────
+  // When City.tsx hands us the same skylineScene the composer runs in its
+  // skyline RenderPass, we teach the reflector to render THAT scene into
+  // its RT after the default sky-dome pass. The result: the mirror
+  // carries the actual extruded prism towers, PBR facades, lit windows,
+  // and traffic — exactly what the eye sees above the surface, doubled.
+  //
+  // Mechanism:
+  //   1. Save the default `onBeforeRender` (which sets up the virtualCam,
+  //      applies the oblique frustum clip, and renders the water scene —
+  //      i.e., the sky dome on layer 1 — into the reflector's RT).
+  //   2. Wrap it: after the default runs, the RT has fresh sky pixels and
+  //      the virtualCam has been configured. We then bind the RT again,
+  //      set autoClear=false (preserve the sky pixels), and call
+  //      renderer.render(skylineScene, reflector.camera) — a second pass
+  //      that draws the towers on top of the dome. Depth is inherited
+  //      from the dome's render (dome writes no depth; buffer stays at
+  //      1.0), so any tower fragment wins depth cleanly.
+  //   3. shadowMap.autoUpdate is muted for our second pass — the shadow
+  //      map was already refreshed by the composer's earlier skyline
+  //      RenderPass this frame, and we reuse that map for the mirror.
+  //      xr.enabled is muted for symmetry with the default onBeforeRender.
+  //
+  // The reflector's own mesh (`reflector`) is toggled invisible for the
+  // duration of our second pass so the water plane never renders into its
+  // own reflection.
+  //
+  // If skylineScene is absent, this whole patch is skipped and the mirror
+  // falls back to the legacy proxy field above.
+  const skylineSceneForMirror = opts.skylineScene ?? null;
+  if (skylineSceneForMirror) {
+    const rt = (reflector as unknown as {
+      getRenderTarget(): THREE.WebGLRenderTarget;
+    }).getRenderTarget();
+    const virtualCam = reflector.camera;
+    // The Reflector's default onBeforeRender only reads (renderer, scene,
+    // camera) from the six-arg Object3D signature — the trailing geometry,
+    // material, and group are unused by its mirror math. We cast to the
+    // 3-arg shape we actually invoke, and assign the wrapped fn back
+    // through an `any` alias since @types/three insists on the full 6.
+    const originalOnBeforeRender = reflector.onBeforeRender as unknown as (
+      this: unknown,
+      renderer: THREE.WebGLRenderer,
+      scene: THREE.Scene,
+      camera: THREE.Camera,
+    ) => void;
+    const wrapper = function patchedOnBeforeRender(
+      this: unknown,
+      renderer: THREE.WebGLRenderer,
+      scene: THREE.Scene,
+      camera: THREE.Camera,
+    ) {
+      // Default: run the mirror math, render the water scene (sky dome
+      // only, since proxies aren't added on this path) into the RT. This
+      // also restores the render target and toggles reflector.visible
+      // back on after its own pass.
+      originalOnBeforeRender.call(reflector, renderer, scene, camera);
+
+      // Detect "facing away" early-return — same predicate the default
+      // uses. If the reflector face isn't pointed at the eye, the RT
+      // wasn't refreshed and there's nothing to add to it.
+      const reflectorWorldPos = new THREE.Vector3().setFromMatrixPosition(
+        reflector.matrixWorld,
+      );
+      const camWorldPos = new THREE.Vector3().setFromMatrixPosition(
+        camera.matrixWorld,
+      );
+      const normalWs = new THREE.Vector3(0, 0, 1).applyMatrix4(
+        new THREE.Matrix4().extractRotation(reflector.matrixWorld),
+      );
+      const viewDot = normalWs.dot(
+        new THREE.Vector3().subVectors(reflectorWorldPos, camWorldPos),
+      );
+      if (viewDot > 0) return;
+
+      // Second pass: draw the real skyline on top of the sky dome in the
+      // same RT. Preserve renderer state around the call.
+      const prevRT = renderer.getRenderTarget();
+      const prevAutoClear = renderer.autoClear;
+      const prevXrEnabled = renderer.xr.enabled;
+      const prevShadowAuto = renderer.shadowMap.autoUpdate;
+
+      renderer.xr.enabled = false;
+      renderer.shadowMap.autoUpdate = false;
+      renderer.setRenderTarget(rt);
+      renderer.autoClear = false;
+
+      // Hide the water plane itself for the mirror pass — belt-and-braces,
+      // since the reflector is added to `scene` (water scene) and NOT to
+      // skylineScene, but if a future rearrange puts the plane into
+      // skylineScene by accident this guards against reflecting the
+      // mirror into itself.
+      const wasVisible = reflector.visible;
+      reflector.visible = false;
+      renderer.render(skylineSceneForMirror, virtualCam);
+      reflector.visible = wasVisible;
+
+      renderer.setRenderTarget(prevRT);
+      renderer.autoClear = prevAutoClear;
+      renderer.xr.enabled = prevXrEnabled;
+      renderer.shadowMap.autoUpdate = prevShadowAuto;
+
+      // Restore viewport if the outer camera had one — mirrors the tail
+      // of the default onBeforeRender for a compound-render symmetry.
+      const outerCam = camera as THREE.Camera & { viewport?: THREE.Vector4 };
+      if (outerCam.viewport !== undefined) {
+        renderer.state.viewport(outerCam.viewport);
+      }
+    };
+    // Assign through an `any` alias because @types/three declares
+    // onBeforeRender as the 6-arg variant; the runtime callback only uses
+    // the leading 3 (renderer, scene, camera).
+    (reflector as unknown as { onBeforeRender: typeof wrapper }).onBeforeRender = wrapper;
+  }
 
   // ── state ────────────────────────────────────────────────────────────
   let waveTime = 0;
@@ -601,19 +769,25 @@ export function createCityWater(opts: CityWaterOptions): CityWater {
         if (isReflect) resizeRT(u.tier);
       }
 
+      // Legacy proxy update — only meaningful when the mirror is running
+      // on the fallback (no skylineScene passed). When the R6 real-skyline
+      // path is active, `proxies` is empty and this block short-circuits
+      // at the first `if (!slot)` check; we skip the sort entirely too.
       // Update reflectable proxies from live plot data. We pick the
       // WATER_PROXY_COUNT plots with the highest proxyHeightFor score;
       // ties broken by seed so the same plots always map to the same
       // boxes (frame-to-frame stability).
       sortBuf.length = 0;
-      for (const p of u.plots) {
-        if (p.role === "empty") continue;
-        sortBuf.push({ p, score: proxyHeightFor(p.role, p.sealed, p.seed) });
+      if (proxies.length > 0) {
+        for (const p of u.plots) {
+          if (p.role === "empty") continue;
+          sortBuf.push({ p, score: proxyHeightFor(p.role, p.sealed, p.seed) });
+        }
+        sortBuf.sort((a, b) => {
+          if (b.score !== a.score) return b.score - a.score;
+          return (a.p.seed | 0) - (b.p.seed | 0);
+        });
       }
-      sortBuf.sort((a, b) => {
-        if (b.score !== a.score) return b.score - a.score;
-        return (a.p.seed | 0) - (b.p.seed | 0);
-      });
 
       // Warm dusk emissive so the tallest towers "glow" in the reflection
       // — a placeholder for the real lit-window emissives C-tier brings.
@@ -625,7 +799,7 @@ export function createCityWater(opts: CityWaterOptions): CityWater {
       const ember = Math.min(1, dNoon * 2);
       const emissiveWarmth = ember * ember * (3 - 2 * ember);
 
-      for (let i = 0; i < WATER_PROXY_COUNT; i += 1) {
+      for (let i = 0; i < proxies.length; i += 1) {
         const mesh = proxies[i];
         const slot = sortBuf[i];
         if (!slot) {
