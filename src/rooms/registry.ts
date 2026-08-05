@@ -34,12 +34,14 @@ import cabinet from "@/rooms/cabinet/room.config";
 import compass from "@/rooms/compass/room.config";
 import galaxy from "@/rooms/galaxy/room.config";
 import geyser from "@/rooms/geyser/room.config";
+import marsh from "@/rooms/marsh/room.config";
 import orb from "@/rooms/orb/room.config";
 import pebble from "@/rooms/pebble/room.config";
 import planets from "@/rooms/planets/room.config";
 import reef from "@/rooms/reef/room.config";
 import relativity from "@/rooms/relativity/room.config";
 import rocks from "@/rooms/rocks/room.config";
+import root from "@/rooms/root/room.config";
 import soil from "@/rooms/soil/room.config";
 import solar from "@/rooms/solar/room.config";
 import spring from "@/rooms/spring/room.config";
@@ -51,12 +53,14 @@ export const ROOM_MANIFESTS = [
   compass,
   galaxy,
   geyser,
+  marsh,
   orb,
   pebble,
   planets,
   reef,
   relativity,
   rocks,
+  root,
   soil,
   solar,
   spring,
