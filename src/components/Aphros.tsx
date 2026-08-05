@@ -29,6 +29,7 @@ import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import { createFrameGovernor, onVisibility, resolveDpr } from "@/lib/room-runtime";
 import LetGo from "@/components/LetGo";
@@ -185,6 +186,11 @@ export default function Aphros() {
     let lastGlimmerAt = 0;
     let lastStirNoteAt = 0;
     let holdBloom: Bloom | null = null;
+    // the hand's tempo, entrained into the surf: wakes break at the shell
+    // on the visitor's own pulse while it lasts
+    let pulseBpm = 0;
+    let pulseUntil = 0;
+    let lastBeatIdx = -1;
 
     // ── the court, and what the hand last did to it ──────────────────
     // every figure is strikable and answers in its own register: tritons
@@ -289,19 +295,71 @@ export default function Aphros() {
         tap: (e) => {
           lastTouchAt = performance.now();
           if (e.fingers === 3) {
-            // tutti — every bloom flashes, the sea answers in a chord
-            flash = 1;
-            agitation = Math.min(1, agitation + 0.3);
+            // tutti — every bloom flashes, the sea answers in a chord,
+            // exactly as hard as the hand asked
+            flash = Math.min(1, 0.6 + e.intensity * 0.4);
+            agitation = Math.min(1, agitation + 0.2 + e.intensity * 0.25);
             audio.playNote(57, 260);
             audio.playNote(64, 260);
             audio.playNote(69, 300);
-            haptics.ripple(0.5);
+            haptics.ripple(0.35 + e.intensity * 0.4);
             return;
           }
-          if (e.fingers === 2) return; // reserved — the frame's verbs
+          if (e.fingers === 2) {
+            // step back: a raised drawing lowers first; else the elastic
+            // frame springs home and the sea settles a breath
+            if (lensTarget > 0.02 || lensDetentSide === 1) {
+              lensTarget = 0;
+              lensDetentSide = 0;
+              haptics.lens();
+              audio.playNote(48, 160);
+            } else {
+              panTargetX = 0;
+              panTargetY = 0;
+              pushWake(0.5, SHELL_Y + 0.08, 0.5);
+              audio.playNote(44, 200);
+              haptics.detent();
+            }
+            return;
+          }
           const nx = e.x / Math.max(1, width);
           const ny = e.y / Math.max(1, height);
           const AR = width / Math.max(1, height);
+          // the rapid-tap ladder climbs the court: foam → the pod leaps →
+          // the shell rings → a squall breaks
+          const trainTier = tapTrainTier(e.count);
+          const depth = tapTrainDepth(e.count);
+          if (trainTier === "n") {
+            flash = Math.min(1, 0.7 + depth * 0.3);
+            agitation = Math.min(1, agitation + 0.5 + depth * 0.5);
+            pushWake(nx, ny, 1);
+            audio.playNote(57, 300);
+            audio.playNote(64, 300);
+            audio.playNote(73, 340);
+            haptics.storm();
+            return;
+          }
+          if (trainTier === 5) {
+            // the shell rings and the whole court turns toward it
+            galateaGlow = 1;
+            silkBoost = 1;
+            flash = Math.min(1, flash + 0.45 + depth * 0.3);
+            pushWake(SHELL_X, SHELL_Y + 0.06, 0.8 + depth * 0.2);
+            audio.bell();
+            haptics.bloom();
+            return;
+          }
+          if (trainTier === 3) {
+            // the pod answers: all three dolphins play harder for a while
+            const until = performance.now() + 3200 + depth * 2400;
+            dolphinBoostUntil[0] = until;
+            dolphinBoostUntil[1] = until;
+            dolphinBoostUntil[2] = until;
+            audio.playNote(81, 130);
+            window.setTimeout(() => audio.playNote(85, 130), 80);
+            haptics.ripple(0.4 + depth * 0.3);
+            return;
+          }
           const dst = (x: number, y: number) => Math.hypot((nx - x) * AR, ny - y);
           // ── who did the hand strike? each answers in its register ──
           // the woman — a bell and her glow
@@ -371,9 +429,10 @@ export default function Aphros() {
         hold: (e) => {
           lastTouchAt = performance.now();
           if (e.fingers === 3) {
-            // the law: held fingers dilate the whole shore's time
-            if (e.phase === "enter") timeScaleTarget = 0.25;
+            // the law: held fingers dilate the whole shore's time, and the
+            // dilation keeps deepening for as long as the hand stays
             if (e.phase === "release") timeScaleTarget = 1;
+            else timeScaleTarget = Math.max(0.08, Math.min(1, 1 - e.elapsed / 3400));
             return;
           }
           if (e.fingers !== 1) return;
@@ -441,6 +500,7 @@ export default function Aphros() {
             const now = performance.now();
             if (now - lastSeasonFxAt > 900) {
               lastSeasonFxAt = now;
+              audio.playNote(52 + Math.round(season * 12), 140);
               haptics.tap();
             }
             return;
@@ -465,14 +525,29 @@ export default function Aphros() {
         },
         scrub: (e) => {
           lastTouchAt = performance.now();
-          // winding a whirlpool — a strong spiral wake at the scrub centre
-          pushWake(e.cx / Math.max(1, width), e.cy / Math.max(1, height), 1.0);
-          agitation = Math.min(1, agitation + 0.12);
-          audio.playNote(64, 240);
-          haptics.ripple(0.4);
+          // winding a whirlpool — deeper circling churns a stronger wake,
+          // speed whitens the lace, and the direction picks the water's note
+          const turn = Math.min(3, Math.abs(e.winding));
+          const churn = Math.min(1, e.angularVelocity / 1.4);
+          pushWake(
+            e.cx / Math.max(1, width),
+            e.cy / Math.max(1, height),
+            0.55 + turn * 0.15 + churn * 0.3,
+          );
+          agitation = Math.min(1, agitation + 0.06 + turn * 0.05 + churn * 0.06);
+          audio.playNote(e.winding > 0 ? 66 : 62, 200 + Math.round(turn * 60));
+          haptics.ripple(0.25 + turn * 0.12);
         },
         rhythm: (e) => {
-          if (e.stability > 0.7) agitation = Math.min(1, agitation + 0.08);
+          if (e.stability < 0.6) return;
+          // the surf entrains: wakes break at the shell on the hand's own
+          // pulse for a while, steadier hands stirring a little more sea
+          lastTouchAt = performance.now();
+          pulseBpm = Math.max(40, Math.min(170, e.bpm));
+          pulseUntil = performance.now() + 10000;
+          lastBeatIdx = -1;
+          agitation = Math.min(1, agitation + 0.05 + e.stability * 0.1);
+          haptics.tap();
         },
         // knock and flip are vessel (device) events, not DOM pointer
         // gestures — bound above via onVessel, the bus that actually
@@ -1227,6 +1302,21 @@ export default function Aphros() {
                   }
                 } else {
                   cherubFx[i] = 0;
+                }
+              }
+
+              // the entrained surf: while the hand's tempo lasts, a wake
+              // breaks near the shell on every beat, wandering deterministically
+              if (pulseBpm > 0) {
+                if (now < pulseUntil) {
+                  const beat = Math.floor((wT * pulseBpm) / 60);
+                  if (beat !== lastBeatIdx) {
+                    lastBeatIdx = beat;
+                    pushWake(SHELL_X + Math.sin(beat * 2.4) * 0.16, SHELL_Y + 0.07, 0.5);
+                    if (beat % 2 === 0) audio.playNote(noteAt(0.5 + Math.sin(beat) * 0.2), 90);
+                  }
+                } else {
+                  pulseBpm = 0;
                 }
               }
 

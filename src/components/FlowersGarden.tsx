@@ -23,6 +23,7 @@ import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures, THRESHOLDS } from "@/lib/gesture";
+import { tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import LetGo from "@/components/LetGo";
@@ -258,6 +259,10 @@ export default function FlowersGarden() {
     let lastBrushSoundAt = 0;
     let lastWindSoundAt = 0;
     let lastScrubAt = 0;
+    // the hand's tempo, entrained into the beds: they sway on the pulse
+    let pulseBpm = 0;
+    let pulseUntil = 0;
+    let lastBeatIdx = -1;
     let clearing = false;
     const hold: { plantId: string | null; doneId: string | null } = { plantId: null, doneId: null };
     let keyWilt: { id: string; t0: number } | null = null;
@@ -594,16 +599,16 @@ export default function FlowersGarden() {
 
     // three-finger tap = tutti (grammar §5): one synchronized soft pulse —
     // every flower sways once and its note whispers, the garden answering
-    const tutti = () => {
+    const tutti = (strength = 0.5) => {
       const now = performance.now();
       if (now - lastTuttiAt < 1400) return;
       lastTuttiAt = now;
       const living = plants.filter((p) => p.wiltAt == null);
       living.forEach((p, i) => {
-        swayPlant(p, (twinkleHash(p.seed % 997) - 0.5) * 1.1);
+        swayPlant(p, (twinkleHash(p.seed % 997) - 0.5) * (0.7 + strength * 0.9));
         if (i < 12) window.setTimeout(() => note(midiOf(p.species), 70), i * 45);
       });
-      try { haptics.tap(); } catch { /* noop */ }
+      try { haptics.ripple(0.2 + strength * 0.4); } catch { /* noop */ }
     };
 
     // ————— gestures (the grammar, nothing private) —————
@@ -625,9 +630,72 @@ export default function FlowersGarden() {
           }
           return;
         }
-        if (e.fingers === 3) { tutti(); return; }
+        if (e.fingers === 3) { tutti(e.intensity); return; }
         if (e.fingers !== 1) return; // anything else is gently absorbed
         const { x, y } = toLocal(e.x, e.y);
+        // the rapid-tap ladder: a sway → loose pollen → a coaxed crown or a
+        // volunteer called up → a wave across the whole garden
+        const trainTier = tapTrainTier(e.count);
+        const depth = tapTrainDepth(e.count);
+        if (trainTier === "n") {
+          const living = plants.filter((q) => q.wiltAt == null);
+          living
+            .map((q) => ({ q, d: Math.hypot(x - q.hx, y - q.hy) }))
+            .sort((qa, qb) => qa.d - qb.d)
+            .forEach(({ q }, i) => {
+              window.setTimeout(() => {
+                swayPlant(q, (twinkleHash(q.seed % 997) - 0.5) * (1.2 + depth));
+                if (i < 10) note(midiOf(q.species), 70);
+              }, i * 55);
+            });
+          windTarget = clamp(windTarget + 0.4 + depth * 0.4, -1, 1);
+          try { haptics.ripple(0.5 + depth * 0.4); } catch { /* noop */ }
+          return;
+        }
+        if (trainTier === 5) {
+          const p5 = plantAt(x, y);
+          const volunteersAlive = plants.filter((q) => q.volunteer && q.wiltAt == null).length;
+          if (p5) {
+            // five taps coax the crown: it swells wide and breathes there
+            p5.over = Math.min(1, p5.over + 0.45 + depth * 0.3);
+            swayPlant(p5, (x < p5.hx ? -1 : 1) * 0.8);
+            burst(p5.hx, p5.hy, [p5.species.palette.petal, p5.species.palette.glow], 14, 48);
+            try { audio().bell(); } catch { /* noop */ }
+            try { haptics.bloom(); } catch { /* noop */ }
+          } else if (!clearing && volunteersAlive < MAX_VOLUNTEERS) {
+            // five taps on open soil call a volunteer up out of turn
+            const seed = hashSeed(Math.round(x), Math.round(y), 8192 + volSpawned);
+            volSpawned += 1;
+            const vp = makePlant(seed, clamp01(x / width), clamp(y / height, 0.12, 0.96), 0, Date.now());
+            vp.volunteer = true;
+            vp.volLife = 120000 + twinkleHash(seed % 4093) * 120000;
+            plants.push(vp);
+            burst(x, y, [vp.species.palette.stem, vp.species.palette.glow], 8, 20);
+            note(midiOf(vp.species) - 12, 200);
+            try { haptics.ripple(0.5); } catch { /* noop */ }
+          } else {
+            burst(x, y, ["#E7AC52", "#F2EEE6"], 8, 26);
+            note(64, 90);
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+          return;
+        }
+        if (trainTier === 3) {
+          const p3 = plantAt(x, y);
+          if (p3) {
+            // three taps shake the pollen loose — a rising arpeggio
+            fallPetals(p3.hx, p3.hy, [p3.species.palette.petal, p3.species.palette.heart], 4, false);
+            swayPlant(p3, (x < p3.hx ? -1 : 1) * (0.8 + depth));
+            note(midiOf(p3.species), 90);
+            window.setTimeout(() => note(midiOf(p3.species) + 4, 90), 80);
+            window.setTimeout(() => note(midiOf(p3.species) + 7, 120), 170);
+          } else {
+            burst(x, y, ["#E7AC52", "#F2EEE6"], 8 + Math.round(depth * 6), 30);
+            note(64 + Math.round(depth * 5), 90);
+          }
+          try { haptics.tap(); } catch { /* noop */ }
+          return;
+        }
         const p = plantAt(x, y);
         if (p) {
           if (p.phase >= 1) {
@@ -651,9 +719,11 @@ export default function FlowersGarden() {
       hold: (e) => {
         lastInteractionAt = performance.now();
         if (e.fingers === 3) {
-          // three fingers touch the law: time dilates while held
-          if (e.phase === "enter") { timeScaleTarget = 0.25; try { haptics.tap(); } catch { /* noop */ } note(36, 260); }
+          // three fingers touch the law: time dilates while held, and the
+          // dilation keeps deepening for as long as the hand stays
+          if (e.phase === "enter") { try { haptics.tap(); } catch { /* noop */ } note(36, 260); }
           if (e.phase === "release") timeScaleTarget = 1;
+          else timeScaleTarget = clamp(1 - e.elapsed / 3400, 0.08, 1);
           return;
         }
         if (e.fingers !== 1) return;
@@ -792,11 +862,24 @@ export default function FlowersGarden() {
         if (now - lastScrubAt < 700) return;
         lastScrubAt = now;
         const { x, y } = toLocal(e.cx, e.cy);
-        // circling stirs the pollen
-        burst(x, y, ["#E7AC52", "#F2EEE6", "#4E7D8C"], 12, 34);
-        for (const s of specks) s.swirl += Math.sign(e.winding) * 1.4;
-        note(64, 90);
-        try { haptics.ripple(0.3); } catch { /* noop */ }
+        // circling stirs the pollen — deeper, faster circles lift more of it
+        const turn = Math.min(3, Math.abs(e.winding));
+        const spin = Math.min(1, e.angularVelocity / 1.4);
+        burst(x, y, ["#E7AC52", "#F2EEE6", "#4E7D8C"], 8 + Math.round(turn * 5), 26 + Math.round(spin * 22));
+        for (const s of specks) s.swirl += Math.sign(e.winding) * (1 + turn * 0.5);
+        note(62 + Math.round(turn * 3), 90);
+        try { haptics.ripple(0.2 + turn * 0.12); } catch { /* noop */ }
+      },
+      rhythm: (e) => {
+        if (e.stability < 0.6) return;
+        // a steady tap tempo entrains the garden: every bed sways on the
+        // hand's own pulse for a while
+        lastInteractionAt = performance.now();
+        pulseBpm = clamp(e.bpm, 40, 170);
+        pulseUntil = performance.now() + 10000;
+        lastBeatIdx = -1;
+        try { audio().chime(); } catch { /* noop */ }
+        try { haptics.tap(); } catch { /* noop */ }
       },
     });
 
@@ -831,15 +914,17 @@ export default function FlowersGarden() {
         try { (intensity > 0.7 ? haptics.storm : haptics.chop)(); } catch { /* noop */ }
       },
       // knock = wake / ring the room (rhymes with /coin's pop-to-flip): a
-      // rap on the case rings the garden the same way three fingers do
-      knock: () => {
+      // rap on the case rings the garden the same way three fingers do,
+      // as loud as the knuckle asked
+      knock: ({ intensity }) => {
         lastInteractionAt = performance.now();
-        tutti();
+        tutti(0.4 + intensity * 0.6);
       },
       // flip face-down = night: the garden dims and quiets until turned back
       flip: ({ faceDown }) => {
         night = faceDown;
         if (!faceDown) lastInteractionAt = performance.now();
+        note(faceDown ? 28 : 76, faceDown ? 480 : 160);
       },
     });
 
@@ -1284,6 +1369,25 @@ export default function FlowersGarden() {
       const audioT = (() => { try { return audio().getAudioTime(); } catch { return null; } })();
       const bt = audioT != null ? audioT : now / 1000;
       const breath = bt * Math.PI * 2 * 0.14;
+
+      // the entrained pulse: while the hand's tempo lasts, every bed leans
+      // into the beat, fading as the entrainment lets go
+      if (pulseBpm > 0) {
+        if (now < pulseUntil) {
+          const beat = Math.floor((localT * pulseBpm) / 60);
+          if (beat !== lastBeatIdx) {
+            lastBeatIdx = beat;
+            const fade = clamp01((pulseUntil - now) / 10000);
+            for (const p of plants) {
+              if (p.wiltAt != null) continue;
+              swayPlant(p, (twinkleHash((p.seed % 997) + beat) - 0.5) * 0.5 * fade);
+            }
+            if (beat % 2 === 0) note(52 + (beat % 7), 60);
+          }
+        } else {
+          pulseBpm = 0;
+        }
+      }
 
       // the volunteer clock — dilated with the room, deterministic in seed
       volClock += dt * timeScale;
