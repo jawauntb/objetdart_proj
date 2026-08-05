@@ -77,6 +77,11 @@ import {
   type BuiltEventTower,
 } from "@/lib/city-towers";
 import { buildFacadeAtlas, type FacadeAtlas } from "@/lib/city-textures";
+import {
+  createRooftopScene,
+  type RooftopHost,
+  type RooftopScene,
+} from "@/lib/city-rooftop";
 
 // Re-export the pure helpers so existing importers of city-geometry
 // continue to work unchanged — the split into city-geometry-pure.ts
@@ -621,6 +626,19 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
     peakIntensity: 0,
   };
 
+  // ── rooftop clutter (shared InstancedMeshes across all hosts) ────
+  //
+  // Four InstancedMeshes (ac, water, penthouse, vent) sized to a
+  // worst-case bound of 6 pieces per plot. Every store + every event
+  // routes into this shared pool; syncPlots below collects the host
+  // records and hands the batch to syncHosts, which writes one matrix
+  // per piece. Draw calls stay constant regardless of settlement size.
+  const rooftop: RooftopScene = createRooftopScene({
+    maxInstancesPerPart: Math.max(1, opts.maxInstances) * 6,
+    shadows: shadowsOn,
+  });
+  scene.add(rooftop.group);
+
   // ── event role: per-plot Meshes ─────────────────────────────────
   //
   // The tallest, most visible plots. Each event plot allocates its own
@@ -830,14 +848,51 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
       // InstancedMesh; event plots claim per-plot slots one at a time.
       let iHome = 0, iStore = 0, iTree = 0;
       let iEvent = 0;
+      // Rooftop hosts — collected in the same walk so we can pass a
+      // single batch to `rooftop.syncHosts` at the end. Every store
+      // and every event contributes one host; empties, homes, and
+      // trees do not (a home has a pitched cone roof, a park has no
+      // roof, and a home's roof would be too small to read the
+      // clutter anyway).
+      const rooftopHosts: RooftopHost[] = [];
       for (const plot of plots) {
         const r = plot.role;
         if (r === "empty") continue;
         if (r === "home"  && iHome  < opts.maxInstances) { writeInstancedPlot(homeSlot,  iHome++,  plot); continue; }
-        if (r === "store" && iStore < opts.maxInstances) { writeInstancedPlot(storeSlot, iStore++, plot); continue; }
+        if (r === "store" && iStore < opts.maxInstances) {
+          writeInstancedPlot(storeSlot, iStore++, plot);
+          const w = normToWorld(plot.x, plot.y);
+          const fullH = heightForRole("store", plot.seed);
+          const { sx, sz } = footprintForRole("store", plot.seed);
+          const yScale = Math.max(0.02, plot.bornT) * fullH;
+          rooftopHosts.push({
+            role: "store",
+            seed: plot.seed,
+            worldX: w.x,
+            worldZ: w.z,
+            yaw: yawFor(plot),
+            sx, sz,
+            worldHeight: yScale,
+          });
+          continue;
+        }
         if (r === "tree"  && iTree  < opts.maxInstances) { writeInstancedPlot(treeSlot,  iTree++,  plot); continue; }
         if (r === "event" && iEvent < opts.maxInstances) {
           writeEventPlot(eventSlots[iEvent], plot, currentShadows);
+          const w = normToWorld(plot.x, plot.y);
+          const fullH = heightForRole("event", plot.seed);
+          const { sx, sz } = footprintForRole("event", plot.seed);
+          const yScale = Math.max(0.02, plot.bornT) * fullH;
+          rooftopHosts.push({
+            role: "event",
+            seed: plot.seed,
+            variant: eventVariantForSeed(plot.seed),
+            worldX: w.x,
+            worldZ: w.z,
+            yaw: yawFor(plot),
+            sx, sz,
+            worldHeight: yScale,
+          });
           iEvent += 1;
           continue;
         }
@@ -849,6 +904,8 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
       for (let k = iEvent; k < opts.maxInstances; k += 1) {
         eventSlots[k].group.visible = false;
       }
+      // Paint every store + event rooftop's clutter in one batch.
+      rooftop.syncHosts(rooftopHosts);
     },
 
     setDayFrac(day: number) {
@@ -946,6 +1003,7 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
           m.receiveShadow = on;
         }
       }
+      rooftop.setShadows(on);
     },
 
     dispose() {
@@ -975,6 +1033,8 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
       // sub-textures are held by every wall material we just disposed;
       // this frees the underlying GPU allocations.
       try { facadeAtlas.dispose(); } catch { /* noop */ }
+      // Free the rooftop clutter InstancedMeshes + geometries + mats.
+      try { rooftop.dispose(); } catch { /* noop */ }
     },
   };
 }
