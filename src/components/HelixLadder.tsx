@@ -20,7 +20,9 @@
  * stretch is genuinely harder to open. Keep that finger down while the
  * strand is open and a polymerase runs the complement, playing the tune
  * back in the mirror. Let go and it re-anneals. One finger along the helix
- * supercoils it. Tap a rung to sound its degree. Three fingers touch the
+ * supercoils it. Two fingers held apart on two rungs hold a denaturation
+ * bubble open between them — the sustained interval, re-annealing on lift.
+ * Tap a rung to sound its degree. Three fingers touch the
  * world-law: drag is the mutation temperature, hold dilates the clock,
  * tap trains climb 1 / 3 / 5 / n (sound, rewrite, mutate, burst). Twist raises the lens to
  * notation — the letters, the transcript, the melting point. Tilt leans
@@ -122,6 +124,16 @@ export default function HelixLadder() {
     let unzipTarget = 0;
     /** the last rung whose bond we have already broken aloud */
     let brokenTo = 0;
+    // span: two fingers held apart hold a denaturation bubble open between
+    // the two base pairs they touch — a sustained interval, the two edge
+    // pairs pinned by the fingers while the stretch between them melts.
+    // Re-anneals when the grip lifts; the strand itself is never rewritten.
+    let spanActive = false;
+    let spanLo = -1;
+    let spanHi = -1;
+    let spanOpen = 0;
+    let spanOpenTarget = 0;
+    let lastSpanToneAt = 0;
     /** turns per length — a supercoiled strand is a wound spring */
     let supercoil = 1;
     let supercoilTarget = 1;
@@ -691,6 +703,57 @@ export default function HelixLadder() {
           // a circling hand winds the coil the way a finger winds a spring
           supercoilTarget = clamp(supercoilTarget + e.angularVelocity * 0.02, 0.5, 2.6);
         },
+        span: (e) => {
+          // two fingers held apart hold a bubble open between their rungs —
+          // the sustained interval this room means literally: the two base
+          // pairs kept apart while the stretch between them denatures.
+          lastInteractionAt = performance.now();
+          const n = seqRef.current.length;
+          if (e.phase === "release" || n === 0) {
+            spanActive = false;
+            spanOpenTarget = 0;
+            if (e.phase === "release") {
+              try {
+                haptics.tap();
+              } catch {
+                /* noop */
+              }
+            }
+            return;
+          }
+          const a = toLocal(e.ax, e.ay);
+          const b = toLocal(e.bx, e.by);
+          const ra = rungAtPoint(a.x, a.y);
+          const rb = rungAtPoint(b.x, b.y);
+          if (ra < 0 || rb < 0 || ra === rb) {
+            spanActive = false;
+            spanOpenTarget = 0;
+            return;
+          }
+          spanLo = Math.min(ra, rb);
+          spanHi = Math.max(ra, rb);
+          spanActive = true;
+          // duration is the axis: the bubble melts wider the longer it is held
+          const deep = Math.min(1, e.elapsed / 2600);
+          spanOpenTarget = clamp01(0.34 + deep * 0.62);
+          const now = performance.now();
+          if (now - lastSpanToneAt > 300) {
+            lastSpanToneAt = now;
+            // sustain the dyad of the two held pairs — it lengthens and drops
+            // as the interval opens, so 900ms and 2400ms never sound the same
+            const midis = melodyOf(seqRef.current);
+            const dur = Math.round((0.22 + deep * 0.5) * 1000);
+            try {
+              audio.playNote(midis[spanLo], dur);
+              audio.playNote(midis[spanHi] - (deep > 0.6 ? 12 : 0), dur);
+              haptics.ripple(0.18 + deep * 0.26);
+            } catch {
+              /* noop */
+            }
+            litRung[spanLo] = 1;
+            litRung[spanHi] = 1;
+          }
+        },
         rhythm: (e) => {
           if (e.stability > 0.65) playStrand(false);
         },
@@ -825,6 +888,8 @@ export default function HelixLadder() {
       timeScale += (timeScaleTarget - timeScale) * Math.min(1, dt * 5);
       if (!reduced) localT += dt * timeScale;
       unzip += (unzipTarget - unzip) * Math.min(1, dt * 5);
+      // the held bubble opens and re-anneals continuously — never a switch
+      spanOpen += (spanOpenTarget - spanOpen) * Math.min(1, dt * 4);
       supercoil += (supercoilTarget - supercoil) * Math.min(1, dt * 4);
       temperature += (temperatureTarget - temperature) * Math.min(1, dt * 2);
       temperatureTarget *= Math.exp(-dt * 0.05); // the world cools on its own
@@ -948,13 +1013,22 @@ export default function HelixLadder() {
         ctx.translate(cx, cy);
         ctx.rotate(lean * 0.14);
 
+        // a raised-cosine bubble held open between the two spanned pairs:
+        // pinned (0) at each held rung, widest in the middle of the stretch
+        const bubbleAt = (idx: number) => {
+          if (spanOpen <= 0.001 || spanLo < 0 || spanHi <= spanLo || idx < spanLo || idx > spanHi) return 0;
+          const u = (idx - spanLo) / (spanHi - spanLo);
+          return (0.5 - 0.5 * Math.cos(u * Math.PI * 2)) * spanOpen;
+        };
+
         const pts1: number[] = [];
         const pts2: number[] = [];
         for (let i = 0; i < n; i++) {
           const r = rungAt(i, n, unzip, supercoil);
+          const rOpen = Math.max(r.open, bubbleAt(i));
           // the room's own turn ridden on top of the strand's geometry
           const ph = (i / BASES_PER_TURN) * Math.PI * 2 * supercoil + turn;
-          const spread = 1 + r.open * 2.4;
+          const spread = 1 + rOpen * 2.4;
           const x1 = Math.sin(ph) * hw * spread;
           const x2 = -Math.sin(ph) * hw * spread;
           const depth = Math.cos(ph) * 0.5 + 0.5;
@@ -971,9 +1045,9 @@ export default function HelixLadder() {
           const lit = litRung[i];
           const alpha = (1 - leaving) * (1 - lens * 0.55);
           // the rung itself: its colour is its base, its weight its bonds
-          if (r.open < 0.98) {
+          if (rOpen < 0.98) {
             ctx.strokeStyle = `rgba(${BASE_TINT[seq[i]]}, ${
-              (0.12 + depth * 0.3 + lit * 0.55) * (1 - r.open) * alpha
+              (0.12 + depth * 0.3 + lit * 0.55) * (1 - rOpen) * alpha
             })`;
             ctx.lineWidth = H_BONDS[seq[i]] === 3 ? 1.9 : 1.1;
             ctx.beginPath();
@@ -1031,8 +1105,9 @@ export default function HelixLadder() {
             const i = f * n;
             const idx = Math.min(n - 1, Math.floor(i));
             const r = rungAt(idx, n, unzip, supercoil);
+            const open = Math.max(r.open, bubbleAt(idx));
             const ph = (i / BASES_PER_TURN) * Math.PI * 2 * supercoil + turn;
-            const spread = 1 + r.open * 2.4;
+            const spread = 1 + open * 2.4;
             return {
               x: side * Math.sin(ph) * hw * spread,
               y: (f * 2 - 1) * hh,
