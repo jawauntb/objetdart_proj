@@ -48,6 +48,7 @@ import type { EventVariant } from "@/lib/city-geometry-pure";
 import {
   drawEmissiveWindowCanvas,
   facadeMaterialFor,
+  type FacadeAtlasTextures,
 } from "@/lib/city-facades";
 
 // ── pure predicates (safe under the test's THREE stub) ─────────────────
@@ -198,8 +199,12 @@ export function buildEventTower(params: {
   dayFraction: number;
   shadowsOn: boolean;
   emissiveSize: { w: number; h: number };
+  /** Shared PBR facade atlas for the event tile — feeds curtain-wall
+   *  mullion detail as map + roughnessMap. Optional so the pure test
+   *  stub can build a tower without a canvas. */
+  atlas?: FacadeAtlasTextures;
 }): BuiltEventTower {
-  const { variant, seed, dayFraction, shadowsOn, emissiveSize } = params;
+  const { variant, seed, dayFraction, shadowsOn, emissiveSize, atlas } = params;
 
   const canvas = document.createElement("canvas");
   canvas.width = Math.max(4, Math.floor(emissiveSize.w));
@@ -216,7 +221,12 @@ export function buildEventTower(params: {
   texture.generateMipmaps = true;
   texture.needsUpdate = true;
 
-  const material = facadeMaterialFor("event", seed) as THREE.MeshPhysicalMaterial;
+  // Build the material. When an atlas is provided, facadeMaterialFor
+  // installs its map / normalMap / roughnessMap; the Gherkin diamond
+  // normal below then overrides that specific tower variant's normal
+  // — the diamond crosshatch reads at a coarser scale than the
+  // curtain-wall mullion grid.
+  const material = facadeMaterialFor("event", seed, atlas ? { event: atlas } : undefined) as THREE.MeshPhysicalMaterial;
   material.emissive = new THREE.Color(0xffffff);
   material.emissiveMap = texture;
   material.emissiveIntensity = 0;
@@ -225,7 +235,8 @@ export function buildEventTower(params: {
     // as small normal deviations so the grazing-angle reflection off
     // the physical glass breaks along the diamond mullions rather than
     // smoothing across them. Cheap — one shared DataTexture for every
-    // Gherkin, since the pattern is scale-invariant.
+    // Gherkin, since the pattern is scale-invariant. Overrides the
+    // atlas curtain-wall normal for this variant.
     material.normalMap = getSharedGherkinNormalMap();
     material.normalScale = new THREE.Vector2(0.35, 0.35);
   }

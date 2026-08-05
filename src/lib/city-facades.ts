@@ -51,6 +51,16 @@ import * as THREE from "three";
 import { emissiveIntensityForDay as _dropShimEmissive, litFractionForDay, windowIsLit } from "@/lib/city-windows";
 import type { PlotRole } from "@/lib/city";
 
+// PBR facade atlas — the coursing/render-line/mullion/bark detail layer.
+// Optional at the type level so callers pre-atlas (headless tests) still
+// build materials; the runtime scene passes a real atlas.
+export type FacadeAtlasTextures = {
+  map: THREE.CanvasTexture;
+  normalMap: THREE.CanvasTexture;
+  roughnessMap: THREE.CanvasTexture;
+};
+export type FacadeAtlasSet = Partial<Record<Exclude<PlotRole, "empty">, FacadeAtlasTextures>>;
+
 // Re-export for callers that expect the emissive dial to live alongside
 // the material factories. The pure implementation is in city-windows.ts
 // (so it stays testable by scripts/test-city-windows.mjs without pulling
@@ -97,7 +107,11 @@ export const WINDOW_DARK_COLOR = 0x1B2028;
  * pass supplies a normal map for the facade tiles and this material's
  * `emissiveMap` is set to the per-instance window canvas below.
  */
-export function facadeMaterialFor(role: PlotRole, plotSeed: number): THREE.MeshStandardMaterial | THREE.MeshPhysicalMaterial {
+export function facadeMaterialFor(
+  role: PlotRole,
+  plotSeed: number,
+  atlas?: FacadeAtlasSet,
+): THREE.MeshStandardMaterial | THREE.MeshPhysicalMaterial {
   const drift = seedHash01(plotSeed);
   switch (role) {
     case "home": {
@@ -110,6 +124,7 @@ export function facadeMaterialFor(role: PlotRole, plotSeed: number): THREE.MeshS
         emissiveIntensity: 0.0,
       });
       m.name = "cityFacade.home";
+      applyAtlas(m, atlas?.home);
       return m;
     }
     case "store": {
@@ -122,6 +137,7 @@ export function facadeMaterialFor(role: PlotRole, plotSeed: number): THREE.MeshS
         emissiveIntensity: 0.0,
       });
       m.name = "cityFacade.store";
+      applyAtlas(m, atlas?.store);
       return m;
     }
     case "event": {
@@ -145,6 +161,7 @@ export function facadeMaterialFor(role: PlotRole, plotSeed: number): THREE.MeshS
         emissiveIntensity: 0.0,
       });
       m.name = "cityFacade.event";
+      applyAtlas(m, atlas?.event);
       return m;
     }
     case "tree": {
@@ -155,6 +172,7 @@ export function facadeMaterialFor(role: PlotRole, plotSeed: number): THREE.MeshS
         metalness: 0.0,
       });
       m.name = "cityFacade.tree";
+      applyAtlas(m, atlas?.tree);
       return m;
     }
     case "empty":
@@ -168,6 +186,33 @@ export function facadeMaterialFor(role: PlotRole, plotSeed: number): THREE.MeshS
       return m;
     }
   }
+}
+
+/**
+ * Feed the PBR atlas textures — map, normalMap, roughnessMap — onto a
+ * freshly built material. Called from `facadeMaterialFor` when an atlas
+ * is provided by the scene builder. The atlas carries the coursing /
+ * render-line / mullion / bark detail that turns 48 extruded prisms
+ * into architecture; without it, the material falls back to its base
+ * color (the pre-atlas look, still valid for headless tests).
+ *
+ * The material's own base `color` multiplies through the map, so the
+ * atlas contains a neutral mid-tone brick/plaster/glass/bark; the
+ * per-role palette in FACADE_COLORS still tints the wall. Normal
+ * strength is modest (0.6) so shadows read the coursing but the wall
+ * still catches the sun cleanly. Roughness scale is 1.0 — the atlas
+ * already carries the material-appropriate range.
+ */
+function applyAtlas(
+  material: THREE.MeshStandardMaterial | THREE.MeshPhysicalMaterial,
+  atlas: FacadeAtlasTextures | undefined,
+): void {
+  if (!atlas) return;
+  material.map = atlas.map;
+  material.normalMap = atlas.normalMap;
+  material.normalScale = new THREE.Vector2(0.6, 0.6);
+  material.roughnessMap = atlas.roughnessMap;
+  material.needsUpdate = true;
 }
 
 // ── the emissive window canvas ───────────────────────────────────────────

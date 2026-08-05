@@ -61,6 +61,8 @@ import { normToWorld } from "@/lib/city-camera";
 import {
   drawEmissiveWindowCanvas,
   facadeMaterialFor,
+  makeEmissiveWindowTexture,
+  type FacadeAtlasSet,
 } from "@/lib/city-facades";
 import { emissiveIntensityForDay, litFractionForDay } from "@/lib/city-windows";
 import {
@@ -74,6 +76,7 @@ import {
   overlayGherkinDiamondMask,
   type BuiltEventTower,
 } from "@/lib/city-towers";
+import { buildFacadeAtlas, type FacadeAtlas } from "@/lib/city-textures";
 
 // Re-export the pure helpers so existing importers of city-geometry
 // continue to work unchanged — the split into city-geometry-pure.ts
@@ -359,6 +362,27 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
   const scene = new THREE.Scene();
   scene.fog = new THREE.FogExp2(0x9fbccd, 0.0048);
 
+  // ── PBR facade atlas ─────────────────────────────────────────────
+  // One 512×512 CanvasTexture atlas, four tiles: brick / plaster /
+  // mullion / bark. Fed to every wall material as map + normalMap +
+  // roughnessMap. Without this the facades read as untextured Lambert
+  // solids under the new sky — with it the eye reads coursing,
+  // render lines, curtain-wall mullion rhythm before it reads
+  // silhouette. Prime-relative tiling (FACADE_REPEATS in
+  // city-textures.ts) kills the obvious repeat.
+  //
+  // The atlas is built once at scene time. `event` towers still
+  // allocate their own per-plot MeshPhysicalMaterial, but the shared
+  // atlas feeds every one — a curtain-wall pattern is a curtain-wall
+  // pattern; the per-plot difference lives in the emissive canvas.
+  const facadeAtlas: FacadeAtlas = buildFacadeAtlas({ tilePx: 256 });
+  const atlasSet: FacadeAtlasSet = {
+    home:  facadeAtlas.textures.home,
+    store: facadeAtlas.textures.store,
+    event: facadeAtlas.textures.event,
+    tree:  facadeAtlas.textures.tree,
+  };
+
   // ── ground plane ─────────────────────────────────────────────────
   const groundMat = new THREE.MeshStandardMaterial({
     color: new THREE.Color(0.42, 0.44, 0.40),
@@ -441,7 +465,7 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
 
   // ── home role: box body + pitched cone roof + optional chimney ──
   const homeBodyGeo = unitBoxGeo();
-  const homeWallMat = facadeMaterialFor("home", 0) as THREE.MeshStandardMaterial;
+  const homeWallMat = facadeMaterialFor("home", 0, atlasSet) as THREE.MeshStandardMaterial;
   const homeEmiss = primeEmissive(homeWallMat, "home");
   const homeBody = makeInstanced(homeBodyGeo, homeWallMat);
   scene.add(homeBody);
@@ -475,7 +499,7 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
 
   // ── store role: box body + parapet + optional awning ────────────
   const storeBodyGeo = unitBoxGeo();
-  const storeWallMat = facadeMaterialFor("store", 0) as THREE.MeshStandardMaterial;
+  const storeWallMat = facadeMaterialFor("store", 0, atlasSet) as THREE.MeshStandardMaterial;
   const storeEmiss = primeEmissive(storeWallMat, "store");
   const storeBody = makeInstanced(storeBodyGeo, storeWallMat);
   scene.add(storeBody);
@@ -522,7 +546,7 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
   const treeCanopyGeo = new THREE.IcosahedronGeometry(0.42, 1);
   treeCanopyGeo.scale(1.0, 0.85, 1.0);
   treeCanopyGeo.translate(0, 0.72, 0);
-  const treeCanopyMat = facadeMaterialFor("tree", 0) as THREE.MeshStandardMaterial;
+  const treeCanopyMat = facadeMaterialFor("tree", 0, atlasSet) as THREE.MeshStandardMaterial;
   const treeCanopy = makeInstanced(treeCanopyGeo, treeCanopyMat);
   scene.add(treeCanopy);
 
@@ -637,6 +661,13 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
       dayFraction: 0.6,
       shadowsOn: shadowsActive,
       emissiveSize: { w: dims.w, h: dims.h },
+      // Shared PBR facade atlas — feeds curtain-wall mullion detail
+      // as map + roughnessMap onto the event tower material. The
+      // Gherkin variant keeps its own diamond normal (set inside
+      // buildEventTower); non-Gherkin variants pick up the atlas
+      // normal. Per-plot emissive canvas above still owns the dusk
+      // moment.
+      atlas: atlasSet.event,
     });
     // Re-parent the built tower's inner meshes into our persistent slot
     // group so world-space transforms live on `slot.group`.
@@ -940,6 +971,10 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
       if (sun.shadow.map) {
         try { sun.shadow.map.dispose(); } catch { /* noop */ }
       }
+      // Free the PBR atlas GL textures. The shared albedo/normal/rough
+      // sub-textures are held by every wall material we just disposed;
+      // this frees the underlying GPU allocations.
+      try { facadeAtlas.dispose(); } catch { /* noop */ }
     },
   };
 }
