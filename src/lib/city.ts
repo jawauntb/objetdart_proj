@@ -312,7 +312,7 @@ export function targetForNeedWithRegular(
   return best;
 }
 
-// ——— arrival — a phased arc, edge → home → belonging —————————————————————
+// ——— arrival — a phased arc, edge → home → belonging or leaving ——————————
 //
 // A newly-spawned dweller does not blink into existence at their front door;
 // they walk in from the nearest edge of the map. The arrival phase is short
@@ -320,9 +320,89 @@ export function targetForNeedWithRegular(
 // that arrivals *manufacture* the possibility of the next encounter. Once
 // they reach home the first time, they are "settled" and the ordinary need
 // cycle takes over.
+//
+// Density-as-engine is not one-way. A settlement that only gains people is
+// not a settlement — it is a bag. A dweller whose needs stay unmet long
+// enough enters a **leaving** phase: their target is the nearest map edge,
+// and on arrival they are retired from the population. The arc reads as
+// arrival → consolidation → belonging OR leaving, and the tradeoff of
+// density becomes visible: proximity manufactures possibility, and the
+// absence of proximity retires a person from the field.
 
-/** Person phase — a small state machine. Arriving people cannot yet gather. */
-export type PersonPhase = "arriving" | "settled";
+/**
+ * Person phase — a small state machine.
+ *
+ *   arriving → the first walk in from the map edge to home. Cannot yet
+ *              gather, cannot leave.
+ *   settled  → the ordinary need cycle. Rest, food, gather; regulars form;
+ *              hesitation slows the step when the tradeoff is real.
+ *   leaving  → both needs sustained below LEAVING_NEED_THRESHOLD for
+ *              LEAVING_UNMET_MS. Target is the nearest map edge, not a
+ *              plot; on arrival the caller retires the person.
+ */
+export type PersonPhase = "arriving" | "settled" | "leaving";
+
+// ——— leaving — the tradeoff density buys must be able to lose someone ——
+//
+// The brief's arc is arrival → consolidation → belonging OR leaving, and
+// PersonPhase was one-way until now. A dweller whose `fed` AND `rested` stay
+// below LEAVING_NEED_THRESHOLD for LEAVING_UNMET_MS has been trying and
+// failing to answer their needs — the plots they need do not exist, or lie
+// too far. Density manufactures possibility; the absence of density manuf-
+// actures loss. The threshold is strict-less-than so a person at exactly
+// 0.25 (barely fed, barely rested) is not yet leaving — leaving requires
+// real deprivation, not the ordinary trough of the day.
+
+/** Below this on BOTH fed and rested, the counter for leaving accrues. */
+export const LEAVING_NEED_THRESHOLD = 0.25;
+
+/**
+ * How long both needs must remain below the threshold before the transition
+ * fires. About one-quarter of a city day — a visible stretch of the visitor
+ * watching the person try, not an instantaneous flip. Kept here so the test
+ * and the renderer read the same constant.
+ */
+export const LEAVING_UNMET_MS = 8_000;
+
+/**
+ * True when both needs are below the leaving threshold. The caller ticks a
+ * counter while this holds and resets it the moment it doesn't — a person
+ * who eats resets the timer, a person who rests resets the timer, only a
+ * person who cannot answer either need for a sustained stretch leaves.
+ */
+export function needsUnmet(fed: number, rested: number): boolean {
+  return fed < LEAVING_NEED_THRESHOLD && rested < LEAVING_NEED_THRESHOLD;
+}
+
+/**
+ * True when a person's sustained-unmet counter has crossed the leaving
+ * threshold. The caller separately tracks `unmetMs` — this predicate is
+ * the causal statement of when a transition fires.
+ */
+export function shouldLeave(fed: number, rested: number, unmetMs: number): boolean {
+  if (!needsUnmet(fed, rested)) return false;
+  return unmetMs >= LEAVING_UNMET_MS;
+}
+
+/**
+ * How long the leaving fade takes, in ms. The overlay's opacity for a
+ * leaving person eases from 1 to 0 over this window as they walk to the
+ * edge; retirement happens on arrival at the edge, whichever comes first.
+ * A leaving person is honest — they do not vanish mid-street.
+ */
+export const LEAVING_FADE_MS = 1_400;
+
+/**
+ * Fade opacity for a leaving person, given how long since the transition.
+ * Clamped to [0, 1]. Callers pass the ms since `phase` became "leaving";
+ * the renderer multiplies the person's alpha by this. A person retired at
+ * the edge before the fade completes is retired at whatever alpha they had.
+ */
+export function fadeForLeaving(msSinceLeaving: number): number {
+  if (msSinceLeaving <= 0) return 1;
+  if (msSinceLeaving >= LEAVING_FADE_MS) return 0;
+  return 1 - msSinceLeaving / LEAVING_FADE_MS;
+}
 
 export type Vec2 = { x: number; y: number };
 
