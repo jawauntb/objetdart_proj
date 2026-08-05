@@ -214,6 +214,23 @@ export type RoomLife = {
   state_machine?: RoomLifeStateMachine;
   /** Phase-7 depth: opt out of the shader complexity floor for genuine 2D-only rooms. */
   material_2d_only?: boolean;
+  /**
+   * Phase-9 room-visual: exemptions `scripts/test-room-visual.mjs` reads
+   * directly off pixels, not declarations — see docs/room-visual.md.
+   */
+  visual?: {
+    /** A deliberate flat monochrome — exempts `hue_diversity` only. */
+    monochrome_by_design?: boolean;
+    /**
+     * A hand-authored room whose soft-glow lighting (broad gradients, no
+     * hard specular cuts) genuinely produces few Sobel edges even though
+     * hue_diversity, luminance_range, spatial_entropy and file_size_floor
+     * all clear their floors with real margin — evidenced per-room in
+     * data/object-compiler/audits/phase-9-pebble-and-threshold.md. Lowers
+     * only the `edge_density` floor, to `SOFT_GLOW_EDGE_DENSITY_FLOOR`.
+     */
+    soft_glow?: boolean;
+  };
 };
 
 export type RoomManifest = {

@@ -52,21 +52,22 @@ domain_lib:
   invariant_type: field
 
 palette:
-  bg:      "#0a1614"
-  bg2:     "#153228"
-  glow:    "#c8dc9c"
-  accent:  "#5a8c78"
-  accent2: "#a89050"
+  bg:      "#0a1a15"
+  bg2:     "#3a2818"
+  glow:    "#e8dc9a"
+  accent:  "#4a7a8a"
+  accent2: "#c8945a"
   ink:     "#e8eee0"
 
 visual_style:
-  subject: "a hand's width of wetland from a slightly-elevated angle — a shallow water surface with reeds standing straight up, biofilm mats spread across the water, and a dissolved-oxygen field breathing between them"
-  form_language: [SDF, value-noise-FBM, point-cloud, ribbon-flow]
+  subject: "a hand's width of wetland from a shallow, near-water angle — a bright hazy sky above a fixed waterline, shallow water standing over a warm muddy floor, reed stalks rising out of the water with sunlit tips, and biofilm mats spread across the floor where the dissolved-oxygen field runs low"
+  form_language: [SDF, value-noise-FBM, ribbon-flow, point-cloud]
   motion_character: breathing
   reference_notes:
-    - "a marsh at dawn: teal water at the base, warm-green reeds standing straight up, olive biofilm patches drifting across the surface"
-    - "each reed is an SDF vertical line whose height is its live height; the corona at the reed base is the local oxygen (warm where fresh, dim where stagnant)"
-    - "the biofilm is drawn shader-side from a uMatCores[8] uniform (xy pos, mass, phase) as low-frequency fbm patches modulated by mass; the oxygen field is a sampled scalar visualised as a warm-cool cross-fade over the water column"
+    - "a marsh at midday: a hazy warm-gold sky over a dark wetland waterline, muddy silt floor visible through the shallow water, warm-cool oxygen crossfade painted straight over the mud"
+    - "each reed is a population-layer ribbon — rooted at its base, tapering upward, swaying from the base under turbulence + wind — not a disc and not a thin uniform-driven line segment; its body is the cool accent green, its tip a bright glow highlight"
+    - "biofilm mats are a second population — horizontal, irregular, value-noise-FBM patches in the warm accent2 register, their footprint literally the biofilm density field, breathing +/-20% on the shared clock"
+    - "the water surface carries a Snell-like grazing highlight at the waterline plus a refracted horizontal wobble, so the mud beneath shimmers instead of sitting still under glass"
   mood: "slow, patient, breathing — the marsh is alive between taps, the reeds swaying on the shared 7s breath, the biofilm drifting"
   gesture_feedback_style: "a tap rings the local oxygen (pitch = ringHzFor(O)); a dwell plants a new reed whose height climbs while held and pushes oxygen into its neighborhood; the ceremony seals the reed at full height (kept between visits); a hard knock stirs the oxygen field — the room's touch-reachable secret redistributes stale patches"
 
@@ -134,10 +135,18 @@ life:
     objects:
       - noun: reed
         max_count: 20
-        state_shape: "id, x, y, height (0..1), tilt (phase-driven sway), breath phase, sealed (bool), phase seed"
+        state_shape: "id, x, y, height (0..1), tilt (turbulence + wind-driven sway, computed per step, not stored on the ledger), breath phase, sealed (bool), phase seed"
         lifecycle: "born under dwell (plantReed at cursor, height 0) → height grows on saturating curve while held, injects oxygen into surrounding field → sealed at ceremony (height = MAX_HEIGHT, sealed=true, kept between visits) → retires via <LetGo> (whole marsh)"
         persistence: LetGo
         creates_via_verb: dwell
+        retires_via: [LetGo]
+        implementation_hint: SceneObjectSpec
+      - noun: biofilm mat
+        max_count: 8
+        state_shape: "id, x, y, mass (0..1), phase seed"
+        lifecycle: "seeded at initState (plantMat) → mass tracks the biofilm density field, consuming oxygen from its neighborhood on the closed-form advance → retires via <LetGo> (whole marsh)"
+        persistence: LetGo
+        creates_via_verb: "(automatic — seeded at initState, not hand-planted)"
         retires_via: [LetGo]
         implementation_hint: SceneObjectSpec
   breath:
@@ -167,24 +176,33 @@ life:
     ceremony_is: "sealing the reed at full height — the mature stand persists between visits and lets the biofilm around it settle into equilibrium"
 
 shader_intent: >
-  paint one hand-width of wetland from a slightly-elevated angle. the
-  background is teal water (bg → bg2) with a low-frequency FBM wave
-  texture. reeds stand vertically at anchor points from a uReeds[20]
-  uniform (x, y_base, height, phase); each reed is an SDF vertical
-  segment plus a warm-green top. biofilm mats are drawn shader-side
-  from a uMats[8] uniform (x, y, mass, phase) as low-frequency FBM
-  patches at the mat centres, tinted olive (accent2). the oxygen
-  field is sampled at a coarse grid uOxygen[GRID_W * GRID_H]
-  (packed into vec4s) and visualised as a warm-cool cross-fade over
-  the water: high-oxygen tiles read glow (warm), low-oxygen tiles
-  read accent (cool). ripple wavefronts from taps and flicks
-  propagate through the field as gaussian rings. no
-  createRadialGradient, no per-frame allocation. palette registers:
-  bg = deep water, bg2 = mid-water, glow = sunlit / oxygen-high
-  register (the load-bearing highlight), accent = cool oxygen-low /
-  water register, accent2 = olive biofilm register, ink = readable
-  text over the darkest tile. the twist lens is a second render
-  path: mean oxygen, reed count, biofilm mass total, and mean pitch.
+  two shaders: the background field, and the population layer. the
+  background field is a fixed waterline near the top of the frame —
+  turbulence and the scrub gesture add real chop on top of a slow
+  breathing wavelet. above the line: a bright hazy sky (glow-tinted
+  horizon band, warmth-tinted haze, night dims it). below: a shallow
+  water column over a muddy floor (bg2) with layered FBM grain, sampled
+  through a small refracted wobble so the mud shimmers under a
+  Snell-like grazing surface highlight. the oxygen field
+  (approxOxygen, reading uReeds/uMats/uClimate as a proxy for the JS
+  ledger's real grid) paints straight over the mud as a warm-cool
+  cross-fade: high-oxygen tiles read glow (warm), low-oxygen tiles read
+  accent (cool) and darken. ripple wavefronts from taps and flicks
+  propagate as gaussian rings. the population layer (see
+  `src/lib/scene/population-layer.ts`'s custom-frag support, same
+  pattern as /tidepool and /reef) draws both populations in one shared
+  instanced pass: reeds as vertical ribbon SDFs rooted at their base,
+  swaying from the base under turbulence + wind, green (accent) body
+  with a bright sunlit tip (glow); biofilm mats as horizontal,
+  irregular value-noise-FBM patches in accent2, breathing ±20%. no
+  createRadialGradient, no per-frame allocation. palette registers: bg
+  = dark wetland base, bg2 = warm mud/silt (distinct from bg), glow =
+  bright water surface + sunlit reed tips (the load-bearing highlight),
+  accent = cool water / oxygen-poor register (also the reed body —
+  a stagnant tile and a green stalk share the cool family), accent2 =
+  warm biofilm bloom (exclusive to the mats), ink = readable text over
+  the darkest tile. the twist lens is a second render path: mean
+  oxygen, reed count, biofilm mass total, and mean pitch.
 
 domain_intent: >
   write `src/lib/marshfield.ts` around one exported

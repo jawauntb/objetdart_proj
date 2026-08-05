@@ -30,6 +30,7 @@ import {
   POLISH_MAX,
   advanceExact,
   cleavageAt,
+  hashSeed,
   initState,
   partialsFor,
   polishStep,
@@ -80,6 +81,7 @@ uniform float uSectionScale;      // outer radius of the pebble in NDC
 uniform vec4  uCleavage;          // xyz = plane hkl, w = highlight strength
 uniform float uPolishMax;         // constant echoed for GLSL
 uniform vec4  uClimate;           // waterCarry, latticePressure, tau, season
+uniform float uStoneSeed;         // hashSeed(seedKey) folded to [0,1) — the wear marks' phase
 
 // The palette — six registers set once, from the manifest.
 const vec3 BG      = vec3(0.016, 0.024, 0.031); // deep cabinet dark
@@ -149,6 +151,22 @@ vec2 rot2(vec2 p, float a) {
   return vec2(c * p.x - s * p.y, s * p.x + c * p.y);
 }
 
+// Distance from p to the segment [a, b] — the wear marks' primitive.
+float distSeg(vec2 p, vec2 a, vec2 b) {
+  vec2 pa = p - a;
+  vec2 ba = b - a;
+  float h = clamp(dot(pa, ba) / max(1e-6, dot(ba, ba)), 0.0, 1.0);
+  return length(pa - ba * h);
+}
+
+// One deterministic direction per index, folded through uStoneSeed — the
+// same stone always wears the same marks; a different seed wears different
+// ones. No time, no randomness — a pure function of (i, uStoneSeed).
+vec2 dirFor(float i, float salt) {
+  float a = hash21(vec2(i * 12.9898 + salt, uStoneSeed * 78.233)) * 6.28318530718;
+  return vec2(cos(a), sin(a));
+}
+
 void main() {
   float aspect = uRes.x / max(1.0, uRes.y);
   vec2 uv = vUv;
@@ -196,10 +214,12 @@ void main() {
       sectionTint = mix(sectionTint, mineralTint(mHue), weight);
     }
 
+    float polishFrac = uPolishDepth / uPolishMax;
+
     // The polished shell — a thin outer band whose thickness is uPolishDepth
     // times the outer radius, with a Fresnel-like highlight where the lamp
     // catches the surface angle.
-    float shellStart = 1.0 - (uPolishDepth / uPolishMax) * 0.28;
+    float shellStart = 1.0 - polishFrac * 0.28;
     float shellHi = smoothstep(shellStart, 1.0, r01);
     // The lamp angle is the direction from stone centre to lamp position.
     vec2 lampDir = normalize(lamp - vec2(0.0, 0.0));
@@ -216,6 +236,37 @@ void main() {
       float trace = 1.0 - smoothstep(0.0, 0.02, perp);
       sectionTint = mix(sectionTint, ACCENT2, trace * uCleavage.w * 0.6);
     }
+
+    // The micro-crystalline stipple — the lattice's own facet texture,
+    // intrinsic to the mineral and always present (independent of polish
+    // or hold). A high-frequency FBM field cut by a NARROW smoothstep band
+    // reads as a scatter of small facets rather than a blur: each iso-
+    // contour crossing is a real boundary a few pixels wide, not a gradient
+    // — that crispness is the point, not the amplitude (kept mild, +-9%,
+    // so the stone's overall tint never drifts).
+    float facetField = fbm(stoneP * 30.0 + vec2(7.3, 2.1));
+    float facetEdge = smoothstep(0.47, 0.50, facetField)
+                     - smoothstep(0.50, 0.53, facetField);
+    sectionTint *= mix(0.91, 1.09, facetEdge);
+    sectionTint = mix(sectionTint, ACCENT2, facetEdge * 0.10);
+
+    // Wear marks — thin scratches left by the stream's grit before this
+    // much polish was reached. Position, angle and length are a pure
+    // function of (index, uStoneSeed): the same stone always shows the
+    // same marks. Visibility fades toward zero as polishFrac climbs toward
+    // 1 — the abraded shell has smoothed them away, a continuous axis, not
+    // a switch — so a bare tap on a heavily-worn stone shows almost none.
+    float wear = 0.0;
+    for (int wi = 0; wi < 5; wi++) {
+      float fi = float(wi);
+      vec2 centre = dirFor(fi, 1.0) * outer * (0.58 + hash21(vec2(fi, uStoneSeed * 41.0)) * 0.34);
+      vec2 along = dirFor(fi, 5.0);
+      float scratchHalf = outer * (0.06 + hash21(vec2(fi, uStoneSeed * 63.0)) * 0.09);
+      float d = distSeg(stoneP, centre - along * scratchHalf, centre + along * scratchHalf);
+      wear += 1.0 - smoothstep(0.0, outer * 0.006, d);
+    }
+    wear = clamp(wear, 0.0, 1.0) * (1.0 - polishFrac);
+    sectionTint = mix(sectionTint, ACCENT * 0.55, wear * 0.5);
 
     // Slight radial darkening toward the centre so the section has depth.
     sectionTint *= mix(1.0, 0.72, 1.0 - r01);
@@ -922,6 +973,9 @@ export default function Pebble() {
         prog.setFloat("uNight", night);
         prog.setFloat("uSectionScale", 0.34);
         prog.setFloat("uPolishMax", POLISH_MAX);
+        // The wear marks' phase — a pure function of the stone's own seed,
+        // so the same stone always shows the same scratches.
+        prog.setFloat("uStoneSeed", (hashSeed(state.seedKey, 0x5ea1) % 100000) / 100000);
         prog.setVec4(
           "uCleavage",
           cleavagePlane[0],

@@ -9,13 +9,17 @@
  *
  * The invariant is a rooted directed tree of nodes anchored under a plant
  * crown (src/lib/rootnet.ts). The shader paints one hand-width of soil in
- * section: the plant crown as a green band above the surface, the surface
- * line, the soil column deepening from bg2 to bg with a mineral bloom, and
- * — one instanced draw per frame — a corona around every root node whose
- * brightness IS the local water × sugar (the load-bearing invariant map is
- * WATER×SUGAR → CORONA-BRIGHTNESS, and every ripple is a lens over the same
- * tree). Edges are painted shader-side from the uNodes / uNodesB uniforms as
- * signed-distance ink-lines.
+ * section: the plant crown as a warm gold-lit band above the surface, the
+ * surface line, a soil column with real top-to-bottom depth contrast (humus
+ * brown at the surface deepening to near-black at the bedrock), multi-scale
+ * grain and moisture-band FBM texture, and a mycorrhizal glow that
+ * concentrates wherever the root density is actually high (not painted-on —
+ * read off the same uNodes/uNodesB positions the edges use). The population
+ * layer (`createPopulationLayer`, custom frag below `POPULATION_FRAG`) draws
+ * two instances per tip in one instanced pass: a warm capsule edge from
+ * parent to child, and a bright glow terminus at the tip — the load-bearing
+ * invariant map is still WATER×SUGAR → BRIGHTNESS, now painted on both the
+ * edges (flow) and the termini (corona) instead of only the termini.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -105,6 +109,12 @@ type TipView = SceneObjectState & {
   growthVal: number;
   sealed: boolean;
   phase: number;
+  /** which branching level this tip sits at — 1 is straight off the crown. */
+  generation: number;
+  /** the parent node's own position, so emit() can draw the connecting edge
+   *  without a second lookup pass — the population's own instance data. */
+  parentNx: number;
+  parentNy: number;
 };
 
 type StoredRoot = {
@@ -146,13 +156,12 @@ uniform float uNight;
 uniform float uStir;
 uniform float uLens;
 
-const vec3 BG      = vec3(0.039, 0.031, 0.024); // deep soil dark
-const vec3 BG2     = vec3(0.110, 0.082, 0.055); // mid-soil brown
-const vec3 GLOW    = vec3(0.918, 0.769, 0.478); // sunlit surface highlight
-const vec3 ACCENT  = vec3(0.518, 0.635, 0.353); // plant crown (green)
-const vec3 ACCENT2 = vec3(0.753, 0.478, 0.227); // warm mineral rust
+const vec3 BG      = vec3(0.026, 0.020, 0.015); // deep subsoil dark
+const vec3 BG2     = vec3(0.227, 0.165, 0.102); // warm humus brown — distinct from BG
+const vec3 GLOW    = vec3(0.859, 0.788, 0.541); // plant crown / root-tip light, warm gold
+const vec3 ACCENT  = vec3(0.353, 0.545, 0.545); // cool moisture register
+const vec3 ACCENT2 = vec3(0.784, 0.580, 0.353); // warm root / mycorrhizal register
 const vec3 INK     = vec3(0.937, 0.910, 0.863);
-const vec3 SKY     = vec3(0.078, 0.078, 0.086);
 
 const float CROWN_LINE   = ${CROWN_Y.toFixed(3)};
 const float BEDROCK_LINE = ${POOL_Y_MAX.toFixed(3)};
@@ -195,20 +204,28 @@ void main() {
   vec3 col;
 
   if (uv.y < CROWN_LINE - 0.005) {
+    // Above-ground register: a warm glow-lit horizon rising into a cool
+    // moisture-tinted sky — both named registers, no third unlisted hue.
     float sky = clamp((CROWN_LINE - uv.y) / CROWN_LINE, 0.0, 1.0);
-    vec3 airCol = mix(GLOW * 0.6, SKY, sky * sky);
+    vec3 airCol = mix(GLOW * 0.55, ACCENT * 0.30, sky * sky);
     airCol *= 0.86 + 0.14 * uBreath;
-    airCol += GLOW * 0.24 * (1.0 - sky) * (0.85 + 0.15 * uBreath) * (1.0 - night * 0.7);
+    airCol += GLOW * 0.26 * (1.0 - sky) * (0.85 + 0.15 * uBreath) * (1.0 - night * 0.7);
     col = airCol * (1.0 - night * 0.72);
     gl_FragColor = vec4(col, 1.0);
     return;
   }
 
   if (uv.y < CROWN_LINE + 0.02) {
+    // Plant crown — an olive-gold band mixed from the two named registers
+    // (GLOW warm, ACCENT cool) rather than a separate green constant, so
+    // the crown still reads as living growth without a sixth hue.
     float band = smoothstep(CROWN_LINE - 0.06, CROWN_LINE, uv.y)
                 * (1.0 - smoothstep(CROWN_LINE, CROWN_LINE + 0.02, uv.y));
     float leaf = fbm(vec2(uv.x * 12.0, uv.y * 30.0 + uTime * 0.05));
-    vec3 crown = mix(ACCENT * 0.7, ACCENT, leaf);
+    float leafFine = fbm(vec2(uv.x * 34.0 + 5.0, uv.y * 60.0 - uTime * 0.03));
+    vec3 crownBase = mix(ACCENT, GLOW, 0.72);
+    vec3 crown = mix(crownBase * 0.62, crownBase * 1.08, leaf);
+    crown += GLOW * leafFine * 0.10;
     crown *= 0.85 + 0.15 * uBreath;
     col = mix(BG2, crown, band);
     col *= 1.0 - night * 0.55;
@@ -221,25 +238,44 @@ void main() {
       vec2 pb = vec2(b.x, b.y) * vec2(aspect, 1.0);
       vec2 pp = uv * vec2(aspect, 1.0);
       float d = sdSegment(pp, pa, pb);
-      float lineW = 0.0015 + 0.0018 * b.z;
-      float ink = 1.0 - smoothstep(lineW, lineW * 1.8, d);
-      col = mix(col, INK * 0.14, ink * (0.6 + 0.4 * uBreath));
+      float lineW = 0.0022 + 0.0026 * b.z;
+      float ink = 1.0 - smoothstep(lineW, lineW * 1.5, d);
+      col = mix(col, ACCENT2 * 0.4, ink * (0.35 + 0.15 * uBreath));
     }
     gl_FragColor = vec4(col, 1.0);
     return;
   }
 
   if (uv.y < BEDROCK_LINE) {
-    float d = clamp((uv.y - CROWN_LINE) / max(0.02, BEDROCK_LINE - CROWN_LINE), 0.0, 1.0);
-    vec3 soil = mix(BG2, BG, d * d);
+    float dGrad = clamp((uv.y - CROWN_LINE) / max(0.02, BEDROCK_LINE - CROWN_LINE), 0.0, 1.0);
+    vec3 soil = mix(BG2, BG, dGrad * dGrad);
     soil *= 0.86 + 0.14 * uBreath;
     col = soil;
 
-    float bloom = fbm(uv * vec2(30.0 * aspect, 30.0) + vec2(uv.y * 4.0, 0.0));
-    col += ACCENT2 * bloom * (0.4 + 0.6 * uClimate.z) * (0.6 + uBreath * 0.4) * 0.6;
+    // Soil texture — three grain scales, so the column reads as ground and
+    // not a flat gradient: coarse clods, fine mineral speckle, a scatter of
+    // hard-edged mineral flecks (a real Sobel boundary, not a soft blend),
+    // and a directional moisture-band FBM tinted with the cool ACCENT
+    // register (rides uClimate.z = soilWater — wetter ground bands more
+    // visibly).
+    float grainCoarse = fbm(uv * vec2(15.0 * aspect, 15.0) + vec2(2.3, 7.1));
+    float grainFine = fbm(uv * vec2(68.0 * aspect, 68.0) + vec2(9.4, 1.6));
+    col *= 0.62 + 0.56 * grainCoarse;
+    col *= 0.86 + 0.20 * grainFine;
 
-    float bandNoise = fbm(vec2(uv.x * 4.0, uv.y * 22.0 + uTime * 0.02));
-    col *= 0.86 + 0.22 * bandNoise;
+    vec2 fleckUv = uv * vec2(150.0 * aspect, 150.0);
+    vec2 fleckCell = floor(fleckUv);
+    vec2 fleckLocal = fract(fleckUv) - 0.5;
+    vec2 fleckJitter = vec2(hash21(fleckCell + 1.3), hash21(fleckCell + 5.9)) - 0.5;
+    float fleckDist = length(fleckLocal - fleckJitter * 0.6);
+    float fleckPick = step(0.91, hash21(fleckCell + 3.7));
+    float fleckMask = fleckPick * (1.0 - smoothstep(0.09, 0.20, fleckDist));
+    float fleckShade = hash21(fleckCell + 9.2);
+    col = mix(col, mix(BG * 0.3, GLOW * 0.8, fleckShade), fleckMask * 0.78);
+
+    float moistureNoise = fbm(vec2(uv.x * 3.2, uv.y * 11.0 + uTime * 0.015));
+    float moistureBand = smoothstep(0.38, 0.62, moistureNoise);
+    col = mix(col, col + ACCENT * 0.4, moistureBand * clamp(uClimate.z, 0.0, 1.0) * (0.5 + 0.5 * uBreath));
 
     float wave = 0.0;
     for (int i = 0; i < ${MAX_RIPPLES}; i++) {
@@ -252,9 +288,18 @@ void main() {
       float ring = exp(-pow((dist - rad) * 24.0, 2.0));
       wave += ring * r.w * exp(-age * 1.4);
     }
-    col += ACCENT * wave * 0.55;
+    col += ACCENT * wave * 0.6;
 
-    float edgeAlpha = 0.75 + 0.20 * uBreath;
+    // Root channel — a dark groove where the field itself parts around each
+    // edge, sharp enough to read on a Sobel pass, but deliberately faint:
+    // the population layer (below, POPULATION_FRAG) draws the actual bright
+    // capsule-and-terminus edges in its own instanced pass, so this loop's
+    // real payload is density — a gaussian sum of distance-to-every-edge
+    // — which drives the mycorrhizal patches: the glow concentrates exactly
+    // where the tree the visitor grew is thick, never painted independent
+    // of the physics.
+    float grooveAlpha = 0.36 + 0.08 * uBreath;
+    float density = 0.0;
     for (int i = 0; i < ${MAX_NODES}; i++) {
       if (i >= uNodeCount) break;
       vec4 a = uNodesB[i];
@@ -264,13 +309,19 @@ void main() {
       vec2 pb = vec2(b.x, b.y) * vec2(aspect, 1.0);
       vec2 pp = uv * vec2(aspect, 1.0);
       float dSeg = sdSegment(pp, pa, pb);
-      float lineW = 0.0018 + 0.0022 * b.z;
-      float ink = 1.0 - smoothstep(lineW, lineW * 1.8, dSeg);
-      vec3 edgeColor = mix(vec3(0.06, 0.04, 0.03), ACCENT2 * 0.4, a.z);
-      float glow = b.w * exp(-dSeg * 60.0);
-      col = mix(col, edgeColor, ink * edgeAlpha);
-      col += GLOW * glow * 0.35 * (0.6 + 0.4 * uBreath);
+      density += exp(-dSeg * dSeg * 34.0) * (0.45 + 0.55 * b.z);
+      float lineW = 0.0026 + 0.0034 * b.z;
+      float groove = 1.0 - smoothstep(lineW, lineW * 1.35, dSeg);
+      vec3 grooveColor = mix(BG * 0.6, ACCENT2 * 0.4, a.z);
+      col = mix(col, grooveColor, groove * grooveAlpha);
     }
+
+    // Mycorrhizal hint — a faint fbm patch masked by root density, tinted
+    // ACCENT2. Where the network is dense the ground itself glows faintly
+    // warm; where it is sparse the ground stays plain soil.
+    density = clamp(density, 0.0, 1.0);
+    float mycoNoise = fbm(uv * vec2(22.0 * aspect, 22.0) + vec2(11.3, 4.8));
+    col += ACCENT2 * mycoNoise * density * 0.4 * (0.65 + 0.35 * uBreath);
 
     if (uStir > 0.02) {
       vec2 sp = (uv - vec2(0.5, CROWN_LINE + 0.35)) * vec2(aspect, 1.0);
@@ -279,6 +330,13 @@ void main() {
       col += ACCENT2 * uStir * 0.20 * sin(ang * 4.0 + uTime * 3.0)
               * exp(-rr * rr * 8.0);
     }
+
+    // Vignette — the section reads as a lit column, not a flat poster: real
+    // depth-of-field darkening toward the corners widens the frame's actual
+    // light-to-dark spread the way /tidepool and /reef's does.
+    vec2 vd = (uv - vec2(0.5, CROWN_LINE + 0.30)) * vec2(aspect, 1.0);
+    col *= 1.0 - 0.60 * smoothstep(0.10, 1.0, dot(vd, vd));
+
     col *= 1.0 - night * 0.55;
     gl_FragColor = vec4(col, 1.0);
     return;
@@ -294,6 +352,92 @@ void main() {
     dot((uv - vec2(0.5, 0.5)) * vec2(aspect, 1.0), (uv - vec2(0.5, 0.5)) * vec2(aspect, 1.0)));
   col *= 1.0 - night * 0.68;
   gl_FragColor = vec4(col, 1.0);
+}
+`;
+
+/**
+ * The population's own material — /tidepool and /reef's pattern: a
+ * shape-select packed into the low bits of vPhase (`shapeSlot`), two SDFs,
+ * and a two-stop palette instead of the default sprite's disc-plus-corona.
+ *
+ * Two shapes share the pass:
+ *  - SHAPE_EDGE (0): a capsule from a tip's parent to the tip itself,
+ *    oriented by `a_rot` — the vertex stage rotates the *position* into
+ *    place but leaves `vLocal` in the pre-rotation frame, so an SDF that is
+ *    asymmetric along local x reads as a segment aligned with the edge on
+ *    screen. `vGlow` carries the edge's half-width, already normalized by
+ *    its own half-length (so a short edge and a long edge both read as the
+ *    same felt thickness); `vHue` carries the local water×sugar flow,
+ *    warming the capsule from ACCENT2 (root brown) toward GLOW (gold) the
+ *    same way the field shader's edges do.
+ *  - SHAPE_NODE (1): the tip terminus — a bright glow core, an ACCENT2
+ *    body ring, and a faint ACCENT (cool, water) halo at the rim. `vGlow`
+ *    is water×sugar; brightness still inverts to the tip's live state.
+ */
+const POPULATION_FRAG = `precision mediump float;
+varying vec2 vLocal;
+varying float vHue;
+varying float vGlow;
+varying float vPhase;
+varying float vAlpha;
+uniform vec3 u_palA; // ACCENT2 — warm root / mycorrhizal register
+uniform vec3 u_palB; // GLOW    — plant crown / root-tip light
+uniform vec3 u_palC; // ACCENT  — cool moisture register
+
+// Capsule from -1.0..1.0 along local x, width set by halfWidth (already
+// normalized against the instance's own half-length). Feathers past the
+// ends so neighbouring edges never show a hard seam at a shared node.
+float sdfEdgeCapsule(vec2 p, float halfWidth) {
+  float alongFeather = 1.0 - smoothstep(0.90, 1.06, abs(p.x));
+  // A steep core transition plus a thin dark ring just outside it — the
+  // ring is what a Sobel pass actually locks onto; a soft corona alone is
+  // too gentle a gradient to read as a real boundary.
+  float core = 1.0 - smoothstep(halfWidth * 0.65, halfWidth * 0.92, abs(p.y));
+  float darkRing = exp(-pow((abs(p.y) - halfWidth * 1.15) * (3.2 / max(0.02, halfWidth)), 2.0)) * 0.45;
+  float corona = exp(-(p.y * p.y) / max(1e-4, halfWidth * halfWidth * 2.2)) * 0.18;
+  return clamp((core + corona - darkRing) * alongFeather, 0.0, 1.0);
+}
+
+// Tip terminus — bright core, ACCENT2 body ring, faint outer halo, a crisp
+// rim right at the body's edge so the terminus reads as a real silhouette
+// (a Sobel-visible boundary) rather than only a soft glow blob.
+float sdfRootTerminus(vec2 p, float breathPulse) {
+  float r = length(p);
+  if (r > 1.4) return 0.0;
+  float coreR = 0.34 + breathPulse * 0.05;
+  float core = smoothstep(coreR, coreR * 0.5, r);
+  float bodyR = coreR * 1.9;
+  float body = smoothstep(bodyR, bodyR * 0.55, r);
+  float rim = exp(-pow((r - bodyR * 0.92) * 16.0, 2.0)) * 0.6;
+  float corona = exp(-r * r * 1.4) * 0.32;
+  return clamp(core + body * 0.4 + rim + corona, 0.0, 1.0);
+}
+
+void main() {
+  float shapeF = floor(vPhase + 0.001);
+  float breathPulse = 0.5 + 0.5 * sin(fract(vPhase) * 6.2832);
+  vec3 c;
+  float a;
+  if (shapeF < 0.5) {
+    // edge — capsule from parent to child, flow-warmed toward GLOW.
+    float halfWidth = clamp(vGlow, 0.02, 0.9);
+    float flow = clamp(vHue, 0.0, 1.0);
+    a = sdfEdgeCapsule(vLocal, halfWidth);
+    c = mix(u_palA, u_palB, flow * 0.65);
+  } else {
+    // node terminus — bright glow-gold core, ACCENT2 body, ACCENT halo.
+    float wSugar = clamp(vGlow, 0.0, 1.0);
+    float r = length(vLocal);
+    a = sdfRootTerminus(vLocal, breathPulse);
+    float coreMix = smoothstep(0.55, 0.0, r);
+    vec3 c0 = mix(u_palA, u_palB, coreMix * (0.5 + 0.5 * wSugar));
+    c0 = mix(c0, u_palC, smoothstep(0.85, 1.4, r) * 0.35);
+    a *= 0.55 + 0.45 * wSugar;
+    c = c0 * (0.8 + 0.5 * wSugar);
+  }
+  a *= vAlpha;
+  if (a <= 0.003) discard;
+  gl_FragColor = vec4(c * a, a);
 }
 `;
 
@@ -472,36 +616,70 @@ export default function Root() {
           growthVal: 0,
           sealed: false,
           phase: rng(),
+          generation: 1,
+          parentNx: nx,
+          parentNy: CROWN_Y,
         };
       },
       step(s, ctx) {
         if (s.growth < 1) s.growth = Math.min(1, s.growth + ctx.dt * 0.9);
       },
+      // Two instances per tip: the connecting edge (parent → this tip, a
+      // capsule oriented by the segment's own angle) and the bright glow
+      // terminus at the tip itself. `SHAPE_EDGE = 0`, `SHAPE_NODE = 1`,
+      // packed into vPhase's integer part the way /reef packs its shapes —
+      // POPULATION_FRAG above reads it back with `floor(vPhase)`.
       emit(s, ctx, out) {
         const px = s.nx * ctx.width;
         const py = s.ny * ctx.height;
         const baseR = Math.max(3, ctx.width * 0.011);
-        const wSugar = Math.min(1.6, s.waterVal * s.sugarVal * 2);
-        out.push(
-          px, py,
-          baseR * (0.5 + s.growthVal * 0.5) * (s.sealed ? 1.15 : 1),
-          s.phase * Math.PI * 2,
-          s.sealed ? 0.9 : 0.35,
-          0.28 + s.growthVal * 0.35 + ctx.breath * 0.12,
-          Math.sin(ctx.tMs * 0.001 * 1.1 + s.phase * Math.PI * 2) * 0.5 + 0.5,
-          s.presence * (0.5 + s.growth * 0.5),
-        );
-        if (wSugar > 0.01) {
+        const wSugar = clamp01(s.waterVal * s.sugarVal * 1.6);
+        const presenceAlpha = s.presence * (0.5 + s.growth * 0.5);
+
+        const ppx = s.parentNx * ctx.width;
+        const ppy = s.parentNy * ctx.height;
+        const dx = px - ppx;
+        const dy = py - ppy;
+        const segLen = Math.hypot(dx, dy);
+        if (segLen > 1) {
+          const midx = (px + ppx) / 2;
+          const midy = (py + ppy) / 2;
+          const angle = Math.atan2(dy, dx);
+          const halfLen = segLen / 2;
+          // Constant felt thickness regardless of length: a real half-width
+          // in css px, tapered by generation (a primary root reads thicker
+          // than a fine offshoot), then normalized against this instance's
+          // own half-length so the capsule SDF's local-space width stays
+          // correct no matter how long the edge is.
+          const genFactor = 1 / (1 + s.generation * 0.22);
+          const desiredHalfWidthPx = baseR * 0.34 * genFactor * (0.6 + s.growthVal * 0.4);
+          // Only an UPPER clamp — a lower floor on the ratio would inflate a
+          // long edge's absolute width (ratio = width / length, so a floor
+          // here scales width back up with length, exactly backwards). The
+          // felt thickness the visitor wants is the absolute px value; the
+          // ratio is just how the capsule SDF (defined in the instance's own
+          // -1..1 local space) recovers it.
+          const halfWidthRatio = Math.min(0.5, desiredHalfWidthPx / Math.max(1, halfLen));
           out.push(
-            px, py,
-            baseR * 3.4,
-            -s.phase * Math.PI * 2,
-            s.sealed ? 0.95 : 0.6,
-            wSugar,
-            ctx.breath,
-            s.presence * Math.min(1, wSugar * 0.75),
+            midx, midy,
+            halfLen,
+            angle,
+            wSugar, // vHue → flow warmth (root brown → gold)
+            halfWidthRatio, // vGlow → normalized half-width
+            0, // vPhase → SHAPE_EDGE (0) + 0 subphase
+            presenceAlpha * (0.7 + 0.3 * wSugar),
           );
         }
+
+        out.push(
+          px, py,
+          baseR * (0.6 + s.growthVal * 0.6) * (s.sealed ? 1.2 : 1),
+          0,
+          0, // vHue unused on the node shape
+          wSugar, // vGlow → water×sugar brightness, still invertible
+          1 + Math.min(0.999, Math.max(0, s.phase)), // vPhase → SHAPE_NODE (1) + phase
+          presenceAlpha,
+        );
       },
       verbs: [],
       respond: {},
@@ -509,7 +687,8 @@ export default function Root() {
     const population = createPopulation(tipSpec);
     const populationLayer = stage
       ? createPopulationLayer(stage, {
-          palette: ["#84a25a", "#c07a3a", "#eac47a"],
+          palette: ["#c8945a", "#dbc98a", "#5a8b8b"],
+          frag: POPULATION_FRAG,
         })
       : null;
     const instanceBuffer = createInstanceBuffer(MAX_NODES * 2);
@@ -580,6 +759,8 @@ export default function Root() {
     const syncPopulationFromLedger = (now: number) => {
       const items = population.items;
       const ledger: RootNode[] = state.nodes;
+      const byId = new Map<number, RootNode>();
+      for (const n of ledger) byId.set(n.id, n);
       for (let i = 0; i < items.length; i++) {
         const item = items[i];
         if (item.presence < 1) continue;
@@ -587,6 +768,9 @@ export default function Root() {
       }
       for (const n of ledger) {
         if (n.parentId === null) continue;
+        const parent = byId.get(n.parentId);
+        const parentNx = parent ? parent.x : n.x;
+        const parentNy = parent ? parent.y : n.y;
         let item = items.find((it) => it.id === n.id && it.presence >= 1);
         if (!item) {
           item = {
@@ -603,6 +787,9 @@ export default function Root() {
             growthVal: n.growth,
             sealed: n.sealed,
             phase: n.phase,
+            generation: n.generation,
+            parentNx,
+            parentNy,
           };
           items.push(item);
         } else {
@@ -613,6 +800,9 @@ export default function Root() {
           item.growthVal = n.growth;
           item.sealed = n.sealed;
           item.phase = n.phase;
+          item.generation = n.generation;
+          item.parentNx = parentNx;
+          item.parentNy = parentNy;
           if (n.sealed && item.sealedMs === null) item.sealedMs = now;
         }
       }
@@ -1142,7 +1332,7 @@ export default function Root() {
       onGlimmer={() => apiRef.current?.glimmer()}
       onReducedMotion={(on) => apiRef.current?.reduced(on)}
       letGo={{ label: "let the network rest", onLetGo: letGo, visible: hasKept }}
-      style={{ position: "fixed", inset: 0, background: "#0a0806" }}
+      style={{ position: "fixed", inset: 0, background: "#070504" }}
     >
       <canvas
         ref={surfaceRef}

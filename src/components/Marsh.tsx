@@ -8,10 +8,16 @@
  * §"Three creative slots" for what belongs in each slot.
  *
  * The invariant is a continuous oxygen field on a coarse grid, with reeds
- * producing and biofilm mats consuming (src/lib/marshfield.ts). The shader
- * paints the water surface with oxygen visualised as a warm-cool cross-fade
- * across the grid, reeds as SDF vertical segments, biofilm mats as low-
- * frequency FBM patches. Every ripple is a lens over the same field.
+ * producing and biofilm mats consuming (src/lib/marshfield.ts). Two shaders
+ * paint it: the background field (FRAG) is a fixed shallow waterline — a
+ * hazy sky above it, a muddy FBM floor below with the oxygen field cross-
+ * faded straight over it (warm/bright where oxygenated, cool/dark where
+ * stagnant) and a Snell-like surface highlight — and the population layer
+ * (MARSH_POPULATION_FRAG, same custom-frag pattern as /tidepool and /reef)
+ * draws reeds as vertical ribbon SDFs, rooted and swaying from their base
+ * under turbulence + wind, and biofilm mats as horizontal value-noise-FBM
+ * patches, in one shared instanced pass. Every ripple is a lens over the
+ * same field.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -67,6 +73,7 @@ import {
   totalReedHeight,
   type Climate,
   type Reed,
+  type BiofilmMat,
   type MarshState,
 } from "@/lib/marshfield";
 
@@ -90,11 +97,25 @@ const WATCHED_SPEED = 60;
 const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
 const clamp01 = (v: number) => clamp(v, 0, 1);
 
+/**
+ * Shape-select encoding for the population fragment shader — `vPhase`'s
+ * integer part picks the silhouette (0 = reed ribbon, 1 = biofilm mat), the
+ * fractional part carries the sprite's own breath phase. Mirrors the
+ * convention set in /tidepool and /reef.
+ */
+const shapeSlot = (shape: number, phase01: number) => shape + Math.min(0.999, Math.max(0, phase01));
+
 type ReedView = SceneObjectState & {
   heightVal: number;
   sealed: boolean;
   phase: number;
-  breathPhase: number;
+  /** sway, 0..1 (0.5 = upright) — updated every step from turbulence + wind, read-only in emit. */
+  tiltNorm: number;
+};
+
+type MatView = SceneObjectState & {
+  massVal: number;
+  phase: number;
 };
 
 type StoredMarsh = {
@@ -108,6 +129,117 @@ type StoredMarsh = {
   lastSeen: number;
   cleared?: boolean;
 };
+
+/**
+ * The population-layer fragment shader, room-specialized for the marsh's
+ * two populations. The shared SPRITE_VERT (in `@/lib/scene/population-layer`)
+ * declares five varyings — `vLocal` (the sprite-local -1.9..1.9 quad
+ * coordinate, unrotated), `vHue`, `vGlow`, `vPhase`, `vAlpha` — plus the
+ * three palette uniforms `u_palA` (ACCENT — cool reed green), `u_palB`
+ * (ACCENT2 — warm biofilm), `u_palC` (GLOW — bright water/sunlit reed
+ * tip). We hijack `vPhase`'s integer part as a shape selector (0 = reed
+ * ribbon, 1 = biofilm mat); the fractional part carries the sprite's own
+ * breath phase. `vGlow` carries a creature-specific parameter: the reed's
+ * tilt (0.5 = upright, written every step from turbulence + wind so a
+ * rooted stalk sways from its base) or the mat's mass-linked brightness.
+ * This lets each population draw its real silhouette in one shared
+ * instanced pass instead of a generic SDF disc — the defect this room's
+ * audit named directly.
+ */
+const MARSH_POPULATION_FRAG = `precision mediump float;
+varying vec2 vLocal;
+varying float vHue;
+varying float vGlow;
+varying float vPhase;
+varying float vAlpha;
+uniform vec3 u_palA;
+uniform vec3 u_palB;
+uniform vec3 u_palC;
+
+vec3 marshPalette(float h) {
+  h = clamp(h, 0.0, 1.0);
+  return h < 0.5 ? mix(u_palA, u_palB, h * 2.0) : mix(u_palB, u_palC, (h - 0.5) * 2.0);
+}
+
+float hash21p(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+float vnoisep(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  float a = hash21p(i);
+  float b = hash21p(i + vec2(1.0, 0.0));
+  float c = hash21p(i + vec2(0.0, 1.0));
+  float d = hash21p(i + vec2(1.0, 1.0));
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
+}
+float fbmp(vec2 p) {
+  float v = 0.0;
+  float a = 0.5;
+  for (int i = 0; i < 3; i++) { v += a * vnoisep(p); p *= 2.13; a *= 0.55; }
+  return v;
+}
+
+// Reed — a vertical ribbon rooted at the sprite's bottom (vLocal.y = +K),
+// tip at the top (vLocal.y = -K). bendNorm (0..1, 0.5 upright) displaces
+// the ribbon sideways more near the tip than the base, so a rooted stalk
+// sways FROM its base instead of rotating rigidly around the sprite.
+float sdfReed(vec2 p, float bendNorm, float breathPulse) {
+  float bend = (bendNorm - 0.5) * 2.0;
+  float alongReed = clamp((1.65 - p.y) / 3.1, 0.0, 1.0);
+  float tipStrength = alongReed * alongReed;
+  float sway = sin(breathPulse * 6.2832 * 1.3) * 0.05;
+  float dispX = p.x - (bend * 0.9 + sway) * tipStrength;
+  float widthAtY = mix(0.30, 0.075, tipStrength);
+  float ribbon = 1.0 - smoothstep(widthAtY * 0.55, widthAtY * 1.15, abs(dispX));
+  float verticalMask = smoothstep(1.72, 1.42, abs(p.y));
+  float midrib = 1.0 - smoothstep(widthAtY * 0.18, widthAtY * 0.03, abs(dispX)) * 0.30;
+  return clamp(ribbon * verticalMask * midrib, 0.0, 1.0);
+}
+
+// Biofilm mat — a horizontal, irregular patch flattened onto the floor.
+// Both the edge and the interior grain are value-noise FBM seeded by the
+// mat's own phase, so every mat reads as a distinct organism, not a
+// stamped decal, and its footprint is the biofilm density field itself.
+float sdfMat(vec2 p, float phase, float breathPulse) {
+  vec2 pp = vec2(p.x, p.y * 2.35);
+  float r = length(pp);
+  float edgeWobble = fbmp(p * 1.4 + phase * 9.0 + breathPulse * 0.3);
+  float edge = 1.0 + (edgeWobble - 0.5) * 0.55;
+  float body = smoothstep(1.05 * edge, 0.30 * edge, r);
+  float grain = fbmp(p * 3.4 + phase * 13.0);
+  return clamp(body * (0.5 + grain * 0.65), 0.0, 1.0);
+}
+
+void main() {
+  float shapeF = floor(vPhase + 0.001);
+  float subPhase = fract(vPhase);
+  float breathPulse = 0.5 + 0.5 * sin(subPhase * 6.2832);
+  vec3 c;
+  float a = 0.0;
+  if (shapeF < 0.5) {
+    // reed — green body (u_palA), bright sunlit tip (u_palC).
+    float bendNorm = clamp(vGlow, 0.0, 1.0);
+    a = sdfReed(vLocal, bendNorm, breathPulse);
+    float tipMix = clamp(1.0 - length(vLocal - vec2(0.0, -1.55)) / 2.35, 0.0, 1.0);
+    tipMix = pow(tipMix, 1.6);
+    vec3 body = marshPalette(vHue);
+    c = mix(body, u_palC, tipMix * 0.62);
+    c += u_palC * pow(tipMix, 3.0) * 0.45 * (0.6 + breathPulse * 0.4);
+    c *= 0.82 + 0.22 * breathPulse;
+  } else {
+    // biofilm mat — warm patch (u_palB), breathing +/-20% per the manifest.
+    a = sdfMat(vLocal, subPhase, breathPulse);
+    c = u_palB * (0.65 + 0.55 * breathPulse) * (0.75 + 0.35 * clamp(vGlow, 0.0, 1.0));
+  }
+  a *= vAlpha;
+  if (a <= 0.003) discard;
+  gl_FragColor = vec4(c * a, a);
+}
+`;
 
 const FRAG = `
 precision highp float;
@@ -134,12 +266,20 @@ uniform float uNight;
 uniform float uStir;
 uniform float uLens;
 
-const vec3 BG      = vec3(0.039, 0.086, 0.078); // deep water dark
-const vec3 BG2     = vec3(0.082, 0.196, 0.157); // mid-water teal
-const vec3 GLOW    = vec3(0.784, 0.863, 0.612); // sunlit / oxygen-high (load-bearing)
-const vec3 ACCENT  = vec3(0.353, 0.549, 0.471); // cool oxygen-low water register
-const vec3 ACCENT2 = vec3(0.659, 0.565, 0.314); // olive biofilm register
-const vec3 INK     = vec3(0.910, 0.933, 0.878);
+// The palette — six registers set once from the manifest. bg = dark
+// wetland base; bg2 = warm mud/silt, distinct from bg; glow = bright
+// water surface + sunlit reed tips (load-bearing: high oxygen reads this);
+// accent = cool water / oxygen-poor register (also the reed body — a
+// stagnant tile and a green stalk share the same cool family); accent2 =
+// warm biofilm bloom, exclusive to the mats; ink = readable text.
+const vec3 BG      = vec3(0.039, 0.102, 0.082); // #0a1a15 dark wetland base
+const vec3 BG2     = vec3(0.227, 0.157, 0.094); // #3a2818 warm mud/silt
+const vec3 GLOW    = vec3(0.910, 0.863, 0.604); // #e8dc9a bright water / sunlit reed tips
+const vec3 ACCENT  = vec3(0.290, 0.478, 0.541); // #4a7a8a cool water / oxygen-poor
+const vec3 ACCENT2 = vec3(0.784, 0.580, 0.353); // #c8945a warm biofilm bloom
+const vec3 INK     = vec3(0.910, 0.933, 0.878); // #e8eee0
+const vec3 SKY      = vec3(0.62, 0.70, 0.55);   // hazy marsh sky, warm-green cast
+const vec3 SKY_HIGH = vec3(0.10, 0.16, 0.14);   // deep humid upper sky, cooler
 
 const float POOL_YMIN = ${POOL_Y_MIN.toFixed(3)};
 const float POOL_YMAX = ${POOL_Y_MAX.toFixed(3)};
@@ -166,13 +306,6 @@ float fbm(vec2 p) {
   float a = 0.5;
   for (int i = 0; i < 4; i++) { v += a * vnoise(p); p *= 2.11; a *= 0.53; }
   return v;
-}
-
-float sdSegment(vec2 p, vec2 a, vec2 b) {
-  vec2 pa = p - a;
-  vec2 ba = b - a;
-  float h = clamp(dot(pa, ba) / max(1e-6, dot(ba, ba)), 0.0, 1.0);
-  return length(pa - ba * h);
 }
 
 // Approximate oxygen field at (x, y) from reed and mat contributions.
@@ -208,35 +341,78 @@ void main() {
   float night = uNight;
   vec3 col;
 
-  // ——— the water surface — the whole viewport is a marsh ———
-  // Depth reads BG toward the edges, BG2 in the middle band.
-  float dCentre = abs(uv.y - 0.5) * 2.0;
-  vec3 water = mix(BG2, BG, dCentre * 0.6);
-  water *= 0.86 + 0.14 * uBreath;
+  // layer: waterline_and_chop — a fixed shallow-marsh surface line near
+  // the top of the frame. Turbulence and the scrub gesture add real chop
+  // on top of a slow breathing wavelet, so the surface — not the sky — is
+  // what visibly moves from second to second. Reads uTurbulence, uStir,
+  // uBreath.
+  float chop = uTurbulence * (sin(uv.x * 46.0 + uTime * 3.2) * 0.012
+                              + sin(uv.x * 83.0 - uTime * 2.1) * 0.007)
+             + uStir * sin(uv.x * 30.0 + uTime * 5.0) * 0.010;
+  float wavelet = sin(uv.x * 14.0 + uTime * 0.6) * 0.004;
+  float waterlineY = POOL_YMIN + wavelet + chop;
 
-  // FBM wave texture over the water.
-  float wave = fbm(vec2(uv.x * 8.0 + uTime * 0.05, uv.y * 12.0 - uTime * 0.03));
-  water *= 0.9 + 0.14 * wave;
-
-  col = water;
-
-  // ——— oxygen visualisation: warm-cool crossfade over the proxy field ———
-  float O = approxOxygen(uv, aspect);
-  // High O → GLOW (warm sunlit), Low O → ACCENT (cool water).
-  vec3 oxTint = mix(ACCENT, GLOW, O);
-  col = mix(col, oxTint, 0.35 * (0.8 + 0.2 * uBreath));
-
-  // ——— biofilm mats: low-frequency FBM patches at mat centres ———
-  for (int i = 0; i < ${MAX_MATS}; i++) {
-    if (i >= uMatCount) break;
-    vec4 m = uMats[i];
-    vec2 dp = (uv - m.xy) * vec2(aspect, 1.0);
-    float d = length(dp);
-    float mask = exp(-d * d * 30.0) * m.z;
-    if (mask < 0.01) continue;
-    float patch = fbm(uv * vec2(18.0 * aspect, 18.0) + vec2(m.w * 12.0, 0.0));
-    col = mix(col, ACCENT2 * (0.6 + 0.4 * patch) * (0.9 + 0.2 * uBreath), mask * 0.7);
+  if (uv.y < waterlineY) {
+    // layer: sky — bright, hazy glow above the waterline. The whole
+    // reason a hand looking across the marsh sees anything but water.
+    // Reads uBreath, uClimate.x (warmth tints the haze), uNight, uLean.
+    float above = clamp((waterlineY - uv.y) / max(1e-3, waterlineY), 0.0, 1.0);
+    vec3 horizonTone = mix(GLOW, mix(SKY, GLOW, 0.4), 0.6);
+    vec3 airTone = mix(horizonTone, SKY_HIGH, pow(above, 1.1));
+    float horizonBand = exp(-pow((waterlineY - uv.y) * 16.0, 2.0));
+    airTone += GLOW * horizonBand * (0.5 + 0.18 * uBreath) * (0.6 + uClimate.x * 0.4);
+    float haze = fbm(vec2(uv.x * 4.0 * aspect + uTime * 0.015, uv.y * 20.0));
+    haze = smoothstep(0.5, 0.85, haze);
+    airTone = mix(airTone, mix(airTone, SKY, 0.5), haze * (1.0 - above * 0.4));
+    airTone *= 0.88 + 0.12 * uBreath;
+    airTone *= 1.0 - night * 0.75;
+    airTone *= 1.0 - 0.10 * abs(uLean);
+    col = airTone;
+    gl_FragColor = vec4(col, 1.0);
+    return;
   }
+
+  // Underwater — a shallow body standing over a muddy floor. The floor
+  // shows through everywhere (this is a marsh, not a deep pool); the
+  // oxygen field tints it, and the surface catches a Snell-like highlight.
+  float depthBelow = clamp((uv.y - waterlineY) / max(0.05, 1.0 - waterlineY), 0.0, 1.0);
+
+  // layer: water_surface — a Snell-like grazing highlight right at the
+  // waterline, and a refracted horizontal wobble so the mud beneath
+  // shimmers instead of sitting still under glass.
+  float refractAmp = (1.0 - depthBelow * 0.7) * 0.012;
+  float refractDx = sin((uv.y - waterlineY) * 40.0 + uTime * 0.85) * refractAmp
+                   + sin((uv.y - waterlineY) * 97.0 - uTime * 1.3) * refractAmp * 0.4;
+  vec2 uvR = vec2(uv.x + refractDx, uv.y);
+
+  // layer: muddy_floor — warm brown mud (BG2), layered FBM grain (coarse
+  // silt structure + fine speckle) so the floor reads as ground, sampled
+  // through the refracted coordinate so the shimmer actually distorts it.
+  float coarse = fbm(uvR * vec2(9.0 * aspect, 8.0));
+  float fine = fbm(uvR * vec2(46.0 * aspect, 40.0) + vec2(1.7, 2.9));
+  float grain = hash21(floor(uv * uRes * 0.35));
+  vec3 mud = mix(BG2 * 0.55, BG2 * 1.20, coarse);
+  mud = mix(mud, mud * (0.7 + grain * 0.6), 0.30);
+  mud += BG2 * fine * 0.18;
+  mud = mix(mud, BG, depthBelow * 0.45);
+  col = mud;
+
+  // layer: oxygen_visualisation — the load-bearing invariant map, painted
+  // straight over the floor: a high-O tile reads warmer/brighter (GLOW),
+  // a stagnant one cooler/darker (ACCENT). approxOxygen reads the reed
+  // and mat positions the JS ledger owns, so the shader's painted field
+  // and the ledger's real one never disagree in sign.
+  float O = approxOxygen(uvR, aspect);
+  vec3 oxTint = mix(ACCENT, GLOW, O);
+  col = mix(col, oxTint, 0.44 * (0.82 + 0.18 * uBreath));
+  col *= mix(0.70, 1.0, O);
+
+  // Surface highlight, layered after the floor/oxygen tint so it reads as
+  // light sitting on TOP of the water rather than mixed into the mud.
+  float surfBand = exp(-pow((uv.y - waterlineY) * 60.0, 2.0));
+  col += mix(GLOW, ACCENT, 0.12) * surfBand * 0.55 * (0.82 + 0.18 * uBreath);
+  float underGlow = exp(-pow((uv.y - waterlineY - 0.02) * 26.0, 2.0));
+  col += GLOW * underGlow * 0.16;
 
   // ——— ripple wavefronts (taps and flicks) ———
   float rippleWave = 0.0;
@@ -252,42 +428,19 @@ void main() {
   }
   col += GLOW * rippleWave * 0.55;
 
-  // ——— reeds: SDF vertical segments from y_base up by height ———
-  for (int i = 0; i < ${MAX_REEDS}; i++) {
-    if (i >= uReedCount) break;
-    vec4 r = uReeds[i];
-    vec4 rb = uReedsB[i];
-    // Reed base at (r.x, r.y); tip above at (r.x, r.y - r.z * 0.32).
-    // Tilt subtly on breath so the reeds sway.
-    float tilt = sin(r.w * 6.283 + uTime * 0.4) * 0.02 * r.z;
-    vec2 base = vec2(r.x, r.y) * vec2(aspect, 1.0);
-    vec2 tip = vec2(r.x + tilt, r.y - r.z * 0.32) * vec2(aspect, 1.0);
-    vec2 pp = uv * vec2(aspect, 1.0);
-    float dSeg = sdSegment(pp, base, tip);
-    float lineW = 0.0035 + 0.0015 * r.z;
-    float shape = 1.0 - smoothstep(lineW, lineW * 1.6, dSeg);
-    // Reed body: sealed = warm ACCENT2, young = green GLOW
-    vec3 reedCol = mix(GLOW * 0.6, ACCENT2, rb.x);
-    reedCol *= 0.85 + 0.15 * uBreath;
-    col = mix(col, reedCol, shape);
-    // A warm corona at the reed base scaled by the local oxygen — the
-    // load-bearing invariant map: OXYGEN → BASE-CORONA-BRIGHTNESS.
-    float baseCorona = exp(-pow((length(uv - vec2(r.x, r.y)) * aspect) * 22.0, 2.0));
-    col += GLOW * baseCorona * O * r.z * 0.6;
-  }
-
   // ——— stir: the water surface agitates under a scrubbing finger ———
   if (uStir > 0.02) {
-    vec2 sp = (uv - vec2(0.5, 0.5)) * vec2(aspect, 1.0);
+    vec2 sp = (uv - vec2(0.5, waterlineY + 0.1)) * vec2(aspect, 1.0);
     float ang = atan(sp.y, sp.x);
     float rr = length(sp);
-    col += GLOW * uStir * 0.18 * sin(ang * 4.0 + uTime * 3.0) * exp(-rr * rr * 8.0);
+    col += ACCENT * uStir * 0.22 * sin(ang * 4.0 + uTime * 3.0) * exp(-rr * rr * 8.0);
   }
 
   // ——— vignette + night ———
   vec2 vd = (uv - vec2(0.5, 0.5)) * vec2(aspect, 1.0);
   col *= 1.0 - 0.42 * smoothstep(0.18, 0.94, dot(vd, vd));
   col *= 1.0 - night * 0.62;
+  col *= 1.0 - 0.06 * abs(uLean) * (1.0 - depthBelow);
 
   gl_FragColor = vec4(col, 1.0);
 }
@@ -447,6 +600,9 @@ export default function Marsh() {
     const prog = stage?.program(FULLSCREEN_VERT_UNIT, FRAG) ?? null;
     const quad = stage && prog ? stage.fullscreenQuad(prog, "unit") : null;
 
+    /** How tall a fully-grown, fully-charged reed reaches, as a fraction of frame height. */
+    const REED_MAX_HEIGHT_NY = 0.34;
+
     const reedSpec: SceneObjectSpec<ReedView> = {
       kind: "reed",
       cap: MAX_REEDS,
@@ -464,39 +620,109 @@ export default function Marsh() {
           heightVal: 0,
           sealed: false,
           phase: rng(),
-          breathPhase: rng(),
+          tiltNorm: 0.5,
         };
       },
       step(s, ctx) {
         if (s.growth < 1) s.growth = Math.min(1, s.growth + ctx.dt * 0.9);
+        // Sway is deterministic — a function of the shared clock, the
+        // reed's own phase, turbulence, and the wind gust the world-law
+        // drag leaves decaying behind it. No Math.random, no Date.now.
+        const target = clamp01(
+          0.5 +
+            0.5 *
+              (Math.sin(ctx.tMs * 0.00075 + s.phase * Math.PI * 2) * (0.35 + ctx.agitation * 0.9) +
+                ctx.wind * 0.55),
+        );
+        s.tiltNorm += (target - s.tiltNorm) * Math.min(1, ctx.dt * 3);
       },
       emit(s, ctx, out) {
+        // A vertical ribbon rooted at the reed's true position: the sprite
+        // centre sits half the frond's height above the anchor, so the
+        // SDF's bottom edge lands exactly on the water floor. Height is
+        // the ledger's live growth curve; width (biomass) rides the same
+        // value — a mature stand is both taller and thicker.
         const px = s.nx * ctx.width;
-        const py = s.ny * ctx.height;
-        const baseR = Math.max(3, ctx.width * 0.010);
-        // The reed body's disc is drawn by the shader from uReeds; here we
-        // emit a small base marker to keep the population layer engaged
-        // (SceneObjectSpec has to emit at least one instance per object).
+        const anchorY = s.ny * ctx.height;
+        const heightNy = REED_MAX_HEIGHT_NY * (0.16 + s.heightVal * 0.84);
+        const heightPx = Math.max(
+          ctx.height * 0.045,
+          heightNy * ctx.height * (0.4 + s.growth * 0.6),
+        );
+        const spriteR = Math.max(heightPx / 3.3, ctx.width * 0.006);
+        const centerY = anchorY - heightPx * 0.5;
+        const O = oxygenAt(state, s.nx, s.ny);
+        const hue = clamp(0.04 + O * 0.16 + (s.sealed ? 0.06 : 0), 0, 0.46);
+        const subPhase = (s.phase + ((ctx.tMs * 0.00026) % 1)) % 1;
         out.push(
-          px, py,
-          baseR * (0.6 + s.heightVal * 0.4) * (s.sealed ? 1.15 : 1),
-          s.phase * Math.PI * 2,
-          s.sealed ? 0.9 : 0.4,
-          0.24 + s.heightVal * 0.4 + ctx.breath * 0.10,
-          Math.sin(ctx.tMs * 0.001 * 1.2 + s.phase * Math.PI * 2) * 0.5 + 0.5,
-          s.presence * (0.5 + s.growth * 0.5),
+          px, centerY,
+          spriteR,
+          0,
+          hue,
+          s.tiltNorm,
+          shapeSlot(0, subPhase),
+          s.presence * (0.55 + s.heightVal * 0.45),
         );
       },
       verbs: [],
       respond: {},
     };
-    const population = createPopulation(reedSpec);
+
+    const matSpec: SceneObjectSpec<MatView> = {
+      kind: "biofilm",
+      cap: MAX_MATS,
+      born(seed, nx, ny, tMs) {
+        const rng = sceneMulberry32(seed);
+        return {
+          id: 0,
+          seed,
+          nx,
+          ny,
+          bornMs: tMs,
+          growth: 0.2,
+          sealedMs: null,
+          presence: 1,
+          massVal: 0.2,
+          phase: rng(),
+        };
+      },
+      step(s, ctx) {
+        if (s.growth < 1) s.growth = Math.min(1, s.growth + ctx.dt * 0.6);
+      },
+      emit(s, ctx, out) {
+        // A horizontal patch on the floor — the biofilm density field's
+        // footprint. Position and mass come straight from the ledger.
+        const px = s.nx * ctx.width;
+        const py = s.ny * ctx.height;
+        const r =
+          Math.max(ctx.width * 0.05, ctx.width * 0.13 * (0.35 + s.massVal * 0.75)) *
+          (0.3 + s.growth * 0.7);
+        const subPhase = (s.phase + ((ctx.tMs * 0.00017) % 1)) % 1;
+        out.push(
+          px, py,
+          r,
+          0,
+          0.5,
+          0.35 + s.massVal * 0.5,
+          shapeSlot(1, subPhase),
+          s.presence * (0.45 + s.massVal * 0.55),
+        );
+      },
+      verbs: [],
+      respond: {},
+    };
+
+    const reeds = createPopulation(reedSpec);
+    const mats = createPopulation(matSpec);
     const populationLayer = stage
       ? createPopulationLayer(stage, {
-          palette: ["#5a8c78", "#a89050", "#c8dc9c"],
+          // u_palA = ACCENT (cool reed green), u_palB = ACCENT2 (warm
+          // biofilm), u_palC = GLOW (bright water / sunlit reed tip).
+          palette: ["#4a7a8a", "#c8945a", "#e8dc9a"],
+          frag: MARSH_POPULATION_FRAG,
         })
       : null;
-    const instanceBuffer = createInstanceBuffer(MAX_REEDS);
+    const instanceBuffer = createInstanceBuffer(MAX_REEDS + MAX_MATS);
 
     const reedU = new Float32Array(MAX_REEDS * 4);
     const reedUB = new Float32Array(MAX_REEDS * 4);
@@ -512,6 +738,10 @@ export default function Marsh() {
     let night = 0;
     let nightTarget = 0;
     let stir = 0;
+    // Decaying lateral gust — the reeds' cosmetic sway, nudged by the
+    // world-law drag (wind) and by turbulence, never a stored physics
+    // field. Decays back toward 0 each frame; see draw().
+    let windX = 0;
     let timeScale = 1;
     let timeScaleTarget = 1;
     let cursorX = 0.5;
@@ -559,8 +789,8 @@ export default function Marsh() {
     const chargeHeightFor = (elapsedMs: number) =>
       HEIGHT_STEP_MAX * (1 - Math.exp(-Math.max(0, elapsedMs) / REED_GROW_TAU_MS));
 
-    const syncPopulationFromLedger = (now: number) => {
-      const items = population.items;
+    const syncReedsFromLedger = (now: number) => {
+      const items = reeds.items;
       const ledger: Reed[] = state.reeds;
       for (let i = 0; i < items.length; i++) {
         const item = items[i];
@@ -582,7 +812,7 @@ export default function Marsh() {
             heightVal: r.height,
             sealed: r.sealed,
             phase: r.phase,
-            breathPhase: r.phase,
+            tiltNorm: 0.5,
           };
           items.push(item);
         } else {
@@ -592,6 +822,39 @@ export default function Marsh() {
           item.sealed = r.sealed;
           item.phase = r.phase;
           if (r.sealed && item.sealedMs === null) item.sealedMs = now;
+        }
+      }
+    };
+
+    const syncMatsFromLedger = (now: number) => {
+      const items = mats.items;
+      const ledger: BiofilmMat[] = state.mats;
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.presence < 1) continue;
+        if (!ledger.some((m) => m.id === item.id)) item.presence = 0.999;
+      }
+      for (const m of ledger) {
+        let item = items.find((it) => it.id === m.id && it.presence >= 1);
+        if (!item) {
+          item = {
+            id: m.id,
+            seed: hashSeed(state.seedKey, m.id + 1000),
+            nx: m.x,
+            ny: m.y,
+            bornMs: now,
+            growth: 0.2,
+            sealedMs: null,
+            presence: 1,
+            massVal: m.mass,
+            phase: m.phase,
+          };
+          items.push(item);
+        } else {
+          item.nx = m.x;
+          item.ny = m.y;
+          item.massVal = m.mass;
+          item.phase = m.phase;
         }
       }
     };
@@ -723,6 +986,9 @@ export default function Marsh() {
           ...state,
           sunlight: clamp01(state.sunlight + dx * 0.0018),
         };
+        // The same drag also leaves a decaying gust behind it — a purely
+        // cosmetic lean on the reeds' sway, not a ledger field.
+        windX = clamp(windX + dx * 0.0025, -1, 1);
         try {
           audio.playTone(72 + state.sunlight * 60, 0.14);
         } catch { /* noop */ }
@@ -898,6 +1164,7 @@ export default function Marsh() {
       lean += (leanTarget - lean) * Math.min(1, dtRaw * 3);
       night += (nightTarget - night) * Math.min(1, dtRaw * 2);
       stir = Math.max(0, stir - dtRaw * 0.28);
+      windX *= Math.exp(-dtRaw * 0.5);
       cursorLit = Math.max(0, cursorLit - dtRaw * 0.5);
 
       if (!asleep) {
@@ -972,11 +1239,25 @@ export default function Marsh() {
         if (rippleLoc) stage.gl.uniform4fv(rippleLoc, rippleU);
         quad.draw();
 
-        syncPopulationFromLedger(now);
-        population.step({
+        syncReedsFromLedger(now);
+        syncMatsFromLedger(now);
+        const breathNow = reduced ? 0.5 : 0.5 + 0.5 * Math.sin((t * Math.PI * 2) / 7);
+        reeds.step({
           dt: Math.min(0.05, dtRaw),
           tMs: now,
-          breath: reduced ? 0.5 : 0.5 + 0.5 * Math.sin(t * Math.PI * 2 / 7),
+          breath: breathNow,
+          detail: 1,
+          wind: windX,
+          gravity: 0,
+          agitation,
+          season: 0,
+          timeScale,
+          reducedMotion: reduced,
+        });
+        mats.step({
+          dt: Math.min(0.05, dtRaw),
+          tMs: now,
+          breath: breathNow,
           detail: 1,
           wind: 0,
           gravity: 0,
@@ -986,17 +1267,16 @@ export default function Marsh() {
           reducedMotion: reduced,
         });
         instanceBuffer.reset();
-        population.emit(
-          {
-            width: stage.size.width,
-            height: stage.size.height,
-            tMs: now,
-            breath: reduced ? 0.5 : 0.5 + 0.5 * Math.sin(t * Math.PI * 2 / 7),
-            detail: 1,
-            reducedMotion: reduced,
-          },
-          instanceBuffer,
-        );
+        const emitCtx = {
+          width: stage.size.width,
+          height: stage.size.height,
+          tMs: now,
+          breath: breathNow,
+          detail: 1,
+          reducedMotion: reduced,
+        };
+        reeds.emit(emitCtx, instanceBuffer);
+        mats.emit(emitCtx, instanceBuffer);
         populationLayer?.draw(instanceBuffer);
       }
 
@@ -1016,11 +1296,11 @@ export default function Marsh() {
           const meanO = meanOxygen(state);
           const totalH = totalReedHeight(state);
           const totalM = matTotalMass(state);
-          octx.fillStyle = "rgba(200, 220, 156, 0.6)";
+          octx.fillStyle = "rgba(232, 220, 154, 0.6)";
           octx.fillRect(pad, barY, barW * meanO, 8);
-          octx.fillStyle = "rgba(90, 140, 120, 0.6)";
+          octx.fillStyle = "rgba(74, 122, 138, 0.6)";
           octx.fillRect(pad, barY + 14, barW * clamp01(totalH / MAX_HEIGHT / MAX_REEDS * 5), 8);
-          octx.fillStyle = "rgba(168, 144, 80, 0.6)";
+          octx.fillStyle = "rgba(200, 148, 90, 0.6)";
           octx.fillRect(pad, barY + 28, barW * clamp01(totalM / MAX_MATS), 6);
           octx.font = "300 10px ui-monospace, 'SF Mono', Menlo, monospace";
           octx.textAlign = "left";
@@ -1118,7 +1398,7 @@ export default function Marsh() {
       onGlimmer={() => apiRef.current?.glimmer()}
       onReducedMotion={(on) => apiRef.current?.reduced(on)}
       letGo={{ label: "let the marsh rest", onLetGo: letGo, visible: hasKept }}
-      style={{ position: "fixed", inset: 0, background: "#0a1614" }}
+      style={{ position: "fixed", inset: 0, background: "#0a1a15" }}
     >
       <canvas
         ref={surfaceRef}

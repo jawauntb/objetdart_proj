@@ -55,23 +55,24 @@ domain_lib:
   invariant_type: chain
 
 palette:
-  bg:      "#0a0806"
-  bg2:     "#1c150e"
-  glow:    "#eac47a"
-  accent:  "#84a25a"
-  accent2: "#c07a3a"
+  bg:      "#070504"
+  bg2:     "#3a2a1a"
+  glow:    "#dbc98a"
+  accent:  "#5a8b8b"
+  accent2: "#c8945a"
   ink:     "#efe8dc"
 
 visual_style:
-  subject: "a hand's width of soil in section — a plant crown just above the surface, a directed tree of root nodes extending down through the ground, thin ink-line edges connecting each node to its parent, warm coronas at each tip whose brightness is the local water × sugar"
+  subject: "a hand's width of soil in section — a warm gold-lit plant crown just above the surface, a directed tree of root nodes extending down through humus-brown-to-near-black ground, bold warm capsule edges connecting each node to its parent, a bright glow terminus at every tip, and mycorrhizal patches that concentrate wherever the tree itself is dense"
   form_language: [SDF, value-noise-FBM, ink-line, point-cloud]
   motion_character: drifting
   reference_notes:
-    - "a botanical section illustration: leaf/crown of accent green above the topsoil line, a warm-brown / dark section of ground below, a hand-drawn tree of ink-line roots reaching downward with warm nodes at their tips"
-    - "each node is an SDF disc plus an additive corona whose brightness IS the local water × sugar — invert the corona and you recover the node's live state"
-    - "edges are thin dark ink-lines (signed-distance to a straight segment between parent and child); no per-frame gradient allocation — the tree is drawn shader-side from a uniform of node positions and parent indices"
+    - "a botanical section illustration: an olive-gold crown mixed from the warm and cool named registers above the topsoil line, a warm humus brown deepening to near-black ground below with real top-to-bottom contrast, a hand-drawn tree of bold warm-toned roots reaching downward with a bright glow node at every tip"
+    - "each tip is drawn twice in one instanced pass: a capsule edge from its parent (warmed root-brown → gold by local water × sugar flow) and a bright terminus (glow core, root-brown body ring, faint cool-moisture halo) — invert either and you recover the tip's live state"
+    - "the ground itself carries three grain scales (coarse clods, fine mineral speckle, a cool moisture-band FBM) plus a mycorrhizal glow masked by the same root-density field the edges are drawn from — nothing painted independent of the physics"
+    - "no per-frame gradient allocation — the tree and its edges are drawn shader-side, the field from a uniform of node positions and parent indices, the population from one instanced capsule-and-terminus pass"
   mood: "patient, exploratory, quiet — the network is hunting water in the dark, the plant above is patient, the whole thing breathes slowly"
-  gesture_feedback_style: "a tap rings a tip at its depth (pitch = ringHzFor(y)); a dwell recruits a new tip whose corona brightens as it draws water up and sugar down; the ceremony seals the tip as a mature branch point (kept between visits); a hard knock dislodges every unsealed tip below a water threshold — the room's touch-reachable secret"
+  gesture_feedback_style: "a tap rings a tip at its depth (pitch = ringHzFor(y)); a dwell recruits a new tip whose terminus brightens as it draws water up and sugar down; the ceremony seals the tip as a mature branch point (kept between visits); a hard knock dislodges every unsealed tip below a water threshold — the room's touch-reachable secret"
 
 verbs_answered:
   - tap
@@ -172,22 +173,31 @@ life:
 
 shader_intent: >
   paint one hand-width of soil in section, seen from the front. the upper
-  strip is the plant crown — an accent-green mass above the surface,
-  breathing on the 7s clock. the surface at y ≈ 0.14 is a horizontal line;
-  below it the soil column deepens from bg2 at the top to bg near bedrock.
-  every root node is drawn as an SDF disc with an additive corona through
-  the shared instanced pass; each corona's brightness IS water × sugar so
-  from the halo alone you recover the node's live state. edges between
-  nodes are painted shader-side from a uNodes[24] uniform (xy, growth,
-  water*sugar) and a companion uNodesB[24] uniform (parent xy, sealed,
-  phase) and rendered as thin dark ink-lines using signed-distance to a
-  straight segment. no createRadialGradient, no per-frame allocation.
-  the soil column carries a low-frequency fbm mineral bloom modulated by
-  uSoilWater (a uniform in [0, 1] the drag3 verb writes). ripple
-  wavefronts from taps and flicks propagate through the soil as gaussian
-  rings. palette registers: bg = deep soil dark, bg2 = mid-soil brown,
-  glow = sunlit surface highlight, accent = green plant crown, accent2 =
-  warm mineral rust, ink = readable text over the darkest tile. the
+  strip is the plant crown — an olive-gold mass mixed from glow (warm) and
+  accent (cool) above the surface, breathing on the 7s clock. the surface
+  at y ≈ 0.14 is a horizontal line; below it the soil column deepens from
+  bg2 (warm humus, distinct from bg) at the top to bg (near-black) near
+  bedrock, textured with three fbm grain scales (coarse clods, fine
+  mineral speckle) plus a cool accent-tinted moisture-band fbm that rides
+  uClimate.z (soilWater). every root edge is painted shader-side from a
+  uNodes[24] uniform (xy, growth, water*sugar) and a companion uNodesB[24]
+  uniform (parent xy, sealed, phase), rendered as bold accent2 ink-lines
+  (signed-distance to a straight segment, a sharp 1.35x falloff so the
+  boundary reads on a Sobel pass) with a glow highlight riding water*sugar.
+  the same per-node loop accumulates a density field (gaussian sum of
+  distance-to-every-edge) that drives a mycorrhizal accent2 fbm patch —
+  concentrated exactly where the tree is thick, never painted independent
+  of the physics. the population layer (one instanced pass, custom frag)
+  draws two shapes per tip: a capsule edge from parent to child (half-width
+  normalized by its own half-length so felt thickness stays constant
+  regardless of edge length, tapered by generation) and a bright terminus
+  (glow core, accent2 body, faint accent halo) whose brightness IS water ×
+  sugar — invertible either way. no createRadialGradient, no per-frame
+  allocation. ripple wavefronts from taps and flicks propagate through the
+  soil as gaussian rings tinted accent. palette registers: bg = deep
+  subsoil dark, bg2 = warm humus brown, glow = plant crown / root-tip
+  light, accent = cool moisture register, accent2 = warm root /
+  mycorrhizal register, ink = readable text over the darkest tile. the
   twist lens is a second render path: mean water, mean sugar, total root
   length, tips count, sealed count, and mean pitch.
 

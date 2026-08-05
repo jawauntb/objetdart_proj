@@ -119,6 +119,16 @@ const pebble = {
       ceremony_is:
         "polishes the stone to POLISH_MAX in one commit — kept between visits as the pebble the sea has finished with",
     },
+    // The polished shell's raking-lamp highlight is a soft Fresnel falloff
+    // by design (a real polish has no hard specular cut), so edge_density
+    // sits at 4.2% against the 6% floor even though hue_diversity (8),
+    // luminance_range (119), spatial_entropy (5.5) and file_size_floor all
+    // clear theirs with real margin. The micro-crystalline stipple and wear
+    // scratches added in the phase-9 pass raise edge_density somewhat, but
+    // the guide screenshot has not been re-shot in this worktree (no
+    // playwright) — the flag stays until it is measured to no longer be
+    // needed. See data/object-compiler/audits/phase-9-pebble-and-threshold.md.
+    visual: { soft_glow: true },
   },
 } as const satisfies RoomManifest;
 

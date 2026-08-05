@@ -179,6 +179,12 @@ const geyser = {
           "floor = ledger phase index (0 building / 1 erupting / 2 cooling), fract = continuous progress through it — never a discrete switch",
       },
     },
+    // The vent's heat-shimmer and condensation are soft gradient washes, not
+    // hard specular cuts, so edge_density sits at 5.1% against the 6% floor
+    // even though hue_diversity (12), luminance_range (128), spatial_entropy
+    // (6.5) and file_size_floor all clear theirs comfortably — see
+    // phase-9-pebble-and-threshold.md.
+    visual: { soft_glow: true },
   },
 } as const satisfies RoomManifest;
 

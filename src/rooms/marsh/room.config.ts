@@ -30,11 +30,11 @@ const marsh = {
     path: "/marsh",
     shortName: "marsh",
     kind: "aphros",
-    bg: "#0a1614",
-    bg2: "#153228",
-    glow: "#c8dc9c",
-    accent: "#5a8c78",
-    accent2: "#a89050",
+    bg: "#0a1a15",
+    bg2: "#3a2818",
+    glow: "#e8dc9a",
+    accent: "#4a7a8a",
+    accent2: "#c8945a",
     ink: "#e8eee0",
   },
   guide: {
@@ -85,6 +85,18 @@ const marsh = {
             "LetGo"
           ],
           implementation_hint: "SceneObjectSpec"
+        },
+        {
+          noun: "biofilm mat",
+          max_count: 8,
+          state_shape: "id, x, y, mass (0..1), phase seed",
+          lifecycle: "seeded at initState (plantMat) → mass tracks the biofilm density field, consuming oxygen from its neighborhood on the closed-form advance → retires via <LetGo> (whole marsh)",
+          persistence: "LetGo",
+          creates_via_verb: "(automatic — seeded at initState, not hand-planted)",
+          retires_via: [
+            "LetGo"
+          ],
+          implementation_hint: "SceneObjectSpec"
         }
       ]
     },
@@ -117,7 +129,8 @@ const marsh = {
     make_unmake: {
       letgo_clears_population: true,
       ceremony_is: "sealing the reed at full height — the mature stand persists between visits and lets the biofilm around it settle into equilibrium"
-    }
+    },
+    visual: { soft_glow: true },
   },
 } as const satisfies RoomManifest;
 
