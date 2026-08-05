@@ -221,6 +221,193 @@ export function mulberry(seed: number): () => number {
   };
 }
 
+// ——— regulars — identity densifies from role into small community ————————
+//
+// A store answers food, but a store that a person visits often answers *their*
+// food — the plot's identity is the causal history of who kept coming back.
+// After `REGULAR_VISITS_TO_BECOME_REGULAR` returns, a person is a regular at
+// that plot, and the plot's pull on that person grows by `REGULAR_PULL_FACTOR`
+// (a farther regular store is chosen over a nearer stranger's, up to but not
+// past the factor). The map does not need to store anything about the plots
+// — the community lives on the people, and a plot's regulars are counted by
+// how many people carry the plot as their regular slot.
+
+/** How many arrivals at the same plot before a person is a regular there. */
+export const REGULAR_VISITS_TO_BECOME_REGULAR = 3;
+
+/**
+ * Effective-distance shrink factor for a person's own regular plot. A regular
+ * store 1.5× farther than a stranger's is still preferred; a regular store
+ * 2× farther is not. The value is deliberately modest: regulars deepen the
+ * city, they do not distort geography.
+ */
+export const REGULAR_PULL_FACTOR = 1.6;
+
+/**
+ * A per-need visit ledger for one person. `plotId` is the plot they last
+ * arrived at for this need; `visits` is how many times in a row they arrived
+ * at *that same* plot. A different plot resets to 1 — a regular is a habit,
+ * not a lifetime count.
+ */
+export type VisitRecord = {
+  plotId: number;
+  visits: number;
+};
+
+/**
+ * Called once when a person arrives at a plot answering some need. Returns
+ * the new record. Same plot as last time → count deepens; different plot →
+ * the habit resets and the ledger begins again with `visits: 1`.
+ */
+export function recordVisit(current: VisitRecord | null, plotId: number): VisitRecord {
+  if (!current || current.plotId !== plotId) return { plotId, visits: 1 };
+  return { plotId, visits: current.visits + 1 };
+}
+
+/** True when this record's visit count has crossed the regular threshold. */
+export function isRegularOf(record: VisitRecord | null, plotId: number): boolean {
+  if (!record) return false;
+  return record.plotId === plotId && record.visits >= REGULAR_VISITS_TO_BECOME_REGULAR;
+}
+
+/**
+ * Effective squared distance under the regular-pull rule. A plot the person
+ * is a regular at reads as closer than it is; every other plot reads as
+ * itself. Working in squared distances lets callers keep a hot inner loop
+ * with no `sqrt`.
+ */
+export function effectiveDistanceSq(d2: number, regular: boolean): number {
+  return regular ? d2 / (REGULAR_PULL_FACTOR * REGULAR_PULL_FACTOR) : d2;
+}
+
+/**
+ * Like `targetForNeed`, but honors a person's regular slot. The signature
+ * takes the plot id (or `null`) rather than the full record so the caller can
+ * decide per-need which regular to consult — the store one for food, the
+ * event one for gathering. Rest still routes to the person's home, unchanged.
+ */
+export function targetForNeedWithRegular(
+  person: Pick<PersonSample, "x" | "y" | "homeId">,
+  need: Need,
+  plots: readonly PlotSample[],
+  regularPlotId: number | null,
+): PlotSample | null {
+  if (need === "rest") {
+    return plots.find((p) => p.id === person.homeId) ?? null;
+  }
+  const wanted = need === "food" ? "store" : "event";
+  let best: PlotSample | null = null;
+  let bestEff = Infinity;
+  for (const plot of plots) {
+    if (plot.role !== wanted) continue;
+    const dx = plot.x - person.x;
+    const dy = plot.y - person.y;
+    const d2 = dx * dx + dy * dy;
+    const eff = effectiveDistanceSq(d2, plot.id === regularPlotId);
+    if (eff < bestEff) {
+      bestEff = eff;
+      best = plot;
+    }
+  }
+  return best;
+}
+
+// ——— arrival — a phased arc, edge → home → belonging —————————————————————
+//
+// A newly-spawned dweller does not blink into existence at their front door;
+// they walk in from the nearest edge of the map. The arrival phase is short
+// (a single trip home) but visible — the whole point of density-as-engine is
+// that arrivals *manufacture* the possibility of the next encounter. Once
+// they reach home the first time, they are "settled" and the ordinary need
+// cycle takes over.
+
+/** Person phase — a small state machine. Arriving people cannot yet gather. */
+export type PersonPhase = "arriving" | "settled";
+
+export type Vec2 = { x: number; y: number };
+
+/**
+ * The nearest map-edge point to `target` in the unit square. Used to spawn
+ * new dwellers: they enter from the closest edge and walk toward their home.
+ * The rule is deliberately geometric — no randomness, no rolls — so a home
+ * on the north end always births people who arrive from the north.
+ */
+export function nearestEdgePoint(target: Vec2): Vec2 {
+  const dLeft = target.x;
+  const dRight = 1 - target.x;
+  const dTop = target.y;
+  const dBot = 1 - target.y;
+  const min = Math.min(dLeft, dRight, dTop, dBot);
+  if (min === dLeft) return { x: 0, y: target.y };
+  if (min === dRight) return { x: 1, y: target.y };
+  if (min === dTop) return { x: target.x, y: 0 };
+  return { x: target.x, y: 1 };
+}
+
+// ——— heading — the person faces where they are going ————————————————————
+//
+// v1 people were 2.4px black dots. Dots point nowhere. A heading gives every
+// person a facing angle, and the renderer draws them as tiny slivers along
+// that angle so a street of walkers reads as a street of directed walkers.
+// The heading lags one frame — it is a function of the previous position and
+// the new one — and falls back to whatever the last angle was when the step
+// is too small to measure a direction.
+
+export function headingFor(prev: Vec2, cur: Vec2, fallback: number): number {
+  const dx = cur.x - prev.x;
+  const dy = cur.y - prev.y;
+  if (dx * dx + dy * dy < 1e-10) return fallback;
+  return Math.atan2(dy, dx);
+}
+
+// ——— hesitation — two needs, two plots, one slower step ——————————————————
+//
+// Density manufactures tradeoffs. If a person's need can be answered by two
+// plots at nearly the same distance, they hesitate: their next step is slower
+// and their route is unstable — one visit they aim at A, the next at B. The
+// visible slowdown is what the eye reads as choice. The ratio threshold
+// (`HESITATION_RATIO_THRESHOLD`) is measured in linear distance, not squared,
+// because "nearly the same distance" is a linear concept.
+
+export const HESITATION_RATIO_THRESHOLD = 1.2;
+export const HESITATION_SPEED_FACTOR = 0.45;
+
+/**
+ * When a person's current need has more than one plot able to answer it and
+ * the two nearest are within `HESITATION_RATIO_THRESHOLD` of each other,
+ * return `{ hesitating: true, secondBestId }` — the caller can slow the
+ * person's step, swap the target to the alternate, or both. Rest never
+ * hesitates: home is unique.
+ */
+export function hesitationBetween(
+  person: Pick<PersonSample, "x" | "y">,
+  need: Need,
+  plots: readonly PlotSample[],
+): { hesitating: boolean; secondBestId: number | null } {
+  const wanted = need === "food" ? "store" : need === "gather" ? "event" : null;
+  if (!wanted) return { hesitating: false, secondBestId: null };
+  let d1 = Infinity;
+  let d2 = Infinity;
+  let id1: number | null = null;
+  let id2: number | null = null;
+  for (const p of plots) {
+    if (p.role !== wanted) continue;
+    const dd = (p.x - person.x) ** 2 + (p.y - person.y) ** 2;
+    if (dd < d1) {
+      d2 = d1;
+      id2 = id1;
+      d1 = dd;
+      id1 = p.id;
+    } else if (dd < d2) {
+      d2 = dd;
+      id2 = p.id;
+    }
+  }
+  if (!Number.isFinite(d2) || d1 <= 0) return { hesitating: false, secondBestId: null };
+  const ratio = Math.sqrt(d2 / d1); // linear ratio of distances
+  return { hesitating: ratio < HESITATION_RATIO_THRESHOLD, secondBestId: id2 };
+}
+
 // ——— season ————————————————————————————————————————————————————————————
 
 export const SEASON_ORDER: readonly Season[] = ["spring", "summer", "fall", "winter"];
