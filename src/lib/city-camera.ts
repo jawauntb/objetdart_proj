@@ -88,6 +88,30 @@ export function lookYForZoom(zoom01: number): number {
   return 0.3 + 6.5 * z;
 }
 
+/**
+ * The pitch cliff runs from `pitchForZoom(0)` (78°) to `pitchForZoom(1)` (8°).
+ * `pitch01` normalises the *current* pitch onto that range so a post-process
+ * pass can rank the frame as "bird's-eye" vs "eye-level" without having to
+ * know the specific degree values or reimplement the coupling curve.
+ *
+ *   pitch01 = 0  → eye-level  (photoreal SF/London skyline read)
+ *   pitch01 = 1  → bird's-eye (Currier & Ives model-scale read)
+ *
+ * The brief's Bokeh DOF pass rides this: at bird's-eye we WANT the diorama
+ * blur, at eye-level we want none. A sharp threshold would judder as the
+ * spring settled, so callers should smoothstep over pitch01, not step it.
+ */
+export const PITCH_MIN_RAD = pitchForZoom(1);
+export const PITCH_MAX_RAD = pitchForZoom(0);
+
+export function pitch01ForZoom(zoom01: number): number {
+  const p = pitchForZoom(zoom01);
+  const span = PITCH_MAX_RAD - PITCH_MIN_RAD;
+  if (span <= 0) return 0;
+  const t = (p - PITCH_MIN_RAD) / span;
+  return t < 0 ? 0 : t > 1 ? 1 : t;
+}
+
 export type CityCamera = {
   /** The Three.js camera instance. Add to no scene; pass to RenderPass. */
   camera: THREE.PerspectiveCamera;
@@ -100,6 +124,12 @@ export type CityCamera = {
   currentZoom(): number;
   /** The target zoom value (what the spring is chasing). */
   targetZoom(): number;
+  /** Current pitch in [0..1] where 0 = eye-level (near-horizon) and
+   * 1 = bird's-eye (near-nadir). Consumed by post-process passes that
+   * want to ramp on the bird's-eye read (Bokeh DOF, the Currier &
+   * Ives color grade later). Read from the *eased* zoom so a fast
+   * pinch feels like the DOF rides the spring, not the intent. */
+  pitch01(): number;
   /** Set the orbit angle target in radians (yaw around Y axis). */
   setOrbit(a: number): void;
   /** Pan the camera's target on the ground plane by (dx, dz) world units.
@@ -176,6 +206,9 @@ export function createCityCamera(opts: CityCameraOptions): CityCamera {
     },
     targetZoom() {
       return zoomTarget;
+    },
+    pitch01() {
+      return pitch01ForZoom(zoomCurrent);
     },
     setOrbit(a: number) {
       orbitTarget = a;

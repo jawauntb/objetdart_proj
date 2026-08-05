@@ -1983,7 +1983,10 @@ export default function City() {
       // strength / radius ride the same dayFraction the shaders do — the
       // ember rises as the sun sets. Tier gates the bloom entirely on
       // low/sleep so slow devices keep hitting frame budget.
-      composer.render(df, tier);
+      // pitch01 rides the eased camera pitch — the composer's Bokeh DOF
+      // ramps in as the frame climbs toward bird's-eye. SSAO is tier-gated
+      // inside the composer, so we don't touch it here.
+      composer.render(df, tier, cityCam.pitch01());
       drawOverlay();
       raf = requestAnimationFrame(tick);
     };
