@@ -950,6 +950,17 @@ export default function City() {
   // The hint fades once the visitor has planted anything.
   const hintRef = useRef<HTMLDivElement | null>(null);
   const [hasKept, setHasKept] = useState(false);
+  // Emergency fallback flag. Flipped by the try/catch that wraps the setup
+  // effect below when construction throws. Renders the wrap div's dawn
+  // CSS gradient without the WebGL canvas over it, so a visitor whose
+  // browser cannot mount the pipeline still sees a sky, never black.
+  const [setupFailed, setSetupFailed] = useState(false);
+  // Kept `false` until the tick loop lands its FIRST composer.render(),
+  // then flipped `true` so the WebGL canvas is revealed in the JSX. Until
+  // then the wrap div's dawn CSS gradient is what the visitor sees — no
+  // grey-canvas flash while shaders compile, no black-forever if the tab
+  // was hidden at mount.
+  const [firstFramePainted, setFirstFramePainted] = useState(false);
   const letGo = () => {
     try { window.dispatchEvent(new Event("letgo")); } catch { /* noop */ }
     setHasKept(false);
@@ -964,6 +975,19 @@ export default function City() {
     const fgctxMaybe = fg.getContext("2d");
     if (!fgctxMaybe) return;
     const fgctx: CanvasRenderingContext2D = fgctxMaybe;
+
+    // Emergency /city fix (fix/city-first-frame-emergency): the setup below
+    // constructs ~30 heavy GPU modules in one synchronous block, any of
+    // which can throw on a device that fails WebGL2 context creation,
+    // shader compilation, or float-texture extension probing. Before this
+    // guard a throw here left the wrap div showing its own dark background
+    // and the visitor saw black forever. Now: any exception during setup
+    // flips `setupFailed`, the wrap paints a dawn gradient via state, and
+    // the canvas gets `display: none` so the CSS is what the visitor sees.
+    // The outer `return` still fires the cleanup the setup captured before
+    // it threw.
+    let cleanup: (() => void) | null = null;
+    try {
 
     // ── quality / dpr ────────────────────────────────────────────────────
     const embedded = window.self !== window.top;
@@ -2181,13 +2205,72 @@ export default function City() {
     const offVisibility = onVisibility((hidden) => { docHidden = hidden; applyPause(); });
     const offGallery = onGalleryPause((paused) => { galleryPaused = paused; applyPause(); });
 
+    // ── progressive enablement (emergency /city fix) ────────────────────
+    // Before the tick loop starts, we HIDE every heavy world-scene mesh
+    // and force EVERY composer post-processing pass off. Frame 1 renders
+    // only: the Preetham sky mesh, the ground plane, the plot instanced
+    // meshes on the skyline scene, and one directional-sun light — the
+    // minimum GPU work needed to put a sky-and-buildings picture on the
+    // canvas. The prior code compiled bloom + SSAO + Bokeh + god-rays +
+    // volumetric clouds + water reflector + backdrop dome + cascade
+    // shadow shaders all on the SAME `composer.render()` call, which
+    // spun the main thread past 45 s and iOS Safari killed the page.
+    //
+    // Then each subsequent frame runs one step from `progressiveSteps`
+    // — un-hiding one heavy mesh or re-opening one composer pass gate —
+    // so shader compilation is amortised across ~30 frames instead of
+    // one megaframe. The visitor sees a sky within ~200 ms and the
+    // full pipeline arrives smoothly across the next ~500 ms.
+    cityClouds.mesh.visible = false;
+    citySunDisk.mesh.visible = false;
+    backdropDome.group.visible = false;
+    skylineRing.group.visible = false;
+    infill.group.visible = false;
+    traffic.group.visible = false;
+    pedestrians.group.visible = false;
+    composer.setPassGates({
+      bloom: false,
+      ssao: false,
+      dof: false,
+      godrays: false,
+      water: false,
+    });
+    // Each step runs on ONE tick, in order. Ordered by rough cost to
+    // amortise the heaviest shader compiles first (clouds raymarch, water
+    // reflector, backdrop dome). Kept declarative so a future edit that
+    // adds another heavy module can slot itself in without touching the
+    // tick loop's control flow.
+    const progressiveSteps: Array<() => void> = [
+      () => { infill.group.visible = true; },
+      () => { skylineRing.group.visible = true; },
+      () => { backdropDome.group.visible = true; },
+      () => { cityClouds.mesh.visible = true; },
+      () => { citySunDisk.mesh.visible = true; },
+      () => { traffic.group.visible = true; },
+      () => { pedestrians.group.visible = true; },
+      () => { composer.setPassGates({ water: true }); },
+      () => { composer.setPassGates({ bloom: true }); },
+      () => { composer.setPassGates({ ssao: true }); },
+      () => { composer.setPassGates({ godrays: true }); },
+      () => { composer.setPassGates({ dof: true }); },
+    ];
+    let progressiveIdx = 0;
+
     // ── frame loop ──────────────────────────────────────────────────────
     let stopped = false;
     let raf = 0;
     let slowWake: ReturnType<typeof setTimeout> | null = null;
+    // Guarantee that the FIRST tick renders regardless of docHidden /
+    // galleryPaused. The bug was: `document.hidden` reads true at mount
+    // on a background tab or during mobile navigation transition, the
+    // tick's early-return took the pause path forever, and when the tab
+    // came forward the slow-wake tick was already at the pause branch —
+    // never rendered. `hasEverRendered` inverts the guard so the pause
+    // path is only taken AFTER at least one successful frame has landed.
+    let hasEverRendered = false;
     const tick = (now: number) => {
       if (stopped) return;
-      if (docHidden || galleryPaused) {
+      if ((docHidden || galleryPaused) && hasEverRendered) {
         slowWake = setTimeout(() => { raf = requestAnimationFrame(tick); }, 250);
         return;
       }
@@ -2549,6 +2632,30 @@ export default function City() {
       // through the horizon-crossing window — R10-7.
       composer.render(df, tier, cityCam.pitch01(), sunScreen, volFog);
       drawOverlay();
+      // Emergency /city fix: on the FIRST successful composer.render() we
+      // reveal the WebGL canvas. Until this frame the JSX renders the
+      // canvas at `display: none` and the wrap div's dawn CSS gradient
+      // is what the visitor sees — so a still-compiling shader can never
+      // present a black canvas. Once we know we have pixels, we flip the
+      // React state so the canvas renders on top of the gradient.
+      if (!hasEverRendered) {
+        hasEverRendered = true;
+        try { setFirstFramePainted(true); } catch { /* noop */ }
+      }
+      // Advance the progressive-enablement schedule by one step per
+      // frame. Each step un-hides one heavy mesh or re-opens one composer
+      // pass gate, so the shader compilations that used to land in a
+      // single megaframe are spread across ~12 frames (~200 ms at 60 Hz).
+      if (progressiveIdx < progressiveSteps.length) {
+        const step = progressiveSteps[progressiveIdx++];
+        try { step(); } catch (err) {
+          // A step throw would be catastrophic — one heavy module failed
+          // to accept its own visibility flip. Log and skip; the room
+          // stays alive with whatever finished lighting up before.
+          // eslint-disable-next-line no-console
+          console.error("[city:progressive]", err);
+        }
+      }
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
@@ -3386,7 +3493,7 @@ export default function City() {
       }
     }, 125);
 
-    return () => {
+    cleanup = () => {
       stopped = true;
       if (raf) cancelAnimationFrame(raf);
       if (slowWake) clearTimeout(slowWake);
@@ -3458,6 +3565,22 @@ export default function City() {
       cityGround.dispose();
       renderer.dispose();
     };
+    } catch (err) {
+      // Any exception before the tick loop or during heavy module
+      // construction lands here. We surface a `[city:setup]` line to
+      // the console (production logs), flip the fallback state so the
+      // wrap div paints the dawn gradient, and fall through to the
+      // outer cleanup return — which will call `cleanup()` if any
+      // partial cleanup was captured, or be a noop.
+      // eslint-disable-next-line no-console
+      console.error("[city:setup]", err);
+      setSetupFailed(true);
+    }
+    return () => {
+      if (cleanup) {
+        try { cleanup(); } catch { /* noop — teardown must not throw */ }
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -3471,11 +3594,32 @@ export default function City() {
         inset: 0,
         touchAction: "none",
         overflow: "hidden",
-        background: "#0e0f13",
+        // Dawn-sky CSS gradient as the wrap's own background. Two jobs:
+        // (1) painted BEFORE any WebGL canvas mounts, so navigation from
+        // another route lands the visitor on a sky, never on the old
+        // `#0e0f13` grey the previous version showed while shaders
+        // compiled; (2) the fallback the visitor sees when `setupFailed`
+        // hides the WebGL canvas — so a device that cannot mount the
+        // pipeline still shows dawn colors, never black-forever.
+        background:
+          "linear-gradient(180deg, #23244b 0%, #4a4374 22%, #a06c85 55%, #f0b18a 82%, #f8d8b0 100%)",
         outline: "none",
       }}
     >
-      <canvas ref={glCanvasRef} style={{ position: "absolute", inset: 0, display: "block" }} />
+      <canvas
+        ref={glCanvasRef}
+        style={{
+          position: "absolute",
+          inset: 0,
+          // Canvas starts hidden. The tick loop flips `firstFramePainted`
+          // to `true` on the FIRST successful `composer.render()` call so
+          // a still-compiling shader can never present a black frame over
+          // the wrap's dawn gradient. When `setupFailed` is true (setup
+          // threw before the first render) the canvas stays hidden and
+          // the gradient is what the visitor sees.
+          display: !setupFailed && firstFramePainted ? "block" : "none",
+        }}
+      />
       <canvas ref={fgCanvasRef} style={{ position: "absolute", inset: 0, pointerEvents: "none" }} />
       {/* Night veil — face-down flips this from transparent to a deep dusk
           across the whole field. The shader already dims the ground; this
