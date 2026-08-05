@@ -77,6 +77,7 @@ import {
 } from "@/lib/city-camera";
 import { createSkylineScene, type SkylineScene } from "@/lib/city-geometry";
 import { createCityGround, type CityGround } from "@/lib/city-ground";
+import { createCityInfill, type CityInfill } from "@/lib/city-infill";
 import {
   createCityWater,
   type CityWater,
@@ -1186,6 +1187,28 @@ export default function City() {
     // in the tick loop keeps the skyline scene pointed at the fresh one.
     skyline.setEnvironment(citySky.environment);
 
+    // ── background infill ring ──────────────────────────────────────────
+    // Six hundred hex-jittered extruded silhouettes fill the annulus
+    // beyond the plot disk (r=90..500 m) so the horizon reads as MORE
+    // city instead of empty sky. Deterministic per cityGroundSeed —
+    // remounts of the same visit produce the same skyline. One
+    // InstancedMesh, one draw call, tier-gated (high=600, medium=300,
+    // low=0). The emissive-per-instance shader hook shares the same
+    // dusk curve the plot facades ride, so at dusk the whole horizon
+    // lights up window by window on the same clock as the plots.
+    //
+    // Attached to skyline.scene so it shares the world scene's fog
+    // (dissolving the ring into the sky at the horizon), the PMREM sky
+    // IBL (reflections match the plots), the sun's PCF shadows, and
+    // the composer's bloom pass (dusk emissive → ember halos).
+    const infill: CityInfill = createCityInfill({
+      seed: cityGroundSeed ^ 0x1c17f11,
+      shadows: true,
+    });
+    infill.setEnvironment(citySky.environment);
+    infill.setTier(governor.tier());
+    skyline.scene.add(infill.group);
+
     // ── perspective camera (coupled zoom+pitch) ─────────────────────────
     // One camera drives both the world sky pass and the skyline pass.
     // Pinch travels a shared zoom scalar; pitch and distance ride the
@@ -2072,6 +2095,10 @@ export default function City() {
       if (renderer.shadowMap.enabled !== shadowsOn) {
         renderer.shadowMap.enabled = shadowsOn;
         skyline.setShadows(shadowsOn);
+        // The infill ring's 600 boxes cast shadows onto the ground the
+        // plot skyline does; the same tier gate that turns off the sun
+        // PCF PCF for the plot scene turns it off for the ring.
+        infill.setShadows(shadowsOn);
       }
       // Sun + sky are driven by the world scene's citySun/citySky below;
       // the skyline's own hemi/sun/ambient are held at intensity 0 so the
@@ -2112,6 +2139,14 @@ export default function City() {
       // rides the same dayFraction the sky does. Setting it every frame is
       // cheap (the atlas redraw is behind its own 24-slot change detector).
       skyline.setDayFrac(df);
+      // The horizon infill ring lives on the same day. Setting the
+      // day fraction ramps its material.emissiveIntensity through the
+      // dusk curve (0 at noon, 1.6 at midnight); the per-instance
+      // aEmit shader attribute distributes the glow so some silhouettes
+      // light early and some hold dark. Tier flip resizes mesh.count
+      // in one scalar assignment — no rebuild on transitions.
+      infill.setDayFrac(df);
+      infill.setTier(tier);
       if (Math.floor(df * 64) !== lastSkySlot) {
         lastSkySlot = Math.floor(df * 64);
         // The environment texture identity changes on each PMREM re-run;
@@ -2120,6 +2155,10 @@ export default function City() {
         // event tower's iridescence + transmission reads flat.
         worldScene.environment = citySky.environment;
         skyline.setEnvironment(citySky.environment);
+        // The horizon infill ring rides the same IBL so its rooftops
+        // catch the current sky's reflected light — the ring reads as
+        // the SAME city as the plot skyline, not a separate diorama.
+        infill.setEnvironment(citySky.environment);
         worldFog.color.copy(fogColorFromSky(citySky.currentState));
         // Shadow-map allocation follows the current tier. Cheap on
         // matched tiers — only reallocates on transitions.
@@ -3068,6 +3107,11 @@ export default function City() {
       // Skyline scene holds the box geometry, its PBR material, the ground
       // plane, and the sun's shadow map. Drop them before the renderer
       // that owns their GL context.
+      // Infill ring holds one InstancedMesh + BoxGeometry + one
+      // MeshStandardMaterial + the aEmit InstancedBufferAttribute.
+      // Drop it before the skyline so the group.remove(mesh) call lands
+      // on a scene that still exists.
+      infill.dispose();
       skyline.dispose();
       // The harbour holds the Reflector's RT + its own material graph and
       // the layer-1 proxy meshes. Dispose it before the composer so the
