@@ -396,6 +396,10 @@ const GROUND_FRAG = /* glsl */`
   uniform float uNight;        // 0..1, face-down veil (adds a cold cast)
   uniform int   uLens;         // 0=map, 1=hydrology, 2=satisfaction
   uniform float uAspect;       // width / height
+  // The shared 7s breath, 0..1. Held at 0.5 in reduced motion so the ground
+  // is still under prefers-reduced-motion. Every room in the album rides
+  // the same clock so a visitor walking between rooms feels one rhythm.
+  uniform float uBreath;
 
   // small hash / value noise — enough to build soil grain and puddle noise
   // without pulling in a whole 4th-order pnoise; the settlement is a soft
@@ -485,6 +489,12 @@ const GROUND_FRAG = /* glsl */`
     float veinFlow = smoothstep(0.05, 0.02, abs(vein - 0.52));
 
     vec3 soil = soilBase * (0.78 + soilN * 0.34);
+    // ── the 7s breath, one of three registers the shader rides ──
+    // The soil grain lightens and dims by ±6% on the shared clock — small
+    // enough to read as the ground being alive, not as a pulse. Coin, Stars,
+    // Reef, Spring, and Geyser all ride the same clock so a visitor walking
+    // between rooms never leaves it.
+    soil *= (0.94 + 0.06 * uBreath);
     // a bit of moss / growth where the ground is fed — spring/summer stronger
     float growth = smoothstep(0.35, 0.7, fbm(auv * 2.5 + 8.0)) * (0.6 - clamp(s / 3.0, 0.0, 0.55));
     soil = mix(soil, growthTint, growth * 0.55);
@@ -513,11 +523,16 @@ const GROUND_FRAG = /* glsl */`
     // ── sky: daytime sky above, night sky at low sun, an ember at the horizon
     //    at dusk (sun setting) and again at dawn (sun rising, weakly).
     vec3 sky = mix(skyNight, skyDay, clamp(sh + 0.35, 0.0, 1.0));
-    // horizon ember — a thin warm band that peaks near dawn/dusk
+    // second register of the 7s breath: the sky brightens by ±6% on the same
+    // clock as the soil, so the whole field breathes as one body.
+    sky *= (0.96 + 0.06 * uBreath);
+    // horizon ember — a thin warm band that peaks near dawn/dusk. Third
+    // register of the breath: the ember swells by ±15%, the biggest read of
+    // the three, because dawn and dusk are the settlement's most alive hour.
     float ember = exp(-pow((uv.y - horizon)/0.045, 2.0)) * (1.0 - clamp(abs(uDayFrac - 0.5) * 4.0, 0.0, 1.0));
     // a second (weaker) ember at dawn
     ember += 0.55 * exp(-pow((uv.y - horizon)/0.06, 2.0)) * (1.0 - clamp(abs(uDayFrac) * 4.0, 0.0, 1.0));
-    sky += vec3(0.60, 0.22, 0.10) * ember;
+    sky += vec3(0.60, 0.22, 0.10) * ember * (0.85 + 0.15 * uBreath);
 
     // ── wind: slight horizontal streaking of the sky, more when uWind is
     //    large. A wind-blown sky reads as weather in motion — the settlement
@@ -780,6 +795,9 @@ export default function City() {
       uNight:   { value: 0 },
       uLens:    { value: 0 },
       uAspect:  { value: 1 },
+      // The 7s breath. Written every frame in the tick loop; held at 0.5 in
+      // reduced motion so the ground is still under prefers-reduced-motion.
+      uBreath:  { value: 0.5 },
     };
     const groundMat = new THREE.ShaderMaterial({
       depthTest: false,
@@ -917,6 +935,49 @@ export default function City() {
     const heldArrows = { up: false, down: false, left: false, right: false };
     let keyboardHolding = false;
 
+    // ── idle glimmer ────────────────────────────────────────────────────
+    // AGENTS.md: "glimmering physically after ~20s idle, never with text."
+    // A glimmer is a soft ring drawn over one plot (or, in an empty city, a
+    // patch near the horizon) that fades over one breath. Picked
+    // deterministically off cityTimeMs so the same idle produces the same
+    // glimmer — the settlement's own reminder that it is still alive.
+    const IDLE_GLIMMER_MS = 20000;
+    const GLIMMER_DURATION_MS = 3500;
+    let lastInteractionAt = performance.now();
+    let lastGlimmerAt = 0;
+    // `glimmerAt` carries the current glimmer's normalized center and the
+    // wall-clock time it started. Null between glimmers. Read by the overlay.
+    let glimmerAt: { nx: number; ny: number; startedAt: number } | null = null;
+    const markInteraction = (): void => {
+      lastInteractionAt = performance.now();
+      glimmerAt = null;
+    };
+    const maybeGlimmer = (now: number): void => {
+      if (glimmerAt) return;
+      if (now - lastInteractionAt < IDLE_GLIMMER_MS) return;
+      // Only fire one glimmer per idle stretch; another must wait for the
+      // clock to advance past the last one plus a full breath.
+      if (now - lastGlimmerAt < IDLE_GLIMMER_MS) return;
+      // Deterministic pick — sealed plots first (they are the settlement's
+      // kept things and deserve the light), else any plot, else a horizon
+      // patch. Coin/Spring both use the same `state * prime % n` idiom.
+      const sealed = plots.filter((p) => p.sealed);
+      const pool = sealed.length > 0 ? sealed : plots;
+      if (pool.length > 0) {
+        const idx = Math.floor(cityTimeMs / 313) % pool.length;
+        const plot = pool[idx < 0 ? idx + pool.length : idx];
+        glimmerAt = { nx: plot.x, ny: plot.y, startedAt: now };
+      } else {
+        // Empty city — a soft light rides the horizon, at a spot the same
+        // hour would always land on. The visitor sees the settlement
+        // "before it is settled" — a mark on the ground where a home could
+        // stand. No text, only light.
+        const nx = 0.5 + 0.35 * Math.sin(cityTimeMs / 733);
+        glimmerAt = { nx, ny: 0.62, startedAt: now };
+      }
+      lastGlimmerAt = now;
+    };
+
     // ── restore ─────────────────────────────────────────────────────────
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
@@ -1002,6 +1063,7 @@ export default function City() {
     // ── gestures ─────────────────────────────────────────────────────────
     const detach = attachGestures(wrap, {
       tap: (e) => {
+        markInteraction();
         if (e.fingers === 1) {
           const p = plotAt(e.x, e.y);
           if (p && isPlayableRole(p.role)) {
@@ -1030,6 +1092,7 @@ export default function City() {
       },
 
       hold: (e) => {
+        markInteraction();
         if (e.fingers === 3) {
           if (e.phase === "enter") {
             cityTimeScale = 0.25;
@@ -1082,6 +1145,7 @@ export default function City() {
       },
 
       drag: (e) => {
+        markInteraction();
         if (e.fingers === 3) {
           if (e.phase === "end") return;
           weatherWind = Math.max(-1, Math.min(1, weatherWind + e.dx * 0.006));
@@ -1108,6 +1172,7 @@ export default function City() {
       },
 
       twist: (e) => {
+        markInteraction();
         if (e.fingers === 3) {
           if (e.phase !== "move") return;
           const detent = Math.PI / 2;
@@ -1125,6 +1190,7 @@ export default function City() {
       },
 
       flick: (e) => {
+        markInteraction();
         if (e.fingers !== 1) return;
         ring(noteForFlickAngle(e.angle), 260);
         try { haptics.chop(); } catch { /* noop */ }
@@ -1137,6 +1203,7 @@ export default function City() {
       },
 
       scrub: () => {
+        markInteraction();
         try { haptics.tap(); } catch { /* noop */ }
       },
     }, { wheelZoom: false });
@@ -1144,14 +1211,17 @@ export default function City() {
     // ── vessel: tilt / shake / knock / flip ──────────────────────────────
     const detachVessel = onVessel({
       tilt: (e) => {
+        markInteraction();
         const lean = Math.min(1, Math.hypot(e.beta, e.gamma) / 45);
         weatherRain = Math.max(weatherRain, lean * 0.9);
       },
       shake: (e) => {
+        markInteraction();
         dragRoadStart = null;
         weatherWind = Math.max(-1, Math.min(1, weatherWind + (e.intensity - 0.5) * 0.4));
       },
       knock: () => {
+        markInteraction();
         const events = plots.filter((p) => p.role === "event");
         try { A().bell(); } catch { /* noop */ }
         ringChord(bellChord(events.length), 380, 28);
@@ -1163,6 +1233,7 @@ export default function City() {
         }
       },
       flip: (e) => {
+        markInteraction();
         nightOn = e.faceDown;
         if (e.faceDown) {
           cityTimeMs = Math.floor(cityTimeMs / CITY_DAY_MS) * CITY_DAY_MS + CITY_DAY_MS * 0.75;
@@ -1196,8 +1267,10 @@ export default function City() {
       const isLens = key === "l" || key === "L";
       const isLower = key === "Escape";
       if (!(isArrow || isPlant || isSeal || isLens || isLower)) return;
-      // any keyboard interaction reveals the cursor
+      // any keyboard interaction reveals the cursor AND resets the idle
+      // glimmer clock — a keyboard visitor is a visitor.
       cursorVisible = true;
+      markInteraction();
 
       if (key === "ArrowUp")    { heldArrows.up    = true; e.preventDefault(); return; }
       if (key === "ArrowDown")  { heldArrows.down  = true; e.preventDefault(); return; }
@@ -1307,6 +1380,21 @@ export default function City() {
         hintHidden = wantHintHidden;
         hintRef.current.style.opacity = wantHintHidden ? "0" : "";
       }
+      // the shared 7s breath — every room in the album rides this same
+      // clock. Held at 0.5 under prefers-reduced-motion so the ground is
+      // still without the visitor being cheated of the register that says
+      // "alive at rest". A phase of 2π * (uTime / 7) sends the sinusoid
+      // once around every seven seconds; mapped 0..1 in the shader.
+      const breath = reduceMotion ? 0.5 : 0.5 + 0.5 * Math.sin(uTime * (Math.PI * 2 / 7));
+
+      // idle glimmer — after 20s of no touch and no vessel event, one
+      // sealed plot (or a horizon patch in an empty city) breathes a
+      // wider ring, alone, and nothing is said.
+      maybeGlimmer(now);
+      if (glimmerAt && now - glimmerAt.startedAt > GLIMMER_DURATION_MS) {
+        glimmerAt = null;
+      }
+
       // draw
       syncPlotAttributes();
       groundUniforms.uTime.value = uTime;
@@ -1316,6 +1404,7 @@ export default function City() {
       groundUniforms.uWind.value = weatherWind;
       groundUniforms.uNight.value = nightAmt;
       groundUniforms.uLens.value = lens === "map" ? 0 : lens === "hydrology" ? 1 : 2;
+      groundUniforms.uBreath.value = breath;
       plotUniforms.uDayFrac.value = dayFraction(cityTimeMs);
       plotUniforms.uNight.value = nightAmt;
       renderer.clear();
@@ -1631,6 +1720,28 @@ export default function City() {
     function drawOverlay(): void {
       const detail = detailForTier(governor.tier());
       fgctx.clearRect(0, 0, width, height);
+
+      // idle glimmer — a soft ochre ring, rising and fading over one breath.
+      // Drawn UNDER the roads and people so the settlement's own strokes
+      // land on top of the light, not the other way around; this is the
+      // ground exhaling, not something the visitor did. The ring's radius
+      // eases outward and its alpha rides a sine over its short life so
+      // the eye reads it as one soft pulse.
+      if (glimmerAt) {
+        const age = performance.now() - glimmerAt.startedAt;
+        const t = Math.min(1, Math.max(0, age / GLIMMER_DURATION_MS));
+        // sin(π t) peaks at t=0.5 → ring is brightest in its middle, dark
+        // at both ends. Radius grows monotonically so the glimmer expands.
+        const alpha = Math.sin(t * Math.PI) * 0.42;
+        const r = 22 + t * 46;
+        const px = glimmerAt.nx * width;
+        const py = glimmerAt.ny * height;
+        fgctx.strokeStyle = `rgba(232, 187, 129, ${alpha.toFixed(3)})`;
+        fgctx.lineWidth = 1.5;
+        fgctx.beginPath();
+        fgctx.arc(px, py, r, 0, Math.PI * 2);
+        fgctx.stroke();
+      }
 
       // roads (thin strokes over the ground shader)
       fgctx.strokeStyle = "rgba(21, 23, 26, 0.35)";
@@ -1968,6 +2079,7 @@ export default function City() {
 
     // ── LetGo support ───────────────────────────────────────────────────
     const onLetGo = () => {
+      markInteraction();
       plots.length = 0;
       people.length = 0;
       roads.length = 0;
