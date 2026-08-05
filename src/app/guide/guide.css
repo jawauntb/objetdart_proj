@@ -1,0 +1,224 @@
+/*
+ * The one sanctioned reading surface where the site explains itself
+ * (AGENTS.md, "the documentation law"). Every selector is prefixed with
+ * .guide so this file stays scoped even though it is imported globally.
+ *
+ * Perf notes for the 55-room layout:
+ *   - No mix-blend-mode, no will-change (previously froze iPad Safari).
+ *   - .guide-room uses content-visibility: auto so the browser skips
+ *     rendering off-screen room cards until they scroll into view; this
+ *     is the single biggest scroll-perf win for mobile.
+ *   - .guide-room-shot only becomes position: sticky on wide, fine-pointer
+ *     viewports. iPad and phones stack instead of pinning 55 sidebars.
+ *   - Aurora is hidden on any touch device — the hero still lights the
+ *     type via static gradients on .guide-hero-room.
+ */
+
+.guide {
+  max-width: var(--max);
+  margin: 0 auto;
+  padding: var(--pad-y) var(--pad-x);
+}
+.guide a { transition: color var(--t); }
+.guide-hero { max-width: 100%; }
+.guide-hero-room {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  background:
+    radial-gradient(120% 160% at 12% -10%, rgba(79, 183, 200, 0.16), transparent 55%),
+    radial-gradient(130% 140% at 92% 118%, rgba(231, 185, 78, 0.14), transparent 60%),
+    linear-gradient(165deg, #0a0e17 0%, #10141f 55%, #140f1c 100%);
+  border: 1px solid rgba(232, 226, 213, 0.14);
+  padding: clamp(40px, 7vw, 76px) clamp(24px, 5vw, 64px) clamp(44px, 7vw, 80px);
+}
+.guide-aurora {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+.guide-aurora-spot {
+  position: absolute;
+  margin-left: -60px;
+  margin-top: -60px;
+  border-radius: 50%;
+  opacity: 0.72;
+  animation: guide-breathe 7s ease-in-out infinite;
+}
+@keyframes guide-breathe {
+  0%, 100% { transform: scale(0.92); opacity: 0.55; }
+  50% { transform: scale(1.08); opacity: 0.85; }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* fully hide instead of just pausing — the compositor cost survives paused animation */
+  .guide-aurora { display: none; }
+}
+/* Touch devices (iPad, iPhone, Android tablets/phones) skip the aurora entirely.
+ * 20 blurred radial-gradient blobs on continuous scale animation reliably froze
+ * iPad Safari — one GPU layer per spot. The aurora is decorative; a static
+ * room-lit hero is still the intended look on touch. */
+@media (pointer: coarse) {
+  .guide-aurora { display: none; }
+}
+.guide-hero-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: linear-gradient(
+    100deg,
+    rgba(9, 12, 19, 0.86) 0%,
+    rgba(9, 12, 19, 0.62) 38%,
+    rgba(9, 12, 19, 0.22) 62%,
+    transparent 82%
+  );
+  pointer-events: none;
+}
+.guide-hero-text { position: relative; z-index: 1; max-width: 760px; }
+.guide-hero-eyebrow { color: rgba(232, 226, 213, 0.72); }
+.guide-hero-title { margin: 10px 0 18px; color: rgba(244, 238, 222, 0.98); }
+.guide-lede { color: rgba(232, 226, 213, 0.82); }
+.guide-toc {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 22px;
+  margin-top: 26px;
+  font-size: 13px;
+}
+.guide-toc a {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  color: rgba(232, 226, 213, 0.86);
+  border-bottom: 1px solid rgba(232, 226, 213, 0.22);
+}
+.guide-toc a:hover { color: var(--candle); border-bottom-color: var(--candle); }
+.guide-section {
+  margin-top: clamp(64px, 9vw, 110px);
+  padding-top: 28px;
+  border-top: 1px solid var(--rule);
+}
+.guide-h2 { margin-bottom: 12px; }
+.guide-note { max-width: 640px; color: var(--ink-2); }
+.guide-steps {
+  list-style: none;
+  margin: 34px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 26px;
+}
+.guide-step {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  gap: 14px;
+  max-width: 700px;
+}
+.guide-step-num { color: var(--candle); font-size: 13px; padding-top: 5px; }
+.guide-step-title { margin: 0 0 6px; }
+.guide-step-body { color: var(--ink-2); }
+.guide-layers {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 22px;
+  margin: 34px 0 40px;
+}
+.guide-layer { border-left: 2px solid var(--candle); padding-left: 14px; }
+.guide-layer-title { font-size: 12px; letter-spacing: 0.08em; margin: 0 0 8px; }
+.guide-layer-body { color: var(--ink-2); font-size: 16px; }
+.guide-bindings { width: 100%; max-width: 760px; border-collapse: collapse; }
+.guide-bindings-caption {
+  text-align: left;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  color: var(--ink-2);
+  padding-bottom: 10px;
+}
+.guide-bindings tr { border-top: 1px solid var(--rule); }
+.guide-bindings th {
+  text-align: left;
+  font-weight: 500;
+  font-size: 13px;
+  padding: 10px 18px 10px 0;
+  white-space: nowrap;
+  vertical-align: top;
+  width: 1%;
+}
+.guide-bindings td { padding: 10px 0; font-size: 16px; color: var(--ink-2); }
+.guide-cluster { margin-top: 54px; }
+.guide-cluster-title { margin-bottom: 6px; }
+.guide-room {
+  display: grid;
+  grid-template-columns: minmax(0, 460px) 1fr;
+  gap: clamp(18px, 3vw, 36px);
+  padding: 30px 0 30px 18px;
+  border-top: 1px solid var(--rule);
+  border-left: 3px solid var(--room-border, var(--rule));
+  align-items: start;
+  /* Off-screen room cards skip layout+paint entirely until they scroll near
+   * the viewport. Reserves ~720px of vertical space so the scrollbar tracks
+   * cleanly. This is the single biggest scroll-perf win on mobile with 55
+   * cards; without it, the browser lays out every card on load. */
+  content-visibility: auto;
+  contain-intrinsic-size: 720px;
+}
+.guide-room-shot img {
+  width: 100%;
+  height: auto;
+  display: block;
+  border: 1px solid var(--room-border, var(--rule));
+}
+.guide-room-shot { position: static; }
+.guide-room-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 12px;
+}
+.guide-room-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--room-glow), var(--room-accent2));
+  flex: none;
+}
+.guide-room-title { margin: 0; font-size: 26px; }
+.guide-room-href { font-size: 12px; color: var(--ink-2); }
+.guide-room-href:hover { color: var(--room-glow, var(--candle)); }
+.guide-room-scale { font-size: 11px; letter-spacing: 0.05em; color: var(--sea); margin-top: 6px; }
+.guide-room-essence { margin-top: 10px; color: var(--ink-2); font-style: italic; }
+.guide-moves { list-style: none; margin: 16px 0 0; padding: 0; }
+.guide-moves li {
+  display: grid;
+  grid-template-columns: minmax(120px, 190px) 1fr;
+  gap: 12px;
+  padding: 6px 0;
+  border-top: 1px dashed var(--rule);
+}
+.guide-move-gesture { font-size: 12px; padding-top: 2px; color: var(--ink); }
+.guide-move-answer { font-size: 15px; color: var(--ink-2); }
+.guide-room-finds { margin-top: 16px; font-size: 15px; color: var(--ink-2); }
+.guide-room-finds-label { font-size: 11px; letter-spacing: 0.06em; color: var(--candle); }
+.guide-room-keeps { margin-top: 10px; font-size: 11px; letter-spacing: 0.05em; color: var(--kept); }
+.guide-workshop-part { max-width: 720px; margin-top: 40px; }
+.guide-workshop-title { margin-bottom: 10px; }
+.guide-workshop-body { color: var(--ink-2); margin-top: 10px; }
+.guide-workshop-body .t-mono { font-size: 13px; }
+.guide-apis { display: grid; gap: 18px; margin-top: 20px; }
+.guide-api { border: 1px solid var(--rule); padding: 16px 18px; background: var(--paper-2); }
+.guide-api-name { font-size: 13px; margin-bottom: 8px; }
+.guide-api-line { font-size: 15px; color: var(--ink-2); margin-top: 4px; }
+.guide-api-line .t-mono { font-size: 11px; letter-spacing: 0.06em; }
+/* Wide, fine-pointer screens get the sticky sidebar image — kept on desktop
+ * only because 55 sticky elements are a scroll-thread killer on iPad. */
+@media (min-width: 1025px) and (pointer: fine) {
+  .guide-room-shot { position: sticky; top: 84px; }
+}
+@media (max-width: 760px) {
+  .guide-room {
+    grid-template-columns: 1fr;
+    padding-left: 14px;
+    contain-intrinsic-size: 900px; /* stacked cards are taller than side-by-side */
+  }
+  .guide-moves li { grid-template-columns: 1fr; gap: 2px; }
+  .guide-hero-room { padding: 40px 20px 46px; }
+}

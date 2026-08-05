@@ -131,8 +131,13 @@ for (const spot of spotsA) {
 // --- the guide is reachable and rendered -----------------------------------
 
 assert.match(readRepoFile("src/components/SiteFooter.tsx"), /href="\/guide"/, "the footer must link the guide");
-assert.match(readRepoFile("src/components/Guide.tsx"), /GUIDE_ROOMS/, "the guide page must render the room entries");
+// The guide page was split into per-section server components under
+// src/components/guide/. GuideRooms is where the room roster is rendered;
+// the roster assertion follows the code, not the old monolith path.
+assert.match(readRepoFile("src/components/guide/GuideRooms.tsx"), /GUIDE_ROOMS/, "the guide rooms component must render the room entries");
 assert.ok(existsSync(new URL("src/app/guide/page.tsx", rootUrl)), "the /guide route must exist");
+assert.ok(existsSync(new URL("src/app/guide/guide.css", rootUrl)), "the guide stylesheet must exist as a real .css file (not inline in JS)");
+assert.ok(existsSync(new URL("src/components/guide/GuideHero.tsx", rootUrl)), "the guide sections must live in src/components/guide/");
 
 console.log(
   `guide ok: ${GUIDE_ROOMS.length} rooms documented, ${GUIDE_APIS.length} apis, ` +
