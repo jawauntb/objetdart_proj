@@ -42,6 +42,7 @@ const rocks = {
       "a tray of brine with stones still coming out of it — salt, quartz, calcite, pyrite, zircon, topaz — each shaped by its own crystal lattice, split along its own cleavage planes, ranked by its own hardness, and ringing with the partials that lattice allows.",
     moves: [
       "tap a stone → it rings its own ring; the partial ratios are its allowed reflections",
+      "rapid taps (1 / 3 / 5 / n) → a ring → the stone knocks against its neighbour, a dyad of two lattices → rapped loose into a bright spin, or a grain of salt shaken out of the dark → the whole shelf rolls, harder with every extra tap",
       "tap the wet dark → a grain of salt, and the brine takes a little more into it",
       "drag a stone → turns it in your fingers, facets sweeping the light, and it keeps the turn when you let go",
       "drag a stone into its neighbour → the softer one takes the groove; salt beds under quartz, quartz never under salt",
@@ -49,7 +50,7 @@ const rocks = {
       "hold on the wet dark → plants a nucleus and feeds it from the tray for as long as you hold",
       "hold a nodule to the ceremony tier → the geode opens and its lining faces out",
       "three-finger drag → how much the brine is holding; drag it far enough down and the stones go back into solution",
-      "three-finger hold → the clock runs at a quarter; three-finger twist → the season, the brine run hot then cold",
+      "three-finger hold → the clock keeps slowing for as long as it is held; three-finger twist → the season, the brine run hot then cold",
       "three-finger tap → every stone on the shelf rings at once",
       "twist → raises the lattice lens: the ring drawn as its reflections, the cleavage traces across the stone, and the mineral read back out of its own sound",
       "scrub → stirs the brine, driving the solvent off so it holds more",

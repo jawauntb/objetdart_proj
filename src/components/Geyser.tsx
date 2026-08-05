@@ -32,6 +32,7 @@ import * as haptics from "@/lib/haptics";
 import { getTurbulence, relaxTurbulence, stirTurbulence } from "@/lib/turbulence";
 import RoomShell from "@/components/RoomShell";
 import type { RoomVoice } from "@/lib/gesture/defaults";
+import { tapTrainTier } from "@/lib/gesture/core";
 import { createGLStage, FULLSCREEN_VERT_UNIT } from "@/lib/webgl/stage";
 import { clocksFrom } from "@/lib/webgl/sizing";
 import {
@@ -847,6 +848,70 @@ export default function Geyser() {
         cursorY = ny;
         cursorLit = 1;
         if (fingers >= 2) return;
+        // the rapid-tap ladder (1 / 3 / 5 / n), in superheated ground:
+        // 1 rings the throat, 3 walks a run of steam toward the vent,
+        // 5 hisses a spit of droplets out of the throat, and from 7 on the
+        // hammering hand shifts the trigger itself — a near-ready geyser
+        // can be drummed over the top, harder with every extra tap
+        const tier = tapTrainTier(count);
+        if (tier === "n") {
+          const drive = clamp01(0.5 + (count - 7) * 0.12 + intensity * 0.3);
+          const attempt = knockErupt(state, drive);
+          state = attempt.state;
+          pushRipple(nx, ny, 0.6 + drive * 0.4);
+          const hz = ringHzFor(state.H);
+          try {
+            audio.playTone(hz * (1 + drive * 0.5), 0.3 + drive * 0.3);
+            haptics.ripple(0.4 + drive * 0.4);
+            if (attempt.fired) {
+              audio.bell();
+              haptics.bloom();
+            }
+          } catch {
+            /* noop */
+          }
+          if (attempt.fired) {
+            setHasKept(true);
+            pushRipple(VENT_NX, VENT_NY, 1);
+            writer.schedule();
+          }
+          return;
+        }
+        if (tier === 5 && count === 5) {
+          // a spit of steam: the throat coughs real droplets without firing
+          for (let i = 0; i < 3; i++) plumePopulation.spawn(VENT_NX, VENT_NY, performance.now());
+          stirTurbulence(0.12 + intensity * 0.1);
+          pushRipple(VENT_NX, VENT_NY, 0.7);
+          const hz = ringHzFor(state.H);
+          try {
+            audio.playTone(hz * 1.5, 0.24 + intensity * 0.2);
+            audio.playTone(hz * 2, 0.16);
+            haptics.chop();
+          } catch {
+            /* noop */
+          }
+          return;
+        }
+        if (tier === 3 && count === 3) {
+          // a run of steam: three ripples march from the tap toward the vent,
+          // each a step up the throat's own pitch
+          const hz = ringHzFor(state.H);
+          for (let i = 0; i < 3; i++) {
+            const f = (i + 1) / 3;
+            pushRipple(nx + (VENT_NX - nx) * f, ny + (VENT_NY - ny) * f, 0.35 + intensity * 0.25);
+            try {
+              audio.playTone(hz * (1 + f * 0.5), 0.12 + intensity * 0.1);
+            } catch {
+              /* noop */
+            }
+          }
+          try {
+            haptics.ripple(0.4 + intensity * 0.3);
+          } catch {
+            /* noop */
+          }
+          return;
+        }
         const found = nearestHeatMark(state, nx, ny, 0.09);
         if (found) {
           soundHeatMark(found.heat);
