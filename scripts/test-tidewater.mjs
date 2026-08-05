@@ -66,21 +66,55 @@ const abs = (a, b, tol, msg) =>
 }
 
 // —— THE TIDE CLOCK IS EXACTLY PERIODIC ————————————————————————
-// H(t) = H_MEAN + H_AMP · sin(...) — a full period must return to the
-// same value. Bug this catches: any accidental drift, integration, or
-// off-by-one in the closed form.
+// The ocean drives with a sine; the pool decouples during isolation. Both
+// return exactly at TIDE_PERIOD_S. Bug this catches: any accidental drift,
+// integration, or off-by-one in the closed form.
 {
   const climate = { warmth: 0.5, wet: 0.4 }; // below storm threshold
   for (let i = 0; i < 5; i++) {
     const t0 = i * 7.3;
     abs(M.waterLevel(t0, climate), M.waterLevel(t0 + M.TIDE_PERIOD_S, climate),
-        1e-12, `tide clock periodic at t = ${t0}`);
+        1e-9, `pool level periodic at t = ${t0}`);
+    abs(M.oceanTide(t0, climate), M.oceanTide(t0 + M.TIDE_PERIOD_S, climate),
+        1e-12, `ocean periodic at t = ${t0}`);
   }
-  // At t = 0, waterLevel = H_MEAN.
-  abs(M.waterLevel(0, climate), M.H_MEAN, 1e-12, "H(0) = H_MEAN");
-  // At t = TIDE_PERIOD_S/4, waterLevel = H_MEAN + H_AMP.
+  // The ocean is a plain sine on H_MEAN. This is the driver.
+  abs(M.oceanTide(0, climate), M.H_MEAN, 1e-12, "ocean(0) = H_MEAN");
+  abs(M.oceanTide(M.TIDE_PERIOD_S / 4, climate), M.H_MEAN + M.H_AMP,
+      1e-12, "ocean(T/4) = H_MEAN + H_AMP (peak)");
+  // The POOL is not the ocean. During the connected window (ocean above
+  // rim) the pool tracks the ocean, so peak matches. Bug this catches:
+  // the shader reading H_MEAN + H_AMP · sin(...) directly — a bungee cord.
   abs(M.waterLevel(M.TIDE_PERIOD_S / 4, climate), M.H_MEAN + M.H_AMP,
-      1e-12, "H(T/4) = mean + amplitude");
+      1e-9, "pool(T/4) = ocean(T/4) — connected regime");
+  // At t = 0 the ocean is at mean level, BELOW the rim. Pool is isolated
+  // and has been decaying — level is well under H_MEAN. Bug: pool tied
+  // to ocean (the bungee cord that shipped in phase 8).
+  assert.ok(M.waterLevel(0, climate) < M.H_MEAN - 0.5 * M.H_AMP,
+    `pool(0) is deep in isolated decay, well below mean (got ${M.waterLevel(0, climate).toFixed(3)})`);
+  // At the ocean trough (3T/4), pool holds water ABOVE the ocean — this
+  // is the pool's whole physical point. If this fails, the rim isn't
+  // catching water and the room has degenerated back to a bungee sine.
+  const tTrough = 3 * M.TIDE_PERIOD_S / 4;
+  assert.ok(M.waterLevel(tTrough, climate) > M.oceanTide(tTrough, climate) + 0.02,
+    `pool > ocean at trough — the rim is decoupling (pool ${M.waterLevel(tTrough, climate).toFixed(3)} vs ocean ${M.oceanTide(tTrough, climate).toFixed(3)})`);
+  // Isolated pool decays monotonically. Sample after the down-crossing.
+  const tDown = M.TIDE_PERIOD_S / 2 - (M.TIDE_PERIOD_S * Math.asin(0.55) / (2 * Math.PI));
+  let lastLvl = Infinity;
+  for (let dt = 0.5; dt <= 15; dt += 2) {
+    const lvl = M.waterLevel(tDown + dt, climate);
+    assert.ok(lvl < lastLvl,
+      `pool decays monotonically at t=${(tDown + dt).toFixed(2)} (${lvl.toFixed(4)} < ${lastLvl.toFixed(4)})`);
+    lastLvl = lvl;
+  }
+  // Overtopping fires exactly during the connected window (ocean > rim)
+  // and is zero otherwise. Bug: shader adds foam at the wrong phase.
+  assert.equal(M.overtoppingIntensity(0, climate), 0,
+    "no overtopping at t=0 (ocean at mean, below rim)");
+  assert.ok(M.overtoppingIntensity(M.TIDE_PERIOD_S / 4, climate) > 0.9,
+    "full overtopping at ocean peak");
+  assert.equal(M.overtoppingIntensity(M.TIDE_PERIOD_S / 2, climate), 0,
+    "no overtopping at t=T/2 (ocean back at mean)");
   // Below the storm threshold, waterLevel does NOT contain the storm.
   abs(M.stormDisplacement({ warmth: 0.5, wet: 0.5 }), 0, 1e-12,
       "storm displacement is zero below the threshold");

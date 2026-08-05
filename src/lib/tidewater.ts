@@ -158,14 +158,94 @@ export const PITCH_SCALE = 0.5;
 // ——— the tide clock ————————————————————————————————————————————
 
 /**
- * The pool's water level at time t (seconds). Mean-line + amplitude sine
- * plus a storm displacement past the threshold. Closed-form, deterministic,
- * exact — never integrated.
+ * The ocean outside the pool — the driver. Sinusoidal, pure, deterministic.
+ * The pool listens to this but is not equal to it.
  */
-export function waterLevel(t: number, climate: Climate): number {
+export function oceanTide(t: number, climate: Climate): number {
   const cycle = H_AMP * Math.sin((2 * Math.PI * t) / TIDE_PERIOD_S);
   const storm = stormDisplacement(climate);
   return H_MEAN + cycle + storm;
+}
+
+/**
+ * The rim of the rock pool — the ocean must climb past this to overtop it
+ * and refill the pool. Set inside the amplitude so the ocean crosses the
+ * rim twice per cycle (once going up, once coming down).
+ */
+export const RIM_H = H_MEAN + 0.55 * H_AMP;
+
+/**
+ * The floor the pool decays toward when isolated — never fully dry, but
+ * far enough below the rim that low_tide state weight fires cleanly.
+ */
+export const POOL_MIN_H = H_MEAN - 1.5 * H_AMP;
+
+/**
+ * Seconds for the isolated pool to lose 63% of its RIM_H → POOL_MIN_H head.
+ * Slow, so the pool holds its water most of the time.
+ */
+export const POOL_EVAP_TAU_S = 15;
+
+/**
+ * The pool's water level at time t (seconds).
+ *
+ * Two regimes:
+ *  - Connected: ocean is above the rim. Waves wash into the pool, so the
+ *    pool tracks the ocean instantaneously (the approximation is exact
+ *    while the ocean is above the rim, because inflow > any credible
+ *    evaporation rate on this timescale).
+ *  - Isolated: ocean has dropped below the rim. The pool is a puddle now,
+ *    losing head exponentially toward POOL_MIN_H with time constant
+ *    POOL_EVAP_TAU_S. Head resets to (RIM_H + any storm boost that was
+ *    still in effect at the moment of disconnection) at the down-crossing.
+ *
+ * Closed-form. Bounded to one cycle by modular arithmetic on TIDE_PERIOD_S,
+ * so the answer at t and at t + TIDE_PERIOD_S is identical (up to the
+ * storm displacement, which is time-invariant given the same climate).
+ * This is why the sine tide over 33 seconds does NOT drag the whole
+ * waterline up and down like a spring — the pool decouples and holds.
+ */
+export function waterLevel(t: number, climate: Climate): number {
+  const storm = stormDisplacement(climate);
+  const oceanCore = oceanTide(t, { warmth: climate.warmth, wet: 0 }) - H_MEAN;
+  // If the ocean (including storm bump) is over the rim, the pool matches it.
+  if (oceanCore + H_MEAN + storm >= RIM_H) {
+    return oceanCore + H_MEAN + storm;
+  }
+  // Otherwise the pool is isolated. Find the last down-crossing of the rim
+  // in the current cycle, exponentially decay from that starting head toward
+  // POOL_MIN_H. The rim crossing happens at sin(phase) = (RIM_H - H_MEAN - storm) / H_AMP.
+  // Solve for the down-crossing phase in [π/2, 3π/2] (the descending half of
+  // the sine): phaseDown = π - asin(k), where k = (RIM_H - H_MEAN - storm)/H_AMP.
+  const k = (RIM_H - H_MEAN - storm) / H_AMP;
+  // If storm pushes the ocean permanently above the rim, there is no
+  // isolated regime — the pool never disconnects. Guard the asin domain.
+  if (k <= -1) return oceanCore + H_MEAN + storm;
+  const T = TIDE_PERIOD_S;
+  const twoPi = 2 * Math.PI;
+  const phase = ((t % T) + T) % T * (twoPi / T);
+  const phaseDown = Math.PI - Math.asin(k);
+  // Phase since disconnection, wrapped into [0, 2π).
+  let dPhase = phase - phaseDown;
+  if (dPhase < 0) dPhase += twoPi;
+  const dtSince = (dPhase / twoPi) * T;
+  const decay = Math.exp(-dtSince / POOL_EVAP_TAU_S);
+  const startingHead = RIM_H + storm;
+  return POOL_MIN_H + (startingHead - POOL_MIN_H) * decay;
+}
+
+/**
+ * How hard the ocean is currently overtopping the rim — 0 when the ocean
+ * is below the rim, ramps to 1 as it climbs a small band above. Drives the
+ * splash/foam layer at the rim during the connected window, and the audible
+ * wash the room's timbre reads.
+ */
+export function overtoppingIntensity(t: number, climate: Climate): number {
+  const ocean = oceanTide(t, climate);
+  const above = ocean - RIM_H;
+  if (above <= 0) return 0;
+  const OVERTOP_BAND = 0.04;
+  return clamp01(above / OVERTOP_BAND);
 }
 
 /**
