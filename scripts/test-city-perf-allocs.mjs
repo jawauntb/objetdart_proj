@@ -149,4 +149,74 @@ assert.equal(scratchD[0].role, "home", "shrink: surviving entry still carries it
 builder.clear();
 assert.equal(builder.cacheSize(), 0, "clear() empties the yaw cache");
 
+// ——— tick body: no per-frame object literals ————————————————————————
+// The tick loop's contract is "zero allocations at steady state". This
+// grep-then-assert scans the source between the `const tick = (now: …)`
+// arrow and the `raf = requestAnimationFrame(tick);` at its tail — the
+// exact block that runs 60 times a second — and refuses to let the
+// signatures we hoisted a scratch for come back as inline literals.
+//
+// Adding a new subsystem?  Two options:
+//   (a) Its update() takes a plain object → hoist a scratch above the
+//       tick loop like `_waterFrame`, `_cloudsFrame`, …, and pass THAT.
+//   (b) It genuinely wants a fresh literal each frame → extend the
+//       `ALLOWED_LITERAL_SNIPPETS` list with a comment explaining why.
+//
+// This test would have caught the previous round's regression the
+// moment it landed instead of after a p99 spike showed up in the
+// harness.
+import { readFileSync } from "node:fs";
+const cityTsx = readFileSync("src/components/City.tsx", "utf8");
+const tickStart = cityTsx.indexOf("const tick = (now: number) =>");
+assert.ok(tickStart > 0, "tick arrow must exist in City.tsx");
+// End marker: the raf reschedule at the bottom of the tick body. There
+// are TWO occurrences in City.tsx (`raf = requestAnimationFrame(tick)`)
+// — the FIRST one (inside the tick arrow) is what we want; the second
+// is the initial mount kick right after the arrow closes. Slicing to
+// that first occurrence bounds the tick body precisely.
+const tickBodyEnd = cityTsx.indexOf("raf = requestAnimationFrame(tick)", tickStart);
+assert.ok(tickBodyEnd > tickStart, "tick body must end with a raf reschedule");
+const tickBody = cityTsx.slice(tickStart, tickBodyEnd);
+
+// The forbidden signatures — each one was allocated per frame in a
+// prior round and every one has a hoisted scratch equivalent now.
+// The tick body must not contain any of these shapes.
+const BANNED_LITERAL_PATTERNS = [
+  {
+    // water.update({ dayFraction: … }) — old signature
+    // traffic.update({ dtMs: … })      — old signature
+    // pedestrians.update({ dtMs: … })  — old signature
+    re: /\{\s*(dayFraction|dtMs)\s*:/,
+    where:
+      "the tick body must not construct a fresh literal starting with `{ dayFraction:` or `{ dtMs:` — those are the water/traffic/pedestrians/clouds/sundisk frame shapes, and they belong in a hoisted scratch (_waterFrame / _trafficFrame / _pedestriansFrame / _cloudsFrame / _sunDiskFrame)",
+  },
+  {
+    // pedestrianInputs.push({ id: … }) — per-pedestrian per-frame alloc
+    re: /\{\s*id\s*:\s*person\./,
+    where:
+      "the tick body must not push a fresh `{ id: person.… }` per pedestrian — use the _pedInputPool slot-reuse pattern",
+  },
+  {
+    // volFog: VolumetricFogFrame = { … } — hoisted as _volFogFrame
+    re: /:\s*VolumetricFogFrame\s*=\s*\{/,
+    where:
+      "the tick body must not build a `VolumetricFogFrame` literal — hoist as _volFogFrame at scratch init and mutate fogColor in place",
+  },
+  {
+    // projectSunToScreen(…) — its internal .clone() + fresh return object
+    // If a maintainer imports the non-`Into` variant, hold the line.
+    re: /projectSunToScreen\(/,
+    where:
+      "the tick body must call projectSunToScreenInto(_sunScreenOut, …) — the non-`Into` variant .clone()s a Vector3 and returns a fresh {x,y,visible} per frame",
+  },
+];
+
+for (const { re, where } of BANNED_LITERAL_PATTERNS) {
+  const hit = tickBody.match(re);
+  assert.ok(
+    !hit,
+    `${where}\n    matched: ${hit ? JSON.stringify(hit[0]) : "(unknown)"} in the tick body`,
+  );
+}
+
 console.log("test-city-perf-allocs OK");
