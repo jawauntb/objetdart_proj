@@ -62,7 +62,11 @@ import {
   type CityRole,
 } from "@/lib/city-audio";
 import { createCityComposer, type CityComposer } from "@/lib/city-composer";
-import { createCityClouds, type CityClouds } from "@/lib/city-clouds";
+import {
+  createCityClouds,
+  cloudHorizonPink,
+  type CityClouds,
+} from "@/lib/city-clouds";
 import { projectSunToScreen } from "@/lib/city-godrays";
 import { exposureForDay } from "@/lib/city-grading";
 import {
@@ -1157,6 +1161,14 @@ export default function City() {
     // Zenith sample vector reused across frames — sampleSkyColor writes
     // into a scratch Vector3 which we then transfer into the Color.
     const CLOUD_ZENITH_DIR = new THREE.Vector3(0, 1, 0);
+    // Horizon-direction sample vector reused across frames. Points a
+    // hair above the horizon (y=+0.03) in the sun's azimuth so the
+    // Preetham evaluator picks up the reddened band the atmosphere is
+    // painting under the setting sun. The cloud shader multiplies this
+    // colour into the base-of-slab samples — the physical read of
+    // "sun grazing horizon lights the underside of a cloud pink".
+    const CLOUD_HORIZON_DIR = new THREE.Vector3();
+    const cloudHorizonPinkRGB = { r: 1, g: 1, b: 1 };
 
     // The world ground: baked streets + sidewalks + curbs + a settlement-
     // scale road overlay the visitor paints onto. The seed is the persisted
@@ -2170,14 +2182,69 @@ export default function City() {
         Math.max(0.03, zen.y),
         Math.max(0.05, zen.z),
       );
+      // Horizon-pink tint. Sample the Preetham sky at a direction just
+      // above the horizon in the sun's azimuth — the physical colour of
+      // the atmosphere along the same ray the setting sun's light took
+      // to reach the underside of any cloud in the slab. Then BLEND
+      // that physical read with the analytical pink curve. The physical
+      // sample carries the correct warmth over the diurnal arc; the
+      // analytical curve pushes the blue channel up specifically at
+      // dusk to hit the London-reference pink note (Rayleigh + Chappuis
+      // give the twilight sky a cool-pink undertone the Preetham model
+      // captures only partially at the horizon direction). The blend is
+      // weighted by the horizon-proximity so at noon the tint collapses
+      // to neutral (1,1,1) and at dusk it lands on pink.
+      //
+      // We normalise the sampled colour so it enters the shader as a
+      // multiplicative TINT (max component = 1 → neutral peak), not a
+      // radiance — the sun's own intensity is already baked into
+      // cloudSunColor and multiplying pure radiance would double-count.
+      const sunDir = citySun.light.position.clone().normalize();
+      CLOUD_HORIZON_DIR.set(sunDir.x, 0.05, sunDir.z).normalize();
+      const horiz = sampleSkyColor(citySky.currentState, CLOUD_HORIZON_DIR);
+      // Guard against a Preetham sample that collapsed to near-zero at
+      // midnight — then we want the tint to be the identity so the
+      // underbellies read as their sun-colour, not a black wash. We
+      // renormalize by the maximum channel so the tint peaks at 1 and
+      // the smallest channel carries the pink/blue split.
+      const maxCh = Math.max(horiz.x, horiz.y, horiz.z, 1e-4);
+      let physR = 1;
+      let physG = 1;
+      let physB = 1;
+      if (maxCh > 1e-3) {
+        physR = horiz.x / maxCh;
+        physG = horiz.y / maxCh;
+        physB = horiz.z / maxCh;
+      }
+      // Analytical pink lift — pure function of dayFraction, peaks at
+      // horizon crossings, collapses to (1,1,1) at noon and midnight.
+      const analytical = cloudHorizonPink(df);
+      // Horizon-proximity weight: 1 at df=0 or df=0.5, 0 at df=0.25 or
+      // df=0.75. This is the same shape the analytical curve uses, so
+      // the blend heaviest weights the analytical value exactly where
+      // its pink lift is meaningful.
+      const dDawn2 = Math.min(df, 1 - df);
+      const dDusk2 = Math.abs(df - 0.5);
+      const dHoriz2 = Math.min(dDawn2, dDusk2);
+      const wA = Math.max(0, 1 - dHoriz2 * 4);
+      const wAs = wA * wA * (3 - 2 * wA);
+      // Blend: at horizon the analytical curve dominates (70%),
+      // physical Preetham the remainder (30%). At noon/midnight the
+      // blend collapses to (1,1,1) either way.
+      const wAn = 0.70 * wAs;
+      const wPh = 1 - wAn;
+      cloudHorizonPinkRGB.r = wAn * analytical.r + wPh * physR;
+      cloudHorizonPinkRGB.g = wAn * analytical.g + wPh * physG;
+      cloudHorizonPinkRGB.b = wAn * analytical.b + wPh * physB;
       cityClouds.update({
         dayFraction: df,
-        sunDir: citySun.light.position.clone().normalize(),
+        sunDir,
         sunColor: cloudSunColor,
         ambientColor: cloudAmbientColor,
         cityTimeMs,
         tier,
         camera: cityCam.camera,
+        horizonPink: cloudHorizonPinkRGB,
       });
       // Tone-mapping exposure rides the same axis the sky and sun do.
       // exposureForDay is a pure smoothstep-piecewise on dayFraction —

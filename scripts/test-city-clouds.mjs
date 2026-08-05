@@ -59,11 +59,21 @@ const {
   CLOUD_TOP_ALT,
   CLOUD_HG_G,
   CLOUD_WIND_MPS,
+  CLOUD_HORIZON_PINK_R,
+  CLOUD_HORIZON_PINK_G,
+  CLOUD_HORIZON_PINK_B,
+  CLOUD_MS_PEAK,
+  CLOUD_SILVER_PEAK,
+  CLOUD_UNDERBELLY_PEAK,
   cloudCoverageForDay,
   cloudDensityForDay,
   cloudWindOffset,
   cloudStepsForTier,
   cloudsEnabledForTier,
+  cloudHorizonPink,
+  cloudMultiScatterForDay,
+  cloudSilverLiningForDay,
+  cloudUnderbellyLift,
   buildCloudFragmentShader,
   cloudVertexShader,
   createCityClouds,
@@ -239,6 +249,152 @@ assert.equal(cloudsEnabledForTier("medium"), true, "clouds enabled at medium");
 assert.equal(cloudsEnabledForTier("low"), false, "clouds off at low");
 assert.equal(cloudsEnabledForTier("sleep"), false, "clouds off at sleep");
 
+// ── horizon-pink underbelly tint ────────────────────────────────────────
+// The r9-0 dusk-pink lift. The peak vec3 constant must land the
+// London-reference pink note: red-boosted (>1), muted green (~0.6),
+// lifted blue (>0.7). A future refactor that dropped the blue channel
+// toward 0.3 would drift the aesthetic back to SF-day orange; the
+// three constants pin the tone.
+
+assert.equal(CLOUD_HORIZON_PINK_R, 1.35, "horizon-pink R is 1.35 (Rayleigh-red boost)");
+assert.equal(CLOUD_HORIZON_PINK_G, 0.60, "horizon-pink G is 0.60 (warm mid, not gold)");
+assert.equal(CLOUD_HORIZON_PINK_B, 0.72, "horizon-pink B is 0.72 (Chappuis pink lift)");
+assert.ok(CLOUD_HORIZON_PINK_R > CLOUD_HORIZON_PINK_G, "R > G (reddish)");
+assert.ok(CLOUD_HORIZON_PINK_B > CLOUD_HORIZON_PINK_G, "B > G (pink not orange)");
+
+// cloudHorizonPink curve at the four cardinal times.
+// dawn+dusk (df=0, 0.5) → peak pink; noon+midnight (df=0.25, 0.75) → neutral.
+
+{
+  const p = cloudHorizonPink(0);
+  assert.ok(Math.abs(p.r - CLOUD_HORIZON_PINK_R) < 1e-9, `dawn r=${p.r}`);
+  assert.ok(Math.abs(p.g - CLOUD_HORIZON_PINK_G) < 1e-9, `dawn g=${p.g}`);
+  assert.ok(Math.abs(p.b - CLOUD_HORIZON_PINK_B) < 1e-9, `dawn b=${p.b}`);
+}
+{
+  const p = cloudHorizonPink(0.5);
+  assert.ok(Math.abs(p.r - CLOUD_HORIZON_PINK_R) < 1e-9, `dusk r=${p.r}`);
+  assert.ok(Math.abs(p.g - CLOUD_HORIZON_PINK_G) < 1e-9, `dusk g=${p.g}`);
+  assert.ok(Math.abs(p.b - CLOUD_HORIZON_PINK_B) < 1e-9, `dusk b=${p.b}`);
+}
+{
+  const p = cloudHorizonPink(0.25);
+  assert.ok(Math.abs(p.r - 1) < 1e-9, `noon r=${p.r} should be neutral`);
+  assert.ok(Math.abs(p.g - 1) < 1e-9, `noon g=${p.g} should be neutral`);
+  assert.ok(Math.abs(p.b - 1) < 1e-9, `noon b=${p.b} should be neutral`);
+}
+{
+  const p = cloudHorizonPink(0.75);
+  assert.ok(Math.abs(p.r - 1) < 1e-9, `midnight r=${p.r} should be neutral`);
+  assert.ok(Math.abs(p.g - 1) < 1e-9, `midnight g=${p.g} should be neutral`);
+  assert.ok(Math.abs(p.b - 1) < 1e-9, `midnight b=${p.b} should be neutral`);
+}
+// Halfway between noon and dusk (df=0.375) — smoothstep midpoint of the
+// horizon-proximity ramp. Should land between neutral and peak.
+{
+  const p = cloudHorizonPink(0.375);
+  assert.ok(p.r > 1 && p.r < CLOUD_HORIZON_PINK_R, `df=0.375 r=${p.r} between 1 and peak`);
+  assert.ok(p.g < 1 && p.g > CLOUD_HORIZON_PINK_G, `df=0.375 g=${p.g} between neutral and peak`);
+  assert.ok(p.b < 1 && p.b > CLOUD_HORIZON_PINK_B, `df=0.375 b=${p.b} between neutral and peak`);
+}
+
+// Determinism: same df → same tint. Same df wrapped → same tint.
+{
+  const a = cloudHorizonPink(0.5);
+  const b = cloudHorizonPink(1.5);
+  assert.ok(Math.abs(a.r - b.r) < 1e-9, "wrap-around determinism r");
+  assert.ok(Math.abs(a.g - b.g) < 1e-9, "wrap-around determinism g");
+  assert.ok(Math.abs(a.b - b.b) < 1e-9, "wrap-around determinism b");
+}
+
+// ── multi-scatter Taylor lift ────────────────────────────────────────────
+// Peaks at dusk to lift the thick-storm cloud interiors from black
+// toward pink. Kept bounded at 0.35 so it never blows out the composite.
+
+assert.equal(CLOUD_MS_PEAK, 0.35, "multi-scatter peak is 0.35");
+{
+  const s = cloudMultiScatterForDay(0.5);
+  assert.ok(Math.abs(s - 0.35) < 1e-9, `dusk multi-scatter is peak: got ${s}`);
+}
+{
+  const s = cloudMultiScatterForDay(0.25);
+  // noon: sin(2π·0.25 - π/2) = sin(0) = 0 → 0.15
+  assert.ok(Math.abs(s - 0.15) < 1e-9, `noon multi-scatter is min: got ${s}`);
+}
+{
+  const s = cloudMultiScatterForDay(0);
+  // dawn: sin(-π/2) = -1 → 0.15 - 0.20 = -0.05 → clamped to 0
+  assert.equal(s, 0, `dawn multi-scatter clamps to 0: got ${s}`);
+}
+{
+  // All values stay in [0, CLOUD_MS_PEAK].
+  for (let i = 0; i <= 200; i += 1) {
+    const df = i / 200;
+    const s = cloudMultiScatterForDay(df);
+    assert.ok(Number.isFinite(s) && s >= 0 && s <= CLOUD_MS_PEAK, `ms clamped; df=${df} s=${s}`);
+  }
+}
+
+// ── silver-lining boost ──────────────────────────────────────────────────
+// Peaks at dusk, whispers at noon, near-zero at dawn. The narrow HG
+// lobe at g=0.9 fires when the shoulder of a cloud sits near the sun.
+
+assert.equal(CLOUD_SILVER_PEAK, 0.55, "silver-lining peak is 0.55");
+{
+  const s = cloudSilverLiningForDay(0.5);
+  assert.ok(Math.abs(s - 0.55) < 1e-9, `dusk silver is peak: got ${s}`);
+}
+{
+  const s = cloudSilverLiningForDay(0.25);
+  // sin(0) = 0 → 0.30
+  assert.ok(Math.abs(s - 0.30) < 1e-9, `noon silver is baseline: got ${s}`);
+}
+{
+  const s = cloudSilverLiningForDay(0);
+  // sin(-π/2) = -1 → 0.30 - 0.25 = 0.05
+  assert.ok(Math.abs(s - 0.05) < 1e-9, `dawn silver is minimum: got ${s}`);
+}
+{
+  for (let i = 0; i <= 200; i += 1) {
+    const df = i / 200;
+    const s = cloudSilverLiningForDay(df);
+    assert.ok(Number.isFinite(s) && s >= 0 && s <= CLOUD_SILVER_PEAK, `silver in range; df=${df} s=${s}`);
+  }
+}
+
+// ── underbelly-lift ──────────────────────────────────────────────────────
+// Peaks at horizon (dawn, dusk); zero at noon and midnight. The base of
+// the cloud slab gets this factor added onto its sun contribution.
+
+assert.equal(CLOUD_UNDERBELLY_PEAK, 1.6, "underbelly peak is 1.6");
+{
+  const s = cloudUnderbellyLift(0);
+  assert.ok(Math.abs(s - 1.6) < 1e-9, `dawn underbelly is peak: got ${s}`);
+}
+{
+  const s = cloudUnderbellyLift(0.5);
+  assert.ok(Math.abs(s - 1.6) < 1e-9, `dusk underbelly is peak: got ${s}`);
+}
+{
+  const s = cloudUnderbellyLift(0.25);
+  assert.equal(s, 0, `noon underbelly is 0: got ${s}`);
+}
+{
+  const s = cloudUnderbellyLift(0.75);
+  assert.equal(s, 0, `midnight underbelly is 0: got ${s}`);
+}
+// Continuity and range.
+for (let i = 0; i <= 200; i += 1) {
+  const df = i / 200;
+  const s = cloudUnderbellyLift(df);
+  assert.ok(Number.isFinite(s) && s >= 0 && s <= 1.6 + 1e-9, `underbelly in range; df=${df} s=${s}`);
+}
+// Halfway between noon and dusk — lift between 0 and peak.
+{
+  const s = cloudUnderbellyLift(0.375);
+  assert.ok(s > 0 && s < 1.6, `df=0.375 underbelly=${s} between 0 and peak`);
+}
+
 // ── shader source carries the raymarch operations ───────────────────────
 // A future silent shader edit that removed the HG phase, the sun
 // march, the coverage threshold, or the front-to-back composite
@@ -259,6 +415,17 @@ assert.ok(frag.includes("raySlab"), "fragment carries the slab-intersection help
 assert.ok(frag.includes("accumAlpha"), "fragment integrates alpha front-to-back");
 assert.ok(frag.includes("accumColor"), "fragment integrates colour front-to-back");
 assert.ok(frag.includes("if (uStrength <= 0.0)"), "fragment short-circuits when strength is zero");
+// r9-0 additions: vertical stratification, pink underbelly, multi-scatter,
+// silver-lining. Named in the source so a silent removal fails here
+// before the pink drains out of the frame.
+assert.ok(frag.includes("uHorizonPink"), "fragment tints base samples with horizon-pink");
+assert.ok(frag.includes("uUnderbellyLift"), "fragment lifts sun contribution near slab base");
+assert.ok(frag.includes("uMsBoost"), "fragment integrates multi-scatter interior lift");
+assert.ok(frag.includes("uSilverLining"), "fragment sharpens forward-scatter into silver lining");
+assert.ok(frag.includes("basePref"), "fragment computes vertical stratification");
+assert.ok(frag.includes("phaseSilver"), "fragment carries the narrow silver-lining lobe");
+assert.ok(frag.includes("msLight"), "fragment carries the multi-scatter contribution");
+assert.ok(frag.includes("bellyGain"), "fragment applies the underbelly-lift multiplier");
 
 // vertex reconstructs the world ray
 assert.ok(cloudVertexShader.includes("uInvViewProj"), "vertex uses the inverse view-projection matrix");
@@ -298,6 +465,8 @@ assert.ok(cloudVertexShader.includes("uCamPos"), "vertex reads the camera world 
     "uInvViewProj", "uCamPos", "uSunDir", "uSunColor", "uAmbientColor",
     "uCoverage", "uDensityMul", "uWindOffset", "uSlabBase", "uSlabTop",
     "uHgG", "uStrength",
+    // r9-0 additions
+    "uHorizonPink", "uUnderbellyLift", "uMsBoost", "uSilverLining",
   ]) {
     assert.ok(u[name], `uniform ${name} exists`);
   }
@@ -347,6 +516,47 @@ assert.ok(cloudVertexShader.includes("uCamPos"), "vertex reads the camera world 
   const uAtDusk = clouds.mesh.material.uniforms;
   assert.ok(Math.abs(uAtDusk.uCoverage.value - 0.65) < 1e-9, "dusk update writes coverage=0.65");
   assert.ok(Math.abs(uAtDusk.uDensityMul.value - 1.3) < 1e-9, "dusk update writes density=1.3");
+  // r9-0: dusk update writes the pink-underbelly uniforms.
+  assert.ok(Math.abs(uAtDusk.uUnderbellyLift.value - 1.6) < 1e-9, "dusk writes underbelly peak");
+  assert.ok(Math.abs(uAtDusk.uMsBoost.value - 0.35) < 1e-9, "dusk writes multi-scatter peak");
+  assert.ok(Math.abs(uAtDusk.uSilverLining.value - 0.55) < 1e-9, "dusk writes silver-lining peak");
+  // Without an override the analytical pink lands.
+  assert.ok(Math.abs(uAtDusk.uHorizonPink.value.x - CLOUD_HORIZON_PINK_R) < 1e-9,
+    "dusk without override: analytical R");
+  assert.ok(Math.abs(uAtDusk.uHorizonPink.value.y - CLOUD_HORIZON_PINK_G) < 1e-9,
+    "dusk without override: analytical G");
+  assert.ok(Math.abs(uAtDusk.uHorizonPink.value.z - CLOUD_HORIZON_PINK_B) < 1e-9,
+    "dusk without override: analytical B");
+  // A caller-provided horizonPink takes precedence over the analytical
+  // curve — the Preetham path in City.tsx feeds a physical sample.
+  clouds.update({
+    dayFraction: 0.5,
+    sunDir: new V3(0, 1, 0),
+    sunColor: new Color(1, 0.8, 0.6),
+    ambientColor: new Color(0.5, 0.6, 0.75),
+    cityTimeMs: 12345,
+    tier: "high",
+    camera,
+    horizonPink: { r: 1.2, g: 0.55, b: 0.8 },
+  });
+  assert.ok(Math.abs(uAtDusk.uHorizonPink.value.x - 1.2) < 1e-9, "override R lands");
+  assert.ok(Math.abs(uAtDusk.uHorizonPink.value.y - 0.55) < 1e-9, "override G lands");
+  assert.ok(Math.abs(uAtDusk.uHorizonPink.value.z - 0.80) < 1e-9, "override B lands");
+  // A noon update collapses the underbelly-lift back to zero — no
+  // pink at midday, when the sun is overhead.
+  clouds.update({
+    dayFraction: 0.25,
+    sunDir: new V3(0, 1, 0),
+    sunColor: new Color(1, 0.8, 0.6),
+    ambientColor: new Color(0.5, 0.6, 0.75),
+    cityTimeMs: 12345,
+    tier: "high",
+    camera,
+  });
+  assert.equal(uAtDusk.uUnderbellyLift.value, 0, "noon: underbelly lift zeroed");
+  assert.ok(Math.abs(uAtDusk.uHorizonPink.value.x - 1) < 1e-9, "noon: pink tint neutral R");
+  assert.ok(Math.abs(uAtDusk.uHorizonPink.value.y - 1) < 1e-9, "noon: pink tint neutral G");
+  assert.ok(Math.abs(uAtDusk.uHorizonPink.value.z - 1) < 1e-9, "noon: pink tint neutral B");
   // A tier drop to low hides the mesh and does no more work.
   clouds.update({
     dayFraction: 0.5,
@@ -364,5 +574,7 @@ assert.ok(cloudVertexShader.includes("uCamPos"), "vertex reads the camera world 
 console.log(
   "city-clouds ok: 200 m slab at 800 m altitude, coverage 0.5→0.65 across day, " +
   "density peaks at dusk (1.3), 6 m/s easterly wind is deterministic in cityTimeMs, " +
-  "48/32/0 tier ladder, HG g=0.6 for silver-lining phase, raymarch operations named.",
+  "48/32/0 tier ladder, HG g=0.6 for silver-lining phase, raymarch operations named, " +
+  "r9-0: horizon-pink (1.35, 0.60, 0.72) peaks at dusk/dawn, underbelly-lift 1.6, " +
+  "multi-scatter 0.35, silver-lining 0.55, all four uniforms + shader ops named.",
 );

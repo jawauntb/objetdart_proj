@@ -134,6 +134,174 @@ export const CLOUD_HG_G = 0.6;
 export const CLOUD_WIND_MPS = 6.0;
 
 /**
+ * Peak horizon-pink chroma at dusk / dawn. A dusty pink centred at ~2300 K
+ * blackbody with a Rayleigh red-shift pulled through 6 airmasses of
+ * atmosphere — this is the colour that the setting sun's remaining light
+ * actually is once it has crossed the sideways-longest atmospheric path
+ * on the way to a cloud underside. Kept as a linear-space vec3 so it
+ * feeds the ShaderMaterial and the tests uniformly.
+ *
+ *   R = 1.35  → boosted red channel (the horizon flush)
+ *   G = 0.60  → mid green, warm not gold
+ *   B = 0.72  → lifted blue — this is what tips the tone from ORANGE
+ *               toward PINK, matching the London-dusk reference. A pure
+ *               orange (0.20-ish blue) would be the SF-noon sun; the
+ *               London-sunset reference has a distinctly cool-pink
+ *               undertone, and that is what this constant captures.
+ *
+ * A future refactor that dropped the blue toward 0.2 would drift the
+ * aesthetic toward SF-day orange; one that pushed the green above 0.8
+ * would flatten the tint toward salmon. Test pins the value.
+ */
+export const CLOUD_HORIZON_PINK_R = 1.35;
+export const CLOUD_HORIZON_PINK_G = 0.60;
+export const CLOUD_HORIZON_PINK_B = 0.72;
+
+/**
+ * Peak multi-scatter contribution at dusk. Bouthors / Wrenninge use a
+ * Taylor-series expansion of the RTE where each order contributes an
+ * exponentially-decaying share; we cap the sum at 0.35 (a moderate
+ * lift, not a wash-out) at the emotional peak. At noon multi-scatter
+ * is negligible because sun-transmittance is already high enough that
+ * the interior samples read plausibly bright without the lift.
+ *
+ * The test pins the peak so a regression that dropped it to zero
+ * would return the cloud interiors to pure black at dusk — a diagram,
+ * not a photograph.
+ */
+export const CLOUD_MS_PEAK = 0.35;
+
+/**
+ * Peak silver-lining boost at dusk. The forward-scattering lobe uses
+ * g=0.6 (the module's HG constant); the silver-lining boost mixes in
+ * a much narrower g=0.9 lobe when the sample sits near the sun's
+ * horizontal direction. 0.55 is a moderate silver — enough to make
+ * cloud edges near the sun BLAZE the way the London reference shows,
+ * not so much that a broken cumulus becomes a spotlight.
+ */
+export const CLOUD_SILVER_PEAK = 0.55;
+
+/**
+ * Peak underbelly-lift at dusk. Samples near the slab base get their
+ * sun contribution multiplied by (1 + uUnderbellyLift), which is the
+ * physical read of horizon light illuminating the underside of a
+ * cloud more strongly than the top (the top sees the zenith sky
+ * directly, the bottom sees the horizon sun grazing sideways).
+ *
+ *   df=0.25 (noon)   → 0.0  (sun is overhead; base and top light equally)
+ *   df=0.5  (dusk)   → 1.6  (peak — underbelly ignites)
+ *   df=0.75 (midnight) → 0.0 (no sun to light the underbelly)
+ *
+ * Test pins the four cardinals — a regression that flipped noon to peak
+ * would render the SF-day photo with lit cloud bottoms and no lit tops,
+ * inverting the reference. A regression that dropped dusk to 0 would
+ * kill the pink-underbelly read entirely.
+ */
+export const CLOUD_UNDERBELLY_PEAK = 1.6;
+
+/**
+ * Horizon-pink tint as a function of dayFraction. Peaks at dusk
+ * (df=0.5) and dawn (df=0) — both moments when the sun crosses the
+ * horizon and its light is Rayleigh-reddened through six airmasses
+ * of atmosphere. At noon the tint is a neutral (1,1,1) — no pink
+ * bias, the sun colour rides straight through.
+ *
+ * The curve is a triangular ramp on horizon-proximity: 1 at either
+ * horizon crossing, 0 at noon and midnight. Multiplied against the
+ * peak vec3 constant above so the result is smoothly interpolable
+ * between neutral (noon) and full pink (horizon).
+ *
+ * Exported and pure so scripts/test-city-clouds.mjs can pin the
+ * curve at the four cardinal times.
+ */
+export function cloudHorizonPink(dayFraction: number): {
+  r: number;
+  g: number;
+  b: number;
+} {
+  const f = ((dayFraction % 1) + 1) % 1;
+  // Distance to nearest horizon crossing (df=0 or df=0.5) on wrapped axis.
+  const dDawn = Math.min(f, 1 - f);
+  const dDusk = Math.abs(f - 0.5);
+  const dHoriz = Math.min(dDawn, dDusk);
+  // Ramp: 1 at horizon (d=0), 0 at 0.25 away (noon or midnight).
+  const t = Math.max(0, 1 - dHoriz * 4);
+  // Smoothstep so the ramp is continuous in slope at the horizon.
+  const s = t * t * (3 - 2 * t);
+  return {
+    r: 1 + (CLOUD_HORIZON_PINK_R - 1) * s,
+    g: 1 + (CLOUD_HORIZON_PINK_G - 1) * s,
+    b: 1 + (CLOUD_HORIZON_PINK_B - 1) * s,
+  };
+}
+
+/**
+ * Multi-scatter Taylor-series lift as a function of dayFraction. The
+ * lift is a Wrenninge/Bouthors trick: interior cloud samples where the
+ * primary-ray sun-transmittance has dropped to near-zero would normally
+ * read pure black, but real cumulus interiors are lit by multi-scatter
+ * from surrounding cloud. We approximate that as a bounded additive
+ * term whose peak scales with the day's density curve — thicker cloud
+ * at dusk feeds a larger multi-scatter reservoir.
+ *
+ *   df=0.25 (noon)   → 0.10  (thin cumulus — negligible interior lift)
+ *   df=0.5  (dusk)   → 0.35  (peak — pink glow through thick storm)
+ *   df=0.75 (midnight) → 0.20 (moon-lit cool overcast interior)
+ *
+ * Test pins the peak.
+ */
+export function cloudMultiScatterForDay(dayFraction: number): number {
+  const f = ((dayFraction % 1) + 1) % 1;
+  // Broad hump at dusk. Base 0.15, amplitude 0.20.
+  const s = 0.15 + 0.20 * Math.sin(f * Math.PI * 2 - Math.PI * 0.5);
+  return s < 0 ? 0 : s > CLOUD_MS_PEAK ? CLOUD_MS_PEAK : s;
+}
+
+/**
+ * Silver-lining boost as a function of dayFraction. The forward
+ * scatter lobe (HG g=0.6) is what gives the base of the shader its
+ * halo; a secondary narrow lobe (g=0.9) mixed in near the sun turns
+ * the halo into a sharp silver edge on cloud shoulders facing the
+ * sun.
+ *
+ *   df=0.25 (noon)   → 0.30  (whisper — sun overhead, halo is a rim)
+ *   df=0.5  (dusk)   → 0.55  (peak — the London reference)
+ *   df=0.75 (midnight) → 0.10 (moon; a hint of silver on the leading edge)
+ *
+ * Test pins the peak.
+ */
+export function cloudSilverLiningForDay(dayFraction: number): number {
+  const f = ((dayFraction % 1) + 1) % 1;
+  const s = 0.30 + 0.25 * Math.sin(f * Math.PI * 2 - Math.PI * 0.5);
+  return s < 0 ? 0 : s > CLOUD_SILVER_PEAK ? CLOUD_SILVER_PEAK : s;
+}
+
+/**
+ * Underbelly-lift as a function of dayFraction. See CLOUD_UNDERBELLY_PEAK
+ * for the physics. Curve peaks at dusk, zero at noon and midnight —
+ * the underbelly-lift is a horizon-only phenomenon.
+ *
+ *   df=0.0  (dawn)   → 1.6 (peak — underbelly ignites)
+ *   df=0.25 (noon)   → 0.0
+ *   df=0.5  (dusk)   → 1.6 (peak — the London reference)
+ *   df=0.75 (midnight) → 0.0
+ *
+ * A future regression that peaked at noon would inverting the reference
+ * (bright bottoms of clouds mid-day is not how sunlight works). Test
+ * pins the four cardinals.
+ */
+export function cloudUnderbellyLift(dayFraction: number): number {
+  const f = ((dayFraction % 1) + 1) % 1;
+  const dDawn = Math.min(f, 1 - f);
+  const dDusk = Math.abs(f - 0.5);
+  const dHoriz = Math.min(dDawn, dDusk);
+  // Ramp: peak at horizon (d=0), 0 at 0.25 away (noon or midnight).
+  const t = Math.max(0, 1 - dHoriz * 4);
+  const s = t * t * (3 - 2 * t);
+  return CLOUD_UNDERBELLY_PEAK * s;
+}
+
+/**
  * Coverage curve as a function of dayFraction.
  *
  * The curve is a slow sinusoid so the sky reads:
@@ -339,6 +507,20 @@ const CLOUD_FRAGMENT_TEMPLATE = /* glsl */ `
   /** Multiplier for the whole cloud contribution; used to fade clouds in
       or out under a tier transition without a hard pop. */
   uniform float uStrength;
+  /** Horizon Rayleigh-reddened pink tint. Multiplied into the sun's
+      light contribution at the BASE of the cloud slab so underbellies
+      go pink at dusk. Neutral (1,1,1) at noon. */
+  uniform vec3  uHorizonPink;
+  /** Extra multiplier on the sun's contribution at the base of the slab
+      (0 at top, uUnderbellyLift+1 at base). Peaks at dusk. */
+  uniform float uUnderbellyLift;
+  /** Multi-scatter Taylor-series contribution scalar. Lifts thick-cloud
+      interiors from black toward the ambient/sun cast so a storm doesn't
+      read as a black silhouette. Peaks at dusk. */
+  uniform float uMsBoost;
+  /** Silver-lining boost: mixes in a narrow g=0.9 HG lobe near the sun
+      to sharpen the halo on cloud shoulders. Peaks at dusk. */
+  uniform float uSilverLining;
 
   // Cheap 3D hash for value noise. Not a texture — a 32³ noise LUT would
   // read more organically but at the cost of a 32 KB texture the module
@@ -465,7 +647,17 @@ const CLOUD_FRAGMENT_TEMPLATE = /* glsl */ `
 
     float dt = (tExit - tEnter) / float(PRIMARY_STEPS);
     float cosTheta = dot(rayDir, uSunDir);
-    float phase = hgPhase(cosTheta, uHgG);
+    // Primary forward-scattering lobe at g=0.6 — the general halo the
+    // reference clouds carry all day. Silver-lining boost mixes in a
+    // narrower g=0.9 lobe at dusk so the shoulders near the sun blaze.
+    float phaseBase   = hgPhase(cosTheta, uHgG);
+    float phaseSilver = hgPhase(cosTheta, 0.9);
+    float phase = phaseBase + uSilverLining * phaseSilver;
+
+    // Slab midpoint for the vertical stratification factor. Cached
+    // outside the loop so the two arithmetic ops don't repeat per sample.
+    float midY = (uSlabBase + uSlabTop) * 0.5;
+    float halfH = max(1.0, (uSlabTop - uSlabBase) * 0.5);
 
     vec3 accumColor = vec3(0.0);
     float accumAlpha = 0.0;
@@ -478,6 +670,17 @@ const CLOUD_FRAGMENT_TEMPLATE = /* glsl */ `
       vec3 samplePos = uCamPos + rayDir * t;
       float d = densityAt(samplePos);
       if (d <= 1e-4) continue;
+
+      // Vertical stratification factor. basePref = 1 at slab base, 0 at
+      // slab top. This is the "underbelly" factor — samples near the
+      // base see more grazing horizon light and get the pink tint /
+      // underbelly-lift; samples near the top see the zenith sky more
+      // directly and get straight ambient. Smoothstep so a sample at
+      // the exact midpoint transitions continuously.
+      float vRel = (samplePos.y - uSlabBase) / (2.0 * halfH);
+      vRel = clamp(vRel, 0.0, 1.0);
+      float basePref = 1.0 - vRel;
+      basePref = basePref * basePref * (3.0 - 2.0 * basePref);
 
       // Sun-ray transmittance: short march toward the sun, sum density.
       float sunTau = 0.0;
@@ -501,12 +704,39 @@ const CLOUD_FRAGMENT_TEMPLATE = /* glsl */ `
       // simplification.
       float ambT = exp(-d * 40.0);
 
-      // Sample light: sun tone × phase × sun-transmittance, plus a
-      // small ambient tone weighted by (1 - ambT). Physically this
-      // is "how much of the sun made it to this sample and scattered
-      // toward the camera" plus "how much of the zenith sky made it
-      // to this sample and scattered isotropically toward the camera".
-      vec3 lightHere = uSunColor * phase * sunT + uAmbientColor * (1.0 - ambT) * 0.35;
+      // The horizon-pink tint applies most strongly at the BASE of the
+      // slab and fades to neutral at the top — the physics is that
+      // horizon-crossing light travels sideways under the cloud and lit
+      // its underside; the top of the same cloud is lit by the zenith
+      // sky, which is not pink.
+      vec3 sunTint = mix(vec3(1.0), uHorizonPink, basePref);
+      // Underbelly-lift: base samples get an extra multiplier on the sun
+      // contribution. At noon uUnderbellyLift is 0 so this collapses to
+      // 1 — no lift. At dusk basePref*uUnderbellyLift peaks at ~1.6 at
+      // the bottom sample, doubling+ the sun's contribution there.
+      float bellyGain = 1.0 + basePref * uUnderbellyLift;
+
+      // Multi-scatter Taylor lift — Wrenninge's approximation of the
+      // higher-order scatter that keeps thick cumulus interiors from
+      // rendering as black voids. The lift scales with the surviving
+      // sun-transmittance so a totally-shadowed sample stays dark
+      // (physical), but a partly-lit interior gains a warm pink glow.
+      // The 0.6+0.4*basePref factor biases the multi-scatter toward
+      // the underbelly — where the light is spectrally pink.
+      float msT = exp(-sunTau * 0.001);
+      vec3 msLight = uSunColor * sunTint * msT * uMsBoost * (0.6 + 0.4 * basePref);
+
+      // Sample light: (sun × phase × sun-transmittance × pink-tint ×
+      // belly-gain) + (ambient × sky-transmittance × 0.35) + (multi-
+      // scatter). Physically this is "how much of the sun made it to
+      // this sample and scattered toward the camera along a Rayleigh-
+      // reddened path" plus "how much of the sky reached and scattered
+      // isotropically" plus "how much scattered light bounced through
+      // the surrounding cloud and reached us here".
+      vec3 lightHere =
+          uSunColor * sunTint * bellyGain * phase * sunT
+        + uAmbientColor * (1.0 - ambT) * 0.35
+        + msLight;
 
       // Alpha step at this sample from the density and step length.
       float stepAlpha = 1.0 - exp(-d * dt * 0.02);
@@ -576,6 +806,18 @@ export type CloudsUpdate = {
   tier: QualityTier;
   /** The world-scene camera. */
   camera: THREE.PerspectiveCamera;
+  /**
+   * Optional horizon-pink tint the caller has sampled from the Preetham
+   * sky at the sun's horizon direction. When present the module trusts
+   * this over its analytical cloudHorizonPink curve — the sampled value
+   * is what the physical atmosphere actually paints on the underside of
+   * a cloud at horizon light. When null / omitted, the module falls back
+   * to the analytical curve so no caller receives an unlit underbelly.
+   *
+   * A plain rgb object rather than a THREE.Color so the pure test suite
+   * can drive it without a THREE dependency.
+   */
+  horizonPink?: { r: number; g: number; b: number } | null;
 };
 
 export type CityClouds = {
@@ -643,6 +885,13 @@ export function createCityClouds(opts: CityCloudsOptions = {}): CityClouds {
         uSlabTop: { value: CLOUD_TOP_ALT },
         uHgG: { value: CLOUD_HG_G },
         uStrength: { value: 1.0 },
+        // Neutral at construction — the tick loop overwrites once the
+        // dayFraction is known. A pass that never receives an update
+        // still ships a plausible noon-cumulus frame.
+        uHorizonPink: { value: new THREE.Vector3(1, 1, 1) },
+        uUnderbellyLift: { value: 0 },
+        uMsBoost: { value: cloudMultiScatterForDay(0.25) },
+        uSilverLining: { value: cloudSilverLiningForDay(0.25) },
       },
       transparent: true,
       depthWrite: false,
@@ -680,6 +929,10 @@ export function createCityClouds(opts: CityCloudsOptions = {}): CityClouds {
   // Reusable scratch — Vector3 for sun colour uniform writes.
   const sunColorVec = new THREE.Vector3();
   const ambientColorVec = new THREE.Vector3();
+  // Reusable scratch — Vector3 for the horizon-pink tint. Cheaper to
+  // rewrite the members of a shared vec3 than to allocate a new one
+  // per frame; the uniform pointer never moves.
+  const horizonPinkVec = new THREE.Vector3(1, 1, 1);
 
   return {
     mesh,
@@ -735,6 +988,26 @@ export function createCityClouds(opts: CityCloudsOptions = {}): CityClouds {
       // Slow-changing day-driven scalars.
       material.uniforms.uCoverage.value = cloudCoverageForDay(state.dayFraction);
       material.uniforms.uDensityMul.value = cloudDensityForDay(state.dayFraction);
+
+      // Horizon-pink tint. The caller may override with a physically-
+      // sampled Preetham horizon colour (city-sky.ts's sampleSkyColor),
+      // in which case we take it directly. If the caller passes null
+      // (the pre-r9 path) we compute the analytical curve here so a
+      // legacy caller still gets pink underbellies. The uniform vec3
+      // is reused — mutating its members is cheaper than allocation.
+      if (state.horizonPink) {
+        horizonPinkVec.set(state.horizonPink.r, state.horizonPink.g, state.horizonPink.b);
+      } else {
+        const p = cloudHorizonPink(state.dayFraction);
+        horizonPinkVec.set(p.r, p.g, p.b);
+      }
+      material.uniforms.uHorizonPink.value = horizonPinkVec;
+
+      // Underbelly-lift, multi-scatter, silver-lining — all pure
+      // functions of dayFraction. Each maps to a single uniform write.
+      material.uniforms.uUnderbellyLift.value = cloudUnderbellyLift(state.dayFraction);
+      material.uniforms.uMsBoost.value = cloudMultiScatterForDay(state.dayFraction);
+      material.uniforms.uSilverLining.value = cloudSilverLiningForDay(state.dayFraction);
 
       // Wind offset from cityTimeMs — the pure function above.
       const wind = cloudWindOffset(state.cityTimeMs);
