@@ -77,6 +77,7 @@
     "test:city-grading": "node scripts/test-city-grading.mjs",
     "test:city-ground": "node scripts/test-city-ground.mjs",
     "test:city-water": "node scripts/test-city-water.mjs",
+    "perf:city-water": "node scripts/perf-city-water.mjs",
     "test:city-painterly": "node scripts/test-city-painterly.mjs",
     "test:city-godrays": "node scripts/test-city-godrays.mjs",
     "test:city-traffic": "node scripts/test-city-traffic.mjs",

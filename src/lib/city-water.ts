@@ -535,6 +535,106 @@ const MARCH_STEPS_HIGH = 24;
 const MARCH_STEPS_MEDIUM = 16;
 const MARCH_DISTANCE = 120.0;
 
+// ─── mirror-refresh cadence (idle-guard) ───────────────────────────────
+// The reflection RT re-renders the entire skyline scene from a mirror
+// camera every frame — ~50–100 draw calls that duplicate the primary
+// pass. Nothing forces that duplication on an idle frame: if the camera
+// hasn't moved and the sky slot hasn't advanced and no plot has toggled,
+// the reflection is byte-identical to last frame's, and keeping the
+// previous RT is honest. `mirrorRefreshDecision` is the pure kernel of
+// that guard — same shape called from `onBeforeRender` and re-called
+// from `scripts/test-city-water.mjs` and `scripts/perf-city-water.mjs`
+// so the cadence is testable without a WebGL context.
+//
+// Day slot bucketing — the Preetham sky rebakes on four cardinal
+// boundaries (dawn/day/dusk/night), and the reflection tracks it. We
+// bucket the day fraction into 24 slots (roughly one per solar hour)
+// so a very slow day cycle still refreshes the mirror at a smooth
+// cadence even when the visitor is holding perfectly still.
+export const MIRROR_DAY_SLOTS = 24;
+/** Bucket a 0..1 day fraction into a discrete slot for the idle guard. */
+export function mirrorDaySlot(dayFraction: number): number {
+  if (!Number.isFinite(dayFraction)) return 0;
+  const norm = ((dayFraction % 1) + 1) % 1;
+  return Math.floor(norm * MIRROR_DAY_SLOTS);
+}
+
+/**
+ * A cheap fingerprint over a plot list: length + xor-mix of (seed,
+ * sealed, role). Collision-safe enough to catch any add/remove/seal
+ * flip in the idle-guard critical path; we do NOT need cryptographic
+ * strength here — a false negative (missed change) at worst holds a
+ * stale reflection for one frame, and a false positive (missed match)
+ * just re-renders when it didn't need to.
+ */
+export function mirrorPlotSig(plots: ReadonlyArray<{ seed: number; sealed: boolean; role: string }>): number {
+  let sig = (plots.length * 2654435761) | 0;
+  for (let i = 0; i < plots.length; i += 1) {
+    const p = plots[i];
+    sig = (sig ^ ((p.seed | 0) + i)) >>> 0;
+    sig = (Math.imul(sig, 16777619) >>> 0) ^ (p.sealed ? 0x9e3779b1 : 0x85ebca6b);
+    // Fold in a short-hash of the role so a role-flip is caught even
+    // when seed and sealed are unchanged.
+    const roleTag = p.role.length | (p.role.charCodeAt(0) << 4);
+    sig = (sig ^ roleTag) >>> 0;
+  }
+  return sig | 0;
+}
+
+/** Result of the idle-guard decision. */
+export type MirrorRefreshOutcome =
+  /** first frame or invalidator changed — do a full render. */
+  | "render"
+  /** medium tier alternate frame — hold the previous RT. */
+  | "skip-medium-parity"
+  /** camera + epoch identical to the last render — hold the previous RT. */
+  | "skip-idle";
+
+export type MirrorRefreshState = {
+  /** Whether a mirror render has ever landed. First frame always renders. */
+  hasRendered: boolean;
+  /** Whether the visitor's camera matrix has moved since the last render. */
+  camChanged: boolean;
+  /** Whether any invalidator (sky slot, plot sig, tier, RT size) has changed. */
+  epochChanged: boolean;
+  /**
+   * The frame counter's parity (0/1) for the medium-tier every-other-frame
+   * cadence. Ignored on high tier. The counter is bumped once per update()
+   * regardless of whether we actually rendered.
+   */
+  mediumFrameParity: 0 | 1;
+  /** Current governor tier — decides the parity gate. */
+  tier: QualityTier;
+};
+
+/**
+ * Pure kernel of the water mirror's idle guard. Given the state of the
+ * invalidators for one frame, return whether we render the reflection
+ * RT or hold the previous one. The reflection is a low-frequency signal:
+ * a still visitor at a still hour has no reason to re-render the mirror
+ * every frame at 60 Hz. Medium tier caps the refresh at 30 Hz (every
+ * other frame) even when the scene is actively changing — the primary
+ * scene stays at 60 Hz; only the mirror halves.
+ */
+export function mirrorRefreshDecision(state: MirrorRefreshState): MirrorRefreshOutcome {
+  if (!state.hasRendered) return "render";
+  const invalidated = state.camChanged || state.epochChanged;
+  if (state.tier === "medium") {
+    // On medium, honour parity BEFORE checking invalidation: even a
+    // moving camera on medium is served at 30 Hz. This is what caps
+    // the mirror's cost on the M1 baseline.
+    if (state.mediumFrameParity === 1) return "skip-medium-parity";
+    // Even-parity frame: if nothing changed, still skip — a moving
+    // scene will hit the parity gate on odd frames and the render
+    // path on even ones, giving 30 Hz.
+    if (!invalidated) return "skip-idle";
+    return "render";
+  }
+  // high / low / sleep: only skip when nothing has changed.
+  if (!invalidated) return "skip-idle";
+  return "render";
+}
+
 // ─── public API ─────────────────────────────────────────────────────────
 
 export type CityWaterUpdate = {
@@ -568,6 +668,13 @@ export type CityWater = {
   setEnvMap(env: THREE.CubeTexture | null): void;
   /** dispose GL resources; call before renderer.dispose() */
   dispose(): void;
+  /**
+   * Snapshot the idle-guard counters. Used by scripts/perf-city-water.mjs
+   * and any devtools poke to prove the mirror is holding stale RTs on
+   * idle frames instead of re-rendering the skyline every tick. Not on
+   * the render hot path — call once per second or on demand.
+   */
+  getMirrorStats(): { renders: number; skips: number };
 };
 
 export type CityWaterOptions = {
@@ -591,6 +698,24 @@ export type CityWaterOptions = {
    */
   envMap?: THREE.CubeTexture | null;
 };
+
+/** Cheap identity check between a Matrix4 and a saved Float64Array of
+ * its elements. Called on the render hot path — a manual unrolled
+ * compare beats a Float32Array copy + memcmp in Node, and reads the
+ * matrix elements directly instead of allocating a Vector3 per axis. */
+function matrixEqualsElements(m: THREE.Matrix4, saved: Float64Array): boolean {
+  const e = m.elements;
+  for (let i = 0; i < 16; i += 1) {
+    if (e[i] !== saved[i]) return false;
+  }
+  return true;
+}
+function copyMatrixElements(m: THREE.Matrix4, dst: Float64Array): void {
+  const e = m.elements;
+  for (let i = 0; i < 16; i += 1) {
+    dst[i] = e[i];
+  }
+}
 
 /**
  * Build the /city harbour. Idempotent per mount — nothing here is global,
@@ -713,6 +838,21 @@ export function createCityWater(opts: CityWaterOptions): CityWater {
   // Vec3 scratch buffers — allocated once.
   const scratchCamPos = new THREE.Vector3();
 
+  // Idle-guard state — closed over by both update() (bumps sceneEpoch
+  // when the invalidators change) and onBeforeRender (compares against
+  // the last rendered epoch + camera matrix). See mirrorRefreshDecision
+  // above for the pure kernel of the decision.
+  const lastCamMatrix = new Float64Array(16);
+  let hasCamBaseline = false;
+  let sceneEpoch = 0;
+  let renderedEpoch = -1;
+  let hasEverRendered = false;
+  // Counts refreshes across the lifetime of the water — read by the
+  // perf harness (scripts/perf-city-water.mjs) to prove the idle-guard
+  // is holding the RT. Also useful in the field for a devtools poke.
+  let mirrorRenderCount = 0;
+  let mirrorSkipCount = 0;
+
   water.onBeforeRender = function ssrOnBeforeRender(
     renderer: THREE.WebGLRenderer,
     _scene: THREE.Scene,
@@ -729,6 +869,32 @@ export function createCityWater(opts: CityWaterOptions): CityWater {
       return;
     }
     const mainCam = camera as THREE.PerspectiveCamera;
+
+    // ── idle guard ──────────────────────────────────────────────────
+    // If the camera hasn't moved and no invalidator has fired since the
+    // last render, keep the previous RT — the mirror is a low-frequency
+    // signal and reproducing the same pixels is pure waste. Medium tier
+    // additionally caps refresh at 30 Hz (every other frame) even when
+    // the scene is actively changing; the primary scene stays at 60 Hz.
+    const camMatChanged = hasCamBaseline
+      ? !matrixEqualsElements(mainCam.matrixWorld, lastCamMatrix)
+      : true;
+    const outcome = mirrorRefreshDecision({
+      hasRendered: hasEverRendered,
+      camChanged: camMatChanged,
+      epochChanged: renderedEpoch !== sceneEpoch,
+      mediumFrameParity: (frameCounter & 1) as 0 | 1,
+      tier: lastTier ?? "high",
+    });
+    if (outcome !== "render") {
+      // Do NOT touch uMirrorViewProjMatrix or textureMatrix on a skipped
+      // frame — the water shader must keep projecting against the same
+      // mirror camera whose scene lives in the RT, or we'd get parallax
+      // mis-registration. The uCameraPos uniform still updated above is
+      // safe: it feeds fresnel, not the mirror UV lookup.
+      mirrorSkipCount += 1;
+      return;
+    }
 
     // Match projection + aspect so the mirror RT frames the same view.
     mirrorCam.projectionMatrix.copy(mainCam.projectionMatrix);
@@ -806,6 +972,13 @@ export function createCityWater(opts: CityWaterOptions): CityWater {
     renderer.shadowMap.autoUpdate = prevShadowAuto;
     renderer.clippingPlanes = prevClippingPlanes;
     renderer.localClippingEnabled = prevClipping;
+
+    // Save the state that gates the next frame's guard.
+    copyMatrixElements(mainCam.matrixWorld, lastCamMatrix);
+    hasCamBaseline = true;
+    renderedEpoch = sceneEpoch;
+    hasEverRendered = true;
+    mirrorRenderCount += 1;
   };
 
   // ── state ────────────────────────────────────────────────────────────
@@ -816,6 +989,13 @@ export function createCityWater(opts: CityWaterOptions): CityWater {
   let lastPixelRatio = opts.pixelRatio;
   let currentRTWidth = initialRTWidth;
   let currentRTHeight = initialRTHeight;
+  // Frame counter drives the medium-tier every-other-frame gate. Bumped
+  // in update() so the parity is a property of the whole tick, not of
+  // whether onBeforeRender was called that tick.
+  let frameCounter = 0;
+  let lastDaySlot = -1;
+  let lastPlotSig = 0;
+  let plotSigInitialised = false;
 
   function resizeRT(tier: QualityTier | null): void {
     const scale = tier === "high" ? 0.7 : tier === "medium" ? 0.5 : 0.5;
@@ -827,6 +1007,9 @@ export function createCityWater(opts: CityWaterOptions): CityWater {
     depthTex.needsUpdate = true;
     currentRTWidth = targetW;
     currentRTHeight = targetH;
+    // Resize is a hard invalidator: the RT dimensions change so the
+    // previous contents are stale.
+    sceneEpoch = (sceneEpoch + 1) | 0;
   }
 
   return {
@@ -857,12 +1040,33 @@ export function createCityWater(opts: CityWaterOptions): CityWater {
           u.tier === "high" ? MARCH_STEPS_HIGH : MARCH_STEPS_MEDIUM;
         lastTier = u.tier;
         if (isReflect) resizeRT(u.tier);
+        // Tier flip is an invalidator — the reflection's step count or
+        // RT scale changed, so the previous contents no longer represent
+        // "what this tier draws".
+        sceneEpoch = (sceneEpoch + 1) | 0;
       }
 
-      // Unused in the SSR path — we render the real skyline into the RT.
-      // The `plots` field is retained on CityWaterUpdate for the legacy
-      // caller shape; the SSR shader reads no per-plot data.
-      void u.plots;
+      // Idle-guard invalidators driven by the update payload.
+      //  1. Day slot: the Preetham sky rebakes on cardinal boundaries;
+      //     bucketing dayFraction into MIRROR_DAY_SLOTS gives the mirror
+      //     a smooth cadence when nothing else changes.
+      //  2. Plot signature: a cheap fingerprint over the plots array
+      //     catches add/remove/seal/role flips that would change the
+      //     skyline scene the mirror draws. On idle the sig is stable.
+      const daySlot = mirrorDaySlot(u.dayFraction);
+      if (daySlot !== lastDaySlot) {
+        sceneEpoch = (sceneEpoch + 1) | 0;
+        lastDaySlot = daySlot;
+      }
+      const plotSig = mirrorPlotSig(u.plots as ReadonlyArray<{ seed: number; sealed: boolean; role: string }>);
+      if (!plotSigInitialised || plotSig !== lastPlotSig) {
+        if (plotSigInitialised) sceneEpoch = (sceneEpoch + 1) | 0;
+        lastPlotSig = plotSig;
+        plotSigInitialised = true;
+      }
+      // Tick the frame counter regardless of render outcome. The medium
+      // tier parity gate reads (frameCounter & 1) inside onBeforeRender.
+      frameCounter = (frameCounter + 1) | 0;
     },
     setSize(width: number, height: number, pixelRatio: number) {
       lastCanvasW = Math.max(1, Math.floor(width));
@@ -891,6 +1095,9 @@ export function createCityWater(opts: CityWaterOptions): CityWater {
         }
         ssrMat.needsUpdate = true;
       }
+    },
+    getMirrorStats() {
+      return { renders: mirrorRenderCount, skips: mirrorSkipCount };
     },
     dispose() {
       try { reflectionRT.dispose(); } catch { /* noop */ }
