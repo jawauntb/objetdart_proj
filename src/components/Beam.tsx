@@ -854,6 +854,59 @@ export default function Beam() {
     let waveBurst = 0;
     let waltzBurst = 0;
 
+    // double tap: a petal cascade — a ripple runs outward, ring by ring, as
+    // if every ring let go and streamed after the one before it. Stages are
+    // fixed and evenly spaced in time — not Math.random — so the same tap
+    // always plays the same cascade.
+    let cascadeTimers: number[] = [];
+    const CASCADE_STAGES = 5;
+    const petalCascade = (wx: number, wy: number, intensity: number) => {
+      for (const t of cascadeTimers) window.clearTimeout(t);
+      cascadeTimers = [];
+      for (let i = 0; i < CASCADE_STAGES; i++) {
+        const id = window.setTimeout(() => {
+          const r = i / (CASCADE_STAGES - 1);
+          uniforms.uRipple.value.set(wx * (0.3 + r * 0.9), wy * (0.3 + r * 0.9), 0);
+          uniforms.uRippleAmp.value = 0.6 + intensity * 0.5 + r * 0.5;
+          waveBurst = Math.max(waveBurst, 1 - r * 0.3);
+          flash = Math.max(flash, 0.2 + intensity * 0.2);
+          try { audioRef.current?.chime(0.5 + r * 0.4); } catch { /* noop */ }
+          try { haptics.ripple(0.25 + r * 0.2); } catch { /* noop */ }
+        }, i * 140);
+        cascadeTimers.push(id);
+      }
+      try { audioRef.current?.whoosh(0.8); } catch { /* noop */ }
+      try { haptics.bloom(); } catch { /* noop */ }
+    };
+
+    // triple tap: the room's largest, rarest event — a shower, not one
+    // meteor. The single meteor slot the room already animates is reused in
+    // a fixed, deterministic rapid sequence rather than an array of streaks,
+    // so every meteor still gets the room's real ballistic shader path.
+    let showerTimers: number[] = [];
+    const METEOR_SHOWER_COUNT = 6;
+    const meteorShower = (intensity: number) => {
+      for (const t of showerTimers) window.clearTimeout(t);
+      showerTimers = [];
+      for (let i = 0; i < METEOR_SHOWER_COUNT; i++) {
+        const id = window.setTimeout(() => {
+          const ang = (i / METEOR_SHOWER_COUNT) * Math.PI * 2 + i * 0.73;
+          const wx2 = Math.cos(ang) * 0.9;
+          const wy2 = Math.sin(ang) * 0.9;
+          const dir = new THREE.Vector2(-wx2, -wy2);
+          if (dir.lengthSq() < 1e-6) dir.set(1, 0); else dir.normalize();
+          uniforms.uMeteorA.value.set(wx2, wy2);
+          uniforms.uMeteorD.value.copy(dir);
+          uniforms.uMeteorAge.value = 0;
+          flash = Math.max(flash, 0.5 + intensity * 0.3);
+          try { audioRef.current?.bell(); } catch { /* noop */ }
+          try { haptics.ripple(0.3 + intensity * 0.3); } catch { /* noop */ }
+        }, i * 260);
+        showerTimers.push(id);
+      }
+      try { haptics.storm(); } catch { /* noop */ }
+    };
+
     const detachGestures = attachGestures(renderer.domElement, {
       tap: (e) => {
         ensureAudio();
@@ -883,13 +936,18 @@ export default function Beam() {
         uniforms.uRippleAmp.value = 0.75 + e.intensity * 0.5;
         try { audioRef.current?.chime(1 - focusTarget); } catch { /* noop */ }
         try { haptics.tap(); } catch { /* noop */ }
+        // a true double tap: the petal cascade, every ring letting go in turn
+        if (e.count === 2) {
+          petalCascade(wx, wy, e.intensity);
+          return;
+        }
         // the train tiers (1 / 3 / 5 / n from gesture/core): rapid taps climb
-        // the formation's own ladder — the wind, the waltz, the blaze
+        // the formation's own ladder — the shower, the waltz, the blaze
         const trainTier = tapTrainTier(e.count);
         if (trainTier === 3 && e.count === 3) {
-          // three taps send the shimmer-wind sprinting round the rings —
-          // the orbiting crest of light breaks into a run
-          waveBurst = 1;
+          // three taps: the room's biggest, rarest event — a shower of
+          // meteors rather than the ceremony's single one
+          meteorShower(e.intensity);
           flash = Math.max(flash, 0.25);
           try { audioRef.current?.whoosh(0.9); } catch { /* noop */ }
           try { haptics.ripple(0.5); } catch { /* noop */ }
@@ -1245,6 +1303,8 @@ export default function Beam() {
 
     return () => {
       cancelAnimationFrame(raf);
+      for (const t of cascadeTimers) window.clearTimeout(t);
+      for (const t of showerTimers) window.clearTimeout(t);
       window.removeEventListener("resize", resize);
       detachGestures();
       unvis();

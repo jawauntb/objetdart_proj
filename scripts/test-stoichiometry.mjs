@@ -25,7 +25,7 @@ function loadTsModule(path) {
   return module.exports;
 }
 
-const { resolveReaction, reactionForPair } = loadTsModule("src/lib/stoichiometry.ts");
+const { resolveReaction, reactionForPair, affordable, cascade } = loadTsModule("src/lib/stoichiometry.ts");
 const { REACTIONS, COMPOUNDS } = loadTsModule("src/lib/chemistry.ts");
 
 // objects born inside the vm sandbox carry a foreign prototype; strip it
@@ -123,6 +123,55 @@ const plain = (v) => JSON.parse(JSON.stringify(v));
       `atoms conserved through resolution: ${keys.join(" + ")}`,
     );
   }
+}
+
+// — THE CASCADE: fire everything the population can pay for, feeding each
+//   round's products back in. The bug this catches is the naive one — a
+//   cascade that fires an equation it cannot afford (half-firing), or that
+//   forgets to credit the products and so stops one step early.
+{
+  // four hydrogens and two oxygens is exactly two units of 2H₂ + O₂ → 2H₂O
+  const { steps, remaining, energy } = cascade(REACTIONS, { H2: 4, O2: 2 });
+  assert.equal(steps.length, 2, "four H₂ and two O₂ burn in exactly two firings");
+  assert.equal(remaining.H2 ?? 0, 0, "every hydrogen is spent");
+  assert.equal(remaining.O2 ?? 0, 0, "and every oxygen with it");
+  assert.equal(remaining.H2O, 4, "four waters condense");
+  assert.equal(energy, 572 * 2, "and the released energy is the sum of the equations");
+  // one H₂ and one O₂ can afford nothing: the half-met equation never fires
+  const short = cascade(REACTIONS, { H2: 1, O2: 1 });
+  assert.equal(short.steps.length, 0, "a half-met equation never half-fires");
+  assert.deepEqual(short.remaining, { H2: 1, O2: 1 }, "and nothing is quietly consumed");
+  // products feed forward — the property that makes this a cascade and not
+  // a loop over a fixed list. Asked of a two-step set the module is handed
+  // (it takes the reactions as an argument precisely so this is askable):
+  // a cascade that failed to credit the products would stop after step one.
+  const ladder = [
+    { reactants: [{ key: "a", n: 2 }], products: [{ key: "b", n: 1 }], energy: 10 },
+    { reactants: [{ key: "b", n: 2 }], products: [{ key: "c", n: 1 }], energy: 5 },
+  ];
+  const chain = cascade(ladder, { a: 8 });
+  assert.equal(chain.steps.length, 6, "four a→b firings, then two b→c: the products fed forward");
+  assert.equal(chain.remaining.a ?? 0, 0, "every a is spent");
+  assert.equal(chain.remaining.b ?? 0, 0, "and every b it became");
+  assert.equal(chain.remaining.c, 2, "leaving two c, which nothing else can consume");
+  assert.equal(chain.energy, 4 * 10 + 2 * 5, "the released energy is the whole ladder's");
+  // the census never goes negative, ever
+  for (const census of [{ H2: 9, O2: 5 }, { CH4: 3, O2: 9 }, { N2: 4, H2: 12, O2: 4 }]) {
+    const out = cascade(REACTIONS, census);
+    for (const [key, n] of Object.entries(out.remaining)) {
+      assert.ok(n >= 0, `${key} never goes into debt during a cascade`);
+    }
+    assert.deepEqual(cascade(REACTIONS, census), out, "the cascade is deterministic in its census");
+  }
+  // exothermic first: what releases energy is what lights the next step
+  const mixed = cascade(REACTIONS, { CH4: 1, O2: 3, N2: 1 });
+  assert.ok(mixed.steps[0].energy > 0, "the cascade opens with an equation that pays");
+  // it terminates on an empty table and on nothing at all
+  assert.equal(cascade([], { H2: 4, O2: 2 }).steps.length, 0, "no equations, no cascade");
+  assert.equal(cascade(REACTIONS, {}).steps.length, 0, "no reactants, no cascade");
+  assert.ok(cascade(REACTIONS, { H2: 400, O2: 400 }, 3).steps.length === 3, "maxSteps bounds the run");
+  assert.ok(affordable(REACTIONS[0], { H2: 2, O2: 1 }), "affordable reads the equation's real demand");
+  assert.ok(!affordable(REACTIONS[0], { H2: 1, O2: 1 }), "and refuses one short");
 }
 
 console.log(

@@ -200,13 +200,16 @@ for (const entry of ROOM_REGISTRY) {
   const raw = read(entry.source);
   interactive.push({
     entry,
-    raw,
+    // both blanked: the handler-body scan must not read a gesture named in a
+    // docstring or a string as a binding
     clean: blank(raw),
+    // comments blanked, strings kept: the ladder's top rung is the literal
+    // "n" that tapTrainTier returns
     code: blank(raw, { strings: false }),
   });
 }
 
-for (const { entry, raw, clean, code } of interactive) {
+for (const { entry, clean, code } of interactive) {
   const key = entry.key;
 
   // — 1. the tap train is bound ————————————————————————————————————

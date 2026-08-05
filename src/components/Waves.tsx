@@ -1044,9 +1044,9 @@ export default function Waves() {
     // real air; vessel tilt adds a steady gravity-lean to the same vector.
     let lensPos = 0; // 0..2 continuous — surface / equation / felt
     let seasonPos = 0; // 0..1 wrapping — the sun's slow walk
-    // deterministic double-tap-on-empty-water cycle: drop → gust → stone.
-    // Advances one step per double tap, never Math.random.
-    let doubleEmptyCycle = 0;
+    // deterministic tier-3-tap-on-empty-water cycle: drop → gust → stone.
+    // Advances one step per tier-3 tap on open water, never Math.random.
+    let emptyTapCycle = 0;
     let windDirX = 1;
     let windDirY = 0;
     let windStrength = 0;
@@ -1107,9 +1107,12 @@ export default function Waves() {
         }
         if (e.fingers !== 1) return; // two-finger tap = step back, ScaleTravel's verb
         energyRef.current = Math.min(1, energyRef.current + 0.35);
-        // the rapid-tap ladder, in wave physics: one drop, then a beating
-        // pair, then a focusing ring, then the whole tank rings. On the
-        // string the same rungs climb the harmonics instead.
+        // the rapid-tap ladder, in wave physics: tier 1 a single drop, tier
+        // 3 a source's own transformation (splits in two) or a cycling
+        // disturbance on open water, tier 5 an emergent rogue wave read
+        // straight out of the field's real interference, tier n a
+        // continuously deepening crescendo. On the string the same rungs
+        // climb the harmonics instead.
         const rect = canvas.getBoundingClientRect();
         const nx = clamp((e.x - rect.left) / Math.max(1, rect.width), 0.02, 0.98);
         const ny = clamp((e.y - rect.top) / Math.max(1, rect.height), 0.02, 0.98);
@@ -1117,80 +1120,6 @@ export default function Waves() {
         const trainDepth = tapTrainDepth(e.count);
         const cfg = MODES.find((it) => it.id === modeRef.current) ?? MODES[0];
 
-        // double tap: on a raised source, splits it in two so the pair beats
-        // as real independent emitters; on open water, cycles a deterministic
-        // set of rarer disturbances — a drop, a gust-line, a dropped stone.
-        if (e.count === 2) {
-          if (modeRef.current === "string") {
-            pluck1D(nx, ny, 0.55 + e.intensity * 0.35);
-            pluck1D(clamp(nx + (nx < 0.5 ? 0.2 : -0.2), 0.05, 0.95), 0.5, 0.4);
-            try { getFieldAudio().playNote(cfg.midi + 7, 220); } catch { /* noop */ }
-            try { haptics.ripple(0.5); } catch { /* noop */ }
-            return;
-          }
-          let nearest: WaveSource | null = null;
-          let nearestD = 0.055;
-          for (const s of sources) {
-            const d = Math.hypot(s.nx - nx, s.ny - ny);
-            if (d < nearestD) { nearestD = d; nearest = s; }
-          }
-          if (nearest && sources.length < MAX_SOURCES) {
-            // split into two coherent emitters, a half-turn out of phase —
-            // the pair now genuinely beats in the shared field rather than
-            // ringing a single tone alone
-            const halfStrength = Math.max(0.14, nearest.strength * 0.62);
-            const ang = (((nearest.id * 2654435761) % 1000) / 1000) * Math.PI * 2;
-            const off = 0.045 + trainDepth * 0.02;
-            sourceIdCounter += 1;
-            const twin: WaveSource = {
-              id: sourceIdCounter,
-              nx: clamp(nearest.nx + Math.cos(ang) * off, 0.04, 0.96),
-              ny: clamp(nearest.ny + Math.sin(ang) * off, 0.06, 0.94),
-              strength: halfStrength,
-              phase: 0.5,
-            };
-            nearest.strength = halfStrength;
-            nearest.phase = 0;
-            sources.push(twin);
-            drop2D(nearest.nx, nearest.ny, 0.45 + e.intensity * 0.3);
-            drop2D(twin.nx, twin.ny, 0.45 + e.intensity * 0.3);
-            try { getFieldAudio().chime(); } catch { /* noop */ }
-            try { getFieldAudio().playTone(cfg.midi * 6 + 40, 0.22); } catch { /* noop */ }
-            try { haptics.roll(); } catch { /* noop */ }
-            useField.getState().recordTape("object", 0.75, "waves/split-source");
-            idleSourcePersist.schedule();
-            refreshKept();
-            return;
-          }
-          // open water: cycle drop → gust-line → dropped stone, seeded by a
-          // simple advancing counter (deterministic, not Math.random)
-          const kind = doubleEmptyCycle % 3;
-          doubleEmptyCycle += 1;
-          if (kind === 0) {
-            drop2D(nx, ny, 0.75 + e.intensity * 0.5);
-            try { getFieldAudio().chime(); } catch { /* noop */ }
-          } else if (kind === 1) {
-            const ang = (((nx * 137 + ny * 971) % 1) + 1) % 1 * Math.PI * 2; // deterministic from tap position
-            const ux = Math.cos(ang);
-            const uy = Math.sin(ang);
-            for (let k = -2; k <= 2; k += 1) {
-              drop2D(
-                clamp(nx + ux * k * 0.05, 0.03, 0.97),
-                clamp(ny + uy * k * 0.05, 0.05, 0.95),
-                0.22 + e.intensity * 0.2,
-              );
-            }
-            try { getFieldAudio().playTone(96 + e.intensity * 40, 0.3); } catch { /* noop */ }
-          } else {
-            // a stone: a slow, heavy, wide trough that keeps settling
-            drop2D(nx, ny, -(0.9 + e.intensity * 0.5));
-            drop2D(nx, ny, 0.3 + e.intensity * 0.2);
-            try { getFieldAudio().thud(); } catch { /* noop */ }
-          }
-          try { haptics.ripple(0.4 + trainDepth * 0.2); } catch { /* noop */ }
-          useField.getState().recordTape("ripple", 0.55, `waves/double-${kind}`);
-          return;
-        }
         if (trainTier === "n") {
           // seven and more: the crescendo — a rain of drops round the hand,
           // wider and harder with every extra tap
@@ -1213,29 +1142,12 @@ export default function Waves() {
           return;
         }
         if (trainTier === 5) {
-          // five taps close a ring of drops: the fronts converge back
-          // through the centre — a lens made of interference. The string's
-          // fifth rung is the octave, plucked at the half.
-          if (modeRef.current === "string") {
-            pluck1D(nx, 0.5, 0.8);
-            pluck1D(clamp(nx * 0.5, 0.05, 0.95), 0.5, 0.6);
-          } else {
-            for (let k = 0; k < 8; k++) {
-              const a = (k / 8) * Math.PI * 2;
-              drop2D(nx + Math.cos(a) * 0.12, ny + Math.sin(a) * 0.12, 0.5 + trainDepth * 0.3);
-            }
-          }
-          try { getFieldAudio().chime(); } catch { /* noop */ }
-          try { haptics.roll(); } catch { /* noop */ }
-          useField.getState().recordTape("ripple", 0.8, "waves/focus");
-          return;
-        }
-        if (trainTier === 3) {
-          // triple tap: a rogue wave. Not a scripted third drop — the tank
-          // is scanned for where its *existing* wavefronts already sum
-          // constructively (real superposition, read straight out of the
-          // finite-difference field), and the strike pours its energy in
-          // there. Where the sea is already piling up, it now breaks.
+          // tier 5 — the tank's largest, rarest event: a rogue wave. Not a
+          // scripted extra drop — the field is scanned for where its
+          // *existing* wavefronts already sum constructively (real
+          // superposition, read straight out of the finite-difference
+          // field), and the strike pours its energy in there. Where the sea
+          // is already piling up, it now breaks.
           if (modeRef.current === "string") {
             const sim = simRef.current;
             let peak = 0;
@@ -1287,6 +1199,81 @@ export default function Waves() {
           try { getFieldAudio().bell(); } catch { /* noop */ }
           try { haptics.storm(); } catch { /* noop */ }
           useField.getState().recordTape("ripple", 0.85, "waves/rogue");
+          return;
+        }
+        if (trainTier === 3) {
+          // tier 3, on a raised source: it transforms — splitting in two so
+          // the pair beats as real independent emitters, out of phase, in
+          // the shared field. On open water: one of a cycling, deterministic
+          // set of rarer disturbances — a drop, a gust-line, a dropped stone.
+          if (modeRef.current === "string") {
+            pluck1D(nx, ny, 0.55 + e.intensity * 0.35);
+            pluck1D(clamp(nx + (nx < 0.5 ? 0.2 : -0.2), 0.05, 0.95), 0.5, 0.4);
+            try { getFieldAudio().playNote(cfg.midi + 7, 220); } catch { /* noop */ }
+            try { haptics.ripple(0.5); } catch { /* noop */ }
+            return;
+          }
+          let nearest: WaveSource | null = null;
+          let nearestD = 0.055;
+          for (const s of sources) {
+            const d = Math.hypot(s.nx - nx, s.ny - ny);
+            if (d < nearestD) { nearestD = d; nearest = s; }
+          }
+          if (nearest && sources.length < MAX_SOURCES) {
+            // split into two coherent emitters, a half-turn out of phase —
+            // the pair now genuinely beats in the shared field rather than
+            // ringing a single tone alone
+            const halfStrength = Math.max(0.14, nearest.strength * 0.62);
+            const ang = (((nearest.id * 2654435761) % 1000) / 1000) * Math.PI * 2;
+            const off = 0.045 + trainDepth * 0.02;
+            sourceIdCounter += 1;
+            const twin: WaveSource = {
+              id: sourceIdCounter,
+              nx: clamp(nearest.nx + Math.cos(ang) * off, 0.04, 0.96),
+              ny: clamp(nearest.ny + Math.sin(ang) * off, 0.06, 0.94),
+              strength: halfStrength,
+              phase: 0.5,
+            };
+            nearest.strength = halfStrength;
+            nearest.phase = 0;
+            sources.push(twin);
+            drop2D(nearest.nx, nearest.ny, 0.45 + e.intensity * 0.3);
+            drop2D(twin.nx, twin.ny, 0.45 + e.intensity * 0.3);
+            try { getFieldAudio().chime(); } catch { /* noop */ }
+            try { getFieldAudio().playTone(cfg.midi * 6 + 40, 0.22); } catch { /* noop */ }
+            try { haptics.roll(); } catch { /* noop */ }
+            useField.getState().recordTape("object", 0.75, "waves/split-source");
+            idleSourcePersist.schedule();
+            refreshKept();
+            return;
+          }
+          // open water: cycle drop → gust-line → dropped stone, seeded by a
+          // simple advancing counter (deterministic, not Math.random)
+          const kind = emptyTapCycle % 3;
+          emptyTapCycle += 1;
+          if (kind === 0) {
+            drop2D(nx, ny, 0.75 + e.intensity * 0.5);
+            try { getFieldAudio().chime(); } catch { /* noop */ }
+          } else if (kind === 1) {
+            const ang = (((nx * 137 + ny * 971) % 1) + 1) % 1 * Math.PI * 2; // deterministic from tap position
+            const ux = Math.cos(ang);
+            const uy = Math.sin(ang);
+            for (let k = -2; k <= 2; k += 1) {
+              drop2D(
+                clamp(nx + ux * k * 0.05, 0.03, 0.97),
+                clamp(ny + uy * k * 0.05, 0.05, 0.95),
+                0.22 + e.intensity * 0.2,
+              );
+            }
+            try { getFieldAudio().playTone(96 + e.intensity * 40, 0.3); } catch { /* noop */ }
+          } else {
+            // a stone: a slow, heavy, wide trough that keeps settling
+            drop2D(nx, ny, -(0.9 + e.intensity * 0.5));
+            drop2D(nx, ny, 0.3 + e.intensity * 0.2);
+            try { getFieldAudio().thud(); } catch { /* noop */ }
+          }
+          try { haptics.ripple(0.4 + trainDepth * 0.2); } catch { /* noop */ }
+          useField.getState().recordTape("ripple", 0.55, `waves/double-${kind}`);
           return;
         }
         // tap intensity is the drop: amplitude rides the same 0..1, and the

@@ -25,6 +25,7 @@ import {
   mulberry32,
   mix32,
   SEA_BAND,
+  WET_BAND,
   createSandProfile,
   sandProfileAt,
   breakerRunup,
@@ -256,7 +257,9 @@ void main() {
   sea += vec3(1.0, 0.96, 0.86) * spec * (0.45 + 0.55 * uSeason.w) * (0.35 + 0.65 * (1.0 - d01));
 
   // ——— sand ———
-  float dune = duneLineG(p.x, tide) - uSeason.x * 0.02;   // the summer berm builds it up
+  // the profile a breaker's swash has actually left behind: erosion right
+  // where it broke, a berm further up its own run — real, not painted
+  float dune = duneLineG(p.x, tide) - uSeason.x * 0.02 - sandProfileG(p.x);   // the summer berm builds it up
   float wet = wetnessG(p.y, tide, swash);
   float grain = fbm(vec2(p.x * 160.0, p.y * 420.0));
   vec3 dry = mix(vec3(0.79, 0.71, 0.55), vec3(0.87, 0.80, 0.64), mix(0.5, grain, uDetail));
@@ -310,6 +313,23 @@ void main() {
     col += tint * (ring * 0.60 + glow * 0.38) * (0.30 + 0.95 * st);
     if (zi > 1.5 && zi < 2.5) col *= 1.0 - glow * 0.32 * st;   // wet sand darkens
     if (zi > 2.5 && zi < 3.5) col *= 1.0 - ring * 0.20 * st;   // dry sand craters
+  }
+
+  // ——— a raised breaker's own swash front, running up the beach ———
+  for (int i = 0; i < 3; i++) {
+    if (i >= uBreakCount) break;
+    vec4 br = uBreak[i];
+    float bx = br.x;
+    float spread = br.y;
+    float power = br.z;
+    float runup = br.w;
+    float lateral = exp(-(p.x - bx) * (p.x - bx) / (2.0 * spread * spread));
+    if (lateral < 0.02) continue;
+    float reach = 0.16 + power * 0.55;
+    // the swash front climbs from the waterline toward the dune as runup rises
+    float frontY = tide + 0.02 - runup * (dune - tide) * min(1.0, reach);
+    float band = exp(-abs(p.y - frontY) * 90.0) * lateral * power;
+    col += vec3(0.96, 0.98, 1.0) * band * 0.85;
   }
 
   // ——— whole-band answers (tutti, a knock, the vessel) ———
@@ -711,6 +731,7 @@ export default function CoastBeach() {
       for (const name of [
         "uTime", "uRes", "uTide", "uWind", "uTilt", "uSurf", "uLens", "uPan",
         "uSeason", "uPulse", "uPulseDune", "uTouch", "uTouchCount", "uDetail",
+        "uSandProfile", "uBreak", "uBreakCount",
       ]) {
         u[name] = gl.getUniformLocation(prog, name);
       }
@@ -1220,33 +1241,118 @@ export default function CoastBeach() {
           const { x, y } = toLocal(e.x, e.y);
           const nx = x / Math.max(1, width);
           const ny = y / Math.max(1, height);
-          // a shell under the finger rings instead of the sand around it
+          const tideForTap = tideNow();
+          // a shell under the finger rings instead of the sand around it;
+          // a double tap on it presses it in deeper, the ceremony a hold
+          // already owns for taking it back
           const s = shellAt(nx, ny);
           if (s) {
-            const tide = tideNow();
             const shellGain = 0.55 + e.intensity * 0.45 + tapTrainDepth(e.count) * 0.35;
-            voice.say(zoneVoice(zoneAt(nx, beachY(s, tide), tide), 0.25, shellGain));
-            throwFoam(mix32(s.seed, e.x), s.nx, beachY(s, tide), Math.round(8 + tapTrainDepth(e.count) * 10), {
+            voice.say(zoneVoice(zoneAt(nx, beachY(s, tideForTap), tideForTap), 0.25, shellGain));
+            throwFoam(mix32(s.seed, e.x), s.nx, beachY(s, tideForTap), Math.round(8 + tapTrainDepth(e.count) * 10), {
               spread: 0.02, rise: 0.06, drift: 0.03, size: 4.0, decay: 0.9, tint: 0,
             });
-            addTouch(s.nx, beachY(s, tide), "wet", 0.5 + e.intensity * 0.45 + tapTrainDepth(e.count) * 0.3);
+            addTouch(s.nx, beachY(s, tideForTap), "wet", 0.5 + e.intensity * 0.45 + tapTrainDepth(e.count) * 0.3);
             haptics.ripple(0.4 + tapTrainDepth(e.count) * 0.25);
+            if (e.count === 2) {
+              // pressed home: a firmer mark, and the sand round it settles
+              addMark(s.nx, beachY(s, tideForTap), 0.05 + e.intensity * 0.02, 0, 0.05);
+              audio.spark();
+              haptics.tap();
+            }
             return;
           }
-          // rapid-tap ladder: print → break → surge → shore tutti
+
+          const zone = zoneAt(nx, ny, tideForTap);
+
+          // double tap on open ground: what it means depends on which of
+          // the five materials it lands on
+          if (e.count === 2) {
+            const power = clamp01(0.45 + e.intensity * 0.5);
+            if (zone === "sea") {
+              // the surf: a real breaker, raised where the hand struck it
+              raiseBreaker(nx, power);
+              return;
+            }
+            if (zone === "wet") {
+              // wet sand: a shallow tide pool opens and holds water
+              tidePools.push({ nx, ny, r: 0.03 + power * 0.02, t0: simT });
+              if (tidePools.length > MAX_TIDE_POOLS) tidePools.shift();
+              addMark(nx, ny, 0.045, 0, 0.02);
+              throwFoam(mix32(Math.round(nx * 4096), Math.round(simT * 10)), nx, ny, 10, {
+                spread: 0.03, rise: 0.03, drift: 0.02, size: 4.2, decay: 0.5, tint: 0,
+              });
+              voice.say(zoneVoice("wet", 0.15, 0.6 + e.intensity * 0.3));
+              audio.bell();
+              haptics.ripple(0.5);
+              return;
+            }
+            if (zone === "dune") {
+              // the dune: whatever is nesting there is flushed downhill
+              let flushed = 0;
+              for (const shell of shells) {
+                if (zoneAt(shell.nx, beachY(shell, tideForTap), tideForTap) !== "dune") continue;
+                if (Math.abs(shell.nx - nx) > 0.14) continue;
+                shell.ny = clamp(tideForTap + WET_BAND * 0.6, tideForTap + 0.02, 0.97);
+                writer.schedule();
+                flushed++;
+              }
+              throwFoam(mix32(Math.round(nx * 4096), 7), nx, ny, 14, {
+                spread: 0.06, rise: 0.05, drift: 0.08, size: 3.8, decay: 0.5, tint: 2,
+              });
+              addMark(nx, ny, 0.06, 2, 0.3);
+              voice.say(zoneVoice("dune", 0.3, 0.5 + (flushed ? 0.4 : 0)));
+              audio.spark();
+              haptics.chop();
+              return;
+            }
+            if (zone === "dry") {
+              // dry sand: the wind kicks a ridge of it into the air
+              wind = clamp(wind + (nx < 0.5 ? -1 : 1) * 0.3, -1, 1);
+              throwFoam(mix32(Math.round(nx * 4096), 9), nx, ny, 16, {
+                spread: 0.07, rise: 0.07, drift: 0.09, size: 4.6, decay: 0.6, tint: 1,
+              });
+              addMark(nx, ny, 0.05, 1, 0.15);
+              voice.say(zoneVoice("dry", 0.4, 0.55 + e.intensity * 0.3));
+              haptics.tap();
+              return;
+            }
+            // sky: gulls startle off the wind
+            throwFoam(mix32(Math.round(nx * 4096), 11), nx, ny, 12, {
+              spread: 0.08, rise: 0.1, drift: 0.05, size: 4.2, decay: 0.3, tint: 0,
+            });
+            voice.say(zoneVoice("sky", 0.4, 0.55));
+            haptics.tap();
+            return;
+          }
+
+          // rapid-tap ladder: print → break → rogue set → shore tutti
           const tier = tapTrainTier(e.count);
           const depth = tapTrainDepth(e.count);
           if (tier === "n") {
+            // the largest event the shore has: a rogue set on top of tutti —
+            // three big waves stacked into one crossing swell
             tutti(0.75 + e.intensity * 0.4 + depth * 0.25);
+            raiseBreaker(clamp(nx - 0.14, 0.06, 0.94), 0.9 + depth * 0.1);
+            raiseBreaker(nx, 1);
+            raiseBreaker(clamp(nx + 0.14, 0.06, 0.94), 0.9 + depth * 0.1);
             answer(nx, ny, e.intensity, 2.4 + depth);
             return;
           }
           if (tier === 5) {
             voice.breakWave(0.55 + e.intensity * 0.4 + depth * 0.2);
+            raiseBreaker(clamp(nx - 0.1, 0.06, 0.94), 0.75 + depth * 0.2);
+            raiseBreaker(clamp(nx + 0.1, 0.06, 0.94), 0.75 + depth * 0.2);
             answer(nx, ny, e.intensity, 2.0 + depth * 0.5);
             return;
           }
           if (tier === 3) {
+            // triple tap: a rogue set — three big waves that rearrange the
+            // beach and can bury or uncover shells, the shore's biggest
+            // reachable event short of the full tutti above
+            raiseBreaker(clamp(nx - 0.13, 0.06, 0.94), 0.55 + depth * 0.25);
+            raiseBreaker(nx, 0.7 + depth * 0.3);
+            raiseBreaker(clamp(nx + 0.13, 0.06, 0.94), 0.55 + depth * 0.25);
             answer(nx, ny, e.intensity, 1.55 + depth * 0.45);
             return;
           }
@@ -1822,6 +1928,22 @@ export default function CoastBeach() {
           gl.uniform4fv(u.uTouch, touchBuf);
           gl.uniform1i(u.uTouchCount, count);
         }
+        if (u.uSandProfile) gl.uniform1fv(u.uSandProfile, sandProfile);
+        if (u.uBreak && u.uBreakCount) {
+          let bc = 0;
+          for (let i = 0; i < breakers.length && bc < 3; i++) {
+            const b = breakers[i];
+            const age = simT - b.t0;
+            breakUniform[bc * 4] = b.nx;
+            breakUniform[bc * 4 + 1] = b.spread;
+            breakUniform[bc * 4 + 2] = b.power;
+            breakUniform[bc * 4 + 3] = breakerRunup(age, b.power);
+            bc++;
+          }
+          for (let i = bc * 4; i < breakUniform.length; i++) breakUniform[i] = 0;
+          gl.uniform4fv(u.uBreak, breakUniform);
+          gl.uniform1i(u.uBreakCount, bc);
+        }
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       }
 
@@ -1915,9 +2037,26 @@ export default function CoastBeach() {
         ctx.globalAlpha = 1;
       }
 
-      // what the shore keeps
+      // tide pools opened by a double tap on wet sand: a held patch that
+      // mirrors the sky and slowly drains, drawn from the shared sprite
+      const poolSprite = SPRITES[0];
+      if (poolSprite) {
+        for (const pool of tidePools) {
+          const age = simT - pool.t0;
+          const life = clamp01(1 - age / 22);
+          const r = (pool.r + 0.01) * Math.min(width, height) * (0.6 + 0.4 * life);
+          ctx.globalAlpha = 0.22 * life;
+          ctx.drawImage(poolSprite, pool.nx * width - r, pool.ny * height - r * 0.55, r * 2, r * 1.1);
+        }
+        ctx.globalAlpha = 1;
+      }
+
+      // what the shore keeps — a shell sitting where a rogue set has piled
+      // sand reads as buried: the same profile the breaker actually left,
+      // never a separate flag
       for (const s of shells) {
-        drawNatural(s, s.nx * width, beachY(s, tide) * height, 1, 1);
+        const buried = clamp01(sandProfileAt(sandProfile, s.nx) / SAND_PROFILE_MAX);
+        drawNatural(s, s.nx * width, beachY(s, tide) * height, 1 - buried * 0.8, 1 - buried * 0.45);
       }
       for (const d of departing) {
         const u = Math.min(1, (now - d.t0) / d.dur);

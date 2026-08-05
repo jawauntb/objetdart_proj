@@ -689,18 +689,23 @@ export default function OrganicsField() {
     };
 
     /**
-     * A double tap on open solvent pours in the next reagent of the cycle —
-     * an amine pool, an oxidiser, a methyl donor, then water, which does
-     * what water does and takes a chain apart again.
+     * The 3-rung on open solvent pours in the next reagent of the cycle: a
+     * chain condensing out of the solvent (what the rung has always done),
+     * then an amine pool, an oxidiser, a methyl donor, then water — which
+     * does what water does and takes a chain apart again.
      */
     const summonReagent = (x: number, y: number, intensity: number) => {
       const nx = clamp01(x / width);
       const ny = clamp01(y / height);
-      const kind = reagentIdx % 4;
+      const kind = reagentIdx % 5;
       reagentIdx += 1;
       const seed = hashSeed(reagentIdx, Math.round(x), Math.round(y));
       const n = 2 + Math.round(intensity * 3);
-      if (kind === 0) {
+      if (kind === 4) {
+        // the solvent condenses a whole chain, bonds and all
+        condenseAt(nx, ny, 2 + Math.round(intensity * 3));
+        reagentFx = { x, y, t0: performance.now(), tint: "222, 214, 196", ring: 1 };
+      } else if (kind === 0) {
         pourReagent("N", n, nx, ny, seed);
         reagentFx = { x, y, t0: performance.now(), tint: "150, 178, 226", ring: 1 };
         try { audio.playNote(55, 180); } catch { /* noop */ }
@@ -826,32 +831,6 @@ export default function OrganicsField() {
           const base = tier === "n" ? 7 : tier;
           const deepen = Math.min(1, (e.count - base) * 0.5);
           const amp = e.intensity * (0.75 + deepen * 0.55);
-          // ——— the ladder above the single tap ———
-          // two on a chain: it folds into its conformation. two on open
-          // solvent: the next reagent of the cycle arrives.
-          if (e.count === 2) {
-            if (pi >= 0) foldInto(placedRef.current[pi], e.intensity);
-            else summonReagent(x, y, e.intensity);
-            return;
-          }
-          // three: the polymerisation cascade — every compatible pair in the
-          // field condenses, one join per beat, running down the population
-          if (e.count === 3) {
-            cascade = {
-              at: performance.now(),
-              left: 2 + Math.round(e.intensity * 3),
-              gain: e.intensity,
-            };
-            warmthTarget = clamp01(warmthTarget + 0.2 + e.intensity * 0.25);
-            stirTurbulence(0.14 + e.intensity * 0.12);
-            try {
-              audio.bell();
-              haptics.roll();
-            } catch {
-              /* noop */
-            }
-            return;
-          }
           if (tier === 1) {
             if (pi >= 0) {
               kick(placedRef.current[pi], 0.16 + amp * 0.55);
@@ -878,10 +857,21 @@ export default function OrganicsField() {
             return;
           }
           if (tier === 3) {
-            // spawn: bond a loose atom, or condense a new chain
+            // The 3-rung is the room's *transformation* rung. On a chain: a
+            // loose atom in reach bonds to it (the shipped meaning), and with
+            // nothing to bond the chain folds into its own conformation —
+            // every angle onto the tetrahedral one, every torsion into its
+            // staggered well. On open solvent: the next reagent of the cycle
+            // pours in, so a hand that keeps asking keeps being answered
+            // differently — the condensation the rung always did is the first
+            // of those answers, never the only one.
             const li = nearestLoose(x, y, scaleOf() * 3.5);
             if (li >= 0 && tryBond(li, x, y)) return;
-            condenseAt(clamp01(x / width), clamp01(y / height), 2 + Math.round(deepen * 3));
+            if (pi >= 0) {
+              foldInto(placedRef.current[pi], e.intensity + deepen * 0.3);
+              return;
+            }
+            summonReagent(x, y, e.intensity + deepen * 0.3);
             return;
           }
           if (tier === 5) {
@@ -933,6 +923,15 @@ export default function OrganicsField() {
             }
           }
           if (pi < 0) condenseAt(clamp01(x / width), clamp01(y / height), 4);
+          // ...and the top rung's own act, the largest thing this room does:
+          // a POLYMERISATION CASCADE. Every pair of chains the chemistry
+          // allows condenses, one peptide bond per beat, running down the
+          // whole population — each join a chain that is neither parent.
+          cascade = {
+            at: performance.now(),
+            left: 2 + Math.round(deepen * 4) + Math.round(e.intensity * 2),
+            gain: e.intensity,
+          };
           stirTurbulence(0.14 + deepen * 0.12);
           try {
             audio.bell();

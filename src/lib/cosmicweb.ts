@@ -614,3 +614,96 @@ export function novaBrightness(age: number, strength: number): number {
   const fall = Math.pow(1 - u, 1.8);
   return clamp01(strength * rise * fall);
 }
+
+// ——— wanderers: real bodies moving THROUGH the invariant field ————————
+// The density field itself never moves — that is the room's whole
+// argument, galaxies are a measurement, not a scatter. But a struck
+// cluster or a passing halo is a different kind of thing: an actual body,
+// with a velocity, that can fall toward a galaxy's density (read as a
+// pseudo-mass) or toward another wanderer, and can coalesce on contact
+// exactly like two knots would if the skeleton were ever allowed to move.
+// Self-contained rather than importing src/lib/manifold-field.ts — this
+// file stays import-free by law (see file header); the physics duplicated
+// here is the same ~20 lines the header already accepts duplicating once.
+
+export type Wanderer = { x: number; y: number; z: number; vx: number; vy: number; vz: number; m: number };
+
+/**
+ * One softened-gravity step of mutual attraction among the wanderers
+ * themselves, in box units. Same shape as the knot/filament kernels: finite
+ * everywhere, classical inverse-square far away.
+ */
+export function stepWanderers(
+  bodies: readonly Wanderer[],
+  dtSec: number,
+  g: number,
+  soft: number,
+  maxSpeed: number,
+): Wanderer[] {
+  const n = bodies.length;
+  const ax = new Array<number>(n).fill(0);
+  const ay = new Array<number>(n).fill(0);
+  const az = new Array<number>(n).fill(0);
+  const s2 = soft * soft;
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      const a = bodies[i];
+      const b = bodies[j];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const dz = b.z - a.z;
+      const d2 = dx * dx + dy * dy + dz * dz + s2;
+      const inv = g / (d2 * Math.sqrt(d2));
+      ax[i] += dx * inv * b.m; ay[i] += dy * inv * b.m; az[i] += dz * inv * b.m;
+      ax[j] -= dx * inv * a.m; ay[j] -= dy * inv * a.m; az[j] -= dz * inv * a.m;
+    }
+  }
+  return bodies.map((b, i) => {
+    let vx = b.vx + ax[i] * dtSec;
+    let vy = b.vy + ay[i] * dtSec;
+    let vz = b.vz + az[i] * dtSec;
+    const sp = Math.sqrt(vx * vx + vy * vy + vz * vz);
+    if (sp > maxSpeed && sp > 0) { vx *= maxSpeed / sp; vy *= maxSpeed / sp; vz *= maxSpeed / sp; }
+    return { x: b.x + vx * dtSec, y: b.y + vy * dtSec, z: b.z + vz * dtSec, vx, vy, vz, m: b.m };
+  });
+}
+
+/** Contact radius for a wanderer of mass m, box units — heavier bodies
+ *  merge from further apart. */
+export function wandererMergeRadius(m: number, unit: number): number {
+  return unit * Math.sqrt(Math.max(0, m));
+}
+
+export type WandererMerge = { a: Wanderer; b: Wanderer; into: Wanderer };
+
+/** Coalesce every touching pair into one body: mass and momentum exactly
+ *  summed, so the third body is provably neither parent alone. */
+export function mergeWanderers(
+  bodies: readonly Wanderer[],
+  unit: number,
+): { bodies: Wanderer[]; merges: WandererMerge[] } {
+  const alive = bodies.map((b) => ({ ...b }));
+  const merges: WandererMerge[] = [];
+  for (let i = 0; i < alive.length; i++) {
+    for (let j = alive.length - 1; j > i; j--) {
+      const a = alive[i];
+      const b = alive[j];
+      const d = Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2 + (b.z - a.z) ** 2);
+      if (d > wandererMergeRadius(a.m, unit) + wandererMergeRadius(b.m, unit)) continue;
+      const m = a.m + b.m;
+      const into: Wanderer = {
+        m,
+        x: (a.x * a.m + b.x * b.m) / m,
+        y: (a.y * a.m + b.y * b.m) / m,
+        z: (a.z * a.m + b.z * b.m) / m,
+        vx: (a.vx * a.m + b.vx * b.m) / m,
+        vy: (a.vy * a.m + b.vy * b.m) / m,
+        vz: (a.vz * a.m + b.vz * b.m) / m,
+      };
+      merges.push({ a, b, into });
+      alive.splice(j, 1);
+      alive[i] = into;
+    }
+  }
+  return { bodies: alive, merges };
+}

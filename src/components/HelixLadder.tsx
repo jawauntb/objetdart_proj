@@ -593,48 +593,6 @@ export default function HelixLadder() {
           const base = tier === "n" ? 7 : tier;
           const deepen = Math.min(1, (e.count - base) * 0.5);
           const amp = e.intensity * (0.75 + deepen * 0.55);
-          // ——— the ladder above the single tap ———
-          // two on a rung: a true substitution at that base — the mutation,
-          // not the ordered A→T→G→C rewrite the third rung already carries.
-          if (e.count === 2) {
-            if (i >= 0) {
-              selIdx = i;
-              const next = mutate(seqRef.current, i, hashSeed(i, Math.round(amp * 977), seqRef.current.length));
-              if (next !== seqRef.current) {
-                seqRef.current = next;
-                litRung[i] = 1;
-                soundBase(i, 240 + Math.round(amp * 200));
-                try {
-                  audio.playNote(33, 200);
-                  haptics.chop();
-                } catch {
-                  /* noop */
-                }
-                save();
-              }
-              return;
-            }
-            summonEvent(x, y, e.intensity);
-            return;
-          }
-          // three: the whole strand replicates, the fork running its length
-          if (e.count === 3) {
-            if (seqRef.current.length > 0) {
-              replicating = { u: 0, speed: 0.16 + e.intensity * 0.22, gain: e.intensity };
-              holdingOpen = true;
-              polymerase = 0;
-              chromatid = 0;
-              chromatidCoil = 0;
-              try {
-                audio.bell();
-                haptics.roll();
-              } catch {
-                /* noop */
-              }
-              stirTurbulence(0.14 + e.intensity * 0.14);
-            }
-            return;
-          }
           if (tier === 1) {
             if (i >= 0) {
               selIdx = i;

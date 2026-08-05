@@ -197,6 +197,78 @@ export function redistribute(list: Organelle[], i: number, delta: number): Organ
   return list.map((o, k) => withArea(o, nextOthers[k]));
 }
 
+// ——— vesicles: membrane in transit ——————————————————————————————
+//
+// A vesicle is not a new object in the ledger — it is membrane that has
+// left one organ and has not yet arrived at another. Budding takes area
+// OUT of a parent and fusion puts exactly that area back, so the room's
+// one law (the total never moves) survives the whole secretory pathway.
+
+/** The states cargo passes through, in the order the cell actually does it. */
+export type CargoStage = "raw" | "folded" | "mature";
+export const CARGO_STAGES: readonly CargoStage[] = ["raw", "folded", "mature"];
+
+/** The smallest parcel of membrane that can travel on its own. */
+export const VESICLE_AREA = 2.4;
+
+/**
+ * Which organ advances which stage. The pathway is ordered: the er folds
+ * what the ribosome made, the golgi matures what the er folded, and nothing
+ * skips a station. A golgi handed raw cargo can do nothing with it.
+ */
+export function advanceCargo(cargo: CargoStage, kind: MembraneKind): CargoStage {
+  if (cargo === "raw" && kind === "er") return "folded";
+  if (cargo === "folded" && kind === "golgi") return "mature";
+  return cargo;
+}
+
+/** Where a parcel at this stage is trying to get to next. */
+export function cargoDestination(cargo: CargoStage): MembraneKind | null {
+  if (cargo === "raw") return "er";
+  if (cargo === "folded") return "golgi";
+  return null; // mature cargo leaves the cell entirely
+}
+
+/**
+ * Bud a vesicle off an organelle. The parent shrinks by exactly the area
+ * that left; refused outright when the parent cannot spare it, because a
+ * bud that overdraws would quietly mint membrane.
+ */
+export function budVesicle(o: Organelle, area = VESICLE_AREA): { parent: Organelle; area: number } | null {
+  const have = surfaceArea(o);
+  const take = Math.max(0, area);
+  if (take <= 0 || have - take < AREA_FLOOR) return null;
+  return { parent: withArea(o, have - take), area: take };
+}
+
+/** ...and fusion, the same ledger entry read the other way. */
+export function fuseVesicle(o: Organelle, area: number): Organelle {
+  return withArea(o, surfaceArea(o) + Math.max(0, area));
+}
+
+/**
+ * Fission: one organ becomes two, and the membrane is halved, not copied.
+ * The daughters keep the parent's fold character (they are the same organ,
+ * divided) but each carries its own seed, so they diverge from here.
+ */
+export function fissionOrganelle(o: Organelle): [Organelle, Organelle] | null {
+  const have = surfaceArea(o);
+  if (have / 2 < AREA_FLOOR) return null;
+  const half = have / 2;
+  const a = withArea({ ...o, seed: hashSeed(o.seed, 1) >>> 0 }, half);
+  const b = withArea({ ...o, seed: hashSeed(o.seed, 2) >>> 0 }, half);
+  return [a, b];
+}
+
+/**
+ * What the plasm still holds loose: the budget minus everything currently
+ * folded into an organ or riding in a vesicle. Never negative — an
+ * over-full plasm has nothing free rather than a debt.
+ */
+export function freeMembrane(list: Organelle[], inTransit = 0): number {
+  return Math.max(0, MEMBRANE_BUDGET - totalArea(list) - Math.max(0, inTransit));
+}
+
 // ——— folded surface → timbre ————————————————————————————————————
 
 /** The most partials the room will ever ring at once. */

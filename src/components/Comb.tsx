@@ -600,7 +600,7 @@ export default function Comb() {
       try { haptics.roll(); } catch { /* noop */ }
     };
 
-    // ── the tap ladder's double/triple rungs ────────────────────────────
+    // ── the tap ladder's tier 3 and tier 5 rungs (tapTrainTier) ─────────
     // Splitting conserves winding by construction: one defect of charge q
     // (contributing q) becomes two of q and one of −q (contributing
     // q + q − q = q) — the hairy ball theorem paying out under the hand,
@@ -617,9 +617,9 @@ export default function Comb() {
       try { haptics.bloom(); } catch { /* noop */ }
     };
 
-    // Double-tap on open sky: a cycling set of rarer events, deterministic
-    // by tap order (a counter, never Math.random) — the same sequence every
-    // time a hand keeps double-tapping the same empty patch of field.
+    // Tier 3 on open sky: a cycling set of rarer events, deterministic by
+    // tap order (a counter, never Math.random) — the same sequence every
+    // time a hand keeps tapping the same empty patch of field.
     let skyEventCounter = 0;
     const skyEventPair = (wx: number, wy: number) => {
       const a = spawnDefect(1, wx - 0.09, wy, 1);
@@ -659,7 +659,7 @@ export default function Comb() {
       pick();
     };
 
-    // Triple tap: the room's biggest, rarest event — the whole field's time
+    // Tier 5: the room's biggest, rarest event — the whole field's time
     // sense turns over. Reuses the same tDir the phone-flip already drives,
     // so the wave term in fieldAngle genuinely runs backward everywhere at
     // once, not a decal on top of the same forward field.
@@ -716,60 +716,31 @@ export default function Comb() {
           return;
         }
         const wx = toWorldX(e.x), wy = toWorldY(e.y);
-        // a true double tap (exactly two): on a defect it splits, winding
-        // conserved; on open sky it summons the next of a cycling set.
-        if (e.count === 2) {
+        // the site-wide tap train (gesture/core.ts): 1 / 3 / 5 / n. Tier 3 is
+        // the object's transformation (or, on open sky, a cycling rarer
+        // event); tier 5 is the room's biggest, rarest event; tier n keeps
+        // deepening rather than stopping at a step.
+        const trainTier = tapTrainTier(e.count);
+        if (trainTier === 3) {
           const hitD = defectNear(wx, wy);
           if (hitD) splitDefect(hitD);
           else cycleSkyEvent(wx, wy, e.intensity);
           return;
         }
-        // the train tiers (1 / 3 / 5 / n from gesture/core): rapid taps climb
-        // the field's own ladder of winding — vortex, full reversal, conserved
-        // split, then the flare
-        const trainTier = tapTrainTier(e.count);
-        if (trainTier === 3 && e.count === 3) {
-          // three taps: the room's largest, rarest event — the whole field's
-          // time sense turns over, exactly as a physical flip would
+        if (trainTier === 5) {
+          // the room's biggest, rarest event: the whole field's time sense
+          // turns over — the wave term runs backward everywhere at once
           reverseField();
           return;
         }
-        if (trainTier === 5 && e.count === 5) {
-          // five taps split the nearest sun: +1 becomes +1 +1 −1, the total
-          // winding conserved — the hairy ball theorem paying out under the hand
-          let sun: Defect | null = null;
-          let sunD = Infinity;
-          for (const d of defects) {
-            if (d.q <= 0 || d.dying) continue;
-            const dist = Math.hypot(d.x - wx, d.y - wy);
-            if (dist < sunD) { sun = d; sunD = dist; }
-          }
-          const px = sun ? sun.x : wx, py = sun ? sun.y : wy;
-          if (sun) sun.dying = true;
-          spawnDefect(1, px - 0.14, py - 0.05, 1);
-          spawnDefect(1, px + 0.14, py - 0.05, 1);
-          spawnDefect(-1, px, py + 0.12, 0.9);
-          bursts.push({ x: px, y: py, t0: simT, amp: 0.9 });
-          try { audioRef.current?.ring(0.9); } catch { /* noop */ }
-          try { haptics.bloom(); } catch { /* noop */ }
-          return;
-        }
         if (trainTier === "n") {
-          // seven and beyond: the crescendo — every defect flares brighter
-          // with each further strike, nothing new is born, the field just burns
+          // seven and beyond: the crescendo keeps deepening — every further
+          // strike brightens every defect further, nothing new is born
           const amp = clamp(0.3 + (e.count - 6) * 0.12, 0.3, 1);
           for (const d of defects) bursts.push({ x: d.x, y: d.y, t0: simT, amp });
           bursts.push({ x: wx, y: wy, t0: simT, amp: amp * 0.8 });
           try { audioRef.current?.ring(amp); } catch { /* noop */ }
           try { (e.count === 7 ? haptics.storm : () => haptics.ripple(amp))(); } catch { /* noop */ }
-          return;
-        }
-        if (e.count === 4 || e.count === 6) {
-          // between the rungs the train only deepens — an echo of the last
-          // special, never another defect crowding the field
-          bursts.push({ x: wx, y: wy, t0: simT, amp: 0.35 + e.intensity * 0.35 });
-          try { audioRef.current?.bloom(e.count === 4 ? -1 : 1, 0.5 + e.intensity * 0.3); } catch { /* noop */ }
-          try { haptics.tap(); } catch { /* noop */ }
           return;
         }
         // tap intensity is the strike — the newborn vortex's burst rides it

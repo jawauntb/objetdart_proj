@@ -775,12 +775,12 @@ export default function RelativityRoom() {
 
     /** One step of mutual gravity among every settled mass, then a merge
      *  pass — runs every frame, gestured or not. */
-    const stepMassPhysics = (dt: number) => {
+    const stepMassPhysics = (dtG: number) => {
       const alive = masses.filter((m) => !m.evapAt && m.settled);
       if (alive.length < 2) return;
-      if (!(dt > 0)) return;
+      if (!(dtG > 0)) return;
       const bodies: OrbitBody[] = alive.map((m) => ({ x: m.nx * width, y: m.ny * height, m: m.m, vx: m.vx, vy: m.vy }));
-      const stepped = stepMutualGravity(bodies, dt, MUTUAL_G, SOFTENING * 1.5, MASS_SPEED_CAP);
+      const stepped = stepMutualGravity(bodies, dtG, MUTUAL_G, SOFTENING * 1.5, MASS_SPEED_CAP);
       stepped.forEach((b, i) => {
         const m = alive[i];
         m.nx = clamp(b.x / width, 0.03, 0.97);
@@ -1032,6 +1032,14 @@ export default function RelativityRoom() {
         // the covenant's crescendo
         const trainTier = tapTrainTier(e.count);
         const depth = tapTrainDepth(e.count);
+        // the double-tap ladder: on a mass it collapses a step denser, on
+        // open fabric it summons the next rarity in a fixed cycle
+        if (e.count === 2) {
+          const m2 = massAt(x, y);
+          if (m2 && !m2.evapAt) { collapseStage(m2); return; }
+          summonEmpty(x, y, e.intensity);
+          return;
+        }
         if (trainTier === "n") {
           tutti();
           firePulse(x, y, 1 + depth * 0.6);
@@ -1070,8 +1078,12 @@ export default function RelativityRoom() {
           return;
         }
         if (trainTier === 3) {
-          // the race, staged in one strike: a flash and a comet leave the
-          // same point in the same instant — the light wins, every time
+          // an exact triple tap with two or more masses standing: a real
+          // binary inspiral and merger, run to completion over a few
+          // seconds — the room's largest, rarest event
+          if (e.count === 3 && forceInspiral(x, y)) return;
+          // otherwise: the race, staged in one strike — a flash and a comet
+          // leave the same point in the same instant, the light wins every time
           firePulse(x, y, 0.6 + e.intensity * 0.4);
           throwComet(x, y, hash01(x * 3.7 + y * 1.3) * Math.PI * 2, 0.9 + depth * 0.6);
           return;
@@ -1800,6 +1812,9 @@ export default function RelativityRoom() {
       beaconOffX = beaconOffX * Math.exp(-dt * 0.6) + aetherX * 160 * dt;
       beaconOffY = beaconOffY * Math.exp(-dt * 0.6) + aetherY * 160 * dt;
 
+      // the law between the masses runs whether or not a hand is present
+      if (!reduce) stepMassPhysics(dt * timeScale);
+
       const pts = livePoints();
 
       for (let i = masses.length - 1; i >= 0; i--) {
@@ -1936,7 +1951,9 @@ export default function RelativityRoom() {
         const mx = m.nx * width;
         const my = m.ny * height;
         const grow = m.settled ? 1 : 0.3 + 0.7 * m.growth;
-        let R = (10 + m.m * 16) * grow;
+        // the collapse ladder compacts the same mass — a black hole reads
+        // tightest and darkest, its rim gone violet
+        let R = (10 + m.m * 16) * grow * STAGE_COMPACTION[m.stage];
         let evapP = 0;
         if (m.evapAt) {
           evapP = clamp01((now - m.evapAt) / EVAP_MS);
@@ -1953,11 +1970,19 @@ export default function RelativityRoom() {
         ctx.beginPath();
         ctx.arc(mx, my, R, 0, Math.PI * 2);
         ctx.fill();
-        ctx.strokeStyle = `rgba(150, 175, 225, ${(m.settled ? 0.13 : 0.3) * (1 - evapP)})`;
+        const rimColor = m.stage === 2 ? "192, 150, 255" : m.stage === 1 ? "205, 220, 245" : "150, 175, 225";
+        ctx.strokeStyle = `rgba(${rimColor}, ${(m.settled ? 0.13 : 0.3) + m.stage * 0.09 * (1 - evapP)})`;
         ctx.lineWidth = m.settled ? 0.8 : 1.2;
         ctx.beginPath();
         ctx.arc(mx, my, R, 0, Math.PI * 2);
         ctx.stroke();
+        if (m.stage === 2 && !m.evapAt) {
+          ctx.strokeStyle = `rgba(231, 172, 82, ${0.22 * (1 - evapP)})`;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.arc(mx, my, R * 1.55, 0, Math.PI * 2);
+          ctx.stroke();
+        }
         if (m.charge > 0 && !m.evapAt) {
           ctx.strokeStyle = `rgba(231, 172, 82, ${0.25 + m.charge * 0.5})`;
           ctx.lineWidth = 1.4;

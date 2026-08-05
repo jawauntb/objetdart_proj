@@ -895,20 +895,14 @@ export default function ManifoldFold() {
         if (e.fingers !== 1) return; // anything else is gently absorbed
         const { x, y } = toLocal(e.x, e.y);
         const k = beadAt(x, y);
-        // the rapid-tap ladder (tiers 1/3/5/n) in the fold's material: one
-        // rings a pulse (or a bead), three sound the neighborhood of bands,
-        // five catch the light into orbit, n is the whole axis's crescendo
+        // the site-wide rapid-tap ladder (tiers 1/3/5/n from tapTrainTier):
+        // one rings a pulse (or a bead); three transforms a standing mass a
+        // step denser, or on open fabric summons the next rarity in a fixed
+        // cycle; five is the room's largest event — a real binary inspiral
+        // and merger where two or more masses stand; n is the axis's
+        // sustained crescendo, deepening continuously with the train
         const trainTier = tapTrainTier(e.count);
         const depth = tapTrainDepth(e.count);
-        // the double-tap ladder, distinct from the 1/3/5/n rapid train: on a
-        // mass it collapses a step denser, on open fabric it summons the
-        // next rarity in a fixed cycle
-        if (e.count === 2) {
-          const m2 = massAt(x, y);
-          if (m2 && !m2.evapAt) { collapseStage(m2); return; }
-          summonEmpty(x, y, e.intensity);
-          return;
-        }
         if (trainTier === "n") {
           tutti();
           firePulse(x, y, 1 + depth * 0.5);
@@ -917,8 +911,10 @@ export default function ManifoldFold() {
           return;
         }
         if (trainTier === 5) {
-          // five taps catch the light: the rays near the strike wind into
-          // closed orbits for a breath — lensing without a mass
+          // the room's biggest, rarest event: a real inspiral and merger
+          // when two or more masses stand; otherwise the light itself is
+          // caught into a closed orbit for a breath — lensing without a mass
+          if (forceInspiral(x, y)) return;
           orbit = { x, y, omega: 3 + depth * 3, until: performance.now() + 2200 };
           firePulse(x, y, 0.5 + depth * 0.3);
           note(38, 220);
@@ -926,23 +922,12 @@ export default function ManifoldFold() {
           return;
         }
         if (trainTier === 3) {
-          // an exact triple tap with two or more masses standing: a real
-          // binary inspiral and merger, run to completion over a few
-          // seconds — the room's largest, rarest event
-          if (e.count === 3 && forceInspiral(x, y)) return;
-          // otherwise: three taps sound the neighborhood — the nearest bead
-          // and the two bands it touches answer as one chord
-          let nearest = 0;
-          let bestD = Infinity;
-          for (let i = 0; i < beadPos.length; i++) {
-            const d = Math.hypot(x - beadPos[i].x, y - beadPos[i].y);
-            if (d < bestD) { bestD = d; nearest = i; }
-          }
-          for (const off of [0, -1, 1]) {
-            const i = nearest + off;
-            if (i >= 0 && i < SCALE_BANDS.length) chimeBead(i, off !== 0);
-          }
-          try { haptics.ripple(0.4 + depth * 0.3); } catch { /* noop */ }
+          // on a standing mass: its own transformation — one step denser,
+          // star to neutron star to black hole
+          const m3 = massAt(x, y);
+          if (m3 && !m3.evapAt) { collapseStage(m3); return; }
+          // on open fabric: the next rarity in a fixed, deterministic cycle
+          summonEmpty(x, y, e.intensity);
           return;
         }
         if (k >= 0) { chimeBead(k); return; }

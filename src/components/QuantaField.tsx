@@ -64,8 +64,12 @@ import {
   PITCH_MAX_HZ,
   PITCH_MIN_HZ,
   QUANTA_TINTS,
+  annihilates,
+  annihilationPhotonEnergy,
+  annihilationProducts,
   betaFor,
   birthFor,
+  conjugate,
   decayProducts,
   dopplerHz,
   hashSeed,
@@ -77,6 +81,7 @@ import {
   rungFor,
   settlePopulation,
   starterKinds,
+  superposedAmplitude,
   symbolOf,
   tintFamily,
   windEnergy,
@@ -89,6 +94,12 @@ const RETIRE_MS = 1400;
 const MOTE_COUNT = 64;
 /** Seeded cosmic-muon schedule period, s of local time. */
 const COSMIC_PERIOD_S = 24;
+/** Seeded schedule for a virtual pair borrowing enough time to go real, s. */
+const VACUUM_REAL_PERIOD_S = 11;
+/** How near two ripples must come before they are one wave, px. */
+const MEET_PX = 15;
+/** A pair that has already met does not meet again for this long, ms. */
+const MEET_COOLDOWN_MS = 420;
 
 type Exc = {
   uid: number;
@@ -126,6 +137,17 @@ type Speck = {
   r: number;
   color: string;
 };
+
+/**
+ * A Casimir squeeze: two plates the hand set down, close enough that the
+ * vacuum between them cannot hold every mode it wants. The suppressed modes
+ * are missing pressure, so the plates are pushed together by the vacuum
+ * outside — the one place empty space measurably pulls.
+ */
+type Squeeze = { x: number; y: number; angle: number; gap: number; born: number; life: number };
+
+/** A tear in the field the triple-tap opened: pairs condense along it. */
+type Tear = { x0: number; y0: number; x1: number; y1: number; born: number; life: number };
 
 type Stored = {
   residue: Array<{ id: string; anti: boolean; nx: number; ny: number; energy: number; seed: number; pitch: number }>;
@@ -169,7 +191,16 @@ export default function QuantaField() {
     // ————— state —————
     let excs: Exc[] = [];
     const specks: Speck[] = [];
+    const squeezes: Squeeze[] = [];
+    const tears: Tear[] = [];
     const motes: Array<{ x: number; y: number; p: number }> = [];
+    /** Which rarer vacuum process the tier-3 train summons next. */
+    let vacuumCycle = 0;
+    /** The highest rung this tap train has already fired; 0 between trains. */
+    let trainRung = 0;
+    /** uid-pair → when these two last met, so one meeting is one event. */
+    const metAt = new Map<string, number>();
+    let lastVacuumRealSlot = -1;
     let uid = 1;
     let width = 0;
     let height = 0;
