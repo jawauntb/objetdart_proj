@@ -58,6 +58,7 @@ export type FacadeAtlasTextures = {
   map: THREE.CanvasTexture;
   normalMap: THREE.CanvasTexture;
   roughnessMap: THREE.CanvasTexture;
+  aoMap: THREE.CanvasTexture;
 };
 export type FacadeAtlasSet = Partial<Record<Exclude<PlotRole, "empty">, FacadeAtlasTextures>>;
 
@@ -189,12 +190,12 @@ export function facadeMaterialFor(
 }
 
 /**
- * Feed the PBR atlas textures — map, normalMap, roughnessMap — onto a
- * freshly built material. Called from `facadeMaterialFor` when an atlas
- * is provided by the scene builder. The atlas carries the coursing /
- * render-line / mullion / bark detail that turns 48 extruded prisms
- * into architecture; without it, the material falls back to its base
- * color (the pre-atlas look, still valid for headless tests).
+ * Feed the PBR atlas textures — map, normalMap, roughnessMap, aoMap —
+ * onto a freshly built material. Called from `facadeMaterialFor` when
+ * an atlas is provided by the scene builder. The atlas carries the
+ * coursing / render-line / mullion / bark detail that turns 48 extruded
+ * prisms into architecture; without it, the material falls back to its
+ * base color (the pre-atlas look, still valid for headless tests).
  *
  * The material's own base `color` multiplies through the map, so the
  * atlas contains a neutral mid-tone brick/plaster/glass/bark; the
@@ -202,6 +203,14 @@ export function facadeMaterialFor(
  * strength is modest (0.6) so shadows read the coursing but the wall
  * still catches the sun cleanly. Roughness scale is 1.0 — the atlas
  * already carries the material-appropriate range.
+ *
+ * `aoMap` is the fourth PBR channel: pre-baked contact darkening in
+ * the mortar valleys, mullion corners, render-line seams, and bark
+ * grooves. Three's WebGL renderer samples `aoMap` from `uv2`, so we
+ * mirror `uv` → `uv2` on the material's target geometry in the caller
+ * (city-geometry wires this on the shared prism BufferGeometry). The
+ * intensity is set to 0.85 — a touch under 1 so the ambient IBL still
+ * lifts the wall in daytime without the contact zones going full black.
  */
 function applyAtlas(
   material: THREE.MeshStandardMaterial | THREE.MeshPhysicalMaterial,
@@ -212,6 +221,15 @@ function applyAtlas(
   material.normalMap = atlas.normalMap;
   material.normalScale = new THREE.Vector2(0.6, 0.6);
   material.roughnessMap = atlas.roughnessMap;
+  // aoMap only lands on box-body materials whose geometry mirrors uv → uv2
+  // (see city-geometry.unitBoxGeo). Event towers use lathe / cone / cylinder
+  // profiles without uv2, so an aoMap on the tower would sample at (0,0);
+  // the curtain-wall shader already darkens contact zones through its
+  // mullion mask. `MeshPhysicalMaterial` is the event marker.
+  if (!(material as THREE.MeshPhysicalMaterial).isMeshPhysicalMaterial) {
+    material.aoMap = atlas.aoMap;
+    material.aoMapIntensity = 0.85;
+  }
   material.needsUpdate = true;
 }
 

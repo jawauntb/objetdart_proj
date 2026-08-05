@@ -57,6 +57,7 @@ const {
   EVENT_VERTICAL_MULLIONS,
   EVENT_HORIZONTAL_FLOORS,
   TREE_BARK_GROOVES,
+  FACADE_ANISOTROPY,
   homeBrickIsMortar,
   storePlasterHasLine,
   eventMullionIsVertical,
@@ -66,6 +67,14 @@ const {
   normalHeightAt,
   normalAt,
   albedoAt,
+  aoAt,
+  hash21,
+  valueNoise2,
+  fbm2,
+  weatheringStreak01,
+  microHeight01,
+  homeBrickChromatic,
+  pxBelowFeature,
   isPrime,
   tileUVWindowFor,
   tileRepeatsFor,
@@ -415,6 +424,177 @@ for (const r of roles) {
     assert.equal(roughnessAt(role, x, y, TILE), roughnessAt(role, x, y, TILE),
       `roughness is pure — same (role, x, y) reads the same twice`);
   }
+}
+
+// ── photoreal detail layer: FBM + weathering + AO ──────────────────────
+//
+// This block pins the NEW photogrammetric-detail invariants: a
+// deterministic value-noise / FBM hash, weathering streaks that descend
+// from mortar seams / render lines / floor plates, a real ambient-
+// occlusion channel with valley darkening, and per-brick chromatic
+// dispersion. If any of these regress the atlas falls back to painted
+// flat luminance ramps — the pre-detail look the brief calls out as the
+// single largest close-zoom tell.
+
+// hash21 is a 2-arg hash returning [0, 1).
+{
+  const a = hash21(1.7, 3.9);
+  const b = hash21(1.7, 3.9);
+  assert.equal(a, b, "hash21 is deterministic: same args read the same twice");
+  assert.ok(a >= 0 && a < 1, `hash21 in [0,1) (got ${a})`);
+  // Different args produce different outputs (with overwhelming probability).
+  assert.notEqual(hash21(1.7, 3.9), hash21(2.3, 4.1), "hash21 responds to inputs");
+}
+
+// valueNoise2 is a bilinearly interpolated value-noise in [0, 1].
+{
+  for (let i = 0; i < 40; i += 1) {
+    const nx = (i * 0.7) % 8;
+    const ny = ((i * 1.3) + 1.1) % 8;
+    const v = valueNoise2(nx, ny);
+    assert.ok(v >= 0 && v <= 1 && Number.isFinite(v),
+      `valueNoise2(${nx}, ${ny}) in [0,1] (got ${v})`);
+  }
+  // Continuous — a small step produces a small change.
+  const a = valueNoise2(2.11, 3.71);
+  const b = valueNoise2(2.11 + 1e-3, 3.71);
+  assert.ok(Math.abs(a - b) < 0.05, `valueNoise2 continuous (Δ=${Math.abs(a - b).toFixed(4)})`);
+}
+
+// fbm2 sums octaves; range remains in [0, 1] and is deterministic.
+{
+  const a = fbm2(3.14, 2.71, 4);
+  const b = fbm2(3.14, 2.71, 4);
+  assert.equal(a, b, "fbm2 is deterministic");
+  assert.ok(a >= 0 && a <= 1 && Number.isFinite(a), `fbm2 in [0,1] (got ${a})`);
+  // Two different points produce different outputs.
+  assert.notEqual(fbm2(1.1, 1.2, 4), fbm2(4.7, 5.3, 4), "fbm2 responds to inputs");
+}
+
+// ── weathering streaks descend from horizontal features ─────────────────
+
+{
+  // A home tile at TILE=128, HOME_BRICK_ROWS=25 → rowH ≈ 5.12. A pixel
+  // right above y=0 (top of tile) is "above" the mortar seam, which
+  // in a periodic tile wraps to the seam BELOW. pxBelowFeature returns
+  // yMod, so at y=0 it's 0 (on the seam). weathering there ~0.
+  // A pixel a few rows down is well below the seam and can carry a
+  // streak. Sample many pixels across a column and confirm the mean
+  // weathering peaks in the top ~half of a period, not the bottom.
+  const col = 10;
+  const period = TILE / HOME_BRICK_ROWS;
+  let topSum = 0, botSum = 0, topN = 0, botN = 0;
+  for (let y = 0; y < TILE; y += 1) {
+    const yMod = pxBelowFeature("home", col, y, TILE);
+    const dropFrac = yMod / period;
+    const w = weatheringStreak01("home", col, y, TILE);
+    if (dropFrac < 0.4) { topSum += w; topN += 1; }
+    else                { botSum += w; botN += 1; }
+  }
+  const topMean = topSum / Math.max(1, topN);
+  const botMean = botSum / Math.max(1, botN);
+  // Weathering peaks near the top of a period (just below the seam)
+  // and decays toward the bottom. Top mean should exceed bottom mean.
+  assert.ok(topMean > botMean,
+    `home weathering peaks under the mortar seam (top ${topMean.toFixed(3)} > bot ${botMean.toFixed(3)})`);
+  // Tree has no water staining.
+  for (let y = 0; y < TILE; y += 8) {
+    assert.equal(weatheringStreak01("tree", 5, y, TILE), 0,
+      "tree bark carries no water-stain streaks");
+  }
+  // Weathering stays in [0, 1].
+  for (const r of roles) {
+    for (let y = 0; y < TILE; y += 9) {
+      for (let x = 0; x < TILE; x += 9) {
+        const w = weatheringStreak01(r, x, y, TILE);
+        assert.ok(w >= 0 && w <= 1 && Number.isFinite(w),
+          `weathering in [0,1] for ${r} at ${x},${y} (${w})`);
+      }
+    }
+  }
+}
+
+// ── micro-normal detail is bounded and continuous ───────────────────────
+
+{
+  for (const r of roles) {
+    let mmax = -Infinity, mmin = Infinity;
+    for (let y = 0; y < TILE; y += 5) {
+      for (let x = 0; x < TILE; x += 5) {
+        const m = microHeight01(r, x, y, TILE);
+        if (m > mmax) mmax = m;
+        if (m < mmin) mmin = m;
+        assert.ok(Number.isFinite(m) && Math.abs(m) < 0.10,
+          `microHeight bounded for ${r} at ${x},${y} (${m})`);
+      }
+    }
+    // The micro layer must actually VARY — a flat return means the atlas
+    // reverts to the pre-detail three-luminance look.
+    assert.ok(mmax - mmin > 0.02,
+      `microHeight varies across ${r} (range ${(mmax - mmin).toFixed(3)})`);
+  }
+}
+
+// ── per-brick chromatic dispersion ──────────────────────────────────────
+//
+// Hash 20 different bricks and confirm each is warm (r > g > b) but the
+// SET of centroids has genuine variance — the wall reads as many
+// individually-fired bricks, not one paint colour.
+
+{
+  const rs = [], gs = [], bs = [];
+  for (let idx = 0; idx < 20; idx += 1) {
+    const c = homeBrickChromatic(idx);
+    assert.ok(c.r > c.g && c.g > c.b,
+      `brick #${idx} reads warm (r=${c.r.toFixed(3)} > g=${c.g.toFixed(3)} > b=${c.b.toFixed(3)})`);
+    rs.push(c.r); gs.push(c.g); bs.push(c.b);
+  }
+  const spread = (arr) => Math.max(...arr) - Math.min(...arr);
+  assert.ok(spread(rs) > 0.03, `brick R centroids scatter across bricks (spread ${spread(rs).toFixed(3)})`);
+  assert.ok(spread(gs) > 0.02, `brick G centroids scatter across bricks (spread ${spread(gs).toFixed(3)})`);
+}
+
+// ── ambient occlusion channel ───────────────────────────────────────────
+//
+// AO in [0, 1]. Mortar valley / mullion corner samples DARKER than a
+// wide-open brick / glass center. Otherwise the aoMap does nothing and
+// the fourth PBR channel is dead weight.
+
+{
+  // Every AO sample is in [0, 1].
+  for (const r of roles) {
+    for (let y = 0; y < TILE; y += 11) {
+      for (let x = 0; x < TILE; x += 11) {
+        const v = aoAt(r, x, y, TILE);
+        assert.ok(v >= 0 && v <= 1 && Number.isFinite(v),
+          `AO in [0,1] for ${r} at ${x},${y} (${v})`);
+      }
+    }
+  }
+  // Home: sample AO at a mortar seam vs a brick center. The seam sits
+  // in a valley (heights around are higher on both sides), the center
+  // sits on a plateau. Valley AO < plateau AO.
+  const rowH = TILE / HOME_BRICK_ROWS;
+  const colW = TILE / HOME_BRICK_COLS;
+  // Mortar corner: intersection of a horizontal seam and a vertical seam
+  // for row 0. y=0 is the horizontal seam; x=0 the leftmost vertical.
+  const aoCorner = aoAt("home", 0, 0, TILE);
+  const aoBrick = aoAt("home", Math.floor(colW * 1.5), Math.floor(rowH * 1.5), TILE);
+  assert.ok(aoCorner < aoBrick,
+    `mortar corner AO (${aoCorner.toFixed(3)}) is darker than brick center (${aoBrick.toFixed(3)})`);
+  // Event: mullion junction AO < glass center AO.
+  const vPeriodE = TILE / EVENT_VERTICAL_MULLIONS;
+  const hPeriodE = TILE / EVENT_HORIZONTAL_FLOORS;
+  const aoMull = aoAt("event", 0, 0, TILE);
+  const aoGlass = aoAt("event", Math.floor(vPeriodE * 0.5), Math.floor(hPeriodE * 0.5), TILE);
+  assert.ok(aoMull < aoGlass,
+    `mullion corner AO (${aoMull.toFixed(3)}) darker than glass center (${aoGlass.toFixed(3)})`);
+}
+
+// ── anisotropy constant ────────────────────────────────────────────────
+{
+  assert.ok(Number.isInteger(FACADE_ANISOTROPY) && FACADE_ANISOTROPY >= 8,
+    `FACADE_ANISOTROPY >= 8 for crisp grazing-angle street shots (got ${FACADE_ANISOTROPY})`);
 }
 
 console.log(
