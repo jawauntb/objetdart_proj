@@ -376,6 +376,35 @@ export function projectSunToScreen(
   return { x: v.x, y: v.y, visible: !behind && !off };
 }
 
+// The internal scratch Vector3 the zero-allocation variant projects into.
+// Kept at module scope so `projectSunToScreenInto` allocates nothing per
+// frame — the previous `projectSunToScreen` did `sunWorldPos.clone()`
+// on every tick, one Vector3 per frame at 60 Hz that the young generation
+// eventually collected. See fix/city-perf-r3-1 for the diagnosis.
+const _projectSunScratch: THREE.Vector3 = new THREE.Vector3();
+
+/**
+ * Zero-allocation variant of `projectSunToScreen` — writes the projected
+ * NDC coordinates + visibility flag into the caller-supplied `out` object
+ * and returns it. The tick loop hoists a single `out` at mount and reuses
+ * it every frame, so this path allocates neither a Vector3 nor a result
+ * object. Semantics are otherwise identical to `projectSunToScreen`:
+ * behind-camera and >1.5× off-frame both clear `visible`.
+ */
+export function projectSunToScreenInto(
+  out: GodraysSunPosition,
+  sunWorldPos: THREE.Vector3,
+  camera: THREE.PerspectiveCamera | THREE.Camera,
+): GodraysSunPosition {
+  const v = _projectSunScratch.copy(sunWorldPos).project(camera);
+  const behind = v.z > 1;
+  const off = Math.abs(v.x) > 1.5 || Math.abs(v.y) > 1.5;
+  out.x = v.x;
+  out.y = v.y;
+  out.visible = !behind && !off;
+  return out;
+}
+
 /**
  * GLSL uniform block for the god-rays ShaderPass. Shared type so the
  * composer (which writes to these per frame) and the pass itself can

@@ -70,8 +70,9 @@ import {
   createCityClouds,
   cloudHorizonPink,
   type CityClouds,
+  type CloudsUpdate,
 } from "@/lib/city-clouds";
-import { projectSunToScreen } from "@/lib/city-godrays";
+import { projectSunToScreenInto, type GodraysSunPosition } from "@/lib/city-godrays";
 import { exposureForDay } from "@/lib/city-grading";
 import {
   createCitySky,
@@ -80,7 +81,7 @@ import {
   type CitySky,
 } from "@/lib/city-sky";
 import { createCitySun, type CitySun } from "@/lib/city-sun";
-import { createCitySunDisk, type CitySunDisk } from "@/lib/city-sun-disk";
+import { createCitySunDisk, type CitySunDisk, type SunDiskUpdate } from "@/lib/city-sun-disk";
 import {
   baselineLitFractionForDay,
   emissiveIntensityForDay,
@@ -106,15 +107,18 @@ import {
   WATER_PLANE_Y,
   type CityWater,
   type CityWaterProxy,
+  type CityWaterUpdate,
 } from "@/lib/city-water";
 import {
   createCityTraffic,
   type CityTraffic,
+  type TrafficUpdate,
 } from "@/lib/city-traffic";
 import {
   createCityPedestrians,
   type CityPedestrians,
   type PedestrianInput,
+  type PedestrianUpdate,
 } from "@/lib/city-pedestrians";
 import {
   createPlotViewBuilder,
@@ -2324,6 +2328,73 @@ export default function City() {
     ];
     let progressiveIdx = 0;
 
+    // ── zero-alloc tick scratches ────────────────────────────────────────
+    // Every subsystem's update() takes a single "frame" object literal in
+    // the tick body. The prior code built five fresh literals per frame
+    // (water.update({…}), traffic.update({…}), pedestrians.update({…}),
+    // cityClouds.update({…}), citySunDisk.update({…}), volFog literal for
+    // composer.render) + one {x,y,visible} from projectSunToScreen()'s
+    // internal .clone(). At 60 Hz that is ~360 short-lived objects/sec
+    // that the young generation eventually collects — the exact shape of
+    // the previous round's p99 spike. These hoisted structs turn every
+    // one of those into an in-place field write. See scripts/
+    // test-city-perf-allocs.mjs for the grep-then-assert that keeps the
+    // tick body clean.
+    const _waterFrame: CityWaterUpdate = {
+      dayFraction: 0,
+      night: 0,
+      dtMs: 0,
+      tier: governor.tier(),
+      // Plot's shape is a superset of CityWaterProxy — role, sealed,
+      // seed, x, y are shared. The `plots` array reference never
+      // changes; the water module only reads the current contents.
+      plots: plots as unknown as ReadonlyArray<CityWaterProxy>,
+    };
+    const _trafficFrame: TrafficUpdate = {
+      dtMs: 0,
+      night: 0,
+      tier: governor.tier(),
+    };
+    const _pedestriansFrame: PedestrianUpdate = {
+      dtMs: 0,
+      night: 0,
+      tier: governor.tier(),
+    };
+    const _cloudsFrame: CloudsUpdate = {
+      dayFraction: 0,
+      sunDir: _sunDirScratch,
+      sunColor: cloudSunColor,
+      ambientColor: cloudAmbientColor,
+      cityTimeMs: 0,
+      tier: governor.tier(),
+      camera: cityCam.camera,
+      horizonPink: cloudHorizonPinkRGB,
+    };
+    const _sunDiskFrame: SunDiskUpdate = {
+      dayFraction: 0,
+      sunPosition: citySun.sunPosition,
+      camera: cityCam.camera,
+      tier: governor.tier(),
+    };
+    const _volFogFrame: VolumetricFogFrame = {
+      camera: cityCam.camera,
+      sunWorldPos: citySun.sunPosition,
+      fogColor: volFogColor,
+      waterY: WATER_PLANE_Y,
+    };
+    // Zero-alloc {x, y, visible} target for projectSunToScreenInto — the
+    // hot path variant that reuses this + an internal Vector3 instead of
+    // the prior `sunWorldPos.clone().project()` + fresh return object.
+    const _sunScreenOut: GodraysSunPosition = { x: 0, y: 0, visible: false };
+    // Pedestrian-input pool: one PedestrianInput object per persistent
+    // slot, reused across frames. The prior code did
+    // `pedestrianInputs.push({ id, x, y, heading, standing, leaving,
+    // regular, opacity })` per pedestrian per frame — ~20 objects/tick
+    // for a lively town. Here we grow the pool on demand and mutate its
+    // entries in place; setPedestrians only reads the fields, never
+    // captures the reference beyond the call.
+    const _pedInputPool: PedestrianInput[] = [];
+
     // ── frame loop ──────────────────────────────────────────────────────
     let stopped = false;
     let raf = 0;
@@ -2436,12 +2507,9 @@ export default function City() {
       // at ~1.1° across regardless of the visitor's location and stays
       // locked to the direction the light travels. Tier gate is inside
       // update(); sleep tier hides the mesh, below-horizon hides it too.
-      citySunDisk.update({
-        dayFraction: df,
-        sunPosition: citySun.sunPosition,
-        camera: cityCam.camera,
-        tier,
-      });
+      _sunDiskFrame.dayFraction = df;
+      _sunDiskFrame.tier = tier;
+      citySunDisk.update(_sunDiskFrame);
       // Feed the raymarched cloud slab. Sun tone rides the sun light's
       // colour × intensity so a golden dawn paints golden edges; ambient
       // rides the Preetham zenith (from the same analytical model the
@@ -2518,16 +2586,12 @@ export default function City() {
       cloudHorizonPinkRGB.r = wAn * analytical.r + wPh * physR;
       cloudHorizonPinkRGB.g = wAn * analytical.g + wPh * physG;
       cloudHorizonPinkRGB.b = wAn * analytical.b + wPh * physB;
-      cityClouds.update({
-        dayFraction: df,
-        sunDir,
-        sunColor: cloudSunColor,
-        ambientColor: cloudAmbientColor,
-        cityTimeMs,
-        tier,
-        camera: cityCam.camera,
-        horizonPink: cloudHorizonPinkRGB,
-      });
+      _cloudsFrame.dayFraction = df;
+      _cloudsFrame.cityTimeMs = cityTimeMs;
+      _cloudsFrame.tier = tier;
+      // sunDir, sunColor, ambientColor, camera, horizonPink are stable
+      // references we mutate above; the scratch already points at them.
+      cityClouds.update(_cloudsFrame);
       // Tone-mapping exposure rides the same axis the sky and sun do.
       // exposureForDay is a pure smoothstep-piecewise on dayFraction —
       // ~1.4 at noon (hold the sky before the ACES knee clips the sun
@@ -2603,17 +2667,13 @@ export default function City() {
       // whose warm dusk emissive is what makes the reflection catch fire
       // exactly when the sky does. Water rides cityCam.camera through the
       // composer, so its virtualCamera is the mirror of the visitor's eye.
-      water.update({
-        dayFraction: df,
-        night: nightAmt,
-        dtMs: dt,
-        tier,
-        // Plot's shape is a superset of CityWaterProxy — role, sealed,
-        // seed, x, y are shared. The extra ledger fields on Plot are
-        // ignored by the water module; a structural cast avoids a per-
-        // frame allocation.
-        plots: plots as unknown as ReadonlyArray<CityWaterProxy>,
-      });
+      _waterFrame.dayFraction = df;
+      _waterFrame.night = nightAmt;
+      _waterFrame.dtMs = dt;
+      _waterFrame.tier = tier;
+      // plots is the same array reference — the water module reads its
+      // current contents; the extra ledger fields on Plot are ignored.
+      water.update(_waterFrame);
 
       // Advance the 24 cars along the road graph, cross the 6 boats on
       // the harbour strip, and drive the emissive gate on the lamp
@@ -2621,43 +2681,63 @@ export default function City() {
       // sleep (group.visible = false). The wake proxies returned here
       // are for a future PR that reads them into the reflector — for
       // now the emissive strip alone is what carries the harbour life.
-      traffic.update({
-        dtMs: dt,
-        night: nightAmt,
-        tier,
-      });
+      _trafficFrame.dtMs = dt;
+      _trafficFrame.night = nightAmt;
+      _trafficFrame.tier = tier;
+      traffic.update(_trafficFrame);
 
       // Pedestrians: rebuild the input snapshot from the pure people
       // array (id, x, y, heading, standing/leaving/regular flags, and
       // the leaving fade) and hand it to the InstancedMesh capsule pack.
-      // The array is a scratch buffer we reuse across frames — no
-      // allocation per tick. isStanding + fadeForLeaving are the same
-      // pure predicates the 2D overlay used to consult; the 3D bodies
-      // now speak the same language.
+      // Both the outer array (pedestrianInputs) AND each per-slot object
+      // (_pedInputPool) are reused across frames — the prior code did
+      // `pedestrianInputs.push({ id: …, x: …, y: …, heading: …,
+      // standing: …, leaving: …, regular: …, opacity: … })` per
+      // pedestrian per frame, ~20 objects/tick at 60Hz = ~1200
+      // objects/sec of young-generation pressure. We grow the pool on
+      // demand and mutate its entries in place. isStanding +
+      // fadeForLeaving are the same pure predicates the 2D overlay
+      // used to consult; the 3D bodies now speak the same language.
       pedestrianInputs.length = 0;
+      let pedSlot = 0;
       for (const person of people) {
         const leaving = person.phase === "leaving";
         const opacity = leaving && person.leavingSinceMs != null
           ? fadeForLeaving(cityTimeMs - person.leavingSinceMs)
           : 1;
         if (opacity <= 0) continue;
-        pedestrianInputs.push({
-          id: person.id,
-          x: person.x,
-          y: person.y,
-          heading: person.heading,
-          standing: isStanding(person.stillMs),
-          leaving,
-          regular: person.regularStoreId != null || person.regularEventId != null,
-          opacity,
-        });
+        // Grow the pool once the slot count outruns it; every entry
+        // beyond that is mutated in place across the run's lifetime.
+        let slot = _pedInputPool[pedSlot];
+        if (!slot) {
+          slot = {
+            id: 0,
+            x: 0,
+            y: 0,
+            heading: 0,
+            standing: false,
+            leaving: false,
+            regular: false,
+            opacity: 1,
+          };
+          _pedInputPool[pedSlot] = slot;
+        }
+        slot.id = person.id;
+        slot.x = person.x;
+        slot.y = person.y;
+        slot.heading = person.heading;
+        slot.standing = isStanding(person.stillMs);
+        slot.leaving = leaving;
+        slot.regular = person.regularStoreId != null || person.regularEventId != null;
+        slot.opacity = opacity;
+        pedestrianInputs.push(slot);
+        pedSlot += 1;
       }
       pedestrians.setPedestrians(pedestrianInputs);
-      pedestrians.update({
-        dtMs: dt,
-        night: nightAmt,
-        tier,
-      });
+      _pedestriansFrame.dtMs = dt;
+      _pedestriansFrame.night = nightAmt;
+      _pedestriansFrame.tier = tier;
+      pedestrians.update(_pedestriansFrame);
 
       // Project the sun's world-space position to NDC for the god-rays
       // pass. The composer only samples this when the horizon-crossing
@@ -2666,7 +2746,7 @@ export default function City() {
       // effectively unused. Kept unconditional here so the projection
       // result is stable and the pass sees a fresh sunScreen every tick
       // it wakes up.
-      const sunScreen = projectSunToScreen(citySun.sunPosition, cityCam.camera);
+      const sunScreen = projectSunToScreenInto(_sunScreenOut, citySun.sunPosition, cityCam.camera);
 
       // R10-7: the participating-media fog frame. Hands the god-rays
       // pass everything its 20-step raymarch needs — the perspective
@@ -2683,12 +2763,10 @@ export default function City() {
       // the citySky module already updates its state on a 64-slot
       // rhythm so the underlying colour is nearly constant here.
       volFogColor.copy(fogColorFromSky(citySky.currentState));
-      const volFog: VolumetricFogFrame = {
-        camera: cityCam.camera,
-        sunWorldPos: citySun.sunPosition,
-        fogColor: volFogColor,
-        waterY: WATER_PLANE_Y,
-      };
+      // _volFogFrame's camera / sunWorldPos / fogColor / waterY were
+      // wired at scratch init and never change; the mutation above
+      // updates fogColor in place via volFogColor.copy(...).
+      const volFog = _volFogFrame;
 
       // The four RenderPasses live inside the composer now. Bloom threshold /
       // strength / radius ride the same dayFraction the shaders do — the
