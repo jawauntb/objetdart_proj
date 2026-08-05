@@ -31,6 +31,7 @@ import {
   dynamicZoomFloor,
   exploredBounds,
   focusForSheet,
+  hasZoomHeadroom,
   placeChildRect,
   resolvePlaneEdgeTravel,
   tileNeedsDetail,
@@ -293,6 +294,64 @@ const MARK_SIGILS: Record<MarkKind, RouteSigilKind> = {
 
 function MapMark({ kind }: { kind: MarkKind }) {
   return <RouteSigil kind={MARK_SIGILS[kind]} size={24} />;
+}
+
+const TILE_CROSSFADE_MS = 560;
+
+// A tile's DOM key stays fixed across its own lifetime (a landing sheet
+// upgrades a preview to a final in place, a re-rooted plane's origin
+// sheet does the same), so React never remounts it and the plain CSS
+// mount animation on .living-atlas__tile never gets to replay for that
+// swap. Without this, a sharper drawing arriving under the same id was a
+// hard cut — the ground now blends into the ground it replaces.
+function AtlasTileImage({ src, priority }: { src: string; priority: boolean }) {
+  const [shown, setShown] = useState(src);
+  const [incoming, setIncoming] = useState<string | null>(null);
+  const [incomingVisible, setIncomingVisible] = useState(false);
+  const shownRef = useRef(src);
+
+  useEffect(() => {
+    if (src === shownRef.current) return;
+    setIncoming(src);
+    setIncomingVisible(false);
+    const raf = window.requestAnimationFrame(() => setIncomingVisible(true));
+    const settle = window.setTimeout(() => {
+      shownRef.current = src;
+      setShown(src);
+      setIncoming(null);
+      setIncomingVisible(false);
+    }, TILE_CROSSFADE_MS);
+    return () => {
+      window.cancelAnimationFrame(raf);
+      window.clearTimeout(settle);
+    };
+  }, [src]);
+
+  return (
+    <>
+      <Image
+        className="living-atlas__image"
+        src={shown}
+        alt=""
+        fill
+        sizes="100vw"
+        priority={priority}
+        unoptimized
+        draggable={false}
+      />
+      {incoming && (
+        <Image
+          className={"living-atlas__image living-atlas__image--incoming" + (incomingVisible ? " is-visible" : "")}
+          src={incoming}
+          alt=""
+          fill
+          sizes="100vw"
+          unoptimized
+          draggable={false}
+        />
+      )}
+    </>
+  );
 }
 
 // ── living-atlas atmosphere types ───────────────────────────────
@@ -1427,9 +1486,17 @@ export default function Atlas() {
   };
 
   // When the camera outruns the deepest drawing beneath it, ask for a
-  // child sheet of just that ground. Detail resolves in place — the
+  // child sheet of just that ground. Most levels resolve in place — the
   // camera never moves, and zooming back out still shows the parent
-  // around it. The pyramid, one level at a time.
+  // around it. But a child's rect shrinks every level, so the zoom the
+  // camera would need to outrun it again grows the same way; left
+  // unchecked that requirement eventually exceeds what the camera can
+  // ever reach and a tile is stuck over-magnified forever. Once
+  // hasZoomHeadroom says the well is running dry, this landing re-roots
+  // the plane instead — the same swap a fresh concept or a widened chart
+  // already uses — so the sharper sheet becomes a new full-zoom world
+  // with a full MAX_ZOOM of headroom again. The pyramid, endless one
+  // checkpoint at a time.
   const maybeRequestDetail = () => {
     if (busy || hasPendingGenerationWork()) return;
     const m = metricsRef.current;
@@ -1451,11 +1518,12 @@ export default function Atlas() {
     ].join("|");
     if (key === childRequestKeyRef.current) return;
     childRequestKeyRef.current = key;
-    setStatus("settling new detail into the visible ground");
+    const reroot = !hasZoomHeadroom(childRect, MAX_ZOOM);
+    setStatus(reroot ? "a sharper world is coming into focus" : "settling new detail into the visible ground");
     recordTape("region", 0.68, "atlas/detail/" + (deep.level + 1));
     void generateMap({
       mode: "zoom",
-      plane: "same",
+      plane: reroot ? "new" : "same",
       subjectPrompt: concept + " · visible region",
       focus: localFocus,
       childRect,
@@ -2630,16 +2698,7 @@ export default function Atlas() {
                 zIndex: tile.level + 2,
               }}
             >
-              <Image
-                className="living-atlas__image"
-                src={tile.image}
-                alt=""
-                fill
-                sizes="100vw"
-                priority={tile.level === 0}
-                unoptimized
-                draggable={false}
-              />
+              <AtlasTileImage src={tile.image} priority={tile.level === 0} />
             </div>
           ))}
           <div
@@ -2849,6 +2908,15 @@ export default function Atlas() {
           transform: scale(var(--atlas-breath, 1));
           transform-origin: center center;
         }
+        /* A sharper drawing landing under the same tile (preview → final,
+           or a re-rooted plane's origin sheet) sits on top and dissolves
+           in — the ground blends into its own deeper self instead of
+           popping. */
+        .living-atlas__image--incoming {
+          opacity: 0;
+          transition: opacity 560ms ease;
+        }
+        .living-atlas__image--incoming.is-visible { opacity: 1; }
         .living-atlas__overlay {
           position: absolute;
           inset: 0;
@@ -3168,8 +3236,10 @@ export default function Atlas() {
           animation: atlas-glimmer 2.6s ease-in-out 1;
         }
         @keyframes atlas-tile-in {
-          from { opacity: 0; }
-          to { opacity: 1; }
+          /* A faint inward settle reads as the ground coming into focus
+             rather than a flat cut — the same depth cue a lens racks. */
+          from { opacity: 0; transform: scale(1.018); }
+          to { opacity: 1; transform: scale(1); }
         }
         @keyframes atlas-diffuse {
           0% { transform: translate(-50%, -50%) scale(.12) rotate(0deg); opacity: 0; filter: blur(0); }

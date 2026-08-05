@@ -30,6 +30,14 @@ Last verified against the live provider documentation and OpenRouter model-disco
 
 This deliberately separates **fast navigation** from **slow synthesis**. Generation enriches the map; it is not required for every gesture.
 
+## Endless zoom: the pyramid re-roots so it never hits a ceiling
+
+`maybeRequestDetail` in `src/components/Atlas.tsx` asks for a native, full-resolution child sheet whenever the camera magnifies the deepest tile under it past `tileNeedsDetail`'s threshold (`src/lib/atlas-plane.ts`). Most levels land that child in place — same plane, same camera, no recenter — but a child's rect is always a fraction of its parent's (`clipRectForFocus`, `src/lib/atlas-batch.ts`), so it shrinks every level, and the camera zoom required to outrun it again grows the same way. Left unbounded, that requirement eventually exceeds `MAX_ZOOM` (`ATLAS_ZOOM_SPEC.zoomMax`) and a tile is stuck over-magnified with nowhere sharper to go — the room's actual "blurry, never gets crisp again" failure mode, arithmetically inevitable around level 12–13 at the pyramid's default clip widths.
+
+`hasZoomHeadroom` (`src/lib/atlas-plane.ts`) checks, at the moment a child is requested, whether landing it still leaves the camera enough zoom range to ask for one more level in place. Once it doesn't, that same landing re-roots the plane instead — the identical swap a fresh concept (`mode: "generate"`) or a widened chart (zoom-out past the floor) already uses (`applyLandedPlane`): the sharper sheet becomes a brand-new full-zoom world (`ATLAS_WORLD_ORIGIN`, camera reset to fit-1), so the next level starts again with a full `MAX_ZOOM` of headroom. `generationDepth` keeps incrementing across a re-root exactly as it does across an in-place child, and the fresh root is a normal explorable sheet — its own N/E/S/W edges answer lateral `shift` travel like any other plane. This is what makes the zoom genuinely endless (verified to at least 12 levels, with margin, in `scripts/test-atlas.mjs`) rather than merely deep.
+
+Every tile's image renders through `AtlasTileImage`, which crossfades whenever its `src` changes without a DOM remount — a preview upgrading to its final, or a re-rooted plane's origin sheet arriving — using the `.living-atlas__image--incoming` / `.is-visible` layer `docs/atlas-progressive-qa.md`'s QA matrix already names. Before this, a same-id swap was an un-transitioned hard cut.
+
 ## Provider-neutral server boundary (proposed Atlas contract)
 
 The browser must call one Atlas-owned route, not OpenAI or OpenRouter directly. The route chooses the provider from server configuration and normalizes provider output.
