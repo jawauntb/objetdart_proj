@@ -718,9 +718,7 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "axis",
     keeps: null,
     creates: null,
-    exempt: {
-      dwell: "the comb's teeth are a fixed acoustic scale; prolonged contact sustains a note instead of planting new material into the instrument",
-    },
+    exempt: {},
   },
   {
     key: "beam",
