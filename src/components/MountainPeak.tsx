@@ -558,6 +558,9 @@ export default function MountainPeak() {
     let running = true;
     let screeSerial = 0;
     let windAt = 0;
+    /** the hand's tempo, entrained into the fog's own breath for a while */
+    let rhythmBpm = 0;
+    let rhythmUntil = 0;
     let glDirty = true;
     let lastGlAt = 0;
     let lastSig = Infinity;
@@ -1036,11 +1039,20 @@ export default function MountainPeak() {
             lensTarget = snapped;
           }
         },
-        scrub: () => {
+        scrub: (e) => {
+          // stirring the inversion: a clockwise circle draws the sea of fog
+          // down off the ridges, counterclockwise lifts it — deeper and
+          // faster circling moves more of it
           lastTouchAt = performance.now();
-          fogLiftTarget = clamp(fogLiftTarget - 0.06, -FOG_BREATH_KM * 1.6, FOG_BREATH_KM * 2.4);
-          audio.playNote(50, 160);
-          haptics.ripple(0.3);
+          const turn = clamp(Math.abs(e.winding), 0.5, 3);
+          const moved = 0.04 * turn * (1 + clamp01(e.angularVelocity / 1.2) * 0.6);
+          fogLiftTarget = clamp(
+            fogLiftTarget + (e.winding > 0 ? moved * 0.6 : -moved),
+            -FOG_BREATH_KM * 1.6,
+            FOG_BREATH_KM * 2.4,
+          );
+          audio.playNote(50 + Math.round(turn * 3), 160);
+          haptics.ripple(0.2 + Math.min(0.5, turn * 0.15));
         },
         flick: (e) => {
           // a stone thrown down the slope, the way the hand sent it and as
@@ -1056,19 +1068,24 @@ export default function MountainPeak() {
           haptics.chop();
         },
         drum: (e) => {
-          // the patter between two zones is two calls into the range, and
-          // the range answers each at its own distance
+          // the patter between two zones is a volley of calls into the range,
+          // each answered at its own distance — a tighter alternation carries
+          // further, and every extra hit throws the volley harder
           lastTouchAt = performance.now();
           const a = toLocal(e.ax, e.ay);
           const b = toLocal(e.bx, e.by);
-          callOut(a.x, a.y, 0.4);
-          window.setTimeout(() => callOut(b.x, b.y, 0.4), 90);
+          const carry = 0.25 + e.alternation * 0.4 + Math.min(1, e.hits / 8) * 0.3;
+          callOut(a.x, a.y, carry);
+          window.setTimeout(() => callOut(b.x, b.y, carry), 90);
           haptics.tap();
         },
         rhythm: (e) => {
-          // a steady hand is answered in its own tempo, never with a lesson
+          // a steady hand entrains the inversion: the sea of fog breathes at
+          // the hand's own tempo for a while, never with a lesson
           if (e.stability < 0.6) return;
           lastTouchAt = performance.now();
+          rhythmBpm = clamp(e.bpm, 30, 160);
+          rhythmUntil = performance.now() + 9000;
           audio.playTone(90 + e.bpm * 0.4, 0.5);
           haptics.tap();
         },
@@ -1231,7 +1248,14 @@ export default function MountainPeak() {
       }
 
       // the shared 7s breath: the fog settles on the exhale, lifts on the draw
-      const breath = reduced ? 0 : Math.sin(t * Math.PI * 2 * 0.14);
+      // — and while an entrained tempo lasts, a second swell rides the hand's
+      // own pulse on top of it, fading as the entrainment lets go
+      const entrain = rhythmBpm > 0 && now < rhythmUntil ? clamp01((rhythmUntil - now) / 9000) : 0;
+      if (rhythmBpm > 0 && now >= rhythmUntil) rhythmBpm = 0;
+      const breath = reduced
+        ? 0
+        : Math.sin(t * Math.PI * 2 * 0.14) +
+          (entrain > 0 ? Math.sin(t * Math.PI * 2 * (rhythmBpm / 60)) * 0.6 * entrain : 0);
       const fogAltitude = restingFog + fogLift + breath * FOG_BREATH_KM * 0.18;
       const phase = reduced ? 0 : t * 0.09;
 

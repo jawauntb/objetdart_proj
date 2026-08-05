@@ -486,7 +486,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     keeps: "objetdart:flowers:v1",
     creates: "a flower",
     exempt: {
-      pan: "the garden camera is anchored to its bed: pinch changes the botanical scale but translation would move the visitor outside the bounded plot",
       dwell: "the garden's pressure-bloom is continuous from contact and already owns its growth axis; a second dwell plant would duplicate a flower at the same contact",
     },
     rawPointer: "reads contact count and the surf-line inset directly for the press-bloom; the engine reports intensity per event but no continuous pressure channel while held",
