@@ -5,9 +5,16 @@
  * is assembled from role-shaped Meshes rather than a single unit box, so
  * the settlement finally reads the way the brief calls for it:
  *
- *   home  → BoxGeometry body + a 4-sided pitched roof + optional chimney.
- *           Roof pitch and chimney presence are seeded — a row of homes
- *           reads as a row of separate houses, not 48 identical prefabs.
+ *   home  → BoxGeometry body + a FLAT tarred rooftop with a raised
+ *           parapet + optional HVAC condenser + optional wooden water
+ *           tower. This is the SF / London / NYC roofline — real homes
+ *           in those cities are flat-topped with rooftop equipment; the
+ *           old 4-sided pitched cone read as a picture-book cottage and
+ *           broke every reference in the brief. HVAC + water-tower
+ *           presence are seeded off `hashUnit(seed, k)` with the same
+ *           pattern `hasChimneyForSeed` uses, so a row of 48 homes still
+ *           reads as 48 individuals — some bare, some cluttered, some
+ *           carrying an iconic wooden tank against the sunset.
  *
  *   store → BoxGeometry body + a flat parapet cornice at the top + a
  *           thin awning strip on the +Z face at the ground floor. Awning
@@ -224,9 +231,37 @@ export function roofPitchForSeed(seed: number): RoofPitch {
 export function roofUnitHeightFor(pitch: RoofPitch): number {
   return pitch === 0 ? 0.18 : pitch === 1 ? 0.32 : 0.55;
 }
-/** Whether this home has a chimney. About 55% do. */
+/** Whether this home has a chimney. About 55% do.
+ *
+ *  NOTE: The home's roof itself is now the flat-tarred variant with a
+ *  parapet, HVAC box, and optional water tower — this predicate is kept
+ *  because `test-city-geometry.mjs` pins its purity and seed-based
+ *  distribution, and because `hasHvacForSeed` / `hasWaterTowerForSeed`
+ *  reuse the same `hashUnit(seed, k)` shape. Chimneys are no longer
+ *  rendered — the equipment on a real SF/London/NYC flat rooftop is
+ *  HVAC condensers and wooden water tanks, not brick chimneys. */
 export function hasChimneyForSeed(seed: number): boolean {
   return hashUnit(seed, 29) < 0.55;
+}
+/** Whether this home carries a rooftop HVAC condenser box. About 62% do.
+ *
+ *  Uses the same `hashUnit(seed, k)` pattern as `hasChimneyForSeed`, but
+ *  a fresh k so the predicate is independent — a home with an HVAC unit
+ *  may or may not also carry a water tower, and the row of 48 homes
+ *  reads as 48 individuals rather than a lockstep on/off pair. */
+export function hasHvacForSeed(seed: number): boolean {
+  return hashUnit(seed, 31) < 0.62;
+}
+/** Whether this home carries a wooden rooftop water tower. About 34% do.
+ *
+ *  Water towers are iconic (NYC, and yes, London and SF too — you can
+ *  see them on older mid-rise buildings). Rarer than HVAC, so a tank
+ *  reads as a punctuation mark against the skyline rather than uniform
+ *  rooftop clutter. Uses `hashUnit(seed, 37)` — same slot the awning
+ *  color function reads from, but a different threshold decoding, so
+ *  it remains independent of the home/store distinction. */
+export function hasWaterTowerForSeed(seed: number): boolean {
+  return hashUnit(seed, 41) < 0.34;
 }
 
 // EventVariant + eventVariantForSeed have moved to city-geometry-pure.ts
@@ -242,11 +277,49 @@ export function hasChimneyForSeed(seed: number): boolean {
 
 // ── shared PBR sub-materials (roof / awning / plaza / trunk / etc) ───────
 
-function makeRoofMaterial(): THREE.MeshStandardMaterial {
+/** The flat tar/asphalt roof deck — dark, matte, non-metal. Reads as
+ *  a modern-membrane roof at wide zoom and as a tar-and-gravel deck at
+ *  close zoom (the bird's-eye Currier & Ives frame catches the color as
+ *  a warm-neutral dark against the awning + wall drift). */
+function makeRoofDeckMaterial(): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({
-    color: 0x5A3728,
-    roughness: 0.88,
-    metalness: 0.06,
+    color: 0x2A2622,
+    roughness: 0.94,
+    metalness: 0.02,
+  });
+}
+
+/** The home parapet — a raised stone-or-brick ring at the roof edge.
+ *  Uses the same PBR profile as the store parapet (0x9C8770) so a row
+ *  of homes and a row of stores share the cornice palette at dusk. */
+function makeHomeParapetMaterial(): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({
+    color: 0x9C8770,
+    roughness: 0.86,
+    metalness: 0.04,
+  });
+}
+
+/** HVAC condenser — light metallic grey with a hint of specular. Real
+ *  rooftop condensers are painted aluminum housings; the slight metal
+ *  bump lets the sunset rake across the panels for a brief highlight
+ *  in the composer's bloom pass. */
+function makeHvacMaterial(): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({
+    color: 0xB6B4AF,
+    roughness: 0.55,
+    metalness: 0.35,
+  });
+}
+
+/** Wooden water tower — warm cedar/redwood plank color. Non-metallic,
+ *  high-roughness so the tank catches sunset warmth without going
+ *  spec-glossy the way a metal tank would. */
+function makeWaterTowerMaterial(): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({
+    color: 0x8A5A34,
+    roughness: 0.92,
+    metalness: 0.04,
   });
 }
 
@@ -277,14 +350,6 @@ function makeParapetMaterial(): THREE.MeshStandardMaterial {
   });
 }
 
-function makeChimneyMaterial(): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({
-    color: 0x8A6455,
-    roughness: 0.88,
-    metalness: 0.03,
-  });
-}
-
 function makePlazaMaterial(): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({
     color: 0x8E8578,
@@ -299,6 +364,180 @@ function makeTrunkMaterial(): THREE.MeshStandardMaterial {
     roughness: 0.95,
     metalness: 0.0,
   });
+}
+
+// ── flat rooftop geometry helpers (home role) ───────────────────────────
+//
+// The home flat-tar rooftop is assembled from three "ride-the-body"
+// extras. Each is a BufferGeometry pre-translated into the unit-body
+// coordinate frame — Y in [0..1] maps to world [0..yScale] once the
+// primary body's (sx, yScale, sz) matrix scales the extra through.
+// Geometries are shared across every home instance; per-plot variation
+// comes from seed-gated presence, not per-instance geometry rewrites.
+//
+// Placement conventions inside the unit body [-0.5, +0.5] × [0, 1]:
+//
+//   ROOF DECK: solid slab at y ∈ [0.995, 1.010], covering the full
+//              footprint. Sits just above the wall's top face so the
+//              wall's facade texture doesn't z-fight the deck. Tar
+//              color makes the deck read as a modern-membrane roof
+//              from the bird's-eye Currier & Ives zoom.
+//
+//   PARAPET:   hollow rectangular ring, outer 1.02 × 1.02, inner
+//              0.86 × 0.86, height 0.05 (world 0.15..0.35 m depending
+//              on wall). Base at y = 1.010 so it sits on the deck.
+//              Stone color matches the store parapet.
+//
+//   HVAC:      light-metal box, ~0.28 × 0.10 × 0.20 in unit space, off-
+//              center at (+0.20, +1.06, -0.18) so it doesn't touch the
+//              parapet ring or the water tower's tank.
+//
+//   WATER TWR: merged (tank + cap + 4 legs) rooftop water tank at
+//              (-0.20, +1.00.. +1.35, +0.20). Wooden color, ~1.5 m tall
+//              in world for a mid-height home. Rarer than HVAC — a
+//              punctuation mark against the skyline at dusk.
+
+/** Build the parapet ring as an ExtrudeGeometry with a rectangular hole
+ *  in the middle. Outer edge sits slightly outside the wall (1.02 vs
+ *  1.00) so from the plaza looking up, the parapet crown reads as a
+ *  raised cornice line rather than an invisible edge. Extrudes along
+ *  +Y after a -π/2 rotate about X. */
+function makeHomeParapetGeometry(): THREE.BufferGeometry {
+  const outer = 0.51;
+  const inner = 0.43;
+  const shape = new THREE.Shape();
+  shape.moveTo(-outer, -outer);
+  shape.lineTo( outer, -outer);
+  shape.lineTo( outer,  outer);
+  shape.lineTo(-outer,  outer);
+  shape.closePath();
+  const hole = new THREE.Path();
+  hole.moveTo(-inner, -inner);
+  hole.lineTo( inner, -inner);
+  hole.lineTo( inner,  inner);
+  hole.lineTo(-inner,  inner);
+  hole.closePath();
+  shape.holes.push(hole);
+  const geo = new THREE.ExtrudeGeometry(shape, {
+    depth: 0.05,
+    bevelEnabled: false,
+    steps: 1,
+  });
+  // ExtrudeGeometry extrudes the shape (in the XY plane) along +Z. We
+  // want the parapet's height to run along +Y, so rotate the shape
+  // plane down. After rotateX(-π/2): +Z (depth) → +Y, +Y (shape) → -Z
+  // (which is fine — the shape is symmetric about the origin).
+  geo.rotateX(-Math.PI / 2);
+  // Sit the parapet on top of the roof deck: base at y = 1.010, crown
+  // at y = 1.060.
+  geo.translate(0, 1.010, 0);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/** Build the roof-deck slab: a thin box that covers the full wall
+ *  footprint and reads as tar/asphalt at close zoom. Y-thickness 0.015
+ *  in unit space so it scales to a plausible 0.05..0.10 m in world. */
+function makeHomeRoofDeckGeometry(): THREE.BufferGeometry {
+  const g = new THREE.BoxGeometry(1.00, 0.015, 1.00);
+  g.translate(0, 1.0025, 0); // top face at y = 1.010, base at y = 0.995
+  return g;
+}
+
+/** Build the HVAC condenser: a single BoxGeometry offset toward one
+ *  corner of the roof deck. Placed at (+0.20, ~1.06, -0.18) so it never
+ *  overlaps the parapet ring (inner 0.86 wide → half 0.43 clearance)
+ *  or the water tower's -X/+Z tank position. */
+function makeHomeHvacGeometry(): THREE.BufferGeometry {
+  const g = new THREE.BoxGeometry(0.26, 0.10, 0.18);
+  g.translate(0.20, 1.060, -0.18);
+  return g;
+}
+
+/** Local geometry-merge helper — mirrors the tiny merger in
+ *  city-pedestrians. Concatenates position + normal buffers of a small
+ *  set of BufferGeometries into one flat non-indexed geometry so the
+ *  water-tower (tank + cap + 4 legs) can live inside a single
+ *  InstancedMesh extra. Cheaper than pulling in BufferGeometryUtils
+ *  and avoids the third-party import dance. */
+function mergeHomeGeometries(geos: THREE.BufferGeometry[]): THREE.BufferGeometry {
+  const nonIndexed: THREE.BufferGeometry[] = geos.map((g) => {
+    const gi = g.index ? g.toNonIndexed() : g;
+    if (!gi.attributes.normal) gi.computeVertexNormals();
+    return gi;
+  });
+  let totalVerts = 0;
+  for (const g of nonIndexed) totalVerts += g.attributes.position.count;
+  const positions = new Float32Array(totalVerts * 3);
+  const normals   = new Float32Array(totalVerts * 3);
+  let offset = 0;
+  for (const g of nonIndexed) {
+    const p = g.attributes.position;
+    const n = g.attributes.normal;
+    for (let i = 0; i < p.count; i += 1) {
+      positions[(offset + i) * 3 + 0] = p.getX(i);
+      positions[(offset + i) * 3 + 1] = p.getY(i);
+      positions[(offset + i) * 3 + 2] = p.getZ(i);
+      normals[(offset + i) * 3 + 0]   = n.getX(i);
+      normals[(offset + i) * 3 + 1]   = n.getY(i);
+      normals[(offset + i) * 3 + 2]   = n.getZ(i);
+    }
+    offset += p.count;
+  }
+  // Free the sub-geometries; nothing outside this call needs them.
+  for (const g of geos) {
+    try { g.dispose(); } catch { /* noop */ }
+  }
+  for (const g of nonIndexed) {
+    if (!geos.includes(g)) {
+      try { g.dispose(); } catch { /* noop */ }
+    }
+  }
+  const out = new THREE.BufferGeometry();
+  out.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  out.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
+  return out;
+}
+
+/** Build the wooden water tower as a merged geometry: cylindrical tank
+ *  + conical cap + 4 short leg posts. Sits at (-0.20, ~1.00 → 1.35,
+ *  +0.20). The tank is 12-segment (cheap silhouette), the cap 12-
+ *  segment matching. Legs are 4 tiny BoxGeometries under the tank so
+ *  the tank appears raised — the iconic NYC skyline read. */
+function makeHomeWaterTowerGeometry(): THREE.BufferGeometry {
+  const cx = -0.20;
+  const cz =  0.20;
+  const legTop = 1.020;
+  const legBase = 1.000;
+  const tankBase = legTop;
+  const tankTop = 1.300;
+  const capTop  = 1.360;
+
+  // Legs — 4 tiny box posts at the corners of a 0.20 square under the
+  // tank. Height (legTop - legBase) = 0.020 unit → ~0.10 m world.
+  const legOff = 0.11; // distance from tank centre to each leg
+  const legGeo = (dx: number, dz: number) => {
+    const g = new THREE.BoxGeometry(0.028, legTop - legBase, 0.028);
+    g.translate(cx + dx, (legBase + legTop) * 0.5, cz + dz);
+    return g;
+  };
+  const leg1 = legGeo(-legOff, -legOff);
+  const leg2 = legGeo( legOff, -legOff);
+  const leg3 = legGeo(-legOff,  legOff);
+  const leg4 = legGeo( legOff,  legOff);
+
+  // Tank — a 12-segment cylinder. Radius 0.13 in unit space →
+  // ~0.4..0.9 m across depending on footprint sx. Height 0.28 unit.
+  const tank = new THREE.CylinderGeometry(0.13, 0.13, tankTop - tankBase, 12, 1, false);
+  tank.translate(cx, (tankBase + tankTop) * 0.5, cz);
+
+  // Cap — conical roof for the tank. Radius matches the tank at the
+  // base and tapers to 0 at capTop. 12 segments to match the tank so
+  // the seam reads clean.
+  const cap = new THREE.ConeGeometry(0.13, capTop - tankTop, 12);
+  cap.translate(cx, (tankTop + capTop) * 0.5, cz);
+
+  return mergeHomeGeometries([leg1, leg2, leg3, leg4, tank, cap]);
 }
 
 // ── emissive atlas dims (per role) ──────────────────────────────────────
@@ -494,39 +733,58 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
     return { canvas, texture };
   }
 
-  // ── home role: box body + pitched cone roof + optional chimney ──
+  // ── home role: box body + flat tarred rooftop with rooftop kit ──
+  //
+  // The old 4-sided pitched cone roof + brick chimney read as picture-
+  // book cottage and broke every SF/London/NYC reference in the brief.
+  // The flat-tar rooftop kit that replaces it: a dark deck slab (always),
+  // a raised stone parapet ring (always), a light-metal HVAC condenser
+  // (~62% of homes, seeded), and a wooden water tower (~34% of homes,
+  // seeded). Each part is an InstancedMesh keyed to the primary body's
+  // instance index — one write per plot per part, done in lockstep by
+  // `writeInstancedPlot` (see the extras loop below).
   const homeBodyGeo = unitBoxGeo();
   const homeWallMat = facadeMaterialFor("home", 0, atlasSet) as THREE.MeshStandardMaterial;
   const homeEmiss = primeEmissive(homeWallMat, "home");
   const homeBody = makeInstanced(homeBodyGeo, homeWallMat);
   scene.add(homeBody);
 
-  // Roof is a 4-sided pyramidal cone. Base radius covers slightly more
-  // than the unit box's half-width so the ridges land ABOVE the wall
-  // corners. Rotate 45° about Y so the four ridges point AT the four
-  // wall corners rather than midway across the faces. The base of the
-  // cone is baked to sit at local y=0 (translate up by 0.5 so the built
-  // ConeGeometry, which centers at y=0, has its base at y=0 and tip at
-  // y=1). The instance matrix's Y-position then places that base at the
-  // top of the plot's wall (world y = yScale) and its Y-scale stretches
-  // the cone to the seeded pitch height.
-  const homeRoofGeo = new THREE.ConeGeometry(0.72, 1.0, 4);
-  homeRoofGeo.rotateY(Math.PI / 4);
-  homeRoofGeo.translate(0, 0.5, 0);
-  const homeRoofMat = makeRoofMaterial();
-  const homeRoof = makeInstanced(homeRoofGeo, homeRoofMat);
-  scene.add(homeRoof);
+  // Roof deck — always present. Thin dark slab that covers the wall's
+  // footprint and gives the bird's-eye zoom a real dark rectangle to
+  // read as tarred roofing rather than the wall's brick texture bled
+  // upward. Baked in local unit space (top face at y = 1.010) so the
+  // extra rides the body's Y-scale like every other flat piece.
+  const homeRoofDeckGeo = makeHomeRoofDeckGeometry();
+  const homeRoofDeckMat = makeRoofDeckMaterial();
+  const homeRoofDeck = makeInstanced(homeRoofDeckGeo, homeRoofDeckMat);
+  scene.add(homeRoofDeck);
 
-  // Chimney: a small box that sits on top of the roof at one corner.
-  // Baked at y in [1.0..1.32] so its base sits at the wall top and its
-  // shaft rises ~0.32 units into the roof space. The primary Y-scale
-  // multiplies through — a taller house has a taller chimney, which
-  // reads as proportional rather than out of place.
-  const homeChimneyGeo = new THREE.BoxGeometry(0.12, 0.32, 0.12);
-  homeChimneyGeo.translate(0.28, 1.16, 0.28);
-  const homeChimneyMat = makeChimneyMaterial();
-  const homeChimney = makeInstanced(homeChimneyGeo, homeChimneyMat);
-  scene.add(homeChimney);
+  // Parapet — always present. Raised hollow rectangular ring around
+  // the roof edge; the same stone palette the store parapet uses so
+  // the two roles' cornices agree at dusk. Sits on top of the deck.
+  const homeParapetGeo = makeHomeParapetGeometry();
+  const homeParapetMat = makeHomeParapetMaterial();
+  const homeParapet = makeInstanced(homeParapetGeo, homeParapetMat);
+  scene.add(homeParapet);
+
+  // HVAC condenser — presence-gated on `hasHvacForSeed` (~62%). A
+  // small light-metal box offset to one corner of the roof deck so
+  // it never overlaps the parapet ring or the water tower's tank.
+  // Metallic-ish so sunset light catches its face for a brief bloom.
+  const homeHvacGeo = makeHomeHvacGeometry();
+  const homeHvacMat = makeHvacMaterial();
+  const homeHvac = makeInstanced(homeHvacGeo, homeHvacMat);
+  scene.add(homeHvac);
+
+  // Wooden water tower — presence-gated on `hasWaterTowerForSeed`
+  // (~34%). Merged geometry: 4 leg posts + cylindrical tank + conical
+  // cap. Warm cedar/redwood color that catches sunset warmth against
+  // the cool blue evening sky — the emotional peak of the brief lives
+  // on this kind of small detail.
+  const homeWaterTowerGeo = makeHomeWaterTowerGeometry();
+  const homeWaterTowerMat = makeWaterTowerMaterial();
+  const homeWaterTower = makeInstanced(homeWaterTowerGeo, homeWaterTowerMat);
+  scene.add(homeWaterTower);
 
   // ── store role: box body + parapet + optional awning ────────────
   const storeBodyGeo = unitBoxGeo();
@@ -628,22 +886,39 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
     primaryMesh: homeBody,
     wallMaterial: homeWallMat,
     extras: [
+      // Roof deck (always) — thin dark tar slab across the full
+      // footprint. Ride-the-body: the extra's local geometry lives in
+      // unit space and the primary Y-scale (yScale = wall height in
+      // world units) stretches its Y coordinates through. The deck's
+      // thickness scales linearly with wall height, which is what a
+      // real membrane roof does; the slab always reads as thin.
       {
-        mesh: homeRoof, material: homeRoofMat,
+        mesh: homeRoofDeck, material: homeRoofDeckMat,
         perInstanceColor: false,
-        // Roof height depends on seeded pitch bucket. Base ConeGeometry
-        // has y in [-0.5..0.5]; after `rotateY(45°)` its base is at
-        // y=-0.5, tip at y=0.5. We want the base at y=1.0 (top of body)
-        // and to scale the height. We fold both into a per-instance
-        // matrix built from the primary transform combined with
-        // yScaleFn * pitchUnitHeight, and a Y translation so the base
-        // touches the roof plane.
-        yScaleFn: (seed: number) => roofUnitHeightFor(roofPitchForSeed(seed)),
       },
+      // Parapet (always) — raised hollow ring at the roof edge. Sits
+      // on top of the deck. Same convention as the store parapet: the
+      // geometry's Y coordinates already carry the placement; only the
+      // instance matrix's (sx, yScale, sz) applies here.
       {
-        mesh: homeChimney, material: homeChimneyMat,
+        mesh: homeParapet, material: homeParapetMat,
         perInstanceColor: false,
-        presence: hasChimneyForSeed,
+      },
+      // HVAC condenser — presence-gated. Small box offset to one
+      // corner of the roof deck. Skipped seeds write a zero-scale
+      // matrix so the mesh renders as nothing without a per-instance
+      // visibility flag on the InstancedMesh.
+      {
+        mesh: homeHvac, material: homeHvacMat,
+        perInstanceColor: false,
+        presence: hasHvacForSeed,
+      },
+      // Water tower — presence-gated. Merged tank + cap + 4 legs at
+      // the opposite corner from the HVAC unit.
+      {
+        mesh: homeWaterTower, material: homeWaterTowerMat,
+        perInstanceColor: false,
+        presence: hasWaterTowerForSeed,
       },
     ],
     emissiveCanvas: homeEmiss.canvas,
@@ -1173,8 +1448,10 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
       ground.receiveShadow = on;
       const flip = (m: THREE.InstancedMesh) => { m.castShadow = on; m.receiveShadow = on; };
       flip(homeSlot.primaryMesh);
-      flip(homeRoof);
-      flip(homeChimney);
+      flip(homeRoofDeck);
+      flip(homeParapet);
+      flip(homeHvac);
+      flip(homeWaterTower);
       flip(storeSlot.primaryMesh);
       flip(storeParapet);
       flip(storeAwning);
@@ -1197,14 +1474,22 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
       const disposeInstanced = (im: THREE.InstancedMesh) => {
         try { im.geometry.dispose(); } catch { /* noop */ }
       };
-      disposeInstanced(homeBody); disposeInstanced(homeRoof); disposeInstanced(homeChimney);
+      disposeInstanced(homeBody);
+      disposeInstanced(homeRoofDeck);
+      disposeInstanced(homeParapet);
+      disposeInstanced(homeHvac);
+      disposeInstanced(homeWaterTower);
       disposeInstanced(storeBody); disposeInstanced(storeParapet); disposeInstanced(storeAwning);
       disposeInstanced(treePlaza); disposeInstanced(treeTrunk); disposeInstanced(treeCanopy);
       // The two window-frame lattices SHARE one ExtrudeGeometry; free
       // it once by disposing the geometry off just one of the meshes.
       try { frameGeo.dispose(); } catch { /* noop */ }
       try { frameMatShared.dispose(); } catch { /* noop */ }
-      homeWallMat.dispose(); homeRoofMat.dispose(); homeChimneyMat.dispose();
+      homeWallMat.dispose();
+      homeRoofDeckMat.dispose();
+      homeParapetMat.dispose();
+      homeHvacMat.dispose();
+      homeWaterTowerMat.dispose();
       storeWallMat.dispose(); storeParapetMat.dispose(); storeAwningMat.dispose();
       treePlazaMat.dispose(); treeTrunkMat.dispose(); treeCanopyMat.dispose();
       if (homeEmiss.texture) try { homeEmiss.texture.dispose(); } catch { /* noop */ }
