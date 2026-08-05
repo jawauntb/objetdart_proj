@@ -201,6 +201,36 @@ const {
   );
 }
 
+// ── shader identifiers: no leading __ anywhere in an injected chunk ─────
+//
+// GLSL ES reserves any identifier containing two consecutive underscores.
+// ANGLE (Chrome desktop), Metal (iOS Safari), and every WebGL2 shader
+// validator reject the entire program on that ground — the plane silently
+// stops drawing and three.js spams "useProgram: program not valid" per
+// frame. Draw-call baselines measured against a phantom ground are lies,
+// so we pin the source itself: no `__` anywhere in the file's shader
+// literals. Simple substring is enough because comments in this module
+// don't use double-underscore either.
+
+{
+  const fs = await import("node:fs");
+  const src = fs.readFileSync("src/lib/city-ground.ts", "utf8");
+  assert.ok(
+    !src.includes("__cityGroundWp"),
+    "city-ground.ts must not use the reserved identifier __cityGroundWp — GLSL ES forbids two consecutive underscores",
+  );
+  // General guard: any leading-underscore identifier in the injected
+  // vertex / fragment chunks is a shader compile error waiting to happen.
+  // Match `<letters>__<letters>` inside the file with the identifier
+  // starting on an underscore.
+  const badId = src.match(/\b__[A-Za-z][A-Za-z0-9_]*\b/);
+  assert.equal(
+    badId,
+    null,
+    `city-ground.ts contains a reserved GLSL identifier ${badId && badId[0]} — rename to strip the leading __`,
+  );
+}
+
 // ── factory: refuses to bake in node ─────────────────────────────────────
 //
 // The bake requires a DOM canvas. A future test that accidentally imports
