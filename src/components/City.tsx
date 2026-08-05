@@ -62,9 +62,15 @@ import {
   type CityRole,
 } from "@/lib/city-audio";
 import { createCityComposer, type CityComposer } from "@/lib/city-composer";
+import { createCityClouds, type CityClouds } from "@/lib/city-clouds";
 import { projectSunToScreen } from "@/lib/city-godrays";
 import { exposureForDay } from "@/lib/city-grading";
-import { createCitySky, fogColorFromSky, type CitySky } from "@/lib/city-sky";
+import {
+  createCitySky,
+  fogColorFromSky,
+  sampleSkyColor,
+  type CitySky,
+} from "@/lib/city-sky";
 import { createCitySun, type CitySun } from "@/lib/city-sun";
 import {
   baselineLitFractionForDay,
@@ -1130,6 +1136,27 @@ export default function City() {
     worldScene.add(citySun.target);
     worldScene.add(citySun.hemi);
 
+    // ── volumetric clouds ──────────────────────────────────────────────
+    // A raymarched slab at ~800 m altitude that occludes the sun disk and
+    // wraps its light into pink-lit underbellies at dusk. Lives in the
+    // world scene BEHIND the skyline (renderOrder=1 puts the cloud mesh
+    // after the sky at renderOrder=0; the skyline pass clears depth so
+    // towers still occlude cloud from the visitor's angle correctly).
+    // Zero coupling to city.ts laws — the module is a pure post-attach
+    // layer that reads dayFraction, sunDir, and cityTimeMs each tick.
+    const cityClouds: CityClouds = createCityClouds({ initialTier: governor.tier() });
+    worldScene.add(cityClouds.mesh);
+    // Scratch tone objects reused each frame; the cloud shader wants
+    // linear-space RGB for sun and ambient contributions. sunColor
+    // rides the sun light's own colour × intensity so a golden dawn
+    // paints golden edges on the underbellies; ambientColor rides the
+    // Preetham zenith so the top of the cloud picks up the sky.
+    const cloudSunColor = new THREE.Color();
+    const cloudAmbientColor = new THREE.Color();
+    // Zenith sample vector reused across frames — sampleSkyColor writes
+    // into a scratch Vector3 which we then transfer into the Color.
+    const CLOUD_ZENITH_DIR = new THREE.Vector3(0, 1, 0);
+
     // The world ground: baked streets + sidewalks + curbs + a settlement-
     // scale road overlay the visitor paints onto. The seed is the persisted
     // cityTimeMs read directly from storage below — the visitor's same
@@ -2100,6 +2127,31 @@ export default function City() {
       const df = dayFraction(cityTimeMs);
       citySky.update(df);
       citySun.update(df);
+      // Feed the raymarched cloud slab. Sun tone rides the sun light's
+      // colour × intensity so a golden dawn paints golden edges; ambient
+      // rides the Preetham zenith (from the same analytical model the
+      // fog samples) so the tops of the clouds pick up the sky above
+      // them. sunDir is the light's world position normalised — the
+      // directional light points TOWARD the origin so its position IS
+      // the world-space sun vector. cityTimeMs drives wind advection.
+      cloudSunColor
+        .copy(citySun.light.color)
+        .multiplyScalar(citySun.light.intensity);
+      const zen = sampleSkyColor(citySky.currentState, CLOUD_ZENITH_DIR);
+      cloudAmbientColor.setRGB(
+        Math.max(0.02, zen.x),
+        Math.max(0.03, zen.y),
+        Math.max(0.05, zen.z),
+      );
+      cityClouds.update({
+        dayFraction: df,
+        sunDir: citySun.light.position.clone().normalize(),
+        sunColor: cloudSunColor,
+        ambientColor: cloudAmbientColor,
+        cityTimeMs,
+        tier,
+        camera: cityCam.camera,
+      });
       // Tone-mapping exposure rides the same axis the sky and sun do.
       // exposureForDay is a pure smoothstep-piecewise on dayFraction —
       // ~1.4 at noon (hold the sky before the ACES knee clips the sun
@@ -3089,6 +3141,9 @@ export default function City() {
       // shadow-map allocation. Both drop cleanly before the renderer.
       citySky.dispose();
       citySun.dispose();
+      // Clouds own a PlaneGeometry + a ShaderMaterial (rebuilt on tier
+      // transitions). Drop them before the renderer.
+      cityClouds.dispose();
       // Ground plane owns three baked base textures + a settlement-scale
       // road overlay + a PBR material + a plane geometry — the factory
       // handles the whole set so the GPU doesn't leak across remounts.
