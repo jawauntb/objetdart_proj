@@ -37,6 +37,11 @@ const {
 // ——— constants are what the brief pins ————————————————————————————————————
 
 assert.equal(WAVE_SCROLL_RATE, 0.02, "brief pins the wave scroll at ~0.02 uv/s");
+// WATER_PROXY_COUNT is retained after R6-C as a legacy constant — the
+// reflector no longer instantiates proxy boxes when a real skylineScene is
+// provided, but the pure helper `proxyHeightFor` and its ladder are still
+// exported and testable, and the constant keeps sizing math stable for
+// any future caller that runs on the fallback path.
 assert.equal(WATER_PROXY_COUNT, 16, "16 reflectable proxies for 48 plots is honest coverage");
 
 // ——— waveScrollFor: monotone, wraps at 1, tolerates junk ——————————————————
@@ -142,6 +147,25 @@ assert.equal(
   proxyHeightFor("event", true, 42),
   proxyHeightFor("event", true, 42),
   "proxyHeightFor is a pure function of (role, sealed, seed)",
+);
+
+// ——— R6-C: the module still exports its pure helpers even after the mirror
+// switched from proxy boxes to rendering the real skylineScene ————————————
+
+assert.equal(typeof mod.createCityWater, "function", "createCityWater is still exported");
+assert.equal(typeof mod.waveScrollFor, "function", "waveScrollFor pure helper still exported");
+assert.equal(typeof mod.skyTintForDay, "function", "skyTintForDay pure helper still exported");
+assert.equal(typeof mod.proxyHeightFor, "function", "proxyHeightFor pure helper still exported (legacy)");
+
+// The R6-C option shape: createCityWater now accepts an optional
+// `skylineScene`. We can't instantiate it here (the three shim would
+// throw on Reflector construction), but the signature accepting the
+// option keyword is guaranteed by the TypeScript type-check in tsc.
+// This assertion just documents the contract in JS-readable form.
+assert.equal(
+  mod.createCityWater.length,
+  1,
+  "createCityWater takes a single options object (including optional skylineScene)",
 );
 
 console.log("test-city-water: ok");

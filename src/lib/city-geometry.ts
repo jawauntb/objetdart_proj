@@ -62,7 +62,15 @@ import {
   drawEmissiveWindowCanvas,
   facadeMaterialFor,
   makeEmissiveWindowTexture,
+  makeWindowFrameGeometry,
+  makeWindowFrameMaterial,
+  windowFramePlacement,
+  windowsPerPlot,
+  WINDOW_FACES,
+  WINDOW_FRAME_DEPTH_M,
+  WINDOW_GRIDS,
   type FacadeAtlasSet,
+  type WindowFace,
 } from "@/lib/city-facades";
 import { emissiveIntensityForDay, litFractionForDay } from "@/lib/city-windows";
 import {
@@ -77,6 +85,11 @@ import {
   type BuiltEventTower,
 } from "@/lib/city-towers";
 import { buildFacadeAtlas, type FacadeAtlas } from "@/lib/city-textures";
+import {
+  createRooftopScene,
+  type RooftopHost,
+  type RooftopScene,
+} from "@/lib/city-rooftop";
 
 // Re-export the pure helpers so existing importers of city-geometry
 // continue to work unchanged — the split into city-geometry-pure.ts
@@ -519,6 +532,46 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
   const storeAwning = makeInstanced(storeAwningGeo, storeAwningMat);
   scene.add(storeAwning);
 
+  // ── window-frame lattices (home + store) ─────────────────────────
+  //
+  // A shared ExtrudeGeometry — a rectangle with a hole — instanced
+  // per window position on every home / store plot × 4 wall faces.
+  // Home = 3×3 windows × 4 faces = 36 per plot; store = 5×4 × 4 = 80.
+  // The lattice is where "windows recess into the wall" finally reads
+  // as real geometry: frames protrude ~8cm from the wall face, so
+  // sunset light rakes across them and the composer's bloom pass
+  // catches genuine self-shadow contact at the frame edge. The
+  // emissive canvas still lives on the wall body — the frame is the
+  // ring that surrounds it, and the pane reads as backlit glass.
+  //
+  // Instance layout is dense per plot: plot index `p` writes into
+  // slots [p * windowsPerPlot .. p * windowsPerPlot + wPP). Presence
+  // is a zero-scale matrix when a plot's role doesn't match the
+  // lattice's role (e.g. a plot that flipped from home → store, or
+  // a slot never filled).
+  const frameGeo = makeWindowFrameGeometry();
+  const frameMatShared = makeWindowFrameMaterial();
+  const homeWinPerPlot = windowsPerPlot("home");
+  const storeWinPerPlot = windowsPerPlot("store");
+  const homeFrameMesh = new THREE.InstancedMesh(
+    frameGeo, frameMatShared, opts.maxInstances * homeWinPerPlot,
+  );
+  homeFrameMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  homeFrameMesh.castShadow = shadowsOn;
+  homeFrameMesh.receiveShadow = shadowsOn;
+  homeFrameMesh.count = 0;
+  homeFrameMesh.name = "cityFrame.home";
+  scene.add(homeFrameMesh);
+  const storeFrameMesh = new THREE.InstancedMesh(
+    frameGeo, frameMatShared, opts.maxInstances * storeWinPerPlot,
+  );
+  storeFrameMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  storeFrameMesh.castShadow = shadowsOn;
+  storeFrameMesh.receiveShadow = shadowsOn;
+  storeFrameMesh.count = 0;
+  storeFrameMesh.name = "cityFrame.store";
+  scene.add(storeFrameMesh);
+
   // ── tree role: plaza disc + trunk + canopy ──────────────────────
   //
   // "Tree" is a small park: a paved circular plaza with a single
@@ -620,6 +673,19 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
     lastBakeSlot: -1,
     peakIntensity: 0,
   };
+
+  // ── rooftop clutter (shared InstancedMeshes across all hosts) ────
+  //
+  // Four InstancedMeshes (ac, water, penthouse, vent) sized to a
+  // worst-case bound of 6 pieces per plot. Every store + every event
+  // routes into this shared pool; syncPlots below collects the host
+  // records and hands the batch to syncHosts, which writes one matrix
+  // per piece. Draw calls stay constant regardless of settlement size.
+  const rooftop: RooftopScene = createRooftopScene({
+    maxInstancesPerPart: Math.max(1, opts.maxInstances) * 6,
+    shadows: shadowsOn,
+  });
+  scene.add(rooftop.group);
 
   // ── event role: per-plot Meshes ─────────────────────────────────
   //
@@ -768,6 +834,86 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
     }
   }
 
+  // Write one plot's worth of window-frame instances into the shared
+  // lattice for home / store. The frames sit on the wall face with a
+  // small outward protrusion, oriented per the 4 cardinal faces. This
+  // is the geometry that finally lets grazing sunset light rake across
+  // a real edge — the emissive canvas alone read as painted wallpaper.
+  //
+  // Row 0 sits at the ground floor (base of the wall), higher rows
+  // climb toward the roof — same convention `drawEmissiveWindowCanvas`
+  // uses when it walks the grid top-to-bottom, so the frame ring and
+  // the lit-pane canvas cell are in register at every hour.
+  function writeWindowsForPlot(
+    mesh: THREE.InstancedMesh,
+    plotIndex: number,
+    perPlot: number,
+    plot: PlotInstance | null,
+  ): void {
+    const base = plotIndex * perPlot;
+    if (!plot) {
+      _pos.set(0, -1000, 0);
+      _s.set(0, 0, 0);
+      _q.setFromAxisAngle(_yAxis, 0);
+      _m.compose(_pos, _q, _s);
+      for (let k = 0; k < perPlot; k += 1) {
+        mesh.setMatrixAt(base + k, _m);
+      }
+      return;
+    }
+    const w = normToWorld(plot.x, plot.y);
+    const fullH = heightForRole(plot.role, plot.seed);
+    const { sx, sz } = footprintForRole(plot.role, plot.seed);
+    const yScale = Math.max(0.02, plot.bornT) * fullH;
+    const yaw = yawFor(plot);
+    // `drawEmissiveWindowCanvas` uses canvas row 0 at the TOP of the
+    // texture and row (rows-1) at the bottom. The wall in world space
+    // maps the top of the canvas to the roof (y=yScale) and the bottom
+    // to the ground (y=0). Flipping the row index here keeps a lit
+    // canvas cell and its frame ring on the same window.
+    const roleGrid = plot.role === "home" || plot.role === "store"
+      ? WINDOW_GRIDS[plot.role]
+      : null;
+    if (!roleGrid) {
+      // Zero-scale sweep — this lattice does not carry this role.
+      _pos.set(0, -1000, 0);
+      _s.set(0, 0, 0);
+      _q.setFromAxisAngle(_yAxis, 0);
+      _m.compose(_pos, _q, _s);
+      for (let k = 0; k < perPlot; k += 1) {
+        mesh.setMatrixAt(base + k, _m);
+      }
+      return;
+    }
+    const { rows, cols } = roleGrid;
+    let k = 0;
+    for (const face of WINDOW_FACES) {
+      for (let r = 0; r < rows; r += 1) {
+        for (let c = 0; c < cols; c += 1) {
+          const wallRow = (rows - 1) - r;
+          const p = windowFramePlacement(
+            w.x, w.z, yaw, sx, sz, yScale, rows, cols,
+            face as WindowFace, wallRow, c,
+          );
+          _pos.set(p.x, p.y, p.z);
+          _q.setFromAxisAngle(_yAxis, p.yaw);
+          // A newly planted plot is still growing (bornT small) — hide
+          // frames until the wall has some height to sit on. Below
+          // ~0.15 the wall is a stub and the frames would clip the
+          // ground; write a zero-scale matrix instead.
+          if (plot.bornT < 0.15) {
+            _s.set(0, 0, 0);
+          } else {
+            _s.set(p.winW, p.winH, WINDOW_FRAME_DEPTH_M);
+          }
+          _m.compose(_pos, _q, _s);
+          mesh.setMatrixAt(base + k, _m);
+          k += 1;
+        }
+      }
+    }
+  }
+
   function commitInstancedSlot(slot: InstancedBuildingSlot, count: number): void {
     const c = Math.max(0, Math.min(opts.maxInstances, count));
     slot.primaryMesh.count = c;
@@ -828,16 +974,62 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
     syncPlots(plots: readonly PlotInstance[]) {
       // Per-role write index. Home / store / tree route into their
       // InstancedMesh; event plots claim per-plot slots one at a time.
+      // The window-frame lattices are keyed to the SAME iHome / iStore
+      // indices so a plot's body and its window lattice always align.
       let iHome = 0, iStore = 0, iTree = 0;
       let iEvent = 0;
+      // Rooftop hosts — collected in the same walk so we can pass a
+      // single batch to `rooftop.syncHosts` at the end. Every store
+      // and every event contributes one host; empties, homes, and
+      // trees do not (a home has a pitched cone roof, a park has no
+      // roof, and a home's roof would be too small to read the
+      // clutter anyway).
+      const rooftopHosts: RooftopHost[] = [];
       for (const plot of plots) {
         const r = plot.role;
         if (r === "empty") continue;
-        if (r === "home"  && iHome  < opts.maxInstances) { writeInstancedPlot(homeSlot,  iHome++,  plot); continue; }
-        if (r === "store" && iStore < opts.maxInstances) { writeInstancedPlot(storeSlot, iStore++, plot); continue; }
+        if (r === "home"  && iHome  < opts.maxInstances) {
+          writeInstancedPlot(homeSlot, iHome, plot);
+          writeWindowsForPlot(homeFrameMesh, iHome, homeWinPerPlot, plot);
+          iHome += 1;
+          continue;
+        }
+        if (r === "store" && iStore < opts.maxInstances) {
+          writeInstancedPlot(storeSlot, iStore, plot);
+          writeWindowsForPlot(storeFrameMesh, iStore, storeWinPerPlot, plot);
+          const w = normToWorld(plot.x, plot.y);
+          const fullH = heightForRole("store", plot.seed);
+          const { sx, sz } = footprintForRole("store", plot.seed);
+          const yScale = Math.max(0.02, plot.bornT) * fullH;
+          rooftopHosts.push({
+            role: "store",
+            seed: plot.seed,
+            worldX: w.x,
+            worldZ: w.z,
+            yaw: yawFor(plot),
+            sx, sz,
+            worldHeight: yScale,
+          });
+          iStore += 1;
+          continue;
+        }
         if (r === "tree"  && iTree  < opts.maxInstances) { writeInstancedPlot(treeSlot,  iTree++,  plot); continue; }
         if (r === "event" && iEvent < opts.maxInstances) {
           writeEventPlot(eventSlots[iEvent], plot, currentShadows);
+          const w = normToWorld(plot.x, plot.y);
+          const fullH = heightForRole("event", plot.seed);
+          const { sx, sz } = footprintForRole("event", plot.seed);
+          const yScale = Math.max(0.02, plot.bornT) * fullH;
+          rooftopHosts.push({
+            role: "event",
+            seed: plot.seed,
+            variant: eventVariantForSeed(plot.seed),
+            worldX: w.x,
+            worldZ: w.z,
+            yaw: yawFor(plot),
+            sx, sz,
+            worldHeight: yScale,
+          });
           iEvent += 1;
           continue;
         }
@@ -845,10 +1037,19 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
       commitInstancedSlot(homeSlot,  iHome);
       commitInstancedSlot(storeSlot, iStore);
       commitInstancedSlot(treeSlot,  iTree);
+      // The frame lattices' live count is (plot count × per-plot windows).
+      // A plot that's no longer a home still holds its slots but writes
+      // zero-scale matrices above, so the buffer stays coherent.
+      homeFrameMesh.count = iHome * homeWinPerPlot;
+      homeFrameMesh.instanceMatrix.needsUpdate = true;
+      storeFrameMesh.count = iStore * storeWinPerPlot;
+      storeFrameMesh.instanceMatrix.needsUpdate = true;
       // Hide event slots beyond the live count.
       for (let k = iEvent; k < opts.maxInstances; k += 1) {
         eventSlots[k].group.visible = false;
       }
+      // Paint every store + event rooftop's clutter in one batch.
+      rooftop.syncHosts(rooftopHosts);
     },
 
     setDayFrac(day: number) {
@@ -939,6 +1140,8 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
       flip(treeSlot.primaryMesh);
       flip(treeTrunk);
       flip(treeCanopy);
+      flip(homeFrameMesh);
+      flip(storeFrameMesh);
       for (const s of eventSlots) {
         if (!s.built) continue;
         for (const m of s.built.meshes) {
@@ -946,6 +1149,7 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
           m.receiveShadow = on;
         }
       }
+      rooftop.setShadows(on);
     },
 
     dispose() {
@@ -955,6 +1159,10 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
       disposeInstanced(homeBody); disposeInstanced(homeRoof); disposeInstanced(homeChimney);
       disposeInstanced(storeBody); disposeInstanced(storeParapet); disposeInstanced(storeAwning);
       disposeInstanced(treePlaza); disposeInstanced(treeTrunk); disposeInstanced(treeCanopy);
+      // The two window-frame lattices SHARE one ExtrudeGeometry; free
+      // it once by disposing the geometry off just one of the meshes.
+      try { frameGeo.dispose(); } catch { /* noop */ }
+      try { frameMatShared.dispose(); } catch { /* noop */ }
       homeWallMat.dispose(); homeRoofMat.dispose(); homeChimneyMat.dispose();
       storeWallMat.dispose(); storeParapetMat.dispose(); storeAwningMat.dispose();
       treePlazaMat.dispose(); treeTrunkMat.dispose(); treeCanopyMat.dispose();
@@ -975,6 +1183,8 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
       // sub-textures are held by every wall material we just disposed;
       // this frees the underlying GPU allocations.
       try { facadeAtlas.dispose(); } catch { /* noop */ }
+      // Free the rooftop clutter InstancedMeshes + geometries + mats.
+      try { rooftop.dispose(); } catch { /* noop */ }
     },
   };
 }

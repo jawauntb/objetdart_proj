@@ -1199,16 +1199,22 @@ export default function City() {
     // ── harbour water (Reflector on cityCam) ─────────────────────────────
     // A strip of harbour beyond the +z edge of the city. The Reflector
     // rides the SAME cityCam the sky, IBL, and skyline pass do — one eye
-    // for the visitor, one mirror on the water. Layer-1 proxies + a sky
-    // dome sit behind the plane at world scale; only the reflector's
-    // virtualCamera renders them (main pass stays on layer 0). The
-    // dusk-and-lit-windows moment doubles here: proxies for the tallest
-    // sealed plots emit warm dusk light, the wave normal scrolls at
-    // 0.02 uv/s, and bloom in the composer catches both together.
+    // for the visitor, one mirror on the water.
+    //
+    // R6-C: we hand the REAL skylineScene to createCityWater. The reflector
+    // patches its own onBeforeRender to render that scene into its RT after
+    // the sky-dome pass, so the mirror carries the actual extruded prism
+    // towers, PBR facades, and lit windows — plus the traffic group that
+    // City.tsx already attached to skyline.scene (cars along the road
+    // graph, boats crossing the strip, lamp posts) rides along for free.
+    // The dusk-and-lit-windows moment doubles the way the brief calls for:
+    // warm emissive windows glow at the water surface exactly as they do
+    // in the tower above.
     const water: CityWater = createCityWater({
       width: 1,
       height: 1,
       pixelRatio: dpr,
+      skylineScene: skyline.scene,
     });
 
     // ── traffic (cars + boats + lamp posts) ─────────────────────────────
