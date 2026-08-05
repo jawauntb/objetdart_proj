@@ -2786,6 +2786,14 @@ export default function City() {
       // the same bornMs / growMs clock as the atlas emblems. streetYaw
       // is the nearest road angle; the geometry module snaps the plot's
       // yaw to it so streets and buildings finally agree.
+      //
+      // LOD + season are set BEFORE syncPlots so the next matrix write
+      // picks the correct near/far leaf variant and the leaf material's
+      // seasonal tint is current. The LOD reference is the perspective
+      // camera's world position — trees within ~55m render the full
+      // 12-quad crossed cluster, beyond that a Y-billboard.
+      skyline.setLodCamera(cityCam.camera.position);
+      skyline.setSeason(season);
       const view = plots.map((plot) => {
         const age = cityTimeMs - plot.bornMs;
         const bornT = age >= growMs ? 1 : Math.max(0.02, age / growMs);
