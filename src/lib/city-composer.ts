@@ -9,6 +9,8 @@
  * This module owns an EffectComposer with:
  *   RenderPass(groundScene)                → the sky/ground
  *   RenderPass(plotScene, clear:false)     → 48 instanced plots on top
+ *   RenderPass(waterScene, clear:false)    → harbour reflector strip (optional,
+ *                                             tier-gated; slot D of the brief)
  *   UnrealBloomPass                        → the ember at dusk, lit windows at night
  *   OutputPass                             → sRGB write + tonemap
  *
@@ -95,6 +97,16 @@ export type CityComposerOptions = {
   groundCam: THREE.Camera;
   plotScene: THREE.Scene;
   plotCam: THREE.Camera;
+  /**
+   * Optional harbour pass — added between plots and bloom when supplied.
+   * The composer only routes the RenderPass; the water module owns the
+   * scene contents (Reflector, static fallback, proxies, sky). Omitted
+   * = no water pass, which keeps the composer usable by anything that
+   * doesn't want it. Tier-gated: sleep skips the pass entirely; low
+   * hides the Reflector mesh (the water module handles that internally).
+   */
+  waterScene?: THREE.Scene;
+  waterCam?: THREE.Camera;
   /** Initial CSS-pixel size; the room will resize us in ResizeObserver. */
   width: number;
   height: number;
@@ -129,6 +141,22 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
   const plotPass = new RenderPass(plotScene, plotCam);
   plotPass.clear = false;
   composer.addPass(plotPass);
+
+  // RenderPass 3 (optional): the harbour. A perspective scene whose
+  // Reflector plane sits along the front edge of the field; only the
+  // pixels the water mesh covers are overwritten, above the strip the
+  // ground+plot output survives (clear:false).
+  const waterPass = opts.waterScene && opts.waterCam
+    ? new RenderPass(opts.waterScene, opts.waterCam)
+    : null;
+  if (waterPass) {
+    waterPass.clear = false;
+    // clearDepth so the water plane's depth (perspective) doesn't fight
+    // the ortho passes' depth output — they wrote none (depthWrite:false),
+    // but the depth buffer may still hold stale far values.
+    (waterPass as unknown as { clearDepth?: boolean }).clearDepth = true;
+    composer.addPass(waterPass);
+  }
 
   // Bloom: the ember at dusk, the warm halo on lit windows at night.
   // Parameters are updated per-frame from dayFraction inside render().
@@ -174,6 +202,13 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
       if (tier !== lastTier) {
         const bloomOn = tier === "medium" || tier === "high";
         bloomPass.enabled = bloomOn;
+        if (waterPass) {
+          // Sleep skips water entirely (nothing worth reflecting when the
+          // room is paused); low/medium/high run the pass and the water
+          // module decides internally whether the reflector or the
+          // static fallback is visible.
+          waterPass.enabled = tier !== "sleep";
+        }
         lastTier = tier;
         // Force the ember to recompute after a tier flip.
         lastEmberSlot = -1;

@@ -66,6 +66,7 @@ import {
   baselineLitFractionForDay,
   emissiveIntensityForDay,
 } from "@/lib/city-windows";
+import { createCityWater, type CityWater, type CityWaterProxy } from "@/lib/city-water";
 
 /**
  * /city — a small settlement whose identity IS its causal roles.
@@ -1056,17 +1057,40 @@ export default function City() {
     plotMesh.frustumCulled = false;
     plotScene.add(plotMesh);
 
+    // ── water (harbour reflector, aesthetic slot D) ──────────────────────
+    // A perspective sub-scene along the near edge of the field: a
+    // THREE.Reflector plane whose scrolled wave normal mirrors a small
+    // proxy skyline (up to WATER_PROXY_COUNT boxes populated from the
+    // tallest sealed plots), and a hemisphere sky whose tint tracks
+    // dayFraction. Two flat meshes ride the plane — the Reflector for
+    // high/medium tiers, a cheap static-mirror shader for low. Sleep
+    // tier is skipped by the composer entirely (see waterPass.enabled).
+    //
+    // Nothing in city-water.ts touches gesture, city.ts laws, or
+    // persistence. The plot roles it consumes are the same shape as
+    // PlotRole (module-local CityWaterRole alias — no import edge back).
+    const water: CityWater = createCityWater({
+      width: 1,
+      height: 1,
+      pixelRatio: dpr,
+    });
+
     // ── composer ─────────────────────────────────────────────────────────
     // The tick loop below hands its two RenderPasses to this composer so
     // bright pixels can bloom, the workflow stays linear, and B/C/D have
     // a chain to hang more passes on. Sized 1×1 here — the resize() call
-    // a few blocks down snaps it to the real canvas immediately.
+    // a few blocks down snaps it to the real canvas immediately. The
+    // waterScene/waterCam args slot in a third RenderPass between plots
+    // and bloom, so the reflection lives in the linear buffer and its
+    // bright dusk pixels bloom the same way the plot's lit windows will.
     const composer: CityComposer = createCityComposer({
       renderer,
       groundScene,
       groundCam,
       plotScene,
       plotCam,
+      waterScene: water.scene,
+      waterCam: water.camera,
       width: 1,
       height: 1,
       pixelRatio: dpr,
@@ -1236,6 +1260,10 @@ export default function City() {
       // Composer holds its own render targets — bloom pyramid especially
       // is a stack of downsampled RTs whose size depends on this call.
       composer.setSize(width, height, dpr);
+      // Water pass owns its own perspective camera + Reflector RT — the
+      // camera aspect must match the canvas or the horizon tilts, and
+      // the RT is resized to a tier-scaled fraction of the canvas.
+      water.setSize(width, height);
       // fg overlay canvas — the thin 2D layer. Keeps its own DPR so a stroke
       // stays crisp regardless of the GL renderScale. Coin uses the same trick.
       fg.width = Math.floor(width * dpr);
@@ -1788,10 +1816,32 @@ export default function City() {
       const _dayFrac = dayFraction(cityTimeMs);
       plotUniforms.uWindowLit.value = baselineLitFractionForDay(_dayFrac);
       plotUniforms.uWindowIntensity.value = emissiveIntensityForDay(_dayFrac);
-      // The two RenderPasses live inside the composer now. Bloom threshold /
+      // Feed the harbour before the composer paints — the water module
+      // scrolls its wave normal by dt, retints its sky to dayFraction,
+      // and populates its proxy skyline from the tallest sealed plots.
+      // The lit-window ember above is the same source the reflection wants
+      // to catch fire from; both ride _dayFrac. Allocates only a fresh
+      // array (proxies read into the water's own pre-sized buffer);
+      // this is cheap enough to run every frame.
+      const waterProxies: CityWaterProxy[] = plots.map((p) => ({
+        role: p.role,
+        sealed: p.sealed,
+        seed: p.seed,
+        x: p.x,
+        y: p.y,
+      }));
+      water.update({
+        dayFraction: _dayFrac,
+        night: nightAmt,
+        dtMs: dt,
+        tier,
+        plots: waterProxies,
+      });
+      // The RenderPasses live inside the composer now. Bloom threshold /
       // strength / radius ride the same dayFraction the shaders do — the
       // ember rises as the sun sets. Tier gates the bloom entirely on
-      // low/sleep so slow devices keep hitting frame budget.
+      // low/sleep so slow devices keep hitting frame budget, and gates
+      // the water pass off at sleep so the paused room paints nothing new.
       composer.render(dayFraction(cityTimeMs), tier);
       drawOverlay();
       raf = requestAnimationFrame(tick);
@@ -2632,7 +2682,10 @@ export default function City() {
       groundMat.dispose();
       plotMat.dispose();
       // Composer holds bloom pyramid RTs — drop them before disposing
-      // the renderer that owns their GL context.
+      // the renderer that owns their GL context. Water also owns a
+      // Reflector RT and shader materials; dispose it before the renderer
+      // for the same reason.
+      water.dispose();
       composer.dispose();
       renderer.dispose();
     };
