@@ -8,7 +8,7 @@ Last verified against the live provider documentation and OpenRouter model-disco
 
 - **V1 provider:** OpenAI's Image API with `gpt-image-2`.
 - **V1 whole-map flow:** a person enters only a concept such as `fire forest`; Atlas turns that into an internal art-direction prompt and generates one complete map image.
-- **V1 refinement flow:** zoom/regeneration uses the current rendered map as the image input to `gpt-image-2`, rather than reconstructing the map from coordinates.
+- **Refinement flow:** a lateral shift or an in-place refine may send the current rendered map as the image input. **Zoom never does.** Every deeper layer is drawn natively from coordinates (`atlasOperationForRequest` returns `generation` for `mode: "zoom"`), because editing the on-screen bitmap upsamples whatever softness the preview left and compounds it at every depth. See "Progressive descent" below for the geometry this feeds.
 - **Immediate interaction:** pan, zoom, and fold happen on the client immediately. They do not wait for generation and remain available if generation fails.
 - **UI boundary:** there is no visible coordinate editor, provider picker, model picker, or prompt-engineering panel. Coordinates/transforms may exist as private client state, but the only creative text input is the concept.
 - **Live OpenRouter adapter:** `generateWithOpenRouter` in `src/lib/atlas-generation.ts` is wired and exercised in tests. It targets `POST https://openrouter.ai/api/v1/images` and accepts any model in `OPENROUTER_MODEL_ALLOWLIST`. The current allowlist is:
@@ -30,13 +30,65 @@ Last verified against the live provider documentation and OpenRouter model-disco
 
 This deliberately separates **fast navigation** from **slow synthesis**. Generation enriches the map; it is not required for every gesture.
 
-## Endless zoom: the pyramid re-roots so it never hits a ceiling
+## Progressive descent — how a sheet stays sharp
 
-`maybeRequestDetail` in `src/components/Atlas.tsx` asks for a native, full-resolution child sheet whenever the camera magnifies the deepest tile under it past `tileNeedsDetail`'s threshold (`src/lib/atlas-plane.ts`). Most levels land that child in place — same plane, same camera, no recenter — but a child's rect is always a fraction of its parent's (`clipRectForFocus`, `src/lib/atlas-batch.ts`), so it shrinks every level, and the camera zoom required to outrun it again grows the same way. Left unbounded, that requirement eventually exceeds `MAX_ZOOM` (`ATLAS_ZOOM_SPEC.zoomMax`) and a tile is stuck over-magnified with nowhere sharper to go — the room's actual "blurry, never gets crisp again" failure mode, arithmetically inevitable around level 12–13 at the pyramid's default clip widths.
+`src/lib/atlas-pyramid.ts` owns this, and `scripts/test-atlas.mjs` pins it. The
+whole mechanism is two moves:
 
-`hasZoomHeadroom` (`src/lib/atlas-plane.ts`) checks, at the moment a child is requested, whether landing it still leaves the camera enough zoom range to ask for one more level in place. Once it doesn't, that same landing re-roots the plane instead — the identical swap a fresh concept (`mode: "generate"`) or a widened chart (zoom-out past the floor) already uses (`applyLandedPlane`): the sharper sheet becomes a brand-new full-zoom world (`ATLAS_WORLD_ORIGIN`, camera reset to fit-1), so the next level starts again with a full `MAX_ZOOM` of headroom. `generationDepth` keeps incrementing across a re-root exactly as it does across an in-place child, and the fresh root is a normal explorable sheet — its own N/E/S/W edges answer lateral `shift` travel like any other plane. This is what makes the zoom genuinely endless (verified to at least 12 levels, with margin, in `scripts/test-atlas.mjs`) rather than merely deep.
+1. **Detail.** When the camera magnifies the deepest drawing past
+   `PYRAMID_DETAIL_MAGNIFICATION` (1.15), the client asks for a child sheet of
+   exactly **half** the ground (`PYRAMID_RATIO`), centered on what the camera
+   is looking at. Half the ground with the same pixel budget is four times the
+   density, so the child lands already downsampled — it is the sharper drawing
+   from the instant it arrives, not after some later refinement.
+   `pyramidLayerBlend` dissolves it in against the live `--atlas-zoom`, and a
+   ~5.5% feathered mask keeps the join from reading as a seam.
+2. **Promotion.** The moment that child covers the whole viewport, the frame is
+   re-expressed around it: the child becomes the unit cell, its ancestors keep
+   their places at negative levels, and the camera's numbers are rewritten so
+   nothing moves on screen. `promoteView` and `demoteView` are exact inverses,
+   so pulling back out at the plane's floor climbs the same stair upward and
+   lands where the descent left.
 
-Every tile's image renders through `AtlasTileImage`, which crossfades whenever its `src` changes without a DOM remount — a preview upgrading to its final, or a re-rooted plane's origin sheet arriving — using the `.living-atlas__image--incoming` / `.is-visible` layer `docs/atlas-progressive-qa.md`'s QA matrix already names. Before this, a same-id swap was an un-transitioned hard cut.
+Promotion is what makes the descent endless. Camera zoom never leaves roughly
+[1, 8] (`pyramidZoomCeiling`) however deep the traveler goes — depth lives in
+the descent stack, not in a transform scale of four thousand where CSS
+sub-pixel geometry and compositor precision both fail. Twelve layers of real,
+natively drawn ground cost twelve promotions and no precision at all;
+`PYRAMID_MAX_DEPTH` allows twenty-four, and only there does the deep clamp —
+and the band wall toward `/coast` behind it — come back into reach.
+
+Descending also changes **what kind of map this is**. `pyramidPerspective`
+walks a fixed ladder — continental survey → region → district → settlement →
+quarter → block → room → object → surface → microscopy → lattice → grain — and
+`formatAtlasPerspectiveClause` tells the generator both the register and how
+many layers below the outer chart this sheet stands. Without it, twelve layers
+would be twelve renderings of the same coastline.
+
+`npm run smoke:atlas-descent -- http://127.0.0.1:3210` drives this in a real
+browser against a stubbed generator: it descends twelve layers, asserts the
+camera never leaves the plane's range, and measures the magnification of the
+deepest drawing actually under the middle of the stage.
+
+### What this replaced
+
+An earlier pass answered the same failure from the other end: `hasZoomHeadroom`
+watched for the moment a child would leave the camera no room to ask for
+another level, and re-rooted the plane at that point with the ordinary
+`applyLandedPlane` swap. That worked, but only as a checkpoint — every level up
+to the checkpoint still let the camera outrun its sheet by 1.45x, and the swap
+itself discarded the parent plane, reset the camera to fit, and could not be
+climbed back out of. Promotion happens at *every* layer instead, keeps the
+ancestors, and inverts, so headroom is never spent and there is nothing left to
+check for. `tileNeedsDetail` and `hasZoomHeadroom` are gone with it.
+
+Every tile's image renders through `AtlasTileImage`, which crossfades whenever
+its `src` changes without a DOM remount — a preview upgrading to its final, or
+a promoted plane's origin sheet arriving — using the
+`.living-atlas__image--incoming` / `.is-visible` layer that
+`docs/atlas-progressive-qa.md`'s QA matrix already names. That crossfade is
+between two drawings of the *same* ground; `pyramidLayerBlend` above is the
+crossfade between drawings of different depths. Both are needed.
 
 ## Provider-neutral server boundary (proposed Atlas contract)
 

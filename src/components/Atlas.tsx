@@ -14,7 +14,6 @@ import {
 import { REGIONS } from "@/data/content";
 import RouteSigil, { type RouteSigilKind } from "@/components/RouteSigil";
 import {
-  clipRectForFocus,
   clipRectForShiftDirection,
   resolveAtlasBatchPlan,
   type AtlasClipRect,
@@ -31,10 +30,8 @@ import {
   dynamicZoomFloor,
   exploredBounds,
   focusForSheet,
-  hasZoomHeadroom,
   placeChildRect,
   resolvePlaneEdgeTravel,
-  tileNeedsDetail,
   viewForCenter,
   worldCenter,
   worldPointAtScreen,
@@ -42,6 +39,19 @@ import {
   type PlaneTile,
 } from "@/lib/atlas-plane";
 import { atlasBaseConcept, atlasNamePart } from "@/lib/atlas-naming";
+import {
+  PYRAMID_ANCESTOR_LEVELS,
+  PYRAMID_MAX_DEPTH,
+  PYRAMID_RATIO,
+  demoteView,
+  promotableTile,
+  promoteTiles,
+  promoteView,
+  pyramidBlendWindow,
+  pyramidClipForFocus,
+  pyramidNeedsDetail,
+  pyramidZoomCeiling,
+} from "@/lib/atlas-pyramid";
 import { prepareAtlasSourceImage } from "@/lib/atlas-source";
 import {
   ATLAS_WORLD_ORIGIN,
@@ -73,7 +83,14 @@ const MOBILE_BREAKPOINT = 760;
 // The deep clamp comes from the room's manifold spec so the camera's
 // range and its band walls (coast below, earth above) can never disagree;
 // the shallow floor is dynamic — it falls as the explored plane grows.
+// Inside the pyramid the working ceiling is lower still (see
+// pyramidZoomCeiling): a harder pinch buys deeper ground, not a stretched
+// sheet, and only at the bottom of the descent does this deep clamp — and
+// the wall toward the coast behind it — come back into reach.
 const MAX_ZOOM = ATLAS_ZOOM_SPEC.zoomMax;
+// The blend ramp the tile CSS runs against --atlas-zoom, so a child layer
+// dissolves in and out with the camera instead of cutting.
+const BLEND_WINDOW = pyramidBlendWindow();
 const SETTLE_TRANSITION = "transform 180ms cubic-bezier(.22,.8,.24,1)";
 // Travel between cells is a real camera glide across the plane.
 const GLIDE_TRANSITION = "transform 640ms cubic-bezier(.3,.7,.2,1)";
@@ -151,6 +168,15 @@ type MapSnapshot = {
   view: MapView;
   renderPhase: RenderPhase;
   generationDepth: number;
+  /**
+   * Set when this plane was left by *descending* into one of its child
+   * tiles. The anchor is that child's rect in this plane's coordinates,
+   * so the ascent can re-express the live camera back into here exactly
+   * (demoteView inverts promoteView) and the ground never jumps: the
+   * traveler rises out of the child at the magnification that put them
+   * in it. Without it the pop is a cut.
+   */
+  descentAnchor?: PlaneRect;
 };
 // A new plane that landed while a hand was still on the map — applied
 // once the camera settles so an arrival never fights the gesture.
@@ -452,6 +478,8 @@ export default function Atlas() {
   const zoomSettleRef = useRef<number | null>(null);
   // Debounce for "wider territory" generation triggered by zoom-out at the floor.
   const lastWidenAtRef = useRef(0);
+  // Debounce for the ascent, so one flick of the wheel climbs one stair.
+  const lastAscentAtRef = useRef(0);
   const historyRef = useRef<MapSnapshot[]>([]);
   const inertiaRef = useRef<number | null>(null);
   const interactingRef = useRef(false);
@@ -470,6 +498,9 @@ export default function Atlas() {
   // Zoom children: deeper drawings of fractional ground, layered above
   // their parents at their world rects — the pyramid. Reset per plane.
   const childTilesRef = useRef<PlaneTile[]>([]);
+  // The landmarks a zoom child came back with, held by tile id until that
+  // child is promoted to a plane of its own and can wear them.
+  const childHotspotsRef = useRef(new Map<string, MapHotspot[]>());
   // The previous plane's tiles, kept beneath a newly landing plane while
   // it fades in, then released.
   const retiringTilesRef = useRef<PlaneTile[]>([]);
@@ -516,6 +547,8 @@ export default function Atlas() {
 
   const [metrics, setMetrics] = useState<MapMetrics>(EMPTY_METRICS);
   const [hotspots, setHotspots] = useState(DEFAULT_HOTSPOTS);
+  const hotspotsRef = useRef(hotspots);
+  hotspotsRef.current = hotspots;
   const [seeds, setSeeds] = useState(DEFAULT_SEEDS);
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [focusedLabel, setFocusedLabel] = useState<string | null>(null);
@@ -578,6 +611,16 @@ export default function Atlas() {
   // Clamp the camera to explored ground: the union of remembered cells
   // (always including the standing one), with the overview floor falling
   // as the world grows so the whole walked plane can be surveyed.
+  // How many planes deep the traveler stands. Every descent, landmark, and
+  // widening pushes one — it is the same "outer map" the return button
+  // means, and the ceiling and the ascent both read it.
+  const descentDepth = () => historyRef.current.length;
+
+  // Inside the pyramid the camera stops at the plane ceiling and the room
+  // answers with deeper ground; at the bottom of the descent the deep
+  // clamp (and the coast wall behind it) opens again.
+  const cameraZoomCeiling = () => pyramidZoomCeiling(descentDepth(), MAX_ZOOM);
+
   const boundCamera = (view: MapView, metrics: MapMetrics, overscroll = 0): MapView => {
     const bounds = exploredBounds(worldRef.current.visited(), worldAddressRef.current);
     return boundViewToBounds(
@@ -585,7 +628,7 @@ export default function Atlas() {
       metrics,
       bounds,
       dynamicZoomFloor(bounds, metrics),
-      MAX_ZOOM,
+      cameraZoomCeiling(),
       overscroll,
     );
   };
@@ -1549,11 +1592,11 @@ export default function Atlas() {
   // The previous plane's tiles stay mounted beneath a landing newcomer
   // while it fades in, then release — an arrival covers, never blinks.
   const retirePlane = () => {
-    const keep = allTilesRef.current.filter((tile) => tile.level >= 0);
+    const keep = allTilesRef.current.filter((tile) => !tile.retiring);
     retiringTilesRef.current = keep.slice(-8).map((tile) => ({
       ...tile,
       id: "retired-" + tile.id,
-      level: -1,
+      retiring: true,
     }));
     if (retireTimerRef.current !== null) window.clearTimeout(retireTimerRef.current);
     retireTimerRef.current = window.setTimeout(() => {
@@ -1572,7 +1615,7 @@ export default function Atlas() {
   ) => {
     const tiles = childTilesRef.current.filter((tile) => tile.id !== id);
     tiles.push({ id, rect, level, image, phase });
-    while (tiles.length > 10) tiles.shift();
+    while (tiles.length > 12) tiles.shift();
     childTilesRef.current = tiles;
     bumpTiles();
   };
@@ -1651,28 +1694,30 @@ export default function Atlas() {
   };
 
   // When the camera outruns the deepest drawing beneath it, ask for a
-  // child sheet of just that ground. Most levels resolve in place — the
+  // child sheet of just that ground. Detail resolves in place — the
   // camera never moves, and zooming back out still shows the parent
-  // around it. But a child's rect shrinks every level, so the zoom the
-  // camera would need to outrun it again grows the same way; left
-  // unchecked that requirement eventually exceeds what the camera can
-  // ever reach and a tile is stuck over-magnified forever. Once
-  // hasZoomHeadroom says the well is running dry, this landing re-roots
-  // the plane instead — the same swap a fresh concept or a widened chart
-  // already uses — so the sharper sheet becomes a new full-zoom world
-  // with a full MAX_ZOOM of headroom again. The pyramid, endless one
-  // checkpoint at a time.
+  // around it.
+  //
+  // A child's rect shrinks every level, so the zoom needed to outrun it
+  // again would grow the same way, and an earlier pass watched for the
+  // moment that requirement outran MAX_ZOOM (hasZoomHeadroom) and
+  // re-rooted the plane as a checkpoint. Promotion below does that at
+  // *every* layer instead, exactly and reversibly, so the headroom is
+  // never spent and there is nothing left to check for.
   const maybeRequestDetail = () => {
     if (busy || hasPendingGenerationWork()) return;
     const m = metricsRef.current;
     if (!m.width) return;
     const view = viewRef.current;
     const center = worldCenter(view, m);
-    const live = allTilesRef.current.filter((tile) => tile.level >= 0);
+    const live = allTilesRef.current.filter((tile) => !tile.retiring);
     const deep = deepestTileAt(live, center);
-    if (!deep || !tileNeedsDetail(deep, view.zoom)) return;
+    if (!deep || !pyramidNeedsDetail(deep.rect, view.zoom)) return;
     const localFocus = focusForSheet(view, m, deep.rect);
-    const clip = clipRectForFocus(localFocus);
+    // Exactly half the ground, centered where the camera looks: the same
+    // pixel budget over a quarter of the area, so the child is the sharper
+    // drawing from the moment it lands.
+    const clip = pyramidClipForFocus(localFocus, PYRAMID_RATIO);
     const childRect = placeChildRect(deep.rect, clip);
     const key = [
       concept,
@@ -1683,18 +1728,142 @@ export default function Atlas() {
     ].join("|");
     if (key === childRequestKeyRef.current) return;
     childRequestKeyRef.current = key;
-    const reroot = !hasZoomHeadroom(childRect, MAX_ZOOM);
-    setStatus(reroot ? "a sharper world is coming into focus" : "settling new detail into the visible ground");
+    setStatus("settling new detail into the visible ground");
     recordTape("region", 0.68, "atlas/detail/" + (deep.level + 1));
     void generateMap({
       mode: "zoom",
-      plane: reroot ? "new" : "same",
+      plane: "same",
       subjectPrompt: concept + " · visible region",
       focus: localFocus,
       childRect,
       level: deep.level + 1,
       prefetchNeighbors: false,
     });
+  };
+
+  /**
+   * The promotion. Once a freshly drawn child owns the whole viewport,
+   * the frame is re-expressed around it: the child becomes the plane's
+   * unit cell, its ancestors keep their places at negative levels, and
+   * the camera's numbers are rewritten so that not one pixel moves. The
+   * parent plane goes on the stack whole, with the anchor that inverts
+   * the move, so pulling back out is the same stair climbed upward.
+   *
+   * This — not a bigger zoom clamp — is what makes the descent endless.
+   * The camera never leaves roughly [1, 8] however deep the traveler
+   * goes, so nothing is ever drawn from a transform scale that has run
+   * out of precision, and every layer is a native sheet at its own fit.
+   */
+  const maybePromoteDeeperPlane = (): boolean => {
+    const m = metricsRef.current;
+    if (!m.width) return false;
+    if (descentDepth() >= PYRAMID_MAX_DEPTH) return false;
+    const view = viewRef.current;
+    const live = allTilesRef.current.filter((tile) => !tile.retiring);
+    const anchor = promotableTile(live, view, m);
+    if (!anchor) return false;
+    const sheet = worldRef.current.peek(worldAddressRef.current);
+
+    const parent = captureSnapshot();
+    parent.descentAnchor = { ...anchor.rect };
+    // Sheets are megabyte-scale data URLs and the descent runs two dozen
+    // deep: the snapshot keeps only what redrawing this plane needs.
+    parent.children = parent.children.slice(-6);
+    historyRef.current.push(parent);
+    while (historyRef.current.length > PYRAMID_MAX_DEPTH) historyRef.current.shift();
+    setHistoryDepth(historyRef.current.length);
+
+    const promoted = promoteTiles(live, anchor.rect, anchor.level, PYRAMID_ANCESTOR_LEVELS);
+    const nextView = promoteView(view, m, anchor.rect);
+    const depth = generationDepthRef.current + 1;
+
+    stopNeighborGeneration();
+    worldRef.current.reset();
+    worldAddressRef.current = { ...ATLAS_WORLD_ORIGIN };
+    worldRef.current.remember({
+      address: { ...ATLAS_WORLD_ORIGIN },
+      image: anchor.image,
+      hotspots: childHotspotsRef.current.get(anchor.id) ?? null,
+      seeds: sheet?.seeds ?? seeds,
+      concept,
+      phase: anchor.phase,
+      depth,
+    });
+    // Ancestors ride on as live ground beneath the promoted sheet — they
+    // are what fills the margins until this plane grows its own children.
+    childTilesRef.current = promoted.filter((tile) => tile.id !== anchor.id);
+    // The mirror has to move with the frame, not wait for the next render:
+    // a hard pinch can outrun several drawn layers, and the settle loop
+    // reads this to promote through all of them at once.
+    allTilesRef.current = promoted;
+    childRequestKeyRef.current = null;
+    planeEpochRef.current += 1;
+    generationDepthRef.current = depth;
+    setGenerationDepth(depth);
+    setRenderPhase(anchor.phase);
+    // The child's own landmarks come up with it — a promoted layer is
+    // tappable ground, not a picture. Without them the descent would go
+    // mute after the first stair.
+    const landed = childHotspotsRef.current.get(anchor.id) ?? null;
+    setHotspots(landed ?? []);
+    // The mirror moves with the frame: promoting twice in one settle must
+    // snapshot the layer it actually left, not the one before it.
+    hotspotsRef.current = landed ?? [];
+    setFocusedId(null);
+    setFocusedLabel(null);
+    childHotspotsRef.current.clear();
+    if (landed) childHotspotsRef.current.set(anchor.id, landed);
+    setWorldVersion((version) => version + 1);
+    bumpTiles();
+    // A pure change of coordinates: committed without animation because
+    // there is nothing to animate — the ground is already exactly there.
+    commitView(boundCamera(nextView, m), { animate: false });
+    setStatus("the ground opened · " + descentDepth() + " layers below the outer chart");
+    recordTape("region", 0.74, "atlas/descend/" + descentDepth());
+    try {
+      haptics.tap();
+      getFieldAudio().chime();
+    } catch {
+      // Sound and haptics are progressive enhancement.
+    }
+    return true;
+  };
+
+  /**
+   * The ascent: pulling back at the plane's own floor climbs out of the
+   * layer instead of minting a wider chart. The camera is carried up
+   * through the anchor that brought it down, so the parent opens at the
+   * magnification that had swallowed the frame — continuous in both
+   * directions, which is the whole point of an invertible map.
+   */
+  const ascendOneLayer = (): boolean => {
+    const parent = historyRef.current[historyRef.current.length - 1];
+    if (!parent) return false;
+    // A trackpad flick is fifty events a second; one flick must climb one
+    // stair, not empty the stack under the hand.
+    const nowMs = performance.now();
+    if (nowMs - lastAscentAtRef.current < 340) return true;
+    lastAscentAtRef.current = nowMs;
+    const anchor = parent.descentAnchor;
+    invalidateGeneration();
+    historyRef.current.pop();
+    setHistoryDepth(historyRef.current.length);
+    // The live camera carried up through the anchor, not the camera the
+    // snapshot was taken with: the traveler may have panned around down
+    // there, and rising should open the parent over the ground they were
+    // actually standing on.
+    const carried = anchor ? demoteView(viewRef.current, metricsRef.current, anchor) : null;
+    restoreSnapshot(carried ? { ...parent, view: carried } : parent, { animate: !anchor });
+    setStatus(anchor
+      ? "risen a layer · the wider ground closes over"
+      : (parent.focusedLabel ? "returned to " + parent.focusedLabel.toLowerCase() : "returned to the outer map"));
+    recordTape("region", 0.62, "atlas/ascend/" + historyRef.current.length);
+    try {
+      haptics.tap();
+    } catch {
+      // Haptics are progressive enhancement.
+    }
+    return true;
   };
 
   // One settle path for every gesture's end: apply a plane that waited
@@ -1713,10 +1882,18 @@ export default function Atlas() {
     }
     if (pendingWiderTerritoryRef.current) {
       pendingWiderTerritoryRef.current = false;
-      requestWiderTerritory(true);
+      // A descent is climbed back out before any wider chart is minted:
+      // the layer above already exists and is already drawn.
+      if (!ascendOneLayer()) requestWiderTerritory(true);
       return;
     }
     maybeAdoptCell();
+    // Promote first: a child that has taken the frame becomes the plane,
+    // and only then does the settled camera decide whether *that* ground
+    // needs a deeper drawing. Run as a loop, because one hard pinch can
+    // outrun several already-drawn layers at once.
+    let promotions = 0;
+    while (promotions < PYRAMID_ANCESTOR_LEVELS && maybePromoteDeeperPlane()) promotions += 1;
     maybeRequestDetail();
   };
 
@@ -1735,7 +1912,7 @@ export default function Atlas() {
     sheets: worldRef.current.export(),
     children: [...childTilesRef.current],
     address: { ...worldAddressRef.current },
-    hotspots,
+    hotspots: hotspotsRef.current,
     seeds,
     concept,
     focusedId,
@@ -1748,7 +1925,7 @@ export default function Atlas() {
 
   // A popped plane comes back whole: every sheet at its address, every
   // child tile in place, and the traveler standing where they stood.
-  const restoreSnapshot = (snapshot: MapSnapshot) => {
+  const restoreSnapshot = (snapshot: MapSnapshot, { animate = true }: { animate?: boolean } = {}) => {
     stopNeighborGeneration();
     retirePlane();
     worldRef.current.reset();
@@ -1768,18 +1945,14 @@ export default function Atlas() {
     setRenderPhase(snapshot.renderPhase);
     generationDepthRef.current = snapshot.generationDepth;
     setGenerationDepth(snapshot.generationDepth);
-    commitView(boundCamera(snapshot.view, metricsRef.current), { animate: true });
+    commitView(boundCamera(snapshot.view, metricsRef.current), { animate });
   };
 
   const resetOuterMap = () => {
+    // One stair, whether it was climbed by entering a landmark or by
+    // zooming until the ground opened — the return is the same act.
+    if (ascendOneLayer()) return;
     invalidateGeneration();
-    const parent = historyRef.current.pop();
-    setHistoryDepth(historyRef.current.length);
-    if (parent) {
-      restoreSnapshot(parent);
-      setStatus(parent.focusedLabel ? "returned to " + parent.focusedLabel.toLowerCase() : "returned to the outer map");
-      return;
-    }
     setFocusedId(null);
     setFocusedLabel(null);
     setRenderPhase("idle");
@@ -2086,8 +2259,10 @@ export default function Atlas() {
           // A child of the pyramid: deeper ground resolves exactly where
           // the camera already looks. No recenter, no swap — the blur
           // under the zoom simply becomes drawing.
+          const childId = "child-" + planeEpochRef.current + "-" + clientGenerationId;
+          if (nextHotspots) childHotspotsRef.current.set(childId, nextHotspots);
           upsertChildTile(
-            "child-" + planeEpochRef.current + "-" + clientGenerationId,
+            childId,
             childRect,
             childLevel,
             data.dataUrl,
@@ -2224,7 +2399,7 @@ export default function Atlas() {
   const enterHotspot = (hotspot: MapHotspot) => {
     const parent = captureSnapshot();
     historyRef.current.push(parent);
-    if (historyRef.current.length > 8) historyRef.current.shift();
+    while (historyRef.current.length > PYRAMID_MAX_DEPTH) historyRef.current.shift();
     setHistoryDepth(historyRef.current.length);
     invalidateGeneration();
     stopNeighborGeneration();
@@ -2401,7 +2576,7 @@ export default function Atlas() {
     const parent = captureSnapshot();
     invalidateGeneration();
     historyRef.current.push(parent);
-    if (historyRef.current.length > 8) historyRef.current.shift();
+    while (historyRef.current.length > PYRAMID_MAX_DEPTH) historyRef.current.shift();
     setHistoryDepth(historyRef.current.length);
     setStatus("widening the chart to the surrounding territory");
     setRenderPhase("local");
@@ -2427,16 +2602,19 @@ export default function Atlas() {
     // The attempted log-zoom velocity of this tick, in the gesture engine's
     // wheel convention (ln-ratio × 60/s); positive means zooming in.
     const attemptedVel = -event.deltaY * 0.0018 * 60;
-    // Already surveying all explored ground and still pulling back —
-    // treat that as "show me a wider world" and mint one. When the room
-    // has already answered (busy or debounced), the residue goes to the
-    // manifold wall toward the earth.
+    // Already surveying all explored ground and still pulling back. If the
+    // traveler descended to get here, that is the ascent — the same stair,
+    // climbed upward. Otherwise it asks the generator for a wider world.
+    // When the room has already answered, the residue goes to the manifold
+    // wall toward the earth.
     if (event.deltaY > 0 && current.zoom <= floor + 0.02) {
-      if (requestWiderTerritory()) resetScaleEdge();
+      if (ascendOneLayer()) resetScaleEdge();
+      else if (requestWiderTerritory()) resetScaleEdge();
       else reportScaleEdge(current.zoom, attemptedVel);
       return;
     }
-    const nextZoom = clamp(current.zoom * Math.exp(-event.deltaY * 0.0018), floor, MAX_ZOOM);
+    const ceiling = cameraZoomCeiling();
+    const nextZoom = clamp(current.zoom * Math.exp(-event.deltaY * 0.0018), floor, ceiling);
     const point = { x: event.clientX - rect.left, y: event.clientY - rect.top };
     const worldX = (point.x - current.x) / current.zoom;
     const worldY = (point.y - current.y) / current.zoom;
@@ -2448,7 +2626,14 @@ export default function Atlas() {
     scheduleSettle();
     // Attempted minus achieved ln-ratio: zero strictly inside the range,
     // and at the deepest zoom the clamped residue presses toward the coast.
-    reportScaleEdge(nextZoom, attemptedVel - Math.log(nextZoom / current.zoom) * 60);
+    // Residue caught by the *plane* ceiling is not the coast asking — it is
+    // the pyramid asking, and the settle path answers it with deeper
+    // ground. Only at the bottom of the descent does it become pressure.
+    if (ceiling >= MAX_ZOOM || nextZoom < ceiling) {
+      reportScaleEdge(nextZoom, attemptedVel - Math.log(nextZoom / current.zoom) * 60);
+    } else {
+      resetScaleEdge();
+    }
   };
 
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -2569,7 +2754,8 @@ export default function Atlas() {
       // contraction becomes manifold wall pressure below.
       const wantsWider = distance < prev.distance * 0.94
         && viewRef.current.zoom <= floor + 0.02;
-      const zoom = clamp(prev.view.zoom * (distance / Math.max(1, prev.distance)), floor, MAX_ZOOM);
+      const ceiling = cameraZoomCeiling();
+      const zoom = clamp(prev.view.zoom * (distance / Math.max(1, prev.distance)), floor, ceiling);
       // Incremental pinch around the live midpoint keeps mobile two-finger zoom stable.
       const worldX = (midpoint.x - prev.view.x) / prev.view.zoom;
       const worldY = (midpoint.y - prev.view.y) / prev.view.zoom;
@@ -2602,6 +2788,10 @@ export default function Atlas() {
       const dtMs = nowMs - pinchAtRef.current;
       pinchAtRef.current = nowMs;
       if (pendingWiderTerritoryRef.current) {
+        resetScaleEdge();
+      } else if (zoom >= ceiling && ceiling < MAX_ZOOM) {
+        // Held against the plane ceiling: the pyramid answers this, not
+        // the coast. The settle path draws deeper ground and promotes it.
         resetScaleEdge();
       } else if (dtMs > 0) {
         const attempted = distance / Math.max(1, prev.distance);
@@ -2853,17 +3043,23 @@ export default function Atlas() {
               className={
                 "living-atlas__tile"
                 + (tile.phase === "preview" ? " is-preview" : "")
-                + (tile.level < 0 ? " is-retiring" : "")
+                + (tile.retiring ? " is-retiring" : "")
+                + (tile.level > 0 ? " is-child" : "")
               }
+              data-level={tile.level}
               style={{
                 left: tile.rect.x * 100 + "%",
                 top: tile.rect.y * 100 + "%",
                 width: tile.rect.width * 100 + "%",
                 height: tile.rect.height * 100 + "%",
-                zIndex: tile.level + 2,
-              }}
+                // The layer's own span, so the CSS below can read the live
+                // --atlas-zoom and dissolve this drawing in and out with
+                // the camera — no per-frame JavaScript touching the DOM.
+                "--tile-span": String(tile.rect.width),
+                zIndex: tile.retiring ? 1 : tile.level + 6,
+              } as CSSProperties}
             >
-              <AtlasTileImage src={tile.image} priority={tile.level === 0} />
+              <AtlasTileImage src={tile.image} priority={tile.level === 0 && !tile.retiring} />
             </div>
           ))}
           <div
@@ -3062,9 +3258,13 @@ export default function Atlas() {
           object-fit: cover;
           pointer-events: none;
           user-select: none;
-          /* Prefer hard pixels while the camera is CSS-scaled awaiting a
-             native redraw — soft bilinear stretch made mid-zoom look mushy. */
-          image-rendering: crisp-edges;
+          /* Smooth resampling, deliberately. crisp-edges was a nearest
+             neighbour reading of the same problem and it made the answer
+             worse: blocky on the way up, aliased on the way down. The
+             pyramid keeps every sheet within ~1.15x of its own fit and
+             dissolves a denser child over anything past that, so the
+             right filter here is the good one. */
+          image-rendering: auto;
           filter: saturate(.96) contrast(1.07) brightness(.82);
           /* Very slow lung-scale set per-frame by the RAF loop via the
              --atlas-breath custom property on the stage. Composes on top
@@ -3094,11 +3294,34 @@ export default function Atlas() {
         .living-atlas__tile {
           position: absolute;
           overflow: hidden;
-          /* Every tile fades up on mount — a landing resolves into the
-             plane where it belongs instead of swapping the whole frame. */
+        }
+        /* Every tile fades up on mount — a landing resolves into the plane
+           where it belongs instead of swapping the whole frame. The mount
+           fade rides the image so the tile's own opacity is free to carry
+           the zoom crossfade below. */
+        .living-atlas__tile .living-atlas__image {
           animation: atlas-tile-in 700ms ease-out both;
         }
-        .living-atlas__tile.is-retiring { animation: none; }
+        .living-atlas__tile.is-retiring .living-atlas__image { animation: none; }
+        /* The layer crossfade. A child is asked for once its parent is
+           magnified past the sharpness threshold, so it lands already
+           downsampled and is the better drawing from that moment; pull the
+           camera back and it dissolves rather than sitting on the parent as
+           a rectangle of some other drawing. Pure CSS against the live
+           --atlas-zoom the camera writes each frame. */
+        .living-atlas__tile.is-child {
+          opacity: clamp(0, calc((var(--atlas-zoom, 1) * var(--tile-span, 1) - ${BLEND_WINDOW.from.toFixed(4)}) / ${BLEND_WINDOW.span.toFixed(4)}), 1);
+          /* And its border is feathered, so where the deeper drawing meets
+             the shallower one there is a dissolve, not a seam. */
+          -webkit-mask-image:
+            linear-gradient(to right, transparent 0, #000 5.5%, #000 94.5%, transparent 100%),
+            linear-gradient(to bottom, transparent 0, #000 5.5%, #000 94.5%, transparent 100%);
+          -webkit-mask-composite: source-in;
+          mask-image:
+            linear-gradient(to right, transparent 0, #000 5.5%, #000 94.5%, transparent 100%),
+            linear-gradient(to bottom, transparent 0, #000 5.5%, #000 94.5%, transparent 100%);
+          mask-composite: intersect;
+        }
         .living-atlas__tile.is-preview .living-atlas__image {
           filter: saturate(.9) contrast(1.04) brightness(.8);
         }
@@ -3443,7 +3666,7 @@ export default function Atlas() {
             bottom: max(14px, env(safe-area-inset-bottom, 0px));
             width: calc(100% - 28px);
           }
-          .living-atlas__tile { animation-duration: 380ms; }
+          .living-atlas__tile .living-atlas__image { animation-duration: 380ms; }
           .living-atlas__traverse {
             /* clear the full-width prompt row */
             right: 14px;
@@ -3454,7 +3677,7 @@ export default function Atlas() {
           }
         }
         @media (prefers-reduced-motion: reduce) {
-          .living-atlas__tile { animation-duration: 1ms; }
+          .living-atlas__tile .living-atlas__image { animation-duration: 1ms; }
           .living-atlas__diffusion span,
           .living-atlas__ripple,
           .living-atlas__hotspot.is-glimmer .living-atlas__mark { animation: none; }

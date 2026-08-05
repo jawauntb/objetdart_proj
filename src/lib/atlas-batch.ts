@@ -83,20 +83,6 @@ export function clipRectForBatchDirection(direction: AtlasBatchDirection): Atlas
   }
 }
 
-/** Focus-centered clip for zoom upsample, with the same ~12% buffer margin. */
-export function clipRectForFocus(focus: { x: number; y: number; zoom: number }): AtlasClipRect {
-  const zoom = Math.max(1, focus.zoom);
-  const base = Math.min(0.72, Math.max(0.28, 1 / zoom + ATLAS_CLIP_BUFFER));
-  const width = base;
-  const height = base;
-  return normalizeClipRect({
-    x: focus.x - width / 2,
-    y: focus.y - height / 2,
-    width,
-    height,
-  });
-}
-
 export function clipRectForShiftDirection(direction: AtlasDirection): AtlasClipRect {
   return clipRectForBatchDirection(direction);
 }
