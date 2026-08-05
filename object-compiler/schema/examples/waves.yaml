@@ -131,6 +131,72 @@ guide:
     - "damping decides whether a pulse decays before it reaches the wall; the same tap dies out or reflects depending on d"
   keeps: "the current mode, c, d, drop amplitude, and pause state — enough that a returning visitor sees the tank they left."
 
+# ——— the "alive at rest" / "make and unmake" / "haptics" contract ————————
+# Round-trip-derived from src/components/Waves.tsx. Waves is another older
+# room predating the RoomShell/RoomVoice pattern: it uses raw `attachGestures`
+# + `onVessel`, keeps its integrator inline (rather than in the spec's
+# proposed `src/lib/wavefield.ts`), and has TWO shapes of countable object:
+# sources (persistent drivers held on the pool — MAX_SOURCES=6, kept via
+# createIdleWriter under a room-owned key) and pulses (transient injections
+# that ride the finite-difference field). Persistent naturals (leaves, koi)
+# are also written to the shared world.ts pool under the room's zone.
+life:
+  population:
+    objects:
+      - noun: source
+        max_count: 6   # MAX_SOURCES from Waves.tsx
+        state_shape: "id, pos {x, y}, radius, amp, mode, planted_t"
+        lifecycle: "born under dwell (plantPeak — a still peak that grows amplitude while held) → sealed at ceremony (releases as its own sonic bell — a chord in the tank's tune) → retires when a subsequent source shifts it past MAX_SOURCES, or by LetGo"
+        persistence: LetGo
+        creates_via_verb: dwell
+        retires_via: [ceremony, LetGo]
+        implementation_hint: "inline `sources[]` array + createIdleWriter through the room's own storage_key `objetdart:world:v1`"
+      - noun: pulse
+        max_count: 24   # per spec's domain_intent MAX_PULSES = 24; current Waves.tsx keeps a bounded transient list
+        state_shape: "id, pos, radius, amp, t0"
+        lifecycle: "born by tap (injectPulse Gaussian bump), drag (paintDrag caterpillar), flick (a final-velocity throw), shake (random noise), or knock (large centred pulse) → advected through the leapfrog finite-difference integrator → retires by dissipating below FIELD_RANGE threshold (natural damping)"
+        persistence: ephemeral
+        creates_via_verb: tap
+        retires_via: [LetGo]
+        implementation_hint: "two Float32Arrays swapped each step (h, hPrev) — the field itself; pulses are inline metadata on top"
+      - noun: natural
+        max_count: 32   # world.ts zone cap — leaves, koi
+        state_shape: "zone='waves', kind, nx, ny — the WorldNatural triple"
+        lifecycle: "born on touch-down landing (a leaf drops at flick end) → drifts with the pool's current between visits → retires only by LetGo (world-level wipe)"
+        persistence: world
+        creates_via_verb: flick
+        retires_via: [LetGo]
+        implementation_hint: "world.ts registry (addNatural / getNaturalsInZone, zone 'waves')"
+  breath:
+    period_seconds: 7
+    reads:
+      - "no uBreath uniform read in Waves.tsx — the shader reads the height field h directly and computes gradient/depth/caustics per pixel. The room references `breaths` conceptually (line 889: `sources ride the downstream current out over a couple of breaths`) but does not sample the shared LFO. Worth flagging as item 5 gap."
+    behavior_at_rest: "the tank continues to solve the wave equation — pulses reflect off walls, sources keep firing, the height field integrates on a fixed sub-step. The room breathes on its own hydrodynamic clock, not the shared 7s LFO (item 5 gap)."
+  glimmer:
+    after_idle_ms: 20000
+    visual: "a source that has been quiet fires one small pulse on its own — a gentle rebroadcast of its head to the tank, visual only"
+  haptics_grammar:
+    tap: tap                # injectPulse → haptics.tap()
+    dwell: bloom            # plantPeak grows → haptics.bloom() on ceremony release
+    ceremony: bloom         # release the peak with its own sonic bell → haptics.bloom()
+    drag: null              # paintDrag caterpillar — no per-frame haptic (would over-vibrate)
+    flick: chop             # throws the caterpillar → haptics.chop()
+    twist: lens             # equation lens
+    twist3: detent          # mode crossfade (ripple / string / refraction)
+    tap3: ripple            # tutti — every mode rings its natural tone → haptics.ripple(0.5)
+    drag3: tap              # world-law (c, d)
+    hold3: null             # time dilation
+    scrub: null             # tank stirs — audio-carried
+    drum: tap               # pulses at beat between contacts
+    knock: ripple           # knock rings a struck-mode pulse → haptics.ripple(0.7)
+    shake: null             # scatters the field (random noise)
+    tilt: null              # tilt gradient — continuous, no haptic
+    flip: null              # night uniform
+    arrows: tap             # walk between modes / step timeline
+  make_unmake:
+    letgo_clears_population: true   # letGo empties sources[], stillTank zeroes h/hPrev, world.ts naturals under 'waves' zone clear
+    ceremony_is: "releasing the peak with its own sonic bell — a chord in the tank's tune, kept as a source that keeps firing"
+
 # ——— the three LLM slots ————————————————————————————————————————————————
 
 shader_intent: >

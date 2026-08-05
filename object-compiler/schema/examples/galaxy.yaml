@@ -119,6 +119,65 @@ guide:
     - "an untouched room sounds precisely the note the scale axis assigns this band; wind the law with three fingers and you can hear how far you have bent it"
   keeps: "the stars you have ridden through an arm, and the gas and remnants you left in the disc"
 
+# ——— the "alive at rest" / "make and unmake" / "haptics" contract ————————
+# Round-trip-derived from src/components/GalaxyArms.tsx and src/lib/spiral.ts.
+# GALAXY IS A DELIBERATE EXCEPTION TO THE POPULATION LIFECYCLE: 180,000 stars
+# are drawn once at genesis by their orbital positions and never come or go —
+# the arms EMERGE from where the crowd compresses, not from any make/unmake
+# gesture. The only visitor-created and retired objects are the star-forming
+# knots (gas nurseries planted by a dwell, blown out by a ceremony). That is
+# a small population living inside a much bigger point cloud, and the schema
+# records both facets rather than pretend a star is a "world" the hand can
+# create.
+life:
+  population:
+    objects:
+      - noun: knot
+        max_count: 12   # a small nursery cap — the disc doesn't hold arbitrarily many gas patches
+        state_shape: "id, R (orbit radius), phi0 (initial phase), age, planted_t, mass, seed"
+        lifecycle: "born under dwell (a hand held at a disc point gathers gas at that radius, caught in the shear from the moment it exists) → matures while held → sealed by ceremony release (blows out as a supernova shell propagating at real signal speed, lighting neighbouring gas when it arrives) → the disc closes over it"
+        persistence: localStorage
+        creates_via_verb: dwell
+        retires_via: [ceremony, LetGo]
+        implementation_hint: "inline array (knots[]) + persisted through the room's own storage_key"
+      # Note: the 180,000 stars are NOT a `population` in the compile-contract
+      # sense — they are a field the shader reads, not addressable countable
+      # objects born or retired by any verb. They are drawn by their own
+      # orbit, one instanced draw, and the arms emerge from where the crowd
+      # of small excursions compresses the disc. See the exception argued in
+      # the block comment above.
+  breath:
+    period_seconds: 7   # the room's own header says the pattern is ~62Hz sub-bass with a slower 42s breath; the shell's 7s LFO rides on top
+    reads:
+      - "u_breath uniform (disc shader — vignette dust brightness `0.4 + 0.6 * u_breath`)"
+      - "u_breath uniform (star shader — sigma brightness `0.85 + 0.3 * u_breath` and crest gain)"
+      - "clocks.breath (mixed 0.4 * fast + 0.6 * slow) — a two-clock combined breath"
+    behavior_at_rest: "the whole disc pulses subtly on the 7s LFO — the vignette dust brightens by ±60%, the star crest gain rides by ±30%; a second, slower ~42s clock rides underneath so the arms feel like they turn on two clocks at once"
+  glimmer:
+    after_idle_ms: 20000
+    visual: "a knot brightens once (haptics.roll fires), or a passing star flashes; a wave of coherent light passes along one arm briefly"
+  haptics_grammar:
+    tap: tap                # tap a star → tap; tap a knot → tap
+    dwell: bloom            # gathering gas into a nursery → haptics.bloom() on entry, ripple on the hold
+    ceremony: roll          # knot goes off → haptics.roll() (a bell)
+    drag: ripple            # lean the eye → ripple
+    flick: chop             # ease the lean into decay
+    twist: lens             # lens raise
+    twist3: detent          # winding the pattern speed
+    tap3: ripple            # rotation curve arpeggio
+    drag3: ripple           # world-law: pattern speed / arm pitch
+    hold3: null             # time dilation / veil
+    scrub: tap              # roll the sky about line of sight
+    drum: ripple            # `haptics.ripple(0.3 + 0.3 * e.alternation)`
+    knock: bloom            # ring the bar
+    shake: chop             # heats the disc
+    tilt: null              # lean, no haptic
+    flip: roll              # night — the veil arrives
+    arrows: detent          # step along the rotation curve — one detent per step
+  make_unmake:
+    letgo_clears_population: true   # LetGo clears the knots; the stars themselves remain (they aren't visitor-made)
+    ceremony_is: "the knot goes off — its shell runs outward at real signal speed, and where it reaches the next patch of gas it lights that too"
+
 # ——— the three LLM slots ————————————————————————————————————————————————
 
 shader_intent: >

@@ -68,6 +68,57 @@ const pebble = {
     ],
     keeps: "the pebble's lattice (system, centering, axial ratios), its growth-ring history, the current polish depth, and the season the stream is at.",
   },
+  // ——— the room quality bar, structured ————————————————————————————————
+  // Round-trip-derived from Pebble.tsx + pebblecore.ts. Pebble's spec-noun
+  // is `cut` (what a flick creates), but the persistent population is
+  // `growthRings[]` — the stone's own accretion history. The polish depth
+  // is the room's load-bearing NEW dimension (rocks doesn't have polish).
+  life: {
+    population: {
+      objects: [
+        {
+          noun: "growth-ring",
+          max_count: 24,
+          state_shape: "id, radius, mineral (species), thickness, seed",
+          lifecycle:
+            "born when growStep adds a ring (rare — driven by brine saturation over long simulated time); grows further while dwell-polishing → sealed at ceremony (polishDepth = POLISH_MAX, kept between visits) → retires only via <LetGo>; a cleavage flick splits the whole stone into two, each keeping its own history",
+          persistence: "LetGo",
+          creates_via_verb: "dwell",
+          retires_via: ["LetGo"],
+          implementation_hint:
+            "inline array — state.growthRings: GrowthRing[] in src/lib/pebblecore.ts. Phase-4 note: not yet migrated to SceneObjectSpec.",
+        },
+      ],
+    },
+    breath: {
+      period_seconds: 7,
+      reads: ["uBreath"],
+      behavior_at_rest:
+        "the stone's interior colour breathes by ±6% on the 7s clock — the mineral body reads as breathing under the polish, the shell's Fresnel highlight tracks the raking light.",
+    },
+    glimmer: {
+      after_idle_ms: 20000,
+      visual:
+        "the polished shell's highlight brightens for a beat (visual only) — the stone catches the cabinet's raking lamp.",
+    },
+    haptics_grammar: {
+      tap: "ripple",     // tap-open answers with haptics.ripple; tap-on-stone → haptics.tap()
+      dwell: "tap",      // polishStep tick per hold-cadence lands on haptics.tap()
+      ceremony: "bloom", // polishDepth = POLISH_MAX → haptics.bloom()
+      flick: "chop",     // cleaves along the nearest allowed plane → haptics.chop()
+      twist: "lens",     // lattice lens raise → haptics.lens()
+      twist3: "detent",  // season through advanceExact
+      tap3: "roll",      // tutti — every growth ring rings at once → haptics.roll()
+      drum: "tap",       // two-point tap on the stone
+      knock: "detent",   // rings the stone as a struck bell → haptics.detent()
+      arrows: "tap",     // step between rings; enter rings the current one
+    },
+    make_unmake: {
+      letgo_clears_population: true,
+      ceremony_is:
+        "polishes the stone to POLISH_MAX in one commit — kept between visits as the pebble the sea has finished with",
+    },
+  },
 } as const satisfies RoomManifest;
 
 export default pebble;

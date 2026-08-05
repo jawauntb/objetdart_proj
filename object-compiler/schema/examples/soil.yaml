@@ -122,6 +122,55 @@ guide:
     - "the roots grew while you were away — a fortnight's absence is read off a closed-form trajectory, not replayed"
   keeps: "the ledger, every life standing in it and how big it has grown, the season the year had reached, and the hour it was last looked at"
 
+# ——— the "alive at rest" / "make and unmake" / "haptics" contract ————————
+# Round-trip-derived from src/components/SoilGround.tsx and src/lib/humus.ts.
+# The population is `Organism[]` — root OR fungus, cap MAX_ORGANISMS=28,
+# born from `plant()` (the ceremony act), retired by `uproot()` (a drag-up
+# through the surface, or a ceremony over an existing organism), and
+# persisted to localStorage under the room's own storage_key. The room is
+# a strong reference for item 3: the retire path is legibly a hand
+# reaching in and pulling a life out, not a silent decay.
+life:
+  population:
+    objects:
+      - noun: organism
+        max_count: 28
+        state_shape: "id, kind ('root'|'fungus'), nx (surface x), ny (depth), m (mass), bornTau, seed"
+        lifecycle: "born under ceremony (a hold ≥ tier 3) → grows logistically toward its neighbours' available nutrient → retires when uprooted by a drag-up-through-surface or when starved by a stronger neighbour"
+        persistence: localStorage
+        creates_via_verb: ceremony
+        retires_via: [ceremony, drag, flick, LetGo]
+        implementation_hint: "inline array (orgs[]) + persisted through the room's own storage_key"
+  breath:
+    period_seconds: 7
+    reads:
+      - "uBreath uniform (fragment shader — dust glow, mineral glint, humus vignette)"
+    behavior_at_rest: "the dust in a warm ground shaft brightens and dims by ±50% (`0.5 + uBreath * 0.5`); the mineral glint on the mineral horizon pulses by ±35%; the humus fleck brightens by ±40% — the ground itself breathes without any hand on it"
+  glimmer:
+    after_idle_ms: 20000
+    visual: "one hypha in the mycelial graph brightens for a breath, then fades — the network showing which edges the room is actually holding"
+  haptics_grammar:
+    tap: ripple             # liftHandful → haptics.ripple(0.3 + strength * 0.4)
+    dwell: tap              # chatter tap while pressing litter into humus
+    ceremony: bloom         # plantHere → haptics.bloom()
+    drag: tap               # rake chatter
+    flick: chop             # throwOut → haptics.chop()
+    twist: lens             # setLens → haptics.lens()
+    twist3: detent          # season detent per turn
+    tap3: ripple            # tutti sounds the whole ledger
+    drag3: tap              # weather chatter
+    hold3: null             # time dilation, no haptic
+    scrub: chop             # turnCompost → haptics.chop()
+    drum: ripple            # sift
+    knock: bloom            # settleGrains (via shell default) — jostle rings the tray
+    shake: chop             # turnOver via scatter
+    tilt: null              # lean, no haptic
+    flip: null              # night, no haptic
+    arrows: tap             # moveCursor tap
+  make_unmake:
+    letgo_clears_population: true   # LetGo empties orgs[]; the ledger stays but the standing lives clear
+    ceremony_is: "planting a life where the finger is — a root down in the mineral, a fungus up in the litter — its body taken out of the litter that funded it"
+
 # ——— the three LLM slots ————————————————————————————————————————————————
 
 shader_intent: >

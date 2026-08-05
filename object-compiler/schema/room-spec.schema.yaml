@@ -44,6 +44,22 @@ description: >
   compile — the field is optional for backward compat until it is filled in
   from the landed screenshots.
 
+  The optional `life` block encodes the room's answer to AGENTS.md §"The
+  room quality bar" items 3 (make and unmake), 5 (alive at rest), and 6
+  (two senses in the same frame — haptics on every meaningful act). Where
+  `shader_intent` says what the room LOOKS like and `domain_intent` says
+  what its physics ARE, `life` says how the room feels between and during
+  interactions: what population lives here and how it is born and retired,
+  what the material does on the shared 7s breath when no one is touching
+  it, what a glimmer looks like after ~20s of idle, and which haptic
+  pattern (from `src/lib/haptics.ts`) fires for each verb the room
+  answers. If `life` is present, the compiler will require corresponding
+  calls in the generated room (uBreath, haptics.<pattern>,
+  createIdleWriter, SceneObjectSpec) — see scripts/test-room-quality.mjs
+  for the mechanical checks. Older specs without a `life` block still
+  compile — the field is optional for backward compat until it is filled
+  in from the merged room.
+
 type: object
 additionalProperties: false
 required:
@@ -708,3 +724,278 @@ properties:
       rain-down; season winds τ; dilation slows the room clock while
       held). Name the pure functions the handlers call, not a control
       panel.
+
+  # ——— the "alive at rest" / "make and unmake" / "two senses" bar ————
+  # This block structures AGENTS.md §"The room quality bar" items 3, 5 and 6.
+  # Every top-level field is optional; the block itself is optional. When it
+  # is present the compiler (via scripts/test-room-quality.mjs) requires the
+  # room to actually call uBreath, haptics.<pattern>, createIdleWriter and
+  # SceneObjectSpec — so a `life:` block IS a promise, not decoration.
+
+  life:
+    type: object
+    additionalProperties: false
+    description: >
+      The felt-bar contract: a room's answer to AGENTS.md's non-negotiable
+      items 3 (make and unmake — countable objects with a real lifecycle),
+      5 (alive at rest — the 7s breath, glimmers after 20s idle), and 6
+      (two senses in the same frame — a haptic pattern on every meaningful
+      act). Where `shader_intent` names the look and `domain_intent` names
+      the physics, `life` names what the room DOES when nobody is watching
+      and what it FEELS like in the palm when someone is. All fields are
+      optional; the block itself is optional so older specs still compile.
+      Present here, the compiler treats each field as a requirement its
+      test hooks will check.
+
+    properties:
+
+      # ~~~ item 3: make and unmake ~~~
+      population:
+        type: object
+        additionalProperties: false
+        required: [objects]
+        description: >
+          The countable inhabitants of the room. Omit `life.population`
+          entirely for the rare room that has no countable objects (a
+          reading surface, or a point-cloud where individual objects are
+          not the addressable unit — /galaxy's 180,000 stars are drawn as
+          a field, not a population in the "dwell creates one" sense).
+          When present, `objects` MUST be non-empty (the schema enforces
+          this): every room with countable objects should account for
+          them here even if the room today fails part of the lifecycle.
+        properties:
+          objects:
+            type: array
+            minItems: 1
+            description: >
+              One entry per addressable kind of countable object. Most
+              rooms have exactly one entry (soil's `root`, spring's
+              `seep`); a few have two (soil declares roots AND fungi as
+              two shapes of the same organism kind, or a room like
+              atmosphere has parcels-in-flight AND lanterns-kept).
+            items:
+              type: object
+              additionalProperties: false
+              required:
+                - noun
+                - max_count
+                - state_shape
+                - lifecycle
+                - persistence
+                - creates_via_verb
+                - retires_via
+                - implementation_hint
+              properties:
+                noun:
+                  type: string
+                  description: >
+                    Singular, lowercase, no article. Prefer nouns that
+                    already appear in the room's `guide.moves` — the
+                    written grammar and the schema should match. If this
+                    room's top-level `noun` names one of these, prefer
+                    the same string here.
+                max_count:
+                  type: integer
+                  minimum: 1
+                  description: >
+                    Population cap — the constant the room's component
+                    or its `src/lib/<domain>.ts` reads to slice its
+                    array before writing to storage. Names the same
+                    constant as `MAX_LANTERNS`, `MAX_SEEPS`,
+                    `MAX_WORLDS`, `MAX_ORGANISMS` etc. Unbounded
+                    populations are a bug — no `max_count` cap allowed.
+                state_shape:
+                  type: string
+                  description: >
+                    One-line description of the per-object state
+                    vector. E.g. "id, nx, ny, throat, sealed" for a
+                    seep, or "id, orbital elements (a, e, incl, omega,
+                    phase), mass, seed" for a body.
+                lifecycle:
+                  type: string
+                  description: >
+                    One-line description of the object's arc:
+                    "born under dwell → growing → sealed by ceremony
+                    → retiring over one breath". Prefer this exact
+                    four-stage grammar; deviate only when the room
+                    genuinely does not follow it (e.g. a lantern that
+                    never retires — call that out truthfully).
+                persistence:
+                  type: string
+                  enum: [world, LetGo, localStorage, ephemeral]
+                  description: >
+                    Which bus persists the population between visits.
+                    `world` — the shared `src/lib/world.ts` naturals
+                    registry (atmosphere's lanterns, waves' leaves).
+                    `LetGo` — kept via createIdleWriter, cleared by
+                    the shared <LetGo> button (rocks' stones, soil's
+                    organisms, planets' worlds). `localStorage` — a
+                    room-owned key that is not gated by <LetGo>
+                    (rare, and probably a smell). `ephemeral` — dies
+                    with the tab (embers in /fire, pulses in /waves;
+                    intentional for fast-decay populations).
+                creates_via_verb:
+                  type: string
+                  description: >
+                    Which gesture verb births a new instance. Almost
+                    always `dwell` (a press that grows the reserve
+                    while held). Sometimes `tap` (a strike that seeds
+                    one immediately) or `ceremony` (a hold that only
+                    plants at tier 3). Must be a verb in
+                    `verbs_answered`.
+                retires_via:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: string
+                  description: >
+                    Verbs that retire an instance, in order of
+                    everyday reach. Typical value: `["ceremony",
+                    "LetGo"]` (ceremony over an existing instance is
+                    its touch-reachable delete; LetGo is the
+                    whole-population clear). A `flick` that tears one
+                    apart also counts. Every entry must be a verb the
+                    room answers OR the literal string `LetGo`.
+                implementation_hint:
+                  type: string
+                  description: >
+                    Which shared shape the object rides. `SceneObjectSpec`
+                    (declared through `src/lib/scene/object.ts` — the
+                    typed grammar-answering path), `inline array` (the
+                    room manages a plain array on its own — older
+                    rooms), `world.ts registry` (persistence through
+                    the shared naturals bus). This is a promise about
+                    HOW the population is stored, not just that it is.
+
+      # ~~~ item 5: alive at rest ~~~
+      breath:
+        type: object
+        additionalProperties: false
+        description: >
+          What visibly moves on the shared 7s breath when nobody is
+          touching the room. AGENTS.md §"quality bar" item 5.
+        properties:
+          period_seconds:
+            type: number
+            minimum: 0.5
+            description: >
+              Breath period in seconds. Default 7 to match the site's
+              shared LFO (`src/lib/timing.ts` `getBreath()` / the shell's
+              `uBreath` uniform). Override only when the material's
+              rhythm is genuinely different (a room on the pulse of a
+              heartbeat, a room on the tick of a clock — rare).
+            default: 7
+          reads:
+            type: array
+            minItems: 1
+            items:
+              type: string
+            description: >
+              What the shader or component reads from the breath —
+              e.g. "uBreath uniform" (fragment shader), "u_breath
+              uniform" (older shader), "getBreath()" (from
+              `src/lib/timing.ts`), "clocks.breath" (from the shell's
+              clock pack). At least one must be named.
+          behavior_at_rest:
+            type: string
+            description: >
+              One-line description of what the visitor sees change when
+              nothing is being touched. "the sky's colour widens and
+              narrows by ±0.14 as the column breathes"; "the polish
+              highlight brightens and dims by 6%"; "every world's
+              corona swells and settles by ±14%". Concrete, in the
+              room's own material vocabulary.
+
+      glimmer:
+        type: object
+        additionalProperties: false
+        description: >
+          The discovery flare that AGENTS.md pins as the ONLY explanation
+          the site is allowed — a physical event, never text, that lights
+          up after roughly 20s of quiet.
+        properties:
+          after_idle_ms:
+            type: integer
+            minimum: 1000
+            description: >
+              Idle threshold in milliseconds before the glimmer fires.
+              Default 20000 per AGENTS.md; override only for rooms with
+              a genuinely different rhythm.
+            default: 20000
+          visual:
+            type: string
+            description: >
+              One-line description of what a glimmer looks like in this
+              material. "a single seep breathes a wider ring, alone";
+              "one stone's facet catches the raking light for half a
+              breath"; "a passing bird calls once, then falls silent".
+              Not "a small animation" — the specific event.
+
+      # ~~~ item 6: two senses — the haptics grammar ~~~
+      haptics_grammar:
+        type: object
+        additionalProperties: false
+        description: >
+          For each verb the room implements, the haptic pattern from
+          `src/lib/haptics.ts` that fires. The keys named here MUST be a
+          subset of `verbs_answered` — you cannot claim a haptic for a
+          verb the room does not answer. Values are pattern names from
+          `haptics.ts` (`ripple`, `roll`, `chop`, `tap`, `storm`,
+          `detent`, `crossing`, `lens`, `bloom`) or the literal `null`
+          when a verb genuinely has no haptic. `tap` uses a small
+          hard-typed enum because the choice among ripple/roll/chop/tap
+          /storm is the most consequential single call; the other verbs
+          take a string so any current or future haptics export is
+          legal, with the convention that unknown values fail
+          `test-room-quality.mjs`.
+        properties:
+          tap:
+            oneOf:
+              - type: "null"
+              - type: string
+                enum: [ripple, roll, chop, tap, storm]
+          dwell:     { type: [string, "null"] }
+          ceremony:  { type: [string, "null"] }
+          drag:      { type: [string, "null"] }
+          flick:     { type: [string, "null"] }
+          twist:     { type: [string, "null"] }
+          twist3:    { type: [string, "null"] }
+          tap3:      { type: [string, "null"] }
+          drag3:     { type: [string, "null"] }
+          hold3:     { type: [string, "null"] }
+          scrub:     { type: [string, "null"] }
+          drum:      { type: [string, "null"] }
+          knock:     { type: [string, "null"] }
+          shake:     { type: [string, "null"] }
+          tilt:      { type: [string, "null"] }
+          flip:      { type: [string, "null"] }
+          arrows:    { type: [string, "null"] }
+
+      # ~~~ integration checkpoints — the joins between the above ~~~
+      make_unmake:
+        type: object
+        additionalProperties: false
+        description: >
+          Two questions the schema poses so a spec cannot fudge item 3.
+          Answer them truthfully — a spec whose room fails these has a
+          real bug worth naming.
+        properties:
+          letgo_clears_population:
+            type: boolean
+            description: >
+              True if the shared <LetGo> button empties this room's
+              population; false if <LetGo> only ends the
+              ceremony/current-hold and long-lived instances persist
+              past it. AGENTS.md item 3 requires "an emptied room stays
+              empty" — a false value here is worth flagging as a
+              real-room bug in the spec's comment, not silently
+              accepted.
+          ceremony_is:
+            type: string
+            description: >
+              One-line description of the room's solemn act — AGENTS.md
+              calls it "the one solemn act", and the room needs one.
+              "planting a life where the finger is"; "giving a candle
+              to the wind as a lantern, kept"; "the geode opens and its
+              lining faces out". Named here so the schema author has
+              actually thought about it.

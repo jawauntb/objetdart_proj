@@ -136,6 +136,58 @@ guide:
     ring, the season the year had reached, and the hour it was last looked
     at.
 
+# ——— the "alive at rest" / "make and unmake" / "haptics" contract ————————
+# Round-trip-derived from src/components/Spring.tsx and src/lib/springflow.ts.
+# Seeps are the countable object — MAX_SEEPS=16, throat 0..MAX_THROAT=1,
+# born by dwelling on the pool (plantSeep at throat 0, deepenSeep while
+# held on a saturating curve), sealed at ceremony (throat = MAX_THROAT,
+# sealed=true, kept between visits), retired only by LetGo. Worth noting
+# for item 3: a seep once sealed cannot be individually retired by a
+# ceremony over it — only <LetGo> clears the population. Persistence via
+# the room's own storage_key.
+life:
+  population:
+    objects:
+      - noun: seep
+        max_count: 16   # MAX_SEEPS from src/lib/springflow.ts
+        state_shape: "id, nx, ny, throat (0..MAX_THROAT=1), sealed (bool), t0, phase seed"
+        lifecycle: "born under dwell (plantSeep at throat 0) → throat widens on saturating curve `DWELL_THROAT_MAX * (1 - exp(-elapsed / THROAT_WIDEN_TAU_MS))` while held → sealed at ceremony (throat = MAX_THROAT, sealed=true, kept between visits) → retires only via <LetGo> (no ceremony-over-existing-seep delete — item 3 partially unmet)"
+        persistence: LetGo
+        creates_via_verb: dwell
+        retires_via: [LetGo]
+        implementation_hint: "inline array + createIdleWriter through the room's own storage_key (phase-4 note: population is `state.seeps: Seep[]` in springflow.ts, not yet migrated to SceneObjectSpec)"
+  breath:
+    period_seconds: 7
+    reads:
+      - "uBreath uniform (fragment shader — air column airCol *= 0.86 + 0.14 * uBreath)"
+      - "uBreath uniform (surface Snell highlight 0.85 + 0.15 * uBreath)"
+      - "uBreath uniform (mineral bloom `0.6 + uBreath * 0.4`)"
+    behavior_at_rest: "three visible registers ride the 7s clock: air column brightens/dims by ±14%, Snell surface highlight by ±15%, mineral bloom at the wet edge by ±40% — the pool is always visibly moving even between taps"
+  glimmer:
+    after_idle_ms: 20000
+    visual: "one seep breathes a wider ring, alone, and nothing is said (glimmer handler picks a seep by `state.tau * 977 % state.seeps.length` and pushes a soft ripple)"
+  haptics_grammar:
+    tap: ripple             # ringHere → haptics.ripple(0.3 + weight * 0.35); tap-on-seep → tap
+    dwell: tap              # plant() fires haptics.tap(); deepen ticks are silent by design (60ms cadence would over-vibrate)
+    ceremony: bloom         # sealSeep → haptics.bloom() — the room's solemn act
+    drag: null              # surface film slides — no haptic (ledger unchanged; visual+audio only)
+    flick: chop             # bubble thrown → haptics.chop()
+    twist: lens             # lens raise/lower → haptics.lens()
+    twist3: detent          # season detent on release (year passing has no continuous grain)
+    tap3: roll              # tutti → haptics.roll()
+    drag3: null             # wind (rain/evap) — continuous audio-only write, no haptic per event
+    hold3: null             # time dilation is a state, not a hit
+    scrub: tap              # stir the pool — audio carries it, small tap on entry
+    drum: tap               # drum between two zones
+    knock: detent           # struck stone rings the pool → haptics.detent()
+    shake: null             # scatter — writes turbulence axis, no per-event haptic
+    tilt: null              # continuous accelerometer lean
+    flip: null              # night toggle
+    arrows: tap             # moveCursor / keyTap
+  make_unmake:
+    letgo_clears_population: true   # `clear` empties `state.seeps` and fires haptics.roll()
+    ceremony_is: "sealing the seep at full throat — the aquifer is opened, kept between visits, a small artesian rise stays in the pool"
+
 # ——— the three LLM slots ————————————————————————————————————————————————
 
 shader_intent: >

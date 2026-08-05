@@ -44,6 +44,71 @@ The site's `test:room-contract` (`src/lib/room-registry.ts`) and
    captured `api` variable. React re-renders and effect resets must not
    drop an in-flight hold — the ref makes them safe.
 
+## Haptics — the third sense (mandatory)
+
+Two senses in the same frame is the room quality bar (`AGENTS.md` §"The
+room quality bar" §6): every meaningful act must land in sight *and*
+sound *and*, where the hardware allows, haptics. This slot writes the
+haptic call.
+
+**For each verb this room implements, the handler body MUST call
+`haptics.<pattern>()` where `<pattern>` is drawn from
+`spec.life.haptics_grammar.<verb>`.** Read the block below and honor it
+verbatim — a `tap: bloom` line means the `tap` handler calls
+`haptics.bloom()`; a `ceremony: roll` line means the `ceremony` handler
+calls `haptics.roll()`.
+
+```yaml
+{{life_haptics_grammar}}
+```
+
+The named patterns are the ones exported by `src/lib/haptics.ts`: `tap`,
+`ripple`, `chop`, `roll`, `storm`, `detent`, `crossing`, `lens`, `bloom`.
+Any name outside that set is a bug — do not invent new pattern names in
+this slot; if the room needs a new haptic, that is a shared-bus PR that
+predates this one.
+
+**If a verb has no entry in `haptics_grammar`,** the handler MUST include
+a one-line comment explaining why (e.g. `// pointer-only feedback; no
+haptic for keyboard arrows`, or `// the material is silent on a knock —
+the vessel already answered`). The compiler will fail room-quality checks
+if a verb handler lacks both a `haptics.` call and an inline reason
+comment.
+
+Scale the haptic with what the hand offered: `haptics.ripple(e.intensity)`,
+not a bare `haptics.ripple()`, when the pattern takes a strength argument.
+The turbulence bus already lifts intensity in a storm; the handler's job
+is to pass the hand's own force through.
+
+## Population — creating and retiring the countable things (mandatory
+when the room has any)
+
+The `__SLOT_POPULATION__` fill above yours has already bound population
+methods onto `apiRef.current`. For verbs the spec marks as *creating* or
+*retiring* a countable object, the handler MUST call the appropriate
+method:
+
+- If `spec.life.population.objects[i].creates_via_verb === "<verb>"`, the
+  `<verb>` handler MUST call `apiRef.current?.add<Noun>(e.nx, e.ny)` (or
+  whatever creator method the population slot bound — read the retrieval
+  examples for the exact shape). Typical creators are `dwell` and
+  `ceremony`.
+- If `<verb>` appears in `spec.life.population.objects[i].retires_via`,
+  the `<verb>` handler MUST call `apiRef.current?.retire<Noun>(e.nx,
+  e.ny)` (or the population's retire method).
+- The `letGo` handler is the whole-field clear (`<LetGo>` mounts it):
+  it MUST call `apiRef.current?.letGoPopulation()` for every population
+  in the room.
+
+Read the population block below to see the create/retire assignments.
+
+```yaml
+{{life_population}}
+```
+
+If the room has no population (empty `life.population.objects`), skip
+this rule.
+
 ## Voice — the handler comments and grouping
 
 Two-of-three registers in every comment. Group the handlers thematically

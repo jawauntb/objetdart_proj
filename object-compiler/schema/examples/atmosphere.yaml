@@ -116,6 +116,66 @@ guide:
     - "walk the sun down to the horizon and the reds arrive by subtraction — the same λ⁻⁴ that keeps noon blue"
   keeps: "the lanterns you gave to the wind — they drift on their layer's wind between visits"
 
+# ——— the "alive at rest" / "make and unmake" / "haptics" contract ————————
+# Round-trip-derived from src/components/AirColumn.tsx and src/lib/aircolumn.ts.
+# Two shapes of countable object live here: the parcels in flight (short-lived,
+# capped at MAX_PARCELS=10) and the lanterns given to the wind (long-lived,
+# persisted through the shared world.ts naturals bus, capped at MAX_LANTERNS=12).
+# `atmosphere` is the reference case for population BUT flags one real bug:
+# lanterns are BORN by ceremony and PERSISTED to world.ts, but the merged room
+# never actively retires them — they only fall off silently when the room reads
+# `getNaturalsInZone("sky").slice(-MAX_LANTERNS)`, i.e. oldest wins the shift.
+# The retirement lifecycle stage is a promise the code does not keep; documented
+# here so the compiler's quality check can catch it in the emitted room.
+life:
+  population:
+    objects:
+      - noun: parcel
+        max_count: 10
+        state_shape: "id, xKm, zKm, mass, w (vertical velocity), spin, lclKm (cloud base), t0"
+        lifecycle: "born under press → warmed and lifted while held → sealed as lantern at ceremony (retires the parcel) → or torn by flick → or shifted out of the array when the population caps"
+        persistence: ephemeral
+        creates_via_verb: dwell
+        retires_via: [ceremony, flick, tap]
+        implementation_hint: "inline array (parcels[])"
+      - noun: lantern
+        max_count: 12
+        state_shape: "id (from world.ts), zone='sky', nx, ny, magnitude — the WorldNatural triple"
+        lifecycle: "born from a parcel at ceremony hold → drifts on its own altitude's wind between visits → retires ONLY silently when MAX_LANTERNS is exceeded; the room has no explicit retire verb (real bug per AGENTS.md item 3 — worth flagging)"
+        persistence: world
+        creates_via_verb: ceremony
+        retires_via: [LetGo]
+        implementation_hint: "world.ts registry (addNatural/getNaturalsInZone)"
+  breath:
+    period_seconds: 7
+    reads:
+      - "uBreath uniform (fragment shader — sky swell, cloud lift, lantern bloom)"
+    behavior_at_rest: "the sky swell in the shader (`(uBreath - 0.5) * 0.34 * exp(-p.y/9)`) widens and narrows the whole column on the shared 7s clock — the base register is always breathing even when the parcels are still"
+  glimmer:
+    after_idle_ms: 20000
+    visual: "a soft ring is emitted from a random parcel or lantern point — a wider swell drawn on the shader's overlay, briefly"
+  haptics_grammar:
+    tap: tap                # base tap — nearest parcel warms a little
+    dwell: bloom            # via `haptics.roll()` at rapid-tap tier n; `haptics.bloom()` at rapid-tap tier 5 (seed puff)
+    ceremony: bloom         # ceremony is the lantern act; not fired here directly (world.ts writes it), but the ceremony arc uses bloom on subsequent frames
+    drag: tap               # via the stir path; a small tap while dragging
+    flick: chop             # tearParcel → haptics.chop()
+    twist: lens             # (via shell default — no per-room override)
+    twist3: detent          # season
+    tap3: ripple            # tutti (a small chord across altitudes)
+    drag3: tap              # law walk (sun + lapse)
+    hold3: null             # time dilation is felt as a slowdown, not a haptic
+    scrub: chop             # vortex-winding
+    drum: ripple            # gust between the two zones
+    knock: bloom            # ring the column from the ground up
+    shake: chop             # gusts and tears
+    tilt: null              # a lean of the whole sky — visual, not haptic
+    flip: roll              # night; the LetGo also fires roll
+    arrows: tap
+  make_unmake:
+    letgo_clears_population: true   # `letGo` clears parcels; the world.ts naturals also drop
+    ceremony_is: "giving a candle to the wind as a lantern, kept between visits on the layer's own wind"
+
 # ——— the three LLM slots ————————————————————————————————————————————————
 
 shader_intent: >

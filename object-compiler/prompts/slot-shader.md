@@ -54,6 +54,25 @@ the following. Do not break them:
 5. **`prefers-reduced-motion` respected.** When `uReduced > 0.5`, the
    material animates less (or not at all). The reference examples show the
    pattern.
+6. **The breath, if it is claimed, is used.** If `spec.life.breath.reads`
+   (below) includes `uBreath`, the shader MUST declare
+   `uniform float uBreath;` and use it somewhere in `main()` as a
+   low-frequency modulation of at least one visible register — brightness,
+   scale, hue mix, opacity, cloud density, ember warmth. Amplitude small,
+   never garish; the site's one respiration is a *dimension of the
+   material*, not a strobe. The compiler will fail room-quality checks
+   if `uBreath` is declared but not referenced in `main()`, or if the
+   spec claims it and the shader omits the uniform. When
+   `spec.life.breath.reads` does not include `uBreath`, do not declare
+   it — a dead uniform is a bug the driver silently optimizes away and
+   the reader spends time chasing.
+
+The spec's `life.breath` block (which register(s) the breath modulates,
+the behavior at rest) is substituted below:
+
+```yaml
+{{life_breath}}
+```
 
 ## Voice — the material itself
 

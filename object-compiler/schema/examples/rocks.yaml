@@ -120,6 +120,56 @@ guide:
     - "a grooved stone loses its clarity as well as its polish: you can see the scratch and hear the ring go dull"
   keeps: "every stone, its species and seed and the cuts made in it, and how much is still dissolved in the tray"
 
+# ——— the "alive at rest" / "make and unmake" / "haptics" contract ————————
+# Round-trip-derived from src/components/RockShelf.tsx and src/lib/crystal.ts.
+# Stones are the countable object — MAX_STONES=14 through `settleStones` —
+# born by dwelling on the wet dark (a nucleus is planted and grows by
+# `growStep` while held; brine visibly draws down as it does), split by a
+# flick (a cleavage plane the lattice actually names), retired by ceremony
+# (opens the nodule as a geode — a real touch-reachable transformation)
+# or by starvation (a smaller stone next to a larger loses to it slowly).
+# Persistence via the room's own storage_key.
+life:
+  population:
+    objects:
+      - noun: stone
+        max_count: 14   # MAX_STONES
+        state_shape: "id, LatticeState (system, centering, a, b, c, alpha, beta, gamma, pointGroup, cleavage) + growthMass + polishDepth + species + isGeode"
+        lifecycle: "born under dwell (plantNucleus + growStep while held) → grows further while pressing → sealed as ceremony geode (opens and its liner faces out) → retires by being flicked to split (both halves persist and keep their mass), being ground down by another stone, or by settleStones shift past MAX_STONES"
+        persistence: LetGo
+        creates_via_verb: dwell
+        retires_via: [flick, ceremony, LetGo]
+        implementation_hint: "inline array + createIdleWriter through the room's own storage_key"
+  breath:
+    period_seconds: 7
+    reads:
+      - "u_breath uniform (brine shader — lamp warmth `0.72 + 0.28 * u_breath`)"
+    behavior_at_rest: "the raking lamp catches the tray at ±28% intensity on the 7s clock; the wet dark tray brightens and dims by ~20% underneath — a lit cabinet quietly breathing"
+  glimmer:
+    after_idle_ms: 20000
+    visual: "one stone's facet catches the raking light for half a breath (glimmerStone index cycles through the population); haptics.detent fires briefly"
+  haptics_grammar:
+    tap: tap                # tap a stone → tap; tap the wet dark → seed a grain of salt with a tap
+    dwell: bloom            # plant a nucleus → bloom on plant (via haptics.bloom() when nodule seeded)
+    ceremony: bloom         # geode opens → bloom  (`haptics.bloom()` on wasGeode)
+    drag: ripple            # turn a stone → ripple as facets sweep
+    flick: chop             # cleave along the nearest allowed plane → chop
+    twist: lens             # lattice lens raise → lens
+    twist3: detent          # season detent
+    tap3: ripple            # tutti sounds every stone
+    drag3: tap              # brine saturation
+    hold3: null             # time dilation
+    scrub: chop             # stir the brine
+    drum: tap               # sift-like felt taps
+    knock: detent           # ring the tray → detent
+    shake: chop             # jostles the brine
+    tilt: null              # lean, no haptic
+    flip: null              # night, no haptic
+    arrows: tap             # step between stones → tap
+  make_unmake:
+    letgo_clears_population: true   # LetGo returns all stones to solution (visibly dissolves the tray back to brine)
+    ceremony_is: "the geode opens and its lining faces out — the tracked nodule becomes a hollow ringing stone kept between visits"
+
 shader_intent: >
   a shelf-level view of the tray of brine with stones coming out of it.
   each stone is a per-instance SDF whose habit is the Wulff hull of the

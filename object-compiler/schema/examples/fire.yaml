@@ -128,6 +128,67 @@ guide:
     - "a fortnight's absence lets the fire settle to banked; the ember count is remembered but the heat is gone"
   keeps: "the current heat readout, the banked ember state, the fire-marks (labeled events), and the hour it was last looked at."
 
+# ——— the "alive at rest" / "make and unmake" / "haptics" contract ————————
+# Round-trip-derived from src/components/Fire.tsx. Fire is an older room:
+# it uses raw `attachGestures` (not RoomShell/RoomVoice), keeps its physics
+# inline instead of in `src/lib/hearth.ts` as the spec's domain_intent
+# proposes, and pools embers in a fixed emberPool of 320 slots. Three
+# shapes of countable object live in the room: embers (fast-decay sparks,
+# pool of 320, retired by aging out), pressure wells (dwell creates; the
+# ceremony can extinguish an existing well — the room's touch-reachable
+# delete), and heat-strokes (drag-born, released with the finger).
+# Persistence: fireMarks (labeled events) are kept but the ember/well/stroke
+# populations are ephemeral. The spec IS a target for a future rewrite —
+# the noun (`ember`) below matches spec intent, not persisted state.
+life:
+  population:
+    objects:
+      - noun: ember
+        max_count: 320   # emberPool.length in the current Fire.tsx
+        state_shape: "alive (bool), x, y, vx, vy, life, maxLife, radius, hue"
+        lifecycle: "born by tap (small burst), drag start, dwell burst, ceremony flash, flick (comet), scrub (whirl), shake, or knock → advected by pressure-well convection + buoyancy + drag → retires by life ≤ 0 (recycled from the pool)"
+        persistence: ephemeral
+        creates_via_verb: tap
+        retires_via: [LetGo]
+        implementation_hint: "pooled `Ember[]` of fixed length 320 (not yet SceneObjectSpec; item 3 partially unmet — retirement is silent decay, not a hand's act)"
+      - noun: pressure-well
+        max_count: 24   # per spec's domain_intent MAX_PRESSURES; current Fire.tsx keeps this in the `wells` array
+        state_shape: "id, pos, t0, strength, radius"
+        lifecycle: "born by dwell (addWell at tier ≥ 2 with charge from held elapsed) → strength decays exponentially with time-since-t0 → retires by ceremony over an existing well (extinguishWellNear — the touch-reachable delete) OR by natural exponential decay"
+        persistence: ephemeral
+        creates_via_verb: dwell
+        retires_via: [ceremony, LetGo]
+        implementation_hint: "inline array `wells[]` (spec target: MAX_PRESSURES = 24 in src/lib/hearth.ts — not yet extracted)"
+  breath:
+    period_seconds: 7
+    reads:
+      - "no uBreath uniform read in Fire.tsx — a real gap. The room has an ignitionAmp / gutter / bank clock that runs on its own timescales but does not read the shared `getBreath()` LFO. Worth flagging as item 5 gap."
+    behavior_at_rest: "the field's own convection and turbulence continue: embers advect, wells decay, the bed banks toward its cool register. NOT on the shared 7s breath (item 5 gap — the room breathes but on its own clock, not the site's)."
+  glimmer:
+    after_idle_ms: 20000
+    visual: "a faint turning ring of embers (per the comment `glimmer (grammar §6): after ~20s of quiet, a faint turning ring of…`). Currently a comment-annotated event; needs verification that it fires on the shared idle clock."
+  haptics_grammar:
+    tap: ripple             # ember tap → haptics.ripple(0.2 + intensity * 0.36); step-back tap → tap
+    dwell: bloom            # pressure well dwell tier ≥ 2 → haptics.storm(); ceremony → haptics.bloom() on new fire
+    ceremony: bloom         # ceremony over open bed → bloom; over existing well → chop (snuff)
+    drag: chop              # crosswind gutter chop; extendStroke has no haptic per frame
+    flick: chop             # thrown sparks → haptics.chop()
+    twist: lens             # (via shell default; Fire uses attachGestures directly, twist just writes lens uniform)
+    twist3: detent          # season winds
+    tap3: ripple            # tutti → haptics.ripple(0.4)
+    drag3: chop             # crosswind gutter → chop when |vx| > 0.35
+    hold3: tap              # three-finger hold enter → haptics.tap()
+    scrub: ripple           # whirl → haptics.ripple(0.35)
+    drum: tap               # (no explicit drum handler; falls through to shell default)
+    knock: tap              # knock → haptics.tap()
+    shake: storm            # shake scatters → haptics.storm()
+    tilt: null              # windTarget write, continuous
+    flip: null              # bankTarget flip
+    arrows: tap             # (via shell keyboard)
+  make_unmake:
+    letgo_clears_population: true   # letGo → all wells cleared, embers set alive=false, ignitionAmp reset; fireMarks kept unless clear() also fires
+    ceremony_is: "the pyre blooms fully — white heat through the whole bed, a real flame kept until it burns itself out (OR, over an existing well: snuff it — the touch-reachable delete of a fire you started)"
+
 # ——— the three LLM slots ————————————————————————————————————————————————
 
 shader_intent: >

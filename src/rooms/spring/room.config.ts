@@ -67,6 +67,60 @@ const spring = {
     ],
     keeps: "the current head, the pool level, every seep with its throat and its ring, the season the year had reached, and the hour it was last looked at.",
   },
+  // ——— the room quality bar, structured ————————————————————————————————
+  // AGENTS.md §"The room quality bar" items 3, 5 and 6, declared per
+  // Spring.tsx as it is today. Round-trip-derived from the component
+  // source; the audit at data/object-compiler/audits/phase-3-recompile.md
+  // says what each claim refers to in the file. Only verbs that DO fire a
+  // haptic appear in `haptics_grammar` — a verb with no haptic (surface
+  // drag, world-law wind, time dilation, tilt/shake/flip) is omitted, so
+  // scripts/test-room-quality.mjs does not misread silence as a hole.
+  life: {
+    population: {
+      objects: [
+        {
+          noun: "seep",
+          max_count: 16,
+          state_shape: "id, nx, ny, throat (0..MAX_THROAT=1), sealed (bool), t0, phase seed",
+          lifecycle:
+            "born under dwell (plantSeep at throat 0) → throat widens on saturating curve DWELL_THROAT_MAX·(1 − exp(-elapsed / THROAT_WIDEN_TAU_MS)) while held → sealed at ceremony (throat = MAX_THROAT, sealed=true, kept between visits) → retires only via <LetGo>",
+          persistence: "LetGo",
+          creates_via_verb: "dwell",
+          retires_via: ["LetGo"],
+          implementation_hint:
+            "inline array — state.seeps: Seep[] in src/lib/springflow.ts, drawn as a uSeeps[16] uniform block. Phase-4 note: not yet migrated to SceneObjectSpec.",
+        },
+      ],
+    },
+    breath: {
+      period_seconds: 7,
+      reads: ["uBreath"],
+      behavior_at_rest:
+        "three visible registers ride the 7s clock: the air column brightens by ±14%, the Snell surface highlight rides ±15%, the mineral bloom at the wet edge swells by ±40%. Between taps the pool is never still.",
+    },
+    glimmer: {
+      after_idle_ms: 20000,
+      visual:
+        "one seep breathes a wider ring, alone, and nothing is said — the glimmer handler picks a seep and pushes a soft ripple.",
+    },
+    haptics_grammar: {
+      tap: "ripple",     // ringHere → haptics.ripple(0.3 + weight * 0.35)
+      dwell: "tap",      // plant() lands one haptics.tap()
+      ceremony: "bloom", // sealSeep → haptics.bloom()
+      flick: "chop",     // bubble thrown → haptics.chop()
+      twist: "lens",     // lens raise/lower → haptics.lens()
+      twist3: "detent",  // season detent on release
+      tap3: "roll",      // tutti → haptics.roll()
+      drum: "tap",       // beat between two zones → haptics.tap()
+      knock: "detent",   // struck stone rings the pool → haptics.detent()
+      arrows: "tap",     // keyTap → ringHere → haptics.ripple is the audible half; a tap is the tactile half
+    },
+    make_unmake: {
+      letgo_clears_population: true,
+      ceremony_is:
+        "seals the seep at full throat — the aquifer opens, kept between visits as a small artesian rise in the pool",
+    },
+  },
 } as const satisfies RoomManifest;
 
 export default spring;

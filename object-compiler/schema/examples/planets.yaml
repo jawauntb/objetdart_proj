@@ -114,6 +114,58 @@ guide:
     - "each world's chord is read off its vector: ringed worlds carry a fifth the bare ones lack"
   keeps: "the worlds you forged, where in their orbits they are, and a deliberate clearing"
 
+# ——— the "alive at rest" / "make and unmake" / "haptics" contract ————————
+# Round-trip-derived from src/components/PlanetForge.tsx and src/lib/worldforge.ts.
+# The population is one bounded fleet of worlds, MAX_WORLDS=9, born by a
+# `dwell` on the dust reserve (mass grows via `accretionRadius(holdMs)`,
+# reserve visibly dims as it does), retired by being flicked into the star
+# (which returns their mass to the reserve — a real thermodynamic loop) or
+# by two colliding into a merge (mass conserved, latent interpolated by
+# mass), or by shifting past MAX_WORLDS (oldest retired, mass returned).
+# Persistence: the room's own storage_key, gated by LetGo.
+life:
+  population:
+    objects:
+      - noun: world
+        max_count: 9   # MAX_WORLDS
+        state_shape: "12-dim latent (radius, ocean, terrain family, relief, atmosphere tint, atmosphere depth, axial tilt, day length, cloud cover, ring density, moon retinue, polar ice) + orbit + mass + seed"
+        lifecycle: "born under dwell (accretionRadius saturates on ACCRETION_TAU_MS) → grows further while held → sealed at ceremony holds → retires by flick-into-star (mass returned to dust reserve), by merge with another world (mass conserved, latent interpolated), or by exceeding MAX_WORLDS (oldest wins the shift, mass returned)"
+        persistence: localStorage
+        creates_via_verb: dwell
+        retires_via: [flick, ceremony, LetGo]
+        implementation_hint: "inline array + persisted through the room's own storage_key"
+  breath:
+    period_seconds: 7
+    reads:
+      - "u_breath uniform (star shader — halo airy pattern)"
+      - "u_breath uniform (body shader — atmosphere breath multiplier `0.92 + 0.13 * u_breath`)"
+      - "clocks.breath (the shell's clock pack read every frame)"
+    behavior_at_rest: "the star's halo airy pattern widens and dims by ±14% on the 7s clock; every body's atmosphere brightens and dims by ~13% — the whole system breathes in one register"
+  glimmer:
+    after_idle_ms: 20000
+    visual: "a small tick fires from the focused world (haptics.detent + audio ping), and its corona brightens for half a breath"
+  haptics_grammar:
+    tap: tap                # tap on a world → tap; tap on dust → tap
+    dwell: bloom            # accretion under dwell → haptics.bloom() as the world condenses
+    ceremony: bloom         # ceremony seal → bloom
+    drag: ripple            # drag a world → ripple
+    flick: chop             # throw a world → chop
+    twist: lens             # focused-world twist raises the lens
+    twist3: detent          # system clock detent
+    tap3: ripple            # tutti chord
+    drag3: ripple           # world-law wind (star luminosity / axis)
+    hold3: null             # time dilation
+    scrub: detent           # ring-winding fires a felt click per condense
+    drum: ripple            # ripple between two zones
+    knock: chop             # jostles the system → the focused world answers
+    shake: chop             # perturbs every orbit
+    tilt: null              # gravity vector — visual
+    flip: null              # night
+    arrows: tap             # walk the field
+  make_unmake:
+    letgo_clears_population: true   # `letGo` returns every world to dust (reserve visibly restored)
+    ceremony_is: "the ceremony hold approaches RADIUS_MAX — the world is sealed at its maximum accretion and the dust is drawn down to its floor"
+
 # ——— the three LLM slots ————————————————————————————————————————————————
 
 shader_intent: >

@@ -1,7 +1,11 @@
 // object-compiler template — docs/plans/object-compiler.md M3.
 // Consumes: spec.key, spec.route, spec.storage_key, spec.palette.bg,
-//           ComponentName (PascalCase of key), spec.aria_label.
-// Three LLM slots below carry the creative work; the boilerplate is verbatim.
+//           ComponentName (PascalCase of key), spec.aria_label, plus the
+//           three synthesized spec.life.* wires (breath_uniform_wire,
+//           idle_writer_setup, idle_writer_cleanup) produced by
+//           render-template.py's preprocess_spec from spec.life.
+// Three LLM slots carry the creative work here (shader, verbs, population);
+// two more (domain, pins) land in sibling files. The boilerplate is verbatim.
 "use client";
 
 /**
@@ -24,6 +28,16 @@ import {
   createFrameGovernor,
   isEmbeddedFrame,
 } from "@/lib/room-runtime";
+import { createInstanceBuffer } from "@/lib/scene/instances";
+import { createPopulationLayer } from "@/lib/scene/population-layer";
+import {
+  createPopulation,
+  mulberry32,
+  type SceneObjectSpec,
+  type SceneObjectState,
+  type StepContext,
+  type EmitContext,
+} from "@/lib/scene/object";
 // __SLOT_DOMAIN_IMPORTS__
 
 /** Persistence key — versioned; a schema change bumps the suffix. */
@@ -122,6 +136,25 @@ export default function {{ComponentName}}() {
     const prog = stage?.program(FULLSCREEN_VERT_UNIT, FRAG) ?? null;
     const quad = stage && prog ? stage.fullscreenQuad(prog, "unit") : null;
 
+    // ——— the breath uniform — the shared 7s respiration reaches the shader
+    // through stage.beginFrame → clocksFrom, and a local handle is kept here so
+    // the population step context (and any JS side-effect on the same beat) can
+    // read the same value the material sees. Renderer emits deterministically.
+    {{spec.life.breath_uniform_wire}}
+
+    // ——— the population — countable things, drawn in one instanced pass.
+    // The LLM slot below declares SceneObjectSpec<StateVector> per object in
+    // spec.life.population.objects[] and instantiates the population + layer
+    // + buffer. It also assigns `tickPopulation` — the harness's draw loop
+    // (below) calls that closure once per frame so the population steps and
+    // emits in the same GL context beat as the field.
+    let tickPopulation: (now: number, tSec: number) => void = () => {};
+    // __SLOT_POPULATION__
+
+    // ——— the glimmer clock — a physical shimmer after ~20s of idle, never a
+    // text hint. Renderer emits deterministically from spec.life.glimmer.
+    {{spec.life.idle_writer_setup}}
+
     // ——— the hand's verbs, in this room's material ———
     // __SLOT_VERB_HANDLERS__
 
@@ -145,6 +178,9 @@ export default function {{ComponentName}}() {
           prog,
         );
         quad.draw();
+        // The population rides the same frame; its own step/emit/draw is
+        // packed into tickPopulation by the SLOT_POPULATION fill.
+        tickPopulation(now, t);
       }
 
       raf = requestAnimationFrame(draw);
@@ -157,6 +193,7 @@ export default function {{ComponentName}}() {
       unvis();
       ungal();
       writer.flush();
+      {{spec.life.idle_writer_cleanup}}
       quad?.dispose();
       stage?.dispose();
       cancelAnimationFrame(raf);

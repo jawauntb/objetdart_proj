@@ -132,6 +132,58 @@ guide:
     - "a scattered sky rings a flat, detuned stack; a coherent one collapses to a single partial — you can hear the murmuration form"
   keeps: "the aviary the meadow holds — each bird with its species, seed, and the ring of its call — the season the year has reached, and the hour it was last looked at."
 
+# ——— the "alive at rest" / "make and unmake" / "haptics" contract ————————
+# Round-trip-derived from src/components/Murmuration.tsx and src/lib/flock.ts.
+# The bird itself is the countable object — MAX_BIRDS = 4096, with an
+# AVIARY_MIN/MAX of 13/22 (readable individuals, not a distant blur). Birds
+# are born by spawnBird (a tap at tier 3 in the rapid-tap ladder, or a
+# dwell in empty sky) and retired by cullAt (tap at tier 5 hits a bird),
+# by clearBirds (tap at tier n scatters the whole sky), or by leaving the
+# world when they migrate offscreen. Persistence via the room's own key.
+# Note: Murmuration uses raw `attachGestures` — an older room predating the
+# RoomShell/RoomVoice pattern — so haptic calls are inline in the gesture
+# handlers rather than through a voice memo.
+life:
+  population:
+    objects:
+      - noun: bird
+        max_count: 4096   # MAX_BIRDS in flock.ts; typical aviary sits at 13-22
+        state_shape: "pos (Vec3), vel (Vec3), kind (BirdKind), seed, activity (idle/eat/roost/flee), size, eatProgress"
+        lifecycle: "born by tap-tier-3 or dwell-in-empty-sky (spawnBird) → lives on the fixed-timestep integrator obeying separation/alignment/cohesion + wind + goal → retires by tap-tier-5 direct hit (cullAt), by tap-tier-n scatter (clearBirds), or by drifting past the world bounds and being culled quietly"
+        persistence: localStorage
+        creates_via_verb: tap   # tap-train tier 3 spawns; dwell also spawns if empty
+        retires_via: [tap, LetGo]
+        implementation_hint: "inline array + Float32Array pools (fixed-timestep integrator) + persisted through the room's own storage_key"
+  breath:
+    period_seconds: 7
+    reads:
+      - "u_breath uniform (sky shader — subtractive sun tint `0.34 + u_breath * 0.09`)"
+    behavior_at_rest: "the low-sun subtractive warm on the horizon rides ±9% on the 7s clock; the flock's coherence continues to evolve on its fixed-timestep integrator so the sky is never truly still"
+  glimmer:
+    after_idle_ms: 20000
+    visual: "a passing bird calls once and its neighbours ripple briefly — a small chirp with no text, just the flock breathing"
+  haptics_grammar:
+    tap: ripple             # tap at various tiers → haptics.tap()/ripple/roll depending on tier
+    dwell: bloom            # roostNearest on entry → haptics.ripple(0.4); ceremony bond → haptics.bloom()
+    ceremony: bloom         # settle on the hand as one animal → haptics.bloom() past ceremony
+    drag: tap               # one-finger stroke → tap when e.dx+e.dy > 8
+    flick: chop             # release the lure with a scatter — chop
+    twist: lens             # field-watch lens
+    twist3: detent          # season goal turn
+    tap3: ripple            # tutti — every species answers → haptics.ripple(0.45)
+    drag3: tap              # world-law wind (writes handWind)
+    hold3: null             # time dilation
+    scrub: tap              # circle swirls the flock
+    drum: ripple            # beat between two zones → haptics.ripple(0.3 + 0.3 * alternation)
+    knock: chop             # one wingbeat wave across → haptics.chop()
+    shake: chop             # bursts and re-gathers
+    tilt: null              # writes wind — continuous, no haptic
+    flip: null              # night, no haptic
+    arrows: tap             # walk the sun / step
+  make_unmake:
+    letgo_clears_population: true   # letGo empties the aviary (calls clearBirds and clears the storage)
+    ceremony_is: "the flock settles onto the finger as ONE animal — roostNearest is called and the alignment/cohesion params are pushed toward their maximum, kept between visits"
+
 # ——— the three LLM slots ————————————————————————————————————————————————
 
 shader_intent: >
