@@ -762,8 +762,9 @@ export default function AtomsField() {
           specks.push({
             x: px, y: py,
             vx: Math.cos(ang) * 420, vy: Math.sin(ang) * 420,
-            born: performance.now() + i * 12,
-            life: 520, r: 1.3,
+            born: performance.now(),
+            life: 460 + i * 26,
+            r: 1.3,
             color: "#F2C56B", streak: true,
           });
         }

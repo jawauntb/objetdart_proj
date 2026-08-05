@@ -974,7 +974,32 @@ export default function Plasma() {
       return { nx: rx * cosP - ry * sinP, ny: rx * sinP + ry * cosP };
     };
 
+    // two filaments landing close enough reconnect rather than sit side by
+    // side — real magnetic reconnection: they fuse at their midpoint into a
+    // third filament that is neither parent, releasing a brighter flare
+    // than either alone
+    const RECONNECT_R = FILAMENT_HIT * 0.5;
     const addFilament = (nx: number, ny: number) => {
+      let nearIdx = -1;
+      let nearD = RECONNECT_R;
+      filaments.forEach((f, i) => {
+        const d = Math.hypot(f.nx - nx, f.ny - ny);
+        if (d < nearD) { nearD = d; nearIdx = i; }
+      });
+      if (nearIdx >= 0) {
+        const old = filaments[nearIdx];
+        const mx = (old.nx + nx) / 2;
+        const my = (old.ny + ny) / 2;
+        const seed = Math.abs(((mx * 5171 + my * 3187 + filaments.length * 97) % 1000) / 1000);
+        filaments[nearIdx] = { nx: mx, ny: my, seed };
+        writer.schedule();
+        const { x, y } = toLocal(cx + mx * radius, cy + my * radius);
+        spark(x, y, 1.1);
+        try { getAudio().bell(); } catch { /* noop */ }
+        try { haptics.bloom(); } catch { /* noop */ }
+        recordTapeRef.current("kept", 0.8, "plasma/filament-reconnect");
+        return;
+      }
       const seed = ((nx * 5171 + ny * 3187 + filaments.length * 97) % 1000) / 1000;
       filaments.push({ nx, ny, seed: Math.abs(seed) });
       if (filaments.length > MAX_FILAMENTS) filaments.shift();

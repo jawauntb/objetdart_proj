@@ -425,7 +425,7 @@ export default function QuarksVacuum() {
       seedCount = hadrons.length;
       save(true);
     }
-    const syncStanding = () => setStanding(!clearing && hadrons.some((h) => !h.retiringAt));
+    const syncStanding = () => setStanding(!clearing && (plasma != null || hadrons.some((h) => !h.retiringAt)));
     syncStanding();
 
     // ————— helpers —————
@@ -1041,6 +1041,9 @@ export default function QuarksVacuum() {
     // a stilled vacuum is a remembered state, and the starters do not return.
     const letGo = () => {
       if (clearing) return;
+      // a plasma is a state of the room too: stilling the vacuum lets it
+      // freeze back out first, so nothing is left hanging with no hadron
+      if (plasma) reconfine();
       const alive = hadrons.filter((h) => !h.retiringAt);
       if (alive.length === 0) return;
       try { audio().thud(); } catch { /* noop */ }

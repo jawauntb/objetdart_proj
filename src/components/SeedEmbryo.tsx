@@ -14,6 +14,12 @@ import {
   restingEnergy,
   mulberry32,
   mix32,
+  advanceStage,
+  imbibe,
+  offspringSeed,
+  stageIndex,
+  stageOf,
+  GERMINATION_STAGES,
   type SeedMorph,
 } from "@/lib/seed";
 import {
@@ -46,28 +52,138 @@ export default function SeedEmbryo() {
     const embedded = isEmbeddedFrame();
     const gov = createFrameGovernor(embedded ? "medium" : "high");
 
-    let morph: SeedMorph = morphFromSeed(mix32(Date.now() & 0xffff, 0x5eed));
+    // ————— the seeds in the soil —————
+    // More than one, because a seed's only real neighbour is another seed:
+    // they share the water that percolates down, and the nearest root takes
+    // the drop. A crowded pot germinates slower, and that is the whole law.
+    type Kernel = { m: SeedMorph; nx: number; ny: number; born: number };
+    const MAX_KERNELS = 4;
+    let kernels: Kernel[] = [];
     let generations = 0;
+    let morph: SeedMorph = morphFromSeed(mix32(Date.now() & 0xffff, 0x5eed));
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
-        const parsed = JSON.parse(raw) as { morph?: SeedMorph; generations?: number };
+        const parsed = JSON.parse(raw) as {
+          morph?: SeedMorph;
+          generations?: number;
+          kernels?: Array<{ m: SeedMorph; nx: number; ny: number }>;
+        };
         if (parsed.morph) morph = parsed.morph;
         if (typeof parsed.generations === "number") generations = parsed.generations;
+        if (Array.isArray(parsed.kernels)) {
+          kernels = parsed.kernels
+            .filter((k) => k && k.m && typeof k.m.seed === "number")
+            .slice(-MAX_KERNELS)
+            .map((k) => ({
+              m: k.m,
+              nx: Math.max(0.08, Math.min(0.92, Number(k.nx) || 0.5)),
+              ny: Math.max(0.3, Math.min(0.86, Number(k.ny) || 0.52)),
+              born: performance.now(),
+            }));
+        }
       }
     } catch {
       /* fresh */
     }
-    setHasKept(restingEnergy(morph) > 0.05 || generations > 0);
+    // the first seed IS the one this room has always held; the rest are what
+    // it sets when it makes it all the way to a shoot
+    if (kernels.length === 0) kernels = [{ m: morph, nx: 0.5, ny: 0.52, born: performance.now() }];
+    const primary = () => kernels[0] ?? { m: morph, nx: 0.5, ny: 0.52, born: 0 };
+    /** water percolating down through the soil — a finite thing, competed for */
+    const drops: { x: number; y: number; vx: number; vy: number; seed: number; born: number }[] = [];
+    let dropCount = 0;
+    let nextRainAt = 0;
+    /** the top rung: the whole unfurling, run stage by stage */
+    let unfurl: { at: number; gain: number } | null = null;
+    const soilRngLife = mulberry32(mix32(primary().m.seed, 0x5011fe));
+    setHasKept(kernels.some((k) => restingEnergy(k.m) > 0.05) || generations > 0);
 
     const writer = createIdleWriter(() => {
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify({ morph, generations }));
+        localStorage.setItem(
+          STORAGE_KEY,
+          JSON.stringify({
+            morph: primary().m,
+            generations,
+            kernels: kernels.map((k) => ({ m: k.m, nx: k.nx, ny: k.ny })),
+          }),
+        );
       } catch {
         /* noop */
       }
-      setHasKept(restingEnergy(morph) > 0.05 || generations > 0);
+      setHasKept(kernels.some((k) => restingEnergy(k.m) > 0.05) || generations > 0);
     });
+
+    /** The kernel under a point, or the one nearest to it. */
+    const kernelAt = (x: number, y: number): Kernel => {
+      let best = kernels[0];
+      let bestD = Infinity;
+      for (const k of kernels) {
+        const d = Math.hypot(x - k.nx * width, y - k.ny * height);
+        if (d < bestD) {
+          bestD = d;
+          best = k;
+        }
+      }
+      return best;
+    };
+
+    /** Rain: drops enter the soil and fall. Whoever is nearest drinks. */
+    const rain = (n: number, atX?: number, atY?: number) => {
+      for (let i = 0; i < n && drops.length < 60; i++) {
+        dropCount += 1;
+        const u = ((mix32(dropCount, 0x7a10) >>> 8) % 1000) / 1000;
+        const v = ((mix32(dropCount, 0x7a11) >>> 8) % 1000) / 1000;
+        drops.push({
+          x: atX != null ? atX + (u - 0.5) * 40 : u * width,
+          y: atY != null ? atY + (v - 0.5) * 20 : -6 - v * 40,
+          vx: (u - 0.5) * 14,
+          vy: 40 + v * 50,
+          seed: mix32(dropCount, 0x7a12),
+          born: performance.now(),
+        });
+      }
+    };
+
+    /** One stage further along for this kernel, in sight, sound and hand. */
+    const stepStage = (k: Kernel, gain: number): boolean => {
+      const before = stageIndex(k.m);
+      const next = advanceStage(k.m);
+      if (stageIndex(next) === before) return false;
+      k.m = next;
+      agitation = Math.min(1, agitation + 0.25 + gain * 0.3);
+      audio.playNote(46 + stageIndex(k.m) * 4, 200 + Math.round(gain * 160));
+      haptics.detent();
+      writer.schedule();
+      return true;
+    };
+
+    /** A shoot sets seeds: the pot holds what it grew, not only what it was. */
+    const setSeeds = (k: Kernel, gain: number) => {
+      if (stageOf(k.m) !== "shoot") return;
+      const n = kernels.length >= MAX_KERNELS ? 1 : 1 + Math.round(gain);
+      for (let i = 0; i < n; i++) {
+        const seed = offspringSeed(k.m.seed, generations * 8 + kernels.length + i);
+        const side = i % 2 === 0 ? 1 : -1;
+        const child: Kernel = {
+          m: morphFromSeed(seed),
+          nx: Math.max(0.1, Math.min(0.9, k.nx + side * (0.11 + ((seed >>> 9) % 100) / 900))),
+          ny: Math.max(0.34, Math.min(0.84, k.ny + (((seed >>> 5) % 100) / 1000 - 0.05))),
+          born: performance.now(),
+        };
+        if (kernels.length >= MAX_KERNELS) {
+          // at the cap the eldest gives way, visibly — never a silent refusal
+          const gone = kernels.shift();
+          if (gone) audio.playNote(31, 220);
+        }
+        kernels.push(child);
+      }
+      generations += 1;
+      audio.bell();
+      haptics.bloom();
+      writer.schedule();
+    };
 
     let width = 0;
     let height = 0;
@@ -191,8 +307,13 @@ export default function SeedEmbryo() {
           const tier = tapTrainTier(e.count);
           const depth = tapTrainDepth(e.count);
           if (tier === "n") {
-            // crescendo: a rattle the seed itself keeps up for a moment
-            morph = rattleMorph(morph, 0.5 + depth * 0.5);
+            // ...and the top rung's own act, the largest thing this room
+            // does: the FULL UNFURLING. Every stage in turn, one per beat,
+            // all the way to the shoot — and a shoot sets seeds, so the pot
+            // holds a generation it did not hold before.
+            const k = kernelAt(e.x, e.y);
+            k.m = rattleMorph(k.m, 0.5 + depth * 0.5);
+            unfurl = { at: performance.now(), gain: e.intensity + depth * 0.5 };
             agitation = Math.min(1, agitation + 0.5 + depth * 0.3);
             audio.bell();
             haptics.storm();
@@ -201,7 +322,9 @@ export default function SeedEmbryo() {
           }
           if (tier === 5) {
             // the husk nicks: the split line brightens where the taps landed
-            morph = rattleMorph(morph, 0.35 + e.intensity * 0.3 + depth * 0.2);
+            const k5 = kernelAt(e.x, e.y);
+            k5.m = rattleMorph(k5.m, 0.35 + e.intensity * 0.3 + depth * 0.2);
+            morph = primary().m;
             agitation = Math.min(1, agitation + 0.3);
             audio.spark();
             haptics.ripple(0.5 + depth * 0.3);
@@ -209,11 +332,18 @@ export default function SeedEmbryo() {
             return;
           }
           if (tier === 3) {
-            // the loose kernel knocks against the inside of its husk
-            morph = rattleMorph(morph, 0.12 + e.intensity * 0.15);
-            agitation = Math.min(1, agitation + 0.2 + depth * 0.15);
-            audio.buzz();
-            haptics.chop();
+            // the 3-rung is the germination itself: the seed under the hand
+            // goes ONE stage further along — dormant → imbibed → split →
+            // radicle → cotyledons → shoot — and the kernel knocks against
+            // its husk on the way. A stage it cannot reach yet still answers.
+            const k = kernelAt(e.x, e.y);
+            k.m = rattleMorph(k.m, 0.12 + e.intensity * 0.15);
+            if (!stepStage(k, e.intensity + depth * 0.4)) {
+              agitation = Math.min(1, agitation + 0.2 + depth * 0.15);
+              audio.buzz();
+              haptics.chop();
+            }
+            morph = primary().m;
             writer.schedule();
             return;
           }
@@ -353,8 +483,81 @@ export default function SeedEmbryo() {
       // three-finger hold = time dilation while held.
       timeScale += (timeScaleTarget - timeScale) * Math.min(1, dt * 5);
       if (!asleep && !reduced) {
-        morph = growMorph(morph, dt * timeScale * detail.simHz / 60, pressure);
+        // the hand's pressure works the seed it is on; the rest of the pot
+        // grows on what it has drunk, which is the whole competition
+        const held = kernels[0];
+        for (const k of kernels) {
+          const p = k === held ? pressure : 0;
+          k.m = growMorph(k.m, (dt * timeScale * detail.simHz) / 60, p + (k.m.water ?? 0) * 0.22);
+        }
+        morph = primary().m;
         if (pressure > 0) writer.schedule();
+      }
+
+      // ————— the physics BETWEEN the seeds —————
+      // Water percolates down and the NEAREST root takes it, so two seeds
+      // planted close share one rain between them and both come on slower —
+      // the pot is a finite thing, and crowding is felt as time.
+      if (!asleep && !reduced) {
+        for (let i = drops.length - 1; i >= 0; i--) {
+          const d = drops[i];
+          d.vy += 90 * dt * timeScale;
+          d.vx += (tiltX * 40 + wind * 30) * dt;
+          d.vx *= Math.exp(-dt * 1.1);
+          d.x += d.vx * dt * timeScale;
+          d.y += d.vy * dt * timeScale;
+          if (d.y > height + 12) {
+            drops.splice(i, 1);
+            continue;
+          }
+          // whoever is nearest drinks it — and only one of them can
+          let taken: Kernel | null = null;
+          let bestD = Infinity;
+          for (const k of kernels) {
+            const kd = Math.hypot(d.x - k.nx * width, d.y - k.ny * height);
+            if (kd < bestD) {
+              bestD = kd;
+              taken = k;
+            }
+          }
+          const reach = Math.min(width, height) * 0.16 * (taken ? taken.m.mass : 1) * 1.1;
+          if (taken && bestD < reach) {
+            taken.m = imbibe(taken.m, 0.06);
+            drops.splice(i, 1);
+            agitation = Math.min(1, agitation + 0.02);
+            writer.schedule();
+          }
+        }
+
+        // ————— aliveness: it rains on the pot with nobody here —————
+        if (nextRainAt === 0) nextRainAt = now + 5000;
+        if (now >= nextRainAt) {
+          nextRainAt = now + 7000 + soilRngLife() * 11000;
+          rain(3 + Math.floor(soilRngLife() * 5));
+          audio.playNote(38 + Math.round(soilRngLife() * 6), 140);
+        }
+        // a seed that has drunk enough comes on by itself, stage by stage
+        for (const k of kernels) {
+          if ((k.m.water ?? 0) > 0.55 && stageIndex(k.m) < GERMINATION_STAGES.length - 1) {
+            if (now - k.born > 9000 + stageIndex(k.m) * 7000) {
+              k.born = now;
+              stepStage(k, 0.2);
+            }
+          }
+        }
+      }
+
+      // the unfurling, run stage by stage so the eye can follow it
+      if (unfurl && now >= unfurl.at) {
+        const k = primary();
+        if (stageIndex(k.m) >= GERMINATION_STAGES.length - 1) {
+          setSeeds(k, unfurl.gain);
+          unfurl = null;
+        } else {
+          stepStage(k, unfurl.gain);
+          unfurl.at = now + 420;
+        }
+        morph = primary().m;
       }
       agitation *= reduced ? 0.9 : 0.985;
       wind *= 0.98;
@@ -393,9 +596,22 @@ export default function SeedEmbryo() {
         ctx.fillRect(mx, my, 1.5, 1.5);
       }
 
-      const cx = width * 0.5 + tiltX * 28 + wind * 12;
-      const cy = height * 0.52 + tiltY * 18;
-      const scale = Math.min(width, height) * 0.16 * morph.mass;
+      // the water still falling through the soil
+      for (const d of drops) {
+        ctx.strokeStyle = `rgba(150,190,210,${0.35 + Math.min(0.4, d.vy / 400)})`;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(d.x, d.y);
+        ctx.lineTo(d.x - d.vx * 0.02, d.y - Math.min(9, d.vy * 0.045));
+        ctx.stroke();
+      }
+
+      // every seed in the pot, drawn where it sits
+      for (const kern of kernels) {
+      const morph = kern.m;
+      const cx = width * (kern.nx - 0.5) * 1.0 + width * 0.5 + tiltX * 28 + wind * 12;
+      const cy = height * (kern.ny - 0.52) + height * 0.52 + tiltY * 18;
+      const scale = Math.min(width, height) * 0.16 * morph.mass * (kernels.length > 1 ? 0.78 : 1);
 
       // radicle — the twist-lens bares the root system: brighter, thicker.
       if (morph.radicle > 0.02) {
@@ -449,7 +665,27 @@ export default function SeedEmbryo() {
       ctx.beginPath();
       ctx.arc(0, 0, scale * (1.1 + breath * 0.15), 0, Math.PI * 2);
       ctx.fill();
+      // what it has drunk, held as a cool ring inside the husk — the number
+      // that decides whether it can germinate at all, shown and never written
+      const w = morph.water ?? 0;
+      if (w > 0.02) {
+        ctx.strokeStyle = `rgba(150,190,210,${0.15 + w * 0.35})`;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(0, 0, scale * 0.78, -Math.PI / 2, -Math.PI / 2 + w * Math.PI * 2);
+        ctx.stroke();
+      }
+      // the shoot, once the seed has come all the way through
+      if (morph.open >= 0.72 && morph.radicle >= 0.72) {
+        ctx.strokeStyle = `rgba(150,200,110,${0.5 + morph.open * 0.3})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(0, -scale * 0.6);
+        ctx.quadraticCurveTo(scale * 0.2, -scale * 1.4, 0, -scale * 2.1);
+        ctx.stroke();
+      }
       ctx.restore();
+      }
 
       // an early, physical suggestion of the central verb (a hand can grow
       // this) — once, a few seconds in, well before the 20s idle glimmer.
@@ -462,7 +698,13 @@ export default function SeedEmbryo() {
         const u = (now - glimmerAt) / 1600;
         ctx.beginPath();
         ctx.strokeStyle = `rgba(238,234,219,${0.28 * (1 - u)})`;
-        ctx.arc(cx, cy, 16 + u * 40, 0, Math.PI * 2);
+        ctx.arc(
+          width * (primary().nx - 0.5) + width * 0.5 + tiltX * 28 + wind * 12,
+          height * (primary().ny - 0.52) + height * 0.52 + tiltY * 18,
+          16 + u * 40,
+          0,
+          Math.PI * 2,
+        );
         ctx.stroke();
       }
       ctx.restore();
@@ -492,10 +734,16 @@ export default function SeedEmbryo() {
 
     (wrap as HTMLDivElement & { __letGo?: () => void }).__letGo = () => {
       morph = morphFromSeed(mix32(morph.seed, generations + 1));
+      kernels = [{ m: morph, nx: 0.5, ny: 0.52, born: performance.now() }];
+      drops.length = 0;
+      unfurl = null;
       generations = 0;
       writer.flush();
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify({ morph, generations }));
+        localStorage.setItem(
+          STORAGE_KEY,
+          JSON.stringify({ morph, generations, kernels: kernels.map((k) => ({ m: k.m, nx: k.nx, ny: k.ny })) }),
+        );
       } catch {
         /* noop */
       }

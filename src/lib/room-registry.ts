@@ -697,6 +697,17 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     frame: "yield",
     chrome: "travel",
     keeps: "objetdart:molecules:v1",
+    interacts:
+      "polarity and heat, in one solution: like dissolves like, so polar and ionic molecules " +
+      "lean toward each other and away from the oily ones (and a solvent shift re-sorts the " +
+      "whole population without adding anything). Two that touch only react if the collision " +
+      "clears the Arrhenius barrier between them — heat is literally the collision rate, and a " +
+      "catalyst lowers the barrier without ever being consumed. What a reaction produces is the " +
+      "curated balanced equation's real products (2H₂+O₂→2H₂O, CH₄+2O₂→CO₂+2H₂O), never a " +
+      "reactant: the parents retire and new compounds condense with true stoichiometry. The " +
+      "cascade fires equation after equation, feeding each round's products back in, so a " +
+      "product goes on to be a reactant. Flammables catch from hot neighbours, CO₂ warms the " +
+      "whole field, and the bench keeps warming and cooling on its own clock when no hand is on it",
     creates: "a molecule",
     exempt: {},
   },
@@ -710,6 +721,17 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     frame: "yield",
     chrome: "travel",
     keeps: "objetdart:atoms:v1",
+    interacts:
+      "charge and the electronegativity gap: approaching clouds visibly DEFORM each other " +
+      "(the envelope stretches along the line between them and the charge pools on the near " +
+      "side), and the force between them is read from Pauling's table — a wide gap attracts " +
+      "outright, an even one barely pulls, and a noble gas keeps its distance because it has " +
+      "nothing to share. Two nuclei driven together hard enough FUSE into a third element " +
+      "that is neither parent (H+H→He, and the ledger pays less each step until iron refuses). " +
+      "An ionised atom throws a real free electron into the room; the ion pulls it — or any " +
+      "other loose one — back, and what a recombination produces is neither of them: it is " +
+      "LIGHT, cascading down the element's own emission lines (hydrogen's 656 nm red). " +
+      "Unattended, the ambient field keeps exciting clouds and they keep falling home",
     creates: "an atom",
     exempt: {},
   },
@@ -723,6 +745,18 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     frame: "yield",
     chrome: "travel",
     keeps: "objetdart:nucleons:v1",
+    interacts:
+      "the Coulomb force, made legible before it is felt: every proton pushes every other, so " +
+      "two drops fight a Z_a·Z_b/r² wall the whole way in, and the barrier they are climbing is " +
+      "drawn and heard rising until it goes white at the moment they are carrying enough to " +
+      "cross. Two that do cross MERGE into a heavier nuclide that is neither parent; two that " +
+      "do not bounce off each other's charge. Free neutrons feel no wall at all — they are drawn " +
+      "in by each drop's capture cross-section and absorbed, and if the drop is fissile the " +
+      "captured neutron pays more into the compound nucleus than its barrier holds and it SPLITS " +
+      "AT ONCE into two fragments and two or three prompt neutrons, which go and find the next " +
+      "drop: a real chain reaction, propagating. Unstable nuclides decay unattended on their own " +
+      "half-life clocks, beta into a neighbour on the chart or alpha, shedding a helium nucleus " +
+      "that is itself a new object in the field",
     creates: "a nucleus",
     exempt: {},
   },
@@ -736,6 +770,17 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     frame: "yield",
     chrome: "travel",
     keeps: "objetdart:quarks:v1",
+    interacts:
+      "the colour force. Each hadron is white, so at any distance the others are invisible to " +
+      "it — but inside RECONNECT_REACH the colour fields overlap, the two visibly lean into each " +
+      "other as a flux tube forms between them, and a gluon crosses: the strings RE-FORM ACROSS " +
+      "the pair and what parts is two hadrons neither of which is either parent, their " +
+      "constituents traded (recombineSeeds, kinds preserved as a multiset so nothing ever leaves " +
+      "un-white). Stretch one tube past SNAP_RATIO and it snaps into two bound things rather " +
+      "than freeing a quark, ever. Five rapid taps DECONFINE the whole field into a quark-gluon " +
+      "plasma where colour is not confined at all, and as it cools every quark must find partners " +
+      "again — the hadrons that freeze out carry the same census and are not the ones that went " +
+      "in. Unattended, the vacuum seethes on its seeded schedule and bound things radiate and drop",
     creates: "a hadron",
     exempt: {},
   },
@@ -749,6 +794,17 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     frame: "yield",
     chrome: "travel",
     keeps: "objetdart:quanta:v1",
+    interacts:
+      "interference and annihilation, field by field. Two ripples of the SAME field that arrive " +
+      "at the same place are one wave: matter meeting its own antimatter is gone into TWO " +
+      "photons back to back sharing the whole energy (never one — one could not carry off the " +
+      "momentum), and two photons resolve by phase, crest on crest reinforcing into a single " +
+      "brighter, higher-pitched wave and crest on trough cancelling to nothing, the energy the " +
+      "cancellation cannot keep leaving as a neutrino pair that is neither parent. Different " +
+      "fields pass straight through each other, which is exactly why a neutrino crosses a planet " +
+      "without noticing it. Unattended, cosmic muons rain in and die mid-flight, and the vacuum " +
+      "borrows enough on its own seeded clock to make a real pair that then finds its way back " +
+      "together",
     creates: "a particle",
     exempt: {
       dwell: "a quantum event is emitted at contact and evolves probabilistically; a stationary dwell cannot plant a second particle without inventing a classical seed",
@@ -988,6 +1044,14 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     creates: null,
     exempt: {},
     rawPointer: "tracks per-contact filaments; the engine speaks this as `voice`, and adopting it is owed work, not a permanent exemption",
+    // `creates` is null (kept filaments are a rail of positions, not a
+    // whole-field population with its own LetGo), but they still act on
+    // each other and it should be on record.
+    interacts:
+      "real magnetic reconnection between the kept filaments: a filament planted close enough " +
+      "to an existing one does not sit beside it, it fuses at their midpoint into a third " +
+      "filament that is neither parent, releasing a brighter flare, a bell and a haptic bloom " +
+      "than either alone would ring",
   },
   {
     key: "pulse",
