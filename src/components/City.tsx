@@ -68,6 +68,12 @@ import {
   baselineLitFractionForDay,
   emissiveIntensityForDay,
 } from "@/lib/city-windows";
+import {
+  createCityCamera,
+  projectPlotToScreen,
+  type CityCamera,
+} from "@/lib/city-camera";
+import { createSkylineScene, type SkylineScene } from "@/lib/city-geometry";
 
 /**
  * /city — a small settlement whose identity IS its causal roles.
@@ -1073,32 +1079,21 @@ export default function City() {
     plotScene.add(plotMesh);
 
     // ── world scene (perspective, HDR sky, real sun) ─────────────────────
-    // The real 3D scene the ground shader now composites over. It carries:
+    // The Preetham HDR sky + PMREM IBL + directional sun with PCF soft
+    // shadows landed in PR #291. It carries:
     //   - a Preetham HDR sky (city-sky.ts) as visible backdrop AND as the
-    //     source cubemap for the PMREM environment IBL the future PBR
-    //     buildings and glass will reflect
-    //   - a directional sun (city-sun.ts) with PCF soft shadows configured
-    //     against a placeholder shadow-receiver plane at y=0. Sunset light
-    //     rakes across the settlement, shadow bias tuned for tall geometry.
-    //   - a hemisphere fill so the shadowed side of a future facade never
-    //     goes to pure black
-    //   - exponential fog whose colour is sampled from the sky at horizon
-    //     each slot change, so distance dissolves into the same colour the
-    //     sky is painting
-    //   - a large ground plane using MeshStandardMaterial. It receives the
-    //     directional shadow and reads scene.environment for IBL — the
-    //     surface state Aesthetic Slot C's 3D prisms will drop onto.
+    //     source cubemap for the PMREM environment IBL the PBR buildings
+    //     and glass reflect
+    //   - a directional sun (city-sun.ts) with PCF soft shadows
+    //   - a hemisphere fill so shadowed facade sides never crush to black
+    //   - exponential fog sampled from the sky at horizon each slot
+    //   - a large placeholder ground plane the sun rakes light across
+    //
+    // The perspective camera is now provided by createCityCamera below —
+    // the sky, the IBL-lit ground, and the extruded prism skyline all
+    // read through ONE coupled zoom+pitch camera. The old fixed worldCam
+    // is gone.
     const worldScene = new THREE.Scene();
-    // Perspective camera. Sits at eye level (y=6 units), looking toward the
-    // scene origin along -Z. FoV 42° matches a moderate wide-angle lens —
-    // wide enough to hold the bird's-eye impression, narrow enough to keep
-    // foreshortening on future towers. The camera's aspect is written from
-    // the resize observer below.
-    const worldCam = new THREE.PerspectiveCamera(42, 1, 0.5, 4000);
-    worldCam.position.set(0, 12, 60);
-    worldCam.lookAt(0, 4, 0);
-    // Exponential fog. FogExp2 has one parameter (density) — the color is
-    // updated each sky-slot change from sampleSkyColor at horizon-theta.
     const worldFog = new THREE.FogExp2(0x88a5c8, 0.0035);
     worldScene.fog = worldFog;
 
@@ -1114,14 +1109,10 @@ export default function City() {
     worldScene.add(citySun.target);
     worldScene.add(citySun.hemi);
 
-    // Placeholder ground plane. Large — the horizon line the ground shader
-    // paints on top sits above ~0.42 uv, which corresponds roughly to the
-    // camera-forward direction at eye level. MeshStandardMaterial so the
-    // IBL and directional sun actually light it; receives shadow so tall
-    // geometry added in later PRs immediately reads as grounded. The 2D
-    // painterly ground shader covers most of what the visitor sees below
-    // the horizon; this plane is here so the sun has something to fall on
-    // when we look past the 2D horizon into the Preetham distance.
+    // Placeholder shadow-receiver ground plane — large enough that a
+    // helicopter-altitude shot sees it as the horizon plane. The tall
+    // 3D prisms in the skyline scene cast onto this. When the extruded
+    // buildings ship on top, this remains as the world ground.
     const worldGround = new THREE.Mesh(
       new THREE.PlaneGeometry(2000, 2000),
       new THREE.MeshStandardMaterial({
@@ -1135,30 +1126,54 @@ export default function City() {
     worldGround.position.y = 0;
     worldScene.add(worldGround);
 
-    // Apply the current governor tier to the shadow map. On low / sleep
-    // tiers the shadow map is off but the light still lights — the ground
-    // plane and IBL still read as sunlit, only the cast shadow is dropped.
     citySun.applyTier(governor.tier());
 
-    // First bake happened inside createCitySky at dayFraction=0.25 so the
-    // environment texture is real from frame zero. The tick loop below
-    // rebakes at the actual restored cityTimeMs once persistence has been
-    // read (which happens between this line and the first render).
     let lastSkySlot = -1;
 
+    // ── 3D skyline scene ────────────────────────────────────────────────
+    // Forty-eight extruded prisms with role-driven height. Rendered
+    // through the SAME perspective camera as the world scene so sky,
+    // IBL-lit ground, and buildings all agree on where "up" is. The
+    // skyline scene provides its own hemisphere + sun so future PRs can
+    // vary its lighting independently; disabled here (intensity 0) so
+    // the world scene's Preetham-driven sun is the single light source
+    // in the frame. Its own tiny ground plane is disabled too — the
+    // world scene's ground plane above is the one that receives shadows.
+    const skyline: SkylineScene = createSkylineScene({
+      maxInstances: MAX_PLOTS,
+      shadows: true,
+    });
+    skyline.hemi.intensity = 0;
+    skyline.ambient.intensity = 0;
+    skyline.sun.intensity = 0;
+    skyline.sun.castShadow = false;
+    skyline.ground.visible = false;
+    skyline.scene.fog = null;
+
+    // ── perspective camera (coupled zoom+pitch) ─────────────────────────
+    // One camera drives both the world sky pass and the skyline pass.
+    // Pinch travels a shared zoom scalar; pitch and distance ride the
+    // same coupled curve; spring easing so a fast pinch never snaps.
+    const cityCam: CityCamera = createCityCamera({
+      width: 1,
+      height: 1,
+      initialZoom: 0.15,
+    });
+
     // ── composer ─────────────────────────────────────────────────────────
-    // The tick loop below hands its RenderPasses to this composer so
-    // bright pixels can bloom, the workflow stays linear, and D/E have
-    // a chain to hang more passes on. Sized 1×1 here — the resize() call
-    // a few blocks down snaps it to the real canvas immediately.
+    // The tick loop hands its passes to this composer so bright pixels
+    // can bloom and the workflow stays linear. Sized 1×1 here — the
+    // resize() call a few blocks down snaps it to the real canvas.
     const composer: CityComposer = createCityComposer({
       renderer,
       worldScene,
-      worldCam,
+      worldCam: cityCam.camera,
       groundScene,
       groundCam,
       plotScene,
       plotCam,
+      skylineScene: skyline.scene,
+      skylineCam: cityCam.camera,
       width: 1,
       height: 1,
       pixelRatio: dpr,
@@ -1328,6 +1343,10 @@ export default function City() {
       // Composer holds its own render targets — bloom pyramid especially
       // is a stack of downsampled RTs whose size depends on this call.
       composer.setSize(width, height, dpr);
+      // Perspective camera aspect follows the canvas so the skyline reads
+      // right at any window shape — a wide monitor doesn't stretch the
+      // towers, a portrait phone doesn't squash them.
+      cityCam.setSize(width, height);
       // fg overlay canvas — the thin 2D layer. Keeps its own DPR so a stroke
       // stays crisp regardless of the GL renderScale. Coin uses the same trick.
       fg.width = Math.floor(width * dpr);
@@ -1337,12 +1356,6 @@ export default function City() {
       fgctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       groundUniforms.uAspect.value = width / Math.max(1, height);
       plotUniforms.uPixSize.value.set(width, height);
-      // Perspective world camera follows the canvas aspect. FoV stays
-      // constant — the visitor's field of view is a property of the scene,
-      // not the browser window, and letterboxing looks worse than a
-      // slightly re-cropped skyline.
-      worldCam.aspect = width / Math.max(1, height);
-      worldCam.updateProjectionMatrix();
       // keep the keyboard cursor inside the new bounds; on first sizing it
       // lands in the middle of the field, ready for the arrows
       if (cursorX === 0 && cursorY === 0) {
@@ -1486,6 +1499,15 @@ export default function City() {
           } else {
             try { haptics.tap(); } catch { /* noop */ }
           }
+        } else if (e.fingers === 2) {
+          // step back — the frame retreats to bird's-eye. The camera
+          // eases from wherever the pinch left it back to the Currier
+          // & Ives view of the whole settlement, and the target lifts
+          // to the center of the ground so a panned camera returns to
+          // the origin as it climbs.
+          cityCam.setZoomTarget(0);
+          cityCam.resetTarget();
+          try { haptics.detent(); } catch { /* noop */ }
         } else if (e.fingers === 3) {
           // tutti — as loud as the hand meant it: the bells carry on
           // e.intensity and every plot answers in the same frame.
@@ -1649,6 +1671,36 @@ export default function City() {
         try { haptics.ripple(Math.min(1, 0.3 + Math.abs(e.angularVelocity) * 0.4)); } catch { /* noop */ }
       },
 
+      pan2: (e) => {
+        markInteraction();
+        if (e.phase !== "move") return;
+        // Two-finger drag translates the camera's aim on the ground
+        // plane. dx and dy are in CSS pixels; convert to world units
+        // proportional to the current zoom-out distance so a pan feels
+        // one-to-one at any pitch — a pixel-of-drag under a helicopter
+        // shot moves further world-space than a pixel at eye-level.
+        const zoom = cityCam.currentZoom();
+        // Bird's-eye moves fast (each pixel maps to a big world step);
+        // eye-level moves slowly (each pixel is close to a real step).
+        const pxToWorld = 0.14 + (1 - zoom) * 0.16;
+        cityCam.panTarget(e.dx * pxToWorld, e.dy * pxToWorld);
+      },
+
+      pinch: (e) => {
+        markInteraction();
+        // The coupled zoom+pitch: e.scale > 1 = pinch OUT (fingers spread,
+        // camera zooms IN toward eye-level); e.scale < 1 = pinch IN
+        // (fingers together, camera zooms OUT to bird's-eye). The city
+        // camera's spring eases the target across the ~1 second travel.
+        if (e.phase === "start" || e.phase === "end") return;
+        // Map log(scale) to a zoom delta. A full-hand pinch (scale 2.0)
+        // moves ~0.7 up the [0..1] zoom axis; a small nudge is a small
+        // change. Log so a scale 0.5 (pinch-in) travels the same distance
+        // as a scale 2.0 (pinch-out).
+        const delta = Math.log(Math.max(0.05, e.scale)) * 0.09;
+        cityCam.nudgeZoom(delta);
+      },
+
       rhythm: (e) => {
         markInteraction();
         if (e.stability < 0.55) return;
@@ -1660,7 +1712,10 @@ export default function City() {
         ring(noteForRole("event") + 12, 180);
         try { haptics.detent(); } catch { /* noop */ }
       },
-    }, { wheelZoom: false });
+      // wheelZoom routes desktop wheel + trackpad ctrl-pinch into the
+      // pinch verb above, so a laptop visitor gets the same coupled
+      // zoom+pitch travel a pinch on glass does.
+    }, { wheelZoom: true });
 
     // ── vessel: tilt / shake / knock / flip ──────────────────────────────
     const detachVessel = onVessel({
@@ -1866,8 +1921,27 @@ export default function City() {
         glimmerAt = null;
       }
 
+      // The perspective camera's spring — a pinch pushed the target;
+      // the tick eases the current zoom toward it and updates the camera
+      // pose so pitch, distance, and look-at all travel together.
+      cityCam.tick(dt);
+
+      // Shadow cost tracks tier — the sun is heavy at 2048² PCF, and
+      // sleep/low can't afford it. This is the only per-frame renderer
+      // state change; MeshStandardMaterial doesn't need a recompile.
+      const shadowsOn = tier === "medium" || tier === "high";
+      if (renderer.shadowMap.enabled !== shadowsOn) {
+        renderer.shadowMap.enabled = shadowsOn;
+        skyline.mesh.castShadow = shadowsOn;
+        skyline.mesh.receiveShadow = shadowsOn;
+      }
+      // Sun + sky are driven by the world scene's citySun/citySky below;
+      // the skyline's own hemi/sun/ambient are held at intensity 0 so the
+      // single light source in the frame remains Preetham's.
+
       // draw
       syncPlotAttributes();
+      syncSkylineInstances();
       groundUniforms.uTime.value = uTime;
       groundUniforms.uDayFrac.value = dayFraction(cityTimeMs);
       groundUniforms.uSeason.value = SEASON_ORDER.indexOf(season);
@@ -2259,6 +2333,32 @@ export default function City() {
       plotGeo.instanceCount = n;
     }
 
+    // ── skyline instance sync ────────────────────────────────────────────
+    // The 3D scene reads the same `plots` array the ortho pass does, but
+    // writes per-instance transform matrices and colors into the InstancedMesh
+    // instead of packed attributes. Height is a function of role (via the
+    // dwell ladder in city.ts) and seed; the grow-in factor rides the same
+    // bornMs / growMs clock as the atlas emblems so a newly planted plot
+    // rises visibly out of the plane.
+    function syncSkylineInstances(): void {
+      const n = plots.length;
+      const growMs = reduceMotion ? 250 : 380;
+      for (let i = 0; i < n; i += 1) {
+        const plot = plots[i];
+        const age = cityTimeMs - plot.bornMs;
+        const bornT = age >= growMs ? 1 : Math.max(0.02, age / growMs);
+        skyline.updateInstance(i, {
+          role: plot.role,
+          seed: plot.seed,
+          x: plot.x,
+          y: plot.y,
+          sealed: plot.sealed,
+          bornT,
+        });
+      }
+      skyline.setCount(n);
+    }
+
     // Integer → [0,1) hash, splashed on the same shape as Mulberry32's
     // avalanche so a small integer difference in plot.seed lands in a
     // very different quadrant of the unit interval. Cheap enough to run
@@ -2278,6 +2378,16 @@ export default function City() {
     // Nothing here allocates a gradient per frame — the ledger's ban stays
     // honored, and the only 2D calls that touch this canvas are strokes and
     // fills over a cleared surface.
+    // Project a normalized (0..1) plot coordinate through the perspective
+    // camera to screen (CSS-pixel) coordinates, so the 2D overlay tracks
+    // where the extruded prism actually rises regardless of camera pitch.
+    // Returns null when the point is behind the camera (or clipped) so a
+    // caller can skip drawing rather than mirror the point on screen.
+    function projPlot(nx: number, ny: number): { x: number; y: number } | null {
+      const p = projectPlotToScreen(cityCam.camera, nx, ny, width, height);
+      return p.visible ? { x: p.x, y: p.y } : null;
+    }
+
     function drawOverlay(): void {
       const detail = detailForTier(governor.tier());
       fgctx.clearRect(0, 0, width, height);
@@ -2295,13 +2405,14 @@ export default function City() {
         // at both ends. Radius grows monotonically so the glimmer expands.
         const alpha = Math.sin(t * Math.PI) * 0.42;
         const r = 22 + t * 46;
-        const px = glimmerAt.nx * width;
-        const py = glimmerAt.ny * height;
-        fgctx.strokeStyle = `rgba(232, 187, 129, ${alpha.toFixed(3)})`;
-        fgctx.lineWidth = 1.5;
-        fgctx.beginPath();
-        fgctx.arc(px, py, r, 0, Math.PI * 2);
-        fgctx.stroke();
+        const proj = projPlot(glimmerAt.nx, glimmerAt.ny);
+        if (proj) {
+          fgctx.strokeStyle = `rgba(232, 187, 129, ${alpha.toFixed(3)})`;
+          fgctx.lineWidth = 1.5;
+          fgctx.beginPath();
+          fgctx.arc(proj.x, proj.y, r, 0, Math.PI * 2);
+          fgctx.stroke();
+        }
       }
 
       // tap-train echo — one ring expanding from the tapped ground, its
@@ -2333,21 +2444,28 @@ export default function City() {
           fgctx.strokeStyle = `rgba(246, 230, 180, ${alpha.toFixed(3)})`;
           fgctx.lineWidth = 1.5;
           for (const plot of plots) {
+            const proj = projPlot(plot.x, plot.y);
+            if (!proj) continue;
             fgctx.beginPath();
-            fgctx.arc(plot.x * width, plot.y * height, 14 + t * 36, 0, Math.PI * 2);
+            fgctx.arc(proj.x, proj.y, 14 + t * 36, 0, Math.PI * 2);
             fgctx.stroke();
           }
         }
       }
 
-      // roads (thin strokes over the ground shader)
+      // roads (thin strokes over the ground shader) — projected through
+      // the perspective camera so a road drawn under bird's-eye still
+      // reads at eye-level as a line laid on the ground at the buildings' feet.
       fgctx.strokeStyle = "rgba(21, 23, 26, 0.35)";
       fgctx.lineWidth = 3;
       fgctx.lineCap = "round";
       for (const road of roads) {
+        const a = projPlot(road.x1, road.y1);
+        const b = projPlot(road.x2, road.y2);
+        if (!a || !b) continue;
         fgctx.beginPath();
-        fgctx.moveTo(road.x1 * width, road.y1 * height);
-        fgctx.lineTo(road.x2 * width, road.y2 * height);
+        fgctx.moveTo(a.x, a.y);
+        fgctx.lineTo(b.x, b.y);
         fgctx.stroke();
       }
 
@@ -2372,13 +2490,14 @@ export default function City() {
         const nextThreshold = nextRoleThreshold(activePlant.role);
         const prev = prevRoleThreshold(activePlant.role);
         const frac = nextThreshold ? Math.min(1, (dwell - prev) / (nextThreshold - prev)) : 1;
-        const px = activePlant.x * width;
-        const py = activePlant.y * height;
-        fgctx.strokeStyle = `rgba(255, 232, 178, ${0.55 + plantRingWeight * 0.35})`;
-        fgctx.lineWidth = 2;
-        fgctx.beginPath();
-        fgctx.arc(px, py, 24 + frac * 14, 0, Math.PI * 2);
-        fgctx.stroke();
+        const proj = projPlot(activePlant.x, activePlant.y);
+        if (proj) {
+          fgctx.strokeStyle = `rgba(255, 232, 178, ${0.55 + plantRingWeight * 0.35})`;
+          fgctx.lineWidth = 2;
+          fgctx.beginPath();
+          fgctx.arc(proj.x, proj.y, 24 + frac * 14, 0, Math.PI * 2);
+          fgctx.stroke();
+        }
       }
 
       // micro-communities: a plot with two or more regulars carries a cool
@@ -2399,13 +2518,13 @@ export default function City() {
       for (const plot of plots) {
         const count = regularCountByPlot.get(plot.id) ?? 0;
         if (count < 2) continue;
-        const px = plot.x * width;
-        const py = plot.y * height;
+        const proj = projPlot(plot.x, plot.y);
+        if (!proj) continue;
         const radius = 22 + count * 3;
         fgctx.strokeStyle = `rgba(74, 158, 158, ${Math.min(0.62, 0.22 + count * 0.10)})`;
         fgctx.lineWidth = 1.5;
         fgctx.beginPath();
-        fgctx.arc(px, py, radius, 0, Math.PI * 2);
+        fgctx.arc(proj.x, proj.y, radius, 0, Math.PI * 2);
         fgctx.stroke();
       }
 
@@ -2426,8 +2545,14 @@ export default function City() {
       // never freeze into a standing pose mid-departure.
       const dropTails = detail.samples < 2;
       for (const person of people) {
-        const px = person.x * width;
-        const py = person.y * height;
+        // People walk on the ground plane (world Y=0). Projecting through
+        // the perspective camera keeps them at the feet of the towers at
+        // any pitch — a resident walking to the market ends up at the
+        // market's front door on screen, not floating over its rooftop.
+        const proj = projPlot(person.x, person.y);
+        if (!proj) continue;
+        const px = proj.x;
+        const py = proj.y;
         const leavingFade = person.phase === "leaving" && person.leavingSinceMs != null
           ? fadeForLeaving(cityTimeMs - person.leavingSinceMs)
           : 1;
@@ -2478,19 +2603,20 @@ export default function City() {
         if (!dropTails && person.phase === "arriving") {
           const home = plots.find((p) => p.id === person.homeId);
           if (home) {
-            const hx = home.x * width;
-            const hy = home.y * height;
-            const dx = px - hx;
-            const dy = py - hy;
-            const dLen = Math.hypot(dx, dy);
-            if (dLen > 16) {
-              const backLen = Math.min(14, dLen * 0.25);
-              fgctx.strokeStyle = "rgba(232, 226, 213, 0.22)";
-              fgctx.lineWidth = 1;
-              fgctx.beginPath();
-              fgctx.moveTo(px, py);
-              fgctx.lineTo(px + (dx / dLen) * backLen, py + (dy / dLen) * backLen);
-              fgctx.stroke();
+            const hproj = projPlot(home.x, home.y);
+            if (hproj) {
+              const dx = px - hproj.x;
+              const dy = py - hproj.y;
+              const dLen = Math.hypot(dx, dy);
+              if (dLen > 16) {
+                const backLen = Math.min(14, dLen * 0.25);
+                fgctx.strokeStyle = "rgba(232, 226, 213, 0.22)";
+                fgctx.lineWidth = 1;
+                fgctx.beginPath();
+                fgctx.moveTo(px, py);
+                fgctx.lineTo(px + (dx / dLen) * backLen, py + (dy / dLen) * backLen);
+                fgctx.stroke();
+              }
             }
           }
         }
@@ -2520,10 +2646,12 @@ export default function City() {
             if ((person.x - plot.x) ** 2 + (person.y - plot.y) ** 2 < 0.005) visitors += 1;
           }
           if (visitors === 0) continue;
+          const proj = projPlot(plot.x, plot.y);
+          if (!proj) continue;
           fgctx.strokeStyle = `rgba(74, 145, 106, ${Math.min(0.55, visitors * 0.18)})`;
           fgctx.lineWidth = 4;
           fgctx.beginPath();
-          fgctx.arc(plot.x * width, plot.y * height, 20 + visitors * 2, 0, Math.PI * 2);
+          fgctx.arc(proj.x, proj.y, 20 + visitors * 2, 0, Math.PI * 2);
           fgctx.stroke();
         }
       }
@@ -2748,6 +2876,10 @@ export default function City() {
       groundQuad.geometry.dispose();
       groundMat.dispose();
       plotMat.dispose();
+      // Skyline scene holds the box geometry, its PBR material, the ground
+      // plane, and the sun's shadow map. Drop them before the renderer
+      // that owns their GL context.
+      skyline.dispose();
       // Composer holds bloom pyramid RTs — drop them before disposing
       // the renderer that owns their GL context.
       composer.dispose();

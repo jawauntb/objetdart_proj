@@ -106,6 +106,13 @@ export type CityComposerOptions = {
    */
   worldScene?: THREE.Scene;
   worldCam?: THREE.Camera;
+  /** The 3D skyline scene (perspective camera). Rendered after the ortho
+   * ground/atlas passes, before bloom, so the extruded prisms rise on
+   * top of the ground shader and their highlights feed the bloom curve
+   * alongside the sky's ember. Shares its camera with `worldCam` so the
+   * sky, IBL-lit ground, and buildings all read the same perspective. */
+  skylineScene?: THREE.Scene;
+  skylineCam?: THREE.Camera;
   /** Initial CSS-pixel size; the room will resize us in ResizeObserver. */
   width: number;
   height: number;
@@ -124,9 +131,11 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
   // Composer's default color buffer is HalfFloat when available so the
   // bloom pass has real HDR headroom — the ember at dusk needs values
   // above 1.0 to look like an actual light source, not a bright grey.
+  // Depth buffer ON: the 3D skyline pass needs it so a closer tower
+  // occludes one behind it. HalfFloat color buffer for HDR headroom.
   const target = new THREE.WebGLRenderTarget(1, 1, {
     type: THREE.HalfFloatType,
-    depthBuffer: false,
+    depthBuffer: true,
     stencilBuffer: false,
   });
   const composer = new EffectComposer(renderer, target);
@@ -148,10 +157,36 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
   groundPass.clear = !opts.worldScene;
   composer.addPass(groundPass);
 
-  // RenderPass 2: the plots, alpha-blended over the ground. Must NOT clear.
+  // RenderPass 2: the plot atlas emblems (ortho). Kept in the chain so
+  // the lit-window emissive PR #290 baked into the atlas shader still
+  // reads at bird's-eye view (where the emblems shine as painterly
+  // rooftop marks). At eye-level the 3D skyline pass draws over them,
+  // and the emblems sit on the ground below the tower footprints — the
+  // full facade with lit-window emissive lives on the extruded prisms
+  // in a follow-up PR (city-facades.ts is already in place).
   const plotPass = new RenderPass(plotScene, plotCam);
   plotPass.clear = false;
   composer.addPass(plotPass);
+
+  // RenderPass 3 (optional): the 3D skyline scene. Perspective camera,
+  // real geometry, PCF soft shadows from the sun. Must NOT clear — it
+  // overlays the ortho passes and reads the depth buffer from the box
+  // instances themselves. Note the plot atlas emblems below sit at the
+  // ground plane and are dominated visually by the tower on top, which
+  // is intentional at bird's-eye view (the emblem is the plot's crown
+  // when seen from above; the tower is its body when seen head-on).
+  let skylinePass: RenderPass | null = null;
+  if (opts.skylineScene && opts.skylineCam) {
+    skylinePass = new RenderPass(opts.skylineScene, opts.skylineCam);
+    // Preserve the ortho passes' color output beneath. Clear DEPTH so the
+    // 3D geometry starts with a fresh z-buffer — EffectComposer ping-pongs
+    // color between passes but the depth buffer belongs to the target and
+    // may carry stale values from the previous frame, which would produce
+    // ghost occlusion the first tick.
+    skylinePass.clear = false;
+    (skylinePass as unknown as { clearDepth: boolean }).clearDepth = true;
+    composer.addPass(skylinePass);
+  }
 
   // Bloom: the ember at dusk, the warm halo on lit windows at night.
   // Parameters are updated per-frame from dayFraction inside render().
