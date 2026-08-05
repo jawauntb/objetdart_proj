@@ -17,6 +17,7 @@ import { loadTsModule } from "./lib/load-ts.mjs";
  */
 
 const threeStub = {
+  Vector2: class { constructor(x=0,y=0){this.x=x;this.y=y;} },
   Vector3: class { constructor(x=0,y=0,z=0){this.x=x;this.y=y;this.z=z;}
     set(x,y,z){this.x=x;this.y=y;this.z=z;return this;} },
   Quaternion: class { setFromAxisAngle() {} },
@@ -67,6 +68,22 @@ const {
   hasChimneyForSeed,
   eventVariantForSeed,
 } = mod;
+
+// The event silhouettes live in a sibling module so the compound
+// geometry files stay small. Same THREE stub, same camera stub — the
+// tower module's pure exports are all we exercise below.
+const towers = loadTsModule("src/lib/city-towers.ts", {
+  requireMap: { three: threeStub, "@/lib/city-camera": cameraStub },
+});
+const {
+  spireForSeed,
+  partCountForEventVariant,
+  BASE_PART_COUNTS,
+  distinctSilhouettes,
+  GHERKIN_LATHE_POINTS,
+  GHERKIN_LATHE_RADIAL,
+  SALESFORCE_SEGMENTS,
+} = towers;
 
 // ——— BUILDING_ROLES holds the four civic roles that get their own mesh ——
 // The role-split geometry pass built one InstancedMesh per role; a test
@@ -224,8 +241,104 @@ assert.ok(roofUnitHeightFor(1) < roofUnitHeightFor(2), "roof pitch 1 (medium) < 
 assert.ok(roofUnitHeightFor(0) > 0, "shallow roof has positive height");
 assert.ok(roofUnitHeightFor(2) < 1, "steep roof stays below the wall's own height");
 
+// ——— event-tower silhouettes: distinct part counts + spire on tallest 20% —
+// The R5-2 pass replaced the smooth event Lathe with three tightly-scoped
+// silhouettes (Gherkin body, Salesforce 4-step stack + cap, Transamerica
+// pyramid + two wings) plus an optional spire on the tallest 20% of seeds.
+// A regression to a single lathe (parts = 1 for every variant) would fail
+// distinctSilhouettes; a regression that lost the wings would drop
+// Transamerica from 3 back to 1; a regression that lost the Salesforce
+// setback stack would drop that variant from 5 back to 1.
+
+assert.equal(typeof spireForSeed, "function", "spireForSeed is exported");
+assert.equal(typeof partCountForEventVariant, "function", "partCountForEventVariant is exported");
+assert.equal(typeof distinctSilhouettes, "function", "distinctSilhouettes is exported");
+
+// The three variants have DIFFERENT base part counts — this is what
+// makes the silhouettes structurally distinguishable, not just visually.
+assert.ok(distinctSilhouettes(), "base part counts are pairwise distinct across variants");
+assert.deepEqual(
+  [...BASE_PART_COUNTS],
+  [1, 5, 3],
+  "BASE_PART_COUNTS is [Gherkin=1, Salesforce=5, Transamerica=3] — regression to single lathe fails here",
+);
+
+// Salesforce is FOUR tapered cylinder segments + one ellipsoid cap.
+// A regression to three would flatten the setback.
+assert.equal(SALESFORCE_SEGMENTS, 4, "Salesforce is exactly 4 tapered setbacks");
+
+// The Gherkin body is exactly one LatheGeometry — the diamond mullion
+// mask is a texture overlay, NOT extra meshes. Pin the point/radial
+// counts so a downsampling change is visible in the test.
+assert.equal(GHERKIN_LATHE_POINTS, 21, "Gherkin lathe profile has 21 points");
+assert.equal(GHERKIN_LATHE_RADIAL, 24, "Gherkin lathe is 24 radial segments (a curved body)");
+
+// spireForSeed is deterministic and lands in the target band. The
+// brief calls out "tallest 20%"; the predicate uses `hashUnit(seed, 3) > 0.8`
+// which is the same salt heightForRole reads, so a spire literally means
+// "tallest 20%" rather than "20% of the time on average".
+assert.equal(spireForSeed(101), spireForSeed(101), "spireForSeed is pure in seed");
+{
+  let spired = 0;
+  const N = 800;
+  let maxNonSpired = -Infinity;
+  let minSpired = Infinity;
+  for (let s = 0; s < N; s += 1) {
+    const seed = s * 199 + 3;
+    const h = heightForRole("event", seed);
+    if (spireForSeed(seed)) {
+      spired += 1;
+      if (h < minSpired) minSpired = h;
+    } else {
+      if (h > maxNonSpired) maxNonSpired = h;
+    }
+  }
+  const frac = spired / N;
+  assert.ok(frac > 0.14 && frac < 0.26,
+    "about 20% of seeds carry a spire (got " + frac + ")");
+  // A tower that carries a spire IS taller than any tower that doesn't —
+  // "tallest 20%" reads literal, not statistical.
+  assert.ok(minSpired > maxNonSpired,
+    "spired towers ARE the tallest ones (minSpired " + minSpired +
+    " > maxNonSpired " + maxNonSpired + ")");
+}
+
+// Per-variant part counts:
+// Gherkin (0) is 1 without spire, 2 with; Salesforce (1) is 5 or 6;
+// Transamerica (2) is 3 or 4. A regression that reused one builder for
+// another variant would break these counts.
+{
+  const withoutSpire = 12345; // hashUnit(12345, 3) < 0.8 — verified below
+  const withSpire    = 456;   // hashUnit(456, 3) > 0.8 — verified below
+  const withoutHasSpire = spireForSeed(withoutSpire);
+  const withHasSpire    = spireForSeed(withSpire);
+  assert.equal(withoutHasSpire, false, "sentinel seed 12345 must NOT carry a spire");
+  assert.equal(withHasSpire, true, "sentinel seed 456 MUST carry a spire");
+
+  assert.equal(partCountForEventVariant(0, withoutSpire), 1, "Gherkin without spire = 1 mesh");
+  assert.equal(partCountForEventVariant(1, withoutSpire), 5, "Salesforce without spire = 5 meshes");
+  assert.equal(partCountForEventVariant(2, withoutSpire), 3, "Transamerica without spire = 3 meshes");
+
+  assert.equal(partCountForEventVariant(0, withSpire), 2, "Gherkin with spire = 2 meshes");
+  assert.equal(partCountForEventVariant(1, withSpire), 6, "Salesforce with spire = 6 meshes");
+  assert.equal(partCountForEventVariant(2, withSpire), 4, "Transamerica with spire = 4 meshes");
+}
+
+// A pass across many seeds — every variant/spire combination must yield
+// the pinned counts. A subtle regression that "sometimes" reused the
+// wrong builder would show up as a mismatch here.
+for (let s = 0; s < 300; s += 1) {
+  const seed = s * 251 + 17;
+  const v = eventVariantForSeed(seed);
+  const expected = (v === 0 ? 1 : v === 1 ? 5 : 3) + (spireForSeed(seed) ? 1 : 0);
+  const got = partCountForEventVariant(v, seed);
+  assert.equal(got, expected,
+    "partCountForEventVariant(" + v + "," + seed + ") = " + got + " expected " + expected);
+}
+
 console.log(
   "city-geometry ok: role→height ladder strict (home<store<event), footprint means climb, " +
   "sealed brightens, palette distinct, hashUnit deterministic and evenly spread, " +
-  "roof pitch/chimney/event silhouette knobs deterministic and spread across buckets.",
+  "roof pitch/chimney/event silhouette knobs deterministic and spread across buckets. " +
+  "event silhouettes: parts (1|5|3) distinct + spire on tallest 20%.",
 );
