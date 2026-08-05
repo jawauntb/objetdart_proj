@@ -17,23 +17,32 @@ import {
 } from "@/lib/room-runtime";
 import {
   CITY_DAY_MS,
+  HESITATION_SPEED_FACTOR,
   PLOT_DWELL_MS,
+  REGULAR_VISITS_TO_BECOME_REGULAR,
   SEASON_ORDER,
   dayFraction,
   dwellersPerHome,
+  headingFor,
+  hesitationBetween,
   isDaytime,
+  isRegularOf,
   mulberry,
+  nearestEdgePoint,
   needFor,
   nextSeason,
+  recordVisit,
   roleForDwell,
   stepTowards,
-  targetForNeed,
+  targetForNeedWithRegular,
   treeFoliage,
   type CityLens,
   type Need,
+  type PersonPhase,
   type PlotRole,
   type PlotSample,
   type Season,
+  type VisitRecord,
 } from "@/lib/city";
 
 /**
@@ -63,6 +72,19 @@ import {
  *
  * The laws are extracted to `src/lib/city.ts` and pinned by test-city.mjs;
  * this file is only rendering + gesture translation.
+ *
+ * The population is the density that manufactures the city's possibilities:
+ * every dweller carries a heading (so a street of walkers reads as a street
+ * of directed walkers), an arrival phase (a new resident enters from the
+ * nearest edge and walks in, so the phased arc arrival → consolidation →
+ * belonging is visible), a small per-need visit ledger (returning to the
+ * same store or event N times makes that person a regular there, and the
+ * plot's identity densifies from a role into a small community of the
+ * people who keep coming back), and a hesitation state (when two plots
+ * answer the same need at nearly-equal distance, the step slows and the
+ * route may swap — the visible tradeoff density buys). All of that is
+ * decided by pure functions in `src/lib/city.ts`; this file only writes
+ * the rendering.
  */
 
 const STORAGE_KEY = "objetdart:city:v1";
@@ -92,6 +114,28 @@ type Person = {
   need: Need;
   fed: number;
   rested: number;
+  // heading (radians) is the person's facing — the direction the last non-trivial
+  // step took them. Renderer draws each dweller as a small sliver along heading.
+  heading: number;
+  // "arriving" until the first arrival at home; then "settled" — the phased arc.
+  phase: PersonPhase;
+  // the plot they most recently arrived at for food. Same plot as last time
+  // deepens the count; a different plot resets it. See `recordVisit` in city.ts.
+  foodVisit: VisitRecord | null;
+  gatherVisit: VisitRecord | null;
+  // once foodVisit.visits crosses REGULAR_VISITS_TO_BECOME_REGULAR, the plot
+  // becomes this person's regular store — same for events. These slots feed
+  // `targetForNeedWithRegular`, and the plot's regular-count is derived by
+  // scanning people at draw time.
+  regularStoreId: number | null;
+  regularEventId: number | null;
+  // hesitation: true while the current need has two plots at nearly-equal
+  // distance. Slows the step by HESITATION_SPEED_FACTOR and marks the person
+  // visually. `hesitationSince` is when the state entered — used to gate a
+  // route swap so a hesitating person does not thrash between targets every
+  // frame; a real hesitation buys a second look, then commits.
+  hesitating: boolean;
+  hesitationSince: number;
 };
 
 type Road = { x1: number; y1: number; x2: number; y2: number; bornMs: number };
@@ -506,17 +550,35 @@ export default function City() {
     function spawnDwellersFor(home: Plot): void {
       const count = dwellersPerHome(home.seed);
       const rng = mulberry(home.seed ^ 0x1eaf);
+      // Arrivals begin at the nearest map edge and walk home — the phased-arc
+      // "arrival" is what the visitor sees before the first "settled" step.
+      // Small deterministic jitter along the edge so two siblings do not stand
+      // in the same pixel; still 100% seed-derived, no `Math.random`.
+      const edge = nearestEdgePoint({ x: home.x, y: home.y });
+      const onVerticalEdge = edge.x === 0 || edge.x === 1;
       for (let i = 0; i < count && people.length < MAX_PEOPLE; i += 1) {
+        const jitter = (rng() - 0.5) * 0.06;
+        const sx = onVerticalEdge ? edge.x : clamp(edge.x + jitter, 0, 1);
+        const sy = onVerticalEdge ? clamp(edge.y + jitter, 0, 1) : edge.y;
+        const initialHeading = Math.atan2(home.y - sy, home.x - sx);
         people.push({
           id: nextPersonId++,
           seed: home.seed ^ (i + 1),
-          x: home.x + (rng() - 0.5) * 0.02,
-          y: home.y + (rng() - 0.5) * 0.02,
+          x: sx,
+          y: sy,
           homeId: home.id,
           targetPlotId: home.id,
           need: "rest",
           fed: 0.7,
           rested: 0.6,
+          heading: initialHeading,
+          phase: "arriving",
+          foodVisit: null,
+          gatherVisit: null,
+          regularStoreId: null,
+          regularEventId: null,
+          hesitating: false,
+          hesitationSince: 0,
         });
       }
     }
@@ -542,32 +604,93 @@ export default function City() {
     }
 
     function stepPopulation(dt: number): void {
-      // adjust need slowly; walking + arriving satisfies it
+      // arrivals are gated on distance-to-home: the traveller is "arriving"
+      // until their first close pass with the front door, then flips to
+      // "settled" and the ordinary need cycle takes over. Route swaps only
+      // land on a settled person — an arriving dweller has one target and
+      // one job (get home). Every visible slowdown is a hesitation, and
+      // every hesitation is a genuine same-need tradeoff, not a stutter.
+      const HESITATION_SWAP_MS = 550; // "a real hesitation buys a second look, then commits"
+      const ARRIVAL_MS = 260; // once close to home for ~1/4s, they belong
       for (const person of people) {
+        const prevX = person.x;
+        const prevY = person.y;
+
         // decay
         person.fed = Math.max(0, person.fed - dt * 0.00003);
         person.rested = Math.max(0, person.rested - dt * 0.00002);
 
-        // choose target
-        const chosenNeed = needFor(cityTimeMs, person.fed, person.rested);
-        if (person.need !== chosenNeed || person.targetPlotId == null) {
-          const target = targetForNeed(
-            { x: person.x, y: person.y, homeId: person.homeId },
+        // ── target selection ────────────────────────────────────────────
+        let chosenNeed: Need;
+        let regularForNeed: number | null = null;
+        if (person.phase === "arriving") {
+          // an arriving dweller has one job: reach home. Their need is rest
+          // and their target is fixed to their own home id — no wandering.
+          chosenNeed = "rest";
+          if (person.need !== chosenNeed || person.targetPlotId !== person.homeId) {
+            person.need = chosenNeed;
+            person.targetPlotId = person.homeId;
+          }
+        } else {
+          chosenNeed = needFor(cityTimeMs, person.fed, person.rested);
+          regularForNeed =
+            chosenNeed === "food" ? person.regularStoreId :
+            chosenNeed === "gather" ? person.regularEventId : null;
+          if (person.need !== chosenNeed || person.targetPlotId == null) {
+            const target = targetForNeedWithRegular(
+              { x: person.x, y: person.y, homeId: person.homeId },
+              chosenNeed,
+              plots as PlotSample[],
+              regularForNeed,
+            );
+            person.targetPlotId = target?.id ?? null;
+            person.need = chosenNeed;
+            person.hesitating = false;
+            person.hesitationSince = 0;
+          }
+        }
+
+        // ── hesitation: two same-need plots, close in distance ─────────
+        // Only settled people can hesitate — an arriving traveller has no
+        // choice to make. Rest never hesitates: home is unique.
+        if (person.phase === "settled" && (chosenNeed === "food" || chosenNeed === "gather")) {
+          const h = hesitationBetween(
+            { x: person.x, y: person.y },
             chosenNeed,
             plots as PlotSample[],
           );
-          person.targetPlotId = target?.id ?? null;
-          person.need = chosenNeed;
+          if (h.hesitating) {
+            if (!person.hesitating) {
+              person.hesitating = true;
+              person.hesitationSince = cityTimeMs;
+            }
+            // A hesitation past HESITATION_SWAP_MS commits to the alternate
+            // once — the person swaps and the state clears. That is the
+            // visible route-swap; without it a hesitation would just be a
+            // permanent slowdown, not a tradeoff.
+            if (h.secondBestId != null &&
+                h.secondBestId !== person.targetPlotId &&
+                cityTimeMs - person.hesitationSince > HESITATION_SWAP_MS) {
+              person.targetPlotId = h.secondBestId;
+              person.hesitating = false;
+              person.hesitationSince = 0;
+            }
+          } else if (person.hesitating) {
+            person.hesitating = false;
+            person.hesitationSince = 0;
+          }
         }
 
+        // ── step ────────────────────────────────────────────────────────
         if (person.targetPlotId != null) {
           const target = plots.find((p) => p.id === person.targetPlotId);
           if (target) {
             const roadBoost = personOnRoad(person) ? 2.2 : 1;
+            const hesitationBrake = person.hesitating ? HESITATION_SPEED_FACTOR : 1;
             const stepped = stepTowards(
               { x: person.x, y: person.y },
               { x: target.x, y: target.y },
-              dt * roadBoost,
+              dt * roadBoost * hesitationBrake,
             );
             person.x = stepped.x;
             person.y = stepped.y;
@@ -578,9 +701,37 @@ export default function City() {
               if (target.role === "store") person.fed = Math.min(1, person.fed + dt * 0.0015);
               if (target.role === "event") person.rested = Math.min(1, person.rested + dt * 0.0004);
               if (target.role === "home") person.rested = Math.min(1, person.rested + dt * 0.0012);
+              // the phased arc: an arriving dweller who touches home is now settled.
+              if (person.phase === "arriving" && target.id === person.homeId) {
+                // require a short close-in dwell so a flyover does not settle them
+                if (!person.hesitationSince) person.hesitationSince = cityTimeMs;
+                else if (cityTimeMs - person.hesitationSince > ARRIVAL_MS) {
+                  person.phase = "settled";
+                  person.hesitating = false;
+                  person.hesitationSince = 0;
+                }
+              }
+              // regulars: on arrival at a store/event, deepen (or reset) the
+              // per-need ledger and lift the person to "regular" once they
+              // cross the threshold. Same plot as last time → visits += 1.
+              if (person.phase === "settled" && target.role === "store") {
+                person.foodVisit = recordVisit(person.foodVisit, target.id);
+                if (isRegularOf(person.foodVisit, target.id)) person.regularStoreId = target.id;
+              }
+              if (person.phase === "settled" && target.role === "event") {
+                person.gatherVisit = recordVisit(person.gatherVisit, target.id);
+                if (isRegularOf(person.gatherVisit, target.id)) person.regularEventId = target.id;
+              }
             }
           }
         }
+
+        // ── heading: face where the last step took us ───────────────────
+        person.heading = headingFor(
+          { x: prevX, y: prevY },
+          { x: person.x, y: person.y },
+          person.heading,
+        );
       }
     }
 
@@ -731,13 +882,93 @@ export default function City() {
         fgctx.stroke();
       }
 
-      // people
-      fgctx.fillStyle = "rgba(21, 23, 26, 0.85)";
+      // micro-communities: a plot with two or more regulars carries a small,
+      // warm ring, its diameter widening with the count. The ring is the
+      // visible record of the plot's identity densifying from a role into a
+      // community — "a store is where THESE people eat", drawn.
+      const regularCountByPlot = new Map<number, number>();
+      for (const person of people) {
+        if (person.regularStoreId != null) {
+          regularCountByPlot.set(
+            person.regularStoreId,
+            (regularCountByPlot.get(person.regularStoreId) ?? 0) + 1,
+          );
+        }
+        if (person.regularEventId != null) {
+          regularCountByPlot.set(
+            person.regularEventId,
+            (regularCountByPlot.get(person.regularEventId) ?? 0) + 1,
+          );
+        }
+      }
+      for (const plot of plots) {
+        const count = regularCountByPlot.get(plot.id) ?? 0;
+        if (count < 2) continue; // one regular is a habit, two is a community
+        const px = plot.x * width;
+        const py = plot.y * height;
+        const radius = 16 + count * 3;
+        fgctx.strokeStyle = `rgba(232, 187, 129, ${Math.min(0.55, 0.18 + count * 0.08)})`;
+        fgctx.lineWidth = 1.5;
+        fgctx.beginPath();
+        fgctx.arc(px, py, radius, 0, Math.PI * 2);
+        fgctx.stroke();
+      }
+
+      // people. Each dweller is a small heading-aligned sliver — a line
+      // segment along their facing angle. Arrivals carry a faint tail from
+      // where they came in; regulars carry a slightly warmer head so the
+      // eye can pick a community out of a crowd; hesitating people are
+      // marked with a paler body so a tradeoff is legible.
       for (const person of people) {
         const px = person.x * width;
         const py = person.y * height;
+        const cos = Math.cos(person.heading);
+        const sin = Math.sin(person.heading);
+        // body is a short line along heading (~5px), longer if arriving so a
+        // walker coming in from the edge reads as a mover, not a dot
+        const length = person.phase === "arriving" ? 6 : 5;
+        const bx = px + cos * (length * 0.5);
+        const by = py + sin * (length * 0.5);
+        const tx = px - cos * (length * 0.5);
+        const ty = py - sin * (length * 0.5);
+        // arrival tail — from the person back toward their home, a faint hint
+        // of the phased arc (only during arriving, and only when far enough
+        // from home that the tail has room to draw)
+        if (person.phase === "arriving") {
+          const home = plots.find((p) => p.id === person.homeId);
+          if (home) {
+            const hx = home.x * width;
+            const hy = home.y * height;
+            const dx = px - hx;
+            const dy = py - hy;
+            const dLen = Math.hypot(dx, dy);
+            if (dLen > 16) {
+              const backLen = Math.min(14, dLen * 0.25);
+              fgctx.strokeStyle = "rgba(232, 226, 213, 0.18)";
+              fgctx.lineWidth = 1;
+              fgctx.beginPath();
+              fgctx.moveTo(px, py);
+              fgctx.lineTo(px + (dx / dLen) * backLen, py + (dy / dLen) * backLen);
+              fgctx.stroke();
+            }
+          }
+        }
+        // body
+        const bodyAlpha = person.hesitating ? 0.55 : 0.85;
+        const bodyColor = person.regularStoreId != null || person.regularEventId != null
+          ? `rgba(200, 115, 42, ${bodyAlpha + 0.05})` // regulars carry a warm cast
+          : `rgba(21, 23, 26, ${bodyAlpha})`;
+        fgctx.strokeStyle = bodyColor;
+        fgctx.lineWidth = 2;
+        fgctx.lineCap = "round";
         fgctx.beginPath();
-        fgctx.arc(px, py, 2.4, 0, Math.PI * 2);
+        fgctx.moveTo(tx, ty);
+        fgctx.lineTo(bx, by);
+        fgctx.stroke();
+        // small head dot to keep dwellers legible at 390px width
+        fgctx.fillStyle = bodyColor;
+        fgctx.beginPath();
+        fgctx.arc(bx, by, 1.4, 0, Math.PI * 2);
         fgctx.fill();
       }
 

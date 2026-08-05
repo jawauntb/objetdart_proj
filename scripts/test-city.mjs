@@ -22,15 +22,26 @@ const {
   needAnsweredBy,
   needFor,
   targetForNeed,
+  targetForNeedWithRegular,
   stepTowards,
   dwellersPerHome,
   nextSeason,
   treeFoliage,
   dayFraction,
   isDaytime,
+  recordVisit,
+  isRegularOf,
+  effectiveDistanceSq,
+  nearestEdgePoint,
+  headingFor,
+  hesitationBetween,
   PLOT_DWELL_MS,
   CITY_DAY_MS,
   SEASON_ORDER,
+  REGULAR_VISITS_TO_BECOME_REGULAR,
+  REGULAR_PULL_FACTOR,
+  HESITATION_RATIO_THRESHOLD,
+  HESITATION_SPEED_FACTOR,
 } = mod.exports;
 
 // ——— the plot role ladder is a causal, monotone function of dwell —————————
@@ -127,7 +138,127 @@ assert.equal(dayFraction(0), 0, "the day begins at 0");
 assert.ok(Math.abs(dayFraction(CITY_DAY_MS) - 0) < 1e-9, "one full day returns to 0");
 assert.ok(Math.abs(dayFraction(CITY_DAY_MS * 1.25) - 0.25) < 1e-9, "the second morning has the same fraction as the first");
 
+// ——— regulars: identity densifies from role into small community —————————
+
+// A visit to the same plot as last time deepens the count; a different plot resets it.
+let record = null;
+for (let i = 0; i < REGULAR_VISITS_TO_BECOME_REGULAR; i += 1) {
+  record = recordVisit(record, 7);
+}
+assert.equal(record.plotId, 7, "the record remembers which plot the person kept returning to");
+assert.equal(record.visits, REGULAR_VISITS_TO_BECOME_REGULAR, "each return to the same plot adds one visit");
+assert.equal(isRegularOf(record, 7), true, "reaching the threshold makes the person a regular there");
+assert.equal(isRegularOf(record, 8), false, "a regular at 7 is not a regular at every plot");
+
+// Going somewhere new resets the ledger — a regular is a habit, not a lifetime count.
+const reset = recordVisit(record, 12);
+assert.equal(reset.plotId, 12, "visiting a new plot rewrites the ledger");
+assert.equal(reset.visits, 1, "the new plot's habit begins at one");
+assert.equal(isRegularOf(reset, 12), false, "one visit is not yet a habit");
+assert.equal(isRegularOf(null, 7), false, "no ledger → no belonging");
+
+// One-under-threshold is not yet a regular.
+let almost = null;
+for (let i = 0; i < REGULAR_VISITS_TO_BECOME_REGULAR - 1; i += 1) {
+  almost = recordVisit(almost, 3);
+}
+assert.equal(isRegularOf(almost, 3), false, "one visit short of the threshold is not yet a regular");
+
+// Effective distance: the regular's plot reads as closer than it is.
+const dReg = effectiveDistanceSq(4, true);
+const dStranger = effectiveDistanceSq(4, false);
+assert.ok(dReg < dStranger, "a regular's plot reads as closer than a stranger's plot at the same distance");
+assert.equal(dStranger, 4, "a stranger's plot reads as its own distance");
+// The shrink is exactly the pull factor squared.
+assert.ok(Math.abs(dReg * (REGULAR_PULL_FACTOR ** 2) - dStranger) < 1e-9, "the effective distance shrinks by exactly PULL_FACTOR²");
+
+// A regular is pulled to a farther store — up to but not past the pull factor.
+const stores = [
+  { id: 10, role: "store", x: 0.4,  y: 0.5 }, // 0.1 away from person
+  { id: 20, role: "store", x: 0.65, y: 0.5 }, // 0.15 away — 1.5× farther, inside REGULAR_PULL_FACTOR of 1.6
+];
+const walker = { x: 0.5, y: 0.5, homeId: 1 };
+assert.equal(targetForNeedWithRegular(walker, "food", stores, null).id, 10, "no regular → the near store wins");
+assert.equal(targetForNeedWithRegular(walker, "food", stores, 20).id, 20, "regular at the farther store → they walk past the near one");
+// If the regular plot is much too far, geography wins after all.
+const stretched = [
+  { id: 10, role: "store", x: 0.55, y: 0.5 }, // 0.05 away
+  { id: 20, role: "store", x: 0.9,  y: 0.5 }, // 0.4 away — 8x farther, well past REGULAR_PULL_FACTOR
+];
+assert.equal(
+  targetForNeedWithRegular(walker, "food", stretched, 20).id, 10,
+  "a regular pull only shrinks distance by PULL_FACTOR — a store many times farther still loses",
+);
+// Rest is unchanged: home wins regardless of regulars.
+const homePlot = { id: 1, role: "home", x: 0.1, y: 0.1 };
+assert.equal(
+  targetForNeedWithRegular(walker, "rest", [homePlot, ...stores], 20).id, 1,
+  "rest routes to the person's own home even if they are a regular somewhere else",
+);
+
+// ——— arrival: newly-spawned dwellers walk in from the nearest edge ————————
+
+assert.deepEqual(nearestEdgePoint({ x: 0.1, y: 0.5 }), { x: 0, y: 0.5 }, "a home near the west wall births arrivals from the west");
+assert.deepEqual(nearestEdgePoint({ x: 0.9, y: 0.5 }), { x: 1, y: 0.5 }, "a home near the east wall births arrivals from the east");
+assert.deepEqual(nearestEdgePoint({ x: 0.5, y: 0.1 }), { x: 0.5, y: 0 }, "a home near the north wall births arrivals from the north");
+assert.deepEqual(nearestEdgePoint({ x: 0.5, y: 0.9 }), { x: 0.5, y: 1 }, "a home near the south wall births arrivals from the south");
+// A spawn on an edge really is on an edge — one axis is always at 0 or 1.
+const edgeSpawn = nearestEdgePoint({ x: 0.33, y: 0.72 });
+const onEdge = edgeSpawn.x === 0 || edgeSpawn.x === 1 || edgeSpawn.y === 0 || edgeSpawn.y === 1;
+assert.ok(onEdge, "the spawn point sits on an edge, whichever is nearest");
+
+// ——— heading: the person faces where they are going ——————————————————————
+
+// Cardinal directions.
+assert.ok(Math.abs(headingFor({ x: 0, y: 0 }, { x: 1, y: 0 }, 0) - 0) < 1e-9, "walking east reads as heading 0");
+assert.ok(Math.abs(headingFor({ x: 0, y: 0 }, { x: 0, y: 1 }, 0) - Math.PI / 2) < 1e-9, "walking south reads as heading π/2");
+assert.ok(Math.abs(headingFor({ x: 0, y: 0 }, { x: -1, y: 0 }, 0) - Math.PI) < 1e-9, "walking west reads as heading π");
+// A step too small to measure returns the fallback, not zero — a person standing still keeps their face.
+assert.equal(headingFor({ x: 0.3, y: 0.4 }, { x: 0.3, y: 0.4 }, 1.234), 1.234, "no motion → the previous heading is preserved");
+// Diagonal.
+const diag = headingFor({ x: 0, y: 0 }, { x: 1, y: 1 }, 0);
+assert.ok(Math.abs(diag - Math.PI / 4) < 1e-9, "walking southeast reads as heading π/4");
+
+// ——— hesitation: two plots of the same role, close in distance ———————————
+
+const twinStores = [
+  { id: 30, role: "store", x: 0.4, y: 0.5 }, // 0.1 west of walker
+  { id: 31, role: "store", x: 0.6, y: 0.5 }, // 0.1 east of walker
+  { id: 32, role: "home",  x: 0.5, y: 0.5 }, // same-role check
+];
+const twinResult = hesitationBetween({ x: 0.5, y: 0.5 }, "food", twinStores);
+assert.equal(twinResult.hesitating, true, "two stores at the same distance produce hesitation");
+assert.ok(twinResult.secondBestId === 30 || twinResult.secondBestId === 31, "the alternate is one of the two candidates");
+
+const soloStores = [
+  { id: 40, role: "store", x: 0.5, y: 0.5 }, // right on top
+  { id: 41, role: "store", x: 0.99, y: 0.99 }, // very far
+];
+const soloResult = hesitationBetween({ x: 0.5, y: 0.5 }, "food", soloStores);
+assert.equal(soloResult.hesitating, false, "one store far, one close → no hesitation");
+
+// Rest is unique — a home is the home, no competing option.
+assert.equal(
+  hesitationBetween({ x: 0.5, y: 0.5 }, "rest", twinStores).hesitating,
+  false,
+  "rest is unique to the person's own home — no hesitation available",
+);
+
+// Only one candidate → nothing to hesitate between.
+assert.equal(
+  hesitationBetween({ x: 0.5, y: 0.5 }, "food", [twinStores[0]]).hesitating,
+  false,
+  "a single-store city offers no tradeoff, and so no hesitation",
+);
+
+// The hesitation speed factor is a real slowdown, not a decoration.
+assert.ok(HESITATION_SPEED_FACTOR < 1, "a hesitating step is slower than a decided step");
+assert.ok(HESITATION_SPEED_FACTOR > 0, "a hesitating person still moves");
+assert.ok(HESITATION_RATIO_THRESHOLD > 1, "hesitation is triggered by nearly-equal distances, not by identical ones alone");
+
 console.log(
   `city ok: role ladder monotone, needs answered by identity, ${SEASON_ORDER.length} seasons cycle both ways, ` +
-  `movement never overshoots, homes seed 1..3 residents deterministically.`,
+  `movement never overshoots, homes seed 1..3 residents deterministically, ` +
+  `regulars densify identity at ${REGULAR_VISITS_TO_BECOME_REGULAR} visits with a ${REGULAR_PULL_FACTOR}× pull, ` +
+  `arrivals enter from the nearest map edge, headings track motion, hesitation slows a tradeoff to ${HESITATION_SPEED_FACTOR}×.`,
 );
