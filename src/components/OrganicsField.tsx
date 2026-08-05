@@ -211,6 +211,16 @@ export default function OrganicsField() {
     let season = 0;
     let lastSeasonSoundAt = 0;
 
+    // rhythm entrainment: the hand's tempo becomes the solvent's pulse
+    let entrainBpm = 0;
+    let entrainUntil = 0;
+    let entrainDepth = 0;
+    let lastPulseAt = 0;
+    let pulseIdx = 0;
+
+    // span: the sustained interval — which chain the two still fingers hold
+    let spanIdx = -1;
+
     // vessel flip: face-down is night
     let night = 0;
     let nightTarget = 0;
@@ -524,12 +534,15 @@ export default function OrganicsField() {
       }
     };
 
-    const tutti = () => {
+    const tutti = (gain = 0.5) => {
+      // one synchronized pulse, sized like the hand that asked for it: a
+      // soft three-finger touch is a murmur, a firm one lights every chain
       placedRef.current.forEach((p, i) => {
-        window.setTimeout(() => soundChain(p, 0.4), i * 110);
+        window.setTimeout(() => soundChain(p, 0.2 + gain * 0.5), i * 110);
+        p.lit = Math.min(1, p.lit + 0.2 + gain * 0.4);
       });
       try {
-        haptics.ripple(0.4);
+        haptics.ripple(0.25 + gain * 0.35);
       } catch {
         /* noop */
       }
@@ -578,7 +591,7 @@ export default function OrganicsField() {
             return;
           }
           if (e.fingers === 3) {
-            tutti();
+            tutti(clamp01(0.35 + e.intensity * 0.65));
             return;
           }
           if (e.fingers !== 1) return;
@@ -683,7 +696,6 @@ export default function OrganicsField() {
           lastInteractionAt = performance.now();
           if (e.fingers === 3) {
             if (e.phase === "enter") {
-              timeScaleTarget = 0.25;
               try {
                 audio.playNote(26, 480);
                 haptics.tap();
@@ -691,7 +703,14 @@ export default function OrganicsField() {
                 /* noop */
               }
             }
-            if (e.phase === "release") timeScaleTarget = 1;
+            if (e.phase === "release") {
+              timeScaleTarget = 1;
+              return;
+            }
+            // dilation is an axis, not a switch: the solvent keeps slowing
+            // for as long as the three fingers stay — a 900ms hold and a
+            // 2400ms hold are different depths of the same stillness
+            timeScaleTarget = 1 - 0.85 * clamp01(e.elapsed / 2400);
             return;
           }
           if (e.fingers !== 1) return;
@@ -883,9 +902,70 @@ export default function OrganicsField() {
           }
         },
         rhythm: (e) => {
-          // a steady hand entrains the thermal jitter to its own pulse
-          if (e.stability > 0.65) {
-            for (const p of placedRef.current) kick(p, 0.05);
+          // a steady hand entrains the solvent: the chains take up the
+          // hand's own tempo and re-beat on it after the taps have stopped —
+          // steadier taps carry the pulse further, faster ones drive it harder
+          lastInteractionAt = performance.now();
+          if (e.stability < 0.55 || e.bpm < 40 || e.bpm > 220) return;
+          const wasSilent = performance.now() > entrainUntil;
+          entrainBpm = e.bpm;
+          entrainDepth = e.stability;
+          entrainUntil = performance.now() + 8000 + e.stability * 10000;
+          if (wasSilent) {
+            try {
+              audio.playNote(52, 130);
+              haptics.tap();
+            } catch {
+              /* noop */
+            }
+          }
+        },
+        span: (e) => {
+          // two still fingers hold the interval open — and the interval IS
+          // this room's load-bearing map: a strained chain's two voices, a
+          // few hertz apart. While the span stands the beat is held audible
+          // and the geometry may not settle; the longer it is held, the
+          // closer together the beats come and the brighter the chain burns.
+          lastInteractionAt = performance.now();
+          const { x, y } = toLocal(e.cx, e.cy);
+          if (e.phase === "release") {
+            if (spanIdx >= 0 && spanIdx < placedRef.current.length) {
+              // the letting-go word deepens with how long it was listened to
+              soundChain(placedRef.current[spanIdx], 0.3 + Math.min(0.5, e.elapsed / 6000));
+            }
+            spanIdx = -1;
+            return;
+          }
+          if (e.phase === "enter") {
+            spanIdx = nearestChain(x, y, scaleOf() * 6);
+            if (spanIdx >= 0) {
+              try {
+                haptics.tap();
+              } catch {
+                /* noop */
+              }
+            }
+          }
+          if (spanIdx < 0 || spanIdx >= placedRef.current.length) return;
+          const p = placedRef.current[spanIdx];
+          const depth = clamp01(e.elapsed / 5000);
+          p.lit = Math.min(1, p.lit + 0.08);
+          // the strain may not settle while it is being listened to
+          if (strainEnergy(p.chain) < 0.06) {
+            p.chain = {
+              ...p.chain,
+              angles: p.chain.angles.map((a2, i) => a2 + (i % 2 ? 0.02 : -0.02)),
+            };
+          }
+          const now = performance.now();
+          if (now - lastBeatAt > Math.max(260, 720 - depth * 400)) {
+            lastBeatAt = now;
+            soundChain(p, 0.25 + depth * 0.5);
+            try {
+              haptics.tap();
+            } catch {
+              /* noop */
+            }
           }
         },
       },
@@ -1086,6 +1166,14 @@ export default function OrganicsField() {
       // the current tier bothers keeping topped up.
       const looseFloor = Math.max(3, Math.round(MAX_LOOSE * 0.45 * detail.particles));
       if (loose.length < looseFloor) spawnLoose(2, hashSeed(Math.round(localT * 10), loose.length));
+
+      // ——— the entrained pulse: while the hand's tempo holds, the chains
+      // take turns re-beating on it — the room's clock is the visitor's
+      if (entrainBpm > 0 && now < entrainUntil && list.length > 0 && now - lastPulseAt > 60000 / entrainBpm) {
+        lastPulseAt = now;
+        pulseIdx = (pulseIdx + 1) % list.length;
+        kick(list[pulseIdx], 0.05 + entrainDepth * 0.09);
+      }
 
       // ——— the beating: the room's own voice, sounding only while strained
       if (now - lastBeatAt > 2600 && holdIdx < 0 && !condensing) {

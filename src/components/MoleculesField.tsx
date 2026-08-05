@@ -681,16 +681,17 @@ export default function MoleculesField() {
     };
 
     // three-finger tap = tutti (grammar §5): one synchronized soft pulse —
-    // every molecule rings its tone quietly, shimmering as one solution
-    const tutti = () => {
+    // every molecule rings its tone quietly, shimmering as one solution,
+    // and how firmly the three fingers landed is how brightly it answers
+    const tutti = (gain = 0.5) => {
       const now = performance.now();
       if (now - lastTuttiAt < 1400) return;
       lastTuttiAt = now;
-      tuttiPulse = 1;
+      tuttiPulse = 0.55 + gain * 0.45;
       const alive = mols.filter((m) => !m.retiringAt && m.closed);
-      alive.slice(0, 10).forEach((m, i) => noteLater(i * 45, midiOf(m.morph), 70));
-      for (const m of alive) m.heat = Math.min(2, m.heat + 0.3);
-      try { haptics.tap(); } catch { /* noop */ }
+      alive.slice(0, 10).forEach((m, i) => noteLater(i * 45, midiOf(m.morph), 60 + Math.round(gain * 50)));
+      for (const m of alive) m.heat = Math.min(2, m.heat + 0.15 + gain * 0.3);
+      try { haptics.ripple(0.2 + gain * 0.3); } catch { /* noop */ }
     };
 
     // ————— gestures (the grammar, nothing private; pinch belongs to the manifold) —————
@@ -709,7 +710,7 @@ export default function MoleculesField() {
           }
           return;
         }
-        if (e.fingers === 3) { tutti(); return; }
+        if (e.fingers === 3) { tutti(clamp01(0.35 + e.intensity * 0.65)); return; }
         if (e.fingers !== 1) return; // anything else is gently absorbed
         const { x, y } = toLocal(e.x, e.y);
         // rapid-tap ladder 1 / 3 / 5 / n — counts between tiers deepen intensity
@@ -772,9 +773,11 @@ export default function MoleculesField() {
       hold: (e) => {
         lastInteractionAt = performance.now();
         if (e.fingers === 3) {
-          // three fingers touch the law: time dilates while held
-          if (e.phase === "enter") { timeScaleTarget = 0.25; try { haptics.tap(); } catch { /* noop */ } note(36, 260); }
-          if (e.phase === "release") timeScaleTarget = 1;
+          // three fingers touch the law: time dilates while held — and keeps
+          // dilating, a 900ms hold and a 2400ms hold are different stillnesses
+          if (e.phase === "enter") { try { haptics.tap(); } catch { /* noop */ } note(36, 260); }
+          if (e.phase === "release") { timeScaleTarget = 1; return; }
+          timeScaleTarget = 1 - 0.85 * clamp01(e.elapsed / 2400);
           return;
         }
         if (e.fingers !== 1) return;
@@ -981,12 +984,42 @@ export default function MoleculesField() {
         if (e.bpm < 40 || e.bpm > 220) return;
         const wasSilent = performance.now() > entrainedUntil;
         entrainedBpm = e.bpm;
-        entrainedUntil = performance.now() + 16000;
+        // stability is an axis: a metronomic hand carries the entrainment
+        // more than twice as far as a loose one
+        entrainedUntil = performance.now() + 8000 + e.stability * 12000;
         if (wasSilent) {
           // the vibration modes lock to your pulse: a felt click as it takes
           try { haptics.tap(); } catch { /* noop */ }
           note(55, 140);
         }
+      },
+      drum: (e) => {
+        lastInteractionAt = performance.now();
+        // percussion on the bench: the patter plays the space BETWEEN the
+        // hands. A convection cell wakes between the two struck spots and
+        // the molecules shuttle across it — each hit sends the ferry the
+        // other way, harder the stricter the alternation
+        const a = toLocal(e.ax, e.ay);
+        const b = toLocal(e.bx, e.by);
+        const across = e.hits % 2 === 0 ? 1 : -1;
+        const dd = Math.max(1, Math.hypot(b.x - a.x, b.y - a.y));
+        const ux = ((b.x - a.x) / dd) * across;
+        const uy = ((b.y - a.y) / dd) * across;
+        const k = 0.4 + e.alternation * 0.6;
+        const mx = (a.x + b.x) / 2;
+        const my = (a.y + b.y) / 2;
+        stirs.push({ x: mx, y: my, dx: ux * k, dy: uy * k, strength: k, born: performance.now() });
+        if (stirs.length > 24) stirs.shift();
+        for (const m of mols) {
+          if (m.retiringAt || m.sr <= 0) continue;
+          if (Math.hypot(m.sx - mx, m.sy - my) < Math.min(width, height) * 0.32) {
+            m.pushX += ux * 26 * k * m.massK;
+            m.pushY += uy * 26 * k * m.massK;
+            m.heat = Math.min(2, m.heat + 0.08 * k);
+          }
+        }
+        note(52 + (e.hits % 2) * 7 + Math.round(e.alternation * 4), 80);
+        try { haptics.tap(); } catch { /* noop */ }
       },
     });
 
