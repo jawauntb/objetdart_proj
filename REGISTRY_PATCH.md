@@ -1,0 +1,40 @@
+<!-- object-compiler template — docs/plans/object-compiler.md M3.
+     Consumes: spec.key, ComponentName.
+     Two literal edits to src/rooms/registry.ts. Kept as a plain-prose
+     diff-audit fallback — the compiler's default path is
+     `scripts/object-compiler/apply-side-patches.py`, which writes these
+     edits (and the three other side files) idempotically. See the
+     companion `SIDE_FILES_PATCH.md` for the full auto-patch report. -->
+
+# Registry patch — `src/rooms/registry.ts`
+
+Two edits, alphabetical placement. Do not hand-add the room to any other
+registry — `SITE_ROUTES`, nav order, peer seats, the icon config, the guide
+and `scripts/test-routes.mjs` all derive themselves from `ROOM_MANIFESTS`.
+
+**Auto-applied** by `scripts/object-compiler/apply-side-patches.py` when
+`compile-room.py --apply-side-patches` runs (default). This document is the
+prose audit trail; the machine writes the file.
+
+## 1. Add the import
+
+Insert alphabetically among the other `import <key> from "@/rooms/<key>/room.config";`
+lines:
+
+```ts
+import tidepool from "@/rooms/tidepool/room.config";
+```
+
+## 2. Add to `ROOM_MANIFESTS`
+
+Insert alphabetically in the `ROOM_MANIFESTS` array literal:
+
+```ts
+  tidepool,
+```
+
+## Verification
+
+`npm run test:rooms` fails if the room's `place`, its band linkage, or its
+guide drift from the manifest — a red row there is the derivation working;
+edit the manifest, never the registry the manifest feeds.

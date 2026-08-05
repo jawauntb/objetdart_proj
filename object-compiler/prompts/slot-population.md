@@ -16,14 +16,28 @@ harness's `draw()` function will call once per frame — `tickPopulation`.
 `AGENTS.md` §"The room quality bar" §3 says: *the visitor creates objects and
 retires them, and the objects act on each other — a population, not a
 slideshow*. §7 says: *one instanced draw per population, not N*. Together,
-those two lines force this shape: one `SceneObjectSpec` per kind, one
-`createPopulation`, one `createPopulationLayer`, one `createInstanceBuffer`,
-and one draw call per frame — the exact wiring
+those two lines force this shape: **≥2 `SceneObjectSpec` declarations
+per room** (one per entry in `life.population.objects`), one
+`createPopulation` per spec, one `createPopulationLayer` per population
+(or a shared layer if two specs share the SDF-disc primitive), one
+`createInstanceBuffer`, and one draw call per emit — the exact wiring
 `src/components/RoomTemplate.tsx` demonstrates and `test:scene` pins.
 
 A room that draws its countable things by iterating and painting them
-individually — a `for (const c of clouds)` calling anything —is the bug
+individually — a `for (const c of clouds)` calling anything — is the bug
 this slot exists to prevent.
+
+Phase 7 (see `data/object-compiler/audits/phase-7-prompt-rewrite.md`)
+adds the **cross-population interaction** requirement: an object is
+alive if it can change on account of ANOTHER object. /rocks' stones
+and salt affect each other's presence; /molecules' atoms bond into
+molecules; /root's roots and fungi share the same soil profile and
+compete for it. A room whose two populations never touch is a
+slideshow-of-two. Cross-population interaction lives in each spec's
+`step(s, ctx)`: read the sibling population from the closure the
+harness makes visible (`otherPop.snapshot()`, or a shared bus your
+`respond` maps write to) and use it in `s.growth`, `s.presence`, or
+whatever field the object's `state_shape` names.
 
 ## Output contract
 
@@ -45,7 +59,15 @@ this slot exists to prevent.
 
 ## What the slot must produce
 
-For each object in `spec.life.population.objects[]`:
+Phase 7 requires TWO OR MORE populations (`spec.life.population.objects[]`
+of length ≥ 2). The compiler substitutes the full multi-object list
+below this line — read every entry, every field:
+
+```yaml
+{{life_population_multi}}
+```
+
+For each object in that list:
 
 1. **A state-vector type** extending `SceneObjectState`, named after
    `object.noun` in PascalCase (e.g. `Cloud`, `Root`, `Bird`). Add only the
@@ -91,10 +113,25 @@ For each object in `spec.life.population.objects[]`:
 
 6. **Bind the population onto `apiRef.current`** so the verb-handler slot
    below can reach it. The verb-handler slot expects methods like
-   `add(nx, ny)`, `retire(nx, ny)`, `dwell(nx, ny, elapsed)`, `letGo()` —
-   whatever the verbs your room answers need. Read
-   `spec.life.population.objects[].creates_via_verb` and `.retires_via` for
-   the mapping.
+   `add<Noun>(nx, ny)`, `retire<Noun>(nx, ny)`, `dwell(nx, ny, elapsed)`,
+   `letGoPopulation()` — whatever the verbs your room answers need. Read
+   each object's `creates_via_verb` and `retires_via` for the mapping.
+   **Namespace the creators by noun** (`addCloud` not just `add`) so a
+   verb handler in a two-population room can create the right kind.
+
+7. **Cross-population interaction** — for each pair of populations, the
+   `step(s, ctx)` of population A MUST read from the state of population
+   B in at least one place, and the change MUST be visible in what
+   `emit()` pushes. Concrete pattern: capture the second population's
+   `snapshot()` into a closure the first spec's step reads, or share a
+   small state bus (a plain `let` at the top of the slot) that both
+   populations' `step` and `respond` methods write to and read from.
+   Do not use React state, do not use module-level `let` outside the
+   `useEffect` — everything is local to the effect scope, per the
+   deterministic-lifecycle rule (`AGENTS.md` §"laws that no test can
+   reach"). The `depth_note` on `spec.life.population` should read as a
+   single-sentence description of the interaction; the compiled code
+   should be the executable of that sentence.
 
 ## What NOT to produce
 
@@ -121,13 +158,21 @@ seed the hand left" is in. The site's prose voice extends into the code.
 
 ## Retrieval — the one-shot references
 
-The compiler substitutes 2–3 population-block examples from the closest
-past rooms below this line, chosen by `invariant_type`, `form_language`,
-and population shape. `src/components/RoomTemplate.tsx` (`mote`, ~line 86) is
-the canonical shape; `src/components/AirColumn.tsx` (clouds as a marched
-volume) is the reference for a population that lives inside the field
-itself; `src/components/SoilGround.tsx` (roots and fungi under a soil
-cross-section) is the reference for two-population rooms.
+The compiler substitutes 2 population-block examples below this line.
+Phase 7's retrieval strategy anchors on **depth** as much as invariant
+type: one slot is the DEEP anchor (the room with the most populations
+and the strongest cross-population interaction — typically /rocks,
+/molecules, or /root); the other is the PEER anchor (nearest by
+`invariant_type`, `form_language`, and population shape).
+`src/components/RoomTemplate.tsx` (`mote`, ~line 86) is the canonical
+one-population shape; `src/components/AirColumn.tsx` (clouds as a
+marched volume) is the reference for a population that lives inside
+the field itself; `src/components/SoilGround.tsx` (roots and fungi
+under a soil cross-section) is the reference for two-population rooms
+that actually TOUCH each other.
+
+Count the DEEP anchor's `createPopulation(...)` calls before you
+write yours. Your room MUST have at least as many.
 
 ```typescript
 {{one_shot_examples}}

@@ -45,6 +45,7 @@ import root from "@/rooms/root/room.config";
 import soil from "@/rooms/soil/room.config";
 import solar from "@/rooms/solar/room.config";
 import spring from "@/rooms/spring/room.config";
+import tidepool from "@/rooms/tidepool/room.config";
 
 export const ROOM_MANIFESTS = [
   atmosphere,
@@ -64,6 +65,7 @@ export const ROOM_MANIFESTS = [
   soil,
   solar,
   spring,
+  tidepool,
 ] as const;
 
 /** Literal union of every manifest-declared room key. */

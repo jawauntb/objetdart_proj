@@ -1270,6 +1270,19 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     creates: "a seep",
     exempt: {},
   },
+  {
+    key: "tidepool",
+    href: "/tidepool",
+    kind: "room",
+    source: "src/components/Tidepool.tsx",
+    page: "src/app/tidepool/page.tsx",
+    address: { band: "coast" },
+    frame: "yield",
+    chrome: "axis",
+    keeps: "objetdart:tidepool:v1",
+    creates: "a creature",
+    exempt: {},
+  },
 ];
 
 export const ROOM_BY_KEY: Record<string, RoomEntry> = Object.fromEntries(

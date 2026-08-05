@@ -82,15 +82,86 @@ and "screen-space AO" reads out of voice; one that talks about "the field",
 "the column", "the wet halo" reads in. The site's prose voice extends into
 the code.
 
+## Compose the layers — the density requirement
+
+Phase 7 (see `data/object-compiler/audits/phase-7-prompt-rewrite.md`)
+teaches the shader to be **many things at once**. A `shader_intent` that
+names one register — "an ochre column" — bakes into a shader with one
+thing to say and one animation to try. The site's densest rooms
+(AirColumn, /stars, /molecules) don't paint one thing; they paint four
+or five, and the visitor's eye finds a new layer on each return. That
+depth is the room quality bar (`AGENTS.md` §"The room quality bar" §2).
+
+The spec's `shader_layers` array names the discrete visual passes this
+shader MUST include. The compiler substitutes it below this line before
+it calls you:
+
+```yaml
+{{shader_layers}}
+```
+
+Each entry is one drawing step in `main()`. For each entry, emit:
+
+1. A comment `// layer: <name>` on its own line, marking the start of
+   that layer's block.
+2. The code that composes the layer's register into the accumulator
+   (`col`, or an equivalent name you carry from the top of `main()`).
+3. Composition consistent with `order` (small-to-large) and `register`
+   (the palette role the layer paints — background, midground, incident
+   light, particulate, ink, etc.).
+
+**Hard rule — mechanical density check.** The shader body MUST contain
+at LEAST as many `// layer:` comment blocks as `spec.shader_layers`
+has entries. A shorter shader fails the phase-7 density mechanical
+test. Reference: AirColumn composes four visible layers (sky/haze,
+ridge silhouette, cloud march, lantern candles) plus airglow — the
+comment blocks are literal, and each is one recognizable pass in
+`main()`. If `spec.shader_layers` is absent or empty, this rule is
+inert (the room predates phase 7); otherwise it is law.
+
+Do not collapse two layers into one because they *could* share math —
+the point of the layered comment blocks is that the reader sees the
+composition at a glance, and the LLM that recompiles this room later
+can reach for one layer without pulling on all of them.
+
+## The state machine — sampling `uState`
+
+The spec may declare a `state_machine` with a small set of named
+states (calm, agitated, erupting, sealed, …). The compiler substitutes
+it below this line before it calls you:
+
+```yaml
+{{state_machine}}
+```
+
+If `spec.state_machine.states` has any entries, the shader MUST:
+
+- Declare `uniform float uState;` (or `uniform vec2 uState;` when the
+  spec calls for two flags — see the block above).
+- Sample `uState` in EVERY layer whose `visible_change` names a state.
+  A layer whose `visible_change` reads "the plume rings brighten in
+  the eruption state" MUST have `uState` on its brightness term.
+- Compose the states as smooth blends, not hard switches. The room
+  passes through a state on a shared clock; the shader crossfades.
+  `smoothstep(state - 0.5, state + 0.5, uState)` is the pattern.
+- Respect `uReduced` first — a reduced-motion visitor sees the calm
+  state, no matter what the state machine currently reads.
+
+If `spec.state_machine` is absent or empty, do not declare `uState`;
+a dead uniform is a bug (see the `uBreath` rule above).
+
 ## Retrieval — the one-shot references
 
-The compiler substitutes 2–3 shader-body examples from the closest past
-rooms below this line before it calls you. The closest is chosen by
-`invariant_type`: a `flux` room retrieves aircolumn (`src/components/AirColumn.tsx`,
-search for `const FRAG = \``) and soil-ground (`src/components/SoilGround.tsx`,
-same search); a `gravitation` room retrieves solar/orbits; a `conservation`
-room retrieves humus. Read them as examples of *this codebase's shader
-dialect*, not as content to copy.
+The compiler substitutes 2 shader-body examples below this line before
+it calls you. Phase 7's retrieval strategy anchors on **depth** as much
+as invariant type: one slot is the DEEP anchor (the room with the most
+`shader_layers` × `population.objects` × `discoverables` × `state_machine`
+axes populated — typically /stars, /molecules, or aircolumn), and the
+other slot is the PEER anchor (nearest by `invariant_type`, `form_language`,
+`motion_character`). The deep anchor teaches density; the peer anchor
+teaches the invariant. Read both as examples of *this codebase's shader
+dialect*, not content to copy — but do count the DEEP anchor's layers.
+That number is your floor.
 
 ```glsl
 {{one_shot_examples}}

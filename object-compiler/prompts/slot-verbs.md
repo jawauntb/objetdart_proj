@@ -109,6 +109,67 @@ Read the population block below to see the create/retire assignments.
 If the room has no population (empty `life.population.objects`), skip
 this rule.
 
+## Discoverables — the long tail
+
+Phase 7 (see `data/object-compiler/audits/phase-7-prompt-rewrite.md`)
+requires that verb handlers know about **discoverables** — verb
+behaviors that fire only when the room is in a particular state, or
+only after a small ceremony of gesture. A discoverable is what the
+patient visitor finds and the impatient one never learns exists. The
+site's densest rooms (/coin, /stars, /molecules) hide a handful of
+these behind state or velocity checks, and the discovery IS the
+reward.
+
+The compiler substitutes `spec.discoverables` and (if any)
+`spec.state_machine` below this line before it calls you:
+
+```yaml
+{{discoverables}}
+```
+
+```yaml
+{{state_machine}}
+```
+
+For each entry in `spec.discoverables`, the verb handler for the
+entry's `trigger` MUST implement the `response` on the condition the
+entry names. The pattern:
+
+```ts
+tap: (e) => {
+  haptics.bloom(e.intensity);
+  const state = apiRef.current?.state?.() as string | undefined;
+  if (state === "erupting") {
+    // discoverable: tap during eruption → the plume rings a note
+    apiRef.current?.ringPlume?.(e.nx, e.ny, e.intensity);
+  } else {
+    apiRef.current?.tap?.(e.nx, e.ny, e.intensity);
+  }
+},
+```
+
+**Silent until found.** A discoverable never carries an on-screen
+hint. Its existence is legible only through the visible response
+when the visitor happens to trigger it. Do not add a `console.log`,
+do not add a toast, do not add a caption. The register the response
+lands in (`spec.discoverables[i].register`) IS the hint — a
+particulate register that only ever flashes at ceremony-count 5 is
+the room saying "keep going" without a word.
+
+**Guard on state, not on time.** If the discoverable belongs to a
+state, guard on `apiRef.current?.state?.()`; if it belongs to a
+count, read the count from the domain (see `apiRef.current?.tapCount`
+or equivalent — the domain slot exports the counter). Do not
+`setTimeout` a discoverable; do not read `Date.now()` in the handler.
+
+The full slot-discoverables prompt (`slot-discoverables.md`) writes
+the DEDICATED state-machine + discoverable table into
+`__SLOT_DISCOVERABLES__` further down in the effect body; this
+verbs slot only needs to KNOW about the discoverables so its verb
+handlers branch correctly. If a discoverable's `trigger` names a
+verb this room does not answer, that is a spec bug — flag it in a
+comment inside the handler that would have carried it.
+
 ## Voice — the handler comments and grouping
 
 Two-of-three registers in every comment. Group the handlers thematically
