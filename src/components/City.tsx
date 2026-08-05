@@ -21,6 +21,7 @@ import {
   HESITATION_SPEED_FACTOR,
   PLOT_DWELL_MS,
   SEASON_ORDER,
+  applyPersonLedger,
   dayFraction,
   dwellersPerHome,
   fadeForLeaving,
@@ -28,11 +29,13 @@ import {
   hesitationBetween,
   isRegularOf,
   isStanding,
+  ledgerIsMeaningful,
   mulberry,
   nearestEdgePoint,
   needFor,
   needsUnmet,
   nextSeason,
+  personLedgerFor,
   recordVisit,
   roleForDwell,
   shouldLeave,
@@ -41,6 +44,7 @@ import {
   treeFoliage,
   type CityLens,
   type Need,
+  type PersistedPersonLedger,
   type PersonPhase,
   type PlotRole,
   type PlotSample,
@@ -169,6 +173,14 @@ type Persisted = {
   plots: Array<Omit<Plot, "dwellStartMs" | "liveDwellMs">>;
   season: Season;
   cityTimeMs: number;
+  // The visitor's micro-communities as a small ledger per resident: which
+  // plots each dweller kept returning to, which they crossed the regular
+  // threshold at. Optional so a pre-ledger payload restores as it always
+  // did — plots come back, colonies begin fresh. When present, the teal
+  // colonies are rehydrated by respawnPeopleFromHomes, and the plot's
+  // identity is literally the history of who kept coming back, not a
+  // session artifact.
+  people?: PersistedPersonLedger[];
 };
 
 // Role → int for the shader (matches the order along the plot atlas).
@@ -1034,6 +1046,15 @@ export default function City() {
     };
 
     // ── restore ─────────────────────────────────────────────────────────
+    //
+    // A visitor's ledger — the (homeId, seed) → belonging map that survives a
+    // page close. `respawnPeopleFromHomes` reads it once, right after the
+    // fresh spawn, and each dweller whose seed matches picks up their
+    // regular slots and visit records; a dweller with no ledger begins as a
+    // stranger. The map lives at the outer scope so a later `letGo` or
+    // rebuild does not accidentally carry the previous session's belonging
+    // into a fresh settlement (we clear it on rehydration).
+    const pendingLedgers = new Map<number, PersistedPersonLedger>();
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
@@ -1045,11 +1066,22 @@ export default function City() {
           }
           if (SEASON_ORDER.includes(parsed.season)) season = parsed.season;
           cityTimeMs = Number.isFinite(parsed.cityTimeMs) ? parsed.cityTimeMs : 0;
+          if (Array.isArray(parsed.people)) {
+            for (const l of parsed.people) {
+              // A ledger without a seed cannot be matched to a spawned
+              // person — skip it. Corrupt entries are the visitor's not
+              // problem, we simply forget them.
+              if (typeof l?.seed === "number" && Number.isFinite(l.seed)) {
+                pendingLedgers.set(l.seed, l);
+              }
+            }
+          }
         }
       }
     } catch { /* corrupt persistence is silently discarded — it is not the visitor's problem */ }
 
-    // spawn initial residents from any restored homes
+    // spawn initial residents from any restored homes, then rehydrate their
+    // ledgers so the teal colonies come back with the plots.
     respawnPeopleFromHomes();
 
     // ── sizing ──────────────────────────────────────────────────────────
@@ -1102,6 +1134,18 @@ export default function City() {
     // ── persistence writer ───────────────────────────────────────────────
     const saveState = () => {
       try {
+        // Only settled dwellers with meaningful ledgers are persisted — an
+        // arriving person has no habits yet, a leaving person is on their
+        // way out, and a settled stranger with no regular slot writes an
+        // all-null row that would just bloat the payload. The seed is what
+        // matches back on restore; without it a ledger is homeless.
+        const peopleLedger: PersistedPersonLedger[] = [];
+        for (const person of people) {
+          if (person.phase !== "settled") continue;
+          const ledger = personLedgerFor(person);
+          if (!ledgerIsMeaningful(ledger)) continue;
+          peopleLedger.push(ledger);
+        }
         const payload: Persisted = {
           version: 1,
           plots: plots.map((p) => ({
@@ -1109,6 +1153,7 @@ export default function City() {
           })),
           season,
           cityTimeMs,
+          people: peopleLedger,
         };
         localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
       } catch { /* quota exhausted → the city is a session, not a record */ }
@@ -1534,6 +1579,24 @@ export default function City() {
       people.length = 0;
       for (const p of plots) {
         if (p.role === "home") spawnDwellersFor(p);
+      }
+      // Rehydrate the ledgers from persistence, one per person, matched by
+      // the deterministic seed. `pendingLedgers` is populated once on
+      // restore and consumed here — a seed only rehydrates one person, so
+      // a subsequent respawn (a `letGo` then fresh plants) cannot pick up
+      // a stale ledger from an earlier session.
+      if (pendingLedgers.size > 0) {
+        for (const person of people) {
+          const ledger = pendingLedgers.get(person.seed);
+          if (ledger && ledger.homeId === person.homeId) {
+            applyPersonLedger(person, ledger);
+            pendingLedgers.delete(person.seed);
+          }
+        }
+        // Whatever ledgers didn't match a fresh spawn are dropped — the
+        // home they belonged to may have been climbed away from "home" and
+        // no longer spawns anyone. The belonging retires with its home.
+        pendingLedgers.clear();
       }
     }
 

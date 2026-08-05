@@ -280,6 +280,97 @@ export function effectiveDistanceSq(d2: number, regular: boolean): number {
   return regular ? d2 / (REGULAR_PULL_FACTOR * REGULAR_PULL_FACTOR) : d2;
 }
 
+// ——— persisted ledger — the belonging that must outlive a page close ——————
+//
+// A regular is a habit, and a habit is history. Without persistence, the
+// plots come back on reload but the teal colonies around them do not — the
+// visitor sees decoration where their previous visit built causal history.
+// This ledger is the small state vector that IS a person's belonging:
+// which plots they kept returning to (foodVisit / gatherVisit) and which
+// they crossed the regular threshold at (regularStoreId / regularEventId).
+// Persist this and the settlement's micro-communities survive; drop it and
+// the plot's identity resets to a role instead of a history.
+//
+// The (homeId, seed) pair identifies which dweller of which home this
+// ledger belongs to — spawning is deterministic (`dwellersPerHome(home.seed)`
+// residents, each seeded `home.seed ^ (i + 1)`), so on restore the seed
+// matches back to exactly the person the ledger came from.
+
+export type PersistedPersonLedger = {
+  seed: number;
+  homeId: number;
+  foodVisit: VisitRecord | null;
+  gatherVisit: VisitRecord | null;
+  regularStoreId: number | null;
+  regularEventId: number | null;
+};
+
+/**
+ * Read a person's ledger for persistence. Structural copy of the visit
+ * records so the caller cannot mutate the returned object into the person
+ * — the persist path is a pure read.
+ */
+export function personLedgerFor(person: {
+  seed: number;
+  homeId: number;
+  foodVisit: VisitRecord | null;
+  gatherVisit: VisitRecord | null;
+  regularStoreId: number | null;
+  regularEventId: number | null;
+}): PersistedPersonLedger {
+  return {
+    seed: person.seed,
+    homeId: person.homeId,
+    foodVisit: person.foodVisit
+      ? { plotId: person.foodVisit.plotId, visits: person.foodVisit.visits }
+      : null,
+    gatherVisit: person.gatherVisit
+      ? { plotId: person.gatherVisit.plotId, visits: person.gatherVisit.visits }
+      : null,
+    regularStoreId: person.regularStoreId,
+    regularEventId: person.regularEventId,
+  };
+}
+
+/**
+ * True when a ledger carries any belonging — a visit record started or a
+ * regular slot filled. An empty ledger has nothing to persist; skip it and
+ * the payload stays small.
+ */
+export function ledgerIsMeaningful(ledger: PersistedPersonLedger): boolean {
+  return (
+    ledger.foodVisit != null ||
+    ledger.gatherVisit != null ||
+    ledger.regularStoreId != null ||
+    ledger.regularEventId != null
+  );
+}
+
+/**
+ * Apply a persisted ledger back onto a freshly-spawned person. Mutates the
+ * target. The caller matched by (homeId, seed) — mismatches are the caller's
+ * problem, and the applied fields are only the four the ledger owns (the
+ * spawn location, phase, need, and heading remain the fresh spawn's).
+ */
+export function applyPersonLedger(
+  person: {
+    foodVisit: VisitRecord | null;
+    gatherVisit: VisitRecord | null;
+    regularStoreId: number | null;
+    regularEventId: number | null;
+  },
+  ledger: PersistedPersonLedger,
+): void {
+  person.foodVisit = ledger.foodVisit
+    ? { plotId: ledger.foodVisit.plotId, visits: ledger.foodVisit.visits }
+    : null;
+  person.gatherVisit = ledger.gatherVisit
+    ? { plotId: ledger.gatherVisit.plotId, visits: ledger.gatherVisit.visits }
+    : null;
+  person.regularStoreId = ledger.regularStoreId;
+  person.regularEventId = ledger.regularEventId;
+}
+
 /**
  * Like `targetForNeed`, but honors a person's regular slot. The signature
  * takes the plot id (or `null`) rather than the full record so the caller can
