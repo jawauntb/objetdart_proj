@@ -86,6 +86,13 @@ import {
 } from "@/lib/city-towers";
 import { buildFacadeAtlas, type FacadeAtlas } from "@/lib/city-textures";
 import {
+  applyCurtainWallShader,
+  curtainWallTierFor,
+  equatorRadiusForVariant,
+  type CurtainWallHandle,
+  type CurtainWallTier,
+} from "@/lib/city-curtainwall";
+import {
   createRooftopScene,
   type RooftopHost,
   type RooftopScene,
@@ -148,6 +155,12 @@ export type SkylineScene = {
 export type SkylineOptions = {
   maxInstances: number;
   shadows?: boolean;
+  /** Curtain-wall shader tier for event towers. Defaults to "high"
+   *  when shadows are on (a scene already paying for PCF shadows can
+   *  pay for a per-pane hash), "medium" when shadows are off
+   *  (mullions only, no per-pane roughness or tint jitter). Pass
+   *  explicit "low" to keep the current baked-atlas look. */
+  curtainWallTier?: CurtainWallTier;
 };
 
 /**
@@ -362,6 +375,11 @@ type EventPlotSlot = {
   group: THREE.Group;
   built: BuiltEventTower | null;
   lastBakeSlot: number;
+  /** Handle to the curtain-wall shader patch on this slot's material.
+   *  Owned per-plot so the column count and tier stay in step with the
+   *  variant's equator radius. Null when tier="low" or before the slot
+   *  has been populated. */
+  curtainWall: CurtainWallHandle | null;
 };
 
 // ── the scene ────────────────────────────────────────────────────────────
@@ -702,8 +720,13 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
     const group = new THREE.Group();
     group.visible = false;
     eventRoot.add(group);
-    eventSlots.push({ group, built: null, lastBakeSlot: -1 });
+    eventSlots.push({ group, built: null, lastBakeSlot: -1, curtainWall: null });
   }
+
+  // Curtain-wall tier for event towers. Defaults follow shadows —
+  // scenes paying for PCF shadows can afford the per-pane hash;
+  // shadow-less scenes still get the mullions.
+  const curtainWallTier: CurtainWallTier = curtainWallTierFor(shadowsOn, opts.curtainWallTier);
 
   // Build (or rebuild) the event tower at this slot from the plot's seed.
   // Delegates to `city-towers.buildEventTower` which owns the variant
@@ -714,6 +737,10 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
     if (slot.built) {
       disposeBuiltEventTower(slot.built);
       slot.built = null;
+      // The curtain-wall handle points at the now-disposed material,
+      // so drop it too. A fresh one is installed below on the new
+      // material.
+      slot.curtainWall = null;
     }
     // Clear the persistent group before adding the new tower's meshes.
     while (slot.group.children.length) {
@@ -742,6 +769,20 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
     }
     slot.built = built;
     slot.lastBakeSlot = -1;
+
+    // Install the curtain-wall shader on this tower's material. Column
+    // count derives from the variant's equator radius times the plot's
+    // sx (world footprint). Idempotent: a seed swap that rebuilt the
+    // tower rebuilds the material through facadeMaterialFor, so we
+    // re-install the shader here on the fresh material.
+    const equatorLocal = equatorRadiusForVariant(variant);
+    const { sx } = footprintForRole("event", seed);
+    const equatorWorldM = equatorLocal * sx;
+    slot.curtainWall = applyCurtainWallShader(built.material, {
+      seed,
+      tier: curtainWallTier,
+      equatorRadiusM: equatorWorldM,
+    });
   }
 
   // ── temporaries ──────────────────────────────────────────────────
