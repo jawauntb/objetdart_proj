@@ -62,6 +62,8 @@ import {
   type CityRole,
 } from "@/lib/city-audio";
 import { createCityComposer, type CityComposer } from "@/lib/city-composer";
+import { createCitySky, fogColorFromSky, type CitySky } from "@/lib/city-sky";
+import { createCitySun, type CitySun } from "@/lib/city-sun";
 import {
   baselineLitFractionForDay,
   emissiveIntensityForDay,
@@ -635,7 +637,17 @@ const GROUND_FRAG = /* glsl */`
 
     // an idle drift on the noise — nothing waves in reduced motion; the
     // uTime uniform is what the CPU pauses when reduce is set.
-    gl_FragColor = vec4(col, 1.0);
+    //
+    // Alpha follows the horizon mask so the real Preetham sky rendered
+    // into the worldScene shows through above the horizon and blends
+    // softly into the 2D painterly ground below it. The mask is the same
+    // smoothstep the composition above uses (0 sky-side, 1 ground-side)
+    // — writing it as the alpha channel means the sky pixels never make
+    // it to the output buffer, so what we see up there is Preetham. The
+    // 2D sun/moon disks are kept for their reduced-motion legibility on
+    // the small horizontal strip they occupy at low altitudes; above the
+    // horizon they fade with the ground mask into the Preetham sun.
+    gl_FragColor = vec4(col, ground);
   }
 `;
 
@@ -966,6 +978,10 @@ export default function City() {
     const groundMat = new THREE.ShaderMaterial({
       depthTest: false,
       depthWrite: false,
+      // The shader writes alpha=ground (0 above horizon, 1 below) so the
+      // Preetham sky rendered in worldScene shows through the top of the
+      // frame. Standard alpha blend over whatever the worldScene painted.
+      transparent: true,
       uniforms: groundUniforms,
       vertexShader: GROUND_VERT,
       fragmentShader: GROUND_FRAG,
@@ -1056,13 +1072,89 @@ export default function City() {
     plotMesh.frustumCulled = false;
     plotScene.add(plotMesh);
 
+    // ── world scene (perspective, HDR sky, real sun) ─────────────────────
+    // The real 3D scene the ground shader now composites over. It carries:
+    //   - a Preetham HDR sky (city-sky.ts) as visible backdrop AND as the
+    //     source cubemap for the PMREM environment IBL the future PBR
+    //     buildings and glass will reflect
+    //   - a directional sun (city-sun.ts) with PCF soft shadows configured
+    //     against a placeholder shadow-receiver plane at y=0. Sunset light
+    //     rakes across the settlement, shadow bias tuned for tall geometry.
+    //   - a hemisphere fill so the shadowed side of a future facade never
+    //     goes to pure black
+    //   - exponential fog whose colour is sampled from the sky at horizon
+    //     each slot change, so distance dissolves into the same colour the
+    //     sky is painting
+    //   - a large ground plane using MeshStandardMaterial. It receives the
+    //     directional shadow and reads scene.environment for IBL — the
+    //     surface state Aesthetic Slot C's 3D prisms will drop onto.
+    const worldScene = new THREE.Scene();
+    // Perspective camera. Sits at eye level (y=6 units), looking toward the
+    // scene origin along -Z. FoV 42° matches a moderate wide-angle lens —
+    // wide enough to hold the bird's-eye impression, narrow enough to keep
+    // foreshortening on future towers. The camera's aspect is written from
+    // the resize observer below.
+    const worldCam = new THREE.PerspectiveCamera(42, 1, 0.5, 4000);
+    worldCam.position.set(0, 12, 60);
+    worldCam.lookAt(0, 4, 0);
+    // Exponential fog. FogExp2 has one parameter (density) — the color is
+    // updated each sky-slot change from sampleSkyColor at horizon-theta.
+    const worldFog = new THREE.FogExp2(0x88a5c8, 0.0035);
+    worldScene.fog = worldFog;
+
+    // Sky + sun. Both are quantised so the expensive PMREM prefilter and
+    // shadow-camera recompute only run when the day has visibly advanced.
+    const citySky: CitySky = createCitySky({ renderer, resolution: 256, slotsPerDay: 64 });
+    const visibleSky = citySky.makeVisibleSky();
+    worldScene.add(visibleSky);
+    worldScene.environment = citySky.environment;
+
+    const citySun: CitySun = createCitySun({ area: 220, mapSize: 2048, hemiIntensity: 0.35 });
+    worldScene.add(citySun.light);
+    worldScene.add(citySun.target);
+    worldScene.add(citySun.hemi);
+
+    // Placeholder ground plane. Large — the horizon line the ground shader
+    // paints on top sits above ~0.42 uv, which corresponds roughly to the
+    // camera-forward direction at eye level. MeshStandardMaterial so the
+    // IBL and directional sun actually light it; receives shadow so tall
+    // geometry added in later PRs immediately reads as grounded. The 2D
+    // painterly ground shader covers most of what the visitor sees below
+    // the horizon; this plane is here so the sun has something to fall on
+    // when we look past the 2D horizon into the Preetham distance.
+    const worldGround = new THREE.Mesh(
+      new THREE.PlaneGeometry(2000, 2000),
+      new THREE.MeshStandardMaterial({
+        color: 0x6a614c,
+        roughness: 0.95,
+        metalness: 0.0,
+      }),
+    );
+    worldGround.rotation.x = -Math.PI / 2;
+    worldGround.receiveShadow = true;
+    worldGround.position.y = 0;
+    worldScene.add(worldGround);
+
+    // Apply the current governor tier to the shadow map. On low / sleep
+    // tiers the shadow map is off but the light still lights — the ground
+    // plane and IBL still read as sunlit, only the cast shadow is dropped.
+    citySun.applyTier(governor.tier());
+
+    // First bake happened inside createCitySky at dayFraction=0.25 so the
+    // environment texture is real from frame zero. The tick loop below
+    // rebakes at the actual restored cityTimeMs once persistence has been
+    // read (which happens between this line and the first render).
+    let lastSkySlot = -1;
+
     // ── composer ─────────────────────────────────────────────────────────
-    // The tick loop below hands its two RenderPasses to this composer so
-    // bright pixels can bloom, the workflow stays linear, and B/C/D have
+    // The tick loop below hands its RenderPasses to this composer so
+    // bright pixels can bloom, the workflow stays linear, and D/E have
     // a chain to hang more passes on. Sized 1×1 here — the resize() call
     // a few blocks down snaps it to the real canvas immediately.
     const composer: CityComposer = createCityComposer({
       renderer,
+      worldScene,
+      worldCam,
       groundScene,
       groundCam,
       plotScene,
@@ -1245,6 +1337,12 @@ export default function City() {
       fgctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       groundUniforms.uAspect.value = width / Math.max(1, height);
       plotUniforms.uPixSize.value.set(width, height);
+      // Perspective world camera follows the canvas aspect. FoV stays
+      // constant — the visitor's field of view is a property of the scene,
+      // not the browser window, and letterboxing looks worse than a
+      // slightly re-cropped skyline.
+      worldCam.aspect = width / Math.max(1, height);
+      worldCam.updateProjectionMatrix();
       // keep the keyboard cursor inside the new bounds; on first sizing it
       // lands in the middle of the field, ready for the arrows
       if (cursorX === 0 && cursorY === 0) {
@@ -1780,19 +1878,38 @@ export default function City() {
       groundUniforms.uBreath.value = breath;
       plotUniforms.uDayFrac.value = dayFraction(cityTimeMs);
       plotUniforms.uNight.value = nightAmt;
+      // Preetham sky + directional sun. Both are quantised on the same
+      // 64-slot-per-day rhythm — on frames where the sun has not visibly
+      // moved, update() is a cheap early-out. When the slot advances,
+      // the sky re-bakes into a cube RT, PMREM re-prefilters into the
+      // scene environment IBL, the sun light repositions + recolours,
+      // and the fog picks up the new horizon colour. Everything the
+      // future PBR glass hangs off.
+      const df = dayFraction(cityTimeMs);
+      citySky.update(df);
+      citySun.update(df);
+      if (Math.floor(df * 64) !== lastSkySlot) {
+        lastSkySlot = Math.floor(df * 64);
+        // The environment texture identity changes on each PMREM re-run;
+        // re-assign it to the scene so materials pick up the new IBL.
+        worldScene.environment = citySky.environment;
+        worldFog.color.copy(fogColorFromSky(citySky.currentState));
+        // Shadow-map allocation follows the current tier. Cheap on
+        // matched tiers — only reallocates on transitions.
+        citySun.applyTier(tier);
+      }
       // The dusk-and-lit-windows dials. Both are pure functions of
       // dayFraction (from src/lib/city-windows.ts, pinned by the
       // test-city-windows.mjs ladder — dawn=0, noon=0, dusk~0.7,
       // midnight~0.4). Bloom in the composer picks up warm emissive
       // pixels above threshold at dusk, and the whole block glows.
-      const _dayFrac = dayFraction(cityTimeMs);
-      plotUniforms.uWindowLit.value = baselineLitFractionForDay(_dayFrac);
-      plotUniforms.uWindowIntensity.value = emissiveIntensityForDay(_dayFrac);
-      // The two RenderPasses live inside the composer now. Bloom threshold /
+      plotUniforms.uWindowLit.value = baselineLitFractionForDay(df);
+      plotUniforms.uWindowIntensity.value = emissiveIntensityForDay(df);
+      // The three RenderPasses live inside the composer now. Bloom threshold /
       // strength / radius ride the same dayFraction the shaders do — the
       // ember rises as the sun sets. Tier gates the bloom entirely on
       // low/sleep so slow devices keep hitting frame budget.
-      composer.render(dayFraction(cityTimeMs), tier);
+      composer.render(df, tier);
       drawOverlay();
       raf = requestAnimationFrame(tick);
     };
@@ -2634,6 +2751,14 @@ export default function City() {
       // Composer holds bloom pyramid RTs — drop them before disposing
       // the renderer that owns their GL context.
       composer.dispose();
+      // Sky owns a cube RT + PMREM env + shader material; sun owns the
+      // shadow-map allocation. Both drop cleanly before the renderer.
+      citySky.dispose();
+      citySun.dispose();
+      // Ground plane geometry / material are ordinary — dispose them so
+      // the GPU doesn't leak across remounts.
+      worldGround.geometry.dispose();
+      (worldGround.material as THREE.Material).dispose();
       renderer.dispose();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

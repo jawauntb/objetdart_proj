@@ -95,6 +95,17 @@ export type CityComposerOptions = {
   groundCam: THREE.Camera;
   plotScene: THREE.Scene;
   plotCam: THREE.Camera;
+  /**
+   * Optional real-perspective world scene rendered BEFORE the 2D ground
+   * shader. Contains the Preetham sky (as scene.background), the directional
+   * sun light, hemisphere fill, and any future 3D geometry that receives
+   * IBL from scene.environment. When present, the composer runs
+   * worldScene first (clearing) and the ground2D pass second, non-clearing
+   * — the ground shader is expected to write alpha < 1 above the horizon
+   * so the real sky shows through.
+   */
+  worldScene?: THREE.Scene;
+  worldCam?: THREE.Camera;
   /** Initial CSS-pixel size; the room will resize us in ResizeObserver. */
   width: number;
   height: number;
@@ -120,9 +131,21 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
   });
   const composer = new EffectComposer(renderer, target);
 
-  // RenderPass 1: ground/sky. Clears the frame.
+  // Optional RenderPass 0: the perspective world scene — real sky mesh,
+  // directional sun, fog, IBL-lit ground and (later) 3D buildings. Runs
+  // first and clears the frame so the 2D ground shader that follows can
+  // paint on top with alpha < 1 above the horizon and reveal this sky.
+  if (opts.worldScene && opts.worldCam) {
+    const worldPass = new RenderPass(opts.worldScene, opts.worldCam);
+    worldPass.clear = true;
+    composer.addPass(worldPass);
+  }
+
+  // RenderPass 1: 2D ground/atmosphere. Clears the frame only when there
+  // is no world scene in front of it — otherwise it composites over the
+  // world scene and its shader alpha decides where the world shows.
   const groundPass = new RenderPass(groundScene, groundCam);
-  groundPass.clear = true;
+  groundPass.clear = !opts.worldScene;
   composer.addPass(groundPass);
 
   // RenderPass 2: the plots, alpha-blended over the ground. Must NOT clear.
