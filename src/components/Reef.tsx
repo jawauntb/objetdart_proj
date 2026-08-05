@@ -22,6 +22,7 @@ import * as haptics from "@/lib/haptics";
 import { getTurbulence, relaxTurbulence, stirTurbulence } from "@/lib/turbulence";
 import RoomShell from "@/components/RoomShell";
 import type { RoomVoice } from "@/lib/gesture/defaults";
+import { tapTrainTier } from "@/lib/gesture/core";
 import { createGLStage, FULLSCREEN_VERT_UNIT } from "@/lib/webgl/stage";
 import { clocksFrom } from "@/lib/webgl/sizing";
 import {
@@ -597,6 +598,81 @@ export default function Reef() {
         cursorY = ny;
         cursorLit = 1;
         if (fingers >= 2) return;
+        // the rapid-tap ladder (1 / 3 / 5 / n), in living coral: 1 rings a
+        // polyp, 3 feeds a wave through its nearest neighbours, 5 raises a
+        // spawning shimmer over the colony, n is the whole reef in crescendo
+        const tier = tapTrainTier(count);
+        if (tier === "n") {
+          const crest = clamp01(0.5 + (count - 7) * 0.12 + intensity * 0.3);
+          // the colony in crescendo: every polyp rings pitched by its own
+          // size, small to large, and the water shivers with it
+          const bySize = [...state.polyps].sort((a, b) => a.size - b.size);
+          for (let i = 0; i < bySize.length; i++) {
+            const p = bySize[i];
+            pushRipple(p.x, p.y, 0.4 + crest * 0.5);
+            if (i < 4) {
+              try {
+                audio.playTone(ringHzFor(p.size), 0.16 + crest * 0.16);
+              } catch {
+                /* noop */
+              }
+            }
+          }
+          pushRipple(nx, ny, 0.6 + crest * 0.4);
+          stirTurbulence(0.1 + crest * 0.15);
+          try {
+            haptics.roll();
+          } catch {
+            /* noop */
+          }
+          return;
+        }
+        if (tier === 5 && count === 5) {
+          // a spawning shimmer: the light over the reef lifts and every
+          // sealed cornerstone releases a bright ring of gametes
+          state = { ...state, illum: clamp01(state.illum + 0.06 + intensity * 0.04) };
+          for (const p of state.polyps) {
+            if (p.sealed) pushRipple(p.x, p.y, 0.7 + intensity * 0.2);
+          }
+          pushRipple(nx, ny, 0.5);
+          try {
+            audio.bell();
+            audio.playTone(ringHzFor(meanSize(state)) * 2, 0.18 + intensity * 0.12);
+            haptics.chop();
+          } catch {
+            /* noop */
+          }
+          writer.schedule();
+          return;
+        }
+        if (tier === 3 && count === 3) {
+          // a feeding wave: the three polyps nearest the strike answer in
+          // turn, each with its own pitch — the colony passing the touch on
+          const near = [...state.polyps]
+            .sort(
+              (a, b) =>
+                Math.hypot(a.x - nx, a.y - ny) - Math.hypot(b.x - nx, b.y - ny),
+            )
+            .slice(0, 3);
+          if (near.length === 0) {
+            ringHere(nx, ny, 0.7 + intensity * 0.3);
+            return;
+          }
+          for (const p of near) {
+            pushRipple(p.x, p.y, 0.5 + intensity * 0.3);
+            try {
+              audio.playTone(ringHzFor(p.size), 0.14 + intensity * 0.1);
+            } catch {
+              /* noop */
+            }
+          }
+          try {
+            haptics.ripple(0.4 + intensity * 0.3);
+          } catch {
+            /* noop */
+          }
+          return;
+        }
         const found = nearestPolyp(state, nx, ny, 0.08);
         if (found) {
           soundPolyp(found.size);

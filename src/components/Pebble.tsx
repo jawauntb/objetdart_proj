@@ -15,6 +15,7 @@ import * as haptics from "@/lib/haptics";
 import { getTurbulence, relaxTurbulence, stirTurbulence } from "@/lib/turbulence";
 import RoomShell from "@/components/RoomShell";
 import type { RoomVoice } from "@/lib/gesture/defaults";
+import { tapTrainTier } from "@/lib/gesture/core";
 import { createGLStage, FULLSCREEN_VERT_UNIT } from "@/lib/webgl/stage";
 import { clocksFrom } from "@/lib/webgl/sizing";
 import {
@@ -521,6 +522,62 @@ export default function Pebble() {
         const dyc = ny - 0.5;
         const distFromCentre = Math.hypot(dxc, dyc);
         if (distFromCentre < 0.28) {
+          // the rapid-tap ladder (1 / 3 / 5 / n), on cut stone: 1 rings the
+          // fundamental, 3 strikes the lattice's triad, 5 knaps a flash off
+          // a cleavage plane, n rolls the full bell and spins the section
+          const tier = tapTrainTier(count);
+          if (tier === "n") {
+            const crest = clamp01(0.5 + (count - 7) * 0.12 + intensity * 0.3);
+            const partials = partialsFor(state);
+            const hz = ringHzFor(state);
+            try {
+              for (let k = 0; k < Math.min(partials.length, 5); k++) {
+                audio.playTone(hz * partials[k], (0.14 + crest * 0.14) * partials[k]);
+              }
+              haptics.bloom();
+            } catch {
+              /* noop */
+            }
+            rotationTarget += (0.4 + crest * 0.8) * (nx < 0.5 ? -1 : 1);
+            cleavageStrength = Math.min(1, cleavageStrength + 0.3 + crest * 0.4);
+            return;
+          }
+          if (tier === 5 && count === 5) {
+            // a knap: the strike finds the cleavage plane nearest the blow's
+            // own angle and flashes along it — light, a high partial, a chop
+            const ang = Math.atan2(dyc, dxc);
+            const { plane } = cleavageAt(state, ang);
+            cleavagePlane = plane;
+            cleavageStrength = Math.min(1, 0.7 + intensity * 0.3);
+            const partials = partialsFor(state);
+            try {
+              audio.playTone(
+                ringHzFor(state) * partials[Math.min(partials.length - 1, 2)],
+                0.2 + intensity * 0.15,
+              );
+              haptics.chop();
+            } catch {
+              /* noop */
+            }
+            return;
+          }
+          if (tier === 3 && count === 3) {
+            // the lattice's triad: fundamental and the first two allowed
+            // reflections together — the diffraction fingerprint as a chord
+            const partials = partialsFor(state);
+            const hz = ringHzFor(state);
+            try {
+              audio.playTone(hz, 0.2 + intensity * 0.15);
+              for (let k = 1; k < Math.min(partials.length, 3); k++) {
+                audio.playTone(hz * partials[k], (0.12 + intensity * 0.1) * partials[k]);
+              }
+              haptics.ripple(0.4 + intensity * 0.3);
+            } catch {
+              /* noop */
+            }
+            cleavageStrength = Math.min(1, cleavageStrength + 0.2 + intensity * 0.2);
+            return;
+          }
           ringStone(0.5 + intensity * 0.5 + Math.min(0.3, (count - 1) * 0.08));
           try {
             haptics.tap();

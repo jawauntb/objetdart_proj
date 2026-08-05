@@ -56,6 +56,12 @@ import {
   painterlyStrengthForPitch,
   type CityPainterlyPass,
 } from "@/lib/city-painterly";
+import {
+  createCityGodraysPass,
+  godraysGateOpen,
+  godraysStrengthForDay,
+  type CityGodraysPass,
+} from "@/lib/city-godrays";
 import type { QualityTier } from "@/lib/room-runtime";
 
 export type CityComposer = {
@@ -69,8 +75,16 @@ export type CityComposer = {
    *   `pitch01`     — the camera's eased pitch in [0..1] (0=eye-level,
    *   1=bird's-eye). Optional so pre-camera callers still compile; when
    *   omitted, DOF stays off. Drives the Bokeh strength ramp.
+   *   `sunScreen`   — the projected sun position in NDC ([-1..1]², z<1
+   *   when in front of the camera) plus a visibility flag. Optional so
+   *   pre-sun callers still compile; when omitted, god-rays are off.
    */
-  render(dayFraction: number, tier: QualityTier, pitch01?: number): void;
+  render(
+    dayFraction: number,
+    tier: QualityTier,
+    pitch01?: number,
+    sunScreen?: { x: number; y: number; visible: boolean },
+  ): void;
   /**
    * Resize the offscreen render targets to (width, height) in CSS pixels
    * and set the renderer pixel ratio. Call from the room's ResizeObserver
@@ -160,16 +174,17 @@ export function passesForTier(tier: QualityTier): {
   bloom: boolean;
   ssao: boolean;
   dof: boolean;
+  godrays: boolean;
 } {
   switch (tier) {
     case "high":
-      return { bloom: true, ssao: true, dof: true };
+      return { bloom: true, ssao: true, dof: true, godrays: true };
     case "medium":
-      return { bloom: true, ssao: true, dof: false };
+      return { bloom: true, ssao: true, dof: false, godrays: false };
     case "low":
     case "sleep":
     default:
-      return { bloom: false, ssao: false, dof: false };
+      return { bloom: false, ssao: false, dof: false, godrays: false };
   }
 }
 
@@ -373,6 +388,17 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
     composer.addPass(bokehPass);
   }
 
+  // God-rays — volumetric sun shafts through the buildings, gated to the
+  // horizon-crossing windows at dawn and dusk and high tier only. Runs
+  // AFTER the DOF pass so shafts scatter follows the diorama blur, and
+  // BEFORE the painterly register-shift so the warm-tint register at
+  // bird's-eye also acts on the shaft pixels. Cheap short-circuit inside
+  // the fragment shader on uStrength=0 means outside the gate the pass
+  // ships a passthrough copy at ~one texture fetch per pixel.
+  const godraysPass: CityGodraysPass = createCityGodraysPass();
+  godraysPass.enabled = false;
+  composer.addPass(godraysPass);
+
   // Painterly register-shift — the Currier & Ives LUT-like overlay that
   // arrives when the visitor pinches to bird's-eye. Runs between bloom
   // and OutputPass so the ember still catches (bloom writes into the
@@ -413,6 +439,17 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
   // is a microsecond that pays for B/C/D in the next PRs.
   let lastTier: QualityTier | null = null;
   let lastEmberSlot = -1;
+  // Quantised god-rays slot — the strength curve is a linear ramp inside
+  // a narrow [±0.08] gate, so quantising the day into 128 slots gives us
+  // ~10 samples across the ramp, which is imperceptible to the eye.
+  // Writing the uniform only when the slot advances saves the JS-side
+  // uniform-object churn on the ~99% of frames that don't need it.
+  let lastGodraysStrengthSlot = -1;
+  // Quantised sun-uv slot — 128×128 slots across the frame. Any finer
+  // and the human eye can't tell; any coarser and a slow pan of the
+  // camera would step the sun position visibly.
+  let lastGodraysSunSlotX = -1;
+  let lastGodraysSunSlotY = -1;
   // Quantised DOF slot — writing the Bokeh uniforms every frame is a JS
   // object write per uniform, cheap but not free. Round pitch01 to
   // eighths (~7° each) so the ramp only touches the uniform when the
@@ -433,7 +470,12 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
   };
 
   return {
-    render(dayFraction: number, tier: QualityTier, pitch01?: number) {
+    render(
+      dayFraction: number,
+      tier: QualityTier,
+      pitch01?: number,
+      sunScreen?: { x: number; y: number; visible: boolean },
+    ) {
       // Tier gating. Passes are pre-constructed in the chain; we only
       // flip their `enabled` bit. The ground and plots still render
       // through the composer's linear buffer at every tier so C's PBR
@@ -455,11 +497,23 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
         // High tier gets a marginally deeper vignette so the paper-edge
         // halo reads on the big screens that carry the extra headroom.
         painterlyPass.uniforms.uVignette.value = tier === "high" ? 1.15 : 1.0;
+        // God-rays live at high tier only. On any drop out of high, mute
+        // the strength uniform so a later re-entry starts from a clean
+        // ramp — otherwise the leftover uStrength from the last high-tier
+        // frame would flash for one frame on re-entry.
+        if (!alive.godrays) {
+          godraysPass.enabled = false;
+          godraysPass.uniforms.uStrength.value = 0;
+        }
         lastTier = tier;
-        // Force the ember + DOF + painterly to recompute after a tier flip.
+        // Force the ember + DOF + painterly + god-rays to recompute
+        // after a tier flip.
         lastEmberSlot = -1;
         lastDofSlot = -1;
         lastPainterlySlot = -1;
+        lastGodraysStrengthSlot = -1;
+        lastGodraysSunSlotX = -1;
+        lastGodraysSunSlotY = -1;
         // When we drop below high tier the Bokeh uniforms must return to
         // zero so a later high-tier re-entry starts from a clean ramp —
         // otherwise the leftover maxblur from the last high-tier frame
@@ -548,6 +602,50 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
         }
       }
 
+      // God-rays: high tier only, gated to dawn/dusk horizon-crossings.
+      // The pass is enabled ONLY when the gate is open AND the sun's
+      // projection is visible in the frame — outside that window we set
+      // enabled=false so the composer skips the draw entirely. Inside
+      // it, we update the sun UV and the strength curve on quantised
+      // slots so the uniform writes only fire when a value has visibly
+      // advanced.
+      if (tier === "high") {
+        const gateOpen = godraysGateOpen(dayFraction);
+        const sunVisible = sunScreen ? sunScreen.visible : false;
+        const active = gateOpen && sunVisible;
+        godraysPass.enabled = active;
+        if (active) {
+          // Strength ramp — pinned by test-city-godrays.mjs.
+          const dfSlot = Math.floor(dayFraction * 128);
+          if (dfSlot !== lastGodraysStrengthSlot) {
+            const s = godraysStrengthForDay(dayFraction);
+            godraysPass.uniforms.uStrength.value = s;
+            lastGodraysStrengthSlot = dfSlot;
+          }
+          // Sun UV — NDC → UV is (ndc + 1) * 0.5 on both axes; note the
+          // y-flip is NOT applied here because both the composer's
+          // render target and camera.project() use the same GL-style
+          // convention (y-up in NDC, y-up in UV). If a future renderer
+          // change flipped the target we would flip here too.
+          const sx = sunScreen!.x;
+          const sy = sunScreen!.y;
+          const slotX = Math.round(((sx + 1) * 0.5) * 128);
+          const slotY = Math.round(((sy + 1) * 0.5) * 128);
+          if (slotX !== lastGodraysSunSlotX || slotY !== lastGodraysSunSlotY) {
+            godraysPass.uniforms.uSunUv.value.set(
+              (sx + 1) * 0.5,
+              (sy + 1) * 0.5,
+            );
+            lastGodraysSunSlotX = slotX;
+            lastGodraysSunSlotY = slotY;
+          }
+        } else if (godraysPass.uniforms.uStrength.value !== 0) {
+          // Explicit zero so a next-frame re-enable (fast gate transit)
+          // doesn't flash the previous strength for one frame.
+          godraysPass.uniforms.uStrength.value = 0;
+        }
+      }
+
       composerLike.render();
     },
     setSize(width, height, pixelRatio) {
@@ -620,6 +718,17 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
         if (typeof pa.dispose === "function") {
           try {
             pa.dispose();
+          } catch {
+            /* noop */
+          }
+        }
+      }
+      // God-rays pass — same ShaderMaterial + FullScreenQuad dispose.
+      {
+        const gr = godraysPass as unknown as { dispose?: () => void };
+        if (typeof gr.dispose === "function") {
+          try {
+            gr.dispose();
           } catch {
             /* noop */
           }

@@ -25,6 +25,7 @@ import * as haptics from "@/lib/haptics";
 import { getTurbulence, relaxTurbulence, stirTurbulence } from "@/lib/turbulence";
 import RoomShell from "@/components/RoomShell";
 import type { RoomVoice } from "@/lib/gesture/defaults";
+import { tapTrainTier } from "@/lib/gesture/core";
 import { createGLStage, FULLSCREEN_VERT_UNIT } from "@/lib/webgl/stage";
 import { clocksFrom } from "@/lib/webgl/sizing";
 import {
@@ -766,6 +767,64 @@ export default function Spring() {
         // a two-finger tap steps the lens back; the shell also forwards it
         // through stepBack, but a room may hear the raw tap first
         if (fingers >= 2) return;
+        // the rapid-tap ladder (1 / 3 / 5 / n), in pooled water: 1 rings the
+        // head, 3 strikes the pool's chord, 5 shakes loose a breath of
+        // bubbles, n sets the whole ledger ringing — wider with every tap
+        const tier = tapTrainTier(count);
+        if (tier === "n") {
+          const crest = clamp01(0.5 + (count - 7) * 0.12 + intensity * 0.3);
+          for (const s of state.seeps) pushRipple(s.x, s.y, 0.5 + crest * 0.4);
+          pushRipple(nx, ny, 0.6 + crest * 0.4);
+          stirTurbulence(0.1 + crest * 0.15);
+          const hz = ringHzFor(state.H);
+          try {
+            audio.playTone(hz, 0.3 + crest * 0.3);
+            audio.playTone(hz * (1.5 + crest * 0.5), 0.2 + crest * 0.2);
+            haptics.roll();
+          } catch {
+            /* noop */
+          }
+          return;
+        }
+        if (tier === 5 && count === 5) {
+          // trapped air shaken loose: a breath of bubbles rises from the tap
+          // (only where there is water to rise through)
+          const tMs = performance.now();
+          for (let i = 0; i < 3; i++) {
+            const bx = clamp01(nx + (i - 1) * 0.02);
+            const by = clamp01(ny + 0.02);
+            if (inPoolBounds(bx, by)) bubblePopulation.spawn(bx, by, tMs);
+          }
+          pushRipple(nx, ny, 0.6 + intensity * 0.3);
+          const hz = ringHzFor(state.H);
+          try {
+            audio.playTone(hz * 2, 0.18 + intensity * 0.15);
+            audio.playTone(hz * 3, 0.1);
+            haptics.chop();
+          } catch {
+            /* noop */
+          }
+          return;
+        }
+        if (tier === 3 && count === 3) {
+          // the pool's chord: fundamental, fifth and octave of the live head,
+          // three rings widening from the strike
+          const hz = ringHzFor(state.H);
+          for (let i = 0; i < 3; i++) {
+            pushRipple(nx, ny, 0.3 + i * 0.15 + intensity * 0.2);
+            try {
+              audio.playTone(hz * [1, 1.5, 2][i], 0.14 + intensity * 0.1);
+            } catch {
+              /* noop */
+            }
+          }
+          try {
+            haptics.ripple(0.4 + intensity * 0.3);
+          } catch {
+            /* noop */
+          }
+          return;
+        }
         const found = nearestSeep(state, nx, ny, 0.08);
         if (found) {
           soundSeep(found.flux);

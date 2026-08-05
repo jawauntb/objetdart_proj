@@ -44,6 +44,7 @@ const reef = {
       "a colony of coral polyps at discrete anchor points on a growing calcite substrate, each carrying a size under a shared current and a depth-based illumination. every polyp's ring IS its size, so from the pitch alone you recover how mature it is; the shallowest and lightest polyps grow fastest, but the current can shear a young recruit off the frame if you knock the reef hard enough. nothing on the shelf is created except what the sun gave from above or the current carried past.",
     moves: [
       "tap → a ripple, and the nearest polyp rings at its own pitch; small polyps ring high, cornerstones ring low, so the map is legible before it is explained",
+      "rapid taps (1 / 3 / 5 / n) → a ring → a feeding wave through the three nearest polyps → a spawning shimmer: the light lifts and every cornerstone releases its ring → the whole colony in crescendo, small to large",
       "dwell → recruits a new polyp at the finger, its size climbing on a logistic curve; keep pressing and the polyp matures faster toward saturation",
       "ceremony (hold to the tier) → seals the polyp as a cornerstone — kept between visits, an anchor for what settles next",
       "drag → the current lens shears, and the water column slides across the reef; polyps do not move, but the fbm-warped water reads the drag",

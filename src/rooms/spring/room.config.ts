@@ -49,6 +49,7 @@ const spring = {
       "a two-cell hydraulic ledger — an aquifer under the ground and a small pool over it — with a seep between them and a lip the pool spills over. the water's pitch IS the head that pushed it up, so from the ringing you can read the depth of the water below the ground; nothing on the shelf is created except what the rain gives back or the sun quietly takes.",
     moves: [
       "tap → a ripple, and the water rings at the local head; deep water rings low, and where the finger lands the pool answers first",
+      "rapid taps (1 / 3 / 5 / n) → a ring → the pool's chord: fundamental, fifth and octave of the live head → a breath of bubbles shaken loose → the whole ledger rings, wider with every extra tap",
       "dwell → plants a seep, its rate climbing the head under it; keep pressing and the seep's throat widens, drawing more of the aquifer through",
       "ceremony (hold to the tier) → opens the seep to the aquifer at full — a small artesian rise, kept between visits",
       "drag → the surface film slides, and the pool climbs the far edge; layers of the pool slip against each other without changing the ledger",

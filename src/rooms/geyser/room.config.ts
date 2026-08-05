@@ -44,6 +44,7 @@ const geyser = {
       "a two-state thermal ledger — an aquifer head H(t) under a narrow throat and a temperature T(t) in the same column — with an eruption trigger E = H·T that fires when it crosses upward and reseats only after E has fallen well below it. the room is not a fountain — it is the wait for one; a slow build hisses under the ground, the plume rides the release, the pool cools and starts again. the whole rhythm is read off the two numbers and the phase the column is in; nothing on the shelf is created except what the sky gave back or the mantle quietly poured in.",
     moves: [
       "tap → rings the throat at the local head; the pitch rises through the build and drops after the fire, so the same room sounds like two different rooms across a cycle",
+      "rapid taps (1 / 3 / 5 / n) → a ring → a run of steam marches to the vent → the throat coughs a spit of droplets → from seven on the hammering shifts the trigger itself, and a near-ready geyser can be drummed over the top",
       "dwell → warms the local ground with the palm's own heat, accelerating the build; keep pressing and T climbs faster toward the trigger",
       "ceremony (hold to the tier) → releases the throat manually — a fired eruption whether the trigger was ready or not, kept as a mark of intent",
       "drag → the surface film slides while the pool cools; a shear across the plume, no change to the ledger",
