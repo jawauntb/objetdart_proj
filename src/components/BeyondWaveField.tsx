@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import {
@@ -147,6 +148,7 @@ export default function BeyondWaveField() {
     let night = 0, nightTarget = 0;                     // vessel flip
     let lastInteractionAt = performance.now();
     let holdDeepenAt = -1e9;
+    let entrainBpm = 0, entrainUntil = 0, entrainLastBeat = -1; // rhythm: the field's clock entrained to the hand
 
     // background gradient's shape only depends on `bloom`, which changes
     // rarely — cache it by a coarse bucket instead of allocating one every
@@ -192,6 +194,21 @@ export default function BeyondWaveField() {
 
       if (runningRef.current && !reduceMotionRef.current) {
         time += delta * 0.001 * timeScale;
+      }
+      // an entrained clock: while the hand's tempo holds, the field pulses
+      // on the beat, alternating between two zones like a slow tide
+      if (entrainBpm > 0 && now < entrainUntil) {
+        const beatIdx = Math.floor(now / (60000 / entrainBpm));
+        if (beatIdx !== entrainLastBeat) {
+          entrainLastBeat = beatIdx;
+          pointerRef.current = {
+            x: width * (beatIdx % 2 ? 0.62 : 0.38),
+            y: height * 0.5,
+            force: 0.9,
+            born: now,
+          };
+          try { getFieldAudio().playNote(50 + (beatIdx % 2) * 7, 90); } catch { /* noop */ }
+        }
       }
       // weather leans the field's own parameters, continuously
       if (windX !== 0 || windY !== 0) {
@@ -316,23 +333,73 @@ export default function BeyondWaveField() {
         tap: (e) => {
           lastInteractionAt = performance.now();
           if (e.fingers === 2) {
-            // step back: a panned frame comes home
-            if (Math.abs(panTX) > 0.01 || Math.abs(panTY) > 0.01) {
+            // step back: a raised lens lowers first, then a panned frame
+            // comes home — the frame retreats one step, never two at once
+            if (lensTarget > 0.01) {
+              lensTarget = 0;
+              try { haptics.lens(); } catch { /* noop */ }
+              try { getFieldAudio().playNote(48, 160); } catch { /* noop */ }
+            } else if (Math.abs(panTX) > 0.01 || Math.abs(panTY) > 0.01) {
               panTX = 0;
               panTY = 0;
+              try { haptics.tap(); } catch { /* noop */ }
+            } else {
+              // already home: the field breathes out once, softly
+              pointerRef.current = { x: width / 2, y: height / 2, force: 0.5, born: performance.now() };
+              try { getFieldAudio().playNote(41, 180); } catch { /* noop */ }
               try { haptics.tap(); } catch { /* noop */ }
             }
             return;
           }
           if (e.fingers === 3) {
-            // tutti: the whole field answers once, low and bright
-            pointerRef.current = { x: width / 2, y: height / 2, force: 1.6, born: performance.now() };
+            // tutti: the whole field answers once, as loud as the chord landed
+            pointerRef.current = { x: width / 2, y: height / 2, force: 1.2 + e.intensity * 0.8, born: performance.now() };
             try { getFieldAudio().chime(); } catch { /* noop */ }
-            try { haptics.ripple(0.5); } catch { /* noop */ }
+            try { haptics.ripple(0.35 + e.intensity * 0.3); } catch { /* noop */ }
             return;
           }
           if (e.fingers !== 1) return;
-          stir(e.x, e.y, e.intensity);
+          stir(e.x, e.y, e.intensity + (e.count - 1) * 0.08);
+          // train tiers (1 / 3 / 5 / n from gesture/core): rapid taps fold,
+          // bloom, then flood the interference
+          const trainTier = tapTrainTier(e.count);
+          if (trainTier === 3 && e.count === 3) {
+            // three taps snap the fold deeper — the whole lattice tightens
+            const nextFold = clamp(foldRef.current + 2.2, 4, 16);
+            setFold(Number(nextFold.toFixed(1)));
+            try { getFieldAudio().playNote(52, 130); } catch { /* noop */ }
+            try { getFieldAudio().playNote(59, 190); } catch { /* noop */ }
+            try { haptics.ripple(0.44); } catch { /* noop */ }
+            useField.getState().recordTape("sigil", 0.5, "beyond/train-fold");
+          } else if (trainTier === 5 && e.count === 5) {
+            // five taps bloom the field — the glow swells and a wide ring
+            // opens from the last strike
+            setBloom(clamp01(bloomRef.current + 0.18));
+            const rect = canvas.getBoundingClientRect();
+            pointerRef.current = {
+              x: clamp(e.x - rect.left, 0, rect.width),
+              y: clamp(e.y - rect.top, 0, rect.height),
+              force: 1.7,
+              born: performance.now(),
+            };
+            try { getFieldAudio().bell(); } catch { /* noop */ }
+            try { haptics.bloom(); } catch { /* noop */ }
+            useField.getState().recordTape("sigil", 0.7, "beyond/train-bloom");
+          } else if (trainTier === "n") {
+            // seven and beyond: the crescendo — the pull climbs and each
+            // further tap sends a stronger ring through the lattice
+            setPull(Number(clamp(pullRef.current + 0.1, 0.1, 1.6).toFixed(2)));
+            const rect = canvas.getBoundingClientRect();
+            pointerRef.current = {
+              x: clamp(e.x - rect.left, 0, rect.width),
+              y: clamp(e.y - rect.top, 0, rect.height),
+              force: clamp(1.2 + (e.count - 6) * 0.2, 1.2, 2),
+              born: performance.now(),
+            };
+            try { getFieldAudio().playNote(38 + (e.count - 7) * 2, 200); } catch { /* noop */ }
+            try { (e.count === 7 ? haptics.storm : () => haptics.ripple(0.55))(); } catch { /* noop */ }
+            useField.getState().recordTape("sigil", clamp(0.6 + (e.count - 7) * 0.08, 0.6, 1), "beyond/train-crescendo");
+          }
         },
         drag: (e) => {
           lastInteractionAt = performance.now();
@@ -368,7 +435,10 @@ export default function BeyondWaveField() {
         },
         scrub: (e) => {
           lastInteractionAt = performance.now();
-          stir(e.cx, e.cy, 1.2 + Math.min(1, Math.abs(e.winding) * 0.3));
+          // a faster or wider circle stirs harder, and the circling's
+          // direction leans the fold itself — with the clock or against it
+          stir(e.cx, e.cy, 1.2 + Math.min(1, Math.abs(e.winding) * 0.3 + Math.abs(e.angularVelocity) * 60));
+          foldRef.current = clamp(foldRef.current + Math.sign(e.winding) * 0.18, 4, 16);
         },
         flick: (e) => {
           lastInteractionAt = performance.now();
@@ -384,8 +454,10 @@ export default function BeyondWaveField() {
         hold: (e) => {
           lastInteractionAt = performance.now();
           if (e.fingers === 3) {
-            // three fingers hold the law: time dilates while the hand stays
+            // three fingers hold the law: time dilates while the hand stays,
+            // and keeps deepening toward stillness the longer it is held
             if (e.phase === "enter") { timeScaleTarget = 0.25; try { haptics.tap(); } catch { /* noop */ } }
+            if (e.phase === "tick") timeScaleTarget = Math.max(0.08, 0.25 - 0.17 * Math.min(1, e.elapsed / 4000));
             if (e.phase === "release") timeScaleTarget = 1;
             return;
           }
@@ -416,9 +488,14 @@ export default function BeyondWaveField() {
           }
         },
         rhythm: (e) => {
-          if (e.stability > 0.7) {
-            try { getFieldAudio().chime(); } catch { /* noop */ }
-          }
+          // a steady tapped pulse: the field's clock locks to your tempo and
+          // pulses on the beat for a while (visible in the draw loop above)
+          if (e.stability <= 0.7) return;
+          entrainBpm = Math.max(40, Math.min(150, e.bpm));
+          entrainUntil = performance.now() + 9000;
+          try { getFieldAudio().chime(); } catch { /* noop */ }
+          try { haptics.tap(); } catch { /* noop */ }
+          useField.getState().recordTape("sigil", 0.45, "beyond/entrain");
         },
       },
       { wheelZoom: false },
@@ -441,9 +518,11 @@ export default function BeyondWaveField() {
       shake: ({ intensity }) => {
         if (reduceMotionRef.current) return;
         lastInteractionAt = performance.now();
+        // deterministic scatter — seeded by the clock, never Math.random
+        const seed = performance.now() * 0.0137;
         pointerRef.current = {
-          x: width * (0.3 + Math.random() * 0.4),
-          y: height * (0.3 + Math.random() * 0.4),
+          x: width * (0.3 + (0.5 + Math.sin(seed) * 0.5) * 0.4),
+          y: height * (0.3 + (0.5 + Math.cos(seed * 1.7) * 0.5) * 0.4),
           force: clamp01(1 + intensity),
           born: performance.now(),
         };

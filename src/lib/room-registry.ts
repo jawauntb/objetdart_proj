@@ -336,9 +336,7 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "axis",
     keeps: null,
     creates: null,
-    exempt: {
-      pan: "the wave's camera is an orthographic strip with a fixed horizontal domain; zooming changes its reading scale but translation would hide the signal rather than move through a larger frame",
-    },
+    exempt: {},
     rawPointer: "the typography layer samples pointer contact continuously to deform the wave beneath a fingertip; semantic gesture handlers remain the owner of classified hand meanings",
     governor: "the room's requestAnimationFrame loop is a short visual settling pass after a contact, not a continuously running simulation, so it has no sustained frame budget to tier",
   },
