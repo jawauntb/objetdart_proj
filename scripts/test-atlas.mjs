@@ -1352,6 +1352,7 @@ const {
   exploredBounds,
   fitZoomForBounds,
   focusForSheet,
+  hasZoomHeadroom,
   placeChildRect,
   resolvePlaneEdgeTravel,
   tileNeedsDetail,
@@ -1452,6 +1453,52 @@ assert.deepEqual(plain(cellAt({ wx: 0.999, wy: -1.001 })), { wx: 0, wy: -2 }, "c
   assert.equal(tileNeedsDetail(parent, 2), true, "a doubled zoom must outrun the root sheet");
   assert.equal(tileNeedsDetail(child, 2), false, "the landed child must satisfy the same zoom");
   assert.equal(tileNeedsDetail(child, 4), true, "outrunning the child asks for the next level down");
+}
+
+// hasZoomHeadroom: a working margin against MAX_ZOOM, not just the bare
+// tileNeedsDetail threshold — a child right at the edge of what the
+// camera can ever reach again is treated as dry even if one exact
+// crossing might technically still land.
+{
+  const wide = { x: 0, y: 0, width: 0.5, height: 0.5 };
+  const narrow = { x: 0, y: 0, width: 0.02, height: 0.02 };
+  assert.equal(hasZoomHeadroom(wide, 64), true, "a half-width child still has zoom to spare under 64x");
+  assert.equal(hasZoomHeadroom(narrow, 64), false, "a 2%-width child has run out of headroom under 64x");
+  assert.equal(hasZoomHeadroom({ x: 0, y: 0, width: 1, height: 1 }, 1.4), false, "a camera with almost no zoom range never has headroom");
+}
+
+// Without re-rooting, a same-plane pyramid's required zoom compounds
+// every level (each child's rect shrinks, so outrunning it again needs
+// more zoom) until it exceeds what the camera can ever reach — this is
+// the ceiling the fix removes, documented here so it cannot regress
+// silently back in.
+{
+  const MAX_ZOOM = 64;
+  let rect = { x: 0, y: 0, width: 1, height: 1 };
+  let reachedLevel = 0;
+  for (let level = 0; level < 20; level += 1) {
+    const neededZoom = 1.45 / rect.width;
+    if (neededZoom > MAX_ZOOM) break;
+    reachedLevel = level + 1;
+    rect = placeChildRect(rect, clipRectForFocus({ x: 0.5, y: 0.5, zoom: neededZoom }));
+  }
+  assert.ok(reachedLevel < 13, "an unbounded same-plane pyramid must hit its MAX_ZOOM ceiling well short of level 13");
+}
+
+// The endless pyramid: re-rooting whenever hasZoomHeadroom says the well
+// is dry keeps every crossing within MAX_ZOOM indefinitely — the same
+// worst-case sequence above, but landing a re-root resets the next level
+// back to a full unit cell instead of compounding forever. This must
+// clear at least twelve levels, the room's stated depth floor.
+{
+  const MAX_ZOOM = 64;
+  let rect = { x: 0, y: 0, width: 1, height: 1 };
+  for (let level = 0; level < 64; level += 1) {
+    const neededZoom = 1.45 / rect.width;
+    assert.ok(neededZoom <= MAX_ZOOM + 1e-9, `level ${level} must stay reachable within MAX_ZOOM once re-rooting is honored`);
+    const child = placeChildRect(rect, clipRectForFocus({ x: 0.5, y: 0.5, zoom: neededZoom }));
+    rect = hasZoomHeadroom(child, MAX_ZOOM) ? child : { x: 0, y: 0, width: 1, height: 1 };
+  }
 }
 
 // Frontier travel: only pressing past the explored edge asks for new
