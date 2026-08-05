@@ -8,6 +8,8 @@
  *
  * This module owns an EffectComposer with:
  *   RenderPass(worldScene)                 → the Preetham HDR sky + IBL ground
+ *                                            + the billboarded sun disk (renderOrder=0.5)
+ *                                            + the raymarched cloud slab (renderOrder=1)
  *   RenderPass(groundScene, clear:false)   → 2D painterly ground shader
  *   RenderPass(plotScene,   clear:false)   → 48 instanced plots as emblems
  *   RenderPass(skylineScene, clear:false)  → the 3D extruded skyline
@@ -31,7 +33,12 @@
  * Bloom threshold / strength / radius are a function of dayFraction so the
  * ember RISES as the sun sets. At noon the bloom is a whisper; at dusk it is
  * the emotional peak the brief calls the core of the room; at midnight it
- * stays warm on the lit-window pixels.
+ * stays warm on the lit-window pixels. The city-sun-disk module writes a
+ * 4.5× hot-core boost inside its 20 %-radius inner region — that emits a
+ * luminance well above the 0.55..0.90 threshold curve so the bloom sieve
+ * always sees the sun's core, and the halo it draws around the disk is
+ * the characteristic photographic sun-flare every reference the brief
+ * pins carries.
  *
  * SSAO reads the skyline scene's geometry — the shadowed alley between a home
  * and a store, the shadow band where a tower's footprint meets the ground.
