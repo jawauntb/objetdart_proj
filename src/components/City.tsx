@@ -86,6 +86,11 @@ import {
   createCityTraffic,
   type CityTraffic,
 } from "@/lib/city-traffic";
+import {
+  createCityPedestrians,
+  type CityPedestrians,
+  type PedestrianInput,
+} from "@/lib/city-pedestrians";
 
 /**
  * /city — a small settlement whose identity IS its causal roles.
@@ -1246,6 +1251,23 @@ export default function City() {
     // emissive quads and bulbs, and depth-tests against the towers.
     skyline.scene.add(traffic.group);
 
+    // ── pedestrians ─────────────────────────────────────────────────────
+    // The city-traffic module puts cars, boats, and lamps on the streets;
+    // this module puts BODIES on the sidewalks — the second-largest
+    // photoreal gap after windows. A single InstancedMesh capsule pack
+    // reads the existing `people` array each frame, positions each
+    // pedestrian in world coordinates with normToWorld, and drives a
+    // two-pose leg-swap via arc-length. Attached to the SKYLINE scene so
+    // bloom picks up the warm head-dot at dusk and shadows from the sun
+    // fall on the bodies at the same tier as the towers.
+    const pedestrians: CityPedestrians = createCityPedestrians({
+      seed: cityGroundSeed ^ 0x9ed05,
+    });
+    skyline.scene.add(pedestrians.group);
+    // Scratch pedestrian-input array reused each frame so the sync path
+    // allocates nothing. We resize it in-place as people arrive/leave.
+    const pedestrianInputs: PedestrianInput[] = [];
+
     // ── composer ─────────────────────────────────────────────────────────
     // The tick loop hands its passes to this composer so bright pixels
     // can bloom and the workflow stays linear. Sized 1×1 here — the
@@ -2141,6 +2163,38 @@ export default function City() {
         tier,
       });
 
+      // Pedestrians: rebuild the input snapshot from the pure people
+      // array (id, x, y, heading, standing/leaving/regular flags, and
+      // the leaving fade) and hand it to the InstancedMesh capsule pack.
+      // The array is a scratch buffer we reuse across frames — no
+      // allocation per tick. isStanding + fadeForLeaving are the same
+      // pure predicates the 2D overlay used to consult; the 3D bodies
+      // now speak the same language.
+      pedestrianInputs.length = 0;
+      for (const person of people) {
+        const leaving = person.phase === "leaving";
+        const opacity = leaving && person.leavingSinceMs != null
+          ? fadeForLeaving(cityTimeMs - person.leavingSinceMs)
+          : 1;
+        if (opacity <= 0) continue;
+        pedestrianInputs.push({
+          id: person.id,
+          x: person.x,
+          y: person.y,
+          heading: person.heading,
+          standing: isStanding(person.stillMs),
+          leaving,
+          regular: person.regularStoreId != null || person.regularEventId != null,
+          opacity,
+        });
+      }
+      pedestrians.setPedestrians(pedestrianInputs);
+      pedestrians.update({
+        dtMs: dt,
+        night: nightAmt,
+        tier,
+      });
+
       // Project the sun's world-space position to NDC for the god-rays
       // pass. The composer only samples this when the horizon-crossing
       // gate is open AND the tier is high; on ~99% of frames the god-
@@ -2744,114 +2798,21 @@ export default function City() {
         fgctx.stroke();
       }
 
-      // people — two poses drawn by one causal predicate.
-      //
-      // A walking person is a heading-aligned sliver (body along the
-      // motion vector, head-dot at the leading end). A person whose
-      // stepTowards delta has stayed ~0 for more than STANDING_STILL_MS
-      // is a STANDING person: drawn as a small vertical body — a head
-      // dot above a body dot — so a colony of regulars at a plot reads
-      // as *people standing at a store*, not as strokes indistinguishable
-      // from motion. The predicate is `isStanding(stillMs)` from
-      // src/lib/city.ts, single-sourced with the test that pins it.
-      //
-      // A leaving person fades toward the edge — their opacity eases
-      // from 1 to 0 across LEAVING_FADE_MS via `fadeForLeaving`; their
-      // stillMs is reset every frame in the leaving branch so they
-      // never freeze into a standing pose mid-departure.
-      const dropTails = detail.samples < 2;
-      for (const person of people) {
-        // People walk on the ground plane (world Y=0). Projecting through
-        // the perspective camera keeps them at the feet of the towers at
-        // any pitch — a resident walking to the market ends up at the
-        // market's front door on screen, not floating over its rooftop.
-        const proj = projPlot(person.x, person.y);
-        if (!proj) continue;
-        const px = proj.x;
-        const py = proj.y;
-        const leavingFade = person.phase === "leaving" && person.leavingSinceMs != null
-          ? fadeForLeaving(cityTimeMs - person.leavingSinceMs)
-          : 1;
-        if (leavingFade <= 0) continue;
-
-        const baseAlpha = person.hesitating ? 0.6 : 0.9;
-        const bodyAlpha = baseAlpha * leavingFade;
-        // Regulars wear cool teal (reads AGAINST the settlement's warm
-        // plots); the ordinary body is candle-black. A leaving person is
-        // a neutral desaturated grey — the belonging teal drops away as
-        // they walk to the edge. Visual language: teal is belonging,
-        // grey is departure, and the fade takes care of the rest.
-        const isRegular = person.regularStoreId != null || person.regularEventId != null;
-        const bodyColor = person.phase === "leaving"
-          ? `rgba(64, 68, 76, ${bodyAlpha})`
-          : isRegular
-            ? `rgba(74, 158, 158, ${bodyAlpha})`
-            : `rgba(21, 23, 26, ${bodyAlpha})`;
-
-        const standing = isStanding(person.stillMs);
-        if (standing) {
-          // Standing pose — a small vertical body: a head dot above a
-          // body dot, aligned to gravity (screen +y is down). Not
-          // heading-aligned: a person parked at a store points nowhere.
-          // The body dot is a touch larger than the head so the eye
-          // reads posture rather than punctuation.
-          fgctx.fillStyle = bodyColor;
-          const bodyRadius = isRegular ? 2.0 : 1.6;
-          const headRadius = isRegular ? 1.5 : 1.2;
-          const stackGap = 3.2;
-          fgctx.beginPath();
-          fgctx.arc(px, py + 0.4, bodyRadius, 0, Math.PI * 2);
-          fgctx.fill();
-          fgctx.beginPath();
-          fgctx.arc(px, py + 0.4 - stackGap, headRadius, 0, Math.PI * 2);
-          fgctx.fill();
-          continue;
-        }
-
-        // Walking pose — a heading-aligned sliver with a leading head dot.
-        const cos = Math.cos(person.heading);
-        const sin = Math.sin(person.heading);
-        const length = person.phase === "arriving" ? 6 : 5;
-        const bx = px + cos * (length * 0.5);
-        const by = py + sin * (length * 0.5);
-        const tx = px - cos * (length * 0.5);
-        const ty = py - sin * (length * 0.5);
-        if (!dropTails && person.phase === "arriving") {
-          const home = plots.find((p) => p.id === person.homeId);
-          if (home) {
-            const hproj = projPlot(home.x, home.y);
-            if (hproj) {
-              const dx = px - hproj.x;
-              const dy = py - hproj.y;
-              const dLen = Math.hypot(dx, dy);
-              if (dLen > 16) {
-                const backLen = Math.min(14, dLen * 0.25);
-                fgctx.strokeStyle = "rgba(232, 226, 213, 0.22)";
-                fgctx.lineWidth = 1;
-                fgctx.beginPath();
-                fgctx.moveTo(px, py);
-                fgctx.lineTo(px + (dx / dLen) * backLen, py + (dy / dLen) * backLen);
-                fgctx.stroke();
-              }
-            }
-          }
-        }
-        fgctx.strokeStyle = bodyColor;
-        fgctx.lineWidth = 2;
-        fgctx.lineCap = "round";
-        fgctx.beginPath();
-        fgctx.moveTo(tx, ty);
-        fgctx.lineTo(bx, by);
-        fgctx.stroke();
-        fgctx.fillStyle = bodyColor;
-        // Regulars carry a slightly larger head dot — a colony of
-        // regulars reads as a small ring of round dots around a plot,
-        // not as several strokes indistinguishable from the crowd.
-        const headRadius = isRegular ? 2.0 : 1.4;
-        fgctx.beginPath();
-        fgctx.arc(bx, by, headRadius, 0, Math.PI * 2);
-        fgctx.fill();
-      }
+      // people — now drawn by the InstancedMesh capsule pack in
+      // city-pedestrians.ts. What used to live here — a heading-aligned
+      // 2D sliver per person, with a head dot, a leaving-fade opacity,
+      // a regular-teal, a standing pose stacked as head-above-body dots
+      // — has moved to real 3D geometry attached to the skyline scene.
+      // The pure predicates the 2D branch consulted (isStanding on
+      // stillMs, fadeForLeaving on leavingSinceMs, the regular flag
+      // combo) now feed into the InstancedMesh sync at the top of the
+      // tick loop, so the visual language survives: teal is belonging,
+      // grey is departure, feet-together is waiting, leg-swap is
+      // walking. The bodies rise off the ground plane and catch the
+      // same sun-lit shading + dusk bloom the towers do. The 2D
+      // overlay keeps the roads, the dwell ring, and the community
+      // rings above — the lines the visitor DRAWS or the settlement
+      // OWES stay 2D; the people it MEANS are 3D.
 
       // satisfaction lens — halo plots by how many people are near
       if (lens === "satisfaction") {
@@ -3063,6 +3024,11 @@ export default function City() {
       // the traffic group renders an empty settlement, which is what
       // the visitor asked for.
       traffic.setRoads([]);
+      // Pedestrians clear too — an empty settlement should have no
+      // bodies on its (nonexistent) sidewalks. The next setPedestrians
+      // call with an empty list frees every slot back to the pool.
+      pedestrianInputs.length = 0;
+      pedestrians.setPedestrians(pedestrianInputs);
       activePlant = null;
       idleWrite.schedule();
     };
@@ -3112,6 +3078,10 @@ export default function City() {
       // them before the renderer so the GL context they belong to still
       // exists at teardown.
       traffic.dispose();
+      // Pedestrians own four InstancedMeshes (poseA/poseB/standing/head)
+      // + a shared PBR material + the head-dot emissive material + the
+      // small merged capsule geometries. Drop them before the renderer.
+      pedestrians.dispose();
       // Composer holds bloom pyramid RTs — drop them before disposing
       // the renderer that owns their GL context.
       composer.dispose();
