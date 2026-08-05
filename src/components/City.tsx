@@ -1391,10 +1391,17 @@ export default function City() {
     // One camera drives both the world sky pass and the skyline pass.
     // Pinch travels a shared zoom scalar; pitch and distance ride the
     // same coupled curve; spring easing so a fast pinch never snaps.
+    // Postcard 3/4 perspective by default — pitch ~40° at ~72 units.
+    // Old default 0.15 held the camera at 67° / 155 units, which crammed
+    // the whole city into the bottom third of a portrait phone and left
+    // the top two-thirds as empty night void. Phones (portrait) drop
+    // even lower toward eye-level so the towers dominate the vertical
+    // frame the way a real skyline does.
+    const isPortrait = typeof window !== "undefined" && window.innerHeight > window.innerWidth;
     const cityCam: CityCamera = createCityCamera({
       width: 1,
       height: 1,
-      initialZoom: 0.15,
+      initialZoom: isPortrait ? 0.62 : 0.5,
     });
 
     // ── devtools perf-probe rings (opt-in via ?__perf=1) ─────────────────
