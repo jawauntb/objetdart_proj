@@ -11,10 +11,22 @@
  *   RenderPass(groundScene, clear:false)   → 2D painterly ground shader
  *   RenderPass(plotScene,   clear:false)   → 48 instanced plots as emblems
  *   RenderPass(skylineScene, clear:false)  → the 3D extruded skyline
+ *   RenderPass(waterScene,  clear:false)   → the harbour Reflector
+ *   CityGodraysPass                        → volumetric sun shafts at dawn/dusk
  *   SSAOPass(skylineScene)                 → contact AO between towers
  *   UnrealBloomPass                        → the ember at dusk, lit windows at night
  *   BokehPass(skylineScene)                → wide-zoom Currier & Ives DOF
+ *   CityPainterlyPass                      → bird's-eye warm register-shift
  *   OutputPass                             → sRGB write + tonemap
+ *
+ * God-rays sit between the water/skyline stack and SSAO+bloom on purpose:
+ * the shafts the pass writes into the frame are then read by bloom's
+ * threshold sieve, so a dusk shaft crossing a glass tower's lit-window
+ * pixels feeds the ember curve twice (once as the shaft's own gold
+ * additive, once as the bloom halo bloom pulls off the shafted pixels).
+ * Placing the pass after bloom instead would let the shafts glow but
+ * would not extend the ember downstream — the emotional peak of the
+ * room deserves both.
  *
  * Bloom threshold / strength / radius are a function of dayFraction so the
  * ember RISES as the sun sets. At noon the bloom is a whisper; at dusk it is
@@ -34,10 +46,10 @@
  * the spring — never a hard flip on the boundary.
  *
  * Tiers gate cost, not aesthetic goal:
- *   sleep  → no bloom, no ssao, no dof (composer still runs so the pipeline stays linear)
- *   low    → no bloom, no ssao, no dof
- *   medium → bloom on, ssao on, no dof
- *   high   → bloom on, ssao on, dof on (ramped by pitch)
+ *   sleep  → no bloom, no ssao, no dof, no god-rays (composer still runs so the pipeline stays linear)
+ *   low    → no bloom, no ssao, no dof, no god-rays
+ *   medium → bloom on, ssao on, god-rays on, no dof
+ *   high   → bloom on, ssao on, god-rays on, dof on (ramped by pitch)
  *
  * Nothing here touches gesture, city.ts laws, or persistence — it is the
  * pipeline the aesthetic hangs from.
@@ -167,8 +179,8 @@ export function dofStrengthForPitch(pitch01: number): number {
  *
  *   sleep  → nothing but bloom-less linear composition (pipeline stays lin.)
  *   low    → same as sleep — the composer runs but the aesthetic budget is 0
- *   medium → bloom on + ssao on (photorealistic contact AO, small radius)
- *   high   → bloom on + ssao on (wider radius) + dof on (ramped by pitch)
+ *   medium → bloom on + ssao on + god-rays on (contact AO + dawn/dusk shafts)
+ *   high   → bloom on + ssao on + dof on + god-rays on (all four post-passes)
  */
 export function passesForTier(tier: QualityTier): {
   bloom: boolean;
@@ -180,7 +192,14 @@ export function passesForTier(tier: QualityTier): {
     case "high":
       return { bloom: true, ssao: true, dof: true, godrays: true };
     case "medium":
-      return { bloom: true, ssao: true, dof: false, godrays: false };
+      // God-rays ride the same tier gate as SSAO — the brief's spec.
+      // A medium-tier device on a sunset frame still gets the London
+      // shafts through the towers; only the DOF (BokehPass, wide-zoom
+      // painterly blur) is dropped. The fragment cost is bounded: on the
+      // ~85% of the day outside the ±0.08 gate the pass short-circuits
+      // to a passthrough at one texture fetch, and inside the gate the
+      // 24 radial taps are the same budget SSAO's kernel already pays.
+      return { bloom: true, ssao: true, dof: false, godrays: true };
     case "low":
     case "sleep":
     default:
@@ -356,6 +375,25 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
     composer.addPass(ssaoPass);
   }
 
+  // God-rays — volumetric sun shafts through the buildings, gated to the
+  // horizon-crossing windows at dawn and dusk. Runs BEFORE bloom so the
+  // shaft pixels the pass adds feed the bloom curve — the gold ember at
+  // dusk gathers around the shafted sky and the lit-window emissive on
+  // any tower whose facade the shaft crosses picks up a warmer halo than
+  // it would have without the ray contribution underneath. The pass
+  // sits right after the water/skyline scenes and before SSAO so the
+  // AO ring the SSAO writes into the crevices doesn't get scattered by
+  // the shaft's radial tap accumulator (AO subtracts from the frame; the
+  // rays add to it — order matters only in that both need to land before
+  // bloom for the ember to peak at dusk). Cheap short-circuit inside the
+  // fragment shader on uStrength=0 means outside the ±0.08 dayFraction
+  // gate the pass ships a passthrough copy at ~one texture fetch per
+  // pixel — the ~85% of the day that lives outside dawn/dusk pays only
+  // that single fetch.
+  const godraysPass: CityGodraysPass = createCityGodraysPass();
+  godraysPass.enabled = false;
+  composer.addPass(godraysPass);
+
   // Bloom: the ember at dusk, the warm halo on lit windows at night.
   // Parameters are updated per-frame from dayFraction inside render().
   const bloomPass = new UnrealBloomPass(
@@ -396,17 +434,6 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
     composer.addPass(bokehPass);
   }
 
-  // God-rays — volumetric sun shafts through the buildings, gated to the
-  // horizon-crossing windows at dawn and dusk and high tier only. Runs
-  // AFTER the DOF pass so shafts scatter follows the diorama blur, and
-  // BEFORE the painterly register-shift so the warm-tint register at
-  // bird's-eye also acts on the shaft pixels. Cheap short-circuit inside
-  // the fragment shader on uStrength=0 means outside the gate the pass
-  // ships a passthrough copy at ~one texture fetch per pixel.
-  const godraysPass: CityGodraysPass = createCityGodraysPass();
-  godraysPass.enabled = false;
-  composer.addPass(godraysPass);
-
   // Painterly register-shift — the Currier & Ives LUT-like overlay that
   // arrives when the visitor pinches to bird's-eye. Runs between bloom
   // and OutputPass so the ember still catches (bloom writes into the
@@ -446,6 +473,11 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
   // this room is dominated by the plot shader; every microsecond back
   // is a microsecond that pays for B/C/D in the next PRs.
   let lastTier: QualityTier | null = null;
+  // Cached tier decision, refreshed on tier change. The tick loop reads
+  // `aliveTier.godrays` per frame instead of running the switch statement
+  // every draw — a marginal saving, but worth the closure slot: the tier
+  // decision is the same shape for every frame at that tier.
+  let aliveTier = passesForTier("high");
   let lastEmberSlot = -1;
   // Quantised god-rays slot — the strength curve is a linear ramp inside
   // a narrow [±0.08] gate, so quantising the day into 128 slots gives us
@@ -490,6 +522,7 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
       // materials land right whatever the governor decided.
       if (tier !== lastTier) {
         const alive = passesForTier(tier);
+        aliveTier = alive;
         bloomPass.enabled = alive.bloom;
         if (ssaoPass) ssaoPass.enabled = alive.ssao;
         if (bokehPass) bokehPass.enabled = alive.dof;
@@ -505,9 +538,10 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
         // High tier gets a marginally deeper vignette so the paper-edge
         // halo reads on the big screens that carry the extra headroom.
         painterlyPass.uniforms.uVignette.value = tier === "high" ? 1.15 : 1.0;
-        // God-rays live at high tier only. On any drop out of high, mute
-        // the strength uniform so a later re-entry starts from a clean
-        // ramp — otherwise the leftover uStrength from the last high-tier
+        // God-rays live at high AND medium tier — the same gate SSAO uses,
+        // per the brief. On any drop below medium, mute the strength
+        // uniform so a later re-entry starts from a clean ramp —
+        // otherwise the leftover uStrength from the last high/medium
         // frame would flash for one frame on re-entry.
         if (!alive.godrays) {
           godraysPass.enabled = false;
@@ -610,14 +644,17 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
         }
       }
 
-      // God-rays: high tier only, gated to dawn/dusk horizon-crossings.
+      // God-rays: high + medium tier, gated to dawn/dusk horizon-crossings.
       // The pass is enabled ONLY when the gate is open AND the sun's
       // projection is visible in the frame — outside that window we set
       // enabled=false so the composer skips the draw entirely. Inside
       // it, we update the sun UV and the strength curve on quantised
       // slots so the uniform writes only fire when a value has visibly
-      // advanced.
-      if (tier === "high") {
+      // advanced. Uses passesForTier's `godrays` flag rather than a hard
+      // `tier === "high"` compare so the tier gate lives in one place —
+      // a future refactor that adds god-rays at low tier flips only the
+      // ladder.
+      if (aliveTier.godrays) {
         const gateOpen = godraysGateOpen(dayFraction);
         const sunVisible = sunScreen ? sunScreen.visible : false;
         const active = gateOpen && sunVisible;

@@ -8,14 +8,24 @@
  * high tier and only in the narrow horizon-crossing windows the sun
  * actually is at the horizon, is what carries the reference forward.
  *
- * The ShaderPass rides in the composer between BokehPass (which softens
- * the wide-zoom read) and the painterly ShaderPass (which shifts the
- * whole register warm at bird's-eye). Placing it AFTER Bokeh means the
- * god-rays scatter follows the diorama blur, so a wide-zoom frame reads
- * as painting-with-shafts, not sharp-shafts-in-a-blurred-frame; placing
- * it BEFORE painterly means the register shift acts on the shaft
- * pixels too, so at bird's-eye the whole scene (including the rays)
- * warms toward the Currier & Ives tint.
+ * The ShaderPass rides in the composer between the skyline/water render
+ * passes and UnrealBloomPass — the shafts feed the bloom curve directly.
+ * A dusk shaft crossing a glass tower's lit-window pixels lights those
+ * pixels through the additive gold multiplier, and bloom's threshold
+ * sieve then pulls a warm halo off the just-shafted pixels: the ember
+ * peak the London reference is about is the sum of both, not either
+ * alone. Placing the pass after bloom would still glow the shafts
+ * themselves but would not extend the ember downstream; placing it
+ * before bloom is what carries the emotional peak forward.
+ *
+ * SSAO sits before this pass in the chain, so the shafts add on top of
+ * an already-AO'd frame — the ring of contact shadow under a tower's
+ * footprint stays dark under the golden shaft, which is the physical
+ * read (a shadow crevice does not glow just because the sun above it
+ * shafts). Bloom sits after and pulls a warm halo off the shaft-lit
+ * pixels; painterly + DOF sit downstream, so at bird's-eye the
+ * register-shift warms the shafts along with the rest of the scene and
+ * DOF blurs them along with the diorama.
  *
  * Gate:
  *   |dayFraction - 0| < 0.08  → the dawn horizon crossing window
