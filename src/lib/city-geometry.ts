@@ -110,6 +110,11 @@ import {
   type RooftopHost,
   type RooftopScene,
 } from "@/lib/city-rooftop";
+import {
+  createStoreExtrasScene,
+  type StoreExtraHost,
+  type StoreExtrasScene,
+} from "@/lib/city-store-extras";
 
 // Re-export the pure helpers so existing importers of city-geometry
 // continue to work unchanged — the split into city-geometry-pure.ts
@@ -1273,6 +1278,20 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
   });
   scene.add(rooftop.group);
 
+  // ── store trim extras (shared InstancedMeshes across all stores) ─
+  //
+  // Three InstancedMeshes (cornice, awning, balcony) sized to a
+  // worst-case bound of one piece per store per part. Every store
+  // routes into this shared pool; syncPlots below collects the host
+  // records in the SAME walk as the rooftop hosts and hands the batch
+  // to syncHosts, which writes one matrix per piece. Draw calls stay
+  // constant regardless of settlement size.
+  const storeExtras: StoreExtrasScene = createStoreExtrasScene({
+    maxInstancesPerPart: Math.max(1, opts.maxInstances),
+    shadows: shadowsOn,
+  });
+  scene.add(storeExtras.group);
+
   // ── event role: per-plot Meshes ─────────────────────────────────
   //
   // The tallest, most visible plots. Each event plot allocates its own
@@ -1642,6 +1661,10 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
       // roof, and a home's roof would be too small to read the
       // clutter anyway).
       const rooftopHosts: RooftopHost[] = [];
+      // Store-role trim hosts — cornice always, awning ~62%, balcony ~34%.
+      // Collected in the same walk as the rooftop hosts so we hand a single
+      // batch to `storeExtras.syncHosts` at the end.
+      const storeExtraHosts: StoreExtraHost[] = [];
       for (const plot of plots) {
         const r = plot.role;
         if (r === "empty") continue;
@@ -1660,6 +1683,14 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
           const yScale = Math.max(0.02, plot.bornT) * fullH;
           rooftopHosts.push({
             role: "store",
+            seed: plot.seed,
+            worldX: w.x,
+            worldZ: w.z,
+            yaw: yawFor(plot),
+            sx, sz,
+            worldHeight: yScale,
+          });
+          storeExtraHosts.push({
             seed: plot.seed,
             worldX: w.x,
             worldZ: w.z,
@@ -1707,6 +1738,9 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
       }
       // Paint every store + event rooftop's clutter in one batch.
       rooftop.syncHosts(rooftopHosts);
+      // Paint every store's cornice + optional awning + optional balcony
+      // in one batch (three draw calls total).
+      storeExtras.syncHosts(storeExtraHosts);
     },
 
     setDayFrac(day: number) {
@@ -1811,6 +1845,7 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
         }
       }
       rooftop.setShadows(on);
+      storeExtras.setShadows(on);
     },
 
     setLodCamera(pos: THREE.Vector3 | null) {
@@ -1878,6 +1913,8 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
       try { facadeAtlas.dispose(); } catch { /* noop */ }
       // Free the rooftop clutter InstancedMeshes + geometries + mats.
       try { rooftop.dispose(); } catch { /* noop */ }
+      // Free the store-extras (cornice / awning / balcony) meshes.
+      try { storeExtras.dispose(); } catch { /* noop */ }
     },
   };
 }
