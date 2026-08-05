@@ -515,8 +515,11 @@ function patchGroundMaterial(
         // the worldpos_vertex chunk (which only defines worldPosition
         // when USE_ENVMAP / USE_SHADOWMAP etc are set). One extra mat4
         // multiply per vertex — cheap; the plane is two triangles.
-        vec4 __cityGroundWp = modelMatrix * vec4( transformed, 1.0 );
-        vGroundWorldXZ = __cityGroundWp.xz;`,
+        // Local name has no leading underscores: GLSL ES reserves any
+        // identifier containing two consecutive underscores, and ANGLE /
+        // Metal / iOS Safari reject the whole shader on that ground.
+        vec4 cityGroundWp = modelMatrix * vec4( transformed, 1.0 );
+        vGroundWorldXZ = cityGroundWp.xz;`,
       );
 
     shader.fragmentShader = shader.fragmentShader
