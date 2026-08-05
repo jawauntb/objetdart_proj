@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import LetGo from "@/components/LetGo";
 import { attachGestures } from "@/lib/gesture";
+import { holdTier } from "@/lib/gesture/core";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { onVessel } from "@/lib/vessel";
@@ -85,6 +86,18 @@ import {
  *   tilt              → rain leans across the field
  *   knock             → the city's bell tolls once — people gather
  *   flip              → night, whatever the day said
+ *
+ *   arrow keys        → a plot cursor drifts across the field (the visible
+ *                        surrogate for a fingertip on the glass)
+ *   p (held)          → synthesises a plant at the cursor. keep holding and
+ *                        the same roleForDwell ladder gestures climb —
+ *                        home → store → event → tree — because both paths
+ *                        read one causal law
+ *   space             → seals the plot under the cursor (the ceremony
+ *                        verb, ceremonyMs from gesture/core.ts; keyboard's
+ *                        only permanent act)
+ *   l                 → cycles the lens: map → hydrology → satisfaction
+ *   escape            → lowers the lens back to map
  *
  * The laws are extracted to `src/lib/city.ts` and pinned by test-city.mjs;
  * this file is only rendering + gesture translation.
@@ -867,6 +880,29 @@ export default function City() {
     let nightAmt = 0;
     let hintHidden = false;
 
+    // ── keyboard cursor state ────────────────────────────────────────────
+    // A visible surrogate for a finger: the arrows drift it across the field,
+    // `p` plants at it (same roleForDwell ladder as gestures), space seals
+    // it at ceremony tier, `l` cycles the lens, escape lowers it. Nothing
+    // here is a control to learn — it is the accessibility baseline for the
+    // gestures above, so a keyboard-only visitor can walk the same causal
+    // ladder a fingertip walks. The reason `p` is a hold rather than a tap
+    // is that a plant IS a hold: the ladder is the room's one continuous
+    // axis, and a tap would collapse it into a switch.
+    //
+    // The cursor position lives in CSS-pixel space (like the plot centers)
+    // and defaults to the middle of the field. It becomes visible on any
+    // key press and hides on blur.
+    let cursorX = 0;
+    let cursorY = 0;
+    let cursorVisible = false;
+    // Held-arrow state, ticked in the raf loop so movement is smooth (browser
+    // key-repeat is jagged and skips the first ~500ms). Only p distinguishes
+    // "keyboard hold in progress" from "gesture hold in progress" so a
+    // touchpad and a keyboard cannot both drive the same plant.
+    const heldArrows = { up: false, down: false, left: false, right: false };
+    let keyboardHolding = false;
+
     // ── restore ─────────────────────────────────────────────────────────
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
@@ -903,6 +939,15 @@ export default function City() {
       fgctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       groundUniforms.uAspect.value = width / Math.max(1, height);
       plotUniforms.uPixSize.value.set(width, height);
+      // keep the keyboard cursor inside the new bounds; on first sizing it
+      // lands in the middle of the field, ready for the arrows
+      if (cursorX === 0 && cursorY === 0) {
+        cursorX = width * 0.5;
+        cursorY = height * 0.5;
+      } else {
+        cursorX = Math.max(0, Math.min(width, cursorX));
+        cursorY = Math.max(0, Math.min(height, cursorY));
+      }
     };
     resize();
     const observer = new ResizeObserver(resize);
@@ -1012,25 +1057,8 @@ export default function City() {
 
         if (e.phase === "tick" && activePlant) {
           activePlant.liveDwellMs = performance.now() - activePlantStartedAt;
-          if (e.tier >= 2 && !activePlant.sealed) {
-            const newRole = roleForDwell(activePlant.liveDwellMs);
-            if (newRole !== activePlant.role && isPlayableRole(newRole)) {
-              activePlant.role = newRole;
-              ring(dwellClimbNote(newRole), 260);
-              try { haptics.detent(); } catch { /* noop */ }
-              plantRingWeight = 1;
-            }
-          }
-          if (e.tier >= 3 && !activePlant.sealed) {
-            activePlant.sealed = true;
-            try { A().bell(); } catch { /* noop */ }
-            if (isPlayableRole(activePlant.role)) {
-              ringChord(chordForCeremony(activePlant.role), 520, 34);
-            }
-            try { haptics.bloom(); } catch { /* noop */ }
-            plantRingWeight = 1;
-            idleWrite.schedule();
-          }
+          if (e.tier >= 2) climbPlantRole(activePlant, activePlant.liveDwellMs);
+          if (e.tier >= 3) sealPlot(activePlant);
         }
 
         if (e.phase === "release") {
@@ -1079,10 +1107,7 @@ export default function City() {
         if (e.fingers === 3) return;
         if (e.phase !== "move") return;
         if (Math.abs(e.angle) < Math.PI / 3) return;
-        const lenses: CityLens[] = ["map", "hydrology", "satisfaction"];
-        const cur = lenses.indexOf(lens);
-        lens = lenses[(cur + (e.angle > 0 ? 1 : -1) + lenses.length) % lenses.length];
-        try { haptics.lens(); } catch { /* noop */ }
+        cycleLens(e.angle > 0 ? 1 : -1);
       },
 
       flick: (e) => {
@@ -1133,6 +1158,98 @@ export default function City() {
       },
     });
 
+    // ── keyboard ────────────────────────────────────────────────────────
+    // The gestures above, reachable without a hand on the glass. Nothing
+    // here is a control the visitor has to learn — the arrows drift a
+    // cursor over the field, `p` plants at it and keeps deepening while
+    // held (the same roleForDwell ladder a dwell walks, so the causal law
+    // stays single-sourced), space seals at ceremony tier (THRESHOLDS
+    // .ceremonyMs from gesture/core.ts, never a private copy), `l` cycles
+    // the lens forward, escape lowers it back to map. The wrap div is the
+    // one focus target on this page and it receives its own keydown so a
+    // typed key elsewhere on the site never fires here by accident.
+    const onKeyDown = (e: KeyboardEvent) => {
+      // guard against typing into anything editable (there is nothing on
+      // /city yet, but the check keeps the room safe against a later panel)
+      const active = document.activeElement as HTMLElement | null;
+      if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" ||
+                     active.isContentEditable)) return;
+
+      const key = e.key;
+      const isArrow = key === "ArrowUp" || key === "ArrowDown" || key === "ArrowLeft" || key === "ArrowRight";
+      const isPlant = key === "p" || key === "P";
+      const isSeal = key === " " || key === "Spacebar";
+      const isLens = key === "l" || key === "L";
+      const isLower = key === "Escape";
+      if (!(isArrow || isPlant || isSeal || isLens || isLower)) return;
+      // any keyboard interaction reveals the cursor
+      cursorVisible = true;
+
+      if (key === "ArrowUp")    { heldArrows.up    = true; e.preventDefault(); return; }
+      if (key === "ArrowDown")  { heldArrows.down  = true; e.preventDefault(); return; }
+      if (key === "ArrowLeft")  { heldArrows.left  = true; e.preventDefault(); return; }
+      if (key === "ArrowRight") { heldArrows.right = true; e.preventDefault(); return; }
+
+      if (isPlant) {
+        e.preventDefault();
+        if (e.repeat) return;                    // browser repeat is ignored;
+        if (keyboardHolding) return;             // one plant hold at a time
+        keyboardHolding = true;
+        beginKeyboardPlant(cursorX, cursorY);
+        return;
+      }
+
+      if (isSeal) {
+        e.preventDefault();
+        if (e.repeat) return;
+        // The touch-reachable ceremony: seal the plot the cursor is over,
+        // or the active keyboard plant if it is already growing. If neither
+        // is present the press is silent — nothing to seal is not an error.
+        const under = plotAt(cursorX, cursorY);
+        const target = under ?? activePlant;
+        if (target && !target.sealed) sealPlot(target);
+        return;
+      }
+
+      if (isLens) {
+        e.preventDefault();
+        cycleLens(1);
+        return;
+      }
+
+      if (isLower) {
+        e.preventDefault();
+        // Escape's cascade: if the visitor is mid-plant, release without
+        // sealing; else if the lens is raised (anything but map), lower it;
+        // else hide the cursor and blur — the room returns to still water.
+        if (keyboardHolding) {
+          releaseKeyboardPlant();
+          return;
+        }
+        if (lens !== "map") {
+          lens = "map";
+          try { haptics.lens(); } catch { /* noop */ }
+          return;
+        }
+        cursorVisible = false;
+        if (wrap === document.activeElement) wrap.blur();
+        return;
+      }
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key === "ArrowUp")    heldArrows.up    = false;
+      if (e.key === "ArrowDown")  heldArrows.down  = false;
+      if (e.key === "ArrowLeft")  heldArrows.left  = false;
+      if (e.key === "ArrowRight") heldArrows.right = false;
+      if ((e.key === "p" || e.key === "P") && keyboardHolding) {
+        releaseKeyboardPlant();
+      }
+    };
+    const onWrapBlur = () => { cursorVisible = false; };
+    wrap.addEventListener("keydown", onKeyDown);
+    wrap.addEventListener("keyup", onKeyUp);
+    wrap.addEventListener("blur", onWrapBlur);
+
     // ── pause and visibility ────────────────────────────────────────────
     let docHidden = document.hidden;
     let galleryPaused = embedded;
@@ -1159,6 +1276,8 @@ export default function City() {
       lastFrameAt = now;
       cityTimeMs += dt * cityTimeScale;
       uTime += reduceMotion ? 0 : dt * 0.001;
+      advanceKeyboardCursor(dt);
+      advanceKeyboardPlant();
       stepPopulation(dt * populationSpeed);
       decayWeather(dt);
       plantRingWeight = Math.max(0, plantRingWeight - dt * 0.002);
@@ -1580,6 +1699,31 @@ export default function City() {
         }
       }
 
+      // keyboard cursor — a soft ring at the arrow-driven position. The
+      // ring's radius matches the dwell ring so the visitor's eye reads
+      // the same target for keyboard and touch. A thin cross inside marks
+      // the exact center — it is a cursor, not a shape. Under an active
+      // keyboard plant the ring is drawn only by the plant's own dwell ring
+      // (above), and the cursor cross would double-strike, so it is skipped.
+      if (cursorVisible) {
+        const showCross = !(keyboardHolding && activePlant);
+        fgctx.strokeStyle = "rgba(246, 230, 180, 0.72)";
+        fgctx.lineWidth = 1.5;
+        fgctx.beginPath();
+        fgctx.arc(cursorX, cursorY, 18, 0, Math.PI * 2);
+        fgctx.stroke();
+        if (showCross) {
+          fgctx.strokeStyle = "rgba(246, 230, 180, 0.6)";
+          fgctx.lineWidth = 1;
+          fgctx.beginPath();
+          fgctx.moveTo(cursorX - 6, cursorY);
+          fgctx.lineTo(cursorX + 6, cursorY);
+          fgctx.moveTo(cursorX, cursorY - 6);
+          fgctx.lineTo(cursorX, cursorY + 6);
+          fgctx.stroke();
+        }
+      }
+
       // rain streaks over the wet ground shader — the streaks are thin
       // lines whose angle is driven by weatherWind. Under reduced motion
       // the field is stationary: the streaks are drawn from a stationary
@@ -1602,6 +1746,118 @@ export default function City() {
           fgctx.stroke();
         }
       }
+    }
+
+    // ── plant-ladder helpers (shared by touch and keyboard paths) ───────
+    // Both callers pass the plot and the elapsed dwell time; the causal law
+    // roleForDwell() decides what role that plot has become. Keeping the
+    // ladder in one place means touch and keyboard climb literally the same
+    // rungs — the audit that added this file also removed the private 540ms
+    // timer /earth used to reimplement, and the same discipline applies here.
+    function climbPlantRole(plot: Plot, dwellMs: number): void {
+      if (plot.sealed) return;
+      const newRole = roleForDwell(dwellMs);
+      if (newRole === plot.role || !isPlayableRole(newRole)) return;
+      plot.role = newRole;
+      ring(dwellClimbNote(newRole), 260);
+      try { haptics.detent(); } catch { /* noop */ }
+      plantRingWeight = 1;
+    }
+    function sealPlot(plot: Plot): void {
+      if (plot.sealed) return;
+      plot.sealed = true;
+      try { A().bell(); } catch { /* noop */ }
+      if (isPlayableRole(plot.role)) {
+        ringChord(chordForCeremony(plot.role), 520, 34);
+      }
+      try { haptics.bloom(); } catch { /* noop */ }
+      plantRingWeight = 1;
+      idleWrite.schedule();
+    }
+    function cycleLens(direction: 1 | -1): void {
+      const lenses: CityLens[] = ["map", "hydrology", "satisfaction"];
+      const cur = lenses.indexOf(lens);
+      lens = lenses[(cur + direction + lenses.length) % lenses.length];
+      try { haptics.lens(); } catch { /* noop */ }
+    }
+
+    // ── keyboard driving ────────────────────────────────────────────────
+    // The keyboard synthesises a hold the same way the finger does: it
+    // grabs (or plants) a plot at press time, then the tick loop climbs
+    // its ladder using elapsed time and the shared holdTier() / roleForDwell
+    // functions. releaseKeyboardPlant() is the counterpart of hold's
+    // "release" phase; the plot stays at whatever role the ladder reached.
+    function beginKeyboardPlant(cx: number, cy: number): void {
+      const existing = plotAt(cx, cy);
+      if (existing && !existing.sealed) {
+        activePlant = existing;
+        activePlantStartedAt = performance.now();
+        existing.dwellStartMs = activePlantStartedAt;
+        return;
+      }
+      if (existing) {
+        // sealed plots refuse the plant — keyboard mirrors the touch path
+        keyboardHolding = false;
+        return;
+      }
+      if (plots.length >= MAX_PLOTS) {
+        keyboardHolding = false;
+        return;
+      }
+      const seed = ((cx * 1000) | 0) ^ ((cy * 1000) | 0) ^ nextPlotId;
+      const plot: Plot = {
+        id: nextPlotId++,
+        seed,
+        x: cx / width,
+        y: cy / height,
+        role: "home",
+        dwellStartMs: performance.now(),
+        liveDwellMs: 0,
+        sealed: false,
+        bornMs: cityTimeMs,
+      };
+      plots.push(plot);
+      activePlant = plot;
+      activePlantStartedAt = plot.dwellStartMs;
+      spawnDwellersFor(plot);
+      ring(noteForPlot({ role: "home", seed: plot.seed }), 240);
+      try { haptics.tap(); } catch { /* noop */ }
+    }
+    function advanceKeyboardPlant(): void {
+      if (!keyboardHolding || !activePlant) return;
+      const dwell = performance.now() - activePlantStartedAt;
+      activePlant.liveDwellMs = dwell;
+      const tier = holdTier(dwell);
+      if (tier >= 2) climbPlantRole(activePlant, dwell);
+      if (tier >= 3) sealPlot(activePlant);
+    }
+    function releaseKeyboardPlant(): void {
+      keyboardHolding = false;
+      if (activePlant) {
+        activePlant = null;
+        idleWrite.schedule();
+      }
+    }
+
+    // The cursor drifts under held arrow keys. Speed is a plain px-per-ms
+    // rate; it is not a threshold in the gesture-grammar sense, only a
+    // continuous velocity — the room's own kinematic constant. Reduced
+    // motion halves the speed so a keyboard visitor with reduced motion is
+    // still walking, not sliding.
+    const CURSOR_PX_PER_MS = reduceMotion ? 0.20 : 0.42;
+    function advanceKeyboardCursor(dt: number): void {
+      if (!cursorVisible) return;
+      let dx = 0;
+      let dy = 0;
+      if (heldArrows.left)  dx -= 1;
+      if (heldArrows.right) dx += 1;
+      if (heldArrows.up)    dy -= 1;
+      if (heldArrows.down)  dy += 1;
+      if (dx === 0 && dy === 0) return;
+      // diagonals normalize so up-right moves the same speed as up
+      const norm = dx * dx + dy * dy === 2 ? 0.7071 : 1;
+      cursorX = Math.max(0, Math.min(width, cursorX + dx * norm * CURSOR_PX_PER_MS * dt));
+      cursorY = Math.max(0, Math.min(height, cursorY + dy * norm * CURSOR_PX_PER_MS * dt));
     }
 
     function nextRoleThreshold(role: PlotRole): number | null {
@@ -1650,6 +1906,9 @@ export default function City() {
       offVisibility();
       offGallery();
       detachVessel();
+      wrap.removeEventListener("keydown", onKeyDown);
+      wrap.removeEventListener("keyup", onKeyUp);
+      wrap.removeEventListener("blur", onWrapBlur);
       window.removeEventListener("letgo", onLetGo);
       window.clearInterval(standingInterval);
       idleWrite.flush();
@@ -1667,12 +1926,15 @@ export default function City() {
   return (
     <div
       ref={wrapRef}
+      tabIndex={0}
+      aria-label="a small settlement — arrows drift a cursor, p plants and keeps deepening while held, space seals, l cycles the lens, escape lowers it"
       style={{
         position: "fixed",
         inset: 0,
         touchAction: "none",
         overflow: "hidden",
         background: "#0e0f13",
+        outline: "none",
       }}
     >
       <canvas ref={glCanvasRef} style={{ position: "absolute", inset: 0, display: "block" }} />
