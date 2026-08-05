@@ -227,7 +227,148 @@ assert.equal(dofStrengthForPitch(2), 1, "over-clamped pitch stays at DOF strengt
   );
 }
 
+// ── bokeh depth pre-pass gating on pitch ──────────────────────────────────
+// The BokehPass internally renders the skyline scene with a MeshDepthMaterial
+// override into its own depth target before applying the blur. At the default
+// wide-view pitch01=0 the strength curve is exactly 0, so the blur is a no-op
+// copy — but the depth pre-pass would still run every frame unless we gate
+// `enabled` on the strength. Painterly already uses this pattern (see the
+// composer body). The invariant this test pins: after a render() at high
+// tier with pitch01 < PITCH_DOF_START, bokehPass.enabled MUST be false;
+// after a render() at high tier with pitch01 >= PITCH_DOF_END, it MUST be
+// true.
+//
+// We construct the composer against the module-load stubs plus a small set
+// of runtime stubs for scene/camera/renderer — the pure JS branches inside
+// render() decide bokehPass.enabled without touching any GL.
+// Construct the composer against a BokehPass stub that captures the
+// instance on a shared ref, then drive render() at a handful of
+// (tier, pitch01) points and assert on the pass's `enabled` bit.
+{
+  let capturedBokeh = null;
+  const bokehStubCapture = {
+    BokehPass: class {
+      constructor() {
+        this.enabled = true;
+        this.uniforms = { maxblur: { value: 0 }, aperture: { value: 0 } };
+        capturedBokeh = this;
+      }
+      setSize() {}
+      dispose() {}
+    },
+  };
+  // loadTsModule caches by requireMap KEY-names — same keys returns the
+  // cached module and uses the original stubs. Add a unique sentinel key
+  // so this load gets its own cache entry and picks up bokehStubCapture.
+  const captureMod = loadTsModule("src/lib/city-composer.ts", {
+    requireMap: {
+      three: threeStub,
+      "three/examples/jsm/postprocessing/EffectComposer.js": composerStubModule,
+      "three/examples/jsm/postprocessing/RenderPass.js": renderPassStub,
+      "three/examples/jsm/postprocessing/UnrealBloomPass.js": bloomStub,
+      "three/examples/jsm/postprocessing/SSAOPass.js": ssaoStub,
+      "three/examples/jsm/postprocessing/BokehPass.js": bokehStubCapture,
+      "three/examples/jsm/postprocessing/OutputPass.js": outputStub,
+      "three/examples/jsm/postprocessing/ShaderPass.js": shaderPassStub,
+      "@/lib/room-runtime": runtimeStub,
+      "__cache_bust_bokeh_capture__": {},
+    },
+  });
+  const scene = {};
+  const cam = {};
+  const renderer = {
+    getPixelRatio() { return 1; },
+    setSize() {},
+    render() {},
+    clear() {},
+    dispose() {},
+  };
+  const composer = captureMod.createCityComposer({
+    renderer,
+    groundScene: scene,
+    groundCam: cam,
+    plotScene: scene,
+    plotCam: cam,
+    skylineScene: scene,
+    skylineCam: cam,
+    width: 800,
+    height: 600,
+    pixelRatio: 1,
+  });
+
+  assert.ok(capturedBokeh, "BokehPass should be constructed when a skyline scene is present");
+
+  // High tier, eye-level (pitch01 = 0): the depth pre-pass MUST be off,
+  // because dofStrengthForPitch(0) === 0 and the blur is a no-op copy.
+  composer.render(0.25, "high", 0);
+  assert.equal(
+    capturedBokeh.enabled,
+    false,
+    "at wide-view (pitch01=0) high tier, bokehPass.enabled must be false — no depth pre-pass for a zero-blur frame",
+  );
+
+  // High tier, bird's-eye (pitch01 = 1): the depth pre-pass MUST run.
+  composer.render(0.25, "high", 1);
+  assert.equal(
+    capturedBokeh.enabled,
+    true,
+    "at bird's-eye (pitch01=1) high tier, bokehPass.enabled must be true — the diorama blur is on",
+  );
+
+  // High tier, at exactly PITCH_DOF_START (strength 0): still off.
+  composer.render(0.25, "high", PITCH_DOF_START);
+  assert.equal(
+    capturedBokeh.enabled,
+    false,
+    "at pitch01=PITCH_DOF_START high tier, bokehPass.enabled must be false — the ramp is exactly 0 at the start",
+  );
+
+  // High tier, past PITCH_DOF_START by a hair (strength > 0): on.
+  composer.render(0.25, "high", PITCH_DOF_START + 0.05);
+  assert.equal(
+    capturedBokeh.enabled,
+    true,
+    "at pitch01 just above PITCH_DOF_START, bokehPass.enabled must be true — any positive blur runs the pass",
+  );
+
+  // Medium tier at bird's-eye: DOF is not alive at medium, so the pass
+  // MUST stay off regardless of the pitch.
+  composer.render(0.25, "medium", 1);
+  assert.equal(
+    capturedBokeh.enabled,
+    false,
+    "at bird's-eye medium tier, bokehPass.enabled must be false — tier ladder gates DOF off",
+  );
+
+  // Low tier at bird's-eye: same story, pass off.
+  composer.render(0.25, "low", 1);
+  assert.equal(
+    capturedBokeh.enabled,
+    false,
+    "at bird's-eye low tier, bokehPass.enabled must be false — tier ladder gates DOF off",
+  );
+
+  // Gate.dof off at high tier bird's-eye: pass must stay off.
+  composer.setPassGates({ dof: false });
+  composer.render(0.25, "high", 1);
+  assert.equal(
+    capturedBokeh.enabled,
+    false,
+    "with the dof gate closed, bokehPass.enabled must be false even at bird's-eye — gate ANDs with the tier ladder",
+  );
+
+  // Re-open the gate — bird's-eye high tier: pass on again.
+  composer.setPassGates({ dof: true });
+  composer.render(0.25, "high", 1);
+  assert.equal(
+    capturedBokeh.enabled,
+    true,
+    "with the dof gate re-opened at bird's-eye high tier, bokehPass.enabled must be true again",
+  );
+}
+
 console.log(
   "city-composer ok: ember curve peaks at dusk, DOF ramps 0→1 on pitch [0.55..0.85], " +
-  "tier ladder is sleep/low → medium(bloom+ssao+godrays) → high(bloom+ssao+godrays+dof).",
+  "tier ladder is sleep/low → medium(bloom+ssao+godrays) → high(bloom+ssao+godrays+dof), " +
+  "bokeh depth pre-pass skips when dofStrengthForPitch(pitch01) === 0.",
 );
