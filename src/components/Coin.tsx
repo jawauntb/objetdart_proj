@@ -7,7 +7,7 @@ import { getFieldAudio } from "@/lib/audio";
 import { useField } from "@/store/field";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
-import { THRESHOLDS } from "@/lib/gesture/core";
+import { THRESHOLDS, tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import {
   createFrameGovernor,
   createIdleWriter,
@@ -705,6 +705,7 @@ export default function Coin() {
     let blessed = false;
     let lastWindCueAt = 0;
     let lastScrubAt = 0;
+    let lastDrumAt = 0;
     const spinBy = (d: number) => {
       spin.z += d;
       const sec = (((Math.floor(spin.z / (Math.PI / 4)) % 8) + 8) % 8);
@@ -714,17 +715,71 @@ export default function Coin() {
       tap: (e) => {
         lastGestureAt = performance.now();
         if (e.fingers !== 1) return; // the medal absorbs frame/law taps
-        // tap flips toward where you pressed & rings that region's note —
-        // intensity is the strike: shine, haptic and toss ride the same 0..1
+        if (performance.now() - lastDrumAt < THRESHOLDS.drumWindowMs) return; // a patter already answered
         const { cx, cy } = coinCenter();
         const dx = e.x - cx, dy = cy - e.y;    // up-positive
         const sec = sectorOf(dx, dy);
+        // the rapid-tap train (grammar tiers 1 / 3 / 5 / n) — the medal's
+        // own reward ladder, each rung deeper than the last
+        const tier = tapTrainTier(e.count);
+        const depth = tapTrainDepth(e.count);
+        if (tier === 3) {
+          // three rapid taps: the region rings its triad — root, fifth,
+          // octave chiming up the same sector as the medal shivers in hand
+          [0, 7, 12].forEach((iv, i) => window.setTimeout(() => voice(SCALE[sec] + iv, 200), i * 70));
+          spin.z += (Math.PI / 8) * (dx >= 0 ? 1 : -1);
+          shine.v = Math.min(1, 0.7 + e.intensity * 0.3);
+          haptics.roll();
+          addPoints(0.03);
+          useField.getState().recordTape("sigil", 0.6, "coin/triad");
+          return;
+        }
+        if (tier === 5) {
+          // five: the grand toss — the medal leaps high, the whole octave
+          // running up beneath it while it turns over
+          toss.amp = Math.min(2, 1.55 + e.intensity * 0.35 + depth * 0.2);
+          SCALE.forEach((m, i) => window.setTimeout(() => voice(m, 120), i * 55));
+          try { haptics.bloom(); } catch { /* noop */ }
+          addPoints(0.05);
+          useField.getState().recordTape("ripple", 0.75, "coin/grand-toss");
+          doFlip(dx, dy);
+          return;
+        }
+        if (tier === "n") {
+          // seven and beyond: the peal — the octave cascades back down and
+          // the aventurine night pulses wave on wave, deeper every strike
+          SCALE.slice().reverse().forEach((m, i) => window.setTimeout(() => voice(m, 150), i * 70));
+          fill.pulse = Math.min(1, fill.pulse + 0.4 + depth * 0.5);
+          shine.v = 1;
+          try { haptics.storm(); } catch { /* noop */ }
+          addPoints(0.05 + depth * 0.07);
+          useField.getState().recordTape("kept", 0.6 + depth * 0.3, "coin/peal");
+          return;
+        }
+        // tier 1: tap flips toward where you pressed & rings that region's
+        // note — intensity is the strike: shine, haptic and toss ride it
         ting(); regionNote(sec);
         shine.v = 0.6 + e.intensity * 0.4;
         haptics.ripple(0.25 + e.intensity * 0.4);
         toss.amp = 0.85 + e.intensity * 0.45;
         useField.getState().recordTape("object", 0.4 + e.intensity * 0.4, "coin/tap");
         doFlip(dx, dy);
+      },
+      drum: (e) => {
+        lastGestureAt = performance.now();
+        lastDrumAt = performance.now();
+        // two hands pattering: the hanging medal teeters, rocking toward
+        // each strike, ringing root under one hand and fifth under the other
+        const { cx, cy } = coinCenter();
+        const nearB = Math.hypot(e.x - e.bx, e.y - e.by) < Math.hypot(e.x - e.ax, e.y - e.ay);
+        tilt.ty = Math.max(-1.1, Math.min(1.1, (e.x - cx) * 0.004));
+        tilt.tx = Math.max(-1.1, Math.min(1.1, (e.y - cy) * 0.004));
+        const sec = sectorOf(e.x - cx, cy - e.y);
+        voice(SCALE[sec] + (nearB ? 7 : 0), 140);
+        shine.v = Math.min(1, shine.v + 0.2 + e.alternation * 0.2);
+        try { haptics.tap(); } catch { /* noop */ }
+        addPoints(0.008);
+        useField.getState().recordTape("object", 0.5, "coin/teeter");
       },
       drag: (e) => {
         lastGestureAt = performance.now();
@@ -804,19 +859,23 @@ export default function Coin() {
         const now = performance.now();
         if (now - lastScrubAt < 300) return;
         lastScrubAt = now;
-        // one circling finger turns the coin in-plane — the octave sweeps
-        spinBy((Math.sign(e.winding) || 1) * (Math.PI / 4));
+        // one circling finger turns the coin in-plane — the octave sweeps,
+        // and a faster circle carries it further per pass
+        const sweep = (Math.PI / 4) * (1 + Math.min(1, Math.abs(e.angularVelocity) * 0.4));
+        spinBy((Math.sign(e.winding) || 1) * sweep);
       },
       hold: (e) => {
         lastGestureAt = performance.now();
         if (e.fingers === 3) {
-          // three fingers hold the law: the coin's time runs at 1/4
+          // three fingers hold the law: the coin's time keeps slowing the
+          // longer the chord is held — toward 1/8 by the ceremony tier,
+          // never the same at 900ms as at 2400ms
+          if (e.phase === "release") { timeScale.target = 1; return; }
+          timeScale.target = Math.max(0.125, 1 - 0.875 * Math.min(1, e.elapsed / THRESHOLDS.ceremonyMs));
           if (e.phase === "enter") {
-            timeScale.target = 0.25;
             try { A().playNote(36, 260); } catch { /* noop */ }
             try { haptics.tap(); } catch { /* noop */ }
           }
-          if (e.phase === "release") timeScale.target = 1;
           return;
         }
         if (e.fingers !== 1) return;

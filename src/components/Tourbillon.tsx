@@ -8,6 +8,7 @@ import { getFieldAudio } from "@/lib/audio";
 import { useField } from "@/store/field";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { THRESHOLDS, tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import { relaxTurbulence, stirTurbulence } from "@/lib/turbulence";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
@@ -1158,7 +1159,9 @@ export default function Tourbillon() {
       try { haptics.tap(); } catch { /* noop */ }
       try { getFieldAudio().playNote(50, 140); } catch { /* noop */ }
     };
-    const tutti = () => {
+    const tutti = (intensity = 0.5) => {
+      // one synchronized pulse of everything alive — scaled by how hard
+      // the chord landed: the balance swings wider, the ratchet surges more
       const a = getFieldAudio();
       const order: Array<[string, THREE.Object3D]> = [
         ["gear-center", center.group], ["gear-third", third.group],
@@ -1168,19 +1171,59 @@ export default function Tourbillon() {
         window.setTimeout(() => { try { a.playNote(GEAR_PITCH[act] ?? 60, 90); } catch { /* noop */ } }, i * 45);
       });
       try { a.chime(); } catch { /* noop */ }
-      escapeKick.amp = Math.max(escapeKick.amp, 0.5);
+      escapeKick.amp = Math.max(escapeKick.amp, 0.35 + intensity * 0.35);
       escapeKick.at = performance.now();
-      windKick.v = Math.min(1, windKick.v + 0.4);
-      try { haptics.ripple(0.6); } catch { /* noop */ }
-      useField.getState().recordTape("sigil", 0.6, "tourbillon/tutti");
+      windKick.v = Math.min(1, windKick.v + 0.25 + intensity * 0.3);
+      try { haptics.ripple(0.4 + intensity * 0.4); } catch { /* noop */ }
+      useField.getState().recordTape("sigil", 0.4 + intensity * 0.4, "tourbillon/tutti");
+    };
+    // the repeater — the rapid-tap train (grammar tiers 1 / 3 / 5 / n)
+    // strikes the movement's own complications
+    const strike = (count: number, high: boolean, gapMs: number) => {
+      const a = getFieldAudio();
+      for (let i = 0; i < count; i++) {
+        window.setTimeout(() => { try { a.playNote(high ? 84 : 72, 140); } catch { /* noop */ } }, i * gapMs);
+      }
     };
 
     const detachGestures = attachGestures(renderer.domElement, {
       tap: (e) => {
         lastGestureAt = performance.now();
         if (e.fingers === 2) { stepBack(); return; }
-        if (e.fingers === 3) { tutti(); return; }
+        if (e.fingers === 3) { tutti(e.intensity); return; }
         if (e.fingers !== 1) return;
+        const tier = tapTrainTier(e.count);
+        const depth = tapTrainDepth(e.count);
+        if (tier === 3) {
+          // three rapid taps: the quarter repeater — the two-tone
+          // ding-dong of a minute repeater striking a quarter
+          strike(1, true, 0);
+          window.setTimeout(() => strike(1, false, 0), 160);
+          escapeKick.amp = Math.max(escapeKick.amp, 0.25 + e.intensity * 0.2);
+          escapeKick.at = performance.now();
+          try { haptics.roll(); } catch { /* noop */ }
+          useField.getState().recordTape("sigil", 0.55, "tourbillon/quarter-repeater");
+          return;
+        }
+        if (tier === 5) {
+          // five: the hour strike — the gong counts the hour the hands
+          // are actually telling, one low blow per hour
+          const hour = (Math.floor(simAccum / 3600) % 12) || 12;
+          strike(hour, false, 260);
+          windKick.v = Math.min(1.2, windKick.v + 0.3);
+          try { haptics.bloom(); } catch { /* noop */ }
+          useField.getState().recordTape("kept", 0.7, "tourbillon/hour-strike");
+          return;
+        }
+        if (tier === "n") {
+          // seven and beyond: grande sonnerie — every gear rings in
+          // train order, the mainspring surges, deeper with every strike
+          tutti(Math.min(1, 0.5 + depth * 0.5));
+          windKick.v = Math.min(1.2, windKick.v + 0.3 + depth * 0.4);
+          try { haptics.storm(); } catch { /* noop */ }
+          useField.getState().recordTape("ripple", 0.6 + depth * 0.3, "tourbillon/sonnerie");
+          return;
+        }
         handleHit(actAt(e.x, e.y), e.intensity);
       },
       flick: (e) => {
@@ -1199,8 +1242,9 @@ export default function Tourbillon() {
         const now = performance.now();
         if (now - lastCrankAt < 420) return;
         lastCrankAt = now;
-        // a circling finger turns the crown — the ratchet clicks over
-        windKick.v = Math.min(1, windKick.v + 0.35);
+        // a circling finger turns the crown — the ratchet clicks over,
+        // and a faster wrist pours more wind in per pass
+        windKick.v = Math.min(1.1, windKick.v + 0.25 + Math.min(0.35, Math.abs(e.angularVelocity) * 0.12));
         try { getFieldAudio().playNote(62 + ((Math.abs(Math.round(e.winding)) % 3) * 2), 70); } catch { /* noop */ }
         try { haptics.tap(); } catch { /* noop */ }
         useField.getState().recordTape("object", 0.45, "tourbillon/crank");
@@ -1222,13 +1266,15 @@ export default function Tourbillon() {
       hold: (e) => {
         lastGestureAt = performance.now();
         if (e.fingers === 3) {
-          // three fingers hold the law: the whole train runs at 1/4
+          // three fingers hold the law: the whole train keeps slowing the
+          // longer the chord is held — toward 1/8 by the ceremony tier,
+          // never the same at 900ms as at 2400ms
+          if (e.phase === "release") { timeScale.target = 1; return; }
+          timeScale.target = Math.max(0.125, 1 - 0.875 * Math.min(1, e.elapsed / THRESHOLDS.ceremonyMs));
           if (e.phase === "enter") {
-            timeScale.target = 0.25;
             try { getFieldAudio().playNote(36, 260); } catch { /* noop */ }
             try { haptics.tap(); } catch { /* noop */ }
           }
-          if (e.phase === "release") timeScale.target = 1;
           return;
         }
         if (e.fingers !== 1) return;
@@ -1281,6 +1327,28 @@ export default function Tourbillon() {
         entrainT.until = performance.now() + 9000;
         entrainT.lastBeat = -1;
         useField.getState().recordTape("sigil", 0.5, "tourbillon/entrain");
+      },
+      span: (e) => {
+        lastGestureAt = performance.now();
+        // two still fingers hold the movement: hacking seconds — the
+        // watchmaker's stop that stills the balance to set the time true.
+        // The train slows further the longer the interval is sustained,
+        // and springs back to full beat the moment the fingers lift.
+        if (e.phase === "release") {
+          timeScale.target = 1;
+          escapeKick.amp = Math.max(escapeKick.amp, 0.3);
+          escapeKick.at = performance.now();
+          try { getFieldAudio().chime(); } catch { /* noop */ }
+          try { haptics.tap(); } catch { /* noop */ }
+          useField.getState().recordTape("object", 0.5, "tourbillon/hack-release");
+          return;
+        }
+        timeScale.target = Math.max(0.04, 1 - Math.min(1, e.elapsed / THRESHOLDS.ceremonyMs));
+        if (e.phase === "enter") {
+          try { getFieldAudio().playNote(48, 200); } catch { /* noop */ }
+          try { haptics.tap(); } catch { /* noop */ }
+          useField.getState().recordTape("object", 0.45, "tourbillon/hack");
+        }
       },
     }, { wheelZoom: false, noCapture: true, manageStyle: false });
 
