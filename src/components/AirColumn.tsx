@@ -508,7 +508,8 @@ void main() {
 /** What the hand's verbs reach: set once the stage and the loop exist. */
 type Air = {
   tap: (x: number, y: number, intensity: number, count?: number) => void;
-  tutti: () => void;
+  tutti: (intensity: number) => void;
+  stepBack: () => void;
   plant: (x: number, y: number) => void;
   deepen: (elapsed: number, x: number, y: number) => void;
   ceremony: (x: number, y: number) => void;
@@ -519,7 +520,9 @@ type Air = {
   lens: (angle: number) => void;
   season: (angle: number) => void;
   vortex: (cx: number, cy: number, angularVelocity: number) => void;
-  gust: (x: number, y: number) => void;
+  gust: (x: number, y: number, hits: number, alternation: number) => void;
+  entrain: (bpm: number, stability: number) => void;
+  lid: (ayPx: number, byPx: number, elapsed: number, phase: "enter" | "tick" | "release") => void;
   scatter: (intensity: number) => void;
   gravity: (gamma: number) => void;
   ring: (intensity: number) => void;
@@ -573,6 +576,11 @@ export default function AirColumn() {
     let lanternWriteAt = 0;
     let heldParcelId = -1;
     let nextParcelId = 1;
+    // a steady tapped pulse entrains the thermals to the hand's tempo
+    let entrainBpm = 0;
+    let entrainUntil = 0;
+    let entrainDepth = 0;
+    let lastEntrainBeat = -1;
     let shownElevNow = sunElev;
     let width = 1;
     let height = 1;
@@ -769,9 +777,30 @@ export default function AirColumn() {
         if (near) near.w += 0.0004 + intensity * 0.0008 + depth * 0.0005;
         haptics.tap();
       },
-      tutti: () => {
-        stirTurbulence(0.22);
-        for (const p of parcels) p.w += 0.0009;
+      tutti: (intensity) => {
+        // one synchronized pulse, as strong as it was asked: every cloud
+        // takes a breath of buoyancy, and the column sounds ground and
+        // tropopause together — the room stating its own two ends
+        stirTurbulence(0.12 + intensity * 0.18);
+        for (const p of parcels) {
+          p.w += 0.0006 + intensity * 0.0007;
+          pushRing(pxForXKm(p.xKm), yForZ(p.zKm));
+        }
+        soundAltitude(0.5, 240);
+        soundAltitude(tropopauseKm(lapse), 200);
+        haptics.ripple(0.25 + intensity * 0.3);
+      },
+      stepBack: () => {
+        // the frame retreats one step: a raised lens lowers; otherwise the
+        // column settles — the stirred wind damps and the haze thins
+        if (lens > 0.02) {
+          lens = 0;
+        } else {
+          for (let n = 0; n < WIND_MODES; n++) amps[n] *= 0.6;
+          haze = clamp(haze * 0.75 + 0.25, 0.2, 2.2);
+        }
+        soundAltitude(12, 180);
+        haptics.tap();
       },
       plant: (x, y) => {
         const p = seedParcel(xKmForPx(x), zForY(y), 0.6);
@@ -855,10 +884,53 @@ export default function AirColumn() {
         haze = clamp(haze + 0.05, 0.2, 2.2);
         audio.playNote(Math.round(midiForPressure(pressureKPa(zKm, lapse))) + 12, 160);
       },
-      gust: (x, y) => {
-        void x;
-        stirAtAltitude(zForY(y), 0.28);
-        stirTurbulence(0.08);
+      gust: (x, y, hits, alternation) => {
+        // drumming gusts the layer under each landing, harder as the patter
+        // lengthens and steadier hands push steadier wind — seen as a ring,
+        // heard at the layer's own pressure
+        const roll = clamp01(hits / 9);
+        stirAtAltitude(zForY(y), 0.16 + roll * 0.24 + alternation * 0.1);
+        stirTurbulence(0.05 + roll * 0.06);
+        pushRing(x, y);
+        soundAltitude(zForY(y), 90 + Math.round(roll * 90));
+        haptics.tap();
+      },
+      entrain: (bpm, stability) => {
+        // the hand's pulse becomes the convective cycle: every beat, each
+        // cloud takes a breath of lift for as long as the tempo holds
+        entrainBpm = clamp(bpm, 40, 150);
+        entrainDepth = clamp01(stability);
+        entrainUntil = performance.now() + 9000;
+        haptics.tap();
+      },
+      lid: (ayPx, byPx, elapsed, phase) => {
+        // span — two still fingers pin two altitudes and hold the air
+        // between them: a capping lid, by hand. The wind in the band damps,
+        // climbing parcels flatten under it (deeper the longer it stands),
+        // and both levels sound as one held interval. Release lets the
+        // band convect again with a stir sized by the wait.
+        const zLo = zForY(Math.max(ayPx, byPx));
+        const zHi = zForY(Math.min(ayPx, byPx));
+        const depth = clamp01(elapsed / 4000);
+        if (phase === "release") {
+          stirAtAltitude((zLo + zHi) / 2, 0.2 + depth * 0.3);
+          for (const p of parcels) {
+            if (p.zKm > zLo && p.zKm < zHi) p.w += 0.0005 + depth * 0.0008;
+          }
+          soundAltitude((zLo + zHi) / 2, 220);
+          haptics.ripple(0.2 + depth * 0.3);
+          return;
+        }
+        for (let n = 0; n < WIND_MODES; n++) amps[n] *= 1 - 0.015 - depth * 0.02;
+        for (const p of parcels) {
+          if (p.zKm > zLo && p.zKm < zHi) p.w *= 0.9 - depth * 0.2;
+        }
+        if (phase === "enter" || elapsed % 900 < 60) {
+          soundAltitude(zLo, 200);
+          soundAltitude(zHi, 180);
+          pushRing(width * 0.5, yForZ(zHi));
+          haptics.ripple(0.12 + depth * 0.18);
+        }
       },
       scatter: (intensity) => {
         stirTurbulence(intensity * 0.6);
@@ -945,6 +1017,17 @@ export default function AirColumn() {
 
       // ——— the parcels live ———
       if (!asleep) {
+        // the entrained pulse: while the hand's tempo holds, every beat
+        // lifts the thermals together and the ground sounds its pressure
+        if (now < entrainUntil && entrainBpm > 0) {
+          const beatIdx = Math.floor((now / 1000) * (entrainBpm / 60));
+          if (beatIdx !== lastEntrainBeat) {
+            lastEntrainBeat = beatIdx;
+            for (const p of parcels) p.w += 0.0004 + entrainDepth * 0.0005;
+            pushRing(width * (0.3 + (beatIdx % 3) * 0.2), yForZ(0.8));
+            audio.playNote(Math.round(midiForPressure(pressureKPa(0.8, lapse))) - 12, 90);
+          }
+        }
         for (const p of parcels) {
           const shear = shearAt(p.zKm, amps, lapse);
           if (!reduced) {
@@ -1203,7 +1286,8 @@ export default function AirColumn() {
   const voice = useMemo<RoomVoice>(
     () => ({
       tap: (e) => airRef.current?.tap(e.x, e.y, e.intensity, e.count),
-      tutti: () => airRef.current?.tutti(),
+      tutti: (e) => airRef.current?.tutti(e.intensity),
+      stepBack: () => airRef.current?.stepBack(),
       plant: (e) => airRef.current?.plant(e.x, e.y),
       deepen: (e) => airRef.current?.deepen(e.elapsed, e.x, e.y),
       ceremony: (e) => airRef.current?.ceremony(e.x, e.y),
@@ -1214,7 +1298,9 @@ export default function AirColumn() {
       stir: (e) => airRef.current?.vortex(e.cx, e.cy, e.angularVelocity),
       lens: (e) => airRef.current?.lens(e.angle),
       season: (e) => airRef.current?.season(e.angle),
-      drum: (e) => airRef.current?.gust(e.x, e.y),
+      drum: (e) => airRef.current?.gust(e.x, e.y, e.hits, e.alternation),
+      rhythm: (e) => airRef.current?.entrain(e.bpm, e.stability),
+      sustain: (e) => airRef.current?.lid(e.ay, e.by, e.elapsed, e.phase),
       scatter: (e) => airRef.current?.scatter(e.intensity),
       gravity: (e) => airRef.current?.gravity(e.gamma),
       knock: (e) => airRef.current?.ring(e.intensity),
