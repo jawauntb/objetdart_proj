@@ -102,6 +102,12 @@ import {
   type CityBackdropDome,
 } from "@/lib/city-backdrop-dome";
 import {
+  createCompileGate,
+  hasParallelShaderCompile,
+  probeMaterialReady,
+  submitSceneCompile,
+} from "@/lib/city-shader-compile";
+import {
   createCityWater,
   WATER_PLANE_Y,
   type CityWater,
@@ -2259,24 +2265,81 @@ export default function City() {
       godrays: false,
       water: false,
     });
-    // Each step runs on ONE tick, in order. Ordered by rough cost to
-    // amortise the heaviest shader compiles first (clouds raymarch, water
-    // reflector, backdrop dome). Kept declarative so a future edit that
-    // adds another heavy module can slot itself in without touching the
-    // tick loop's control flow.
-    const progressiveSteps: Array<() => void> = [
-      () => { infill.group.visible = true; },
-      () => { skylineRing.group.visible = true; },
-      () => { backdropDome.group.visible = true; },
-      () => { cityClouds.mesh.visible = true; },
-      () => { citySunDisk.mesh.visible = true; },
-      () => { traffic.group.visible = true; },
-      () => { pedestrians.group.visible = true; },
-      () => { composer.setPassGates({ water: true }); },
-      () => { composer.setPassGates({ bloom: true }); },
-      () => { composer.setPassGates({ ssao: true }); },
-      () => { composer.setPassGates({ godrays: true }); },
-      () => { composer.setPassGates({ dof: true }); },
+    // ── async shader compilation (KHR_parallel_shader_compile) ──────────
+    // Lever 4 in the perf brief. `submitSceneCompile` walks every mesh
+    // in both scenes and asks WebGLRenderer to initialise its material's
+    // program right now — on WebGL2 with the KHR extension the driver
+    // links on a background worker and the JS thread returns after
+    // ~1 ms, so shader link cost has moved OFF the reveal frame and
+    // ONTO whatever wall-clock slice the driver's compile worker owns.
+    // Without the extension, the compile happens synchronously here at
+    // setup time — worse than pre-PR#341 for setup, but the reveal
+    // frames no longer stall, and the gate's deadline safety net keeps
+    // the schedule advancing regardless.
+    //
+    // We compile BEFORE hiding the meshes above? No — meshes are
+    // already hidden by the block above, and `scene.traverse` (three's
+    // compile impl) walks all children regardless of visibility. So
+    // the driver initialises every heavy material even while their
+    // meshes will read `visible=false` on the first draw.
+    submitSceneCompile(renderer, worldScene, cityCam.camera);
+    submitSceneCompile(renderer, skyline.scene, cityCam.camera);
+    // The gate. `probe` reads the driver's opinion via three's internal
+    // WebGLProgram.isReady(); `deadlineMs=500` is the safety net for a
+    // context that strips the extension (some WKWebViews do).
+    const compileGate = createCompileGate({
+      probe: (mat) => probeMaterialReady(renderer, mat),
+      deadlineMs: 500,
+    });
+    // Submit the four heavy materials named in the brief. The gate
+    // treats submit() as idempotent; a step that reveals a mesh whose
+    // material was never submitted returns ready immediately and
+    // behaves like PR#341's non-gated path — a safe default for future
+    // step additions.
+    compileGate.submit(backdropDome.material);
+    compileGate.submit(cityClouds.mesh.material as THREE.Material);
+    compileGate.submit(citySunDisk.mesh.material as THREE.Material);
+    // A one-time console breadcrumb so future audits can see whether
+    // the extension survived the current runtime. Cheap; runs once.
+    if (typeof console !== "undefined") {
+      // eslint-disable-next-line no-console
+      console.info(
+        "[city:shader-compile] KHR_parallel_shader_compile:",
+        hasParallelShaderCompile(renderer),
+      );
+    }
+
+    // ── progressive step schedule ───────────────────────────────────────
+    // Each step is now a `{ run, ready? }` pair. `ready` is polled every
+    // tick BEFORE calling `run`; if the material isn't ready and the
+    // deadline hasn't lapsed, the schedule holds on this step for one
+    // more frame. `run` is the visibility flip that used to be the
+    // step. Steps without a `ready` (composer pass gates, group
+    // reveals whose materials aren't heavy enough to bother tracking)
+    // advance the same frame they run, exactly as pre-async.
+    type ProgressiveStep = { run: () => void; ready?: () => boolean };
+    const progressiveSteps: Array<ProgressiveStep> = [
+      { run: () => { infill.group.visible = true; } },
+      { run: () => { skylineRing.group.visible = true; } },
+      {
+        run: () => { backdropDome.group.visible = true; },
+        ready: () => compileGate.isReady(backdropDome.material),
+      },
+      {
+        run: () => { cityClouds.mesh.visible = true; },
+        ready: () => compileGate.isReady(cityClouds.mesh.material as THREE.Material),
+      },
+      {
+        run: () => { citySunDisk.mesh.visible = true; },
+        ready: () => compileGate.isReady(citySunDisk.mesh.material as THREE.Material),
+      },
+      { run: () => { traffic.group.visible = true; } },
+      { run: () => { pedestrians.group.visible = true; } },
+      { run: () => { composer.setPassGates({ water: true }); } },
+      { run: () => { composer.setPassGates({ bloom: true }); } },
+      { run: () => { composer.setPassGates({ ssao: true }); } },
+      { run: () => { composer.setPassGates({ godrays: true }); } },
+      { run: () => { composer.setPassGates({ dof: true }); } },
     ];
     let progressiveIdx = 0;
 
@@ -2667,21 +2730,42 @@ export default function City() {
       // React state so the canvas renders on top of the gradient.
       if (!hasEverRendered) {
         hasEverRendered = true;
+        // [perf] instrumentation — first-paint marker in performance.now()
+        // space (relative to route navigation start). Cheap: fires once
+        // per mount. A DevTools filter of `[city:perf]` in the console
+        // reads first paint end-to-end without a test harness. This log
+        // is load-bearing for future perf regressions — do not remove
+        // without a Node-side or Playwright-side substitute.
+        try { console.log('[city:perf]', 'first-paint', 'ms=' + performance.now().toFixed(1)); } catch {}
         try { setFirstFramePainted(true); } catch { /* noop */ }
       }
       // Advance the progressive-enablement schedule by one step per
       // frame. Each step un-hides one heavy mesh or re-opens one composer
-      // pass gate, so the shader compilations that used to land in a
-      // single megaframe are spread across ~12 frames (~200 ms at 60 Hz).
+      // pass gate. A step with a `ready` gate polls the compile-gate
+      // (see city-shader-compile) — if the driver hasn't finished linking
+      // the material's program AND the deadline hasn't elapsed, we hold
+      // on this step for one more frame so its reveal frame no longer
+      // stalls on `useProgram`. Async shader compilation via WebGL2's
+      // KHR_parallel_shader_compile means the driver was already
+      // working on the link the whole time; by the time we reach the
+      // step, it's usually already ready and the step advances the
+      // same frame.
       if (progressiveIdx < progressiveSteps.length) {
-        const step = progressiveSteps[progressiveIdx++];
-        try { step(); } catch (err) {
-          // A step throw would be catastrophic — one heavy module failed
-          // to accept its own visibility flip. Log and skip; the room
-          // stays alive with whatever finished lighting up before.
-          // eslint-disable-next-line no-console
-          console.error("[city:progressive]", err);
+        const step = progressiveSteps[progressiveIdx];
+        const ready = step.ready ? step.ready() : true;
+        if (ready) {
+          progressiveIdx += 1;
+          try { step.run(); } catch (err) {
+            // A step throw would be catastrophic — one heavy module failed
+            // to accept its own visibility flip. Log and skip; the room
+            // stays alive with whatever finished lighting up before.
+            // eslint-disable-next-line no-console
+            console.error("[city:progressive]", err);
+          }
         }
+        // If not ready, we simply DO NOT advance — the same step is
+        // re-checked next frame. The gate's internal deadline (500 ms
+        // by default) guarantees we can't hang here forever.
       }
       raf = requestAnimationFrame(tick);
     };
