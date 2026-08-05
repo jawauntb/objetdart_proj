@@ -39,6 +39,13 @@ const threeStub = {
   HalfFloatType: 0,
   Vector2: class {
     constructor(x = 0, y = 0) { this.x = x; this.y = y; }
+    set(x, y) { this.x = x; this.y = y; }
+  },
+  Vector3: class {
+    constructor(x = 0, y = 0, z = 0) { this.x = x; this.y = y; this.z = z; }
+    set(x, y, z) { this.x = x; this.y = y; this.z = z; }
+    clone() { return new threeStub.Vector3(this.x, this.y, this.z); }
+    project() { return this; }
   },
   WebGLRenderTarget: class {
     constructor() {}
@@ -178,19 +185,35 @@ assert.equal(dofStrengthForPitch(2), 1, "over-clamped pitch stays at DOF strengt
 
 {
   const high = passesForTier("high");
-  assert.deepEqual(high, { bloom: true, ssao: true, dof: true }, "high tier has all three post-passes on");
+  assert.deepEqual(
+    high,
+    { bloom: true, ssao: true, dof: true, godrays: true },
+    "high tier has all four post-passes on",
+  );
 }
 {
   const medium = passesForTier("medium");
-  assert.deepEqual(medium, { bloom: true, ssao: true, dof: false }, "medium tier has bloom + ssao, no DOF");
+  assert.deepEqual(
+    medium,
+    { bloom: true, ssao: true, dof: false, godrays: false },
+    "medium tier has bloom + ssao, no DOF or god-rays",
+  );
 }
 {
   const low = passesForTier("low");
-  assert.deepEqual(low, { bloom: false, ssao: false, dof: false }, "low tier has no post-passes");
+  assert.deepEqual(
+    low,
+    { bloom: false, ssao: false, dof: false, godrays: false },
+    "low tier has no post-passes",
+  );
 }
 {
   const sleep = passesForTier("sleep");
-  assert.deepEqual(sleep, { bloom: false, ssao: false, dof: false }, "sleep tier has no post-passes");
+  assert.deepEqual(
+    sleep,
+    { bloom: false, ssao: false, dof: false, godrays: false },
+    "sleep tier has no post-passes",
+  );
 }
 
 console.log(
