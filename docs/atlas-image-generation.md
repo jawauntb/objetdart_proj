@@ -8,7 +8,7 @@ Last verified against the live provider documentation and OpenRouter model-disco
 
 - **V1 provider:** OpenAI's Image API with `gpt-image-2`.
 - **V1 whole-map flow:** a person enters only a concept such as `fire forest`; Atlas turns that into an internal art-direction prompt and generates one complete map image.
-- **V1 refinement flow:** zoom/regeneration uses the current rendered map as the image input to `gpt-image-2`, rather than reconstructing the map from coordinates.
+- **Refinement flow:** a lateral shift or an in-place refine may send the current rendered map as the image input. **Zoom never does.** Every deeper layer is drawn natively from coordinates (`atlasOperationForRequest` returns `generation` for `mode: "zoom"`), because editing the on-screen bitmap upsamples whatever softness the preview left and compounds it at every depth. See "Progressive descent" below for the geometry this feeds.
 - **Immediate interaction:** pan, zoom, and fold happen on the client immediately. They do not wait for generation and remain available if generation fails.
 - **UI boundary:** there is no visible coordinate editor, provider picker, model picker, or prompt-engineering panel. Coordinates/transforms may exist as private client state, but the only creative text input is the concept.
 - **Live OpenRouter adapter:** `generateWithOpenRouter` in `src/lib/atlas-generation.ts` is wired and exercised in tests. It targets `POST https://openrouter.ai/api/v1/images` and accepts any model in `OPENROUTER_MODEL_ALLOWLIST`. The current allowlist is:
@@ -29,6 +29,46 @@ Last verified against the live provider documentation and OpenRouter model-disco
 6. While generation is pending, the existing surface stays interactive. On timeout, moderation block, quota error, or provider outage, Atlas keeps the current image and offers a retry instead of replacing the map with an empty/error screen.
 
 This deliberately separates **fast navigation** from **slow synthesis**. Generation enriches the map; it is not required for every gesture.
+
+## Progressive descent — how a sheet stays sharp
+
+`src/lib/atlas-pyramid.ts` owns this, and `scripts/test-atlas.mjs` pins it. The
+whole mechanism is two moves:
+
+1. **Detail.** When the camera magnifies the deepest drawing past
+   `PYRAMID_DETAIL_MAGNIFICATION` (1.15), the client asks for a child sheet of
+   exactly **half** the ground (`PYRAMID_RATIO`), centered on what the camera
+   is looking at. Half the ground with the same pixel budget is four times the
+   density, so the child lands already downsampled — it is the sharper drawing
+   from the instant it arrives, not after some later refinement.
+   `pyramidLayerBlend` dissolves it in against the live `--atlas-zoom`, and a
+   ~5.5% feathered mask keeps the join from reading as a seam.
+2. **Promotion.** The moment that child covers the whole viewport, the frame is
+   re-expressed around it: the child becomes the unit cell, its ancestors keep
+   their places at negative levels, and the camera's numbers are rewritten so
+   nothing moves on screen. `promoteView` and `demoteView` are exact inverses,
+   so pulling back out at the plane's floor climbs the same stair upward and
+   lands where the descent left.
+
+Promotion is what makes the descent endless. Camera zoom never leaves roughly
+[1, 8] (`pyramidZoomCeiling`) however deep the traveler goes — depth lives in
+the descent stack, not in a transform scale of four thousand where CSS
+sub-pixel geometry and compositor precision both fail. Twelve layers of real,
+natively drawn ground cost twelve promotions and no precision at all;
+`PYRAMID_MAX_DEPTH` allows twenty-four, and only there does the deep clamp —
+and the band wall toward `/coast` behind it — come back into reach.
+
+Descending also changes **what kind of map this is**. `pyramidPerspective`
+walks a fixed ladder — continental survey → region → district → settlement →
+quarter → block → room → object → surface → microscopy → lattice → grain — and
+`formatAtlasPerspectiveClause` tells the generator both the register and how
+many layers below the outer chart this sheet stands. Without it, twelve layers
+would be twelve renderings of the same coastline.
+
+`npm run smoke:atlas-descent -- http://127.0.0.1:3210` drives this in a real
+browser against a stubbed generator: it descends twelve layers, asserts the
+camera never leaves the plane's range, and measures the magnification of the
+deepest drawing actually under the middle of the stage.
 
 ## Provider-neutral server boundary (proposed Atlas contract)
 

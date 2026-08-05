@@ -33,6 +33,13 @@ export type PlaneTile = {
   level: number;
   image: string;
   phase: PlaneTilePhase;
+  /**
+   * The previous plane's ground, held under a landing newcomer while it
+   * covers. Retirement is a separate axis from level: a promoted frame
+   * carries live *ancestors* at negative levels, and those are the floor
+   * of the world, not something on its way out.
+   */
+  retiring?: boolean;
 };
 
 function clamp(value: number, min: number, max: number): number {
@@ -203,17 +210,6 @@ export function deepestTileAt(tiles: PlaneTile[], point: PlanePoint): PlaneTile 
     if (!best || tile.level >= best.level) best = tile;
   }
   return best;
-}
-
-/**
- * Whether the camera has outrun a tile's native detail: the tile is being
- * magnified past its own fit by more than the threshold, so the ground
- * under the viewer deserves a deeper drawing. Landing that child shrinks
- * the deepest rect and the same zoom no longer wants more — the pyramid's
- * termination condition.
- */
-export function tileNeedsDetail(tile: PlaneTile, zoom: number, threshold = 1.45): boolean {
-  return zoom * tile.rect.width >= threshold;
 }
 
 export type PlaneVelocity = { x: number; y: number };
