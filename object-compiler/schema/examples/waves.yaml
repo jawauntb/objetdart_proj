@@ -1,0 +1,230 @@
+# /waves — travelling disturbance.
+#
+# Round-trip-derived from src/components/Waves.tsx and public/guide/waves.jpg.
+# A `field` invariant: a real finite-difference wave equation runs on a 2D
+# grid (a ripple tank), with three media — ripple (2D open tank), string
+# (1D plucked line), refraction (2D tank with a speed gradient). The height
+# field h(x,y) + its previous step is a deterministic JS integrator that
+# uploads the packed height field to a fragment shader; the GPU does the
+# per-pixel colour work — real gradient-lit water, sun glint on the crests,
+# foam on the steep water, depth in the troughs.
+#
+# Placement: peer of the coast band. Rings the coast circle after
+# `/coast`; sits alongside `/tide`, `/ocean`, `/sine`, `/aphros` as
+# instruments of the coast's own language.
+
+key: waves
+component_name: Waves
+
+placement:
+  kind: band
+  band: coast
+
+sigil: waves
+icon_kind: waves
+desc: "travelling disturbance"
+cluster: field
+dark: true
+ambient_profile: waves
+storage_key: "objetdart:world:v1"
+
+invariant: >
+  a real finite-difference wave equation h_tt = c² · (h_xx + h_yy) − d · h_t
+  on a 2D grid, with three media (ripple, string, refraction) that share the
+  same integrator. the load-bearing map is HEIGHT_FIELD → colour: the
+  shader reads slope, depth and crest brightness from a packed height
+  texture, so a screenshot IS the field and inverting a pixel returns h.
+  the equation is deterministic, energy conserving up to damping, and runs
+  identically on WebGL1 (LUMINANCE_ALPHA) and WebGL2 (RG8).
+
+material: 2d-over-shader
+noun: pulse
+
+domain_lib:
+  name: wavefield
+  invariant_type: field
+
+palette:
+  bg:      "#050a12"
+  bg2:     "#0a1a2e"
+  glow:    "#8ae4ee"
+  accent:  "#5fd4e0"
+  accent2: "#b99aff"
+  ink:     "#eaf6ff"
+
+visual_style:
+  composition: top-down
+  subject: "a tank of water seen from above — a ripple expanding as a circular wavefront from a source, gradient-lit crests catching the sun, foam on the steep water, a lens sitting over the equation the water is solving"
+  form_language: [SDF, value-noise-FBM, ray-marched, hand-painted]
+  motion_character: pulsing
+  registers:
+    - "the deep tank dark and the tank's cool ambient — via bg"
+    - "the trough register (below still water) and the far vignette — via bg2"
+    - "the sunlit crest highlight and the caustic ridge riding the slope — via glow"
+    - "the mid-water register and the ripple's teal register — via accent"
+    - "the refraction register (purple/violet under the bent front) and the paper of the lens — via accent2"
+    - "the readable Waves title, the wavefront-speed hint, the controls' text — via ink"
+  reference_notes:
+    - "a ripple-tank photograph: circular wavefronts crossing, interfering, reflecting off the walls"
+    - "a fluid-dynamics textbook plate — gradient-lit crests, foam on the steep water, the equation in the corner"
+    - "the guide screenshot at public/guide/waves.jpg: 'Waves / travelling disturbance', a single circular ripple, mode controls at top-right, timeline at bottom"
+  banned_forms:
+    - "no createRadialGradient, no shadowBlur per AGENTS.md"
+    - "no drawn wavefronts — every ripple is the field's own h, and the shader reads slope and depth from a packed height texture"
+    - "no per-frame allocation in the integrator — the field is two Float32Arrays swapped each step"
+    - "no per-object gradient — the caustic ridge is a gradient of the same texture the crest reads"
+  mood: "still water waiting to be touched; every pulse a physics demonstration in miniature"
+  gesture_feedback_style: "a tap injects a pulse at the contact — a Gaussian bump in h that expands as a circular wavefront; a drag paints a moving pulse (a caterpillar of energy); a hold builds a still peak that releases outward when let go"
+
+verbs_answered:
+  - tap
+  - dwell
+  - ceremony
+  - drag
+  - flick
+  - twist
+  - twist3
+  - tap3
+  - drag3
+  - hold3
+  - scrub
+  - drum
+  - arrows
+  - tilt
+  - shake
+  - knock
+  - flip
+
+guide:
+  title: "waves — travelling disturbance"
+  scale: "the coast band — beside the tide and the ocean, a small tank of water where a real wave equation runs."
+  essence: >
+    a wave is a travelling disturbance; here it is literal. a real
+    finite-difference wave equation runs on a grid — a ripple tank —
+    so pulses expand at a finite speed, reflect off the walls, and
+    interfere into moiré. three media share the same physics: ripple
+    (2D open tank, circular wavefronts), string (1D plucked line,
+    reflecting at both ends), refraction (2D tank with a speed
+    gradient, bending fronts). the shader reads the height field
+    live: crest glint, trough depth, foam on the steep water.
+  moves:
+    - "tap → injects a pulse at the contact; a Gaussian bump in h expands as a circular wavefront"
+    - "hold → builds a still peak under the finger; release throws it outward as a large pulse"
+    - "hold to the ceremony → releases the pulse with its own sonic bell (a chord in the tank's tune)"
+    - "drag → paints a moving pulse; the finger drives energy along its path, a caterpillar of crests"
+    - "flick → throws the drag's pulse with its final velocity; the caterpillar keeps going after release"
+    - "scrub → stirs the whole tank with a slow rotation; the equation keeps solving, the field turns"
+    - "drum (two hands alternating) → drops pulses in the two contacts at the beat"
+    - "twist → raises the equation lens: the tank drawn as isolines of h, the mesh spacing visible, the equation in the corner"
+    - "twist3 → walks between modes — ripple / string / refraction — with a smooth crossfade"
+    - "three-finger drag → the world-law: horizontal is speed c (faster = tighter fronts), vertical is damping d (higher = softer)"
+    - "three-finger hold → time dilation while held; the tank's clock runs slow"
+    - "three-finger tap → tutti; every mode rings its natural tone at once"
+    - "arrows → walk between modes and step the timeline"
+    - "tilt / shake / knock / flip (once invited) → the tank leans (wavefronts curve), the water scatters, a knock rings a struck-mode pulse, face-down is night"
+    - "controls (visible at the bottom): pause, speed, damping, drop amplitude, still, and a readout of the current mode / c / status"
+  finds:
+    - "a screenshot IS the field — invert the pixel's brightness and you recover h; the shader is a lens over the equation, not a decoration"
+    - "the wavefronts reflect off the walls; two pulses interfering into moiré is real interference, not a texture"
+    - "in refraction mode the speed gradient bends the fronts — Snell's law made visible"
+    - "the string mode is 1D: energy reflects at both ends and returns as its own opposite phase, so a plucked note is the tank's fundamental"
+    - "damping decides whether a pulse decays before it reaches the wall; the same tap dies out or reflects depending on d"
+  keeps: "the current mode, c, d, drop amplitude, and pause state — enough that a returning visitor sees the tank they left."
+
+# ——— the three LLM slots ————————————————————————————————————————————————
+
+shader_intent: >
+  paint a tank of water from above. the field itself is uploaded as a packed
+  two-channel 8-bit texture (16-bit fixed point, ±FIELD_RANGE) that carries
+  h(x,y). the shader reads it and does the per-pixel colour work: (1) SLOPE
+  from the field's finite-difference gradient (sample four neighbours,
+  compute sx = hR − hL, sy = hB − hT); (2) COLOUR from a monotone map t =
+  clamp(hC * 2.3, −1, 1) → mix(uMid, uCrest, t) for crests and mix(uMid,
+  uTrough, −t) for troughs; (3) DEPTH tint in the troughs — the deeper the
+  trough, the more the light is swallowed; (4) CAUSTICS riding the slope
+  — clamp(slope * 3.6, 0, 1)² with a caustic tint blend; (5) NORMAL from
+  the slope, a sun/sky glint riding the crests using a Blinn-Phong
+  half-vector against a directional light; (6) SHEEN — a broad sky tint
+  from the normal's z; (7) FOAM where the gradient is steep, textured
+  with a per-pixel hash so it never reads as a flat band. the LENS
+  render path rotates the level of description: at uLens = 0.5 the tank
+  becomes isolines of h on paper (thin ink lines where h crosses
+  fractional levels), at uLens = 1.0 the "felt" register — a mapping
+  from local energy (slope + h) to a warm/cold register. mode-specific
+  palettes: ripple uses `bg2` mid, `glow` crest, `bg2` trough, `glow`
+  caustic, `ink` foam; refraction uses `accent2` mid, `accent2` crest,
+  `accent2` trough (violet register). string mode reduces to a 1D
+  render along the middle row. two shader variants share one COLOURING
+  body via macros: `FRAG_GL1` (WebGL1, LUMINANCE_ALPHA, `texture2D`) and
+  `FRAG_GL2` (WebGL2, RG8, `texture`). palette registers: `bg` deep
+  tank dark, `bg2` trough / far vignette, `glow` sunlit crest, `accent`
+  ripple teal register, `accent2` refraction violet + lens paper, `ink`
+  lens ink and readable text.
+
+domain_intent: >
+  write `src/lib/wavefield.ts` as pure math around `WaveState = { mode:
+  WaveMode, h: Float32Array, hPrev: Float32Array, grid: {w, h}, c:
+  number, d: number, dropAmp: number, paused: bool, pulses: Pulse[],
+  tau: number }`. `WaveMode` is one of "ripple" | "string" |
+  "refraction". `Pulse = { id, pos: {x,y}, radius, amp, t0 }`. the
+  integrator is a standard leapfrog finite-difference wave equation:
+  `advanceField(state, dtSec)` computes h_next = 2·h − h_prev + c² · dt²
+  · (h_xx + h_yy) − d · dt · (h − h_prev) using a 5-point stencil, in
+  fixed sub-steps sized to satisfy the CFL condition (dt_sub ≤ dx / (c ·
+  sqrt(2))). two Float32Arrays swap each step — no per-frame allocation.
+  boundaries: reflecting for ripple and refraction, fixed (h = 0) at
+  both ends for string. `refraction` mode reads a per-cell c-gradient
+  from an auxiliary array so the wavefronts bend. the load-bearing
+  invertible map is HEIGHT_TEXTURE → pixel brightness: `encodeH(h)`
+  packs a scalar into two 8-bit channels (16-bit fixed point, ±FIELD_RANGE
+  = 1.5) and `decodeH(rg)` recovers h exactly. also export `injectPulse(state,
+  x, y, radius, amp)`, `paintDrag(state, x, y, radius, amp)` (writes a
+  moving Gaussian along a drag path), `plantPeak(state, x, y, amp)`
+  (writes a still peak that decays outward), `releasePeak(state, id)`,
+  `setMode(state, mode)`, `snellSpeedAt(state, x, y)` (returns the local
+  c for refraction mode), `energyOf(state)` (∫ 0.5(h_t² + c²·|∇h|²)),
+  and `stillTank(state)` (zeros both arrays). constants: GRID_W =
+  GRID_H = 256, DEFAULT_C = 0.34, DEFAULT_D = 0.006, DEFAULT_DROP = 1.05,
+  FIELD_RANGE = 1.5, MAX_PULSES = 24, MAX_ELAPSED_S = 60 (the tank
+  never runs more than a minute unattended — energy dissipates faster
+  than that). use `hashSeed`/`mulberry32` where randomness is needed;
+  no Math.random, no Date.now, no DOM, no audio.
+
+verb_intent: >
+  every handler reads a `WavesApi` from a stable ref and writes into the
+  field through pure `wavefield.ts` functions. `tap` at the finger calls
+  `injectPulse(state, x, y, radius = 3, amp = dropAmp)` — a Gaussian
+  bump in h expands as a circular wavefront (or a 1D wavefront in
+  string mode). `dwell` at the finger calls `plantPeak(state, x, y,
+  amp)` and rises the peak's amplitude as an increasing but saturating
+  function of `e.elapsed` (θ(t) = θ_max · (1 − exp(-t/τ))); the peak
+  sits still while held, releasing outward when the finger lifts.
+  `ceremony` (held past tier 3) releases the peak with its own sonic
+  bell (audio calls into the tank's fundamental via a MIDI value on
+  the current mode); a fireMark-analog event lands in the fieldWatch
+  overlay. `drag` paints a moving pulse — `paintDrag(state, x, y,
+  radius, amp)` on each drag delta writes a caterpillar of energy
+  along the path; a smooth curve of pulses. `flick` at drag end
+  throws the caterpillar with its final velocity — the last few
+  segments carry a slightly higher amp and the field advances as
+  usual. `scrub` (finger circling) stirs the whole tank with a
+  slow rotation; the equation keeps solving, the field turns. `twist`
+  (two-finger) raises the equation lens; `tap` fingers === 2 lowers
+  it. `twist3` walks between modes — a smooth cross-fade from
+  ripple → string → refraction via `setMode(state, next)`. `drag3`
+  writes the world-law: horizontal is c (speed; higher = tighter
+  fronts), vertical is d (damping; higher = softer). `hold3` slows
+  the sim clock while held. `tap3` (tutti) rings every mode's
+  natural tone at once — one chord. `drum` (two hands alternating)
+  drops pulses at the two contacts on the beat. the vessel: `tilt`
+  writes a gradient into the tank (fronts curve); `shake` scatters
+  the field (adds random noise briefly); `knock` rings a struck-mode
+  pulse (a large centred injectPulse); `flip` is night (writes into
+  the shader's uNight uniform — the palette shifts to cool night
+  tints). `arrows` walk between modes and step the timeline forward
+  or back. no room-local timing constants — every threshold is from
+  `gesture/core.ts`; wavefield constants live in `wavefield.ts`.
+
+chrome:
+  travel: true
+  peers: true

@@ -156,6 +156,7 @@ const expectedKeys = [
   "compass",
   "geyser",
   "orb",
+  "pebble",
   "spring",
 ];
 const validClusters = new Set(["field", "water", "nature", "mechanism"]);

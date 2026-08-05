@@ -339,7 +339,12 @@ def output_plan(component_name: str, key: str, domain_lib_name: str) -> list[Emi
         Emit("Component.tsx.tmpl", f"src/components/{component_name}.tsx"),
         Emit("domain-lib.ts.tmpl", f"src/lib/{domain_lib_name}.ts"),
         Emit("test-domain.mjs.tmpl", f"scripts/test-{domain_lib_name}.mjs"),
+        # Both patch-audit templates render. REGISTRY_PATCH.md is the plain-prose
+        # legacy version (kept as a diff-audit fallback); SIDE_FILES_PATCH.md is
+        # the companion to apply-side-patches.py — one file summarising what the
+        # auto-patcher wrote into the four shared side files.
         Emit("registry-patch.md.tmpl", f"REGISTRY_PATCH.md"),
+        Emit("side-files-patch.md.tmpl", f"SIDE_FILES_PATCH.md"),
     ]
 
 

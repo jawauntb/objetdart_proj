@@ -928,6 +928,7 @@ export const LATERAL_ROUTE_BANDS: { prefix: string; band: ScaleBandId }[] = [
   // the ground's strata — door rooms of the earth wall (see DOOR_ROOMS):
   // a rock in the hand, a handful of soil, both the drop's size
   { prefix: "/rocks", band: "drop" },
+  { prefix: "/pebble", band: "drop" },
   { prefix: "/soil", band: "drop" },
   { prefix: "/spring", band: "drop" },
   { prefix: "/geyser", band: "drop" },

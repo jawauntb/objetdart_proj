@@ -63,6 +63,7 @@ SCHEMA_PATH = COMPILER_ROOT / "schema" / "room-spec.schema.yaml"
 EXAMPLES_DIR = COMPILER_ROOT / "schema" / "examples"
 
 RENDER_TEMPLATE = REPO_ROOT / "scripts" / "object-compiler" / "render-template.py"
+APPLY_SIDE_PATCHES = REPO_ROOT / "scripts" / "object-compiler" / "apply-side-patches.py"
 REGISTRY_PATH = REPO_ROOT / "src" / "rooms" / "registry.ts"
 
 WORKTREE_ROOT = REPO_ROOT / ".claude" / "worktrees"
@@ -100,6 +101,7 @@ TIMEOUT_INTENT_TO_SPEC = 180
 TIMEOUT_SLOT_FILL      = 300
 TIMEOUT_RENDER         = 60
 TIMEOUT_GIT            = 30
+TIMEOUT_SIDE_PATCHES   = 60
 
 # The registry-patch instructions live here when a supplementary prompt file
 # is used; the compiler also has a programmatic fallback (see _patch_registry).
@@ -119,6 +121,7 @@ class CompileConfig:
     branch: str
     no_llm: bool
     dry_run: bool
+    apply_side_patches: bool     # run apply-side-patches.py after slot-fill
 
 
 @dataclass
@@ -177,6 +180,12 @@ def _parse_args(argv: list[str] | None = None) -> CompileConfig:
                    help="skip slot-fill; leave __SLOT_*__ markers in place and report")
     p.add_argument("--dry-run", action="store_true",
                    help="print planned actions, do not modify anything")
+    p.add_argument("--apply-side-patches",
+                   action=argparse.BooleanOptionalAction, default=True,
+                   help="after slot-fill, auto-patch src/rooms/registry.ts, "
+                        "src/lib/room-registry.ts, src/lib/scale.ts and "
+                        "scripts/test-routes.mjs via apply-side-patches.py "
+                        "(default: yes)")
 
     a = p.parse_args(argv)
 
@@ -188,6 +197,7 @@ def _parse_args(argv: list[str] | None = None) -> CompileConfig:
         branch=a.branch or "",  # filled in later once we know the key
         no_llm=a.no_llm,
         dry_run=a.dry_run,
+        apply_side_patches=bool(a.apply_side_patches),
     )
 
 
@@ -475,45 +485,124 @@ def _call_slot_prompt(slot: str, spec: Spec) -> str:
 
 
 def _retrieve_one_shots(slot: str, spec: Spec) -> str:
-    """The heart of the retrieval bank. Pick 2–3 past rooms whose
-    `invariant_type` matches `spec.invariant_type` and pull the corresponding
-    section from each. Deliberately naive: linear scan over the examples
-    directory, no vector search — with a corpus of ~7 rooms, exact-match on
-    the invariant tag is enough."""
-    reference_dir = COMPILER_ROOT / "reference"
+    """The retrieval bank. Rank all example specs against the target `spec`
+    by a four-tier key — invariant_type, composition, form_language,
+    motion_character — and return the top K anchors' source sections.
+
+    The K=2 default is a deliberate response to the /geyser audit finding
+    that a *retrieval bank of one* biases toward *copying* rather than
+    *differentiating*. When the top hit dominates by invariant_type
+    (i.e. there is only one room in the target family), the second slot
+    is *forced* to a next-best DIFFERENT-invariant-type room so the LLM
+    sees a foil — the room's identity shape, plus a contrast that says
+    "you are not any of these other rooms either."
+
+    Sources — spec.yaml files with a full `visual_style` block — are
+    read from `object-compiler/schema/examples/`. The retrieval bank
+    used to live at `object-compiler/reference/<key>/spec.yaml`, but
+    that directory was never populated (M7 was designed to pack it and
+    never landed); the examples dir carries the authoritative specs
+    and is checked in already.
+
+    The code (shader / domain / verbs / pins) is still pulled from the
+    landed `src/` tree via the domain module name — the retrieval
+    picks WHICH rooms to anchor against; `_read_slot_section_from_main`
+    then reads the *actual code* those rooms shipped, exactly as
+    before.
+    """
     inv = spec.invariant_type
-    hits: list[Path] = []
-    if reference_dir.exists():
-        for spec_yaml in sorted(reference_dir.glob("*/spec.yaml")):
+    target_style = spec.raw.get("visual_style", {}) or {}
+    target_composition = str(target_style.get("composition", ""))
+    target_form_langs = set(target_style.get("form_language", []) or [])
+    target_motion = str(target_style.get("motion_character", ""))
+    target_key = spec.key
+
+    # Rank every example spec by a four-tier score. Ties broken by name.
+    candidates: list[dict[str, Any]] = []
+    if EXAMPLES_DIR.exists():
+        for spec_yaml in sorted(EXAMPLES_DIR.glob("*.yaml")):
+            if spec_yaml.stem == target_key:
+                continue  # do not retrieve the spec we are compiling
             try:
                 other = _parse_yaml(spec_yaml.read_text(encoding="utf-8"))
             except Exception:
                 continue
-            if isinstance(other, dict):
-                other_inv = other.get("domain", {}).get("invariant_type")
-                if other_inv == inv:
-                    hits.append(spec_yaml.parent)
+            if not isinstance(other, dict):
+                continue
+            other_inv = other.get("domain_lib", other.get("domain", {})).get(
+                "invariant_type", ""
+            )
+            other_style = other.get("visual_style", {}) or {}
+            other_composition = str(other_style.get("composition", ""))
+            other_form_langs = set(other_style.get("form_language", []) or [])
+            other_motion = str(other_style.get("motion_character", ""))
+            other_module = other.get("domain_lib", other.get("domain", {})).get(
+                "name", ""
+            )
+            # Score: (invariant_match, composition_match, form_language_overlap,
+            #        motion_match). Higher is better.
+            score = (
+                int(other_inv == inv),
+                int(bool(other_composition) and other_composition == target_composition),
+                len(target_form_langs & other_form_langs),
+                int(bool(other_motion) and other_motion == target_motion),
+            )
+            candidates.append({
+                "key":       spec_yaml.stem,
+                "score":     score,
+                "invariant": other_inv,
+                "module":    other_module,
+            })
 
-    # Fallback: if no reference/ dir is populated yet, hand-map by
-    # invariant_type to the known peers on `main`. The mapping tracks the
-    # reasoning in the slot prompt docstrings (`slot-shader.md`, etc).
-    if not hits:
+    if not candidates:
+        # No specs on disk — fall through to the hand-map on src/.
         fallback_map = {
-            "flux":              ["aircolumn", "humus"],
-            "gravitation":       ["orbits"],
-            "conservation":      ["humus", "orbits"],
-            "bounded_iteration": ["flock", "chemistry"],
+            "field":   ["spiral", "hearth", "wavefield"],
+            "flock":   ["flock"],
+            "column":  ["aircolumn"],
+            "ledger":  ["humus", "springflow", "geyserflow"],
+            "lattice": ["crystal"],
+            "orbit":   ["orbits"],
+            "latent":  ["worldforge"],
+            "chain":   [],
         }
         return _fallback_one_shots(slot, fallback_map.get(inv, ["aircolumn", "humus"]))
 
+    # Sort best-first by score.
+    candidates.sort(key=lambda c: c["score"], reverse=True)
+
+    # Assemble top-K = 2, forcing invariant-type diversity when the top hit is
+    # the ONLY member of its family. That is the geyser-audit fix: a retrieval
+    # bank of one biases toward copying; a foil corrects it.
+    K = 2
+    picked: list[dict[str, Any]] = []
+    if candidates:
+        picked.append(candidates[0])
+        top_inv = candidates[0]["invariant"]
+        # Count how many share top's invariant across ALL candidates. If exactly
+        # one, force the second slot to be a different invariant_type; otherwise
+        # the next-best (same-family or not) is fine.
+        same_family = [c for c in candidates if c["invariant"] == top_inv]
+        different_family = [c for c in candidates if c["invariant"] != top_inv]
+        if len(same_family) == 1 and different_family:
+            picked.append(different_family[0])
+        elif len(candidates) >= 2:
+            picked.append(candidates[1])
+        # Trim to K.
+        picked = picked[:K]
+
     parts: list[str] = []
-    for room_dir in hits[:3]:
-        parts.append(f"# --- one-shot from {room_dir.name} ---")
-        # Load the slot-specific section from a well-known relative file.
-        source = _room_source_for_slot(room_dir, slot)
+    for cand in picked:
+        parts.append(
+            f"# --- one-shot from /{cand['key']} "
+            f"(invariant_type={cand['invariant']}, score={cand['score']}) ---"
+        )
+        source = _read_slot_section_from_main(slot, cand["module"])
         if source:
             parts.append(source)
-    return "\n\n".join(parts)
+        else:
+            parts.append(f"# (source unavailable for module: {cand['module']})")
+    return "\n\n".join(parts) or "# (no one-shot examples available)"
 
 
 def _fallback_one_shots(slot: str, module_names: list[str]) -> str:
@@ -531,20 +620,57 @@ def _fallback_one_shots(slot: str, module_names: list[str]) -> str:
 
 def _read_slot_section_from_main(slot: str, module: str) -> str:
     """Read the slot-relevant section from a canonical past room on main.
-    Deliberately narrow: for the shader slot we pull the `FRAG` block; for
-    the domain slot the whole lib file; for verbs the `voice = useMemo(...)`
-    or `voiceRef = useRef(...)` block; for pins the whole test file."""
+    Deliberately narrow: for the shader slot we pull the largest FRAG-ish
+    template literal; for the domain slot the whole lib file; for verbs
+    the `voice = useMemo(...)` or `voiceRef = useRef(...)` block; for
+    pins the whole test file.
+
+    When a room's physics lives inline in its component (pre-consolidation
+    rooms like /fire and /waves do this), the domain slot falls back to
+    the component's own file — a good-enough anchor for what the module
+    would look like if it were extracted, and honest about the fact that
+    not every ancestor room has been factored into `src/lib/`.
+    """
     if slot == "shader":
         component = _guess_component_for_domain(module)
         path = REPO_ROOT / "src" / "components" / f"{component}.tsx"
         if not path.exists():
             return ""
         text = path.read_text(encoding="utf-8")
+        # Match the largest FRAG-ish shader literal in the file. Rooms use
+        # a variety of names — const FRAG, SKY_FRAG, FIELD_CORE, FRAG_GL1,
+        # or an inline const frag = `...`. Pick the longest hit.
+        candidates = re.findall(
+            r"const\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*`([^`]+)`",
+            text,
+            re.DOTALL,
+        )
+        shader_candidates = [
+            c for c in candidates
+            if ("precision" in c or "gl_Position" in c or "gl_FragColor" in c
+                or "FRAG_COLOR" in c or "fragColor" in c)
+        ]
+        if shader_candidates:
+            return max(shader_candidates, key=len)
+        # Legacy exact-name fallback if nothing matched the heuristic.
         m = re.search(r"const FRAG = `(.*?)`;", text, re.DOTALL)
         return m.group(1) if m else ""
     if slot == "domain":
         path = REPO_ROOT / "src" / "lib" / f"{module}.ts"
-        return path.read_text(encoding="utf-8") if path.exists() else ""
+        if path.exists():
+            return path.read_text(encoding="utf-8")
+        # Fallback: the room's physics lives inline in its component. Return
+        # the component file as a coarser anchor. Better than empty context
+        # when the retrieval bank names a pre-consolidation room.
+        component = _guess_component_for_domain(module)
+        component_path = REPO_ROOT / "src" / "components" / f"{component}.tsx"
+        if component_path.exists():
+            return (
+                f"# (no src/lib/{module}.ts — physics is inline in "
+                f"{component}.tsx; the whole component follows)\n"
+                + component_path.read_text(encoding="utf-8")
+            )
+        return ""
     if slot == "verbs":
         component = _guess_component_for_domain(module)
         path = REPO_ROOT / "src" / "components" / f"{component}.tsx"
@@ -559,7 +685,12 @@ def _read_slot_section_from_main(slot: str, module: str) -> str:
             m = re.search(pattern, text, re.DOTALL)
             if m:
                 return m.group(1)
-        return ""
+        # Fallback: return the attachGestures block — pre-consolidation rooms
+        # wire verbs there directly rather than through a RoomVoice ref.
+        m = re.search(
+            r"attachGestures\s*\([^,]+,\s*(\{.*?\})\s*\)", text, re.DOTALL
+        )
+        return m.group(1) if m else ""
     if slot == "pins":
         path = REPO_ROOT / "scripts" / f"test-{module}.mjs"
         return path.read_text(encoding="utf-8") if path.exists() else ""
@@ -572,13 +703,19 @@ def _guess_component_for_domain(module: str) -> str:
     because the M2 corpus is small enough that this cost is worth its
     determinism."""
     known = {
-        "aircolumn": "AirColumn",
-        "humus":     "SoilGround",
-        "orbits":    "SolarSystem",
-        "flock":     "Flock",
-        "chemistry": "AtomsField",
-        "spiral":    "Galaxy",
-        "worldforge":"Planets",
+        "aircolumn":  "AirColumn",
+        "humus":      "SoilGround",
+        "orbits":     "SolarSystem",
+        "flock":      "Murmuration",
+        "chemistry":  "AtomsField",
+        "spiral":     "GalaxyArms",
+        "worldforge": "PlanetForge",
+        "crystal":    "RockShelf",
+        "springflow": "Spring",
+        "geyserflow": "Geyser",
+        "hearth":     "Fire",
+        "wavefield":  "Waves",
+        "pebblecore": "Pebble",
     }
     return known.get(module, module.capitalize())
 
@@ -677,6 +814,39 @@ def _patch_registry(spec: Spec, out_dir: Path) -> str:
 
     registry_target.write_text(text, encoding="utf-8")
     return f"patched (import + ROOM_MANIFESTS[{key}])"
+
+
+# ---------------------------------------------------------------------------
+# side-file patches — pass (e.b)
+# ---------------------------------------------------------------------------
+
+def _run_side_patches(spec_path: Path, out_dir: Path) -> list[str]:
+    """Invoke `apply-side-patches.py` against the worktree to auto-apply the
+    four side-file edits (registry.ts + room-registry.ts + scale.ts +
+    test-routes.mjs). Returns a small list of report lines for the summary.
+
+    Not fatal on error — the caller still gets the summary and can inspect
+    the failure. The patcher itself is idempotent, so a partial success
+    followed by a rerun of `compile-room.py --apply-side-patches` heals."""
+    if not APPLY_SIDE_PATCHES.exists():
+        return [f"skipped (apply-side-patches.py not found at {APPLY_SIDE_PATCHES})"]
+    _log(f"[side-patch] calling {APPLY_SIDE_PATCHES.name} (timeout {TIMEOUT_SIDE_PATCHES}s)")
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(APPLY_SIDE_PATCHES),
+             "--spec", str(spec_path),
+             "--repo", str(out_dir)],
+            capture_output=True,
+            text=True,
+            timeout=TIMEOUT_SIDE_PATCHES,
+        )
+    except subprocess.TimeoutExpired:
+        return [f"error: timed out after {TIMEOUT_SIDE_PATCHES}s"]
+    lines = proc.stdout.strip().splitlines() if proc.stdout else []
+    if proc.returncode != 0:
+        stderr = (proc.stderr or "").strip().splitlines()[:5]
+        return lines + ["error: exit " + str(proc.returncode)] + stderr
+    return lines
 
 
 # ---------------------------------------------------------------------------
@@ -820,6 +990,19 @@ def main(argv: list[str] | None = None) -> int:
     else:
         registry_result = _patch_registry(spec, out_dir)
 
+    # ── (e.b) side-file patches ───────────────────────────────────────────
+    # After the registry is patched, apply the three other side files
+    # (`src/lib/room-registry.ts`, `src/lib/scale.ts`,
+    # `scripts/test-routes.mjs`) that spring flagged and geyser confirmed as
+    # derivable from the spec. The registry.ts patch above overlaps with
+    # apply-side-patches.py's first patch — that's fine, both are idempotent.
+    side_patch_results: list[str] = []
+    if cfg.apply_side_patches:
+        if cfg.dry_run:
+            side_patch_results = ["dry-run"]
+        else:
+            side_patch_results = _run_side_patches(spec_path, out_dir)
+
     # ── (f) summary ───────────────────────────────────────────────────────
     _log("")
     _log("── object-compiler summary ─────────────────────────────────────")
@@ -827,6 +1010,10 @@ def main(argv: list[str] | None = None) -> int:
     _log(f"  worktree:     {out_dir}")
     _log(f"  branch:       {cfg.branch}")
     _log(f"  registry:     {registry_result}")
+    if cfg.apply_side_patches:
+        _log(f"  side-patches:")
+        for line in side_patch_results:
+            _log(f"    {line}")
     for slot, outcome in outcomes.items():
         marker = SLOT_MARKERS[slot]
         target = SLOT_TARGET_TEMPLATES[slot].format(

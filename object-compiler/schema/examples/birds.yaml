@@ -1,0 +1,230 @@
+# /birds — the flock as one animal, seen from the meadow.
+#
+# Round-trip-derived from src/components/Murmuration.tsx, src/lib/flock.ts,
+# and public/guide/birds.jpg. The `flock` invariant type: a boid parameter
+# triple (separation, alignment, cohesion) plus wind and season goal, poured
+# through a FIXED timestep integrator so 60Hz and 120Hz reach the same sky.
+# The load-bearing map is Vicsek order → the harmonic series; a scattered
+# sky sounds a detuned partial stack, a coherent murmuration collapses onto
+# one ringing partial, and `orderFromPartials` recovers the order from the
+# sound alone.
+#
+# Placement: primary resident of the birds band at ~10¹·³ m — the meadow
+# under the flock, the sky above, one dusk sun on the horizon. This is
+# NOT a peer of anything in the drop band; it holds its own band on the
+# axis (between garden below and coast above).
+
+key: birds
+component_name: Murmuration
+
+placement:
+  kind: band
+  band: birds
+
+sigil: stars
+desc: "the flock as one animal"
+cluster: nature
+dark: true
+ambient_profile: wind
+storage_key: "objetdart:birds:v1"
+
+invariant: >
+  a boid triple (separation, alignment, cohesion) with a wind field and a
+  season goal, integrated on a FIXED timestep so the same second gives the
+  same sky at 60Hz and 120Hz. the load-bearing map is the Vicsek order
+  parameter (the mean-heading magnitude) → the harmonic series: a scattered
+  flock reads as a flat, detuned partial stack; a coherent murmuration
+  collapses onto one ringing partial exactly k× the fundamental, and
+  `orderFromPartials` recovers order from the sound.
+
+material: 2d-over-shader
+noun: bird
+
+domain_lib:
+  name: flock
+  invariant_type: flock
+
+palette:
+  bg:      "#0a0e18"
+  bg2:     "#3a4a3a"
+  glow:    "#f5c68a"
+  accent:  "#4a5c2e"
+  accent2: "#7c8fa8"
+  ink:     "#e8ecd8"
+
+visual_style:
+  composition: first-person
+  subject: "a meadow at dusk seen through the eye of someone standing in it — one low sun on the horizon, ground foreshortened out to a pond and a hay pile, an aviary of readable birds under a wide dim sky"
+  form_language: [ray-marched, SDF, value-noise-FBM, hand-painted]
+  motion_character: drifting
+  registers:
+    - "the high dark sky above the horizon — via bg"
+    - "the meadow-green ground plane and the far cool arm of the sky — via bg2"
+    - "the low-sun subtractive warm on the horizon and the sunset tint on the birds — via glow"
+    - "the mid-tone meadow moss and the shadow side of a bird — via accent"
+    - "the cool foreground vault, the pond's water, and the highlight side of a bird — via accent2"
+    - "the field-watch ink and text — via ink"
+  reference_notes:
+    - "an evening pastoral: sun sitting low behind a low ridge, tall grass foreshortened by the ray-traced ground plane"
+    - "an Attenborough starling murmuration frame: the flock as ONE animal, its silhouette carried by the crowd"
+    - "the aviary shows readable individuals — no distant Instagram-blur murmuration; each bird is its own SDF silhouette with a species-specific beak or train"
+    - "the pond and the hay pile sit at real world coordinates (PLACES) and parallax when the eye leans"
+  banned_forms:
+    - "no createRadialGradient, no shadowBlur per AGENTS.md"
+    - "no first-person UI or head-mounted horizon; the eye is a fixed camera the vessel steers"
+    - "no billboard sprites without species SDFs — every bird is its own silhouette"
+    - "no p5 or animation library — one WebGL pass and one rAF"
+    - "no per-frame allocation in the flock advance — the integrator is fixed-timestep with an accumulator"
+  mood: "the sky waiting to be one thing; a dusk animal made of many, breathing on its own"
+  gesture_feedback_style: "a held finger reaches a lure into the sky and the flock gathers or scatters around it; a circling finger swirls the flock about its own axis; a tilt banks the whole sky; a knock crosses one wingbeat wave across the flock"
+
+verbs_answered:
+  - tap
+  - dwell
+  - ceremony
+  - drag
+  - flick
+  - twist
+  - twist3
+  - tap3
+  - drag3
+  - hold3
+  - scrub
+  - drum
+  - arrows
+  - tilt
+  - shake
+  - knock
+  - flip
+
+guide:
+  title: "the flock as one animal"
+  scale: "the birds band — between the garden below and the coast above; the meadow's air at wingspan scale."
+  essence: >
+    a murmuration seen from the meadow: a boid parameter triple integrated
+    on a fixed timestep so the same second is the same sky on every
+    machine. the load-bearing map is order → harmonic series — a
+    scattered sky sounds a flat, stretched stack; a coherent one collapses
+    to a single ringing partial. the ear knows the order before the eye
+    resolves it, and the map runs backwards so the interval between the
+    first two partials IS the order.
+  moves:
+    - "tap a bird → it calls once with its species voice, and its neighbours answer"
+    - "hold a finger in the sky → a lure reaches into the flock at that point; the flock gathers around it"
+    - "hold past the ceremony → the flock settles onto the finger as one animal, roosting on the palm"
+    - "flick across a held finger → releases the lure with a scatter, the flock bursting outward"
+    - "one-finger drag → strokes the sky; a stroke scatters, a held drag gathers"
+    - "circle a finger → swirls the whole murmuration about its own axis"
+    - "two-finger drag → turns the observer; the sun swings with the head"
+    - "three-finger drag → the wind for a device that cannot be tilted"
+    - "three-finger twist → the season; the goal heading turns and the whole sky flies south (or north)"
+    - "three-finger hold → time dilation while held"
+    - "three-finger tap → tutti; every bird calls at once, one chord across the aviary"
+    - "twist → raises the field-watch lens: order parameter, wind vector, season heading, aviary count"
+    - "drum → alternating hands beat the wave field between them, and the flock streams into the beat"
+    - "tilt / shake / knock / flip (once invited) → the whole sky banks, bursts and re-gathers, one wingbeat wave crosses, and face-down is night"
+    - "arrows → walk the sun along the horizon and the season through its year"
+  finds:
+    - "the interval between the first two partials IS the order — the ear reads the flock's coherence before the eye resolves it"
+    - "at 60Hz and at 120Hz the same second gives the same sky; the integrator is fixed-timestep, so the flock is a machine-invariant not a machine artifact"
+    - "one bird held long enough gathers all the others onto it — the flock has one attractor at a time"
+    - "the season's goal pulls harder than the wind; a strong wind slides the flock across the meadow but a season turn moves the whole aviary south"
+    - "a scattered sky rings a flat, detuned stack; a coherent one collapses to a single partial — you can hear the murmuration form"
+  keeps: "the aviary the meadow holds — each bird with its species, seed, and the ring of its call — the season the year has reached, and the hour it was last looked at."
+
+# ——— the three LLM slots ————————————————————————————————————————————————
+
+shader_intent: >
+  paint a meadow at dusk from inside it — first-person, one low sun on the
+  horizon, a foreshortened ground plane out to a pond and a hay pile. two
+  shader passes stacked: (1) the sky and ground — a ray hits a world-y
+  ground plane, the meadow's soil/moss/turf/pond/hay resolved in world
+  coordinates so places parallax when the eye leans; a warm subtractive
+  sun sits on the horizon (low-sun tint), the high sky fades to dark blue
+  from the horizon up. (2) the flock — up to a few thousand instanced
+  billboard birds, each drawn as a species SDF silhouette (a shared
+  eye/barb/ruffle prelude plus a species-specific beak and train) lit
+  from the sun's direction so the sunset tint lands on the flank facing
+  the sun and the shadow side reads darker. the murmuration is not a
+  distant Instagram-blur but readable individuals — each bird is its
+  own outline. the 2D overlay draws the field-watch lens when raised
+  (order parameter as a coloured bar, wind vector as a small arrow,
+  season heading, aviary count) plus the LetGo mark and the pointer's
+  lure ring. `flip` (night) sinks the sun below the horizon and shifts
+  the sky palette toward `bg`; the flock's silhouettes brighten as they
+  catch a moonlike register. palette registers: `bg` is the high dark
+  sky, `bg2` is the meadow-green ground plane, `glow` is the low-sun
+  warmth and the sunset tint on the birds, `accent` is the moss/shadow
+  register, `accent2` is the cool foreground / pond / highlight
+  register, `ink` is the lens text. the load-bearing invariant is Vicsek
+  order → visible coherence: a scattered sky visibly disagrees, a
+  murmuration visibly aligns; the ear and the eye must confirm each
+  other.
+
+domain_intent: >
+  write `src/lib/flock.ts` as pure math around `FlockState = { birds:
+  Bird[], params: FlockParams, wind: Vec3, goal: Vec3, tau: number,
+  accumulator: number }`. `Bird = { pos: Vec3, vel: Vec3, kind:
+  BirdKind, seed: number }`. `FlockParams = { separation, alignment,
+  cohesion, wind, goal, goalPull, lure?, lurePull?, swirl? }` — a 0..2
+  dial on each of separation / alignment / cohesion. the integrator is
+  FIXED-TIMESTEP: `advanceFlock(state, dtSec)` accumulates dt into
+  `state.accumulator`, then walks the accumulator in fixed steps of
+  `FIXED_DT = 1/60` (up to `MAX_STEPS_PER_ADVANCE = 6` per call to bound
+  a stall). one bird's step: count the nearest `MAX_NEIGHBORS = 16`
+  birds within `PERCEPTION = 5.2`, compute separation / alignment /
+  cohesion forces, add the wind, add a soft wall force at BOUND_MARGIN,
+  add a mild pull toward the goal, clamp speed into `[MIN_SPEED = 5,
+  MAX_SPEED = 13]`. the load-bearing invertible map is
+  `orderParameter(state)` → the harmonic series: `partialsForOrder(o)`
+  emits a partial stack that goes flat and detuned at o=0 and collapses
+  to a clean k× stack at o=1; `orderFromPartials(partials)` recovers
+  the order from those ratios exactly. also export `centroid(state)`,
+  `windFromTilt(tiltVec)`, `seasonGoal(seasonIndex)`, `spawnBird(kind,
+  seed, near)`, `cullBird(state, kind)`, `roostNearest(state, worldPt)`,
+  `launchNearest(state, worldPt)`, `flushNear(state, worldPt, radius)`,
+  and `callInterval(kind)`. constants: WORLD_X = WORLD_Z = 34, WORLD_Y
+  = 15, MIN/MAX_BIRDS = 200/4096, AVIARY_MIN/MAX = 13/22 (a
+  living-room-scale readable aviary). use `hashSeed`/`mulberry32`
+  everywhere randomness is needed; no Math.random, no Date.now, no
+  DOM.
+
+verb_intent: >
+  every handler reads a `FlockApi` from a stable ref and writes into
+  the state through pure `flock.ts` functions. `tap` on a bird calls
+  its species voice through `callInterval(kind)` and drops a felt
+  ripple into its neighbours; `tap` on empty sky pings one grain of
+  wind. `dwell` at a sky point sets `params.lure = worldFromNdc(x, y)`
+  and rises `params.lurePull` as an increasing but saturating function
+  of `e.elapsed` (θ(t) = θ_max · (1 − exp(-t/τ))) — so a two-second
+  hold gathers more than a one-second hold but a ten-second hold only
+  1.5× more than five, never identical at 900ms and 2400ms. `ceremony`
+  (held past tier 3) pushes lurePull above its natural saturation and
+  the flock settles onto the finger as ONE animal — the state's
+  `roostNearest` is called and the ceremony ring lands as a felt
+  bloom. `drag` (one finger) strokes the sky — a stroke scatters
+  (writes a negative lurePull), a held drag gathers (positive). `flick`
+  releases the lure with a scatter — writes a strong negative
+  lurePull briefly, then the lure lifts. `scrub` (finger circling)
+  writes into `params.swirl` — a rotation about the vertical through
+  the lure or the centre. `twist` (two-finger) raises the field-watch
+  lens; `tap` fingers === 2 lowers it (stepBack). `drum` (two hands
+  alternating) drops felt taps between the two contact zones. `drag3`
+  writes into `params.wind` — device that cannot be tilted uses this
+  as the wind. `twist3` moves the season: writes `params.goal =
+  seasonGoal(seasonIndex)`. `hold3` slows the sim clock while held.
+  `tap3` (tutti) calls every species at once — one chord across the
+  aviary. the vessel: `tilt` writes `params.wind = windFromTilt(...)`;
+  `shake` bursts and re-gathers (spikes separation up briefly);
+  `knock` crosses one wingbeat wave across the flock (a single
+  synchronised felt tick per bird); `flip` is night (the sun sinks
+  below the horizon and the shader recomputes). `arrows` walk the sun
+  along the horizon and the season through its year; enter follows
+  the nearest bird; held enter is a keyboard dwell; escape lowers the
+  lens. no room-local timing constants — every threshold is from
+  `gesture/core.ts`; the integrator's FIXED_DT and MAX_STEPS_PER_ADVANCE
+  live in `flock.ts`.
+
+chrome:
+  travel: true
+  peers: true

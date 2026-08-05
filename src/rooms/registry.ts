@@ -35,6 +35,7 @@ import compass from "@/rooms/compass/room.config";
 import galaxy from "@/rooms/galaxy/room.config";
 import geyser from "@/rooms/geyser/room.config";
 import orb from "@/rooms/orb/room.config";
+import pebble from "@/rooms/pebble/room.config";
 import planets from "@/rooms/planets/room.config";
 import relativity from "@/rooms/relativity/room.config";
 import rocks from "@/rooms/rocks/room.config";
@@ -50,6 +51,7 @@ export const ROOM_MANIFESTS = [
   galaxy,
   geyser,
   orb,
+  pebble,
   planets,
   relativity,
   rocks,

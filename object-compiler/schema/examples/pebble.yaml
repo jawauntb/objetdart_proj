@@ -1,0 +1,277 @@
+# /pebble — one stone, held to the light and cut open.
+#
+# The within-family test of the object compiler: peer of `/rocks` at the
+# same drop band, same `lattice` invariant type, but a fundamentally
+# different subject. Where `/rocks` is a shelf tray of many faceted
+# stones seen in silhouette, `/pebble` is ONE water-worn stone held
+# close and cut open along its own cleavage plane — you see INTO the
+# stone, through its growth rings, at the underlying lattice with its
+# cleavage traces drawn as ink lines over the section. The lattice is
+# the invariant both rooms share; the subject and the composition
+# separate them completely.
+#
+# The polish is what makes it a pebble and not a raw crystal: a stone
+# that has been carried by water long enough to lose its habit and
+# grow a smooth outer shell over its lattice. The invertible map
+# stays reciprocal → partials — you can still hear the lattice — but
+# the outer envelope now imposes a modal-damping envelope on those
+# partials, so a well-polished pebble rings LESS than an unpolished
+# one and the polish depth is audible.
+#
+# Placement: peer of `/rocks` in the cabinet ring at the drop band,
+# `ringAfter: rocks`. The twist order becomes … → /seed → /rocks →
+# /pebble → /soil → /spring → …
+#
+# The sigil is "earth" — same register as /rocks, but the icon and
+# guide read as ONE stone rather than a tray of them.
+
+key: pebble
+component_name: Pebble
+
+placement:
+  kind: peer
+  circle: cabinet
+  band: drop
+  label: "the pebble"
+  # The cabinet ring at the drop already has a hydrology chain (rocks → soil →
+  # spring → geyser). Pebble sits AFTER that chain because it is the single-
+  # stone re-focusing of the mineral register the chain opened with — the
+  # hydrology closes, then one polished stone alone before the manufactured
+  # cabinet objects begin.
+  ringAfter: geyser
+
+sigil: earth
+desc: "one stone, cut open"
+cluster: nature
+dark: true
+home_priority: 8
+ambient_profile: earth
+storage_key: "objetdart:pebble:v1"
+
+invariant: >
+  one lattice grown from one seed, enclosed in a water-worn polished
+  shell whose surface is a Wulff hull relaxed by abrasion. the interior
+  keeps the lattice's growth history as concentric rings, each with its
+  own metric spacing; a cleavage cut opens the stone along the nearest
+  lattice plane and both halves keep their mass. the invertible map is
+  reciprocal → partials (kept from /rocks), damped by the polish depth
+  so a well-worn pebble rings shorter than a fresh one — polish depth
+  is audible.
+
+material: 2d-over-shader
+noun: cut
+
+domain_lib:
+  name: pebblecore
+  invariant_type: lattice
+
+palette:
+  bg:      "#040608"
+  bg2:     "#0f141c"
+  glow:    "#e9d9a6"
+  accent:  "#b48c5a"
+  accent2: "#8ba0c0"
+  ink:     "#f2ecd9"
+
+visual_style:
+  composition: cutaway
+  subject: "one polished pebble seen at hand's reach — a section through its centre showing concentric growth rings, cleavage traces as fine ink lines, and the outer polished shell as a smooth envelope over its lattice"
+  form_language: [SDF, hand-painted, ink-line, value-noise-FBM]
+  motion_character: still
+  registers:
+    - "the deep cabinet dark behind the stone — via bg"
+    - "the sectioned interior's shadow band and the deep lattice-plane density — via bg2"
+    - "the polished shell's highlight where the lamp catches it — via glow"
+    - "the warm mineral body colour (calcite-cream / chert-brown / jasper-red) — via accent"
+    - "the cool ring lines and the cleavage-trace ink under the polish — via accent2"
+    - "the lattice-lens numeric ink and the pebble-mineral name — via ink"
+  reference_notes:
+    - "a hand specimen photograph — one stone, cut and polished, section facing the camera"
+    - "an agate slice under a raking light: concentric bands each their own colour, translucent at their edges"
+    - "a gemcutter's diagram: the outline of the finished stone drawn over the raw crystal's Wulff hull, cleavage planes as ghost lines"
+    - "the /rocks screenshot at public/guide/rocks.jpg is the peer register; pebble is the SAME lattice register but SEEN INTO rather than seen over"
+  banned_forms:
+    - "no createRadialGradient, no shadowBlur per AGENTS.md"
+    - "no tray of stones — this room is ONE stone; other stones live at /rocks"
+    - "no top-down or first-person view — the section is seen from the front, hand-close"
+    - "no drawn concentric circles as decoration — every growth ring is the domain's growthHistory read live"
+    - "no fake polish gloss — the outer shell's highlight IS the Fresnel of the polished surface's angle to the light"
+  mood: "held; the stone lets you look inside without asking"
+  gesture_feedback_style: "a tap rings the stone's own partials, damped by its polish depth; a drag turns the stone in the section (the cleavage traces sweep with the lattice); a hold rubs the outer shell, deepening the polish and audibly quieting the higher partials; a flick cleaves the stone along the nearest allowed plane and both halves keep their mass"
+
+verbs_answered:
+  - tap
+  - dwell
+  - ceremony
+  - drag
+  - flick
+  - twist
+  - twist3
+  - tap3
+  - drag3
+  - hold3
+  - scrub
+  - drum
+  - arrows
+  - tilt
+  - shake
+  - knock
+  - flip
+
+guide:
+  title: "one stone, cut open"
+  scale: "the drop band — cabinet peer behind the rocks: one water-worn stone held to the light, its section facing you."
+  essence: >
+    one pebble, cut open along its own cleavage plane. the interior is
+    the lattice's growth history — concentric rings each with their own
+    metric spacing, cleavage traces drawn as ink lines under the polish.
+    the outer shell is the Wulff hull relaxed by abrasion: the more the
+    water has carried it, the smoother the envelope. the sound is the
+    lattice you can hear (kept from the tray), damped by the polish so
+    a well-worn pebble rings shorter than a fresh crystal — the polish
+    depth is audible.
+  moves:
+    - "tap the stone → it rings its own partials, damped by its polish; a fresh crystal rings long, a polished pebble rings short"
+    - "tap the dark → the cabinet answers with a low grain"
+    - "hold on the polished shell → rubs it deeper; the polish grows and the higher partials quiet"
+    - "hold to the ceremony tier → the stone is polished as far as the lattice will let it; kept between visits"
+    - "drag → turns the stone in its section; cleavage traces sweep with the lattice, the ring lines rotating in place"
+    - "flick across the stone → cleaves along the nearest allowed plane; both halves keep their mass and their growth history"
+    - "three-finger drag → the world-law: horizontal is water-carry (down = older/smoother), vertical is lattice pressure (up = harder mineral)"
+    - "three-finger twist → seasons of the stream; the stone gets younger and rounder or older and more angular"
+    - "three-finger hold → clock slows; a season of carry can be inspected"
+    - "three-finger tap → tutti; every growth ring rings at once, one chord across the stone's history"
+    - "twist → raises the lattice lens: the reciprocal-lattice partials drawn on the section, the polish depth in mm, the cleavage indices"
+    - "scrub → stirs the cabinet air; the polish shine changes as the raking light angle shifts"
+    - "drum (two hands alternating) → drops felt taps at both points; the stone rings the ratio of their distances"
+    - "arrows → step between growth rings; enter → ring the current ring; held enter → polish that ring's boundary; esc → lower the lens"
+    - "tilt / shake / knock / flip (once invited) → the section leans, the polished surface catches a moving lamp, a knock rings the stone as a struck bell, face-down is night"
+  finds:
+    - "the polish is audible — a pebble carried a hundred years rings shorter than a fresh crystal of the same lattice, because the shell damps the higher partials"
+    - "cleavage still follows the lattice; a flick cuts along a plane the domain names, not an arbitrary line"
+    - "each growth ring is a chord of its own; the outer rings sound the newer accretion, the inner ring the seed"
+    - "a well-polished pebble can be brought back — the polish decay can be pushed back to its lattice, at the cost of the shell's mass"
+    - "the same mineral can be identified from the ring even under deep polish; the load-bearing map only damps, does not erase"
+  keeps: "the pebble's lattice (system, centering, axial ratios), its growth-ring history, the current polish depth, and the season the stream is at."
+
+# ——— the three LLM slots ————————————————————————————————————————————————
+
+shader_intent: >
+  paint the room as ONE stone at hand's reach, section facing the viewer.
+  the composition is a `cutaway` — the stone is drawn as a large SDF
+  ellipse centred in the frame, and inside it a section reveals the
+  lattice's growth history. three shader layers stacked: (1) the DARK
+  BACKGROUND — a soft cabinet fade from `bg` at the corners to `bg2`
+  behind the stone, so the section reads as a lit specimen in a dark
+  cabinet, and one warm lamp position in the upper-left casts a
+  raking highlight; (2) the STONE'S INTERIOR — inside the SDF, sample
+  a concentric-ring pattern read from the domain's `growthRings()`
+  array (each entry is a radius and a hue/metric pair); the shader
+  interpolates the section's colour between accent (warm mineral body)
+  and accent2 (cool ring-line register) using each ring's own weight;
+  a value-noise FBM modulates the boundaries so ring transitions
+  interfinger, never as painted lines. (3) the POLISHED SHELL — a
+  thin outer band inside the SDF, whose thickness is `polishDepth`
+  from the domain, and whose highlight is a Fresnel of the surface
+  angle to the lamp; the polish is `glow` where the light catches it
+  and `bg2` where it turns away. the CLEAVAGE TRACES are drawn on
+  the 2D overlay: fine `accent2` ink lines along the lattice's
+  cleavage-orbit planes, visible through the polish but drawn
+  crisper on the section. the twist LENS overlay draws the
+  reciprocal-lattice partials as tick marks around the stone, the
+  polish depth in millimetres as text, the cleavage indices, and the
+  current mineral's name. palette registers: `bg` deep cabinet dark,
+  `bg2` sectioned-interior shadow, `glow` polished-shell highlight,
+  `accent` warm mineral body, `accent2` cool ring-line ink + cleavage
+  traces, `ink` lens numeric text. the load-bearing invariant is
+  polish depth → visible damping: the shader must show the outer
+  shell growing thicker and more damping as the room's `polishDepth`
+  rises. NO drawn concentric circles as decoration — every ring
+  boundary is `growthRings()[i].radius` read live.
+
+domain_intent: >
+  write `src/lib/pebblecore.ts` around one exported `PebbleState = {
+  lattice: Lattice, growthRings: GrowthRing[], polishDepth: number,
+  season: number, tau: number, seedKey: number }`. `Lattice` reuses
+  the same fields as /rocks' crystal.ts: `{ system: SystemId, centering:
+  Centering, ba: number, ca: number, alpha, beta, gamma }` — DO NOT
+  import crystal.ts; redeclare the fields here (pebblecore.ts is
+  standalone so the two rooms' domain libs stay independent, which
+  is what makes them peer instruments rather than a shared library).
+  `GrowthRing = { radius: number, mineral: MineralId, thickness:
+  number, seed: number }` — a growth ring is an accretion event; a
+  stone's growthRings is its history, oldest-first. `polishDepth ∈
+  [0, POLISH_MAX]` is how far the outer shell has been abraded — a
+  fresh crystal has polishDepth = 0, a well-worn pebble sits at
+  POLISH_MAX = 0.35 (a fraction of the stone's radius). the load-
+  bearing invertible map is reciprocal → partials, KEPT FROM
+  /rocks but with one modification: `partialsFor(state)` emits the
+  sorted magnitudes of the reciprocal-lattice vectors modulated by
+  `polishDamping(polishDepth) = exp(-k * polishDepth)` — the polish
+  damps the higher partials monotonically; `readLattice(partials)`
+  recovers the lattice by first inverting the damping (using the
+  fundamental as the reference amplitude) and then reading the
+  system + axial ratio the same way /rocks does. also export
+  `growStep(state, dtSec, brine)` — adds an accretion ring if brine
+  is above threshold; `polishStep(state, dtSec, waterCarry)` —
+  increases polishDepth on a saturating curve toward POLISH_MAX;
+  `cleavageAt(state, ray)` — returns the nearest cleavage-orbit
+  plane through the section; `speciesFromRing(partials)` — names
+  the mineral by pattern-matching the (damping-corrected) partials
+  to a known table; and `advanceExact(state, seconds, climate)` —
+  closed-form combination of grow + polish + season, MAX_ELAPSED_S
+  = 14 days cap. constants: POLISH_MAX = 0.35, POLISH_TAU_S = 1e7
+  (a hundred years for full polish), MAX_GROWTH_RINGS = 24,
+  MINERAL_COUNT = 8 (calcite, quartz, jasper, agate, chert,
+  chalcedony, feldspar, obsidian). use `hashSeed`/`mulberry32`
+  from a prelude; no DOM, no audio, no Math.random, no Date.now,
+  no imports from /rocks or crystal.ts.
+
+verb_intent: >
+  every handler reads a `PebbleApi` from a stable ref and writes into
+  the state through pure `pebblecore.ts` functions. `tap` on the stone
+  calls `partialsFor(state)` and rings its damped partials through the
+  audio bus — a fresh crystal rings long, a polished pebble rings
+  short; `tap` on the dark answers with a low grain from the cabinet
+  bed. `dwell` on the polished shell calls `polishStep(state, dtSec,
+  1.0)` while held, deepening the polish as an increasing but
+  saturating function of `e.elapsed` (θ(t) = θ_max · (1 −
+  exp(-t/τ))); a two-second dwell polishes more than a one-second
+  dwell but a ten-second dwell only 1.5× more than five, never
+  identical at 900ms and 2400ms. `ceremony` (held past tier 3) sets
+  `polishDepth = POLISH_MAX` — the stone is polished as far as the
+  lattice will let it, and a bloom haptic + audio bell lands on
+  release. `drag` on the stone rotates it in the section — writes to
+  the section's rotation angle; the cleavage traces sweep with the
+  lattice. `flick` across the stone calls `cleavageAt(state, ray)`
+  and cleaves along the nearest allowed plane; both halves keep
+  their mass and their growth history (represented as two child
+  states in the room's own tracked list, not as a domain-level
+  event). `scrub` (finger circling) stirs the cabinet's raking
+  light — writes to a lamp-angle uniform, changing the highlight;
+  no ledger change. `twist` (two-finger) raises the lattice lens;
+  `tap` fingers === 2 lowers it (stepBack). `drum` (two hands
+  alternating) taps the stone at two points; the stone rings the
+  ratio of their distances (chord read from the lattice). `drag3`
+  writes into `Climate`: horizontal is water-carry (raises polish
+  rate), vertical is lattice pressure (raises growth rate).
+  `twist3` walks the year through `advanceExact` — a summer's
+  worth of water carry can pass in a twist. `hold3` slows the sim
+  clock while held. `tap3` (tutti) rings every growth ring at
+  once — one chord across the stone's history, each ring's mineral
+  contributing its own partial. the vessel: `tilt` leans the
+  section (the lamp shifts, the polish highlight moves); `shake`
+  disturbs the cabinet (a small dust ripple across the dark);
+  `knock` rings the stone as a struck bell, pitch from the current
+  damped partials — a knock on a well-polished pebble is quieter
+  than a knock on a fresh crystal; `flip` is night (the cabinet
+  goes darker, and the section reads as a low-light exposure with
+  the polish register still catching the raking light). `arrows`
+  step between growth rings; enter rings the current ring; held
+  enter polishes that ring's boundary; escape lowers the lens.
+  every timing constant reads from `gesture/core.ts`; pebble
+  constants live in `pebblecore.ts`.
+
+chrome:
+  travel: true
+  peers: true

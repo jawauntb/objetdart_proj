@@ -1,0 +1,224 @@
+# /fire — pressure, oxygen, ash: fire as matter under energy.
+#
+# Round-trip-derived from src/components/Fire.tsx and public/guide/fire.jpg.
+# Fire is chosen as `field` rather than `phase-machine`: unlike geyser, its
+# state is not a discrete build→erupt→cool cycle but a continuous heat/energy
+# field over the hearth — a scalar temperature over a 2D grid, plus embers
+# and pressure wells that ADVECT through the field. That is a field, not
+# a two-state ledger with a hysteretic trigger. The `pyre` reading names
+# what fire IS: touch heat until it remembers matter.
+#
+# Placement: primary resident of the earth band (the same band as /earth,
+# ringed by ambient chrome rather than a peer circle). The register the
+# room sounds in is `fire` — a low continuous roar under calm heat, a
+# rising register as ignition builds, and a bright roar when the field is
+# in white heat.
+
+key: fire
+component_name: Fire
+
+placement:
+  kind: band
+  band: earth
+
+sigil: fire
+icon_kind: fire
+desc: "touch heat until it remembers matter"
+cluster: nature
+dark: true
+ambient_profile: fire
+
+invariant: >
+  a continuous heat field over the hearth — a scalar temperature T(x, y, t)
+  with convection carrying warmth upward, embers and pressure wells
+  advecting through it, and heat strokes (drag-born shears) writing into it.
+  every ember, cloud and glow is a lens over T and the field's pressure
+  wells; the load-bearing map is HEAT_READOUT → the visible register, and
+  a held finger compresses the field into white heat.
+
+material: 2d-over-shader
+noun: ember
+
+domain_lib:
+  name: hearth
+  invariant_type: field
+
+palette:
+  bg:      "#0a0603"
+  bg2:     "#1a0806"
+  glow:    "#f39b44"
+  accent:  "#d45a24"
+  accent2: "#8a2a12"
+  ink:     "#e8dcc8"
+
+visual_style:
+  composition: ambient-column
+  subject: "the full frame is fire itself — a low dark hearth, an ember-lit under-cloud sitting near the bottom, warm orange shimmer sitting where the heat rides upward, sparse spark grains hanging in the dark"
+  form_language: [ray-marched, value-noise-FBM, SDF, hand-painted]
+  motion_character: pulsing
+  registers:
+    - "the deep hearth dark and the smoke-choked upper column — via bg"
+    - "the charred bed and the darker under-cloud — via bg2"
+    - "the bright ember glow and the flare of a spark — via glow"
+    - "the mid-orange body of a burning cloud — via accent"
+    - "the deep red heart of a fresh ignition — via accent2"
+    - "the readable pyre-title text and the ember-count readout — via ink"
+  reference_notes:
+    - "a Turner sunset burned down to its embers: warmth in a sea of dark"
+    - "a wood-stove viewing window at dusk — the charred bed underneath, the ember-lit convection cloud above, sparks spiralling loose"
+    - "the guide screenshot at public/guide/fire.jpg: mostly dark, a horizontal warm cloud low, sparks hanging like drifting stars, everything under the phrase 'touch heat until it remembers matter'"
+  banned_forms:
+    - "no createRadialGradient, no shadowBlur per AGENTS.md"
+    - "no cartoon flames — the visible fire is fbm density lit by its own temperature, not a hand-drawn triangle"
+    - "no per-frame allocation in the RAF loop — embers, pressure wells and heat strokes are pooled arrays"
+    - "no flat orange gradient — the field's brightness is TEMPERATURE_FOR_PIXEL, and inverting the pixel returns the local T"
+  mood: "the fire is waiting; touch it and it remembers matter"
+  gesture_feedback_style: "a tap seeds a new ember at the finger; a drag bends the convection column and pulls a heat-stroke across the field; a held finger compresses a pressure well into white heat; a knock cracks a log and lofts a burst of embers"
+
+verbs_answered:
+  - tap
+  - dwell
+  - ceremony
+  - drag
+  - flick
+  - twist
+  - twist3
+  - tap3
+  - drag3
+  - hold3
+  - scrub
+  - drum
+  - arrows
+  - tilt
+  - shake
+  - knock
+  - flip
+
+guide:
+  title: "fire — pressure, oxygen, ash"
+  scale: "the earth band — the hearth's own room, sat between the ground below and the atmosphere above."
+  essence: >
+    fire as matter under energy: a continuous heat field over the hearth,
+    plus embers, sparks, pressure wells, and drag-born heat strokes that
+    write into it. touch heat until it remembers matter — a tap seeds
+    ignition, a drag bends the convection, a hold compresses the field
+    into white heat. every visible register is a lens over the same
+    temperature field; inverting a pixel's brightness returns the local
+    T.
+  moves:
+    - "tap → seeds a new ember at the finger; a spark grain lifts and drifts on the field's convection"
+    - "hold (dwell) → compresses a pressure well under the finger; the field's local T climbs toward white heat"
+    - "hold to the ceremony tier → the well flashes into ignition and a real flame sits there, kept until it burns itself out"
+    - "drag → bends the convection column and drops a heat-stroke along the drag's line — the field's temperature rides along it"
+    - "flick → throws whatever the drag had built; a heat-stroke can be flung and it keeps its heat while it decays"
+    - "scrub → stirs the field's convection into a vortex; the smoke turns visibly"
+    - "drum (two hands alternating) → the pressure between the two contacts oscillates and drives a felt beat"
+    - "twist → raises the pyre lens: the heat readout, the ember count, the pressure-well positions, and the pyre-title text overlay"
+    - "twist3 → runs the year through the fire's rest: winter smothers, summer stokes, and the ambient bed answers"
+    - "three-finger drag → the world-law: horizontal is oxygen (more air = brighter combustion), vertical is fuel (more fuel = longer burns)"
+    - "three-finger hold → time dilation while held"
+    - "three-finger tap → tutti: every ember answers at once"
+    - "tilt / shake / knock / flip (once invited) → the field leans, sparks scatter, a knock cracks a log and lofts embers, face-down is night (the ember-glow is what remains)"
+    - "arrows → walk the pointer along the hearth; enter held is a keyboard dwell; escape lowers the lens"
+  finds:
+    - "a fire left unattended in the field settles into its embers — the pressure wells decay and the visible register drops back to the banked state"
+    - "a heat-stroke laid along a drag becomes a real convection track — the field's T climbs where the stroke is, and drops behind it"
+    - "a well held to the ceremony flashes into white heat that then walks its own decay — the ceremony fire IS a felt event"
+    - "sparks that drift over an ember warm it; two embers under one spark rise together"
+    - "a fortnight's absence lets the fire settle to banked; the ember count is remembered but the heat is gone"
+  keeps: "the current heat readout, the banked ember state, the fire-marks (labeled events), and the hour it was last looked at."
+
+# ——— the three LLM slots ————————————————————————————————————————————————
+
+shader_intent: >
+  paint the full viewport as a hearth field. two shader passes stacked:
+  (1) the FIELD — a WebGL fragment program marching per-pixel through a
+  temperature field, `TEMPERATURE_FOR_PIXEL(uv, t, pressures[24], strokes[16])`
+  returns a scalar T ∈ [0, 1]; the visible register is a monotone map T →
+  colour that goes from `bg` (dark hearth) through `bg2` (charred bed)
+  through `accent2` (deep red heart of an ignition) through `accent` (mid
+  orange body) to `glow` (the bright ember glow and the flash of a spark).
+  layer three warping stages: a slow vertical convection (a warp along y
+  driven by pressure wells at the bottom of the field, gradients rising
+  through the column), a fast fbm turbulence overlaid on the mid-band,
+  and a hash grain sitting on the brightest register so sparks read as
+  discrete points not smooth blobs. (2) the OVERLAY — a 2D pass that
+  draws ember sprites (pooled Ember objects, each with pos/vel/life/hue,
+  advected by the field's convection direction), heat-strokes (drag-born
+  segments that ride the field for a fixed decay time), pressure wells
+  (invisible on their own, but the field pass reads them as uniforms),
+  and the pyre-lens text ("fire / pressure, oxygen, ash" title, "banked"
+  ember-count readout at the bottom-left, drag hint at the bottom-right).
+  the load-bearing invariant is TEMPERATURE_FOR_PIXEL → colour: invert
+  the brightness and you recover T. `flip` (night) subtracts warmth
+  from the field and leaves only the embers; the sky above the fire
+  goes to `bg` cold and the ember glow is what remains.
+
+domain_intent: >
+  write `src/lib/hearth.ts` around `HearthState = { readout: number,
+  banked: number, embers: Ember[], pressures: PressureWell[], strokes:
+  HeatStroke[], tau: number, seedKey: number }`. `Ember = { alive: bool,
+  pos: {x,y}, vel: {x,y}, life: number, maxLife: number, radius: number,
+  hue: number }`. `PressureWell = { id, pos, t0, strength, radius }` —
+  invisible on their own but drive the field's convection when read by
+  the shader. `HeatStroke = { id, points: {x,y,t}[], t0, releasedAt,
+  strength, hue }` — drag-born; write into T along their line. the
+  advance is `advanceField(state, dtSec, climate)`: (1) ember advection —
+  each ember's velocity is updated by (a) local convection from the
+  pressure wells, (b) buoyancy (`vy -= BUOYANCY`), (c) drag; ember life
+  decreases at `1/dtSec` and dead embers are recycled from the pool
+  (bounded population, `MAX_EMBERS = 512`). (2) pressure-well decay —
+  each well's strength decays exponentially with time-since-t0. (3) heat
+  stroke decay — each stroke's contribution decays until released, then
+  fades linearly to 0. (4) heat readout — `heatReadout(state) =
+  averageTempAt(state, hearthCentre)` in [0, 1]. the load-bearing map
+  is `temperatureAt(state, x, y) → colour`: exposed to the shader as
+  `pressures[24]` (top pressure wells) and `strokes[16]` (top heat
+  strokes) uniform arrays. also export `seedEmber(state, x, y, hue)`,
+  `plantWell(state, x, y, strength)`, `beginStroke(state, x, y, hue)`,
+  `extendStroke(state, id, x, y)`, `releaseStroke(state, id)`,
+  `crackLog(state, x, y)` (lofts a burst of embers), `knockEmbers(state,
+  intensity)` — a knock disturbs the field. `Climate = { oxygen, fuel }`.
+  constants: MAX_EMBERS = 512, MAX_PRESSURES = 24, MAX_STROKES = 16,
+  BANK_DECAY_S = 30, BUOYANCY = 0.5, MAX_ELAPSED_S = 14 * 24 * 3600.
+  use `hashSeed`/`mulberry32`; no Math.random, no Date.now, no DOM, no
+  audio.
+
+verb_intent: >
+  every handler reads a `HearthApi` from a stable ref and writes into
+  the field through pure `hearth.ts` functions. `tap` at the finger
+  calls `seedEmber(state, x, y, DEFAULT_HUE)` — one small ember lifts
+  and drifts on the field's convection. `dwell` at the finger plants
+  a pressure well and rises its strength as an increasing but
+  saturating function of `e.elapsed` (θ(t) = θ_max · (1 −
+  exp(-t/τ))) — a two-second dwell compresses more than a one-second
+  dwell but a ten-second dwell only 1.5× more than five; never
+  identical at 900ms and 2400ms. `ceremony` (held past tier 3) fires
+  a real flame at the well's location: `plantWell` at ceremony
+  strength, plus a mark_fire event that appears in the fireMarks
+  overlay ("kindled" at level 0.9). `drag` bends the convection
+  column — `beginStroke` at drag start, `extendStroke` on each
+  drag delta, `releaseStroke` on drag end; the stroke's contribution
+  writes into T along its line. `flick` releases a stroke with an
+  impulse — the stroke keeps its heat while decaying. `scrub`
+  (finger circling) stirs the convection into a vortex; writes into
+  the field's swirl. `twist` (two-finger) raises the pyre lens; `tap`
+  fingers === 2 lowers it. `drag3` writes into Climate: horizontal
+  is oxygen (higher = brighter combustion), vertical is fuel (higher
+  = longer burns). `twist3` runs the year — winter smothers the
+  ambient, summer stokes it. `hold3` slows the sim clock while held.
+  `tap3` (tutti) sounds every ember at once — one chord across the
+  hearth. `drum` (two hands alternating) drives a pressure oscillation
+  between the two contact zones. the vessel: `tilt` writes a
+  convection bias (the field leans in the tilt direction); `shake`
+  scatters embers (an event that decays); `knock` cracks a log and
+  calls `crackLog(state, hearthCentre)` — a burst of embers lofts;
+  `flip` is night (writes into the shader's uNight uniform; the
+  field goes cold and the embers remain). `arrows` walk a pointer;
+  enter held is a keyboard dwell; escape lowers the lens. no
+  room-local timing constants — every threshold is from
+  `gesture/core.ts`; hearth constants live in `hearth.ts`.
+
+chrome:
+  travel: true
+  peers: false
