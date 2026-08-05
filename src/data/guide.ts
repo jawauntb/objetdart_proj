@@ -156,6 +156,32 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
 
   // --- field ---
   {
+    key: "city",
+    title: "a settlement · homes · stores · events",
+    href: "/city",
+    scale: "the atlas band — a peer of the atlas at the ground: the same earth at the level of dwellings, not coastlines.",
+    essence: "a small settlement whose parts are what they do — a plot is a home the moment it is planted, becomes a store, becomes an event, quiets to a tree; the people carry a need and walk to the plot that answers it.",
+    moves: [
+      "tap → ripples the ground, or brightens a plot if the tap lands on one",
+      "dwell → plants a home; keep holding and it densifies (home → store → event → tree)",
+      "ceremony hold → seals the plot at its current role, kept between visits",
+      "drag → traces a road; people walk faster where the road runs",
+      "flick → rings a chime at that point; nearby people gather to it",
+      "twist → the lens: map, hydrology, satisfaction",
+      "twist3 → turns the year through the four seasons; the trees follow",
+      "tap3 → tutti; bells ring across the town, people move to the nearest event",
+      "drag3 → weather; wind and rain roll across the settlement",
+      "hold3 → time dilation — the day runs at one quarter while held",
+      "tilt / knock / flip → rain leans in / the bell tolls / night falls",
+    ],
+    finds: [
+      "a home spawns one to three residents deterministically from its own seed — the same seed always brings the same people",
+      "roads are only ever as fast as the people who use them; a road with no traffic is just a line you drew",
+      "a hungry city with no stores is a city standing still: people wait rather than wander when nothing answers their need",
+    ],
+    keeps: "every sealed plot, the season the year reached, and the day the city had been living in",
+  },
+  {
     key: "atlas",
     title: "the living map",
     href: "/atlas/origin",

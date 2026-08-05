@@ -90,6 +90,7 @@ const { isDarkRoute } = darkRoutesModule;
 
 const expectedKeys = [
   "atlas",
+  "city",
   "coast",
   "ocean",
   "tide",
@@ -157,6 +158,7 @@ const expectedKeys = [
   "geyser",
   "orb",
   "pebble",
+  "reef",
   "spring",
 ];
 const validClusters = new Set(["field", "water", "nature", "mechanism"]);
