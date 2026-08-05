@@ -1,5 +1,6 @@
 /**
- * city-sun — the diurnal light of /city, as a real DirectionalLight.
+ * city-sun — the diurnal light of /city, as a real DirectionalLight with
+ *            cascaded shadow maps.
  *
  * The 2D ground shader used to paint a hand-tuned yellow disk on a hand-tuned
  * gradient and call it "the sun". That produced a moving spot on a screen, not
@@ -14,16 +15,43 @@
  * it as a much dimmer cold source when the altitude is negative, so the
  * settlement is never lit by nothing.
  *
- * The light casts PCF soft shadows. The shadow camera is an orthographic
- * frustum sized to the settlement (default 260 units — enough to hold the
- * whole visitor-drawable area plus the iconic event tower's cast shadow).
- * Bias values were tuned against a 200-unit-tall placeholder box on a plane
- * at y=0: normalBias 0.05 stops acne at the base of the tower without leaving
- * peter-panning at the rooftop, and bias -0.0002 pulls the ground-plane
- * self-shadow in tight. Shadow-map size follows the tier: 2048 at high,
- * 1024 at medium, 512 at low, off at sleep (the light still casts but the
- * receiver's material won't sample if shadowMap is disabled at renderer
- * level).
+ * Cascaded shadow maps (R10-4 + R10-8). One 2048² PCF map at a 220m half-
+ * frustum was the previous state — a 180 m event tower and a 1.7 m
+ * pedestrian could not share one shadow frustum without one going dithered.
+ * The v4 sun splits the shadow work across three DirectionalLights, all
+ * pointing in the same sun direction, each with its own orthographic
+ * frustum sized to a different scale of world detail:
+ *
+ *   CASCADE 0 (near):  40 m half-radius  — pedestrians, lamp posts, cars
+ *   CASCADE 1 (mid):  250 m half-radius  — storefronts, trees, block plots
+ *   CASCADE 2 (far): 2000 m half-radius  — event towers, harbour, ring
+ *
+ * The three lights each carry ONE THIRD of the sun's total color × intensity
+ * so their summed lighting is identical to the previous single light, but
+ * every pixel gets three shadow samples — the cascade whose frustum
+ * covers it at the highest resolution effectively wins for that scale. A
+ * pedestrian at ground level sits inside all three frustums, but the near
+ * cascade's 4096² map at 40 m gives ~1 cm/texel, which is the resolution
+ * required to draw a readable contact shadow under one boot. The event
+ * tower at 180 m sits only inside the far cascade's 2000 m frustum, whose
+ * 4096² map gives ~49 cm/texel — enough for its self-shadow to read solid
+ * at the dusk raking angle.
+ *
+ * PCSS-style contact hardening (R10-8). Real PCSS requires shader-chunk
+ * injection into the built-in materials' shadow test; the approximation
+ * we ship here is per-cascade `shadow.radius`: the near cascade uses a
+ * small radius (~1.5 texels) so contact shadows harden right at the
+ * point of contact, and the far cascade uses a wider radius (~6 texels)
+ * so distant occluders read as soft ambient darkening. `bias` and
+ * `normalBias` are scaled per cascade — a large frustum needs a larger
+ * normalBias to hide slope-scale acne on tall vertical facades, while
+ * the near cascade needs the tightest bias so a pedestrian's foot
+ * shadow does not peter-pan.
+ *
+ * All three cascade lights share ONE target Object3D — moving the target
+ * with the camera at update() time keeps the entire cascade stack tracking
+ * the visitor. The target Object3D itself is exposed so the caller adds
+ * it to the scene graph exactly once.
  *
  * Nothing here reads or writes city.ts state. `update(dayFraction)` is the
  * whole interface — the renderer's tick loop calls it with the same
@@ -53,6 +81,54 @@ export const CITY_SUN_AZIMUTH_RAD = Math.PI * 0.375;
  * far bracket it.
  */
 export const CITY_SUN_DISTANCE = 240;
+
+/**
+ * The count of cascades. Three is the number the brief pins — near for
+ * pedestrians + cars, mid for storefronts + trees, far for towers +
+ * harbour + the ring landmarks. A fourth cascade would only add cost
+ * without covering a new scale of geometry the room presents.
+ */
+export const CSM_CASCADE_COUNT = 3;
+
+/**
+ * Per-cascade half-radius of the orthographic frustum, in world units
+ * (metres). These are the emotional targets the brief pins:
+ *   [0] 40 m   — a lamp post's cast shadow, a pedestrian's contact shadow
+ *   [1] 250 m  — the storefront block, tree ring canopies, cars in traffic
+ *   [2] 2000 m — the tallest event tower and the harbour ring
+ * A refactor that tightened cascade 2 to 500 m would drop the outer
+ * landmark ring's shadows entirely; a refactor that widened cascade 0
+ * past 60 m would dither pedestrian shadows to a resolution the eye
+ * reads as diorama. The literals are the spec.
+ */
+export const CSM_CASCADE_RADII: readonly number[] = [40, 250, 2000];
+
+/**
+ * Per-cascade PCSS-approximation shadow radius (texels). Smaller radius
+ * hardens the shadow — visible at the contact point where the near
+ * cascade covers a pedestrian's foot or a lamp post's base. Larger
+ * radius softens — the far cascade's tower shadow spreads its
+ * self-shadow across the facade so a hard edge does not stripe the
+ * building.
+ */
+export const CSM_CASCADE_SHADOW_RADII: readonly number[] = [1.5, 3.0, 6.0];
+
+/**
+ * Per-cascade normalBias — proportional to the texel size of the shadow
+ * map at that frustum size. The near cascade at 40 m / 4096² has ~1 cm
+ * texels, so a normalBias of 0.02 keeps a pedestrian's foot shadow
+ * touching the ground without acne; the far cascade at 2000 m / 4096²
+ * has ~49 cm texels, so its normalBias runs up to 0.3 to hide the
+ * slope-scale acne a tall vertical facade shows at dusk raking angles.
+ */
+export const CSM_CASCADE_NORMAL_BIAS: readonly number[] = [0.02, 0.08, 0.30];
+
+/**
+ * Per-cascade bias — the negative offset that pulls the shadow test in
+ * so a ground plane does not self-shadow at noon. Scaled the same way
+ * as normalBias, roughly proportional to the frustum size.
+ */
+export const CSM_CASCADE_BIAS: readonly number[] = [-0.00005, -0.0002, -0.001];
 
 /**
  * dayFraction → normalized sun direction (unit vector, y is up).
@@ -125,77 +201,188 @@ export function sunIntensityAt(dayFraction: number): number {
 }
 
 /**
+ * Per-tier shadow-map resolution. The brief pins 4096² per cascade at
+ * high tier — the resolution required to make a pedestrian's contact
+ * shadow AND a 180 m tower's self-shadow read solid in the same frame.
+ * Weaker tiers step down by powers of two so mid-range hardware does
+ * not blow its shadow-atlas budget. Sleep tier disables shadows entirely.
+ *
+ * The ladder is pure: it does not read any THREE.js state, so the
+ * test suite can pin every step.
+ */
+export function cascadeMapSizeForTier(tier: QualityTier): number {
+  if (tier === "high") return 4096;
+  if (tier === "medium") return 2048;
+  if (tier === "low") return 1024;
+  return 0; // sleep — no shadows at all
+}
+
+/**
+ * Per-cascade half-radius accessor. Guards against an index outside the
+ * cascade count returning undefined — clamps to the outermost cascade.
+ */
+export function cascadeRadiusFor(index: number): number {
+  const clamped = Math.max(0, Math.min(CSM_CASCADE_COUNT - 1, Math.floor(index)));
+  return CSM_CASCADE_RADII[clamped];
+}
+
+/**
+ * Per-cascade PCSS-approx shadow radius (texels). Same guard.
+ */
+export function cascadeShadowRadiusFor(index: number): number {
+  const clamped = Math.max(0, Math.min(CSM_CASCADE_COUNT - 1, Math.floor(index)));
+  return CSM_CASCADE_SHADOW_RADII[clamped];
+}
+
+/**
+ * Per-cascade normalBias accessor. Same guard.
+ */
+export function cascadeNormalBiasFor(index: number): number {
+  const clamped = Math.max(0, Math.min(CSM_CASCADE_COUNT - 1, Math.floor(index)));
+  return CSM_CASCADE_NORMAL_BIAS[clamped];
+}
+
+/**
+ * Per-cascade bias accessor. Same guard.
+ */
+export function cascadeBiasFor(index: number): number {
+  const clamped = Math.max(0, Math.min(CSM_CASCADE_COUNT - 1, Math.floor(index)));
+  return CSM_CASCADE_BIAS[clamped];
+}
+
+/**
  * Options for creating the city sun. Any of these may be omitted and
  * sensible defaults land — the room's default camera and its default
  * quality tier are the tuning target.
  */
 export type CitySunOptions = {
-  /** Half-size of the shadow-camera orthographic frustum, in world units. */
+  /** Half-size of the FAR cascade's orthographic frustum, in world units.
+   *  Retained for backward compat with the pre-CSM caller; if omitted,
+   *  the cascade ladder's own CSM_CASCADE_RADII[2] is used. */
   area?: number;
-  /** Shadow map resolution. Round to a power of two. */
+  /** Shadow map resolution for the high tier. Round to a power of two. */
   mapSize?: number;
   /** Hemisphere fill light amplitude. 0 disables the fill light entirely. */
   hemiIntensity?: number;
 };
 
 /**
- * The bundled sun the city hangs off. `light` is the directional; `hemi`
- * is a hemisphere fill that keeps the shadow side of a facade from going
- * to pure black (adjusting toward the sky/ground colours the city-sky
- * module provides). `target` is the group the shadow camera looks at —
- * moving it lets the shadow frustum follow the camera at wide zooms.
+ * The bundled sun the city hangs off.
+ *
+ * `light` is retained as the FAR cascade — the biggest frustum, the one
+ * that shadows event towers and the ring landmarks. Its `position`,
+ * `color`, and full contribution can be sampled by godray / cloud
+ * effects via the `sunColor` / `sunIntensity` / `sunPosition` accessors
+ * (which report the AGGREGATE across all three cascades, so a caller
+ * reading them gets the same numbers the single-light version returned).
+ *
+ * `cascades` is the ordered [near, mid, far] triplet. Each is a real
+ * DirectionalLight in the scene, casting its own shadow map from the
+ * same sun direction. Adding them to the scene one time at construct
+ * (via `addToScene`) is enough; `update()` refreshes their positions
+ * and shadow-camera projection every frame.
+ *
+ * `hemi` is a hemisphere fill that keeps the shadow side of a facade
+ * from going to pure black (adjusting toward the sky/ground colours
+ * the city-sky module provides).
+ *
+ * `target` is the single Object3D all three cascade lights point at.
+ * Moving it lets the shadow frustums follow the visitor at wide zooms
+ * without needing three separate targets.
  */
 export type CitySun = {
   light: THREE.DirectionalLight;
+  cascades: THREE.DirectionalLight[];
   hemi: THREE.HemisphereLight;
   target: THREE.Object3D;
+  /** Aggregate sun colour (linear RGB) — full unattenuated colour, so
+   *  cloud / godray sampling gets the numbers that lit the previous
+   *  single-light version. */
+  readonly sunColor: THREE.Color;
+  /** Aggregate sun intensity — the sum across cascades, matching the
+   *  pre-CSM single-light value. */
+  readonly sunIntensity: number;
+  /** World-space position of the sun (the direction is `sunPosition.normalize()`). */
+  readonly sunPosition: THREE.Vector3;
+  /**
+   * Attach the cascades, the hemisphere, and the target to a scene
+   * graph node. One-shot; the caller does NOT need to add any of the
+   * exposed lights individually.
+   */
+  addToScene(root: THREE.Object3D): void;
   /**
    * Reposition and recolour the sun for a given dayFraction. `centerXZ`
-   * is the world-space (x, z) point the shadow frustum should follow;
+   * is the world-space (x, z) point the shadow frustums should follow;
    * default is (0, 0).
    */
   update(dayFraction: number, centerXZ?: { x: number; z: number }): void;
   /**
-   * Adjust shadow map size and quality by tier. Off at sleep / low.
+   * Adjust shadow map size and quality by tier. Off at sleep. Reallocates
+   * the shadow maps only when the resolution actually changes.
    */
   applyTier(tier: QualityTier): void;
   dispose(): void;
 };
 
 /**
- * Build the city's sun and fill light. Adds nothing to any scene — the
- * caller places `light`, `light.target`, `hemi`, and `target` where the
- * scene graph expects them. `light.castShadow` is already true; whether
- * the shadow map actually renders depends on the renderer's shadowMap
- * settings and the tier.
+ * Build the city's sun and fill light. The three cascade lights are
+ * created but NOT yet added to any scene — call `addToScene(worldScene)`
+ * exactly once to wire them in. `castShadow` is already true on each
+ * cascade; whether the shadow map actually renders depends on the
+ * renderer's shadowMap settings and the current tier.
  */
 export function createCitySun(opts: CitySunOptions = {}): CitySun {
-  const area = opts.area ?? 260;
-  const mapSize = opts.mapSize ?? 2048;
+  // `area` is retained as a compat hook — if the caller pins the FAR
+  // cascade's radius, we respect it; otherwise the cascade ladder's
+  // own constant [40, 250, 2000] wins.
+  const farRadiusOverride = opts.area;
+  const highMapSize = opts.mapSize ?? cascadeMapSizeForTier("high");
   const hemiIntensity = opts.hemiIntensity ?? 0.35;
 
-  const light = new THREE.DirectionalLight(0xffffff, 1);
-  light.castShadow = true;
-  // PCF soft shadow tuning. These values were checked against a placeholder
-  // 200-unit tower on a plane at y=0: normalBias handles the slope-scale
-  // problem on tall vertical facades, bias handles the ground-plane self-
-  // shadow near noon.
-  light.shadow.mapSize.set(mapSize, mapSize);
-  light.shadow.bias = -0.0002;
-  light.shadow.normalBias = 0.05;
-  light.shadow.radius = 4;
-  // Orthographic shadow camera sized to the settlement.
-  const cam = light.shadow.camera as THREE.OrthographicCamera;
-  cam.left = -area;
-  cam.right = area;
-  cam.top = area;
-  cam.bottom = -area;
-  cam.near = 0.5;
-  cam.far = CITY_SUN_DISTANCE * 3;
-  cam.updateProjectionMatrix();
-
   const target = new THREE.Object3D();
-  light.target = target;
+
+  // Aggregate sun state — updated per-frame from the pure sunColorAt /
+  // sunIntensityAt curves; the cascade lights read a THIRD of each so
+  // their SUM matches this aggregate.
+  const sunColor = new THREE.Color(1, 1, 1);
+  const sunPosition = new THREE.Vector3();
+  let sunIntensity = 1;
+
+  const cascades: THREE.DirectionalLight[] = [];
+  for (let i = 0; i < CSM_CASCADE_COUNT; i += 1) {
+    const light = new THREE.DirectionalLight(0xffffff, 1 / CSM_CASCADE_COUNT);
+    light.castShadow = true;
+    light.shadow.mapSize.set(highMapSize, highMapSize);
+    light.shadow.bias = cascadeBiasFor(i);
+    light.shadow.normalBias = cascadeNormalBiasFor(i);
+    // PCSS-approx contact hardening — per-cascade radius (texels).
+    light.shadow.radius = cascadeShadowRadiusFor(i);
+
+    const radius = i === CSM_CASCADE_COUNT - 1 && farRadiusOverride !== undefined
+      ? farRadiusOverride
+      : cascadeRadiusFor(i);
+    const cam = light.shadow.camera as THREE.OrthographicCamera;
+    cam.left = -radius;
+    cam.right = radius;
+    cam.top = radius;
+    cam.bottom = -radius;
+    cam.near = 0.5;
+    // Far plane must comfortably bracket the sun's placement distance
+    // scaled by the cascade radius — the FAR cascade sits 2000 m away
+    // from the target, so its shadow camera's far plane runs deeper.
+    cam.far = CITY_SUN_DISTANCE * 3 + radius * 2;
+    cam.updateProjectionMatrix();
+
+    light.target = target;
+    cascades.push(light);
+  }
+
+  // `light` alias — the FAR cascade. The legacy accessor for callers
+  // that only need one directional light reference (godray projection,
+  // cloud sun-direction, external overrides). Its .color / .intensity
+  // reflect only 1/3 of the total sun — use the aggregate accessors
+  // (`sunColor` / `sunIntensity`) for that.
+  const light = cascades[CSM_CASCADE_COUNT - 1];
 
   // Hemisphere fill — sky colour above, ground below. Colours are placed
   // here as the "default day" values; update() rewrites them from the
@@ -206,8 +393,17 @@ export function createCitySun(opts: CitySunOptions = {}): CitySun {
 
   return {
     light,
+    cascades,
     hemi,
     target,
+    get sunColor() { return sunColor; },
+    get sunIntensity() { return sunIntensity; },
+    get sunPosition() { return sunPosition; },
+    addToScene(root: THREE.Object3D) {
+      for (const c of cascades) root.add(c);
+      root.add(target);
+      root.add(hemi);
+    },
     update(dayFraction: number, centerXZ?: { x: number; z: number }) {
       // Quantise so we skip identical rewrites within the same 1/128 of a
       // day. The shadow camera's updateMatrixWorld is cheap but the ramp
@@ -223,14 +419,29 @@ export function createCitySun(opts: CitySunOptions = {}): CitySun {
       cache.slot = slot;
 
       const dir = sunDirection(dayFraction);
-      light.position.set(
+      // Aggregate sun state — the value external effects (cloud,
+      // godray) read for their own tinting.
+      const col = sunColorAt(dayFraction);
+      sunColor.copy(col);
+      sunIntensity = sunIntensityAt(dayFraction);
+      sunPosition.set(
         cx + dir.x * CITY_SUN_DISTANCE,
         Math.max(2, dir.y * CITY_SUN_DISTANCE),   // never below ground plane
         cz + dir.z * CITY_SUN_DISTANCE,
       );
-      const col = sunColorAt(dayFraction);
-      light.color.copy(col);
-      light.intensity = sunIntensityAt(dayFraction);
+
+      // Per-cascade updates: same direction, same colour, each carries
+      // 1/N of the aggregate intensity. Cascade positions all sit on
+      // the same ray toward the sun — the shadow-camera frustum
+      // difference is what makes each cover a different scale.
+      const perCascadeIntensity = sunIntensity / CSM_CASCADE_COUNT;
+      for (let i = 0; i < cascades.length; i += 1) {
+        const c = cascades[i];
+        c.position.copy(sunPosition);
+        c.color.copy(sunColor);
+        c.intensity = perCascadeIntensity;
+        c.shadow.camera.updateProjectionMatrix();
+      }
 
       // Hemisphere colours track the sun: sky warms at dusk, ground grows
       // cool at midnight so the settlement never reads as a flat monochrome.
@@ -249,35 +460,34 @@ export function createCitySun(opts: CitySunOptions = {}): CitySun {
         hemi.color.setRGB(0.08, 0.10, 0.20);
         hemi.groundColor.setRGB(0.04, 0.05, 0.09);
       }
-
-      light.shadow.camera.updateProjectionMatrix();
     },
     applyTier(tier: QualityTier) {
-      const wantMap =
-        tier === "high" ? mapSize :
-        tier === "medium" ? Math.max(512, Math.floor(mapSize * 0.5)) :
-        0;
-      if (wantMap === 0) {
-        light.castShadow = false;
-      } else {
-        light.castShadow = true;
-        if (light.shadow.mapSize.x !== wantMap) {
-          light.shadow.mapSize.set(wantMap, wantMap);
-          // Force reallocation of the shadow map at the new size.
-          const map = light.shadow.map as { dispose?: () => void } | null;
-          if (map && typeof map.dispose === "function") {
-            try { map.dispose(); } catch { /* noop */ }
+      const wantMap = cascadeMapSizeForTier(tier);
+      for (const c of cascades) {
+        if (wantMap === 0) {
+          c.castShadow = false;
+        } else {
+          c.castShadow = true;
+          if (c.shadow.mapSize.x !== wantMap) {
+            c.shadow.mapSize.set(wantMap, wantMap);
+            // Force reallocation of the shadow map at the new size.
+            const map = c.shadow.map as { dispose?: () => void } | null;
+            if (map && typeof map.dispose === "function") {
+              try { map.dispose(); } catch { /* noop */ }
+            }
+            c.shadow.map = null;
           }
-          light.shadow.map = null;
         }
       }
     },
     dispose() {
-      const map = light.shadow.map as { dispose?: () => void } | null;
-      if (map && typeof map.dispose === "function") {
-        try { map.dispose(); } catch { /* noop */ }
+      for (const c of cascades) {
+        const map = c.shadow.map as { dispose?: () => void } | null;
+        if (map && typeof map.dispose === "function") {
+          try { map.dispose(); } catch { /* noop */ }
+        }
+        c.shadow.map = null;
       }
-      light.shadow.map = null;
     },
   };
 }

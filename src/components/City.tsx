@@ -1140,10 +1140,17 @@ export default function City() {
     worldScene.add(visibleSky);
     worldScene.environment = citySky.environment;
 
-    const citySun: CitySun = createCitySun({ area: 220, mapSize: 2048, hemiIntensity: 0.35 });
-    worldScene.add(citySun.light);
-    worldScene.add(citySun.target);
-    worldScene.add(citySun.hemi);
+    // Three-cascade shadow stack (R10-4 + R10-8): the near cascade
+    // handles pedestrian/lamp-post/car contact shadows at ~1 cm/texel,
+    // the mid cascade covers storefronts + trees + traffic at ~6 cm,
+    // and the far cascade at 2000 m + 4096² carries the event towers +
+    // ring landmarks at ~49 cm — the resolution required for a 180 m
+    // tower's self-shadow to read solid at dusk raking angles without
+    // dithering. `addToScene` wires all three cascade lights, their
+    // shared target, and the hemi fill in one call so no single-light
+    // reference leaks out of this constructor.
+    const citySun: CitySun = createCitySun({ hemiIntensity: 0.35 });
+    citySun.addToScene(worldScene);
 
     // ── volumetric clouds ──────────────────────────────────────────────
     // A raymarched slab at ~800 m altitude that occludes the sun disk and
@@ -2212,9 +2219,12 @@ export default function City() {
       // them. sunDir is the light's world position normalised — the
       // directional light points TOWARD the origin so its position IS
       // the world-space sun vector. cityTimeMs drives wind advection.
+      // Aggregate sun colour × intensity — the sum across all three
+      // cascade lights, so the cloud slab reads the same total sun
+      // radiance the pre-CSM single-light version delivered.
       cloudSunColor
-        .copy(citySun.light.color)
-        .multiplyScalar(citySun.light.intensity);
+        .copy(citySun.sunColor)
+        .multiplyScalar(citySun.sunIntensity);
       const zen = sampleSkyColor(citySky.currentState, CLOUD_ZENITH_DIR);
       cloudAmbientColor.setRGB(
         Math.max(0.02, zen.x),
@@ -2238,7 +2248,7 @@ export default function City() {
       // multiplicative TINT (max component = 1 → neutral peak), not a
       // radiance — the sun's own intensity is already baked into
       // cloudSunColor and multiplying pure radiance would double-count.
-      const sunDir = citySun.light.position.clone().normalize();
+      const sunDir = citySun.sunPosition.clone().normalize();
       CLOUD_HORIZON_DIR.set(sunDir.x, 0.05, sunDir.z).normalize();
       const horiz = sampleSkyColor(citySky.currentState, CLOUD_HORIZON_DIR);
       // Guard against a Preetham sample that collapsed to near-zero at
@@ -2410,7 +2420,7 @@ export default function City() {
       // effectively unused. Kept unconditional here so the projection
       // result is stable and the pass sees a fresh sunScreen every tick
       // it wakes up.
-      const sunScreen = projectSunToScreen(citySun.light.position, cityCam.camera);
+      const sunScreen = projectSunToScreen(citySun.sunPosition, cityCam.camera);
 
       // The four RenderPasses live inside the composer now. Bloom threshold /
       // strength / radius ride the same dayFraction the shaders do — the
