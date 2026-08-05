@@ -74,6 +74,11 @@ import {
   type CityCamera,
 } from "@/lib/city-camera";
 import { createSkylineScene, type SkylineScene } from "@/lib/city-geometry";
+import {
+  createCityWater,
+  type CityWater,
+  type CityWaterProxy,
+} from "@/lib/city-water";
 
 /**
  * /city — a small settlement whose identity IS its causal roles.
@@ -1160,6 +1165,21 @@ export default function City() {
       initialZoom: 0.15,
     });
 
+    // ── harbour water (Reflector on cityCam) ─────────────────────────────
+    // A strip of harbour beyond the +z edge of the city. The Reflector
+    // rides the SAME cityCam the sky, IBL, and skyline pass do — one eye
+    // for the visitor, one mirror on the water. Layer-1 proxies + a sky
+    // dome sit behind the plane at world scale; only the reflector's
+    // virtualCamera renders them (main pass stays on layer 0). The
+    // dusk-and-lit-windows moment doubles here: proxies for the tallest
+    // sealed plots emit warm dusk light, the wave normal scrolls at
+    // 0.02 uv/s, and bloom in the composer catches both together.
+    const water: CityWater = createCityWater({
+      width: 1,
+      height: 1,
+      pixelRatio: dpr,
+    });
+
     // ── composer ─────────────────────────────────────────────────────────
     // The tick loop hands its passes to this composer so bright pixels
     // can bloom and the workflow stays linear. Sized 1×1 here — the
@@ -1174,6 +1194,11 @@ export default function City() {
       plotCam,
       skylineScene: skyline.scene,
       skylineCam: cityCam.camera,
+      // Water rides cityCam — the follow-up on PR #292 required the
+      // reflector share the perspective camera created in f7543df so
+      // the mirrored horizon reads at bird's-eye AND eye-level.
+      waterScene: water.scene,
+      waterCam: cityCam.camera,
       width: 1,
       height: 1,
       pixelRatio: dpr,
@@ -1343,6 +1368,11 @@ export default function City() {
       // Composer holds its own render targets — bloom pyramid especially
       // is a stack of downsampled RTs whose size depends on this call.
       composer.setSize(width, height, dpr);
+      // The harbour's reflection RT rides the same shape as the composer's
+      // internal targets. Called in this same ResizeObserver callback so
+      // a screen rotation or a tier flip that changes DPR reshapes the
+      // mirror in step with the rest of the frame — nothing lags.
+      water.setSize(width, height, dpr);
       // Perspective camera aspect follows the canvas so the skyline reads
       // right at any window shape — a wide monitor doesn't stretch the
       // towers, a portrait phone doesn't squash them.
@@ -1979,7 +2009,26 @@ export default function City() {
       // pixels above threshold at dusk, and the whole block glows.
       plotUniforms.uWindowLit.value = baselineLitFractionForDay(df);
       plotUniforms.uWindowIntensity.value = emissiveIntensityForDay(df);
-      // The three RenderPasses live inside the composer now. Bloom threshold /
+
+      // Feed the harbour: wave scroll advances by dt, sky tint slides
+      // through the same day fraction the ground and skyline read, and
+      // the tallest sealed plots populate the WATER_PROXY_COUNT boxes
+      // whose warm dusk emissive is what makes the reflection catch fire
+      // exactly when the sky does. Water rides cityCam.camera through the
+      // composer, so its virtualCamera is the mirror of the visitor's eye.
+      water.update({
+        dayFraction: df,
+        night: nightAmt,
+        dtMs: dt,
+        tier,
+        // Plot's shape is a superset of CityWaterProxy — role, sealed,
+        // seed, x, y are shared. The extra ledger fields on Plot are
+        // ignored by the water module; a structural cast avoids a per-
+        // frame allocation.
+        plots: plots as unknown as ReadonlyArray<CityWaterProxy>,
+      });
+
+      // The four RenderPasses live inside the composer now. Bloom threshold /
       // strength / radius ride the same dayFraction the shaders do — the
       // ember rises as the sun sets. Tier gates the bloom entirely on
       // low/sleep so slow devices keep hitting frame budget.
@@ -2880,6 +2929,10 @@ export default function City() {
       // plane, and the sun's shadow map. Drop them before the renderer
       // that owns their GL context.
       skyline.dispose();
+      // The harbour holds the Reflector's RT + its own material graph and
+      // the layer-1 proxy meshes. Dispose it before the composer so the
+      // composer's own targets can drop cleanly right after.
+      water.dispose();
       // Composer holds bloom pyramid RTs — drop them before disposing
       // the renderer that owns their GL context.
       composer.dispose();
