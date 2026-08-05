@@ -35,6 +35,9 @@ const {
   nearestEdgePoint,
   headingFor,
   hesitationBetween,
+  needsUnmet,
+  shouldLeave,
+  fadeForLeaving,
   PLOT_DWELL_MS,
   CITY_DAY_MS,
   SEASON_ORDER,
@@ -42,6 +45,9 @@ const {
   REGULAR_PULL_FACTOR,
   HESITATION_RATIO_THRESHOLD,
   HESITATION_SPEED_FACTOR,
+  LEAVING_NEED_THRESHOLD,
+  LEAVING_UNMET_MS,
+  LEAVING_FADE_MS,
 } = mod.exports;
 
 // ——— the plot role ladder is a causal, monotone function of dwell —————————
@@ -256,9 +262,65 @@ assert.ok(HESITATION_SPEED_FACTOR < 1, "a hesitating step is slower than a decid
 assert.ok(HESITATION_SPEED_FACTOR > 0, "a hesitating person still moves");
 assert.ok(HESITATION_RATIO_THRESHOLD > 1, "hesitation is triggered by nearly-equal distances, not by identical ones alone");
 
+// ——— leaving: the tradeoff density buys must be able to lose someone ——————
+//
+// The brief's arc is arrival → consolidation → belonging OR leaving. A person
+// whose fed AND rested stay below LEAVING_NEED_THRESHOLD for LEAVING_UNMET_MS
+// is a person the settlement failed to hold. The predicate that fires the
+// transition is pure: both needs low, and the sustained-unmet counter past
+// the threshold.
+
+// needsUnmet: both fed AND rested strictly below the leaving threshold.
+assert.equal(needsUnmet(0.1, 0.1), true, "both needs deep in the trough → unmet");
+assert.equal(needsUnmet(0.4, 0.1), false, "fed is fine → the person is not sliding out yet");
+assert.equal(needsUnmet(0.1, 0.4), false, "rested is fine → the person is not sliding out yet");
+assert.equal(
+  needsUnmet(LEAVING_NEED_THRESHOLD, LEAVING_NEED_THRESHOLD), false,
+  "exactly at the threshold is not below — leaving requires real deprivation, not the ordinary trough",
+);
+assert.equal(
+  needsUnmet(LEAVING_NEED_THRESHOLD - 0.001, LEAVING_NEED_THRESHOLD - 0.001), true,
+  "just below the threshold on both counts is unmet",
+);
+
+// shouldLeave: sustained-unmet counter past the leaving threshold.
+assert.equal(
+  shouldLeave(0.1, 0.1, LEAVING_UNMET_MS), true,
+  "both needs deep and the counter at the threshold → the person leaves",
+);
+assert.equal(
+  shouldLeave(0.1, 0.1, LEAVING_UNMET_MS - 1), false,
+  "one ms short of the threshold — leaving is a sustained condition, not a spike",
+);
+assert.equal(
+  shouldLeave(0.5, 0.1, LEAVING_UNMET_MS * 4), false,
+  "a fed person never leaves, however long they've been tired — one need answered is enough to stay",
+);
+assert.equal(
+  shouldLeave(0.1, 0.5, LEAVING_UNMET_MS * 4), false,
+  "a rested person never leaves, however long they've been hungry — one need answered is enough to stay",
+);
+assert.equal(
+  shouldLeave(0.1, 0.1, 0), false,
+  "an instant of deprivation is not a decision to leave",
+);
+assert.ok(LEAVING_UNMET_MS > 0, "the leaving window is a real span, not a tick");
+assert.ok(LEAVING_NEED_THRESHOLD > 0 && LEAVING_NEED_THRESHOLD < 1, "the leaving threshold is inside the need range");
+
+// fadeForLeaving: the opacity eases from 1 to 0 over LEAVING_FADE_MS.
+assert.equal(fadeForLeaving(0), 1, "a person who just started leaving is still fully drawn");
+assert.equal(fadeForLeaving(-5), 1, "a negative age is treated as zero — no future-fading");
+assert.equal(fadeForLeaving(LEAVING_FADE_MS), 0, "a person past the fade window is invisible in the overlay");
+assert.equal(fadeForLeaving(LEAVING_FADE_MS * 2), 0, "the fade clamps — no negative opacities");
+const halfWay = fadeForLeaving(LEAVING_FADE_MS / 2);
+assert.ok(halfWay > 0.49 && halfWay < 0.51, "halfway through the fade the person reads at half opacity");
+// Monotone: the person fades further, never brighter, as they walk toward the edge.
+assert.ok(fadeForLeaving(200) > fadeForLeaving(600), "the fade is monotone — a leaving person only dims");
+
 console.log(
   `city ok: role ladder monotone, needs answered by identity, ${SEASON_ORDER.length} seasons cycle both ways, ` +
   `movement never overshoots, homes seed 1..3 residents deterministically, ` +
   `regulars densify identity at ${REGULAR_VISITS_TO_BECOME_REGULAR} visits with a ${REGULAR_PULL_FACTOR}× pull, ` +
-  `arrivals enter from the nearest map edge, headings track motion, hesitation slows a tradeoff to ${HESITATION_SPEED_FACTOR}×.`,
+  `arrivals enter from the nearest map edge, headings track motion, hesitation slows a tradeoff to ${HESITATION_SPEED_FACTOR}×, ` +
+  `unmet needs past ${LEAVING_UNMET_MS}ms on both counters retire a person from the settlement.`,
 );

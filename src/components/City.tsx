@@ -22,15 +22,18 @@ import {
   SEASON_ORDER,
   dayFraction,
   dwellersPerHome,
+  fadeForLeaving,
   headingFor,
   hesitationBetween,
   isRegularOf,
   mulberry,
   nearestEdgePoint,
   needFor,
+  needsUnmet,
   nextSeason,
   recordVisit,
   roleForDwell,
+  shouldLeave,
   stepTowards,
   targetForNeedWithRegular,
   treeFoliage,
@@ -125,6 +128,17 @@ type Person = {
   regularEventId: number | null;
   hesitating: boolean;
   hesitationSince: number;
+  // ── leaving arc ──
+  // `unmetSinceMs` is the city-time when both fed AND rested first fell
+  // below LEAVING_NEED_THRESHOLD; null while at least one is met. The
+  // predicate `shouldLeave` reads (cityTimeMs - unmetSinceMs) as the sust-
+  // ained-unmet counter, and once it crosses LEAVING_UNMET_MS the person
+  // transitions to phase "leaving" and their walk is the walk to the edge.
+  unmetSinceMs: number | null;
+  // Only defined while phase === "leaving": the edge coordinate they walk
+  // toward, and the city-time the leaving began (for the fade).
+  leavingTo: { x: number; y: number } | null;
+  leavingSinceMs: number | null;
 };
 
 type Road = { x1: number; y1: number; x2: number; y2: number; bornMs: number };
@@ -1236,6 +1250,9 @@ export default function City() {
           regularEventId: null,
           hesitating: false,
           hesitationSince: 0,
+          unmetSinceMs: null,
+          leavingTo: null,
+          leavingSinceMs: null,
         });
       }
     }
@@ -1250,12 +1267,74 @@ export default function City() {
     function stepPopulation(dt: number): void {
       const HESITATION_SWAP_MS = 550;
       const ARRIVAL_MS = 260;
-      for (const person of people) {
+      // Walk the array with an index so retiring a leaving person on arrival
+      // at the edge is a splice, not a rebuild — the population is small and
+      // the mutation is honest: a person who reached the edge is gone.
+      let idx = 0;
+      while (idx < people.length) {
+        const person = people[idx];
         const prevX = person.x;
         const prevY = person.y;
 
         person.fed = Math.max(0, person.fed - dt * 0.00003);
         person.rested = Math.max(0, person.rested - dt * 0.00002);
+
+        // ── the sustained-unmet ledger ──
+        // Only settled people can decide to leave: an arriving person has
+        // not yet had a chance to try, and a leaving person has already
+        // decided. The counter reads city-time so the run under 3-finger
+        // hold (time dilation) slows the trip out the same as it slows
+        // everything else — the tradeoff is continuous with the room.
+        if (person.phase === "settled") {
+          if (needsUnmet(person.fed, person.rested)) {
+            if (person.unmetSinceMs == null) person.unmetSinceMs = cityTimeMs;
+            const unmetMs = cityTimeMs - person.unmetSinceMs;
+            if (shouldLeave(person.fed, person.rested, unmetMs)) {
+              person.phase = "leaving";
+              person.leavingSinceMs = cityTimeMs;
+              person.leavingTo = nearestEdgePoint({ x: person.x, y: person.y });
+              person.targetPlotId = null;
+              person.hesitating = false;
+              person.hesitationSince = 0;
+              // A leaving is a small solemn act — sight+sound in the same
+              // frame. The note is low, the haptic soft: the settlement
+              // noticed, the visitor can too.
+              ring(noteForRole("home") - 12, 320);
+              try { haptics.tap(); } catch { /* noop */ }
+            }
+          } else {
+            person.unmetSinceMs = null;
+          }
+        }
+
+        // ── leaving people walk to the edge, no plot in sight ──
+        if (person.phase === "leaving" && person.leavingTo) {
+          const target = person.leavingTo;
+          const roadBoost = personOnRoad(person) ? 2.2 : 1;
+          const stepped = stepTowards(
+            { x: person.x, y: person.y },
+            target,
+            dt * roadBoost,
+          );
+          person.x = stepped.x;
+          person.y = stepped.y;
+          person.heading = headingFor(
+            { x: prevX, y: prevY },
+            { x: person.x, y: person.y },
+            person.heading,
+          );
+          const arrivedAtEdge =
+            Math.abs(person.x - target.x) < 0.006 &&
+            Math.abs(person.y - target.y) < 0.006;
+          if (arrivedAtEdge) {
+            // Retire the person from the array. The homeId is intact — a
+            // future arrival from this same home spawns fresh.
+            people.splice(idx, 1);
+            continue;
+          }
+          idx += 1;
+          continue;
+        }
 
         let chosenNeed: Need;
         let regularForNeed: number | null = null;
@@ -1352,6 +1431,7 @@ export default function City() {
           { x: person.x, y: person.y },
           person.heading,
         );
+        idx += 1;
       }
     }
 
@@ -1505,6 +1585,9 @@ export default function City() {
       // people — heading-aligned slivers with an arrival tail and warm cast
       // for regulars, pale for hesitators. On the lowest detail tier the
       // per-person tail is dropped (still the population, still legible).
+      // A leaving person fades toward the edge — their opacity eases from 1
+      // to 0 across LEAVING_FADE_MS via `fadeForLeaving`, the same law the
+      // test pins.
       const dropTails = detail.samples < 2;
       for (const person of people) {
         const px = person.x * width;
@@ -1516,6 +1599,10 @@ export default function City() {
         const by = py + sin * (length * 0.5);
         const tx = px - cos * (length * 0.5);
         const ty = py - sin * (length * 0.5);
+        const leavingFade = person.phase === "leaving" && person.leavingSinceMs != null
+          ? fadeForLeaving(cityTimeMs - person.leavingSinceMs)
+          : 1;
+        if (leavingFade <= 0) continue;
         if (!dropTails && person.phase === "arriving") {
           const home = plots.find((p) => p.id === person.homeId);
           if (home) {
@@ -1535,17 +1622,19 @@ export default function City() {
             }
           }
         }
-        const bodyAlpha = person.hesitating ? 0.6 : 0.9;
-        // Regulars wear cool teal, not the settlement's warm candle. The
-        // previous warm body matched the store's own awning tint, so a
-        // regular sitting on the plot they were a regular of disappeared
-        // into it — the micro-community reading collapsed. Teal reads
-        // AGAINST every warm plot in the palette; the person is now a
-        // small cool body on a warm plate.
+        const baseAlpha = person.hesitating ? 0.6 : 0.9;
+        const bodyAlpha = baseAlpha * leavingFade;
+        // Regulars wear cool teal (reads AGAINST the settlement's warm
+        // plots); the ordinary body is candle-black. A leaving person is
+        // a neutral desaturated grey — the belonging teal drops away as
+        // they walk to the edge. Visual language: teal is belonging, grey
+        // is departure, and the fade takes care of the rest.
         const isRegular = person.regularStoreId != null || person.regularEventId != null;
-        const bodyColor = isRegular
-          ? `rgba(74, 158, 158, ${bodyAlpha})`
-          : `rgba(21, 23, 26, ${bodyAlpha})`;
+        const bodyColor = person.phase === "leaving"
+          ? `rgba(64, 68, 76, ${bodyAlpha})`
+          : isRegular
+            ? `rgba(74, 158, 158, ${bodyAlpha})`
+            : `rgba(21, 23, 26, ${bodyAlpha})`;
         fgctx.strokeStyle = bodyColor;
         fgctx.lineWidth = 2;
         fgctx.lineCap = "round";
