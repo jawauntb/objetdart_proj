@@ -49,6 +49,7 @@ import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { THRESHOLDS, attachGestures } from "@/lib/gesture";
+import { tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import LetGo from "@/components/LetGo";
@@ -276,6 +277,11 @@ export default function AtomsField() {
     let season = 0.1;
     let seasonSpokenAt = 0;
     let spontaneousAt = 0;
+    /** rhythm entrainment: electrons jump on the hand's own beat for a while */
+    let pulseBpm = 0;
+    let pulseUntil = 0;
+    let lastPulseAt = 0;
+    let pulseIdx = 0;
     /** face-down: the clouds keep their watch in the dark */
     let night = 0;
     let nightTarget = 0;
@@ -852,17 +858,18 @@ export default function AtomsField() {
     };
 
     // three-finger tap = tutti (grammar §5): one synchronized soft pulse —
-    // every cloud brightens a breath and hums its own voice, quietly
-    const tutti = () => {
+    // every cloud brightens a breath and hums its own voice, quietly, and
+    // the firmness of the three fingers is the brightness of the answer
+    const tutti = (gain = 0.6) => {
       const now = performance.now();
       if (now - lastTuttiAt < 1400) return;
       lastTuttiAt = now;
-      tuttiPulse = 1;
+      tuttiPulse = 0.55 + gain * 0.45;
       atoms
         .filter((a) => !a.retiringAt && a.closed)
         .slice(0, 8)
-        .forEach((a, i) => noteLater(i * 45, midiOf(a.morph), 70));
-      try { haptics.tap(); } catch { /* noop */ }
+        .forEach((a, i) => noteLater(i * 45, midiOf(a.morph), 55 + Math.round(gain * 40)));
+      try { haptics.ripple(0.2 + gain * 0.3); } catch { /* noop */ }
     };
 
     // ————— gestures (the grammar, nothing private; pinch belongs to the manifold) —————
@@ -881,17 +888,94 @@ export default function AtomsField() {
           }
           return;
         }
-        if (e.fingers === 3) { tutti(); return; }
+        if (e.fingers === 3) { tutti(clamp01(0.35 + e.intensity * 0.65)); return; }
         if (e.fingers !== 1) return; // anything else is gently absorbed
         const { x, y } = toLocal(e.x, e.y);
         const a = nearestAtom(x, y);
-        if (a) excite(a, e.intensity);
+        // rapid-tap ladder 1 / 3 / 5 / n — counts between tiers deepen intensity
+        const trainTier = tapTrainTier(e.count);
+        const trainBase = trainTier === "n" ? 7 : trainTier;
+        const deepen = Math.min(1, (e.count - trainBase) * 0.5);
+        const amp = clamp01(e.intensity * (0.75 + deepen * 0.55));
+        if (trainTier === 1) {
+          if (a) excite(a, amp);
+          return;
+        }
+        if (trainTier === 3) {
+          // three sharp taps IONIZE: the outermost electron is knocked clean
+          // off — it streaks away, the cloud dims, and after a beat the
+          // falling-home note says it was only borrowed. On open vacuum the
+          // taps condense an atom instead.
+          if (a) {
+            const ang = twinkleHash(a.seed + e.count) * Math.PI * 2;
+            photonStreak(a, ang, 200 + amp * 180, ATOM_FAMILIES[a.morph.family][5]);
+            a.dim = Math.min(1, a.dim + 0.5 + deepen * 0.3);
+            note(midiOf(a.morph) + 12, 90);
+            noteLater(650, midiOf(a.morph) + 3, 220);
+            try { haptics.detent(); } catch { /* noop */ }
+            useField.getState().recordTape("ripple", 0.5 + deepen * 0.3, "atoms/ionize");
+          } else {
+            condense(x, y);
+          }
+          return;
+        }
+        if (trainTier === 5) {
+          // five taps are PHOTOLYSIS: every bond the ceremony joined on this
+          // atom lets go at once, the partners thrown back with the elastic
+          // recoil of the share they lose. An unbonded cloud takes the whole
+          // charge as stirred orbitals instead.
+          if (!a) return;
+          const mine = bonds.filter((b) => b.aId === a.id || b.bId === a.id);
+          if (mine.length > 0) {
+            bonds = bonds.filter((b) => b.aId !== a.id && b.bId !== a.id);
+            const byId = new Map(atoms.map((q) => [q.id, q]));
+            for (const b of mine) {
+              const o = byId.get(b.aId === a.id ? b.bId : b.aId);
+              if (!o) continue;
+              const dx = o.sx - a.sx;
+              const dy = o.sy - a.sy;
+              const dd = Math.max(1, Math.hypot(dx, dy));
+              const kick = 30 + deepen * 24;
+              o.pushX += (dx / dd) * kick;
+              o.pushY += (dy / dd) * kick;
+              a.pushX -= (dx / dd) * kick;
+              a.pushY -= (dy / dd) * kick;
+              o.shudder = Math.min(1, o.shudder + 0.4);
+            }
+            a.shudder = 1;
+            burst(a.sx, a.sy, [ATOM_FAMILIES[a.morph.family][5], "#F2EEE6"], 12, 46);
+            try { audio().thud(); } catch { /* noop */ }
+            note(midiOf(a.morph) - 7, 260);
+            try { haptics.chop(); } catch { /* noop */ }
+            save();
+          } else {
+            excite(a, 1);
+            a.precessBoost = clamp(a.precessBoost + 0.8 + deepen * 0.8, -3, 3);
+            try { haptics.chop(); } catch { /* noop */ }
+          }
+          return;
+        }
+        // n: the CASCADE — every cloud in reach jumps in sequence, a spectral
+        // avalanche that widens and brightens as the train runs on
+        const reach = Math.min(width, height) * (0.4 + deepen * 0.25);
+        const near = atoms.filter(
+          (q) => !q.retiringAt && q.closed && Math.hypot(q.sx - x, q.sy - y) < reach,
+        );
+        near.forEach((q, i) => {
+          window.setTimeout(() => excite(q, 0.5 + deepen * 0.5), i * 70);
+        });
+        stirOmega = clamp(stirOmega + 0.6 + deepen, -4, 4);
+        try { audio().bell(); } catch { /* noop */ }
+        try { haptics.bloom(); } catch { /* noop */ }
       },
       hold: (e) => {
         lastInteractionAt = performance.now();
         if (e.fingers === 3) {
-          if (e.phase === "enter") { timeScaleTarget = 0.25; try { haptics.tap(); } catch { /* noop */ } note(34, 280); }
-          if (e.phase === "release") timeScaleTarget = 1;
+          // dilation deepens with the hold: 900ms and 2400ms are different
+          // stillnesses, and the vacuum keeps slowing for as long as asked
+          if (e.phase === "enter") { try { haptics.tap(); } catch { /* noop */ } note(34, 280); }
+          if (e.phase === "release") { timeScaleTarget = 1; return; }
+          timeScaleTarget = 1 - 0.85 * clamp01(e.elapsed / 2400);
           return;
         }
         if (e.fingers !== 1) return;
@@ -1110,6 +1194,20 @@ export default function AtomsField() {
           lastScrubAt = now;
           note(72 + Math.round(Math.abs(e.winding)), 90);
           try { haptics.ripple(0.3); } catch { /* noop */ }
+        }
+      },
+      rhythm: (e) => {
+        lastInteractionAt = performance.now();
+        // a steady hand entrains the vacuum: while the tempo holds, the
+        // clouds take turns jumping a shell ON the beat — the steadier the
+        // taps, the longer the pulse outlives them
+        if (e.stability < 0.55 || e.bpm < 40 || e.bpm > 220) return;
+        const wasSilent = performance.now() > pulseUntil;
+        pulseBpm = e.bpm;
+        pulseUntil = performance.now() + 6000 + e.stability * 10000;
+        if (wasSilent) {
+          note(58, 140);
+          try { haptics.tap(); } catch { /* noop */ }
         }
       },
     });
@@ -1586,6 +1684,17 @@ export default function AtomsField() {
       // and after an iron refusal the whole field sags toward the band below
       const gravX = windX + tiltLeanX * 0.5;
       const gravY = windY + tiltLeanY * 0.5 + ironward * 0.85;
+
+      // the entrained pulse: while the hand's tempo holds, the clouds take
+      // turns jumping a shell on the visitor's own beat
+      if (pulseBpm > 0 && now < pulseUntil && now - lastPulseAt > 60000 / pulseBpm) {
+        lastPulseAt = now;
+        const live = atoms.filter((a) => !a.retiringAt && a.closed);
+        if (live.length > 0) {
+          pulseIdx = (pulseIdx + 1) % live.length;
+          excite(live[pulseIdx], 0.35);
+        }
+      }
 
       // the furnace season: hot enough and electrons jump unbidden — the room
       // is alive at rest, and the season says how alive

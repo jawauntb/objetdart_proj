@@ -7,9 +7,13 @@
  * working space, nowhere to hang SSAO / DOF / god-rays in a later PR.
  *
  * This module owns an EffectComposer with:
- *   RenderPass(groundScene)                → the sky/ground
- *   RenderPass(plotScene, clear:false)     → 48 instanced plots on top
+ *   RenderPass(worldScene)                 → the Preetham HDR sky + IBL ground
+ *   RenderPass(groundScene, clear:false)   → 2D painterly ground shader
+ *   RenderPass(plotScene,   clear:false)   → 48 instanced plots as emblems
+ *   RenderPass(skylineScene, clear:false)  → the 3D extruded skyline
+ *   SSAOPass(skylineScene)                 → contact AO between towers
  *   UnrealBloomPass                        → the ember at dusk, lit windows at night
+ *   BokehPass(skylineScene)                → wide-zoom Currier & Ives DOF
  *   OutputPass                             → sRGB write + tonemap
  *
  * Bloom threshold / strength / radius are a function of dayFraction so the
@@ -17,11 +21,23 @@
  * the emotional peak the brief calls the core of the room; at midnight it
  * stays warm on the lit-window pixels.
  *
+ * SSAO reads the skyline scene's geometry — the shadowed alley between a home
+ * and a store, the shadow band where a tower's footprint meets the ground.
+ * That contact-AO ring is what the eye uses to read a photo as photo and a
+ * diorama as diorama; without it a settlement of PBR prisms feels floating.
+ *
+ * BokehPass runs before OutputPass so the tonemapper still gets the blurred
+ * linear buffer, not a re-quantised sRGB one. DOF strength ramps in over the
+ * eased pitch: at eye-level the frame is razor-sharp (photoreal SF/London
+ * read), at bird's-eye the frame gathers a painterly depth blur (Currier &
+ * Ives model-scale read). A smoothstep between pitch01 = 0.55 and 0.85 rides
+ * the spring — never a hard flip on the boundary.
+ *
  * Tiers gate cost, not aesthetic goal:
- *   sleep  → no bloom (composer still runs so the pipeline stays linear)
- *   low    → no bloom
- *   medium → bloom on, tight radius
- *   high   → bloom on, wider radius (softer glow around bright pixels)
+ *   sleep  → no bloom, no ssao, no dof (composer still runs so the pipeline stays linear)
+ *   low    → no bloom, no ssao, no dof
+ *   medium → bloom on, ssao on, no dof
+ *   high   → bloom on, ssao on, dof on (ramped by pitch)
  *
  * Nothing here touches gesture, city.ts laws, or persistence — it is the
  * pipeline the aesthetic hangs from.
@@ -31,17 +47,25 @@ import * as THREE from "three";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { SSAOPass } from "three/examples/jsm/postprocessing/SSAOPass.js";
+import { BokehPass } from "three/examples/jsm/postprocessing/BokehPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 
 import type { QualityTier } from "@/lib/room-runtime";
 
 export type CityComposer = {
   /**
-   * Draw one frame. `dayFraction` is city.ts's dayFraction (0=dawn, 0.25=noon,
-   * 0.5=dusk, 0.75=midnight). `tier` is the current governor tier — the
-   * composer decides which passes are alive from it.
+   * Draw one frame.
+   *
+   *   `dayFraction` — city.ts's dayFraction (0=dawn, 0.25=noon, 0.5=dusk,
+   *   0.75=midnight). Drives the bloom curve.
+   *   `tier`        — the current governor tier. Decides which passes are
+   *   alive from it.
+   *   `pitch01`     — the camera's eased pitch in [0..1] (0=eye-level,
+   *   1=bird's-eye). Optional so pre-camera callers still compile; when
+   *   omitted, DOF stays off. Drives the Bokeh strength ramp.
    */
-  render(dayFraction: number, tier: QualityTier): void;
+  render(dayFraction: number, tier: QualityTier, pitch01?: number): void;
   /**
    * Resize the offscreen render targets to (width, height) in CSS pixels
    * and set the renderer pixel ratio. Call from the room's ResizeObserver
@@ -89,6 +113,61 @@ export function bloomParamsForDay(dayFraction: number): {
   };
 }
 
+/**
+ * The DOF strength curve as a function of the camera's pitch01.
+ * Read the range as: below `PITCH_DOF_START` the frame is razor-sharp
+ * (eye-level, the photoreal SF/London skyline moment) and above
+ * `PITCH_DOF_END` the frame is fully blurred (bird's-eye, the Currier &
+ * Ives model-scale moment). A smoothstep in between rides the eased
+ * spring — a fast pinch never snaps into DOF.
+ *
+ * `strength01` is the normalised strength returned by this function; the
+ * caller multiplies it into the Bokeh pass's `maxblur` and `aperture`
+ * uniforms so the ramp is not a light switch but a soft dial.
+ *
+ * Exported so a test can pin the curve at the two ends and at the middle.
+ */
+export const PITCH_DOF_START = 0.55;
+export const PITCH_DOF_END = 0.85;
+
+export function dofStrengthForPitch(pitch01: number): number {
+  const p = pitch01 < 0 ? 0 : pitch01 > 1 ? 1 : pitch01;
+  const span = PITCH_DOF_END - PITCH_DOF_START;
+  if (span <= 0) return p >= PITCH_DOF_START ? 1 : 0;
+  const t = (p - PITCH_DOF_START) / span;
+  const c = t < 0 ? 0 : t > 1 ? 1 : t;
+  return c * c * (3 - 2 * c);
+}
+
+/**
+ * Which post-process passes should be alive at a given tier. The one
+ * function of tier the composer consults per-frame; the tick loop passes
+ * the current tier and this decides. A test pins the ladder — a future
+ * regression that flips SSAO on at low tier would tank frame budget on
+ * exactly the devices that most need the budget back.
+ *
+ *   sleep  → nothing but bloom-less linear composition (pipeline stays lin.)
+ *   low    → same as sleep — the composer runs but the aesthetic budget is 0
+ *   medium → bloom on + ssao on (photorealistic contact AO, small radius)
+ *   high   → bloom on + ssao on (wider radius) + dof on (ramped by pitch)
+ */
+export function passesForTier(tier: QualityTier): {
+  bloom: boolean;
+  ssao: boolean;
+  dof: boolean;
+} {
+  switch (tier) {
+    case "high":
+      return { bloom: true, ssao: true, dof: true };
+    case "medium":
+      return { bloom: true, ssao: true, dof: false };
+    case "low":
+    case "sleep":
+    default:
+      return { bloom: false, ssao: false, dof: false };
+  }
+}
+
 export type CityComposerOptions = {
   renderer: THREE.WebGLRenderer;
   groundScene: THREE.Scene;
@@ -112,16 +191,16 @@ export type CityComposerOptions = {
    * alongside the sky's ember. Shares its camera with `worldCam` so the
    * sky, IBL-lit ground, and buildings all read the same perspective. */
   skylineScene?: THREE.Scene;
-  skylineCam?: THREE.Camera;
+  skylineCam?: THREE.PerspectiveCamera;
   /**
    * Optional harbour water scene (created by src/lib/city-water.ts).
-   * Rendered AFTER the skyline pass and BEFORE bloom, so the Reflector
-   * plane sits in the frame like a strip of water beyond the plot grid.
-   * Its `waterCam` MUST be the same `cityCam.camera` the skyline uses —
-   * the Reflector's `virtualCamera` derives from whatever camera the
-   * water pass runs with, and if the two cameras diverged the mirrored
-   * horizon would slide off the water surface at any pitch other than
-   * the one the water module was built for.
+   * Rendered AFTER the skyline pass and BEFORE the SSAO/bloom stack, so
+   * the Reflector plane sits in the frame like a strip of water beyond
+   * the plot grid. Its `waterCam` MUST be the same `cityCam.camera` the
+   * skyline uses — the Reflector's `virtualCamera` derives from whatever
+   * camera the water pass runs with, and if the two cameras diverged the
+   * mirrored horizon would slide off the water surface at any pitch
+   * other than the one the water module was built for.
    */
   waterScene?: THREE.Scene;
   waterCam?: THREE.Camera;
@@ -214,6 +293,41 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
     composer.addPass(waterPass);
   }
 
+  // SSAOPass — the contact ambient occlusion between adjacent buildings.
+  // Only meaningful when a skyline scene is present; the pass renders the
+  // skyline through a MeshNormalMaterial into its own depth+normal target,
+  // then subtracts a soft AO ring from the read buffer. Because
+  // needsSwap=false the color buffer the bloom sees is the same buffer
+  // the skyline pass wrote, just darker in the crevices — the emissive
+  // dusk-window pixels stay bright and bloom the way they did before.
+  //
+  // We build the pass in the tier-inactive state and flip `enabled` in
+  // render() so the tick loop doesn't pay to construct/tear-down the SSAO
+  // material on a tier transition — the flip is a boolean write, that's it.
+  let ssaoPass: SSAOPass | null = null;
+  if (opts.skylineScene && opts.skylineCam) {
+    ssaoPass = new SSAOPass(
+      opts.skylineScene,
+      opts.skylineCam,
+      Math.max(1, opts.width),
+      Math.max(1, opts.height),
+    );
+    // The AO radius was tuned by walking the sample space: 12 world units
+    // reads the wall of one tower against its neighbor as one shadow band,
+    // not a rim halo. `minDistance`/`maxDistance` are the near/far cutoffs
+    // in NDC space; the defaults 0.005/0.1 crush too much on tall towers
+    // so we push maxDistance out and keep minDistance small so the ground
+    // contact of a footprint still reads.
+    ssaoPass.kernelRadius = 12;
+    ssaoPass.minDistance = 0.002;
+    ssaoPass.maxDistance = 0.16;
+    // OUTPUT_DEFAULT (0) — the standard AO composite. `renderToScreen`
+    // stays false so the pass writes back into the composer buffer.
+    (ssaoPass as unknown as { output: number }).output = 0;
+    ssaoPass.enabled = false;
+    composer.addPass(ssaoPass);
+  }
+
   // Bloom: the ember at dusk, the warm halo on lit windows at night.
   // Parameters are updated per-frame from dayFraction inside render().
   const bloomPass = new UnrealBloomPass(
@@ -223,6 +337,36 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
     /* threshold*/ 0.75,
   );
   composer.addPass(bloomPass);
+
+  // BokehPass — the Currier & Ives model-scale DOF at wide zoom. Only
+  // meaningful when a perspective skyline scene is present. The pass
+  // re-renders the skyline with a depth-packing material into its own
+  // depth target and blurs the color buffer by circle-of-confusion.
+  //
+  // We drive the pass at high tier only, and RAMP its `maxblur` and
+  // `aperture` uniforms from 0 → full as the camera's pitch01 crosses
+  // PITCH_DOF_START..PITCH_DOF_END. At eye-level the pass is present but
+  // does nothing (maxblur=0) — that keeps the composer chain identical
+  // frame-to-frame and only asks the GPU to skip when we set enabled=false.
+  //
+  // Focus is fixed at the world-space distance from the camera to the
+  // ground plane in front of the settlement (~40 units) — the buildings
+  // in the middle of the frame are what the eye is meant to fixate on,
+  // and the fore/back blur ranges are what we tune with maxblur.
+  let bokehPass: BokehPass | null = null;
+  const bokehState: { maxblur: number; aperture: number } = {
+    maxblur: 0.012,   // full-blur — a soft painterly haze, not a smear
+    aperture: 0.0018, // subtle CoC — the diorama read, not the macro read
+  };
+  if (opts.skylineScene && opts.skylineCam) {
+    bokehPass = new BokehPass(opts.skylineScene, opts.skylineCam, {
+      focus: 40.0,
+      aperture: 0.0,   // ramped by pitch — 0 at eye-level
+      maxblur: 0.0,
+    });
+    bokehPass.enabled = false;
+    composer.addPass(bokehPass);
+  }
 
   // OutputPass writes the linear working buffer to the canvas as sRGB and
   // applies the renderer's tonemapping (ACESFilmic, set in City.tsx).
@@ -240,6 +384,12 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
   // is a microsecond that pays for B/C/D in the next PRs.
   let lastTier: QualityTier | null = null;
   let lastEmberSlot = -1;
+  // Quantised DOF slot — writing the Bokeh uniforms every frame is a JS
+  // object write per uniform, cheap but not free. Round pitch01 to
+  // eighths (~7° each) so the ramp only touches the uniform when the
+  // pitch has visibly advanced. A smoothstep at 8 samples across
+  // [0.55..0.85] is still perceptually smooth to a human eye.
+  let lastDofSlot = -1;
 
   const composerLike = composer as unknown as {
     render(delta?: number): void;
@@ -250,21 +400,38 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
   };
 
   return {
-    render(dayFraction: number, tier: QualityTier) {
-      // Tier gating. Bloom is where the aesthetic budget goes so a low
-      // tier drops it; the ground and plots still render through the
-      // composer's linear buffer so C's PBR materials will land right
-      // when they arrive.
+    render(dayFraction: number, tier: QualityTier, pitch01?: number) {
+      // Tier gating. Passes are pre-constructed in the chain; we only
+      // flip their `enabled` bit. The ground and plots still render
+      // through the composer's linear buffer at every tier so C's PBR
+      // materials land right whatever the governor decided.
       if (tier !== lastTier) {
-        const bloomOn = tier === "medium" || tier === "high";
-        bloomPass.enabled = bloomOn;
+        const alive = passesForTier(tier);
+        bloomPass.enabled = alive.bloom;
+        if (ssaoPass) ssaoPass.enabled = alive.ssao;
+        if (bokehPass) bokehPass.enabled = alive.dof;
         // The harbour is off on sleep tier — the whole pass skips. The
         // water module still handles its own high/medium/low visible-mesh
         // swap inside update(); this gate is defence in depth.
         if (waterPass) waterPass.enabled = tier !== "sleep";
         lastTier = tier;
-        // Force the ember to recompute after a tier flip.
+        // Force the ember + DOF to recompute after a tier flip.
         lastEmberSlot = -1;
+        lastDofSlot = -1;
+        // When we drop below high tier the Bokeh uniforms must return to
+        // zero so a later high-tier re-entry starts from a clean ramp —
+        // otherwise the leftover maxblur from the last high-tier frame
+        // would flash for one frame on the reentry.
+        if (bokehPass && !alive.dof) {
+          const u = (bokehPass as unknown as {
+            uniforms: {
+              maxblur: { value: number };
+              aperture: { value: number };
+            };
+          }).uniforms;
+          u.maxblur.value = 0;
+          u.aperture.value = 0;
+        }
       }
 
       if (bloomPass.enabled) {
@@ -283,6 +450,29 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
         }
       }
 
+      if (bokehPass && bokehPass.enabled) {
+        // Ramp DOF strength on the pitch01. At eye-level the maxblur sits
+        // at 0 and the pass is essentially a no-op copy; at bird's-eye it
+        // hits `bokehState.maxblur`. Quantise to 8 slots across [0..1]
+        // so the uniform writes only fire when the pitch has advanced
+        // by ~12.5%. A smoothstep at 8 samples across [0.55..0.85]
+        // reads as continuous to a human eye.
+        const p = pitch01 == null ? 0 : pitch01;
+        const slot = Math.floor(p * 8);
+        if (slot !== lastDofSlot) {
+          const s = dofStrengthForPitch(p);
+          const u = (bokehPass as unknown as {
+            uniforms: {
+              maxblur: { value: number };
+              aperture: { value: number };
+            };
+          }).uniforms;
+          u.maxblur.value = bokehState.maxblur * s;
+          u.aperture.value = bokehState.aperture * s;
+          lastDofSlot = slot;
+        }
+      }
+
       composerLike.render();
     },
     setSize(width, height, pixelRatio) {
@@ -293,6 +483,12 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
       // UnrealBloom holds its own pyramid targets — this rebuilds them
       // at the right resolution for the new canvas.
       bloomPass.setSize(w, h);
+      // SSAO holds a normal render target sized to the canvas; without
+      // this the AO would be sampled from a stale 1×1 map after a resize.
+      if (ssaoPass) ssaoPass.setSize(w, h);
+      // Bokeh holds its own depth target; setSize rebuilds it and
+      // updates the aspect uniform.
+      if (bokehPass) bokehPass.setSize(w, h);
     },
     dispose() {
       // Composer.dispose() (three r160+) drops the target + pass buffers.
@@ -316,6 +512,27 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
           bl.dispose();
         } catch {
           /* noop */
+        }
+      }
+      // SSAO/Bokeh both hold their own render targets and materials.
+      if (ssaoPass) {
+        const ao = ssaoPass as unknown as { dispose?: () => void };
+        if (typeof ao.dispose === "function") {
+          try {
+            ao.dispose();
+          } catch {
+            /* noop */
+          }
+        }
+      }
+      if (bokehPass) {
+        const bo = bokehPass as unknown as { dispose?: () => void };
+        if (typeof bo.dispose === "function") {
+          try {
+            bo.dispose();
+          } catch {
+            /* noop */
+          }
         }
       }
     },

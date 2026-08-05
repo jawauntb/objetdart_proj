@@ -61,7 +61,20 @@ const {
   hashUnit,
   colorForInstance,
   ROLE_COLOR,
+  BUILDING_ROLES,
 } = mod;
+
+// ——— BUILDING_ROLES holds the four civic roles that get their own mesh ——
+// The role-split geometry pass built one InstancedMesh per role; a test
+// pins the list so a regression that drops (or reorders) a role would fail
+// loudly. `empty` is intentionally NOT in the list — empty plots don't render.
+assert.ok(Array.isArray(BUILDING_ROLES), "BUILDING_ROLES is an array");
+assert.deepEqual(
+  [...BUILDING_ROLES].sort(),
+  ["event", "home", "store", "tree"],
+  "BUILDING_ROLES lists exactly home/store/event/tree",
+);
+assert.ok(!BUILDING_ROLES.includes("empty"), "empty is not a building role");
 
 // ——— hashUnit determinism + spread ———————————————————————————————————————
 // A seeded hash that returned the same value for every seed would silently
