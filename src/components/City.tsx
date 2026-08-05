@@ -63,7 +63,9 @@ import {
 } from "@/lib/city-audio";
 import {
   createCityComposer,
+  createPerfRing,
   type CityComposer,
+  type PerfRing,
   type VolumetricFogFrame,
 } from "@/lib/city-composer";
 import {
@@ -1395,6 +1397,52 @@ export default function City() {
       initialZoom: 0.15,
     });
 
+    // ── devtools perf-probe rings (opt-in via ?__perf=1) ─────────────────
+    // The composer and the water each own one hot render path — the
+    // composer wraps composer.render(); the water wraps the mirror-into-RT
+    // render inside its onBeforeRender. Both accept a `perfProbe`
+    // callback. When ?__perf=1 is set we mount six ring buffers here
+    // (composer_ms, scene_ms, frame_ms, mirror_ms, draw_calls, triangles)
+    // and hand `onComposerFrame` / `onMirrorFrame` closures that push
+    // into the matching ring.
+    //
+    // We build the rings BEFORE the water and composer factories so the
+    // closures the factories capture are the same objects `window.__cityPerf`
+    // exposes later — otherwise the tick loop's push and the harness's
+    // read would touch different rings.
+    //
+    // The `?__perf=1` decision is stable per mount; the flag can only
+    // change on remount. That is exactly the same gate the pre-existing
+    // firstPaintMs probe reads a few blocks down (`perfEnabled`), so we
+    // recompute it inline here without hoisting the flag — the two reads
+    // are cheap and localise the coupling.
+    const perfEnabledForRings = ((): boolean => {
+      try {
+        return new URLSearchParams(window.location.search).get("__perf") === "1";
+      } catch { return false; }
+    })();
+    const perfRings = perfEnabledForRings
+      ? {
+          composer_ms: createPerfRing(120),
+          scene_ms: createPerfRing(120),
+          frame_ms: createPerfRing(120),
+          mirror_ms: createPerfRing(120),
+          draw_calls: createPerfRing(120),
+          triangles: createPerfRing(120),
+        }
+      : null;
+    // Non-render counters that reset each frame — read in the tick loop
+    // BEFORE any renderer.info.autoReset flip so their meaning is stable.
+    // The composer probe writes composer_ms; the water probe writes
+    // mirror_ms; the tick loop writes scene_ms + frame_ms + draw_calls +
+    // triangles. Every metric has one and only one writer.
+    const composerProbe = perfRings
+      ? { onComposerFrame(ms: number) { perfRings.composer_ms.push(ms); } }
+      : undefined;
+    const waterProbe = perfRings
+      ? { onMirrorFrame(ms: number) { perfRings.mirror_ms.push(ms); } }
+      : undefined;
+
     // ── harbour water (Reflector on cityCam) ─────────────────────────────
     // A strip of harbour beyond the +z edge of the city. The Reflector
     // rides the SAME cityCam the sky, IBL, and skyline pass do — one eye
@@ -1419,6 +1467,7 @@ export default function City() {
       pixelRatio: dpr,
       skylineScene: skyline.scene,
       envMap: citySky.background,
+      perfProbe: waterProbe,
     });
 
     // ── traffic (cars + boats + lamp posts) ─────────────────────────────
@@ -1511,6 +1560,7 @@ export default function City() {
       width: 1,
       height: 1,
       pixelRatio: dpr,
+      perfProbe: composerProbe,
     });
 
     // ── devtools perf probe (opt-in, non-production) ────────────────────
@@ -1543,6 +1593,17 @@ export default function City() {
       };
       w.__cityRenderer = renderer;
       w.__cityComposer = composer;
+      // Six ring buffers — one per metric — expose their aggregates via
+      // snapshot(). The rings themselves are the closures the composer
+      // and water probes push into on the render hot path; the harness
+      // polls .snapshot() once per second (outside the tick) to read
+      // avg / p50 / p95 / max over the last 120 frames per metric.
+      //
+      // The whole shape is `{ frame_ms: {avg, p50, p95, max, count},
+      // composer_ms: {...}, scene_ms: {...}, mirror_ms: {...},
+      // draw_calls: {...}, triangles: {...} }` — a single evaluate()
+      // in the harness returns everything a PR body needs.
+      const rings = perfRings as NonNullable<typeof perfRings>;
       w.__cityPerf = {
         // routeMountMs is the anchor performance.now() at useEffect entry.
         routeMountMs: routeMountAt,
@@ -1554,6 +1615,17 @@ export default function City() {
         // its JSON so a run's numbers are always paired with the tier
         // that produced them.
         tier: () => governor.tier(),
+        // Snapshot every ring's aggregate. Zero-allocation on the tick
+        // path (this is called by the harness, not the tick); a bad ring
+        // read simply returns zeros so the polling harness never crashes.
+        snapshot: () => ({
+          frame_ms: rings.frame_ms.snapshot(),
+          composer_ms: rings.composer_ms.snapshot(),
+          scene_ms: rings.scene_ms.snapshot(),
+          mirror_ms: rings.mirror_ms.snapshot(),
+          draw_calls: rings.draw_calls.snapshot(),
+          triangles: rings.triangles.snapshot(),
+        }),
       };
     }
 
@@ -2407,12 +2479,31 @@ export default function City() {
     // never rendered. `hasEverRendered` inverts the guard so the pause
     // path is only taken AFTER at least one successful frame has landed.
     let hasEverRendered = false;
+    // Perf-probe: turn off renderer.info's per-render autoReset so
+    // renderer.info.render.calls accumulates ACROSS the ~5 internal
+    // renderer.render() calls composer.render() makes each frame. We
+    // read the accumulated value AFTER composer.render() and reset it
+    // ourselves for the next frame. Without this, the ring would only
+    // ever see the LAST pass's draw count — a dramatic understatement
+    // of the true per-frame budget. This flag lives on the renderer,
+    // not the composer, so the mirror render inside water.onBeforeRender
+    // also contributes its ~48-plot draws to the same accumulator.
+    if (perfRings) {
+      try { renderer.info.autoReset = false; } catch { /* noop */ }
+    }
     const tick = (now: number) => {
       if (stopped) return;
       if ((docHidden || galleryPaused) && hasEverRendered) {
         slowWake = setTimeout(() => { raf = requestAnimationFrame(tick); }, 250);
         return;
       }
+      // Perf-probe: mark the raf entrypoint. `dt` below is the raf-to-raf
+      // delta the frame_ms ring records; `perfSceneStart` is the wall
+      // time we use as the anchor for scene_ms, measured from here to
+      // just before composer.render(). Both reads are one performance.now()
+      // when the probe is off. `now` is the DOMHighResTimeStamp raf
+      // hands us — the same clock performance.now() reads from.
+      const perfFrameStart = perfRings ? now : 0;
       const tier = governor.beginFrame(now);
       const dt = Math.min(66, now - lastFrameAt);
       lastFrameAt = now;
@@ -2779,7 +2870,32 @@ export default function City() {
       // horizon crossings), while volFog drives the participating-media
       // volumetric raymarch that runs all day at low density and thickens
       // through the horizon-crossing window — R10-7.
+      //
+      // Perf-probe: mark the scene_ms end just before the composer runs.
+      // Everything above this line — governor.beginFrame, cityCam.tick,
+      // module updates, pedestrian sync, sun projection — is the "scene"
+      // budget the composer will spend `composer_ms` more on. The delta
+      // between perfFrameStart and this mark is what the ring records.
+      // Reset renderer.info.render.calls/triangles to 0 so the counters
+      // start clean each frame and the accumulation below captures ONLY
+      // this frame's draws.
+      if (perfRings) {
+        perfRings.scene_ms.push(performance.now() - perfFrameStart);
+        try { renderer.info.reset(); } catch { /* noop */ }
+      }
       composer.render(df, tier, cityCam.pitch01(), sunScreen, volFog);
+      // Perf-probe: sample renderer.info AFTER composer.render() (which
+      // internally chains multiple renderer.render() calls, all of them
+      // now accumulating into info.render.calls because autoReset was
+      // flipped off at the top of the tick). The two ring pushes capture
+      // this frame's TOTAL draw-call count and triangle count — the two
+      // numbers targets E and D read against. `dt` — the raf-to-raf
+      // delta — is the frame_ms sample.
+      if (perfRings) {
+        perfRings.frame_ms.push(dt);
+        perfRings.draw_calls.push(renderer.info.render.calls);
+        perfRings.triangles.push(renderer.info.render.triangles);
+      }
       drawOverlay();
       // Emergency /city fix: on the FIRST successful composer.render() we
       // reveal the WebGL canvas. Until this frame the JSX renders the
@@ -3682,6 +3798,8 @@ export default function City() {
       // Devtools perf probe: unmount before disposing the composer so
       // a lingering reference cannot keep it (or its RTs) alive after
       // the GL context has torn down. The flag mirrors the setup gate.
+      // Also restore renderer.info.autoReset so a subsequent remount
+      // does not inherit the ring-buffer flag from this run.
       if (perfEnabled) {
         try {
           const w = window as unknown as {
@@ -3693,6 +3811,7 @@ export default function City() {
           delete w.__cityComposer;
           delete w.__cityPerf;
         } catch { /* noop */ }
+        try { renderer.info.autoReset = true; } catch { /* noop */ }
       }
       // Composer holds bloom pyramid RTs — drop them before disposing
       // the renderer that owns their GL context.

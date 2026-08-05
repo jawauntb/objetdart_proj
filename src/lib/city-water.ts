@@ -677,12 +677,41 @@ export type CityWater = {
   getMirrorStats(): { renders: number; skips: number };
 };
 
+/**
+ * Perf-probe surface for the mirror render. See src/lib/city-composer.ts
+ * for the sibling type on the composer side — kept structurally identical
+ * so the tick loop can hand both probes the same ring buffer.
+ *
+ * The mirror runs INSIDE the composer's water RenderPass (from
+ * `water.onBeforeRender`), so `mirror_ms` is a component of `composer_ms`,
+ * not additive to it. A future PR that skips the mirror on medium tier
+ * needs both numbers so the delta the PR claims is attributable.
+ */
+export type CityWaterPerfProbe = {
+  /**
+   * Called once per successful mirror RT render — the wall-clock delta
+   * from just before the reflection scene is rendered to the RT to just
+   * after. Skipped frames (the idle-guard fast path) do NOT call this;
+   * a caller counting them can read `getMirrorStats()` for the same
+   * information.
+   */
+  onMirrorFrame(mirrorMs: number): void;
+};
+
 export type CityWaterOptions = {
   /** initial canvas size in CSS pixels */
   width: number;
   height: number;
   /** initial pixel ratio — matches renderer.getPixelRatio() at mount */
   pixelRatio: number;
+  /**
+   * Optional perf probe. When present, `onBeforeRender` measures the wall
+   * time around the mirror `renderer.render(skylineScene, mirrorCam)`
+   * call and forwards the delta to `probe.onMirrorFrame(ms)`. Off by
+   * default; a null probe costs one property read per non-skipped mirror
+   * render.
+   */
+  perfProbe?: CityWaterPerfProbe;
   /**
    * The real 3D skyline scene the composer already renders in its skyline
    * RenderPass. The SSR path renders this scene from a mirror camera into
@@ -962,7 +991,26 @@ export function createCityWater(opts: CityWaterOptions): CityWater {
     water.visible = false;
 
     renderer.setRenderTarget(reflectionRT);
+    // Perf probe — measure the wall time around the mirror render. The
+    // reflection into `reflectionRT` is the ONE reason this whole hook
+    // exists; timing it in isolation lets a "skip mirror on medium tier"
+    // claim in a later PR attribute the delta correctly, instead of
+    // hiding inside the composer_ms number. The branch is a single
+    // property compare when the probe is absent.
+    const perfProbe = opts.perfProbe;
+    const mirrorStart = perfProbe
+      ? (typeof performance !== "undefined" && typeof performance.now === "function"
+          ? performance.now()
+          : 0)
+      : 0;
     renderer.render(skylineSceneForMirror, mirrorCam);
+    if (perfProbe) {
+      const mirrorEnd = typeof performance !== "undefined" && typeof performance.now === "function"
+        ? performance.now()
+        : mirrorStart;
+      try { perfProbe.onMirrorFrame(mirrorEnd - mirrorStart); }
+      catch { /* probe error is not a render error */ }
+    }
 
     water.visible = wasVisible;
 
