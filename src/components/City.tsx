@@ -1509,6 +1509,50 @@ export default function City() {
       pixelRatio: dpr,
     });
 
+    // ── devtools perf probe (opt-in, non-production) ────────────────────
+    // The measurement contract in the perf brief demands MEASURED numbers
+    // in every perf PR: renderer.info.render.calls, first paint ms, avg
+    // frame time, heap. That is only possible if a headless harness can
+    // reach `renderer` and `composer` from outside the tick loop. This
+    // block mounts them on `window` under a `?__perf=1` query flag so a
+    // production visitor cannot see them but scripts/perf-city-first-paint.mjs
+    // can. The flag is checked once at setup — hot-toggle isn't supported,
+    // and the probe carries no runtime cost past this one branch when the
+    // flag is off. The route-mount timestamp is captured here so first
+    // paint is measured from the mount instant (the useEffect entry) —
+    // that is the wall clock the brief specifies.
+    const perfEnabled = ((): boolean => {
+      try {
+        return new URLSearchParams(window.location.search).get("__perf") === "1";
+      } catch { return false; }
+    })();
+    const routeMountAt = perfEnabled ? performance.now() : 0;
+    let firstPaintStampedAt = 0;
+    if (perfEnabled) {
+      // Cast through unknown so TypeScript's `window` type stays clean —
+      // this is a runtime-only devtools surface, never referenced by
+      // application code.
+      const w = window as unknown as {
+        __cityRenderer?: unknown;
+        __cityComposer?: unknown;
+        __cityPerf?: unknown;
+      };
+      w.__cityRenderer = renderer;
+      w.__cityComposer = composer;
+      w.__cityPerf = {
+        // routeMountMs is the anchor performance.now() at useEffect entry.
+        routeMountMs: routeMountAt,
+        // firstPaintMs is set on the FIRST composer.render() completion.
+        // Until then it is 0 — the harness polls until it goes positive.
+        firstPaintMs: 0,
+        // Governor tier — high / medium / low / sleep. The composer's
+        // pass gates depend on this and the harness pastes it into
+        // its JSON so a run's numbers are always paired with the tier
+        // that produced them.
+        tier: () => governor.tier(),
+      };
+    }
+
     // ── state ────────────────────────────────────────────────────────────
     const plots: Plot[] = [];
     const people: Person[] = [];
@@ -2668,6 +2712,20 @@ export default function City() {
       if (!hasEverRendered) {
         hasEverRendered = true;
         try { setFirstFramePainted(true); } catch { /* noop */ }
+        // Stamp first-paint time for the devtools perf probe. This runs
+        // AFTER the composer.render() call above so the number represents
+        // the frame that actually presented pixels, not the frame that
+        // began rendering. When the probe is off (production) both flags
+        // are false and this branch is a noop.
+        if (perfEnabled && firstPaintStampedAt === 0) {
+          firstPaintStampedAt = performance.now();
+          try {
+            const w = window as unknown as { __cityPerf?: { firstPaintMs: number } };
+            if (w.__cityPerf) {
+              w.__cityPerf.firstPaintMs = firstPaintStampedAt - routeMountAt;
+            }
+          } catch { /* noop — probe is best-effort */ }
+        }
       }
       // Advance the progressive-enablement schedule by one step per
       // frame. Each step un-hides one heavy mesh or re-opens one composer
@@ -3543,6 +3601,21 @@ export default function City() {
       // + a shared PBR material + the head-dot emissive material + the
       // small merged capsule geometries. Drop them before the renderer.
       pedestrians.dispose();
+      // Devtools perf probe: unmount before disposing the composer so
+      // a lingering reference cannot keep it (or its RTs) alive after
+      // the GL context has torn down. The flag mirrors the setup gate.
+      if (perfEnabled) {
+        try {
+          const w = window as unknown as {
+            __cityRenderer?: unknown;
+            __cityComposer?: unknown;
+            __cityPerf?: unknown;
+          };
+          delete w.__cityRenderer;
+          delete w.__cityComposer;
+          delete w.__cityPerf;
+        } catch { /* noop */ }
+      }
       // Composer holds bloom pyramid RTs — drop them before disposing
       // the renderer that owns their GL context.
       composer.dispose();
