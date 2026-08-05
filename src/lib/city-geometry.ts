@@ -1757,11 +1757,15 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
       sun.color.setRGB(1.0, 0.68 + alt * 0.32, 0.42 + alt * 0.55);
       sun.intensity = 0.15 + alt * 1.35;
       hemi.intensity = 0.30 + alt * 0.55;
-      const fog = scene.fog as THREE.FogExp2;
-      const fr = 0.62 * alt + 0.14 * warmMix;
-      const fg = 0.74 * alt + 0.20 * warmMix;
-      const fb = 0.80 * alt + 0.28 * warmMix;
-      fog.color.setRGB(fr, fg, fb);
+      // A host may take fog ownership for itself (City.tsx colours its
+      // worldFog from the procedural sky and sets this scene's fog null).
+      const fog = scene.fog as THREE.FogExp2 | null;
+      if (fog) {
+        const fr = 0.62 * alt + 0.14 * warmMix;
+        const fg = 0.74 * alt + 0.20 * warmMix;
+        const fb = 0.80 * alt + 0.28 * warmMix;
+        fog.color.setRGB(fr, fg, fb);
+      }
 
       // ── emissive intensity per role ─────────────────────────────
       // Same shape as before: an eIdx from emissiveIntensityForDay
