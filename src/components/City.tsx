@@ -74,6 +74,7 @@ import {
   type CityCamera,
 } from "@/lib/city-camera";
 import { createSkylineScene, type SkylineScene } from "@/lib/city-geometry";
+import { createCityGround, type CityGround } from "@/lib/city-ground";
 
 /**
  * /city — a small settlement whose identity IS its causal roles.
@@ -1109,21 +1110,29 @@ export default function City() {
     worldScene.add(citySun.target);
     worldScene.add(citySun.hemi);
 
-    // Placeholder shadow-receiver ground plane — large enough that a
-    // helicopter-altitude shot sees it as the horizon plane. The tall
-    // 3D prisms in the skyline scene cast onto this. When the extruded
-    // buildings ship on top, this remains as the world ground.
-    const worldGround = new THREE.Mesh(
-      new THREE.PlaneGeometry(2000, 2000),
-      new THREE.MeshStandardMaterial({
-        color: 0x6a614c,
-        roughness: 0.95,
-        metalness: 0.0,
-      }),
-    );
-    worldGround.rotation.x = -Math.PI / 2;
-    worldGround.receiveShadow = true;
-    worldGround.position.y = 0;
+    // The world ground: baked streets + sidewalks + curbs + a settlement-
+    // scale road overlay the visitor paints onto. The seed is the persisted
+    // cityTimeMs read directly from storage below — the visitor's same
+    // town, remounted, gets the same block plan. The overlay receives
+    // one stripe per road the visitor draws in the gesture layer; the
+    // shader composes overlay on top of base so both agree with the sun.
+    //
+    // We peek at localStorage here (rather than deferring construction
+    // until after the full restore block below) so the ground is in the
+    // scene graph before the first render — no one-frame flash of empty
+    // horizon while the atlas paints.
+    let cityGroundSeed = 0x9e3779b1;
+    try {
+      const rawForSeed = localStorage.getItem(STORAGE_KEY);
+      if (rawForSeed) {
+        const parsedForSeed = JSON.parse(rawForSeed) as Persisted;
+        if (parsedForSeed?.version === 1 && Number.isFinite(parsedForSeed.cityTimeMs)) {
+          cityGroundSeed = (Math.floor(parsedForSeed.cityTimeMs) ^ 0x51ad7e) >>> 0;
+        }
+      }
+    } catch { /* corrupt persistence is not the visitor's problem — use the default seed */ }
+    const cityGround: CityGround = createCityGround({ seed: cityGroundSeed });
+    const worldGround = cityGround.mesh;
     worldScene.add(worldGround);
 
     citySun.applyTier(governor.tier());
@@ -1601,12 +1610,24 @@ export default function City() {
         }
         if (e.phase === "end") {
           if (dragRoadStart) {
-            if (roads.length >= MAX_ROADS) roads.shift();
-            roads.push({
+            if (roads.length >= MAX_ROADS) {
+              // Drop the oldest road from the 3D overlay too — the
+              // simplest way to keep the two in sync is to repaint from
+              // the truncated list. One CanvasTexture upload per
+              // eviction; still cheap.
+              roads.shift();
+              cityGround.setRoads(roads);
+            }
+            const road: Road = {
               x1: dragRoadStart.x, y1: dragRoadStart.y,
               x2: e.x / width, y2: e.y / height,
               bornMs: cityTimeMs,
-            });
+            };
+            roads.push(road);
+            // Stamp the road onto the ground's overlay atlas. One draw,
+            // one texture upload — the 3D pass now shows the same road
+            // the 2D overlay traces.
+            cityGround.addRoad(road.x1, road.y1, road.x2, road.y2);
             try { haptics.chop(); } catch { /* noop */ }
           }
           dragRoadStart = null;
@@ -2840,6 +2861,9 @@ export default function City() {
       plots.length = 0;
       people.length = 0;
       roads.length = 0;
+      // Wipe the painted-road overlay too — LetGo is the room-wide clear
+      // and the 3D pass must forget the roads the 2D overlay just did.
+      cityGround.clearRoads();
       activePlant = null;
       idleWrite.schedule();
     };
@@ -2887,10 +2911,10 @@ export default function City() {
       // shadow-map allocation. Both drop cleanly before the renderer.
       citySky.dispose();
       citySun.dispose();
-      // Ground plane geometry / material are ordinary — dispose them so
-      // the GPU doesn't leak across remounts.
-      worldGround.geometry.dispose();
-      (worldGround.material as THREE.Material).dispose();
+      // Ground plane owns three baked base textures + a settlement-scale
+      // road overlay + a PBR material + a plane geometry — the factory
+      // handles the whole set so the GPU doesn't leak across remounts.
+      cityGround.dispose();
       renderer.dispose();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
