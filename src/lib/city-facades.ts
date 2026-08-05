@@ -337,9 +337,11 @@ export {
   WINDOW_FRAME_OUTER,
   WINDOW_FRAME_INNER,
   WINDOW_FRAME_DEPTH_M,
+  WINDOW_MULLION_HALF,
   windowFramePlacement,
+  windowFrameQuadrantHoles,
 } from "@/lib/city-window-frames-pure";
-export type { WindowFace } from "@/lib/city-window-frames-pure";
+export type { WindowFace, WindowQuadrantHole } from "@/lib/city-window-frames-pure";
 
 // The event tower's real-world curtain-wall detail (mullion grid + per-
 // pane roughness/tint jitter) lives in a sibling module so this file
@@ -363,8 +365,7 @@ export {
 export type { CurtainWallTier, CurtainWallHandle, CurtainWallUniforms } from "@/lib/city-curtainwall";
 
 import {
-  WINDOW_FRAME_INNER,
-  WINDOW_FRAME_OUTER,
+  windowFrameQuadrantHoles,
 } from "@/lib/city-window-frames-pure";
 
 /**
@@ -385,36 +386,50 @@ export function makeWindowFrameMaterial(): THREE.MeshStandardMaterial {
 
 /**
  * Build the window-frame ExtrudeGeometry: outer rectangle [-0.5..0.5]²
- * with a rectangular hole sized by WINDOW_FRAME_INNER / WINDOW_FRAME_OUTER,
- * extruded from local z=0 to z=1 (bevel disabled — a cleaner silhouette).
+ * carved by FOUR quadrant holes — one per pane quadrant — so the shape
+ * material left between them forms both the outer reveal ring AND a
+ * horizontal + vertical mullion cross through the pane. Extruded from
+ * local z=0 to z=1 (bevel disabled — a cleaner silhouette against dusk).
  * The caller's per-instance matrix scales x/y to the window's world
- * width/height and z to WINDOW_FRAME_DEPTH_M so the frame protrudes 8cm
- * regardless of building height.
+ * width/height and z to WINDOW_FRAME_DEPTH_M so both the reveal ring
+ * AND the mullion bar protrude 8cm from the wall face, regardless of
+ * building height.
+ *
+ * Why four holes instead of one big hole plus a "+" of separate bars:
+ *  - a single Shape with four holes extrudes to ONE BufferGeometry, so
+ *    every home + store frame across the whole settlement still shares
+ *    one small buffer (~5,500 instances, one draw call per role).
+ *  - the reveal ring and the mullion bar cast a single continuous
+ *    self-shadow at grazing sunset — no seam artifacts where separate
+ *    meshes would z-fight along the shared edge.
+ *  - the pane's four backlit quadrants read as four distinct panes
+ *    catching the tungsten glow, not one washed panel — the "+" is what
+ *    finally lets a real window stop reading as a decal at close zoom.
  *
  * The geometry is authored once and shared across every home + store
- * plot via the two lattice InstancedMeshes — the entire settlement's
- * ~5,500 frame instances share ONE tiny buffer.
+ * plot via the two lattice InstancedMeshes.
  */
 export function makeWindowFrameGeometry(): THREE.ExtrudeGeometry {
   const outer = 0.5;
-  // Ratio of inner-to-outer is FRAME_INNER / FRAME_OUTER (both are
-  // fractions of the cell; the frame geometry's inner is in its OWN
-  // local frame so the ratio is what carries over).
-  const innerRatio = WINDOW_FRAME_INNER / WINDOW_FRAME_OUTER;
-  const inner = outer * innerRatio;
   const shape = new THREE.Shape();
   shape.moveTo(-outer, -outer);
   shape.lineTo( outer, -outer);
   shape.lineTo( outer,  outer);
   shape.lineTo(-outer,  outer);
   shape.lineTo(-outer, -outer);
-  const hole = new THREE.Path();
-  hole.moveTo(-inner, -inner);
-  hole.lineTo( inner, -inner);
-  hole.lineTo( inner,  inner);
-  hole.lineTo(-inner,  inner);
-  hole.lineTo(-inner, -inner);
-  shape.holes.push(hole);
+  // Four quadrant holes — the "+" cross of ExtrudeShape material between
+  // them IS the mullion, and the strip around all four IS the reveal ring.
+  // Pure math lives in `windowFrameQuadrantHoles` so the test can pin the
+  // rectangle set without pulling THREE in.
+  for (const q of windowFrameQuadrantHoles()) {
+    const h = new THREE.Path();
+    h.moveTo(q.minX, q.minY);
+    h.lineTo(q.maxX, q.minY);
+    h.lineTo(q.maxX, q.maxY);
+    h.lineTo(q.minX, q.maxY);
+    h.lineTo(q.minX, q.minY);
+    shape.holes.push(h);
+  }
   const geo = new THREE.ExtrudeGeometry(shape, {
     depth: 1.0,
     bevelEnabled: false,

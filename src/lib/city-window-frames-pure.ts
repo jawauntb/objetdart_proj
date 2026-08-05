@@ -83,6 +83,27 @@ export const WINDOW_FRAME_INNER = 0.56;
 export const WINDOW_FRAME_DEPTH_M = 0.08;
 
 /**
+ * The mullion cross that splits every pane into four quadrants — the
+ * horizontal + vertical bar you see in every real double-hung / casement
+ * window. Authored in the frame's LOCAL frame where the outer bounds sit
+ * at [-0.5, 0.5]; the caller scales x/y by (winW, winH) so a bar's
+ * world thickness = 2 × MULLION_HALF × winW.
+ *
+ * At the current value 0.010 (2% of window width) a typical 1m home
+ * window carries a ~20mm mullion — the same 4mm-per-face reveal the
+ * brief calls for, plus a bit of wiggle so the bar reads at pedestrian
+ * eye-level without breaking bloom threshold at dusk. Below ~0.005 the
+ * bar vanishes on canvas; above ~0.020 it starts to eat the pane. The
+ * bar is authored as merged BufferGeometry via `windowFrameQuadrantHoles`,
+ * so it extrudes to WINDOW_FRAME_DEPTH_M along +Z just like the outer
+ * reveal ring — one silhouette, one draw call, real depth on both.
+ *
+ * Kept in this pure module so `test-city-windows.mjs` can pin the ratio
+ * without pulling THREE in.
+ */
+export const WINDOW_MULLION_HALF = 0.010;
+
+/**
  * The world-space placement of one window frame on one plot face.
  *
  * Coordinate frame matches `createSkylineScene`:
@@ -146,4 +167,61 @@ export function windowFramePlacement(
     winW,
     winH,
   };
+}
+
+/**
+ * A quadrant hole rectangle in the frame's local frame (outer bounds
+ * [-0.5, 0.5]). Four of these — one per pane quadrant — together punch
+ * the "one big hole with a + cross through it" pattern into the extruded
+ * shape. The strip of shape material left between adjacent holes IS the
+ * mullion bar; the strip around all four is the outer reveal ring.
+ */
+export type WindowQuadrantHole = {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+};
+
+/**
+ * The four quadrant holes that carve a "+" mullion cross into the frame.
+ *
+ * Layout (in the frame's own local frame):
+ *
+ *   +outer ──┬───────────┬─────────┬───────────┬── +outer
+ *            │  reveal   │  reveal │  reveal   │
+ *            │  ring     │  ring   │  ring     │
+ *            ├───────────┼─────────┼───────────┤
+ *            │  Q_TL     │ mullion │  Q_TR     │
+ *            │  (hole)   │         │  (hole)   │
+ *            ├───────────┼─────────┼───────────┤
+ *            │  mullion  │ mullion │  mullion  │
+ *            ├───────────┼─────────┼───────────┤
+ *            │  Q_BL     │ mullion │  Q_BR     │
+ *            │  (hole)   │         │  (hole)   │
+ *            ├───────────┼─────────┼───────────┤
+ *   -outer ──┴───────────┴─────────┴───────────┴── -outer
+ *
+ * The reveal ring is the outer band between ±innerBound and ±outerBound;
+ * the mullion is the cross of ExtrudeShape material at |x| ≤ MULLION_HALF
+ * and |y| ≤ MULLION_HALF inside the inner rectangle. When the caller
+ * scales the geometry by (winW, winH, WINDOW_FRAME_DEPTH_M) the bar's
+ * WORLD thickness = 2 × WINDOW_MULLION_HALF × winW.
+ *
+ * Kept pure so the test can pin the geometry without a THREE dependency.
+ */
+export function windowFrameQuadrantHoles(): WindowQuadrantHole[] {
+  const outer = 0.5;
+  const innerRatio = WINDOW_FRAME_INNER / WINDOW_FRAME_OUTER;
+  const inner = outer * innerRatio;
+  const m = WINDOW_MULLION_HALF;
+  // Bottom-left, bottom-right, top-left, top-right — order doesn't
+  // affect the resulting shape, but a stable list keeps the test
+  // deterministic and readable.
+  return [
+    { minX: -inner, minY: -inner, maxX: -m,     maxY: -m     }, // Q_BL
+    { minX:  m,     minY: -inner, maxX:  inner, maxY: -m     }, // Q_BR
+    { minX: -inner, minY:  m,     maxX: -m,     maxY:  inner }, // Q_TL
+    { minX:  m,     minY:  m,     maxX:  inner, maxY:  inner }, // Q_TR
+  ];
 }
