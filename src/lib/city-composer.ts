@@ -192,6 +192,18 @@ export type CityComposerOptions = {
    * sky, IBL-lit ground, and buildings all read the same perspective. */
   skylineScene?: THREE.Scene;
   skylineCam?: THREE.PerspectiveCamera;
+  /**
+   * Optional harbour water scene (created by src/lib/city-water.ts).
+   * Rendered AFTER the skyline pass and BEFORE the SSAO/bloom stack, so
+   * the Reflector plane sits in the frame like a strip of water beyond
+   * the plot grid. Its `waterCam` MUST be the same `cityCam.camera` the
+   * skyline uses — the Reflector's `virtualCamera` derives from whatever
+   * camera the water pass runs with, and if the two cameras diverged the
+   * mirrored horizon would slide off the water surface at any pitch
+   * other than the one the water module was built for.
+   */
+  waterScene?: THREE.Scene;
+  waterCam?: THREE.Camera;
   /** Initial CSS-pixel size; the room will resize us in ResizeObserver. */
   width: number;
   height: number;
@@ -265,6 +277,20 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
     skylinePass.clear = false;
     (skylinePass as unknown as { clearDepth: boolean }).clearDepth = true;
     composer.addPass(skylinePass);
+  }
+
+  // RenderPass 4 (optional): the harbour water scene. Runs with the SAME
+  // camera as the skyline (cityCam.camera) so the Reflector's virtualCamera
+  // is the mirror of the visitor's eye. Do NOT clear depth — the skyline's
+  // depth buffer is what makes tall buildings occlude the water beyond
+  // them; a clearDepth here would let the water plane draw over towers
+  // that stand in front of it.
+  let waterPass: RenderPass | null = null;
+  if (opts.waterScene && opts.waterCam) {
+    waterPass = new RenderPass(opts.waterScene, opts.waterCam);
+    waterPass.clear = false;
+    (waterPass as unknown as { clearDepth: boolean }).clearDepth = false;
+    composer.addPass(waterPass);
   }
 
   // SSAOPass — the contact ambient occlusion between adjacent buildings.
@@ -384,6 +410,10 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
         bloomPass.enabled = alive.bloom;
         if (ssaoPass) ssaoPass.enabled = alive.ssao;
         if (bokehPass) bokehPass.enabled = alive.dof;
+        // The harbour is off on sleep tier — the whole pass skips. The
+        // water module still handles its own high/medium/low visible-mesh
+        // swap inside update(); this gate is defence in depth.
+        if (waterPass) waterPass.enabled = tier !== "sleep";
         lastTier = tier;
         // Force the ember + DOF to recompute after a tier flip.
         lastEmberSlot = -1;
