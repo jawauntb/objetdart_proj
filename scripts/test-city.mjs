@@ -1,22 +1,12 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import * as ts from "typescript";
-import vm from "node:vm";
+import { loadTsModule } from "./lib/load-ts.mjs";
 
-// Compile src/lib/city.ts in-process — same pattern test-atlas.mjs uses.
-const rootUrl = new URL("../", import.meta.url);
-const source = readFileSync(fileURLToPath(new URL("src/lib/city.ts", rootUrl)), "utf8");
-const code = ts.transpileModule(source, {
-  compilerOptions: {
-    module: ts.ModuleKind.CommonJS,
-    target: ts.ScriptTarget.ES2020,
-    esModuleInterop: true,
-  },
-  fileName: "src/lib/city.ts",
-}).outputText;
-const mod = { exports: {} };
-vm.runInNewContext(code, { module: mod, exports: mod.exports, require: () => ({}), Math, Object }, { filename: "src/lib/city.ts" });
+// Compile src/lib/city.ts through the shared loader. This used to be a
+// private vm.runInNewContext copy, and that separate realm is exactly what
+// scripts/lib/load-ts.mjs exists to end: an array minted in a vm context
+// carries a foreign Array.prototype, so `assert.deepStrictEqual` rejects
+// SEASON_ORDER against a literal that prints identically — a false red.
+const mod = loadTsModule("src/lib/city.ts");
 const {
   roleForDwell,
   needAnsweredBy,
@@ -53,7 +43,7 @@ const {
   LEAVING_UNMET_MS,
   LEAVING_FADE_MS,
   STANDING_STILL_MS,
-} = mod.exports;
+} = mod;
 
 // ——— the plot role ladder is a causal, monotone function of dwell —————————
 

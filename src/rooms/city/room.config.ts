@@ -56,6 +56,9 @@ const city = {
       "a small settlement whose parts are what they do — a plot is a home the moment it is planted, becomes a store, becomes an event, quiets to a tree; the people carry a need and walk to the plot that answers it.",
     moves: [
       "tap → ripples the ground, or brightens a plot if the tap lands on one",
+      "rapid taps → the train: three raps knock on the nearest door and its neighbors turn toward it; five ring a market bell that feeds the near and turns a leaver back; seven and more, a carillon — every plot rings and the town is called home",
+      "steady taps → the day entrains to the hand's tempo for a few breaths",
+      "scrub → stirs the weather the way the hand circles; the people caught inside turn to its center",
       "dwell → plants a home; keep holding and it densifies (home → store → event → tree)",
       "ceremony hold → seals the plot at its current role, kept between visits",
       "drag → traces a road; people walk faster where the road runs",
@@ -64,10 +67,11 @@ const city = {
       "twist3 → turns the year through the four seasons; the trees follow",
       "tap3 → tutti; bells ring across the town, people move to the nearest event",
       "drag3 → weather; wind and rain roll across the settlement",
-      "hold3 → time dilation — the day runs at one quarter while held",
-      "tilt / knock / flip → rain leans in / the bell tolls / night falls",
+      "hold3 → time dilation — the day slows the longer the hold, toward stillness",
+      "tilt / knock / flip → rain leans in / the bell tolls as far as the rap was hard / night falls",
     ],
     finds: [
+      "a five-tap market bell reaches a person already walking out — fed at the edge of leaving, they turn back and settle",
       "a home spawns one to three residents deterministically from its own seed — the same seed always brings the same people",
       "roads are only ever as fast as the people who use them; a road with no traffic is just a line you drew",
       "a hungry city with no stores is a city standing still: people wait rather than wander when nothing answers their need",

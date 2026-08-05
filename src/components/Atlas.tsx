@@ -54,7 +54,7 @@ import {
 } from "@/lib/atlas-world";
 import { getFieldAudio } from "@/lib/audio";
 import { PLANET_DESCENT_KEY } from "@/lib/stars/nestedCosmos";
-import { intensityFrom, THRESHOLDS } from "@/lib/gesture/core";
+import { intensityFrom, tapTrainTier, THRESHOLDS } from "@/lib/gesture/core";
 import { attachGestures } from "@/lib/gesture";
 import { onVessel } from "@/lib/vessel";
 import * as haptics from "@/lib/haptics";
@@ -411,15 +411,19 @@ type PinchGesture = {
 // additive, mounted alongside via a second, noCapture attachGestures
 // call: three-finger tap (tutti), twist(2) (the lens — the traverse
 // chart, the map and not the territory, swells briefly), three-finger
-// drag (wind, drawn from the room's own weather), three-finger hold
+// drag (wind, leaning the way the hand pushed), three-finger hold
 // (time dilation — the sim clock driving every periodic wobble slows
-// continuously while held), and the vessel (shake echoes a gust, a
-// knock is tutti, face-down is night). Three-finger twist (season) is
-// left unbound: the weather scheduler's own comment already says this
-// room keeps no day/night state, and inventing one only to answer a
-// gesture would be the forced meaning the grammar warns against. Tilt
-// is left unbound too — there is no honest gravity in a map seen from
-// directly above. The naturals a hand plants are the room's countable
+// continuously while held), three-finger twist (season — the atlas
+// keeps no day, but the sky keeps habits: the year turns and the
+// weather mix follows), the rapid-tap train (a second tap deepens the
+// ripple; three raise birds from the tapped ground; five call a
+// migration; seven and more, the whole sky answers), a circular scrub
+// (stirs the cloud shadows along the winding), a steady rhythm (the
+// weather arrives on the hand's pulse for a few rounds), and the
+// vessel (shake gusts by how hard it was shaken, a knock is tutti,
+// face-down is night). Tilt is left unbound — there is no honest
+// gravity in a map seen from directly above (the registry carries the
+// sentence). The naturals a hand plants are the room's countable
 // material; the shared <LetGo/> below is their whole-field clear. A
 // per-mark ceremony-hold delete was deliberately not added: it would
 // share the same touch as the existing plant timer and could delete
@@ -913,14 +917,20 @@ export default function Atlas() {
     // ── ambient cloud shadows ────────────────────────────────────
     // 4 soft gray radial gradients slowly drift W→E at slightly
     // different speeds so the day visibly passes over the land.
-    type Cloud = { x: number; y: number; r: number; vx: number; alpha: number };
-    const clouds: Cloud[] = Array.from({ length: 4 }, () => ({
-      x: Math.random() * 1.4 - 0.2,
-      y: 0.08 + Math.random() * 0.74,
-      r: 0.16 + Math.random() * 0.10,
-      vx: 0.008 + Math.random() * 0.013, // fraction of viewport width per second
-      alpha: 0.04 + Math.random() * 0.05,
-    }));
+    // `vx0` is each cloud's own resting pace: a scrub whips `vx` away from
+    // it and the draw loop relaxes back, so a stirred sky always settles.
+    type Cloud = { x: number; y: number; r: number; vx: number; vx0: number; alpha: number };
+    const clouds: Cloud[] = Array.from({ length: 4 }, () => {
+      const vx = 0.008 + Math.random() * 0.013; // fraction of viewport width per second
+      return {
+        x: Math.random() * 1.4 - 0.2,
+        y: 0.08 + Math.random() * 0.74,
+        r: 0.16 + Math.random() * 0.10,
+        vx,
+        vx0: vx,
+        alpha: 0.04 + Math.random() * 0.05,
+      };
+    });
 
     // ── weather events ────────────────────────────────────────────
     // Jittered self-rescheduling setTimeout. Six kinds, weighted so
@@ -995,22 +1005,41 @@ export default function Atlas() {
         dy: Math.sin(ang) * len,
       });
     };
+    // The room's slow cycle: the atlas keeps no day/night, but the sky
+    // keeps seasonal habits — three-finger twist turns this index and the
+    // weather mix follows. 0 spring · 1 summer · 2 autumn · 3 winter.
+    let seasonIdx = 0;
+    // Per-season spawn weights: flock, cloud, gust, sunbeam, migration —
+    // the meteor takes the remainder and stays rare in every year.
+    const SEASON_WEATHER_WEIGHTS = [
+      [0.40, 0.20, 0.10, 0.13, 0.12], // spring — the flocks return
+      [0.18, 0.16, 0.08, 0.42, 0.11], // summer — sunbeams own the land
+      [0.14, 0.20, 0.14, 0.10, 0.37], // autumn — the migrations cross
+      [0.14, 0.26, 0.40, 0.06, 0.09], // winter — gusts and low cloud
+    ] as const;
+    // Rhythm entrainment: a steady tap train sets the sky's cadence for a
+    // few rounds, then the scheduler returns to its own jittered pace.
+    let weatherEveryMs = 0;
+    let weatherPulsesLeft = 0;
     let weatherTimer: ReturnType<typeof setTimeout> | 0 = 0;
     const fireWeather = () => {
       if (!document.hidden) {
         const roll = Math.random();
-        // weighted: flock 25, cloud 22, gust 18, sunbeam 18, migration 12, meteor 5.
-        // Atlas has no explicit day/night state — the meteor just fires
-        // at its natural rare cadence and reads as a shooting star
-        // across the sky over the land.
-        if (roll < 0.25) spawnFlock();
-        else if (roll < 0.47) spawnCloud();
-        else if (roll < 0.65) spawnGust();
-        else if (roll < 0.83) spawnSunbeam();
-        else if (roll < 0.95) spawnMigration();
+        const w = SEASON_WEATHER_WEIGHTS[seasonIdx];
+        let acc = 0;
+        if (roll < (acc += w[0])) spawnFlock();
+        else if (roll < (acc += w[1])) spawnCloud();
+        else if (roll < (acc += w[2])) spawnGust();
+        else if (roll < (acc += w[3])) spawnSunbeam();
+        else if (roll < (acc += w[4])) spawnMigration();
         else spawnMeteor();
       }
-      weatherTimer = setTimeout(fireWeather, 12000 + Math.random() * 8000);
+      const entrained = weatherPulsesLeft > 0 && weatherEveryMs > 0;
+      if (entrained) weatherPulsesLeft -= 1;
+      weatherTimer = setTimeout(
+        fireWeather,
+        entrained ? weatherEveryMs : 12000 + Math.random() * 8000,
+      );
     };
     weatherTimer = setTimeout(fireWeather, 5000 + Math.random() * 4000);
 
@@ -1020,14 +1049,18 @@ export default function Atlas() {
     // the grammar's material and frame verbs via useBandEdgeTravel).
     // noCapture keeps that state machine as the sole owner of pointer
     // capture; this layer only adds the verbs Atlas had none of yet.
-    // Exemptions, stated rather than forced: three-finger twist (season)
-    // has no honest target — the weather spawner's own comment already
-    // says the atlas keeps no day/night state, and inventing one only
-    // to bind this gesture would be exactly the forced meaning the
-    // grammar warns against.
     let timeScale = 1;
     let lensTimer: ReturnType<typeof setTimeout> | null = null;
     let twoTwistAcc = 0;
+    // three-finger twist accumulates toward a quarter-turn detent, then
+    // the year advances (or rewinds) one season.
+    let seasonTwistAcc = 0;
+    // three-finger drag accumulates pull so the wind answers with one
+    // leaning gust per armful, not one gust per pointer event.
+    let windAcc = 0;
+    // scrub half-turns already answered, so the stir sounds once per
+    // half-winding instead of chattering on every sample.
+    let stirTurns = 0;
     // One-finger hold gather: create at dwell, annihilate at ceremony.
     // Declared here so the handler and the overlay share one state object —
     // shipping the handler without this declaration is what broke the deploy.
@@ -1072,34 +1105,158 @@ export default function Atlas() {
     };
     const detachGrammar = attachGestures(stage, {
       tap: (e) => {
-        if (e.fingers !== 3) return;
-        // tutti — every alive thing on the map answers together: a
-        // gentle synchronized cloud/weather beat plus the touch itself.
-        setPulse({ x: e.x, y: e.y, key: Date.now(), intensity: 0.5 });
-        try { getFieldAudio().chime(); } catch { /* noop */ }
-        try { haptics.ripple(0.4); } catch { /* noop */ }
-        recordTape("ripple", 0.4, "atlas/tutti");
+        if (e.fingers === 3) {
+          // tutti — every alive thing on the map answers together, as
+          // loud as the hand meant it: the ripple, the chime, and the
+          // tape all ride e.intensity instead of a fixed pulse.
+          setPulse({ x: e.x, y: e.y, key: Date.now(), intensity: 0.35 + e.intensity * 0.5 });
+          try { getFieldAudio().chime(); } catch { /* noop */ }
+          try { haptics.ripple(0.25 + e.intensity * 0.45); } catch { /* noop */ }
+          recordTape("ripple", 0.3 + e.intensity * 0.4, "atlas/tutti");
+          return;
+        }
+        if (e.fingers !== 1 || e.count < 2) return;
+        // The rapid-tap train (tiers 1 / 3 / 5 / n). A bare tap is the
+        // water's own — the pointer state machine already answers it,
+        // scaled by intensityFrom — so this ladder starts at the second
+        // tap and climbs in the map's material: birds, then a
+        // migration, then the whole sky at once.
+        const tier = tapTrainTier(e.count);
+        if (e.count === 3) {
+          // three taps — birds rise from the tapped ground and cross
+          // the land on the side the hand chose.
+          addWeather({
+            kind: "flock",
+            t0: performance.now(),
+            duration: 12,
+            count: 4 + Math.round(e.intensity * 5),
+            yBase: Math.max(0.06, Math.min(0.6, e.y / Math.max(1, metricsRef.current.height))),
+            dir: e.x > metricsRef.current.width / 2 ? -1 : 1,
+            seed: (e.x * 7 + e.y * 13) % 1000,
+          });
+          setPulse({ x: e.x, y: e.y, key: Date.now(), intensity: 0.5 + e.intensity * 0.3 });
+          try { getFieldAudio().chime(); } catch { /* noop */ }
+          try { haptics.ripple(0.4 + e.intensity * 0.3); } catch { /* noop */ }
+          recordTape("ripple", 0.5, "atlas/train/3");
+          return;
+        }
+        if (e.count === 5) {
+          // five taps — the rare gift arrives on call: a migration
+          // crosses at the tapped latitude.
+          addWeather({
+            kind: "migration",
+            t0: performance.now(),
+            duration: 18,
+            count: 12 + Math.round(e.intensity * 10),
+            yBase: Math.max(0.05, Math.min(0.5, e.y / Math.max(1, metricsRef.current.height))),
+            dir: e.x > metricsRef.current.width / 2 ? -1 : 1,
+            seed: (e.x * 11 + e.y * 3) % 1000,
+          });
+          setPulse({ x: e.x, y: e.y, key: Date.now(), intensity: 0.7 + e.intensity * 0.25 });
+          try { getFieldAudio().bell(); } catch { /* noop */ }
+          try { haptics.roll(); } catch { /* noop */ }
+          recordTape("region", 0.65, "atlas/train/5");
+          return;
+        }
+        if (tier === "n") {
+          // seven and beyond — the crescendo: the whole sky answers at
+          // once, deeper with every further tap in the train.
+          const depth = Math.min(1, 0.7 + (e.count - 7) * 0.15);
+          spawnSunbeam();
+          spawnGust();
+          if (e.count === 7) spawnMeteor();
+          setPulse({ x: e.x, y: e.y, key: Date.now(), intensity: depth });
+          try { getFieldAudio().bell(); getFieldAudio().chime(); } catch { /* noop */ }
+          try { haptics.storm(); } catch { /* noop */ }
+          recordTape("region", depth, "atlas/train/n");
+          return;
+        }
+        // between the rungs the previous payoff deepens rather than a
+        // new one firing: a slightly stronger ripple, a touch to match.
+        setPulse({ x: e.x, y: e.y, key: Date.now(), intensity: 0.3 + e.intensity * 0.3 + e.count * 0.04 });
+        try { haptics.tap(); } catch { /* noop */ }
       },
       twist: (e) => {
-        if (e.fingers === 3 || e.phase !== "move") return;
+        if (e.phase !== "move") return;
+        if (e.fingers === 3) {
+          // season — the atlas keeps no day, but the sky keeps habits:
+          // a quarter-turn detent advances (or rewinds) the year, the
+          // weather mix follows, and the turned season announces itself
+          // in its own signature weather.
+          seasonTwistAcc += e.angle;
+          if (Math.abs(seasonTwistAcc) < Math.PI / 2) return;
+          const dir = seasonTwistAcc > 0 ? 1 : -1;
+          seasonTwistAcc = 0;
+          seasonIdx = (seasonIdx + dir + 4) % 4;
+          if (seasonIdx === 0) spawnFlock();
+          else if (seasonIdx === 1) spawnSunbeam();
+          else if (seasonIdx === 2) spawnMigration();
+          else spawnGust();
+          try { getFieldAudio().playNote(50 + seasonIdx * 5, 360); } catch { /* noop */ }
+          try { haptics.detent(); } catch { /* noop */ }
+          recordTape("region", 0.4, "atlas/season");
+          return;
+        }
         twoTwistAcc += e.angle;
         if (Math.abs(twoTwistAcc) < THRESHOLDS.twistDeadzoneRad * 3) return;
         twoTwistAcc = 0;
         setLensFlash(true);
         if (lensTimer) clearTimeout(lensTimer);
-        lensTimer = setTimeout(() => setLensFlash(false), 1600);
+        // velocity is an axis, not a switch: a slow turn raises the
+        // chart for a glance, a fast one holds it up longer.
+        lensTimer = setTimeout(
+          () => setLensFlash(false),
+          900 + Math.min(1400, Math.abs(e.velocity) * 500),
+        );
         try { haptics.lens(); } catch { /* noop */ }
         recordTape("region", 0.3, "atlas/lens");
       },
       drag: (e) => {
         if (e.fingers !== 3) return;
-        // wind — a gust drawn from the room's own weather, leaning the
-        // direction the hand pushed
-        spawnGust();
+        // wind — the gust leans the way the hand pushed and grows with
+        // its speed: pull accumulates into one armful per gust, never
+        // one gust per pointer event.
+        windAcc += e.dx;
+        if (Math.abs(windAcc) < 48) return;
         const speed = Math.hypot(e.vx, e.vy);
-        if (speed > 0.05) {
-          try { haptics.chop(); } catch { /* noop */ }
+        addWeather({
+          kind: "gust",
+          t0: performance.now(),
+          duration: 2 + Math.min(3, speed * 2),
+          y: Math.max(0.1, Math.min(0.85, e.y / Math.max(1, metricsRef.current.height))),
+          dir: windAcc > 0 ? 1 : -1,
+        });
+        windAcc = 0;
+        try { haptics.chop(); } catch { /* noop */ }
+      },
+      scrub: (e) => {
+        // stir — a circular path whips the cloud shadows along the
+        // winding; the sky visibly hurries (or reverses) under the
+        // hand, then settles back to each cloud's own resting pace.
+        const push = Math.max(-0.03, Math.min(0.03, (e.winding > 0 ? 1 : -1) * (0.008 + Math.abs(e.angularVelocity) * 0.012)));
+        for (const c of clouds) {
+          c.vx = Math.max(-0.06, Math.min(0.06, c.vx + push));
         }
+        const turn = Math.trunc(e.winding * 2);
+        if (turn !== stirTurns) {
+          stirTurns = turn;
+          try { getFieldAudio().chime(); } catch { /* noop */ }
+          try { haptics.ripple(Math.min(1, 0.3 + Math.abs(e.angularVelocity) * 0.4)); } catch { /* noop */ }
+          recordTape("ripple", 0.35, "atlas/stir");
+        }
+      },
+      rhythm: (e) => {
+        if (e.stability < 0.55) return;
+        // entrain — the sky answers on the hand's pulse: the next few
+        // weather events arrive on multiples of the tapped tempo, more
+        // of them the steadier the pulse was.
+        weatherEveryMs = Math.max(2500, Math.min(16000, (60000 / Math.max(1, e.bpm)) * 8));
+        weatherPulsesLeft = 2 + Math.round(e.stability * 2);
+        if (weatherTimer) clearTimeout(weatherTimer);
+        weatherTimer = setTimeout(fireWeather, Math.min(weatherEveryMs, 1200));
+        try { getFieldAudio().chime(); } catch { /* noop */ }
+        try { haptics.detent(); } catch { /* noop */ }
+        recordTape("ripple", 0.3 + e.stability * 0.3, "atlas/rhythm");
       },
       hold: (e) => {
         if (e.fingers === 3) {
@@ -1189,13 +1346,18 @@ export default function Atlas() {
     // seen from directly above, so it is left unbound.
     let nightTarget = 0;
     const detachVessel = onVessel({
-      shake: () => {
-        spawnGust();
+      shake: (e) => {
+        // agitation in the sky's own material: a harder shake sends
+        // more gusts across the land, never the same one twice.
+        const gusts = 1 + Math.round(Math.min(2, e.intensity * 2));
+        for (let i = 0; i < gusts; i++) spawnGust();
         try { haptics.chop(); } catch { /* noop */ }
         try { getFieldAudio().chime(); } catch { /* noop */ }
       },
-      knock: () => {
-        setPulse({ x: (metricsRef.current.width || 0) / 2, y: (metricsRef.current.height || 0) / 2, key: Date.now(), intensity: 0.5 });
+      knock: (e) => {
+        // a rap on the case rings the map like tutti, as hard as it was
+        // struck.
+        setPulse({ x: (metricsRef.current.width || 0) / 2, y: (metricsRef.current.height || 0) / 2, key: Date.now(), intensity: 0.35 + e.intensity * 0.5 });
         try { getFieldAudio().bell(); } catch { /* noop */ }
         try { haptics.tap(); } catch { /* noop */ }
       },
@@ -1264,8 +1426,12 @@ export default function Atlas() {
       // three-finger hold dilates time: the drift (and, below, the
       // naturals' own idle wobble via `t`) slows continuously while held.
       for (const c of clouds) {
+        // a stirred sky settles: whatever a scrub whipped `vx` to, it
+        // relaxes back to this cloud's own resting pace.
+        c.vx += (c.vx0 - c.vx) * Math.min(1, dtSec * 0.25);
         c.x += c.vx * dtSec * timeScale;
         if (c.x > 1.3) c.x = -0.3;
+        else if (c.x < -0.3) c.x = 1.3;
         const cx = c.x * w;
         const cy = c.y * h;
         const rad = c.r * Math.min(w, h) * 1.8;
