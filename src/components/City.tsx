@@ -557,6 +557,46 @@ const GROUND_FRAG = /* glsl */`
     float vig = smoothstep(1.30, 0.25, length((uv - 0.5) * vec2(uAspect, 1.0)));
     col *= mix(0.86, 1.02, vig);
 
+    // ── sun / moon bodies ────────────────────────────────────────────────
+    // The two lights that manufacture the diurnal arc. Both ride the same
+    // circle centered on the horizon: the sun's angle is uDayFrac*2π - π/2
+    // (rising at dawn, apex at noon, setting at dusk, hidden all night);
+    // the moon rides 12h offset, so it is unseen through the day and
+    // legible from dusk to dawn. Both are added after the day/night light
+    // multiplier — they are their own emitters, not surfaces being lit —
+    // and both are masked by (1 - ground), which is what makes the arc
+    // read as literal rising and setting instead of a fade. The sun's
+    // tint reads the same ember table the horizon glow uses: warm at the
+    // low hours, hot-white toward noon. The moon carries a cold indigo,
+    // dimmer, no ember warmth of its own.
+    {
+      float mask = 1.0 - ground;
+
+      // sun: warm at dawn/dusk, hot at noon; hidden below the horizon.
+      float sunA  = uDayFrac * 6.2831 - 1.5708;
+      vec2  sunP  = vec2(0.5 + 0.42 * sin(sunA), horizon - 0.42 * cos(sunA));
+      float sunD  = length((uv - sunP) * vec2(uAspect, 1.0));
+      float sunR  = 0.028;
+      float sunDisk = smoothstep(sunR, sunR * 0.80, sunD);
+      float sunHalo = exp(-pow(sunD / (sunR * 3.5), 2.0)) * 0.40;
+      float dayness = clamp(sh, 0.0, 1.0);
+      vec3  sunWarm = vec3(1.00, 0.48, 0.18);
+      vec3  sunHot  = vec3(1.00, 0.94, 0.78);
+      vec3  sunCol  = mix(sunWarm, sunHot, dayness);
+      col += (sunDisk + sunHalo) * sunCol * mask * (0.90 + 0.10 * uBreath);
+
+      // moon: 12h phase offset, cold indigo, dimmer read; hidden through
+      // the day, unmistakable at midnight.
+      float moonA = (uDayFrac + 0.5) * 6.2831 - 1.5708;
+      vec2  moonP = vec2(0.5 + 0.42 * sin(moonA), horizon - 0.42 * cos(moonA));
+      float moonD = length((uv - moonP) * vec2(uAspect, 1.0));
+      float moonR = 0.024;
+      float moonDisk = smoothstep(moonR, moonR * 0.80, moonD);
+      float moonHalo = exp(-pow(moonD / (moonR * 2.8), 2.0)) * 0.26;
+      vec3  moonCol  = vec3(0.68, 0.76, 0.94);
+      col += (moonDisk + moonHalo) * moonCol * mask * (0.55 + 0.10 * uBreath);
+    }
+
     // an idle drift on the noise — nothing waves in reduced motion; the
     // uTime uniform is what the CPU pauses when reduce is set.
     gl_FragColor = vec4(col, 1.0);
