@@ -61,6 +61,7 @@ import {
   noteForSeason,
   type CityRole,
 } from "@/lib/city-audio";
+import { createCityComposer, type CityComposer } from "@/lib/city-composer";
 
 /**
  * /city — a small settlement whose identity IS its causal roles.
@@ -840,8 +841,21 @@ export default function City() {
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.05;
-    renderer.autoClear = false;
+    // Composer's RenderPasses control their own clear. Renderer autoClear
+    // must stay on so composer's first pass gets a clean slate; the old
+    // manual renderer.clear() before render() is gone below.
+    renderer.autoClear = true;
     renderer.setClearColor(new THREE.Color(0x0e0f13), 1);
+    // Linear-workflow physically correct lights. r169's default is already
+    // useLegacyLights=false, but writing it out documents the invariant
+    // that B/C/D depend on — legacy lighting would double-gamma the IBL.
+    (renderer as unknown as { useLegacyLights?: boolean }).useLegacyLights = false;
+    // Shadow map on for the sun's directional light in the next PR. PCF
+    // soft shadows are what "tall buildings self-shadow cleanly" needs.
+    // Enabling here (before any mesh receives shadows) is free — Three
+    // only allocates the shadow atlas when a light casts.
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
     // Ground scene: a single NDC quad, own ortho camera. Renders first.
     const groundScene = new THREE.Scene();
@@ -943,6 +957,22 @@ export default function City() {
     const plotMesh = new THREE.Mesh(plotGeo, plotMat);
     plotMesh.frustumCulled = false;
     plotScene.add(plotMesh);
+
+    // ── composer ─────────────────────────────────────────────────────────
+    // The tick loop below hands its two RenderPasses to this composer so
+    // bright pixels can bloom, the workflow stays linear, and B/C/D have
+    // a chain to hang more passes on. Sized 1×1 here — the resize() call
+    // a few blocks down snaps it to the real canvas immediately.
+    const composer: CityComposer = createCityComposer({
+      renderer,
+      groundScene,
+      groundCam,
+      plotScene,
+      plotCam,
+      width: 1,
+      height: 1,
+      pixelRatio: dpr,
+    });
 
     // ── state ────────────────────────────────────────────────────────────
     const plots: Plot[] = [];
@@ -1092,6 +1122,9 @@ export default function City() {
       dpr = resolveDpr(governor.tier(), qualityCtx);
       renderer.setPixelRatio(dpr);
       renderer.setSize(width, height, false);
+      // Composer holds its own render targets — bloom pyramid especially
+      // is a stack of downsampled RTs whose size depends on this call.
+      composer.setSize(width, height, dpr);
       // fg overlay canvas — the thin 2D layer. Keeps its own DPR so a stroke
       // stays crisp regardless of the GL renderScale. Coin uses the same trick.
       fg.width = Math.floor(width * dpr);
@@ -1467,7 +1500,6 @@ export default function City() {
         return;
       }
       const tier = governor.beginFrame(now);
-      void tier; // detail is read per-frame from detailForTier below
       const dt = Math.min(66, now - lastFrameAt);
       lastFrameAt = now;
       cityTimeMs += dt * cityTimeScale;
@@ -1516,9 +1548,11 @@ export default function City() {
       groundUniforms.uBreath.value = breath;
       plotUniforms.uDayFrac.value = dayFraction(cityTimeMs);
       plotUniforms.uNight.value = nightAmt;
-      renderer.clear();
-      renderer.render(groundScene, groundCam);
-      renderer.render(plotScene, plotCam);
+      // The two RenderPasses live inside the composer now. Bloom threshold /
+      // strength / radius ride the same dayFraction the shaders do — the
+      // ember rises as the sun sets. Tier gates the bloom entirely on
+      // low/sleep so slow devices keep hitting frame budget.
+      composer.render(dayFraction(cityTimeMs), tier);
       drawOverlay();
       raf = requestAnimationFrame(tick);
     };
@@ -2308,6 +2342,9 @@ export default function City() {
       groundQuad.geometry.dispose();
       groundMat.dispose();
       plotMat.dispose();
+      // Composer holds bloom pyramid RTs — drop them before disposing
+      // the renderer that owns their GL context.
+      composer.dispose();
       renderer.dispose();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
