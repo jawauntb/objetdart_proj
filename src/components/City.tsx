@@ -116,6 +116,11 @@ import {
   type CityPedestrians,
   type PedestrianInput,
 } from "@/lib/city-pedestrians";
+import {
+  createPlotViewBuilder,
+  type PlotViewBuilder,
+  type PlotViewEntry,
+} from "@/lib/city-plot-view";
 
 /**
  * /city — a small settlement whose identity IS its causal roles.
@@ -1463,6 +1468,23 @@ export default function City() {
     // allocates nothing. We resize it in-place as people arrive/leave.
     const pedestrianInputs: PedestrianInput[] = [];
 
+    // Scratch plot-view array + builder reused each frame so
+    // syncSkylineInstances allocates nothing at steady state (previously
+    // built a fresh 48-object array + nested nearestRoadYaw scan per
+    // plot per frame — ~2900 short-lived objects/sec of GC pressure).
+    // roadsRev is a monotone counter the road-mutating paths bump; the
+    // builder's yaw cache invalidates only when rev advances or a plot's
+    // (x, y) moves — the two conditions that could change nearestRoadYaw.
+    const plotViewBuilder: PlotViewBuilder = createPlotViewBuilder();
+    const plotViewScratch: PlotViewEntry[] = [];
+    let roadsRev = 0;
+    // Reused sun-direction vector for the cloud slab's per-frame update.
+    // The prior tick loop called `citySun.sunPosition.clone().normalize()`
+    // every frame — one Vector3 allocation per frame at 60Hz. cityClouds
+    // copies the vector internally, so a stable scratch handed in is
+    // functionally identical.
+    const _sunDirScratch = new THREE.Vector3();
+
     // ── composer ─────────────────────────────────────────────────────────
     // The tick loop hands its passes to this composer so bright pixels
     // can bloom and the workflow stays linear. Sized 1×1 here — the
@@ -1920,6 +1942,7 @@ export default function City() {
               // the truncated list. One CanvasTexture upload per
               // eviction; still cheap.
               roads.shift();
+              roadsRev += 1;
               cityGround.setRoads(roads);
               // Traffic reads the road list wholesale; a shift on the
               // ground overlay must be mirrored here or the oldest road's
@@ -1932,6 +1955,7 @@ export default function City() {
               bornMs: cityTimeMs,
             };
             roads.push(road);
+            roadsRev += 1;
             // Stamp the road onto the ground's overlay atlas. One draw,
             // one texture upload — the 3D pass now shows the same road
             // the 2D overlay traces.
@@ -2410,7 +2434,10 @@ export default function City() {
       // multiplicative TINT (max component = 1 → neutral peak), not a
       // radiance — the sun's own intensity is already baked into
       // cloudSunColor and multiplying pure radiance would double-count.
-      const sunDir = citySun.sunPosition.clone().normalize();
+      // Reuse the pre-allocated _sunDirScratch — cityClouds.update copies
+      // the vector into its own uniform each frame, so a stable scratch
+      // is safe. Prior version allocated one Vector3 per frame here.
+      const sunDir = _sunDirScratch.copy(citySun.sunPosition).normalize();
       CLOUD_HORIZON_DIR.set(sunDir.x, 0.05, sunDir.z).normalize();
       const horiz = sampleSkyColor(citySky.currentState, CLOUD_HORIZON_DIR);
       // Guard against a Preetham sample that collapsed to near-zero at
@@ -3027,55 +3054,20 @@ export default function City() {
       // 12-quad crossed cluster, beyond that a Y-billboard.
       skyline.setLodCamera(cityCam.camera.position);
       skyline.setSeason(season);
-      const view = plots.map((plot) => {
-        const age = cityTimeMs - plot.bornMs;
-        const bornT = age >= growMs ? 1 : Math.max(0.02, age / growMs);
-        return {
-          role: plot.role,
-          seed: plot.seed,
-          x: plot.x,
-          y: plot.y,
-          sealed: plot.sealed,
-          bornT,
-          streetYaw: nearestRoadYaw(plot.x, plot.y),
-        };
-      });
+      // Reuse plotViewScratch — the builder mutates entries in place
+      // and only allocates on plot-count growth. streetYaw is cached
+      // per plot.id against roadsRev, so nearestRoadYaw runs only when
+      // the road list changed or the plot moved. See city-plot-view.ts
+      // and test-city-perf-allocs.mjs for the zero-alloc contract.
+      const view = plotViewBuilder.build(
+        plotViewScratch,
+        plots,
+        roads,
+        cityTimeMs,
+        growMs,
+        roadsRev,
+      );
       skyline.syncPlots(view);
-    }
-
-    // The nearest road segment's yaw, in radians, if one is close enough
-    // to visibly influence the plot's orientation. Returns NaN if no
-    // road is within ~0.12 (normalized-plot-coord units) of the plot;
-    // callers treat non-finite as "no snap, use seed drift". The angle
-    // is measured off the road's dx/dy in NORMALIZED coords, converted
-    // to world-space yaw by negating (world Z grows the opposite way of
-    // plot Y in normToWorld's frame).
-    function nearestRoadYaw(nx: number, ny: number): number {
-      const SNAP_RADIUS_SQ = 0.12 * 0.12;
-      let bestD2 = SNAP_RADIUS_SQ;
-      let bestAng = NaN;
-      for (const road of roads) {
-        const dx = road.x2 - road.x1;
-        const dy = road.y2 - road.y1;
-        const len2 = dx * dx + dy * dy;
-        if (len2 < 1e-8) continue;
-        // Distance from (nx, ny) to the segment.
-        const t = Math.max(0, Math.min(1,
-          ((nx - road.x1) * dx + (ny - road.y1) * dy) / len2));
-        const px = road.x1 + t * dx;
-        const py = road.y1 + t * dy;
-        const d2 = (nx - px) ** 2 + (ny - py) ** 2;
-        if (d2 < bestD2) {
-          bestD2 = d2;
-          // normToWorld maps (nx, ny) → (worldX, worldZ) directly, so
-          // plot-space (dx, dy) becomes world-space (dx_world, dz_world).
-          // To align the building's default +Z axis with the road
-          // direction, yaw = atan2(dx_world, dz_world). Building faces
-          // then land parallel to the street.
-          bestAng = Math.atan2(dx, dy);
-        }
-      }
-      return bestAng;
     }
 
     // Integer → [0,1) hash, splashed on the same shape as Mulberry32's
@@ -3466,6 +3458,11 @@ export default function City() {
       plots.length = 0;
       people.length = 0;
       roads.length = 0;
+      roadsRev += 1;
+      // Drop the yaw cache — plot.id → yaw entries would leak between
+      // wipes since MAX_PLOTS = 48 keeps the cache small, but the clean
+      // sweep here matches the intent of onLetGo (nothing survives).
+      plotViewBuilder.clear();
       // Wipe the painted-road overlay too — LetGo is the room-wide clear
       // and the 3D pass must forget the roads the 2D overlay just did.
       cityGround.clearRoads();
