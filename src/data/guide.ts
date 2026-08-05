@@ -1392,10 +1392,12 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
     essence: "the whole album as one object — a fabric that wells under masses you place, threaded with a filament carrying every scale band as a bead.",
     moves: [
       "tap open fabric → a pulse that races at exactly light speed; tap a bead → hear that band's own register",
+      "rapid taps → three sound the nearest band with its two neighbors as one chord, five catch the light into orbit around the strike, seven and more ring the whole axis",
+      "drum two spots with alternating hands → each strike sends its own slow wave, the two zones in different registers",
       "hold open fabric (dwell) → a mass gathers, warping the fabric",
       "hold a built room's bead to the ceremony tier → travels there",
       "twist → drops the lens to the bare metric, the only place notation appears on the site",
-      "three-finger hold → time slows and the light itself nearly stands still",
+      "three-finger hold → time keeps slowing for as long as you hold, and the light itself nearly stands still",
     ],
     finds: [
       "your own tap and the light in the shader travel at exactly the same speed — race it and it never wins",
@@ -1410,9 +1412,12 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
     essence: "the entire scale axis drawn as a living tree, the quanta at the root and the fold at the crown, derived structurally from the site's own travel graph.",
     moves: [
       "tap a node → chimes at that band's register; tap open air → the tree leans gently",
+      "rapid taps on a node → three light its lineage down to the roots, five bloom its whole branch, seven and more rock the entire tree",
+      "tap a steady tempo → the tree falls into your pulse and rocks on it for a while",
       "pinch → zooms the whole view (the one room where pinch is a camera, not travel)",
       "hold a node to the ceremony tier → travels there",
       "three-finger tap → every node pulses in order, the whole site heard once as one glissando",
+      "three-finger hold → the vignettes keep slowing for as long as you hold",
       "twist → drops the lens to the bare derived graph",
     ],
     finds: ["the tree is never hand-authored — it's derived live from the same travel graph the rest of the site uses, so a cosmology change redraws it for free"],
@@ -1424,6 +1429,9 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
     essence: "one abstract structure compiled at once into five materials — sound, shape, text, space, touch — with a live table proving each still carries the same invariants.",
     moves: [
       "tap or hold → pours attention into the gathering; the longer you hold, the faster it pours",
+      "rapid taps → three braid the substrates into line, five throw the shuttle in one surge, seven and more saturate the gathering",
+      "circle a finger → stirs the weave at the speed you circle: one way aligns it, the other loosens",
+      "tap a steady tempo → the whole structure's clock falls into your pulse for a while",
       "hold to the ceremony tier, once the structure reaches agency → keeps a future, once",
       "pinch → reaches for a farther or nearer future to select",
       "twist → raises the lens onto the bare structure and its conservation law",

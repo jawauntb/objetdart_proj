@@ -25,6 +25,7 @@ import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import LetGo from "@/components/LetGo";
 import {
@@ -221,6 +222,10 @@ export default function StructureLoom() {
     let lastPhase: Phase = s.phase;
     let lastCross = 0; // audio time of last threshold entry (for flashes)
     let selShift = 0; // most recent selection shift, for the readout
+    let lastStirAt = 0; // scrub feedback throttle
+    // a steady tapped tempo entrains the structure's own clock for a while
+    let entrainMul = 1;
+    let entrainUntil = 0;
     // three-finger twist = season: leans the structure's own clock
     let season = 0;
     let seasonTarget = 0;
@@ -329,10 +334,11 @@ export default function StructureLoom() {
       },
       // knock = wake / ring the room: a rap on the case pours a small tutti
       // pulse (rhymes with /coin, /flowers, /growth, /overlook)
-      knock: () => {
-        pour = Math.min(1, pour + 0.12);
+      knock: ({ intensity }) => {
+        // a rap on the case pours by exactly how hard the case was struck
+        pour = Math.min(1, pour + 0.12 + Math.min(1, intensity) * 0.18);
         audio.chime();
-        try { haptics.ripple(0.4); } catch { /* noop */ }
+        try { haptics.ripple(0.3 + Math.min(1, intensity) * 0.4); } catch { /* noop */ }
       },
       // flip face-down = night: the loom dims and hushes until turned back
       flip: ({ faceDown }) => {
@@ -377,14 +383,46 @@ export default function StructureLoom() {
             }
             return;
           }
+          // the rapid-tap ladder (tiers 1/3/5/n) in the loom's own material:
+          // one pours, three cohere the substrates, five throw the shuttle,
+          // n saturates the gathering
+          const trainTier = tapTrainTier(e.count);
+          const depth = tapTrainDepth(e.count);
+          if (trainTier === "n") {
+            pour = 1;
+            audio.bell();
+            haptics.bloom();
+            return;
+          }
+          if (trainTier === 5) {
+            // the shuttle: a decisive surge of attention, thrown at once
+            pour = Math.min(1, pour + 0.45 + depth * 0.2);
+            const spec = compileSound(s, params);
+            audio.playTone(spec.rootHz * 2, 0.6);
+            haptics.detent();
+            return;
+          }
+          if (trainTier === 3) {
+            // the braid: the five substrates pull into line — coherence
+            // rises and the chord agrees with itself
+            s = { ...s, coherence: Math.min(1, s.coherence + 0.12 + depth * 0.1) };
+            const spec = compileSound(s, params);
+            audio.playTone(spec.rootHz, 0.7);
+            audio.playTone(spec.rootHz * 1.5, 0.6);
+            haptics.ripple(0.4 + depth * 0.3);
+            return;
+          }
           pourPulse(0.14 + 0.2 * e.intensity);
           audio.playNote(46 + Math.round(s.tension * 22 + s.reach * 8), 200);
           haptics.tap();
         },
         hold: (e) => {
           if (e.fingers === 3) {
-            // three-finger hold = time dilation while held.
-            clockScale = e.phase === "release" ? 1 : 0.25;
+            // three-finger hold = time dilation while held — deepening for
+            // as long as it stands, never the same at 900ms and 2400ms.
+            clockScale = e.phase === "release"
+              ? 1
+              : Math.max(0.15, 1 - 0.85 * Math.min(1, e.elapsed / 2000));
             return;
           }
           if (e.fingers !== 1) return;
@@ -445,9 +483,29 @@ export default function StructureLoom() {
           if (e.phase !== "move") return;
           lensTarget = Math.max(0, Math.min(1, lensTarget + e.angle / 1.6));
         },
-        scrub: () => {
-          pour = Math.min(1, pour + 0.12);
-          haptics.ripple(0.4);
+        scrub: (e) => {
+          // stirring pours at the speed the hand circles, and the direction
+          // acts on the weave: winding one way aligns the substrates
+          // (coherence gathers), the other way loosens them
+          const speed = Math.min(1, Math.abs(e.angularVelocity) * 0.2);
+          pour = Math.min(1, pour + 0.05 + speed * 0.1);
+          const dir = e.winding >= 0 ? 1 : -1;
+          s = { ...s, coherence: Math.max(0, Math.min(1, s.coherence + dir * (0.008 + speed * 0.02))) };
+          const nowMs = performance.now();
+          if (nowMs - lastStirAt > 600) {
+            lastStirAt = nowMs;
+            audio.playNote(40 + Math.round(Math.min(6, Math.abs(e.winding)) * 2), 140);
+            haptics.ripple(0.25 + speed * 0.25);
+          }
+        },
+        rhythm: (e) => {
+          // a steady tapped tempo entrains the structure's clock: the whole
+          // dynamical system runs at the hand's pulse for eight seconds
+          if (e.stability <= 0.7) return;
+          entrainMul = Math.max(0.5, Math.min(2, e.bpm / 72));
+          entrainUntil = performance.now() + 8000;
+          audio.playNote(38 + Math.round(entrainMul * 8), 200);
+          haptics.tap();
         },
       },
       { wheelZoom: false },
@@ -513,6 +571,8 @@ export default function StructureLoom() {
       const seasonIdx = Math.floor(((season % 4) + 4) % 4);
       const seasonMul = [1.25, 1.0, 0.8, 0.55][seasonIdx];
       dt *= clockScale * seasonMul;
+      // an entrained clock runs at the hand's tempo until the grip lapses
+      if (nowMs < entrainUntil) dt *= entrainMul;
 
       // ——— advance the ONE structure ———
       // tilt leans the gathering: a lean adds a little attention on its side.

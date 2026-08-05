@@ -37,6 +37,7 @@ import { useRouter } from "next/navigation";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import {
@@ -1068,6 +1069,66 @@ export default function OverlookTree() {
       }
     };
 
+    // the tapped node's lineage: its branch walked in to the trunk, then the
+    // trunk walked down to the roots — the containment chain made visible
+    const idxOf = (id: string) => NODES.findIndex((q) => q.id === id);
+    const lineageOf = (i: number): number[] => {
+      const path: number[] = [i];
+      let n: OverlookNode | undefined = NODES[i];
+      while (n && !n.onTrunk && n.parent) {
+        const pi = idxOf(n.parent);
+        if (pi < 0) break;
+        path.push(pi);
+        n = NODES[pi];
+      }
+      if (n && n.onTrunk) {
+        for (let k = TREE.trunk.indexOf(n.id) - 1; k >= 0; k--) path.push(idxOf(TREE.trunk[k]));
+      }
+      return path;
+    };
+    const glowEdgeBetween = (ai: number, bi: number, amount: number) => {
+      const a = NODES[ai].id;
+      const b = NODES[bi].id;
+      const key = a < b ? `${a}|${b}` : `${b}|${a}`;
+      edgeGlow.set(key, Math.max(edgeGlow.get(key) ?? 0, amount));
+    };
+    const descendantsOf = (i: number): number[] => {
+      const rootId = NODES[i].id;
+      const out: number[] = [];
+      for (let k = 0; k < NODES.length; k++) {
+        if (k === i) continue;
+        let at: OverlookNode | undefined = NODES[k];
+        let hops = 0;
+        while (at && at.parent && hops <= NODES.length) {
+          if (at.parent === rootId) { out.push(k); break; }
+          const pi = idxOf(at.parent);
+          at = pi >= 0 ? NODES[pi] : undefined;
+          hops += 1;
+        }
+      }
+      return out;
+    };
+
+    // a steady tapped tempo entrains the tree's own lean: it rocks on the
+    // hand's pulse for eight beats, then the breeze takes it back
+    let rhythmTimer: ReturnType<typeof setInterval> | null = null;
+    const entrain = (bpm: number) => {
+      const interval = Math.max(280, Math.min(1500, 60000 / bpm));
+      let beats = 0;
+      if (rhythmTimer) clearInterval(rhythmTimer);
+      rhythmTimer = setInterval(() => {
+        beats += 1;
+        if (beats > 8) {
+          if (rhythmTimer) clearInterval(rhythmTimer);
+          rhythmTimer = null;
+          return;
+        }
+        if (!reduce) swayVel += (beats % 2 === 0 ? 1 : -1) * 0.22;
+        note(31 + (beats % 2) * 4, Math.min(180, interval * 0.4));
+        try { haptics.tap(); } catch { /* noop */ }
+      }, interval);
+    };
+
     const dropLeaves = (intensity: number) => {
       const n = Math.min(LEAF_MAX - leaves.length, 3 + Math.round(intensity * 4));
       for (let k = 0; k < n; k++) {
@@ -1101,6 +1162,47 @@ export default function OverlookTree() {
         const { x, y } = toLocal(e.x, e.y);
         const i = nodeAt(x, y);
         if (i >= 0) {
+          // the rapid-tap ladder (tiers 1/3/5/n), in the tree's own
+          // structure: one chimes the band, three light its lineage down to
+          // the roots, five bloom its whole branch, n rock the entire tree
+          const trainTier = tapTrainTier(e.count);
+          const depth = tapTrainDepth(e.count);
+          if (trainTier === "n") {
+            tutti();
+            if (!reduce) {
+              shiver = Math.min(1, shiver + 0.4 + depth * 0.6);
+              swayVel += (x > width / 2 ? 1 : -1) * (0.3 + depth * 0.4);
+            }
+            dropLeaves(depth);
+            try { haptics.ripple(0.4 + depth * 0.4); } catch { /* noop */ }
+            return;
+          }
+          if (trainTier === 5) {
+            const branch = descendantsOf(i);
+            bloom[i] = Math.max(bloom[i], 0.7);
+            chimeNode(i, true);
+            branch.forEach((bi, k) => {
+              window.setTimeout(() => {
+                bloom[bi] = Math.max(bloom[bi], 0.6);
+                chimeNode(bi, true);
+              }, 90 + k * 90);
+            });
+            dropLeaves(0.6);
+            try { haptics.ripple(0.45); } catch { /* noop */ }
+            return;
+          }
+          if (trainTier === 3) {
+            const path = lineageOf(i);
+            path.forEach((pi, k) => {
+              window.setTimeout(() => {
+                swell[pi] = Math.max(swell[pi], 0.8);
+                if (k > 0) glowEdgeBetween(path[k - 1], pi, 1);
+                tone(nodeHz(NODES[pi]), 0.3);
+              }, k * 70);
+            });
+            try { haptics.ripple(0.35); } catch { /* noop */ }
+            return;
+          }
           chimeNode(i);
           return;
         }
@@ -1110,9 +1212,10 @@ export default function OverlookTree() {
       hold: (e) => {
         lastInteractionAt = performance.now();
         if (e.fingers === 3) {
-          // three fingers touch the law: every vignette slows ×0.25
+          // three fingers touch the law: every vignette slows — and keeps
+          // slowing the longer the hold stands, never the same at 900ms
+          // and 2400ms
           if (e.phase === "enter") {
-            timeScaleTarget = 0.25;
             note(24, 500);
             try {
               haptics.tap();
@@ -1120,7 +1223,8 @@ export default function OverlookTree() {
               /* noop */
             }
           }
-          if (e.phase === "release") timeScaleTarget = 1;
+          if (e.phase === "release") { timeScaleTarget = 1; return; }
+          timeScaleTarget = Math.max(0.12, 1 - 0.88 * Math.min(1, e.elapsed / 2200));
           return;
         }
         if (e.fingers !== 1) return;
@@ -1231,6 +1335,12 @@ export default function OverlookTree() {
           }
         }
       },
+      rhythm: (e) => {
+        lastInteractionAt = performance.now();
+        // a steady tapped tempo: the tree rocks on the hand's pulse
+        if (e.stability <= 0.7) return;
+        entrain(e.bpm);
+      },
     });
 
     // ————— the vessel: tilt = parallax of trunk vs branches vs vignettes;
@@ -1258,10 +1368,15 @@ export default function OverlookTree() {
         }
       },
       // knock = wake / ring the room: a rap on the case rings the whole
-      // tree (rhymes with /coin, /flowers, /growth)
-      knock: () => {
+      // tree (rhymes with /coin, /flowers, /growth) — and a harder rap
+      // rocks it harder
+      knock: ({ intensity }) => {
         lastInteractionAt = performance.now();
         tutti();
+        if (!reduce) {
+          shiver = Math.min(1, shiver + intensity * 0.4);
+          swayVel += intensity * 0.3;
+        }
       },
       // flip face-down = night: the tree dims and hushes until turned back
       flip: ({ faceDown }) => {
@@ -1608,6 +1723,7 @@ export default function OverlookTree() {
       wrap.removeEventListener("keydown", onKeyDown);
       wrap.removeEventListener("keyup", onKeyUp);
       mq.removeEventListener?.("change", onMq);
+      if (rhythmTimer) clearInterval(rhythmTimer);
       cancelAnimationFrame(raf);
     };
   }, [router]);
