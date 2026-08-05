@@ -519,7 +519,14 @@ function getWaveNormalTexture(): THREE.DataTexture {
 const WATER_PLANE_WIDTH = 96;
 const WATER_PLANE_DEPTH = 32;
 const WATER_PLANE_CENTER_Z = 50;
-const WATER_PLANE_Y = 0.05;
+/**
+ * World-space Y of the harbour surface. Exported so downstream passes
+ * (the participating-media fog raymarch inside city-godrays.ts) can
+ * bound their view rays against the SAME plane the water sits on,
+ * instead of hard-coding the constant in two places and drifting them
+ * silently.
+ */
+export const WATER_PLANE_Y = 0.05;
 
 // SSR march tuning — steps and distance chosen so a ~40-unit-tall tower
 // visible at ~20 units from the harbour resolves at least one hit per

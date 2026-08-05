@@ -47,6 +47,17 @@ const threeStub = {
     clone() { return new threeStub.Vector3(this.x, this.y, this.z); }
     project() { return this; }
   },
+  // Stub Matrix4 — city-godrays constructs identity mat4s for its
+  // uInverseProjection / uInverseView uniform defaults. The stub only
+  // needs a constructor and a `copy` method; no math is performed on
+  // these in the pure test path.
+  Matrix4: class {
+    constructor() { this.elements = new Array(16).fill(0); }
+    copy(o) {
+      for (let i = 0; i < 16; i += 1) this.elements[i] = o.elements[i];
+      return this;
+    }
+  },
   WebGLRenderTarget: class {
     constructor() {}
     dispose() {}

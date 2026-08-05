@@ -72,9 +72,53 @@ import {
   createCityGodraysPass,
   godraysGateOpen,
   godraysStrengthForDay,
+  volumetricFogDensityForDay,
   type CityGodraysPass,
 } from "@/lib/city-godrays";
 import type { QualityTier } from "@/lib/room-runtime";
+
+/**
+ * Per-frame parameters for the participating-media volumetric fog
+ * raymarch inside the god-rays pass.
+ *
+ * The composer needs a world-space sun direction (for the H-G phase
+ * function), the camera the raymarch reconstructs its view ray from
+ * (its projection + view matrices are inverted every tick), the water
+ * plane height (so the march bounds itself against the harbour surface
+ * instead of running to infinity), and a fog tint the world scene's
+ * FogExp2 also reads from — so the volumetric contribution enters the
+ * frame as the SAME sky the flat FogExp2 already reads against, and
+ * R10-7's flat-wall complaint dissolves.
+ *
+ * The composer computes `uFogDensity` itself from `dayFraction`; the
+ * frame does NOT carry it. This keeps the diurnal curve in one place
+ * — a future refactor cannot silently drift the peak/floor on one
+ * side while the test still passes on the other.
+ */
+export type VolumetricFogFrame = {
+  /** The perspective camera the world scene renders through. */
+  camera: THREE.PerspectiveCamera;
+  /**
+   * The sun's world-space position — the raymarch normalises this to
+   * a direction. The directional light points TOWARD the origin, so
+   * light.position IS the sun direction from the scene's viewpoint.
+   */
+  sunWorldPos: THREE.Vector3;
+  /**
+   * Fog tint the volumetric in-scatter carries. City.tsx samples this
+   * from the same `fogColorFromSky(citySky.currentState)` the world
+   * scene's FogExp2 reads — so the volumetric read is the same colour
+   * the wall read was, and the two agree on the horizon hue.
+   */
+  fogColor: THREE.Color;
+  /**
+   * World-space Y of the harbour plane. WATER_PLANE_Y from
+   * `src/lib/city-water.ts` (~0.05). The raymarch bounds itself
+   * against this plane so a ray looking downward from the camera
+   * stops at the water surface instead of continuing beneath it.
+   */
+  waterY: number;
+};
 
 export type CityComposer = {
   /**
@@ -96,6 +140,7 @@ export type CityComposer = {
     tier: QualityTier,
     pitch01?: number,
     sunScreen?: { x: number; y: number; visible: boolean },
+    volFog?: VolumetricFogFrame,
   ): void;
   /**
    * Resize the offscreen render targets to (width, height) in CSS pixels
@@ -515,6 +560,7 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
       tier: QualityTier,
       pitch01?: number,
       sunScreen?: { x: number; y: number; visible: boolean },
+      volFog?: VolumetricFogFrame,
     ) {
       // Tier gating. Passes are pre-constructed in the chain; we only
       // flip their `enabled` bit. The ground and plots still render
@@ -546,6 +592,11 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
         if (!alive.godrays) {
           godraysPass.enabled = false;
           godraysPass.uniforms.uStrength.value = 0;
+          // Zero the fog density on tier drop so a later re-entry into
+          // medium/high starts from a clean ramp — otherwise the
+          // leftover density from the last active frame would flash
+          // for one frame on re-entry.
+          godraysPass.uniforms.uFogDensity.value = 0;
         }
         lastTier = tier;
         // Force the ember + DOF + painterly + god-rays to recompute
@@ -654,39 +705,125 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
       // `tier === "high"` compare so the tier gate lives in one place —
       // a future refactor that adds god-rays at low tier flips only the
       // ladder.
+      // God-rays + participating-media volumetric fog.
+      // The pass now carries BOTH the shaft accumulator (gated to the
+      // ±0.08 horizon-crossing window) AND a 20-step fog raymarch that
+      // runs at a low but non-zero density all day — R10-7's fix. The
+      // pass is enabled whenever the tier says godrays are alive AND
+      // the fog frame is present; the shaft accumulator inside the
+      // shader short-circuits on uStrength=0 so on the ~85% of the day
+      // outside the shaft gate the fragment cost is fog-only (20 taps
+      // + one composition).
+      //
+      // If the caller does NOT hand us a `volFog` frame — this is the
+      // legacy no-CSM caller path or a pre-fog test bench — we fall
+      // back to the previous R2 behaviour: shafts-only, no fog. The
+      // check on `volFog` keeps the composer backwards-compatible so
+      // an older room can still mount it without hitting undefined
+      // matrix dereferences in the shader.
       if (aliveTier.godrays) {
         const gateOpen = godraysGateOpen(dayFraction);
         const sunVisible = sunScreen ? sunScreen.visible : false;
-        const active = gateOpen && sunVisible;
-        godraysPass.enabled = active;
-        if (active) {
-          // Strength ramp — pinned by test-city-godrays.mjs.
+        const shaftActive = gateOpen && sunVisible;
+        const fogActive = !!volFog;
+        // The pass is enabled whenever the fog frame is present OR the
+        // shafts are active. Fog-alone frames still write per-frame
+        // matrices so the raymarch reconstructs the current view ray.
+        godraysPass.enabled = shaftActive || fogActive;
+        if (godraysPass.enabled) {
+          // Shaft strength — pinned by test-city-godrays.mjs. When the
+          // gate is closed we write 0 so the shader's short-circuit
+          // takes the fast path.
           const dfSlot = Math.floor(dayFraction * 128);
           if (dfSlot !== lastGodraysStrengthSlot) {
-            const s = godraysStrengthForDay(dayFraction);
+            const s = shaftActive ? godraysStrengthForDay(dayFraction) : 0;
             godraysPass.uniforms.uStrength.value = s;
+            // Fog density rides the same slot so a single day-fraction
+            // change updates both curves at once — one JS write per
+            // slot for the two coupled uniforms.
+            godraysPass.uniforms.uFogDensity.value = fogActive
+              ? volumetricFogDensityForDay(dayFraction)
+              : 0;
             lastGodraysStrengthSlot = dfSlot;
+          } else if (!shaftActive && godraysPass.uniforms.uStrength.value !== 0) {
+            // Same-slot but shaft gate just closed: explicit zero so
+            // the previous frame's strength doesn't flash for one
+            // frame on a fast gate transit.
+            godraysPass.uniforms.uStrength.value = 0;
           }
-          // Sun UV — NDC → UV is (ndc + 1) * 0.5 on both axes; note the
-          // y-flip is NOT applied here because both the composer's
-          // render target and camera.project() use the same GL-style
-          // convention (y-up in NDC, y-up in UV). If a future renderer
-          // change flipped the target we would flip here too.
-          const sx = sunScreen!.x;
-          const sy = sunScreen!.y;
-          const slotX = Math.round(((sx + 1) * 0.5) * 128);
-          const slotY = Math.round(((sy + 1) * 0.5) * 128);
-          if (slotX !== lastGodraysSunSlotX || slotY !== lastGodraysSunSlotY) {
-            godraysPass.uniforms.uSunUv.value.set(
-              (sx + 1) * 0.5,
-              (sy + 1) * 0.5,
+
+          if (shaftActive) {
+            // Sun UV — NDC → UV is (ndc + 1) * 0.5 on both axes; note
+            // the y-flip is NOT applied here because both the composer's
+            // render target and camera.project() use the same GL-style
+            // convention (y-up in NDC, y-up in UV). If a future renderer
+            // change flipped the target we would flip here too.
+            const sx = sunScreen!.x;
+            const sy = sunScreen!.y;
+            const slotX = Math.round(((sx + 1) * 0.5) * 128);
+            const slotY = Math.round(((sy + 1) * 0.5) * 128);
+            if (slotX !== lastGodraysSunSlotX || slotY !== lastGodraysSunSlotY) {
+              godraysPass.uniforms.uSunUv.value.set(
+                (sx + 1) * 0.5,
+                (sy + 1) * 0.5,
+              );
+              lastGodraysSunSlotX = slotX;
+              lastGodraysSunSlotY = slotY;
+            }
+          }
+
+          // Volumetric fog uniforms — camera-derived quantities update
+          // every frame. The three mat4/vec3 writes are cheap: one
+          // camera-matrix inversion (Three.js caches internally when
+          // safe) and two vector copies. The alternative — quantising
+          // these to slots — would band the raymarch on a slow pan
+          // and defeat the participating-media illusion.
+          if (fogActive) {
+            const cam = volFog!.camera;
+            // Ensure the projection matrix is fresh; three.js updates
+            // it lazily on aspect changes but we want stability under
+            // resize.
+            cam.updateProjectionMatrix();
+            cam.updateMatrixWorld();
+            godraysPass.uniforms.uInverseProjection.value.copy(
+              cam.projectionMatrixInverse,
             );
-            lastGodraysSunSlotX = slotX;
-            lastGodraysSunSlotY = slotY;
+            godraysPass.uniforms.uInverseView.value.copy(cam.matrixWorld);
+            godraysPass.uniforms.uCameraPos.value.copy(cam.position);
+            // Sun direction — the raymarch reads this as a unit vector
+            // for the Henyey-Greenstein phase function. sunWorldPos
+            // is a placement at some large distance along the sun
+            // direction from the origin; normalising it lands the
+            // unit direction we need.
+            const s = volFog!.sunWorldPos;
+            const invLen = 1 / Math.max(1e-6, Math.hypot(s.x, s.y, s.z));
+            godraysPass.uniforms.uSunDir.value.set(
+              s.x * invLen,
+              s.y * invLen,
+              s.z * invLen,
+            );
+            // Fog tint from the world scene's horizon sample — the
+            // SAME hue the flat FogExp2 already carries. R10-7's fix
+            // requires the volumetric read to agree with the flat
+            // read; passing the same colour is what does it.
+            const c = volFog!.fogColor;
+            godraysPass.uniforms.uFogColor.value.set(c.r, c.g, c.b);
+            // Water plane Y — the raymarch bounds itself against this
+            // so a downward-looking ray stops at the harbour surface.
+            godraysPass.uniforms.uFogHeight.value = volFog!.waterY;
+            // Advance the jitter time uniform so temporal dither
+            // reshuffles the 20-tap raymarch each frame.
+            const nowMs =
+              typeof performance !== "undefined" &&
+              typeof performance.now === "function"
+                ? performance.now()
+                : 0;
+            godraysPass.uniforms.uTime.value = (nowMs - mountEpochMs) / 1000;
           }
         } else if (godraysPass.uniforms.uStrength.value !== 0) {
-          // Explicit zero so a next-frame re-enable (fast gate transit)
-          // doesn't flash the previous strength for one frame.
+          // Pass disabled — explicit zero so a next-frame re-enable
+          // (fast gate transit) doesn't flash the previous strength
+          // for one frame.
           godraysPass.uniforms.uStrength.value = 0;
         }
       }
