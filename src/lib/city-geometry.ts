@@ -61,9 +61,26 @@ import { normToWorld } from "@/lib/city-camera";
 import {
   drawEmissiveWindowCanvas,
   facadeMaterialFor,
-  makeEmissiveWindowTexture,
 } from "@/lib/city-facades";
 import { emissiveIntensityForDay, litFractionForDay } from "@/lib/city-windows";
+import {
+  hashUnit as hashUnitPure,
+  eventVariantForSeed as eventVariantForSeedPure,
+  type EventVariant as EventVariantPure,
+} from "@/lib/city-geometry-pure";
+import {
+  buildEventTower as buildEventTowerParts,
+  disposeBuiltEventTower,
+  overlayGherkinDiamondMask,
+  type BuiltEventTower,
+} from "@/lib/city-towers";
+
+// Re-export the pure helpers so existing importers of city-geometry
+// continue to work unchanged — the split into city-geometry-pure.ts
+// was a no-op at the module's public surface.
+export type EventVariant = EventVariantPure;
+export const hashUnit = hashUnitPure;
+export const eventVariantForSeed = eventVariantForSeedPure;
 
 /** The shape of an instance's per-plot state. */
 export type PlotInstance = {
@@ -116,16 +133,6 @@ export type SkylineOptions = {
   maxInstances: number;
   shadows?: boolean;
 };
-
-/** Deterministic unit-float hash from a seed integer and a small salt. */
-export function hashUnit(seed: number, salt: number): number {
-  let n = ((seed | 0) ^ (salt * 0x9e3779b1)) >>> 0;
-  n = Math.imul(n, 0x85ebca6b) >>> 0;
-  n = (n ^ (n >>> 13)) >>> 0;
-  n = Math.imul(n, 0xc2b2ae35) >>> 0;
-  n = (n ^ (n >>> 16)) >>> 0;
-  return n / 4294967295;
-}
 
 /**
  * The role → height ladder. Pinned by test-city-geometry.mjs:
@@ -193,61 +200,16 @@ export function hasChimneyForSeed(seed: number): boolean {
   return hashUnit(seed, 29) < 0.55;
 }
 
-/** Event tower silhouette variant. 0 = Gherkin, 1 = Salesforce
- *  ellipsoid-cap, 2 = Transamerica four-sided pyramid. */
-export type EventVariant = 0 | 1 | 2;
-export function eventVariantForSeed(seed: number): EventVariant {
-  const t = hashUnit(seed, 31);
-  return t < 0.4 ? 0 : t < 0.75 ? 1 : 2;
-}
+// EventVariant + eventVariantForSeed have moved to city-geometry-pure.ts
+// so both this module and city-towers.ts can import them without a
+// circular dep. Re-exported at the top for backward compat.
 
-// ── LatheGeometry profiles for event towers ─────────────────────────────
-//
-// Each profile is an array of Vector2(radius, y) with y in [0, 1]; the
-// caller scales the Lathe up to the tower's full height. Bottom → top.
-
-function gherkinProfilePoints(): THREE.Vector2[] {
-  const pts: THREE.Vector2[] = [];
-  const N = 20;
-  for (let i = 0; i <= N; i += 1) {
-    const y = i / N;
-    // Sinusoidal swell — narrow base, widest at ~55%, taper to a crown.
-    const swell = Math.sin(y * Math.PI) * 0.32;
-    const taper = 1 - Math.max(0, (y - 0.85) / 0.15) ** 1.4 * 0.85;
-    const r = (0.60 + swell) * taper;
-    pts.push(new THREE.Vector2(Math.max(0.02, r), y));
-  }
-  return pts;
-}
-
-function ellipsoidCapProfilePoints(): THREE.Vector2[] {
-  const pts: THREE.Vector2[] = [];
-  pts.push(new THREE.Vector2(0.55, 0.0));
-  pts.push(new THREE.Vector2(0.55, 0.05));
-  pts.push(new THREE.Vector2(0.58, 0.15));
-  pts.push(new THREE.Vector2(0.60, 0.35));
-  pts.push(new THREE.Vector2(0.60, 0.60));
-  pts.push(new THREE.Vector2(0.58, 0.75));
-  pts.push(new THREE.Vector2(0.56, 0.82));
-  const capN = 8;
-  for (let i = 1; i <= capN; i += 1) {
-    const t = i / capN;
-    const y = 0.82 + t * 0.18;
-    const r = 0.56 * Math.sqrt(Math.max(0, 1 - t * t));
-    pts.push(new THREE.Vector2(Math.max(0.02, r), y));
-  }
-  return pts;
-}
-
-function pyramidProfilePoints(): THREE.Vector2[] {
-  // Cylinder for 60% of the height, linear taper to a point. Combined
-  // with radialSegments=4 in the Lathe this reads as Transamerica.
-  const pts: THREE.Vector2[] = [];
-  pts.push(new THREE.Vector2(0.55, 0.0));
-  pts.push(new THREE.Vector2(0.55, 0.60));
-  pts.push(new THREE.Vector2(0.02, 1.0));
-  return pts;
-}
+// The LatheGeometry event-tower profiles used to live here. They now
+// live inside src/lib/city-towers.ts, where each profile is one of
+// three real silhouettes: Gherkin (a lathe body with a diamond mullion
+// mask), Salesforce (a four-step tapered cylinder stack capped by an
+// ellipsoid crown), Transamerica (a four-sided pyramid with two wing
+// prisms). The tallest 20% carry a spire. See city-towers.ts.
 
 // ── shared PBR sub-materials (roof / awning / plaza / trunk / etc) ───────
 
@@ -371,15 +333,18 @@ type ExtraInstanced = {
 };
 
 // ── event tower per-plot bookkeeping ─────────────────────────────────────
+//
+// Each event slot holds a Group into which the compiled tower's meshes
+// are parented, plus the last-built `BuiltEventTower` handle (or null
+// when the slot has never been populated). A seed change triggers a
+// full rebuild — different variants are structurally different (5
+// meshes vs 3 vs 1) so a lightweight swap wouldn't work.
 
 type EventPlotSlot = {
+  /** The wrapping Group added to the scene once. Position / yaw / scale
+   *  are written on this Group, not on the built tower's inner group. */
   group: THREE.Group;
-  mesh: THREE.Mesh | null;
-  material: THREE.MeshPhysicalMaterial | null;
-  emissiveCanvas: HTMLCanvasElement | null;
-  emissiveTexture: THREE.CanvasTexture | null;
-  seed: number;
-  variant: EventVariant;
+  built: BuiltEventTower | null;
   lastBakeSlot: number;
 };
 
@@ -647,53 +612,39 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
     const group = new THREE.Group();
     group.visible = false;
     eventRoot.add(group);
-    eventSlots.push({
-      group, mesh: null, material: null,
-      emissiveCanvas: null, emissiveTexture: null,
-      seed: 0, variant: 0, lastBakeSlot: -1,
-    });
+    eventSlots.push({ group, built: null, lastBakeSlot: -1 });
   }
 
-  function buildEventTower(slot: EventPlotSlot, seed: number, shadowsActive: boolean): void {
-    // Free the previous tower's GL resources so a role/seed change
-    // doesn't leak.
-    if (slot.mesh) {
-      slot.group.remove(slot.mesh);
-      slot.mesh.geometry.dispose();
+  // Build (or rebuild) the event tower at this slot from the plot's seed.
+  // Delegates to `city-towers.buildEventTower` which owns the variant
+  // silhouettes. The compiled tower's inner Group is re-parented into
+  // this slot's persistent Group so downstream setShadows / dispose can
+  // iterate one root per slot.
+  function buildEventForSlot(slot: EventPlotSlot, seed: number, shadowsActive: boolean): void {
+    if (slot.built) {
+      disposeBuiltEventTower(slot.built);
+      slot.built = null;
     }
-    if (slot.material) slot.material.dispose();
-    if (slot.emissiveTexture) slot.emissiveTexture.dispose();
-
+    // Clear the persistent group before adding the new tower's meshes.
+    while (slot.group.children.length) {
+      slot.group.remove(slot.group.children[0]);
+    }
     const variant = eventVariantForSeed(seed);
-    slot.seed = seed;
-    slot.variant = variant;
-    slot.lastBakeSlot = -1;
-
-    const profile = variant === 0 ? gherkinProfilePoints()
-                  : variant === 1 ? ellipsoidCapProfilePoints()
-                  : pyramidProfilePoints();
-    const radial = variant === 2 ? 4 : 24;
-    const geo = new THREE.LatheGeometry(profile, radial);
-
-    // Material — MeshPhysicalMaterial via facadeMaterialFor("event").
-    const mat = facadeMaterialFor("event", seed) as THREE.MeshPhysicalMaterial;
     const dims = EMISSIVE_CANVAS_SIZE.event;
-    const emiss = makeEmissiveWindowTexture("event", seed, 0.6, { width: dims.w, height: dims.h });
-    slot.emissiveCanvas = emiss.canvas;
-    slot.emissiveTexture = emiss.texture;
-    emiss.texture.wrapS = THREE.RepeatWrapping;
-    emiss.texture.wrapT = THREE.ClampToEdgeWrapping;
-    mat.emissive = new THREE.Color(0xffffff);
-    mat.emissiveMap = emiss.texture;
-    mat.emissiveIntensity = 0;
-    mat.needsUpdate = true;
-
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.castShadow = shadowsActive;
-    mesh.receiveShadow = shadowsActive;
-    slot.group.add(mesh);
-    slot.mesh = mesh;
-    slot.material = mat;
+    const built = buildEventTowerParts({
+      variant,
+      seed,
+      dayFraction: 0.6,
+      shadowsOn: shadowsActive,
+      emissiveSize: { w: dims.w, h: dims.h },
+    });
+    // Re-parent the built tower's inner meshes into our persistent slot
+    // group so world-space transforms live on `slot.group`.
+    for (const m of built.meshes) {
+      slot.group.add(m);
+    }
+    slot.built = built;
+    slot.lastBakeSlot = -1;
   }
 
   // ── temporaries ──────────────────────────────────────────────────
@@ -798,12 +749,14 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
     }
   }
 
-  // Write one event tower slot. Rebuilds its Lathe geometry if the
-  // seed changed since last frame — the profile depends on
-  // eventVariantForSeed, so a seed change is a shape change.
+  // Write one event tower slot. Rebuilds the underlying geometry (via
+  // city-towers.buildEventTower) when the plot's seed changes, since a
+  // seed change is a variant change and each variant is a distinct
+  // Mesh count. On the same seed the existing tower is reused and
+  // only the group transform is rewritten.
   function writeEventPlot(slot: EventPlotSlot, plot: PlotInstance, shadowsActive: boolean): void {
-    if (!slot.mesh || slot.seed !== plot.seed) {
-      buildEventTower(slot, plot.seed, shadowsActive);
+    if (!slot.built || slot.built.seed !== plot.seed) {
+      buildEventForSlot(slot, plot.seed, shadowsActive);
     }
     const w = normToWorld(plot.x, plot.y);
     const fullH = heightForRole(plot.role, plot.seed);
@@ -812,16 +765,15 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
     const yaw = yawFor(plot);
     slot.group.position.set(w.x, 0, w.z);
     slot.group.rotation.set(0, yaw, 0);
-    // Lathe profile y is in [0,1]; scale to full height. X/Z use the
-    // plot's footprint (Lathe is symmetric so sx and sz produce a
-    // slightly elliptical tower — reads as bespoke architecture rather
-    // than a perfect cylinder).
+    // Tower parts are authored in a unit-height frame (y in [0,1]).
+    // Scale to full world dimensions. sx and sz differ slightly so
+    // the tower reads as bespoke architecture rather than a lathe.
     slot.group.scale.set(sx, yScale, sz);
     slot.group.visible = true;
     // Sealed towers brighten a touch — mirrors colorForInstance's rule.
-    if (slot.material) {
+    if (slot.built) {
       _c.copy(colorForInstance("event", plot.seed, plot.sealed));
-      slot.material.color.copy(_c);
+      slot.built.material.color.copy(_c);
     }
   }
 
@@ -900,8 +852,8 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
       (storeSlot.wallMaterial as THREE.MeshStandardMaterial).emissiveIntensity =
         emitScale * storeSlot.peakIntensity;
       for (const s of eventSlots) {
-        if (!s.material) continue;
-        s.material.emissiveIntensity = emitScale * PEAK_EMISSIVE.event;
+        if (!s.built) continue;
+        s.built.material.emissiveIntensity = emitScale * PEAK_EMISSIVE.event;
       }
 
       // ── rebake emissive atlases on city-hour boundaries ─────────
@@ -917,13 +869,18 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
         storeSlot.lastBakeSlot = hourSlot;
       }
       // Event towers: each has its OWN per-plot canvas keyed by its own
-      // seed. Redraw them all when the hour slot advances.
+      // seed. Redraw them all when the hour slot advances. Gherkin
+      // variants also re-overlay the diamond mullion mask so the
+      // curtain-wall crosshatch stays through the rebaked windows.
       for (const s of eventSlots) {
-        if (!s.emissiveCanvas || !s.emissiveTexture || !s.mesh) continue;
+        if (!s.built) continue;
         if (s.lastBakeSlot === hourSlot) continue;
         s.lastBakeSlot = hourSlot;
-        drawEmissiveWindowCanvas("event", s.seed, day, s.emissiveCanvas);
-        s.emissiveTexture.needsUpdate = true;
+        drawEmissiveWindowCanvas("event", s.built.seed, day, s.built.emissiveCanvas);
+        if (s.built.variant === 0) {
+          overlayGherkinDiamondMask(s.built.emissiveCanvas, s.built.seed);
+        }
+        s.built.emissiveTexture.needsUpdate = true;
       }
     },
 
@@ -952,9 +909,10 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
       flip(treeTrunk);
       flip(treeCanopy);
       for (const s of eventSlots) {
-        if (s.mesh) {
-          s.mesh.castShadow = on;
-          s.mesh.receiveShadow = on;
+        if (!s.built) continue;
+        for (const m of s.built.meshes) {
+          m.castShadow = on;
+          m.receiveShadow = on;
         }
       }
     },
@@ -972,9 +930,10 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
       if (homeEmiss.texture) try { homeEmiss.texture.dispose(); } catch { /* noop */ }
       if (storeEmiss.texture) try { storeEmiss.texture.dispose(); } catch { /* noop */ }
       for (const s of eventSlots) {
-        if (s.mesh) { try { s.mesh.geometry.dispose(); } catch { /* noop */ } }
-        if (s.material) s.material.dispose();
-        if (s.emissiveTexture) try { s.emissiveTexture.dispose(); } catch { /* noop */ }
+        if (s.built) {
+          disposeBuiltEventTower(s.built);
+          s.built = null;
+        }
       }
       ground.geometry.dispose();
       (ground.material as THREE.Material).dispose();
