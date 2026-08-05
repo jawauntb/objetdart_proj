@@ -40,6 +40,7 @@ import planets from "@/rooms/planets/room.config";
 import reef from "@/rooms/reef/room.config";
 import relativity from "@/rooms/relativity/room.config";
 import rocks from "@/rooms/rocks/room.config";
+import root from "@/rooms/root/room.config";
 import soil from "@/rooms/soil/room.config";
 import solar from "@/rooms/solar/room.config";
 import spring from "@/rooms/spring/room.config";
@@ -57,6 +58,7 @@ export const ROOM_MANIFESTS = [
   reef,
   relativity,
   rocks,
+  root,
   soil,
   solar,
   spring,
