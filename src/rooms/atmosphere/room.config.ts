@@ -126,6 +126,12 @@ const atmosphere = {
       ceremony_is:
         "gives a candle to the wind as a lantern — one addNatural into the shared 'sky' zone, kept between visits on the layer's own wind",
     },
+    // The column's sky is one continuous exponential wash (breath-modulated,
+    // never a hard specular cut), so edge_density sits at 3.5% against the
+    // 6% floor even though hue_diversity (15), luminance_range (230),
+    // spatial_entropy (7.3) and file_size_floor all clear theirs by a wide
+    // margin — see phase-9-pebble-and-threshold.md.
+    visual: { soft_glow: true },
   },
 } as const satisfies RoomManifest;
 
