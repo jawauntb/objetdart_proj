@@ -854,7 +854,12 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
   // allocate their own per-plot MeshPhysicalMaterial, but the shared
   // atlas feeds every one — a curtain-wall pattern is a curtain-wall
   // pattern; the per-plot difference lives in the emissive canvas.
-  const facadeAtlas: FacadeAtlas = buildFacadeAtlas({ tilePx: 256 });
+  // Bake at 512 px per tile — a 1024² master per PBR channel (2K facade
+  // atlas). The extra resolution reveals the per-brick chromatic
+  // dispersion, weathering streaks, and micro-normal grain that fold
+  // 48 extruded prisms into "close-zoom architecture" instead of "flat
+  // painted decal".
+  const facadeAtlas: FacadeAtlas = buildFacadeAtlas({ tilePx: 512 });
   const atlasSet: FacadeAtlasSet = {
     home:  facadeAtlas.textures.home,
     store: facadeAtlas.textures.store,
@@ -904,6 +909,14 @@ export function createSkylineScene(opts: SkylineOptions): SkylineScene {
   function unitBoxGeo(): THREE.BoxGeometry {
     const g = new THREE.BoxGeometry(1, 1, 1);
     g.translate(0, 0.5, 0);
+    // aoMap in three's WebGL renderer samples from uv2. BoxGeometry
+    // only carries a uv attribute by default, so we mirror uv → uv2
+    // here — the atlas's per-role aoMap then darkens the mortar valleys
+    // and mullion corners in the same window the base map draws.
+    const uv = g.getAttribute("uv") as THREE.BufferAttribute | undefined;
+    if (uv) {
+      g.setAttribute("uv2", new THREE.BufferAttribute(uv.array.slice(), 2));
+    }
     return g;
   }
 

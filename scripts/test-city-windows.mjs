@@ -199,7 +199,9 @@ const {
   WINDOW_FRAME_DEPTH_M,
   WINDOW_FRAME_OUTER,
   WINDOW_FRAME_INNER,
+  WINDOW_MULLION_HALF,
   windowFramePlacement,
+  windowFrameQuadrantHoles,
   WINDOW_GRIDS_PURE,
 } = frames;
 
@@ -360,10 +362,137 @@ assert.ok(
   assert.deepEqual(a, b, "windowFramePlacement is a pure function — same inputs give same outputs");
 }
 
+// ── mullion cross — the "+" that finally kills the decal read ────────────
+//
+// R10-2: each pane now carries a horizontal + vertical mullion bar carved
+// from the same ExtrudeShape as the outer reveal ring, so both cast a
+// continuous self-shadow at grazing sunset. The pure math that shapes
+// the four quadrant holes lives in city-window-frames-pure.ts; this
+// section pins its ladder so a refactor can't collapse the "+" back into
+// a single hole (decal read) or shrink the mullion so far the pane loses
+// its four-quadrant identity at close zoom.
+
+assert.equal(
+  typeof WINDOW_MULLION_HALF, "number",
+  "mullion half-width must be exported — the frame's cross carries real geometry",
+);
+assert.ok(
+  WINDOW_MULLION_HALF > 0.003 && WINDOW_MULLION_HALF < 0.025,
+  `mullion half-width ${WINDOW_MULLION_HALF} must sit between 0.003 (invisible) and 0.025 (eats the pane)`,
+);
+
+// Four quadrant holes — one per pane quadrant, so the shape material
+// between them forms the mullion cross.
+const holes = windowFrameQuadrantHoles();
+assert.equal(holes.length, 4, "the frame carves exactly four quadrant holes — a + cross of shape material between them");
+
+// Every hole must sit strictly inside the outer bounds.
+const outerBound = 0.5;
+for (const q of holes) {
+  assert.ok(
+    q.minX >= -outerBound - 1e-9 && q.maxX <= outerBound + 1e-9 &&
+    q.minY >= -outerBound - 1e-9 && q.maxY <= outerBound + 1e-9,
+    `quadrant hole (${q.minX}..${q.maxX}, ${q.minY}..${q.maxY}) must sit inside the outer frame`,
+  );
+  assert.ok(
+    q.maxX > q.minX && q.maxY > q.minY,
+    `quadrant hole must have positive area — got (${q.minX}..${q.maxX}, ${q.minY}..${q.maxY})`,
+  );
+}
+
+// The gap between adjacent quadrant holes IS the mullion — its width in
+// local-frame units must equal 2 × WINDOW_MULLION_HALF. Two adjacent
+// quadrants split by the vertical mullion: their inner edges (maxX of
+// the left one, minX of the right one) are ±MULLION_HALF respectively.
+{
+  // Sort holes by X quadrant.
+  const leftHoles = holes.filter(q => q.maxX <= 0 + 1e-9);
+  const rightHoles = holes.filter(q => q.minX >= 0 - 1e-9);
+  assert.equal(leftHoles.length, 2, "two quadrants sit left of the vertical mullion");
+  assert.equal(rightHoles.length, 2, "two quadrants sit right of the vertical mullion");
+  for (const q of leftHoles) {
+    assert.ok(
+      Math.abs(q.maxX + WINDOW_MULLION_HALF) < 1e-9,
+      `left-side quadrant's inner edge ${q.maxX} must sit at -MULLION_HALF (${-WINDOW_MULLION_HALF})`,
+    );
+  }
+  for (const q of rightHoles) {
+    assert.ok(
+      Math.abs(q.minX - WINDOW_MULLION_HALF) < 1e-9,
+      `right-side quadrant's inner edge ${q.minX} must sit at +MULLION_HALF (${WINDOW_MULLION_HALF})`,
+    );
+  }
+  // Same check on Y for the horizontal mullion.
+  const bottomHoles = holes.filter(q => q.maxY <= 0 + 1e-9);
+  const topHoles = holes.filter(q => q.minY >= 0 - 1e-9);
+  assert.equal(bottomHoles.length, 2, "two quadrants sit below the horizontal mullion");
+  assert.equal(topHoles.length, 2, "two quadrants sit above the horizontal mullion");
+  for (const q of bottomHoles) {
+    assert.ok(
+      Math.abs(q.maxY + WINDOW_MULLION_HALF) < 1e-9,
+      `bottom quadrant's upper edge ${q.maxY} must sit at -MULLION_HALF (${-WINDOW_MULLION_HALF})`,
+    );
+  }
+  for (const q of topHoles) {
+    assert.ok(
+      Math.abs(q.minY - WINDOW_MULLION_HALF) < 1e-9,
+      `top quadrant's lower edge ${q.minY} must sit at +MULLION_HALF (${WINDOW_MULLION_HALF})`,
+    );
+  }
+}
+
+// The reveal ring width (outer bound minus inner opening bound) must
+// still exceed the mullion bar half-width so the "+" reads as an
+// internal cross, not as thicker than the ring around it. This preserves
+// the reference photo hierarchy: the reveal is the deepest step, the
+// mullion is the finer subdivision inside it.
+{
+  const innerBound = outerBound * (WINDOW_FRAME_INNER / WINDOW_FRAME_OUTER);
+  const revealRingHalfWidth = outerBound - innerBound;
+  assert.ok(
+    revealRingHalfWidth > WINDOW_MULLION_HALF + 1e-6,
+    `reveal ring width ${revealRingHalfWidth} must exceed mullion half-width ${WINDOW_MULLION_HALF} — the ring is the primary depth step`,
+  );
+}
+
+// The four quadrants must be symmetric across both axes — mirroring
+// Q_BL through origin lands on Q_TR, and Q_BR mirrors to Q_TL.
+{
+  function findQ(sx, sy) {
+    return holes.find(q =>
+      Math.sign(q.minX + q.maxX) === sx &&
+      Math.sign(q.minY + q.maxY) === sy,
+    );
+  }
+  const bl = findQ(-1, -1);
+  const tr = findQ( 1,  1);
+  const br = findQ( 1, -1);
+  const tl = findQ(-1,  1);
+  assert.ok(bl && tr && br && tl, "all four sign-quadrants must be present in the hole set");
+  assert.ok(
+    Math.abs(bl.minX + tr.maxX) < 1e-9 && Math.abs(bl.minY + tr.maxY) < 1e-9 &&
+    Math.abs(bl.maxX + tr.minX) < 1e-9 && Math.abs(bl.maxY + tr.minY) < 1e-9,
+    "bottom-left quadrant mirrors to top-right through the origin — the cross is centered",
+  );
+  assert.ok(
+    Math.abs(br.minX + tl.maxX) < 1e-9 && Math.abs(br.minY + tl.maxY) < 1e-9 &&
+    Math.abs(br.maxX + tl.minX) < 1e-9 && Math.abs(br.maxY + tl.minY) < 1e-9,
+    "bottom-right quadrant mirrors to top-left through the origin — the cross is centered",
+  );
+}
+
+// Determinism: two calls give the same rectangle set (no wall clock,
+// no per-call jitter — the frame geometry is baked once and shared).
+{
+  const a = windowFrameQuadrantHoles();
+  const b = windowFrameQuadrantHoles();
+  assert.deepEqual(a, b, "windowFrameQuadrantHoles is a pure function — one shared BufferGeometry across the whole settlement");
+}
+
 console.log(
   `city-windows ok: dawn ${dawn.toFixed(3)} → noon ${noon.toFixed(3)} → dusk ${dusk.toFixed(3)} → midnight ${midnight.toFixed(3)}, ` +
   `peak at hour ${peakHour.toFixed(3)}, ` +
   `seeds spread ${(max - min).toFixed(3)} at dusk with mean ${mean.toFixed(3)}, ` +
   `per-cell gate is monotone through the evening lift — the dusk moment is pinned. ` +
-  `Frame lattice: home=36, store=80, tree/event=0; ${WINDOW_FRAME_DEPTH_M * 100}cm protrusion; +Z / -Z / +X / -X faces land on the wall.`,
+  `Frame lattice: home=36, store=80, tree/event=0; ${WINDOW_FRAME_DEPTH_M * 100}cm protrusion; +Z / -Z / +X / -X faces land on the wall; mullion cross carved as four quadrant holes at ±${WINDOW_MULLION_HALF} — reveal ring + "+" cross share one ExtrudeGeometry.`,
 );

@@ -1,68 +1,68 @@
 /**
  * city-textures — the PBR facade atlas that makes 48 extruded prisms
- * finally read as architecture.
+ * finally read as architecture at close zoom.
  *
- * Before this module the /city skyline was a set of clean BoxGeometry /
- * LatheGeometry solids in per-role PBR materials. Silhouette held up at
- * a distance, but at the CLOSE zoom (the SF financial district / London
- * City reference plates) the eye reads surface detail before it reads
- * outline: brick coursing on the residential blocks, horizontal render
- * lines on plaster storefronts, curtain-wall mullion rhythm on the
- * glass towers, ridged bark on the park kerb. Without those cues the
- * facades sit as untextured Lambert-ish solids under the new sky, and
- * every downstream pass — sun, bloom, SSR — lands on a surface that
- * looks like a mock-up.
+ * BEFORE this pass the atlas was a set of clean binary predicates —
+ * brick / not brick, mullion / glass, groove / ridge — flattened into
+ * three luminance ramps: albedo, normal-height, roughness. That reads
+ * as "printed decal" at close zoom because a real brick wall is NEVER
+ * three luminance levels. It is per-brick chromatic dispersion, sub-
+ * brick grain, rain-driven staining below every mortar seam, small
+ * chips at the arris, faint efflorescence patches, and a micro-normal
+ * that never lies flat. A polished glass pane carries subtle streaks
+ * from the cleaning squeegee. A plaster wall carries a decade of
+ * capillary staining below every render line.
  *
- * The atlas is authored once, procedurally, at scene build time. Four
- * tiles, arranged as a 2×2 quad on one CanvasTexture:
+ * This pass keeps the same four tiles, the same layout, the same
+ * prime tiling. What changes is what happens INSIDE each tile:
  *
- *   ┌─────────────────┬─────────────────┐
- *   │ home:  brick    │ store: plaster  │
- *   │ 8cm × 24cm      │ 60cm horiz      │
- *   │ running bond    │ render lines    │
- *   ├─────────────────┼─────────────────┤
- *   │ event: mullion  │ tree:  bark     │
- *   │ 1.5m × 3.5m     │ 6cm grooves     │
- *   │ curtain wall    │ park kerb       │
- *   └─────────────────┴─────────────────┘
+ *   1. A deterministic 2-D value-noise hash + 4-octave fBm layered on
+ *      the raw predicates. Every pixel now carries a continuous grain
+ *      that averages to the predicate's mean but never sits at it.
  *
- * Each tile is rendered three times into three master canvases —
- * albedo (map), tangent-space normal (normalMap), roughness
- * (roughnessMap) — so a single procedural draw fills the whole PBR
- * material graph. Per-role Textures then crop the correct quadrant
- * out of each master and wrap freely, so a home wall can tile brick
- * across itself at 11×7 (prime) without leaking into the store or
- * event tile above. The prime-relative tiling is what breaks the
- * obvious repeat that gives away procedural textures.
+ *   2. Per-brick chromatic dispersion — each brick hashes to its own
+ *      (r, g, b) triple around the warm red-brown centroid, so a wall
+ *      reads as forty individually-fired bricks rather than one paint
+ *      colour with mortar. Includes small chip darkening near the
+ *      running-bond corners.
  *
- * The DOM-touching drawer sits behind `buildFacadeAtlas`. The pure
- * laws — TILE_LAYOUT, FACADE_REPEATS, the mortar / render-line /
- * mullion / bark predicates — live at the top of the file and stay
- * free of `three` and `document`, so scripts/test-city-textures.mjs
- * can pin them under node without a canvas.
+ *   3. Weathering. A vertical staining streak descends from every
+ *      mortar seam — capillary water carrying dissolved lime and dust.
+ *      Efflorescence spots on masonry. Streaks below the cornice on
+ *      plaster. Cleaning-squeegee streaks on glass.
  *
- * Sizes are in *real architectural units* (metres) so the atlas can
- * be re-authored at a higher resolution later without shifting the
- * coursing. A home tile represents a 2m × 2m patch of masonry; a
- * store tile represents a 2m × 2.5m patch of rendered stucco; an
- * event tile represents a 3m × 7m panel of curtain-wall glass (one
- * bay × two floors); a tree tile represents a 0.6m × 0.6m patch of
- * bark and stone kerb.
+ *   4. A real ambient-occlusion channel — the fourth PBR map, wired
+ *      through material.aoMap in city-facades.ts. Occlusion darkens
+ *      the mortar valleys, the mullion corners, the bark grooves, and
+ *      the render-line seams so the light response reads as recessed
+ *      geometry rather than a painted stripe.
  *
- * Nothing here changes the city.ts causal laws, the dwell ladder,
- * the emissive-window law, or any test that pins them. This module
- * is additive — it feeds `facadeMaterialFor` new map/normalMap/
- * roughnessMap textures and returns them for the scene to dispose.
+ *   5. A micro-normal layer that perturbs the tangent field on FLAT
+ *      surfaces — brick faces, plaster fields, glass panes — so the
+ *      sun rakes across a wall with a soft grain rather than a mirror.
+ *
+ * The atlas is authored once at scene-build time (still one bake, still
+ * pure GPU-once — never per-frame) at a HIGHER default resolution
+ * (512 px per tile, so a 1024² master canvas per map — 2K facade
+ * atlas). The per-role subtextures request `anisotropy = 8` so the
+ * grazing-angle shots down a street stay crisp instead of blurring.
+ *
+ * The pure predicates below still exist and still drive the higher-
+ * level laws (`homeBrickIsMortar` etc.). Tests in
+ * scripts/test-city-textures.mjs pin BOTH the old binary predicates
+ * (backwards compatible) AND the new detail layers (FBM determinism,
+ * weathering direction, AO ranges). Anything that reads the atlas
+ * gets four maps: map / normalMap / roughnessMap / aoMap.
+ *
+ * Nothing here changes the city.ts causal laws, the dwell ladder, the
+ * emissive-window law, or the curtain-wall shader. The atlas is a
+ * detail layer the geometry pass consumes; its colours multiply
+ * through each material's base tint.
  */
 
 import * as THREE from "three";
 
 // ── the four tiles: layout on the master atlas ──────────────────────────
-//
-// The atlas is a 2×2 grid. Each tile occupies exactly one quadrant.
-// UV space is [0,1] on the whole atlas; a tile's slice is a 0.5 × 0.5
-// window. TILE_LAYOUT is exported so the geometry side can compute
-// per-role UV offsets consistently with the drawer.
 
 export type FacadeTileRole = "home" | "store" | "event" | "tree";
 
@@ -85,25 +85,6 @@ export const TILE_LAYOUT: Record<FacadeTileRole, TileWindow> = {
 };
 
 // ── prime-relative wall repeats ──────────────────────────────────────────
-//
-// The dead giveaway of a procedural texture is a repeat count that lands
-// on a factor of the wall's own aspect. Set `.repeat` on each per-role
-// texture to a pair of primes and the pattern never lands on itself in
-// a period the eye can lock onto within a single facade.
-//
-// The numbers below are all prime. They come from a real-world sanity
-// check:
-//   home:  a 5m × 8m brownstone wall should read as ~11 brick tiles
-//          across and ~7 tiles tall (one tile = 2m × 2m of masonry).
-//   store: a wider 8m × 12m storefront reads at 13 × 5 (~2m × 2.5m
-//          tiles of rendered stucco; render lines every 60cm land
-//          coherent).
-//   event: a tall glass panel reads as 17 verticals × 23 horizontals
-//          (1.5m × 3.5m mullion cells stacked).
-//   tree:  the small plaza kerb tiles at 5 × 5 (a park has one plaza
-//          disc; the bark UVs feed the trunk cylinder).
-//
-// If a change here breaks primality, test-city-textures.mjs fires.
 
 export type UVRepeats = { u: number; v: number };
 
@@ -125,30 +106,19 @@ export const TILE_METRES: Record<FacadeTileRole, TileSize> = {
   tree:  { widthM: 0.6, heightM: 0.6 },
 };
 
-// ── the pure predicates: what is mortar / render line / mullion / groove ─
-//
-// The atlas is drawn by walking pixels and asking each of these functions
-// whether the pixel sits on a surface feature. All predicates take pixel
-// coordinates in [0, tilePx) and the tile's own pixel size, so the same
-// law drives the albedo canvas, the normal canvas, and the roughness
-// canvas — a caller can't accidentally draw mortar in one map without it
-// also appearing in the other. The tests pin these directly.
+/** Anisotropy set on every atlas subtexture. Grazing-angle shots down
+ *  a street need >=8 to stay crisp; 4 blurs the brick coursing at
+ *  street level. Kept as an exported constant so a governor tier can
+ *  ramp it if the GPU can afford more. */
+export const FACADE_ANISOTROPY = 8;
 
-/**
- * Home brick coursing law. A tile is `tilePx` × `tilePx` and represents
- * TILE_METRES.home (2m × 2m) of running-bond masonry with 8cm × 24cm
- * bricks and 1cm mortar. The predicate returns true for pixels that
- * land in the mortar between bricks. Every other course is offset by
- * half a brick — the running bond pattern.
- */
+// ── the pure predicates: what is mortar / render line / mullion / groove ─
+
 export function homeBrickIsMortar(px: number, py: number, tilePx: number): boolean {
-  // 25 courses of 8cm bricks in 2m of tile → row height = tilePx / 25.
-  // 8 bricks wide per course at 24cm each → brick width = tilePx / 8.
   const rowH = tilePx / HOME_BRICK_ROWS;
   const colW = tilePx / HOME_BRICK_COLS;
-  const mortar = Math.max(1, Math.floor(tilePx / 128)); // ~4px at 512, ~2px at 256
+  const mortar = Math.max(1, Math.floor(tilePx / 128));
   const row = Math.floor(py / rowH);
-  // Offset every other course by half a brick — the running bond.
   const shift = (row & 1) === 0 ? 0 : colW * 0.5;
   const yInRow = py - row * rowH;
   if (yInRow < mortar) return true;
@@ -161,13 +131,6 @@ export function homeBrickIsMortar(px: number, py: number, tilePx: number): boole
 export const HOME_BRICK_ROWS = 25;
 export const HOME_BRICK_COLS = 8;
 
-/**
- * Store plaster horizontal render line law. Rendered stucco walls in
- * London City / SF financial district have a subtle horizontal seam
- * every ~60cm where the render courses were struck. On a 2.5m tile
- * that lands at rows y = tilePx * n/4 (n = 1..3) — four visible seams
- * across the tile height.
- */
 export function storePlasterHasLine(py: number, tilePx: number): boolean {
   const period = tilePx / STORE_RENDER_LINES;
   const thickness = Math.max(1, Math.floor(tilePx / 256));
@@ -177,12 +140,6 @@ export function storePlasterHasLine(py: number, tilePx: number): boolean {
 
 export const STORE_RENDER_LINES = 4;
 
-/**
- * Event mullion grid vertical law. Real curtain-wall glass has narrow
- * vertical aluminium mullions on a ~1.5m spacing. On a 3m-wide tile
- * that lands at columns x = tilePx * n/2 (n = 0..1) — two full-height
- * mullions per tile bay.
- */
 export function eventMullionIsVertical(px: number, tilePx: number): boolean {
   const period = tilePx / EVENT_VERTICAL_MULLIONS;
   const half = Math.max(1, Math.floor(tilePx / 128));
@@ -190,13 +147,6 @@ export function eventMullionIsVertical(px: number, tilePx: number): boolean {
   return xMod < half || xMod > period - half;
 }
 
-/**
- * Event mullion grid horizontal law. Floor plates land every 3.5m —
- * on a 7m tile that's two horizontal bands. The horizontal spandrel
- * (the opaque strip covering the floor slab) is a thicker rhythm than
- * the vertical mullion, so bloom at dusk reads it as the floor line
- * separating one lit storey from the next.
- */
 export function eventMullionIsHorizontal(py: number, tilePx: number): boolean {
   const period = tilePx / EVENT_HORIZONTAL_FLOORS;
   const thickness = Math.max(2, Math.floor(tilePx / 64));
@@ -207,14 +157,6 @@ export function eventMullionIsHorizontal(py: number, tilePx: number): boolean {
 export const EVENT_VERTICAL_MULLIONS = 2;
 export const EVENT_HORIZONTAL_FLOORS = 2;
 
-/**
- * Tree bark groove law. A tile is a small 60×60cm patch of bark; the
- * grooves run mostly vertical (bark ridges track the trunk axis) with
- * a small horizontal jitter driven by px. A pixel is in a groove if
- * its column, offset by a slow sine of py, lands under the groove
- * threshold. This is enough to give the trunk texture that reads as
- * bark without a photo.
- */
 export function treeBarkHasGroove(px: number, py: number, tilePx: number): boolean {
   const period = tilePx / TREE_BARK_GROOVES;
   const jitter = Math.sin(py * 0.045) * (period * 0.28);
@@ -225,63 +167,218 @@ export function treeBarkHasGroove(px: number, py: number, tilePx: number): boole
 
 export const TREE_BARK_GROOVES = 6;
 
-// ── the roughness law ────────────────────────────────────────────────────
+// ── noise primitives ────────────────────────────────────────────────────
 //
-// Each surface feature has a canonical roughness value. Brick and mortar
-// are matte (~0.85); render lines on plaster are slightly rougher than
-// the flat wall (a scored seam catches dust); mullions are metal-painted
-// (~0.30, they read as anodised aluminium against the polished glass at
-// ~0.10); bark grooves are the roughest thing in the frame (0.95).
+// The predicates above give binary structure. The photoreal detail lives
+// in what happens INSIDE each region. These are the small building blocks
+// every enrichment below stacks on top of the predicates. All pure and
+// deterministic — the same (x, y, tilePx, role) reads the same value
+// forever, so the atlas bakes identically on every machine and the tests
+// can pin exact points.
 
-export function roughnessAt(role: FacadeTileRole, px: number, py: number, tilePx: number): number {
-  if (role === "home") {
-    return homeBrickIsMortar(px, py, tilePx) ? 0.92 : 0.78;
-  }
-  if (role === "store") {
-    return storePlasterHasLine(py, tilePx) ? 0.80 : 0.66;
-  }
-  if (role === "event") {
-    const isMullion =
-      eventMullionIsVertical(px, tilePx) || eventMullionIsHorizontal(py, tilePx);
-    return isMullion ? 0.34 : 0.09;
-  }
-  // tree
-  return treeBarkHasGroove(px, py, tilePx) ? 0.98 : 0.88;
+/** Two-argument hash mapping (nx, ny) → a stable value in [0, 1). */
+export function hash21(nx: number, ny: number): number {
+  const s = Math.sin(nx * 127.1 + ny * 311.7) * 43758.5453;
+  return ((s % 1) + 1) % 1;
 }
 
-// ── the normal-map height field ─────────────────────────────────────────
-//
-// Each surface feature displaces the tangent-space normal in a small,
-// consistent way. Mortar sinks below the brick face (a valley); render
-// lines are scored channels; mullions stand proud of the glass; bark
-// grooves are valleys in the trunk. The height field is a scalar in
-// [0, 1] where 0.5 is "flat with the wall surface"; the drawer computes
-// a normal from finite differences on the height field.
+/** Value noise: bilinear interpolation of hash21 on the integer lattice.
+ *  Returns a value in [0, 1). */
+export function valueNoise2(nx: number, ny: number): number {
+  const ix = Math.floor(nx);
+  const iy = Math.floor(ny);
+  const fx = nx - ix;
+  const fy = ny - iy;
+  const a = hash21(ix, iy);
+  const b = hash21(ix + 1, iy);
+  const c = hash21(ix, iy + 1);
+  const d = hash21(ix + 1, iy + 1);
+  // Smoothstep interpolation (Ken Perlin's fade) keeps the tangent
+  // continuous so a differentiated height field yields a smooth normal.
+  const ux = fx * fx * (3 - 2 * fx);
+  const uy = fy * fy * (3 - 2 * fy);
+  const abx = a * (1 - ux) + b * ux;
+  const cdx = c * (1 - ux) + d * ux;
+  return abx * (1 - uy) + cdx * uy;
+}
 
-export function normalHeightAt(role: FacadeTileRole, px: number, py: number, tilePx: number): number {
+/** Fractional Brownian motion: sum of `octaves` value-noise octaves
+ *  with lacunarity 2 and gain 0.5. Returns [0, 1] (normalised by the
+ *  geometric-sum of gains). Pure — deterministic on (nx, ny, octaves). */
+export function fbm2(nx: number, ny: number, octaves: number = 4): number {
+  let amp = 1;
+  let freq = 1;
+  let sum = 0;
+  let norm = 0;
+  for (let o = 0; o < octaves; o += 1) {
+    sum += amp * valueNoise2(nx * freq, ny * freq);
+    norm += amp;
+    amp *= 0.5;
+    freq *= 2;
+  }
+  return norm > 0 ? sum / norm : 0;
+}
+
+// ── weathering law ──────────────────────────────────────────────────────
+//
+// Real building walls have staining. Water enters at the mortar seam,
+// runs down the brick face, deposits dissolved lime as it evaporates.
+// The result: a vertical, tapering, darker streak below every seam.
+// Below a cornice on plaster, the same phenomenon draws long dark
+// bands from the render line to the wall's base. On a glass pane, the
+// stain reads as a soft cleaning-squeegee stripe.
+//
+// `weatheringStreak01` returns 0..1: 0 = no staining, 1 = heavy stain.
+// The streak descends from every mortar seam / render line / horizontal
+// mullion. The amount tapers over ~1/3 of a tile height. FBM modulates
+// the streak so it never draws a straight rectangle.
+
+/**
+ * Height (in tile pixels) below the nearest horizontal feature. Used
+ * by `weatheringStreak01` to drive the vertical taper. Returns 0 if
+ * the pixel is *on* a feature, up to `maxDropPx` below the feature.
+ */
+export function pxBelowFeature(
+  role: FacadeTileRole,
+  px: number,
+  py: number,
+  tilePx: number,
+): number {
+  // Find the y of the last horizontal feature above (or at) py.
+  // For each role: mortar seams, render lines, floor plates, or (for
+  // tree) the top of the tile.
+  let period = tilePx;
   if (role === "home") {
-    return homeBrickIsMortar(px, py, tilePx) ? 0.32 : 0.58;
+    period = tilePx / HOME_BRICK_ROWS;
+  } else if (role === "store") {
+    period = tilePx / STORE_RENDER_LINES;
+  } else if (role === "event") {
+    period = tilePx / EVENT_HORIZONTAL_FLOORS;
+  } else {
+    period = tilePx;
   }
-  if (role === "store") {
-    return storePlasterHasLine(py, tilePx) ? 0.42 : 0.54;
-  }
-  if (role === "event") {
-    const v = eventMullionIsVertical(px, tilePx);
-    const h = eventMullionIsHorizontal(py, tilePx);
-    if (v || h) return 0.66;
-    return 0.50;
-  }
-  // tree
-  return treeBarkHasGroove(px, py, tilePx) ? 0.30 : 0.62;
+  const yMod = py - Math.floor(py / period) * period;
+  return yMod;
 }
 
 /**
- * Finite-difference the height field into a tangent-space normal. The
- * returned vector is normalised; components are in [-1, 1]. This is the
- * value the atlas drawer would encode as (r = (nx+1)/2, g = (ny+1)/2,
- * b = (nz+1)/2) into a normalMap. Pure — a caller can pin the shape
- * without DOM.
+ * The staining intensity at a pixel. Ranges [0, 1]. Zero at the top
+ * of a period (dry masonry just above the mortar seam), rising sharply
+ * to peak a few pixels below the seam, then decaying to zero as the
+ * water runs out over the next ~1/3 of a tile. Horizontal position
+ * modulates by FBM to break the streak into vertical rivulets.
+ *
+ * The store's plaster carries stronger staining (Victorian render
+ * pulls water for longer); the event's glass carries only a faint
+ * squeegee streak; the tree's bark has no water staining (bark is
+ * absorbent, not shedding). Home masonry: moderate.
  */
+export function weatheringStreak01(
+  role: FacadeTileRole,
+  px: number,
+  py: number,
+  tilePx: number,
+): number {
+  if (role === "tree") return 0;
+  const period = role === "home"
+    ? tilePx / HOME_BRICK_ROWS
+    : role === "store"
+      ? tilePx / STORE_RENDER_LINES
+      : tilePx / EVENT_HORIZONTAL_FLOORS;
+  const drop = pxBelowFeature(role, px, py, tilePx);
+  const dropFrac = drop / Math.max(1, period);
+  // Peak envelope: rises for the first 8%, then decays over the rest.
+  const peakFrac = 0.08;
+  const envelope = dropFrac < peakFrac
+    ? dropFrac / peakFrac
+    : Math.max(0, 1 - (dropFrac - peakFrac) / (1 - peakFrac));
+  // Horizontal modulation: two-octave FBM breaks the streak into
+  // rivulets. The x-scale is a small number so streaks are ~10cm wide.
+  const rivulet = fbm2(px / (tilePx * 0.06), py / (tilePx * 0.24), 3);
+  // rivulet in [0,1]; center it so ~half the wall stays clean.
+  const rivGate = Math.max(0, rivulet - 0.42) / 0.58;
+  // Strength per role.
+  const strength = role === "store" ? 1.0 : role === "home" ? 0.7 : 0.35;
+  return envelope * rivGate * strength;
+}
+
+// ── micro-normal detail ─────────────────────────────────────────────────
+//
+// Even a flat brick face has grain — sand inclusions, firing scars, tiny
+// bloating from the kiln. The old normal map read three discrete levels
+// (mortar, flat wall, mullion). The new micro-normal layer adds a small
+// FBM height perturbation so the sun's grazing pass reveals the grain.
+//
+// `microHeight01` returns the perturbation added to `normalHeightAt`.
+// It stays small (±0.06) so the coursing structure still dominates the
+// finite-difference normal computation.
+
+export function microHeight01(
+  role: FacadeTileRole,
+  px: number,
+  py: number,
+  tilePx: number,
+): number {
+  // Different scales per role. Bricks have coarser grain than glass.
+  const scale = role === "home"
+    ? tilePx / 24
+    : role === "store"
+      ? tilePx / 48
+      : role === "event"
+        ? tilePx / 64
+        : tilePx / 12;
+  const g = fbm2(px / scale, py / scale, 3);
+  // g in [0,1]; centre on 0 with ±0.5 range, then damp to ±0.06.
+  return (g - 0.5) * 0.12;
+}
+
+// ── the roughness law (enriched) ────────────────────────────────────────
+
+export function roughnessAt(role: FacadeTileRole, px: number, py: number, tilePx: number): number {
+  // Base value: the same as before, driven by the binary predicate.
+  let base: number;
+  if (role === "home") {
+    base = homeBrickIsMortar(px, py, tilePx) ? 0.92 : 0.78;
+  } else if (role === "store") {
+    base = storePlasterHasLine(py, tilePx) ? 0.80 : 0.66;
+  } else if (role === "event") {
+    const isMullion =
+      eventMullionIsVertical(px, tilePx) || eventMullionIsHorizontal(py, tilePx);
+    base = isMullion ? 0.34 : 0.09;
+  } else {
+    base = treeBarkHasGroove(px, py, tilePx) ? 0.98 : 0.88;
+  }
+  // Weathering: stained regions read rougher (dust settles, film builds).
+  const w = weatheringStreak01(role, px, py, tilePx);
+  const weatheredBias = role === "event" ? 0.05 : 0.10;
+  base += w * weatheredBias;
+  // Micro-detail: small hash-driven jitter around the base value. Keep
+  // amplitude small so the roughness stays in-family (mortar still >
+  // brick, glass still low).
+  const noise = fbm2(px / (tilePx * 0.02), py / (tilePx * 0.02), 2);
+  base += (noise - 0.5) * 0.04;
+  return base < 0 ? 0 : base > 1 ? 1 : base;
+}
+
+// ── the normal-map height field (enriched) ──────────────────────────────
+
+export function normalHeightAt(role: FacadeTileRole, px: number, py: number, tilePx: number): number {
+  let h: number;
+  if (role === "home") {
+    h = homeBrickIsMortar(px, py, tilePx) ? 0.32 : 0.58;
+  } else if (role === "store") {
+    h = storePlasterHasLine(py, tilePx) ? 0.42 : 0.54;
+  } else if (role === "event") {
+    const v = eventMullionIsVertical(px, tilePx);
+    const hz = eventMullionIsHorizontal(py, tilePx);
+    h = (v || hz) ? 0.66 : 0.50;
+  } else {
+    h = treeBarkHasGroove(px, py, tilePx) ? 0.30 : 0.62;
+  }
+  h += microHeight01(role, px, py, tilePx);
+  return h < 0 ? 0 : h > 1 ? 1 : h;
+}
+
 export function normalAt(role: FacadeTileRole, px: number, py: number, tilePx: number): {
   nx: number;
   ny: number;
@@ -292,8 +389,6 @@ export function normalAt(role: FacadeTileRole, px: number, py: number, tilePx: n
   const hR = normalHeightAt(role, px + step, py, tilePx);
   const hU = normalHeightAt(role, px, py - step, tilePx);
   const hD = normalHeightAt(role, px, py + step, tilePx);
-  // Standard central-difference to a tangent normal. The z bump strength
-  // controls how deep the surface reads; 4 is a modest displacement.
   const z = 4.0;
   const nx = -(hR - hL);
   const ny = -(hD - hU);
@@ -302,71 +397,176 @@ export function normalAt(role: FacadeTileRole, px: number, py: number, tilePx: n
   return { nx: nx / mag, ny: ny / mag, nz: nz / mag };
 }
 
-// ── albedo colour law ────────────────────────────────────────────────────
+// ── ambient occlusion law ───────────────────────────────────────────────
 //
-// The atlas is a *detail* layer: the material's own base color multiplies
-// through, so the albedo values in the atlas are small variations around
-// mid-gray. Mortar reads a shade darker than brick; render lines a shade
-// darker than plaster; mullions much darker than glass; bark grooves
-// darker than the bark itself.
+// The AO channel darkens contact zones — the crook between a brick face
+// and its mortar bed, the corner where a mullion meets a spandrel, the
+// bottom of a bark groove. This is what makes a wall read as recessed
+// geometry rather than a painted stripe. Values in [0, 1]: 1 = fully lit,
+// 0 = deep contact shadow. The atlas encodes AO as a greyscale channel
+// (R=G=B=aoAt*255) and city-facades wires it through material.aoMap.
+//
+// The AO field is a convolution of the height field with a small
+// occluder kernel. We approximate with a cheap: "how many neighbours
+// within a small radius sit ABOVE this pixel's height?" — the more
+// occluders, the darker. That approximation matches real screen-space AO
+// well enough for a static baked map.
+
+export function aoAt(role: FacadeTileRole, px: number, py: number, tilePx: number): number {
+  const h0 = normalHeightAt(role, px, py, tilePx);
+  // A 4-tap ring at radius 2 pixels: cheap enough to bake but captures
+  // the mortar-valley / mullion-corner darkening the eye reads.
+  let occluders = 0;
+  const R = Math.max(1, Math.floor(tilePx / 128) + 1);
+  const samples: [number, number][] = [
+    [+R, 0], [-R, 0], [0, +R], [0, -R],
+    [+R, +R], [-R, +R], [+R, -R], [-R, -R],
+  ];
+  for (const [dx, dy] of samples) {
+    const hn = normalHeightAt(role, px + dx, py + dy, tilePx);
+    if (hn > h0 + 0.02) occluders += 1;
+  }
+  // Base AO: 1.0 (fully lit), drops proportional to occluders / 8.
+  let ao = 1 - (occluders / samples.length) * 0.55;
+  // Weathering also darkens (soot + film absorb light).
+  const w = weatheringStreak01(role, px, py, tilePx);
+  ao -= w * 0.12;
+  // Micro-noise for surface irregularity — very small.
+  const n = fbm2(px / (tilePx * 0.03), py / (tilePx * 0.03), 2);
+  ao += (n - 0.5) * 0.05;
+  return ao < 0 ? 0 : ao > 1 ? 1 : ao;
+}
+
+// ── albedo colour law (enriched with dispersion + weathering) ───────────
+//
+// Real fired brick shows chromatic dispersion — each brick fires slightly
+// differently in the kiln, so a wall shows a scattered range from paler
+// buff through the warm centroid down to deep umber. Efflorescence draws
+// pale ghosts on masonry. Weathering deposits darker streaks below every
+// seam. Glass panes carry cool squeegee streaks. Plaster reads warmer
+// where the sun hits, cooler where it stays damp.
 
 export type AlbedoRGB = { r: number; g: number; b: number };
 
+/** Per-brick chromatic centroid: two hashes drive brightness (all
+ *  channels together) and warmth (a subtle hue drift restricted to the
+ *  warm axis so r > g > b holds for every fired brick, not just on
+ *  average). Exported so tests can verify the wall reads as many
+ *  individually-fired bricks rather than one paint colour. */
+export function homeBrickChromatic(brickIdx: number): AlbedoRGB {
+  // Offsets on both axes guarantee non-zero inputs for brickIdx=0 so
+  // the corner brick doesn't collapse to a dark outlier.
+  const bright = hash21(brickIdx * 12.9898 + 3.71, brickIdx * 78.233 + 5.13);
+  const warmth = hash21(brickIdx * 5.113 + 1.79, brickIdx * 9.131 + 4.91);
+  // Brightness offset moves ALL channels together so it can't flip the
+  // channel ordering. Warmth offset shifts R most, G a touch, B not at
+  // all — a hotter fire never turns a brick blue.
+  const b0 = bright * 0.10 - 0.05;
+  const w0 = (warmth - 0.5) * 0.06;
+  return {
+    r: 0.60 + b0 + w0,
+    g: 0.36 + b0 + w0 * 0.4,
+    b: 0.28 + b0,
+  };
+}
+
 export function albedoAt(role: FacadeTileRole, px: number, py: number, tilePx: number): AlbedoRGB {
+  const w = weatheringStreak01(role, px, py, tilePx);
+  const grain = fbm2(px / (tilePx * 0.015), py / (tilePx * 0.015), 3);
+  const grainMod = (grain - 0.5) * 0.06;
+
   if (role === "home") {
-    // Brick warm red-brown; mortar a cooler mid-gray. Bricks also carry
-    // a small per-brick jitter so the wall isn't a uniform swatch —
-    // stamp the jitter from the brick index (which brick am I in?).
     const rowH = tilePx / HOME_BRICK_ROWS;
     const colW = tilePx / HOME_BRICK_COLS;
     const row = Math.floor(py / rowH);
     const shift = (row & 1) === 0 ? 0 : colW * 0.5;
     const col = Math.floor(((px + shift) % tilePx + tilePx) % tilePx / colW);
     const brickIdx = row * HOME_BRICK_COLS + col;
-    const jitter = ((Math.sin(brickIdx * 12.9898) * 43758.5453) % 1 + 1) % 1;
     if (homeBrickIsMortar(px, py, tilePx)) {
-      return { r: 0.42, g: 0.40, b: 0.38 };
+      // Mortar: cool mid-gray, weathering deepens it. Keep spread near
+      // zero (mortar is deliberately more neutral than brick).
+      let r = 0.42 + grainMod;
+      let g = 0.40 + grainMod;
+      let b = 0.38 + grainMod;
+      r -= w * 0.12;
+      g -= w * 0.12;
+      b -= w * 0.10;
+      return { r: clamp01(r), g: clamp01(g), b: clamp01(b) };
     }
-    const brickR = 0.62 + jitter * 0.10 - 0.05;
-    const brickG = 0.36 + jitter * 0.08 - 0.04;
-    const brickB = 0.30 + jitter * 0.06 - 0.03;
-    return { r: brickR, g: brickG, b: brickB };
+    // Brick: per-brick chromatic centroid plus intra-brick grain.
+    const c = homeBrickChromatic(brickIdx);
+    let r = c.r + grainMod;
+    let g = c.g + grainMod * 0.9;
+    let b = c.b + grainMod * 0.8;
+    // Weathering darkens brick asymmetrically (blue-ish film).
+    r -= w * 0.10;
+    g -= w * 0.08;
+    b -= w * 0.05;
+    // Efflorescence: rare pale spots, hash-gated on the brick index.
+    if (hash21(brickIdx * 13.7, brickIdx * 17.1) > 0.92) {
+      const spot = fbm2(px / (tilePx * 0.02), py / (tilePx * 0.02), 2);
+      const gate = Math.max(0, spot - 0.65) * 0.4;
+      r += gate; g += gate; b += gate;
+    }
+    return { r: clamp01(r), g: clamp01(g), b: clamp01(b) };
   }
+
   if (role === "store") {
     if (storePlasterHasLine(py, tilePx)) {
-      return { r: 0.72, g: 0.68, b: 0.62 };
+      let r = 0.72 + grainMod;
+      let g = 0.68 + grainMod;
+      let b = 0.62 + grainMod;
+      r -= w * 0.14; g -= w * 0.14; b -= w * 0.10;
+      return { r: clamp01(r), g: clamp01(g), b: clamp01(b) };
     }
-    // Very slight vertical striation on the plaster — a tiny sine on
-    // px so the wall doesn't stamp flat. The magnitude is small; the
-    // eye reads it as "hand-rendered" not "photograph of tile".
+    // Plaster body: warm cream with subtle striation + weathering streaks.
     const stria = Math.sin(px * 0.28) * 0.014;
-    return {
-      r: 0.86 + stria,
-      g: 0.82 + stria,
-      b: 0.76 + stria,
-    };
+    let r = 0.86 + stria + grainMod;
+    let g = 0.82 + stria + grainMod * 0.95;
+    let b = 0.76 + stria + grainMod * 0.85;
+    // Staining: gray-green cast below cornices (Victorian render tell).
+    r -= w * 0.20;
+    g -= w * 0.16;
+    b -= w * 0.12;
+    return { r: clamp01(r), g: clamp01(g), b: clamp01(b) };
   }
+
   if (role === "event") {
     if (eventMullionIsVertical(px, tilePx) || eventMullionIsHorizontal(py, tilePx)) {
-      return { r: 0.28, g: 0.30, b: 0.32 };
+      // Anodised aluminium — cool mid-grey with a hint of blue.
+      let r = 0.28 + grainMod * 0.5;
+      let g = 0.30 + grainMod * 0.5;
+      let b = 0.32 + grainMod * 0.5;
+      return { r: clamp01(r), g: clamp01(g), b: clamp01(b) };
     }
-    // Faint tint on the glass pane; the material color multiplies
-    // through and the environment IBL supplies the actual reflection.
-    return { r: 0.82, g: 0.86, b: 0.90 };
+    // Glass pane: faint cool tint. Cleaning streaks (weathering * cool tint).
+    let r = 0.82 + grainMod * 0.3;
+    let g = 0.86 + grainMod * 0.3;
+    let b = 0.90 + grainMod * 0.3;
+    r -= w * 0.06;
+    g -= w * 0.05;
+    b -= w * 0.03;
+    return { r: clamp01(r), g: clamp01(g), b: clamp01(b) };
   }
-  // tree — bark. Grooves are deep umber, ridges lighter.
+
+  // tree — bark. Grooves deep umber, ridges lighter with per-strip drift.
   if (treeBarkHasGroove(px, py, tilePx)) {
-    return { r: 0.28, g: 0.20, b: 0.14 };
+    const drift = fbm2(px / (tilePx * 0.03), py / (tilePx * 0.03), 2) * 0.10;
+    return {
+      r: clamp01(0.24 + drift),
+      g: clamp01(0.18 + drift * 0.9),
+      b: clamp01(0.12 + drift * 0.7),
+    };
   }
-  return { r: 0.46, g: 0.32, b: 0.22 };
+  const drift = fbm2(px / (tilePx * 0.02), py / (tilePx * 0.02), 3);
+  return {
+    r: clamp01(0.42 + drift * 0.14),
+    g: clamp01(0.30 + drift * 0.12),
+    b: clamp01(0.20 + drift * 0.10),
+  };
 }
 
 // ── primality — checked at import time ──────────────────────────────────
-//
-// The FACADE_REPEATS numbers are prime by construction; if a change ever
-// drops one of them to a composite the test-city-textures.mjs script
-// catches it, and this helper is exported so the geometry side can check
-// its own footprint values too.
 
 export function isPrime(n: number): boolean {
   if (!Number.isInteger(n) || n < 2) return false;
@@ -377,11 +577,6 @@ export function isPrime(n: number): boolean {
 }
 
 // ── the tiled UV window helpers ─────────────────────────────────────────
-//
-// A caller building a per-role UV range for a mesh's uv2 attribute (or
-// setting a texture's `.offset` and `.repeat` on the master atlas)
-// consumes these — the tile's UV rectangle on the atlas plus the
-// prime-relative repeat count for that role.
 
 export function tileUVWindowFor(role: FacadeTileRole): TileWindow {
   return TILE_LAYOUT[role];
@@ -392,11 +587,6 @@ export function tileRepeatsFor(role: FacadeTileRole): UVRepeats {
 }
 
 // ── the atlas — the DOM/three side ──────────────────────────────────────
-//
-// Everything below this line touches HTMLCanvasElement + THREE.CanvasTexture.
-// The test script does not exercise this half — it pins the pure predicates
-// above. The drawer walks pixels and calls the same predicates for the
-// albedo, normal, and roughness canvas so the three maps stay in sync.
 
 export type FacadeAtlas = {
   /** Full 2×2 albedo canvas (all four tiles). */
@@ -405,31 +595,40 @@ export type FacadeAtlas = {
   normalCanvas: HTMLCanvasElement;
   /** Full 2×2 roughness canvas. */
   roughnessCanvas: HTMLCanvasElement;
+  /** Full 2×2 ambient occlusion canvas. */
+  aoCanvas: HTMLCanvasElement;
   /** Per-role Textures — separate CanvasTextures cropped from each
-   *  master canvas so `.wrapS/T = RepeatWrapping` works cleanly without
-   *  a neighbouring tile bleeding in. */
+   *  master canvas so `.wrapS/T = RepeatWrapping` works cleanly. */
   textures: Record<FacadeTileRole, {
     map: THREE.CanvasTexture;
     normalMap: THREE.CanvasTexture;
     roughnessMap: THREE.CanvasTexture;
+    aoMap: THREE.CanvasTexture;
   }>;
   dispose(): void;
 };
 
 export type FacadeAtlasOptions = {
   /** Pixel size of each tile. The full atlas is 2× this on both axes.
-   *  Defaults to 256 (a 512×512 master canvas per map). */
+   *  Defaults to 512 — a 1024² master canvas per map (2K facade atlas).
+   *  Tests pin the small-tile path at 128 for speed; runtime scenes
+   *  bake at 512 so a close-zoom brick reads its grain honestly. */
   tilePx?: number;
+  /** Anisotropy set on every subtexture. Defaults to `FACADE_ANISOTROPY`
+   *  (8). Set higher only if the governor's inspection reports the GPU
+   *  supports 16 — most desktop GL contexts do, mobile clamps at 4. */
+  anisotropy?: number;
 };
 
 /**
- * Build one PBR facade atlas — albedo, tangent-space normal, roughness.
- * Runs at scene-build time; the result is passed to `facadeMaterialFor`
- * which assigns the map/normalMap/roughnessMap slots. Dispose on scene
- * unmount to free the GL textures.
+ * Build one PBR facade atlas — albedo, tangent-space normal, roughness,
+ * ambient occlusion. Runs at scene-build time; the result is passed to
+ * `facadeMaterialFor` which assigns the map/normalMap/roughnessMap/aoMap
+ * slots. Dispose on scene unmount to free the GL textures.
  */
 export function buildFacadeAtlas(opts: FacadeAtlasOptions = {}): FacadeAtlas {
-  const tilePx = Math.max(32, Math.floor(opts.tilePx ?? 256));
+  const tilePx = Math.max(32, Math.floor(opts.tilePx ?? 512));
+  const aniso = Math.max(1, Math.floor(opts.anisotropy ?? FACADE_ANISOTROPY));
   const atlasPx = tilePx * 2;
 
   const albedoCanvas = document.createElement("canvas");
@@ -441,23 +640,21 @@ export function buildFacadeAtlas(opts: FacadeAtlasOptions = {}): FacadeAtlas {
   const roughnessCanvas = document.createElement("canvas");
   roughnessCanvas.width = atlasPx;
   roughnessCanvas.height = atlasPx;
+  const aoCanvas = document.createElement("canvas");
+  aoCanvas.width = atlasPx;
+  aoCanvas.height = atlasPx;
 
   const albedoCtx = albedoCanvas.getContext("2d");
   const normalCtx = normalCanvas.getContext("2d");
   const roughCtx = roughnessCanvas.getContext("2d");
+  const aoCtx = aoCanvas.getContext("2d");
 
-  // Guard for headless environments (SSR paths). Without a 2D context,
-  // the atlas is still allocated but blank — the material falls back to
-  // its base color, which is the pre-atlas look.
-  if (albedoCtx && normalCtx && roughCtx) {
+  if (albedoCtx && normalCtx && roughCtx && aoCtx) {
     for (const role of ["home", "store", "event", "tree"] as const) {
-      drawTileInto(albedoCtx, normalCtx, roughCtx, role, tilePx);
+      drawTileInto(albedoCtx, normalCtx, roughCtx, aoCtx, role, tilePx);
     }
   }
 
-  // Per-role sub-textures. Each is a fresh CanvasTexture cropped from
-  // the correct quadrant of the master canvas. Wrapping is Repeat on
-  // both axes so `.repeat` on the texture drives the prime tiling.
   const textures = {} as FacadeAtlas["textures"];
   for (const role of ["home", "store", "event", "tree"] as const) {
     const win = TILE_LAYOUT[role];
@@ -470,14 +667,15 @@ export function buildFacadeAtlas(opts: FacadeAtlasOptions = {}): FacadeAtlas {
     const map = subTextureFrom(albedoCanvas, px0, py0, w, h, THREE.SRGBColorSpace);
     const normalMap = subTextureFrom(normalCanvas, px0, py0, w, h, THREE.NoColorSpace);
     const roughnessMap = subTextureFrom(roughnessCanvas, px0, py0, w, h, THREE.NoColorSpace);
-    for (const t of [map, normalMap, roughnessMap]) {
+    const aoMap = subTextureFrom(aoCanvas, px0, py0, w, h, THREE.NoColorSpace);
+    for (const t of [map, normalMap, roughnessMap, aoMap]) {
       t.wrapS = THREE.RepeatWrapping;
       t.wrapT = THREE.RepeatWrapping;
       t.repeat.set(reps.u, reps.v);
-      t.anisotropy = 4;
+      t.anisotropy = aniso;
       t.needsUpdate = true;
     }
-    textures[role] = { map, normalMap, roughnessMap };
+    textures[role] = { map, normalMap, roughnessMap, aoMap };
   }
 
   function dispose(): void {
@@ -485,22 +683,20 @@ export function buildFacadeAtlas(opts: FacadeAtlasOptions = {}): FacadeAtlas {
       try { textures[role].map.dispose(); } catch { /* noop */ }
       try { textures[role].normalMap.dispose(); } catch { /* noop */ }
       try { textures[role].roughnessMap.dispose(); } catch { /* noop */ }
+      try { textures[role].aoMap.dispose(); } catch { /* noop */ }
     }
   }
 
-  return { albedoCanvas, normalCanvas, roughnessCanvas, textures, dispose };
+  return { albedoCanvas, normalCanvas, roughnessCanvas, aoCanvas, textures, dispose };
 }
 
 // ── the pixel walker ────────────────────────────────────────────────────
-//
-// Walk every pixel of the tile once. For each pixel, ask the predicates
-// what the surface is, then write the corresponding value into three
-// image-data buffers. One shot per role fills all three maps in sync.
 
 function drawTileInto(
   albedoCtx: CanvasRenderingContext2D,
   normalCtx: CanvasRenderingContext2D,
   roughCtx: CanvasRenderingContext2D,
+  aoCtx: CanvasRenderingContext2D,
   role: FacadeTileRole,
   tilePx: number,
 ): void {
@@ -513,10 +709,12 @@ function drawTileInto(
   const albedoImg = albedoCtx.createImageData(w, h);
   const normalImg = normalCtx.createImageData(w, h);
   const roughImg = roughCtx.createImageData(w, h);
+  const aoImg = aoCtx.createImageData(w, h);
 
   const aData = albedoImg.data;
   const nData = normalImg.data;
   const rData = roughImg.data;
+  const oData = aoImg.data;
 
   let i = 0;
   for (let y = 0; y < h; y += 1) {
@@ -540,6 +738,13 @@ function drawTileInto(
       rData[i + 2] = r8;
       rData[i + 3] = 255;
 
+      const ao = aoAt(role, x, y, tilePx);
+      const o8 = clamp8(ao * 255);
+      oData[i]     = o8;
+      oData[i + 1] = o8;
+      oData[i + 2] = o8;
+      oData[i + 3] = 255;
+
       i += 4;
     }
   }
@@ -547,6 +752,7 @@ function drawTileInto(
   albedoCtx.putImageData(albedoImg, px0, py0);
   normalCtx.putImageData(normalImg, px0, py0);
   roughCtx.putImageData(roughImg, px0, py0);
+  aoCtx.putImageData(aoImg, px0, py0);
 }
 
 function subTextureFrom(
@@ -557,8 +763,6 @@ function subTextureFrom(
   h: number,
   colorSpace: THREE.ColorSpace,
 ): THREE.CanvasTexture {
-  // Copy the tile quadrant into its own canvas so wrap modes on the
-  // resulting texture stay inside the tile.
   const sub = document.createElement("canvas");
   sub.width = w;
   sub.height = h;
@@ -826,4 +1030,8 @@ export function leafTintForSeason(season: "spring" | "summer" | "fall" | "winter
     case "fall":   return { r: 1.35, g: 0.85, b: 0.35 }; // ochre / red-orange
     case "winter": return { r: 0.55, g: 0.50, b: 0.45 }; // bare branches — near-neutral, the alpha carries the "gone" reading
   }
+}
+
+function clamp01(v: number): number {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
 }
