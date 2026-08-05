@@ -1314,11 +1314,16 @@ export default function City() {
     // The dusk-and-lit-windows moment doubles the way the brief calls for:
     // warm emissive windows glow at the water surface exactly as they do
     // in the tower above.
+    // R10-5: the SSR water samples the citySky background cubemap as its
+    // grazing-angle fallback. The cube identity is stable across the
+    // PMREM re-bake (only the prefiltered `environment` swaps out), so
+    // one setEnvMap here is enough for the whole session.
     const water: CityWater = createCityWater({
       width: 1,
       height: 1,
       pixelRatio: dpr,
       skylineScene: skyline.scene,
+      envMap: citySky.background,
     });
 
     // ── traffic (cars + boats + lamp posts) ─────────────────────────────

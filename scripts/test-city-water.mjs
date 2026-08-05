@@ -168,4 +168,69 @@ assert.equal(
   "createCityWater takes a single options object (including optional skylineScene)",
 );
 
+// ——— R10-5: SSR — replaces Reflector with a depth-buffer raymarch ————————
+//
+// The module no longer imports THREE.Reflector; check the source directly
+// to lock the rewrite in place. If a future refactor accidentally brings
+// Reflector back the test flags it — the whole point of R10-5 is the
+// planar mirror is gone.
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const waterSrc = readFileSync(
+  resolve(__dirname, "..", "src", "lib", "city-water.ts"),
+  "utf8",
+);
+
+assert.ok(
+  !/from\s+["']three\/examples\/jsm\/objects\/Reflector\.js["']/.test(waterSrc),
+  "R10-5: city-water no longer imports THREE.Reflector",
+);
+assert.ok(
+  !/new Reflector\(/.test(waterSrc),
+  "R10-5: city-water no longer instantiates Reflector",
+);
+assert.ok(
+  /raymarchReflection/.test(waterSrc),
+  "R10-5: shader contains a raymarchReflection function",
+);
+assert.ok(
+  /tReflectionDepth/.test(waterSrc),
+  "R10-5: shader samples a depth texture for the SSR march",
+);
+assert.ok(
+  /DepthTexture\(/.test(waterSrc),
+  "R10-5: mirror RT is backed by a real DepthTexture",
+);
+assert.ok(
+  /textureCube\(uEnvMap/.test(waterSrc),
+  "R10-5: fragment shader samples the cubemap fallback",
+);
+assert.ok(
+  /Schlick|1\.0 - cosTheta.*5\.0|F0/.test(waterSrc),
+  "R10-5: shader mixes reflection over body colour by a Fresnel",
+);
+assert.ok(
+  /reflectMatrix/.test(waterSrc),
+  "R10-5: module builds a plane-reflection matrix for the mirror camera",
+);
+assert.ok(
+  /worldClipPlane|clippingPlanes/.test(waterSrc),
+  "R10-5: mirror render clips below the water plane",
+);
+assert.ok(
+  /setEnvMap/.test(waterSrc),
+  "R10-5: cubemap can be swapped at runtime via setEnvMap",
+);
+assert.ok(
+  /MARCH_STEPS_HIGH.*=\s*24|uMarchSteps/.test(waterSrc),
+  "R10-5: SSR runs 24 march steps on high tier",
+);
+assert.ok(
+  /MARCH_STEPS_MEDIUM.*=\s*16/.test(waterSrc),
+  "R10-5: SSR runs a reduced 16 march steps on medium tier",
+);
+
 console.log("test-city-water: ok");
