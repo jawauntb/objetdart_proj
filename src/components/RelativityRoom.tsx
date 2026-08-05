@@ -56,6 +56,7 @@ import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import {
@@ -404,6 +405,13 @@ export default function RelativityRoom() {
     let lastCaptureSoundAt = 0;
     let staticRayPaths: Array<Array<{ x: number; y: number }>> = [];
     let staticRaysStale = true;
+    // the span: two still fingers build a light clock between the fingertips —
+    // a photon bounces at exactly c, and the tick period IS the geometry:
+    // spread the fingers and the tick audibly slows. Rides the light clock,
+    // so the three-finger law slows this photon too.
+    const spanClock = { active: false, ax: 0, ay: 0, bx: 0, by: 0, s: 0, dir: 1, held: 0 };
+    let lastSpanTickAt = 0;
+    const trainTimers = new Set<ReturnType<typeof setTimeout>>();
     const hold: { mode: "fabric" | "mass" | null; massId: string | null; placed: boolean; done: boolean } = {
       mode: null,
       massId: null,
@@ -858,6 +866,55 @@ export default function RelativityRoom() {
         // tap a twin: its rings shimmer and its age is heard, deeper when older
         const b = beaconAt(x, y);
         if (b !== null) { soundBeaconAge(b === 0 ? beaconA : beaconB, performance.now()); return; }
+        // the rapid-tap ladder (tiers 1/3/5/n) on open dark: one rings your
+        // pulse at c, three stage the race, five make the wells echo, n is
+        // the covenant's crescendo
+        const trainTier = tapTrainTier(e.count);
+        const depth = tapTrainDepth(e.count);
+        if (trainTier === "n") {
+          tutti();
+          firePulse(x, y, 1 + depth * 0.6);
+          note(31, 320);
+          try { haptics.bloom(); } catch { /* noop */ }
+          return;
+        }
+        if (trainTier === 5) {
+          // the wells echo the strike: every standing mass answers with its
+          // own ring, each arriving when light from the tap would reach it
+          const alive = masses.filter((m) => !m.evapAt);
+          if (alive.length > 0) {
+            for (const m of alive) {
+              const mx = m.nx * width;
+              const my = m.ny * height;
+              const delayMs = (Math.hypot(mx - x, my - y) / c) * 1000;
+              const t = setTimeout(() => {
+                trainTimers.delete(t);
+                firePulse(mx, my, 0.5 + m.m * 0.3);
+                note(29 + Math.round(m.m * 4), 160);
+              }, delayMs);
+              trainTimers.add(t);
+            }
+          } else {
+            // no wells standing: three nested wavefronts, none beats the rest
+            for (let k = 0; k < 3; k++) {
+              const t = setTimeout(() => {
+                trainTimers.delete(t);
+                firePulse(x, y, 0.55 + k * 0.12);
+              }, k * 140);
+              trainTimers.add(t);
+            }
+            note(41, 220);
+          }
+          try { haptics.ripple(0.5); } catch { /* noop */ }
+          return;
+        }
+        if (trainTier === 3) {
+          // the race, staged in one strike: a flash and a comet leave the
+          // same point in the same instant — the light wins, every time
+          firePulse(x, y, 0.6 + e.intensity * 0.4);
+          throwComet(x, y, hash01(x * 3.7 + y * 1.3) * Math.PI * 2, 0.9 + depth * 0.6);
+          return;
+        }
         // your pulse: a ring at exactly c — race it with anything you like
         firePulse(x, y, 0.5 + e.intensity * 0.8);
         note(45 + Math.round(e.intensity * 7), 200);
@@ -882,14 +939,15 @@ export default function RelativityRoom() {
         if (e.fingers === 3) {
           // three fingers touch the law: time dilates, and — this room's one
           // legitimate slow-light moment — the light itself nearly stands
-          // still, so its geometry can finally be seen
+          // still, so its geometry can finally be seen. Both keep deepening
+          // for as long as the hold stands: 900ms and 2400ms are different.
           if (e.phase === "enter") {
-            timeScaleTarget = 0.25;
-            rayScaleTarget = 0.04;
             note(24, 500);
             try { haptics.tap(); } catch { /* noop */ }
           }
-          if (e.phase === "release") { timeScaleTarget = 1; rayScaleTarget = 1; }
+          if (e.phase === "release") { timeScaleTarget = 1; rayScaleTarget = 1; return; }
+          timeScaleTarget = Math.max(0.15, 1 - 0.85 * Math.min(1, e.elapsed / 2000));
+          rayScaleTarget = Math.max(0.03, 1 - 0.97 * Math.min(1, e.elapsed / 1800));
           return;
         }
         if (e.fingers !== 1) return;
@@ -1031,6 +1089,34 @@ export default function RelativityRoom() {
           note(45 + Math.round(Math.min(6, Math.abs(e.winding))), 130);
           try { haptics.ripple(0.25); } catch { /* noop */ }
         }
+      },
+      span: (e) => {
+        lastInteractionAt = performance.now();
+        if (e.phase === "release") {
+          if (spanClock.active) {
+            spanClock.active = false;
+            const held = Math.min(1, e.elapsed / 4000);
+            note(45, 120 + held * 220);
+            try { haptics.ripple(0.2 + held * 0.3); } catch { /* noop */ }
+          }
+          return;
+        }
+        const a = toLocal(e.ax, e.ay);
+        const b = toLocal(e.bx, e.by);
+        if (e.phase === "enter") {
+          // two still fingers become a light clock: a photon starts bouncing
+          // between the fingertips at exactly c
+          spanClock.active = true;
+          spanClock.s = 0;
+          spanClock.dir = 1;
+          note(50, 140);
+          try { haptics.tap(); } catch { /* noop */ }
+        }
+        spanClock.ax = a.x;
+        spanClock.ay = a.y;
+        spanClock.bx = b.x;
+        spanClock.by = b.y;
+        spanClock.held = Math.min(1, e.elapsed / 4000);
       },
       twist: (e) => {
         if (e.fingers === 3) {
@@ -1602,6 +1688,24 @@ export default function RelativityRoom() {
       stepCar(dt);
       stepBeacons(dt, now, pts);
 
+      // the span's photon: it bounces between the fingertips at exactly c on
+      // the light clock, so the tick period is the spread itself — and the
+      // three-finger law slows this photon like every other light
+      if (spanClock.active) {
+        const dist = Math.max(24, Math.hypot(spanClock.bx - spanClock.ax, spanClock.by - spanClock.ay));
+        spanClock.s += ((c * dt * (reduce ? 1 : rayScale)) / dist) * spanClock.dir;
+        if (spanClock.s >= 1 || spanClock.s <= 0) {
+          spanClock.s = clamp01(spanClock.s);
+          spanClock.dir *= -1;
+          if (now - lastSpanTickAt > 90) {
+            lastSpanTickAt = now;
+            // the geometry heard: a wider interval ticks lower and slower
+            note(60 - Math.round(clamp01(dist / 500) * 18), 60 + spanClock.held * 60);
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+        }
+      }
+
       // ————— background: ink with a cold slow breath —————
       const bg = ctx.createLinearGradient(0, 0, 0, height);
       bg.addColorStop(0, "#05070c");
@@ -1924,6 +2028,29 @@ export default function RelativityRoom() {
         ctx.restore();
       }
       ctx.restore();
+
+      // ————— the span's light clock: a photon held between two fingers —————
+      if (spanClock.active) {
+        const px = spanClock.ax + (spanClock.bx - spanClock.ax) * spanClock.s;
+        const py = spanClock.ay + (spanClock.by - spanClock.ay) * spanClock.s;
+        const glow = 0.3 + spanClock.held * 0.4;
+        ctx.strokeStyle = `rgba(198, 216, 248, ${0.12 + spanClock.held * 0.14})`;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(spanClock.ax, spanClock.ay);
+        ctx.lineTo(spanClock.bx, spanClock.by);
+        ctx.stroke();
+        for (const [ex, ey] of [[spanClock.ax, spanClock.ay], [spanClock.bx, spanClock.by]] as const) {
+          ctx.strokeStyle = `rgba(198, 216, 248, ${glow * 0.6})`;
+          ctx.beginPath();
+          ctx.arc(ex, ey, 6, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        ctx.fillStyle = `rgba(240, 246, 255, ${0.7 + spanClock.held * 0.3})`;
+        ctx.beginPath();
+        ctx.arc(px, py, 2.6, 0, Math.PI * 2);
+        ctx.fill();
+      }
 
       // ————— the train: rest-length ghost, contracted car, one flash —————
       {
@@ -2472,6 +2599,7 @@ export default function RelativityRoom() {
       mq.removeEventListener?.("change", onMq);
       offVis();
       offGallery();
+      trainTimers.forEach((t) => clearTimeout(t));
       field?.dispose();
       try { getFieldAudio().releaseConcernTone("love"); } catch { /* noop */ }
       try { getFieldAudio().releaseConcernTone("season"); } catch { /* noop */ }

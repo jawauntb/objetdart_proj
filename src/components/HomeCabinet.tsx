@@ -26,7 +26,7 @@ import ConcernSigil from "@/components/ConcernSigil";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
-import { THRESHOLDS } from "@/lib/gesture/core";
+import { THRESHOLDS, tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import { createFrameGovernor, createIdleWriter, detailForTier, isEmbeddedFrame, onVisibility, resolveDpr } from "@/lib/room-runtime";
 import { SITE_ROUTE_BY_KEY, SITE_ROUTES, type SiteRouteCluster, type SiteRouteEntry } from "@/lib/routes";
@@ -191,6 +191,13 @@ export default function HomeCabinet() {
   const nightRef = useRef(0);
   /** 0..1, the case's slow cycle — three-finger twist walks it, continuously. */
   const seasonRef = useRef(0);
+  // the rapid-tap ladder's answers, read once per tick and decayed there:
+  // three taps ring the standing current's gems, five kindle the embers
+  const ringRef = useRef(0);
+  const kindleRef = useRef(0);
+  // the span: two still fingers hold the case's chord open — depth 0..1
+  // keeps deepening with elapsed, spread tunes which octave the glass sings
+  const spanRef = useRef(0);
   // The embers are the case's countable material, and the only thing in it a
   // hand makes rather than finds. `emberRef` is what the render loop reads;
   // the patina is what survives the visit; `standing` is only what <LetGo> needs.
@@ -363,20 +370,57 @@ export default function HomeCabinet() {
     let tuttiTimer: ReturnType<typeof setTimeout> | null = null;
     let ceremonyTarget: Ember | null = null;
     let holdOnFurniture = false;
+    const trainTimers = new Set<ReturnType<typeof setTimeout>>();
+    let lastStirNoteAt = 0;
     const detach = attachGestures(section, {
       tap: (e) => {
         if (document.elementFromPoint(e.x, e.y)?.closest("a, button")) return;
         if (e.fingers === 1) {
-          pointerRef.current.pulse = Math.max(0.35, e.intensity);
-          addPatina(`surface-${clusterRef.current}`, clusterRef.current, 0.08 + e.intensity * 0.2);
-          try { haptics.tap(); } catch { /* noop */ }
-          try {
-            getFieldAudio().playNote(
-              CLUSTER_BY_ID[clusterRef.current].pitch,
-              50 + e.intensity * 90,
-            );
-          } catch { /* noop */ }
-          useField.getState().recordTape("ripple", 0.2 + e.intensity * 0.4, `cabinet/${clusterRef.current}`);
+          // the rapid-tap ladder (tiers 1/3/5/n): each rung a deeper answer
+          // in the case's own material — never the same tap twice in a train
+          const trainTier = tapTrainTier(e.count);
+          const depth = tapTrainDepth(e.count);
+          pointerRef.current.pulse = Math.max(0.35, e.intensity + depth * 0.4);
+          addPatina(`surface-${clusterRef.current}`, clusterRef.current, 0.08 + e.intensity * 0.2 + depth * 0.1);
+          if (trainTier === "n") {
+            // n taps: the crescendo — the whole case states itself, scaled
+            // by how far past seven the train has run
+            tuttiRef.current = Math.max(tuttiRef.current, 0.6 + depth * 0.4);
+            kindleRef.current = Math.max(kindleRef.current, depth);
+            try { getFieldAudio().bell(); } catch { /* noop */ }
+            try { haptics.bloom(); } catch { /* noop */ }
+            if (tuttiTimer) clearTimeout(tuttiTimer);
+            tuttiTimer = setTimeout(() => { tuttiRef.current = 0; }, 700);
+          } else if (trainTier === 5) {
+            // five taps kindle the embers: every light the hand has planted
+            // flares at once — the case remembering out loud
+            kindleRef.current = 1;
+            try { getFieldAudio().spark(); } catch { /* noop */ }
+            try { haptics.ripple(0.5 + e.intensity * 0.3); } catch { /* noop */ }
+          } else if (trainTier === 3) {
+            // three taps ring the standing current: its gems answer as an
+            // arpeggio around the ring, brightening while it runs
+            ringRef.current = 1;
+            const cluster = CLUSTER_BY_ID[clusterRef.current];
+            const gems = ROUTES_BY_CLUSTER[clusterRef.current];
+            for (let i = 0; i < Math.min(6, gems.length); i += 1) {
+              const t = setTimeout(() => {
+                trainTimers.delete(t);
+                try { getFieldAudio().playNote(cluster.pitch + i * 2, 70); } catch { /* noop */ }
+              }, i * 70);
+              trainTimers.add(t);
+            }
+            try { haptics.ripple(0.35); } catch { /* noop */ }
+          } else {
+            try { haptics.tap(); } catch { /* noop */ }
+            try {
+              getFieldAudio().playNote(
+                CLUSTER_BY_ID[clusterRef.current].pitch,
+                50 + e.intensity * 90,
+              );
+            } catch { /* noop */ }
+          }
+          useField.getState().recordTape("ripple", 0.2 + e.intensity * 0.4 + depth * 0.2, `cabinet/${clusterRef.current}`);
           return;
         }
         if (e.fingers === 2) {
@@ -432,6 +476,50 @@ export default function HomeCabinet() {
       drag: (e) => {
         if (e.fingers !== 3) return;
         gustRef.current = Math.max(-1, Math.min(1, gustRef.current + e.dx * 0.01));
+      },
+      scrub: (e) => {
+        // a circling hand stirs the dust: the drift follows the circle's own
+        // speed and direction, and the motes brighten while they are stirred
+        gustRef.current = Math.max(-3, Math.min(3, gustRef.current + Math.max(-6, Math.min(6, e.angularVelocity)) * 0.16));
+        agitationRef.current = Math.min(1, agitationRef.current + Math.min(0.4, Math.abs(e.angularVelocity) * 0.05));
+        const now = performance.now();
+        if (now - lastStirNoteAt > 600) {
+          lastStirNoteAt = now;
+          try {
+            getFieldAudio().playNote(
+              CLUSTER_BY_ID[clusterRef.current].pitch - 7 + Math.round(Math.min(5, Math.abs(e.winding)) * 2),
+              120,
+            );
+          } catch { /* noop */ }
+          try { haptics.ripple(0.25); } catch { /* noop */ }
+        }
+      },
+      span: (e) => {
+        // two still fingers hold the case's chord open: the glass and the
+        // core brighten for as long as the interval is sustained — deeper at
+        // 2400ms than at 900ms, always — and the spread tunes its voice
+        if (e.phase === "enter") {
+          spanRef.current = 0.2;
+          try { getFieldAudio().playNote(CLUSTER_BY_ID[clusterRef.current].pitch - 12, 260); } catch { /* noop */ }
+          try { haptics.tap(); } catch { /* noop */ }
+          return;
+        }
+        if (e.phase === "tick") {
+          spanRef.current = 0.2 + 0.8 * (1 - Math.exp(-e.elapsed / 1600));
+          pointerRef.current.pulse = Math.max(pointerRef.current.pulse, spanRef.current * 0.5);
+          return;
+        }
+        // release: the chord resolves, weighted by how long it was held and
+        // how wide the hand had it open
+        const held = Math.min(1, e.elapsed / 4000);
+        try {
+          getFieldAudio().playNote(
+            CLUSTER_BY_ID[clusterRef.current].pitch - 12 + Math.round(Math.min(12, e.spread / 40)),
+            140 + held * 160,
+          );
+        } catch { /* noop */ }
+        try { haptics.ripple(0.2 + held * 0.4); } catch { /* noop */ }
+        spanRef.current = 0;
       },
       hold: (e) => {
         if (e.fingers >= 3) {
@@ -536,10 +624,11 @@ export default function HomeCabinet() {
         agitationRef.current = Math.min(1, agitationRef.current + intensity);
         try { haptics.chop(); } catch { /* noop */ }
       },
-      knock: () => {
-        tuttiRef.current = 1;
+      knock: ({ intensity }) => {
+        // a rap on the case rings it by exactly how hard the case was struck
+        tuttiRef.current = 0.6 + Math.min(1, intensity) * 0.4;
         try { getFieldAudio().bell(); } catch { /* noop */ }
-        try { haptics.tap(); } catch { /* noop */ }
+        try { haptics.ripple(0.3 + Math.min(1, intensity) * 0.5); } catch { /* noop */ }
         if (tuttiTimer) clearTimeout(tuttiTimer);
         tuttiTimer = setTimeout(() => { tuttiRef.current = 0; }, 700);
       },
@@ -555,6 +644,7 @@ export default function HomeCabinet() {
       section.removeEventListener("pointerup", releaseHold);
       section.removeEventListener("pointercancel", releaseHold);
       if (tuttiTimer) clearTimeout(tuttiTimer);
+      trainTimers.forEach((t) => clearTimeout(t));
     };
   }, [addPatina, selectCluster, commitEmbers, emberNear, worldFromClient]);
 
@@ -787,6 +877,13 @@ export default function HomeCabinet() {
       pointer.pulse *= 0.92;
       const tutti = tuttiRef.current;
       tuttiRef.current *= 0.9;
+      // the tap ladder's lights and the span's sustain, decayed here so the
+      // answers ease out instead of switching off
+      const ring = ringRef.current;
+      ringRef.current *= 0.94;
+      const kindle = kindleRef.current;
+      kindleRef.current *= 0.95;
+      const span = spanRef.current;
       const agitation = agitationRef.current;
       agitationRef.current *= 0.94;
       const nightLevel = nightRef.current;
@@ -810,12 +907,12 @@ export default function HomeCabinet() {
       mainRing.rotation.z = t * 0.035 * motion;
       crossRing.rotation.z = -t * 0.06 * motion;
       tiltedRing.rotation.z = t * 0.044 * motion;
-      lens.scale.setScalar(1 + Math.sin(t * 1.2) * 0.018 * motion + pointer.pulse * 0.04 + tutti * 0.06);
+      lens.scale.setScalar(1 + Math.sin(t * 1.2) * 0.018 * motion + pointer.pulse * 0.04 + tutti * 0.06 + span * 0.05);
       core.rotation.y = t * 0.5 * motion;
       core.rotation.z = -t * 0.36 * motion;
       (candle as THREE.MeshStandardMaterial).emissiveIntensity =
-        (0.35 + pointer.pulse * 0.8 + level * 0.3 + tutti * 0.5) * (1 - nightLevel * 0.7);
-      (glass as THREE.MeshPhysicalMaterial).emissiveIntensity = 0.22 + pointer.pulse * 0.18 + level * 0.22;
+        (0.35 + pointer.pulse * 0.8 + level * 0.3 + tutti * 0.5 + span * 0.4) * (1 - nightLevel * 0.7);
+      (glass as THREE.MeshPhysicalMaterial).emissiveIntensity = 0.22 + pointer.pulse * 0.18 + level * 0.22 + span * 0.25;
 
       const active = activeKeyRef.current;
       const cluster = clusterRef.current;
@@ -828,7 +925,7 @@ export default function HomeCabinet() {
         mesh.rotation.y += dt * 0.8 * motion;
         mesh.position.z = (route.homePriority ? 0.34 : -0.12) + Math.sin(t * 0.9 + angle * 3) * 0.08 * motion + (isActive ? 0.26 : 0);
         material.emissiveIntensity =
-          ((isActive ? 0.84 : isCluster ? 0.34 : 0.08) + pointer.pulse * 0.12 + level * 0.18 + tutti * 0.4)
+          ((isActive ? 0.84 : isCluster ? 0.34 : 0.08) + pointer.pulse * 0.12 + level * 0.18 + tutti * 0.4 + (isCluster ? ring * 0.5 : 0))
           * (1 - nightLevel * 0.6);
       });
       // three-finger drag = wind: a gust speeds or reverses the dust
@@ -853,7 +950,7 @@ export default function HomeCabinet() {
         // the one under the finger burns brightest, so a plant is legible
         // from the instant the dwell tier is crossed
         const heat =
-          (0.32 + e.weight * 0.85 + tutti * 0.5 + (e === growingNow ? 0.7 : 0)) *
+          (0.32 + e.weight * 0.85 + tutti * 0.5 + kindle * 0.8 + (e === growingNow ? 0.7 : 0)) *
           (1 - nightLevel * 0.65);
         emberColors[i * 3] = emberTint.r * heat;
         emberColors[i * 3 + 1] = emberTint.g * heat;

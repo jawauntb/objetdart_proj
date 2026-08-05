@@ -7,7 +7,7 @@ import { CONCERNS, PRESET_KEYS, PRESETS } from "@/data/content";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
-import { THRESHOLDS } from "@/lib/gesture/core";
+import { THRESHOLDS, tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import { buildReading } from "@/lib/reading";
 import { createIdleWriter } from "@/lib/room-runtime";
@@ -126,6 +126,9 @@ export default function ConcernField() {
   const roseRef = useRef(0);
   // the dwell's charge, so a resting finger is visible from the tier it crosses
   const [charging, setCharging] = useState<{ k: ConcernKey; grip: number } | null>(null);
+  // the span: two still fingers sustaining a dyad — the pair sings while the
+  // interval is held open, and the two weights reconcile the longer it stands
+  const [spanPair, setSpanPair] = useState<{ a: ConcernKey; b: ConcernKey; grip: number } | null>(null);
   // The glimmer (docs/gesture-grammar.md §6.3). The instruction that used to
   // sit above this compass is gone, and a room does not get to be silent about
   // its own material instead — so after ~20s of stillness one bead tugs
@@ -298,6 +301,8 @@ export default function ConcernField() {
     let tuttiTimer: ReturnType<typeof setTimeout> | null = null;
     let seasonAcc = 0;
     let chargeTarget: { k: ConcernKey; from: number } | null = null;
+    let lastStirAt = 0;
+    let spanHeld: { a: ConcernKey; b: ConcernKey } | null = null;
     const detach = attachGestures(svg as unknown as HTMLElement, {
       tap: (e) => {
         touched();
@@ -325,6 +330,52 @@ export default function ConcernField() {
         if (!local) return;
         const hit = nearestVertex(local.x, local.y);
         if (!hit || hit.d > 72) return; // background taps are absorbed
+        // the rapid-tap ladder (tiers 1/3/5/n), spoken in the rose's own
+        // polarity geometry: opposites face each other across the compass
+        const trainTier = tapTrainTier(e.count);
+        const depth = tapTrainDepth(e.count);
+        const idx = RADIAL_ORDER.indexOf(hit.k);
+        if (trainTier === "n") {
+          // n taps: the full circle — all eight voices answer in ring order
+          // from the struck one, swelling with how far the train has run
+          for (let step = 0; step < RADIAL_ORDER.length; step += 1) {
+            const k = RADIAL_ORDER[(idx + step) % RADIAL_ORDER.length];
+            pulseVoice(k, 90 + step * 8);
+          }
+          setTutti(Date.now());
+          if (tuttiTimer) clearTimeout(tuttiTimer);
+          tuttiTimer = setTimeout(() => setTutti(0), 700);
+          try { haptics.bloom(); } catch { /* noop */ }
+          recordTape("sigil", 0.5 + depth * 0.4, `compass/circle-${hit.k}`);
+          return;
+        }
+        if (trainTier === 5) {
+          // five taps bring that concern to true north: the rose turns the
+          // shortest way until the struck axis points up
+          const target = -idx * (Math.PI / 4);
+          let delta = target - roseRef.current;
+          delta = ((delta + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
+          roseRef.current += delta;
+          setRose(roseRef.current);
+          setTapGlow({ k: hit.k, intensity: 1, key: Date.now() });
+          pulseVoice(hit.k, 220);
+          try { getFieldAudio().bell(); } catch { /* noop */ }
+          try { haptics.lens(); } catch { /* noop */ }
+          recordTape("sigil", 0.6, `compass/north-${hit.k}`);
+          return;
+        }
+        if (trainTier === 3) {
+          // three taps sound the polarity: the struck concern and the one
+          // facing it across the rose answer together, a dyad
+          const opposite = RADIAL_ORDER[(idx + 4) % RADIAL_ORDER.length];
+          setTapGlow({ k: hit.k, intensity: Math.max(0.6, e.intensity), key: Date.now() });
+          setBeat({ k: opposite, key: Date.now() });
+          pulseVoice(hit.k, 190);
+          pulseVoice(opposite, 190);
+          try { haptics.ripple(0.4 + depth * 0.3); } catch { /* noop */ }
+          recordTape("ripple", 0.5, `compass/dyad-${hit.k}`);
+          return;
+        }
         // tap intensity is the pull: the vertex glow blooms by the same
         // 0..1 the whole grammar reads
         setTapGlow({ k: hit.k, intensity: e.intensity, key: Date.now() });
@@ -379,6 +430,79 @@ export default function ConcernField() {
           const now = concernsRef.current[k] ?? 50;
           st.setConcern(k, Math.max(0, Math.min(100, Math.round(now + lean * gust))));
         });
+      },
+      scrub: (e) => {
+        touched();
+        if (draggingRef.current) return;
+        // a circling hand stirs the weights: counterclockwise blends the
+        // shape toward its own mean, clockwise sharpens what already leads —
+        // at exactly the speed the hand circles
+        const rate = Math.min(1, Math.abs(e.angularVelocity) * 0.25) * 0.05;
+        if (rate <= 0) return;
+        const st = useField.getState();
+        let mean = 0;
+        for (const k of RADIAL_ORDER) mean += concernsRef.current[k] ?? 50;
+        mean /= RADIAL_ORDER.length;
+        for (const k of RADIAL_ORDER) {
+          const now = concernsRef.current[k] ?? 50;
+          const target = e.winding >= 0 ? mean : mean + (now - mean) * 1.3;
+          st.setConcern(k, Math.max(0, Math.min(100, Math.round(now + (target - now) * rate))));
+        }
+        const nowMs = performance.now();
+        if (nowMs - lastStirAt > 600) {
+          lastStirAt = nowMs;
+          try { getFieldAudio().playNote(50 + Math.round(Math.min(6, Math.abs(e.winding)) * 2), 130); } catch { /* noop */ }
+          try { haptics.ripple(0.25); } catch { /* noop */ }
+        }
+      },
+      span: (e) => {
+        touched();
+        if (e.phase === "enter") {
+          if (draggingRef.current) return;
+          const a = toSvg(e.ax, e.ay);
+          const b = toSvg(e.bx, e.by);
+          if (!a || !b) return;
+          const ha = nearestVertex(a.x, a.y);
+          const hb = nearestVertex(b.x, b.y);
+          if (!ha || !hb || ha.d > 110 || hb.d > 110 || ha.k === hb.k) return;
+          // two still fingers hold a dyad open: both concerns sing together
+          spanHeld = { a: ha.k, b: hb.k };
+          try {
+            getFieldAudio().holdConcernTone(ha.k, concernsRef.current[ha.k] ?? 50);
+            getFieldAudio().holdConcernTone(hb.k, concernsRef.current[hb.k] ?? 50);
+          } catch { /* noop */ }
+          try { haptics.tap(); } catch { /* noop */ }
+          setSpanPair({ a: ha.k, b: hb.k, grip: 0 });
+          return;
+        }
+        if (!spanHeld) return;
+        if (e.phase === "tick") {
+          // the sustained interval reconciles: the two weights lean toward
+          // each other for as long as the chord is held — deeper at 2400ms
+          // than at 900ms, always
+          const grip = 1 - Math.exp(-Math.max(0, e.elapsed - THRESHOLDS.spanEnterMs) / 2600);
+          const st = useField.getState();
+          const va = concernsRef.current[spanHeld.a] ?? 50;
+          const vb = concernsRef.current[spanHeld.b] ?? 50;
+          const mid = (va + vb) / 2;
+          st.setConcern(spanHeld.a, Math.max(0, Math.min(100, Math.round(va + (mid - va) * grip * 0.03))));
+          st.setConcern(spanHeld.b, Math.max(0, Math.min(100, Math.round(vb + (mid - vb) * grip * 0.03))));
+          try {
+            getFieldAudio().holdConcernTone(spanHeld.a, concernsRef.current[spanHeld.a] ?? 50);
+            getFieldAudio().holdConcernTone(spanHeld.b, concernsRef.current[spanHeld.b] ?? 50);
+          } catch { /* noop */ }
+          setSpanPair({ a: spanHeld.a, b: spanHeld.b, grip });
+          return;
+        }
+        // release: the dyad resolves, weighted by how long it stood
+        const held = Math.min(1, e.elapsed / 4000);
+        try {
+          getFieldAudio().releaseConcernTone(spanHeld.a);
+          getFieldAudio().releaseConcernTone(spanHeld.b);
+        } catch { /* noop */ }
+        try { haptics.ripple(0.2 + held * 0.4); } catch { /* noop */ }
+        spanHeld = null;
+        setSpanPair(null);
       },
       rhythm: (e) => {
         touched();
@@ -511,11 +635,12 @@ export default function ConcernField() {
         if (agitateTimer) clearTimeout(agitateTimer);
         agitateTimer = setTimeout(() => setAgitated(false), 460);
       },
-      knock: () => {
-        RADIAL_ORDER.forEach((k, i) => pulseVoice(k, 90 + i * 6));
+      knock: ({ intensity }) => {
+        // a rap on the case rings all eight voices, longer for a harder rap
+        RADIAL_ORDER.forEach((k, i) => pulseVoice(k, 90 + i * 6 + Math.min(1, intensity) * 120));
         setTutti(Date.now());
         try { getFieldAudio().bell(); } catch { /* noop */ }
-        try { haptics.tap(); } catch { /* noop */ }
+        try { haptics.ripple(0.25 + Math.min(1, intensity) * 0.5); } catch { /* noop */ }
         if (tuttiTimer) clearTimeout(tuttiTimer);
         tuttiTimer = setTimeout(() => setTutti(0), 700);
       },
@@ -890,6 +1015,28 @@ export default function ConcernField() {
                       strokeWidth={0.8 + charging.grip * 2.2}
                       strokeOpacity={0.3 + charging.grip * 0.5}
                     />
+                  );
+                })()}
+                {/* span: two still fingers holding a dyad open — the chord
+                    drawn as a string between the two beads, thickening for
+                    as long as the interval is sustained */}
+                {spanPair && (() => {
+                  const pa = pointAt(RADIAL_ORDER.indexOf(spanPair.a), concerns[spanPair.a], rose);
+                  const pb = pointAt(RADIAL_ORDER.indexOf(spanPair.b), concerns[spanPair.b], rose);
+                  return (
+                    <g>
+                      <line
+                        x1={pa.x}
+                        y1={pa.y}
+                        x2={pb.x}
+                        y2={pb.y}
+                        stroke="var(--candle)"
+                        strokeWidth={0.8 + spanPair.grip * 2.4}
+                        strokeOpacity={0.3 + spanPair.grip * 0.5}
+                      />
+                      <circle cx={pa.x} cy={pa.y} r={8 + spanPair.grip * 8} fill={`rgba(200,115,42,${0.08 + spanPair.grip * 0.16})`} />
+                      <circle cx={pb.x} cy={pb.y} r={8 + spanPair.grip * 8} fill={`rgba(200,115,42,${0.08 + spanPair.grip * 0.16})`} />
+                    </g>
                   );
                 })()}
                 {/* ceremony: a ring gathers at the center while the hold deepens */}

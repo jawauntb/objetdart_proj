@@ -42,6 +42,9 @@ const compass = {
     moves: [
       "drag a vertex → the weight moves and the concern sings while you hold it",
       "tap a vertex → it blooms by exactly how hard the tap landed",
+      "rapid taps on a vertex → three sound its polarity across the rose, five turn that concern to true north, seven and more ring the full circle",
+      "circle a finger → the weights stir: one way blends the shape toward its mean, the other sharpens what leads",
+      "hold two still fingers on two beads → the dyad sings and the two weights reconcile for as long as the interval stands",
       "rest a finger on an axis → that concern charges outward for as long as you hold it",
       "hold at the center until the ring closes → the reading is kept",
       "twist (2 fingers) → the rose turns; a different concern comes to the top",

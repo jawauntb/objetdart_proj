@@ -35,6 +35,8 @@ const relativity = {
       "the law of relativity taught by hand — light's fixed speed, time dilation, gravity, doppler, simultaneity, and the twin paradox, sharing one dark room.",
     moves: [
       "tap open dark → a pulse at exactly the speed of light",
+      "rapid taps → three stage the race (a flash and a comet leave the same point — light wins), five make every standing well echo the strike, seven and more swell the covenant's crescendo",
+      "hold two still fingers apart → a photon bounces between the fingertips at exactly c; spread them and the tick audibly slows",
       "drag a light clock → carrying it visibly slows its own tick",
       "flick a beacon → sends its twin on a journey; it returns visibly younger, sounded as a detuned chord",
       "tap the gliding car → one flash splits toward both ends, but the room's own strikes land unevenly — simultaneity, heard as a gap",
