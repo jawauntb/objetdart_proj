@@ -156,6 +156,27 @@ export type CityComposer = {
    */
   setSize(width: number, height: number, pixelRatio: number): void;
   /**
+   * Progressive-enablement gates. Each named pass is ANDed with the tier
+   * decision inside `render()` — a gate of `false` forces the pass off
+   * even at a tier that would normally enable it. Undefined keys keep
+   * their previous state (default: all `true` so nothing changes for
+   * pre-existing callers).
+   *
+   * Emergency /city fix uses this to stagger heavy shader compilation
+   * across the first ~30 frames: frame 1 renders sky+ground+plots with
+   * every gate `false`, then City.tsx re-opens one gate per frame until
+   * the full pipeline is live. Without this the composer would compile
+   * bloom+SSAO+bokeh+godrays all at once on the first `.render()` call
+   * and iOS Safari kills the tab.
+   */
+  setPassGates(gates: Partial<{
+    bloom: boolean;
+    ssao: boolean;
+    dof: boolean;
+    godrays: boolean;
+    water: boolean;
+  }>): void;
+  /**
    * Dispose composer render targets and the passes' internal buffers. Call
    * on unmount BEFORE `renderer.dispose()` — bloom holds its own targets.
    */
@@ -520,6 +541,19 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
   composer.setPixelRatio(opts.pixelRatio);
   composer.setSize(Math.max(1, opts.width), Math.max(1, opts.height));
 
+  // Progressive-enablement gates. All `true` by default so pre-existing
+  // callers see no behavior change. City.tsx flips these `false` at mount
+  // to skip heavy shader compilation on frame 1, then re-opens them one
+  // per frame across the first ~30 frames of the tick loop. A gate of
+  // `false` forces the pass off regardless of the tier's decision.
+  const gate = {
+    bloom: true,
+    ssao: true,
+    dof: true,
+    godrays: true,
+    water: true,
+  };
+
   // Track the last tier we applied so we can skip DOM-ish `enabled` writes
   // and threshold reads on frames where nothing changed. Frame time in
   // this room is dominated by the plot shader; every microsecond back
@@ -561,6 +595,13 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
     dispose?: () => void;
   };
 
+  // Whenever `setPassGates` runs we mark the enable-bit derivation dirty
+  // so the next `render()` re-derives every pass's `enabled` flag from
+  // (tier ∧ gate), even if the tier itself did not change. Without this
+  // a `setPassGates({ bloom: true })` while sitting at high tier would
+  // not take effect until the next tier transition.
+  let gatesDirty = false;
+
   return {
     render(
       dayFraction: number,
@@ -573,16 +614,16 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
       // flip their `enabled` bit. The ground and plots still render
       // through the composer's linear buffer at every tier so C's PBR
       // materials land right whatever the governor decided.
-      if (tier !== lastTier) {
+      if (tier !== lastTier || gatesDirty) {
         const alive = passesForTier(tier);
         aliveTier = alive;
-        bloomPass.enabled = alive.bloom;
-        if (ssaoPass) ssaoPass.enabled = alive.ssao;
-        if (bokehPass) bokehPass.enabled = alive.dof;
+        bloomPass.enabled = alive.bloom && gate.bloom;
+        if (ssaoPass) ssaoPass.enabled = alive.ssao && gate.ssao;
+        if (bokehPass) bokehPass.enabled = alive.dof && gate.dof;
         // The harbour is off on sleep tier — the whole pass skips. The
         // water module still handles its own high/medium/low visible-mesh
         // swap inside update(); this gate is defence in depth.
-        if (waterPass) waterPass.enabled = tier !== "sleep";
+        if (waterPass) waterPass.enabled = tier !== "sleep" && gate.water;
         // Painterly register-shift keeps living at every non-sleep tier
         // — the brief calls it out as cheap enough to keep at low tier
         // (one full-screen sample; the aesthetic split into two
@@ -595,8 +636,11 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
         // per the brief. On any drop below medium, mute the strength
         // uniform so a later re-entry starts from a clean ramp —
         // otherwise the leftover uStrength from the last high/medium
-        // frame would flash for one frame on re-entry.
-        if (!alive.godrays) {
+        // frame would flash for one frame on re-entry. `gate.godrays`
+        // ANDs the tier decision so the progressive-enablement chain can
+        // hold the pass off past the tier boundary until its own frame.
+        aliveTier = { ...alive, godrays: alive.godrays && gate.godrays };
+        if (!aliveTier.godrays) {
           godraysPass.enabled = false;
           godraysPass.uniforms.uStrength.value = 0;
           // Zero the fog density on tier drop so a later re-entry into
@@ -606,6 +650,7 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
           godraysPass.uniforms.uFogDensity.value = 0;
         }
         lastTier = tier;
+        gatesDirty = false;
         // Force the ember + DOF + painterly + god-rays to recompute
         // after a tier flip.
         lastEmberSlot = -1;
@@ -836,6 +881,27 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
       }
 
       composerLike.render();
+    },
+    setPassGates(gates) {
+      let changed = false;
+      if (gates.bloom !== undefined && gate.bloom !== gates.bloom) {
+        gate.bloom = gates.bloom; changed = true;
+      }
+      if (gates.ssao !== undefined && gate.ssao !== gates.ssao) {
+        gate.ssao = gates.ssao; changed = true;
+      }
+      if (gates.dof !== undefined && gate.dof !== gates.dof) {
+        gate.dof = gates.dof; changed = true;
+      }
+      if (gates.godrays !== undefined && gate.godrays !== gates.godrays) {
+        gate.godrays = gates.godrays; changed = true;
+      }
+      if (gates.water !== undefined && gate.water !== gates.water) {
+        gate.water = gates.water; changed = true;
+      }
+      // Force the next `render()` to re-derive every pass's `enabled` bit
+      // from (tier ∧ gate) even when the tier itself did not change.
+      if (changed) gatesDirty = true;
     },
     setSize(width, height, pixelRatio) {
       const w = Math.max(1, Math.floor(width));
