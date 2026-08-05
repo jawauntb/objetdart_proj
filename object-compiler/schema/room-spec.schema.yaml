@@ -35,14 +35,28 @@ description: >
   The three LLM slots (`shader_intent`, `domain_intent`, `verb_intent`) are
   the per-room briefs the compiler hands to the slot-filler. The optional
   `visual_style` block sits alongside them as *design context*: a structured
-  picture of what the room should look like — composition, subject, form
-  language, motion character, palette registers by function, references,
-  banned forms, mood, gesture-feedback style. When present it does not
-  replace `shader_intent`; it hands the shader author the visual vocabulary
-  the brief assumes. `slot-shader.md` (and, where useful, `slot-verbs.md`)
-  SHOULD consume it. Older specs without a `visual_style` block still
-  compile — the field is optional for backward compat until it is filled in
-  from the landed screenshots.
+  picture of what THIS room should look like — subject, form language,
+  motion character, reference notes, mood, gesture-feedback style. When
+  present it does not replace `shader_intent`; it hands the shader author
+  the visual vocabulary the brief assumes. `slot-shader.md` (and, where
+  useful, `slot-verbs.md`) SHOULD consume it. Older specs without a
+  `visual_style` block still compile — the field is optional for backward
+  compat until it is filled in from the landed screenshots.
+
+  The schema enforces the phase-4 split (see
+  `data/object-compiler/audits/phase-4-visual-style-split.md` and the
+  phase-5 rerun that landed at 0.92 avg agreement on the surviving six
+  fields): CROSS-ROOM design vocabulary — the six framings, the canonical
+  palette-role register map, the AGENTS.md paint bar, the form-language
+  taxonomy, the shared clocks, the default gesture-feedback vocabulary —
+  lives in `object-compiler/design/authoring_style.yaml` and is threaded
+  into every slot prompt as `{{authoring_style}}`. Per-room REFINEMENTS
+  over that shared vocabulary live in `visual_style` and are threaded in
+  as `{{visual_style}}`. The three fields formerly at this level
+  (`composition`, `registers`, `banned_forms`) were removed in phase 6
+  after the phase-5 falsifiability rerun confirmed the split; they now
+  live exclusively in the shared artifact. Old specs that still carry
+  them will fail validation — which is the point.
 
   The optional `life` block encodes the room's answer to AGENTS.md §"The
   room quality bar" items 3 (make and unmake), 5 (alive at rest), and 6
@@ -59,6 +73,22 @@ description: >
   for the mechanical checks. Older specs without a `life` block still
   compile — the field is optional for backward compat until it is filled
   in from the merged room.
+
+  Four optional blocks — `shader_layers`, `discoverables`, `state_machine`,
+  and `life.population.depth_note` — were added in phase 7 to capture the
+  DEPTH axes phase 6 named as the gap between the compiler-generated
+  rooms (/spring, /geyser, /pebble, /reef, /root, /marsh) and the
+  hand-authored deep references (/stars, /planets, /coin, /molecules).
+  The compiler-generated rooms passed every mechanical check but felt
+  THIN because the schema captured contract (item 1 shader, item 2
+  grammar, item 3 make-and-unmake shape, item 5 breath, item 6 haptics,
+  item 7 performance) without capturing density: how MANY shader layers
+  the material stacks, how MANY populations move through it, how MANY
+  rewards the patient hand finds, how MANY distinct states the material
+  passes through. All four blocks are optional so every existing spec
+  still validates; when a future spec declares them, `test:room-depth`
+  (Track C) will check the counts against the deep-reference floor. See
+  `data/object-compiler/audits/phase-7-depth-schema.md`.
 
 type: object
 additionalProperties: false
@@ -360,11 +390,15 @@ properties:
     type: string
     description: >
       The `localStorage` key `createIdleWriter` writes the room's kept
-      state under. Convention `objetdart:<key>:v<n>`. Optional — a room
-      that keeps nothing of its own (its persistence rides through the
-      shared `world.ts` bus) may omit this; the compiler will emit
-      `keeps: null` in the registry.
-    pattern: "^objetdart:[a-z0-9-]+:v[0-9]+$"
+      state under. Convention `objetdart:<key>:v<n>`. Older hand-authored
+      rooms sometimes carry a namespace segment (e.g. `objetdart:stars:cosmic:v2`)
+      or an unversioned tail (e.g. `objetdart:coin:aventurine`); phase 7
+      widened the pattern to accept both, so the phase-7 backfills of the
+      hand-authored deep references validate against the same schema as
+      the compiler-generated rooms. Optional — a room that keeps nothing
+      of its own (its persistence rides through the shared `world.ts` bus)
+      may omit this; the compiler will emit `keeps: null` in the registry.
+    pattern: "^objetdart:[a-z0-9-]+(:[a-z0-9-]+)*(:v[0-9]+)?$"
 
   # ——— material ————————————————————————————————————————————————————————
 
@@ -408,7 +442,10 @@ properties:
         description: >
           Bare filename stem in `src/lib/`. The compiler writes
           `src/lib/<name>.ts` and pairs it with `scripts/test-<name>.mjs`.
-        pattern: "^[a-z][a-z0-9]{1,23}$"
+          The pattern accepts camelCase because a few hand-authored
+          modules (`nestedCosmos` under `src/lib/stars/`) use it;
+          compiler-generated names remain all-lowercase.
+        pattern: "^[a-z][A-Za-z0-9]{1,23}$"
       invariant_type:
         type: string
         description: >
@@ -546,7 +583,7 @@ properties:
     type: object
     additionalProperties: false
     description: >
-      Design brief for what the room SHOULD LOOK LIKE — the picture-diff
+      Design brief for what THIS room SHOULD LOOK LIKE — the picture-diff
       between a landed `public/guide/<key>.jpg` and the shader that produced
       it, structured. `shader_intent` remains the specific, per-room brief;
       this block is the DESIGN CONTEXT the brief assumes: subject, form
@@ -557,45 +594,19 @@ properties:
       it. All fields carry pictorial vocabulary — nouns and adjectives a
       designer would say aloud — not technical GLSL.
 
-      **As of phase 4, `composition`, `registers`, and `banned_forms`
-      live in `object-compiler/design/authoring_style.yaml` — the shared
-      design language.** The phase-2 falsifiability audit (see
-      `data/object-compiler/audits/phase-2-visual-style.md`) showed those
-      three fields drift when recovered from screenshots alone (mean
-      agreement rates 0.42, 0.50, 0.50) because they encode DECISIONS the
-      site makes once, not observations about a single room. Per-room
-      specs may still declare them here for overrides, but the LLM
-      slot-shader prompt reads the site-wide values first. The fields
-      below are marked `deprecated: true` for that reason — old specs
-      still validate; new specs should leave them out and let the shared
-      artifact carry the design law.
+      The schema enforces the phase-4 split (see
+      `data/object-compiler/audits/phase-4-visual-style-split.md` and the
+      phase-5 rerun): CROSS-ROOM design vocabulary lives in
+      `object-compiler/design/authoring_style.yaml` (the six framings,
+      the canonical palette-role register map, the AGENTS.md paint bar,
+      the form-language taxonomy, the shared clocks, the default
+      gesture-feedback vocabulary), while per-room REFINEMENTS over that
+      shared vocabulary live here. Three fields formerly at this level —
+      `composition`, `registers`, `banned_forms` — were fully removed in
+      phase 6 after the phase-5 falsifiability rerun (avg agreement
+      climbed from 0.63 → 0.92 on the surviving six fields). Any spec
+      that still declares them will fail validation.
     properties:
-      composition:
-        type: string
-        deprecated: true
-        description: >
-          [Deprecated — phase 4] Moved to
-          `object-compiler/design/authoring_style.yaml` under
-          `compositions`. Old specs may still carry this as a per-room
-          override; new specs should omit it and let the shared artifact
-          name the taxonomy. Phase-2 audit found this the least-agreed
-          field (0.42) because the authored value encodes a design-law
-          commitment invisible in the rendered frame.
-
-          How the room is framed. `side-section` shows a vertical slice
-          (soil is a side-section cutaway; atmosphere is a side-section
-          ambient column). `top-down` looks down (galaxy). `first-person`
-          places the viewer inside. `ambient-column` is a full-viewport
-          vertical field with no framing chrome. `cutaway` opens a section
-          through a solid. `silhouette` shows only the outline against a
-          field.
-        enum:
-          - side-section
-          - top-down
-          - first-person
-          - ambient-column
-          - cutaway
-          - silhouette
       subject:
         type: string
         description: >
@@ -644,29 +655,6 @@ properties:
           - cyclic
           - ballistic
           - stochastic
-      registers:
-        type: array
-        deprecated: true
-        description: >
-          [Deprecated — phase 4] Moved to
-          `object-compiler/design/authoring_style.yaml` under `registers`.
-          The site-wide default now names the canonical hex-role → what-
-          it-paints mapping once; per-room specs may still restate it
-          here as an override, but new specs should omit unless the room
-          genuinely paints a different meaning onto the same six palette
-          slots. Phase-2 audit found this recoverable in STRUCTURE but
-          not in specific assignment (0.50) — the mapping is a design
-          decision, not a visible feature.
-
-          The palette registers by function — one string per assignment,
-          each naming what a hex slot ACTUALLY PAINTS in this room.
-          Bridges the abstract palette (`bg`, `bg2`, `glow`, `accent`,
-          `accent2`, `ink`) to the concrete registers the shader draws.
-          E.g. "deep water: bg→bg2", "mineral bloom: accent2",
-          "sunlit highlight: glow", "root/hypha line: accent2 at 0.6α".
-          Arrow (→) permitted for gradients.
-        items:
-          type: string
       reference_notes:
         type: array
         description: >
@@ -676,31 +664,6 @@ properties:
           the ocean's depth gradient", "reads as an ink-line orrery on
           warm paper". Not for URLs — these are described references,
           the kind a shader author carries in their head.
-        items:
-          type: string
-      banned_forms:
-        type: array
-        deprecated: true
-        description: >
-          [Deprecated — phase 4] Moved to
-          `object-compiler/design/authoring_style.yaml` under
-          `banned_forms`. The AGENTS.md paint bar is site-wide law, not
-          per-room description, and belongs in the shared artifact. A
-          per-room spec may still add room-specific negatives here (e.g.
-          "no drawn spiral — arms emerge from the population"), but new
-          specs should keep this list to the truly room-specific bans
-          and let the shared artifact carry the standard AGENTS ones.
-          Phase-2 audit found the standard bans trivially recoverable
-          (they descend from a global rule) and the room-specific ones
-          almost never recoverable from image alone (0.50).
-
-          The explicit no-fly list for this room. Always includes at
-          least the AGENTS.md room-quality bar (no `createRadialGradient`,
-          no per-frame `shadowBlur`, no `ctx.filter` blur, no per-object
-          gradient pass, no allocation in the RAF loop). May add
-          room-specific negatives — "no cartoon puffiness on the plume",
-          "no visible seam between layers", "no rainbow gradient" — where
-          a landed screenshot exposed the failure mode.
         items:
           type: string
       mood:
@@ -808,7 +771,32 @@ properties:
           When present, `objects` MUST be non-empty (the schema enforces
           this): every room with countable objects should account for
           them here even if the room today fails part of the lifecycle.
+
+          Phase 7 note on DEPTH: `objects` stays at minItems 1 to keep
+          every existing spec valid, but the phase-6 gap the deep
+          references named — /stars has three populations (born stars,
+          user black holes, user planets) plus the four-layer nested
+          cosmos and the constellation shapes; /planets has worlds,
+          moons and dust; /molecules has molecules AND the docking pair
+          — is that ONE population is a slideshow. New specs are asked
+          to name every population truthfully; `depth_note` below is
+          where the spec argues why THIS count (1, 2, 3, 5) is right,
+          and `test:room-depth` (Track C) checks the count against the
+          declared depth floor for depth-declared specs.
         properties:
+          depth_note:
+            type: string
+            description: >
+              One-line reason THIS number of populations is the honest
+              count for the room. /stars: "three: the sky-born stars,
+              the user's black holes, and the user's condensed worlds
+              — each a distinct addressable object with its own
+              persistence and its own retirement path." /spring: "one:
+              a seep is the room's only addressable object; every other
+              lens (H, L, ring, weir) is a reading OFF the seeps rather
+              than an object of its own." Optional; new specs are asked
+              to fill it in truthfully rather than leave the count
+              silent.
           objects:
             type: array
             minItems: 1
@@ -1044,3 +1032,205 @@ properties:
               to the wind as a lantern, kept"; "the geode opens and its
               lining faces out". Named here so the schema author has
               actually thought about it.
+
+  # ——— phase 7: DEPTH — the four axes phase 6 named as the gap ————————
+  # The compiler-generated rooms (/spring, /geyser, /pebble, /reef,
+  # /root, /marsh) passed every mechanical check but felt thin next to
+  # the hand-authored deep references (/stars, /planets, /coin,
+  # /molecules). What the schema was NOT capturing was density: how
+  # many shader layers the material stacks, how many populations move
+  # through it, how many hidden combinations a patient hand finds, how
+  # many distinct states the material passes through. Phase 7 adds four
+  # optional blocks — one per axis — so a spec can DECLARE its depth
+  # truthfully. The four blocks below are all optional at the top
+  # level: every existing spec still validates against this schema
+  # unchanged. New specs are asked to fill them in; the mechanical
+  # test in Track C will check the counts against the declared depth
+  # floor when a spec declares them.
+
+  # ~~~ 7.1 shader depth — the material's stacked passes ~~~
+  shader_layers:
+    type: array
+    minItems: 3
+    description: >
+      Discrete render passes, or composited elements the shader draws
+      as its own step. AGENTS.md §"quality bar" item 1 says the material
+      is a shader; the phase-6 gap the deep references named is that
+      "the material is a shader" and "the material is a RICH shader"
+      are two different things. /stars stacks a deep-field static
+      canvas, a nebula pass, a black-hole pass, a galaxy pass, planet
+      systems, quasars, born stars, user holes, user planets, saved
+      constellations and grav-wave shimmer — well past three. /planets
+      draws four passes (background, dust ring, star, instanced
+      bodies). /molecules composites a solvent field, honest bond
+      strands, a bond-hint dashed arc, thermal wavefronts, and the
+      lens overlay. A room with fewer than three shader layers is a
+      slideshow; density requires at least three passes that visibly
+      differ in what they paint. Optional — older specs still compile;
+      when a spec declares this block, `test:room-depth` (Track C)
+      checks that the room's actual shader / component matches the
+      declared count.
+    items:
+      type: object
+      additionalProperties: false
+      required: [name, brief, register]
+      properties:
+        name:
+          type: string
+          description: >
+            Short label for the layer — e.g. "depth gradient", "caustic
+            network", "particle drift", "instanced body pass". The name
+            a shader author would speak aloud.
+        brief:
+          type: string
+          description: >
+            One paragraph on what this layer contributes: what it paints,
+            what modulates it, what it reads (uBreath, uTime, a uniform
+            passed from the ledger), and how it composites with the
+            layer above and below it.
+        register:
+          type: string
+          description: >
+            Which palette register(s) it paints in — `bg`, `bg2`, `glow`,
+            `accent`, `accent2`, `ink`, or a combination separated by
+            `+` (e.g. "bg+bg2" for a depth ramp, "glow+accent" for a
+            warmth-into-cool caustic). Names the load-bearing colour
+            role, so the layer can be inspected against the palette.
+        order:
+          type: string
+          enum: [background, midground, foreground, overlay]
+          description: >
+            Where in the composite this layer sits. `background` — the
+            base field or a static canvas. `midground` — the population
+            or the light-carrying pass. `foreground` — the hand's marks
+            and the accented population. `overlay` — the 2D twist lens,
+            the accretion swirl, the constellation ink.
+
+  # ~~~ 7.2 discoverables — the rewards a patient hand finds ~~~
+  discoverables:
+    type: array
+    minItems: 3
+    description: >
+      Hidden combinations a visitor finds AFTER the first minute — the
+      rewards a patient hand collects when the room's laws lock into
+      themselves. These are NOT the room's visible grammar (which lives
+      in `guide.moves`); they are what `guide.finds` already gestures
+      at, structured. /stars carries the black-hole chirp when two
+      horizons meet at a real speed of gravity, the world condensing
+      from a double-tap on a born star, the constellation fraying under
+      a saved shape, the layer crossfade tuned to real orbital scales,
+      the sky's own quiet forgetting under LetGo. /molecules carries
+      the reactable-neighbor dashed arc, CO₂'s greenhouse tell, water
+      finding water. A room with fewer than three discoverables is a
+      surface without a rabbit-hole — density requires at least three
+      because the "lower friction to the next reward" law depends on
+      there being a next reward. Optional — older specs still compile;
+      Track C checks that the described response actually fires in the
+      merged room.
+    items:
+      type: object
+      additionalProperties: false
+      required: [trigger, response]
+      properties:
+        trigger:
+          type: string
+          description: >
+            One line naming the combination that fires this. Concrete
+            enough that a tester could reproduce it — "tap during the
+            eruption phase", "double-tap a star you birthed", "flick
+            a world into the star", "circle around a molecule at the
+            same time another is docked", "hold the ceremony hold
+            through midnight". Never "sometimes" or "occasionally".
+        response:
+          type: string
+          description: >
+            What the material does — the sight, sound, or haptic that
+            confirms the finding. "the plume rings a note that matches
+            the tap's pitch", "the world merges its mass into the
+            star's luminosity and returns as dust", "the pair chirps
+            its true inspiral tone rising into ringdown". Concrete,
+            never marketing.
+        register:
+          type: string
+          enum: [sight, sound, haptic, multiple]
+          description: >
+            Which sense carries the finding. `multiple` when the
+            response lands in more than one — sight AND sound, sight
+            AND haptic. AGENTS.md's "state lands in ≥2 senses in the
+            same frame" makes multiple the default a discoverable
+            aims for; a single-register finding is legal but weaker.
+
+  # ~~~ 7.3 state machine — distinct modes of the material ~~~
+  state_machine:
+    type: object
+    additionalProperties: false
+    required: [states, transitions]
+    description: >
+      Distinct room states — day/night, calm/active, phases of an
+      eruption, layers of a nested cosmos, seasons, lens rungs, night-
+      versus-day, dilation-versus-real-time. A room with a single state
+      is a slideshow; density requires at least two. /stars has four
+      zoom layers × three lens rungs × night/day × dilation × forget =
+      a lattice, not a switch. /geyser has calm / charging / eruption /
+      cooling — its phase state is the whole reward. /planets has the
+      day/night flip, the merge, the flick-into-star, the ring-winding.
+      /coin has front/back, night, blessed, and the aventurine fill
+      levels. Optional — older specs still compile; when declared,
+      Track C checks that the room reaches every named state on some
+      input trajectory and that each transition trigger fires the
+      described move.
+    properties:
+      states:
+        type: array
+        minItems: 2
+        items:
+          type: object
+          additionalProperties: false
+          required: [name, description]
+          properties:
+            name:
+              type: string
+              description: >
+                Short label — "calm", "eruption", "cooling", "night",
+                "dilated", "veil", "layer/local", "lens/gravity",
+                "blessed". The state's name in the room's own voice.
+            description:
+              type: string
+              description: >
+                One line on what this state IS — the condition on the
+                domain module or on the world clock that puts the
+                material here.
+            visible_change:
+              type: string
+              description: >
+                One line on what the shader visibly does in this
+                state. "sky drains to a pale value and the wave shows
+                alone", "the plume fires ballistically for one breath,
+                then the throat closes", "the star's luminosity halves
+                and every world's ice creeps toward the equator".
+      transitions:
+        type: array
+        items:
+          type: object
+          additionalProperties: false
+          required: [from, to, trigger]
+          properties:
+            from:
+              type: string
+              description: >
+                Name of the state this transition starts in — must
+                appear in `states[].name`. The literal `*` is allowed
+                when a transition fires from any state.
+            to:
+              type: string
+              description: >
+                Name of the state this transition lands in — must
+                appear in `states[].name`.
+            trigger:
+              type: string
+              description: >
+                One line on what fires the transition — "H·T crosses
+                threshold", "user hold-3", "midnight", "flick past
+                escape velocity", "layer zoom crosses corotation
+                radius". Concrete on the domain condition or the
+                gesture verb, never "eventually" or "when it's right".

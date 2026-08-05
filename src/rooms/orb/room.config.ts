@@ -38,6 +38,8 @@ const orb = {
       "loose discs of plasma drifting in the dark, each one two crossing ribbons of light inside a bloom. they push on each other and answer the hand together.",
     moves: [
       "tap a disc → it flares by exactly how hard the tap landed",
+      "rapid taps (1 / 3 / 5 / n) → a flare → the charge arcs to the nearest disc → the whole field leans in toward the strike → the plasma surges wilder with every extra tap",
+      "circle a finger → a magnetic stir: the discs take up an orbit around it, faster with the hand",
       "rest a finger on empty dark → a disc gathers under it and keeps growing while you hold",
       "hold on a disc until it blooms → it is annihilated",
       "drag → the discs lean toward the stroke",

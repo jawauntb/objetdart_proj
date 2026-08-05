@@ -10,6 +10,7 @@ import {
 import { useField } from "@/store/field";
 import { getFieldAudio } from "@/lib/audio";
 import { attachGestures } from "@/lib/gesture";
+import { tapTrainTier } from "@/lib/gesture/core";
 import type { ConcernKey } from "@/lib/types";
 import * as haptics from "@/lib/haptics";
 import { onVessel } from "@/lib/vessel";
@@ -1024,6 +1025,7 @@ export default function Charts() {
     let lastRippleCueAt = 0;
     let lastScrubAt = 0;
     let lastGrowNoteAt = 0;
+    let lastSeasonCueAt = 0;
     let holdIdx = -1;
     let holdCeremony = false;
 
@@ -1031,11 +1033,12 @@ export default function Charts() {
       tap: (e) => {
         lastGestureAtRef.current = performance.now();
         if (e.fingers === 3) {
-          // tutti — every panel answers at once, the plate stating itself.
-          rippleRef.current = { t0: performance.now(), amp: 0.7, dir: 1 };
-          playNote(52, 200);
+          // tutti — every panel answers at once, the plate stating itself
+          // as loudly as the hand meant it.
+          rippleRef.current = { t0: performance.now(), amp: 0.4 + e.intensity * 0.6, dir: 1 };
+          playNote(52, 160 + Math.round(e.intensity * 120));
           try { haptics.bloom(); } catch { /* noop */ }
-          recordTape("region", 0.6, "charts/tutti");
+          recordTape("region", 0.4 + e.intensity * 0.4, "charts/tutti");
           return;
         }
         if (e.fingers === 2) {
@@ -1046,14 +1049,65 @@ export default function Charts() {
             overlay.removeAttribute("data-lens-raised");
             try { haptics.tap(); } catch { /* noop */ }
             recordTape("sigil", 0.4, "charts/lens-candles");
+            return;
           }
+          // lens already home: the frame recenters — never silence
+          panRef.current.tx = 0;
+          panRef.current.ty = 0;
+          playNote(43, 200);
+          try { haptics.tap(); } catch { /* noop */ }
           return;
         }
         if (e.fingers !== 1) return; // the plate absorbs frame/law taps
-        if (e.count === 3) {
-          // a triple tap reseeds the field — the same act as the generate
-          // chrome, spoken by hand
-          onGenerateRef.current();
+        // rapid one-finger taps climb the train (1 / 3 / 5 / n): the ladder
+        // of the plate is the market itself — reseed, the closing bell,
+        // volatility running toward storm
+        const trainTier = tapTrainTier(e.count);
+        if (trainTier === "n") {
+          // n (≥7) — crescendo: volatility surges toward storm, the ripple
+          // steepening and the field churning harder with every tap
+          const v = Math.round(Math.min(3, volRef.current + 0.25 + (e.count - 7) * 0.1) / 0.05) * 0.05;
+          setVolatility(v);
+          rippleRef.current = { t0: performance.now(), amp: 1, dir: 1 };
+          stirTurbulence(Math.min(0.3, 0.1 + (e.count - 7) * 0.05));
+          playNote(58 + (e.count - 7) * 2, 100);
+          try { haptics.storm(); } catch { /* noop */ }
+          recordTape("ripple", Math.min(1, 0.6 + (e.count - 7) * 0.1), "charts/storm");
+          addChartMark(`vol ${v.toFixed(2)}`, "fall", Math.min(1, 0.7 + (e.count - 7) * 0.08));
+          return;
+        }
+        if (trainTier >= 5) {
+          // 5 — the closing bell: the last candles ring their closes in
+          // order, a wave of light walking the panels behind them. The
+          // sixth tap only deepens the wave, never re-rings the bell.
+          rippleRef.current = { t0: performance.now(), amp: 0.85, dir: 1 };
+          if (e.count === 5) {
+            const all = candlesRef.current;
+            const ringers = all.slice(Math.max(0, all.length - 6));
+            ringers.forEach((c, i) => {
+              window.setTimeout(() => {
+                try { playClickForCandle(c); } catch { /* noop */ }
+              }, i * 90);
+            });
+            try { haptics.bloom(); } catch { /* noop */ }
+            recordTape("sigil", 0.75, "charts/closing-bell");
+            addChartMark("the close", "rise", 0.85);
+          } else {
+            playNote(57, 120);
+            try { haptics.ripple(0.5); } catch { /* noop */ }
+          }
+          return;
+        }
+        if (trainTier >= 3) {
+          // 3 — reseed the whole field: the same act as the generate
+          // chrome, spoken by hand. The fourth tap deepens, never reseeds.
+          if (e.count === 3) {
+            onGenerateRef.current();
+          } else {
+            rippleRef.current = { t0: performance.now(), amp: 0.5 + e.intensity * 0.3, dir: 1 };
+            playNote(50, 120);
+            try { haptics.ripple(0.4); } catch { /* noop */ }
+          }
           return;
         }
         const hit = locate(e.x, e.y);
@@ -1238,13 +1292,18 @@ export default function Charts() {
       hold: (e) => {
         lastGestureAtRef.current = performance.now();
         if (e.fingers === 3) {
-          // three fingers hold the law: the scan slows to a quarter speed
+          // three fingers hold the law: the scan slows, and keeps slowing
+          // the longer the hand stays — a quarter by two seconds, sinking
+          // toward stillness past the ceremony tier. Never one fixed depth.
           if (e.phase === "enter") {
-            scanScaleRef.current.target = 0.25;
             playNote(36, 260);
             try { haptics.tap(); } catch { /* noop */ }
           }
-          if (e.phase === "release") scanScaleRef.current.target = 1;
+          if (e.phase === "release") { scanScaleRef.current.target = 1; return; }
+          scanScaleRef.current.target = Math.max(
+            0.08,
+            1 - 0.75 * Math.min(1, e.elapsed / 2000) - 0.17 * Math.min(1, Math.max(0, (e.elapsed - 2500) / 3500)),
+          );
           return;
         }
         if (e.fingers !== 1) return;
@@ -1263,15 +1322,18 @@ export default function Charts() {
           return;
         }
         // dwell tier — the held candle grows: its close accretes upward
-        // under the finger, tick by tick
+        // under the finger, tick by tick, and the accretion runs away the
+        // longer the hold lasts (a candle at 2400ms climbs faster than at
+        // 900ms — elapsed is an axis, never a switch)
         if (e.tier >= 2 && holdIdx >= 0 && !holdCeremony) {
           const { yMin, yMax } = p1RangeRef.current;
           const span = yMax - yMin || 1;
           const idx = holdIdx;
+          const climb = span * 0.0035 * (1 + Math.min(1.6, (e.elapsed - 900) / 1000));
           setCandles((prev) => {
             if (!prev[idx]) return prev;
             const next = prev.slice();
-            next[idx] = { ...next[idx], tweak: next[idx].tweak + span * 0.0035 };
+            next[idx] = { ...next[idx], tweak: next[idx].tweak + climb };
             return next;
           });
           const nowMs = performance.now();
@@ -1298,8 +1360,19 @@ export default function Charts() {
       twist: (e) => {
         lastGestureAtRef.current = performance.now();
         if (e.fingers === 3) {
-          // three-finger twist = season: a slow warm/cool drift.
-          if (e.phase === "move") seasonRef.current += e.angle * 0.7;
+          // three-finger twist = season: a slow warm/cool drift, answered
+          // in sound and touch as it turns — never a silent handler
+          if (e.phase === "move") {
+            seasonRef.current += e.angle * 0.7;
+            const nowMs = performance.now();
+            if (Math.abs(e.velocity) > 0.2 && nowMs - lastSeasonCueAt > 600) {
+              lastSeasonCueAt = nowMs;
+              const warm = Math.sin(seasonRef.current) * 0.5 + 0.5;
+              playNote(42 + Math.round(warm * 12), 220);
+              try { haptics.tap(); } catch { /* noop */ }
+              recordTape("region", 0.3 + warm * 0.3, "charts/season");
+            }
+          }
           return;
         }
         if (e.phase !== "move") return;

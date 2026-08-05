@@ -52,26 +52,13 @@ palette:
   ink:     "#e8dcc8"
 
 visual_style:
-  composition: ambient-column
   subject: "the full frame is fire itself — a low dark hearth, an ember-lit under-cloud sitting near the bottom, warm orange shimmer sitting where the heat rides upward, sparse spark grains hanging in the dark"
   form_language: [ray-marched, value-noise-FBM, SDF, hand-painted]
   motion_character: pulsing
-  registers:
-    - "the deep hearth dark and the smoke-choked upper column — via bg"
-    - "the charred bed and the darker under-cloud — via bg2"
-    - "the bright ember glow and the flare of a spark — via glow"
-    - "the mid-orange body of a burning cloud — via accent"
-    - "the deep red heart of a fresh ignition — via accent2"
-    - "the readable pyre-title text and the ember-count readout — via ink"
   reference_notes:
     - "a Turner sunset burned down to its embers: warmth in a sea of dark"
     - "a wood-stove viewing window at dusk — the charred bed underneath, the ember-lit convection cloud above, sparks spiralling loose"
     - "the guide screenshot at public/guide/fire.jpg: mostly dark, a horizontal warm cloud low, sparks hanging like drifting stars, everything under the phrase 'touch heat until it remembers matter'"
-  banned_forms:
-    - "no createRadialGradient, no shadowBlur per AGENTS.md"
-    - "no cartoon flames — the visible fire is fbm density lit by its own temperature, not a hand-drawn triangle"
-    - "no per-frame allocation in the RAF loop — embers, pressure wells and heat strokes are pooled arrays"
-    - "no flat orange gradient — the field's brightness is TEMPERATURE_FOR_PIXEL, and inverting the pixel returns the local T"
   mood: "the fire is waiting; touch it and it remembers matter"
   gesture_feedback_style: "a tap seeds a new ember at the finger; a drag bends the convection column and pulls a heat-stroke across the field; a held finger compresses a pressure well into white heat; a knock cracks a log and lofts a burst of embers"
 

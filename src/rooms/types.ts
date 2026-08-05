@@ -147,14 +147,90 @@ export type RoomLifeMakeUnmake = {
   ceremony_is: string;
 };
 
+/**
+ * Phase-7 depth blocks — the density axes phase 6 named as the gap between
+ * one-population compiler rooms and hand-authored deep references. Every
+ * field optional; the mechanical `test-room-depth.mjs` reads these to check
+ * shader layer counts, cross-population interaction, state-guarded verb
+ * branches, and named-state literals in code. See
+ * `data/object-compiler/audits/phase-7-depth-schema.md`.
+ */
+export type RoomLifeShaderLayer = {
+  name: string;
+  order?: number;
+  register?: string;
+  visible_change?: string;
+  reads?: readonly string[];
+};
+
+export type RoomLifeDiscoverable = {
+  name: string;
+  trigger?: string;
+  reward?: string;
+  reads_state?: readonly string[];
+  verb?: string;
+};
+
+export type RoomLifeStateMachineState = {
+  name: string;
+  condition?: string;
+  visible_effect?: string;
+};
+
+export type RoomLifeStateMachine = {
+  clock?: {
+    kind?: string;
+    period_seconds?: number;
+    reads_from_domain?: string;
+  };
+  states: readonly RoomLifeStateMachineState[];
+  transitions?: readonly {
+    from?: string;
+    to?: string;
+    on?: string;
+  }[];
+  uniform?: {
+    name?: string;
+    kind?: string;
+    packing?: string;
+  };
+};
+
 export type RoomLife = {
   population?: {
     objects: readonly RoomLifePopulationObject[];
+    /** Phase-7 depth: how the room's populations interact through the shared ledger. */
+    depth_note?: string;
   };
   breath?: RoomLifeBreath;
   glimmer?: RoomLifeGlimmer;
   haptics_grammar?: RoomLifeHapticsGrammar;
   make_unmake?: RoomLifeMakeUnmake;
+  /** Phase-7 depth: named shader passes the material composes in main(). */
+  shader_layers?: readonly RoomLifeShaderLayer[];
+  /** Phase-7 depth: state- or breath-conditional rewards the room promises. */
+  discoverables?: readonly RoomLifeDiscoverable[];
+  /** Phase-7 depth: the room's state machine as a data structure the shader and verbs read. */
+  state_machine?: RoomLifeStateMachine;
+  /** Phase-7 depth: opt out of the shader complexity floor for genuine 2D-only rooms. */
+  material_2d_only?: boolean;
+  /**
+   * Phase-9 room-visual: exemptions `scripts/test-room-visual.mjs` reads
+   * directly off pixels, not declarations — see docs/room-visual.md.
+   */
+  visual?: {
+    /** A deliberate flat monochrome — exempts `hue_diversity` only. */
+    monochrome_by_design?: boolean;
+    /**
+     * A hand-authored room whose soft-glow lighting (broad gradients, no
+     * hard specular cuts) genuinely produces few Sobel edges even though
+     * hue_diversity, luminance_range, spatial_entropy and file_size_floor
+     * all clear their floors with real margin — evidenced per-room in
+     * data/object-compiler/audits/phase-9-pebble-and-threshold.md. Lowers
+     * only the `edge_density` floor, to `SOFT_GLOW_EDGE_DENSITY_FLOOR`.
+     */
+    soft_glow?: boolean;
+  };
 };
 
 export type RoomManifest = {

@@ -82,15 +82,86 @@ and "screen-space AO" reads out of voice; one that talks about "the field",
 "the column", "the wet halo" reads in. The site's prose voice extends into
 the code.
 
+## Compose the layers — the density requirement
+
+Phase 7 (see `data/object-compiler/audits/phase-7-prompt-rewrite.md`)
+teaches the shader to be **many things at once**. A `shader_intent` that
+names one register — "an ochre column" — bakes into a shader with one
+thing to say and one animation to try. The site's densest rooms
+(AirColumn, /stars, /molecules) don't paint one thing; they paint four
+or five, and the visitor's eye finds a new layer on each return. That
+depth is the room quality bar (`AGENTS.md` §"The room quality bar" §2).
+
+The spec's `shader_layers` array names the discrete visual passes this
+shader MUST include. The compiler substitutes it below this line before
+it calls you:
+
+```yaml
+{{shader_layers}}
+```
+
+Each entry is one drawing step in `main()`. For each entry, emit:
+
+1. A comment `// layer: <name>` on its own line, marking the start of
+   that layer's block.
+2. The code that composes the layer's register into the accumulator
+   (`col`, or an equivalent name you carry from the top of `main()`).
+3. Composition consistent with `order` (small-to-large) and `register`
+   (the palette role the layer paints — background, midground, incident
+   light, particulate, ink, etc.).
+
+**Hard rule — mechanical density check.** The shader body MUST contain
+at LEAST as many `// layer:` comment blocks as `spec.shader_layers`
+has entries. A shorter shader fails the phase-7 density mechanical
+test. Reference: AirColumn composes four visible layers (sky/haze,
+ridge silhouette, cloud march, lantern candles) plus airglow — the
+comment blocks are literal, and each is one recognizable pass in
+`main()`. If `spec.shader_layers` is absent or empty, this rule is
+inert (the room predates phase 7); otherwise it is law.
+
+Do not collapse two layers into one because they *could* share math —
+the point of the layered comment blocks is that the reader sees the
+composition at a glance, and the LLM that recompiles this room later
+can reach for one layer without pulling on all of them.
+
+## The state machine — sampling `uState`
+
+The spec may declare a `state_machine` with a small set of named
+states (calm, agitated, erupting, sealed, …). The compiler substitutes
+it below this line before it calls you:
+
+```yaml
+{{state_machine}}
+```
+
+If `spec.state_machine.states` has any entries, the shader MUST:
+
+- Declare `uniform float uState;` (or `uniform vec2 uState;` when the
+  spec calls for two flags — see the block above).
+- Sample `uState` in EVERY layer whose `visible_change` names a state.
+  A layer whose `visible_change` reads "the plume rings brighten in
+  the eruption state" MUST have `uState` on its brightness term.
+- Compose the states as smooth blends, not hard switches. The room
+  passes through a state on a shared clock; the shader crossfades.
+  `smoothstep(state - 0.5, state + 0.5, uState)` is the pattern.
+- Respect `uReduced` first — a reduced-motion visitor sees the calm
+  state, no matter what the state machine currently reads.
+
+If `spec.state_machine` is absent or empty, do not declare `uState`;
+a dead uniform is a bug (see the `uBreath` rule above).
+
 ## Retrieval — the one-shot references
 
-The compiler substitutes 2–3 shader-body examples from the closest past
-rooms below this line before it calls you. The closest is chosen by
-`invariant_type`: a `flux` room retrieves aircolumn (`src/components/AirColumn.tsx`,
-search for `const FRAG = \``) and soil-ground (`src/components/SoilGround.tsx`,
-same search); a `gravitation` room retrieves solar/orbits; a `conservation`
-room retrieves humus. Read them as examples of *this codebase's shader
-dialect*, not as content to copy.
+The compiler substitutes 2 shader-body examples below this line before
+it calls you. Phase 7's retrieval strategy anchors on **depth** as much
+as invariant type: one slot is the DEEP anchor (the room with the most
+`shader_layers` × `population.objects` × `discoverables` × `state_machine`
+axes populated — typically /stars, /molecules, or aircolumn), and the
+other slot is the PEER anchor (nearest by `invariant_type`, `form_language`,
+`motion_character`). The deep anchor teaches density; the peer anchor
+teaches the invariant. Read both as examples of *this codebase's shader
+dialect*, not content to copy — but do count the DEEP anchor's layers.
+That number is your floor.
 
 ```glsl
 {{one_shot_examples}}
@@ -107,13 +178,16 @@ room-specific instruction *in* that vocabulary.
 ### The site-wide authoring style — read this first
 
 The compiler substitutes `object-compiler/design/authoring_style.yaml`
-below this line. This is the **design law** of the site: the palette
-tokens (Tidewater Vellum from DESIGN.md), the six framings a room can
-choose, the canonical hex-role → what-it-paints mapping, the AGENTS.md
-paint bar, the form-language taxonomy, the shared clocks (7s breath,
-33.3s tide, 20s glimmer idle), and the default touch vocabulary. These
-are decisions the site makes ONCE — a per-room spec does not re-derive
-them. Treat every value here as the default the shader author obeys.
+below this line. This is the **design law** of the site, and as of
+phase 6 (see `data/object-compiler/audits/phase-6-schema-cleanup.md`)
+it is the AUTHORITATIVE and ONLY source for the six framings, the
+canonical hex-role → what-it-paints register mapping, and the AGENTS.md
+paint bar (the three fields formerly duplicated per-room were removed
+after the phase-5 falsifiability rerun landed at 0.92). It also carries
+the palette tokens (Tidewater Vellum from DESIGN.md), the form-language
+taxonomy, the shared clocks (7s breath, 33.3s tide, 20s glimmer idle),
+and the default touch vocabulary. These are decisions the site makes
+ONCE — treat every value here as the law the shader author obeys.
 
 ```yaml
 {{authoring_style}}
@@ -124,37 +198,20 @@ them. Treat every value here as the default the shader author obeys.
 The compiler substitutes the spec's `visual_style` block below this line
 if one is present. This is *design context specific to THIS room*: the
 subject, the mood, the reference notes, the motion character, the form
-language subset, and the gesture feedback style — the pictorial half of
-the descriptor, the fields that recover reliably from a landed
-screenshot (the phase-2 falsifiability audit landed these four at
-≥ 0.75 mean agreement). If a per-room block RESTATES a field that also
-lives in `authoring_style` above (composition, registers, banned_forms —
-those three are marked `deprecated: true` in the schema as of phase 4),
-the per-room value is a **refinement** for this room only; the site-wide
-default still stands for every other room. If a per-room block omits a
-field, use the site-wide default. If the per-room block itself is empty
-(an older spec, authored before `visual_style` landed), skip to the
-brief.
+language subset, and the gesture feedback style — the six fields that
+survived the phase-4 split and recover reliably from a landed screenshot
+(the phase-5 rerun landed them at 0.92 avg agreement). The block carries
+per-room REFINEMENTS over the site-wide vocabulary above; the framing,
+the register mapping, and the banned forms are NOT restated here —
+those live exclusively in `authoring_style`. If the per-room block
+itself is empty (an older spec, authored before `visual_style` landed),
+skip to the brief.
 
 ```yaml
 {{visual_style}}
 ```
 
-Read the per-room block field by field. Each field is load-bearing —
-and each field either RESTATES a site-wide default (in which case the
-site-wide value in `authoring_style` above already carries the
-authoritative vocabulary) or NAMES a per-room specific.
-
-- **`composition`** *(site-wide default lives in
-  `authoring_style.compositions`; per-room may restate)* — the framing.
-  `side-section` is a vertical slice drawn as if the ground were sliced
-  open and viewed from the front; `top-down` looks straight down onto a
-  plan; `first-person` looks out from a body inside the room;
-  `ambient-column` is a vertical column of material with no ground or
-  sky boundary; `cutaway` reveals a normally hidden interior;
-  `silhouette` reads as the outline of a form against its field. Compose
-  the shader to that framing — do not draw a different picture than the
-  composition names.
+Read the per-room block field by field. Each field is load-bearing.
 
 - **`subject`** — the noun phrase this shader is a picture of. Say it
   once, clearly, in the first comment line of the shader body (as in
@@ -213,19 +270,6 @@ authoritative vocabulary) or NAMES a per-room specific.
   Whichever character is named, `uReduced > 0.5` MUST collapse it toward
   `still`. The reference examples show the pattern.
 
-- **`registers`** *(site-wide default lives in `authoring_style.registers`;
-  per-room may override)* — one entry per hex→role mapping. NAME each
-  register in a comment in the shader (as in `// #6E5A2E — the kept
-  ochre, humus's stored carbon`). Legibility is a design law: a reader
-  scanning the shader should be able to point at any colour and say what
-  it means physically. The site-wide default in `authoring_style` names
-  what each of the six palette roles (`bg`, `bg2`, `glow`, `accent`,
-  `accent2`, `ink`) canonically paints; the per-room `visual_style.
-  registers` OVERRIDES that mapping when this room binds a palette slot
-  to a different meaning. When the register list disagrees with the
-  spec's `palette` block, `visual_style.registers` is the authority for
-  *meaning*; `palette` still supplies the six site-manifest slots.
-
 - **`reference_notes`** — free-text references from the author. Honor them
   verbatim; do not paraphrase them into inventions. If a note says "the
   ochre reads like the underside of a cliff at low tide", the shader
@@ -238,19 +282,20 @@ authoritative vocabulary) or NAMES a per-room specific.
   or, in a `2d-over-shader` room, in what the shader leaves room for the
   2D layer to draw over.
 
-- **`banned_forms`** *(site-wide default lives in
-  `authoring_style.banned_forms`; per-room adds room-specific bans on top)*
-  — verbatim, non-negotiable. Do not emit anything matching the
-  descriptions in either list. The site-wide list carries the AGENTS.md
-  paint bar (no `createRadialGradient`, no per-frame `shadowBlur`, no
-  `ctx.filter`, no per-object gradient pass, no per-frame allocation,
-  no `Math.random`/`Date.now`, no cartoon puffiness, no emoji, no
-  marketing verbs, no glow on text); the per-room list adds anything
-  room-specific — "no drawn spiral, arms emerge from the population",
-  "no top-down or first-person composition", "no boundaries as painted
-  lines" — that a landed screenshot exposed as a failure mode. Both
-  lists apply; the per-room list is stricter than the site-wide bar
-  where the two overlap.
+The framing (`composition`), the palette-role → what-it-paints mapping
+(`registers`), and the paint bar (`banned_forms`) are NOT in this
+block — they live in `{{authoring_style}}` above, which is the sole
+source of truth for them as of phase 6. Read them there; do not expect
+a per-room override. Legibility is still the design law: NAME each
+palette register in a comment in the shader (as in `// #6E5A2E — the
+kept ochre, humus's stored carbon`) using the canonical mapping the
+site-wide `registers` block defines. Do not emit anything matching the
+paint bar the site-wide `banned_forms` list carries (no
+`createRadialGradient`, no per-frame `shadowBlur`, no `ctx.filter`, no
+per-object gradient pass, no per-frame allocation, no
+`Math.random`/`Date.now`, no cartoon puffiness, no emoji, no marketing
+verbs, no glow on text). Compose the shader to the framing the site
+carries and the room's `subject` names.
 
 ## The brief
 

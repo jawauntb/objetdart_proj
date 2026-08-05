@@ -38,7 +38,9 @@
  * which you see as the front stalling; twist turns the body axis and the
  * pattern with it; tap is tutti, one synchronized pulse of the whole
  * chord. A flick tears. Two fingers drag to pan the frame over the dense
- * sheet; two fingers twist to the notation lens. Tilt is gravity, a shake
+ * sheet; two fingers twist to the notation lens; two fingers held apart
+ * hold an interval taut across the sheet, the two cells' degrees ringing
+ * as a sustained dyad while the tissue between them stretches. Tilt is gravity, a shake
  * strains every bond, a knock rings the whole chord, and turning the sheet
  * face-down is night. A press past the sheet's cap refuses visibly, not
  * only in sound.
@@ -201,6 +203,19 @@ export default function TissueSheet() {
     let holdCellIdx = -1;
     let holdResorbed = false;
     let holdPrevTier = 0;
+    // span: two fingers held apart sustain a taut interval — the sheet held
+    // stretched between the two cells they touch, whose degrees ring as a
+    // held dyad while the bonds along the line between them run taut.
+    let spanActive = false;
+    let spanA = -1;
+    let spanB = -1;
+    let spanAx = 0;
+    let spanAy = 0;
+    let spanBx = 0;
+    let spanBy = 0;
+    let spanElapsed = 0;
+    let spanTickAt = 0;
+    let lastSpanToneAt = 0;
     let strokeX = 0;
     let strokeY = 0;
     let strokeRun = 0;
@@ -906,6 +921,60 @@ export default function TissueSheet() {
             /* noop */
           }
         },
+        span: (e) => {
+          // two fingers held apart hold an interval open across the sheet:
+          // the two cells they touch sing a sustained dyad while the tissue
+          // between them is stretched taut, deepening as the hold lengthens.
+          lastInteractionAt = performance.now();
+          if (!sheet) return;
+          if (e.phase === "release") {
+            spanActive = false;
+            spanA = -1;
+            spanB = -1;
+            try {
+              haptics.tap();
+            } catch {
+              /* noop */
+            }
+            return;
+          }
+          if (e.phase === "enter" || spanA < 0 || spanB < 0) {
+            const pa = toSheet(e.ax, e.ay);
+            const pb = toSheet(e.bx, e.by);
+            spanA = nearestCell(sheet, pa.x, pa.y, 1.6);
+            spanB = nearestCell(sheet, pb.x, pb.y, 1.6);
+          }
+          if (spanA < 0 || spanB < 0 || spanA === spanB) {
+            spanActive = false;
+            return;
+          }
+          const pa = toSheet(e.ax, e.ay);
+          const pb = toSheet(e.bx, e.by);
+          spanAx = pa.x;
+          spanAy = pa.y;
+          spanBx = pb.x;
+          spanBy = pb.y;
+          spanActive = true;
+          spanElapsed = e.elapsed;
+          spanTickAt = performance.now();
+          const deep = Math.min(1, e.elapsed / 2600);
+          const now = performance.now();
+          if (now - lastSpanToneAt > 300) {
+            lastSpanToneAt = now;
+            // the sustained interval lengthens and adds an octave shimmer as
+            // the tension deepens — 900ms and 2400ms never sound the same
+            const dur = 0.3 + deep * 0.6;
+            try {
+              audio.playTone(voiceOf(degrees[spanA], ROOT_HZ), dur);
+              audio.playTone(voiceOf(degrees[spanB], ROOT_HZ) * (deep > 0.6 ? 2 : 1), dur);
+              haptics.ripple(0.16 + deep * 0.26);
+            } catch {
+              /* noop */
+            }
+            lit[spanA] = 1;
+            lit[spanB] = 1;
+          }
+        },
         rhythm: (e) => {
           // the sheet takes the hand's tempo for its contraction wave
           if (e.stability > 0.65 && e.bpm > 24) {
@@ -1193,6 +1262,21 @@ export default function TissueSheet() {
         if (pitActive && now - pitTickAt > 340 && pitTickAt > 0) pitActive = false;
         if (pitActive) constrict(sheet, pitX, pitY, 2.1, pitAmount);
         else relaxConstriction(sheet, dt * timeScale, 0.55);
+
+        // the span, sustained: the two touched cells are held at the fingers
+        // and the elastic sheet between them stays stretched taut — the pull
+        // stiffens the longer the interval is held, and lets go on release
+        if (spanActive && now - spanTickAt > 340) spanActive = false;
+        if (spanActive && spanA >= 0 && spanB >= 0 && spanA < sheet.n && spanB < sheet.n) {
+          const deep = Math.min(1, spanElapsed / 2600);
+          const k = 0.1 + deep * 0.16;
+          sheet.px[spanA] += (spanAx - sheet.px[spanA]) * k;
+          sheet.py[spanA] += (spanAy - sheet.py[spanA]) * k;
+          sheet.px[spanB] += (spanBx - sheet.px[spanB]) * k;
+          sheet.py[spanB] += (spanBy - sheet.py[spanB]) * k;
+          lit[spanA] = Math.max(lit[spanA], 0.6);
+          lit[spanB] = Math.max(lit[spanB], 0.6);
+        }
 
         advance(sheet, dt * timeScale, {
           gx: reduced ? 0 : gx,
@@ -1559,6 +1643,18 @@ export default function TissueSheet() {
         if (anyLit) {
           ctx.strokeStyle = `rgba(248, 240, 224, ${0.4 * alpha})`;
           ctx.lineWidth = 1;
+          ctx.stroke();
+        }
+
+        // — the span's held interval: a taut bright line between the two
+        // cells, brighter and heavier the longer the tension is sustained —
+        if (spanActive && spanA >= 0 && spanB >= 0 && spanA < n && spanB < n) {
+          const deep = Math.min(1, spanElapsed / 2600);
+          ctx.strokeStyle = `rgba(231, 172, 82, ${(0.28 + deep * 0.42) * alpha})`;
+          ctx.lineWidth = 1 + deep * 1.5;
+          ctx.beginPath();
+          ctx.moveTo(ox + sheet.px[spanA] * scale, oy + sheet.py[spanA] * scale);
+          ctx.lineTo(ox + sheet.px[spanB] * scale, oy + sheet.py[spanB] * scale);
           ctx.stroke();
         }
 

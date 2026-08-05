@@ -5,6 +5,7 @@ import { getFieldAudio } from "@/lib/audio";
 import { useField } from "@/store/field";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import { relaxTurbulence, stirTurbulence } from "@/lib/turbulence";
 import {
@@ -610,6 +611,7 @@ export default function Ocean() {
       planted: { kind: NaturalKind; ny: number } | null;
       settled: boolean;
     } = { crasherFired: false, planted: null, settled: false };
+    let lastHoldGatherAt = 0;
     let lastDragEmit = 0;
     let lastWindFxAt = 0;
     let lastScrubAt = 0;
@@ -755,52 +757,142 @@ export default function Ocean() {
       tap: (e) => {
         lastGestureAt = performance.now();
         if (e.fingers === 3) {
-          addRipple((surf.clientWidth || 1) / 2, seaLevelPx(), 56 + e.intensity * 44);
+          // tutti — everything alive in the sea answers at once: the swell
+          // rings, every natural bobs in its own ripple, and in the dark the
+          // motes flare across the whole column.
+          const wT = surf.clientWidth || 1;
+          const hT = surf.clientHeight || 1;
+          const horizonT = hT * 0.15;
+          addRipple(wT / 2, seaLevelPx(), 56 + e.intensity * 44);
           stirTurbulence(0.1 + e.intensity * 0.12);
+          for (const n of naturals) {
+            addRipple(n.nx * wT, horizonT + Math.pow(n.ny, 0.85) * (hT - horizonT), 12 + e.intensity * 10);
+          }
+          if (depthRef.current > 0.38) {
+            for (let i = 0; i < 5; i++) {
+              addSpark(wT * (0.14 + i * 0.18), hT * (0.30 + (i % 2) * 0.32), 0.45 + e.intensity * 0.4);
+            }
+          }
           haptics.ripple(e.intensity);
           try { getFieldAudio().chime(); } catch { /* noop */ }
+          try { getFieldAudio().playTone(96 + e.intensity * 40, 0.5); } catch { /* noop */ }
           return;
         }
-        if (e.fingers !== 1) return; // the sea absorbs frame/law taps
+        if (e.fingers !== 1) return; // the sea absorbs frame taps
         armSensors();
         const { x, y } = toLocal(e.x, e.y);
+        const tier = tapTrainTier(e.count);
+        const depth01 = tapTrainDepth(e.count);
         // tap intensity is the splash: ripple height, spark brightness and
-        // crasher size all ride the same 0..1 from core.
-        addRipple(x, y, 28 * (0.6 + e.intensity * 0.95));
-        stirTurbulence(e.intensity * 0.05);
-        haptics.ripple(e.intensity);
+        // crasher size all ride the same 0..1 from core; the train keeps
+        // deepening the same answer between its rungs.
+        addRipple(x, y, 28 * (0.6 + e.intensity * 0.95 + depth01 * 0.5));
+        stirTurbulence(e.intensity * 0.05 + depth01 * 0.04);
+        haptics.ripple(Math.min(1, e.intensity + depth01 * 0.3));
         const deep = depthRef.current > 0.38;
+        const wSurf = surf.clientWidth || 1;
+        const hSurf = surf.clientHeight || 1;
         if (deep) {
-          addSpark(x, y, 0.7 + e.intensity * 0.6);
+          addSpark(x, y, 0.7 + e.intensity * 0.6 + depth01 * 0.3);
           useField.getState().recordTape("ripple", 0.7, "biolume");
-          try { getFieldAudio().playNote(74 + Math.floor(e.intensity * 10), 160); } catch { /* noop */ }
-        } else {
-          useField.getState().recordTape("ripple", 0.85);
-          try { getFieldAudio().chime(); } catch { /* noop */ }
-          const wSurf = surf.clientWidth || 0;
-          const nowMs = performance.now();
-          if (nowMs - lastTapCrasherAt > 180) {
-            lastTapCrasherAt = nowMs;
+          try { getFieldAudio().playNote(74 + Math.floor(e.intensity * 10) + Math.round(depth01 * 8), 160); } catch { /* noop */ }
+          // the train in the dark climbs the light: three taps ring the
+          // motes round the hand, five wake the whole field, seven and more
+          // send a bioluminescent wave across the frame.
+          if (tier === "n") {
+            for (let i = 0; i < 10; i++) {
+              addSpark((0.06 + i * 0.098) * wSurf, y + Math.sin(i * 1.7) * hSurf * 0.08, 0.8 + depth01 * 0.3);
+            }
+            try { getFieldAudio().thud(); } catch { /* noop */ }
+            try { getFieldAudio().playNote(46, 620); } catch { /* noop */ }
+            haptics.storm();
+            useField.getState().recordTape("ripple", 1, "biolume/wave");
+          } else if (tier === 5) {
+            for (let i = 0; i < motes.length; i += 12) {
+              const m = motes[i];
+              addSpark(m.x * wSurf, m.y * hSurf, 0.5 + depth01 * 0.3);
+            }
+            try { getFieldAudio().bell(); } catch { /* noop */ }
+            haptics.roll();
+          } else if (tier === 3) {
+            for (let i = 0; i < 5; i++) {
+              const a = (i / 5) * Math.PI * 2;
+              addSpark(x + Math.cos(a) * 64, y + Math.sin(a) * 44, 0.5 + depth01 * 0.35);
+            }
+            try { getFieldAudio().playNote(79, 220); } catch { /* noop */ }
+            haptics.ripple(0.5 + depth01 * 0.3);
+          }
+          return;
+        }
+        useField.getState().recordTape("ripple", 0.85);
+        try { getFieldAudio().chime(); } catch { /* noop */ }
+        // the surface train wakes the sea's own inhabitants: three taps
+        // startle the seabirds up off the water, five call a whale under
+        // the hand, seven and more raise a rogue set off the tap's side.
+        if (tier === "n") {
+          const fromLeft = x < wSurf / 2;
+          for (let i = 0; i < 3; i++) {
             spawnCrasher({
-              x, y: seaLevelPx(),
-              size: 0.45 + e.intensity * 0.35,
-              dir: (x > wSurf / 2) ? Math.PI - 0.1 : 0.1,
-              duration: 1.7,
-              kind: "tap",
+              x: fromLeft ? -40 - i * 60 : wSurf + 40 + i * 60,
+              y: seaLevelPx(),
+              vx: (fromLeft ? 1 : -1) * (150 + depth01 * 90 + i * 24),
+              size: 1.0 + depth01 * 0.3,
+              dir: fromLeft ? 0.06 : Math.PI - 0.06,
+              duration: 3.0,
+              breakAt: 0.55,
+              kind: "swipe",
             });
           }
+          try { getFieldAudio().playTone(80, 0.9); } catch { /* noop */ }
+          try { getFieldAudio().thud(); } catch { /* noop */ }
+          haptics.storm();
+          useField.getState().recordTape("ripple", 1, "ocean/set");
+          return;
+        }
+        if (tier === 5) {
+          addWeather({ kind: "whale", t0: simNow, duration: 3.4, x, dir: x > wSurf / 2 ? -1 : 1 });
+          try { getFieldAudio().thud(); } catch { /* noop */ }
+          try { getFieldAudio().playNote(41, 520); } catch { /* noop */ }
+          haptics.roll();
+          useField.getState().recordTape("ripple", 0.9, "ocean/whale");
+          return;
+        }
+        if (tier === 3) {
+          addWeather({
+            kind: "seabirds", t0: simNow, duration: 10,
+            count: 4 + Math.round(e.intensity * 4 + depth01 * 3),
+            yBase: hSurf * (0.06 + depth01 * 0.05),
+            dir: x > wSurf / 2 ? -1 : 1,
+            seed: x + y,
+          });
+          try { getFieldAudio().playNote(81, 180); } catch { /* noop */ }
+          haptics.ripple(0.5 + depth01 * 0.3);
+          useField.getState().recordTape("ripple", 0.7, "ocean/birds");
+          return;
+        }
+        const nowMs = performance.now();
+        if (nowMs - lastTapCrasherAt > 180) {
+          lastTapCrasherAt = nowMs;
+          spawnCrasher({
+            x, y: seaLevelPx(),
+            size: 0.45 + e.intensity * 0.35 + depth01 * 0.2,
+            dir: (x > wSurf / 2) ? Math.PI - 0.1 : 0.1,
+            duration: 1.7,
+            kind: "tap",
+          });
         }
       },
       hold: (e) => {
         lastGestureAt = performance.now();
         if (e.fingers === 3) {
-          // three fingers hold the law: the whole sea slows while held
+          // three fingers hold the law: the whole sea slows while held, and
+          // keeps slowing — deeper at 2400ms than at 900ms, never a switch
           if (e.phase === "enter") {
-            timeScaleTarget = 0.25;
             try { getFieldAudio().playTone(58, 0.6); } catch { /* noop */ }
             try { haptics.tap(); } catch { /* noop */ }
           }
           if (e.phase === "release") timeScaleTarget = 1;
+          else timeScaleTarget = 1 - 0.78 * Math.min(1, e.elapsed / 2400);
           return;
         }
         if (e.fingers !== 1) return;
@@ -816,6 +908,19 @@ export default function Ocean() {
         pointer.current.y = y;
         pointer.current.pressed = e.phase !== "release";
         if (e.phase === "release") return;
+        // duration is an axis: the sea keeps gathering round the held
+        // finger past every tier — wider rings, quicker pulse, a rising
+        // note — so 2400ms answers more than 900ms ever did.
+        const gather = Math.min(1, e.elapsed / 2600);
+        const holdNow = performance.now();
+        if (holdNow - lastHoldGatherAt > 460 - gather * 220) {
+          lastHoldGatherAt = holdNow;
+          addRipple(x, y, 8 + gather * 24);
+          if (depthRef.current > 0.38) addSpark(x, y, 0.3 + gather * 0.5);
+          else stirTurbulence(0.02 + gather * 0.05);
+          try { getFieldAudio().playNote(52 + Math.round(gather * 12), 120); } catch { /* noop */ }
+          haptics.tap();
+        }
         // touch tier — the sea gathers toward the held finger
         // (was a private 780ms timer; the threshold now lives in core)
         if (e.tier >= 1 && !holdState.crasherFired) {

@@ -43,26 +43,13 @@ palette:
   ink: "#e9edf8"
 
 visual_style:
-  composition: top-down
   subject: "one spiral galaxy from above the disc — 180,000 stars streaming through a two-armed density wave"
   form_language: [point-cloud, SDF, value-noise-FBM, ribbon-flow]
   motion_character: cyclic
-  registers:
-    - "deep space between the arms — via bg"
-    - "the disc's outer haze and cold outer sky — via bg2"
-    - "the young blue light sitting on the arm's crest and the cold foreground halo stars — via glow"
-    - "the warm bulge and the old golden light of the inner disc — via accent"
-    - "the pale foreground vault and the far cool arm — via accent2"
-    - "the twist-lens ink (corotation ring, log-spiral crest, rotation-curve overlay) — via ink"
   reference_notes:
     - "M51 / M83 atlas plates — a bulge, a dust lane biting the inner edge, blue crests"
     - "particle-cloud galaxies from a planetarium simulation: the arms LIT by where the crowd IS, not painted"
     - "a halo of foreground stars fixed in world coordinates so they parallax as the eye leans, not a screen-space overlay"
-  banned_forms:
-    - "no createRadialGradient, no shadowBlur per AGENTS.md"
-    - "no drawn spiral — the arms emerge from where the population's small excursions compress"
-    - "no first-person or side-section — the eye is above the disc plane and can lean around it"
-    - "no fat star discs — each star is a couple of pixels; structure comes from where stars ARE"
   mood: "the wave outlives the stars that pass through it; the room turns whether or not you look"
   gesture_feedback_style: "a tap on a star rings its orbital speed (inner disc higher); a hold gathers gas into a nursery knot that brightens and, past the ceremony, blows out as a real supernova shell propagating at signal speed"
 

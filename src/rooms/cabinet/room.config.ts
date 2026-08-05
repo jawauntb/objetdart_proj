@@ -46,6 +46,9 @@ const cabinet = {
       "a gold armature under glass, every room in the site hung on it as a gem, lit by the current you are standing in.",
     moves: [
       "hover or focus a gem → the case turns toward it and its cluster warms",
+      "rapid taps on open glass → three ring the standing current's gems in an arpeggio, five kindle every ember you have planted, seven and more swell the whole case into its crescendo",
+      "circle a finger → the dust stirs with the circling, faster with a faster hand",
+      "hold two still fingers apart → the glass holds its chord open, deepening for as long as the interval is sustained",
       "twist (2 fingers) → the lens turns through the four currents; the drawer follows",
       "two-finger drag → the whole assembly leans, then springs back",
       "two-finger tap → the case returns to the field, centered",

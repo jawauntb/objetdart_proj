@@ -45,8 +45,8 @@ export type Season = "spring" | "summer" | "fall" | "winter";
 export const PLOT_DWELL_MS: Record<Exclude<PlotRole, "empty">, number> = {
   home: 0,
   store: 900,
-  event: 2100,
-  tree: 3800,
+  event: 1800,
+  tree: 2200,
 };
 
 /**
@@ -81,11 +81,10 @@ export function needAnsweredBy(role: PlotRole): Need | null {
 
 /**
  * The city keeps its own day. `cityTimeMs` runs on the shell's clock; the
- * day-fraction is what determines dawn, noon, dusk, and night. A quarter of
- * a day is roughly two of the site's 7s breaths — long enough that the
- * cycle is felt, short enough that the visitor sees it happen while playing.
+ * day-fraction is what determines dawn, noon, dusk, and night. Two minutes
+ * for a full cycle — dawn→dusk is felt without the sun racing past.
  */
-export const CITY_DAY_MS = 28_000;
+export const CITY_DAY_MS = 120_000;
 
 /** 0..1 where 0 is dawn, 0.25 noon, 0.5 dusk, 0.75 midnight. */
 export function dayFraction(cityTimeMs: number): number {
@@ -280,6 +279,97 @@ export function effectiveDistanceSq(d2: number, regular: boolean): number {
   return regular ? d2 / (REGULAR_PULL_FACTOR * REGULAR_PULL_FACTOR) : d2;
 }
 
+// ——— persisted ledger — the belonging that must outlive a page close ——————
+//
+// A regular is a habit, and a habit is history. Without persistence, the
+// plots come back on reload but the teal colonies around them do not — the
+// visitor sees decoration where their previous visit built causal history.
+// This ledger is the small state vector that IS a person's belonging:
+// which plots they kept returning to (foodVisit / gatherVisit) and which
+// they crossed the regular threshold at (regularStoreId / regularEventId).
+// Persist this and the settlement's micro-communities survive; drop it and
+// the plot's identity resets to a role instead of a history.
+//
+// The (homeId, seed) pair identifies which dweller of which home this
+// ledger belongs to — spawning is deterministic (`dwellersPerHome(home.seed)`
+// residents, each seeded `home.seed ^ (i + 1)`), so on restore the seed
+// matches back to exactly the person the ledger came from.
+
+export type PersistedPersonLedger = {
+  seed: number;
+  homeId: number;
+  foodVisit: VisitRecord | null;
+  gatherVisit: VisitRecord | null;
+  regularStoreId: number | null;
+  regularEventId: number | null;
+};
+
+/**
+ * Read a person's ledger for persistence. Structural copy of the visit
+ * records so the caller cannot mutate the returned object into the person
+ * — the persist path is a pure read.
+ */
+export function personLedgerFor(person: {
+  seed: number;
+  homeId: number;
+  foodVisit: VisitRecord | null;
+  gatherVisit: VisitRecord | null;
+  regularStoreId: number | null;
+  regularEventId: number | null;
+}): PersistedPersonLedger {
+  return {
+    seed: person.seed,
+    homeId: person.homeId,
+    foodVisit: person.foodVisit
+      ? { plotId: person.foodVisit.plotId, visits: person.foodVisit.visits }
+      : null,
+    gatherVisit: person.gatherVisit
+      ? { plotId: person.gatherVisit.plotId, visits: person.gatherVisit.visits }
+      : null,
+    regularStoreId: person.regularStoreId,
+    regularEventId: person.regularEventId,
+  };
+}
+
+/**
+ * True when a ledger carries any belonging — a visit record started or a
+ * regular slot filled. An empty ledger has nothing to persist; skip it and
+ * the payload stays small.
+ */
+export function ledgerIsMeaningful(ledger: PersistedPersonLedger): boolean {
+  return (
+    ledger.foodVisit != null ||
+    ledger.gatherVisit != null ||
+    ledger.regularStoreId != null ||
+    ledger.regularEventId != null
+  );
+}
+
+/**
+ * Apply a persisted ledger back onto a freshly-spawned person. Mutates the
+ * target. The caller matched by (homeId, seed) — mismatches are the caller's
+ * problem, and the applied fields are only the four the ledger owns (the
+ * spawn location, phase, need, and heading remain the fresh spawn's).
+ */
+export function applyPersonLedger(
+  person: {
+    foodVisit: VisitRecord | null;
+    gatherVisit: VisitRecord | null;
+    regularStoreId: number | null;
+    regularEventId: number | null;
+  },
+  ledger: PersistedPersonLedger,
+): void {
+  person.foodVisit = ledger.foodVisit
+    ? { plotId: ledger.foodVisit.plotId, visits: ledger.foodVisit.visits }
+    : null;
+  person.gatherVisit = ledger.gatherVisit
+    ? { plotId: ledger.gatherVisit.plotId, visits: ledger.gatherVisit.visits }
+    : null;
+  person.regularStoreId = ledger.regularStoreId;
+  person.regularEventId = ledger.regularEventId;
+}
+
 /**
  * Like `targetForNeed`, but honors a person's regular slot. The signature
  * takes the plot id (or `null`) rather than the full record so the caller can
@@ -312,7 +402,7 @@ export function targetForNeedWithRegular(
   return best;
 }
 
-// ——— arrival — a phased arc, edge → home → belonging —————————————————————
+// ——— arrival — a phased arc, edge → home → belonging or leaving ——————————
 //
 // A newly-spawned dweller does not blink into existence at their front door;
 // they walk in from the nearest edge of the map. The arrival phase is short
@@ -320,9 +410,89 @@ export function targetForNeedWithRegular(
 // that arrivals *manufacture* the possibility of the next encounter. Once
 // they reach home the first time, they are "settled" and the ordinary need
 // cycle takes over.
+//
+// Density-as-engine is not one-way. A settlement that only gains people is
+// not a settlement — it is a bag. A dweller whose needs stay unmet long
+// enough enters a **leaving** phase: their target is the nearest map edge,
+// and on arrival they are retired from the population. The arc reads as
+// arrival → consolidation → belonging OR leaving, and the tradeoff of
+// density becomes visible: proximity manufactures possibility, and the
+// absence of proximity retires a person from the field.
 
-/** Person phase — a small state machine. Arriving people cannot yet gather. */
-export type PersonPhase = "arriving" | "settled";
+/**
+ * Person phase — a small state machine.
+ *
+ *   arriving → the first walk in from the map edge to home. Cannot yet
+ *              gather, cannot leave.
+ *   settled  → the ordinary need cycle. Rest, food, gather; regulars form;
+ *              hesitation slows the step when the tradeoff is real.
+ *   leaving  → both needs sustained below LEAVING_NEED_THRESHOLD for
+ *              LEAVING_UNMET_MS. Target is the nearest map edge, not a
+ *              plot; on arrival the caller retires the person.
+ */
+export type PersonPhase = "arriving" | "settled" | "leaving";
+
+// ——— leaving — the tradeoff density buys must be able to lose someone ——
+//
+// The brief's arc is arrival → consolidation → belonging OR leaving, and
+// PersonPhase was one-way until now. A dweller whose `fed` AND `rested` stay
+// below LEAVING_NEED_THRESHOLD for LEAVING_UNMET_MS has been trying and
+// failing to answer their needs — the plots they need do not exist, or lie
+// too far. Density manufactures possibility; the absence of density manuf-
+// actures loss. The threshold is strict-less-than so a person at exactly
+// 0.25 (barely fed, barely rested) is not yet leaving — leaving requires
+// real deprivation, not the ordinary trough of the day.
+
+/** Below this on BOTH fed and rested, the counter for leaving accrues. */
+export const LEAVING_NEED_THRESHOLD = 0.25;
+
+/**
+ * How long both needs must remain below the threshold before the transition
+ * fires. About one-quarter of a city day — a visible stretch of the visitor
+ * watching the person try, not an instantaneous flip. Kept here so the test
+ * and the renderer read the same constant.
+ */
+export const LEAVING_UNMET_MS = 8_000;
+
+/**
+ * True when both needs are below the leaving threshold. The caller ticks a
+ * counter while this holds and resets it the moment it doesn't — a person
+ * who eats resets the timer, a person who rests resets the timer, only a
+ * person who cannot answer either need for a sustained stretch leaves.
+ */
+export function needsUnmet(fed: number, rested: number): boolean {
+  return fed < LEAVING_NEED_THRESHOLD && rested < LEAVING_NEED_THRESHOLD;
+}
+
+/**
+ * True when a person's sustained-unmet counter has crossed the leaving
+ * threshold. The caller separately tracks `unmetMs` — this predicate is
+ * the causal statement of when a transition fires.
+ */
+export function shouldLeave(fed: number, rested: number, unmetMs: number): boolean {
+  if (!needsUnmet(fed, rested)) return false;
+  return unmetMs >= LEAVING_UNMET_MS;
+}
+
+/**
+ * How long the leaving fade takes, in ms. The overlay's opacity for a
+ * leaving person eases from 1 to 0 over this window as they walk to the
+ * edge; retirement happens on arrival at the edge, whichever comes first.
+ * A leaving person is honest — they do not vanish mid-street.
+ */
+export const LEAVING_FADE_MS = 1_400;
+
+/**
+ * Fade opacity for a leaving person, given how long since the transition.
+ * Clamped to [0, 1]. Callers pass the ms since `phase` became "leaving";
+ * the renderer multiplies the person's alpha by this. A person retired at
+ * the edge before the fade completes is retired at whatever alpha they had.
+ */
+export function fadeForLeaving(msSinceLeaving: number): number {
+  if (msSinceLeaving <= 0) return 1;
+  if (msSinceLeaving >= LEAVING_FADE_MS) return 0;
+  return 1 - msSinceLeaving / LEAVING_FADE_MS;
+}
 
 export type Vec2 = { x: number; y: number };
 
@@ -358,6 +528,49 @@ export function headingFor(prev: Vec2, cur: Vec2, fallback: number): number {
   const dy = cur.y - prev.y;
   if (dx * dx + dy * dy < 1e-10) return fallback;
   return Math.atan2(dy, dx);
+}
+
+// ——— pose — a store IS what its regulars do at it ————————————————————————
+//
+// A store answering food is a plot with people STANDING at it, not a plot
+// with slivers on top of it. v2's regulars ring told you a plot was a
+// community, but every person at the plot was still drawn as a heading-
+// aligned sliver — the pose the eye reads as "walking". A colony of
+// regulars at a plot has to read as a colony of *stationary bodies*, or
+// the invariant "identity by causal role" fails at the exact spot where
+// role densifies into community.
+//
+// The predicate is pure: given how long the person has been still
+// (`stillMs`, accumulated by the caller from stepTowards' returned delta),
+// return whether the pose has flipped from walking to standing. Kept in
+// this file so the visual predicate is single-sourced and testable, in the
+// same discipline as `roleForDwell` (the dwell → role ladder both the
+// finger and the keyboard climb through this one function).
+
+/**
+ * How long a person must have made no measurable step before their pose
+ * reads as standing rather than walking. 200ms is a beat below a slow
+ * gait cycle — long enough that a person parked at a store IS visibly
+ * still, short enough that arrival flips them from walker to stander in
+ * the same second the eye reads their body.
+ *
+ * Strict-greater: at exactly 200ms the person is still walking. Standing
+ * is a decision the visitor has watched happen, not an instantaneous
+ * predicate on a single frame.
+ */
+export const STANDING_STILL_MS = 200;
+
+/**
+ * True when the person has been stationary long enough to read as
+ * standing. The caller accumulates `stillMs` frame-by-frame while
+ * stepTowards' returned delta is near zero, and resets it the frame the
+ * person moves. A negative or zero counter is walking — a person who has
+ * not yet had a chance to be still is not standing. The threshold's
+ * strict inequality matches the follow-up brief exactly: "when delta ≈ 0
+ * for > 200ms, draw a small vertical body".
+ */
+export function isStanding(stillMs: number): boolean {
+  return stillMs > STANDING_STILL_MS;
 }
 
 // ——— hesitation — two needs, two plots, one slower step ——————————————————

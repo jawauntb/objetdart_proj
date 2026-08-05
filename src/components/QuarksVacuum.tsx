@@ -41,7 +41,7 @@
 import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
-import { THRESHOLDS, attachGestures } from "@/lib/gesture";
+import { THRESHOLDS, attachGestures, tapTrainDepth, tapTrainTier } from "@/lib/gesture";
 import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import LetGo from "@/components/LetGo";
@@ -325,6 +325,14 @@ export default function QuarksVacuum() {
     /** the room's slow cycle, 0..1: a still vacuum ↔ a boiling one */
     let season = 0.15;
     let seasonSpokenAt = 0;
+    // span: two still fingers string a flux tube across the open vacuum —
+    // held to the dwell, the interval condenses into a real pair
+    const spanTube = { active: false, ax: 0, ay: 0, bx: 0, by: 0, elapsed: 0, spokenAt: 0 };
+    // rhythm: a steady tapped pulse entrains the seethe to the hand's beat
+    let entrainBpm = 0;
+    let entrainUntil = 0;
+    let lastEntrainBeat = -1;
+    let beatEnv = 0;
 
     // ————— the room runtime: govern frames, sleep when unwatched —————
     const gov = createFrameGovernor();
@@ -728,17 +736,20 @@ export default function QuarksVacuum() {
     };
 
     // three-finger tap = tutti (grammar §5): one synchronized soft pulse —
-    // every hadron's tubes shimmer and its voice speaks once, quietly
-    const tutti = () => {
+    // every hadron's tubes shimmer and its voice speaks once, quietly.
+    // Intensity is an axis: a firmer chord shakes the field harder and
+    // more voices join the statement.
+    const tutti = (strength = 0.5) => {
       const now = performance.now();
       if (now - lastTuttiAt < 1400) return;
       lastTuttiAt = now;
+      const k = clamp01(strength);
       const alive = hadrons.filter((h) => !h.retiringAt && h.closed);
       alive.forEach((h, i) => {
-        h.shiver = Math.max(h.shiver, 0.55);
-        if (i < 8) noteLater(i * 45, midiOf(h.morph), 70);
+        h.shiver = Math.max(h.shiver, 0.35 + k * 0.45);
+        if (i < 4 + Math.round(k * 6)) noteLater(i * 45, midiOf(h.morph), 70 + Math.round(k * 60));
       });
-      try { haptics.tap(); } catch { /* noop */ }
+      try { (k > 0.7 ? haptics.ripple(k) : haptics.tap()); } catch { /* noop */ }
     };
 
     // ————— gestures (the grammar, nothing private; pinch belongs to the manifold) —————
@@ -757,15 +768,88 @@ export default function QuarksVacuum() {
           }
           return;
         }
-        if (e.fingers === 3) { tutti(); return; }
+        if (e.fingers === 3) { tutti(e.intensity); return; }
         if (e.fingers !== 1) return; // anything else is gently absorbed
         const { x, y } = toLocal(e.x, e.y);
+        // the rapid-tap ladder (1 / 3 / 5 / n): perturb → the nearest
+        // hadron speaks its chord → it radiates real light → the field boils
+        const trainTier = tapTrainTier(e.count);
+        const depth = tapTrainDepth(e.count);
+        if (trainTier === "n") {
+          // crescendo: the whole vacuum boils over — a wavefront of pair
+          // production crosses the field and everything bound trembles
+          rings.push({ x, y, r: minDim() * (0.14 + depth * 0.1), born: performance.now(), life: 1100 });
+          if (rings.length > 6) rings.splice(0, rings.length - 6);
+          spraySparks(x, y, 9 + Math.round(depth * 6), minDim() * 0.22);
+          for (const h of hadrons) h.shiver = Math.min(1, h.shiver + 0.5 + depth * 0.5);
+          note(RING_MIDI, 140);
+          noteLater(90, RING_MIDI + 7, 160);
+          noteLater(200, RING_MIDI + 12, 200 + Math.round(depth * 120));
+          try { haptics.storm(); } catch { /* noop */ }
+          useField.getState().recordTape("region", 0.7 + depth * 0.3, "quarks/boil");
+          return;
+        }
+        if (trainTier === 5) {
+          // five taps shake light loose: the hadron under the hand radiates
+          // a photon from every quark and stays whole — bremsstrahlung
+          const h = hadronAt(x, y);
+          if (h && h.closed) {
+            for (let qi = 0; qi < h.quarks.length; qi++) {
+              const q = h.quarks[qi];
+              emitPhoton(q.sx, q.sy, twinkleHash(h.seed + qi * 7) * Math.PI * 2, COLOR_TINTS[h.morph.colors[qi]]);
+            }
+            h.shiver = Math.min(1, h.shiver + 0.6 + depth * 0.4);
+            try { audio().bell(); } catch { /* noop */ }
+            note(midiOf(h.morph) + 12, 200);
+            try { haptics.bloom(); } catch { /* noop */ }
+            useField.getState().recordTape("sigil", 0.7, "quarks/radiate");
+          } else {
+            // nothing bound under the hand: the vacuum rings a halo instead
+            rings.push({ x, y, r: 40 + depth * 24, born: performance.now(), life: 900 });
+            if (rings.length > 6) rings.splice(0, rings.length - 6);
+            spraySparks(x, y, 6, 44);
+            note(RING_MIDI - 3, 130);
+            try { haptics.ripple(0.5); } catch { /* noop */ }
+          }
+          return;
+        }
+        if (trainTier === 3) {
+          // three taps ask the nearest hadron for its chord: each quark
+          // speaks in turn and the whole thing spins up for a breath
+          const h = hadronAt(x, y);
+          if (h && h.closed) {
+            for (let qi = 0; qi < h.quarks.length; qi++) {
+              noteLater(qi * 70, midiOf(h.morph) + [0, 4, 7][qi % 3], 130);
+            }
+            let hcx = 0, hcy = 0;
+            for (const q of h.quarks) { hcx += q.nx; hcy += q.ny; }
+            hcx /= h.quarks.length;
+            hcy /= h.quarks.length;
+            const kick = 0.18 * (0.6 + depth);
+            for (const q of h.quarks) {
+              q.vx += -(q.ny - hcy) * kick;
+              q.vy += (q.nx - hcx) * kick;
+            }
+            h.shiver = Math.min(1, h.shiver + 0.3 + depth * 0.3);
+            try { haptics.ripple(0.4 + depth * 0.3); } catch { /* noop */ }
+            useField.getState().recordTape("object", 0.5, "quarks/chord");
+          } else {
+            spraySparks(x, y, 5 + Math.round(depth * 4), 34);
+            note(RING_MIDI - 5, 90);
+            noteLater(80, RING_MIDI, 110);
+            try { haptics.ripple(0.35); } catch { /* noop */ }
+          }
+          return;
+        }
         perturb(x, y, e.intensity);
       },
       hold: (e) => {
         lastInteractionAt = performance.now();
         if (e.fingers === 3) {
           if (e.phase === "enter") { timeScaleTarget = 0.25; try { haptics.tap(); } catch { /* noop */ } note(FLOOR_MIDI - 12, 300); }
+          // duration is an axis: the dilation keeps deepening the longer the
+          // chord stands — never the same at 900ms and 2400ms
+          if (e.phase === "tick") timeScaleTarget = Math.max(0.07, 0.25 - 0.18 * clamp01((e.elapsed - DWELL_MS) / 3000));
           if (e.phase === "release") timeScaleTarget = 1;
           return;
         }
@@ -987,6 +1071,73 @@ export default function QuarksVacuum() {
           try { haptics.ripple(0.3); } catch { /* noop */ }
         }
       },
+      span: (e) => {
+        lastInteractionAt = performance.now();
+        if (e.phase === "release") {
+          if (spanTube.active && spanTube.elapsed >= DWELL_MS && hadrons.length < MAX_HADRONS + 2) {
+            // held to the dwell, the strung interval condenses: a real pair
+            // whose quarks land exactly where the fingers stood
+            const anx = clamp(spanTube.ax / Math.max(1, width), 0.05, 0.95);
+            const anyy = clamp(spanTube.ay / Math.max(1, height), 0.07, 0.94);
+            const bnx = clamp(spanTube.bx / Math.max(1, width), 0.05, 0.95);
+            const bny = clamp(spanTube.by / Math.max(1, height), 0.07, 0.94);
+            const seed = seedForKind(hashSeed(Math.round(anx * 811), Math.round(bny * 809), seedCount), "pair");
+            seedCount += 1;
+            const h = makeHadron(seed, (anx + bnx) / 2, (anyy + bny) / 2, 0.72);
+            h.quarks[0].nx = anx;
+            h.quarks[0].ny = anyy;
+            h.quarks[1].nx = bnx;
+            h.quarks[1].ny = bny;
+            hadrons.push(h);
+            retireOldest();
+            try { audio().bell(); } catch { /* noop */ }
+            note(midiOf(h.morph), 260);
+            try { haptics.bloom(); } catch { /* noop */ }
+            spraySparks((spanTube.ax + spanTube.bx) / 2, (spanTube.ay + spanTube.by) / 2, 6, 30);
+            useField.getState().recordTape("object", 0.6, "quarks/span-pair");
+            save();
+            syncStanding();
+          } else if (spanTube.active) {
+            // let go early: the interval dissolves back into the seethe
+            spraySparks((spanTube.ax + spanTube.bx) / 2, (spanTube.ay + spanTube.by) / 2, 3, 22);
+            note(FLOOR_MIDI + 5, 160);
+          }
+          spanTube.active = false;
+          return;
+        }
+        const a = toLocal(e.ax, e.ay);
+        const b = toLocal(e.bx, e.by);
+        spanTube.ax = a.x;
+        spanTube.ay = a.y;
+        spanTube.bx = b.x;
+        spanTube.by = b.y;
+        spanTube.elapsed = e.elapsed;
+        if (e.phase === "enter") {
+          spanTube.active = true;
+          spanTube.spokenAt = 0;
+          note(FLOOR_MIDI + 2, 140);
+          try { haptics.tap(); } catch { /* noop */ }
+          return;
+        }
+        // tick: the tube grows more real for as long as the interval holds —
+        // its word climbs with it, sustain as a continuous axis
+        const now = performance.now();
+        if (now - spanTube.spokenAt > 420) {
+          spanTube.spokenAt = now;
+          note(FLOOR_MIDI + 4 + Math.round(clamp01(spanTube.elapsed / DWELL_MS) * 10), 110);
+        }
+      },
+      rhythm: (e) => {
+        // a steady tapped pulse entrains the seethe: for a while the vacuum
+        // boils on the hand's beat instead of only the shared clock
+        if (e.stability <= 0.7 || e.bpm < 30 || e.bpm > 220) return;
+        lastInteractionAt = performance.now();
+        entrainBpm = e.bpm;
+        entrainUntil = performance.now() + 9000;
+        lastEntrainBeat = -1;
+        note(FLOOR_MIDI + 7, 150);
+        try { haptics.detent(); } catch { /* noop */ }
+      },
     });
 
     // ————— the vessel: the device is the vacuum's body (grammar §5) —————
@@ -1039,7 +1190,7 @@ export default function QuarksVacuum() {
           if (rings.length > 6) rings.splice(0, rings.length - 6);
           spraySparks(width / 2, height / 2, 5 + Math.round(intensity * 6), minDim() * 0.22);
         }
-        tutti();
+        tutti(intensity);
       },
       flip: ({ faceDown }) => {
         const want = faceDown ? 1 : 0;
@@ -1397,6 +1548,26 @@ export default function QuarksVacuum() {
       const seethe = 0.5 - 0.5 * Math.cos(season * Math.PI * 2);
       gatherFade = Math.max(0, gatherFade - dt * 2.2);
 
+      // entrained seethe: while the hand's pulse holds, the vacuum boils on
+      // the beat — each downbeat flares a brief burst of pair production
+      beatEnv = 0;
+      if (now < entrainUntil && entrainBpm > 0) {
+        const beatLen = 60000 / entrainBpm;
+        const beatIdx = Math.floor(now / beatLen);
+        beatEnv = Math.max(0, 1 - ((now % beatLen) / beatLen) * 3);
+        if (beatIdx !== lastEntrainBeat) {
+          lastEntrainBeat = beatIdx;
+          if (!reduce) {
+            spraySparks(
+              width * (0.3 + twinkleHash(beatIdx) * 0.4),
+              height * (0.3 + twinkleHash(beatIdx + 3) * 0.4),
+              2, 26,
+            );
+          }
+          note(FLOOR_MIDI - 5, 50);
+        }
+      }
+
       timeScale += (timeScaleTarget - timeScale) * Math.min(1, dt * 5);
       if (!reduce) localT += dt * timeScale;
       windX += (windTargetX - windX) * Math.min(1, dt * 2.2);
@@ -1587,7 +1758,7 @@ export default function QuarksVacuum() {
         // the season decides how much of the schedule the field shows: a
         // cold vacuum keeps most of its fluctuations to itself, a boiling one
         // shows them all. The schedule itself never changes — determinism.
-        const shown = (0.45 + seethe * 0.75) * detail.particles;
+        const shown = (0.45 + seethe * 0.75) * (1 + beatEnv * 0.6) * detail.particles;
         for (let slot = nowSlot - back; slot <= nowSlot; slot++) {
           const age = btMs - slot * VACUUM_SLOT_MS;
           if (age < 0) continue;
@@ -1680,6 +1851,40 @@ export default function QuarksVacuum() {
             ctx.stroke();
           }
         }
+      }
+
+      // ——— the strung interval ———
+      // two still fingers hold a flux tube open across the vacuum: it fills
+      // in from both ends, sagging like the real strings, and whitens as the
+      // dwell approaches — the pair it is about to become
+      if (spanTube.active) {
+        const fill = clamp01(spanTube.elapsed / DWELL_MS);
+        const sx1 = spanTube.ax;
+        const sy1 = spanTube.ay;
+        const sx2 = spanTube.bx;
+        const sy2 = spanTube.by;
+        const len = Math.max(1, Math.hypot(sx2 - sx1, sy2 - sy1));
+        const px = -(sy2 - sy1) / len;
+        const py = (sx2 - sx1) / len;
+        const sag = (1 - fill) * 16 + (reduce ? 2 : Math.sin(breath * 2) * 3);
+        const hx = (sx1 + sx2) / 2 + px * sag;
+        const hy = (sy1 + sy2) / 2 + py * sag;
+        ctx.strokeStyle = colorAlpha(mixHex(COLOR_TINTS[0], "#F2EEE6", fill), 0.2 + fill * 0.55);
+        ctx.lineWidth = 0.8 + fill * 2;
+        ctx.beginPath();
+        ctx.moveTo(sx1, sy1);
+        ctx.quadraticCurveTo(hx, hy, sx2, sy2);
+        ctx.stroke();
+        // the two ends already wear their charges: quark and antiquark
+        ctx.fillStyle = colorAlpha(COLOR_TINTS[0], 0.3 + fill * 0.6);
+        ctx.beginPath();
+        ctx.arc(sx1, sy1, 2 + fill * 2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = colorAlpha(ANTI_TINTS[0], 0.3 + fill * 0.6);
+        ctx.beginPath();
+        ctx.arc(sx2, sy2, 2 + fill * 2, 0, Math.PI * 2);
+        ctx.fill();
+        if (fill >= 1) stamp(CORONA_SPRITE, (sx1 + sx2) / 2, (sy1 + sy2) / 2, 18, 0.4);
       }
 
       // glimmer (grammar §6.3) — after quiet the same gathering ripples once

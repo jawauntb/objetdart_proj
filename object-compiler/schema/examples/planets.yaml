@@ -43,25 +43,13 @@ palette:
   ink: "#f2eee6"
 
 visual_style:
-  composition: top-down
   subject: "one star, a fixed budget of dust, and up to nine worlds — each a lit sphere decoded from its 12-dim latent"
   form_language: [SDF, value-noise-FBM, hand-painted]
   motion_character: cyclic
-  registers:
-    - "deep space behind everything — via bg"
-    - "the ocean-blue face of a cold world and the dust disc's outer haze — via bg2"
-    - "the star's warmth and the ochre / firelight of an inner burnt world — via glow"
-    - "the ink of the world card and the pale ring band — via accent"
-    - "cool outer worlds and the sea shallows — via accent2"
-    - "the twelve-spoke lens spokes and label ink — via ink"
   reference_notes:
     - "the way an early Cassini plate paints Saturn — a ringed disc against velvet space"
     - "planet portraits from a school atlas: visibly ochre-and-blue continents over a lit sphere"
     - "the dust-ring shimmer of an orrery photograph — a brightness that IS the mass reserve"
-  banned_forms:
-    - "no createRadialGradient, no shadowBlur per AGENTS.md"
-    - "no side-section or first-person view; no drawn continents (all terrain is fbm3 decoded from the latent)"
-    - "no sprite planets — every world is an instanced SDF disc decoded live and each ring is a real equatorial-plane pass"
   mood: "attentive making; the field visibly dims as you forge, brightens as you let go"
   gesture_feedback_style: "a hold on open dust condenses a world under the finger (radius saturates on ACCRETION_TAU_MS); the accretion halo is drawn on the 2D overlay while the sphere below decodes the latent live"
 
@@ -125,6 +113,18 @@ guide:
 # Persistence: the room's own storage_key, gated by LetGo.
 life:
   population:
+    depth_note: >
+      two addressable populations: the worlds themselves (up to nine,
+      each a compact 12-dim latent decoded into a body) and the dust
+      motes of the reserve (a bounded set of DUST_N=260, redrawn every
+      frame from the mass reserve as a point-cloud pass). moons are a
+      latent DIMENSION of a world rather than a separate population,
+      so they count with the world that owns them; the star itself is
+      a fixed singleton with its own luminosity ledger, and does not
+      count as a population in the "dwell creates one" sense. calling
+      this "one population plus a field" would be honest for /spring's
+      shape but wrong here — dust moves independently and its
+      brightness IS the reserve, an invertible visual invariant.
     objects:
       - noun: world
         max_count: 9   # MAX_WORLDS
@@ -134,6 +134,14 @@ life:
         creates_via_verb: dwell
         retires_via: [flick, ceremony, LetGo]
         implementation_hint: "inline array + persisted through the room's own storage_key"
+      - noun: dust mote
+        max_count: 260   # DUST_N
+        state_shape: "phase (0..τ), radius (0.06..0.68), tumble (0..τ), seed"
+        lifecycle: "born once at genesis by mulberry32(hashSeed(0xd05, 0x7)) → orbits the star on its own phase → each mote's alpha reads from the mass reserve, so the whole disc visibly dims as worlds condense out of it and brightens when a world is flicked back into the star"
+        persistence: ephemeral
+        creates_via_verb: tap
+        retires_via: [LetGo]
+        implementation_hint: "inline Float32Array (dustArr, 4 values per mote) + one instanced draw call (dustDraw); alpha per mote sampled live from the reserve — not persisted, redrawn from the reserve each frame"
   breath:
     period_seconds: 7
     reads:
@@ -243,3 +251,136 @@ verb_intent: >
   (mass returns to reserve). no room-local timing constants — the
   handlers read `ACCRETION_TAU_MS` from `worldforge.ts` and all tier
   gates from `gesture/core.ts`.
+
+# ——— phase 7: DEPTH — the four axes ———————————————————————————————————
+# Round-trip-derived from src/components/PlanetForge.tsx: four shader
+# programs (body, ring, dust, star), two populations, five discoverables
+# tied to real physics, and a state lattice of day/night × dilated ×
+# lens/12-spoke × merge/scatter/settle.
+
+shader_layers:
+  - name: aventurine background field
+    brief: >
+      The base of the room: a shader-driven `bg` colour with faint
+      value-noise stars in the far dark; no allocation per frame, one
+      quad drawn behind the star and body passes. Reads `u_night` to
+      dim toward the flip-face-down state.
+    register: "bg+bg2"
+    order: background
+  - name: dust disc
+    brief: >
+      One instanced point-sprite draw for DUST_N=260 motes, each with
+      its own phase, radius, tumble and seed. Alpha per mote is a live
+      sample of the mass reserve (DUST_TOTAL − Σ world mass) — forge
+      greedily and the whole disc visibly dims; flick a world back into
+      the star and the disc brightens. The load-bearing invertible
+      visual invariant.
+    register: "accent+glow"
+    order: midground
+  - name: star + corona
+    brief: >
+      One SDF disc at the field centre, corona = exp(-r · 6) · 0.9 +
+      exp(-r · 2.2) · 0.28, granulation from vnoise on u_time, breath =
+      0.92 + 0.13 · u_breath — the star swells on the shared 7s clock,
+      not one of its own. u_lum reads the current luminosity, u_night
+      pulls the star toward dark on face-down.
+    register: "glow"
+    order: midground
+  - name: worlds — instanced body pass
+    brief: >
+      Up to MAX_WORLDS × (1 + 3) = 36 instanced SDF discs (worlds plus
+      their moons), each decoding its own 12-dim latent live in the
+      fragment shader: ocean fraction, terrain family, relief, cloud
+      cover, atmosphere depth, axial tilt, spin phase, oblateness, ice
+      caps, ring density all read from a_p0/a_p1/a_p2/a_p3 vertex
+      attributes. Lighting: the star is the ONLY lamp, and the ring's
+      shadow is cast through the equatorial plane onto each sphere.
+      One instanced draw for the whole fleet.
+    register: "accent+accent2+glow"
+    order: foreground
+  - name: ring arcs
+    brief: >
+      A second instanced draw for the ring around each ringed world
+      (density > RING_MIN). Twelve arcs per ring, each a thin band with
+      value-noise banding.
+    register: "accent2"
+    order: foreground
+  - name: 2D overlay — accretion swirl + lens spokes
+    brief: >
+      The thin canvas above the shader: the accretion halo under a
+      dwell (haptics.bloom fires on ceremony), the scattering of a
+      retired world, the flick-into-star arc, and — when the twist
+      lens is raised — the twelve spokes of the focused world's latent
+      drawn as a ring, each spoke labelled with what dimension it
+      encodes. The one lettered surface.
+    register: "ink+paper"
+    order: overlay
+
+discoverables:
+  - trigger: "flick a world hard enough that its trajectory clears escape velocity (ESCAPE_R = 1.7 field units)"
+    response: "the world scatters over RETIRE_MS=1600 as a returning cloud of dust motes; the mass reserve visibly climbs; a thud fires; the disc brightens where the mass returned"
+    register: multiple
+  - trigger: "flick a world into the star (its trajectory crosses STAR_RADIUS)"
+    response: "the star eats the world, u_lum rises, and the world's mass returns to the reserve as dust — a real thermodynamic loop, not a disappearance"
+    register: multiple
+  - trigger: "let two worlds' orbits cross so their bodies touch"
+    response: "they merge — mass is conserved, the child's latent is a mass-weighted interpolation of the parents', and what will not fit as a single world is ejected as dust; the merge fires haptics.bloom() and a chord read from the combined latent"
+    register: multiple
+  - trigger: "park a world close to the star (small orbit radius) and wait through the settle clock"
+    response: "temperature01 climbs on the inverse square, atmosphereRetention drops (Jeans escape), settleClimate drives the latent's ocean fraction toward evaporation and cloud cover to zero — the shader shows the seas boiling away and the world drying to a stone; the same latent parked far out ices over"
+    register: sight
+  - trigger: "twist a focused world past the lens threshold"
+    response: "the twelve-spoke latent notation appears as a ring around the world — each spoke a labelled dimension, each length its current value; the shader's decode is drawn side by side with the latent's read-back so the whole load-bearing invertible map (worldFromLatent → latentFromWorld) can be inspected live"
+    register: sight
+  - trigger: "scrub (a finger circling) around a world"
+    response: "windRing writes into the ring-density dimension of the latent — clockwise densifies, other way rarefies; the shader repaints the ring in the same frame; each condense fires a felt click through haptics.detent"
+    register: multiple
+
+state_machine:
+  states:
+    - name: day
+      description: "the default; the star illuminates every world's day hemisphere; u_night = 0"
+      visible_change: "worlds' day hemispheres light on their tilt-relative light angle; the dust disc glitters at its default alpha; the ambient bed is 'cosmic' with the band's own register on top"
+    - name: night
+      description: "vessel flip event (faceDown = true) sets u_night → 1 over one breath"
+      visible_change: "the whole field darkens by ~85% (col = mix(col, C_NIGHT, u_night · 0.85)); the star dims by (1 − u_night · 0.9); embers show on the night side of every world where landness > 0.08 — the candle again, at planetary scale"
+    - name: dilated
+      description: "three fingers held; the sim clock scales down to as slow as 0.05× wall time"
+      visible_change: "every world's rotation and orbit visibly slow; dust motes drift more slowly; the audio bed thickens on a matching detent"
+    - name: lens/twelve-spoke
+      description: "twist on a focused world past the lens threshold; the latent notation ring draws around it"
+      visible_change: "twelve spokes label each latent dimension; the world spins under the hand as the twist deepens; the shader continues drawing what worldFromLatent decoded, so the notation and the body agree by construction"
+    - name: merge-in-flight
+      description: "two worlds' orbits have crossed and the merge integrator is running"
+      visible_change: "the pair leans together, mass conserving; a bloom fires when the bodies contact; the child's latent takes its place; unfit mass ejects as dust"
+    - name: scattering
+      description: "a retired world (flicked past escape or into the star) is over RETIRE_MS=1600"
+      visible_change: "the world's alpha fades to zero; a cloud of dust motes fans outward from its last position; the mass reserve climbs by the world's mass; the disc brightens"
+  transitions:
+    - from: day
+      to: night
+      trigger: "vessel flip event faceDown → true; night(e.faceDown) writes u_night's target to 1"
+    - from: night
+      to: day
+      trigger: "vessel flip event faceDown → false; u_night eases back to 0 over one breath"
+    - from: "*"
+      to: dilated
+      trigger: "three-finger hold enter; timeScale(k) writes the sim clock to 0.05..1"
+    - from: dilated
+      to: "*"
+      trigger: "three-finger hold release; timeScale(1)"
+    - from: "*"
+      to: lens/twelve-spoke
+      trigger: "twist on a focused world raises the lens past its threshold; lens(e.velocity) writes into the lens ref"
+    - from: "*"
+      to: merge-in-flight
+      trigger: "two worlds' bodies touch; stepBodies integrator finds the collision and mergeWorlds runs"
+    - from: merge-in-flight
+      to: day
+      trigger: "the merge integrator has settled — the child world is placed, unfit mass ejected as dust"
+    - from: "*"
+      to: scattering
+      trigger: "a world is retired — flicked past ESCAPE_R, flicked into the star, or shifted out because MAX_WORLDS was exceeded; dyingAt is set to the current time; scatter runs over RETIRE_MS"
+    - from: scattering
+      to: day
+      trigger: "RETIRE_MS elapses; the entry is removed from the worlds array; mass returned to the reserve"

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import LetGo from "@/components/LetGo";
 import {
@@ -103,6 +104,10 @@ export default function SeedEmbryo() {
     // three-finger hold: time dilation while held.
     let timeScale = 1;
     let timeScaleTarget = 1;
+    // a steady tapped pulse entrains the seed's breath for a while.
+    let breathHz = 0.14;
+    let entrainUntil = 0;
+    let spanVoiceAt = 0;
     let asleep = false;
     let hidden = document.hidden;
     let galleryPaused = false;
@@ -143,9 +148,11 @@ export default function SeedEmbryo() {
         audio.buzz();
         writer.schedule();
       },
-      knock: () => {
+      knock: ({ intensity }) => {
         if (asleep) return;
-        agitation = Math.min(1, agitation + 0.4);
+        // a rap on the case is a rap on the husk: the kernel shudders as
+        // hard as the knuckle landed
+        agitation = Math.min(1, agitation + 0.25 + intensity * 0.35);
         haptics.tap();
         audio.thud();
       },
@@ -161,10 +168,10 @@ export default function SeedEmbryo() {
         tap: (e) => {
           lastTouchAt = performance.now();
           if (e.fingers === 3) {
-            // tutti — the whole seed answers at once.
-            agitation = Math.min(1, agitation + 0.3);
+            // tutti — the whole seed answers at once, as hard as the chord landed.
+            agitation = Math.min(1, agitation + 0.2 + e.intensity * 0.25);
             audio.chime();
-            haptics.ripple(0.45);
+            haptics.ripple(0.3 + e.intensity * 0.35);
             return;
           }
           if (e.fingers === 2) {
@@ -176,6 +183,38 @@ export default function SeedEmbryo() {
               audio.playNote(50, 120);
               haptics.tap();
             }
+            return;
+          }
+          // the rapid-tap ladder (tiers 1 / 3 / 5 / n from gesture/core):
+          // a poke → the kernel knocks inside → the husk nicks visibly →
+          // the seed rattles itself awake.
+          const tier = tapTrainTier(e.count);
+          const depth = tapTrainDepth(e.count);
+          if (tier === "n") {
+            // crescendo: a rattle the seed itself keeps up for a moment
+            morph = rattleMorph(morph, 0.5 + depth * 0.5);
+            agitation = Math.min(1, agitation + 0.5 + depth * 0.3);
+            audio.bell();
+            haptics.storm();
+            writer.schedule();
+            return;
+          }
+          if (tier === 5) {
+            // the husk nicks: the split line brightens where the taps landed
+            morph = rattleMorph(morph, 0.35 + e.intensity * 0.3 + depth * 0.2);
+            agitation = Math.min(1, agitation + 0.3);
+            audio.spark();
+            haptics.ripple(0.5 + depth * 0.3);
+            writer.schedule();
+            return;
+          }
+          if (tier === 3) {
+            // the loose kernel knocks against the inside of its husk
+            morph = rattleMorph(morph, 0.12 + e.intensity * 0.15);
+            agitation = Math.min(1, agitation + 0.2 + depth * 0.15);
+            audio.buzz();
+            haptics.chop();
+            writer.schedule();
             return;
           }
           agitation = Math.min(1, agitation + 0.12 * e.intensity);
@@ -206,13 +245,42 @@ export default function SeedEmbryo() {
           }
           if (e.phase === "release") {
             if (e.tier >= 3) {
-              morph = { ...morph, husk: Math.max(0, morph.husk - 0.55), radicle: Math.min(1, morph.radicle + 0.25) };
+              // the ceremony deepens past its own threshold: a hold released
+              // at 2.5s splits less of the husk than one carried to 5s
+              const over = Math.min(1, Math.max(0, e.elapsed - 2500) / 3000);
+              morph = {
+                ...morph,
+                husk: Math.max(0, morph.husk - 0.45 - over * 0.35),
+                radicle: Math.min(1, morph.radicle + 0.2 + over * 0.15),
+              };
               generations += 1;
               audio.bell();
               haptics.bloom();
               writer.schedule();
             }
             pressure = 0;
+          }
+        },
+        span: (e) => {
+          lastTouchAt = performance.now();
+          // two still fingers cradle the seed: held warmth. the embryo grows
+          // gently for as long as the interval is sustained, deeper the longer
+          // it is held — a cradle, not a press.
+          if (e.phase === "release") {
+            pressure = 0;
+            haptics.ripple(0.15 + Math.min(1, e.elapsed / 5000) * 0.25);
+            return;
+          }
+          if (e.phase === "enter") {
+            audio.playNote(45, 300);
+            haptics.tap();
+          }
+          pressure = Math.min(0.75, 0.25 + e.elapsed / 6000);
+          const now = performance.now();
+          if (now - spanVoiceAt > 640) {
+            spanVoiceAt = now;
+            audio.playNote(45 + Math.round(Math.min(1, e.elapsed / 5000) * 7), 220);
+            haptics.ripple(0.1 + Math.min(1, e.elapsed / 5000) * 0.2);
           }
         },
         drag: (e) => {
@@ -249,14 +317,27 @@ export default function SeedEmbryo() {
             haptics.tap();
           }
         },
-        scrub: () => {
+        scrub: (e) => {
           lastTouchAt = performance.now();
-          agitation = Math.min(1, agitation + 0.2);
-          audio.playNote(62, 200);
-          haptics.ripple(0.35);
+          // stirring the soil around the seed: how far the circle has wound
+          // is how much earth turns, and its direction leans the seed with
+          // the swirl — winding and velocity are axes, never switches
+          const turn = Math.min(1, Math.abs(e.winding) / 2);
+          const spin = Math.min(1, Math.abs(e.angularVelocity) / 8);
+          agitation = Math.min(1, agitation + 0.12 + turn * 0.25 + spin * 0.1);
+          wind = Math.max(-1, Math.min(1, wind + Math.sign(e.winding) * (0.15 + spin * 0.3)));
+          audio.playNote(58 + Math.round(spin * 10), 160 + Math.round(turn * 160));
+          haptics.ripple(0.25 + turn * 0.3);
         },
         rhythm: (e) => {
-          if (e.stability > 0.7) agitation = Math.min(1, agitation + 0.08);
+          if (e.stability <= 0.7) return;
+          // the seed's breath falls in with the hand's pulse — its tempo,
+          // not just its presence, is what the room takes up
+          breathHz = Math.max(0.08, Math.min(0.6, e.bpm / 240));
+          entrainUntil = performance.now() + 9000;
+          agitation = Math.min(1, agitation + 0.06 + e.stability * 0.06);
+          audio.playNote(52, 140);
+          haptics.tap();
         },
       },
       { wheelZoom: false },
@@ -283,8 +364,11 @@ export default function SeedEmbryo() {
       frameTY *= 0.9;
       lens.v += (lens.t - lens.v) * Math.min(1, dt * 5);
 
+      // the entrained breath eases back to the room's own 0.14 Hz once the
+      // hand's pulse has faded
+      if (now >= entrainUntil) breathHz += (0.14 - breathHz) * Math.min(1, dt * 0.5);
       const t = (audio.getAudioTime() ?? now / 1000) * timeScale;
-      const breath = reduced ? 0.5 : Math.sin(t * Math.PI * 2 * 0.14) * 0.5 + 0.5;
+      const breath = reduced ? 0.5 : Math.sin(t * Math.PI * 2 * breathHz) * 0.5 + 0.5;
 
       ctx.clearRect(0, 0, width, height);
       const g = ctx.createLinearGradient(0, 0, 0, height);

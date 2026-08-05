@@ -11,7 +11,7 @@ import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
-import { holdTier, pathWinding, THRESHOLDS } from "@/lib/gesture/core";
+import { holdTier, pathWinding, tapTrainTier, THRESHOLDS } from "@/lib/gesture/core";
 import { getTimbreEngine } from "@/lib/timbre-engine";
 import type { TimbreBlend, TimbreSpec } from "@/lib/timbre";
 import { useField } from "@/store/field";
@@ -843,6 +843,16 @@ export default function SineWaveExplorer() {
             lensState.snapped = lensState.target;
             try { haptics.lens(); } catch { /* noop */ }
             try { audio.playNote(48, 160); } catch { /* noop */ }
+          } else {
+            // no lens raised: the frame itself steps back — the pan comes
+            // home and the wave settles one breath quieter
+            panRef.current.tx = 0;
+            panRef.current.ty = 0;
+            const eased = Math.round(clamp(ampRef.current * 0.86, 26, 156));
+            ampRef.current = eased;
+            setAmp(eased);
+            try { audio.playNote(41, 200); } catch { /* noop */ }
+            try { haptics.tap(); } catch { /* noop */ }
           }
           return;
         }
@@ -851,23 +861,57 @@ export default function SineWaveExplorer() {
           let i = 0;
           for (const v of voicesRef.current.values()) {
             const vv = v;
-            window.setTimeout(() => { try { audio.playNote(cfg3.midi + (i % 2) * 7, 80); } catch { /* noop */ } void vv; }, i * 45);
+            window.setTimeout(() => { try { audio.playNote(cfg3.midi + (i % 2) * 7, 80 + Math.round(e.intensity * 80)); } catch { /* noop */ } void vv; }, i * 45);
             i += 1;
           }
           try { audio.chime(); } catch { /* noop */ }
-          try { haptics.ripple(0.4); } catch { /* noop */ }
-          recordTape("sigil", 0.5, "sine/tutti");
+          try { haptics.ripple(0.28 + e.intensity * 0.36); } catch { /* noop */ }
+          recordTape("sigil", 0.35 + e.intensity * 0.35, "sine/tutti");
           return;
         }
         if (e.fingers !== 1) return;
         const cfg = MODES.find((item) => item.id === modeRef.current) ?? MODES[0];
         const p = toNorm(e.x, e.y);
         // tap intensity is the strike: pitch weight, impulse size and the
-        // haptic all ride the same 0..1 from core.
-        tuneFromPointer(e.x, e.y, 0.3 + e.intensity * 0.7);
+        // haptic all ride the same 0..1 from core; the train count deepens it.
+        tuneFromPointer(e.x, e.y, 0.3 + e.intensity * 0.7 + (e.count - 1) * 0.04);
         try { audio.playNote(cfg.midi + Math.round((1 - p.y) * 22) + Math.round(p.x * 7), 90 + Math.round(e.intensity * 120)); } catch { /* noop */ }
         try { haptics.ripple(0.2 + e.intensity * 0.4); } catch { /* noop */ }
         recordTape("object", 0.3 + e.intensity * 0.35, "sine/strike");
+        // the train tiers (1 / 3 / 5 / n from gesture/core): rapid taps climb
+        // the oscillator's own ladder — overtones, then nature, then loudness
+        const trainTier = tapTrainTier(e.count);
+        if (trainTier === 3 && e.count === 3) {
+          // three taps bloom the harmonics: the overtone series thickens the
+          // ribbon and the node dots swell in the same frame
+          const nextHarm = Number(clamp(harmonicRef.current + 0.16, 0, 0.82).toFixed(2));
+          harmonicRef.current = nextHarm;
+          setHarmonic(nextHarm);
+          try { audio.playNote(cfg.midi + 12, 130); } catch { /* noop */ }
+          try { audio.playNote(cfg.midi + 19, 190); } catch { /* noop */ }
+          try { haptics.ripple(0.44); } catch { /* noop */ }
+          recordTape("sigil", 0.5, "sine/train-bloom");
+        } else if (trainTier === 5 && e.count === 5) {
+          // five taps turn the wave to its next nature — source becomes
+          // interference becomes standing, the whole ribbon reshaping
+          const idx = MODES.findIndex((item) => item.id === modeRef.current);
+          const nextMode = MODES[(idx + 1) % MODES.length];
+          modeRef.current = nextMode.id;
+          setMode(nextMode.id);
+          try { audio.playNote(nextMode.midi + 12, 170); } catch { /* noop */ }
+          try { audio.chime(); } catch { /* noop */ }
+          try { haptics.lens(); } catch { /* noop */ }
+          recordTape("sigil", 0.66, `sine/train-${nextMode.id}`);
+        } else if (trainTier === "n") {
+          // seven and beyond: the crescendo — every further tap swells the
+          // amplitude and climbs the scale until the hand relents
+          const swell = Math.round(clamp(ampRef.current + 10 + e.intensity * 8, 26, 156));
+          ampRef.current = swell;
+          setAmp(swell);
+          try { audio.playNote(cfg.midi + 12 + (e.count - 7) * 2, 150); } catch { /* noop */ }
+          try { (e.count === 7 ? haptics.storm : () => haptics.ripple(0.55))(); } catch { /* noop */ }
+          recordTape("sigil", clamp(0.6 + (e.count - 7) * 0.08, 0.6, 1), "sine/train-crescendo");
+        }
       },
       // twist rotates the lens (grammar §5): correlated pairs on this
       // instrument surface are reclaimed from the voice dialect exactly as
@@ -990,11 +1034,22 @@ export default function SineWaveExplorer() {
         try { (intensity > 0.7 ? haptics.storm : haptics.chop)(); } catch { /* noop */ }
       },
       // knock = wake / ring the room (rhymes with /coin, /flowers, /growth,
-      // /overlook): a rap on the case rings a small tutti of every voice
-      knock: () => {
+      // /overlook): a rap on the case rings the wave, harder raps ring lower
+      // and leave a visible wavefront mid-ribbon in the same frame
+      knock: ({ intensity }) => {
         lastGestureAtRef.current = performance.now();
+        const rect = canvas.getBoundingClientRect();
+        impulsesRef.current.push({
+          x: rect.width * 0.5,
+          y: rect.height * 0.49,
+          born: performance.now(),
+          life: 700 + intensity * 500,
+          strength: clamp(0.4 + intensity * 0.5, 0.4, 0.95),
+        });
+        if (impulsesRef.current.length > 18) impulsesRef.current = impulsesRef.current.slice(-18);
+        try { audio.playNote(43 - Math.round(intensity * 7), 200 + Math.round(intensity * 160)); } catch { /* noop */ }
         try { audio.chime(); } catch { /* noop */ }
-        try { haptics.ripple(0.4); } catch { /* noop */ }
+        try { haptics.ripple(0.3 + intensity * 0.4); } catch { /* noop */ }
       },
       // flip face-down = night: the field dims and hushes until turned back
       flip: ({ faceDown }) => {

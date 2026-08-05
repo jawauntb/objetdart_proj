@@ -756,6 +756,9 @@ export default function CoastBeach() {
     const tideEpoch = (Date.now() % 86_400_000) / 1000;
     const pulse = [0, 0, 0, 0, 0];
     let breathWind = 0;
+    // rhythm entrainment: a steady tapped pulse briefly sets the swell period
+    let entrainPeriod = 9;
+    let entrainUntil = 0;
 
     let lastTouchAt = performance.now();
     let glimmerAt = 0;
@@ -788,7 +791,11 @@ export default function CoastBeach() {
     });
 
     const tideNow = () => tideLine(tideEpoch + simT, moon);
-    const surfNow = () => surfBreath(tideEpoch + simT, 9 - seasonProfile(season).swell * 3);
+    const surfNow = () =>
+      surfBreath(
+        tideEpoch + simT,
+        performance.now() < entrainUntil ? entrainPeriod : 9 - seasonProfile(season).swell * 3,
+      );
 
     const toLocal = (cx: number, cy: number) => {
       const r = wrap.getBoundingClientRect();
@@ -1458,6 +1465,48 @@ export default function CoastBeach() {
           voice.say(zoneVoice(zone, zoneDepth(nx, ny, tide), 0.3 + mag * 0.5));
           pulse[zoneIndex(zone)] = Math.min(1, pulse[zoneIndex(zone)] + 0.4);
           haptics.ripple(0.35 + mag * 0.4);
+        },
+
+        rhythm: (e) => {
+          // a steady tapped pulse: the surf's own sets fall in with the
+          // hand's tempo for a while — four beats to a swell, so a slow
+          // pulse stretches the sets long and a quick one crowds them in
+          if (e.stability <= 0.7) return;
+          lastTouchAt = performance.now();
+          entrainPeriod = clamp((60 / e.bpm) * 4, 3, 14);
+          entrainUntil = performance.now() + 12000;
+          voice.breakWave(clamp01(0.3 + e.stability * 0.3));
+          pulse[1] = Math.min(1, pulse[1] + 0.4);
+          haptics.tap();
+        },
+
+        drum: (e) => {
+          // two alternating hands play the space between them: foam leaps
+          // the span, both zones pulse, and each strike answers in the
+          // register of the side it landed on
+          lastTouchAt = performance.now();
+          voice.ensure();
+          const a = toLocal(e.ax, e.ay);
+          const b = toLocal(e.bx, e.by);
+          const tide = tideNow();
+          const anx = a.x / Math.max(1, width);
+          const any = a.y / Math.max(1, height);
+          const bnx = b.x / Math.max(1, width);
+          const bny = b.y / Math.max(1, height);
+          const za = zoneAt(anx, any, tide);
+          const zb = zoneAt(bnx, bny, tide);
+          const lift = clamp01(e.alternation) * Math.min(1, e.hits / 6);
+          const midx = (anx + bnx) / 2;
+          const midy = (any + bny) / 2;
+          const midZone = zoneAt(midx, midy, tide);
+          throwFoam(mix32(e.hits, Math.round(midx * 4096), Math.round(midy * 4096)), midx, midy, Math.round(6 + lift * 10), {
+            spread: Math.abs(anx - bnx) * 0.5 + 0.02, rise: 0.05 + lift * 0.06, drift: 0.04,
+            size: 4.6, decay: 0.6, tint: midZone === "sea" || midZone === "wet" ? 0 : 1,
+          });
+          voice.say(zoneVoice(e.hits % 2 === 0 ? za : zb, 0.4, 0.25 + lift * 0.45));
+          pulse[zoneIndex(za)] = Math.min(1, pulse[zoneIndex(za)] + 0.2 + lift * 0.2);
+          pulse[zoneIndex(zb)] = Math.min(1, pulse[zoneIndex(zb)] + 0.2 + lift * 0.2);
+          haptics.ripple(0.3 + lift * 0.4);
         },
       },
       { wheelZoom: false },

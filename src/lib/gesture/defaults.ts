@@ -38,6 +38,7 @@ export const GLOBAL_VERBS = [
   { verb: "drag3", meaning: "wind / weather", owner: "room" },
   { verb: "flick", meaning: "throw, skip, dismiss", owner: "room" },
   { verb: "scrub", meaning: "stir — a circular path, any finger count", owner: "room" },
+  { verb: "span", meaning: "sustain — two still fingers holding an interval open", owner: "room" },
   { verb: "twist", meaning: "rotate the lens — level of description at fixed scale", owner: "room" },
   { verb: "twist3", meaning: "advance / rewind the room's season", owner: "room" },
   { verb: "rhythm", meaning: "entrain the room's clock to the hand's tempo", owner: "room" },
@@ -102,6 +103,22 @@ export type RoomVoice = {
   wind?: (e: { dx: number; dy: number }) => void;
   flick?: (e: { fingers: number; angle: number; speed: number; x: number; y: number }) => void;
   stir?: (e: { winding: number; angularVelocity: number; cx: number; cy: number }) => void;
+  /**
+   * The span: two still fingers sustaining an interval. `spread` is the live
+   * distance between them and `elapsed` keeps counting through every tick —
+   * whatever is sustained must keep deepening for as long as it is held.
+   */
+  sustain?: (e: {
+    phase: "enter" | "tick" | "release";
+    spread: number;
+    elapsed: number;
+    cx: number;
+    cy: number;
+    ax: number;
+    ay: number;
+    bx: number;
+    by: number;
+  }) => void;
   lens?: (e: { angle: number; velocity: number }) => void;
   season?: (e: { angle: number; velocity: number }) => void;
   rhythm?: (e: { bpm: number; stability: number }) => void;
@@ -143,6 +160,7 @@ export function voiceCoverage(voice: RoomVoice): { spoken: GlobalVerb[]; acknowl
     drag3: "wind",
     flick: "flick",
     scrub: "stir",
+    span: "sustain",
     twist: "lens",
     twist3: "season",
     rhythm: "rhythm",
@@ -260,6 +278,18 @@ export function roomGestureBindings(ctx: RoomBindingContext): GestureHandlers {
       contact();
       if (voice.stir) voice.stir(e);
       else answer(clamp01(Math.abs(e.winding)), 0.35);
+    },
+
+    span: (e) => {
+      contact();
+      if (voice.sustain) {
+        voice.sustain(e);
+        return;
+      }
+      // Acknowledge the interval opening and closing, never every tick —
+      // an 80ms chirp train is a rattle, not a sustained chord.
+      if (e.phase === "enter") answer(0.3, 0.65);
+      else if (e.phase === "release") answer(0.2 + clamp01(e.elapsed / 4000) * 0.25, 0.8);
     },
 
     twist: (e) => {

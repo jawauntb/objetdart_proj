@@ -1,29 +1,11 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import * as ts from "typescript";
-import vm from "node:vm";
+import { loadTsModule } from "./lib/load-ts.mjs";
 
-// Compile src/lib/city-audio.ts in-process. Same pattern as test-city.mjs
-// (its causal-laws sibling). The `@/lib/city` import is types-only, so we
-// don't need to resolve it — TypeScript strips the import at compile time.
-const rootUrl = new URL("../", import.meta.url);
-const source = readFileSync(fileURLToPath(new URL("src/lib/city-audio.ts", rootUrl)), "utf8");
-const code = ts.transpileModule(source, {
-  compilerOptions: {
-    module: ts.ModuleKind.CommonJS,
-    target: ts.ScriptTarget.ES2020,
-    esModuleInterop: true,
-    isolatedModules: true,
-  },
-  fileName: "src/lib/city-audio.ts",
-}).outputText;
-const mod = { exports: {} };
-vm.runInNewContext(
-  code,
-  { module: mod, exports: mod.exports, require: () => ({}), Math, Object, Array, Number },
-  { filename: "src/lib/city-audio.ts" },
-);
+// Compile src/lib/city-audio.ts through the shared loader, same as
+// test-city.mjs (its causal-laws sibling): the private vm context this
+// script used to carry mints arrays on a foreign Array.prototype, which
+// `assert.deepStrictEqual` rejects even when the values print identically.
+const mod = loadTsModule("src/lib/city-audio.ts");
 const {
   CITY_TONIC_MIDI,
   CITY_MODE,
@@ -36,7 +18,7 @@ const {
   noteForSeason,
   noteForFlickAngle,
   windNoiseTarget,
-} = mod.exports;
+} = mod;
 
 const ROLES = ["home", "store", "event", "tree"];
 const SEASONS = ["spring", "summer", "fall", "winter"];

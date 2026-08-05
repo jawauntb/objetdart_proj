@@ -65,10 +65,12 @@ EXAMPLES_DIR = COMPILER_ROOT / "schema" / "examples"
 # The site's authoring style — the cross-room design language every
 # room shares. Loaded once at module scope and threaded into every
 # slot-prompt substitution alongside the per-room visual_style block.
-# See object-compiler/design/authoring_style.yaml for the artifact and
+# See object-compiler/design/authoring_style.yaml for the artifact,
 # data/object-compiler/audits/phase-4-visual-style-split.md for why
 # the site-wide vocabulary lives in its own file rather than being
-# restated in every room's spec.
+# restated in every room's spec, and phase-6-schema-cleanup.md for
+# the final removal of the deprecated per-room composition, registers,
+# and banned_forms fields (which now live exclusively here).
 AUTHORING_STYLE_PATH = COMPILER_ROOT / "design" / "authoring_style.yaml"
 
 
@@ -93,31 +95,38 @@ WORKTREE_ROOT = REPO_ROOT / ".claude" / "worktrees"
 # marker with its LLM output; leaving the marker in place means the slot is
 # still open. Resumability is a textual property, not a database one.
 SLOT_MARKERS = {
-    "shader":     "__SLOT_SHADER_BODY__",
-    "domain":     "__SLOT_DOMAIN_LAW__",
-    "verbs":      "__SLOT_VERB_HANDLERS__",
-    "pins":       "__SLOT_PINS__",
-    "population": "__SLOT_POPULATION__",
+    "shader":         "__SLOT_SHADER_BODY__",
+    "domain":         "__SLOT_DOMAIN_LAW__",
+    "verbs":          "__SLOT_VERB_HANDLERS__",
+    "pins":           "__SLOT_PINS__",
+    "population":     "__SLOT_POPULATION__",
+    # Phase 7 (data/object-compiler/audits/phase-7-prompt-rewrite.md): the
+    # state machine + discoverable table, filled after the population slot
+    # so it can close over the population's snapshot() methods and read the
+    # count rings the verb handlers below index into.
+    "discoverables":  "__SLOT_DISCOVERABLES__",
 }
 
 # Which slot prompt each marker calls into.
 SLOT_PROMPTS = {
-    "shader":     "slot-shader.md",
-    "domain":     "slot-domain.md",
-    "verbs":      "slot-verbs.md",
-    "pins":       "slot-pins.md",
-    "population": "slot-population.md",
+    "shader":         "slot-shader.md",
+    "domain":         "slot-domain.md",
+    "verbs":          "slot-verbs.md",
+    "pins":           "slot-pins.md",
+    "population":     "slot-population.md",
+    "discoverables":  "slot-discoverables.md",
 }
 
 # Which file each slot lands in, relative to the worktree root, with a key
 # whose {name} is substituted from spec.key. Multiple slots may share a file
-# (shader + verbs + population all live in Room.tsx).
+# (shader + verbs + population + discoverables all live in Room.tsx).
 SLOT_TARGET_TEMPLATES = {
-    "shader":     "src/components/{Room}.tsx",
-    "domain":     "src/lib/{domain}.ts",
-    "verbs":      "src/components/{Room}.tsx",
-    "pins":       "scripts/test-{domain}.mjs",
-    "population": "src/components/{Room}.tsx",
+    "shader":         "src/components/{Room}.tsx",
+    "domain":         "src/lib/{domain}.ts",
+    "verbs":          "src/components/{Room}.tsx",
+    "pins":           "scripts/test-{domain}.mjs",
+    "population":     "src/components/{Room}.tsx",
+    "discoverables":  "src/components/{Room}.tsx",
 }
 
 # Timeouts (seconds). Every subprocess call names one; there is no default.
@@ -485,13 +494,15 @@ def _call_slot_prompt(slot: str, spec: Spec) -> str:
     # yaml block; an empty block is legal (older specs may not carry the
     # field yet), and the prompt handles the absent-visual-style case.
     #
-    # As of phase 4 (see data/object-compiler/audits/phase-4-visual-style-
-    # split.md), the slot-shader prompt reads TWO blocks: the shared
-    # `authoring_style.yaml` (site-wide design language — palette,
-    # compositions, canonical registers, banned forms, form-language
-    # taxonomy, motion grammar, gesture defaults) FIRST, then the per-room
-    # `visual_style` block as room-specific refinements. Both are threaded
-    # in below.
+    # As of phase 6 (see data/object-compiler/audits/phase-6-schema-cleanup.md
+    # and its predecessors phase-4/phase-5), the per-room `visual_style`
+    # block carries exactly six fields (`subject`, `form_language`,
+    # `motion_character`, `reference_notes`, `mood`, `gesture_feedback_style`);
+    # the cross-room vocabulary (composition, registers, banned_forms,
+    # form-language taxonomy, motion grammar, gesture defaults) lives in
+    # `authoring_style.yaml` and is threaded in as `{{authoring_style}}`.
+    # The slot-shader prompt reads the shared artifact FIRST as the design
+    # law, then the per-room block as room-specific refinements.
     visual_style_block = _yaml_block(spec.raw.get("visual_style", {}))
 
     # life is the schema block that makes a room feel alive: population,
@@ -501,6 +512,17 @@ def _call_slot_prompt(slot: str, spec: Spec) -> str:
     # block is legal (older specs may not carry the field yet); each prompt
     # handles the absent-life case.
     life_block = spec.raw.get("life", {}) or {}
+
+    # Phase 7 blocks — shader_layers, discoverables, state_machine, and the
+    # full multi-population objects list. Older specs (no phase-7 fields)
+    # substitute as empty blocks; the slot prompts treat empty as
+    # "no phase-7 requirement" and remain backward-compatible.
+    # See data/object-compiler/audits/phase-7-prompt-rewrite.md.
+    population_obj = life_block.get("population", {}) or {}
+    multi_population = (
+        population_obj.get("objects", [])
+        if isinstance(population_obj, dict) else []
+    )
 
     subs: dict[str, str] = {
         "one_shot_examples":         one_shots,
@@ -512,9 +534,13 @@ def _call_slot_prompt(slot: str, spec: Spec) -> str:
         "authoring_style":           AUTHORING_STYLE_TEXT,
         "life":                      _yaml_block(life_block),
         "life_population":           _yaml_block(life_block.get("population", {})),
+        "life_population_multi":     _yaml_block(multi_population),
         "life_breath":               _yaml_block(life_block.get("breath", {})),
         "life_glimmer":              _yaml_block(life_block.get("glimmer", {})),
         "life_haptics_grammar":      _yaml_block(life_block.get("haptics_grammar", {})),
+        "shader_layers":             _yaml_block(spec.raw.get("shader_layers", [])),
+        "discoverables":             _yaml_block(spec.raw.get("discoverables", [])),
+        "state_machine":             _yaml_block(spec.raw.get("state_machine", {})),
         "declared_surface":          _read_declared_surface(slot, spec),
         "verbs_answered_with_briefs": _yaml_block({
             v: spec.raw.get("verbs", {}).get(v, "")
@@ -531,39 +557,67 @@ def _call_slot_prompt(slot: str, spec: Spec) -> str:
 
 
 def _retrieve_one_shots(slot: str, spec: Spec) -> str:
-    """The retrieval bank. Rank all example specs against the target `spec`
-    by a four-tier key — invariant_type, composition, form_language,
-    motion_character — and return the top K anchors' source sections.
+    """The retrieval bank. Two anchors, chosen on two different axes.
 
-    The K=2 default is a deliberate response to the /geyser audit finding
-    that a *retrieval bank of one* biases toward *copying* rather than
-    *differentiating*. When the top hit dominates by invariant_type
-    (i.e. there is only one room in the target family), the second slot
-    is *forced* to a next-best DIFFERENT-invariant-type room so the LLM
-    sees a foil — the room's identity shape, plus a contrast that says
-    "you are not any of these other rooms either."
+    **The peer anchor** — one of the K=2 slots is chosen by a three-tier
+    match against the target `spec`: `invariant_type`, `form_language`,
+    `motion_character`. That is the identity shape — the room's family,
+    the material vocabulary it shares, the animation character it moves
+    in. (The fourth tier, `composition`, was retired in phase 6 when
+    the field moved to the shared authoring_style.yaml.)
+
+    **The deep anchor** — phase 7 (see
+    `data/object-compiler/audits/phase-7-prompt-rewrite.md`) adds a
+    SECOND axis for the other of the K=2 slots: **depth**. The deep
+    anchor is the room from the example bank whose phase-7 blocks are
+    most densely populated — scored as
+    `len(shader_layers) + len(life.population.objects) +
+    len(discoverables) + len(state_machine.states)` — regardless of
+    whether its invariant_type matches. The idea: peer teaches
+    invariant, deep teaches density. Without a deep anchor the LLM
+    reads two same-family shallow rooms and produces a third shallow
+    room; with one, it sees at least one room whose shader has five
+    layered `// layer:` blocks, whose population is two mutually
+    interacting kinds, whose discoverables table has three entries.
+    The count IS the floor.
+
+    For most new phase-7 compiles the deep anchor will be /stars (5405
+    lines, four+ visual layers, multi-population, count-gated
+    discoverables), /molecules (multi-population with bonding), or
+    /coin (edge-vs-flat discoverable driven by state + count). The
+    picker doesn't hard-code — it ranks and takes the winner.
+
+    If the target `spec` has NO phase-7 blocks (an older room), the
+    deep-anchor axis collapses to zero for every candidate and the
+    strategy degrades cleanly to phase-6 behavior (peer + foil).
+
+    **The geyser-audit rule survives** as a tiebreaker inside the peer
+    axis: when the top peer is the only member of its invariant_type
+    family, the second slot (before the deep anchor overrides) is
+    forced to a different-family room. If the deep anchor happens to
+    be that different-family room, both concerns collapse into one.
 
     Sources — spec.yaml files with a full `visual_style` block — are
-    read from `object-compiler/schema/examples/`. The retrieval bank
-    used to live at `object-compiler/reference/<key>/spec.yaml`, but
-    that directory was never populated (M7 was designed to pack it and
-    never landed); the examples dir carries the authoritative specs
-    and is checked in already.
-
-    The code (shader / domain / verbs / pins) is still pulled from the
+    read from `object-compiler/schema/examples/`. The code (shader /
+    domain / verbs / pins / discoverables) is still pulled from the
     landed `src/` tree via the domain module name — the retrieval
     picks WHICH rooms to anchor against; `_read_slot_section_from_main`
-    then reads the *actual code* those rooms shipped, exactly as
-    before.
+    then reads the actual code those rooms shipped.
     """
     inv = spec.invariant_type
     target_style = spec.raw.get("visual_style", {}) or {}
-    target_composition = str(target_style.get("composition", ""))
+    # `composition` was removed in phase 6 (see
+    # data/object-compiler/audits/phase-6-schema-cleanup.md); it lives only in
+    # the shared authoring_style.yaml now, and every room chooses one of the
+    # six framings by naming it in the shader_intent brief. Retrieval falls
+    # back to a three-tier score (invariant / form_language / motion).
     target_form_langs = set(target_style.get("form_language", []) or [])
     target_motion = str(target_style.get("motion_character", ""))
     target_key = spec.key
 
-    # Rank every example spec by a four-tier score. Ties broken by name.
+    # Rank every example spec on both axes at once. The peer axis is the
+    # three-tier match; the depth axis is the phase-7 field count. Ties
+    # broken by name.
     candidates: list[dict[str, Any]] = []
     if EXAMPLES_DIR.exists():
         for spec_yaml in sorted(EXAMPLES_DIR.glob("*.yaml")):
@@ -579,25 +633,45 @@ def _retrieve_one_shots(slot: str, spec: Spec) -> str:
                 "invariant_type", ""
             )
             other_style = other.get("visual_style", {}) or {}
-            other_composition = str(other_style.get("composition", ""))
             other_form_langs = set(other_style.get("form_language", []) or [])
             other_motion = str(other_style.get("motion_character", ""))
             other_module = other.get("domain_lib", other.get("domain", {})).get(
                 "name", ""
             )
-            # Score: (invariant_match, composition_match, form_language_overlap,
-            #        motion_match). Higher is better.
-            score = (
+            # Peer score: (invariant_match, form_language_overlap, motion_match).
+            # Higher is better — the identity-shape axis.
+            peer_score = (
                 int(other_inv == inv),
-                int(bool(other_composition) and other_composition == target_composition),
                 len(target_form_langs & other_form_langs),
                 int(bool(other_motion) and other_motion == target_motion),
             )
+            # Depth score: how many phase-7 axes this candidate populates.
+            # A single scalar so it sorts cleanly; higher is denser. Older
+            # specs without phase-7 fields score 0 and never win as deep
+            # anchor. See phase-7-prompt-rewrite.md.
+            other_life = other.get("life", {}) or {}
+            other_pop = other_life.get("population", {}) or {}
+            other_pop_objects = (
+                other_pop.get("objects", [])
+                if isinstance(other_pop, dict) else []
+            )
+            other_state_machine = other.get("state_machine", {}) or {}
+            other_states = (
+                other_state_machine.get("states", [])
+                if isinstance(other_state_machine, dict) else []
+            )
+            depth_score = (
+                len(other.get("shader_layers", []) or [])
+                + len(other_pop_objects if isinstance(other_pop_objects, list) else [])
+                + len(other.get("discoverables", []) or [])
+                + len(other_states if isinstance(other_states, list) else [])
+            )
             candidates.append({
-                "key":       spec_yaml.stem,
-                "score":     score,
-                "invariant": other_inv,
-                "module":    other_module,
+                "key":         spec_yaml.stem,
+                "score":       peer_score,     # peer axis, tuple
+                "depth_score": depth_score,    # deep axis, scalar
+                "invariant":   other_inv,
+                "module":      other_module,
             })
 
     if not candidates:
@@ -614,34 +688,49 @@ def _retrieve_one_shots(slot: str, spec: Spec) -> str:
         }
         return _fallback_one_shots(slot, fallback_map.get(inv, ["aircolumn", "humus"]))
 
-    # Sort best-first by score.
-    candidates.sort(key=lambda c: c["score"], reverse=True)
+    # Phase 7: two axes, two anchors. See _retrieve_one_shots' docstring for
+    # the design. The picker builds the peer ranking and the deep ranking
+    # independently, then assembles K=2 as [peer_top, deep_top] — with a
+    # deduplication step in case the same room wins both. Legacy fallback:
+    # if the depth axis is uniformly zero (no phase-7 specs on disk), the
+    # second slot falls back to the geyser-audit peer-with-foil rule.
+    peer_ranked = sorted(candidates, key=lambda c: c["score"], reverse=True)
+    deep_ranked = sorted(candidates, key=lambda c: c["depth_score"], reverse=True)
 
-    # Assemble top-K = 2, forcing invariant-type diversity when the top hit is
-    # the ONLY member of its family. That is the geyser-audit fix: a retrieval
-    # bank of one biases toward copying; a foil corrects it.
     K = 2
     picked: list[dict[str, Any]] = []
-    if candidates:
-        picked.append(candidates[0])
-        top_inv = candidates[0]["invariant"]
-        # Count how many share top's invariant across ALL candidates. If exactly
-        # one, force the second slot to be a different invariant_type; otherwise
-        # the next-best (same-family or not) is fine.
-        same_family = [c for c in candidates if c["invariant"] == top_inv]
-        different_family = [c for c in candidates if c["invariant"] != top_inv]
-        if len(same_family) == 1 and different_family:
-            picked.append(different_family[0])
-        elif len(candidates) >= 2:
-            picked.append(candidates[1])
-        # Trim to K.
+    if peer_ranked:
+        peer_top = peer_ranked[0]
+        picked.append({**peer_top, "anchor": "peer"})
+
+        # Try the deep anchor first. Only use it if it actually has phase-7
+        # signal (depth_score > 0) AND is not the same room as the peer.
+        deep_top = deep_ranked[0] if deep_ranked else None
+        if (
+            deep_top is not None
+            and deep_top["depth_score"] > 0
+            and deep_top["key"] != peer_top["key"]
+        ):
+            picked.append({**deep_top, "anchor": "deep"})
+        else:
+            # Legacy path (phase-6 geyser-audit fix): force invariant-type
+            # diversity if the peer's family has only one member.
+            top_inv = peer_top["invariant"]
+            same_family = [c for c in peer_ranked if c["invariant"] == top_inv]
+            different_family = [c for c in peer_ranked if c["invariant"] != top_inv]
+            if len(same_family) == 1 and different_family:
+                picked.append({**different_family[0], "anchor": "foil"})
+            elif len(peer_ranked) >= 2:
+                picked.append({**peer_ranked[1], "anchor": "peer"})
         picked = picked[:K]
 
     parts: list[str] = []
     for cand in picked:
+        anchor = cand.get("anchor", "peer")
         parts.append(
             f"# --- one-shot from /{cand['key']} "
-            f"(invariant_type={cand['invariant']}, score={cand['score']}) ---"
+            f"(anchor={anchor}, invariant_type={cand['invariant']}, "
+            f"peer_score={cand['score']}, depth_score={cand['depth_score']}) ---"
         )
         source = _read_slot_section_from_main(slot, cand["module"])
         if source:
@@ -740,6 +829,42 @@ def _read_slot_section_from_main(slot: str, module: str) -> str:
     if slot == "pins":
         path = REPO_ROOT / "scripts" / f"test-{module}.mjs"
         return path.read_text(encoding="utf-8") if path.exists() else ""
+    if slot == "discoverables":
+        # Phase 7's __SLOT_DISCOVERABLES__ block lives in the component's
+        # useEffect body, between the population setup and the verb handlers.
+        # Backfilled rooms carry a `// state:` or `// discoverable:` line
+        # or a small `transitions`/`discoverables` object. Try both patterns
+        # from the component; fall back to the whole component when the room
+        # hasn't been backfilled yet so the reader still gets shape context.
+        component = _guess_component_for_domain(module)
+        path = REPO_ROOT / "src" / "components" / f"{component}.tsx"
+        if not path.exists():
+            return ""
+        text = path.read_text(encoding="utf-8")
+        # Prefer an explicit `const discoverables = { ... }` object.
+        m = re.search(
+            r"const discoverables\s*=\s*(\{.*?\});",
+            text,
+            re.DOTALL,
+        )
+        if m:
+            return m.group(0)
+        # Fallback: match a state-machine block that reads a `let state` + a
+        # `transitions` map. Pull whichever contiguous region carries both.
+        m = re.search(
+            r"(let state[^\n]*\n(?:.*?\n){0,80}?const transitions\s*=\s*\{.*?\};)",
+            text,
+            re.DOTALL,
+        )
+        if m:
+            return m.group(1)
+        # Last-resort fallback: the file itself. Better than empty context
+        # when the room predates phase 7's backfill.
+        return (
+            f"# (no dedicated discoverables block in {component}.tsx yet — "
+            f"the component follows for shape reference)\n"
+            + text
+        )
     return ""
 
 

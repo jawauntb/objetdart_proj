@@ -11,7 +11,7 @@ import {
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
-import { THRESHOLDS } from "@/lib/gesture/core";
+import { THRESHOLDS, tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
@@ -252,8 +252,12 @@ export default function Pulse() {
   // drumming IS the pacemaker: while an alternating two-point patter holds,
   // each hit paces one beat and the autonomous heart stands aside
   const drumRef = useRef({ until: 0, lastHitAt: 0, bpm: 0, queued: 0 });
+  // span = the held breath: two still fingers pinch the airway shut, and
+  // the longer it holds the more the heart creeps — the body's own law
+  const breathHoldRef = useRef({ active: false, elapsed: 0 });
   const lastGestureAtRef = useRef(0);
   const ceremonyKeepRef = useRef<() => void>(() => {});
+  const defibRef = useRef<() => void>(() => {});
   const detailParticlesRef = useRef(1);
   const lensRef = useRef({ v: 0, t: 0 });
   const seasonRef = useRef(0);
@@ -463,7 +467,13 @@ export default function Pulse() {
       const drummed = now < drum.until;
       const entrained = !drummed && now < entrain.until && entrain.bpm > 0;
       const baseHr = drummed && drum.bpm > 0 ? drum.bpm : entrained ? entrain.bpm : hrRef.current;
-      const effectiveHr = clamp(baseHr * (1 + stressV * 0.16) + render.touchEnergy * 9 + Math.abs(wind.cur) * 6, 38, 220);
+      // the held breath (span): the airway closes, the breath trace goes
+      // flat, and past a few seconds the heart begins to climb — the body's
+      // own law, deepening for as long as the interval stands
+      const bh = breathHoldRef.current;
+      const breathGate = bh.active ? Math.max(0, 1 - bh.elapsed / 1400) : 1;
+      const bhStrain = bh.active ? clamp((bh.elapsed - 4000) / 6000, 0, 1) : 0;
+      const effectiveHr = clamp(baseHr * (1 + stressV * 0.16) + render.touchEnergy * 9 + Math.abs(wind.cur) * 6 + bhStrain * 26, 38, 220);
       const period = 60 / effectiveHr;
       const sinceBeat = (wnow - render.beatAt) / 1000;
       const variance = 0.028 + stressV * 0.11 + render.touchEnergy * 0.012;
@@ -487,7 +497,7 @@ export default function Pulse() {
       if (render.qrs < 1) render.qrs = Math.min(1, render.qrs + dt / 0.45);
       render.beatGlow *= Math.pow(0.03, rawDt / 0.9);
 
-      const breathHz = clamp((breathRef.current * (1 + stressV * 0.22) + render.touchEnergy * 1.2) / 60, 0.05, 0.9);
+      const breathHz = clamp((breathRef.current * (1 + stressV * 0.22) + render.touchEnergy * 1.2) / 60, 0.05, 0.9) * breathGate;
       const previousBreath = Math.sin(render.breathPhase);
       render.breathPhase += dt * Math.PI * 2 * (breathHz + Math.sin(wnow * 0.0011) * stressV * 0.025);
       const breathNow = Math.sin(render.breathPhase);
@@ -693,11 +703,11 @@ export default function Pulse() {
       tap: (e) => {
         lastGestureAtRef.current = performance.now();
         if (e.fingers === 3) {
-          // tutti — every channel answers at once.
-          touchImpulseRef.current = clamp(touchImpulseRef.current + 0.7, 0, 2);
-          addBloom(canvas.clientWidth / 2, canvas.clientHeight / 2, 1, "tutti");
+          // tutti — every channel answers at once, as hard as the chord landed.
+          touchImpulseRef.current = clamp(touchImpulseRef.current + 0.5 + e.intensity * 0.5, 0, 2);
+          addBloom(canvas.clientWidth / 2, canvas.clientHeight / 2, 0.7 + e.intensity * 0.5, "tutti");
           try { haptics.bloom(); } catch { /* noop */ }
-          recordTape("region", 0.6, "pulse/tutti");
+          recordTape("region", 0.5 + e.intensity * 0.3, "pulse/tutti");
           return;
         }
         if (e.fingers === 2) {
@@ -712,6 +722,36 @@ export default function Pulse() {
         }
         if (e.fingers !== 1) return;
         void getFieldAudio().start();
+        // the rapid-tap ladder (1 / 3 / 5 / n): a bloom → an ectopic
+        // triplet → an adrenaline surge → the paddles themselves
+        const trainTier = tapTrainTier(e.count);
+        const depth = tapTrainDepth(e.count);
+        if (trainTier === "n") {
+          // crescendo: hammering the membrane IS the shock — the monitor
+          // flatlines under the hand and comes back on its own
+          if (performance.now() >= shockRef.current.until) defibRef.current();
+          return;
+        }
+        if (trainTier === 5) {
+          // five taps: adrenaline — the whole body surges for a breath
+          touchImpulseRef.current = clamp(touchImpulseRef.current + 0.9 + depth * 0.5, 0, 2.2);
+          addBloom(e.x, e.y, 1.1 + depth * 0.3, "surge");
+          try { getFieldAudio().playNote(72, 160); } catch { /* noop */ }
+          try { haptics.roll(); } catch { /* noop */ }
+          recordTape("ripple", 0.7, "pulse/surge");
+          return;
+        }
+        if (trainTier === 3) {
+          // three taps: an ectopic run — the heart throws a quick triplet
+          // of beats right now, exactly when the hand asked
+          drumRef.current.queued = Math.min(3, drumRef.current.queued + 1);
+          schedule(() => { drumRef.current.queued = Math.min(3, drumRef.current.queued + 1); }, 170);
+          schedule(() => { drumRef.current.queued = Math.min(3, drumRef.current.queued + 1); }, 340);
+          addBloom(e.x, e.y, 0.8 + depth * 0.3, "triplet");
+          try { haptics.ripple(0.45 + depth * 0.3); } catch { /* noop */ }
+          recordTape("ripple", 0.6, "pulse/triplet");
+          return;
+        }
         // tap intensity is the strike — bloom size, note length and the
         // haptic all ride the same 0..1 from core.
         addBloom(e.x, e.y, 0.6 + e.intensity * 0.9, "press");
@@ -789,12 +829,15 @@ export default function Pulse() {
       hold: (e) => {
         lastGestureAtRef.current = performance.now();
         if (e.fingers === 3) {
-          // three fingers hold the law: the body slows to quarter time
+          // three fingers hold the law: the body slows to quarter time,
+          // and keeps slowing the longer the chord stands — anesthesia
+          // deepening, never a switch
           if (e.phase === "enter") {
             timeScaleRef.current.target = 0.25;
             try { getFieldAudio().playNote(36, 260); } catch { /* noop */ }
             try { haptics.tap(); } catch { /* noop */ }
           }
+          if (e.phase === "tick") timeScaleRef.current.target = Math.max(0.07, 0.25 - 0.18 * clamp((e.elapsed - 900) / 3000, 0, 1));
           if (e.phase === "release") timeScaleRef.current.target = 1;
           return;
         }
@@ -851,10 +894,35 @@ export default function Pulse() {
           recordTape("sigil", 0.55, "pulse/entrain");
         }
       },
+      span: (e) => {
+        lastGestureAtRef.current = performance.now();
+        // two still fingers pinch the airway: the breath is HELD — the
+        // trace flattens, and past a few seconds the heart starts to climb
+        const s = breathHoldRef.current;
+        if (e.phase === "release") {
+          if (s.active) {
+            s.active = false;
+            // the exhale: everything lets go at once, bigger for a longer hold
+            touchImpulseRef.current = clamp(touchImpulseRef.current + 0.2 + Math.min(0.6, e.elapsed / 5000), 0, 2);
+            addBloom((e.ax + e.bx) / 2, (e.ay + e.by) / 2, 0.5 + Math.min(0.6, e.elapsed / 5000), "exhale");
+            try { getFieldAudio().chime(); } catch { /* noop */ }
+            try { haptics.ripple(0.4); } catch { /* noop */ }
+            recordTape("ripple", 0.5, "pulse/exhale");
+          }
+          return;
+        }
+        s.elapsed = e.elapsed;
+        if (e.phase === "enter") {
+          s.active = true;
+          try { getFieldAudio().playNote(57, 200); } catch { /* noop */ }
+          try { haptics.tap(); } catch { /* noop */ }
+          recordTape("object", 0.4, "pulse/breath-held");
+        }
+      },
     }, { wheelZoom: false });
 
     return detach;
-  }, [addBloom, recordTape]);
+  }, [addBloom, recordTape, schedule]);
 
   const toggleAudio = useCallback((key: ChannelKey) => {
     void getFieldAudio().start();
@@ -888,6 +956,7 @@ export default function Pulse() {
     recordTape("ripple", 1, "pulse/shock");
     schedule(() => setDefibActive(false), 2180);
   }, [recordTape, schedule]);
+  useEffect(() => { defibRef.current = onDefibrillate; }, [onDefibrillate]);
 
   const onPatternKind = useCallback((kind: PatternKind) => {
     void getFieldAudio().start();

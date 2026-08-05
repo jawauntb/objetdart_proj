@@ -1166,6 +1166,7 @@ export default function Murmuration() {
     let swirl = 0;
     let scatter = 0;
     let gather = 0;
+    let spanHeld = 0; // two fingers resting: the interval the flock sustains
     let ceremonyReleaseFired = false;
     let wingHz = 7.2;
     let wingHzTarget = 7.2;
@@ -1431,12 +1432,12 @@ export default function Murmuration() {
           armVessel();
           if (e.fingers === 2) return; // ScaleTravel's step back
           if (e.fingers === 3) {
-            // tutti: the whole sky answers at once
+            // tutti: the whole sky answers at once, as loud as it was asked
             pulse();
-            call(1.5);
-            stirTurbulence(0.08);
+            call(1.1 + e.intensity * 0.8);
+            stirTurbulence(0.05 + e.intensity * 0.07);
             try {
-              haptics.ripple(0.45);
+              haptics.ripple(0.3 + e.intensity * 0.3);
             } catch {
               /* noop */
             }
@@ -1501,8 +1502,14 @@ export default function Murmuration() {
           energy = 1.4;
           if (e.phase === "enter") armVessel();
           if (e.fingers === 3) {
+            // the law deepens with the hold: a lull at 900ms, near-still air
+            // by 2400ms — never the same answer at both
+            if (e.phase === "release") {
+              timeScaleTarget = 1;
+              return;
+            }
+            timeScaleTarget = 1 - 0.75 * clamp01(e.elapsed / 2000);
             if (e.phase === "enter") {
-              timeScaleTarget = 0.25;
               try {
                 audio.playTone(register.baseHz / 4, 0.7);
                 haptics.tap();
@@ -1510,7 +1517,6 @@ export default function Murmuration() {
                 /* noop */
               }
             }
-            if (e.phase === "release") timeScaleTarget = 1;
             return;
           }
           if (e.fingers !== 1) return;
@@ -1713,6 +1719,71 @@ export default function Murmuration() {
             }
           }
         },
+        span: (e) => {
+          lastInteractionAt = performance.now();
+          energy = 1.2;
+          // span — two still fingers hold an interval over the sky: a dyad
+          // from the flock's own register sustains, spaced by the spread,
+          // and the murmuration draws in along it, straighter the longer it
+          // is kept; the release lets the whole animal exhale
+          if (e.phase === "release") {
+            const pent = spanHeld;
+            spanHeld = 0;
+            lurePullTarget = 0;
+            pulse();
+            call(0.8 + pent * 0.8);
+            try {
+              haptics.ripple(0.25 + pent * 0.3);
+            } catch {
+              /* noop */
+            }
+            return;
+          }
+          spanHeld = clamp01(e.elapsed / 2500);
+          char.ali = clamp(char.ali + 0.003 + spanHeld * 0.004, 0.15, 2);
+          softenTarget = Math.max(softenTarget, 0.3 + spanHeld * 0.4);
+          const mid = screenToWorld(e.cx, e.cy);
+          lure.x = mid.x;
+          lure.y = mid.y;
+          lure.z = mid.z;
+          lurePullTarget = 3 + spanHeld * 9;
+          if (e.phase === "enter" || e.elapsed % 700 < 60) {
+            try {
+              audio.playTone(register.baseHz, 0.14);
+              audio.playTone(register.baseHz * (1.12 + clamp01(e.spread / 480) * 0.5 + spanHeld * 0.12), 0.12);
+              haptics.ripple(0.12 + spanHeld * 0.18);
+            } catch {
+              /* noop */
+            }
+          }
+        },
+        drum: (e) => {
+          lastInteractionAt = performance.now();
+          energy = 1.6;
+          // drumming plays the space between the hands: the flock volleys
+          // toward whichever zone just sounded, each side answering in its
+          // own register, and a held patter binds the animal tighter
+          const at = screenToWorld(e.x, e.y);
+          const nearA =
+            (e.x - e.ax) ** 2 + (e.y - e.ay) ** 2 <= (e.x - e.bx) ** 2 + (e.y - e.by) ** 2;
+          const roll = clamp01(e.hits / 9);
+          lure.x = at.x;
+          lure.y = at.y;
+          lure.z = at.z;
+          lurePullTarget = 8 + roll * 18 + e.alternation * 8;
+          try {
+            audio.playTone(register.baseHz * (nearA ? 0.75 : 1.25), 0.1 + roll * 0.08);
+            haptics.tap();
+          } catch {
+            /* noop */
+          }
+          if (e.hits >= 5 && e.alternation > 0.85) {
+            char.coh = clamp(char.coh + 0.008, 0.15, 2);
+            wingHzTarget = clamp(wingHzTarget + 0.4, 2.4, 13);
+            pulse();
+            call(1 + roll * 0.6);
+          }
+        },
       },
       { wheelZoom: false },
     );
@@ -1765,17 +1836,19 @@ export default function Murmuration() {
         }
         window.setTimeout(() => call(1.2), 220);
       },
-      knock: () => {
+      knock: ({ intensity }) => {
+        // a rap on the case rings the aviary — harder knocks carry further
         lastInteractionAt = performance.now();
-        energy = 1.6;
+        energy = 1.2 + intensity * 0.8;
         pulse();
+        stirTurbulence(0.04 + intensity * 0.08);
         try {
           audio.thud();
           haptics.detent();
         } catch {
           /* noop */
         }
-        window.setTimeout(() => call(1.1), 120);
+        window.setTimeout(() => call(0.9 + intensity * 0.5), 120);
       },
       flip: ({ faceDown }) => {
         // face-down is night: the flock goes quiet and low

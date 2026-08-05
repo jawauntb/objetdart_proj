@@ -1,0 +1,267 @@
+# /marsh — a wetland with standing water, reeds, and biofilm.
+#
+# Peer of the drop band, cabinet ring, ringAfter root. So the twist order
+# extends: … → geyser → pebble → root → marsh → coin → … . Where /spring is
+# a two-cell hydraulic ledger and /root is a directed tree, /marsh is the
+# FIELD — a shallow standing-water surface with reed cores anchored at
+# seed points, biofilm mats spread across the surface, and dissolved oxygen
+# diffusing across the whole layer. Fresh invariant type: **field** — a
+# continuous scalar field (dissolved oxygen) over the water surface, with
+# reeds as discrete anchor points that produce it via photosynthesis and
+# biofilm patches that consume it.
+#
+# The sigil is "aphros" — the reef used "growth", but here the water at
+# the surface is the load-bearing register; the marsh is closer to foam
+# than to strict growth. Cabinet ring peer with an aphros sigil reads
+# naturally against /aphros (the shore's foam).
+
+key: marsh
+
+placement:
+  kind: peer
+  circle: cabinet
+  band: drop
+  label: "the marsh"
+  ringAfter: root
+
+sigil: aphros
+desc: "the wetland, breathing between reeds"
+cluster: nature
+dark: true
+home_priority: 9
+ambient_profile: aphros
+storage_key: "objetdart:marsh:v1"
+
+invariant: >
+  a continuous scalar field of dissolved oxygen O(x, y) ∈ [0, 1] over a
+  shallow standing-water surface, with a small set of reed cores anchored
+  at discrete points that PRODUCE oxygen via photosynthesis, and biofilm
+  mats that CONSUME it. every closed-form advance the field diffuses
+  laterally (heat-equation with a small conductivity), reed points inject
+  oxygen at rate `PROD * sunlight`, biofilm mats sink it at rate
+  `CONS * mass`. the load-bearing map is OXYGEN → PITCH — a well-
+  oxygenated tile rings HIGH (a fresh spring), a stagnant tile rings LOW
+  (a stagnant swamp), and from the ringing alone you recover the local
+  oxygen concentration.
+
+material: 2d-over-shader
+noun: reed
+
+domain_lib:
+  name: marshfield
+  invariant_type: field
+
+palette:
+  bg:      "#0a1a15"
+  bg2:     "#3a2818"
+  glow:    "#e8dc9a"
+  accent:  "#4a7a8a"
+  accent2: "#c8945a"
+  ink:     "#e8eee0"
+
+visual_style:
+  subject: "a hand's width of wetland from a shallow, near-water angle — a bright hazy sky above a fixed waterline, shallow water standing over a warm muddy floor, reed stalks rising out of the water with sunlit tips, and biofilm mats spread across the floor where the dissolved-oxygen field runs low"
+  form_language: [SDF, value-noise-FBM, ribbon-flow, point-cloud]
+  motion_character: breathing
+  reference_notes:
+    - "a marsh at midday: a hazy warm-gold sky over a dark wetland waterline, muddy silt floor visible through the shallow water, warm-cool oxygen crossfade painted straight over the mud"
+    - "each reed is a population-layer ribbon — rooted at its base, tapering upward, swaying from the base under turbulence + wind — not a disc and not a thin uniform-driven line segment; its body is the cool accent green, its tip a bright glow highlight"
+    - "biofilm mats are a second population — horizontal, irregular, value-noise-FBM patches in the warm accent2 register, their footprint literally the biofilm density field, breathing +/-20% on the shared clock"
+    - "the water surface carries a Snell-like grazing highlight at the waterline plus a refracted horizontal wobble, so the mud beneath shimmers instead of sitting still under glass"
+  mood: "slow, patient, breathing — the marsh is alive between taps, the reeds swaying on the shared 7s breath, the biofilm drifting"
+  gesture_feedback_style: "a tap rings the local oxygen (pitch = ringHzFor(O)); a dwell plants a new reed whose height climbs while held and pushes oxygen into its neighborhood; the ceremony seals the reed at full height (kept between visits); a hard knock stirs the oxygen field — the room's touch-reachable secret redistributes stale patches"
+
+verbs_answered:
+  - tap
+  - dwell
+  - ceremony
+  - drag
+  - flick
+  - twist
+  - twist3
+  - tap3
+  - drag3
+  - hold3
+  - scrub
+  - drum
+  - arrows
+  - tilt
+  - shake
+  - knock
+  - flip
+
+guide:
+  title: "the marsh — reed, biofilm, oxygen"
+  scale: >
+    the drop band — cabinet peer behind the root, ahead of the coin: a
+    hand's width of wetland from just above, where reed cores stand in a
+    shallow water field and the dissolved oxygen breathes between them.
+  essence: >
+    a continuous scalar field of dissolved oxygen over the water surface,
+    with reeds that produce oxygen and biofilm mats that consume it.
+    every closed-form advance the field diffuses laterally, reeds inject
+    oxygen scaled by sunlight, biofilm mats sink it scaled by their mass.
+    the load-bearing pitch is the local oxygen concentration, so from the
+    ringing you recover the field's state; nothing on the shelf is created
+    except what the sun gave from above or the biofilm quietly took.
+  moves:
+    - "tap → a ripple through the water, and the tile at the finger rings at its local oxygen; a fresh tile rings high, a stagnant tile rings low, so the field is legible before it is explained"
+    - "dwell → plants a reed at the finger, its height climbing on a saturating curve; while held the reed pushes oxygen into its neighborhood"
+    - "ceremony (hold to the tier) → seals the reed at full height — kept between visits, a mature stand the biofilm consumes around"
+    - "drag → the water lens slides — the surface film shears past the reeds without moving them; the oxygen field is unchanged"
+    - "flick → throws an oxygen impulse at that point — a small ring wavefront through the field, its pitch the local oxygen"
+    - "twist → raises the marsh lens: the mean oxygen, the reed heights, the biofilm mass, and the field's mean pitch as a barometer"
+    - "twist3 → turns the year through sunlight; from midsummer's peak photosynthesis to midwinter's slow, the field emptying and refilling"
+    - "tap3 → tutti; every reed rings at once at its local oxygen, one chord across the whole field"
+    - "drag3 → the world-law: down is oxygen inflow (sunlight up), across is biofilm mass"
+    - "hold3 → time dilation while held; the diffusion clock runs slow"
+    - "scrub → agitates the water surface; the oxygen field redistributes toward its mean"
+    - "drum (two hands alternating) → wave field between the two zones; oxygen pulses back and forth"
+    - "arrows → walk the marsh cursor; enter held plants and matures a reed at the cursor; escape lowers the lens"
+    - "tilt / shake / knock / flip (once invited) → the water leans, the surface scatters, a struck marsh stirs the oxygen field, face-down is night"
+  finds:
+    - "the pitch is the oxygen, and the map is invertible — two tiles ringing the same note carry the same amount of dissolved oxygen"
+    - "a marsh left through summer under bright light overflows with oxygen; the biofilm blooms in response and pulls it back down"
+    - "two reeds within a hand's width share the same oxygen pool, so a third one nearby competes for the same photons"
+    - "a hard knock (touch-reachable secret) stirs the oxygen field — the mean stays but the local gradients dissolve, mixing every stagnant patch back into the whole"
+    - "a fortnight's absence is read off a closed-form diffusion — the marsh does not owe the visitor the breaths it took"
+  keeps: >
+    every reed with its height, sealed status and phase, every biofilm
+    mat's mass, the oxygen field as a small grid, the sunlight scalar,
+    the season the year had reached, and the hour it was last looked at.
+
+life:
+  population:
+    objects:
+      - noun: reed
+        max_count: 20
+        state_shape: "id, x, y, height (0..1), tilt (turbulence + wind-driven sway, computed per step, not stored on the ledger), breath phase, sealed (bool), phase seed"
+        lifecycle: "born under dwell (plantReed at cursor, height 0) → height grows on saturating curve while held, injects oxygen into surrounding field → sealed at ceremony (height = MAX_HEIGHT, sealed=true, kept between visits) → retires via <LetGo> (whole marsh)"
+        persistence: LetGo
+        creates_via_verb: dwell
+        retires_via: [LetGo]
+        implementation_hint: SceneObjectSpec
+      - noun: biofilm mat
+        max_count: 8
+        state_shape: "id, x, y, mass (0..1), phase seed"
+        lifecycle: "seeded at initState (plantMat) → mass tracks the biofilm density field, consuming oxygen from its neighborhood on the closed-form advance → retires via <LetGo> (whole marsh)"
+        persistence: LetGo
+        creates_via_verb: "(automatic — seeded at initState, not hand-planted)"
+        retires_via: [LetGo]
+        implementation_hint: SceneObjectSpec
+  breath:
+    period_seconds: 7
+    reads:
+      - "uBreath uniform (fragment shader — water surface highlight `0.85 + 0.15 * uBreath`)"
+      - "uBreath uniform (biofilm mass modulation — the mats breathe by ±20%)"
+      - "uBreath uniform (reed tilt phase — the reeds sway on the shared clock)"
+    behavior_at_rest: "three visible registers ride the 7s clock: the water surface highlight brightens/dims by ±15%, the biofilm mats swell by ±20%, the reeds sway by ±15°. Between taps the marsh is never still"
+  glimmer:
+    after_idle_ms: 20000
+    visual: "one reed sways wider than the others, alone, and nothing is said — the glimmer handler picks a reed by `state.tau * 977 % state.reeds.length` and pushes a soft impulse through its base"
+  haptics_grammar:
+    tap: ripple
+    dwell: tap
+    ceremony: bloom
+    flick: chop
+    twist: lens
+    twist3: detent
+    tap3: roll
+    scrub: tap
+    drum: tap
+    knock: detent
+    arrows: tap
+  make_unmake:
+    letgo_clears_population: true
+    ceremony_is: "sealing the reed at full height — the mature stand persists between visits and lets the biofilm around it settle into equilibrium"
+
+shader_intent: >
+  two shaders: the background field, and the population layer. the
+  background field is a fixed waterline near the top of the frame —
+  turbulence and the scrub gesture add real chop on top of a slow
+  breathing wavelet. above the line: a bright hazy sky (glow-tinted
+  horizon band, warmth-tinted haze, night dims it). below: a shallow
+  water column over a muddy floor (bg2) with layered FBM grain, sampled
+  through a small refracted wobble so the mud shimmers under a
+  Snell-like grazing surface highlight. the oxygen field
+  (approxOxygen, reading uReeds/uMats/uClimate as a proxy for the JS
+  ledger's real grid) paints straight over the mud as a warm-cool
+  cross-fade: high-oxygen tiles read glow (warm), low-oxygen tiles read
+  accent (cool) and darken. ripple wavefronts from taps and flicks
+  propagate as gaussian rings. the population layer (see
+  `src/lib/scene/population-layer.ts`'s custom-frag support, same
+  pattern as /tidepool and /reef) draws both populations in one shared
+  instanced pass: reeds as vertical ribbon SDFs rooted at their base,
+  swaying from the base under turbulence + wind, green (accent) body
+  with a bright sunlit tip (glow); biofilm mats as horizontal,
+  irregular value-noise-FBM patches in accent2, breathing ±20%. no
+  createRadialGradient, no per-frame allocation. palette registers: bg
+  = dark wetland base, bg2 = warm mud/silt (distinct from bg), glow =
+  bright water surface + sunlit reed tips (the load-bearing highlight),
+  accent = cool water / oxygen-poor register (also the reed body —
+  a stagnant tile and a green stalk share the cool family), accent2 =
+  warm biofilm bloom (exclusive to the mats), ink = readable text over
+  the darkest tile. the twist lens is a second render path: mean
+  oxygen, reed count, biofilm mass total, and mean pitch.
+
+domain_intent: >
+  write `src/lib/marshfield.ts` around one exported
+  `MarshState = { reeds, mats, oxygen, sunlight, tau, seedKey }`.
+  `reeds` is a `Reed[]` where each is
+  `{ id, x, y, height (0..1), sealed, phase }`. `mats` is a
+  `BiofilmMat[]` where each is `{ id, x, y, mass (0..1), phase }`.
+  `oxygen` is a `Float32Array` of length GRID_W * GRID_H (16 × 12 =
+  192 cells covering the section). `sunlight` is a scalar in [0, 1].
+  climate `Climate = { warmth, wet }` drives two responses:
+  `sunlightRate(warmth)` scales the effective sunlight into every
+  reed, and `matRate(wet)` scales biofilm consumption. the closed-
+  form advance walks the oxygen field forward using a linear
+  diffusion step (5-point Laplacian with conductivity K_DIFF), then
+  adds reed injection `PROD * sunlight * reed.height * dt` to
+  every cell within a reed's radius, then subtracts biofilm
+  consumption `CONS * mat.mass * dt` from every cell within a
+  mat's radius. all bounded [0, 1]. `advanceExact(state, seconds,
+  climate)` runs a fixed number of sub-steps for stability, capped
+  at `MAX_ELAPSED_S = 14 days`. reed heights follow closed-form
+  logistic growth `dh/dt = R_BASE * (1 - h) * localO` — a reed grows
+  where oxygen is high (the environment is fertile). the LOAD-
+  BEARING INVERTIBLE MAP is OXYGEN → PITCH:
+  `ringHzFor(O) = PITCH_BASE_HZ * 2^(O / PITCH_SCALE_O)`, and
+  `oxygenForRingHz(hz)` exactly inverts it. from the ring alone
+  the visitor recovers the local oxygen; the test pins the round-
+  trip. export `plantReed(state, x, y)`, `deepenReed(state, id,
+  dHeight)`, `sealReed(state, id)`, `plantMat(state, x, y, mass)`,
+  `stirOxygen(state, intensity)` (redistributes oxygen toward the
+  mean — the touch-reachable secret), `nearestReed`, `meanOxygen`,
+  `matTotalMass`, `oxygenAt(state, x, y)` (bilinear sample of the
+  grid), `sealedCount`, `initState`. no DOM, no audio, no
+  Math.random, no Date.now.
+
+verb_intent: >
+  every handler reads MarshState from a stable apiRef and forwards
+  to a method on MarshApi. `tap` rings the local oxygen (pitch =
+  ringHzFor(oxygenAt(nx, ny))); a smaller intensity rings a smaller
+  ripple, and the pitch alone tells the local oxygen. `dwell` plants
+  a reed at the finger (refuses outside bounds), height grows on the
+  logistic `h = HEIGHT_STEP_MAX * (1 - exp(-elapsed /
+  REED_GROW_TAU_MS))` — never fires identically at 900ms and 2400ms.
+  `ceremony` calls `sealReed` on the currently-planted reed (or the
+  nearest one within reach) and marks hasKept=true. `drag` slides
+  the surface lens — a scalar shear stored for the shader; the
+  ledger is unchanged. `flick` throws an oxygen impulse at that
+  point (adds a small pulse to the oxygen cell). `scrub` agitates
+  the surface — writes into stir for the shader. `drum` pulses
+  oxygen between two zones (raises the local oxygen at both). `twist`
+  raises the marsh lens; two-finger tap steps back. `drag3` (wind)
+  writes into sunlight and biofilm mass (or their proxies). `twist3`
+  (season) advances the ledger through part of the year. `hold3`
+  slows the clock. `tap3` (tutti) rings every tile in the field at
+  once. the vessel: `tilt` leans the water surface, `shake` scatters
+  ripples, `knock` calls stirOxygen — the touch-reachable secret
+  homogenises the field. `flip` is night. `arrows` walk a cursor;
+  enter held is a keyboard dwell; escape lowers the lens. no room-
+  local timing constants; every threshold from gesture/core.ts.
+
+chrome:
+  travel: true
+  peers: true

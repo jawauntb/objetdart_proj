@@ -44,6 +44,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
+import { tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import RoomShell from "@/components/RoomShell";
 import { createGLStage, FULLSCREEN_VERT_CLIP } from "@/lib/webgl/stage";
 import { clocksFrom } from "@/lib/webgl/sizing";
@@ -397,7 +398,7 @@ void main(){
 
 /** The imperative half of the room: the shell speaks to it through this. */
 type Engine = {
-  tap: (e: { intensity: number; x: number; y: number }) => void;
+  tap: (e: { count: number; intensity: number; x: number; y: number }) => void;
   stepBack: () => void;
   tutti: () => void;
   plant: (e: { x: number; y: number }) => void;
@@ -412,10 +413,19 @@ type Engine = {
   lens: (e: { angle: number }) => void;
   season: (e: { angle: number }) => void;
   drum: (e: { hits: number; alternation: number }) => void;
-  rhythm: (e: { stability: number }) => void;
+  rhythm: (e: { bpm: number; stability: number }) => void;
+  sustain: (e: {
+    phase: "enter" | "tick" | "release";
+    spread: number;
+    elapsed: number;
+    ax: number;
+    ay: number;
+    bx: number;
+    by: number;
+  }) => void;
   scatter: (e: { intensity: number }) => void;
   gravity: (e: { beta: number; gamma: number }) => void;
-  knock: () => void;
+  knock: (e: { intensity: number }) => void;
   night: (e: { faceDown: boolean }) => void;
   glimmer: () => void;
   reduced: (r: boolean) => void;
@@ -711,6 +721,7 @@ export default function SolarSystem() {
       lastTickAt: number; ceremonyFired: boolean;
     } | null = null;
     let dragIdx = -1;
+    let spanDuo: { a: number; b: number; lastVoiceAt: number } | null = null;
     let lastScrubAt = 0;
     let lastScrubTickAt = 0;
     let twistWound = 0;
@@ -812,7 +823,119 @@ export default function SolarSystem() {
     // ——— the engine the shell speaks to ———
     engineRef.current = {
       tap: (e) => {
+        // The rapid-tap ladder: 1 touches, 3 calls the resonances, 5
+        // condenses a wanderer, n sweeps the whole chord open.
+        const trainTier = tapTrainTier(e.count);
+        const depth = tapTrainDepth(e.count);
+        if (trainTier === "n") {
+          // the crescendo: every voice in the system, inner first, at the
+          // depth the train has earned
+          bodies.forEach((el, k) => {
+            window.setTimeout(() => voice(el, 1.5 + depth), 90 * k);
+            flare[k] = Math.max(flare[k] ?? 0, 0.5 + depth * 0.4);
+          });
+          sunFlare = Math.max(sunFlare, 0.55 + depth * 0.4);
+          agitation = Math.min(1, agitation + 0.2 + depth * 0.2);
+          try {
+            haptics.roll();
+          } catch {
+            /* noop */
+          }
+          return;
+        }
+        if (trainTier === 5) {
+          if (e.count > 5) {
+            // taps past the rung urge the newest wanderer on, not another
+            const at = bodies.findIndex((b) => b.kind === "comet");
+            const idx = at >= 0 ? bodies.length - 1 : selIdx;
+            if (idx >= 0 && idx < bodies.length) {
+              flare[idx] = Math.max(flare[idx] ?? 0, 0.5 + depth * 0.3);
+              voice(bodies[idx], 1.2 + depth);
+            }
+            try {
+              haptics.ripple(0.3 + depth * 0.2);
+            } catch {
+              /* noop */
+            }
+            return;
+          }
+          // five strikes on one spot and a wanderer condenses there,
+          // dropped slightly against the circular speed — a comet's blade
+          const w = toWorldPolar(e.x, e.y, 1);
+          const out = plantBody(
+            hashSeed(Math.round(e.x), Math.round(e.y), bodies.length, SOLAR_SEED ^ 0x51),
+            worldRadiusForDisplay(clamp01(w.r / viewR)),
+            w.theta,
+            220 + depth * 900,
+            { vr: 0, vt: -0.18 - e.intensity * 0.2 },
+            mu,
+            simS,
+          );
+          if (out.kind === "bound") {
+            bodies = withComet(bodies, out.el).slice(0, MAX_BODIES);
+            resync();
+            const at = bodies.indexOf(out.el);
+            if (at >= 0) {
+              select(at);
+              flare[at] = 0.9;
+            }
+            voice(out.el, 1.8);
+            try {
+              audio.spark();
+              haptics.bloom();
+            } catch {
+              /* noop */
+            }
+            scheduleSave();
+          } else {
+            lose(undefined, out.kind);
+          }
+          return;
+        }
         const i = bodyAtScreen(e.x, e.y);
+        if (trainTier === 3) {
+          if (i >= 0) {
+            // three taps and the struck world calls whoever it is locked
+            // with — the resonance heard before it is looked for
+            select(i);
+            flare[i] = Math.max(flare[i] ?? 0, 0.5 + depth * 0.3);
+            voice(bodies[i], 1.6);
+            let echoed = 0;
+            for (const lk of locks) {
+              if (lk.i !== i && lk.j !== i) continue;
+              const j = lk.i === i ? lk.j : lk.i;
+              if (j < 0 || j >= bodies.length) continue;
+              flare[j] = Math.max(flare[j] ?? 0, 0.4 + depth * 0.3);
+              const el = bodies[j];
+              window.setTimeout(() => voice(el, 1.3), 140 + 90 * echoed);
+              echoed += 1;
+            }
+            if (!echoed) {
+              // no lock yet: the nearest course answers instead
+              const j = i + 1 < bodies.length ? i + 1 : i - 1;
+              if (j >= 0 && j < bodies.length) {
+                flare[j] = Math.max(flare[j] ?? 0, 0.3 + depth * 0.2);
+                const el = bodies[j];
+                window.setTimeout(() => voice(el, 1.1), 150);
+              }
+            }
+            try {
+              haptics.ripple(0.35 + depth * 0.2);
+            } catch {
+              /* noop */
+            }
+            return;
+          }
+          // open sky: the dust deepens its answer with the train
+          agitation = Math.min(1, agitation + 0.12 + depth * 0.1);
+          try {
+            audio.playNote(28, 700);
+            haptics.ripple(0.3);
+          } catch {
+            /* noop */
+          }
+          return;
+        }
         if (i >= 0) {
           select(i);
           flare[i] = Math.max(flare[i] ?? 0, 0.35 + e.intensity * 0.45);
@@ -1093,7 +1216,79 @@ export default function SolarSystem() {
         }
       },
       rhythm: (e) => {
-        if (e.stability > 0.72) tutti();
+        if (e.stability < 0.6) return;
+        // A steady pulse entrains the epoch itself: the chosen world's year
+        // is retimed so one orbit lands on eight of the hand's beats —
+        // Kepler's clock, set by tapping.
+        const el = bodies[selIdx] ?? bodies[0];
+        if (!el) return;
+        const T = TAU * Math.sqrt((el.a * el.a * el.a) / mu);
+        rateExp = clamp(Math.log2((T * e.bpm) / (60 * 8)), RATE_EXP_MIN, RATE_EXP_MAX);
+        flare[selIdx] = Math.max(flare[selIdx] ?? 0, 0.4 + e.stability * 0.3);
+        sunFlare = Math.max(sunFlare, 0.3);
+        voice(el, 1.2);
+        try {
+          haptics.detent();
+        } catch {
+          /* noop */
+        }
+        seasonDirty = true;
+        lastSeasonAt = performance.now();
+        // a hand that is truly metronomic earns the whole chord
+        if (e.stability > 0.9) tutti();
+      },
+      sustain: (e) => {
+        // The span: two still fingers hold an interval open, and the
+        // interval IS the third law — the two courses under the fingertips
+        // keep sounding together, deeper the longer they are held.
+        if (e.phase === "release") {
+          spanDuo = null;
+          return;
+        }
+        if (e.phase === "enter" || !spanDuo) {
+          const pick = (sx: number, sy: number) => {
+            const hit = bodyAtScreen(sx, sy);
+            return hit >= 0 ? hit : orbitAtScreen(sx, sy);
+          };
+          spanDuo = { a: pick(e.ax, e.ay), b: pick(e.bx, e.by), lastVoiceAt: 0 };
+        }
+        const now = performance.now();
+        if (now - spanDuo.lastVoiceAt < 620) return;
+        spanDuo.lastVoiceAt = now;
+        const ia = spanDuo.a;
+        const ib = spanDuo.b;
+        const dur = 0.7 + Math.min(1.5, e.elapsed / 2400);
+        if (ia >= 0 && ib >= 0 && ia !== ib && ia < bodies.length && ib < bodies.length) {
+          voice(bodies[ia], dur);
+          voice(bodies[ib], dur);
+          flare[ia] = Math.max(flare[ia] ?? 0, 0.3 + Math.min(0.3, e.elapsed / 6000));
+          flare[ib] = Math.max(flare[ib] ?? 0, 0.3 + Math.min(0.3, e.elapsed / 6000));
+          // a pair already locked answers the held interval with its bell
+          const lk = locks.find(
+            (l) => (l.i === ia && l.j === ib) || (l.i === ib && l.j === ia),
+          );
+          if (lk) {
+            try {
+              audio.chime();
+            } catch {
+              /* noop */
+            }
+          }
+          try {
+            haptics.ripple(0.2 + Math.min(0.25, e.elapsed / 8000));
+          } catch {
+            /* noop */
+          }
+          return;
+        }
+        // open sky: the zodiacal dust holds a drone that lengthens as it is held
+        agitation = Math.min(1, agitation + 0.05);
+        try {
+          audio.playNote(24, Math.round(320 + Math.min(1400, e.elapsed * 0.35)));
+          haptics.ripple(0.15);
+        } catch {
+          /* noop */
+        }
       },
       scatter: (e) => {
         agitation = Math.min(1, agitation + 0.4 + e.intensity * 0.5);
@@ -1117,12 +1312,16 @@ export default function SolarSystem() {
         squashTarget = clamp(0.72 - ((beta - 45) / 90) * 0.3, 0.5, 0.94);
         tiltRot = clamp(gamma / 140, -0.35, 0.35);
       },
-      knock: () => {
-        // a knock on the case is a knock on the sun's door
-        sunFlare = Math.max(sunFlare, 0.9);
-        for (let i = 0; i < flare.length; i++) flare[i] = Math.max(flare[i], 0.25);
+      knock: (e) => {
+        // a knock on the case is a knock on the sun's door — a firm rap
+        // rings the whole system harder, and lower
+        const k = clamp01(e.intensity);
+        sunFlare = Math.max(sunFlare, 0.55 + k * 0.45);
+        for (let i = 0; i < flare.length; i++) flare[i] = Math.max(flare[i], 0.15 + k * 0.25);
         try {
           audio.thud();
+          const outer = bodies[bodies.length - 1];
+          if (outer) audio.playTone(freqOf(outer) * 0.5, 0.8 + k * 1.2);
           haptics.roll();
         } catch {
           /* noop */
@@ -1668,6 +1867,7 @@ export default function SolarSystem() {
         wind: on("wind"),
         flick: on("flick"),
         stir: on("stir"),
+        sustain: on("sustain"),
         lens: on("lens"),
         season: on("season"),
         drum: on("drum"),

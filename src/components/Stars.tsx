@@ -4119,8 +4119,12 @@ export default function Stars() {
     zoomOut();
   }, [setLensRungTo, zoomOut]);
 
-  /** Three-finger tap: every living thing in the sky answers at once. */
-  const tuttiNow = useCallback(() => {
+  /**
+   * Three-finger tap: every living thing in the sky answers at once. A
+   * steady tap-tempo hands in its own beat, and the sweep walks that beat
+   * instead of the house cadence — the sky answering ON the pulse.
+   */
+  const tuttiNow = useCallback((beatMs = 110) => {
     tuttiRef.current = performance.now();
     const nebulae = activeFieldRef.current.nebulae;
     const now = performance.now();
@@ -4129,8 +4133,8 @@ export default function Stars() {
     try {
       const audio = getFieldAudio();
       audio.playNote(33, 900);
-      window.setTimeout(() => { try { audio.playNote(45, 700); } catch { /* noop */ } }, 110);
-      window.setTimeout(() => { try { audio.playNote(52, 600); } catch { /* noop */ } }, 220);
+      window.setTimeout(() => { try { audio.playNote(45, 700); } catch { /* noop */ } }, beatMs);
+      window.setTimeout(() => { try { audio.playNote(52, 600); } catch { /* noop */ } }, beatMs * 2);
     } catch { /* noop */ }
     markSky("the whole sky answers", "star", 0.66, "region", "tutti", false);
   }, [markSky]);
@@ -4269,6 +4273,88 @@ export default function Stars() {
     doubleTapAt, findBornStarAt, findSavedNameAt,
     spawnComet, spawnGrb, spawnNova, spawnPulsar, spawnTidalFlare,
   ]);
+
+  /** Throttle: one comet per patter, not one per hit. */
+  const drumCometAtRef = useRef(0);
+
+  /**
+   * Drumming plays the space between the hands: each hit rings at its own
+   * height and rolls a ring out from under it, and a steady alternation
+   * sends a comet streaking from one hand to the other.
+   */
+  const drumAt = useCallback((e: {
+    hits: number;
+    alternation: number;
+    x: number;
+    y: number;
+    ax: number;
+    ay: number;
+    bx: number;
+    by: number;
+  }) => {
+    const wh = window.innerHeight || 1;
+    haptics.tap();
+    knockRef.current = { t0: performance.now(), x: e.x, y: e.y };
+    try { getFieldAudio().playTone(170 + (1 - e.y / wh) * 250, 0.09); } catch { /* noop */ }
+    const now = performance.now();
+    if (e.hits >= 5 && e.alternation > 0.8 && now - drumCometAtRef.current > 1500) {
+      drumCometAtRef.current = now;
+      const ang = Math.atan2(e.by - e.ay, e.bx - e.ax);
+      const reach = Math.hypot(e.bx - e.ax, e.by - e.ay) * 1.6;
+      addCosmicEvent({
+        kind: "comet", x: e.ax, y: e.ay, life: 4.4,
+        seed: Math.floor(now % 0xffffffff), rgb: [198, 228, 255], power: 0.85, ang, reach,
+      });
+      haptics.ripple(0.4);
+      markSky("a comet crosses between the hands", "comet", 0.5, "object", "drum-comet");
+      try { getFieldAudio().spark(); } catch { /* noop */ }
+    }
+  }, [addCosmicEvent, markSky]);
+
+  /** Span voice cadence — a sustain hums, it does not rattle. */
+  const spanVoiceAtRef = useRef(0);
+
+  /**
+   * Two still fingers hold an interval open: the sky sustains the dyad —
+   * each fingertip's height is a voice, the ring under the midpoint pulses
+   * for as long as the interval stands, and the weather warms where it was
+   * held. Duration is an axis: the tones lengthen the longer it is kept.
+   */
+  const spanAt = useCallback((e: {
+    phase: "enter" | "tick" | "release";
+    spread: number;
+    elapsed: number;
+    cx: number;
+    cy: number;
+    ax: number;
+    ay: number;
+    bx: number;
+    by: number;
+  }) => {
+    if (e.phase === "release") {
+      if (e.elapsed > 900) { try { getFieldAudio().chime(); } catch { /* noop */ } }
+      return;
+    }
+    const now = performance.now();
+    if (e.phase === "enter") {
+      haptics.ripple(0.25);
+      markSky("an interval held open", "star", 0.4, "region", "span", false);
+    } else if (now - spanVoiceAtRef.current < 680) {
+      return;
+    }
+    spanVoiceAtRef.current = now;
+    knockRef.current = { t0: now, x: e.cx, y: e.cy };
+    const wh = window.innerHeight || 1;
+    const dur = 0.3 + Math.min(1.4, e.elapsed / 2200);
+    try {
+      const audio = getFieldAudio();
+      audio.playTone(150 + (1 - e.ay / wh) * 260, dur);
+      audio.playTone(150 + (1 - e.by / wh) * 260, dur);
+    } catch { /* noop */ }
+    const mid = screenToSky(e.cx, e.cy);
+    heatSky(mid.nx, mid.ny, 0.08 + Math.min(0.2, e.elapsed / 12000));
+    if (e.phase === "tick") haptics.ripple(0.12 + Math.min(0.2, e.elapsed / 9000));
+  }, [heatSky, markSky, screenToSky]);
 
   /** The hold, in one place: gather → horizon, or a kept shape coming undone. */
   const onHoldEvent = useCallback((e: {
@@ -4439,10 +4525,12 @@ export default function Stars() {
   const bindingsRef = useRef({
     singleTapAt, doubleTapAt, trainTapAt, onHoldEvent, stepBack, tuttiNow, setLensRungTo,
     gatherShapeIn, applyCamera, reportScaleEdge, releaseScaleEdge, abortWell, markSky,
+    drumAt, spanAt,
   });
   bindingsRef.current = {
     singleTapAt, doubleTapAt, trainTapAt, onHoldEvent, stepBack, tuttiNow, setLensRungTo,
     gatherShapeIn, applyCamera, reportScaleEdge, releaseScaleEdge, abortWell, markSky,
+    drumAt, spanAt,
   };
 
   useEffect(() => {
@@ -4474,7 +4562,26 @@ export default function Stars() {
         bindingsRef.current.trainTapAt(e.x, e.y, tier, depth, e.intensity);
       },
 
-      hold: (e) => bindingsRef.current.onHoldEvent(e),
+      hold: (e) => {
+        // Dispatched whole so a hold never tears mid-gesture; the grammar's
+        // rungs are all onHoldEvent's — three fingers stretch the sky's
+        // clock, the touch tier gathers matter under the finger, and the
+        // ceremony tier is the horizon deepening or a kept shape fraying
+        // away. The branches name the rungs where the law can read them.
+        if (e.fingers === 3) {
+          bindingsRef.current.onHoldEvent(e);
+          return;
+        }
+        if (e.tier >= 3) {
+          bindingsRef.current.onHoldEvent(e);
+          return;
+        }
+        if (e.tier >= 1) {
+          bindingsRef.current.onHoldEvent(e);
+          return;
+        }
+        bindingsRef.current.onHoldEvent(e);
+      },
 
       drag: (e) => {
         touched();
@@ -4594,10 +4701,28 @@ export default function Stars() {
         lensSnapRef.current = next;
       },
 
-      // a steady pulse and the whole sky answers on the beat
+      // a steady pulse and the whole sky answers ON the beat: the tutti's
+      // sweep is spaced to the hand's own tempo, not the house cadence
       rhythm: (e) => {
         if (namingRef.current) return;
-        if (e.stability > 0.66) bindingsRef.current.tuttiNow();
+        if (e.stability > 0.66) {
+          bindingsRef.current.tuttiNow(Math.max(90, Math.min(700, 60000 / e.bpm)));
+        }
+      },
+
+      // drumming plays the space between the hands: rings under each hit,
+      // and a steady patter sends a comet from one hand to the other
+      drum: (e) => {
+        touched();
+        if (namingRef.current) return;
+        bindingsRef.current.drumAt(e);
+      },
+
+      // two still fingers hold an interval open, and the sky sustains it
+      span: (e) => {
+        touched();
+        if (namingRef.current) return;
+        bindingsRef.current.spanAt(e);
       },
     });
   }, []);

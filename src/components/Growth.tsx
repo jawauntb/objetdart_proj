@@ -21,6 +21,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
@@ -1272,7 +1273,7 @@ export default function Growth() {
 
     // three-finger tap = tutti (grammar §5): one synchronized soft pulse —
     // every blossom on every vine sways once, its note a whisper
-    const tutti = () => {
+    const tutti = (strength = 0.5) => {
       const now = performance.now();
       if (now - lastTuttiAt < 1400) return;
       lastTuttiAt = now;
@@ -1280,15 +1281,15 @@ export default function Growth() {
       for (const system of field.systems) {
         for (const b of system.blossoms) {
           if (b.sx < 0) continue;
-          b.wobbleV += (hash(b.seed % 977) - 0.5) * 1.1;
+          b.wobbleV += (hash(b.seed % 977) - 0.5) * (0.7 + strength * 0.9);
           if (voiceI < 10) {
             window.setTimeout(() => note(midiOf(b.species), 70), voiceI * 45);
             voiceI += 1;
           }
         }
       }
-      field.params.pulse = Math.max(field.params.pulse, 0.6);
-      haptics.tap();
+      field.params.pulse = Math.max(field.params.pulse, 0.4 + strength * 0.5);
+      haptics.ripple(0.2 + strength * 0.4);
     };
 
     // ————— gestures (the grammar, nothing private) —————
@@ -1296,19 +1297,96 @@ export default function Growth() {
       tap: (e) => {
         lastInteractionAt = performance.now();
         if (e.fingers === 2) {
-          // step back: a raised lens lowers — the frame retreats one step
+          // step back: a raised lens lowers first; otherwise the field's
+          // forces ease one step toward rest — the frame retreating in the
+          // room's own noun, which here is the equation's pull
           if (lensSnapped === 1) {
             lensSnapped = 0;
             lensTarget = 0;
             try { haptics.lens(); } catch { /* noop */ }
             note(48, 160);
+          } else {
+            panTargetX = 0;
+            panTargetY = 0;
+            field.params.gravityX *= 0.4;
+            field.params.gravityY *= 0.4;
+            windTarget *= 0.4;
+            note(43, 140);
+            try { haptics.detent(); } catch { /* noop */ }
           }
           return;
         }
-        if (e.fingers === 3) { tutti(); return; }
+        if (e.fingers === 3) { tutti(e.intensity); return; }
         if (e.fingers !== 1) return; // anything else is gently absorbed
         const p = toLocal(e.x, e.y);
         const b = blossomAt(p.x, p.y);
+        // the rapid-tap ladder: a wobble → the vine arpeggiates → a
+        // bloom-wave runs the stem → the whole trellis pulses
+        const trainTier = tapTrainTier(e.count);
+        const depth = tapTrainDepth(e.count);
+        if (trainTier === "n") {
+          let voiceI = 0;
+          for (const system of field.systems) {
+            for (const bb of system.blossoms) {
+              if (bb.sx < 0) continue;
+              bb.wobbleV += (hash(bb.seed % 977) - 0.5) * (1.2 + depth * 1.2);
+              if (voiceI < 12) {
+                window.setTimeout(() => note(midiOf(bb.species) + 12, 60), voiceI * 40);
+                voiceI += 1;
+              }
+            }
+          }
+          field.params.pulse = Math.max(field.params.pulse, 0.7 + depth * 0.3);
+          windTarget = clamp(windTarget + 0.5 + depth * 0.4, -1, 1);
+          haptics.ripple(0.5 + depth * 0.4);
+          return;
+        }
+        if (trainTier === 5) {
+          if (b) {
+            // five taps send a bloom-wave up the whole vine
+            const system = field.systems.find((s) => s.blossoms.includes(b));
+            if (system) {
+              system.blossoms.forEach((bb, i) => {
+                window.setTimeout(() => {
+                  bb.held = Math.min(1, bb.held + 0.3 + depth * 0.2);
+                  bb.wobbleV += (hash(bb.seed % 977) - 0.5) * 1.2;
+                  if (i < 6) note(midiOf(bb.species) + i * 2, 80);
+                }, i * 70);
+              });
+              system.force = clamp(system.force + 0.4, 0, 1.8);
+            }
+            try { getFieldAudio().bell(); } catch { /* noop */ }
+            haptics.bloom();
+          } else {
+            // five taps on the open field kick its bloom
+            field.params.bloom = Math.max(field.params.bloom, 0.7 + depth * 0.2);
+            field.params.pulse = Math.max(field.params.pulse, 0.5);
+            burst(p.x, p.y, ["#b8f07a", "#fff5cf", "#8ed8c4"], 14, 44);
+            try { getFieldAudio().chime(); } catch { /* noop */ }
+            haptics.ripple(0.5);
+          }
+          return;
+        }
+        if (trainTier === 3) {
+          if (b) {
+            // three taps arpeggiate the vine under the hand
+            const system = field.systems.find((s) => s.blossoms.includes(b));
+            const line = system ? system.blossoms.filter((bb) => bb.sx >= 0) : [b];
+            line.slice(0, 5).forEach((bb, i) => {
+              window.setTimeout(() => {
+                bb.wobbleV += (hash(bb.seed % 977) - 0.5) * (0.9 + depth);
+                note(midiOf(bb.species) + i * 3, 70);
+              }, i * 60);
+            });
+            burst(b.sx, b.sy, [b.species.palette.petal, b.species.palette.heart], 6 + Math.round(depth * 4), 26);
+          } else {
+            field.params.rate = clamp(field.params.rate + 0.12 + depth * 0.1, 0.08, 1);
+            burst(p.x, p.y, ["#b8f07a", "#8ed8c4"], 8, 26);
+            note(configFor(modeRef.current).note + 7, 90);
+          }
+          haptics.tap();
+          return;
+        }
         if (b) {
           b.wobbleV += (p.x < b.sx ? -1 : 1) * (0.6 + e.intensity * 1.2);
           note(midiOf(b.species), 130);
@@ -1323,13 +1401,14 @@ export default function Growth() {
       hold: (e) => {
         lastInteractionAt = performance.now();
         if (e.fingers === 3) {
-          // three fingers touch the law: time dilates while held
+          // three fingers touch the law: time dilates while held, and the
+          // dilation keeps deepening for as long as the hand stays
           if (e.phase === "enter") {
-            timeScaleTarget = 0.25;
             haptics.tap();
             note(36, 260);
           }
           if (e.phase === "release") timeScaleTarget = 1;
+          else timeScaleTarget = clamp(1 - e.elapsed / 3400, 0.08, 1);
           return;
         }
         if (e.fingers !== 1) return;
@@ -1506,15 +1585,18 @@ export default function Growth() {
         if (now - lastScrubAt < 700) return;
         lastScrubAt = now;
         const p = toLocal(e.cx, e.cy);
-        // circling stirs a falling-petal eddy from the nearest open blossom
+        // circling stirs a falling-petal eddy from the nearest open blossom —
+        // deeper, faster circles lift more of it and spin it harder
         const b = blossomAt(p.x, p.y);
         const colors = b
           ? [b.species.palette.petal, b.species.palette.glow, b.species.palette.heart]
           : ["#b8f07a", "#fff5cf", "#8ed8c4"];
-        burst(p.x, p.y, colors, 12, 34);
-        for (const s of specks) s.swirl += Math.sign(e.winding) * 1.4;
-        note(64, 90);
-        haptics.ripple(0.3);
+        const turn = Math.min(3, Math.abs(e.winding));
+        const spin = Math.min(1, e.angularVelocity / 1.4);
+        burst(p.x, p.y, colors, 8 + Math.round(turn * 5), 26 + Math.round(spin * 22));
+        for (const s of specks) s.swirl += Math.sign(e.winding) * (1 + turn * 0.5);
+        note(62 + Math.round(turn * 3), 90);
+        haptics.ripple(0.2 + turn * 0.12);
         useField.getState().recordTape("ripple", 0.5, "growth/eddy");
       },
       rhythm: (e) => {
@@ -1599,15 +1681,17 @@ export default function Growth() {
         try { (intensity > 0.7 ? haptics.storm : haptics.chop)(); } catch { /* noop */ }
       },
       // knock = wake / ring the room (rhymes with /coin's pop-to-flip and
-      // /flowers' tutti-on-knock): a rap on the case sounds every blossom once
-      knock: () => {
+      // /flowers' tutti-on-knock): a rap on the case sounds every blossom
+      // once, as loud as the knuckle asked
+      knock: ({ intensity }) => {
         lastInteractionAt = performance.now();
-        tutti();
+        tutti(0.4 + intensity * 0.6);
       },
       // flip face-down = night: the field dims and hushes until turned back
       flip: ({ faceDown }) => {
         night = faceDown;
         if (!faceDown) lastInteractionAt = performance.now();
+        note(faceDown ? 28 : 76, faceDown ? 480 : 160);
       },
     });
 

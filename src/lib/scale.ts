@@ -904,6 +904,7 @@ export const LATERAL_ROUTE_BANDS: { prefix: string; band: ScaleBandId }[] = [
   { prefix: "/pretext", band: "coast" },
   { prefix: "/aphros", band: "coast" },
   { prefix: "/reef", band: "coast" },
+  { prefix: "/tidepool", band: "coast" },
   // peak weather
   { prefix: "/clouds", band: "olympus" },
   { prefix: "/storm", band: "olympus" },
@@ -934,6 +935,8 @@ export const LATERAL_ROUTE_BANDS: { prefix: string; band: ScaleBandId }[] = [
   { prefix: "/soil", band: "drop" },
   { prefix: "/spring", band: "drop" },
   { prefix: "/geyser", band: "drop" },
+  { prefix: "/root", band: "drop" },
+  { prefix: "/marsh", band: "drop" },
 ];
 
 /** Where a route enters the manifold: center of its band. */

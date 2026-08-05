@@ -15,6 +15,7 @@ import { useGeneratedSpeech } from "@/lib/useGeneratedSpeech";
 import { useField } from "@/store/field";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import { onVisibility } from "@/lib/room-runtime";
 import LetGo from "@/components/LetGo";
@@ -174,6 +175,8 @@ export default function PretextWave() {
   const tuttiRef = useRef(0);
   const nightRef = useRef(false);
   const lastTouchAtRef = useRef(0);
+  // rhythm: a steady tapped pulse entrains the tide's clock for a while
+  const entrainRef = useRef({ bpm: 0, until: 0, lastBeat: -1 });
 
   // ── create/delete: the room's material is countable (a kept phrase).
   const KEPT_PHRASES_KEY = "objetdart:pretext-kept:v1";
@@ -263,7 +266,22 @@ export default function PretextWave() {
       const ts = timeScaleRef.current;
       ts.cur += (ts.target - ts.cur) * 0.08;
       tuttiRef.current *= 0.92;
-      setPhase((value) => (value + delta * 0.0025 * ts.cur) % (Math.PI * 2));
+      // an entrained tide: the phase clock locks to the hand's tempo (one
+      // full cycle per four beats) and the words brighten on every beat
+      const en = entrainRef.current;
+      const entrained = en.bpm > 0 && now < en.until;
+      const advance = entrained
+        ? delta * ((Math.PI * 2) / ((60000 / en.bpm) * 4))
+        : delta * 0.0025;
+      if (entrained) {
+        const beatIdx = Math.floor(now / (60000 / en.bpm));
+        if (beatIdx !== en.lastBeat) {
+          en.lastBeat = beatIdx;
+          tuttiRef.current = Math.max(tuttiRef.current, 0.28);
+          try { getFieldAudio().playNote(52 + (beatIdx % 2) * 5, 70); } catch { /* noop */ }
+        }
+      }
+      setPhase((value) => (value + advance * ts.cur) % (Math.PI * 2));
     };
     raf = requestAnimationFrame(tick);
     return () => {
@@ -462,8 +480,11 @@ export default function PretextWave() {
         hold: (e) => {
           lastTouchAtRef.current = performance.now();
           if (e.fingers === 3) {
-            // time dilation: the phase clock eases to 1/4 while held.
-            timeScaleRef.current.target = e.phase === "release" ? 1 : 0.25;
+            // time dilation: the phase clock eases to 1/4 while held and
+            // keeps slowing toward stillness the longer the hand stays.
+            timeScaleRef.current.target = e.phase === "release"
+              ? 1
+              : Math.max(0.08, 0.25 - 0.17 * Math.min(1, e.elapsed / 4000));
             return;
           }
           if (e.fingers !== 1) return;
@@ -543,13 +564,93 @@ export default function PretextWave() {
             return;
           }
           if (e.fingers === 3) {
-            // tutti — one synchronized pulse of everything alive.
-            tuttiRef.current = 1;
+            // tutti — one synchronized pulse of everything alive, as bright
+            // as the chord landed.
+            tuttiRef.current = 0.7 + e.intensity * 0.3;
             try { getFieldAudio().chime(); } catch { /* noop */ }
-            haptics.ripple(0.6);
-            addMark("tutti", "ember", 0.72);
-            recordTape("sigil", 0.5, "pretext:tutti");
+            haptics.ripple(0.4 + e.intensity * 0.3);
+            addMark("tutti", "ember", 0.5 + e.intensity * 0.35);
+            recordTape("sigil", 0.35 + e.intensity * 0.35, "pretext:tutti");
+            return;
           }
+          if (e.fingers !== 1) return;
+          // one finger touches the material: a drop lands on the sentence —
+          // the tide quickens where it fell, pitched by how high it landed
+          const rect = stage.getBoundingClientRect();
+          const yNorm = clamp((e.y - rect.top) / Math.max(1, rect.height), 0, 1);
+          setPlaying(true);
+          setPhase((v) => (v + 0.18 + e.intensity * 0.3) % (Math.PI * 2));
+          try { getFieldAudio().playNote(48 + Math.round((1 - yNorm) * 16), 80 + Math.round(e.intensity * 100)); } catch { /* noop */ }
+          haptics.ripple(0.16 + e.intensity * 0.36);
+          recordTape("object", 0.3 + e.intensity * 0.35, "pretext:drop");
+          // train tiers (1 / 3 / 5 / n from gesture/core): rapid taps recall,
+          // crest, then flood the tide
+          const trainTier = tapTrainTier(e.count);
+          if (trainTier === 3 && e.count === 3) {
+            // three taps turn the tide's pages: the next kept phrase takes
+            // the water; with nothing kept, the swell simply rises
+            const kept = keptPhrasesRef.current;
+            if (kept.length > 0) {
+              const at = kept.indexOf(textRef.current.trim());
+              setText(kept[(at + 1 + kept.length) % kept.length]);
+              addMark("recalled", "water", 0.55);
+            } else {
+              const swell = clamp(ampRef.current + 6, AMP_MIN, AMP_MAX);
+              setAmp(swell); ampRef.current = swell;
+            }
+            try { getFieldAudio().playNote(55, 120); } catch { /* noop */ }
+            try { getFieldAudio().playNote(62, 180); } catch { /* noop */ }
+            haptics.ripple(0.45);
+            recordTape("sigil", 0.5, "pretext:train-recall");
+          } else if (trainTier === 5 && e.count === 5) {
+            // five taps crest the tide: amplitude leaps and the meter
+            // tightens — whitecaps in the sentence
+            const crest = clamp(ampRef.current + 12, AMP_MIN, AMP_MAX);
+            setAmp(crest); ampRef.current = crest;
+            const stride = clamp(densityRef.current + 0.25, DENSITY_MIN, DENSITY_MAX);
+            setDensity(Number(stride.toFixed(2))); densityRef.current = Number(stride.toFixed(2));
+            try { getFieldAudio().bell(); } catch { /* noop */ }
+            haptics.bloom();
+            addMark("crest", "ember", 0.7);
+            recordTape("sigil", 0.7, "pretext:train-crest");
+          } else if (trainTier === "n") {
+            // seven and beyond: the crescendo — every further tap floods the
+            // words brighter and rings a rising note
+            tuttiRef.current = 1;
+            const flood = clamp(ampRef.current + 3, AMP_MIN, AMP_MAX);
+            setAmp(flood); ampRef.current = flood;
+            try { getFieldAudio().playNote(60 + (e.count - 7) * 2, 140); } catch { /* noop */ }
+            if (e.count === 7) haptics.storm(); else haptics.ripple(0.55);
+            recordTape("sigil", clamp(0.6 + (e.count - 7) * 0.08, 0.6, 1), "pretext:train-crescendo");
+          }
+        },
+        scrub: (e) => {
+          lastTouchAtRef.current = performance.now();
+          // stir the tide: circling winds the phase with the finger — with
+          // the clock the tide runs on, against it the tide runs back
+          const dir = Math.sign(e.winding) || 1;
+          const stirDepth = Math.min(1, Math.abs(e.winding) * 0.4 + Math.abs(e.angularVelocity) * 60);
+          setPlaying(true);
+          setPhase((v) => (v + dir * (0.25 + stirDepth * 0.5) + Math.PI * 2) % (Math.PI * 2));
+          const now = performance.now();
+          if (now - dragRef.current.lastFx > 220) {
+            dragRef.current.lastFx = now;
+            try { getFieldAudio().playNote(50 + (dir > 0 ? 4 : -3) + Math.round(stirDepth * 5), 110); } catch { /* noop */ }
+            haptics.ripple(0.2 + stirDepth * 0.3);
+            recordTape("ripple", 0.35 + stirDepth * 0.3, "pretext:stir");
+          }
+        },
+        rhythm: (e) => {
+          // a steady tapped pulse: the tide locks to your tempo and the
+          // words brighten on every beat (read by the phase clock above)
+          if (e.stability <= 0.7) return;
+          entrainRef.current.bpm = Math.max(40, Math.min(150, e.bpm));
+          entrainRef.current.until = performance.now() + 9000;
+          setPlaying(true);
+          try { getFieldAudio().chime(); } catch { /* noop */ }
+          haptics.tap();
+          addMark("entrained", "water", 0.55);
+          recordTape("sigil", 0.5, "pretext:entrain");
         },
       },
       { wheelZoom: false },
@@ -563,10 +664,12 @@ export default function PretextWave() {
         tuttiRef.current = Math.max(tuttiRef.current, 0.4 + intensity * 0.5);
         haptics.chop();
       },
-      knock: () => {
+      knock: ({ intensity }) => {
+        // a rap on the case rings the words — a harder rap rings brighter
+        try { getFieldAudio().playNote(45 - Math.round(intensity * 6), 160 + Math.round(intensity * 120)); } catch { /* noop */ }
         try { getFieldAudio().chime(); } catch { /* noop */ }
-        haptics.tap();
-        tuttiRef.current = Math.max(tuttiRef.current, 0.55);
+        haptics.ripple(0.25 + intensity * 0.35);
+        tuttiRef.current = Math.max(tuttiRef.current, 0.4 + intensity * 0.4);
       },
       flip: ({ faceDown }) => { nightRef.current = faceDown; },
     });

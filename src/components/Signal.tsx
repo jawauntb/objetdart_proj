@@ -10,7 +10,7 @@ import type { ConcernKey } from "@/lib/types";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
 import WaterText from "@/components/WaterText";
 import { attachGestures } from "@/lib/gesture";
-import { holdTier } from "@/lib/gesture/core";
+import { holdTier, tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import { createFrameGovernor, detailForTier, onVisibility, resolveDpr } from "@/lib/room-runtime";
 import LetGo from "@/components/LetGo";
@@ -287,7 +287,7 @@ export default function Signal() {
   // Only a together-landed pair moving against each other is reclaimed as
   // the frame layer (pinch/twist/pan2); staggered fingers stay voices.
   type VoiceRegion = "spectrum" | "waveform" | "spiral" | null;
-  type VoiceState = { region: VoiceRegion; lastX: number; lastY: number; t0: number; sealed: boolean; charging: boolean };
+  type VoiceState = { region: VoiceRegion; lastX: number; lastY: number; t0: number; sealed: boolean; blessed: boolean; charging: boolean };
   const voiceStateRef = useRef<Map<number, VoiceState>>(new Map());
   // twist(2) rotates the lens — the level of description: spectrum ↔
   // waveform ↔ the felt sound (spiral). A discrete state advanced by
@@ -300,6 +300,9 @@ export default function Signal() {
   const panRef = useRef({ curX: 0, curY: 0, targetX: 0, targetY: 0 });
   // tutti / step-back flashes — a soft synchronized pulse across layers.
   const tuttiRef = useRef(0);
+  // rhythm entrainment: the nautilus turns at the hand's tempo for a while,
+  // and every beat pulses the layers. Cleared when `until` passes.
+  const entrainRef = useRef({ bpm: 0, until: 0, lastBeat: -1 });
   // last touch, for the idle glimmer (grammar §6).
   const lastTouchAtRef = useRef(0);
   const glimmerAtRef = useRef(0);
@@ -399,6 +402,13 @@ export default function Signal() {
       setPlaying(false);
     }
   }, [micActive]);
+
+  // refs so the gesture surface (mounted once) can reach the current phrase
+  // player without re-binding — same idiom as keepActiveSignalRef below.
+  const playPhraseRef = useRef(playPhrase);
+  useEffect(() => { playPhraseRef.current = playPhrase; }, [playPhrase]);
+  const phraseIdxRef = useRef(phraseIdx);
+  useEffect(() => { phraseIdxRef.current = phraseIdx; }, [phraseIdx]);
 
   // The big play button (and any background click) — start audio, play the
   // current phrase so the visualiser has something rich to show.
@@ -875,22 +885,25 @@ export default function Signal() {
       return null;
     };
 
-    const playSpectrumTone = (x: number) => {
+    // the spectrum's x → Hz map, shared by every hand that reads it: single
+    // voices, the overtone train, and the drummed difference tone below.
+    const freqAtX = (x: number): number => {
       const u = Math.max(0, Math.min(1, x / window.innerWidth));
       const an = sourceAnalyser.current;
       if (an) {
         const c = getFieldAudio().getAudioContext();
         if (c) {
           const trueBin = u * an.frequencyBinCount;
-          const freq = (trueBin * c.sampleRate) / an.fftSize;
-          void playFreq(Math.max(60, Math.min(6000, freq)));
-          return;
+          return Math.max(60, Math.min(6000, (trueBin * c.sampleRate) / an.fftSize));
         }
       }
       // fallback pentatonic shape so the page still feels alive before the
       // analyser/context is ready.
-      const fallback = [220, 277, 330, 415, 494, 587, 698][Math.floor(u * NBINS) % 7];
-      void playFreq(fallback);
+      return [220, 277, 330, 415, 494, 587, 698][Math.floor(u * NBINS) % 7];
+    };
+
+    const playSpectrumTone = (x: number) => {
+      void playFreq(freqAtX(x));
     };
 
     const detachGestures = attachGestures(
@@ -911,7 +924,7 @@ export default function Signal() {
           if (e.phase === "start") {
             const region = regionAt(x, y);
             voiceStateRef.current.set(e.id, {
-              region, lastX: x, lastY: y, t0: performance.now(), sealed: false, charging: false,
+              region, lastX: x, lastY: y, t0: performance.now(), sealed: false, blessed: false, charging: false,
             });
             if (region === "spectrum") {
               haptics.ripple(e.intensity);
@@ -993,12 +1006,74 @@ export default function Signal() {
             return;
           }
           if (e.fingers === 3) {
-            // tutti — one synchronized pulse of everything alive.
-            tuttiRef.current = 1;
+            // tutti — one synchronized pulse of everything alive, as full
+            // as the strike that asked for it.
+            tuttiRef.current = 0.7 + e.intensity * 0.3;
             try { getFieldAudio().chime(); } catch { /* noop */ }
-            haptics.ripple(0.6);
+            haptics.ripple(0.4 + e.intensity * 0.4);
             recordTape("sigil", 0.5, "signal/tutti");
+            return;
           }
+          if (e.fingers !== 1) return;
+          // the train tiers (1 / 3 / 5 / n from gesture/core): rapid taps
+          // climb the spectrum's own ladder — the voice already sounded on
+          // landing; 3 stacks its overtones, 5 states a whole phrase, 7+
+          // climbs the bins in a crescendo.
+          const rect = cv.getBoundingClientRect();
+          const x = e.x - rect.left;
+          const trainTier = tapTrainTier(e.count);
+          if (trainTier === 3 && e.count === 3) {
+            // one fundamental wearing its harmonic stack — the spectrum's
+            // own chord, drawn from the very bin under the finger
+            const f = freqAtX(x);
+            void playFreq(f, 0.42);
+            void playFreq(Math.min(6400, f * 2), 0.3);
+            void playFreq(Math.min(6400, f * 3), 0.22);
+            tuttiRef.current = Math.max(tuttiRef.current, 0.45);
+            haptics.ripple(0.5);
+            recordTape("sigil", 0.5, "signal/train-overtones");
+          } else if (trainTier === 5 && e.count === 5) {
+            // five taps ask the room to state a whole phrase — the current
+            // sigil weights sung through the spectrum
+            void playPhraseRef.current(phraseIdxRef.current);
+            tuttiRef.current = Math.max(tuttiRef.current, 0.8);
+            haptics.lens();
+            recordTape("sigil", 0.66, "signal/train-phrase");
+          } else if (trainTier === "n") {
+            // seven and beyond: the crescendo — each further strike climbs
+            // the bins and pulses every layer brighter
+            const f = Math.min(6400, freqAtX(x) * (1 + (e.count - 7) * 0.35));
+            void playFreq(f, 0.2);
+            tuttiRef.current = Math.max(tuttiRef.current, Math.min(1, 0.5 + (e.count - 7) * 0.1));
+            if (e.count === 7) haptics.storm(); else haptics.ripple(0.55);
+            recordTape("sigil", Math.min(1, 0.6 + (e.count - 7) * 0.08), "signal/train-crescendo");
+          }
+        },
+        rhythm: (e) => {
+          // a steady tapped pulse: the nautilus falls in with the hand —
+          // its turn takes your tempo for a while, pulsing on every beat
+          if (e.stability <= 0.7 || e.bpm < 40 || e.bpm > 200) return;
+          lastTouchAtRef.current = performance.now();
+          entrainRef.current = { bpm: e.bpm, until: performance.now() + 9000, lastBeat: -1 };
+          try { getFieldAudio().chime(); } catch { /* noop */ }
+          haptics.tap();
+          recordTape("sigil", 0.5, "signal/entrain");
+        },
+        drum: (e) => {
+          // drumming two spots plays the space between them: both
+          // frequencies sound and their difference tone hums beneath —
+          // beats made audible, which is this room's whole physics
+          lastTouchAtRef.current = performance.now();
+          const rect = cv.getBoundingClientRect();
+          const fa = freqAtX(e.ax - rect.left);
+          const fb = freqAtX(e.bx - rect.left);
+          void playFreq(fa, 0.16);
+          void playFreq(fb, 0.16);
+          void playFreq(Math.max(36, Math.min(1400, Math.abs(fa - fb))), 0.34);
+          distortionsRef.current.push({ x: e.x - rect.left, amount: 10 + e.alternation * 16, t0: performance.now() });
+          if (distortionsRef.current.length > 80) distortionsRef.current = distortionsRef.current.slice(-80);
+          tuttiRef.current = Math.max(tuttiRef.current, 0.25 + e.alternation * 0.3);
+          haptics.tap();
         },
       },
       { wheelZoom: false },
@@ -1015,10 +1090,10 @@ export default function Signal() {
         tuttiRef.current = Math.max(tuttiRef.current, 0.5 + intensity * 0.5);
         haptics.chop();
       },
-      knock: () => {
+      knock: ({ intensity }) => {
         try { getFieldAudio().bell(); } catch { /* noop */ }
         haptics.tap();
-        tuttiRef.current = Math.max(tuttiRef.current, 0.6);
+        tuttiRef.current = Math.max(tuttiRef.current, 0.4 + intensity * 0.5);
       },
       flip: ({ faceDown }) => {
         nightRef.current = faceDown;
@@ -1205,11 +1280,21 @@ export default function Signal() {
       // numbers we just rendered (avoids any layout drift on resize).
       layoutRef.current = { waveY, waveAmp, spiralR, cx, cy };
 
-      // advance the spiral rotation phase — slow drift, faster on hover
+      // advance the spiral rotation phase — slow drift, faster on hover,
+      // and at the hand's own tempo while a tapped rhythm holds it
       if (!reduce) {
         const baseRate = 0.10;     // rad/sec
         const hoverRate = 0.42;    // rad/sec (~4x base)
-        const rate = spiralHoverRef.current ? hoverRate : baseRate;
+        let rate = spiralHoverRef.current ? hoverRate : baseRate;
+        const ent = entrainRef.current;
+        if (ent.bpm > 0 && now < ent.until) {
+          rate = Math.max(rate, (ent.bpm / 60) * 0.35);
+          const beatIdx = Math.floor(now / (60000 / ent.bpm));
+          if (beatIdx !== ent.lastBeat) {
+            ent.lastBeat = beatIdx;
+            tuttiRef.current = Math.max(tuttiRef.current, 0.35);
+          }
+        }
         spiralPhaseRef.current += rate * (1 / 60);
       }
       const phase = spiralPhaseRef.current;
@@ -1253,24 +1338,28 @@ export default function Signal() {
       // finger from the moment the dwell tier crosses, and holding through
       // the ceremony tier deepens it into the room's one solemn act.
       for (const [, st] of voiceStateRef.current) {
-        if (st.region !== "spiral" || st.sealed) continue;
+        if (st.region !== "spiral") continue;
         const elapsed = now - st.t0;
         const tier = holdTier(elapsed);
         if (tier < 2) continue;
         st.charging = true;
         const growth = Math.min(1, (elapsed - 900) / 1600); // 0 at dwell → 1 at ceremony
+        // duration is an axis: past the ceremony the ring keeps widening
+        const over = Math.max(0, Math.min(26, (elapsed - 2500) / 220));
         ctx2d.beginPath();
         ctx2d.strokeStyle = `rgba(255, 210, 160, ${(0.25 + growth * 0.5).toFixed(3)})`;
-        ctx2d.lineWidth = 1.5;
-        ctx2d.arc(st.lastX, st.lastY, 10 + growth * 26, 0, Math.PI * 2);
+        ctx2d.lineWidth = 1.5 + over * 0.05;
+        ctx2d.arc(st.lastX, st.lastY, 10 + growth * 26 + over, 0, Math.PI * 2);
         ctx2d.stroke();
-        if (tier === 2 && !st.sealed) {
+        if (!st.sealed && tier >= 2) {
           // dwell crossed once — create/keep the active signal now.
           st.sealed = true; // gate to one commit per hold session
           keepActiveSignalRef.current();
         }
-        if (tier >= 3) {
-          // ceremony — deepen into the solemn act: seal it with a bell.
+        if (!st.blessed && tier >= 3) {
+          // ceremony — deepen into the solemn act: seal it with a bell,
+          // once, while the ring above goes on answering the longer hold.
+          st.blessed = true;
           try { getFieldAudio().bell(); } catch { /* noop */ }
           haptics.bloom();
           tuttiRef.current = Math.max(tuttiRef.current, 0.8);

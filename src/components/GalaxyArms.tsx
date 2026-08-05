@@ -44,6 +44,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import RoomShell, { type RoomShellProps } from "@/components/RoomShell";
 import type { RoomVoice } from "@/lib/gesture/defaults";
+import { tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import {
   FULLSCREEN_VERT_CLIP,
   createGLStage,
@@ -985,6 +986,68 @@ export default function GalaxyArms() {
             return;
           }
         }
+        // The rapid-tap ladder: 1 rings the orbit, 3 lights the arm through
+        // the struck radius, 5 sets the gas off on the spot, n heats the
+        // whole disc into the tutti.
+        const trainTier = tapTrainTier(e.count);
+        const depth = tapTrainDepth(e.count);
+        if (trainTier === "n") {
+          tutti();
+          heat = clamp01(heat + 0.2 + depth * 0.3);
+          stirTurbulence(0.08 + depth * 0.08);
+          return;
+        }
+        if (trainTier === 5) {
+          const dp = discPointAt(x, y);
+          if (dp && e.count === 5) {
+            // five strikes are the burst without the wait: gas gathers and
+            // goes off in the same breath, and the shear takes it from there
+            const idx = seedRegion(dp.x, dp.z);
+            if (idx >= 0) {
+              const reg = regionsRef.current[idx];
+              regionsRef.current[idx] = {
+                ...reg,
+                strength: clamp01(0.3 + depth * 0.35),
+              };
+              igniteRegion(idx);
+              return;
+            }
+          } else if (regionsRef.current.length) {
+            // the taps past the rung fan the newest burn hotter
+            const idx = regionsRef.current.length - 1;
+            const reg = regionsRef.current[idx];
+            regionsRef.current[idx] = { ...reg, strength: clamp01(reg.strength + 0.1) };
+            const rp = regionAt(reg, tau);
+            addFlare(rp.x, rp.y, 0.4 + depth * 0.2);
+            save();
+            return;
+          }
+          stirTurbulence(0.08);
+          return;
+        }
+        if (trainTier === 3) {
+          const dp = discPointAt(x, y);
+          if (dp) {
+            // three taps light the arm through the struck ring: the crest
+            // flares where it crosses that radius, on both arms, and the
+            // orbit rings under it
+            const R = clamp(Math.hypot(dp.x, dp.z), 0.14, R_MAX);
+            const kw = waveNumber(pitch);
+            const crest = Math.atan2(kw, 1);
+            for (let arm = 0; arm < ARM_M; arm++) {
+              const th =
+                patPhase + (crest + TAU * arm) / ARM_M + (kw / ARM_M) * Math.log(R / R_REF);
+              addFlare(R * Math.cos(th), R * Math.sin(th), 0.45 + depth * 0.3);
+            }
+            soundOrbit(R, 700, 1 + depth * 0.4);
+            try {
+              haptics.ripple(0.3 + depth * 0.2);
+            } catch {
+              /* noop */
+            }
+            return;
+          }
+        }
         const rr = regionIndexAt(x, y);
         if (rr >= 0) {
           // touching gas stirs it: the knot answers at its own orbit
@@ -1161,7 +1224,13 @@ export default function GalaxyArms() {
       },
 
       stir: (e) => {
-        rollVel += e.angularVelocity * 0.02;
+        // stirring the disc is stirring the spiral itself: circling with the
+        // arms winds them tighter, circling against lets them out — the
+        // winding problem, run by hand at the speed the hand circles
+        pitchTarget = clamp(pitchTarget + e.angularVelocity * 0.01, PITCH_MIN, PITCH_MAX);
+        rollVel += e.angularVelocity * 0.006;
+        stirTurbulence(Math.min(0.06, Math.abs(e.angularVelocity) * 0.01));
+        soundLaw(performance.now(), 420);
       },
 
       lens: (e) => {
@@ -1176,7 +1245,19 @@ export default function GalaxyArms() {
       },
 
       rhythm: (e) => {
-        if (e.stability > 0.68) tutti();
+        if (e.stability < 0.6) return;
+        // a steady pulse entrains the pattern speed — the law's own clock
+        // set to the hand's tempo, and the register re-tunes with it
+        omegaPTarget = clamp((OMEGA_P_DEFAULT * e.bpm) / 72, OMEGA_P_MIN, OMEGA_P_MAX);
+        soundLaw(performance.now(), 520);
+        addFlare(corotationRadius(omegaPTarget), 0, 0.4 + e.stability * 0.3);
+        try {
+          haptics.detent();
+        } catch {
+          /* noop */
+        }
+        // a truly metronomic hand still earns the rotation curve whole
+        if (e.stability > 0.9) tutti();
       },
 
       // drumming between two points of the disc rings both radii at once —
@@ -1234,14 +1315,19 @@ export default function GalaxyArms() {
         tiltY = clamp((beta - 45) / 60, -1, 1);
       },
 
-      // the bar answers — the heaviest thing in the room rings lowest
-      knock: () => {
+      // the bar answers — the heaviest thing in the room rings lowest,
+      // and a firmer rap rings it longer and brighter
+      knock: ({ intensity }) => {
         if (reduced) return;
-        barFlash = 1;
-        addFlare(0, 0, 0.8);
+        const k = clamp01(intensity);
+        barFlash = 0.6 + k * 0.4;
+        addFlare(0, 0, 0.5 + k * 0.5);
         try {
           audio.thud();
-          audio.playNote(Math.round(patternMidiFor(omegaP, pitch)) - 12, 1600);
+          audio.playNote(
+            Math.round(patternMidiFor(omegaP, pitch)) - 12,
+            Math.round(1100 + k * 1400),
+          );
           haptics.detent();
         } catch {
           /* noop */

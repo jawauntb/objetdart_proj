@@ -45,25 +45,13 @@ palette:
   ink: "#efe3cc"
 
 visual_style:
-  composition: cutaway
   subject: "a hand's width of earth in section — five pools shown as horizons, plus roots and fungi standing IN the ledger"
   form_language: [value-noise-FBM, hand-painted, ink-line, stipple]
   motion_character: still
-  registers:
-    - "night dark above the horizon and the under-ground floor — via bg"
-    - "the deep mineral parent material — via bg2"
-    - "ochre litter band and the dust hanging in a warm ground shaft — via glow"
-    - "the dark humic middle band — via accent"
-    - "pale root and hypha ink lines drawn over the section — via accent2"
-    - "the twist-lens line colour and readable text — via ink"
   reference_notes:
     - "a natural-history plate: soil profile with roots and fungi drawn over an ink-and-wash section"
     - "pixel-scale grain (hashed per-pixel) so the ground never reads as a texture stretched over a shape"
     - "boundaries between horizons interfinger with warp/warp2 fbm — never straight painted lines"
-  banned_forms:
-    - "no createRadialGradient, no shadowBlur per AGENTS.md"
-    - "no side view of an object — this is section, never elevation"
-    - "no boundaries drawn as painted lines — every horizon thickness is uPools[i] read live"
   mood: "held, ledgered, breathing slow; the ground is a book read across at once"
   gesture_feedback_style: "a press compacts the section under the finger (radial dark dip); planted lives appear as ink-line skeletons rooting down or radiating out, drawn from the pool that funded them"
 

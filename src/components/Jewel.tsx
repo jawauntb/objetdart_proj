@@ -5,6 +5,7 @@ import { getFieldAudio } from "@/lib/audio";
 import { useField } from "@/store/field";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { THRESHOLDS, tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import LetGo from "@/components/LetGo";
 import {
@@ -581,6 +582,7 @@ export default function Jewel() {
 
     let uiDrag = false;
     let twistAcc = 0;
+    let seasonAcc = 0;
     let holdSealed = false;
     let lastLightCueAt = 0;
     let lastScrubAt = 0;
@@ -623,16 +625,82 @@ export default function Jewel() {
           return;
         }
         if (e.fingers !== 1 || overUi(e.x, e.y)) return;
-        // a tap (no turn) rings a pentatonic note + a ripple bloom —
-        // intensity is the strike: ripple size, note length, haptic
         const rect = wrap.getBoundingClientRect();
         const x = (e.x - rect.left) / rect.width;
         const y = (e.y - rect.top) / rect.height;
-        spawnRipple(x, y, 0.6 + e.intensity * 0.6, nowSec());
         const midi = PENTA[Math.max(0, Math.min(PENTA.length - 1, Math.floor(x * PENTA.length)))];
+        // the rapid-tap train (grammar tiers 1 / 3 / 5 / n) — struck fire,
+        // each rung hotter than the last
+        const tier = tapTrainTier(e.count);
+        const depth = tapTrainDepth(e.count);
+        if (tier === 3) {
+          // three rapid taps: the strike splits into a prismatic triad —
+          // root, third, fifth of the pentatonic flare with the dispersion
+          const base = Math.max(0, Math.min(PENTA.length - 1, Math.floor(x * PENTA.length)));
+          [0, 2, 4].forEach((step, i) => {
+            window.setTimeout(() => {
+              try { getFieldAudio().playNote(PENTA[(base + step) % PENTA.length], 180); } catch { /* noop */ }
+            }, i * 65);
+          });
+          fire.current = Math.min(1.9, fire.current + 0.6 + e.intensity * 0.3);
+          spawnRipple(x, y, 0.8, nowSec());
+          try { haptics.roll(); } catch { /* noop */ }
+          useField.getState().recordTape("sigil", 0.65, "jewel/fire-triad");
+          return;
+        }
+        if (tier === 5) {
+          // five: every planted facet catches the light in turn — the kept
+          // cuts answer one by one; an unplanted stone throws a full sweep
+          const kept = facetsRef.current;
+          if (kept.length > 0) {
+            kept.forEach((f, i) => {
+              window.setTimeout(() => {
+                spawnRipple(f.x, f.y, 0.7, nowSec());
+                try { getFieldAudio().playNote(PENTA[i % PENTA.length] + 12, 130); } catch { /* noop */ }
+              }, i * 110);
+            });
+          } else {
+            PENTA.forEach((m, i) => window.setTimeout(() => { try { getFieldAudio().playNote(m + 12, 110); } catch { /* noop */ } }, i * 45));
+            spawnRipple(0.5, 0.42, 1.0, nowSec());
+          }
+          fire.current = Math.min(1.9, fire.current + 0.8);
+          try { haptics.bloom(); } catch { /* noop */ }
+          useField.getState().recordTape("kept", 0.7, "jewel/facet-parade");
+          return;
+        }
+        if (tier === "n") {
+          // seven and beyond: the stone blazes — full fire, a wind of spin,
+          // the cascade climbing further the longer the train runs
+          fire.current = 1.9;
+          if (!reducedRef.current) {
+            turn.current.vyaw = Math.max(-0.2, Math.min(0.2, turn.current.vyaw + 0.03 + depth * 0.05));
+          }
+          PENTA.slice(0, 4 + Math.round(depth * 3)).forEach((m, i) =>
+            window.setTimeout(() => { try { getFieldAudio().playNote(m + 12, 100); } catch { /* noop */ } }, i * 55));
+          spawnRipple(x, y, 1.0, nowSec());
+          try { haptics.storm(); } catch { /* noop */ }
+          useField.getState().recordTape("ripple", 0.6 + depth * 0.35, "jewel/blaze");
+          return;
+        }
+        // tier 1: a tap (no turn) rings a pentatonic note + a ripple bloom —
+        // intensity is the strike: ripple size, note length, haptic
+        spawnRipple(x, y, 0.6 + e.intensity * 0.6, nowSec());
         try { getFieldAudio().playNote(midi, 160 + Math.round(e.intensity * 140)); } catch { /* noop */ }
         haptics.ripple(0.35 + e.intensity * 0.4);
         useField.getState().recordTape("sigil", 0.5 + e.intensity * 0.4, "jewel/tap");
+      },
+      drum: (e) => {
+        lastGestureAtRef.current = performance.now();
+        // two hands pattering: the lamp itself leaps between the zones —
+        // the highlight swings to each strike and two pitches alternate
+        const rect = wrap.getBoundingClientRect();
+        const nearB = Math.hypot(e.x - e.bx, e.y - e.by) < Math.hypot(e.x - e.ax, e.y - e.ay);
+        lightRef.current.x = Math.max(-0.9, Math.min(0.9, ((e.x - rect.left) / Math.max(1, rect.width)) * 2 - 1));
+        lightRef.current.y = Math.max(-0.9, Math.min(0.9, ((e.y - rect.top) / Math.max(1, rect.height)) * 2 - 1));
+        fire.current = Math.min(1.7, fire.current + 0.2 + e.alternation * 0.25);
+        try { getFieldAudio().playNote(PENTA[nearB ? 4 : 1], 120); } catch { /* noop */ }
+        try { haptics.tap(); } catch { /* noop */ }
+        useField.getState().recordTape("object", 0.5, "jewel/lamp-patter");
       },
       pan2: (e) => {
         lastGestureAtRef.current = performance.now();
@@ -722,13 +790,15 @@ export default function Jewel() {
       hold: (e) => {
         lastGestureAtRef.current = performance.now();
         if (e.fingers === 3) {
-          // three fingers hold the law: the stone's time runs at 1/4
+          // three fingers hold the law: the stone's time keeps slowing the
+          // longer the chord is held — toward 1/8 by the ceremony tier,
+          // never the same at 900ms as at 2400ms
+          if (e.phase === "release") { timeScaleRef.current.target = 1; return; }
+          timeScaleRef.current.target = Math.max(0.125, 1 - 0.875 * Math.min(1, e.elapsed / THRESHOLDS.ceremonyMs));
           if (e.phase === "enter") {
-            timeScaleRef.current.target = 0.25;
             try { getFieldAudio().playNote(36, 260); } catch { /* noop */ }
             try { haptics.tap(); } catch { /* noop */ }
           }
-          if (e.phase === "release") timeScaleRef.current.target = 1;
           return;
         }
         if (e.fingers !== 1) return;
@@ -779,9 +849,22 @@ export default function Jewel() {
       },
       twist: (e) => {
         if (e.fingers === 3) {
-          // three fingers turn the season: the light's warm/cool cast drifts.
+          // three fingers turn the season: the light's warm/cool cast
+          // drifts, and each quarter-turn of the wrist clicks past a
+          // solstice — a detent and a low note, faster wrists ring sooner
           lastGestureAtRef.current = performance.now();
-          if (e.phase === "move") seasonRef.current += e.angle * 0.7;
+          if (e.phase === "move") {
+            const before = Math.floor(Math.abs(seasonAcc) / (Math.PI / 2));
+            seasonRef.current += e.angle * 0.7;
+            seasonAcc += e.angle;
+            const after = Math.floor(Math.abs(seasonAcc) / (Math.PI / 2));
+            if (after !== before) {
+              fire.current = Math.min(1.7, fire.current + 0.3);
+              try { getFieldAudio().playNote(41 + (after % 4) * 3, 200); } catch { /* noop */ }
+              try { haptics.detent(); } catch { /* noop */ }
+              useField.getState().recordTape("region", 0.45, "jewel/season");
+            }
+          }
           return;
         }
         lastGestureAtRef.current = performance.now();

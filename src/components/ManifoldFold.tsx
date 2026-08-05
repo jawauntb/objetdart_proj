@@ -56,6 +56,7 @@ import { useRouter } from "next/navigation";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import {
@@ -710,6 +711,43 @@ export default function ManifoldFold() {
         if (e.fingers !== 1) return; // anything else is gently absorbed
         const { x, y } = toLocal(e.x, e.y);
         const k = beadAt(x, y);
+        // the rapid-tap ladder (tiers 1/3/5/n) in the fold's material: one
+        // rings a pulse (or a bead), three sound the neighborhood of bands,
+        // five catch the light into orbit, n is the whole axis's crescendo
+        const trainTier = tapTrainTier(e.count);
+        const depth = tapTrainDepth(e.count);
+        if (trainTier === "n") {
+          tutti();
+          firePulse(x, y, 1 + depth * 0.5);
+          note(21, 340);
+          try { haptics.bloom(); } catch { /* noop */ }
+          return;
+        }
+        if (trainTier === 5) {
+          // five taps catch the light: the rays near the strike wind into
+          // closed orbits for a breath — lensing without a mass
+          orbit = { x, y, omega: 3 + depth * 3, until: performance.now() + 2200 };
+          firePulse(x, y, 0.5 + depth * 0.3);
+          note(38, 220);
+          try { haptics.ripple(0.5); } catch { /* noop */ }
+          return;
+        }
+        if (trainTier === 3) {
+          // three taps sound the neighborhood: the nearest bead and the two
+          // bands it touches answer as one chord — the axis heard locally
+          let nearest = 0;
+          let bestD = Infinity;
+          for (let i = 0; i < beadPos.length; i++) {
+            const d = Math.hypot(x - beadPos[i].x, y - beadPos[i].y);
+            if (d < bestD) { bestD = d; nearest = i; }
+          }
+          for (const off of [0, -1, 1]) {
+            const i = nearest + off;
+            if (i >= 0 && i < SCALE_BANDS.length) chimeBead(i, off !== 0);
+          }
+          try { haptics.ripple(0.4 + depth * 0.3); } catch { /* noop */ }
+          return;
+        }
         if (k >= 0) { chimeBead(k); return; }
         // a gravitational pulse — your ripple will race the light and lose
         firePulse(x, y, 0.5 + e.intensity * 0.8);
@@ -720,14 +758,15 @@ export default function ManifoldFold() {
         lastInteractionAt = performance.now();
         if (e.fingers === 3) {
           // three fingers touch the law: time dilates — and here, of all
-          // rooms, the light itself nearly stands still
+          // rooms, the light itself nearly stands still. Both keep deepening
+          // for as long as the hold stands: 900ms and 2400ms differ.
           if (e.phase === "enter") {
-            timeScaleTarget = 0.25;
-            rayScaleTarget = 0.05;
             note(24, 500);
             try { haptics.tap(); } catch { /* noop */ }
           }
-          if (e.phase === "release") { timeScaleTarget = 1; rayScaleTarget = 1; }
+          if (e.phase === "release") { timeScaleTarget = 1; rayScaleTarget = 1; return; }
+          timeScaleTarget = Math.max(0.15, 1 - 0.85 * Math.min(1, e.elapsed / 2000));
+          rayScaleTarget = Math.max(0.04, 1 - 0.96 * Math.min(1, e.elapsed / 1800));
           return;
         }
         if (e.fingers !== 1) return;
@@ -865,6 +904,19 @@ export default function ManifoldFold() {
           note(45 + Math.round(Math.min(6, Math.abs(e.winding))), 130);
           try { haptics.ripple(0.25); } catch { /* noop */ }
         }
+      },
+      drum: (e) => {
+        lastInteractionAt = performance.now();
+        // two hands pattering between two spots: each strike sends its own
+        // slow wave, and the two zones speak in different registers — the
+        // fold played as a drum, gravitational waves from alternating hands
+        const { x, y } = toLocal(e.x, e.y);
+        const a = toLocal(e.ax, e.ay);
+        const b = toLocal(e.bx, e.by);
+        const nearA = Math.hypot(x - a.x, y - a.y) <= Math.hypot(x - b.x, y - b.y);
+        firePulse(x, y, 0.3 + e.alternation * 0.4);
+        note(nearA ? 26 : 33, 100);
+        try { haptics.tap(); } catch { /* noop */ }
       },
       twist: (e) => {
         lastInteractionAt = performance.now();

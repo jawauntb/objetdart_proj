@@ -39,6 +39,7 @@ import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import { stirTurbulence } from "@/lib/turbulence";
 import LetGo from "@/components/LetGo";
@@ -619,15 +620,18 @@ export default function RockShelf() {
       return -1;
     };
 
-    /** Everything alive answers at once — the chord of the whole shelf. */
-    const tutti = () => {
+    /**
+     * Everything alive answers at once — the chord of the whole shelf,
+     * struck exactly as hard as the hand asked for it.
+     */
+    const tutti = (strength = 0.4) => {
       const list = stonesRef.current;
       const step = clamp(900 / Math.max(1, list.length), 40, 140);
       list.forEach((s, i) => {
-        window.setTimeout(() => ringStone(s, 0.4), i * step);
+        window.setTimeout(() => ringStone(s, strength), i * step);
       });
       try {
-        haptics.ripple(0.4);
+        haptics.ripple(strength);
       } catch {
         /* noop */
       }
@@ -917,12 +921,86 @@ export default function RockShelf() {
           lastInteractionAt = performance.now();
           if (e.fingers === 2) return; // ScaleTravel's step back
           if (e.fingers === 3) {
-            tutti();
+            // tutti rides the strike: everything alive answers, as hard as asked
+            tutti(0.4 + e.intensity * 0.5);
             return;
           }
           if (e.fingers !== 1) return;
           const { x, y } = toLocal(e.x, e.y);
           const i = stoneAt(x, y);
+          // the rapid-tap ladder (1 / 3 / 5 / n), in the mineral register:
+          // 1 rings the stone, 3 knocks it against whatever it lies on,
+          // 5 raps it loose into a bright spin — or shakes a grain of salt
+          // out of the brine — and n rolls the whole shelf, harder with
+          // every extra tap while the brine climbs toward saturation
+          const trainTier = tapTrainTier(e.count);
+          if (trainTier === "n") {
+            const crest = clamp01(0.4 + (e.count - 7) * 0.12 + e.intensity * 0.3);
+            tutti(0.5 + crest * 0.5);
+            saturationTarget = clamp01(saturationTarget + 0.05 + crest * 0.08);
+            stirTurbulence(0.08 + crest * 0.12);
+            return;
+          }
+          if (trainTier === 5 && e.count === 5) {
+            if (i >= 0) {
+              // rapped loose: the stone jumps into a spin and rings bright
+              const s = stonesRef.current[i];
+              s.spin += (s.seed % 2 ? 1 : -1) * (0.5 + e.intensity * 0.4);
+              s.lit = Math.max(s.lit ?? 0, 0.8);
+              ringStone(s, 0.9 + e.intensity * 0.1);
+              try {
+                haptics.detent();
+              } catch {
+                /* noop */
+              }
+              dirty = true;
+            } else {
+              // the patter shakes a grain of salt out of solution
+              const j = plant(x, y, 0.02);
+              const s = stonesRef.current[j];
+              if (s) s.species = "halite";
+              saturationTarget = clamp01(saturationTarget + 0.06);
+              try {
+                audio.playNote(31, 260);
+                haptics.chop();
+              } catch {
+                /* noop */
+              }
+            }
+            return;
+          }
+          if (trainTier === 3 && e.count === 3) {
+            if (i >= 0) {
+              // knocked against its neighbour: both stones speak, the pair a
+              // dyad of two lattices — or the stone alone, twice as lit
+              const s = stonesRef.current[i];
+              selected = i;
+              ringStone(s, 0.6 + e.intensity * 0.4);
+              const j = neighbourOf(i);
+              if (j >= 0) {
+                ringStone(stonesRef.current[j], 0.5 + e.intensity * 0.3);
+                stonesRef.current[j].spin += 0.12 * (e.intensity + 0.4);
+              }
+              s.spin += (s.seed % 2 ? 1 : -1) * 0.15 * (e.intensity + 0.4);
+              try {
+                haptics.ripple(0.4 + e.intensity * 0.3);
+              } catch {
+                /* noop */
+              }
+              dirty = true;
+            } else {
+              // the brine shivers: a patter on the wet dark stirs the tray
+              saturationTarget = clamp01(saturationTarget + 0.08 + 0.06 * e.intensity);
+              stirTurbulence(0.1 + e.intensity * 0.08);
+              try {
+                audio.playNote(38, 220);
+                haptics.ripple(0.35);
+              } catch {
+                /* noop */
+              }
+            }
+            return;
+          }
           if (i >= 0) {
             selected = i;
             ringStone(stonesRef.current[i], 0.4 + e.intensity * 0.6);
@@ -946,16 +1024,24 @@ export default function RockShelf() {
         hold: (e) => {
           lastInteractionAt = performance.now();
           if (e.fingers === 3) {
+            // dilation is a continuous axis: the brine's clock keeps slowing
+            // the longer the three fingers stay, toward a near-standstill —
+            // never the same at 900ms as at 2400ms
             if (e.phase === "enter") {
-              timeScaleTarget = 0.25;
+              timeScaleTarget = 0.6;
               try {
                 audio.playNote(26, 480);
                 haptics.tap();
               } catch {
                 /* noop */
               }
+              return;
             }
-            if (e.phase === "release") timeScaleTarget = 1;
+            if (e.phase === "release") {
+              timeScaleTarget = 1;
+              return;
+            }
+            timeScaleTarget = clamp(1 - 1.4 * (e.elapsed / (e.elapsed + 1400)), 0.12, 0.6);
             return;
           }
           if (e.fingers !== 1) return;

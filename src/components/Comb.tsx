@@ -32,6 +32,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { tapTrainTier } from "@/lib/gesture/core";
 import { onVessel, requestVessel, vesselAvailable, vesselGranted } from "@/lib/vessel";
 import LetGo from "@/components/LetGo";
 import {
@@ -624,6 +625,7 @@ export default function Comb() {
     let feeding: Defect | null = null;
     let strokeAcc = 0;
     let holdDone = false;
+    let dwellCued = false;   // the dwell tier announces itself exactly once
     let pendingSaddle = 0;   // a hold preempted by a drag must not commit
     let lastFeedCueAt = 0;
     let lastGustCueAt = 0;
@@ -635,13 +637,62 @@ export default function Comb() {
         lastGestureAt = performance.now();
         if (e.fingers === 2) return; // ScaleTravel's step back — no lens here
         if (e.fingers === 3) {
-          // tutti — everything alive answers softly at once
-          for (const d of defects) bursts.push({ x: d.x, y: d.y, t0: simT, amp: 0.25 });
-          try { audioRef.current?.ring(0.5); } catch { /* noop */ }
-          try { haptics.ripple(0.4); } catch { /* noop */ }
+          // tutti — everything alive answers softly at once, as loud as the strike
+          for (const d of defects) bursts.push({ x: d.x, y: d.y, t0: simT, amp: 0.16 + e.intensity * 0.22 });
+          try { audioRef.current?.ring(0.35 + e.intensity * 0.35); } catch { /* noop */ }
+          try { haptics.ripple(0.3 + e.intensity * 0.3); } catch { /* noop */ }
           return;
         }
         const wx = toWorldX(e.x), wy = toWorldY(e.y);
+        // the train tiers (1 / 3 / 5 / n from gesture/core): rapid taps climb
+        // the field's own ladder of winding — vortex, inversion, conserved
+        // split, then the flare
+        const trainTier = tapTrainTier(e.count);
+        if (trainTier === 3 && e.count === 3) {
+          // three taps invert the charge: a saddle blooms right here without
+          // waiting for the dwell, as strong as the strikes that called it
+          const d = spawnDefect(-1, wx, wy, clamp(0.5 + e.intensity * 0.5, 0.5, 1));
+          bursts.push({ x: d.x, y: d.y, t0: simT, amp: 0.4 + e.intensity * 0.3 });
+          return;
+        }
+        if (trainTier === 5 && e.count === 5) {
+          // five taps split the nearest sun: +1 becomes +1 +1 −1, the total
+          // winding conserved — the hairy ball theorem paying out under the hand
+          let sun: Defect | null = null;
+          let sunD = Infinity;
+          for (const d of defects) {
+            if (d.q <= 0 || d.dying) continue;
+            const dist = Math.hypot(d.x - wx, d.y - wy);
+            if (dist < sunD) { sun = d; sunD = dist; }
+          }
+          const px = sun ? sun.x : wx, py = sun ? sun.y : wy;
+          if (sun) sun.dying = true;
+          spawnDefect(1, px - 0.14, py - 0.05, 1);
+          spawnDefect(1, px + 0.14, py - 0.05, 1);
+          spawnDefect(-1, px, py + 0.12, 0.9);
+          bursts.push({ x: px, y: py, t0: simT, amp: 0.9 });
+          try { audioRef.current?.ring(0.9); } catch { /* noop */ }
+          try { haptics.bloom(); } catch { /* noop */ }
+          return;
+        }
+        if (trainTier === "n") {
+          // seven and beyond: the crescendo — every defect flares brighter
+          // with each further strike, nothing new is born, the field just burns
+          const amp = clamp(0.3 + (e.count - 6) * 0.12, 0.3, 1);
+          for (const d of defects) bursts.push({ x: d.x, y: d.y, t0: simT, amp });
+          bursts.push({ x: wx, y: wy, t0: simT, amp: amp * 0.8 });
+          try { audioRef.current?.ring(amp); } catch { /* noop */ }
+          try { (e.count === 7 ? haptics.storm : () => haptics.ripple(amp))(); } catch { /* noop */ }
+          return;
+        }
+        if (e.count === 4 || e.count === 6) {
+          // between the rungs the train only deepens — an echo of the last
+          // special, never another defect crowding the field
+          bursts.push({ x: wx, y: wy, t0: simT, amp: 0.35 + e.intensity * 0.35 });
+          try { audioRef.current?.bloom(e.count === 4 ? -1 : 1, 0.5 + e.intensity * 0.3); } catch { /* noop */ }
+          try { haptics.tap(); } catch { /* noop */ }
+          return;
+        }
         // tap intensity is the strike — the newborn vortex's burst rides it
         const d = spawnDefect(1, wx, wy);
         bursts.push({ x: d.x, y: d.y, t0: simT, amp: 0.3 + e.intensity * 0.4 });
@@ -744,6 +795,7 @@ export default function Comb() {
         if (e.fingers !== 1) return;
         if (e.phase === "enter") {
           holdDone = false;
+          dwellCued = false;
           const d = defectNear(toWorldX(e.x), toWorldY(e.y));
           if (d && d.q > 0) {
             // dwelling on a sun feeds it — the winding deepens
@@ -789,6 +841,13 @@ export default function Comb() {
           forming.x = toWorldX(e.x);
           forming.y = toWorldY(e.y);
           forming.elapsed = e.elapsed;
+          // the dwell tier crossed: the gathering plants in earnest — a
+          // second, darker tone and a firmer pull mark the saddle taking root
+          if (e.tier >= 2 && !dwellCued) {
+            dwellCued = true;
+            try { audioRef.current?.bloom(-1, 0.5); } catch { /* noop */ }
+            try { haptics.ripple(0.35); } catch { /* noop */ }
+          }
           // ceremony — the one solemn act: the gathering completes into a
           // charge PAIR, born together, winding conserved.
           if (e.tier >= 3 && !holdDone) {

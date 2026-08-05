@@ -49,33 +49,25 @@ domain_lib:
   invariant_type: ledger
 
 palette:
-  bg:      "#050a0c"
-  bg2:     "#0e2530"
-  glow:    "#a9d8e6"
-  accent:  "#4a91a8"
-  accent2: "#c9b988"
+  # phase-8 visual pass (data/object-compiler/audits/phase-8-spring-visual.md):
+  # bg2 turns from a second teal into a real wet-ground brown, glow and
+  # accent2 both brighten, so the water surface and the mineral bloom read
+  # as distinct pixels instead of dark siblings of the aquifer.
+  bg:      "#060a10"
+  bg2:     "#2e2013"
+  glow:    "#d7f2fb"
+  accent:  "#3f9dc2"
+  accent2: "#e3ac57"
   ink:     "#e6efe8"
 
 visual_style:
-  composition: side-section
   subject: "a hand's width of wet ground in section — air above, a wavy waterline, a pool with a wet-halo skirt around every live seep"
   form_language: [SDF, value-noise-FBM, hand-painted]
   motion_character: drifting
-  registers:
-    - "wet dark under the water — via bg"
-    - "the pool's deep column and the sky just above the horizon — via bg2"
-    - "the sunlit water surface highlight (a low-angle Snell reflection) — via glow"
-    - "cold water-in-motion — ripple rings and seep pulses — via accent"
-    - "warm mineral bloom crusting along the wet edge — via accent2"
-    - "readable text and lens ink over the darkest tile — via ink"
   reference_notes:
     - "a botanical / hydrological section illustration: air-band, waterline, pool, wet ground, dry ground"
     - "a wet-halo around each seep whose brightness IS its live flux — invert the halo and you recover the ledger"
-    - "the guide screenshot at public/guide/spring.jpg reads dark — probably captured before the shader landed; the shader body is the source of truth for this room"
-  banned_forms:
-    - "no createRadialGradient, no shadowBlur per AGENTS.md"
-    - "no per-frame allocation — seeps and ripples go through the shared instanced pass"
-    - "no top-down or first-person view — section only, seen from the front"
+    - "phase-8 (data/object-compiler/audits/phase-8-spring-visual.md): the guide screenshot at public/guide/spring.jpg was thin — a near-monochrome gradient — because the pool's visual bounds covered nearly the whole frame and the ground palette was dark and low-contrast; recaptured after the shader and palette rewrite"
   mood: "steady, moist, giving — the aquifer breathing under a lipped pool"
   gesture_feedback_style: "a tap fires a gaussian ring wavefront through the pool; a dwell plants a seep whose corona brightens with widening throat; the ceremony seals it at full and its halo is kept between visits"
 
@@ -156,6 +148,27 @@ life:
         creates_via_verb: dwell
         retires_via: [LetGo]
         implementation_hint: SceneObjectSpec
+      # phase-8 visual pass: a second population, added so the room is a
+      # population and not one object in space (test-room-depth's density
+      # floor). Spawns from the seep population's own flux — no gesture verb
+      # creates it.
+      - noun: bubble
+        max_count: 28
+        state_shape: "id, nx, ny, vy (rise rate), wobbleAmp/wobbleFreq/wobblePhase, r0, popping (bool)"
+        lifecycle: "born from an open seep's flux (spawn budget accumulates as fluxBright·rate·dt, deterministic, no RNG in the timing) → rises and wobbles on its own seeded sine → pops at the waterline (popping=true, presence begins the population's own graceful fade) → never persisted"
+        persistence: ephemeral
+        creates_via_verb: "(automatic — spawned by an active seep)"
+        retires_via: ["waterline crossing", LetGo]
+        implementation_hint: SceneObjectSpec
+    depth_note: "the two populations share one ledger: a seep's live flux is the bubble population's only spawn source, so a wider throat visibly bubbles harder, not just brighter. Both populations write into the same instanced draw call."
+  shader_layers:
+    - { name: sky_and_clouds, order: 1, register: background }
+    - { name: seep_wet_halo, order: 2, register: underwater+ground }
+    - { name: refraction_wobble, order: 3, register: underwater }
+    - { name: underwater_column, order: 4, register: pool }
+    - { name: wet_ground_moisture, order: 5, register: ground }
+    - { name: mineral_bloom, order: 6, register: ground }
+    - { name: vignette_and_night, order: 7, register: overlay }
   breath:
     period_seconds: 7
     reads:
@@ -192,27 +205,37 @@ life:
 
 shader_intent: >
   paint one hand-width of wet ground in section, seen from the front. the
-  upper third is air; below it the ground meets the pool at a wavy waterline.
+  top third is air, with a faint fbm cloud streak riding the horizon; below
+  it the ground meets a SHALLOW pool at a wavy waterline — the pool is a
+  band, not the whole lower frame, so real wet ground reads both above the
+  waterline (the bank) and below the pool floor (down toward the aquifer).
   in the pool: the surface highlight is a low-angle Snell reflection of the
-  sky palette, ripples propagate as gaussian wavefronts from every live seep
-  and from pointer taps (all passed as a `vec4[24]` uniform), and the
-  underwater dark is a monotone depth gradient in `bg` → `bg2`. in the
-  ground: horizontal moisture bands, wettest along the waterline and drying
-  upward with an `exp(-y/λ)` — the load-bearing map is HEAD → COLOR, so the
-  wet halo around a seep is exactly as bright as its live flux the domain
-  module reports (invert the wet-halo brightness and you recover the local
-  flux). every seep is drawn as an SDF disc with an additive corona through
-  the shared instanced pass (`src/lib/scene/population-layer.ts` and
-  `src/lib/webgl/stage.ts`); no `createRadialGradient`, no per-frame
-  allocation. a hand-drawn mineral bloom at the wet edge is a value-noise
-  FBM modulated by the moisture band, so the room ages visibly as the ledger
-  runs. palette registers: `bg` is wet dark under the water, `bg2` is the
-  pool's deep column, `glow` is the sunlit water surface (the load-bearing
-  highlight), `accent` is the cold register (water in motion), `accent2` is
-  the warm register (mineral bloom at the wet edge), `ink` is readable text
-  over the darkest tile. the twist lens is a second render path: H(t) and
-  L(t) drawn as bars, the flux curve between them, the weir line, every
-  seep's throat as a labelled tick — the ledger read back off the water.
+  sky palette, a small horizontal refraction wobble bends everything below
+  the waterline, an fbm caustic shimmer tints the water glow, and ripples
+  propagate as gaussian wavefronts from every live seep and from pointer
+  taps (all passed as a `vec4[24]` uniform). the underwater dark is a depth
+  gradient from a lifted shallow tone down to `bg` (the true aquifer dark) —
+  `bg2` no longer doubles as pool depth. in the ground: horizontal moisture
+  bands, wettest at the waterline/pool floor and drying with distance from
+  it in EITHER direction — `mix(DRY, bg2, moisture)`, so wet ground reads
+  dark and rich, dry ground pale and dusty. the wet halo around a seep is
+  read in BOTH registers (pool and ground) and is exactly as bright as its
+  live flux the domain module reports (invert the halo, recover the local
+  flux). every seep and every bubble is drawn as an SDF disc with an
+  additive corona through the shared instanced pass
+  (`src/lib/scene/population-layer.ts` and `src/lib/webgl/stage.ts`); no
+  `createRadialGradient`, no per-frame allocation. a mineral bloom at the
+  pool edge is a value-noise FBM patch gated over the moisture field —
+  amplitude monotone in moisture, same invertible shape as the flux→corona
+  map, so the fbm only says WHERE a patch draws, never rescales it. palette
+  registers: `bg` is the deep aquifer dark, `bg2` is a real wet-ground brown
+  (dark and rich when saturated), `glow` is the sunlit water surface (the
+  load-bearing highlight, and the bubble's own hue), `accent` is the cold
+  register (water in motion), `accent2` is the warm register (mineral bloom
+  at the wet edge), `ink` is readable text over the darkest tile. the twist
+  lens is a second render path: H(t) and L(t) drawn as bars, the flux curve
+  between them, the weir line, every seep's throat as a labelled tick — the
+  ledger read back off the water.
 
 domain_intent: >
   write `src/lib/springflow.ts` around one exported `SpringState = { H, L,

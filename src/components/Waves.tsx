@@ -10,6 +10,7 @@ import {
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures, THRESHOLDS } from "@/lib/gesture";
+import { tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
@@ -1080,6 +1081,8 @@ export default function Waves() {
     let lastWindFxAt = 0;
     let lastWindToneAt = 0;
     let lastScrubAt = 0;
+    let lastSpanDriveAt = 0;
+    let lastSpanToneAt = 0;
     const detachGestures = attachGestures(canvas, {
       tap: (e) => {
         lastGestureAt = performance.now();
@@ -1101,8 +1104,72 @@ export default function Waves() {
         }
         if (e.fingers !== 1) return; // two-finger tap = step back, ScaleTravel's verb
         energyRef.current = Math.min(1, energyRef.current + 0.35);
-        // tap intensity is the drop: amplitude rides the same 0..1
-        disturb(e.x, e.y, 0.35 + e.intensity * 0.9);
+        // the rapid-tap ladder, in wave physics: one drop, then a beating
+        // pair, then a focusing ring, then the whole tank rings. On the
+        // string the same rungs climb the harmonics instead.
+        const rect = canvas.getBoundingClientRect();
+        const nx = clamp((e.x - rect.left) / Math.max(1, rect.width), 0.02, 0.98);
+        const ny = clamp((e.y - rect.top) / Math.max(1, rect.height), 0.02, 0.98);
+        const trainTier = tapTrainTier(e.count);
+        const trainDepth = tapTrainDepth(e.count);
+        const cfg = MODES.find((it) => it.id === modeRef.current) ?? MODES[0];
+        if (trainTier === "n") {
+          // seven and more: the crescendo — a rain of drops round the hand,
+          // wider and harder with every extra tap
+          energyRef.current = 1;
+          if (modeRef.current === "string") {
+            pluck1D(nx, 0.5, 0.9 + trainDepth * 0.3);
+            pluck1D(clamp(nx - 0.18, 0.05, 0.95), 0.5, 0.5);
+            pluck1D(clamp(nx + 0.18, 0.05, 0.95), 0.5, 0.5);
+          } else {
+            for (let k = 0; k < 7; k++) {
+              const a = (k / 7) * Math.PI * 2;
+              const r = 0.15 + trainDepth * 0.08;
+              drop2D(nx + Math.cos(a) * r, ny + Math.sin(a) * r, 0.55 + trainDepth * 0.4);
+            }
+            drop2D(nx, ny, 1.0 + trainDepth * 0.4);
+          }
+          try { getFieldAudio().bell(); } catch { /* noop */ }
+          try { haptics.storm(); } catch { /* noop */ }
+          useField.getState().recordTape("ripple", 0.9, "waves/crescendo");
+          return;
+        }
+        if (trainTier === 5) {
+          // five taps close a ring of drops: the fronts converge back
+          // through the centre — a lens made of interference. The string's
+          // fifth rung is the octave, plucked at the half.
+          if (modeRef.current === "string") {
+            pluck1D(nx, 0.5, 0.8);
+            pluck1D(clamp(nx * 0.5, 0.05, 0.95), 0.5, 0.6);
+          } else {
+            for (let k = 0; k < 8; k++) {
+              const a = (k / 8) * Math.PI * 2;
+              drop2D(nx + Math.cos(a) * 0.12, ny + Math.sin(a) * 0.12, 0.5 + trainDepth * 0.3);
+            }
+          }
+          try { getFieldAudio().chime(); } catch { /* noop */ }
+          try { haptics.roll(); } catch { /* noop */ }
+          useField.getState().recordTape("ripple", 0.8, "waves/focus");
+          return;
+        }
+        if (trainTier === 3) {
+          // three taps set a beating pair beside the strike — the moiré of
+          // interference blooms under the hand
+          if (modeRef.current === "string") {
+            pluck1D(nx, 0.5, 0.7);
+            pluck1D(clamp(nx + 0.12, 0.05, 0.95), 0.5, 0.45);
+          } else {
+            drop2D(nx, ny, 0.6 + e.intensity * 0.5);
+            drop2D(clamp(nx - 0.09, 0.02, 0.98), ny, 0.45 + trainDepth * 0.2);
+            drop2D(clamp(nx + 0.09, 0.02, 0.98), ny, 0.45 + trainDepth * 0.2);
+          }
+          try { getFieldAudio().playNote(cfg.midi + 4, 200); } catch { /* noop */ }
+          try { haptics.ripple(0.45 + trainDepth * 0.25); } catch { /* noop */ }
+          return;
+        }
+        // tap intensity is the drop: amplitude rides the same 0..1, and the
+        // train keeps deepening it between the rungs
+        disturb(e.x, e.y, 0.35 + e.intensity * 0.9 + trainDepth * 0.3);
         try { haptics.tap(); } catch { /* noop */ }
       },
       drag: (e) => {
@@ -1161,13 +1228,14 @@ export default function Waves() {
       hold: (e) => {
         lastGestureAt = performance.now();
         if (e.fingers === 3) {
-          // three fingers hold the law: the medium runs at ~1/4 speed
+          // three fingers hold the law: the medium slows while held, and
+          // keeps slowing — deeper at 2400ms than at 900ms, never a switch
           if (e.phase === "enter") {
-            timeScaleTarget = 0.25;
             try { getFieldAudio().playNote(36, 260); } catch { /* noop */ }
             try { haptics.tap(); } catch { /* noop */ }
           }
           if (e.phase === "release") timeScaleTarget = 1;
+          else timeScaleTarget = 1 - 0.78 * Math.min(1, e.elapsed / 2400);
           return;
         }
         if (e.fingers !== 1) return;
@@ -1299,6 +1367,57 @@ export default function Waves() {
         if (e.stability <= 0.7) return;
         entrainInterval = Math.max(500, Math.min(2400, 60000 / e.bpm));
         entrainUntil = performance.now() + 9000;
+      },
+      span: (e) => {
+        // the sustained interval: two still fingers pin a beating pair — twin
+        // sources driven together whose interference stands between the
+        // fingertips, fringe spacing set by the spread. Holding longer drives
+        // it deeper; the pair falls silent the moment the interval closes.
+        lastGestureAt = performance.now();
+        const rect = canvas.getBoundingClientRect();
+        const ax = clamp((e.ax - rect.left) / Math.max(1, rect.width), 0.02, 0.98);
+        const ay = clamp((e.ay - rect.top) / Math.max(1, rect.height), 0.02, 0.98);
+        const bx = clamp((e.bx - rect.left) / Math.max(1, rect.width), 0.02, 0.98);
+        const by = clamp((e.by - rect.top) / Math.max(1, rect.height), 0.02, 0.98);
+        const depth = Math.min(1, e.elapsed / 6000); // sustain keeps deepening
+        const nowMs = performance.now();
+        if (e.phase === "release") {
+          // the interval closes: one settling trough at each source
+          if (modeRef.current !== "string") {
+            drop2D(ax, ay, -0.3 - depth * 0.3);
+            drop2D(bx, by, -0.3 - depth * 0.3);
+          }
+          try { haptics.ripple(0.25 + depth * 0.35); } catch { /* noop */ }
+          useField.getState().recordTape("ripple", 0.4 + depth * 0.4, "waves/span");
+          return;
+        }
+        if (e.phase === "enter") {
+          energyRef.current = Math.min(1, energyRef.current + 0.25);
+          try { haptics.tap(); } catch { /* noop */ }
+        }
+        // drive the pair in phase — every other tick keeps the integrator calm
+        if (nowMs - lastSpanDriveAt < 140) return;
+        lastSpanDriveAt = nowMs;
+        const amp = 0.14 + depth * 0.3;
+        if (modeRef.current === "string") {
+          // a double stop: both positions sound together, the interval theirs
+          pluck1D(ax, 0.5, amp);
+          pluck1D(bx, 0.5, amp * 0.9);
+        } else {
+          drop2D(ax, ay, amp);
+          drop2D(bx, by, amp);
+        }
+        if (nowMs - lastSpanToneAt > 900) {
+          lastSpanToneAt = nowMs;
+          // the audible interval widens with the spread and settles with depth
+          const cfg = MODES.find((it) => it.id === modeRef.current) ?? MODES[0];
+          const step = Math.round(3 + clamp(e.spread / Math.max(1, rect.width), 0, 1) * 9);
+          try {
+            getFieldAudio().playNote(cfg.midi, 220 + depth * 260);
+            getFieldAudio().playNote(cfg.midi + step, 220 + depth * 260);
+          } catch { /* noop */ }
+          try { haptics.ripple(0.2 + depth * 0.3); } catch { /* noop */ }
+        }
       },
     }, { wheelZoom: false });
 

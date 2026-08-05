@@ -436,6 +436,12 @@ export default function DeepSpaceWeb() {
     let glimmerAt = 0;
     let lastVeilVoiceAt = 0;
     let lastNovaTick = -1;
+    /** the hand's tempo, while the web's clock is entrained to it */
+    let entrainUntil = 0;
+    /** the two wells a span is holding open, and its voice cadence */
+    let spanA = -1;
+    let spanB = -1;
+    let spanVoiceAt = 0;
 
     // ——— typed arrays: the whole population, uploaded once ———
     const posArr = new Float32Array(count * 3);
@@ -1064,7 +1070,113 @@ export default function DeepSpaceWeb() {
           panY = clamp(panY + (e.dy / Math.max(1, height)) * 1.0, -0.55, 0.55);
         },
         rhythm: (e) => {
-          if (e.stability > 0.68) tutti();
+          if (e.stability < 0.6) return;
+          lastInteractionAt = performance.now();
+          // a steady pulse entrains the web's own clock: the minute-long
+          // drift runs at the hand's tempo for a while, then settles home
+          timeScaleTarget = clamp(e.bpm / 66, 0.55, 2.2);
+          entrainUntil = performance.now() + 9000;
+          try {
+            audio.playNote(Math.round(subBassMidiFor(0.5)), 900);
+            haptics.detent();
+          } catch {
+            /* noop */
+          }
+          // a truly metronomic hand still earns the whole sky
+          if (e.stability > 0.9) tutti();
+        },
+        span: (e) => {
+          lastInteractionAt = performance.now();
+          if (e.phase === "release") {
+            spanA = -1;
+            spanB = -1;
+            return;
+          }
+          if (e.phase === "enter") {
+            const a = toLocal(e.ax, e.ay);
+            const b = toLocal(e.bx, e.by);
+            spanA = galaxyAt(a.x, a.y);
+            spanB = galaxyAt(b.x, b.y);
+            spanVoiceAt = 0;
+          }
+          const now = performance.now();
+          if (now - spanVoiceAt < 700) return;
+          spanVoiceAt = now;
+          const gain = 0.7 + Math.min(0.8, e.elapsed / 3000);
+          if (spanA >= 0 && spanB >= 0 && spanA !== spanB) {
+            // two wells held open together: the interval between their
+            // depths, sustained — and the filament between them wakes the
+            // longer the interval is held
+            soundGalaxy(spanA, 900, gain);
+            soundGalaxy(spanB, 900, gain);
+            if (e.elapsed > 1400) {
+              const ga = galaxies[spanA];
+              const gb = galaxies[spanB];
+              const ux = gb.x - ga.x;
+              const uy = gb.y - ga.y;
+              const uz = gb.z - ga.z;
+              const len2 = Math.max(1e-6, ux * ux + uy * uy + uz * uz);
+              for (let i = 0; i < count; i++) {
+                if (i === spanA || i === spanB) continue;
+                if (!isLit(galaxies[i].density, growth, DENSITY_THRESHOLD)) continue;
+                const g = galaxies[i];
+                const t2 = clamp01(
+                  ((g.x - ga.x) * ux + (g.y - ga.y) * uy + (g.z - ga.z) * uz) / len2,
+                );
+                const dx = g.x - (ga.x + ux * t2);
+                const dy = g.y - (ga.y + uy * t2);
+                const dz = g.z - (ga.z + uz * t2);
+                if (dx * dx + dy * dy + dz * dz < 0.008) {
+                  flare[i] = Math.max(flare[i], 0.18 + Math.min(0.3, e.elapsed / 8000));
+                }
+              }
+            }
+            try {
+              haptics.ripple(0.2 + Math.min(0.25, e.elapsed / 8000));
+            } catch {
+              /* noop */
+            }
+            return;
+          }
+          // held over the void: the sustained note is the void's own —
+          // very low, and longer the longer it is held open
+          try {
+            audio.playNote(22, Math.round(500 + Math.min(2000, e.elapsed * 0.4)));
+            haptics.ripple(0.15);
+          } catch {
+            /* noop */
+          }
+        },
+        drum: (e) => {
+          lastInteractionAt = performance.now();
+          // a patter between two hands plays the space between two wells:
+          // the galaxy nearest each zone answers in alternation, and the
+          // web between them stirs
+          const a = toLocal(e.ax, e.ay);
+          const b = toLocal(e.bx, e.by);
+          const ia = galaxyAt(a.x, a.y);
+          const ib = galaxyAt(b.x, b.y);
+          const h = toLocal(e.x, e.y);
+          const hit = galaxyAt(h.x, h.y);
+          const target = hit >= 0 ? hit : e.hits % 2 === 0 ? ia : ib;
+          if (target >= 0) {
+            soundGalaxy(target, 360, 0.8 + e.alternation * 0.4);
+          } else {
+            try {
+              audio.playNote(24, 300);
+            } catch {
+              /* noop */
+            }
+          }
+          if (ia >= 0) flare[ia] = Math.max(flare[ia], 0.25 + e.alternation * 0.2);
+          if (ib >= 0) flare[ib] = Math.max(flare[ib], 0.25 + e.alternation * 0.2);
+          stir = clamp01(stir + 0.06 + e.alternation * 0.06);
+          stirTurbulence(0.04 + e.alternation * 0.04);
+          try {
+            haptics.tap();
+          } catch {
+            /* noop */
+          }
         },
       },
       { wheelZoom: false },
@@ -1090,10 +1202,12 @@ export default function DeepSpaceWeb() {
           /* noop */
         }
       },
-      knock: () => {
+      knock: ({ intensity }) => {
         if (reduced) return;
         lastInteractionAt = performance.now();
-        // the nearest knot answers — the densest thing in front of you
+        // the nearest knot answers — the densest thing in front of you,
+        // ringing longer and brighter the harder the case was struck
+        const k = clamp01(intensity);
         let best = -1;
         let bestD = -1;
         for (let i = 0; i < count; i++) {
@@ -1107,8 +1221,8 @@ export default function DeepSpaceWeb() {
           }
         }
         if (best >= 0) {
-          soundGalaxy(best, 1400, 1.2);
-          flare[best] = Math.max(flare[best], 0.7);
+          soundGalaxy(best, 1000 + Math.round(k * 900), 1 + k * 0.5);
+          flare[best] = Math.max(flare[best], 0.5 + k * 0.4);
         }
         try {
           audio.thud();
@@ -1200,6 +1314,11 @@ export default function DeepSpaceWeb() {
       last = now;
       const dt = delta / 1000;
 
+      if (entrainUntil && now > entrainUntil) {
+        // the entrained clock lets go of the hand's tempo and settles home
+        entrainUntil = 0;
+        timeScaleTarget = 1;
+      }
       timeScale += (timeScaleTarget - timeScale) * Math.min(1, dt * 5);
       if (!reduced) localT += dt * timeScale;
       veil += (veilTarget - veil) * Math.min(1, dt * (veilTarget > veil ? 3.4 : 0.9));

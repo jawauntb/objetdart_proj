@@ -70,6 +70,26 @@ browser against a stubbed generator: it descends twelve layers, asserts the
 camera never leaves the plane's range, and measures the magnification of the
 deepest drawing actually under the middle of the stage.
 
+### What this replaced
+
+An earlier pass answered the same failure from the other end: `hasZoomHeadroom`
+watched for the moment a child would leave the camera no room to ask for
+another level, and re-rooted the plane at that point with the ordinary
+`applyLandedPlane` swap. That worked, but only as a checkpoint — every level up
+to the checkpoint still let the camera outrun its sheet by 1.45x, and the swap
+itself discarded the parent plane, reset the camera to fit, and could not be
+climbed back out of. Promotion happens at *every* layer instead, keeps the
+ancestors, and inverts, so headroom is never spent and there is nothing left to
+check for. `tileNeedsDetail` and `hasZoomHeadroom` are gone with it.
+
+Every tile's image renders through `AtlasTileImage`, which crossfades whenever
+its `src` changes without a DOM remount — a preview upgrading to its final, or
+a promoted plane's origin sheet arriving — using the
+`.living-atlas__image--incoming` / `.is-visible` layer that
+`docs/atlas-progressive-qa.md`'s QA matrix already names. That crossfade is
+between two drawings of the *same* ground; `pyramidLayerBlend` above is the
+crossfade between drawings of different depths. Both are needed.
+
 ## Provider-neutral server boundary (proposed Atlas contract)
 
 The browser must call one Atlas-owned route, not OpenAI or OpenRouter directly. The route chooses the provider from server configuration and normalizes provider output.

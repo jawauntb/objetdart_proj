@@ -54,35 +54,24 @@ domain_lib:
   invariant_type: ledger
 
 palette:
-  bg:      "#050a08"
-  bg2:     "#132420"
-  glow:    "#f0c690"
-  accent:  "#5aa89c"
-  accent2: "#e88c4a"
+  bg:      "#050a08"  # deep subterranean dark — the mantle, the underwater floor
+  bg2:     "#241a12"  # basalt / rock, the ground's own warm register
+  glow:    "#f0c690"  # sulfur / steam, bright
+  accent:  "#5aa89c"  # cool pool teal
+  accent2: "#e88c4a"  # hot orange plume
   ink:     "#f0efe6"
 
 visual_style:
-  composition: side-section
   subject: "a hand's width of superheated ground in section — a narrow central throat, a shallow pool, an intermittent ballistic plume when the trigger crosses"
   form_language: [SDF, value-noise-FBM, ribbon-flow, hand-painted]
   motion_character: cyclic
-  registers:
-    - "the deep basalt / mantle dark under the ground — via bg"
-    - "the pool's cool column and steaming warmed rock — via bg2"
-    - "sulfur light on the plume (the load-bearing highlight) — via glow"
-    - "the cool water-in-motion / teal pool register — via accent"
-    - "the hot mantle / eruption register — the crossfade axis — via accent2"
-    - "readable text over the darkest tile — via ink"
   reference_notes:
     - "an Old Faithful cutaway diagram: pool, throat, mantle-warmed dark, plume above"
-    - "the sky and pool crossfade between a 'cool' register and a 'hot' register as the phase moves through build → erupt → cool"
-    - "the plume as a stack of upward-advecting gaussian rings warped by fbm — a wider ring at Q_erupt so discharge reads off the visible cross-section"
-    - "the guide screenshot at public/guide/geyser.jpg reads dark — probably captured before the shader landed; the shader body is the source of truth for this room"
-  banned_forms:
-    - "no createRadialGradient, no shadowBlur per AGENTS.md"
-    - "no per-frame allocation — heat-marks, ripples and rings go through the shared instanced pass"
-    - "no top-down or first-person view — section only, seen from the front"
-    - "no painted plume — its height and cross-section are read live from uPlumeHeight / uPlumeQ"
+    - "the sky and pool crossfade between a 'cool' register and a 'hot' register as the phase moves through build → erupt → cool, carried by one continuous uState axis (floor = ledger phase, fract = progress) rather than a switch"
+    - "the plume as a fluid-like column warped by fbm, drawn unbroken from the throat through the ground strip into the sky — the ground layer used to skip the plume call and leave a dark gap at the horizon; it does not anymore"
+    - "the vent is a proper RING SDF at the waterline (a mineral collar), not a filled disc; a second decorative population of ballistic droplets (never Math.random) scatters off the plume while erupting and free-runs its own closed-form arc"
+    - "steam wisps (FBM noise) ride off the pool and merge into a cool, LIT sky as the room heats; a heat-shimmer ripples the ground while building climbs, and condensation beads on the rocks while cooling settles"
+    - "phase-8-geyser-visual.md carries the before/after audit; the shader body remains the source of truth for this room"
   mood: "a waiting-for-an-event room — a slow build hisses, the plume rides the release, the pool cools and starts again"
   gesture_feedback_style: "a tap rings the throat at the local head (pitch = ringHzFor(H)); a dwell plants a heat-marker whose corona brightens with local T; a knock near the trigger can actually push the cycle over — the room's touch-reachable secret"
 
@@ -165,6 +154,14 @@ life:
         creates_via_verb: dwell
         retires_via: [ceremony, LetGo]
         implementation_hint: SceneObjectSpec
+      - noun: plume-droplet
+        max_count: 40   # MAX_PLUME_DROPLETS in src/components/Geyser.tsx — decorative only
+        state_shape: "id, x, y, lateral velocity, vertical velocity, birth time, hue seed"
+        lifecycle: "spawned deterministically (never Math.random) at the vent while phase === \"erupting\", scaled by Q_erupt → rides its own closed-form ballistic arc against a fixed gravity constant, in real time → fades and retires ~1.05s after birth, independent of the ledger's own much-faster watched-speed clock so the scatter is still visibly settling into \"cooling\""
+        persistence: ephemeral
+        creates_via_verb: "(none — spawned by the erupting phase itself, not a gesture)"
+        retires_via: [decay]
+        implementation_hint: SceneObjectSpec
   breath:
     period_seconds: 7
     reads:
@@ -194,8 +191,39 @@ life:
     flip: null              # night toggle
     arrows: tap             # moveCursor / keyTap
   make_unmake:
-    letgo_clears_population: true   # `clear` → state = initState(SEED); heat marks empty, phase returns to "building", eruptions count resets
+    letgo_clears_population: true   # `clear` → state = initState(SEED); heat marks + plume droplets empty, phase returns to "building", eruptions count resets
     ceremony_is: "firing the throat manually (manualErupt) — a ballistic eruption whether or not the trigger E was ready, and increments the persistent eruptions count"
+  # Phase-7 depth: three MECHANICAL phases (building/erupting/cooling, the
+  # authoritative machine in geyserflow.ts — untouched by the phase-8 visual
+  # pass); "dormant" is not a fourth ledger state, it is "building" read at
+  # low E. See visualPhaseLabel() in Geyser.tsx and
+  # data/object-compiler/audits/phase-8-geyser-visual.md.
+  state_machine:
+    clock:
+      kind: "phase-branch closed form"
+      reads_from_domain: "advanceExact (src/lib/geyserflow.ts)"
+    states:
+      - name: dormant
+        condition: 'phase === "building" && (H·T)/(E_TRIGGER_HIGH·1.2) < 0.35'
+        visible_effect: "cool register, quiet ground, no plume, no heat-shimmer, no steam"
+      - name: building
+        condition: 'phase === "building" && the same ratio ≥ 0.35'
+        visible_effect: "a subtle rippling heat-shimmer climbs over the ground; the vent rim, the mineral bloom and the sky warm continuously toward the hot register"
+      - name: erupting
+        condition: 'phase === "erupting"'
+        visible_effect: "a bright accent2 plume rides unbroken from the throat through the sky, ballistic droplets scatter off it, hot-weight pins to 1"
+      - name: cooling
+        condition: 'phase === "cooling"'
+        visible_effect: "the plume fades on Q_erupt's own decay, condensation beads on the rocks near the vent and fades as the ground settles back toward the next build"
+    transitions:
+      - { from: dormant, to: building, on: "E climbs past the 0.35 read on the same ratio" }
+      - { from: building, to: erupting, on: "E crosses E_TRIGGER_HIGH upward, or ceremony/knock" }
+      - { from: erupting, to: cooling, on: "ERUPT_DURATION_S elapses" }
+      - { from: cooling, to: dormant, on: "E falls below E_TRIGGER_LOW — the hysteresis reseat" }
+    uniform:
+      name: uState
+      kind: float
+      packing: "floor = ledger phase index (0 building / 1 erupting / 2 cooling), fract = continuous progress through it — never a discrete switch"
 
 # ——— the three LLM slots ————————————————————————————————————————————————
 
@@ -232,9 +260,33 @@ shader_intent: >
   column and the warmed rock, `glow` is sulfur light on the plume (the
   load-bearing highlight), `accent` is the cool water in motion register,
   `accent2` is the hot heat register — the crossfade axis, `ink` is
-  readable text over the darkest tile. the twist lens is a second render
-  path: H(t) and T(t) drawn as bars, the trigger line as their product,
-  the eruption count, an interval clock, and the phase name.
+  readable text over the darkest tile. `bg2` in particular carries the
+  ground's OWN register (a warm basalt/rock tone), separate from `bg`'s
+  deep mantle dark and from the pool's teal — the ground-column depth
+  gradient sinks from `bg2` near the horizon to `bg` with depth, using an
+  EXPONENTIAL falloff (not a flatter quadratic), so the rock reads as a
+  lit section rather than a flat fill. the vent is a proper RING SDF
+  standing at the waterline — a mineral collar, not a filled disc — drawn
+  from both the pool and ground branches so the annulus reads whole across
+  the boundary it straddles. the plume call is now shared by every branch
+  (sky, pool, AND the ground strip between the horizon and the waterline)
+  so the column never breaks crossing that strip. steam wisps (an fbm
+  advecting upward, gated by the hot-weight) ride off the pool and merge
+  into a cool, LIT sky — the room's sky is a bright register, not a dark
+  one, so eruption's steam has somewhere brighter to disappear into. a
+  single continuous `uState` uniform (floor = ledger phase, fract =
+  progress through it) replaces any discrete per-state switch and drives
+  two more cosmetic layers: a heat-shimmer ripple over the ground while
+  building's own fraction climbs, and condensation speckles beading on
+  the rocks while cooling's own fraction falls back toward the next
+  build. a second, PURELY DECORATIVE scene population — ballistic
+  droplets, seeded off the population's own monotone id, never
+  `Math.random` — spawns at the vent while erupting and scatters off the
+  plume, riding the same shared instanced pass as the heat-marks. the
+  twist lens is a second render path: H(t) and T(t) drawn as bars, the
+  trigger line as their product, the eruption count, an interval clock,
+  and the phase name alongside its own informal read (dormant/building/
+  erupting/cooling).
 
 domain_intent: >
   write `src/lib/geyserflow.ts` around one exported `GeyserState = { H, T,

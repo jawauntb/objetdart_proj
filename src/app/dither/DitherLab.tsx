@@ -9,6 +9,7 @@ import {
 } from "@/lib/dither-avatar";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { tapTrainTier } from "@/lib/gesture/core";
 import { onVisibility } from "@/lib/room-runtime";
 import { useField } from "@/store/field";
 import styles from "./dither.module.css";
@@ -111,6 +112,7 @@ function DitherChart({
   onFocus,
   onWind,
   onCeremony,
+  onTrain,
 }: {
   mode: ChartMode;
   pattern: PatternMode;
@@ -122,6 +124,7 @@ function DitherChart({
   onFocus: (focus: SeriesKey | null, locked?: boolean) => void;
   onWind: (delta: number) => void;
   onCeremony: () => void;
+  onTrain: (count: number, intensity: number) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [scrubIndex, setScrubIndex] = useState<number | null>(null);
@@ -318,6 +321,7 @@ function DitherChart({
     let twistAcc = 0;
     let inked = false;
     let lastWindCueAt = 0;
+    let lastStirCueAt = 0;
     let strumTimers: number[] = [];
     let entrainStop = 0;
     let entrainRaf = 0;
@@ -326,8 +330,18 @@ function DitherChart({
       tap: (e) => {
         lastGestureAtRef.current = performance.now();
         if (e.fingers !== 1) return;
+        // rapid taps climb the train (1 / 3 / 5 / n): the ladder here is
+        // the ink itself — hold a month, re-ink the surface, change the
+        // ink's color, crescendo to full density. Rungs past 1 belong to
+        // the lab (pattern, palette, density live there).
+        const tier = tapTrainTier(e.count);
+        if (tier !== 1) {
+          onTrain(e.count, e.intensity);
+          return;
+        }
         updateScrub(e.x, true);
-        setScrubLocked((value) => !value);
+        if (e.count === 1) setScrubLocked((value) => !value);
+        try { haptics.ripple(0.2 + e.intensity * 0.3); } catch { /* noop */ }
       },
       drag: (e) => {
         lastGestureAtRef.current = performance.now();
@@ -369,14 +383,19 @@ function DitherChart({
       hold: (e) => {
         lastGestureAtRef.current = performance.now();
         if (e.fingers === 3) {
-          // three fingers hold the law: the signal redraws at quarter speed
+          // three fingers hold the law: the signal redraws slower, and
+          // keeps slowing the longer the hand stays — a quarter by two
+          // seconds, sinking toward stillness. Never one fixed depth.
           if (e.phase === "enter") {
-            timeScaleRef.current.target = 0.25;
             setReplayNonce((n) => n + 1);
             try { getFieldAudio().playNote(36, 260); } catch { /* noop */ }
             try { haptics.tap(); } catch { /* noop */ }
           }
-          if (e.phase === "release") timeScaleRef.current.target = 1;
+          if (e.phase === "release") { timeScaleRef.current.target = 1; return; }
+          timeScaleRef.current.target = Math.max(
+            0.08,
+            1 - 0.75 * Math.min(1, e.elapsed / 2000) - 0.17 * Math.min(1, Math.max(0, (e.elapsed - 2500) / 3500)),
+          );
           return;
         }
         if (e.fingers !== 1) return;
@@ -401,6 +420,19 @@ function DitherChart({
           try { haptics.lens(); } catch { /* noop */ }
           try { getFieldAudio().chime(); } catch { /* noop */ }
         }
+      },
+      scrub: (e) => {
+        lastGestureAtRef.current = performance.now();
+        // a circling finger stirs the ink: density gathers with the turn
+        // and thins against it, faster circles pouring harder
+        const nowMs = performance.now();
+        if (nowMs - lastStirCueAt < 400) return;
+        lastStirCueAt = nowMs;
+        const dir = Math.sign(e.winding) || 1;
+        const pour = Math.min(0.12, 0.04 + Math.abs(e.angularVelocity) * 0.01);
+        onWind(dir * pour);
+        try { getFieldAudio().playNote(dir > 0 ? 58 : 46, 110); } catch { /* noop */ }
+        try { haptics.ripple(0.3 + pour); } catch { /* noop */ }
       },
       rhythm: (e) => {
         // a steady tapped pulse: the signal breathes on your beat
@@ -431,7 +463,7 @@ function DitherChart({
       strumTimers.forEach((id) => window.clearTimeout(id));
       cancelAnimationFrame(entrainRaf);
     };
-  }, [draw, onCeremony, onWind, updateScrub]);
+  }, [draw, onCeremony, onTrain, onWind, updateScrub]);
 
   // idle glimmer — every ~9s of stillness a ghost scrub sweeps once
   useEffect(() => {
@@ -754,6 +786,52 @@ export default function DitherLab() {
     useField.getState().recordTape("kept", 0.85, "dither/full-ink");
   }, []);
 
+  // rapid-tap train, rungs 3 / 5 / n (tapTrainTier in gesture/core): the
+  // ladder is the ink itself — the surface re-inks, the ink changes color,
+  // then density crescendos and the signal replays. Each rung lands in two
+  // senses in the same frame: the visible re-render plus sound and touch.
+  const onTrain = useCallback((count: number, intensity: number) => {
+    const tier = tapTrainTier(count);
+    if (tier === "n") {
+      // n (≥7) — crescendo: ink floods toward full and the signal replays
+      setDensity((value) => Math.min(1, value + 0.09 + (count - 7) * 0.04));
+      if (count === 7) setReplayToken((value) => value + 1);
+      try { getFieldAudio().playNote(60 + (count - 7) * 2, 90 + Math.round(intensity * 80)); } catch { /* noop */ }
+      try { haptics.roll(); } catch { /* noop */ }
+      useField.getState().recordTape("ripple", Math.min(1, 0.6 + (count - 7) * 0.1), "dither/flood");
+      return;
+    }
+    if (tier >= 5) {
+      // 5 — the ink changes color: the palette steps to its next ink
+      if (count === 5) {
+        setPaletteName((value) => {
+          const names = Object.keys(PALETTES) as PaletteName[];
+          return names[(names.indexOf(value) + 1) % names.length];
+        });
+        try { getFieldAudio().bell(); } catch { /* noop */ }
+        try { haptics.bloom(); } catch { /* noop */ }
+        useField.getState().recordTape("sigil", 0.7, "dither/re-ink");
+      } else {
+        try { getFieldAudio().playNote(64, 120); } catch { /* noop */ }
+        try { haptics.ripple(0.5); } catch { /* noop */ }
+      }
+      return;
+    }
+    // 3 — the surface re-inks itself: the dither pattern steps one stage
+    if (count === 3) {
+      setPattern((value) => {
+        const stages: PatternMode[] = ["gradient", "dotted", "hatched", "solid"];
+        return stages[(stages.indexOf(value) + 1) % stages.length];
+      });
+      try { getFieldAudio().chime(); } catch { /* noop */ }
+      try { haptics.lens(); } catch { /* noop */ }
+      useField.getState().recordTape("object", 0.55 + intensity * 0.2, "dither/re-surface");
+    } else {
+      try { getFieldAudio().playNote(57, 110); } catch { /* noop */ }
+      try { haptics.ripple(0.35 + intensity * 0.2); } catch { /* noop */ }
+    }
+  }, []);
+
   return (
     <div
       className={styles.page}
@@ -802,6 +880,7 @@ export default function DitherLab() {
             onFocus={onFocus}
             onWind={onWind}
             onCeremony={onCeremony}
+            onTrain={onTrain}
           />
           <div className={styles.controls}>
             <fieldset>

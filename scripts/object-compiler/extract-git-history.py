@@ -583,6 +583,55 @@ def _load_previous_ci_outcomes(prs_jsonl: Path) -> dict[int, str]:
     return outcomes
 
 
+# Fields written by downstream passes (e.g. classify-task-family.py) that
+# extract-git-history.py must copy through on rerun rather than overwrite.
+# The extractor owns everything shipped in `build_row`; these belong to
+# other stages of the pipeline and are load-bearing for phase-2+ analyses.
+_DOWNSTREAM_FIELDS = (
+    "task_family_llm",
+    "task_family_llm_confidence",
+    "task_family_llm_reasoning",
+)
+
+
+def _load_previous_downstream_fields(
+    prs_jsonl: Path,
+) -> dict[int, dict[str, Any]]:
+    """Return {pr_number: {field: value}} for any downstream-owned fields
+    already present on the existing prs.jsonl rows.
+
+    This preserves LLM-classifier verdicts and other analyses across
+    reruns of extract-git-history.py. Without it, rerunning the extractor
+    (even to only re-classify with a tightened heuristic) would silently
+    wipe every task_family_llm on disk.
+    """
+    preserved: dict[int, dict[str, Any]] = {}
+    if not prs_jsonl.exists():
+        return preserved
+    try:
+        with prs_jsonl.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                num = row.get("pr_number")
+                if not isinstance(num, int):
+                    continue
+                keep: dict[str, Any] = {}
+                for field in _DOWNSTREAM_FIELDS:
+                    if field in row:
+                        keep[field] = row[field]
+                if keep:
+                    preserved[num] = keep
+    except OSError:
+        pass
+    return preserved
+
+
 def _repo_slug(repo: Path) -> str:
     """Resolve `owner/repo` from a local git checkout (fed to `gh --repo`)."""
     # Prefer the remote URL — `gh` needs owner/repo, not a filesystem path.
@@ -606,6 +655,32 @@ _TITLE_FIX = re.compile(r"^\s*(fix|hotfix|bug)\b", re.IGNORECASE)
 _TITLE_CHORE = re.compile(r"^\s*chore\b", re.IGNORECASE)
 _TITLE_DOCS = re.compile(r"^\s*docs?\b", re.IGNORECASE)
 _TITLE_MIGRATION = re.compile(r"\b(migrat|migration|schema)\b", re.IGNORECASE)
+
+# `feat(<key>): ...` — the site-wide commit convention. The <key> group is
+# the room / subsystem the PR is scoped to.
+_TITLE_FEAT_SCOPE = re.compile(r"^\s*feat\(([\w-]+)\):", re.IGNORECASE)
+
+# Paths inside src/app/<key>/ that Next.js treats as the room entry-point.
+_APP_ROOM_PAGE_RE = re.compile(r"^src/app/([^/]+)/page\.tsx$")
+_APP_ROOM_LAYOUT_RE = re.compile(r"^src/app/([^/]+)/layout\.tsx$")
+_COMPONENT_TSX_RE = re.compile(r"^src/components/[^/]+\.tsx$")
+
+# feat(<key>): scopes that are cross-cutting system concepts, not rooms.
+# When one of these appears as the title scope, the PR touches shared
+# infrastructure and should NOT be flagged as a room mechanic improvement
+# even when its footprint looks single-room-ish. Derived from the LLM
+# `other-*` labels that contaminated a title-only rule (see phase-6 audit).
+_NON_ROOM_TITLE_SCOPES = frozenset({
+    "world",
+    "scale",
+    "guide",
+    "home",
+    "site",
+    "gesture",
+    "grammar",
+    "rooms",
+    "travel",
+})
 
 
 def _infer_task_family(
@@ -645,6 +720,30 @@ def _infer_task_family(
         # a size consistent with a real room manifest (~60+ lines).
         if not added_paths and int(f.get("additions", 0)) >= 40 and int(f.get("deletions", 0)) == 0:
             return "new-room"
+
+    # 1b. New room (modern App Router convention) — rooms added after the
+    #     src/rooms/<key>/ config migration land as a new src/app/<key>/
+    #     directory with BOTH page.tsx and layout.tsx created in the same
+    #     PR. Requires exactly one such <key> so multi-page PRs (grammar
+    #     enforcement, peer-room rollouts) don't match, and excludes the
+    #     'guide' key (the field guide adds page+layout but is documented
+    #     surface, not a room).
+    #     Phase-6 LLM-discovered pattern; purity = 23/25 = 92% on the
+    #     heuristic-`unknown` bucket resolved to `new-room` by the LLM.
+    if added:
+        page_keys: set[str] = set()
+        layout_keys: set[str] = set()
+        for a in added:
+            m = _APP_ROOM_PAGE_RE.match(a)
+            if m:
+                page_keys.add(m.group(1))
+            m = _APP_ROOM_LAYOUT_RE.match(a)
+            if m:
+                layout_keys.add(m.group(1))
+        if len(page_keys) == 1 and len(layout_keys) == 1 and page_keys == layout_keys:
+            (only_key,) = page_keys
+            if only_key != "guide":
+                return "new-room"
 
     # 2. Guide update — the guide index or a landed screenshot.
     if any(
@@ -700,11 +799,51 @@ def _infer_task_family(
     if _TITLE_DOCS.match(title or ""):
         return "docs"
 
-    # 9. Mechanic improvement — small, single-component-ish.
+    # 9a. Mechanic improvement (single-component signature) — polishes a
+    #     specific room by modifying exactly one existing src/components/
+    #     <Name>.tsx and touching at most 4 files total, without creating
+    #     any new page/layout under src/app/. This is the "Redesign X",
+    #     "Polish X", "<room>: rework" pattern that dominated pre-2026
+    #     merges when titles didn't yet follow feat(<key>): convention.
+    #     Phase-6 LLM-discovered pattern; purity = 47/49 = 96% on the
+    #     heuristic-`unknown` bucket resolved by the LLM.
+    modified_components = [
+        p for p in paths
+        if _COMPONENT_TSX_RE.match(p) and p not in added
+    ]
+    adds_app_path = any(p.startswith("src/app/") for p in added)
+    if (
+        len(modified_components) == 1
+        and not adds_app_path
+        and len(paths) <= 4
+    ):
+        return "mechanic-improvement"
+
+    # 9b. Mechanic improvement (feat(<room>) scoped signature) — modern
+    #     commits titled `feat(<key>): ...` where <key> is a room name
+    #     (not one of the cross-cutting system scopes) that modify
+    #     src/components/*.tsx without creating a new src/app/ entry,
+    #     with a moderate footprint (<= 8 files, <= 1500 added lines).
+    #     Phase-6 LLM-discovered pattern; purity = 35/38 = 92% on the
+    #     heuristic-`unknown` bucket resolved by the LLM.
+    title_scope = _TITLE_FEAT_SCOPE.match(title or "")
+    if (
+        title_scope
+        and title_scope.group(1).lower() not in _NON_ROOM_TITLE_SCOPES
+        and modified_components
+        and not adds_app_path
+        and len(paths) <= 8
+        and int(additions or 0) <= 1500
+    ):
+        return "mechanic-improvement"
+
+    # 9c. Mechanic improvement (legacy small-diff signature) — the original
+    #     rule: any small (< 200 lines) change scoped to at most 3 files
+    #     under src/components/, src/rooms/, or src/lib/. Kept as the final
+    #     safety net for pre-convention PRs; the tighter rules above catch
+    #     the modern shapes with higher precision.
     total_lines = int(additions or 0) + int(deletions or 0)
     if total_lines < 200:
-        # A "single component" heuristic: at most one file under src/components/
-        # or src/rooms/, plus incidental config/test edits.
         component_hits = [
             p for p in paths
             if p.startswith("src/components/")
@@ -1194,18 +1333,34 @@ def main(argv: list[str]) -> int:
         _log(f"  polling CI outcomes for {len(kept)} PRs...", quiet=args.quiet)
         ci_map = _iter_ci_outcomes(repo, kept, quiet=args.quiet)
 
+    # Preserve downstream-owned fields (LLM classifier, etc.) from any
+    # existing prs.jsonl. build_row only emits the extractor's own schema;
+    # without this the next stage's verdicts would be silently wiped on
+    # every extractor rerun.
+    prior_downstream = _load_previous_downstream_fields(out_path)
+
     rows: list[dict[str, Any]] = []
     for pr in kept:
         num = int(pr.get("number", 0) or 0)
         msgs, count = commits_by_pr.get(num, ([], 0))
-        rows.append(
-            build_row(
-                pr,
-                commit_messages=msgs,
-                commit_count=count,
-                ci_outcome=ci_map.get(num, "unknown"),
-                added_paths=added_by_pr.get(num, set()),
-            )
+        row = build_row(
+            pr,
+            commit_messages=msgs,
+            commit_count=count,
+            ci_outcome=ci_map.get(num, "unknown"),
+            added_paths=added_by_pr.get(num, set()),
+        )
+        preserved = prior_downstream.get(num)
+        if preserved:
+            for k, v in preserved.items():
+                row[k] = v
+        rows.append(row)
+
+    if prior_downstream:
+        _log(
+            f"  preserved downstream fields on {len(prior_downstream)} rows "
+            f"(e.g., task_family_llm)",
+            quiet=args.quiet,
         )
 
     # Optional: extract per-PR patches to disk and stamp the three new fields

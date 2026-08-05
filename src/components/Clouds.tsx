@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import GreekKeyFrame from "@/components/GreekKeyFrame";
@@ -942,13 +943,47 @@ export default function Clouds() {
           return;
         }
         if (e.fingers === 3) {
-          // tutti — everything alive answers softly at once
-          for (const cell of weatherCells) cell.strength = Math.min(1, cell.strength + 0.12);
+          // tutti — everything alive answers softly at once, to the weight asked
+          for (const cell of weatherCells) cell.strength = Math.min(1, cell.strength + 0.08 + e.intensity * 0.1);
           try { getFieldAudio().chime(); } catch { /* noop */ }
-          haptics.ripple(0.4);
+          haptics.ripple(0.3 + e.intensity * 0.3);
           return;
         }
         const { x: px, y: py } = trackPointer(e.x, e.y);
+        // rapid-tap ladder (tiers from gesture/core): condensation quickens
+        // into rain, rain calls lightning, and past seven the front arrives
+        const tier = tapTrainTier(e.count);
+        const depth = tapTrainDepth(e.count);
+        if (tier === "n") {
+          const w = overlay.clientWidth;
+          for (let k = 0; k < 3; k++) {
+            const fx = clamp(px + (k - 1) * (w * 0.18), 40, w - 40);
+            seedWeatherCell(fx, py, "storm", 0.6 + depth * 0.4);
+            seedRainVeil(fx, py + 44, 0.6 + depth * 0.4, 160 + depth * 90);
+          }
+          windTargetX = clamp(windTargetX + (px > w * 0.5 ? -0.3 : 0.3) * (0.6 + depth), -1, 1);
+          triggerLightning(pointer.current.uvx, { x: px, y: py });
+          addWeatherMark("the front", 0.85 + depth * 0.15);
+          useField.getState().recordTape("region", 0.85 + depth * 0.15, "clouds/front");
+          return;
+        }
+        if (tier >= 5) {
+          // five taps call the bolt down to the finger
+          seedWeatherCell(px, py, "storm", 0.6 + depth * 0.4);
+          triggerLightning(pointer.current.uvx, { x: px, y: py });
+          addWeatherMark("called bolt", 0.8 + depth * 0.2);
+          return;
+        }
+        if (tier >= 3) {
+          // three taps break the vapor into rain where the train lands
+          seedWeatherCell(px, py, "vapor", 0.4 + depth * 0.3);
+          seedRainVeil(px, py + 36, 0.4 + depth * 0.4, 140 + depth * 80);
+          try { getFieldAudio().playNote(52 - Math.round(depth * 6), 180); } catch { /* noop */ }
+          haptics.ripple(0.3 + depth * 0.25);
+          addWeatherMark("first rain", 0.5 + depth * 0.2);
+          useField.getState().recordTape("ripple", 0.5 + depth * 0.2, "clouds/rain");
+          return;
+        }
         const g = glyphAt(px, py);
         if (g) {
           // soft whoosh + breadcrumb trail
@@ -1040,13 +1075,14 @@ export default function Clouds() {
       hold: (e) => {
         lastGestureAt = performance.now();
         if (e.fingers === 3) {
-          // three fingers hold the law: the sky slows to a quarter speed
+          // three fingers hold the law: the sky keeps slowing the longer
+          // they stay — a lull at 900ms, near-stillness by 2400ms
+          if (e.phase === "release") { timeScaleTarget = 1; return; }
+          timeScaleTarget = 1 - 0.75 * clamp(e.elapsed / 2000, 0, 1);
           if (e.phase === "enter") {
-            timeScaleTarget = 0.25;
             try { getFieldAudio().playNote(36, 260); } catch { /* noop */ }
             try { haptics.tap(); } catch { /* noop */ }
           }
-          if (e.phase === "release") timeScaleTarget = 1;
           return;
         }
         if (e.fingers !== 1) return;
@@ -1058,6 +1094,15 @@ export default function Clouds() {
           haptics.tap();
           addWeatherMark("pressure", 0.45);
           return;
+        }
+        if (e.phase === "tick" && e.tier >= 2 && !holdState.ceremony && e.elapsed % 700 < 60) {
+          // the gathering is audible while it happens: the held air groans
+          // lower and the hand feels the cell thicken, deeper every beat
+          const charge = clamp(e.elapsed / 1800, 0, 1);
+          cloudPuffs.push({ x: pointer.current.x, y: pointer.current.y, t0: simNowMs });
+          if (cloudPuffs.length > 8) cloudPuffs.shift();
+          try { getFieldAudio().playTone(120 - charge * 50, 0.06); } catch { /* noop */ }
+          try { haptics.ripple(0.15 + charge * 0.25); } catch { /* noop */ }
         }
         if (e.phase === "release") {
           pointer.current.pressed = false;
@@ -1138,6 +1183,32 @@ export default function Clouds() {
         if (e.stability <= 0.7) return;
         entrainBpm = Math.max(40, Math.min(120, e.bpm));
         entrainUntil = performance.now() + 9000;
+      },
+      drum: (e) => {
+        lastGestureAt = performance.now();
+        // drumming builds weather in the space between the hands: each
+        // landing condenses its own spot, and a held patter strings a
+        // squall line from one zone to the other, wind running along it
+        const { x, y } = trackPointer(e.x, e.y);
+        const roll = clamp(e.hits / 9, 0, 1);
+        seedWeatherCell(x, y, "vapor", 0.3 + roll * 0.3);
+        try { getFieldAudio().playTone(90 + (x > (e.ax + e.bx) * 0.5 ? 34 : 0) + roll * 40, 0.05); } catch { /* noop */ }
+        try { haptics.tap(); } catch { /* noop */ }
+        if (e.hits >= 5 && e.alternation > 0.85) {
+          const r = overlay.getBoundingClientRect();
+          const ax = e.ax - r.left;
+          const ay = e.ay - r.top;
+          const bx = e.bx - r.left;
+          const by = e.by - r.top;
+          for (let k = 1; k < 4; k++) {
+            const tt = k / 4;
+            seedWeatherCell(ax + (bx - ax) * tt, ay + (by - ay) * tt, "storm", 0.5 + roll * 0.3);
+          }
+          seedRainVeil((ax + bx) * 0.5, (ay + by) * 0.5 + 40, 0.55 + roll * 0.35, 200);
+          windTargetX = clamp(windTargetX + Math.sign(bx - ax) * 0.22, -1, 1);
+          addWeatherMark("squall line", 0.7 + roll * 0.2);
+          useField.getState().recordTape("region", 0.7 + roll * 0.2, "clouds/squall");
+        }
       },
     }, { wheelZoom: false });
 

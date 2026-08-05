@@ -56,45 +56,28 @@ DOES; it does not carry what the room SHOULD LOOK LIKE with any of the
 vocabulary a designer would reach for. That gap is why /spring's shader
 landed simple and /geyser's crossfade was hand-tuned: the picture-diff
 between the rendered room and its `public/guide/<key>.jpg` was mediated by
-prose alone. `visual_style` closes that gap by structuring the design
-context the brief assumes. It gives the slot-shader author (and, where
-useful, the slot-verbs author) a name for the composition, the subject, the
-form language, the temporal character, the palette registers *by function*,
-the reference images a designer would cite, the explicit no-fly list, the
-mood, and the visual language for gesture feedback. All fields are
-optional; a spec without a `visual_style` block still compiles.
+prose alone. `visual_style` closes that gap by structuring the *per-room*
+half of that design context — the six fields the phase-5 falsifiability
+rerun landed at 0.92 avg agreement, the pictorial half of the descriptor
+a designer would point at and name:
 
-To author one: study the landed screenshot and answer each field in the
-vocabulary a colleague would use to point at the picture. Concrete
-examples:
-
-- **`composition`** — pick one of `side-section`, `top-down`,
-  `first-person`, `ambient-column`, `cutaway`, `silhouette`. Soil is a
-  `side-section` cutaway; atmosphere is an `ambient-column`; galaxy is
-  `top-down`.
 - **`subject`** — a one-line noun phrase: *"a hand's width of wet ground
   with a small pool over an aquifer"*, *"a heliocentric map of orbits on
   warm paper"*.
 - **`form_language`** — one or more tokens from the enum: `watercolor`,
   `hand-painted`, `ink-line`, `SDF`, `value-noise-FBM`, `ray-marched`,
   `point-cloud`, `ribbon-flow`, `stipple`. Multiple values are legal — a
-  watercolor SDF room is a real thing.
+  watercolor SDF room is a real thing. The taxonomy (what each token
+  means as a shader-authoring instruction) lives in
+  `object-compiler/design/authoring_style.yaml` under
+  `form_language_taxonomy`.
 - **`motion_character`** — `still` / `breathing` / `drifting` / `pulsing`
   / `cyclic` / `ballistic` / `stochastic`. `breathing` picks up the site's
   7s clock; `ballistic` fits an erupt phase; `cyclic` fits a year-scale
   loop.
-- **`registers`** — one string per palette-slot assignment, mapping the
-  abstract hex to what it PAINTS: *"deep water: bg→bg2"*, *"mineral
-  bloom: accent2"*, *"sunlit highlight: glow"*. Arrow (→) permitted for
-  gradients.
 - **`reference_notes`** — described references, not URLs: *"like a wet
   cross-section of clay in a jar; the aquifer register echoes the ocean's
   depth gradient"*, *"reads as an ink-line orrery on warm paper"*.
-- **`banned_forms`** — always includes the AGENTS.md bar (no
-  `createRadialGradient`, no per-frame `shadowBlur`, no `ctx.filter`);
-  add room-specific negatives when a landed screenshot exposed a failure
-  mode: *"no cartoon puffiness on the plume"*, *"no visible seam between
-  layers"*.
 - **`mood`** — one line, felt sense: *"contemplative and low"*,
   *"anticipatory then eruptive"*, *"buoyant, weightless, held"*. Not a
   marketing verb; the adjective a visitor would offer unprompted.
@@ -103,9 +86,43 @@ examples:
   *"displacement wave under the surface"*. This bridges the shader to
   the verb handlers.
 
-When a `visual_style` block is present, `slot-shader.md` consumes it
-alongside `shader_intent`; the shader author gets both the specific brief
-and the design vocabulary the brief assumes.
+All fields are optional; a spec without a `visual_style` block still
+compiles. When present, `slot-shader.md` consumes it alongside the shared
+`object-compiler/design/authoring_style.yaml` (the CROSS-ROOM design
+vocabulary — palette, framings, canonical register mapping, paint bar,
+form-language taxonomy, shared clocks, gesture-feedback defaults), so
+the shader author gets both the room-specific brief AND the design
+language it speaks inside.
+
+### Migration note — the three fields removed in phase 6
+
+Earlier phases carried three additional fields at this level:
+`composition`, `registers`, and `banned_forms`. Phase 2's falsifiability
+audit (see `data/object-compiler/audits/phase-2-visual-style.md`) landed
+those three at 0.42, 0.50, and 0.50 respectively — they encode
+DECISIONS the site makes once, not observations about a single room.
+Phase 4 moved them into a shared
+`object-compiler/design/authoring_style.yaml`
+(`data/object-compiler/audits/phase-4-visual-style-split.md`); the
+phase-5 rerun on the surviving six fields landed at 0.92 avg agreement
+(`data/object-compiler/audits/phase-5-visual-style-rerun.md`); phase 6
+removed the fields from the schema and from every example spec
+(`data/object-compiler/audits/phase-6-schema-cleanup.md`). Old specs
+that still declare them will fail validation — which is the point.
+
+- **`composition`** now lives at `authoring_style.compositions` as the
+  enumeration of the six framings (`side-section`, `top-down`,
+  `first-person`, `ambient-column`, `cutaway`, `silhouette`). The slot-
+  shader prompt reads it as a taxonomy, not as a per-room choice.
+- **`registers`** now lives at `authoring_style.registers` as the
+  canonical mapping from the six palette roles (`bg`, `bg2`, `glow`,
+  `accent`, `accent2`, `ink`) to what each role typically paints.
+- **`banned_forms`** now lives at `authoring_style.banned_forms` as the
+  verbatim AGENTS.md paint bar (no `createRadialGradient` in a loop,
+  no per-frame `shadowBlur`, no `ctx.filter` blur, no per-object
+  gradient pass, no allocation in the RAF loop, no `Math.random` /
+  `Date.now` in the render loop, no cartoon puffiness, no emoji, no
+  marketing verbs, no glow on text, no autoplay).
 
 ## The `life` block — the room quality bar, structured
 
@@ -205,6 +222,126 @@ lantern lifecycle above documents the real merged room, including that
 lanterns are never actively retired (only shifted out when the cap is
 hit). Where a room fails part of the bar, say so in the spec's comments
 — those failures are what the quality-check test exists to catch.
+
+## Depth — the four axes phase 7 added
+
+Phase 6 landed the compiler-generated rooms (`/spring`, `/geyser`,
+`/pebble`, `/reef`, `/root`, `/marsh`) and named the gap between them
+and the hand-authored deep references (`/stars`, `/planets`, `/coin`,
+`/molecules`): every mechanical check passed, but the compiled rooms
+felt THIN. The schema up to phase 6 captured *contract* — item 1
+(shader), 2 (grammar), 3 (make-and-unmake shape), 5 (breath), 6
+(haptics), 7 (performance) — but not *density*. How many shader
+layers the material stacks, how many populations move through it,
+how many rewards the patient hand finds, how many distinct states the
+material passes through: those axes were invisible to the spec.
+
+Phase 7 adds four optional blocks so a spec can DECLARE its depth.
+Every block is optional at the top level; every existing spec still
+validates unchanged. When a future spec DECLARES them,
+`test:room-depth` (Track C) will check the counts against the deep-
+reference floor.
+
+### `shader_layers` — the material's stacked passes
+
+An array of at least three `{ name, brief, register, order? }` items.
+Each layer is a discrete render pass or a composited element the
+shader draws. AGENTS.md §"quality bar" item 1 says the material is a
+shader; the phase-6 gap is that "the material is a shader" and "the
+material is a RICH shader" are two different things.
+
+Concrete example — /stars declares nine layers (the schema requires 3,
+the deep reference clears it):
+
+```yaml
+shader_layers:
+  - name: deep-field static canvas
+    brief: "pareto-distributed stars, five to seven nebulae, one to three
+            black holes with accretion disks … blit each frame; static
+            between resizes"
+    register: "bg+bg2"
+    order: background
+  - name: nebula pass
+    brief: "three to five wisps per nebula, each with its own offset,
+            rotation, squashY and seeded noise phase; softens toward the
+            finger"
+    register: "accent+accent2"
+    order: midground
+  - name: black-hole accretion + lensing pass
+    brief: "hot inner rim moving with mass and zoom, an infalling-mote
+            cloud dilating to a stop at the horizon, a lensing halo
+            displacing starlight in a real geometric warp"
+    register: "glow+accent2"
+    order: midground
+  # …six more, ending with…
+  - name: constellation + lens overlay
+    brief: "hairline strokes for pending shapes, lens rung notation at
+            rungs 1 (MK chromaticity) and 2 (geodesic net), well gather
+            ring, sky-pulse ribbon"
+    register: "ink+glow"
+    order: overlay
+```
+
+A room with fewer than three shader layers is a slideshow.
+
+### Multi-population — `life.population.objects` at ≥ 2
+
+Phase 7 does NOT tighten the schema's `minItems` on `objects` (that
+would break every single-population spec). Instead it adds a
+`life.population.depth_note` field where a spec argues why THIS
+population count (1, 2, 3, 5) is honest — /stars answers "three: the
+sky-born stars, the user's black holes, and the user's condensed
+worlds"; /spring answers "one: every other lens is a reading OFF the
+seeps rather than an object of its own." When a spec's `depth_note`
+argues for ≥ 2 populations, `test:room-depth` (Track C) checks that
+the room actually implements them.
+
+### `discoverables` — the rewards a patient hand finds
+
+An array of at least three `{ trigger, response, register? }` items.
+NOT the room's visible grammar (which lives in `guide.moves`); these
+are what `guide.finds` already gestures at, structured — the rewards
+a visitor collects when the room's laws lock into themselves.
+
+/stars: the merger chirp, the double-tap world condensation, the
+horizon that keeps swelling past ceremony, the constellation loop
+closing, the lens rung raising through curvature, the pinch handoff
+at the band edges, the idle event on the layer seed.
+
+/molecules: the water-from-hydrogen-and-oxygen equation firing with
+its true stoichiometry, the endothermic N₂ + O₂ indraw, the CO₂
+warm-tell, water-finds-water, the mass-scaled kick response, the
+structural-formula lens.
+
+AGENTS.md's "lower friction to the next reward" law depends on there
+being a next reward — density requires at least three.
+
+### `state_machine` — distinct modes of the material
+
+`{ states: [{name, description, visible_change?}], transitions:
+[{from, to, trigger}] }`. `states` requires at least two.
+
+Concrete example — /geyser declares four states (calm → charging →
+eruption → cooling); /stars declares ten (four zoom layers × three
+lens rungs × night × dilated × forgetting); /planets declares six
+(day, night, dilated, lens/twelve-spoke, merge-in-flight, scattering);
+/coin declares six (day, night, dilated, entrained, blessed,
+hue/season). A room with a single state is a slideshow.
+
+`from: "*"` means "from any state" — used for transitions that fire
+on a vessel event or a ceremony hold regardless of the current mode.
+
+### Why phase 7 exists
+
+The phase-6 recompile of `/spring`, `/geyser`, `/pebble`, `/reef`,
+`/root`, `/marsh` produced rooms that passed `test:room-contract`,
+`test:paint`, `test:room-quality` and the phase-6 heuristic-tightening
+checks — but a walkthrough named a felt gap the tests could not see:
+one population, one shader layer, no discoverables, one state. The
+phase-7 blocks make that gap CAPTURABLE in the schema itself. The
+retrieval anchors (`examples/{stars,planets,coin,molecules}.yaml`)
+teach a compiler-driven run what a room clearing the density bar
+actually declares across all four axes.
 
 ## What the schema does not capture (the three LLM slots)
 

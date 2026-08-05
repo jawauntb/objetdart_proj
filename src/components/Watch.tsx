@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import { attachGestures } from "@/lib/gesture";
-import { THRESHOLDS } from "@/lib/gesture/core";
+import { THRESHOLDS, tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import * as haptics from "@/lib/haptics";
@@ -380,12 +380,76 @@ export default function Watch() {
           haptics.roll();
           tape("candle", 0.9, "watch:relight");
           addWatchMark("relit", "ember", 0.92);
-        } else {
-          audio.spark();
-          haptics.ripple(0.25 + intensity * 0.4);
-          tape("candle", 0.6 + intensity * 0.4, "watch");
-          addWatchMark("flame", "ember", 0.7);
+          return;
         }
+        // rapid taps on the living flame climb the train (1 / 3 / 5 / n):
+        // a spark, a leap, the room catching the light, a roaring wick
+        const tier = tapTrainTier(count);
+        const flameBase = g.candle.y - g.candle.h - 11;
+        const throwRing = (n: number, speed: number) => {
+          for (let i = 0; i < n; i++) {
+            const a = (i / n) * Math.PI * 2;
+            sparks.current.push({
+              x: g.candle.x + (Math.random() - 0.5) * 5,
+              y: flameBase - 6,
+              vx: Math.cos(a) * speed * (0.7 + Math.random() * 0.5),
+              vy: Math.sin(a) * speed * 0.5 - 40 - Math.random() * 30,
+              life: 0.7 + Math.random() * 0.6,
+              maxLife: 1.0,
+            });
+          }
+          if (sparks.current.length > 44) sparks.current.splice(0, sparks.current.length - 44);
+        };
+        if (tier === "n") {
+          // n (≥7) — crescendo: the wick roars, sparks fountain harder with
+          // every tap, and the whole room's little lights flare with it
+          candleState.current.flameScale = Math.min(1.7, 1.3 + (count - 7) * 0.08 + intensity * 0.15);
+          throwRing(Math.min(14, 8 + (count - 7) * 2), 90 + count * 8);
+          lit.current.candle = 1; lit.current.window = 1;
+          audio.spark();
+          try { audio.playNote(64 + (count - 7) * 2, 90 + Math.round(intensity * 90)); } catch { /* ignore */ }
+          haptics.roll();
+          tape("candle", Math.min(1, 0.6 + (count - 7) * 0.08), "watch:roar");
+          addWatchMark("roar", "ember", Math.min(1, 0.7 + (count - 7) * 0.06));
+          return;
+        }
+        if (tier >= 5) {
+          // 5 — the room catches the light: every instrument answers the
+          // flame in turn, an arpeggio walking the table. The sixth tap
+          // deepens the glow without restriking the phrase.
+          lit.current.clock = 1; lit.current.music = 1; lit.current.record = 1;
+          lit.current.book = 1; lit.current.window = 1; lit.current.frame = 1;
+          if (count === 5) {
+            [62, 66, 69, 74].forEach((midi, i) => {
+              window.setTimeout(() => {
+                try { audio.playNote(midi, 140); } catch { /* ignore */ }
+              }, i * 90);
+            });
+            throwRing(8, 70);
+            haptics.bloom();
+            tape("region", 0.75, "watch:caught-light");
+            addWatchMark("caught", "ember", 0.88);
+          } else {
+            try { audio.playNote(74, 160); } catch { /* ignore */ }
+            haptics.ripple(0.5);
+          }
+          return;
+        }
+        if (tier >= 3) {
+          // 3 — the flame leaps and throws a ring of sparks off the wick
+          candleState.current.flameScale = Math.min(1.5, 1.15 + intensity * 0.25);
+          throwRing(6, 60 + intensity * 40);
+          audio.spark();
+          try { audio.playNote(69, 120); } catch { /* ignore */ }
+          haptics.chop();
+          tape("candle", 0.65 + intensity * 0.25, "watch:leap");
+          addWatchMark("leap", "ember", 0.78);
+          return;
+        }
+        audio.spark();
+        haptics.ripple(0.25 + intensity * 0.4);
+        tape("candle", 0.6 + intensity * 0.4, "watch");
+        addWatchMark("flame", "ember", 0.7);
         return;
       }
 
@@ -613,18 +677,36 @@ export default function Watch() {
     let holdVigil = false;
     let lastGustCueAt = 0;
     let lastCrownAt = 0;
+    let lastSeasonCueAt = 0;
 
     let lensTwistAcc = 0;
     const detachGestures = attachGestures(cv, {
       tap: (e) => {
         law.current.lastGestureAt = performance.now();
         if (e.fingers === 3) {
-          // tutti — every lit object answers at once.
+          // tutti — every lit object answers at once, as loud as the hand
+          // meant it: a soft chord at a graze, sparks off the wick at a slap
           lit.current.candle = 1; lit.current.clock = 1; lit.current.music = 1;
           lit.current.record = 1; lit.current.window = 1; lit.current.book = 1;
           try { getFieldAudio().chime(); } catch { /* ignore */ }
+          if (!reduce && candleState.current.alive > 0.5 && e.intensity > 0.5) {
+            const g = geometry();
+            const flameBase = g.candle.y - g.candle.h - 16;
+            const burst = 2 + Math.round(e.intensity * 4);
+            for (let i = 0; i < burst; i++) {
+              sparks.current.push({
+                x: g.candle.x + (Math.random() - 0.5) * 8,
+                y: flameBase,
+                vx: (Math.random() - 0.5) * 60,
+                vy: -30 - Math.random() * 40,
+                life: 0.7 + Math.random() * 0.6,
+                maxLife: 1.0,
+              });
+            }
+            if (sparks.current.length > 44) sparks.current.splice(0, sparks.current.length - 44);
+          }
           try { haptics.bloom(); } catch { /* ignore */ }
-          useField.getState().recordTape("region", 0.6, "watch:tutti");
+          useField.getState().recordTape("region", 0.4 + e.intensity * 0.4, "watch:tutti");
           return;
         }
         if (e.fingers === 2) {
@@ -634,7 +716,14 @@ export default function Watch() {
             lensRef.current.target = 0;
             cv.removeAttribute("data-lens-raised");
             try { haptics.tap(); } catch { /* ignore */ }
+            return;
           }
+          // lens already home: the frame itself comes back to center —
+          // never silence, the room settles under the two-finger touch
+          panRef.current.tx = 0;
+          panRef.current.ty = 0;
+          try { oneShotChime(getFieldAudio(), 760, 940, 0.1); } catch { /* ignore */ }
+          try { haptics.tap(); } catch { /* ignore */ }
           return;
         }
         if (e.fingers !== 1) return; // the room absorbs frame/law taps
@@ -648,8 +737,19 @@ export default function Watch() {
       twist: (e) => {
         law.current.lastGestureAt = performance.now();
         if (e.fingers === 3) {
-          // three-finger twist = season: a slow warm/cool drift.
-          if (e.phase === "move") seasonRef.current += e.angle * 0.7;
+          // three-finger twist = season: a slow warm/cool drift — answered
+          // in sound and touch as it turns, faster wrists ringing warmer
+          if (e.phase === "move") {
+            seasonRef.current += e.angle * 0.7;
+            const nowMs = performance.now();
+            if (Math.abs(e.velocity) > 0.2 && nowMs - lastSeasonCueAt > 600) {
+              lastSeasonCueAt = nowMs;
+              const warm = Math.sin(seasonRef.current) * 0.5 + 0.5;
+              try { getFieldAudio().playNote(44 + Math.round(warm * 12), 220); } catch { /* ignore */ }
+              try { haptics.tap(); } catch { /* ignore */ }
+              useField.getState().recordTape("region", 0.3 + warm * 0.3, "watch:season");
+            }
+          }
           return;
         }
         if (e.phase === "start") lensTwistAcc = 0;
@@ -792,13 +892,18 @@ export default function Watch() {
         law.current.lastGestureAt = performance.now();
         if (e.fingers === 3) {
           // three fingers hold the law: the room about time slows its own —
-          // clock, pendulum, day and flame ease to a quarter speed
+          // clock, pendulum, day and flame ease toward stillness, and keep
+          // easing the longer the hand stays. 900ms and 2400ms are
+          // different depths of the same held hush.
           if (e.phase === "enter") {
-            law.current.timeScaleTarget = 0.25;
             try { getFieldAudio().playNote(36, 260); } catch { /* ignore */ }
             try { haptics.tap(); } catch { /* ignore */ }
           }
-          if (e.phase === "release") law.current.timeScaleTarget = 1;
+          if (e.phase === "release") { law.current.timeScaleTarget = 1; return; }
+          law.current.timeScaleTarget = Math.max(
+            0.08,
+            1 - 0.75 * Math.min(1, e.elapsed / 2000) - 0.17 * Math.min(1, Math.max(0, (e.elapsed - 2500) / 3500)),
+          );
           return;
         }
         if (e.fingers !== 1) return;

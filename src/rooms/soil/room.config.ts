@@ -42,6 +42,8 @@ const soil = {
       "one nutrient ledger held in five pools — litter, humus, mineral, mycelium, root — where litter rots to humus, humus mineralizes, and the roots and fungi standing in the section are two of those pools rather than things drawn on top of them.",
     moves: [
       "tap the ground → lifts a handful at that depth and sounds it; the surface and the floor are different soils, and hear different",
+      "rapid taps (1 / 3 / 5 / n) → a handful → the worms turn the litter down → a shower wets the surface → the whole section drums at full voice",
+      "a steady tap tempo → the ground's turning entrains to your pulse: a quick patter composts faster, a slow one lets the year idle",
       "tap a root or a fungus → sounds that life alone, its mass its pitch",
       "hold (dwell) → presses litter down into humus, deeper the longer it is held",
       "hold to the ceremony tier → plants a life where the finger is: up in the litter it is a fungus, down in the mineral a root. its body is taken out of the litter lying there, so a spent surface refuses",
@@ -49,7 +51,7 @@ const soil = {
       "flick → throws whatever the hand had hold of; over bare ground it throws a clod instead",
       "drag → rakes the ground, stirring the layering flat and setting the grains chattering",
       "scrub → turns the compost; the pile answers an octave down",
-      "drum (two hands alternating) → sifts the section: the grit rings, the fines fall through",
+      "drum (two hands alternating) → sifts the section: the grit rings, the fines fall through to mineral — more of them the stricter and longer the patter",
       "three-finger drag → the weather: across is warmth, down is rain",
       "three-finger twist → turns the year through thaw, high summer, fall, frost — and the soil ages by the span it names",
       "three-finger hold → slows the room's clock while held",

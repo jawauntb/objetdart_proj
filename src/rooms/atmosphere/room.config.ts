@@ -49,8 +49,11 @@ const atmosphere = {
       "three-finger twist → the season: how much water this air carries, so every cloud base moves at once",
       "twist → raises the lens: isobars crowding toward the ground, the tropopause, the wind profile, the temperature and dew-point curves",
       "scrub → winds a vortex; the cloud it finds turns on its own axis",
-      "drumming → gusts the air between the two places the hands alternate over",
-      "three-finger tap → tutti: every cloud and lantern answers at once",
+      "drumming → gusts the layer under each landing, harder as the patter lengthens — a ring seen, the layer's own pressure heard",
+      "tap a steady tempo → the thermals take the hand's pulse: every beat lifts the clouds together while the tempo holds",
+      "two fingers rested → a lid held by hand: the air between the fingertips steadies, climbing parcels flatten under it, and both levels sound as one held interval — letting go frees the band to convect again",
+      "two-finger tap → the frame steps back: a raised lens lowers, or the stirred column settles and the haze thins",
+      "three-finger tap → tutti: every cloud and lantern answers at once, ground and tropopause sounding together",
       "three-finger hold → time dilation while held",
       "tilt / shake / knock / face-down (once invited) → the vessel is wind; a shake gusts and tears, a knock rings the column from the ground up, face-down is night",
       "keyboard → enter (held) lifts and warms a parcel, backspace tears the last one, arrows walk the sun and the lapse rate, [ and ] turn the season, escape lowers the lens",
@@ -123,6 +126,12 @@ const atmosphere = {
       ceremony_is:
         "gives a candle to the wind as a lantern — one addNatural into the shared 'sky' zone, kept between visits on the layer's own wind",
     },
+    // The column's sky is one continuous exponential wash (breath-modulated,
+    // never a hard specular cut), so edge_density sits at 3.5% against the
+    // 6% floor even though hue_diversity (15), luminance_range (230),
+    // spatial_entropy (7.3) and file_size_floor all clear theirs by a wide
+    // margin — see phase-9-pebble-and-threshold.md.
+    visual: { soft_glow: true },
   },
 } as const satisfies RoomManifest;
 

@@ -10,7 +10,7 @@ import {
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
-import { THRESHOLDS } from "@/lib/gesture/core";
+import { THRESHOLDS, tapTrainTier } from "@/lib/gesture/core";
 import { onVessel, requestVessel, vesselAvailable } from "@/lib/vessel";
 import { shouldInvite } from "@/lib/candle";
 import { useField } from "@/store/field";
@@ -929,7 +929,17 @@ export default function DropSphere() {
         const rg = cx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
         for (const [off, color] of stops) rg.addColorStop(off, color);
         cx.fillStyle = rg;
-        cx.fillRect(0, 0, size, size);
+        // Fill the disc the gradient actually describes, never the sprite's
+        // bounding box. A radial gradient continues past its outer radius
+        // with the LAST stop's colour, so a fillRect here hands every corner
+        // outside that circle a flat wash of it — and a sprite whose rim is
+        // its brightest stop then paints its own square. That is exactly
+        // what put two hard-edged boxes around every bead: the fresnel rim
+        // (0.28 alpha at offset 1, drawn at 2r) and the wet halo (0.12 at
+        // offset 1, drawn at 2.5r), nested and clipping the drop.
+        cx.beginPath();
+        cx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
+        cx.fill();
       }
       return c;
     };
@@ -937,10 +947,15 @@ export default function DropSphere() {
       [0, "rgba(120,220,235,0.18)"],
       [1, "rgba(120,220,235,0)"],
     ]);
+    // Wetness dissipates into the water — it peaks just outside the bead and
+    // is gone by the sprite's rim. Ending on its brightest stop instead left
+    // a faint hard ring at the disc's edge (and, before the clip above, a
+    // flat wash over the whole sprite box).
     const wetHaloSprite = makeRadialSprite(64, [
       [0, "rgba(70,150,180,0)"],
       [0.68, "rgba(70,150,180,0)"],
-      [1, "rgba(70,150,180,0.12)"],
+      [0.86, "rgba(70,150,180,0.12)"],
+      [1, "rgba(70,150,180,0)"],
     ]);
     const fresnelSprite = makeRadialSprite(64, [
       [0, "rgba(90,190,220,0)"],
@@ -1498,6 +1513,7 @@ export default function DropSphere() {
       return { x: clientX - rect.left, y: clientY - rect.top };
     };
     const holdCtx = { stilled: false };
+    const spanCtx = { drop: -1, lastFxAt: 0 };
     let lastSwirlFxAt = 0;
     let lastScrubAt = 0;
     // twist rotates the lens (grammar §5): dark-field microscope reading
@@ -1562,7 +1578,45 @@ export default function DropSphere() {
         if (e.fingers !== 1) return; // two fingers: the frame's own verbs
         const { x: px, y: py } = toLocal(e.x, e.y);
         const hit = hitDrop(px, py);
-        if (e.count >= 2 && hit !== -1) {
+        // the rapid-tap ladder (1 / 3 / 5 / n), in water: 2 bounces the bead,
+        // 3 rings every harmonic at once, 5 patters a droplet clean off,
+        // n keeps the whole cluster leaping higher with every extra tap
+        const tier = tapTrainTier(e.count);
+        if (tier === "n" && dropsRef.current.length > 0) {
+          const crest = clamp(0.4 + (e.count - 7) * 0.12 + e.intensity * 0.3, 0.4, 1);
+          for (const d of dropsRef.current) {
+            d.vy -= (reduceRef.current ? 120 : 260) * crest;
+            d.vx += rand(-40, 40) * crest;
+            poke(d, rand(0, TAU), 0.06 + 0.08 * crest);
+            for (const m of d.mic) m.dart = Math.max(m.dart, 0.6 * crest);
+          }
+          try { audioRef.current?.gloop(); } catch { /* noop */ }
+          try { audioRef.current?.ripple(clamp(0.5 + crest * 0.4, 0.5, 0.95)); } catch { /* noop */ }
+          try { haptics.roll(); } catch { /* noop */ }
+          recordTape("object", clamp(0.6 + crest * 0.35, 0.6, 0.95), "drop/leap");
+          return;
+        }
+        if (tier === 5 && e.count === 5 && hit !== -1) {
+          // five quick taps patter a droplet off the struck bead — the same
+          // necking a hard yank earns, reached by rhythm instead of force
+          const dd = dropsRef.current[hit];
+          const ang = Math.atan2(py - dd.y, px - dd.x);
+          flickOff(dd, ang, 260 + e.intensity * 300);
+          return;
+        }
+        if (tier === 3 && e.count === 3 && hit !== -1) {
+          // three taps strike the bead's whole chord: every harmonic mode
+          // rings at once and the life inside startles with the jelly
+          const dd = dropsRef.current[hit];
+          for (const m of dd.modes) m.v += (m.k % 2 === 0 ? 1 : -1) * (4 + e.intensity * 7);
+          for (const m of dd.mic) m.dart = Math.max(m.dart, 0.7);
+          try { audioRef.current?.gloop(); } catch { /* noop */ }
+          try { audioRef.current?.drip(0.5 + e.intensity * 0.4); } catch { /* noop */ }
+          try { haptics.ripple(0.5 + e.intensity * 0.3); } catch { /* noop */ }
+          recordTape("object", 0.7, "drop/chord");
+          return;
+        }
+        if (e.count === 2 && hit !== -1) {
           bounceDrop(dropsRef.current[hit]);
           return;
         }
@@ -1580,14 +1634,18 @@ export default function DropSphere() {
       hold: (e) => {
         lastGestureAt = performance.now();
         if (e.fingers === 3) {
-          // three fingers hold the law: the droplet world slows to ~1/4
+          // three fingers hold the law: dilation is a continuous axis, not a
+          // switch — the droplet world keeps slowing the longer it is held,
+          // easing toward ~1/8 speed and never the same at 900ms as at 2400ms
           if (e.phase === "enter") {
             ensureAudio();
-            timeScaleTarget = 0.25;
+            timeScaleTarget = 0.6;
             try { audioRef.current?.gloop(); } catch { /* noop */ }
             try { haptics.tap(); } catch { /* noop */ }
+            return;
           }
-          if (e.phase === "release") timeScaleTarget = 1;
+          if (e.phase === "release") { timeScaleTarget = 1; return; }
+          timeScaleTarget = clamp(1 - 0.875 * (e.elapsed / (e.elapsed + 1400)) * 1.6, 0.125, 0.6);
           return;
         }
         if (e.fingers !== 1) return;
@@ -1629,6 +1687,16 @@ export default function DropSphere() {
             try { audioRef.current?.gloop(); } catch { /* noop */ }
             try { haptics.bloom(); } catch { /* noop */ }
             recordTape("object", 0.9, "drop/still");
+          }
+        } else if (holdCtx.stilled) {
+          // the calm keeps deepening past the ceremony: the longer the palm
+          // stays, the further the life inside settles toward sleep
+          const drop = dr.drop !== -1
+            ? dropsRef.current.find((o) => o.id === dr.drop)
+            : undefined;
+          if (drop) {
+            for (const m of drop.modes) { m.a *= 0.96; m.v *= 0.9; }
+            for (const m of drop.mic) m.dart = Math.max(0, m.dart - 0.05);
           }
         }
       },
@@ -1820,6 +1888,66 @@ export default function DropSphere() {
         try { audioRef.current?.drip(0.6); } catch { /* noop */ }
         try { haptics.ripple(0.4); } catch { /* noop */ }
         recordTape("ripple", 0.6, "drop/stir");
+      },
+      span: (e) => {
+        // the sustained interval: two still fingers hold a bead between them
+        // like a film of surface tension. The bead is drawn to the midpoint
+        // and stretched along the axis — an ellipse whose reach rides the
+        // spread and keeps deepening with elapsed — and lets go with a snap
+        // that answers how long it was carried.
+        lastGestureAt = performance.now();
+        const { x: mx, y: my } = toLocal(e.cx, e.cy);
+        if (e.phase === "enter") {
+          ensureAudio();
+          const hit = hitDrop(mx, my);
+          const near = hit !== -1
+            ? dropsRef.current[hit]
+            : dropsRef.current.reduce<Drop | null>((best, d) => {
+                const dist = Math.hypot(d.x - mx, d.y - my);
+                return !best || dist < Math.hypot(best.x - mx, best.y - my) ? d : best;
+              }, null);
+          spanCtx.drop = near ? near.id : -1;
+          if (near) {
+            try { audioRef.current?.drip(0.3); } catch { /* noop */ }
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+          return;
+        }
+        const held = spanCtx.drop !== -1
+          ? dropsRef.current.find((o) => o.id === spanCtx.drop)
+          : undefined;
+        if (!held) return;
+        if (e.phase === "release") {
+          spanCtx.drop = -1;
+          // the film lets go: the bead snaps back the harder the longer held
+          const snap = clamp(0.06 + (e.elapsed / (e.elapsed + 2600)) * 0.16, 0.06, 0.2);
+          const axis = Math.atan2(e.by - e.ay, e.bx - e.ax);
+          poke(held, axis, snap);
+          poke(held, axis + Math.PI, snap);
+          try { audioRef.current?.gloop(); } catch { /* noop */ }
+          try { haptics.ripple(0.3 + snap * 2); } catch { /* noop */ }
+          recordTape("object", 0.5 + snap * 2, "drop/span");
+          return;
+        }
+        // tick: draw the bead toward the midpoint, and lean its surface into
+        // an ellipse along the finger axis — deeper the longer it is held
+        const depth = e.elapsed / (e.elapsed + 3000);
+        held.vx += (mx - held.x) * 0.9 * depth;
+        held.vy += (my - held.y) * 0.9 * depth;
+        const axis = Math.atan2(e.by - e.ay, e.bx - e.ax);
+        const reach = clamp(e.spread / Math.max(1, held.r * 2), 0.4, 1.6);
+        for (const m of held.modes) {
+          if (m.k !== 2) continue;
+          m.a = mix(m.a, 0.1 * depth * reach * Math.cos(2 * axis), 0.12);
+          m.v *= 0.9;
+        }
+        const nowMs = performance.now();
+        if (nowMs - spanCtx.lastFxAt > 900) {
+          spanCtx.lastFxAt = nowMs;
+          for (const m of held.mic) m.heading = axis + (m.seed % 2 ? 0 : Math.PI);
+          try { audioRef.current?.ripple(0.15 + depth * 0.3); } catch { /* noop */ }
+          try { haptics.tap(); } catch { /* noop */ }
+        }
       },
       rhythm: (e) => {
         // a steady tapped pulse: the beads' buoyant breathing falls in

@@ -55,28 +55,52 @@ retrieval bank by *description of where to look*, not by hard-coded content —
 the compiler resolves the reference at call time so that a room landing later
 this week can appear as an example next week without editing any prompt.
 
-## Design context: `visual_style`
+## Design context: `authoring_style` + `visual_style`
 
-The M2 schema carries an optional **`visual_style`** block (composition,
-subject, form language, motion character, palette registers by function,
-reference notes, banned forms, mood, gesture-feedback style — see
-`object-compiler/schema/room-spec.schema.yaml`). It is not per-room brief; it
-is the design vocabulary that `shader_intent` (and, where useful, other
-briefs) speaks *inside*.
+The design context every slot prompt speaks inside is split across two
+files as of phases 4–6 (see the audits under
+`data/object-compiler/audits/`):
 
-**`slot-shader.md` consumes it** via a `{{visual_style}}` substitution — the
-shader slot reads the block field by field before it reads the room-specific
-brief, so the two land as one full brief on the LLM. Older specs that pre-date
-`visual_style` still compile: when the block is absent, the substitution is
-empty and the prompt tells the model to skip that section and go straight to
-the brief.
+- **`object-compiler/design/authoring_style.yaml`** — the CROSS-ROOM
+  vocabulary the whole site shares: palette tokens, the six framings,
+  the canonical palette-role → what-it-paints register map, the
+  AGENTS.md paint bar (`banned_forms`), the form-language taxonomy,
+  the shared clocks, and the default gesture-feedback vocabulary.
+  Threaded into every slot prompt as `{{authoring_style}}`.
+- **`visual_style`** inside each `spec.yaml` — the per-room
+  refinements over that shared vocabulary: `subject`, `form_language`,
+  `motion_character`, `reference_notes`, `mood`,
+  `gesture_feedback_style`. Six fields, all pictorial, all recover
+  reliably from a landed screenshot (phase-5 rerun, 0.92 avg
+  agreement). Threaded into slot prompts as `{{visual_style}}`.
 
-The other slot prompts (`slot-domain.md`, `slot-verbs.md`, `slot-pins.md`) do
-not consume `visual_style` — the block is about how the room looks and moves,
-which is the shader's domain. If a future slot wants a piece of it (for
-example, `slot-verbs.md` reading `gesture_feedback_style` to keep tap answers
-consistent across rooms), add a matching `{{visual_style}}` reference to that
-prompt and a matching substitution key in `compile-room.py::_call_slot_prompt`.
+**`slot-shader.md` consumes both** — the shared artifact FIRST as the
+design law, then the per-room block as room-specific refinements —
+so the two land as one full brief on the LLM. Older specs that
+pre-date `visual_style` still compile: when the block is absent, the
+substitution is empty and the prompt tells the model to skip that
+section and go straight to the brief.
+
+The other slot prompts (`slot-domain.md`, `slot-verbs.md`,
+`slot-pins.md`) do not consume `visual_style` — the block is about
+how the room looks and moves, which is the shader's domain. If a
+future slot wants a piece of it (for example, `slot-verbs.md`
+reading `gesture_feedback_style` to keep tap answers consistent
+across rooms), add a matching `{{visual_style}}` reference to that
+prompt and a matching substitution key in
+`compile-room.py::_call_slot_prompt`.
+
+### Migration note — the three fields removed in phase 6
+
+Earlier revisions of the schema carried `composition`, `registers`,
+and `banned_forms` inside the per-room `visual_style` block. Phase 2's
+falsifiability audit landed them at 0.42, 0.50, and 0.50 agreement
+respectively — they encode DECISIONS the site makes once, not
+observations about a single room. Phase 4 moved them into
+`authoring_style.yaml`; phase 5 confirmed the split held (0.92 avg on
+the surviving six fields); phase 6 removed the deprecated properties
+entirely. Old specs that still declare them will fail validation.
+See `data/object-compiler/audits/phase-6-schema-cleanup.md`.
 
 ## Prompt style — the voice this repo speaks
 

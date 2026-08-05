@@ -22,6 +22,7 @@ import * as haptics from "@/lib/haptics";
 import { getTurbulence, relaxTurbulence, stirTurbulence } from "@/lib/turbulence";
 import RoomShell from "@/components/RoomShell";
 import type { RoomVoice } from "@/lib/gesture/defaults";
+import { tapTrainTier } from "@/lib/gesture/core";
 import { createGLStage, FULLSCREEN_VERT_UNIT } from "@/lib/webgl/stage";
 import { clocksFrom } from "@/lib/webgl/sizing";
 import {
@@ -95,11 +96,123 @@ const clamp01 = (v: number) => clamp(v, 0, 1);
  * `createPopulation` + `createPopulationLayer` can draw every polyp in
  * one instanced pass.
  */
-type PolypView = SceneObjectState & {
+/**
+ * Two polyp views over the shared coralflow ledger. cornerstoneView reads
+ * sealed polyps; recruitView reads unsealed. Splitting the population into
+ * two specs (phase 9 rewrite) is what lets the eye read the colony's frame
+ * off shape difference — a mature branching cornerstone vs a young disc —
+ * instead of one flat SDF disc for every polyp (the phase-5 stub).
+ */
+type CornerstoneView = SceneObjectState & {
   sizeVal: number;
-  sealed: boolean;
   phase: number;
 };
+type RecruitView = SceneObjectState & {
+  sizeVal: number;
+  phase: number;
+};
+
+/**
+ * The population-layer fragment shader, room-specialized for the reef's
+ * two-tier polyp system. Uses the phase-8 `PopulationLayerOptions.frag`
+ * escape hatch added by /tidepool's rewrite (src/lib/scene/population-layer.ts).
+ *
+ * Shape selection rides `vPhase`'s integer part:
+ *   SHAPE_CORNERSTONE = 0 + breathPhase(0..1)   — branching mature coral
+ *   SHAPE_RECRUIT     = 1 + breathPhase(0..1)   — small disc with corona
+ *
+ * `vGlow` carries the polyp's live size (0..1.6 to accommodate the corona
+ * brightness overrun the ledger allows). `vHue` is a per-tier bias into the
+ * shared palette (u_palA teal, u_palB coral-orange, u_palC pale gold). The
+ * two-tier shape difference is what makes an object screenshot instantly
+ * legible: a cornerstone is a decade of anchor, a recruit is a season.
+ */
+const POPULATION_FRAG = `precision mediump float;
+varying vec2 vLocal;
+varying float vHue;
+varying float vGlow;
+varying float vPhase;
+varying float vAlpha;
+uniform vec3 u_palA;
+uniform vec3 u_palB;
+uniform vec3 u_palC;
+
+vec3 pickPalette(float h) {
+  h = clamp(h, 0.0, 1.0);
+  return h < 0.5 ? mix(u_palA, u_palB, h * 2.0) : mix(u_palB, u_palC, (h - 0.5) * 2.0);
+}
+
+// Cornerstone — a mature branching coral head. Bright central bulb (the
+// polyp mouth), six radial tapered tines with small branching nubs, plus a
+// soft additive corona. sizeParam (from vGlow) drives the branch reach and
+// the corona brightness — a sealed polyp with full size reads unambiguously
+// as a decade of anchor, and inverting the corona still recovers its size.
+float sdfCornerstone(vec2 p, float sizeParam, float breathPulse) {
+  float r = length(p);
+  if (r > 1.85) return 0.0;
+  float theta = atan(p.y, p.x);
+  // Central bulb — always bright
+  float bulbR = 0.36 + breathPulse * 0.05;
+  float bulb = smoothstep(bulbR, bulbR * 0.42, r);
+  // 6 tapering tines radiating outward
+  const float N = 6.0;
+  float sector = 6.2832 / N;
+  float phaseA = mod(theta + 6.2832 + sector * 0.5, sector) - sector * 0.5;
+  float alongTine = smoothstep(1.55, 0.25, r);
+  float taperedWidth = mix(0.34, 0.09, r / 1.6);
+  float crossTine = 1.0 - smoothstep(taperedWidth * 0.65, taperedWidth * 1.5, abs(phaseA) * (r + 0.2));
+  float tines = alongTine * crossTine;
+  // Two branching nubs on each tine — small brighter clusters at 40% / 75%
+  float nub1 = exp(-pow((r - 0.65) * 9.0, 2.0)) * exp(-pow(phaseA * 6.0, 2.0));
+  float nub2 = exp(-pow((r - 1.10) * 9.0, 2.0)) * exp(-pow(phaseA * 6.0, 2.0));
+  float branches = (nub1 + nub2) * 0.42;
+  // Additive outer corona — feathered glow scaling with size
+  float corona = exp(-r * r * 0.75) * 0.32 * sizeParam;
+  return clamp(bulb + tines * (0.62 + 0.35 * sizeParam) + branches + corona, 0.0, 1.0);
+}
+
+// Recruit — a small bright disc with a soft additive corona. Reads as a
+// juvenile polyp still climbing its logistic; brightness is the size, so
+// two recruits ringing the same note are the same age, and the corona
+// inverts to recover it.
+float sdfRecruit(vec2 p, float sizeParam, float breathPulse) {
+  float r = length(p);
+  if (r > 1.5) return 0.0;
+  float discR = 0.38 + sizeParam * 0.14 + breathPulse * 0.045;
+  // Sharper disc edge (smoothstep between the disc radius and 82% of it)
+  // reads as a real polyp silhouette instead of a soft glow blob.
+  float disc = smoothstep(discR, discR * 0.82, r);
+  // A crisp rim around the disc — a young polyp has a real edge to its
+  // body, and the corona is the soft glow around it.
+  float rim = exp(-pow((r - discR * 0.9) * 24.0, 2.0)) * (0.35 + sizeParam * 0.4);
+  float corona = exp(-r * r * 2.4) * (0.24 + sizeParam * 0.50);
+  return clamp(disc * 0.90 + rim + corona, 0.0, 1.0);
+}
+
+void main() {
+  float shapeF = floor(vPhase + 0.001);
+  float subPhase = fract(vPhase);
+  float breathPulse = 0.5 + 0.5 * sin(subPhase * 6.2832);
+  float a = 0.0;
+  vec3 c;
+  if (shapeF < 0.5) {
+    // cornerstone — warm mature tissue, brighter than a recruit
+    float sizeParam = clamp(vGlow, 0.0, 1.6);
+    a = sdfCornerstone(vLocal, sizeParam, breathPulse);
+    c = pickPalette(vHue) * (0.82 + 0.55 * (1.0 - length(vLocal) * 0.35));
+    // Sealed cornerstones carry a bright inner rim toward u_palC (glow)
+    c += u_palC * 0.30 * clamp(1.0 - length(vLocal) * 0.75, 0.0, 1.0);
+  } else {
+    // recruit — small young polyp, brightness = its live size
+    float sizeParam = clamp(vGlow, 0.0, 1.6);
+    a = sdfRecruit(vLocal, sizeParam, breathPulse);
+    c = pickPalette(vHue) * (0.68 + 0.40 * (1.0 - length(vLocal) * 0.4));
+  }
+  a *= vAlpha;
+  if (a <= 0.003) discard;
+  gl_FragColor = vec4(c * a, a);
+}
+`;
 
 type StoredReef = {
   v: 1;
@@ -140,22 +253,30 @@ uniform float uNight;
 uniform float uStir;
 uniform float uLens;
 
-// The palette — six registers, set once from the manifest.
-const vec3 BG      = vec3(0.008, 0.031, 0.078); // deep water dark
-const vec3 BG2     = vec3(0.039, 0.141, 0.196); // mid-water column
-const vec3 GLOW    = vec3(0.918, 0.659, 0.478); // sunlit coral tissue
-const vec3 ACCENT  = vec3(0.306, 0.663, 0.635); // cool turquoise current
-const vec3 ACCENT2 = vec3(0.761, 0.416, 0.322); // mature coral / mineral rust
+// Phase 9 palette — three distinct registers so the frame reads as a real
+// reef in section: bright warm surface, cool teal column, warm coral floor.
+// Contrast between BG (deep blue) and BG2 (calcite rust) is what pushes the
+// screenshot across the visual-density floor test-room-visual measures.
+const vec3 BG      = vec3(0.039, 0.114, 0.165);  // #0a1d2a deep-sea dark blue
+const vec3 BG2     = vec3(0.290, 0.157, 0.094);  // #4a2818 warm coral substrate
+const vec3 GLOW    = vec3(0.957, 0.902, 0.659);  // #f4e6a8 bright pale gold
+const vec3 ACCENT  = vec3(0.239, 0.620, 0.761);  // #3d9ec2 bright teal water
+const vec3 ACCENT2 = vec3(0.878, 0.412, 0.227);  // #e0693a coral bloom warm
 const vec3 INK     = vec3(0.910, 0.929, 0.898);
-const vec3 SKY     = vec3(0.482, 0.729, 0.769); // shallow-water sky through the surface
+const vec3 SKY_LOW  = vec3(0.878, 0.792, 0.647); // sky-horizon warmth just above waterline
+const vec3 SKY_HIGH = vec3(0.243, 0.435, 0.596); // upper sky, cooler
+const vec3 SILT     = vec3(0.404, 0.278, 0.176); // silt cloud (post-shake)
+const vec3 BIO      = vec3(0.353, 0.925, 0.812); // bioluminescent cyan-green
 
-const float HORIZON       = 0.06;   // the water surface sits high — the room is underwater
-const float WATERLINE_MID = 0.10;
+// The sky reads big enough to carry real Snell reflection above the water,
+// the substrate is thick enough to carry biofilm + sand ripples below.
+const float HORIZON       = 0.16;
+const float WATERLINE_MID = 0.20;
 const float POOL_XMIN     = ${POOL_X_MIN.toFixed(3)};
 const float POOL_XMAX     = ${POOL_X_MAX.toFixed(3)};
-const float SUBSTRATE_Y   = 0.94;
+const float SUBSTRATE_Y   = 0.78;
 
-// Hoskins' hash + value noise + short FBM: the room's only non-physics.
+// Hoskins' hash + value noise + FBM: the shader's only non-physics.
 float hash21(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * 0.1031);
   p3 += dot(p3, p3.yzx + 33.33);
@@ -177,123 +298,288 @@ float fbm(vec2 p) {
   for (int i = 0; i < 4; i++) { v += a * vnoise(p); p *= 2.11; a *= 0.53; }
   return v;
 }
-
-// The waterline: a wavy shallow surface at HORIZON. The current warps it
-// laterally, and the breath modulates its highlight.
-float waterlineY(float x, float t) {
-  float wave = sin(x * 9.0 + t * 0.55) * 0.006
-             + sin(x * 21.0 - t * 0.9 + uClimate.z * 3.0) * 0.003;
-  return WATERLINE_MID + wave;
+// Three-octave caustic-cell FBM — the sunlit-surface network the caustics
+// ride. Kept separate so the caustic term is a real function of position,
+// not a scalar per pixel, and reads distinct from the substrate bloom FBM.
+float causticFBM(vec2 p) {
+  float v = 0.0;
+  float a = 0.5;
+  for (int i = 0; i < 3; i++) { v += a * vnoise(p); p = p * 2.03 + vec2(1.7, 0.6); a *= 0.62; }
+  return v;
 }
 
-// The current warp: a low-frequency drift the water column carries.
-vec2 currentWarp(vec2 uv, float t) {
-  float depth = clamp((uv.y - HORIZON) / max(0.02, SUBSTRATE_Y - HORIZON), 0.0, 1.0);
-  float phase = fbm(vec2(uv.x * 2.2, uv.y * 1.6 + t * 0.04));
-  float drift = uClimate.z * 0.045 * (0.4 + depth * 0.6);
-  return vec2(drift * phase, 0.0);
+// The waterline: a wavy shallow surface at WATERLINE_MID. The current
+// warps it laterally, and the breath modulates its highlight.
+float waterlineY(float x, float t) {
+  float wave = sin(x * 8.0 + t * 0.55) * 0.007
+             + sin(x * 21.0 - t * 0.9 + uClimate.z * 3.0) * 0.004;
+  return WATERLINE_MID + wave;
 }
 
 void main() {
   vec2 uv = vec2(vUv.x, 1.0 - vUv.y);
   float aspect = uRes.x / max(1.0, uRes.y);
   float night = uNight;
+  float silty = clamp(uStir, 0.0, 1.0);
   vec3 col;
 
-  // ——— the sky above the water surface ———
-  if (uv.y < HORIZON) {
-    float k = uv.y / HORIZON;
-    vec3 airCol = mix(SKY, GLOW * 0.75, (1.0 - k) * (1.0 - uTurbulence * 0.35));
-    airCol *= 0.86 + 0.14 * uBreath;
-    col = airCol * (1.0 - night * 0.72);
-    gl_FragColor = vec4(col, 1.0);
-    return;
-  }
-
   float wl = waterlineY(uv.x, uTime);
-  vec2 warp = currentWarp(uv, uTime);
 
-  // ——— underwater column ———
-  if (uv.y < SUBSTRATE_Y) {
-    float d = clamp((uv.y - HORIZON) / max(0.02, SUBSTRATE_Y - HORIZON), 0.0, 1.0);
-    vec3 waterCol = mix(BG2, BG, d * d);
-    float illum = clamp(uClimate.w, 0.0, 1.0);
-    waterCol *= 0.55 + 0.45 * illum;
-    waterCol *= 0.86 + 0.14 * uBreath;
-    col = waterCol;
-
-    // Snell surface highlight
-    float surf = exp(-pow((uv.y - wl) * 90.0, 2.0));
-    float breath = 0.85 + 0.15 * uBreath;
-    col += SKY * surf * 0.5 * breath * illum * (1.0 - night * 0.85);
-
-    // Slow lateral shimmer — caustics from the surface wave
-    float caustic = fbm(vec2((uv.x + warp.x) * 20.0, (uv.y + warp.y) * 8.0 - uTime * 0.3));
-    col += SKY * caustic * caustic * 0.12 * (1.0 - d) * illum;
-
-    // ——— ripple wavefronts from taps and flicks (gaussian rings) ———
-    float wave = 0.0;
-    for (int i = 0; i < ${MAX_RIPPLES}; i++) {
-      if (i >= uRippleCount) break;
-      vec4 r = uRipples[i];
-      float age = r.z;
-      float rad = age * 0.32;
-      vec2 dp = (uv - r.xy) * vec2(aspect, 1.0);
-      float dist = length(dp);
-      float ring = exp(-pow((dist - rad) * 22.0, 2.0));
-      wave += ring * r.w * exp(-age * 1.4);
-    }
-    col += ACCENT * wave * 0.55;
-
-    // ——— polyp size-pulses (each polyp breathes a slow ring at its size) ———
-    float sizeWave = 0.0;
-    for (int i = 0; i < ${MAX_POLYPS}; i++) {
-      if (i >= uPolypCount) break;
-      vec4 p = uPolyps[i];
-      float phase = fract(p.w + uTime * 0.14);
-      float rad = phase * 0.18 * (0.3 + p.z);
-      vec2 dp = (uv - p.xy) * vec2(aspect, 1.0);
-      float dist = length(dp);
-      float ring = exp(-pow((dist - rad) * 28.0, 2.0));
-      sizeWave += ring * (1.0 - phase) * clamp(p.z, 0.0, 1.0) * 0.5;
-    }
-    col += mix(ACCENT, GLOW, illum) * sizeWave * 0.55;
-
-    // ——— stir: the water column spins under a scrubbing finger ———
-    if (uStir > 0.02) {
-      vec2 sp = (uv - vec2(0.5, wl + 0.20)) * vec2(aspect, 1.0);
-      float ang = atan(sp.y, sp.x);
-      float rr = length(sp);
-      col += ACCENT * uStir * 0.20 * sin(ang * 4.0 + uTime * 3.0)
-              * exp(-rr * rr * 8.0);
-    }
-
-    col *= 1.0 - night * 0.55;
+  // layer: sky_reflection
+  // Above the waterline: a real sunlit sky with a bright horizon band,
+  // a sun disc, cirrus streaks. Reads uClimate.w (illumination) and uNight
+  // (face-down bioluminescence). This is what makes the guide screenshot
+  // show a horizon above the water instead of a dark stub.
+  if (uv.y < wl) {
+    float above = clamp((wl - uv.y) / max(1e-3, wl), 0.0, 1.0);
+    // Horizon → high sky gradient
+    vec3 skyTone = mix(SKY_LOW, SKY_HIGH, pow(above, 0.85));
+    // Bright horizon band right at the waterline (sun's reflection on the sea)
+    float horizonBand = exp(-pow((wl - uv.y) * 22.0, 2.0));
+    skyTone += GLOW * horizonBand * (0.55 + 0.20 * uBreath) * (0.6 + uClimate.w * 0.4);
+    // Sun disc — rides climate warmth, breathes with uBreath
+    float sunX = 0.68 + sin(uTime * 0.04) * 0.02;
+    float sunY = wl - 0.09 - uClimate.w * 0.03;
+    vec2 sd = (uv - vec2(sunX, sunY)) * vec2(aspect, 1.0);
+    float sunR = 0.032;
+    float sun = smoothstep(sunR * 1.15, sunR * 0.55, length(sd));
+    float sunHalo = exp(-dot(sd, sd) * 65.0);
+    skyTone += GLOW * (sun * 0.85 + sunHalo * 0.45) * (0.85 + 0.15 * uBreath);
+    // Cirrus streaks — long thin FBM bands
+    float cirrus = fbm(vec2(uv.x * 5.0 * aspect + uTime * 0.02, uv.y * 30.0));
+    cirrus = smoothstep(0.55, 0.85, cirrus) * (0.32 + uClimate.w * 0.25);
+    skyTone = mix(skyTone, mix(skyTone, vec3(1.0), 0.55), cirrus * (1.0 - above * 0.5));
+    skyTone *= 0.86 + 0.14 * uBreath;
+    // Silt-in-air (post-shake) mutes the sky
+    skyTone = mix(skyTone, SILT, silty * 0.30);
+    // Night — sky darkens; a subtle bioluminescent glow on the horizon
+    skyTone *= 1.0 - night * 0.72;
+    skyTone += BIO * night * horizonBand * 0.22;
+    col = skyTone;
     gl_FragColor = vec4(col, 1.0);
     return;
   }
 
-  // ——— the calcite substrate at the section floor ———
-  vec3 sub = vec3(0.098, 0.086, 0.078);
-  vec3 wet = vec3(0.156, 0.118, 0.098);
-  float dSub = clamp((uv.y - SUBSTRATE_Y) / max(0.02, 1.0 - SUBSTRATE_Y), 0.0, 1.0);
-  col = mix(wet, sub, dSub * dSub);
+  float depthBelow = clamp((uv.y - wl) / max(0.02, SUBSTRATE_Y - wl), 0.0, 1.0);
 
-  vec2 gp = floor(uv * uRes * 0.45);
-  col *= 0.86 + 0.24 * hash21(gp);
+  // layer: reef_substrate
+  // The calcite floor at the section bottom: layered FBM (coarse + fine +
+  // grain) paints granite texture, biofilm patches in ACCENT2 concentrate
+  // near the water-rock interface, sand ripples ridge the deeper substrate,
+  // and dark crevices give the floor depth. Reads uBreath, uStir (silt
+  // deposits), uNight (bioluminescent patches glow).
+  if (uv.y >= SUBSTRATE_Y) {
+    float dSub = clamp((uv.y - SUBSTRATE_Y) / max(0.02, 1.0 - SUBSTRATE_Y), 0.0, 1.0);
+    float grain = hash21(floor(uv * uRes * 0.4));
+    float coarse = fbm(uv * vec2(9.0 * aspect, 8.0) + vec2(0.4, 1.1));
+    float fine = fbm(uv * vec2(48.0 * aspect, 40.0) + vec2(2.7, 3.1));
+    vec3 sub = mix(BG2 * 0.55, BG2 * 1.25, coarse);
+    sub = mix(sub, sub * (0.7 + grain * 0.6), 0.35);
+    sub += BG2 * fine * 0.24;
+    // Wet sheen right at the top of the substrate (water-rock interface) —
+    // a crisp ridge where the water meets the calcite, so the transition
+    // reads as a real boundary the eye can pick up.
+    float wetSheen = smoothstep(SUBSTRATE_Y + 0.05, SUBSTRATE_Y, uv.y);
+    float ridgeEdge = exp(-pow((uv.y - SUBSTRATE_Y) * 200.0, 2.0));
+    sub += GLOW * ridgeEdge * 0.55 * (1.0 - night * 0.7);
+    sub += GLOW * wetSheen * 0.24 * (1.0 - night * 0.7);
+    // Biofilm — multi-octave FBM patches of coral-bloom warmth
+    float bloom = fbm(uv * vec2(24.0 * aspect, 20.0));
+    float bloomFine = fbm(uv * vec2(60.0 * aspect, 52.0) + vec2(1.3, 0.7));
+    float biofilm = pow(bloom * 0.65 + bloomFine * 0.35, 1.35);
+    // Sharp-edged biofilm — smoothstep threshold gives crisp patch edges
+    float biofilmSharp = smoothstep(0.32, 0.52, bloom * 0.65 + bloomFine * 0.35);
+    float biofilmMask = 0.55 + wetSheen * 0.45;
+    sub += ACCENT2 * biofilm * biofilmMask * 0.85 * (0.6 + uBreath * 0.4);
+    sub += ACCENT2 * biofilmSharp * biofilmMask * 0.45;
+    // Sand ripples — sharper horizontal ridges, denser deeper into the
+    // substrate. The smoothstep clamps a sine into ridge-and-trough edges
+    // rather than a soft cosine wash — that is what the edge-density
+    // metric reads as texture.
+    float rawRipple = sin(uv.x * 30.0 * aspect + fbm(uv * vec2(6.0, 4.0)) * 6.0);
+    float rippleY = smoothstep(-0.2, 0.35, rawRipple);
+    float rippleX = smoothstep(-0.2, 0.35, sin(uv.y * 55.0 + uv.x * 6.0));
+    sub += BG2 * rippleY * rippleX * 0.32 * (0.4 + dSub * 0.6);
+    sub -= vec3(0.02) * (1.0 - rippleY) * (1.0 - rippleX) * (0.4 + dSub * 0.6);
+    // Scattered coral rubble — small dark spots the substrate carries as
+    // debris. Deterministic from hash21; adds sharp edges without touching
+    // the ledger.
+    {
+      vec2 rubbleUV = uv * vec2(28.0 * aspect, 22.0);
+      vec2 rubbleCell = floor(rubbleUV);
+      vec2 rubbleFrac = fract(rubbleUV);
+      float rubbleSeed = hash21(rubbleCell + 7.3);
+      vec2 rubbleOff = vec2(hash21(rubbleCell + 2.1), hash21(rubbleCell - 4.7));
+      float rubbleDist = length(rubbleFrac - rubbleOff);
+      float rubbleR = 0.16 + rubbleSeed * 0.14;
+      float rubble = smoothstep(rubbleR, rubbleR * 0.55, rubbleDist);
+      float rubbleAlive = step(0.42, rubbleSeed);
+      sub = mix(sub, sub * mix(0.55, 1.35, rubbleSeed), rubble * rubbleAlive * 0.75);
+    }
+    // Dark crevices for calcite depth — sharper threshold
+    float crev = smoothstep(0.68, 0.85, fbm(uv * vec2(14.0 * aspect, 12.0) + vec2(0.9, 2.4)));
+    sub *= 1.0 - crev * 0.40;
+    // Silt deposits from the water column settle brighter into the floor
+    sub = mix(sub, SILT * 1.35, silty * 0.30 * (1.0 - dSub * 0.4));
+    // Night bioluminescence — patches of biofilm glow faintly
+    sub += BIO * biofilm * night * 0.60;
+    sub *= 1.0 - night * 0.32;
+    sub *= 0.90 + 0.10 * uBreath;
+    col = sub;
+    gl_FragColor = vec4(col, 1.0);
+    return;
+  }
 
-  float bloom = fbm(uv * vec2(30.0 * aspect, 30.0) + vec2(uv.y * 4.0, 0.0));
-  col += ACCENT2 * bloom * 0.7 * (0.6 + uBreath * 0.4);
+  // ——— Underwater water column ———
 
-  // The polyp SDF disc + additive corona lives in the shared population-
-  // layer (src/lib/scene/population-layer.ts) — one instanced draw for all
-  // polyps. The load-bearing SIZE → CORONA-BRIGHTNESS map is preserved
-  // there, on the polypSpec's emit: glow = clamp(p.sizeVal, 0, 1.6).
+  // layer: refraction_wobble
+  // Small horizontal wobble under the surface — stronger near the meniscus,
+  // eases with depth. What lives underwater reads distorted, so a polyp
+  // just below the waterline reads wavier than a cornerstone deep on the
+  // substrate.
+  float refractAmp = (1.0 - depthBelow * 0.7) * 0.014;
+  float refractDx = sin((uv.y - wl) * 40.0 + uTime * 0.9 + uv.x * 6.0) * refractAmp
+                  + sin((uv.y - wl) * 88.0 - uTime * 1.4) * refractAmp * 0.4;
+  vec2 uvR = vec2(uv.x + refractDx, uv.y);
 
+  // layer: depth_column
+  // Exponential absorption falloff — ACCENT teal near the surface fades to
+  // BG deep-water dark. Warmth tints the shallow water toward GLOW; the
+  // deep never sees the sun.
+  float depthFall = 1.0 - exp(-depthBelow * 2.6);
+  vec3 waterCol = mix(ACCENT, BG, depthFall);
+  waterCol = mix(waterCol, mix(waterCol, GLOW, 0.32 * (1.0 - depthFall)), uClimate.x);
+  waterCol *= 0.55 + 0.45 * clamp(uClimate.w, 0.0, 1.0);
+  waterCol *= 0.86 + 0.14 * uBreath;
+
+  // layer: sunlit_surface
+  // A bright Snell highlight right at the waterline plus a wider under-
+  // surface glow. Reads uClimate.x (warmth colors the highlight) and
+  // uBreath (the band pulses ±15% on the 7s clock).
+  float surfBand = exp(-pow((uv.y - wl) * 78.0, 2.0));
+  vec3 surfTone = mix(GLOW, mix(SKY_LOW, GLOW, uClimate.x), 0.55);
+  waterCol += surfTone * surfBand * 0.85 * (0.85 + 0.15 * uBreath);
+  float underGlow = exp(-pow((uv.y - wl - 0.025) * 26.0, 2.0));
+  waterCol += GLOW * underGlow * 0.30 * (0.5 + uClimate.w * 0.5);
+  // A crisp meniscus line right at the waterline — sub-pixel-tight Gaussian
+  // gives the sky/water boundary a clean edge the pixel test can read.
+  float meniscus = exp(-pow((uv.y - wl) * 220.0, 2.0));
+  waterCol += GLOW * meniscus * 0.60;
+
+  // layer: caustics
+  // Three-octave FBM cells shifted per iter — the sunlit-surface network
+  // ripples across the sunlit shelf. Rides uCurrent so the whole net drifts
+  // laterally with the current, and uStir scrubs them out (silt occludes
+  // the sun). Reads uClimate.w (illumination lifts the whole net) and
+  // uClimate.x (warmth shifts the caustic tint from teal-tinged toward
+  // pure gold).
+  vec2 causticUV = vec2(
+    uvR.x * 9.0 * aspect + uTime * 0.16 + uClimate.z * 0.5,
+    (uvR.y - wl) * 3.6 - uTime * 0.11
+  );
+  float c1 = causticFBM(causticUV);
+  float c2 = causticFBM(causticUV * 2.4 + vec2(1.7, 2.3));
+  float c3 = causticFBM(causticUV * 5.7 + vec2(3.1, 0.9));
+  float causticSoft = pow(c1 * 0.55 + c2 * 0.30 + c3 * 0.15, 2.6);
+  // Sharp filament threshold — the top ridges of the caustic network read
+  // as bright veins, not a soft wash. This is what makes the caustic show
+  // up as edge density in the pixel test.
+  float causticSharp = smoothstep(0.58, 0.72, c1 * 0.60 + c2 * 0.30 + c3 * 0.10);
+  float caustic = causticSoft + causticSharp * 0.55;
+  caustic *= (0.6 + uClimate.w * 0.6);
+  caustic *= (1.0 - depthBelow * 0.55);
+  caustic *= (1.0 - silty * 0.70);
+  waterCol += mix(GLOW, mix(GLOW, ACCENT, 0.28), 1.0 - uClimate.x) * caustic * 1.15;
+
+  // Ripple wavefronts from taps and flicks (gaussian rings)
+  float wave = 0.0;
+  for (int i = 0; i < ${MAX_RIPPLES}; i++) {
+    if (i >= uRippleCount) break;
+    vec4 r = uRipples[i];
+    float age = r.z;
+    float rad = age * 0.32;
+    vec2 dp = (uv - r.xy) * vec2(aspect, 1.0);
+    float dist = length(dp);
+    float ring = exp(-pow((dist - rad) * 22.0, 2.0));
+    wave += ring * r.w * exp(-age * 1.4);
+  }
+  waterCol += mix(ACCENT, GLOW, 0.4) * wave * 0.75;
+
+  // Polyp size-pulses (each polyp breathes a slow ring at its own size)
+  float sizeWave = 0.0;
+  for (int i = 0; i < ${MAX_POLYPS}; i++) {
+    if (i >= uPolypCount) break;
+    vec4 p = uPolyps[i];
+    float phase = fract(p.w + uTime * 0.14);
+    float rad = phase * 0.16 * (0.3 + p.z);
+    vec2 dp = (uv - p.xy) * vec2(aspect, 1.0);
+    float dist = length(dp);
+    float ring = exp(-pow((dist - rad) * 28.0, 2.0));
+    sizeWave += ring * (1.0 - phase) * clamp(p.z, 0.0, 1.0) * 0.5;
+  }
+  waterCol += mix(ACCENT, GLOW, clamp(uClimate.w, 0.0, 1.0)) * sizeWave * 0.55;
+
+  // layer: plankton_motes
+  // 24 tiny bright motes drifting through the water column — deterministic
+  // positions from a hash of grid cell + noise offset; drift downward on a
+  // slow uTime term and slide laterally with uCurrent. Silt scatters them
+  // (uStir rides down the visible count). Motes read GLOW so they behave
+  // as backlit particles.
+  {
+    vec2 moteUV = uv * vec2(6.0 * aspect, 4.0)
+                  + vec2(uClimate.z * 0.8, -uTime * 0.06);
+    vec2 moteCell = floor(moteUV);
+    vec2 moteFrac = fract(moteUV);
+    float moteSeed = hash21(moteCell);
+    vec2 moteOff = vec2(hash21(moteCell + 3.7), hash21(moteCell - 1.3));
+    float moteDist = length(moteFrac - moteOff);
+    float mR = 0.045 + moteSeed * 0.055;
+    float mote = smoothstep(mR, mR * 0.45, moteDist);
+    float alive = step(0.28, moteSeed);
+    float notSilty = 1.0 - silty * 0.70;
+    waterCol += GLOW * mote * alive * notSilty * (0.35 + moteSeed * 0.5) * (1.0 - depthBelow * 0.5);
+  }
+
+  // Stir — the water column spins under a scrubbing finger
+  if (uStir > 0.02) {
+    vec2 sp = (uv - vec2(0.5, wl + 0.18)) * vec2(aspect, 1.0);
+    float ang = atan(sp.y, sp.x);
+    float rr = length(sp);
+    waterCol += ACCENT * uStir * 0.22 * sin(ang * 4.0 + uTime * 3.0)
+              * exp(-rr * rr * 8.0);
+  }
+
+  // layer: silt_overlay
+  // Post-shake silt cloud — a warm-neutral FBM haze that mutes colors and
+  // scrubs the caustics. Rides uStir (which the vessel scatter/knock verbs
+  // spike). Drifts on a slow uTime term so it reads alive, not static.
+  {
+    float siltCloud = fbm(uv * vec2(6.0 * aspect, 4.5) + vec2(uTime * 0.03, 0.0));
+    waterCol = mix(waterCol, SILT, silty * (0.35 + siltCloud * 0.4));
+  }
+
+  // Vessel tilt — a subtle color shift with lean
+  waterCol *= 1.0 - 0.06 * abs(uLean) * (1.0 - depthBelow);
+
+  // layer: bioluminescence
+  // Face-down (uNight) invites the room to its second life: patches of
+  // biofilm and drifting plankton glow BIO cyan-green, the water darkens
+  // deep, and the horizon carries a faint bioluminescent band. The reef
+  // has two seasons a day, and this is the second one.
+  {
+    float bioCells = fbm(vec2(uv.x * 30.0 * aspect + uTime * 0.4, uv.y * 22.0 - uTime * 0.3));
+    bioCells = smoothstep(0.55, 0.90, bioCells);
+    waterCol += BIO * bioCells * night * 0.60 * (1.0 - depthBelow * 0.4);
+  }
+
+  // Night — the water column darkens deeply
+  waterCol *= 1.0 - night * 0.55;
+
+  // Vignette
   vec2 vd = (uv - vec2(0.5, 0.5)) * vec2(aspect, 1.0);
-  col *= 1.0 - 0.52 * smoothstep(0.18, 0.94, dot(vd, vd));
-  col *= 1.0 - night * 0.68;
+  waterCol *= 1.0 - 0.42 * smoothstep(0.18, 0.94, dot(vd, vd));
 
+  col = waterCol;
   gl_FragColor = vec4(col, 1.0);
 }
 `;
@@ -452,13 +738,28 @@ export default function Reef() {
     const prog = stage?.program(FULLSCREEN_VERT_UNIT, FRAG) ?? null;
     const quad = stage && prog ? stage.fullscreenQuad(prog, "unit") : null;
 
-    // ——— the polyp, as the shared scene model reads it ———
-    // The physics ledger owns the polyps (coralflow.ts). This SceneObjectSpec
-    // is the polyp's declaration in the site's shared vocabulary; the
-    // population + layer below are the render half — one instanced draw
-    // for every polyp on the reef.
-    const polypSpec: SceneObjectSpec<PolypView> = {
-      kind: "polyp",
+    // ——— the two polyp populations, over one coralflow ledger ———
+    // Phase 9 rewrite: split the previous single SceneObjectSpec into two
+    // views — cornerstoneSpec reads every SEALED polyp and emits an
+    // elaborate branching-coral silhouette; recruitSpec reads every UNSEALED
+    // polyp and emits a smaller disc-with-corona. Both are drawn through
+    // the same shared instanced pass with a room-scoped fragment shader
+    // (POPULATION_FRAG above), selected by shape-select in the sprite's
+    // `vPhase` varying. The two-tier shape difference is what makes an
+    // object screenshot instantly legible.
+    //
+    // The physics ledger (coralflow.ts) stays authoritative for polyp
+    // state; syncPopulationsFromLedger below routes each ledger polyp into
+    // exactly one of the two population views by its `sealed` flag.
+    const shapeSlot = (shape: number, phase01: number) =>
+      shape + Math.min(0.999, Math.max(0, phase01));
+
+    // Shape indices — the POPULATION_FRAG reads these off floor(vPhase).
+    const SHAPE_CORNERSTONE = 0;
+    const SHAPE_RECRUIT = 1;
+
+    const cornerstoneSpec: SceneObjectSpec<CornerstoneView> = {
+      kind: "cornerstone_polyp",
       cap: MAX_POLYPS,
       born(seed, nx, ny, tMs) {
         const rng = sceneMulberry32(seed);
@@ -469,10 +770,9 @@ export default function Reef() {
           ny,
           bornMs: tMs,
           growth: 0.3,
-          sealedMs: null,
+          sealedMs: tMs,
           presence: 1,
-          sizeVal: 0,
-          sealed: false,
+          sizeVal: MAX_SIZE,
           phase: rng(),
         };
       },
@@ -482,47 +782,85 @@ export default function Reef() {
       emit(s, ctx, out) {
         const px = s.nx * ctx.width;
         const py = s.ny * ctx.height;
-        const baseR = Math.max(3, ctx.width * 0.012);
-        // Size drives everything the eye reads: bigger polyps have bigger
-        // discs and brighter coronas. The load-bearing SIZE → CORONA map.
+        // Cornerstones want room for six radial tines — a larger sprite so
+        // the branches reach past the body's own footprint.
+        const baseR = Math.max(10, ctx.width * 0.032);
         const sizeBright = Math.min(1.6, Math.max(0, s.sizeVal));
-        // The polyp body — glow-hued disc for young, accent2 rust for
-        // sealed cornerstones. Discriminating the two is what the eye
-        // does to name the colony's frame.
+        const breath01 =
+          0.5 + 0.5 * Math.sin(ctx.tMs * 0.001 * 0.85 + s.phase * Math.PI * 2);
+        // Hue biased warm — cornerstone tissue reads coral-rust / gold.
         out.push(
-          px, py,
-          baseR * (0.55 + s.sizeVal * 0.45) * (s.sealed ? 1.12 : 1),
+          px,
+          py,
+          baseR * (0.90 + s.sizeVal * 0.20),
           s.phase * Math.PI * 2,
-          s.sealed ? 0.85 : 0.35, // hue: sealed toward accent2, young toward glow
-          0.24 + s.sizeVal * 0.4 + ctx.breath * 0.12,
-          Math.sin(ctx.tMs * 0.001 * 1.1 + s.phase * Math.PI * 2) * 0.5 + 0.5,
-          s.presence * (0.5 + s.growth * 0.5),
+          0.88, // hue: near u_palC (glow) end — mature warm register
+          sizeBright,
+          shapeSlot(SHAPE_CORNERSTONE, breath01),
+          s.presence * (0.55 + s.growth * 0.45),
         );
-        // The corona — brightness IS the size. Invert to recover the polyp.
-        if (sizeBright > 0.01) {
-          out.push(
-            px, py,
-            baseR * 3.6,
-            -s.phase * Math.PI * 2,
-            s.sealed ? 0.9 : 0.55,
-            sizeBright,
-            ctx.breath,
-            s.presence * Math.min(1, sizeBright * 0.75),
-          );
-        }
       },
-      // Verb routing lives on the imperative ReefApi below; the physics
-      // library is authoritative for polyp state, and re-declaring the
-      // handlers here would fork two truths.
       verbs: [],
       respond: {},
     };
-    const population = createPopulation(polypSpec);
+
+    const recruitSpec: SceneObjectSpec<RecruitView> = {
+      kind: "recruit_polyp",
+      cap: MAX_POLYPS,
+      born(seed, nx, ny, tMs) {
+        const rng = sceneMulberry32(seed);
+        return {
+          id: 0,
+          seed,
+          nx,
+          ny,
+          bornMs: tMs,
+          growth: 0.1,
+          sealedMs: null,
+          presence: 1,
+          sizeVal: 0,
+          phase: rng(),
+        };
+      },
+      step(s, ctx) {
+        if (s.growth < 1) s.growth = Math.min(1, s.growth + ctx.dt * 0.9);
+      },
+      emit(s, ctx, out) {
+        const px = s.nx * ctx.width;
+        const py = s.ny * ctx.height;
+        // Recruits are smaller — a young polyp is a disc, not a colony.
+        const baseR = Math.max(5, ctx.width * 0.017);
+        const sizeBright = Math.min(1.6, Math.max(0, s.sizeVal));
+        const breath01 =
+          0.5 + 0.5 * Math.sin(ctx.tMs * 0.001 * 1.15 + s.phase * Math.PI * 2);
+        // Hue biased cool — a young recruit reads teal-tinged, brightening
+        // toward coral warmth as it matures.
+        const hue = 0.15 + s.sizeVal * 0.40;
+        out.push(
+          px,
+          py,
+          baseR * (0.65 + s.sizeVal * 0.55),
+          s.phase * Math.PI * 2,
+          hue,
+          sizeBright,
+          shapeSlot(SHAPE_RECRUIT, breath01),
+          s.presence * (0.5 + s.growth * 0.5) * (0.55 + s.sizeVal * 0.45),
+        );
+      },
+      verbs: [],
+      respond: {},
+    };
+
+    const cornerstones = createPopulation(cornerstoneSpec);
+    const recruits = createPopulation(recruitSpec);
     const populationLayer = stage
       ? createPopulationLayer(stage, {
-          palette: ["#4ea9a2", "#c26a52", "#eaa87a"], // accent, accent2, glow
+          // u_palA = teal water, u_palB = coral bloom warm, u_palC = pale gold
+          palette: ["#3d9ec2", "#e0693a", "#f4e6a8"],
+          frag: POPULATION_FRAG,
         })
       : null;
+    // Two populations × up to MAX_POLYPS each — one instance per polyp.
     const instanceBuffer = createInstanceBuffer(MAX_POLYPS * 2);
 
     // ——— what the shader reads: one Float32Array each, allocated once ———
@@ -597,6 +935,81 @@ export default function Reef() {
         cursorY = ny;
         cursorLit = 1;
         if (fingers >= 2) return;
+        // the rapid-tap ladder (1 / 3 / 5 / n), in living coral: 1 rings a
+        // polyp, 3 feeds a wave through its nearest neighbours, 5 raises a
+        // spawning shimmer over the colony, n is the whole reef in crescendo
+        const tier = tapTrainTier(count);
+        if (tier === "n") {
+          const crest = clamp01(0.5 + (count - 7) * 0.12 + intensity * 0.3);
+          // the colony in crescendo: every polyp rings pitched by its own
+          // size, small to large, and the water shivers with it
+          const bySize = [...state.polyps].sort((a, b) => a.size - b.size);
+          for (let i = 0; i < bySize.length; i++) {
+            const p = bySize[i];
+            pushRipple(p.x, p.y, 0.4 + crest * 0.5);
+            if (i < 4) {
+              try {
+                audio.playTone(ringHzFor(p.size), 0.16 + crest * 0.16);
+              } catch {
+                /* noop */
+              }
+            }
+          }
+          pushRipple(nx, ny, 0.6 + crest * 0.4);
+          stirTurbulence(0.1 + crest * 0.15);
+          try {
+            haptics.roll();
+          } catch {
+            /* noop */
+          }
+          return;
+        }
+        if (tier === 5 && count === 5) {
+          // a spawning shimmer: the light over the reef lifts and every
+          // sealed cornerstone releases a bright ring of gametes
+          state = { ...state, illum: clamp01(state.illum + 0.06 + intensity * 0.04) };
+          for (const p of state.polyps) {
+            if (p.sealed) pushRipple(p.x, p.y, 0.7 + intensity * 0.2);
+          }
+          pushRipple(nx, ny, 0.5);
+          try {
+            audio.bell();
+            audio.playTone(ringHzFor(meanSize(state)) * 2, 0.18 + intensity * 0.12);
+            haptics.chop();
+          } catch {
+            /* noop */
+          }
+          writer.schedule();
+          return;
+        }
+        if (tier === 3 && count === 3) {
+          // a feeding wave: the three polyps nearest the strike answer in
+          // turn, each with its own pitch — the colony passing the touch on
+          const near = [...state.polyps]
+            .sort(
+              (a, b) =>
+                Math.hypot(a.x - nx, a.y - ny) - Math.hypot(b.x - nx, b.y - ny),
+            )
+            .slice(0, 3);
+          if (near.length === 0) {
+            ringHere(nx, ny, 0.7 + intensity * 0.3);
+            return;
+          }
+          for (const p of near) {
+            pushRipple(p.x, p.y, 0.5 + intensity * 0.3);
+            try {
+              audio.playTone(ringHzFor(p.size), 0.14 + intensity * 0.1);
+            } catch {
+              /* noop */
+            }
+          }
+          try {
+            haptics.ripple(0.4 + intensity * 0.3);
+          } catch {
+            /* noop */
+          }
+          return;
+        }
         const found = nearestPolyp(state, nx, ny, 0.08);
         if (found) {
           soundPolyp(found.size);
@@ -938,21 +1351,28 @@ export default function Reef() {
     apiRef.current = engine;
 
     /**
-     * Pull every polyp out of the physics ledger into the shared population's
-     * items array. Items are matched by `id`, so their per-frame identity is
-     * stable — new polyps spawn, polyps that vanished from the ledger start
-     * retiring (population.step decrements presence).
+     * Pull every polyp out of the physics ledger into the correct population
+     * view — sealed polyps into cornerstoneItems, unsealed into recruitItems.
+     * Items are matched by `id`, so per-frame identity is stable across the
+     * seal transition: when a recruit becomes a cornerstone (ceremony fires
+     * sealPolyp), its recruit item retires (presence → 0.999) and a new
+     * cornerstone item spawns in the same frame, so the eye sees a smooth
+     * shape morph rather than a hop. When a knock lands, dislodged unsealed
+     * polyps vanish from state.polyps and their recruit items retire.
      */
-    const syncPopulationFromLedger = (now: number) => {
-      const items = population.items;
+    const syncPopulationsFromLedger = (now: number) => {
+      const cornerstoneItems = cornerstones.items;
+      const recruitItems = recruits.items;
       const ledger: Polyp[] = state.polyps;
-      for (let i = 0; i < items.length; i++) {
-        const item = items[i];
+      const sealedLedger = ledger.filter((p) => p.sealed);
+      const unsealedLedger = ledger.filter((p) => !p.sealed);
+      // ——— cornerstones ———
+      for (const item of cornerstoneItems) {
         if (item.presence < 1) continue;
-        if (!ledger.some((p) => p.id === item.id)) item.presence = 0.999;
+        if (!sealedLedger.some((p) => p.id === item.id)) item.presence = 0.999;
       }
-      for (const p of ledger) {
-        let item = items.find((it) => it.id === p.id && it.presence >= 1);
+      for (const p of sealedLedger) {
+        let item = cornerstoneItems.find((it) => it.id === p.id && it.presence >= 1);
         if (!item) {
           item = {
             id: p.id,
@@ -961,20 +1381,45 @@ export default function Reef() {
             ny: p.y,
             bornMs: now,
             growth: 0.05,
-            sealedMs: p.sealed ? now : null,
+            sealedMs: now,
             presence: 1,
             sizeVal: p.size,
-            sealed: p.sealed,
             phase: p.phase,
           };
-          items.push(item);
+          cornerstoneItems.push(item);
         } else {
           item.nx = p.x;
           item.ny = p.y;
           item.sizeVal = p.size;
-          item.sealed = p.sealed;
           item.phase = p.phase;
-          if (p.sealed && item.sealedMs === null) item.sealedMs = now;
+        }
+      }
+      // ——— recruits ———
+      for (const item of recruitItems) {
+        if (item.presence < 1) continue;
+        if (!unsealedLedger.some((p) => p.id === item.id)) item.presence = 0.999;
+      }
+      for (const p of unsealedLedger) {
+        let item = recruitItems.find((it) => it.id === p.id && it.presence >= 1);
+        if (!item) {
+          item = {
+            id: p.id,
+            seed: hashSeed(state.seedKey, p.id),
+            nx: p.x,
+            ny: p.y,
+            bornMs: now,
+            growth: 0.05,
+            sealedMs: null,
+            presence: 1,
+            sizeVal: p.size,
+            phase: p.phase,
+          };
+          recruitItems.push(item);
+        } else {
+          item.nx = p.x;
+          item.ny = p.y;
+          item.sizeVal = p.size;
+          item.phase = p.phase;
         }
       }
     };
@@ -1054,12 +1499,12 @@ export default function Reef() {
         if (rippleLoc) stage.gl.uniform4fv(rippleLoc, rippleU);
         quad.draw();
 
-        // ——— the polyps, as one instanced draw ———
-        syncPopulationFromLedger(now);
-        population.step({
+        // ——— the two polyp populations, as one shared instanced draw ———
+        syncPopulationsFromLedger(now);
+        const popCtx = {
           dt: Math.min(0.05, dtRaw),
           tMs: now,
-          breath: 0.5,
+          breath: reduced ? 0.5 : 0.5 + 0.5 * Math.sin((t * Math.PI * 2) / 7),
           detail: 1,
           wind: 0,
           gravity: 0,
@@ -1067,19 +1512,22 @@ export default function Reef() {
           season: 0,
           timeScale,
           reducedMotion: reduced,
-        });
+        };
+        cornerstones.step(popCtx);
+        recruits.step(popCtx);
         instanceBuffer.reset();
-        population.emit(
-          {
-            width: stage.size.width,
-            height: stage.size.height,
-            tMs: now,
-            breath: reduced ? 0.5 : 0.5 + 0.5 * Math.sin(t * Math.PI * 2 / 7),
-            detail: 1,
-            reducedMotion: reduced,
-          },
-          instanceBuffer,
-        );
+        const emitCtx = {
+          width: stage.size.width,
+          height: stage.size.height,
+          tMs: now,
+          breath: popCtx.breath,
+          detail: 1,
+          reducedMotion: reduced,
+        };
+        // Recruits first so cornerstones' larger silhouettes read on top —
+        // a young polyp partly under a mature one is visually correct.
+        recruits.emit(emitCtx, instanceBuffer);
+        cornerstones.emit(emitCtx, instanceBuffer);
         populationLayer?.draw(instanceBuffer);
       }
 
@@ -1207,7 +1655,7 @@ export default function Reef() {
       onGlimmer={() => apiRef.current?.glimmer()}
       onReducedMotion={(on) => apiRef.current?.reduced(on)}
       letGo={{ label: "let the reef rest", onLetGo: letGo, visible: hasKept }}
-      style={{ position: "fixed", inset: 0, background: "#020814" }}
+      style={{ position: "fixed", inset: 0, background: "#0a1d2a" }}
     >
       <canvas
         ref={surfaceRef}

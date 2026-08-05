@@ -1,0 +1,452 @@
+# stars — the night sky, a nested cosmos the hand makes and unmakes
+#
+# Round-trip-derived from src/components/Stars.tsx (5,405 lines) and
+# src/lib/stars/nestedCosmos.ts. Phase 7 backfill: the DEEPEST reference
+# room. The `field` invariant type: a nested set of layer profiles, each
+# a seeded field of stars, nebulae, holes, galaxies, planet systems and
+# quasars, plus per-layer user-born stars, user-planted black holes, and
+# condensed-world planets — three addressable populations riding on top
+# of a four-layer background field.
+#
+# This spec exists as the retrieval anchor for track B: the compiler
+# reads it to learn what a room reaching the density bar actually
+# declares, across shader_layers (≥5), populations (3), discoverables
+# (≥5), and state_machine (≥3 axes multiplying).
+
+key: stars
+component_name: Stars
+
+placement:
+  kind: band
+  band: stars
+
+sigil: stars
+desc: "the night sky, nested — pinch to descend"
+cluster: nature
+dark: true
+home_priority: 10
+ambient_profile: cosmic
+storage_key: "objetdart:stars:cosmic:v2"
+
+invariant: >
+  a nested cosmos of four seeded layers (galactic, cluster, system,
+  local) — each carrying its own field of stars, nebulae, black holes,
+  galaxies, planet systems and quasars — plus, per layer, the visitor's
+  own born stars, planted black holes with soft N-body gravity and
+  hierarchical mergers, and worlds condensed from born stars. the eye's
+  address is (panX, panY, zoom); zoom crossfades between layers, the
+  lens rung (0/1/2) rotates the representation (visible / temperature /
+  gravitational), and every event on the field — supernovae, comets,
+  pulsars, tidal flares, novae, star-forming regions, gamma-ray bursts,
+  mergers — is a deterministic function of layer seed and elapsed time.
+
+material: 2d-over-shader
+noun: star
+
+domain_lib:
+  name: nestedCosmos
+  invariant_type: field
+
+palette:
+  bg:      "#040611"
+  bg2:     "#0e1230"
+  glow:    "#f4eede"
+  accent:  "#90d2e6"
+  accent2: "#b8a0ff"
+  ink:     "#e9edf8"
+
+visual_style:
+  subject: "a nested deep field of stars, nebulae, black holes and galaxies, four layers of zoom, with the visitor's own creations kept per layer"
+  form_language: [point-cloud, SDF, value-noise-FBM, ribbon-flow]
+  motion_character: cyclic
+  reference_notes:
+    - "Hubble deep-field plates: pareto-distributed pinpoint stars over a milky-way band, a few large diffraction-spike bright ones"
+    - "accretion-disk photographs from EHT — a hot torus around a horizon, an Einstein-ring shimmer bending the sky behind"
+    - "planetarium simulations: the field is drawn but the arms and knots EMERGE from where the crowd concentrates"
+    - "the sky's colour is temperature at rung 1 (Morgan-Keenan chromaticity), curvature at rung 2 (starlight drained to a single pale value so the geodesics show)"
+  mood: "vast and patient; the sky turns whether or not you look, and remembers everything you make"
+  gesture_feedback_style: "a tap births a star scaled by intensity; a hold opens a black-hole horizon that keeps swelling past the ceremony; a two-finger twist raises the lens through visible → temperature → curvature; matter drawn near a well spirals in on true relativistic time-dilation, freezing at the horizon"
+
+verbs_answered:
+  - tap
+  - dwell
+  - drag
+  - flick
+  - twist
+  - twist3
+  - tap3
+  - drag3
+  - hold3
+  - scrub
+  - drum
+  - arrows
+  - tilt
+  - shake
+  - knock
+  - flip
+
+guide:
+  title: "the night sky"
+  scale: "the stars band — between the earth and beyond; sky peer of comb and beam"
+  essence: >
+    a four-layer nested night sky you pan and zoom through, where stars
+    are born by hand, worlds condense from their disks, black holes open
+    under held fingers and merge when they meet, and every layer keeps
+    what you made in it. the sky is a determined function of layer seed
+    and elapsed time — a supernova that fires when nobody was there
+    fired at the same second everyone else's sky did.
+  moves:
+    - "tap empty sky → births a star; tap a bright one → a supernova"
+    - "rapid taps (1 / 3 / 5 / n) → birth → nova → pulsar / tidal flare → gamma-ray burst"
+    - "hold ~0.8s → opens a black hole's accretion; release and nearby stars are pulled in or swallowed"
+    - "pinch → zooms, crossfading through galactic, cluster, system, and local layers"
+    - "double-click a star you made → condenses a world into orbit around it"
+    - "shift+click stars, then enter → names and keeps a constellation"
+    - "twist → raises the lens: rung 1 = temperature (Morgan-Keenan chromaticity), rung 2 = curvature (geodesics)"
+    - "three-finger drag → interstellar wind combs the gas off the stars; three-finger twist → precesses the season"
+    - "three-finger hold → time dilates while held; three-finger tap → tutti — the whole sky answers"
+    - "tilt (once invited) → parallax lean on the dome; shake → nebula scatter; knock → bell front races outward; face-down → night deepens"
+  finds:
+    - "black holes that meet genuinely inspiral and merge, singing a real gravitational chirp as they go"
+    - "a bright star dies on its own now and then, and its remnant can become a brand-new black hole"
+    - "matter falling into a black hole freezes at the horizon and reddens — the far-away clock dilates to a stop on the exponential the sky actually obeys"
+    - "each zoom layer has its own seeded field and its own memory: the born stars of the galactic layer are not the born stars of the local one"
+  keeps: "your named constellations, plus every layer's born stars, worlds, and black holes"
+
+# ——— the "alive at rest" / "make and unmake" / "haptics" contract ————————
+# Round-trip-derived from src/components/Stars.tsx. Three addressable
+# populations, each with a per-layer cap (MAX_BORN_STARS_PER_LAYER=96,
+# MAX_USER_BLACK_HOLES=12, MAX_USER_PLANETS_PER_LAYER=24), all persisted
+# through the shared cosmic memory (objetdart:stars:cosmic:v2). The
+# whole-sky forgetting (letSkyForget) writes every layer empty at once
+# and ghosts the light out over ~1800ms.
+life:
+  population:
+    depth_note: >
+      three: (1) the sky-born stars a tap of the finger seeds, kept per
+      layer, capped at 96; (2) the user's black holes, planted by a hold
+      that opens the horizon, capped at 12, subject to N-body pull and
+      hierarchical mergers; (3) the user's condensed worlds — one born
+      from a double-tap on a born star, keeping the star's hue as its
+      orbit — capped at 24. each population has its own state shape, its
+      own retirement path, and its own line in the cosmic memory blob;
+      the saved constellations are a fourth kind (a shape over the sky's
+      OWN stars) but they name rather than create, so they sit alongside
+      rather than inside `objects`.
+    objects:
+      - noun: star
+        max_count: 96
+        state_shape: "id, nx, ny, size, brightness, twinklePhase, twinkleAmt, spikeLen, rgb[3], createdAt, vx?, vy? (coast during accretion)"
+        lifecycle: "born under tap (intensity sets size, brightness, and diffraction-spike length) → lives on its layer forever until either eaten by a well, dying as a supernova, or forgotten by <LetGo>"
+        persistence: LetGo
+        creates_via_verb: tap
+        retires_via: [LetGo]
+        implementation_hint: "inline array (bornStarsRef) + shared cosmic memory blob per layer"
+      - noun: black hole
+        max_count: 12
+        state_shape: "id, nx, ny, mass, spin, hue, createdAt — plus, at draw time, an infalling-mote cloud in the hole's local polar frame"
+        lifecycle: "born from a dwell that keeps deepening past ceremony (mass = held-time × WELL_MASS_PER_SEC) → committed at release with intent-check → grows by consuming stars pulled into its lens radius → mergers with another hole are queued, inspiraled over a real chirp, and committed as a single heavier hole → forgotten by <LetGo> as an exhale"
+        persistence: LetGo
+        creates_via_verb: dwell
+        retires_via: [LetGo]
+        implementation_hint: "inline array (userBlackHolesRef) + shared cosmic memory blob per layer"
+      - noun: world
+        max_count: 24
+        state_shape: "id, nx, ny, seed, hue (inherited from parent star), createdAt — decoded deterministically into bodyR, ringR, ringTilt, moons[], land"
+        lifecycle: "born from a double-tap on a born star (a world condenses out of the star's disk, taking a close orbit) → lives beside its parent → forgotten by <LetGo>"
+        persistence: LetGo
+        creates_via_verb: tap
+        retires_via: [LetGo]
+        implementation_hint: "inline array (userPlanetsRef) + shared cosmic memory blob per layer"
+  breath:
+    period_seconds: 7
+    reads:
+      - "cameraRef zoom oscillates by ±1.2% on Math.sin(t * 0.05) (the room's own breathing zoom, ridden on top of the site clock)"
+      - "nebula alpha modulation on seeded per-wisp noise plus the site's 7s LFO"
+      - "the deep-field static canvas is repainted per layer and blit each frame — the field itself does not breathe, but the alpha of the events on it does"
+    behavior_at_rest: "the zoom breathes by ±1.2%; nebulae drift and their wisps flicker on seeded noise; comets, novae and supernovae fire on their layer's weather bias (up to ~1.4× on the local layer); the milky-way band brightens where the finger passes near it"
+  glimmer:
+    after_idle_ms: 20000
+    visual: "a random cosmic event fires — a comet crosses one edge, a pulsar wakes at a nebula's core, or a distant star dies on its own timer; each is a deterministic function of the layer seed, so an idle sky at 20:32 today lights the same nova at the same second every visit"
+  haptics_grammar:
+    tap: tap
+    dwell: bloom
+    drag: ripple
+    flick: chop
+    twist: lens
+    twist3: detent
+    tap3: roll
+    drag3: null
+    hold3: detent
+    scrub: tap
+    drum: ripple
+    knock: bloom
+    shake: chop
+    tilt: null
+    flip: null
+    arrows: tap
+  make_unmake:
+    letgo_clears_population: true
+    ceremony_is: "committing a black hole — the horizon opens under a dwell, keeps swelling past the ceremony tier, and the mass is written into memory as a permanent well that will pull matter and merge with its neighbours"
+
+# ——— phase 7: DEPTH — where /stars' density actually lives ——————————————
+
+shader_layers:
+  - name: deep-field static canvas
+    brief: >
+      The base of the sky: per-layer, generateStarsFor / generateNebulaeFor /
+      generateBlackHolesFor / generateGalaxiesFor / generatePlanetSystemsFor /
+      generateQuasarsFor paint pareto-distributed stars, five to seven
+      nebulae, one to three black holes with accretion disks, up to two
+      galaxies with log-spiral arms, three to eight planet systems and up to
+      three quasars into an offscreen canvas ONCE and blit each frame. Reads
+      the layer's own seed; ignores time; static between resizes. Every
+      other layer draws over this.
+    register: "bg+bg2"
+    order: background
+  - name: nebula pass
+    brief: >
+      Three to five wisps per nebula, each with its own offset, rotation,
+      squashY, palette-picked colour, and seeded noise phase. Ridden on the
+      site's 7s breath plus per-wisp jitter; softens toward the finger under
+      hover and breathes on a tap. Sits between the static field and the
+      hole/galaxy pass.
+    register: "accent+accent2"
+    order: midground
+  - name: black-hole accretion + lensing pass
+    brief: >
+      For every hole (per-layer field + user-planted): a hot accretion disk
+      with an inner rim moving on mass and zoom, an infalling-mote cloud in
+      the hole's local polar frame (redshifting and dilating to a stop at
+      the horizon), a lensing halo displacing every star within lensRadius,
+      and, for user holes, an optional lensed copy of the sky behind. The
+      one shader-side element that reads the domain physics live.
+    register: "glow+accent2"
+    order: midground
+  - name: galaxy arms + planet systems
+    brief: >
+      Log-spiral galaxy arms (rotSpeed × elapsed) + planet systems drawing
+      each body with an SDF disc, optional ring on ringTilt, and one to three
+      moons per system on their own orbits. Composited under the born-star
+      and event passes so the visitor's own creations stand in front of the
+      background.
+    register: "accent+accent2"
+    order: midground
+  - name: born stars + condensed worlds
+    brief: >
+      The visitor's population per layer: each born star drawn as its own
+      SDF disc with a corona and (when bright) diffraction spikes; each
+      condensed world drawn as a small planet on a close orbit around its
+      parent star with a ring and moons decoded from its seed. Ridden by
+      the accretion pull vector when a well is nearby.
+    register: "glow+accent"
+    order: foreground
+  - name: event effects (supernova / comet / pulsar / tidal / nova / starform / grb / merger)
+    brief: >
+      Ten shapes of cosmic event, each with its own baked falloff sprite
+      (FALL_BLAST, FALL_HEAD, FALL_TIDAL, FALL_NOVA, FALL_SFORM, FALL_MERGER,
+      FALL_PULSAR, FALL_COLLAPSE), and each with its own life curve, colour,
+      and trajectory (comet / GRB / tidal carry an angle and a reach).
+      Composited additively so they read on top of the field without
+      overpainting the stars they emerged from.
+    register: "glow"
+    order: foreground
+  - name: gravitational wave pass
+    brief: >
+      Spawned by a black-hole merger. Expands from a normalized sky point
+      and does two things: displaces starlight in lensPoint (a real
+      geometric warp of the field behind it), and paints a racing shimmer
+      ring on top. The one visual that reads its own state back from the
+      merger physics.
+    register: "accent2"
+    order: overlay
+  - name: constellation + lens overlay
+    brief: >
+      The 2D pass above the shader: the pending constellation shape as
+      hairline strokes between selected stars, saved constellations under a
+      hover halo, the lens rung's own notation when the twist has crossed
+      to rung 1 (temperature) or rung 2 (curvature — the geodesic net), the
+      well's gather ring under a hold, and the sky-pulse chrome that
+      captions each event in the room's own voice.
+    register: "ink+glow"
+    order: overlay
+
+discoverables:
+  - trigger: "plant two black holes near each other with a held dwell each — their gravity is real, so they inspiral toward one another over the merger clock"
+    response: "the pair chirps a real inspiral tone — a rising, quickening glide — that cuts off into the low ringdown of the single horizon left behind; a gravitational wave expands from the merger point, displacing starlight geometrically as it passes"
+    register: multiple
+  - trigger: "double-tap a star you birthed"
+    response: "a world condenses out of its disk, taking a close orbit; the world's hue is inherited from the parent star; the world's ring, moons and land are all a deterministic function of a fresh seed, and its position is written into cosmic memory so it survives the next visit"
+    register: multiple
+  - trigger: "keep holding after the horizon has opened, past the ceremony tier"
+    response: "the well keeps swelling — mass = held-time × WELL_MASS_PER_SEC — and every born star within its lens radius drifts inward and freezes at the horizon on the exponential the sky actually obeys (L = L₀·e^(−0.19T/M)), reddening as it goes; nothing plateaus at the ceremony, so a five-second hold is measurably deeper than a three-second one"
+    register: sight
+  - trigger: "start a constellation with three or more stars, then touch the first star again"
+    response: "the loop closes and the name field opens; every constellation is kept in localStorage under objetdart:constellations:v1 and rings its own chord on hover; holding one to the ceremony tier frays it and lets it go"
+    register: multiple
+  - trigger: "raise the lens through rung 1 (temperature) into rung 2 (curvature)"
+    response: "at rung 1 every star repaints to its true blackbody chromaticity (Morgan-Keenan locus), so the sky shows what it is MADE of rather than what it looks like; at rung 2 the whole field drains to a single pale value (LENS_GRAV_RGB) and the geodesic net of every gravitational lens shows on top"
+    register: sight
+  - trigger: "pinch through the outer zoom edge (past ZOOM_MAX=14) or the inner one (past ZOOM_MIN=1)"
+    response: "the room hands off to the neighbouring band — /manifold above, /atlas below — through the shared ScaleTravel edge-report, so the axis is real and the sky is one seat on it"
+    register: sight
+  - trigger: "leave the room quiet for 20 seconds"
+    response: "a passing comet arrives at one edge, or a distant star dies on its own timer, or a pulsar wakes at the core of the nearest nebula; the event is a determined function of the layer seed and the elapsed time, so the same event fires at the same second on every visit"
+    register: multiple
+
+state_machine:
+  states:
+    - name: layer/galactic
+      description: "the widest field — zoom in [1, 2); LAYER_PROFILES.galactic — 520 stars, 5 nebulae, 2 black holes, 2 galaxies, 5 planet systems, no quasars"
+      visible_change: "the milky-way band arcs across the field with a bandFrac of 0.28; galaxies are largest here; born stars sit at 1× sizeScale"
+    - name: layer/cluster
+      description: "the middle field — zoom in [2, 4); LAYER_PROFILES.cluster — 420 stars, 7 nebulae, 3 black holes, 1 galaxy, 4 planet systems, 3 quasars"
+      visible_change: "quasars appear; the band tightens (bandFrac 0.18); the weather bias climbs to 1.25×"
+    - name: layer/system
+      description: "the near field — zoom in [4, 8); LAYER_PROFILES.system — 280 stars, 4 nebulae, 1 black hole, 8 planet systems, 1 quasar, sizeScale 1.55"
+      visible_change: "planet systems dominate; the band is faint (bandFrac 0.08); stars grow visibly larger (sizeScale 1.55)"
+    - name: layer/local
+      description: "the tightest field — zoom in [8, 14]; LAYER_PROFILES.local — 180 stars, 3 nebulae, 1 black hole, 3 planet systems, sizeScale 2.2"
+      visible_change: "stars are individually resolvable; the milky-way band nearly vanishes; the weather bias is 1.4× — events fire fastest here"
+    - name: lens/visible
+      description: "rung 0 — the default; SPECTRAL_RGB — stars in their prettified colours"
+      visible_change: "the sky looks like a photograph"
+    - name: lens/temperature
+      description: "rung 1 — SPECTRAL_TRUE — stars at their real blackbody chromaticity (Morgan-Keenan locus)"
+      visible_change: "the O and B blues cool, the M reds saturate; the sky shows what it is MADE of, not what it LOOKS like"
+    - name: lens/curvature
+      description: "rung 2 — LENS_GRAV_RGB — starlight drained to a single pale value so gravity's own drawing stands alone"
+      visible_change: "colour drains from every star; the lens geodesic net shows on top of every well"
+    - name: night
+      description: "flip face-down (nightRef → nightTargetRef=1); the sky deepens and the simulation idles down"
+      visible_change: "the whole field darkens by ~55%, the simulation dt scales by (1 - 0.55 × night), events slow, ambient bed hushes"
+    - name: dilated
+      description: "three fingers held; timeScaleRef.current eases to max(0.05, 1 - min(0.95, elapsed / 3600))"
+      visible_change: "the room's clock stretches — everything alive slows, and keeps slowing for as long as the three fingers stay; a matching detent haptic and a low tone announce the entry"
+    - name: forgetting
+      description: "letSkyForget fired by <LetGo>; forgetRef holds every kept star, hole and planet during a ~1800ms exhale (~420ms in reduced motion)"
+      visible_change: "every born star fades to zero over the dur; every user hole evaporates; every world scatters; the cosmic memory blob is written empty AT ONCE, so the light lingers as a ghost after the room already forgot"
+  transitions:
+    - from: layer/galactic
+      to: layer/cluster
+      trigger: "zoom crosses 2 (pinch out); layerFromZoom returns cluster; setActiveLayer fires; setLayerFade starts at 0 and eases to 1 over ~16 frames"
+    - from: layer/cluster
+      to: layer/system
+      trigger: "zoom crosses 4 (pinch out); layerFromZoom returns system; layer swap + memory restore for that layer"
+    - from: layer/system
+      to: layer/local
+      trigger: "zoom crosses 8 (pinch out); layerFromZoom returns local; weather bias climbs to 1.4×"
+    - from: "*"
+      to: lens/temperature
+      trigger: "two-finger twist crosses lensRungRef 0 → 1; haptics.lens() + a matching tone; SPECTRAL_RGB → SPECTRAL_TRUE swap"
+    - from: lens/temperature
+      to: lens/curvature
+      trigger: "two-finger twist crosses lensRungRef 1 → 2; SPECTRAL_TRUE → LENS_GRAV_RGB swap; the geodesic net begins to draw"
+    - from: "*"
+      to: night
+      trigger: "vessel flip event (faceDown=true); nightTargetRef → 1; night eases in over ~600ms"
+    - from: "*"
+      to: dilated
+      trigger: "three-finger hold enter; timeScaleTargetRef ← max(0.05, 1 - min(0.95, elapsed / 3600)); haptics.detent + low tone"
+    - from: dilated
+      to: "*"
+      trigger: "three-finger hold release; timeScaleTargetRef ← 1; the clock catches up on its next frame's dt"
+    - from: "*"
+      to: forgetting
+      trigger: "<LetGo> pressed; memory.layers is written empty; forgetRef holds the ghosts for ~1800ms; haptics.roll() and a low thud"
+
+# ——— the three LLM slots ————————————————————————————————————————————————
+# /stars was hand-authored, not compiled; these three intents describe
+# what a compiler-driven run would produce given the same brief.
+
+shader_intent: >
+  paint a four-layer nested night sky — galactic (zoom 1–2), cluster
+  (2–4), system (4–8), local (8–14) — each with its own seeded field
+  written once to an offscreen canvas and blit per frame. draw eight
+  live passes over that static base: (1) the nebulae, each three to
+  five wisps softening toward the finger; (2) the black-hole accretion
+  disks, each a hot inner rim moving with mass and zoom, an infalling-
+  mote cloud dilating to a stop at the horizon, and a lensing halo
+  displacing starlight within a lens radius (a real geometric warp of
+  the field behind, not a texture); (3) the galaxy arms as log spirals
+  on rotSpeed × elapsed; (4) the planet systems as SDF discs with
+  optional rings and moons; (5) the user's born stars as SDF discs
+  with coronas and diffraction spikes when bright; (6) the user's
+  condensed worlds as small planets in close orbits around their
+  parent stars; (7) the cosmic-event pass — ten kinds of transient
+  (supernova, pulsar, comet, tidal, nova, starform, grb, merger,
+  birth, collapse), each with its own baked falloff and life curve;
+  (8) gravitational waves from mergers, both displacing starlight and
+  painting a racing shimmer. above the shader, a thin 2D pass carries
+  the pending constellation shape, the saved constellation ink, the
+  lens rung's notation (rung 1 = MK chromaticity, rung 2 = the
+  geodesic net), the well's gather ring, and the sky-pulse ribbon.
+  palette registers: `bg` deep space, `bg2` layer haze, `glow` the
+  star cores and the hot register, `accent` cool blue for the far
+  field, `accent2` violet for gravitational events, `ink` for the
+  lens and the constellation strokes. every visible thing on the sky
+  is a determined function of layer seed + elapsed time — a supernova
+  that fires while you were away fired exactly on the second everyone
+  else's sky did.
+
+domain_intent: >
+  write `src/lib/stars/nestedCosmos.ts` around the four layer profiles
+  (`LAYER_PROFILES.{galactic, cluster, system, local}`), each carrying
+  a seed, starCount, bandFrac, nebulaCount, bhCount, galaxyCount,
+  planetCount, quasarCount, sizeScale and weatherBias. export
+  `layerFromZoom(z)` (galactic 1–2, cluster 2–4, system 4–8, local
+  8–14) and `layerBlend(z)` for the soft crossfade at each edge.
+  export `createAutomata(seed)` — a coarse density field per layer,
+  ticked by `tickAutomata` and heated by `heatAutomata(nx, ny, amount)`
+  under every tap and dwell; the field back-writes into event weather
+  bias so hot patches fire more events. export `applyHoleNBody(holes,
+  dt)` — a soft N-body integrator over the user's planted black holes;
+  export `rankMergePairs(holes)` — the merger queue on real distance ×
+  mass; the inspiral time and chirp shape read off total mass and
+  orbital radius, not a randomised timer. export `clampPan`,
+  `clampZoom`, `clampPanForZoom`, `panByScreen`, `zoomAtScreen` for the
+  camera transforms; `screenToSky` and `skyToScreen` are the
+  invertible maps between viewport px and normalized world. cosmic
+  memory persists through `saveCosmicMemoryV2` and `loadCosmicMemoryV2`
+  under `objetdart:stars:cosmic:v2` — one blob keying per layer to
+  bornStars, blackHoles, planets and consumedSeedIds. no DOM, no audio,
+  no `Math.random`, no `Date.now` inside the render loop; the seed is
+  passed in.
+
+verb_intent: >
+  every handler reads a per-layer state ref (bornStarsRef, userBlackHolesRef,
+  userPlanetsRef) and either writes into it and persists via
+  saveCosmicMemoryV2, or edits transient refs the RAF loop reads.
+  `tap` on empty sky births a star — intensity sets size, brightness,
+  and diffraction-spike length; on a bright existing star, tips it
+  over into a supernova; on a nebula, breathes it and spawns a
+  star-forming event; on the milky-way band, brightens the band and
+  births there. rapid-tap ladder (tier from `tapTrainTier`): 1 = birth,
+  3 = nova, 5 = pulsar / tidal, n = gamma-ray burst. `dwell` (one
+  finger) opens a gravity well under the finger — the well's `mass`
+  grows continuously by `WELL_MASS_PER_SEC × (0.62 + e.intensity × 0.9)`
+  and never plateaus at the ceremony tier; on release, the well
+  commits as a black hole in the layer's userBlackHolesRef and the
+  accretion draws every star within lens radius inward. `dwell` on a
+  saved constellation frays it; three tiers of fray, and past the
+  ceremony it lets go. `flick` throws a born star or a hole across the
+  layer. `twist` (two-finger) raises the lens rung; step-back (two-
+  finger tap) lowers it. `twist3` precesses the season (writes into
+  `seasonRef`, which the draw loop reads as an added rotation on every
+  frame). `drag3` writes into `windRef` — an interstellar wind combing
+  gas off the stars. `hold3` writes `timeScaleTargetRef` to
+  `max(0.05, 1 - min(0.95, e.elapsed / 3600))` — time dilation that
+  keeps deepening the longer three fingers stay. `tap3` (tutti) fires
+  every nebula's breath at once, plays a three-tone chord, and pulses
+  the sky. the vessel: `tilt` writes `leanRef`; `shake` scatters the
+  nebulae; `knock` fires a bell front (`knockRef.current`); `flip` writes
+  `nightTargetRef` and eases toward night. `arrows` walk a screen
+  cursor; enter births at the cursor; shift+click keeps the shape open
+  for a constellation; enter after a shape closes opens the naming
+  field. all thresholds from `gesture/core.ts`; all layer seeds from
+  `LAYER_PROFILES`; the closed-form advance of the accretion clock is
+  linear in `held time × WELL_MASS_PER_SEC`, never a catch-up loop.
+
+chrome:
+  travel: true
+  peers: true

@@ -30,12 +30,15 @@ const reef = {
     path: "/reef",
     shortName: "reef",
     kind: "growth",
-    bg: "#020814",
-    bg2: "#0a2432",
-    glow: "#eaa87a",
-    accent: "#4ea9a2",
-    accent2: "#c26a52",
-    ink: "#e8ede5",
+    // Phase 9 palette rewrite — the sunlit reef in section reads as three
+    // distinct registers: bright warm surface, cool teal water column,
+    // warm coral substrate.
+    bg: "#0a1d2a",      // deep-sea dark blue — the far column, the horizon behind
+    bg2: "#4a2818",     // warm coral-substrate register — the calcite floor rust
+    glow: "#f4e6a8",    // bright surface sunlight — pale gold, the sun above
+    accent: "#3d9ec2",  // cool water in motion — bright teal shallows
+    accent2: "#e0693a", // coral bloom warm — the biofilm / mature tissue
+    ink: "#e8ede5",     // readable text
   },
   guide: {
     title: "the reef — polyp, colony, cornerstone",
@@ -44,6 +47,7 @@ const reef = {
       "a colony of coral polyps at discrete anchor points on a growing calcite substrate, each carrying a size under a shared current and a depth-based illumination. every polyp's ring IS its size, so from the pitch alone you recover how mature it is; the shallowest and lightest polyps grow fastest, but the current can shear a young recruit off the frame if you knock the reef hard enough. nothing on the shelf is created except what the sun gave from above or the current carried past.",
     moves: [
       "tap → a ripple, and the nearest polyp rings at its own pitch; small polyps ring high, cornerstones ring low, so the map is legible before it is explained",
+      "rapid taps (1 / 3 / 5 / n) → a ring → a feeding wave through the three nearest polyps → a spawning shimmer: the light lifts and every cornerstone releases its ring → the whole colony in crescendo, small to large",
       "dwell → recruits a new polyp at the finger, its size climbing on a logistic curve; keep pressing and the polyp matures faster toward saturation",
       "ceremony (hold to the tier) → seals the polyp as a cornerstone — kept between visits, an anchor for what settles next",
       "drag → the current lens shears, and the water column slides across the reef; polyps do not move, but the fbm-warped water reads the drag",
@@ -73,12 +77,25 @@ const reef = {
   // the manifest and phase-5-<key>.md for the template synthesis).
   life: {
     population: {
+      depth_note: "two tiers share the same coralflow ledger: cornerstone_polyp reads every SEALED polyp (mature, kept between visits) and paints an elaborate branching coral silhouette; recruit_polyp reads every UNSEALED polyp (young, still growing) and paints a smaller disc-with-corona. the two-tier map is what the eye reads to name the colony — a mature branching shape means a cornerstone anchors here, a small disc means a recruit is still climbing its logistic. one ledger, two visual registers, both drawn in the same shared instanced pass.",
       objects: [
         {
-          noun: "polyp",
+          noun: "cornerstone_polyp",
           max_count: 24,
-          state_shape: "id, x, y, size (0..MAX_SIZE=1), sealed (bool — cornerstone), phase seed",
-          lifecycle: "born under dwell (plantPolyp at size 0) → size grows on saturating logistic `MAX_SIZE * (1 - exp(-r_eff * elapsed))` while held → sealed at ceremony (size = MAX_SIZE, sealed=true, kept between visits as a cornerstone) → retires via <LetGo> (population-wide) or via knock (unsealed polyps under DISLODGE_THRESHOLD when a hard knock lands — the room's touch-reachable secret)",
+          state_shape: "id, x, y, size (fixed at MAX_SIZE=1 once sealed), sealed=true, phase seed",
+          lifecycle: "sealed at ceremony from a recruit polyp (size = MAX_SIZE, sealed = true) — kept between visits as an anchor for what settles next; survives knockSweep; retires only via <LetGo>",
+          persistence: "LetGo",
+          creates_via_verb: "ceremony",
+          retires_via: [
+            "LetGo"
+          ],
+          implementation_hint: "SceneObjectSpec"
+        },
+        {
+          noun: "recruit_polyp",
+          max_count: 24,
+          state_shape: "id, x, y, size (0..MAX_SIZE=1 climbing the logistic), sealed=false, phase seed",
+          lifecycle: "born under dwell (plantPolyp at size 0) → size grows on saturating logistic `MAX_SIZE * (1 - exp(-r_eff * elapsed))` while held → sealed at ceremony (transitions to cornerstone_polyp above) → retires via knockSweep (unsealed polyps under DISLODGE_THRESHOLD when a hard knock lands — the room's touch-reachable secret) or via <LetGo>",
           persistence: "LetGo",
           creates_via_verb: "dwell",
           retires_via: [

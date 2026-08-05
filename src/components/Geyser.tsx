@@ -9,13 +9,21 @@
  * §"Three creative slots" for what belongs in each slot.
  *
  * The invariant is a two-state thermal ledger (src/lib/geyserflow.ts). The
- * shader paints a hand's width of superheated ground in section: air on top,
- * a shallow pool at a wavy waterline, a narrow throat down through the pool
+ * shader paints a hand's width of superheated ground in section: a lit sky
+ * on top, a shallow pool at a wavy waterline ringed by a proper mineral vent
+ * (a ring SDF, not a filled disc), a narrow throat down through the pool
  * into a mantle-warmed dark, and — when the trigger fires — a fluid-like
- * plume rising out of the throat. The load-bearing shader map is PHASE →
- * REGISTER: a cool teal register during build/cool crossfades to a hot
- * orange register through eruption. Every heat-mark and ripple is a lens
- * over the same two numbers and the phase the column is in.
+ * plume rising unbroken from the throat through the ground strip into the
+ * sky, with ballistic droplets (a second, decorative scene population,
+ * seeded off the population's own id — never Math.random) scattering off
+ * it. The load-bearing shader map is PHASE → REGISTER: a cool teal register
+ * during build/cool crossfades to a hot orange register through eruption,
+ * carried by one continuous `uState` axis (floor = ledger phase, fract =
+ * progress through it) rather than a discrete switch — the same axis reads
+ * as "dormant" near the bottom of building and "building" near its top,
+ * drives a subtle heat-shimmer as it climbs, and drives condensation on the
+ * rocks as cooling's own fraction falls. Every heat-mark and ripple is a
+ * lens over the same two numbers and the phase the column is in.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -24,6 +32,7 @@ import * as haptics from "@/lib/haptics";
 import { getTurbulence, relaxTurbulence, stirTurbulence } from "@/lib/turbulence";
 import RoomShell from "@/components/RoomShell";
 import type { RoomVoice } from "@/lib/gesture/defaults";
+import { tapTrainTier } from "@/lib/gesture/core";
 import { createGLStage, FULLSCREEN_VERT_UNIT } from "@/lib/webgl/stage";
 import { clocksFrom } from "@/lib/webgl/sizing";
 import {
@@ -104,6 +113,39 @@ type HeatMarkView = SceneObjectState & {
   phaseSeed: number;
 };
 
+/**
+ * The eruption's own ballistic droplets — decorative only (geyserflow.ts
+ * owns the ledger; this population never feeds back into it). Cap and
+ * lifetime are material constants of the render, not physics.
+ */
+const MAX_PLUME_DROPLETS = 40;
+const PLUME_DROPLET_LIFE_S = 1.05;
+/** Deceleration/gravity on the droplet's closed-form ballistic arc. */
+const PLUME_GRAVITY = 1.35;
+/** Where a droplet is born — the vent's mouth, in the room's own frame. */
+const VENT_NX = 0.5;
+const VENT_NY = 0.44;
+
+type PlumeDropletView = SceneObjectState & {
+  vx: number;
+  vy: number;
+  hueMix: number;
+};
+
+/**
+ * The four informally-named visual states, read off the SAME continuous
+ * ledger the mechanical phase machine owns — "dormant" and "building" are
+ * not two ledger phases, they are one phase (`"building"`) split by how far
+ * E has climbed toward the trigger. Used by the twist-lens readout; the
+ * literal names double as the room's `state_machine.states` witnesses.
+ */
+function visualPhaseLabel(s: GeyserState): "dormant" | "building" | "erupting" | "cooling" {
+  if (s.phase === "erupting") return "erupting";
+  if (s.phase === "cooling") return "cooling";
+  const eNorm = clamp01((s.H * s.T) / (E_TRIGGER_HIGH * 1.2));
+  return eNorm < 0.35 ? "dormant" : "building";
+}
+
 type StoredGeyser = {
   v: 1;
   H: number;
@@ -149,15 +191,25 @@ uniform float uLean;
 uniform float uNight;
 uniform float uStir;
 uniform float uLens;
+/**
+ * The visual-state axis: floor(uState) is the ledger phase (0 building,
+ * 1 erupting, 2 cooling); fract(uState) is continuous progress through it.
+ * The room's four INFORMAL states — dormant, building, erupting, cooling —
+ * all ride this one number, never a switch: dormant is just fract() near 0
+ * inside building, building is fract() climbing toward 1, and cooling's own
+ * fract() falling drives the condensation fading back toward the next
+ * build.
+ */
+uniform float uState;
 
 // The palette — six registers, set once from the manifest.
-const vec3 BG      = vec3(0.020, 0.039, 0.031); // deep basalt / mantle dark
-const vec3 BG2     = vec3(0.075, 0.141, 0.125); // steaming stone / warmed rock
-const vec3 GLOW    = vec3(0.941, 0.776, 0.565); // sulfur light on the plume
+const vec3 BG      = vec3(0.020, 0.039, 0.031); // deep mantle dark — subterranean, near-black
+const vec3 BG2     = vec3(0.141, 0.102, 0.071); // basalt / warmed rock — the ground's own register
+const vec3 GLOW    = vec3(0.941, 0.776, 0.565); // sulfur light — the vent rim, the plume's core
 const vec3 ACCENT  = vec3(0.353, 0.659, 0.612); // cool pool teal
-const vec3 ACCENT2 = vec3(0.910, 0.549, 0.290); // hot heat register
+const vec3 ACCENT2 = vec3(0.910, 0.549, 0.290); // hot orange — the eruption register
 const vec3 INK     = vec3(0.941, 0.937, 0.902);
-const vec3 SKY     = vec3(0.024, 0.055, 0.075);
+const vec3 SKY     = vec3(0.620, 0.700, 0.740); // a cool, LIT sky — the bright register
 
 const float HORIZON       = 0.30;
 const float WATERLINE_MID = 0.44;
@@ -200,7 +252,10 @@ float waterlineY(float x, float t) {
 
 // The plume: a fluid-like column above the throat while erupting. Returns
 // a brightness contribution modulated by fbm; top-y is the visible
-// discharge (invert PLUME_TOP_Y → Q_erupt).
+// discharge (invert PLUME_TOP_Y → Q_erupt). Spans from below the waterline
+// up through the sky — every branch of main() calls the SAME evaluation, so
+// the column never breaks crossing the ground strip between the horizon and
+// the waterline (the gap a filled-disc-only vent used to leave dark).
 float plumeAmp(vec2 uv, float aspect, float t) {
   float plumeH = uCycle.z; // 0..1 — normalized plume height
   float plumeQ = uCycle.w; // 0..1 — normalized discharge
@@ -218,49 +273,86 @@ float plumeAmp(vec2 uv, float aspect, float t) {
   return xIn * (0.6 + 0.4 * turb) * (0.4 + plumeQ * 0.8);
 }
 
+// The vent — a proper RING SDF at the throat's mouth, not a filled disc: a
+// mineral collar standing at the waterline, brighter as T rises. Drawn from
+// both the pool and the ground branches so the annulus reads whole across
+// the boundary it straddles.
+float ventRing(vec2 uv, float aspect, float wl) {
+  vec2 p = (uv - vec2(THROAT_X, wl)) * vec2(aspect, 1.0);
+  float d = length(p);
+  float r = THROAT_HALF * 2.3;
+  float thick = THROAT_HALF * 0.5;
+  return 1.0 - smoothstep(thick * 0.5, thick, abs(d - r));
+}
+
+// Steam — FBM noise advecting upward off the vent, merging into the sky as
+// the room heats. Shared between the sky's own wisps and the haze right off
+// the pool surface so the column reads continuous top to bottom.
+float steamWisp(vec2 uv, float aspect, float t, float hotW) {
+  float mask = exp(-abs((uv.x - THROAT_X) * aspect) * 2.2);
+  vec2 p = vec2((uv.x - THROAT_X) * aspect * 3.0, uv.y * 9.0 - t * 1.1);
+  float n = fbm(p + vec2(0.0, hotW * 2.0));
+  return smoothstep(0.32, 0.85, n) * mask * (0.12 + hotW * 0.88);
+}
+
 void main() {
   vec2 uv = vec2(vUv.x, 1.0 - vUv.y);
   float aspect = uRes.x / max(1.0, uRes.y);
   float night = uNight;
   float hot = uCycle.y;
+  float wl = waterlineY(uv.x, uTime);
+  float plume = plumeAmp(uv, aspect, uTime);
+
+  // The visual-state axis, decomposed. See the uState uniform doc above.
+  float statePhase = floor(uState);
+  float stateSub = clamp(fract(uState), 0.0, 1.0);
+  float buildW = statePhase < 0.5 ? stateSub : 0.0;             // dormant→building
+  float coolW  = (statePhase > 1.5 && statePhase < 2.5) ? (1.0 - stateSub) : 0.0; // fresh→settled cooling
+
   vec3 col;
 
-  // ——— the air ———
+  // layer: sky ——— the air, a cool lit register, steam merging in at eruption
   if (uv.y < HORIZON) {
     float k = uv.y / HORIZON;
     // Base sky: cool → warm as hot rises through the cycle
     vec3 coolAir = mix(SKY, GLOW * 0.55, k * k * (1.0 - uTurbulence * 0.4));
-    vec3 hotAir  = mix(SKY * 1.2, ACCENT2 * 0.7, k * k);
+    vec3 hotAir  = mix(SKY * 1.08, ACCENT2 * 0.7, k * k);
     vec3 airCol = mix(coolAir, hotAir, hot * 0.7);
     airCol *= 0.86 + 0.14 * uBreath;
     col = airCol * (1.0 - night * 0.72);
     // The plume: rises above the pool into the air
-    float plume = plumeAmp(uv, aspect, uTime);
     if (plume > 0.0) {
       col += GLOW * plume * (0.5 + hot * 0.5);
       col += ACCENT2 * plume * hot * 0.6;
     }
+    // layer: steam-wisps — rises off the vent, merges into the sky when hot
+    float steam = steamWisp(uv, aspect, uTime, hot);
+    col = mix(col, mix(GLOW, vec3(1.0), 0.45), clamp(steam, 0.0, 1.0) * 0.55);
     gl_FragColor = vec4(col, 1.0);
     return;
   }
 
-  float wl = waterlineY(uv.x, uTime);
   bool inPool = uv.x > POOL_XMIN && uv.x < POOL_XMAX && uv.y > wl && uv.y < POOL_FLOOR;
 
   if (inPool) {
-    // ——— underwater depth: cool by default, warmed as hot rises ———
+    // layer: pool-depth — exponential, not the flatter quadratic
     float d = (uv.y - wl) / max(0.02, POOL_FLOOR - wl);
-    vec3 coolCol = mix(BG, BG2, d * d);
-    vec3 hotCol  = mix(BG, ACCENT2 * 0.35, d * d);
+    float dExp = 1.0 - exp(-d * 3.2);
+    vec3 coolCol = mix(BG, ACCENT * 0.4, dExp);
+    vec3 hotCol  = mix(BG, ACCENT2 * 0.4, dExp);
     col = mix(coolCol, hotCol, hot * 0.6);
 
-    // Snell surface highlight
+    // layer: snell-highlight
     float surf = exp(-pow((uv.y - wl) * 90.0, 2.0));
     float breath = 0.85 + 0.15 * uBreath;
     vec3 highlight = mix(GLOW, ACCENT2, hot);
     col += highlight * surf * 0.55 * breath * (1.0 - night * 0.85);
 
-    // ——— ripple wavefronts from taps and flicks ———
+    // layer: pool-steam — a thin haze right off the surface, hot-gated
+    float poolSteam = steamWisp(uv, aspect, uTime, hot) * exp(-d * 6.0);
+    col += mix(GLOW, vec3(1.0), 0.3) * poolSteam * 0.5;
+
+    // layer: ripples — wavefronts from taps and flicks
     float wave = 0.0;
     for (int i = 0; i < ${MAX_RIPPLES}; i++) {
       if (i >= uRippleCount) break;
@@ -274,8 +366,8 @@ void main() {
     }
     col += mix(ACCENT, ACCENT2, hot) * wave * 0.6;
 
-    // The throat: a dark vertical channel down through the pool, brighter
-    // as T rises (throat-mouth brightness IS T — invertible).
+    // layer: throat — a dark vertical channel down through the pool,
+    // brighter as T rises (throat-mouth brightness IS T — invertible).
     float xoff = (uv.x - THROAT_X) * aspect;
     float throatIn = 1.0 - smoothstep(THROAT_HALF * 0.7, THROAT_HALF, abs(xoff));
     if (throatIn > 0.0) {
@@ -290,6 +382,10 @@ void main() {
       col += mix(ACCENT, ACCENT2, hot) * ringBright * throatIn * (0.3 + T01 * 0.9);
     }
 
+    // layer: vent-rim — the ring SDF's lower half, straddling the waterline
+    float rim = ventRing(uv, aspect, wl);
+    col += mix(BG2, GLOW, hot) * rim * (0.5 + 0.5 * uBreath);
+
     // Stir: the pool spins under a scrubbing finger, decays to still
     if (uStir > 0.02) {
       vec2 sp = (uv - vec2(0.5, wl + 0.14)) * vec2(aspect, 1.0);
@@ -300,7 +396,6 @@ void main() {
     }
 
     // The plume rides upward from the throat's mouth
-    float plume = plumeAmp(uv, aspect, uTime);
     if (plume > 0.0) {
       col += mix(GLOW, ACCENT2, hot) * plume * 0.8;
     }
@@ -310,15 +405,18 @@ void main() {
     return;
   }
 
-  // ——— the ground beside the pool: warmed rock in section ———
-  float distToWL = uv.y - wl;
+  // layer: ground-depth ——— the ground beside the pool: warmed rock in
+  // section, an EXPONENTIAL depth gradient sinking from bg2 (warm rock, near
+  // the horizon) toward bg (deep mantle dark) with distance below it.
+  float depthK = clamp((uv.y - HORIZON) / max(0.001, POOL_FLOOR - HORIZON), 0.0, 1.0);
+  float deepGrad = 1.0 - exp(-depthK * 2.4);
+  vec3 rockBase = mix(BG2, BG, deepGrad);
+
   // Warmth glow map: mantle-warmth radiates outward from the throat's line
   float xoff = (uv.x - THROAT_X) * aspect;
   float ground_glow = exp(-abs(xoff) * 6.0) * exp(-max(0.0, uv.y - 0.5) * 3.0);
-  // Base ground color, then a mantle-warmed overlay in the hot register
-  vec3 dry = vec3(0.078, 0.055, 0.045);
-  vec3 warm = vec3(0.115, 0.075, 0.055);
-  col = mix(dry, warm, ground_glow * (0.5 + hot * 0.5));
+  vec3 warmRock = mix(rockBase, ACCENT2, 0.35);
+  col = mix(rockBase, warmRock, ground_glow * (0.5 + hot * 0.5));
 
   // Grain
   vec2 gp = floor(uv * uRes * 0.45);
@@ -328,22 +426,48 @@ void main() {
   float band = fbm(vec2(uv.x * 3.4, uv.y * 22.0 + uTime * 0.02));
   col *= 0.86 + 0.20 * band;
 
+  // The plume passes through this strip too — between the horizon and the
+  // waterline the column would otherwise vanish for one section's height.
+  if (plume > 0.0) {
+    col += mix(GLOW, ACCENT2, hot) * plume * 0.8;
+  }
+
+  // layer: vent-rim — the ring SDF's upper half, above the waterline
+  float rimAbove = ventRing(uv, aspect, wl);
+  col += mix(BG2, GLOW, hot) * rimAbove * (0.5 + 0.5 * uBreath);
+
   // The ground under night: glow red where the mantle is loudest
   if (night > 0.01) {
     col += ACCENT2 * ground_glow * night * (0.4 + hot * 0.6);
   }
 
-  // Mineral bloom at the wet edge — a value-noise fbm modulated by ground_glow
+  // layer: sulfur-bloom — value-noise fbm patches at the wet edge, warm register
   float bloom = fbm(uv * vec2(30.0 * aspect, 30.0) + vec2(uv.y * 4.0, 0.0));
   float bloomBand = smoothstep(0.05, 0.35, ground_glow) *
                     (1.0 - smoothstep(0.55, 0.9, ground_glow));
   col += mix(ACCENT2, GLOW, hot) * bloom * bloomBand * 0.6 * (0.6 + uBreath * 0.4);
 
-  // The heat-mark disc + additive corona lives in the shared population-layer
-  // (src/lib/scene/population-layer.ts) — one instanced draw for every mark.
-  // The load-bearing HEAT to CORONA-BRIGHTNESS map is preserved there, on
-  // the heatSpec's emit: glow = clamp(m.heat / DWELL_T_MAX, 0, 1.6). Invert
-  // the halo, recover the ground temperature the palm left behind.
+  // layer: heat-shimmer — a subtle rippling distortion while building climbs
+  if (buildW > 0.01) {
+    float shimmer = sin(uv.y * 90.0 + uTime * 5.0 + xoff * 12.0) * 0.5 + 0.5;
+    col += mix(ACCENT, ACCENT2, 0.5) * shimmer * ground_glow * buildW * 0.18;
+  }
+
+  // layer: condensation — droplets beading on the rocks right after a fire,
+  // fading as cooling settles back toward the next build
+  if (coolW > 0.01) {
+    vec2 dp = floor(uv * uRes * 0.12);
+    float speck = step(0.965, hash21(dp + 11.0));
+    col += mix(ACCENT, vec3(1.0), 0.6) * speck * coolW * 0.7;
+  }
+
+  // The heat-mark disc + additive corona, and the eruption's ballistic
+  // droplets, live in the shared population-layer
+  // (src/lib/scene/population-layer.ts) — one instanced draw per
+  // population. The load-bearing HEAT to CORONA-BRIGHTNESS map is
+  // preserved there, on the heatSpec's emit: glow = clamp(m.heat /
+  // DWELL_T_MAX, 0, 1.6). Invert the halo, recover the ground temperature
+  // the palm left behind.
 
   // Vignette + night
   vec2 vd = (uv - vec2(0.5, 0.5)) * vec2(aspect, 1.0);
@@ -591,6 +715,68 @@ export default function Geyser() {
       : null;
     const instanceBuffer = createInstanceBuffer(MAX_HEAT_MARKS * 2);
 
+    // ——— the plume's own droplets — decorative only, not the ledger ———
+    // A second population, riding the same shared scene model, so the
+    // plume's ballistic scatter is a countable population and not a hand-
+    // rolled Float32Array on the side. Spawned deterministically off the
+    // shared population's own monotone id (scene/object.ts's `spawn`) while
+    // `state.phase === "erupting"` — never Math.random, never Date.now.
+    const plumeSpec: SceneObjectSpec<PlumeDropletView> = {
+      kind: "plume-droplet",
+      cap: MAX_PLUME_DROPLETS,
+      born(seed, nx, ny, tMs) {
+        const rng = sceneMulberry32(seed);
+        const angle = (rng() - 0.5) * 0.85;
+        const speed = 0.32 + rng() * 0.5;
+        return {
+          id: 0,
+          seed,
+          nx,
+          ny,
+          bornMs: tMs,
+          growth: 1,
+          sealedMs: null,
+          presence: 1,
+          vx: Math.sin(angle) * speed * 0.55,
+          vy: Math.cos(angle) * speed,
+          hueMix: rng(),
+        };
+      },
+      step(s, ctx) {
+        const age = (ctx.tMs - s.bornMs) / 1000;
+        if (age > PLUME_DROPLET_LIFE_S) {
+          s.presence = Math.max(0, s.presence - ctx.dt * 6);
+        }
+      },
+      emit(s, ctx, out) {
+        const age = Math.max(0, (ctx.tMs - s.bornMs) / 1000);
+        const t = Math.min(age, PLUME_DROPLET_LIFE_S);
+        const lifeFrac = clamp01(t / PLUME_DROPLET_LIFE_S);
+        const alpha = (1 - lifeFrac) * s.presence;
+        if (alpha <= 0.01) return;
+        // Ballistic — ballistic droplets scattering off the plume, tapering
+        // (shrinking) upward as they age, a closed-form arc from birth.
+        const nx = s.nx + s.vx * t;
+        const ny = s.ny - s.vy * t + 0.5 * PLUME_GRAVITY * t * t;
+        const px = clamp01(nx) * ctx.width;
+        const py = clamp01(ny) * ctx.height;
+        const r = Math.max(1.1, ctx.width * 0.0055 * (1 - lifeFrac * 0.55));
+        out.push(
+          px, py,
+          r,
+          s.hueMix * Math.PI * 2,
+          0.82, // toward accent2/glow in the layer palette
+          0.4 + 0.5 * (1 - lifeFrac),
+          ctx.breath,
+          alpha * 0.85,
+        );
+      },
+      verbs: [],
+      respond: {},
+    };
+    const plumePopulation = createPopulation(plumeSpec);
+    const plumeInstanceBuffer = createInstanceBuffer(MAX_PLUME_DROPLETS);
+
     // ——— uniform buffers allocated once ———
     const heatU = new Float32Array(MAX_HEAT_MARKS * 4);
     const rippleU = new Float32Array(MAX_RIPPLES * 4);
@@ -662,6 +848,70 @@ export default function Geyser() {
         cursorY = ny;
         cursorLit = 1;
         if (fingers >= 2) return;
+        // the rapid-tap ladder (1 / 3 / 5 / n), in superheated ground:
+        // 1 rings the throat, 3 walks a run of steam toward the vent,
+        // 5 hisses a spit of droplets out of the throat, and from 7 on the
+        // hammering hand shifts the trigger itself — a near-ready geyser
+        // can be drummed over the top, harder with every extra tap
+        const tier = tapTrainTier(count);
+        if (tier === "n") {
+          const drive = clamp01(0.5 + (count - 7) * 0.12 + intensity * 0.3);
+          const attempt = knockErupt(state, drive);
+          state = attempt.state;
+          pushRipple(nx, ny, 0.6 + drive * 0.4);
+          const hz = ringHzFor(state.H);
+          try {
+            audio.playTone(hz * (1 + drive * 0.5), 0.3 + drive * 0.3);
+            haptics.ripple(0.4 + drive * 0.4);
+            if (attempt.fired) {
+              audio.bell();
+              haptics.bloom();
+            }
+          } catch {
+            /* noop */
+          }
+          if (attempt.fired) {
+            setHasKept(true);
+            pushRipple(VENT_NX, VENT_NY, 1);
+            writer.schedule();
+          }
+          return;
+        }
+        if (tier === 5 && count === 5) {
+          // a spit of steam: the throat coughs real droplets without firing
+          for (let i = 0; i < 3; i++) plumePopulation.spawn(VENT_NX, VENT_NY, performance.now());
+          stirTurbulence(0.12 + intensity * 0.1);
+          pushRipple(VENT_NX, VENT_NY, 0.7);
+          const hz = ringHzFor(state.H);
+          try {
+            audio.playTone(hz * 1.5, 0.24 + intensity * 0.2);
+            audio.playTone(hz * 2, 0.16);
+            haptics.chop();
+          } catch {
+            /* noop */
+          }
+          return;
+        }
+        if (tier === 3 && count === 3) {
+          // a run of steam: three ripples march from the tap toward the vent,
+          // each a step up the throat's own pitch
+          const hz = ringHzFor(state.H);
+          for (let i = 0; i < 3; i++) {
+            const f = (i + 1) / 3;
+            pushRipple(nx + (VENT_NX - nx) * f, ny + (VENT_NY - ny) * f, 0.35 + intensity * 0.25);
+            try {
+              audio.playTone(hz * (1 + f * 0.5), 0.12 + intensity * 0.1);
+            } catch {
+              /* noop */
+            }
+          }
+          try {
+            haptics.ripple(0.4 + intensity * 0.3);
+          } catch {
+            /* noop */
+          }
+          return;
+        }
         const found = nearestHeatMark(state, nx, ny, 0.09);
         if (found) {
           soundHeatMark(found.heat);
@@ -967,6 +1217,7 @@ export default function Geyser() {
       clear: () => {
         cleared = true;
         state = initState(SEED);
+        plumePopulation.items.length = 0;
         setHasKept(false);
         try {
           audio.thud();
@@ -1101,6 +1352,15 @@ export default function Geyser() {
               ? Math.max(0, 1 - state.tSincePhase / (ERUPT_DURATION_S * 4))
               : eNorm * 0.85;
         prog.setVec4("uCycle", phaseIdx, hot, plumeH, plumeQ);
+        // uState: floor = ledger phase, fract = continuous progress through
+        // it — dormant/building/erupting/cooling all read off this one axis.
+        const subProgress =
+          phaseIdx === 0
+            ? eNorm
+            : phaseIdx === 1
+              ? clamp01(state.tSincePhase / ERUPT_DURATION_S)
+              : clamp01(state.tSincePhase / (ERUPT_DURATION_S * 4));
+        prog.setFloat("uState", phaseIdx + Math.min(0.999, subProgress));
         prog.setFloat("uLean", lean);
         prog.setFloat("uNight", night);
         prog.setFloat("uStir", stir);
@@ -1140,6 +1400,46 @@ export default function Geyser() {
           instanceBuffer,
         );
         populationLayer?.draw(instanceBuffer);
+
+        // ——— the plume's own droplets ———
+        // Spawn deterministically while erupting, scaled by the ledger's
+        // own Q_erupt — a bigger discharge throws more of them. They then
+        // free-run their own closed-form ballistic arc in real time,
+        // independent of the ledger's much-faster watched-speed clock, so
+        // the scatter is still visibly settling as the phase moves on to
+        // "cooling" — the plume's own follow-through.
+        if (state.phase === "erupting") {
+          const q = Q_erupt(state);
+          const spawnCount = Math.min(4, 1 + Math.round(q * 3));
+          for (let i = 0; i < spawnCount; i++) {
+            plumePopulation.spawn(VENT_NX, VENT_NY, now);
+          }
+        }
+        plumePopulation.step({
+          dt: Math.min(0.05, dtRaw),
+          tMs: now,
+          breath: 0.5,
+          detail: 1,
+          wind: 0,
+          gravity: 0,
+          agitation,
+          season: 0,
+          timeScale,
+          reducedMotion: reduced,
+        });
+        plumeInstanceBuffer.reset();
+        plumePopulation.emit(
+          {
+            width: stage.size.width,
+            height: stage.size.height,
+            tMs: now,
+            breath: reduced ? 0.5 : 0.5 + 0.5 * Math.sin(t * Math.PI * 2 / 7),
+            detail: 1,
+            reducedMotion: reduced,
+          },
+          plumeInstanceBuffer,
+        );
+        populationLayer?.draw(plumeInstanceBuffer);
       }
 
       // ——— the twist lens: the cycle, drawn back off the water ———
@@ -1186,7 +1486,7 @@ export default function Geyser() {
             ? `${forecast.toFixed(0)}s to fire`
             : phaseName(state);
           octx.fillText(
-            `phase ${phaseName(state)}  eruptions ${state.eruptions}  ${forecastStr}`,
+            `phase ${visualPhaseLabel(state)} (${phaseName(state)})  eruptions ${state.eruptions}  ${forecastStr}`,
             pad,
             barY + 68,
           );

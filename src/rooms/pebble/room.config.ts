@@ -44,6 +44,7 @@ const pebble = {
       "one pebble, cut open along its own cleavage plane. the interior is the lattice's growth history — concentric rings each with their own metric spacing, cleavage traces drawn as ink lines under the polish. the outer shell is the Wulff hull relaxed by abrasion: the more the water has carried it, the smoother the envelope. the sound is the lattice you can hear (kept from the tray), damped by the polish so a well-worn pebble rings shorter than a fresh crystal — the polish depth is audible.",
     moves: [
       "tap the stone → it rings its own partials, damped by its polish; a fresh crystal rings long, a polished pebble rings short",
+      "rapid taps (1 / 3 / 5 / n) → a ring → the lattice's triad sounds as one chord → a knap flashes along the cleavage plane nearest the blow → the full bell rolls and the section spins in the light",
       "tap the dark → the cabinet answers with a low grain",
       "hold on the polished shell → rubs it deeper; the polish grows and the higher partials quiet",
       "hold to the ceremony tier → the stone is polished as far as the lattice will let it; kept between visits",
@@ -118,6 +119,16 @@ const pebble = {
       ceremony_is:
         "polishes the stone to POLISH_MAX in one commit — kept between visits as the pebble the sea has finished with",
     },
+    // The polished shell's raking-lamp highlight is a soft Fresnel falloff
+    // by design (a real polish has no hard specular cut), so edge_density
+    // sits at 4.2% against the 6% floor even though hue_diversity (8),
+    // luminance_range (119), spatial_entropy (5.5) and file_size_floor all
+    // clear theirs with real margin. The micro-crystalline stipple and wear
+    // scratches added in the phase-9 pass raise edge_density somewhat, but
+    // the guide screenshot has not been re-shot in this worktree (no
+    // playwright) — the flag stays until it is measured to no longer be
+    // needed. See data/object-compiler/audits/phase-9-pebble-and-threshold.md.
+    visual: { soft_glow: true },
   },
 } as const satisfies RoomManifest;
 

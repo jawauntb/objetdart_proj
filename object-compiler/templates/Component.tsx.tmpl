@@ -151,6 +151,14 @@ export default function {{ComponentName}}() {
     let tickPopulation: (now: number, tSec: number) => void = () => {};
     // __SLOT_POPULATION__
 
+    // ——— the state machine + the room's secrets — phase 7's long tail. This
+    // slot lands the state variable, the transition table, the discoverable
+    // dispatch, and the per-verb rapid-count storage. Exposed onto apiRef so
+    // the verb handlers below can guard their branches on state and count.
+    // If spec.state_machine and spec.discoverables are empty, this slot
+    // becomes a one-line comment and the harness proceeds unchanged.
+    // __SLOT_DISCOVERABLES__
+
     // ——— the glimmer clock — a physical shimmer after ~20s of idle, never a
     // text hint. Renderer emits deterministically from spec.life.glimmer.
     {{spec.life.idle_writer_setup}}

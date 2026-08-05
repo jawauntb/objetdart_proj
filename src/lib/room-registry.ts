@@ -247,7 +247,10 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     source: "src/components/City.tsx",
     page: "src/app/city/page.tsx",
     address: { band: "atlas" },
-    frame: "yield",
+    // The room owns its own perspective camera and the pinch that couples
+    // zoom with pitch (bird's-eye Currier & Ives → SF/London eye-level).
+    // ScaleTravel yields the pinch verb to the material here.
+    frame: "own",
     chrome: "axis",
     keeps: "objetdart:city:v1",
     creates: "a plot",
@@ -290,9 +293,7 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "travel+peers",
     keeps: "objetdart:world:v1",
     creates: "a natural",
-    exempt: {
-      tutti: "the tide is one continuous waterline rather than a population of independent objects; its synchronized answer is already the shared tide phase",
-    },
+    exempt: {},
   },
   {
     key: "waves",
@@ -336,9 +337,7 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "axis",
     keeps: null,
     creates: null,
-    exempt: {
-      pan: "the wave's camera is an orthographic strip with a fixed horizontal domain; zooming changes its reading scale but translation would hide the signal rather than move through a larger frame",
-    },
+    exempt: {},
     rawPointer: "the typography layer samples pointer contact continuously to deform the wave beneath a fingertip; semantic gesture handlers remain the owner of classified hand meanings",
     governor: "the room's requestAnimationFrame loop is a short visual settling pass after a contact, not a continuously running simulation, so it has no sustained frame budget to tier",
   },
@@ -490,7 +489,6 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     keeps: "objetdart:flowers:v1",
     creates: "a flower",
     exempt: {
-      pan: "the garden camera is anchored to its bed: pinch changes the botanical scale but translation would move the visitor outside the bounded plot",
       dwell: "the garden's pressure-bloom is continuous from contact and already owns its growth axis; a second dwell plant would duplicate a flower at the same contact",
     },
     rawPointer: "reads contact count and the surf-line inset directly for the press-bloom; the engine reports intensity per event but no continuous pressure channel while held",
@@ -690,11 +688,7 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "axis",
     keeps: "objetdart:constellations:v1",
     creates: "a star",
-    exempt: {
-      dilation: "the star field's clock is astronomical position rather than room-time; holding it would falsify the orbital representation",
-      dwell: "constellations are named from a completed contact path, not grown under a stationary finger",
-      ceremony: "the kept sky is sealed by naming a constellation; there is no separate ceremony that can safely retire a shared star",
-    },
+    exempt: {},
   },
   {
     key: "space",
@@ -722,9 +716,7 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "axis",
     keeps: null,
     creates: null,
-    exempt: {
-      dwell: "the comb's teeth are a fixed acoustic scale; prolonged contact sustains a note instead of planting new material into the instrument",
-    },
+    exempt: {},
   },
   {
     key: "beam",
@@ -1141,6 +1133,19 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     exempt: {},
   },
   {
+    key: "marsh",
+    href: "/marsh",
+    kind: "room",
+    source: "src/components/Marsh.tsx",
+    page: "src/app/marsh/page.tsx",
+    address: { band: "drop" },
+    frame: "yield",
+    chrome: "axis",
+    keeps: "objetdart:marsh:v1",
+    creates: "a reed",
+    exempt: {},
+  },
+  {
     key: "orb",
     href: "/orb",
     kind: "room",
@@ -1206,6 +1211,19 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     exempt: {},
   },
   {
+    key: "root",
+    href: "/root",
+    kind: "room",
+    source: "src/components/Root.tsx",
+    page: "src/app/root/page.tsx",
+    address: { band: "drop" },
+    frame: "yield",
+    chrome: "axis",
+    keeps: "objetdart:root:v1",
+    creates: "a tip",
+    exempt: {},
+  },
+  {
     key: "soil",
     href: "/soil",
     kind: "room",
@@ -1242,6 +1260,19 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "axis",
     keeps: "objetdart:spring:v1",
     creates: "a seep",
+    exempt: {},
+  },
+  {
+    key: "tidepool",
+    href: "/tidepool",
+    kind: "room",
+    source: "src/components/Tidepool.tsx",
+    page: "src/app/tidepool/page.tsx",
+    address: { band: "coast" },
+    frame: "yield",
+    chrome: "axis",
+    keeps: "objetdart:tidepool:v1",
+    creates: "a creature",
     exempt: {},
   },
 ];
