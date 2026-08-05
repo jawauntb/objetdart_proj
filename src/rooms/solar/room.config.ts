@@ -34,6 +34,9 @@ const solar = {
       "a small solar system that genuinely keeps orbiting while nobody watches — real elapsed time folded into kepler's clockwork in one closed-form step — and the worlds pull on each other while you do, so orbits precess, pairs lock into whole-number ratios, and what touches merges.",
     moves: [
       "tap a world → it flares and sings its orbit; the tone's frequency is the orbital frequency, lifted whole into hearing",
+      "rapid taps (1 / 3 / 5 / n) → a world answers → it calls its resonance partners → a comet condenses under the striking finger → the whole chord sweeps open, inner voice first",
+      "tap a steady beat → the epoch entrains: the chosen world's year is retimed onto eight of your beats, and a truly even hand earns the tutti",
+      "two still fingers held apart → a span: the two courses under the fingertips hold their interval — the third law, sustained — and a locked pair answers with its bell",
       "tap the sun → it answers with a low bell and a flare of its corona",
       "tap open sky → the dust stirs and one low grain sounds",
       "drag a world → the orbit follows the hand; pulled outward the voice falls, exactly as kepler demands",
