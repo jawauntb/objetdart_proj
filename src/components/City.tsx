@@ -27,6 +27,7 @@ import {
   headingFor,
   hesitationBetween,
   isRegularOf,
+  isStanding,
   mulberry,
   nearestEdgePoint,
   needFor,
@@ -141,6 +142,13 @@ type Person = {
   regularEventId: number | null;
   hesitating: boolean;
   hesitationSince: number;
+  // ── pose ──
+  // `stillMs` accumulates each frame stepTowards produced no measurable
+  // delta and resets the frame it did. The renderer feeds this into
+  // `isStanding` (a pure city.ts law) to decide walking sliver vs standing
+  // dot-over-dot — a store IS what its regulars do at it, and a regular at
+  // their store has to read as a body standing there, not a sliver.
+  stillMs: number;
   // ── leaving arc ──
   // `unmetSinceMs` is the city-time when both fed AND rested first fell
   // below LEAVING_NEED_THRESHOLD; null while at least one is met. The
@@ -1458,6 +1466,7 @@ export default function City() {
           regularEventId: null,
           hesitating: false,
           hesitationSince: 0,
+          stillMs: 0,
           unmetSinceMs: null,
           leavingTo: null,
           leavingSinceMs: null,
@@ -1475,6 +1484,14 @@ export default function City() {
     function stepPopulation(dt: number): void {
       const HESITATION_SWAP_MS = 550;
       const ARRIVAL_MS = 260;
+      // The step-delta threshold below which a person reads as stationary.
+      // A walking frame moves ~5e-5 normalized units per ms of dt (see
+      // PERSON_SPEED_NORM_PER_MS), so a 16ms frame walks ~8e-4 units and its
+      // squared norm is ~6.4e-7. A hundredth of that (~1e-8) is safely below
+      // any real walk and above the floating-point noise of stepTowards'
+      // arithmetic — a person hovering on their target lands here every
+      // frame, and their `stillMs` counter accrues until isStanding fires.
+      const STILL_DELTA_NORM_SQ = 1e-8;
       // Walk the array with an index so retiring a leaving person on arrival
       // at the edge is a splice, not a rebuild — the population is small and
       // the mutation is honest: a person who reached the edge is gone.
@@ -1531,6 +1548,11 @@ export default function City() {
             { x: person.x, y: person.y },
             person.heading,
           );
+          // A leaving person is defined by walking to the edge; their pose
+          // must never flip to standing. Reset the still counter every frame
+          // in this branch so the renderer keeps drawing them as slivers
+          // heading out of the field.
+          person.stillMs = 0;
           const arrivedAtEdge =
             Math.abs(person.x - target.x) < 0.006 &&
             Math.abs(person.y - target.y) < 0.006;
@@ -1639,6 +1661,22 @@ export default function City() {
           { x: person.x, y: person.y },
           person.heading,
         );
+        // Accumulate the still counter that isStanding() reads. A frame
+        // whose delta is beneath STILL_DELTA_NORM_SQ is not a walking
+        // frame — the person is hovering on a plot they've already
+        // arrived at, or waiting because their targetPlotId is null in a
+        // city with no matching plot. A frame with any real delta resets
+        // the counter to 0 so the pose flips back to walking the instant
+        // they move.
+        {
+          const ddx = person.x - prevX;
+          const ddy = person.y - prevY;
+          if (ddx * ddx + ddy * ddy < STILL_DELTA_NORM_SQ) {
+            person.stillMs += dt;
+          } else {
+            person.stillMs = 0;
+          }
+        }
         idx += 1;
       }
     }
@@ -1812,16 +1850,65 @@ export default function City() {
         fgctx.stroke();
       }
 
-      // people — heading-aligned slivers with an arrival tail and warm cast
-      // for regulars, pale for hesitators. On the lowest detail tier the
-      // per-person tail is dropped (still the population, still legible).
-      // A leaving person fades toward the edge — their opacity eases from 1
-      // to 0 across LEAVING_FADE_MS via `fadeForLeaving`, the same law the
-      // test pins.
+      // people — two poses drawn by one causal predicate.
+      //
+      // A walking person is a heading-aligned sliver (body along the
+      // motion vector, head-dot at the leading end). A person whose
+      // stepTowards delta has stayed ~0 for more than STANDING_STILL_MS
+      // is a STANDING person: drawn as a small vertical body — a head
+      // dot above a body dot — so a colony of regulars at a plot reads
+      // as *people standing at a store*, not as strokes indistinguishable
+      // from motion. The predicate is `isStanding(stillMs)` from
+      // src/lib/city.ts, single-sourced with the test that pins it.
+      //
+      // A leaving person fades toward the edge — their opacity eases
+      // from 1 to 0 across LEAVING_FADE_MS via `fadeForLeaving`; their
+      // stillMs is reset every frame in the leaving branch so they
+      // never freeze into a standing pose mid-departure.
       const dropTails = detail.samples < 2;
       for (const person of people) {
         const px = person.x * width;
         const py = person.y * height;
+        const leavingFade = person.phase === "leaving" && person.leavingSinceMs != null
+          ? fadeForLeaving(cityTimeMs - person.leavingSinceMs)
+          : 1;
+        if (leavingFade <= 0) continue;
+
+        const baseAlpha = person.hesitating ? 0.6 : 0.9;
+        const bodyAlpha = baseAlpha * leavingFade;
+        // Regulars wear cool teal (reads AGAINST the settlement's warm
+        // plots); the ordinary body is candle-black. A leaving person is
+        // a neutral desaturated grey — the belonging teal drops away as
+        // they walk to the edge. Visual language: teal is belonging,
+        // grey is departure, and the fade takes care of the rest.
+        const isRegular = person.regularStoreId != null || person.regularEventId != null;
+        const bodyColor = person.phase === "leaving"
+          ? `rgba(64, 68, 76, ${bodyAlpha})`
+          : isRegular
+            ? `rgba(74, 158, 158, ${bodyAlpha})`
+            : `rgba(21, 23, 26, ${bodyAlpha})`;
+
+        const standing = isStanding(person.stillMs);
+        if (standing) {
+          // Standing pose — a small vertical body: a head dot above a
+          // body dot, aligned to gravity (screen +y is down). Not
+          // heading-aligned: a person parked at a store points nowhere.
+          // The body dot is a touch larger than the head so the eye
+          // reads posture rather than punctuation.
+          fgctx.fillStyle = bodyColor;
+          const bodyRadius = isRegular ? 2.0 : 1.6;
+          const headRadius = isRegular ? 1.5 : 1.2;
+          const stackGap = 3.2;
+          fgctx.beginPath();
+          fgctx.arc(px, py + 0.4, bodyRadius, 0, Math.PI * 2);
+          fgctx.fill();
+          fgctx.beginPath();
+          fgctx.arc(px, py + 0.4 - stackGap, headRadius, 0, Math.PI * 2);
+          fgctx.fill();
+          continue;
+        }
+
+        // Walking pose — a heading-aligned sliver with a leading head dot.
         const cos = Math.cos(person.heading);
         const sin = Math.sin(person.heading);
         const length = person.phase === "arriving" ? 6 : 5;
@@ -1829,10 +1916,6 @@ export default function City() {
         const by = py + sin * (length * 0.5);
         const tx = px - cos * (length * 0.5);
         const ty = py - sin * (length * 0.5);
-        const leavingFade = person.phase === "leaving" && person.leavingSinceMs != null
-          ? fadeForLeaving(cityTimeMs - person.leavingSinceMs)
-          : 1;
-        if (leavingFade <= 0) continue;
         if (!dropTails && person.phase === "arriving") {
           const home = plots.find((p) => p.id === person.homeId);
           if (home) {
@@ -1852,19 +1935,6 @@ export default function City() {
             }
           }
         }
-        const baseAlpha = person.hesitating ? 0.6 : 0.9;
-        const bodyAlpha = baseAlpha * leavingFade;
-        // Regulars wear cool teal (reads AGAINST the settlement's warm
-        // plots); the ordinary body is candle-black. A leaving person is
-        // a neutral desaturated grey — the belonging teal drops away as
-        // they walk to the edge. Visual language: teal is belonging, grey
-        // is departure, and the fade takes care of the rest.
-        const isRegular = person.regularStoreId != null || person.regularEventId != null;
-        const bodyColor = person.phase === "leaving"
-          ? `rgba(64, 68, 76, ${bodyAlpha})`
-          : isRegular
-            ? `rgba(74, 158, 158, ${bodyAlpha})`
-            : `rgba(21, 23, 26, ${bodyAlpha})`;
         fgctx.strokeStyle = bodyColor;
         fgctx.lineWidth = 2;
         fgctx.lineCap = "round";
@@ -1873,9 +1943,9 @@ export default function City() {
         fgctx.lineTo(bx, by);
         fgctx.stroke();
         fgctx.fillStyle = bodyColor;
-        // Regulars carry a slightly larger head dot — a colony of regulars
-        // reads as a small ring of round dots around a plot, not as
-        // several strokes indistinguishable from the crowd.
+        // Regulars carry a slightly larger head dot — a colony of
+        // regulars reads as a small ring of round dots around a plot,
+        // not as several strokes indistinguishable from the crowd.
         const headRadius = isRegular ? 2.0 : 1.4;
         fgctx.beginPath();
         fgctx.arc(bx, by, headRadius, 0, Math.PI * 2);

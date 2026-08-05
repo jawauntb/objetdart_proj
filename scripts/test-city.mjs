@@ -38,6 +38,7 @@ const {
   needsUnmet,
   shouldLeave,
   fadeForLeaving,
+  isStanding,
   PLOT_DWELL_MS,
   CITY_DAY_MS,
   SEASON_ORDER,
@@ -48,6 +49,7 @@ const {
   LEAVING_NEED_THRESHOLD,
   LEAVING_UNMET_MS,
   LEAVING_FADE_MS,
+  STANDING_STILL_MS,
 } = mod.exports;
 
 // ——— the plot role ladder is a causal, monotone function of dwell —————————
@@ -317,10 +319,41 @@ assert.ok(halfWay > 0.49 && halfWay < 0.51, "halfway through the fade the person
 // Monotone: the person fades further, never brighter, as they walk toward the edge.
 assert.ok(fadeForLeaving(200) > fadeForLeaving(600), "the fade is monotone — a leaving person only dims");
 
+// ——— pose: a store IS what its regulars do at it —————————————————————————
+//
+// isStanding is a pure predicate: given how long the person has been
+// stationary, has their pose flipped from walking to standing? The caller
+// (City.tsx) accumulates stillMs frame-by-frame from stepTowards' delta.
+// The visual predicate is single-sourced here so a regenerating pose
+// change cannot drift from the test — same discipline roleForDwell holds.
+
+assert.equal(isStanding(0), false, "a person who has not been still is walking, not standing");
+assert.equal(isStanding(50), false, "a moment of stillness is not yet a standing pose");
+assert.equal(
+  isStanding(STANDING_STILL_MS), false,
+  "at exactly the threshold the person is still walking — standing requires a beat past the tier",
+);
+assert.equal(
+  isStanding(STANDING_STILL_MS + 1), true,
+  "one ms past the threshold flips the pose to standing",
+);
+assert.equal(isStanding(1_000), true, "a long parked stretch is unambiguously standing");
+assert.equal(isStanding(-100), false, "a negative counter is walking — a person cannot un-stand into a stand");
+assert.ok(STANDING_STILL_MS > 0, "the standing tier is a real window, not a tick");
+// The tier must be smaller than the hesitation-swap window (550ms in the
+// renderer) so a hesitator hovering between two plots still reads as
+// walking, not as standing. And it must be smaller than the leaving fade
+// so a person paused at a store reads as standing well before any leaving
+// arc could ever bite. Both are covered by keeping STANDING_STILL_MS at
+// ~200ms; if the constant grows past those bounds the invariant slips.
+assert.ok(STANDING_STILL_MS < LEAVING_FADE_MS, "the standing tier is faster than the leaving fade");
+assert.ok(STANDING_STILL_MS < LEAVING_UNMET_MS, "a person becomes visibly standing long before they would ever leave");
+
 console.log(
   `city ok: role ladder monotone, needs answered by identity, ${SEASON_ORDER.length} seasons cycle both ways, ` +
   `movement never overshoots, homes seed 1..3 residents deterministically, ` +
   `regulars densify identity at ${REGULAR_VISITS_TO_BECOME_REGULAR} visits with a ${REGULAR_PULL_FACTOR}× pull, ` +
   `arrivals enter from the nearest map edge, headings track motion, hesitation slows a tradeoff to ${HESITATION_SPEED_FACTOR}×, ` +
-  `unmet needs past ${LEAVING_UNMET_MS}ms on both counters retire a person from the settlement.`,
+  `unmet needs past ${LEAVING_UNMET_MS}ms on both counters retire a person from the settlement, ` +
+  `people flip from walking sliver to standing dot-over-dot after ${STANDING_STILL_MS}ms of no measurable step.`,
 );

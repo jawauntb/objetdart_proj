@@ -440,6 +440,49 @@ export function headingFor(prev: Vec2, cur: Vec2, fallback: number): number {
   return Math.atan2(dy, dx);
 }
 
+// ——— pose — a store IS what its regulars do at it ————————————————————————
+//
+// A store answering food is a plot with people STANDING at it, not a plot
+// with slivers on top of it. v2's regulars ring told you a plot was a
+// community, but every person at the plot was still drawn as a heading-
+// aligned sliver — the pose the eye reads as "walking". A colony of
+// regulars at a plot has to read as a colony of *stationary bodies*, or
+// the invariant "identity by causal role" fails at the exact spot where
+// role densifies into community.
+//
+// The predicate is pure: given how long the person has been still
+// (`stillMs`, accumulated by the caller from stepTowards' returned delta),
+// return whether the pose has flipped from walking to standing. Kept in
+// this file so the visual predicate is single-sourced and testable, in the
+// same discipline as `roleForDwell` (the dwell → role ladder both the
+// finger and the keyboard climb through this one function).
+
+/**
+ * How long a person must have made no measurable step before their pose
+ * reads as standing rather than walking. 200ms is a beat below a slow
+ * gait cycle — long enough that a person parked at a store IS visibly
+ * still, short enough that arrival flips them from walker to stander in
+ * the same second the eye reads their body.
+ *
+ * Strict-greater: at exactly 200ms the person is still walking. Standing
+ * is a decision the visitor has watched happen, not an instantaneous
+ * predicate on a single frame.
+ */
+export const STANDING_STILL_MS = 200;
+
+/**
+ * True when the person has been stationary long enough to read as
+ * standing. The caller accumulates `stillMs` frame-by-frame while
+ * stepTowards' returned delta is near zero, and resets it the frame the
+ * person moves. A negative or zero counter is walking — a person who has
+ * not yet had a chance to be still is not standing. The threshold's
+ * strict inequality matches the follow-up brief exactly: "when delta ≈ 0
+ * for > 200ms, draw a small vertical body".
+ */
+export function isStanding(stillMs: number): boolean {
+  return stillMs > STANDING_STILL_MS;
+}
+
 // ——— hesitation — two needs, two plots, one slower step ——————————————————
 //
 // Density manufactures tradeoffs. If a person's need can be answered by two
