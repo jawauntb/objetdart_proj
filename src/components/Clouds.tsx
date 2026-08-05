@@ -708,6 +708,18 @@ export default function Clouds() {
     let panXTarget = 0;
     let panYTarget = 0;
 
+    const cellNear = (x: number, y: number): WeatherCell | null => {
+      let best: WeatherCell | null = null;
+      let bestD = 80;
+      for (const cell of weatherCells) {
+        const d = Math.hypot(cell.x - x, cell.y - y);
+        if (d < bestD) { bestD = d; best = cell; }
+      }
+      return best;
+    };
+    // deterministic tier-3-on-empty-sky cycle: moisture → thermal → shear
+    let skyTapCycle = 0;
+
     const dissolveWeatherCellNear = (x: number, y: number): boolean => {
       let bestIdx = -1;
       let bestD = 80;
@@ -761,9 +773,9 @@ export default function Clouds() {
       y: number,
       kind: WeatherCell["kind"],
       strength: number,
-    ) => {
+    ): WeatherCell => {
       const p = clampToSky(x, y);
-      weatherCells.push({
+      const cell: WeatherCell = {
         id: ++nextWeatherId,
         kind,
         x: p.x,
@@ -775,9 +787,11 @@ export default function Clouds() {
         lift: kind === "storm" ? 0.35 + Math.random() * 0.35 : 1.2 + Math.random() * 1.8,
         phase: Math.random() * Math.PI * 2,
         rain: kind === "storm" ? 0.45 + Math.random() * 0.35 + strength * 0.22 : Math.random() * 0.10,
-      });
+      };
+      weatherCells.push(cell);
       if (weatherCells.length > 20) weatherCells.shift();
       setHasBuilt(true);
+      return cell;
     };
 
     const seedRainVeil = (x: number, y: number, strength: number, width = 180) => {
@@ -968,20 +982,57 @@ export default function Clouds() {
           return;
         }
         if (tier >= 5) {
-          // five taps call the bolt down to the finger
-          seedWeatherCell(px, py, "storm", 0.6 + depth * 0.4);
+          // tier 5 — the sky's biggest reachable event: a storm cell that
+          // actually rains, lightning called down into it in the same frame
+          seedWeatherCell(px, py, "storm", 0.7 + depth * 0.3);
+          seedRainVeil(px, py + 40, 0.6 + depth * 0.4, 170 + depth * 100);
           triggerLightning(pointer.current.uvx, { x: px, y: py });
-          addWeatherMark("called bolt", 0.8 + depth * 0.2);
+          addWeatherMark("storm cell", 0.8 + depth * 0.2);
+          useField.getState().recordTape("region", 0.8 + depth * 0.2, "clouds/storm-cell");
           return;
         }
         if (tier >= 3) {
-          // three taps break the vapor into rain where the train lands
-          seedWeatherCell(px, py, "vapor", 0.4 + depth * 0.3);
-          seedRainVeil(px, py + 36, 0.4 + depth * 0.4, 140 + depth * 80);
-          try { getFieldAudio().playNote(52 - Math.round(depth * 6), 180); } catch { /* noop */ }
+          const hitCell = cellNear(px, py);
+          if (hitCell) {
+            // tier 3 on an existing cloud: it grows toward cumulonimbus —
+            // real growth of the thing that's there, not a new decal
+            hitCell.strength = Math.min(1, hitCell.strength + 0.28 + depth * 0.2);
+            hitCell.spread = Math.min(2.2, hitCell.spread + 0.18 + depth * 0.12);
+            if (hitCell.strength > 0.72) {
+              hitCell.kind = "storm";
+              hitCell.rain = Math.max(hitCell.rain, 0.45 + depth * 0.2);
+              seedRainVeil(hitCell.x, hitCell.y + 40, hitCell.rain, 150 + depth * 80);
+              try { getFieldAudio().thud(); } catch { /* noop */ }
+            } else {
+              try { getFieldAudio().playNote(52 - Math.round(depth * 6), 180); } catch { /* noop */ }
+            }
+            haptics.ripple(0.35 + depth * 0.3);
+            addWeatherMark("cloud grows", 0.55 + depth * 0.2);
+            useField.getState().recordTape("object", 0.6 + depth * 0.2, "clouds/grow");
+            return;
+          }
+          // tier 3 on open sky: one of a cycling, deterministic set —
+          // moisture condenses, a thermal lifts, or a shear layer combs in
+          const kind = skyTapCycle % 3;
+          skyTapCycle += 1;
+          if (kind === 0) {
+            seedWeatherCell(px, py, "vapor", 0.4 + depth * 0.3);
+            seedRainVeil(px, py + 36, 0.4 + depth * 0.4, 140 + depth * 80);
+            try { getFieldAudio().playNote(52 - Math.round(depth * 6), 180); } catch { /* noop */ }
+            addWeatherMark("moisture", 0.5 + depth * 0.2);
+          } else if (kind === 1) {
+            const cell = seedWeatherCell(px, py, "vapor", 0.32 + depth * 0.2);
+            if (cell) cell.lift = Math.min(48, cell.lift + 14 + depth * 8);
+            try { getFieldAudio().playTone(190 + depth * 40, 0.3); } catch { /* noop */ }
+            addWeatherMark("a thermal", 0.5 + depth * 0.2);
+          } else {
+            windTargetX = clamp(windTargetX + (px > overlay.clientWidth / 2 ? -0.4 : 0.4) * (0.6 + depth), -1, 1);
+            seedWeatherCell(px, py, "vapor", 0.28 + depth * 0.18);
+            try { getFieldAudio().playTone(120, 0.4); } catch { /* noop */ }
+            addWeatherMark("a shear layer", 0.5 + depth * 0.2);
+          }
           haptics.ripple(0.3 + depth * 0.25);
-          addWeatherMark("first rain", 0.5 + depth * 0.2);
-          useField.getState().recordTape("ripple", 0.5 + depth * 0.2, "clouds/rain");
+          useField.getState().recordTape("ripple", 0.5 + depth * 0.2, `clouds/sky-${kind}`);
           return;
         }
         const g = glyphAt(px, py);
@@ -1843,6 +1894,55 @@ export default function Clouds() {
 
       const stormFade = phase > 0.55 && phase < 0.93 ? 0.55 : 1;
       drawSunShafts(octx, w, h, phase, motionElapsed, isLight);
+
+      // ── cells act on each other ──
+      // Two that touch merge into one that is neither parent: combined
+      // strength and spread, and enough combined strength condenses it all
+      // the way to a storm cell — real growth toward cumulonimbus, not a
+      // scripted tap response. A storm heavy with rain sheds a downdraft
+      // that feeds any vapor cell nearby, pushing it toward its own storm —
+      // a chain reaction, not an isolated decal.
+      if (!reduce) {
+        for (let i = 0; i < weatherCells.length; i++) {
+          const a = weatherCells[i];
+          for (let j = weatherCells.length - 1; j > i; j--) {
+            const b = weatherCells[j];
+            const d = Math.hypot(a.x - b.x, a.y - b.y);
+            const reach = (a.spread + b.spread) * 46;
+            if (d > reach) continue;
+            const sum = a.strength + b.strength;
+            a.strength = Math.min(1, sum * 0.62);
+            a.spread = Math.min(2.2, a.spread + b.spread * 0.5);
+            a.rain = Math.max(a.rain, b.rain);
+            if (a.kind === "storm" || b.kind === "storm" || sum > 1.15) {
+              a.kind = "storm";
+              a.rain = Math.max(a.rain, 0.45);
+            }
+            a.x = (a.x + b.x) / 2;
+            a.y = Math.min(a.y, b.y);
+            weatherCells.splice(j, 1);
+            try { getFieldAudio().thud(); } catch { /* noop */ }
+            try { haptics.bloom(); } catch { /* noop */ }
+            addWeatherMark("cells merge", 0.6 + Math.min(0.3, sum * 0.2));
+            useField.getState().recordTape("region", 0.65, "clouds/cell-merge");
+          }
+        }
+        for (const a of weatherCells) {
+          if (a.kind !== "storm" || a.rain < 0.5) continue;
+          for (const b of weatherCells) {
+            if (b === a || b.kind === "storm") continue;
+            const d = Math.hypot(a.x - b.x, a.y - b.y);
+            if (d > 220) continue;
+            b.strength = Math.min(1, b.strength + dt * 0.12);
+            if (b.strength > 0.78) {
+              b.kind = "storm";
+              b.rain = Math.max(b.rain, 0.4);
+              try { haptics.chop(); } catch { /* noop */ }
+              addWeatherMark("downdraft feeds a neighbour", 0.6);
+            }
+          }
+        }
+      }
 
       for (let i = weatherCells.length - 1; i >= 0; i--) {
         const cell = weatherCells[i];

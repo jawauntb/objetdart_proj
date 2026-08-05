@@ -552,6 +552,58 @@ for (const seed of [1, 42, 0x5eed, 0xbeef, 991]) {
   assert.equal(S.sealPit(sheet, 0, 0, 2.2), 0, "and sealing twice seals nothing twice");
 }
 
+// —— gastrulation: the sheet folds a region in and under ————————————
+// The bug this catches: a "gastrulation" that recolours a disc of cells
+// without moving them, or one that folds the whole sheet because the radius
+// was never honoured. Both look plausible in one screenshot and are not a
+// fold. The assertions are: cells outside are untouched, the inside really
+// travels inward, nothing is created or destroyed, and it holds.
+{
+  const sheet = S.buildSheet(0x6a57, 11, 11, 0);
+  const n0 = sheet.n;
+  const R = 2.4;
+  const inside = [];
+  const outside = [];
+  for (let i = 0; i < sheet.n; i++) {
+    if (sheet.px[i] ** 2 + sheet.py[i] ** 2 <= R * R) inside.push(i);
+    else outside.push(i);
+  }
+  assert.ok(inside.length > 4 && outside.length > 4, "the region is a region, not the sheet");
+  const fateBefore = Array.from(sheet.fate);
+  const homeBefore = inside.map((i) => Math.hypot(sheet.hx[i], sheet.hy[i]));
+
+  // driven as a duration, the way the room drives it
+  let inner = 0;
+  for (let k = 0; k < 40; k++) inner = S.gastrulate(sheet, 0, 0, R, (k + 1) / 40);
+
+  assert.ok(inner > 0, "a full invagination really makes a second layer");
+  assert.equal(sheet.n, n0, "and makes it out of the cells that were there — nothing created or destroyed");
+  for (const i of outside) {
+    assert.equal(sheet.fate[i], fateBefore[i], "cells outside the blastopore keep their fate");
+    assert.equal(sheet.depth[i], 0, "and stay on the surface");
+  }
+  let pulledIn = 0;
+  inside.forEach((i, k) => {
+    if (Math.hypot(sheet.hx[i], sheet.hy[i]) < homeBefore[k] - 1e-9) pulledIn += 1;
+  });
+  assert.ok(pulledIn > inside.length * 0.6, "the folding region is drawn toward the blastopore, not merely tinted");
+  for (let i = 0; i < sheet.n; i++) {
+    if (sheet.fate[i] === S.INNER_FATE) assert.equal(sheet.depth[i], 1, "the inner layer is all the way in");
+  }
+  for (let e = 0; e < sheet.ecount; e++) {
+    assert.ok(sheet.restF[e] >= S.MIN_REST_FACTOR - 1e-12, "no bond is constricted to nothing");
+  }
+  // and it holds: relaxing the constriction never un-seals the germ layer
+  const innerBefore = Array.from(sheet.fate).filter((f) => f === S.INNER_FATE).length;
+  S.relaxConstriction(sheet, 1, 4);
+  assert.equal(
+    Array.from(sheet.fate).filter((f) => f === S.INNER_FATE).length,
+    innerBefore,
+    "a sealed germ layer is terminal — the sheet does not unfold itself",
+  );
+  assert.equal(S.gastrulate(sheet, 0, 0, R, 0), 0, "asking for no fold folds nothing");
+}
+
 // —— what the room keeps survives the trip through storage ————————
 // The bug: a persisted sheet that comes back with a different topology, so
 // the chord you left is not the chord you return to.
@@ -583,5 +635,5 @@ for (const seed of [1, 42, 0x5eed, 0xbeef, 991]) {
 }
 
 console.log(
-  "sheet ok: the verlet sheet identical at 60 and 120 Hz over a full second, relaxation removing exactly its stiffness fraction per pass and converging on a strained lattice, an interior cell knit by exactly six bonds, the chord reading back into the degree spectrum it came from, every single cut bond strictly raising the dissonance, mitosis conserving area to 1e-12 with every neighbour rewired to exactly one daughter, apoptosis dropping exactly the bonds it held with no self-loop left behind and the ring around it still closed, differentiation pure and monotone, constriction bounded away from zero, and storage returning the sheet still singing its chord",
+  "sheet ok: the verlet sheet identical at 60 and 120 Hz over a full second, relaxation removing exactly its stiffness fraction per pass and converging on a strained lattice, an interior cell knit by exactly six bonds, the chord reading back into the degree spectrum it came from, every single cut bond strictly raising the dissonance, mitosis conserving area to 1e-12 with every neighbour rewired to exactly one daughter, apoptosis dropping exactly the bonds it held with no self-loop left behind and the ring around it still closed, differentiation pure and monotone, constriction bounded away from zero, gastrulation folding exactly its region in and under with the cell count untouched, and storage returning the sheet still singing its chord",
 );

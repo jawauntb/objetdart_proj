@@ -75,11 +75,15 @@ import {
   grownDensity,
   hashSeed,
   isLit,
+  mergeWanderers,
   mulberry32,
   novaBrightness,
   placeGalaxies,
+  stepWanderers,
   subBassMidiFor,
+  wandererMergeRadius,
   type Galaxy,
+  type Wanderer,
 } from "@/lib/cosmicweb";
 
 /** One seed, one universe — the same one every visit, for everybody. */
@@ -442,6 +446,83 @@ export default function DeepSpaceWeb() {
     let spanA = -1;
     let spanB = -1;
     let spanVoiceAt = 0;
+
+    // ——— wanderers: real bodies, moving THROUGH the invariant field ———
+    // The density field itself never moves — that is the room's whole
+    // argument. A wanderer is a different kind of thing: an actual body
+    // with a velocity, gravitationally attracted to every other wanderer,
+    // that can coalesce into a third body on contact. Struck by hand
+    // (cluster / filament / void / merger / structure-formation run) and
+    // capped small, so the population physics stays O(wanderers²), never
+    // O(galaxies).
+    type WanderBody = Wanderer & { id: number; bornAt: number };
+    let wanderers: WanderBody[] = [];
+    let wanderSerial = 0;
+    const MAX_WANDERERS = 14;
+    const WANDER_G = 0.02;
+    const WANDER_SOFT = 0.035;
+    const WANDER_SPEED_CAP = 0.9;
+    const WANDER_MERGE_UNIT = 0.02;
+    let emptyCycleIdx = 0;
+
+    const spawnWanderer = (x: number, y: number, z: number, vx: number, vy: number, vz: number, m: number) => {
+      wanderers.push({ id: wanderSerial++, bornAt: performance.now(), x, y, z, vx, vy, vz, m });
+      if (wanderers.length > MAX_WANDERERS) wanderers.shift();
+    };
+
+    /** A point roughly ahead of the eye, in box units — deterministic jitter
+     *  seeded by the spawn serial, never the wall clock. */
+    const pointAhead = (depth: number, jitter = 0.12) => {
+      const rng = mulberry32(hashSeed(UNIVERSE_SEED, wanderSerial, 0x7a11));
+      const jx = (rng() - 0.5) * jitter;
+      const jy = (rng() - 0.5) * jitter;
+      const jz = (rng() - 0.5) * jitter;
+      return {
+        x: clamp01(cam.x + basis.fx * depth + jx),
+        y: clamp01(cam.y + basis.fy * depth + jy),
+        z: clamp01(cam.z + basis.fz * depth + jz),
+      };
+    };
+
+    /** Sight + sound + haptics, in the same frame, for a wanderer merger —
+     *  the third body that is neither parent. */
+    const soundWanderMerge = (into: Wanderer) => {
+      try {
+        audio.bell();
+        audio.playNote(Math.round(subBassMidiFor(clamp01(into.m / 6))), 700);
+        haptics.storm();
+      } catch {
+        /* noop */
+      }
+    };
+
+    const stepWandererPhysics = (dt: number) => {
+      if (wanderers.length < 2) return;
+      const bodies: Wanderer[] = wanderers.map((w) => ({ x: w.x, y: w.y, z: w.z, vx: w.vx, vy: w.vy, vz: w.vz, m: w.m }));
+      const stepped = stepWanderers(bodies, dt, WANDER_G, WANDER_SOFT, WANDER_SPEED_CAP);
+      stepped.forEach((b, i) => {
+        wanderers[i].x = clamp(b.x, -0.4, 1.4);
+        wanderers[i].y = clamp(b.y, -0.4, 1.4);
+        wanderers[i].z = clamp(b.z, -0.4, 1.4);
+        wanderers[i].vx = b.vx;
+        wanderers[i].vy = b.vy;
+        wanderers[i].vz = b.vz;
+      });
+      const { merges } = mergeWanderers(stepped, WANDER_MERGE_UNIT);
+      if (merges.length === 0) return;
+      const findIdx = (body: Wanderer) => stepped.findIndex((s) => s.x === body.x && s.y === body.y && s.m === body.m);
+      for (const ev of merges) {
+        const ia = findIdx(ev.a);
+        const ib = findIdx(ev.b);
+        if (ia < 0 || ib < 0 || ia === ib) continue;
+        const survivor = wanderers[ia];
+        survivor.x = ev.into.x; survivor.y = ev.into.y; survivor.z = ev.into.z;
+        survivor.vx = ev.into.vx; survivor.vy = ev.into.vy; survivor.vz = ev.into.vz;
+        survivor.m = ev.into.m;
+        wanderers.splice(ib, 1);
+        soundWanderMerge(ev.into);
+      }
+    };
 
     // ——— typed arrays: the whole population, uploaded once ———
     const posArr = new Float32Array(count * 3);
@@ -906,6 +987,29 @@ export default function DeepSpaceWeb() {
                 /* noop */
               }
             }
+            // the room's biggest, rarest event: a cosmic-web-scale structure
+            // formation run — a burst of real bodies, seeded along the sky's
+            // own filaments, that fall together under their own gravity over
+            // the seconds that follow and merge as they meet
+            const burst = Math.min(6, MAX_WANDERERS - wanderers.length);
+            for (let b = 0; b < burst; b++) {
+              const rng = mulberry32(hashSeed(UNIVERSE_SEED, wanderSerial + b, 0xf012));
+              const fil = web.filaments[Math.floor(rng() * web.filaments.length)];
+              const a = web.knots[fil[0]];
+              const bk = web.knots[fil[1]];
+              const u = rng();
+              const px = a.x + (bk.x - a.x) * u;
+              const py = a.y + (bk.y - a.y) * u;
+              const pz = a.z + (bk.z - a.z) * u;
+              const cx = (a.x + bk.x) / 2;
+              const cy = (a.y + bk.y) / 2;
+              const cz = (a.z + bk.z) / 2;
+              const inv = 0.6 + depth * 0.6;
+              spawnWanderer(px, py, pz, (cx - px) * inv, (cy - py) * inv, (cz - pz) * inv, 0.4 + rng() * 0.5);
+            }
+            if (burst > 0) {
+              try { audio.playNote(20, 1400); haptics.bloom(); } catch { /* noop */ }
+            }
             return;
           }
           if (tier === 3) {
@@ -925,6 +1029,19 @@ export default function DeepSpaceWeb() {
                   window.setTimeout(() => soundGalaxy(k, 520), 80 + Math.round(depth * 60));
                 }
               }
+              // its own transformation: two real bodies gather beside it and
+              // fall together — the node collapsing into a small cluster
+              const gx = galaxies[i].x;
+              const gy = galaxies[i].y;
+              const gz = galaxies[i].z;
+              const r1 = mulberry32(hashSeed(UNIVERSE_SEED, wanderSerial, 0xc105));
+              const ang = r1() * Math.PI * 2;
+              const off = 0.05 + r1() * 0.03;
+              const p1 = { x: clamp01(gx + Math.cos(ang) * off), y: clamp01(gy + Math.sin(ang) * off), z: clamp01(gz + (r1() - 0.5) * off) };
+              const p2 = { x: clamp01(gx - Math.cos(ang) * off), y: clamp01(gy - Math.sin(ang) * off), z: clamp01(gz - (r1() - 0.5) * off) };
+              const conv = 0.5 + depth * 0.4;
+              spawnWanderer(p1.x, p1.y, p1.z, (gx - p1.x) * conv, (gy - p1.y) * conv, (gz - p1.z) * conv, 0.5);
+              spawnWanderer(p2.x, p2.y, p2.z, (gx - p2.x) * conv, (gy - p2.y) * conv, (gz - p2.z) * conv, 0.5);
               try {
                 haptics.ripple(0.35 + depth * 0.2);
               } catch {
@@ -932,7 +1049,40 @@ export default function DeepSpaceWeb() {
               }
               return;
             }
-            stirTurbulence(0.06 + depth * 0.05);
+            // open sky: the next rarity in a fixed, deterministic cycle —
+            // a filament, a void, a merger, in that order, forever
+            const kinds = ["filament", "void", "merger"] as const;
+            const kind = kinds[emptyCycleIdx % kinds.length];
+            emptyCycleIdx += 1;
+            if (kind === "filament") {
+              const rng = mulberry32(hashSeed(UNIVERSE_SEED, wanderSerial, 0xf17a));
+              const fil = web.filaments[Math.floor(rng() * web.filaments.length)];
+              const a = web.knots[fil[0]];
+              const bk = web.knots[fil[1]];
+              const along = 0.5 + (rng() - 0.5) * 0.6;
+              const p = pointAhead(0.5);
+              const dx = bk.x - a.x;
+              const dy = bk.y - a.y;
+              const dz = bk.z - a.z;
+              const speed = 0.05 + depth * 0.05;
+              spawnWanderer(p.x, p.y, p.z, dx * speed * along, dy * speed * along, dz * speed * along, 0.35);
+            } else if (kind === "void") {
+              const p = pointAhead(0.55, 0.24);
+              const rng = mulberry32(hashSeed(UNIVERSE_SEED, wanderSerial, 0x901d));
+              const ang = rng() * Math.PI * 2;
+              const speed = 0.16 + depth * 0.1;
+              spawnWanderer(p.x, p.y, p.z, Math.cos(ang) * speed, Math.sin(ang) * speed, (rng() - 0.5) * speed, 0.22);
+            } else {
+              const p = pointAhead(0.5);
+              const rng = mulberry32(hashSeed(UNIVERSE_SEED, wanderSerial, 0xa16e));
+              const ang = rng() * Math.PI * 2;
+              const sep = 0.02;
+              const speed = 0.08 + depth * 0.06;
+              const p1 = { x: clamp01(p.x + Math.cos(ang) * sep), y: clamp01(p.y + Math.sin(ang) * sep), z: p.z };
+              const p2 = { x: clamp01(p.x - Math.cos(ang) * sep), y: clamp01(p.y - Math.sin(ang) * sep), z: p.z };
+              spawnWanderer(p1.x, p1.y, p1.z, -Math.cos(ang) * speed, -Math.sin(ang) * speed, 0, 0.4);
+              spawnWanderer(p2.x, p2.y, p2.z, Math.cos(ang) * speed, Math.sin(ang) * speed, 0, 0.4);
+            }
             try {
               audio.playNote(26, 800);
               haptics.tap();
@@ -1339,6 +1489,9 @@ export default function DeepSpaceWeb() {
       for (let i = 0; i < count; i++) {
         if (flare[i] > 0) flare[i] = Math.max(0, flare[i] - dt * 0.9);
       }
+      // the wanderers pull on each other whether or not a hand is here —
+      // aliveness, and the physics between things, running on its own clock
+      if (!reduced) stepWandererPhysics(dt * timeScale);
 
       const t = audio.getAudioTime() ?? now / 1000;
       const breath = reduced ? 0.5 : Math.sin(t * Math.PI * 2 * 0.14) * 0.5 + 0.5;
@@ -1555,6 +1708,19 @@ export default function DeepSpaceWeb() {
         ctx.beginPath();
         ctx.arc(p.x, p.y, 6 + u * 90, 0, Math.PI * 2);
         ctx.stroke();
+      }
+
+      // wanderers: real bodies falling through the field, struck by hand
+      for (const w of wanderers) {
+        const p = project(w.x, w.y, w.z);
+        if (!p) continue;
+        const age = (now - w.bornAt) / 1000;
+        const settle = clamp01(age / 0.6);
+        const r = clamp((2.2 + Math.cbrt(w.m) * 2.4) / (0.5 + p.z), 1, 16) * (0.4 + 0.6 * settle);
+        ctx.fillStyle = `rgba(238, 220, 190, ${clamp01(0.55 / (0.5 + p.z))})`;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+        ctx.fill();
       }
 
       // the season, felt at the edges: an early universe is a colder frame

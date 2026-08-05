@@ -377,6 +377,33 @@ export default function CircularityFourier() {
     ringTone(meta, value / 12, value);
   };
 
+  // tier 5: the room's biggest, rarest event — a full Fourier build-up. The
+  // series resets to its fundamental and climbs to all twelve terms one at a
+  // time, on a fixed schedule (never Math.random), so the square/saw/
+  // triangle/pulse genuinely assembles from its own components in front of
+  // the hand — the composite IS the running sum in `epicycle`, not a drawn
+  // approximation cut to the same shape.
+  const buildUpTimersRef = useRef<number[]>([]);
+  const fourierBuildUp = useCallback((intensity: number) => {
+    for (const t of buildUpTimersRef.current) window.clearTimeout(t);
+    buildUpTimersRef.current = [];
+    setFourierTerms(1, "build-reset");
+    momentumRef.current = clamp(momentumRef.current + 1.2 + intensity * 0.8, -3, 3);
+    for (let n = 2; n <= 12; n += 1) {
+      const id = window.setTimeout(() => {
+        setFourierTerms(n, "build");
+      }, (n - 1) * 190);
+      buildUpTimersRef.current.push(id);
+    }
+    const id = window.setTimeout(() => {
+      try { getFieldAudio().bell(); } catch { /* noop */ }
+      try { haptics.bloom(); } catch { /* noop */ }
+      recordTape("sigil", 1, "circularity/build-complete");
+    }, 12 * 190);
+    buildUpTimersRef.current.push(id);
+    try { haptics.storm(); } catch { /* noop */ }
+  }, [momentumRef, recordTape]);
+
   const tuneFromPointer = useCallback((clientX: number, clientY: number, strength = 1) => {
     const stage = stageRef.current;
     if (!stage) return;
@@ -480,13 +507,10 @@ export default function CircularityFourier() {
           // three taps call the next harmonic into the chain — one more
           // circle visibly joins, rung by ringTone in the same frame
           setFourierTerms(termsRef.current + 1, "train");
-        } else if (trainTier === 5 && e.count === 5) {
-          // five taps throw the wheel a full extra turn — momentum the flick
-          // alone cannot reach, spinning down on its own
-          momentumRef.current = clamp(momentumRef.current + 2.4, -3, 3);
-          try { audio.bell(); } catch { /* noop */ }
-          try { haptics.bloom(); } catch { /* noop */ }
-          recordTape("sigil", 0.7, "circularity/train-throw");
+        } else if (trainTier === 5) {
+          // the room's biggest, rarest event: the whole series builds from
+          // its fundamental, one harmonic joining at a time
+          fourierBuildUp(e.intensity);
         } else if (trainTier === "n") {
           // seven and beyond: the crescendo — every further tap winds the
           // spring harder and rolls the whole standing series, rising
@@ -678,8 +702,9 @@ export default function CircularityFourier() {
     return () => {
       detach();
       detachVessel();
+      for (const t of buildUpTimersRef.current) window.clearTimeout(t);
     };
-  }, [presetRef, recordTape, ringTone, termsRef, tuneFromPointer]);
+  }, [fourierBuildUp, presetRef, recordTape, ringTone, termsRef, tuneFromPointer]);
 
   return (
     <div

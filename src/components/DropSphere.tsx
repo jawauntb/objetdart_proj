@@ -628,6 +628,9 @@ export default function DropSphere() {
   // gesture-driven grab state: which bead the finger holds, and where the
   // finger is (canvas-local) so the draw loop can critically-damp toward it.
   const dragRef = useRef({ active: false, drop: -1, x: 0, y: 0, lastX: 0, lastY: 0, throttle: 0, pullAt: 0 });
+  // deterministic tier-3-on-open-water cycle: a fresh droplet falls in, or
+  // the cluster bounces once. Advances one step per tier-3 empty tap.
+  const emptyTapCycleRef = useRef(0);
   const audioRef = useRef<WaterAudio | null>(null);
   const startRef = useRef(0);
   const sizeRef = useRef({ w: 0, h: 0 });
@@ -711,6 +714,59 @@ export default function DropSphere() {
     try { audioRef.current?.plip(); } catch { /* noop */ }
     try { haptics.chop(); } catch { /* noop */ }
     recordTape("object", 0.85, "drop/split");
+  }, [recordTape]);
+
+  /**
+   * Triple tap on a bead: it shatters — area-conserving, thrown outward in
+   * every direction — and then re-coalesces, because nothing new is added
+   * to do that: the cluster's own cohesion (every drop pulled toward the
+   * crowd's centroid, in the physics step) and its own contact-merge law
+   * already pull the fragments back into one another. The bug a decal
+   * version of this would have: fragments that fly apart and just sit
+   * there. Here they don't, because the force between drops is real.
+   */
+  const shatterDrop = useCallback((idx: number, kickScale: number) => {
+    const drops = dropsRef.current;
+    const d = drops[idx];
+    if (!d || d.r < 30) return false;
+    const reduced = reduceRef.current;
+    const now = (performance.now() - startRef.current) / 1000;
+    // however many pieces fit under the population cap, at least 2 — the
+    // cap gives way visibly (the oldest/smallest already-shattered piece
+    // is simply not created) rather than refusing the whole gesture
+    const room = Math.max(0, MAX_DROPS - drops.length + 1);
+    const n = Math.max(2, Math.min(4, room));
+    const childR = Math.max(20, d.r / Math.sqrt(n));
+    const seedAngle = rand(0, TAU);
+    const fragments: Drop[] = [];
+    for (let i = 0; i < n; i++) {
+      const ang = seedAngle + (i / n) * TAU;
+      const speed = (140 + kickScale * 220) * (0.85 + 0.3 * ((i * 37) % 5) / 5);
+      fragments.push({
+        id: DROP_ID++,
+        x: d.x + Math.cos(ang) * childR * 0.5,
+        y: d.y + Math.sin(ang) * childR * 0.5,
+        vx: d.vx + Math.cos(ang) * speed,
+        vy: d.vy + Math.sin(ang) * speed,
+        r: childR,
+        modes: makeModes(reduced),
+        mic: [],
+        grabbed: false, gx: 0, gy: 0,
+        // a short lock: long enough to see the shatter, short enough that
+        // cohesion visibly draws them back together and lets them merge
+        mergeLock: now + 0.45,
+        bob: rand(0, TAU),
+      });
+    }
+    const per = Math.ceil(d.mic.length / n);
+    for (let i = 0; i < d.mic.length; i++) fragments[Math.min(n - 1, Math.floor(i / per))].mic.push(d.mic[i]);
+    for (const f of fragments) if (f.mic.length === 0) populate(f, reduced);
+    drops.splice(idx, 1, ...fragments);
+    try { audioRef.current?.gloop(); } catch { /* noop */ }
+    try { audioRef.current?.plip(); } catch { /* noop */ }
+    try { haptics.storm(); } catch { /* noop */ }
+    recordTape("object", 0.95, "drop/shatter");
+    return true;
   }, [recordTape]);
 
   // ── screen point → which drop / where ────────────────────────────────
@@ -1604,9 +1660,12 @@ export default function DropSphere() {
           flickOff(dd, ang, 260 + e.intensity * 300);
           return;
         }
-        if (tier === 3 && e.count === 3 && hit !== -1) {
-          // three taps strike the bead's whole chord: every harmonic mode
-          // rings at once and the life inside startles with the jelly
+        if (tier === 3 && hit !== -1) {
+          // tier 3 on a bead: it transforms — it shatters into pieces that
+          // the cluster's own cohesion and merge law then pull back into
+          // one, a third drop that is neither parent
+          if (shatterDrop(hit, e.intensity)) return;
+          // too small to shatter usefully: it still rings its whole chord
           const dd = dropsRef.current[hit];
           for (const m of dd.modes) m.v += (m.k % 2 === 0 ? 1 : -1) * (4 + e.intensity * 7);
           for (const m of dd.mic) m.dart = Math.max(m.dart, 0.7);
@@ -1616,8 +1675,16 @@ export default function DropSphere() {
           recordTape("object", 0.7, "drop/chord");
           return;
         }
-        if (e.count === 2 && hit !== -1) {
-          bounceDrop(dropsRef.current[hit]);
+        if (tier === 3 && hit === -1 && dropsRef.current.length > 0) {
+          // tier 3 on open water: one of a cycling, deterministic set —
+          // a fresh droplet falls in, or the whole cluster bounces once
+          const kind = emptyTapCycleRef.current % 2;
+          emptyTapCycleRef.current += 1;
+          if (kind === 0 && dropsRef.current.length < MAX_DROPS) {
+            splitLargest();
+          } else {
+            for (const dd of dropsRef.current) bounceDrop(dd);
+          }
           return;
         }
         if (dartMicrobe(px, py)) return;
@@ -2125,7 +2192,10 @@ export default function DropSphere() {
       try { audioRef.current?.dispose(); } catch { /* noop */ }
       audioRef.current = null;
     };
-  }, [agitate, bounceDrop, dartMicrobe, ensureAudio, hitDrop, pullApart, recordTape, shakeScatter, vesselSpoke]);
+  }, [
+    agitate, bounceDrop, dartMicrobe, ensureAudio, hitDrop, pullApart, recordTape, shakeScatter,
+    shatterDrop, splitLargest, vesselSpoke,
+  ]);
 
   return (
     <div

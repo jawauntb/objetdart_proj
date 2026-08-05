@@ -44,6 +44,7 @@ import {
   select,
   isMonotoneRising,
   isMonotoneFalling,
+  currentThreshold,
   NAV_GRID,
   type State,
   type Params,
@@ -353,6 +354,28 @@ export default function StructureLoom() {
       startTones();
     };
 
+    // tier 5: the room's biggest, rarest event — a full compile through
+    // every phase. Sustaining `pour` (the real attention input) over several
+    // seconds so the actual step() dynamics genuinely walk latent →
+    // gathering → threshold → agency → rest, not a scripted snap: enough
+    // pours to guarantee a crossing and hold agency open a while, then the
+    // pours stop and the room's own decay carries it to rest on schedule.
+    let compileTimers: number[] = [];
+    const fullCompile = (depth: number) => {
+      for (const t of compileTimers) window.clearTimeout(t);
+      compileTimers = [];
+      const pulses = 6;
+      for (let i = 0; i < pulses; i++) {
+        const id = window.setTimeout(() => { pour = 1; }, i * 420);
+        compileTimers.push(id);
+      }
+      audio.start();
+      startTones();
+      audio.bell();
+      haptics.bloom();
+      void depth;
+    };
+
     // ——— the selection ceremony (agency only) ———
     const doSelect = () => {
       if (s.phase !== "agency") return;
@@ -383,9 +406,14 @@ export default function StructureLoom() {
             }
             return;
           }
-          // the rapid-tap ladder (tiers 1/3/5/n) in the loom's own material:
-          // one pours, three cohere the substrates, five throw the shuttle,
-          // n saturates the gathering
+          // the site-wide tap train (gesture/core.ts): 1 / 3 / 5 / n. Tier 3
+          // is the structure's transformation — the braid pulls the five
+          // substrates into line AND leaves tension one pour short of the
+          // real crossing, so the very next accumulation genuinely fires it
+          // (the room's own step(), not a scripted snap). Tier 5 is the
+          // room's biggest, rarest event: a full compile through every
+          // phase, latent to rest, sustained long enough for the real
+          // dynamics to walk the whole arc. Tier n keeps saturating.
           const trainTier = tapTrainTier(e.count);
           const depth = tapTrainDepth(e.count);
           if (trainTier === "n") {
@@ -395,17 +423,20 @@ export default function StructureLoom() {
             return;
           }
           if (trainTier === 5) {
-            // the shuttle: a decisive surge of attention, thrown at once
-            pour = Math.min(1, pour + 0.45 + depth * 0.2);
-            const spec = compileSound(s, params);
-            audio.playTone(spec.rootHz * 2, 0.6);
-            haptics.detent();
+            fullCompile(depth);
             return;
           }
           if (trainTier === 3) {
             // the braid: the five substrates pull into line — coherence
-            // rises and the chord agrees with itself
-            s = { ...s, coherence: Math.min(1, s.coherence + 0.12 + depth * 0.1) };
+            // rises and the chord agrees with itself — and tension is
+            // carried right to the lip of its real threshold
+            const thresh = currentThreshold(s);
+            s = {
+              ...s,
+              coherence: Math.min(1, s.coherence + 0.12 + depth * 0.1),
+              tension: Math.min(thresh - 0.015, s.tension + 0.4 + depth * 0.3),
+            };
+            pour = Math.max(pour, 0.5 + depth * 0.3);
             const spec = compileSound(s, params);
             audio.playTone(spec.rootHz, 0.7);
             audio.playTone(spec.rootHz * 1.5, 0.6);
@@ -546,6 +577,11 @@ export default function StructureLoom() {
     let raf = 0;
     let last = audio.getAudioTime() ?? performance.now() / 1000;
     let tableAt = 0;
+    // aliveness: the room's own simulation clock (paused exactly when the
+    // frame is), which the ambient breath below rides — so the structure
+    // never sits fully still even with no hand ever on it, the way the
+    // reference room's weather spawns unattended.
+    let simClock = 0;
 
     const palette = {
       bg: "#07090e",
@@ -575,8 +611,12 @@ export default function StructureLoom() {
       if (nowMs < entrainUntil) dt *= entrainMul;
 
       // ——— advance the ONE structure ———
-      // tilt leans the gathering: a lean adds a little attention on its side.
-      const attention = Math.min(1, pour + Math.max(0, tiltLean) * 0.12);
+      simClock += dt;
+      // a small ambient breath of concern, always present: the room keeps
+      // gathering on its own timer and will eventually cross unattended,
+      // the loom's own version of unattended weather. tilt leans it further.
+      const ambient = 0.026 + 0.016 * Math.sin(simClock * 0.5);
+      const attention = Math.min(1, Math.max(pour, ambient) + Math.max(0, tiltLean) * 0.12);
       const prev = s;
       s = step(s, { attention, renew: attention }, dt, params);
       pour *= reduced ? 0.9 : 0.92;
@@ -892,6 +932,7 @@ export default function StructureLoom() {
       offGalleryPause();
       window.removeEventListener("keydown", onKey);
       cancelAnimationFrame(raf);
+      for (const t of compileTimers) window.clearTimeout(t);
       stopTones();
     };
   }, []);

@@ -698,6 +698,72 @@ export function sealPit(s: Sheet, cx: number, cy: number, radius: number): numbe
   return sealed;
 }
 
+// ——— gastrulation ————————————————————————————————————————————
+//
+// The pit is what one finger can make. Gastrulation is what the sheet does
+// to itself: a whole region folds in and under, and the cells that go under
+// become the second layer. It is the same three moves the pit makes — depth,
+// apical constriction, and the seal — but applied across a front, and it
+// moves the sheet's MEMORY (hx, hy), so the fold is permanent and the tissue
+// does not spring flat again the moment nothing is holding it.
+
+/** How far a gastrulating region drags its cells toward the blastopore. */
+export const GASTRULA_PULL = 0.42;
+
+/**
+ * Fold a region of the sheet in and under. `amount` (0..1) is how far the
+ * invagination has run — a duration, not a switch, so a caller can drive it
+ * over seconds and the sheet folds continuously. Cells past SEAL_DEPTH join
+ * the inner layer (INNER_FATE, terminal); their remembered home is drawn
+ * toward the centre, so the fold holds.
+ *
+ * Nothing is created or destroyed: `s.n` is exactly what it was.
+ */
+export function gastrulate(
+  s: Sheet,
+  cx: number,
+  cy: number,
+  radius: number,
+  amount: number,
+): number {
+  const a = amount < 0 ? 0 : amount > 1 ? 1 : amount;
+  if (a <= 0 || radius <= 0) return 0;
+  const r2 = radius * radius;
+  let inner = 0;
+  for (let i = 0; i < s.n; i++) {
+    const dx = s.px[i] - cx;
+    const dy = s.py[i] - cy;
+    const d2 = dx * dx + dy * dy;
+    if (d2 > r2) continue;
+    const d = Math.sqrt(d2);
+    const falloff = 1 - d / radius;
+    const want = a * falloff;
+    if (want > s.depth[i]) s.depth[i] = want > 1 ? 1 : want;
+    // the sheet remembers being folded: home creeps toward the blastopore
+    const pull = GASTRULA_PULL * a * falloff * falloff;
+    s.hx[i] += (cx - s.hx[i]) * pull;
+    s.hy[i] += (cy - s.hy[i]) * pull;
+    if (s.depth[i] >= SEAL_DEPTH && s.fate[i] !== INNER_FATE) {
+      s.fate[i] = INNER_FATE;
+      s.depth[i] = 1;
+    }
+    if (s.fate[i] === INNER_FATE) inner += 1;
+  }
+  // the apical surfaces of the folding region constrict, as they really do
+  for (let e = 0; e < s.ecount; e++) {
+    const ia = s.ea[e];
+    const ib = s.eb[e];
+    const da = (s.px[ia] - cx) ** 2 + (s.py[ia] - cy) ** 2;
+    const db = (s.px[ib] - cx) ** 2 + (s.py[ib] - cy) ** 2;
+    if (da > r2 || db > r2) continue;
+    const falloff = 1 - Math.sqrt(Math.max(da, db)) / radius;
+    let target = 1 - APICAL_MAX * a * falloff;
+    if (target < MIN_REST_FACTOR) target = MIN_REST_FACTOR;
+    if (target < s.restF[e]) s.restF[e] = target;
+  }
+  return inner;
+}
+
 // ——— tearing ————————————————————————————————————————————————
 
 function segmentsCross(

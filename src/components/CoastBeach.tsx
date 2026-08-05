@@ -1246,17 +1246,20 @@ export default function CoastBeach() {
           // a double tap on it presses it in deeper, the ceremony a hold
           // already owns for taking it back
           const s = shellAt(nx, ny);
+          const tier = tapTrainTier(e.count);
+          const depth = tapTrainDepth(e.count);
           if (s) {
-            const shellGain = 0.55 + e.intensity * 0.45 + tapTrainDepth(e.count) * 0.35;
+            const shellGain = 0.55 + e.intensity * 0.45 + depth * 0.35;
             voice.say(zoneVoice(zoneAt(nx, beachY(s, tideForTap), tideForTap), 0.25, shellGain));
-            throwFoam(mix32(s.seed, e.x), s.nx, beachY(s, tideForTap), Math.round(8 + tapTrainDepth(e.count) * 10), {
+            throwFoam(mix32(s.seed, e.x), s.nx, beachY(s, tideForTap), Math.round(8 + depth * 10), {
               spread: 0.02, rise: 0.06, drift: 0.03, size: 4.0, decay: 0.9, tint: 0,
             });
-            addTouch(s.nx, beachY(s, tideForTap), "wet", 0.5 + e.intensity * 0.45 + tapTrainDepth(e.count) * 0.3);
-            haptics.ripple(0.4 + tapTrainDepth(e.count) * 0.25);
-            if (e.count === 2) {
-              // pressed home: a firmer mark, and the sand round it settles
-              addMark(s.nx, beachY(s, tideForTap), 0.05 + e.intensity * 0.02, 0, 0.05);
+            addTouch(s.nx, beachY(s, tideForTap), "wet", 0.5 + e.intensity * 0.45 + depth * 0.3);
+            haptics.ripple(0.4 + depth * 0.25);
+            if (tier === 3 || tier === 5 || tier === "n") {
+              // tier ≥3 on a shell already kept: pressed home, and the sand
+              // round it settles firmer the harder the train climbs
+              addMark(s.nx, beachY(s, tideForTap), 0.05 + e.intensity * 0.02 + depth * 0.02, 0, 0.05);
               audio.spark();
               haptics.tap();
             }
@@ -1265,17 +1268,17 @@ export default function CoastBeach() {
 
           const zone = zoneAt(nx, ny, tideForTap);
 
-          // double tap on open ground: what it means depends on which of
-          // the five materials it lands on
-          if (e.count === 2) {
+          // tier 3, on open ground: its own transformation, one of a
+          // deterministic set that depends on which of the five materials
+          // it lands on — a real breaker on the surf, a tide pool in the
+          // wet sand, a flush on the dune, a gust on dry sand, gulls in air
+          if (tier === 3) {
             const power = clamp01(0.45 + e.intensity * 0.5);
             if (zone === "sea") {
-              // the surf: a real breaker, raised where the hand struck it
               raiseBreaker(nx, power);
               return;
             }
             if (zone === "wet") {
-              // wet sand: a shallow tide pool opens and holds water
               tidePools.push({ nx, ny, r: 0.03 + power * 0.02, t0: simT });
               if (tidePools.length > MAX_TIDE_POOLS) tidePools.shift();
               addMark(nx, ny, 0.045, 0, 0.02);
@@ -1288,7 +1291,7 @@ export default function CoastBeach() {
               return;
             }
             if (zone === "dune") {
-              // the dune: whatever is nesting there is flushed downhill
+              // whatever is nesting there is flushed downhill
               let flushed = 0;
               for (const shell of shells) {
                 if (zoneAt(shell.nx, beachY(shell, tideForTap), tideForTap) !== "dune") continue;
@@ -1307,7 +1310,6 @@ export default function CoastBeach() {
               return;
             }
             if (zone === "dry") {
-              // dry sand: the wind kicks a ridge of it into the air
               wind = clamp(wind + (nx < 0.5 ? -1 : 1) * 0.3, -1, 1);
               throwFoam(mix32(Math.round(nx * 4096), 9), nx, ny, 16, {
                 spread: 0.07, rise: 0.07, drift: 0.09, size: 4.6, decay: 0.6, tint: 1,
@@ -1326,34 +1328,27 @@ export default function CoastBeach() {
             return;
           }
 
-          // rapid-tap ladder: print → break → rogue set → shore tutti
-          const tier = tapTrainTier(e.count);
-          const depth = tapTrainDepth(e.count);
-          if (tier === "n") {
-            // the largest event the shore has: a rogue set on top of tutti —
-            // three big waves stacked into one crossing swell
-            tutti(0.75 + e.intensity * 0.4 + depth * 0.25);
-            raiseBreaker(clamp(nx - 0.14, 0.06, 0.94), 0.9 + depth * 0.1);
-            raiseBreaker(nx, 1);
-            raiseBreaker(clamp(nx + 0.14, 0.06, 0.94), 0.9 + depth * 0.1);
-            answer(nx, ny, e.intensity, 2.4 + depth);
-            return;
-          }
           if (tier === 5) {
+            // tier 5 — the shore's largest, rarest reachable event short of
+            // tutti: a rogue set, three big waves stacked so their swash
+            // overlaps, rearranging the beach and able to bury or uncover
+            // whatever the sea has kept
             voice.breakWave(0.55 + e.intensity * 0.4 + depth * 0.2);
-            raiseBreaker(clamp(nx - 0.1, 0.06, 0.94), 0.75 + depth * 0.2);
-            raiseBreaker(clamp(nx + 0.1, 0.06, 0.94), 0.75 + depth * 0.2);
+            raiseBreaker(clamp(nx - 0.13, 0.06, 0.94), 0.7 + depth * 0.2);
+            raiseBreaker(nx, 0.9 + depth * 0.1);
+            raiseBreaker(clamp(nx + 0.13, 0.06, 0.94), 0.7 + depth * 0.2);
             answer(nx, ny, e.intensity, 2.0 + depth * 0.5);
             return;
           }
-          if (tier === 3) {
-            // triple tap: a rogue set — three big waves that rearrange the
-            // beach and can bury or uncover shells, the shore's biggest
-            // reachable event short of the full tutti above
-            raiseBreaker(clamp(nx - 0.13, 0.06, 0.94), 0.55 + depth * 0.25);
-            raiseBreaker(nx, 0.7 + depth * 0.3);
-            raiseBreaker(clamp(nx + 0.13, 0.06, 0.94), 0.55 + depth * 0.25);
-            answer(nx, ny, e.intensity, 1.55 + depth * 0.45);
+          if (tier === "n") {
+            // tier n: the sustained train keeps deepening — the rogue set
+            // now rides under a full tutti, and every extra tap in the
+            // train widens and strengthens it further, never a flat ceiling
+            tutti(0.75 + e.intensity * 0.4 + depth * 0.25);
+            raiseBreaker(clamp(nx - 0.14 - depth * 0.03, 0.04, 0.96), 0.9 + depth * 0.1);
+            raiseBreaker(nx, 1);
+            raiseBreaker(clamp(nx + 0.14 + depth * 0.03, 0.04, 0.96), 0.9 + depth * 0.1);
+            answer(nx, ny, e.intensity, 2.4 + depth);
             return;
           }
           answer(nx, ny, e.intensity, 1 + depth * 0.35);

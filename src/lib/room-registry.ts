@@ -301,6 +301,13 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     keeps: "objetdart:coast:v1",
     creates: "a shell",
     exempt: {},
+    interacts:
+      "swash: a raised breaker (lib/coast's asymmetric run-up) drags every shell caught in its " +
+      "lateral reach up the beach on the rise and back on the drain, exactly as it erodes and " +
+      "redeposits the shared sand profile beneath them — the same force moves both. Heavy " +
+      "redeposition from a rogue set can visibly bury a shell in the new sand; the profile's own " +
+      "slow relax later uncovers it. At the shell cap the oldest washes out to the sea rather " +
+      "than vanishing silently.",
   },
   {
     key: "ocean",
@@ -314,6 +321,12 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     keeps: "objetdart:world:v1",
     creates: "a natural",
     exempt: {},
+    interacts:
+      "flow and drag: a raised storm swell (tier 5/n of the tap ladder) is a real crasher set " +
+      "crossing the surface, and its passage carries every natural on the water a little further " +
+      "along the same crossing — the swell and the naturals share one drag field, not two " +
+      "unrelated animations. Breaching life (whale/pod/school/seabirds) is a deterministic cycle " +
+      "read out of the same field, never a decal fixed to the tap point.",
   },
   {
     key: "tide",
@@ -413,6 +426,15 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     keeps: "objetdart:manifold:v1",
     creates: "a mass",
     exempt: {},
+    interacts:
+      "gravity, the same softened field every mass wells the fabric with: every settled mass " +
+      "pulls every other one (src/lib/manifold-field.ts stepMutualGravity), orbiting and " +
+      "inspiraling on its own timers whether or not a hand is present. Two masses whose centers " +
+      "close inside their combined contact radius merge (mergeBodies) into a third mass that is " +
+      "neither parent — mass and momentum exactly summed — landing as a bright pulse, a bell, a " +
+      "haptic storm and a damped-sinusoid ringdown (ringdownEnvelope) in the same frame. A " +
+      "tier-3 tap on a standing mass instead collapses it a step denser (star, neutron star, " +
+      "black hole); a tier-5 tap forces the two nearest masses into an immediate inspiral",
   },
   {
     key: "overlook",
@@ -441,6 +463,16 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     keeps: null,
     creates: null,
     exempt: {},
+    // `creates` is null (the room keeps no belongings), but the planted
+    // masses still share one law: stated anyway, since a reviewer should
+    // not have to infer it from src/lib/manifold-field.ts.
+    interacts:
+      "gravity — the same shared stepMutualGravity/mergeBodies pair /manifold uses: every " +
+      "settled mass pulls every other one every frame, unattended, and two whose centers touch " +
+      "merge into a third mass with the summed mass and momentum, ringing a damped-sinusoid " +
+      "ringdown in sight, sound and haptics at once. A tier-3 tap collapses a standing mass a " +
+      "step denser (star, neutron star, black hole); tier-5 forces the nearest two into an " +
+      "immediate inspiral and merger",
   },
   {
     key: "loom",
@@ -456,6 +488,16 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     exempt: {
       dwell: "a crossing is created by a completed stroke, not planted by duration; growing one under a stationary hand would break the loom's deterministic thread geometry",
     },
+    interacts:
+      "one state vector constrains all five substrates at once (src/lib/structure.ts): tension, " +
+      "coherence and reach are shared, so raising coherence audibly locks the chord AND visibly " +
+      "snaps the shape's symmetry in the same frame, not two decals reading one number " +
+      "separately. The crossing is the reaction: accumulated tension is SPENT — a discontinuous " +
+      "redistribution into reach and coherence conserving total intensity (conservedQuantity) — " +
+      "producing a state that is neither the gathering that fed it nor the agency it becomes " +
+      "until the redistribution fires. A tier-3 tap carries tension to the lip of its real " +
+      "threshold so the next accumulation crosses it for real; tier 5 sustains attention long " +
+      "enough for the actual step() dynamics to walk latent through rest unattended",
   },
   {
     key: "storm",
@@ -496,6 +538,14 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     keeps: "objetdart:mountain:v1",
     creates: "a cairn",
     exempt: {},
+    interacts:
+      "gravity, felt between the mountain's two populations: falling scree (src/lib/mountain.ts " +
+      "screeCairnHits) strikes any standing cairn it passes near and topples it, and a toppled " +
+      "cairn's own stones become a fresh scree cascade — a third thing that is neither the " +
+      "falling stone nor the standing cairn, felt as a thud, a roll and a haptic in the same " +
+      "frame. A tier-3 tap on a cairn topples and rebuilds it in place; on open slope it cycles " +
+      "a rockfall, a small avalanche or a cloud inversion; tier-5 sends a full avalanche down " +
+      "the face in bands, each guaranteed to find any cairn in its path",
   },
   {
     key: "aphros",
@@ -538,6 +588,18 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     keeps: "objetdart:birds:v1",
     creates: "a bird",
     exempt: {},
+    interacts:
+      "alignment/cohesion/separation (src/lib/flock.ts): every air bird's heading is a running " +
+      "average of its neighbours', drawn toward their centre and pushed off the ones crowding it " +
+      "— the murmuration's shape is that force balance, not a drawn path. A predator (tier-3 " +
+      "double-tap-empty, or spawned unattended on its own clock) is a real repulsion field the " +
+      "same integrator applies, so the flock's swerve around it is emergent from the same three " +
+      "rules, not scripted; a thermal is the same field inverted into lift plus a spiral. A tier-3 " +
+      "tap on a held bird flushes it AND repels every bird nearby through the shared lure, so the " +
+      "flock visibly answers one bird's fright. Meeting a perch is a reaction, not a decal: a bird " +
+      "settles into a real activity (roostNearest/roostSeveral) and a flush reverses it back to " +
+      "flight; tier 5 musters the whole animal into a ring that spins and collapses to a point " +
+      "through the same lure/lurePull/swirl forces, a shape made of the flock's own physics",
   },
   {
     key: "tissue",
@@ -747,6 +809,15 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     exempt: {
       ceremony: "a galaxy web has no singular touch-reachable object to seal or retire; its persistence is the topology of the whole field",
     },
+    interacts:
+      "the invariant density field itself never moves — that is the room's whole argument, a " +
+      "galaxy is a measurement, not a scatter — but wanderers do: real bodies (src/lib/cosmicweb.ts " +
+      "stepWanderers/mergeWanderers) with a velocity, mutually gravitating and, on contact, " +
+      "coalescing into a third body with the summed mass and momentum, felt as a bell, a haptic " +
+      "storm and a note in the same frame. A tier-3 tap on a lit galaxy gathers two wanderers " +
+      "beside it into a small cluster; on open sky it summons a filament, a void crossing or a " +
+      "converging merger in a fixed cycle; tier-5 seeds a cosmic-web-scale structure-formation " +
+      "run — a burst of wanderers along real filaments that fall together and merge unattended",
   },
   {
     key: "comb",
@@ -775,6 +846,14 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     exempt: {
       pan: "the beam's perspective is locked to its source and target; translation would detach the kept sky from the optical axis",
     },
+    interacts:
+      "gravity between the binary pair: the two suns orbit their shared barycenter (the waltz), " +
+      "and every petal's formation radius is measured from whichever sun it belongs to, so pulling " +
+      "the suns apart or together (pinch) visibly redistributes the whole ring system around the " +
+      "new geometry rather than redrawing a fixed picture. A petal breaking formation on its own " +
+      "clock, or a tier-5 shower of them, is that same orbital law losing its grip on one body at a " +
+      "time and letting it fall outward as a meteor streak; the ring closes back over the gap it " +
+      "left",
   },
   {
     key: "signal",
@@ -904,6 +983,13 @@ export const ROOM_REGISTRY: RoomEntry[] = [
       dwell: "a pattern is struck and recorded on contact; holding the same cell sustains its pulse instead of planting a duplicate pattern",
     },
     rawPointer: "the sequencer needs immediate cell lighting at touchdown for low-latency performance, while attachGestures continues to classify every grammar-level act",
+    interacts:
+      "adhesion on the membrane: a touch bloom landing near a still-fresh one does not sit " +
+      "beside it, it coalesces into one compound flare (strength summed, capped) — a third " +
+      "bloom that is neither strike alone, felt as a bell and a haptic bloom in the same frame. " +
+      "The four channels also drive each other, not just their own trace: stress raises heart " +
+      "rate and narrows breath, a held breath (span) creeps the heart, and a steady tapped or " +
+      "drummed pulse entrains it away from its own autonomous rhythm",
   },
   {
     key: "charts",
@@ -981,6 +1067,12 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     creates: "a facet",
     exempt: {},
     rawPointer: "arrests a spinning stone on the instant of contact, below any gesture threshold — the engine classifies tap and hold, and emits nothing at touchdown",
+    interacts:
+      "adhesion under the cutter's hand: a new facet planted within its own hit radius of an " +
+      "existing one does not sit beside it, it fuses into a single deeper cut — a third facet " +
+      "that is neither parent, at their midpoint, with a weight (up to 3×) that reads wider and " +
+      "brighter in the shader itself, felt as a bell and a haptic bloom in the same frame the " +
+      "hand lands",
   },
   {
     key: "drop",
@@ -1045,6 +1137,12 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     keeps: null,
     creates: null,
     exempt: {},
+    nondeterminism:
+      "Math.random() spawns ambient decoration only, never the watch's own material: candle-" +
+      "flame spark jitter, gull flight paths, boat drift timing, and where a background whisper " +
+      "sets down. None of it is a countable object the room persists or a physical law the tests " +
+      "reach — reseeding it would trade one unnoticed jitter for another with no visible or " +
+      "testable gain",
   },
   {
     key: "archive",

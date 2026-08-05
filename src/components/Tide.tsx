@@ -371,6 +371,39 @@ export default function Tide() {
         if (e.fingers !== 1) return; // the night absorbs frame taps
         const body = grab(e.x, e.y);
         if (body) {
+          const bodyTier = tapTrainTier(e.count);
+          const bodyDepth = tapTrainDepth(e.count);
+          const g3 = geomRef.current;
+          const p = body === "moon" ? g3.moon : g3.sun;
+          if (bodyTier === 3) {
+            // tier 3 on a body: it transforms — its phase jumps a quarter
+            // turn, a real advance through the tidal cycle rather than the
+            // slow orbit, so the shore's high/low visibly reorders
+            const ref = body === "moon" ? moonAngRef : sunAngRef;
+            ref.current = (ref.current + Math.PI / 2 + bodyDepth * 0.3) % TAU;
+            addRipple(p.x, p.y, 60 + bodyDepth * 30, "gold");
+            try { audio.playNote(body === "moon" ? 66 : 61, 220); } catch { /* noop */ }
+            try { haptics.roll(); } catch { /* noop */ }
+            recordTapeRef.current("object", 0.7, `tide/phase-jump-${body}`);
+            return;
+          }
+          if (bodyTier === 5 || bodyTier === "n") {
+            // tier 5+: syzygy — the other body snaps into alignment with
+            // this one (same true angle for the moon's own pull, opposed
+            // for the sun's, matching how bodyTide/spring-neap already read
+            // the pair), forcing the two bulges to genuinely superpose into
+            // a spring tide and surging the shore at once
+            if (body === "moon") sunAngRef.current = moonAngRef.current;
+            else moonAngRef.current = sunAngRef.current;
+            surge = Math.min(1.6, surge + (bodyTier === "n" ? 0.55 : 0.9) + bodyDepth * 0.4);
+            addRipple(g3.moon.x, g3.moon.y, 70 + bodyDepth * 40, "gold");
+            addRipple(g3.sun.x, g3.sun.y, 70 + bodyDepth * 40, "gold");
+            try { audio.bell(); } catch { /* noop */ }
+            try { audio.playNote(50, 560); } catch { /* noop */ }
+            try { haptics.storm(); } catch { /* noop */ }
+            recordTapeRef.current("object", 0.95, "tide/syzygy");
+            return;
+          }
           try { audio.playNote(body === "moon" ? 62 : 57, 140); } catch { /* noop */ }
           try { haptics.tap(); } catch { /* noop */ }
           recordTapeRef.current("object", 0.5, `tide/grab-${body}`);
@@ -417,12 +450,16 @@ export default function Tide() {
           return;
         }
         if (trainTier === 3) {
-          // three taps wake a firefly by the candle
+          // three taps on open water: a wave train, three rings sized to
+          // read as one set travelling out from the strike rather than a
+          // single ring — and a firefly wakes by the candle at the same time
           spawnFirefly();
-          addRipple(e.x, e.y, 60 + trainDepth * 30, "pale");
+          addRipple(e.x, e.y, 40 + trainDepth * 18, "pale");
+          addRipple(e.x, e.y, 70 + trainDepth * 28, "pale");
+          addRipple(e.x, e.y, 100 + trainDepth * 38, "pale");
           try { audio.chime(); } catch { /* noop */ }
           try { haptics.ripple(0.4 + trainDepth * 0.3); } catch { /* noop */ }
-          recordTapeRef.current("ripple", 0.5, "tide/firefly");
+          recordTapeRef.current("ripple", 0.5, "tide/wave-train");
           return;
         }
         // a tap on the open sea — chime and a ring sized by how hard it

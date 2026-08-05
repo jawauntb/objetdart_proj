@@ -35,6 +35,13 @@ const {
   latentFromSeed,
   expandLSystem,
   hashSeed,
+  speciesFromLatent,
+  crossLatent,
+  shadeFrom,
+  rootOverlap,
+  vigour,
+  canopySpread,
+  DRIFT_RATE,
 } = loadTsModule("src/lib/botany.ts");
 
 const SEEDS = Array.from({ length: 60 }, (_, i) => hashSeed(i + 1, 7, 13));
@@ -162,4 +169,78 @@ for (const seed of SEEDS) {
   assert.ok(a !== b && a !== c && b !== c, "nearby plantings get distinct seeds");
 }
 
+// —— crossing: a child is inherited, never averaged ————————————————
+// The bug this catches: a "cross" that blends the two latents. Every child
+// would land in the middle of latent space and a garden would go beige in
+// three generations — while each individual flower still looked fine.
+{
+  const a = latentFromSeed(hashSeed(11, 2, 3));
+  const b = latentFromSeed(hashSeed(99, 5, 8));
+  const child = crossLatent(a, b, 0x51de, 0);
+  assert.equal(child.length, LATENT_DIM, "a child carries a whole genome");
+  let fromA = 0;
+  let fromB = 0;
+  for (let i = 0; i < LATENT_DIM; i++) {
+    const isA = child[i] === a[i];
+    const isB = child[i] === b[i];
+    assert.ok(isA || isB, `locus ${i} came from a parent, not from between them`);
+    if (isA) fromA += 1;
+    if (isB) fromB += 1;
+  }
+  assert.ok(fromA > 0 && fromB > 0, "the child really is of both parents");
+  assert.notDeepEqual(child, a, "and is neither parent");
+  assert.notDeepEqual(child, b);
+  assert.deepEqual(crossLatent(a, b, 0x51de, 0), child, "the same pollen makes the same child");
+  assert.notDeepEqual(crossLatent(a, b, 0x51df, 0), child, "a different grain makes a different one");
+  // a plant crossed with itself, with no drift, is itself — the law that
+  // proves inheritance is real inheritance and not noise wearing its name
+  assert.deepEqual(crossLatent(a, a, 0xabc, 0), a, "selfing without drift reproduces the parent exactly");
+  // ...and with drift, it does not
+  const selfed = crossLatent(a, a, 0xabc, 1);
+  assert.notDeepEqual(selfed, a, "drift is where new form comes from");
+  for (const v of selfed) assert.ok(v >= 0 && v <= 1, "and it never leaves latent space");
+  assert.ok(DRIFT_RATE > 0 && DRIFT_RATE < 0.25, "the default drift is a mutation rate, not a shuffle");
+  // the crossed latent decodes through the SAME decoder as a seeded one
+  const sp = speciesFromLatent(child, 0x1234);
+  assert.deepEqual(sp.latent, child, "the child's species is decoded from the child's genome");
+  assert.equal(speciesFromLatent(latentFromSeed(SEEDS[3]), SEEDS[3]).petals, speciesFromSeed(SEEDS[3]).petals,
+    "and the decoder is the one seeded species already use");
+}
+
+// —— shade is one-directional; roots are not ————————————————————————
+{
+  // a shorter neighbour cannot shade a taller one, at any distance
+  for (const d of [0, 0.02, 0.05, 0.1]) {
+    assert.equal(shadeFrom(0.9, 0.4, d, 0.2), 0, "a seedling never shades the plant above it");
+  }
+  assert.ok(shadeFrom(0.4, 0.9, 0.01, 0.2) > 0, "but a tall neighbour standing over it does");
+  assert.ok(
+    shadeFrom(0.4, 0.9, 0.02, 0.2) > shadeFrom(0.4, 0.9, 0.15, 0.2),
+    "and takes less light the further off it stands",
+  );
+  assert.equal(shadeFrom(0.4, 0.9, 0.2, 0.2), 0, "outside the canopy, nothing");
+  assert.equal(shadeFrom(0.4, 0.4, 0, 0.2), 0, "equals do not shade each other");
+  assert.ok(canopySpread(speciesFromSeed(SEEDS[0])) > 0, "every plant casts some canopy");
+
+  // root overlap is the real lens area of two discs
+  assert.equal(rootOverlap(0.5, 0.1, 0.1), 0, "roots that do not reach each other share nothing");
+  assert.equal(rootOverlap(0.2, 0.1, 0.1), 0, "and rims that just touch still share nothing");
+  assert.equal(rootOverlap(0, 0.1, 0.1), 1, "roots in the same place share everything");
+  assert.ok(rootOverlap(0.05, 0.1, 0.1) > rootOverlap(0.15, 0.1, 0.1), "and closer is more");
+  assert.equal(rootOverlap(0.02, 0.3, 0.05), 1, "a small root inside a big one is wholly in its shadow");
+  for (let d = 0; d <= 0.25; d += 0.01) {
+    const v = rootOverlap(d, 0.1, 0.12);
+    assert.ok(v >= 0 && v <= 1, "overlap stays a fraction");
+  }
+  // vigour: full light and no neighbours is a whole plant; shade and
+  // crowding take it away, and neither can drive it negative
+  assert.equal(vigour(1, 0), 1, "alone in full light, a plant has all of itself");
+  assert.ok(vigour(0.4, 0) < vigour(1, 0), "shade costs it");
+  assert.ok(vigour(1, 1) < vigour(1, 0), "so does a crowded root");
+  assert.ok(vigour(0, 1) >= 0, "and it never goes negative");
+}
+
 console.log("botany latent tests passed");
+console.log(
+  "botany garden ok: crossing inherits locus by locus (never averages), selfing without drift is the identity, shade is one-directional, and root overlap is the true lens area",
+);

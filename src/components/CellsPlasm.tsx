@@ -49,13 +49,19 @@ import {
 } from "@/lib/room-runtime";
 import {
   CELL_FAMILIES,
+  CONTACT_RATIO,
   MAX_CELLS,
+  adhesionBetween,
+  canEngulf,
   catchUpCulture,
   cellFromSeed,
+  competeForNutrient,
   daughterSeeds,
+  engulfSeed,
   hashSeed,
   membraneRadius,
   settlePopulation,
+  signalAt,
   validateStoredCulture,
   type CellMorph,
   type LineageCell,
@@ -278,6 +284,34 @@ export default function CellsPlasm() {
       tier: 0,
     };
 
+    // ————— what one cell does to another —————
+    // Adhesion (homophilic — like sorts with like), a signal that walks the
+    // culture cell to cell, one finite supply competed for, and phagocytosis,
+    // which leaves a cell that is neither the eater nor the eaten. The
+    // buffers are allocated once and refilled in place; the population is
+    // capped at MAX_CELLS, so the pair loop is a few hundred comparisons.
+    const aliveBuf: Cell[] = [];
+    const uptakeBuf: number[] = [];
+    const shareBuf: number[] = [];
+    /** junctions standing this frame, for the eye: preallocated, rewritten */
+    const JUNCTION_MAX = 64;
+    const junctions = Array.from({ length: JUNCTION_MAX }, () => ({ ax: 0, ay: 0, bx: 0, by: 0, s: 0 }));
+    let junctionCount = 0;
+    /** a signal walking outward, relayed by every cell it reaches */
+    type Signal = { x: number; y: number; born: number; speed: number; strength: number; hit: Set<string> };
+    const signals: Signal[] = [];
+    /** the mitotic spindles standing right now — poles, fibres, and a clock */
+    const spindles: { x: number; y: number; ax: number; ay: number; r: number; born: number; family: number }[] = [];
+    /** a local bloom of food — cells inside it fatten and brighten */
+    let bloom: { x: number; y: number; born: number; r: number } | null = null;
+    /** what the dish can feed per second, in uptake units */
+    const NUTRIENT_SUPPLY = 0.115;
+    /** the plasm-tap cycle: seed, signal, pathogen, bloom */
+    let plasmEventIdx = 0;
+    /** the culture's own clock while a hand is here */
+    let lifeCount = 0;
+    let nextLifeAt = 0;
+
     const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
     reduce = mq.matches;
     const onMq = () => { reduce = mq.matches; };
@@ -494,6 +528,20 @@ export default function CellsPlasm() {
       cells = cells.filter((c) => c !== parent);
       cells.push(a, b);
       retireOldest();
+      // the spindle: two poles on the division axis with the fibres strung
+      // between them, drawn while the daughters are still pulling apart
+      spindles.push({
+        x: parent.sx,
+        y: parent.sy,
+        ax,
+        ay,
+        r: parent.sr,
+        born: performance.now(),
+        family: parent.morph.family,
+      });
+      if (spindles.length > 6) spindles.shift();
+      // a division is a thing the neighbours hear about
+      emitSignal(parent.sx, parent.sy, 0.42);
       // mitosis: one solemn act, three senses in one frame
       try { audio().bell(); } catch { /* noop */ }
       try { haptics.bloom(); } catch { /* noop */ }
@@ -547,6 +595,97 @@ export default function CellsPlasm() {
       setStanding(false);
     };
     letGoRef.current = letGo;
+
+    /** A signal leaves a point and walks outward through the culture. */
+    const emitSignal = (x: number, y: number, strength: number) => {
+      if (signals.length >= 8) signals.shift();
+      signals.push({
+        x,
+        y,
+        born: performance.now(),
+        speed: Math.min(width, height) * 0.55,
+        strength: clamp01(strength),
+        hit: new Set<string>(),
+      });
+    };
+
+    /**
+     * Phagocytosis. The larger cell takes the smaller one in, and what
+     * stands afterwards is neither of them: `engulfSeed` keeps the
+     * phagocyte's lineage nibble and re-rolls everything above it, so the
+     * morphology, the voice and the cilia are new — and it is bigger, by
+     * exactly the area it swallowed.
+     */
+    const engulf = (big: Cell, small: Cell) => {
+      if (big.retiringAt || small.retiringAt) return;
+      const seed = engulfSeed(big.seed, small.seed);
+      const made = makeCell(seed, big.nx, big.ny, big.generation, 1);
+      made.morph = {
+        ...made.morph,
+        // area adds: the phagocyte is larger for having eaten
+        radius: Math.min(0.13, Math.hypot(big.morph.radius, small.morph.radius)),
+      };
+      made.closed = true;
+      made.vitality = clamp01(Math.max(big.vitality, small.vitality) + 0.25);
+      made.axis = big.axis;
+      cells = cells.filter((c) => c !== big && c !== small);
+      cells.push(made);
+      retireOldest();
+      // one meal, three senses, one frame
+      try { audio().thud(); } catch { /* noop */ }
+      note(midiOf(made.morph) - 5, 300);
+      try { haptics.chop(); } catch { /* noop */ }
+      burst(small.sx, small.sy, [CELL_FAMILIES[small.morph.family][4], CELL_FAMILIES[made.morph.family][5]], 14, 40);
+      emitSignal(big.sx, big.sy, 0.5);
+      useField.getState().recordTape("sigil", 0.7, "cells/phagocytose");
+      save();
+      syncStanding();
+    };
+
+    /**
+     * The 3-rung on open plasm cycles what arrives: a cell of the hand's own
+     * making (what the rung has always done), then a signalling molecule, a
+     * pathogen small enough to be eaten, then a bloom of food.
+     */
+    const summonPlasmEvent = (x: number, y: number, intensity: number) => {
+      const kind = plasmEventIdx % 4;
+      plasmEventIdx += 1;
+      if (kind === 0) {
+        seedCell(x, y);
+        return;
+      }
+      if (kind === 1) {
+        // a signalling molecule: the wave walks the culture, cell to cell
+        emitSignal(x, y, 0.6 + intensity * 0.4);
+        note(66, 150);
+        try { haptics.ripple(0.3 + intensity * 0.3); } catch { /* noop */ }
+        burst(x, y, ["#6997A4", "#DDD3BE"], 8, 26);
+        return;
+      }
+      if (kind === 2) {
+        // a pathogen: small, foreign, and fast — food for whatever finds it
+        const seed = (hashSeed(Math.round(x), Math.round(y), plasmEventIdx) & ~0x03) | 0x01;
+        const p = makeCell(seed >>> 0, clamp01(x / width), clamp(y / height, 0.08, 0.95), 0, 1);
+        p.morph = { ...p.morph, radius: 0.03 + intensity * 0.008 };
+        p.closed = true;
+        p.pushX = (twinkleHash(seed % 991) - 0.5) * 90;
+        p.pushY = (twinkleHash((seed + 7) % 991) - 0.5) * 90;
+        cells.push(p);
+        retireOldest();
+        try { audio().spark(); } catch { /* noop */ }
+        note(midiOf(p.morph) + 12, 140);
+        try { haptics.chop(); } catch { /* noop */ }
+        save();
+        syncStanding();
+        return;
+      }
+      // a bloom of food: everything inside it fattens, and the crowding eases
+      bloom = { x, y, born: performance.now(), r: Math.min(width, height) * (0.2 + intensity * 0.18) };
+      note(50, 260);
+      try { audio().chime(); } catch { /* noop */ }
+      try { haptics.bloom(); } catch { /* noop */ }
+      burst(x, y, ["#E7AC52", "#F2C56B"], 12, 30);
+    };
 
     const perturb = (x: number, y: number, intensity: number) => {
       const maxR = Math.min(width, height) * (0.14 + intensity * 0.3);
@@ -638,17 +777,16 @@ export default function CellsPlasm() {
           return;
         }
         if (tier === 3) {
-          // mitosis: nearest closed cell divides; open plasm seeds one
+          // On a cell, the 3-rung is mitosis — the spindle draws itself and
+          // the daughters shove apart. On open plasm it cycles what arrives:
+          // a new cell, a signalling molecule, a pathogen, a bloom of food.
           const hit = cellAt(x, y);
-          const c = hit && hit.closed && !hit.retiringAt
-            ? hit
-            : cells.find((q) => !q.retiringAt && q.closed) ?? null;
-          if (c) {
-            c.streamBoost = Math.min(2.4, c.streamBoost + 0.25 + deepen * 0.55);
-            divideCell(c);
-          } else {
-            seedCell(x, y);
+          if (hit && hit.closed && !hit.retiringAt) {
+            hit.streamBoost = Math.min(2.4, hit.streamBoost + 0.25 + deepen * 0.55);
+            divideCell(hit);
+            return;
           }
+          summonPlasmEvent(x, y, amp);
           return;
         }
         if (tier === 5) {
@@ -1341,6 +1479,148 @@ export default function CellsPlasm() {
         }
       }
 
+      // ————— the physics BETWEEN cells —————
+      // Four forces, all of them real: a finite supply competed for by uptake
+      // area, adhesion that is homophilic so like sorts with like, pressure
+      // where two membranes overlap, and phagocytosis where the size ratio
+      // allows it — which leaves a cell that is neither the eater nor eaten.
+      {
+        aliveBuf.length = 0;
+        for (const c of cells) if (!c.retiringAt) aliveBuf.push(c);
+        const minDim = Math.max(1, Math.min(width, height));
+
+        // — the dish's supply, divided to the last crumb —
+        uptakeBuf.length = 0;
+        for (const c of aliveBuf) uptakeBuf.push(c.morph.radius);
+        let supply = NUTRIENT_SUPPLY;
+        if (bloom) {
+          const age = (now - bloom.born) / 9000;
+          if (age >= 1) bloom = null;
+          else supply += NUTRIENT_SUPPLY * 1.6 * (1 - age);
+        }
+        competeForNutrient(uptakeBuf, supply, shareBuf);
+        for (let i = 0; i < aliveBuf.length; i++) {
+          const c = aliveBuf[i];
+          // what it needs is what it is: a bigger cell costs more to keep
+          const need = c.morph.radius * c.morph.radius * 3.4;
+          let got = shareBuf[i] ?? 0;
+          if (bloom) {
+            const d = Math.hypot(c.sx - bloom.x, c.sy - bloom.y);
+            if (d < bloom.r) got += (1 - d / bloom.r) * 0.02;
+          }
+          c.vitality = clamp01(c.vitality + (got - need) * dt * 2.2);
+          // starved out: the dish thins itself, with nobody's hand on it
+          if (c.vitality <= 0.02 && c.closed && !c.retiringAt && aliveBuf.length > 2) {
+            c.retiringAt = now;
+            note(midiOf(c.morph) - 14, 340);
+            try { haptics.roll(); } catch { /* noop */ }
+            dirty = true;
+          }
+        }
+
+        // — adhesion, pressure, and the meal —
+        junctionCount = 0;
+        for (let i = 0; i < aliveBuf.length; i++) {
+          const a = aliveBuf[i];
+          for (let j = i + 1; j < aliveBuf.length; j++) {
+            const b = aliveBuf[j];
+            const dxp = b.sx - a.sx;
+            const dyp = b.sy - a.sy;
+            const d = Math.hypot(dxp, dyp) || 1;
+            const contact = (a.sr + b.sr) * CONTACT_RATIO;
+            if (d > contact * 1.7) continue;
+            const ux = dxp / d;
+            const uy = dyp / d;
+            // phagocytosis: deep overlap plus a real size difference
+            if (
+              d < (a.sr + b.sr) * 0.62 &&
+              a.closed &&
+              b.closed &&
+              canEngulf(Math.max(a.sr, b.sr), Math.min(a.sr, b.sr))
+            ) {
+              if (a.sr >= b.sr) engulf(a, b);
+              else engulf(b, a);
+              junctionCount = 0;
+              break;
+            }
+            const adh = adhesionBetween(a.morph, b.morph);
+            // a spring on the contact distance: kin pull together and hold,
+            // strangers barely notice each other
+            const stretch = (d - contact) / Math.max(1, contact);
+            const f = stretch > 0
+              ? -stretch * adh * 46 // adhesion draws them into contact
+              : -stretch * 130; // pressure pushes overlapping membranes apart
+            a.pushX += ux * f * dt * 60;
+            a.pushY += uy * f * dt * 60;
+            b.pushX -= ux * f * dt * 60;
+            b.pushY -= uy * f * dt * 60;
+            if (stretch < 0.14 && adh > 0.3 && junctionCount < JUNCTION_MAX) {
+              const jn = junctions[junctionCount++];
+              jn.ax = a.sx;
+              jn.ay = a.sy;
+              jn.bx = b.sx;
+              jn.by = b.sy;
+              jn.s = adh * (1 - Math.max(0, stretch) / 0.14);
+            }
+          }
+        }
+
+        // — the signal walking the culture, cell to cell —
+        for (let k = signals.length - 1; k >= 0; k--) {
+          const s = signals[k];
+          const age = (now - s.born) / 1000;
+          const r = age * s.speed;
+          if (r > minDim * 0.9 || age > 3) {
+            signals.splice(k, 1);
+            continue;
+          }
+          for (const c of aliveBuf) {
+            if (s.hit.has(c.id)) continue;
+            const d = Math.hypot(c.sx - s.x, c.sy - s.y);
+            if (d > r) continue;
+            s.hit.add(c.id);
+            const resp = signalAt(c.morph, d / Math.max(1, c.sr)) * s.strength;
+            if (resp <= 0.02) continue;
+            c.streamBoost = Math.min(2.4, c.streamBoost + resp * 1.6);
+            c.vitality = clamp01(c.vitality + resp * 0.06);
+            note(midiOf(c.morph), 80);
+            // and the cell passes it on — that is what a signal IS
+            if (s.strength > 0.34 && signals.length < 8) {
+              emitSignal(c.sx, c.sy, s.strength * 0.42);
+            }
+          }
+        }
+
+        // ————— aliveness: the culture goes on with no hand here —————
+        if (nextLifeAt === 0) nextLifeAt = now + 6000;
+        if (now >= nextLifeAt && !reduce) {
+          const roll = twinkleHash(lifeCount * 7 + 3);
+          const pick = twinkleHash(lifeCount * 13 + 11);
+          lifeCount += 1;
+          nextLifeAt = now + 9000 + twinkleHash(lifeCount * 5 + 1) * 12000;
+          const closed = aliveBuf.filter((c) => c.closed);
+          if (closed.length > 0 && closed.length < MAX_CELLS - 2 && roll < 0.46) {
+            // the healthiest cell divides of its own accord
+            let best = closed[0];
+            for (const c of closed) if (c.vitality > best.vitality) best = c;
+            divideCell(best);
+            emitSignal(best.sx, best.sy, 0.4);
+          } else if (closed.length > 0 && roll < 0.74) {
+            // ...or one of them speaks, and the culture answers
+            const c = closed[Math.floor(pick * closed.length) % closed.length];
+            emitSignal(c.sx, c.sy, 0.45);
+          } else if (roll < 0.9) {
+            // ...or food drifts in from the edge of the slide
+            bloom = {
+              x: width * (0.2 + pick * 0.6),
+              y: height * (0.2 + roll * 0.6),
+              born: now,
+              r: Math.min(width, height) * 0.24,
+            };
+          }
+        }
+      }
+
       // the stage: dark plasm, the candle pool beneath it, the objective's
       // iris. Repainted only when the lens turns or the pool's light moves;
       // otherwise it is one blit, and the whole frame budget goes to life.
@@ -1454,9 +1734,84 @@ export default function CellsPlasm() {
         spanB.streamBoost = Math.min(2.4, spanB.streamBoost + 0.03 + deep * 0.045);
       }
 
+      // the bloom of food, before the cells: a warm patch of the slide
+      if (bloom) {
+        const age = clamp01((now - bloom.born) / 9000);
+        ctx.strokeStyle = colorAlpha("#E7AC52", (1 - age) * 0.16);
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(bloom.x, bloom.y, bloom.r * (0.7 + age * 0.5), 0, Math.PI * 2);
+        ctx.stroke();
+        for (let k = 0; k < 9; k++) {
+          const a2 = (k / 9) * Math.PI * 2 + localT * 0.2;
+          const rr = bloom.r * (0.25 + ((k * 0.11 + localT * 0.07) % 1) * 0.7);
+          ctx.fillStyle = colorAlpha("#F2C56B", (1 - age) * 0.22);
+          ctx.beginPath();
+          ctx.arc(bloom.x + Math.cos(a2) * rr, bloom.y + Math.sin(a2) * rr, 1.2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      // the junctions: where two membranes hold each other, a lit seam —
+      // like sticks to like, so the kin clusters draw themselves
+      for (let k = 0; k < junctionCount; k++) {
+        const jn = junctions[k];
+        ctx.strokeStyle = colorAlpha("#DDD3BE", 0.1 + jn.s * 0.3);
+        ctx.lineWidth = 0.6 + jn.s * 1.6;
+        ctx.beginPath();
+        ctx.moveTo(jn.ax, jn.ay);
+        ctx.lineTo(jn.bx, jn.by);
+        ctx.stroke();
+      }
+
       // cells, painter's order by size (small behind, large in front)
       const sorted = [...cells].sort((a, b) => a.morph.radius - b.morph.radius);
       for (const c of sorted) drawCell(c, localT, breath);
+
+      // the spindle: two poles on the division axis, fibres strung between
+      // them and reaching the chromosomes as the daughters pull apart
+      for (let k = spindles.length - 1; k >= 0; k--) {
+        const sp = spindles[k];
+        const u = (now - sp.born) / 1100;
+        if (u >= 1) {
+          spindles.splice(k, 1);
+          continue;
+        }
+        const reach = sp.r * (0.5 + u * 1.5);
+        const px = sp.ax * reach;
+        const py = sp.ay * reach;
+        const a2 = (1 - u) * 0.7;
+        ctx.strokeStyle = colorAlpha(CELL_FAMILIES[sp.family][5], a2 * 0.5);
+        ctx.lineWidth = 0.7;
+        for (let f = -3; f <= 3; f++) {
+          const spread = (f / 3) * sp.r * 0.55 * (1 - u * 0.4);
+          const nx2 = -sp.ay * spread;
+          const ny2 = sp.ax * spread;
+          ctx.beginPath();
+          ctx.moveTo(sp.x - px, sp.y - py);
+          ctx.quadraticCurveTo(sp.x + nx2 * 1.6, sp.y + ny2 * 1.6, sp.x + px, sp.y + py);
+          ctx.stroke();
+        }
+        // the two poles themselves
+        ctx.fillStyle = colorAlpha("#F2EEE6", a2 * 0.8);
+        for (const s2 of [1, -1]) {
+          ctx.beginPath();
+          ctx.arc(sp.x + px * s2, sp.y + py * s2, 1.6 + (1 - u) * 1.4, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      // the signals walking the culture — a thin front, and where it has
+      // reached, the cells are already answering
+      for (const s of signals) {
+        const age = (now - s.born) / 1000;
+        const r = age * s.speed;
+        ctx.strokeStyle = colorAlpha("#6997A4", Math.max(0, 0.3 - age * 0.12) * s.strength);
+        ctx.lineWidth = 1.1;
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
+        ctx.stroke();
+      }
 
       if (spanActive && spanA && spanB) {
         const deep = Math.min(1, spanElapsed / 2600);

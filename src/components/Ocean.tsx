@@ -59,6 +59,9 @@ export default function Ocean() {
   // dive position through the water column: 0 = surface, 1 = the abyss.
   const depthRef = useRef(0);
   const depthTargetRef = useRef(0);
+  // deterministic cycle through breaching life (whale/pod/school/seabirds) —
+  // advances one step per tier-3 tap, never Math.random.
+  const breachCycleRef = useRef(0);
   // tiny floating readout — the depth zone and a reading in metres of dark.
   const [zone, setZone] = useState("surface");
   const [depthM, setDepthM] = useState(0);
@@ -546,7 +549,7 @@ export default function Ocean() {
       | { kind: "rogue"; t0: number; duration: number }
       | { kind: "seabirds"; t0: number; duration: number; count: number; yBase: number; dir: 1 | -1; seed: number }
       | { kind: "phosphor"; t0: number; duration: number; x: number; radius: number }
-      | { kind: "whale"; t0: number; duration: number; x: number; dir: 1 | -1 }
+      | { kind: "whale"; t0: number; duration: number; x: number; dir: 1 | -1; count: number; scale: number; seed: number }
       | { kind: "beachcomber"; t0: number; duration: number; x: number; y: number; revealed: NaturalKind };
     const weather: WeatherEvent[] = [];
     const addWeather = (e: WeatherEvent) => {
@@ -826,48 +829,67 @@ export default function Ocean() {
         }
         useField.getState().recordTape("ripple", 0.85);
         try { getFieldAudio().chime(); } catch { /* noop */ }
-        // the surface train wakes the sea's own inhabitants: three taps
-        // startle the seabirds up off the water, five call a whale under
-        // the hand, seven and more raise a rogue set off the tap's side.
-        if (tier === "n") {
+        // the surface train: tier 3 wakes whatever the sea has to breach —
+        // a cycling, deterministic set so a curious hand keeps being
+        // surprised — tier 5 raises a storm swell that crosses the whole
+        // surface (the room's biggest reachable event), and tier n keeps
+        // that swell deepening for as long as the train keeps landing.
+        if (tier === "n" || tier === 5) {
           const fromLeft = x < wSurf / 2;
-          for (let i = 0; i < 3; i++) {
+          const legs = tier === "n" ? 5 : 3;
+          for (let i = 0; i < legs; i++) {
             spawnCrasher({
               x: fromLeft ? -40 - i * 60 : wSurf + 40 + i * 60,
-              y: seaLevelPx(),
+              y: seaLevelPx() + (i - (legs - 1) / 2) * 10,
               vx: (fromLeft ? 1 : -1) * (150 + depth01 * 90 + i * 24),
-              size: 1.0 + depth01 * 0.3,
+              size: 1.0 + depth01 * 0.3 + (tier === "n" ? 0.25 : 0),
               dir: fromLeft ? 0.06 : Math.PI - 0.06,
               duration: 3.0,
               breakAt: 0.55,
               kind: "swipe",
             });
           }
+          stirTurbulence(0.14 + depth01 * 0.12 + (tier === "n" ? 0.1 : 0));
+          // the swell pushes whatever it passes — every natural on the
+          // surface drifts a little further along the crossing
+          for (const n of naturals) {
+            n.nx = Math.max(0.02, Math.min(0.98, n.nx + (fromLeft ? 1 : -1) * (0.01 + depth01 * 0.01)));
+          }
           try { getFieldAudio().playTone(80, 0.9); } catch { /* noop */ }
           try { getFieldAudio().thud(); } catch { /* noop */ }
           haptics.storm();
-          useField.getState().recordTape("ripple", 1, "ocean/set");
-          return;
-        }
-        if (tier === 5) {
-          addWeather({ kind: "whale", t0: simNow, duration: 3.4, x, dir: x > wSurf / 2 ? -1 : 1 });
-          try { getFieldAudio().thud(); } catch { /* noop */ }
-          try { getFieldAudio().playNote(41, 520); } catch { /* noop */ }
-          haptics.roll();
-          useField.getState().recordTape("ripple", 0.9, "ocean/whale");
+          useField.getState().recordTape("ripple", 1, "ocean/storm-swell");
           return;
         }
         if (tier === 3) {
-          addWeather({
-            kind: "seabirds", t0: simNow, duration: 10,
-            count: 4 + Math.round(e.intensity * 4 + depth01 * 3),
-            yBase: hSurf * (0.06 + depth01 * 0.05),
-            dir: x > wSurf / 2 ? -1 : 1,
-            seed: x + y,
-          });
-          try { getFieldAudio().playNote(81, 180); } catch { /* noop */ }
-          haptics.ripple(0.5 + depth01 * 0.3);
-          useField.getState().recordTape("ripple", 0.7, "ocean/birds");
+          // breaching life: whale, a dolphin pod, a leaping school, or
+          // startled seabirds — cycled deterministically, never re-rolled,
+          // so a curious hand keeps finding a different creature
+          const kind = breachCycleRef.current % 4;
+          breachCycleRef.current += 1;
+          const dir: 1 | -1 = x > wSurf / 2 ? -1 : 1;
+          const seed = Math.round(x * 4096 + y * 4096 + breachCycleRef.current * 97);
+          if (kind === 0) {
+            addWeather({ kind: "whale", t0: simNow, duration: 3.4, x, dir, count: 1, scale: 1, seed });
+            try { getFieldAudio().playNote(41, 520); } catch { /* noop */ }
+          } else if (kind === 1) {
+            addWeather({ kind: "whale", t0: simNow, duration: 2.6, x, dir, count: 3, scale: 0.55, seed });
+            try { getFieldAudio().playNote(58, 320); } catch { /* noop */ }
+          } else if (kind === 2) {
+            addWeather({ kind: "whale", t0: simNow, duration: 1.8, x, dir, count: 6, scale: 0.28, seed });
+            try { getFieldAudio().playNote(72, 200); } catch { /* noop */ }
+          } else {
+            addWeather({
+              kind: "seabirds", t0: simNow, duration: 10,
+              count: 4 + Math.round(e.intensity * 4 + depth01 * 3),
+              yBase: hSurf * (0.06 + depth01 * 0.05),
+              dir, seed: x + y,
+            });
+            try { getFieldAudio().playNote(81, 180); } catch { /* noop */ }
+          }
+          try { getFieldAudio().thud(); } catch { /* noop */ }
+          haptics.roll();
+          useField.getState().recordTape("ripple", 0.9, "ocean/breach");
           return;
         }
         const nowMs = performance.now();
@@ -1210,6 +1232,9 @@ export default function Ocean() {
         duration: 3.4,
         x: w0 * (0.2 + Math.random() * 0.6),
         dir: Math.random() < 0.5 ? 1 : -1,
+        count: 1,
+        scale: 1,
+        seed: Math.round(Math.random() * 100000),
       });
       try { getFieldAudio().thud(); } catch { /* noop */ }
     };
@@ -2768,8 +2793,16 @@ type WeatherLite =
   | { kind: "rogue"; t0: number; duration: number }
   | { kind: "seabirds"; t0: number; duration: number; count: number; yBase: number; dir: number; seed: number }
   | { kind: "phosphor"; t0: number; duration: number; x: number; radius: number }
-  | { kind: "whale"; t0: number; duration: number; x: number; dir: number }
+  | { kind: "whale"; t0: number; duration: number; x: number; dir: number; count: number; scale: number; seed: number }
   | { kind: "beachcomber"; t0: number; duration: number; x: number; y: number; revealed: string };
+
+/** Deterministic 0..1 from an integer seed — never Math.random for placement. */
+function hash01(n: number): number {
+  let x = Math.imul(n ^ 0x9e3779b9, 0x85ebca6b);
+  x = Math.imul(x ^ (x >>> 13), 0xc2b2ae35);
+  x ^= x >>> 16;
+  return ((x >>> 0) % 100000) / 100000;
+}
 
 function drawWeatherSky(
   ctx: CanvasRenderingContext2D,
@@ -2870,34 +2903,51 @@ function drawWeatherSurface(
       ctx.fill();
       ctx.restore();
     } else if (e.kind === "whale") {
-      // A dark silhouette arcs out of the sea and back. Front half of
-      // the duration = rise + apex; back half = re-entry with splash.
+      // Breaching life: a dark silhouette arcs out of the sea and back.
+      // Front half of the duration = rise + apex; back half = re-entry
+      // with splash. `count`/`scale` turn the same arc into a lone whale,
+      // a pod of dolphins, or a leaping school — a deterministic cycle,
+      // never Math.random for placement, only for the splash's own grit.
       const f = age / e.duration;
       const seaY = horizonY + (h - horizonY) * 0.68;
-      const arcH = 60;
-      const span = 90;
-      const t = Math.min(1, f * 1.15); // squash so descent finishes cleanly
-      const hx = e.x + (t - 0.5) * span * e.dir;
-      const hy = seaY - Math.sin(Math.PI * t) * arcH;
-      ctx.save();
-      ctx.fillStyle = "rgba(24, 34, 52, 0.9)";
-      ctx.beginPath();
-      // fluke / body arc: two ellipses forming the classic breach outline
-      ctx.ellipse(hx, hy, 24, 8, Math.sin(Math.PI * t) * 0.6 * e.dir, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.beginPath();
-      ctx.ellipse(hx - 22 * e.dir, hy - 4, 6, 4, 0.6 * e.dir, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
-      // splash on re-entry
-      if (f > 0.72 && f < 0.82) {
-        ctx.fillStyle = "rgba(232, 244, 250, 0.72)";
-        for (let s = 0; s < 8; s++) {
-          const sa = Math.random() * Math.PI * 2;
-          const sr = 6 + Math.random() * 22;
-          ctx.beginPath();
-          ctx.arc(hx + Math.cos(sa) * sr, seaY - Math.random() * 8, 1 + Math.random() * 1.4, 0, Math.PI * 2);
-          ctx.fill();
+      const arcH = 60 * e.scale;
+      const span = 90 * e.scale;
+      const n = Math.max(1, e.count);
+      for (let bIdx = 0; bIdx < n; bIdx++) {
+        // deterministic per-body stagger and lateral offset from the seed
+        const bh = hash01(e.seed + bIdx * 7919);
+        const stagger = bIdx === 0 ? 0 : (bh - 0.5) * 0.22;
+        const bf = Math.max(0, Math.min(1.15, f * 1.15 + stagger));
+        const t = Math.min(1, bf);
+        if (t <= 0) continue;
+        const lane = (bIdx - (n - 1) / 2) * (28 + e.scale * 10);
+        const hx = e.x + lane + (t - 0.5) * span * e.dir;
+        const hy = seaY - Math.sin(Math.PI * t) * arcH;
+        ctx.save();
+        ctx.fillStyle = "rgba(24, 34, 52, 0.9)";
+        ctx.beginPath();
+        // fluke / body arc: two ellipses forming the classic breach outline
+        ctx.ellipse(hx, hy, 24 * e.scale, 8 * e.scale, Math.sin(Math.PI * t) * 0.6 * e.dir, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.ellipse(hx - 22 * e.dir * e.scale, hy - 4 * e.scale, 6 * e.scale, 4 * e.scale, 0.6 * e.dir, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+        // splash on re-entry
+        if (t > 0.72 && t < 0.86) {
+          ctx.fillStyle = "rgba(232, 244, 250, 0.72)";
+          for (let s = 0; s < 8; s++) {
+            const sa = hash01(e.seed + bIdx * 131 + s * 977) * Math.PI * 2;
+            const sr = (6 + hash01(e.seed + bIdx * 191 + s * 331) * 22) * e.scale;
+            ctx.beginPath();
+            ctx.arc(
+              hx + Math.cos(sa) * sr,
+              seaY - hash01(e.seed + bIdx * 61 + s * 811) * 8 * e.scale,
+              (1 + hash01(e.seed + s) * 1.4) * e.scale,
+              0, Math.PI * 2,
+            );
+            ctx.fill();
+          }
         }
       }
     } else if (e.kind === "beachcomber") {

@@ -1568,19 +1568,22 @@ export default function Murmuration() {
           }
           if (e.fingers !== 1) return;
           const at = screenToWorld(e.x, e.y);
-          // the tap ladder: single is the ordinary answer; a true double tap
-          // (exactly two) transforms what's under the finger — flush a held
-          // bird, or on open sky summon the next of a cycling set; a triple
-          // musters the whole animal into a shape and lets it collapse.
-          if (e.count === 2) {
+          // the site-wide tap train (gesture/core.ts): 1 / 3 / 5 / n. Tier 3
+          // transforms whatever is under the finger — a held bird flushes
+          // dramatically and the flock answers; open sky summons the next of
+          // a cycling set (predator / thermal / roost call). Tier 5 is the
+          // room's biggest, rarest event: the whole animal musters into a
+          // shape and lets it collapse. Tier n keeps deepening, never a
+          // silent no-op at the population cap.
+          const tier = tapTrainTier(e.count);
+          const depth = tapTrainDepth(e.count);
+          if (tier === 3) {
             const hit = birdAtScreen(e.x, e.y);
             if (hit >= 0) flushBirdDramatic(hit, at, e.intensity);
             else cycleSkyEvent(at);
             return;
           }
-          const tier = tapTrainTier(e.count);
-          const depth = tapTrainDepth(e.count);
-          if (tier === 3) {
+          if (tier === 5) {
             startMuster(at, e.intensity, depth);
             return;
           }
@@ -1595,22 +1598,6 @@ export default function Murmuration() {
               haptics.roll();
             } catch {
               /* noop */
-            }
-            return;
-          }
-          if (tier === 5) {
-            const hit = birdAtScreen(e.x, e.y);
-            if (hit >= 0) cullAt(hit);
-            else {
-              flushNear(state, at, 16 + e.intensity * 10 + depth * 8);
-              startle(at, 40 + e.intensity * 50 + depth * 30);
-              call(1.0 + e.intensity * 0.4);
-              try {
-                audio.thud();
-                haptics.roll();
-              } catch {
-                /* noop */
-              }
             }
             return;
           }

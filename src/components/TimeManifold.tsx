@@ -52,6 +52,13 @@ const BREATH_MS = 7000; // the site's one shared clock (AGENTS.md: "one clock fa
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const gammaOf = (v: number) => 1 / Math.sqrt(Math.max(1e-4, 1 - v * v));
 
+/** A seeded 0..1 stream for the room's own idle timers — never Math.random,
+ *  so the same run of radiate events plays back the same. */
+function hash01(n: number): number {
+  const x = Math.sin(n * 127.1 + 311.7) * 43758.5453123;
+  return x - Math.floor(x);
+}
+
 function colorAlpha(hex: string, alpha: number) {
   const clean = hex.replace("#", "");
   const n = parseInt(
@@ -122,6 +129,9 @@ export default function TimeManifold() {
   // /ocean's weather — see the scheduler in the draw loop below.
   const radiateAtRef = useRef(-1e9);
   const nextRadiateAtRef = useRef(-1);
+  // aliveness on a seeded timer, not Math.random: a small counter mixed
+  // through a hash, so the same run of radiate events plays back the same
+  const radiateSerialRef = useRef(0);
 
   const recordTape = useField((s) => s.recordTape);
 
@@ -164,7 +174,7 @@ export default function TimeManifold() {
     // walking the 60-iteration loop every frame.
     const tickSprites = new Map<string, HTMLCanvasElement>();
     if (nextRadiateAtRef.current < 0) {
-      nextRadiateAtRef.current = last + 5000 + Math.random() * 6000;
+      nextRadiateAtRef.current = last + 5000 + hash01(radiateSerialRef.current++) * 6000;
     }
 
     // ── performance contract (room-runtime): a frame governor picks a
@@ -245,7 +255,7 @@ export default function TimeManifold() {
       // flow briefly races exactly as it would under a real hand's drag.
       // Only reachable while the loop runs, which is only while visible.
       if (now > nextRadiateAtRef.current) {
-        nextRadiateAtRef.current = now + 9000 + Math.random() * 8000;
+        nextRadiateAtRef.current = now + 9000 + hash01(radiateSerialRef.current++) * 8000;
         radiateAtRef.current = now;
         if (!reduce) stirTurbulence(0.16 + massN * 0.14);
         try { getFieldAudio().playNote(30 + Math.round(massN * 6), 900); } catch { /* noop */ }

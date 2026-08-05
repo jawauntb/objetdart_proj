@@ -195,7 +195,17 @@ const HABITS: ReadonlyArray<{ axiom: string; rules: Record<string, string> }> = 
 
 /** Decode a seed into a complete species. Pure; same seed = same flower. */
 export function speciesFromSeed(seed: number): Species {
-  const l = latentFromSeed(seed);
+  return speciesFromLatent(latentFromSeed(seed), seed);
+}
+
+/**
+ * Decode an ARBITRARY point in latent space into a species. `speciesFromSeed`
+ * is this with the latent drawn from a seed; a crossed latent (see
+ * `crossLatent`) comes through the same decoder, which is what makes a
+ * child of two plants a real flower rather than a blend of two pictures.
+ */
+export function speciesFromLatent(latent: number[], seed: number): Species {
+  const l = latent;
 
   const petals = pick(FIB_PETALS, l[0]);
   const florets = pick(FIB_FLORETS, l[1]);
@@ -253,6 +263,85 @@ export function speciesFromSeed(seed: number): Species {
     swayStiffness: 0.3 + l[22] * 0.6,
     breathDepth: 0.4 + l[23] * 0.6,
   };
+}
+
+// —————————————————— crossing, light, and root space ——————————————————
+
+/** How often a locus mutates when pollen actually lands. Small, and real. */
+export const DRIFT_RATE = 0.06;
+
+/**
+ * Meiosis, then fertilisation: the child takes each locus from ONE parent or
+ * the other — independent assortment, not an average. Averaging is the bug
+ * this shape exists to avoid: every cross would land in the middle of latent
+ * space and a garden would go beige in three generations. With `drift` at 0
+ * a plant crossed with itself reproduces itself exactly; above 0, a few loci
+ * mutate, which is where new form comes from.
+ */
+export function crossLatent(a: number[], b: number[], seed: number, drift = DRIFT_RATE): number[] {
+  const n = Math.min(a.length, b.length);
+  const rng = mulberry32(mix32((seed >>> 0) || 1));
+  const out: number[] = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const fromA = rng() < 0.5;
+    let v = fromA ? a[i] : b[i];
+    if (rng() < drift) v = clamp01(v + (rng() - 0.5) * 0.5);
+    out[i] = clamp01(v);
+  }
+  return out;
+}
+
+/** How wide a plant's canopy reaches, as a fraction of the garden's width. */
+export function canopySpread(sp: Species): number {
+  return 0.06 + sp.height * 0.1 + sp.heartR * 0.14;
+}
+
+/**
+ * The light a neighbour takes. Shade is one-directional: only a TALLER plant
+ * shades a shorter one, and only inside its canopy. A symmetric falloff here
+ * would have a seedling shading the tree above it, which is exactly the
+ * mistake that makes a "competing" garden look like mutual repulsion.
+ * Returns 0..1 of the light lost.
+ */
+export function shadeFrom(myHeight: number, otherHeight: number, dx: number, spread: number): number {
+  if (!(otherHeight > myHeight)) return 0;
+  const d = Math.abs(dx);
+  if (!(spread > 0) || d >= spread) return 0;
+  const over = clamp01((otherHeight - myHeight) / Math.max(1e-6, otherHeight));
+  return clamp01((1 - d / spread) * over);
+}
+
+/**
+ * How much of two root discs overlap, 0..1 of the smaller one's area — the
+ * exact lens area of two circles, so touching rims read as 0 and a coincident
+ * pair as 1, with everything between continuous.
+ */
+export function rootOverlap(dx: number, ra: number, rb: number): number {
+  const d = Math.abs(dx);
+  if (!(ra > 0) || !(rb > 0)) return 0;
+  if (d >= ra + rb) return 0;
+  const rMin = Math.min(ra, rb);
+  if (d <= Math.abs(ra - rb)) return 1; // one disc entirely inside the other
+  const r1 = ra;
+  const r2 = rb;
+  const a1 = Math.acos(clampTo((d * d + r1 * r1 - r2 * r2) / (2 * d * r1), -1, 1));
+  const a2 = Math.acos(clampTo((d * d + r2 * r2 - r1 * r1) / (2 * d * r2), -1, 1));
+  const area =
+    r1 * r1 * (a1 - Math.sin(2 * a1) / 2) + r2 * r2 * (a2 - Math.sin(2 * a2) / 2);
+  return clamp01(area / (Math.PI * rMin * rMin));
+}
+
+function clampTo(v: number, a: number, b: number): number {
+  return v < a ? a : v > b ? b : v;
+}
+
+/**
+ * A plant's vigour, 0..1: what is left of it after the light its neighbours
+ * take and the root space they share. This is the number a garden competes
+ * over — it drives growth, bloom, and whether a crowded seedling makes it.
+ */
+export function vigour(light: number, rootShare: number): number {
+  return clamp01(clamp01(light) * (1 - clamp01(rootShare) * 0.6));
 }
 
 /**

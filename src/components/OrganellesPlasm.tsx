@@ -533,11 +533,17 @@ export default function OrganellesPlasm() {
      * halfway down the pathway, then an atp wave through everything.
      */
     const summonTraffic = (nx: number, ny: number, intensity: number) => {
-      const kind = plasmEventIdx % 4;
+      const kind = plasmEventIdx % 5;
       plasmEventIdx += 1;
       const list = listRef.current;
       const seed = hashSeed(plasmEventIdx, Math.round(nx * 4093), Math.round(ny * 8191));
-      if (kind === 3) {
+      if (kind === 0) {
+        // the organ the cell is still missing condenses here — the rung's
+        // own creation, kept, and the first answer of the cycle
+        condenseMissing(nx, ny);
+        return;
+      }
+      if (kind === 4) {
         // an atp wave: every mitochondrion answers, and the plasm races
         streamingTarget = clamp01(streamingTarget + 0.25 + intensity * 0.35);
         list.forEach((o, i) => {
@@ -588,7 +594,7 @@ export default function OrganellesPlasm() {
         }
         return;
       }
-      const cargo: CargoStage = kind === 0 ? "raw" : kind === 1 ? "mature" : "folded";
+      const cargo: CargoStage = kind === 1 ? "raw" : kind === 2 ? "mature" : "folded";
       addVesicle(nx, ny, area, cargo, seed);
       pulses.push({ x: nx * width, y: ny * height, t0: performance.now(), tint: "150, 190, 172", gain: 0.5 });
       try {
@@ -762,33 +768,6 @@ export default function OrganellesPlasm() {
           const base = tier === "n" ? 7 : tier;
           const deepen = Math.min(1, (e.count - base) * 0.5);
           const amp = e.intensity * (0.75 + deepen * 0.55);
-          // ——— the ladder above the single tap ———
-          // two on an organ: it does what it is for — a mitochondrion fires
-          // atp or divides, the pathway organs bud their parcel. Two on the
-          // plasm: the next traffic of the cycle arrives.
-          if (e.count === 2) {
-            if (i >= 0) {
-              selIdx = i;
-              performFunction(i, e.intensity);
-            } else {
-              summonTraffic(clamp01(x / width), clamp01(y / height), e.intensity);
-            }
-            return;
-          }
-          // three: the metabolic cascade — every organ in pitch order, every
-          // mitochondrion firing, every parcel pushed one station along
-          if (e.count === 3) {
-            cascade = { at: performance.now(), step: 0, gain: e.intensity };
-            streamingTarget = clamp01(streamingTarget + 0.25 + e.intensity * 0.3);
-            stirTurbulence(0.12 + e.intensity * 0.12);
-            try {
-              audio.bell();
-              haptics.roll();
-            } catch {
-              /* noop */
-            }
-            return;
-          }
           if (tier === 1) {
             if (i >= 0) {
               selIdx = i;
@@ -811,11 +790,17 @@ export default function OrganellesPlasm() {
             return;
           }
           if (tier === 3) {
-            // draw membrane into the organ, or condense what the cell still lacks
+            // The 3-rung is the room's transformation rung. On an organ: the
+            // plasm feeds it membrane (the shipped meaning) and the organ
+            // spends it doing what it is FOR — a mitochondrion large enough
+            // divides, a smaller one fires atp, the pathway organs bud the
+            // parcel they are responsible for. On open plasm: the next
+            // traffic of the cycle, whose first answer is the organ the cell
+            // still lacks condensing there.
             if (i >= 0) {
               selIdx = i;
               draw_(i, 0.1 + amp * 0.16 + deepen * 0.08);
-              ring(i, 0.75 + deepen * 0.25);
+              performFunction(i, e.intensity + deepen * 0.3);
               try {
                 haptics.detent();
               } catch {
@@ -823,7 +808,7 @@ export default function OrganellesPlasm() {
               }
               save();
             } else {
-              condenseMissing(x / width, y / height);
+              summonTraffic(clamp01(x / width), clamp01(y / height), e.intensity + deepen * 0.3);
             }
             return;
           }
@@ -865,7 +850,19 @@ export default function OrganellesPlasm() {
             }
             save();
           }
-          tutti();
+          // ...and the top rung's own act, the largest thing this room does:
+          // a METABOLIC CASCADE walking the organs from the lowest voice to
+          // the highest — every mitochondrion firing, every maker budding a
+          // fresh parcel, and every parcel in transit lit at the close.
+          cascade = { at: performance.now(), step: 0, gain: e.intensity + deepen * 0.4 };
+          streamingTarget = clamp01(streamingTarget + 0.25 + e.intensity * 0.3);
+          stirTurbulence(0.12 + deepen * 0.12);
+          try {
+            audio.bell();
+            haptics.roll();
+          } catch {
+            /* noop */
+          }
         },
         hold: (e) => {
           lastInteractionAt = performance.now();
@@ -1615,6 +1612,44 @@ export default function OrganellesPlasm() {
           ctx.arc(cx, cy, o.radius * scale * (1 + o.amplitude) + 17, -Math.PI / 2, -Math.PI / 2 + clamp01(l) * Math.PI * 2);
           ctx.stroke();
         }
+      }
+
+      // the parcels in transit: a smooth sac (one sine, and drawn as one
+      // circle), tinted by how far down the pathway its cargo has come, with
+      // a thread back toward the station it is making for
+      for (const v of vesicles) {
+        const vx = v.nx * width;
+        const vy = v.ny * height;
+        const r = Math.max(2.4, Math.sqrt(Math.max(0.2, v.area)) * U * 0.34);
+        const tint = v.cargo === "raw" ? "150, 178, 226" : v.cargo === "folded" ? "134, 186, 168" : "231, 172, 82";
+        ctx.strokeStyle = `rgba(${tint}, ${0.3 + v.lit * 0.5})`;
+        ctx.lineWidth = 0.9;
+        ctx.beginPath();
+        ctx.arc(vx, vy, r * (1 + breath * 0.06), 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.fillStyle = `rgba(${tint}, ${0.08 + v.lit * 0.28})`;
+        ctx.fill();
+        // the cargo inside it, a mark that changes at every station
+        ctx.fillStyle = `rgba(${tint}, ${0.45 + v.lit * 0.4})`;
+        ctx.beginPath();
+        ctx.arc(vx, vy, r * (v.cargo === "mature" ? 0.5 : v.cargo === "folded" ? 0.38 : 0.26), 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // fusions, buds and releases: one soft ring each, where it happened
+      for (let k = pulses.length - 1; k >= 0; k--) {
+        const p = pulses[k];
+        const u = (now - p.t0) / 780;
+        if (u < 0) continue;
+        if (u >= 1) {
+          pulses.splice(k, 1);
+          continue;
+        }
+        ctx.strokeStyle = `rgba(${p.tint}, ${(1 - u) * 0.5 * p.gain})`;
+        ctx.lineWidth = 1.3 * (1 - u) + 0.4;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, U * (0.5 + u * 3.6 * (0.6 + p.gain)), 0, Math.PI * 2);
+        ctx.stroke();
       }
 
       // the span's membrane tubule: a contact site sustained between two

@@ -953,7 +953,8 @@ export default function Plasma() {
     const spark = (x: number, y: number, strength: number) => {
       flashRef.current = Math.max(flashRef.current, strength);
       flashT0Ref.current = simNowMs;
-      flaresRef.current.push({ x, y, t0: simNowMs, seed: Math.random() });
+      const flareSeed = Math.abs(Math.sin(x * 12.9898 + y * 78.233 + flaresRef.current.length * 37.719));
+      flaresRef.current.push({ x, y, t0: simNowMs, seed: flareSeed });
       if (flaresRef.current.length > 6) flaresRef.current.shift();
     };
 
@@ -1010,7 +1011,7 @@ export default function Plasma() {
         cx: e.clientX, cy: e.clientY,
         downAt: performance.now(), moved: 0,
         lastX: e.clientX, lastY: e.clientY,
-        lastRipple: 0, seed: Math.random(),
+        lastRipple: 0, seed: Math.abs(Math.sin(e.pointerId * 12.9898 + e.clientX * 0.017 + e.clientY * 0.029)),
       });
       heatPeakRef.current = heatRef.current;
       lastContact = toLocal(e.clientX, e.clientY);

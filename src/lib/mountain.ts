@@ -129,6 +129,41 @@ export function nearestCairnIndex(
   return best;
 }
 
+/** Radius (normalized, aspect-corrected) within which a falling scree stone
+ *  strikes a cairn it passes near — real contact, not a coincidence of the
+ *  eye, and cheap: O(scree × cairns) over two small capped populations,
+ *  never per-pixel. */
+export const SCREE_STRIKE_R = 0.03;
+
+/**
+ * The physics BETWEEN the mountain's two countable populations: which
+ * falling scree strikes which standing cairn this step. Each scree index
+ * strikes at most one cairn (the first it is close enough to); a struck
+ * cairn is consumed by the caller's own `topple`, which itself produces a
+ * fresh scree cascade — the third thing that is neither the falling stone
+ * nor the standing cairn.
+ */
+export function screeCairnHits(
+  scree: readonly Scree[],
+  cairns: readonly Cairn[],
+  aspect = 1,
+  radius: number = SCREE_STRIKE_R,
+): Array<{ screeIdx: number; cairnIdx: number }> {
+  const hits: Array<{ screeIdx: number; cairnIdx: number }> = [];
+  for (let i = 0; i < scree.length; i++) {
+    const s = scree[i];
+    for (let j = 0; j < cairns.length; j++) {
+      const c = cairns[j];
+      const d = Math.hypot((s.x - c.x) * aspect, s.y - c.y);
+      if (d <= radius) {
+        hits.push({ screeIdx: i, cairnIdx: j });
+        break;
+      }
+    }
+  }
+  return hits;
+}
+
 export function snowLine(tSec: number, weather: number): number {
   return 0.22 + Math.sin(tSec * 0.05) * 0.02 - weather * 0.06;
 }

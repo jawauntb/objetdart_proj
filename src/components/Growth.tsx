@@ -243,6 +243,21 @@ function configFor(mode: GrowthMode) {
   return MODES.find((entry) => entry.id === mode) ?? MODES[0];
 }
 
+/** Blend two hex colors by `t` (0 = all `a`, 1 = all `b`) — the graft's third hue. */
+function mixHue(a: string, b: string, t: number): string {
+  const toRgb = (hex: string) => {
+    const clean = hex.replace("#", "");
+    const full = clean.length === 3 ? clean.split("").map((ch) => ch + ch).join("") : clean;
+    const n = parseInt(full, 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  };
+  const [ar, ag, ab] = toRgb(a);
+  const [br, bg, bb] = toRgb(b);
+  const mixByte = (x: number, y: number) => Math.round(x + (y - x) * t);
+  const toHex = (v: number) => v.toString(16).padStart(2, "0");
+  return `#${toHex(mixByte(ar, br))}${toHex(mixByte(ag, bg))}${toHex(mixByte(ab, bb))}`;
+}
+
 function colorAlpha(hex: string, alpha: number) {
   const clean = hex.replace("#", "");
   const full = clean.length === 3
@@ -1040,6 +1055,7 @@ export default function Growth() {
     let lastScrubAt = 0;
     let lastBrushSoundAt = 0;
     let lastShedAt = 0;
+    let lastCompeteAt = 0;
     let focused = false;
     let cursorVisible = false;
     let cursorNx = 0.5;
@@ -1271,6 +1287,117 @@ export default function Growth() {
       markGrowth("bloom", b.species.palette.petal, 0.9);
     };
 
+    // tier 3 on an existing vine: it gives birth to a satellite of itself —
+    // a branch rooted a short, deterministic distance from the parent,
+    // sharing its mode and hue family, the parent surging as it forks.
+    const branchVine = (b: Blossom, intensity: number) => {
+      const parent = field.systems.find((s) => s.blossoms.includes(b));
+      if (!parent) return;
+      const ang = (hash(parent.seed % 6113 + b.node * 71) - 0.5) * 0.7;
+      const bx = clamp01(parent.x + Math.sin(ang) * 0.09);
+      const by = clamp01(parent.y - 0.07 - intensity * 0.04);
+      const child = addSystem(bx, by, parent.mode, 0.85 + intensity * 0.5);
+      child.hue = parent.hue;
+      parent.force = clamp(parent.force + 0.3, 0, 1.8);
+      try { getFieldAudio().chime(); } catch { /* noop */ }
+      haptics.bloom();
+      useField.getState().recordTape("object", 0.6, `growth/${parent.mode}/branch`);
+      markGrowth("branch", parent.hue, 0.7 + intensity * 0.2);
+    };
+
+    // tier 3 on open field: a cycling set of seasons/weather, deterministic
+    // by tap order (a counter on the season index, never Math.random).
+    const seasonFlavor = (idx: number, intensity: number) => {
+      if (idx === 0) {
+        field.params.bloom = Math.max(field.params.bloom, 0.55 + intensity * 0.2);
+        field.params.rate = clamp(field.params.rate + 0.15, 0.08, 1);
+        burst(width * 0.5, height * 0.32, ["#b8f07a", "#fff5cf"], 12, 34);
+        note(64, 160);
+      } else if (idx === 1) {
+        field.params.saturation = Math.max(field.params.saturation, 0.8);
+        field.params.ceiling = Math.max(field.params.ceiling, 0.85);
+        burst(width * 0.5, height * 0.28, ["#f2c35b", "#fff5cf"], 10, 30);
+        note(67, 180);
+      } else if (idx === 2) {
+        windTarget = clamp(windTarget + (idx % 2 === 0 ? 1 : -1), -1, 1);
+        field.params.collapse = Math.min(0.5, field.params.collapse + 0.22);
+        burst(width * 0.5, height * 0.4, ["#f2c35b", "#745126"], 10, 40);
+        note(52, 200);
+      } else {
+        field.params.rest = Math.max(field.params.rest, 0.65);
+        burst(width * 0.5, height * 0.36, ["#7fb0c9", "#cfe8f2"], 8, 20);
+        note(38, 240);
+      }
+      try { haptics.ripple(0.3 + intensity * 0.3); } catch { /* noop */ }
+    };
+    const cycleSeason = (intensity: number) => {
+      seasonTarget += 1;
+      const idx = Math.floor(((seasonTarget % 4) + 4) % 4);
+      seasonSnapped = idx;
+      seasonFlavor(idx, intensity);
+      try { getFieldAudio().chime(); } catch { /* noop */ }
+      markGrowth("season", MODES[idx % MODES.length].tone, 0.6 + intensity * 0.2);
+    };
+
+    // tier 5: the room's largest, rarest event — a full year races through,
+    // each season's flavor landing on its own beat rather than snapping once
+    let raceTimers: number[] = [];
+    const raceSeason = (intensity: number) => {
+      for (const t of raceTimers) window.clearTimeout(t);
+      raceTimers = [];
+      for (let i = 1; i <= 4; i += 1) {
+        const id = window.setTimeout(() => {
+          seasonTarget += 1;
+          const idx = Math.floor(((seasonTarget % 4) + 4) % 4);
+          seasonSnapped = idx;
+          seasonFlavor(idx, intensity);
+        }, i * 480);
+        raceTimers.push(id);
+      }
+      try { getFieldAudio().bell(); } catch { /* noop */ }
+      haptics.storm();
+      markGrowth("year", "#fff5cf", 0.9);
+    };
+
+    // ── physics between vines: competition for light and space, and graft ──
+    // Throttled (not every frame — O(n²) over a capped population, and the
+    // outcome only needs to read at human speed). Two roots close enough
+    // starve each other's force a little every pass; closer still, they
+    // graft into one vine that is neither parent — the survivor's hue
+    // blends toward the one it took, and its force jumps, a third thing.
+    const COMPETE_D = 0.07;
+    const GRAFT_D = 0.022;
+    const applyVineCompetitionAndGraft = () => {
+      const standing = field.systems.filter((s) => s.retiringAt == null);
+      for (let i = 0; i < standing.length; i += 1) {
+        const a = standing[i];
+        for (let j = i + 1; j < standing.length; j += 1) {
+          const c = standing[j];
+          const d = Math.hypot(a.x - c.x, a.y - c.y);
+          if (d >= COMPETE_D) continue;
+          if (d < GRAFT_D && field.clock - a.born > 1200 && field.clock - c.born > 1200) {
+            // graft: the younger/lighter vine feeds the older — a third hue
+            const survivor = a.blossoms.length >= c.blossoms.length ? a : c;
+            const taken = survivor === a ? c : a;
+            survivor.force = clamp(survivor.force + 0.5, 0, 1.8);
+            survivor.energy = clamp(survivor.energy + 0.2, 0.45, 1.35);
+            survivor.hue = mixHue(survivor.hue, taken.hue, 0.35);
+            taken.retiringAt = field.clock;
+            const gx = (survivor.x + taken.x) / 2;
+            const gy = (survivor.y + taken.y) / 2;
+            burst(gx * width, gy * height, [survivor.hue, taken.hue, "#fff5cf"], 12, 34);
+            try { getFieldAudio().bell(); } catch { /* noop */ }
+            haptics.bloom();
+            markGrowth("graft", survivor.hue, 0.8);
+            return; // one graft per pass — the field settles before the next
+          }
+          // competing for the same light and space: both give a little ground
+          a.force = clamp(a.force - 0.006, 0.1, 1.8);
+          c.force = clamp(c.force - 0.006, 0.1, 1.8);
+        }
+      }
+    };
+
     // three-finger tap = tutti (grammar §5): one synchronized soft pulse —
     // every blossom on every vine sways once, its note a whisper
     const tutti = (strength = 0.5) => {
@@ -1342,47 +1469,18 @@ export default function Growth() {
           return;
         }
         if (trainTier === 5) {
-          if (b) {
-            // five taps send a bloom-wave up the whole vine
-            const system = field.systems.find((s) => s.blossoms.includes(b));
-            if (system) {
-              system.blossoms.forEach((bb, i) => {
-                window.setTimeout(() => {
-                  bb.held = Math.min(1, bb.held + 0.3 + depth * 0.2);
-                  bb.wobbleV += (hash(bb.seed % 977) - 0.5) * 1.2;
-                  if (i < 6) note(midiOf(bb.species) + i * 2, 80);
-                }, i * 70);
-              });
-              system.force = clamp(system.force + 0.4, 0, 1.8);
-            }
-            try { getFieldAudio().bell(); } catch { /* noop */ }
-            haptics.bloom();
-          } else {
-            // five taps on the open field kick its bloom
-            field.params.bloom = Math.max(field.params.bloom, 0.7 + depth * 0.2);
-            field.params.pulse = Math.max(field.params.pulse, 0.5);
-            burst(p.x, p.y, ["#b8f07a", "#fff5cf", "#8ed8c4"], 14, 44);
-            try { getFieldAudio().chime(); } catch { /* noop */ }
-            haptics.ripple(0.5);
-          }
+          // tier 5: the room's biggest, rarest event — a full year races
+          // through, every season landing its own flavor in turn
+          raceSeason(e.intensity);
           return;
         }
         if (trainTier === 3) {
           if (b) {
-            // three taps arpeggiate the vine under the hand
-            const system = field.systems.find((s) => s.blossoms.includes(b));
-            const line = system ? system.blossoms.filter((bb) => bb.sx >= 0) : [b];
-            line.slice(0, 5).forEach((bb, i) => {
-              window.setTimeout(() => {
-                bb.wobbleV += (hash(bb.seed % 977) - 0.5) * (0.9 + depth);
-                note(midiOf(bb.species) + i * 3, 70);
-              }, i * 60);
-            });
-            burst(b.sx, b.sy, [b.species.palette.petal, b.species.palette.heart], 6 + Math.round(depth * 4), 26);
+            // tier 3 on a vine: it gives birth to a satellite of itself
+            branchVine(b, e.intensity);
           } else {
-            field.params.rate = clamp(field.params.rate + 0.12 + depth * 0.1, 0.08, 1);
-            burst(p.x, p.y, ["#b8f07a", "#8ed8c4"], 8, 26);
-            note(configFor(modeRef.current).note + 7, 90);
+            // tier 3 on open field: the next of a cycling set of seasons
+            cycleSeason(e.intensity);
           }
           haptics.tap();
           return;
@@ -1784,6 +1882,12 @@ export default function Growth() {
 
       field.traces = field.traces.filter((trace) => (nowMs - trace.born) < 1500);
       field.traces.forEach((trace) => drawTrace(ctx, trace, width, height, nowMs, gradCache));
+      // vines compete for light and space, and two rooted close enough graft
+      // into a third thing — throttled, an O(n²) pass over a capped population
+      if (nowMs - lastCompeteAt > 260) {
+        lastCompeteAt = nowMs;
+        applyVineCompetitionAndGraft();
+      }
       const beforeCount = field.systems.length;
       field.systems = field.systems.filter((system) => {
         if (system.retiringAt != null) return field.clock - system.retiringAt < RETIRE_MS;
@@ -1944,6 +2048,7 @@ export default function Growth() {
 
     return () => {
       cancelAnimationFrame(raf);
+      for (const t of raceTimers) window.clearTimeout(t);
       ro.disconnect();
       window.removeEventListener("resize", resize);
       mq.removeEventListener?.("change", onMotionChange);

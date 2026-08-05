@@ -77,6 +77,8 @@ import {
   divideCell,
   distToSegment2,
   fateFront,
+  FATE_COUNT,
+  gastrulate,
   hashSeed,
   morphogenAt,
   morphogenField,
@@ -177,6 +179,10 @@ export default function TissueSheet() {
     /** face-down is night: the sheet dims and slows until it's turned back */
     let night = 0;
     let nightTarget = 0;
+    /** the top rung's own act: a blastopore, folding the sheet in and under */
+    let gastrula: { x: number; y: number; r: number; u: number; speed: number; voiceAt: number } | null = null;
+    /** the sheet-tap cycle: a fresh morphogen, a wound, a fold */
+    let sheetEventIdx = 0;
 
     // ——— the frame ———
     let lens = 0;
@@ -462,6 +468,27 @@ export default function TissueSheet() {
       }
       const j = divideCell(sheet, i, hashSeed(i, sheet.n, Math.round(x * 977)));
       if (j < 0) return;
+      // A division is a mechanical event, not a bookkeeping one: two cells
+      // now stand where one did, and the ring around them is shoved outward.
+      // The lattice carries that shove on — the constraint solver passes it
+      // ring by ring — so a mitosis at one end strains bonds at the other,
+      // and the bonds are drawn by their strain.
+      {
+        const cxd = sheet.px[i];
+        const cyd = sheet.py[i];
+        for (let k = 0; k < sheet.n; k++) {
+          if (k === i || k === j) continue;
+          const dx = sheet.px[k] - cxd;
+          const dy = sheet.py[k] - cyd;
+          const d2 = dx * dx + dy * dy;
+          if (d2 > 9 || d2 < 1e-9) continue;
+          const d = Math.sqrt(d2);
+          const push = (0.12 / (0.5 + d)) * (1 - d / 3);
+          sheet.px[k] += (dx / d) * push;
+          sheet.py[k] += (dy / d) * push;
+          lit[k] = Math.max(lit[k], 0.35 * (1 - d / 3));
+        }
+      }
       lit[i] = 1;
       lit[j] = 1;
       bloomAt = performance.now();
@@ -481,6 +508,80 @@ export default function TissueSheet() {
         /* noop */
       }
       dirty = true;
+    };
+
+    /**
+     * Differentiation the hand can see: the cell commits one fate further
+     * along the morphogen than it had, and its neighbours feel the shift.
+     * Monotone, like every fate in this room — nothing ever un-differentiates.
+     */
+    const differentiate = (i: number): boolean => {
+      if (!sheet || i < 0 || i >= sheet.n) return false;
+      if (sheet.fate[i] === INNER_FATE) return false;
+      const next = Math.min(FATE_COUNT - 1, sheet.fate[i] + 1);
+      if (next === sheet.fate[i]) return false;
+      sheet.fate[i] = next;
+      lit[i] = 1;
+      return true;
+    };
+
+    /**
+     * The 3-rung on open sheet cycles the sheet's own weather: a fresh
+     * morphogen gradient sweeping a new axis, a wound the tissue has to
+     * close, then a fold pressed into it.
+     */
+    const summonSheetEvent = (x: number, y: number, intensity: number) => {
+      if (!sheet) return;
+      const kind = sheetEventIdx % 3;
+      sheetEventIdx += 1;
+      if (kind === 0) {
+        // a new morphogen: the differentiation front starts over on a new
+        // axis, and the fates it lands are a different map of the same sheet
+        field = morphogenField(hashSeed(sheet.seed, sheetEventIdx, Math.round(x * 977)));
+        axisTarget = (axisTarget + Math.PI * (0.4 + intensity * 0.6)) % (Math.PI * 2);
+        sheet.t = 0;
+        pushMark(x, y, 1);
+        try {
+          audio.chime();
+          haptics.ripple(0.3 + intensity * 0.3);
+        } catch {
+          /* noop */
+        }
+        return;
+      }
+      if (kind === 1) {
+        // a wound: a real cut across the epithelium, which the tissue then
+        // has to pull shut against its own adhesion
+        const len = 1.6 + intensity * 2.2;
+        const ang = ((hashSeed(sheetEventIdx, Math.round(y * 613)) % 628) / 100);
+        const cut = tearAcross(
+          sheet,
+          x - Math.cos(ang) * len,
+          y - Math.sin(ang) * len,
+          x + Math.cos(ang) * len,
+          y + Math.sin(ang) * len,
+        );
+        pushMark(x, y, 2);
+        recomputeChord();
+        try {
+          if (cut > 0) audio.thud();
+          else audio.refuse();
+          haptics.chop();
+        } catch {
+          /* noop */
+        }
+        dirty = true;
+        return;
+      }
+      // a fold: a pit presses itself in here, without a finger to hold it
+      constrict(sheet, x, y, 2.1, 0.5 + intensity * 0.4);
+      pushMark(x, y, 1);
+      try {
+        audio.playTone(ROOT_HZ * 0.7, 0.5);
+        haptics.roll();
+      } catch {
+        /* noop */
+      }
     };
 
     const strainAll = (amount: number) => {
@@ -558,11 +659,29 @@ export default function TissueSheet() {
             return;
           }
           if (tier === 3) {
-            // mitosis: the nearest cell divides (stroke's reward, now a train)
+            // On a cell the 3-rung is mitosis AND commitment: the daughters
+            // come out one fate further along the morphogen than the mother
+            // was, so a struck cell visibly becomes a different KIND of cell
+            // and the sheet's chord moves with it. Off the sheet it cycles
+            // the tissue's own weather: a fresh gradient, a wound, a fold.
+            if (i < 0 && nearestCell(sheet, p.x, p.y, 1.4) < 0) {
+              summonSheetEvent(p.x, p.y, amp);
+              return;
+            }
+            const mother = i >= 0 ? i : nearestCell(sheet, p.x, p.y, 1.4);
+            const before = sheet.n;
             divideAt(p.x, p.y, false);
+            if (mother >= 0) {
+              differentiate(mother);
+              if (sheet.n > before) differentiate(sheet.n - 1);
+              recomputeChord();
+            }
             if (deepen > 0.2) {
               const j = nearestCell(sheet, p.x + 0.4, p.y - 0.3, 1.6);
-              if (j >= 0) divideAt(sheet.px[j], sheet.py[j], true);
+              if (j >= 0) {
+                divideAt(sheet.px[j], sheet.py[j], true);
+                differentiate(j);
+              }
             }
             return;
           }
@@ -605,13 +724,25 @@ export default function TissueSheet() {
           else {
             sites.forEach((s, n) => divideAt(s.x, s.y, n > 0));
             strainAll(0.2 + deepen * 0.25);
-            try {
-              audio.bell();
-              haptics.bloom();
-            } catch {
-              /* noop */
-            }
             save();
+          }
+          // ...and the top rung's own act, the largest thing this room does:
+          // GASTRULATION. A blastopore opens under the hand and the sheet
+          // folds itself in and under across a whole front, the cells that
+          // go under becoming a second layer that never comes back out.
+          gastrula = {
+            x: p.x,
+            y: p.y,
+            r: 2.2 + deepen * 1.4 + e.intensity * 0.8,
+            u: 0,
+            speed: 0.34 + e.intensity * 0.26,
+            voiceAt: 0,
+          };
+          try {
+            audio.bell();
+            haptics.bloom();
+          } catch {
+            /* noop */
           }
         },
         hold: (e) => {
@@ -1260,8 +1391,39 @@ export default function TissueSheet() {
         // so the pit would stay pressed into the sheet forever. It lifts
         // when the ticks stop, exactly as a finger does.
         if (pitActive && now - pitTickAt > 340 && pitTickAt > 0) pitActive = false;
+        // the blastopore: a fold driven as a duration, not a switch — the
+        // sheet goes in and under over seconds, and what passes the seal
+        // depth joins the inner layer and stays there
+        if (gastrula) {
+          gastrula.u = Math.min(1, gastrula.u + dt * timeScale * gastrula.speed);
+          const inner = gastrulate(sheet, gastrula.x, gastrula.y, gastrula.r, gastrula.u);
+          if (now - gastrula.voiceAt > 240) {
+            gastrula.voiceAt = now;
+            // the fold falls in pitch as it deepens — the sheet going down
+            try {
+              audio.playTone(ROOT_HZ * (1 - gastrula.u * 0.5), 0.55);
+              haptics.ripple(0.2 + gastrula.u * 0.4);
+            } catch {
+              /* noop */
+            }
+          }
+          if (gastrula.u >= 1) {
+            gastrula = null;
+            recomputeChord();
+            dirty = true;
+            if (inner > 0) {
+              try {
+                audio.bell();
+                haptics.bloom();
+              } catch {
+                /* noop */
+              }
+            }
+            save();
+          }
+        }
         if (pitActive) constrict(sheet, pitX, pitY, 2.1, pitAmount);
-        else relaxConstriction(sheet, dt * timeScale, 0.55);
+        else if (!gastrula) relaxConstriction(sheet, dt * timeScale, 0.55);
 
         // the span, sustained: the two touched cells are held at the fingers
         // and the elastic sheet between them stays stretched taut — the pull

@@ -41,6 +41,13 @@ const {
   advanceCulture: advanceCultureRaw,
   validateStoredCulture: validateStoredCultureRaw,
   catchUpCulture: catchUpCultureRaw,
+  adhesionBetween,
+  signalReach,
+  signalAt,
+  competeForNutrient,
+  canEngulf,
+  engulfSeed,
+  ENGULF_RATIO,
 } = loadTsModule("src/lib/cytology.ts");
 
 // Arrays (and the plain records inside them) born in the vm realm carry a
@@ -289,7 +296,79 @@ function seedCell(seed, nx, ny, generation = 0, vitality = 1) {
   assert.deepEqual(roundTripped, rehome(original), "encode → decode must round-trip a well-formed culture exactly");
 }
 
+// — What one cell does to another —
+// The bug this catches: an "adhesion" that is really just distance, so a
+// mixed culture would clump into one indiscriminate blob instead of sorting
+// by lineage the way cadherin-bearing cells actually do.
+{
+  const kin = SEEDS.filter((s) => cellFromSeed(s).family === cellFromSeed(SEEDS[0]).family);
+  const alien = SEEDS.filter((s) => cellFromSeed(s).family !== cellFromSeed(SEEDS[0]).family);
+  assert.ok(kin.length > 1 && alien.length > 0, "the sample holds both kin and strangers");
+  const a = cellFromSeed(SEEDS[0]);
+  const b = cellFromSeed(kin[1]);
+  const c = cellFromSeed(alien[0]);
+  assert.ok(adhesionBetween(a, b) > adhesionBetween(a, c), "like holds like harder than it holds a stranger");
+  assert.equal(adhesionBetween(a, c), adhesionBetween(c, a), "adhesion is symmetric — it is one bond, not two");
+  for (const s of SEEDS.slice(0, 20)) {
+    const v = adhesionBetween(a, cellFromSeed(s));
+    assert.ok(v >= 0 && v <= 1, "adhesion stays a fraction");
+  }
+}
+
+// Signalling reaches a neighbourhood, not the dish: past the reach it is
+// exactly zero, or a "signal" would be a global broadcast wearing a falloff.
+{
+  const m = cellFromSeed(SEEDS[3]);
+  const reach = signalReach(m);
+  assert.ok(reach > 0, "a cell's signal carries somewhere");
+  assert.ok(signalAt(m, 0) > signalAt(m, reach * 0.5), "and weakens with distance");
+  assert.equal(signalAt(m, reach), 0, "at the edge of reach, nothing");
+  assert.equal(signalAt(m, reach + 5), 0, "and nothing beyond it");
+  assert.equal(signalAt(m, -1), 0, "a negative distance is not a nearer neighbour");
+}
+
+// A finite supply is divided, not multiplied: the shares must sum to the
+// supply exactly, or a crowded dish would quietly feed everyone in full.
+{
+  const radii = [0.05, 0.1, 0.08, 0.06];
+  const shares = competeForNutrient(radii, 12);
+  const sum = shares.reduce((x, y) => x + y, 0);
+  assert.ok(Math.abs(sum - 12) < 1e-9, "the dish gives out exactly what it holds");
+  assert.ok(shares[1] > shares[0], "the larger cell takes the larger share");
+  // the same supply among twice as many mouths feeds each of them less
+  const crowded = competeForNutrient([...radii, ...radii], 12);
+  assert.ok(crowded[1] < shares[1], "a crowded dish starves each of them proportionally");
+  assert.ok(Math.abs(crowded.reduce((x, y) => x + y, 0) - 12) < 1e-9, "and still gives out exactly what it holds");
+  assert.deepEqual(competeForNutrient([], 12), [], "an empty dish divides nothing");
+  assert.deepEqual(competeForNutrient([0, 0], 12), [0, 0], "and cells with no uptake take nothing");
+}
+
+// Phagocytosis needs a real size difference, and makes a third thing.
+{
+  assert.equal(canEngulf(0.1, 0.099), false, "a cell cannot swallow one its own size");
+  assert.equal(canEngulf(0.1, 0.1 / Math.sqrt(ENGULF_RATIO) - 1e-6), true, "past the ratio, it can");
+  assert.equal(canEngulf(0.05, 0.1), false, "and the small one never eats the large");
+  assert.equal(canEngulf(0, 0.1), false, "nothing swallows anything");
+  const pred = SEEDS[5];
+  const prey = SEEDS[9];
+  const made = engulfSeed(pred, prey);
+  assert.notEqual(made, pred >>> 0, "what stands afterwards is not the phagocyte it was");
+  assert.notEqual(made, prey >>> 0, "nor the cell it ate");
+  assert.equal(made & HERITABLE_MASK, pred & HERITABLE_MASK, "but it is still of the phagocyte's lineage");
+  assert.equal(engulfSeed(pred, prey), made, "and the same meal always makes the same cell");
+  assert.notEqual(engulfSeed(prey, pred), made, "eating the other way round makes a different cell");
+  assert.notDeepEqual(
+    cellFromSeed(made),
+    cellFromSeed(pred),
+    "the morphology is genuinely new, not the phagocyte redrawn",
+  );
+}
+
 console.log(`cytology ok: ${SEEDS.length} seeds decoded, lineage stable, population bounded at ${MAX_CELLS}`);
+console.log(
+  "cytology contact ok: adhesion homophilic and symmetric, signalling exactly zero past its reach, " +
+    "a finite supply divided to the last crumb, and phagocytosis making a cell that is neither parent",
+);
 console.log(
   `cytology catch-up ok: growth+thinning relax toward steady population ${STEADY_POPULATION}, ` +
     `bounded at ${MAX_CATCHUP_H}h, corrupt/backwards state handled`,

@@ -578,6 +578,56 @@ const webs = seeds.map((s) => C.buildWeb(s));
   );
 }
 
+// ————— wanderers: real bodies moving through the invariant field —————
+{
+  // two bodies at rest fall toward each other
+  {
+    const a = { x: 0.3, y: 0.5, z: 0.5, m: 1, vx: 0, vy: 0, vz: 0 };
+    const b = { x: 0.7, y: 0.5, z: 0.5, m: 1, vx: 0, vy: 0, vz: 0 };
+    const next = C.stepWanderers([a, b], 1 / 30, 0.02, 0.05, 5);
+    assert.ok(next[0].vx > 0, "the left wanderer accelerates toward its partner");
+    assert.ok(next[1].vx < 0, "the right wanderer accelerates toward its partner, not away");
+  }
+
+  // the speed cap actually caps
+  {
+    const a = { x: 0.5, y: 0.5, z: 0.5, m: 10, vx: 0, vy: 0, vz: 0 };
+    const b = { x: 0.501, y: 0.5, z: 0.5, m: 10, vx: 0, vy: 0, vz: 0 };
+    const capped = C.stepWanderers([a, b], 1 / 20, 0.05, 0.02, 0.4);
+    for (const body of capped) {
+      const sp = Math.sqrt(body.vx ** 2 + body.vy ** 2 + body.vz ** 2);
+      assert.ok(sp <= 0.4 + 1e-6, "mutual gravity honors the wanderer speed cap");
+    }
+  }
+
+  // mergeRadius grows with mass
+  assert.ok(C.wandererMergeRadius(4, 1) > C.wandererMergeRadius(1, 1), "heavier wanderers reach contact from further away");
+
+  // a merge conserves mass and momentum exactly, producing a third body
+  {
+    const a = { x: 0.4, y: 0.4, z: 0.4, m: 2, vx: 1, vy: 0, vz: 0 };
+    const b = { x: 0.401, y: 0.4, z: 0.4, m: 6, vx: -0.5, vy: 0.2, vz: 0 };
+    const { bodies, merges } = C.mergeWanderers([a, b], 0.02);
+    assert.equal(bodies.length, 1, "two touching wanderers merge into one");
+    assert.equal(merges.length, 1);
+    const into = merges[0].into;
+    assert.equal(into.m, 8, "merged mass is the exact sum of its parents");
+    assert.ok(Math.abs(into.vx * into.m - (a.m * a.vx + b.m * b.vx)) < 1e-9, "merged momentum matches the sum, x");
+    assert.ok(Math.abs(into.vy * into.m - (a.m * a.vy + b.m * b.vy)) < 1e-9, "merged momentum matches the sum, y");
+    assert.notEqual(into.m, a.m);
+    assert.notEqual(into.m, b.m);
+  }
+
+  // distant wanderers never merge
+  {
+    const a = { x: 0, y: 0, z: 0, m: 5, vx: 0, vy: 0, vz: 0 };
+    const b = { x: 1, y: 1, z: 1, m: 5, vx: 0, vy: 0, vz: 0 };
+    const { bodies, merges } = C.mergeWanderers([a, b], 0.02);
+    assert.equal(bodies.length, 2, "distant wanderers stay distant");
+    assert.equal(merges.length, 0);
+  }
+}
+
 console.log(
   "cosmicweb ok: one seed one universe; the volume grid proved identical to the field cell by cell; " +
     "every galaxy above the threshold and every rejected candidate below it; the threshold→count map " +

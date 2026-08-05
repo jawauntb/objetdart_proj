@@ -614,8 +614,17 @@ export default function HelixLadder() {
             return;
           }
           if (tier === 3) {
-            // rewrite: cycle the nucleotide A→T→G→C (was double-tap)
-            const t = i >= 0 ? i : Math.floor(seqRef.current.length / 2);
+            // Off the ladder, the 3-rung calls in the next real event of the
+            // nucleus: a replication fork, a transcription bubble, a repair
+            // enzyme carrying a deliberately imperfect patch, then a clean
+            // primer. Struck ON a rung it keeps its shipped meaning — the
+            // ordered A→T→G→C rewrite, the nucleotide felt changing.
+            if (i < 0) {
+              summonEvent(x, y, e.intensity + deepen * 0.3);
+              return;
+            }
+            // rewrite: cycle the nucleotide A→T→G→C
+            const t = i;
             if (t < 0 || t >= seqRef.current.length) return;
             selIdx = t;
             const next = cycleBase(seqRef.current, t);
@@ -678,14 +687,23 @@ export default function HelixLadder() {
           }
           seqRef.current = next;
           save();
+          // ...and then the top rung's own act, the largest thing this room
+          // does: the whole strand REPLICATES. The fork runs its full length,
+          // the polymerase riding it base by base, and a complete daughter
+          // chromatid peels off and condenses beside the parent.
+          replicating = { u: 0, speed: 0.16 + e.intensity * 0.22 + deepen * 0.1, gain: e.intensity };
+          holdingOpen = true;
+          polymerase = 0;
+          chromatid = 0;
+          chromatidCoil = 0;
           stirTurbulence(0.15 + deepen * 0.2);
           try {
+            audio.bell();
             audio.playNote(31, 300);
             haptics.bloom();
           } catch {
             /* noop */
           }
-          playStrand(false);
         },
         hold: (e) => {
           lastInteractionAt = performance.now();

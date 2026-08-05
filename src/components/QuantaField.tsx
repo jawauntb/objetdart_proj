@@ -317,6 +317,11 @@ export default function QuantaField() {
         /* noop */
       }
     };
+    const pendingNotes: Array<{ at: number; midi: number; ms: number }> = [];
+    const noteLater = (delayMs: number, midi: number, ms = 120) => {
+      pendingNotes.push({ at: performance.now() + delayMs, midi, ms });
+      if (pendingNotes.length > 24) pendingNotes.splice(0, pendingNotes.length - 24);
+    };
     const tone = (hz: number, sec = 0.5) => {
       try {
         audio().playTone(hz, sec);
@@ -617,6 +622,285 @@ export default function QuantaField() {
       softly(() => (k > 0.7 ? haptics.ripple(k) : haptics.tap()));
     };
 
+    // ——— the tier-3 answers: what a train of taps asks the vacuum for ———
+
+    /**
+     * PAIR PRODUCTION off an excitation. Energy poured onto a ripple that is
+     * already there comes back as that field's own matter–antimatter pair —
+     * so the thing under the finger acquires its own opposite, and the two
+     * find each other. Charge and every flavor number stay at zero because
+     * the pair is born neutral; that is not a convention here, it is why the
+     * vacuum is allowed to do this at all.
+     *
+     * Light is the one that behaves differently, and truthfully: a photon
+     * carries no charge to double, so what it does above 2mₑ is CONVERT —
+     * γ → e⁺e⁻, the pair-production every cloud chamber is built to show —
+     * and below that threshold it can only shiver, because the vacuum does
+     * not extend credit.
+     */
+    const pairProduceFrom = (target: Exc, intensity: number, depth: number) => {
+      const k = 1 + intensity * 0.9 + depth * 0.7;
+      const seed = hashSeed(target.seed, Math.round(localT * 60), 0x9a17);
+      const spec = PARTICLES[target.id];
+      if (spec.selfConjugate) {
+        // a photon (or a Z, or the Higgs) converts what it carries into the
+        // heaviest pair its energy affords — nothing, if it affords nothing
+        const budget = Math.max(target.energy, 2 * PARTICLES.electron.massMeV * 1.05) * k;
+        birth(budget, target.x, target.y, seed);
+        if (target.id === "photon") {
+          // the photon is spent making them: it leaves the field
+          excs = excs.filter((q) => q !== target);
+        }
+        return;
+      }
+      // the pair the field owes: the conjugate is born flying at the parent,
+      // its partner away from it, and the books close at zero
+      const anti = conjugate({ id: target.id, anti: target.anti });
+      const same: Excitation = { id: target.id, anti: target.anti };
+      const ang = Math.atan2(target.vy, target.vx) + Math.PI / 2;
+      const each = Math.max(spec.massMeV * (1.3 + intensity), target.energy * 0.6);
+      const off = 26 + depth * 16;
+      const a = spawn(anti, target.x + Math.cos(ang) * off, target.y + Math.sin(ang) * off, each, ang + Math.PI, hashSeed(seed, 1));
+      spawn(same, target.x - Math.cos(ang) * off, target.y - Math.sin(ang) * off, each, ang, hashSeed(seed, 2));
+      // the antiparticle is aimed home: what happens next is the room's law,
+      // not this function's business
+      const toward = Math.atan2(target.y - a.y, target.x - a.x);
+      const sp = Math.hypot(a.vx, a.vy);
+      a.vx = Math.cos(toward) * sp;
+      a.vy = Math.sin(toward) * sp;
+      target.ring = Math.min(1, target.ring + 0.5 + intensity * 0.4);
+      burst(target.x, target.y, QUANTA_TINTS[tintFamily(target.id)], 10 + Math.round(depth * 8), 60 + intensity * 50);
+      softly(() => audio().chime());
+      note(midiOf(target.id) + 3, 220);
+      softly(() => haptics.bloom());
+      useField.getState().recordTape("object", clamp01(0.5 + depth * 0.3), `quanta/pair-${target.id}`);
+      save();
+    };
+
+    /**
+     * The rarer things the vacuum does, in a fixed cycle so a hand that keeps
+     * asking keeps being answered differently. Seeded, never random: the same
+     * field in the same state gives the same sequence, forever.
+     */
+    const vacuumProcess = (x: number, y: number, intensity: number, depth: number) => {
+      const which = vacuumCycle % 3;
+      vacuumCycle += 1;
+      const seed = hashSeed(Math.round(x), Math.round(y), vacuumCycle, 0xfacc);
+      const k = 0.6 + intensity * 0.8 + depth * 0.6;
+      if (which === 0) {
+        // a virtual pair borrows enough to go REAL. Ordinarily a fluctuation
+        // pays its debt back inside ΔEΔt ≈ ℏ and annihilates unseen; given
+        // energy from outside, the loan is settled and the pair simply stays.
+        const ang = hash01(seed) * Math.PI * 2;
+        const each = PARTICLES.electron.massMeV * (1.4 + intensity * 1.2);
+        spawn({ id: "electron", anti: false }, x - Math.cos(ang) * 14, y - Math.sin(ang) * 14, each, ang + Math.PI, hashSeed(seed, 1));
+        spawn({ id: "electron", anti: true }, x + Math.cos(ang) * 14, y + Math.sin(ang) * 14, each, ang, hashSeed(seed, 2));
+        burst(x, y, QUANTA_TINTS.lepton, 9, 54 * k);
+        softly(() => audio().spark());
+        note(66, 200);
+        softly(() => haptics.bloom());
+        useField.getState().recordTape("object", 0.55, "quanta/virtual-goes-real");
+        save();
+        return;
+      }
+      if (which === 1) {
+        // THE CASIMIR SQUEEZE. Two plates set close enough that the gap can
+        // only hold modes whose half-wavelengths fit; every mode it cannot
+        // hold is pressure missing from the inside, so the vacuum OUTSIDE
+        // pushes the plates together. Empty space, pulling.
+        const ang = hash01(seed * 1.7) * Math.PI;
+        const gap = (34 + hash01(seed * 3.1) * 26) / (0.7 + intensity);
+        squeezes.push({ x, y, angle: ang, gap, born: performance.now(), life: 2200 + depth * 900 });
+        if (squeezes.length > 3) squeezes.shift();
+        // what is between the plates is pressed toward the axis and the
+        // suppressed modes leave as one long, low photon along it
+        const ux = Math.cos(ang);
+        const uy = Math.sin(ang);
+        for (const q of excs) {
+          if (q.retiringAt) continue;
+          const dx = q.x - x;
+          const dy = q.y - y;
+          const across = -dx * uy + dy * ux;
+          if (Math.abs(across) > gap * 1.6 || Math.abs(dx * ux + dy * uy) > gap * 3) continue;
+          q.vx -= uy * -Math.sign(across) * 70 * k;
+          q.vy -= ux * Math.sign(across) * 70 * k;
+          q.ring = Math.min(1, q.ring + 0.3);
+        }
+        const ph = spawn({ id: "photon", anti: false }, x, y, PHOTON_E_MIN * 1.4, ang, hashSeed(seed, 3));
+        tone(ph.pitch, 0.8);
+        note(28, 480);
+        softly(() => haptics.detent());
+        useField.getState().recordTape("region", clamp01(0.5 + depth * 0.3), "quanta/casimir");
+        return;
+      }
+      // A FLUCTUATION CASCADE: one seethe seeds the next, branching outward,
+      // each generation shorter-lived than the last until the vacuum has
+      // paid itself back and closes over.
+      const branches = 3 + Math.round(depth * 3 + intensity * 2);
+      for (let g = 0; g < 3; g++) {
+        const r = 26 + g * (34 + intensity * 22);
+        for (let i = 0; i < branches; i++) {
+          const a = (i / branches) * Math.PI * 2 + hash01(seed + g * 7 + i) * 0.7 + g * 0.4;
+          const px = x + Math.cos(a) * r;
+          const py = y + Math.sin(a) * r;
+          burst(px, py, QUANTA_TINTS.neutrino, 3, 20 + g * 12);
+          if (g === 2 && i % 2 === 0) {
+            const nus: ParticleId[] = ["nu-e", "nu-mu", "nu-tau"];
+            spawn(
+              { id: nus[(i + g) % 3], anti: (i & 1) === 0 },
+              px, py, 1, a,
+              hashSeed(seed, g, i),
+            );
+          }
+        }
+      }
+      softly(() => audio().buzz());
+      note(52, 120);
+      noteLater(140, 59, 140);
+      noteLater(280, 64, 180);
+      softly(() => haptics.roll());
+      useField.getState().recordTape("region", clamp01(0.45 + depth * 0.35), "quanta/fluctuation-cascade");
+    };
+
+    /**
+     * THE SCHWINGER LIMIT — the room's largest, rarest event, and the only
+     * one that is about the field itself rather than anything in it. Push the
+     * electric field past ≈10¹⁸ V/m and the vacuum can no longer hold: it
+     * TEARS, and pairs condense out of the tear along its whole length,
+     * heaviest at the centre where the field is strongest. What is born there
+     * is the top of the mass ladder the hand can reach, and it dies within a
+     * breath, down the whole chain, exactly as the ladder says it must.
+     *
+     * The tear is a line, not a flash: the hand can see the pairs coming out
+     * of it for as long as it stays open, and everything already in the field
+     * is dragged toward it.
+     */
+    const schwingerTear = (x: number, y: number, intensity: number, depth: number) => {
+      const seed = hashSeed(Math.round(x), Math.round(y), Math.round(localT * 30), 0x5c47);
+      const k = 0.55 + intensity * 0.75 + depth * 0.7;
+      const ang = hash01(seed) * Math.PI * 2;
+      const half = Math.min(width, height) * (0.2 + k * 0.2);
+      const tear: Tear = {
+        x0: x - Math.cos(ang) * half,
+        y0: y - Math.sin(ang) * half,
+        x1: x + Math.cos(ang) * half,
+        y1: y + Math.sin(ang) * half,
+        born: performance.now(),
+        life: 1500 + k * 900,
+      };
+      tears.push(tear);
+      if (tears.length > 2) tears.shift();
+      // pairs condense along the tear, the ladder climbing toward the middle
+      const along = 5 + Math.round(k * 4);
+      for (let i = 0; i < along; i++) {
+        const u = (i + 0.5) / along;
+        const px = tear.x0 + (tear.x1 - tear.x0) * u;
+        const py = tear.y0 + (tear.y1 - tear.y0) * u;
+        // strongest at the centre: a smooth arch across the ladder's rungs
+        const centre = 1 - Math.abs(u - 0.5) * 2;
+        const rung = Math.min(LADDER.length - 2, Math.floor(centre * (2.2 + k * 2)));
+        birth(LADDER[Math.max(0, rung)].thresholdMeV * (1.04 + centre * 0.2), px, py, hashSeed(seed, i), true);
+      }
+      // and the heaviest thing the hand can afford, at the middle of the tear
+      birth(PARTICLES.higgs.massMeV * 1.02, x, y, hashSeed(seed, 0x48));
+      // everything already in the field falls toward the tear as it opens
+      for (const q of excs) {
+        if (q.retiringAt || q.id === "photon") continue;
+        const dx = x - q.x;
+        const dy = y - q.y;
+        const d = Math.max(1, Math.hypot(dx, dy));
+        q.vx += (dx / d) * 140 * k;
+        q.vy += (dy / d) * 140 * k;
+        q.ring = Math.min(1, q.ring + 0.5);
+      }
+      softly(() => audio().thud());
+      softly(() => audio().bell());
+      note(22, 720);
+      noteLater(180, 34, 520);
+      noteLater(420, 46, 420);
+      softly(() => haptics.storm());
+      tuttiPulse = Math.max(tuttiPulse, 0.9);
+      useField.getState().recordTape("sigil", clamp01(0.85 + depth * 0.15), "quanta/schwinger");
+      save();
+    };
+
+    /**
+     * Two ripples of the same field arriving at the same place. Matter meets
+     * its antimatter and both are gone into two photons; light meets light
+     * and the phases decide — crest on crest is one brighter wave, crest on
+     * trough is nothing at all where two things were, and the energy the
+     * cancellation cannot keep leaves as the one pair that carries neither
+     * charge nor much of anything else.
+     */
+    const meet = (a: Exc, b: Exc, nowMs: number) => {
+      const key = a.uid < b.uid ? `${a.uid}:${b.uid}` : `${b.uid}:${a.uid}`;
+      const last = metAt.get(key) ?? 0;
+      if (nowMs - last < MEET_COOLDOWN_MS) return;
+      metAt.set(key, nowMs);
+      const x = (a.x + b.x) / 2;
+      const y = (a.y + b.y) / 2;
+      const ka: Excitation = { id: a.id, anti: a.anti };
+      const kb: Excitation = { id: b.id, anti: b.anti };
+      const products = annihilationProducts(ka, kb);
+      if (products.length > 0) {
+        // ANNIHILATION: two photons, back to back, splitting the whole
+        // energy — never one, because one could not carry off the momentum
+        const total = a.energy + b.energy + PARTICLES[a.id].massMeV * 2;
+        const each = annihilationPhotonEnergy(total);
+        const ang = Math.atan2(b.y - a.y, b.x - a.x) + Math.PI / 2;
+        excs = excs.filter((q) => q !== a && q !== b);
+        products.forEach((p, i) => {
+          const ph = spawn(p, x, y, each, ang + i * Math.PI, hashSeed(a.seed, b.seed, i));
+          if (i === 0) tone(ph.pitch, 0.7);
+        });
+        burst(x, y, QUANTA_TINTS.photon, 16, 130);
+        softly(() => audio().bell());
+        note(midiOf(a.id) + 19, 260);
+        softly(() => haptics.bloom());
+        useField.getState().recordTape("sigil", 0.85, `quanta/annihilate-${a.id}`);
+        save();
+        return;
+      }
+      if (a.id !== "photon" || b.id !== "photon") return;
+      // INTERFERENCE. The wave phase each photon carries has been winding on
+      // since it was born — one full turn per wavelength walked — so where
+      // they meet is what decides the outcome, not who they are.
+      const pa = a.phase + a.walked * 0.11;
+      const pb = b.phase + b.walked * 0.11;
+      const amp = superposedAmplitude(pa, pb);
+      if (amp > 1.62) {
+        // constructive: one wave of twice the amplitude, carrying both
+        excs = excs.filter((q) => q !== b);
+        a.energy += b.energy;
+        a.pitch = photonPitchHz(Math.max(PHOTON_E_MIN, a.energy));
+        a.ring = 1;
+        burst(x, y, QUANTA_TINTS.photon, 8, 44);
+        tone(a.pitch, 0.5);
+        softly(() => haptics.ripple(0.45));
+        useField.getState().recordTape("ripple", 0.55, "quanta/reinforce");
+        return;
+      }
+      if (amp < 0.42) {
+        // destructive: nothing left where two things were. The energy still
+        // has to go somewhere, and what it goes to is the pair that answers
+        // to almost nothing — a neutrino and its conjugate, streaming out
+        const total = a.energy + b.energy;
+        const ang = Math.atan2(b.y - a.y, b.x - a.x);
+        excs = excs.filter((q) => q !== a && q !== b);
+        const nu: ParticleId = (["nu-e", "nu-mu", "nu-tau"] as ParticleId[])[
+          Math.floor(hash01(a.seed + b.seed) * 3) % 3
+        ];
+        spawn({ id: nu, anti: false }, x, y, Math.max(1, total / 2), ang, hashSeed(a.seed, b.seed, 3));
+        spawn({ id: nu, anti: true }, x, y, Math.max(1, total / 2), ang + Math.PI, hashSeed(a.seed, b.seed, 4));
+        burst(x, y, QUANTA_TINTS.neutrino, 10, 36);
+        softly(() => audio().thud());
+        note(30, 380);
+        softly(() => haptics.chop());
+        useField.getState().recordTape("ripple", 0.6, "quanta/cancel");
+        save();
+      }
+    };
+
     // ————— gestures —————
     const detach = attachGestures(wrap, {
       tap: (e) => {
@@ -637,32 +921,65 @@ export default function QuantaField() {
         }
         if (e.fingers !== 1) return;
         const { x, y } = toLocal(e.x, e.y);
-        // the rapid-tap ladder (1 / 3 / 5 / n) hammers energy straight into
-        // the field: three taps afford the electron pair, five the muons,
-        // seven the taus — the mass ladder climbed by tempo instead of hold
+        // The site-wide tap ladder (gesture/core.ts: 1 / 3 / 5 / n), read in
+        // this material. Three taps ask the field for what it can make out of
+        // what is already there — a pair off an excitation, or one of the
+        // rarer things the bare vacuum does. Five tear the vacuum itself.
+        // Past seven the tear keeps widening for as long as the hand keeps
+        // hammering, which is the only rung with no ceiling.
         const trainTier = tapTrainTier(e.count);
         const depth = tapTrainDepth(e.count);
-        if (trainTier !== 1) {
-          if (e.count === 3 || e.count === 5 || e.count === 7) {
-            const rung = e.count === 3 ? 1 : e.count === 5 ? 2 : 3;
-            birth(
-              LADDER[rung].thresholdMeV * (1.05 + depth * 0.2),
-              x, y,
-              hashSeed(Math.round(x), Math.round(y), e.count),
-            );
-            if (trainTier === "n") {
-              // crescendo: the whole field answers the hammering at once
-              softly(() => haptics.storm());
-              tutti(0.6 + depth * 0.4);
-            }
-          } else {
-            // counts between the rungs only deepen the shiver
-            burst(x, y, QUANTA_TINTS.photon, 2 + Math.round(depth * 4), 18 + depth * 30);
-            note(70 + Math.round(depth * 12), 70);
-            softly(() => haptics.ripple(0.2 + depth * 0.3));
+        if (e.count <= 1) trainRung = 0;
+        if (trainTier === 3) {
+          const onIt = excAt(x, y);
+          if (trainRung >= 3) {
+            // still inside the same rung: deepen what it already did rather
+            // than firing a second one — the axis is continuous
+            if (onIt) onIt.ring = Math.min(1, onIt.ring + 0.3 + depth * 0.4);
+            burst(x, y, QUANTA_TINTS.photon, 3 + Math.round(depth * 5), 24 + depth * 40);
+            note(70 + Math.round(depth * 12), 80);
+            softly(() => haptics.ripple(0.25 + depth * 0.35));
+            return;
           }
+          trainRung = 3;
+          if (onIt && !isNeutrino(onIt.id)) pairProduceFrom(onIt, e.intensity, depth);
+          else vacuumProcess(x, y, e.intensity, depth);
           return;
         }
+        if (trainTier === 5) {
+          if (trainRung >= 5) {
+            // the tear widens under a hand that keeps asking
+            const t = tears[tears.length - 1];
+            if (t) t.life += 220 + depth * 260;
+            birth(LADDER[Math.min(LADDER.length - 2, 3 + Math.round(depth * 2))].thresholdMeV * 1.05, x, y, hashSeed(Math.round(x), e.count));
+            softly(() => haptics.chop());
+            return;
+          }
+          trainRung = 5;
+          schwingerTear(x, y, e.intensity, depth);
+          return;
+        }
+        if (trainTier === "n") {
+          // the sustained train: no last step. Each further tap widens the
+          // tear, climbs a rung, and wakes the whole field louder than the
+          // one before it.
+          trainRung = 7;
+          const t = tears[tears.length - 1];
+          if (t) {
+            t.life += 320 + depth * 420;
+          } else {
+            schwingerTear(x, y, e.intensity, depth);
+          }
+          birth(
+            LADDER[Math.min(LADDER.length - 2, 2 + Math.round(depth * 3))].thresholdMeV * (1.05 + depth * 0.3),
+            x, y,
+            hashSeed(Math.round(x), Math.round(y), e.count),
+          );
+          softly(() => haptics.storm());
+          tutti(0.6 + depth * 0.4);
+          return;
+        }
+        trainRung = 1;
         const target = excAt(x, y);
         if (target && isNeutrino(target.id)) {
           // the ghost: it almost never answers — one knock in eight lands
@@ -1346,6 +1663,12 @@ export default function QuantaField() {
       windTargetX *= 0.985;
       windTargetY *= 0.985;
       tuttiPulse *= 0.94;
+      for (let i = pendingNotes.length - 1; i >= 0; i--) {
+        if (nowReal >= pendingNotes[i].at) {
+          note(pendingNotes[i].midi, pendingNotes[i].ms);
+          pendingNotes.splice(i, 1);
+        }
+      }
       // the entrained flicker: while the hand's pulse holds, the vacuum's
       // virtual pairs shimmer on the beat, each downbeat a low tick
       entrain.env = 0;
@@ -1477,6 +1800,53 @@ export default function QuantaField() {
         }
       }
 
+      // ——— ripples meeting ripples: the physics BETWEEN the excitations ———
+      //
+      // Nothing here is a decal. Two ripples of the same field that arrive at
+      // the same place are one wave, and what that wave is depends on what
+      // they were: matter and its antimatter cancel into two photons, light
+      // and light interfere, and everything else simply passes through — the
+      // fields are independent, which is exactly why a neutrino can cross a
+      // planet without noticing it.
+      for (let i = 0; i < excs.length; i++) {
+        const a = excs[i];
+        if (a.retiringAt) continue;
+        for (let j = i + 1; j < excs.length; j++) {
+          const b = excs[j];
+          if (b.retiringAt || a.id !== b.id) continue;
+          if (isNeutrino(a.id)) continue; // the ghosts pass through everything
+          const reach = a.id === "photon" ? MEET_PX : MEET_PX + 8;
+          if (Math.abs(a.x - b.x) > reach || Math.abs(a.y - b.y) > reach) continue;
+          if (Math.hypot(a.x - b.x, a.y - b.y) > reach) continue;
+          meet(a, b, nowReal);
+          break;
+        }
+        if (!excs.includes(a)) break;
+      }
+      if (metAt.size > 64) metAt.clear();
+
+      // ——— the vacuum's own life: a fluctuation that goes real, unattended ———
+      //
+      // The room must keep running when the hand leaves. On its own seeded
+      // clock a virtual pair borrows enough time to become a real one, drifts
+      // apart, and — being each other's undoing — usually finds its way back
+      // together, which the meeting loop above resolves into two photons
+      // without anyone asking it to.
+      const realSlot = Math.floor(localT / VACUUM_REAL_PERIOD_S);
+      if (realSlot !== lastVacuumRealSlot) {
+        lastVacuumRealSlot = realSlot;
+        if (realSlot > 0 && hash01(realSlot * 41.7) < 0.7 && excs.length < MAX_EXCITATIONS - 3) {
+          const nx = 0.15 + hash01(realSlot * 13.3) * 0.7;
+          const ny = 0.15 + hash01(realSlot * 27.1) * 0.7;
+          const ang = hash01(realSlot * 7.9) * Math.PI * 2;
+          const each = PARTICLES.electron.massMeV * 1.25;
+          spawn({ id: "electron", anti: false }, nx * width - Math.cos(ang) * 10, ny * height - Math.sin(ang) * 10, each, ang + Math.PI, hashSeed(realSlot, 1));
+          spawn({ id: "electron", anti: true }, nx * width + Math.cos(ang) * 10, ny * height + Math.sin(ang) * 10, each, ang, hashSeed(realSlot, 2));
+          burst(nx * width, ny * height, QUANTA_TINTS.lepton, 5, 26);
+          note(74, 90);
+        }
+      }
+
       // ——— specks ———
       for (let i = specks.length - 1; i >= 0; i--) {
         const s = specks[i];
@@ -1558,6 +1928,86 @@ export default function QuantaField() {
         ctx.moveTo(lastBeamX * width - windX * 90, lastBeamY * height - windY * 90);
         ctx.lineTo(lastBeamX * width + windX * 90, lastBeamY * height + windY * 90);
         ctx.stroke();
+      }
+
+      // the Casimir plates, and the modes the gap will not hold: the missing
+      // pressure drawn as the rungs that fit between them thinning out
+      for (let i = squeezes.length - 1; i >= 0; i--) {
+        const s = squeezes[i];
+        const u = (nowReal - s.born) / s.life;
+        if (u >= 1) {
+          squeezes.splice(i, 1);
+          continue;
+        }
+        if (feltAlpha <= 0.05) continue;
+        // the plates close as the vacuum outside pushes them together
+        const gap = s.gap * (1 - u * 0.55);
+        const ux = Math.cos(s.angle);
+        const uy = Math.sin(s.angle);
+        const half = s.gap * 3;
+        const fade = (1 - u) * feltAlpha;
+        ctx.save();
+        ctx.strokeStyle = colorAlpha("#B8A87F", 0.55 * fade);
+        ctx.lineWidth = 2;
+        for (const sgn of [-1, 1]) {
+          const ox = -uy * gap * sgn;
+          const oy = ux * gap * sgn;
+          ctx.beginPath();
+          ctx.moveTo(s.x + ox - ux * half, s.y + oy - uy * half);
+          ctx.lineTo(s.x + ox + ux * half, s.y + oy + uy * half);
+          ctx.stroke();
+        }
+        // only the modes whose half-wavelengths fit survive between them
+        const modes = Math.max(1, Math.floor(gap / 9));
+        ctx.strokeStyle = colorAlpha("#E7AC52", 0.3 * fade);
+        ctx.lineWidth = 0.8;
+        for (let m = 1; m <= modes; m++) {
+          ctx.beginPath();
+          for (let k = 0; k <= 30; k++) {
+            const t2 = (k / 30 - 0.5) * 2 * half;
+            const across = Math.sin(((k / 30) * Math.PI) * m) * gap * 0.8;
+            const px = s.x + ux * t2 - uy * across;
+            const py = s.y + uy * t2 + ux * across;
+            if (k === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+          }
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      // the tear the Schwinger limit opened: the field itself come apart,
+      // pairs still condensing out of the seam while it holds
+      for (let i = tears.length - 1; i >= 0; i--) {
+        const tr = tears[i];
+        const u = (nowReal - tr.born) / tr.life;
+        if (u >= 1) {
+          tears.splice(i, 1);
+          continue;
+        }
+        if (feltAlpha <= 0.05) continue;
+        const fade = Math.sin(Math.min(1, u) * Math.PI) * feltAlpha;
+        ctx.save();
+        ctx.strokeStyle = colorAlpha("#F2EEE6", 0.85 * fade);
+        ctx.lineWidth = 1.4 + (1 - u) * 2.2;
+        ctx.beginPath();
+        const seg = 26;
+        for (let k = 0; k <= seg; k++) {
+          const v = k / seg;
+          const px = tr.x0 + (tr.x1 - tr.x0) * v;
+          const py = tr.y0 + (tr.y1 - tr.y0) * v;
+          const n = Math.sin(v * Math.PI) * (reduce ? 0 : Math.sin(v * 19 + t * 6) * 5);
+          const dx = tr.y1 - tr.y0;
+          const dy = tr.x0 - tr.x1;
+          const dl = Math.max(1, Math.hypot(dx, dy));
+          if (k === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px + (dx / dl) * n, py + (dy / dl) * n);
+        }
+        ctx.stroke();
+        ctx.strokeStyle = colorAlpha("#B25048", 0.4 * fade);
+        ctx.lineWidth = 6 + (1 - u) * 10;
+        ctx.stroke();
+        ctx.restore();
       }
 
       // trails (photons and neutrinos), under the excitations

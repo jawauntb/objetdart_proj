@@ -226,6 +226,96 @@ export function daughterSeeds(seed: number, generation: number): [number, number
   return [out[0], out[1]];
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// What one cell does to another
+//
+// A dish of cells that never touch is a particle count. These are the four
+// forces the plasm actually runs on: adhesion (cadherins are homophilic —
+// like sticks to like), signalling, competition for a finite supply, and
+// phagocytosis, where one cell eats another and what stands afterwards is
+// neither of them.
+
+/** Cells nearer than this many combined radii are in contact. */
+export const CONTACT_RATIO = 1.05;
+/** A cell must be this many times another's area to swallow it whole. */
+export const ENGULF_RATIO = 1.8;
+
+/**
+ * Adhesion between two cells, 0..1. Cadherin binding is homophilic: cells
+ * of the same lineage family hold each other far harder than strangers do,
+ * which is why like sorts with like in a mixed culture. Symmetric, always.
+ */
+export function adhesionBetween(a: CellMorph, b: CellMorph): number {
+  const kin = a.family === b.family ? 1 : 0.28;
+  // a smooth-membraned lineage has less to hold with than a ciliated one
+  const grip = 0.55 + 0.45 * Math.min(1, (a.cilia.count + b.cilia.count) / 40);
+  return Math.max(0, Math.min(1, kin * grip));
+}
+
+/** How far a cell's signal carries, in multiples of its own radius. */
+export function signalReach(m: CellMorph): number {
+  return 2.2 + m.radius * 12;
+}
+
+/**
+ * How strongly a cell at distance `d` (in units of the sender's radius)
+ * answers a signal. Diffusion: it falls off smoothly and is exactly zero
+ * past the reach, so the room stays O(near) and nothing answers from
+ * across the dish.
+ */
+export function signalAt(m: CellMorph, d: number): number {
+  const reach = signalReach(m);
+  if (!(d >= 0) || d >= reach) return 0;
+  const u = d / reach;
+  return (1 - u) * (1 - u);
+}
+
+/**
+ * A finite supply divided among competitors by uptake area. The shares sum
+ * to exactly the supply — a dish cannot feed more than it holds — so a
+ * crowded culture starves proportionally rather than everyone eating their
+ * fill. `out` may be reused to keep the frame allocation-free.
+ */
+export function competeForNutrient(radii: number[], supply: number, out?: number[]): number[] {
+  const shares = out ?? new Array<number>(radii.length);
+  shares.length = radii.length;
+  let total = 0;
+  for (let i = 0; i < radii.length; i++) {
+    const a = Math.max(0, radii[i]) * Math.max(0, radii[i]);
+    shares[i] = a;
+    total += a;
+  }
+  if (total <= 0) {
+    for (let i = 0; i < shares.length; i++) shares[i] = 0;
+    return shares;
+  }
+  for (let i = 0; i < shares.length; i++) shares[i] = (shares[i] / total) * supply;
+  return shares;
+}
+
+/** Whether the first cell is big enough to swallow the second whole. */
+export function canEngulf(rBig: number, rSmall: number): boolean {
+  if (!(rBig > 0) || !(rSmall > 0)) return false;
+  return (rBig * rBig) / (rSmall * rSmall) >= ENGULF_RATIO;
+}
+
+/**
+ * Phagocytosis. What stands afterwards is NEITHER cell: the phagocyte keeps
+ * its own lineage nibble — it is still its family — but everything above it
+ * is re-rolled from both seeds, so the morphology, the voice and the cilia
+ * are new. Deterministic, and never accidentally equal to either parent.
+ */
+export function engulfSeed(predator: number, prey: number): number {
+  const heritable = predator & HERITABLE_MASK;
+  let round = 0;
+  let s = ((hashSeed(predator, prey, round) & ~HERITABLE_MASK) | heritable) >>> 0;
+  while (s === (predator >>> 0) || s === (prey >>> 0)) {
+    round += 1;
+    s = ((hashSeed(predator, prey, round) & ~HERITABLE_MASK) | heritable) >>> 0;
+  }
+  return s;
+}
+
 /**
  * Enforce the population cap: the oldest residents (front of the list, which
  * the room keeps in arrival order) retire first, gracefully, never the new.

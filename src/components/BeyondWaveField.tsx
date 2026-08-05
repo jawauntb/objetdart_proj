@@ -326,6 +326,37 @@ export default function BeyondWaveField() {
       if (!pausedNow && !sleeping && !rafRef.current) rafRef.current = requestAnimationFrame(draw);
     });
 
+    // tier 5: the room's biggest, rarest event — the fold cascade. A rapid
+    // sequence of deepening folds, each ringing the lattice from the same
+    // point, fixed steps on a schedule (never Math.random) so the same tap
+    // always plays the same cascade; it resolves into the bloom.
+    let foldCascadeTimers: number[] = [];
+    const foldCascade = (screenX: number, screenY: number, intensity: number) => {
+      for (const t of foldCascadeTimers) window.clearTimeout(t);
+      foldCascadeTimers = [];
+      const rect = canvas.getBoundingClientRect();
+      const px = clamp(screenX - rect.left, 0, rect.width);
+      const py = clamp(screenY - rect.top, 0, rect.height);
+      const steps = 6;
+      for (let i = 1; i <= steps; i += 1) {
+        const id = window.setTimeout(() => {
+          const nextFold = clamp(foldRef.current + 1.1 + intensity * 0.4, 4, 16);
+          setFold(Number(nextFold.toFixed(1)));
+          pointerRef.current = { x: px, y: py, force: 1.3 + i * 0.1, born: performance.now() };
+          try { getFieldAudio().playNote(50 + i * 2, 110); } catch { /* noop */ }
+          try { haptics.ripple(0.3 + i * 0.05); } catch { /* noop */ }
+        }, i * 180);
+        foldCascadeTimers.push(id);
+      }
+      const id = window.setTimeout(() => {
+        setBloom(clamp01(bloomRef.current + 0.32));
+        try { getFieldAudio().bell(); } catch { /* noop */ }
+        try { haptics.storm(); } catch { /* noop */ }
+        useField.getState().recordTape("sigil", 1, "beyond/fold-cascade-complete");
+      }, steps * 180);
+      foldCascadeTimers.push(id);
+    };
+
     // ————— the grammar (src/lib/gesture) — replaces raw pointer wiring —————
     const detachGestures = attachGestures(
       canvas,
@@ -371,20 +402,9 @@ export default function BeyondWaveField() {
             try { getFieldAudio().playNote(59, 190); } catch { /* noop */ }
             try { haptics.ripple(0.44); } catch { /* noop */ }
             useField.getState().recordTape("sigil", 0.5, "beyond/train-fold");
-          } else if (trainTier === 5 && e.count === 5) {
-            // five taps bloom the field — the glow swells and a wide ring
-            // opens from the last strike
-            setBloom(clamp01(bloomRef.current + 0.18));
-            const rect = canvas.getBoundingClientRect();
-            pointerRef.current = {
-              x: clamp(e.x - rect.left, 0, rect.width),
-              y: clamp(e.y - rect.top, 0, rect.height),
-              force: 1.7,
-              born: performance.now(),
-            };
-            try { getFieldAudio().bell(); } catch { /* noop */ }
-            try { haptics.bloom(); } catch { /* noop */ }
-            useField.getState().recordTape("sigil", 0.7, "beyond/train-bloom");
+          } else if (trainTier === 5) {
+            // the room's biggest, rarest event: the fold cascade
+            foldCascade(e.x, e.y, e.intensity);
           } else if (trainTier === "n") {
             // seven and beyond: the crescendo — the pull climbs and each
             // further tap sends a stronger ring through the lattice
@@ -549,6 +569,7 @@ export default function BeyondWaveField() {
       offGallery();
       detachGestures();
       detachVessel();
+      for (const t of foldCascadeTimers) window.clearTimeout(t);
     };
   }, []);
 

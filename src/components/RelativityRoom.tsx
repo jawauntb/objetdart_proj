@@ -1027,19 +1027,15 @@ export default function RelativityRoom() {
         // tap a twin: its rings shimmer and its age is heard, deeper when older
         const b = beaconAt(x, y);
         if (b !== null) { soundBeaconAge(b === 0 ? beaconA : beaconB, performance.now()); return; }
-        // the rapid-tap ladder (tiers 1/3/5/n) on open dark: one rings your
-        // pulse at c, three stage the race, five make the wells echo, n is
-        // the covenant's crescendo
+        // the site-wide rapid-tap ladder (tiers 1/3/5/n from tapTrainTier)
+        // on open dark: one rings your pulse at c; three transforms a
+        // standing mass a step denser or, on open fabric, summons the next
+        // rarity in a fixed cycle; five is the room's biggest event — a
+        // real binary inspiral and merger where two or more masses stand,
+        // otherwise the wells echo the strike; n is the covenant's
+        // sustained crescendo
         const trainTier = tapTrainTier(e.count);
         const depth = tapTrainDepth(e.count);
-        // the double-tap ladder: on a mass it collapses a step denser, on
-        // open fabric it summons the next rarity in a fixed cycle
-        if (e.count === 2) {
-          const m2 = massAt(x, y);
-          if (m2 && !m2.evapAt) { collapseStage(m2); return; }
-          summonEmpty(x, y, e.intensity);
-          return;
-        }
         if (trainTier === "n") {
           tutti();
           firePulse(x, y, 1 + depth * 0.6);
@@ -1048,6 +1044,7 @@ export default function RelativityRoom() {
           return;
         }
         if (trainTier === 5) {
+          if (forceInspiral(x, y)) return;
           // the wells echo the strike: every standing mass answers with its
           // own ring, each arriving when light from the tap would reach it
           const alive = masses.filter((m) => !m.evapAt);
@@ -1078,14 +1075,11 @@ export default function RelativityRoom() {
           return;
         }
         if (trainTier === 3) {
-          // an exact triple tap with two or more masses standing: a real
-          // binary inspiral and merger, run to completion over a few
-          // seconds — the room's largest, rarest event
-          if (e.count === 3 && forceInspiral(x, y)) return;
-          // otherwise: the race, staged in one strike — a flash and a comet
-          // leave the same point in the same instant, the light wins every time
-          firePulse(x, y, 0.6 + e.intensity * 0.4);
-          throwComet(x, y, hash01(x * 3.7 + y * 1.3) * Math.PI * 2, 0.9 + depth * 0.6);
+          // on a standing mass: its own transformation, one step denser
+          const m3 = massAt(x, y);
+          if (m3 && !m3.evapAt) { collapseStage(m3); return; }
+          // on open fabric: the next rarity in a fixed, deterministic cycle
+          summonEmpty(x, y, e.intensity);
           return;
         }
         // your pulse: a ring at exactly c — race it with anything you like

@@ -936,24 +936,19 @@ export default function Beam() {
         uniforms.uRippleAmp.value = 0.75 + e.intensity * 0.5;
         try { audioRef.current?.chime(1 - focusTarget); } catch { /* noop */ }
         try { haptics.tap(); } catch { /* noop */ }
-        // a true double tap: the petal cascade, every ring letting go in turn
-        if (e.count === 2) {
+        // the site-wide tap train (gesture/core.ts): 1 / 3 / 5 / n. Tier 3 is
+        // the petal cascade — every ring letting go in turn; tier 5 is the
+        // room's biggest, rarest event — a full meteor shower; tier n keeps
+        // deepening.
+        const trainTier = tapTrainTier(e.count);
+        if (trainTier === 3) {
           petalCascade(wx, wy, e.intensity);
           return;
-        }
-        // the train tiers (1 / 3 / 5 / n from gesture/core): rapid taps climb
-        // the formation's own ladder — the shower, the waltz, the blaze
-        const trainTier = tapTrainTier(e.count);
-        if (trainTier === 3 && e.count === 3) {
-          // three taps: the room's biggest, rarest event — a shower of
-          // meteors rather than the ceremony's single one
+        } else if (trainTier === 5) {
+          // the room's biggest, rarest event: a shower of meteors, and the
+          // waltz quickens with it — the two suns swing hard around their
+          // barycenter, petals streaming to keep formation
           meteorShower(e.intensity);
-          flash = Math.max(flash, 0.25);
-          try { audioRef.current?.whoosh(0.9); } catch { /* noop */ }
-          try { haptics.ripple(0.5); } catch { /* noop */ }
-        } else if (trainTier === 5 && e.count === 5) {
-          // five taps quicken the waltz — the two suns swing hard around
-          // their barycenter, petals streaming to keep formation
           waltzBurst = 1;
           flash = Math.max(flash, 0.4);
           try { audioRef.current?.bell(); } catch { /* noop */ }

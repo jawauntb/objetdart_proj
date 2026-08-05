@@ -202,8 +202,19 @@ function generatePattern(kind: PatternKind, seed: number): Float32Array {
   }
 }
 
-function makePattern(kind: PatternKind, seed = Math.floor(Math.random() * 0xffffffff)): PatternState {
+/** The room's own fixed genesis seed — the pattern this room opens on is
+ *  the same pattern on every visit, until a hand asks for another. */
+const GENESIS_PATTERN_SEED = 0x7a17c0de;
+
+function makePattern(kind: PatternKind, seed = GENESIS_PATTERN_SEED): PatternState {
   return { kind, seed, samples: generatePattern(kind, seed) };
+}
+
+/** The next seed in a deterministic chain — regenerating a pattern walks
+ *  forward through one fixed sequence rather than rolling live dice, so
+ *  the room's material stays a function of a state vector, not the clock. */
+function nextPatternSeed(seed: number): number {
+  return (Math.imul(seed ^ 0x9e3779b9, 0x2545f491) >>> 0) + 1;
 }
 
 function isPatternKind(value: string): value is PatternKind {
@@ -272,7 +283,7 @@ export default function Pulse() {
     bp: false,
     brain: false,
   });
-  const [pattern, setPattern] = useState<PatternState>(() => makePattern("tide"));
+  const [pattern, setPattern] = useState<PatternState>(() => makePattern("tide", GENESIS_PATTERN_SEED));
   const [patternName, setPatternName] = useState("");
   const [saved, setSaved] = useState<SavedPattern[]>([]);
   const [shareMsg, setShareMsg] = useState<string | null>(null);
@@ -374,6 +385,10 @@ export default function Pulse() {
       lastReadout: 0,
       lastGlimmer: 0,
     };
+    // the brain channel's own seeded stream — a real generator advanced
+    // once a frame, never Math.random: the same run of frames rolls the
+    // same bursts
+    const brainRng = rng(0xb4a1);
 
     // ── performance contract (room-runtime): frame governor + visibility
     // sleep + DPR ceiling, shared with every other room on the site. ──
@@ -511,8 +526,8 @@ export default function Pulse() {
         try { getFieldAudio().playNote(42, 36); } catch { /* noop */ }
       }
 
-      if (!inShock && wnow > render.brainBurstUntil && Math.random() < (0.008 + stressV * 0.017 + render.touchEnergy * 0.002) * ts.cur) {
-        render.brainBurstUntil = wnow + 260 + Math.random() * 520;
+      if (!inShock && wnow > render.brainBurstUntil && brainRng() < (0.008 + stressV * 0.017 + render.touchEnergy * 0.002) * ts.cur) {
+        render.brainBurstUntil = wnow + 260 + brainRng() * 520;
         if (audioRef.current.brain) {
           try { getFieldAudio().spark(); } catch { /* noop */ }
         }
@@ -520,7 +535,7 @@ export default function Pulse() {
       const burst = wnow < render.brainBurstUntil ? 1 : 0;
       const alpha = Math.sin(wnow * 0.061) * Math.sin(wnow * 0.079) * 0.55;
       const beta = Math.sin(wnow * 0.18 + render.touchEnergy) * 0.28;
-      const noise = (Math.random() - 0.5) * (0.42 + stressV * 0.52);
+      const noise = (brainRng() - 0.5) * (0.42 + stressV * 0.52);
       const brainTarget = (alpha + beta + noise) * (0.56 + stressV * 0.54 + burst * 0.38);
       render.brain = render.brain * 0.58 + brainTarget * 0.42;
 
@@ -656,17 +671,39 @@ export default function Pulse() {
     const hue = PATTERN_COLORS[kind];
     const now = performance.now();
 
-    bloomsRef.current.push({
-      x,
-      y,
-      born: now,
-      life: 1500 + strength * 1100,
-      strength,
-      hue,
-    });
+    // two blooms meeting on the membrane coalesce — the physics between
+    // this room's countable material, exactly like two drops: a touch
+    // landing near a still-fresh bloom does not sit beside it, it merges
+    // into one compound flare, stronger than either strike alone
+    const blooms = bloomsRef.current;
+    const mergeR = Math.max(22, rect.width * 0.045);
+    let mergeIdx = -1;
+    let mergeD = mergeR;
+    for (let i = 0; i < blooms.length; i++) {
+      const b = blooms[i];
+      if (now - b.born > b.life * 0.65) continue; // a nearly-spent bloom does not absorb
+      const d = Math.hypot(b.x - x, b.y - y);
+      if (d < mergeD) { mergeD = d; mergeIdx = i; }
+    }
+    if (mergeIdx >= 0) {
+      const b = blooms[mergeIdx];
+      const combined = Math.min(2.6, b.strength + strength * 0.85);
+      blooms[mergeIdx] = { x: (b.x + x) / 2, y: (b.y + y) / 2, born: now, life: 1500 + combined * 1100, strength: combined, hue };
+      try { getFieldAudio().bell(); } catch { /* noop */ }
+      try { haptics.bloom(); } catch { /* noop */ }
+    } else {
+      blooms.push({
+        x,
+        y,
+        born: now,
+        life: 1500 + strength * 1100,
+        strength,
+        hue,
+      });
+    }
     const cap = Math.max(8, Math.round(34 * detailParticlesRef.current));
-    if (bloomsRef.current.length > cap) {
-      bloomsRef.current.splice(0, bloomsRef.current.length - cap);
+    if (blooms.length > cap) {
+      blooms.splice(0, blooms.length - cap);
     }
     touchImpulseRef.current = clamp(touchImpulseRef.current + 0.18 + strength * 0.42, 0, 1.8);
 
@@ -967,7 +1004,7 @@ export default function Pulse() {
 
   const onGenerate = useCallback(() => {
     void getFieldAudio().start();
-    setPattern((prev) => makePattern(prev.kind));
+    setPattern((prev) => makePattern(prev.kind, nextPatternSeed(prev.seed)));
     touchImpulseRef.current = clamp(touchImpulseRef.current + 0.9, 0, 1.8);
     try {
       getFieldAudio().spark();
