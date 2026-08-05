@@ -19,7 +19,9 @@
  * 7s clock and drift with the flow. Tap an organelle and it rings its own
  * timbre. Hold one and the budget flows into it while you hold — the others
  * pay, in the same frame. Circle a finger on one to wind its folds deeper,
- * the other way to let them out. Dwell on open plasm and the organ the cell
+ * the other way to let them out. Two fingers held apart on two organs draw a
+ * sustained membrane tubule between them, spending no membrane at all.
+ * Dwell on open plasm and the organ the cell
  * is still missing condenses there; the ghost membrane grows with the set,
  * and its well gathers organs toward the forming cell. Gather all six and
  * the cell membrane settles closed — then the plasm becomes the cell above
@@ -169,6 +171,15 @@ export default function OrganellesPlasm() {
     let leaving = false;
     let leaveGlow = 0;
     let holdCeremonyDone = false; // guards the non-nucleus annihilate act
+    // span: two fingers held apart draw a membrane tubule between the two
+    // organs they touch — a sustained contact site, both timbres held
+    // together. No membrane is spent: the ledger's total never moves.
+    let spanActive = false;
+    let spanA = -1;
+    let spanB = -1;
+    let spanElapsed = 0;
+    let spanTickAt = 0;
+    let lastSpanToneAt = 0;
     const lit = new Float32Array(MAX_ORGANELLES);
     const vel = new Float32Array(MAX_ORGANELLES * 2);
 
@@ -740,6 +751,51 @@ export default function OrganellesPlasm() {
             }
           }
         },
+        span: (e) => {
+          // two fingers held apart draw a membrane tubule between two organs:
+          // a sustained contact site, both timbres held, thickening as it
+          // holds — and no membrane is spent, so the budget stays exact.
+          lastInteractionAt = performance.now();
+          const list = listRef.current;
+          if (e.phase === "release") {
+            spanActive = false;
+            spanA = -1;
+            spanB = -1;
+            try {
+              haptics.tap();
+            } catch {
+              /* noop */
+            }
+            return;
+          }
+          const a = toLocal(e.ax, e.ay);
+          const b = toLocal(e.bx, e.by);
+          if (e.phase === "enter" || spanA < 0 || spanB < 0) {
+            spanA = organelleAt(a.x, a.y);
+            spanB = organelleAt(b.x, b.y);
+          }
+          if (spanA < 0 || spanB < 0 || spanA === spanB || spanA >= list.length || spanB >= list.length) {
+            spanActive = false;
+            return;
+          }
+          spanActive = true;
+          spanElapsed = e.elapsed;
+          spanTickAt = performance.now();
+          const deep = Math.min(1, e.elapsed / 2600);
+          const now = performance.now();
+          if (now - lastSpanToneAt > 340) {
+            lastSpanToneAt = now;
+            // the two timbres sustain together, brighter as the tubule draws
+            // out — a longer hold rings louder, never the same at 900 and 2400
+            ring(spanA, 0.28 + deep * 0.34);
+            ring(spanB, 0.28 + deep * 0.34);
+            try {
+              haptics.ripple(0.14 + deep * 0.24);
+            } catch {
+              /* noop */
+            }
+          }
+        },
         rhythm: (e) => {
           if (e.stability > 0.65) tutti();
         },
@@ -1105,6 +1161,38 @@ export default function OrganellesPlasm() {
           ctx.beginPath();
           ctx.arc(cx, cy, o.radius * scale * (1 + o.amplitude) + 17, -Math.PI / 2, -Math.PI / 2 + clamp01(l) * Math.PI * 2);
           ctx.stroke();
+        }
+      }
+
+      // the span's membrane tubule: a contact site sustained between two
+      // organs while the grip holds — vesicles bud along it, and it thickens
+      // with duration. Drawn in the same frame-panned space as the organs.
+      if (spanActive && (now - spanTickAt > 380 || spanA >= list.length || spanB >= list.length)) {
+        spanActive = false;
+      }
+      if (spanActive && spanA >= 0 && spanB >= 0) {
+        const oa = list[spanA];
+        const ob = list[spanB];
+        const deep = Math.min(1, spanElapsed / 2600);
+        const ax = oa.nx * width;
+        const ay = oa.ny * height;
+        const bx = ob.nx * width;
+        const by = ob.ny * height;
+        ctx.strokeStyle = `rgba(170, 214, 190, ${0.2 + deep * 0.4})`;
+        ctx.lineWidth = 0.8 + deep * 2;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(ax, ay);
+        ctx.lineTo(bx, by);
+        ctx.stroke();
+        ctx.lineCap = "butt";
+        const beads = 2 + Math.round(deep * 4);
+        for (let k = 0; k < beads; k++) {
+          const f = (now / 800 + k / beads) % 1;
+          ctx.fillStyle = `rgba(231, 172, 82, ${0.28 + (1 - Math.abs(f - 0.5) * 2) * 0.4})`;
+          ctx.beginPath();
+          ctx.arc(ax + (bx - ax) * f, ay + (by - ay) * f, 1.2 + deep * 1.6, 0, Math.PI * 2);
+          ctx.fill();
         }
       }
 

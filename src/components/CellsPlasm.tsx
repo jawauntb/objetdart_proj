@@ -12,8 +12,9 @@
  * two daughters with deterministically perturbed seeds. Tap perturbs the
  * plasm, a drag stirs the cytoplasm, three fingers run an osmotic current
  * or dilate time, a scrub spins a centrifuge vortex, a twist rotates the
- * lens to a stained-slide diagram. Rhythm entrains the cilia; a flick sends
- * a mote comet. The whole field breathes on the site's shared 0.14 Hz swell.
+ * lens to a stained-slide diagram. Two fingers held apart on two cells open
+ * a sustained cytoplasmic bridge between them. Rhythm entrains the cilia; a
+ * flick sends a mote comet. The whole field breathes on the site's shared 0.14 Hz swell.
  * The vessel is wired through: tilt leans the plasm downhill, shake storms
  * it, a knock on the case rings the coverslip, face-down is night, and a
  * blow across the stage gutters the candle. The plasm persists in
@@ -258,6 +259,15 @@ export default function CellsPlasm() {
     let lastStreamSoundAt = 0;
     let lastScrubAt = 0;
     let lastChargeNoteAt = 0;
+    // span: two fingers held apart open a cytoplasmic bridge between the two
+    // cells they touch — a sustained conjugation, the two voices held
+    // together while the plasm streams between them, thickening as it holds.
+    let spanActive = false;
+    let spanA: Cell | null = null;
+    let spanB: Cell | null = null;
+    let spanElapsed = 0;
+    let spanTickAt = 0;
+    let lastSpanToneAt = 0;
     const hold: {
       cellId: string | null; onExisting: boolean; seeded: boolean; divided: boolean; tier: number;
     } = {
@@ -878,6 +888,43 @@ export default function CellsPlasm() {
           try { haptics.ripple(0.3); } catch { /* noop */ }
         }
       },
+      span: (e) => {
+        // two fingers held apart open a cytoplasmic bridge between two cells:
+        // their voices sustain together and the plasm streams along the span,
+        // the bridge thickening the longer it is held.
+        lastInteractionAt = performance.now();
+        if (e.phase === "release") {
+          spanActive = false;
+          spanA = null;
+          spanB = null;
+          try { haptics.tap(); } catch { /* noop */ }
+          return;
+        }
+        const a = toLocal(e.ax, e.ay);
+        const b = toLocal(e.bx, e.by);
+        if (e.phase === "enter" || !spanA || !spanB) {
+          spanA = cellAt(a.x, a.y);
+          spanB = cellAt(b.x, b.y);
+        }
+        if (!spanA || !spanB || spanA === spanB || spanA.retiringAt || spanB.retiringAt) {
+          spanActive = false;
+          return;
+        }
+        spanActive = true;
+        spanElapsed = e.elapsed;
+        spanTickAt = performance.now();
+        const deep = Math.min(1, e.elapsed / 2600);
+        const now = performance.now();
+        if (now - lastSpanToneAt > 320) {
+          lastSpanToneAt = now;
+          // the sustained dyad lengthens and drops an octave as the bridge
+          // deepens, so 900ms and 2400ms are never the same sound
+          const ms = 200 + Math.round(deep * 320);
+          note(midiOf(spanA.morph), ms);
+          note(midiOf(spanB.morph) - (deep > 0.6 ? 12 : 0), ms);
+          try { haptics.ripple(0.15 + deep * 0.26); } catch { /* noop */ }
+        }
+      },
       rhythm: (e) => {
         lastInteractionAt = performance.now();
         if (e.bpm < 40 || e.bpm > 220) return;
@@ -1394,9 +1441,42 @@ export default function CellsPlasm() {
       for (let i = stirs.length - 1; i >= 0; i--) if (now - stirs[i].born > 1800) stirs.splice(i, 1);
       for (let i = vortices.length - 1; i >= 0; i--) if (now - vortices[i].born > 3000) vortices.splice(i, 1);
 
+      // the span's cytoplasmic bridge: while it holds, both cells stream
+      // faster toward the join, and the bridge is drawn as a lit channel
+      // with plasm beading along it — sustained, thickening with duration
+      if (spanActive && (now - spanTickAt > 360 || !spanA || !spanB
+        || spanA.retiringAt || spanB.retiringAt || !cells.includes(spanA) || !cells.includes(spanB))) {
+        spanActive = false;
+      }
+      if (spanActive && spanA && spanB) {
+        const deep = Math.min(1, spanElapsed / 2600);
+        spanA.streamBoost = Math.min(2.4, spanA.streamBoost + 0.03 + deep * 0.045);
+        spanB.streamBoost = Math.min(2.4, spanB.streamBoost + 0.03 + deep * 0.045);
+      }
+
       // cells, painter's order by size (small behind, large in front)
       const sorted = [...cells].sort((a, b) => a.morph.radius - b.morph.radius);
       for (const c of sorted) drawCell(c, localT, breath);
+
+      if (spanActive && spanA && spanB) {
+        const deep = Math.min(1, spanElapsed / 2600);
+        ctx.strokeStyle = colorAlpha("#E7AC52", 0.22 + deep * 0.4);
+        ctx.lineWidth = 1 + deep * 2.4;
+        ctx.beginPath();
+        ctx.moveTo(spanA.sx, spanA.sy);
+        ctx.lineTo(spanB.sx, spanB.sy);
+        ctx.stroke();
+        const beads = 3 + Math.round(deep * 4);
+        for (let k = 0; k < beads; k++) {
+          const f = (now / 700 + k / beads) % 1;
+          const bx = spanA.sx + (spanB.sx - spanA.sx) * f;
+          const by = spanA.sy + (spanB.sy - spanA.sy) * f;
+          ctx.fillStyle = colorAlpha("#DDD3BE", 0.25 + (1 - Math.abs(f - 0.5) * 2) * 0.4);
+          ctx.beginPath();
+          ctx.arc(bx, by, 1 + deep * 1.6, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
 
       // tutti: one soft ring around everything alive, fading together
       if (tuttiPulse > 0.03) {
