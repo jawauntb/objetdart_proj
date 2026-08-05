@@ -953,6 +953,13 @@ export default function City() {
       glimmerAt = null;
     };
     const maybeGlimmer = (now: number): void => {
+      // Under prefers-reduced-motion the ground is held still (uTime frozen)
+      // and the ground shader's breath sits at 0.5 — a sinusoidal overlay
+      // ring would be the one moving thing left, breaking the Coin/Stars
+      // contract that a room is quiet under reduce. Skip the glimmer here
+      // rather than paint a static alpha the eye would still catch as a
+      // discontinuous switch.
+      if (reduceMotion) return;
       if (glimmerAt) return;
       if (now - lastInteractionAt < IDLE_GLIMMER_MS) return;
       // Only fire one glimmer per idle stretch; another must wait for the
@@ -1332,7 +1339,16 @@ export default function City() {
         releaseKeyboardPlant();
       }
     };
-    const onWrapBlur = () => { cursorVisible = false; };
+    // Focus loss mid-hold must release the hold — the counterpart of the
+    // gesture engine's pointercancel path. Without this, a `p` press during
+    // blur leaves keyboardHolding=true and activePlant non-null, and the
+    // next `p` press is silently swallowed by `if (keyboardHolding) return`.
+    // releaseKeyboardPlant nulls activePlant and schedules the write, mirror
+    // of the mouse hold's `release` phase (line ~1141).
+    const onWrapBlur = () => {
+      cursorVisible = false;
+      if (keyboardHolding) releaseKeyboardPlant();
+    };
     wrap.addEventListener("keydown", onKeyDown);
     wrap.addEventListener("keyup", onKeyUp);
     wrap.addEventListener("blur", onWrapBlur);
