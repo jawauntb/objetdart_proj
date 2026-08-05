@@ -9,7 +9,7 @@ import {
 } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
-import { attachGestures } from "@/lib/gesture";
+import { attachGestures, tapTrainDepth, tapTrainTier } from "@/lib/gesture";
 import { useField } from "@/store/field";
 import { onVessel } from "@/lib/vessel";
 import LetGo from "@/components/LetGo";
@@ -585,6 +585,12 @@ export default function Plasma() {
     let lastContact = { x: 0, y: 0 }; // root-relative, for the discharge crack
     const holdState = { ceremony: false };
     let twistAcc = 0;
+    let lastSeasonCueAt = 0;
+    // span: two still fingers hold an arc open BETWEEN them — the one
+    // filament in the room that never touches the core
+    const spanArc = { active: false, ax: 0, ay: 0, bx: 0, by: 0, elapsed: 0, lastHum: 0 };
+    // drum: an alternating patter — the lightning leaps between the hands
+    const drumArc = { until: 0, ax: 0, ay: 0, bx: 0, by: 0 };
 
     // detail.particles scales fork count / segment density on lower tiers —
     // set once per frame by the governor, read by every drawFilament call.
@@ -894,6 +900,19 @@ export default function Plasma() {
         }
       }
 
+      // the sustained interval — an arc bridging two still fingers, glass
+      // to glass, whitening the longer it is held
+      if (spanArc.active) {
+        const deep = Math.min(1, spanArc.elapsed / 4000);
+        drawFilament(spanArc.ax, spanArc.ay, spanArc.bx, spanArc.by, 0.63, t, 0.5 + deep * 0.6, motion, true);
+      }
+
+      // the drummed patter — lightning leaping between the hands' two spots
+      if (simNowMs < drumArc.until) {
+        const fade = (drumArc.until - simNowMs) / 600;
+        drawFilament(drumArc.ax, drumArc.ay, drumArc.bx, drumArc.by, 0.29, t, 0.35 + fade * 0.5, motion, true);
+      }
+
       // ceremony corona — every direction at once, briefly
       if (simNowMs < coronaUntil) {
         const fade = (coronaUntil - simNowMs) / 1800;
@@ -1048,6 +1067,57 @@ export default function Plasma() {
         }
         if (e.fingers !== 1) return;
         const { x, y } = toLocal(e.x, e.y);
+        // the rapid-tap ladder (1 / 3 / 5 / n): a spark → a threefold
+        // fork → the banked charge lets go at once → the globe overloads
+        const trainTier = tapTrainTier(e.count);
+        const depth = tapTrainDepth(e.count);
+        if (trainTier === "n") {
+          // crescendo: overload — a ring of flares off the rim and a
+          // surge of heat the glass takes seconds to shed
+          heatRef.current = clamp(heatRef.current + 0.3 + depth * 0.3, 0, 1);
+          for (let k = 0; k < 6; k++) {
+            const ang = (k / 6) * Math.PI * 2 + depth;
+            flaresRef.current.push({
+              x: cx + Math.cos(ang) * radius * 0.7,
+              y: cy + Math.sin(ang) * radius * 0.7,
+              t0: simNowMs,
+              seed: (k + 1) / 7,
+            });
+          }
+          if (flaresRef.current.length > 10) flaresRef.current.splice(0, flaresRef.current.length - 10);
+          flashRef.current = Math.max(flashRef.current, 0.8 + depth * 0.2);
+          flashT0Ref.current = simNowMs;
+          try { getAudio().bell(); } catch { /* noop */ }
+          try { haptics.storm(); } catch { /* noop */ }
+          recordTapeRef.current("region", 0.8, "plasma/overload");
+          return;
+        }
+        if (trainTier === 5) {
+          // five quick taps milk the banked charge: whatever heat the
+          // globe holds discharges NOW, sized by what it held
+          const strength = 0.6 + heatRef.current * 0.4;
+          spark(x, y, strength);
+          try { getAudio().bell(); } catch { /* noop */ }
+          try { haptics.storm(); } catch { /* noop */ }
+          recordTapeRef.current("concern", 0.5 + heatRef.current * 0.5, "plasma/discharge");
+          heatRef.current = Math.max(0, heatRef.current - 0.5);
+          heatPeakRef.current = 0;
+          return;
+        }
+        if (trainTier === 3) {
+          // three taps fork the strike: the glass answers threefold
+          for (let k = 0; k < 3; k++) {
+            flaresRef.current.push({ x, y, t0: simNowMs, seed: (0.17 + k * 0.31 + depth * 0.13) % 1 });
+          }
+          if (flaresRef.current.length > 10) flaresRef.current.splice(0, flaresRef.current.length - 10);
+          flashRef.current = Math.max(flashRef.current, 0.4 + depth * 0.3);
+          flashT0Ref.current = simNowMs;
+          try { getAudio().spark(); } catch { /* noop */ }
+          try { getAudio().playNote(62 + Math.round(depth * 8), 140); } catch { /* noop */ }
+          try { haptics.ripple(0.4 + depth * 0.3); } catch { /* noop */ }
+          recordTapeRef.current("sigil", 0.55 + depth * 0.2, "plasma/fork");
+          return;
+        }
         // tap intensity is the crack: bloom, sound and haptic ride the
         // same 0..1 from core.
         spark(x, y, 0.55 + e.intensity * 0.45);
@@ -1062,8 +1132,17 @@ export default function Plasma() {
       twist: (e) => {
         lastGestureAt = performance.now();
         if (e.fingers === 3) {
-          // three fingers turn the season: a slow warm/cool drift.
-          if (e.phase === "move") season += e.angle * 0.7;
+          // three fingers turn the season: a slow warm/cool drift whose
+          // word tracks how fast the hand winds it.
+          if (e.phase === "move") {
+            season += e.angle * 0.7;
+            const nowMs = performance.now();
+            if (Math.abs(e.velocity) > 0.2 && nowMs - lastSeasonCueAt > 420) {
+              lastSeasonCueAt = nowMs;
+              try { getAudio().playTone(140 + (Math.sin(season) * 0.5 + 0.5) * 160, 0.3); } catch { /* noop */ }
+              try { haptics.detent(); } catch { /* noop */ }
+            }
+          }
           return;
         }
         if (e.phase === "start") twistAcc = 0;
@@ -1132,12 +1211,15 @@ export default function Plasma() {
       hold: (e) => {
         lastGestureAt = performance.now();
         if (e.fingers === 3) {
-          // three fingers hold the law: the plasma slows to a quarter speed
+          // three fingers hold the law: the plasma slows to a quarter speed,
+          // and duration is an axis — the longer the chord stands, the
+          // deeper the stillness gets
           if (e.phase === "enter") {
             timeScaleTarget = 0.25;
             try { getAudio().playNote(36, 260); } catch { /* noop */ }
             try { haptics.tap(); } catch { /* noop */ }
           }
+          if (e.phase === "tick") timeScaleTarget = Math.max(0.07, 0.25 - 0.18 * clamp((e.elapsed - 900) / 3000, 0, 1));
           if (e.phase === "release") timeScaleTarget = 1;
           return;
         }
@@ -1215,6 +1297,61 @@ export default function Plasma() {
         if (e.stability <= 0.7) return;
         entrainBpm = Math.max(40, Math.min(140, e.bpm));
         entrainUntil = performance.now() + 9000;
+      },
+      span: (e) => {
+        lastGestureAt = performance.now();
+        const a = toLocal(e.ax, e.ay);
+        const b = toLocal(e.bx, e.by);
+        spanArc.ax = a.x;
+        spanArc.ay = a.y;
+        spanArc.bx = b.x;
+        spanArc.by = b.y;
+        spanArc.elapsed = e.elapsed;
+        if (e.phase === "enter") {
+          // two still fingers: an arc bridges them, glass to glass —
+          // the sustained interval, and the one filament that skips the core
+          spanArc.active = true;
+          spark(a.x, a.y, 0.3);
+          spark(b.x, b.y, 0.3);
+          try { getAudio().buzz(); } catch { /* noop */ }
+          try { haptics.tap(); } catch { /* noop */ }
+          recordTapeRef.current("object", 0.5, "plasma/bridge");
+          return;
+        }
+        if (e.phase === "release") {
+          if (spanArc.active) {
+            // the bridge lets go with a crack sized by how long it stood
+            spark((spanArc.ax + spanArc.bx) / 2, (spanArc.ay + spanArc.by) / 2, 0.4 + Math.min(0.6, spanArc.elapsed / 4000));
+            try { haptics.ripple(0.3 + Math.min(0.5, spanArc.elapsed / 5000)); } catch { /* noop */ }
+          }
+          spanArc.active = false;
+          return;
+        }
+        // tick: the held interval hums, climbing for as long as it stands
+        const nowMs = performance.now();
+        if (nowMs - spanArc.lastHum > 240) {
+          spanArc.lastHum = nowMs;
+          try {
+            getAudio().playTone(120 + Math.min(1, spanArc.elapsed / 4000) * 240 + (e.spread / Math.max(1, radius)) * 60, 0.24);
+          } catch { /* noop */ }
+        }
+      },
+      drum: (e) => {
+        lastGestureAt = performance.now();
+        // an alternating patter: the lightning leaps between the two spots
+        // the hands keep, playing the space between them
+        const a = toLocal(e.ax, e.ay);
+        const b = toLocal(e.bx, e.by);
+        const hit = toLocal(e.x, e.y);
+        drumArc.ax = a.x;
+        drumArc.ay = a.y;
+        drumArc.bx = b.x;
+        drumArc.by = b.y;
+        drumArc.until = simNowMs + 600;
+        spark(hit.x, hit.y, 0.35 + e.alternation * 0.3);
+        try { getAudio().playNote(52 + (e.hits % 2) * 7 + Math.round(e.alternation * 5), 90); } catch { /* noop */ }
+        try { haptics.tap(); } catch { /* noop */ }
+        recordTapeRef.current("ripple", 0.4 + e.alternation * 0.3, "plasma/patter");
       },
     }, { wheelZoom: false, manageStyle: false });
 

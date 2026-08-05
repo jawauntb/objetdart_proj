@@ -43,7 +43,7 @@
 import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
-import { attachGestures } from "@/lib/gesture";
+import { attachGestures, tapTrainDepth, tapTrainTier } from "@/lib/gesture";
 import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import LetGo from "@/components/LetGo";
@@ -61,6 +61,8 @@ import {
   MAX_EXCITATIONS,
   PARTICLES,
   PHOTON_E_MIN,
+  PITCH_MAX_HZ,
+  PITCH_MIN_HZ,
   QUANTA_TINTS,
   betaFor,
   birthFor,
@@ -230,6 +232,12 @@ export default function QuantaField() {
     // three-finger twist = season: the field's own slow cycle
     let season = 0;
     let lastSeasonSoundAt = 0;
+
+    // span: two still fingers hold a standing wave open — the interval IS
+    // the wavelength, and release lets it go as light of exactly that pitch
+    const spanWave = { active: false, ax: 0, ay: 0, bx: 0, by: 0, elapsed: 0, pitch: 440, spokenAt: 0 };
+    // rhythm: a steady tapped pulse entrains the vacuum's flicker
+    const entrain = { bpm: 0, until: 0, lastBeat: -1, env: 0 };
 
     // vessel flip: face-down is night
     let night = 0;
@@ -559,20 +567,23 @@ export default function QuantaField() {
       return best;
     };
 
-    const tutti = () => {
+    // tutti — everything alive states itself at once. Intensity is an axis:
+    // a firmer chord wakes more voices and rings each of them harder.
+    const tutti = (strength = 0.5) => {
       const now = performance.now();
       if (now - lastTuttiAt < 1400) return;
       lastTuttiAt = now;
-      tuttiPulse = 1;
-      const alive = excs.filter((e) => !e.retiringAt).slice(0, 9);
+      const k = clamp01(strength);
+      tuttiPulse = 0.6 + k * 0.4;
+      const alive = excs.filter((e) => !e.retiringAt).slice(0, 4 + Math.round(k * 5));
       alive.forEach((e, i) => {
         window.setTimeout(() => {
-          if (e.id === "photon") tone(e.pitch, 0.35);
-          else if (!isNeutrino(e.id)) note(midiOf(e.id), 120);
-          e.ring = Math.min(1, e.ring + 0.5);
+          if (e.id === "photon") tone(e.pitch, 0.25 + k * 0.25);
+          else if (!isNeutrino(e.id)) note(midiOf(e.id), 90 + Math.round(k * 80));
+          e.ring = Math.min(1, e.ring + 0.35 + k * 0.35);
         }, i * 60);
       });
-      softly(() => haptics.tap());
+      softly(() => (k > 0.7 ? haptics.ripple(k) : haptics.tap()));
     };
 
     // ————— gestures —————
@@ -590,11 +601,37 @@ export default function QuantaField() {
           return;
         }
         if (e.fingers === 3) {
-          tutti();
+          tutti(e.intensity);
           return;
         }
         if (e.fingers !== 1) return;
         const { x, y } = toLocal(e.x, e.y);
+        // the rapid-tap ladder (1 / 3 / 5 / n) hammers energy straight into
+        // the field: three taps afford the electron pair, five the muons,
+        // seven the taus — the mass ladder climbed by tempo instead of hold
+        const trainTier = tapTrainTier(e.count);
+        const depth = tapTrainDepth(e.count);
+        if (trainTier !== 1) {
+          if (e.count === 3 || e.count === 5 || e.count === 7) {
+            const rung = e.count === 3 ? 1 : e.count === 5 ? 2 : 3;
+            birth(
+              LADDER[rung].thresholdMeV * (1.05 + depth * 0.2),
+              x, y,
+              hashSeed(Math.round(x), Math.round(y), e.count),
+            );
+            if (trainTier === "n") {
+              // crescendo: the whole field answers the hammering at once
+              softly(() => haptics.storm());
+              tutti(0.6 + depth * 0.4);
+            }
+          } else {
+            // counts between the rungs only deepen the shiver
+            burst(x, y, QUANTA_TINTS.photon, 2 + Math.round(depth * 4), 18 + depth * 30);
+            note(70 + Math.round(depth * 12), 70);
+            softly(() => haptics.ripple(0.2 + depth * 0.3));
+          }
+          return;
+        }
         const target = excAt(x, y);
         if (target && isNeutrino(target.id)) {
           // the ghost: it almost never answers — one knock in eight lands
@@ -628,6 +665,9 @@ export default function QuantaField() {
             softly(() => haptics.tap());
             note(30, 320);
           }
+          // duration is an axis: held past the dwell the dilation keeps
+          // deepening — the heavy bosons live visibly longer still
+          if (e.phase === "tick") timeScaleTarget = Math.max(0.07, 0.25 - 0.18 * clamp01((e.elapsed - 900) / 3000));
           if (e.phase === "release") timeScaleTarget = 1;
           return;
         }
@@ -812,6 +852,73 @@ export default function QuantaField() {
           useField.getState().recordTape("object", 0.4, "quanta/gluon");
         }
       },
+      span: (e) => {
+        lastInteractionAt = performance.now();
+        // the interval IS the wavelength: two still fingers hold a standing
+        // wave open between them, sounding the pitch that spacing means
+        const waveHz = (spread: number) => {
+          const u = clamp01(1 - spread / (0.6 * Math.max(1, Math.min(width, height))));
+          return PITCH_MIN_HZ * Math.pow(PITCH_MAX_HZ / PITCH_MIN_HZ, u);
+        };
+        if (e.phase === "release") {
+          if (spanWave.active) {
+            // release lets the interval go as light of exactly that pitch —
+            // held longer, it has fed more energy in and leaves more photons
+            const cxm = (spanWave.ax + spanWave.bx) / 2;
+            const cym = (spanWave.ay + spanWave.by) / 2;
+            const ang = Math.atan2(spanWave.by - spanWave.ay, spanWave.bx - spanWave.ax) + Math.PI / 2;
+            const n = 1 + Math.min(2, Math.floor(e.elapsed / 2500));
+            for (let i = 0; i < n; i++) {
+              const ph = spawn(
+                { id: "photon", anti: false },
+                cxm, cym, 0.4,
+                ang + i * Math.PI,
+                hashSeed(Math.round(cxm), Math.round(cym), i),
+              );
+              ph.pitch = spanWave.pitch;
+            }
+            tone(spanWave.pitch, 0.6);
+            softly(() => haptics.ripple(0.3 + clamp01(e.elapsed / 4000) * 0.4));
+            useField.getState().recordTape("object", 0.5, "quanta/standing-wave");
+            save();
+          }
+          spanWave.active = false;
+          return;
+        }
+        const a = toLocal(e.ax, e.ay);
+        const b = toLocal(e.bx, e.by);
+        spanWave.ax = a.x;
+        spanWave.ay = a.y;
+        spanWave.bx = b.x;
+        spanWave.by = b.y;
+        spanWave.elapsed = e.elapsed;
+        spanWave.pitch = waveHz(e.spread);
+        if (e.phase === "enter") {
+          spanWave.active = true;
+          spanWave.spokenAt = performance.now();
+          tone(spanWave.pitch, 0.35);
+          softly(() => haptics.tap());
+          return;
+        }
+        // tick: the wave keeps sounding for as long as it is held,
+        // retuning live as the fingers breathe
+        const now = performance.now();
+        if (now - spanWave.spokenAt > 700) {
+          spanWave.spokenAt = now;
+          tone(spanWave.pitch, 0.55);
+        }
+      },
+      rhythm: (e) => {
+        // a steady tapped pulse entrains the vacuum's flicker: the virtual
+        // pairs shimmer on the hand's beat for a while
+        if (e.stability <= 0.7 || e.bpm < 30 || e.bpm > 220) return;
+        lastInteractionAt = performance.now();
+        entrain.bpm = e.bpm;
+        entrain.until = performance.now() + 9000;
+        entrain.lastBeat = -1;
+        note(50, 140);
+        softly(() => haptics.detent());
+      },
     });
 
     // ————— the vessel —————
@@ -838,10 +945,11 @@ export default function QuantaField() {
       knock: ({ intensity }) => {
         if (reduce) return;
         lastInteractionAt = performance.now();
-        // a knock on the case shakes a photon out of the wall
+        // a knock on the case shakes a photon out of the wall — struck
+        // harder, the light it frees is bluer
         const k = hash01(Math.round(intensity * 997) + Math.round(localT));
         const fromLeft = k < 0.5;
-        const en = 0.1 + k * 0.8;
+        const en = 0.1 + clamp01(intensity) * 0.6 + k * 0.3;
         const e = spawn(
           { id: "photon", anti: false },
           fromLeft ? 6 : width - 6,
@@ -1207,6 +1315,18 @@ export default function QuantaField() {
       windTargetX *= 0.985;
       windTargetY *= 0.985;
       tuttiPulse *= 0.94;
+      // the entrained flicker: while the hand's pulse holds, the vacuum's
+      // virtual pairs shimmer on the beat, each downbeat a low tick
+      entrain.env = 0;
+      if (nowReal < entrain.until && entrain.bpm > 0) {
+        const beatLen = 60000 / entrain.bpm;
+        const beatIdx = Math.floor(nowReal / beatLen);
+        entrain.env = Math.max(0, 1 - ((nowReal % beatLen) / beatLen) * 3);
+        if (beatIdx !== entrain.lastBeat) {
+          entrain.lastBeat = beatIdx;
+          note(38, 40);
+        }
+      }
       // two-finger pan: the frame eases toward the hand's nudge, then home
       panX += (panTargetX - panX) * 0.14;
       panY += (panTargetY - panY) * 0.14;
@@ -1372,7 +1492,7 @@ export default function QuantaField() {
         const ph = (localT * (0.25 + hash01(i) * 0.5) + m.p) % 1;
         const a = reduce ? 0.05 : Math.sin(ph * Math.PI) * (0.05 + 0.05 * hash01(i + 3));
         const sep = reduce ? 2 : 2 + Math.sin(ph * Math.PI) * 3;
-        ctx.fillStyle = `rgba(221, 211, 190, ${(a + tuttiPulse * 0.06 + breath * 0.015) * feltAlpha})`;
+        ctx.fillStyle = `rgba(221, 211, 190, ${(a + tuttiPulse * 0.06 + breath * 0.015 + entrain.env * 0.05) * feltAlpha})`;
         ctx.beginPath();
         ctx.arc(m.x - sep, m.y, 0.7, 0, Math.PI * 2);
         ctx.arc(m.x + sep, m.y, 0.7, 0, Math.PI * 2);
@@ -1422,6 +1542,29 @@ export default function QuantaField() {
           ctx.stroke();
         }
         for (const e of excs) drawFelt(e, t, feltAlpha);
+      }
+
+      // the standing wave two still fingers hold open — nodes at the
+      // fingertips, swelling for as long as the interval is held
+      if (spanWave.active && feltAlpha > 0.05) {
+        const sAng = Math.atan2(spanWave.by - spanWave.ay, spanWave.bx - spanWave.ax);
+        const sLen = Math.max(1, Math.hypot(spanWave.bx - spanWave.ax, spanWave.by - spanWave.ay));
+        const sAmp = (3 + Math.min(9, spanWave.elapsed / 400)) * (reduce ? 0.5 : 1);
+        const bright = QUANTA_TINTS.photon[QUANTA_TINTS.photon.length - 1];
+        ctx.save();
+        ctx.translate(spanWave.ax, spanWave.ay);
+        ctx.rotate(sAng);
+        ctx.strokeStyle = colorAlpha(bright, (0.4 + clamp01(spanWave.elapsed / 3000) * 0.45) * feltAlpha);
+        ctx.lineWidth = 1.3;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        for (let i = 1; i <= 26; i++) {
+          const u = i / 26;
+          const yy = Math.sin(u * Math.PI * 3) * sAmp * Math.sin(u * Math.PI) * (reduce ? 1 : Math.cos(t * 7));
+          ctx.lineTo(u * sLen, yy);
+        }
+        ctx.stroke();
+        ctx.restore();
       }
 
       // specks over everything felt
