@@ -173,6 +173,7 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "drag3 → weather; wind and rain roll across the settlement",
       "hold3 → time dilation — the day runs at one quarter while held",
       "tilt / knock / flip → rain leans in / the bell tolls / night falls",
+      "arrows → a plot cursor drifts over the field; p held plants and climbs the same civic ladder a dwell climbs; space seals under the cursor; l cycles the lens; escape lowers it",
     ],
     finds: [
       "a home spawns one to three residents deterministically from its own seed — the same seed always brings the same people",
