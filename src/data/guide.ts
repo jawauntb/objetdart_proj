@@ -346,11 +346,16 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "move a finger → glides its pitch and bends the whole waveform",
       "flick → throws a pulse down the wave",
       "circle a finger → bends the frequency up or down",
+      "rapid taps → three bloom the overtones, five turn the wave to its next nature, seven and more swell a crescendo",
+      "a steady tapped pulse → the oscillator locks its phase to your tempo for a while",
       "mode buttons → source, interference, standing wave",
       "pinch through the edge → travels the scale axis from the coast",
       "two-finger hold to dwell → opens the shore peer ring (coast, ocean, tide, waves…)",
     ],
-    finds: ["three fingers moving the same way winds the whole phase — read straight off the moving voices, never a separate gesture"],
+    finds: [
+      "three fingers moving the same way winds the whole phase — read straight off the moving voices, never a separate gesture",
+      "a rap on the device's case rings the wave — harder raps ring lower and leave a wavefront mid-ribbon",
+    ],
   },
   {
     key: "pretext",
@@ -359,11 +364,19 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
     essence: "a sentence turned into an instrument — real prose laid out along a wave-shaped column, then loosened into six motions.",
     moves: [
       "drag anywhere → up sets amplitude, right sets frequency; a note tracks both",
+      "tap → a drop lands on the sentence: the tide quickens where it fell, pitched by height",
+      "rapid taps → three recall the next kept phrase, five crest the tide, seven and more flood it",
+      "circle a finger → stirs the tide with or against its clock",
+      "a steady tapped pulse → the words lock to your tempo and brighten on every beat",
+      "hold → charges a ring that keeps the phrase; the same hold on a kept phrase is the act that lets it go",
       "the six mode buttons (move / shift / shake / quake / wave / sine) → each jumps the wave to that motion's signature shape",
       "the prompt field → asks the room to write the text you're playing",
       "\"speak\" → the room reads the current text aloud",
     ],
-    finds: ["if the room can't answer, it falls back to one of four sentences chosen deterministically from your own prompt — a failure always fails the same way"],
+    finds: [
+      "if the room can't answer, it falls back to one of four sentences chosen deterministically from your own prompt — a failure always fails the same way",
+      "three fingers held still slow the tide's clock, and it keeps slowing the longer the hand stays",
+    ],
   },
   {
     key: "circularity",
@@ -373,11 +386,17 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
     moves: [
       "drag → rotates the chain and sets how many harmonic terms are drawn",
       "flick → throws the wheel spinning, which slows on its own",
+      "rapid taps → three call the next harmonic into the chain, five throw the wheel a full turn, seven and more roll the whole series rising",
+      "circle a finger → winds the spring; a wider or faster circle winds harder",
+      "a steady tapped pulse → the wheel locks its turning to your tempo",
       "hold (dwell) → grows the series by one more harmonic; to the ceremony tier → all twelve unfurl at once",
       "twist → turns the lens between the spinning circles and the unrolled wave",
       "preset buttons → square, saw, triangle, pulse",
     ],
-    finds: ["the lens is a ratchet, not a dial — a long twist flips circle and wave once per quarter turn"],
+    finds: [
+      "the lens is a ratchet, not a dial — a long twist flips circle and wave once per quarter turn",
+      "a rap on the device's case rings every standing harmonic once, louder for a harder rap",
+    ],
   },
   {
     key: "beyond",
@@ -387,11 +406,17 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
     essence: "a living interference field — four incommensurate wave functions summed into one grid, folded and pulled by hand.",
     moves: [
       "press and drag → x folds the pattern, y pulls it, both live",
+      "rapid taps → three snap the fold deeper, five bloom the field wide, seven and more flood the pull",
+      "circle a finger → stirs harder the faster you circle, and leans the fold with the circling's direction",
+      "a steady tapped pulse → the field's clock locks to your tempo and pulses between two poles on the beat",
       "\"keep fold\" then \"replay fold\" → saves the exact composition, including where you touched, and restores it",
       "the \"tune\" sliders → cell size, fold, pull, bloom",
       "pinch → zooms; held through the edge, travels to the neighboring band",
     ],
-    finds: ["the field is a fixed weighted sum of four frequencies, not noise — the aliveness comes from their incommensurability"],
+    finds: [
+      "the field is a fixed weighted sum of four frequencies, not noise — the aliveness comes from their incommensurability",
+      "three fingers held still dilate the field's time, deepening toward stillness the longer they stay",
+    ],
   },
   {
     key: "storm",

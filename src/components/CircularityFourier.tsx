@@ -12,6 +12,7 @@ import {
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { tapTrainTier } from "@/lib/gesture/core";
 import { useField } from "@/store/field";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
 import { onVisibility, onGalleryPause, detailForTier, createFrameGovernor, isEmbeddedFrame } from "@/lib/room-runtime";
@@ -440,28 +441,63 @@ export default function CircularityFourier() {
         lastGestureAtRef.current = performance.now();
         if (onUi(e.x, e.y)) return;
         if (e.fingers === 2) {
-          // step back: a raised lens lowers one level
+          // step back: a raised lens lowers one level; with no lens raised
+          // the wheel itself settles — spin and spring both breathe out
           if (lensTargetRef.current > 0) {
             lensTargetRef.current = Math.max(0, lensTargetRef.current - 1);
             try { haptics.lens(); } catch { /* noop */ }
             try { audio.playNote(48, 160); } catch { /* noop */ }
+          } else {
+            momentumRef.current *= 0.4;
+            boostRef.current *= 0.4;
+            panRef.current.tx = 0;
+            panRef.current.ty = 0;
+            try { audio.playNote(41, 200); } catch { /* noop */ }
+            try { haptics.tap(); } catch { /* noop */ }
           }
           return;
         }
         if (e.fingers === 3) {
-          // tutti: every standing harmonic rings once, small to large
+          // tutti: every standing harmonic rings once, small to large,
+          // as loud as the chord landed
           const cfg = PRESETS.find((item) => item.id === presetRef.current) ?? PRESETS[0];
           for (let i = 0; i < termsRef.current; i++) {
-            window.setTimeout(() => { try { audio.playNote(cfg.midi + i, 80); } catch { /* noop */ } }, i * 45);
+            window.setTimeout(() => { try { audio.playNote(cfg.midi + i, 60 + Math.round(e.intensity * 70)); } catch { /* noop */ } }, i * 45);
           }
-          try { haptics.ripple(0.4); } catch { /* noop */ }
-          recordTape("sigil", 0.5, "circularity/tutti");
+          try { haptics.ripple(0.28 + e.intensity * 0.36); } catch { /* noop */ }
+          recordTape("sigil", 0.35 + e.intensity * 0.35, "circularity/tutti");
           return;
         }
         if (e.fingers !== 1) return;
         // tap intensity is the strike: energy, tone and haptic ride the
-        // same 0..1 from core
-        tuneFromPointer(e.x, e.y, 0.4 + e.intensity * 0.6);
+        // same 0..1 from core; the train count deepens the same strike
+        tuneFromPointer(e.x, e.y, 0.4 + e.intensity * 0.6 + (e.count - 1) * 0.04);
+        // train tiers (1 / 3 / 5 / n from gesture/core): rapid taps climb the
+        // series itself — a harmonic joins, the wheel is thrown, then all of
+        // it at once
+        const trainTier = tapTrainTier(e.count);
+        if (trainTier === 3 && e.count === 3) {
+          // three taps call the next harmonic into the chain — one more
+          // circle visibly joins, rung by ringTone in the same frame
+          setFourierTerms(termsRef.current + 1, "train");
+        } else if (trainTier === 5 && e.count === 5) {
+          // five taps throw the wheel a full extra turn — momentum the flick
+          // alone cannot reach, spinning down on its own
+          momentumRef.current = clamp(momentumRef.current + 2.4, -3, 3);
+          try { audio.bell(); } catch { /* noop */ }
+          try { haptics.bloom(); } catch { /* noop */ }
+          recordTape("sigil", 0.7, "circularity/train-throw");
+        } else if (trainTier === "n") {
+          // seven and beyond: the crescendo — every further tap winds the
+          // spring harder and rolls the whole standing series, rising
+          boostRef.current = clamp(boostRef.current + 0.5 + (e.count - 7) * 0.15, -2.2, 2.2);
+          const cfg = PRESETS.find((item) => item.id === presetRef.current) ?? PRESETS[0];
+          for (let i = 0; i < termsRef.current; i++) {
+            window.setTimeout(() => { try { audio.playNote(cfg.midi + i + (e.count - 7), 70); } catch { /* noop */ } }, i * 45);
+          }
+          try { (e.count === 7 ? haptics.storm : () => haptics.ripple(0.55))(); } catch { /* noop */ }
+          recordTape("sigil", clamp(0.6 + (e.count - 7) * 0.08, 0.6, 1), "circularity/train-crescendo");
+        }
       },
       pan2: (e) => {
         lastGestureAtRef.current = performance.now();
@@ -516,11 +552,16 @@ export default function CircularityFourier() {
       hold: (e) => {
         lastGestureAtRef.current = performance.now();
         if (e.fingers === 3) {
-          // three fingers hold the law: the rotation slows to quarter speed
+          // three fingers hold the law: the rotation slows toward stillness,
+          // deepening for as long as the hand stays — a 900ms hold and a
+          // 2400ms hold are different depths of the same act
           if (e.phase === "enter") {
             speedScaleRef.current.target = 0.25;
             try { audio.playNote(36, 260); } catch { /* noop */ }
             try { haptics.tap(); } catch { /* noop */ }
+          }
+          if (e.phase === "tick") {
+            speedScaleRef.current.target = Math.max(0.08, 0.25 - 0.17 * Math.min(1, e.elapsed / 4000));
           }
           if (e.phase === "release") speedScaleRef.current.target = 1;
           return;
@@ -583,13 +624,14 @@ export default function CircularityFourier() {
         if (nowMs - lastScrubAt < 600) return;
         lastScrubAt = nowMs;
         // circling winds the spring — the epicycle turns with the finger,
-        // against the clock it unwinds
+        // against the clock it unwinds; a wider or faster circle winds harder
         const dir = Math.sign(e.winding) || 1;
-        boostRef.current = clamp(boostRef.current + dir * 0.8, -2.2, 2.2);
+        const grip = clamp(0.5 + Math.abs(e.winding) * 0.45 + Math.abs(e.angularVelocity) * 40, 0.5, 1.6);
+        boostRef.current = clamp(boostRef.current + dir * grip, -2.2, 2.2);
         const cfg = PRESETS.find((item) => item.id === presetRef.current) ?? PRESETS[0];
-        try { audio.playNote(cfg.midi + (dir > 0 ? 7 : -5), 160); } catch { /* noop */ }
-        try { haptics.ripple(0.35); } catch { /* noop */ }
-        recordTape("ripple", 0.5, "circularity/wind");
+        try { audio.playNote(cfg.midi + (dir > 0 ? 7 : -5) + Math.round(grip * 3), 160); } catch { /* noop */ }
+        try { haptics.ripple(0.25 + grip * 0.2); } catch { /* noop */ }
+        recordTape("ripple", 0.35 + grip * 0.2, "circularity/wind");
       },
       rhythm: (e) => {
         // a steady tapped pulse: the wheel locks to your tempo
@@ -616,14 +658,16 @@ export default function CircularityFourier() {
         try { (intensity > 0.7 ? haptics.storm : haptics.chop)(); } catch { /* noop */ }
       },
       // knock = wake / ring the room (rhymes with /coin, /flowers, /growth):
-      // a rap on the case rings every standing harmonic once
-      knock: () => {
+      // a rap on the case rings every standing harmonic once — a harder rap
+      // rings louder and stirs the wheel a visible fraction of a turn
+      knock: ({ intensity }) => {
         lastGestureAtRef.current = performance.now();
         const cfg = PRESETS.find((item) => item.id === presetRef.current) ?? PRESETS[0];
         for (let i = 0; i < termsRef.current; i++) {
-          window.setTimeout(() => { try { audio.playNote(cfg.midi + i, 80); } catch { /* noop */ } }, i * 45);
+          window.setTimeout(() => { try { audio.playNote(cfg.midi + i, 60 + Math.round(intensity * 70)); } catch { /* noop */ } }, i * 45);
         }
-        try { haptics.ripple(0.4); } catch { /* noop */ }
+        boostRef.current = clamp(boostRef.current + intensity * 0.5, -2.2, 2.2);
+        try { haptics.ripple(0.3 + intensity * 0.35); } catch { /* noop */ }
       },
       // flip face-down = night: the wheel dims and hushes until turned back
       flip: ({ faceDown }) => {
