@@ -280,12 +280,126 @@ export function passesForTier(tier: QualityTier): {
   }
 }
 
+/**
+ * The perf-probe callback surface. When `createCityComposer` is handed a
+ * probe, its `render()` measures `performance.now()` around the internal
+ * `composer.render()` call and forwards the elapsed milliseconds to
+ * `onComposerFrame`. The probe is off by default — callers who do not
+ * pass one pay nothing (one property read per render).
+ *
+ * Kept as a plain callback (not an event emitter) so the composer stays
+ * free of listener lists. The room's `?__perf=1` gate builds one probe
+ * per mount and drops it in cleanup — see `src/components/City.tsx`.
+ *
+ * `mirror_ms` and `frame_ms` and the other keys arrive from other modules
+ * (city-water.ts, City.tsx tick loop) and land in the same ring the tick
+ * loop builds — the composer only owns `composer_ms`.
+ */
+export type CityComposerPerfProbe = {
+  /**
+   * Called once per successful `composer.render()`. `composerMs` is the
+   * wall-clock delta from just before the internal render() to just
+   * after — the number a "composer under 8ms" claim must quote.
+   */
+  onComposerFrame(composerMs: number): void;
+};
+
+/**
+ * A rolling window of the last N samples for a given metric, with
+ * avg / p50 / p95 / max derived on demand. Pure JS — no THREE, no DOM —
+ * so a Node test can pin the aggregation semantics without a browser.
+ *
+ * The window is fixed-size (120 frames = ~2s at 60Hz per the brief);
+ * `push` overwrites the oldest slot in place, so the ring is a
+ * zero-alloc write path — the ring lives on the tick's hot line.
+ * `snapshot` allocates a temporary sorted copy for the percentile read
+ * but the room reads the snapshot at most once per second (devtools /
+ * harness poll), never inside the tick. Do NOT call `snapshot` from a
+ * frame path — it would defeat the ring's whole point.
+ */
+export type PerfRing = {
+  /** Push a sample. Overwrites the oldest slot when the ring is full. */
+  push(value: number): void;
+  /** How many samples the ring currently holds (0..capacity). */
+  size(): number;
+  /** The ring's capacity (fixed at construction). */
+  capacity(): number;
+  /**
+   * Aggregate the current window. `avg` is the arithmetic mean; `p50` /
+   * `p95` are the sorted-order quantiles (nearest-rank); `max` is the
+   * largest sample. Returns zeros when the ring is empty — a caller
+   * polling before the first frame gets stable numbers, not NaNs.
+   */
+  snapshot(): { avg: number; p50: number; p95: number; max: number; count: number };
+};
+
+/**
+ * Build a rolling-window ring for a single perf metric. Fixed capacity
+ * (120 by default — a two-second window at 60Hz). Allocations happen
+ * ONCE at construction; `push` never allocates.
+ *
+ * Exported so scripts/test-city-perf-probe.mjs can verify the ring
+ * aggregates the way every later PR expects — a regression that
+ * silently averaged over a larger window would rewrite the meaning of
+ * every measured_delta claim.
+ */
+export function createPerfRing(capacityIn = 120): PerfRing {
+  // Clamp to a sane range. A ring of size 0 would divide by zero on avg;
+  // an enormous ring would still work but would consume 4 KB per metric
+  // for no analytic benefit past a few hundred frames.
+  const capacity = Math.max(1, Math.min(4096, Math.floor(capacityIn)));
+  const buf = new Float64Array(capacity);
+  let head = 0;   // next write index
+  let count = 0;  // how many samples we have (up to capacity)
+  return {
+    push(value: number) {
+      // Guard NaN/Infinity — a bad sample would poison the percentile
+      // read. We drop silently: a lost frame's timing is less harmful
+      // than a NaN turning the whole window into NaN.
+      if (!Number.isFinite(value)) return;
+      buf[head] = value;
+      head = (head + 1) % capacity;
+      if (count < capacity) count += 1;
+    },
+    size() { return count; },
+    capacity() { return capacity; },
+    snapshot() {
+      if (count === 0) return { avg: 0, p50: 0, p95: 0, max: 0, count: 0 };
+      // Copy the live window into a scratch typed array, sort, index.
+      // The copy is O(n) and cheap; the sort is O(n log n). Both live
+      // OUTSIDE the tick loop — see the type doc above.
+      const scratch = new Float64Array(count);
+      for (let i = 0; i < count; i += 1) scratch[i] = buf[i];
+      let sum = 0;
+      let max = -Infinity;
+      for (let i = 0; i < count; i += 1) {
+        const v = scratch[i];
+        sum += v;
+        if (v > max) max = v;
+      }
+      scratch.sort();
+      // Nearest-rank quantile: floor(q * n) clamped to n-1. For n=1 both
+      // p50 and p95 are the sole sample; for n=120 p95 lands at index 114.
+      const p50 = scratch[Math.min(count - 1, Math.floor(0.50 * count))];
+      const p95 = scratch[Math.min(count - 1, Math.floor(0.95 * count))];
+      return { avg: sum / count, p50, p95, max, count };
+    },
+  };
+}
+
 export type CityComposerOptions = {
   renderer: THREE.WebGLRenderer;
   groundScene: THREE.Scene;
   groundCam: THREE.Camera;
   plotScene: THREE.Scene;
   plotCam: THREE.Camera;
+  /**
+   * Optional perf probe. When present, `render()` measures the wall time
+   * around the internal composer.render() call and forwards the delta to
+   * `probe.onComposerFrame(ms)`. Off by default — a null probe costs
+   * nothing per frame past the one property read.
+   */
+  perfProbe?: CityComposerPerfProbe;
   /**
    * Optional real-perspective world scene rendered BEFORE the 2D ground
    * shader. Contains the Preetham sky (as scene.background), the directional
@@ -880,7 +994,30 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
         }
       }
 
+      // Perf probe — measure the wall time around composer.render(). The
+      // start/end pair straddles the ONLY internal renderer.render()
+      // chain that lives inside the composer, so the delta the probe
+      // reports is exactly the composer's frame budget (target D). The
+      // probe is opt-in per createCityComposer options; the branch is a
+      // single property compare on frames where the probe is off.
+      const perfProbe = opts.perfProbe;
+      const composerStart = perfProbe
+        ? (typeof performance !== "undefined" && typeof performance.now === "function"
+            ? performance.now()
+            : 0)
+        : 0;
       composerLike.render();
+      if (perfProbe) {
+        const composerEnd = typeof performance !== "undefined" && typeof performance.now === "function"
+          ? performance.now()
+          : composerStart;
+        // A negative or non-finite delta would only arise from a clock
+        // rewind or a probe misuse — hand the raw number and let the
+        // ring's NaN guard drop it, so the room never crashes on a bad
+        // sample.
+        try { perfProbe.onComposerFrame(composerEnd - composerStart); }
+        catch { /* probe error is not a render error */ }
+      }
     },
     setPassGates(gates) {
       let changed = false;
