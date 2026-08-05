@@ -10,6 +10,7 @@ import {
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
+import { tapTrainTier } from "@/lib/gesture/core";
 import { relaxTurbulence, stirTurbulence } from "@/lib/turbulence";
 import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
@@ -99,6 +100,7 @@ export default function TimeManifold() {
   const timeScaleRef = useRef({ cur: 1, target: 1 }); // 3-finger hold: time dilation ×0.25
   const entrainRef = useRef({ bpm: 0, until: 0, lastBeat: -1 });
   const pulseRef = useRef(0);        // traveller glow on entrained beats
+  const ladderFlashRef = useRef(0);  // tap-train tier 3: the felt-duration ladder surfaces
   const ceremonyAtRef = useRef(-1e9); // ring flash when the well is sealed
   const lastGestureAtRef = useRef(0);
   // ── frame layer (two fingers) ──
@@ -233,6 +235,7 @@ export default function TimeManifold() {
       }
       pulseRef.current *= Math.exp(-delta / 320);
       tuttiRef.current *= Math.exp(-delta / 460);
+      ladderFlashRef.current *= Math.exp(-delta / 1100);
 
       // ── idle life: the well never stops radiating ──
       // Spacetime does not hold still while nobody watches: on a jittered
@@ -253,7 +256,9 @@ export default function TimeManifold() {
       lens.cur += (lens.target - lens.cur) * Math.min(1, delta * 0.011);
       const L = lens.cur;
       const wGeo = clamp(1 - Math.abs(L), 0, 1);
-      const wFelt = clamp(1 - Math.abs(L - 1), 0, 1);
+      // a tier-3 tap train makes the twin's ladder surface briefly without
+      // turning the lens: the felt-duration weight borrows the flash
+      const wFelt = clamp(Math.max(1 - Math.abs(L - 1), ladderFlashRef.current), 0, 1);
       const wMetric = clamp(1 - Math.abs(L - 2), 0, 1);
       const pan = panRef.current;
       pan.x += (pan.tx - pan.x) * Math.min(1, delta * 0.013);
@@ -823,28 +828,29 @@ export default function TimeManifold() {
     let twistTickAcc = 0;  // radians since the last haptic tick
     let holdCeremony = false;
 
-    // three-finger tap: everything alive in the room answers at once
+    // three-finger tap: everything alive in the room answers at once,
+    // as loud as the hand meant it — intensity is an axis, never a switch
     let lastTuttiAt = 0;
-    const tutti = () => {
+    const tutti = (intensity: number) => {
       const nowMs = performance.now();
       if (nowMs - lastTuttiAt < 1200) return;
       lastTuttiAt = nowMs;
-      tuttiRef.current = 1;
-      pulseRef.current = 1;
+      tuttiRef.current = 0.6 + intensity * 0.4;
+      pulseRef.current = 0.6 + intensity * 0.4;
       const g = gammaOf(velRef.current);
       [0, 70, 140].forEach((at, i) => {
         window.setTimeout(() => {
-          try { audio.playNote(50 + i * 5 + Math.round(g * 3), 150); } catch { /* noop */ }
+          try { audio.playNote(50 + i * 5 + Math.round(g * 3), 120 + Math.round(intensity * 120)); } catch { /* noop */ }
         }, at);
       });
       try { haptics.roll(); } catch { /* noop */ }
-      recordTape("sigil", 0.6, "time/tutti");
+      recordTape("sigil", 0.4 + intensity * 0.4, "time/tutti");
     };
 
     const detach = attachGestures(canvas, {
       tap: (e) => {
         lastGestureAtRef.current = performance.now();
-        if (e.fingers === 3) { tutti(); return; }
+        if (e.fingers === 3) { tutti(e.intensity); return; }
         if (e.fingers === 2) {
           // step back (grammar §5): a raised lens lowers a level first, then
           // the frame comes home. Both already home, the manifold still answers.
@@ -872,10 +878,65 @@ export default function TimeManifold() {
           return;
         }
         if (e.fingers !== 1) return;
+        // rapid one-finger taps climb the site-wide train (1 / 3 / 5 / n):
+        // the ladder of the room is relativity itself — the twin, the well,
+        // the racing clock — each rung answering in the manifold's own nouns
+        const tier = tapTrainTier(e.count);
+        const gamma = gammaOf(velRef.current);
+        if (tier === "n") {
+          // n (≥7) — crescendo: the clocks race, coordinate time surging a
+          // second per tap and proper time falling behind by exactly 1/γ,
+          // the falling-behind piling up audibly under the drumming finger
+          const surge = 1000 * (1 + (e.count - 7) * 0.5);
+          coordRef.current += surge;
+          properRef.current += surge / gamma;
+          lastTickRef.current = Math.floor(properRef.current / 1000);
+          pulseRef.current = 1;
+          try { audio.playNote(60 + (e.count - 7) * 3, 90 + Math.round(e.intensity * 80)); } catch { /* noop */ }
+          try { haptics.roll(); } catch { /* noop */ }
+          if (!reduceRef.current) stirTurbulence(0.05 + e.intensity * 0.05);
+          recordTape("ripple", 0.6 + e.intensity * 0.3, "time/race");
+          return;
+        }
+        if (tier >= 5) {
+          // 5 — the well sheds: mass rings down and radiates away a step,
+          // the wave leaving through the same calm↔storm axis it always
+          // uses. The sixth tap deepens the ring without shedding again.
+          if (e.count === 5) {
+            const shed = Math.max(0, Math.round(massRef.current * 0.55));
+            massRef.current = shed;
+            setMass(shed);
+            try { audio.playNote(34 + Math.round(e.intensity * 6), 500); } catch { /* noop */ }
+            try { haptics.bloom(); } catch { /* noop */ }
+            recordTape("object", 0.7, "time/shed-mass");
+          } else {
+            try { audio.playNote(38, 300); } catch { /* noop */ }
+            try { haptics.tap(); } catch { /* noop */ }
+          }
+          radiateAtRef.current = performance.now();
+          if (!reduceRef.current) stirTurbulence(0.14 + e.intensity * 0.1);
+          return;
+        }
+        if (tier >= 3) {
+          // 3 — the twin returns: the felt-duration ladder surfaces and the
+          // two clocks state their gap as a dyad whose interval widens with γ
+          ladderFlashRef.current = 1;
+          pulseRef.current = 1;
+          try { audio.playNote(57, 240); } catch { /* noop */ }
+          try { audio.playNote(57 + Math.min(19, Math.round((gamma - 1) * 12)), 240); } catch { /* noop */ }
+          try { haptics.lens(); } catch { /* noop */ }
+          recordTape("sigil", 0.5 + e.intensity * 0.3, "time/twin");
+          return;
+        }
         const mobile = window.matchMedia(MOBILE_QUERY).matches;
         if (mobile) {
-          // a deliberate tap is the primary play action on phones
-          toggleRunningRef.current();
+          // a deliberate single tap is the primary play action on phones;
+          // the second tap of a train only deepens, never re-toggles
+          if (e.count === 1) toggleRunningRef.current();
+          else {
+            try { audio.playNote(55, 90); } catch { /* noop */ }
+            try { haptics.ripple(0.2 + e.intensity * 0.3); } catch { /* noop */ }
+          }
           return;
         }
         // desktop: click places velocity and mass; tap intensity is the
@@ -989,14 +1050,19 @@ export default function TimeManifold() {
       hold: (e) => {
         lastGestureAtRef.current = performance.now();
         if (e.fingers === 3) {
-          // three fingers hold the law: time dilates to a quarter speed —
-          // both clocks slow while the hand stays
+          // three fingers hold the law: time dilates — and keeps dilating.
+          // Duration is an axis: a quarter speed by two seconds, sinking on
+          // toward near-stillness the longer the hand stays. 900ms and
+          // 2400ms are different depths of the same held silence.
           if (e.phase === "enter") {
-            timeScaleRef.current.target = 0.25;
             try { audio.playNote(36, 260); } catch { /* noop */ }
             try { haptics.tap(); } catch { /* noop */ }
           }
-          if (e.phase === "release") timeScaleRef.current.target = 1;
+          if (e.phase === "release") { timeScaleRef.current.target = 1; return; }
+          timeScaleRef.current.target = Math.max(
+            0.08,
+            1 - 0.75 * clamp(e.elapsed / 2000, 0, 1) - 0.17 * clamp((e.elapsed - 2500) / 3500, 0, 1),
+          );
           return;
         }
         if (e.fingers !== 1) return;
@@ -1005,12 +1071,15 @@ export default function TimeManifold() {
           return;
         }
         if (e.phase === "release") return;
-        // dwell tier — gravity accretes under the held finger: mass grows
+        // dwell tier — gravity accretes under the held finger: mass grows,
+        // and accretion runs away the longer the hold lasts (elapsed is an
+        // axis — the well at 2400ms is gathering faster than at 900ms)
         if (e.tier >= 2 && !holdCeremony) {
           const nowMs = performance.now();
           if (nowMs - lastGrowTickAt > 160) {
             lastGrowTickAt = nowMs;
-            const next = Math.min(100, massRef.current + 2);
+            const rate = 2 + Math.min(3, (e.elapsed - 900) / 500);
+            const next = Math.min(100, massRef.current + rate);
             massRef.current = next;
             setMass(next);
             try { audio.playNote(46 + Math.round((next / 100) * 18), 70); } catch { /* noop */ }
