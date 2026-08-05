@@ -36,6 +36,7 @@ import {
   onVisibility,
 } from "@/lib/room-runtime";
 import { createGLStage, FULLSCREEN_VERT_CLIP } from "@/lib/webgl/stage";
+import { tapTrainTier } from "@/lib/gesture/core";
 import { clocksFrom } from "@/lib/webgl/sizing";
 import {
   DISC_CAP,
@@ -270,8 +271,9 @@ export default function PlasmaOrb() {
     plant: (_nx: number, _ny: number, _intensity: number) => {},
     deepen: (_elapsed: number, _nx: number, _ny: number) => {},
     ceremony: (_nx: number, _ny: number) => {},
-    tap: (_nx: number, _ny: number, _intensity: number) => {},
+    tap: (_nx: number, _ny: number, _intensity: number, _count: number) => {},
     tutti: (_intensity: number) => {},
+    stir: (_nx: number, _ny: number, _angularVelocity: number) => {},
     lens: (_angle: number) => {},
     season: (_angle: number) => {},
     wind: (_dx: number, _dy: number) => {},
@@ -442,9 +444,71 @@ export default function PlasmaOrb() {
       }
     };
 
-    api.current.tap = (nx, ny, intensity) => {
+    api.current.tap = (nx, ny, intensity, count) => {
       const at = toField(nx, ny);
       const hit = nearest(at.x, at.y);
+      // the rapid-tap ladder (1 / 3 / 5 / n), in loose plasma: 1 flares the
+      // struck disc, 3 arcs its charge to the nearest neighbour, 5 makes the
+      // whole field lean in toward the strike, n surges brighter and wilder
+      // with every extra tap
+      const trainTier = tapTrainTier(count);
+      if (trainTier === "n") {
+        const crest = Math.min(1, 0.5 + (count - 7) * 0.12 + intensity * 0.3);
+        tutti = Math.min(1, tutti + 0.3 + crest * 0.6);
+        agitation = Math.min(1, agitation + crest * 0.4);
+        for (const d of discs) {
+          d.flare = Math.min(1.6, d.flare + 0.4 + crest * 0.6);
+          d.vx += (d.seed - 0.5) * crest * 1.2;
+          d.vy += (0.5 - d.seed) * crest * 0.9;
+        }
+        audio.chime();
+        haptics.roll();
+        return;
+      }
+      if (trainTier === 5 && count === 5 && hit) {
+        // the struck disc calls the field: every other disc leans toward it,
+        // dimmer with distance — plasma gathering around a live electrode
+        for (const d of discs) {
+          if (d === hit || d.retire > 0) continue;
+          const dist = Math.max(0.2, Math.hypot(d.x - hit.x, d.y - hit.y));
+          d.vx += ((hit.x - d.x) / dist) * 0.5 * (0.4 + intensity * 0.6);
+          d.vy += ((hit.y - d.y) / dist) * 0.5 * (0.4 + intensity * 0.6);
+          d.flare = Math.min(1.6, d.flare + 0.5 / dist);
+        }
+        hit.flare = 1.6;
+        audio.bell();
+        haptics.chop();
+        return;
+      }
+      if (trainTier === 3 && count === 3 && hit) {
+        // an arc: the charge jumps to the nearest standing neighbour — both
+        // flare hard, both are pushed apart, and the pair sounds as a dyad
+        let other: Disc | null = null;
+        let bestD = Infinity;
+        for (const d of discs) {
+          if (d === hit || d.retire > 0) continue;
+          const dist = Math.hypot(d.x - hit.x, d.y - hit.y);
+          if (dist < bestD) {
+            bestD = dist;
+            other = d;
+          }
+        }
+        hit.flare = 1.6;
+        audio.playNote(Math.round(62 + hit.seed * 12), 140 + intensity * 120);
+        if (other) {
+          other.flare = Math.min(1.6, other.flare + 0.8 + intensity * 0.6);
+          const dist = Math.max(0.15, bestD);
+          const px = (other.x - hit.x) / dist;
+          const py = (other.y - hit.y) / dist;
+          other.vx += px * 0.4;
+          other.vy += py * 0.4;
+          hit.vx -= px * 0.4;
+          hit.vy -= py * 0.4;
+          audio.playNote(Math.round(67 + other.seed * 12), 140 + intensity * 120);
+        }
+        haptics.ripple(0.5 + intensity * 0.4);
+        return;
+      }
       if (hit) {
         hit.flare = Math.min(1.6, hit.flare + 0.3 + intensity * 1.1);
         hit.vx += (hit.x - at.x) * 0.6 * intensity;
@@ -456,6 +520,26 @@ export default function PlasmaOrb() {
         audio.playNote(Math.round(48 + intensity * 8), 70 + intensity * 90);
       }
       haptics.ripple(0.15 + intensity * 0.5);
+    };
+
+    api.current.stir = (nx, ny, angularVelocity) => {
+      // a circling finger is a magnetic stir: the discs take up an orbit
+      // around it, faster with the hand's own angular velocity
+      const at = toField(nx, ny);
+      const sgn = Math.sign(angularVelocity) || 1;
+      const rate = Math.min(1.2, Math.abs(angularVelocity)) * 0.5;
+      for (const d of discs) {
+        if (d.retire > 0) continue;
+        const dx = d.x - at.x;
+        const dy = d.y - at.y;
+        const dist = Math.max(0.2, Math.hypot(dx, dy));
+        const fall = Math.exp(-dist * dist * 0.7);
+        d.vx += (-dy / dist) * sgn * rate * fall * 1.4;
+        d.vy += (dx / dist) * sgn * rate * fall * 1.4;
+        d.flare = Math.min(1.6, d.flare + rate * fall * 0.3);
+      }
+      audio.spark();
+      haptics.ripple(0.2 + rate * 0.3);
     };
 
     api.current.tutti = (intensity) => {
@@ -665,9 +749,12 @@ export default function PlasmaOrb() {
   // out still lands through `lib/gesture/defaults`, scaled by the magnitude the
   // hand offered — there are no dead taps here to discover later.
   const voice = useRef({
-    tap: (e: { x: number; y: number; intensity: number; fingers: number }) => {
+    tap: (e: { x: number; y: number; intensity: number; fingers: number; count: number }) => {
       if (e.fingers !== 1) return;
-      api.current.tap(...norm(e.x, e.y, wrapRef.current), e.intensity);
+      api.current.tap(...norm(e.x, e.y, wrapRef.current), e.intensity, e.count);
+    },
+    stir: (e: { winding: number; angularVelocity: number; cx: number; cy: number }) => {
+      api.current.stir(...norm(e.cx, e.cy, wrapRef.current), e.angularVelocity);
     },
     tutti: (e: { intensity: number }) => api.current.tutti(e.intensity),
     plant: (e: { x: number; y: number; intensity: number }) => {
@@ -703,7 +790,7 @@ export default function PlasmaOrb() {
       letGo={{ label: "let the plasma go", onLetGo: letGo, visible: standing > 0 }}
       onGlimmer={() => api.current.glimmer()}
       keyboard={{
-        enter: () => api.current.tap(0.5, 0.5, 0.6),
+        enter: () => api.current.tap(0.5, 0.5, 0.6, 1),
         enterHeld: (elapsed) => {
           if (elapsed < 340) api.current.plant(0.5, 0.5, 0.5);
           else api.current.deepen(elapsed, 0.5, 0.5);

@@ -1296,9 +1296,11 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
     essence: "a bead of water as a soft, surface-tension body, with dark-field microscopic life that reveals itself the deeper you dive.",
     moves: [
       "tap or drag → dents and sloshes the bead",
+      "rapid taps (1 / 3 / 5 / n) → a dent → the bead's whole chord rings at once → a droplet patters off → the cluster leaps higher with every extra tap",
       "a fast, far drag → necks a whole new droplet off and hands it to your finger",
       "flick → throws a droplet clear of the bead; over open water it sends a current through the cluster",
       "double-tap → bounces the bead",
+      "two still fingers held apart → the bead is carried between them and stretches into a lens, deeper the longer the interval is held",
       "two fingers dragged down, or the wheel → sinks the lens into the water, revealing smaller life as you go",
       "tap a microbe → startles it into darting away",
       "hold to the ceremony tier → the water goes glass-calm",
