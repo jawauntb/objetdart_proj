@@ -228,7 +228,7 @@ const tidepool = {
       clock: {
         kind: "real",
         period_seconds: 33,
-        reads_from_domain: "waterLevel(t, climate) = H_MEAN + H_AMP · sin(2π·t/TIDE_PERIOD_S) + stormDisplacement(climate.wet)",
+        reads_from_domain: "ocean(t) = H_MEAN + H_AMP · sin(2π·t/TIDE_PERIOD_S) + stormDisplacement drives the outside sea. The pool decouples at the rim: while ocean > RIM_H the pool tracks ocean (connected, waves crash in — overtoppingIntensity > 0); while ocean < RIM_H the pool holds isolated, decaying exponentially toward POOL_MIN_H with time constant POOL_EVAP_TAU_S. This is why the visible waterline is NOT the ocean sine — the pool rim catches water and holds most of the cycle.",
       },
       states: [
         {

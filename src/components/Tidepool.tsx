@@ -78,6 +78,7 @@ import {
   stateWeights,
   totalBiomass,
   waterLevel,
+  overtoppingIntensity,
   zoneAt,
   type Climate,
   type Creature,
@@ -261,6 +262,7 @@ uniform float uLean;      // vessel tilt
 uniform float uNight;     // face-down: 0..1
 uniform float uStir;      // scrub agitation
 uniform float uLens;      // twist lens raise
+uniform float uOvertop;   // 0..1 — ocean overtops rim, waves crash in
 
 // The palette — six registers set once from the manifest.
 // bg = deep water dark; bg2 = warm brown wet rock; glow = bright sunlit gold;
@@ -329,7 +331,14 @@ void main() {
                  + sin(uv.x * 41.0 - uTime * 0.7 + uTide * 0.2) * 0.003;
   float chop = uState.w * (sin(uv.x * 55.0 + uTime * 4.5) * 0.014
                            + sin(uv.x * 91.0 - uTime * 3.1) * 0.008);
-  float waterlineY = uWaterY + wavelet + chop;
+  // layer: overtopping_crash
+  // When the ocean climbs above the rim (uOvertop > 0), waves crash into
+  // the pool — fast, higher-frequency chop, and a plume of foam right at
+  // the waterline. Zero during the isolated regime, so the pool sits still
+  // most of the cycle.
+  float crash = uOvertop * (sin(uv.x * 82.0 + uTime * 9.0) * 0.010
+                          + sin(uv.x * 141.0 - uTime * 12.5) * 0.005);
+  float waterlineY = uWaterY + wavelet + chop + crash;
   float depthBelow = clamp((uv.y - waterlineY) / max(0.02, POOL_Y_MAX - waterlineY), 0.0, 1.0);
   float overRock = float(uv.x < POOL_X_MIN || uv.x > POOL_X_MAX || uv.y > POOL_Y_MAX);
   float overRim = float(uv.y < POOL_Y_MIN);
@@ -386,6 +395,14 @@ void main() {
       airTone *= 1.0 - 0.30 * uState.w;
     }
     airTone *= 1.0 - uNight * 0.78;
+    // Foam mist above the waterline during overtopping — the splash arc.
+    if (uOvertop > 0.02 && uv.y > waterlineY - 0.04) {
+      float mistMask = exp(-pow((waterlineY - uv.y) * 22.0, 2.0));
+      float mistPattern = 0.4 + 0.6 * sin(uv.x * 62.0 + uTime * 7.5)
+                              + 0.3 * sin(uv.x * 155.0 - uTime * 4.1);
+      airTone = mix(airTone, FOAM,
+        clamp(uOvertop * mistMask * mistPattern * 0.6, 0.0, 0.7));
+    }
     col = airTone;
     gl_FragColor = vec4(col, 1.0);
     return;
@@ -489,6 +506,15 @@ void main() {
   float surfBand = exp(-pow((uv.y - waterlineY) * 78.0, 2.0));
   vec3 surfTone = mix(GLOW, mix(SKY, GLOW, uClimate.x), 0.55);
   waterCol += surfTone * surfBand * 0.85 * (0.85 + 0.15 * uBreath);
+  // layer: foam_plume — visible splash during overtopping
+  if (uOvertop > 0.02) {
+    float foamMask = exp(-pow((uv.y - waterlineY) * 34.0, 2.0));
+    float foamPattern = 0.55 + 0.35 * sin(uv.x * 47.0 + uTime * 6.5)
+                              + 0.20 * sin(uv.x * 121.0 - uTime * 3.7)
+                              + 0.15 * sin(uv.x * 217.0 + uTime * 11.0);
+    waterCol = mix(waterCol, FOAM,
+      clamp(uOvertop * foamMask * foamPattern, 0.0, 0.85));
+  }
   // A wider soft glow just below the surface.
   float underGlow = exp(-pow((uv.y - waterlineY - 0.025) * 28.0, 2.0));
   waterCol += GLOW * underGlow * 0.24 * (0.5 + uState.y * 0.5);
@@ -1719,6 +1745,7 @@ export default function Tidepool() {
         prog.setFloat("uNight", night);
         prog.setFloat("uStir", stir);
         prog.setFloat("uLens", lens);
+        prog.setFloat("uOvertop", overtoppingIntensity(state.tau, state.climate));
         const rippleLoc = prog.location("uRipples[0]");
         if (rippleLoc) stage.gl.uniform4fv(rippleLoc, rippleU);
 
