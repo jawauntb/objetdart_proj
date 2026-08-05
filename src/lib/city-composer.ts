@@ -724,26 +724,45 @@ export function createCityComposer(opts: CityComposerOptions): CityComposer {
         painterlyPass.enabled = false;
       }
 
-      if (bokehPass && bokehPass.enabled) {
-        // Ramp DOF strength on the pitch01. At eye-level the maxblur sits
-        // at 0 and the pass is essentially a no-op copy; at bird's-eye it
-        // hits `bokehState.maxblur`. Quantise to 8 slots across [0..1]
-        // so the uniform writes only fire when the pitch has advanced
-        // by ~12.5%. A smoothstep at 8 samples across [0.55..0.85]
-        // reads as continuous to a human eye.
+      if (bokehPass && aliveTier.dof && gate.dof) {
+        // Toggle the pass on the pitch strength. Below PITCH_DOF_START
+        // the strength is 0 and the blur is a no-op copy — but leaving
+        // `enabled = true` still runs BokehPass's depth pre-pass every
+        // frame (a full extra render of the skyline through a
+        // MeshDepthMaterial override into `renderTargetDepth`) for a
+        // result the blur throws away. Painterly already uses this
+        // pattern above; the depth pre-pass is what makes this
+        // asymmetry cost real milliseconds.
+        //
+        // Zero visual change: the maxblur/aperture uniforms were
+        // already being multiplied by `s`, so the color-out was
+        // identical to a no-op copy — we just stop paying for the
+        // depth pre-pass on eye-level frames where nobody sees any
+        // circle-of-confusion.
         const p = pitch01 == null ? 0 : pitch01;
-        const slot = Math.floor(p * 8);
-        if (slot !== lastDofSlot) {
-          const s = dofStrengthForPitch(p);
-          const u = (bokehPass as unknown as {
-            uniforms: {
-              maxblur: { value: number };
-              aperture: { value: number };
-            };
-          }).uniforms;
-          u.maxblur.value = bokehState.maxblur * s;
-          u.aperture.value = bokehState.aperture * s;
-          lastDofSlot = slot;
+        const s = dofStrengthForPitch(p);
+        const wantEnabled = s > 0;
+        if (bokehPass.enabled !== wantEnabled) {
+          bokehPass.enabled = wantEnabled;
+        }
+        if (bokehPass.enabled) {
+          // Ramp DOF strength on the pitch01. At bird's-eye the pass
+          // hits `bokehState.maxblur`. Quantise to 8 slots across
+          // [0..1] so the uniform writes only fire when the pitch has
+          // advanced by ~12.5%. A smoothstep at 8 samples across
+          // [0.55..0.85] reads as continuous to a human eye.
+          const slot = Math.floor(p * 8);
+          if (slot !== lastDofSlot) {
+            const u = (bokehPass as unknown as {
+              uniforms: {
+                maxblur: { value: number };
+                aperture: { value: number };
+              };
+            }).uniforms;
+            u.maxblur.value = bokehState.maxblur * s;
+            u.aperture.value = bokehState.aperture * s;
+            lastDofSlot = slot;
+          }
         }
       }
 
