@@ -181,6 +181,7 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "a new resident walks in from the nearest map edge before settling — arrival is a visible passage, not a spawn",
       "returning to the same store or event three times makes the person a regular there, and the plot warms into a small community — a store is where these people eat",
       "when two stores stand at nearly the same distance, the walker slows and, given a moment, swaps route — the tradeoff is legible in the step",
+      "the settlement is tuned to d mixolydian: a home rings the tonic, a store the fourth, an event the fifth, a tree the flat seventh — the civic ladder climbs the mode; a sealed plot tolls the triad rooted at its own note, and tutti stacks a voice for every event the city holds",
     ],
     keeps: "every sealed plot, the season the year reached, and the day the city had been living in",
   },

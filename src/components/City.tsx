@@ -43,6 +43,16 @@ import {
   type Season,
   type VisitRecord,
 } from "@/lib/city";
+import {
+  bellChord,
+  chordForCeremony,
+  dwellClimbNote,
+  noteForFlickAngle,
+  noteForPlot,
+  noteForRole,
+  noteForSeason,
+  type CityRole,
+} from "@/lib/city-audio";
 
 /**
  * /city — a small settlement whose identity IS its causal roles.
@@ -292,7 +302,26 @@ export default function City() {
     observer.observe(wrap);
 
     // ── audio + haptics wake ─────────────────────────────────────────────
+    // The audio grammar (mode, per-role notes, ceremony chords, tutti chord,
+    // weather noise target) is pure and lives in `@/lib/city-audio`; this
+    // component only asks it what to play and hands the answer to the shared
+    // FieldAudio graph. `ring()` plays a single MIDI, `ringChord()` stacks
+    // voices with a small stagger so the ear reads them as one chord and
+    // not as a chord-shaped scale — same trick a real bell tower uses.
     const A = () => getFieldAudio();
+    const isPlayableRole = (r: PlotRole): r is CityRole => r !== "empty";
+    const ring = (midi: number, durationMs = 240) => {
+      try { A().playNote(midi, durationMs); } catch { /* noop */ }
+    };
+    const ringChord = (notes: readonly number[], durationMs = 320, staggerMs = 22) => {
+      notes.forEach((midi, i) => {
+        if (i === 0) {
+          ring(midi, durationMs);
+        } else {
+          window.setTimeout(() => ring(midi, durationMs), i * staggerMs);
+        }
+      });
+    };
 
     // ── persistence writer ───────────────────────────────────────────────
     const saveState = () => {
@@ -314,17 +343,22 @@ export default function City() {
     const detach = attachGestures(wrap, {
       tap: (e) => {
         if (e.fingers === 1) {
-          // ripple this ground; if the tap hit a plot, brighten it
+          // ripple this ground; if the tap hit a plot, brighten it with the
+          // plot's own identity note — the same pitch that plot rings when
+          // it climbs the civic ladder, so the ear associates the pitch
+          // with THAT plot's role rather than with a random MIDI offset.
           const p = plotAt(e.x, e.y);
-          if (p) {
+          if (p && isPlayableRole(p.role)) {
             plantRingWeight = 0.9;
-            try { A().playNote(48 + p.id % 12, 220); } catch { /* noop */ }
+            ring(noteForPlot({ role: p.role, seed: p.seed }), 220);
             try { haptics.ripple(0.3 + e.intensity * 0.35); } catch { /* noop */ }
           } else {
             try { haptics.tap(); } catch { /* noop */ }
           }
         } else if (e.fingers === 3) {
-          // tutti — every home rings, people gather to the nearest event
+          // tutti — every home rings, people gather to the nearest event.
+          // The bell chord's voice count IS the event count: a settlement
+          // with three events rings a fuller chord than one with one.
           const events = plots.filter((p) => p.role === "event");
           for (const person of people) {
             if (events.length > 0) {
@@ -337,6 +371,7 @@ export default function City() {
             }
           }
           try { A().bell(); } catch { /* noop */ }
+          ringChord(bellChord(events.length), 380, 28);
           try { haptics.roll(); } catch { /* noop */ }
         }
       },
@@ -379,7 +414,8 @@ export default function City() {
             activePlantStartedAt = plot.dwellStartMs;
             // a home spawns its residents immediately
             spawnDwellersFor(plot);
-            try { A().playNote(52, 240); } catch { /* noop */ }
+            // a plant is a new home — ring its identity note
+            ring(noteForPlot({ role: "home", seed: plot.seed }), 240);
             try { haptics.tap(); } catch { /* noop */ }
           }
         }
@@ -389,19 +425,29 @@ export default function City() {
           // At the dwell tier the plot is still climbing the civic ladder —
           // home → store → event → tree. That climb is the verb "dwell" in
           // this material: a longer press is a deeper answer to a real need.
+          // Each rung rings its ladder-climb note (one octave above the role
+          // note) so the ear reads climb-then-settle instead of a fresh
+          // pitch each time.
           if (e.tier >= 2 && !activePlant.sealed) {
             const newRole = roleForDwell(activePlant.liveDwellMs);
-            if (newRole !== activePlant.role) {
+            if (newRole !== activePlant.role && isPlayableRole(newRole)) {
               activePlant.role = newRole;
-              try { A().playNote(56 + roleTier(newRole) * 2, 260); } catch { /* noop */ }
+              ring(dwellClimbNote(newRole), 260);
               try { haptics.detent(); } catch { /* noop */ }
               plantRingWeight = 1;
             }
           }
-          // ceremony seals the plot at its current role — the one solemn act
+          // ceremony seals the plot at its current role — the one solemn
+          // act. The seal tolls a diatonic triad rooted at that role: a
+          // sealed home tolls D major, a sealed store G major, a sealed
+          // event A minor, a sealed tree C major. Every seal is the same
+          // chord *shape* at a different *pitch*.
           if (e.tier >= 3 && !activePlant.sealed) {
             activePlant.sealed = true;
             try { A().bell(); } catch { /* noop */ }
+            if (isPlayableRole(activePlant.role)) {
+              ringChord(chordForCeremony(activePlant.role), 520, 34);
+            }
             try { haptics.bloom(); } catch { /* noop */ }
             plantRingWeight = 1;
             idleWrite.schedule();
@@ -448,7 +494,9 @@ export default function City() {
           const detent = Math.PI / 2;
           if (Math.abs(e.angle) < detent * 0.9) return;
           season = nextSeason(season, e.angle > 0 ? 1 : -1);
-          try { A().playNote(44 + SEASON_ORDER.indexOf(season) * 2, 320); } catch { /* noop */ }
+          // each season lands on a different scale degree of the mode —
+          // the year rounds through bud → fruit → harvest → hearth
+          ring(noteForSeason(season), 320);
           try { haptics.detent(); } catch { /* noop */ }
           idleWrite.schedule();
           return;
@@ -465,9 +513,11 @@ export default function City() {
 
       flick: (e) => {
         if (e.fingers !== 1) return;
-        // a flick from the ground → ring a chime at that point;
-        // people nearby drift toward it (a brief attractor)
-        try { A().playNote(60 + Math.floor(e.angle * 4) % 12, 260); } catch { /* noop */ }
+        // a flick from the ground → ring a chime at that point; people
+        // nearby drift toward it (a brief attractor). The chime rings one
+        // octave above the tonic, angle-picked but always in-mode, so a
+        // flick never introduces a note that fights the settlement.
+        ring(noteForFlickAngle(e.angle), 260);
         try { haptics.chop(); } catch { /* noop */ }
         const px = e.x / width;
         const py = e.y / height;
@@ -498,10 +548,12 @@ export default function City() {
         weatherWind = Math.max(-1, Math.min(1, weatherWind + (e.intensity - 0.5) * 0.4));
       },
       knock: () => {
-        // one bell across the town, the people gather to the nearest event
-        try { A().bell(); } catch { /* noop */ }
-        try { haptics.detent(); } catch { /* noop */ }
+        // one bell across the town — the tutti chord, same as three-finger
+        // tap. The knock and the tutti tap answer the same civic call.
         const events = plots.filter((p) => p.role === "event");
+        try { A().bell(); } catch { /* noop */ }
+        ringChord(bellChord(events.length), 380, 28);
+        try { haptics.detent(); } catch { /* noop */ }
         if (events.length === 0) return;
         for (const person of people) {
           person.targetPlotId = events[0].id;
@@ -517,7 +569,10 @@ export default function City() {
         nightOn = e.faceDown;
         if (e.faceDown) {
           cityTimeMs = Math.floor(cityTimeMs / CITY_DAY_MS) * CITY_DAY_MS + CITY_DAY_MS * 0.75;
-          try { A().playNote(38, 320); } catch { /* noop */ }
+          // night is the settlement's tonic sunk two octaves — the hearth
+          // note transposed into the low register. The room's day-clock
+          // jumps, the veil closes, and the tonic falls to bass at once.
+          ring(noteForRole("home") - 24, 320);
           try { haptics.detent(); } catch { /* noop */ }
         }
       },
@@ -635,16 +690,6 @@ export default function City() {
           // homes reliably spawn; the others are inhabited by history
         }
         if (p.role === "home") spawnDwellersFor(p);
-      }
-    }
-
-    function roleTier(role: PlotRole): number {
-      switch (role) {
-        case "empty": return 0;
-        case "home": return 1;
-        case "store": return 2;
-        case "event": return 3;
-        case "tree": return 4;
       }
     }
 
