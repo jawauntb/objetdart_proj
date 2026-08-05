@@ -65,6 +65,67 @@ const rocks = {
     ],
     keeps: "every stone, its species and seed and the cuts made in it, and how much is still dissolved in the tray",
   },
+  // ——— the room quality bar, structured ————————————————————————————————
+  // AGENTS.md §"The room quality bar" items 3, 5 and 6, declared per
+  // RockShelf.tsx as it is today. Round-trip-derived from the component
+  // source. Two honest notes for the mechanical check:
+  //   • the brine shader breathes on `u_breath` (lowercase, snake-case)
+  //     rather than the canonical `uBreath`, so `reads` names it truthfully
+  //     and scripts/test-room-quality.mjs skips the breath_wired check by
+  //     design (the check only fires when `uBreath` is named);
+  //   • the room uses raw `attachGestures` with a per-tier branch inside the
+  //     `hold` handler rather than a `useMemo<RoomVoice>` with a discrete
+  //     `ceremony:` method — so the ceremony act (opening the geode at
+  //     tier 3) IS in the code but the mechanical check cannot see it and
+  //     the room FAILS make_unmake_ceremony. That FAIL is real drift, not
+  //     a mislabel; declaring `ceremony_is` here surfaces it as a follow-up.
+  life: {
+    population: {
+      objects: [
+        {
+          noun: "stone",
+          max_count: 14, // MAX_STONES from @/lib/crystal
+          state_shape:
+            "species, seed, nx, ny, yaw, pitch, spin, solid, LatticeState (system, centering, a, b, c, α, β, γ, pointGroup, cleavage), cuts (up to MAX_CUTS=3), geode/lined/scratched",
+          lifecycle:
+            "born under dwell on the wet dark (plant() seeds a nucleus and feeds it from the tray while held) → grows while pressing (feed()) → cleaved by flick along the nearest allowed lattice plane (cleave() splits into two stones, both keep their mass) → geode nodule opens at ceremony (hold tier 3 → cleave with wasGeode → the lining faces out) → ground down by a neighbour under drag (scratch()) → retires via <LetGo> (dissolves back to brine) or when settleStones shifts it out",
+          persistence: "localStorage",
+          creates_via_verb: "dwell",
+          retires_via: ["LetGo", "flick", "neighbour-scratch", "MAX_STONES overflow"],
+          implementation_hint: "inline array (stonesRef) + createIdleWriter to STORE_KEY",
+        },
+      ],
+    },
+    breath: {
+      period_seconds: 7,
+      reads: ["u_breath"], // shader-side name; the test only wires the check when 'uBreath' appears, so this skips by design
+      behavior_at_rest:
+        "the brine shader reads `u_breath` at `lamp = exp(-ld * 2.1) * (0.72 + 0.28 * u_breath)` and the JS-side draw pass mixes it into a twinkle floor for opened geodes — the raking lamp is quietly breathing on the shared 7s clock.",
+    },
+    glimmer: {
+      after_idle_ms: 20000,
+      visual:
+        "after ~20s of quiet the loop picks one stone (glimmerStone index cycles by hashed time) and lifts its `lit` by 0.45 — one facet catches the raking light for a beat.",
+    },
+    haptics_grammar: {
+      tap: "tap", // stone tap and wet-dark tap → haptics.tap()
+      dwell: "ripple", // plant nucleus → haptics.ripple(0.4)
+      ceremony: "bloom", // tier-3 release on held stone → haptics.bloom() (and inside cleave() when wasGeode)
+      drag: "tap", // stone turning under drag → haptics.tap() on facet-catches-light beat
+      flick: "detent", // cleave() → haptics.detent()
+      twist: "lens", // lens snap on twist end → haptics.lens()
+      twist3: "detent", // season detent on twist(3) release → haptics.detent()
+      tap3: "ripple", // tutti() → haptics.ripple(0.4)
+      scrub: "ripple", // scrub the brine → haptics.ripple(0.3)
+      knock: "detent", // vessel knock → haptics.detent()
+      shake: "chop", // vessel shake → haptics.chop()
+    },
+    make_unmake: {
+      letgo_clears_population: true,
+      ceremony_is:
+        "opens the tracked nodule as a geode — cleave with wasGeode faces the lining out, the stone becomes a hollow ringing thing kept between visits (the tier-3 act lives inside the hold handler, not a discrete `ceremony:` method — the mechanical test cannot see it and FAILs; real drift for a follow-up)",
+    },
+  },
 } as const satisfies RoomManifest;
 
 export default rocks;

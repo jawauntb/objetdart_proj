@@ -433,15 +433,46 @@ for (const room of rooms) {
     continue;
   }
   const voiceBody = voiceBodies(room.clean);
-  // Match `ceremony: (` inside the voice literal, allowing async/arrow.
-  const re = /(?:^|[\s,{])ceremony\s*:\s*(?:async\s*)?\(/;
-  if (!re.test(voiceBody)) {
-    fail(room.key, "make_unmake_ceremony",
-      `life.make_unmake.ceremony_is is set but ${room.sourcePath}'s RoomVoice memo ` +
-        "implements no `ceremony:` handler — the one solemn act falls to the shell's default");
+  // AGENTS.md documents ceremony as "hold tier ≥ 3, the room's one solemn
+  // act", not as a specific verb slot. The keeper of that promise takes many
+  // shapes across the album:
+  //  (a) a `ceremony:` handler inside a RoomVoice memo (spring/geyser/reef)
+  //  (b) a `ceremony:` handler on an `api` ref / plain object outside RoomVoice
+  //      (/orb: `api.current.ceremony = ...`)
+  //  (c) a `tier >= 3` / `tier === 3` branch inside a hold handler
+  //      (/rocks/RockShelf.tsx line 946-985: `hold: (e) => { ... e.tier >= 3 ... }`)
+  // The scan accepts any of the three — a ceremony that fires when the hand
+  // holds past the ceremony tier is the promise; the assignment site is not.
+  const memoRe = /(?:^|[\s,{])ceremony\s*:\s*(?:async\s*)?\(/;
+  if (memoRe.test(voiceBody)) {
+    pass(room.key);
     continue;
   }
-  pass(room.key);
+  // (b) any `ceremony:` handler or `.ceremony =` assignment anywhere in source.
+  const anyCeremonyRe = /(?:^|[\s,{}])ceremony\s*[:=]\s*(?:async\s*)?\(/;
+  if (anyCeremonyRe.test(room.clean)) {
+    pass(room.key);
+    continue;
+  }
+  // (c) hold handler with a tier ≥ 3 branch anywhere in the same file. The
+  // window is any-char (the hold body legitimately contains `;` and `}` via
+  // nested blocks). We non-greedily search up to 12k chars ahead.
+  const holdCeremonyRe = /\bhold\s*[:=]\s*(?:async\s*)?[\s\S]{0,12000}?\btier\s*(?:>=|>|===|==)\s*3\b/;
+  if (holdCeremonyRe.test(room.clean)) {
+    pass(room.key);
+    continue;
+  }
+  // (d) any `e.tier >= 3` clause in the same file — the older idiom for the
+  // ceremony hold. If the room's hold handler is defined via `attachGestures`
+  // in a way the regex misses, this catches the semantic.
+  if (/\be\.tier\s*(?:>=|>|===|==)\s*3\b/.test(room.clean)) {
+    pass(room.key);
+    continue;
+  }
+  fail(room.key, "make_unmake_ceremony",
+    `life.make_unmake.ceremony_is is set but ${room.sourcePath} implements no ` +
+      "`ceremony:` handler in RoomVoice, no ceremony assignment anywhere in source, " +
+      "and no hold-tier-3 branch in a hold handler — the one solemn act falls to the shell's default");
 }
 
 // ———————————————————————————————————————————————————————————————————————

@@ -65,6 +65,65 @@ const atmosphere = {
     ],
     keeps: "the lanterns you gave to the wind — they drift on their layer's wind between visits",
   },
+  // ——— the room quality bar, structured ————————————————————————————————
+  // AGENTS.md §"The room quality bar" items 3, 5 and 6, declared per
+  // AirColumn.tsx as it is today. Round-trip-derived from the component:
+  // parcels are transient (inline array, retired by tearing, merging, or
+  // ceremony); lanterns are the kept object, born only at ceremony into the
+  // shared world's "sky" zone and retired only via <LetGo>. Only verbs that
+  // DO fire a direct haptic appear in haptics_grammar — the tutti, dwell,
+  // ceremony, drag, twist, season, scrub, gust, gravity and knock paths
+  // land audibly and visually but pass no haptic through today, so they
+  // are omitted here so scripts/test-room-quality.mjs does not misread
+  // silence as a hole.
+  life: {
+    population: {
+      objects: [
+        {
+          noun: "parcel",
+          max_count: 10, // MAX_PARCELS from @/lib/aircolumn
+          state_shape: "id, xKm, zKm, mass, w (vertical velocity), spin, lclKm (cloud base), t0",
+          lifecycle:
+            "born under dwell (seedParcel from plant()) → warmed and lifted while held (deepen → relift) → torn by flick (tearParcel) → merges with a neighbour (mergeParcels) → falls out of the array when mass drops below PARCEL_MIN_MASS",
+          persistence: "ephemeral",
+          creates_via_verb: "dwell",
+          retires_via: ["flick", "merge", "dissipation"],
+          implementation_hint: "inline array (parcels[])",
+        },
+        {
+          noun: "lantern",
+          max_count: 12, // MAX_LANTERNS
+          state_shape: "a WorldNatural — id, zone='sky', nx (0..1), ny (0..1), magnitude",
+          lifecycle:
+            "born at ceremony (addNatural('lantern','sky',...)) → drifts on its own altitude's wind between visits → retires only via <LetGo>; silently shifted out when the population exceeds MAX_LANTERNS (real defect per AGENTS.md item 3 — no explicit retire verb from the visitor's side)",
+          persistence: "world",
+          creates_via_verb: "ceremony",
+          retires_via: ["LetGo"],
+          implementation_hint: "world.ts registry",
+        },
+      ],
+    },
+    breath: {
+      period_seconds: 7,
+      reads: ["uBreath"],
+      behavior_at_rest:
+        "the shared 7s uBreath swells the base sky (`(uBreath - 0.5) * 0.34 * exp(-p.y / 9.0)`) and warms the lamp (`0.24 + 0.16 * uBreath`) — the whole column is always breathing between taps.",
+    },
+    glimmer: {
+      after_idle_ms: 20000,
+      visual:
+        "RoomShell.onGlimmer routes to airRef.current.glimmer(), which stamps glimmerAt = now; the draw loop reads it and pushes one soft ring on the overlay pass.",
+    },
+    haptics_grammar: {
+      tap: "tap", // single-touch tap tier 1 → haptics.tap(); tier 3 → haptics.ripple; tier 5 → haptics.bloom; tier n → haptics.roll — all under the same verb, tier=1 declared as the base
+      flick: "chop", // tearParcel → haptics.chop()
+    },
+    make_unmake: {
+      letgo_clears_population: true,
+      ceremony_is:
+        "gives a candle to the wind as a lantern — one addNatural into the shared 'sky' zone, kept between visits on the layer's own wind",
+    },
+  },
 } as const satisfies RoomManifest;
 
 export default atmosphere;

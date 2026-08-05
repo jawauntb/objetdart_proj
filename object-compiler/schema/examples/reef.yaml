@@ -1,0 +1,292 @@
+# /reef — a coral colony, at the coast band, ringing behind the foam.
+#
+# Placement is the ordinal decision (docs/new-room.md §1). At the ~metre scale
+# of the shore band a reef is the coast's other face — where /aphros paints the
+# surface foam and /waves paints the wavefront, the reef is the LIVING FRAME
+# built from below by many small mouths eating what the current carries. It
+# joins the shore ring behind /aphros (`ringAfter: aphros`), so the twist
+# order becomes: /coast → /ocean → /tide → /waves → /sine → /circularity →
+# /pretext → /aphros → /reef → /coast. A peer of the sea's other four
+# instruments; a peer of the deep the current runs through.
+#
+# The sigil is "growth" — a reef is exactly what growth does at the coast
+# scale: a slow, deterministic accumulation, tuned by illumination overhead
+# and by the current that feeds and shears. The "aphros" sigil was tempting
+# because the foam already carries that mark next door, but the reef's
+# invariant is the LIVING FRAME below the waterline, not the fleeting
+# surface — the growth glyph reads correctly through a decade's polyps.
+#
+# The invariant type is **lattice** — coral polyps sit at discrete anchor
+# points on a growing calcite substrate, each polyp's size a scalar the
+# closed-form logistic advance walks toward saturation. That is the fresh
+# stress the compiler needed: spring/geyser/pebble all rode `ledger`; the
+# retrieval bank's `lattice` slice is /rocks, so the LLM sees a completely
+# different family than the peer /aphros or the nearest sibling /spring.
+
+key: reef
+
+placement:
+  kind: peer
+  circle: shore
+  band: coast
+  label: "the reef"
+  ringAfter: aphros
+
+sigil: growth
+desc: "the colony, ringing at its cornerstones"
+cluster: nature
+dark: true
+home_priority: 9
+ambient_profile: aphros
+storage_key: "objetdart:reef:v1"
+
+invariant: >
+  a lattice of coral polyps at discrete anchor points on a calcite substrate,
+  each polyp carrying a size s ∈ [0, 1] under a shared current θ and a
+  depth-dependent illumination gradient I(y). every polyp grows toward
+  saturation on a closed-form logistic, and the load-bearing map is
+  size → pitch — a small polyp rings high, a mature one rings low, and
+  from the ring alone you recover its size.
+
+material: 2d-over-shader
+noun: polyp
+
+domain_lib:
+  name: coralflow
+  invariant_type: lattice
+
+palette:
+  bg:      "#020814"
+  bg2:     "#0a2432"
+  glow:    "#eaa87a"
+  accent:  "#4ea9a2"
+  accent2: "#c26a52"
+  ink:     "#e8ede5"
+
+visual_style:
+  subject: "a hand's width of sunlit reef in section — a shallow water column above the substrate, a colony of coral polyps at discrete anchor points, a slow lateral current shearing the water"
+  form_language: [SDF, value-noise-FBM, point-cloud, hand-painted]
+  motion_character: drifting
+  reference_notes:
+    - "a botanical / marine-biology section illustration: bright water above, deepening turquoise below, warm coral tissue picking up the sunlit register"
+    - "each polyp is an SDF disc plus a warm additive corona whose brightness IS its live size — invert the corona and you recover the colony"
+    - "the current is a slow diagonal warp on the water column, painted by fbm at a low frequency; the reef stands still as the water passes"
+  mood: "patient, luminous, held below the surface — the colony has been building for years before the visitor arrived"
+  gesture_feedback_style: "a tap rings a polyp at its size (pitch = ringHzFor(size)); a dwell recruits a new polyp whose corona brightens with widening size; the ceremony seals it as a cornerstone, kept between visits; a hard knock dislodges every unsealed polyp below a threshold — the room's touch-reachable secret"
+
+verbs_answered:
+  - tap
+  - dwell
+  - ceremony
+  - drag
+  - flick
+  - twist
+  - twist3
+  - tap3
+  - drag3
+  - hold3
+  - scrub
+  - drum
+  - arrows
+  - tilt
+  - shake
+  - knock
+  - flip
+
+guide:
+  title: "the reef — polyp, colony, cornerstone"
+  scale: >
+    the coast band — shore peer behind the foam, ahead of the coast itself:
+    a hand's width of sunlit reef in section, where a colony of coral polyps
+    settles the calcite frame that will hold the next generation.
+  essence: >
+    a colony of coral polyps at discrete anchor points on a growing calcite
+    substrate, each carrying a size under a shared current and a depth-based
+    illumination. every polyp's ring IS its size, so from the pitch alone you
+    recover how mature it is; the shallowest and lightest polyps grow
+    fastest, but the current can shear a young recruit off the frame if you
+    knock the reef hard enough. nothing on the shelf is created except what
+    the sun gave from above or the current carried past.
+  moves:
+    - "tap → a ripple, and the nearest polyp rings at its own pitch; small polyps ring high, cornerstones ring low, so the map is legible before it is explained"
+    - "dwell → recruits a new polyp at the finger, its size climbing on a logistic curve; keep pressing and the polyp matures faster toward saturation"
+    - "ceremony (hold to the tier) → seals the polyp as a cornerstone — kept between visits, an anchor for what settles next"
+    - "drag → the current lens shears, and the water column slides across the reef; polyps do not move, but the fbm-warped water reads the drag"
+    - "flick → throws a spat of gametes at that point — a small ring wavefront, its pitch the local illumination"
+    - "twist → raises the colony lens: every polyp's size as a labelled tick, the current strength, the illumination gradient, and the mean pitch as a barometer of the whole colony's maturity"
+    - "twist3 → turns the year through illumination; from midsummer's peak growth to midwinter's slow, the colony wintering and waking"
+    - "tap3 → tutti; every polyp rings at once, one chord of sizes read across the whole colony"
+    - "drag3 → the world-law: down is illumination (I up), across is current strength (nutrient delivery)"
+    - "hold3 → time dilation while held; the ledger's clock runs slow so the growth curves can be inspected"
+    - "scrub → agitates the water column above the reef; nutrients redistribute and the current briefly homogenizes"
+    - "drum (two hands alternating) → the tidal beat between two zones; feeding pulses that speed nearby polyps"
+    - "arrows → walk the reef cursor; enter held recruits and matures a polyp at the cursor; escape lowers the lens"
+    - "tilt / shake / knock / flip (once invited) → the water leans, the surface scatters, a struck reef sheds its unsealed recruits, face-down is night"
+  finds:
+    - "the pitch is the size, and the map is invertible — two polyps ringing the same note are the same age, no matter where they sit on the reef"
+    - "a colony left through summer under bright light matures its recruits from the top down; the deep polyps stay small until the current strengthens"
+    - "two polyps within a hand's width share a nutrient stream, so recruiting a third near them slows the pair's growth for a season"
+    - "a hard knock (touch-reachable secret) dislodges every unsealed polyp under a size threshold — the cornerstones stay, the young are swept back out"
+    - "a fortnight's absence is read off the closed-form logistic — the reef does not owe the visitor the growth they missed"
+  keeps: >
+    every polyp with its size and its ring, the current direction and
+    strength, the illumination gradient's angle, the season the year had
+    reached, and the hour it was last looked at.
+
+# ——— the "alive at rest" / "make and unmake" / "haptics" contract ————————
+# Round-trip-derived from the intent of the physics library (coralflow.ts):
+# MAX_POLYPS = 24 anchor points on the substrate, size 0..MAX_SIZE=1, born
+# by dwelling on the reef (plantPolyp at size 0, deepenPolyp on a logistic
+# saturating curve), sealed at ceremony (size = MAX_SIZE, sealed=true, kept
+# between visits, becomes cornerstone). Retires by LetGo, or by knockSweep
+# for unsealed polyps under DISLODGE_THRESHOLD when a knock lands hard.
+life:
+  population:
+    objects:
+      - noun: polyp
+        max_count: 24  # MAX_POLYPS from src/lib/coralflow.ts
+        state_shape: "id, x, y, size (0..MAX_SIZE=1), sealed (bool — cornerstone), phase seed"
+        lifecycle: "born under dwell (plantPolyp at size 0) → size grows on saturating logistic `MAX_SIZE * (1 - exp(-r_eff * elapsed))` while held → sealed at ceremony (size = MAX_SIZE, sealed=true, kept between visits as a cornerstone) → retires via <LetGo> (population-wide) or via knock (unsealed polyps under DISLODGE_THRESHOLD when a hard knock lands — the room's touch-reachable secret)"
+        persistence: LetGo
+        creates_via_verb: dwell
+        retires_via: [knock, LetGo]
+        implementation_hint: SceneObjectSpec
+  breath:
+    period_seconds: 7
+    reads:
+      - "uBreath uniform (fragment shader — water column brightens `0.86 + 0.14 * uBreath`)"
+      - "uBreath uniform (Snell surface highlight `0.85 + 0.15 * uBreath`)"
+      - "uBreath uniform (mineral bloom on the substrate `0.6 + uBreath * 0.4`)"
+    behavior_at_rest: "three visible registers ride the 7s clock: the water column brightens/dims by ±14%, the Snell surface highlight rides ±15%, the calcite substrate's mineral bloom swells by ±40% — the reef is never still even between taps"
+  glimmer:
+    after_idle_ms: 20000
+    visual: "one polyp breathes a wider ring, alone, and nothing is said — the glimmer handler picks a polyp by `state.tau * 977 % state.polyps.length` and pushes a soft ripple through the water above it"
+  haptics_grammar:
+    tap: ripple             # ringHere → haptics.ripple(0.3 + weight * 0.35); tap-on-polyp → tap
+    dwell: tap              # plantPolyp → haptics.tap(); deepen ticks are silent (60ms cadence would over-vibrate)
+    ceremony: bloom         # sealPolyp → haptics.bloom() — the room's solemn act (cornerstone)
+    flick: chop             # gamete spat thrown → haptics.chop()
+    twist: lens             # lens raise/lower → haptics.lens()
+    twist3: detent          # season detent on release (illumination cycle)
+    tap3: roll              # tutti → haptics.roll()
+    scrub: tap              # stir the water column
+    drum: tap               # tidal beat between two zones
+    knock: detent           # struck reef rings the colony; the touch-reachable secret dislodges unsealed young — haptics.detent()
+    arrows: tap             # moveCursor / keyTap
+  make_unmake:
+    letgo_clears_population: true   # `clear` empties `state.polyps` and fires haptics.roll()
+    ceremony_is: "sealing the polyp at full size — the cornerstone anchors the calcite frame, kept between visits, an anchor for what settles next"
+
+# ——— the three LLM slots ————————————————————————————————————————————————
+
+shader_intent: >
+  paint one hand-width of sunlit reef in section, seen from the front. the
+  upper third is the surface — a wavy waterline above bright water; below
+  it a deepening turquoise column meets the reef substrate. the load-
+  bearing shader map is DEPTH → ILLUMINATION: the sunlit column brightens
+  the water and the polyp tissue registers, deep water darkens toward
+  `bg` → `bg2`, and every polyp's warm corona is exactly as bright as its
+  live size the domain module reports (invert the corona brightness and
+  you recover the polyp's local size). every polyp is drawn as an SDF
+  disc with an additive corona through the shared instanced pass
+  (`src/lib/scene/population-layer.ts` and `src/lib/webgl/stage.ts`);
+  no `createRadialGradient`, no per-frame allocation. the current is a
+  low-frequency fbm warp on the water column, animated by `uTime` and
+  the `uCurrent` uniform, so a drag can lean the whole water above the
+  reef without moving the polyps themselves. the calcite substrate is a
+  band of value-noise FBM at the pool floor, modulated by mineral bloom
+  in `accent2` — the reef ages visibly with each cornerstone. ripple
+  wavefronts from taps and flicks propagate as gaussian rings through
+  the water column (a `vec4[24]` uniform, xy pos / age / intensity).
+  palette registers: `bg` is deep water dark, `bg2` is mid-water column,
+  `glow` is sunlit coral tissue (the load-bearing highlight), `accent`
+  is cool turquoise water in motion, `accent2` is warm mineral / mature
+  coral (the rust register), `ink` is readable text over the darkest
+  tile. the twist lens is a second render path: every polyp's size as a
+  labelled tick, the current strength, the illumination gradient's
+  angle, the count of cornerstones, and the mean pitch as a barometer
+  of the whole colony's maturity.
+
+domain_intent: >
+  write `src/lib/coralflow.ts` around one exported
+  `ReefState = { polyps, current, illum, tau, seedKey }`. `polyps` is a
+  `Polyp[]` where each Polyp is `{ id, x, y, size, sealed, phase }`;
+  `current` is a scalar in [-1, 1] (negative = leftward, positive =
+  rightward), `illum` is a scalar in [0, 1] (0 = midnight, 1 =
+  midday), `tau` is seconds of maturity. climate `Climate = { warmth,
+  wet }` drives two responses: `illuminationRate(warmth)` scales the
+  effective illumination (a warmer year is a longer growing season),
+  and `currentStrength(wet)` scales the current magnitude (a wet year
+  brings stronger currents that both feed and shear). the growth law
+  is a closed-form logistic: every polyp's size advances by
+  `size(t + dt) = 1 - (1 - size(t)) * exp(-r_eff(polyp) * dt)`, where
+  `r_eff(polyp) = R_BASE * illuminationAt(polyp.y) * (1 - SHEAR_C *
+  |current|)`. `illuminationAt(y)` is a monotone-decreasing map from
+  section depth to a growth multiplier (top of the reef gets more sun
+  than the bottom); this is closed-form, never a per-frame loop.
+  `advanceExact(state, seconds, climate)` walks the elapsed time
+  forward as a single closed-form step across every polyp, capped at
+  `MAX_ELAPSED_S = 14 days` so a month away is not a century of drift.
+  the LOAD-BEARING INVERTIBLE MAP is SIZE → PITCH:
+  `ringHzFor(size) = PITCH_BASE_HZ * 2^(-size / PITCH_SCALE)` (note the
+  MINUS: bigger polyps ring LOWER — a bell's fundamental drops as its
+  mass grows), and `sizeForRingHz(hz)` exactly inverts it. from the
+  ring alone the visitor recovers the polyp's size; the test pins the
+  round-trip across seeds and sizes. export
+  `plantPolyp(state, x, y, size)` (refuses outside the reef bounds,
+  refuses at cap, deterministic phase from `mulberry32(hashSeed(seedKey,
+  id))`), `deepenPolyp(state, id, dSize)` (bounded at MAX_SIZE, no-op
+  on sealed), `sealPolyp(state, id)` (size = MAX_SIZE, sealed = true —
+  the cornerstone), `knockSweep(state, intensity)` (returns
+  `{state, dislodged}` — every unsealed polyp under
+  `DISLODGE_THRESHOLD * (1 - intensity * KNOCK_KAPPA)` is retired; the
+  cornerstones stay), a `nearestPolyp(state, x, y, within)` for the tap
+  handler, `meanSize(state)` and `cornerstoneCount(state)` for the
+  lens, and `totalMass(state)` as the conservation observable. no DOM,
+  no audio, no `Math.random`, no `Date.now`.
+
+verb_intent: >
+  every handler reads `ReefState` from a stable `apiRef` and forwards to
+  a method on `ReefApi` (mirrors `src/components/Spring.tsx`'s
+  imperative surface pattern). `tap` rings the polyp at the finger,
+  pitch derived from its size via `ringHzFor` — a smaller `e.intensity`
+  rings a smaller ripple, and the pitch alone tells the size, so a tap
+  on a young recruit never sounds like a tap on a cornerstone. `dwell`
+  plants a polyp at the finger with size 0 (refuses outside the reef
+  bounds); while held, the size grows on the logistic
+  `MAX_SIZE * (1 - exp(-elapsed / DWELL_SIZE_TAU_MS))`, so a two-second
+  dwell grows twice as far as a one-second dwell but a ten-second dwell
+  only 1.5× as far as five — never fires identically at 900ms and
+  2400ms. `ceremony` calls `sealPolyp(state, id)` on the currently-
+  planted polyp (or the nearest one within reach) — the cornerstone —
+  and writes it to the shared `world.ts` bus so it keeps between
+  visits. `drag` slides the current lens — a linear write into
+  `state.current` proportional to `e.dx`, the ledger unchanged. `flick`
+  throws a gamete spat at that point (a small ring wavefront; the
+  pitch is the local illumination). `scrub` (a finger circling)
+  writes an angular velocity into the water column that decays on its
+  own clock. `drum` (two hands alternating) beats the wave field
+  between the two contact zones — a tidal feeding pulse that briefly
+  raises `state.illum`. `twist` raises the colony lens; a `tap` with
+  `e.fingers === 2` (step back) lowers it. `drag3` writes into
+  `Climate` — `e.dy` is rate-of-change on illumination (I up), `e.dx`
+  is rate-of-change on current strength, both bounded so a maximal
+  drag can never take I above 1 or current below -1. `twist3` moves
+  the year through `Climate`'s combined `warmth` axis, and
+  `advanceExact` catches the ledger up on the closed form. `hold3`
+  slows the room's clock (a real dt scale, not an animation trick).
+  `tap3` (tutti) rings every polyp at once — one chord of sizes across
+  the whole colony. the vessel: `tilt` leans the water column, `shake`
+  scatters the ripples, `knock` calls `knockSweep(state, intensity)` —
+  a hard knock dislodges every unsealed polyp under
+  `DISLODGE_THRESHOLD * (1 - intensity * KNOCK_KAPPA)`. this is the
+  room's touch-reachable secret: the cornerstones are safe, the young
+  are not. `flip` is night; the illumination goes to a low register
+  and the ledger keeps its closed-form clock. `arrows` walk a reef
+  cursor; enter held is a keyboard dwell; escape lowers the lens. no
+  room-local timing constants — every threshold is from
+  `gesture/core.ts`.
+
+chrome:
+  travel: true
+  peers: true

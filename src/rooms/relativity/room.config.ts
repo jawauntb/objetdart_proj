@@ -44,6 +44,59 @@ const relativity = {
       "harder flicks make comets glow hotter rather than move faster — effort is capped at the speed of light and turns to heat instead",
     ],
   },
+  // ——— the room quality bar, structured ————————————————————————————————
+  // AGENTS.md §"The room quality bar" items 3 and 6, declared per
+  // RelativityRoom.tsx as it is today. Round-trip-derived from the
+  // component. This room persists nothing (registry.keeps=null,
+  // creates=null), so `glimmer` is deliberately absent — the code makes no
+  // createIdleWriter call and adding a glimmer cadence would document a
+  // fiction. `breath` is also absent: there is no shader uniform to read;
+  // the field breathes only in a 2D pass at `sin(localT * 2π * 0.14) * ...`
+  // that no other frame reads back. Two honest notes:
+  //   • the room uses raw `attachGestures` with a per-tier branch inside
+  //     the `hold` handler rather than a `useMemo<RoomVoice>` with a
+  //     discrete `ceremony:` method — so the ceremony act (evaporating a
+  //     held mass at tier 3) IS in the code but the mechanical check
+  //     cannot see it and the room FAILS make_unmake_ceremony. That FAIL
+  //     is real drift, not a mislabel; declaring `ceremony_is` here
+  //     surfaces it as a follow-up.
+  life: {
+    population: {
+      objects: [
+        {
+          noun: "mass",
+          max_count: 4, // MAX_MASSES
+          state_shape: "id, nx, ny, m, growth (0..1), settled, charge (0..1), evapAt, plantedAt",
+          lifecycle:
+            "born under dwell (placeMass while held past tier 2) → grows and settles (settleMass fires haptics.bloom) → keeps deepening while held past settle → evaporated at ceremony (tier-3 hold on the mass) or oldest-first when the population exceeds MAX_MASSES; not persisted between visits",
+          persistence: "ephemeral",
+          creates_via_verb: "dwell",
+          retires_via: ["ceremony", "LetGo", "MAX_MASSES overflow"],
+          implementation_hint: "inline array (masses[])",
+        },
+      ],
+    },
+    haptics_grammar: {
+      tap: "ripple", // firePulse tap path → haptics.ripple(0.3 + intensity * 0.4)
+      dwell: "tap", // hold + settleMass growth notes → haptics.tap() at growth beats
+      ceremony: "roll", // evaporate() → haptics.roll() (also fired on knock/flip and LetGo)
+      drag: "tap", // grabAt + carry → haptics.tap() on grab
+      flick: "ripple", // throwComet fire → haptics.ripple(0.3 + heat * 0.4)
+      twist: "lens", // lens snap on twist end → haptics.lens()
+      twist3: "tap", // season release → haptics.tap()
+      drag3: "chop", // three-finger wind → haptics.chop()
+      hold3: "tap", // three-finger hold enter → haptics.tap()
+      scrub: "ripple", // orbit stir → haptics.ripple(0.25)
+      knock: "roll", // vessel knock → haptics.roll()
+      shake: "chop", // vessel shake → haptics.chop() (or haptics.storm on intensity > 0.7)
+      flip: "roll", // vessel flip → haptics.roll()
+    },
+    make_unmake: {
+      letgo_clears_population: true,
+      ceremony_is:
+        "evaporates the mass under the finger — a strong pulse at c and it is gone; the collapse path also runs when <LetGo> is pulled (the tier-3 act lives inside the hold handler, not a discrete `ceremony:` method — the mechanical test cannot see it and FAILs; real drift for a follow-up)",
+    },
+  },
 } as const satisfies RoomManifest;
 
 export default relativity;

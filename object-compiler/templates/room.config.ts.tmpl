@@ -40,6 +40,11 @@ const {{spec.key}} = {
     finds: {{spec.guide.finds | as_list}},
     keeps: "{{spec.guide.keeps}}",
   },
+  // The felt-bar declaration for scripts/test-room-quality.mjs — AGENTS.md
+  // §"The room quality bar" items 3/5/6, round-trip-derived from spec.life
+  // by the compiler (see phase-3-recompile.md for why this block ships in
+  // the manifest and phase-5-<key>.md for the template synthesis).
+  {{spec.life_manifest_literal}}
 } as const satisfies RoomManifest;
 
 export default {{spec.key}};

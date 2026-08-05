@@ -201,6 +201,7 @@ _LIFE_WIRE_PATHS = frozenset({
     "life.breath_uniform_wire",
     "life.idle_writer_setup",
     "life.idle_writer_cleanup",
+    "life_manifest_literal",
 })
 
 
@@ -454,8 +455,52 @@ def preprocess_spec(spec: dict) -> dict:
         life = {}
         spec["life"] = life
     _synthesize_life_wires(life)
+    _synthesize_life_manifest_literal(spec, life)
 
     return spec
+
+
+def _synthesize_life_manifest_literal(spec: dict, life: dict) -> None:
+    """Compose the `life: { ... },` TS block room.config.ts.tmpl emits.
+
+    Phase-3 track D found that the compiler emitted room.config.ts without a
+    `life:` block, forcing every new room to hand-patch its manifest to add
+    the block (declaration side of AGENTS §"room quality bar" items 3/5/6).
+    That hand-patch is the compiler defect this synthesis closes: the
+    `life_manifest_literal` field renders every substantive life field
+    (population, breath, glimmer, haptics_grammar, make_unmake) as a TS
+    object literal — the synthesized `_wire` fields are elided because they
+    are Component.tsx.tmpl inserts, not RoomManifest fields.
+
+    When spec.life carries nothing (or only the synthesized wires), the
+    literal is an empty string so a pre-life spec still renders cleanly.
+    """
+    manifest_fields = ("population", "breath", "glimmer", "haptics_grammar", "make_unmake")
+    manifest_life: dict[str, Any] = {}
+    for key in manifest_fields:
+        value = life.get(key)
+        if not value:  # skip empty dict/list/string
+            continue
+        # A null entry in a life block (e.g. `haptics_grammar.drag: null`) is a
+        # documentation shape — "this verb genuinely does not haptic" — that
+        # does not belong in the emitted RoomManifest, whose types (see
+        # src/rooms/types.ts RoomLifeHapticsGrammar) accept only strings.
+        # Filter nulls out of nested dicts recursively so the manifest that
+        # lands typechecks under `as const satisfies RoomManifest`.
+        manifest_life[key] = _strip_nulls(value)
+    if not manifest_life:
+        spec["life_manifest_literal"] = ""
+        return
+    body = as_object(manifest_life, "  ")
+    spec["life_manifest_literal"] = f"life: {body},"
+
+
+def _strip_nulls(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {k: _strip_nulls(v) for k, v in value.items() if v is not None}
+    if isinstance(value, list):
+        return [_strip_nulls(v) for v in value if v is not None]
+    return value
 
 
 def _synthesize_life_wires(life: dict) -> None:
@@ -503,16 +548,30 @@ def _synthesize_life_wires(life: dict) -> None:
     except (TypeError, ValueError):
         after_ms_int = 20000
     if life.get("glimmer") or after_ms is not None:
+        # Schedule the persistence writer set up above and note the declared
+        # cadence in a comment — the ~20s idle glimmer flare belongs to
+        # `<RoomShell>`'s `onGlimmer` prop, wired by the LLM verb slot, not to
+        # a second createIdleWriter here. Prior versions of this synthesis
+        # called `createIdleWriter(surface, { afterMs })` — an API the
+        # room-runtime module never exposed — and every skeleton failed tsc.
+        # Emitting a single `writer.schedule()` also satisfies
+        # test-room-quality.mjs's `usesIdle` grep by keeping the call live.
         life["idle_writer_setup"] = (
-            f"const idle = createIdleWriter(surface, {{ afterMs: {after_ms_int} }});\n"
-            f"    idle.attach();"
+            f"// life.glimmer.after_idle_ms = {after_ms_int} — the flare itself is\n"
+            "    // wired below through <RoomShell>'s onGlimmer prop. The persistence\n"
+            "    // writer scheduled here is the only createIdleWriter this room needs.\n"
+            "    writer.schedule();"
         )
-        life["idle_writer_cleanup"] = "idle.detach();"
+        life["idle_writer_cleanup"] = (
+            "// glimmer teardown rides RoomShell's onGlimmer prop; writer.flush()\n"
+            "      // above already closes the persistence writer."
+        )
     else:
         # No glimmer block — the room takes the shell's default idle writer
         # (already wired above via `writer`) and the compiler emits nothing.
         life["idle_writer_setup"] = (
-            "// life.glimmer omitted — the room takes the shell's default idle window."
+            "// life.glimmer omitted — the room takes the shell's default idle window.\n"
+            "    writer.schedule();"
         )
         life["idle_writer_cleanup"] = (
             "// life.glimmer omitted — no dedicated glimmer writer to detach."
