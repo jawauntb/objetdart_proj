@@ -533,11 +533,13 @@ const PLOT_VERT = /* glsl */`
   attribute float a_role;     // 0..3 tile index (home/store/event/tree)
   attribute float a_sealed;   // 0/1
   attribute float a_bornT;    // grow-in progress 0..1
+  attribute float a_seed;     // per-plot hash in [0,1], drives the small per-instance drift so 48 homes read as 48
   uniform vec2 uPixSize;      // canvas CSS width / height
   varying vec2  vUv;
   varying float vRole;
   varying float vSealed;
   varying float vBornT;
+  varying float vSeed;
   void main() {
     vec2 world = a_center + a_pos * a_size;
     // convert CSS-px to NDC: x -> [-1,1], y -> [1,-1] (canvas has y down)
@@ -549,6 +551,7 @@ const PLOT_VERT = /* glsl */`
     vRole = a_role;
     vSealed = a_sealed;
     vBornT = a_bornT;
+    vSeed = a_seed;
     gl_Position = vec4(ndc, 0.0, 1.0);
   }
 `;
@@ -558,6 +561,7 @@ const PLOT_FRAG = /* glsl */`
   varying float vRole;
   varying float vSealed;
   varying float vBornT;
+  varying float vSeed;
   uniform sampler2D uAtlas;
   uniform float uDayFrac;        // 0..1
   uniform vec3  uTintHome;
@@ -578,6 +582,28 @@ const PLOT_FRAG = /* glsl */`
     return uTintTree;
   }
 
+  // Small hue rotation via YIQ — cheap enough for 48 quads, drifts each
+  // plot's roof / awning / canopy off the shared role tint by a few degrees
+  // so a settlement of homes reads as forty-eight separate homes at the
+  // same causal role, not one tile stamped forty-eight times.
+  vec3 hueRotate(vec3 c, float angle){
+    const mat3 toYIQ = mat3(
+      0.299, 0.596, 0.211,
+      0.587, -0.274, -0.523,
+      0.114, -0.322, 0.312
+    );
+    const mat3 toRGB = mat3(
+      1.0, 1.0, 1.0,
+      0.956, -0.272, -1.106,
+      0.621, -0.647, 1.703
+    );
+    vec3 yiq = toYIQ * c;
+    float cs = cos(angle);
+    float sn = sin(angle);
+    vec3 rot = vec3(yiq.x, cs*yiq.y - sn*yiq.z, sn*yiq.y + cs*yiq.z);
+    return toRGB * rot;
+  }
+
   void main() {
     // grow-in: the quad rises out of its own center at plant time. Multiplies
     // both the alpha and the local uv so a newborn plot is a small bright
@@ -586,6 +612,26 @@ const PLOT_FRAG = /* glsl */`
     vec2 local = (vUv - 0.5) / max(0.08, t) + 0.5;
     // outside the atlas tile → the ground shows through
     if (local.x < 0.0 || local.x > 1.0 || local.y < 0.0 || local.y > 1.0) discard;
+
+    // three roughly-independent sub-seeds from the one per-instance hash
+    // — one drives hue, one brightness, one the atlas UV rotation. All
+    // ranges are small on purpose: the causal identity (home vs store
+    // vs event vs tree) must survive the drift.
+    float s1 = fract(vSeed * 1.71 + 0.31);
+    float s2 = fract(vSeed * 2.93 + 0.11);
+    float s3 = fract(vSeed * 5.13 + 0.71);
+
+    // per-plot UV rotation about the tile center — rotates the whole
+    // silhouette a few degrees so a roof pitches slightly differently
+    // for each home, an awning tilts, a mast leans, a canopy turns.
+    float uvAng = (s3 - 0.5) * 0.36;         // ±10.3°
+    float ca = cos(uvAng);
+    float sa = sin(uvAng);
+    vec2 lc = local - 0.5;
+    local = mat2(ca, -sa, sa, ca) * lc + 0.5;
+    // clamp so a rotated corner samples the atlas plate rim, not a
+    // neighbor tile in the shared atlas strip.
+    local = clamp(local, vec2(0.0), vec2(1.0));
 
     vec2 auv = atlasUv(local, vRole);
     float bump = texture2D(uAtlas, auv).r;
@@ -606,6 +652,14 @@ const PLOT_FRAG = /* glsl */`
     float ambient = 0.35;
 
     vec3 tint = roleTint(vRole);
+    // per-plot hue drift — small enough that a home is still a home,
+    // large enough that a row of homes reads as a variety of homes.
+    float hueDrift = (s1 - 0.5) * 0.34;        // ±0.17 rad ≈ ±9.7°
+    tint = hueRotate(tint, hueDrift);
+    // per-plot brightness jitter — some plots read a touch brighter,
+    // some a touch dimmer, so the atlas doesn't visibly stamp.
+    float bright = 0.90 + s2 * 0.18;           // 0.90..1.08
+    tint *= bright;
     // dark parts of the atlas are the plot's plate — a shade of the tint
     // rather than a pure grey, so a home plate reads warm and a tree plate
     // reads cool. The bright silhouette carries the full tint.
@@ -750,6 +804,12 @@ export default function City() {
     const aRole   = new Float32Array(MAX_PLOTS);
     const aSealed = new Float32Array(MAX_PLOTS);
     const aBornT  = new Float32Array(MAX_PLOTS);
+    // Per-plot hash into [0,1], populated once when a plot lands and read
+    // by the shader to drift hue, brightness, and atlas rotation. The seed
+    // is the plot's own — same seed the audio picks from, same seed the
+    // dwellers-per-home ladder picks from — so a plot's look is a
+    // deterministic read of its own state vector, not decoration.
+    const aSeed   = new Float32Array(MAX_PLOTS);
     const plotGeo = new THREE.InstancedBufferGeometry();
     plotGeo.setAttribute("a_pos", new THREE.BufferAttribute(quadCorners, 2));
     const centerAttr = new THREE.InstancedBufferAttribute(aCenter, 2);
@@ -757,16 +817,19 @@ export default function City() {
     const roleAttr   = new THREE.InstancedBufferAttribute(aRole, 1);
     const sealedAttr = new THREE.InstancedBufferAttribute(aSealed, 1);
     const bornAttr   = new THREE.InstancedBufferAttribute(aBornT, 1);
+    const seedAttr   = new THREE.InstancedBufferAttribute(aSeed, 1);
     centerAttr.setUsage(THREE.DynamicDrawUsage);
     sizeAttr.setUsage(THREE.DynamicDrawUsage);
     roleAttr.setUsage(THREE.DynamicDrawUsage);
     sealedAttr.setUsage(THREE.DynamicDrawUsage);
     bornAttr.setUsage(THREE.DynamicDrawUsage);
+    seedAttr.setUsage(THREE.DynamicDrawUsage);
     plotGeo.setAttribute("a_center", centerAttr);
     plotGeo.setAttribute("a_size", sizeAttr);
     plotGeo.setAttribute("a_role", roleAttr);
     plotGeo.setAttribute("a_sealed", sealedAttr);
     plotGeo.setAttribute("a_bornT", bornAttr);
+    plotGeo.setAttribute("a_seed", seedAttr);
     plotGeo.instanceCount = 0;
     // Explicit index draws the four quad corners as two triangles — a plain
     // 6-index list is what Three.js's default TRIANGLES mode expects, and
@@ -1336,13 +1399,29 @@ export default function City() {
         // born-in: 0 → 1 over growMs, starting from bornMs on the city clock
         const age = cityTimeMs - plot.bornMs;
         aBornT[i] = age >= growMs ? 1 : Math.max(0.08, age / growMs);
+        aSeed[i] = hashSeedToUnit(plot.seed);
       }
       centerAttr.needsUpdate = true;
       sizeAttr.needsUpdate = true;
       roleAttr.needsUpdate = true;
       sealedAttr.needsUpdate = true;
       bornAttr.needsUpdate = true;
+      seedAttr.needsUpdate = true;
       plotGeo.instanceCount = n;
+    }
+
+    // Integer → [0,1) hash, splashed on the same shape as Mulberry32's
+    // avalanche so a small integer difference in plot.seed lands in a
+    // very different quadrant of the unit interval. Cheap enough to run
+    // per plot per frame; the write is what matters, not the compute.
+    function hashSeedToUnit(seed: number): number {
+      let n = (seed | 0) >>> 0;
+      n = ((n ^ 0x9e3779b9) >>> 0);
+      n = (Math.imul(n, 0x85ebca6b) >>> 0);
+      n = ((n ^ (n >>> 13)) >>> 0);
+      n = (Math.imul(n, 0xc2b2ae35) >>> 0);
+      n = ((n ^ (n >>> 16)) >>> 0);
+      return n / 4294967295;
     }
 
     // ── overlay drawing (the thin 2D layer) ─────────────────────────────
@@ -1395,9 +1474,12 @@ export default function City() {
         fgctx.stroke();
       }
 
-      // micro-communities: a plot with two or more regulars carries a warm
+      // micro-communities: a plot with two or more regulars carries a cool
       // ring — the visible record of the plot's identity densifying from a
-      // role into a community.
+      // role into a community. The ring is teal so a colony of regulars
+      // reads AGAINST its warm plot rather than dissolving into it (a warm
+      // ring on a warm awning was one plot and one regular class, both
+      // arguing the same hue).
       const regularCountByPlot = new Map<number, number>();
       for (const person of people) {
         if (person.regularStoreId != null) {
@@ -1413,7 +1495,7 @@ export default function City() {
         const px = plot.x * width;
         const py = plot.y * height;
         const radius = 22 + count * 3;
-        fgctx.strokeStyle = `rgba(232, 187, 129, ${Math.min(0.55, 0.18 + count * 0.08)})`;
+        fgctx.strokeStyle = `rgba(74, 158, 158, ${Math.min(0.62, 0.22 + count * 0.10)})`;
         fgctx.lineWidth = 1.5;
         fgctx.beginPath();
         fgctx.arc(px, py, radius, 0, Math.PI * 2);
@@ -1454,8 +1536,15 @@ export default function City() {
           }
         }
         const bodyAlpha = person.hesitating ? 0.6 : 0.9;
-        const bodyColor = person.regularStoreId != null || person.regularEventId != null
-          ? `rgba(232, 187, 129, ${bodyAlpha})`
+        // Regulars wear cool teal, not the settlement's warm candle. The
+        // previous warm body matched the store's own awning tint, so a
+        // regular sitting on the plot they were a regular of disappeared
+        // into it — the micro-community reading collapsed. Teal reads
+        // AGAINST every warm plot in the palette; the person is now a
+        // small cool body on a warm plate.
+        const isRegular = person.regularStoreId != null || person.regularEventId != null;
+        const bodyColor = isRegular
+          ? `rgba(74, 158, 158, ${bodyAlpha})`
           : `rgba(21, 23, 26, ${bodyAlpha})`;
         fgctx.strokeStyle = bodyColor;
         fgctx.lineWidth = 2;
@@ -1465,8 +1554,12 @@ export default function City() {
         fgctx.lineTo(bx, by);
         fgctx.stroke();
         fgctx.fillStyle = bodyColor;
+        // Regulars carry a slightly larger head dot — a colony of regulars
+        // reads as a small ring of round dots around a plot, not as
+        // several strokes indistinguishable from the crowd.
+        const headRadius = isRegular ? 2.0 : 1.4;
         fgctx.beginPath();
-        fgctx.arc(bx, by, 1.4, 0, Math.PI * 2);
+        fgctx.arc(bx, by, headRadius, 0, Math.PI * 2);
         fgctx.fill();
       }
 
