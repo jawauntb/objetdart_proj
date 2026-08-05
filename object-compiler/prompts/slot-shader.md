@@ -107,13 +107,16 @@ room-specific instruction *in* that vocabulary.
 ### The site-wide authoring style — read this first
 
 The compiler substitutes `object-compiler/design/authoring_style.yaml`
-below this line. This is the **design law** of the site: the palette
-tokens (Tidewater Vellum from DESIGN.md), the six framings a room can
-choose, the canonical hex-role → what-it-paints mapping, the AGENTS.md
-paint bar, the form-language taxonomy, the shared clocks (7s breath,
-33.3s tide, 20s glimmer idle), and the default touch vocabulary. These
-are decisions the site makes ONCE — a per-room spec does not re-derive
-them. Treat every value here as the default the shader author obeys.
+below this line. This is the **design law** of the site, and as of
+phase 6 (see `data/object-compiler/audits/phase-6-schema-cleanup.md`)
+it is the AUTHORITATIVE and ONLY source for the six framings, the
+canonical hex-role → what-it-paints register mapping, and the AGENTS.md
+paint bar (the three fields formerly duplicated per-room were removed
+after the phase-5 falsifiability rerun landed at 0.92). It also carries
+the palette tokens (Tidewater Vellum from DESIGN.md), the form-language
+taxonomy, the shared clocks (7s breath, 33.3s tide, 20s glimmer idle),
+and the default touch vocabulary. These are decisions the site makes
+ONCE — treat every value here as the law the shader author obeys.
 
 ```yaml
 {{authoring_style}}
@@ -124,37 +127,20 @@ them. Treat every value here as the default the shader author obeys.
 The compiler substitutes the spec's `visual_style` block below this line
 if one is present. This is *design context specific to THIS room*: the
 subject, the mood, the reference notes, the motion character, the form
-language subset, and the gesture feedback style — the pictorial half of
-the descriptor, the fields that recover reliably from a landed
-screenshot (the phase-2 falsifiability audit landed these four at
-≥ 0.75 mean agreement). If a per-room block RESTATES a field that also
-lives in `authoring_style` above (composition, registers, banned_forms —
-those three are marked `deprecated: true` in the schema as of phase 4),
-the per-room value is a **refinement** for this room only; the site-wide
-default still stands for every other room. If a per-room block omits a
-field, use the site-wide default. If the per-room block itself is empty
-(an older spec, authored before `visual_style` landed), skip to the
-brief.
+language subset, and the gesture feedback style — the six fields that
+survived the phase-4 split and recover reliably from a landed screenshot
+(the phase-5 rerun landed them at 0.92 avg agreement). The block carries
+per-room REFINEMENTS over the site-wide vocabulary above; the framing,
+the register mapping, and the banned forms are NOT restated here —
+those live exclusively in `authoring_style`. If the per-room block
+itself is empty (an older spec, authored before `visual_style` landed),
+skip to the brief.
 
 ```yaml
 {{visual_style}}
 ```
 
-Read the per-room block field by field. Each field is load-bearing —
-and each field either RESTATES a site-wide default (in which case the
-site-wide value in `authoring_style` above already carries the
-authoritative vocabulary) or NAMES a per-room specific.
-
-- **`composition`** *(site-wide default lives in
-  `authoring_style.compositions`; per-room may restate)* — the framing.
-  `side-section` is a vertical slice drawn as if the ground were sliced
-  open and viewed from the front; `top-down` looks straight down onto a
-  plan; `first-person` looks out from a body inside the room;
-  `ambient-column` is a vertical column of material with no ground or
-  sky boundary; `cutaway` reveals a normally hidden interior;
-  `silhouette` reads as the outline of a form against its field. Compose
-  the shader to that framing — do not draw a different picture than the
-  composition names.
+Read the per-room block field by field. Each field is load-bearing.
 
 - **`subject`** — the noun phrase this shader is a picture of. Say it
   once, clearly, in the first comment line of the shader body (as in
@@ -213,19 +199,6 @@ authoritative vocabulary) or NAMES a per-room specific.
   Whichever character is named, `uReduced > 0.5` MUST collapse it toward
   `still`. The reference examples show the pattern.
 
-- **`registers`** *(site-wide default lives in `authoring_style.registers`;
-  per-room may override)* — one entry per hex→role mapping. NAME each
-  register in a comment in the shader (as in `// #6E5A2E — the kept
-  ochre, humus's stored carbon`). Legibility is a design law: a reader
-  scanning the shader should be able to point at any colour and say what
-  it means physically. The site-wide default in `authoring_style` names
-  what each of the six palette roles (`bg`, `bg2`, `glow`, `accent`,
-  `accent2`, `ink`) canonically paints; the per-room `visual_style.
-  registers` OVERRIDES that mapping when this room binds a palette slot
-  to a different meaning. When the register list disagrees with the
-  spec's `palette` block, `visual_style.registers` is the authority for
-  *meaning*; `palette` still supplies the six site-manifest slots.
-
 - **`reference_notes`** — free-text references from the author. Honor them
   verbatim; do not paraphrase them into inventions. If a note says "the
   ochre reads like the underside of a cliff at low tide", the shader
@@ -238,19 +211,20 @@ authoritative vocabulary) or NAMES a per-room specific.
   or, in a `2d-over-shader` room, in what the shader leaves room for the
   2D layer to draw over.
 
-- **`banned_forms`** *(site-wide default lives in
-  `authoring_style.banned_forms`; per-room adds room-specific bans on top)*
-  — verbatim, non-negotiable. Do not emit anything matching the
-  descriptions in either list. The site-wide list carries the AGENTS.md
-  paint bar (no `createRadialGradient`, no per-frame `shadowBlur`, no
-  `ctx.filter`, no per-object gradient pass, no per-frame allocation,
-  no `Math.random`/`Date.now`, no cartoon puffiness, no emoji, no
-  marketing verbs, no glow on text); the per-room list adds anything
-  room-specific — "no drawn spiral, arms emerge from the population",
-  "no top-down or first-person composition", "no boundaries as painted
-  lines" — that a landed screenshot exposed as a failure mode. Both
-  lists apply; the per-room list is stricter than the site-wide bar
-  where the two overlap.
+The framing (`composition`), the palette-role → what-it-paints mapping
+(`registers`), and the paint bar (`banned_forms`) are NOT in this
+block — they live in `{{authoring_style}}` above, which is the sole
+source of truth for them as of phase 6. Read them there; do not expect
+a per-room override. Legibility is still the design law: NAME each
+palette register in a comment in the shader (as in `// #6E5A2E — the
+kept ochre, humus's stored carbon`) using the canonical mapping the
+site-wide `registers` block defines. Do not emit anything matching the
+paint bar the site-wide `banned_forms` list carries (no
+`createRadialGradient`, no per-frame `shadowBlur`, no `ctx.filter`, no
+per-object gradient pass, no per-frame allocation, no
+`Math.random`/`Date.now`, no cartoon puffiness, no emoji, no marketing
+verbs, no glow on text). Compose the shader to the framing the site
+carries and the room's `subject` names.
 
 ## The brief
 

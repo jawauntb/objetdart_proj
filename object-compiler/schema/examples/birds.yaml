@@ -53,28 +53,14 @@ palette:
   ink:     "#e8ecd8"
 
 visual_style:
-  composition: first-person
   subject: "a meadow at dusk seen through the eye of someone standing in it — one low sun on the horizon, ground foreshortened out to a pond and a hay pile, an aviary of readable birds under a wide dim sky"
   form_language: [ray-marched, SDF, value-noise-FBM, hand-painted]
   motion_character: drifting
-  registers:
-    - "the high dark sky above the horizon — via bg"
-    - "the meadow-green ground plane and the far cool arm of the sky — via bg2"
-    - "the low-sun subtractive warm on the horizon and the sunset tint on the birds — via glow"
-    - "the mid-tone meadow moss and the shadow side of a bird — via accent"
-    - "the cool foreground vault, the pond's water, and the highlight side of a bird — via accent2"
-    - "the field-watch ink and text — via ink"
   reference_notes:
     - "an evening pastoral: sun sitting low behind a low ridge, tall grass foreshortened by the ray-traced ground plane"
     - "an Attenborough starling murmuration frame: the flock as ONE animal, its silhouette carried by the crowd"
     - "the aviary shows readable individuals — no distant Instagram-blur murmuration; each bird is its own SDF silhouette with a species-specific beak or train"
     - "the pond and the hay pile sit at real world coordinates (PLACES) and parallax when the eye leans"
-  banned_forms:
-    - "no createRadialGradient, no shadowBlur per AGENTS.md"
-    - "no first-person UI or head-mounted horizon; the eye is a fixed camera the vessel steers"
-    - "no billboard sprites without species SDFs — every bird is its own silhouette"
-    - "no p5 or animation library — one WebGL pass and one rAF"
-    - "no per-frame allocation in the flock advance — the integrator is fixed-timestep with an accumulator"
   mood: "the sky waiting to be one thing; a dusk animal made of many, breathing on its own"
   gesture_feedback_style: "a held finger reaches a lure into the sky and the flock gathers or scatters around it; a circling finger swirls the flock about its own axis; a tilt banks the whole sky; a knock crosses one wingbeat wave across the flock"
 

@@ -56,45 +56,28 @@ DOES; it does not carry what the room SHOULD LOOK LIKE with any of the
 vocabulary a designer would reach for. That gap is why /spring's shader
 landed simple and /geyser's crossfade was hand-tuned: the picture-diff
 between the rendered room and its `public/guide/<key>.jpg` was mediated by
-prose alone. `visual_style` closes that gap by structuring the design
-context the brief assumes. It gives the slot-shader author (and, where
-useful, the slot-verbs author) a name for the composition, the subject, the
-form language, the temporal character, the palette registers *by function*,
-the reference images a designer would cite, the explicit no-fly list, the
-mood, and the visual language for gesture feedback. All fields are
-optional; a spec without a `visual_style` block still compiles.
+prose alone. `visual_style` closes that gap by structuring the *per-room*
+half of that design context — the six fields the phase-5 falsifiability
+rerun landed at 0.92 avg agreement, the pictorial half of the descriptor
+a designer would point at and name:
 
-To author one: study the landed screenshot and answer each field in the
-vocabulary a colleague would use to point at the picture. Concrete
-examples:
-
-- **`composition`** — pick one of `side-section`, `top-down`,
-  `first-person`, `ambient-column`, `cutaway`, `silhouette`. Soil is a
-  `side-section` cutaway; atmosphere is an `ambient-column`; galaxy is
-  `top-down`.
 - **`subject`** — a one-line noun phrase: *"a hand's width of wet ground
   with a small pool over an aquifer"*, *"a heliocentric map of orbits on
   warm paper"*.
 - **`form_language`** — one or more tokens from the enum: `watercolor`,
   `hand-painted`, `ink-line`, `SDF`, `value-noise-FBM`, `ray-marched`,
   `point-cloud`, `ribbon-flow`, `stipple`. Multiple values are legal — a
-  watercolor SDF room is a real thing.
+  watercolor SDF room is a real thing. The taxonomy (what each token
+  means as a shader-authoring instruction) lives in
+  `object-compiler/design/authoring_style.yaml` under
+  `form_language_taxonomy`.
 - **`motion_character`** — `still` / `breathing` / `drifting` / `pulsing`
   / `cyclic` / `ballistic` / `stochastic`. `breathing` picks up the site's
   7s clock; `ballistic` fits an erupt phase; `cyclic` fits a year-scale
   loop.
-- **`registers`** — one string per palette-slot assignment, mapping the
-  abstract hex to what it PAINTS: *"deep water: bg→bg2"*, *"mineral
-  bloom: accent2"*, *"sunlit highlight: glow"*. Arrow (→) permitted for
-  gradients.
 - **`reference_notes`** — described references, not URLs: *"like a wet
   cross-section of clay in a jar; the aquifer register echoes the ocean's
   depth gradient"*, *"reads as an ink-line orrery on warm paper"*.
-- **`banned_forms`** — always includes the AGENTS.md bar (no
-  `createRadialGradient`, no per-frame `shadowBlur`, no `ctx.filter`);
-  add room-specific negatives when a landed screenshot exposed a failure
-  mode: *"no cartoon puffiness on the plume"*, *"no visible seam between
-  layers"*.
 - **`mood`** — one line, felt sense: *"contemplative and low"*,
   *"anticipatory then eruptive"*, *"buoyant, weightless, held"*. Not a
   marketing verb; the adjective a visitor would offer unprompted.
@@ -103,9 +86,43 @@ examples:
   *"displacement wave under the surface"*. This bridges the shader to
   the verb handlers.
 
-When a `visual_style` block is present, `slot-shader.md` consumes it
-alongside `shader_intent`; the shader author gets both the specific brief
-and the design vocabulary the brief assumes.
+All fields are optional; a spec without a `visual_style` block still
+compiles. When present, `slot-shader.md` consumes it alongside the shared
+`object-compiler/design/authoring_style.yaml` (the CROSS-ROOM design
+vocabulary — palette, framings, canonical register mapping, paint bar,
+form-language taxonomy, shared clocks, gesture-feedback defaults), so
+the shader author gets both the room-specific brief AND the design
+language it speaks inside.
+
+### Migration note — the three fields removed in phase 6
+
+Earlier phases carried three additional fields at this level:
+`composition`, `registers`, and `banned_forms`. Phase 2's falsifiability
+audit (see `data/object-compiler/audits/phase-2-visual-style.md`) landed
+those three at 0.42, 0.50, and 0.50 respectively — they encode
+DECISIONS the site makes once, not observations about a single room.
+Phase 4 moved them into a shared
+`object-compiler/design/authoring_style.yaml`
+(`data/object-compiler/audits/phase-4-visual-style-split.md`); the
+phase-5 rerun on the surviving six fields landed at 0.92 avg agreement
+(`data/object-compiler/audits/phase-5-visual-style-rerun.md`); phase 6
+removed the fields from the schema and from every example spec
+(`data/object-compiler/audits/phase-6-schema-cleanup.md`). Old specs
+that still declare them will fail validation — which is the point.
+
+- **`composition`** now lives at `authoring_style.compositions` as the
+  enumeration of the six framings (`side-section`, `top-down`,
+  `first-person`, `ambient-column`, `cutaway`, `silhouette`). The slot-
+  shader prompt reads it as a taxonomy, not as a per-room choice.
+- **`registers`** now lives at `authoring_style.registers` as the
+  canonical mapping from the six palette roles (`bg`, `bg2`, `glow`,
+  `accent`, `accent2`, `ink`) to what each role typically paints.
+- **`banned_forms`** now lives at `authoring_style.banned_forms` as the
+  verbatim AGENTS.md paint bar (no `createRadialGradient` in a loop,
+  no per-frame `shadowBlur`, no `ctx.filter` blur, no per-object
+  gradient pass, no allocation in the RAF loop, no `Math.random` /
+  `Date.now` in the render loop, no cartoon puffiness, no emoji, no
+  marketing verbs, no glow on text, no autoplay).
 
 ## The `life` block — the room quality bar, structured
 

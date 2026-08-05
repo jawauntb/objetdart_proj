@@ -65,10 +65,12 @@ EXAMPLES_DIR = COMPILER_ROOT / "schema" / "examples"
 # The site's authoring style — the cross-room design language every
 # room shares. Loaded once at module scope and threaded into every
 # slot-prompt substitution alongside the per-room visual_style block.
-# See object-compiler/design/authoring_style.yaml for the artifact and
+# See object-compiler/design/authoring_style.yaml for the artifact,
 # data/object-compiler/audits/phase-4-visual-style-split.md for why
 # the site-wide vocabulary lives in its own file rather than being
-# restated in every room's spec.
+# restated in every room's spec, and phase-6-schema-cleanup.md for
+# the final removal of the deprecated per-room composition, registers,
+# and banned_forms fields (which now live exclusively here).
 AUTHORING_STYLE_PATH = COMPILER_ROOT / "design" / "authoring_style.yaml"
 
 
@@ -485,13 +487,15 @@ def _call_slot_prompt(slot: str, spec: Spec) -> str:
     # yaml block; an empty block is legal (older specs may not carry the
     # field yet), and the prompt handles the absent-visual-style case.
     #
-    # As of phase 4 (see data/object-compiler/audits/phase-4-visual-style-
-    # split.md), the slot-shader prompt reads TWO blocks: the shared
-    # `authoring_style.yaml` (site-wide design language — palette,
-    # compositions, canonical registers, banned forms, form-language
-    # taxonomy, motion grammar, gesture defaults) FIRST, then the per-room
-    # `visual_style` block as room-specific refinements. Both are threaded
-    # in below.
+    # As of phase 6 (see data/object-compiler/audits/phase-6-schema-cleanup.md
+    # and its predecessors phase-4/phase-5), the per-room `visual_style`
+    # block carries exactly six fields (`subject`, `form_language`,
+    # `motion_character`, `reference_notes`, `mood`, `gesture_feedback_style`);
+    # the cross-room vocabulary (composition, registers, banned_forms,
+    # form-language taxonomy, motion grammar, gesture defaults) lives in
+    # `authoring_style.yaml` and is threaded in as `{{authoring_style}}`.
+    # The slot-shader prompt reads the shared artifact FIRST as the design
+    # law, then the per-room block as room-specific refinements.
     visual_style_block = _yaml_block(spec.raw.get("visual_style", {}))
 
     # life is the schema block that makes a room feel alive: population,
@@ -532,8 +536,10 @@ def _call_slot_prompt(slot: str, spec: Spec) -> str:
 
 def _retrieve_one_shots(slot: str, spec: Spec) -> str:
     """The retrieval bank. Rank all example specs against the target `spec`
-    by a four-tier key — invariant_type, composition, form_language,
-    motion_character — and return the top K anchors' source sections.
+    by a three-tier key — invariant_type, form_language, motion_character —
+    and return the top K anchors' source sections. (The fourth tier,
+    composition, was retired in phase 6 when the field moved to the
+    shared authoring_style.yaml; see the schema README migration note.)
 
     The K=2 default is a deliberate response to the /geyser audit finding
     that a *retrieval bank of one* biases toward *copying* rather than
@@ -558,12 +564,16 @@ def _retrieve_one_shots(slot: str, spec: Spec) -> str:
     """
     inv = spec.invariant_type
     target_style = spec.raw.get("visual_style", {}) or {}
-    target_composition = str(target_style.get("composition", ""))
+    # `composition` was removed in phase 6 (see
+    # data/object-compiler/audits/phase-6-schema-cleanup.md); it lives only in
+    # the shared authoring_style.yaml now, and every room chooses one of the
+    # six framings by naming it in the shader_intent brief. Retrieval falls
+    # back to a three-tier score (invariant / form_language / motion).
     target_form_langs = set(target_style.get("form_language", []) or [])
     target_motion = str(target_style.get("motion_character", ""))
     target_key = spec.key
 
-    # Rank every example spec by a four-tier score. Ties broken by name.
+    # Rank every example spec by a three-tier score. Ties broken by name.
     candidates: list[dict[str, Any]] = []
     if EXAMPLES_DIR.exists():
         for spec_yaml in sorted(EXAMPLES_DIR.glob("*.yaml")):
@@ -579,17 +589,15 @@ def _retrieve_one_shots(slot: str, spec: Spec) -> str:
                 "invariant_type", ""
             )
             other_style = other.get("visual_style", {}) or {}
-            other_composition = str(other_style.get("composition", ""))
             other_form_langs = set(other_style.get("form_language", []) or [])
             other_motion = str(other_style.get("motion_character", ""))
             other_module = other.get("domain_lib", other.get("domain", {})).get(
                 "name", ""
             )
-            # Score: (invariant_match, composition_match, form_language_overlap,
-            #        motion_match). Higher is better.
+            # Score: (invariant_match, form_language_overlap, motion_match).
+            # Higher is better.
             score = (
                 int(other_inv == inv),
-                int(bool(other_composition) and other_composition == target_composition),
                 len(target_form_langs & other_form_langs),
                 int(bool(other_motion) and other_motion == target_motion),
             )

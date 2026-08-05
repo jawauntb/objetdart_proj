@@ -74,28 +74,14 @@ palette:
   ink:     "#f2ecd9"
 
 visual_style:
-  composition: cutaway
   subject: "one polished pebble seen at hand's reach — a section through its centre showing concentric growth rings, cleavage traces as fine ink lines, and the outer polished shell as a smooth envelope over its lattice"
   form_language: [SDF, hand-painted, ink-line, value-noise-FBM]
   motion_character: still
-  registers:
-    - "the deep cabinet dark behind the stone — via bg"
-    - "the sectioned interior's shadow band and the deep lattice-plane density — via bg2"
-    - "the polished shell's highlight where the lamp catches it — via glow"
-    - "the warm mineral body colour (calcite-cream / chert-brown / jasper-red) — via accent"
-    - "the cool ring lines and the cleavage-trace ink under the polish — via accent2"
-    - "the lattice-lens numeric ink and the pebble-mineral name — via ink"
   reference_notes:
     - "a hand specimen photograph — one stone, cut and polished, section facing the camera"
     - "an agate slice under a raking light: concentric bands each their own colour, translucent at their edges"
     - "a gemcutter's diagram: the outline of the finished stone drawn over the raw crystal's Wulff hull, cleavage planes as ghost lines"
     - "the /rocks screenshot at public/guide/rocks.jpg is the peer register; pebble is the SAME lattice register but SEEN INTO rather than seen over"
-  banned_forms:
-    - "no createRadialGradient, no shadowBlur per AGENTS.md"
-    - "no tray of stones — this room is ONE stone; other stones live at /rocks"
-    - "no top-down or first-person view — the section is seen from the front, hand-close"
-    - "no drawn concentric circles as decoration — every growth ring is the domain's growthHistory read live"
-    - "no fake polish gloss — the outer shell's highlight IS the Fresnel of the polished surface's angle to the light"
   mood: "held; the stone lets you look inside without asking"
   gesture_feedback_style: "a tap rings the stone's own partials, damped by its polish depth; a drag turns the stone in the section (the cleavage traces sweep with the lattice); a hold rubs the outer shell, deepening the polish and audibly quieting the higher partials; a flick cleaves the stone along the nearest allowed plane and both halves keep their mass"
 

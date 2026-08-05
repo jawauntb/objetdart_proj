@@ -53,26 +53,13 @@ palette:
   ink:     "#eaf6ff"
 
 visual_style:
-  composition: top-down
   subject: "a tank of water seen from above — a ripple expanding as a circular wavefront from a source, gradient-lit crests catching the sun, foam on the steep water, a lens sitting over the equation the water is solving"
   form_language: [SDF, value-noise-FBM, ray-marched, hand-painted]
   motion_character: pulsing
-  registers:
-    - "the deep tank dark and the tank's cool ambient — via bg"
-    - "the trough register (below still water) and the far vignette — via bg2"
-    - "the sunlit crest highlight and the caustic ridge riding the slope — via glow"
-    - "the mid-water register and the ripple's teal register — via accent"
-    - "the refraction register (purple/violet under the bent front) and the paper of the lens — via accent2"
-    - "the readable Waves title, the wavefront-speed hint, the controls' text — via ink"
   reference_notes:
     - "a ripple-tank photograph: circular wavefronts crossing, interfering, reflecting off the walls"
     - "a fluid-dynamics textbook plate — gradient-lit crests, foam on the steep water, the equation in the corner"
     - "the guide screenshot at public/guide/waves.jpg: 'Waves / travelling disturbance', a single circular ripple, mode controls at top-right, timeline at bottom"
-  banned_forms:
-    - "no createRadialGradient, no shadowBlur per AGENTS.md"
-    - "no drawn wavefronts — every ripple is the field's own h, and the shader reads slope and depth from a packed height texture"
-    - "no per-frame allocation in the integrator — the field is two Float32Arrays swapped each step"
-    - "no per-object gradient — the caustic ridge is a gradient of the same texture the crest reads"
   mood: "still water waiting to be touched; every pulse a physics demonstration in miniature"
   gesture_feedback_style: "a tap injects a pulse at the contact — a Gaussian bump in h that expands as a circular wavefront; a drag paints a moving pulse (a caterpillar of energy); a hold builds a still peak that releases outward when let go"
 

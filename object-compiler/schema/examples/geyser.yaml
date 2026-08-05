@@ -62,27 +62,14 @@ palette:
   ink:     "#f0efe6"
 
 visual_style:
-  composition: side-section
   subject: "a hand's width of superheated ground in section — a narrow central throat, a shallow pool, an intermittent ballistic plume when the trigger crosses"
   form_language: [SDF, value-noise-FBM, ribbon-flow, hand-painted]
   motion_character: cyclic
-  registers:
-    - "the deep basalt / mantle dark under the ground — via bg"
-    - "the pool's cool column and steaming warmed rock — via bg2"
-    - "sulfur light on the plume (the load-bearing highlight) — via glow"
-    - "the cool water-in-motion / teal pool register — via accent"
-    - "the hot mantle / eruption register — the crossfade axis — via accent2"
-    - "readable text over the darkest tile — via ink"
   reference_notes:
     - "an Old Faithful cutaway diagram: pool, throat, mantle-warmed dark, plume above"
     - "the sky and pool crossfade between a 'cool' register and a 'hot' register as the phase moves through build → erupt → cool"
     - "the plume as a stack of upward-advecting gaussian rings warped by fbm — a wider ring at Q_erupt so discharge reads off the visible cross-section"
     - "the guide screenshot at public/guide/geyser.jpg reads dark — probably captured before the shader landed; the shader body is the source of truth for this room"
-  banned_forms:
-    - "no createRadialGradient, no shadowBlur per AGENTS.md"
-    - "no per-frame allocation — heat-marks, ripples and rings go through the shared instanced pass"
-    - "no top-down or first-person view — section only, seen from the front"
-    - "no painted plume — its height and cross-section are read live from uPlumeHeight / uPlumeQ"
   mood: "a waiting-for-an-event room — a slow build hisses, the plume rides the release, the pool cools and starts again"
   gesture_feedback_style: "a tap rings the throat at the local head (pitch = ringHzFor(H)); a dwell plants a heat-marker whose corona brightens with local T; a knock near the trigger can actually push the cycle over — the room's touch-reachable secret"
 

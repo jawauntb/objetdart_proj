@@ -122,8 +122,8 @@ seed the hand left" is in. The site's prose voice extends into the code.
 ## Retrieval — the one-shot references
 
 The compiler substitutes 2–3 population-block examples from the closest
-past rooms below this line, chosen by `invariant_type`, composition, and
-population shape. `src/components/RoomTemplate.tsx` (`mote`, ~line 86) is
+past rooms below this line, chosen by `invariant_type`, `form_language`,
+and population shape. `src/components/RoomTemplate.tsx` (`mote`, ~line 86) is
 the canonical shape; `src/components/AirColumn.tsx` (clouds as a marched
 volume) is the reference for a population that lives inside the field
 itself; `src/components/SoilGround.tsx` (roots and fungi under a soil

@@ -41,26 +41,14 @@ palette:
   ink: "#eef5ff"
 
 visual_style:
-  composition: side-section
   subject: "a hundred kilometres of atmosphere marched as a volume, sun above a low dark ridge"
   form_language: [ray-marched, SDF, value-noise-FBM, watercolor]
   motion_character: breathing
-  registers:
-    - "midnight column at the top of frame — via bg"
-    - "daytime blue column above the horizon — via bg2"
-    - "warm lantern flame and low-sun subtractive red — via glow / accent"
-    - "cool cloud base and stratified aerosol band — via accent2"
-    - "twist-lens ink for isobars, tropopause, wind and T/Td curves — via ink"
-    - "ridge silhouette at the bottom eighth — flat dark rock, lit only by the sun's transmitted colour"
   reference_notes:
     - "a scientific altitude-vs-density diagram redrawn as a painted landscape at first light"
     - "the sky sitting behind a Bierstadt ridge, but in real barometric colour"
     - "cirrus painted as soft SDF ellipsoids eroded by 3D FBM, never as sprites"
     - "starfield above the sky-fade — sparse hashed points that read as vault, not stamp"
-  banned_forms:
-    - "no createRadialGradient, no shadowBlur per AGENTS.md"
-    - "no sprite clouds; no per-frame allocation in the marcher; no top-down or first-person composition"
-    - "no chosen colour — every hue is the tonemap of a real optical depth"
   mood: "still, held; the column waiting to be touched — dawn or dusk depending on where the sun rides"
   gesture_feedback_style: "a press warms and lifts the parcel under the finger (its cloud base slides up on the y axis); a lantern arrives as an additive warm corona and then drifts on its own altitude's wind"
 

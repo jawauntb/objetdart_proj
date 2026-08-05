@@ -57,25 +57,13 @@ palette:
   ink:     "#e6efe8"
 
 visual_style:
-  composition: side-section
   subject: "a hand's width of wet ground in section — air above, a wavy waterline, a pool with a wet-halo skirt around every live seep"
   form_language: [SDF, value-noise-FBM, hand-painted]
   motion_character: drifting
-  registers:
-    - "wet dark under the water — via bg"
-    - "the pool's deep column and the sky just above the horizon — via bg2"
-    - "the sunlit water surface highlight (a low-angle Snell reflection) — via glow"
-    - "cold water-in-motion — ripple rings and seep pulses — via accent"
-    - "warm mineral bloom crusting along the wet edge — via accent2"
-    - "readable text and lens ink over the darkest tile — via ink"
   reference_notes:
     - "a botanical / hydrological section illustration: air-band, waterline, pool, wet ground, dry ground"
     - "a wet-halo around each seep whose brightness IS its live flux — invert the halo and you recover the ledger"
     - "the guide screenshot at public/guide/spring.jpg reads dark — probably captured before the shader landed; the shader body is the source of truth for this room"
-  banned_forms:
-    - "no createRadialGradient, no shadowBlur per AGENTS.md"
-    - "no per-frame allocation — seeps and ripples go through the shared instanced pass"
-    - "no top-down or first-person view — section only, seen from the front"
   mood: "steady, moist, giving — the aquifer breathing under a lipped pool"
   gesture_feedback_style: "a tap fires a gaussian ring wavefront through the pool; a dwell plants a seep whose corona brightens with widening throat; the ceremony seals it at full and its halo is kept between visits"
 
