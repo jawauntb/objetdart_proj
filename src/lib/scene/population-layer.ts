@@ -101,6 +101,17 @@ export type PopulationLayer = {
 export type PopulationLayerOptions = {
   /** Three anchor colours the instance `hue` (0..1) is read against. */
   palette?: [string, string, string];
+  /**
+   * Optional room-scoped fragment shader — the default SPRITE_FRAG draws an
+   * SDF disc with an additive corona; a room whose creatures need real
+   * silhouettes (snails as spirals, anemones as tentacles, kelp as ribbons)
+   * passes its own body here. The varyings SPRITE_VERT declares must be
+   * consumed as-is: `vLocal` (the sprite's own -1.9..1.9 quad-local xy),
+   * `vHue`, `vGlow`, `vPhase`, `vAlpha`, plus the palette uniforms
+   * `u_palA` / `u_palB` / `u_palC`. `precision mediump float;` is set by
+   * the caller.
+   */
+  frag?: string;
 };
 
 function hexToRgb(hex: string): [number, number, number] {
@@ -119,7 +130,7 @@ export function createPopulationLayer(
   stage: GLStage,
   options: PopulationLayerOptions = {},
 ): PopulationLayer | null {
-  const prog: GLProgram | null = stage.program(SPRITE_VERT, SPRITE_FRAG);
+  const prog: GLProgram | null = stage.program(SPRITE_VERT, options.frag ?? SPRITE_FRAG);
   if (!prog) return null;
   const draw: InstancedDraw = stage.instanced(prog);
   const gl = stage.gl;

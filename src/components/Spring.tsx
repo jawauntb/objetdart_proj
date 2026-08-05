@@ -84,6 +84,14 @@ const DWELL_THROAT_MAX = 0.55;
 const THROAT_WIDEN_TAU_MS = 900;
 /** Simulation speed while a hand is present, in ledger seconds per real second. */
 const WATCHED_SPEED = 60;
+/** How many bubbles may stand at once — a second, ephemeral population. */
+const MAX_BUBBLES = 28;
+/**
+ * Bubbles per real second at a fully-open seep (fluxBright saturates at
+ * 1.6, same scale the corona reads). The spawn budget accumulates from the
+ * ledger's own flux — no RNG in the timing, only in the bubble's own seed.
+ */
+const BUBBLE_SPAWN_RATE = 0.55;
 
 const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
 const clamp01 = (v: number) => clamp(v, 0, 1);
@@ -100,6 +108,23 @@ type SeepView = SceneObjectState & {
   flux: number;
   sealed: boolean;
   phase: number;
+};
+
+/**
+ * The bubble — the room's second population. It answers no gesture verb;
+ * it is born from an open seep's live flux alone (spawn budget accumulates
+ * as `fluxBright * BUBBLE_SPAWN_RATE * dt`, deterministic from the ledger,
+ * no RNG in the timing), rises on its own seeded wobble, and pops the
+ * instant it crosses the waterline. Never persisted — a bubble is weather,
+ * not a kept thing.
+ */
+type BubbleView = SceneObjectState & {
+  vy: number;
+  wobbleAmp: number;
+  wobbleFreq: number;
+  wobblePhase: number;
+  r0: number;
+  popping: boolean;
 };
 
 type StoredSpring = {
@@ -141,18 +166,23 @@ uniform float uNight;
 uniform float uStir;
 uniform float uLens;
 
-// The palette — six registers set once, from the manifest.
-const vec3 BG      = vec3(0.020, 0.039, 0.047); // wet dark under water
-const vec3 BG2     = vec3(0.055, 0.145, 0.188); // pool's deep column
-const vec3 GLOW    = vec3(0.663, 0.847, 0.902); // sunlit water surface
-const vec3 ACCENT  = vec3(0.290, 0.569, 0.659); // water in motion
-const vec3 ACCENT2 = vec3(0.788, 0.725, 0.533); // mineral bloom at the wet edge
+// The palette — six registers set once, from the manifest. phase-8: bg2 is a
+// real wet-ground brown (not a second teal), glow and accent2 both brighten
+// so the water surface and the mineral bloom read as their own pixels.
+const vec3 BG      = vec3(0.024, 0.039, 0.063); // deep aquifer dark
+const vec3 BG2     = vec3(0.180, 0.125, 0.075); // wet ground, dark and rich
+const vec3 GLOW    = vec3(0.843, 0.949, 0.984); // sunlit water-surface highlight
+const vec3 ACCENT  = vec3(0.247, 0.616, 0.761); // cool water in motion
+const vec3 ACCENT2 = vec3(0.890, 0.675, 0.341); // warm mineral bloom at the wet edge
 const vec3 INK     = vec3(0.902, 0.937, 0.910);
-const vec3 SKY     = vec3(0.024, 0.055, 0.078);
+const vec3 SKY     = vec3(0.026, 0.059, 0.086);
+const vec3 DRY     = vec3(0.320, 0.270, 0.205); // dusty ground, far from any water — not a manifest register, just what BG2 fades toward
 
-const float HORIZON       = 0.32;
-const float WATERLINE_MID = 0.42;
-const float POOL_FLOOR    = 0.94;
+const float HORIZON       = 0.30;
+const float WATERLINE_MID = 0.40;
+// phase-8: the pool is a shallow band, not the whole lower frame — the
+// ground it sits in, above and below, is the room's other half.
+const float POOL_FLOOR    = 0.60;
 const float POOL_XMIN     = ${POOL_X_MIN.toFixed(3)};
 const float POOL_XMAX     = ${POOL_X_MAX.toFixed(3)};
 
@@ -186,7 +216,7 @@ float waterlineY(float x, float t) {
   float wave = sin(x * 9.0 + t * 0.35) * 0.008
              + sin(x * 21.0 - t * 0.62 + uLean * 3.0) * 0.004;
   float lFrac = clamp(uClimate.w, 0.0, 1.5);
-  return WATERLINE_MID + (0.55 - lFrac) * 0.10 + wave;
+  return WATERLINE_MID + (0.55 - lFrac) * 0.06 + wave;
 }
 
 void main() {
@@ -195,11 +225,13 @@ void main() {
   float night = uNight;
   vec3 col;
 
-  // ——— the air ———
+  // layer: sky_and_clouds
   if (uv.y < HORIZON) {
     float k = uv.y / HORIZON;
-    // Snell approximation: the pool's ceiling is the sky's colour, dimmed
-    vec3 airCol = mix(SKY, GLOW * 0.6, k * k * (1.0 - uTurbulence * 0.4));
+    // a faint streak of cloud, dragging slowly across the horizon band
+    float cloud = fbm(vec2(uv.x * 3.1 + uTime * 0.015, uv.y * 5.0 + 4.0));
+    vec3 airCol = mix(SKY, GLOW * 0.62, k * k * (1.0 - uTurbulence * 0.4));
+    airCol = mix(airCol, GLOW * 0.85, smoothstep(0.56, 0.86, cloud) * 0.16 * k);
     // a slow breath in the dawn column
     airCol *= 0.86 + 0.14 * uBreath;
     col = airCol * (1.0 - night * 0.72);
@@ -210,48 +242,69 @@ void main() {
   float wl = waterlineY(uv.x, uTime);
   bool inPool = uv.x > POOL_XMIN && uv.x < POOL_XMAX && uv.y > wl && uv.y < POOL_FLOOR;
 
+  // layer: seep_wet_halo
+  // the wet halo around every seep — read below whether the pixel is inside
+  // the open pool or in the wet ground past the floor, so a deep seep still
+  // tells its flux even where the water above it has gone underground.
+  // brightness is monotone in flux: invert the halo, recover the ledger.
+  float seepGlow = 0.0;
+  for (int i = 0; i < ${MAX_SEEPS}; i++) {
+    if (i >= uSeepCount) break;
+    vec4 s = uSeeps[i];
+    vec2 dp = (uv - s.xy) * vec2(aspect, 1.0);
+    float dist = length(dp);
+    float fluxAmt = clamp(s.z * 3.0e4, 0.0, 1.0);
+    float halo = exp(-dist * dist * 90.0) * fluxAmt;
+    float phase = fract(s.w + uTime * 0.28);
+    float rad = phase * 0.30;
+    float ring = exp(-pow((dist - rad) * 30.0, 2.0)) * (1.0 - phase) * fluxAmt;
+    seepGlow += halo * 0.5 + ring;
+  }
+
   if (inPool) {
-    // ——— underwater depth: BG at the surface, BG2 at the floor ———
-    float d = (uv.y - wl) / max(0.02, POOL_FLOOR - wl);
-    col = mix(BG, BG2, d * d);
+    // layer: refraction_wobble
+    // a small horizontal sine displacement, growing with depth from zero at
+    // the surface — what light does crossing into the water at an angle.
+    float depthT = (uv.y - wl) / max(0.02, POOL_FLOOR - wl);
+    float wobble = sin(uv.y * 46.0 + uTime * 1.05) * 0.006 * smoothstep(0.0, 0.3, depthT);
+    vec2 uvW = vec2(uv.x + wobble, uv.y);
+
+    // layer: underwater_column
+    // shallow water reads bright (accent lifted toward glow); the column
+    // darkens toward the true aquifer dark as depth in the pool increases
+    vec3 shallow = mix(ACCENT, GLOW, 0.32);
+    col = mix(shallow, BG, depthT * depthT);
 
     // Snell surface highlight — a low-angle reflection of the sky palette
-    float surf = exp(-pow((uv.y - wl) * 90.0, 2.0));
+    float surf = exp(-pow((uv.y - wl) * 78.0, 2.0));
     float breath = 0.85 + 0.15 * uBreath;
-    col += GLOW * surf * 0.55 * breath * (1.0 - night * 0.85);
+    col += GLOW * surf * 0.85 * breath * (1.0 - night * 0.85);
 
-    // ——— ripple wavefronts from taps and flicks (gaussian rings) ———
+    // caustic cells: an fbm shimmer tinted glow, wobbled by the refraction
+    // above and fading out with depth — the light a shallow pool still lets
+    // through, never claiming to reach the true floor
+    float caustic = fbm(vec2(uvW.x * 20.0 * aspect, uvW.y * 11.0 - uTime * 0.42));
+    float causticMask = smoothstep(0.52, 0.86, caustic) * exp(-depthT * 2.6);
+    col += GLOW * causticMask * 0.4 * (0.6 + 0.4 * uBreath);
+
+    // ripple wavefronts from taps and flicks (gaussian rings), refracted
     float wave = 0.0;
     for (int i = 0; i < ${MAX_RIPPLES}; i++) {
       if (i >= uRippleCount) break;
       vec4 r = uRipples[i];
       float age = r.z;
       float rad = age * 0.36;
-      vec2 dp = (uv - r.xy) * vec2(aspect, 1.0);
+      vec2 dp = (vec2(uvW.x, uv.y) - r.xy) * vec2(aspect, 1.0);
       float dist = length(dp);
       float ring = exp(-pow((dist - rad) * 22.0, 2.0));
       wave += ring * r.w * exp(-age * 1.4);
     }
     col += ACCENT * wave * 0.6;
-
-    // ——— continuous seep pulses: one ring per phase, per seep ———
-    float seepWave = 0.0;
-    for (int i = 0; i < ${MAX_SEEPS}; i++) {
-      if (i >= uSeepCount) break;
-      vec4 s = uSeeps[i];
-      float phase = fract(s.w + uTime * 0.28);
-      float rad = phase * 0.42;
-      vec2 dp = (uv - s.xy) * vec2(aspect, 1.0);
-      float dist = length(dp);
-      float ring = exp(-pow((dist - rad) * 26.0, 2.0));
-      // fade the ring out as it ages, so the wave dies at the pool wall
-      seepWave += ring * (1.0 - phase) * clamp(s.z * 3.0e4, 0.0, 1.0);
-    }
-    col += ACCENT * seepWave * 0.55;
+    col += ACCENT * seepGlow * 0.6;
 
     // ——— stir: the pool spins under a scrubbing finger, decays to still ———
     if (uStir > 0.02) {
-      vec2 sp = (uv - vec2(0.5, wl + 0.14)) * vec2(aspect, 1.0);
+      vec2 sp = (uv - vec2(0.5, wl + 0.10)) * vec2(aspect, 1.0);
       float ang = atan(sp.y, sp.x);
       float rr = length(sp);
       col += ACCENT * uStir * 0.22 * sin(ang * 4.0 + uTime * 3.0)
@@ -263,42 +316,51 @@ void main() {
     return;
   }
 
-  // ——— the wet ground: moisture bands drying upward ———
-  float distToWL = uv.y - wl;
-  // wettest along the waterline, drying with exp(-y/λ). The moisture band
-  // reads directly off the pool level: a fuller pool wets more ground.
-  float lambda = 0.14 + uClimate.y * 0.06;
-  float moisture = exp(-max(0.0, distToWL) / lambda);
-  moisture *= 1.0 - smoothstep(0.85, 1.0, uv.y) * 0.6; // fade at the floor
+  // layer: wet_ground_moisture
+  // wettest at the waterline / pool floor, drying with distance from it in
+  // EITHER direction — up toward the sky, or down away from the pool. The
+  // moisture band reads directly off the pool level: a fuller pool wets
+  // more ground.
+  float aboveWater = wl - uv.y;
+  float belowFloor = uv.y - POOL_FLOOR;
+  float distFromWater = max(aboveWater, max(belowFloor, 0.0));
+  // a tighter fall-off than the old pass — the wet register hugs the pool
+  // and visibly gives way to dry ground within the frame, not a wash
+  float lambda = 0.10 + uClimate.y * 0.05;
+  float moisture = exp(-distFromWater / lambda);
+  moisture *= 1.0 - smoothstep(0.90, 1.0, uv.y) * 0.4; // fade at the very bottom edge
 
-  vec3 dry = vec3(0.075, 0.058, 0.048);
-  vec3 wet = vec3(0.038, 0.058, 0.072);
-  col = mix(dry, wet, moisture);
+  // wet ground reads dark and rich (bg2); dry ground is a pale dusty tone —
+  // the reverse of the old near-monochrome pass, and true to real soil
+  col = mix(DRY, BG2, moisture);
 
-  // grain
-  vec2 gp = floor(uv * uRes * 0.45);
-  col *= 0.86 + 0.28 * hash21(gp);
+  // grain — kept subtle so it textures the ground without drowning the
+  // wet→dry gradient in noise
+  vec2 gp = floor(uv * uRes * 0.42);
+  col *= 0.92 + 0.14 * hash21(gp);
 
-  // horizontal moisture bands — layering, wet more so under the waterline
-  float band = fbm(vec2(uv.x * 3.4, uv.y * 22.0 + uTime * 0.02));
-  col *= 0.86 + 0.22 * band;
+  // horizontal moisture bands — layering, wet more so near the pool
+  float band = fbm(vec2(uv.x * 3.2, uv.y * 18.0 + uTime * 0.02));
+  col *= 0.92 + 0.12 * band;
 
-  // mineral bloom at the wet edge — value-noise FBM modulated by moisture
-  float bloom = fbm(uv * vec2(30.0 * aspect, 30.0) + vec2(uv.y * 4.0, 0.0));
-  float bloomBand = smoothstep(0.18, 0.45, moisture) * (1.0 - smoothstep(0.55, 0.9, moisture));
-  col += ACCENT2 * bloom * bloomBand * 0.9 * (0.6 + uBreath * 0.4);
+  // layer: mineral_bloom
+  // wetness → brightness is monotone here, same shape as the seep's flux →
+  // corona map: the fbm only gates WHERE a patch draws, never rescales its
+  // amplitude, so a lit patch's brightness alone recovers the local
+  // moisture — invert it and read the ground back off it. squaring the
+  // moisture term (still monotone) sharpens the concentration at the pool
+  // edge, so the bloom reads as an EDGE feature, not a wash over the ground.
+  float bloomPatches = fbm(uv * vec2(28.0 * aspect, 28.0) + vec2(uv.y * 3.4, uTime * 0.01));
+  float bloomGate = smoothstep(0.58, 0.80, bloomPatches);
+  float bloomAmt = moisture * moisture * bloomGate;
+  col += ACCENT2 * bloomAmt * (0.85 + uBreath * 0.4);
 
-  // The seep disc + additive corona lives in the shared population-layer
-  // (src/lib/scene/population-layer.ts) — one instanced draw for all seeps.
-  // The load-bearing FLUX to CORONA-BRIGHTNESS map is preserved there, on the
-  // seepSpec's emit: glow = clamp(s.flux * 4e4, 0, 1.6). Invert the halo,
-  // recover the ledger. This shader still reports every seep to the pool via
-  // uSeeps so the underwater seep-pulse rings still ride the head to phase
-  // map inside the pool branch above.
+  // the wet halo again, dimmer here — a deep seep still tells its flux
+  col += mix(ACCENT2, ACCENT, 0.4) * seepGlow * 0.45;
 
-  // vignette + night
+  // layer: vignette_and_night
   vec2 vd = (uv - vec2(0.5, 0.5)) * vec2(aspect, 1.0);
-  col *= 1.0 - 0.52 * smoothstep(0.18, 0.94, dot(vd, vd));
+  col *= 1.0 - 0.48 * smoothstep(0.18, 0.94, dot(vd, vd));
   col *= 1.0 - night * 0.68;
 
   gl_FragColor = vec4(col, 1.0);
@@ -470,7 +532,7 @@ export default function Spring() {
     // one instanced draw for every seep the pool holds.
     // waterline is captured by closure so a seep sitting below the pool
     // surface fades (the "the water reveals seeps as it drops" invariant).
-    let waterlineU = 0.42;
+    let waterlineU = 0.40;
     const seepSpec: SceneObjectSpec<SeepView> = {
       kind: "seep",
       cap: MAX_SEEPS,
@@ -540,12 +602,93 @@ export default function Spring() {
       respond: {},
     };
     const population = createPopulation(seepSpec);
+
+    /**
+     * The bubble — the room's second population (test-room-depth's density
+     * floor: a room is a population, not one object in space). It answers
+     * no verb; it is entirely a consequence of the seep population's own
+     * flux, read every frame in `spawnBubblesFromSeeps` below. Rides the
+     * same instanced draw as the seeps — one population per kind, one
+     * `drawArraysInstanced` for both.
+     */
+    const bubbleSpec: SceneObjectSpec<BubbleView> = {
+      kind: "bubble",
+      cap: MAX_BUBBLES,
+      born(seed, nx, ny, tMs) {
+        const rng = sceneMulberry32(seed);
+        return {
+          id: 0,
+          seed,
+          nx,
+          ny,
+          bornMs: tMs,
+          growth: 0.25,
+          sealedMs: null,
+          presence: 1,
+          vy: 0.03 + rng() * 0.035,
+          wobbleAmp: 0.006 + rng() * 0.01,
+          wobbleFreq: 1.8 + rng() * 2.6,
+          wobblePhase: rng() * Math.PI * 2,
+          r0: 0.5 + rng() * 0.75,
+          popping: false,
+        };
+      },
+      step(s, ctx) {
+        if (s.growth < 1) s.growth = Math.min(1, s.growth + ctx.dt * 2.4);
+        if (s.popping) return;
+        // rises buoyantly, wobbling on its own seeded sine — no ledger
+        // input past the moment it was born
+        s.ny -= s.vy * ctx.dt;
+        s.nx += Math.sin(ctx.tMs * 0.001 * s.wobbleFreq + s.wobblePhase) * s.wobbleAmp * ctx.dt * 2;
+        if (s.ny <= waterlineU - 0.006) {
+          // pops the instant it breaks the surface — presence begins the
+          // population's own graceful fade, never a blink-delete
+          s.popping = true;
+          s.presence = 0.999;
+        }
+      },
+      emit(s, ctx, out) {
+        const px = s.nx * ctx.width;
+        const py = s.ny * ctx.height;
+        const baseR = Math.max(1.4, ctx.width * 0.0048) * s.r0 * (s.popping ? 1.6 : 1);
+        const bodyAlpha = s.presence * s.growth * (s.popping ? Math.max(0, s.presence) : 0.8);
+        // the body: a small bright disc, almost pure glow — what a rising
+        // bubble looks like against the dark
+        out.push(px, py, baseR, s.wobblePhase, 0.94, 0.35 + ctx.breath * 0.15, ctx.breath, bodyAlpha * 0.75);
+        // the halo: wider, fainter, flaring bright the instant it pops
+        out.push(px, py, baseR * 3.2, -s.wobblePhase, 0.88, s.popping ? 1.0 : 0.2, ctx.breath, bodyAlpha * 0.3);
+      },
+      verbs: [],
+      respond: {},
+    };
+    const bubblePopulation = createPopulation(bubbleSpec);
+    // per-seep spawn budget: accumulates from the ledger's own flux, so the
+    // timing is deterministic from state — no Math.random, no Date.now.
+    const bubbleSpawnAcc = new Map<number, number>();
+    const bubbleSpawnN = new Map<number, number>();
+    const spawnBubblesFromSeeps = (dt: number, tMs: number) => {
+      for (const s of state.seeps) {
+        const fluxBright = Math.min(1.6, Math.max(0, s.flux) * 4e4);
+        if (fluxBright <= 0.02) continue;
+        const acc = (bubbleSpawnAcc.get(s.id) ?? 0) + fluxBright * BUBBLE_SPAWN_RATE * dt;
+        if (acc >= 1) {
+          const n = (bubbleSpawnN.get(s.id) ?? 0) + 1;
+          bubbleSpawnN.set(s.id, n);
+          const jitter = sceneMulberry32(hashSeed(s.id, n))();
+          bubblePopulation.spawn(clamp01(s.x + (jitter - 0.5) * 0.03), s.y, tMs);
+          bubbleSpawnAcc.set(s.id, acc - 1);
+        } else {
+          bubbleSpawnAcc.set(s.id, acc);
+        }
+      }
+    };
+
     const populationLayer = stage
       ? createPopulationLayer(stage, {
-          palette: ["#4a91a8", "#c9b988", "#a9d8e6"], // accent, accent2, glow
+          palette: ["#3f9dc2", "#e3ac57", "#d7f2fb"], // accent, accent2, glow
         })
       : null;
-    const instanceBuffer = createInstanceBuffer(MAX_SEEPS * 2);
+    const instanceBuffer = createInstanceBuffer(MAX_SEEPS * 2 + MAX_BUBBLES * 2);
 
     // ——— what the shader reads: one Float32Array each, allocated once ———
     const seepU = new Float32Array(MAX_SEEPS * 4);
@@ -936,6 +1079,9 @@ export default function Spring() {
           ...state,
           seeps: [],
         };
+        bubblePopulation.letGo();
+        bubbleSpawnAcc.clear();
+        bubbleSpawnN.clear();
         setHasKept(false);
         try {
           audio.thud();
@@ -1021,6 +1167,10 @@ export default function Spring() {
       // Closed form, one call per frame — never a catch-up loop.
       if (!asleep) {
         state = advanceExact(state, dtRaw * timeScale * WATCHED_SPEED, climate);
+        // the bubble population's only input: real elapsed time (not the
+        // ledger's fast-forwarded seconds), so an open seep bubbles at a
+        // rate a hand can actually watch, not sixty times a second.
+        spawnBubblesFromSeeps(dtRaw, now);
       }
       lastSeen = now;
 
@@ -1080,9 +1230,9 @@ export default function Spring() {
         // authority, the population is the render view. Then step it once
         // (so retiring items ride out their fade) and emit every seep into
         // the shared instance buffer.
-        waterlineU = clamp01(0.42 + (0.55 - clamp01(state.L)) * 0.10);
+        waterlineU = clamp01(0.40 + (0.55 - clamp01(state.L)) * 0.06);
         syncPopulationFromLedger(now);
-        population.step({
+        const stepCtx = {
           dt: Math.min(0.05, dtRaw),
           tMs: now,
           breath: 0.5,
@@ -1093,19 +1243,22 @@ export default function Spring() {
           season: 0,
           timeScale,
           reducedMotion: reduced,
-        });
+        };
+        population.step(stepCtx);
+        bubblePopulation.step(stepCtx);
+        const emitCtx = {
+          width: stage.size.width,
+          height: stage.size.height,
+          tMs: now,
+          breath: reduced ? 0.5 : 0.5 + 0.5 * Math.sin(t * Math.PI * 2 / 7),
+          detail: 1,
+          reducedMotion: reduced,
+        };
+        // both populations write into the SAME buffer — one instanced draw
+        // for the whole room's countable material, seeps and bubbles alike.
         instanceBuffer.reset();
-        population.emit(
-          {
-            width: stage.size.width,
-            height: stage.size.height,
-            tMs: now,
-            breath: reduced ? 0.5 : 0.5 + 0.5 * Math.sin(t * Math.PI * 2 / 7),
-            detail: 1,
-            reducedMotion: reduced,
-          },
-          instanceBuffer,
-        );
+        population.emit(emitCtx, instanceBuffer);
+        bubblePopulation.emit(emitCtx, instanceBuffer);
         populationLayer?.draw(instanceBuffer);
       }
 
@@ -1239,7 +1392,7 @@ export default function Spring() {
       onGlimmer={() => apiRef.current?.glimmer()}
       onReducedMotion={(on) => apiRef.current?.reduced(on)}
       letGo={{ label: "let the spring rest", onLetGo: letGo, visible: hasKept }}
-      style={{ position: "fixed", inset: 0, background: "#050a0c" }}
+      style={{ position: "fixed", inset: 0, background: "#060a10" }}
     >
       <canvas
         ref={surfaceRef}
@@ -1270,7 +1423,6 @@ export default function Spring() {
   );
 }
 
-void hashSeed;
 void headForRingHz;
 void totalWater;
 void MAX_THROAT;

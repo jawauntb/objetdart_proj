@@ -31,7 +31,7 @@ const geyser = {
     shortName: "geyser",
     kind: "growth",
     bg: "#050a08",
-    bg2: "#132420",
+    bg2: "#241a12",
     glow: "#f0c690",
     accent: "#5aa89c",
     accent2: "#e88c4a",
@@ -87,6 +87,17 @@ const geyser = {
           retires_via: ["ceremony", "LetGo"],
           implementation_hint: "SceneObjectSpec",
         },
+        {
+          noun: "plume-droplet",
+          max_count: 40,
+          state_shape: "id, x, y, lateral velocity, vertical velocity, birth time, hue seed",
+          lifecycle:
+            "spawned deterministically (never Math.random) at the vent while phase === \"erupting\", scaled by Q_erupt → rides its own closed-form ballistic arc against a fixed gravity constant → fades and retires ~1.05s after birth, independent of the ledger's own much-faster watched-speed clock so the scatter is still visibly settling into \"cooling\"",
+          persistence: "ephemeral",
+          creates_via_verb: "(none — spawned by the erupting phase itself, not a gesture)",
+          retires_via: ["decay"],
+          implementation_hint: "SceneObjectSpec",
+        },
       ],
     },
     breath: {
@@ -116,6 +127,56 @@ const geyser = {
       letgo_clears_population: true,
       ceremony_is:
         "fires the throat manually (manualErupt) — a ballistic eruption whether or not the trigger E was ready, and increments the persistent eruptions count",
+    },
+    // Phase-7 depth: the mechanical machine has three phases (building,
+    // erupting, cooling); the shader's own "dormant" is not a fourth ledger
+    // state — it is the same "building" phase read at a low E, split by the
+    // same continuous fraction the uState uniform carries. See
+    // visualPhaseLabel() in Geyser.tsx and data/object-compiler/audits/
+    // phase-8-geyser-visual.md for why that made this room easier, not
+    // harder, to keep alive at rest.
+    state_machine: {
+      clock: {
+        kind: "phase-branch closed form",
+        reads_from_domain: "advanceExact (src/lib/geyserflow.ts)",
+      },
+      states: [
+        {
+          name: "dormant",
+          condition: 'phase === "building" && (H·T)/(E_TRIGGER_HIGH·1.2) < 0.35',
+          visible_effect: "cool register, quiet ground, no plume, no heat-shimmer, no steam",
+        },
+        {
+          name: "building",
+          condition: 'phase === "building" && the same ratio ≥ 0.35',
+          visible_effect:
+            "a subtle rippling heat-shimmer climbs over the ground; the vent rim, the mineral bloom and the sky warm continuously toward the hot register",
+        },
+        {
+          name: "erupting",
+          condition: 'phase === "erupting"',
+          visible_effect:
+            "a bright accent2 plume rides unbroken from the throat through the sky, ballistic droplets scatter off it, hot-weight pins to 1",
+        },
+        {
+          name: "cooling",
+          condition: 'phase === "cooling"',
+          visible_effect:
+            "the plume fades on Q_erupt's own decay, condensation beads on the rocks near the vent and fades as the ground settles back toward the next build",
+        },
+      ],
+      transitions: [
+        { from: "dormant", to: "building", on: "E climbs past the 0.35 read on the same ratio" },
+        { from: "building", to: "erupting", on: "E crosses E_TRIGGER_HIGH upward, or ceremony/knock" },
+        { from: "erupting", to: "cooling", on: "ERUPT_DURATION_S elapses" },
+        { from: "cooling", to: "dormant", on: "E falls below E_TRIGGER_LOW — the hysteresis reseat" },
+      ],
+      uniform: {
+        name: "uState",
+        kind: "float",
+        packing:
+          "floor = ledger phase index (0 building / 1 erupting / 2 cooling), fract = continuous progress through it — never a discrete switch",
+      },
     },
   },
 } as const satisfies RoomManifest;
