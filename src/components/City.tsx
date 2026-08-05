@@ -570,10 +570,9 @@ const GROUND_FRAG = /* glsl */`
     // deep-indigo night sky, tinted by season
     skyNight = mix(vec3(0.04, 0.06, 0.11), vec3(0.02, 0.04, 0.08), 1.0 - sh);
 
-    // ── horizon: a soft band where sky meets earth. Below is ground,
-    //    above is sky. The horizon line stays at y=0.58 (a bit below mid)
-    //    so a settlement built on the ground has room to breathe.
-    float horizon = 0.58;
+    // ── horizon: sky is the top ~28% so shore, river, and skyline own
+    //    the frame the way a waterfront photograph does.
+    float horizon = 0.72;
     float ground = smoothstep(horizon - 0.02, horizon + 0.02, uv.y);
 
     // ── soil: fbm noise on top of the season base, banded slightly by y
@@ -1002,14 +1001,27 @@ export default function City() {
 
     // ── quality / dpr ────────────────────────────────────────────────────
     const embedded = window.self !== window.top;
-    const governor = createFrameGovernor(embedded ? "medium" : "high");
+    // Phones start medium — high's CSM + SSR + cloud march is what
+    // cooked iPhones. Desktop still opens on high and can climb.
+    const coarse =
+      typeof window !== "undefined" &&
+      !!window.matchMedia?.("(pointer: coarse)").matches;
+    const iOS =
+      typeof navigator !== "undefined" &&
+      /iPhone|iPad|iPod/i.test(navigator.userAgent || "");
+    const mobileBudget = embedded || coarse || iOS;
+    const governor = createFrameGovernor(mobileBudget ? "medium" : "high");
     let reduceMotion = false;
     if (typeof window !== "undefined" && window.matchMedia) {
       reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     }
     // Population walk slowdown under reduced motion.
     const populationSpeed = reduceMotion ? 0.4 : 1;
-    const qualityCtx = { embedded, reducedMotion: reduceMotion };
+    const qualityCtx = {
+      embedded,
+      reducedMotion: reduceMotion,
+      maxDpr: mobileBudget ? 1.5 : undefined,
+    };
     let dpr = resolveDpr(governor.tier(), qualityCtx);
     let width = 0;
     let height = 0;
@@ -1401,7 +1413,8 @@ export default function City() {
     const cityCam: CityCamera = createCityCamera({
       width: 1,
       height: 1,
-      initialZoom: isPortrait ? 0.62 : 0.5,
+      // Bias toward the waterfront eye-level postcard, not a floorplan.
+      initialZoom: isPortrait ? 0.68 : 0.58,
     });
 
     // ── devtools perf-probe rings (opt-in via ?__perf=1) ─────────────────
@@ -1500,13 +1513,15 @@ export default function City() {
     // strip's world extents.
     const traffic: CityTraffic = createCityTraffic({
       harbour: {
-        centerZ: 50,
-        depth: 32,
-        halfWidth: 48,
+        centerZ: 44,
+        depth: 52,
+        halfWidth: 70,
         surfaceY: 0.05,
       },
       seed: cityGroundSeed ^ 0x7a4c,
     });
+    // Seed the waterfront avenues so cars crawl before any road is drawn.
+    traffic.setRoads([]);
     // Attach the group to the skyline scene so bloom picks up the
     // emissive quads and bulbs, and depth-tests against the towers.
     skyline.scene.add(traffic.group);
@@ -1645,6 +1660,7 @@ export default function City() {
     let nextPersonId = 1;
 
     let activePlant: Plot | null = null;
+    let activeDemolish: Plot | null = null;
     let activePlantStartedAt = 0;
     let plantRingWeight = 0;
 
@@ -2009,12 +2025,22 @@ export default function City() {
 
         if (e.phase === "enter") {
           const existing = plotAt(e.x, e.y);
-          if (existing && !existing.sealed) {
+          if (existing && existing.sealed) {
+            // ceremony on a sealed plot unmakes it — make and unmake.
+            activeDemolish = existing;
+            activePlant = null;
+            try { haptics.tap(); } catch { /* noop */ }
+          } else if (existing && !existing.sealed) {
             activePlant = existing;
+            activeDemolish = null;
             activePlantStartedAt = performance.now();
             existing.dwellStartMs = activePlantStartedAt;
           } else if (!existing) {
-            if (plots.length >= MAX_PLOTS) return;
+            if (plots.length >= MAX_PLOTS) {
+              try { haptics.chop(); } catch { /* noop */ }
+              ring(noteForRole("home") - 12, 160);
+              return;
+            }
             const seed = ((e.x * 1000) | 0) ^ ((e.y * 1000) | 0) ^ nextPlotId;
             const plot: Plot = {
               id: nextPlotId++,
@@ -2029,6 +2055,7 @@ export default function City() {
             };
             plots.push(plot);
             activePlant = plot;
+            activeDemolish = null;
             activePlantStartedAt = plot.dwellStartMs;
             spawnDwellersFor(plot);
             ring(noteForPlot({ role: "home", seed: plot.seed }), 240);
@@ -2036,14 +2063,23 @@ export default function City() {
           }
         }
 
+        if (e.phase === "tick" && activeDemolish) {
+          if (e.tier >= 3) demolishPlot(activeDemolish);
+          return;
+        }
+
         if (e.phase === "tick" && activePlant) {
           activePlant.liveDwellMs = performance.now() - activePlantStartedAt;
           if (e.tier >= 2) climbPlantRole(activePlant, activePlant.liveDwellMs);
-          if (e.tier >= 3) sealPlot(activePlant);
+          // seal waits for release so the tree rung can be reached
         }
 
         if (e.phase === "release") {
+          if (activePlant && e.tier >= 3 && !activePlant.sealed) {
+            sealPlot(activePlant);
+          }
           activePlant = null;
+          activeDemolish = null;
           idleWrite.schedule();
         }
       },
@@ -2207,7 +2243,12 @@ export default function City() {
       tilt: (e) => {
         markInteraction();
         const lean = Math.min(1, Math.hypot(e.beta, e.gamma) / 45);
-        weatherRain = Math.max(weatherRain, lean * 0.9);
+        weatherRain = Math.max(weatherRain, lean * 0.55);
+        // Gyro leans the camera — the postcard tips with the hand.
+        cityCam.setTiltBias(
+          (e.gamma / 45) * 0.16,
+          (e.beta / 45) * 0.10,
+        );
       },
       shake: (e) => {
         markInteraction();
@@ -2294,7 +2335,8 @@ export default function City() {
         // is present the press is silent — nothing to seal is not an error.
         const under = plotAt(cursorX, cursorY);
         const target = under ?? activePlant;
-        if (target && !target.sealed) sealPlot(target);
+        if (target && target.sealed) demolishPlot(target);
+        else if (target && !target.sealed) sealPlot(target);
         return;
       }
 
@@ -3608,6 +3650,28 @@ export default function City() {
       plantRingWeight = 1;
       idleWrite.schedule();
     }
+    function demolishPlot(plot: Plot): void {
+      const idx = plots.indexOf(plot);
+      if (idx < 0) return;
+      plots.splice(idx, 1);
+      for (const person of people) {
+        if (person.homeId === plot.id || person.targetPlotId === plot.id) {
+          person.phase = "leaving";
+          person.targetPlotId = null;
+          person.leavingSinceMs = cityTimeMs;
+          person.leavingTo = nearestEdgePoint({ x: person.x, y: person.y });
+        }
+      }
+      if (activePlant === plot) activePlant = null;
+      if (activeDemolish === plot) activeDemolish = null;
+      // Descending inverse of the ceremony chord.
+      if (isPlayableRole(plot.role)) {
+        const chord = chordForCeremony(plot.role).map((n) => n - 12);
+        ringChord(chord, 380, 28);
+      }
+      try { haptics.chop(); } catch { /* noop */ }
+      idleWrite.schedule();
+    }
     function cycleLens(direction: 1 | -1): void {
       const lenses: CityLens[] = ["map", "hydrology", "satisfaction"];
       const cur = lenses.indexOf(lens);
@@ -3623,19 +3687,22 @@ export default function City() {
     // "release" phase; the plot stays at whatever role the ladder reached.
     function beginKeyboardPlant(cx: number, cy: number): void {
       const existing = plotAt(cx, cy);
+      if (existing && existing.sealed) {
+        activeDemolish = existing;
+        activePlant = null;
+        activePlantStartedAt = performance.now();
+        return;
+      }
       if (existing && !existing.sealed) {
         activePlant = existing;
+        activeDemolish = null;
         activePlantStartedAt = performance.now();
         existing.dwellStartMs = activePlantStartedAt;
         return;
       }
-      if (existing) {
-        // sealed plots refuse the plant — keyboard mirrors the touch path
-        keyboardHolding = false;
-        return;
-      }
       if (plots.length >= MAX_PLOTS) {
         keyboardHolding = false;
+        try { haptics.chop(); } catch { /* noop */ }
         return;
       }
       const seed = ((cx * 1000) | 0) ^ ((cy * 1000) | 0) ^ nextPlotId;
@@ -3658,19 +3725,29 @@ export default function City() {
       try { haptics.tap(); } catch { /* noop */ }
     }
     function advanceKeyboardPlant(): void {
-      if (!keyboardHolding || !activePlant) return;
+      if (!keyboardHolding) return;
+      if (activeDemolish) {
+        if (holdTier(performance.now() - activePlantStartedAt) >= 3) {
+          demolishPlot(activeDemolish);
+          keyboardHolding = false;
+        }
+        return;
+      }
+      if (!activePlant) return;
       const dwell = performance.now() - activePlantStartedAt;
       activePlant.liveDwellMs = dwell;
       const tier = holdTier(dwell);
       if (tier >= 2) climbPlantRole(activePlant, dwell);
-      if (tier >= 3) sealPlot(activePlant);
     }
     function releaseKeyboardPlant(): void {
       keyboardHolding = false;
       if (activePlant) {
+        const dwell = performance.now() - activePlantStartedAt;
+        if (holdTier(dwell) >= 3 && !activePlant.sealed) sealPlot(activePlant);
         activePlant = null;
         idleWrite.schedule();
       }
+      activeDemolish = null;
     }
 
     // The cursor drifts under held arrow keys. Speed is a plain px-per-ms

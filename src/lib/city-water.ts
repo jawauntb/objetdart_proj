@@ -80,12 +80,11 @@
  *   pass so tall buildings still occlude the water beyond them.
  *
  * Tier gating (the door B/C/D depend on):
- *   high, medium  → SSR runs; its RT is 0.7 × canvas on high, 0.5 × on
- *                   medium. Wave normal scrolls; the raymarch tap count
- *                   is 24 steps on high, 16 on medium.
- *   low           → SSR is hidden; a cheaper static mirror mesh takes its
+ *   high          → SSR runs at 0.7 × canvas, 24 march steps.
+ *   medium / low  → SSR is hidden; a cheaper static mirror mesh takes its
  *                   place, painting the sky gradient with a wave normal
- *                   highlight but no live reflection.
+ *                   highlight but no live reflection (phones cannot afford
+ *                   a second skyline render every frame).
  *   sleep         → the whole water pass is skipped by the composer.
  *
  * Nothing here touches gesture, city.ts laws, or persistence. The pure
@@ -516,9 +515,9 @@ function getWaveNormalTexture(): THREE.DataTexture {
 // /city's ±40-unit field (CITY_HALF in city-camera.ts): the plane starts
 // where the city ends (z=+34) and extends outward to z=+66, wide enough
 // to span the full city width.
-const WATER_PLANE_WIDTH = 96;
-const WATER_PLANE_DEPTH = 32;
-const WATER_PLANE_CENTER_Z = 50;
+const WATER_PLANE_WIDTH = 140;
+const WATER_PLANE_DEPTH = 52;
+const WATER_PLANE_CENTER_Z = 44;
 /**
  * World-space Y of the harbour surface. Exported so downstream passes
  * (the participating-media fog raymarch inside city-godrays.ts) can
@@ -1080,12 +1079,11 @@ export function createCityWater(opts: CityWaterOptions): CityWater {
 
       // Tier flip: visibility + march-step count + RT size.
       if (u.tier !== lastTier) {
-        const isReflect = u.tier === "high" || u.tier === "medium";
-        const isStatic = u.tier === "low";
+        const isReflect = u.tier === "high";
+        const isStatic = u.tier === "medium" || u.tier === "low";
         water.visible = isReflect;
         staticMesh.visible = isStatic;
-        ssrUniforms.uMarchSteps.value =
-          u.tier === "high" ? MARCH_STEPS_HIGH : MARCH_STEPS_MEDIUM;
+        ssrUniforms.uMarchSteps.value = MARCH_STEPS_HIGH;
         lastTier = u.tier;
         if (isReflect) resizeRT(u.tier);
         // Tier flip is an invalidator — the reflection's step count or

@@ -390,9 +390,9 @@ export function cloudStepsForTier(tier: QualityTier): {
 } {
   switch (tier) {
     case "high":
-      return { primary: 48, sun: 6 };
+      return { primary: 24, sun: 4 };
     case "medium":
-      return { primary: 32, sun: 4 };
+      return { primary: 8, sun: 2 };
     case "low":
     case "sleep":
     default:

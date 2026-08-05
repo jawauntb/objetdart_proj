@@ -224,13 +224,13 @@ for (let i = 0; i < 200; i += 1) {
 
 {
   const s = cloudStepsForTier("high");
-  assert.equal(s.primary, 48, "high tier: 48 primary steps");
-  assert.equal(s.sun, 6, "high tier: 6 sun steps");
+  assert.equal(s.primary, 24, "high tier: 24 primary steps");
+  assert.equal(s.sun, 4, "high tier: 4 sun steps");
 }
 {
   const s = cloudStepsForTier("medium");
-  assert.equal(s.primary, 32, "medium tier: 32 primary steps");
-  assert.equal(s.sun, 4, "medium tier: 4 sun steps");
+  assert.equal(s.primary, 8, "medium tier: 8 primary steps");
+  assert.equal(s.sun, 2, "medium tier: 2 sun steps");
 }
 {
   const s = cloudStepsForTier("low");
@@ -400,9 +400,9 @@ for (let i = 0; i <= 200; i += 1) {
 // march, the coverage threshold, or the front-to-back composite
 // would drain the volumetric read. Names are stamped in the source.
 
-const frag = buildCloudFragmentShader(48, 6);
-assert.ok(frag.includes("#define PRIMARY_STEPS 48"), "primary count stamped as GLSL #define");
-assert.ok(frag.includes("#define SUN_STEPS 6"), "sun count stamped as GLSL #define");
+const frag = buildCloudFragmentShader(24, 4);
+assert.ok(frag.includes("#define PRIMARY_STEPS 24"), "primary count stamped as GLSL #define");
+assert.ok(frag.includes("#define SUN_STEPS 4"), "sun count stamped as GLSL #define");
 assert.ok(frag.includes("hgPhase"), "fragment carries the Henyey-Greenstein phase");
 assert.ok(frag.includes("uSunDir"), "fragment samples the sun direction uniform");
 assert.ok(frag.includes("uCoverage"), "fragment thresholds density by coverage");
@@ -434,9 +434,9 @@ assert.ok(cloudVertexShader.includes("uCamPos"), "vertex reads the camera world 
 
 // tier-dependent step counts land in the shader
 {
-  const medium = buildCloudFragmentShader(32, 4);
-  assert.ok(medium.includes("#define PRIMARY_STEPS 32"), "medium: 32 primary steps stamped");
-  assert.ok(medium.includes("#define SUN_STEPS 4"), "medium: 4 sun steps stamped");
+  const medium = buildCloudFragmentShader(8, 2);
+  assert.ok(medium.includes("#define PRIMARY_STEPS 8"), "medium: 8 primary steps stamped");
+  assert.ok(medium.includes("#define SUN_STEPS 2"), "medium: 2 sun steps stamped");
 }
 
 // step counts under 1 are clamped to 1 so the GLSL loop bound is valid
@@ -574,7 +574,7 @@ assert.ok(cloudVertexShader.includes("uCamPos"), "vertex reads the camera world 
 console.log(
   "city-clouds ok: 200 m slab at 800 m altitude, coverage 0.5→0.65 across day, " +
   "density peaks at dusk (1.3), 6 m/s easterly wind is deterministic in cityTimeMs, " +
-  "48/32/0 tier ladder, HG g=0.6 for silver-lining phase, raymarch operations named, " +
+  "24/8/0 tier ladder, HG g=0.6 for silver-lining phase, raymarch operations named, " +
   "r9-0: horizon-pink (1.35, 0.60, 0.72) peaks at dusk/dawn, underbelly-lift 1.6, " +
   "multi-scatter 0.35, silver-lining 0.55, all four uniforms + shader ops named.",
 );

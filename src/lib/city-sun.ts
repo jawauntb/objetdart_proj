@@ -201,20 +201,17 @@ export function sunIntensityAt(dayFraction: number): number {
 }
 
 /**
- * Per-tier shadow-map resolution. The brief pins 4096² per cascade at
- * high tier — the resolution required to make a pedestrian's contact
- * shadow AND a 180 m tower's self-shadow read solid in the same frame.
- * Weaker tiers step down by powers of two so mid-range hardware does
- * not blow its shadow-atlas budget. Sleep tier disables shadows entirely.
+ * Per-tier shadow-map resolution. Three 4096² cascades melted phones;
+ * the ladder now keeps contact shadows readable without an atlas war.
+ * Low and sleep disable shadows entirely.
  *
  * The ladder is pure: it does not read any THREE.js state, so the
  * test suite can pin every step.
  */
 export function cascadeMapSizeForTier(tier: QualityTier): number {
-  if (tier === "high") return 4096;
-  if (tier === "medium") return 2048;
-  if (tier === "low") return 1024;
-  return 0; // sleep — no shadows at all
+  if (tier === "high") return 2048;
+  if (tier === "medium") return 1024;
+  return 0; // low / sleep — no shadows at all
 }
 
 /**
@@ -463,20 +460,27 @@ export function createCitySun(opts: CitySunOptions = {}): CitySun {
     },
     applyTier(tier: QualityTier) {
       const wantMap = cascadeMapSizeForTier(tier);
-      for (const c of cascades) {
-        if (wantMap === 0) {
+      // Medium: far cascade only. High: mid + far. Near cascade stays
+      // off outside high desktop budgets — three full CSM passes were
+      // the hottest GPU line item on phones.
+      const activeCount =
+        wantMap === 0 ? 0 : tier === "medium" ? 1 : 2;
+      for (let i = 0; i < cascades.length; i += 1) {
+        const c = cascades[i];
+        // cascades are ordered [near, mid, far] — keep the outer ones.
+        const enable = i >= cascades.length - activeCount;
+        if (!enable || wantMap === 0) {
           c.castShadow = false;
-        } else {
-          c.castShadow = true;
-          if (c.shadow.mapSize.x !== wantMap) {
-            c.shadow.mapSize.set(wantMap, wantMap);
-            // Force reallocation of the shadow map at the new size.
-            const map = c.shadow.map as { dispose?: () => void } | null;
-            if (map && typeof map.dispose === "function") {
-              try { map.dispose(); } catch { /* noop */ }
-            }
-            c.shadow.map = null;
+          continue;
+        }
+        c.castShadow = true;
+        if (c.shadow.mapSize.x !== wantMap) {
+          c.shadow.mapSize.set(wantMap, wantMap);
+          const map = c.shadow.map as { dispose?: () => void } | null;
+          if (map && typeof map.dispose === "function") {
+            try { map.dispose(); } catch { /* noop */ }
           }
+          c.shadow.map = null;
         }
       }
     },
