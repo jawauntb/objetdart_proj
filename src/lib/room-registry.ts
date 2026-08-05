@@ -255,6 +255,13 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "axis",
     keeps: "objetdart:atlas:naturals:v1",
     creates: "a natural",
+    interacts:
+      "same-kind crowding at the moment of planting: a cairn set down within reach of an " +
+      "existing cairn (or a flower near a flower, a trail near a trail) is nudged clear of " +
+      "every same-kind neighbour in range, summed exactly as lib/orbfield's disc separation is " +
+      "— so two cairns can never stack invisibly on one spot, and a hand that keeps planting " +
+      "the same kind in one place watches the cluster visibly spread out (addNatural in " +
+      "Atlas.tsx). Different kinds pass through each other; nothing merges or is consumed.",
     exempt: {
       tilt:
         "the map is seen from directly overhead, so there is no down for the device to lean " +
@@ -272,6 +279,16 @@ export const ROOM_REGISTRY: RoomEntry[] = [
       "two differ because a phone's glide is shorter than a trackpad's. Neither classifies a " +
       "contact: no hold, tap or chord is measured against them, and the room's one real gesture " +
       "timing (the plant) is THRESHOLDS.dwellMs from gesture/core.ts",
+    nondeterminism:
+      "both plant paths (the gesture dwell and the hand-tuned pointer's own long-press) now draw " +
+      "a planted mark's kind, its drawing seed, and — for a trail — its whole footprint path from " +
+      "a seeded hash of where and when it landed, not Math.random(); all three are persisted " +
+      "(objetdart:atlas:naturals:v1), so a reload draws back the same cairn, flower or trail it " +
+      "left. The 30 Math.random() calls left never reach that storage: the idle glimmer's choice " +
+      "of which existing mark to highlight, a fallback id's entropy (crypto.randomUUID covers the " +
+      "normal path), the four drifting cloud-shadows, and the flock/cloud/gust/sunbeam/migration/" +
+      "meteor weather system (spawn parameters, which kind fires, and the two setTimeout jitters) " +
+      "— ambient sky the map never remembers.",
   },
   {
     key: "city",
@@ -287,6 +304,15 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "axis",
     keeps: "objetdart:city:v1",
     creates: "a plot",
+    interacts:
+      "plots never touch, but they compete through the population moving between them: a " +
+      "dweller's need routes to the nearest matching plot (targetForNeedWithRegular in lib/city), " +
+      "so two stores split the same catchment and the plot with no rival within reach keeps every " +
+      "visitor who would otherwise have hesitated between them (hesitationBetween). A settlement " +
+      "whose store/event plots cannot meet the demand its own homes generate loses residents to a " +
+      "real leaving phase — an unmet dweller walks to the map edge and is retired from the " +
+      "population — so a plot's worth is read off the traffic its neighbours leave it, not a fixed " +
+      "number on the plot itself.",
     exempt: {},
   },
   {
@@ -298,7 +324,11 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     address: { band: "coast" },
     frame: "yield",
     chrome: "axis",
-    keeps: "objetdart:coast:v1",
+    // The shore joined the shared naturals bus: a shell left here is the shell
+    // /tide and /waves already know about. The private objetdart:coast:v1 store
+    // is read once on first load and folded forward, so nothing a visitor left
+    // is dropped — but it is no longer where the shore keeps anything.
+    keeps: "objetdart:world:naturals:v1",
     creates: "a shell",
     exempt: {},
     interacts:
@@ -308,6 +338,11 @@ export const ROOM_REGISTRY: RoomEntry[] = [
       "redeposition from a rogue set can visibly bury a shell in the new sand; the profile's own " +
       "slow relax later uncovers it. At the shell cap the oldest washes out to the sea rather " +
       "than vanishing silently.",
+    nondeterminism:
+      "the 2 Math.random() calls in CoastBeach.tsx fill the shore voice's brown-noise and hiss " +
+      "audio buffers once, from real entropy, at first use — neither is a shell, a sand-profile " +
+      "sample, or anything else the room persists or a replay would need; they are the raw grain " +
+      "an audio noise buffer needs, not a material trait.",
   },
   {
     key: "ocean",
@@ -327,6 +362,16 @@ export const ROOM_REGISTRY: RoomEntry[] = [
       "along the same crossing — the swell and the naturals share one drag field, not two " +
       "unrelated animations. Breaching life (whale/pod/school/seabirds) is a deterministic cycle " +
       "read out of the same field, never a decal fixed to the tap point.",
+    nondeterminism:
+      "the file already carried the rule ('Deterministic 0..1 from an integer seed — never " +
+      "Math.random for placement') for its own hash01, and the code now keeps it: a dwell-planted " +
+      "natural's kind, and the rare beachcomber event's kind and where the tide leaves it, draw " +
+      "from hash01 rather than a roll — the only two paths that reach the persisted world " +
+      "(objetdart:world:v1). The 29 Math.random() calls left are weather and impact texture that " +
+      "never becomes a natural: seabirds/phosphor/lightning/rogue-wave/whale spawn parameters, a " +
+      "flip or shake's crasher scatter, the ambient wave-train's steady drizzle of crashers, a " +
+      "breaking wave's foam-spray offsets, a lightning bolt's jagged path, and the two setTimeout " +
+      "jitters that pick only when the scheduler's next tick fires.",
   },
   {
     key: "tide",
@@ -347,6 +392,16 @@ export const ROOM_REGISTRY: RoomEntry[] = [
       "to align with it), which is what a spring tide actually is: two bulges genuinely " +
       "superposing, not a scripted 'big wave' — the surge that follows visibly floods the shore " +
       "and keeps deepening the longer the train continues.",
+    nondeterminism:
+      "the natural planted by a dwell — the one persisted, countable object this room creates — " +
+      "now draws its kind from a seeded hash of the touch position and time, not Math.random(). " +
+      "The 14 Math.random() calls left are all ambient sky weather in the same family /watch " +
+      "already exempts: a shake's gust direction, and the meteor/moonhalo/fog/boat/firefly the " +
+      "weather scheduler (and the tap train's top rungs) summon — none of it is persisted " +
+      "(addWeather is a transient pool, never written to objetdart:world:v1) and none of it is a " +
+      "force or a merge outcome, so a replay losing the exact shape of a given firefly or fog " +
+      "bank changes nothing a visitor could compare. The two setTimeout jitters only pick when " +
+      "the scheduler's next tick fires, never what it spawns.",
   },
   {
     key: "waves",
@@ -368,6 +423,16 @@ export const ROOM_REGISTRY: RoomEntry[] = [
       "tier-5 tap scans the field for where its own wavefronts are already piling up and pours " +
       "energy in there, so the rogue wave that results is emergent from real interference, never " +
       "a scripted extra drop.",
+    nondeterminism:
+      "wherever a draw becomes a persisted natural (objetdart:world:v1) it is seeded, not " +
+      "Math.random(): a falling leaf's rest spot and a surfacing koi's are drawn from a hash01 " +
+      "stream advanced once per draw, and a raised source restored from objetdart:waves:sources:v1 " +
+      "(which saves only nx/ny/strength) gets its unsaved animation phase back from a hash of its " +
+      "own position rather than a fresh roll. The 21 Math.random() calls left are the pond's purely " +
+      "ambient weather — the dragonfly, wind gust, frog jump and water-strider events, none of " +
+      "which ever becomes a persisted natural — plus a shake's chaotic splash scatter, the sparse " +
+      "ambient pluck/drop that keeps the medium from looking dead, and the two setTimeout jitters " +
+      "that pick only when the weather scheduler's next tick fires.",
   },
   {
     key: "sine",
@@ -527,6 +592,15 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     creates: null,
     exempt: {},
     rawPointer: "the wind vane and the barometer are instrument panels with pointer capture — continuous dials the engine has no verb for",
+    nondeterminism:
+      "storm keeps nothing and creates nothing (both null above) — the room's real state is the " +
+      "pressure and charge dials, and both move only from the hand, never a roll. All 35 " +
+      "Math.random() calls texture the weather those dials drive: rain particle life/size, spray " +
+      "and wind-streak spawn position/speed, a lightning bolt's branching path and flicker timing, " +
+      "wave-crash foam scatter, and the gap before the next crash or the next bolt. None of it is " +
+      "an object anything else reads back — the discharge event itself is deterministic (charge " +
+      "threshold or a tap), only the bolt's exact fork pattern is drawn fresh — so there is nothing " +
+      "here a replay of the pressure/charge state would need to reproduce.",
   },
   {
     key: "clouds",
@@ -540,6 +614,15 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     keeps: null,
     creates: null,
     exempt: {},
+    nondeterminism:
+      "the sky's own creations are seeded, not Math.random(): the glyph flock born at mount " +
+      "(its comment already promised 'seeded at mount', which the code hadn't kept until now) and " +
+      "every trait of a tapped weather cell, rain veil, or wind stroke — spread, drift, lift, " +
+      "phase, rain, slant, hue — draw from a hash of that object's own id and position, so the " +
+      "same run of taps grows the same weather. The 9 Math.random() calls left are geometry no " +
+      "population needs back: a lightning bolt's mid-jitter fork and a strike's start/end offset " +
+      "(neither lightning nor a weather cell is persisted or kept), a poked glyph's trail jitter, " +
+      "and where a weather cell reappears after it drifts off the top of the sky.",
   },
   {
     key: "mountain",
@@ -893,6 +976,13 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     keeps: null,
     creates: null,
     exempt: {},
+    nondeterminism:
+      "fire keeps nothing and creates nothing (both null above) — there is no persisted object " +
+      "for any of the 33 Math.random() calls to be a trait of. Every one is an ember's own life: " +
+      "spawn position, velocity, lifespan, radius and hue, spark-fountain angle and speed, and how " +
+      "many embers a gust or a log-shift throws. Embers pool and expire within a session (the " +
+      "`Ember` array) and are never written to storage, so nothing downstream ever reads one back " +
+      "— there is no replay for this decoration to owe reproducibility to.",
   },
   {
     key: "earth",
@@ -942,6 +1032,20 @@ export const ROOM_REGISTRY: RoomEntry[] = [
       "star takes an orbit around it and keeps it. Nothing here is a decal — every object is " +
       "in the same force field as every other, and the room keeps spawning and collapsing on " +
       "its own timers when no hand is on it",
+    nondeterminism:
+      "Math.random() left in Stars.tsx is decorative only, never what the sky is: the " +
+      "crypto.randomUUID fallback for a born object's id (3 call sites, only reached when the " +
+      "Crypto API is unavailable — the id is a key, not a trait); the infalling-matter mote " +
+      "swirl a black hole draws once it exists (6 call sites, a visual grain around an already-" +
+      "seeded hole, never a trait a merge or a replay needs); the collapsing-well spark jitter " +
+      "(2 call sites, the same kind of grain); and the scheduling delay between one cosmic-" +
+      "weather tick and the next (2 call sites, which decides only *when* the timer fires, " +
+      "never *what* it spawns). Every call site that decides what is born, where, or whether " +
+      "two black holes merge — the comet/tidal/GRB event angles, the unattended supernova's " +
+      "target star and collapse roll, the weather timer's spawn position and event choice, the " +
+      "merger-scan roll — now draws from `dice()`, a small counter (skyDiceRef) advanced once " +
+      "per draw and hashed (hash01), so the same run of taps and elapsed intervals plays back " +
+      "identically while a longer or shorter visit still never shows the same sky twice.",
   },
   {
     key: "space",
@@ -979,6 +1083,17 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     keeps: null,
     creates: null,
     exempt: {},
+    nondeterminism:
+      "the room's real state — every defect (+1 vortex / −1 saddle), its position and charge — " +
+      "is created only from a touch coordinate (spawnDefect(q, x, y)) and never rolls a die; " +
+      "annihilation and splitting are read off defect positions, not chance. All 24 " +
+      "Math.random() calls left are the comet field, which the room's own comment names as what " +
+      "it is: streaks combed along the direction field like iron filings, respawned continuously, " +
+      "counted by targetCount() and never persisted (`creates: null`, no storage key) or read back " +
+      "by the field's own law. That covers particle respawn position/color-group/size/speed/life " +
+      "(respawn, syncParticles), the gust-stroke scatter a shake or a three-finger drag combs into " +
+      "the sky, the drum gesture's spark shower between two hands, and the audio noise buffer " +
+      "filled once at first use — decoration a replay of the defect field does not need.",
   },
   {
     key: "beam",
@@ -1002,6 +1117,14 @@ export const ROOM_REGISTRY: RoomEntry[] = [
       "clock, or a tier-5 shower of them, is that same orbital law losing its grip on one body at a " +
       "time and letting it fall outward as a meteor streak; the ring closes back over the gap it " +
       "left",
+    nondeterminism:
+      "the 3 Math.random() calls left in Beam.tsx are scheduling only, never what the room is: " +
+      "the hiss buffer is filled once from real noise at first use (an audio noise source, not a " +
+      "trait), and the two meteorNext rolls only pick how long until the next loose petal, never " +
+      "which direction it takes — that draw (aRing/aAng/aDepth/aPhase/aSeed/aSun for the whole " +
+      "petal formation, and each meteor's own angle and jitter) now comes from a seeded " +
+      "mulberry32/hashSeed stream, so the formation is the same field every load and a given run " +
+      "of meteor breaks replays the same way.",
   },
   {
     key: "signal",
@@ -1014,6 +1137,12 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "none",
     keeps: "objetdart:signal-kept:v1",
     creates: "a kept signal",
+    interacts:
+      "stated exemption: a kept signal (KeptSignal in Signal.tsx) is a saved bookmark — prompt, " +
+      "label, source, model, chip tags — of a broadcast the visitor asked the station to remember, " +
+      "the same way a station preset is a memory of a dial position, not a body in a field. It " +
+      "carries no position, no mass, no proximity to any other kept signal, so there is no force " +
+      "for a second one to exert. A population of presets, not a population of objects.",
     exempt: {
       weather: "the signal is an ordered spectral trace with no spatial weather field; wind would change its encoded measurement rather than its material",
       dilation: "time is the horizontal coordinate of the signal, so dilation would rewrite the reading rather than hold a simulated world",
@@ -1158,6 +1287,11 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "axis",
     keeps: "objetdart:charts:pinned:v1",
     creates: "a pinned reading",
+    interacts:
+      "stated exemption: `pinned` in Charts.tsx is typed `Snapshot | null` — the room holds at " +
+      "most ONE pinned reading at a time, ever, not an array. A saved snapshot of a candle " +
+      "reading, exactly like the room's own guide language calls it, not a population; there is " +
+      "no second object for a force to act between.",
     exempt: {},
     governor: "chart motion is a short transition between readings and stops at rest, so adaptive simulation detail would not govern any persistent frame loop",
   },
@@ -1245,6 +1379,17 @@ export const ROOM_REGISTRY: RoomEntry[] = [
       dwell: "a drop pinches off only from continuous vessel tilt and surface tension; a stationary touch cannot plant a second physical droplet",
     },
     governor: "the sphere's requestAnimationFrame loop is event-driven settling after an impact and sleeps when no drop is moving",
+    nondeterminism:
+      "every droplet's own state — its initial microbial population, a new bead's idle-buoyancy " +
+      "phase, and the idle event that spawns dust or a bacterium's division (the one idle event " +
+      "that leaves permanent state) — now draws from a seeded module-level stream (dropRand01, " +
+      "reseeded once at first mount), not Math.random(); the shared rand(a,b) helper used through " +
+      "the file's physics now routes through the same stream. The 9 Math.random() calls left are " +
+      "texture on an already-deterministic body, never a trait a merge or a replay needs: the " +
+      "one-time bubbling audio noise buffer, a shake's random mode/velocity kick (agitate), the " +
+      "idle-timer's own scheduling jitter (twice — when the next event fires, not what it is), the " +
+      "~20s glimmer's exploratory poke angle, a three-finger drag's wander-heading jitter on the " +
+      "life already inside, and the graze-triggered dart flinch's random chance.",
   },
   {
     key: "seed",
@@ -1376,6 +1521,14 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "axis",
     keeps: null,
     creates: "a lantern",
+    interacts:
+      "real coalescence: every cloud a dwell grows is a parcel with mass, position and momentum " +
+      "(lib/aircolumn's Parcel), and two whose radii touch (parcelsTouch) do not sit side by side " +
+      "— they merge (mergeParcels) into a third parcel at their combined mass and centre of mass, " +
+      "carrying the summed momentum forward; nothing is created or lost in the meeting. A parcel " +
+      "that thins past PARCEL_MIN_MASS under shear and dry entrainment (dissipationRate) " +
+      "dissipates rather than lingering as a ghost. The lantern a ceremony seals is what the hand " +
+      "keeps of that grown parcel; the merging happens upstream of the keeping.",
     exempt: {},
   },
   {
@@ -1392,6 +1545,13 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "none",
     keeps: "objetdart:cabinet:v2",
     creates: "an ember",
+    interacts:
+      "coalescence: an ember a dwell just finished gathering, released within reach of an " +
+      "existing ember of the same current (cluster), does not stand beside it — it combines into " +
+      "it, weight (brightness) summed and capped at their midpoint, exactly the way embers heaped " +
+      "in a real hearth burn as one hotter light rather than two separate sparks (the release " +
+      "handler in HomeCabinet.tsx). Embers lit from a different current never merge — they are " +
+      "from a different room, not the same fire.",
     exempt: {},
     rawPointer:
       "a pointermove parallax (the grammar's own desktop 'hover ≈ light touch' register, which has no classified-gesture equivalent) and a pointerup/pointercancel that releases the three-finger dilation; every real verb comes from attachGestures",
@@ -1425,6 +1585,13 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "axis",
     keeps: "objetdart:galaxy:v1",
     creates: "a star",
+    interacts:
+      "propagating star formation, computed and geometric, not painted: every gas region a hand " +
+      "seeds is a point on the disc's own rotation; when one ignites, its shell expands " +
+      "(shellRadius) and a second, still-dark region the shell genuinely reaches (shellReaches, " +
+      "lib/spiral) ignites in turn, lighting a real chain of regions across the arm rather than " +
+      "each one flaring on its own private timer (propagate). The chain runs unattended once " +
+      "struck — a region does not wait for a second tap to pass its fire on.",
     exempt: {},
   },
   {
@@ -1438,6 +1605,13 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "axis",
     keeps: "objetdart:geyser:v1",
     creates: "an eruption",
+    interacts:
+      "one shared thermal reservoir, not independent timers: every heat mark a hand plants " +
+      "bleeds its own heat on its own decay (bleedHeatMarks in lib/geyserflow), but every bit it " +
+      "sheds is added into the same subsurface temperature T that drives the whole column's phase " +
+      "clock — more marks, or marks placed while T is already climbing, genuinely heat the shared " +
+      "reservoir faster and pull the next eruption sooner. The eruption a mark's warmth produces " +
+      "belongs to the column, never to the mark that fed it.",
     exempt: {},
   },
   {
@@ -1451,6 +1625,16 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "axis",
     keeps: "objetdart:marsh:v1",
     creates: "a reed",
+    interacts:
+      "one shared oxygen field, not two unrelated meters: reeds inject O2 into their " +
+      "neighbourhood scaled by height and sunlight, biofilm mats drain it scaled by mass, and " +
+      "diffusion spreads the difference (advanceExact in lib/marshfield) — a mat parked near a " +
+      "young reed measurably slows it, since the reed's own growth rate reads the same local O2 " +
+      "the mat is starving. A tier-5/n tap forces a whole-marsh flush (flushMarsh): the field is " +
+      "pulled toward saturation and every mat loses mass in the same reaction, in one frame — the " +
+      "aeration that lifts every reed's pitch is what starves the mats that were feeding on the " +
+      "stagnant water. A tier-3 tap on a reed forks it: a real satellite reed sprouts beside it, " +
+      "inheriting a share of its height.",
     exempt: {},
   },
   {
@@ -1464,6 +1648,15 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "axis",
     keeps: "objetdart:orb:v1",
     creates: "a disc",
+    interacts:
+      "plasma pressure and a real electrode pull: every disc pushes on any other it overlaps, " +
+      "momentum-neutral and split by their own radii so a large disc shoulders a small one aside " +
+      "(separate in lib/orbfield); a tier-5 tap on a disc calls the field — every other disc " +
+      "genuinely accelerates toward it, dimmer with distance, plasma gathering around a live " +
+      "electrode; a tier-3 tap arcs the charge to the disc's nearest standing neighbour — both " +
+      "flare hard and are pushed apart in the same frame, a real discharge dyad, not a scripted " +
+      "spark. No two discs fuse into a third, but none of this is decoration: every disc sits in " +
+      "the same pressure-and-charge field as every other.",
     exempt: {},
   },
   {
@@ -1477,6 +1670,12 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "axis",
     keeps: "objetdart:pebble:v1",
     creates: "a cut",
+    interacts:
+      "stated exemption: /pebble is one stone, cut open — PebbleState in lib/pebblecore holds a " +
+      "single lattice, a single set of growth rings, a single polish depth. A dwell deepens it, a " +
+      "ceremony seals it, <LetGo> releases it; there is never a second stone in the room for a " +
+      "force to act between. The 'cut' the field names is a facet of that one stone, not a member " +
+      "of a population.",
     exempt: {},
   },
   {
@@ -1490,6 +1689,14 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "axis",
     keeps: "objetdart:planets:v2",
     creates: "a world",
+    interacts:
+      "mutual gravity, real and momentum-conserving: every world pulls every other and the star " +
+      "pulls all of them (stepBodies in lib/worldforge, a softened kick-drift step), so orbits " +
+      "perturb each other and total momentum is exactly conserved with no star present. Two " +
+      "worlds whose bodies touch merge (mergeWorlds): mass adds, the latent genome is the mass- " +
+      "weighted mean of both parents so the child visibly wears both, the heavier parent's seed " +
+      "survives as the terrain lineage, and whatever the display band cannot hold comes back as " +
+      "ejecta — mass scattered, never destroyed.",
     exempt: {},
   },
   {
@@ -1503,6 +1710,14 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "axis",
     keeps: "objetdart:reef:v1",
     creates: "a polyp",
+    interacts:
+      "real competition for space: an equal-or-larger neighbour whose footprint already " +
+      "overlaps a polyp's own measurably cuts its growth rate (crowdingAt in lib/coralflow) — a " +
+      "colony hemmed in by an established one grows slower than the same polyp alone on open " +
+      "reef. A much larger neighbour overlapping deeply goes further and overgrows it outright " +
+      "(overgrowthAt): the smaller polyp's own ceiling is pulled down below MAX_SIZE by the " +
+      "dominant one, a real reaction — not a merge, but genuine overgrowth, the way real coral " +
+      "colonies compete for the same patch of light and substrate.",
     exempt: {},
   },
   {
@@ -1516,6 +1731,14 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "travel+peers",
     keeps: "objetdart:rocks:v1",
     creates: "a stone",
+    interacts:
+      "Mohs hardness, straight: dragging one stone across a neighbour it is lying against " +
+      "(neighbourOf, RockShelf.tsx) runs a real scratch test — the softer one always takes the " +
+      "mark, never the harder, and the groove is stone actually removed: `victim.solid` drops by " +
+      "the bite and that same mass is returned into the shared brine pool, where it is available " +
+      "to feed and grow crystals nucleating elsewhere on the shelf (`feed`/`drawFrom`). Equal " +
+      "hardness only knocks and rings, no material lost. Abrasion between two stones is what " +
+      "grows a third.",
     exempt: {},
   },
   {
@@ -1529,6 +1752,15 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "axis",
     keeps: "objetdart:root:v1",
     creates: "a tip",
+    interacts:
+      "every parent-child edge is a real conductance: water flows up and sugar down between " +
+      "them (advanceExact in lib/rootnet), so every tip is a sink competing with its siblings on " +
+      "the same finite supply from the crown — a network with more branches divides the same " +
+      "flow thinner. A tip whose water starves under a knock, and everything hanging off it " +
+      "downstream, is pruned in one cascade (knockSweep) — a real loser, removed, not hidden. A " +
+      "tier-3 tap forks a tip into a real child that starts starved and has to earn its own share " +
+      "of the flow; a tier-5/n tap races the whole frontier at once, every unsealed tip branching " +
+      "together before the ledger is fast-forwarded through the surge.",
     exempt: {},
   },
   {
@@ -1542,6 +1774,14 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "axis",
     keeps: "objetdart:soil:v2",
     creates: "a root",
+    interacts:
+      "same kind competes, different kingdoms trade — the whole ecology in one law " +
+      "(capacityOf in lib/humus): a root's growth capacity divides by the mineral its own root " +
+      "neighbours are also drawing on, a fungus's by the humus its own fungal neighbours draw on, " +
+      "but a root and a fungus planted near each other genuinely help each other (linkStrength, " +
+      "the mycorrhizal trade bonus). Growth is rationed proportionally whenever the whole " +
+      "population's demand exceeds what the pool holds (settle) — real competition biting, not " +
+      "decoration — and what dies returns its biomass to litter, where the cascade starts again.",
     exempt: {},
   },
   {
@@ -1555,6 +1795,15 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "axis",
     keeps: "objetdart:solar:v1",
     creates: "a body",
+    interacts:
+      "mutual gravity, computed pairwise every kick: every body perturbs every other's orbit " +
+      "(mutualAccelerations in lib/orbits, Newton's third law by construction), and the elements " +
+      "are re-read from the perturbed state vector each step (elementsFromState) rather than " +
+      "painted. Two bodies close enough to touch merge (mergedBody): mass adds, momentum is " +
+      "conserved, the merged body starts from the barycentre of the collision and keeps the " +
+      "heavier parent's identity — a world absorbing a wanderer is still that world. A body that " +
+      "loses its angular momentum or crosses escape velocity is consumed by the sun or lost for " +
+      "good, not silently clamped.",
     exempt: {},
   },
   {
@@ -1568,6 +1817,13 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "axis",
     keeps: "objetdart:spring:v1",
     creates: "a seep",
+    interacts:
+      "one shared aquifer, not independent taps: every seep drains the same aquifer head H " +
+      "into the same pool L through Darcy flux (K_SEEP · throat · (H − L)), and it is the SUM of " +
+      "every live seep's throat that sets how fast the exchange runs (totalThroat in " +
+      "lib/springflow) — opening a second seep wide measurably slows how fast the first one can " +
+      "drain the same reservoir, and a seep widened past what the aquifer can feed empties it for " +
+      "every seep at once. They share one finite head, genuinely, not a private supply each.",
     exempt: {},
   },
   {
@@ -1581,6 +1837,16 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     chrome: "axis",
     keeps: "objetdart:tidepool:v1",
     creates: "a creature",
+    interacts:
+      "a real three-way food web, not three separate meters: a snail's growth rate reads the " +
+      "kelp biomass within its own reach (snailGrowthRate) — it is grazing — while a kelp's rate " +
+      "falls with the snail biomass grazing IT (kelpGrowthRate, GRAZE_C), and an anemone filters " +
+      "biomass straight out of nearby kelp into itself (the Euler coupling in advanceExact, " +
+      "lib/tidewater) — plant one shellfish beside a kelp bed and the kelp visibly slows. A tier-3 " +
+      "tap reproduces the tapped creature true to its own biology — a snail lays a cluster, a " +
+      "kelp frond fragments, an anemone splits by real binary fission (reproduceCreature) — and " +
+      "the parent pays a third of its own biomass to fund the offspring, a real budget transfer, " +
+      "not a free duplicate.",
     exempt: {},
   },
 ];

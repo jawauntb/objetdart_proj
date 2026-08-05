@@ -500,9 +500,10 @@ export default function Ocean() {
       naturals = getNaturalsInZone("ocean");
       syncKept();
     });
+    let naturalFallbackSerial = 0;
     const addNatural = (kind: NaturalKind, nx?: number, ny?: number) => {
-      const finalNx = nx != null ? Math.max(0.02, Math.min(0.98, nx)) : Math.random();
-      const finalNy = ny != null ? Math.max(0.05, Math.min(0.95, ny)) : 0.5 + Math.random() * 0.4;
+      const finalNx = nx != null ? Math.max(0.02, Math.min(0.98, nx)) : hash01(naturalFallbackSerial++);
+      const finalNy = ny != null ? Math.max(0.05, Math.min(0.95, ny)) : 0.5 + hash01(naturalFallbackSerial++) * 0.4;
       const created = worldAddNatural(kind, "ocean", finalNx, finalNy, vxForKind(kind));
       // resync our local slice so the new one shows up this frame
       naturals = getNaturalsInZone("ocean");
@@ -971,7 +972,7 @@ export default function Ocean() {
           const horizon0 = h0 * 0.15;
           const seaSpan = h0 - horizon0;
           const ny = Math.max(0.05, Math.min(0.95, (y - horizon0) / seaSpan));
-          const roll = Math.random();
+          const roll = hash01(Math.floor(Date.now() + x * 997 + y * 431));
           const kind: NaturalKind =
             roll < 0.55 ? "seashell" :
             roll < 0.80 ? "kelp" :
@@ -1176,6 +1177,10 @@ export default function Ocean() {
     // the analog. Only runs at the surface — the deep dive is meant to be
     // the user's own quiet.
     let weatherTimer: ReturnType<typeof setTimeout> | 0 = 0;
+    // advances only for draws that decide a persisted natural's fate —
+    // whether the weather picks the beachcomber and what it reveals — never
+    // Math random, same rule hash01 above already states for placement
+    let weatherSeedSerial = 0;
     const spawnLightning = () => {
       const w0 = surf.clientWidth || 1;
       addWeather({
@@ -1241,15 +1246,15 @@ export default function Ocean() {
     const spawnBeachcomber = () => {
       // The rare one: the tide pulls back and reveals something that
       // stays. Pick a natural kind biased toward the discoveries.
-      const roll = Math.random();
+      const roll = hash01(weatherSeedSerial++);
       const kind: NaturalKind =
         roll < 0.45 ? "seashell" :
         roll < 0.72 ? "starfish" :
         roll < 0.90 ? "sanddollar" :
         "driftwood";
       const w0 = surf.clientWidth || 1;
-      const cx = w0 * (0.18 + Math.random() * 0.64);
-      const cyBand = 0.55 + Math.random() * 0.35;
+      const cx = w0 * (0.18 + hash01(weatherSeedSerial++) * 0.64);
+      const cyBand = 0.55 + hash01(weatherSeedSerial++) * 0.35;
       addNatural(kind, cx / w0, cyBand);
       addWeather({
         kind: "beachcomber",
@@ -1263,7 +1268,7 @@ export default function Ocean() {
     };
     const fireWeather = () => {
       if (!document.hidden && depthRef.current < 0.30) {
-        const roll = Math.random();
+        const roll = hash01(weatherSeedSerial++);
         // weighted: seabirds 22, phosphor 20, lightning 18, rogue 16, whale 14, beachcomber 10
         if (roll < 0.22) spawnSeabirds();
         else if (roll < 0.42) spawnPhosphor();

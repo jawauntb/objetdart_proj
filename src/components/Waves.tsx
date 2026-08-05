@@ -74,6 +74,14 @@ const MODES: ModeCfg[] = [
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 const mix = (a: number, b: number, t: number) => a + (b - a) * t;
 
+/** A seeded 0..1 draw for anything that lands in the persisted pond life
+ *  (a falling leaf's rest spot, a surfacing koi's) — never Math random, so
+ *  a leaf that lands is the same leaf on reload. */
+function hash01(n: number): number {
+  const x = Math.sin(n * 127.1 + 311.7) * 43758.5453123;
+  return x - Math.floor(x);
+}
+
 type RGB = readonly [number, number, number];
 
 type Palette = {
@@ -823,9 +831,10 @@ export default function Waves() {
       naturals = getNaturalsInZone("waves");
       refreshKept();
     });
+    let naturalSeedSerial = 0;
     const addNatural = (kind: NaturalKind, nx?: number, ny?: number) => {
-      const finalNx = nx != null ? clamp(nx, 0.04, 0.96) : Math.random();
-      const finalNy = ny != null ? clamp(ny, 0.10, 0.94) : 0.2 + Math.random() * 0.7;
+      const finalNx = nx != null ? clamp(nx, 0.04, 0.96) : hash01(naturalSeedSerial++);
+      const finalNy = ny != null ? clamp(ny, 0.10, 0.94) : 0.2 + hash01(naturalSeedSerial++) * 0.7;
       const created = worldAddNatural(kind, "waves", finalNx, finalNy, vxForKind(kind));
       naturals = getNaturalsInZone("waves");
       refreshKept();
@@ -865,7 +874,10 @@ export default function Waves() {
                 nx: clamp(it.nx, 0, 1),
                 ny: clamp(it.ny, 0, 1),
                 strength: clamp(it.strength, 0.1, 1),
-                phase: Math.random(),
+                // phase isn't saved (only nx/ny/strength are), so a restored
+                // source gets a deterministic one from its own position and
+                // slot, not a fresh roll each load
+                phase: hash01(it.nx * 991 + it.ny * 397 + sourceIdCounter * 131),
               });
             }
           }
@@ -932,19 +944,27 @@ export default function Waves() {
       weather.push(e);
       if (weather.length > 8) weather.shift();
     };
+    // advances only for draws that decide a persisted natural's fate (which
+    // weather fires, where a leaf lands, where a koi surfaces) — everything
+    // purely ambient (dragonfly, wind, frog, strider) keeps real entropy,
+    // declared in the registry
+    let weatherSeedSerial = 0;
 
     const spawnFallingLeaf = () => {
-      const startX = 0.1 + Math.random() * 0.8;
+      // seeded, not Math random — endX/endY become a persisted natural's
+      // position the moment the leaf lands (addNatural below), so the same
+      // run of falls always lands the same leaves
+      const startX = 0.1 + hash01(weatherSeedSerial++) * 0.8;
       const startY = -0.06;
-      const endX = clamp(startX + (Math.random() - 0.5) * 0.35, 0.08, 0.92);
-      const endY = 0.35 + Math.random() * 0.5;
+      const endX = clamp(startX + (hash01(weatherSeedSerial++) - 0.5) * 0.35, 0.08, 0.92);
+      const endY = 0.35 + hash01(weatherSeedSerial++) * 0.5;
       addWeather({
         kind: "leaf",
         t0: performance.now(),
-        duration: 4.8 + Math.random() * 1.4,
+        duration: 4.8 + hash01(weatherSeedSerial++) * 1.4,
         startX, startY, endX, endY,
-        rot0: Math.random() * Math.PI * 2,
-        spin: (Math.random() - 0.5) * 4,
+        rot0: hash01(weatherSeedSerial++) * Math.PI * 2,
+        spin: (hash01(weatherSeedSerial++) - 0.5) * 4,
         landed: false,
         nat: null,
       });
@@ -1004,9 +1024,10 @@ export default function Waves() {
       });
     };
     const spawnKoiSurface = () => {
-      const x = 0.15 + Math.random() * 0.7;
-      const y = 0.25 + Math.random() * 0.55;
-      const dir = Math.random() < 0.5 ? 1 : -1;
+      // seeded — x/y become the persisted koi's position (addNatural below)
+      const x = 0.15 + hash01(weatherSeedSerial++) * 0.7;
+      const y = 0.25 + hash01(weatherSeedSerial++) * 0.55;
+      const dir = hash01(weatherSeedSerial++) < 0.5 ? 1 : -1;
       addWeather({
         kind: "koi",
         t0: performance.now(),
@@ -1023,7 +1044,7 @@ export default function Waves() {
       // Only stir the pond when the user is here and in ripple mode.
       // string / refraction stay untouched analytical instruments.
       if (!document.hidden && modeRef.current === "ripple" && runningRef.current) {
-        const roll = Math.random();
+        const roll = hash01(weatherSeedSerial++);
         // weighted: leaf 25, dragonfly 22, wind 18, frog 16, strider 12, koi 7
         if (roll < 0.25) spawnFallingLeaf();
         else if (roll < 0.47) spawnDragonfly();

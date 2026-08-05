@@ -30,7 +30,24 @@ import { createFrameGovernor, detailForTier, onVisibility, resolveDpr } from "@/
 const TAU = Math.PI * 2;
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 const mix = (a: number, b: number, t: number) => a + (b - a) * t;
-const rand = (a: number, b: number) => a + Math.random() * (b - a);
+
+// ── seeded stream for everything the bead's own body creates ───────────
+// Never Math random: a module-level generator, reseeded once per mount,
+// so a session's droplets, their microbial population, and every split /
+// merge / division play back the same for that session's run of gestures.
+let dropRngState = 0x9e3779b9;
+function dropRand01(): number {
+  dropRngState |= 0;
+  dropRngState = (dropRngState + 0x6d2b79f5) | 0;
+  let t = dropRngState;
+  t = Math.imul(t ^ (t >>> 15), t | 1);
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+function seedDropRng(seed: number): void {
+  dropRngState = (seed >>> 0) || 1;
+}
+const rand = (a: number, b: number) => a + dropRand01() * (b - a);
 const smooth = (e0: number, e1: number, x: number) => {
   const t = clamp((x - e0) / (e1 - e0 || 1e-4), 0, 1);
   return t * t * (3 - 2 * t);
@@ -134,18 +151,18 @@ function populate(drop: Drop, reduced: boolean): void {
   const list: Microbe[] = [];
   for (const [sp, n] of plan) {
     for (let i = 0; i < n; i++) {
-      const rr = Math.sqrt(Math.random()) * 0.78;
-      const a = Math.random() * TAU;
+      const rr = Math.sqrt(dropRand01()) * 0.78;
+      const a = dropRand01() * TAU;
       list.push({
         sp,
         x: Math.cos(a) * rr,
         y: Math.sin(a) * rr,
-        depth: Math.random(),
-        heading: Math.random() * TAU,
+        depth: dropRand01(),
+        heading: dropRand01() * TAU,
         size: SPECIES[sp].size * rand(0.8, 1.25),
-        phase: Math.random() * TAU,
-        spin: (Math.random() - 0.5) * (reduced ? 0.2 : 1),
-        seed: Math.random() * 1000,
+        phase: dropRand01() * TAU,
+        spin: (dropRand01() - 0.5) * (reduced ? 0.2 : 1),
+        seed: dropRand01() * 1000,
         dart: 0,
       });
     }
@@ -161,7 +178,7 @@ function makeDrop(x: number, y: number, r: number, reduced: boolean): Drop {
     mic: [],
     grabbed: false, gx: 0, gy: 0,
     mergeLock: 0,
-    bob: Math.random() * TAU,
+    bob: dropRand01() * TAU,
   };
   populate(d, reduced);
   return d;
@@ -697,7 +714,7 @@ export default function DropSphere() {
       mic: [],
       grabbed: false, gx: 0, gy: 0,
       mergeLock: now + 1.0,
-      bob: Math.random() * TAU,
+      bob: dropRand01() * TAU,
     });
     const a = mk(1), b = mk(-1);
     // partition the life between the two beads along the pull axis
@@ -859,7 +876,7 @@ export default function DropSphere() {
       mic: [],
       grabbed: true, gx: 0, gy: 0,
       mergeLock: now + 0.9,
-      bob: Math.random() * TAU,
+      bob: dropRand01() * TAU,
     };
     // hand the microbes on the pulled side to the new droplet
     const kept: Microbe[] = [];
@@ -1047,6 +1064,7 @@ export default function DropSphere() {
 
     // first bead — centred, sized to the viewport
     if (dropsRef.current.length === 0) {
+      seedDropRng(0x0d20);
       const r = clamp(Math.min(w, h) * 0.24, 92, 240);
       dropsRef.current.push(makeDrop(w / 2, h / 2, r, reduceRef.current));
     }
@@ -1114,12 +1132,12 @@ export default function DropSphere() {
         sp: "mote",
         x: Math.cos(a) * rr,
         y: Math.sin(a) * rr,
-        depth: Math.random(),
+        depth: dropRand01(),
         heading: a + Math.PI + rand(-0.4, 0.4),
         size: SPECIES.mote.size * rand(0.8, 1.3),
-        phase: Math.random() * TAU,
+        phase: dropRand01() * TAU,
         spin: 0,
-        seed: Math.random() * 1000,
+        seed: dropRand01() * 1000,
         dart: 0,
       });
     };
@@ -1129,7 +1147,7 @@ export default function DropSphere() {
         if (d.mic.length >= MIC_CAP) continue;
         const bacteria = d.mic.filter((m) => m.sp === "bacterium");
         if (bacteria.length === 0) continue;
-        const parent = bacteria[Math.floor(Math.random() * bacteria.length)];
+        const parent = bacteria[Math.floor(dropRand01() * bacteria.length)];
         const a = rand(0, TAU);
         const off = parent.size * 1.3;
         d.mic.push({
@@ -1137,8 +1155,8 @@ export default function DropSphere() {
           x: parent.x + Math.cos(a) * off,
           y: parent.y + Math.sin(a) * off,
           heading: a,
-          seed: Math.random() * 1000,
-          phase: Math.random() * TAU,
+          seed: dropRand01() * 1000,
+          phase: dropRand01() * TAU,
           dart: 0,
         });
         parent.x -= Math.cos(a) * off * 0.4;
@@ -1148,7 +1166,7 @@ export default function DropSphere() {
     };
 
     const fireIdleEvent = () => {
-      const roll = Math.random();
+      const roll = dropRand01();
       if (roll < 0.45) fireDraught();
       else if (roll < 0.8) spawnDust();
       else fireDivision();

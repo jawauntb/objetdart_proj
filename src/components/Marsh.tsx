@@ -26,6 +26,7 @@ import * as haptics from "@/lib/haptics";
 import { getTurbulence, relaxTurbulence, stirTurbulence } from "@/lib/turbulence";
 import RoomShell from "@/components/RoomShell";
 import type { RoomVoice } from "@/lib/gesture/defaults";
+import { tapTrainTier, tapTrainDepth } from "@/lib/gesture/core";
 import { createGLStage, FULLSCREEN_VERT_UNIT } from "@/lib/webgl/stage";
 import { clocksFrom } from "@/lib/webgl/sizing";
 import {
@@ -56,6 +57,7 @@ import {
   POOL_Y_MIN,
   advanceExact,
   deepenReed,
+  flushMarsh,
   hashSeed,
   inMarshBounds,
   initState,
@@ -64,6 +66,7 @@ import {
   nearestReed,
   oxygenAt,
   oxygenForRingHz,
+  plantMat,
   plantReed,
   pulseOxygen,
   ringHzFor,
@@ -751,6 +754,9 @@ export default function Marsh() {
     let lastSaveAt = performance.now();
     let dwellingReedId: number | null = null;
     let lastDeepenAt = 0;
+    // Deterministic index into the tier-3-on-open-water cycle (spring /
+    // germinate / bloom) — advances once per tap, never Math.random.
+    let emptyTapCycle = 0;
 
     const toLocal = (px: number, py: number) => {
       const r = surface.getBoundingClientRect();
@@ -859,6 +865,30 @@ export default function Marsh() {
       }
     };
 
+    /**
+     * The tap ladder's top rung, on a reed or on open water alike: a
+     * whole-marsh oxygen flush (flushMarsh). The room's largest, rarest
+     * event — every reed pings brighter as the field aerates, every
+     * biofilm mat visibly recedes as the same aeration starves it. `depth`
+     * is 0..1; tier 5 lands mid-scale, a sustained tier-n train deepens it
+     * continuously via tapTrainDepth.
+     */
+    const flushEvent = (depth: number, intensity: number) => {
+      state = flushMarsh(state, (0.5 + depth * 0.5) * (0.7 + intensity * 0.3));
+      for (const r of state.reeds) pushRipple(r.x, r.y, 0.6 + depth * 0.4);
+      for (const m of state.mats) pushRipple(m.x, m.y, 0.5 + depth * 0.3);
+      try {
+        const meanO = meanOxygen(state);
+        audio.playTone(ringHzFor(meanO), 0.4 + depth * 0.3);
+        audio.playTone(ringHzFor(meanO) * 1.5, 0.28 + depth * 0.2);
+        audio.bell();
+        haptics.roll();
+      } catch {
+        /* noop */
+      }
+      writer.schedule();
+    };
+
     const engine: MarshApi = {
       tap: (x, y, intensity, count, fingers) => {
         const { nx, ny } = toLocal(x, y);
@@ -866,14 +896,110 @@ export default function Marsh() {
         cursorY = ny;
         cursorLit = 1;
         if (fingers >= 2) return;
+        const tier = tapTrainTier(count);
         const found = nearestReed(state, nx, ny, 0.08);
         if (found) {
-          soundReed(found);
-          pushRipple(found.x, found.y, 0.7);
-          haptics.tap();
+          if (tier === 1) {
+            // the room's ordinary answer: ring the reed at its own pitch.
+            soundReed(found);
+            pushRipple(found.x, found.y, 0.7);
+            haptics.tap();
+            return;
+          }
+          if (tier === 3) {
+            // the reed forks: a satellite sprouts beside it, inheriting a
+            // share of its height — a real second reed, not a bigger ring.
+            // The offset is seeded from the reed's own id and the ledger's
+            // own clock (tau), never Math.random.
+            const rng = sceneMulberry32(hashSeed(found.id, Math.floor(state.tau * 997)));
+            const ang = rng() * Math.PI * 2;
+            const rad = 0.03 + rng() * 0.035;
+            const ox = clamp01(found.x + Math.cos(ang) * rad);
+            const oy = clamp01(found.y + Math.sin(ang) * rad);
+            const before = state.reeds.length;
+            state = plantReed(state, ox, oy);
+            if (state.reeds.length > before) {
+              const child = state.reeds[state.reeds.length - 1];
+              if (child) {
+                state = deepenReed(state, child.id, found.height * 0.4 * (0.6 + intensity * 0.4));
+              }
+              pushRipple(ox, oy, 0.7);
+              pushRipple(found.x, found.y, 0.5);
+              try {
+                audio.playNote(52, 260);
+                audio.bell();
+                haptics.bloom();
+              } catch {
+                /* noop */
+              }
+              writer.schedule();
+            } else {
+              try { audio.refuse(); } catch { /* noop */ }
+            }
+            return;
+          }
+          // tier 5 / n — the whole-marsh flush, scaled by the train's depth
+          // past 5 so a sustained roll keeps deepening rather than stopping.
+          flushEvent(tier === "n" ? tapTrainDepth(count) : 0.62, intensity);
           return;
         }
-        ringHere(nx, ny, 0.6 + intensity * 0.4 + Math.min(0.4, (count - 1) * 0.08));
+        if (tier === 1) {
+          ringHere(nx, ny, 0.6 + intensity * 0.4);
+          return;
+        }
+        if (tier === 3) {
+          // a cycling set of rarer events over open water, true to the
+          // marsh's own materials — a spring wells up, a reed germinates,
+          // an algae bloom takes hold — so a hand that keeps tapping empty
+          // water keeps finding something new, deterministically.
+          const which = emptyTapCycle % 3;
+          emptyTapCycle++;
+          if (which === 0) {
+            state = pulseOxygen(state, nx, ny, 0.28 + intensity * 0.14);
+            pushRipple(nx, ny, 0.75);
+            try {
+              audio.bell();
+              audio.playTone(ringHzFor(oxygenAt(state, nx, ny)), 0.3);
+              haptics.chop();
+            } catch {
+              /* noop */
+            }
+            writer.schedule();
+          } else if (which === 1) {
+            const before = state.reeds.length;
+            state = plantReed(state, nx, ny);
+            if (state.reeds.length > before) {
+              pushRipple(nx, ny, 0.6);
+              try {
+                audio.playNote(50, 240);
+                haptics.tap();
+              } catch {
+                /* noop */
+              }
+              writer.schedule();
+            } else {
+              try { audio.refuse(); } catch { /* noop */ }
+            }
+          } else {
+            const before = state.mats.length;
+            state = plantMat(state, nx, ny, 0.18 + intensity * 0.14);
+            if (state.mats.length > before) {
+              pushRipple(nx, ny, 0.55);
+              try {
+                audio.playTone(140, 0.28);
+                haptics.tap();
+              } catch {
+                /* noop */
+              }
+              writer.schedule();
+            } else {
+              try { audio.refuse(); } catch { /* noop */ }
+            }
+          }
+          return;
+        }
+        // tier 5 / n on open water — the same whole-marsh flush.
+        flushEvent(tier === "n" ? tapTrainDepth(count) : 0.62, intensity);
       },
       stepBack: () => {
         if (lensSnapped === 1) {

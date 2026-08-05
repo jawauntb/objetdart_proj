@@ -63,6 +63,27 @@ function saveMemory(mem: BeamMemory): void {
 const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
 const mix = (a: number, b: number, t: number) => a + (b - a) * t;
 
+// ── seeded PRNG — never Math random: the same formation and the same
+// run of meteors plays back the same way, so a kept sky replays true. ──
+function hashSeed(...parts: number[]): number {
+  let h = 0x811c9dc5;
+  for (const p of parts) {
+    h ^= Math.round(p) | 0;
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 // ── color weather ────────────────────────────────────────────────────────
 // four moments of day, each: background core, background edge, warm streak,
 // cool streak, tail ink. The cycle drifts through them; night is its own
@@ -720,15 +741,18 @@ export default function Beam() {
     const aSeed = new Float32Array(COUNT);
     const aSun = new Float32Array(COUNT);
     // petals arranged in loose rings, like the video: a few seeds per ring
-    // step, jittered so the formation is organic rather than mechanical
+    // step, jittered so the formation is organic rather than mechanical.
+    // Seeded, not Math random — the initial formation is what the room
+    // is, the same field every load, exactly like /stars' seeded PRNG.
+    const formRng = mulberry32(hashSeed(COUNT, 0x8eef));
     for (let i = 0; i < COUNT; i++) {
-      const ring = 0.14 + Math.pow(Math.random(), 0.72) * 1.05;
+      const ring = 0.14 + Math.pow(formRng(), 0.72) * 1.05;
       aRing[i] = ring;
-      aAng[i] = Math.random() * Math.PI * 2;
-      aDepth[i] = clamp(ring / 1.2 + (Math.random() - 0.5) * 0.3, 0, 1);
-      aPhase[i] = Math.random();
-      aSeed[i] = Math.random();
-      aSun[i] = Math.random() < 0.55 ? 0 : 1;
+      aAng[i] = formRng() * Math.PI * 2;
+      aDepth[i] = clamp(ring / 1.2 + (formRng() - 0.5) * 0.3, 0, 1);
+      aPhase[i] = formRng();
+      aSeed[i] = formRng();
+      aSun[i] = formRng() < 0.55 ? 0 : 1;
     }
     geo.setAttribute("aRing", new THREE.InstancedBufferAttribute(aRing, 1));
     geo.setAttribute("aAng", new THREE.InstancedBufferAttribute(aAng, 1));
@@ -802,7 +826,12 @@ export default function Beam() {
     let focusBreathing = true;
     const sep0 = clamp(memRef.current.sep ?? 0.66, 0.04, 0.9);
     let sep = sep0, sepTarget = sep0;
+    // meteorNext is scheduling only — how long until the next loose petal —
+    // and stays real entropy (declared in the registry); the meteor's own
+    // direction is seeded below via meteorSerial so the same run of breaks
+    // replays the same way.
     let meteorNext = 12 + Math.random() * 18;
+    let meteorSerial = 0;
     let bary = new THREE.Vector2(0, 0);
     const baryTarget = new THREE.Vector2(0, 0);
     let orbAng = 0;
@@ -1172,9 +1201,10 @@ export default function Beam() {
       // a loose petal, every so often
       if (uniforms.uMeteorAge.value < 90) uniforms.uMeteorAge.value += dt * speed;
       if (simT > meteorNext && !reduced) {
-        const ang = Math.random() * Math.PI * 2;
+        const mrng = mulberry32(hashSeed(meteorSerial++, 0x5eed));
+        const ang = mrng() * Math.PI * 2;
         const start = new THREE.Vector2(Math.cos(ang) * (aspect + 0.3), Math.sin(ang) * 1.3);
-        const jitter = (Math.random() - 0.5) * 0.9;
+        const jitter = (mrng() - 0.5) * 0.9;
         const dir = start.clone().multiplyScalar(-1).normalize().rotateAround(new THREE.Vector2(0, 0), jitter);
         uniforms.uMeteorA.value.copy(start);
         uniforms.uMeteorD.value.copy(dir);

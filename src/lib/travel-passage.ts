@@ -57,7 +57,24 @@ export type PassageEdgeKey =
   | "cells->tissue"
   | "tissue->cells"
   | "tissue->drop"
-  | "drop->tissue";
+  | "drop->tissue"
+  // ——— The living middle and the top of the axis (both directions) ———
+  | "tissue->flowers"
+  | "flowers->tissue"
+  | "drop->coast"
+  | "coast->drop"
+  | "drop->flowers"
+  | "flowers->drop"
+  | "flowers->birds"
+  | "birds->flowers"
+  | "birds->coast"
+  | "coast->birds"
+  | "olympus->earth"
+  | "earth->olympus"
+  | "space->beyond"
+  | "beyond->space"
+  | "beyond->manifold"
+  | "manifold->beyond";
 
 export type PassageFilm =
   | "planet"
@@ -83,7 +100,17 @@ export type PassageFilm =
   | "chromatin"
   | "membrane"
   | "sheet"
-  | "dissolve";
+  | "dissolve"
+  // ——— The living middle and the top of the axis ———
+  | "starchart"
+  | "lamina"
+  | "tension"
+  | "dew"
+  | "lift"
+  | "shorewing"
+  | "massif"
+  | "interfere"
+  | "curvature";
 
 export type PassageSpec = {
   durationMs: number;
@@ -198,6 +225,8 @@ export const PASSAGES: Partial<Record<PassageEdgeKey, PassageSpec>> = {
     out: false,
     film: "orbitfall",
   },
+  // The album's busiest hop, and the one that used to play the default
+  // planet: a chart of one world re-projected into a sky of many suns.
   "atlas->stars": {
     durationMs: 3500,
     reducedMs: 1200,
@@ -205,6 +234,7 @@ export const PASSAGES: Partial<Record<PassageEdgeKey, PassageSpec>> = {
     bellAt: 0.4,
     detentAt: 0.62,
     out: true,
+    film: "starchart",
   },
   "stars->atlas": {
     durationMs: 3500,
@@ -213,6 +243,7 @@ export const PASSAGES: Partial<Record<PassageEdgeKey, PassageSpec>> = {
     bellAt: 0.5,
     detentAt: 0.28,
     out: false,
+    film: "starchart",
   },
   "stars->galaxy": {
     durationMs: 3600,
@@ -540,6 +571,154 @@ export const PASSAGES: Partial<Record<PassageEdgeKey, PassageSpec>> = {
     detentAt: 0.3,
     out: false,
     film: "dissolve",
+  },
+  // ——— The living middle: the doors a hand actually walks ———
+  // Slower than the small-scale spine (there is a place to arrive at, not
+  // just a structure to read) and quicker than the astronomical trunk.
+  "tissue->flowers": {
+    durationMs: 2700,
+    reducedMs: 950,
+    navigateAt: 0.5,
+    bellAt: 0.44,
+    detentAt: 0.62,
+    out: true,
+    film: "lamina",
+  },
+  "flowers->tissue": {
+    durationMs: 2700,
+    reducedMs: 950,
+    navigateAt: 0.45,
+    bellAt: 0.55,
+    detentAt: 0.3,
+    out: false,
+    film: "lamina",
+  },
+  "drop->coast": {
+    durationMs: 2900,
+    reducedMs: 1050,
+    navigateAt: 0.5,
+    bellAt: 0.46,
+    detentAt: 0.64,
+    out: true,
+    film: "tension",
+  },
+  "coast->drop": {
+    durationMs: 2900,
+    reducedMs: 1050,
+    navigateAt: 0.45,
+    bellAt: 0.52,
+    detentAt: 0.3,
+    out: false,
+    film: "tension",
+  },
+  "drop->flowers": {
+    durationMs: 2700,
+    reducedMs: 950,
+    navigateAt: 0.5,
+    bellAt: 0.42,
+    detentAt: 0.62,
+    out: true,
+    film: "dew",
+  },
+  "flowers->drop": {
+    durationMs: 2700,
+    reducedMs: 950,
+    navigateAt: 0.45,
+    bellAt: 0.56,
+    detentAt: 0.3,
+    out: false,
+    film: "dew",
+  },
+  "flowers->birds": {
+    durationMs: 2800,
+    reducedMs: 1000,
+    navigateAt: 0.5,
+    bellAt: 0.44,
+    detentAt: 0.62,
+    out: true,
+    film: "lift",
+  },
+  "birds->flowers": {
+    durationMs: 2800,
+    reducedMs: 1000,
+    navigateAt: 0.45,
+    bellAt: 0.54,
+    detentAt: 0.3,
+    out: false,
+    film: "lift",
+  },
+  "birds->coast": {
+    durationMs: 2800,
+    reducedMs: 1000,
+    navigateAt: 0.5,
+    bellAt: 0.46,
+    detentAt: 0.62,
+    out: true,
+    film: "shorewing",
+  },
+  "coast->birds": {
+    durationMs: 2800,
+    reducedMs: 1000,
+    navigateAt: 0.45,
+    bellAt: 0.52,
+    detentAt: 0.3,
+    out: false,
+    film: "shorewing",
+  },
+  "olympus->earth": {
+    durationMs: 3100,
+    reducedMs: 1100,
+    navigateAt: 0.52,
+    bellAt: 0.44,
+    detentAt: 0.62,
+    out: true,
+    film: "massif",
+  },
+  "earth->olympus": {
+    durationMs: 3100,
+    reducedMs: 1100,
+    navigateAt: 0.45,
+    bellAt: 0.54,
+    detentAt: 0.3,
+    out: false,
+    film: "massif",
+  },
+  // ——— The top of the axis ———
+  "space->beyond": {
+    durationMs: 3200,
+    reducedMs: 1150,
+    navigateAt: 0.55,
+    bellAt: 0.5,
+    detentAt: 0.66,
+    out: true,
+    film: "interfere",
+  },
+  "beyond->space": {
+    durationMs: 3200,
+    reducedMs: 1150,
+    navigateAt: 0.45,
+    bellAt: 0.48,
+    detentAt: 0.3,
+    out: false,
+    film: "interfere",
+  },
+  "beyond->manifold": {
+    durationMs: 3200,
+    reducedMs: 1150,
+    navigateAt: 0.55,
+    bellAt: 0.48,
+    detentAt: 0.64,
+    out: true,
+    film: "curvature",
+  },
+  "manifold->beyond": {
+    durationMs: 3200,
+    reducedMs: 1150,
+    navigateAt: 0.45,
+    bellAt: 0.52,
+    detentAt: 0.3,
+    out: false,
+    film: "curvature",
   },
 };
 

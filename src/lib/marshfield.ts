@@ -442,6 +442,29 @@ export function stirOxygen(state: MarshState, intensity: number): MarshState {
 }
 
 /**
+ * A whole-marsh oxygen flush — the room's largest event (tier-5/n of the tap
+ * ladder on a reed, or on open water). Every cell in the field is pulled
+ * toward saturation by `strength` (0..1), and every biofilm mat — which
+ * only holds ground by keeping the water around it stagnant — loses a
+ * matching fraction of its mass: the same aeration that lifts the reeds'
+ * pitch starves the mats that were feeding on the low-oxygen water. A real
+ * reaction between the marsh's two populations, not two unrelated meters
+ * moving together.
+ */
+export function flushMarsh(state: MarshState, strength: number): MarshState {
+  const s = clamp01(strength);
+  const O = new Float32Array(state.oxygen);
+  for (let k = 0; k < O.length; k++) {
+    O[k] = clamp01(O[k] + (1 - O[k]) * s * 0.7);
+  }
+  const mats = state.mats.map((m) => ({
+    ...m,
+    mass: clamp(m.mass * (1 - s * 0.55), 0, MAX_MASS),
+  }));
+  return { ...state, oxygen: O, mats };
+}
+
+/**
  * Add an oxygen impulse at (x, y) — the flick's ring wavefront. Bounded.
  */
 export function pulseOxygen(

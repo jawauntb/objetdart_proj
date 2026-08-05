@@ -935,6 +935,12 @@ export default function Stars() {
   // transient effects — mutated by event handlers, read by the RAF loop
   const skyPulseId = useRef(0);
   const summonRef = useRef(0);
+  // seeded dice for the sky's own decisions — never Math random: a small
+  // counter advanced once per draw and hashed, so the same run of events
+  // (the same taps, the same elapsed intervals) plays back identically,
+  // while a longer or shorter visit still never sees the same sky twice.
+  const skyDiceRef = useRef(0);
+  const dice = useCallback(() => hash01(skyDiceRef.current++), []);
   const sparksRef = useRef<Spark[]>([]);
   const breathsRef = useRef<NebulaBreath[]>([]);
   const cosmicEventsRef = useRef<CosmicEvent[]>([]);
@@ -1539,8 +1545,8 @@ export default function Stars() {
   const spawnComet = useCallback((x?: number, y?: number) => {
     const ww = typeof window !== "undefined" ? window.innerWidth : 1200;
     const wh = typeof window !== "undefined" ? window.innerHeight : 800;
-    const ang = Math.random() * Math.PI * 2;
-    const reach = Math.hypot(ww, wh) * (0.85 + Math.random() * 0.4);
+    const ang = dice() * Math.PI * 2;
+    const reach = Math.hypot(ww, wh) * (0.85 + dice() * 0.4);
     // start off an edge if no explicit origin, so it truly streaks across
     const sx = x ?? ww * 0.5 - Math.cos(ang) * reach * 0.5;
     const sy = y ?? wh * 0.5 - Math.sin(ang) * reach * 0.5;
@@ -1549,15 +1555,15 @@ export default function Stars() {
     haptics.ripple(0.34);
     markSky("comet streaking", "comet", 0.5, "object", "comet");
     try { getFieldAudio().spark(); } catch { /* noop */ }
-  }, [addCosmicEvent, markSky]);
+  }, [addCosmicEvent, markSky, dice]);
 
   const spawnTidalFlare = useCallback((x: number, y: number) => {
     const seed = Math.floor((Date.now() + x * 457 + y * 131) % 0xFFFFFFFF);
-    addCosmicEvent({ kind: "tidal", x, y, life: 3.4, seed, rgb: [255, 150, 96], power: 1.0, ang: Math.random() * Math.PI * 2 });
+    addCosmicEvent({ kind: "tidal", x, y, life: 3.4, seed, rgb: [255, 150, 96], power: 1.0, ang: dice() * Math.PI * 2 });
     haptics.roll();
     markSky("star torn apart", "tidal", 0.82, "sigil", "tidal-disruption");
     try { getFieldAudio().bell(); } catch { /* noop */ }
-  }, [addCosmicEvent, markSky]);
+  }, [addCosmicEvent, markSky, dice]);
 
   const spawnNova = useCallback((x: number, y: number) => {
     const seed = Math.floor((Date.now() + x * 619 + y * 241) % 0xFFFFFFFF);
@@ -1605,11 +1611,11 @@ export default function Stars() {
 
   const spawnGrb = useCallback((x: number, y: number) => {
     const seed = Math.floor((Date.now() + x * 787 + y * 149) % 0xFFFFFFFF);
-    addCosmicEvent({ kind: "grb", x, y, life: 1.5, seed, rgb: [206, 255, 176], power: 1.0, ang: Math.random() * Math.PI });
+    addCosmicEvent({ kind: "grb", x, y, life: 1.5, seed, rgb: [206, 255, 176], power: 1.0, ang: dice() * Math.PI });
     haptics.chop();
     markSky("gamma-ray burst", "grb", 0.9, "sigil", "gamma-ray-burst");
     try { getFieldAudio().bell(); } catch { /* noop */ }
-  }, [addCosmicEvent, markSky]);
+  }, [addCosmicEvent, markSky, dice]);
 
   // load saved constellations on mount
   useEffect(() => {
@@ -4819,25 +4825,25 @@ export default function Stars() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     const id = window.setInterval(() => {
-      if (document.hidden || namingRef.current || Math.random() > 0.54) return;
+      if (document.hidden || namingRef.current || dice() > 0.54) return;
       const fn = starPosRef.current;
       if (!fn) return;
       const STARS = activeFieldRef.current.stars;
       for (let tries = 0; tries < 18; tries++) {
-        const idx = Math.floor(Math.random() * STARS.length);
+        const idx = Math.floor(dice() * STARS.length);
         const star = STARS[idx];
         if (!star || (star.size < 1.35 && star.brightness < 0.76)) continue;
         if (consumedSeedRef.current.get(activeLayerRef.current)?.has(idx)) continue;
         const p = fn(idx, performance.now() / 1000);
         if (p.x < 40 || p.x > window.innerWidth - 40 || p.y < 80 || p.y > window.innerHeight - 80) continue;
-        const collapse = (star.size > 2.1 || star.brightness > 0.9) && Math.random() < 0.34
+        const collapse = (star.size > 2.1 || star.brightness > 0.9) && dice() < 0.34
           && userBlackHolesRef.current.length < MAX_USER_BLACK_HOLES;
         supernovaAt(p.x, p.y, star.rgb, false, collapse);
         break;
       }
     }, RANDOM_SUPERNOVA_MS);
     return () => window.clearInterval(id);
-  }, [supernovaAt]);
+  }, [supernovaAt, dice]);
 
   // ── cosmic weather — biased by per-layer automata density ──────────
   useEffect(() => {
@@ -4846,8 +4852,8 @@ export default function Stars() {
     const safePoint = (): { x: number; y: number; nx: number; ny: number } => {
       const ww = window.innerWidth;
       const wh = window.innerHeight;
-      const x = 60 + Math.random() * Math.max(1, ww - 120);
-      const y = 120 + Math.random() * Math.max(1, wh - 220);
+      const x = 60 + dice() * Math.max(1, ww - 120);
+      const y = 120 + dice() * Math.max(1, wh - 220);
       const sky = camScreenToSky(cameraRef.current, x, y, ww, wh);
       return { x, y, nx: sky.nx, ny: sky.ny };
     };
@@ -4863,7 +4869,7 @@ export default function Stars() {
         const p = safePoint();
         const dens = sampleAutomata(grid, p.nx, p.ny);
         // hotter cells → more violent events; cool cells prefer comets/birth
-        let roll = Math.random();
+        let roll = dice();
         if (dens > 0.55) roll = Math.min(0.99, roll + 0.18);
         if (dens < 0.22) roll *= 0.7;
         if (profile.quasarCount > 0 && dens > 0.6 && roll > 0.85) {
@@ -4880,11 +4886,14 @@ export default function Stars() {
       // fingers held down stretch the wait between events, and a
       // face-down phone stretches it further still
       const dilation = Math.max(0.08, timeScaleRef.current * (1 - 0.55 * nightRef.current));
+      // scheduling jitter only — declared in the registry's nondeterminism
+      // note: it decides *when* the next weather tick fires, never *what*
+      // happens, so it carries nothing a replay needs to reproduce.
       timer = window.setTimeout(fire, (9000 + Math.random() * 8000) / bias / dilation);
     };
     timer = window.setTimeout(fire, 5000 + Math.random() * 5000);
     return () => window.clearTimeout(timer);
-  }, [spawnComet, spawnPulsar, spawnNova, spawnStarForm, spawnTidalFlare, spawnGrb]);
+  }, [spawnComet, spawnPulsar, spawnNova, spawnStarForm, spawnTidalFlare, spawnGrb, dice]);
 
   // ── the room runtime: sleep when unseen, tick the density automata ──
   // Both the document's own visibility and the gallery frame's pause
@@ -5069,7 +5078,7 @@ export default function Stars() {
         if (startMergeById(q.aId, q.bId)) return;
       }
 
-      if (nowMs > mergerScanRef.current && holes.length >= 2 && Math.random() < 0.45) {
+      if (nowMs > mergerScanRef.current && holes.length >= 2 && dice() < 0.45) {
         mergerScanRef.current = nowMs + 18000;
         const ranked = rankMergePairs(holes, 0.22);
         if (ranked[0]) startMergeById(ranked[0].aId, ranked[0].bId);
@@ -5077,7 +5086,7 @@ export default function Stars() {
     };
     const id = window.setInterval(tick, 140);
     return () => window.clearInterval(id);
-  }, [addCosmicEvent, chirpTone, markSky, persistCosmicMemory]);
+  }, [addCosmicEvent, chirpTone, markSky, persistCosmicMemory, dice]);
 
   // ── the way down ───────────────────────────────────────────────────
   // At local-band zoom, the condensed world nearest the frame's center is

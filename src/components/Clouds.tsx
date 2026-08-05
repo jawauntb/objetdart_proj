@@ -57,6 +57,14 @@ type RainVeil = {
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
+/** A seeded 0..1 draw for the sky's own creations (the glyph flock born at
+ *  mount, a tapped cell's traits) — never Math random, so the same run of
+ *  taps grows the same weather. */
+function hash01(n: number): number {
+  const x = Math.sin(n * 127.1 + 311.7) * 43758.5453123;
+  return x - Math.floor(x);
+}
+
 /**
  * /clouds — Olympus. The cloud floor.
  *
@@ -775,18 +783,26 @@ export default function Clouds() {
       strength: number,
     ): WeatherCell => {
       const p = clampToSky(x, y);
+      const id = ++nextWeatherId;
+      // a tapped cell's traits are seeded from its own id/position, not
+      // Math random — the same run of taps grows the same weather
+      const s0 = hash01(id * 7 + p.x * 0.013);
+      const s1 = hash01(id * 11 + p.y * 0.017);
+      const s2 = hash01(id * 13 + p.x * 0.021 + p.y * 0.009);
+      const s3 = hash01(id * 17);
+      const s4 = hash01(id * 19 + strength * 97);
       const cell: WeatherCell = {
-        id: ++nextWeatherId,
+        id,
         kind,
         x: p.x,
         y: p.y,
         t0: simNowMs,
         strength: clamp(strength, 0.2, 1),
-        spread: kind === "storm" ? 0.72 + Math.random() * 0.28 : 0.70 + Math.random() * 0.55,
-        drift: (Math.random() - 0.5) * (kind === "storm" ? 7 : 16),
-        lift: kind === "storm" ? 0.35 + Math.random() * 0.35 : 1.2 + Math.random() * 1.8,
-        phase: Math.random() * Math.PI * 2,
-        rain: kind === "storm" ? 0.45 + Math.random() * 0.35 + strength * 0.22 : Math.random() * 0.10,
+        spread: kind === "storm" ? 0.72 + s0 * 0.28 : 0.70 + s0 * 0.55,
+        drift: (s1 - 0.5) * (kind === "storm" ? 7 : 16),
+        lift: kind === "storm" ? 0.35 + s2 * 0.35 : 1.2 + s2 * 1.8,
+        phase: s3 * Math.PI * 2,
+        rain: kind === "storm" ? 0.45 + s4 * 0.35 + strength * 0.22 : s4 * 0.10,
       };
       weatherCells.push(cell);
       if (weatherCells.length > 20) weatherCells.shift();
@@ -796,29 +812,31 @@ export default function Clouds() {
 
     const seedRainVeil = (x: number, y: number, strength: number, width = 180) => {
       const p = clampToSky(x, y);
+      const id = ++nextWeatherId;
       rainVeils.push({
-        id: ++nextWeatherId,
+        id,
         x: p.x,
         y: p.y,
         t0: simNowMs,
         strength: clamp(strength, 0.18, 1),
         width,
-        slant: -10 + Math.random() * 22 + windTargetX * 18,
-        seed: Math.random() * 1000,
+        slant: -10 + hash01(id * 23 + p.x * 0.03) * 22 + windTargetX * 18,
+        seed: hash01(id * 29 + p.y * 0.04) * 1000,
       });
       if (rainVeils.length > 14) rainVeils.shift();
     };
 
     const beginWindStroke = (x: number, y: number) => {
+      const id = ++nextWeatherId;
       activeWindStroke = {
-        id: ++nextWeatherId,
+        id,
         points: [{ x, y, t: performance.now() }],
         t0: simNowMs,
         releasedAt: null,
         strength: 0.12,
         vx: 0,
         vy: 0,
-        hue: Math.random(),
+        hue: hash01(id * 31 + x * 0.05 + y * 0.05),
       };
       windStrokes.push(activeWindStroke);
       if (windStrokes.length > 14) windStrokes.shift();
@@ -1343,27 +1361,40 @@ export default function Clouds() {
     const initialH = wrap.clientHeight || 720;
     const glyphs: Glyph[] = [];
     for (let i = 0; i < GLYPH_COUNT; i++) {
-      const yFrac = 0.08 + (i / GLYPH_COUNT) * 0.62 + (Math.random() - 0.5) * 0.04;
-      const size = 10 + Math.random() * 28; // 10..38
+      // seeded from the glyph's own index, not Math random — the comment
+      // above already promised "seeded at mount"; now it is
+      const g0 = hash01(i * 41 + 3);
+      const g1 = hash01(i * 43 + 7);
+      const g2 = hash01(i * 47 + 11);
+      const g3 = hash01(i * 53 + 13);
+      const g4 = hash01(i * 59 + 17);
+      const g5 = hash01(i * 61 + 19);
+      const g6 = hash01(i * 67 + 23);
+      const g7 = hash01(i * 71 + 29);
+      const g8 = hash01(i * 73 + 31);
+      const g9 = hash01(i * 79 + 37);
+      const g10 = hash01(i * 83 + 41);
+      const yFrac = 0.08 + (i / GLYPH_COUNT) * 0.62 + (g0 - 0.5) * 0.04;
+      const size = 10 + g1 * 28; // 10..38
       // Back glyphs (smaller, higher up) drift slowly; front glyphs faster.
       // Mix sizes with altitude so it doesn't look stratified.
       const altWeight = yFrac; // higher y → larger weight
-      const baseSpeed = 4 + altWeight * 14 + Math.random() * 6; // 4..24 px/s
+      const baseSpeed = 4 + altWeight * 14 + g2 * 6; // 4..24 px/s
       glyphs.push({
         kind: GLYPH_KINDS[i % GLYPH_KINDS.length],
         size,
-        x: Math.random() * initialW,
+        x: g3 * initialW,
         baseY: yFrac * initialH,
-        vx: baseSpeed * (Math.random() < 0.08 ? -1 : 1), // most drift right
-        bobAmp: 2 + Math.random() * 4,
-        bobFreq: 0.08 + Math.random() * 0.18,
-        phase: Math.random() * Math.PI * 2,
-        opacity: 0.08 + Math.random() * 0.12,
-        strokeWidth: 0.75 + Math.random() * 0.45,
-        rotation: Math.random() * Math.PI * 2,
+        vx: baseSpeed * (g4 < 0.08 ? -1 : 1), // most drift right
+        bobAmp: 2 + g5 * 4,
+        bobFreq: 0.08 + g6 * 0.18,
+        phase: g7 * Math.PI * 2,
+        opacity: 0.08 + g8 * 0.12,
+        strokeWidth: 0.75 + g9 * 0.45,
+        rotation: g10 * Math.PI * 2,
         // 0.02..0.06 deg/frame, half clockwise / half counter
-        rotSpeed: ((Math.random() * 0.04 + 0.02) * Math.PI) / 180 *
-          (Math.random() < 0.5 ? -1 : 1),
+        rotSpeed: ((hash01(i * 89 + 43) * 0.04 + 0.02) * Math.PI) / 180 *
+          (hash01(i * 97 + 47) < 0.5 ? -1 : 1),
         hovered: false,
         trail: [],
       });
@@ -1375,11 +1406,11 @@ export default function Clouds() {
     const windStrokes: WindStroke[] = [];
     const rainVeils: RainVeil[] = [];
     const iceCrystals = Array.from({ length: 34 }).map((_, i) => ({
-      xFrac: (i * 0.381966 + Math.random() * 0.08) % 1,
-      yFrac: 0.10 + Math.random() * 0.23,
-      size: 1.4 + Math.random() * 3.8,
-      spin: (Math.random() < 0.5 ? -1 : 1) * (0.15 + Math.random() * 0.35),
-      phase: Math.random() * Math.PI * 2,
+      xFrac: (i * 0.381966 + hash01(i * 101 + 5) * 0.08) % 1,
+      yFrac: 0.10 + hash01(i * 103 + 7) * 0.23,
+      size: 1.4 + hash01(i * 107 + 11) * 3.8,
+      spin: (hash01(i * 109 + 13) < 0.5 ? -1 : 1) * (0.15 + hash01(i * 113 + 17) * 0.35),
+      phase: hash01(i * 127 + 19) * Math.PI * 2,
     }));
 
     // Keep baseY proportional on resize.

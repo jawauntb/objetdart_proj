@@ -28,6 +28,7 @@ import * as haptics from "@/lib/haptics";
 import { getTurbulence, relaxTurbulence, stirTurbulence } from "@/lib/turbulence";
 import RoomShell from "@/components/RoomShell";
 import type { RoomVoice } from "@/lib/gesture/defaults";
+import { tapTrainTier, tapTrainDepth } from "@/lib/gesture/core";
 import { createGLStage, FULLSCREEN_VERT_UNIT } from "@/lib/webgl/stage";
 import { clocksFrom } from "@/lib/webgl/sizing";
 import {
@@ -67,6 +68,7 @@ import {
   sealTip,
   sealedCount,
   spawnTip,
+  tips,
   treeDepth,
   totalRootLength,
   depthForRingHz,
@@ -717,6 +719,9 @@ export default function Root() {
     let lastSaveAt = performance.now();
     let dwellingTipId: number | null = null;
     let lastDeepenAt = 0;
+    // Deterministic index into the tier-3-on-open-soil cycle (germinate /
+    // surge / graft) — advances once per tap, never Math.random.
+    let emptyTapCycle = 0;
 
     const toLocal = (px: number, py: number) => {
       const r = surface.getBoundingClientRect();
@@ -808,6 +813,49 @@ export default function Root() {
       }
     };
 
+    /**
+     * The tap ladder's top rung: the whole root system races out. Every
+     * unsealed frontier tip branches at once (bounded by MAX_NODES and
+     * MAX_GENERATION, exactly like a single branch, just simultaneous),
+     * then the ledger is advanced several virtual hours so the surge of
+     * new growth is visible immediately rather than trickling in — the
+     * room's largest, rarest event. `depth` is 0..1; tier 5 lands
+     * mid-scale, a sustained tier-n train deepens it continuously via
+     * tapTrainDepth.
+     */
+    const raceOut = (depth: number, intensity: number) => {
+      const frontier = tips(state).filter(
+        (t) => t.parentId !== null && t.generation < MAX_GENERATION,
+      );
+      for (const t of frontier) {
+        if (state.nodes.length >= MAX_NODES) break;
+        const rng = sceneMulberry32(hashSeed(t.id, Math.floor(state.tau * 997)));
+        const ang = rng() * Math.PI * 2;
+        const rad = 0.025 + rng() * 0.03;
+        const ox = clamp(t.x + Math.cos(ang) * rad, POOL_X_MIN, POOL_X_MAX);
+        const oy = clamp(t.y + Math.sin(ang) * rad, CROWN_Y, POOL_Y_MAX);
+        state = spawnTip(state, ox, oy, t.id);
+      }
+      state = advanceExact(
+        state,
+        3 * 3600 * (0.4 + depth * 0.8) * (0.7 + intensity * 0.3),
+        climate,
+      );
+      for (const n of state.nodes) {
+        if (n.parentId !== null) pushRipple(n.x, n.y, 0.55 + depth * 0.4);
+      }
+      try {
+        const hz = ringHzFor(meanY());
+        audio.playTone(hz, 0.4 + depth * 0.3);
+        audio.playTone(hz * 1.5, 0.28 + depth * 0.2);
+        audio.bell();
+        haptics.roll();
+      } catch {
+        /* noop */
+      }
+      writer.schedule();
+    };
+
     // ——— the hand's verbs, in this room's material ———
     const engine: RootApi = {
       tap: (x, y, intensity, count, fingers) => {
@@ -816,14 +864,122 @@ export default function Root() {
         cursorY = ny;
         cursorLit = 1;
         if (fingers >= 2) return;
+        const tier = tapTrainTier(count);
         const found = nearestNode(state, nx, ny, 0.08);
         if (found && found.parentId !== null) {
-          soundTip(found.y);
-          pushRipple(found.x, found.y, 0.7);
-          haptics.tap();
+          if (tier === 1) {
+            // the room's ordinary answer: ring the tip at its own depth.
+            soundTip(found.y);
+            pushRipple(found.x, found.y, 0.7);
+            haptics.tap();
+            return;
+          }
+          if (tier === 3) {
+            // the tip branches: a real child spawns off it, sharing the
+            // same conductance law every other edge obeys — it starts
+            // starved and has to earn its own water and sugar. The offset
+            // is seeded from the tip's own id and the ledger's own clock
+            // (tau), never Math.random.
+            const rng = sceneMulberry32(hashSeed(found.id, Math.floor(state.tau * 997)));
+            const ang = rng() * Math.PI * 2;
+            const rad = 0.03 + rng() * 0.035;
+            const ox = clamp(found.x + Math.cos(ang) * rad, POOL_X_MIN, POOL_X_MAX);
+            const oy = clamp(found.y + Math.sin(ang) * rad, CROWN_Y, POOL_Y_MAX);
+            const before = state.nodes.length;
+            state = spawnTip(state, ox, oy, found.id);
+            if (state.nodes.length > before) {
+              pushRipple(ox, oy, 0.7);
+              pushRipple(found.x, found.y, 0.5);
+              try {
+                audio.playNote(52, 260);
+                audio.bell();
+                haptics.bloom();
+              } catch {
+                /* noop */
+              }
+              writer.schedule();
+            } else {
+              try { audio.refuse(); } catch { /* noop */ }
+            }
+            return;
+          }
+          // tier 5 / n — the whole system races out, scaled by the train's
+          // depth past 5 so a sustained roll keeps deepening it.
+          raceOut(tier === "n" ? tapTrainDepth(count) : 0.62, intensity);
           return;
         }
-        ringHere(nx, ny, 0.6 + intensity * 0.4 + Math.min(0.4, (count - 1) * 0.08));
+        if (tier === 1) {
+          ringHere(nx, ny, 0.6 + intensity * 0.4);
+          return;
+        }
+        if (tier === 3) {
+          // a cycling set of rarer events over open soil, true to the
+          // network's own materials — a tip germinates, a surge of sap
+          // charges the nearest one, a graft forks it from a distance —
+          // so a hand that keeps tapping bare soil keeps finding something
+          // new, deterministically.
+          const which = emptyTapCycle % 3;
+          emptyTapCycle++;
+          if (which === 0) {
+            if (!inSectionBounds(nx, ny)) {
+              try { audio.refuse(); } catch { /* noop */ }
+              return;
+            }
+            const before = state.nodes.length;
+            state = spawnTip(state, nx, ny, null);
+            if (state.nodes.length > before) {
+              pushRipple(nx, ny, 0.6);
+              try {
+                audio.playNote(50, 240);
+                haptics.tap();
+              } catch {
+                /* noop */
+              }
+              writer.schedule();
+            } else {
+              try { audio.refuse(); } catch { /* noop */ }
+            }
+          } else if (which === 1) {
+            const near = nearestNode(state, nx, ny, 1);
+            if (near && near.parentId !== null && !near.sealed) {
+              state = deepenTip(state, near.id, GROWTH_STEP_MAX * (0.3 + intensity * 0.3));
+              pushRipple(near.x, near.y, 0.65);
+              try {
+                audio.playTone(ringHzFor(near.y), 0.3);
+                haptics.chop();
+              } catch {
+                /* noop */
+              }
+              writer.schedule();
+            } else {
+              try { audio.refuse(); } catch { /* noop */ }
+            }
+          } else {
+            const near = nearestNode(state, nx, ny, 1);
+            if (near && near.parentId !== null) {
+              const before = state.nodes.length;
+              state = spawnTip(state, nx, ny, near.id);
+              if (state.nodes.length > before) {
+                pushRipple(nx, ny, 0.6);
+                pushRipple(near.x, near.y, 0.45);
+                try {
+                  audio.playTone(140, 0.28);
+                  haptics.tap();
+                } catch {
+                  /* noop */
+                }
+                writer.schedule();
+              } else {
+                try { audio.refuse(); } catch { /* noop */ }
+              }
+            } else {
+              try { audio.refuse(); } catch { /* noop */ }
+            }
+          }
+          return;
+        }
+        // tier 5 / n on open soil — the same whole-system race.
+        raceOut(tier === "n" ? tapTrainDepth(count) : 0.62, intensity);
       },
       stepBack: () => {
         if (lensSnapped === 1) {
@@ -1366,7 +1522,6 @@ export default function Root() {
 // Kept imports the compiler intentionally reserved for the shader-template
 // interpolations and forward-compatibility. Referencing them here silences
 // unused-import diagnostics without adding runtime overhead.
-void MAX_GENERATION;
 void MAX_GROWTH;
 void POOL_Y_MIN;
 void depthForRingHz;

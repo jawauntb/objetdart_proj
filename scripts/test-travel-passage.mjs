@@ -1,12 +1,13 @@
 /**
  * Every travel edge gets a film — registered trunk or the shared default.
  * Catches the bug where an unregistered edge hard-cut with an ink fade, pins
- * the richer high-traffic trunk films (astronomical and small-scale) so they
- * cannot silently fall back, and — for the small-scale spine's ten new
- * films — checks the law a film cannot break without anyone noticing until
- * the return leg looks wrong: pure function of u and a seed, no wall-clock,
- * no Math.random, and identical output across repeated / re-ordered calls
- * (the mechanism that makes the backward replay land on the outbound frames).
+ * the richer films (astronomical trunk, small-scale spine, the living
+ * middle) so they cannot silently fall back to the default planet, and — for
+ * every film the test realm can build — checks the law a film cannot break
+ * without anyone noticing until the return leg looks wrong: pure function of
+ * u and a seed, no wall-clock, no Math.random, and identical output across
+ * repeated / re-ordered calls (the mechanism that makes the backward replay
+ * land on the outbound frames).
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -99,6 +100,63 @@ function band(id) {
     // astronomical rhythm instead of its own.
     assert.ok(spec.durationMs <= 2600, `${key} is quicker than the astronomical trunk`);
   }
+}
+
+// The living middle and the top of the axis — the edges a hand actually
+// walks between the two trunks, which resolved to the default planet until
+// they were filmed. Same bug guarded as above: a key drifts, the hop goes
+// quietly back to the turning globe on the busiest doors in the album.
+{
+  const middle = [
+    ["atlas", "stars", "starchart", true],
+    ["stars", "atlas", "starchart", false],
+    ["tissue", "flowers", "lamina", true],
+    ["flowers", "tissue", "lamina", false],
+    ["drop", "coast", "tension", true],
+    ["coast", "drop", "tension", false],
+    ["drop", "flowers", "dew", true],
+    ["flowers", "drop", "dew", false],
+    ["flowers", "birds", "lift", true],
+    ["birds", "flowers", "lift", false],
+    ["birds", "coast", "shorewing", true],
+    ["coast", "birds", "shorewing", false],
+    ["olympus", "earth", "massif", true],
+    ["earth", "olympus", "massif", false],
+    ["space", "beyond", "interfere", true],
+    ["beyond", "space", "interfere", false],
+    ["beyond", "manifold", "curvature", true],
+    ["manifold", "beyond", "curvature", false],
+  ];
+  for (const [from, to, film, out] of middle) {
+    const key = `${from}->${to}`;
+    const spec = resolvePassageSpec(from, band(to));
+    assert.equal(spec.film, film, `${key} keeps film ${film}`);
+    assert.equal(spec.out, out, `${key} direction`);
+    assert.equal(spec.durationMs, PASSAGES[key].durationMs, `${key} duration from registry`);
+    assert.notEqual(spec.durationMs, DEFAULT_PASSAGE.durationMs, `${key} is not the soft default`);
+  }
+}
+
+// Every registered edge's return leg is the SAME film at the SAME length,
+// with the direction flipped. The passage plays a film forward when
+// `out` and backward when it is false, so a pair that disagrees on
+// film or duration is not one crossing traversed both ways — it is two
+// different films, and the second is the one nobody looked at. The bug this
+// catches is the ordinary one: a registry block copy-pasted for the return
+// leg with a name or a number left unedited.
+{
+  let pairs = 0;
+  for (const [key, spec] of Object.entries(PASSAGES)) {
+    const [from, to] = key.split("->");
+    const back = PASSAGES[`${to}->${from}`];
+    if (!back) continue; // one-way registrations are legal; unmatched is not a pair
+    pairs++;
+    assert.equal(back.film, spec.film, `${to}->${from} plays the same film as ${key}`);
+    assert.equal(back.durationMs, spec.durationMs, `${to}->${from} runs as long as ${key}`);
+    assert.equal(back.reducedMs, spec.reducedMs, `${to}->${from} reduces like ${key}`);
+    assert.equal(back.out, !spec.out, `${to}->${from} is the reverse direction of ${key}`);
+  }
+  assert.ok(pairs >= 60, `both legs of every filmed edge are registered (saw ${pairs})`);
 }
 
 // An unregistered edge still resolves — never null, never silent.
@@ -198,9 +256,20 @@ function loadTsxModule(path) {
   return mod.exports;
 }
 
-const { __spineFilmFactories } = loadTsxModule("src/components/TravelPassage.tsx");
-assert.ok(__spineFilmFactories, "TravelPassage.tsx exports the spine film factories for testing");
-const SPINE_FILM_NAMES = [
+const { __pureFilmFactories } = loadTsxModule("src/components/TravelPassage.tsx");
+assert.ok(__pureFilmFactories, "TravelPassage.tsx exports the pure film factories for testing");
+const PURE_FILM_NAMES = [
+  // the astronomical trunk and the ground/vista films
+  "arm",
+  "node",
+  "orbitfall",
+  "sunfall",
+  "peakair",
+  "fogclimb",
+  "garden",
+  "strand",
+  "fold",
+  // the small-scale spine, quanta → drop
   "quantum",
   "confine",
   "shell",
@@ -211,13 +280,40 @@ const SPINE_FILM_NAMES = [
   "membrane",
   "sheet",
   "dissolve",
+  // the chart-to-sky hop, the living middle, and the top of the axis
+  "starchart",
+  "lamina",
+  "tension",
+  "dew",
+  "lift",
+  "shorewing",
+  "massif",
+  "interfere",
+  "curvature",
 ];
-for (const name of SPINE_FILM_NAMES) {
+for (const name of PURE_FILM_NAMES) {
   assert.equal(
-    typeof __spineFilmFactories[name],
+    typeof __pureFilmFactories[name],
     "function",
     `${name} film factory is exported for testing`,
   );
+}
+// Every film name a registered edge asks for must be one this suite can
+// actually sample, or the purity checks below silently stop covering it —
+// which is how a film gets written, registered, and never tested at all.
+// The four that draw through an offscreen canvas cannot be built in node,
+// and are named here so the exemption is a decision rather than a gap.
+{
+  const CANVAS_BOUND_FILMS = new Set(["beads", "chartland", "airmap", "planet"]);
+  const registered = new Set(Object.values(PASSAGES).map((s) => s.film).filter(Boolean));
+  for (const name of registered) {
+    if (CANVAS_BOUND_FILMS.has(name)) continue;
+    assert.ok(
+      PURE_FILM_NAMES.includes(name),
+      `film "${name}" is registered on an edge but is not sampled for purity — export its ` +
+        "factory in __pureFilmFactories and add it to PURE_FILM_NAMES",
+    );
+  }
 }
 
 /** A recording stand-in for CanvasRenderingContext2D: no pixels, just the
@@ -262,8 +358,8 @@ function fingerprint(film, w, h, u) {
 // draw byte-identical frames at the same u. Catches a film whose factory
 // leaks external state (e.g. a module-level counter) instead of closing
 // only over its seeded arrays.
-for (const name of SPINE_FILM_NAMES) {
-  const factory = __spineFilmFactories[name];
+for (const name of PURE_FILM_NAMES) {
+  const factory = __pureFilmFactories[name];
   const filmA = factory(0x51ee5eed);
   const filmB = factory(0x51ee5eed);
   for (const u of [0, 0.12, 0.37, 0.5, 0.68, 0.91, 1]) {
@@ -280,8 +376,8 @@ for (const name of SPINE_FILM_NAMES) {
 // were rendered before it — no accumulator, no frame counter, no rAF-timing
 // leak. This renders u values out of order and confirms a later call at the
 // same u reproduces the very first call at that u exactly.
-for (const name of SPINE_FILM_NAMES) {
-  const factory = __spineFilmFactories[name];
+for (const name of PURE_FILM_NAMES) {
+  const factory = __pureFilmFactories[name];
   const film = factory(0x0a0b1e5);
   const probe = 0.42;
   const first = fingerprint(film, 640, 480, probe);
@@ -300,5 +396,6 @@ for (const name of SPINE_FILM_NAMES) {
 }
 
 console.log(
-  "travel-passage ok: spine films are pure — deterministic in u, no wall-clock, order-independent",
+  `travel-passage ok: ${PURE_FILM_NAMES.length} films are pure — deterministic in u, ` +
+    "no wall-clock, order-independent",
 );

@@ -598,6 +598,43 @@ export function sealCreature(state: PoolState, id: number): PoolState {
 }
 
 /**
+ * Reproduce a creature near itself — the tap ladder's tier-3 rung on an
+ * existing creature: a snail lays a cluster, a kelp frond fragments, an
+ * anemone splits by binary fission (real anemone biology, not invented).
+ * The parent pays a real third of its own biomass to fund the offspring —
+ * a budget transfer, not a free duplicate — so the split is felt at the
+ * parent too. Anemones can only be founded by the ceremony (hollow-only);
+ * a split obeys that same law. Refuses (no-op) at the kind's cap, outside
+ * the parent's own zone, or if the parent has too little biomass to spare.
+ */
+export function reproduceCreature(
+  state: PoolState,
+  id: number,
+  offsetX: number,
+  offsetY: number,
+): { state: PoolState; childId: number | null } {
+  const parent = state.creatures.find((c) => c.id === id);
+  if (!parent || parent.biomass < 0.12) return { state, childId: null };
+  const ox = clamp(parent.x + offsetX, POOL_X_MIN, POOL_X_MAX);
+  const oy = clamp(parent.y + offsetY, POOL_Y_MIN, POOL_Y_MAX);
+  const before = state.creatures.length;
+  let next =
+    parent.kind === "anemone" ? ceremonyPlantAnemone(state, ox, oy) : plantCreature(state, ox, oy);
+  if (next.creatures.length <= before) return { state, childId: null };
+  const child = next.creatures[next.creatures.length - 1];
+  if (child.kind !== parent.kind) return { state, childId: null };
+  const gift = parent.biomass * (1 / 3);
+  next = deepenCreature(next, child.id, gift);
+  next = {
+    ...next,
+    creatures: next.creatures.map((c) =>
+      c.id === parent.id ? { ...c, biomass: clamp(c.biomass - gift, 0, MAX_BIOMASS) } : c,
+    ),
+  };
+  return { state: next, childId: child.id };
+}
+
+/**
  * A hard knock startles the pool. Every anemone curls, every snail
  * retreats. Kelp thrashes (bendPhase spike). Returns the new state and
  * the count of creatures affected. During a storm state the caller

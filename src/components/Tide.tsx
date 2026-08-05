@@ -41,6 +41,13 @@ const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const TAU = Math.PI * 2;
 
+/** A seeded 0..1 draw for what a planted natural becomes — never Math
+ *  random, so the same touch on the same tide always yields the same kind. */
+function hash01(n: number): number {
+  const x = Math.sin(n * 127.1 + 311.7) * 43758.5453123;
+  return x - Math.floor(x);
+}
+
 // Real-ish ratio: the Sun's tide-raising force is ~46% of the Moon's.
 const MOON_AMP = 1.0;
 const SUN_AMP = 0.46;
@@ -593,7 +600,7 @@ export default function Tide() {
             (bodyTide(moonAngRef.current, MOON_AMP) + bodyTide(sunAngRef.current, SUN_AMP)) / (MOON_AMP + SUN_AMP),
             -1, 1,
           );
-          const roll = Math.random();
+          const roll = hash01(Date.now() * 0.001 + e.x * 997 + e.y * 431);
           const kind: NaturalKind =
             tideN < -0.3 ? (roll < 0.72 ? "seashell" : roll < 0.94 ? "starfish" : "driftwood")
             : tideN > 0.3 ? (roll < 0.72 ? "driftwood" : "seashell")
