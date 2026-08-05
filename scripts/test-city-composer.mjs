@@ -206,8 +206,8 @@ assert.equal(dofStrengthForPitch(2), 1, "over-clamped pitch stays at DOF strengt
   const medium = passesForTier("medium");
   assert.deepEqual(
     medium,
-    { bloom: true, ssao: true, dof: false, godrays: true },
-    "medium tier has bloom + ssao + god-rays, no DOF (god-rays ride the SSAO gate per the brief)",
+    { bloom: true, ssao: false, dof: false, godrays: false },
+    "medium tier keeps bloom only — phones need the budget back",
   );
 }
 {
@@ -229,5 +229,5 @@ assert.equal(dofStrengthForPitch(2), 1, "over-clamped pitch stays at DOF strengt
 
 console.log(
   "city-composer ok: ember curve peaks at dusk, DOF ramps 0→1 on pitch [0.55..0.85], " +
-  "tier ladder is sleep/low → medium(bloom+ssao+godrays) → high(bloom+ssao+godrays+dof).",
+  "tier ladder is sleep/low → medium(bloom) → high(bloom+ssao+godrays+dof).",
 );

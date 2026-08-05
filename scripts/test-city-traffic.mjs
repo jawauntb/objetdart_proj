@@ -24,6 +24,7 @@ const mod = loadTsModule("src/lib/city-traffic.ts", {
 
 const {
   CAR_COUNT,
+  BASELINE_ROADS,
   BOAT_COUNT,
   MAX_LAMPS,
   LAMP_SPACING_M,
@@ -42,7 +43,8 @@ const {
 
 // ─── constants the brief pins ────────────────────────────────────────────
 
-assert.equal(CAR_COUNT, 24, "brief pins the fleet at 24 cars");
+assert.equal(CAR_COUNT, 16, "fleet sized for waterfront avenues without stacking");
+assert.ok(BASELINE_ROADS.length >= 3, "baseline avenues keep cars alive before the visitor draws");
 assert.equal(BOAT_COUNT, 6, "brief pins the harbour at 6 boats");
 assert.equal(MAX_LAMPS, 256, "MAX_LAMPS is the capacity, not the used count");
 assert.equal(LAMP_SPACING_M, 8, "lamp posts every 8 metres, per the London kerb");
@@ -182,7 +184,7 @@ assert.equal(
 // ─── the four brief pins, held together ─────────────────────────────────
 
 // per-instance count (cars = 24, boats = 6, lamps ≤ MAX_LAMPS=256)
-assert.equal(CAR_COUNT, 24);
+assert.equal(CAR_COUNT, 16);
 assert.equal(BOAT_COUNT, 6);
 assert.ok(MAX_LAMPS >= 128, "MAX_LAMPS at least 128 as the brief calls for");
 

@@ -45,11 +45,9 @@ import type { QualityTier } from "@/lib/room-runtime";
 
 // ─── pure constants + pinned functions ──────────────────────────────────
 
-/** How many cars advance along the visitor-drawn road graph at any moment.
- * Sized to comfortably feel like a small settlement — a value low enough
- * that four cars on one road never overlap, high enough that a settlement
- * with two or three roads reads as populated. Pinned by test-city-traffic. */
-export const CAR_COUNT = 24;
+/** How many cars advance along the road graph at any moment. Sixteen
+ * keeps the waterfront avenues alive without stacking on a single kerb. */
+export const CAR_COUNT = 16;
 
 /** How many boats crawl across the harbour. Six is what the London-at-dusk
  * reference shows: a couple of barges, a small ferry, one distant tanker
@@ -188,6 +186,19 @@ export function roadWorldLength(road: { x1: number; y1: number; x2: number; y2: 
  * four normalized endpoints. */
 export type TrafficRoad = { x1: number; y1: number; x2: number; y2: number };
 
+/**
+ * Baseline avenues that exist before the visitor draws anything — a
+ * waterfront strip plus two cross streets so cars always crawl a real
+ * grid. Normalized 0..1 coords, same space as visitor roads. Visitor
+ * roads append on top; LetGo restores the baseline.
+ */
+export const BASELINE_ROADS: ReadonlyArray<TrafficRoad> = [
+  { x1: 0.08, y1: 0.72, x2: 0.92, y2: 0.72 }, // waterfront avenue
+  { x1: 0.08, y1: 0.38, x2: 0.92, y2: 0.38 }, // mid cross street
+  { x1: 0.32, y1: 0.18, x2: 0.32, y2: 0.88 }, // north–south
+  { x1: 0.68, y1: 0.18, x2: 0.68, y2: 0.88 }, // north–south
+];
+
 /** The harbour geometry the boat lane rides in. City.tsx passes the same
  * strip the water module uses so the wake proxies land under the reflector. */
 export type TrafficHarbour = {
@@ -284,50 +295,72 @@ type BoatState = {
 };
 
 // ─── car mesh construction ──────────────────────────────────────────────
-// Chamfered box: the box has soft top edges so the sunset light rakes a
-// small highlight along the roof rather than reading as a shipping crate.
-// We build it once per module load; the InstancedMesh reuses this geometry
-// for every car (transform + colour is per-instance).
-function buildChamferedCarBody(): THREE.BufferGeometry {
-  // A 4.2 m long, 1.8 m wide, 1.4 m tall car with the top slightly narrower
-  // than the base (a subtle taper, like a saloon or a small SUV). Built
-  // from an extruded shape so the corners chamfer softly.
-  const shape = new THREE.Shape();
-  const w = 0.9;   // half-width at the base
-  const wt = 0.72; // half-width at the top (subtle taper)
-  const halfL = 2.1;
-  shape.moveTo(-halfL, -w);
-  shape.lineTo(halfL, -w);
-  shape.lineTo(halfL, w);
-  shape.lineTo(-halfL, w);
-  shape.lineTo(-halfL, -w);
-  const extrudeSettings: THREE.ExtrudeGeometryOptions = {
-    depth: 1.4,
-    bevelEnabled: true,
-    bevelThickness: 0.22,
-    bevelSize: 0.22,
-    bevelSegments: 2,
-    curveSegments: 3,
-  };
-  const geo = new THREE.ExtrudeGeometry(shape, extrudeSettings);
-  // ExtrudeGeometry produces vertices in the XY plane with depth on +Z; we
-  // want the car flat on the ground (XZ plane) with height on +Y and the
-  // taper applied so the top narrows relative to the base. First rotate
-  // the extrude axis onto +Y, then squeeze the top faces inward on X to
-  // give the taper. The subtle squeeze is what reads as a car body vs a
-  // brick — the shader's highlight walks the taper at sunset.
-  geo.rotateX(-Math.PI / 2);
-  const pos = geo.attributes.position;
-  for (let i = 0; i < pos.count; i += 1) {
-    const y = pos.getY(i);
-    if (y > 1.0) {
-      const ratio = wt / w;
-      pos.setX(i, pos.getX(i) * ratio);
+// Low-poly saloon: chassis + cabin greenhouse + four wheel darks, merged
+// into one body geometry so one InstancedMesh still draws the fleet.
+// Cabin and wheels keep their own materials via separate InstancedMeshes
+// so instanceColor only tints the painted body.
+function buildCarChassis(): THREE.BufferGeometry {
+  const chassis = new THREE.BoxGeometry(4.2, 0.85, 1.75);
+  chassis.translate(0, 0.55, 0);
+  return chassis;
+}
+function buildCarCabin(): THREE.BufferGeometry {
+  const cabin = new THREE.BoxGeometry(2.1, 0.72, 1.45);
+  cabin.translate(-0.15, 1.25, 0);
+  return cabin;
+}
+function buildCarWheels(): THREE.BufferGeometry {
+  const parts: THREE.BufferGeometry[] = [];
+  const spots: Array<[number, number]> = [
+    [-1.35, -0.95],
+    [-1.35, 0.95],
+    [1.25, -0.95],
+    [1.25, 0.95],
+  ];
+  for (const [x, z] of spots) {
+    const w = new THREE.BoxGeometry(0.55, 0.45, 0.28);
+    w.translate(x, 0.28, z);
+    parts.push(w);
+  }
+  return mergeCarGeometries(parts);
+}
+/** Minimal merge — same pattern as city-pedestrians. */
+function mergeCarGeometries(geos: THREE.BufferGeometry[]): THREE.BufferGeometry {
+  const nonIndexed = geos.map((g) => {
+    const gi = g.index ? g.toNonIndexed() : g;
+    if (!gi.attributes.normal) gi.computeVertexNormals();
+    return gi;
+  });
+  let totalVerts = 0;
+  for (const g of nonIndexed) totalVerts += g.attributes.position.count;
+  const positions = new Float32Array(totalVerts * 3);
+  const normals = new Float32Array(totalVerts * 3);
+  let offset = 0;
+  for (const g of nonIndexed) {
+    const p = g.attributes.position;
+    const n = g.attributes.normal;
+    for (let i = 0; i < p.count; i += 1) {
+      positions[(offset + i) * 3 + 0] = p.getX(i);
+      positions[(offset + i) * 3 + 1] = p.getY(i);
+      positions[(offset + i) * 3 + 2] = p.getZ(i);
+      normals[(offset + i) * 3 + 0] = n.getX(i);
+      normals[(offset + i) * 3 + 1] = n.getY(i);
+      normals[(offset + i) * 3 + 2] = n.getZ(i);
+    }
+    offset += p.count;
+  }
+  for (const g of geos) {
+    try { g.dispose(); } catch { /* noop */ }
+  }
+  for (const g of nonIndexed) {
+    if (!geos.includes(g)) {
+      try { g.dispose(); } catch { /* noop */ }
     }
   }
-  pos.needsUpdate = true;
-  geo.computeVertexNormals();
-  return geo;
+  const out = new THREE.BufferGeometry();
+  out.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  out.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
+  return out;
 }
 
 // A small emissive quad that sits in front of the car — the headlights.
@@ -399,6 +432,16 @@ export function createCityTraffic(opts: CityTrafficOptions): CityTraffic {
     metalness: 0.35,
     roughness: 0.5,
   });
+  const carCabinMat = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(0x1a2430),
+    metalness: 0.55,
+    roughness: 0.25,
+  });
+  const carWheelMat = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(0x121214),
+    metalness: 0.1,
+    roughness: 0.85,
+  });
   const carHeadlightMat = new THREE.MeshBasicMaterial({
     color: new THREE.Color(0xfff2c8),
     transparent: true,
@@ -434,15 +477,27 @@ export function createCityTraffic(opts: CityTrafficOptions): CityTraffic {
   });
 
   // ── car instances ───────────────────────────────────────────────────
-  const carBodyGeo = buildChamferedCarBody();
+  const carBodyGeo = buildCarChassis();
+  const carCabinGeo = buildCarCabin();
+  const carWheelGeo = buildCarWheels();
   const headlightGeo = buildHeadlightQuad();
 
   const carBody = new THREE.InstancedMesh(carBodyGeo, carBodyMat, CAR_COUNT);
-  carBody.castShadow = false; // shadows come from the sun on the world scene
+  carBody.castShadow = false;
   carBody.receiveShadow = false;
   carBody.name = "cars-body";
   carBody.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-  // Per-instance colour so 24 cars read as different vehicles.
+  const carCabin = new THREE.InstancedMesh(carCabinGeo, carCabinMat, CAR_COUNT);
+  carCabin.castShadow = false;
+  carCabin.receiveShadow = false;
+  carCabin.name = "cars-cabin";
+  carCabin.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  const carWheels = new THREE.InstancedMesh(carWheelGeo, carWheelMat, CAR_COUNT);
+  carWheels.castShadow = false;
+  carWheels.receiveShadow = false;
+  carWheels.name = "cars-wheels";
+  carWheels.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  // Per-instance colour so the fleet reads as different paint jobs.
   const carColorArr = new Float32Array(CAR_COUNT * 3);
   for (let i = 0; i < CAR_COUNT; i += 1) {
     // A palette of muted paint hues — silver, navy, red, olive, white,
@@ -464,6 +519,8 @@ export function createCityTraffic(opts: CityTrafficOptions): CityTraffic {
   carBody.instanceColor = new THREE.InstancedBufferAttribute(carColorArr, 3);
   carBody.instanceColor.setUsage(THREE.StaticDrawUsage);
   group.add(carBody);
+  group.add(carCabin);
+  group.add(carWheels);
 
   const carLights = new THREE.InstancedMesh(headlightGeo, carHeadlightMat, CAR_COUNT);
   carLights.name = "cars-headlights";
@@ -623,8 +680,9 @@ export function createCityTraffic(opts: CityTrafficOptions): CityTraffic {
   }
 
   function setRoads(roads: ReadonlyArray<TrafficRoad>): void {
-    // Copy so we hold a stable list even if the caller mutates theirs.
-    currentRoads = roads.slice();
+    // Always keep the baseline avenues; visitor roads append so the
+    // fleet never goes dark when the field is empty.
+    currentRoads = BASELINE_ROADS.concat(roads);
     assignCarsToRoads();
     relayoutLamps();
   }
@@ -659,6 +717,8 @@ export function createCityTraffic(opts: CityTrafficOptions): CityTraffic {
         scratchQuat.identity();
         scratchMatrix.compose(scratchPos, scratchQuat, scratchScale);
         carBody.setMatrixAt(i, scratchMatrix);
+        carCabin.setMatrixAt(i, scratchMatrix);
+        carWheels.setMatrixAt(i, scratchMatrix);
         carLights.setMatrixAt(i, scratchMatrix);
         continue;
       }
@@ -695,12 +755,14 @@ export function createCityTraffic(opts: CityTrafficOptions): CityTraffic {
       const laneSin = Math.sin(yaw);
       const laneOffsetX = -laneSin * 1.05;
       const laneOffsetZ = -laneCos * 1.05;
-      scratchPos.set(worldX + laneOffsetX, 0.55, worldZ + laneOffsetZ);
+      scratchPos.set(worldX + laneOffsetX, 0, worldZ + laneOffsetZ);
       scratchEuler.set(0, yaw, 0);
       scratchQuat.setFromEuler(scratchEuler);
       scratchScale.set(1, 1, 1);
       scratchMatrix.compose(scratchPos, scratchQuat, scratchScale);
       carBody.setMatrixAt(i, scratchMatrix);
+      carCabin.setMatrixAt(i, scratchMatrix);
+      carWheels.setMatrixAt(i, scratchMatrix);
 
       // Headlight quad — sits 2.4 m in front of the car centre at hood
       // height. When emissive gate is zero, the quad is off-screen (y
@@ -721,6 +783,8 @@ export function createCityTraffic(opts: CityTrafficOptions): CityTraffic {
       bodyVisible += 1;
     }
     carBody.instanceMatrix.needsUpdate = true;
+    carCabin.instanceMatrix.needsUpdate = true;
+    carWheels.instanceMatrix.needsUpdate = true;
     carLights.instanceMatrix.needsUpdate = true;
     // Emissive quad opacity rides the night gate. AdditiveBlending +
     // transparent so bloom picks it up as a hot spot at dusk.
@@ -779,11 +843,15 @@ export function createCityTraffic(opts: CityTrafficOptions): CityTraffic {
 
   function dispose(): void {
     try { carBodyGeo.dispose(); } catch { /* noop */ }
+    try { carCabinGeo.dispose(); } catch { /* noop */ }
+    try { carWheelGeo.dispose(); } catch { /* noop */ }
     try { headlightGeo.dispose(); } catch { /* noop */ }
     try { boatGeo.dispose(); } catch { /* noop */ }
     try { lampPostGeo.dispose(); } catch { /* noop */ }
     try { lampBulbGeo.dispose(); } catch { /* noop */ }
     try { carBodyMat.dispose(); } catch { /* noop */ }
+    try { carCabinMat.dispose(); } catch { /* noop */ }
+    try { carWheelMat.dispose(); } catch { /* noop */ }
     try { carHeadlightMat.dispose(); } catch { /* noop */ }
     try { boatMat.dispose(); } catch { /* noop */ }
     try { lampPostMat.dispose(); } catch { /* noop */ }

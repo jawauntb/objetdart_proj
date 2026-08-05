@@ -252,8 +252,8 @@ export function dofStrengthForPitch(pitch01: number): number {
  *
  *   sleep  → nothing but bloom-less linear composition (pipeline stays lin.)
  *   low    → same as sleep — the composer runs but the aesthetic budget is 0
- *   medium → bloom on + ssao on + god-rays on (contact AO + dawn/dusk shafts)
- *   high   → bloom on + ssao on + dof on + god-rays on (all four post-passes)
+ *   medium → bloom only — keeps dusk window halos without SSAO/godrays/DOF
+ *   high   → bloom + ssao + dof + god-rays (full postcard stack)
  */
 export function passesForTier(tier: QualityTier): {
   bloom: boolean;
@@ -265,14 +265,9 @@ export function passesForTier(tier: QualityTier): {
     case "high":
       return { bloom: true, ssao: true, dof: true, godrays: true };
     case "medium":
-      // God-rays ride the same tier gate as SSAO — the brief's spec.
-      // A medium-tier device on a sunset frame still gets the London
-      // shafts through the towers; only the DOF (BokehPass, wide-zoom
-      // painterly blur) is dropped. The fragment cost is bounded: on the
-      // ~85% of the day outside the ±0.08 gate the pass short-circuits
-      // to a passthrough at one texture fetch, and inside the gate the
-      // 24 radial taps are the same budget SSAO's kernel already pays.
-      return { bloom: true, ssao: true, dof: false, godrays: true };
+      // Phones live here. Bloom alone sells lit windows at dusk; SSAO,
+      // god-rays, and DOF were melting thermal budgets on iPhone.
+      return { bloom: true, ssao: false, dof: false, godrays: false };
     case "low":
     case "sleep":
     default:

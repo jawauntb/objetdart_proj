@@ -45,8 +45,8 @@ export type Season = "spring" | "summer" | "fall" | "winter";
 export const PLOT_DWELL_MS: Record<Exclude<PlotRole, "empty">, number> = {
   home: 0,
   store: 900,
-  event: 2100,
-  tree: 3800,
+  event: 1800,
+  tree: 2200,
 };
 
 /**
@@ -81,11 +81,10 @@ export function needAnsweredBy(role: PlotRole): Need | null {
 
 /**
  * The city keeps its own day. `cityTimeMs` runs on the shell's clock; the
- * day-fraction is what determines dawn, noon, dusk, and night. A quarter of
- * a day is roughly two of the site's 7s breaths — long enough that the
- * cycle is felt, short enough that the visitor sees it happen while playing.
+ * day-fraction is what determines dawn, noon, dusk, and night. Two minutes
+ * for a full cycle — dawn→dusk is felt without the sun racing past.
  */
-export const CITY_DAY_MS = 28_000;
+export const CITY_DAY_MS = 120_000;
 
 /** 0..1 where 0 is dawn, 0.25 noon, 0.5 dusk, 0.75 midnight. */
 export function dayFraction(cityTimeMs: number): number {

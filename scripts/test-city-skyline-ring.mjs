@@ -117,8 +117,8 @@ assert.ok(SKYLINE_CELL_M < 80, "landmark cell not so coarse the ring goes empty"
 assert.ok(SKYLINE_CELL_JITTER > 0 && SKYLINE_CELL_JITTER < 1, "jitter is a fraction");
 
 assert.equal(SKYLINE_COUNT_HIGH, 80, "brief pins the high-tier landmark ring at 80");
-assert.equal(SKYLINE_COUNT_MEDIUM, 40, "brief pins the mid tier at 40");
-assert.equal(SKYLINE_COUNT_LOW, 0, "low tier disables the landmark ring");
+assert.equal(SKYLINE_COUNT_MEDIUM, 50, "mid tier keeps a denser far-bank");
+assert.equal(SKYLINE_COUNT_LOW, 28, "low keeps landmarks so the postcard survives");
 
 assert.ok(SKYLINE_HEIGHT_MIN < SKYLINE_HEIGHT_MAX, "height envelope not inverted");
 assert.ok(

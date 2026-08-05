@@ -126,9 +126,10 @@ export const INFILL_CELL_JITTER = 0.55;
 /** Tier → instance count. Low disables the ring entirely (the low-tier
  *  visitor is on a device where every extra draw call is a frame at
  *  risk); medium halves it; high is the full ring the brief asks for. */
-export const INFILL_COUNT_HIGH = 600;
-export const INFILL_COUNT_MEDIUM = 300;
-export const INFILL_COUNT_LOW = 0;
+export const INFILL_COUNT_HIGH = 280;
+export const INFILL_COUNT_MEDIUM = 120;
+/** Low keeps a thin ring so a phone that drops tier still shows a skyline. */
+export const INFILL_COUNT_LOW = 60;
 
 /** Building height envelope (metres). The ring keeps the ladder consistent
  *  with the plot skyline: nothing on the horizon towers over a sealed
@@ -155,9 +156,9 @@ export type HarbourCutout = {
 };
 
 export const DEFAULT_HARBOUR: HarbourCutout = {
-  centerZ: 50,
-  halfWidth: 48,
-  depth: 32,
+  centerZ: 44,
+  halfWidth: 70,
+  depth: 52,
 };
 
 /** Governor tier tag City.tsx already passes around. Mirrored here so

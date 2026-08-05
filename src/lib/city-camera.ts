@@ -75,12 +75,10 @@ export function pitchForZoom(zoom01: number): number {
  */
 export function distanceForZoom(zoom01: number): number {
   const z = Math.max(0, Math.min(1, zoom01));
-  // Old bird's-eye altitude of 165 units on an 80-unit-wide city left the
-  // settlement small in the frame with a huge empty sky above. 115 pulls
-  // the frame in so the city fills the ground half of the canvas even at
-  // full pull-back — the postcard aesthetic, not a satellite thumbnail.
-  const far = 115;
-  const near = 22;
+  // Bird's-eye stays tight so the skyline fills the frame; eye-level
+  // drops closer so the river and far-bank towers read as midground.
+  const far = 95;
+  const near = 18;
   const t = z * z * (3 - 2 * z);
   return far * (1 - t) + near * t;
 }
@@ -153,6 +151,8 @@ export type CityCamera = {
    * finger tap) so the ceremony of "seeing the settlement whole" always
    * returns to the same center. */
   resetTarget(): void;
+  /** Vessel lean — small roll/pitch bias from device tilt, radians. */
+  setTiltBias(roll: number, pitch: number): void;
   /** Advance the spring by dtMs milliseconds. Called from the tick loop. */
   tick(dtMs: number): void;
   /** Resize handler — updates the camera's aspect ratio. */
@@ -186,6 +186,8 @@ export function createCityCamera(opts: CityCameraOptions): CityCamera {
 
   let orbit = 0;
   let orbitTarget = 0;
+  let tiltRoll = 0;
+  let tiltPitch = 0;
 
   const K = opts.springStiffness ?? 62;
   const D = opts.springDamping ?? 14;
@@ -193,7 +195,7 @@ export function createCityCamera(opts: CityCameraOptions): CityCamera {
   const target = new THREE.Vector3(0, 0, 0);
 
   const applyCamera = (): void => {
-    const pitch = pitchForZoom(zoomCurrent);
+    const pitch = pitchForZoom(zoomCurrent) + tiltPitch;
     const dist = distanceForZoom(zoomCurrent);
     const y = dist * Math.sin(pitch);
     const horizontal = dist * Math.cos(pitch);
@@ -202,6 +204,9 @@ export function createCityCamera(opts: CityCameraOptions): CityCamera {
     cam.position.set(cosA * horizontal, y, sinA * horizontal);
     const lookY = lookYForZoom(zoomCurrent);
     cam.lookAt(target.x, target.y + lookY, target.z);
+    // Roll after lookAt so vessel tilt leans the postcard without
+    // fighting the orbit spring.
+    if (tiltRoll !== 0) cam.rotateZ(tiltRoll);
   };
 
   applyCamera();
@@ -227,12 +232,17 @@ export function createCityCamera(opts: CityCameraOptions): CityCamera {
       orbitTarget = a;
     },
     panTarget(dx: number, dz: number) {
-      const limit = CITY_HALF * 0.9;
+      const limit = CITY_HALF * 2.2;
       target.x = Math.max(-limit, Math.min(limit, target.x + dx));
       target.z = Math.max(-limit, Math.min(limit, target.z + dz));
     },
     resetTarget() {
       target.set(0, 0, 0);
+    },
+    setTiltBias(roll: number, pitch: number) {
+      // Soft clamp — a pocket tilt should lean the view, not flip it.
+      tiltRoll = Math.max(-0.18, Math.min(0.18, roll));
+      tiltPitch = Math.max(-0.12, Math.min(0.12, pitch));
     },
     tick(dtMs: number) {
       const dt = Math.max(0.001, Math.min(0.05, dtMs / 1000));

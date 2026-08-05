@@ -218,9 +218,9 @@ for (const nb of CSM_CASCADE_NORMAL_BIAS) {
 // down by powers of two so mid-range hardware does not blow its
 // shadow-atlas budget. Sleep disables shadows.
 
-assert.equal(cascadeMapSizeForTier("high"), 4096, "high tier maps at 4096²");
-assert.equal(cascadeMapSizeForTier("medium"), 2048, "medium tier maps at 2048²");
-assert.equal(cascadeMapSizeForTier("low"), 1024, "low tier maps at 1024²");
+assert.equal(cascadeMapSizeForTier("high"), 2048, "high tier maps at 2048²");
+assert.equal(cascadeMapSizeForTier("medium"), 1024, "medium tier maps at 1024²");
+assert.equal(cascadeMapSizeForTier("low"), 0, "low tier disables shadows");
 assert.equal(cascadeMapSizeForTier("sleep"), 0, "sleep tier disables shadows entirely");
 
 // ── clamp accessors ────────────────────────────────────────────────────
@@ -321,8 +321,8 @@ assert.equal(CITY_SUN_DISTANCE, 240, "sun distance stays at 240 m");
     // Every cascade shares the same target.
     assert.strictEqual(c.target, citySun.target, `cascade ${i} points at the shared target`);
     // Default mapSize matches the high-tier ladder (4096²).
-    assert.equal(c.shadow.mapSize.x, 4096, `cascade ${i} defaults to 4096² map`);
-    assert.equal(c.shadow.mapSize.y, 4096, `cascade ${i} defaults to 4096² map`);
+    assert.equal(c.shadow.mapSize.x, 2048, `cascade ${i} defaults to 2048² map`);
+    assert.equal(c.shadow.mapSize.y, 2048, `cascade ${i} defaults to 2048² map`);
   }
 
   // `light` alias must point at the FAR cascade — the biggest frustum,
@@ -367,22 +367,22 @@ assert.equal(CITY_SUN_DISTANCE, 240, "sun distance stays at 240 m");
   citySun.update(0.75);
   assert.ok(citySun.sunPosition.y >= 2, "sun y clamped at ≥2 m even below horizon");
 
-  // applyTier propagates to every cascade. Sleep tier disables all
-  // shadows; medium halves the map size; high restores 4096.
+  // applyTier: medium keeps the far cascade only; high keeps mid+far;
+  // sleep disables all. Near cascade stays off outside desktop budgets.
   citySun.applyTier("medium");
-  for (const c of citySun.cascades) {
-    assert.equal(c.castShadow, true, "medium tier still casts");
-    assert.equal(c.shadow.mapSize.x, 2048, "medium tier maps to 2048²");
-  }
+  assert.equal(citySun.cascades[0].castShadow, false, "medium: near cascade off");
+  assert.equal(citySun.cascades[1].castShadow, false, "medium: mid cascade off");
+  assert.equal(citySun.cascades[2].castShadow, true, "medium: far cascade on");
+  assert.equal(citySun.cascades[2].shadow.mapSize.x, 1024, "medium tier maps to 1024²");
   citySun.applyTier("sleep");
   for (const c of citySun.cascades) {
     assert.equal(c.castShadow, false, "sleep tier disables cascade shadow casting");
   }
   citySun.applyTier("high");
-  for (const c of citySun.cascades) {
-    assert.equal(c.castShadow, true, "high tier restores cascade shadow casting");
-    assert.equal(c.shadow.mapSize.x, 4096, "high tier restores 4096² map");
-  }
+  assert.equal(citySun.cascades[0].castShadow, false, "high: near cascade stays off");
+  assert.equal(citySun.cascades[1].castShadow, true, "high: mid cascade on");
+  assert.equal(citySun.cascades[2].castShadow, true, "high: far cascade on");
+  assert.equal(citySun.cascades[2].shadow.mapSize.x, 2048, "high tier restores 2048² map");
 
   // addToScene — every cascade + target + hemi lands in the root's
   // children exactly once. A future refactor that dropped the target

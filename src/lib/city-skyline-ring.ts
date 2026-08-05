@@ -151,8 +151,9 @@ export const SKYLINE_CELL_JITTER = 0.40;
 
 /** Tier → landmark count. */
 export const SKYLINE_COUNT_HIGH = 80;
-export const SKYLINE_COUNT_MEDIUM = 40;
-export const SKYLINE_COUNT_LOW = 0;
+export const SKYLINE_COUNT_MEDIUM = 50;
+/** Low keeps landmarks so the postcard survives thermal throttle. */
+export const SKYLINE_COUNT_LOW = 28;
 
 /** Landmark height envelope (metres). Ceiling is 70 m — comfortably above
  *  the plot event tower's ~50 m so a distant church steeple pokes above

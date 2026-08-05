@@ -104,9 +104,9 @@ assert.equal(INFILL_OUTER_R, 500, "outer radius extends past the FogExp2 knee");
 assert.ok(INFILL_OUTER_R > INFILL_INNER_R, "outer must be > inner");
 assert.ok(INFILL_OUTER_R - INFILL_INNER_R > 200, "annulus is deep enough to matter");
 
-assert.equal(INFILL_COUNT_HIGH, 600, "brief pins the high-tier ring at 600");
-assert.equal(INFILL_COUNT_MEDIUM, 300, "brief pins the mid-tier ring at 300");
-assert.equal(INFILL_COUNT_LOW, 0, "brief pins low-tier disabled");
+assert.equal(INFILL_COUNT_HIGH, 280, "high-tier ring capped for mobile budget");
+assert.equal(INFILL_COUNT_MEDIUM, 120, "mid-tier ring halved for thermal headroom");
+assert.equal(INFILL_COUNT_LOW, 60, "low keeps a thin ring so the postcard survives");
 
 assert.ok(INFILL_CELL_M > 0 && INFILL_CELL_M < 40, "cell size stays sub-block");
 assert.ok(INFILL_CELL_JITTER > 0 && INFILL_CELL_JITTER < 1, "jitter is a unit fraction");
@@ -122,8 +122,8 @@ assert.ok(INFILL_WIDTH_MIN < INFILL_WIDTH_MAX, "footprint envelope not inverted"
 
 assert.equal(infillCountForTier("high"), INFILL_COUNT_HIGH, "high → high count");
 assert.equal(infillCountForTier("medium"), INFILL_COUNT_MEDIUM, "medium → medium");
-assert.equal(infillCountForTier("low"), INFILL_COUNT_LOW, "low → 0");
-assert.equal(infillCountForTier("sleep"), INFILL_COUNT_LOW, "sleep → 0 (same as low)");
+assert.equal(infillCountForTier("low"), INFILL_COUNT_LOW, "low → thin ring");
+assert.equal(infillCountForTier("sleep"), INFILL_COUNT_LOW, "sleep → thin ring (same as low)");
 // Ordering monotonicity — a regression that scrambled the ladder would land here.
 assert.ok(
   infillCountForTier("high") > infillCountForTier("medium"),
