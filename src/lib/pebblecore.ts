@@ -246,7 +246,18 @@ export function mineralFromSeed(seed: number): MineralId {
 
 const MAX_MILLER = 3;
 
+// reciprocalMagnitudes is a pure function of (system, centering, ba, ca) —
+// a lattice's axial ratios never change across a stone's lifetime (only
+// polishDepth and growthRings do), but every partialsFor() call re-derives
+// it. A single-slot cache on the last-seen lattice key skips the
+// MAX_MILLER^3 scan + sort + dedupe on the common case of repeated calls
+// against the same stone, with zero change to the returned values.
+let lastRecipKey: string | null = null;
+let lastRecipMags: number[] = [];
+
 function reciprocalMagnitudes(l: Lattice): number[] {
+  const key = `${l.system}|${l.centering}|${l.ba}|${l.ca}`;
+  if (key === lastRecipKey) return lastRecipMags;
   // For orthorhombic / tetragonal / cubic and hexagonal the reciprocal
   // magnitudes are read from the metric tensor. We only need MAGNITUDES,
   // not directions.
@@ -286,6 +297,8 @@ function reciprocalMagnitudes(l: Lattice): number[] {
       out.push(g);
     }
   }
+  lastRecipKey = key;
+  lastRecipMags = out;
   return out;
 }
 
@@ -458,6 +471,43 @@ export function advanceExact(
   return { ...grown, season };
 }
 
+// The legal cleavage planes for each system. Simplified — we only need
+// enough that a `flick` returns a lattice plane, never an arbitrary line.
+// Hoisted to module scope: these are constant per system, so cleavageAt
+// (a gesture-rate call, but one whose allocation cost is otherwise pure
+// waste) doesn't need to rebuild the same small arrays every call.
+const CLEAVAGE_PLANES_CUBIC: [number, number, number][] = [
+  [1, 0, 0],
+  [0, 1, 0],
+  [0, 0, 1],
+  [1, 1, 0],
+  [1, 0, 1],
+];
+const CLEAVAGE_PLANES_HEXAGONAL: [number, number, number][] = [
+  [0, 0, 1],
+  [1, 0, 0],
+  [1, 1, 0],
+  [1, 0, 1],
+];
+const CLEAVAGE_PLANES_TETRAGONAL: [number, number, number][] = [
+  [0, 0, 1],
+  [1, 0, 0],
+  [1, 1, 0],
+];
+const CLEAVAGE_PLANES_ORTHORHOMBIC: [number, number, number][] = [
+  [1, 0, 0],
+  [0, 1, 0],
+  [0, 0, 1],
+];
+
+const cleavageAngleOf = (p: [number, number, number]) => Math.atan2(p[1], p[0]);
+const wrapAngle = (a: number) => {
+  let r = a;
+  while (r > Math.PI) r -= 2 * Math.PI;
+  while (r < -Math.PI) r += 2 * Math.PI;
+  return r;
+};
+
 /**
  * The nearest cleavage plane through a ray from the stone's centre. Only
  * a few planes are legal — the ones in the point group's cleavage orbit.
@@ -467,48 +517,19 @@ export function cleavageAt(
   state: PebbleState,
   rayAngle: number,
 ): { plane: [number, number, number] } {
-  // The legal cleavage planes for each system. Simplified — we only need
-  // enough that a `flick` returns a lattice plane, never an arbitrary line.
   const planes: [number, number, number][] =
     state.lattice.system === "cubic"
-      ? [
-          [1, 0, 0],
-          [0, 1, 0],
-          [0, 0, 1],
-          [1, 1, 0],
-          [1, 0, 1],
-        ]
+      ? CLEAVAGE_PLANES_CUBIC
       : state.lattice.system === "hexagonal"
-      ? [
-          [0, 0, 1],
-          [1, 0, 0],
-          [1, 1, 0],
-          [1, 0, 1],
-        ]
+      ? CLEAVAGE_PLANES_HEXAGONAL
       : state.lattice.system === "tetragonal"
-      ? [
-          [0, 0, 1],
-          [1, 0, 0],
-          [1, 1, 0],
-        ]
-      : [
-          [1, 0, 0],
-          [0, 1, 0],
-          [0, 0, 1],
-        ];
+      ? CLEAVAGE_PLANES_TETRAGONAL
+      : CLEAVAGE_PLANES_ORTHORHOMBIC;
   // Pick the plane whose angle is closest to rayAngle (normalized).
-  const angleOf = (p: [number, number, number]) =>
-    Math.atan2(p[1], p[0]);
-  const wrap = (a: number) => {
-    let r = a;
-    while (r > Math.PI) r -= 2 * Math.PI;
-    while (r < -Math.PI) r += 2 * Math.PI;
-    return r;
-  };
   let best: [number, number, number] = planes[0];
   let bestDist = Infinity;
   for (const p of planes) {
-    const d = Math.abs(wrap(angleOf(p) - rayAngle));
+    const d = Math.abs(wrapAngle(cleavageAngleOf(p) - rayAngle));
     if (d < bestDist) {
       bestDist = d;
       best = p;

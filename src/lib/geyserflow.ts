@@ -289,6 +289,32 @@ export function phaseName(state: GeyserState): GeyserPhase {
 }
 
 /**
+ * Closed-form head at time t under linear recharge: H0 + W·t. A free
+ * (non-closure) function so the binary searches below don't allocate a
+ * fresh closure on every call — same arithmetic, hoisted.
+ */
+function headAtLinear(H0: number, W: number, t: number): number {
+  return H0 + W * t;
+}
+
+/** Closed-form temperature at time t relaxing toward T_ss at rate c. */
+function tempAtRelax(T_ss: number, T0: number, c: number, t: number): number {
+  return T_ss - (T_ss - T0) * Math.exp(-c * t);
+}
+
+/** E(t) = H(t) · T(t) for the same closed forms above. */
+function energyAtLinearRelax(
+  H0: number,
+  W: number,
+  T_ss: number,
+  T0: number,
+  c: number,
+  t: number,
+): number {
+  return headAtLinear(H0, W, t) * tempAtRelax(T_ss, T0, c, t);
+}
+
+/**
  * Time until the next eruption, assuming climate holds. Returns +∞ if the
  * state is not "building" (a caller reading this while "erupting" or
  * "cooling" gets Infinity, and knows). While "building" the eruption fires
@@ -308,9 +334,8 @@ export function timeUntilEruption(state: GeyserState, climate: Climate): number 
   if (E0 >= E_TRIGGER_HIGH) return 0; // already over
   // If M ≤ 0 (impossible with M_BASELINE > 0 but be defensive) and W = 0,
   // the state cannot heat toward the trigger, so it never fires.
-  const H_at = (t: number) => state.H + W * t;
-  const T_at = (t: number) => T_ss - (T_ss - state.T) * Math.exp(-c * t);
-  const E_at = (t: number) => H_at(t) * T_at(t);
+  const H0 = state.H;
+  const T0 = state.T;
   // Bracket: E is monotone in t (both H and T are non-decreasing here when
   // T0 <= T_ss; when T0 > T_ss, T decays and the geyser is off-cycle).
   // Find an upper bracket by doubling; cap at MAX_ELAPSED_S.
@@ -318,16 +343,20 @@ export function timeUntilEruption(state: GeyserState, climate: Climate): number 
   let lo = 0;
   let hi = 60; // start with a minute
   let it = 0;
-  while (E_at(hi) < E_TRIGGER_HIGH && hi < MAX_ELAPSED_S && it < 40) {
+  while (
+    energyAtLinearRelax(H0, W, T_ss, T0, c, hi) < E_TRIGGER_HIGH &&
+    hi < MAX_ELAPSED_S &&
+    it < 40
+  ) {
     lo = hi;
     hi *= 2;
     it++;
   }
-  if (E_at(hi) < E_TRIGGER_HIGH) return Infinity;
+  if (energyAtLinearRelax(H0, W, T_ss, T0, c, hi) < E_TRIGGER_HIGH) return Infinity;
   // Bisect. 60 iterations bring the interval down to ~1e-12 · hi.
   for (let i = 0; i < 60; i++) {
     const mid = (lo + hi) / 2;
-    if (E_at(mid) < E_TRIGGER_HIGH) lo = mid;
+    if (energyAtLinearRelax(H0, W, T_ss, T0, c, mid) < E_TRIGGER_HIGH) lo = mid;
     else hi = mid;
   }
   return (lo + hi) / 2;
@@ -486,11 +515,8 @@ function phaseStep(state: GeyserState, budget: number, climate: Climate): PhaseS
     const bleedRate = budget > 0 ? bleedT / budget : 0;
     const M_eff = M + bleedRate;
     const T_ss_eff = (M_eff + c * T_AIR) / c;
-    const H_at = (t: number) => s.H + W * t;
-    const T_at = (t: number) => T_ss_eff - (T_ss_eff - s.T) * Math.exp(-c * t);
-    const E_at = (t: number) => H_at(t) * T_at(t);
     let phaseEnd: number;
-    if (E_at(0) >= E_TRIGGER_LOW) {
+    if (energyAtLinearRelax(s.H, W, T_ss_eff, s.T, c, 0) >= E_TRIGGER_LOW) {
       // Already back above LOW — the reseat happens immediately.
       phaseEnd = 0;
     } else {
@@ -501,15 +527,19 @@ function phaseStep(state: GeyserState, budget: number, climate: Climate): PhaseS
       let lo = 0;
       let hi = 60;
       let it = 0;
-      while (E_at(hi) < E_TRIGGER_LOW && hi < MAX_ELAPSED_S && it < 40) {
+      while (
+        energyAtLinearRelax(s.H, W, T_ss_eff, s.T, c, hi) < E_TRIGGER_LOW &&
+        hi < MAX_ELAPSED_S &&
+        it < 40
+      ) {
         lo = hi;
         hi *= 2;
         it++;
       }
-      if (E_at(hi) >= E_TRIGGER_LOW) {
+      if (energyAtLinearRelax(s.H, W, T_ss_eff, s.T, c, hi) >= E_TRIGGER_LOW) {
         for (let i = 0; i < 60; i++) {
           const mid = (lo + hi) / 2;
-          if (E_at(mid) < E_TRIGGER_LOW) lo = mid;
+          if (energyAtLinearRelax(s.H, W, T_ss_eff, s.T, c, mid) < E_TRIGGER_LOW) lo = mid;
           else hi = mid;
         }
         phaseEnd = (lo + hi) / 2;
@@ -558,8 +588,10 @@ function bleedHeatMarks(
   if (state.heatMarks.length === 0) return { state, tContribution: 0 };
   let contribution = 0;
   const next: HeatMark[] = [];
+  // decay depends only on `budget`, not on the individual mark — hoisted
+  // out of the loop so it's one Math.exp per call, not one per mark.
+  const decay = Math.exp(-budget / DWELL_DECAY_S);
   for (const m of state.heatMarks) {
-    const decay = Math.exp(-budget / DWELL_DECAY_S);
     const bled = m.heat * (1 - decay);
     contribution += bled;
     const remain = m.heat * decay;

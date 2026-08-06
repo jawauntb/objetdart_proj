@@ -131,10 +131,21 @@ export function bindingPerNucleon(z: number, n: number): number {
  *
  * Brute-forced against this file's own SEMF rather than the closed-form
  * approximation, so the valley and the decay rules can never disagree.
+ *
+ * Memoized: this is a pure function of a single integer (the SEMF
+ * coefficients above are fixed constants), and its callers include the
+ * chart's valley-of-stability curve, which asks it for the same handful of
+ * mass numbers every drawn frame. Caching the O(a) brute force keyed on the
+ * floored input costs a few hundred numbers, at most, for the life of the
+ * page.
  */
+const mostStableZCache = new Map<number, number>();
+
 export function mostStableZ(a: number): number {
   const ai = Math.floor(a);
   if (ai <= 1) return Math.max(0, ai);
+  const cached = mostStableZCache.get(ai);
+  if (cached !== undefined) return cached;
   let bestZ = 1;
   let bestM = -Infinity;
   for (let z = 1; z < ai; z++) {
@@ -144,6 +155,7 @@ export function mostStableZ(a: number): number {
       bestZ = z;
     }
   }
+  mostStableZCache.set(ai, bestZ);
   return bestZ;
 }
 

@@ -828,7 +828,10 @@ export function stepFlock(state: FlockState, params: FlockParams, dt: number): v
     cellStart[c + 1] += 1;
   }
   for (let c = 0; c < GRID_CELLS; c++) cellStart[c + 1] += cellStart[c];
-  cursor.set(cellStart.subarray(0, GRID_CELLS));
+  // Manual copy (not `cursor.set(cellStart.subarray(...))`) — `.subarray`
+  // allocates a fresh TypedArray view every call, and this runs once per
+  // fixed step, i.e. potentially several times per rAF tick.
+  for (let c = 0; c < GRID_CELLS; c++) cursor[c] = cellStart[c];
   for (let i = 0; i < n; i++) {
     if (cellOf[i] < 0) continue;
     sorted[cursor[cellOf[i]]++] = i;

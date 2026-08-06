@@ -192,19 +192,19 @@ export function advanceExact(
   const nodes = [...byId.values()];
 
   const SUN_RELAX = 1 / (12 * 3600);
+  const relax = Math.exp(-SUN_RELAX * dt);
   const targetSun = sunlightRate(climate);
-  const sunlight1 =
-    targetSun + (state.sunlight - targetSun) * Math.exp(-SUN_RELAX * dt);
+  const sunlight1 = targetSun + (state.sunlight - targetSun) * relax;
   const targetSoil = soilWaterRate(climate);
-  const soilWater1 =
-    targetSoil + (state.soilWater - targetSoil) * Math.exp(-SUN_RELAX * dt);
+  const soilWater1 = targetSoil + (state.soilWater - targetSoil) * relax;
 
   const nSubSteps = 60;
   const subDt = dt / nSubSteps;
   const tipMap = new Set<number>();
   {
-    const asState: RootState = { ...state, nodes };
-    for (const t of tips(asState)) tipMap.add(t.id);
+    const childrenOf = new Set<number>();
+    for (const n of nodes) if (n.parentId !== null) childrenOf.add(n.parentId);
+    for (const n of nodes) if (!childrenOf.has(n.id)) tipMap.add(n.id);
   }
   for (let step = 0; step < nSubSteps; step++) {
     for (const n of nodes) {

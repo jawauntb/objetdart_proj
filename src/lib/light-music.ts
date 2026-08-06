@@ -121,17 +121,26 @@ export function xFromWavelength(nm: number) {
   return Math.log(MAX_WAVELENGTH / clamp(nm, MIN_WAVELENGTH, MAX_WAVELENGTH)) / VISIBLE_SPAN;
 }
 
+// Stops sorted once (ascending by wavelength) instead of on every call — the
+// source list is a static const, so the sort order never changes at runtime.
+const SORTED_SPECTRAL_STOPS = [...SPECTRAL_STOPS].sort((a, b) => a.nm - b.nm);
+// Each stop's RGB parsed once up front so the hot color-lookup path (driven
+// from pointer/gesture handlers) never re-parses hex strings per call.
+const SORTED_SPECTRAL_STOP_RGB = SORTED_SPECTRAL_STOPS.map((stop) => hexToRgb(stop.color));
+
 export function colorFromWavelength(nm: number) {
-  const stops = [...SPECTRAL_STOPS].sort((a, b) => a.nm - b.nm);
+  const stops = SORTED_SPECTRAL_STOPS;
   const upperIndex = stops.findIndex((stop) => nm <= stop.nm);
   const safeUpperIndex = upperIndex === -1 ? stops.length - 1 : upperIndex;
-  const upper = stops[Math.max(0, safeUpperIndex)];
-  const lower = stops[Math.max(0, safeUpperIndex - 1)] ?? upper;
+  const upperPos = Math.max(0, safeUpperIndex);
+  const lowerPos = Math.max(0, safeUpperIndex - 1);
+  const upper = stops[upperPos];
+  const lower = stops[lowerPos] ?? upper;
   if (!upper || !lower || upper.nm === lower.nm) return upper?.color ?? "#f4d778";
 
   const mix = (nm - lower.nm) / (upper.nm - lower.nm);
-  const from = hexToRgb(lower.color);
-  const to = hexToRgb(upper.color);
+  const from = SORTED_SPECTRAL_STOP_RGB[lowerPos];
+  const to = SORTED_SPECTRAL_STOP_RGB[upperPos];
   const rgb = from.map((channel, index) => Math.round(channel + (to[index] - channel) * mix));
 
   return `#${rgb.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;

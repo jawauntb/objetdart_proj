@@ -382,6 +382,23 @@ export function kicked(
 // The kick is a perturbation on a dominant central mass, which is exactly
 // the regime where that split is the right physics and not a shortcut.
 
+// Scratch position buffers for the O(n²) passes below (mutualAccelerations,
+// firstCollision). The population is capped at PLANET_COUNT + MAX_COMETS,
+// bodies.length never exceeds that, so this grows at most once and never
+// allocates again — the buffers are purely internal work space, never
+// returned or exposed, so callers can't observe or alias them.
+let scratchN = 0;
+let scratchPx = new Float64Array(0);
+let scratchPy = new Float64Array(0);
+function scratchPositions(n: number): { px: Float64Array; py: Float64Array } {
+  if (n > scratchN) {
+    scratchN = n;
+    scratchPx = new Float64Array(n);
+    scratchPy = new Float64Array(n);
+  }
+  return { px: scratchPx, py: scratchPy };
+}
+
 /**
  * Perturbing accelerations (the sun excluded — the drift already carries
  * it), written into `out` as [ax0, ay0, ax1, ay1, …]. O(n²) over a
@@ -396,8 +413,7 @@ export function mutualAccelerations(
   const n = bodies.length;
   const acc = out && out.length >= n * 2 ? out : new Float64Array(n * 2);
   acc.fill(0, 0, n * 2);
-  const px = new Float64Array(n);
-  const py = new Float64Array(n);
+  const { px, py } = scratchPositions(n);
   for (let i = 0; i < n; i++) {
     const p = positionAt(bodies[i], mu, t);
     px[i] = p.r * Math.cos(p.angle);
@@ -424,6 +440,15 @@ export function mutualAccelerations(
 
 export type PerturbEvent = { index: number; fate: "escaped" | "consumed" };
 
+// Scratch accelerations buffer for `perturbed`'s own (internal-only, never
+// returned) call into mutualAccelerations — same bounded-population
+// reasoning as scratchPositions above.
+let scratchAcc = new Float64Array(0);
+function scratchAccelerations(n: number): Float64Array {
+  if (scratchAcc.length < n * 2) scratchAcc = new Float64Array(n * 2);
+  return scratchAcc;
+}
+
 /**
  * One kick of the mixed-variable map: advance every body's elements by the
  * mutual pull over `dtSim` seconds. Bodies that leave (unbound) or fall in
@@ -437,7 +462,7 @@ export function perturbed(
   dtSim: number,
 ): { bodies: OrbitalElements[]; lost: PerturbEvent[] } {
   if (bodies.length < 2 || dtSim <= 0) return { bodies, lost: [] };
-  const acc = mutualAccelerations(bodies, mu, t);
+  const acc = mutualAccelerations(bodies, mu, t, scratchAccelerations(bodies.length));
   const out: OrbitalElements[] = [];
   const lost: PerturbEvent[] = [];
   for (let i = 0; i < bodies.length; i++) {
@@ -502,8 +527,7 @@ export function firstCollision(
   t: number,
 ): [number, number] | null {
   const n = bodies.length;
-  const px = new Float64Array(n);
-  const py = new Float64Array(n);
+  const { px, py } = scratchPositions(n);
   for (let i = 0; i < n; i++) {
     const p = positionAt(bodies[i], mu, t);
     px[i] = p.r * Math.cos(p.angle);

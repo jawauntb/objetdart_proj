@@ -588,7 +588,9 @@ export function backbonePoints(chain: Chain): { x: number; y: number }[] {
   const pts: { x: number; y: number }[] = [{ x: 0, y: 0 }];
   const n = chain.atoms.length;
   if (n < 2) return pts;
-  const tors = coiledTorsions(chain);
+  // Same values as coiledTorsions(chain), computed per-index instead of via
+  // a separate mapped array — this runs once per chain per rendered frame.
+  const f = Math.min(1, Math.max(0, chain.fold));
   let heading = 0;
   let x = 0;
   let y = 0;
@@ -597,7 +599,12 @@ export function backbonePoints(chain: Chain): { x: number; y: number }[] {
       const bend = Math.PI - chain.angles[i - 2];
       // Torsion decides which way the chain turns at each joint; a coiled
       // chain always turns the same way, which is how a helix happens.
-      const sign = i - 3 >= 0 ? (Math.cos(tors[i - 3]) >= 0 ? 1 : -1) : 1;
+      let sign = 1;
+      if (i - 3 >= 0) {
+        const t = chain.torsions[i - 3];
+        const coiled = t + (Math.PI - t) * f;
+        sign = Math.cos(coiled) >= 0 ? 1 : -1;
+      }
       heading += bend * sign;
     }
     x += Math.cos(heading);

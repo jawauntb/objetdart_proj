@@ -262,12 +262,21 @@ export const EXPECTED_GROUP_ORDER: Record<PointGroupId, number> = {
 const IDENTITY: Mat3 = [1, 0, 0, 0, 1, 0, 0, 0, 1];
 const matKey = (m: Mat3) => m.join(",");
 
+// symmetryOps(pg) is a pure function of a 5-valued enum — the group closure
+// never changes for a given point group, so it is cached per pg rather than
+// re-closed (Map allocation + matMul per generator) on every call. Callers
+// like planeOrbit/cleavagePlanes run inside per-frame draw and gesture
+// paths, so this is a real hot path, not a hypothetical one.
+const symmetryOpsCache = new Map<PointGroupId, Mat3[]>();
+
 /**
  * Close the generators into the full rotation group. A group, not a list:
  * the closure is what makes "the fracture obeys the symmetry" true rather
  * than decorative, and the tests check closure, identity and inverses.
  */
 export function symmetryOps(pg: PointGroupId): Mat3[] {
+  const cached = symmetryOpsCache.get(pg);
+  if (cached) return cached;
   const seen = new Map<string, Mat3>();
   seen.set(matKey(IDENTITY), IDENTITY);
   const gens = GENERATORS[pg];
@@ -289,7 +298,9 @@ export function symmetryOps(pg: PointGroupId): Mat3[] {
     if (seen.size > 48) break;
     frontier = next;
   }
-  return [...seen.values()];
+  const result = [...seen.values()];
+  symmetryOpsCache.set(pg, result);
+  return result;
 }
 
 /** Integer inverse of a unimodular rotation (det = ±1) via the adjugate. */
@@ -330,12 +341,22 @@ export function preservesMetric(op: Mat3, l: Lattice, tol = 1e-9): boolean {
   return true;
 }
 
+// Same reasoning as symmetryOpsCache: (pg, hkl) pairs are drawn from a small,
+// fixed set (each species' cleavage/forms), and cleavagePlanes/habitMesh call
+// this every frame from the room's draw loop, so the orbit — closure walk,
+// transformPlane's matrix inverse, and the sort — is worth keeping instead
+// of redoing for an input that hasn't changed.
+const planeOrbitCache = new Map<string, Miller[]>();
+
 /**
  * The orbit of a plane under the group, with ± included — the *form*, the
  * set of faces that are the same face by symmetry. Sorted so the family is
  * a deterministic list and a fracture is reproducible.
  */
 export function planeOrbit(pg: PointGroupId, hkl: Miller): Miller[] {
+  const cacheKey = `${pg}|${hkl[0]},${hkl[1]},${hkl[2]}`;
+  const cached = planeOrbitCache.get(cacheKey);
+  if (cached) return cached;
   const out: Miller[] = [];
   const seen = new Set<string>();
   for (const op of symmetryOps(pg)) {
@@ -349,6 +370,7 @@ export function planeOrbit(pg: PointGroupId, hkl: Miller): Miller[] {
     }
   }
   out.sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2]);
+  planeOrbitCache.set(cacheKey, out);
   return out;
 }
 
@@ -381,12 +403,22 @@ export function allowedReflection(centering: Centering, hkl: Miller): boolean {
 export const RING_COUNT = 8;
 const RING_MAX_INDEX = 4;
 
+// Keyed by the Lattice object's identity (species lattices are created once
+// in SPECIES and reused every call, e.g. from the lens draw loop and from
+// speciesFromRing's per-species scan), then by count. A WeakMap means a
+// fresh Lattice — like the ones readLattice's search constructs by the
+// thousand — simply misses and is never retained.
+const ringRatiosCache = new WeakMap<Lattice, Map<number, number[]>>();
+
 /**
  * The partial ratios of a stone's ring: the sorted distinct lengths of the
  * allowed reciprocal-lattice vectors, normalised by the shortest. This is a
  * powder pattern — and it is the whole map, because it inverts.
  */
 export function ringRatios(l: Lattice, count = RING_COUNT): number[] {
+  let byCount = ringRatiosCache.get(l);
+  const cachedOut = byCount?.get(count);
+  if (cachedOut) return cachedOut;
   const vals: number[] = [];
   const g = reciprocalMetric(l);
   // Only the h ≥ 0 half — Friedel's law: (hkl) and (-h-k-l) are one length.
@@ -412,6 +444,11 @@ export function ringRatios(l: Lattice, count = RING_COUNT): number[] {
   for (let i = 0; i < Math.min(count, distinct.length); i++) {
     out.push(Math.sqrt(distinct[i] / base));
   }
+  if (!byCount) {
+    byCount = new Map<number, number[]>();
+    ringRatiosCache.set(l, byCount);
+  }
+  byCount.set(count, out);
   return out;
 }
 

@@ -170,13 +170,18 @@ export function seasonAccelAt(
   anchorY = 0,
   hubble = 0,
 ): { ax: number; ay: number } {
-  const base = accelAt(masses, x, y, g, soft);
-  if (season === "attract") return base;
-  if (season === "repel") return { ax: -base.ax, ay: -base.ay };
+  if (season === "attract") return accelAt(masses, x, y, g, soft);
+  if (season === "repel") {
+    const base = accelAt(masses, x, y, g, soft);
+    return { ax: -base.ax, ay: -base.ay };
+  }
   if (season === "drag") {
-    // the swirl: per-mass, at right angles to the pull, magnitude
-    // ~ g·m·soft/d³ — one power steeper than the radial 1/r², so the
-    // twist lives near the wells and the far field stays Newtonian
+    // pull and swirl share the same per-mass dx/dy/d2 — folded into one
+    // pass over `masses` (was accelAt's pass plus a second identical scan
+    // for the swirl term; same arithmetic, same summation order, half the
+    // per-mass work every ray substep this season is live).
+    let ax = 0;
+    let ay = 0;
     let tx = 0;
     let ty = 0;
     const s2 = soft * soft;
@@ -184,13 +189,20 @@ export function seasonAccelAt(
       const dx = p.x - x;
       const dy = p.y - y;
       const d2 = dx * dx + dy * dy + s2;
-      const inv = (g * p.m * soft) / (d2 * d2);
-      tx += -dy * inv * DRAG_SWIRL;
-      ty += dx * inv * DRAG_SWIRL;
+      const invBase = (g * p.m) / (d2 * Math.sqrt(d2));
+      ax += dx * invBase;
+      ay += dy * invBase;
+      // the swirl: per-mass, at right angles to the pull, magnitude
+      // ~ g·m·soft/d³ — one power steeper than the radial 1/r², so the
+      // twist lives near the wells and the far field stays Newtonian
+      const invSwirl = (g * p.m * soft) / (d2 * d2);
+      tx += -dy * invSwirl * DRAG_SWIRL;
+      ty += dx * invSwirl * DRAG_SWIRL;
     }
-    return { ax: base.ax + tx, ay: base.ay + ty };
+    return { ax: ax + tx, ay: ay + ty };
   }
   // expand: the pull thinned, plus an outward term linear in distance
+  const base = accelAt(masses, x, y, g, soft);
   return {
     ax: base.ax * EXPAND_BIND + (x - anchorX) * hubble,
     ay: base.ay * EXPAND_BIND + (y - anchorY) * hubble,

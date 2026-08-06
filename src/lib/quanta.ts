@@ -124,6 +124,20 @@ export function symbolOf(x: Excitation): string {
 
 // ———————————————————————————————————————— the one great law: mass ↔ time
 
+function computeLifetimeMs(id: ParticleId): number {
+  const spec = PARTICLES[id];
+  if (spec.stable) return Infinity;
+  if (id === "gluon") return 700;
+  // The heavier the field, the briefer its ripple: a smooth inverse-power
+  // law fit so the muon lingers and the Higgs is gone within a breath.
+  return 90000 / Math.pow(spec.massMeV, 0.52);
+}
+
+// lifetimeMs is a pure function of `id` alone (a fixed 11-value enum), but
+// draw and physics loops call it per excitation, per frame — cache the
+// (species → lifetime) table once instead of repeating Math.pow every tick.
+const LIFETIME_MS_CACHE: Partial<Record<ParticleId, number>> = {};
+
 /**
  * How long an excitation lives, ms on the room's clock. Strictly monotone
  * DECREASING in mass across the unstable massive species — the law the
@@ -132,12 +146,12 @@ export function symbolOf(x: Excitation): string {
  * yet brief, because confinement (not mass) sets its span.
  */
 export function lifetimeMs(id: ParticleId): number {
-  const spec = PARTICLES[id];
-  if (spec.stable) return Infinity;
-  if (id === "gluon") return 700;
-  // The heavier the field, the briefer its ripple: a smooth inverse-power
-  // law fit so the muon lingers and the Higgs is gone within a breath.
-  return 90000 / Math.pow(spec.massMeV, 0.52);
+  let v = LIFETIME_MS_CACHE[id];
+  if (v === undefined) {
+    v = computeLifetimeMs(id);
+    LIFETIME_MS_CACHE[id] = v;
+  }
+  return v;
 }
 
 /** Speed of light in the room, px/s — the one speed nothing beats. */

@@ -197,7 +197,9 @@ export function cellFromSeed(seed: number): CellMorph {
  */
 export function membraneRadius(morph: CellMorph, theta: number, t: number): number {
   let r = 1;
-  for (const w of morph.wobble) {
+  const wobble = morph.wobble;
+  for (let i = 0; i < wobble.length; i++) {
+    const w = wobble[i];
     r += w.amp * Math.sin(w.k * theta + w.phase + t * w.speed);
   }
   return r;

@@ -1108,14 +1108,6 @@ export const SUN_TOP_ELEVATION = 1.0;
 const DAWN_U = 0.26;
 const MORNING_U = 0.55;
 
-function mix3(
-  a: [number, number, number],
-  b: [number, number, number],
-  k: number,
-): [number, number, number] {
-  return [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k];
-}
-
 /**
  * Sun elevation (radians) → the whole palette, from night through the
  * alpenglow into a high blue day. Three disjoint smoothstep segments over
@@ -1129,13 +1121,26 @@ export function paletteForSun(elevation: number): SkyPalette {
   const k1 = smoothstep(0, DAWN_U, u);
   const k2 = smoothstep(DAWN_U, MORNING_U, u);
   const k3 = smoothstep(MORNING_U, 1, u);
+  // Component-wise instead of three mix3() calls: mix3 would allocate a
+  // fresh array at every intermediate step (this runs every animation
+  // frame), and the scalar path below already does it this way.
   const lerp = (
     pick: (p: SkyPalette) => [number, number, number],
   ): [number, number, number] => {
-    let c = mix3(pick(NIGHT), pick(DAWN), k1);
-    c = mix3(c, pick(MORNING), k2);
-    c = mix3(c, pick(HIGH), k3);
-    return c;
+    const n = pick(NIGHT);
+    const dw = pick(DAWN);
+    const mo = pick(MORNING);
+    const hi = pick(HIGH);
+    let r = n[0] + (dw[0] - n[0]) * k1;
+    let g = n[1] + (dw[1] - n[1]) * k1;
+    let b = n[2] + (dw[2] - n[2]) * k1;
+    r += (mo[0] - r) * k2;
+    g += (mo[1] - g) * k2;
+    b += (mo[2] - b) * k2;
+    r += (hi[0] - r) * k3;
+    g += (hi[1] - g) * k3;
+    b += (hi[2] - b) * k3;
+    return [r, g, b];
   };
   const scalar = (pick: (p: SkyPalette) => number): number => {
     let v = pick(NIGHT) + (pick(DAWN) - pick(NIGHT)) * k1;

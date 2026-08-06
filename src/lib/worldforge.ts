@@ -480,6 +480,13 @@ export type Body = {
   radius: number;
 };
 
+// stepBodies runs every rAF tick (often several sub-steps per tick) from the
+// room's draw loop; these are scratch accumulators for the force sum, grown
+// once to the largest population seen and reused thereafter — never
+// reallocated per call, never exposed outside the function below.
+let accelScratchX = new Float64Array(0);
+let accelScratchY = new Float64Array(0);
+
 /** The circular-orbit speed at radius r about a body of parameter mu. */
 export function circularSpeed(mu: number, r: number): number {
   return Math.sqrt(mu / Math.max(1e-6, r));
@@ -511,8 +518,16 @@ export function stepBodies(
   extraAy = 0,
 ): void {
   const n = bodies.length;
-  const ax = new Array<number>(n).fill(extraAx);
-  const ay = new Array<number>(n).fill(extraAy);
+  if (accelScratchX.length < n) {
+    accelScratchX = new Float64Array(n);
+    accelScratchY = new Float64Array(n);
+  }
+  const ax = accelScratchX;
+  const ay = accelScratchY;
+  for (let i = 0; i < n; i++) {
+    ax[i] = extraAx;
+    ay[i] = extraAy;
+  }
   for (let i = 0; i < n; i++) {
     const b = bodies[i];
     if (mu > 0) {

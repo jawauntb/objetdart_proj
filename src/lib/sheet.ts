@@ -466,7 +466,9 @@ export function dissonance(chord: Chord): number {
 
 /** The chord as pitches, in hertz, over a root the band chooses. */
 export function chordFrequencies(chord: Chord, rootHz: number): number[] {
-  return chord.ratio.map((r) => rootHz * r);
+  const out: number[] = new Array(chord.ratio.length);
+  for (let i = 0; i < chord.ratio.length; i++) out[i] = rootHz * chord.ratio[i];
+  return out;
 }
 
 /** One cell's voice: the interval its own coordination names. */
@@ -504,14 +506,19 @@ export function morphogenField(seed: number): MorphogenField {
  * landscape, read along a different direction, which is what a three-finger
  * twist does to the room's season.
  */
-export function morphogenAt(f: MorphogenField, nx: number, ny: number, axis = 0): number {
-  const ca = Math.cos(axis);
-  const sa = Math.sin(axis);
+/** Same map as `morphogenAt`, but with cos/sin(axis) supplied by the caller
+ * instead of recomputed — `commitFates` walks every cell at one fixed axis
+ * per call, so it hoists the trig once instead of paying for it per cell. */
+function morphogenAtCS(f: MorphogenField, nx: number, ny: number, ca: number, sa: number): number {
   const u = nx * ca + ny * sa;
   const v = -nx * sa + ny * ca;
   const m = f.a1 * Math.sin(f.k1 * u * Math.PI + f.p1) + f.a2 * Math.sin(f.k2 * v * Math.PI + f.p2);
   const x = 0.5 + 0.5 * m;
   return x < 0 ? 0 : x > 1 ? 1 : x;
+}
+
+export function morphogenAt(f: MorphogenField, nx: number, ny: number, axis = 0): number {
+  return morphogenAtCS(f, nx, ny, Math.cos(axis), Math.sin(axis));
 }
 
 /** How far the differentiation front has swept. Monotone in time, always. */
@@ -526,11 +533,15 @@ export function fateFront(t: number): number {
  * fate is whatever the morphogen says there. Monotone in t, so a cell's
  * fate can only ever land, never unland.
  */
-export function fateAt(f: MorphogenField, nx: number, ny: number, axis: number, t: number): number {
-  const m = morphogenAt(f, nx, ny, axis);
+function fateAtCS(f: MorphogenField, nx: number, ny: number, ca: number, sa: number, t: number): number {
+  const m = morphogenAtCS(f, nx, ny, ca, sa);
   if (m > fateFront(t)) return 0;
   const lvl = Math.floor(m * FATE_COUNT);
   return lvl < 0 ? 0 : lvl > FATE_COUNT - 1 ? FATE_COUNT - 1 : lvl;
+}
+
+export function fateAt(f: MorphogenField, nx: number, ny: number, axis: number, t: number): number {
+  return fateAtCS(f, nx, ny, Math.cos(axis), Math.sin(axis), t);
 }
 
 /**
@@ -545,10 +556,18 @@ export function commitFate(prev: number, next: number): number {
 /** Walk the sheet and let the front land what it has reached. */
 export function commitFates(s: Sheet, f: MorphogenField, axis: number): number {
   let changed = 0;
+  // axis, spanX and spanY are the same for every cell in this walk, so the
+  // trig and the floor-clamp are hoisted out of the per-cell loop instead of
+  // being recomputed s.n times.
+  const sx = Math.max(1e-6, s.spanX);
+  const sy = Math.max(1e-6, s.spanY);
+  const ca = Math.cos(axis);
+  const sa = Math.sin(axis);
+  const t = s.t;
   for (let i = 0; i < s.n; i++) {
-    const nx = s.px[i] / Math.max(1e-6, s.spanX);
-    const ny = s.py[i] / Math.max(1e-6, s.spanY);
-    const next = commitFate(s.fate[i], fateAt(f, nx, ny, axis, s.t));
+    const nx = s.px[i] / sx;
+    const ny = s.py[i] / sy;
+    const next = commitFate(s.fate[i], fateAtCS(f, nx, ny, ca, sa, t));
     if (next !== s.fate[i]) {
       s.fate[i] = next;
       changed += 1;

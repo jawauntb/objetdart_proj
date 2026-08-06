@@ -234,9 +234,13 @@ export const N_GATES = 9;
 const GATE_EPS = 0.12; // softness of a gate's edge
 const GATE_BIAS = 0.7; // how strongly a choice tilts the horizon
 
+// Gate positions never change (N_GATES is fixed), so the p_i = i/(N-1)
+// values are computed once here instead of on every reachableRegion call.
+const GATE_POSITIONS: readonly number[] = Array.from({ length: N_GATES }, (_, i) => i / (N_GATES - 1));
+
 /** Gate positions along the future axis: p_i = i/(N-1) ∈ [0,1]. */
 export function gatePositions(): number[] {
-  return Array.from({ length: N_GATES }, (_, i) => i / (N_GATES - 1));
+  return GATE_POSITIONS.slice();
 }
 
 /**
@@ -246,7 +250,7 @@ export function gatePositions(): number[] {
  */
 export function reachableRegion(s: State, bias: number): number[] {
   const b = Math.max(-1, Math.min(1, bias));
-  return gatePositions().map((p) => {
+  return GATE_POSITIONS.map((p) => {
     // A positive bias lifts the horizon for far gates, lowers it for near.
     const horizon = s.reach * (1 + GATE_BIAS * b * (2 * p - 1));
     return 1 / (1 + Math.exp(-(horizon - p) / GATE_EPS));
@@ -265,6 +269,13 @@ export type Selection = {
   state: State;
 };
 
+/** Shared summation core for selectionShift, given already-computed regions. */
+function shiftFromRegions(before: number[], after: number[]): number {
+  let sum = 0;
+  for (let i = 0; i < before.length; i++) sum += Math.abs(after[i] - before[i]);
+  return sum / before.length;
+}
+
 /**
  * Apply a choice at agency: the landscape moves (before→after), and the
  * selection reopens reach toward what was chosen — agency as the selective
@@ -276,7 +287,9 @@ export function select(s: State, choice: number): Selection {
     return { reachableBefore: before, reachableAfter: before, shift: 0, state: s };
   }
   const after = reachableRegion(s, choice);
-  const shift = selectionShift(s, choice);
+  // before/after are already computed above — reuse them instead of asking
+  // selectionShift to recompute both reachableRegion calls from scratch.
+  const shift = shiftFromRegions(before, after);
   const reopened = clamp01(s.reach + 0.25 * Math.abs(Math.max(-1, Math.min(1, choice))) * (1 - s.reach));
   return {
     reachableBefore: before,
@@ -291,9 +304,7 @@ export function selectionShift(s: State, choice: number): number {
   if (!inAgency(s)) return 0;
   const before = reachableRegion(s, 0);
   const after = reachableRegion(s, choice);
-  let sum = 0;
-  for (let i = 0; i < before.length; i++) sum += Math.abs(after[i] - before[i]);
-  return sum / before.length;
+  return shiftFromRegions(before, after);
 }
 
 // ══════════════════════════════════════════════════════════════════════

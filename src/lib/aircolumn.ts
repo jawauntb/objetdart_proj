@@ -248,6 +248,26 @@ export function hazePathKm(z0Km: number, dirY: number, distKm: number): number {
 
 export type RGB = [number, number, number];
 
+/**
+ * τ per channel over a path, written into `out` — the allocation-free twin
+ * of `opticalDepthRGB`, used by the scatter loop below so a single ray
+ * sample doesn't cost a fresh array per channel-pass.
+ */
+function opticalDepthRGBInto(
+  out: RGB,
+  z0Km: number,
+  dirY: number,
+  distKm: number,
+  lapse: number,
+  haze: number,
+): void {
+  const air = airPathKm(z0Km, dirY, distKm, lapse);
+  const hz = hazePathKm(z0Km, dirY, distKm) * Math.max(0, haze) * BETA_HAZE;
+  out[0] = Math.min(TAU_MAX, BETA_R[0] * air + hz);
+  out[1] = Math.min(TAU_MAX, BETA_R[1] * air + hz);
+  out[2] = Math.min(TAU_MAX, BETA_R[2] * air + hz);
+}
+
 /** τ per channel over a path, Rayleigh + haze, capped against NaN. */
 export function opticalDepthRGB(
   z0Km: number,
@@ -256,13 +276,24 @@ export function opticalDepthRGB(
   lapse = LAPSE_STD,
   haze = 1,
 ): RGB {
-  const air = airPathKm(z0Km, dirY, distKm, lapse);
-  const hz = hazePathKm(z0Km, dirY, distKm) * Math.max(0, haze) * BETA_HAZE;
-  return [
-    Math.min(TAU_MAX, BETA_R[0] * air + hz),
-    Math.min(TAU_MAX, BETA_R[1] * air + hz),
-    Math.min(TAU_MAX, BETA_R[2] * air + hz),
-  ];
+  const out: RGB = [0, 0, 0];
+  opticalDepthRGBInto(out, z0Km, dirY, distKm, lapse, haze);
+  return out;
+}
+
+/** The allocation-free twin of `transmittanceRGB` — writes into `out`. */
+function transmittanceRGBInto(
+  out: RGB,
+  z0Km: number,
+  dirY: number,
+  distKm: number,
+  lapse: number,
+  haze: number,
+): void {
+  opticalDepthRGBInto(out, z0Km, dirY, distKm, lapse, haze);
+  out[0] = Math.exp(-out[0]);
+  out[1] = Math.exp(-out[1]);
+  out[2] = Math.exp(-out[2]);
 }
 
 /** What survives the path, per channel: 1 clear, 0 drowned. */
@@ -273,8 +304,9 @@ export function transmittanceRGB(
   lapse = LAPSE_STD,
   haze = 1,
 ): RGB {
-  const t = opticalDepthRGB(z0Km, dirY, distKm, lapse, haze);
-  return [Math.exp(-t[0]), Math.exp(-t[1]), Math.exp(-t[2])];
+  const out: RGB = [0, 0, 0];
+  transmittanceRGBInto(out, z0Km, dirY, distKm, lapse, haze);
+  return out;
 }
 
 /**
@@ -290,9 +322,22 @@ export function sunTransmitRGB(
   lapse = LAPSE_STD,
   haze = 1,
 ): RGB {
+  const out: RGB = [0, 0, 0];
+  sunTransmitRGBInto(out, zKm, sunElev, lapse, haze);
+  return out;
+}
+
+/** The allocation-free twin of `sunTransmitRGB` — writes into `out`. */
+function sunTransmitRGBInto(
+  out: RGB,
+  zKm: number,
+  sunElev: number,
+  lapse: number,
+  haze: number,
+): void {
   const dirY = Math.max(0.015, Math.sin(sunElev));
   const dist = (TOP_KM - Math.min(zKm, TOP_KM - 1)) / dirY;
-  return transmittanceRGB(zKm, dirY, dist, lapse, haze);
+  transmittanceRGBInto(out, zKm, dirY, dist, lapse, haze);
 }
 
 // ——— the sky, scattered once ————————————————————————————————————
@@ -344,6 +389,11 @@ export function skyColor(
   const pR = rayleighPhase(cosTheta);
   const pM = hazePhase(cosTheta);
   const out: RGB = [0, 0, 0];
+  // Reused across every scatter step below instead of asking
+  // transmittanceRGB/sunTransmitRGB for a fresh triple each time — same
+  // values, SCATTER_STEPS× fewer short-lived arrays per call.
+  const toEye: RGB = [0, 0, 0];
+  const fromSun: RGB = [0, 0, 0];
   let steps = 0;
   for (let i = 0; i < SCATTER_STEPS; i++) {
     steps++;
@@ -351,8 +401,8 @@ export function skyColor(
     const zi = Math.max(0, zKm + dirY * t);
     const rho = relDensity(zi, lapse);
     const hzD = Math.max(0, haze) * Math.exp(-zi / HAZE_SCALE_KM);
-    const toEye = transmittanceRGB(zKm, dirY, t, lapse, haze);
-    const fromSun = sunTransmitRGB(zi, sunElev, lapse, haze);
+    transmittanceRGBInto(toEye, zKm, dirY, t, lapse, haze);
+    sunTransmitRGBInto(fromSun, zi, sunElev, lapse, haze);
     // Night falls in the scatter itself: below the horizon the direct term
     // is already extinguished by the long path; this floor only keeps the
     // arithmetic finite.
