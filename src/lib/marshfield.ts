@@ -128,6 +128,18 @@ export const PITCH_SCALE_O = 0.5;
 /** Threshold for the stir-oxygen sweep: intensity moves the field toward its mean by this fraction. */
 export const STIR_STRENGTH = 0.65;
 
+// ——— hoisted invariants (computed once at module load, not per call) ———
+
+/** Flat row-major index into a GRID_W x GRID_H field. Shared, allocation-free. */
+function gridIdx(i: number, j: number): number {
+  return j * GRID_W + i;
+}
+
+/** Reed influence radius in grid units — REED_RADIUS * max(GRID_W, GRID_H) is invariant. */
+const REED_RADIUS_GRID = REED_RADIUS * Math.max(GRID_W, GRID_H);
+/** Mat influence radius in grid units — MAT_RADIUS * max(GRID_W, GRID_H) is invariant. */
+const MAT_RADIUS_GRID = MAT_RADIUS * Math.max(GRID_W, GRID_H);
+
 // ——— climate responses ————————————————————————————————————————————
 
 export function sunlightRate(c: Climate): number {
@@ -169,11 +181,10 @@ export function oxygenAt(state: MarshState, x: number, y: number): number {
   const ry = fy - iy;
   const ix1 = Math.min(ix + 1, GRID_W - 1);
   const iy1 = Math.min(iy + 1, GRID_H - 1);
-  const idx = (i: number, j: number) => j * GRID_W + i;
-  const a = state.oxygen[idx(ix, iy)];
-  const b = state.oxygen[idx(ix1, iy)];
-  const c = state.oxygen[idx(ix, iy1)];
-  const d = state.oxygen[idx(ix1, iy1)];
+  const a = state.oxygen[gridIdx(ix, iy)];
+  const b = state.oxygen[gridIdx(ix1, iy)];
+  const c = state.oxygen[gridIdx(ix, iy1)];
+  const d = state.oxygen[gridIdx(ix1, iy1)];
   return a * (1 - rx) * (1 - ry) + b * rx * (1 - ry) + c * (1 - rx) * ry + d * rx * ry;
 }
 
@@ -232,7 +243,7 @@ export function advanceExact(
   const sunlight1 = sunlightRate(climate);
   // Sunlight relaxes toward its climate target on a 12-hour clock.
   const SUN_RELAX = 1 / (12 * 3600);
-  const targetSun = sunlightRate(climate);
+  const targetSun = sunlight1;
   const finalSunlight =
     targetSun + (state.sunlight - targetSun) * Math.exp(-SUN_RELAX * dt);
   const matConsScale = matRate(climate);
@@ -242,19 +253,17 @@ export function advanceExact(
   const reeds = state.reeds.map((r) => ({ ...r }));
   const mats = state.mats.map((m) => ({ ...m }));
 
-  const idx = (i: number, j: number) => j * GRID_W + i;
-
   for (let step = 0; step < nSubSteps; step++) {
     // 5-point Laplacian diffusion
     for (let j = 0; j < GRID_H; j++) {
       for (let i = 0; i < GRID_W; i++) {
-        const c = O[idx(i, j)];
-        const l = i > 0 ? O[idx(i - 1, j)] : c;
-        const r = i < GRID_W - 1 ? O[idx(i + 1, j)] : c;
-        const u = j > 0 ? O[idx(i, j - 1)] : c;
-        const d = j < GRID_H - 1 ? O[idx(i, j + 1)] : c;
+        const c = O[gridIdx(i, j)];
+        const l = i > 0 ? O[gridIdx(i - 1, j)] : c;
+        const r = i < GRID_W - 1 ? O[gridIdx(i + 1, j)] : c;
+        const u = j > 0 ? O[gridIdx(i, j - 1)] : c;
+        const d = j < GRID_H - 1 ? O[gridIdx(i, j + 1)] : c;
         const lap = l + r + u + d - 4 * c;
-        O2[idx(i, j)] = clamp01(c + K_DIFF * lap * subDt);
+        O2[gridIdx(i, j)] = clamp01(c + K_DIFF * lap * subDt);
       }
     }
     // Copy back
@@ -266,7 +275,7 @@ export function advanceExact(
       // Weighted contribution to every cell in reed's radius.
       const cx = reed.x * GRID_W;
       const cy = reed.y * GRID_H;
-      const rG = REED_RADIUS * Math.max(GRID_W, GRID_H);
+      const rG = REED_RADIUS_GRID;
       const i0 = Math.max(0, Math.floor(cx - rG));
       const i1 = Math.min(GRID_W - 1, Math.ceil(cx + rG));
       const j0 = Math.max(0, Math.floor(cy - rG));
@@ -278,7 +287,7 @@ export function advanceExact(
           const d2 = dxG * dxG + dyG * dyG;
           if (d2 > rG * rG) continue;
           const w = 1 - Math.sqrt(d2) / rG;
-          O[idx(i, j)] = clamp01(O[idx(i, j)] + inject * w);
+          O[gridIdx(i, j)] = clamp01(O[gridIdx(i, j)] + inject * w);
         }
       }
     }
@@ -288,7 +297,7 @@ export function advanceExact(
       const cons = CONS * matConsScale * mat.mass * subDt;
       const cx = mat.x * GRID_W;
       const cy = mat.y * GRID_H;
-      const rG = MAT_RADIUS * Math.max(GRID_W, GRID_H);
+      const rG = MAT_RADIUS_GRID;
       const i0 = Math.max(0, Math.floor(cx - rG));
       const i1 = Math.min(GRID_W - 1, Math.ceil(cx + rG));
       const j0 = Math.max(0, Math.floor(cy - rG));
@@ -300,7 +309,7 @@ export function advanceExact(
           const d2 = dxG * dxG + dyG * dyG;
           if (d2 > rG * rG) continue;
           const w = 1 - Math.sqrt(d2) / rG;
-          O[idx(i, j)] = clamp01(O[idx(i, j)] - cons * w);
+          O[gridIdx(i, j)] = clamp01(O[gridIdx(i, j)] - cons * w);
         }
       }
     }
@@ -339,11 +348,10 @@ function sampleGrid(field: Float32Array, x: number, y: number): number {
   const ry = fy - iy;
   const ix1 = Math.min(ix + 1, GRID_W - 1);
   const iy1 = Math.min(iy + 1, GRID_H - 1);
-  const idx = (i: number, j: number) => j * GRID_W + i;
-  const a = field[idx(ix, iy)];
-  const b = field[idx(ix1, iy)];
-  const c = field[idx(ix, iy1)];
-  const d = field[idx(ix1, iy1)];
+  const a = field[gridIdx(ix, iy)];
+  const b = field[gridIdx(ix1, iy)];
+  const c = field[gridIdx(ix, iy1)];
+  const d = field[gridIdx(ix1, iy1)];
   return a * (1 - rx) * (1 - ry) + b * rx * (1 - ry) + c * (1 - rx) * ry + d * rx * ry;
 }
 
@@ -477,7 +485,6 @@ export function pulseOxygen(
   const cx = clamp01(x) * GRID_W;
   const cy = clamp01(y) * GRID_H;
   const R = 3;
-  const idx = (i: number, j: number) => j * GRID_W + i;
   const i0 = Math.max(0, Math.floor(cx - R));
   const i1 = Math.min(GRID_W - 1, Math.ceil(cx + R));
   const j0 = Math.max(0, Math.floor(cy - R));
@@ -489,7 +496,7 @@ export function pulseOxygen(
       const d = Math.sqrt(dxG * dxG + dyG * dyG);
       if (d > R) continue;
       const w = 1 - d / R;
-      O[idx(i, j)] = clamp01(O[idx(i, j)] + amount * w);
+      O[gridIdx(i, j)] = clamp01(O[gridIdx(i, j)] + amount * w);
     }
   }
   return { ...state, oxygen: O };
