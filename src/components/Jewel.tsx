@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import { useField } from "@/store/field";
 import * as haptics from "@/lib/haptics";
@@ -73,6 +73,9 @@ const GEMS: Gem[] = [
   { key: "emerald",  label: "emerald",  chord: [55, 59, 62, 67], color: "#3fbf85", rgb: [0.25, 0.75, 0.52], setting: "gold",   cut: 8.6 },
   { key: "brilliant",label: "brilliant",chord: [72, 76, 79, 84], color: "#eaf2ff", rgb: [0.92, 0.95, 1.0], setting: "silver", cut: 16.0 },
 ];
+
+// static wrapper style — hoisted so it isn't reallocated on every render
+const WRAP_STYLE: CSSProperties = { position: "fixed", inset: 0, background: "#0a0805" };
 
 export default function Jewel() {
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -1135,13 +1138,13 @@ export default function Jewel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const letGo = () => {
+  const letGo = useCallback(() => {
     const wrap = wrapRef.current as (HTMLDivElement & { __letGo?: () => void }) | null;
     wrap?.__letGo?.();
     try { getFieldAudio().thud(); } catch { /* noop */ }
     try { haptics.roll(); } catch { /* noop */ }
     setHasFacets(false);
-  };
+  }, []);
 
   return (
     <div
@@ -1149,7 +1152,7 @@ export default function Jewel() {
       className="jewel-shader"
       data-touch-surface="true"
       data-pretext-ignore="true"
-      style={{ position: "fixed", inset: 0, background: "#0a0805" }}
+      style={WRAP_STYLE}
     >
       <canvas ref={canvasRef} />
       <LetGo label="let the facets go" onLetGo={letGo} visible={hasFacets} />
@@ -1325,7 +1328,7 @@ const METAL = {
  * thick beveled metal bezel (gold or silver), and ringed by a "carat halo" of
  * tiny set diamonds — so the swatch reads minted, weighty and real.
  */
-function GemSetting({ gem }: { gem: Gem }) {
+const GemSetting = memo(function GemSetting({ gem }: { gem: Gem }) {
   const accent = gem.color;
   const m = METAL[gem.setting];
   const id = `${gem.key}-${gem.setting}`;
@@ -1452,4 +1455,4 @@ function GemSetting({ gem }: { gem: Gem }) {
       ))}
     </svg>
   );
-}
+});

@@ -643,6 +643,31 @@ export default function AirColumn() {
     const xKmForPx = (x: number) => (x / Math.max(1, width) - 0.5) * FRAME_KM;
     const pxForXKm = (xKm: number) => (xKm / FRAME_KM + 0.5) * width;
 
+    // The lens's two profile curves (temperature, dew point) — hoisted out of
+    // the per-frame draw loop so the overlay doesn't allocate three closures
+    // (this function plus its two callbacks) every single frame the lens is
+    // held open. Same maths, same pixels, just not rebuilt 60 times a second.
+    const drawProfileCurve = (f: (z: number) => number, color: string) => {
+      if (!octx) return;
+      octx.strokeStyle = color;
+      octx.lineWidth = 1.6;
+      octx.beginPath();
+      for (let k = 0; k <= 40; k++) {
+        const z = (k / 40) * 26;
+        const x = width * 0.52 + (f(z) - 240) * width * 0.0055;
+        const y = yForZ(z);
+        if (k === 0) octx.moveTo(x, y);
+        else octx.lineTo(x, y);
+      }
+      octx.stroke();
+    };
+    const lensTempCurve = (z: number) => temperatureK(z, lapse);
+    const lensDewCurve = (z: number) =>
+      dewPointK(
+        pressureKPa(z, lapse),
+        rh * satMixingRatio(pressureKPa(z, lapse), temperatureK(z, lapse)),
+      );
+
     const bankZ = hazeBankAltitudes(SEED);
 
     // Stars live on the overlay, not in the downscaled raster: at real device
@@ -1060,8 +1085,16 @@ export default function AirColumn() {
             j--;
           }
         }
+        // in-place compaction — same reasoning as the rings above: this runs
+        // every live frame, so filter()'s fresh array + closure is pure churn
         const before = parcels.length;
-        parcels = parcels.filter((p) => p.mass > PARCEL_MIN_MASS);
+        {
+          let w = 0;
+          for (let i = 0; i < parcels.length; i++) {
+            if (parcels[i].mass > PARCEL_MIN_MASS) parcels[w++] = parcels[i];
+          }
+          parcels.length = w;
+        }
         if (parcels.length !== before) haptics.tap();
       }
 
@@ -1144,7 +1177,15 @@ export default function AirColumn() {
           octx.fillRect(st.u * width, st.v * height, st.r, st.r);
         }
 
-        rings = rings.filter((r) => now - r.t0 < 1400);
+        // in-place compaction — filter() would allocate a fresh array (and a
+        // fresh predicate closure) every single frame for no reason
+        {
+          let w = 0;
+          for (let i = 0; i < rings.length; i++) {
+            if (now - rings[i].t0 < 1400) rings[w++] = rings[i];
+          }
+          rings.length = w;
+        }
         for (const r of rings) {
           const u = (now - r.t0) / 1400;
           octx.beginPath();
@@ -1194,28 +1235,8 @@ export default function AirColumn() {
             octx.stroke();
           }
           // the two curves the moisture lives between
-          const curve = (f: (z: number) => number, color: string) => {
-            octx.strokeStyle = color;
-            octx.lineWidth = 1.6;
-            octx.beginPath();
-            for (let k = 0; k <= 40; k++) {
-              const z = (k / 40) * 26;
-              const x = width * 0.52 + (f(z) - 240) * width * 0.0055;
-              const y = yForZ(z);
-              if (k === 0) octx.moveTo(x, y);
-              else octx.lineTo(x, y);
-            }
-            octx.stroke();
-          };
-          curve((z) => temperatureK(z, lapse), "rgba(226,140,96,0.8)");
-          curve(
-            (z) =>
-              dewPointK(
-                pressureKPa(z, lapse),
-                rh * satMixingRatio(pressureKPa(z, lapse), temperatureK(z, lapse)),
-              ),
-            "rgba(126,190,152,0.8)",
-          );
+          drawProfileCurve(lensTempCurve, "rgba(226,140,96,0.8)");
+          drawProfileCurve(lensDewCurve, "rgba(126,190,152,0.8)");
           // every cloud base, where the air actually condenses
           for (const p of parcels) {
             octx.strokeStyle = "rgba(238,234,219,0.55)";
